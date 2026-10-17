@@ -515,6 +515,170 @@ func copyObjectsLocked(
 	return newMap
 }
 
+type snapshotMetaState struct {
+	objects          map[uint64]map[objectio.Segmentid]*objectInfo
+	tombstones       map[uint64]map[objectio.Segmentid]*objectInfo
+	aobjDelTsMap     map[types.TS]struct{}
+	pitr             specialTableInfo
+	iscp             specialTableInfo
+	tables           map[uint32]map[uint64]*tableInfo
+	tableIDIndex     map[uint64]*tableInfo
+	tablePKIndex     map[string][]*tableInfo
+	snapshotTableIDs map[uint64]struct{}
+}
+
+func cloneObjectInfoMap(src map[objectio.Segmentid]*objectInfo) map[objectio.Segmentid]*objectInfo {
+	dst := make(map[objectio.Segmentid]*objectInfo, len(src))
+	for id, info := range src {
+		if info == nil {
+			dst[id] = nil
+			continue
+		}
+		copy := *info
+		dst[id] = &copy
+	}
+	return dst
+}
+
+func cloneObjectInfoByTable(src map[uint64]map[objectio.Segmentid]*objectInfo) map[uint64]map[objectio.Segmentid]*objectInfo {
+	dst := make(map[uint64]map[objectio.Segmentid]*objectInfo, len(src))
+	for tid, objects := range src {
+		dst[tid] = cloneObjectInfoMap(objects)
+	}
+	return dst
+}
+
+func (sm *SnapshotMeta) cloneStateLocked() snapshotMetaState {
+	state := snapshotMetaState{
+		objects:          cloneObjectInfoByTable(sm.objects),
+		tombstones:       cloneObjectInfoByTable(sm.tombstones),
+		aobjDelTsMap:     make(map[types.TS]struct{}, len(sm.aobjDelTsMap)),
+		pitr:             *sm.pitr.clone(),
+		iscp:             *sm.iscp.clone(),
+		tables:           make(map[uint32]map[uint64]*tableInfo, len(sm.tables)),
+		tableIDIndex:     make(map[uint64]*tableInfo, len(sm.tableIDIndex)),
+		tablePKIndex:     make(map[string][]*tableInfo, len(sm.tablePKIndex)),
+		snapshotTableIDs: make(map[uint64]struct{}, len(sm.snapshotTableIDs)),
+	}
+	for ts := range sm.aobjDelTsMap {
+		state.aobjDelTsMap[ts] = struct{}{}
+	}
+	for tid := range sm.snapshotTableIDs {
+		state.snapshotTableIDs[tid] = struct{}{}
+	}
+
+	tableCopies := make(map[*tableInfo]*tableInfo, len(sm.tableIDIndex))
+	for account, tables := range sm.tables {
+		state.tables[account] = make(map[uint64]*tableInfo, len(tables))
+		for tid, info := range tables {
+			copy, ok := tableCopies[info]
+			if !ok {
+				if info == nil {
+					state.tables[account][tid] = nil
+					continue
+				}
+				value := *info
+				copy = &value
+				tableCopies[info] = copy
+			}
+			state.tables[account][tid] = copy
+		}
+	}
+	for tid, info := range sm.tableIDIndex {
+		if info == nil {
+			state.tableIDIndex[tid] = nil
+			continue
+		}
+		copy, ok := tableCopies[info]
+		if !ok {
+			value := *info
+			copy = &value
+			tableCopies[info] = copy
+		}
+		state.tableIDIndex[tid] = copy
+	}
+	for pk, infos := range sm.tablePKIndex {
+		state.tablePKIndex[pk] = make([]*tableInfo, len(infos))
+		for i, info := range infos {
+			if info == nil {
+				continue
+			}
+			copy, ok := tableCopies[info]
+			if !ok {
+				value := *info
+				copy = &value
+				tableCopies[info] = copy
+			}
+			state.tablePKIndex[pk][i] = copy
+		}
+	}
+	return state
+}
+
+func (sm *SnapshotMeta) restoreStateLocked(state snapshotMetaState) {
+	sm.objects = state.objects
+	sm.tombstones = state.tombstones
+	sm.aobjDelTsMap = state.aobjDelTsMap
+	sm.pitr = state.pitr
+	sm.iscp = state.iscp
+	sm.tables = state.tables
+	sm.tableIDIndex = state.tableIDIndex
+	sm.tablePKIndex = state.tablePKIndex
+	sm.snapshotTableIDs = state.snapshotTableIDs
+}
+
+// Clone returns a consistent copy that can be used as a transaction savepoint
+// by an outer GC scan. SnapshotMeta.Update has its own savepoint, but an outer
+// scan may fail after Update succeeds and before its scan watermark advances.
+func (sm *SnapshotMeta) Clone() *SnapshotMeta {
+	sm.RLock()
+	state := sm.cloneStateLocked()
+	sm.RUnlock()
+	clone := NewSnapshotMeta()
+	clone.restoreStateLocked(state)
+	return clone
+}
+
+// RestoreFrom restores all published snapshot state from a savepoint. The
+// caller owns the decision to roll back; this method only provides an atomic
+// replacement under SnapshotMeta's lock.
+func (sm *SnapshotMeta) RestoreFrom(savepoint *SnapshotMeta) {
+	if savepoint == nil || savepoint == sm {
+		return
+	}
+	savepoint.RLock()
+	state := savepoint.cloneStateLocked()
+	savepoint.RUnlock()
+	sm.Lock()
+	sm.restoreStateLocked(state)
+	sm.Unlock()
+}
+
+// RunWithSavepoint makes a multi-stage caller's SnapshotMeta mutation
+// transactional. Update protects only its own callback; GC can fail later
+// while collecting checkpoint objects, saving metadata, or syncing a sinker.
+// Those failures leave the scan watermark unchanged and replay the same
+// checkpoint, so all state published during the outer scan must be restored.
+func (sm *SnapshotMeta) RunWithSavepoint(scan func() error) (err error) {
+	if scan == nil {
+		return nil
+	}
+	if sm == nil {
+		return scan()
+	}
+	sm.RLock()
+	savepoint := sm.cloneStateLocked()
+	sm.RUnlock()
+	defer func() {
+		if err != nil {
+			sm.Lock()
+			sm.restoreStateLocked(savepoint)
+			sm.Unlock()
+		}
+	}()
+	return scan()
+}
+
 func IsMoTable(tid uint64) bool {
 	return tid == catalog2.MO_TABLES_ID
 }
@@ -568,8 +732,12 @@ func (sm *SnapshotMeta) updateTableInfo(
 			moTable[id].deleteAt = deleteTS
 		}
 	}
-	collectObjects(ctx, &objects, nil, nil, data, ckputil.ObjectType_Data, collector)
-	collectObjects(ctx, &tombstones, nil, nil, data, ckputil.ObjectType_Tombstone, collector)
+	if err := collectObjects(ctx, &objects, nil, nil, data, ckputil.ObjectType_Data, collector); err != nil {
+		return err
+	}
+	if err := collectObjects(ctx, &tombstones, nil, nil, data, ckputil.ObjectType_Tombstone, collector); err != nil {
+		return err
+	}
 	tObjects := objects[catalog2.MO_TABLES_ID]
 	tTombstones := tombstones[catalog2.MO_TABLES_ID]
 	orderedInfos := make([]*objectInfo, 0, len(tObjects))
@@ -843,8 +1011,8 @@ func collectObjects(
 		objectio.ObjectStats,
 		types.TS, types.TS,
 	),
-) {
-	data.ForEachRow(
+) error {
+	return data.ForEachRow(
 		ctx,
 		func(
 			account uint32,
@@ -871,6 +1039,12 @@ func (sm *SnapshotMeta) Update(
 ) (err error) {
 	sm.Lock()
 	defer sm.Unlock()
+	state := sm.cloneStateLocked()
+	defer func() {
+		if err != nil {
+			sm.restoreStateLocked(state)
+		}
+	}()
 
 	start := time.Now()
 	defer func() {
@@ -957,7 +1131,7 @@ func (sm *SnapshotMeta) Update(
 		}
 		mapFun((*objects1)[tid])
 	}
-	collectObjects(
+	if err = collectObjects(
 		ctx,
 		&sm.objects,
 		&sm.pitr.objects,
@@ -965,8 +1139,10 @@ func (sm *SnapshotMeta) Update(
 		data,
 		ckputil.ObjectType_Data,
 		collector,
-	)
-	collectObjects(
+	); err != nil {
+		return
+	}
+	if err = collectObjects(
 		ctx,
 		&sm.tombstones,
 		&sm.pitr.tombstones,
@@ -974,7 +1150,9 @@ func (sm *SnapshotMeta) Update(
 		data,
 		ckputil.ObjectType_Tombstone,
 		collector,
-	)
+	); err != nil {
+		return
+	}
 
 	trimList := func(
 		objects map[uint64]map[objectio.Segmentid]*objectInfo,

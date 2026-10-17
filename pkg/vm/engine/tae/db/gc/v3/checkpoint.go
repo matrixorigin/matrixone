@@ -1673,14 +1673,18 @@ func (c *checkpointCleaner) DoCheck(ctx context.Context) error {
 		if err != nil {
 			return err
 		}
-		collectObjectsFromCheckpointData(c.ctx, ckpReader, ickpObjects)
+		if err = collectObjectsFromCheckpointData(c.ctx, ckpReader, ickpObjects); err != nil {
+			return err
+		}
 	}
 	cptCkpObjects := make(map[string]map[uint64]*ObjectEntry, 0)
 	ckpReader, err := c.getCkpReader(c.ctx, cpt)
 	if err != nil {
 		return err
 	}
-	collectObjectsFromCheckpointData(c.ctx, ckpReader, cptCkpObjects)
+	if err = collectObjectsFromCheckpointData(c.ctx, ckpReader, cptCkpObjects); err != nil {
+		return err
+	}
 
 	tList, pList := c.mutation.snapshotMeta.AccountToTableSnapshots(snapshots, pitr)
 	for name, tables := range ickpObjects {
@@ -2615,7 +2619,6 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 			zap.Uint32("table-meta-size :", tableSize),
 			zap.String("snapshot-detail", c.mutation.snapshotMeta.String()))
 	}()
-
 	var snapshotFile, accountFile ioutil.TSRangeFile
 	newFiles = make([]string, 0, 3)
 	saveSnapshot := func() (err2 error) {
@@ -2671,14 +2674,23 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 
 	gcWindow = NewGCWindow(c.mp, c.fs)
 	var gcMetaFile string
-	if gcMetaFile, err = gcWindow.ScanCheckpoints(
-		ctx,
-		ckps,
-		c.getCkpReader,
-		c.mutUpdateSnapshotMetaLocked,
-		saveSnapshot,
-		memoryBuffer,
-	); err != nil {
+	// ScanCheckpoints calls processCkpData before collecting the same
+	// checkpoint's object rows. If that later enumeration fails, tryScanLocked
+	// deliberately leaves the scan watermark unchanged and retries the whole
+	// checkpoint. Keep the published snapshot metadata transactional across
+	// that outer boundary, not only across SnapshotMeta.Update itself.
+	if err = c.mutation.snapshotMeta.RunWithSavepoint(func() error {
+		var scanErr error
+		gcMetaFile, scanErr = gcWindow.ScanCheckpoints(
+			ctx,
+			ckps,
+			c.getCkpReader,
+			c.mutUpdateSnapshotMetaLocked,
+			saveSnapshot,
+			memoryBuffer,
+		)
+		return scanErr
+	}); err != nil {
 		gcWindow.Close()
 		gcWindow = nil
 		return

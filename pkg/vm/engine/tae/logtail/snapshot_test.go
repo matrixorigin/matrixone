@@ -82,6 +82,33 @@ func TestSnapshotInfo(t *testing.T) {
 	})
 }
 
+func TestSnapshotMetaCloneRestorePreservesIndexes(t *testing.T) {
+	sm := NewSnapshotMeta()
+	info := &tableInfo{accountID: 1, dbID: 2, tid: 3, pk: "pk"}
+	sm.tables[1] = map[uint64]*tableInfo{3: info}
+	sm.tableIDIndex[3] = info
+	sm.tablePKIndex["pk"] = []*tableInfo{info}
+	sm.objects[3] = map[objectio.Segmentid]*objectInfo{
+		{}: {createAt: types.BuildTS(10, 0)},
+	}
+	sm.snapshotTableIDs[3] = struct{}{}
+
+	savepoint := sm.Clone()
+	sm.tablePKIndex["pk"] = append(sm.tablePKIndex["pk"], info)
+	sm.tableIDIndex[3].deleteAt = types.BuildTS(20, 0)
+	sm.objects[3][objectio.Segmentid{}].deleteAt = types.BuildTS(20, 0)
+	delete(sm.snapshotTableIDs, 3)
+
+	sm.RestoreFrom(savepoint)
+
+	require.Len(t, sm.tablePKIndex["pk"], 1)
+	require.Empty(t, sm.tableIDIndex[3].deleteAt)
+	require.Empty(t, sm.objects[3][objectio.Segmentid{}].deleteAt)
+	require.Contains(t, sm.snapshotTableIDs, uint64(3))
+	require.Same(t, sm.tables[1][3], sm.tableIDIndex[3])
+	require.Same(t, sm.tableIDIndex[3], sm.tablePKIndex["pk"][0])
+}
+
 func TestSnapshotMetaGetSnapshotSkipsPersistedAborts(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()

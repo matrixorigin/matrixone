@@ -22,11 +22,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
+	coverageplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 	idxcronplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/idxcron"
 	planplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/plan"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 
 	hnswcompile "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/compile"
+	hnswcoverage "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/coverage"
 	hnswidxcron "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/idxcron"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	hnswruntime "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
@@ -34,29 +36,32 @@ import (
 )
 
 type Plugin struct {
-	catalogHooks catalogplugin.Hooks
-	compileHooks compileplugin.Hooks
-	planHooks    planplugin.Hooks
-	idxcronHooks idxcronplugin.Hooks
-	searchHooks  searchplugin.Hooks
+	catalogHooks  catalogplugin.Hooks
+	compileHooks  compileplugin.Hooks
+	planHooks     planplugin.Hooks
+	idxcronHooks  idxcronplugin.Hooks
+	coverageHooks hnswcoverage.Hooks
+	searchHooks   searchplugin.Hooks
 }
 
 func New() *Plugin {
 	return &Plugin{
-		catalogHooks: hnswruntime.CatalogHooks{},
-		compileHooks: hnswcompile.Hooks{},
-		planHooks:    hnswplan.Hooks{},
-		idxcronHooks: hnswidxcron.Hooks{},
-		searchHooks:  hnswsearch.Hooks{},
+		catalogHooks:  hnswruntime.CatalogHooks{},
+		compileHooks:  hnswcompile.Hooks{},
+		planHooks:     hnswplan.Hooks{},
+		idxcronHooks:  hnswidxcron.Hooks{},
+		coverageHooks: hnswcoverage.Hooks{},
+		searchHooks:   hnswsearch.Hooks{},
 	}
 }
 
-func (*Plugin) Algo() string                   { return catalog.MoIndexHnswAlgo.ToString() }
-func (p *Plugin) Catalog() catalogplugin.Hooks { return p.catalogHooks }
-func (p *Plugin) Compile() compileplugin.Hooks { return p.compileHooks }
-func (p *Plugin) Plan() planplugin.Hooks       { return p.planHooks }
-func (p *Plugin) Idxcron() idxcronplugin.Hooks { return p.idxcronHooks }
-func (p *Plugin) Search() searchplugin.Hooks   { return p.searchHooks }
+func (*Plugin) Algo() string                     { return catalog.MoIndexHnswAlgo.ToString() }
+func (p *Plugin) Catalog() catalogplugin.Hooks   { return p.catalogHooks }
+func (p *Plugin) Compile() compileplugin.Hooks   { return p.compileHooks }
+func (p *Plugin) Plan() planplugin.Hooks         { return p.planHooks }
+func (p *Plugin) Idxcron() idxcronplugin.Hooks   { return p.idxcronHooks }
+func (p *Plugin) Coverage() coverageplugin.Hooks { return p.coverageHooks }
+func (p *Plugin) Search() searchplugin.Hooks     { return p.searchHooks }
 
 var _ plugin.AlgoPlugin = (*Plugin)(nil)
 var _ plugin.SearchPlugin = (*Plugin)(nil)

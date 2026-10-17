@@ -243,7 +243,9 @@ func (w *GCWindow) ScanCheckpoints(
 			}
 		}
 		objects := make(map[string]map[uint64]*ObjectEntry)
-		collectObjectsFromCheckpointData(ctx, ckpReader, objects)
+		if err = collectObjectsFromCheckpointData(ctx, ckpReader, objects); err != nil {
+			return false, err
+		}
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
 		}
@@ -360,8 +362,8 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]map[uint64]*ObjectEntry) {
-	ckpReader.ForEachRow(
+func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]map[uint64]*ObjectEntry) error {
+	return ckpReader.ForEachRow(
 		ctx,
 		func(
 			account uint32,
