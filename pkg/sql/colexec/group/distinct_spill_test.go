@@ -428,7 +428,7 @@ func TestDistinctSpillControllerBoundaryContracts(t *testing.T) {
 	nilController.recordCompletion()
 	require.Nil(t, nilController.takePartialPartition())
 	require.ErrorIs(t, nilController.pushPartialChildren(nil), mpool.ErrAllocationAccountInvalid)
-	freeDistinctWave(nil)
+	(*container)(nil).freeDistinctWave(nil)
 	require.ErrorIs(t, nilController.mergeCommittedWave(nil, nil, nil), mpool.ErrAllocationAccountInvalid)
 	_, _, err := nilController.repartition(nil, nil, nil)
 	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvalid)
@@ -498,7 +498,7 @@ func TestDistinctSpillControllerBoundaryContracts(t *testing.T) {
 	for _, bucket := range wave {
 		require.NotEmpty(t, bucket.name)
 	}
-	freeDistinctWave(&wave)
+	controller.ctr.freeDistinctWave(&wave)
 	for _, bucket := range wave {
 		require.Nil(t, bucket)
 	}

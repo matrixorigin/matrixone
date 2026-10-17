@@ -16,6 +16,7 @@ package message
 
 import (
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"os"
 	"runtime"
 	"runtime/debug"
@@ -255,10 +256,14 @@ func TestAccountedSpillFileOwnership(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, fd.Close())
 		name := fd.Name()
+		metadata, reserveErr := spillcleanup.Reserve()
+		if reserveErr != nil {
+			panic(reserveErr)
+		}
 		file := NewReopenableSpillFile(
 			func(context.Context) (*os.File, error) { return os.Open(name) },
 			func() error { return os.Remove(name) },
-			7, 11, func() { releases.Add(1) },
+			7, 11, func() { releases.Add(1) }, metadata,
 		)
 		t.Cleanup(func() { require.NoError(t, file.Close()) })
 		return file

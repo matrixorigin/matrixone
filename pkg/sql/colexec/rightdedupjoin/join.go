@@ -46,6 +46,13 @@ func (rightDedupJoin *RightDedupJoin) OpType() vm.OpType {
 }
 
 func (rightDedupJoin *RightDedupJoin) Prepare(proc *process.Process) (err error) {
+	if rightDedupJoin.ctr.spillEngine != nil {
+		rightDedupJoin.ctr.spillEngine.Cleanup(proc)
+		if rightDedupJoin.ctr.spillEngine.CleanupPending() {
+			return moerr.NewInternalError(proc.Ctx, "previous join spill cleanup is pending")
+		}
+		rightDedupJoin.ctr.spillEngine = nil
+	}
 	if rightDedupJoin.allocationAccount == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
@@ -126,7 +133,9 @@ func (rightDedupJoin *RightDedupJoin) Call(proc *process.Process) (vm.CallResult
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, readErr)
 				}
 				if bat == nil {
-					ctr.spillEngine.FinishBucket()
+					if err := ctr.spillEngine.FinishBucket(); err != nil {
+						return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
+					}
 					ctr.state = Finalize
 					continue
 				}
@@ -230,10 +239,10 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				return takeErr
 			}
 			if rightDedupJoin.allocationAccount == nil {
-				_ = payload.Close()
+				cleanupErr := ctr.mp.CloseOrRetainSpillPayload(&payload, mpool.ErrAllocationAccountInvalid)
 				ctr.mp.Free()
 				ctr.mp = nil
-				return mpool.ErrAllocationAccountInvalid
+				return cleanupErr
 			}
 			engine, engineErr := spillutil.NewSpillEngine(spillutil.SpillEngineConfig{
 				BuildKeyExprs:           rightDedupJoin.Conditions[1],
@@ -245,7 +254,7 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				Budget:                  budget,
 			}, rightDedupJoin.allocationAccount, mpool.AllocationOwnerHashBuild)
 			if engineErr != nil {
-				_ = payload.Close()
+				engineErr = ctr.mp.CloseOrRetainSpillPayload(&payload, engineErr)
 				ctr.mp.Free()
 				ctr.mp = nil
 				ctr.cleanEvalVectors()
@@ -269,7 +278,9 @@ func (rightDedupJoin *RightDedupJoin) build(analyzer process.Analyzer, proc *pro
 				ctr.mp.Free()
 				ctr.mp = nil
 				engine.Cleanup(proc)
-				ctr.spillEngine = nil
+				if !engine.CleanupPending() {
+					ctr.spillEngine = nil
+				}
 				return err
 			}
 			ctr.mp.Free()

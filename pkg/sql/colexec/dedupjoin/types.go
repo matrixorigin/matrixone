@@ -458,6 +458,7 @@ func NewArgument() *DedupJoin {
 
 func (dedupJoin *DedupJoin) Release() {
 	if dedupJoin != nil {
+		dedupJoin.ctr.spillEngine.DeferCleanup()
 		reuse.Free[DedupJoin](dedupJoin, nil)
 	}
 }
@@ -506,6 +507,9 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.cleanBatch(proc)
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
+		// Prepared operators can stay cached after Reset. Failed removals
+		// must progress without waiting for another execution or Release.
+		ctr.spillEngine.DeferCleanup()
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
@@ -528,6 +532,9 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanStableUpdateVecs(proc)
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
+		// Prepared operators can stay cached after Reset. Failed removals
+		// must progress without waiting for another execution or Release.
+		ctr.spillEngine.DeferCleanup()
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()

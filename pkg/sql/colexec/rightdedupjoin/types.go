@@ -184,6 +184,7 @@ func NewArgument() *RightDedupJoin {
 
 func (rightDedupJoin *RightDedupJoin) Release() {
 	if rightDedupJoin != nil {
+		rightDedupJoin.ctr.spillEngine.DeferCleanup()
 		reuse.Free[RightDedupJoin](rightDedupJoin, nil)
 	}
 }
@@ -205,6 +206,9 @@ func (rightDedupJoin *RightDedupJoin) Reset(proc *process.Process, pipelineFaile
 	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
+		// Prepared operators can stay cached after Reset. Failed removals
+		// must progress without waiting for another execution or Release.
+		ctr.spillEngine.DeferCleanup()
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
@@ -219,6 +223,9 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 	ctr.cleanExprExecutor()
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
+		// Prepared operators can stay cached after Reset. Failed removals
+		// must progress without waiting for another execution or Release.
+		ctr.spillEngine.DeferCleanup()
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()

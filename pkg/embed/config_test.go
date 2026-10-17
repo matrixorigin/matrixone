@@ -16,7 +16,7 @@ package embed
 
 import (
 	"context"
-	"reflect"
+	"net"
 	"testing"
 	"time"
 
@@ -183,47 +183,85 @@ func TestDefaultTmpFileServiceUsesServiceDataDir(t *testing.T) {
 }
 
 func TestResolveGossipSeedAddresses(t *testing.T) {
-	tests := []struct {
+	for _, tt := range []struct {
+		name    string
 		addrs   []string
 		results []string
-		err     error
+		lookups []string
+		wantErr bool
 	}{
 		{
-			[]string{"localhost:32001", "localhost:32011"},
-			[]string{"127.0.0.1:32001", "127.0.0.1:32011"},
-			nil,
+			name:    "one IPv4 per host, preserving ports",
+			addrs:   []string{"seed.test:32001", "seed.test:32011", "127.0.0.1:32021"},
+			results: []string{"192.0.2.1:32001", "192.0.2.1:32011", "127.0.0.1:32021"},
+			lookups: []string{"seed.test", "seed.test", "127.0.0.1"},
 		},
 		{
-			[]string{"localhost:32001", "localhost:32011", "127.0.0.1:32021"},
-			[]string{"127.0.0.1:32001", "127.0.0.1:32011", "127.0.0.1:32021"},
-			nil,
+			name:    "lookup failure retains original hostname",
+			addrs:   []string{"seed.test:32001", "missing.test:32011"},
+			results: []string{"192.0.2.1:32001", "missing.test:32011"},
+			lookups: []string{"seed.test", "missing.test"},
 		},
 		{
-			[]string{"127.0.0.1:32001"},
-			[]string{"127.0.0.1:32001"},
-			nil,
+			name:  "IPv6 is filtered from mixed results",
+			addrs: []string{"dual.test:32001"}, results: []string{"192.0.2.2:32001"},
+			lookups: []string{"dual.test"},
 		},
 		{
-			// The empty DNS label forces lookup failure even with wildcard DNS.
-			[]string{"localhost:32001", "of-course-no-such-address42033..invalid:32001"},
-			[]string{"127.0.0.1:32001", "of-course-no-such-address42033..invalid:32001"},
-			nil,
+			name:    "empty successful result is not a lookup failure",
+			addrs:   []string{"seed.test:32001", "empty.test:32011"},
+			lookups: []string{"seed.test", "empty.test"}, wantErr: true,
 		},
-	}
-
-	for _, tt := range tests {
-		cfg := ServiceConfig{
-			LogService: logservice.Config{
-				GossipSeedAddresses: tt.addrs,
-			},
-		}
-		err := cfg.resolveGossipSeedAddresses()
-		if err != tt.err {
-			t.Errorf("expected %v, got %v", tt.err, err)
-		}
-		if got := cfg.LogService.GossipSeedAddresses; !reflect.DeepEqual(got, tt.results) {
-			t.Errorf("expected %v, got %v", tt.results, got)
-		}
+		{
+			name:  "IPv6 only is rejected",
+			addrs: []string{"v6.test:32001"}, lookups: []string{"v6.test"}, wantErr: true,
+		},
+		{
+			name:  "multiple IPv4 addresses are rejected",
+			addrs: []string{"many.test:32001"}, lookups: []string{"many.test"}, wantErr: true,
+		},
+		{
+			name:  "malformed address is rejected before lookup",
+			addrs: []string{"missing-port.test"}, wantErr: true,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := ServiceConfig{LogService: logservice.Config{
+				GossipSeedAddresses: append([]string(nil), tt.addrs...),
+			}}
+			var lookups []string
+			lookup := func(host string) ([]net.IP, error) {
+				lookups = append(lookups, host)
+				switch host {
+				case "seed.test":
+					return []net.IP{net.ParseIP("192.0.2.1")}, nil
+				case "127.0.0.1":
+					return []net.IP{net.ParseIP(host)}, nil
+				case "dual.test":
+					return []net.IP{net.ParseIP("::1"), net.ParseIP("192.0.2.2")}, nil
+				case "missing.test":
+					return nil, &net.DNSError{Err: "no such host", Name: host, IsNotFound: true}
+				case "empty.test":
+					return nil, nil
+				case "v6.test":
+					return []net.IP{net.ParseIP("::1")}, nil
+				case "many.test":
+					return []net.IP{net.ParseIP("192.0.2.1"), net.ParseIP("192.0.2.2")}, nil
+				default:
+					t.Fatalf("unexpected lookup: %s", host)
+					return nil, nil
+				}
+			}
+			err := cfg.resolveGossipSeedAddressesWithLookup(lookup)
+			if tt.wantErr {
+				require.Error(t, err)
+				require.Equal(t, tt.addrs, cfg.LogService.GossipSeedAddresses, "failed resolution must not partially rewrite config")
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, tt.results, cfg.LogService.GossipSeedAddresses)
+			}
+			require.Equal(t, tt.lookups, lookups)
+		})
 	}
 }
 
@@ -240,7 +278,7 @@ max-size = 512
 deployment-id = 1
 uuid = "9c4dccb4-4d3c-41f8-b482-5251dc7a41bf"
 gossip-seed-addresses = [
-  "localhost:32002",
+  "127.0.0.1:32002",
 ]
 
 [logservice.BootstrapConfig]

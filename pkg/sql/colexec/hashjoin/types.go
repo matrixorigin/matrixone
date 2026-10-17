@@ -391,6 +391,7 @@ func NewArgument() *HashJoin {
 
 func (hashJoin *HashJoin) Release() {
 	if hashJoin != nil {
+		hashJoin.ctr.spillEngine.DeferCleanup()
 		reuse.Free[HashJoin](hashJoin, nil)
 	}
 }
@@ -541,6 +542,9 @@ func (ctr *container) cleanBucketBatches(proc *process.Process) {
 	ctr.probeBucketActive = false
 	if ctr.spillEngine != nil {
 		ctr.spillEngine.Cleanup(proc)
+		// Prepared operators can stay cached after Reset. Failed removals
+		// must progress without waiting for another execution or Release.
+		ctr.spillEngine.DeferCleanup()
 		ctr.spillEngine = nil
 	}
 }

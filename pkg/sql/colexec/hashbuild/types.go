@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -166,6 +167,7 @@ type spillFileEntry struct {
 	fdToken        *process.ExecutionSpillFDReservation
 	cacheToken     *process.ExecutionTransientMemoryReservation
 	diskToken      *process.ExecutionSpillDiskReservation
+	cleanupToken   *spillcleanup.Reservation
 	fs             fileservice.MutableFileService
 	name           string
 	created        bool
@@ -181,32 +183,69 @@ func (b *spillFileBundle) release() {
 		return
 	}
 	b.mu.Lock()
-	if b.released {
-		b.mu.Unlock()
-		return
-	}
+	defer b.mu.Unlock()
 	b.released = true
-	entries := b.entries
-	b.entries = nil
-	b.mu.Unlock()
-	for _, entry := range entries {
+	for bucket, entry := range b.entries {
 		if entry == nil {
+			delete(b.entries, bucket)
 			continue
 		}
-		if entry.file != nil {
-			_ = entry.file.Close()
+		if err := entry.cleanup(); err != nil {
+			logutil.Errorf("hash build spill cleanup failed: %v", err)
+			continue
 		}
-		if entry.fs != nil && entry.name != "" {
-			_ = entry.fs.RemoveFile(context.Background(), entry.name)
-		}
-		if entry.fdToken != nil {
-			entry.fdToken.Release()
-		}
-		if entry.diskToken != nil {
-			entry.diskToken.Release()
-		}
-		entry.cacheToken.Release()
+		delete(b.entries, bucket)
 	}
+}
+
+func (b *spillFileBundle) cleanupPending() bool {
+	if b == nil {
+		return false
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return len(b.entries) != 0
+}
+
+// Transfer each file separately: a blocked remove cannot stall an entire
+// bundle, and a callback cannot retain a bundle's already-deleted siblings.
+func (b *spillFileBundle) deferCleanup() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for bucket, entry := range b.entries {
+		if entry != nil {
+			entry.cleanupToken.Enqueue(entry.cleanup)
+		}
+		delete(b.entries, bucket)
+	}
+}
+
+func (entry *spillFileEntry) cleanup() error {
+	if entry.file != nil {
+		_ = entry.file.Close()
+		entry.file = nil
+	}
+	if entry.fdToken != nil {
+		entry.fdToken.Release()
+		entry.fdToken = nil
+	}
+	if entry.created {
+		if err := spillio.RemoveFileWithRetry(entry.fs, entry.name); err != nil {
+			return err
+		}
+		entry.created = false
+	}
+	if entry.diskToken != nil {
+		entry.diskToken.Release()
+		entry.diskToken = nil
+	}
+	// A failed removal may retain page-cache residency as well as the file.
+	// Return the writer grant here so detached retries release it too.
+	entry.cacheToken.Release()
+	entry.cacheToken = nil
+	entry.cleanupToken.Release()
+	entry.cleanupToken = nil
+	return nil
 }
 
 func (b *spillFileBundle) openFile(
@@ -247,7 +286,16 @@ func (b *spillFileBundle) openFile(
 			_, err = file.Seek(0, io.SeekEnd)
 		}
 	} else {
+		entry.cleanupToken, err = spillcleanup.Reserve()
+		if err != nil {
+			token.Release()
+			return nil, err
+		}
 		file, err = fs.CreateFile(ctx, name)
+		if err != nil {
+			entry.cleanupToken.Release()
+			entry.cleanupToken = nil
+		}
 	}
 	if err != nil {
 		if file != nil {
@@ -372,10 +420,10 @@ func (b *spillFileBundle) accountedFiles(
 	}
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	files := make([]*message.SpillFile, spillNumBuckets)
 	if b.released {
 		return nil, process.ErrExecutionSpillReservationInactive
 	}
+	files := make([]*message.SpillFile, spillNumBuckets)
 	// Submit all larger-window tails before waiting on any one bucket. Small
 	// files may not have crossed their batch threshold; serial Finish calls
 	// would otherwise turn the larger window into a synchronous I/O burst.
@@ -440,7 +488,7 @@ func (b *spillFileBundle) accountedFiles(
 				return fs.OpenFile(ctx, name)
 			},
 			func() error {
-				return fs.RemoveFile(context.Background(), name)
+				return spillio.RemoveFileWithRetry(fs, name)
 			},
 			e.rows,
 			e.bytes,
@@ -450,6 +498,7 @@ func (b *spillFileBundle) accountedFiles(
 					e.diskToken = nil
 				}
 			},
+			entry.cleanupToken,
 		)
 		files[bucket] = accounted
 	}
@@ -778,6 +827,7 @@ func NewArgument() *HashBuild {
 
 func (hashBuild *HashBuild) Release() {
 	if hashBuild != nil {
+		hashBuild.cleanupSpillFiles()
 		reuse.Free[HashBuild](hashBuild, nil)
 	}
 }
@@ -811,7 +861,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	// Only clean up build files when the join map was NOT successfully sent.
 	// When mapSucceed=true, hashjoin owns the files and deletes them after reading.
 	if !mapSucceed {
-		hashBuild.cleanupSpillFiles(proc)
+		hashBuild.cleanupSpillFiles()
 	}
 	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.state = BuildHashMap
@@ -845,7 +895,7 @@ func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err
 		}
 		hashBuild.publishBuildError(proc, err)
 	}
-	hashBuild.cleanupSpillFiles(proc)
+	hashBuild.cleanupSpillFiles()
 	hashBuild.ctr.spillFS = nil
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.freeSpillExprExecs()
@@ -919,12 +969,14 @@ func (hashBuild *HashBuild) publishBuildError(proc *process.Process, err error) 
 	return true
 }
 
-func (hashBuild *HashBuild) cleanupSpillFiles(proc *process.Process) {
+func (hashBuild *HashBuild) cleanupSpillFiles() {
 	// Release physical descriptors before their FD tokens, then remove durable
-	// names and return disk ownership.
-	if hashBuild.ctr.spillBundle != nil {
-		hashBuild.ctr.spillBundle.release()
+	// names and return disk ownership. Reset may leave a prepared operator
+	// cached indefinitely: detach failed removals at this boundary, not Release.
+	if bundle := hashBuild.ctr.spillBundle; bundle != nil {
 		hashBuild.ctr.spillBundle = nil
+		bundle.release()
+		bundle.deferCleanup()
 	}
 }
 
