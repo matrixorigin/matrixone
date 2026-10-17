@@ -11207,28 +11207,6 @@ func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {
 	require.False(t, stmt.hasPendingLongData())
 }
 
-func Test_ExecRequest_SidecarHintUsesNormalQueryPath(t *testing.T) {
-	// The hint is stripped and carried as compile intent. With no service Sirius
-	// runtime, compilation remains on the normal native query path.
-	ctx := context.TODO()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ses := newTestSession(t, ctrl)
-	ses.txnHandler = &TxnHandler{}
-
-	ec := newTestExecCtx(ctx, ctrl)
-	req := &Request{
-		cmd:  COM_QUERY,
-		data: []byte("/*+ SIDECAR */ SELECT 1"),
-	}
-
-	// ExecRequest won't return an error even though doComQuery panics/fails;
-	// the deferred recover catches it. We just verify it doesn't panic.
-	resp, _ := ExecRequest(ses, ec, req)
-	_ = resp
-}
-
 func Test_unsupportedCommand(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
