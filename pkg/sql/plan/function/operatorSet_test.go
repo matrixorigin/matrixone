@@ -1019,6 +1019,35 @@ func TestIffFn_DecimalConditionBatch(t *testing.T) {
 	require.True(t, succeed, info)
 }
 
+func TestIffFn_PreservesEnumStoredErrorMember(t *testing.T) {
+	// JOIN UPDATE uses IF(selected, new, old) over ENUM ordinals. Stored error
+	// member 0 (INSERT IGNORE) must survive both branches; CastIndexValueToIndex
+	// would reject it, so the ENUM IF overload must keep the bits unchanged.
+	proc := testutil.NewProcess(t)
+	enumTyp := types.T_enum.ToType()
+	// Rows: false/old0, true/new0, true/new1, false/old1 (NULL condition is falsey → else).
+	tcc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{false, true, true, false}, []bool{false, false, false, true}),
+		NewFunctionTestInput(enumTyp, []types.Enum{1, 0, 1, 2}, nil),
+		NewFunctionTestInput(enumTyp, []types.Enum{0, 2, 0, 1}, nil),
+	}, NewFunctionTestResult(enumTyp, false, []types.Enum{0, 0, 1, 1}, nil), iffFn)
+	succeed, info := tcc.RunAndFree()
+	require.True(t, succeed, info)
+}
+
+func TestIffCheck_PrefersEnumOverUint16(t *testing.T) {
+	enumTyp := types.T_enum.ToType()
+	result := iffCheck(nil, []types.Type{types.T_bool.ToType(), enumTyp, enumTyp})
+	require.NotEqual(t, failedFunctionParametersWrong, result.status)
+	if result.status == succeedWithCast {
+		require.Equal(t, types.T_enum, result.finalType[1].Oid)
+		require.Equal(t, types.T_enum, result.finalType[2].Oid)
+	} else {
+		require.Equal(t, succeedMatched, result.status)
+	}
+	require.Equal(t, types.T_enum, iffReturnType([]types.Type{types.T_bool.ToType(), enumTyp, enumTyp}).Oid)
+}
+
 func TestIffFn_SkipsInactiveRows(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	tc := NewFunctionTestCase(proc,

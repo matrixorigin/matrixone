@@ -750,7 +750,7 @@ var (
 		types.T_float32, types.T_float64,
 		types.T_uuid,
 		types.T_bool, types.T_date, types.T_datetime,
-		types.T_bit,
+		types.T_bit, types.T_enum,
 		types.T_varchar, types.T_char, types.T_blob, types.T_text, types.T_json,
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_timestamp, types.T_time, types.T_datalink,

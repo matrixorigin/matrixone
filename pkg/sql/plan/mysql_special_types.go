@@ -1021,6 +1021,15 @@ func makeMySQLSpecialNumericValue(
 		if err != nil {
 			return nil, err
 		}
+		// This helper serves numeric consumers, while native IF now preserves
+		// ENUM storage. Keep its established UINT16 contract explicitly.
+		if types.T(recovered.Typ.Id) == types.T_enum {
+			numericType := types.T_uint16.ToType()
+			recovered, err = appendCastBeforeExpr(ctx, recovered, makePlan2Type(&numericType))
+			if err != nil {
+				return nil, err
+			}
+		}
 		recovered.Typ.NotNullable = displayExpr.Typ.NotNullable
 		recovered.Typ.Enumvalues = storageType.Enumvalues
 		return recovered, nil
@@ -1086,37 +1095,6 @@ func makeMySQLSpecialOrderKey(ctx context.Context, displayExpr *plan.Expr, stora
 	orderKey.Typ.NotNullable = displayExpr.Typ.NotNullable
 	orderKey.Typ.Enumvalues = storageType.Enumvalues
 	return orderKey, nil
-}
-
-func wrapAstExprForMySQLSpecialType(ctx context.Context, targetType plan.Type, astExpr tree.Expr) (tree.Expr, error) {
-	if !isEnumOrSetPlanType(&targetType) {
-		return astExpr, nil
-	}
-
-	binder := NewDefaultBinder(ctx, nil, nil, targetType, nil)
-	boundExpr, err := binder.BindExpr(astExpr, 0, false)
-	if err != nil {
-		return nil, err
-	}
-
-	_, valueToIndex, indexValueToIndex, err := mysqlSpecialTypeFuncNames(&targetType)
-	if err != nil {
-		return nil, err
-	}
-
-	funcName := valueToIndex
-	if types.T(boundExpr.Typ.Id).IsInteger() {
-		funcName = indexValueToIndex
-	}
-
-	return &tree.FuncExpr{
-		Func: tree.FuncName2ResolvableFunctionReference(tree.NewUnresolvedColName(funcName)),
-		Type: tree.FUNC_TYPE_DEFAULT,
-		Exprs: []tree.Expr{
-			tree.NewNumVal(targetType.Enumvalues, targetType.Enumvalues, false, tree.P_char),
-			astExpr,
-		},
-	}, nil
 }
 
 func funcCastForGeometryType(ctx context.Context, expr *Expr, targetType Type) (*Expr, error) {

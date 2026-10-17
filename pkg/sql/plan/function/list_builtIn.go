@@ -15456,6 +15456,18 @@ var supportedOthersBuiltIns = []FuncNew{
 					return CastValueToIndex
 				},
 			},
+			{
+				overloadId:      1,
+				args:            []types.T{types.T_varchar, types.T_varchar, types.T_enum},
+				volatile:        true,
+				realTimeRelated: true,
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_enum.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return CastValueToIndex
+				},
+			},
 		},
 	},
 
