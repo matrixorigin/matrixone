@@ -21,6 +21,8 @@
 package operator
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 )
@@ -162,7 +164,14 @@ func (c *Controller) RemoveFinishedOperator(
 func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 	tnState pb.TNState, cnState pb.CNState, proxyState pb.ProxyState) (commands []pb.ScheduleCommand) {
 	for _, op := range ops {
-		c.operators[op.shardID] = append(c.operators[op.shardID], op)
+		registered := false
+		if len(op.steps) == 1 {
+			_, tnStart := op.steps[0].(AddTnReplica)
+			registered = tnStart && slices.Contains(c.operators[op.shardID], op)
+		}
+		if !registered {
+			c.operators[op.shardID] = append(c.operators[op.shardID], op)
+		}
 		if step := op.Check(logState, tnState, cnState, proxyState); step != nil {
 			commands = append(commands, generateScheduleCommand(step))
 		}

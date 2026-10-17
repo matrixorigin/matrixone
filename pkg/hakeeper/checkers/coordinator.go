@@ -15,6 +15,8 @@
 package checkers
 
 import (
+	"slices"
+
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper"
 	"github.com/matrixorigin/matrixone/pkg/hakeeper/checkers/cnservice"
@@ -84,6 +86,17 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 
 	// check whether system health or not.
 	if operators, health := syshealth.Check(c.cfg, cluster, tnState, logState, currentTick); !health {
+		// TN starts have a report/target lifetime. Teardown ends their ownership
+		// before ordinary checks stop running.
+		for _, record := range cluster.TNShards {
+			for _, op := range slices.Clone(c.OperatorController.GetOperators(record.ShardID)) {
+				if steps := op.OpSteps(); len(steps) == 1 {
+					if _, ok := steps[0].(operator.AddTnReplica); ok {
+						c.OperatorController.RemoveOperator(op)
+					}
+				}
+			}
+		}
 		c.teardown = true
 		c.teardownOps = operators
 		return c.OperatorController.Dispatch(c.teardownOps, logState, tnState, cnState, proxyState)
@@ -113,7 +126,7 @@ func (c *Coordinator) Check(alloc util.IDAllocator, state pb.CheckerState, stand
 			state.NonVotingLocality,
 			standbyEnabled,
 		),
-		tnservice.NewTNServiceChecker(commonFields, tnState),
+		tnservice.NewTNServiceChecker(commonFields, tnState, c.OperatorController),
 		cnservice.NewCNServiceChecker(commonFields, cnState),
 		proxy.NewProxyServiceChecker(commonFields, proxyState),
 	}
