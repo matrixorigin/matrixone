@@ -62,8 +62,9 @@ type branchRestartScenario struct {
 	// a quiet test cluster.
 	//
 	// Setting this field also enables this scenario's accelerated TN GC
-	// knobs (2s scans, 1ms TTLs, 2s incremental checkpoints): the shipped
-	// defaults (1h gc-ttl, 30m scan-gc-interval) make checkpoints younger
+	// knobs (1s catalog GC, 2s disk scans, 1ms TTLs, 2s incremental
+	// checkpoints): the shipped defaults (1h gc-ttl, 30m scan-gc-interval)
+	// make checkpoints younger
 	// than an hour ineligible for scanning, which is the right policy for
 	// production but leaves a seconds-old test cluster unreachable for the
 	// probe. The knob pattern matches the repo's storage UTs
@@ -234,6 +235,7 @@ func runBranchRestartScenario(t *testing.T, sc branchRestartScenario) {
 					tn = cfg.TNCompatible
 				}
 				if tn != nil {
+					tn.GCCfg.CatalogGCInterval.Duration = time.Second
 					tn.GCCfg.ScanGCInterval.Duration = 2 * time.Second
 					tn.GCCfg.GCTTL.Duration = time.Millisecond
 					tn.GCCfg.GCInMemoryTTL.Duration = time.Millisecond
@@ -250,12 +252,8 @@ func runBranchRestartScenario(t *testing.T, sc branchRestartScenario) {
 	}
 	require.NoError(t, err)
 
-	// The reclaim wait rides on this harness's slow background cadences
-	// (forced global checkpoints complete on a roughly per-minute boundary
-	// in a quiet embedded cluster, and reclamation has needed up to four of
-	// those cycles after a drop), so the default five-minute workload
-	// budget could expire inside the first generation. Fifteen minutes
-	// leaves wide margin while keeping the budget finite.
+	// Keep workload and recovery bounded independently of service startup and
+	// admission. Each restart refreshes the generation's SQL context.
 	start, finish := newRecoveryClusterStarterWithBudget(
 		setupCtx, c.Start, time.Now, 15*time.Minute,
 	)
@@ -314,14 +312,9 @@ func runBranchRestartScenario(t *testing.T, sc branchRestartScenario) {
 // require if the deadline passes with objects left, which is exactly the
 // red state expected when the disk cleaner silently does nothing.
 //
-// The alternation must tolerate this harness's slow checkpoint cadence: on
-// a quiet embedded cluster every forced global checkpoint completes on a
-// roughly per-minute boundary, so DB.ForceGlobalCheckpoint spends ~55s in
-// ForceICKP no-progress retries (ICKP-Schedule-Force-End logs
-// no-progress-retries=54-59) and each round below can cost a minute. The
-// commit heartbeat keeps WAL traffic flowing so the checkpoint machinery
-// has fresh boundaries to work against; the deadline is sized for the
-// slowest observed cadence, not for the fast path.
+// Catalog GC first retires dropped table metadata; disk GC can then reclaim
+// its objects. This scenario configures both existing cron owners with short
+// cadences instead of generating background writes while waiting for defaults.
 func assertDiskGCReclaimsProbe(
 	t *testing.T,
 	ctx context.Context,
@@ -367,24 +360,10 @@ func assertDiskGCReclaimsProbe(
 	_, err := db.ExecContext(ctx, fmt.Sprintf("drop table %s", probeTable))
 	require.NoError(t, err)
 
-	stopHeartbeat, heartbeatDone := startCommitHeartbeat(ctx, db)
-	defer func() {
-		stopHeartbeat()
-		require.NoError(t, <-heartbeatDone)
-	}()
-
 	_, err = db.ExecContext(ctx, "select mo_ctl('dn','globalcheckpoint','')")
 	require.NoError(t, err)
 
 	waitStart := time.Now()
-	// The deadline must absorb this harness's slow checkpoint cadence: in
-	// the quiet embedded cluster every forced global checkpoint completes
-	// on a roughly per-minute boundary (observed Force-GCKP-End costs of
-	// 54-58s with 54-59 ForceICKP no-progress retries, in this harness
-	// across runs), so each round below can cost a minute; the slowest
-	// observed reclamation needed three rounds after the drop checkpoint.
-	// Reclamation itself has always completed — the deadline only needs to
-	// be generous enough to never cut a working cadence short.
 	deadline := waitStart.Add(6 * time.Minute)
 	for round := 1; ; round++ {
 		require.NoError(t, ctx.Err())
@@ -393,6 +372,8 @@ func assertDiskGCReclaimsProbe(
 			if _, statErr := os.Stat(filepath.Join(sharedRoot, name)); statErr == nil {
 				allReclaimed = false
 				break
+			} else {
+				require.ErrorIs(t, statErr, os.ErrNotExist, "stat probe object %s", name)
 			}
 		}
 		if allReclaimed {
@@ -406,79 +387,6 @@ func assertDiskGCReclaimsProbe(
 		require.NoError(t, err)
 		time.Sleep(2 * time.Second)
 	}
-}
-
-// startCommitHeartbeat commits a tiny insert on a short interval until the
-// returned stop function is called. A quiet embedded cluster has no WAL
-// traffic besides what the probe itself commits, and the checkpoint
-// machinery in that state schedules work on its own ~60s cadence
-// (Force-GCKP-End shows 54-58s stalls bounded by ForceICKP no-progress
-// retries). The heartbeat's steady commit stream keeps fresh WAL
-// boundaries available so each forced checkpoint has new content to
-// advance through when the cadence fires.
-//
-// The heartbeat runs on its own context derived from the caller's: stop
-// closes stopCh and cancels that context, so a statement blocked inside
-// ExecContext is released immediately and the caller's join on done cannot
-// outlive the scenario context. A statement that fails because stop was
-// called — during setup DDL or during inserts — is a clean exit, not a
-// heartbeat failure. The returned channel is closed when the goroutine
-// exits and yields the first genuine failure, or nil if the heartbeat was
-// stopped or the parent context ended it.
-func startCommitHeartbeat(ctx context.Context, db *sql.DB) (stop func(), done <-chan error) {
-	hbCtx, cancel := context.WithCancel(ctx)
-	stopCh := make(chan struct{})
-	doneCh := make(chan error, 1)
-	go func() {
-		defer close(doneCh)
-		defer cancel()
-		for _, statement := range []string{
-			"create database if not exists gc_progress_heartbeat",
-			"create table if not exists gc_progress_heartbeat.tick(id int primary key)",
-		} {
-			if _, err := db.ExecContext(hbCtx, statement); err != nil {
-				select {
-				case <-stopCh:
-					// Stopped while the statement was in flight.
-					return
-				default:
-					doneCh <- err
-					return
-				}
-			}
-		}
-		ticker := time.NewTicker(50 * time.Millisecond)
-		defer ticker.Stop()
-		for n := 1; ; n++ {
-			select {
-			case <-stopCh:
-				return
-			default:
-			}
-			if _, err := db.ExecContext(hbCtx,
-				fmt.Sprintf("insert into gc_progress_heartbeat.tick values (%d)", n)); err != nil {
-				select {
-				case <-stopCh:
-					// Stopped while the statement was in flight.
-					return
-				default:
-					doneCh <- err
-					return
-				}
-			}
-			select {
-			case <-stopCh:
-				return
-			case <-hbCtx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-	return func() {
-		close(stopCh)
-		cancel()
-	}, doneCh
 }
 
 // assertBranchScenario checks the full post-lifecycle contract of one
