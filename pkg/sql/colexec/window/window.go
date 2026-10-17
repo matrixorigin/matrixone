@@ -80,6 +80,9 @@ func (window *Window) Prepare(proc *process.Process) (err error) {
 	} else {
 		window.OpAnalyzer.Reset()
 	}
+	if window.ScalarSetReaggregation {
+		return window.prepareScalarIdentity()
+	}
 
 	ctr := &window.ctr
 
@@ -310,6 +313,9 @@ func (window *Window) Call(proc *process.Process) (callResult vm.CallResult, cal
 	// next Call begins, release its borrowed input windows and owned result
 	// vector before reusing any operator state.
 	ctr.cleanOutput(proc.Mp())
+	if window.ScalarSetReaggregation {
+		return window.callScalarIdentity(proc)
+	}
 
 	for {
 		if err, canceled := vm.CancelCheck(proc); canceled {

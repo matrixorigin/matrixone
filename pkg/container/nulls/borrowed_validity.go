@@ -63,6 +63,28 @@ func (nsp *Nulls) BorrowedAccountedBytes() int64 {
 	return nsp.validityLease.AccountedBytes()
 }
 
+// BorrowedRetainedBytes bounds the physical validity backing kept alive by a
+// lease, even when its separate accounting charge is zero.
+func (nsp *Nulls) BorrowedRetainedBytes() uint64 {
+	if nsp == nil || nsp.validityLease == nil {
+		return 0
+	}
+	size := max(uint64(cap(nsp.validity)), uint64(cap(nsp.validityLease.Bytes())))
+	if n := nsp.validityLease.AccountedBytes(); n > 0 {
+		size = max(size, uint64(n))
+	}
+	return size
+}
+
+// RetainedStorageBytes measures owned and borrowed validity storage without
+// crossing the copy-on-write boundary or releasing a lease.
+func (nsp *Nulls) RetainedStorageBytes() uint64 {
+	if nsp == nil {
+		return 0
+	}
+	return uint64(nsp.np.StorageCapacity())*8 + nsp.BorrowedRetainedBytes()
+}
+
 // InitBorrowedWindow creates a retained logical sub-view. It returns false
 // when the requested range contains no NULL, in which case dst remains empty.
 func (nsp *Nulls) InitBorrowedWindow(dst *Nulls, start, end int) (bool, error) {

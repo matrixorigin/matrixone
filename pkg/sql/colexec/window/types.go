@@ -127,8 +127,10 @@ type timestampRangeSelection struct {
 }
 
 type Window struct {
-	ctr         container
-	WinSpecList []*plan.Expr
+	ctr                    container
+	ScalarSetReaggregation bool
+	scalarIdentity         scalarIdentityState
+	WinSpecList            []*plan.Expr
 	// sort and partition
 	Fs []*plan.OrderBySpec
 	// agg func
@@ -142,13 +144,6 @@ type Window struct {
 	SpillThreshold int64
 
 	vm.OperatorBase
-}
-
-func (window *Window) SetAllocationAccount(account *mpool.AllocationAccount) error {
-	return window.ctr.allocation.Set(account)
-}
-func (window *Window) ClearAllocationAccount(account *mpool.AllocationAccount) error {
-	return window.ctr.allocation.Clear(account)
 }
 
 func (window *Window) GetOperatorBase() *vm.OperatorBase {
@@ -192,6 +187,9 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr := &window.ctr
 
 	ctr.cleanOutput(proc.Mp())
+	window.scalarIdentity.releaseInput()
+	window.scalarIdentity.counter = 0
+	window.scalarIdentity.done = false
 	ctr.resetParam()
 	ctr.prepareParamKind.Reset(nil)
 	ctr.resetVectors()
@@ -218,6 +216,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr := &window.ctr
 
 	ctr.cleanOutput(proc.Mp())
+	window.scalarIdentity.releaseInput()
 	ctr.runtimeFrames = nil
 	ctr.clearCivilOrder()
 	// Free aggregators before the batch so an error exit from Call (which skips

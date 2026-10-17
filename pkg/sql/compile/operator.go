@@ -260,6 +260,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.LoopJoin:
 		t := sourceOp.(*loopjoin.LoopJoin)
 		op := loopjoin.NewArgument()
+		op.ScalarSetReaggregation = t.ScalarSetReaggregation
+		op.ScalarSetLease = t.ScalarSetLease
 		op.ResultCols = t.ResultCols
 		op.LeftTypes = t.LeftTypes
 		op.RightTypes = t.RightTypes
@@ -361,6 +363,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.Window:
 		t := sourceOp.(*window.Window)
 		op := window.NewArgument()
+		op.ScalarSetReaggregation = t.ScalarSetReaggregation
 		op.WinSpecList = t.WinSpecList
 		op.Fs = t.Fs
 		op.Aggs = t.Aggs
@@ -1910,6 +1913,7 @@ func constructWindow(_ context.Context, node *plan.Node, proc *process.Process) 
 			functionID, isDistinct, args, cfg, configType)
 	}
 	arg := window.NewArgument()
+	arg.ScalarSetReaggregation = node.ScalarSetReaggregation
 	arg.Aggs = aggregationExpressions
 	arg.WinSpecList = node.WinSpecList
 	arg.SpillThreshold = node.SpillMem
@@ -2587,10 +2591,14 @@ func constructLoopJoin(node *plan.Node, leftTypes, rightTypes []types.Type, proc
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
 	arg := loopjoin.NewArgument()
+	arg.ScalarSetReaggregation = node.ScalarSetReaggregation
 	arg.ResultCols = result
 	arg.LeftTypes = leftTypes
 	arg.RightTypes = rightTypes
 	arg.NonEqCond = colexec.RewriteFilterExprList(node.OnList)
+	if node.ScalarSetReaggregation && arg.NonEqCond == nil {
+		arg.NonEqCond = &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: true}}}}
+	}
 	arg.OwnsConstantFilterDiagnostics = containsStatementInvariantDiagnosticInList(proc, node.OnList)
 	arg.JoinType = node.JoinType
 	for i := range node.SendMsgList {

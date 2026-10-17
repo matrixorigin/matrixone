@@ -238,9 +238,10 @@ func (e *ExecutionResourceError) Is(target error) bool {
 // closure transitions.  This gives the operation a simple linearization point
 // and, importantly, makes a query rejection roll back its complete CN charge.
 type ExecutionResourceBudget struct {
-	mu         sync.Mutex
-	refreshMu  sync.Mutex
-	headroomMu sync.Mutex
+	mu               sync.Mutex
+	scalarSetQueries uint64
+	refreshMu        sync.Mutex
+	headroomMu       sync.Mutex
 
 	aggregateCap  uint64
 	aggregateUsed uint64

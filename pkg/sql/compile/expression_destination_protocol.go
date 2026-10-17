@@ -30,6 +30,9 @@ import (
 // their diagnostic order. One send observes its actual destination once; no
 // observation survives a later send, placement, or receiver validation.
 func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipeline, features plan.RemoteExpressionFeatures) error {
+	if features.ScalarSetReaggregation {
+		return moerr.NewNotSupportedNoCtx("bounded scalar set reaggregation requires coordinator-local execution")
+	}
 	integerArgumentsVersion := defines.MORPCVersion85
 	if features.SpecialIntegerConsumers {
 		integerArgumentsVersion = defines.MORPCVersion98

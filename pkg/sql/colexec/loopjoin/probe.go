@@ -177,6 +177,14 @@ func (ctr *container) evalConditionWindow(
 		return vec, nil, start + 1, nil
 	}
 	end = min(start+conditionWindowRowLimit(buildBat), buildBat.RowCount())
+	if ap.ScalarSetReaggregation {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return nil, nil, 0, err
+		}
+		if err := ap.ScalarSetLease.ChargeCandidatePairs(uint64(end - start)); err != nil {
+			return nil, nil, 0, err
+		}
+	}
 	conditionInput := buildBat
 	if start != 0 || end != buildBat.RowCount() {
 		window, err = buildBat.WindowWithAllocation(
