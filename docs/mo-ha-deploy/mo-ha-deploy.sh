@@ -470,6 +470,14 @@ LOCAL
 stage_moconf(){
   hdr "阶段 moconf: 下发 MatrixOne 配置"
   if [ "$NO_MO" = 1 ]; then info "NO_MO=1，跳过"; return 0; fi
+  # S3 一旦启用就必须给全参数，否则会生成空 endpoint / 空凭据的配置
+  if [ -n "$S3_BUCKET" ]; then
+    local _miss=""
+    [ -n "$S3_ENDPOINT" ]   || _miss="$_miss S3_ENDPOINT"
+    [ -n "$S3_KEY_ID" ]     || _miss="$_miss S3_KEY_ID"
+    [ -n "$S3_KEY_SECRET" ] || _miss="$_miss S3_KEY_SECRET"
+    [ -z "$_miss" ] || die "启用 S3 (S3_BUCKET=$S3_BUCKET) 时必须同时设置：$_miss"
+  fi
   local payload="$MO_CONFIG_DIR"
   [ -n "$payload" ] || payload="$(cd "$(dirname "$0")" && pwd)/mo-config"
   if [ ! -d "$payload" ]; then
