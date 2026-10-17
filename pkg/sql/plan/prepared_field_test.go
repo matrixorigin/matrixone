@@ -188,11 +188,16 @@ func TestStringDeclarationBoundaries(t *testing.T) {
 	}{
 		{"mergeable projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation) d", false},
 		{"filtered projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation where n_nationkey=1) d", false},
+		{"having projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation having x is not null) d", true},
+		{"constant having projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation having true) d", true},
 		{"limited projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation limit 1) d", true},
 		{"sorted limited projection", "select reverse(x) from (select coalesce(n_name,_binary '') x from nation order by n_name limit 1) d", true},
 		{"distinct projection", "select reverse(x) from (select distinct coalesce(n_name,_binary '') x from nation) d", true},
 		{"window projection", "select reverse(x) from (select coalesce(n_name,_binary '') x,row_number() over () rn from nation) d", true},
 		{"scalar projection", "select reverse((select coalesce(n_name,_binary '') from nation limit 1))", false},
+		{"scalar grouped", "select reverse((select coalesce(n_name,_binary '') from nation group by coalesce(n_name,_binary '')))", true},
+		{"scalar singleton group", "select reverse((select coalesce(n_name,_binary '') from nation where n_nationkey=1 group by coalesce(n_name,_binary '')))", false},
+		{"scalar having", "select reverse((select coalesce(n_name,_binary '') x from nation where n_nationkey=1 having x is not null))", false},
 		{"scalar distinct", "select reverse((select distinct coalesce(n_name,_binary '') from nation limit 1))", true},
 		{"scalar window", "select reverse((select first_value(coalesce(n_name,_binary '')) over () from nation limit 1))", true},
 		{"scalar set", "select reverse((select coalesce(n_name,_binary '') x from nation union all select _binary '' order by x desc limit 1))", true},
@@ -235,8 +240,119 @@ func TestStringCommonValueDeclarationBoundary(t *testing.T) {
 			}
 			require.True(t, isCastOverload(arg, 1), "consume the conditional's declaration before COALESCE selects its payload: %s", arg.String())
 			require.False(t, arg.GetF().GetSyntaxExplicitCast())
-			require.Equal(t, int32(types.T_blob), arg.Typ.Id)
+			require.Equal(t, int32(types.T_varbinary), arg.Typ.Id)
+			require.Equal(t, makeTypeByPlan2Expr(arg.GetF().Args[0]), makeTypeByPlan2Expr(arg),
+				"declaration consumption must preserve the complete bounded binary type")
 		})
+	}
+}
+
+func TestStringDeclarationConsumers(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql, function string
+		argument            int
+		ownsDeclaration     bool
+	}{
+		{"COALESCE over REVERSE", "select coalesce(reverse(coalesce(n_name,_binary '')),'') from nation", "coalesce", 0, false},
+		{"COALESCE over LEFT", "select coalesce(left(coalesce(n_name,_binary ''),1),'') from nation", "coalesce", 0, false},
+		{"COALESCE over TRIM", "select coalesce(trim(coalesce(n_name,_binary '')),'') from nation", "coalesce", 0, false},
+		{"COALESCE over REPEAT", "select coalesce(repeat(coalesce(n_name,_binary ''),2),'') from nation", "coalesce", 0, false},
+		{"COALESCE over RPAD", "select coalesce(rpad(coalesce(n_name,_binary ''),3,'z'),'') from nation", "coalesce", 0, false},
+		{"COALESCE over LPAD", "select coalesce(lpad(coalesce(n_name,_binary ''),3,'z'),'') from nation", "coalesce", 0, true},
+		{"IF over COALESCE", "select char_length(if(n_nationkey=1,_binary '',coalesce(n_name,_binary ''))) from nation", "char_length", 0, true},
+		{"CASE over COALESCE", "select char_length(case when n_nationkey=1 then _binary '' else coalesce(n_name,_binary '') end) from nation", "char_length", 0, true},
+		{"CASE over column", "select char_length(case when n_nationkey=1 then _binary '' else n_name end) from nation", "char_length", 0, true},
+		{"merged conditional", "select char_length(x) from (select if(n_nationkey=1,_binary '',coalesce(n_name,_binary '')) x from nation) d", "char_length", 0, true},
+		{"LOCATE merged source", "select locate('a',x) from (select coalesce(n_name,_binary '') x from nation) d", "locate", 1, true},
+		{"INSTR merged source", "select instr(x,'a') from (select coalesce(n_name,_binary '') x from nation) d", "instr", 0, true},
+		{"LIKE merged source", "select x like '__' from (select coalesce(n_name,_binary '') x from nation) d", "like", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			require.NoError(t, err)
+			consumer := findPlanFunctionExpr(bound, tc.function)
+			require.NotNil(t, consumer)
+			arg := consumer.GetF().Args[tc.argument]
+			for source := preparedFieldPrivateCastSource(arg, 0); source != nil; source = preparedFieldPrivateCastSource(arg, 0) {
+				arg = source
+			}
+			require.Equal(t, tc.ownsDeclaration, isCastOverload(arg, 1), "the actual consumer owns the conversion, not an arbitrary function result: %s", arg.String())
+		})
+	}
+}
+
+func TestStringConditionalDeclarationOwnership(t *testing.T) {
+	binaryType := types.T_blob.ToType()
+	typ := makePlan2Type(&binaryType)
+	variable := &Expr{Typ: typ, Expr: &planpb.Expr_V{V: &planpb.VarRef{Name: "bound_s"}}}
+	parameter := &Expr{Typ: typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	column := &Expr{Typ: typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}}
+	null := &Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
+	binary := makePlan2VarBinaryConstExprWithType("x")
+	binary.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	fn := func(name string, args ...*Expr) *Expr {
+		return &Expr{Typ: typ, Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{ObjName: name}, Args: args,
+		}}}
+	}
+	explicit := fn("cast", null)
+	explicit.GetF().SyntaxExplicitCast = true
+	for _, tc := range []struct {
+		name        string
+		value, peer *Expr
+		owns        bool
+	}{
+		{"variable transport", variable, null, false},
+		{"parameter transport", parameter, null, false},
+		{"forwarded variable", fn("left", variable, makePlan2Int64ConstExprWithType(1)), null, false},
+		{"RPAD forwards value", fn("rpad", variable, makePlan2Int64ConstExprWithType(3), makePlan2StringConstExprWithType("z")), null, false},
+		{"LPAD owns result", fn("lpad", variable, makePlan2Int64ConstExprWithType(3), makePlan2StringConstExprWithType("z")), null, true},
+		{"materializing result", fn("any_value", variable), null, true},
+		{"genuine binary peer", variable, binary, true},
+		{"genuine binary column", variable, column, true},
+		{"explicit binary NULL", variable, explicit, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// The binary condition contributes no result declaration.
+			expr := fn("case", binary, tc.value, tc.peer)
+			b := &baseBinder{}
+			require.Equal(t, tc.owns, b.stringSourceHasDeclarationBoundary(expr, nil, nil))
+		})
+	}
+}
+
+func TestStringDomainContract(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		arity, pos int
+		collation  bool
+		result     bool
+	}{
+		{"lower", 1, 0, true, false},
+		{"lower", 0, -1, true, false},
+		{"reverse", 1, 0, false, false},
+		{"reverse", 0, -1, false, false},
+		{"repeat", 2, 0, false, false},
+		{"rpad", 3, 0, false, false},
+		{"lpad", 3, 0, false, true},
+		{"lpad", 0, -1, false, true},
+		{"replace", 3, 0, false, true},
+		{"substring_index", 3, 0, false, true},
+		{"trim", 3, 2, false, false},
+		{"trim", 2, -1, false, false},
+		{"coalesce", 2, -1, false, false},
+		{"case", 3, -1, false, true},
+	} {
+		pos, collation, result := preparedStringDomainContract(tc.name, tc.arity)
+		require.Equal(t, tc.pos, pos, tc.name)
+		require.Equal(t, tc.collation, collation, tc.name)
+		require.Equal(t, tc.result, result, tc.name)
+		legacyPos, legacyCollation := preparedStringDomainSourceIndex(tc.name, tc.arity)
+		require.Equal(t, pos, legacyPos, "the collation API must use the same source mapping")
+		require.Equal(t, collation, legacyCollation)
 	}
 }
 
