@@ -66,8 +66,8 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 				{"varchar tinytext", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 100}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 255}}, types.T_text, 0, 0},
 				{"tinytext varchar", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 255}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 100}}, types.T_text, 0, 0},
 				{"utf8 boundary 256", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 64, Charset: uint32(types.CharsetUTF8)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 255}}, types.T_text, 0, 0},
-				{"mb3 boundary 255", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 85, Charset: uint32(types.CharsetUTF8MB3UnicodeCI), CollationVersion: uint32(types.CollationVersionV1)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 255}}, types.T_text, 255, 0},
-				{"mb3 boundary 258", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 86, Charset: uint32(types.CharsetUTF8MB3UnicodeCI), CollationVersion: uint32(types.CollationVersionV1)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 255}}, types.T_text, 0, 0},
+				{"mb3 boundary 255", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 85, Charset: uint32(types.CharsetUTF8MB3UnicodeCI), CollationVersion: uint32(types.CollationVersionV1)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 255, Charset: uint32(types.CharsetUTF8MB3UnicodeCI), CollationVersion: uint32(types.CollationVersionV1)}}, types.T_text, 255, 0},
+				{"mb3 boundary 258", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 86, Charset: uint32(types.CharsetUTF8MB3UnicodeCI), CollationVersion: uint32(types.CollationVersionV1)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 255, Charset: uint32(types.CharsetUTF8MB3UnicodeCI), CollationVersion: uint32(types.CollationVersionV1)}}, types.T_text, 0, 0},
 				{"binary charset boundary", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 255, Charset: uint32(types.CharsetBinary)}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 255, Charset: uint32(types.CharsetBinary)}}, types.T_text, 255, 0},
 				{"medium text byte capacity", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 20000}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_text), Width: 255}}, types.T_text, types.MaxMediumTextLen, 0},
 				{"varchar tinyblob", &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_varchar), Width: 100}}, &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_blob), Width: 255}}, types.T_blob, 0, 0},
@@ -114,6 +114,10 @@ func TestBindLagLeadDefaultCapacity(t *testing.T) {
 					for i, typ := range []planpb.Type{expr.Typ, expr.GetF().Args[0].Typ, expr.GetF().Args[2].Typ} {
 						require.Equal(t, int32(tc.oid), typ.Id)
 						require.Equal(t, tc.scale, typ.Scale)
+						if tc.value.Typ.Charset == uint32(types.CharsetUTF8MB3UnicodeCI) {
+							require.Equal(t, tc.value.Typ.Charset, typ.Charset)
+							require.Equal(t, tc.value.Typ.CollationVersion, typ.CollationVersion)
+						}
 						// Same-family decimals and BLOBs need no metadata-only
 						// cast when their original capacity fits the result.
 						if i == 0 || (!tc.oid.IsDecimal() && tc.oid != types.T_blob) {
