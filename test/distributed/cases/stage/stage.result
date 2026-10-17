@@ -250,6 +250,7 @@ stage_name    stage_status    comment
 local_stage    in_use    local stage configure
 sub_local_stage    in_use    sub local stage configure
 select * from stage_table into outfile 'stage://sub_local_stage/stage_table5.csv';
+internal error: only the sys account moadmin role can access SQL file paths
 CREATE TABLE stage_infile_table(
 R_REGIONKEY  INTEGER NOT NULL,
 R_NAME       CHAR(25) NOT NULL,
@@ -257,13 +258,9 @@ R_COMMENT    VARCHAR(152),
 PRIMARY KEY (R_REGIONKEY)
 );
 load data infile 'stage://sub_local_stage/stage_table5.csv' into table stage_infile_table fields terminated by ',' IGNORE 1 LINES;
+internal error: only the sys account moadmin role can access SQL file paths
 select * from stage_infile_table;
-r_regionkey    r_name    r_comment
-0    AFRICA    lar deposits. blithely final packages cajole. regular waters are final requests. regular accounts are according to 
-1    AMERICA    hs use ironic, even requests. s
-2    ASIA    ges. thinly even pinto beans ca
-3    EUROPE    ly final courts cajole furiously final excuse
-4    MIDDLE EAST    uickly special accounts cajole carefully blithely close requests. carefully final asymptotes haggle furiousl
+➤ r_regionkey[4,32,0]  ¦  r_name[1,25,0]  ¦  r_comment[12,152,0]
 CREATE EXTERNAL TABLE stage_ext_table(
 R_REGIONKEY  INTEGER NOT NULL,
 R_NAME       CHAR(25) NOT NULL,

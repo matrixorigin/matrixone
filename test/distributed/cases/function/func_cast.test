@@ -39,6 +39,81 @@ select cast(cast(0.5 as double) as signed), cast(cast(1.5 as double) as signed),
 select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), cast('7e2' as unsigned);
 select cast('.5e0' as signed), cast('-.5e0' as signed), cast('+.5e+2' as signed);
 
+# Explicit CAST range diagnostics (#30265, #30271).
+set @cast_range_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = '';
+select cast(999.995 as decimal(5,2)) as d;
+show warnings;
+select @@warning_count;
+select cast(999.994 as decimal(5,2)) as d;
+show warnings;
+select @@warning_count;
+select cast('9223372036854775808' as signed) as s, cast('-9223372036854775809' as signed) as n,
+       cast('-1' as unsigned) as u, cast('18446744073709551616' as unsigned) as o;
+show warnings;
+select @@warning_count;
+select cast('-9223372036854775809' as unsigned) as u;
+show warnings;
+select @@warning_count;
+select cast('9223372036854775807' as signed) as s, cast('18446744073709551615' as unsigned) as u;
+show warnings;
+select @@warning_count;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+select cast(999.995 as decimal(5,2)) as d, cast('9223372036854775808' as signed) as s, cast('-1' as unsigned) as u;
+show warnings;
+select @@warning_count;
+
+# Retaining fewer records must not reduce the count of range events.
+set @cast_range_saved_max_error_count = @@session.max_error_count;
+set session max_error_count = 1;
+select cast('9223372036854775808' as signed) as s, cast('-1' as unsigned) as u;
+show warnings;
+select @@warning_count;
+set session max_error_count = @cast_range_saved_max_error_count;
+
+# Runtime column conversion and NULL use the same diagnostic owner.
+drop table if exists cast_range_warning_rows;
+create table cast_range_warning_rows(id int primary key, s varchar(32), d decimal(6,3));
+insert into cast_range_warning_rows values
+    (1, '9223372036854775808', 999.995), (2, '9223372036854775807', 999.994), (3, null, null);
+select cast(s as signed) as s from cast_range_warning_rows order by id;
+show warnings;
+select @@warning_count;
+select cast(d as decimal(5,2)) as d from cast_range_warning_rows where id = 1;
+show warnings;
+select @@warning_count;
+select cast(d as decimal(5,2)) as d from cast_range_warning_rows where id > 1 order by id;
+show warnings;
+select @@warning_count;
+drop table cast_range_warning_rows;
+
+# Every EXECUTE owns fresh diagnostics, including reuse after a silent boundary.
+prepare cast_range_signed from 'select cast(? as signed) as s';
+set @cast_range_value = '9223372036854775808';
+execute cast_range_signed using @cast_range_value;
+show warnings;
+select @@warning_count;
+set @cast_range_value = '9223372036854775807';
+execute cast_range_signed using @cast_range_value;
+show warnings;
+select @@warning_count;
+set @cast_range_value = '9223372036854775808';
+execute cast_range_signed using @cast_range_value;
+show warnings;
+select @@warning_count;
+deallocate prepare cast_range_signed;
+prepare cast_range_decimal from 'select cast(? as decimal(5,2)) as d';
+set @cast_range_value = '999.995';
+execute cast_range_decimal using @cast_range_value;
+show warnings;
+select @@warning_count;
+set @cast_range_value = '999.994';
+execute cast_range_decimal using @cast_range_value;
+show warnings;
+select @@warning_count;
+deallocate prepare cast_range_decimal;
+set session sql_mode = @cast_range_saved_sql_mode;
+
 # String numeric cast with sign and radix prefixes.
 # 0b/0B is binary, 0o/0O is octal, 0x/0X is hexadecimal, and no prefix is decimal.
 # Leading zero without a radix prefix is still decimal.

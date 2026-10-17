@@ -16,9 +16,14 @@ package fulltext2
 
 import (
 	"fmt"
-	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
 	"os"
 	"path/filepath"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
 
 // defaultTailCapacity floors the streaming segment cap when a non-positive
@@ -28,7 +33,7 @@ const defaultTailCapacity int64 = DefaultBuildCapacity
 // TailSegment locates one sealed CDC frame inside a PACKED spool file: Path is the spool file,
 // Offset is the frame's start byte within it, and FrameLen its length. Many frames share one spool
 // file (rolled at DefaultTailSpoolRollBytes), so a burst of tiny CDC frames costs a handful of files
-// instead of one file per frame; persist reads exactly [Offset, Offset+FrameLen) via load_file.
+// instead of one file per frame; persist reads exactly [Offset, Offset+FrameLen) through owner-read binary parameters.
 type TailSegment struct {
 	Path     string
 	Offset   int64
@@ -74,7 +79,7 @@ type TailBuilder struct {
 
 	// Packed spool: sealed frames are appended to curFile at curOff until it would exceed rollCap,
 	// then a fresh file is opened. curFile is closed on roll and in Finish/Cleanup so persist's
-	// load_file reads flushed bytes. fileSeq names the spool files.
+	// persistence reads flushed bytes. fileSeq names the spool files.
 	rollCap int64
 	curFile *os.File
 	curPath string
@@ -111,7 +116,7 @@ const DefaultTailSpoolRollBytes int64 = 128 << 20 // 128 MiB
 
 // writeFrame appends framed to the current rolling spool file — starting a new file when the
 // current one would exceed rollCap — and returns the file path plus the frame's byte offset within
-// it, so persist can address exactly [offset, offset+len) via load_file. A frame is never split
+// it, so persist can address exactly [offset, offset+len) through owner-read binary parameters. A frame is never split
 // across files, so load_file always sees a contiguous range.
 func (t *TailBuilder) writeFrame(framed []byte) (string, int64, error) {
 	if t.curFile != nil && t.curOff > 0 && t.curOff+int64(len(framed)) > t.rollCap {
@@ -253,10 +258,10 @@ func (t *TailBuilder) sealDeletes() error {
 
 // Finish seals the final open insert segment and delete run (in that order — at most one is open,
 // since an op switch already sealed the other), CLOSES the current spool file so its bytes are
-// flushed for load_file, then returns ALL frames in chronological (recency) order. chunk_id is
+// flushed for persistence, then returns ALL frames in chronological (recency) order. chunk_id is
 // assigned sequentially at persist, so recency = operation order and the last writer wins across
 // CDC blobs (see AddBatch / the type doc). Each frame is a [Offset, Offset+FrameLen) range in its
-// packed spool file, which the caller persists via load_file. Cleanup must be called afterwards.
+// packed spool file, which the caller persists through owner-read binary parameters. Cleanup must be called afterwards.
 func (t *TailBuilder) Finish() ([]TailSegment, error) {
 	if err := t.seal(); err != nil {
 		return nil, err
@@ -271,6 +276,61 @@ func (t *TailBuilder) Finish() ([]TailSegment, error) {
 		t.curFile = nil
 	}
 	return t.frames, nil
+}
+
+// PersistFinished consumes only this builder's sealed spool frames. Finish must
+// run first; Cleanup remains with the outer owner until commit/rollback returns.
+func (t *TailBuilder) PersistFinished(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkID, buildTS int64) (int64, error) {
+	if t.curFile != nil || t.cur != nil || len(t.delBatch) != 0 {
+		return startChunkID, moerr.NewInternalErrorNoCtx("tail builder must finish before persistence")
+	}
+	next := startChunkID
+	metadata := tailFrameMetaSqls(sqlproc, cfg, startChunkID, t.frames, buildTS)
+	err := sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
+		stmt := sqlproc.StatementOption()
+		writer, err := sqlexec.NewChunkInserter(sqlproc.GetContext(), exec, stmt, cfg.DbName, cfg.IndexTable, maxInsertTuples)
+		if err != nil {
+			return err
+		}
+		var fp *os.File
+		var path string
+		defer func() {
+			if fp != nil {
+				fp.Close()
+			}
+		}()
+		for _, f := range t.frames {
+			if path != f.Path {
+				if fp != nil {
+					if err := fp.Close(); err != nil {
+						return err
+					}
+					fp = nil
+				}
+				fp, err = os.Open(f.Path)
+				if err != nil {
+					return err
+				}
+				path = f.Path
+			}
+			next, err = writer.WriteRange(fp, f.Offset, int64(f.FrameLen), vectorindex.CdcTailId, next, int(vectorindex.Tag_CdcEvents))
+			if err != nil {
+				return err
+			}
+		}
+		if err := writer.Flush(); err != nil {
+			return err
+		}
+		for _, sql := range metadata {
+			res, err := exec.Exec(sql, stmt)
+			res.Close()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return next, err
 }
 
 // Cleanup closes any open spool file and removes the temp dir with all packed spool files. Idempotent.
