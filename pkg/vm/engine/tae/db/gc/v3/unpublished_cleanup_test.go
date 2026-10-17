@@ -118,8 +118,9 @@ func (fs *controllableUnpublishedCleanupFS) Write(
 		return errors.New("injected marker write failure")
 	}
 	err := fs.FileService.Write(ctx, vector)
-	if err == nil && strings.HasPrefix(vector.FilePath, "gc/unpublished/") &&
-		fs.ambiguousMarkerWrites.Load() {
+	if strings.HasPrefix(vector.FilePath, "gc/unpublished/") &&
+		fs.ambiguousMarkerWrites.Load() &&
+		(err == nil || moerr.IsMoErrCode(err, moerr.ErrFileAlreadyExists)) {
 		return errors.New("injected post-persist marker write failure")
 	}
 	return err
@@ -223,6 +224,35 @@ func TestCheckpointCleanerRetainsAmbiguousReplayMarkerIdentity(t *testing.T) {
 	require.Empty(t, cleaner.unpublishedCleanupOwnership.markers)
 	require.Empty(t, cleaner.unpublishedCleanupOwnership.uncertain)
 	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerRetainsObjectWhenMarkerAdmissionFails(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	file := objectio.MockObjectName().String()
+	markerFS.rejectMarkerWrites.Store(true)
+	require.Error(t, cleaner.retainUnpublishedObjects(ctx, []string{file}))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	_, retained := cleaner.unpublishedCleanupOwnership.retry[file]
+	cleaner.unpublishedCleanupOwnership.Unlock()
+	require.True(t, retained)
+
+	markerFS.rejectMarkerWrites.Store(false)
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	_, retained = cleaner.unpublishedCleanupOwnership.retry[file]
+	cleaner.unpublishedCleanupOwnership.Unlock()
+	require.False(t, retained)
 }
 
 func TestParseUnpublishedObjectID(t *testing.T) {
@@ -343,6 +373,48 @@ func TestCheckpointCleanerAcceptsMarkerOnlyAfterAmbiguousWriteIsVisible(t *testi
 	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
 	require.Len(t, cleaner.unpublishedCleanupOwnership.active, 1)
 	require.Contains(t, cleaner.unpublishedCleanupOwnership.markers, marker)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerBalancesRepeatedAmbiguousMarkerAdmission(t *testing.T) {
+	ctx := context.Background()
+	objectFS, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerBase, err := fileservice.NewMemoryFS(
+		"local", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	markerFS := &controllableUnpublishedCleanupFS{FileService: markerBase}
+	cleaner := NewCheckpointCleaner(
+		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+	).(*checkpointCleaner)
+
+	file := objectio.MockObjectName().String()
+	marker, err := cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, file)
+	require.NoError(t, err)
+	cleaner.AbandonUnpublishedObject(file)
+
+	// Re-admission produces the same content-addressed marker. Make both the
+	// marker write and its visibility check ambiguous to exercise the retry path.
+	markerFS.ambiguousMarkerWrites.Store(true)
+	markerFS.rejectMarkerStats.Store(true)
+	_, err = cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, file)
+	require.ErrorContains(t, err, "post-persist marker write failure")
+	require.ErrorContains(t, err, "marker stat failure")
+
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.markers, 1)
+	require.Contains(t, cleaner.unpublishedCleanupOwnership.uncertain, marker)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+
+	markerFS.ambiguousMarkerWrites.Store(false)
+	markerFS.rejectMarkerStats.Store(false)
+	require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.markers)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.uncertain)
 	cleaner.unpublishedCleanupOwnership.Unlock()
 }
 
@@ -630,6 +702,35 @@ func TestCheckpointCleanerMarkerAccountingIsIdentityBased(t *testing.T) {
 	cleaner.unpublishedCleanupOwnership.Lock()
 	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
 	require.Len(t, cleaner.unpublishedCleanupOwnership.markers, 1)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+}
+
+func TestCheckpointCleanerRepeatedMarkerAdmissionIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	cleaner := NewCheckpointCleaner(ctx, "", fs, nil, nil).(*checkpointCleaner)
+	name := objectio.MockObjectName().String()
+
+	marker, err := cleaner.PrepareUnpublishedObject(ctx, 1, 2, true, name)
+	require.NoError(t, err)
+	cleaner.AbandonUnpublishedObject(name)
+
+	repeatedMarker, err := cleaner.PrepareUnpublishedObject(
+		ctx, 1, 2, true, name)
+	require.NoError(t, err)
+	require.Equal(t, marker, repeatedMarker)
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Equal(t, 1, cleaner.unpublishedCleanupOwnership.pending)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.markers, 1)
+	require.Len(t, cleaner.unpublishedCleanupOwnership.active, 1)
+	cleaner.unpublishedCleanupOwnership.Unlock()
+
+	require.NoError(t, cleaner.FinishUnpublishedObject(ctx, repeatedMarker, name))
+	cleaner.unpublishedCleanupOwnership.Lock()
+	require.Zero(t, cleaner.unpublishedCleanupOwnership.pending)
+	require.Empty(t, cleaner.unpublishedCleanupOwnership.markers)
 	cleaner.unpublishedCleanupOwnership.Unlock()
 }
 
