@@ -584,14 +584,23 @@ DRBD"
       wrn "--format-drbd 只应在 bootstrap 节点执行；本机跳过格式化"
     else
       info "首次初始化 DRBD 数据卷 (up -> promote --force -> mkfs.xfs -> down)"
-      runq "drbdadm up ${DRBD_RESOURCE}"
+      runq "drbdadm up ${DRBD_RESOURCE}" || die "drbdadm up ${DRBD_RESOURCE} 失败，请查看 dmesg / drbdadm status"
       if blkid "$DRBD_VOLUME" >/dev/null 2>&1; then
         info "$DRBD_VOLUME 已有文件系统，跳过 mkfs"
       else
-        runq "drbdadm primary ${DRBD_RESOURCE} --force"
-        runq "mkfs.xfs -f ${DRBD_VOLUME}"
+        runq "drbdadm primary ${DRBD_RESOURCE} --force" || die "drbdadm primary ${DRBD_RESOURCE} --force 失败，无法格式化"
+        runq "mkfs.xfs -f ${DRBD_VOLUME}" || die "mkfs.xfs ${DRBD_VOLUME} 失败（设备被占用？缺 xfsprogs？）"
+        # mkfs 返回 0 仍要确认文件系统真的在：否则会把裸设备交给 p_fs，挂载失败反复重启，
+        # 在 stonith-enabled=true 的集群上可能升级为 fence 健康节点。
+        local _fsok=0
+        for _i in 1 2 3; do
+          sync
+          if blkid "$DRBD_VOLUME" >/dev/null 2>&1; then _fsok=1; break; fi
+          sleep 1
+        done
+        [ "$_fsok" = 1 ] || die "mkfs 后仍未在 $DRBD_VOLUME 检测到文件系统，拒绝交给集群；请检查设备与 xfsprogs"
       fi
-      runq "drbdadm down ${DRBD_RESOURCE}"
+      runq "drbdadm down ${DRBD_RESOURCE}" || wrn "drbdadm down ${DRBD_RESOURCE} 失败，Pacemaker 接管前请确认已停止"
       ok "DRBD 数据卷就绪，交由 Pacemaker 管理"
     fi
   elif [ "$DRY_RUN" != 1 ] && [ "$BOOTSTRAP" = 1 ]; then
