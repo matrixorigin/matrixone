@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -691,7 +692,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
 		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
-	applyLoadParallelAdmission(stmt.Param, offset)
+	applyLoadParallelAdmission(stmt.Param, offset, ctx.GetProcess().GetService())
 
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.Tail.Assignments = nil
@@ -920,9 +921,12 @@ func systemVariableInt64(value any) (int64, bool) {
 	}
 }
 
-func applyLoadParallelAdmission(param *tree.ExternParam, offset int64) {
+func applyLoadParallelAdmission(param *tree.ExternParam, offset int64, service string) {
 	if param == nil {
 		return
+	}
+	if cfg, ok := moruntime.GetLoadDataTestConfig(service, param.Filepath); ok {
+		param.ParallelLoadMinSize = cfg.MinSize
 	}
 	param.ParallelLoadRequested = param.ParallelLoadRequested || param.Parallel
 	minSize := int64(LoadParallelMinSize)
