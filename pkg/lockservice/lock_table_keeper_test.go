@@ -21,6 +21,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -144,6 +145,8 @@ func (c *bindCursorClient) Send(
 
 func runBlockedKeepRemoteLockRound(t *testing.T, keeper *lockTableKeeper, client *bindCursorClient) {
 	t.Helper()
+	// Both callers run this mock-only round in a synctest bubble. The watchdog
+	// must detect blocked work, not race instrumentation or a busy CI logger.
 	activateAllKeeperBinds(keeper)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -910,6 +913,10 @@ func TestKeepRemoteLockRefreshWindowIsFairAcrossRounds(t *testing.T) {
 }
 
 func TestKeepRemoteLockWorkCursorIsFairAcrossSlowRounds(t *testing.T) {
+	synctest.Test(t, testKeepRemoteLockWorkCursorIsFairAcrossSlowRounds)
+}
+
+func testKeepRemoteLockWorkCursorIsFairAcrossSlowRounds(t *testing.T) {
 	logger := getLogger("")
 	client := &bindCursorClient{
 		submitted: make(map[uint64]int),
@@ -962,6 +969,10 @@ func TestKeepRemoteLockWorkCursorIsFairAcrossSlowRounds(t *testing.T) {
 }
 
 func TestKeepRemoteLockPeerCursorIsFairAcrossSlowRounds(t *testing.T) {
+	synctest.Test(t, testKeepRemoteLockPeerCursorIsFairAcrossSlowRounds)
+}
+
+func testKeepRemoteLockPeerCursorIsFairAcrossSlowRounds(t *testing.T) {
 	logger := getLogger("")
 	client := &bindCursorClient{
 		submitted: make(map[uint64]int),
