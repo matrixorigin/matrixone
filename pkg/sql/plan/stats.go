@@ -2393,6 +2393,13 @@ func (builder *QueryBuilder) determineBuildAndProbeSide(nodeID int32, recursive 
 	if node.NodeType != plan.Node_JOIN {
 		return
 	}
+	// The bounded scalar candidate stage streams the outer/probe side and
+	// shares one attempt lease across its predicate evaluations. Keep candidates
+	// on the right/build side even when an equality conjunct permits hash costing.
+	if node.ScalarSetReaggregation {
+		node.IsRightJoin = false
+		return
+	}
 	if node.JoinType == plan.Node_LEFT || node.JoinType == plan.Node_SEMI ||
 		node.JoinType == plan.Node_ANTI || node.JoinType == plan.Node_SINGLE {
 		// A row-dependent diagnostic needs LoopJoin to evaluate the selected

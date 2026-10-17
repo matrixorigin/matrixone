@@ -882,12 +882,14 @@ const (
 	TO_CALENDAR_INTERVAL        = 598
 	CHECK_ASYNC_DATALINK_SOURCE = 599
 	INTERNAL_TABLE_COLLATION    = 600
+	SET_OPERATION_FLOAT_KEY     = 601
 
-	FUNCTION_END_NUMBER = 601
+	FUNCTION_END_NUMBER = 602
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"set_operation_float_key":      SET_OPERATION_FLOAT_KEY,
 	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
 
 	"format_bytes":            FORMAT_BYTES,

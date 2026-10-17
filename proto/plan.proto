@@ -1283,6 +1283,11 @@ message Node {
 
   // Ordered binding contexts used by view authorization.
   repeated ViewStep view_path = 94;
+
+  // Compiler-generated scalar UNION reaggregation only. WINDOW streams a
+  // global occurrence identity; LEFT JOIN charges actual candidate work.
+  // Both stages require the bounded execution contract introduced with v119.
+  bool scalar_set_reaggregation = 95;
 }
 
 message SnapshotExtraInfo {

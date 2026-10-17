@@ -679,6 +679,9 @@ message Instruction {
   // PARTITION Top-N only: retain all peers of the Nth row. Planning is gated
   // by MORPCVersion69 so an older receiver cannot silently drop RANK ties.
   bool partition_top_n_with_ties = 64;
+  // WINDOW/LOOP_JOIN only: compiler-generated bounded scalar reaggregation.
+  // Receivers must reject this contract before decoding below MORPC v119.
+  bool scalar_set_reaggregation = 65;
 }
 
 message AnalysisList {

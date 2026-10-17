@@ -30,6 +30,9 @@ import (
 // their diagnostic order. One send observes its actual destination once; no
 // observation survives a later send, placement, or receiver validation.
 func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipeline, features plan.RemoteExpressionFeatures) error {
+	if features.ScalarSetReaggregation {
+		return moerr.NewNotSupportedNoCtx("bounded scalar set reaggregation requires coordinator-local execution")
+	}
 	integerArgumentsVersion := defines.MORPCVersion85
 	if features.SpecialIntegerConsumers {
 		integerArgumentsVersion = defines.MORPCVersion98
@@ -57,6 +60,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.LeastGreatestCollationSemantics, defines.MORPCVersion117,
 			"collation-aware LEAST/GREATEST requires a versioned remote destination",
 			"remote destination does not support collation-aware LEAST/GREATEST (MORPC version %d)"},
+		{features.SetOperationFloatKeys, defines.MORPCVersion119,
+			"set-operation float keys require a versioned remote destination",
+			"remote destination does not support set-operation float keys (MORPC version %d)"},
 		{features.CalendarIntervalNormalization, defines.MORPCVersion115,
 			"calendar interval normalization requires a versioned remote destination",
 			"remote destination does not support calendar interval normalization (MORPC version %d)"},

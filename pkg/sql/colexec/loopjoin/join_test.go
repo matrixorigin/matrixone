@@ -17,6 +17,7 @@ package loopjoin
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -1591,4 +1592,48 @@ func resetHashBuildChildrenWithBatch(arg *hashbuild.HashBuild, bat *batch.Batch)
 	op := colexec.NewMockOperator().WithBatchs([]*batch.Batch{bat})
 	arg.Children = nil
 	arg.AppendChild(op)
+}
+
+func TestScalarSetLoopJoinWorkAdmission(t *testing.T) {
+	for _, matched := range []bool{true, false} {
+		t.Run(fmt.Sprint(matched), func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			defer generation.Close()
+			lease, err := generation.AcquireScalarSetExecution()
+			require.NoError(t, err)
+			defer lease.Close()
+			require.NoError(t, lease.ChargeCandidatePairs(process.ScalarSetCandidatePairLimit-8))
+			build := makeInt32LoopJoinBatch(proc.Mp(), []int32{1, 2, 3, 4, 5, 6, 7, 8})
+			joinMap := message.NewJoinMap(message.GroupSels{}, nil, nil, nil, []*batch.Batch{build}, proc.Mp())
+			joinMap.IncRef(1)
+			join := &LoopJoin{ScalarSetReaggregation: true, ScalarSetLease: lease, NonEqCond: &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: matched}}}}, ResultCols: []colexec.ResultPos{colexec.NewResultPos(0, 0)}, LeftTypes: []types.Type{types.T_int32.ToType()}, RightTypes: []types.Type{types.T_int32.ToType()}, JoinType: plan.Node_LEFT}
+			installLoopJoinTestAllocation(t, join)
+			join.ctr.state = Probe
+			join.ctr.mp = joinMap
+			join.ctr.resultBatchByteLimit = 4
+			join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{makeInt32LoopJoinBatch(proc.Mp(), []int32{10, 20})}))
+			require.NoError(t, join.Prepare(proc))
+			defer join.Free(proc, false, nil)
+			if matched {
+				for i := 0; i < 2; i++ {
+					result, err := join.Call(proc)
+					require.NoError(t, err)
+					require.Equal(t, 1, result.Batch.RowCount())
+					require.Equal(t, process.ScalarSetCandidatePairLimit, lease.CandidatePairs(), "output yields must not recharge cached condition")
+				}
+			}
+			for i := 0; i < 20; i++ {
+				_, err = join.Call(proc)
+				if err != nil {
+					break
+				}
+			}
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrScalarSetResourceBudgetExceeded), "false predicates must consume work too: %v", err)
+			require.Equal(t, process.ScalarSetCandidatePairLimit, lease.CandidatePairs())
+		})
+	}
 }

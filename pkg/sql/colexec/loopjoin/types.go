@@ -127,6 +127,8 @@ type container struct {
 }
 
 type LoopJoin struct {
+	ScalarSetReaggregation        bool
+	ScalarSetLease                *process.ScalarSetExecutionLease
 	ctr                           container
 	LeftTypes                     []types.Type
 	RightTypes                    []types.Type
@@ -205,6 +207,7 @@ func (loopJoin *LoopJoin) ClearAllocationAccount(
 	loopJoin.allocationAccount = nil
 	loopJoin.resultAllocation = nil
 	loopJoin.conditionAllocation = nil
+	loopJoin.ScalarSetLease = nil
 	return nil
 }
 

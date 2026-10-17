@@ -115,8 +115,10 @@ type timestampRangeSelection struct {
 }
 
 type Window struct {
-	ctr         container
-	WinSpecList []*plan.Expr
+	ctr                    container
+	ScalarSetReaggregation bool
+	scalarIdentity         scalarIdentityState
+	WinSpecList            []*plan.Expr
 	// sort and partition
 	Fs []*plan.OrderBySpec
 	// agg func
@@ -167,6 +169,9 @@ func (window *Window) Reset(proc *process.Process, pipelineFailed bool, err erro
 	ctr := &window.ctr
 
 	ctr.cleanOutput(proc.Mp())
+	window.scalarIdentity.releaseInput()
+	window.scalarIdentity.counter = 0
+	window.scalarIdentity.done = false
 	ctr.resetParam()
 	ctr.prepareParamKind.Reset(nil)
 	ctr.resetVectors()
@@ -192,6 +197,7 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr := &window.ctr
 
 	ctr.cleanOutput(proc.Mp())
+	window.scalarIdentity.releaseInput()
 	ctr.runtimeFrames = nil
 	ctr.timestampCivilOrder = nil
 	// Free aggregators before the batch so an error exit from Call (which skips

@@ -646,8 +646,9 @@ func TestLocalCTEGuardedLiteralProof(t *testing.T) {
 
 func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		sql  string
+		name    string
+		sql     string
+		wantErr string
 	}{
 		{
 			name: "non equality having must not lose filter",
@@ -751,6 +752,7 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 			sql: `select p.n_nationkey from tpch.nation p where exists (
 				with q(n) as (select p.n_regionkey)
 				select n from q union all select 7)`,
+			wantErr: "correlated local CTE: UNION ALL without matching row identities is not yet implemented",
 		},
 		{
 			name: "outer join multiplicity",
@@ -892,6 +894,9 @@ func TestLocalCTEOuterReferencesRejectUnsafeDomains(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
 			require.ErrorContains(t, err, "correlated local CTE")
+			if tc.wantErr != "" {
+				require.EqualError(t, err, tc.wantErr)
+			}
 		})
 	}
 }
