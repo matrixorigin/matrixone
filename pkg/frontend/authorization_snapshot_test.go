@@ -67,6 +67,56 @@ func TestAuthorizationEpochOwnershipAndEnd(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestAuthorizationEpochEndCompletesOnce(t *testing.T) {
+	ses := newTestSession(t, gomock.NewController(t))
+	t.Cleanup(ses.Close)
+	parent, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
+	ctx, e := beginAuthorizationEpoch(parent, ses, &ExecCtx{})
+	entered, resume, firstDone, secondDone := make(chan struct{}), make(chan struct{}), make(chan struct{}), make(chan struct{})
+	release := sync.OnceFunc(func() { close(resume) })
+	t.Cleanup(release)
+	priorCancel := e.cancel
+	var cleanups atomic.Uint64
+	e.cancel = func() {
+		if cleanups.Add(1) == 1 {
+			close(entered)
+		}
+		select {
+		case <-resume:
+		case <-parent.Done():
+		}
+		priorCancel()
+	}
+	go func() { e.end(); close(firstDone) }()
+	select {
+	case <-entered:
+	case <-parent.Done():
+		t.Fatal("terminal cleanup did not start")
+	}
+	// A second boundary cannot observe ended and return ahead of the first
+	// owner's cancellation. This check also detects an early unlocked seal.
+	unlocked := e.mu.TryLock()
+	if unlocked {
+		e.mu.Unlock()
+	}
+	require.False(t, unlocked, "terminal completion remains owned until cleanup finishes")
+	go func() { e.end(); close(secondDone) }()
+	release()
+	for _, done := range []chan struct{}{firstDone, secondDone} {
+		select {
+		case <-done:
+		case <-parent.Done():
+			t.Fatal("terminal caller did not complete")
+		}
+	}
+	e.end()
+	require.EqualValues(t, 1, cleanups.Load())
+	require.ErrorIs(t, ctx.Err(), context.Canceled)
+	require.True(t, e.prepared.ended)
+	require.NoError(t, parent.Err())
+}
+
 type authorizationWaitContext struct {
 	context.Context
 	ready chan struct{}

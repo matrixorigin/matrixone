@@ -163,7 +163,10 @@ type rewriteRuleIdentity struct {
 }
 
 func rewriteRuleSessionIdentity(ses *Session) rewriteRuleIdentity {
-	tenant := ses.GetTenantInfo()
+	return rewriteRuleTenantIdentity(ses.GetTenantInfo())
+}
+
+func rewriteRuleTenantIdentity(tenant *TenantInfo) rewriteRuleIdentity {
 	if tenant == nil {
 		return rewriteRuleIdentity{}
 	}
@@ -199,11 +202,18 @@ func rewritePolicyRequestFor(ctx context.Context, ses *Session) *rewritePolicyRe
 }
 
 func preparedPolicyAlreadyRefreshed(ctx context.Context, ses *Session) bool {
+	ses.mu.Lock()
+	defer ses.mu.Unlock()
+	return preparedPolicyAlreadyRefreshedLocked(ctx, ses)
+}
+
+// The caller holds ses.mu; a real refresh must release it before catalog I/O.
+func preparedPolicyAlreadyRefreshedLocked(ctx context.Context, ses *Session) bool {
 	r := rewritePolicyRequestFor(ctx, ses)
 	if r == nil {
 		return false
 	}
-	identity := rewriteRuleSessionIdentity(ses)
+	identity := rewriteRuleTenantIdentity(ses.tenant)
 	ses.ruleCacheMu.RLock()
 	defer ses.ruleCacheMu.RUnlock()
 	r.mu.Lock()

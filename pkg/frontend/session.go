@@ -3118,13 +3118,12 @@ func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvali
 	// policy owner before looking up a live handle; cleanup never requires I/O.
 	if !allowInvalidated {
 		stmt := ses.prepareStmts[normalizedName]
-		if stmt != nil && stmt.rewritePolicyCaptured && !stmt.rewritePolicyInvalidated.Load() {
+		if stmt != nil && stmt.rewritePolicyCaptured && !stmt.rewritePolicyInvalidated.Load() &&
+			!preparedPolicyAlreadyRefreshedLocked(ctx, ses) {
 			ses.mu.Unlock()
-			if !preparedPolicyAlreadyRefreshed(ctx, ses) {
-				if err := refreshPreparedRewritePolicy(ctx, ses); err != nil {
-					// EXECUTE and FETCH own the error cleanup of this known handle.
-					return stmt, err
-				}
+			if err := refreshPreparedRewritePolicy(ctx, ses); err != nil {
+				// EXECUTE and FETCH own the error cleanup of this known handle.
+				return stmt, err
 			}
 			ses.mu.Lock()
 		}

@@ -99,7 +99,15 @@ func TestPreparedFreshnessAdmissionRequestScope(t *testing.T) {
 			seedRewriteRuleCacheProofForTest(ses)
 			calls := 0
 			var proofErr error
-			ses.ruleCacheVersionProvider = func(context.Context, *Session) (any, error) { calls++; return 1, proofErr }
+			ses.ruleCacheVersionProvider = func(context.Context, *Session) (any, error) {
+				unlocked := ses.mu.TryLock()
+				if unlocked {
+					ses.mu.Unlock()
+				}
+				require.True(t, unlocked, "a real prepared refresh must not hold the session lock")
+				calls++
+				return 1, proofErr
+			}
 			stmt := &PrepareStmt{Name: "saved", rewritePolicyCaptured: true}
 			ses.prepareStmts[stmt.Name] = stmt
 			ctx := context.WithValue(context.Background(), rewritePolicyRequestKey{}, &rewritePolicyRequest{owner: ses})

@@ -100,9 +100,14 @@ func authorizationEpochFor(ctx context.Context, ses *Session) *authorizationEpoc
 
 func (e *authorizationEpoch) end() {
 	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.ended {
+		return
+	}
+	// Keep terminal invalidation under one owner. A concurrent or outer
+	// boundary returns only after the first owner completes local cleanup.
 	e.ended = true
 	a := e.admitted
-	e.mu.Unlock()
 	e.prepared.mu.Lock()
 	e.prepared.valid, e.prepared.ended = false, true
 	e.prepared.mu.Unlock()
