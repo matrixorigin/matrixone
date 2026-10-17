@@ -1359,6 +1359,15 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	if isTemp && originRel.GetTableID(c.proc.Ctx) != qry.TableDef.TblId {
 		return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
 	}
+	if !isTemp {
+		// The replica is a trusted physical replacement, but ADD CHECK still
+		// authors new logical identities. Validate them before any replica or
+		// lineage catalog effects, excluding the source's inherited names.
+		if err := c.validateIntroducedCheckConstraintNames(dbName, tblName,
+			qry.TableDef.GetChecks(), qry.CopyTableDef.GetChecks()); err != nil {
+			return err
+		}
+	}
 
 	replacementAdmission := dropLifecycleAdmission{}
 	oldId := originRel.GetTableID(c.proc.Ctx)

@@ -15,11 +15,33 @@
 package plan
 
 import (
+	"context"
 	"strconv"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+// ValidateCheckConstraintNames checks the final authored identities, including
+// names generated after the original SQL identifiers have been validated.
+func ValidateCheckConstraintNames(ctx context.Context, checks []*plan.CheckDef) error {
+	seen := make(map[string]struct{}, len(checks))
+	for _, check := range checks {
+		if check == nil {
+			continue
+		}
+		if err := validateIdentifier(ctx, check.Name); err != nil {
+			return err
+		}
+		name := strings.ToLower(check.Name)
+		if _, exists := seen[name]; exists {
+			return moerr.NewDuplicateCheckConstraintName(ctx, check.Name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
 
 // RenameGeneratedCheckConstraintNames renames every generated CHECK constraint
 // name of the form <oldTable>_chk_<n> to <newTable>_chk_<n>, keeping the

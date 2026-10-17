@@ -4508,7 +4508,18 @@ func nextUnnamedCheckConstraintName(tableDef *TableDef) string {
 // authoritative: only a genuine restore should keep captured CHECK identities.
 // Retain the marker fallback for callers without an outer clone context.
 func preserveCheckNamesForRestore(ctx CompilerContext, cloneStmt *tree.CloneTable) bool {
-	switch ctx.GetContext().Value(tree.CloneLevelCtxKey{}) {
+	marked := cloneStmt != nil && cloneStmt.IsRestore
+	if proc := ctx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil {
+		marked = marked || proc.GetSessionInfo().IsRestore
+	}
+	return IsCheckConstraintRestoreReplay(ctx.GetContext(), marked)
+}
+
+// IsCheckConstraintRestoreReplay shares the restore identity decision with
+// execution. Ordinary data-branch clones also carry restore session markers;
+// the outer clone level distinguishes a new owner from historical replay.
+func IsCheckConstraintRestoreReplay(ctx context.Context, marked bool) bool {
+	switch ctx.Value(tree.CloneLevelCtxKey{}) {
 	case tree.NormalCloneLevelTable, tree.NormalCloneLevelDatabase,
 		tree.NormalCloneLevelAccount, tree.NormalCloneLevelCluster:
 		return false
@@ -4516,11 +4527,7 @@ func preserveCheckNamesForRestore(ctx CompilerContext, cloneStmt *tree.CloneTabl
 		tree.RestoreCloneLevelAccount, tree.RestoreCloneLevelCluster:
 		return true
 	}
-	if cloneStmt != nil && cloneStmt.IsRestore {
-		return true
-	}
-	return ctx.GetProcess() != nil && ctx.GetProcess().GetSessionInfo() != nil &&
-		ctx.GetProcess().GetSessionInfo().IsRestore
+	return marked
 }
 
 // renameCheckConstraintsForClone regenerates CHECK names for a table created
@@ -4623,6 +4630,9 @@ func appendCheckDef(
 	}
 	if name == "" {
 		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
+	if err := validateIdentifier(ctx.GetContext(), name); err != nil {
+		return err
 	}
 	for _, check := range tableDef.Checks {
 		if check.Name == name {
