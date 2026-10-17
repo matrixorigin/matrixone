@@ -577,9 +577,17 @@ func PreparedPlanDependsOnIndexCoverage(p *Plan) bool {
 		return false
 	}
 	for _, node := range query.GetNodes() {
+		if node == nil || node.GetNodeType() != plan.Node_INDEX_SEARCH_SCAN {
+			continue
+		}
 		spec := node.GetIndexSearchScan()
-		if node.GetNodeType() != plan.Node_INDEX_SEARCH_SCAN ||
-			!catalog.IsFullText2IndexAlgo(spec.GetIndex().GetIndexAlgo()) {
+		if spec == nil || spec.GetIndex() == nil {
+			continue
+		}
+		if catalog.IsHnswIndexAlgo(spec.GetIndex().GetIndexAlgo()) {
+			return true
+		}
+		if !catalog.IsFullText2IndexAlgo(spec.GetIndex().GetIndexAlgo()) {
 			continue
 		}
 		if opts, err := ft2plan.DecodeScanOptions(spec.GetAlgoOptions()); err == nil && opts.Mode == fulltext2.JSONProbeMode {

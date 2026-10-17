@@ -586,6 +586,12 @@ func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 		"an injected json coverage probe must force a rebuild")
 	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ftNode(fulltext2.JSONProbeMode))),
 		"the probe must be found among other nodes")
+	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexHnswAlgo.ToString()},
+		},
+	})), "an HNSW search must be rebuilt when coverage can change")
 }
 
 // recordJSONProbeTail marks a scan self-completing and records (keyed by node id) both the json
