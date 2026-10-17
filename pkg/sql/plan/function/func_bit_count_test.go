@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
@@ -297,6 +298,10 @@ func TestBitCountTypeCheck(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(BIT_COUNT), get.fid)
 	require.Equal(t, int32(13), get.overloadId)
+	overload, err := GetFunctionById(ctx, get.GetEncodedOverloadID())
+	require.NoError(t, err)
+	require.False(t, overload.IsVolatile(), "text diagnostics do not make the result nondeterministic")
+	require.True(t, overload.CannotFold(), "folding must preserve row diagnostics")
 
 	get, err = GetFunctionByName(ctx, "bit_count", []types.Type{types.T_any.ToType()})
 	require.NoError(t, err)
@@ -315,4 +320,120 @@ func TestBitCountTypeCheck(t *testing.T) {
 	get, err = GetFunctionByName(ctx, "bit_count", []types.Type{types.T_blob.ToType()})
 	require.NoError(t, err)
 	require.Equal(t, int32(14), get.overloadId)
+}
+
+func TestBitCountStringWarnings(t *testing.T) {
+	for _, tc := range []struct {
+		name                        string
+		values                      []string
+		want                        []uint64
+		nulls                       []bool
+		mask                        *FunctionSelectList
+		binary, rowBinary, constant bool
+		warnings                    int
+	}{
+		{name: "text", values: []string{"3x", "2.9", "3 ", "", "bad", "3x"}, want: []uint64{2, 1, 2, 0, 0, 0}, nulls: []bool{false, false, false, false, false, true}, warnings: 3},
+		{name: "binary_literal", values: []string{"3x"}, want: []uint64{8}, binary: true},
+		{name: "runtime_domains", values: []string{"3x", "3x", "3"}, want: []uint64{8, 2, 2}, rowBinary: true, warnings: 1},
+		{name: "partial_selection", values: []string{"bad", "3x", "bad"}, want: []uint64{0, 2, 0}, mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}, warnings: 1},
+		{name: "constant_rows", values: []string{"3x"}, want: []uint64{2, 2, 2}, constant: true, warnings: 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
+			outputNulls := tc.nulls
+			if tc.mask != nil {
+				outputNulls = []bool{true, false, true}
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), tc.values, tc.nulls)}, NewFunctionTestResult(types.T_uint64.ToType(), false, tc.want, outputNulls), BitCountNonBinaryString).WithSelectList(tc.mask)
+			defer fc.Free()
+			fc.parameters[0].SetIsBin(tc.binary)
+			if tc.rowBinary {
+				require.NoError(t, fc.parameters[0].SetRuntimeStringDomainAtWithMP(0, types.RuntimeStringBinary, proc.Mp()))
+				require.NoError(t, fc.parameters[0].SetRuntimeStringDomainAtWithMP(1, types.RuntimeStringText, proc.Mp()))
+			}
+			if tc.constant {
+				fc.parameters[0].SetClass(vector.CONSTANT)
+				fc.fnLength = 3
+			}
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+			require.Len(t, session.warnings, tc.warnings)
+			for _, warning := range session.warnings {
+				require.Equal(t, uint16(moerr.ER_TRUNCATED_WRONG_VALUE), warning.code)
+				require.Contains(t, warning.msg, "Truncated incorrect INTEGER value")
+			}
+		})
+	}
+}
+
+func TestBitCountDirectDiagnostics(t *testing.T) {
+	for _, tc := range []struct {
+		name, value string
+		null, warns bool
+	}{
+		{"malformed", "3x", false, true}, {"valid", "3 ", false, false}, {"null", "", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
+			input, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.value), 3, proc.Mp())
+			require.NoError(t, err)
+			defer input.Free(proc.Mp())
+			if tc.null {
+				input.SetNull(0)
+			}
+			for _, length := range []int{3, 0} {
+				session.warnings = nil
+				func() {
+					result, err := RunFunctionDirectly(proc, EncodeOverloadID(BIT_COUNT, 13), []*vector.Vector{input}, length)
+					require.NoError(t, err)
+					defer result.Free(proc.Mp())
+					require.Equal(t, length, result.Length())
+					if tc.warns {
+						require.Len(t, session.warnings, length)
+					} else {
+						require.Empty(t, session.warnings)
+					}
+					if length > 0 {
+						require.True(t, result.IsConst())
+					}
+					for row := 0; row < length; row++ {
+						require.Equal(t, tc.null, result.IsNull(uint64(row)))
+						if !tc.null {
+							require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](result, row))
+						}
+						if tc.warns {
+							require.Equal(t, numericWarning{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect INTEGER value: '3x'"}, session.warnings[row])
+						}
+					}
+				}()
+			}
+		})
+	}
+}
+
+func TestBitCountFoldCandidatesPreserveDiagnosticOwnership(t *testing.T) {
+	for _, value := range []string{"3", "3x"} {
+		source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}}
+		expr := &plan.Expr{Typ: plan.Type{Id: int32(types.T_uint64)}, Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(BIT_COUNT, 13)}, Args: []*plan.Expr{source},
+		}}}
+		require.True(t, IsFoldCandidate(expr, false))
+		require.False(t, IsConstant(expr, false))
+		require.False(t, IsStatementConstant(expr))
+		require.False(t, IsRuntimeConstant(expr))
+		require.False(t, IsStatementConstantInput(expr))
+		require.Equal(t, ZoneMapUnsupported, GetZoneMapEvaluation(expr.GetF()))
+		expr.GetF().Args[0] = &plan.Expr{Typ: source.Typ, Expr: &plan.Expr_P{P: &plan.ParamRef{}}}
+		require.False(t, IsFoldCandidate(expr, false))
+		require.True(t, IsFoldCandidate(expr, true))
+		expr.GetF().Args[0] = &plan.Expr{Typ: source.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{}}}
+		require.False(t, IsFoldCandidate(expr, true))
+		expr.GetF().Func.Obj = EncodeOverloadID(RANDOM, 0)
+		expr.GetF().Args = nil
+		require.False(t, IsFoldCandidate(expr, true))
+	}
 }
