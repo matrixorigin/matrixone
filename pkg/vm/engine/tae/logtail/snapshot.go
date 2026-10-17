@@ -666,10 +666,14 @@ func (sm *SnapshotMeta) RunWithSavepoint(scan func() error) (err error) {
 	if sm == nil {
 		return scan()
 	}
-	savepoint := sm.Clone()
+	sm.RLock()
+	savepoint := sm.cloneStateLocked()
+	sm.RUnlock()
 	defer func() {
 		if err != nil {
-			sm.RestoreFrom(savepoint)
+			sm.Lock()
+			sm.restoreStateLocked(savepoint)
+			sm.Unlock()
 		}
 	}()
 	return scan()

@@ -115,7 +115,9 @@ and algo = 'hnsw'
 order by algo_table_type;
 select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
 -- Plan selection is asynchronous after COPY; this EXPLAIN is retained as a
--- smoke check, while the query above validates the rebuilt index result.
+-- smoke check, while the query above validates the returned row.
+-- @regex("TP QUERY PLAN", true)
+-- @regex("(Table Scan on alter_copy_add_index[.]vectors|Vector Index Scan on)", true)
 explain select id from vectors order by l2_distance(embedding, '[1,0,0]') limit 1;
 set experimental_hnsw_index = 0;
 

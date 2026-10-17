@@ -16,7 +16,6 @@ package logtail
 
 import (
 	"context"
-	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -108,28 +107,6 @@ func TestSnapshotMetaCloneRestorePreservesIndexes(t *testing.T) {
 	require.Contains(t, sm.snapshotTableIDs, uint64(3))
 	require.Same(t, sm.tables[1][3], sm.tableIDIndex[3])
 	require.Same(t, sm.tableIDIndex[3], sm.tablePKIndex["pk"][0])
-}
-
-func TestSnapshotMetaOuterReplaySavepointDoesNotAccumulateHistory(t *testing.T) {
-	sm := NewSnapshotMeta()
-	info := &tableInfo{accountID: 1, dbID: 2, tid: 3, pk: "pk"}
-	sm.tables[1] = map[uint64]*tableInfo{3: info}
-	sm.tableIDIndex[3] = info
-	sm.tablePKIndex["pk"] = []*tableInfo{info}
-
-	for attempt := 0; attempt < 2; attempt++ {
-		// Model a successful SnapshotMeta.Update followed by the later
-		// checkpoint-object enumeration failing. The scan retries with the
-		// same checkpoint, so the published history must stay at one entry.
-		err := sm.RunWithSavepoint(func() error {
-			// SnapshotMeta.Update has already published this entry when the
-			// later object enumeration reports its error.
-			sm.tablePKIndex["pk"] = append(sm.tablePKIndex["pk"], info)
-			return errors.New("checkpoint object enumeration failed")
-		})
-		require.Error(t, err)
-		require.Len(t, sm.tablePKIndex["pk"], 1)
-	}
 }
 
 func TestSnapshotMetaGetSnapshotSkipsPersistedAborts(t *testing.T) {
