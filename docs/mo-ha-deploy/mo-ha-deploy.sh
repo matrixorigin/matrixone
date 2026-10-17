@@ -296,7 +296,16 @@ build_drbd_from_source(){
     *) tb="$url"; [ -r "$tb" ] || { wrn "找不到 DRBD 源码包: $tb"; return 1; };;
   esac
   run "tar -C /usr/src -xf '$tb'"
-  d="$(basename "$tb" .tar.gz)"
+  d="$(basename "$tb")"
+  d="${d%.tar.gz}"; d="${d%.tgz}"; d="${d%.tar.bz2}"; d="${d%.tar.xz}"; d="${d%.tar}"
+  if [ "$DRY_RUN" != 1 ]; then
+    if [ ! -d "/usr/src/$d" ]; then
+      # 后缀非 .tar.gz 或顶层目录名与包名不一致时，用 tar 的顶层目录名
+      local top; top="$(tar -tf "$tb" 2>/dev/null | head -1 | sed 's#^\./##' | cut -d/ -f1)"
+      [ -n "$top" ] && [ -d "/usr/src/$top" ] && d="$top"
+    fi
+    [ -d "/usr/src/$d" ] || { wrn "DRBD 源码解包目录不存在: /usr/src/$d"; return 1; }
+  fi
   run "cd /usr/src/$d && make -j\$(nproc) && make install && depmod -a"
 }
 
@@ -482,6 +491,10 @@ stage_moconf(){
     ' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
   done
   rm -f "$blk"
+  # S3 凭据是明文写入 conf，收紧权限避免同机其他用户可读
+  if [ -n "$S3_BUCKET" ]; then
+    runq "chmod 600 $MO_DIR/conf/*.toml 2>/dev/null || true"
+  fi
   if [ -f "$MO_DIR/conf/launch.toml" ]; then ok "已下发 $MO_DIR (compose + conf)"; else wrn "$MO_DIR/conf/launch.toml 缺失"; fi
 }
 
@@ -700,6 +713,12 @@ wait_for(){
 stage_check(){
   hdr "阶段 check: 部署后检查"
   CHECK_RC=0
+  # dry-run 只做预览：不执行 pcs/corosync 查询，也不等待资源稳态
+  if [ "$DRY_RUN" = 1 ]; then
+    info "(dry-run) 检查阶段：不执行集群查询、不等待资源稳态"
+    info "  正式执行时检查：quorum / stonith-enabled / no-quorum-policy / fencing 节点覆盖 / DRBD Promoted / p_fs / p_mo"
+    return 0
+  fi
   if ! command -v pcs >/dev/null 2>&1; then wrn "无 pcs，无法检查"; return 0; fi
 
   # 资源刚创建时需要时间进入稳态（DRBD promote / FS 挂载 / MO 拉起容器）
@@ -784,9 +803,13 @@ main(){
   stage_enabled fence && stage_fence
   stage_enabled resources && stage_resources
   stage_enabled teardown && stage_teardown
-  # 防火墙与 STAGES 解耦：OPEN_PORTS 是独立开关(--no-open-ports 关闭)。
-  # 若挂在 check 上，按 README 的 node2 阶段列表部署时会漏放行 pcsd/corosync/DRBD 端口。
-  open_ports
+  # 防火墙：OPEN_PORTS 是独立开关(--no-open-ports 关闭)，但只在真正做部署的阶段
+  # 才执行；纯 --stages check 复检或 teardown 不应改动防火墙状态。
+  local _fw=1 _s
+  for _s in pre pkg docker moconf drbd cluster fence resources; do
+    stage_enabled "$_s" && _fw=0
+  done
+  [ "$_fw" = 1 ] || open_ports
   if stage_enabled check; then stage_check; fi
   printf "\n${G}完成${N}：$SELF ($([ "$BOOTSTRAP" = 1 ] && echo 引导节点 || echo 普通节点))\n"
   [ "$BOOTSTRAP" != 1 ] && info "提示：请在引导节点执行本脚本(加 --bootstrap)以组建集群并创建资源。"
