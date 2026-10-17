@@ -606,14 +606,15 @@ UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 # Split issues roots under one shared package deadline.
 # Shorter process lifetimes bound catalog and race-detector retention. The
-# eight-batch pool gives each process two Go execution cores. Linux runners
-# requesting at least eight tasks use four complete clusters; smaller budgets
-# and unmeasured platforms retain two. One/four batches retain serial rollback.
+# eight-batch pool gives each process two Go execution cores. A 14--16 GiB CI
+# domain cannot safely retain four race-instrumented clusters merely because
+# eight CPUs are available. Default to two; larger runners may explicitly opt
+# into three/four workers. One/four batches retain serial rollback.
 UT_ISSUES_BATCHES ?= 8
-UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
-# The audited embedded batches use the same two-core child budget. Enable four
-# processes only for measured Linux eight-task runs; preserve smaller rollbacks.
-UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
+UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),2,1)
+# Use the same conservative process default for audited embedded batches;
+# UT_EMBEDDED_PACKAGE_PARALLEL still permits an explicit higher-memory opt-in.
+UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),2,1)
 # Audited embed/DML/isolated/SQL batching applies only to the non-prebuild path.
 UT_EMBEDDED_BATCHES ?= 4
 # A compiler overlapping cluster processes increases the memory peak. The new
