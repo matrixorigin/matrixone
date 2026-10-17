@@ -21,11 +21,14 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // A binding fixes a parser ordinal's execution slot and SQL source domain.
@@ -466,6 +469,20 @@ func (builder *QueryBuilder) bindPreparedPredicateDiagnostics() error {
 		return nil
 	}
 	p := &Plan{Plan: &plan.Plan_Query{Query: builder.qry}}
+	if state.selectStatement {
+		for _, node := range builder.qry.Nodes {
+			if node == nil {
+				continue
+			}
+			for _, exprs := range [][]*Expr{node.OnList, node.FilterList, node.BlockFilterList} {
+				for _, expr := range exprs {
+					if err := specializePreparedTemporalDecimalCasts(builder.compCtx.GetProcess(), state, expr); err != nil {
+						return err
+					}
+				}
+			}
+		}
+	}
 	candidates := PreparedPlanDiagnosticCandidates(p)
 	for i, expr := range candidates {
 		candidates[i] = DeepCopyExpr(expr)
@@ -478,6 +495,81 @@ func (builder *QueryBuilder) bindPreparedPredicateDiagnostics() error {
 	state.diagnosticFree = state.diagnosticFree && safe
 	state.diagnosticCandidates = append(state.diagnosticCandidates, candidates...)
 	return nil
+}
+
+// A silent DECIMAL child must not hide its temporal parent's statement warning.
+// Specialize only these constant predicate operands, before owner selection.
+// Both successful and refused probes make the plan value-dependent: every
+// EXECUTE must bind again rather than reuse a proof for a different value.
+func specializePreparedTemporalDecimalCasts(proc *process.Process, state *preparedSourceBindingState, expr *Expr) error {
+	if expr == nil {
+		return nil
+	}
+	if !planfunction.IsStatementConstantTemporalCall(expr) {
+		if fn := expr.GetF(); fn != nil {
+			for _, arg := range fn.Args {
+				if err := specializePreparedTemporalDecimalCasts(proc, state, arg); err != nil {
+					return err
+				}
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				if err := specializePreparedTemporalDecimalCasts(proc, state, item); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	}
+	return plan.VisitExprTree(expr, func(child *Expr) error {
+		if !planfunction.IsExplicitDecimalCast(child) || !planfunction.ContainsParameter(child) ||
+			!planfunction.IsStatementConstantInput(child) {
+			return nil
+		}
+		state.valueDependent = true
+		if proc == nil || proc.Base == nil || proc.GetPrepareParams() == nil {
+			return nil
+		}
+		complete := true
+		_ = plan.VisitExprTree(child, func(input *Expr) error {
+			if param := input.GetP(); param != nil && (param.Pos < 0 ||
+				int(param.Pos) >= len(state.values) || int(param.Pos) >= proc.GetPrepareParams().Length()) {
+				complete = false
+			}
+			return nil
+		})
+		if !complete {
+			return nil
+		}
+		vec, free, warned, err := rule.EvaluateConstantExpression(proc, child, batch.EmptyForConstFoldBatch)
+		if free != nil {
+			defer free()
+		}
+		if err != nil {
+			if isStatementConversionError(err) {
+				return nil
+			}
+			return err
+		}
+		if warned || vec == nil || vec.Length() == 0 {
+			return nil
+		}
+		literal := rule.GetConstantValue(vec, false, 0)
+		if literal != nil {
+			rule.PreserveFoldedDecimalLiteralSemantics(child, literal)
+			child.Expr = &plan.Expr_Lit{Lit: literal}
+		} else {
+			constant, err := rule.MaterializeDecimal256Constant(proc, child, vec)
+			if err != nil {
+				return err
+			}
+			if constant != nil {
+				child.Expr = &plan.Expr_Vec{Vec: constant}
+			}
+		}
+		return nil
+	})
 }
 
 func (builder *QueryBuilder) preparedParameterDiagnosticsFree() bool {

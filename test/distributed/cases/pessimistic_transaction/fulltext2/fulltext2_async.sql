@@ -96,21 +96,27 @@ drop table json_null_cdc;
 -- A non-empty generation must eventually refresh WITHOUT rebuilding the index
 -- or invalidating it from CDC. Keep MATCH hot while waiting: sliding TTL alone
 -- cannot satisfy this assertion; the ordinary pull-based stale sweep must work.
--- Default cadence is four 150s ticks plus the next eviction tick (~750s).
--- This bounded wait checks a result, not a fixed sleep or immediate visibility.
+-- Exercise the existing periodic sweep at a shorter cadence, not its production
+-- wall-clock interval. The control only rearms timers; it never evicts entries.
+-- Restore the default immediately after this scenario, before the other cases.
 create table warm_refresh (id bigint primary key, body text);
 insert into warm_refresh values (1, 'refreshmarker baseline'), (2, 'unrelated control');
 create fulltext2 index ft_refresh on warm_refresh(body);
 select id from warm_refresh where match(body) against('refreshmarker' in boolean mode) order by id;
 set @warm_storage = (select index_table_name from mo_catalog.mo_indexes where name = 'ft_refresh' and algo = 'fulltext2' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'warm_refresh') limit 1);
+set @freshness_override = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '1s');
+-- A partial fan-out must fail this case rather than leaving a slow CN unnoticed.
+select @freshness_override not like '%failed=[%' as all_cn_updated;
 insert into warm_refresh values (101, 'refreshmarker committed');
 set @warm_tail_sql = concat('select count(*) > 0 as tail_ready from `', database(), '`.`', @warm_storage, '` where index_id = ''cdc_tail'' and tag = 1');
 prepare warm_tail from @warm_tail_sql;
 -- @wait_expect(2, 120)
 execute warm_tail;
 deallocate prepare warm_tail;
--- @wait_expect(2, 900)
+-- @wait_expect(1, 60)
 select id from warm_refresh where match(body) against('refreshmarker' in boolean mode) order by id;
+set @freshness_restore = mo_ctl('cn', 'SetVectorIndexFreshnessInterval', '0');
+select @freshness_restore not like '%failed=[%' as all_cn_restored;
 drop table warm_refresh;
 create table json_null_cdc(id bigint primary key, left_doc json, right_doc json);
 create fulltext2 index ftv on json_null_cdc(left_doc, right_doc) with parser json_value;

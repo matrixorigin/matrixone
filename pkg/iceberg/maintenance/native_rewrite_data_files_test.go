@@ -726,7 +726,7 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesEqualityDeleteManifests(t 
 	}).CompactRewriteDataFiles(context.Background(), RewriteDataFilesCompactRequest{
 		Metadata: rewriteDataFilesPartitionedMetadata(),
 		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
-		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes}}, Groups: []RewriteDataFileGroup{{
+		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes, SequenceNumber: 11}}, Groups: []RewriteDataFileGroup{{
 			PartitionSpecID: 0,
 			PartitionKey:    "0|region=s:ksa",
 			Candidates: []RewriteDataFileCandidate{
@@ -783,7 +783,7 @@ func TestParquetConcatRewriteDataFilesCompactorAppliesPositionDeleteManifests(t 
 	}).CompactRewriteDataFiles(context.Background(), RewriteDataFilesCompactRequest{
 		Metadata: rewriteDataFilesPartitionedMetadata(),
 		Snapshot: api.Snapshot{SnapshotID: 10, ManifestList: manifestListPath},
-		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes}}, Groups: []RewriteDataFileGroup{{
+		Selection: RewriteDataFilesSelection{DeleteManifestCount: 1, DeleteManifests: []api.ManifestFile{{Path: deleteManifestPath, Content: api.ManifestContentDeletes, SequenceNumber: 10}}, Groups: []RewriteDataFileGroup{{
 			PartitionSpecID: 0,
 			PartitionKey:    "0|region=s:ksa",
 			Candidates: []RewriteDataFileCandidate{
