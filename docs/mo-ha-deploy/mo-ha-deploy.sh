@@ -110,6 +110,17 @@ mask_secrets(){
 run(){  if [ "$DRY_RUN" = 1 ]; then printf "    (dry-run) %s\n" "$(mask_secrets "$*")"; else info "exec: $(mask_secrets "$*")"; bash -c "$*"; fi; }
 runq(){ if [ "$DRY_RUN" = 1 ]; then printf "    (dry-run) %s\n" "$(mask_secrets "$*")"; else bash -c "$*"; fi; }
 stage_enabled(){ case ",$STAGES," in *",$1,"*) return 0;; *) return 1;; esac; }
+validate_stages(){
+  local _s
+  [ -n "$STAGES" ] || die "--stages 不能为空（可选：pre,pkg,docker,moconf,drbd,cluster,fence,resources,check,teardown）"
+  case ",$STAGES," in *",,"*) die "--stages 含空项：\"$STAGES\"" ;; esac
+  for _s in ${STAGES//,/ }; do
+    case "$_s" in
+      pre|pkg|docker|moconf|drbd|cluster|fence|resources|check|teardown) ;;
+      *) die "未知阶段 \"$_s\"（可选：pre,pkg,docker,moconf,drbd,cluster,fence,resources,check,teardown）" ;;
+    esac
+  done
+}
 
 usage(){
   cat <<'EOF'
@@ -1020,6 +1031,7 @@ open_ports(){
 
 # ----------------------------- 主流程 --------------------------------------
 main(){
+  validate_stages
   detect_os
   stage_enabled pre && stage_pre
   stage_enabled pkg && stage_pkg
