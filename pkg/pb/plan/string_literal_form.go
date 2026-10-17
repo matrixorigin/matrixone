@@ -338,6 +338,7 @@ const (
 	planInt64TypeID                   int32 = 23
 	planUint32TypeID                  int32 = 27
 	planAnyTypeID                     int32 = 0
+	internalTableCollationFunctionID  int32 = 600
 	maxVarcharWidth                   int32 = 65535
 )
 
@@ -388,6 +389,8 @@ const (
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
+// TableCollationFunction requires MORPC v118 for INTERNAL_TABLE_COLLATION's
+// execution identity, including directly authored catalog expressions.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
 type RemoteExpressionFeatures struct {
 	CalendarIntervalNormalization bool
@@ -427,6 +430,7 @@ type RemoteExpressionFeatures struct {
 	MediumIntAssignmentBounds               bool
 	DateNumericResultContracts              bool
 	DecimalStatisticalResultContracts       bool
+	TableCollationFunction                  bool
 	InvalidDecimalStatisticalResultContract bool
 	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
 	// Released overload 0 retains its historical byte-order contract.
@@ -462,6 +466,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MediumIntAssignmentBounds ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
+		features.TableCollationFunction ||
 		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
 		features.LeastGreatestCollationSemantics
 }
@@ -923,6 +928,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == internalTableCollationFunctionID {
+					features.TableCollationFunction = true
+				}
 				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
 					features.LeastGreatestCollationSemantics = true
 				}

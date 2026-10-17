@@ -238,7 +238,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 		}
 		spatialChecked = true
 	}
-	if f.CannotFold() { // function cannot be fold
+	if f.IsVolatile() {
 		return expr
 	}
 	if IsLegacyTimeAssignmentOutsideInternalRange(fn) {
@@ -265,7 +265,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	if f.IsAgg() || f.IsWin() {
 		return expr
 	}
-	if !IsConstant(expr, false) {
+	if !function.IsFoldCandidate(expr, false) {
 		return expr
 	}
 	if isVec && !CanMaterializeConstantVector(expr) {

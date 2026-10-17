@@ -81,6 +81,34 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
+	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) && !DatabaseDefaultsSystemDatabase(name) {
+		accountID, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		if snapshot != nil && snapshot.Tenant != nil {
+			accountID = snapshot.Tenant.TenantID
+		}
+		defaults, err := GetDatabaseDefaults(ctx, name, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if defaults == nil || defaults.Version == 0 {
+			fallback, err := databaseServerCollation(ctx)
+			if err != nil {
+				return nil, err
+			}
+			defaults, err = NormalizeDatabaseDefaults(ctx.GetContext(), nil, fallback)
+			if err != nil {
+				return nil, err
+			}
+		}
+		createSQL := "CREATE DATABASE " + sqlquote.Ident(name) + " CHARACTER SET " + defaults.CharacterSet + " COLLATE " + defaults.Collation
+		sql := fmt.Sprintf("SELECT md.datname AS `Database`, %s AS `Create Database` FROM mo_catalog.mo_database %s md WHERE md.account_id = %d AND md.datname = %s",
+			sqlquote.String(createSQL), snapshotSpec, accountID, sqlquote.String(name))
+		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
+	}
+
 	sqlStr := "SELECT \"%s\" AS `Database`, \"%s\" AS `Create Database`"
 	createSql := fmt.Sprintf("CREATE DATABASE `%s`", name)
 	sqlStr = fmt.Sprintf(sqlStr, name, createSql)
@@ -720,6 +748,9 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		"WHEN 4 then 'utf8_unicode_ci' " +
 		"WHEN 5 then 'utf8mb4_unicode_ci' " +
 		"else NULL end"
+	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
+		showColumnsCollation = sysview.ShowColumnCollationSQL("col.atttyp")
+	}
 
 	var sql string
 	if accountId == catalog.System_Account {
@@ -838,6 +869,9 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				and relname != '%s'
 				and (%s)`
 	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
+	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
+		sql = strings.Replace(sql, "'utf8mb4_bin' as 'Collation'", "internal_table_collation(extra_info) as 'Collation'", 1)
+	}
 
 	// Do not show views in sub-db
 	if sub != nil {
