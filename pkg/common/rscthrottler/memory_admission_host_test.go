@@ -33,15 +33,17 @@ func TestProductionPoliciesShareHostCacheCreditAndPendingCharges(t *testing.T) {
 		t.Run(policy.name, func(t *testing.T) {
 			const gib = uint64(1 << 30)
 			snapshot := system.MemoryDomainSnapshot{
-				Used: 14 * gib, Limit: 16 * gib, Reclaimable: 8 * gib,
+				Used: 15 * gib, Limit: 16 * gib, Reclaimable: 9 * gib,
 				Source: system.MemoryDomainSourceHost, Measured: true,
 			}
 			ledger := system.NewMemoryAdmissionBudgetWithProvider(system.DefaultMemoryDomainReservePolicy(),
 				func() (system.MemoryDomainSnapshot, error) { return snapshot, nil })
-			m := &memThrottler{memoryLedger: ledger}
+			m := &memThrottler{memoryLedger: ledger, cgroupBudget: &cgroupMemoryBudget{}}
+			m.publishMemoryDomain(&snapshot)
 			m.limit.Store(int64(12 * gib))
 			m.actualTotalMemory.Store(16 * gib)
 			m.rss.Store(int64(gib))
+			require.Equal(t, int64(6*gib), m.currentMemoryUsage(), "host cache must not trigger hard reclamation")
 			_, ok := policy.acquire(m, int64(gib))
 			require.True(t, ok, "warm host cache must not reject a safe allocation")
 			// Model an execution reservation using the same production ledger.
@@ -54,6 +56,34 @@ func TestProductionPoliciesShareHostCacheCreditAndPendingCharges(t *testing.T) {
 			m.reserved.Add(-int64(gib))
 			m.releaseCgroup(int64(gib))
 			require.Zero(t, ledger.Reserved())
+			snapshot.Used = snapshot.Limit
+			snapshot.Reclaimable = 0
+			m.publishMemoryDomain(&snapshot)
+			_, ok = policy.acquire(m, 1)
+			require.False(t, ok, "true host exhaustion must still reject the production write path")
+			require.Zero(t, ledger.Reserved())
+		})
+	}
+}
+
+func TestComponentDomainCacheCreditPreservesCgroupBoundary(t *testing.T) {
+	for _, source := range []system.MemoryDomainSource{
+		system.MemoryDomainSourceHost, system.MemoryDomainSourceCgroupV1, system.MemoryDomainSourceCgroupV2,
+	} {
+		t.Run(string(source), func(t *testing.T) {
+			m := &memThrottler{}
+			m.publishMemoryDomain(&system.MemoryDomainSnapshot{
+				Used: 95, Limit: 100, Reclaimable: 50, Source: source, Measured: true,
+			})
+			sample := m.cgroupSnapshot()
+			require.Equal(t, int64(95), sample.usage, "retain raw domain usage for diagnostics")
+			if source == system.MemoryDomainSourceHost {
+				require.Equal(t, int64(45), m.currentMemoryUsage())
+				require.Equal(t, int64(50), sample.capAdmissionAvailable(50, 0))
+			} else {
+				require.Equal(t, int64(95), m.currentMemoryUsage())
+				require.Equal(t, int64(5), sample.capAdmissionAvailable(50, 0))
+			}
 		})
 	}
 }

@@ -327,11 +327,12 @@ type RSCThrottler interface {
 // cgroupMemorySample is immutable after publication. Admission reads one sample
 // per attempt so a refresh cannot mix usage with a different physical limit.
 type cgroupMemorySample struct {
-	usage     int64
-	limit     int64
-	softLimit int64
-	cgroup    bool
-	source    system.MemoryDomainSource
+	usage       int64
+	limit       int64
+	softLimit   int64
+	reclaimable int64
+	cgroup      bool
+	source      system.MemoryDomainSource
 }
 
 // All production throttlers observe the shared process memory domain. Component
@@ -721,7 +722,8 @@ func (m *memThrottler) publishMemoryDomain(snapshot *system.MemoryDomainSnapshot
 	}
 	destination.Store(&cgroupMemorySample{
 		usage: usage, limit: limit, softLimit: uint64ToInt64(snapshot.SoftLimit),
-		cgroup: snapshot.IsCgroup(), source: snapshot.Source,
+		reclaimable: uint64ToInt64(snapshot.Reclaimable),
+		cgroup:      snapshot.IsCgroup(), source: snapshot.Source,
 	})
 }
 
@@ -770,10 +772,20 @@ func uint64ToInt64(value uint64) int64 {
 
 func (m *memThrottler) currentMemoryUsage() int64 {
 	rss := m.rss.Load()
-	if sample := m.cgroupSnapshot(); sample != nil && sample.usage > rss {
-		return sample.usage
+	if sample := m.cgroupSnapshot(); sample != nil {
+		return max(rss, sample.admissionUsage())
 	}
 	return rss
+}
+
+// Keep the component backstop and reclamation trigger on the same host
+// availability view as the shared physical ledger. Raw usage remains available
+// for diagnostics; a finite cgroup never credits its charged cache here.
+func (sample *cgroupMemorySample) admissionUsage() int64 {
+	if sample.source == system.MemoryDomainSourceHost {
+		return sample.usage - min(max(0, sample.usage), max(0, sample.reclaimable))
+	}
+	return sample.usage
 }
 
 // admissionHeadroom uses an explicit soft domain limit whenever one exists.
@@ -784,19 +796,20 @@ func (sample *cgroupMemorySample) admissionHeadroom() int64 {
 	if sample == nil {
 		return math.MaxInt64
 	}
+	usage := sample.admissionUsage()
 	if sample.softLimit > 0 &&
 		(sample.limit <= 0 || sample.softLimit < sample.limit) {
-		return max(0, sample.softLimit-sample.usage)
+		return max(0, sample.softLimit-usage)
 	}
 	total := sample.limit
 	if total <= 0 || total == math.MaxInt64 {
 		return math.MaxInt64
 	}
 	hardEnter := int64(float64(total) * rssPressureHardEnter)
-	if sample.usage <= 0 || sample.usage < hardEnter {
+	if usage <= 0 || usage < hardEnter {
 		return math.MaxInt64
 	}
-	return max(0, total-sample.usage)
+	return max(0, total-usage)
 }
 
 func (sample *cgroupMemorySample) capAdmissionAvailable(available, reserved int64) int64 {
