@@ -45,6 +45,8 @@ sudo ./mo-ha-deploy.sh --config node1.env --bootstrap --format-drbd --yes
 sudo ./mo-ha-deploy.sh --config node1.env --stages check --yes
 ```
 
+`check` 会核对 quorum / STONITH / DRBD Promoted / 各资源状态，并探测 MO 客户端端口是否已监听；若配置了 `MO_ROOT_PASSWORD`，还会用 `mysql` 客户端（宿主机或容器内）做一次 `select 1` 登录验证（未配置则跳过）。注意容器 Started 只说明进程在跑，不代表 SQL 已可用。
+
 ## 三、验证
 
 ```bash

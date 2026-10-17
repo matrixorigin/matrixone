@@ -39,6 +39,8 @@ DRBD_RESOURCE="${DRBD_RESOURCE:-mo}"; DRBD_PORT="${DRBD_PORT:-7789}"
 DATA_DIR="${DATA_DIR:-/mnt/mo-data}"
 MO_IMAGE="${MO_IMAGE:-matrixorigin/matrixone:latest}"
 MO_DIR="${MO_DIR:-/opt/mo-ha}"; MO_PORT="${MO_PORT:-6001}"; MO_HOSTNAME="${MO_HOSTNAME:-mo-ha}"
+# MO root 口令：仅用于 check 阶段做一次 SQL 登录验证；留空则跳过 SQL 检查
+MO_ROOT_PASSWORD="${MO_ROOT_PASSWORD:-}"
 # 对外发布地址：默认对所有网卡开放；生产建议改为内网 IP 或 VIP
 MO_BIND_IP="${MO_BIND_IP:-0.0.0.0}"
 MO_CONFIG_DIR="${MO_CONFIG_DIR:-}"; NO_MO="${NO_MO:-0}"
@@ -119,6 +121,7 @@ mo-ha-deploy.sh — MatrixOne 双机主备(DRBD+Pacemaker/STONITH) 一键部署
   --mo-bind-ip IP        MO 端口绑定的本机地址(默认 0.0.0.0，生产建议填内网 IP/VIP)
   --mo-dir PATH          MO 运行目录(默认 /opt/mo-ha)
   --mo-hostname NAME     explicit-hostname(默认 mo-ha，两台必须一致)
+  --mo-root-password P   MO root 口令(仅用于 check 阶段验证 SQL 可登录；默认跳过)
   --mo-config-dir PATH   配置载荷目录(默认脚本同级 mo-config/)
   --no-mo                只部署集群存储，不创建 MO 资源
   --vip CIDR             资源虚拟 IP，如 10.0.0.100/24(可选)
@@ -177,6 +180,7 @@ while [ $# -gt 0 ]; do
     --mo-bind-ip) MO_BIND_IP="${2:-}"; shift 2;;
     --mo-dir) MO_DIR="${2:-}"; shift 2;;
     --mo-hostname) MO_HOSTNAME="${2:-}"; shift 2;;
+    --mo-root-password) MO_ROOT_PASSWORD="${2:-}"; shift 2;;
     --mo-config-dir) MO_CONFIG_DIR="${2:-}"; shift 2;;
     --no-mo) NO_MO=1; shift;;
     --vip) VIP="${2:-}"; shift 2;;
@@ -843,6 +847,29 @@ stage_check(){
     local mow="${CHECK_MO_WAIT:-300}"
     wait_for "$mow" "pcs status 2>&1 | grep -qE 'p_mo.*Started'" \
       && ok "p_mo Started" || wrn "p_mo 未 Started（首次拉镜像较慢时属正常；确认 $MO_DIR/docker-compose.yaml 已下发）"
+    # 数据面：docker-compose RA 的 monitor 只看 State.Running，容器 Started
+    # 不等于 SQL 已可连接（MO 可能仍在 bootstrap/迁移），单独探一次端口与登录。
+    local maddr=127.0.0.1
+    [ -n "$MO_BIND_IP" ] && [ "$MO_BIND_IP" != "0.0.0.0" ] && maddr="$MO_BIND_IP"
+    if wait_for 120 "(exec 3<>/dev/tcp/$maddr/$MO_PORT)" || wait_for 60 "(exec 3<>/dev/tcp/127.0.0.1/$MO_PORT)"; then
+      ok "MO 客户端端口 $maddr:$MO_PORT 已监听"
+      local mcli=""
+      command -v mysql >/dev/null 2>&1 && mcli="mysql"
+      if [ -z "$mcli" ] && docker exec matrixone sh -c 'command -v mysql >/dev/null 2>&1' 2>/dev/null; then
+        mcli="docker exec matrixone mysql"
+      fi
+      if [ -z "$MO_ROOT_PASSWORD" ]; then
+        info "未提供 --mo-root-password，跳过 SQL 登录检查（可手工：mysql -h127.0.0.1 -P$MO_PORT -uroot -p）"
+      elif [ -z "$mcli" ]; then
+        info "未找到 mysql 客户端，跳过 SQL 登录检查（宿主或容器内均可）"
+      elif $mcli -h127.0.0.1 -P"$MO_PORT" -uroot -p"$MO_ROOT_PASSWORD" -N -e 'select 1' 2>/dev/null | grep -qx 1; then
+        ok "MO SQL 可登录（-uroot）"
+      else
+        wrn "MO SQL 登录失败：确认 --mo-root-password 与端口 $MO_PORT"
+      fi
+    else
+      wrn "MO 客户端端口 $maddr:$MO_PORT 未监听（MO 可能仍在启动）"
+    fi
   fi
   if [ -b "$DRBD_VOLUME" ]; then drbdadm status "$DRBD_RESOURCE" 2>/dev/null | sed 's/^/    /'; fi
 
