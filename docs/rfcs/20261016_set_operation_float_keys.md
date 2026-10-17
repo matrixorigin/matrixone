@@ -1,11 +1,14 @@
-- Status: draft (pending independent approval)
+- Status: in progress
 - Start Date: 2026-10-16
 - Revision: 11
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
-- Rebase baseline: official main `b111224b0c624773389b390cd3cf1223126b6ee2`
+- Revision 11 measurement baseline: official main `b111224b0c624773389b390cd3cf1223126b6ee2`
 - Design feedback: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784
+- Independently accepted revision: 11 at `e7dbe6a2cdd57d0c53221bafe35bae1c1f6b29e8`
+- Design acceptance: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5559536863
+- Implementation approval: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5559558038
 
 # Signed-zero set membership and scalar reaggregation
 
@@ -27,8 +30,8 @@ the official-main rebase. Revision 9 preserves newly merged diagnostic/folding
 semantics, resolves the shared executor test append conflict and refreshes the
 same validation protocol. Revision 10 preserves upstream table charset and
 grouping-query-block semantics, advances the set-key allocation, and retains
-previous capacity receipts as historical evidence. These revisions do not assert
-repository approval or advance implementation approval.
+previous capacity receipts as historical evidence. Those historical revisions
+did not assert repository approval or advance implementation approval.
 
 Revision 11 addresses the automatic-activation capacity gap identified in
 review 5558405070. It replaces full outer materialization in the explicitly
@@ -36,8 +39,11 @@ marked occurrence stage with streaming numbering and introduces enforced
 attempt-wide memory/work admission plus CN concurrency admission. It adds typed
 plan/pipeline markers; ordinary WINDOW and equality/set semantics keep their
 existing paths. Revisions 5–10 below are immutable historical receipts, not
-qualification of this revision. Independent design approval remains pending;
-publication of this repair does not self-grant that approval.
+qualification of this revision. Independent review 5559536863 accepts revision 11
+at the exact commit recorded above; review 5559558038 separately approves that
+implementation. The acceptance record below preserves their distinct scope and
+limitations. This documentation update records those decisions without changing
+the accepted architecture or qualification protocol.
 
 ## Membership contract
 
@@ -223,11 +229,15 @@ specific automatic route, including sparse work and over-limit termination.
 
 ### Capacity acceptance protocol
 
-Before accepting this design for rollout, planner/execution reviewers must record
-a named deployment profile and supported envelope: outer/candidate sizes, widths,
-selectivity, distinctness/skew, concurrency, CN placement and numerical latency,
-peak-memory and spill/disk budgets. Revisions 5 and 6 record measured local proposals below;
-an independently accepted production envelope remains outstanding.
+The independently accepted revision-11 contract permits automatic selection under
+the enforced local execution boundaries: coordinator DOP 1, at most two marked
+attempts per CN, a 256 MiB participating account or smaller inherited cap, and
+16,777,216 candidate pairs shared across all marked stages in one attempt.
+Excess work or concurrency terminates with 20833. This replaces the historical
+S1-only deployment preconditions; it does not accept a universal latency/RSS
+guarantee or distributed scalar execution. The source-bound revision-11 receipt
+below records the measured sizes, widths, selectivity, distinctness/skew,
+concurrency and numerical latency, memory and spill targets for its 21 profiles.
 
 Validation must inspect the actual compiled plan while independently varying
 `O`, `I`, `M/(O*I)`, `U/M`, outer width, skew and concurrency. Include both a tiny
@@ -244,7 +254,9 @@ recovery error, cancellation during merge/build/group, Reset and subsequent
 successful reuse. Verify terminal cleanup with the owning allocation/reservation
 and file oracles, rather than sleeps or a large stress fixture. The evidence must
 identify source SHA, commands, settings, topology, inputs and terminal outcomes.
-Independent design/capacity acceptance remains a separate decision; the runtime guards and current-code evidence below are required for this delivery.
+Independent review 5559536863 accepts this bounded contract and its current
+source-bound evidence. A wider execution scope or stronger capacity guarantee
+requires its own evidence and acceptance; the historical receipts do not grant it.
 
 ### Historical revisions 5–10
 
@@ -794,7 +806,10 @@ the old lease is closed. Missing terminal proof, owner cleanup panic, partial
 initialization and exporter panic controls distinguish permit retention from safe
 release. Existing composed cancellation, corrupt reload and forced spill recovery
 remain covered. Multi-CN scalar execution and universal upstream/RSS/latency bounds
-are not asserted. Independent RFC approval remains pending.
+are not asserted. Independent design acceptance and implementation approval are
+recorded below. The receipt's `Execution.IndependentApproval` field retains the
+pending state at measurement time; the immutable receipt is not rewritten to
+represent the subsequent review decisions.
 
 ## Alternatives
 
@@ -812,6 +827,12 @@ physical key plus explicit capability admission avoids changing shared scalar or
 GROUP BY equality and avoids a new set executor; the bounded scalar composition has explicit typed marker fields.
 
 ## Compatibility, rollout and rollback
+
+The accepted rollout scope is the automatically selected, resource-bounded local
+route described above. Historical S1 workload restrictions are not current
+activation gates. Retain the terminal 20833 behavior, participating-account limits
+and coordinator-only scope when deploying; broader distributed execution and
+universal latency or process-RSS guarantees remain unqualified.
 
 Official main at this revision ends at MORPC 118. This capability uses MORPC
 **119**. The feature walker recognizes encoded function identity 601 without
@@ -874,7 +895,11 @@ separately; unrelated correctness evidence remains reusable only where its
 semantic inputs are unchanged. Successful tests are not independent design
 acceptance or a capacity benchmark.
 
-| Invariant or risk | Evidence and revision | Result and limitation | Pending acceptance |
+The following table preserves the review context of those historical revisions.
+Its open review items describe their state at the time, superseded by the
+revision-11 decisions and current evidence recorded after the table.
+
+| Invariant or risk | Evidence and revision | Result and limitation | Historical review state (superseded) |
 | --- | --- | --- | --- |
 | Signed-zero membership, empty/real NULL, outer identity and scalar cardinality | Public `TestSetOperationSignedZero` at `fae17ae98d93f2b3e5e251dbc5649d643513af03`; preceding repair receipts report 117 named pass events (6.36s root, 8.438s package) | Pass includes grouped MAX, LIMIT 2, OFFSET, COUNT, repeated members, opposite-zero/finite-member 1242, and correlation partitions. One-CN correctness, not capacity. | Independent reconciliation/implementation review |
 | Boundary routing, physical/correlation keys, pagination and SINGLE, volatile/prepared controls | Complete planner and compile package tests from that same repair; `-count=1` through repository CGo wrapper, 35.715s and 14.010s | Passed; gofmt/vet and incremental lint also passed (0 lint issues). Revision 3 ran no product tests; this is a historical receipt. | Independent implementation review |
@@ -885,9 +910,31 @@ acceptance or a capacity benchmark.
 | Rebased function 600 overloads, upstream 599 negative control and predecessor 117 rejection | Revision 9 on official main `aa8d4278bdb940fe2e2b50a02fc2d9c5c362c3b7`; complete protobuf-plan/function/planner/compile/colexec package suites passed | Fresh registry/encoded-feature and existing placement/send/receive/Prepare/executor/persisted tests; independent collation 117/division 116 controls retained. Not a live mixed-version cluster. | Execution/compatibility acceptance |
 | Global merge and reaggregation capacity | Revision 6 benchmark and linked receipt above | Twelve actual fallback profiles and separate terminal internal roots; local targets met, including high-U/skew, measured account peaks, merge and spill/reload counters. Full allocator attribution and remote qualification are not claimed. | Planner/execution reviewers: supported production envelope and remaining protocol acceptance |
 | Composed partial failure/cancel/reset/spill recovery | Revision 6 composed compile test plus named owner fault tests above | Typed 4 KiB rejection, WINDOW input / pre-reload cancellation, synchronous corrupt reload, first/final attempt file/handle/ledger cleanup and TP Reset/same-budget recovery. Mid-single-batch cancellation is not injected. | Execution reviewers: remaining composed boundaries |
-| Design gate | [Review 5541720784](https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784) requested ownership, capacity and alternatives | This revision supplies those artifacts; the reviewer deferred full implementation review. No independent approval is recorded. | Independent reviewer approval of this exact revision |
+| Historical design gate | [Review 5541720784](https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784) requested ownership, capacity and alternatives | The earlier artifacts were supplied while full implementation review was deferred; independent approval had not been recorded at that stage. | Superseded by the independent revision-11 decisions below |
 
-Record any later acceptance with the immutable revision/commit link, reviewer,
-decision, supported capacity envelope and evidence links. Advance status to
-`in progress` only after independent approval; the author does not self-approve
-or infer acceptance from CI. Until then, revision 6 remains a reviewable draft.
+### Revision 11 independent acceptance
+
+Both decisions below concern revision 11 at
+[`e7dbe6a2cdd57d0c53221bafe35bae1c1f6b29e8`](https://github.com/matrixorigin/matrixone/commit/e7dbe6a2cdd57d0c53221bafe35bae1c1f6b29e8).
+The reviewer is XuPeng-SH; the times are UTC. Design acceptance and implementation
+approval were recorded as separate phases.
+
+| Phase | Independent record | Decision and scope |
+| --- | --- | --- |
+| Design, 2026-10-17 19:03:36 UTC | [Review 5559536863](https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5559536863) | Accept revision 11's bounded local contract and advance the RFC to `in progress`: streaming occurrence IDs, shared memory/work admission, CN concurrency admission and fail-closed terminal proof. This decision did not approve implementation. |
+| Implementation, 2026-10-17 19:07:25 UTC | [Review 5559558038](https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5559558038) | Approve the reviewed implementation after the separate design acceptance. The reviewer reports no remaining blocking finding within that review and requests this documentation synchronization. This is not a statement that every PR reviewer has approved. |
+
+The implementation review independently reconciled all 63 delivered-source
+fingerprints in the revision-11 receipt and reused its 21 profiles / 135 samples,
+including exact/excess work boundaries. It also records passing public
+signed-zero SQL, focused compile/process checks, targeted race checks and four
+independent public-entry counterexamples. These are the reviewer's recorded
+checks, not new measurements from this documentation update.
+
+The accepted capacity scope is the enforced participating-account, shared-work
+and concurrency envelope stated above, with terminal rejection at its limits.
+The measured profiles do not establish a universal latency/RSS bound or qualify
+distributed scalar execution. Historical revisions 5–10 and every receipt retain
+their original source and measurement provenance. The RFC status now reflects
+the independent revision-11 decision; no architecture or runtime contract is
+changed by this synchronization.
