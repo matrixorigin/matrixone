@@ -38,7 +38,7 @@ func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 }
 
 func TestGetPythonUdfStatusRequiresProtocolVersion118(t *testing.T) {
-	assert.Equal(t, defines.MORPCVersion118, methodVersions[query.CmdMethod_GetPythonUdfStatus])
+	assert.Equal(t, defines.MORPCVersion119, methodVersions[query.CmdMethod_GetPythonUdfStatus])
 }
 
 // The name says 54 because that is the contract: the protocol RefreshSessionAuth shipped with.
