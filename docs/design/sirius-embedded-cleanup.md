@@ -19,7 +19,7 @@ adapters and comparison utilities.
 Both `/*+ SIDECAR */` and `/*+ SIDECAR GPU */` continue to select embedded GPU
 execution for one eligible statement. Normal MO execution, prepared execution,
 and statement context isolation retain their existing contracts. There is no
-new selector, backend, compatibility handler, or fallback.
+new selector, backend, execution compatibility handler, or fallback.
 
 Native TAE scanning, manifest generation, `/debug/tae/manifest`, the inspect
 command, and TN registration/unregistration remain available. The unused
@@ -31,7 +31,7 @@ argument; this cleanup does not introduce snapshot-bound manifests.
 | Closure | Change and consumer | Risk and proof |
 | --- | --- | --- |
 | Frontend selection | Replace the old offloader with a Boolean Sirius hint helper consumed by statement selection; retain both hint spellings | R2: recognition, statement isolation, prepared/context regressions, public GPU fixture |
-| Configuration | Remove `frontend.sidecarUrl`, `sidecar_url`, and frontend debug-address wiring | R2: standard unknown-variable errors and omission from variable listings; normal TOML unknown-key policy remains |
+| Configuration | Remove `frontend.sidecarUrl`, `sidecar_url`, and frontend debug-address wiring; consume the old typed migration field without restoring it | R2: SQL unknown-variable behavior, variable listings, and an old-producer snapshot restored through `Migrate`; normal TOML unknown-key policy remains |
 | GC protection | Remove the sidecar adapter, guard, replay/rollback and terminal-only protection state; retain normal CCPR protection | R3: registration/GC exclusion, TTL, soft-delete and capacity tests plus focused and package race validation |
 | Unused utilities | Delete the unreferenced comparison package and transaction-ignoring manifest wrapper | R1: reference closure and manifest owning-package tests |
 | Documentation | Correct current-state claims and preserve historical evidence | R0: inspect links, commands and recorded identities |
@@ -42,10 +42,10 @@ debug-address state and setter, and their dedicated tests. Retain active hint
 and statement-isolation tests under Sirius names. Remove obsolete configuration
 registrations without aliases or special unknown-variable handling.
 The existing catalog loader ignores unregistered variable names and SHOW
-enumerates registered definitions, so persisted old values need no migration
-or special compatibility list. Remove the old request smoke test that discards
-all results after recovered failures; the public GPU fixture and retained
-statement-context tests provide concrete selection oracles.
+enumerates registered definitions. Typed connection snapshots have a separate,
+strict decoder and need the migration handling below. Remove the old request
+smoke test that discards all results after recovered failures; the public GPU
+fixture and retained statement-context tests provide concrete selection oracles.
 
 Delete `SidecarReadProtector` and its tests. Remove `SyncProtectionGuard`,
 `EnsureSyncProtection`, terminal registration/release, guard rollback, and
@@ -53,6 +53,27 @@ Delete `SidecarReadProtector` and its tests. Remove `SyncProtectionGuard`,
 branches. Ordinary registration returns only an error and needs no guard object.
 Keep general protection queries, renewal, soft deletion, TTL cleanup, capacity
 reclamation, object validation, and real CCPR/RPC consumers.
+
+## Connection migration
+
+The review identified a rolling-upgrade gap in the original cleanup assumption:
+older CNs export every dynamic session-capable variable, including the unused
+`sidecar_url=""` default. Removing its SQL registration alone rejects ordinary
+session migrations onto upgraded CNs.
+
+The existing typed migration decoder recognizes only this removed endpoint
+field, validates its string value and ordinary duplicate/scope/runtime rules,
+then discards it. Snapshot size and cancellation checks remain ahead of decoding;
+other unknown names remain errors. The target does not store, replay or export
+the field, and SQL reads/sets/listings retain the removed-variable behavior.
+No endpoint registration, transport, registry or execution route is restored.
+
+Regression coverage temporarily supplies the old definition to the production
+snapshot owner, serializes the complete protobuf request, removes that definition,
+and invokes the target's real `Migrate` path. Cover both the untouched empty
+default and a configured old endpoint, preserve ordinary SQL mode, and verify
+the target's next snapshot omits the removed field. Reuse the existing mocked
+migration fixture; no additional cluster or source-tree snapshot is needed.
 
 ## GC state and lifetime
 
@@ -101,6 +122,8 @@ the normal release build's source-path binding is unchanged.
    the existing small public GPU fixture.
 2. Prove standard session/global read/set errors for the removed variable and
    omission from variable listings; extend the existing system-variable BVT.
+   Exercise old typed snapshots through protobuf and the migration consumer,
+   including malformed values, duplicates, invalid flags and unknown-name controls.
 3. Run normal sync-protection tests, deterministic GC-barrier rejection tests,
    focused adaptive race validation, and one owning-package race run.
 4. Run existing manifest generation, HTTP lifecycle and inspect tests; retain
