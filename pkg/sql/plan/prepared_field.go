@@ -657,6 +657,15 @@ func (b *baseBinder) rememberPreparedFieldNullIfDomain(expr *Expr, args []*Expr)
 		return
 	}
 	source := preparedFieldReturnSource{value: args[2]}
+	if domains := possibleStringDomainsForExpr(source.value); domains != 0 &&
+		!b.stringSourceHasDeclarationBoundary(source.value, nil, nil) && !preparedStringResultOwnsDeclaration(source.value) {
+		// Ordinary consumers need the SQL value owner too, even without a
+		// prepared binding state. Publish only a flat, immutable source proof;
+		// retain frozen P/V identities independently of type dependence.
+		collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+		collector.collectResult(source.value, make(map[*Expr]struct{}), true)
+		ensurePreparedNumericMetadata(expr).StringDomainSource = collector.witness(source.value, domains)
+	}
 	if cmp := args[0].GetF(); cmp != nil && len(cmp.Args) == 2 {
 		source.peer = cmp.Args[1]
 	}

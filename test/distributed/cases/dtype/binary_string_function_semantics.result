@@ -237,6 +237,38 @@ where table_schema = database() and table_name = 'declared_conditional_slice' an
 ➤ data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  𝄀
 varbinary  ¦  1
 drop table declared_conditional_slice;
+select id, char_length(nullif(coalesce(txt, bin), '')),
+hex(left(nullif(coalesce(txt, bin), ''), 1)),
+hex(reverse(nullif(coalesce(txt, bin), '')))
+from domains order by id;
+➤ id[4,32,0]  ¦  char_length(nullif(coalesce(txt, bin), ))[-5,64,0]  ¦  hex(left(nullif(coalesce(txt, bin), ), 1))[-1,16383,0]  ¦  hex(reverse(nullif(coalesce(txt, bin), )))[-1,16383,0]  𝄀
+1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  𝄀
+2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0
+select id, char_length(nullif(x, '')), hex(left(nullif(x, ''), 1)),
+hex(reverse(nullif(x, '')))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+➤ id[4,32,0]  ¦  char_length(nullif(x, ))[-5,64,0]  ¦  hex(left(nullif(x, ), 1))[-1,16383,0]  ¦  hex(reverse(nullif(x, )))[-1,16383,0]  𝄀
+1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  𝄀
+2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0
+select id, bit_count(coalesce(txt, bin)) from domains order by id;
+➤ id[4,32,0]  ¦  bit_count(coalesce(txt, bin))[-5,64,0]  𝄀
+1  ¦  15  𝄀
+2  ¦  15  𝄀
+3  ¦  15
+select id, bit_count(x), char_length(x), hex(left(x, 1))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+➤ id[4,32,0]  ¦  bit_count(x)[-5,64,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  𝄀
+1  ¦  15  ¦  2  ¦  E4BDA0  𝄀
+2  ¦  15  ¦  4  ¦  E4  𝄀
+3  ¦  15  ¦  2  ¦  E4BDA0
+select id, bit_count(x)
+from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
+➤ id[4,32,0]  ¦  bit_count(x)[-5,64,0]  𝄀
+1  ¦  15  𝄀
+2  ¦  15  𝄀
+3  ¦  15
 select id, hex(left(invalid_bytes, 1)), hex(reverse(invalid_bytes)),
 char_length(invalid_bytes), invalid_bytes like '____'
 from domains order by id;
@@ -402,13 +434,13 @@ E4  ¦  E4BDA061  ¦  E478A061  ¦  1  ¦  4  ¦  2
 select hex(substring(left(if(false, X'ff', '你好'), 2), 2, 1)) as selected_text,
 hex(substring(left(if(false, X'ff', '你好'), 2), 2)) as selected_text_tail,
 hex(substring(left(if(true, X'e4bda0e5a5bd', '你好'), 2), 2, 1)) as selected_binary;
-➤ selected_text[12,16,0]  ¦  selected_text_tail[12,16,0]  ¦  selected_binary[12,2,0]  𝄀
-E5A5BD  ¦  E5A5BD  ¦  BD
+➤ selected_text[12,2,0]  ¦  selected_text_tail[12,2,0]  ¦  selected_binary[12,2,0]  𝄀
+BD  ¦  BD  ¦  BD
 with mixed_domain as (
 select if(false, X'ff', '你好') as value
 )
 select hex(left(value, 1)), char_length(value)
 from mixed_domain;
-➤ hex(left(value, 1))[12,16,0]  ¦  char_length(value)[-5,64,0]  𝄀
-E4BDA0  ¦  2
+➤ hex(left(value, 1))[12,2,0]  ¦  char_length(value)[-5,64,0]  𝄀
+E4  ¦  6
 drop database binary_string_function_semantics;
