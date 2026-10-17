@@ -27,11 +27,8 @@ import (
 	"go.uber.org/zap"
 )
 
-// 4.0.15 replays the idempotent shared Python UDF catalog entries without
-// changing the already-published upstream handlers. Tenants that completed
-// upstream 4.0.14 may still lack this catalog; a new semantic version makes
-// them eligible for both background upgrade and first-login compensation.
-// Complete, partial and absent catalog states converge on retry.
+// Database defaults have their own tenant migration after 4.0.14. An older
+// worker must not treat the new catalog and SCHEMATA view as already upgraded.
 var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:                 "4.0.15",
@@ -51,17 +48,12 @@ func (v *versionHandle) Metadata() versions.Version {
 	return v.metadata
 }
 
-func (v *versionHandle) Prepare(ctx context.Context, txn executor.TxnExecutor, final bool) error {
+func (v *versionHandle) Prepare(_ context.Context, txn executor.TxnExecutor, _ bool) error {
 	txn.Use(catalog.MO_CATALOG)
 	return nil
 }
 
-func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32, txn executor.TxnExecutor) error {
-	// Login compensation invokes this handler without the cluster-upgrade
-	// scheduler, so enforce the same floor before any catalog mutation.
-	if err := versions.CheckCommonProtocolVersion(txn, v.metadata.RequiredProtocolVersion); err != nil {
-		return err
-	}
+func (v *versionHandle) HandleTenantUpgrade(_ context.Context, tenantID int32, txn executor.TxnExecutor) error {
 	logger := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN).Logger()
 	for _, entry := range tenantUpgEntries {
 		start := time.Now()
@@ -82,10 +74,10 @@ func (v *versionHandle) HandleTenantUpgrade(ctx context.Context, tenantID int32,
 	return nil
 }
 
-func (v *versionHandle) HandleClusterUpgrade(ctx context.Context, txn executor.TxnExecutor) error {
+func (v *versionHandle) HandleClusterUpgrade(_ context.Context, _ executor.TxnExecutor) error {
 	return nil
 }
 
-func (v *versionHandle) HandleCreateFrameworkDeps(txn executor.TxnExecutor) error {
+func (v *versionHandle) HandleCreateFrameworkDeps(_ executor.TxnExecutor) error {
 	return moerr.NewInternalErrorNoCtxf("Only v1.2.0 can initialize upgrade framework, current version is:%s", v.metadata.Version)
 }

@@ -154,7 +154,8 @@ const (
 	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
 	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
 	MORPCVersion118    int64 = 118 // transactional database defaults and table charset alteration
-	MORPCLatestVersion       = MORPCVersion118
+	MORPCVersion119    int64 = 119 // shared Python UDF revision catalog and remote execution contract
+	MORPCLatestVersion       = MORPCVersion119
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

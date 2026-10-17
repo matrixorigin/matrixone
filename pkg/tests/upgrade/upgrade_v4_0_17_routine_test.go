@@ -23,7 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
-	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_15"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_17"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,7 +36,7 @@ import (
 
 // Reuse the upgrade package's single-CN fixture. A late tenant must be repaired
 // on its first real login, even when the cluster has already completed upgrade.
-func TestV4015LoginRepairsLegacyRoutineCatalog(t *testing.T) {
+func TestV4017LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
@@ -46,9 +46,9 @@ func TestV4015LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 		systemDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 		require.NoError(t, err)
 		defer systemDB.Close()
-		for _, sourceVersion := range []string{"4.0.12", "4.0.13", "4.0.14"} {
+		for _, sourceVersion := range []string{"4.0.12", "4.0.13", "4.0.14", "4.0.15", "4.0.16"} {
 			t.Run(sourceVersion, func(t *testing.T) {
-				account := "routine_repair_4015_" + strings.ReplaceAll(sourceVersion, ".", "")
+				account := "routine_repair_4017_" + strings.ReplaceAll(sourceVersion, ".", "")
 				_, err = systemDB.ExecContext(ctx, "create account "+account+" ADMIN_NAME 'root' IDENTIFIED BY '111'")
 				require.NoError(t, err)
 				defer func() {
@@ -127,7 +127,7 @@ func TestV4015LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 					db, err := sql.Open("mysql", tenantDSN)
 					require.NoError(t, err)
 					defer db.Close()
-					require.ErrorContains(t, db.PingContext(ctx), "upgrade requires all CNs to support protocol version 118")
+					require.ErrorContains(t, db.PingContext(ctx), "upgrade requires all CNs to support protocol version 119")
 				}()
 				checkCatalog(sourceVersion, false)
 				tenantDB, err := sql.Open("mysql", tenantDSN)
@@ -142,18 +142,18 @@ func TestV4015LoginRepairsLegacyRoutineCatalog(t *testing.T) {
 					require.Equal(t, int64(12), result)
 				}
 				checkResult()
-				checkCatalog("4.0.15", true)
+				checkCatalog("4.0.17", true)
 				// Explicit replay reaches the handler; a cached second login would not
 				// prove that its DDL is idempotent against the persisted catalog.
 				for range 2 {
 					var mutations int
 					require.NoError(t, sqlExecutor.ExecTxn(ctx, func(txn executor.TxnExecutor) error {
-						return v4_0_15.Handler.HandleTenantUpgrade(ctx, int32(accountID),
+						return v4_0_17.Handler.HandleTenantUpgrade(ctx, int32(accountID),
 							&routineRepairTxn{TxnExecutor: txn, mutations: &mutations})
 					}, executor.Options{}.WithDatabase(catalog.MO_CATALOG).
 						WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied()))
 					require.Zero(t, mutations)
-					checkCatalog("4.0.15", true)
+					checkCatalog("4.0.17", true)
 					checkResult()
 				}
 			})
