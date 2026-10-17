@@ -124,11 +124,16 @@ func TestStatementAuthorizationEpochAcrossCatalogCommit(t *testing.T) {
 		// whole authorization/rewrite owner before creating the DDL's transaction.
 		mustExec(t, ctx, owner, "begin")
 		mustExec(t, ctx, owner, "insert into app.t values (3,3)")
-		mustExec(t, ctx, owner, "truncate table app.marker")
+		// This first batch statement replaces the epoch before its sibling base
+		// is needed. The continuation must still descend from the live request.
+		mustExec(t, ctx, owner, "truncate table app.marker; insert into app.marker values (9)")
 		syncCatalog()
 		observer := open(1, "epoch_auth#admin#accountadmin")
 		require.NoError(t, observer.QueryRowContext(ctx, "select count(*) from app.t").Scan(&count))
 		require.Equal(t, 3, count)
+		require.NoError(t, observer.QueryRowContext(ctx, "select count(*), min(id) from app.marker").Scan(&count, &marker))
+		require.Equal(t, 1, count)
+		require.Equal(t, 9, marker)
 		// CREATE TABLE is transactional in this repository; the implicit-commit
 		// TRUNCATE/RENAME forms are excluded from prepareable_stmt. Retained
 		// binary DDL must preserve the existing user transaction's data view.

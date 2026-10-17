@@ -6335,11 +6335,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
 	execCtx.isIssue3482 = input.isIssue3482Sql()
 	var statementBaseCtx context.Context
+	var statementParentCtx context.Context
 	if epoch != nil {
 		// A sibling must descend from the request, not the cancelled previous
-		// statement. Keep shared diagnostic owners without retaining an epoch chain.
-		statementBaseCtx = statistic.ContextWithStatsInfo(
-			defines.AttachDDLOwnerRoleIDProvider(appendStatementAt(epoch.parent, beginInstant), ses), statsInfo)
+		// statement. Capture this owner before any implicit commit replaces epoch;
+		// single statements do not need the sibling's diagnostic context nodes.
+		statementParentCtx = epoch.parent
 	}
 
 	executionInput := input
@@ -6729,6 +6730,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 		if stagedSQLMode && hasMoreStatements {
 			if epoch != nil {
+				if statementBaseCtx == nil {
+					statementBaseCtx = statistic.ContextWithStatsInfo(
+						defines.AttachDDLOwnerRoleIDProvider(appendStatementAt(statementParentCtx, beginInstant), ses), statsInfo)
+				}
 				epoch.end()
 				execCtx.reqCtx, epoch = beginAuthorizationEpoch(statementBaseCtx, ses, execCtx)
 				epoch.entered = true
