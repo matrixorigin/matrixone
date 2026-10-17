@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -82,6 +83,29 @@ func TestGroupingSetQueryBlockIsolation(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) { check(t, tc.query, tc.want) })
 		}
+		t.Run("static-computed-outputs", func(t *testing.T) {
+			rt := runtime.ServiceRuntime(cn.ServiceID())
+			old, existed := rt.GetGlobalVariables("optimizer_hints")
+			rt.SetGlobalVariables("optimizer_hints", "sharedComputation=1")
+			defer func() {
+				if existed {
+					rt.SetGlobalVariables("optimizer_hints", old)
+				} else {
+					rt.CompareAndDeleteGlobalVariables("optimizer_hints", "sharedComputation=1")
+				}
+			}()
+			for _, tc := range []struct {
+				name, query string
+				want        []string
+			}{
+				{"filter", "select k,total from (select g+1 k,sum(v) total from small group by g with rollup) r where k=2", []string{"2:10"}},
+				{"null-filter", "select k,total from (select g+1 k,sum(v) total from small group by g with rollup) r where k is null", []string{"NULL:10"}},
+				{"mixed-keys", "select k,total from (select g+coalesce(h,0) k,sum(v) total from (select g,h,v from small union all select 1,2,20) s group by g,h with rollup) r where k=1", []string{"1:10", "1:30"}},
+				{"constant-null-filter", "select * from (select NULL k,count(*) n from small group by g with rollup) r where k is not null", nil},
+			} {
+				t.Run(tc.name, func(t *testing.T) { check(t, tc.query, tc.want) })
+			}
+		})
 		for _, family := range []struct {
 			name, clause string
 			nullCount    int

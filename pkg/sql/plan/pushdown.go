@@ -1479,9 +1479,9 @@ func unwrapIsTrueFromMarkJoinEqualities(
 }
 
 // simplifyActiveGroupingFilter removes output NULL normalization only for this
-// static branch's active keys. Their GROUPING bit is zero, so the wrapper is a
-// value identity in a predicate. Keep synthetic/dynamic keys and real GROUPING
-// observers intact; output projections must retain their query-block boundary.
+// static branch's active-key expressions. Their GROUPING bit is zero, making
+// the wrapper a value identity in a predicate. Keep synthetic/dynamic keys and
+// real GROUPING observers intact; output projections retain their boundary.
 func simplifyActiveGroupingFilter(expr *plan.Expr, groupTag int32, groupCount int, flags []bool) *plan.Expr {
 	if len(flags) == 0 {
 		return expr
@@ -1496,17 +1496,17 @@ func simplifyActiveGroupingFilter(expr *plan.Expr, groupTag int32, groupCount in
 	}
 	if id == function.IFF && len(fn.Args) == 3 {
 		key := fn.Args[2]
-		col := key.GetCol()
 		probe := fn.Args[0].GetF()
 		null := fn.Args[1]
-		if col != nil && col.RelPos == groupTag && col.ColPos >= 0 &&
-			int(col.ColPos) < groupCount && int(col.ColPos) < len(flags) && flags[col.ColPos] &&
+		if key != nil &&
 			probe != nil && probe.Func != nil && len(probe.Args) == 1 &&
-			exprStructuralEqual(probe.Args[0], key) && null.GetLit() != nil && null.GetLit().Isnull {
+			proto.Equal(probe.Args[0], key) && null.GetLit() != nil && null.GetLit().Isnull {
 			probeID, _ := function.DecodeOverloadID(probe.Func.Obj)
 			keyType, nullType, resultType := key.Typ, null.Typ, expr.Typ
 			keyType.NotNullable, nullType.NotNullable, resultType.NotNullable = false, false, false
-			if probeID == function.GROUPING && proto.Equal(&keyType, &nullType) && proto.Equal(&keyType, &resultType) {
+			if probeID == function.GROUPING && proto.Equal(&keyType, &nullType) && proto.Equal(&keyType, &resultType) &&
+				containsTag(key, groupTag) && groupingFilterHasOnlyActiveKeys(key, groupTag, groupCount, flags) &&
+				exprCanRemoveProject(key) && !function.ContainsRowScopedConversion(key) {
 				return key
 			}
 		}
@@ -1515,6 +1515,43 @@ func simplifyActiveGroupingFilter(expr *plan.Expr, groupTag int32, groupCount in
 		fn.Args[i] = simplifyActiveGroupingFilter(arg, groupTag, groupCount, flags)
 	}
 	return expr
+}
+
+// Ordinary literals and scalar operations on active keys cannot introduce a
+// grouping sentinel. Prove every input's ownership and scalar shape;
+// unknown expression forms and foreign/inactive keys retain the boundary.
+func groupingFilterHasOnlyActiveKeys(expr *plan.Expr, groupTag int32, groupCount int, flags []bool) bool {
+	if expr == nil || groupCount == 0 || len(flags) != groupCount {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return e.Col != nil && e.Col.RelPos == groupTag && e.Col.ColPos >= 0 &&
+			int(e.Col.ColPos) < groupCount && flags[e.Col.ColPos]
+	case *plan.Expr_Lit:
+		return e.Lit != nil
+	case *plan.Expr_T:
+		return e.T != nil
+	case *plan.Expr_P:
+		return e.P != nil && e.P.Pos >= 0
+	case *plan.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		id, _ := function.DecodeOverloadID(e.F.Func.Obj)
+		overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+		if !ok || id == function.GROUPING || overload.IsAgg() || overload.IsWin() {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !groupingFilterHasOnlyActiveKeys(arg, groupTag, groupCount, flags) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 // referencesSyntheticGroupKey reports whether expr cannot be rewritten below
