@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -136,4 +137,25 @@ func TestOnlyFullGroupByDependencyClosure(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestGroupByDiagnosticFunctionsHaveStableValues(t *testing.T) {
+	expr, err := BindFuncExprImplByPlanExpr(context.Background(), "bit_count", []*Expr{makePlan2StringConstExprWithType("3x")})
+	require.NoError(t, err)
+	require.True(t, isMySQLFullGroupBySingleValueExpr(expr))
+
+	column := &Expr{Typ: expr.GetF().Args[0].Typ, Expr: &pbplan.Expr_Col{Col: &pbplan.ColRef{RelPos: 1, ColPos: 0}}}
+	expr.GetF().Args[0] = column
+	require.False(t, isMySQLFullGroupBySingleValueExpr(expr))
+	key := fullGroupByColumn{1, 0}
+	refs := make(map[fullGroupByColumn]bool)
+	columns := map[fullGroupByColumn]pbplan.Type{key: column.Typ}
+	require.True(t, fullGroupByStableReferences(expr, columns, refs))
+	require.Equal(t, map[fullGroupByColumn]bool{key: true}, refs)
+	require.False(t, fullGroupByStableReferences(expr, nil, nil), "unknown columns still fail the proof")
+
+	volatile, err := BindFuncExprImplByPlanExpr(context.Background(), "uuid", nil)
+	require.NoError(t, err)
+	require.False(t, isMySQLFullGroupBySingleValueExpr(volatile))
+	require.False(t, fullGroupByStableReferences(volatile, columns, refs))
 }
