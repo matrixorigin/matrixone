@@ -345,8 +345,7 @@ ensure_drbd_module_rpm(){
 stage_pre(){
   hdr "阶段 pre: 系统准备"
   [ "$(id -u)" = 0 ] || [ "$DRY_RUN" = 1 ] || die "请以 root 运行"
-  [ -n "$SELF" ] && [ -n "$PEER" ] && [ -n "$SELF_IP" ] && [ -n "$PEER_IP" ] \
-    || die "缺少参数: --self/--peer/--self-ip/--peer-ip"
+  require_nodes
   [ -n "$DRBD_DEVICE" ] || die "缺少 --drbd-device"
   command -v hostnamectl >/dev/null 2>&1 && run "hostnamectl set-hostname $SELF"
   run "sed -i '/# MO-HA-BEGIN/,/# MO-HA-END/d' /etc/hosts"
@@ -529,8 +528,21 @@ stage_moconf(){
 }
 
 # ----------------------------- 阶段 drbd ------------------------------------
+# 节点身份校验：预阶段与 DRBD/集群阶段都要拦，避免 --stages drbd 单独跑时绕过。
+# 同名/同 IP 会生成只有单个 host 段的 DRBD 配置且不报错。
+require_nodes(){
+  [ -n "$SELF" ] && [ -n "$PEER" ] && [ -n "$SELF_IP" ] && [ -n "$PEER_IP" ] \
+    || die "缺少参数: --self/--peer/--self-ip/--peer-ip"
+  [ "$SELF" != "$PEER" ] || die "--self 与 --peer 不能相同（当前都是 ${SELF}）"
+  [ "$SELF_IP" != "$PEER_IP" ] || die "--self-ip 与 --peer-ip 不能相同（当前都是 ${SELF_IP}）"
+  case "$SELF_IP$PEER_IP" in
+    *[!0-9.]*) die "--self-ip/--peer-ip 需要裸 IPv4 地址（不要写主机名或 /掩码）：${SELF_IP} ${PEER_IP}" ;;
+  esac
+}
+
 stage_drbd(){
   hdr "阶段 drbd: 配置 DRBD"
+  require_nodes
   [ -b "$DRBD_DEVICE" ] || [ "$DRY_RUN" = 1 ] || die "$DRBD_DEVICE 不是块设备"
   local quorum_opts=""
   [ "$DRBD9_QUORUM" = 1 ] && quorum_opts="
