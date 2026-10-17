@@ -846,6 +846,17 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 	} else if hasSelectedIsolation {
 		opts = append(opts, txnclient.WithTxnIsolation(selectedIsolation))
 	}
+	if backSes != nil && backSes.authorizationSnapshot != nil {
+		opts = append(opts, txnclient.WithAuthorizationSnapshot(backSes.authorizationSnapshot))
+	} else if ses, ok := execCtx.ses.(*Session); ok {
+		admission, err := statementSnapshotOption(execCtx.reqCtx, ses, pu.TxnClient)
+		if err != nil {
+			return err
+		}
+		if admission != nil {
+			opts = append(opts, admission)
+		}
+	}
 
 	var (
 		tempCtx    context.Context
@@ -937,8 +948,8 @@ func (th *TxnHandler) Commit(execCtx *ExecCtx) error {
 }
 
 // commitBeforeStatement ends the transaction that precedes a statement with
-// MySQL's implicit-commit-before rule.  It intentionally bypasses Commit's
-// option-bit policy: an explicit BEGIN or AUTOCOMMIT=0 must not keep the old
+// MySQL's implicit-commit-before rule or starts a replacement BEGIN. It
+// intentionally bypasses Commit's option-bit policy: an explicit BEGIN or AUTOCOMMIT=0 must not keep the old
 // workspace alive across TRUNCATE or RENAME TABLE. The unsafe path remains the sole
 // owner of commit-result-unknown, temporary-table, and DDL-generation cleanup.
 func (th *TxnHandler) commitBeforeStatement(execCtx *ExecCtx) error {

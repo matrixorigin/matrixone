@@ -773,6 +773,7 @@ type BackgroundExecOption struct {
 	// cancelTxnCreateWithRequest is reserved for short-lived background
 	// transactions whose request context owns a blocked TxnClient.New call.
 	cancelTxnCreateWithRequest bool
+	authorizationSnapshot      *client.SnapshotAdmission
 }
 
 // BackgroundExec executes the sql in background session without network output.
