@@ -504,11 +504,8 @@ func TestQueryServiceMigrateToCarriesTypedSystemVariables(t *testing.T) {
 		}
 		assert.True(t, migration.UserDefinedVarsExported)
 		assert.True(t, migration.SystemVariablesExported)
-		if assert.Len(t, migration.SystemVariables, 2) {
-			assert.Equal(t, "sql_mode", migration.SystemVariables[0].Name)
-			assert.Equal(t, "sidecar_url", migration.SystemVariables[1].Name)
-			assert.Equal(t, "", migration.SystemVariables[1].Value.GetLit().GetSval())
-		}
+		assert.Len(t, migration.SystemVariables, 1)
+		assert.Equal(t, "sql_mode", migration.SystemVariables[0].Name)
 		assert.Empty(t, migration.SetVarStmts)
 		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
 		return nil
@@ -529,9 +526,6 @@ func TestQueryServiceMigrateToCarriesTypedSystemVariables(t *testing.T) {
 			SystemVariables: []*pb.MigrateSystemVariable{{
 				Name:  "sql_mode",
 				Value: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "ANSI_QUOTES"}}}},
-			}, {
-				Name:  "sidecar_url",
-				Value: &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: ""}}}},
 			}},
 		}
 		assert.NoError(t, cc.migrateConnTo(sc, info))

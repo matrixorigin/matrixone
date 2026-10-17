@@ -503,55 +503,6 @@ func TestSessionSystemVariableMigrationValidation(t *testing.T) {
 	require.ErrorContains(t, err, "runtime side effect is invalid")
 }
 
-func TestSessionSystemVariableMigrationRetiredSidecar(t *testing.T) {
-	ctx := context.Background()
-	value := plan2.MakePlan2StringConstExprWithType("ANSI_QUOTES")
-	for _, tc := range []struct {
-		name  string
-		key   string
-		value string
-	}{
-		{"default", "sidecar_url", ""},
-		{"configured", "sidecar_url", "http://old-endpoint"},
-		{"case insensitive", "SIDECAR_URL", "http://old-endpoint"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			vars, err := decodeSessionSystemVars(ctx, []*query.MigrateSystemVariable{
-				{Name: "sql_mode", Value: value},
-				{Name: tc.key, Value: plan2.MakePlan2StringConstExprWithType(tc.value)},
-			})
-			require.NoError(t, err)
-			require.Len(t, vars, 1)
-			require.Equal(t, "sql_mode", vars[0].name)
-			require.Equal(t, "ANSI_QUOTES", vars[0].value)
-		})
-	}
-	legacy := &query.MigrateSystemVariable{Name: "sidecar_url", Value: value}
-	for _, tc := range []struct {
-		name string
-		vars []*query.MigrateSystemVariable
-		err  string
-	}{
-		{"unknown name", []*query.MigrateSystemVariable{{Name: "sidecar_url_extra", Value: value}}, "unknown session system variable"},
-		{"duplicate", []*query.MigrateSystemVariable{legacy, {Name: "SIDECAR_URL", Value: value}}, "duplicate session system variable"},
-		{"missing value", []*query.MigrateSystemVariable{{Name: "sidecar_url"}}, "invalid user variable value"},
-		{"invalid value", []*query.MigrateSystemVariable{{Name: "sidecar_url", Value: &plan.Expr{}}}, "invalid user variable value"},
-		{"wrong type", []*query.MigrateSystemVariable{{Name: "sidecar_url", Value: plan2.MakePlan2Int64ConstExprWithType(1)}}, "must be a string"},
-		{"runtime side effect", []*query.MigrateSystemVariable{{Name: "sidecar_url", Value: value, RuntimeValue: value}}, "runtime side effect is invalid"},
-		{"next transaction", []*query.MigrateSystemVariable{{Name: "sidecar_url", Value: value, NextTransaction: true}}, "next transaction scope is invalid"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			vars, err := decodeSessionSystemVars(ctx, tc.vars)
-			require.ErrorContains(t, err, tc.err)
-			require.Nil(t, vars)
-		})
-	}
-	canceled, cancel := context.WithCancel(ctx)
-	cancel()
-	_, err := decodeSessionSystemVars(canceled, []*query.MigrateSystemVariable{legacy})
-	require.ErrorIs(t, err, context.Canceled)
-}
-
 func TestUserDefinedVarRepeatedMigrationDoesNotReevaluateExpressions(t *testing.T) {
 	source := &Session{userDefinedVars: map[string]*UserDefinedVar{
 		"random_value": {

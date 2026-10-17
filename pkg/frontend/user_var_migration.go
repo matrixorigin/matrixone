@@ -291,10 +291,7 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 			return nil, moerr.NewInternalError(ctx, "invalid session system variable in connection migration")
 		}
 		rawName := strings.ToLower(item.Name)
-		// Older CNs export this retired no-op even for untouched sessions.
-		// Consume it only at the wire boundary; SQL registration stays removed.
-		retiredSidecarURL := rawName == "sidecar_url"
-		if _, ok := gSysVarsDefs[rawName]; !ok && !retiredSidecarURL {
+		if _, ok := gSysVarsDefs[rawName]; !ok {
 			return nil, moerr.NewInternalErrorf(ctx,
 				"unknown session system variable %q in connection migration", rawName)
 		}
@@ -336,13 +333,6 @@ func decodeSessionSystemVars(ctx context.Context, vars []*query.MigrateSystemVar
 			if _, err := txnIsolationFromSystemValue(ctx, value); err != nil {
 				return nil, err
 			}
-		}
-		if retiredSidecarURL {
-			if _, ok := value.(string); !ok {
-				return nil, moerr.NewInternalErrorf(ctx,
-					"retired session system variable %q must be a string", name)
-			}
-			continue
 		}
 		migrated := migratedSystemVariable{
 			name:                name,
