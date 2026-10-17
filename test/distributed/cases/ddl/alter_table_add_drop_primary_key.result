@@ -165,11 +165,15 @@ drop table pri07;
 drop table if exists pri08;
 create table pri08 (col1 binary, col2 int unsigned);
 insert into pri08 values ('ewfijew', 372984324);
+Data truncation: Can't cast 'ewfijew' to BINARY type. Src length 7 is larger than Dest length 1
 insert into pri08 values ('ew8u3ejkfcwev', 2147483647);
+Data truncation: Can't cast 'ew8u3ejkfcwev' to BINARY type. Src length 13 is larger than Dest length 1
+insert into pri08 values ('e', 372984324);
+insert into pri08 values ('w', 2147483647);
 select * from pri08;
 col1    col2
-ewfijew    372984324
-ew8u3ejkfcwev    2147483647
+e    372984324
+w    2147483647
 alter table pri08 add constraint primary key (col1);
 show create table pri08;
 Table    Create Table

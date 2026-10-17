@@ -4602,11 +4602,14 @@ alter_option:
     }
 |   CONVERT TO CHARACTER SET charset_name
     {
-        $$ = tree.NewTableOptionCharset($5)
+        opt := tree.NewTableOptionCharset($5)
+        opt.Convert = true
+        $$ = opt
     }
 |   CONVERT TO CHARACTER SET charset_name COLLATE equal_opt charset_name
     {
         opt := tree.NewTableOptionCharset($5)
+        opt.Convert = true
         opt.Collate = $8
         $$ = opt
     }

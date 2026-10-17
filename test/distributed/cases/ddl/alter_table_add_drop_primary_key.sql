@@ -107,6 +107,8 @@ drop table if exists pri08;
 create table pri08 (col1 binary, col2 int unsigned);
 insert into pri08 values ('ewfijew', 372984324);
 insert into pri08 values ('ew8u3ejkfcwev', 2147483647);
+insert into pri08 values ('e', 372984324);
+insert into pri08 values ('w', 2147483647);
 select * from pri08;
 alter table pri08 add constraint primary key (col1);
 show create table pri08;

@@ -153,7 +153,9 @@ const (
 	MORPCVersion115    int64 = 115 // type-sensitive calendar DAY and truncating SECOND intervals
 	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
 	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
-	MORPCLatestVersion       = MORPCVersion117
+	MORPCVersion118    int64 = 118 // JSON text/MIN/MAX/functional keys and ODKU result/baseline; cumulative112..117 required
+	MORPCVersion119    int64 = 119 // binary assignment byte capacity and typed physical payload; cumulative112..118 required
+	MORPCLatestVersion       = MORPCVersion119
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

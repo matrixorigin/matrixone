@@ -198,6 +198,12 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			// A free outer reference in HAVING compares the completed aggregate
+			// with the outer row. Keep it correlated for subquery decorrelation;
+			// wrapping it in ANY_VALUE would change empty-input semantics.
+			if b.bindingHaving {
+				return expr, nil
+			}
 			return nil, moerr.NewNYI(b.GetContext(), "correlated columns in aggregate function")
 		}
 		newExpr, _ := BindFuncExprImplByPlanExpr(b.builder.compCtx.GetContext(), "any_value", []*plan.Expr{expr})

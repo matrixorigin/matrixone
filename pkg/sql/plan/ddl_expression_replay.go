@@ -164,6 +164,13 @@ func WithPersistedDDLReplay(ctx context.Context, original, target *planpb.TableD
 		if newCol == nil {
 			continue
 		}
+		// A preserved assignment is bound to its owning column, even when it
+		// is constant or references only unchanged inputs. Reuse the CTAS value-
+		// domain comparison so lineage/nullability changes alone preserve the
+		// binding, while changed targets rebind through ordinary CREATE.
+		if !ctasSameDefaultType(oldCol.Typ, newCol.Typ) {
+			continue
+		}
 		entry := &replayedColumnExpressions{columnType: oldCol.Typ}
 		if oldCol.Default != nil && newCol.Default != nil {
 			expr := copyExpr(oldCol.Default.Expr, rawPositions)

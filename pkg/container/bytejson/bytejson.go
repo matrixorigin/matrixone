@@ -41,8 +41,8 @@ func (bj ByteJson) String() string {
 
 func (bj ByteJson) Unquote() (string, error) {
 	if bj.Type == TpCodeBlob {
-		if _, _, ok := mysqlOpaqueValue(bj.GetString()); ok {
-			return string(bj.GetString()), nil
+		if _, encoded, ok := mysqlOpaqueValue(bj.GetString()); ok {
+			return string(appendMySQLOpaqueVisible(nil, bj.GetString(), encoded, false)), nil
 		}
 		if payload, ok := bj.persistedBitPayload(); ok {
 			return base64.StdEncoding.EncodeToString(payload), nil
@@ -219,8 +219,8 @@ func (bj ByteJson) to(buf []byte) ([]byte, error) {
 	case TpCodeBlob:
 		buf = append(buf, '"')
 		data := bj.GetString()
-		if _, _, ok := mysqlOpaqueValue(data); ok {
-			buf = append(buf, data...)
+		if _, encoded, ok := mysqlOpaqueValue(data); ok {
+			buf = appendMySQLOpaqueVisible(buf, data, encoded, true)
 		} else if payload, ok := bj.persistedBitPayload(); ok {
 			start := len(buf)
 			buf = append(buf, make([]byte, base64.StdEncoding.EncodedLen(len(payload)))...)
@@ -2047,4 +2047,22 @@ func (n Node) String() string {
 	default:
 		return fmt.Sprint(v)
 	}
+}
+
+// appendMySQLOpaqueVisible follows MySQL's base64_encode 76-column wrapping
+// at the terminal text boundary. The persisted tag and its compact base64
+// comparison payload remain unchanged. JSON strings escape the inserted LF;
+// JSON_UNQUOTE returns the actual LF. No trailing newline is emitted.
+func appendMySQLOpaqueVisible(dst, tagged, encoded []byte, quoted bool) []byte {
+	dst = append(dst, tagged[:len(tagged)-len(encoded)]...)
+	for len(encoded) > 76 {
+		dst = append(dst, encoded[:76]...)
+		if quoted {
+			dst = append(dst, '\\', 'n')
+		} else {
+			dst = append(dst, '\n')
+		}
+		encoded = encoded[76:]
+	}
+	return append(dst, encoded...)
 }

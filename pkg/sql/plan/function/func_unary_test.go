@@ -11466,7 +11466,6 @@ func TestReleaseUserLevelLocksOnSessionCloseRetainsSaturatedHandoffAndRecovers(t
 		require.NoError(t, err)
 		require.Equal(t, int64(0), v)
 
-		service.blockUnlock.Store(false)
 		detachedUserLevelLockCleanups.Lock()
 		detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
 		for {
@@ -11481,7 +11480,11 @@ func TestReleaseUserLevelLocksOnSessionCloseRetainsSaturatedHandoffAndRecovers(t
 			select {
 			case <-detachedUserLevelLockCleanups.backlog:
 			default:
+				// Restore the consumer before retained work can hand off cleanup.
+				detachedUserLevelLockCleanups.backlogStarted = false
 				detachedUserLevelLockCleanups.Unlock()
+				startDetachedUserLevelLockCleanupBacklogWorker()
+				service.blockUnlock.Store(false)
 				goto waitForCleanup
 			}
 		}
@@ -12092,7 +12095,6 @@ func TestTimedOutFailedAttemptCleanupRetainsOwnershipAfterSaturatedHandoff(t *te
 		userLevelLocks.Unlock()
 		require.True(t, retained)
 
-		service.blockUnlock.Store(false)
 		detachedUserLevelLockCleanups.Lock()
 		detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
 		for {
@@ -12111,7 +12113,11 @@ func TestTimedOutFailedAttemptCleanupRetainsOwnershipAfterSaturatedHandoff(t *te
 			}
 		}
 	timeoutBacklogDrained:
+		// Restore the consumer before retained work can hand off cleanup.
+		detachedUserLevelLockCleanups.backlogStarted = false
 		detachedUserLevelLockCleanups.Unlock()
+		startDetachedUserLevelLockCleanupBacklogWorker()
+		service.blockUnlock.Store(false)
 		// retainDetachedUserLevelLockTxnCleanup starts a worker. Once unlocks
 		// resume, that worker may finish before this goroutine runs a pass.
 		// Drive a pass opportunistically, then assert only the terminal state.
@@ -12159,7 +12165,6 @@ func TestSuccessfulProbeCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.
 		require.Error(t, err)
 		requireUserLevelLockCleanupOwned(t, key)
 
-		service.blockUnlock.Store(false)
 		detachedUserLevelLockCleanups.Lock()
 		detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
 		for {
@@ -12178,7 +12183,11 @@ func TestSuccessfulProbeCleanupRetainsOwnershipAfterSaturatedHandoff(t *testing.
 			}
 		}
 	probeBacklogDrained:
+		// Restore the consumer before retained work can hand off cleanup.
+		detachedUserLevelLockCleanups.backlogStarted = false
 		detachedUserLevelLockCleanups.Unlock()
+		startDetachedUserLevelLockCleanupBacklogWorker()
+		service.blockUnlock.Store(false)
 		// The retained worker races this explicit pass after blockUnlock is
 		// cleared. Either goroutine may complete the cleanup, so progress from
 		// this particular call is not part of the behavior under test.
@@ -12336,7 +12345,6 @@ func TestSessionCloseRetainsCleanupWhenRetainedCapIsFull(t *testing.T) {
 		// Remove only the synthetic admission pressure, then verify the durable
 		// outcome. The retained worker may win the race with this explicit pass,
 		// so neither its transient map entry nor per-call progress is an oracle.
-		service.blockUnlock.Store(false)
 		detachedUserLevelLockCleanups.Lock()
 		detachedUserLevelLockCleanups.entries = make(map[detachedUserLevelLockCleanupKey]*detachedUserLevelLockCleanupEntry)
 		for {
@@ -12355,7 +12363,11 @@ func TestSessionCloseRetainsCleanupWhenRetainedCapIsFull(t *testing.T) {
 			}
 		}
 	closeCapacityBacklogDrained:
+		// Restore the consumer before retained work can hand off cleanup.
+		detachedUserLevelLockCleanups.backlogStarted = false
 		detachedUserLevelLockCleanups.Unlock()
+		startDetachedUserLevelLockCleanupBacklogWorker()
+		service.blockUnlock.Store(false)
 		_, _ = runRetainedUserLevelLockCleanupPass()
 
 		row := string(userLevelLockRow(holder, name))

@@ -115,6 +115,9 @@ func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
 			}},
 		}},
 	}
+	mediumIntVersion, err := RequiredPersistedExpressionProtocolVersion(mediumIntCast)
+	require.NoError(t, err)
+	require.Equal(t, int64(defines.MORPCVersion110), mediumIntVersion)
 	for _, exprs := range [][]*planpb.Expr{{mediumIntCast, jsonConcat}, {jsonConcat, mediumIntCast}} {
 		owner := &planpb.TableDef{Cols: []*planpb.ColDef{
 			{Default: &planpb.Default{Expr: exprs[0]}},
@@ -124,9 +127,10 @@ func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, features.MediumIntAssignmentBounds)
 		require.True(t, features.JSONInputContracts)
+		require.True(t, features.JSONOpaqueTextContracts)
 		version, err := RequiredPersistedExpressionProtocolVersion(owner)
 		require.NoError(t, err)
-		require.Equal(t, int64(defines.MORPCVersion110), version)
+		require.Equal(t, int64(defines.MORPCVersion118), version)
 	}
 }
 
@@ -898,15 +902,16 @@ func TestPersistedBoundedConditionalStringProtocolAdmission(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
 	require.True(t, features.BoundedConditionalStringDomains)
+	require.True(t, features.BinaryAssignmentSemantics, "the binder inserted bounded binary CAST operands")
 
 	required, err := RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, int64(defines.MORPCVersion83), required)
+	require.Equal(t, int64(defines.MORPCVersion119), required)
 
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
 	require.ErrorContains(t,
-		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 83")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion83)
+		RequirePersistedExpressionProtocol(proc.Ctx, proc, expr), "protocol version 119")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
 	require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, expr))
 
 }

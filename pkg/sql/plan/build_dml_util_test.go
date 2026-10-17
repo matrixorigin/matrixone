@@ -22,7 +22,12 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
@@ -434,52 +439,53 @@ func TestMakeInsertValueConstExprDefersInternalTimeOverflow(t *testing.T) {
 }
 
 func TestMakeInsertValueConstExprBinaryHexPadding(t *testing.T) {
-	proc := testutil.NewProcess(t)
-
-	testCases := []struct {
-		name        string
-		literal     string
-		colType     types.Type
-		expected    []byte
-		expectError bool
+	for _, tc := range []struct {
+		name, literal        string
+		colType              types.Type
+		want, lenient        []byte
+		overflow, parseError bool
 	}{
-		{
-			name:     "binary pads to declared width",
-			literal:  "0x4142",
-			colType:  types.New(types.T_binary, 4, 0),
-			expected: []byte{0x41, 0x42, 0x00, 0x00},
-		},
-		{
-			name:        "binary rejects decoded value over declared width",
-			literal:     "0x4142",
-			colType:     types.New(types.T_binary, 1, 0),
-			expectError: true,
-		},
-		{
-			name:        "varbinary counts decoded bytes instead of runes",
-			literal:     "0xC3A9",
-			colType:     types.New(types.T_varbinary, 1, 0),
-			expectError: true,
-		},
-		{
-			name:     "binary accepts odd digit hex literal",
-			literal:  "0x1",
-			colType:  types.New(types.T_binary, 2, 0),
-			expected: []byte{0x01, 0x00},
-		},
-	}
-
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			numVal := tree.NewNumVal(tc.literal, tc.literal, false, tree.P_hexnum)
-			expr, err := MakeInsertValueConstExpr(proc, numVal, &tc.colType, false)
-			if tc.expectError {
-				require.Error(t, err)
-				return
-			}
-			require.NoError(t, err)
-			require.Equal(t, string(tc.expected), expr.GetLit().GetSval())
-		})
+		{"binary pads to declared width", "0x4142", types.New(types.T_binary, 4, 0), []byte{0x41, 0x42, 0, 0}, nil, false, false},
+		{"binary byte overflow", "0x4142", types.New(types.T_binary, 1, 0), nil, []byte{0x41}, true, false},
+		{"varbinary multibyte overflow", "0xC3A9", types.New(types.T_varbinary, 1, 0), nil, []byte{0xc3}, true, false},
+		{"binary odd digit", "0x1", types.New(types.T_binary, 2, 0), []byte{1, 0}, nil, false, false},
+		{"invalid hex still fails planning", "0xGG", types.New(types.T_varbinary, 2, 0), nil, nil, false, true},
+	} {
+		for _, mode := range []struct {
+			name, sqlMode string
+			ignore        bool
+		}{
+			{"strict", "STRICT_TRANS_TABLES", false}, {"nonstrict", "", false}, {"IGNORE", "STRICT_TRANS_TABLES", true},
+		} {
+			t.Run(tc.name+"/"+mode.name, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				setPlanTestGlobalVariable(t, proc.GetService(), moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+				proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return mode.sqlMode, nil })
+				expr, err := MakeInsertValueConstExpr(proc, tree.NewNumVal(tc.literal, tc.literal, false, tree.P_hexnum), &tc.colType, mode.ignore)
+				if tc.parseError {
+					require.Error(t, err)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, int32(tc.colType.Oid), expr.Typ.Id)
+				exec, err := colexec.NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				t.Cleanup(func() { exec.Free() })
+				value, err := exec.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+				if tc.overflow && mode.name == "strict" {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrCastWidthExceeded), "%v", err)
+					return
+				}
+				require.NoError(t, err)
+				got, isNull := vector.GenerateFunctionStrParameter(value).GetStrValue(0)
+				require.False(t, isNull)
+				want := tc.want
+				if tc.overflow {
+					want = tc.lenient
+				}
+				require.Equal(t, want, got)
+			})
+		}
 	}
 }
 

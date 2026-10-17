@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"os"
 	"runtime"
 	"sort"
@@ -37,11 +38,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	planbuilder "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/tools/objecttool"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
@@ -128,13 +132,15 @@ type TableColumn struct {
 }
 
 type TableUniqueKey struct {
-	Expressions map[string]string // backing column name to original functional key expression
-	Name        string
-	Columns     []string
-	Unique      bool
-	Algo        string
-	AlgoParams  string
-	Comment     string
+	invalidFunctionalMetadata bool
+	requiresJSONSemantics     bool              // derived from actual typed catalog generated dependencies
+	Expressions               map[string]string // backing column name to original functional key expression
+	Name                      string
+	Columns                   []string
+	Unique                    bool
+	Algo                      string
+	AlgoParams                string
+	Comment                   string
 }
 
 type TableForeignKey struct {
@@ -149,17 +155,18 @@ type TableForeignKey struct {
 
 // TableSchema holds the decoded schema for one user table.
 type TableSchema struct {
-	TableName    string
-	DatabaseName string
-	AccountID    uint32
-	Columns      []TableColumn // sorted by Position
-	CreateSQL    string        // raw CREATE TABLE from mo_tables.rel_createsql
-	Comment      string
-	UniqueKeys   []TableUniqueKey
-	PrimaryKey   []string
-	ForeignKeys  []TableForeignKey
-	Partition    string
-	ClusterBy    []string
+	invalidFunctionalMetadata bool
+	TableName                 string
+	DatabaseName              string
+	AccountID                 uint32
+	Columns                   []TableColumn // sorted by Position
+	CreateSQL                 string        // raw CREATE TABLE from mo_tables.rel_createsql
+	Comment                   string
+	UniqueKeys                []TableUniqueKey
+	PrimaryKey                []string
+	ForeignKeys               []TableForeignKey
+	Partition                 string
+	ClusterBy                 []string
 }
 
 type TableCatalogEntry struct {
@@ -248,15 +255,17 @@ type indexDDLColumn struct {
 }
 
 type indexDDLInfo struct {
-	expressions map[string]string
-	name        string
-	indexType   string
-	algo        string
-	algoParams  string
-	comment     string
-	columns     map[string]indexDDLColumn
-	order       int
-	catalogID   uint64
+	invalidFunctionalMetadata bool
+	requiresJSONSemantics     bool
+	expressions               map[string]string
+	name                      string
+	indexType                 string
+	algo                      string
+	algoParams                string
+	comment                   string
+	columns                   map[string]indexDDLColumn
+	order                     int
+	catalogID                 uint64
 }
 
 type CSVExportOption func(*CSVExportOptions)
@@ -530,6 +539,11 @@ func renderCreateTableDDLFullWithForeignKeysAndClusterBy(tableName string, cols 
 		}
 	}
 	for i, key := range uniqueKeys {
+		// Restored SQL rederives the current semantic marker. Reject an
+		// unsupported source revision before that identity could be erased.
+		if err := validateExportedJSONFunctionalSemantics(key.AlgoParams, key.requiresJSONSemantics); err != nil || key.invalidFunctionalMetadata {
+			return ""
+		}
 		for _, part := range key.Columns {
 			if strings.HasPrefix(part, "__mo_fi_") && !hasVisibleColumn(cols, part) && key.Expressions[part] == "" {
 				return "" // Never restore a reference to an absent hidden column.
@@ -746,13 +760,15 @@ func normalizedUniqueKeys(keys []TableUniqueKey) []TableUniqueKey {
 		}
 		seen[signature] = struct{}{}
 		out = append(out, TableUniqueKey{
-			Expressions: maps.Clone(key.Expressions),
-			Name:        name,
-			Columns:     cols,
-			Unique:      key.Unique,
-			Algo:        strings.TrimSpace(key.Algo),
-			AlgoParams:  strings.TrimSpace(key.AlgoParams),
-			Comment:     strings.TrimSpace(key.Comment),
+			Expressions:               maps.Clone(key.Expressions),
+			requiresJSONSemantics:     key.requiresJSONSemantics,
+			invalidFunctionalMetadata: key.invalidFunctionalMetadata,
+			Name:                      name,
+			Columns:                   cols,
+			Unique:                    key.Unique,
+			Algo:                      strings.TrimSpace(key.Algo),
+			AlgoParams:                strings.TrimSpace(key.AlgoParams),
+			Comment:                   strings.TrimSpace(key.Comment),
 		})
 	}
 	return out
@@ -883,7 +899,7 @@ func formatDDLDefault(defaultExpr string) string {
 // RenderCreateTableDDLFromSchema renders a CREATE TABLE statement from resolved
 // checkpoint column metadata.
 func RenderCreateTableDDLFromSchema(schema *TableSchema) string {
-	if schema == nil {
+	if schema == nil || schema.invalidFunctionalMetadata {
 		return ""
 	}
 	if schema.TableName == "" || len(schema.Columns) == 0 {
@@ -1090,6 +1106,82 @@ func buildTableSchemaFromCatalogViews(tableID uint64, moTablesView, moColumnsVie
 	return schema
 }
 
+func validateExportedJSONFunctionalSemantics(params string, required bool) error {
+	present, err := plan.JSONFunctionalIndexSemantics(&plan.IndexDef{IndexAlgoParams: params})
+	if err != nil {
+		return err
+	}
+	if required != present {
+		return moerr.NewInvalidInputNoCtx("inconsistent JSON functional index semantics metadata")
+	}
+	return nil
+}
+
+// ColRef positions address the current table column order, including hidden
+// backing columns. Catalog rows need not arrive in that order.
+func catalogGeneratedColumnGraph(view *LogicalTableView, tableID uint64) ([]*plan.ColDef, map[string]int, error) {
+	idPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_RelID)
+	namePos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name)
+	numPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Num)
+	genPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
+	typePos := fallbackCatalogColIndex(view, moColumnsID, "atttyp")
+	hiddenPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsHidden)
+	hasGenPos := view.columnDataIndex("attr_has_generated")
+	autoPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsAutoIncrement)
+	byOrdinal := make(map[int]*plan.ColDef)
+	names := make(map[string]int)
+	invalid := func() ([]*plan.ColDef, map[string]int, error) {
+		return nil, nil, moerr.NewInvalidInputNoCtx("invalid functional index catalog column graph")
+	}
+	for _, fullRow := range view.Rows {
+		off := logicalViewDataOffset(view)
+		if len(fullRow) < off {
+			continue
+		}
+		row := fullRow[off:]
+		if cellAt(row, idPos) != strconv.FormatUint(tableID, 10) {
+			continue
+		}
+		ordinal, err := strconv.Atoi(cellAt(row, numPos))
+		name := cellAt(row, namePos)
+		if err != nil || ordinal <= 0 || name == "" {
+			return invalid()
+		}
+		if _, ok := byOrdinal[ordinal]; ok {
+			return invalid()
+		}
+		if _, ok := names[name]; ok {
+			return invalid()
+		}
+		col := &plan.ColDef{Name: name, Hidden: isTruthyCatalogValue(cellAt(row, hiddenPos))}
+		var typ types.Type
+		if raw := cellAt(row, typePos); raw == "" || types.Decode([]byte(raw), &typ) != nil || typ.Oid == types.T_any || strings.HasPrefix(typ.Oid.String(), "unexpected type:") {
+			return invalid()
+		}
+		col.Typ = typ.PlanType()
+		col.Typ.AutoIncr = isTruthyCatalogValue(cellAt(row, autoPos))
+		raw := cellAt(row, genPos)
+		if raw != "" || isTruthyCatalogValue(cellAt(row, hasGenPos)) {
+			col.GeneratedCol = &plan.GeneratedCol{}
+			// Failed decoding remains an invalid generated dependency, never a base column.
+			if types.Decode([]byte(raw), col.GeneratedCol) != nil {
+				col.GeneratedCol = &plan.GeneratedCol{}
+			}
+		}
+		byOrdinal[ordinal] = col
+		names[name] = ordinal - 1
+	}
+	cols := make([]*plan.ColDef, len(byOrdinal))
+	for i := range cols {
+		col, ok := byOrdinal[i+1]
+		if !ok {
+			return invalid()
+		}
+		cols[i] = col
+	}
+	return cols, names, nil
+}
+
 // Functional backing columns are not exportable row columns. Recover only
 // their generated expression into the owning index's DDL metadata.
 func attachFunctionalIndexExpressions(schema *TableSchema, view *LogicalTableView, tableID uint64) {
@@ -1100,6 +1192,45 @@ func attachFunctionalIndexExpressions(schema *TableSchema, view *LogicalTableVie
 	namePos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Name)
 	hiddenPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_IsHidden)
 	generatedPos := fallbackCatalogColIndex(view, moColumnsID, catalog.SystemColAttr_Generated)
+	// Only tables with owned functional keys need strict typed reconstruction.
+	hasFunctional := false
+	for _, key := range schema.UniqueKeys {
+		for _, part := range key.Columns {
+			if strings.HasPrefix(part, "__mo_fi_") && !schemaHasVisibleColumn(schema, part) {
+				hasFunctional = true
+			}
+		}
+	}
+	// Orphaned hidden backing columns must also enter canonical ownership validation.
+	for _, fullRow := range view.Rows {
+		off := logicalViewDataOffset(view)
+		if len(fullRow) < off {
+			continue
+		}
+		row := fullRow[off:]
+		if cellAt(row, idPos) == strconv.FormatUint(tableID, 10) && isTruthyCatalogValue(cellAt(row, hiddenPos)) && strings.HasPrefix(cellAt(row, namePos), "__mo_fi_") {
+			hasFunctional = true
+		}
+	}
+	if !hasFunctional {
+		return
+	}
+	cols, positions, graphErr := catalogGeneratedColumnGraph(view, tableID)
+	table := &plan.TableDef{Cols: cols}
+	for _, key := range schema.UniqueKeys {
+		table.Indexes = append(table.Indexes, &plan.IndexDef{IndexName: key.Name, Parts: key.Columns, Unique: key.Unique, IndexAlgo: key.Algo, IndexAlgoParams: key.AlgoParams})
+	}
+	if graphErr == nil {
+		graphErr = planbuilder.ValidateFunctionalIndexMetadata(context.Background(), table)
+	}
+	if graphErr != nil {
+		schema.invalidFunctionalMetadata = true
+		for i := range schema.UniqueKeys {
+			schema.UniqueKeys[i].invalidFunctionalMetadata = true
+			schema.UniqueKeys[i].Expressions = nil
+		}
+		return
+	}
 	for _, fullRow := range view.Rows {
 		if len(fullRow) < logicalViewDataOffset(view) {
 			continue
@@ -1123,6 +1254,9 @@ func attachFunctionalIndexExpressions(schema *TableSchema, view *LogicalTableVie
 							key.Expressions = make(map[string]string)
 						}
 						key.Expressions[part] = expression
+						if pos, ok := positions[part]; ok && cols[pos].GeneratedCol != nil {
+							key.requiresJSONSemantics = key.requiresJSONSemantics || function.ExpressionUsesJSONAccess(cols[pos].GeneratedCol.Expr, cols, make(map[int32]bool))
+						}
 					}
 				}
 			}
@@ -1583,12 +1717,13 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		return nil
 	}
 	clone := &TableSchema{
-		TableName:    strings.Clone(schema.TableName),
-		DatabaseName: strings.Clone(schema.DatabaseName),
-		AccountID:    schema.AccountID,
-		CreateSQL:    strings.Clone(schema.CreateSQL),
-		Comment:      strings.Clone(schema.Comment),
-		Partition:    strings.Clone(schema.Partition),
+		invalidFunctionalMetadata: schema.invalidFunctionalMetadata,
+		TableName:                 strings.Clone(schema.TableName),
+		DatabaseName:              strings.Clone(schema.DatabaseName),
+		AccountID:                 schema.AccountID,
+		CreateSQL:                 strings.Clone(schema.CreateSQL),
+		Comment:                   strings.Clone(schema.Comment),
+		Partition:                 strings.Clone(schema.Partition),
 	}
 	if len(schema.PrimaryKey) > 0 {
 		clone.PrimaryKey = make([]string, len(schema.PrimaryKey))
@@ -1629,6 +1764,8 @@ func cloneTableSchema(schema *TableSchema) *TableSchema {
 		clone.UniqueKeys = make([]TableUniqueKey, len(schema.UniqueKeys))
 		for i, key := range schema.UniqueKeys {
 			clone.UniqueKeys[i].Expressions = maps.Clone(key.Expressions)
+			clone.UniqueKeys[i].requiresJSONSemantics = key.requiresJSONSemantics
+			clone.UniqueKeys[i].invalidFunctionalMetadata = key.invalidFunctionalMetadata
 			clone.UniqueKeys[i].Name = strings.Clone(key.Name)
 			clone.UniqueKeys[i].Unique = key.Unique
 			clone.UniqueKeys[i].Algo = strings.Clone(key.Algo)
@@ -2018,6 +2155,9 @@ func (r *CheckpointReader) streamTableCSV(
 	onRow := func(_ string, _ int, _ int, values []string, nulls []bool) error {
 		row := projectCSVRow(values, physicalPositions)
 		rowNulls := projectCSVNulls(nulls, physicalPositions)
+		if err := renderLogicalCSVJSON(row, projectedTypes, rowNulls); err != nil {
+			return err
+		}
 		if options.RowOrder == CSVRowOrderLexical {
 			lexicalRows = append(lexicalRows, exportedCSVRow{values: row, nulls: rowNulls})
 			return nil
@@ -2739,22 +2879,120 @@ func WriteCSV(w io.Writer, schema *TableSchema, view *LogicalTableView, opts ...
 		}
 	}
 
-	rows := merged.Rows
-	if options.RowOrder == CSVRowOrderLexical {
-		rows = make([][]string, len(merged.Rows))
-		for i, row := range merged.Rows {
-			rows[i] = append([]string(nil), row...)
+	// Logical views contain storage bytes for JSON. Copy before rendering so
+	// writing CSV does not change the caller's raw materialized view.
+	rows := make([]exportedCSVRow, len(merged.Rows))
+	for i, row := range merged.Rows {
+		rows[i].values = append([]string(nil), row...)
+		rows[i].nulls = make([]bool, len(row))
+		for j, value := range row {
+			// The materialized reader has no bitmap; only its JSON NULL
+			// sentinel is unambiguous because non-NULL JSON stays encoded.
+			rows[i].nulls[j] = j < len(projectedTypes) && projectedTypes[j].Oid == types.T_json && value == "NULL"
 		}
-		sort.SliceStable(rows, func(i, j int) bool {
-			return compareCSVRowsLexical(rows[i], rows[j]) < 0
-		})
+		if err := renderLogicalCSVJSON(rows[i].values, projectedTypes, rows[i].nulls); err != nil {
+			return err
+		}
+	}
+	if options.RowOrder == CSVRowOrderLexical {
+		sortCSVRowsLexical(rows)
 	}
 	for _, row := range rows {
-		if err := writeSQLLoadCSVRow(w, projectedTypes, row, nil); err != nil {
+		if err := writeSQLLoadCSVRow(w, projectedTypes, row.values, row.nulls); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// renderLogicalCSVJSON converts only the raw JSON fields supplied by the
+// logical checkpoint reader. The generic CSV writer also accepts already-visible
+// text and must not decode it a second time.
+func renderLogicalCSVJSON(row []string, columnTypes []types.Type, nulls []bool) error {
+	for i, value := range row {
+		if i >= len(columnTypes) || columnTypes[i].Oid != types.T_json {
+			continue
+		}
+		// Both callers resolve SQL NULL before decoding; JSON null and the
+		// JSON string "NULL" remain non-NULL encoded values.
+		if i < len(nulls) && nulls[i] {
+			continue
+		}
+		text, err := checkpointJSONLoadText([]byte(value))
+		if err != nil {
+			return err
+		}
+		row[i] = string(text)
+	}
+	return nil
+}
+
+// checkpointJSONLoadText rejects scalar extensions whose JSON text would lose
+// their stored type on LOAD DATA. Validation precedes traversal of encoded data.
+func checkpointJSONLoadText(value []byte) ([]byte, error) {
+	if len(value) == 0 {
+		return nil, moerr.NewInternalErrorNoCtx("invalid checkpoint JSON value")
+	}
+	document := bytejson.ByteJson{Type: bytejson.TpCode(value[0]), Data: value[1:]}
+	if _, err := bytejson.StorageCompatibleDataSizeWithLimit(context.Background(), document, math.MaxInt); err != nil {
+		return nil, err
+	}
+	var text bytes.Buffer
+	var render func(bytejson.ByteJson) error
+	render = func(node bytejson.ByteJson) error {
+		switch node.Type {
+		case bytejson.TpCodeObject:
+			text.WriteByte('{')
+			for i := 0; i < node.GetElemCnt(); i++ {
+				if i > 0 {
+					text.WriteString(", ")
+				}
+				key, err := bytejson.CreateByteJSON(string(node.GetObjectKey(i)))
+				if err != nil {
+					return err
+				}
+				encodedKey, err := key.MarshalJSON()
+				if err != nil {
+					return err
+				}
+				text.Write(encodedKey)
+				text.WriteString(": ")
+				if err := render(node.GetObjectVal(i)); err != nil {
+					return err
+				}
+			}
+			text.WriteByte('}')
+		case bytejson.TpCodeArray:
+			text.WriteByte('[')
+			for i := 0; i < node.GetElemCnt(); i++ {
+				if i > 0 {
+					text.WriteString(", ")
+				}
+				if err := render(node.GetArrayElem(i)); err != nil {
+					return err
+				}
+			}
+			text.WriteByte(']')
+		case bytejson.TpCodeLiteral, bytejson.TpCodeInt64, bytejson.TpCodeUint64, bytejson.TpCodeFloat64, bytejson.TpCodeString:
+			encoded, err := node.MarshalJSON()
+			if err != nil {
+				return err
+			}
+			text.Write(encoded)
+			// LOAD must retain the observable DOUBLE type even when its
+			// shortest value spelling happens to be an integer token.
+			if node.Type == bytejson.TpCodeFloat64 && !bytes.ContainsAny(encoded, ".eE") {
+				text.WriteString(".0")
+			}
+		default:
+			return moerr.NewNotSupportedNoCtx("checkpoint CSV cannot preserve typed JSON scalar")
+		}
+		return nil
+	}
+	if err := render(document); err != nil {
+		return nil, err
+	}
+	return text.Bytes(), nil
 }
 
 func projectCSVRow(values []string, physicalPositions []int) []string {
@@ -2865,6 +3103,16 @@ func writeSQLLoadCSVFieldFromVec(
 	}
 	vec := vecs[pos]
 	rowIdx = vectorRowIndex(vec, rowIdx)
+	if vec.GetType().Oid == types.T_json {
+		text, err := checkpointJSONLoadText(vec.GetBytesAt(rowIdx))
+		if err != nil {
+			return err
+		}
+		w.WriteByte('"')
+		appendEscapedSQLLoadBytes(w, text, '"')
+		w.WriteByte('"')
+		return nil
+	}
 	if shouldQuoteSQLLoadType(typ) {
 		w.WriteByte('"')
 		appendCSVQuotedVecValue(w, vec, rowIdx)
@@ -2887,8 +3135,6 @@ func appendCSVQuotedVecValue(w *bytes.Buffer, vec *vector.Vector, rowIdx int) {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_datalink:
 		appendEscapedSQLLoadBytes(w, vec.GetBytesAt(rowIdx), '"')
-	case types.T_json:
-		appendEscapedSQLLoadString(w, types.DecodeJson(vec.GetBytesAt(rowIdx)).String(), '"')
 	case types.T_bit:
 		appendEscapedSQLLoadBytes(w, bitValueToLoadBytes(vector.MustFixedColWithTypeCheck[uint64](vec)[rowIdx], vec.GetType().Width), '"')
 	default:
@@ -3639,6 +3885,9 @@ func createTableDDLFromCatalogViews(tableID uint64, moTablesView, moColumnsView 
 		clusterBy = buildClusterByFromMoColumnsRows(moColumnsView, tableID)
 		schema := &TableSchema{UniqueKeys: uniqueKeys}
 		attachFunctionalIndexExpressions(schema, moColumnsView, tableID)
+		if schema.invalidFunctionalMetadata {
+			return ""
+		}
 		uniqueKeys = schema.UniqueKeys
 	}
 	if len(partitionMetadataView) > 0 && partitionMetadataView[0] != nil {
@@ -4414,6 +4663,11 @@ func buildCreateIndexStatementsFromMoIndexes(
 	tableName string,
 	schemas ...*TableSchema,
 ) ([]string, error) {
+	for _, schema := range schemas {
+		if schema != nil && schema.invalidFunctionalMetadata {
+			return nil, moerr.NewInvalidInputNoCtx("invalid functional index typed metadata")
+		}
+	}
 	if view == nil {
 		return nil, nil
 	}
@@ -4540,6 +4794,8 @@ func buildCreateIndexStatementsFromMoIndexes(
 							info.expressions = make(map[string]string)
 						}
 						info.expressions[column] = key.Expressions[column]
+						info.requiresJSONSemantics = info.requiresJSONSemantics || key.requiresJSONSemantics
+						info.invalidFunctionalMetadata = info.invalidFunctionalMetadata || key.invalidFunctionalMetadata
 					}
 				}
 			}
@@ -4882,6 +5138,14 @@ func needsExplicitPartitionDefinitions(method string) bool {
 }
 
 func renderCreateIndexStatement(tableName string, info *indexDDLInfo) (string, error) {
+	if info != nil {
+		if info.invalidFunctionalMetadata {
+			return "", moerr.NewInvalidInputNoCtx("invalid functional index typed metadata")
+		}
+		if err := validateExportedJSONFunctionalSemantics(info.algoParams, info.requiresJSONSemantics); err != nil {
+			return "", err
+		}
+	}
 	if info == nil || tableName == "" || len(info.columns) == 0 {
 		return "", nil
 	}
