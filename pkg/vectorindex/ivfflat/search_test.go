@@ -123,6 +123,46 @@ func TestIvfflatSearchDoesNotAddRowPartitionFilterToExactPkSQL(t *testing.T) {
 	require.False(t, strings.Contains(statement, "ORDER BY vec_dist"), statement)
 }
 
+func TestIvfflatSearchExactPkWindowCoversEveryList(t *testing.T) {
+	oldRunSql := runSql
+	defer func() { runSql = oldRunSql }()
+	var statement string
+	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		statement = sql
+		return executor.Result{}, nil
+	}
+
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	idxcfg.Ivfflat.Version = 9
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db1", EntriesTable: "entries1"}
+	search := func(exactPkFilter string) *vectorindex.IvfSearchCursor {
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.ExactPkFilter = exactPkFilter
+		cursor := &vectorindex.IvfSearchCursor{RankedCentroidIDs: []int64{10, 20, 30, 40, 50}}
+		idx := &IvfflatSearchIndex[float32]{Version: 9}
+		_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, []float32{0, 1, 2},
+			vectorindex.RuntimeConfig{Limit: 4, Probe: 2, SearchCursor: cursor, IvfRoutePrepared: true}, 1)
+		require.NoError(t, err)
+		return cursor
+	}
+
+	// nprobe lists: the window is the two nearest lists
+	cursor := search("")
+	require.Contains(t, statement, "IN (10,20)")
+	require.Equal(t, uint(0), cursor.NextBucketOffset)
+	require.Equal(t, uint(2), cursor.CurrentBucketCount)
+	require.False(t, cursor.Exhausted)
+
+	// an exact primary-key set reads every list in one round: the window is every list
+	cursor = search("1,2,3")
+	require.Contains(t, statement, "`__mo_index_pri_col` IN (1,2,3)")
+	require.Equal(t, uint(0), cursor.NextBucketOffset)
+	require.Equal(t, uint(5), cursor.CurrentBucketCount)
+	require.True(t, cursor.Exhausted)
+}
+
 func TestIvfflatSearchFloat32(t *testing.T) {
 	runSql = mock_runSql
 
@@ -732,4 +772,12 @@ func TestBuildActiveCentroidIDsUsesNonOverlappingBucketSlices(t *testing.T) {
 // box-free SearchOutput path yet; it must report "not supported", not silently no-op).
 func TestSearchIntoUnsupported(t *testing.T) {
 	require.ErrorContains(t, (&IvfflatSearch[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+}
+
+func TestCompleteCentroidRanking(t *testing.T) {
+	require.Equal(t, []int64{2, 0, 1, 3}, completeCentroidRanking([]int64{2, 0, 1, 3}, 4))
+	require.Equal(t, []int64{2, 0, 1, 3}, completeCentroidRanking([]int64{2, 2, 0, 2}, 4))
+	require.Equal(t, []int64{3, 0, 1, 2}, completeCentroidRanking([]int64{3, 7, -1}, 4))
+	require.Equal(t, []int64{0, 1}, completeCentroidRanking(nil, 2))
+	require.Equal(t, []int64{5, 5}, completeCentroidRanking([]int64{5, 5}, 0))
 }

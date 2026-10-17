@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -34,12 +35,17 @@ type cuvsSearchScan struct {
 	partPos      int32
 	pkPos        int32
 	pkType       plan.Type
-	// algoOptions returns the algo_options bytes carrying filterJSON.
-	algoOptions func(filterJSON string) ([]byte, error)
+	// colRefCnt counts the column references of the query; nil when the caller has none.
+	colRefCnt map[[2]int32]int
+	// algoOptions returns the algo_options bytes carrying filterJSON and the
+	// iterative flag.
+	algoOptions func(filterJSON string, iterative bool) ([]byte, error)
 }
 
 // applyCuvsIndexSearchScan rewrites the vector sort of vecCtx into
-// SORT(JOIN(scan, INDEX_SEARCH_SCAN)) on pk, ordered by the search score.
+// SORT(JOIN(scan, INDEX_SEARCH_SCAN)) on pk, ordered by the search score. A filter
+// the search does not evaluate builds the PRE shape instead: the primary keys of the
+// rows that pass it reach the search as a membership ANDed into its filter mask.
 func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vectorSortContext, idxColMap map[[2]int32]*plan.Expr, s cuvsSearchScan) (int32, error) {
 	ctx := builder.ctxByNode[nodeID]
 	projNode := vecCtx.projNode
@@ -48,7 +54,7 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 
 	// Any scan filter prunes candidates after the search, so execution
 	// over-fetches the candidate budget from k (#26869).
-	postFilterOverFetch := len(scanNode.FilterList) > 0
+	hasScanFilters := len(scanNode.FilterList) > 0
 
 	// Filters that reference only INCLUDE columns or the primary key are
 	// serialized to JSON and applied by the search on the device; the rest
@@ -61,18 +67,41 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 	if scanNode.TableDef.Pkey != nil {
 		pkColName = scanNode.TableDef.Pkey.PkeyColName
 	}
+	// mode=post does not use INCLUDE columns: only primary-key predicates run in the
+	// search, as for ivfflat.
+	if vectorRankMode(vecCtx) == "post" {
+		includeCols = nil
+	}
 	predsJSON, peeled, residualFilters, err := buildFilterPredicateJSON(
 		scanNode.FilterList, scanNode, includeCols, pkColName, false)
 	if err != nil {
 		return nodeID, err
 	}
+	if predsJSON == "" {
+		residualFilters = scanNode.FilterList
+	}
+	// Distance range predicates move to the search node below and never reach the
+	// membership producer.
+	usePreFilter := builder.cuvsUsesPreFilter(vecCtx,
+		hasNonDistFnFilter(residualFilters, s.partPos, s.origFuncName, s.vecLitArg))
+	if usePreFilter && (vecCtx.providerNodeID >= 0 || vecCtx.hasMembership && !builder.membershipJoinBuildable(vecCtx)) {
+		// A per-row query vector receives no membership runtime filter, and a
+		// membership join of another shape cannot be copied: leave the query to the
+		// exact sort.
+		return nodeID, nil
+	}
+	// Under PRE every filter is in the search, so nothing over-fetches.
+	postFilterOverFetch := hasScanFilters && !usePreFilter
 	if predsJSON != "" {
 		logutil.Debugf("%s pushdown: peeled %d filter(s), %d residual, preds_json = %s",
 			s.algo, len(peeled), len(residualFilters), predsJSON)
 		scanNode.FilterList = residualFilters
 	}
 
-	algoOptions, err := s.algoOptions(predsJSON)
+	// mode=iterative widens the search only when the search evaluates every filter,
+	// itself or through membership: a residual filter drops rows the search cannot count.
+	iterative := vectorRankMode(vecCtx) == "iterative" && (len(scanNode.FilterList) == 0 || usePreFilter)
+	algoOptions, err := s.algoOptions(predsJSON, iterative)
 	if err != nil {
 		return 0, err
 	}
@@ -109,9 +138,10 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 			},
 		},
 	}
+	setIndexSearchScanKnobs(searchNode.IndexSearchScan, vecCtx)
 	searchNodeID := builder.appendNode(searchNode, ctx)
 
-	err = builder.addBinding(searchNodeID, tree.AliasClause{Alias: tree.Identifier(s.alias)}, ctx, "")
+	err = builder.addBinding(searchNodeID, tree.AliasClause{Alias: tree.Identifier(indexSearchAlias(ctx, s.alias))}, ctx, "")
 	if err != nil {
 		return 0, err
 	}
@@ -161,12 +191,50 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 		},
 	})
 
-	joinNodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, searchNodeID},
-		JoinType: plan.Node_INNER,
-		OnList:   []*Expr{wherePkEqPk},
-	}, ctx)
+	var joinNodeID int32
+	if usePreFilter {
+		preJoinID, ok, err := builder.buildVectorPreFilterJoin(vecCtx, vectorPreFilterInput{
+			ctx:             ctx,
+			scanNode:        scanNode,
+			colRefCnt:       s.colRefCnt,
+			idxColMap:       idxColMap,
+			pkPos:           s.pkPos,
+			pkType:          s.pkType,
+			producerFilters: peeled,
+			tableFuncTag:    searchTag,
+			tableFuncNodeID: searchNodeID,
+			candidateNodeID: searchNodeID,
+		})
+		if err != nil {
+			return nodeID, err
+		}
+		joinNodeID = preJoinID
+		if !ok && vecCtx.hasMembership {
+			// The membership join cannot run after the search.
+			return 0, moerr.NewInternalErrorNoCtxf("%s search cannot build the membership plan", s.algo)
+		}
+		if !ok {
+			// The PRE shape could not be built: the filters left on the scan run after
+			// the search, which then over-fetches and does not widen.
+			usePreFilter = false
+			searchNode.RuntimeFilterProbeList = nil
+			searchNode.Stats.ForceOneCN = false
+			searchNode.IndexSearchScan.PostFilterOverFetch = hasScanFilters
+			if iterative && len(scanNode.FilterList) > 0 {
+				if searchNode.IndexSearchScan.AlgoOptions, err = s.algoOptions(predsJSON, false); err != nil {
+					return 0, err
+				}
+			}
+		}
+	}
+	if !usePreFilter {
+		joinNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{scanNode.NodeId, searchNodeID},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{wherePkEqPk},
+		}, ctx)
+	}
 
 	// Limit/Offset apply after the SORT.
 	scanNode.Limit = nil
@@ -200,4 +268,16 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 	// consumer (outer ORDER BY, join) sits between it and any project.
 	remap := vectorRemapForChildProject(childNode, vecCtx.orderExpr, orderByScore[0].Expr, nil)
 	return builder.spliceVectorRewrite(vecCtx, nodeID, sortByID, remap, idxColMap), nil
+}
+
+// cuvsUsesPreFilter reports whether a cagra or ivfpq search of vecCtx builds the PRE
+// shape: under a membership join or a fulltext MATCH filter, and in mode=pre or
+// mode=iterative when a filter is left after the INCLUDE and primary-key filters
+// move into the search (hasResidual).
+func (builder *QueryBuilder) cuvsUsesPreFilter(vecCtx *vectorSortContext, hasResidual bool) bool {
+	if vecCtx.hasMembership || builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
+		return true
+	}
+	mode := vectorRankMode(vecCtx)
+	return (mode == "pre" || mode == "iterative") && hasResidual
 }

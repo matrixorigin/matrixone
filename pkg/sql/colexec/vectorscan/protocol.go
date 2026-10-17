@@ -14,7 +14,22 @@
 
 package vectorscan
 
-import "github.com/matrixorigin/matrixone/pkg/defines"
+import (
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+)
 
 // IndexSearchScanProtocolVersion is the first MORPC protocol version that carries IndexSearchScan.
 const IndexSearchScanProtocolVersion = defines.MORPCVersion111
+
+// SearchKnobsProtocolVersion is the first MORPC protocol version that carries the
+// IndexSearchScan search knobs internal_topk, max_internal_topk and max_nprobe.
+const SearchKnobsProtocolVersion = defines.MORPCVersion118
+
+// RequiredProtocolVersion returns the MORPC protocol version a CN needs to run spec.
+func RequiredProtocolVersion(spec *plan.IndexSearchScan) int64 {
+	if spec.GetInternalTopk() != 0 || spec.GetMaxInternalTopk() != 0 || spec.GetMaxNprobe() != 0 {
+		return SearchKnobsProtocolVersion
+	}
+	return IndexSearchScanProtocolVersion
+}

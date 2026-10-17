@@ -62,8 +62,9 @@ func TestHnswAlterTableCloneBehavior(t *testing.T) {
 	require.Empty(t, CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
-func TestHnswDefaultOptions(t *testing.T) {
-	got := CatalogHooks{}.DefaultOptions()
+func TestHnswParamsWithoutOptions(t *testing.T) {
+	got, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+	require.NoError(t, err)
 	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
 }
 

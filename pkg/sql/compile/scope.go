@@ -2146,6 +2146,9 @@ func (s *Scope) buildVectorIndexReaders(runtimeFilters []receivedRuntimeFilter, 
 	if err != nil {
 		return nil, err
 	}
+	if err := vectorscan.ApplySearchKnobs(&req, spec, s.Proc.GetResolveVariableFunc()); err != nil {
+		return nil, err
+	}
 	req.MembershipFilterPassed = !hasMembership && hasMembershipFilterSpec(s.DataSource.RuntimeFilterSpecs)
 	if dropped || !hasQuery {
 		if hooks, ok := searcher.Search().(searchplugin.EmptyScanHooks); ok {

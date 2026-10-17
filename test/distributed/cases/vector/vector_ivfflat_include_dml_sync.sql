@@ -195,7 +195,7 @@ execute enum_sync;
 select id, id+0 as pk_ordinal, status, status+0 as status_ordinal
 from vector_ivfflat_sync_enum order by id;
 select id, status from vector_ivfflat_sync_enum where status = 'hot'
-order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=include';
+order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=iterative';
 select id, status from vector_ivfflat_sync_enum where status = 'hot'
 order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=force';
 deallocate prepare enum_sync;

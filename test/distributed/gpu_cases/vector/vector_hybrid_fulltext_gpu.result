@@ -37,14 +37,16 @@ create fulltext2 index f on t_ft2_ivfpq(body) with parser ngram;
 create index vi using ivfpq on t_ft2_ivfpq(v) lists=2 m=3 op_type 'vector_l2_ops';
 explain select id from t_ft_cagra where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
+-- @regex("Fulltext Index Scan on[\s\S]*Fulltext Index Scan on", false)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_cagra.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_cagra.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
@@ -52,7 +54,24 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
                           Runtime Filter Probe: t_ft_cagra.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_cagra.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
+                                      Runtime Filter Probe: t_ft_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
 select id from t_ft_cagra where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 ➤ id[-5,64,0]  𝄀
 3  𝄀
@@ -65,14 +84,15 @@ select id from t_ref_ft where match(body) against('needle') order by l2_distance
 9
 explain select id from t_ft_cagra where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_cagra.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_cagra.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
@@ -81,7 +101,25 @@ Project  𝄀
                           Filter Cond: t_ft_cagra.tag in ([1 2 3])  𝄀
                           Runtime Filter Probe: t_ft_cagra.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_cagra.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
+                                      Filter Cond: t_ft_cagra.tag in ([1 2 3])  𝄀
+                                      Runtime Filter Probe: t_ft_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
 select id from t_ft_cagra where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 ➤ id[-5,64,0]  𝄀
 3  𝄀
@@ -94,14 +132,15 @@ select id from t_ref_ft where match(body) against('+needle +anchor' in boolean m
 15
 explain select id from t_ft_cagra where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_cagra.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_cagra.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
@@ -109,7 +148,24 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
                           Runtime Filter Probe: t_ft_cagra.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_cagra.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
+                                      Runtime Filter Probe: t_ft_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
 select id from t_ft_cagra where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 ➤ id[-5,64,0]  𝄀
 100  𝄀
@@ -122,14 +178,16 @@ select id from t_ref_ft where match(body) against('needle') order by l2_distance
 102
 explain select id, match(body) against('needle') as s from t_ft_cagra where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
+-- @regex("Fulltext Index Scan on[\s\S]*Fulltext Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_cagra.v, ) INTERNAL  𝄀
+        Sort Key: #[0,2] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_cagra.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
@@ -137,7 +195,24 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
                           Runtime Filter Probe: t_ft_cagra.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_cagra.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
+                                      Runtime Filter Probe: t_ft_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
 select id, match(body) against('needle') as s from t_ft_cagra where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 ➤ id[-5,64,0]  ¦  s[7,5,0]  𝄀
 3  ¦  0.21361119  𝄀
@@ -150,14 +225,15 @@ select id, match(body) against('needle') as s from t_ref_ft where match(body) ag
 9  ¦  0.21361119
 explain select id from t_ft_cagra where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_cagra.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_cagra.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
@@ -165,7 +241,24 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
                           Runtime Filter Probe: t_ft_cagra.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_cagra.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
+                                      Runtime Filter Probe: t_ft_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
 select id from t_ft_cagra where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
 ➤ id[-5,64,0]  𝄀
 50  𝄀
@@ -182,7 +275,7 @@ explain select id, match(body) against('needle') as s from t_ft_cagra order by l
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_cagra.v, ) INTERNAL  𝄀
+        Sort Key: l2_distance(t_ft_cagra.v, 0x000000000000000000000000) INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Sort  𝄀
               Sort Key: mo_fulltext_alias_0.score DESC  𝄀
@@ -206,14 +299,15 @@ select id, match(body) against('needle') as s from t_ref_ft order by l2_distance
 9  ¦  0.21361119
 explain select id from t_ft2_cagra where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_cagra.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_cagra.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft2_cagra.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
@@ -221,7 +315,24 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_cagra  𝄀
                           Runtime Filter Probe: t_ft2_cagra.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_cagra.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_cagra.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_cagra  𝄀
+                                      Runtime Filter Probe: t_ft2_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
 select id from t_ft2_cagra where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 ➤ id[-5,64,0]  𝄀
 3  𝄀
@@ -234,14 +345,15 @@ select id from t_ref_ft2 where match(body) against('needle') order by l2_distanc
 9
 explain select id from t_ft2_cagra where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_cagra.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_cagra.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft2_cagra.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
@@ -250,7 +362,25 @@ Project  𝄀
                           Filter Cond: t_ft2_cagra.tag in ([1 2 3])  𝄀
                           Runtime Filter Probe: t_ft2_cagra.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_cagra.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_cagra.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_cagra  𝄀
+                                      Filter Cond: t_ft2_cagra.tag in ([1 2 3])  𝄀
+                                      Runtime Filter Probe: t_ft2_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
 select id from t_ft2_cagra where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 ➤ id[-5,64,0]  𝄀
 3  𝄀
@@ -263,14 +393,15 @@ select id from t_ref_ft2 where match(body) against('+needle +anchor' in boolean 
 15
 explain select id from t_ft2_cagra where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_cagra.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_cagra.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft2_cagra.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
@@ -278,7 +409,24 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_cagra  𝄀
                           Runtime Filter Probe: t_ft2_cagra.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_cagra.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_cagra.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_cagra  𝄀
+                                      Runtime Filter Probe: t_ft2_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
 select id from t_ft2_cagra where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 ➤ id[-5,64,0]  𝄀
 100  𝄀
@@ -291,14 +439,15 @@ select id from t_ref_ft2 where match(body) against('needle') order by l2_distanc
 102
 explain select id, match(body) against('needle') as s from t_ft2_cagra where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_cagra.v, ) INTERNAL  𝄀
+        Sort Key: #[0,2] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_cagra.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft2_cagra.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
@@ -306,7 +455,24 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_cagra  𝄀
                           Runtime Filter Probe: t_ft2_cagra.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_cagra.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_cagra.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_cagra  𝄀
+                                      Runtime Filter Probe: t_ft2_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
 select id, match(body) against('needle') as s from t_ft2_cagra where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 ➤ id[-5,64,0]  ¦  s[7,5,0]  𝄀
 3  ¦  0.19058396  𝄀
@@ -319,14 +485,15 @@ select id, match(body) against('needle') as s from t_ref_ft2 where match(body) a
 9  ¦  0.19058396
 explain select id from t_ft2_cagra where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_cagra.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_cagra.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft2_cagra.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
@@ -334,7 +501,24 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_cagra  𝄀
                           Runtime Filter Probe: t_ft2_cagra.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_cagra.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_cagra.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_cagra  𝄀
+                                      Runtime Filter Probe: t_ft2_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
 select id from t_ft2_cagra where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
 ➤ id[-5,64,0]  𝄀
 50  𝄀
@@ -351,7 +535,7 @@ explain select id, match(body) against('needle') as s from t_ft2_cagra order by 
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_cagra.v, ) INTERNAL  𝄀
+        Sort Key: l2_distance(t_ft2_cagra.v, 0x000000000000000000000000) INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Sort  𝄀
               Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
@@ -375,14 +559,16 @@ select id, match(body) against('needle') as s from t_ref_ft2 order by l2_distanc
 9  ¦  0.19058396
 explain select id from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
+-- @regex("Fulltext Index Scan on[\s\S]*Fulltext Index Scan on", false)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_ivfpq.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
@@ -390,27 +576,41 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
                           Runtime Filter Probe: t_ft_ivfpq.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select id from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-3  𝄀
-6  𝄀
-9
-select id from t_ref_ft where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-3  𝄀
-6  𝄀
-9
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_ivfpq.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
+                                      Runtime Filter Probe: t_ft_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select count(*) from (select id from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3) x where x.id not in (select id from t_ref_ft where match(body) against('needle'));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id from t_ft_ivfpq where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_ivfpq.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
@@ -419,27 +619,42 @@ Project  𝄀
                           Filter Cond: t_ft_ivfpq.tag in ([1 2 3])  𝄀
                           Runtime Filter Probe: t_ft_ivfpq.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select id from t_ft_ivfpq where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-3  𝄀
-9  𝄀
-15
-select id from t_ref_ft where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-3  𝄀
-9  𝄀
-15
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_ivfpq.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
+                                      Filter Cond: t_ft_ivfpq.tag in ([1 2 3])  𝄀
+                                      Runtime Filter Probe: t_ft_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select count(*) from (select id from t_ft_ivfpq where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id from t_ft_ivfpq where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3) x where x.id not in (select id from t_ref_ft where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_ivfpq.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
@@ -447,27 +662,41 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
                           Runtime Filter Probe: t_ft_ivfpq.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select id from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
-➤ id[-5,64,0]  𝄀
-100  𝄀
-99  𝄀
-102
-select id from t_ref_ft where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
-➤ id[-5,64,0]  𝄀
-100  𝄀
-99  𝄀
-102
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_ivfpq.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
+                                      Runtime Filter Probe: t_ft_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select count(*) from (select id from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3) x where x.id not in (select id from t_ref_ft where match(body) against('needle'));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id, match(body) against('needle') as s from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: #[0,2] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_ivfpq.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
@@ -475,27 +704,41 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
                           Runtime Filter Probe: t_ft_ivfpq.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select id, match(body) against('needle') as s from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  ¦  s[7,5,0]  𝄀
-3  ¦  0.21361119  𝄀
-6  ¦  0.21361119  𝄀
-9  ¦  0.21361119
-select id, match(body) against('needle') as s from t_ref_ft where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  ¦  s[7,5,0]  𝄀
-3  ¦  0.21361119  𝄀
-6  ¦  0.21361119  𝄀
-9  ¦  0.21361119
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_ivfpq.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
+                                      Runtime Filter Probe: t_ft_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select count(*) from (select id, match(body) against('needle') as s from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id, match(body) against('needle') as s from t_ft_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3) x where x.id not in (select id from t_ref_ft where match(body) against('needle'));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id from t_ft_ivfpq where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft_ivfpq.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
@@ -503,24 +746,37 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
                           Runtime Filter Probe: t_ft_ivfpq.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select id from t_ft_ivfpq where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-50  𝄀
-100  𝄀
-150
-select id from t_ref_ft where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-50  𝄀
-100  𝄀
-150
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft_ivfpq.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
+                                      Runtime Filter Probe: t_ft_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select count(*) from (select id from t_ft_ivfpq where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id from t_ft_ivfpq where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3) x where x.id not in (select id from t_ref_ft where match(body) against('rare'));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id, match(body) against('needle') as s from t_ft_ivfpq order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
 -- @regex("Vector Index Scan on", false)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: l2_distance(t_ft_ivfpq.v, 0x000000000000000000000000) INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Sort  𝄀
               Sort Key: mo_fulltext_alias_0.score DESC  𝄀
@@ -544,14 +800,15 @@ select id, match(body) against('needle') as s from t_ref_ft order by l2_distance
 9  ¦  0.21361119
 explain select id from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_ivfpq.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft2_ivfpq.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
@@ -559,27 +816,41 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_ivfpq  𝄀
                           Runtime Filter Probe: t_ft2_ivfpq.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select id from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-3  𝄀
-6  𝄀
-9
-select id from t_ref_ft2 where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-3  𝄀
-6  𝄀
-9
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_ivfpq.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_ivfpq.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_ivfpq  𝄀
+                                      Runtime Filter Probe: t_ft2_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select count(*) from (select id from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3) x where x.id not in (select id from t_ref_ft2 where match(body) against('needle'));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id from t_ft2_ivfpq where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_ivfpq.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft2_ivfpq.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
@@ -588,27 +859,42 @@ Project  𝄀
                           Filter Cond: t_ft2_ivfpq.tag in ([1 2 3])  𝄀
                           Runtime Filter Probe: t_ft2_ivfpq.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select id from t_ft2_ivfpq where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-3  𝄀
-9  𝄀
-15
-select id from t_ref_ft2 where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-3  𝄀
-9  𝄀
-15
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_ivfpq.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_ivfpq.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_ivfpq  𝄀
+                                      Filter Cond: t_ft2_ivfpq.tag in ([1 2 3])  𝄀
+                                      Runtime Filter Probe: t_ft2_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select count(*) from (select id from t_ft2_ivfpq where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id from t_ft2_ivfpq where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3) order by l2_distance(v,'[0,0,0]') limit 3) x where x.id not in (select id from t_ref_ft2 where match(body) against('+needle +anchor' in boolean mode) and tag in (1,2,3));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_ivfpq.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft2_ivfpq.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
@@ -616,27 +902,41 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_ivfpq  𝄀
                           Runtime Filter Probe: t_ft2_ivfpq.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select id from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
-➤ id[-5,64,0]  𝄀
-100  𝄀
-99  𝄀
-102
-select id from t_ref_ft2 where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3;
-➤ id[-5,64,0]  𝄀
-100  𝄀
-99  𝄀
-102
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_ivfpq.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_ivfpq.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_ivfpq  𝄀
+                                      Runtime Filter Probe: t_ft2_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select count(*) from (select id from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[100,101,102]') limit 3) x where x.id not in (select id from t_ref_ft2 where match(body) against('needle'));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id, match(body) against('needle') as s from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: #[0,2] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_ivfpq.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft2_ivfpq.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
@@ -644,27 +944,41 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_ivfpq  𝄀
                           Runtime Filter Probe: t_ft2_ivfpq.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select id, match(body) against('needle') as s from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  ¦  s[7,5,0]  𝄀
-3  ¦  0.19058396  𝄀
-6  ¦  0.19058396  𝄀
-9  ¦  0.19058396
-select id, match(body) against('needle') as s from t_ref_ft2 where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  ¦  s[7,5,0]  𝄀
-3  ¦  0.19058396  𝄀
-6  ¦  0.19058396  𝄀
-9  ¦  0.19058396
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_ivfpq.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_ivfpq.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_ivfpq  𝄀
+                                      Runtime Filter Probe: t_ft2_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select count(*) from (select id, match(body) against('needle') as s from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id, match(body) against('needle') as s from t_ft2_ivfpq where match(body) against('needle') order by l2_distance(v,'[0,0,0]') limit 3) x where x.id not in (select id from t_ref_ft2 where match(body) against('needle'));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id from t_ft2_ivfpq where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: #[0,1] INTERNAL  𝄀
         Limit: 3  𝄀
-        ->  Sort  𝄀
-              Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t_ft2_ivfpq.id = #[1,0])  𝄀
               ->  Join  𝄀
                     Join Type: INNER  𝄀
                     Join Cond: (t_ft2_ivfpq.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
@@ -672,24 +986,37 @@ Project  𝄀
                     ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_ivfpq  𝄀
                           Runtime Filter Probe: t_ft2_ivfpq.id  𝄀
                     ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select id from t_ft2_ivfpq where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-50  𝄀
-100  𝄀
-150
-select id from t_ref_ft2 where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-50  𝄀
-100  𝄀
-150
+                          Fulltext Index: f  𝄀
+              ->  Join  𝄀
+                    Join Type: SEMI  𝄀
+                    Join Cond: (#[0,0] = t_ft2_ivfpq.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Vector Index Scan on vi [l2_distance]  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                    ->  Sort  𝄀
+                          Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft2_ivfpq.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft2_ivfpq  𝄀
+                                      Runtime Filter Probe: t_ft2_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f
+select count(*) from (select id from t_ft2_ivfpq where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id from t_ft2_ivfpq where match(body) against('rare') order by l2_distance(v,'[0,0,0]') limit 3) x where x.id not in (select id from t_ref_ft2 where match(body) against('rare'));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select id, match(body) against('needle') as s from t_ft2_ivfpq order by l2_distance(v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
 -- @regex("Vector Index Scan on", false)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(t_ft2_ivfpq.v, ) INTERNAL  𝄀
+        Sort Key: l2_distance(t_ft2_ivfpq.v, 0x000000000000000000000000) INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Sort  𝄀
               Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
@@ -716,17 +1043,39 @@ insert into meta select result, result % 2 from generate_series(1, 200) g;
 create table query_vectors(name varchar(10) primary key, v vecf32(3) not null);
 insert into query_vectors values ('lo', '[0,0,0]'), ('hi', '[100,101,102]');
 explain select d.id from t_ft_cagra d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(d.v, ) INTERNAL  𝄀
+        Sort Key: l2_distance(t_ft_cagra.v, 0x000000000000000000000000) INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
-              Join Type: INNER   hashOnPK  𝄀
-              Join Cond: (m.id = d.id)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (m.id = t_ft_cagra.id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on hybrid_ft_vec_gpu.meta  𝄀
-              ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra
+                    Runtime Filter Probe: m.id  𝄀
+              ->  Sort  𝄀
+                    Sort Key: #[0,2] ASC  𝄀
+                    Limit: 3  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (t_ft_cagra.id = #[1,0])  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
+                                Runtime Filter Probe: t_ft_cagra.id  𝄀
+                          ->  Join  𝄀
+                                Join Type: SEMI  𝄀
+                                Join Cond: (#[0,0] = t_ft_cagra.id)  𝄀
+                                Runtime Filter Build: #[14,0]  𝄀
+                                ->  Vector Index Scan on vi [l2_distance]  𝄀
+                                      Runtime Filter Probe: #[12,0]  𝄀
+                                      Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                                ->  Join  𝄀
+                                      Join Type: SEMI   hashOnPK  𝄀
+                                      Join Cond: (t_ft_cagra.id = meta.id)  𝄀
+                                      ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
+                                      ->  Table Scan on hybrid_ft_vec_gpu.meta
 select d.id from t_ft_cagra d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
 ➤ id[-5,64,0]  𝄀
 1  𝄀
@@ -739,26 +1088,53 @@ select d.id from t_ref_ft d join meta m on m.id = d.id order by l2_distance(d.v,
 3
 explain select d.id from t_ft_cagra d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
 -- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(d.v, ) INTERNAL  𝄀
+        Sort Key: l2_distance(t_ft_cagra.v, 0x000000000000000000000000) INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
-              Join Type: INNER   hashOnPK  𝄀
-              Join Cond: (m.id = d.id)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (m.id = t_ft_cagra.id)  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on hybrid_ft_vec_gpu.meta  𝄀
                     Runtime Filter Probe: m.id  𝄀
-              ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (d.id = mo_fulltext_alias_0.doc_id)  𝄀
-                    Runtime Filter Build: #[-1,0]  𝄀
-                    ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
-                          Runtime Filter Probe: d.id  𝄀
-                    ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
+              ->  Sort  𝄀
+                    Sort Key: #[0,2] ASC  𝄀
+                    Limit: 3  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (t_ft_cagra.id = #[1,0])  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
+                                      Runtime Filter Probe: t_ft_cagra.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f  𝄀
+                          ->  Join  𝄀
+                                Join Type: SEMI  𝄀
+                                Join Cond: (#[0,0] = t_ft_cagra.id)  𝄀
+                                Runtime Filter Build: #[14,0]  𝄀
+                                ->  Vector Index Scan on vi [l2_distance]  𝄀
+                                      Runtime Filter Probe: #[12,0]  𝄀
+                                      Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                                ->  Join  𝄀
+                                      Join Type: RIGHT SEMI   hashOnPK  𝄀
+                                      Join Cond: (meta.id = t_ft_cagra.id)  𝄀
+                                      Runtime Filter Build: #[-1,0]  𝄀
+                                      ->  Table Scan on hybrid_ft_vec_gpu.meta [ForceOneCN]  𝄀
+                                            Runtime Filter Probe: meta.id  𝄀
+                                      ->  Join  𝄀
+                                            Join Type: INNER  𝄀
+                                            Join Cond: (t_ft_cagra.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                            Runtime Filter Build: #[-1,0]  𝄀
+                                            ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra [ForceOneCN]  𝄀
+                                                  Runtime Filter Probe: t_ft_cagra.id  𝄀
+                                            ->  Fulltext Index Scan on f  𝄀
+                                                  Fulltext Index: f
 select d.id from t_ft_cagra d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
 ➤ id[-5,64,0]  𝄀
 3  𝄀
@@ -823,23 +1199,14 @@ select d.id from t_ref_ft d join query_vectors q on q.name = 'hi' where match(d.
 100  𝄀
 99  𝄀
 102
-explain select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
--- @regex("Join Type: SEMI", false)
--- @regex("Vector Index Scan on", true)
-➤ TP QUERY PLAN[12,-1,0]  𝄀
-Project  𝄀
-  ->  Sort  𝄀
-        Sort Key: #[0,1] INTERNAL  𝄀
-        Limit: 3  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (t_ft_cagra.id = #[1,0])  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on hybrid_ft_vec_gpu.t_ft_cagra  𝄀
-                    Filter Cond: (t_ft_cagra.tag = 1)  𝄀
-                    Runtime Filter Probe: t_ft_cagra.id  𝄀
-              ->  Vector Index Scan on vi [l2_distance]  𝄀
-                    Vector Index: vi, Metric: l2_distance, Candidate Limit: 3
+select count(*), sum(tag = 1) from (select id, tag from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x;
+➤ count(*)[-5,64,0]  ¦  sum(tag = 1)[-5,64,0]  𝄀
+3  ¦  3
+select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=auto';
+➤ id[-5,64,0]  𝄀
+1  𝄀
+8  𝄀
+15
 explain select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
 -- @regex("Join Type: SEMI", false)
 -- @regex("Vector Index Scan on", true)
@@ -857,66 +1224,104 @@ Project  𝄀
                     Runtime Filter Probe: t_ft_cagra.id  𝄀
               ->  Vector Index Scan on vi [l2_distance]  𝄀
                     Vector Index: vi, Metric: l2_distance, Candidate Limit: 3
-select (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
-➤ same_pre[-7,1,0]  𝄀
-1
 select (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_cagra where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_post;
 ➤ same_post[-7,1,0]  𝄀
 1
 explain select d.id from t_ft_ivfpq d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
--- @regex("Vector Index Scan on", false)
+-- @regex("Vector Index Scan on", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
-        Sort Key: l2_distance(d.v, ) INTERNAL  𝄀
+        Sort Key: l2_distance(t_ft_ivfpq.v, 0x000000000000000000000000) INTERNAL  𝄀
         Limit: 3  𝄀
         ->  Join  𝄀
-              Join Type: INNER   hashOnPK  𝄀
-              Join Cond: (m.id = d.id)  𝄀
-              ->  Table Scan on hybrid_ft_vec_gpu.meta  𝄀
-              ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq
-select d.id from t_ft_ivfpq d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-1  𝄀
-2  𝄀
-3
-select d.id from t_ref_ft d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-1  𝄀
-2  𝄀
-3
-explain select d.id from t_ft_ivfpq d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
--- @regex("Fulltext Index Scan on", true)
--- @regex("Vector Index Scan on", false)
-➤ TP QUERY PLAN[12,-1,0]  𝄀
-Project  𝄀
-  ->  Sort  𝄀
-        Sort Key: l2_distance(d.v, ) INTERNAL  𝄀
-        Limit: 3  𝄀
-        ->  Join  𝄀
-              Join Type: INNER   hashOnPK  𝄀
-              Join Cond: (m.id = d.id)  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (m.id = t_ft_ivfpq.id)  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on hybrid_ft_vec_gpu.meta  𝄀
                     Runtime Filter Probe: m.id  𝄀
-              ->  Join  𝄀
-                    Join Type: INNER  𝄀
-                    Join Cond: (d.id = mo_fulltext_alias_0.doc_id)  𝄀
-                    Runtime Filter Build: #[-1,0]  𝄀
-                    ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
-                          Runtime Filter Probe: d.id  𝄀
-                    ->  Fulltext Index Scan on f  𝄀
-                          Fulltext Index: f
-select d.id from t_ft_ivfpq d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-3  𝄀
-6  𝄀
-9
-select d.id from t_ref_ft d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
-➤ id[-5,64,0]  𝄀
-3  𝄀
-6  𝄀
-9
+              ->  Sort  𝄀
+                    Sort Key: #[0,2] ASC  𝄀
+                    Limit: 3  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (t_ft_ivfpq.id = #[1,0])  𝄀
+                          Runtime Filter Build: #[-1,0]  𝄀
+                          ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
+                                Runtime Filter Probe: t_ft_ivfpq.id  𝄀
+                          ->  Join  𝄀
+                                Join Type: SEMI  𝄀
+                                Join Cond: (#[0,0] = t_ft_ivfpq.id)  𝄀
+                                Runtime Filter Build: #[14,0]  𝄀
+                                ->  Vector Index Scan on vi [l2_distance]  𝄀
+                                      Runtime Filter Probe: #[12,0]  𝄀
+                                      Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                                ->  Join  𝄀
+                                      Join Type: SEMI   hashOnPK  𝄀
+                                      Join Cond: (t_ft_ivfpq.id = meta.id)  𝄀
+                                      ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
+                                      ->  Table Scan on hybrid_ft_vec_gpu.meta
+select count(*) from (select d.id from t_ft_ivfpq d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select d.id from t_ft_ivfpq d join meta m on m.id = d.id order by l2_distance(d.v,'[0,0,0]') limit 3) x where x.id not in (select d.id from t_ref_ft d join meta m on m.id = d.id);
+➤ count(*)[-5,64,0]  𝄀
+0
+explain select d.id from t_ft_ivfpq d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3;
+-- @regex("Fulltext Index Scan on", true)
+-- @regex("Vector Index Scan on", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: l2_distance(t_ft_ivfpq.v, 0x000000000000000000000000) INTERNAL  𝄀
+        Limit: 3  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (m.id = t_ft_ivfpq.id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on hybrid_ft_vec_gpu.meta  𝄀
+                    Runtime Filter Probe: m.id  𝄀
+              ->  Sort  𝄀
+                    Sort Key: #[0,2] ASC  𝄀
+                    Limit: 3  𝄀
+                    ->  Join  𝄀
+                          Join Type: INNER  𝄀
+                          Join Cond: (t_ft_ivfpq.id = #[1,0])  𝄀
+                          ->  Join  𝄀
+                                Join Type: INNER  𝄀
+                                Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                Runtime Filter Build: #[-1,0]  𝄀
+                                ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
+                                      Runtime Filter Probe: t_ft_ivfpq.id  𝄀
+                                ->  Fulltext Index Scan on f  𝄀
+                                      Fulltext Index: f  𝄀
+                          ->  Join  𝄀
+                                Join Type: SEMI  𝄀
+                                Join Cond: (#[0,0] = t_ft_ivfpq.id)  𝄀
+                                Runtime Filter Build: #[14,0]  𝄀
+                                ->  Vector Index Scan on vi [l2_distance]  𝄀
+                                      Runtime Filter Probe: #[12,0]  𝄀
+                                      Vector Index: vi, Metric: l2_distance, Candidate Limit: 3  𝄀
+                                ->  Join  𝄀
+                                      Join Type: RIGHT SEMI   hashOnPK  𝄀
+                                      Join Cond: (meta.id = t_ft_ivfpq.id)  𝄀
+                                      Runtime Filter Build: #[-1,0]  𝄀
+                                      ->  Table Scan on hybrid_ft_vec_gpu.meta [ForceOneCN]  𝄀
+                                            Runtime Filter Probe: meta.id  𝄀
+                                      ->  Join  𝄀
+                                            Join Type: INNER  𝄀
+                                            Join Cond: (t_ft_ivfpq.id = mo_fulltext_alias_0.doc_id)  𝄀
+                                            Runtime Filter Build: #[-1,0]  𝄀
+                                            ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq [ForceOneCN]  𝄀
+                                                  Runtime Filter Probe: t_ft_ivfpq.id  𝄀
+                                            ->  Fulltext Index Scan on f  𝄀
+                                                  Fulltext Index: f
+select count(*) from (select d.id from t_ft_ivfpq d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select d.id from t_ft_ivfpq d join meta m on m.id = d.id where match(d.body) against('needle') order by l2_distance(d.v,'[0,0,0]') limit 3) x where x.id not in (select d.id from t_ref_ft d join meta m on m.id = d.id where match(d.body) against('needle'));
+➤ count(*)[-5,64,0]  𝄀
+0
 explain select d.id from t_ft_ivfpq d join query_vectors q on q.name = 'lo' order by l2_distance(d.v, q.v) limit 3;
 -- @regex("Vector Index Scan on", false)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
@@ -961,33 +1366,20 @@ Project  𝄀
               ->  Table Scan on hybrid_ft_vec_gpu.query_vectors  𝄀
                     Filter Cond: (q.name = 'hi')  𝄀
                     Block Filter Cond: (q.name = 'hi')
-select d.id from t_ft_ivfpq d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
+select count(*) from (select d.id from t_ft_ivfpq d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3) x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select d.id from t_ft_ivfpq d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3) x where x.id not in (select d.id from t_ref_ft d join query_vectors q on q.name = 'hi' where match(d.body) against('needle'));
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*), sum(tag = 1) from (select id, tag from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x;
+➤ count(*)[-5,64,0]  ¦  sum(tag = 1)[-5,64,0]  𝄀
+3  ¦  3
+select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=auto';
 ➤ id[-5,64,0]  𝄀
-100  𝄀
-99  𝄀
-102
-select d.id from t_ref_ft d join query_vectors q on q.name = 'hi' where match(d.body) against('needle') order by l2_distance(d.v, q.v) limit 3;
-➤ id[-5,64,0]  𝄀
-100  𝄀
-99  𝄀
-102
-explain select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre';
--- @regex("Join Type: SEMI", false)
--- @regex("Vector Index Scan on", true)
-➤ TP QUERY PLAN[12,-1,0]  𝄀
-Project  𝄀
-  ->  Sort  𝄀
-        Sort Key: #[0,1] INTERNAL  𝄀
-        Limit: 3  𝄀
-        ->  Join  𝄀
-              Join Type: INNER  𝄀
-              Join Cond: (t_ft_ivfpq.id = #[1,0])  𝄀
-              Runtime Filter Build: #[-1,0]  𝄀
-              ->  Table Scan on hybrid_ft_vec_gpu.t_ft_ivfpq  𝄀
-                    Filter Cond: (t_ft_ivfpq.tag = 1)  𝄀
-                    Runtime Filter Probe: t_ft_ivfpq.id  𝄀
-              ->  Vector Index Scan on vi [l2_distance]  𝄀
-                    Vector Index: vi, Metric: l2_distance, Candidate Limit: 3
+1  𝄀
+8  𝄀
+15
 explain select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post';
 -- @regex("Join Type: SEMI", false)
 -- @regex("Vector Index Scan on", true)
@@ -1005,9 +1397,6 @@ Project  𝄀
                     Runtime Filter Probe: t_ft_ivfpq.id  𝄀
               ->  Vector Index Scan on vi [l2_distance]  𝄀
                     Vector Index: vi, Metric: l2_distance, Candidate Limit: 3
-select (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=pre') x) = (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_pre;
-➤ same_pre[-7,1,0]  𝄀
-1
 select (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3 by rank with option 'mode=post') x) = (select group_concat(id order by id) from (select id from t_ft_ivfpq where tag = 1 order by l2_distance(v,'[0,0,0]') limit 3) x) as same_post;
 ➤ same_post[-7,1,0]  𝄀
 1

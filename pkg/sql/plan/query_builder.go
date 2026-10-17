@@ -14171,30 +14171,27 @@ func (builder *QueryBuilder) checkPlanningCanceled() error {
 	}
 }
 
+// maxRankOptionNprobe is the upper bound of the probe_limit session variable.
+const maxRankOptionNprobe = 80000
+
 // parseRankOption parses rank options from a map of option key-value pairs.
-// Supported options are mode and nprobe. Unsupported keys and invalid values
-// must fail here rather than silently falling back to session defaults.
+// Keys are mode, itopk, max_itopk, nprobe and max_nprobe, case-insensitive.
+// An unsupported key or an invalid value returns an error.
+// Returns nil when no option is set.
 func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
 	if len(options) == 0 {
 		return nil, nil
 	}
 
-	rankOption := &plan.RankOption{}
-	for key, value := range options {
+	for key := range options {
 		switch strings.ToLower(key) {
-		case "mode":
-			// Validated below, retaining case-insensitive mode lookup.
-		case "nprobe":
-			nprobe, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
-			// Match the supported probe_limit session-variable domain.
-			if err != nil || nprobe < 1 || nprobe > 80000 {
-				return nil, moerr.NewInvalidInputf(ctx, "nprobe must be an integer between 1 and 80000, got '%s'", value)
-			}
-			rankOption.Nprobe = nprobe
+		case "mode", "itopk", "max_itopk", "nprobe", "max_nprobe":
 		default:
 			return nil, moerr.NewInvalidInputf(ctx, "unsupported rank option '%s'", key)
 		}
 	}
+
+	rankOption := &plan.RankOption{}
 
 	// Helper function to get value from map case-insensitively
 	getOptionValue := func(key string) (string, bool) {
@@ -14213,12 +14210,50 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 		// - "pre": Enable vector index with BloomFilter pushdown
 		// - "post": Enable vector index with standard behavior (post-filtering)
 		// - "force": Force disable vector index, use full table scan
-		// - "include": Enable explicit include-aware IVF optimization
 		// - "auto": Adaptive mode that automatically selects the best strategy
-		if modeLower != "pre" && modeLower != "post" && modeLower != "force" && modeLower != "include" && modeLower != "auto" {
-			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', 'auto', or 'include', got '%s'", mode)
+		// - "iterative": "pre" that widens the search until LIMIT rows qualify or a cap is reached
+		// - "include": ivfflat's earlier name for "iterative", an alias of it
+		if modeLower == "include" {
+			modeLower = "iterative"
+		}
+		if modeLower != "pre" && modeLower != "post" && modeLower != "force" && modeLower != "auto" && modeLower != "iterative" {
+			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', 'auto' or 'iterative', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
+	}
+
+	for _, knob := range []struct {
+		name string
+		dst  *uint64
+	}{
+		{"itopk", &rankOption.Itopk},
+		{"max_itopk", &rankOption.MaxItopk},
+		{"nprobe", &rankOption.Nprobe},
+		{"max_nprobe", &rankOption.MaxNprobe},
+	} {
+		value, ok := getOptionValue(knob.name)
+		if !ok {
+			continue
+		}
+		v, err := strconv.ParseUint(strings.TrimSpace(value), 10, 64)
+		if knob.dst == &rankOption.Nprobe && (err != nil || v == 0 || v > maxRankOptionNprobe) {
+			return nil, moerr.NewInvalidInputf(ctx, "nprobe must be an integer between 1 and %d, got '%s'", maxRankOptionNprobe, value)
+		}
+		if err != nil || v == 0 {
+			return nil, moerr.NewInvalidInputf(ctx, "%s must be a positive integer, got '%s'", knob.name, value)
+		}
+		*knob.dst = v
+	}
+	if rankOption.MaxItopk != 0 && rankOption.Itopk > rankOption.MaxItopk {
+		return nil, moerr.NewInvalidInputf(ctx, "itopk %d exceeds max_itopk %d", rankOption.Itopk, rankOption.MaxItopk)
+	}
+	if rankOption.MaxNprobe != 0 && rankOption.Nprobe > rankOption.MaxNprobe {
+		return nil, moerr.NewInvalidInputf(ctx, "nprobe %d exceeds max_nprobe %d", rankOption.Nprobe, rankOption.MaxNprobe)
+	}
+
+	if rankOption.Mode == "" && rankOption.Itopk == 0 && rankOption.MaxItopk == 0 &&
+		rankOption.Nprobe == 0 && rankOption.MaxNprobe == 0 {
+		return nil, nil
 	}
 
 	return rankOption, nil
