@@ -22,8 +22,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -813,4 +817,44 @@ func TestResolveInt64VariableNilFallsBackToDefault(t *testing.T) {
 	value, resolveErr = nil, moerr.NewInternalError(context.Background(), "test error")
 	_, err = builder.resolveInt64Variable("hnsw_threads_search", 0)
 	require.Error(t, err)
+}
+
+func TestHnswIndexCoversSnapshotGuards(t *testing.T) {
+	scan := &plan.Node{TableDef: &plan.TableDef{TblId: 1}}
+	idx := &plan.IndexDef{IndexName: "idx_hnsw"}
+
+	require.False(t, (*QueryBuilder)(nil).hnswIndexCoversSnapshot(scan, nil, idx))
+
+	noProcess := NewMockCompilerContext(false, newPlanTestProcess(t))
+	noProcess.GetProcessFunc = func() *process.Process { return nil }
+	require.False(t, (&QueryBuilder{compCtx: noProcess}).hnswIndexCoversSnapshot(scan, nil, idx))
+
+	proc := newPlanTestProcess(t)
+	proc.Base.TxnOperator = fakeCoverageTxn{}
+	noStorage := NewMockCompilerContext(false, proc)
+	require.False(t, (&QueryBuilder{compCtx: noStorage}).hnswIndexCoversSnapshot(scan, nil, idx))
+
+	meta := &plan.IndexDef{IndexTableName: "idx_hnsw_meta"}
+	scan.ObjRef = &plan.ObjectRef{SchemaName: "db"}
+	proc.Base.SessionInfo.StorageEngine = errCommitEngine{}
+	require.False(t, (&QueryBuilder{compCtx: noStorage}).hnswIndexCoversSnapshot(scan, meta, idx))
+
+	proc.Base.SessionInfo.StorageEngine = nonProviderEngine{}
+	require.False(t, (&QueryBuilder{compCtx: noStorage}).hnswIndexCoversSnapshot(scan, nil, idx))
+
+	proc.Base.SessionInfo.StorageEngine = fakeSourceEngine{}
+	meta = &plan.IndexDef{IndexTableName: "idx_hnsw_meta"}
+	idx = &plan.IndexDef{IndexName: "idx_hnsw", IndexTableName: "idx_hnsw_storage"}
+	require.False(t, (&QueryBuilder{compCtx: noStorage}).hnswIndexCoversSnapshot(scan, meta, idx))
+
+	// Historical reads must clone the transaction before resolving the source.
+	scan.ScanSnapshot = &plan.Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1_600_000_000_000_000_000}}
+	proc.Base.SessionInfo.StorageEngine = relationLookupErrorEngine{}
+	require.False(t, (&QueryBuilder{compCtx: noStorage}).hnswIndexCoversSnapshot(scan, meta, idx))
+}
+
+type relationLookupErrorEngine struct{ engine.Engine }
+
+func (relationLookupErrorEngine) GetRelationById(context.Context, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
+	return "", "", nil, moerr.NewInternalErrorNoCtx("source relation unavailable")
 }
