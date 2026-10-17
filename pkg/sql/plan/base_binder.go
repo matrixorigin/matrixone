@@ -5812,7 +5812,7 @@ func IsPercentileConfigExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
-	if rule.IsConstant(expr, false) {
+	if function.IsFoldCandidate(expr, false) {
 		return true
 	}
 	return isPreparedPercentileExpr(expr)
@@ -8285,7 +8285,7 @@ func isXMLXPathConstant(expr *Expr) bool {
 	if expr.GetP() != nil {
 		return true
 	}
-	if rule.IsConstant(expr, false) {
+	if function.IsFoldCandidate(expr, false) {
 		return true
 	}
 	f := expr.GetF()
@@ -8293,7 +8293,7 @@ func isXMLXPathConstant(expr *Expr) bool {
 		return false
 	}
 	ov, ok := function.GetFunctionByIdWithoutError(f.Func.Obj)
-	if !ok || ov.CannotFold() || ov.IsRealTimeRelated() {
+	if !ok || ov.IsVolatile() || ov.IsRealTimeRelated() {
 		return false
 	}
 	for _, arg := range f.Args {

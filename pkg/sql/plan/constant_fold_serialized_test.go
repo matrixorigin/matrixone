@@ -35,7 +35,39 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestConstantFoldBitCountDiagnostics(t *testing.T) {
+	for _, folder := range []string{"generic", "rule", "prepared_rule"} {
+		for _, value := range []string{"3 ", "3x"} {
+			t.Run(folder+"/"+value, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				sink := &process.WarningProbe{}
+				proc.WarningSink = sink
+				expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, "bit_count", []*Expr{makePlan2StringConstExprWithType(value)})
+				require.NoError(t, err)
+				var folded *Expr
+				if folder == "generic" {
+					folded, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+					require.NoError(t, err)
+				} else {
+					node := &planpb.Node{ProjectList: []*Expr{expr}}
+					rule.NewConstantFold(folder == "prepared_rule").Apply(node, nil, proc)
+					folded = node.ProjectList[0]
+				}
+				require.False(t, sink.Warned(), "speculation must not publish statement warnings")
+				require.Same(t, sink, proc.WarningSink)
+				if value == "3x" {
+					require.NotNil(t, folded.GetF())
+				} else {
+					require.NotNil(t, folded.GetLit())
+					require.Equal(t, uint64(2), folded.GetLit().GetU64Val())
+				}
+			})
+		}
+	}
+}
 
 // Wide explicit constants must remain valid in consumers that inspect their
 // configuration or comparison expressions before execution.

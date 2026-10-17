@@ -4748,3 +4748,209 @@ func TestRegisteredXorSelectionAndFolding(t *testing.T) {
 		}
 	})
 }
+
+// Exercise the registered overload through runtime folding, rather than calling
+// its kernel directly: literal diagnostics belong to every selected input row.
+func TestBitCountDiagnosticFolding(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		source *plan.Expr
+		want   uint64
+		fold   bool
+	}{
+		{"text", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3x"}}}}, 2, false},
+		{"valid_text", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3 "}}}}, 2, true},
+		{"binary", &plan.Expr{Typ: plan.Type{Id: int32(types.T_varbinary)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "3x"}}}}, 8, true},
+		{"numeric", makePlan2Int64ConstExprWithType(3), 2, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			checkExpressionStorageAfterCleanup(t, proc)
+			session := &preparedCastWarningSession{}
+			proc.Session = session
+			executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "bit_count", tc.source))
+			if executor != nil {
+				t.Cleanup(executor.Free)
+			}
+			require.NoError(t, err)
+			input := batch.New(nil)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.SetRowCount(3)
+			for _, mask := range [][]bool{nil, {false, true, true}, {false, false, false}} {
+				executor.ResetForNextQuery()
+				session.warningCount = 0
+				result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+				require.NoError(t, err)
+				require.Equal(t, 3, result.Length())
+				selected := 0
+				for row := 0; row < 3; row++ {
+					if mask == nil || mask[row] {
+						selected++
+						require.False(t, result.IsNull(uint64(row)))
+						require.Equal(t, tc.want, vector.GetFixedAtNoTypeCheck[uint64](result, row))
+					}
+				}
+				if tc.fold {
+					require.Zero(t, session.warningCount)
+				} else {
+					require.Equal(t, selected, session.warningCount)
+				}
+				if selected > 0 {
+					require.Equal(t, tc.fold, executor.(*FunctionExpressionExecutor).folded.canFold)
+					require.True(t, result.IsConst(), "value constancy must survive diagnostics")
+				}
+			}
+			executor.ResetForNextQuery()
+			session.warningCount = 0
+			input.SetRowCount(0)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Zero(t, result.Length())
+			require.Zero(t, session.warningCount)
+		})
+	}
+}
+
+func TestDiagnosticScalarValues(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	text := func(value string) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: value}}}}
+	}
+	bits := bindTestFunction(t, proc, "bit_count", text("3x"))
+	converted := bindTestCast(t, proc, 0, bits, types.T_varchar.ToType())
+	joined := bindTestFunction(t, proc, "concat", text("["), converted, text("]"))
+	decimal := bindTestCast(t, proc, 1, bits, types.New(types.T_decimal64, 18, 0))
+	decimalText := bindTestCast(t, proc, 0, decimal, types.T_varchar.ToType())
+	for _, expr := range []*plan.Expr{
+		joined,
+		bindTestFunction(t, proc, "concat", text("["), decimalText, text("]")),
+		bindTestFunction(t, proc, "if", makePlan2BoolConstExprWithType(true), joined, text("unused")),
+	} {
+		func() {
+			executor, err := NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			input := batch.New(nil)
+			defer input.Clean(proc.Mp())
+			input.SetRowCount(3)
+			// Reuse without reset: a scalar output must never cache away effects.
+			for _, mask := range [][]bool{nil, {false, true, true}, nil, {false, false, false}} {
+				sink.warningCount = 0
+				got, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+				require.NoError(t, err)
+				selected := 0
+				for row := 0; row < 3; row++ {
+					if mask == nil || mask[row] {
+						selected++
+						require.Equal(t, "[2]", got.GetStringAt(row))
+					}
+				}
+				require.Equal(t, selected, sink.warningCount)
+				require.False(t, executor.(*FunctionExpressionExecutor).folded.canFold)
+				if selected > 0 {
+					require.True(t, got.IsConst())
+				}
+			}
+		}()
+	}
+
+	// Physical batch constancy does not make a column a scalar SQL expression.
+	column := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "bit_count", column))
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.NewWithSize(1)
+	defer input.Clean(proc.Mp())
+	input.Vecs[0], err = vector.NewConstBytes(types.T_varchar.ToType(), []byte("3x"), 3, proc.Mp())
+	require.NoError(t, err)
+	input.SetRowCount(3)
+	sink.warningCount = 0
+	got, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.False(t, got.IsConst())
+	require.Equal(t, 3, sink.warningCount)
+	for row := 0; row < 3; row++ {
+		require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](got, row))
+	}
+
+	conditions := batch.NewWithSize(1)
+	defer conditions.Clean(proc.Mp())
+	conditions.Vecs[0] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixedList(conditions.Vecs[0], []bool{true, false, true}, nil, proc.Mp()))
+	conditions.SetRowCount(3)
+	condition := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}}
+	for _, tc := range []struct {
+		name     string
+		expr     *plan.Expr
+		warnings int
+	}{
+		{"volatile", bindTestFunction(t, proc, "rand"), 0},
+		{"column_condition", bindTestFunction(t, proc, "if", condition, bits, bindTestFunction(t, proc, "bit_count", text("3"))), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			executor, err := NewExpressionExecutor(proc, tc.expr)
+			require.NoError(t, err)
+			defer executor.Free()
+			sink.warningCount = 0
+			got, err := executor.Eval(proc, []*batch.Batch{conditions}, nil)
+			require.NoError(t, err)
+			require.False(t, got.IsConst())
+			require.Equal(t, tc.warnings, sink.warningCount)
+			if tc.name == "column_condition" {
+				for row := 0; row < 3; row++ {
+					require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](got, row))
+				}
+			}
+		})
+	}
+}
+
+func TestBitCountDiagnosticFoldPreparedReuse(t *testing.T) {
+	proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+	checkExpressionStorageAfterCleanup(t, proc)
+	wasRunning := proc.GetBaseProcessRunningStatus()
+	t.Cleanup(func() { proc.SetBaseProcessRunningStatus(wasRunning) })
+	proc.SetBaseProcessRunningStatus(true)
+	sink := &preparedCastWarningSession{}
+	proc.WarningSink = sink
+	parameter := &plan.Expr{Typ: plan.Type{Id: int32(types.T_text)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+	// Bind the text overload explicitly; untyped BIT_COUNT markers keep their
+	// separate binary dispatch contract in the binder.
+	executor, err := NewExpressionExecutor(proc, bindTestFunction(t, proc, "bit_count", parameter))
+	if executor != nil {
+		t.Cleanup(executor.Free)
+	}
+	require.NoError(t, err)
+	input := batch.New(nil)
+	t.Cleanup(func() { input.Clean(proc.Mp()) })
+	input.SetRowCount(3)
+	for _, tc := range []struct {
+		value string
+		null  bool
+		fold  bool
+	}{
+		{"3", false, true}, {"3x", false, false}, {"", true, true}, {"3 ", false, true}, {"3x", false, false},
+	} {
+		executor.ResetForNextQuery()
+		sink.warningCount = 0
+		result := evalTestTextParameter(t, proc, executor, tc.value, tc.null, vector.PrepareParamNone, []*batch.Batch{input}, nil)
+		require.Equal(t, tc.fold, executor.(*FunctionExpressionExecutor).folded.canFold, tc.value)
+		require.True(t, result.IsConst(), tc.value)
+		require.Equal(t, 3, result.Length())
+		for row := 0; row < 3; row++ {
+			require.Equal(t, tc.null, result.IsNull(uint64(row)))
+			if !tc.null {
+				require.Equal(t, uint64(2), vector.GetFixedAtNoTypeCheck[uint64](result, row))
+			}
+		}
+		if tc.fold {
+			require.Zero(t, sink.warningCount)
+		} else {
+			require.Equal(t, 3, sink.warningCount, "the scalar probe must not leak a fourth warning")
+		}
+		require.Same(t, sink, proc.WarningSink)
+	}
+}

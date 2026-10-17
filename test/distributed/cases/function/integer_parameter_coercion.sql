@@ -125,4 +125,16 @@ set @v=null;
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
 deallocate prepare utility_source;
 
+-- Issue #30218: integer prefix values retain conversion diagnostics.
+SELECT HEX(LPAD('x','3x','0')) = '303078' AS ok;
+SHOW WARNINGS;
+SELECT SUBSTRING('abcdef',1,'2x') = 'ab' AS ok;
+SHOW WARNINGS;
+SELECT BIT_COUNT('3x') = 2 AS ok;
+SHOW WARNINGS;
+SELECT ROUND(12.345,'2x') = 12.350 AS ok;
+SHOW WARNINGS;
+SELECT REPEAT('x','3 ') = 'xxx' AS ok;
+SHOW WARNINGS;
+
 drop database integer_parameter_coercion;
