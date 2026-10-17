@@ -968,7 +968,17 @@ stage_check(){
       wrn "MO 客户端端口 $maddr:$MO_PORT 未监听（MO 可能仍在启动）"
     fi
   fi
-  if [ -b "$DRBD_VOLUME" ]; then drbdadm status "$DRBD_RESOURCE" 2>/dev/null | sed 's/^/    /'; fi
+  if [ -b "$DRBD_VOLUME" ]; then
+    local _dstat; _dstat="$(drbdadm status "$DRBD_RESOURCE" 2>/dev/null)"
+    printf '%s\n' "$_dstat" | sed 's/^/    /'
+    # Promoted 只说明本机盘 UpToDate；initial sync 未完成时对端仍落后，
+    # 此刻切过去会丢数据，不具备本方案承诺的 RPO=0，必须显式提示。
+    if printf '%s\n' "$_dstat" | grep -qE 'replication:Sync(Source|Target)|peer-disk:Inconsistent|out-of-sync:[[:space:]]*[1-9]|oos:[[:space:]]*[1-9]'; then
+      wrn "DRBD 仍在同步（对端数据不完整），此刻不具备 RPO=0：请同步完成后复查 drbdadm status"
+    else
+      ok "DRBD 两侧数据已一致（无待同步数据）"
+    fi
+  fi
 
   printf "\n${C}== 检查汇总 ==${N}\n  PASS=%d WARN=%d FAIL=%d\n" "$PASS" "$WARN" "$FAIL"
   if [ "$FAIL" -gt 0 ]; then printf "  结论：存在 FAIL，请修复后再上线。\n"; CHECK_RC=1; else printf "  结论：部署检查通过。\n"; fi
