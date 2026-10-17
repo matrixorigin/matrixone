@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -507,6 +508,62 @@ func TestAlterTableCopySupportsExternalForeignKeyOnAddedColumn(t *testing.T) {
 	require.Equal(t, uint64(77001), addFk.Fkey.ForeignTbl)
 	require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `fk_t1_external`")
 	require.Contains(t, alter.DetectSqls[0], "`constraint_test`.`replace_fk_p`")
+}
+
+// Issue #30254: MySQL installs a FOREIGN KEY declared under
+// foreign_key_checks=0 without validating pre-existing child rows; the
+// orphan survives and only later DML is rejected. With checks enabled the
+// detect SQLs must still reject orphans at DDL time.
+func TestAlterTableCopyForeignKeyChecksDisabledSkipsDetectSqls(t *testing.T) {
+	for _, parent := range []struct {
+		name      string
+		column    string
+		reference string
+	}{
+		{name: "external", column: "INT", reference: "constraint_test.replace_fk_p(id)"},
+		{name: "self", column: "BIGINT", reference: "constraint_test.t1(a)"},
+	} {
+		for _, tc := range []struct {
+			name        string
+			checks      int64
+			resolveErr  error
+			wantDetects int
+		}{
+			{name: "enabled", checks: 1, wantDetects: 1},
+			{name: "disabled", checks: 0, wantDetects: 0},
+			{name: "resolution error", resolveErr: errors.New("foreign_key_checks unavailable")},
+		} {
+			t.Run(parent.name+"/"+tc.name, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				originalContext := mock.ctxt
+				mock.ctxt.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+					if name == "foreign_key_checks" {
+						return tc.checks, tc.resolveErr
+					}
+					return originalContext.ResolveVariable(name, system, global)
+				}
+
+				logicPlan, err := buildSingleStmt(mock, t, fmt.Sprintf(`
+					ALTER TABLE constraint_test.t1
+						ADD COLUMN parent_id %s,
+						ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id) REFERENCES %s`,
+					parent.column, parent.reference))
+				if tc.resolveErr != nil {
+					require.ErrorIs(t, err, tc.resolveErr)
+					return
+				}
+				require.NoError(t, err)
+
+				alter := logicPlan.GetDdl().GetAlterTable()
+				require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+				require.Len(t, alter.CopyTableDef.Fkeys, 1,
+					"the constraint definition must be installed in both modes")
+				require.Len(t, alter.UpdateFkSqls, 1,
+					"catalog maintenance for the new FK must still be planned")
+				require.Len(t, alter.DetectSqls, tc.wantDetects)
+			})
+		}
+	}
 }
 
 func TestAlterTableCopyRejectsDuplicateForeignKeyName(t *testing.T) {
