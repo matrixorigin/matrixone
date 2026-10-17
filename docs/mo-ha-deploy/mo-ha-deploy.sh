@@ -450,6 +450,9 @@ chmod 0755 $wpath"
 }
 
 # ----------------------------- 阶段 moconf ----------------------------------
+# TOML 基本字符串转义：\ 与 " 不转义会生成非法 toml
+toml_escape(){ printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
+
 build_shared_block(){
   if [ -n "$S3_BUCKET" ]; then
     cat <<S3
@@ -458,12 +461,12 @@ name = "SHARED"
 backend = "S3"
 
 [fileservice.s3]
-endpoint     = "${S3_ENDPOINT}"
-bucket       = "${S3_BUCKET}"
-region       = "${S3_REGION}"
-key-prefix   = "${S3_KEY_PREFIX}"
-key-id       = "${S3_KEY_ID}"
-key-secret   = "${S3_KEY_SECRET}"
+endpoint     = "$(toml_escape "$S3_ENDPOINT")"
+bucket       = "$(toml_escape "$S3_BUCKET")"
+region       = "$(toml_escape "$S3_REGION")"
+key-prefix   = "$(toml_escape "$S3_KEY_PREFIX")"
+key-id       = "$(toml_escape "$S3_KEY_ID")"
+key-secret   = "$(toml_escape "$S3_KEY_SECRET")"
 S3
   else
     cat <<'LOCAL'
@@ -484,6 +487,10 @@ stage_moconf(){
     [ -n "$S3_KEY_ID" ]     || _miss="$_miss S3_KEY_ID"
     [ -n "$S3_KEY_SECRET" ] || _miss="$_miss S3_KEY_SECRET"
     [ -z "$_miss" ] || die "启用 S3 (S3_BUCKET=$S3_BUCKET) 时必须同时设置：$_miss"
+    local _s3v="$S3_ENDPOINT$S3_BUCKET$S3_REGION$S3_KEY_PREFIX$S3_KEY_ID$S3_KEY_SECRET"
+    case "$_s3v" in
+      *$'\n'*|*$'\r'*) die "S3 参数不能包含换行字符" ;;
+    esac
   fi
   local payload="$MO_CONFIG_DIR"
   [ -n "$payload" ] || payload="$(cd "$(dirname "$0")" && pwd)/mo-config"
