@@ -15,6 +15,7 @@
 package fileservice
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
@@ -263,22 +264,61 @@ func TestLocalFSMergeCompletesAfterCacheUpdate(t *testing.T) {
 }
 
 func TestLocalFSMergeCompletionWithoutCacheProgress(t *testing.T) {
-	for _, cached := range []bool{false, true} {
-		t.Run(fmt.Sprintf("cache_published=%t", cached), func(t *testing.T) {
+	// Observe the merge wait, not Done calls while readCache derives a timeout
+	// context. Other package tests may have enabled that optional cache timeout.
+	previousCacheReadThreshold := slowCacheReadThreshold
+	slowCacheReadThreshold = 0
+	t.Cleanup(func() { slowCacheReadThreshold = previousCacheReadThreshold })
+	for _, scenario := range []struct {
+		name     string
+		cached   bool
+		pressure bool
+	}{
+		{name: "cache_published=false"},
+		{name: "cache_published=true", cached: true},
+		{name: "real_pressure_rejects_cache_publication", pressure: true},
+	} {
+		t.Run(scenario.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
+			payload := []byte("foo")
+			capacity := 1 << 20
+			if scenario.pressure {
+				payload = bytes.Repeat([]byte{7}, 64<<10)
+				capacity = 4 * len(payload)
+			}
 			local, err := NewLocalFS(ctx, "local", t.TempDir(), CacheConfig{
-				MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
+				MemoryCapacity: ptrTo(toml.ByteSize(capacity)),
 			}, nil)
 			require.NoError(t, err)
 			t.Cleanup(func() { local.Close(context.Background()) })
+			if scenario.pressure {
+				// Use the real cache allocator, shrink and admission contract.
+				// A completed physical read must not imply a published cache entry.
+				for i := range 4 {
+					func() {
+						name := fmt.Sprintf("warm-%d", i)
+						require.NoError(t, local.Write(ctx, IOVector{FilePath: name, Policy: SkipAllCache,
+							Entries: []IOEntry{{Size: int64(len(payload)), Data: payload}}}))
+						warm := &IOVector{FilePath: name, Policy: SkipFullFilePreloads,
+							Entries: []IOEntry{{Size: int64(len(payload)), ToCacheData: CacheOriginalData}}}
+						defer warm.Release()
+						require.NoError(t, local.Read(ctx, warm))
+					}()
+				}
+				require.Equal(t, int64(capacity), local.memCache.cache.Used())
+				owner := t.Name()
+				t.Cleanup(func() { ClearMemoryCachePressureTargetByOwner(owner) })
+				SetMemoryCachePressureTargetPercentByOwner(owner, 80, time.Now().Add(time.Minute))
+				require.Equal(t, int64(3*len(payload)), local.memCache.EvictToCapacityPercent(ctx, 80))
+			}
 			require.NoError(t, local.Write(ctx, IOVector{
 				FilePath: "foo", Policy: SkipAllCache,
-				Entries: []IOEntry{{Size: 3, Data: []byte("foo")}},
+				Entries: []IOEntry{{Size: int64(len(payload)), Data: payload}},
 			}))
 			vector := &IOVector{
 				FilePath: "foo", Policy: SkipFullFilePreloads,
-				Entries: []IOEntry{{Size: 3, ToCacheData: CacheOriginalData}},
+				Entries: []IOEntry{{Size: int64(len(payload)), ToCacheData: CacheOriginalData}},
 			}
 			t.Cleanup(vector.Release)
 			key := vector.ioMergeKey()
@@ -297,8 +337,9 @@ func TestLocalFSMergeCompletionWithoutCacheProgress(t *testing.T) {
 				}
 			})
 			gets := 0
+			dataCache := local.memCache.cache
 			local.memCache.cache = &localObservedDataCache{
-				DataCache: local.memCache.cache,
+				DataCache: dataCache,
 				beforeGet: func() {
 					gets++
 					if gets == 2 {
@@ -322,12 +363,25 @@ func TestLocalFSMergeCompletionWithoutCacheProgress(t *testing.T) {
 			case <-ctx.Done():
 				t.Fatal("follower did not enter the first generation")
 			}
-			if cached {
-				data := local.memCache.CopyToCacheData(ctx, []byte("foo"))
+			if scenario.cached {
+				data := local.memCache.CopyToCacheData(ctx, payload)
 				defer data.Release()
-				inserted, err := local.memCache.cache.Set(ctx, fscache.CacheKey{Path: "foo", Sz: 3}, data)
+				inserted, err := local.memCache.cache.Set(ctx, fscache.CacheKey{Path: "foo", Sz: int64(len(payload))}, data)
 				require.NoError(t, err)
 				require.True(t, inserted)
+			} else if scenario.pressure {
+				func() {
+					// Bypass only read merging; the ordinary physical read, allocation
+					// and cache update must run and really reject cache publication.
+					leader := &IOVector{FilePath: "foo",
+						Policy:  SkipMemoryCacheReads | SkipDiskCacheReads | SkipFullFilePreloads,
+						Entries: []IOEntry{{Size: int64(len(payload)), ToCacheData: CacheOriginalData}}}
+					defer leader.Release()
+					require.NoError(t, local.Read(ctx, leader))
+					require.Equal(t, payload, leader.Entries[0].CachedData.Bytes())
+					_, present := dataCache.Get(ctx, fscache.CacheKey{Path: "foo", Sz: int64(len(payload))})
+					require.False(t, present, "pressure must actually reject the leader's cache write")
+				}()
 			}
 			releaseFirst()
 			select {
@@ -339,8 +393,11 @@ func TestLocalFSMergeCompletionWithoutCacheProgress(t *testing.T) {
 			wg.Wait()
 			require.NotNil(t, finishSecond)
 			require.Equal(t, 2, gets)
-			require.Equal(t, []byte("foo"), vector.Entries[0].CachedData.Bytes())
-			require.Equal(t, cached, vector.Entries[0].fromCache == local.memCache)
+			require.Equal(t, payload, vector.Entries[0].CachedData.Bytes())
+			require.Equal(t, scenario.cached, vector.Entries[0].fromCache == local.memCache)
+			if scenario.pressure {
+				require.Equal(t, int64(3*len(payload)), local.memCache.cache.Used(), "fallback must not bypass cache pressure")
+			}
 			// Finishing this follower must not release another reader's generation.
 			require.True(t, local.ioMerger.IsMerging(key))
 		})
