@@ -2082,7 +2082,7 @@ func orderedSetPercentileDiscUsesExtendedType(
 // Merge their explicit wire contracts into the same source/destination gates used
 // by expressions, including descriptors in child pipelines.
 func requiredRemotePipelineExpressionFeatures(p *pipeline.Pipeline) (plan.RemoteExpressionFeatures, error) {
-	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	features, err := plan.RequiredExecutableRemoteExpressionFeatures(p)
 	if err != nil {
 		return features, err
 	}
@@ -2261,9 +2261,6 @@ func validateRemoteExpressionPipelineProtocol(
 	proc *process.Process,
 	p *pipeline.Pipeline,
 ) error {
-	if err := plan.RequireLegacyCollations(p); err != nil {
-		return err
-	}
 	features, err := requiredRemotePipelineExpressionFeatures(p)
 	if err != nil {
 		return err
@@ -2302,6 +2299,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.NativePADCollation && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion119) {
+		return moerr.NewNotSupportedNoCtx("native PAD collation requires MORPC protocol version 119")
 	}
 	if features.TableCollationFunction && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
 		return moerr.NewNotSupportedNoCtx("internal table collation requires MORPC protocol version 118")
@@ -2971,8 +2971,7 @@ func convertToResultPos(relList, colList []int32) []colexec.ResultPos {
 	return res
 }
 
-// func decodeBatch(proc *process.Process, data []byte) (*batch.Batch, error) {
-func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
+func decodeBatch(mp *mpool.MPool, data []byte, proc *process.Process) (*batch.Batch, error) {
 	bat := batch.NewOffHeapEmpty()
 	if err := bat.UnmarshalBinaryForPipeline(data, mp); err != nil {
 		bat.Clean(mp)
@@ -2982,9 +2981,20 @@ func decodeBatch(mp *mpool.MPool, data []byte) (*batch.Batch, error) {
 	// about to enter execution. Its opaque vectors need their own admission.
 	for _, vec := range bat.Vecs {
 		if vec != nil {
-			if err := plan.RequireLegacyCollations(vec.GetType().PlanType()); err != nil {
+			typ := vec.GetType().PlanType()
+			if err := plan.RequireExecutableCollations(typ); err != nil {
 				bat.Clean(mp)
 				return nil, err
+			}
+			if plan.HasNativePADCollation(typ) {
+				if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{NativePADCollation: true}); err != nil {
+					bat.Clean(mp)
+					return nil, err
+				}
+				if err := vec.ValidateCollationValues(); err != nil {
+					bat.Clean(mp)
+					return nil, err
+				}
 			}
 		}
 	}

@@ -367,12 +367,14 @@ type BaseOptimizer struct {
 }
 
 type ViewData struct {
-	Stmt                string
-	DefaultDatabase     string
-	SQLMode             *string          `json:"sql_mode,omitempty"`
-	SecurityType        string           `json:"security_type,omitempty"`
-	LowerCaseTableNames *int64           `json:"lower_case_table_names,omitempty"`
-	Dependencies        []ViewDependency `json:"dependencies,omitempty"`
+	// 缺失marker的历史SQL始终使用revision 0重绑定；非零代际必须显式获准。
+	CollationBindingRevision uint32 `json:"collation_binding_revision,omitempty"`
+	Stmt                     string
+	DefaultDatabase          string
+	SQLMode                  *string          `json:"sql_mode,omitempty"`
+	SecurityType             string           `json:"security_type,omitempty"`
+	LowerCaseTableNames      *int64           `json:"lower_case_table_names,omitempty"`
+	Dependencies             []ViewDependency `json:"dependencies,omitempty"`
 	// RequiredProtocolVersion records the minimum protocol needed to bind the
 	// persisted view expression on a local CN. It is a defense-in-depth marker;
 	// cluster admission remains the authoritative old-CN re-entry fence.

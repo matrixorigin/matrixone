@@ -158,7 +158,7 @@ func (c *Compile) Compile(
 			return err
 		}
 	}
-	if err = plan.RequireLegacyCollations(queryPlan); err != nil {
+	if err = plan.RequireExecutableCollations(queryPlan); err != nil {
 		return err
 	}
 	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {

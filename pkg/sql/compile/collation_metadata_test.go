@@ -44,8 +44,8 @@ func TestCollationMetadataRemoteBatchAdmission(t *testing.T) {
 	data, err := source.MarshalBinaryForPipeline(new(bytes.Buffer), true, true)
 	require.NoError(t, err)
 	before := mp.CurrNB()
-	decoded, err := decodeBatch(mp, data)
-	require.ErrorContains(t, err, "disabled")
+	decoded, err := decodeBatch(mp, data, nil)
+	require.ErrorContains(t, err, "version 119")
 	require.Nil(t, decoded)
 	require.Equal(t, before, mp.CurrNB(), "rejection must release all decoded columns")
 }

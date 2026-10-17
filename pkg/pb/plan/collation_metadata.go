@@ -71,6 +71,61 @@ func (t *IndexDef) ValidateCollation() error {
 	return collation.ValidateKeyFormat(t.KeyFormat)
 }
 
+type collationVisitMode uint8
+
+const (
+	legacyCollationAdmission collationVisitMode = iota
+	executableCollationAdmission
+	collationFeatureCollection
+)
+
+// HasNativePADCollation 识别需要新执行协议的原生general-ci/bin文本类型。
+// 合法metadata、可执行性、可持久化性是三个不同边界。
+func HasNativePADCollation(value Type) bool {
+	if value.CollationVersion != uint32(collation.RevisionV1) ||
+		(value.Charset != uint32(collation.UTF8MB4GeneralCIIdentity) && value.Charset != uint32(collation.UTF8MB4BinIdentity)) {
+		return false
+	}
+	switch value.Id {
+	case planCharTypeID, planVarcharTypeID, planBlobTypeID, planTextTypeID:
+		return true
+	default:
+		return false
+	}
+}
+
+func (v *legacyCollationVisitor) checkType(value Type) error {
+	native := false
+	if v.mode != legacyCollationAdmission {
+		native = HasNativePADCollation(value)
+		v.features.NativePADCollation = v.features.NativePADCollation || native
+	}
+	if v.mode == collationFeatureCollection {
+		return nil
+	}
+	if v.mode == executableCollationAdmission && native {
+		return value.ValidateCollation()
+	}
+	return requireLegacyType(value)
+}
+
+func (v *legacyCollationVisitor) checkTable(value *TableDef) error {
+	if v.mode == collationFeatureCollection {
+		v.features.NativePADCollation = v.features.NativePADCollation || HasNativePADCollation(Type{
+			Id: planVarcharTypeID, Charset: value.DefaultCharset, CollationVersion: value.CollationVersion,
+		})
+		return nil
+	}
+	return requireLegacyTable(value)
+}
+
+func (v *legacyCollationVisitor) checkIndex(table *TableDef, index *IndexDef) error {
+	if v.mode == collationFeatureCollection {
+		return nil
+	}
+	return requireLegacyTableIndex(table, index)
+}
+
 func requireLegacyType(value Type) error {
 	if err := value.ValidateCollation(); err != nil {
 		return err
@@ -273,7 +328,16 @@ func requireLegacyTableIndex(table *TableDef, index *IndexDef) error {
 // between planner publication and direct compilation is checked again.
 // Byte payloads remain opaque and are admitted by their actual decode owner.
 func RequireLegacyCollations(owner any) error {
-	visitor := legacyCollationVisitor{}
+	return walkCollationMetadata(owner, &legacyCollationVisitor{mode: legacyCollationAdmission})
+}
+
+// RequireExecutableCollations 仅用于已受协议保护的执行入口，不替代catalog、
+// DDL和物理key的严格准入；调用方仍须独立验证source/destination/receiver能力。
+func RequireExecutableCollations(owner any) error {
+	return walkCollationMetadata(owner, &legacyCollationVisitor{mode: executableCollationAdmission})
+}
+
+func walkCollationMetadata(owner any, visitor *legacyCollationVisitor) error {
 	if handled, err := visitor.typed(owner); handled {
 		return err
 	}
@@ -307,29 +371,33 @@ func RequireLegacyCollations(owner any) error {
 		// Foreign wrappers retain their admission boundary. Only metadata
 		// structs are boxed here; scalar fields and opaque bytes are not.
 		if v.Kind() == reflect.Struct && v.CanInterface() &&
-			(v.Type() == reflect.TypeOf(Type{}) || v.Type() == reflect.TypeOf(TableDef{}) || v.Type() == reflect.TypeOf(IndexDef{})) {
+			(v.Type() == reflect.TypeOf(Type{}) || v.Type() == reflect.TypeOf(TableDef{}) ||
+				v.Type() == reflect.TypeOf(IndexDef{}) || v.Type() == reflect.TypeOf(Expr{})) {
 			switch value := v.Interface().(type) {
 			case Type:
-				return requireLegacyType(value)
+				return visitor.checkType(value)
+			case Expr:
+				return visitor.walkExpr(&value)
 			case TableDef:
 				return visitor.walkTableDef(&value)
 			case IndexDef:
-				if err := collation.RequireLegacy(0, 0, value.KeyFormat); err != nil {
+				if err := visitor.checkIndex(nil, &value); err != nil {
 					return err
 				}
 			}
 		}
 		switch v.Kind() {
 		case reflect.Struct:
-			for i := 0; i < v.NumField(); i++ {
-				if v.Type().Field(i).PkgPath == "" {
-					if err := walk(v.Field(i)); err != nil {
+			for i, fields := 0, v.NumField(); i < fields; i++ {
+				child := v.Field(i)
+				if child.CanInterface() && expressionOwnerContainer(child.Kind()) {
+					if err := walk(child); err != nil {
 						return err
 					}
 				}
 			}
 		case reflect.Slice, reflect.Array:
-			if v.Type().Elem().Kind() == reflect.Uint8 {
+			if !expressionOwnerContainer(v.Type().Elem().Kind()) {
 				return nil
 			}
 			for i := 0; i < v.Len(); i++ {
@@ -338,6 +406,9 @@ func RequireLegacyCollations(owner any) error {
 				}
 			}
 		case reflect.Map:
+			if !expressionOwnerContainer(v.Type().Elem().Kind()) {
+				return nil
+			}
 			iter := v.MapRange()
 			for iter.Next() {
 				if err := walk(iter.Value()); err != nil {

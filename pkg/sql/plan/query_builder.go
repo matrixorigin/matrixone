@@ -12251,6 +12251,11 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
+	restoreCollationBinding, err := enterPersistedCollationBinding(builder.compCtx, viewData.CollationBindingRevision)
+	if err != nil {
+		return 0, err
+	}
+	defer restoreCollationBinding()
 	if viewData.RequiredProtocolVersion != nil {
 		if *viewData.RequiredProtocolVersion < 0 {
 			return 0, moerr.NewInvalidInput(

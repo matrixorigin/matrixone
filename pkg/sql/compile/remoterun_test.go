@@ -2995,7 +2995,7 @@ func Test_decodeBatch(t *testing.T) {
 	bat.SetRowCount(1)
 	data, err := types.Encode(bat)
 	require.Nil(t, err)
-	_, err = decodeBatch(mp, data)
+	_, err = decodeBatch(mp, data, nil)
 	require.Nil(t, err)
 }
 
@@ -3012,7 +3012,7 @@ func Test_decodeBatchPreservesPrepareParamKindTransportTrailer(t *testing.T) {
 	bat.SetRowCount(2)
 	data, err := bat.MarshalBinaryWithPrepareParamKinds(&bytes.Buffer{}, true)
 	require.NoError(t, err)
-	decoded, err := decodeBatch(mp, data)
+	decoded, err := decodeBatch(mp, data, nil)
 	require.NoError(t, err)
 	require.Equal(t, vector.PrepareParamFloat, decoded.Vecs[0].GetPrepareParamKindAt(0))
 	require.Equal(t, vector.PrepareParamNone, decoded.Vecs[0].GetPrepareParamKindAt(1))

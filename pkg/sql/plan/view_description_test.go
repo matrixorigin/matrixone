@@ -39,6 +39,140 @@ func TestViewMetadataUdfRebindFlagSurvivesPlanCopyAndWire(t *testing.T) {
 	require.True(t, decoded.GetViewMetadataDependsOnUdf())
 }
 
+type viewCollationBindingContext struct {
+	*MockCompilerContext
+	revisions []any
+}
+
+func (c *viewCollationBindingContext) Resolve(database, table string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
+	c.revisions = append(c.revisions, c.GetContext().Value(collationBindingRevisionKey{}))
+	return c.MockCompilerContext.Resolve(database, table, snapshot)
+}
+
+func TestPersistedViewCollationBindingScope(t *testing.T) {
+	ctx := &viewCollationBindingContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t))}
+	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
+	outer := context.WithValue(t.Context(), collationBindingRevisionKey{}, uint32(1))
+	ctx.SetContext(outer)
+	for _, marked := range []bool{false, true} {
+		for _, badColumn := range []bool{false, true} {
+			column := "n_name"
+			if badColumn {
+				column = "missing_column"
+			}
+			fields := map[string]any{"Stmt": "create view cv as select " + column + " collate utf8mb4_general_ci as v from nation", "DefaultDatabase": "tpch"}
+			if marked {
+				fields["collation_binding_revision"] = 0
+			}
+			payload, err := json.Marshal(fields)
+			require.NoError(t, err)
+			for _, reader := range []string{"describe", "regenerate", "expand"} {
+				t.Run(fmt.Sprintf("%s/marker=%t/bad=%t", reader, marked, badColumn), func(t *testing.T) {
+					before := len(ctx.revisions)
+					switch reader {
+					case "describe":
+						var columns []*planpb.ColDef
+						columns, err = DescribeViewColumns(ctx, string(payload))
+						if err == nil {
+							require.Zero(t, columns[0].Typ.CollationVersion)
+						}
+					case "regenerate":
+						var result *RegeneratedViewDefinition
+						result, err = RegenerateViewDefinition(ctx, string(payload))
+						if err == nil {
+							var generated map[string]json.RawMessage
+							require.NoError(t, json.Unmarshal([]byte(result.TableDef.ViewSql.View), &generated))
+							_, present := generated["collation_binding_revision"]
+							require.Equal(t, marked, present, "regeneration不得升级历史marker")
+							require.Zero(t, result.TableDef.Cols[0].Typ.CollationVersion)
+						}
+					case "expand":
+						builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
+						_, err = builder.bindView(NewBindContext(builder, nil),
+							&TableDef{ViewSql: &planpb.ViewDef{View: string(payload)}}, nil, &ObjectRef{}, "tpch", "cv", nil)
+					}
+					if badColumn {
+						require.Error(t, err)
+					} else {
+						require.NoError(t, err)
+					}
+					require.Greater(t, len(ctx.revisions), before)
+					for _, revision := range ctx.revisions[before:] {
+						require.Equal(t, uint32(0), revision)
+					}
+					require.Same(t, outer, ctx.GetContext(), "成功和失败都须恢复外层绑定来源")
+				})
+			}
+		}
+	}
+	for _, revision := range []uint32{1, 2, ^uint32(0)} {
+		data, err := json.Marshal(ViewData{Stmt: "create view cv as select 1", CollationBindingRevision: revision})
+		require.NoError(t, err)
+		_, err = DescribeViewColumns(ctx, string(data))
+		require.ErrorContains(t, err, "collation binding revision")
+		_, err = RegenerateViewDefinition(ctx, string(data))
+		require.ErrorContains(t, err, "collation binding revision")
+		builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, false)
+		_, err = builder.bindView(NewBindContext(builder, nil), &TableDef{ViewSql: &planpb.ViewDef{View: string(data)}},
+			nil, &ObjectRef{}, "tpch", "cv", nil)
+		require.ErrorContains(t, err, "collation binding revision")
+		require.Same(t, outer, ctx.GetContext())
+	}
+	// 嵌套作用域保留父代际，并完整恢复nil来源，不依赖全局状态。
+	ctx.SetContext(nil)
+	restoreOuter, err := enterPersistedCollationBinding(ctx, 0)
+	require.NoError(t, err)
+	legacy := ctx.GetContext()
+	restoreInner, err := enterPersistedCollationBinding(ctx, 0)
+	require.NoError(t, err)
+	restoreInner()
+	require.Same(t, legacy, ctx.GetContext())
+	restoreOuter()
+	require.Nil(t, ctx.GetContext())
+}
+
+func TestNestedPersistedViewCollationBindingRestoresOnFailure(t *testing.T) {
+	ctx := &viewCollationBindingContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t))}
+	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
+	outer := context.WithValue(t.Context(), collationBindingRevisionKey{}, uint32(1))
+	ctx.SetContext(outer)
+	innerSQL := `{"Stmt":"create view inner_cv as select n_name collate utf8mb4_general_ci as v from nation","DefaultDatabase":"tpch"}`
+	inner, err := RegenerateViewDefinition(ctx, innerSQL)
+	require.NoError(t, err)
+	// 模拟真实catalog reader，而不是尚未安装到catalog的DDL定义。
+	inner.TableDef.TableType = catalog.SystemViewRel
+	ctx.tables["inner_cv"] = inner.TableDef
+	ctx.objects["inner_cv"] = &ObjectRef{SchemaName: "tpch", ObjName: "inner_cv"}
+	const outerSQL = `{"Stmt":"create view outer_cv as select v from inner_cv","DefaultDatabase":"tpch"}`
+	for _, revision := range []uint32{0, 1} {
+		var data ViewData
+		require.NoError(t, json.Unmarshal([]byte(innerSQL), &data))
+		data.CollationBindingRevision = revision
+		payload, err := json.Marshal(data)
+		require.NoError(t, err)
+		inner.TableDef.ViewSql.View = string(payload)
+		for _, regenerate := range []bool{false, true} {
+			before := len(ctx.revisions)
+			if regenerate {
+				_, err = RegenerateViewDefinition(ctx, outerSQL)
+			} else {
+				_, err = DescribeViewColumns(ctx, outerSQL)
+			}
+			if revision == 0 {
+				require.NoError(t, err)
+				require.GreaterOrEqual(t, len(ctx.revisions), before+2, "必须真正展开inner View至nation")
+			} else {
+				require.ErrorContains(t, err, "collation binding revision")
+			}
+			require.Same(t, outer, ctx.GetContext())
+			require.Greater(t, len(ctx.revisions), before)
+			for _, bound := range ctx.revisions[before:] {
+				require.Equal(t, uint32(0), bound)
+			}
+		}
+	}
+}
+
 func TestDescribeViewColumnsUsesCurrentDefinition(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }

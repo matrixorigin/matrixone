@@ -151,6 +151,11 @@ func DescribeViewColumns(ctx CompilerContext, persistedViewData string) ([]*plan
 		return nil, err
 	}
 	defer parsed.free()
+	restoreCollationBinding, err := enterPersistedCollationBinding(parsed.ctx, parsed.data.CollationBindingRevision)
+	if err != nil {
+		return nil, err
+	}
+	defer restoreCollationBinding()
 	inferred, err := inferViewColumns(
 		parsed.ctx, parsed.selectStmt, parsed.columnNames, parsed.database, parsed.name, false)
 	if err != nil {
@@ -184,6 +189,9 @@ func parsePersistedViewDefinition(
 ) (*parsedViewDefinition, error) {
 	var viewData ViewData
 	if err := json.Unmarshal([]byte(persistedViewData), &viewData); err != nil {
+		return nil, err
+	}
+	if err := persistedCollationBindingRevision(ctx.GetContext(), viewData.CollationBindingRevision); err != nil {
 		return nil, err
 	}
 	if viewData.RequiredProtocolVersion != nil {
@@ -264,6 +272,11 @@ func RegenerateViewDefinition(
 		return nil, err
 	}
 	defer parsed.free()
+	restoreCollationBinding, err := enterPersistedCollationBinding(parsed.ctx, parsed.data.CollationBindingRevision)
+	if err != nil {
+		return nil, err
+	}
+	defer restoreCollationBinding()
 	tableDef, err := genViewTableDef(
 		parsed.ctx, parsed.selectStmt, parsed.columnNames, parsed.database, parsed.name, false)
 	if err != nil {

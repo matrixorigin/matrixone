@@ -1110,7 +1110,7 @@ func TestMessageReceiverSendBatchPreservesGrouping(t *testing.T) {
 	}
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(
 		func(_ context.Context, message any) error {
-			decoded, err := decodeBatch(mp, message.(*pipeline.Message).Data)
+			decoded, err := decodeBatch(mp, message.(*pipeline.Message).Data, nil)
 			require.NoError(t, err)
 			defer decoded.Clean(mp)
 			require.Equal(t, 2, decoded.Vecs[0].GetGrouping().Count())

@@ -23,6 +23,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestValidateCollationValues(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	var absent *Vector
+	require.NoError(t, absent.ValidateCollationValues())
+	for _, charset := range []uint8{2, 3} {
+		raw := types.NewWithCharset(types.T_varchar, 8, 0, charset)
+		native := raw
+		native.CollationVersion = 1
+		for _, constant := range []bool{false, true} {
+			var vec *Vector
+			var err error
+			if constant {
+				vec, err = NewConstBytes(raw, []byte{0xff}, 17, mp)
+			} else {
+				vec = NewVec(raw)
+				err = AppendBytes(vec, []byte{0xff}, false, mp)
+			}
+			require.NoError(t, err)
+			require.NoError(t, vec.ValidateCollationValues(), "legacy保持raw")
+			vec.SetType(native)
+			require.ErrorContains(t, vec.ValidateCollationValues(), "UTF-8")
+			require.Equal(t, []byte{0xff}, vec.GetBytesAt(0), "校验不改写原值")
+			vec.Free(mp)
+		}
+		vec := NewVec(native)
+		require.NoError(t, vec.ValidateCollationValues())
+		require.NoError(t, AppendBytes(vec, []byte("é "), false, mp))
+		require.NoError(t, AppendBytes(vec, nil, true, mp))
+		require.NoError(t, vec.ValidateCollationValues())
+		vec.Free(mp)
+		vec = NewConstNull(native, 17, mp)
+		require.NoError(t, vec.ValidateCollationValues())
+		invalid := native
+		invalid.CollationVersion = 2
+		vec.SetType(invalid)
+		require.Error(t, vec.ValidateCollationValues(), "all-NULL不掩盖非法执行域")
+		vec.Free(mp)
+	}
+}
+
 func TestAppendBytesRejectsInvalidNativeUnicodeValue(t *testing.T) {
 	mp := mpool.MustNewZero()
 	unicode := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
