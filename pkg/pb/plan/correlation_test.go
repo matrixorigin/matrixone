@@ -50,6 +50,10 @@ func correlationTestQuery() *Query {
 
 func TestCorrelationPlanRoundTrip(t *testing.T) {
 	q := correlationTestQuery()
+	q.RoutineDependencies = []*RoutinePlanDependency{{
+		FunctionRef: &FunctionRef{FunctionId: 11, Revision: 3},
+		Language:    "python",
+	}}
 	require.NoError(t, q.ValidateCorrelation())
 	data, err := q.Marshal()
 	require.NoError(t, err)
@@ -57,6 +61,11 @@ func TestCorrelationPlanRoundTrip(t *testing.T) {
 	require.NoError(t, decoded.Unmarshal(data))
 	require.NoError(t, decoded.ValidateCorrelation())
 	require.True(t, proto.Equal(q, decoded))
+	require.Equal(t, uint64(3), decoded.RoutineDependencies[0].FunctionRef.Revision)
+	features, err := RequiredRemoteExpressionFeatures(decoded)
+	require.NoError(t, err)
+	require.True(t, features.DependentPrograms)
+	require.True(t, features.Any())
 	require.Equal(t, int32(0), decoded.MainOutputStep())
 	require.Equal(t, int32(1), (&Query{Steps: []int32{0, 1}}).MainOutputStep())
 	require.Equal(t, int32(-1), (*Query)(nil).MainOutputStep())
