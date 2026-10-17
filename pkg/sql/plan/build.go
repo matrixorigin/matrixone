@@ -18,6 +18,7 @@ import (
 	"context"
 	"reflect"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 	"time"
 
@@ -947,8 +948,9 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		columns := make([]*ColDef, len(lastNode.ProjectList))
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
-				Name: query.Headings[idx],
-				Typ:  expr.Typ,
+				Name:             query.Headings[idx],
+				Typ:              expr.Typ,
+				ResultColumnKind: resultColumnKind(query, query.Steps[step], expr),
 			}
 
 			if exprCol, ok := expr.Expr.(*plan.Expr_Col); ok {
@@ -1019,6 +1021,429 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 		}
 	}
 	return nil
+}
+
+// resultColumnKind records expression provenance independently from source and
+// key metadata.  DISTINCT and set-operation nodes can intentionally discard
+// origin information even when they still carry a stored column through the
+// result, so callers must not use empty origin fields as an expression test.
+func resultColumnKind(query *plan.Query, nodeID int32, expr *plan.Expr) plan.ResultColumnKind {
+	if expr == nil {
+		return plan.ResultColumnKind_RESULT_COLUMN_KIND_UNKNOWN
+	}
+	if expr.GetCol() == nil {
+		return plan.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED
+	}
+	if resultColumnIndexSearchScore(query, nodeID, expr) {
+		return plan.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED
+	}
+	if findResultColumnSource(query, nodeID, expr) != nil {
+		return plan.ResultColumnKind_RESULT_COLUMN_KIND_STORED
+	}
+	if resultColumnExpressionIsComputed(query, nodeID, expr, make(map[[3]int32]bool)) {
+		return plan.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED
+	}
+	return plan.ResultColumnKind_RESULT_COLUMN_KIND_STORED
+}
+
+// resultColumnIndexSearchScore identifies the synthetic distance column emitted
+// by an index-search scan.  It is computed by the search operator even though
+// it is represented as a column reference in the projection, so retry metadata
+// must not treat it as an ordinary stored column.
+func resultColumnIndexSearchScore(query *plan.Query, nodeID int32, expr *plan.Expr) bool {
+	if query == nil || expr == nil || expr.GetCol() == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	return resultColumnIndexSearchScoreAtNode(
+		query, nodeID, expr.GetCol(), make(map[int32]bool), false,
+	)
+}
+
+// resultColumnIndexSearchScoreAtNode follows the same relation/child routing
+// as result-column source lookup.  Searching every child of a join is wrong:
+// a result containing a stored column from the left side must not become
+// COMPUTED merely because the right side also has a synthetic score slot.
+func resultColumnIndexSearchScoreAtNode(
+	query *plan.Query,
+	nodeID int32,
+	ref *plan.ColRef,
+	visited map[int32]bool,
+	preferLocal bool,
+) bool {
+	if query == nil || ref == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || visited[nodeID] {
+		return false
+	}
+	visited[nodeID] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	if node.NodeType == plan.Node_INDEX_SEARCH_SCAN {
+		projected := resultColumnProjectionAtNode(node, ref, preferLocal)
+		if projected != nil && projected.GetCol() != nil {
+			ref = projected.GetCol()
+		}
+		if node.TableDef == nil || ref.ColPos < 0 || int(ref.ColPos) >= len(node.TableDef.GetCols()) {
+			return false
+		}
+		col := node.TableDef.GetCols()[ref.ColPos]
+		return col != nil && strings.EqualFold(col.Name, "score")
+	}
+	if len(node.Children) == 0 || isResultColumnSourceNode(node.NodeType) {
+		return false
+	}
+
+	projected := resultColumnProjectionByIdentity(node, ref)
+	projectedRef := ref
+	if node.NodeType == plan.Node_JOIN {
+		route := resultColumnRouteAtJoin(query, node, ref, preferLocal)
+		if route.computed {
+			return false
+		}
+		projected, projectedRef = route.projected, route.ref
+		if route.childIdx >= 0 {
+			if route.childExpr != nil && route.childExpr.GetCol() == nil {
+				return false
+			}
+			return resultColumnIndexSearchScoreAtNode(
+				query, node.Children[route.childIdx], projectedRef,
+				cloneVisitedResultColumnNodes(visited), false,
+			)
+		}
+	} else if projected != nil && projected.GetCol() != nil {
+		projectedRef = projected.GetCol()
+	}
+
+	if projected == nil || projected.GetCol() == nil {
+		return false
+	}
+	found := false
+	for _, childID := range node.Children {
+		if resultColumnIndexSearchScoreAtNode(
+			query, childID, projectedRef,
+			cloneVisitedResultColumnNodes(visited), false,
+		) {
+			if found {
+				// An unresolved/ambiguous route is not enough to widen a
+				// native stored column's wire metadata.
+				return false
+			}
+			found = true
+		}
+	}
+	return found
+}
+
+// resultColumnExpressionIsComputed follows output projections through the
+// relational nodes that can hide source metadata.  It deliberately returns
+// false when a column reference cannot be resolved: retaining native BOOLEAN
+// metadata is safer than widening it merely because provenance was pruned.
+func resultColumnExpressionIsComputed(
+	query *plan.Query,
+	nodeID int32,
+	expr *plan.Expr,
+	visited map[[3]int32]bool,
+) bool {
+	return resultColumnExpressionIsComputedAtNode(query, nodeID, expr, visited, false)
+}
+
+// resultColumnExpressionIsComputedAtNode carries whether expr was already
+// selected from the current node's projection by its parent.  A WINDOW node
+// normally receives a local output slot, but once that slot has been resolved
+// to a projection expression its ColRef is the expression's source identity.
+// Treating that source ColPos as another local WINDOW slot can move to a
+// neighboring window result in a stacked-window plan.
+func resultColumnExpressionIsComputedAtNode(
+	query *plan.Query,
+	nodeID int32,
+	expr *plan.Expr,
+	visited map[[3]int32]bool,
+	projectionResolved bool,
+) bool {
+	if expr == nil {
+		return false
+	}
+	if visited == nil {
+		visited = make(map[[3]int32]bool)
+	}
+	if expr.GetCol() == nil {
+		// A window expression is owned by the WINDOW node rather than by the
+		// projection slot that happens to carry its result.  Preserve the
+		// distinction between a window over a stored BOOLEAN and a window over
+		// a computed predicate; both are represented by a synthetic output slot.
+		if expr.GetW() != nil {
+			return resultColumnWindowExpressionIsComputed(query, nodeID, expr.GetW(), visited)
+		}
+		return true
+	}
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) {
+		return false
+	}
+	ref := expr.GetCol()
+	key := [3]int32{nodeID, ref.RelPos, ref.ColPos}
+	if visited[key] {
+		return false
+	}
+	visited[key] = true
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	if node.NodeType == plan.Node_JOIN {
+		// A JOIN projection addresses exactly one child output. Never use the
+		// same ordinal in both children: a predicate on one side must not widen
+		// a stored BOOLEAN on the other side after DISTINCT removes key origin.
+		route := resultColumnRouteAtJoin(query, node, ref, false)
+		if route.computed {
+			return true
+		}
+		if route.childIdx < 0 {
+			return false
+		}
+		childExpr := route.childExpr
+		if childExpr == nil {
+			childExpr = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: route.ref}}
+		}
+		return resultColumnExpressionIsComputedAtNode(
+			query, node.Children[route.childIdx], childExpr, visited, route.childExpr != nil,
+		)
+	}
+
+	// DISTINCT is represented by an AGG node. Its output projection contains
+	// grouping-slot references (RelPos == -1), while the expression that
+	// defines each slot lives in GroupBy. Follow that definition before using
+	// the child projection; otherwise a computed grouping expression such as
+	// `flag IS NULL` is mistaken for the stored column it reads.
+	if node.NodeType == plan.Node_AGG && ref.RelPos == -1 && ref.ColPos >= 0 &&
+		int(ref.ColPos) < len(node.GroupBy) {
+		groupExpr := node.GroupBy[ref.ColPos]
+		if groupExpr == nil {
+			return false
+		}
+		if groupExpr.GetCol() == nil {
+			return true
+		}
+		// A grouping expression can itself be a reference to a synthetic
+		// WINDOW output (for example DISTINCT MAX(...) OVER (...)).  Resolve
+		// that reference through the child plan before falling back to the
+		// aggregate's input projection.  The latter would select the stored
+		// BOOLEAN argument and lose the computed-window provenance.
+		for _, childID := range node.Children {
+			if resultColumnExpressionIsComputedInChild(
+				query, childID, groupExpr,
+				cloneVisitedResultColumnExpressions(visited),
+			) {
+				return true
+			}
+		}
+		return false
+	}
+	// Aggregate output slots use a different negative relation position
+	// (RelPos == -2) and are defined by AggList rather than the child
+	// projection.  Following the child for these slots would classify an
+	// aggregate over a predicate (for example MIN(n IS NULL)) as the stored
+	// BOOLEAN input, causing the wire metadata to be advertised as BIT.
+	if node.NodeType == plan.Node_AGG && ref.RelPos == -2 && ref.ColPos >= 0 &&
+		int(ref.ColPos) < len(node.AggList) {
+		aggExpr := node.AggList[ref.ColPos]
+		if aggExpr != nil && aggExpr.GetCol() == nil {
+			return true
+		}
+	}
+
+	projected, projectIndex := resultColumnProjectionWithIndex(node, ref)
+	if node.NodeType == plan.Node_WINDOW && !projectionResolved {
+		// A reference received from a parent PROJECT addresses this node's
+		// output slot.  Prefer that local ordinal over matching the defining
+		// source ColRef: stacked WINDOW nodes can expose an earlier passthrough
+		// expression with the same source identity as a later synthetic result.
+		// Using identity first would route MAX(predicate) to that stored sibling.
+		projected, projectIndex = resultColumnWindowProjectionWithIndex(node, ref)
+	}
+	if projected != nil {
+		if projected.GetCol() == nil {
+			return true
+		}
+		if node.NodeType == plan.Node_WINDOW && projectIndex >= 0 {
+			// WINDOW keeps the child projection first and appends one synthetic
+			// slot for each WinSpecList entry.  The synthetic slot's ColRef is
+			// deliberately not enough to identify the expression that produced
+			// it, so resolve it through the owning window specification instead
+			// of following the same ordinal in the child projection.
+			inputProjectCount := len(node.ProjectList) - len(node.WinSpecList)
+			windowIndex := projectIndex - inputProjectCount
+			if inputProjectCount >= 0 && windowIndex >= 0 && windowIndex < len(node.WinSpecList) {
+				return resultColumnWindowExpressionIsComputed(
+					query, nodeID, node.WinSpecList[windowIndex].GetW(), visited,
+				)
+			}
+		}
+		ref = projected.GetCol()
+	}
+
+	if isResultColumnSourceNode(node.NodeType) {
+		// A scan projection that remains a column reference is a stored value.
+		// Expressions in scan projections are computed values.
+		return false
+	}
+	if len(node.Children) == 0 {
+		return false
+	}
+
+	for _, childID := range node.Children {
+		childExpr := projected
+		child := query.Nodes[childID]
+		if child != nil && child.NodeType == plan.Node_JOIN {
+			// ref identifies the child's output slot, not this node's projection
+			// ordinal. Resolve that boundary once before routing to a JOIN side.
+			if resultColumnExpressionIsComputedInChild(query, childID,
+				&plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: ref}}, visited) {
+				return true
+			}
+			continue
+		}
+		resolvedByWindowSlot := false
+		if child != nil && child.NodeType == plan.Node_WINDOW {
+			// A WINDOW child is addressed by its local output slot.  Resolving
+			// by the source identity first can select an earlier stored sibling
+			// that happens to carry the same ColRef as a later synthetic result.
+			if childProjected, _ := resultColumnWindowProjectionWithIndex(child, ref); childProjected != nil {
+				childExpr = childProjected
+				resolvedByWindowSlot = true
+			}
+		}
+		if child != nil && !resolvedByWindowSlot && projectIndex >= 0 && projectIndex < len(child.ProjectList) {
+			childExpr = child.ProjectList[projectIndex]
+			if child.NodeType == plan.Node_WINDOW {
+				resolvedByWindowSlot = true
+			}
+		}
+		if childExpr == nil {
+			childExpr = &plan.Expr{Typ: expr.Typ, Expr: &plan.Expr_Col{Col: ref}}
+		}
+		if resultColumnExpressionIsComputedAtNode(query, childID, childExpr, visited, resolvedByWindowSlot) {
+			return true
+		}
+	}
+	return false
+}
+
+func resultColumnExpressionIsComputedInChild(
+	query *plan.Query,
+	childID int32,
+	expr *plan.Expr,
+	visited map[[3]int32]bool,
+) bool {
+	if query != nil && childID >= 0 && int(childID) < len(query.Nodes) && expr != nil && expr.GetCol() != nil {
+		child := query.Nodes[childID]
+		if child != nil && child.NodeType == plan.Node_JOIN {
+			route := resultColumnRouteAtJoin(query, child, expr.GetCol(), len(child.BindingTags) == 0)
+			if route.projected != nil {
+				expr = route.projected
+			}
+		}
+	}
+	return resultColumnExpressionIsComputed(query, childID, expr, visited)
+}
+
+// resultColumnWindowExpressionIsComputed classifies the value produced by a
+// WINDOW node's own WindowSpec.  A value-preserving window over a direct column
+// retains the source column's native metadata, while an aggregate, predicate,
+// or any other expression widens BOOLEAN to the numeric wire representation
+// used for computed results.
+func resultColumnWindowExpressionIsComputed(
+	query *plan.Query,
+	nodeID int32,
+	spec *plan.WindowSpec,
+	visited map[[3]int32]bool,
+) bool {
+	if spec == nil || spec.WindowFunc == nil {
+		return true
+	}
+	if ref := spec.WindowFunc.GetCol(); ref != nil {
+		if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+			return false
+		}
+		for _, childID := range query.Nodes[nodeID].Children {
+			if resultColumnExpressionIsComputedInChild(query, childID, spec.WindowFunc, cloneVisitedResultColumnExpressions(visited)) {
+				return true
+			}
+		}
+		return false
+	}
+	fn := spec.WindowFunc.GetF()
+	if fn == nil {
+		return true
+	}
+	if len(fn.Args) == 0 {
+		return true
+	}
+	// Only value-preserving window functions may retain the native metadata of
+	// a direct BOOLEAN input.  Aggregate windows such as MIN/MAX still compute
+	// a new value even when their argument is a stored column.
+	fnName := ""
+	if fn.Func != nil {
+		fnName = strings.ToLower(fn.Func.GetObjName())
+	}
+	switch fnName {
+	case "first_value", "last_value", "nth_value", "lag", "lead":
+	default:
+		return true
+	}
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+		return true
+	}
+	arg := fn.Args[0]
+	if arg == nil || arg.GetCol() == nil {
+		return true
+	}
+	for _, childID := range query.Nodes[nodeID].Children {
+		if resultColumnExpressionIsComputedInChild(query, childID, arg, cloneVisitedResultColumnExpressions(visited)) {
+			return true
+		}
+	}
+	return false
+}
+
+func cloneVisitedResultColumnExpressions(visited map[[3]int32]bool) map[[3]int32]bool {
+	clone := make(map[[3]int32]bool, len(visited)+1)
+	for key, seen := range visited {
+		clone[key] = seen
+	}
+	return clone
+}
+
+func resultColumnProjectionWithIndex(node *plan.Node, ref *plan.ColRef) (*plan.Expr, int) {
+	if node == nil || ref == nil {
+		return nil, -1
+	}
+	for i, expr := range node.ProjectList {
+		if expr == nil || expr.GetCol() == nil {
+			continue
+		}
+		if resultColumnRefsHaveSamePosition(ref, expr.GetCol()) || resultColumnRefsMatchByName(ref, expr.GetCol()) {
+			return expr, i
+		}
+	}
+	if ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		return node.ProjectList[ref.ColPos], int(ref.ColPos)
+	}
+	return nil, -1
+}
+
+// resultColumnWindowProjectionWithIndex resolves a reference received while
+// descending into a WINDOW node.  At that boundary ColPos is the child's
+// output slot; it must not be treated as the source-column identity embedded
+// in one of the child's passthrough expressions.  Identity/name matching is
+// retained only for plans that do not carry a valid local slot.
+func resultColumnWindowProjectionWithIndex(node *plan.Node, ref *plan.ColRef) (*plan.Expr, int) {
+	if node == nil || ref == nil {
+		return nil, -1
+	}
+	if ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		return node.ProjectList[ref.ColPos], int(ref.ColPos)
+	}
+	return resultColumnProjectionWithIndex(node, ref)
 }
 
 type resultColumnSource struct {
@@ -1164,30 +1589,11 @@ func findResultColumnSourceAtJoin(
 		return nil
 	}
 
-	projectedRef := ref
-	childIdx := -1
-	projected := resultColumnProjectionByIdentity(node, ref)
-	if preferLocal && ref.RelPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
-		projected = node.ProjectList[ref.ColPos]
+	route := resultColumnRouteAtJoin(query, node, ref, preferLocal)
+	if route.computed || route.childExpr != nil && route.childExpr.GetCol() == nil {
+		return nil
 	}
-	if projected != nil {
-		if col := projected.GetCol(); col != nil {
-			projectedRef = col
-			// JOIN ProjectList entries use RelPos 0/1 to identify the
-			// corresponding child and ColPos to identify that child's output
-			// slot. This is a local remapping, not a source-table position.
-			if projectedRef.RelPos >= 0 && int(projectedRef.RelPos) < len(node.Children) {
-				childIdx = int(projectedRef.RelPos)
-				if childRef := resultColumnJoinChildProjectionRef(query, node, childIdx, projectedRef.ColPos); childRef != nil {
-					projectedRef = childRef
-				}
-			}
-		}
-	}
-
-	if childIdx < 0 {
-		childIdx = resultColumnJoinChildByBinding(query, node, projectedRef)
-	}
+	projectedRef, childIdx := route.ref, route.childIdx
 	if childIdx >= 0 && childIdx < len(node.Children) {
 		candidate := findResultColumnSourceAtNode(
 			query,
@@ -1224,12 +1630,75 @@ func findResultColumnSourceAtJoin(
 	return resultColumnSourceAfterJoin(found, node, foundChild)
 }
 
+type resultColumnJoinRoute struct {
+	projected *plan.Expr
+	ref       *plan.ColRef
+	childIdx  int
+	childExpr *plan.Expr
+	// computed belongs to the JOIN itself, rather than to a forwarded input.
+	computed bool
+}
+
+// resultColumnRouteAtJoin owns the JOIN projection contract for origin/key,
+// synthetic-score and computed-value provenance. A local JOIN output first
+// resolves through ProjectList; its ColRef then identifies one child by RelPos
+// and one output of that child by ColPos. Preserve the full child expression
+// so value provenance can follow computations without restoring key metadata.
+func resultColumnRouteAtJoin(query *plan.Query, node *plan.Node, ref *plan.ColRef, preferLocal bool) resultColumnJoinRoute {
+	route := resultColumnJoinRoute{ref: ref, childIdx: -1}
+	if query == nil || node == nil || ref == nil {
+		return route
+	}
+	route.projected = resultColumnProjectionByIdentity(node, ref)
+	if preferLocal && ref.RelPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+		route.projected = node.ProjectList[ref.ColPos]
+	}
+	if route.projected != nil {
+		route.ref = route.projected.GetCol()
+		if route.ref == nil {
+			route.computed = true
+			return route
+		}
+	}
+	// insertMarkJoin owns one boolean marker at (bindingTag,0), remapped by
+	// remapAllColRefs to (-1,0). It has no child source. Check the JOIN's own
+	// reference before following a child: a forwarded AGG grouping slot may
+	// also use (-1,0), but is still a stored value rather than this marker.
+	if node.JoinType == plan.Node_MARK && route.ref.ColPos == 0 &&
+		(route.ref.RelPos == -1 || slices.Contains(node.BindingTags, route.ref.RelPos)) {
+		route.computed = true
+		return route
+	}
+	if route.projected != nil {
+		if col := route.ref; col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+			route.childIdx = int(col.RelPos)
+			route.childExpr = resultColumnJoinChildProjection(query, node, route.childIdx, col.ColPos)
+			if childRef := route.childExpr.GetCol(); childRef != nil {
+				route.ref = childRef
+			}
+		}
+	}
+	if route.childIdx < 0 {
+		route.childIdx = resultColumnJoinChildByBinding(query, node, route.ref)
+	}
+	return route
+}
+
 func resultColumnJoinChildProjectionRef(
 	query *plan.Query,
 	node *plan.Node,
 	childIdx int,
 	colPos int32,
 ) *plan.ColRef {
+	return resultColumnJoinChildProjection(query, node, childIdx, colPos).GetCol()
+}
+
+func resultColumnJoinChildProjection(
+	query *plan.Query,
+	node *plan.Node,
+	childIdx int,
+	colPos int32,
+) *plan.Expr {
 	if query == nil || node == nil || childIdx < 0 || childIdx >= len(node.Children) || colPos < 0 {
 		return nil
 	}
@@ -1241,7 +1710,7 @@ func resultColumnJoinChildProjectionRef(
 	if int(colPos) >= len(child.ProjectList) {
 		return nil
 	}
-	return child.ProjectList[colPos].GetCol()
+	return child.ProjectList[colPos]
 }
 
 func resultColumnJoinChildByBinding(query *plan.Query, node *plan.Node, ref *plan.ColRef) int {
