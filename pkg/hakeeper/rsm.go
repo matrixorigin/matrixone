@@ -538,34 +538,23 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	}
 
 	s.state.Term = b.Term
-	acknowledged := s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing
-	commands := b.Commands
-	if acknowledged {
+	if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 		if s.state.ScheduleCommands == nil {
 			s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 		}
 	} else {
-		// Only unresolved TN starts survive legacy batch replacement. Apply
-		// admission and bootstrap effects to incoming work, never carried work.
-		incoming := make([]pb.ScheduleCommand, 0, len(commands))
-		for _, c := range commands {
-			if s.catalogScheduleObsolete(c) {
-				continue
-			}
-			if c.Bootstrapping {
-				s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
-			}
-			incoming = append(incoming, c)
-		}
-		commands = mergeLegacyTNStarts(s.state.ScheduleCommands, incoming)
+		// Preserve the legacy replacement contract until the cluster-wide
+		// capability transition has entered its preparation barrier.
 		s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 	}
-	for _, c := range commands {
-		// Legacy incoming work was already filtered before normalization.
-		if acknowledged && s.catalogScheduleObsolete(c) {
+	for _, c := range b.Commands {
+		// Reject terminally obsolete work at its only admission boundary.
+		// Cleanup and recovery remain defense in depth for commands accepted
+		// by an older binary or made stale while already queued.
+		if s.catalogScheduleObsolete(c) {
 			continue
 		}
-		if acknowledged && c.Bootstrapping {
+		if c.Bootstrapping {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
 		}
 		if c.DeleteCNStore != nil {
@@ -583,10 +572,10 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 			l = pb.CommandBatch{
 				Commands: make([]pb.ScheduleCommand, 0),
 			}
-			if acknowledged {
+			if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 				l.BatchID = s.state.Index
 			}
-		} else if acknowledged {
+		} else if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 			if ensureScheduleCommandIDs(&l, s.state.Index) {
 				s.state.ScheduleCommands[c.UUID] = l
 			}
@@ -613,75 +602,13 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 		}
 		plog.Infof("adding schedule command to hakeeper rsm: %s", c.LogString())
 		l.Commands = append(l.Commands, c)
-		if acknowledged {
+		if s.state.CommandDeliveryEnabled || s.state.CommandDeliveryPreparing {
 			l.CommandIDs = append(l.CommandIDs, nextScheduleCommandID(l, s.state.Index))
 		}
 		s.state.ScheduleCommands[c.UUID] = l
 	}
 
 	return sm.Result{}
-}
-
-// mergeLegacyTNStarts carries unresolved TN starts through unrelated checker
-// batches. Accepted command order is authoritative; a later placement, local
-// removal or shutdown must revoke an older start before it can be replayed.
-func mergeLegacyTNStarts(previous map[string]pb.CommandBatch, incoming []pb.ScheduleCommand) []pb.ScheduleCommand {
-	var commands []pb.ScheduleCommand
-	var discarded []bool
-	starts := make(map[uint64]int)
-	appendCommand := func(cmd pb.ScheduleCommand) {
-		if cmd.ServiceType == pb.TNService {
-			if cmd.ShutdownStore != nil {
-				for shard, index := range starts {
-					if commands[index].UUID == cmd.UUID {
-						discarded[index] = true
-						delete(starts, shard)
-					}
-				}
-			}
-			if change := cmd.ConfigChange; change != nil {
-				shard := change.Replica.ShardID
-				if index, ok := starts[shard]; ok {
-					replace := change.ChangeType == pb.StartReplica || change.ChangeType == pb.AddReplica
-					remove := change.ChangeType == pb.StopReplica || change.ChangeType == pb.RemoveReplica
-					if replace || (remove && commands[index].UUID == cmd.UUID) {
-						discarded[index] = true
-						delete(starts, shard)
-					}
-				}
-				if change.ChangeType == pb.StartReplica {
-					starts[shard] = len(commands)
-				}
-			}
-		}
-		commands = append(commands, cmd)
-		discarded = append(discarded, false)
-	}
-
-	// Stable traversal also gives old snapshots with duplicate intents the same
-	// normalization on every HAKeeper replica.
-	stores := make([]string, 0, len(previous))
-	for uuid := range previous {
-		stores = append(stores, uuid)
-	}
-	sort.Strings(stores)
-	for _, uuid := range stores {
-		for _, cmd := range previous[uuid].Commands {
-			if cmd.ServiceType == pb.TNService && cmd.ConfigChange != nil && cmd.ConfigChange.ChangeType == pb.StartReplica {
-				appendCommand(cmd)
-			}
-		}
-	}
-	for _, cmd := range incoming {
-		appendCommand(cmd)
-	}
-	kept := commands[:0]
-	for index, cmd := range commands {
-		if !discarded[index] {
-			kept = append(kept, cmd)
-		}
-	}
-	return kept
 }
 
 type scheduleCommandIDKey struct {
@@ -880,7 +807,7 @@ func (s *stateMachine) getCommandBatchFiltered(
 			if s.catalogScheduleObsolete(cmd) {
 				continue
 			}
-			retryable, applied := s.legacyReplicaStartCommandStatus(cmd)
+			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
 			if applied {
 				continue
 			}
@@ -1026,24 +953,6 @@ func (s *stateMachine) getCommandBatchWithAck(uuid string, ack uint64) sm.Result
 		panic(err)
 	}
 	return sm.Result{Data: data}
-}
-
-// legacyReplicaStartCommandStatus uses a started-shard report to finish TN
-// intent when no transport ACK is available. Modern delivery keeps its separate
-// ACK contract in bootstrapReplicaCommandStatus.
-func (s *stateMachine) legacyReplicaStartCommandStatus(cmd pb.ScheduleCommand) (retryable, applied bool) {
-	if cmd.ServiceType != pb.TNService || cmd.ConfigChange == nil || cmd.ConfigChange.ChangeType != pb.StartReplica {
-		return s.bootstrapReplicaCommandStatus(cmd)
-	}
-	for _, current := range s.state.TNState.Stores[cmd.UUID].Shards {
-		if current.ShardID == cmd.ConfigChange.Replica.ShardID {
-			// A different replica ID cancels obsolete intent: TN LoadOrStore
-			// cannot replace an existing local shard, and the checker accepts
-			// its started report. This is not an exact replica acknowledgement.
-			return true, true
-		}
-	}
-	return true, false
 }
 
 // bootstrapReplicaCommandStatus returns whether a bootstrap command must be

@@ -1031,16 +1031,8 @@ func TestScheduleCommandReadIsStableUntilHeartbeatDelivery(t *testing.T) {
 	require.NoError(t, delivered.Unmarshal(result.Data))
 	require.Equal(t, *readBatch, delivered)
 	_, ok = rsm.state.ScheduleCommands[command.UUID]
-	require.True(t, ok, "legacy TN intent survives heartbeat delivery until a started report")
-	heartbeat, err = (&pb.TNStoreHeartbeat{
-		UUID:   command.UUID,
-		Shards: []pb.TNShardInfo{{ShardID: command.ConfigChange.Replica.ShardID}},
-	}).Marshal()
-	require.NoError(t, err)
-	_, err = rsm.Update(sm.Entry{Index: 44, Cmd: GetTNStoreHeartbeatCmd(heartbeat)})
-	require.NoError(t, err)
-	_, ok = rsm.state.ScheduleCommands[command.UUID]
-	require.False(t, ok, "the started-shard report retires the legacy intent")
+	require.False(t, ok,
+		"mixed HAKeeper versions keep legacy consumption even for a new TN")
 }
 
 func TestTickAssignsIDsToLegacyScheduleCommandBatchesOnce(t *testing.T) {

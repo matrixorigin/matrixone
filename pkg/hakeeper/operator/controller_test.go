@@ -82,3 +82,19 @@ func TestRemoveFinishedOperator(t *testing.T) {
 	c.RemoveFinishedOperator(logState, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
 	assert.Equal(t, []*Operator(nil), c.GetOperators(1))
 }
+
+func TestDispatchRegisteredOperatorDoesNotDuplicateOwnership(t *testing.T) {
+	c := NewController()
+	op := NewOperator("", 2, NoopEpoch, AddTnReplica{StoreID: "tn", ShardID: 2, ReplicaID: 10, LogShardID: 1})
+	for i := 0; i < 3; i++ {
+		commands := c.Dispatch([]*Operator{op}, pb.LogState{}, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
+		assert.Len(t, commands, 1)
+		assert.Equal(t, []*Operator{op}, c.GetOperators(2))
+	}
+	op.Cancel()
+	assert.Empty(t, c.Dispatch([]*Operator{op}, pb.LogState{}, pb.TNState{}, pb.CNState{}, pb.ProxyState{}))
+	// Passing no fresh operations never implicitly replays log/removal commands.
+	other := NewOperator("", 3, NoopEpoch, RemoveTnReplica{StoreID: "tn", ShardID: 3, ReplicaID: 11})
+	c.Dispatch([]*Operator{other}, pb.LogState{}, pb.TNState{Stores: map[string]pb.TNStoreInfo{"tn": {Shards: []pb.TNShardInfo{{ShardID: 3, ReplicaID: 11}}}}}, pb.CNState{}, pb.ProxyState{})
+	assert.Empty(t, c.Dispatch(nil, pb.LogState{}, pb.TNState{}, pb.CNState{}, pb.ProxyState{}))
+}
