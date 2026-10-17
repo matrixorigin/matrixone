@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -247,6 +248,113 @@ func TestGetResultColumnsFromPlanPreservesBooleanExpressionKind(t *testing.T) {
 			require.Equal(t, tc.kind, cols[0].ResultColumnKind)
 		})
 	}
+}
+
+func TestGetResultColumnsFromPlanPreservesJoinedBooleanProvenance(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, barrier := range []string{"distinct", "group by"} {
+		for _, nativeSide := range []string{"a", "b"} {
+			for _, join := range []string{"cross join", "inner join", "left join", "right join"} {
+				for _, projection := range []string{"a.v, b.v", "b.v, a.v"} {
+					for _, outerDistinct := range []bool{false, true} {
+						name := fmt.Sprintf("%s/native_%s/%s/%s/distinct_%t", barrier, nativeSide, join, projection, outerDistinct)
+						t.Run(name, func(t *testing.T) {
+							derived := func(side string) string {
+								expr := "role_id is null"
+								if side == nativeSide {
+									expr = "with_grant_option"
+								}
+								if barrier == "distinct" {
+									return "(select distinct " + expr + " as v from mo_catalog.mo_role_privs) " + side
+								}
+								return "(select " + expr + " as v from mo_catalog.mo_role_privs group by " + expr + ") " + side
+							}
+							sql := "select "
+							if outerDistinct {
+								sql += "distinct "
+							}
+							sql += projection + " from " + derived("a") + " " + join + " " + derived("b")
+							if join != "cross join" {
+								sql += " on a.v = b.v"
+							}
+							p, err := runOneStmt(mock, t, sql)
+							require.NoError(t, err)
+							columns := GetResultColumnsFromPlan(p)
+							require.Len(t, columns, 2)
+							firstSide := "a"
+							if projection == "b.v, a.v" {
+								firstSide = "b"
+							}
+							for i, column := range columns {
+								native := (firstSide == nativeSide) == (i == 0)
+								want := planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED
+								if native {
+									want = planpb.ResultColumnKind_RESULT_COLUMN_KIND_STORED
+								}
+								require.Equal(t, want, column.ResultColumnKind, "column %d: %s", i, sql)
+								// Value provenance crosses these barriers, but key/origin
+								// metadata must not be restored through DISTINCT/GROUP BY.
+								require.Empty(t, column.OriginName)
+								require.False(t, column.Primary)
+								require.False(t, column.Unique)
+							}
+						})
+					}
+				}
+			}
+		}
+	}
+}
+
+func TestResultColumnJoinRouteUsesOwningChildOutput(t *testing.T) {
+	col := func(rel, pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: rel, ColPos: pos}}}
+	}
+	leftValue := col(-1, 3)
+	rightValue := col(-1, 5)
+	query := &planpb.Query{Nodes: []*planpb.Node{
+		{NodeType: planpb.Node_AGG, ProjectList: []*planpb.Expr{leftValue}, BindingTags: []int32{7}},
+		{NodeType: planpb.Node_AGG, ProjectList: []*planpb.Expr{col(-1, 0), rightValue}, BindingTags: []int32{8}},
+		{
+			NodeType: planpb.Node_JOIN, Children: []int32{0, 1},
+			ProjectList: []*planpb.Expr{col(1, 1), col(0, 0)},
+		},
+	}}
+	join := query.Nodes[2]
+	for _, tc := range []struct {
+		name        string
+		ref         *planpb.ColRef
+		preferLocal bool
+		child       int
+		expr        *planpb.Expr
+	}{
+		{"first output is right child slot one", col(0, 0).GetCol(), true, 1, rightValue},
+		{"second output is left child slot zero", col(0, 1).GetCol(), true, 0, leftValue},
+		{"resolved source identity is not another output slot", col(0, 0).GetCol(), false, 0, leftValue},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			route := resultColumnRouteAtJoin(query, join, tc.ref, tc.preferLocal)
+			require.Equal(t, tc.child, route.childIdx)
+			require.Same(t, tc.expr, route.childExpr)
+			require.Same(t, tc.expr.GetCol(), route.ref)
+		})
+	}
+
+	// Before local JOIN remapping, binding tags identify the owning input.
+	join.ProjectList = nil
+	ref := col(8, 1).GetCol()
+	route := resultColumnRouteAtJoin(query, join, ref, false)
+	require.Equal(t, 1, route.childIdx)
+	require.Same(t, ref, route.ref)
+	require.Nil(t, route.childExpr)
+
+	// Preserve a child's defining expression, not merely ColRef-only origin.
+	computed := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{}}}
+	query.Nodes[1].ProjectList[1] = computed
+	join.ProjectList = []*planpb.Expr{col(1, 1)}
+	route = resultColumnRouteAtJoin(query, join, col(0, 0).GetCol(), true)
+	require.Equal(t, 1, route.childIdx)
+	require.Same(t, computed, route.childExpr)
 }
 
 func TestGetResultColumnsFromPlanPreservesStoredBooleanBesideWindowResult(t *testing.T) {

@@ -25,3 +25,24 @@ java -cp "$probe_classes:$CONNECTOR_JAR" WindowBooleanMetadataProbe
 Set `DB_URL`, `DB_USER`, `DB_PASSWORD`, and `CONNECTOR_JAR` to override the
 defaults. The probe uses bounded connection/query waits and drops its temporary
 table before exiting.
+
+## JOIN projection routing
+
+`JoinBooleanMetadataProbe.java` covers DISTINCT/GROUP BY on both JOIN inputs,
+stored BOOLEAN on either side, reordered outputs, outer DISTINCT, and
+CROSS/INNER/LEFT/RIGHT JOIN. It checks prepare-time and executed metadata,
+actual Java value classes, NULL extension, and exact row multisets. All 64 SQL
+shapes run in Statement, client-prepared, and verified server-prepared mode
+(192 cases); server-prepared fallback is disabled.
+
+Compile and run it with Connector/J 8.4.0 and `tinyInt1isBit=true`:
+
+```sh
+probe_classes=$(mktemp -d "${TMPDIR:-/tmp}/join-boolean-jdbc.XXXXXX")
+javac -cp "$CONNECTOR_JAR" -d "$probe_classes" \
+  test/manual/issue30191/JoinBooleanMetadataProbe.java
+java -cp "$probe_classes:$CONNECTOR_JAR" JoinBooleanMetadataProbe
+```
+
+The same `DB_URL`, `DB_USER`, and `DB_PASSWORD` overrides apply. This probe
+creates a uniquely named database and drops only that database on exit.

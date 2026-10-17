@@ -2720,6 +2720,72 @@ func TestStackedWindowBooleanResultsKeepMixedOutputOrder(t *testing.T) {
 	}
 }
 
+func TestJoinedBooleanResultsKeepWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "distinct cross join",
+			sql: "select a.v, b.v from " +
+				"(select distinct with_grant_option v from mo_catalog.mo_role_privs) a cross join " +
+				"(select distinct role_id is null v from mo_catalog.mo_role_privs) b",
+		},
+		{
+			name: "grouped left join",
+			sql: "select a.v, b.v from " +
+				"(select with_grant_option v from mo_catalog.mo_role_privs group by with_grant_option) a left join " +
+				"(select role_id is null v from mo_catalog.mo_role_privs group by role_id is null) b on a.v = b.v",
+		},
+		{
+			name: "outer distinct right join",
+			sql: "select distinct a.v, b.v from " +
+				"(select distinct with_grant_option v from mo_catalog.mo_role_privs) a right join " +
+				"(select distinct role_id is null v from mo_catalog.mo_role_privs) b on a.v = b.v",
+		},
+	} {
+		for _, reordered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/reordered_%t", tc.name, reordered), func(t *testing.T) {
+				sql := tc.sql
+				lengths := []uint32{boolColumnLength, 8}
+				if reordered {
+					sql = strings.Replace(sql, "a.v, b.v", "b.v, a.v", 1)
+					lengths = []uint32{8, boolColumnLength}
+				}
+				queryPlan, err := buildSingleSql(mock, t, sql)
+				require.NoError(t, err)
+				columns := plan.GetResultColumnsFromPlan(queryPlan)
+				require.Len(t, columns, 2)
+				proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+				for i, colDef := range columns {
+					column, err := colDef2MysqlColumn(t.Context(), colDef)
+					require.NoError(t, err)
+					for _, cmd := range []int{int(COM_QUERY), int(COM_STMT_PREPARE)} {
+						packet := proto.makeColumnDefinition41Payload(column, cmd)
+						pos := HeaderOffset
+						for range 6 {
+							_, next, ok := proto.readStringLenEnc(packet, pos)
+							require.True(t, ok)
+							pos = next
+						}
+						_, pos, ok := proto.io.ReadUint8(packet, pos)
+						require.True(t, ok)
+						_, pos, ok = proto.io.ReadUint16(packet, pos)
+						require.True(t, ok)
+						length, pos, ok := proto.io.ReadUint32(packet, pos)
+						require.True(t, ok)
+						require.Equal(t, lengths[i], length, "column %d, command %d", i, cmd)
+						typ, _, ok := proto.io.ReadUint8(packet, pos)
+						require.True(t, ok)
+						require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+					}
+				}
+			})
+		}
+	}
+}
+
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {
 	cases := []struct {
 		name     string
