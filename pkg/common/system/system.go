@@ -16,7 +16,6 @@ package system
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"os"
 	"path/filepath"
@@ -39,8 +38,6 @@ var (
 	pid int
 	// cpuNum is the total number of CPU of this node.
 	cpuNum atomic.Int32
-	// memoryTotal is the total memory of this node.
-	memoryTotal atomic.Uint64
 	// cpuUsage is the CPU statistics updated every second.
 	cpuUsage atomic.Uint64
 
@@ -74,23 +71,29 @@ func CPUAvailable() float64 {
 	return math.Round((1 - usage) * float64(cpuNum.Load()))
 }
 
-// MemoryTotal returns the total size of memory of this node.
+// MemoryTotal returns the effective sizing capacity, including inherited soft
+// limits. For paired usage/limit diagnostics use CurrentMemoryDomain: a binding
+// ancestor may have less headroom but a larger capacity than this sizing bound.
 func MemoryTotal() uint64 {
-	return memoryTotal.Load()
+	snapshot, _ := CurrentMemoryDomain()
+	if !snapshot.Measured {
+		return 0
+	}
+	return NormalizeMemoryCapacity(snapshot.CapacityLimit())
 }
 
-// CgroupMemoryLimit returns the memory limit for the current process cgroup,
+// CgroupMemoryLimit returns the tightest hard limit from the published domain,
 // including when the process is not PID 1 (for example a systemd scope or a
 // nested container cgroup). Zero means unavailable.
 func CgroupMemoryLimit() uint64 {
-	if limit := hierarchicalCgroupMemoryLimit(pid); limit > 0 {
-		return limit
-	}
-	limit, err := cgroup.GetMemLimit(pid)
-	if err != nil {
+	snapshot, _ := CurrentMemoryDomain()
+	if !snapshot.Measured || !snapshot.IsCgroup() {
 		return 0
 	}
-	return normalizeCgroupLimit(limit)
+	if snapshot.HardCapacity > 0 {
+		return NormalizeMemoryCapacity(snapshot.HardCapacity)
+	}
+	return NormalizeMemoryCapacity(snapshot.Limit)
 }
 
 // NormalizeMemoryCapacity maps a raw memory-capacity reading onto the value
@@ -122,62 +125,6 @@ func normalizeCgroupLimit(limit int64) uint64 {
 		return 0
 	}
 	return NormalizeMemoryCapacity(uint64(limit))
-}
-
-func hierarchicalCgroupMemoryLimit(pid int) uint64 {
-	cgroupData, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
-	if err != nil {
-		return 0
-	}
-	mountData, err := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
-	if err != nil {
-		return 0
-	}
-
-	v2Path := ""
-	v1MemoryPath := ""
-	for _, line := range strings.Split(string(cgroupData), "\n") {
-		parts := strings.SplitN(line, ":", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		if parts[0] == "0" && parts[1] == "" {
-			v2Path = parts[2]
-		}
-		for _, controller := range strings.Split(parts[1], ",") {
-			if controller == "memory" {
-				v1MemoryPath = parts[2]
-			}
-		}
-	}
-
-	for _, line := range strings.Split(string(mountData), "\n") {
-		leftRight := strings.SplitN(line, " - ", 2)
-		if len(leftRight) != 2 {
-			continue
-		}
-		left := strings.Fields(leftRight[0])
-		right := strings.Fields(leftRight[1])
-		if len(left) < 5 || len(right) < 3 {
-			continue
-		}
-		mountRoot, mountPoint, fsType := left[3], left[4], right[0]
-		switch fsType {
-		case "cgroup2":
-			if v2Path != "" {
-				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v2Path); ok {
-					return minHierarchicalLimit(dir, mountPoint, "memory.max")
-				}
-			}
-		case "cgroup":
-			if v1MemoryPath != "" && strings.Contains(","+right[2]+",", ",memory,") {
-				if dir, ok := cgroupDirectory(mountPoint, mountRoot, v1MemoryPath); ok {
-					return minHierarchicalLimit(dir, mountPoint, "memory.limit_in_bytes")
-				}
-			}
-		}
-	}
-	return 0
 }
 
 func cgroupDirectory(mountPoint, mountRoot, processPath string) (string, bool) {
@@ -404,21 +351,14 @@ func minHierarchicalLimit(dir, mountPoint, filename string) uint64 {
 	return minimum
 }
 
-// MemoryAvailable returns the available size of memory of this node.
+// MemoryAvailable returns raw charged headroom at the binding admission level.
+// It excludes cache credit and is saturated when usage exceeds a lowered limit.
 func MemoryAvailable() uint64 {
-	if InContainer() {
-		used, err := cgroup.GetMemUsage(pid)
-		if err != nil {
-			logutil.Errorf("failed to get memory usage: %v", err)
-			return 0
-		}
-		return memoryTotal.Load() - uint64(used)
+	snapshot, _ := CurrentMemoryDomain()
+	if !snapshot.Measured || snapshot.Used >= snapshot.AdmissionLimit() {
+		return 0
 	}
-	mem, err := hostMemoryStats()
-	if err != nil {
-		logutil.Errorf("failed to get memory stats: %v", err)
-	}
-	return mem.Free
+	return snapshot.AdmissionLimit() - snapshot.Used
 }
 
 // MemoryAvailableIncludingCache returns memory that could be allocated on this
@@ -461,20 +401,14 @@ func MemoryAvailableIncludingCache() (avail uint64, measured bool) {
 	return snapshot.AdmissionReclaimableHeadroom(), true
 }
 
+// MemoryUsed returns the charge of the binding level, not an RSS estimate or a
+// usage reading taken separately from the immutable admission snapshot.
 func MemoryUsed() uint64 {
-	if InContainer() {
-		used, err := cgroup.GetMemUsage(pid)
-		if err != nil {
-			logutil.Errorf("failed to get memory usage: %v", err)
-			return 0
-		}
-		return uint64(used)
+	snapshot, _ := CurrentMemoryDomain()
+	if !snapshot.Measured {
+		return 0
 	}
-	mem, err := hostMemoryStats()
-	if err != nil {
-		logutil.Errorf("failed to get memory stats: %v", err)
-	}
-	return mem.Used
+	return snapshot.Used
 }
 
 // MemoryGolang returns the total size of golang's memory.
@@ -639,15 +573,6 @@ func shouldRefreshQuotaConfig() bool {
 	return now-last >= int64(quotaRefreshDebounceSeconds)*int64(time.Second)
 }
 
-func hostMemoryTotal() (uint64, bool) {
-	mem, err := hostMemoryStats()
-	if err != nil {
-		logutil.Errorf("failed to get host memory stats: %v", err)
-		return 0, false
-	}
-	return mem.Total, true
-}
-
 func effectiveContainerMemoryTotal(limit int64, hostTotal uint64) uint64 {
 	if normalized := normalizeCgroupLimit(limit); normalized > 0 {
 		return normalized
@@ -670,34 +595,13 @@ func refreshQuotaConfig() {
 				cpuNum.Store(int32(runtime.NumCPU()))
 			}
 		}
-		limit, err := cgroup.GetMemLimit(pid)
-		if err != nil {
-			logutil.Errorf("failed to get cgroup mem limit: %v", err)
-			if total, ok := hostMemoryTotal(); ok {
-				if normalized := NormalizeMemoryCapacity(total); normalized > 0 {
-					memoryTotal.Store(normalized)
-				}
-			}
-		} else {
-			if normalized := normalizeCgroupLimit(limit); normalized > 0 {
-				memoryTotal.Store(normalized)
-			} else {
-				// An unlimited cgroup is not a 9.2 EB machine. Keep the host
-				// capacity as the total so automatic consumers still have a
-				// finite sizing input; CgroupMemoryLimit independently remains
-				// zero and therefore does not impose a bound.
-				if total, ok := hostMemoryTotal(); ok {
-					if effective := effectiveContainerMemoryTotal(limit, total); effective > 0 {
-						memoryTotal.Store(effective)
-					}
-				}
-			}
-		}
 	} else {
 		cpuNum.Store(int32(runtime.NumCPU()))
-		if total, ok := hostMemoryTotal(); ok {
-			memoryTotal.Store(total)
-		}
+	}
+	// Quota watchers refresh the same fact source as admission and reporting;
+	// memory discovery is independent of the PID-1 CPU accounting heuristic.
+	if _, err := RefreshMemoryDomain(); err != nil {
+		logutil.Errorf("failed to refresh memory domain: %v", err)
 	}
 }
 

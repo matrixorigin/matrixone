@@ -31,6 +31,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func newTestMemThrottler(name string, rate float64, options ...MemThrottlerOption) RSCThrottler {
+	return NewMemThrottler(name, rate, append([]MemThrottlerOption{WithIsolatedMemoryAdmissionForTesting()}, options...)...)
+}
+
+func TestNewMemThrottlerSharesPhysicalOwnerByDefault(t *testing.T) {
+	owner := NewMemThrottler("default-owner-test", 0.9).(*memThrottler)
+	require.Same(t, system.DefaultMemoryAdmissionBudget(), owner.memoryLedger)
+}
+
+func TestSharedPhysicalOwnerReplacesIndependentRSSAndCgroupVetoes(t *testing.T) {
+	const gib = int64(1 << 30)
+	for _, acquire := range []func(*memThrottler, int64) (int64, bool){defaultAcquirePolicy, AcquirePolicyForCNFlushS3, AcquirePolicyForDataBranch} {
+		ledger := system.NewMemoryAdmissionBudgetWithProvider(system.MemoryDomainReservePolicy{
+			MinimumBytes: uint64(gib), ObservedNonGoMultiplier: 1,
+		}, func() (system.MemoryDomainSnapshot, error) {
+			return system.MemoryDomainSnapshot{Used: uint64(95 * gib), Limit: uint64(100 * gib),
+				Source: system.MemoryDomainSourceCgroupV2, Measured: true}, nil
+		})
+		owner := &memThrottler{memoryLedger: ledger, cgroupBudget: &cgroupMemoryBudget{}}
+		owner.cgroupBudget.sample.Store(&cgroupMemorySample{usage: 100 * gib, limit: 100 * gib, cgroup: true})
+		owner.limit.Store(80 * gib)
+		owner.actualTotalMemory.Store(uint64(100 * gib))
+		owner.rss.Store(99 * gib) // stale legacy views must not constitute a second physical owner
+		_, ok := acquire(owner, 2*gib)
+		require.True(t, ok)
+		require.Equal(t, uint64(2*gib), ledger.Reserved())
+		_, ok = acquire(owner, 3*gib)
+		require.False(t, ok, "the shared physical gate still prevents overspending")
+		owner.Release(2 * gib)
+		require.Zero(t, ledger.Reserved())
+	}
+}
+
 func TestFullRefreshPreservesSharedBudgetOnLimitFailure(t *testing.T) {
 	oldLimit, oldTotal, oldUsage := getCgroupMemoryLimit, getHostTotalMemory, getCgroupMemoryUsage
 	t.Cleanup(func() {
@@ -271,8 +304,8 @@ func TestCgroupBudgetConcurrentOwnersAndRefresh(t *testing.T) {
 }
 
 func TestProductionThrottlersShareCgroupOwner(t *testing.T) {
-	a := NewMemThrottler("test-a", 0.8).(*memThrottler)
-	b := NewMemThrottler("test-b", 0.8).(*memThrottler)
+	a := newTestMemThrottler("test-a", 0.8).(*memThrottler)
+	b := newTestMemThrottler("test-b", 0.8).(*memThrottler)
 	require.Same(t, &processCgroupBudget, a.cgroupBudget)
 	require.Same(t, a.cgroupBudget, b.cgroupBudget)
 }
@@ -626,7 +659,7 @@ func TestMemThrottlerPressureUsesCgroupUsage(t *testing.T) {
 
 func TestBasic(t *testing.T) {
 	t.Run("A", func(t *testing.T) {
-		throttler := NewMemThrottler("TestBasic", 1)
+		throttler := newTestMemThrottler("TestBasic", 1)
 
 		throttler.PrintUsage()
 		avail1 := throttler.Available()
@@ -647,7 +680,7 @@ func TestBasic(t *testing.T) {
 	t.Run("B", func(t *testing.T) {
 		total := int64(mpool.KB)
 
-		throttler := NewMemThrottler(
+		throttler := newTestMemThrottler(
 			"TestBasic",
 			1,
 			WithConstLimit(total),
@@ -684,7 +717,7 @@ func TestBasic(t *testing.T) {
 }
 
 func TestParallel(t *testing.T) {
-	throttler := NewMemThrottler("TestParallel", 50.0/100.0)
+	throttler := newTestMemThrottler("TestParallel", 50.0/100.0)
 
 	throttler.PrintUsage()
 	available := throttler.Available()
@@ -722,7 +755,7 @@ func TestParallel(t *testing.T) {
 }
 
 func BenchmarkThrottler(b *testing.B) {
-	throttler := NewMemThrottler("BenchmarkThrottler", 50.0/100.0)
+	throttler := newTestMemThrottler("BenchmarkThrottler", 50.0/100.0)
 
 	for i := 0; i < b.N; i++ {
 		throttler.Acquire(10)

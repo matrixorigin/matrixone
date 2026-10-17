@@ -3225,7 +3225,10 @@ func Test_mce(t *testing.T) {
 		}).AnyTimes()
 		txnOperator := mock_frontend.NewMockTxnOperator(ctrl)
 		txnOperator.EXPECT().Txn().Return(txn.TxnMeta{}).AnyTimes()
-		eng.EXPECT().Database(ctx, gomock.Any(), txnOperator).Return(nil, nil).AnyTimes()
+		eng.EXPECT().Database(gomock.Any(), gomock.Any(), txnOperator).DoAndReturn(func(actual context.Context, _ string, _ txnclient.TxnOperator) (engine.Database, error) {
+			require.Equal(t, ctx.Value(defines.TenantIDKey{}), actual.Value(defines.TenantIDKey{}))
+			return nil, nil
+		}).AnyTimes()
 
 		txnOperator.EXPECT().Commit(gomock.Any()).Return(nil).AnyTimes()
 		txnOperator.EXPECT().Rollback(gomock.Any()).Return(nil).AnyTimes()
@@ -3370,8 +3373,14 @@ func Test_mce(t *testing.T) {
 			select_2.EXPECT().Run(gomock.Any()).Return(nil, nil).AnyTimes()
 			select_2.EXPECT().GetLoadTag().Return(false).AnyTimes()
 			select_2.EXPECT().GetColumns(gomock.Any()).Return(self_handle_sql_columns[i], nil).AnyTimes()
-			select_2.EXPECT().RecordExecPlan(ctx, nil).Return(nil).AnyTimes()
-			select_2.EXPECT().RecordCompoundStmt(ctx, statistic.StatsArray{}).Return(nil).AnyTimes()
+			select_2.EXPECT().RecordExecPlan(gomock.Any(), nil).DoAndReturn(func(actual context.Context, _ *plan.Plan) error {
+				require.Equal(t, ctx.Value(defines.TenantIDKey{}), actual.Value(defines.TenantIDKey{}))
+				return nil
+			}).AnyTimes()
+			select_2.EXPECT().RecordCompoundStmt(gomock.Any(), statistic.StatsArray{}).DoAndReturn(func(actual context.Context, _ statistic.StatsArray) error {
+				require.Equal(t, ctx.Value(defines.TenantIDKey{}), actual.Value(defines.TenantIDKey{}))
+				return nil
+			}).AnyTimes()
 			select_2.EXPECT().Clear().AnyTimes()
 			select_2.EXPECT().Free().AnyTimes()
 			select_2.EXPECT().Plan().Return(&plan.Plan{}).AnyTimes()

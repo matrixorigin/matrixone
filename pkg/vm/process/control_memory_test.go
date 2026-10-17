@@ -107,6 +107,62 @@ func TestControlMemoryContextCanBeClearedAtNextStatement(t *testing.T) {
 	require.False(t, HasControlMemoryAdmission(WithControlMemoryAdmission(ctx, false)))
 }
 
+func TestControlExecutionBorrowsStatementAdmissionWithoutSecondSlot(t *testing.T) {
+	b, _ := controlTestBudget(t, 0)
+	ctx, entry, err := b.physicalLedger.EnterStatement(t.Context(), true)
+	require.NoError(t, err)
+	g, err := b.openControlProcessGenerationWithEntry(1, 1<<30, 0, true, b.physicalLedger.StatementControlMemory(ctx))
+	require.NoError(t, err)
+	require.NotNil(t, g.controlMemory)
+	require.Equal(t, uint64(1), b.physicalLedger.Snapshot().ControlActive)
+	require.NoError(t, g.AcquireAllocationCapacity(120))
+	g.Close()
+	child, err := b.openControlProcessGenerationWithEntry(2, 1<<30, 0, true, b.physicalLedger.StatementControlMemory(ctx))
+	require.NoError(t, err)
+	require.NoError(t, child.AcquireAllocationCapacity(8), "a nested generation must not close its caller's control lease")
+	child.Close()
+	child.ReleaseAllocationCapacity(8)
+	entry.Close()
+	require.Equal(t, uint64(1), b.physicalLedger.Snapshot().ControlActive)
+	g.Close()
+	g.ReleaseAllocationCapacity(120)
+	require.Zero(t, b.physicalLedger.Snapshot().ControlActive)
+	require.Zero(t, b.physicalLedger.Reserved())
+}
+
+func TestStatementEntryFailurePrecedesAllocationAndPreservesCause(t *testing.T) {
+	t.Setenv("MO_MEMORY_STATEMENT_WAIT_TIMEOUT", "0s")
+	b, _ := controlTestBudget(t, 0)
+	g, err := b.openProcessGeneration(1, 1<<30, 0)
+	require.NoError(t, err)
+	defer g.Close()
+	proc := &Process{Ctx: t.Context(), Base: &BaseProcess{}}
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(g))
+	_, _, err = proc.EnterStatementMemoryAdmission(t.Context())
+	require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+	require.ErrorIs(t, err, system.ErrMemoryStatementTimeout)
+	require.Zero(t, g.Used())
+	require.Zero(t, b.physicalLedger.Reserved())
+}
+
+func TestSharedPhysicalBudgetIsSoleAllocationAndGrowthAuthority(t *testing.T) {
+	b, _ := controlTestBudget(t, 1<<20)
+	b.memoryHeadroomMeasured = true
+	b.memoryHeadroomBytes = 0 // obsolete independent observation must not veto the owner
+	g, err := b.openProcessGeneration(1, 1<<30, 0)
+	require.NoError(t, err)
+	defer g.Close()
+	require.NoError(t, g.AcquireAllocationCapacity(120))
+	b.mu.Lock()
+	left, measured := b.physicalGrowthHeadroomLocked()
+	b.mu.Unlock()
+	require.True(t, measured)
+	require.Equal(t, b.physicalLedger.Snapshot().Available, left)
+	require.Equal(t, uint64(120), b.physicalLedger.Reserved())
+	g.ReleaseAllocationCapacity(120)
+	require.Zero(t, b.physicalLedger.Reserved())
+}
+
 func TestHealthyControlQueryRetainsOrdinaryLimits(t *testing.T) {
 	b, _ := controlTestBudget(t, 256<<20)
 	g, err := b.openControlProcessGeneration(1, 1<<30, 0, true)

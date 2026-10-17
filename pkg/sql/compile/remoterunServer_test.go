@@ -33,6 +33,7 @@ import (
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	rt "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -60,15 +61,34 @@ func TestResolveRemoteCompileMPoolCap(t *testing.T) {
 
 	cap, err = resolveRemoteCompileMPoolCapFrom(process.Limitation{}, 0, 10*gib, 0, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(9*gib), cap)
+	expected, err := process.ResolveExecutionMemoryCeiling(process.ExecutionMemoryCeilingInputs{HostMemTotal: 10 * gib})
+	require.NoError(t, err)
+	require.Equal(t, int64(expected.QueryCap), cap)
 
 	cap, err = resolveRemoteCompileMPoolCapFrom(process.Limitation{}, 0, 4*gib, 0, 0)
 	require.NoError(t, err)
-	require.Equal(t, int64(4*gib-(4*gib)/10), cap)
+	expected, err = process.ResolveExecutionMemoryCeiling(process.ExecutionMemoryCeilingInputs{HostMemTotal: 4 * gib})
+	require.NoError(t, err)
+	require.Equal(t, int64(expected.QueryCap), cap)
 
 	cap, err = resolveRemoteCompileMPoolCapFrom(process.Limitation{}, 0, 10*gib, 0, 2*gib)
 	require.NoError(t, err)
 	require.Equal(t, int64(8*gib), cap)
+}
+
+func TestRemoteCompileUsesSameDomainAndReserveAsLocalExecution(t *testing.T) {
+	for _, source := range []system.MemoryDomainSource{system.MemoryDomainSourceHost, system.MemoryDomainSourceCgroupV1, system.MemoryDomainSourceCgroupV2} {
+		inputs := process.ExecutionMemoryCeilingInputs{
+			MemoryDomain: system.MemoryDomainSnapshot{Limit: 16 << 30, SoftLimit: 14 << 30,
+				NonGo: 2 << 30, Source: source, Measured: true},
+			CgroupMemoryMax: 128 << 30, HostMemTotal: 512 << 30,
+		}
+		local, err := process.ResolveExecutionMemoryCeiling(inputs)
+		require.NoError(t, err)
+		remote, err := resolveRemoteCompileMPoolCapInputs(inputs)
+		require.NoError(t, err)
+		require.Equal(t, int64(local.QueryCap), remote)
+	}
 }
 
 // TestWorkspaceCreationInRemoteRun tests that workspace is created early in remote run scenario.

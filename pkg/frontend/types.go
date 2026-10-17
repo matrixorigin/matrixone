@@ -1224,10 +1224,12 @@ type ExecCtx struct {
 	// nested SQL (notably PREPARE ... FROM 'sql'/@var) on the same policy
 	// snapshot even if an earlier statement in the request changes the session
 	// switch before the nested SQL is planned.
-	rewriteEnabled bool
+	rewriteEnabled         bool
+	statementMemoryRelease func()
 }
 
 func (execCtx *ExecCtx) beginStatementGeneration(input *UserInput) {
+	execCtx.releaseStatementMemoryAdmission()
 	execCtx.resultMetadata = nil
 	execCtx.effectiveTxnDefaultDatabase = ""
 	execCtx.effectiveTxnStatement = nil
@@ -1282,6 +1284,7 @@ func (execCtx *ExecCtx) withRootSQL(rootSQL string, fn func() error) error {
 }
 
 func (execCtx *ExecCtx) Close() {
+	execCtx.releaseStatementMemoryAdmission()
 	if execCtx.cursorResultSaver != nil && execCtx.reqCtx != nil && execCtx.ses != nil {
 		_ = execCtx.cursorResultSaver.Abort(execCtx)
 	}

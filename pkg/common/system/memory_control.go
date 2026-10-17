@@ -43,6 +43,10 @@ func (b *MemoryAdmissionBudget) AcquireControl() (*MemoryControlLease, bool) {
 	snapshot, _ := b.domainProvider()
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	return b.acquireControlLocked(snapshot)
+}
+
+func (b *MemoryAdmissionBudget) acquireControlLocked(snapshot MemoryDomainSnapshot) (*MemoryControlLease, bool) {
 	if !snapshot.Measured || snapshot.AdmissionLimit() == 0 || b.controlActive >= memoryControlConcurrency {
 		return nil, false
 	}
@@ -58,7 +62,7 @@ func (b *MemoryAdmissionBudget) AcquireControl() (*MemoryControlLease, bool) {
 func (b *MemoryAdmissionBudget) controlLimitLocked(snapshot MemoryDomainSnapshot) uint64 {
 	// Preserve at least three quarters of the runtime reserve for the runtime
 	// itself, including on small domains with a configured lower floor.
-	return min(memoryControlTotalBytes, b.policy.RuntimeBytes/4, snapshot.AdmissionLimit()/100)
+	return min(memoryControlTotalBytes, b.policy.RuntimeBytes/4, snapshot.CapacityLimit()/100)
 }
 
 func (l *MemoryControlLease) Limit() uint64 {
@@ -77,6 +81,19 @@ func (l *MemoryControlLease) TryReserve(size uint64) (uint64, bool) {
 	snapshot, _ := b.domainProvider()
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	available, valid := l.availableLocked(snapshot)
+	if !valid || size > available || size > ^uint64(0)-b.reserved {
+		return available, false
+	}
+	l.used += size
+	b.controlReserved += size
+	b.reserved += size
+	b.last = b.snapshotLocked(snapshot, b.availableLocked(snapshot))
+	return available - size, true
+}
+
+func (l *MemoryControlLease) availableLocked(snapshot MemoryDomainSnapshot) (uint64, bool) {
+	b := l.budget
 	if l.closed || !snapshot.Measured || snapshot.AdmissionLimit() == 0 {
 		return 0, false
 	}
@@ -92,14 +109,7 @@ func (l *MemoryControlLease) TryReserve(size uint64) (uint64, bool) {
 	}
 	available := b.headroomLocked(snapshot, used, b.policy.RuntimeBytes-controlLimit)
 	available = min(available, l.limit-min(l.used, l.limit), controlLimit-min(b.controlReserved, controlLimit))
-	if size > available || size > ^uint64(0)-b.reserved {
-		return available, false
-	}
-	l.used += size
-	b.controlReserved += size
-	b.reserved += size
-	b.last = b.snapshotLocked(snapshot, b.availableLocked(snapshot))
-	return available - size, true
+	return available, true
 }
 
 // Release runs at the allocation's actual free boundary, even after Close.
@@ -114,6 +124,7 @@ func (l *MemoryControlLease) Release(size uint64) {
 	b.controlReserved -= size
 	b.reserved -= size
 	l.releaseSlotLocked()
+	b.notifyStatementsLocked()
 	if b.last.Measured {
 		b.last = b.snapshotLocked(b.last.Domain, b.availableLocked(b.last.Domain))
 	}

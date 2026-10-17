@@ -15,6 +15,7 @@
 package system
 
 import (
+	"container/list"
 	"math"
 	"sync"
 )
@@ -37,21 +38,30 @@ type MemoryAdmissionBudget struct {
 	last           MemoryAdmissionBudgetSnapshot
 	// Control work can consume a bounded part of RuntimeBytes, which ordinary
 	// allocations cannot spend. These bytes are also included in reserved.
-	controlReserved uint64
-	controlActive   uint64
-	domainProvider  func() (MemoryDomainSnapshot, error)
+	controlReserved   uint64
+	controlActive     uint64
+	domainProvider    func() (MemoryDomainSnapshot, error)
+	statementPolicy   MemoryStatementAdmissionPolicy
+	statementQueue    list.List
+	statementActive   uint64
+	statementAdmitted uint64
+	statementRejected uint64
 }
 
 // MemoryAdmissionBudgetSnapshot is an immutable view of the shared physical
 // ledger and its current domain observation.
 type MemoryAdmissionBudgetSnapshot struct {
-	Domain          MemoryDomainSnapshot
-	Reserve         uint64
-	Reserved        uint64
-	Available       uint64
-	Measured        bool
-	ControlReserved uint64
-	ControlActive   uint64
+	Domain            MemoryDomainSnapshot
+	Reserve           uint64
+	Reserved          uint64
+	Available         uint64
+	Measured          bool
+	ControlReserved   uint64
+	ControlActive     uint64
+	StatementActive   uint64
+	StatementQueued   uint64
+	StatementAdmitted uint64
+	StatementRejected uint64
 }
 
 // NewMemoryAdmissionBudget creates an independent ledger. It is useful for
@@ -66,7 +76,8 @@ func NewMemoryAdmissionBudget(policy MemoryDomainReservePolicy) *MemoryAdmission
 	if policy.ObservedNonGoMultiplier == 0 {
 		policy.ObservedNonGoMultiplier = 1
 	}
-	return &MemoryAdmissionBudget{policy: policy, domainProvider: CurrentMemoryDomain}
+	return &MemoryAdmissionBudget{policy: policy, domainProvider: CurrentMemoryDomain,
+		statementPolicy: defaultMemoryStatementAdmissionPolicy()}
 }
 
 // NewMemoryAdmissionBudgetWithProvider creates a ledger for an explicitly owned
@@ -145,6 +156,7 @@ func (b *MemoryAdmissionBudget) Release(size uint64) {
 	b.mu.Lock()
 	// An ordinary rollback must never release a control allocation's charge.
 	b.reserved -= min(size, b.reserved-b.controlReserved)
+	b.notifyStatementsLocked()
 	if b.last.Measured {
 		b.last = b.snapshotLocked(b.last.Domain, b.availableLocked(b.last.Domain))
 	}
@@ -253,12 +265,16 @@ func (b *MemoryAdmissionBudget) snapshotLocked(
 	reserveSnapshot := snapshot
 	reserveSnapshot.NonGo = b.nonGoHighWater
 	return MemoryAdmissionBudgetSnapshot{
-		Domain:          snapshot,
-		Reserve:         b.policy.Reserve(reserveSnapshot),
-		Reserved:        b.reserved,
-		Available:       available,
-		Measured:        snapshot.Measured,
-		ControlReserved: b.controlReserved,
-		ControlActive:   b.controlActive,
+		Domain:            snapshot,
+		Reserve:           b.policy.Reserve(reserveSnapshot),
+		Reserved:          b.reserved,
+		Available:         available,
+		Measured:          snapshot.Measured,
+		ControlReserved:   b.controlReserved,
+		ControlActive:     b.controlActive,
+		StatementActive:   b.statementActive,
+		StatementQueued:   uint64(b.statementQueue.Len()),
+		StatementAdmitted: b.statementAdmitted,
+		StatementRejected: b.statementRejected,
 	}
 }

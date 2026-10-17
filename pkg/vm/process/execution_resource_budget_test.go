@@ -619,14 +619,13 @@ func TestExecutionMemoryHeadroomSafety(t *testing.T) {
 }
 
 func TestExecutionResourceBudgetUsesCurrentMemoryInputs(t *testing.T) {
-	previous := executionResourceProcessMemoryInputs
-	executionResourceProcessMemoryInputs = ExecutionMemoryCeilingInputs{HostMemTotal: 8 << 30}
-	t.Cleanup(func() { executionResourceProcessMemoryInputs = previous })
 	previousHint := fileservice.GlobalMemoryCacheSizeHint.Load()
 	fileservice.GlobalMemoryCacheSizeHint.Store(1 << 30)
 	t.Cleanup(func() { fileservice.GlobalMemoryCacheSizeHint.Store(previousHint) })
 
-	inputs := executionResourceProcessMemoryInputs
+	inputs := ExecutionMemoryCeilingInputs{MemoryDomain: system.MemoryDomainSnapshot{
+		Limit: 8 << 30, Source: system.MemoryDomainSourceHost, Measured: true,
+	}}
 	inputs.FileCacheHint = uint64(fileservice.GlobalMemoryCacheSizeHint.Load())
 	ceiling, err := ResolveExecutionMemoryCeiling(inputs)
 	if err != nil || ceiling.CNMemoryCap == 0 {

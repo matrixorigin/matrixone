@@ -119,7 +119,8 @@ func (g *VectorIndexGovernor) defaultLimits() (caps, error, error) {
 	g.defaultLimitMu.Lock()
 	defer g.defaultLimitMu.Unlock()
 
-	host, herr := automaticHostLimit(system.MemoryTotal(), system.CgroupMemoryLimit())
+	domain, _ := system.CurrentMemoryDomain()
+	host, herr := automaticHostLimit(domain.CapacityLimit(), 0)
 	g.defaultLimit.host = host
 	g.defaultLimitHostErr = herr
 	g.ensureDeviceLimitsLocked()

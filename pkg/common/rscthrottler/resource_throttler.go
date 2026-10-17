@@ -497,6 +497,7 @@ func (m *memThrottler) String() string {
 	sharedControlReserved := uint64(0)
 	sharedControlActive := uint64(0)
 	sharedMeasured := false
+	var statementActive, statementQueued, statementAdmitted, statementRejected uint64
 	if m.memoryLedger != nil {
 		shared := m.memoryLedger.Snapshot()
 		sharedReserve = shared.Reserve
@@ -505,9 +506,11 @@ func (m *memThrottler) String() string {
 		sharedControlReserved = shared.ControlReserved
 		sharedControlActive = shared.ControlActive
 		sharedMeasured = shared.Measured
+		statementActive, statementQueued = shared.StatementActive, shared.StatementQueued
+		statementAdmitted, statementRejected = shared.StatementAdmitted, shared.StatementRejected
 	}
 	return fmt.Sprintf(
-		"{%s: limit=%s, total=%s, available=%s, memory-domain-source=%s, memory-domain-soft-limit=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, shared-reserve=%s, shared-reserved=%s, shared-available=%s, shared-control-reserved=%s, shared-control-active=%d, shared-measured=%v, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
+		"{%s: limit=%s, total=%s, available=%s, memory-domain-source=%s, memory-domain-soft-limit=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, shared-reserve=%s, shared-reserved=%s, shared-available=%s, shared-control-reserved=%s, shared-control-active=%d, shared-statement-active=%d, shared-statement-queued=%d, shared-statement-admitted=%d, shared-statement-rejected=%d, shared-measured=%v, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
 		m.name,
 		common.HumanReadableBytes(int(m.limit.Load())),
 		common.HumanReadableBytes(int(m.total.Load())),
@@ -523,6 +526,7 @@ func (m *memThrottler) String() string {
 		common.HumanReadableBytes(int(sharedAvailable)),
 		common.HumanReadableBytes(int(sharedControlReserved)),
 		sharedControlActive,
+		statementActive, statementQueued, statementAdmitted, statementRejected,
 		sharedMeasured,
 		m.pinnedRate(),
 		m.limitRate,
@@ -622,7 +626,11 @@ func (m *memThrottler) refresh(force bool) {
 
 		// if the const limit option is set, we should not change the limit.
 		if m.options.constLimit < 0 {
-			m.limit.Store(int64(float64(m.actualTotalMemory.Load()) * m.limitRate))
+			quotaCapacity := m.actualTotalMemory.Load()
+			if domain != nil {
+				quotaCapacity = domain.CapacityLimit()
+			}
+			m.limit.Store(int64(float64(quotaCapacity) * m.limitRate))
 		}
 		m.cgroup.Store(cgroup)
 		m.total.Store(uint64(uint64ToInt64(storedTotal)))
@@ -1005,6 +1013,11 @@ func (m *memThrottler) Available() int64 {
 }
 
 func (m *memThrottler) availableForReserved(reserved int64) int64 {
+	if m.memoryLedger != nil {
+		// Component quota is a child of the shared physical ledger, not a
+		// second RSS-based physical budget with independently sampled usage.
+		return m.capCgroupAvailable(m.limit.Load()-reserved, reserved)
+	}
 	//avail := m.limit.Load() - m.rss.Load() - m.reserved.Load()
 
 	var (
@@ -1043,17 +1056,17 @@ func (m *memThrottler) availableForReserved(reserved int64) int64 {
 }
 
 func (m *memThrottler) capCgroupAvailable(available, localReserved int64) int64 {
+	if m.memoryLedger != nil && !m.options.allowOutOfMemoryAcquire {
+		sharedAvailable, measured := m.memoryLedger.Available()
+		if !measured {
+			return 0
+		}
+		return min(max(0, available), uint64ToInt64(sharedAvailable))
+	}
 	if m.cgroupBudget != nil {
 		localReserved = m.cgroupBudget.reserved.Load()
 	}
 	available = m.cgroupSnapshot().capAdmissionAvailable(available, localReserved)
-	if m.memoryLedger != nil && !m.options.allowOutOfMemoryAcquire {
-		if sharedAvailable, measured := m.memoryLedger.Available(); measured {
-			if sharedAvailable < uint64(max(0, available)) {
-				available = int64(sharedAvailable)
-			}
-		}
-	}
 	return available
 }
 
@@ -1147,6 +1160,7 @@ func NewMemThrottler(
 
 	throttler := &memThrottler{
 		cgroupBudget: &processCgroupBudget,
+		memoryLedger: system.DefaultMemoryAdmissionBudget(),
 		limitRate:    limitRate,
 		name:         name,
 	}
@@ -1179,13 +1193,18 @@ func WithAllowOutOfLimitAcquire() MemThrottlerOption {
 	}
 }
 
-// WithSharedMemoryAdmission makes the throttler participate in the process
-// physical-memory ledger shared with execution admission. It is intentionally
-// opt-in so isolated unit-test throttlers do not consume the production ledger.
+// WithSharedMemoryAdmission explicitly selects the default shared physical
+// ledger. NewMemThrottler already installs it; retained for existing callers.
 func WithSharedMemoryAdmission() MemThrottlerOption {
 	return func(throttler *memThrottler) {
 		throttler.memoryLedger = system.DefaultMemoryAdmissionBudget()
 	}
+}
+
+// WithIsolatedMemoryAdmissionForTesting selects the legacy injected policy
+// owner for deterministic unit fixtures. Production callers must not use it.
+func WithIsolatedMemoryAdmissionForTesting() MemThrottlerOption {
+	return func(throttler *memThrottler) { throttler.memoryLedger = nil }
 }
 
 func WithConstLimit(constLimit int64) MemThrottlerOption {
@@ -1415,7 +1434,7 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 		}
 
 		newReserved := reserved + ask
-		if !throttler.options.allowOutOfMemoryAcquire {
+		if throttler.memoryLedger == nil && !throttler.options.allowOutOfMemoryAcquire {
 			if cgroupAvailable := sample.capAdmissionAvailable(avail, reserved); cgroupAvailable < ask {
 				return cgroupAvailable, false
 			}
@@ -1425,7 +1444,7 @@ func acquireWithinRSSLimit(throttler *memThrottler, ask int64) (int64, bool) {
 		// that base should consume additional physical headroom. This avoids the
 		// rss+reserved double-count that broke ForceRefresh() while still
 		// rejecting new S3 growth when non-S3 RSS has already eaten the cgroup.
-		if !throttler.options.allowOutOfMemoryAcquire &&
+		if throttler.memoryLedger == nil && !throttler.options.allowOutOfMemoryAcquire &&
 			total > 0 && total != math.MaxInt64 &&
 			cnFlushS3ProjectedPhysicalUsed(throttler, newReserved) > total {
 			return min(avail, cnFlushS3PhysicalAvailable(throttler, reserved, sample)), false

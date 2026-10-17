@@ -59,6 +59,9 @@ func (g *ExecutionResourceGeneration) RegisterMemoryGrowthParticipant() (
 }
 
 func (b *ExecutionResourceBudget) sampleMemoryHeadroom() (uint64, bool) {
+	if b != nil && b.physicalLedger != nil {
+		return b.physicalLedger.Available()
+	}
 	if b == nil || b.memoryHeadroomProvider == nil {
 		return 0, false
 	}
@@ -103,6 +106,9 @@ func (b *ExecutionResourceBudget) sampleMemoryHeadroom() (uint64, bool) {
 // budget mutex it already owns. Only one expired sample takes headroomMu and
 // performs filesystem reads; cached admissions add no second global lock.
 func (b *ExecutionResourceBudget) memoryHeadroomRefreshNeededLocked() bool {
+	if b != nil && b.physicalLedger != nil {
+		return false // the shared physical owner samples and accounts for both gates
+	}
 	if b == nil || b.memoryHeadroomProvider == nil {
 		return false
 	}
@@ -121,6 +127,9 @@ func (b *ExecutionResourceBudget) memoryHeadroomRefreshNeededLocked() bool {
 // cached OS sample by all charged bytes not backed before that sample. Freed
 // backing loses its credit even if a new allocation replaces it. b.mu must be held.
 func (b *ExecutionResourceBudget) physicalGrowthHeadroomLocked() (uint64, bool) {
+	if b != nil && b.physicalLedger != nil {
+		return b.physicalLedger.Available()
+	}
 	if b == nil || !b.memoryHeadroomMeasured {
 		return 0, false
 	}

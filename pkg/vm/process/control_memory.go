@@ -14,7 +14,12 @@
 
 package process
 
-import "context"
+import (
+	"context"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/system"
+)
 
 type controlMemoryAdmissionKey struct{}
 
@@ -34,6 +39,10 @@ func HasControlMemoryAdmission(ctx context.Context) bool {
 }
 
 func (b *ExecutionResourceBudget) openControlProcessGeneration(id, memoryCap, spillDiskCap uint64, control bool) (*ExecutionResourceGeneration, error) {
+	return b.openControlProcessGenerationWithEntry(id, memoryCap, spillDiskCap, control, nil)
+}
+
+func (b *ExecutionResourceBudget) openControlProcessGenerationWithEntry(id, memoryCap, spillDiskCap uint64, control bool, entry *system.MemoryControlLease) (*ExecutionResourceGeneration, error) {
 	g, err := b.openProcessGeneration(id, memoryCap, spillDiskCap)
 	if err != nil || !control {
 		return g, err
@@ -44,7 +53,12 @@ func (b *ExecutionResourceBudget) openControlProcessGeneration(id, memoryCap, sp
 	if ledger == nil {
 		return g, nil
 	}
-	lease, ok := ledger.AcquireControl()
+	lease := entry
+	borrowed := entry != nil
+	ok := borrowed
+	if !borrowed {
+		lease, ok = ledger.AcquireControl()
+	}
 	if !ok {
 		// A fifth control statement (or a domain without runtime allowance)
 		// may still execute against the ordinary, fully accounted budget.
@@ -53,7 +67,9 @@ func (b *ExecutionResourceBudget) openControlProcessGeneration(id, memoryCap, sp
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.closed {
-		lease.Close()
+		if !borrowed {
+			lease.Close()
+		}
 		g.closed = true
 		return nil, ErrExecutionResourceClosed
 	}
@@ -62,14 +78,45 @@ func (b *ExecutionResourceBudget) openControlProcessGeneration(id, memoryCap, sp
 	// otherwise large catalogs would regress merely because login is marked.
 	allowance := min(g.cap, lease.Limit())
 	available, measured := ledger.Available()
-	if measured && available >= allowance && b.aggregateUsed <= b.aggregateCap &&
+	if !borrowed && measured && available >= allowance && b.aggregateUsed <= b.aggregateCap &&
 		b.aggregateCap-b.aggregateUsed >= allowance {
 		lease.Close()
 		return g, nil
 	}
 	g.controlMemory = lease
+	g.controlMemoryBorrowed = borrowed
 	g.cap = allowance
 	return g, nil
+}
+
+// EnterStatementMemoryAdmission runs before transaction creation/planning.
+// Unit fixtures explicitly select their private ledger; real processes do not
+// acquire a second CN budget or precharge bytes merely to enter a statement.
+func (proc *Process) EnterStatementMemoryAdmission(ctx context.Context) (context.Context, *system.MemoryStatementLease, error) {
+	if proc == nil || proc.Base == nil {
+		return ctx, nil, ErrExecutionResourceInvalid
+	}
+	proc.Base.executionResourceBudgetMu.Lock()
+	isolated := proc.Base.executionResourceBudgetIsolatedTest
+	g := proc.Base.executionResourceBudget
+	proc.Base.executionResourceBudgetMu.Unlock()
+	if isolated {
+		return ctx, nil, nil
+	}
+	ledger := system.DefaultMemoryAdmissionBudget()
+	if g != nil {
+		g.budget.mu.Lock()
+		ledger = g.budget.physicalLedger
+		g.budget.mu.Unlock()
+		if ledger == nil { // explicit private generation installed by a fixture
+			return ctx, nil, nil
+		}
+	}
+	next, lease, err := ledger.EnterStatement(ctx, HasControlMemoryAdmission(ctx))
+	if err != nil {
+		return ctx, nil, fmt.Errorf("%w: statement entry: %w", ErrExecutionResourceAdmission, err)
+	}
+	return next, lease, nil
 }
 
 func (g *ExecutionResourceGeneration) releasePhysicalMemory(size uint64) {

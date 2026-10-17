@@ -47,6 +47,15 @@ const (
 type MemoryDomainSnapshot struct {
 	Used  uint64
 	Limit uint64
+	// Capacity and HardCapacity retain the tightest ancestor sizing bounds.
+	// The domain with least remaining headroom may have a larger limit than a
+	// less-used child. Its Used must never be paired with that child's limit.
+	Capacity     uint64
+	HardCapacity uint64
+	// ReclaimableBound is the minimum clean-cache headroom across the complete
+	// hierarchy, not just the level selected for its raw charged headroom.
+	ReclaimableBound    uint64
+	HasReclaimableBound bool
 	// SoftLimit is the pressure/admission limit. A zero value means that the
 	// domain does not expose a separate soft boundary. For cgroup v2 this is
 	// memory.high; for cgroup v1 it is memory.soft_limit_in_bytes; for a host it
@@ -66,6 +75,16 @@ type MemoryDomainSnapshot struct {
 
 func (s MemoryDomainSnapshot) IsCgroup() bool {
 	return s.Source == MemoryDomainSourceCgroupV1 || s.Source == MemoryDomainSourceCgroupV2
+}
+
+// CapacityLimit sizes components without losing a smaller descendant/ancestor
+// quota when another level supplies the binding usage/headroom observation.
+func (s MemoryDomainSnapshot) CapacityLimit() uint64 {
+	limit := s.AdmissionLimit()
+	if s.Capacity > 0 && (limit == 0 || s.Capacity < limit) {
+		return s.Capacity
+	}
+	return limit
 }
 
 // AdmissionLimit is the soft boundary used by both physical admission gates.
@@ -117,7 +136,11 @@ func (s MemoryDomainSnapshot) AdmissionReclaimableHeadroom() uint64 {
 	if limit <= used {
 		return 0
 	}
-	return limit - used
+	available := limit - used
+	if s.HasReclaimableBound {
+		available = min(available, s.ReclaimableBound)
+	}
+	return available
 }
 
 // MemoryDomainReservePolicy converts observed non-Go charges into a reserve
@@ -213,7 +236,7 @@ func (p MemoryDomainReservePolicy) Reserve(snapshot MemoryDomainSnapshot) uint64
 		reserve = observed
 	}
 	if minimumPercent > 0 {
-		limit := snapshot.AdmissionLimit()
+		limit := snapshot.CapacityLimit()
 		percentReserve := limit / 100 * minimumPercent
 		if limit%100 != 0 && (limit%100)*minimumPercent > 0 {
 			percentReserve++
@@ -344,17 +367,24 @@ type memoryDomainLevel struct {
 }
 
 func readMemoryDomain(pid int) (MemoryDomainSnapshot, error) {
+	var cgroupSample MemoryDomainSnapshot
 	if levels, ok := memoryDomainLevels(pid); ok {
 		if snapshot, measured, err := readCgroupMemoryDomain(levels); err != nil {
 			return MemoryDomainSnapshot{}, err
 		} else if measured {
-			return snapshot, nil
+			cgroupSample = snapshot
 		}
 	}
 
 	mem, err := hostMemoryStats()
-	if err != nil {
+	if err != nil || mem.Total == 0 {
 		return MemoryDomainSnapshot{}, moerr.NewInternalErrorNoCtxf("read host memory domain: %v", err)
+	}
+	// A cgroup quota at least as large as the physical host is not isolation
+	// from host OOM. Retain the host domain in that layout. Otherwise keep the
+	// complete cgroup hierarchy's independently paired limits/usage.
+	if cgroupSample.Measured && cgroupSample.CapacityLimit() < mem.Total {
+		return cgroupSample, nil
 	}
 	reclaimable := uint64(0)
 	if mem.ActualFree >= mem.Free {
@@ -521,6 +551,9 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 		selected         MemoryDomainSnapshot
 		selectedHeadroom uint64
 		found            bool
+		capacity         uint64
+		hardCapacity     uint64
+		reclaimableBound uint64
 	)
 	for _, level := range levels {
 		structurallyAbsent, err := cgroupMemoryInterfaceStructurallyAbsent(level)
@@ -564,9 +597,23 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 		if softLimit > 0 && softLimit < admissionLimit {
 			admissionLimit = softLimit
 		}
+		if capacity == 0 || admissionLimit < capacity {
+			capacity = admissionLimit
+		}
+		if hasHardLimit && (hardCapacity == 0 || limit < hardCapacity) {
+			hardCapacity = limit
+		}
 		headroom := uint64(0)
 		if usage < admissionLimit {
 			headroom = admissionLimit - usage
+		}
+		cacheUsed := usage - min(usage, reclaimable)
+		cacheHeadroom := uint64(0)
+		if cacheUsed < admissionLimit {
+			cacheHeadroom = admissionLimit - cacheUsed
+		}
+		if !found || cacheHeadroom < reclaimableBound {
+			reclaimableBound = cacheHeadroom
 		}
 		if !found || headroom < selectedHeadroom {
 			snapshotLimit := uint64(math.MaxUint64)
@@ -582,6 +629,8 @@ func readCgroupMemoryDomain(levels []memoryDomainLevel) (MemoryDomainSnapshot, b
 			found = true
 		}
 	}
+	selected.Capacity, selected.HardCapacity = capacity, hardCapacity
+	selected.HasReclaimableBound, selected.ReclaimableBound = found, reclaimableBound
 	return selected, found, nil
 }
 

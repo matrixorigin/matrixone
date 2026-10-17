@@ -5545,6 +5545,14 @@ func executeStmtWithTxn(ses FeSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
 ) (err error) {
+	// Background/derived SQL enters here as well. Top-level client SQL already
+	// holds its admission before the implicit-commit boundary below doComQuery.
+	if execCtx.statementMemoryRelease == nil {
+		if err = execCtx.admitStatementMemory(); err != nil {
+			return err
+		}
+		defer execCtx.releaseStatementMemoryAdmission()
+	}
 	ses.EnterFPrint(FPExecStmtWithTxn)
 	defer ses.ExitFPrint(FPExecStmtWithTxn)
 	// The process survives across statements, including statements handled
@@ -6146,6 +6154,7 @@ func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr
 }
 
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
+	defer execCtx.releaseStatementMemoryAdmission()
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
 	defer ses.ClearDDLOwnerRoleID()
@@ -6510,6 +6519,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// has a current statement identity. Authorization and plan construction
 		// still run after this boundary, matching the DDL implicit-commit
 		// contract while keeping instrumentation failures side-effect free.
+		if err = execCtx.admitStatementMemory(); err != nil {
+			logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+			return err
+		}
 		if execCtx.implicitCommitBefore {
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {
 				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
@@ -6603,6 +6616,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.input = currentInput
 
 		err = executeStmtWithResponse(ses, execCtx)
+		execCtx.releaseStatementMemoryAdmission()
 		ses.ClearDDLOwnerRoleID()
 		if err != nil {
 			return err
