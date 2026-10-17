@@ -42,6 +42,16 @@ type localBlockingDataCache struct {
 	once          sync.Once
 }
 
+type localObservedDataCache struct {
+	fscache.DataCache
+	beforeGet func()
+}
+
+func (c *localObservedDataCache) Get(ctx context.Context, key fscache.CacheKey) (fscache.Data, bool) {
+	c.beforeGet()
+	return c.DataCache.Get(ctx, key)
+}
+
 func requireDirFilesClosed(
 	t *testing.T,
 	dirFiles map[string]*os.File,
@@ -249,6 +259,91 @@ func TestLocalFSMergeCompletesAfterCacheUpdate(t *testing.T) {
 		require.NoError(t, err)
 	case <-readCtx.Done():
 		t.Fatalf("local read did not finish: %v", readCtx.Err())
+	}
+}
+
+func TestLocalFSMergeCompletionWithoutCacheProgress(t *testing.T) {
+	for _, cached := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cache_published=%t", cached), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			local, err := NewLocalFS(ctx, "local", t.TempDir(), CacheConfig{
+				MemoryCapacity: ptrTo(toml.ByteSize(1 << 20)),
+			}, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { local.Close(context.Background()) })
+			require.NoError(t, local.Write(ctx, IOVector{
+				FilePath: "foo", Policy: SkipAllCache,
+				Entries: []IOEntry{{Size: 3, Data: []byte("foo")}},
+			}))
+			vector := &IOVector{
+				FilePath: "foo", Policy: SkipFullFilePreloads,
+				Entries: []IOEntry{{Size: 3, ToCacheData: CacheOriginalData}},
+			}
+			t.Cleanup(vector.Release)
+			key := vector.ioMergeKey()
+			finishFirst, generation := local.ioMerger.merge(key)
+			require.NotNil(t, finishFirst)
+			require.Nil(t, generation)
+			releaseFirst := sync.OnceFunc(finishFirst)
+			var finishSecond func()
+			var wg sync.WaitGroup
+			t.Cleanup(func() {
+				cancel()
+				releaseFirst()
+				wg.Wait()
+				if finishSecond != nil {
+					finishSecond()
+				}
+			})
+			gets := 0
+			local.memCache.cache = &localObservedDataCache{
+				DataCache: local.memCache.cache,
+				beforeGet: func() {
+					gets++
+					if gets == 2 {
+						// Another caller starts a new read before this follower
+						// rechecks the cache. Completion of the first generation
+						// does not guarantee cache admission (pressure, eviction,
+						// or a leader requesting different columns).
+						finishSecond, _ = local.ioMerger.merge(key)
+					}
+				},
+			}
+			waitCtx := &waitStartedContext{Context: ctx, started: make(chan struct{})}
+			result := make(chan error, 1)
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				result <- local.Read(waitCtx, vector)
+			}()
+			select {
+			case <-waitCtx.started:
+			case <-ctx.Done():
+				t.Fatal("follower did not enter the first generation")
+			}
+			if cached {
+				data := local.memCache.CopyToCacheData(ctx, []byte("foo"))
+				defer data.Release()
+				inserted, err := local.memCache.cache.Set(ctx, fscache.CacheKey{Path: "foo", Sz: 3}, data)
+				require.NoError(t, err)
+				require.True(t, inserted)
+			}
+			releaseFirst()
+			select {
+			case err := <-result:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatal("completed generation without a cache hit must fall back, not wait on another generation")
+			}
+			wg.Wait()
+			require.NotNil(t, finishSecond)
+			require.Equal(t, 2, gets)
+			require.Equal(t, []byte("foo"), vector.Entries[0].CachedData.Bytes())
+			require.Equal(t, cached, vector.Entries[0].fromCache == local.memCache)
+			// Finishing this follower must not release another reader's generation.
+			require.True(t, local.ioMerger.IsMerging(key))
+		})
 	}
 }
 

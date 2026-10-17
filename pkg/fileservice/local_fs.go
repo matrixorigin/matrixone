@@ -417,6 +417,7 @@ func (l *LocalFS) Read(ctx context.Context, vector *IOVector) (err error) {
 	// Cache updates are deferred below. Keep the merge generation active until
 	// those updates finish so a completed follower can reuse the leader output.
 	var finishMerge func()
+	mergeWaited := false
 	defer func() {
 		if finishMerge != nil {
 			finishMerge()
@@ -549,7 +550,7 @@ read_disk_cache:
 
 	mayReadMemoryCache := vector.Policy&SkipMemoryCacheReads == 0
 	mayReadDiskCache := vector.Policy&SkipDiskCacheReads == 0
-	if mayReadMemoryCache || mayReadDiskCache {
+	if !mergeWaited && (mayReadMemoryCache || mayReadDiskCache) {
 		// may read caches, merge
 		startLock := time.Now()
 		mergeKey := vector.ioMergeKey()
@@ -558,6 +559,10 @@ read_disk_cache:
 			finishMerge = done
 			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 		} else {
+			// Completion is only a notification, not proof that the requested
+			// columns were admitted to cache. Recheck once, then read directly
+			// on a miss instead of queuing behind successive generations.
+			mergeWaited = true
 			completed, waitErr := waitForIOGeneration(ctx, mergeKey, generation, maxIOWaitDuration)
 			stats.AddLocalFSReadIOMergerTimeConsumption(time.Since(startLock))
 			if waitErr != nil {
