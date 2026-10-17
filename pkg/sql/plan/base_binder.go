@@ -4782,7 +4782,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				if err := b.recordIfNullContract(e, args); err != nil {
 					return nil, err
 				}
-				ensurePreparedNumericMetadata(e).IfnullCommonValue = true
 			}
 			b.markPreparedResultCastsProvisional(
 				b.GetContext(), name, astArgs, preparedPeerSources, e, preparedNumericProvenance)
@@ -4808,7 +4807,6 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				if err := b.recordIfNullContract(builtinExpr, args); err != nil {
 					return nil, err
 				}
-				ensurePreparedNumericMetadata(builtinExpr).IfnullCommonValue = true
 			}
 			return builtinExpr, nil
 		}
@@ -4837,8 +4835,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 	return bindFuncExprImplUdf(b, name, udf, astArgs, args, depth)
 }
 
-func (b *baseBinder) recordIfNullContract(expr *plan.Expr, args []*plan.Expr) error {
+func applyIfNullCommonValueContract(expr *plan.Expr, args []*plan.Expr) {
 	expr.Typ.NotNullable = args[1].Typ.NotNullable || args[2].Typ.NotNullable
+	ensurePreparedNumericMetadata(expr).IfnullCommonValue = true
+}
+
+func (b *baseBinder) recordIfNullContract(expr *plan.Expr, args []*plan.Expr) error {
+	applyIfNullCommonValueContract(expr, args)
 	if b.ctx == nil || !hasSubquery(expr) {
 		return nil
 	}
@@ -8132,17 +8135,8 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 
-	case "repeat":
-		refineRepeatLiteralReturnType(args, &returnType)
-
-	case "substring", "substr", "mid":
-		refineSubstringLiteralReturnType(args, &returnType)
-
-	case "left", "right":
-		refineLeftRightLiteralReturnType(args, &returnType)
-
-	case "lpad", "rpad":
-		refinePadLiteralReturnType(args, &returnType)
+	case "repeat", "substring", "substr", "mid", "left", "right", "lpad", "rpad":
+		refineStringLiteralReturnType(name, args, &returnType)
 
 	case "python_user_defined_function":
 		size := (argsLength - 2) / 2
@@ -8701,6 +8695,22 @@ func castOctFunctionArgsForNumericContext(ctx context.Context, args []*plan.Expr
 		args[idx] = cast
 	}
 	return args, nil
+}
+
+// refineStringLiteralReturnType supplements overload type inference with literal
+// argument bounds. Catalog compatibility must apply the same refinements when
+// recomputing a verified expression after widening an implicit string cast.
+func refineStringLiteralReturnType(name string, args []*plan.Expr, returnType *types.Type) {
+	switch name {
+	case "repeat":
+		refineRepeatLiteralReturnType(args, returnType)
+	case "substring", "substr", "mid":
+		refineSubstringLiteralReturnType(args, returnType)
+	case "left", "right":
+		refineLeftRightLiteralReturnType(args, returnType)
+	case "lpad", "rpad":
+		refinePadLiteralReturnType(args, returnType)
+	}
 }
 
 func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {
