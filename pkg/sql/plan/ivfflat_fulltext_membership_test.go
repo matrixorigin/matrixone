@@ -70,16 +70,17 @@ func newIvfFulltextMembershipTestContext(t *testing.T, fulltext2 bool) *customMo
 
 func TestIvfPreFulltextMembershipSearchesOnce(t *testing.T) {
 	tests := []struct {
-		name      string
-		fulltext2 bool
-		query     string
-		searches  int
+		name           string
+		fulltext2      bool
+		query          string
+		searches       int
+		declinesVector bool
 	}{
 		{name: "filter only", query: "select id from docs where match(body) against('needle')", searches: 1},
 		{name: "fulltext2", fulltext2: true, query: "select id from docs where match(body) against('needle')", searches: 1},
 		{name: "scalar and null", query: "select id from docs where match(body) against('needle') and tag = 2 and body is not null", searches: 1},
 		{name: "score threshold", query: "select id from docs where match(body) against('needle') > 0.5", searches: 1},
-		{name: "mixed or", query: "select id from docs where match(body) against('needle') and (match(body) against('needle') or tag = 2)", searches: 1},
+		{name: "mixed or", query: "select id from docs where match(body) against('needle') and (match(body) against('needle') or tag = 2)", searches: 1, declinesVector: true},
 		{name: "two terms", query: "select id from docs where match(body) against('needle') and match(body) against('omega')", searches: 2},
 		{name: "boolean mode", query: "select id from docs where match(body) against('+needle +omega' in boolean mode)", searches: 1},
 		{name: "projected score", query: "select id, match(body) against('needle') from docs where match(body) against('needle')", searches: 2},
@@ -93,8 +94,24 @@ func TestIvfPreFulltextMembershipSearchesOnce(t *testing.T) {
 			query := test.query + " order by l2_distance(v,'[0,0]') limit 7 by rank with option 'mode=pre'"
 			qry := buildIvfFulltextMembershipTestPlan(t, ctx, query, false)
 			fulltext, vector, membership := countIvfFulltextSearches(qry)
-			require.Equal(t, 1, vector)
-			require.Positive(t, membership, "PRE must retain exact membership, independently of its runtime filter")
+			if test.declinesVector {
+				// Boolean composition keeps the complete input before distance
+				// ordering; even PRE must decline early ANN candidate pruning.
+				require.Zero(t, vector)
+				require.Zero(t, membership)
+				exactSort := false
+				for _, node := range booleanFullTextNodes(qry, qry.Steps[0]) {
+					if node.NodeType == planpb.Node_SORT {
+						for _, order := range node.OrderBy {
+							exactSort = exactSort || exprCallsFunc(order.Expr, "l2_distance")
+						}
+					}
+				}
+				require.True(t, exactSort, "Boolean composition must retain exact distance ordering")
+			} else {
+				require.Equal(t, 1, vector)
+				require.Positive(t, membership, "PRE must retain exact membership, independently of its runtime filter")
+			}
 			require.Equal(t, test.searches, fulltext, "PRE must not repeat a filter-only MATCH on row fetch")
 		})
 	}

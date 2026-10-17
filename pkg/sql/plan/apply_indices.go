@@ -515,7 +515,8 @@ func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[
 	childOrderOverwritten := fullTextOrderOverwritten(node, orderOverwritten)
 	for i, childID := range node.Children {
 		if node.NodeType == plan.Node_JOIN && joinCanConsumeIndexHints(node) &&
-			builder.qry.Nodes[childID].NodeType == plan.Node_TABLE_SCAN && builder.scanForcesJoinIndex(childID) {
+			builder.qry.Nodes[childID].NodeType == plan.Node_TABLE_SCAN && builder.scanForcesJoinIndex(childID) &&
+			!scanHasFullTextBooleanComposition(builder.qry.Nodes[childID]) {
 			continue
 		}
 		node.Children[i], err = builder.applyIndicesWithOrder(childID, colRefCnt, idxColMap, childOrderOverwritten)
@@ -523,10 +524,16 @@ func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[
 			return -1, err
 		}
 	}
+	if err := builder.rewriteFullTextBooleanConsumers(node); err != nil {
+		return -1, err
+	}
 	replaceColumnsForNode(node, idxColMap)
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
+		if scanHasFullTextBooleanComposition(node) {
+			return builder.applyFullTextBooleanComposition(nodeID, node, idxColMap)
+		}
 		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_JOIN:
@@ -2005,6 +2012,10 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 		return nil
 	}
 
+	if scanHasFullTextBooleanComposition(path.scanNode) {
+		return []int32{path.scanNode.NodeId}
+	}
+
 	if path.aggNode != nil {
 		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 		wrappedExprs, _ := builder.getWrappedFullTextMatches(nil, path.scanNode, filterids, nil)
@@ -2051,6 +2062,9 @@ func (builder *QueryBuilder) detectVectorGuardFromSort(sortNode *plan.Node) []in
 func (builder *QueryBuilder) vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
 	if vecCtx == nil || vecCtx.scanNode == nil {
 		return true
+	}
+	if scanHasFullTextBooleanComposition(vecCtx.scanNode) {
+		return false
 	}
 	ivfflat := algo == catalog.MoIndexIvfFlatAlgo.ToString()
 	if builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
