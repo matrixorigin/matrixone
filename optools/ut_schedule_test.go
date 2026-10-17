@@ -882,7 +882,10 @@ if [[ "$MODE" == drained || "$MODE" == drained-late ]]; then
  exit 0
 fi
 [[ "$status" == 125 && -f "$ENGINE_RACE_TEST_BINARY" && -f "$ENGINE_RACE_REPORT.00" && ! -e "$CASE_DIR/helper-returned" && ! -e "$CASE_DIR/forbidden-join" ]] || exit 93
-if [[ "$MODE" == failed-drain* ]]; then ut_process_group_alive "$(<"$CASE_DIR/engine-tool.pid")" || exit 94; fi
+if [[ "$MODE" == failed-drain* ]]; then
+ # Admission already records each owner; a mock-written shared PID races.
+ while read -r pid; do ut_process_group_alive "$pid" || exit 94; done < "$CASE_DIR/owned-pids"
+fi
 if [[ "$MODE" == *-term || "$MODE" == marker-* ]]; then [[ -f "$CASE_DIR/term-sent" ]] || exit 95; fi
 if [[ "$MODE" == marker-* ]]; then [[ -f "$ENGINE_RACE_REPORT-expired.0.drain" ]] || exit 95; fi
 if [[ "$MODE" == marker-completion ]]; then
@@ -914,7 +917,6 @@ if [[ "$1" == test && "$*" == *' -c '* ]]; then
     exit 0
 fi
 if [[ "$1" == tool ]]; then
-    printf '%s\n' "$$" > "$CASE_DIR/engine-tool.pid"
     printf 'ready\n' >&8
     trap 'exit 143' TERM
     while :; do sleep 0.01; done
