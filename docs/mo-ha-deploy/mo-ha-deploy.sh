@@ -715,14 +715,18 @@ stage_fence(){
   # fencing 创建失败必须致命：否则会停在 "stonith-enabled=true 但无设备" 状态
   stonith_create(){
     if ! runq "$1"; then
-      die "fencing 设备创建失败，集群保持 stonith-enabled=false（无 fencing，不会自动切换）。
+      die "fencing 设备创建失败，集群保持 stonith-enabled=false（已确认关闭，无 fencing，不会自动切换）。
        请修正参数后重跑：--stages fence"
     fi
   }
   # 幂等：重跑 fence 阶段时先删除既有设备，否则 create 会报 already exists。
   # 删除与重建之间不能开着 stonith：若某个 create 失败，集群会停在
   # "stonith-enabled=true 但没有设备" 状态，资源无法被停止/恢复。
-  runq "pcs property set stonith-enabled=false"
+  # 先确认 stonith 已关闭再删设备：否则会停在 "stonith-enabled=true 且无设备"，
+  # 集群会为普通资源故障去 fence 节点，而脚本的提示恰恰相反。
+  if ! runq "pcs property set stonith-enabled=false"; then
+    die "无法关闭 stonith-enabled（集群不可达？）：未删除任何 fencing 设备，集群保持原状。请修复后用 --stages fence 重跑"
+  fi
   runq "pcs stonith delete fence_$SELF 2>/dev/null || true"
   runq "pcs stonith delete fence_$PEER 2>/dev/null || true"
   runq "pcs stonith delete fence_${DRBD_RESOURCE} 2>/dev/null || true"
