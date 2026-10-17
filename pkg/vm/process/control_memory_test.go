@@ -82,7 +82,7 @@ func TestControlGenerationProgressUnderOrdinaryPressure(t *testing.T) {
 
 func TestControlGenerationCannotSpendAnotherStatementsAllowance(t *testing.T) {
 	b, _ := controlTestBudget(t, 0)
-	var controls []*ExecutionResourceGeneration
+	controls := make([]*ExecutionResourceGeneration, 0, 4)
 	for i := uint64(1); i <= 4; i++ {
 		g, err := b.openControlProcessGeneration(i, 1<<30, 0, true)
 		require.NoError(t, err)
@@ -202,4 +202,81 @@ func TestFileServiceProcessHostCacheAndTrueExhaustion(t *testing.T) {
 	account.Seal()
 	_, err = registry.Finalize(account)
 	require.NoError(t, err)
+}
+
+func TestFileServiceCgroupCatalogProgressAndExhaustion(t *testing.T) {
+	for _, source := range []system.MemoryDomainSource{system.MemoryDomainSourceCgroupV1, system.MemoryDomainSourceCgroupV2} {
+		for _, control := range []bool{false, true} {
+			t.Run(string(source)+map[bool]string{false: "/ordinary-cache", true: "/control-no-cache"}[control], func(t *testing.T) {
+				const service = "__process_local_cn__"
+				const gib = uint64(1 << 30)
+				sample := system.MemoryDomainSnapshot{
+					Used: 1432 * gib / 100, Limit: 16 * gib, SoftLimit: 15 * gib,
+					NonGo: 978 * gib / 1000, Reclaimable: 7 * gib, Source: source, Measured: true,
+				}
+				if control {
+					sample.Reclaimable = 0
+				}
+				b := MustNewExecutionResourceBudget(gib, gib)
+				b.physicalLedger = system.NewMemoryAdmissionBudgetWithProvider(system.DefaultMemoryDomainReservePolicy(),
+					func() (system.MemoryDomainSnapshot, error) { return sample, nil })
+				b.memoryHeadroomProvider = func() (uint64, bool) { return sample.AdmissionReclaimableHeadroom(), true }
+				executionResourceCNBudgets.Store(service, b)
+				t.Cleanup(func() { executionResourceCNBudgets.Delete(service) })
+				fs, err := fileservice.NewMemoryFS("LOCAL", fileservice.CacheConfig{}, nil)
+				require.NoError(t, err)
+				defer fs.Close(t.Context())
+				proc := &Process{Ctx: WithControlMemoryAdmission(t.Context(), control),
+					Base: &BaseProcess{FileService: fs, Lim: Limitation{Size: int64(gib)}}}
+				g, err := proc.GetExecutionResourceBudget()
+				require.NoError(t, err)
+				defer g.Close()
+				if control {
+					require.NotNil(t, g.controlMemory)
+				}
+				registry, err := g.AllocationAccountRegistry()
+				require.NoError(t, err)
+				account, err := registry.OpenWithController(g.Cap(), g)
+				require.NoError(t, err)
+				mp := mpool.MustNewZero()
+				defer mpool.DeleteMPool(mp)
+				buf, err := mp.AllocAccounted(120, account, 1, 1)
+				require.NoError(t, err, "the real FileService/MPool path must admit the catalog read")
+				require.Positive(t, b.physicalLedger.Reserved())
+				sample.Used = sample.SoftLimit
+				_, err = mp.AllocAccounted(8, account, 1, 1)
+				require.ErrorIs(t, err, ErrExecutionResourceAdmission, "neither control nor cache may cross the soft boundary")
+				g.Close()
+				mp.Free(buf)
+				require.Zero(t, b.physicalLedger.Reserved())
+				require.Zero(t, b.physicalLedger.Snapshot().ControlActive)
+				account.Seal()
+				_, err = registry.Finalize(account)
+				require.NoError(t, err)
+			})
+		}
+	}
+}
+
+func TestIsolatedFixtureBudgetIsLazyFiniteAndPrivate(t *testing.T) {
+	for range 2 {
+		proc := &Process{Base: &BaseProcess{Lim: Limitation{Size: 1024}}}
+		require.NoError(t, proc.UseIsolatedExecutionResourceBudgetForTesting())
+		proc.Base.Lim.Size = 512
+		proc.Base.Lim.SpillSize = 8192
+		g, err := proc.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		require.Equal(t, uint64(512), g.Cap())
+		require.Equal(t, uint64(8192), g.SpillDiskCap())
+		require.Nil(t, g.budget.physicalLedger)
+		require.Nil(t, g.budget.memoryHeadroomProvider)
+		require.NoError(t, g.AcquireAllocationCapacity(512))
+		require.ErrorIs(t, g.AcquireAllocationCapacity(1), ErrExecutionResourceAdmission)
+		require.ErrorIs(t, proc.UseIsolatedExecutionResourceBudgetForTesting(), ErrExecutionResourceInvalid)
+		g.Close()
+		g.ReleaseAllocationCapacity(512)
+		require.Zero(t, g.budget.AggregateUsed())
+	}
+	var proc *Process
+	require.ErrorIs(t, proc.UseIsolatedExecutionResourceBudgetForTesting(), ErrExecutionResourceInvalid)
 }

@@ -211,14 +211,27 @@ func (b *MemoryAdmissionBudget) availableLocked(snapshot MemoryDomainSnapshot) u
 }
 
 func (b *MemoryAdmissionBudget) availableWithReserveLocked(snapshot MemoryDomainSnapshot, reserve uint64) uint64 {
-	limit := snapshot.AdmissionLimit()
 	used := snapshot.Used
-	// On a host, Used includes the page cache. Credit the kernel's estimate of
-	// reclaimable memory (MemAvailable-MemFree) just as execution headroom does.
-	// A finite cgroup keeps the conservative charged-usage hard-OOM boundary.
-	if snapshot.Source == MemoryDomainSourceHost {
+	// The full non-Go reserve protects future working-set growth. Clean cache
+	// already charged to a cgroup must not also consume this entire reserve:
+	// build/test caches can otherwise reject even an eight-byte catalog read.
+	if snapshot.Source == MemoryDomainSourceHost || snapshot.IsCgroup() {
 		used -= min(used, snapshot.Reclaimable)
 	}
+	available := b.headroomLocked(snapshot, used, reserve)
+	if snapshot.IsCgroup() {
+		// Cache credit is NOT permission to cross a charged hard/soft boundary.
+		// Every pending claim must also fit below raw usage plus the runtime
+		// floor. This second gate never assumes a successful kernel reclaim.
+		available = min(available, b.headroomLocked(snapshot, snapshot.Used, min(reserve, b.policy.RuntimeBytes)))
+	}
+	return available
+}
+
+// headroomLocked deducts the same cumulative pending claims from one physical
+// view. Both the working-set and raw-charge checks run under the ledger mutex.
+func (b *MemoryAdmissionBudget) headroomLocked(snapshot MemoryDomainSnapshot, used, reserve uint64) uint64 {
+	limit := snapshot.AdmissionLimit()
 	if b.reserved > ^uint64(0)-used {
 		used = ^uint64(0)
 	} else {

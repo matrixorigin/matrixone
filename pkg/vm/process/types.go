@@ -491,6 +491,7 @@ type BaseProcess struct {
 	executionResourceBudgetBorrowed     bool
 	executionResourceBudgetMu           sync.Mutex
 	executionResourceBudget             *ExecutionResourceGeneration
+	executionResourceBudgetIsolatedTest bool
 	warningDiagnosticBudgetMu           sync.Mutex
 	warningDiagnosticBudget             *WarningDiagnosticBudget
 	cteMemoryBudgetMu                   sync.Mutex

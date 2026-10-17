@@ -33,8 +33,9 @@ type MemoryControlLease struct {
 
 // AcquireControl admits at most four control statements per process. Their
 // combined physical allocations can use at most 64 MiB of the existing runtime
-// reserve (and never more than that reserve). Ordinary requests retain their
-// full reserve. A zero runtime reserve disables this allowance.
+// reserve. They are bounded against charged headroom independently of the
+// ordinary non-Go high-water reserve. A zero runtime reserve disables this
+// allowance.
 func (b *MemoryAdmissionBudget) AcquireControl() (*MemoryControlLease, bool) {
 	if b == nil {
 		return nil, false
@@ -80,11 +81,16 @@ func (l *MemoryControlLease) TryReserve(size uint64) (uint64, bool) {
 		return 0, false
 	}
 	b.availableLocked(snapshot)
-	reserveSnapshot := snapshot
-	reserveSnapshot.NonGo = b.nonGoHighWater
-	reserve := b.policy.Reserve(reserveSnapshot)
-	controlLimit := min(b.controlLimitLocked(snapshot), reserve)
-	available := b.availableWithReserveLocked(snapshot, reserve-controlLimit)
+	controlLimit := b.controlLimitLocked(snapshot)
+	// Ordinary work cannot spend RuntimeBytes. Control work may use only its
+	// bounded allowance within that floor; it must not depend on a stale/high
+	// non-Go reserve fitting a second time. Keep raw cgroup charge authoritative
+	// even when clean cache is reported, including for a finite soft-only limit.
+	used := snapshot.Used
+	if snapshot.Source == MemoryDomainSourceHost {
+		used -= min(used, snapshot.Reclaimable)
+	}
+	available := b.headroomLocked(snapshot, used, b.policy.RuntimeBytes-controlLimit)
 	available = min(available, l.limit-min(l.used, l.limit), controlLimit-min(b.controlReserved, controlLimit))
 	if size > available || size > ^uint64(0)-b.reserved {
 		return available, false

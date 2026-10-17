@@ -39,11 +39,12 @@ import (
 )
 
 type procConfig struct {
-	mp          *mpool.MPool
-	mpSet       bool
-	fs          fileservice.FileService
-	fsSet       bool
-	queryClient client.QueryClient
+	mp                  *mpool.MPool
+	mpSet               bool
+	fs                  fileservice.FileService
+	fsSet               bool
+	queryClient         client.QueryClient
+	liveMemoryAdmission bool
 }
 
 // ProcOptions configures a process before its resources are acquired.
@@ -63,6 +64,13 @@ func WithFileService(fs fileservice.FileService) ProcOptions {
 
 func WithQueryClient(queryClient client.QueryClient) ProcOptions {
 	return func(cfg *procConfig) { cfg.queryClient = queryClient }
+}
+
+// WithLiveMemoryAdmission opts a physical-admission regression test into the
+// real host/cgroup owner. Ordinary operator fixtures use a finite private ledger
+// so a busy CI compiler cannot change their capacity/lifecycle assertions.
+func WithLiveMemoryAdmission() ProcOptions {
+	return func(cfg *procConfig) { cfg.liveMemoryAdmission = true }
 }
 
 // NewProcess owns its default resources for t's lifetime. With nil t, the
@@ -186,7 +194,11 @@ func newProcess(t testing.TB, sid string, cfg procConfig) *process.Process {
 	}
 	proc = process.NewTopProcess(ctx, mp, nil, nil, fs, nil, cfg.queryClient, nil, nil, nil, nil)
 	if t != nil {
-		releaseProcess = sync.OnceFunc(proc.Free)
+		releaseProcess = sync.OnceFunc(func() {
+			proc.Free()
+			// Unit fixtures have no session owner to terminate the last statement.
+			proc.SetStmtProfile(nil)
+		})
 		t.Cleanup(releaseProcess)
 	}
 	proc.Base.Lim.Size = 1 << 20
@@ -194,6 +206,11 @@ func newProcess(t testing.TB, sid string, cfg procConfig) *process.Process {
 	proc.Base.Lim.BatchSize = 1 << 20
 	proc.Base.Lim.ReaderSize = 1 << 20
 	proc.Base.SessionInfo.TimeZone = time.Local
+	if !cfg.liveMemoryAdmission {
+		if err := proc.UseIsolatedExecutionResourceBudgetForTesting(); err != nil {
+			panic(err)
+		}
+	}
 	complete = true
 	return proc
 }

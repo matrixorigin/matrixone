@@ -60,7 +60,7 @@ func TestMemoryControlProgressIsBoundedAndCharged(t *testing.T) {
 	b, _ := newExhaustedOrdinaryControlBudget()
 	_, ok := b.TryReserve(1)
 	require.False(t, ok, "ordinary work cannot spend the runtime reserve")
-	var leases []*MemoryControlLease
+	leases := make([]*MemoryControlLease, 0, memoryControlConcurrency)
 	for range memoryControlConcurrency {
 		lease, ok := b.AcquireControl()
 		require.True(t, ok)

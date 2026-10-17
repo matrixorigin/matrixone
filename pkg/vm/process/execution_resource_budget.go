@@ -2096,6 +2096,32 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	if proc.Base.executionResourceBudget != nil {
 		return proc.Base.executionResourceBudget, nil
 	}
+	if proc.Base.executionResourceBudgetIsolatedTest {
+		// Unit fixtures still enforce finite per-query allocation/spill limits,
+		// but must not inherit the compiler's cgroup usage or another fixture's
+		// CN ledger. Read Lim at first use so setup-time overrides are honored.
+		memoryCap := uint64(64 * mpool.MB)
+		if proc.Base.Lim.Size > 0 {
+			memoryCap = uint64(proc.Base.Lim.Size)
+		}
+		budget, err := NewExecutionResourceBudget(memoryCap, memoryCap)
+		if err != nil {
+			return nil, err
+		}
+		spillCap := uint64(0)
+		if proc.Base.Lim.SpillSize > 0 {
+			spillCap = uint64(proc.Base.Lim.SpillSize)
+			if err := budget.raiseSpillDiskCapToExplicitLimit(spillCap); err != nil {
+				return nil, err
+			}
+		}
+		generation, err := budget.openProcessGeneration(executionResourceGenerationSequence.Add(1), memoryCap, spillCap)
+		if err != nil {
+			return nil, err
+		}
+		proc.Base.executionResourceBudget = generation
+		return generation, nil
+	}
 
 	globalCap := uint64(0)
 	if cap := mpool.GlobalCap(); cap > 0 && cap < mpool.PB {
@@ -2207,6 +2233,23 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 	}
 	proc.Base.executionResourceBudget = generation
 	return generation, nil
+}
+
+// UseIsolatedExecutionResourceBudgetForTesting selects a lazily created private
+// ledger for a unit fixture. It preserves Lim and allocation ownership, without
+// sampling host/cgroup memory or sharing a production CN. Production constructors
+// must not call this method; real-domain tests should use their normal owner.
+func (proc *Process) UseIsolatedExecutionResourceBudgetForTesting() error {
+	if proc == nil || proc.Base == nil {
+		return ErrExecutionResourceInvalid
+	}
+	proc.Base.executionResourceBudgetMu.Lock()
+	defer proc.Base.executionResourceBudgetMu.Unlock()
+	if proc.Base.executionResourceBudget != nil {
+		return ErrExecutionResourceInvalid
+	}
+	proc.Base.executionResourceBudgetIsolatedTest = true
+	return nil
 }
 
 // SetExecutionResourceBudgetForTesting installs a private, deterministic ledger
