@@ -22,6 +22,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -549,6 +550,12 @@ func TestScoreTraversalWorkspaceExact(t *testing.T) {
 		// production-shaped pool: default partition capacity, no forced spilling
 		mpool: fulltext.NewFixedBytePool(proc, dsize, 0, 0),
 	}
+	// Measure traversal structure, not the platform/TTL-dependent allocations
+	// made while discovering memory capacity. Keep the budget check enabled and
+	// the <=8 allocation bound unchanged. Other pools retain the live provider.
+	capacity := system.MemoryTotal()
+	require.Positive(t, capacity)
+	st.mpool.SetMemoryCapacityForTesting(capacity)
 	defer st.mpool.Close()
 	st.aggcnt[0] = ndoc
 	for i := 0; i < ndoc; i++ {

@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,6 +37,41 @@ func controlTestBudget(t *testing.T, free uint64) (*ExecutionResourceBudget, *sy
 		MinimumBytes: 256 << 20, RuntimeBytes: 256 << 20, ObservedNonGoMultiplier: 1,
 	}, func() (system.MemoryDomainSnapshot, error) { return *snapshot, nil })
 	return b, snapshot
+}
+
+type admissionTestLockService struct {
+	lockservice.LockService
+	service string
+}
+
+func (s admissionTestLockService) GetConfig() lockservice.Config {
+	return lockservice.Config{ServiceID: s.service}
+}
+
+func TestServiceMemoryAdmissionFixtureIsScopedAndUsesOneOwner(t *testing.T) {
+	const service = "deterministic-memory-admission-fixture"
+	b, sample := controlTestBudget(t, 8<<30-1<<30)
+	cleanup, err := SetServiceMemoryAdmissionBudgetForTesting(service, b.physicalLedger)
+	require.NoError(t, err)
+	defer cleanup()
+	require.Same(t, b.physicalLedger, serviceMemoryAdmissionBudget(service))
+	require.Same(t, system.DefaultMemoryAdmissionBudget(), serviceMemoryAdmissionBudget(service+"-other"))
+	_, err = SetServiceMemoryAdmissionBudgetForTesting(service, b.physicalLedger)
+	require.ErrorIs(t, err, ErrExecutionResourceInvalid)
+
+	proc := &Process{Ctx: t.Context(), Base: &BaseProcess{LockService: admissionTestLockService{service: service}, Lim: Limitation{Size: 1 << 30}}}
+	_, entry, err := proc.EnterStatementMemoryAdmission(t.Context())
+	require.NoError(t, err)
+	defer entry.Close()
+	g, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	defer g.Close()
+	require.Same(t, b.physicalLedger, g.budget.physicalLedger)
+	_, err = g.budget.sampleCNCap()
+	require.NoError(t, err)
+	require.Equal(t, sample.Limit, g.budget.liveCapInputs.MemoryDomain.Limit)
+	require.Equal(t, sample.Used, g.budget.liveCapInputs.MemoryDomain.Used)
+	require.Equal(t, uint64(1), b.physicalLedger.Snapshot().StatementActive)
 }
 
 func TestProcessEntryChargesActualAllocationWithoutFixedFloor(t *testing.T) {

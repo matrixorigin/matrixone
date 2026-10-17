@@ -67,6 +67,19 @@ func TestHealthyStatementEntryDoesNotThrottleConcurrency(t *testing.T) {
 	require.Zero(t, b.Snapshot().StatementActive)
 }
 
+func TestHealthyStatementEntryDoesNotAllocateRejectionDiagnostics(t *testing.T) {
+	b, _ := statementTestBudget(8 << 30)
+	allocs := testing.AllocsPerRun(10, func() {
+		_, lease, err := b.EnterStatement(t.Context(), false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lease.Close()
+	})
+	// Only the admitted lease and its context value belong on the healthy path.
+	require.LessOrEqual(t, allocs, 2.0)
+}
+
 func TestStatementQueueIsFIFOAndBounded(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b, _ := statementTestBudget(1 << 20)
@@ -201,4 +214,50 @@ func TestStatementAdmissionRejectsExhaustedAndUnknownDomain(t *testing.T) {
 			require.ErrorIs(t, err, ErrMemoryStatementTimeout)
 		}
 	}
+}
+
+func TestStatementRejectionPreservesDecisionWithoutResampling(t *testing.T) {
+	for _, control := range []bool{false, true} {
+		b, sample := statementTestBudget(0)
+		b.statementPolicy.WaitTimeout = 0
+		s := *sample.Load()
+		s.SoftLimit = s.Used
+		s.ObservedAt = time.Now()
+		var reads int
+		b.domainProvider = func() (MemoryDomainSnapshot, error) {
+			reads++
+			return s, nil
+		}
+		_, _, err := b.EnterStatement(t.Context(), control)
+		require.ErrorIs(t, err, ErrMemoryStatementTimeout)
+		var detail *MemoryStatementAdmissionError
+		require.ErrorAs(t, err, &detail)
+		require.Equal(t, s, detail.Snapshot.Domain)
+		require.Equal(t, "no-headroom", detail.OrdinaryReason)
+		require.Equal(t, control, detail.Control)
+		require.Zero(t, detail.ControlAvailable)
+		s.Used = 0 // Later recovery must not change the failure's observation.
+		require.Contains(t, err.Error(), "available=0")
+		require.Contains(t, err.Error(), "soft_limit=")
+		require.NotZero(t, detail.Snapshot.Domain.Used)
+		require.Equal(t, 1, reads, "formatting and unwrapping must not read the domain")
+		require.Zero(t, b.controlActive)
+		require.Zero(t, b.controlReserved)
+	}
+}
+
+func TestStatementRejectionDistinguishesControlSlotExhaustion(t *testing.T) {
+	b, _ := statementTestBudget(0)
+	b.statementPolicy.WaitTimeout = 0
+	for range memoryControlConcurrency {
+		_, lease, err := b.EnterStatement(t.Context(), true)
+		require.NoError(t, err)
+		defer lease.Close()
+	}
+	_, _, err := b.EnterStatement(t.Context(), true)
+	var detail *MemoryStatementAdmissionError
+	require.ErrorAs(t, err, &detail)
+	require.Equal(t, "slots-exhausted", detail.ControlReason)
+	require.Equal(t, memoryControlConcurrency, detail.Snapshot.ControlActive)
+	require.Zero(t, detail.Snapshot.ControlReserved)
 }

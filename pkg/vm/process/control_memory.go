@@ -104,7 +104,7 @@ func (proc *Process) EnterStatementMemoryAdmission(ctx context.Context) (context
 	if isolated {
 		return ctx, nil, nil
 	}
-	ledger := system.DefaultMemoryAdmissionBudget()
+	ledger := serviceMemoryAdmissionBudget(proc.GetService())
 	if g != nil {
 		g.budget.mu.Lock()
 		ledger = g.budget.physicalLedger

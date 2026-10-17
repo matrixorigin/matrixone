@@ -17,6 +17,7 @@ package system
 import (
 	"container/list"
 	"context"
+	"fmt"
 	"os"
 	"time"
 
@@ -27,6 +28,64 @@ var (
 	ErrMemoryStatementQueueFull = moerr.NewInternalErrorNoCtx("memory statement admission queue full")
 	ErrMemoryStatementTimeout   = moerr.NewInternalErrorNoCtx("memory statement admission wait timed out")
 )
+
+// MemoryStatementAdmissionError retains the last failed decision, not a later
+// diagnostic resample. Unwrap preserves timeout/queue-full classification.
+type MemoryStatementAdmissionError struct {
+	Cause               error
+	Snapshot            MemoryAdmissionBudgetSnapshot
+	NonGoHighWater      uint64
+	PressureConcurrency uint64
+	Control             bool
+	ControlAvailable    uint64
+	OrdinaryReason      string
+	ControlReason       string
+}
+
+func (e *MemoryStatementAdmissionError) Error() string {
+	s := e.Snapshot
+	return fmt.Sprintf("%v: source=%s measured=%t used=%d limit=%d soft_limit=%d capacity=%d non_go=%d non_go_high_water=%d reserve=%d reserved=%d available=%d active=%d concurrency=%d queued=%d ordinary_reason=%s control=%t control_active=%d control_reserved=%d control_available=%d control_reason=%s observed_at=%s",
+		e.Cause, s.Domain.Source, s.Measured, s.Domain.Used, s.Domain.Limit, s.Domain.SoftLimit, s.Domain.CapacityLimit(),
+		s.Domain.NonGo, e.NonGoHighWater, s.Reserve, s.Reserved, s.Available, s.StatementActive, e.PressureConcurrency,
+		s.StatementQueued, e.OrdinaryReason, e.Control, s.ControlActive, s.ControlReserved, e.ControlAvailable, e.ControlReason,
+		s.Domain.ObservedAt.Format(time.RFC3339Nano))
+}
+
+func (e *MemoryStatementAdmissionError) Unwrap() error { return e.Cause }
+
+func (e MemoryStatementAdmissionError) withCause(cause error) error {
+	e.Cause = cause
+	return &e
+}
+
+func (b *MemoryAdmissionBudget) statementRejectionLocked(snapshot MemoryDomainSnapshot, available, concurrency uint64, atHead, control bool) MemoryStatementAdmissionError {
+	d := MemoryStatementAdmissionError{Snapshot: b.snapshotLocked(snapshot, available), NonGoHighWater: b.nonGoHighWater,
+		PressureConcurrency: concurrency, Control: control, OrdinaryReason: "pressure-concurrency", ControlReason: "not-requested"}
+	switch {
+	case !snapshot.Measured || snapshot.AdmissionLimit() == 0:
+		d.OrdinaryReason = "domain-unmeasured"
+	case available == 0:
+		d.OrdinaryReason = "no-headroom"
+	case !atHead:
+		d.OrdinaryReason = "queue-order"
+	}
+	if control {
+		switch {
+		case !snapshot.Measured || snapshot.AdmissionLimit() == 0:
+			d.ControlReason = "domain-unmeasured"
+		case b.controlActive >= memoryControlConcurrency:
+			d.ControlReason = "slots-exhausted"
+		case b.controlLimitLocked(snapshot)/memoryControlConcurrency == 0:
+			d.ControlReason = "disabled"
+		default:
+			// A non-owning view: no slot is acquired or released for diagnostics.
+			view := MemoryControlLease{budget: b, limit: b.controlLimitLocked(snapshot) / memoryControlConcurrency}
+			d.ControlAvailable, _ = view.availableLocked(snapshot)
+			d.ControlReason = "no-headroom"
+		}
+	}
+	return d
+}
 
 // MemoryStatementAdmissionPolicy bounds waiting, not the bytes a statement may
 // allocate. Healthy work is unrestricted. At less than one calibrated reserve
@@ -94,6 +153,7 @@ func (b *MemoryAdmissionBudget) EnterStatement(ctx context.Context, control bool
 	var timer *time.Timer
 	var ticker *time.Ticker
 	var expires time.Time
+	var rejection MemoryStatementAdmissionError
 	defer func() {
 		if timer != nil {
 			timer.Stop()
@@ -113,7 +173,7 @@ func (b *MemoryAdmissionBudget) EnterStatement(ctx context.Context, control bool
 			b.removeStatementWaiterLocked(element)
 			b.statementRejected++
 			b.mu.Unlock()
-			return ctx, nil, ErrMemoryStatementTimeout
+			return ctx, nil, rejection.withCause(ErrMemoryStatementTimeout)
 		}
 		available := b.availableLocked(snapshot)
 		concurrency := b.statementPolicy.PressureConcurrency
@@ -145,16 +205,17 @@ func (b *MemoryAdmissionBudget) EnterStatement(ctx context.Context, control bool
 				allowance.releaseSlotLocked()
 			}
 		}
+		rejection = b.statementRejectionLocked(snapshot, available, concurrency, atHead, control)
 		if element == nil {
 			if uint64(b.statementQueue.Len()) >= b.statementPolicy.MaxQueued {
 				b.statementRejected++
 				b.mu.Unlock()
-				return ctx, nil, ErrMemoryStatementQueueFull
+				return ctx, nil, rejection.withCause(ErrMemoryStatementQueueFull)
 			}
 			if b.statementPolicy.WaitTimeout <= 0 {
 				b.statementRejected++
 				b.mu.Unlock()
-				return ctx, nil, ErrMemoryStatementTimeout
+				return ctx, nil, rejection.withCause(ErrMemoryStatementTimeout)
 			}
 			waiter = &memoryStatementWaiter{wake: make(chan struct{}, 1)}
 			element = b.statementQueue.PushBack(waiter)
@@ -173,7 +234,7 @@ func (b *MemoryAdmissionBudget) EnterStatement(ctx context.Context, control bool
 			b.removeStatementWaiterLocked(element)
 			b.statementRejected++
 			b.mu.Unlock()
-			return ctx, nil, ErrMemoryStatementTimeout
+			return ctx, nil, rejection.withCause(ErrMemoryStatementTimeout)
 		}
 	}
 }

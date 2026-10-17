@@ -18,6 +18,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -25,7 +26,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -80,10 +83,24 @@ func TestStatementMemoryAdmissionSQLLifecycle(t *testing.T) {
 
 // Cancellation must not queue behind the query whose resources it releases.
 // Hold a real authenticated SQL query at an execution barrier, saturate the
-// pressure concurrency with accounted entries, then pressure the production
-// ledger using a pending claim rather than a multi-GiB physical allocation.
+// pressure concurrency with accounted entries, then lower the test-owned
+// domain's headroom. Never consume the process-wide ledger: compiler/coverage
+// memory in a shared cgroup must not change this protocol regression's premise.
 func TestStatementMemoryAdmissionKillQueryUnderPressure(t *testing.T) {
-	cluster, err := embed.StartTestCluster(embed.WithCNCount(1))
+	const capacity, healthyUsed = uint64(16 << 30), uint64(1 << 30)
+	var used atomic.Uint64
+	used.Store(healthyUsed)
+	b := system.NewMemoryAdmissionBudgetWithProvider(system.DefaultMemoryDomainReservePolicy(), func() (system.MemoryDomainSnapshot, error) {
+		return system.MemoryDomainSnapshot{Used: used.Load(), Limit: capacity, Source: system.MemoryDomainSourceCgroupV2,
+			Measured: true, ObservedAt: time.Now()}, nil
+	})
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(svc embed.ServiceOperator) {
+		if svc.ServiceType() == metadata.ServiceType_CN {
+			cleanup, setupErr := process.SetServiceMemoryAdmissionBudgetForTesting(svc.ServiceID(), b)
+			require.NoError(t, setupErr)
+			t.Cleanup(cleanup) // registered before cluster.Close: removed after shutdown
+		}
+	}))
 	if cluster != nil {
 		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
 	}
@@ -139,31 +156,23 @@ func TestStatementMemoryAdmissionKillQueryUnderPressure(t *testing.T) {
 		return ok && n > 0
 	}, 20*time.Second, 10*time.Millisecond, "worker must reach execution before pressure is injected")
 
-	b := system.DefaultMemoryAdmissionBudget()
-	// Do not change global policy/env: fill the production default pressure
-	// concurrency. The host may already be below the healthy margin, in which
-	// case the first timeout proves saturation and must not fail test setup.
+	// Retain the default policy/concurrency and real frontend/allocator paths,
+	// but control only this CN's domain observation, not unrelated test owners.
 	for range max(1, system.GoMaxProcs()) {
 		_, lease, err := b.EnterStatement(ctx, false)
-		if err != nil {
-			require.ErrorIs(t, err, system.ErrMemoryStatementTimeout)
-			break
-		}
+		require.NoError(t, err)
 		defer lease.Close()
 	}
 	s := b.Snapshot()
-	const margin = uint64(1 << 20)
-	require.Greater(t, s.Available, margin)
-	claim := s.Available - margin
-	_, ok := b.TryReserve(claim)
-	require.True(t, ok)
-	defer b.Release(claim)
+	used.Store(capacity - s.Reserve - (8 << 20))
+	defer used.Store(healthyUsed)
 	s = b.Snapshot()
 	require.Less(t, s.Available, s.Reserve)
 	require.Positive(t, s.StatementActive)
 	t.Logf("pressure admission: available=%d reserve=%d active=%d", s.Available, s.Reserve, s.StatementActive)
 	_, err = killer.ExecContext(ctx, "select 1")
 	require.ErrorContains(t, err, "memory statement admission wait timed out", "ordinary SQL must still wait under pressure")
+	require.ErrorContains(t, err, "control=false", "the MySQL error must preserve the rejecting decision's diagnostics")
 	_, err = killer.ExecContext(ctx, killSQL)
 	require.NoError(t, err, "KILL must use the bounded control path while the ordinary queue is saturated")
 	_, err = fault.RemoveFaultPoint(ctx, barrier)
