@@ -204,7 +204,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	}
 	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
 		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
-	applyLoadParallelAdmission(stmt.Param, offset)
+	applyLoadParallelAdmission(stmt.Param, offset, ctx.GetProcess().GetService())
 
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.Tail.Assignments = nil

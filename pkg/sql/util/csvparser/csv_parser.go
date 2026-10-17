@@ -38,6 +38,14 @@ var (
 	ReadBlockSize              int64 = 64 * 1024
 )
 
+// IsSyntaxError reports malformed CSV framing, excluding configuration, storage,
+// cancellation and resource-limit errors. Callers may use it for tolerant framing.
+func IsSyntaxError(err error) bool {
+	return errors.Is(err, errUnterminatedQuotedField) ||
+		errors.Is(err, errDanglingBackslash) ||
+		errors.Is(err, errUnexpectedQuoteField)
+}
+
 type Field struct {
 	Val            string
 	IsNull         bool
@@ -271,6 +279,20 @@ func (parser *CSVParser) Read(lastRow []Field) (row []Field, err error) {
 	return row, err
 }
 
+// ScanRecord advances to the next record using Read's framing and header rules,
+// without decoding its field values. Pos reports the consumed record boundary.
+// Like Read, it returns io.EOF when no record remains. Its scratch buffers are
+// reused and it does not produce a decoded row.
+func (parser *CSVParser) ScanRecord() error {
+	if parser.shouldParseHeader {
+		if err := parser.readColumns(); err != nil {
+			return err
+		}
+		parser.shouldParseHeader = false
+	}
+	return parser.readRecord()
+}
+
 func (parser *CSVParser) Pos() int64 {
 	return parser.pos
 }
@@ -288,16 +310,7 @@ func validDelim(r rune) bool {
 
 // readRow reads a row from the datafile.
 func (parser *CSVParser) readRow(row []Field) ([]Field, error) {
-	// skip the header first
-	if parser.shouldParseHeader {
-		err := parser.readColumns()
-		if err != nil {
-			return nil, err
-		}
-		parser.shouldParseHeader = false
-	}
-
-	if err := parser.readRecord(); err != nil {
+	if err := parser.ScanRecord(); err != nil {
 		return nil, err
 	}
 
@@ -612,7 +625,11 @@ outside:
 		// (the default) disables comments entirely.
 		if len(parser.comment) > 0 && prevToken == csvTokenNewLine &&
 			len(parser.recordBuffer) == 0 && !foundStartingByThisLine {
-			if bs, perr := parser.peekBytes(len(parser.comment)); perr == nil && bytes.Equal(bs, parser.comment) {
+			bs, perr := parser.peekBytes(len(parser.comment))
+			if perr != nil && perr != io.EOF {
+				return perr
+			}
+			if perr == nil && bytes.Equal(bs, parser.comment) {
 				if _, _, rerr := parser.readUntilTerminator(); rerr != nil && rerr != io.EOF {
 					return rerr
 				}
@@ -631,13 +648,10 @@ outside:
 			oldPos := parser.pos
 			oldLineNo := parser.lineNo
 			content, _, err := parser.readUntilTerminator()
-			if err != nil {
-				if len(content) == 0 {
-					return err
-				}
-				// if we reached EOF, we should still check the content contains
-				// startingBy and try to put back and parse it.
+			if err != nil && (err != io.EOF || len(content) == 0) {
+				return err
 			}
+			// At EOF, remaining content can still contain startingBy and a final record.
 			idx := bytes.Index(content, parser.startingBy)
 			if idx == -1 {
 				continue
