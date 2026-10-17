@@ -98,6 +98,7 @@ func newPrescanTrackingFS(t *testing.T, data string) *prescanTrackingFS {
 func TestReadFileOffsetClosesTailScanReaders(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
+		format      string
 		strict      bool
 		readErr     error
 		missing     bool
@@ -114,7 +115,11 @@ func TestReadFileOffsetClosesTailScanReaders(t *testing.T) {
 		{name: "strict EOF", strict: true, readErr: io.EOF, cpus: 4, wantOffsets: []int64{0, -1}, wantReaders: 1},
 		{name: "strict scan error", strict: true, readErr: errors.New("scan failed"), cpus: 4, wantOffsets: []int64{0, -1}, wantReaders: 1},
 		{name: "nonstrict scan error", readErr: errors.New("scan failed"), cpus: 4, wantErr: true, wantReaders: 1},
-		{name: "partial read error", readErr: errors.New("partial scan failed"), partialRead: true, cpus: 4, wantErr: true, wantReaders: 3},
+		// CSV framing propagates the first storage error without probing again.
+		{name: "partial read error", readErr: errors.New("partial scan failed"), partialRead: true, cpus: 4, wantErr: true, wantReaders: 1},
+		// Physical scanning can consume a buffered newline before exposing the
+		// accompanying error. Keep its later-probe cleanup coverage separately.
+		{name: "JSONLINE partial read error", format: tree.JSONLINE, readErr: errors.New("partial scan failed"), partialRead: true, cpus: 4, wantErr: true, wantReaders: 3},
 		{name: "open error", missing: true, cpus: 4},
 		{name: "later open error", failReadAt: 2, cpus: 4, wantReaders: 1},
 		{name: "strict canceled scan", strict: true, readErr: context.Canceled, cpus: 4, wantOffsets: []int64{0, -1}, wantReaders: 1},
@@ -128,8 +133,12 @@ func TestReadFileOffsetClosesTailScanReaders(t *testing.T) {
 			fs.readErr = tc.readErr
 			fs.failReadAt = tc.failReadAt
 			fs.partialRead = tc.partialRead
+			format := tc.format
+			if format == "" {
+				format = tree.CSV
+			}
 			param := &tree.ExternParam{
-				ExParamConst: tree.ExParamConst{Filepath: "etl:/prescan.csv", Format: tree.CSV, ScanType: tree.INFILE, CompressType: tree.NOCOMPRESS, Tail: &tree.TailParameter{}},
+				ExParamConst: tree.ExParamConst{Filepath: "etl:/prescan.csv", Format: format, ScanType: tree.INFILE, CompressType: tree.NOCOMPRESS, Tail: &tree.TailParameter{}},
 				ExParam:      tree.ExParam{FileService: fs, Ctx: fileservice.WithSQLFileAccess(t.Context(), "sys", "moadmin"), Strict: tc.strict},
 			}
 			if tc.missing {
@@ -150,6 +159,11 @@ func TestReadFileOffsetClosesTailScanReaders(t *testing.T) {
 				require.Equal(t, tc.wantOffsets, offsets)
 			}
 			require.Len(t, fs.readers, tc.wantReaders)
+			wantReadCalls := tc.wantReaders
+			if tc.missing || tc.failReadAt > 0 {
+				wantReadCalls++
+			}
+			require.Equal(t, wantReadCalls, fs.readCalls, "no probe may open after a terminal error")
 			for _, r := range fs.readers {
 				require.Equal(t, 1, r.closes)
 			}
