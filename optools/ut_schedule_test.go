@@ -554,7 +554,10 @@ func TestEngineLaunchRegistrationSurvivesCancellation(t *testing.T) {
 	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
-UT_HELPER_TERM_GRACE_TICKS=4
+# This is an ownership/ordering test, not a one-second cleanup benchmark.
+# Leave scheduling headroom for the TERM handler's report publication on a
+# busy race runner, while staying below the harness's 15-second deadline.
+UT_HELPER_TERM_GRACE_TICKS=20
 trap handle_ut_termination TERM
 UT_REPORT="$CASE_DIR/ut-report.json"
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
@@ -563,7 +566,7 @@ mkfifo "$CASE_DIR/engine-ready" "$CASE_DIR/engine-hold"
 exec 8<>"$CASE_DIR/engine-hold"
 exec 9<>"$CASE_DIR/engine-ready"
 function run_engine_race_shards() {
-	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; publish_ut_helper_completion 143; exit 143' TERM
+	trap 'if [[ -f "$UT_REPORT" ]] && grep -q "^engine$" "$UT_REPORT"; then : > "$CASE_DIR/report-consumed-early"; fi; : > "$CASE_DIR/engine-stopped"; publish_ut_helper_completion 143; exit 143' TERM
 	printf 'engine\n' > "$ENGINE_RACE_REPORT"
 	touch "$CASE_DIR/engine-started"
 	printf 'ready\n' >&9
