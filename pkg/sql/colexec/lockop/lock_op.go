@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -87,6 +88,12 @@ func (lockOp *LockOp) OpType() vm.OpType {
 }
 
 func (lockOp *LockOp) Prepare(proc *process.Process) error {
+	for _, target := range lockOp.targets {
+		if target.noWait && !proc.GetTxnOperator().Txn().IsPessimistic() {
+			return moerr.NewNotSupportedNoCtx(
+				"NOWAIT requires a pessimistic transaction")
+		}
+	}
 	if lockOp.OpAnalyzer == nil {
 		lockOp.OpAnalyzer = process.NewAnalyzer(lockOp.GetIdx(), lockOp.IsFirst, lockOp.IsLast, "lock_op")
 	} else {
@@ -136,6 +143,12 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
+		for _, target := range lockOp.targets {
+			if target.noWait {
+				return vm.CallResult{}, moerr.NewNotSupportedNoCtx(
+					"NOWAIT requires a pessimistic transaction")
+			}
+		}
 		return vm.Exec(lockOp.GetChildren(0), proc)
 	}
 
@@ -279,6 +292,7 @@ func performLock(
 		// a full range lock can require lockservice to merge ranges that are
 		// already held by multiple foreign-key validation transactions.
 		if targetIdx == -1 && target.mode != lock.LockMode_Shared &&
+			!target.noWait &&
 			target.filter == nil && !target.lockTable && target.lockRows == nil {
 			for next := idx + 1; next < len(lockOp.targets); next++ {
 				candidate := lockOp.targets[next]
@@ -305,7 +319,16 @@ func performLock(
 		}
 		target = lockOp.targets[primaryIdx]
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
+			if target.noWait {
+				return moerr.NewNotSupportedNoCtx(
+					"NOWAIT cannot bypass physical lock admission")
+			}
 			continue
+		}
+		if target.noWait &&
+			(target.lockTable || len(group) > 1) {
+			return moerr.NewNotSupportedNoCtx(
+				"NOWAIT requires exact row lock targets")
 		}
 		lockOp.logger.Debug("lock",
 			zap.Uint64("table", target.tableID),
@@ -363,6 +386,7 @@ func performLock(
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(lockTable, target.changeDef).
+				WithNoWait(target.noWait).
 				WithHasNewVersionInRangeFunc(hasNewVersionInRangeFunc),
 			0,
 		)
@@ -702,6 +726,10 @@ func doLock(
 	lockService := proc.GetLockService()
 
 	if !txnOp.Txn().IsPessimistic() {
+		if opts.noWait {
+			return false, false, timestamp.Timestamp{}, moerr.NewNotSupportedNoCtx(
+				"NOWAIT requires a pessimistic transaction")
+		}
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
@@ -747,7 +775,12 @@ func doLock(
 		fetchFunc = GetFetchRowsFunc(pkType)
 	}
 	fetchLimit := opts.maxCountPerLock
-	if (opts.mode == lock.LockMode_Shared || exactMutation) && !opts.lockTable && vec != nil {
+	fastFail := opts.noWait
+	if fastFail && opts.lockTable {
+		return false, false, timestamp.Timestamp{}, moerr.NewNotSupportedNoCtx(
+			"NOWAIT requires exact row lock targets")
+	}
+	if (opts.mode == lock.LockMode_Shared || exactMutation || fastFail) && !opts.lockTable && vec != nil {
 		// A runtime cardinality surprise must not widen a Shared target or an
 		// exact internal mutation. The latter fails on the fixed-bookkeeping
 		// ceiling instead of upgrading to a table lock.
@@ -764,6 +797,10 @@ func doLock(
 		opts.filterCols)
 	if !has {
 		return false, false, timestamp.Timestamp{}, nil
+	}
+	if fastFail && g != lock.Granularity_Row {
+		return false, false, timestamp.Timestamp{}, moerr.NewNotSupportedNoCtx(
+			"NOWAIT requires exact row lock targets")
 	}
 
 	if g == lock.Granularity_Row && len(rows) > 1 {
@@ -784,6 +821,10 @@ func doLock(
 	}
 	if opts.waitPolicy != nil {
 		options.Policy = *opts.waitPolicy
+	}
+	if fastFail {
+		options.NoWait = true
+		options.Policy = lock.WaitPolicy_FastFail
 	}
 	if err = setPlanSnapshotForLock(ctx, tableID, txn.IsRCIsolation(), proc, &options); err != nil {
 		return false, false, timestamp.Timestamp{}, err
@@ -825,6 +866,24 @@ func doLock(
 	if opts.sharding == lock.Sharding_ByRow {
 		table = lockservice.ShardingByRow(rows[0])
 	}
+	if fastFail {
+		// If this lock service already knows the physical table binding, register
+		// it before issuing a nonblocking request. A first request can allocate
+		// its binding inside Lock; in that case Result.LockedOn below supplies the
+		// same cleanup route on success, conflict, or an indeterminate RPC error.
+		bind, bindErr := lockService.GetLockTableBind(opts.group, table)
+		if bindErr != nil {
+			return false, false, timestamp.Timestamp{}, bindErr
+		}
+		if bind.Valid {
+			if bind.Table != table || bind.Group != opts.group {
+				return false, false, timestamp.Timestamp{}, moerr.NewLockTableBindChangedNoCtx()
+			}
+			if addErr := txnOp.AddLockTable(bind); addErr != nil {
+				return false, false, timestamp.Timestamp{}, addErr
+			}
+		}
+	}
 
 	result, err := lockWithRetry(
 		ctx,
@@ -840,6 +899,20 @@ func doLock(
 		pkType,
 	)
 	if err != nil {
+		if fastFail {
+			if result.LockedOn.Valid {
+				if result.LockedOn.Table != table || result.LockedOn.Group != opts.group {
+					err = errors.Join(err, moerr.NewLockTableBindChangedNoCtx())
+				} else if addErr := txnOp.AddLockTable(result.LockedOn); addErr != nil {
+					err = errors.Join(err, addErr)
+				}
+			} else if err == lockservice.ErrLockConflict {
+				err = errors.Join(err, moerr.NewLockTableBindChangedNoCtx())
+			}
+			if opts.noWait && err == lockservice.ErrLockConflict {
+				return false, false, timestamp.Timestamp{}, moerr.NewLockNowaitNoCtx()
+			}
+		}
 		return false, false, timestamp.Timestamp{}, err
 	}
 
@@ -1223,6 +1296,20 @@ func lockWithRetry(
 	opts LockOptions,
 	pkType types.Type,
 ) (lock.Result, error) {
+	if opts.noWait {
+		return LockWithMayUpgrade(
+			ctx,
+			lockService,
+			tableID,
+			rows,
+			txnID,
+			options,
+			fetchFunc,
+			vec,
+			opts,
+			pkType,
+		)
+	}
 	var result lock.Result
 	var err error
 	retryState := lockRetryState{}
@@ -1273,6 +1360,9 @@ func LockWithMayUpgrade(
 	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		return result, err
+	}
+	if opts.noWait || options.NoWait {
 		return result, err
 	}
 	if (opts.admissionOnly || exactMutationRows(ctx)) && !opts.lockTable {
@@ -1525,7 +1615,12 @@ func DefaultLockOptions(parker *types.Packer) LockOptions {
 	}
 }
 
-// WithLockSharding set lock sharding
+// WithNoWait enables exact-row FastFail admission for one lock target.
+func (opts LockOptions) WithNoWait(noWait bool) LockOptions {
+	opts.noWait = noWait
+	return opts
+}
+
 func (opts LockOptions) WithLockSharding(sharding lock.Sharding) LockOptions {
 	opts.sharding = sharding
 	return opts
@@ -1611,9 +1706,21 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 			LockTableAtTheEnd:    target.lockTableAtTheEnd,
 			ObjRef:               plan.DeepCopyObjectRef(target.objRef),
 			PartitionColIdxInBat: target.partitionColumnIndexInBatch,
+			NoWait:               target.noWait,
 		}
 	}
 	return targets
+}
+
+// RequiresCoordinatorExecution reports whether the lock policy must remain on
+// the transaction-owning CN instead of being serialized to a remote worker.
+func (lockOp *LockOp) RequiresCoordinatorExecution() bool {
+	for i := range lockOp.targets {
+		if lockOp.targets[i].noWait {
+			return true
+		}
+	}
+	return false
 }
 
 // CopyTargetsFrom creates a deep copy of targets from another LockOp.
@@ -1637,6 +1744,7 @@ func (lockOp *LockOp) CopyTargetsFrom(src *LockOp) {
 			lockTable:                    t.lockTable,
 			changeDef:                    t.changeDef,
 			mode:                         t.mode,
+			noWait:                       t.noWait,
 			lockRows:                     plan.DeepCopyExpr(t.lockRows),
 			lockTableAtTheEnd:            t.lockTableAtTheEnd,
 		}
@@ -1676,6 +1784,24 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 	refreshTimestampIndexInBatch int32,
 	lockRows *plan.Expr,
 	lockTableAtTheEnd bool) *LockOp {
+	return lockOp.AddLockTargetWithPolicy(
+		tableID, objRef, mode, primaryColumnIndexInBatch, primaryColumnType,
+		partitionColIndexInBatch, refreshTimestampIndexInBatch, lockRows,
+		lockTableAtTheEnd, false)
+}
+
+// AddLockTargetWithPolicy adds a target with explicit nonblocking read semantics.
+func (lockOp *LockOp) AddLockTargetWithPolicy(
+	tableID uint64,
+	objRef *plan.ObjectRef,
+	mode lock.LockMode,
+	primaryColumnIndexInBatch int32,
+	primaryColumnType types.Type,
+	partitionColIndexInBatch int32,
+	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool,
+	noWait bool) *LockOp {
 	lockOp.targets = append(lockOp.targets, lockTarget{
 		tableID:                      tableID,
 		objRef:                       objRef,
@@ -1683,6 +1809,7 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 		mode:                         mode,
+		noWait:                       noWait,
 		lockRows:                     lockRows,
 		lockTableAtTheEnd:            lockTableAtTheEnd,
 		partitionColumnIndexInBatch:  partitionColIndexInBatch,

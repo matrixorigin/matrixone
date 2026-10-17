@@ -8521,12 +8521,51 @@ func TestReplaceAndChildInsertUseCanonicalForeignKeyLockOrder(t *testing.T) {
 		"REPLACE must lock the base table first and hidden unique indexes by physical table name")
 }
 
+func TestSelectLockPoliciesReachOnlyTheirQueryBlockTargets(t *testing.T) {
+	tests := []struct {
+		name   string
+		sql    string
+		mode   lockpb.LockMode
+		noWait bool
+	}{
+		{name: "ordinary share", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE", mode: lockpb.LockMode_Shared},
+		{name: "update nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR UPDATE NOWAIT", mode: lockpb.LockMode_Exclusive, noWait: true},
+		{name: "share nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT", mode: lockpb.LockMode_Shared, noWait: true},
+		{
+			name:   "nested clause does not leak to outer target",
+			sql:    "SELECT N_NATIONKEY FROM NATION WHERE N_NATIONKEY IN (SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT)",
+			mode:   lockpb.LockMode_Shared,
+			noWait: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+
+			var targets []*plan.LockTarget
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					targets = append(targets, node.LockTargets...)
+				}
+			}
+			require.NotEmpty(t, targets)
+			for _, target := range targets {
+				assert.Equal(t, test.mode, target.Mode)
+				assert.Equal(t, test.noWait, target.GetNoWait())
+			}
+		})
+	}
+}
+
 func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	assert.Nil(t, DeepCopyLockTarget(nil))
 	target := &plan.LockTarget{
 		TableId:              42,
 		ObjRef:               &plan.ObjectRef{Obj: 42, ObjName: "parent"},
 		Mode:                 lockpb.LockMode_Shared,
+		NoWait:               true,
 		PrimaryColRelPos:     11,
 		FilterColRelPos:      12,
 		PartitionColIdxInBat: 13,
@@ -8536,6 +8575,7 @@ func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	assertScalarFields := func(t *testing.T, copied *plan.LockTarget) {
 		t.Helper()
 		assert.Equal(t, lockpb.LockMode_Shared, copied.Mode)
+		assert.True(t, copied.NoWait)
 		assert.Equal(t, int32(11), copied.PrimaryColRelPos)
 		assert.Equal(t, int32(12), copied.FilterColRelPos)
 		assert.Equal(t, int32(13), copied.PartitionColIdxInBat)

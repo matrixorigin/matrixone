@@ -435,6 +435,169 @@ func TestRollbackReadOnly(t *testing.T) {
 	}, WithTxnReadyOnly())
 }
 
+// fatalNoWaitFenceLockService turns a real remote partial-prefix conflict into
+// the fatal bind-fence response that can arrive when protocol admission changes
+// after the owner has acquired rows. The lockservice package separately tests
+// that capability-loss race and that its production response carries only the
+// cleanup route; this adapter lets the txn client exercise rollback end to end.
+type fatalNoWaitFenceLockService struct {
+	lockservice.LockService
+	fenced *bool
+}
+
+func (s fatalNoWaitFenceLockService) Lock(
+	ctx context.Context,
+	tableID uint64,
+	rows [][]byte,
+	txnID []byte,
+	options lock.LockOptions,
+) (lock.Result, error) {
+	result, err := s.LockService.Lock(ctx, tableID, rows, txnID, options)
+	if options.NoWait && err == lockservice.ErrLockConflict && result.LockedOn.Valid {
+		*s.fenced = true
+		return lock.Result{LockedOn: result.LockedOn}, lockservice.ErrLockTableBindChanged
+	}
+	return result, err
+}
+
+func TestReadOnlyRollbackUsesRemoteNoWaitCleanupBinding(t *testing.T) {
+	lockservice.RunLockServicesForTest(
+		zap.InfoLevel,
+		[]string{"readonly-origin", "readonly-owner"},
+		time.Second,
+		func(allocator lockservice.LockTableAllocator, services []lockservice.LockService) {
+			origin, owner := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const tableID = uint64(2510702)
+			bind := allocator.Get(
+				owner.GetServiceID(),
+				0,
+				tableID,
+				tableID,
+				lock.Sharding_None,
+			)
+			require.True(t, bind.Valid)
+			require.Equal(t, owner.GetServiceID(), bind.ServiceID)
+
+			holderTxn := []byte("readonly-cleanup-holder")
+			_, err := owner.Lock(
+				ctx,
+				tableID,
+				[][]byte{[]byte("held")},
+				holderTxn,
+				lock.LockOptions{
+					Granularity: lock.Granularity_Row,
+					Mode:        lock.LockMode_Exclusive,
+					Policy:      lock.WaitPolicy_Wait,
+				},
+			)
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, owner.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			}()
+
+			unknown, err := origin.GetLockTableBind(0, tableID)
+			require.NoError(t, err)
+			require.False(t, unknown.Valid,
+				"the read-only transaction must begin without a local route")
+
+			runOperatorTestsWithOptions(
+				t,
+				func(txnCtx context.Context, tc *txnOperator, _ *testTxnSender) {
+					workspace := &trackingWorkspace{readonly: true}
+					tc.AddWorkspace(workspace)
+
+					tc.mu.RLock()
+					txnID := append([]byte(nil), tc.mu.txn.ID...)
+					tc.mu.RUnlock()
+					fenced := false
+					fatalOrigin := fatalNoWaitFenceLockService{
+						LockService: origin,
+						fenced:      &fenced,
+					}
+					result, err := fatalOrigin.Lock(
+						txnCtx,
+						tableID,
+						[][]byte{[]byte("prefix"), []byte("held")},
+						txnID,
+						lock.LockOptions{
+							Granularity: lock.Granularity_Row,
+							Mode:        lock.LockMode_Exclusive,
+							Policy:      lock.WaitPolicy_FastFail,
+							NoWait:      true,
+						},
+					)
+					require.ErrorIs(t, err, lockservice.ErrLockTableBindChanged,
+						"a late protocol fence must remain fatal while carrying a cleanup route")
+					require.True(t, fenced,
+						"the actual remote partial-prefix conflict must be transformed into the injected fatal fence")
+					require.True(t, result.LockedOn.Valid,
+						"the fatal partial-prefix result must provide the client's cleanup route")
+					require.Equal(t, lock.Result{LockedOn: result.LockedOn}, result)
+					require.NoError(t, tc.AddLockTable(result.LockedOn))
+					tc.mu.RLock()
+					lockTableCount := len(tc.mu.lockTables)
+					tc.mu.RUnlock()
+					require.Equal(t, 1, lockTableCount)
+
+					prefix, found, err := owner.GetLockHolder(
+						txnCtx,
+						tableID,
+						[]byte("prefix"),
+						lock.LockOptions{Granularity: lock.Granularity_Row},
+					)
+					require.NoError(t, err)
+					require.True(t, found)
+					require.Equal(t, txnID, prefix.TxnID)
+					for _, service := range []lockservice.LockService{origin, owner} {
+						active, _, err := service.GetWaitingList(txnCtx, txnID)
+						require.NoError(t, err)
+						require.True(t, active)
+					}
+
+					// Rollback on a real read-only txnOperator must still call the
+					// real origin and owner lockservices when AddLockTable received
+					// the cleanup-only binding.
+					require.NoError(t, tc.Rollback(txnCtx))
+					_, found, err = owner.GetLockHolder(
+						txnCtx,
+						tableID,
+						[]byte("prefix"),
+						lock.LockOptions{Granularity: lock.Granularity_Row},
+					)
+					require.NoError(t, err)
+					require.False(t, found,
+						"read-only rollback must release the actual remote prefix")
+					for _, service := range []lockservice.LockService{origin, owner} {
+						active, _, err := service.GetWaitingList(txnCtx, txnID)
+						require.NoError(t, err)
+						require.False(t, active,
+							"rollback must retire the origin/owner active transaction")
+					}
+					_, found, err = owner.GetLockHolder(
+						txnCtx,
+						tableID,
+						[]byte("held"),
+						lock.LockOptions{Granularity: lock.Granularity_Row},
+					)
+					require.NoError(t, err)
+					require.True(t, found,
+						"rollback must not release the unrelated holder")
+				},
+				newTestTimestamp(0),
+				[]TxnOption{
+					WithTxnMode(txn.TxnMode_Pessimistic),
+					WithTxnReadyOnly(),
+				},
+				WithLockService(origin),
+			)
+		},
+		nil,
+	)
+}
+
 func TestCommit(t *testing.T) {
 	runOperatorTests(t, func(ctx context.Context, tc *txnOperator, ts *testTxnSender) {
 		tc.mu.txn.TNShards = append(tc.mu.txn.TNShards, metadata.TNShard{TNShardRecord: metadata.TNShardRecord{ShardID: 1}})

@@ -250,6 +250,7 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 		LockTableAtTheEnd:    target.LockTableAtTheEnd,
 		PartitionColIdxInBat: target.PartitionColIdxInBat,
 		HasPartitionCol:      target.HasPartitionCol,
+		NoWait:               target.NoWait,
 	}
 }
 

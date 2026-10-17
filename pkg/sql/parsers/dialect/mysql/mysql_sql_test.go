@@ -683,6 +683,16 @@ func TestSelectSharedLockParse(t *testing.T) {
 			sql:  "SELECT id FROM t WHERE id = '1' LOCK IN SHARE MODE",
 			want: "select id from t where id = 1 for share",
 		},
+		{
+			name: "for update nowait",
+			sql:  "SELECT id FROM t WHERE id = '1' FOR UPDATE NOWAIT",
+			want: "select id from t where id = 1 for update nowait",
+		},
+		{
+			name: "for share nowait",
+			sql:  "SELECT id FROM t WHERE id = '1' FOR SHARE NOWAIT",
+			want: "select id from t where id = 1 for share nowait",
+		},
 	}
 
 	for _, test := range tests {
@@ -694,8 +704,59 @@ func TestSelectSharedLockParse(t *testing.T) {
 			selectStmt, ok := stmt.(*tree.Select)
 			require.True(t, ok)
 			require.NotNil(t, selectStmt.SelectLockInfo)
-			require.Equal(t, tree.SelectLockForShare, selectStmt.SelectLockInfo.LockType)
+			switch test.name {
+			case "for update nowait":
+				require.Equal(t, tree.SelectLockForUpdateNoWait, selectStmt.SelectLockInfo.LockType)
+			case "for share nowait":
+				require.Equal(t, tree.SelectLockForShareNoWait, selectStmt.SelectLockInfo.LockType)
+			default:
+				require.Equal(t, tree.SelectLockForShare, selectStmt.SelectLockInfo.LockType)
+			}
 			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func TestSelectLockContextualNoWait(t *testing.T) {
+	for _, mode := range []string{"UPDATE", "SHARE"} {
+		for _, word := range []string{"nowait", "nOwAiT", "/*! nowait */", "/*! nowait */ /* tail */"} {
+			sql := "SELECT id FROM t FOR " + mode + " /* option */ " + word
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err, sql)
+			require.Equal(t, "select id from t for "+strings.ToLower(mode)+" nowait", tree.String(stmt, dialect.MYSQL))
+			stmt.Free()
+		}
+		for _, word := range []string{"other", "nowaits", "`nowait`", "'nowait'"} {
+			sql := "SELECT id FROM t FOR " + mode + " " + word
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			if stmt != nil {
+				stmt.Free()
+			}
+			require.Error(t, err, sql)
+		}
+	}
+}
+
+func TestSelectLockModifiersRemainUsableAsIdentifiers(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "SELECT nowait, locked, t.nowait, t.locked FROM t", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Equal(t, "select nowait, locked, t.nowait, t.locked from t", tree.String(stmt, dialect.MYSQL))
+}
+
+func TestSelectLockRejectsUnsupportedOrConflictingModifiers(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT id FROM t FOR UPDATE SKIP LOCKED",
+		"SELECT id FROM t FOR SHARE SKIP LOCKED",
+		"SELECT id FROM t FOR UPDATE NOWAIT NOWAIT",
+		"SELECT id FROM t FOR SHARE NOWAIT SKIP LOCKED",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			if stmt != nil {
+				stmt.Free()
+			}
+			require.Error(t, err)
 		})
 	}
 }
@@ -1037,6 +1098,9 @@ func TestParseFirstWithSQLMode(t *testing.T) {
 		first   string
 	}{
 		{name: "simple statement", sql: "select 1; select 2", first: "select 1;"},
+		{name: "plain locking boundary", sql: "select id from t for update; select 2", first: "select id from t for update;"},
+		{name: "contextual locking boundary", sql: "select id from t for share /*! nowait */; select 2", first: "select id from t for share /*! nowait */;"},
+
 		{name: "leading empty statements", sql: ";; select 1; select 2", first: ";; select 1;"},
 		{
 			name:  "nested compound statement",

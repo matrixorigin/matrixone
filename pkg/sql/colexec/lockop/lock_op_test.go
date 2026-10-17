@@ -1817,6 +1817,92 @@ func TestCallLockOpWithConflict(t *testing.T) {
 	)
 }
 
+func TestDoLockNowaitConflictMaps3572AndLeavesTransactionUsable(t *testing.T) {
+	runLockOpTest(t, func(proc *process.Process) {
+		const tableID = uint64(756)
+		service := proc.GetLockService()
+		foreignTxn := []byte("nowait-3572-holder")
+		keyFor := func(value int32) []byte {
+			packer := types.NewPacker()
+			defer packer.Close()
+			packer.EncodeInt32(value)
+			return bytes.Clone(packer.Bytes())
+		}
+		_, err := service.Lock(
+			proc.Ctx,
+			tableID,
+			[][]byte{keyFor(42)},
+			foreignTxn,
+			lock.LockOptions{
+				Granularity: lock.Granularity_Row,
+				Mode:        lock.LockMode_Exclusive,
+				Policy:      lock.WaitPolicy_Wait,
+			},
+		)
+		require.NoError(t, err)
+		defer func() { require.NoError(t, service.Unlock(proc.Ctx, foreignTxn, timestamp.Timestamp{})) }()
+
+		lockOne := func(value int32, noWait bool) error {
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = testutil.MakeInt32Vector([]int32{value}, nil, proc.Mp())
+			bat.SetRowCount(1)
+			defer bat.Clean(proc.Mp())
+			parker := types.NewPacker()
+			defer parker.Close()
+			options := DefaultLockOptions(parker).
+				WithLockMode(lock.LockMode_Shared).
+				WithNoWait(noWait).
+				WithHasNewVersionInRangeFunc(testFunc)
+			_, _, _, err := doLock(
+				proc.Ctx,
+				nil,
+				process.NewTempAnalyzer(),
+				nil,
+				tableID,
+				proc,
+				bat,
+				0,
+				types.T_int32.ToType(),
+				-1,
+				options,
+				0,
+			)
+			return err
+		}
+
+		txnID := bytes.Clone(proc.GetTxnOperator().Txn().ID)
+		require.NoError(t, lockOne(41, false), "the explicit txn acquires an earlier Shared row")
+		err = lockOne(42, true)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockNowait))
+		var mysqlErr *moerr.Error
+		require.ErrorAs(t, err, &mysqlErr)
+		require.Equal(t, uint16(moerr.ER_LOCK_NOWAIT), mysqlErr.MySQLCode(),
+			"the settled conflict must surface to SQL as MySQL 3572 / HY000")
+		require.Equal(t, txnID, proc.GetTxnOperator().Txn().ID,
+			"the failed NOWAIT statement must leave the explicit transaction active")
+
+		// A later ordinary operation in the same transaction still succeeds,
+		// and both earlier and later Shared grants remain owned until txn end.
+		require.NoError(t, lockOne(43, false))
+		for _, value := range []int32{41, 43} {
+			_, probeErr := service.Lock(
+				proc.Ctx,
+				tableID,
+				[][]byte{keyFor(value)},
+				[]byte("nowait-3572-probe"),
+				lock.LockOptions{
+					Granularity: lock.Granularity_Row,
+					Mode:        lock.LockMode_Exclusive,
+					Policy:      lock.WaitPolicy_FastFail,
+				},
+			)
+			require.ErrorIs(t, probeErr, lockservice.ErrLockConflict,
+				"the same transaction must keep its valid Shared grants")
+		}
+		require.NoError(t, service.Unlock(proc.Ctx, []byte("nowait-3572-probe"), timestamp.Timestamp{}))
+	})
+}
+
 func TestCallLockOpWithConflictWithRefreshNotEnabled(t *testing.T) {
 	tableID := uint64(10)
 	runLockNonBlockingOpTest(
@@ -2399,6 +2485,14 @@ func runLockOpTest(
 	t *testing.T,
 	fn func(*process.Process),
 	opts ...client.TxnClientCreateOption) {
+	runLockOpTestWithTxnOptions(t, fn, nil, opts...)
+}
+
+func runLockOpTestWithTxnOptions(
+	t *testing.T,
+	fn func(*process.Process),
+	txnOptions []client.TxnOption,
+	opts ...client.TxnClientCreateOption) {
 	defer leaktest.AfterTest(t)()
 	runtime.RunTest(
 		sid,
@@ -2425,7 +2519,7 @@ func runLockOpTest(
 					defer func() {
 						assert.NoError(t, c.Close())
 					}()
-					txnOp, err := c.New(ctx, timestamp.Timestamp{})
+					txnOp, err := c.New(ctx, timestamp.Timestamp{}, txnOptions...)
 					require.NoError(t, err)
 
 					proc := process.NewTopProcess(
