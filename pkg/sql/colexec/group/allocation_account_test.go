@@ -291,16 +291,23 @@ func installGroupTestAllocation(
 	t.Helper()
 	proc.Base.Lim.Size = int64(limit)
 	var generation *process.ExecutionResourceGeneration
-	if len(selected) != 0 {
+	if len(selected) != 0 && selected[0] != nil {
 		generation = selected[0]
 	} else {
 		// Account/spill behavior is the oracle, not the host's emergency disk
-		// headroom. Process.Free owns this private generation after its operators.
+		// headroom. The fixture closes this private generation after its operators.
 		budget := process.MustNewExecutionResourceBudget(limit, limit)
 		require.NoError(t, budget.SetSpillCaps(1<<30, budget.SpillFDCap()))
 		var err error
 		generation, err = budget.OpenGeneration(1)
 		require.NoError(t, err)
+		t.Cleanup(func() {
+			defer generation.Close()
+			snapshot := generation.Snapshot()
+			require.Zero(t, snapshot.Used, "private Group generation: %+v", snapshot)
+			require.Zero(t, snapshot.SpillDiskUsed)
+			require.Zero(t, snapshot.SpillFDUsed)
+		})
 		require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
 	}
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<16)

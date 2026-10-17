@@ -186,6 +186,11 @@ func (c *SharedTestCluster) Run(
 		c.mu.Lock()
 		defer func() {
 			if activeClaimed && !setupComplete {
+				// A panic/Goexit during rollback has not established cleanup
+				// completion. Retain the owner for explicit recovery.
+				if c.cluster != nil {
+					c.closed = true
+				}
 				c.releaseRunLocked()
 			}
 			c.mu.Unlock()
@@ -445,7 +450,7 @@ func (c *SharedTestCluster) Close() error {
 	err := c.cluster.Close()
 	if !closeComplete(c.cluster, err) {
 		c.closed = true
-		return err
+		return errors.Join(err, moerr.NewInvalidStateNoCtx("shared cluster cleanup is incomplete"))
 	}
 	c.cluster = nil
 	c.closed = true
@@ -481,7 +486,7 @@ func (c *SharedTestCluster) CloseIfActive() error {
 		// scenario from observing a partially closed fixture. A subsequent
 		// CloseIfActive call can retry the underlying cleanup.
 		c.closed = true
-		return err
+		return errors.Join(err, moerr.NewInvalidStateNoCtx("shared cluster cleanup is incomplete"))
 	}
 	c.resetGenerationLocked()
 	return err

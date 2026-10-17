@@ -247,6 +247,13 @@ func newWindowSpillProcess(t *testing.T) *process.Process {
 	require.NoError(t, budget.SetSpillCaps(1<<30, budget.SpillFDCap()))
 	generation, err := budget.OpenGeneration(1)
 	require.NoError(t, err)
+	t.Cleanup(func() {
+		defer generation.Close()
+		snapshot := generation.Snapshot()
+		require.Zero(t, snapshot.Used, "private Window generation: %+v", snapshot)
+		require.Zero(t, snapshot.SpillDiskUsed)
+		require.Zero(t, snapshot.SpillFDUsed)
+	})
 	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
 	return proc
 }

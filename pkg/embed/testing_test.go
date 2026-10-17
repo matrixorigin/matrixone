@@ -946,3 +946,42 @@ func TestSharedTestClusterInitializerPanicClosesAdmission(t *testing.T) {
 		state.Run(panicTestReporter{}, func() (Cluster, error) { t.Fatal("initializer must not retry"); return nil, nil }, func(Cluster) {})
 	})
 }
+
+type panickingRollbackCluster struct {
+	Cluster
+	closeCalls int
+	panicClose bool
+	complete   bool
+}
+
+func (c *panickingRollbackCluster) Close() error {
+	c.closeCalls++
+	if c.panicClose {
+		panic("rollback panic")
+	}
+	return nil
+}
+func (c *panickingRollbackCluster) CloseComplete() bool { return c.complete }
+
+func TestSharedTestClusterRollbackPanicRetainsClosedAdmission(t *testing.T) {
+	owner := &panickingRollbackCluster{panicClose: true}
+	state := SharedTestCluster{}
+	require.PanicsWithValue(t, "rollback panic", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) { return owner, errors.New("startup failed") }, func(Cluster) { t.Fatal("failed startup entered callback") })
+	})
+	require.Same(t, owner, state.cluster)
+	require.PanicsWithValue(t, "shared cluster is closed", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) { t.Fatal("initializer retried before cleanup"); return nil, nil }, func(Cluster) {})
+	})
+	require.Equal(t, 1, owner.closeCalls, "later roots must not implicitly retry rollback")
+	owner.panicClose = false
+	// Nil Close is not completion when the owner says resources remain.
+	require.ErrorContains(t, state.CloseIfActive(), "cleanup is incomplete")
+	require.Same(t, owner, state.cluster)
+	owner.complete = true
+	require.NoError(t, state.CloseIfActive())
+	called := false
+	state.Run(panicTestReporter{}, func() (Cluster, error) { return &cluster{}, nil }, func(Cluster) { called = true })
+	require.True(t, called)
+	require.NoError(t, state.Close())
+}

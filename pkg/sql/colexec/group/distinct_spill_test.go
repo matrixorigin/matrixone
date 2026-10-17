@@ -1642,6 +1642,7 @@ func TestDistinctContributionPathIsPartitionedAndAppliedOnce(t *testing.T) {
 
 func TestIntermediateDistinctSpillEmitsExactKeysAcrossWorkers(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	var generation *process.ExecutionResourceGeneration
 	aggs := []aggexec.AggFuncExecExpression{countDistinctAgg(0)}
 	buildPartial := func(values []int32) []*batch.Batch {
 		input := batch.NewWithSize(1)
@@ -1652,7 +1653,8 @@ func TestIntermediateDistinctSpillEmitsExactKeysAcrossWorkers(t *testing.T) {
 		partial.NeedEval = false
 		partial.SpillMem = 64 << 20
 		partial.AppendChild(child)
-		allocation := installGroupTestAllocation(t, partial, proc, 64<<20)
+		allocation := installGroupTestAllocation(t, partial, proc, 64<<20, generation)
+		generation = allocation.generation
 		require.NoError(t, partial.Prepare(proc))
 		partial.ctr.distinctDrainKeysForUT = 2
 
@@ -1681,7 +1683,7 @@ func TestIntermediateDistinctSpillEmitsExactKeysAcrossWorkers(t *testing.T) {
 	child := colexec.NewMockOperator().WithBatchs(partials)
 	merge := newMergeGroupOp(aggs)
 	merge.AppendChild(child)
-	allocation := installGroupTestAllocation(t, merge, proc, 64<<20)
+	allocation := installGroupTestAllocation(t, merge, proc, 64<<20, generation)
 	require.NoError(t, merge.Prepare(proc))
 	// Drain every incoming exact-key leaf so the shared key reaches the spill
 	// controller from both workers. With a larger threshold, the resident

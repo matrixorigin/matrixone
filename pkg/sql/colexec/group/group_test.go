@@ -3897,6 +3897,7 @@ func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
 				orderedPercentileAgg(aggexec.AggIdOfPercentileCont, valueCol, []byte("0.5"), false),
 				orderedPercentileAgg(aggexec.AggIdOfPercentileDisc, valueCol, []byte("0.95"), true),
 			}
+			var generation *process.ExecutionResourceGeneration
 			var partials []*batch.Batch
 			for producer := 0; producer < producers; producer++ {
 				input := batch.NewWithSize(int(valueCol) + 1)
@@ -3924,7 +3925,8 @@ func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
 				partial.NeedEval = false
 				partial.SpillMem = 536870912
 				partial.AppendChild(child)
-				allocation := installGroupTestAllocation(t, partial, proc, 128<<20)
+				allocation := installGroupTestAllocation(t, partial, proc, 128<<20, generation)
+				generation = allocation.generation
 				require.NoError(t, partial.Prepare(proc))
 				for _, bat := range collectBatches(t, partial, proc) {
 					partials = append(partials, cloneBatch(t, proc, bat))
@@ -3943,7 +3945,7 @@ func TestMergeGroupAccountedOrderedPercentileSpillModes(t *testing.T) {
 			merge := newMergeGroupOp(aggs)
 			merge.SpillMem = 1
 			merge.AppendChild(child)
-			allocation := installGroupTestAllocation(t, merge, proc, 128<<20)
+			allocation := installGroupTestAllocation(t, merge, proc, 128<<20, generation)
 			t.Cleanup(func() {
 				merge.Free(proc, false, nil)
 				child.Free(proc, false, nil)
