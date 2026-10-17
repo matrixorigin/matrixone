@@ -611,7 +611,10 @@ stage_fence(){
   hdr "阶段 fence: STONITH ($FENCE_SCENARIO)"
   [ -n "$FENCE_SCENARIO" ] || die "缺少 --fence-scenario"
   [ "$BOOTSTRAP" = 1 ] || { info "非引导节点：跳过 fencing 创建"; return 0; }
-  # 幂等：重跑 fence 阶段时先删除既有设备，否则 create 会报 already exists
+  # 幂等：重跑 fence 阶段时先删除既有设备，否则 create 会报 already exists。
+  # 删除与重建之间不能开着 stonith：若某个 create 失败，集群会停在
+  # "stonith-enabled=true 但没有设备" 状态，资源无法被停止/恢复。
+  runq "pcs property set stonith-enabled=false"
   runq "pcs stonith delete fence_$SELF 2>/dev/null || true"
   runq "pcs stonith delete fence_$PEER 2>/dev/null || true"
   runq "pcs stonith delete fence_${DRBD_RESOURCE} 2>/dev/null || true"
@@ -638,6 +641,7 @@ SBD_WATCHDOG_TIMEOUT=5
 SBD"
     runq "systemctl enable --now sbd" || die "sbd 启动失败：请确认 sbd 已安装且 $sbd_conf 与 watchdog 正确"
     runq "pcs stonith create fence_${DRBD_RESOURCE} external/sbd pcmk_delay_max=${FENCE_DELAY_MAX} op monitor interval=30s"
+    runq "pcs property set stonith-enabled=true"
     return 0
   fi
 
@@ -664,6 +668,7 @@ SBD"
       esac
       runq "pcs stonith create fence_$DRBD_RESOURCE $agent $ipar $ex pcmk_host_map='$map' pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s";;
   esac
+  runq "pcs property set stonith-enabled=true"
 }
 
 # ----------------------------- 阶段 resources ------------------------------
