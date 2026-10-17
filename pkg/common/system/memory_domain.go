@@ -289,24 +289,6 @@ func hostMemorySoftLimit(total uint64) uint64 {
 	return 0
 }
 
-// MemoryAdmissionWaitTimeout controls the bounded statement-entry wait used
-// when the shared physical ledger is temporarily full. A zero duration turns
-// the queue into an immediate reject; the default is short enough not to hold
-// frontend workers while still allowing an in-flight statement to release a
-// reservation.
-func MemoryAdmissionWaitTimeout() time.Duration {
-	const defaultWait = 250 * time.Millisecond
-	value := strings.TrimSpace(os.Getenv("MO_MEMORY_ADMISSION_WAIT"))
-	if value == "" {
-		return defaultWait
-	}
-	wait, err := time.ParseDuration(value)
-	if err != nil || wait < 0 {
-		return defaultWait
-	}
-	return wait
-}
-
 const memoryDomainRefreshInterval = 100 * time.Millisecond
 
 var memoryDomainState struct {

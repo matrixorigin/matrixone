@@ -493,16 +493,20 @@ func (m *memThrottler) String() string {
 	sharedReserved := uint64(0)
 	sharedReserve := uint64(0)
 	sharedAvailable := uint64(0)
+	sharedControlReserved := uint64(0)
+	sharedControlActive := uint64(0)
 	sharedMeasured := false
 	if m.memoryLedger != nil {
 		shared := m.memoryLedger.Snapshot()
 		sharedReserve = shared.Reserve
 		sharedReserved = shared.Reserved
 		sharedAvailable = shared.Available
+		sharedControlReserved = shared.ControlReserved
+		sharedControlActive = shared.ControlActive
 		sharedMeasured = shared.Measured
 	}
 	return fmt.Sprintf(
-		"{%s: limit=%s, total=%s, available=%s, memory-domain-source=%s, memory-domain-soft-limit=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, shared-reserve=%s, shared-reserved=%s, shared-available=%s, shared-measured=%v, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
+		"{%s: limit=%s, total=%s, available=%s, memory-domain-source=%s, memory-domain-soft-limit=%s, cgroup=%s, cgroup-usage=%s, rss=%s, pinned=%s, shared-reserve=%s, shared-reserved=%s, shared-available=%s, shared-control-reserved=%s, shared-control-active=%d, shared-measured=%v, pinnedRate=%f, limitRate=%f, isConstLimit=%v}",
 		m.name,
 		common.HumanReadableBytes(int(m.limit.Load())),
 		common.HumanReadableBytes(int(m.total.Load())),
@@ -516,6 +520,8 @@ func (m *memThrottler) String() string {
 		common.HumanReadableBytes(int(sharedReserve)),
 		common.HumanReadableBytes(int(sharedReserved)),
 		common.HumanReadableBytes(int(sharedAvailable)),
+		common.HumanReadableBytes(int(sharedControlReserved)),
+		sharedControlActive,
 		sharedMeasured,
 		m.pinnedRate(),
 		m.limitRate,

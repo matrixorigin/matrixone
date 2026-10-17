@@ -6413,6 +6413,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// statement generation. Reset before authorization/admission, then inject
 		// binary PREPARE metadata captured before doComQuery.
 		execCtx.beginStatementGeneration(currentInput)
+		// Reclassify every statement, including subsequent statements in one
+		// request, so a task heartbeat cannot confer its allowance on user SQL.
+		execCtx.reqCtx = process.WithControlMemoryAdmission(execCtx.reqCtx,
+			taskControlMemoryStatement(execCtx.reqCtx, ses, stmt))
 		// Keep the transaction origin available to compile-time lineage admission.
 		// Implicit-commit DDL commits the old transaction before planning, so the
 		// fresh transaction alone cannot tell whether the client was already in an

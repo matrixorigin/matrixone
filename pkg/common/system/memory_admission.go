@@ -17,7 +17,6 @@ package system
 import (
 	"math"
 	"sync"
-	"time"
 )
 
 // MemoryAdmissionBudget is the process-wide physical memory ledger shared by
@@ -36,16 +35,23 @@ type MemoryAdmissionBudget struct {
 	reserved       uint64
 	nonGoHighWater uint64
 	last           MemoryAdmissionBudgetSnapshot
+	// Control work can consume a bounded part of RuntimeBytes, which ordinary
+	// allocations cannot spend. These bytes are also included in reserved.
+	controlReserved uint64
+	controlActive   uint64
+	domainProvider  func() (MemoryDomainSnapshot, error)
 }
 
 // MemoryAdmissionBudgetSnapshot is an immutable view of the shared physical
 // ledger and its current domain observation.
 type MemoryAdmissionBudgetSnapshot struct {
-	Domain    MemoryDomainSnapshot
-	Reserve   uint64
-	Reserved  uint64
-	Available uint64
-	Measured  bool
+	Domain          MemoryDomainSnapshot
+	Reserve         uint64
+	Reserved        uint64
+	Available       uint64
+	Measured        bool
+	ControlReserved uint64
+	ControlActive   uint64
 }
 
 // NewMemoryAdmissionBudget creates an independent ledger. It is useful for
@@ -60,7 +66,17 @@ func NewMemoryAdmissionBudget(policy MemoryDomainReservePolicy) *MemoryAdmission
 	if policy.ObservedNonGoMultiplier == 0 {
 		policy.ObservedNonGoMultiplier = 1
 	}
-	return &MemoryAdmissionBudget{policy: policy}
+	return &MemoryAdmissionBudget{policy: policy, domainProvider: CurrentMemoryDomain}
+}
+
+// NewMemoryAdmissionBudgetWithProvider creates a ledger for an explicitly owned
+// memory domain. The provider must report the same boundary for every call.
+func NewMemoryAdmissionBudgetWithProvider(policy MemoryDomainReservePolicy, provider func() (MemoryDomainSnapshot, error)) *MemoryAdmissionBudget {
+	b := NewMemoryAdmissionBudget(policy)
+	if provider != nil {
+		b.domainProvider = provider
+	}
+	return b
 }
 
 var defaultMemoryAdmissionBudget = NewMemoryAdmissionBudget(DefaultMemoryDomainReservePolicy())
@@ -86,7 +102,7 @@ func (b *MemoryAdmissionBudget) TryReserve(size uint64) (available uint64, ok bo
 		// merely because the first memory-domain sample is unavailable.
 		return available, true
 	}
-	snapshot, _ := CurrentMemoryDomain()
+	snapshot, _ := b.domainProvider()
 	if !snapshot.Measured || snapshot.Limit == 0 {
 		return 0, false
 	}
@@ -127,11 +143,8 @@ func (b *MemoryAdmissionBudget) Release(size uint64) {
 		return
 	}
 	b.mu.Lock()
-	if size >= b.reserved {
-		b.reserved = 0
-	} else {
-		b.reserved -= size
-	}
+	// An ordinary rollback must never release a control allocation's charge.
+	b.reserved -= min(size, b.reserved-b.controlReserved)
 	if b.last.Measured {
 		b.last = b.snapshotLocked(b.last.Domain, b.availableLocked(b.last.Domain))
 	}
@@ -145,7 +158,7 @@ func (b *MemoryAdmissionBudget) Snapshot() MemoryAdmissionBudgetSnapshot {
 	if b == nil {
 		return MemoryAdmissionBudgetSnapshot{}
 	}
-	snapshot, _ := CurrentMemoryDomain()
+	snapshot, _ := b.domainProvider()
 	return b.Observe(snapshot)
 }
 
@@ -171,44 +184,6 @@ func (b *MemoryAdmissionBudget) Available() (uint64, bool) {
 	return snapshot.Available, snapshot.Measured
 }
 
-// Check performs a statement-entry admission check without creating a byte
-// reservation. It is intentionally separate from TryReserve: allocation
-// ownership remains with the actual MPool/scratch reservation, while callers
-// can reject a new statement before starting work when the physical domain has
-// no minimum runtime margin left.
-func (b *MemoryAdmissionBudget) Check(size uint64) (available uint64, measured, ok bool) {
-	available, measured = b.Available()
-	if !measured {
-		return 0, false, false
-	}
-	return available, true, available >= size
-}
-
-// WaitFor performs bounded statement-entry admission. It does not reserve the
-// requested bytes: actual MPool/workspace ownership is still charged by
-// TryReserve at allocation time. The wait only lets a closing statement or a
-// cache-reclamation cycle make room before the new statement is admitted.
-func (b *MemoryAdmissionBudget) WaitFor(size uint64, timeout time.Duration) (available uint64, measured, ok bool) {
-	if timeout <= 0 {
-		return b.Check(size)
-	}
-	deadline := time.Now().Add(timeout)
-	for {
-		available, measured, ok = b.Check(size)
-		if ok {
-			return available, measured, true
-		}
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return available, measured, false
-		}
-		if remaining > 10*time.Millisecond {
-			remaining = 10 * time.Millisecond
-		}
-		time.Sleep(remaining)
-	}
-}
-
 func (b *MemoryAdmissionBudget) Reserved() uint64 {
 	if b == nil {
 		return 0
@@ -232,7 +207,18 @@ func (b *MemoryAdmissionBudget) availableLocked(snapshot MemoryDomainSnapshot) u
 	reserveSnapshot := snapshot
 	reserveSnapshot.NonGo = b.nonGoHighWater
 	reserve := b.policy.Reserve(reserveSnapshot)
+	return b.availableWithReserveLocked(snapshot, reserve)
+}
+
+func (b *MemoryAdmissionBudget) availableWithReserveLocked(snapshot MemoryDomainSnapshot, reserve uint64) uint64 {
+	limit := snapshot.AdmissionLimit()
 	used := snapshot.Used
+	// On a host, Used includes the page cache. Credit the kernel's estimate of
+	// reclaimable memory (MemAvailable-MemFree) just as execution headroom does.
+	// A finite cgroup keeps the conservative charged-usage hard-OOM boundary.
+	if snapshot.Source == MemoryDomainSourceHost {
+		used -= min(used, snapshot.Reclaimable)
+	}
 	if b.reserved > ^uint64(0)-used {
 		used = ^uint64(0)
 	} else {
@@ -254,10 +240,12 @@ func (b *MemoryAdmissionBudget) snapshotLocked(
 	reserveSnapshot := snapshot
 	reserveSnapshot.NonGo = b.nonGoHighWater
 	return MemoryAdmissionBudgetSnapshot{
-		Domain:    snapshot,
-		Reserve:   b.policy.Reserve(reserveSnapshot),
-		Reserved:  b.reserved,
-		Available: available,
-		Measured:  snapshot.Measured,
+		Domain:          snapshot,
+		Reserve:         b.policy.Reserve(reserveSnapshot),
+		Reserved:        b.reserved,
+		Available:       available,
+		Measured:        snapshot.Measured,
+		ControlReserved: b.controlReserved,
+		ControlActive:   b.controlActive,
 	}
 }

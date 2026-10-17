@@ -1004,6 +1004,7 @@ func (b *ExecutionResourceBudget) resolveCNCapSample(current ExecutionMemoryCeil
 // caller happens to reuse its numeric ID after the old generation has closed.
 type ExecutionResourceGeneration struct {
 	budget                                                  *ExecutionResourceBudget
+	controlMemory                                           *system.MemoryControlLease
 	id                                                      uint64
 	cap                                                     uint64
 	used                                                    uint64
@@ -1150,59 +1151,8 @@ func (b *ExecutionResourceBudget) openProcessGeneration(
 			Message:   "zero live process execution resource generation cap",
 		}
 	}
-	physicalLedger := b.physicalLedger
-	// A local/test FileService can share the production ledger object without
-	// having a measurable cgroup or host memory domain (for example on Darwin).
-	// In that case the physical gate has no evidence on which to make a safe
-	// decision; retain the execution-budget admission path instead of turning
-	// an unavailable observation into a zero-cap rejection. Once a measured
-	// domain exists, WaitFor below remains the production entry backstop.
-	if physicalLedger != nil {
-		snapshot := physicalLedger.Snapshot()
-		if !snapshot.Measured || snapshot.Domain.Limit == 0 {
-			physicalLedger = nil
-		}
-	}
-	if physicalLedger != nil {
-		policy := system.DefaultMemoryDomainReservePolicy()
-		entryFloor := policy.RuntimeBytes
-		if entryFloor == 0 {
-			entryFloor = 64 * mpool.MB
-		}
-		if entryFloor > memoryCap {
-			entryFloor = memoryCap
-		}
-		// A query cap at or below the runtime floor has no additional entry
-		// margin to wait for. Its actual allocations are still charged through
-		// the shared ledger; skipping this redundant wait keeps tiny deterministic
-		// fixtures from being rejected solely because the floor equals their cap.
-		if entryFloor < memoryCap {
-			b.mu.Unlock()
-			available, measured, ok := physicalLedger.WaitFor(
-				entryFloor, system.MemoryAdmissionWaitTimeout())
-			if !measured || !ok {
-				return nil, newAdmissionError(entryFloor, 0, available)
-			}
-			b.mu.Lock()
-			if b.closed {
-				b.mu.Unlock()
-				return nil, &ExecutionResourceError{
-					Kind:    ExecutionResourceErrorClosed,
-					Message: ErrExecutionResourceClosed.Error(),
-				}
-			}
-			memoryCap = min(requestedMemoryCap, b.aggregateCap)
-			if memoryCap == 0 {
-				b.mu.Unlock()
-				return nil, &ExecutionResourceError{
-					Kind:      ExecutionResourceErrorInvalid,
-					Requested: requestedMemoryCap,
-					Cap:       b.aggregateCap,
-					Message:   "zero live process execution resource generation cap",
-				}
-			}
-		}
-	}
+	// Opening a statement does not allocate its cap. Charge actual MPool and
+	// scratch growth instead of requiring an unrelated 256 MiB entry floor.
 
 	if spillDiskCap == 0 {
 		if b.spillDiskAutomatic {
@@ -1369,6 +1319,9 @@ func (g *ExecutionResourceGeneration) Close() {
 	}
 	g.budget.mu.Lock()
 	g.closed = true
+	if g.controlMemory != nil {
+		g.controlMemory.Close()
+	}
 	g.budget.mu.Unlock()
 }
 
@@ -1412,9 +1365,7 @@ func (g *ExecutionResourceGeneration) ReleaseAllocationCapacity(size uint64) {
 	b.aggregateUsed -= size
 	g.releaseCount++
 	b.mu.Unlock()
-	if b.physicalLedger != nil {
-		b.physicalLedger.Release(size)
-	}
+	g.releasePhysicalMemory(size)
 	observeExecutionResourceBudget("memory", "release", "query", size)
 	observeExecutionResourceBudget("memory", "release", "cn", size)
 }
@@ -1461,9 +1412,7 @@ func (r *ExecutionTransientMemoryReservation) Release() bool {
 	b.aggregateUsed -= r.size
 	r.generation.releaseCount++
 	b.mu.Unlock()
-	if b.physicalLedger != nil {
-		b.physicalLedger.Release(r.size)
-	}
+	r.generation.releasePhysicalMemory(r.size)
 	observeExecutionResourceBudget("memory", "release", "query", r.size)
 	observeExecutionResourceBudget("memory", "release", "cn", r.size)
 	return true
@@ -1503,7 +1452,7 @@ func (g *ExecutionResourceGeneration) acquireMemoryWithClass(
 		b.mu.Unlock()
 		return err
 	}
-	if b.memoryHeadroomRefreshNeededLocked() {
+	if g.controlMemory == nil && b.memoryHeadroomRefreshNeededLocked() {
 		b.mu.Unlock()
 		// The sampler records aggregateUsed at the same boundary; every acquire
 		// below consumes from that cached physical headroom as well as the static
@@ -1612,7 +1561,7 @@ func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 		observeExecutionResourceBudget("memory", "reject", "query", size)
 		return &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}, false
 	}
-	if physicalHeadroom, measured := b.physicalGrowthHeadroomLocked(); measured && size > physicalHeadroom {
+	if physicalHeadroom, measured := b.physicalGrowthHeadroomLocked(); g.controlMemory == nil && measured && size > physicalHeadroom {
 		g.rejectCount++
 		observeExecutionResourceBudget("memory", "reject", "cn", size)
 		physicalCap := b.aggregateUsed
@@ -1625,12 +1574,18 @@ func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 	}
 	// Check by subtraction rather than used+size: this is safe for
 	// math.MaxUint64 and rejects every overflow-sized request.
-	if b.aggregateUsed > b.aggregateCap || size > b.aggregateCap-b.aggregateUsed {
+	aggregateCap := b.aggregateCap
+	if g.controlMemory != nil {
+		// The extra allowance belongs to the existing runtime reserve, is
+		// process-wide, and is still checked by the physical control ledger.
+		aggregateCap += min(g.controlMemory.Capacity(), ^uint64(0)-aggregateCap)
+	}
+	if b.aggregateUsed > aggregateCap || size > aggregateCap-b.aggregateUsed {
 		if recordAggregateReject {
 			g.rejectCount++
 			observeExecutionResourceBudget("memory", "reject", "cn", size)
 		}
-		return newAdmissionError(size, b.aggregateUsed, b.aggregateCap), true
+		return newAdmissionError(size, b.aggregateUsed, aggregateCap), true
 	}
 	if g.used > g.cap || size > g.cap-g.used {
 		g.rejectCount++
@@ -1638,7 +1593,13 @@ func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 		return newAdmissionError(size, g.used, g.cap), false
 	}
 	if b.physicalLedger != nil {
-		sharedAvailable, sharedOK := b.physicalLedger.TryReserve(size)
+		var sharedAvailable uint64
+		var sharedOK bool
+		if g.controlMemory != nil {
+			sharedAvailable, sharedOK = g.controlMemory.TryReserve(size)
+		} else {
+			sharedAvailable, sharedOK = b.physicalLedger.TryReserve(size)
+		}
 		if !sharedOK {
 			g.rejectCount++
 			observeExecutionResourceBudget("memory", "reject", "cn", size)
@@ -1737,9 +1698,7 @@ func (g *ExecutionResourceGeneration) releaseRecoveryCapacity(size uint64) {
 	b.aggregateUsed -= size
 	g.releaseCount++
 	b.mu.Unlock()
-	if b.physicalLedger != nil {
-		b.physicalLedger.Release(size)
-	}
+	g.releasePhysicalMemory(size)
 	observeExecutionResourceBudget("recovery_memory", "release", "query", size)
 	observeExecutionResourceBudget("recovery_memory", "release", "cn", size)
 	observeExecutionResourceBudget("memory", "release", "query", size)
@@ -2237,10 +2196,11 @@ func (proc *Process) GetExecutionResourceBudget() (*ExecutionResourceGeneration,
 			return nil, err
 		}
 	}
-	generation, err := aggregate.openProcessGeneration(
+	generation, err := aggregate.openControlProcessGeneration(
 		executionResourceGenerationSequence.Add(1),
 		ceiling.QueryCap,
 		spillDiskCap,
+		HasControlMemoryAdmission(proc.Ctx),
 	)
 	if err != nil {
 		return nil, err
