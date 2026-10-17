@@ -472,7 +472,8 @@ func newExpressionExecutorWithAllocation(
 			executor.stringToNumericCast = !overload.CannotFold() &&
 				isStringToNumericCast(planExpr, buildCtx.foldOwnedLiteralNumericCast)
 			executor.rowScopedDecimalCast = function.IsExplicitDecimalCast(planExpr)
-			executor.volatile = overload.CannotFold() || executor.stringToNumericCast || executor.rowScopedDecimalCast
+			executor.volatile = overload.IsVolatile() || executor.stringToNumericCast || executor.rowScopedDecimalCast
+			executor.rowScopedDiagnostics = overload.HasRowScopedDiagnostics()
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
@@ -1423,6 +1424,45 @@ func (expr *FunctionExpressionExecutor) hasScalarIntegerArgumentSource() bool {
 	return scalarIntegerArgumentSource(expr.parameterExecutor[0])
 }
 
+// scalarExpressionValue proves a row-independent value and tracks whether its
+// tree owns row-scoped diagnostics. Neither property permits skipping execution.
+// Use executor ancestry rather than vector shape: a column can happen to contain
+// a constant vector in one batch.
+func scalarExpressionValue(executor ExpressionExecutor) (scalar, diagnostic bool) {
+	switch source := executor.(type) {
+	case *memoExpressionExecutor:
+		return scalarExpressionValue(source.state.executor)
+	case *memoRootExpressionExecutor:
+		return scalarExpressionValue(source.executor)
+	case *FixedVectorExpressionExecutor:
+		return source.resultVector.IsConst(), false
+	case *ParamExpressionExecutor, *VarExpressionExecutor:
+		return true, false
+	case *FunctionExpressionExecutor:
+		// CAST's row-evaluation flags protect diagnostics, rather than
+		// declaring its converted value nondeterministic.
+		if source.timeDependent || (source.volatile && !source.stringToNumericCast && !source.rowScopedDecimalCast) {
+			return false, false
+		}
+		diagnostic = source.rowScopedDiagnostics
+		for _, parameter := range source.parameterExecutor {
+			parameterScalar, parameterDiagnostic := scalarExpressionValue(parameter)
+			if !parameterScalar {
+				return false, false
+			}
+			diagnostic = diagnostic || parameterDiagnostic
+		}
+		return true, diagnostic
+	default:
+		return false, false
+	}
+}
+
+func (expr *FunctionExpressionExecutor) hasScalarDiagnosticValue() bool {
+	scalar, diagnostic := scalarExpressionValue(expr)
+	return scalar && diagnostic
+}
+
 func applyTransparentStringSource(
 	result *vector.Vector,
 	source *vector.Vector,
@@ -1683,7 +1723,7 @@ func (expr *FunctionExpressionExecutor) evalSelectedRows(
 	result := expr.resultVector.GetResultVector()
 	result.SetType(runtimeType)
 	result.ResetWithSameType()
-	if selectedCount > 0 && expr.hasScalarIntegerArgumentSource() {
+	if selectedCount > 0 && (expr.hasScalarIntegerArgumentSource() || expr.hasScalarDiagnosticValue()) {
 		// The compact result was evaluated only for selected rows. A scalar
 		// source gives every selected row the same converted value; publish the
 		// first selected value through our owned result wrapper before widening
@@ -1826,8 +1866,9 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		return nil, err
 	}
 	// Partial selections returned through evalSelectedRows above.
-	// Runtime CASTs can flatten an otherwise scalar source.
-	if rowCount > 0 && expr.hasScalarIntegerArgumentSource() {
+	// Publish value constancy only after real execution has emitted all effects.
+	// This does not set canFold: parents must still evaluate this subtree.
+	if rowCount > 0 && (expr.hasScalarIntegerArgumentSource() || expr.hasScalarDiagnosticValue()) {
 		expr.resultVector.GetResultVector().ToConst()
 	}
 	if expr.isImplicitCast() && len(expr.parameterResults) > 0 {

@@ -251,7 +251,7 @@ func waitUntilPipelineBatchFlowDrained(
 	if connectionCtx != nil && connectionCtx.Err() != nil {
 		return moerr.NewStreamClosed(messageCtx)
 	}
-	if flow.wasStoppedByReceiver() && isScopeCancellationError(err) {
+	if flow.wasStoppedByReceiver() && process.IsPipelineCancellationError(err) {
 		return nil
 	}
 	return err

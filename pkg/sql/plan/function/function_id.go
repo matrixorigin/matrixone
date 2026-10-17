@@ -881,8 +881,9 @@ const (
 
 	TO_CALENDAR_INTERVAL        = 598
 	CHECK_ASYNC_DATALINK_SOURCE = 599
+	INTERNAL_TABLE_COLLATION    = 600
 
-	FUNCTION_END_NUMBER = 600
+	FUNCTION_END_NUMBER = 601
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1337,6 +1338,7 @@ var functionIdRegister = map[string]int32{
 	"internal_numeric_scale":         INTERNAL_NUMERIC_SCALE,
 	"internal_datetime_scale":        INTERNAL_DATETIME_SCALE,
 	"internal_column_character_set":  INTERNAL_COLUMN_CHARACTER_SET,
+	"internal_table_collation":       INTERNAL_TABLE_COLLATION,
 	"internal_auto_increment":        INTERNAL_AUTO_INCREMENT,
 	"nextval":                        NEXTVAL,
 	"setval":                         SETVAL,

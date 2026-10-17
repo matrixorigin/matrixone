@@ -50,6 +50,39 @@ type evolutionSQLPlanner struct {
 	objectRef string
 }
 
+// #30435: exercise the real SQL compiler and native planner with the metadata
+// emitted by external writers before their first commit. Reuse the harness's
+// cluster and access setup; an empty object store rejects accidental data IO.
+func runIcebergSQLEngineEmbeddedSnapshotlessTable(t *testing.T, c Cluster, db *embeddedSQLSession, fixture *embeddedIcebergFixture) {
+	currentSnapshot := "-1"
+	native := icebergmetadata.LocalScanPlanner{
+		Metadata:     icebergmetadata.NativeFacade{},
+		ObjectReader: evolutionObjectReader{},
+		Catalog: &catalog.MockClient{LoadTableFunc: func(context.Context, api.LoadTableRequest) (*api.LoadTableResponse, error) {
+			return &api.LoadTableResponse{
+				MetadataLocation: "s3://warehouse/embed/empty/metadata.json",
+				MetadataJSON: []byte(fmt.Sprintf(`{
+					"format-version": 2, "location": "s3://warehouse/embed/empty",
+					"current-schema-id": 0, "schemas": [{"schema-id": 0, "fields": [
+						{"id": 1, "name": "id", "required": true, "type": "long"},
+						{"id": 2, "name": "hidden_key", "required": false, "type": "long"},
+						{"id": 3, "name": "bucket", "required": false, "type": "int"},
+						{"id": 4, "name": "amount", "required": false, "type": "long"}
+					]}], "default-spec-id": 0, "partition-specs": [{"spec-id": 0, "fields": []}],
+					"current-snapshot-id": %s, "snapshots": []
+				}`, currentSnapshot)),
+			}, nil
+		}},
+	}
+	installEmbeddedIcebergPlanner(t, c, evolutionSQLPlanner{planner: native, objectRef: fixture.objectRef})
+	table := createEmbeddedIcebergTable(t, db, fixture, "empty_orders", "empty_orders", "append_only")
+	for _, value := range []string{"-1", "null"} {
+		currentSnapshot = value
+		require.Equal(t, int64(0), queryInt64(t, db, "select count(*) from "+table), value)
+		require.Empty(t, queryIntRows(t, db, "select id, amount from "+table+" where id > 0"), value)
+	}
+}
+
 func (p evolutionSQLPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest) (*api.IcebergScanPlan, error) {
 	plan, err := p.planner.PlanScan(ctx, req)
 	if err == nil {
