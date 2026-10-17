@@ -2277,6 +2277,13 @@ func TestCheckConstraintNamesAvailable(t *testing.T) {
 		name:     "sibling_b",
 		tableDef: &plan2.TableDef{Checks: []*plan2.CheckDef{{Name: "sibling_b_chk_1"}}},
 	}
+	for _, flag := range []uint64{features.Partition, features.IndexTable} {
+		db.rels[fmt.Sprintf("physical_%d", flag)] = &stubRelation{
+			tableDef: &plan2.TableDef{FeatureFlag: flag, Checks: []*plan2.CheckDef{{Name: "borrowed_ck"}}},
+		}
+	}
+	// Physical children do not independently own their borrowed CHECK names.
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "parent", []*plan2.CheckDef{{Name: "borrowed_ck"}}))
 
 	// No checks on the new table: nothing to validate.
 	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_t", nil))
@@ -2298,8 +2305,10 @@ func TestCheckConstraintNamesAvailable(t *testing.T) {
 }
 
 func TestValidateRenamedCheckConstraintNames(t *testing.T) {
-	ctx := context.Background()
 	db := newStubDatabase("db")
+	eng := newStubEngine()
+	eng.dbs["db"] = db
+	c := &Compile{e: eng, proc: testutil.NewProcess(t), disableLock: true}
 	db.rels["t"] = &stubRelation{
 		name:     "t",
 		tableDef: &plan2.TableDef{Checks: []*plan2.CheckDef{{Name: "own_explicit_ck"}}},
@@ -2310,28 +2319,31 @@ func TestValidateRenamedCheckConstraintNames(t *testing.T) {
 	}
 
 	// Empty checks never block a rename.
-	require.NoError(t, validateRenamedCheckConstraintNames(ctx, db, "t", "u", nil))
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "u", nil))
 
 	// A plain generated name simply follows the table.
-	require.NoError(t, validateRenamedCheckConstraintNames(ctx, db, "t", "u2",
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "u2",
 		[]*plan2.CheckDef{{Name: "t_chk_1"}}))
 
 	// Same-table duplicate: the rewritten generated name lands on an
 	// explicit name owned by the table itself.
-	err := validateRenamedCheckConstraintNames(ctx, db, "t", "u",
+	err := c.validateRenamedCheckConstraintNames("db", "t", "u",
 		[]*plan2.CheckDef{{Name: "t_chk_1"}, {Name: "u_chk_1"}})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "Duplicate check constraint name 'u_chk_1'")
 
 	// Cross-table duplicate: a sibling already owns the resulting name.
-	err = validateRenamedCheckConstraintNames(ctx, db, "t", "u",
+	err = c.validateRenamedCheckConstraintNames("db", "t", "u",
 		[]*plan2.CheckDef{{Name: "t_chk_1"}})
 	require.Error(t, err)
 	require.ErrorContains(t, err, "Duplicate check constraint name 'u_chk_1'")
 
 	// The renamed table's own pre-rename names never count as siblings.
-	require.NoError(t, validateRenamedCheckConstraintNames(ctx, db, "t", "v",
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "v",
 		[]*plan2.CheckDef{{Name: "own_explicit_ck"}}))
+	// A legacy name shared with a sibling is inherited, not a new claim.
+	require.NoError(t, c.validateRenamedCheckConstraintNames("db", "t", "v",
+		[]*plan2.CheckDef{{Name: "u_chk_1"}}))
 }
 
 func TestComposeCheckNamesAcrossAlterActions(t *testing.T) {

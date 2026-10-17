@@ -15,11 +15,29 @@
 package plan
 
 import (
+	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
+
+func TestValidateCheckConstraintNames(t *testing.T) {
+	require.NoError(t, ValidateCheckConstraintNames(t.Context(), nil))
+	require.NoError(t, ValidateCheckConstraintNames(t.Context(), []*plan.CheckDef{nil, {Name: strings.Repeat("c", 64)}}))
+	err := ValidateCheckConstraintNames(t.Context(), []*plan.CheckDef{{Name: "ck"}, {Name: "CK"}})
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateCheckConstraintName))
+	for _, length := range []int{58, 59, 64} {
+		checks := RenameGeneratedCheckConstraintNames([]*plan.CheckDef{{Name: "t_chk_1"}}, "t", strings.Repeat("u", length))
+		err = ValidateCheckConstraintNames(t.Context(), checks)
+		if length == 58 {
+			require.NoError(t, err)
+		} else {
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooLongIdent))
+		}
+	}
+}
 
 func TestRenameGeneratedCheckConstraintNames(t *testing.T) {
 	check := func(name string) *plan.CheckDef {

@@ -445,7 +445,8 @@ func (s *storage) Rename(
 					),
 					executor.StatementOption{}.
 						WithIgnoreForeignKey().
-						WithIgnorePublish(),
+						WithIgnorePublish().
+						WithTrustedCheckConstraintNames(),
 				)
 				if err != nil {
 					return err

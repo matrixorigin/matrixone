@@ -688,7 +688,13 @@ func checkConstraintNamesAvailable(ctx context.Context, dbSource engine.Database
 			}
 			return err
 		}
-		for _, check := range rel.GetTableDef(ctx).GetChecks() {
+		def := rel.GetTableDef(ctx)
+		// Physical partitions and index tables borrow their logical owner's
+		// identities. Only logical tables participate in the schema namespace.
+		if def == nil || features.IsPartition(def.FeatureFlag) || features.IsIndexTable(def.FeatureFlag) {
+			continue
+		}
+		for _, check := range def.GetChecks() {
 			if _, dup := wanted[strings.ToLower(check.GetName())]; dup {
 				return moerr.NewDuplicateCheckConstraintName(ctx, check.GetName())
 			}
@@ -705,23 +711,12 @@ func checkConstraintNamesAvailable(ctx context.Context, dbSource engine.Database
 // metadata, so the rename is refused with ER_CHECK_CONSTRAINT_DUP_NAME (3822)
 // before any alter request applies. oldName is passed as the sibling scan's
 // self reference because the catalog still stores the pre-rename name here.
-func validateRenamedCheckConstraintNames(ctx context.Context, dbSource engine.Database, oldName, newName string, checks []*plan.CheckDef) error {
+func (c *Compile) validateRenamedCheckConstraintNames(database, oldName, newName string, checks []*plan.CheckDef) error {
 	if len(checks) == 0 {
 		return nil
 	}
 	renamed := plan2.RenameGeneratedCheckConstraintNames(checks, oldName, newName)
-	seen := make(map[string]struct{}, len(renamed))
-	for _, check := range renamed {
-		if check == nil {
-			continue
-		}
-		lower := strings.ToLower(check.GetName())
-		if _, dup := seen[lower]; dup {
-			return moerr.NewDuplicateCheckConstraintName(ctx, check.GetName())
-		}
-		seen[lower] = struct{}{}
-	}
-	return checkConstraintNamesAvailable(ctx, dbSource, oldName, renamed)
+	return c.validateIntroducedCheckConstraintNames(database, oldName, checks, renamed)
 }
 
 // composeCheckNamesAcrossAlterActions folds table-generated CHECK name moves
@@ -1652,7 +1647,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				}
 				oldName = tblName
 				newName = physicalTemporaryTableName(c.proc, dbName, newName)
-			} else {
+			} else if trusted, _ := c.proc.Ctx.Value(defines.TrustedCheckConstraintNames{}).(bool); !trusted {
 				// Generated CHECK names follow the table; validate the
 				// resulting set before the rename commits. Temporary tables
 				// mirror CREATE TABLE's exemption, and their generated names
@@ -1661,7 +1656,7 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				if extra != nil {
 					catalogChecks = extra.GetChecks()
 				}
-				if err := validateRenamedCheckConstraintNames(c.proc.Ctx, dbSource, oldName, newName, catalogChecks); err != nil {
+				if err := c.validateRenamedCheckConstraintNames(dbName, oldName, newName, catalogChecks); err != nil {
 					return err
 				}
 			}
@@ -2053,7 +2048,7 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	// unrelated sibling.
 	trustedChecks, _ := c.proc.Ctx.Value(defines.TrustedCheckConstraintNames{}).(bool)
 	if !qry.GetTemporary() && !trustedChecks {
-		if err := checkConstraintNamesAvailable(c.proc.Ctx, dbSource, tblName, qry.GetTableDef().GetChecks()); err != nil {
+		if err := c.validateIntroducedCheckConstraintNames(dbName, tblName, nil, qry.GetTableDef().GetChecks()); err != nil {
 			return err
 		}
 	}
@@ -5369,7 +5364,16 @@ func (s *Scope) TableClone(c *Compile) error {
 
 	if clonePlan.CreateTable != nil {
 		s.Plan = clonePlan.CreateTable
-		if err = s.createTable(c, func() { created = true }); err != nil {
+		originalCtx := c.proc.Ctx
+		marked := c.proc.GetSessionInfo() != nil && c.proc.GetSessionInfo().IsRestore
+		if plan2.IsCheckConstraintRestoreReplay(originalCtx, marked) {
+			c.proc.Ctx = context.WithValue(originalCtx, defines.TrustedCheckConstraintNames{}, true)
+		}
+		err = func() error {
+			defer func() { c.proc.Ctx = originalCtx }()
+			return s.createTable(c, func() { created = true })
+		}()
+		if err != nil {
 			return err
 		}
 		if !created {

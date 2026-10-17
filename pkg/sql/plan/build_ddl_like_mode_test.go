@@ -430,6 +430,8 @@ func TestCloneRestorePreservesExplicitCheckNames(t *testing.T) {
 			if tc.cloneLevel != 0 {
 				mock.ctxt.SetContext(context.WithValue(mock.ctxt.GetContext(), tree.CloneLevelCtxKey{}, tc.cloneLevel))
 			}
+			require.Equal(t, tc.wantName == "ck_positive",
+				IsCheckConstraintRestoreReplay(mock.ctxt.GetContext(), tc.restore || tc.sessionRestore))
 			stmt, err := mysql.ParseOne(t.Context(), "create table source_t(a int, constraint ck_positive check (a > 0))", 1)
 			require.NoError(t, err)
 			defer stmt.Free()

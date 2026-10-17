@@ -1388,6 +1388,22 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		return p.GetDdl().GetCreateTable().GetTableDef(), nil
 	}
 
+	t.Run("generated check names respect identifier length", func(t *testing.T) {
+		for _, length := range []int{58, 59, 64} {
+			name := strings.Repeat("t", length)
+			def, err := build("create table "+name+"(a int check(a>0))", false)
+			if length == 58 {
+				require.NoError(t, err)
+				require.Equal(t, name+"_chk_1", def.Checks[0].Name)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooLongIdent), "%v", err)
+			}
+			// The table name itself is valid; an explicit short CHECK still works.
+			_, err = build("create table "+name+"(a int, constraint ck check(a>0))", false)
+			require.NoError(t, err)
+		}
+	})
+
 	t.Run("table check binds after all columns", func(t *testing.T) {
 		tableDef, err := build("create table t(a int, check (b > a), b int)", false)
 		require.NoError(t, err)
