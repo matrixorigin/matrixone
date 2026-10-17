@@ -724,6 +724,14 @@ SBD"
 # ----------------------------- 阶段 resources ------------------------------
 stage_resources(){
   hdr "阶段 resources: DRBD/FS/MatrixOne 资源"
+  # 资源/约束创建失败必须致命：否则会留下半成品集群（缺资源、约束指向不存在的资源），
+  # 而汇总仍显示“完成”，只有之后单独跑 check 阶段才会发现。
+  res_cmd(){
+    if ! runq "$1"; then
+      die "资源/约束创建失败：$1
+       集群处于不完整状态，请修正后重跑：--stages resources"
+    fi
+  }
   [ "$BOOTSTRAP" = 1 ] || { info "非引导节点：跳过资源创建"; return 0; }
   # 幂等：重跑 resources 阶段时先清掉同名资源，否则 create 会报 already exists
   runq "pcs resource delete p_mo 2>/dev/null || true"
@@ -731,18 +739,18 @@ stage_resources(){
   runq "pcs resource delete p_fs 2>/dev/null || true"
   runq "pcs resource delete p_drbd-clone 2>/dev/null || true"
   runq "pcs resource delete p_drbd 2>/dev/null || true"
-  runq "pcs resource create p_drbd ocf:linbit:drbd drbd_resource=$DRBD_RESOURCE op monitor interval=20s role=Promoted timeout=30s op monitor interval=30s role=Unpromoted timeout=30s"
-  runq "pcs resource promotable p_drbd"
+  res_cmd "pcs resource create p_drbd ocf:linbit:drbd drbd_resource=$DRBD_RESOURCE op monitor interval=20s role=Promoted timeout=30s op monitor interval=30s role=Unpromoted timeout=30s"
+  res_cmd "pcs resource promotable p_drbd"
   # linbit drbd RA 要求显式 clone-max<=2，并需要 clone 通知
-  runq "pcs resource meta p_drbd-clone clone-max=2 notify=true"
-  runq "pcs resource create p_fs Filesystem device=$DRBD_VOLUME directory=$DATA_DIR fstype=xfs op monitor interval=20s"
-  runq "pcs constraint colocation add p_fs with p_drbd-clone INFINITY with-rsc-role=Promoted"
-  runq "pcs constraint order promote p_drbd-clone then start p_fs"
+  res_cmd "pcs resource meta p_drbd-clone clone-max=2 notify=true"
+  res_cmd "pcs resource create p_fs Filesystem device=$DRBD_VOLUME directory=$DATA_DIR fstype=xfs op monitor interval=20s"
+  res_cmd "pcs constraint colocation add p_fs with p_drbd-clone INFINITY with-rsc-role=Promoted"
+  res_cmd "pcs constraint order promote p_drbd-clone then start p_fs"
   if [ "$NO_MO" != 1 ]; then
     runq "mkdir -p $MO_DIR"
-    runq "pcs resource create p_mo ocf:heartbeat:docker-compose binpath=$(compose_wrapper_path) dirpath=$MO_DIR ymlfile=docker-compose.yaml op monitor interval=30s timeout=60s op start timeout=$MO_START_TIMEOUT interval=0 op stop timeout=120s"
-    runq "pcs constraint colocation add p_mo with p_fs INFINITY"
-    runq "pcs constraint order start p_fs then start p_mo"
+    res_cmd "pcs resource create p_mo ocf:heartbeat:docker-compose binpath=$(compose_wrapper_path) dirpath=$MO_DIR ymlfile=docker-compose.yaml op monitor interval=30s timeout=60s op start timeout=$MO_START_TIMEOUT interval=0 op stop timeout=120s"
+    res_cmd "pcs constraint colocation add p_mo with p_fs INFINITY"
+    res_cmd "pcs constraint order start p_fs then start p_mo"
   fi
   if [ -n "$VIP" ]; then
     # ${VIP##*/} 在无 "/" 时返回原串，会把整个 IP 当成 netmask 传给 IPaddr2
@@ -752,12 +760,12 @@ stage_resources(){
     esac
     local _vip_addr="${VIP%%/*}" _vip_mask="${VIP##*/}"
     [ -n "$_vip_addr" ] && [ -n "$_vip_mask" ] || die "--vip 缺少地址或掩码部分：$VIP"
-    runq "pcs resource create p_vip IPaddr2 ip=$_vip_addr cidr_netmask=$_vip_mask op monitor interval=20s"
-    runq "pcs constraint colocation add p_vip with p_fs INFINITY"
-    runq "pcs constraint order start p_fs then start p_vip"
+    res_cmd "pcs resource create p_vip IPaddr2 ip=$_vip_addr cidr_netmask=$_vip_mask op monitor interval=20s"
+    res_cmd "pcs constraint colocation add p_vip with p_fs INFINITY"
+    res_cmd "pcs constraint order start p_fs then start p_vip"
     # MO 端口若绑定在 VIP 上，必须等 VIP 就绪后再起容器，否则 docker 会报
     # "cannot assign requested address" 启动失败
-    [ "$NO_MO" = 1 ] || runq "pcs constraint order start p_vip then start p_mo"
+    [ "$NO_MO" = 1 ] || res_cmd "pcs constraint order start p_vip then start p_mo"
   fi
 }
 
