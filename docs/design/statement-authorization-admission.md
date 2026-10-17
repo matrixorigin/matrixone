@@ -1,6 +1,6 @@
 # Statement authorization snapshot admission
 
-Revision: 2 (2026-10-17). Status: design approved; implementation in progress. Owner: frontend / transaction client.
+Revision: 2 (2026-10-17). Status: design approved; implementation and validation complete. Owner: frontend / transaction client.
 Issue: #29133. Implementation: PR #30400. Review feedback: 5555768268.
 
 ## Problem and gate
@@ -238,6 +238,9 @@ unrelated code change is a permitted substitute.
 Independent gpt-6-astra medium design review: PASS of revision 2 at design-only
 commit `23c27718e085cdc9aec20e54b745a98842f9a67f`, SHA-256
 `e078fd951cd9d11182f4607b650f8a38b00ca6f6eab038506714a2f38282d223`.
+After rebase, the same approved design blob is retained in commit
+`02c72d4fc4c19301d1c2222607ed117a23c7019b`. Implementation and the matched acceptance results are recorded in
+[the performance/validation report](../performance/statement-authorization-admission.md).
 The review completed before implementation. RC data/retry
 semantics, fixed authorization snapshot installation and parser compatibility
 are explicit decisions above. Material deviations return to design review.
