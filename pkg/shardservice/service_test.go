@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	goruntime "runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
@@ -1040,6 +1041,79 @@ func waitReplicaCount(
 			return
 		}
 		time.Sleep(time.Millisecond * 10)
+	}
+}
+
+type closeTestServer struct {
+	morpc.MethodBasedServer[*pb.Request, *pb.Response]
+	err   error
+	calls int
+}
+
+func (s *closeTestServer) Close() error {
+	s.calls++
+	return s.err
+}
+
+type closeTestClient struct {
+	morpc.MethodBasedClient[*pb.Request, *pb.Response]
+	err   error
+	calls int
+}
+
+func (c *closeTestClient) Close() error {
+	c.calls++
+	return c.err
+}
+
+func TestServiceCloseClosesBothRemoteOwners(t *testing.T) {
+	serverErr, clientErr := errors.New("server close"), errors.New("client close")
+	for _, tc := range []struct {
+		name                 string
+		serverErr, clientErr error
+	}{
+		{"success", nil, nil}, {"server-error", serverErr, nil},
+		{"client-error", nil, clientErr}, {"both-errors", serverErr, clientErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &service{stopper: stopper.NewStopper(t.Name()), createC: make(chan uint64), deleteC: make(chan uint64)}
+			server, client := &closeTestServer{err: tc.serverErr}, &closeTestClient{err: tc.clientErr}
+			s.remote.server, s.remote.client = server, client
+			err := s.Close()
+			require.Equal(t, 1, server.calls)
+			require.Equal(t, 1, client.calls)
+			if tc.serverErr != nil {
+				require.ErrorIs(t, err, tc.serverErr)
+			}
+			if tc.clientErr != nil {
+				require.ErrorIs(t, err, tc.clientErr)
+			}
+			if tc.serverErr == nil && tc.clientErr == nil {
+				require.NoError(t, err)
+			}
+		})
+	}
+}
+
+func TestServiceCloseReleasesListener(t *testing.T) {
+	var addresses []string
+	runServicesTest(t, "cn1,cn2", func(_ context.Context, _ *server, services []*service) {
+		for _, s := range services {
+			// Also clean the old implementation when the regression assertion fails.
+			t.Cleanup(func() { require.NoError(t, s.remote.server.Close()) })
+			address := strings.TrimPrefix(s.cfg.ListenAddress, "unix://")
+			conn, err := net.DialTimeout("unix", address, time.Second)
+			require.NoError(t, err)
+			require.NoError(t, conn.Close())
+			addresses = append(addresses, address)
+		}
+	}, nil)
+	for _, address := range addresses {
+		conn, err := net.DialTimeout("unix", address, time.Second)
+		if conn != nil {
+			require.NoError(t, conn.Close())
+		}
+		require.Error(t, err, "closed shard service must not accept connections")
 	}
 }
 
