@@ -485,8 +485,12 @@ stage_moconf(){
       "$([ -n "$S3_BUCKET" ] && echo S3 || echo DISK-V2)"
     return 0
   fi
-  sed -i "s#__MO_IMAGE__#${MO_IMAGE}#g; s#__MO_PORT__#${MO_PORT}#g; s#__MO_BIND_IP__#${MO_BIND_IP}#g; s#__DATA_DIR__#${DATA_DIR}#g; s#__MO_DIR__#${MO_DIR}#g" "$MO_DIR/docker-compose.yaml"
+  sed -i "s#__MO_IMAGE__#${MO_IMAGE}#g; s#__MO_PORT__#${MO_PORT}#g; s#__MO_BIND_IP__#${MO_BIND_IP}#g; s#__DATA_DIR__#${DATA_DIR}#g; s#__MO_DIR__#${MO_DIR}#g; s#__MO_HOSTNAME__#${MO_HOSTNAME}#g" "$MO_DIR/docker-compose.yaml"
   sed -i "s#__MO_HOSTNAME__#${MO_HOSTNAME}#g" "$MO_DIR/conf/log.toml" 2>/dev/null || true
+  # 两个模板都必须不再残留占位符
+  if [ "$DRY_RUN" != 1 ] && grep -q '__MO_[A-Z_]*__' "$MO_DIR/docker-compose.yaml" "$MO_DIR/conf/"*.toml 2>/dev/null; then
+    die "配置模板仍有未替换的占位符：$(grep -ho '__MO_[A-Z_]*__' "$MO_DIR/docker-compose.yaml" "$MO_DIR/conf/"*.toml | sort -u | tr '\n' ' ')"
+  fi
   local blk; blk="$(mktemp)"; build_shared_block > "$blk"
   for f in "$MO_DIR/conf/tn.toml" "$MO_DIR/conf/cn.toml"; do
     [ -f "$f" ] || continue
