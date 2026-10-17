@@ -4758,10 +4758,14 @@ alter_table_drop:
 |   CONSTRAINT ident
         {
             $$ = &tree.AlterOptionDrop{
-                Typ:  tree.AlterTableDropForeignKey,
+                Typ:  tree.AlterTableDropConstraint,
                 Name: tree.Identifier($2.Compare()),
             }
         }
+|   CHECK ident
+    {
+        $$ = tree.NewAlterOptionDrop(tree.AlterTableDropCheck, tree.Identifier($2.Compare()));
+    }
 |   PRIMARY KEY
     {
         var dropType = tree.AlterTableDropPrimaryKey;
@@ -10950,7 +10954,7 @@ load_param_opt:
         $$ = &tree.ExternParam{
             ExParamConst: tree.ExParamConst{
                 ScanType: tree.INLINE,
-                Format: $4,
+                Format: strings.ToLower($4),
                 Data: $8,
             },
             ExParam:tree.ExParam{

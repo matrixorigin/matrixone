@@ -1186,6 +1186,78 @@ func TestWaitCommittedLogAppliedInRCMode(t *testing.T) {
 		nil)
 }
 
+// A successful Commit response does not remove RC's applied-logtail barrier.
+// Keep this control separate from service shutdown so cancellation must not be
+// mistaken for a transaction rollback or an unknown commit response.
+type committedRCDrainLockService struct{ trackingUnlockLockService }
+
+func (*committedRCDrainLockService) GetServiceID() string { return "rc-drain" }
+
+func TestCommittedRCTransactionWaitsForAppliedLogtail(t *testing.T) {
+	tw := NewTimestampWaiter(util.GetLogger("")).(*timestampWaiter)
+	defer tw.Close()
+	initial := newTestTimestamp(10)
+	tw.NotifyLatestCommitTS(initial)
+	readyCtx, readyCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer readyCancel()
+	_, err := tw.GetTimestamp(readyCtx, initial)
+	require.NoError(t, err)
+	ls := &committedRCDrainLockService{}
+	runOperatorTestsWithOptions(t, func(ctx context.Context, tc *txnOperator, sender *testTxnSender) {
+		ack := make(chan timestamp.Timestamp, 1)
+		sender.setManual(func(result *rpc.SendResult, err error) (*rpc.SendResult, error) {
+			for _, response := range result.Responses {
+				if response.Method == txn.TxnMethod_Commit {
+					ack <- response.Txn.CommitTS
+				}
+			}
+			return result, err
+		})
+		tc.mu.txn.TNShards = []metadata.TNShard{{TNShardRecord: metadata.TNShardRecord{ShardID: 1}}}
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		done := make(chan error, 1)
+		completed := false
+		defer func() {
+			cancel()
+			if !completed {
+				<-done
+			}
+		}()
+		go func() { done <- tc.Commit(cleanupCtx) }()
+		var commitTS timestamp.Timestamp
+		select {
+		case commitTS = <-ack:
+		case err := <-done:
+			completed = true
+			t.Fatalf("commit returned without the controlled response: %v", err)
+		case <-cleanupCtx.Done():
+			t.Fatal("commit did not reach the controlled response")
+		}
+		// notifyC is pooled and may have been created by an earlier test.
+		// Observe actual registration rather than placing that external
+		// channel in a virtual-time bubble and waiting for quiescence.
+		require.Eventually(t, func() bool {
+			tw.mu.Lock()
+			defer tw.mu.Unlock()
+			return len(tw.mu.waiters) == 1
+		}, 5*time.Second, time.Millisecond)
+		assert.Zero(t, ls.unlockCount)
+		select {
+		case err := <-done:
+			completed = true
+			t.Fatalf("commit returned before logtail applied: %v", err)
+		default:
+		}
+		tw.NotifyLatestCommitTS(commitTS)
+		err := <-done
+		completed = true
+		require.NoError(t, err)
+		require.Equal(t, txn.TxnStatus_Committed, tc.Txn().Status)
+		require.Equal(t, 1, ls.unlockCount)
+	}, timestamp.Timestamp{}, []TxnOption{WithTxnMode(txn.TxnMode_Pessimistic), WithTxnIsolation(txn.TxnIsolation_RC)},
+		WithTimestampWaiter(tw), WithEnableSacrificingFreshness(), WithLockService(ls))
+}
+
 func TestCannotCommitRunningSQLTxn(t *testing.T) {
 	runOperatorTests(
 		t,

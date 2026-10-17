@@ -332,6 +332,7 @@ use db10;
 drop table if exists test01;
 create table test01 (col1 int, col2 datalink);
 insert into test01 values (1, 'file://$resources/load_data/time_date_1.csv');
+-- Restoring a datalink preserves its URI, not permission to read CN files.
 select col1, load_file(col2) from test01;
 -- @ignore:1
 select * from test01;
@@ -339,6 +340,8 @@ drop snapshot if exists spsp10;
 create snapshot spsp10 for database db10;
 drop table test01;
 restore table db10.test01{snapshot="spsp10"};
+select col1, col2 = cast('file://$resources/load_data/time_date_1.csv' as datalink) as uri_preserved from test01;
+select col1, load_file(col2) from test01;
 -- @ignore:1
 select * from db10.test01;
 drop database db10;

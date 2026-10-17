@@ -4102,6 +4102,168 @@ func TestPreparedCastLifecycle(t *testing.T) {
 	})
 }
 
+func TestExplicitDecimalCastRowDiagnostics(t *testing.T) {
+	for _, targetOID := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+		for _, source := range []struct {
+			name string
+			typ  types.Type
+			lit  *plan.Literal
+		}{
+			{"integer", types.T_int64.ToType(), &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1000}}},
+			{"float", types.T_float64.ToType(), &plan.Literal{Value: &plan.Literal_Dval{Dval: 1000}}},
+			{"decimal", types.New(types.T_decimal64, 7, 3), &plan.Literal{Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: 1000000}}}},
+			{"string control", types.T_varchar.ToType(), &plan.Literal{Value: &plan.Literal_Sval{Sval: "1000"}}},
+			{"prepared integer transport", types.T_text.ToType(), nil},
+		} {
+			t.Run(fmt.Sprintf("%s/%s", targetOID, source.name), func(t *testing.T) {
+				proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+				checkExpressionStorageAfterCleanup(t, proc)
+				proc.SetBaseProcessRunningStatus(true)
+				sink := &decimalCastWarningSink{}
+				proc.WarningSink = sink
+				arg := &plan.Expr{Typ: source.typ.PlanType(), Expr: &plan.Expr_Lit{Lit: source.lit}}
+				if source.lit == nil {
+					arg.Expr = &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}
+				}
+				expr := bindTestCast(t, proc, 1, arg, types.New(targetOID, 5, 2))
+				executor, err := NewExpressionExecutor(proc, expr)
+				require.NoError(t, err)
+				t.Cleanup(executor.Free)
+				input := batch.New(nil)
+				t.Cleanup(func() { input.Clean(proc.Mp()) })
+				eval := func(rows int, mask []bool) *vector.Vector {
+					t.Helper()
+					input.SetRowCount(rows)
+					if source.lit == nil {
+						return evalTestTextParameter(t, proc, executor, "1000", false, vector.PrepareParamInteger, []*batch.Batch{input}, mask)
+					}
+					result, err := executor.Eval(proc, []*batch.Batch{input}, mask)
+					require.NoError(t, err)
+					return result
+				}
+				result := eval(4, []bool{false, false, false, false})
+				require.Empty(t, sink.codes)
+				for row := range 4 {
+					require.True(t, result.IsNull(uint64(row)))
+				}
+				for _, stage := range []struct {
+					rows int
+					mask []bool
+					want int
+				}{
+					{4, []bool{true, false, true, false}, 2},
+					{3, nil, 5},
+				} {
+					result = eval(stage.rows, stage.mask)
+					require.Len(t, sink.codes, stage.want)
+					for row := range stage.rows {
+						if stage.mask != nil && !stage.mask[row] {
+							require.True(t, result.IsNull(uint64(row)))
+							continue
+						}
+						require.False(t, result.IsNull(uint64(row)))
+						var value string
+						switch targetOID {
+						case types.T_decimal64:
+							value = vector.GetFixedAtNoTypeCheck[types.Decimal64](result, row).Format(2)
+						case types.T_decimal128:
+							value = vector.GetFixedAtNoTypeCheck[types.Decimal128](result, row).Format(2)
+						case types.T_decimal256:
+							value = vector.GetFixedAtNoTypeCheck[types.Decimal256](result, row).Format(2)
+						}
+						require.Equal(t, "999.99", value)
+					}
+				}
+				executor.ResetForNextQuery()
+				eval(1, nil)
+				require.Equal(t, []uint16{1264, 1264, 1264, 1264, 1264, 1264}, sink.codes)
+			})
+		}
+	}
+}
+
+type decimalCastWarningSink struct{ codes []uint16 }
+
+func (s *decimalCastWarningSink) AppendWarningDiagnostic(code uint16, _ string) {
+	s.codes = append(s.codes, code)
+}
+
+func TestDecimalCastFoldingBoundaries(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		overload int32
+		null     bool
+		fold     bool
+	}{
+		{"silent implicit cast", 0, false, true},
+		{"silent explicit cast", 1, false, false},
+		{"NULL explicit cast", 1, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			checkExpressionStorageAfterCleanup(t, proc)
+			sink := &decimalCastWarningSink{}
+			proc.WarningSink = sink
+			source := &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+				Isnull: tc.null, Value: &plan.Literal_I64Val{I64Val: 999},
+			}}}
+			executor, err := NewExpressionExecutor(proc, bindTestCast(t, proc, tc.overload, source, types.New(types.T_decimal64, 5, 2)))
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+			input := batch.New(nil)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.SetRowCount(2)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.fold, executor.(*FunctionExpressionExecutor).folded.canFold)
+			for row := range 2 {
+				require.Equal(t, tc.null, result.IsNull(uint64(row)))
+				if !tc.null {
+					require.Equal(t, types.Decimal64(99900), vector.GetFixedAtNoTypeCheck[types.Decimal64](result, row))
+				}
+			}
+			require.Empty(t, sink.codes)
+		})
+	}
+
+	for _, joinBuild := range []bool{false, true} {
+		t.Run(fmt.Sprintf("diagnostic owner/join=%v", joinBuild), func(t *testing.T) {
+			proc := testutil.NewProcess(t, testutil.WithFileService(nil))
+			checkExpressionStorageAfterCleanup(t, proc)
+			sink := &decimalCastWarningSink{}
+			proc.WarningSink = sink
+			source := &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1000}}}}
+			cast := bindTestCast(t, proc, 1, source, types.New(types.T_decimal64, 5, 2))
+			expr := bindTestFunction(t, proc, "abs", cast)
+			owner := new(DeferredJoinDiagnostic)
+			owner.Prepare(proc)
+			t.Cleanup(owner.Reset)
+			var executors []ExpressionExecutor
+			var err error
+			if joinBuild {
+				executors, err = NewJoinBuildExpressionExecutors(proc, []*plan.Expr{expr}, nil, owner)
+			} else {
+				executors, err = NewOwnedConstantFilterExecutors(proc, []*plan.Expr{expr})
+			}
+			require.NoError(t, err)
+			for _, executor := range executors {
+				t.Cleanup(executor.Free)
+			}
+			input := batch.New(nil)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			for _, rows := range []int{2, 3} {
+				input.SetRowCount(rows)
+				_, err := executors[0].Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+			}
+			require.Equal(t, []uint16{1264, 1264, 1264, 1264, 1264}, sink.codes,
+				"the owner must not fold or defer a nested row-scoped conversion")
+			require.NoError(t, owner.Activate(proc))
+			require.Len(t, sink.codes, 5, "activation must not replay row diagnostics")
+		})
+	}
+}
+
 type preparedCastWarningSession struct {
 	warningCount int
 }
