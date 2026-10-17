@@ -1548,7 +1548,7 @@ func TestTemporalExtractionNullability(t *testing.T) {
 	// cannot silently inherit a stronger guarantee than their executor.
 	for _, fid := range []int32{EXTRACT, YEAR, MONTH, QUARTER, DAY, DAYOFMONTH,
 		HOUR, MINUTE, SECOND, MICROSECOND, WEEK, WEEKOFYEAR, WEEKDAY, YEARWEEK,
-		DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS} {
+		DAYOFWEEK, DAYOFYEAR, DAYNAME, MONTHNAME, FROM_DAYS, TO_DAYS, TO_SECONDS, DATEDIFF} {
 		for _, op := range allSupportedFunctions[fid].Overloads {
 			args := make([]*plan.Expr, len(op.args))
 			for i, typ := range op.args {
@@ -1558,6 +1558,8 @@ func TestTemporalExtractionNullability(t *testing.T) {
 			switch fid {
 			case EXTRACT:
 				want = op.overloadId < 5 // persisted legacy executors
+			case TO_DAYS, TO_SECONDS, DATEDIFF:
+				want = op.overloadId == 0 // legacy typed executors
 			case YEAR, MONTH, QUARTER, DAY, DAYOFMONTH, HOUR, MINUTE, SECOND, MICROSECOND:
 				want = !op.args[0].IsMySQLString()
 			}

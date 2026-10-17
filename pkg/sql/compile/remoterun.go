@@ -116,10 +116,10 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
-	return encodeRemoteScopeWithVectorProtocol(s, proc, nil)
+	return encodeRemoteScopeWithExecutionProtocol(s, proc, nil)
 }
 
-func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiredVectorProtocol *int64) ([]byte, error) {
+func encodeRemoteScopeWithExecutionProtocol(s *Scope, proc *process.Process, requiredExecutionProtocol *int64) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
 		return nil, err
@@ -127,7 +127,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteBoundStringVariables(p); err != nil {
 		return nil, err
 	}
-	if err = validateVectorPartitionDestinationWithResult(proc, p, requiredVectorProtocol); err != nil {
+	if err = validateVectorPartitionDestinationWithResult(proc, p, requiredExecutionProtocol); err != nil {
 		return nil, err
 	}
 	if err = validateGroupingTransportDestinations(proc, p); err != nil {
@@ -139,6 +139,11 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	features, err := requiredRemotePipelineExpressionFeatures(p)
 	if err != nil {
 		return nil, err
+	}
+	// The Query RPC probe and the execution stream can reach different worker
+	// generations. Fence affected payloads on the bound stream as well.
+	if features.IncompleteTemporalStrings && requiredExecutionProtocol != nil {
+		*requiredExecutionProtocol = max(*requiredExecutionProtocol, defines.MORPCVersion118)
 	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
@@ -2311,6 +2316,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.DecimalStatisticalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
 		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
+	}
+	if features.IncompleteTemporalStrings && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
+		return moerr.NewNotSupportedNoCtx("incomplete temporal strings require MORPC protocol version 118")
 	}
 	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
 		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")

@@ -9297,8 +9297,16 @@ func mysqlDateFormatWidth(name, format string) int32 {
 		switch format[i] {
 		case 'M', 'W':
 			add(64)
-		case 'D', 'Y', 'x', 'X':
+		case 'D', 'Y':
 			add(4)
+		case 'x', 'X':
+			if isTimeFormat {
+				add(4)
+			} else {
+				// Raw calendar week-years can wrap zero to uint32 max.
+				// The formatter's four-digit padding is only a minimum.
+				add(10)
+			}
 		case 'a', 'b':
 			add(32)
 		case 'j':

@@ -276,6 +276,11 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 		{"string subtime", function.SUBTIME, 11, types.T_varchar},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			required := defines.MORPCVersion98
+			if tc.id == function.LAST_DAY {
+				// The released string identity now diagnoses incomplete calendars.
+				required = defines.MORPCVersion118
+			}
 			expr := &planpb.Expr{Typ: planpb.Type{Id: int32(tc.result)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(tc.id, tc.overload)},
 			}}}
@@ -292,13 +297,13 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
 			// 4.2.0/4.2.1 use 9, 4.2.2..4.2.4 use 10. Also retain the direct
 			// protocol-boundary negative control without calling it a release.
-			for _, version := range []int64{9, 10, defines.MORPCVersion96, defines.MORPCVersion97, defines.MORPCVersion98} {
+			for _, version := range []int64{9, 10, defines.MORPCVersion96, defines.MORPCVersion97, defines.MORPCVersion98, required - 1, required} {
 				client.version = version
 				rt := moruntime.ServiceRuntime(c.proc.GetService())
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 				pipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 				receiveErr := validateRemoteExpressionPipelineProtocol(c.proc, pipeline)
-				if version < defines.MORPCVersion98 {
+				if version < required {
 					require.Error(t, receiveErr)
 				} else {
 					require.NoError(t, receiveErr)
@@ -307,7 +312,7 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 				_, err := encodeRemoteScope(scope, c.proc)
-				if version < defines.MORPCVersion98 {
+				if version < required {
 					require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 					require.ErrorContains(t, err, "temporal")
 				} else {
@@ -317,7 +322,7 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 			}
 			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion98, floor)
+			require.Equal(t, required, floor)
 		})
 	}
 	// Previously serialized physical types are still valid on a new reader.

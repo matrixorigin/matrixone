@@ -10531,7 +10531,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: DATE_FORMAT,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    incompleteDateFormatTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -10554,6 +10554,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DateFormat
 				},
 			},
+			{overloadId: 2, args: []types.T{types.T_varchar, types.T_varchar}, retType: func([]types.Type) types.Type { return types.T_varchar.ToType() }, newOp: func() executeLogicOfOverload { return DateFormat }},
 		},
 	},
 
@@ -10794,7 +10795,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: DATEDIFF,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    incompleteDatediffTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -10808,6 +10809,9 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return builtInDateDiff
 				},
 			},
+			{overloadId: 1, args: []types.T{types.T_varchar, types.T_varchar}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return stringDateDiff }},
+			{overloadId: 2, args: []types.T{types.T_varchar, types.T_date}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return stringDateDiff }},
+			{overloadId: 3, args: []types.T{types.T_date, types.T_varchar}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return stringDateDiff }},
 		},
 	},
 
@@ -12186,7 +12190,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: TO_DAYS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    incompleteToDaysTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12199,6 +12203,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return builtInToDays
 				},
 			},
+			{overloadId: 1, args: []types.T{types.T_varchar}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return stringToDays }},
 		},
 	},
 
@@ -12280,7 +12285,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: TO_SECONDS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    incompleteToSecondsTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12293,6 +12298,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return builtInToSeconds
 				},
 			},
+			{overloadId: 1, args: []types.T{types.T_varchar}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return stringToSeconds }},
 		},
 	},
 
@@ -12400,7 +12406,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		class:             plan.Function_STRICT,
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           fixedTypeMatch,
+		checkFn:           incompleteWeekTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12445,6 +12451,8 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return DatetimeToWeek
 				},
 			},
+			{overloadId: 4, args: []types.T{types.T_varchar}, realTimeRelated: true, retType: func([]types.Type) types.Type { return types.T_int32.ToType() }, newOp: func() executeLogicOfOverload { return stringWeek }},
+			{overloadId: 5, args: []types.T{types.T_varchar, types.T_int64}, retType: func([]types.Type) types.Type { return types.T_int32.ToType() }, newOp: func() executeLogicOfOverload { return stringWeek }},
 		},
 	},
 
@@ -12535,7 +12543,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 		functionId: DAYOFWEEK,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    incompleteDayofweekTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -12568,6 +12576,7 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 					return TimestampToDayOfWeek
 				},
 			},
+			{overloadId: 3, args: []types.T{types.T_varchar}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return stringDayOfWeek }},
 		},
 	},
 

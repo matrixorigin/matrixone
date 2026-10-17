@@ -573,6 +573,17 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		// Calendar calculations reject zero dates; FROM_DAYS rejects values
 		// above the representable calendar even when the input is NOT NULL.
 		return false
+	case TO_DAYS, TO_SECONDS:
+		// String calendar totals reject incomplete dates even when the input
+		// column is NOT NULL. Preserve the legacy typed overload's contract.
+		if oid == 1 {
+			return false
+		}
+	case DATEDIFF:
+		// Either string operand can be rejected and synthesize NULL.
+		if oid >= 1 && oid <= 3 {
+			return false
+		}
 	case DATE:
 		// Typed zero DATE/DATETIME values become NULL under NO_ZERO_DATE.
 		if oid == 0 || oid == 2 {

@@ -389,6 +389,8 @@ const (
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
+// IncompleteTemporalStrings requires MORPC v118 for raw-calendar string
+// overloads and incomplete-input rejection diagnostics.
 type RemoteExpressionFeatures struct {
 	CalendarIntervalNormalization bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
@@ -426,6 +428,7 @@ type RemoteExpressionFeatures struct {
 	WeekSessionDefault                      bool
 	MediumIntAssignmentBounds               bool
 	DateNumericResultContracts              bool
+	IncompleteTemporalStrings               bool
 	DecimalStatisticalResultContracts       bool
 	InvalidDecimalStatisticalResultContract bool
 	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
@@ -461,6 +464,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.WeekSessionDefault ||
 		features.MediumIntAssignmentBounds ||
 		features.DateNumericResultContracts ||
+		features.IncompleteTemporalStrings ||
 		features.DecimalStatisticalResultContracts ||
 		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
 		features.LeastGreatestCollationSemantics
@@ -995,11 +999,24 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					features.TemporalResultContracts = true
 				}
 				if current.Typ.Id == planInt32TypeID &&
-					((id == 216 && overload >= 0 && overload <= 3) || (id == 206 && overload == 0)) {
+					((id == 216 && overload >= 0 && overload <= 5) || (id == 206 && overload == 0)) {
 					features.DateNumericResultContracts = true
 				}
-				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
+				if id == 216 && (overload == 0 || overload == 1 || overload == 4) { // one-arg WEEK: DATE/DATETIME/VARCHAR
 					features.WeekSessionDefault = true
+				}
+				// New string identities cannot execute on pre-v118 workers.
+				// Released LAST_DAY and DATE_ADD/SUB string identities also
+				// need the new incomplete-calendar warning contract.
+				if (id == 251 && overload == 2) || // DATE_FORMAT
+					(id == 93 && overload >= 1 && overload <= 3) || // DATEDIFF
+					((id == 222 || id == 223) && overload == 1) || // TO_DAYS/TO_SECONDS
+					(id == 216 && (overload == 4 || overload == 5)) || // WEEK
+					(id == 360 && overload == 3) || // DAYOFWEEK
+					(id == 201 && (overload == 0 || overload == 1)) || // LAST_DAY
+					(id == 224 && (overload == 2 || overload == 3 || overload == 6)) || // DATE_ADD
+					(id == 225 && (overload == 2 || overload == 3 || overload == 5)) { // DATE_SUB
+					features.IncompleteTemporalStrings = true
 				}
 				// Released overloads retain their physical vector ABI. The new
 				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended
