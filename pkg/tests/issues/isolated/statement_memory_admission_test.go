@@ -87,6 +87,19 @@ func TestStatementMemoryAdmissionSQLLifecycle(t *testing.T) {
 // domain's headroom. Never consume the process-wide ledger: compiler/coverage
 // memory in a shared cgroup must not change this protocol regression's premise.
 func TestStatementMemoryAdmissionKillQueryUnderPressure(t *testing.T) {
+	testStatementMemoryAdmissionKillQueryUnderPressure(t, "")
+}
+
+func TestStatementMemoryAdmissionColdConnectionUnderPressure(t *testing.T) {
+	for _, user := range []string{"dump", "sys#root#moadmin"} {
+		t.Run(user, func(t *testing.T) {
+			testStatementMemoryAdmissionKillQueryUnderPressure(t, user)
+		})
+	}
+}
+
+func testStatementMemoryAdmissionKillQueryUnderPressure(t *testing.T, coldUser string) {
+	t.Helper()
 	const capacity, healthyUsed = uint64(16 << 30), uint64(1 << 30)
 	var used atomic.Uint64
 	used.Store(healthyUsed)
@@ -119,6 +132,7 @@ func TestStatementMemoryAdmissionKillQueryUnderPressure(t *testing.T) {
 	killer, err := db.Conn(ctx)
 	require.NoError(t, err)
 	defer killer.Close()
+	cleanupKiller := killer
 	var connectionID uint64
 	require.NoError(t, runner.QueryRowContext(ctx, "select connection_id()").Scan(&connectionID))
 	killSQL := fmt.Sprintf("kill query %d", connectionID)
@@ -138,7 +152,7 @@ func TestStatementMemoryAdmissionKillQueryUnderPressure(t *testing.T) {
 		if !joined {
 			cleanupCtx, stop := context.WithTimeout(context.Background(), 15*time.Second)
 			defer stop()
-			_, _ = killer.ExecContext(cleanupCtx, killSQL)
+			_, _ = cleanupKiller.ExecContext(cleanupCtx, killSQL)
 			_, _ = fault.RemoveFaultPoint(cleanupCtx, barrier)
 			select {
 			case <-done:
@@ -170,6 +184,23 @@ func TestStatementMemoryAdmissionKillQueryUnderPressure(t *testing.T) {
 	require.Less(t, s.Available, s.Reserve)
 	require.Positive(t, s.StatementActive)
 	t.Logf("pressure admission: available=%d reserve=%d active=%d", s.Available, s.Reserve, s.StatementActive)
+	if coldUser != "" {
+		deniedDB, openErr := sql.Open("mysql", fmt.Sprintf("%s:wrong-password@tcp(127.0.0.1:%d)/", coldUser, cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, openErr)
+		defer deniedDB.Close()
+		var authErr *mysql.MySQLError
+		require.ErrorAs(t, deniedDB.PingContext(ctx), &authErr)
+		require.Equal(t, uint16(moerr.ER_ACCESS_DENIED_ERROR), authErr.Number, "control admission must never bypass password validation")
+		// A separate, unused pool guarantees a new handshake AFTER pressure is
+		// installed. The warm connection above is only a failure-cleanup owner.
+		coldDB, openErr := sql.Open("mysql", fmt.Sprintf("%s:111@tcp(127.0.0.1:%d)/", coldUser, cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, openErr)
+		defer coldDB.Close()
+		cold, connectErr := coldDB.Conn(ctx)
+		require.NoError(t, connectErr, "handshake catalog work must retain its bounded control classification")
+		defer cold.Close()
+		killer = cold
+	}
 	_, err = killer.ExecContext(ctx, "select 1")
 	require.ErrorContains(t, err, "memory statement admission wait timed out", "ordinary SQL must still wait under pressure")
 	require.ErrorContains(t, err, "control=false", "the MySQL error must preserve the rejecting decision's diagnostics")
