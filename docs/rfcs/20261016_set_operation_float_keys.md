@@ -1,10 +1,10 @@
 - Status: draft (pending independent approval)
 - Start Date: 2026-10-16
-- Revision: 8
+- Revision: 9
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
-- Rebase baseline: official main `47b9690d7caec56b589fdefaf0684177412cffb2`
+- Rebase baseline: official main `aa8d4278bdb940fe2e2b50a02fc2d9c5c362c3b7`
 - Design feedback: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784
 
 # Signed-zero set membership and scalar reaggregation
@@ -23,7 +23,10 @@ revision 6 extends accounted resource, input-distribution and composed fault evi
 revision 7 defines the intended deployment qualification/rollout contract and
 executes its sparse and concurrent boundary cases with enforced benchmark budgets.
 revision 8 reconciles upstream function allocation and refreshes evidence after
-the official-main rebase. These revisions do not assert repository approval or advance implementation approval.
+the official-main rebase. Revision 9 preserves newly merged diagnostic/folding
+semantics, resolves the shared executor test append conflict and refreshes the
+same validation protocol. These revisions do not assert repository approval or
+advance implementation approval.
 
 The proposal reuses existing WINDOW, JOIN, GROUP and SINGLE owners. It adds no
 wire field, worker, queue, persisted occurrence identity or recovery protocol.
@@ -595,6 +598,55 @@ Fresh validation on this rebased source passes:
 These are refreshed source-bound receipts, not retrospective changes to the
 historical revision-7 run. Independent S1 acceptance remains pending.
 
+### Revision 9 diagnostic-preserving rebase
+
+Official main `aa8d4278bdb940fe2e2b50a02fc2d9c5c362c3b7` adds explicit-cast
+and integer-argument diagnostic/folding behavior in shared planner/function and
+executor consumers. The rebase preserves those upstream changes, including
+row-scoped effects, scalar-value publication and prepared reuse. Its sole manual
+conflict combines the complete upstream diagnostic test functions and the
+set-key executor protocol test at the same file append point. Sixteen topic
+patches replay identically; the remaining patch differs only in that append context.
+No new route, wire field, ownership boundary or capacity envelope is introduced.
+
+Main still advertises MORPC 117, so this feature retains 118 across placement,
+actual-destination sending, receive-before-decode, executor/Prepare and persisted
+admission. Function IDs remain upstream datalink 599, set key 600 and sentinel
+601. The immediate predecessor 117 still rejects set keys; collation 117 and
+division 116 controls remain independent.
+
+The [revision 9 receipt](validation/20261017_scalar_set_capacity_r9.json) records
+fresh evidence after the shared execution/folding changes. Earlier receipts,
+including revision 8, remain unchanged historical measurements. The same S1
+workload/deployment preconditions, fixed budgets, first-invocation separation,
+one excluded warm-up and three measured rounds apply. Module-file fingerprints
+are retained alongside the 17 production and two measurement input hashes.
+
+- Complete selected owning-package suites with short/matrixone_test/count=1
+  pass: protobuf-plan/function/planner/compile/colexec 0.968 / 9.681 / 8.337 / 11.324 / 1.455 s.
+  These include both preserved append groups and their diagnostic/protocol
+  controls; they are not full-repository or full-suite race results.
+- Public signed-zero/correlation/prepared SQL suite passes under race with
+  117 named PASS events, package 9.194 s.
+  Fixture services, admission and port leases close.
+- Eight composed lifecycle modes pass under race, package
+  2.540 s, preserving first/final reservations,
+  live metadata, spill-file removal, handle closure, Reset and same-budget
+  recovery checks before ledger Close.
+- Fifteen capacity profiles / 100 public samples pass, package
+  8.704 s. First-invocation maximum is
+  62.066 ms; measured warm maximum 64.317 ms; sparse C2 warm maximum
+  1.981 ms; forced-spill boundary C2 64.317 ms. Maximum accounted
+  generation peak is 8,505,176 bytes and process lifetime RSS high-water is
+  437,125,120 bytes. All applicable fixed S1 targets pass. The receipt retains the
+  serial EXPLAIN, per-root accounting, overlap and unavailable-metric limits.
+- Seven-package vet and incremental lint pass (0 issues).
+
+These results refresh the same bounded qualification, not general production,
+distributed or whole-allocator capacity. Independent acceptance of the exact
+RFC/S1 deployment contract remains pending; this scoped rebase does not supply
+or waive that repository decision.
+
 ## Alternatives
 
 | Choice | Benefits | Costs and reason for the current proposal |
@@ -673,7 +725,7 @@ acceptance or a capacity benchmark.
 | Historical CI behavior | [Run 38826312235](https://github.com/matrixorigin/matrixone/actions/runs/38826312235), head `fae17ae98d93f2b3e5e251dbc5649d643513af03` | Required CI, Ubuntu UT, SCA, coverage and proxy/pessimistic multi-CN BVT succeeded; upgrade checks skipped. | No inference of upgrade or capacity acceptance |
 | Selective typed-key filter work | Earlier unchanged-path receipt: 4,096 rows, one scan row per arm, two aggregation input rows, reported memory 262,270 bytes | A selective set-operation observation only; does not measure occurrence-based scalar fallback latency, concurrency or resident peak. | Separate from fallback acceptance |
 | Rebased capability allocation | Set-key placement/send/receive/Prepare/persisted tests at 116/117, plus division-only and combined-feature controls | Focused compile/colexec/planner boundary checks pass (3.073s/2.088s/1.517s); full planner, compile, colexec, function and protobuf-plan packages also pass. Fresh receipts are recorded in the implementation PR; historical 115/116 receipts above retain their original provenance. | Independent implementation review |
-| Rebased function 600 overloads, upstream 599 negative control and predecessor 117 rejection | Revision 8 on official main `47b9690d7caec56b589fdefaf0684177412cffb2`; complete protobuf-plan/function/planner/compile/colexec package suites passed | Fresh registry/encoded-feature and existing placement/send/receive/Prepare/executor/persisted tests; independent collation 117/division 116 controls retained. Not a live mixed-version cluster. | Execution/compatibility acceptance |
+| Rebased function 600 overloads, upstream 599 negative control and predecessor 117 rejection | Revision 9 on official main `aa8d4278bdb940fe2e2b50a02fc2d9c5c362c3b7`; complete protobuf-plan/function/planner/compile/colexec package suites passed | Fresh registry/encoded-feature and existing placement/send/receive/Prepare/executor/persisted tests; independent collation 117/division 116 controls retained. Not a live mixed-version cluster. | Execution/compatibility acceptance |
 | Global merge and reaggregation capacity | Revision 6 benchmark and linked receipt above | Twelve actual fallback profiles and separate terminal internal roots; local targets met, including high-U/skew, measured account peaks, merge and spill/reload counters. Full allocator attribution and remote qualification are not claimed. | Planner/execution reviewers: supported production envelope and remaining protocol acceptance |
 | Composed partial failure/cancel/reset/spill recovery | Revision 6 composed compile test plus named owner fault tests above | Typed 4 KiB rejection, WINDOW input / pre-reload cancellation, synchronous corrupt reload, first/final attempt file/handle/ledger cleanup and TP Reset/same-budget recovery. Mid-single-batch cancellation is not injected. | Execution reviewers: remaining composed boundaries |
 | Design gate | [Review 5541720784](https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784) requested ownership, capacity and alternatives | This revision supplies those artifacts; the reviewer deferred full implementation review. No independent approval is recorded. | Independent reviewer approval of this exact revision |
