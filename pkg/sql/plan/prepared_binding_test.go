@@ -460,9 +460,10 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 		{"round nonzero precision", "c=round(?,?)", []string{"54321.0", "1"}, true, true},
 		{"round negative precision", "c=round(?,?)", []string{"54321.0", "-1"}, true, true},
 		{"explicit column cast", "cast(c as decimal(5,0))=round(?,0)", []string{"54321.0"}, false, true},
-		// ROUND sees the source before the explicit result cast clamps it to
-		// 9999. The full expression is safe to lower, but the cast must remain.
-		{"explicit value cast", "c=cast(round(?,0) as decimal(4,0))", []string{"54321.0"}, true, true},
+		// A silent result cast can be lowered. An overflowing cast must keep
+		// the original comparison so its range warning remains runtime-owned.
+		{"explicit value cast in range", "c=cast(round(?,0) as decimal(4,0))", []string{"9999.0"}, true, true},
+		{"explicit value cast overflow", "c=cast(round(?,0) as decimal(4,0))", []string{"54321.0"}, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -527,6 +528,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			require.NoError(t, err)
 			require.True(t, bound.ValueDependent, "runtime value proof must not enter the type-only cache")
 			foundScan, columnCast, executableParam := false, false, false
+			checkExplicitResultCast := strings.HasPrefix(tc.name, "explicit value cast ")
 			explicitResultCast := false
 			for _, node := range bound.Plan.GetQuery().Nodes {
 				if node.NodeType != planpb.Node_TABLE_SCAN || node.TableDef.Name != table.Name {
@@ -539,15 +541,19 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 						// assert pruning eligibility here and actual blocks in public QA.
 						require.True(t, ExprIsZonemappable(context.Background(), filter), "safe predicate must allow block pruning")
 					}
+					if checkExplicitResultCast && !tc.native {
+						require.False(t, ExprIsZonemappable(context.Background(), filter), "warning-producing predicate must retain row evaluation")
+					}
 					executableParam = executableParam || function.ContainsParameter(filter)
 					require.NoError(t, planpb.VisitExprTree(filter, func(expr *Expr) error {
 						if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
 							fn.Args[0].GetCol() != nil && fn.Args[0].Typ.Id == table.Cols[2].Typ.Id {
 							columnCast = true
 						}
-						if tc.name == "explicit value cast" && types.T(expr.Typ.Id).IsDecimal() &&
+						if checkExplicitResultCast && types.T(expr.Typ.Id).IsDecimal() &&
 							expr.Typ.Width == 4 && expr.Typ.Scale == 0 {
-							if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" {
+							if fn := expr.GetF(); fn != nil && fn.Func.ObjName == "cast" && len(fn.Args) == 2 &&
+								fn.Args[0].GetF() != nil && fn.Args[0].GetF().Func.ObjName == "round" {
 								_, overload := function.DecodeOverloadID(fn.Func.Obj)
 								require.EqualValues(t, 1, overload, "retain the explicit, not implicit, cast")
 								require.True(t, function.ContainsParameter(expr))
@@ -561,8 +567,132 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 			require.True(t, foundScan)
 			require.Equal(t, !tc.native, columnCast, bound.Plan.String())
 			require.True(t, executableParam, "proof witnesses must not replace executable parameters")
-			if tc.name == "explicit value cast" {
-				require.True(t, explicitResultCast, "safe key lowering must still execute the user's narrowing cast")
+			if checkExplicitResultCast {
+				require.True(t, explicitResultCast, "the user's narrowing cast must remain executable")
+			}
+		})
+	}
+}
+
+func TestPreparedTemporalDecimalSpecialization(t *testing.T) {
+	for _, width := range []int{10, 38, 65} {
+		t.Run(fmt.Sprintf("decimal%d", width), func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			mock := NewMockOptimizer(false, proc)
+			sink := &loadAssignmentWarningSink{}
+			proc.WarningSink = sink
+			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, fmt.Sprintf(
+				"select 1 where date_sub(time '00:00:00', interval cast(? as decimal(%d,1)) hour) is null", width), 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			overflow := "1" + strings.Repeat("0", width-1)
+			for _, value := range []string{"900", overflow, "0", "900"} {
+				params.CleanOnlyData()
+				require.NoError(t, vector.AppendBytes(params, []byte(value), false, proc.Mp()))
+				proc.SetPrepareParams(params)
+				bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+					[]PreparedSourceBinding{{Position: 0, Type: types.T_text.ToType()}},
+					[]any{ParamValue{Value: value}})
+				require.NoError(t, err)
+				require.True(t, bound.ValueDependent, "even a refused specialization must avoid the type-only cache")
+				cast := false
+				require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *Expr) error {
+					return planpb.VisitExprTree(root, func(expr *Expr) error {
+						cast = cast || function.IsExplicitDecimalCast(expr)
+						return nil
+					})
+				}))
+				require.Equal(t, value == overflow, cast, bound.Plan.String())
+				require.Empty(t, sink.codes, "binding probes must not publish diagnostics")
+			}
+		})
+	}
+}
+
+func TestPreparedTemporalDecimalProbeControls(t *testing.T) {
+	for _, tc := range []struct {
+		name, value                        string
+		null, missing, column, standalone  bool
+		target                             types.T
+		literal, constantVector, dependent bool
+	}{
+		{name: "NULL", null: true, target: types.T_decimal64, literal: true, dependent: true},
+		{name: "lexical warning", value: "bad", target: types.T_decimal64, dependent: true},
+		{name: "missing binding", value: "900", missing: true, target: types.T_decimal64, dependent: true},
+		{name: "row source", value: "900", column: true, target: types.T_decimal64},
+		{name: "ordinary cast", value: "900", standalone: true, target: types.T_decimal64},
+		{name: "wide literal", value: "1234567890123456789012345678901234567890123456789012345678901234.5", target: types.T_decimal256, constantVector: true, dependent: true},
+		{name: "wide NULL", null: true, target: types.T_decimal256, literal: true, dependent: true},
+		{name: "wide overflow", value: "1" + strings.Repeat("0", 64), target: types.T_decimal256, dependent: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			sink := &loadAssignmentWarningSink{}
+			proc.WarningSink = sink
+			params := vector.NewVec(types.T_text.ToType())
+			t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
+			if !tc.missing {
+				proc.SetPrepareParams(params)
+			}
+			source := &Expr{Typ: makeSimplePlan2Type(types.T_text), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+			if tc.column {
+				source.Expr = &planpb.Expr_Col{Col: &planpb.ColRef{}}
+			}
+			target := types.New(tc.target, 10, 1).PlanType()
+			if tc.target == types.T_decimal256 {
+				target.Width = 65
+			}
+			cast, err := appendExplicitCastBeforeExpr(proc.Ctx, source, target)
+			require.NoError(t, err)
+			originalType := cast.Typ
+			expr := &Expr{Typ: makeSimplePlan2Type(types.T_time), Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.DATE_SUB, 0)}, Args: []*Expr{cast},
+			}}}
+			if tc.standalone {
+				expr = cast
+			}
+			state := &preparedSourceBindingState{values: []any{ParamValue{Value: tc.value}}}
+			require.NoError(t, specializePreparedTemporalDecimalCasts(proc, state, expr))
+			require.Equal(t, tc.literal, cast.GetLit() != nil)
+			require.Equal(t, tc.constantVector, cast.GetVec() != nil)
+			require.Equal(t, tc.dependent, state.valueDependent)
+			require.Equal(t, originalType, cast.Typ)
+			require.Empty(t, sink.codes)
+			if tc.null {
+				require.True(t, cast.GetLit().GetIsnull())
+			}
+			if tc.constantVector {
+				require.EqualValues(t, 1, cast.GetVec().Len)
+				require.True(t, cast.GetVec().DecimalLiteralRequiresV82)
+				required, err := planpb.RequiresMORPCVersion89DecimalLiteralSemantics(cast)
+				require.NoError(t, err)
+				require.True(t, required, "the existing remote admission must see the wide constant")
+				encoded, err := cast.Marshal()
+				require.NoError(t, err)
+				var decoded planpb.Expr
+				require.NoError(t, decoded.Unmarshal(encoded))
+				executor, err := colexec.NewExpressionExecutor(proc, &decoded)
+				require.NoError(t, err)
+				defer executor.Free()
+				input := batch.New(nil)
+				defer input.Clean(proc.Mp())
+				for _, rows := range []int{2, 3} {
+					input.SetRowCount(rows)
+					result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+					require.NoError(t, err)
+					require.True(t, result.IsConst(), "a flat one-row vector cannot broadcast")
+					require.Equal(t, 1, result.Length())
+					require.Equal(t, types.New(tc.target, 65, 1), *result.GetType())
+					value := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](result)
+					for row := range rows {
+						coefficient, null := value.GetValue(uint64(row))
+						require.False(t, null)
+						require.Equal(t, tc.value, coefficient.Format(1))
+					}
+				}
 			}
 		})
 	}
@@ -1545,11 +1675,14 @@ func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
 	for _, tc := range []struct {
 		name, expression, value string
 		null, dependent         bool
+		row                     int64
+		warningCode             uint16
 	}{
-		{"warning", "cast(? as double)", "12tail", false, true},
-		{"invalid", "cast(? as decimal(38,0))", "invalid", false, true},
-		{"null", "cast(? as decimal(38,0))", "", true, true},
-		{"volatile", "cast(? as decimal(38,0))+rand()", "12", false, false},
+		{"warning", "cast(? as double)", "12tail", false, true, 12, 1292},
+		{"decimal range warning", "cast(round(?,0) as decimal(4,0))", "54321.0", false, true, 9999, 1264},
+		{"invalid", "cast(? as decimal(38,0))", "invalid", false, true, 0, 0},
+		{"null", "cast(? as decimal(38,0))", "", true, true, 0, 0},
+		{"volatile", "cast(? as decimal(38,0))+rand()", "12", false, false, 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -1577,17 +1710,17 @@ func TestPreparedIntegerComparisonProofDiagnostics(t *testing.T) {
 			require.Same(t, original, rewritten, "diagnostics, NULL and volatility retain their execution owner")
 			require.Equal(t, tc.dependent, state.valueDependent)
 			require.Empty(t, sink.codes, "a proof must not publish warnings")
-			if tc.name == "warning" {
+			if tc.warningCode != 0 {
 				input := batch.NewWithSize(1)
 				input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
 				defer input.Clean(proc.Mp())
-				require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(12), false, proc.Mp()))
+				require.NoError(t, vector.AppendFixed(input.Vecs[0], tc.row, false, proc.Mp()))
 				input.SetRowCount(1)
 				vec, free, err := colexec.GetReadonlyResultFromExpression(proc, rewritten, []*batch.Batch{input})
 				require.NoError(t, err)
 				defer free()
 				require.True(t, vector.GetFixedAtNoTypeCheck[bool](vec, 0))
-				require.Len(t, sink.codes, 1, "runtime still owns the original warning")
+				require.Equal(t, []uint16{tc.warningCode}, sink.codes, "runtime still owns exactly one original warning")
 			}
 		})
 	}

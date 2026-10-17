@@ -122,4 +122,48 @@ function verifyResults(scope, needs) {
       ' Coverage was not evaluated for this test/document-only change.');
 }
 
-module.exports = { category, classify, resolveScope, verifyResults };
+// Shared by the analyzer and BVT consumers, after checkout. No API pagination,
+// mutable branch comparison, or remembered plan can change the tested revision.
+function immutableChanges({ cwd = process.cwd(), env = process.env, git } = {}) {
+  const fs = require('node:fs');
+  const { execFileSync } = require('node:child_process');
+  git ||= args => execFileSync('git', args, {
+    cwd, encoding: 'utf8', timeout: 30000, maxBuffer: 8 * 1024 * 1024,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (env.GITHUB_ACTIONS !== 'true' || !env.GITHUB_EVENT_PATH ||
+      !['pull_request', 'pull_request_target'].includes(env.GITHUB_EVENT_NAME)) return null;
+  try {
+    const pr = JSON.parse(fs.readFileSync(env.GITHUB_EVENT_PATH, 'utf8')).pull_request;
+    const base = pr?.base?.sha;
+    const head = pr?.head?.sha;
+    if (![base, head].every(sha => /^[0-9a-f]{40}$/.test(sha || '')) ||
+        git(['rev-parse', 'HEAD']).trim() !== head) return null;
+    // Local edits cannot use a committed-input exemption. Include untracked
+    // inputs too; ignored native outputs and runner reports are not source.
+    if (git(['status', '--porcelain', '--untracked-files=all', '--ignore-submodules=none']).trim()) return null;
+    try {
+      git(['cat-file', '-e', `${base}^{commit}`]);
+    } catch {
+      // Fetch the immutable object only. Do not move a checkout or local ref.
+      if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY || '')) return null;
+      git(['fetch', '--no-tags', '--depth=1',
+        `https://github.com/${env.GITHUB_REPOSITORY}.git`, base]);
+    }
+    // Tree comparison also works when a shallow checkout lacks ancestry. Both
+    // sides of a rename are roots; do not hide removals behind rename matching.
+    const raw = git(['diff', '--no-ext-diff', '--no-renames', '--ignore-submodules=none', '--name-status', '-z', base, head]);
+    const fields = raw.split('\0');
+    if (fields.pop() !== '' || fields.length === 0 || fields.length % 2) return null;
+    const files = [];
+    for (let i = 0; i < fields.length; i += 2) {
+      if (!['A', 'M', 'D', 'T'].includes(fields[i]) || !validPath(fields[i + 1])) return null;
+      files.push({ status: fields[i], filename: fields[i + 1] });
+    }
+    return files;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { category, classify, resolveScope, verifyResults, immutableChanges };

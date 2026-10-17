@@ -527,12 +527,20 @@ alter table v2 modify column b int unique key; -- dup, fuzzy dedup path
 create table v3 (a int primary key, b int, c text, unique index IdX2(b));
 
 load data infile  '$resources/load_data/dup_load.csv' into table v3 fields terminated by ',';
+select count(*) from v3;
+
+-- Construct corrupt data explicitly to test ALTER's dedup exemption.
+set @alter_v3_optimizer_hints = @@session.optimizer_hints;
+set session optimizer_hints = 'skipDedup=1';
+insert into v3 values (1, 2, 'kyouha'), (1, 2, 'donomisede'), (2, 3, 'tabemashitaka');
+set session optimizer_hints = @alter_v3_optimizer_hints;
 
 insert into v3 values (1, 1, "boroborodesu"); -- dup
 -- @pattern
 insert into v3 values (10, 2, "boroborodesu"); -- dup
 
 alter table v3 add column d int; -- no dup because we have skipped pk and unique index dedup
+select a, b, c, d from v3 order by a, c;
 
 -- Cleanup
 drop table t1;

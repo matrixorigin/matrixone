@@ -29,6 +29,65 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
+func TestTableIDPredecessorUsesPublishedCheckpoint(t *testing.T) {
+	for _, tc := range []struct {
+		name                                     string
+		globalState                              State
+		legacy, differentBoundary, noIncremental bool
+		wantGlobal                               bool
+	}{
+		{name: "published_global_replaces_compactable_incremental", globalState: ST_Finished, wantGlobal: true},
+		{name: "pending_global", globalState: ST_Pending},
+		{name: "running_global", globalState: ST_Running},
+		{name: "legacy_global", globalState: ST_Finished, legacy: true},
+		{name: "different_boundary", globalState: ST_Finished, differentBoundary: true},
+		{name: "incremental_already_collected", globalState: ST_Finished, noIncremental: true, wantGlobal: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newRunnerStore("", time.Hour, time.Hour)
+			predecessorEnd := types.BuildTS(100, 0)
+			start := predecessorEnd.Next()
+			newIndex := func() objectio.LocationSlice {
+				var locations objectio.LocationSlice
+				locations.AppendLocation(objectio.BuildLocation(objectio.MockObjectName(), objectio.NewExtent(1, 1, 1, 1), 1, 0))
+				return locations
+			}
+			incrementalIndex, globalIndex := newIndex(), newIndex()
+			if !tc.noIncremental {
+				incremental := NewCheckpointEntry("", types.TS{}, predecessorEnd, ET_Incremental)
+				incremental.SetState(ST_Finished)
+				incremental.SetTableIDLocation(incrementalIndex)
+				assert.True(t, store.AddICKPFinishedEntry(incremental))
+			}
+			globalEnd := start
+			if tc.differentBoundary {
+				globalEnd = types.BuildTS(50, 0)
+			}
+			global := NewCheckpointEntry("", types.TS{}, globalEnd, ET_Global)
+			global.SetState(tc.globalState)
+			if !tc.legacy {
+				global.SetTableIDLocation(globalIndex)
+			}
+			// Use the real store: pending/running intents must remain invisible.
+			if tc.globalState == ST_Finished {
+				store.AddGCKPFinishedEntry(global)
+			} else {
+				assert.True(t, store.AddGCKPIntent(global))
+			}
+			job := &checkpointJob{executor: &checkpointExecutor{runner: &runner{store: store}}}
+			entry := NewCheckpointEntry("", start, types.BuildTS(200, 0), ET_Incremental)
+			location, requiredEnd, err := job.resolveICKPTableIDPredecessor(entry)
+			assert.NoError(t, err)
+			expected := incrementalIndex
+			if tc.wantGlobal {
+				expected = globalIndex
+			}
+			assert.Equal(t, expected, location)
+			assert.Equal(t, predecessorEnd, requiredEnd)
+		})
+	}
+}
+
 func TestContextForForceICKP(t *testing.T) {
 	t.Run("add the default timeout when the caller has none", func(t *testing.T) {
 		ctx, cancel := contextForForceICKP(context.Background())

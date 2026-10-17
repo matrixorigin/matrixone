@@ -9,6 +9,7 @@ CREATE DATABASE issue_28164_collation_gate;
 USE issue_28164_collation_gate;
 CREATE TABLE legacy (id INT PRIMARY KEY, name VARCHAR(20) COLLATE utf8mb4_general_ci, token VARCHAR(20) COLLATE utf8mb4_bin) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 INSERT INTO legacy VALUES (1, 'Alpha', 'Alpha'), (2, 'alpha', 'alpha');
+SELECT * FROM legacy LIMIT 0;
 SELECT id FROM legacy WHERE name COLLATE utf8mb4_general_ci = 'alpha' ORDER BY id;
 SELECT 1 COLLATE utf8mb4_general_ci AS legacy_numeric;
 SELECT NULL COLLATE utf8mb4_general_ci AS legacy_null;

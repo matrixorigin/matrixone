@@ -16,12 +16,15 @@ package cache
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/require"
 )
@@ -65,34 +68,11 @@ func TestBVTCapChangesStayInsideATenantAccount(t *testing.T) {
 		defer f.Close()
 
 		checked++
-		account := "" // empty means the default connection, i.e. SYS
-		scanner := bufio.NewScanner(f)
-		scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-		for line := 1; scanner.Scan(); line++ {
-			text := scanner.Text()
-			if m := sessionOpenRe.FindStringSubmatch(text); m != nil {
-				account = m[1]
-				continue
-			}
-			if sessionCloseRe.MatchString(text) {
-				account = ""
-				continue
-			}
-			if !capSetRe.MatchString(text) {
-				continue
-			}
-			statements++
-			if account == "" || strings.EqualFold(account, "sys") || strings.EqualFold(account, "dump") {
-				rel, _ := filepath.Rel(root, path)
-				where := account
-				if where == "" {
-					where = "the default (SYS) connection"
-				}
-				offenders = append(offenders, fmt.Sprintf("%s:%d sets a CN-wide cap on %s: %s",
-					rel, line, where, strings.TrimSpace(text)))
-			}
-		}
-		return scanner.Err()
+		rel, _ := filepath.Rel(root, path)
+		count, invalid, scanErr := scanIndexCacheCaps(f, rel)
+		statements += count
+		offenders = append(offenders, invalid...)
+		return scanErr
 	}))
 
 	require.NotZero(t, checked, "found no .sql cases to scan -- the guard would pass vacuously")
@@ -114,4 +94,84 @@ func repoRoot(t *testing.T) string {
 		require.NotEqual(t, parent, dir, "no go.mod above %s", dir)
 		dir = parent
 	}
+}
+
+// Each file starts in the default connection; session scope must not cross files.
+func scanIndexCacheCaps(r io.Reader, path string) (statements int, offenders []string, err error) {
+	account := "" // empty means the default connection, i.e. SYS
+	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for line := 1; scanner.Scan(); line++ {
+		text := scanner.Bytes()
+		trimmed := bytes.TrimSpace(text)
+		// Inspect the reusable scanner buffer first. SQL/data lines need no
+		// string allocation and cannot change the session-comment scope.
+		if bytes.HasPrefix(trimmed, []byte("--")) {
+			if m := sessionOpenRe.FindSubmatch(text); m != nil {
+				account = string(m[1]) // Copy before Scanner reuses its buffer.
+			} else if sessionCloseRe.Match(text) {
+				account = ""
+			}
+			continue
+		}
+		if len(trimmed) == 0 {
+			continue
+		}
+		// Preserve regexp's Unicode case folding (e.g. long s in SET).
+		if first := trimmed[0]; first < 0x80 && first != 's' && first != 'S' {
+			continue
+		}
+		if !capSetRe.Match(text) {
+			continue
+		}
+		statements++
+		if account == "" || strings.EqualFold(account, "sys") || strings.EqualFold(account, "dump") {
+			where := account
+			if where == "" {
+				where = "the default (SYS) connection"
+			}
+			offenders = append(offenders, fmt.Sprintf("%s:%d sets a CN-wide cap on %s: %s",
+				path, line, where, bytes.TrimSpace(text)))
+		}
+	}
+	return statements, offenders, scanner.Err()
+}
+
+func TestScanIndexCacheCaps(t *testing.T) {
+	longLine := strings.Repeat("x", 100<<10) + "\n"
+	for _, tc := range []struct {
+		name, sql             string
+		statements, offenders int
+	}{
+		{"default", "set global max_index_cache_size=1", 1, 1},
+		{"gpu", " \tSET @@global.max_gpu_index_cache_size=1", 1, 1},
+		{"dedicated", "-- @session:id=1&user=acct:admin&password=111\nset global max_index_cache_size=1", 1, 0},
+		{"session closed", "-- @session:id=1&user=acct:admin\nset global max_index_cache_size=1\n-- @session}\nset global max_index_cache_size=2", 2, 1},
+		{"sys", "-- @session:id=1&user=SyS:admin\nset global max_index_cache_size=1", 1, 1},
+		{"dump", "-- @session:id=1&user=dump:admin\nset global max_index_cache_size=1", 1, 1},
+		{"comment", "-- set global max_index_cache_size=1", 0, 0},
+		{"session variable", "set session max_index_cache_size=1", 0, 0},
+		{"embedded text", "select 'set global max_index_cache_size=1'", 0, 0},
+		{"suffix", "set global max_index_cache_size_suffix=1", 0, 0},
+		{"form feed", "\fset global max_index_cache_size=1", 1, 1},
+		{"unicode case fold", "ſet global max_index_cache_size=1", 1, 1},
+		{"non-regexp whitespace", "\u00a0set global max_index_cache_size=1", 0, 0},
+		{"long data line", longLine + "set global max_index_cache_size=1", 1, 1},
+		{"session survives buffer reuse", "-- @SeSsIoN:id=1&user=SyS:admin\n" + longLine + "set global max_index_cache_size=1", 1, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			statements, offenders, err := scanIndexCacheCaps(strings.NewReader(tc.sql), "case.sql")
+			require.NoError(t, err)
+			require.Equal(t, tc.statements, statements)
+			require.Len(t, offenders, tc.offenders)
+			for _, offender := range offenders {
+				require.Contains(t, offender, "case.sql:")
+			}
+		})
+	}
+}
+
+func TestScanIndexCacheCapsReadError(t *testing.T) {
+	_, _, err := scanIndexCacheCaps(iotest.ErrReader(io.ErrUnexpectedEOF), "case.sql")
+	require.ErrorIs(t, err, io.ErrUnexpectedEOF)
 }
