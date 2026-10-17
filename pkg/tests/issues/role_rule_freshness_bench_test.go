@@ -110,10 +110,23 @@ func BenchmarkRoleRuleFreshnessTCP(b *testing.B) {
 					}
 				}
 				for _, administrator := range []bool{false, true} {
-					for _, protocol := range []string{"text", "binary"} {
+					protocols := []string{"text", "binary"}
+					if mode == "default" {
+						protocols = append(protocols, "text-delimiter", "text-literal")
+					}
+					for _, protocol := range protocols {
+						if selected := os.Getenv("MO_ROLE_FRESHNESS_BENCH_CELL"); selected != "" && selected != fmt.Sprintf("%t/%t/%s", rules, administrator, protocol) {
+							continue
+						}
 						func() {
+							query := "select id from app.t order by id"
+							if protocol == "text-delimiter" {
+								query += ";"
+							} else if protocol == "text-literal" {
+								query = "select id from app.t where ';' = ';' order by id"
+							}
 							sampleBase := func(phase string) map[string]any {
-								return map[string]any{"mode": mode, "protocol": protocol, "rules": rules, "admin": administrator, "phase": phase}
+								return map[string]any{"mode": mode, "protocol": protocol, "sql": query, "rules": rules, "admin": administrator, "phase": phase}
 							}
 							beforeConnect, _ := counter.SnapshotAdmissionCounters()
 							started := time.Now()
@@ -124,7 +137,6 @@ func BenchmarkRoleRuleFreshnessTCP(b *testing.B) {
 							_, conn := open(user)
 							connect := time.Since(started)
 							afterConnect, _ := counter.SnapshotAdmissionCounters()
-							const query = "select id from app.t order by id"
 							read := func() (*sql.Rows, error) { return conn.QueryContext(ctx, query) }
 							var prepare time.Duration
 							if protocol == "binary" {

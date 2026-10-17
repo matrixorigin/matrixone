@@ -43,32 +43,48 @@ func (c authorizationTransitionContext) Err() error                  { return c.
 // An epoch owns authorization for one semantic statement, including its helper
 // reads. It is independent of the user's (possibly older) data transaction.
 type authorizationEpoch struct {
-	owner    *Session
-	exec     *ExecCtx
-	identity rewriteRuleIdentity
-	ctx      context.Context
-	parent   context.Context
-	cancel   context.CancelFunc
-	prepared *rewritePolicyRequest
-	mu       sync.Mutex
-	entered  bool
-	ended    bool
-	started  bool
-	pending  chan struct{}
-	engine   *disttae.Engine
-	admitted *txnclient.SnapshotAdmission
-	err      error
-	version  disttae.PrivilegeCacheVersion
-	minimum  timestamp.Timestamp
-	proofErr error
+	owner     *Session
+	exec      *ExecCtx
+	identity  rewriteRuleIdentity
+	ctx       context.Context
+	parent    context.Context
+	cancel    context.CancelFunc
+	prepared  rewritePolicyRequest
+	mu        sync.Mutex
+	entered   bool
+	ended     bool
+	started   bool
+	acquiring bool
+	pending   chan struct{}
+	engine    *disttae.Engine
+	admitted  *txnclient.SnapshotAdmission
+	err       error
+	version   disttae.PrivilegeCacheVersion
+	minimum   timestamp.Timestamp
+	proofErr  error
 }
 
 func beginAuthorizationEpoch(ctx context.Context, ses *Session, exec *ExecCtx) (context.Context, *authorizationEpoch) {
 	origin, cancel := context.WithCancel(ctx)
 	e := &authorizationEpoch{owner: ses, exec: exec, identity: rewriteRuleSessionIdentity(ses), ctx: origin, parent: ctx, cancel: cancel,
-		prepared: &rewritePolicyRequest{owner: ses}}
-	ctx = context.WithValue(origin, authorizationEpochKey{}, e)
-	return context.WithValue(ctx, rewritePolicyRequestKey{}, e.prepared), e
+		prepared: rewritePolicyRequest{owner: ses}}
+	return e, e
+}
+
+// The statement already owns these values and its cancellation context. Keep
+// them together rather than allocating a separate context node for each value.
+func (e *authorizationEpoch) Deadline() (time.Time, bool) { return e.ctx.Deadline() }
+func (e *authorizationEpoch) Done() <-chan struct{}       { return e.ctx.Done() }
+func (e *authorizationEpoch) Err() error                  { return e.ctx.Err() }
+func (e *authorizationEpoch) Value(key any) any {
+	switch key.(type) {
+	case authorizationEpochKey:
+		return e
+	case rewritePolicyRequestKey:
+		return &e.prepared
+	default:
+		return e.ctx.Value(key)
+	}
 }
 
 func authorizationEpochFor(ctx context.Context, ses *Session) *authorizationEpoch {
@@ -113,7 +129,12 @@ func (e *authorizationEpoch) snapshot(ctx context.Context, eng *disttae.Engine) 
 			}
 			return nil, moerr.NewInternalError(ctx, "authorization statement ended")
 		}
-		if e.pending != nil {
+		if e.acquiring {
+			// Ordinary statement execution is sequential. Allocate a notification
+			// only if another authorization consumer actually waits for the proof.
+			if e.pending == nil {
+				e.pending = make(chan struct{})
+			}
 			pending := e.pending
 			e.mu.Unlock()
 			select {
@@ -133,8 +154,7 @@ func (e *authorizationEpoch) snapshot(ctx context.Context, eng *disttae.Engine) 
 			}
 			return a, err
 		}
-		e.pending = make(chan struct{})
-		pending := e.pending
+		e.acquiring = true
 		e.mu.Unlock()
 
 		// No session/epoch lock covers limiter admission or logtail I/O.
@@ -174,8 +194,11 @@ func (e *authorizationEpoch) snapshot(ctx context.Context, eng *disttae.Engine) 
 		}
 		e.admitted, e.err, e.engine, e.started = a, err, eng, true
 		e.version, e.minimum, e.proofErr = version, minimum, proofErr
-		e.pending = nil
-		close(pending)
+		e.acquiring = false
+		if e.pending != nil {
+			close(e.pending)
+			e.pending = nil
+		}
 		e.mu.Unlock()
 		return a, err
 	}

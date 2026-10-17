@@ -16,6 +16,8 @@ package frontend
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 
 	"github.com/golang/mock/gomock"
@@ -32,6 +34,16 @@ func TestAuthorizationEpochOwnershipAndEnd(t *testing.T) {
 	exec := &ExecCtx{}
 	ctx, e := beginAuthorizationEpoch(parent, ses, exec)
 	require.Same(t, e, authorizationEpochFor(ctx, ses))
+	require.Same(t, &e.prepared, rewritePolicyRequestFor(ctx, ses))
+	type marker struct{}
+	valueParent := context.WithValue(parent, marker{}, "request value")
+	valueCtx, valueEpoch := beginAuthorizationEpoch(valueParent, ses, &ExecCtx{})
+	require.Equal(t, "request value", valueCtx.Value(marker{}))
+	childCancelCtx, cancelChild := context.WithCancelCause(valueCtx)
+	defer cancelChild(nil)
+	valueEpoch.end()
+	require.ErrorIs(t, context.Cause(valueCtx), context.Canceled)
+	require.ErrorIs(t, context.Cause(childCancelCtx), context.Canceled)
 	other := newTestSession(t, gomock.NewController(t))
 	defer other.Close()
 	require.Nil(t, authorizationEpochFor(ctx, other))
@@ -53,10 +65,82 @@ func TestAuthorizationEpochOwnershipAndEnd(t *testing.T) {
 	require.Error(t, err)
 }
 
+type authorizationWaitContext struct {
+	context.Context
+	ready chan struct{}
+	once  sync.Once
+}
+
+func (c *authorizationWaitContext) Done() <-chan struct{} {
+	c.once.Do(func() { close(c.ready) })
+	return c.Context.Done()
+}
+
+func TestAuthorizationEpochWaitersShareAcquisitionAndCancel(t *testing.T) {
+	for _, terminal := range []string{"publish", "end", "caller cancellation"} {
+		t.Run(terminal, func(t *testing.T) {
+			ses := newTestSession(t, gomock.NewController(t))
+			defer ses.Close()
+			ctx, e := beginAuthorizationEpoch(t.Context(), ses, &ExecCtx{})
+			defer e.end()
+			// Hold the first acquisition at its I/O boundary without starting a
+			// service. The waiters exercise the same publication and cancel edges.
+			e.acquiring = true
+			var results [2]chan error
+			var cancels [2]context.CancelFunc
+			for i := range results {
+				waitCtx, cancel := context.WithCancel(ctx)
+				cancels[i] = cancel
+				defer cancel()
+				observed := &authorizationWaitContext{Context: waitCtx, ready: make(chan struct{})}
+				results[i] = make(chan error, 1)
+				go func() { _, err := e.snapshot(observed, nil); results[i] <- err }()
+				<-observed.ready
+			}
+			e.mu.Lock()
+			pending := e.pending
+			e.mu.Unlock()
+			require.NotNil(t, pending)
+			if terminal == "end" {
+				e.end()
+				for _, result := range results {
+					require.ErrorIs(t, <-result, context.Canceled)
+				}
+				return
+			}
+			if terminal == "caller cancellation" {
+				cancels[0]()
+				require.ErrorIs(t, <-results[0], context.Canceled)
+				results[0] = nil
+			}
+			failure := errors.New("catalog proof failed")
+			e.mu.Lock()
+			shared := pending == e.pending
+			e.started, e.acquiring, e.err = true, false, failure
+			close(e.pending)
+			e.pending = nil
+			e.mu.Unlock()
+			require.True(t, shared)
+			for _, result := range results {
+				if result != nil {
+					require.ErrorIs(t, <-result, failure)
+				}
+			}
+		})
+	}
+}
+
 func TestAuthorizationBatchParsingKeepsEagerErrorsAndRawContinuations(t *testing.T) {
 	ses := newTestSession(t, gomock.NewController(t))
 	defer ses.Close()
 	ctx := context.Background()
+	for _, sql := range []string{"select id from app.t order by id;", "select ';' as x", "select 1 /* ; */;", "/*! select 1; */"} {
+		first, remaining, staged, err := prepareAuthorizationStagedExecution(ctx, ses, ses.GetMySQLParser(), sql)
+		require.NoError(t, err)
+		require.False(t, staged)
+		require.Empty(t, first)
+		require.Empty(t, remaining.SQL)
+	}
 	_, _, _, err := prepareAuthorizationStagedExecution(ctx, ses, ses.GetMySQLParser(), "select 1; select '")
 	require.Error(t, err, "bad ordinary tail must be rejected before executing statement one")
 	first, rest, staged, err := prepareAuthorizationStagedExecution(ctx, ses, ses.GetMySQLParser(), "select ';'; /*! select 2; select 3 */")

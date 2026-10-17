@@ -4997,6 +4997,11 @@ func prepareSQLModeStagedExecution(
 // Validate ordinary batches eagerly, as before, but execute their original raw
 // continuations one at a time so each statement captures current authorization.
 func prepareAuthorizationStagedExecution(ctx context.Context, ses FeSession, p *mysql.MySQLParser, sql string) (string, mysql.SQLContinuation, bool, error) {
+	if !mysql.MayHaveMultipleStatements(sql, sessionSQLModeForParser(ses)) {
+		// Preserve the single-statement plan-cache path. Its normal parser owns
+		// syntax validation on a miss; staging must not build a discarded AST.
+		return "", mysql.SQLContinuation{}, false, nil
+	}
 	if mayNeedSQLModeStaging(sql) {
 		first, rest, staged, err := prepareSQLModeStagedExecution(ctx, ses, p, sql)
 		if err != nil || staged {
