@@ -1060,7 +1060,11 @@ func (b *baseBinder) bindCaseExpr(astExpr *tree.CaseExpr, depth int32, isRoot bo
 		args = append(args, tree.NewNumVal("", "", false, tree.P_null))
 	}
 
-	return b.bindFuncExprImplByAstExpr("case", args, depth)
+	expr, err := b.bindFuncExprImplByAstExpr("case", args, depth)
+	if err == nil {
+		return b.bindPreparedFieldCase(expr, astExpr)
+	}
+	return expr, err
 }
 
 func bindCaseConditionParam(expr tree.Expr) tree.Expr {
@@ -4233,6 +4237,7 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 	isIfNull := name == "ifnull"
+	isNullIf := name == "nullif"
 
 	// rewrite some ast Exprs before binding
 	switch name {
@@ -4741,6 +4746,17 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		}
 	}
 
+	args, binarySourceErr := b.bindStringSourceDeclaration(name, args)
+	if binarySourceErr != nil {
+		return nil, binarySourceErr
+	}
+	if name == "field" {
+		var err error
+		args, err = b.bindFieldStringArguments(args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	if b.builder != nil {
 		var e *plan.Expr
 		var err error
@@ -4754,6 +4770,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.observePersistedExpressionProtocol)
 		}
 		if err == nil {
+			if isNullIf {
+				b.rememberPreparedFieldNullIfDomain(e, args)
+			}
 			if fn := e.GetF(); fn != nil {
 				for i, source := range preparedPeerSources {
 					if source == nil || i >= len(fn.Args) {
@@ -6238,46 +6257,7 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 			seen: make(map[string]struct{}),
 		}
 		collector.collect(source, make(map[*Expr]struct{}))
-		args := append([]*Expr(nil), collector.args...)
-		if len(args) == 0 {
-			// A static mixed-domain source has no marker to carry. Keep both
-			// choices explicitly instead of manufacturing a one-argument
-			// COALESCE, which is not a valid function shape.
-			text := makePlan2StringConstExprWithType("")
-			text.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
-			args = append(args, text)
-			binary := makePlan2VarBinaryConstExprWithType("")
-			binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
-			args = append(args, binary)
-		} else {
-			if collector.staticDomains&possibleStringDomainText != 0 {
-				text := makePlan2StringConstExprWithType("")
-				text.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
-				args = append(args, text)
-			}
-			if collector.staticDomains&possibleStringDomainBinary != 0 {
-				binary := makePlan2VarBinaryConstExprWithType("")
-				binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
-				args = append(args, binary)
-			}
-		}
-		if len(args) == 1 {
-			return args[0]
-		}
-		witness := &Expr{
-			Typ: source.Typ,
-			Expr: &plan.Expr_F{F: &plan.Function{
-				Func: &plan.ObjectRef{ObjName: "coalesce"},
-				Args: args,
-			}},
-		}
-		if source.GetPreparedNumeric().GetStringDomainSource() != nil {
-			// Preserve an owned declaration alongside runtime domain choices.
-			// Synthetic leaves cannot reconstruct a slice's proven bound, and
-			// an unregistered function's execution type is not such a proof.
-			ensurePreparedNumericMetadata(witness).StringDomainSource = stringDeclarationWitnessArg(source)
-		}
-		return witness
+		return collector.witness(source, domains)
 	}
 	witness := makePlan2StringConstExprWithType("")
 	witness.Typ = stringDomainWitnessType(source, domains)
@@ -6303,7 +6283,7 @@ func stringDomainSourceFunctionWitness(source *Expr) (*Expr, bool) {
 		return nil, false
 	}
 	name := strings.ToLower(fn.Func.GetObjName())
-	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	sourceIndex, _ := preparedStringDomainSourceIndex(name, len(fn.Args))
 	if sourceIndex < 0 || !preparedExprStringDomainDependsOnRuntime(fn.Args[sourceIndex]) {
 		return nil, false
 	}
@@ -6335,22 +6315,271 @@ func stringDomainSourceFunctionWitness(source *Expr) (*Expr, bool) {
 	return witness, true
 }
 
-func preparedStringDomainSourceIndex(name string, arity int) int {
-	switch name {
-	case "substring", "substr", "mid", "substring_index", "left", "right",
-		"lower", "to_lower", "lcase", "upper", "to_upper", "ucase", "reverse",
-		"replace", "insert", "split_part", "repeat", "lpad", "rpad":
-		if arity == 0 {
-			return -1
+// Bind a string transformation against its real declaration, not an internal
+// TEXT representation. Merely relabeling the result loses binary semantics for
+// case conversion, byte offsets and reversal. Inferred BLOBs are not declarations.
+func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*Expr, error) {
+	if name == "field" {
+		// Its dedicated binder reconciles retained CASE facts and numeric
+		// contracts. A readonly declaration preview must not preempt that owner.
+		return args, nil
+	}
+	if preparedRegexpCompatibilityStringOperandCount(name, len(args)) > 0 {
+		// REGEXP must inspect original BINARY ownership, including rejected
+		// fixed casts. A representation cast must not hide that SQL authority.
+		return args, nil
+	}
+	pos, declaredCollation := preparedStringDomainSourceIndex(name, len(args))
+	var resolver *preparedFieldStringResolver
+	result, copied := args, false
+	for i, arg := range args {
+		kind := fieldStringStaticDomain(arg).kind
+		if kind != fieldStringText && kind != fieldStringBinary {
+			continue
 		}
-		return 0
+		if kind == fieldStringBinary && possibleStringDomainsForExpr(arg) == possibleStringDomainBinary {
+			continue
+		}
+		// Input-domain selection and result ownership are different contracts:
+		// LEFT/REVERSE forward their selected row, while e.g. LPAD owns its
+		// result declaration even though it uses character input offsets.
+		declaredResult := isPreparedCommonValueFunction(name) && preparedStringResultOwnsDeclaration(arg)
+		// References alone are not materialization. Conditional results and
+		// actual query-block boundaries, however, consume their declarations.
+		materialized := b.stringSourceHasDeclarationBoundary(arg, nil, nil)
+		declaration := materialized || declaredResult || isPadSpaceComparisonFunction(name)
+		switch name {
+		case "locate", "instr", "like", "ilike", "find_in_set", "bit_count":
+			declaration = true
+		}
+		// A binary-shaped value can still carry a TEXT row override. Do not
+		// recast values whose runtime representation is already proven binary.
+		if kind == fieldStringBinary && !declaration {
+			continue
+		}
+		if !declaration && (i != pos || !declaredCollation &&
+			possibleStringDomainsForExpr(arg) == possibleStringDomainText|possibleStringDomainBinary) {
+			continue
+		}
+		if resolver == nil {
+			resolver = newPreparedFieldStringResolver(b)
+			resolver.readOnly = true
+		}
+		domain := fieldStringArgumentDeclaration(resolver.expr(arg))
+		if domain.kind != fieldStringBinary || domain.inferredBinary {
+			continue
+		}
+		target := types.T_blob.ToType()
+		if kind == fieldStringBinary {
+			// Consume the row override without upgrading a bounded declaration
+			// to BLOB. Fixed binary transport must not add padding to the value.
+			target = makeTypeByPlan2Expr(arg)
+			if target.Oid == types.T_binary {
+				target.Oid = types.T_varbinary
+			} else if target.Oid == types.T_varchar && target.Width <= 0 {
+				// A binary-charset VARCHAR transport has no declared capacity.
+				// CAST1 VARCHAR(0) would truncate it to empty, not consume its
+				// row-domain override. Use the unbounded byte representation.
+				target = types.T_blob.ToType()
+			}
+		}
+		converted, err := appendExplicitCastBeforeExpr(b.GetContext(), arg, makePlan2Type(&target))
+		if err != nil {
+			return nil, err
+		}
+		b.rememberPreparedFieldReturnSource(converted, preparedFieldReturnSource{value: arg})
+		if !copied {
+			result, copied = append([]*Expr(nil), args...), true
+		}
+		result[i] = converted
+	}
+	return result, nil
+}
+
+func preparedStringResultOwnsDeclaration(source *Expr) bool {
+	for inner := preparedFieldPrivateCastSource(source, 0); inner != nil; inner = preparedFieldPrivateCastSource(source, 0) {
+		source = inner
+	}
+	fn := source.GetF()
+	if fn == nil || isPreparedStringConditional(source) {
+		return false
+	}
+	_, _, owns := preparedStringDomainContract(fn.GetFunc().GetObjName(), len(fn.Args))
+	return owns
+}
+
+func isPreparedStringConditional(expr *Expr) bool {
+	fn := expr.GetF()
+	return fn != nil && (numericFunctionHasSelectiveContext(fn.GetFunc().GetObjName()) || fn.GetFunc().GetObjName() == "iff")
+}
+
+// Inspect the binding-time owner, not the ColRef/SubqueryRef representation.
+// Unary nodes in one query block expose LIMIT and relational boundaries; a
+// scalar query's own row selection is not derived-table materialization.
+func (b *baseBinder) stringSourceHasDeclarationBoundary(expr *Expr, scalarScope *BindContext, visiting map[[2]int32]bool) bool {
+	if source := preparedFieldPrivateCastSource(expr, 3); source != nil {
+		return true
+	}
+	if source := preparedFieldPrivateCastSource(expr, 0); source != nil {
+		return b.stringSourceHasDeclarationBoundary(source, scalarScope, visiting)
+	}
+	if fn := expr.GetF(); fn != nil && fn.GetFunc().GetObjName() == "case" {
+		if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+			// Lowered NULLIF publishes a compact first-result proof, not a CASE
+			// declaration. Its comparison never owns the returned value's domain.
+			return b.stringSourceHasDeclarationBoundary(source, scalarScope, visiting)
+		}
+	}
+	if isPreparedStringConditional(expr) {
+		// A bound P/V value owns its frozen row domain; its binary transport
+		// type is not an independent SQL binary declaration. Reuse the result-
+		// operand witness, which excludes predicates and honors explicit casts.
+		collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
+		collector.collectResult(expr, make(map[*Expr]struct{}), true)
+		return len(collector.args) == 0 || collector.staticDomains&possibleStringDomainBinary != 0
+	}
+	if b.builder == nil || b.builder.qry == nil {
+		return false
+	}
+	var nodeID, pos int32
+	if col := expr.GetCol(); col != nil {
+		var ok bool
+		nodeID, ok = b.builder.tag2NodeID[col.RelPos]
+		if !ok {
+			return false
+		}
+		pos = col.ColPos
+	} else if sub := expr.GetSub(); sub != nil && sub.Typ == plan.SubqueryRef_SCALAR {
+		nodeID = sub.NodeId
+	} else {
+		return false
+	}
+	if nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) || pos < 0 {
+		return false
+	}
+	node := b.builder.qry.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	// CTE rebinding can temporarily expose back-references between projection
+	// aliases. Bound this traversal by output identity, not Expr pointer identity.
+	key := [2]int32{nodeID, pos}
+	if visiting[key] {
+		return false
+	}
+	if visiting == nil {
+		visiting = make(map[[2]int32]bool)
+	}
+	visiting[key] = true
+	defer delete(visiting, key)
+	var scope *BindContext
+	if int(nodeID) < len(b.builder.ctxByNode) {
+		scope = b.builder.ctxByNode[nodeID]
+	}
+	// DISTINCT, windows and set reconciliation own their declarations even
+	// inside a scalar query; only its row-selection boundary is transparent.
+	if isPreparedSetOperationNode(node.NodeType) || scope != nil && (scope.isDistinct || len(scope.windows) > 0 ||
+		len(scope.groups) > 0 && (expr.GetSub() != nil || scope == scalarScope) && !b.scalarGroupHasSingleInputRow(scope)) {
+		return true
+	}
+	if expr.GetSub() != nil {
+		if len(node.ProjectList) == 0 {
+			return false
+		}
+		return b.stringSourceHasDeclarationBoundary(node.ProjectList[0], scope, visiting)
+	}
+	if scalarScope == nil || scope != scalarScope {
+		if scope != nil && (scope.hasHaving || len(scope.groups) > 0 || len(scope.aggregates) > 0) {
+			return true
+		}
+		for current := node; current != nil; {
+			if current.Limit != nil || current.Offset != nil || current.RankOption != nil || isPreparedSetOperationNode(current.NodeType) {
+				return true
+			}
+			switch current.NodeType {
+			case plan.Node_AGG, plan.Node_WINDOW, plan.Node_DISTINCT, plan.Node_MATERIAL, plan.Node_VALUE_SCAN:
+				return true
+			case plan.Node_PROJECT, plan.Node_FILTER, plan.Node_SORT, plan.Node_PARTITION:
+				if len(current.Children) != 1 {
+					break
+				}
+				child := current.Children[0]
+				if child >= 0 && int(child) < len(b.builder.ctxByNode) && b.builder.ctxByNode[child] == scope {
+					current = b.builder.qry.Nodes[child]
+					continue
+				}
+			}
+			break
+		}
+	}
+	if int(pos) < len(node.ProjectList) && node.ProjectList[pos] != expr {
+		return b.stringSourceHasDeclarationBoundary(node.ProjectList[pos], scalarScope, visiting)
+	}
+	return false
+}
+
+// A scalar GROUP BY can disappear when its direct scan is fixed to at most
+// one row. Reuse strict physical key proofs, not GROUP BY's logical FD cache.
+func (b *baseBinder) scalarGroupHasSingleInputRow(scope *BindContext) bool {
+	if !scope.fullGroupByInputReady || len(scope.bindings) != 1 || scope.groupingFuncAllowed {
+		return false
+	}
+	binding := scope.bindings[0]
+	if binding == nil || binding.nodeId < 0 || int(binding.nodeId) >= len(b.builder.qry.Nodes) {
+		return false
+	}
+	scan := b.builder.qry.Nodes[binding.nodeId]
+	if scan == nil || scan.NodeType != plan.Node_TABLE_SCAN || len(scan.BindingTags) != 1 || scan.BindingTags[0] != binding.tag {
+		return false
+	}
+	for _, key := range sqlEqualityCompatibleScanUniqueKeys(scan.TableDef) {
+		complete := true
+		for _, pos := range key.columnPositions {
+			if !filterListHasSingleValueEqualityOnCol(scope.whereFilters, binding.tag, pos) {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			return true
+		}
+	}
+	return false
+}
+
+// Preserve the source-index API used by collation binding. The single mapping
+// additionally separates the input contract from ownership of the result.
+func preparedStringDomainSourceIndex(name string, arity int) (index int, declaredCollation bool) {
+	index, declaredCollation, _ = preparedStringDomainContract(name, arity)
+	return
+}
+
+func preparedStringDomainContract(name string, arity int) (index int, declaredCollation, declaredResult bool) {
+	switch name {
+	case "lower", "to_lower", "lcase", "upper", "to_upper", "ucase":
+		if arity == 0 {
+			return -1, true, false
+		}
+		return 0, true, false
+	case "substring", "substr", "mid", "left", "right", "reverse", "repeat", "rpad":
+		if arity == 0 {
+			return -1, false, false
+		}
+		return 0, false, false
+	case "substring_index", "replace", "insert", "split_part", "lpad":
+		if arity == 0 {
+			return -1, false, true
+		}
+		return 0, false, true
 	case "trim":
 		if arity <= 2 {
-			return -1
+			return -1, false, false
 		}
-		return 2
+		return 2, false, false
+	case "coalesce":
+		return -1, false, false
 	default:
-		return -1
+		return -1, false, true
 	}
 }
 
@@ -6414,6 +6643,40 @@ type stringDomainWitnessCollector struct {
 	staticDomains uint8
 }
 
+// A flat summary retains marker identities and scalar domains, never the value
+// graph. With no markers the caller supplies the conservative fallback domains.
+func (c *stringDomainWitnessCollector) witness(source *Expr, fallback uint8) *Expr {
+	args := append([]*Expr(nil), c.args...)
+	domains := c.staticDomains
+	if len(args) == 0 {
+		domains = fallback
+	}
+	if domains&possibleStringDomainText != 0 {
+		text := makePlan2StringConstExprWithType("")
+		text.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+		args = append(args, text)
+	}
+	if domains&possibleStringDomainBinary != 0 {
+		binary := makePlan2VarBinaryConstExprWithType("")
+		binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+		args = append(args, binary)
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	if len(args) == 1 {
+		return args[0]
+	}
+	witness := &Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "coalesce"}, Args: args,
+	}}}
+	if source.GetPreparedNumeric().GetStringDomainSource() != nil {
+		// Keep the independent local declaration without copying a value graph.
+		ensurePreparedNumericMetadata(witness).StringDomainSource = stringDeclarationWitnessArg(source)
+	}
+	return witness
+}
+
 func (c *stringDomainWitnessCollector) addMarker(expr *Expr) {
 	if expr == nil {
 		return
@@ -6447,6 +6710,13 @@ func (c *stringDomainWitnessCollector) addMarker(expr *Expr) {
 }
 
 func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]struct{}) {
+	c.collectResult(expr, visited, false)
+}
+
+// declaration distinguishes value-source authority from runtime type dependence:
+// frozen variables still own their row domains, while allocating functions own
+// their result declarations even when their input's domain can change.
+func (c *stringDomainWitnessCollector) collectResult(expr *Expr, visited map[*Expr]struct{}, declaration bool) {
 	if expr == nil {
 		return
 	}
@@ -6455,7 +6725,7 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 	}
 	visited[expr] = struct{}{}
 	if metadata := expr.GetPreparedNumeric(); expr.GetF() == nil && metadata != nil && metadata.StringDomainSource != nil {
-		c.collect(metadata.StringDomainSource, visited)
+		c.collectResult(metadata.StringDomainSource, visited, declaration)
 		return
 	}
 	if expr.GetP() != nil || expr.GetV() != nil {
@@ -6476,12 +6746,12 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 				c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
 			}
 		}
-		c.collect(lit.Src, visited)
+		c.collectResult(lit.Src, visited, declaration)
 		return
 	}
 	if sub := expr.GetSub(); sub != nil {
 		if sub.Child != nil {
-			c.collect(sub.Child, visited)
+			c.collectResult(sub.Child, visited, declaration)
 		} else {
 			c.staticDomains |= possibleStringDomainText | possibleStringDomainBinary
 		}
@@ -6508,11 +6778,23 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 			return
 		}
 		if possibleStringDomainsForType(makeTypeByPlan2Expr(fn.Args[0])) != 0 {
-			c.collect(fn.Args[0], visited)
+			c.collectResult(fn.Args[0], visited, declaration)
 		} else {
 			c.staticDomains |= possibleStringDomainText
 		}
 		return
+	}
+	if declaration && name == "case" {
+		if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+			c.collectResult(source, visited, declaration)
+			return
+		}
+	}
+	if declaration && !isPreparedStringConditional(expr) {
+		if _, _, ownsResult := preparedStringDomainContract(name, len(fn.Args)); ownsResult {
+			c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+			return
+		}
 	}
 	switch name {
 	case "if", "iff":
@@ -6520,7 +6802,7 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 			if preparedExprStringDomainDependsOnRuntime(arg) {
 				c.staticDomains |= possibleStringDomainText
 			}
-			c.collect(arg, visited)
+			c.collectResult(arg, visited, declaration)
 		}
 		return
 	case "case":
@@ -6528,13 +6810,13 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 			if preparedExprStringDomainDependsOnRuntime(fn.Args[i]) {
 				c.staticDomains |= possibleStringDomainText
 			}
-			c.collect(fn.Args[i], visited)
+			c.collectResult(fn.Args[i], visited, declaration)
 		}
 		if len(fn.Args)%2 == 1 {
 			if preparedExprStringDomainDependsOnRuntime(fn.Args[len(fn.Args)-1]) {
 				c.staticDomains |= possibleStringDomainText
 			}
-			c.collect(fn.Args[len(fn.Args)-1], visited)
+			c.collectResult(fn.Args[len(fn.Args)-1], visited, declaration)
 		}
 		return
 	case "coalesce", "ifnull", "greatest", "least":
@@ -6542,7 +6824,7 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 			if preparedExprStringDomainDependsOnRuntime(arg) {
 				c.staticDomains |= possibleStringDomainText
 			}
-			c.collect(arg, visited)
+			c.collectResult(arg, visited, declaration)
 		}
 		return
 	case "nullif":
@@ -6550,7 +6832,7 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 			if preparedExprStringDomainDependsOnRuntime(fn.Args[0]) {
 				c.staticDomains |= possibleStringDomainText
 			}
-			c.collect(fn.Args[0], visited)
+			c.collectResult(fn.Args[0], visited, declaration)
 		}
 		return
 	}
@@ -6559,11 +6841,11 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 			if preparedExprStringDomainDependsOnRuntime(fn.Args[i]) {
 				c.staticDomains |= possibleStringDomainText
 			}
-			c.collect(fn.Args[i], visited)
+			c.collectResult(fn.Args[i], visited, declaration)
 		}
 		return
 	}
-	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	sourceIndex, _ := preparedStringDomainSourceIndex(name, len(fn.Args))
 	if sourceIndex >= 0 && sourceIndex < len(fn.Args) {
 		if preparedExprStringDomainDependsOnRuntime(fn.Args[sourceIndex]) {
 			// A string-producing function implicitly converts numeric runtime
@@ -6572,7 +6854,7 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 			// a numeric operand to an enclosing regexp function.
 			c.staticDomains |= possibleStringDomainText
 		}
-		c.collect(fn.Args[sourceIndex], visited)
+		c.collectResult(fn.Args[sourceIndex], visited, declaration)
 		return
 	}
 	if preparedFunctionStringDomainDependsOnRuntimeParam(expr) {
@@ -6580,7 +6862,7 @@ func (c *stringDomainWitnessCollector) collect(expr *Expr, visited map[*Expr]str
 			if preparedExprStringDomainDependsOnRuntime(arg) {
 				c.staticDomains |= possibleStringDomainText
 			}
-			c.collect(arg, visited)
+			c.collectResult(arg, visited, declaration)
 		}
 		return
 	}
@@ -8941,7 +9223,7 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 
 	// These functions preserve the effective domain of their value source;
 	// follow that source instead of trusting their common static return type.
-	sourceIndex := preparedStringDomainSourceIndex(name, len(fn.Args))
+	sourceIndex, _ := preparedStringDomainSourceIndex(name, len(fn.Args))
 	if sourceIndex >= 0 && sourceIndex < len(fn.Args) {
 		return possibleStringDomainsForExpr(fn.Args[sourceIndex])
 	}
@@ -8954,6 +9236,17 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 	}
 
 	if staticDomains == possibleStringDomainBinary {
+		// An input-independent binary producer (e.g. an opaque tuple encoder)
+		// already owns its representation. Ask the registry with TEXT inputs;
+		// no second function whitelist or representation CAST is necessary.
+		textInputs := make([]types.Type, len(fn.Args))
+		for i := range textInputs {
+			textInputs[i] = types.T_text.ToType()
+		}
+		if resolved, ok := function.GetFunctionByNameWithoutError(name, textInputs); ok &&
+			types.StaticStringDomain(resolved.GetReturnType()) == types.StringDomainBinary {
+			return possibleStringDomainBinary
+		}
 		// An unrecognized binary-returning function may attach row-level text
 		// provenance, so fail closed rather than narrowing its result.
 		return possibleStringDomainText | possibleStringDomainBinary
