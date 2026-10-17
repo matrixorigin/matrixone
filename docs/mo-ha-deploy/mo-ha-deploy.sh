@@ -606,7 +606,15 @@ DRBD"
   if [ "$DRY_RUN" != 1 ] && drbdadm dump-md "$DRBD_RESOURCE" >/dev/null 2>&1; then
     info "检测到已有 DRBD 元数据，跳过 create-md"
   else
-    runq "drbdadm create-md ${DRBD_RESOURCE} --force 2>&1 | tail -3 || true"
+    if [ "$DRY_RUN" = 1 ]; then
+      runq "drbdadm create-md ${DRBD_RESOURCE} --force"
+    else
+      # 管道会把退出码换成 tail 的 0，必须显式取命令自身状态，否则 create-md 失败也报「配置完成」。
+      local _mdout="" _mdrc=0
+      _mdout=$(drbdadm create-md "${DRBD_RESOURCE}" --force 2>&1) || _mdrc=$?
+      printf '%s\n' "$_mdout" | tail -3
+      [ "$_mdrc" = 0 ] || die "drbdadm create-md ${DRBD_RESOURCE} 失败（设备被占用？元数据区不足？），请查看上方输出"
+    fi
   fi
 
   if [ "$DRY_RUN" != 1 ] && [ "$FORMAT_DRBD" = 1 ]; then
