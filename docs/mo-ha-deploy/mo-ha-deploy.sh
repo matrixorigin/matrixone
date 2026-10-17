@@ -853,16 +853,31 @@ stage_check(){
     [ -n "$MO_BIND_IP" ] && [ "$MO_BIND_IP" != "0.0.0.0" ] && maddr="$MO_BIND_IP"
     if wait_for 120 "(exec 3<>/dev/tcp/$maddr/$MO_PORT)" || wait_for 60 "(exec 3<>/dev/tcp/127.0.0.1/$MO_PORT)"; then
       ok "MO 客户端端口 $maddr:$MO_PORT 已监听"
-      local mcli=""
-      command -v mysql >/dev/null 2>&1 && mcli="mysql"
+      local mcli="" mdocker=0
+      command -v mysql >/dev/null 2>&1 && mcli=mysql
       if [ -z "$mcli" ] && docker exec matrixone sh -c 'command -v mysql >/dev/null 2>&1' 2>/dev/null; then
-        mcli="docker exec matrixone mysql"
+        mcli=mysql; mdocker=1
       fi
+      # 口令都不进 argv(-p<pw> / docker exec -e MYSQL_PWD=... 在 Linux 上 ps 可见)：
+      # 宿主用 MYSQL_PWD 环境变量；容器内经 stdin 下发临时 cnf。
+      mo_sql_login(){
+        if [ "$mdocker" = 1 ]; then
+          printf '[client]\npassword=%s\n' "$MO_ROOT_PASSWORD" | \
+            docker exec -i matrixone sh -c '
+              umask 077
+              cat > /tmp/.mo-ha.cnf
+              mysql --defaults-extra-file=/tmp/.mo-ha.cnf "$@"; rc=$?
+              rm -f /tmp/.mo-ha.cnf
+              exit $rc' sh "$@"
+        else
+          MYSQL_PWD="$MO_ROOT_PASSWORD" mysql "$@"
+        fi
+      }
       if [ -z "$MO_ROOT_PASSWORD" ]; then
-        info "未提供 --mo-root-password，跳过 SQL 登录检查（可手工：mysql -h127.0.0.1 -P$MO_PORT -uroot -p）"
+        info "未提供 --mo-root-password，跳过 SQL 登录检查（可手工：MYSQL_PWD=... mysql -h127.0.0.1 -P$MO_PORT -uroot）"
       elif [ -z "$mcli" ]; then
         info "未找到 mysql 客户端，跳过 SQL 登录检查（宿主或容器内均可）"
-      elif $mcli -h127.0.0.1 -P"$MO_PORT" -uroot -p"$MO_ROOT_PASSWORD" -N -e 'select 1' 2>/dev/null | grep -qx 1; then
+      elif mo_sql_login -h127.0.0.1 -P"$MO_PORT" -uroot -N -e 'select 1' 2>/dev/null | grep -qx 1; then
         ok "MO SQL 可登录（-uroot）"
       else
         wrn "MO SQL 登录失败：确认 --mo-root-password 与端口 $MO_PORT"
