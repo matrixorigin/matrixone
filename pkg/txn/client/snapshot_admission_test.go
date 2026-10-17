@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	goruntime "runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -373,6 +374,104 @@ func TestSnapshotAdmissionEndDuringDirectOpen(t *testing.T) {
 	require.Zero(t, active)
 	require.Zero(t, queued)
 	require.EqualValues(t, 1, limiter.calls.Load(), "failure cannot mint a second admission")
+}
+
+func TestSnapshotAdmissionEndDuringReadinessFallback(t *testing.T) {
+	for _, pausedState := range []bool{false, true} {
+		t.Run(map[bool]string{false: "abort barrier", true: "paused"}[pausedState], func(t *testing.T) {
+			c, _ := admissionTestClient(t)
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			t.Cleanup(cancel)
+			a, _, err := AcquireSnapshotAdmission(ctx, c, timestamp.Timestamp{})
+			require.NoError(t, err)
+			t.Cleanup(a.End)
+			observer := &admissionAdapterObserver{Context: a.ctx}
+			a.ctx = observer
+			c.timestampWaiter = nil
+			c.mu.Lock()
+			if pausedState {
+				c.mu.state = paused
+			} else {
+				c.mu.waitMarkAllActiveAbortedC = make(chan struct{})
+			}
+			c.mu.Unlock()
+			result := make(chan txnCreateResult, 1)
+			go func() {
+				op, err := c.New(ctx, timestamp.Timestamp{}, WithUserTxn(), WithSnapshotAdmission(a))
+				result <- txnCreateResult{op, err}
+			}()
+			// Rendezvous with the actual readiness select while holding its
+			// reacquisition lock. Keep the client unready on a fresh barrier;
+			// only token End (the caller stays live) can release creation.
+			observed := false
+			for !observed && ctx.Err() == nil {
+				c.mu.Lock()
+				barrier := c.mu.waitMarkAllActiveAbortedC
+				if pausedState {
+					barrier = c.mu.pausedC
+				}
+				select {
+				case barrier <- struct{}{}:
+					if !pausedState {
+						c.mu.waitMarkAllActiveAbortedC = make(chan struct{})
+					}
+					a.End()
+					observed = true
+				default:
+				}
+				c.mu.Unlock()
+				goruntime.Gosched()
+			}
+			require.True(t, observed, "New never reached its readiness wait")
+			select {
+			case got := <-result:
+				require.Error(t, got.err)
+				require.Nil(t, got.op)
+			case <-ctx.Done():
+				t.Fatal("token End did not release readiness wait")
+			}
+			require.NoError(t, ctx.Err(), "caller cancellation must not release this test")
+			require.EqualValues(t, 1, observer.registrations.Load())
+			users, active, queued := txnAdmissionCounts(c)
+			require.Zero(t, users)
+			require.Zero(t, active)
+			require.Zero(t, queued)
+		})
+	}
+}
+
+func TestAuthorizationSnapshotEndDuringLimiterWait(t *testing.T) {
+	c, _ := admissionTestClient(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
+	a, _, err := AcquireSnapshotAdmission(ctx, c, timestamp.Timestamp{})
+	require.NoError(t, err)
+	t.Cleanup(a.End)
+	limiter := &blockingTxnRateLimiter{entered: make(chan struct{}, 1)}
+	c.limiter = limiter
+	result := make(chan txnCreateResult, 1)
+	go func() {
+		op, err := c.New(ctx, timestamp.Timestamp{}, WithAuthorizationSnapshot(a))
+		result <- txnCreateResult{op, err}
+	}()
+	select {
+	case <-limiter.entered:
+	case <-ctx.Done():
+		t.Fatal("authorization reader did not enter ordinary admission")
+	}
+	a.End()
+	select {
+	case got := <-result:
+		require.ErrorIs(t, got.err, context.Canceled)
+		require.Nil(t, got.op)
+	case <-ctx.Done():
+		t.Fatal("End did not cancel ordinary authorization admission")
+	}
+	require.NoError(t, ctx.Err())
+	users, active, queued := txnAdmissionCounts(c)
+	require.Zero(t, users)
+	require.Zero(t, active)
+	require.Zero(t, queued)
 }
 
 func (w *admissionNotifyingWaiter) GetTimestampWithClose(ctx context.Context, ts timestamp.Timestamp, closed <-chan struct{}) (timestamp.Timestamp, error) {

@@ -222,6 +222,7 @@ func seedRewriteRuleCacheProofForTest(ses *Session) {
 
 func TestPreparedRefreshDoesNotMaterializeOrAliasPolicy(t *testing.T) {
 	ses := newTestSession(t, gomock.NewController(t))
+	t.Cleanup(ses.Close)
 	ctx := t.Context()
 	ses.SetTenantInfo(&TenantInfo{DefaultRoleID: 10})
 	ses.ruleCache = map[string]string{"db.t": "select * from db.t where role_keep = 1"}
