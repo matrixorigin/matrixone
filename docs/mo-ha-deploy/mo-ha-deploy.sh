@@ -721,7 +721,14 @@ stage_resources(){
     runq "pcs constraint order start p_fs then start p_mo"
   fi
   if [ -n "$VIP" ]; then
-    runq "pcs resource create p_vip IPaddr2 ip=${VIP%%/*} cidr_netmask=${VIP##*/} op monitor interval=20s"
+    # ${VIP##*/} 在无 "/" 时返回原串，会把整个 IP 当成 netmask 传给 IPaddr2
+    case "$VIP" in
+      */*) ;;
+      *)   die "--vip 需要 CIDR 形式(如 10.0.0.100/24)，当前值：$VIP" ;;
+    esac
+    local _vip_addr="${VIP%%/*}" _vip_mask="${VIP##*/}"
+    [ -n "$_vip_addr" ] && [ -n "$_vip_mask" ] || die "--vip 缺少地址或掩码部分：$VIP"
+    runq "pcs resource create p_vip IPaddr2 ip=$_vip_addr cidr_netmask=$_vip_mask op monitor interval=20s"
     runq "pcs constraint colocation add p_vip with p_fs INFINITY"
     runq "pcs constraint order start p_fs then start p_vip"
     # MO 端口若绑定在 VIP 上，必须等 VIP 就绪后再起容器，否则 docker 会报
