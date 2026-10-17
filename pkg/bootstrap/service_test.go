@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	mock_executor "github.com/matrixorigin/matrixone/pkg/util/executor/test"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var _ client.TxnOperator = new(testTxnOperator)
@@ -784,6 +785,31 @@ func newBootstrapStringResult(values ...string) executor.Result {
 	memRes.NewBatchWithRowCount(len(values))
 	executor.AppendStringRows(memRes, 0, values)
 	return memRes.GetResult()
+}
+
+func TestBootstrapReadinessUsesBoundedControlAdmission(t *testing.T) {
+	runtime.RunTest("", func(rt runtime.Runtime) {
+		exec := mock_executor.NewMockSQLExecutor(gomock.NewController(t))
+		exec.EXPECT().Exec(gomock.Any(), "show databases", gomock.Any()).DoAndReturn(
+			func(ctx context.Context, _ string, _ executor.Options) (executor.Result, error) {
+				require.True(t, process.HasControlMemoryAdmission(ctx))
+				return newBootstrapStringResult(bootstrappedCheckerDB), nil
+			})
+		exec.EXPECT().Exec(gomock.Any(), fmt.Sprintf("show tables from %s", bootstrappedCheckerDB), gomock.Any()).DoAndReturn(
+			func(ctx context.Context, _ string, _ executor.Options) (executor.Result, error) {
+				require.True(t, process.HasControlMemoryAdmission(ctx))
+				return newBootstrapStringResult(allBootstrappedCheckerTables()...), nil
+			}).Times(2)
+		s := NewService("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec).(*service)
+		ctx := t.Context()
+		ok, err := s.checkAlreadyBootstrapped(ctx)
+		require.NoError(t, err)
+		require.True(t, ok)
+		ok, err = s.checkBootstrapTables(ctx)
+		require.NoError(t, err)
+		require.True(t, ok)
+		require.False(t, process.HasControlMemoryAdmission(ctx), "readiness must not mark later bootstrap DDL/DML")
+	})
 }
 
 func newBootstrapTestContext(timeout time.Duration) (context.Context, context.CancelFunc) {

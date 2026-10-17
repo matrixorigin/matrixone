@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 )
 
@@ -547,8 +548,8 @@ func TestResolveExecutionMemoryCeiling(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ceiling.EffectiveCN != 10*gib || ceiling.Reserve != 4*gib ||
-		ceiling.CNMemoryCap != 6*gib || ceiling.QueryCap != 2*gib {
+	if ceiling.EffectiveCN != 10*gib || ceiling.Reserve != gib ||
+		ceiling.CNMemoryCap != 9*gib || ceiling.QueryCap != 2*gib {
 		t.Fatalf("ceiling = %+v", ceiling)
 	}
 	if _, err = ResolveExecutionMemoryCeiling(ExecutionMemoryCeilingInputs{
@@ -564,6 +565,27 @@ func TestResolveExecutionMemoryCeiling(t *testing.T) {
 	}
 }
 
+func TestResolveExecutionMemoryCeilingUsesMeasuredReservePolicy(t *testing.T) {
+	t.Setenv("MO_MEMORY_NON_GO_RESERVE_BYTES", "0")
+	t.Setenv("MO_MEMORY_RUNTIME_RESERVE_BYTES", "2")
+	t.Setenv("MO_MEMORY_RESERVE_PERCENT", "0")
+
+	ceiling, err := ResolveExecutionMemoryCeiling(ExecutionMemoryCeilingInputs{
+		MemoryDomain: system.MemoryDomainSnapshot{
+			Limit:    100,
+			NonGo:    10,
+			Measured: true,
+		},
+	})
+	require.NoError(t, err)
+	// The observed non-Go high-water reserve is 2*10 plus the configured
+	// runtime margin. A measured domain must not fall back to the legacy 4GiB
+	// reserve or the legacy one-fifth formula.
+	require.Equal(t, uint64(22), ceiling.RequestedReserve)
+	require.Equal(t, uint64(2), ceiling.RuntimeReserve)
+	require.Equal(t, uint64(78), ceiling.CNMemoryCap)
+}
+
 func TestExecutionMemoryHeadroomSafety(t *testing.T) {
 	const gib = uint64(1 << 30)
 	tests := []struct {
@@ -572,9 +594,9 @@ func TestExecutionMemoryHeadroomSafety(t *testing.T) {
 		want    uint64
 	}{
 		{
-			name:    "minimum runtime margin",
+			name:    "policy runtime margin",
 			ceiling: ExecutionMemoryCeiling{EffectiveCN: 12 * gib, Reserve: 4 * gib},
-			want:    gib,
+			want:    12 * gib / 20,
 		},
 		{
 			name:    "five percent on a large CN",
@@ -582,9 +604,9 @@ func TestExecutionMemoryHeadroomSafety(t *testing.T) {
 			want:    5 * gib,
 		},
 		{
-			name:    "bounded by the startup reserve",
+			name:    "bounded by the measured policy reserve",
 			ceiling: ExecutionMemoryCeiling{EffectiveCN: 2 * gib, Reserve: gib / 2},
-			want:    gib / 2,
+			want:    256 * mpool.MB,
 		},
 	}
 	for _, test := range tests {
@@ -597,14 +619,13 @@ func TestExecutionMemoryHeadroomSafety(t *testing.T) {
 }
 
 func TestExecutionResourceBudgetUsesCurrentMemoryInputs(t *testing.T) {
-	previous := executionResourceProcessMemoryInputs
-	executionResourceProcessMemoryInputs = ExecutionMemoryCeilingInputs{HostMemTotal: 8 << 30}
-	t.Cleanup(func() { executionResourceProcessMemoryInputs = previous })
 	previousHint := fileservice.GlobalMemoryCacheSizeHint.Load()
 	fileservice.GlobalMemoryCacheSizeHint.Store(1 << 30)
 	t.Cleanup(func() { fileservice.GlobalMemoryCacheSizeHint.Store(previousHint) })
 
-	inputs := executionResourceProcessMemoryInputs
+	inputs := ExecutionMemoryCeilingInputs{MemoryDomain: system.MemoryDomainSnapshot{
+		Limit: 8 << 30, Source: system.MemoryDomainSourceHost, Measured: true,
+	}}
 	inputs.FileCacheHint = uint64(fileservice.GlobalMemoryCacheSizeHint.Load())
 	ceiling, err := ResolveExecutionMemoryCeiling(inputs)
 	if err != nil || ceiling.CNMemoryCap == 0 {

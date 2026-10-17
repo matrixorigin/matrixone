@@ -16,19 +16,650 @@ package rscthrottler
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"math"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/KimMachineGun/automemlimit/memlimit"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/stretchr/testify/require"
 )
 
+func newTestMemThrottler(name string, rate float64, options ...MemThrottlerOption) RSCThrottler {
+	return NewMemThrottler(name, rate, append([]MemThrottlerOption{WithIsolatedMemoryAdmissionForTesting()}, options...)...)
+}
+
+func TestNewMemThrottlerSharesPhysicalOwnerByDefault(t *testing.T) {
+	owner := NewMemThrottler("default-owner-test", 0.9).(*memThrottler)
+	require.Same(t, system.DefaultMemoryAdmissionBudget(), owner.memoryLedger)
+}
+
+func TestSharedPhysicalOwnerReplacesIndependentRSSAndCgroupVetoes(t *testing.T) {
+	const gib = int64(1 << 30)
+	for _, acquire := range []func(*memThrottler, int64) (int64, bool){defaultAcquirePolicy, AcquirePolicyForCNFlushS3, AcquirePolicyForDataBranch} {
+		ledger := system.NewMemoryAdmissionBudgetWithProvider(system.MemoryDomainReservePolicy{
+			MinimumBytes: uint64(gib), ObservedNonGoMultiplier: 1,
+		}, func() (system.MemoryDomainSnapshot, error) {
+			return system.MemoryDomainSnapshot{Used: uint64(95 * gib), Limit: uint64(100 * gib),
+				Source: system.MemoryDomainSourceCgroupV2, Measured: true}, nil
+		})
+		owner := &memThrottler{memoryLedger: ledger, cgroupBudget: &cgroupMemoryBudget{}}
+		owner.cgroupBudget.sample.Store(&cgroupMemorySample{usage: 100 * gib, limit: 100 * gib, cgroup: true})
+		owner.limit.Store(80 * gib)
+		owner.actualTotalMemory.Store(uint64(100 * gib))
+		owner.rss.Store(99 * gib) // stale legacy views must not constitute a second physical owner
+		_, ok := acquire(owner, 2*gib)
+		require.True(t, ok)
+		require.Equal(t, uint64(2*gib), ledger.Reserved())
+		_, ok = acquire(owner, 3*gib)
+		require.False(t, ok, "the shared physical gate still prevents overspending")
+		owner.Release(2 * gib)
+		require.Zero(t, ledger.Reserved())
+	}
+}
+
+func TestFullRefreshPreservesSharedBudgetOnLimitFailure(t *testing.T) {
+	oldLimit, oldTotal, oldUsage := getCgroupMemoryLimit, getHostTotalMemory, getCgroupMemoryUsage
+	t.Cleanup(func() {
+		getCgroupMemoryLimit, getHostTotalMemory, getCgroupMemoryUsage = oldLimit, oldTotal, oldUsage
+	})
+	const unit = int64(1 << 30)
+	for _, policy := range []struct {
+		name    string
+		acquire func(*memThrottler, int64) (int64, bool)
+	}{{"workspace", defaultAcquirePolicy}, {"s3", AcquirePolicyForCNFlushS3}, {"branch", AcquirePolicyForDataBranch}} {
+		for _, failure := range []string{"limit", "host-total", "zero-limit"} {
+			t.Run(policy.name+"/"+failure, func(t *testing.T) {
+				var failed bool
+				getCgroupMemoryLimit = func() (uint64, error) {
+					if failed && failure == "limit" {
+						return 0, errors.New("limit read failed")
+					}
+					if failed && failure == "zero-limit" {
+						return 0, nil
+					}
+					return uint64(100 * unit), nil
+				}
+				getHostTotalMemory = func() uint64 {
+					if failed && failure == "host-total" {
+						return 0
+					}
+					return uint64(200 * unit)
+				}
+				getCgroupMemoryUsage = func(int) (int64, error) { return 95 * unit, nil }
+				budget := &cgroupMemoryBudget{}
+				makeOwner := func() *memThrottler {
+					m := &memThrottler{cgroupBudget: budget, limitRate: 0.8}
+					m.fillDefaults()
+					m.ForceRefresh()
+					return m
+				}
+				a, b := makeOwner(), makeOwner()
+				_, ok := policy.acquire(a, 4*unit)
+				require.True(t, ok)
+				_, ok = policy.acquire(b, 4*unit)
+				require.False(t, ok)
+				sample := budget.sample.Load()
+				failed = true
+				b.ForceRefresh()
+				require.Same(t, sample, budget.sample.Load())
+				require.Equal(t, uint64(100*unit), b.cgroup.Load())
+				require.Equal(t, uint64(200*unit), b.total.Load())
+				require.Equal(t, uint64(100*unit), b.actualTotalMemory.Load())
+				require.Equal(t, 80*unit, b.limit.Load())
+				_, ok = policy.acquire(b, 4*unit)
+				require.False(t, ok)
+				// A newly constructed owner must not erase the shared sample either.
+				c := makeOwner()
+				require.Same(t, sample, budget.sample.Load())
+				_, ok = policy.acquire(c, 4*unit)
+				require.False(t, ok)
+				require.Equal(t, 4*unit, budget.reserved.Load())
+				failed = false
+				b.ForceRefresh()
+				_, ok = policy.acquire(b, 4*unit)
+				require.False(t, ok)
+				a.Release(4 * unit)
+				_, ok = policy.acquire(b, 4*unit)
+				require.True(t, ok)
+				b.Release(4 * unit)
+				require.Zero(t, budget.reserved.Load())
+			})
+		}
+	}
+}
+
+func TestSharedMemoryAdmissionReleaseDoesNotTouchLegacyReservation(t *testing.T) {
+	legacy := &cgroupMemoryBudget{}
+	m := &memThrottler{
+		cgroupBudget: legacy,
+		memoryLedger: system.NewMemoryAdmissionBudget(system.MemoryDomainReservePolicy{}),
+	}
+	m.releaseCgroup(64)
+	require.Zero(t, legacy.reserved.Load())
+}
+
+func TestFullRefreshClearsConfirmedRemovedCgroupLimit(t *testing.T) {
+	oldLimit, oldTotal, oldUsage := getCgroupMemoryLimit, getHostTotalMemory, getCgroupMemoryUsage
+	t.Cleanup(func() {
+		getCgroupMemoryLimit, getHostTotalMemory, getCgroupMemoryUsage = oldLimit, oldTotal, oldUsage
+	})
+	getHostTotalMemory = func() uint64 { return 200 }
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95, nil }
+	for _, noLimit := range []error{memlimit.ErrNoLimit, memlimit.ErrNoCgroup, memlimit.ErrCgroupsNotSupported} {
+		t.Run(noLimit.Error(), func(t *testing.T) {
+			getCgroupMemoryLimit = func() (uint64, error) { return 100, nil }
+			budget := &cgroupMemoryBudget{}
+			m := &memThrottler{cgroupBudget: budget, limitRate: 0.8}
+			m.fillDefaults()
+			m.ForceRefresh()
+			require.NotNil(t, budget.sample.Load())
+			budget.reserved.Store(4)
+			getCgroupMemoryLimit = func() (uint64, error) { return 0, fmt.Errorf("no finite limit: %w", noLimit) }
+			m.ForceRefresh()
+			require.Nil(t, budget.sample.Load())
+			require.Equal(t, int64(4), budget.reserved.Load())
+			require.Zero(t, m.cgroup.Load())
+			require.Equal(t, int64(160), m.limit.Load())
+		})
+	}
+}
+
+func TestMergeOwnerBootstrapPreservesSharedMemoryDomain(t *testing.T) {
+	shared := &cgroupMemoryBudget{}
+	shared.sample.Store(&cgroupMemorySample{
+		usage: 95, limit: 100, cgroup: true,
+	})
+	shared.domainProvider = func() (system.MemoryDomainSnapshot, error) {
+		return system.MemoryDomainSnapshot{}, errors.New("transient memory-domain read failure")
+	}
+
+	merge := &memThrottler{
+		cgroupBudget: shared,
+		limitRate:    0.75,
+	}
+	merge.fillDefaults()
+	merge.options.specializedForMerge = true
+	merge.ForceRefresh()
+
+	require.Equal(t, uint64(100), merge.actualTotalMemory.Load())
+	require.Equal(t, uint64(100), merge.total.Load())
+	require.Equal(t, uint64(100), merge.cgroup.Load())
+	require.Same(t, shared.sample.Load(), merge.cgroupSnapshot())
+	merge.rss.Store(0)
+	left, ok := defaultAcquirePolicy(merge, 6)
+	require.False(t, ok)
+	require.Equal(t, int64(5), left)
+}
+
+func TestCgroupBudgetAcrossInstances(t *testing.T) {
+	oldRead := getCgroupMemoryUsage
+	t.Cleanup(func() { getCgroupMemoryUsage = oldRead })
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95, nil }
+	policies := []struct {
+		name    string
+		acquire func(*memThrottler, int64) (int64, bool)
+	}{
+		{"workspace", defaultAcquirePolicy},
+		{"s3", AcquirePolicyForCNFlushS3},
+		{"branch", AcquirePolicyForDataBranch},
+	}
+	for _, first := range policies {
+		for _, second := range policies {
+			t.Run(first.name+"/"+second.name, func(t *testing.T) {
+				budget := &cgroupMemoryBudget{}
+				makeOwner := func() *memThrottler {
+					m := &memThrottler{cgroupBudget: budget, limitRate: 0.8}
+					m.actualTotalMemory.Store(100)
+					m.total.Store(200)
+					m.cgroup.Store(100)
+					m.limit.Store(80)
+					m.rss.Store(60)
+					m.refreshCgroupUsage()
+					return m
+				}
+				a, b := makeOwner(), makeOwner()
+				_, ok := first.acquire(a, 4)
+				require.True(t, ok)
+				// A has reserved but has not allocated yet. Neither a competing
+				// owner nor the same owner can spend those four units again.
+				for _, owner := range []*memThrottler{a, b} {
+					left, granted := second.acquire(owner, 4)
+					require.False(t, granted)
+					require.Equal(t, int64(1), left)
+				}
+				b.refreshCgroupUsage()
+				require.Equal(t, int64(1), b.Available())
+				require.Equal(t, int64(1), cnFlushS3PhysicalAvailable(b, 0, b.cgroupSnapshot()))
+				_, ok = second.acquire(b, 4)
+				require.False(t, ok)
+				require.Equal(t, int64(4), budget.reserved.Load())
+				// Failed upstream allocation: release A's claim and retry B.
+				a.Release(4)
+				_, ok = second.acquire(b, 4)
+				require.True(t, ok)
+				// An extra release by A must not return B's claim.
+				a.Release(4)
+				require.Equal(t, int64(4), budget.reserved.Load())
+				b.Release(100)
+				require.Zero(t, budget.reserved.Load())
+				// A local quota failure must leave the shared budget untouched.
+				b.limit.Store(1)
+				_, ok = second.acquire(b, 4)
+				require.False(t, ok)
+				require.Zero(t, budget.reserved.Load())
+			})
+		}
+	}
+}
+
+func TestCgroupBudgetConcurrentOwnersAndRefresh(t *testing.T) {
+	oldRead := getCgroupMemoryUsage
+	t.Cleanup(func() { getCgroupMemoryUsage = oldRead })
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95, nil }
+	b := &cgroupMemoryBudget{}
+	owners := make([]*memThrottler, 8)
+	for i := range owners {
+		m := &memThrottler{cgroupBudget: b}
+		m.total.Store(200)
+		m.cgroup.Store(100)
+		m.actualTotalMemory.Store(100)
+		m.limit.Store(80)
+		m.rss.Store(60)
+		m.refreshCgroupUsage()
+		owners[i] = m
+	}
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	var granted atomic.Int64
+	for _, m := range owners {
+		for range 4 {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				<-start
+				for range 20 {
+					m.refreshCgroupUsage()
+					if _, ok := defaultAcquirePolicy(m, 1); ok {
+						granted.Add(1)
+					}
+				}
+			}()
+		}
+	}
+	close(start)
+	wg.Wait()
+	require.Equal(t, int64(5), granted.Load())
+	require.Equal(t, int64(5), b.reserved.Load())
+	for _, m := range owners {
+		m.Release(100)
+	}
+	require.Zero(t, b.reserved.Load())
+}
+
+func TestProductionThrottlersShareCgroupOwner(t *testing.T) {
+	a := newTestMemThrottler("test-a", 0.8).(*memThrottler)
+	b := newTestMemThrottler("test-b", 0.8).(*memThrottler)
+	require.Same(t, &processCgroupBudget, a.cgroupBudget)
+	require.Same(t, a.cgroupBudget, b.cgroupBudget)
+}
+
+func TestSharedCgroupClaimsSurvivePressureTransitionAndReadFailure(t *testing.T) {
+	oldRead := getCgroupMemoryUsage
+	t.Cleanup(func() { getCgroupMemoryUsage = oldRead })
+	b := &cgroupMemoryBudget{}
+	a := &memThrottler{cgroupBudget: b}
+	a.total.Store(200)
+	a.cgroup.Store(100)
+	a.actualTotalMemory.Store(100)
+	a.limit.Store(80)
+	a.rss.Store(60)
+	// The claim predates hard pressure and must still be included afterwards.
+	b.sample.Store(&cgroupMemorySample{usage: 80, limit: 100})
+	_, ok := defaultAcquirePolicy(a, 4)
+	require.True(t, ok)
+	other := &memThrottler{cgroupBudget: b}
+	other.total.Store(200)
+	other.cgroup.Store(100)
+	other.actualTotalMemory.Store(100)
+	other.limit.Store(80)
+	other.rss.Store(60)
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95, nil }
+	other.refreshCgroupUsage()
+	getCgroupMemoryUsage = func(int) (int64, error) { return 0, errors.New("failed read") }
+	a.refreshCgroupUsage()
+	_, ok = AcquirePolicyForCNFlushS3(other, 4)
+	require.False(t, ok)
+	require.Equal(t, int64(4), b.reserved.Load())
+	a.Release(4)
+	_, ok = AcquirePolicyForCNFlushS3(other, 4)
+	require.True(t, ok)
+	other.Release(4)
+	require.Zero(t, b.reserved.Load())
+}
+
+// No allocation is performed by the policies themselves. Model an owner paused
+// between Acquire and allocation; refreshing memory.current must not cover it.
+func TestCgroupPendingReservationSurvivesRefresh(t *testing.T) {
+	oldRead := getCgroupMemoryUsage
+	t.Cleanup(func() { getCgroupMemoryUsage = oldRead })
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95, nil }
+	for name, policy := range map[string]func(*memThrottler, int64) (int64, bool){
+		"default":     defaultAcquirePolicy,
+		"S3":          AcquirePolicyForCNFlushS3,
+		"data branch": AcquirePolicyForDataBranch,
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &memThrottler{limitRate: 0.9}
+			m.actualTotalMemory.Store(100)
+			m.cgroup.Store(100)
+			m.total.Store(200)
+			m.limit.Store(90)
+			m.rss.Store(60)
+			m.refreshCgroupUsage()
+
+			reserved := make(chan bool, 1)
+			allocationFailed := make(chan struct{})
+			done := make(chan struct{})
+			go func() {
+				defer close(done)
+				_, ok := policy(m, 4)
+				reserved <- ok
+				<-allocationFailed
+				if ok {
+					m.Release(4) // owner rolls back after allocation failure
+				}
+			}()
+			var release sync.Once
+			finish := func() { release.Do(func() { close(allocationFailed) }); <-done }
+			defer finish()
+			require.True(t, <-reserved)
+
+			left, ok := policy(m, 4)
+			require.False(t, ok)
+			require.Equal(t, int64(1), left)
+			// This is the cgroup sampling stage used by ForceRefresh after denial.
+			// Neither sampling nor a later RSS sample proves allocation happened.
+			m.refreshCgroupUsage()
+			m.rssReservedBase.Store(4)
+			left, ok = policy(m, 4)
+			require.False(t, ok)
+			require.Equal(t, int64(1), left)
+			require.Equal(t, int64(4), m.reserved.Load())
+			require.Equal(t, int64(1), cnFlushS3PhysicalAvailable(m, 4, m.cgroupSample.Load()))
+
+			finish()
+			require.Zero(t, m.reserved.Load())
+			_, ok = policy(m, 4)
+			require.True(t, ok)
+			m.Release(4)
+			require.Zero(t, m.reserved.Load())
+		})
+	}
+}
+
+func TestCgroupAdmissionSnapshotDuringRefresh(t *testing.T) {
+	oldRead := getCgroupMemoryUsage
+	t.Cleanup(func() { getCgroupMemoryUsage = oldRead })
+	var usage atomic.Int64
+	usage.Store(95)
+	getCgroupMemoryUsage = func(int) (int64, error) { return usage.Load(), nil }
+	m := &memThrottler{}
+	m.actualTotalMemory.Store(100)
+	m.cgroup.Store(100)
+	m.total.Store(200)
+	m.limit.Store(90)
+	m.rss.Store(60)
+	m.reserved.Store(4)
+	m.refreshCgroupUsage()
+
+	sampled := make(chan struct{})
+	published := make(chan struct{})
+	type result struct{ admission, physical int64 }
+	results := make(chan result, 1)
+	go func() {
+		// Pause the reader after the one atomic snapshot load used by an
+		// admission attempt, then finish both calculations after publication.
+		sample := m.cgroupSample.Load()
+		close(sampled)
+		<-published
+		results <- result{
+			sample.capAdmissionAvailable(30, 4),
+			cnFlushS3PhysicalAvailable(m, 4, sample),
+		}
+	}()
+	<-sampled
+	usage.Store(99)
+	m.refreshCgroupUsage()
+	close(published)
+	r := <-results
+	// Old (95/100) and new (99/100) samples both deny ask=2. A reader
+	// finishing after publication must keep the original sample throughout.
+	require.Equal(t, int64(1), r.admission)
+	require.Equal(t, int64(1), r.physical)
+	require.Zero(t, m.cgroupSample.Load().capAdmissionAvailable(30, 4))
+	for _, policy := range []func(*memThrottler, int64) (int64, bool){defaultAcquirePolicy, AcquirePolicyForCNFlushS3} {
+		left, ok := policy(m, 2)
+		require.False(t, ok)
+		require.Zero(t, left)
+		require.Equal(t, int64(4), m.reserved.Load())
+	}
+}
+
+func TestCgroupRefreshReadFailureKeepsPendingBudget(t *testing.T) {
+	oldRead := getCgroupMemoryUsage
+	t.Cleanup(func() { getCgroupMemoryUsage = oldRead })
+	getCgroupMemoryUsage = func(int) (int64, error) { return 0, errors.New("read failed") }
+	m := &memThrottler{}
+	m.cgroup.Store(100)
+	m.total.Store(200)
+	sample := &cgroupMemorySample{usage: 95, limit: 100}
+	m.cgroupSample.Store(sample)
+	m.refreshCgroupUsage()
+	require.Same(t, sample, m.cgroupSample.Load())
+	require.Equal(t, int64(1), m.cgroupSample.Load().capAdmissionAvailable(90, 4))
+}
+
+func TestConcurrentCgroupRefreshDoesNotRenewPendingBudget(t *testing.T) {
+	oldRead := getCgroupMemoryUsage
+	t.Cleanup(func() { getCgroupMemoryUsage = oldRead })
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95, nil }
+	for name, policy := range map[string]func(*memThrottler, int64) (int64, bool){
+		"default": defaultAcquirePolicy,
+		"S3":      AcquirePolicyForCNFlushS3,
+	} {
+		t.Run(name, func(t *testing.T) {
+			m := &memThrottler{}
+			m.actualTotalMemory.Store(100)
+			m.cgroup.Store(100)
+			m.total.Store(200)
+			m.limit.Store(90)
+			m.rss.Store(60)
+			m.refreshCgroupUsage()
+			start := make(chan struct{})
+			var wg sync.WaitGroup
+			var granted atomic.Int64
+			wg.Add(17)
+			go func() {
+				defer wg.Done()
+				<-start
+				for range 100 {
+					m.refreshCgroupUsage()
+				}
+			}()
+			for range 16 {
+				go func() {
+					defer wg.Done()
+					<-start
+					for range 10 {
+						if _, ok := policy(m, 1); ok {
+							granted.Add(1)
+						}
+					}
+				}()
+			}
+			close(start)
+			wg.Wait()
+			require.Equal(t, int64(5), granted.Load())
+			require.Equal(t, int64(5), m.reserved.Load())
+		})
+	}
+}
+
+func TestMemThrottlerUsesCgroupHeadroomForAdmission(t *testing.T) {
+	oldGetCgroupMemoryUsage := getCgroupMemoryUsage
+	getCgroupMemoryUsage = func(int) (int64, error) { return 95 * mpool.GB, nil }
+	t.Cleanup(func() { getCgroupMemoryUsage = oldGetCgroupMemoryUsage })
+
+	throttler := &memThrottler{}
+	throttler.actualTotalMemory.Store(100 * mpool.GB)
+	throttler.total.Store(200 * mpool.GB)
+	throttler.cgroup.Store(100 * mpool.GB)
+	throttler.rss.Store(60 * mpool.GB)
+	throttler.limit.Store(90 * mpool.GB)
+
+	// Below hard pressure, reclaimable cgroup charge does not reduce the normal
+	// RSS-based component budget.
+	throttler.cgroupSample.Store(&cgroupMemorySample{usage: 90 * mpool.GB, limit: int64(throttler.actualTotalMemory.Load())})
+	require.Equal(t, int64(40*mpool.GB), throttler.Available())
+
+	// Once hard pressure is active, cap new admission by the remaining cgroup
+	// headroom without treating the whole cgroup charge as non-reclaimable RSS.
+	throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95 * mpool.GB, limit: int64(throttler.actualTotalMemory.Load())})
+	require.Equal(t, int64(5*mpool.GB), throttler.Available())
+
+	throttler.options.specializedForMerge = true
+	require.Equal(t, int64(5*mpool.GB), throttler.Available())
+
+	t.Run("sequential grants share one sampled budget", func(t *testing.T) {
+		throttler := &memThrottler{}
+		throttler.actualTotalMemory.Store(100 * mpool.GB)
+		throttler.limit.Store(90 * mpool.GB)
+		throttler.rss.Store(70 * mpool.GB)
+		throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95 * mpool.GB, limit: int64(throttler.actualTotalMemory.Load())})
+
+		left, ok := defaultAcquirePolicy(throttler, 4*mpool.GB)
+		require.True(t, ok)
+		require.Equal(t, int64(mpool.GB), left)
+
+		left, ok = defaultAcquirePolicy(throttler, 4*mpool.GB)
+		require.False(t, ok)
+		require.Equal(t, int64(mpool.GB), left)
+		require.Equal(t, int64(4*mpool.GB), throttler.reserved.Load())
+	})
+
+	t.Run("concurrent grants share one sampled budget", func(t *testing.T) {
+		throttler := &memThrottler{}
+		throttler.actualTotalMemory.Store(100 * mpool.GB)
+		throttler.limit.Store(90 * mpool.GB)
+		throttler.rss.Store(70 * mpool.GB)
+		throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95 * mpool.GB, limit: int64(throttler.actualTotalMemory.Load())})
+
+		const workers = 32
+		start := make(chan struct{})
+		var granted atomic.Int32
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for range workers {
+			go func() {
+				defer wg.Done()
+				<-start
+				if _, ok := defaultAcquirePolicy(throttler, mpool.GB); ok {
+					granted.Add(1)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		require.Equal(t, int32(5), granted.Load())
+		require.Equal(t, int64(5*mpool.GB), throttler.reserved.Load())
+	})
+
+	t.Run("outstanding reservations remain charged without allocation confirmation", func(t *testing.T) {
+		throttler := &memThrottler{}
+		throttler.actualTotalMemory.Store(100 * mpool.GB)
+		throttler.limit.Store(90 * mpool.GB)
+		throttler.rss.Store(70 * mpool.GB)
+		throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95 * mpool.GB, limit: int64(throttler.actualTotalMemory.Load())})
+		throttler.reserved.Store(10 * mpool.GB)
+
+		_, ok := defaultAcquirePolicy(throttler, 4*mpool.GB)
+		require.False(t, ok)
+		left, ok := defaultAcquirePolicy(throttler, 2*mpool.GB)
+		require.False(t, ok)
+		require.Zero(t, left)
+		require.Equal(t, int64(10*mpool.GB), throttler.reserved.Load())
+	})
+}
+
+func TestMemThrottlerSoftOnlyCgroupDoesNotUnderflowSignedCapacity(t *testing.T) {
+	const unit = int64(mpool.GB)
+	budget := &cgroupMemoryBudget{
+		domainProvider: func() (system.MemoryDomainSnapshot, error) {
+			return system.MemoryDomainSnapshot{
+				Used:      uint64(10 * unit),
+				Limit:     math.MaxUint64,
+				SoftLimit: uint64(100 * unit),
+				Source:    system.MemoryDomainSourceCgroupV2,
+				Measured:  true,
+			}, nil
+		},
+	}
+	throttler := &memThrottler{
+		cgroupBudget: budget,
+		limitRate:    0.05,
+	}
+	throttler.fillDefaults()
+	throttler.ForceRefresh()
+
+	// The hard limit is unlimited, but the finite memory.high must remain the
+	// effective pressure domain. It must never be cast to -1 and reject every
+	// workspace allocation before the shared cgroup check runs.
+	require.Equal(t, uint64(100*unit), throttler.actualTotalMemory.Load())
+	require.Equal(t, uint64(100*unit), throttler.total.Load())
+	require.Greater(t, throttler.Available(), int64(0))
+	left, ok := defaultAcquirePolicy(throttler, 1)
+	require.True(t, ok)
+	require.GreaterOrEqual(t, left, int64(0))
+	throttler.Release(1)
+}
+
+func TestMemThrottlerPressureUsesCgroupUsage(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	oldFreeOSMemory := freeOSMemory
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
+	freeOSMemory = func() {}
+
+	var target int64
+	now := time.Now().UnixNano()
+	throttler := &memThrottler{limitRate: 0.90}
+	throttler.options.enableRSSScavenging = true
+	throttler.options.rssCacheTargetSetter = func(value int64) { target = value }
+	throttler.options.rssCacheEvictor = func(context.Context, int64) {}
+	throttler.actualTotalMemory.Store(100 * mpool.GB)
+	throttler.limit.Store(90 * mpool.GB)
+	throttler.rss.Store(70 * mpool.GB)
+	throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95 * mpool.GB, limit: int64(throttler.actualTotalMemory.Load())})
+
+	// RSS is below the hard threshold, but cgroup usage is above it.
+	throttler.tryScavengeRSS(now, 70*mpool.GB)
+	require.Equal(t, rssPressureHard, rssPressureState(throttler.rssPressureState.Load()))
+	require.Equal(t, rssCacheHardTarget, target)
+}
+
 func TestBasic(t *testing.T) {
 	t.Run("A", func(t *testing.T) {
-		throttler := NewMemThrottler("TestBasic", 1)
+		throttler := newTestMemThrottler("TestBasic", 1)
 
 		throttler.PrintUsage()
 		avail1 := throttler.Available()
@@ -49,7 +680,7 @@ func TestBasic(t *testing.T) {
 	t.Run("B", func(t *testing.T) {
 		total := int64(mpool.KB)
 
-		throttler := NewMemThrottler(
+		throttler := newTestMemThrottler(
 			"TestBasic",
 			1,
 			WithConstLimit(total),
@@ -86,7 +717,7 @@ func TestBasic(t *testing.T) {
 }
 
 func TestParallel(t *testing.T) {
-	throttler := NewMemThrottler("TestParallel", 50.0/100.0)
+	throttler := newTestMemThrottler("TestParallel", 50.0/100.0)
 
 	throttler.PrintUsage()
 	available := throttler.Available()
@@ -124,7 +755,7 @@ func TestParallel(t *testing.T) {
 }
 
 func BenchmarkThrottler(b *testing.B) {
-	throttler := NewMemThrottler("BenchmarkThrottler", 50.0/100.0)
+	throttler := newTestMemThrottler("BenchmarkThrottler", 50.0/100.0)
 
 	for i := 0; i < b.N; i++ {
 		throttler.Acquire(10)
@@ -170,11 +801,43 @@ func TestAcquirePolicyForDataBranch(t *testing.T) {
 		require.Equal(t, int64(70), left)
 		require.Equal(t, int64(10), throttler.reserved.Load())
 	})
+
+	t.Run("cgroup headroom backstops data branch admission under hard pressure", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.80}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(80)
+		throttler.rss.Store(60)
+		throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95, limit: int64(throttler.actualTotalMemory.Load())})
+
+		left, ok := AcquirePolicyForDataBranch(throttler, 6)
+		require.False(t, ok)
+		require.Equal(t, int64(5), left)
+		require.Equal(t, int64(0), throttler.reserved.Load())
+	})
+
+	t.Run("data branch grants cumulatively consume sampled cgroup headroom", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.80}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(80)
+		throttler.rss.Store(60)
+		throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95, limit: int64(throttler.actualTotalMemory.Load())})
+
+		_, ok := AcquirePolicyForDataBranch(throttler, 4)
+		require.True(t, ok)
+		left, ok := AcquirePolicyForDataBranch(throttler, 4)
+		require.False(t, ok)
+		require.Equal(t, int64(1), left)
+		require.Equal(t, int64(4), throttler.reserved.Load())
+	})
 }
 
 func TestMemThrottlerRSSScavenging(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
-	defer func() { freeOSMemory = oldFreeOSMemory }()
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 
 	var calls atomic.Int32
 	freeOSMemory = func() {
@@ -190,15 +853,21 @@ func TestMemThrottlerRSSScavenging(t *testing.T) {
 	throttler.lastRSSScavenge.Store(now - int64(rssScavengeInterval) - int64(time.Second))
 
 	throttler.tryScavengeRSS(now, 900*mpool.GB)
-	require.Equal(t, int32(1), calls.Load())
+	require.Eventually(t, func() bool {
+		return calls.Load() == 1
+	}, time.Second, time.Millisecond)
 
 	throttler.tryScavengeRSS(now+int64(time.Second), 900*mpool.GB)
 	require.Equal(t, int32(1), calls.Load())
 }
 
 func TestMemThrottlerRSSCacheEvictionByRSSRate(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
-	defer func() { freeOSMemory = oldFreeOSMemory }()
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 
 	var freeCalls atomic.Int32
 	freeOSMemory = func() {
@@ -238,7 +907,7 @@ func TestMemThrottlerRSSCacheEvictionByRSSRate(t *testing.T) {
 		return recvTarget(targets) == rssCacheHardTarget
 	}, time.Second, time.Millisecond)
 	require.Eventually(t, func() bool {
-		return freeCalls.Load() == 2
+		return freeCalls.Load() == 1
 	}, time.Second, time.Millisecond)
 
 	throttler.tryScavengeRSS(now+3*int64(time.Second), 920*mpool.GB)
@@ -251,8 +920,12 @@ func TestMemThrottlerRSSCacheEvictionByRSSRate(t *testing.T) {
 }
 
 func TestMemThrottlerRSSPressureStateTargetLifecycle(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
-	defer func() { freeOSMemory = oldFreeOSMemory }()
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 	freeOSMemory = func() {}
 
 	var setTargets []int64
@@ -302,9 +975,11 @@ func TestMemThrottlerRSSPressureStateTargetLifecycle(t *testing.T) {
 	throttler.tryScavengeRSS(now+3*int64(time.Second), 920*mpool.GB)
 	require.Equal(t, rssPressureHard, rssPressureState(throttler.rssPressureState.Load()))
 	require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget, rssCacheSoftTarget, rssCacheHardTarget}, setTargets)
-	require.Eventually(t, func() bool {
-		return recvTarget(evictTargets) == rssCacheHardTarget
-	}, time.Second, time.Millisecond)
+	select {
+	case target := <-evictTargets:
+		t.Fatalf("unexpected cache evict target %d during global cooldown", target)
+	default:
+	}
 
 	throttler.tryScavengeRSS(now+4*int64(time.Second), 800*mpool.GB)
 	require.Equal(t, rssPressureNone, rssPressureState(throttler.rssPressureState.Load()))
@@ -312,8 +987,12 @@ func TestMemThrottlerRSSPressureStateTargetLifecycle(t *testing.T) {
 }
 
 func TestMemThrottlerRSSCacheEvictionConcurrentEscalation(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
-	defer func() { freeOSMemory = oldFreeOSMemory }()
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 
 	var freeCalls atomic.Int32
 	freeOSMemory = func() {
@@ -374,9 +1053,308 @@ func recvTarget(ch <-chan int64) int64 {
 	}
 }
 
-func TestMemThrottlerRSSScavengingDisabled(t *testing.T) {
+func resetRSSReclamationCoordinatorForTest() {
+	for {
+		processRSSReclamation.mu.Lock()
+		if !processRSSReclamation.running {
+			processRSSReclamation.pending = nil
+			processRSSReclamation.lastCacheEvict = 0
+			processRSSReclamation.lastCacheTarget = 0
+			processRSSReclamation.lastFreeOSMemory = 0
+			processRSSReclamation.mu.Unlock()
+			return
+		}
+		processRSSReclamation.mu.Unlock()
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestRSSReclamationCoordinatorDropsRecoveredPendingWork(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
 	oldFreeOSMemory := freeOSMemory
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
+	freeOSMemory = func() {}
+
+	owner := &memThrottler{}
+	owner.rssPressureState.Store(int64(rssPressureSoft))
+	owner.rssPressureGen.Store(1)
+	targets := make(chan int64, 2)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	evictor := func(_ context.Context, targetPercent int64) {
+		targets <- targetPercent
+		if targetPercent == rssCacheSoftTarget {
+			close(entered)
+			<-release
+		}
+	}
+
+	now := time.Now().UnixNano()
+	processRSSReclamation.request(now, rssReclamationWork{
+		owner:         owner,
+		generation:    1,
+		targetPercent: rssCacheSoftTarget,
+		evictor:       evictor,
+		freeOSMemory:  true,
+	})
+	<-entered
+
+	owner.rssPressureState.Store(int64(rssPressureHard))
+	owner.rssPressureGen.Store(2)
+	processRSSReclamation.request(now+int64(time.Second), rssReclamationWork{
+		owner:         owner,
+		generation:    2,
+		targetPercent: rssCacheHardTarget,
+		evictor:       evictor,
+		freeOSMemory:  true,
+	})
+
+	// The hard-pressure request is now stale: recovery invalidates this
+	// owner's generation before the coordinator gets to its pending work.
+	owner.rssPressureState.Store(int64(rssPressureNone))
+	owner.rssPressureGen.Store(3)
+	close(release)
+	resetRSSReclamationCoordinatorForTest()
+
+	select {
+	case target := <-targets:
+		require.Equal(t, rssCacheSoftTarget, target)
+	default:
+		t.Fatal("expected the in-flight soft-pressure eviction")
+	}
+	select {
+	case target := <-targets:
+		t.Fatalf("stale eviction target %d was executed after pressure recovery", target)
+	default:
+	}
+}
+
+func TestRSSReclamationCoordinatorDoesNotReserveCooldownForRecoveredWork(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	defer resetRSSReclamationCoordinatorForTest()
+
+	owner := &memThrottler{}
+	owner.rssPressureState.Store(int64(rssPressureHard))
+	owner.rssPressureGen.Store(1)
+	var evictions atomic.Int32
+	var frees atomic.Int32
+	work := rssReclamationWork{
+		owner:         owner,
+		generation:    1,
+		targetPercent: rssCacheHardTarget,
+		evictor: func(context.Context, int64) {
+			evictions.Add(1)
+		},
+		freeOSMemory: true,
+		freeAction:   "test-free",
+	}
+	oldFreeOSMemory := freeOSMemory
+	freeOSMemory = func() { frees.Add(1) }
 	defer func() { freeOSMemory = oldFreeOSMemory }()
+
+	// The final validity check happens inside execute while the cooldown lock is
+	// held. A recovered request must neither execute nor consume a cooldown.
+	owner.rssPressureState.Store(int64(rssPressureNone))
+	owner.rssPressureGen.Store(2)
+	processRSSReclamation.execute(work)
+	require.Zero(t, evictions.Load())
+	require.Zero(t, frees.Load())
+	processRSSReclamation.mu.Lock()
+	require.Zero(t, processRSSReclamation.lastCacheEvict)
+	require.Zero(t, processRSSReclamation.lastFreeOSMemory)
+	processRSSReclamation.mu.Unlock()
+
+	owner.rssPressureState.Store(int64(rssPressureHard))
+	owner.rssPressureGen.Store(3)
+	work.generation = 3
+	processRSSReclamation.execute(work)
+	require.Equal(t, int32(1), evictions.Load())
+	require.Equal(t, int32(1), frees.Load())
+}
+
+func TestRSSReclamationCoordinatorSkipsWorkRecoveredWhileWaitingForLock(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	defer resetRSSReclamationCoordinatorForTest()
+
+	owner := &memThrottler{}
+	owner.rssPressureState.Store(int64(rssPressureHard))
+	owner.rssPressureGen.Store(1)
+	var evictions atomic.Int32
+	var frees atomic.Int32
+	work := rssReclamationWork{
+		owner:         owner,
+		generation:    1,
+		targetPercent: rssCacheHardTarget,
+		evictor: func(context.Context, int64) {
+			evictions.Add(1)
+		},
+		freeOSMemory: true,
+		freeAction:   "test-free",
+	}
+	oldFreeOSMemory := freeOSMemory
+	freeOSMemory = func() { frees.Add(1) }
+	defer func() { freeOSMemory = oldFreeOSMemory }()
+
+	// Hold the coordinator lock while the work is submitted. Recovery happens
+	// before execute can acquire the lock; cooldown publication and callbacks
+	// must both be skipped for this stale request.
+	processRSSReclamation.mu.Lock()
+	started := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		close(started)
+		processRSSReclamation.execute(work)
+		close(done)
+	}()
+	<-started
+	owner.rssPressureState.Store(int64(rssPressureNone))
+	owner.rssPressureGen.Store(2)
+	processRSSReclamation.mu.Unlock()
+
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("stale reclamation did not drain")
+	}
+	require.Zero(t, evictions.Load())
+	require.Zero(t, frees.Load())
+	processRSSReclamation.mu.Lock()
+	require.Zero(t, processRSSReclamation.lastCacheEvict)
+	require.Zero(t, processRSSReclamation.lastFreeOSMemory)
+	processRSSReclamation.mu.Unlock()
+}
+
+func TestRSSReclamationCoordinatorKeepsOtherOwnerPendingWork(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	oldFreeOSMemory := freeOSMemory
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
+	freeOSMemory = func() {}
+
+	first := &memThrottler{}
+	first.rssPressureState.Store(int64(rssPressureSoft))
+	first.rssPressureGen.Store(1)
+	second := &memThrottler{}
+	second.rssPressureState.Store(int64(rssPressureHard))
+	second.rssPressureGen.Store(1)
+	targets := make(chan int64, 2)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	evictor := func(_ context.Context, targetPercent int64) {
+		targets <- targetPercent
+		if targetPercent == rssCacheSoftTarget {
+			close(entered)
+			<-release
+		}
+	}
+
+	now := time.Now().UnixNano()
+	processRSSReclamation.request(now, rssReclamationWork{
+		owner:         first,
+		generation:    1,
+		targetPercent: rssCacheSoftTarget,
+		evictor:       evictor,
+	})
+	<-entered
+	processRSSReclamation.request(now+int64(time.Second), rssReclamationWork{
+		owner:         second,
+		generation:    1,
+		targetPercent: rssCacheHardTarget,
+		evictor:       evictor,
+	})
+
+	first.rssPressureState.Store(int64(rssPressureNone))
+	first.rssPressureGen.Store(2)
+	close(release)
+	resetRSSReclamationCoordinatorForTest()
+
+	var got []int64
+	for {
+		select {
+		case target := <-targets:
+			got = append(got, target)
+		default:
+			require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget}, got)
+			return
+		}
+	}
+}
+
+func TestRSSReclamationCoordinatorSerializesAndCoalesces(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	oldFreeOSMemory := freeOSMemory
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
+
+	var active atomic.Int32
+	var maxActive atomic.Int32
+	var freeCalls atomic.Int32
+	targets := make(chan int64, 2)
+	entered := make(chan struct{})
+	release := make(chan struct{})
+
+	freeOSMemory = func() {
+		freeCalls.Add(1)
+	}
+	evictor := func(_ context.Context, targetPercent int64) {
+		current := active.Add(1)
+		for {
+			old := maxActive.Load()
+			if current <= old || maxActive.CompareAndSwap(old, current) {
+				break
+			}
+		}
+		targets <- targetPercent
+		if targetPercent == rssCacheSoftTarget {
+			close(entered)
+			<-release
+		}
+		active.Add(-1)
+	}
+
+	now := time.Now().UnixNano()
+	processRSSReclamation.request(now, rssReclamationWork{
+		targetPercent: rssCacheSoftTarget,
+		evictor:       evictor,
+		freeOSMemory:  true,
+	})
+	<-entered
+	processRSSReclamation.request(now+int64(time.Second), rssReclamationWork{
+		targetPercent: rssCacheHardTarget,
+		evictor:       evictor,
+		freeOSMemory:  true,
+	})
+	close(release)
+	resetRSSReclamationCoordinatorForTest()
+
+	var gotTargets []int64
+	for {
+		select {
+		case target := <-targets:
+			gotTargets = append(gotTargets, target)
+		default:
+			require.Equal(t, []int64{rssCacheSoftTarget, rssCacheHardTarget}, gotTargets)
+			require.Equal(t, int32(1), maxActive.Load())
+			require.Equal(t, int32(1), freeCalls.Load())
+			return
+		}
+	}
+}
+
+func TestMemThrottlerRSSScavengingDisabled(t *testing.T) {
+	resetRSSReclamationCoordinatorForTest()
+	oldFreeOSMemory := freeOSMemory
+	defer func() {
+		resetRSSReclamationCoordinatorForTest()
+		freeOSMemory = oldFreeOSMemory
+	}()
 
 	var calls atomic.Int32
 	freeOSMemory = func() {
@@ -561,6 +1539,99 @@ func TestAcquirePolicyForCNFlushS3(t *testing.T) {
 		require.False(t, ok)
 		require.Equal(t, int64(5), left)
 		require.Equal(t, int64(0), throttler.reserved.Load())
+	})
+
+	t.Run("cgroup headroom backstops new s3 reservation under hard pressure", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(70)
+		throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95, limit: int64(throttler.actualTotalMemory.Load())})
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 6)
+		require.False(t, ok)
+		require.Equal(t, int64(5), left)
+		require.Equal(t, int64(0), throttler.reserved.Load())
+	})
+
+	t.Run("cgroup headroom accounts for cumulative s3 growth", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(70)
+		throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95, limit: int64(throttler.actualTotalMemory.Load())})
+
+		_, ok := AcquirePolicyForCNFlushS3(throttler, 4)
+		require.True(t, ok)
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 4)
+		require.False(t, ok)
+		require.Equal(t, int64(1), left)
+		require.Equal(t, int64(4), throttler.reserved.Load())
+	})
+
+	t.Run("rss reuse does not prove pending allocations are covered by cgroup usage", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(95)
+		throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95, limit: int64(throttler.actualTotalMemory.Load())})
+		throttler.rssReservedBase.Store(60)
+		throttler.rssMpoolLiveBase.Store(currentLive + 60)
+
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 6)
+		require.False(t, ok)
+		require.Equal(t, int64(5), left)
+		require.Zero(t, throttler.reserved.Load())
+	})
+
+	t.Run("cgroup guard charges reservations added between cgroup and rss samples", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		currentLive := mpool.GlobalStats().NumCurrBytes.Load()
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(70)
+		throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95, limit: int64(throttler.actualTotalMemory.Load())})
+		// The cgroup sample saw only three reserved bytes. Five more bytes were
+		// granted before the later RSS sample, so rssReservedBase includes them
+		// even though they have already consumed all sampled cgroup headroom.
+		throttler.rssReservedBase.Store(8)
+		throttler.rssMpoolLiveBase.Store(currentLive)
+		throttler.reserved.Store(8)
+
+		require.Equal(t, int64(0), cnFlushS3PhysicalAvailable(throttler, 8, throttler.cgroupSample.Load()))
+		left, ok := AcquirePolicyForCNFlushS3(throttler, 1)
+		require.False(t, ok)
+		require.Equal(t, int64(0), left)
+		require.Equal(t, int64(8), throttler.reserved.Load())
+	})
+
+	t.Run("concurrent s3 grants share one sampled cgroup budget", func(t *testing.T) {
+		throttler := &memThrottler{limitRate: 0.90}
+		throttler.actualTotalMemory.Store(100)
+		throttler.limit.Store(90)
+		throttler.rss.Store(70)
+		throttler.cgroupSample.Store(&cgroupMemorySample{usage: 95, limit: int64(throttler.actualTotalMemory.Load())})
+
+		const workers = 32
+		start := make(chan struct{})
+		var granted atomic.Int32
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for range workers {
+			go func() {
+				defer wg.Done()
+				<-start
+				if _, ok := AcquirePolicyForCNFlushS3(throttler, 1); ok {
+					granted.Add(1)
+				}
+			}()
+		}
+		close(start)
+		wg.Wait()
+
+		require.Equal(t, int32(5), granted.Load())
+		require.Equal(t, int64(5), throttler.reserved.Load())
 	})
 
 	t.Run("allow reacquire after flush while rss snapshot still includes prior s3 bytes", func(t *testing.T) {

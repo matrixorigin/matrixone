@@ -1714,6 +1714,12 @@ func (mp *MysqlProtocolImpl) applyNegotiatedSessionCharset(ctx context.Context) 
 
 // the server authenticate that the client can connect and use the database
 func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse []byte) error {
+	// Login includes post-password catalog initialization as well as
+	// Session.AuthenticateUser. Keep all required handshake work on the bounded
+	// control ledger: the callee's local marker does not reach the system-var
+	// refresh below. Do not store this context on the session or its requests;
+	// ordinary SQL after authentication must still pass ordinary admission.
+	ctx = process.WithControlMemoryAdmission(ctx, true)
 	var psw []byte
 	var err error
 	var tenant *TenantInfo

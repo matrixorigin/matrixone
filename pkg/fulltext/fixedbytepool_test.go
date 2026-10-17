@@ -30,6 +30,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPoolMemoryCapacityFixtureDoesNotReplaceLiveProvider(t *testing.T) {
+	previous := memTotal
+	t.Cleanup(func() { memTotal = previous })
+	total := uint64(1000)
+	memTotal = func() uint64 { return total }
+	fixture := &FixedBytePool{dsize: 1}
+	fixture.SetMemoryCapacityForTesting(500)
+	live := &FixedBytePool{dsize: 1}
+	_, budget, ok := fixture.heapBudget()
+	require.True(t, ok)
+	require.Equal(t, uint64(500)/100*HeapBudgetPct, budget)
+	for _, capacity := range []uint64{1000, 200, 0} {
+		total = capacity
+		_, budget, ok = live.heapBudget()
+		require.Equal(t, capacity != 0, ok)
+		require.Equal(t, capacity/100*HeapBudgetPct, budget, "non-fixture pools must still observe live quota changes")
+	}
+}
+
 func TestPool(t *testing.T) {
 	addrs := make([]uint64, 10)
 

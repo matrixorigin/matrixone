@@ -16,6 +16,7 @@ package system
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -649,4 +650,304 @@ func TestReclaimableCgroupCache(t *testing.T) {
 	}
 	_, ok := reclaimableCgroupCache(filepath.Join(t.TempDir(), "absent.stat"))
 	require.False(t, ok)
+}
+
+func TestReadCgroupMemoryDomainSelectsTightestLevel(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o755))
+
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600))
+	}
+	write(root, "memory.max", "max\n")
+	write(root, "memory.high", "max\n")
+	write(root, "memory.current", "1\n")
+	write(parent, "memory.max", strconv.FormatUint(10<<30, 10))
+	write(parent, "memory.high", strconv.FormatUint(9<<30, 10))
+	write(parent, "memory.current", strconv.FormatUint(7<<30, 10))
+	write(parent, "memory.stat", fmt.Sprintf("file %d\nshmem 0\ninactive_file %d\nactive_file 0\nfile_dirty 0\nfile_writeback 0\nkernel 128\n", 2<<30, 2<<30))
+	write(child, "memory.max", strconv.FormatUint(20<<30, 10))
+	write(child, "memory.high", strconv.FormatUint(19<<30, 10))
+	write(child, "memory.current", strconv.FormatUint(15<<30, 10))
+	write(child, "memory.stat", fmt.Sprintf("file %d\nshmem 0\ninactive_file %d\nactive_file 0\nfile_dirty 0\nfile_writeback 0\nkernel 256\n", 4<<30, 4<<30))
+
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(7<<30), snapshot.Used)
+	require.Equal(t, uint64(10<<30), snapshot.Limit)
+	require.Equal(t, uint64(9<<30), snapshot.SoftLimit)
+	require.Equal(t, uint64(2<<30), snapshot.Reclaimable)
+	require.Equal(t, uint64(128), snapshot.Kernel)
+	require.Equal(t, uint64(128), snapshot.NonGo)
+	require.Equal(t, MemoryDomainSourceCgroupV2, snapshot.Source)
+	require.Equal(t, uint64(3<<30), snapshot.HardHeadroom())
+	require.Equal(t, uint64(5<<30), snapshot.ReclaimableHeadroom())
+	require.Equal(t, uint64(4<<30), snapshot.AdmissionReclaimableHeadroom())
+}
+
+func TestReadCgroupMemoryDomainSkipsStructuralMountRoot(t *testing.T) {
+	root := t.TempDir()
+	child := filepath.Join(root, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	// A true cgroup-v2 hierarchy root can lack the memory controller files.
+	// The bounded child must still be selected instead of turning the whole
+	// domain read into an observation failure.
+	write(child, "memory.max", "100")
+	write(child, "memory.high", "max")
+	write(child, "memory.current", "95")
+
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(100), snapshot.Limit)
+	require.Equal(t, uint64(5), snapshot.HardHeadroom())
+
+	// An entirely unlimited hierarchy falls through to the host-domain reader.
+	write(child, "memory.max", "max")
+	snapshot, measured, err = readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.False(t, measured)
+	require.Zero(t, snapshot)
+}
+
+func TestReadCgroupMemoryDomainSkipsChildWithoutMemoryController(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	// The parent owns the memory controller and its five-unit headroom. It is
+	// not enabled in subtree_control, so the child legitimately has no
+	// memory.* interface files. The reader must retain the governing parent
+	// rather than treating the child as a broken observation.
+	write(root, "memory.max", "max")
+	write(root, "memory.high", "max")
+	write(root, "memory.current", "0")
+	write(parent, "memory.max", "100")
+	write(parent, "memory.high", "max")
+	write(parent, "memory.current", "95")
+	write(parent, "cgroup.subtree_control", "")
+
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(100), snapshot.Limit)
+	require.Equal(t, uint64(5), snapshot.HardHeadroom())
+}
+
+func TestReadCgroupMemoryDomainDoesNotSkipConstrainedMountedRoot(t *testing.T) {
+	root := t.TempDir()
+	mountPoint := filepath.Join(root, "mounted")
+	child := filepath.Join(mountPoint, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	write(mountPoint, "memory.max", "100")
+	write(mountPoint, "memory.high", "max")
+	write(mountPoint, "memory.current", "95")
+	write(child, "memory.max", "200")
+	write(child, "memory.high", "max")
+	write(child, "memory.current", "50")
+	write(mountPoint, "cgroup.controllers", "memory")
+
+	// mountPoint is a cgroup subtree mounted into a namespace, not the true
+	// hierarchy root. Missing one of its binding limits must retain the
+	// fail-closed behavior; the mount position alone is not structural proof.
+	levels := buildMemoryDomainLevelsWithHierarchyRoot(child, mountPoint,
+		MemoryDomainSourceCgroupV2, false,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(100), snapshot.Limit)
+	require.Equal(t, uint64(5), snapshot.HardHeadroom())
+
+	for _, name := range []string{"memory.max", "memory.high"} {
+		require.NoError(t, os.Remove(filepath.Join(mountPoint, name)))
+		_, measured, err = readCgroupMemoryDomain(levels)
+		require.Error(t, err)
+		require.False(t, measured)
+		if name == "memory.max" {
+			write(mountPoint, name, "100")
+		} else {
+			write(mountPoint, name, "max")
+		}
+	}
+
+	// If all memory interfaces are absent and the mounted cgroup says that
+	// memory is unavailable, the level is genuinely inapplicable. This is the
+	// structural exception; a mounted root with memory available is not.
+	for _, name := range []string{"memory.max", "memory.high", "memory.current"} {
+		require.NoError(t, os.Remove(filepath.Join(mountPoint, name)))
+	}
+	write(mountPoint, "cgroup.controllers", "cpu io")
+	snapshot, measured, err = readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(200), snapshot.Limit)
+
+	// The same missing files are an observation failure when the controller is
+	// available at the mounted root.
+	write(mountPoint, "cgroup.controllers", "memory")
+	_, measured, err = readCgroupMemoryDomain(levels)
+	require.Error(t, err)
+	require.False(t, measured)
+}
+
+func TestReadCgroupMemoryDomainRequiresUsageForFiniteLevel(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(root, name), []byte(content), 0o600))
+	}
+	write("memory.max", "1073741824\n")
+	levels := buildMemoryDomainLevels(root, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+	_, measured, err := readCgroupMemoryDomain(levels)
+	require.Error(t, err)
+	require.False(t, measured)
+}
+
+func TestReadCgroupMemoryDomainRetainsBindingLimitOnReadFailure(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	write(root, "memory.max", "max")
+	write(root, "memory.high", "max")
+	write(root, "memory.current", "0")
+	write(parent, "memory.max", "100")
+	write(parent, "memory.high", "max")
+	write(parent, "memory.current", "95")
+	write(child, "memory.max", "200")
+	write(child, "memory.high", "max")
+	write(child, "memory.current", "50")
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(100), snapshot.Limit)
+	require.Equal(t, uint64(5), snapshot.HardHeadroom())
+
+	for _, value := range []string{"", "not-a-number"} {
+		if value == "" {
+			require.NoError(t, os.Remove(filepath.Join(parent, "memory.max")))
+		} else {
+			write(parent, "memory.max", value)
+		}
+		_, measured, err = readCgroupMemoryDomain(levels)
+		require.Error(t, err)
+		require.False(t, measured)
+		write(parent, "memory.max", "100")
+	}
+
+	// "max" is an authoritative unlimited value, not a read failure; the
+	// finite child remains measurable once the parent no longer binds.
+	write(parent, "memory.max", "max")
+	snapshot, measured, err = readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(200), snapshot.Limit)
+}
+
+func TestReadCgroupMemoryDomainRetainsSoftLimitOnReadFailure(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	write(root, "memory.max", "max")
+	write(root, "memory.high", "max")
+	write(root, "memory.current", "0")
+	write(parent, "memory.max", "200")
+	write(parent, "memory.high", "100")
+	write(parent, "memory.current", "95")
+	write(child, "memory.max", "max")
+	write(child, "memory.high", "max")
+	write(child, "memory.current", "50")
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(100), snapshot.AdmissionLimit())
+	require.Equal(t, uint64(5), snapshot.AdmissionLimit()-snapshot.Used)
+
+	for _, value := range []string{"", "not-a-number"} {
+		if value == "" {
+			require.NoError(t, os.Remove(filepath.Join(parent, "memory.high")))
+		} else {
+			write(parent, "memory.high", value)
+		}
+		_, measured, err = readCgroupMemoryDomain(levels)
+		require.Error(t, err)
+		require.False(t, measured)
+		write(parent, "memory.high", "100")
+	}
+
+	// An explicit unlimited value is authoritative and removes only the soft
+	// boundary; it is not treated as a failed observation.
+	write(parent, "memory.high", "max")
+	snapshot, measured, err = readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(200), snapshot.Limit)
+	require.Equal(t, uint64(105), snapshot.AdmissionLimit()-snapshot.Used)
+}
+
+func TestReadCgroupMemoryDomainKeepsSoftOnlyLimit(t *testing.T) {
+	root := t.TempDir()
+	parent := filepath.Join(root, "tenant")
+	child := filepath.Join(parent, "query")
+	require.NoError(t, os.MkdirAll(child, 0o700))
+	write := func(dir, name, content string) {
+		require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(content+"\n"), 0o600))
+	}
+
+	write(root, "memory.max", "max")
+	write(root, "memory.high", "max")
+	write(root, "memory.current", "0")
+	write(parent, "memory.max", "max")
+	write(parent, "memory.high", "100")
+	write(parent, "memory.current", "95")
+	write(child, "memory.max", "max")
+	write(child, "memory.high", "max")
+	write(child, "memory.current", "50")
+	levels := buildMemoryDomainLevels(child, root, MemoryDomainSourceCgroupV2,
+		"memory.max", "memory.high", "memory.current", "memory.stat")
+
+	snapshot, measured, err := readCgroupMemoryDomain(levels)
+	require.NoError(t, err)
+	require.True(t, measured)
+	require.Equal(t, uint64(math.MaxUint64), snapshot.Limit)
+	require.Equal(t, uint64(100), snapshot.SoftLimit)
+	require.Equal(t, uint64(100), snapshot.AdmissionLimit())
+	require.Equal(t, uint64(5), snapshot.AdmissionReclaimableHeadroom())
 }

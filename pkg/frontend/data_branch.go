@@ -212,6 +212,7 @@ func newBranchHashmapAllocator(limitRate float64) *branchHashmapAllocator {
 		"DataBranchHashmap",
 		limitRate,
 		rscthrottler.WithAcquirePolicy(rscthrottler.AcquirePolicyForDataBranch),
+		rscthrottler.WithSharedMemoryAdmission(),
 	)
 	return &branchHashmapAllocator{
 		upstream:  malloc.GetDefault(nil),

@@ -19,13 +19,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/fileservice"
-	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
-	"github.com/stretchr/testify/require"
 	goruntime "runtime"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/queryservice/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
 )
 
 type fixtureProbeTB struct {
@@ -66,6 +68,29 @@ func fixturePoolCount(t *testing.T, tag string) int {
 	var pools []map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal([]byte(mpool.ReportMemUsage(tag)), &pools))
 	return len(pools)
+}
+
+func TestProcessFixtureUsesFiniteIndependentExecutionBudgets(t *testing.T) {
+	var a, b *process.ExecutionResourceGeneration
+	require.True(t, t.Run("fixtures", func(t *testing.T) {
+		first, second := NewProcess(t), NewProcess(t)
+		first.Base.Lim.Size, second.Base.Lim.Size = 4096, 4096
+		var err error
+		a, err = first.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		b, err = second.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		require.NoError(t, a.AcquireAllocationCapacity(4096))
+		require.NoError(t, b.AcquireAllocationCapacity(4096), "another unit fixture's claims must not consume this budget")
+		require.Error(t, a.AcquireAllocationCapacity(1))
+		a.ReleaseAllocationCapacity(4096)
+		b.ReleaseAllocationCapacity(4096)
+	}))
+	require.True(t, a.Closed())
+	require.True(t, b.Closed())
+	cfg := procConfig{}
+	WithLiveMemoryAdmission()(&cfg)
+	require.True(t, cfg.liveMemoryAdmission)
 }
 
 func TestProcessFixtureOwnedLifetimes(t *testing.T) {

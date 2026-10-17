@@ -1449,8 +1449,8 @@ const (
 )
 
 func defaultLockRetryMemoryPressureLevel() lockRetryMemoryPressureLevel {
-	available, measured := system.MemoryAvailableIncludingCache()
-	return classifyLockRetryMemoryPressure(system.MemoryTotal(), system.CgroupMemoryLimit(), available, measured)
+	domain, _ := system.CurrentMemoryDomain()
+	return classifyLockRetryMemoryPressure(domain.CapacityLimit(), 0, domain.AdmissionReclaimableHeadroom(), domain.Measured)
 }
 
 func classifyLockRetryMemoryPressure(host, cgroup, available uint64, measured bool) lockRetryMemoryPressureLevel {

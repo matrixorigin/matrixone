@@ -1161,40 +1161,32 @@ func resolveRemoteCompileMPoolCap(lim process.Limitation) (int64, error) {
 	if hint := fileservice.GlobalMemoryCacheSizeHint.Load(); hint > 0 {
 		fileCacheHint = uint64(hint)
 	}
-	return resolveRemoteCompileMPoolCapFrom(lim, system.CgroupMemoryLimit(), system.MemoryTotal(), globalCap, fileCacheHint)
+	shared := system.DefaultMemoryAdmissionBudget().Snapshot()
+	if !shared.Measured {
+		return 0, process.ErrExecutionMemoryCeilingMissing
+	}
+	return resolveRemoteCompileMPoolCapInputs(process.ExecutionMemoryCeilingInputs{
+		MemoryDomain: shared.Domain, MemoryDomainReserve: shared.Reserve,
+		GlobalMpoolCap: globalCap, FileCacheHint: fileCacheHint, ProcessLimitationSize: uint64(max(0, lim.Size)),
+	})
 }
 
 func resolveRemoteCompileMPoolCapFrom(lim process.Limitation, cgroupLimit, memoryTotal, globalCap, fileCacheHint uint64) (int64, error) {
-	effective := uint64(0)
-	for _, candidate := range []uint64{cgroupLimit, memoryTotal, globalCap} {
-		if candidate == 0 || candidate == math.MaxUint64 {
-			continue
-		}
-		if effective == 0 || candidate < effective {
-			effective = candidate
-		}
+	return resolveRemoteCompileMPoolCapInputs(process.ExecutionMemoryCeilingInputs{
+		CgroupMemoryMax: cgroupLimit, HostMemTotal: memoryTotal, GlobalMpoolCap: globalCap,
+		FileCacheHint: fileCacheHint, ProcessLimitationSize: uint64(max(0, lim.Size)),
+	})
+}
+
+func resolveRemoteCompileMPoolCapInputs(inputs process.ExecutionMemoryCeilingInputs) (int64, error) {
+	ceiling, err := process.ResolveExecutionMemoryCeiling(inputs)
+	if err != nil {
+		return 0, err
 	}
-	if effective == 0 {
-		return 0, process.ErrExecutionMemoryCeilingMissing
-	}
-	reserve := effective / 10
-	if reserve < 256*mpool.MB {
-		reserve = 256 * mpool.MB
-	}
-	if fileCacheHint > reserve {
-		reserve = fileCacheHint
-	}
-	if reserve >= effective {
-		return 0, moerr.NewInternalErrorNoCtx("remote compile memory ceiling is too small")
-	}
-	cap := effective - reserve
-	if lim.Size > 0 && uint64(lim.Size) < cap {
-		cap = uint64(lim.Size)
-	}
-	if cap > uint64(math.MaxInt64) {
+	if ceiling.QueryCap > uint64(math.MaxInt64) {
 		return 0, moerr.NewInternalErrorNoCtx("remote compile memory cap exceeds int64")
 	}
-	return int64(cap), nil
+	return int64(ceiling.QueryCap), nil
 }
 
 func (receiver *messageReceiverOnServer) sendError(

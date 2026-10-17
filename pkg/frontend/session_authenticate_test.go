@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/txn/clock"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type authenticationBarrierEngine struct {
@@ -395,8 +396,9 @@ func TestAuthenticateUserWaitsForLogtailBarrierBeforeBackgroundTransaction(t *te
 		gotRealUser    bool
 		gotCancellable bool
 	)
-	NewBackgroundExec = func(_ context.Context, upstream FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+	NewBackgroundExec = func(ctx context.Context, upstream FeSession, opts ...*BackgroundExecOption) BackgroundExec {
 		require.True(t, waitCompleted, "freshness wait must finish before transaction admission")
+		require.True(t, process.HasControlMemoryAdmission(ctx), "login catalog SQL must retain its bounded control allowance")
 		gotMinimum = upstream.getLastCommitTS()
 		if len(opts) == 1 && opts[0] != nil {
 			gotRealUser = opts[0].fromRealUser
