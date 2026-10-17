@@ -85,8 +85,15 @@ wrn(){  printf "  ${Y}[WARN]${N} %s\n" "$*"; WARN=$((WARN+1)); }
 hdr(){  printf "\n${C}== %s ==${N}\n" "$*"; }
 die(){  printf "${R}ERROR:${N} %s\n" "$*" >&2; exit 1; }
 
-run(){  if [ "$DRY_RUN" = 1 ]; then printf "    (dry-run) %s\n" "$*"; else info "exec: $*"; bash -c "$*"; fi; }
-runq(){ if [ "$DRY_RUN" = 1 ]; then printf "    (dry-run) %s\n" "$*"; else bash -c "$*"; fi; }
+# 打印命令时遮蔽口令：passwd/password='x'、-p 'x'、hacluster:x
+mask_secrets(){
+  printf '%s' "$*" | sed -E \
+    -e "s/(passwd|password)='[^']*'/\1='***'/g" \
+    -e "s/-p '[^']*'/-p '***'/g" \
+    -e 's/(hacluster:)[^ '\''"]*/\1***/g'
+}
+run(){  if [ "$DRY_RUN" = 1 ]; then printf "    (dry-run) %s\n" "$(mask_secrets "$*")"; else info "exec: $(mask_secrets "$*")"; bash -c "$*"; fi; }
+runq(){ if [ "$DRY_RUN" = 1 ]; then printf "    (dry-run) %s\n" "$(mask_secrets "$*")"; else bash -c "$*"; fi; }
 stage_enabled(){ case ",$STAGES," in *",$1,"*) return 0;; *) return 1;; esac; }
 
 usage(){
