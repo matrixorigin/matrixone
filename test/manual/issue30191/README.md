@@ -46,3 +46,25 @@ java -cp "$probe_classes:$CONNECTOR_JAR" JoinBooleanMetadataProbe
 
 The same `DB_URL`, `DB_USER`, and `DB_PASSWORD` overrides apply. This probe
 creates a uniquely named database and drops only that database on exit.
+
+## MARK JOIN predicate results
+
+`MarkBooleanMetadataProbe.java` covers `IN (SELECT ...)` and `= ANY (SELECT ...)`,
+including DISTINCT, stored BOOLEAN siblings in either order, derived/CTE
+projections, multiple markers, value-preserving windows, and an enclosing JOIN.
+Controls include literal IN, NOT IN, EXISTS, IS NULL, and native BOOLEAN. It
+checks prepare/execute metadata, actual Java value classes and exact row
+multisets, including NULL results. The RHS is tested without NULL, with NULL,
+and empty: 16 SQL shapes × 3 RHS states × 3 execution modes = 144 cases.
+
+Use the same Connector/J 8.4.0 and connection overrides as above:
+
+```sh
+probe_classes=$(mktemp -d "${TMPDIR:-/tmp}/mark-boolean-jdbc.XXXXXX")
+javac -cp "$CONNECTOR_JAR" -d "$probe_classes" \
+  test/manual/issue30191/MarkBooleanMetadataProbe.java
+java -cp "$probe_classes:$CONNECTOR_JAR" MarkBooleanMetadataProbe
+```
+
+Server-prepared fallback is disabled and the implementation class is checked.
+The probe creates a uniquely named database and drops only that database.

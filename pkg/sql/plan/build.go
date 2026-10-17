@@ -18,6 +18,7 @@ import (
 	"context"
 	"reflect"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 	"time"
 
@@ -1096,6 +1097,9 @@ func resultColumnIndexSearchScoreAtNode(
 	projectedRef := ref
 	if node.NodeType == plan.Node_JOIN {
 		route := resultColumnRouteAtJoin(query, node, ref, preferLocal)
+		if route.computed {
+			return false
+		}
 		projected, projectedRef = route.projected, route.ref
 		if route.childIdx >= 0 {
 			if route.childExpr != nil && route.childExpr.GetCol() == nil {
@@ -1190,7 +1194,7 @@ func resultColumnExpressionIsComputedAtNode(
 		// same ordinal in both children: a predicate on one side must not widen
 		// a stored BOOLEAN on the other side after DISTINCT removes key origin.
 		route := resultColumnRouteAtJoin(query, node, ref, false)
-		if route.projected != nil && route.projected.GetCol() == nil {
+		if route.computed {
 			return true
 		}
 		if route.childIdx < 0 {
@@ -1586,8 +1590,7 @@ func findResultColumnSourceAtJoin(
 	}
 
 	route := resultColumnRouteAtJoin(query, node, ref, preferLocal)
-	if route.projected != nil && route.projected.GetCol() == nil ||
-		route.childExpr != nil && route.childExpr.GetCol() == nil {
+	if route.computed || route.childExpr != nil && route.childExpr.GetCol() == nil {
 		return nil
 	}
 	projectedRef, childIdx := route.ref, route.childIdx
@@ -1632,6 +1635,8 @@ type resultColumnJoinRoute struct {
 	ref       *plan.ColRef
 	childIdx  int
 	childExpr *plan.Expr
+	// computed belongs to the JOIN itself, rather than to a forwarded input.
+	computed bool
 }
 
 // resultColumnRouteAtJoin owns the JOIN projection contract for origin/key,
@@ -1649,14 +1654,27 @@ func resultColumnRouteAtJoin(query *plan.Query, node *plan.Node, ref *plan.ColRe
 		route.projected = node.ProjectList[ref.ColPos]
 	}
 	if route.projected != nil {
-		if col := route.projected.GetCol(); col != nil {
-			route.ref = col
-			if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
-				route.childIdx = int(col.RelPos)
-				route.childExpr = resultColumnJoinChildProjection(query, node, route.childIdx, col.ColPos)
-				if childRef := route.childExpr.GetCol(); childRef != nil {
-					route.ref = childRef
-				}
+		route.ref = route.projected.GetCol()
+		if route.ref == nil {
+			route.computed = true
+			return route
+		}
+	}
+	// insertMarkJoin owns one boolean marker at (bindingTag,0), remapped by
+	// remapAllColRefs to (-1,0). It has no child source. Check the JOIN's own
+	// reference before following a child: a forwarded AGG grouping slot may
+	// also use (-1,0), but is still a stored value rather than this marker.
+	if node.JoinType == plan.Node_MARK && route.ref.ColPos == 0 &&
+		(route.ref.RelPos == -1 || slices.Contains(node.BindingTags, route.ref.RelPos)) {
+		route.computed = true
+		return route
+	}
+	if route.projected != nil {
+		if col := route.ref; col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+			route.childIdx = int(col.RelPos)
+			route.childExpr = resultColumnJoinChildProjection(query, node, route.childIdx, col.ColPos)
+			if childRef := route.childExpr.GetCol(); childRef != nil {
+				route.ref = childRef
 			}
 		}
 	}
