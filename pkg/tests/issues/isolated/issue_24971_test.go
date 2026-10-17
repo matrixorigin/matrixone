@@ -57,14 +57,35 @@ import (
 //     all rows written, all locks released, and later statements unblocked.
 //
 // Hold-window rationale: on the unfixed protocol the terminal signal is only
-// lost after TWO successive cleanup timeouts (spool-enqueue ~30s, then
-// direct-signal ~30s, each bounded by process.PipelineSignalSendTimeout).
+// lost after TWO successive cleanup timeouts (spool-enqueue, then
+// direct-signal, each bounded by process.PipelineSignalSendTimeout).
 // Releasing the blocker earlier than that is just the already-green early
-// control. The delayed sub-case therefore holds the backpressure for
-// 2*PipelineSignalSendTimeout plus margin, so a regression back to the old
-// protocol would already have lost the End signal before the lock is
-// released - and this test would fail with B never finishing.
+// control. Instead of spending two 30s timeouts per successful run, this
+// test scopes the timeout to a small controlled value before the cluster
+// starts (same pattern as the connector/edge tests that scope it to 10ms)
+// and restores it after the cluster shuts down. The override is inert on
+// the current protocol (production no longer reads the variable), but if a
+// regression reinstates the old read-it-and-drop-it cleanup path, the
+// scoped value makes the End loss happen inside the test's hold window -
+// so the guard fails fast via B never finishing instead of waiting 60+s.
+// Fail-before/pass-after was verified with this exact control on the
+// pre-fix base (see the PR discussion).
+
+// issue24971ControlledSendTimeout bounds each of the two cleanup sends the
+// regression window must cover. It is set before the cluster starts and
+// restored via t.Cleanup registered BEFORE the cluster's own cleanup, so
+// restoration happens after cluster shutdown (cleanups run LIFO).
+const issue24971ControlledSendTimeout = 2 * time.Second
+
+// Fixture notes (observed on darwin/arm64): 16,384 rows is the working
+// cardinality verified to overflow the plan's sink/merge buffering while B
+// waits on the lock; the full test costs ~11s normal and ~14s under -race,
+// dominated by the 6s hold window.
 func TestIssue24971LockWaitBackpressureRecovery(t *testing.T) {
+	oldTimeout := process.PipelineSignalSendTimeout
+	process.PipelineSignalSendTimeout = issue24971ControlledSendTimeout
+	t.Cleanup(func() { process.PipelineSignalSendTimeout = oldTimeout })
+
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(1),
 		embed.WithPreStart(func(service embed.ServiceOperator) {
@@ -120,11 +141,12 @@ func TestIssue24971LockWaitBackpressureRecovery(t *testing.T) {
 		"select w.id, w.v from issue24971.file_working w join seeds s on w.id % 2 = s.k"
 	issue24971RequirePlanShape(t, ctx, admin, query)
 
-	// The delayed window is aligned with the unfixed protocol's worst case:
-	// the End signal is lost only after two successive cleanup timeouts of
-	// process.PipelineSignalSendTimeout each. Margin covers scheduling slack.
+	// The delayed window is aligned with the unfixed protocol's worst case
+	// under the controlled timeout: the End signal is lost only after two
+	// successive cleanup timeouts of the scoped value each. Margin covers
+	// scheduling slack. Keep this in sync with the scoped constant above.
 	ctrlWindow := time.Duration(0)
-	delayedWindow := 2*process.PipelineSignalSendTimeout + 10*time.Second
+	delayedWindow := 2*issue24971ControlledSendTimeout + 2*time.Second
 	for _, holdWindow := range []time.Duration{ctrlWindow, delayedWindow} {
 		name := "release_immediately"
 		if holdWindow > 0 {
