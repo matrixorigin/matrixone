@@ -611,6 +611,10 @@ stage_fence(){
   hdr "阶段 fence: STONITH ($FENCE_SCENARIO)"
   [ -n "$FENCE_SCENARIO" ] || die "缺少 --fence-scenario"
   [ "$BOOTSTRAP" = 1 ] || { info "非引导节点：跳过 fencing 创建"; return 0; }
+  # 幂等：重跑 fence 阶段时先删除既有设备，否则 create 会报 already exists
+  runq "pcs stonith delete fence_$SELF 2>/dev/null || true"
+  runq "pcs stonith delete fence_$PEER 2>/dev/null || true"
+  runq "pcs stonith delete fence_${DRBD_RESOURCE} 2>/dev/null || true"
   local agent; agent="$(fence_agent_for)"; local ex; ex="$(extra_params)"
   local addrkey="${FENCE_ADDR_PARAM}"
   if [ -z "$addrkey" ]; then
@@ -666,6 +670,12 @@ SBD"
 stage_resources(){
   hdr "阶段 resources: DRBD/FS/MatrixOne 资源"
   [ "$BOOTSTRAP" = 1 ] || { info "非引导节点：跳过资源创建"; return 0; }
+  # 幂等：重跑 resources 阶段时先清掉同名资源，否则 create 会报 already exists
+  runq "pcs resource delete p_mo 2>/dev/null || true"
+  runq "pcs resource delete p_vip 2>/dev/null || true"
+  runq "pcs resource delete p_fs 2>/dev/null || true"
+  runq "pcs resource delete p_drbd-clone 2>/dev/null || true"
+  runq "pcs resource delete p_drbd 2>/dev/null || true"
   runq "pcs resource create p_drbd ocf:linbit:drbd drbd_resource=$DRBD_RESOURCE op monitor interval=20s role=Promoted timeout=30s op monitor interval=30s role=Unpromoted timeout=30s"
   runq "pcs resource promotable p_drbd"
   # linbit drbd RA 要求显式 clone-max<=2，并需要 clone 通知
