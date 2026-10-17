@@ -735,7 +735,7 @@ func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResul
 
 // Capture before publication: cleanup must never change an already owned result.
 func newScopeRunResultForContext(err error, pipelineCtx, queryCtx context.Context) scopeRunResult {
-	err, _ = normalizeScopeRunError(err, pipelineCtx, queryCtx)
+	err, _ = process.NormalizePipelineRunError(err, pipelineCtx, queryCtx)
 	return scopeRunResult{err: err}
 }
 
@@ -748,78 +748,6 @@ func scopeRunQueryContext(proc *process.Process) context.Context {
 		return queryCtx
 	}
 	return proc.GetTopContext()
-}
-
-func isScopeCancellationError(err error) bool {
-	return process.IsPipelineCancellationError(err)
-}
-
-// isScopeCancellationFrom reports whether every leaf in err can be attributed
-// to the same canceled context. A joined error is attributable only as a whole;
-// one matching cancellation leaf must not hide an independent deadline leaf.
-func isScopeCancellationFrom(err error, contextErr error) bool {
-	if err == nil || contextErr == nil || process.IsPipelineFailure(err) {
-		return false
-	}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		children := joined.Unwrap()
-		if len(children) == 0 {
-			return false
-		}
-		for _, child := range children {
-			if !isScopeCancellationFrom(child, contextErr) {
-				return false
-			}
-		}
-		return true
-	}
-	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		if child := wrapped.Unwrap(); child != nil {
-			return isScopeCancellationFrom(child, contextErr)
-		}
-	}
-	return errors.Is(err, contextErr) ||
-		(errors.Is(contextErr, context.Canceled) && errors.Is(err, process.ErrPipelineStopped))
-}
-
-// normalizeScopeRunError distinguishes a substantive execution failure from
-// cancellation fallout.  A child pipeline canceled by a successfully finished
-// consumer is secondary and may be ignored, while a real error carried as the
-// pipeline cancel cause must survive.  Query-level cancellation remains owned
-// by the query context and is reported by Compile.Run.
-func normalizeScopeRunError(
-	err error,
-	pipelineCtx context.Context,
-	queryCtx context.Context,
-) (error, bool) {
-	if err == nil {
-		return nil, false
-	}
-	if !isScopeCancellationError(err) {
-		return process.MarkPipelineFailure(err), false
-	}
-	if queryCtx != nil && queryCtx.Err() != nil && isScopeCancellationFrom(err, queryCtx.Err()) {
-		if errors.Is(queryCtx.Err(), context.DeadlineExceeded) {
-			return process.MarkPipelineFailure(queryCtx.Err()), true
-		}
-		if cause := context.Cause(queryCtx); cause != nil {
-			return process.MarkPipelineFailure(cause), true
-		}
-		return process.MarkPipelineFailure(queryCtx.Err()), true
-	}
-	if pipelineCtx == nil || pipelineCtx.Err() == nil || !isScopeCancellationFrom(err, pipelineCtx.Err()) {
-		return process.MarkPipelineFailure(err), false
-	}
-	cause := context.Cause(pipelineCtx)
-	if cause == process.ErrPipelineStopped && queryCtx != nil {
-		// A first-wins consumer stop can outlive its query's deadline. It is
-		// successful only while that query remains live.
-		return process.MarkPipelineFailure(queryCtx.Err()), true
-	}
-	if cause != nil {
-		return process.MarkPipelineFailure(cause), true
-	}
-	return process.MarkPipelineFailure(err), false
 }
 
 // preferPrimaryScopeResult arbitrates frozen results at every scope boundary.

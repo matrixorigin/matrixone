@@ -646,6 +646,7 @@ func TestDistinctSpillInternalIOFailureBoundaries(t *testing.T) {
 	_, _, _, _, _, err = controller.readRecord(
 		bytes.NewReader(validRecord[:16+recordBodyLength]), groups)
 	require.ErrorIs(t, err, io.EOF)
+	controller.record.Free()
 	controller.record = &distinctResizeErrorBuffer{err: sentinel}
 	_, _, _, _, _, err = controller.readRecord(bytes.NewReader(validRecord), groups)
 	require.ErrorIs(t, err, sentinel)
@@ -667,6 +668,7 @@ func TestDistinctSpillInternalIOFailureBoundaries(t *testing.T) {
 	_, _, _, _, err = controller.readContribution(
 		bytes.NewReader(validContribution[:16+contributionBodyLength]), groups)
 	require.ErrorIs(t, err, io.EOF)
+	controller.record.Free()
 	controller.record = &distinctResizeErrorBuffer{err: sentinel}
 	_, _, _, _, err = controller.readContribution(
 		bytes.NewReader(validContribution), groups)
@@ -718,6 +720,7 @@ func TestDistinctSpillInternalIOFailureBoundaries(t *testing.T) {
 	require.Error(t, controller.mergeCommittedWave(proc, spillfs, closedWave))
 	copySource := distinctTestFile(t, []byte("copy"))
 	copyTarget := distinctTestFile(t, nil)
+	require.NoError(t, controller.root[0].free())
 	controller.root[0] = &spillBucket{
 		file: copyTarget, writer: &distinctFailNthWriter{failAt: 1},
 	}
@@ -795,6 +798,7 @@ func TestDistinctSpillInternalIOFailureBoundaries(t *testing.T) {
 	require.NoError(t, err)
 	_, err = repartitionWrite.Seek(0, io.SeekStart)
 	require.NoError(t, err)
+	controller.record.Free()
 	controller.record = &distinctFailNthBuffer{failAt: 1, err: sentinel}
 	_, _, err = controller.repartition(
 		proc, &spillBucket{file: repartitionWrite, cnt: 1}, groups)
@@ -1642,6 +1646,7 @@ func TestDistinctContributionPathIsPartitionedAndAppliedOnce(t *testing.T) {
 
 func TestIntermediateDistinctSpillEmitsExactKeysAcrossWorkers(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	var generation *process.ExecutionResourceGeneration
 	aggs := []aggexec.AggFuncExecExpression{countDistinctAgg(0)}
 	buildPartial := func(values []int32) []*batch.Batch {
 		input := batch.NewWithSize(1)
@@ -1652,7 +1657,8 @@ func TestIntermediateDistinctSpillEmitsExactKeysAcrossWorkers(t *testing.T) {
 		partial.NeedEval = false
 		partial.SpillMem = 64 << 20
 		partial.AppendChild(child)
-		allocation := installGroupTestAllocation(t, partial, proc, 64<<20)
+		allocation := installGroupTestAllocation(t, partial, proc, 64<<20, generation)
+		generation = allocation.generation
 		require.NoError(t, partial.Prepare(proc))
 		partial.ctr.distinctDrainKeysForUT = 2
 
@@ -1681,7 +1687,7 @@ func TestIntermediateDistinctSpillEmitsExactKeysAcrossWorkers(t *testing.T) {
 	child := colexec.NewMockOperator().WithBatchs(partials)
 	merge := newMergeGroupOp(aggs)
 	merge.AppendChild(child)
-	allocation := installGroupTestAllocation(t, merge, proc, 64<<20)
+	allocation := installGroupTestAllocation(t, merge, proc, 64<<20, generation)
 	require.NoError(t, merge.Prepare(proc))
 	// Drain every incoming exact-key leaf so the shared key reaches the spill
 	// controller from both workers. With a larger threshold, the resident
@@ -2267,6 +2273,7 @@ func BenchmarkExactCountDistinctSpill(b *testing.B) {
 			}
 			b.ReportAllocs()
 			b.SetBytes(rows * 8)
+			var generation *process.ExecutionResourceGeneration
 			for b.Loop() {
 				b.StopTimer()
 				input := batch.NewWithSize(2)
@@ -2281,7 +2288,8 @@ func BenchmarkExactCountDistinctSpill(b *testing.B) {
 				g.SpillMem = test.spillMem
 				g.AppendChild(colexec.NewMockOperator().WithBatchs(
 					[]*batch.Batch{input}))
-				allocation := installGroupTestAllocation(b, g, proc, 64<<20)
+				allocation := installGroupTestAllocation(b, g, proc, 64<<20, generation)
+				generation = allocation.generation
 				b.StartTimer()
 
 				if err := g.Prepare(proc); err != nil {

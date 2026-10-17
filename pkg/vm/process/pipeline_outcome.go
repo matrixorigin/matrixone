@@ -133,3 +133,71 @@ func unwrapPipelineFailure(err error) (error, bool) {
 	}
 	return err, false
 }
+
+// isPipelineCancellationFrom reports whether every leaf in err can be attributed
+// to the same canceled context. A joined error is attributable only as a whole;
+// one matching cancellation leaf must not hide an independent deadline leaf.
+func isPipelineCancellationFrom(err error, contextErr error) bool {
+	if err == nil || contextErr == nil || IsPipelineFailure(err) {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isPipelineCancellationFrom(child, contextErr) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isPipelineCancellationFrom(child, contextErr)
+		}
+	}
+	return errors.Is(err, contextErr) ||
+		(errors.Is(contextErr, context.Canceled) && errors.Is(err, ErrPipelineStopped))
+}
+
+// NormalizePipelineRunError distinguishes a substantive execution failure from
+// cancellation fallout.  A child pipeline canceled by a successfully finished
+// consumer is secondary and may be ignored, while a real error carried as the
+// pipeline cancel cause must survive.  Query-level cancellation remains owned
+// by the query context and is reported by Compile.Run.
+func NormalizePipelineRunError(
+	err error,
+	pipelineCtx context.Context,
+	queryCtx context.Context,
+) (error, bool) {
+	if err == nil {
+		return nil, false
+	}
+	if !IsPipelineCancellationError(err) {
+		return MarkPipelineFailure(err), false
+	}
+	if queryCtx != nil && queryCtx.Err() != nil && isPipelineCancellationFrom(err, queryCtx.Err()) {
+		if errors.Is(queryCtx.Err(), context.DeadlineExceeded) {
+			return MarkPipelineFailure(queryCtx.Err()), true
+		}
+		if cause := context.Cause(queryCtx); cause != nil {
+			return MarkPipelineFailure(cause), true
+		}
+		return MarkPipelineFailure(queryCtx.Err()), true
+	}
+	if pipelineCtx == nil || pipelineCtx.Err() == nil || !isPipelineCancellationFrom(err, pipelineCtx.Err()) {
+		return MarkPipelineFailure(err), false
+	}
+	cause := context.Cause(pipelineCtx)
+	if cause == ErrPipelineStopped && queryCtx != nil {
+		// A first-wins consumer stop can outlive its query's deadline. It is
+		// successful only while that query remains live.
+		return MarkPipelineFailure(queryCtx.Err()), true
+	}
+	if cause != nil {
+		return MarkPipelineFailure(cause), true
+	}
+	return MarkPipelineFailure(err), false
+}
