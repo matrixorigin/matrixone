@@ -786,6 +786,8 @@ var predefinedFunids = map[int]int{
 	ONNX_RUN:                       556,
 	APPROX_PERCENTILE:              557,
 	MO_IS_LEGACY_TEMPORARY_TABLE:   558,
+	MO_VIEW_DEFINITION:             601,
+	MO_VIEW_CHECK_OPTION:           602,
 	MAX_BY:                         559,
 	MAX_BY_NON_NULL:                560,
 	CHECK_CONSTRAINT_ASSERT:        561,
@@ -830,7 +832,7 @@ var predefinedFunids = map[int]int{
 	TO_CALENDAR_INTERVAL:        598,
 	CHECK_ASYNC_DATALINK_SOURCE: 599,
 	INTERNAL_TABLE_COLLATION:    600,
-	FUNCTION_END_NUMBER:         601,
+	FUNCTION_END_NUMBER:         603,
 }
 
 func Test_funids(t *testing.T) {

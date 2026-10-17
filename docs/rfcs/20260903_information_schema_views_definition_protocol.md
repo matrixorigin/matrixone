@@ -1,0 +1,466 @@
+- Status: in progress — independently accepted design; implementation under review
+- Start Date: 2026-09-03
+- Authors: MatrixOne maintainers
+- Implementation PR: https://github.com/matrixorigin/matrixone/pull/27716
+- Issue for this RFC: https://github.com/matrixorigin/matrixone/issues/27655
+
+# Parser-derived `information_schema.VIEWS` definitions
+
+## Independent design assessment and revision
+
+[Independent review 5495923812](https://github.com/matrixorigin/matrixone/pull/27716#pullrequestreview-5495923812)
+assessed this RFC at implementation revision
+`5db81447b4afffea9a3a1cbfec528fb1cca901d1` on 2026-10-12. Its decision was
+REQUEST_CHANGES for the function IDs newly occupied by official main; it found
+the ownership model and architectural tradeoffs otherwise acceptable. The
+accepted decisions include CREATE/ALTER ownership of frozen metadata,
+side-effect-free parser fallback, transaction-owned bounded reconciliation,
+the historical raw-wildcard limitation, separate parsing for both legacy
+metadata columns, serial maintenance ordering, and forward-only recovery after
+the monotonic protocol floor.
+
+Revision `3ba7fee3155d332f94ddedb83a9883faa5e7d5ab` reconciles the allocation with
+official main `fa7cc1d9b38e3324572a4efc5617033522de0cbf`: FORMAT_BYTES and
+FORMAT_PICO_TIME retain 596/597, VIEWS uses 598/599, and MORPC remains 112 above
+main's 111. Registry, shared raw-ID detection, FORMAT negative controls, and
+the persisted/Prepare/send/receive tests passed together on this combined tree.
+The remaining non-blocking duplicate persisted-expression walk is removed by
+consuming the existing `ViewMetadataFunctions` result; the persisted marker and
+read/authoring admission remain separate consumers of that shared detection.
+
+[Independent review 5496922722](https://github.com/matrixorigin/matrixone/pull/27716#pullrequestreview-5496922722)
+records a distinct design **PASS** for the corrected revision
+`a766542fb6083e3198e0f7bc5eece33fa20193a6` on 2026-10-12. It confirms the
+function allocation and shared persisted-feature detection, accepts the
+documented tradeoffs above, and reports no additional actionable code defect.
+Its remaining requirement is to record that acceptance and advance this RFC
+to the accepted `in progress` state. This status follows that independent
+decision; implementation approval remains a separate GitHub review state.
+
+## Summary
+
+`information_schema.VIEWS.VIEW_DEFINITION` must expose the defining SELECT,
+not the original CREATE statement. New views persist a parser-derived definition
+and legacy rows are read through parser-aware metadata functions. The functions
+are new distributed plan functions (IDs 601 and 602), so the catalog contract is fenced by MORPC
+v119.
+
+## Problem and invariant
+
+Schema-diff and migration clients replay `VIEW_DEFINITION`. A full CREATE
+statement is not a standalone SELECT and falsely marks aggregate views as
+updatable. Current rows, and legacy rows that have already acquired the additive
+metadata, return their parser-derived frozen SELECT. A legacy row that contains
+only the historical `Stmt` is parsed into a defining SELECT, but a raw
+`SELECT *` cannot be expanded to its creation-time column list because that
+snapshot was never persisted. Such a row therefore preserves the stored
+wildcard expression instead of claiming a historical freeze. Malformed catalog
+rows may return NULL. No CN that cannot resolve either function ID can receive a
+pipeline or catalog view that references it.
+
+## Design
+
+The CREATE/ALTER owner derives `ViewData.Definition` from the stabilized view
+AST, after wildcard expansion and separately persists `CheckOption`. Explicit
+view column names are exposed through a derived-table column list around that
+frozen SELECT, including UNION output, so replay preserves the view's public
+column names without renaming aliases referenced by the inner `ORDER BY` or
+`HAVING`. The same parser-tree helper is used when regenerating a legacy
+definition and when the metadata function parses a legacy `Stmt`. The catalog
+remains the single owner of that frozen metadata.
+`mo_view_definition(viewdef)` and `mo_view_check_option(viewdef)` return the
+stored fields without writes; for an older row that lacks them, they parse only
+the stored statement using its persisted SQL mode and identifier-case settings.
+This bounded, side-effect-free fallback avoids a second SQL regexp lexer and
+does not depend on background recovery.
+
+When either function identity occurs in a persisted view expression, the
+planner writes `required_protocol_version: 119` into `ViewData`, including when
+the call is nested under another expression. The real view bind/Prepare path
+reapplies that marker. It uses the existing two-floor admission lifecycle:
+HAKeeper publishes the durable read floor during the v119 decoder barrier, while
+the authoring floor remains closed until the all-CN admission and catalog fence
+complete. Therefore an authoring or read floor of 0, v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, or v118 fails
+closed, an all-v119 fenced CN can create the VIEWS definition, and an ordinary view
+without either function remains unmarked.
+
+The fallback cannot infer metadata that is absent from a legacy row. In
+particular, it does not promise to reconstruct the historical expansion of a
+wildcard; the authoritative freeze begins when the additive fields are written
+by CREATE/ALTER or by the bounded regeneration path. Adding a historical column
+snapshot to the legacy catalog format would be a separate compatibility
+migration and is outside this PR.
+
+The post-upgrade reconciliation uses the exact current
+`InformationSchemaViewsDDL` as its idempotence marker. After the common v119 gate
+is available, a bounded page may repair any tenant whose
+`information_schema.VIEWS` is missing or whose definition is not exactly that
+current DDL. This includes the v105 predecessor definition and older
+metadata-view definitions; it does not modify user views, user data, or any
+information-schema object other than `VIEWS`. The broader convergence rule is
+intentional: a tenant can have been created while capability discovery was
+incomplete, can have stopped between a drop and create, or can be carrying an
+older view definition from a prior upgrade. Treating only one literal
+predecessor as repairable would leave those states permanently stale.
+The catalog probe recognizes both `VIEWS` and the default case-folded `views`
+name. It still compares the full persisted CREATE statement exactly; name
+folding must not turn a stale definition into an installed marker. Both the
+upgrade entry and periodic maintenance use this same probe, so a committed
+repair is a no-op on every later pass, regardless of catalog name casing.
+
+The reconciliation transaction owns one account page (32 accounts by default)
+and publishes its process-local account cursor only after commit. A replacement
+failure, cancellation, or mid-page protocol loss rolls back the complete page
+and leaves the durable VIEWS definition and cursor as the retry marker. If an
+account disappears after page enumeration, its account-local objects are
+already gone; the transaction intentionally skips that account and may commit
+the remaining repairs and cursor. This is the only account-disappearance
+exception to page-wide rollback. The periodic upgrade owner retries the same
+page on its next 10-second maintenance tick; a successful empty-page scan wraps
+the cursor so late-created accounts remain discoverable. The final-version pass
+intentionally invokes VIEWS reconciliation before orphan-privilege maintenance
+and returns a visible error when reconciliation fails. Consequently,
+orphan-privilege maintenance is skipped on every failed VIEWS pass, including
+repeated failures; once VIEWS succeeds, that same pass proceeds to orphan
+cleanup. This serial ordering keeps a pass that failed to establish the v119
+public catalog contract from being reported as fully successful, while the
+bounded VIEWS page remains independently rollback-safe.
+
+MORPC v119 is allocated as `MORPCLatestVersion + 1` from official main v118 at
+`b111224b0c624773389b390cd3cf1223126b6ee2`. Main v118 owns transactional
+database defaults and table charset alteration. Main owns v117 collation-aware
+LEAST/GREATEST overloads, v116 SELECT division diagnostics, v115 calendar interval
+normalization, and the earlier independent metadata/result contracts. This
+rebase advances VIEWS from v118 to v119; historical measurements retain their
+original version and revision identities.
+Main's hyperbolic functions retain IDs 591–595, FORMAT_BYTES and
+FORMAT_PICO_TIME retain IDs 596 and 597, and TO_CALENDAR_INTERVAL retains 598.
+Main retains CHECK_ASYNC_DATALINK_SOURCE at ID 599 and
+INTERNAL_TABLE_COLLATION at ID 600. The current main function end marker is 601;
+the two VIEWS function IDs are 601 and 602, and the end marker advances to 603. These IDs are allocated from the rebased official main and are
+distinct from all existing function registrations.
+The capability is specific to these functions and the persisted VIEWS definition.
+A sender probes the selected destination CN as well as its local runtime before
+encoding a pipeline containing either function ID; an unknown or unavailable
+destination capability fails closed. The v4.0.6 VIEWS upgrade waits for common
+v119. New tenant initialization installs the new VIEWS DDL only after the local
+coordinator and every CN in the current inventory have positively confirmed v119;
+a mixed, unknown, RPC-failing, or incomplete capability probe records the
+predecessor VIEWS definition while still committing the final-version tenant
+row. A bounded post-upgrade reconciliation pass later rechecks common v119 and
+reuses the guarded transactional entry to converge missing or stale VIEWS
+definitions to the current contract. Any cluster with a CN below v119, including
+the predecessors v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, and immediate predecessor v118, preserves the predecessor VIEWS
+definition while retaining each existing protocol-specific metadata contract,
+including the independent v100 and v109 COLUMNS contracts. A local v119 CN
+that defers VIEWS uses the VIEWS DDL of the immediate v118 predecessor, preserving native Unicode
+collation metadata. A v118 predecessor is selected only when its local
+authoring fence and every current peer support it; older, unknown, or failed
+probes retain the conservative v109 contract. Bootstrap prerequisites still
+defer the v118 TABLES function until the existing post-admission publication
+phase; ordinary tenant initialization retains admitted v118 TABLES/SCHEMATA
+while VIEWS waits for v119. COLUMNS installation still requires a positive common-v100
+or common-v109 probe according to its selected definition; unknown local runtime versions retain
+the minimum supported catalog contract. Pipeline preparation, remote marshal, and
+remote unmarshal reject a
+pipeline containing either function ID below v119. The receiver check protects
+stale prepared work as well as normal sender dispatch. Before the v119 HAKeeper
+protocol-floor activation is durably committed, a cancelled rollout may stop
+the v119 upgrade, keep or restore `InformationSchemaViewsLegacyDDL`
+transactionally, wait for catalog and in-flight work to converge, and admit
+v118 only after verifying that no v119 maintenance worker can re-install the
+new definition. After the v119 floor is committed, the floor is monotonic and
+v104/v105/v106/v108/v109/v110/v111/v112/v113/v114/v115/v116/v117/v118 binaries must not be admitted: restoring the view text alone cannot
+undo the decoder barrier. The supported recovery is forward recovery with v119-
+compatible log/CN services, or a coordinated restoration of cluster state from
+before the activation barrier; an ordinary in-place downgrade is unsupported.
+Merely draining below-v119 requests is not sufficient because the new persisted
+view text references the functions. The new JSON fields are additive and old
+binaries keep treating them as unknown.
+
+## Alternatives
+
+Keeping raw SQL regexp extraction was rejected because it repeatedly diverged
+from the SQL lexer for comments and quoted strings. Eagerly rewriting every
+legacy row was rejected because the existing recovery lifecycle is deliberately
+inactive and a metadata read must not perform unbounded catalog writes. Allowing
+the DDL before v118 was rejected because an old CN cannot bind the metadata functions.
+
+## Bounds, security, and operations
+
+The compatibility parse is per visible legacy row and is linear in that row's
+stored statement; current rows return their stored definition directly. If both
+legacy metadata columns are requested, the row may be parsed once per function;
+each parse is still bounded by the stored statement and query cardinality. It
+creates no durable work, goroutine, queue, retry, or cache. Existing visibility
+joins remain the authorization boundary; the functions do not broaden the
+selected row set. A mixed-version request fails before dispatch with a stable
+NotSupported error rather than returning wrong metadata.
+
+The sender detects both VIEWS function identities in its existing
+`RequiredRemoteExpressionFeatures` walk. That feature feeds the shared placement,
+local/receiver, and destination gates; it does not add another pipeline traversal.
+Persisted-expression admission consumes the same feature result to record v118,
+without another expression traversal or a separate copy of the function IDs.
+The owner walker skips scalar containers, including `MembershipFilter`,
+`LiteralVec.Data`, and `FoldVal.Data`. Ordinary pipelines therefore add only a
+constant-time feature check and no destination RPC. A pipeline with VIEWS
+functions shares one destination observation with its other expression floors,
+including decimal division, but obtains fresh evidence on each send. An unknown
+capability or a destination rolled back to v115 still rejects the send. Probe
+timeout, cancellation, and response cleanup retain their existing owners; there
+is no capability cache across sends.
+
+## Validation
+
+Focused parser/function tests cover current and legacy definitions, quoted and
+commented inputs, malformed rows, frozen wildcard expansion, the documented
+legacy raw-wildcard boundary, explicit derived-table column lists with inner
+alias preservation, and CHECK OPTION.
+Protocol tests cover rejection at v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, and v118 and acceptance at v119 at
+prepare, sender, and receiver boundaries, including a mixed-version destination
+probe and the all-CN capability fence.
+Generated ViewData tests cover both function IDs, nested detection, the
+authoring/read floor values 0, v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, and v118, and binding the exact generated
+metadata at the immediate predecessor and current protocol.
+Real CREATE VIEW controls using FORMAT_BYTES and FORMAT_PICO_TIME succeed with
+the VIEWS authoring floor closed and persist no protocol marker.
+System-view tests prove mixed, unknown, and RPC-failing CN capability probes
+fall back to the predecessor VIEWS DDL, while an all-v119 inventory uses the
+parser-derived DDL. Tenant initialization keeps the final account version but
+records the predecessor VIEWS definition when capability discovery is
+incomplete. The post-upgrade bounded reconciliation pass rediscovers that
+durable definition marker, retries only after a positive all-CN v119 check, and
+uses the same guarded transactional entry to publish the parser-derived
+definition once it is safe. Upgrade tests prove both the v4.0.7 handler and
+its VIEWS entry require v119. The predecessor-init test proves that the
+restoration target has no function reference before an older CN is admitted;
+the cancellation-after-staging test additionally proves that a cancelled
+transaction preserves the legacy marker and page cursor, and that a later
+generation can retry and publish only after a committed v119 gate.
+
+Maintenance acceptance additionally covers the broader convergence rule: a
+missing VIEWS object and a stale/non-current VIEWS definition are both repair
+candidates, while an exact current definition is an idempotent no-op. The
+retry, mid-page protocol-loss, cancellation, commit-failure-after-restart, and
+late-account tests prove that a failed page publishes neither a partial
+replacement nor its cursor; the persisted predecessor definition remains the
+recovery marker. Account disappearance is deliberately skipped so that other
+accounts in the bounded page can still commit, while replacement and
+transaction failures retain page-wide rollback. The service-level ordering is
+intentionally visible in logs and return status: a failed VIEWS page is retried
+by the periodic owner before the same pass is considered complete, and
+orphan-privilege cleanup is skipped on every failed VIEWS pass rather than used
+to hide that failure. Once VIEWS succeeds, the same pass proceeds to orphan
+cleanup.
+
+### Sender check performance
+
+`BenchmarkViewMetadataSenderProtocol` uses actual protobuf pipeline owners and
+measures the existing shared feature analysis plus local and destination gates.
+Fixture allocation and protobuf marshaling are outside the timed loop. It covers
+ordinary membership-filter, literal-vector, and folded-value byte payloads with
+0, 1 MiB, and 4 MiB of data. This isolates compatibility-check work; it is not a
+SQL throughput or complete `RemoteRun` benchmark.
+
+Measured on 2026-10-11 with Go 1.27.1, Darwin/arm64, Apple M4, the repository CGo
+test wrapper, and the same native artifacts. Each version had one separate
+warm-up invocation followed by three measured rounds (`-benchtime=200ms`);
+warm-up results are excluded below. The pre-fix measurement at
+`7b5db1bce8822469caecd301f9f4b5e57a000874` times the removed
+`validateRemoteViewDefinitionDestinationProtocol(nil, p)` with
+`p = &pipeline.Pipeline{DataSource: &pipeline.Source{MembershipFilter: payload}}`.
+The post-fix measurement includes the shared analysis as well as its sender gates,
+so it conservatively includes work that the sender already performed before this
+fix. Median membership-filter results across the three measured rounds:
+
+| Payload | Pre-fix duplicate VIEWS walks | Shared analysis and sender gates |
+| --- | --- | --- |
+| 0 bytes | 1.047 microseconds/op | 0.238 microseconds/op |
+| 1 MiB | 6.231 milliseconds/op | 0.301 microseconds/op |
+| 4 MiB | 24.962 milliseconds/op | 0.251 microseconds/op |
+
+All post-fix payload variants report 0 B/op and 0 allocs/op; literal-vector and
+folded-value medians are 0.333–0.539 microseconds/op across these sizes. The
+byte-length-dependent traversal is removed. Reproduce the post-fix protocol with
+separate warm-up and measured invocations:
+
+```sh
+.agents/skills/mo-dev/scripts/mo-cgo-test -run '^$' \
+  -bench '^BenchmarkViewMetadataSenderProtocol$' -benchtime=200ms -count=1 \
+  -timeout=120s ./pkg/sql/compile
+.agents/skills/mo-dev/scripts/mo-cgo-test -run '^$' \
+  -bench '^BenchmarkViewMetadataSenderProtocol$' -benchtime=200ms -count=3 \
+  -timeout=120s ./pkg/sql/compile
+```
+
+Revalidated on 2026-10-14 after rebasing onto v112 main
+`1b66ff135c64ef1c642a297105bf599cd3173dee`
+and advancing VIEWS to v113, with the same Go 1.27.1/Darwin/arm64/Apple M4
+environment and separate one-round warm-up plus three measured rounds.
+Membership-filter medians for 0, 1 MiB, and 4 MiB were respectively 201.5,
+201.6, and 196.7 ns/op; literal-vector and folded-value medians ranged from
+335.3 to 359.6 ns/op. All nine measured variants still reported 0 B/op and
+0 allocs/op. Warm-up samples and first-build time are excluded.
+
+Revalidated again on 2026-10-15 against v113 main
+`8c8f829f9d3e9576d3b7371333e0eb1147a008e4` with VIEWS at v114, using the same environment and separate one-round warm-up plus
+three measured rounds. Membership-filter medians for 0, 1 MiB, and 4 MiB were
+226.9, 229.2, and 240.8 ns/op; literal-vector and folded-value medians ranged
+from 412.7 to 434.9 ns/op. All nine measured variants reported 0 B/op and
+0 allocs/op; warm-up samples and first-build time are excluded.
+
+Revalidated after rebasing onto v114 main
+`493d8b8181b7d74bed91e360874a3dd35223f276` on 2026-10-15, with VIEWS at v115,
+using the same Go/platform and separate one-round warm-up plus three measured
+rounds. Membership-filter medians for 0, 1 MiB, and 4 MiB were respectively
+863.6, 654.3, and 456.6 ns/op; literal-vector and folded-value medians ranged
+from 711.3 to 1201.0 ns/op. All nine variants reported 0 B/op and 0 allocs/op
+in every measured round. Warm-up samples and first-build time are excluded.
+Round-to-round latency varied, so these samples establish the post-rebase cost
+shape rather than a controlled absolute-latency comparison with earlier sessions.
+
+Revalidated on 2026-10-16 after rebasing onto v115 main
+`99f52528308289e08ab6f07f87b0a54719b877a3`, with VIEWS at v116 and function
+IDs 599/600. The same Go/platform and native artifacts were used for one separate
+warm-up invocation followed by three measured rounds. Membership-filter medians
+for 0, 1 MiB, and 4 MiB were 577.2, 424.2, and 321.7 ns/op;
+literal-vector and folded-value medians ranged from 441.6 to 489.7 ns/op.
+All nine variants reported 0 B/op and 0 allocs/op in each measured round.
+Warm-up samples and first-build time are excluded. These are post-rebase cost
+samples, not a controlled absolute-latency comparison with earlier sessions.
+
+Sender regressions assert no probe for ordinary scalar payloads, both registry
+identities alone and alongside decimal-division, signed-date-result, DECIMAL statistical-result, or calendar-interval
+normalization floors, one released response
+per send, unknown-capability rejection, and renewed rejection after a successful
+v118 send followed by destination rollback. Placement tests additionally verify
+fallback with a v117 worker and remote placement with all-v118 workers. Existing
+prepare/receive predecessor tests and the complete plan, compile, and planner
+package tests pass. The metadata result/catalog contract and BVT inputs remain
+unchanged by this compatibility-check optimization.
+
+## Unresolved questions
+
+None. The independent design PASS for the corrected revision is recorded above,
+and the RFC is accepted and in progress. Implementation approval remains a
+separate GitHub review state.
+
+Revalidated on 2026-10-16 after rebasing onto v116 main
+`76deafc8062f9a7e33a31a4df858ebcdb9477cb5`, with VIEWS at v117 and function
+IDs 599/600 unchanged. The actual sender benchmark ran one separate warm-up
+invocation (`-count=1`) followed by three measured rounds (`-count=3`), using
+Go 1.27.1 on Darwin/arm64 Apple M4, the CGo wrapper, `-p=2`, and
+`-benchtime=200ms`. All nine payload variants (27 measured samples) reported
+0 B/op and 0 allocs/op. Median ns/op for 0/1 MiB/4 MiB were:
+
+- `membership`: 321.1/343.9/388.1.
+- `literal_vec`: 638.5/659.4/649.7.
+- `fold`: 672.8/695.8/684.9.
+
+Compilation and warm-up are excluded from these measured samples. Other host
+work was concurrent, so these values are not a controlled absolute latency
+comparison or a SQL throughput claim. The mixed sender regression also binds
+SELECT scalar division alongside each VIEWS identity: division diagnostics keep
+the main-owned v116 execution-only floor, VIEWS requires v117 for execution and
+persistence, and a v117 success followed by a v116 destination rollback is
+rejected with exactly one capability probe and one released response per send.
+
+The final base refresh to `b24d1b311555e0b6f3d56eb37f9a2e9617e9a5b7` adds temporal
+window interval parsing and parameter handling without changing MORPC allocation,
+function IDs, or the sender's feature walker/gates. Sender benchmark evidence
+above is reused for those unchanged inputs; planner/compile and public SQL
+validation are refreshed for the window execution and parameter dependencies.
+
+Revalidated on 2026-10-16 after rebasing onto v117 main
+`7c61f67e5dc46b0b8e591fe957219308b078bfa4`, with VIEWS at v118 and IDs
+599/600 unchanged. One separate sender benchmark warm-up (`-count=1`) preceded
+three measured rounds (`-count=3`), using Go 1.27.1 on Darwin/arm64 Apple M4,
+the CGo CPU wrapper, `-p=2`, and `-benchtime=200ms`. All nine payload variants
+(27 measured samples) reported 0 B/op and 0 allocs/op. Median ns/op for
+0/1 MiB/4 MiB were:
+
+- `membership`: 230.7/325.3/472.4.
+- `literal_vec`: 1379.0/1057.0/1153.0.
+- `fold`: 1121.0/1324.0/905.9.
+
+Compilation and warm-up are excluded; shared-host activity prevents a controlled
+absolute latency comparison or SQL throughput claim. The existing sender table
+also binds native collation-aware LEAST overload 4 beside each VIEWS identity:
+the main-owned collation floor stays v117, VIEWS execution/persistence requires
+v118, and success followed by same-endpoint rollback to v117 is rejected with
+one probe and one released response per send. Legacy metadata consumer tests
+replay the actual exported COLLATE SELECT under binary and native Unicode
+collations, asserting opposite comparison results in two rounds on the same CN.
+Legacy general-ci retains its historical byte/PAD behavior and is not used as
+the native case-folding oracle.
+
+The final base refresh to `b3d6b21fe9d260c91e1777529a48a9d93061af33` adds session/
+handshake collation admission without changing MORPC v117, the existing
+expression-collation resolver, protocol feature walker/gates, registry IDs, or
+benchmark inputs. All 127 rebased patches remain identical. Core, parser,
+protocol, benchmark, and static evidence is reused for those unchanged inputs;
+the two public SQL roots are refreshed to exercise the updated handshake path.
+
+A subsequent pre-push refresh to `5f9a8c313813d7e1f89c39c5e78f182fa8ea4551` adds
+schema-qualified ALTER VIEW targeting and INSERT VALUES subquery admission,
+without changing MORPC allocation or the sender feature/probe contract. All 127
+patches remain identical. Planner/compile owning-package tests and the two public
+SQL roots are refreshed for these binder/DDL dependencies; parser/function,
+maintenance, benchmark, and static evidence retains its unchanged semantic inputs.
+
+The last base refresh to `14a8d854b0f9346065ff8432eb979e35f32f50d8` only
+formats sequence functions in EXPLAIN group keys. All 127 PR patches remain
+identical; the EXPLAIN package normal suite is refreshed. Protocol allocation,
+metadata execution, parser, binder, and sender benchmark inputs are unchanged,
+so the preceding validation results remain applicable.
+
+The 2026-10-17 base refresh keeps MORPC v117 and VIEWS v118, while main
+allocates ID 599 to the asynchronous datalink admission function. VIEWS moves
+to IDs 600/601. The shared protobuf identity table rejects 599 as a VIEWS
+capability and recognizes both new identities; function registration, persisted
+read/authoring, Prepare, local/remote receivers, and sender placement keep the
+v118 floor, including immediate-predecessor v117 rejection. Historical
+measurements above retain their original function identities and revisions.
+
+At these new IDs, the sender benchmark ran one separate warm-up followed by
+three measured rounds (Go 1.27.1, Darwin/arm64 Apple M4, CGo CPU wrapper,
+`-p=2`, `-benchtime=200ms`). All nine variants and 27 measured samples reported
+0 B/op and 0 allocs/op. This refresh checks the new identities; shared-host
+activity prevents a controlled absolute latency or SQL throughput claim.
+
+
+The subsequent 2026-10-17 refresh rebases onto official main
+`60aa668db26c3e1f3e1d100fac5610a669c841bb`. Main owns MORPC v118 and
+INTERNAL_TABLE_COLLATION ID 600; VIEWS advances to v119 and IDs 601/602.
+Shared feature detection distinguishes the v118 TABLES function from both VIEWS
+functions. Persisted read/authoring, Prepare, sender placement and receiver tests
+include immediate-predecessor v118 rejection. Tenant initialization retains
+v118 TABLES/SCHEMATA when their local fence and peers are ready, while VIEWS
+waits for v119; unknown or failed capability probes keep the conservative
+fallback. System bootstrap preserves the database-default prerequisites even
+with its authoring fence closed and defers the TABLES function to main's
+existing post-admission publication phase.
+
+On the combined tree, the merged SQL grammar was regenerated and compared.
+Normal tests passed in 12 owning/dependency packages, including the new v4.0.15
+upgrade owner; 23 targeted frontend/bootstrap roots and the explicit bootstrap
+and placement boundary controls passed. Both public SQL integration roots
+passed their two rounds on the same CN with teardown checked between rounds.
+The sender benchmark executed one separate warm-up and three measured rounds
+at the new allocation (Go 1.27.1, Darwin/arm64, CGo CPU wrapper, GOMAXPROCS=2,
+`-p=2`, `-benchtime=200ms`): all nine variants and 27 measured samples reported
+0 B/op and 0 allocs/op. Shared-host activity prevents an absolute latency or SQL
+throughput claim. Vet and golangci-lint passed for the 16 affected packages.
+Historical measurements above retain their original inputs and revisions.
+
+
+The final pre-push refresh to official main
+`b111224b0c624773389b390cd3cf1223126b6ee2` keeps MORPC v118 and function
+end marker 601. All 129 PR patches remain identical. Main changes pipeline
+error ownership, catalog refresh-cause classification, and shared test-fixture
+cleanup. The compile normal suite, 34 CN admission roots, and both public SQL
+roots (with their same-CN two-round checks) passed again on this combined tree;
+the integration cleanup deadline control also passed. Other parser, registry,
+persisted metadata, bootstrap, and sender benchmark evidence above is retained
+for its unchanged semantic inputs.

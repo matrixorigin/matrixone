@@ -124,6 +124,41 @@ func TestExpressionProtocolResolvesLegacyAddressOnlyScopes(t *testing.T) {
 	require.Equal(t, client.calls, client.releases)
 }
 
+func TestAllCNsSupportProtocolProbesEveryCN(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	client.version = defines.MORPCVersion86
+
+	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, 1, client.calls)
+
+	client.version = defines.MORPCVersion85
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.False(t, supported)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.False(t, supported)
+}
+
+func TestAllCNsSupportProtocolWithContextIgnoresCanceledProcessContext(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCVersion86
+	procCtx, cancel := context.WithCancel(c.proc.Ctx)
+	c.proc.Ctx = procCtx
+	cancel()
+
+	supported, err := AllCNsSupportProtocolWithContext(
+		context.Background(), c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, 1, client.calls)
+}
+
 func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -196,6 +231,29 @@ func TestRemoteExpressionPlacementRechecksGenerationAndWorkers(t *testing.T) {
 	place(plan2.ExecTypeAP_MULTICN, 2)
 	client.versions["second:9000"] = defines.MORPCVersion71
 	place(plan2.ExecTypeAP_ONECN, 2)
+	// View metadata joins the same placement floor and live worker checks.
+	for _, id := range []int32{function.MO_VIEW_DEFINITION, function.MO_VIEW_CHECK_OPTION} {
+		qry.Nodes[0].ProjectList = []*planpb.Expr{{Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(id, 0)},
+		}}}}
+		client.versions["worker:9000"] = defines.MORPCVersion119
+		client.versions["second:9000"] = defines.MORPCVersion109
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion113
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion114
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion115
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion116
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion117
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion118
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion119
+		place(plan2.ExecTypeAP_MULTICN, 2)
+	}
 	qry.Nodes[0].ProjectList = []*planpb.Expr{plan2.MakePlan2Int64ConstExprWithType(1)}
 	place(plan2.ExecTypeAP_MULTICN, 0)
 }
