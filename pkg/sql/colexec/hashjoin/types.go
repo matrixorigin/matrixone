@@ -540,7 +540,7 @@ func (ctr *container) freeRightRowsMatched(proc *process.Process) {
 func (ctr *container) cleanBucketBatches(proc *process.Process) {
 	ctr.probeBucketActive = false
 	if ctr.spillEngine != nil {
-		ctr.spillEngine.Cleanup(proc)
+		ctr.spillEngine.Close(proc)
 		ctr.spillEngine = nil
 	}
 }

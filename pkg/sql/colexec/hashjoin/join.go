@@ -559,7 +559,7 @@ func (hashJoin *HashJoin) build(analyzer process.Analyzer, proc *process.Process
 			); err != nil {
 				ctr.mp.Free()
 				ctr.mp = nil
-				engine.Cleanup(proc)
+				engine.Close(proc)
 				ctr.spillEngine = nil
 				return err
 			}
@@ -618,7 +618,9 @@ func (hashJoin *HashJoin) getSpilledInputBatch(proc *process.Process, analyzer p
 				return result, nil
 			}
 			// EOF on probe file.
-			engine.FinishBucket()
+			if err := engine.FinishBucket(); err != nil {
+				return result, err
+			}
 			ctr.probeBucketActive = false
 			if hashJoin.AsofBuildLeft && ctr.asofBuildLeftInitialized {
 				return result, nil // finalize this logical-left build bucket

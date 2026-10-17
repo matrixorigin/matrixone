@@ -301,7 +301,9 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, readErr)
 				}
 				if bat == nil {
-					ctr.spillEngine.FinishBucket()
+					if err := ctr.spillEngine.FinishBucket(); err != nil {
+						return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
+					}
 					ctr.state = Finalize
 					ctr.cleanBuf(proc)
 					continue
@@ -471,7 +473,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 			); err != nil {
 				ctr.mp.Free()
 				ctr.mp = nil
-				engine.Cleanup(proc)
+				engine.Close(proc)
 				ctr.spillEngine = nil
 				return err
 			}
