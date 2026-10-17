@@ -471,12 +471,14 @@ func manifestEntryRecord(entry api.ManifestEntry, fields []partitionField) (map[
 	sequenceNumber := any(entry.SequenceNumber)
 	fileSequenceNumber := any(entry.FileSequence)
 	if entry.Status == api.ManifestEntryAdded {
-		// Iceberg v2 requires both sequence fields to be null for added
-		// entries. The catalog assigns the manifest sequence during commit;
-		// writing the locally predicted number (especially zero) suppresses
-		// that inheritance and can make delete ordering incorrect.
-		sequenceNumber = nil
-		fileSequenceNumber = nil
+		// New files inherit at commit; decoded/resolved old files retain their
+		// explicit data age when copied, including an explicit zero.
+		if !entry.SequenceNumberSet {
+			sequenceNumber = nil
+		}
+		if !entry.FileSequenceSet {
+			fileSequenceNumber = nil
+		}
 	}
 	return map[string]any{
 		"status":               int32(entry.Status),
