@@ -6774,7 +6774,9 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 					"charset(@bound_s), collation(@bound_s), "+
 					"hex(left(coalesce(case when @bound_s is null then null else @bound_s end,NULL),1)), "+
 					"hex(left(if(@bound_s is null,NULL,@bound_s),1)), "+
-					"hex(left(case when @bound_s is null then null else left(@bound_s,1) end,1))")
+					"hex(left(case when @bound_s is null then null else left(@bound_s,1) end,1)), "+
+					"hex(left(nullif(@bound_s,''),1)), "+
+					"hex(left(case when @bound_s is null then null else nullif(@bound_s,'') end,1))")
 				defer stmt.Free()
 				prepared, err := buildPlan(execCtx.reqCtx, ses, ses.txnCompileCtx, stmt)
 				require.NoError(t, err)
@@ -6784,7 +6786,7 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 				t.Helper()
 				q := p.GetQuery()
 				projects := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList
-				require.Len(t, projects, 11)
+				require.Len(t, projects, 13)
 				for i, project := range projects {
 					func() {
 						executor, err := colexec.NewExpressionExecutor(cw.proc, project)
@@ -6793,7 +6795,7 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 						value, err := executor.Eval(cw.proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
 						require.NoError(t, err)
 						isValue := i < 6 || i >= 8
-						require.Equal(t, isNull && isValue, value.GetNulls().Contains(0))
+						require.Equal(t, isNull && isValue, value.GetNulls().Contains(0), "project %d: %s", i, project.String())
 						if isNull && isValue {
 							return
 						}
@@ -6804,7 +6806,7 @@ func TestPreparedUserVariableStringDomainIsBoundPerStatement(t *testing.T) {
 								want = 3
 							}
 							require.Equal(t, want, vector.GetFixedAtNoTypeCheck[int64](value, 0))
-						case 1, 5, 8, 9, 10:
+						case 1, 5, 8, 9, 10, 11, 12:
 							want := "E4BDA0"
 							if binary {
 								want = "E4"

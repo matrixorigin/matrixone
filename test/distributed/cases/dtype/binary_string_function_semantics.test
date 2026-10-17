@@ -154,6 +154,22 @@ select id, hex(sliced), char_length(sliced) from declared_conditional_slice orde
 select data_type, character_maximum_length from information_schema.columns
 where table_schema = database() and table_name = 'declared_conditional_slice' and column_name = 'sliced';
 drop table declared_conditional_slice;
+-- NULLIF forwards its first value domain; its comparison is not a CASE result declaration.
+select id, char_length(nullif(coalesce(txt, bin), '')),
+       hex(left(nullif(coalesce(txt, bin), ''), 1)),
+       hex(reverse(nullif(coalesce(txt, bin), '')))
+from domains order by id;
+select id, char_length(nullif(x, '')), hex(left(nullif(x, ''), 1)),
+       hex(reverse(nullif(x, '')))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+
+-- BIT_COUNT consumes the binary declaration without changing sibling row-domain consumers.
+select id, bit_count(coalesce(txt, bin)) from domains order by id;
+select id, bit_count(x), char_length(x), hex(left(x, 1))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+select id, bit_count(x)
+from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
+
 select id, hex(left(invalid_bytes, 1)), hex(reverse(invalid_bytes)),
        char_length(invalid_bytes), invalid_bytes like '____'
 from domains order by id;
@@ -283,13 +299,12 @@ select hex(binary_left), hex(binary_lower), hex(text_replace),
        char_length(binary_left), char_length(binary_lower), char_length(text_replace)
 from binary_function_ctas;
 
--- Exact binary SUBSTRING overloads must retain a selected text row's domain.
+-- IF owns its binary declaration before LEFT and both SUBSTRING overloads consume bytes.
 select hex(substring(left(if(false, X'ff', '你好'), 2), 2, 1)) as selected_text,
        hex(substring(left(if(false, X'ff', '你好'), 2), 2)) as selected_text_tail,
        hex(substring(left(if(true, X'e4bda0e5a5bd', '你好'), 2), 2, 1)) as selected_binary;
 
--- A derived projection has the same common binary-shaped type, but its text
--- branch must remain visible to the outer slicing metadata contract.
+-- A mergeable projection preserves IF's binary result declaration at the outer consumer.
 with mixed_domain as (
     select if(false, X'ff', '你好') as value
 )

@@ -6257,46 +6257,7 @@ func stringDomainSourceWitness(source *Expr, domains uint8) *Expr {
 			seen: make(map[string]struct{}),
 		}
 		collector.collect(source, make(map[*Expr]struct{}))
-		args := append([]*Expr(nil), collector.args...)
-		if len(args) == 0 {
-			// A static mixed-domain source has no marker to carry. Keep both
-			// choices explicitly instead of manufacturing a one-argument
-			// COALESCE, which is not a valid function shape.
-			text := makePlan2StringConstExprWithType("")
-			text.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
-			args = append(args, text)
-			binary := makePlan2VarBinaryConstExprWithType("")
-			binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
-			args = append(args, binary)
-		} else {
-			if collector.staticDomains&possibleStringDomainText != 0 {
-				text := makePlan2StringConstExprWithType("")
-				text.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
-				args = append(args, text)
-			}
-			if collector.staticDomains&possibleStringDomainBinary != 0 {
-				binary := makePlan2VarBinaryConstExprWithType("")
-				binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
-				args = append(args, binary)
-			}
-		}
-		if len(args) == 1 {
-			return args[0]
-		}
-		witness := &Expr{
-			Typ: source.Typ,
-			Expr: &plan.Expr_F{F: &plan.Function{
-				Func: &plan.ObjectRef{ObjName: "coalesce"},
-				Args: args,
-			}},
-		}
-		if source.GetPreparedNumeric().GetStringDomainSource() != nil {
-			// Preserve an owned declaration alongside runtime domain choices.
-			// Synthetic leaves cannot reconstruct a slice's proven bound, and
-			// an unregistered function's execution type is not such a proof.
-			ensurePreparedNumericMetadata(witness).StringDomainSource = stringDeclarationWitnessArg(source)
-		}
-		return witness
+		return collector.witness(source, domains)
 	}
 	witness := makePlan2StringConstExprWithType("")
 	witness.Typ = stringDomainWitnessType(source, domains)
@@ -6382,20 +6343,13 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		// Input-domain selection and result ownership are different contracts:
 		// LEFT/REVERSE forward their selected row, while e.g. LPAD owns its
 		// result declaration even though it uses character input offsets.
-		source := arg
-		for inner := preparedFieldPrivateCastSource(source, 0); inner != nil; inner = preparedFieldPrivateCastSource(source, 0) {
-			source = inner
-		}
-		declaredResult := false
-		if fn := source.GetF(); fn != nil && isPreparedCommonValueFunction(name) && !isPreparedStringConditional(source) {
-			_, _, declaredResult = preparedStringDomainContract(fn.GetFunc().GetObjName(), len(fn.Args))
-		}
+		declaredResult := isPreparedCommonValueFunction(name) && preparedStringResultOwnsDeclaration(arg)
 		// References alone are not materialization. Conditional results and
 		// actual query-block boundaries, however, consume their declarations.
 		materialized := b.stringSourceHasDeclarationBoundary(arg, nil, nil)
 		declaration := materialized || declaredResult || isPadSpaceComparisonFunction(name)
 		switch name {
-		case "locate", "instr", "like", "ilike", "find_in_set":
+		case "locate", "instr", "like", "ilike", "find_in_set", "bit_count":
 			declaration = true
 		}
 		// A binary-shaped value can still carry a TEXT row override. Do not
@@ -6422,6 +6376,11 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 			target = makeTypeByPlan2Expr(arg)
 			if target.Oid == types.T_binary {
 				target.Oid = types.T_varbinary
+			} else if target.Oid == types.T_varchar && target.Width <= 0 {
+				// A binary-charset VARCHAR transport has no declared capacity.
+				// CAST1 VARCHAR(0) would truncate it to empty, not consume its
+				// row-domain override. Use the unbounded byte representation.
+				target = types.T_blob.ToType()
 			}
 		}
 		converted, err := appendExplicitCastBeforeExpr(b.GetContext(), arg, makePlan2Type(&target))
@@ -6435,6 +6394,18 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		result[i] = converted
 	}
 	return result, nil
+}
+
+func preparedStringResultOwnsDeclaration(source *Expr) bool {
+	for inner := preparedFieldPrivateCastSource(source, 0); inner != nil; inner = preparedFieldPrivateCastSource(source, 0) {
+		source = inner
+	}
+	fn := source.GetF()
+	if fn == nil || isPreparedStringConditional(source) {
+		return false
+	}
+	_, _, owns := preparedStringDomainContract(fn.GetFunc().GetObjName(), len(fn.Args))
+	return owns
 }
 
 func isPreparedStringConditional(expr *Expr) bool {
@@ -6451,6 +6422,13 @@ func (b *baseBinder) stringSourceHasDeclarationBoundary(expr *Expr, scalarScope 
 	}
 	if source := preparedFieldPrivateCastSource(expr, 0); source != nil {
 		return b.stringSourceHasDeclarationBoundary(source, scalarScope, visiting)
+	}
+	if fn := expr.GetF(); fn != nil && fn.GetFunc().GetObjName() == "case" {
+		if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+			// Lowered NULLIF publishes a compact first-result proof, not a CASE
+			// declaration. Its comparison never owns the returned value's domain.
+			return b.stringSourceHasDeclarationBoundary(source, scalarScope, visiting)
+		}
 	}
 	if isPreparedStringConditional(expr) {
 		// A bound P/V value owns its frozen row domain; its binary transport
@@ -6665,6 +6643,40 @@ type stringDomainWitnessCollector struct {
 	staticDomains uint8
 }
 
+// A flat summary retains marker identities and scalar domains, never the value
+// graph. With no markers the caller supplies the conservative fallback domains.
+func (c *stringDomainWitnessCollector) witness(source *Expr, fallback uint8) *Expr {
+	args := append([]*Expr(nil), c.args...)
+	domains := c.staticDomains
+	if len(args) == 0 {
+		domains = fallback
+	}
+	if domains&possibleStringDomainText != 0 {
+		text := makePlan2StringConstExprWithType("")
+		text.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_TEXT
+		args = append(args, text)
+	}
+	if domains&possibleStringDomainBinary != 0 {
+		binary := makePlan2VarBinaryConstExprWithType("")
+		binary.GetLit().LiteralForm = plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+		args = append(args, binary)
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	if len(args) == 1 {
+		return args[0]
+	}
+	witness := &Expr{Typ: source.Typ, Expr: &plan.Expr_F{F: &plan.Function{
+		Func: &plan.ObjectRef{ObjName: "coalesce"}, Args: args,
+	}}}
+	if source.GetPreparedNumeric().GetStringDomainSource() != nil {
+		// Keep the independent local declaration without copying a value graph.
+		ensurePreparedNumericMetadata(witness).StringDomainSource = stringDeclarationWitnessArg(source)
+	}
+	return witness
+}
+
 func (c *stringDomainWitnessCollector) addMarker(expr *Expr) {
 	if expr == nil {
 		return
@@ -6771,6 +6783,12 @@ func (c *stringDomainWitnessCollector) collectResult(expr *Expr, visited map[*Ex
 			c.staticDomains |= possibleStringDomainText
 		}
 		return
+	}
+	if declaration && name == "case" {
+		if source := expr.GetPreparedNumeric().GetStringDomainSource(); source != nil {
+			c.collectResult(source, visited, declaration)
+			return
+		}
 	}
 	if declaration && !isPreparedStringConditional(expr) {
 		if _, _, ownsResult := preparedStringDomainContract(name, len(fn.Args)); ownsResult {
@@ -9218,6 +9236,17 @@ func possibleStringDomainsForExpr(expr *plan.Expr) uint8 {
 	}
 
 	if staticDomains == possibleStringDomainBinary {
+		// An input-independent binary producer (e.g. an opaque tuple encoder)
+		// already owns its representation. Ask the registry with TEXT inputs;
+		// no second function whitelist or representation CAST is necessary.
+		textInputs := make([]types.Type, len(fn.Args))
+		for i := range textInputs {
+			textInputs[i] = types.T_text.ToType()
+		}
+		if resolved, ok := function.GetFunctionByNameWithoutError(name, textInputs); ok &&
+			types.StaticStringDomain(resolved.GetReturnType()) == types.StringDomainBinary {
+			return possibleStringDomainBinary
+		}
 		// An unrecognized binary-returning function may attach row-level text
 		// provenance, so fail closed rather than narrowing its result.
 		return possibleStringDomainText | possibleStringDomainBinary

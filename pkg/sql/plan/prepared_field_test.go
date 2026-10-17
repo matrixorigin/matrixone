@@ -253,6 +253,13 @@ func TestStringDeclarationConsumers(t *testing.T) {
 		argument            int
 		ownsDeclaration     bool
 	}{
+		{"NULLIF forwards selected row", "select reverse(nullif(coalesce(n_name,_binary ''),'')) from nation", "reverse", 0, false},
+		{"NULLIF merged source", "select reverse(x) from (select nullif(coalesce(n_name,_binary ''),'') x from nation) d", "reverse", 0, false},
+		{"CASE is not NULLIF", "select reverse(case when coalesce(n_name,_binary '')='' then null else coalesce(n_name,_binary '') end) from nation", "reverse", 0, true},
+		{"NULLIF retains conditional owner", "select reverse(nullif(if(n_nationkey=1,_binary '',coalesce(n_name,_binary '')),'')) from nation", "reverse", 0, true},
+		{"NULLIF retains allocated owner", "select reverse(nullif(lpad(coalesce(n_name,_binary ''),3,'z'),'')) from nation", "reverse", 0, true},
+		{"BIT_COUNT direct source", "select bit_count(coalesce(n_name,_binary '')) from nation", "bit_count", 0, true},
+		{"BIT_COUNT merged source", "select bit_count(x) from (select coalesce(n_name,_binary '') x from nation) d", "bit_count", 0, true},
 		{"COALESCE over REVERSE", "select coalesce(reverse(coalesce(n_name,_binary '')),'') from nation", "coalesce", 0, false},
 		{"COALESCE over LEFT", "select coalesce(left(coalesce(n_name,_binary ''),1),'') from nation", "coalesce", 0, false},
 		{"COALESCE over TRIM", "select coalesce(trim(coalesce(n_name,_binary '')),'') from nation", "coalesce", 0, false},
@@ -280,6 +287,29 @@ func TestStringDeclarationConsumers(t *testing.T) {
 				arg = source
 			}
 			require.Equal(t, tc.ownsDeclaration, isCastOverload(arg, 1), "the actual consumer owns the conversion, not an arbitrary function result: %s", arg.String())
+		})
+	}
+}
+
+func TestSerializedJoinKeyRetainsPhysicalOwner(t *testing.T) {
+	for _, name := range []string{"serial", "serial_full"} {
+		t.Run(name, func(t *testing.T) {
+			sql := "select p.n_nationkey from nation p join nation b on " + name +
+				"(p.n_nationkey,p.n_regionkey)=" + name + "(b.n_nationkey,b.n_regionkey)"
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+			require.NoError(t, err)
+			comparison := findPlanFunctionExpr(bound, "=")
+			require.NotNil(t, comparison)
+			for _, key := range comparison.GetF().Args {
+				require.NotNil(t, key.GetF())
+				require.Equal(t, name, key.GetF().GetFunc().GetObjName(), "no representation CAST may hide an opaque serialized key")
+				_, hashType := GetHashColumn(key)
+				require.Equal(t, int32(types.T_varchar), hashType)
+				require.Equal(t, types.StringDomainBinary, types.StaticStringDomain(makeTypeByPlan2Expr(key)))
+			}
 		})
 	}
 }
