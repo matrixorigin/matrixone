@@ -1512,8 +1512,8 @@ func appendStringHashSels(
 }
 
 func stringHashToRangeForType(ap *Shuffle, typ types.Type, value []byte, bucketNum uint64) uint64 {
-	if types.IsUnicodeCollation(typ.Charset) {
-		value = types.CollationKeyOrOriginal(typ.Charset, value)
+	if types.HasCollationKey(typ) {
+		value = types.CollationKeyOrOriginal(typ, value)
 	}
 	return stringHashToRange(ap, value, bucketNum)
 }

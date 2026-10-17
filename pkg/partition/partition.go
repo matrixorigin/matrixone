@@ -135,7 +135,7 @@ func bytesPartition(sels []int64, diffs []bool, partitions []int64, vec *vector.
 		var n bool
 		var v []byte
 		typ := *vec.GetType()
-		unicode := types.IsUnicodeCollation(typ.Charset)
+		unicode := types.HasCollationKey(typ)
 
 		vs, area := vector.MustVarlenaRawData(vec)
 		nsp := vec.GetNulls()

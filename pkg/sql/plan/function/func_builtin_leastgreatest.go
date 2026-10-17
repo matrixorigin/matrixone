@@ -80,7 +80,7 @@ func leastGreatestNeedsCollationOverload(typ types.Type) bool {
 	case types.T_char:
 		return true // CHAR comparison now ignores trailing spaces.
 	case types.T_varchar, types.T_text, types.T_blob, types.T_datalink:
-		return types.IsUnicodeCollation(typ.Charset)
+		return types.HasCollationKey(typ)
 	default:
 		return false
 	}

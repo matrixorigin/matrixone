@@ -97,8 +97,8 @@ func (op *opOperatorStrIn) init(left, tuple *vector.Vector) {
 	// charset, so deriving the key type from the list alone silently drops a
 	// native Unicode collation. Keep a Unicode type from either side and prefer
 	// the left operand when both sides already agree on the domain.
-	if left != nil && (types.IsUnicodeCollation(left.GetType().Charset) ||
-		!types.IsUnicodeCollation(op.typ.Charset)) {
+	if left != nil && (types.HasCollationKey(*left.GetType()) ||
+		!types.HasCollationKey(op.typ)) {
 		op.typ = *left.GetType()
 	}
 	op.padSpace = op.typ.Oid == types.T_char || tuple.GetType().Oid == types.T_char
@@ -137,12 +137,12 @@ func (op *opOperatorStrIn) keyBytes(value []byte) []byte {
 	if op.padSpace {
 		value = bytes.TrimRight(value, " ")
 	}
-	if types.IsUnicodeCollation(op.typ.Charset) {
+	if types.HasCollationKey(op.typ) {
 		// IN/NOT IN must use the same tagged comparison domain as equality and
 		// grouping. In particular, an invalid/repertoire-invalid value gets a
 		// distinct marker instead of being inserted as an untagged raw key that
 		// can collide with a valid UCA weight string.
-		value = types.CollationKeyOrOriginal(op.typ.Charset, value)
+		value = types.CollationKeyOrOriginal(op.typ, value)
 	}
 	return value
 }

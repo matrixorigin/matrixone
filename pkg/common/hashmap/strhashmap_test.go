@@ -398,6 +398,34 @@ func TestStrHashMapUnicodeKeysUseOneNonCollidingDomain(t *testing.T) {
 	require.Equal(t, uint64(5), hashMap.GroupCount())
 }
 
+func TestStrHashMapVersionedCollation(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		for _, revision := range []uint8{0, 1} {
+			func() {
+				mp := mpool.MustNewZero()
+				defer func() { require.Zero(t, mp.CurrNB()) }()
+				typ := types.NewWithCharset(types.T_varchar, 16, 0, charset)
+				typ.CollationVersion = revision
+				vec := vector.NewVec(typ)
+				defer vec.Free(mp)
+				require.NoError(t, vector.AppendStringList(vec, []string{"A", "a", "a "}, nil, mp))
+				hashMap, err := NewStrHashMap(false, mp)
+				require.NoError(t, err)
+				defer hashMap.Free()
+				groups, _, err := hashMap.NewIterator().Insert(0, 3, []*vector.Vector{vec})
+				require.NoError(t, err)
+				want := []uint64{1, 2, 3}
+				if revision == 1 && charset == types.CharsetUTF8 {
+					want = []uint64{1, 1, 1}
+				} else if revision == 1 {
+					want = []uint64{1, 2, 2}
+				}
+				require.Equal(t, want, groups)
+			}()
+		}
+	}
+}
+
 func TestStrHashMapCanonicalVarlenaVectorShapes(t *testing.T) {
 	negativeZero := float32(math.Copysign(0, -1))
 	negativeZero64 := math.Copysign(0, -1)

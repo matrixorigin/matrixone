@@ -77,6 +77,12 @@ func TestFrozenKeysMySQLOracle(t *testing.T) {
 					t.Fatal(err)
 				}
 				keys[i] = bytes.Clone(k)
+				if d == UTF8MB4GeneralCI || d == UTF8MB4Bin {
+					size, sizeErr := d.PADKeySize([]byte(v))
+					if sizeErr != nil || size != len(k) {
+						t.Fatalf("sample %d key size: got %d/%v want %d", i, size, sizeErr, len(k))
+					}
+				}
 				if err = d.ValidateKey(k); err != nil {
 					t.Fatal(err)
 				}

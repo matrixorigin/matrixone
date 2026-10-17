@@ -102,7 +102,7 @@ func NewMemPKFilter(
 	// The membership filter selects a separate key column for IVF/fulltext and
 	// remains useful even when the SQL predicate cannot produce a PK fast path.
 	filter.setFilterHint(tableDef, filterHint)
-	if tablePrimaryKeyUsesUnicodeCollation(tableDef) {
+	if tablePrimaryKeyNeedsCollationComparison(tableDef) {
 		// The in-memory primary-key iterator also compares packed original bytes;
 		// do not publish a raw probe for a UCA text key. The independent
 		// membership hint above remains available for index/fulltext readers.

@@ -23,6 +23,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestMySQL8045Oracle(t *testing.T) {
@@ -171,6 +173,23 @@ func TestPADKeyExhaustive(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestPADKeySizeAdmission(t *testing.T) {
+	for _, domain := range []Domain{UTF8MB4Bin, UTF8MB4GeneralCI} {
+		_, err := domain.PADKeySize([]byte{0xff})
+		require.ErrorIs(t, err, ErrUTF8)
+		for _, value := range [][]byte{nil, []byte("a  "), []byte(" a\x00"), []byte(" é 😀 ")} {
+			key, err := domain.Key(nil, value)
+			require.NoError(t, err)
+			size, err := domain.PADKeySize(value)
+			require.NoError(t, err)
+			require.Equal(t, len(key), size)
+			require.Zero(t, testing.AllocsPerRun(10, func() { _, _ = domain.PADKeySize(value) }))
+		}
+	}
+	_, err := Raw.PADKeySize(nil)
+	require.ErrorIs(t, err, ErrDomain)
 }
 
 func TestKeyGoldenAndAdmission(t *testing.T) {

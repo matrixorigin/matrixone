@@ -2065,13 +2065,13 @@ func TestPhysicalSerialUsesUnicodeComparisonKeys(t *testing.T) {
 	require.NoError(t, op.BuiltInPhysicalSerial([]*vector.Vector{input}, physicalResult, proc, 1, nil))
 	tuple, err := types.Unpack(physicalResult.GetResultVector().GetBytesAt(0))
 	require.NoError(t, err)
-	require.Equal(t, []byte(types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b"))), tuple[0])
+	require.Equal(t, types.CollationKeyOrOriginal(unicodeType, []byte("b")), tuple[0])
 
 	keyResult := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 	defer keyResult.Free()
 	require.NoError(t, keyResult.PreExtendAndReset(1))
 	require.NoError(t, BuiltInPhysicalCollationKey([]*vector.Vector{input}, keyResult, proc, 1, nil))
-	require.Equal(t, types.CollationKeyOrOriginal(unicodeType.Charset, []byte("b")), keyResult.GetResultVector().GetBytesAt(0))
+	require.Equal(t, types.CollationKeyOrOriginal(unicodeType, []byte("b")), keyResult.GetResultVector().GetBytesAt(0))
 }
 
 func TestPhysicalSerialRejectsOutOfRepertoireValues(t *testing.T) {
@@ -2082,6 +2082,7 @@ func TestPhysicalSerialRejectsOutOfRepertoireValues(t *testing.T) {
 	input := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"😀"}, nil)
 	defer input.Free(proc.Mp())
 	input.GetType().Charset = types.CharsetUTF8MB3UnicodeCI
+	input.GetType().CollationVersion = types.CollationVersionV1
 
 	result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
 	defer result.Free()
@@ -2090,6 +2091,40 @@ func TestPhysicalSerialRejectsOutOfRepertoireValues(t *testing.T) {
 	defer op.Close()
 	err := op.BuiltInPhysicalSerialFull([]*vector.Vector{input}, result, proc, 1, nil)
 	require.ErrorIs(t, err, collation.ErrRepertoire)
+}
+
+func TestPhysicalSerialRejectsUnadmittedCollationTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, charset := range []uint8{types.CharsetUTF8MB3UnicodeCI, types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		for _, shape := range []string{"empty", "null", "value"} {
+			func() {
+				input := vector.NewVec(types.T_varchar.ToType())
+				defer input.Free(proc.Mp())
+				if shape != "empty" {
+					require.NoError(t, vector.AppendBytes(input, []byte("a"), shape == "null", proc.Mp()))
+				}
+				input.GetType().Charset = charset
+				if charset != types.CharsetUTF8MB3UnicodeCI {
+					input.GetType().CollationVersion = types.CollationVersionV1
+				}
+				result := vector.NewFunctionResultWrapper(types.T_varchar.ToType(), proc.Mp())
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(input.Length()))
+				before := result.GetResultVector().Length()
+				op := newOpSerial()
+				defer op.Close()
+				require.Error(t, op.BuiltInPhysicalSerialFull([]*vector.Vector{input}, result, proc, input.Length(), nil))
+				require.Equal(t, before, result.GetResultVector().Length())
+				require.Error(t, op.BuiltInPhysicalSerial([]*vector.Vector{input}, result, proc, input.Length(), nil))
+				require.Equal(t, before, result.GetResultVector().Length())
+				packer := types.NewPacker()
+				defer packer.Close()
+				require.Error(t, PhysicalSerialHelperChecked(input, nil, []*types.Packer{packer}, true))
+				require.Empty(t, packer.Bytes())
+			}()
+		}
+	}
 }
 
 func Test_BuiltIn_SerialFull(t *testing.T) {

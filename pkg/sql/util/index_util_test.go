@@ -217,6 +217,36 @@ func TestBuildUniqueKeyBatchRejectsInvalidNativeUnicodeCompositeValue(t *testing
 	require.Error(t, err)
 }
 
+func TestBuildUniqueKeyBatchRejectsUnadmittedCollationTypes(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, charset := range []uint8{types.CharsetUTF8MB4UnicodeCI, types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		for _, shape := range []string{"empty", "null", "value"} {
+			func() {
+				text := vector.NewVec(types.T_varchar.ToType())
+				defer text.Free(proc.Mp())
+				other := vector.NewVec(types.T_int64.ToType())
+				defer other.Free(proc.Mp())
+				if shape != "empty" {
+					require.NoError(t, vector.AppendBytes(text, []byte("a"), shape == "null", proc.Mp()))
+					require.NoError(t, vector.AppendFixed(other, int64(1), false, proc.Mp()))
+				}
+				text.GetType().Charset = charset
+				if charset != types.CharsetUTF8MB4UnicodeCI {
+					text.GetType().CollationVersion = types.CollationVersionV1
+				}
+				packers := PackerList{}
+				defer packers.Free()
+				got, _, err := BuildUniqueKeyBatch([]*vector.Vector{text, other},
+					[]string{"v", "n"}, []string{"v", "n"}, "", proc, &packers)
+				require.Error(t, err)
+				require.Nil(t, got)
+				require.Zero(t, packers.PackerCount())
+			}()
+		}
+	}
+}
+
 func mustParseDecimal256ForIndexTest(t *testing.T, typ types.Type, value string) types.Decimal256 {
 	result, err := types.ParseDecimal256(value, typ.Width, typ.Scale)
 	require.NoError(t, err)

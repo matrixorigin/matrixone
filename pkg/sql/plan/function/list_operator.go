@@ -96,20 +96,9 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 	}
 	castLeft.Charset = charset
 	castRight.Charset = charset
-	// A string cast changes only the physical representation.  Keep the
-	// revision of the selected native Unicode collation on both operands;
-	// otherwise a derived expression such as LOWER(col) is rebuilt with
-	// revision zero and the executor cannot resolve its comparison key.
-	version := uint8(types.CollationVersionLegacy)
-	if types.IsUnicodeCollation(charset) {
-		version = uint8(types.CollationVersionV1)
-		for _, operand := range []types.Type{left, right} {
-			if operand.Charset == charset && operand.CollationVersion != 0 {
-				version = operand.CollationVersion
-				break
-			}
-		}
-	}
+	// binder 已解析 coercibility；物理 cast 必须同时保留选中域的 ID/revision，
+	// 不能只保留 UCA400 的版本而把同 ID 的新 general-ci/bin 降回 legacy。
+	version := types.MergeStringCollationMetadata(castLeft, []types.Type{left, right}).CollationVersion
 	castLeft.CollationVersion = version
 	castRight.CollationVersion = version
 	// CHAR values may carry PAD_CHAR_TO_FULL_LENGTH representation padding.
@@ -124,7 +113,8 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 		castRight.Oid = types.T_varchar
 		charCast = true
 	}
-	return hasCast || charCast || left.Charset != charset || right.Charset != charset, castLeft, castRight
+	return hasCast || charCast || left.Charset != charset || right.Charset != charset ||
+		left.CollationVersion != version || right.CollationVersion != version, castLeft, castRight
 }
 
 func isDatetimeTimestampComparison(left, right types.Type) bool {

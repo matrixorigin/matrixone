@@ -186,6 +186,32 @@ func TestSortByVectorsUnicodeCollationUsesSecondaryKey(t *testing.T) {
 	require.Equal(t, []int64{1, 2, 3, 0}, selectors)
 }
 
+func TestSortByVectorsVersionedCollation(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		for _, revision := range []uint8{0, 1} {
+			func() {
+				mp := mpool.MustNewZero()
+				defer func() { require.Zero(t, mp.CurrNB()) }()
+				typ := types.NewWithCharset(types.T_varchar, 16, 0, charset)
+				typ.CollationVersion = revision
+				vec := vector.NewVec(typ)
+				defer vec.Free(mp)
+				require.NoError(t, vector.AppendStringList(vec, []string{"a ", "a", "b"}, nil, mp))
+				ids := vector.NewVec(types.T_int64.ToType())
+				defer ids.Free(mp)
+				require.NoError(t, vector.AppendFixedList(ids, []int64{0, 1, 2}, nil, mp))
+				selectors := []int64{0, 1, 2}
+				SortByVectors(selectors, []*vector.Vector{vec, ids}, []bool{false, false}, []bool{false, false})
+				if revision == 0 {
+					require.Equal(t, []int64{1, 0, 2}, selectors)
+				} else {
+					require.Equal(t, []int64{0, 1, 2}, selectors)
+				}
+			}()
+		}
+	}
+}
+
 func TestSortByVectorsUsesSemanticUnicodeTypeWhenVectorMetadataIsPhysical(t *testing.T) {
 	mp := mpool.MustNewZero()
 	physical := vector.NewVec(types.T_varchar.ToType())

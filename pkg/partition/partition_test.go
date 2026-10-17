@@ -225,6 +225,28 @@ func TestPartitionForOrderUnicodeCollationPeers(t *testing.T) {
 	require.Equal(t, []int64{0, 2, 3}, PartitionForOrder(sels, diffs, nil, vec))
 }
 
+func TestPartitionForOrderVersionedCollation(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		for _, revision := range []uint8{0, 1} {
+			func() {
+				mp := mpool.MustNewZero()
+				defer func() { require.Zero(t, mp.CurrNB()) }()
+				typ := types.NewWithCharset(types.T_varchar, 16, 0, charset)
+				typ.CollationVersion = revision
+				vec := vector.NewVec(typ)
+				defer vec.Free(mp)
+				require.NoError(t, vector.AppendStringList(vec, []string{"a", "a ", "b"}, nil, mp))
+				parts := PartitionForOrder([]int64{0, 1, 2}, make([]bool, 3), nil, vec)
+				if revision == 0 {
+					require.Equal(t, []int64{0, 1, 2}, parts)
+				} else {
+					require.Equal(t, []int64{0, 2}, parts)
+				}
+			}()
+		}
+	}
+}
+
 func TestPartitionForOrderJSONNumericPeers(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_json.ToType())

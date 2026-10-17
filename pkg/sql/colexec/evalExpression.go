@@ -1861,7 +1861,7 @@ func (expr *FunctionExpressionExecutor) semanticParameterVectors(parameters []*v
 			continue
 		}
 		typ := expr.parameterTypes[i]
-		if !types.IsUnicodeCollation(typ.Charset) || vec.GetType().Oid != typ.Oid {
+		if !types.HasCollationKey(typ) || vec.GetType().Oid != typ.Oid {
 			continue
 		}
 		switch typ.Oid {

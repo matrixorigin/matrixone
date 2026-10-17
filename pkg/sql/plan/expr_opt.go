@@ -2704,7 +2704,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	// expression path remains responsible for filtering rows.  Treat missing
 	// metadata as unsafe as well; this path must never optimize on an unknown
 	// key definition.
-	if tableDefHasNativeUnicodeKeyPart(tableDef, Parts) {
+	if tableDefHasCollationKeyPart(tableDef, Parts) {
 		return filters
 	}
 
@@ -3306,7 +3306,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 	return newFilterList
 }
 
-func tableDefHasNativeUnicodeKeyPart(tableDef *plan.TableDef, parts []string) bool {
+func tableDefHasCollationKeyPart(tableDef *plan.TableDef, parts []string) bool {
 	if tableDef == nil || len(parts) == 0 {
 		return true
 	}
@@ -3315,7 +3315,8 @@ func tableDefHasNativeUnicodeKeyPart(tableDef *plan.TableDef, parts []string) bo
 		if !ok || idx < 0 || int(idx) >= len(tableDef.Cols) || tableDef.Cols[idx] == nil {
 			return true
 		}
-		if types.IsUnicodeCollation(uint8(tableDef.Cols[idx].Typ.GetCharset())) {
+		typ, err := types.TypeFromPlan(tableDef.Cols[idx].Typ)
+		if err != nil || types.HasCollationKey(typ) {
 			return true
 		}
 	}

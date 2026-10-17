@@ -46,12 +46,22 @@ func TestBuildVarlenaFromVarlenaCollationAdmission(t *testing.T) {
 	mb3 := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB3UnicodeCI)
 	mb4 := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
 	binary := types.NewWithCharset(types.T_varbinary, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	general := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8)
+	general.CollationVersion = 1
+	bin := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4Bin)
+	bin.CollationVersion = 1
 	for _, tc := range []struct {
 		name  string
 		typ   types.Type
 		value []byte
 		bad   bool
 	}{
+		{"general_inline", general, []byte("😀"), false},
+		{"general_invalid_inline", general, []byte{0xff}, true},
+		{"general_invalid_area", general, bytes.Repeat([]byte{0xff}, 49), true},
+		{"bin_inline", bin, []byte("😀"), false},
+		{"bin_invalid_inline", bin, []byte{0xff}, true},
+		{"bin_invalid_area", bin, bytes.Repeat([]byte{0xff}, 49), true},
 		{"legacy_empty", legacy, nil, false},
 		{"legacy_inline", legacy, []byte{0xff, 0x00, 0x80}, false},
 		{"legacy_area", legacy, bytes.Repeat([]byte{0xff}, 49), false},
@@ -98,6 +108,23 @@ func TestBuildVarlenaFromVarlenaCollationAdmission(t *testing.T) {
 				require.True(t, bytes.Equal(tc.value, output.GetByteSlice(vec.area)))
 			}
 		})
+	}
+}
+
+func TestAppendBytesListVersionedCollationRollback(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		mp := mpool.MustNewZero()
+		func() {
+			typ := types.NewWithCharset(types.T_varchar, 64, 0, charset)
+			typ.CollationVersion = 1
+			vec := NewVec(typ)
+			defer vec.Free(mp)
+			require.Error(t, AppendBytesList(vec, [][]byte{[]byte("first"), {0xff}}, nil, mp))
+			require.Zero(t, vec.Length())
+			require.NoError(t, AppendBytesList(vec, [][]byte{[]byte("valid ")}, nil, mp))
+			require.Equal(t, []byte("valid "), vec.GetBytesAt(0))
+		}()
+		require.Zero(t, mp.CurrNB())
 	}
 }
 

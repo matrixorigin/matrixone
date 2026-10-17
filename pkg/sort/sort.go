@@ -373,7 +373,7 @@ func sortByVector(
 			data []types.Varlena
 			area []byte
 		}{data: data, area: area}
-		if sqlOrder && types.IsUnicodeCollation(vec.GetType().Charset) {
+		if sqlOrder && types.HasCollationKey(*vec.GetType()) {
 			// Native Unicode collations must use the same resolved comparison
 			// domain as scalar predicates and top/merge comparison. The legacy
 			// byte comparator remains the fast path for all other string types.

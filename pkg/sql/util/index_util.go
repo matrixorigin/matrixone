@@ -205,7 +205,13 @@ func serialWithCompacted(
 	// once as a raw-byte key.  Validate the complete input batch first so a
 	// partial packer state can never escape on error.
 	for _, v := range vs {
-		if v == nil || !types.IsUnicodeCollation(v.GetType().Charset) || !v.GetType().Oid.IsMySQLString() {
+		if v == nil {
+			continue
+		}
+		if err := types.ValidatePhysicalCollationType(*v.GetType()); err != nil {
+			return nil, err
+		}
+		if !types.HasCollationKey(*v.GetType()) {
 			continue
 		}
 		values, area := vector.MustVarlenaRawData(v)
@@ -557,12 +563,12 @@ func serialWithCompacted(
 					if nulls.Contains(vNull, uint64(i)) {
 						nulls.Add(bitMap, uint64(i))
 					} else {
-						ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, vs[i].GetByteSlice(area)))
+						ps[i].EncodeStringType(types.CollationKeyOrOriginal(*v.GetType(), vs[i].GetByteSlice(area)))
 					}
 				}
 			} else {
 				for i := range vs {
-					ps[i].EncodeStringType(types.CollationKeyOrOriginal(v.GetType().Charset, vs[i].GetByteSlice(area)))
+					ps[i].EncodeStringType(types.CollationKeyOrOriginal(*v.GetType(), vs[i].GetByteSlice(area)))
 				}
 			}
 		}

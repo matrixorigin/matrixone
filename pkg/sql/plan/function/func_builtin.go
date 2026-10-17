@@ -3397,7 +3397,13 @@ func (op *opSerial) builtInSerialFull(parameters []*vector.Vector, result vector
 // UTF-8 and out-of-repertoire values from becoming a second raw-byte identity.
 func validatePhysicalSerialValues(parameters []*vector.Vector, length int) error {
 	for _, v := range parameters {
-		if v == nil || !types.IsUnicodeCollation(v.GetType().Charset) || !v.GetType().Oid.IsMySQLString() {
+		if v == nil {
+			continue
+		}
+		if err := types.ValidatePhysicalCollationType(*v.GetType()); err != nil {
+			return err
+		}
+		if !types.HasCollationKey(*v.GetType()) {
 			continue
 		}
 		for i := 0; i < length; i++ {
@@ -3536,7 +3542,7 @@ func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := v.GetBytesAt(idx)
 			if physicalKey && types.IsUnicodeCollation(v.GetType().Charset) {
-				val = types.CollationKeyOrOriginal(v.GetType().Charset, val)
+				val = types.CollationKeyOrOriginal(*v.GetType(), val)
 			}
 			ps.EncodeStringType(val)
 		}, nil
@@ -3605,7 +3611,12 @@ func PhysicalSerialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Pac
 // should use this wrapper so malformed/repertoire-invalid bytes cannot become
 // a tagged raw fallback in a persisted key.
 func PhysicalSerialHelperChecked(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isFull bool) error {
-	if v == nil || !types.IsUnicodeCollation(v.GetType().Charset) || !v.GetType().Oid.IsMySQLString() {
+	if v != nil {
+		if err := types.ValidatePhysicalCollationType(*v.GetType()); err != nil {
+			return err
+		}
+	}
+	if v == nil || !types.HasCollationKey(*v.GetType()) {
 		PhysicalSerialHelper(v, bitMap, ps, isFull)
 		return nil
 	}
@@ -4072,7 +4083,7 @@ func serialHelper(v *vector.Vector, bitMap *nulls.Nulls, ps []*types.Packer, isF
 
 func serialStringValue(typ types.Type, value []byte, physicalKey bool) []byte {
 	if physicalKey && types.IsUnicodeCollation(typ.Charset) {
-		return types.CollationKeyOrOriginal(typ.Charset, value)
+		return types.CollationKeyOrOriginal(typ, value)
 	}
 	return value
 }

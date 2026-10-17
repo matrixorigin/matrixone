@@ -59,6 +59,20 @@ func TestCollationMetadataPlannerAdmission(t *testing.T) {
 	require.ErrorContains(t, err, "disabled")
 }
 
+func TestCollationMetadataKeyPartPruning(t *testing.T) {
+	for _, charset := range []uint8{types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		for _, revision := range []uint8{0, 1} {
+			typ := types.NewWithCharset(types.T_varchar, 32, 0, charset)
+			typ.CollationVersion = revision
+			table := &pb.TableDef{Cols: []*pb.ColDef{{Name: "a", Typ: typ.PlanType()}},
+				Name2ColIndex: map[string]int32{"a": 0}}
+			require.Equal(t, revision == 1, tableDefHasCollationKeyPart(table, []string{"a"}))
+			table.Cols[0].Typ.CollationVersion = 255
+			require.True(t, tableDefHasCollationKeyPart(table, []string{"a"}))
+		}
+	}
+}
+
 func TestCollationMetadataCloneAndCacheIdentity(t *testing.T) {
 	typ := pb.Type{Id: int32(types.T_varchar), Charset: 4, CollationVersion: 1,
 		CollationCoercibilitySet: true, CollationCoercibility: 0, CollationMergeConflict: true,

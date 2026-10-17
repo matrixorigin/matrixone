@@ -75,12 +75,15 @@ func TestSemanticParameterVectorsRestoresUnicodeMetadataWithoutMutatingInput(t *
 	defer physical.Free(mp)
 	require.NoError(t, vector.AppendBytes(physical, []byte("A"), false, mp))
 
-	semantic := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
-	expr := &FunctionExpressionExecutor{parameterTypes: []types.Type{semantic}}
-	view := expr.semanticParameterVectors([]*vector.Vector{physical})[0]
-	require.Equal(t, semantic, *view.GetType())
-	require.Equal(t, types.T_varchar.ToType(), *physical.GetType())
-	require.Equal(t, []byte("A"), view.GetBytesAt(0))
+	for _, charset := range []uint8{types.CharsetUTF8MB4UnicodeCI, types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
+		semantic := types.NewWithCharset(types.T_varchar, 64, 0, charset)
+		semantic.CollationVersion = 1
+		expr := &FunctionExpressionExecutor{parameterTypes: []types.Type{semantic}}
+		view := expr.semanticParameterVectors([]*vector.Vector{physical})[0]
+		require.Equal(t, semantic, *view.GetType())
+		require.Equal(t, types.T_varchar.ToType(), *physical.GetType())
+		require.Equal(t, []byte("A"), view.GetBytesAt(0))
+	}
 }
 
 // evalTestTextParameter scopes transport ownership and restores the exact prior state.
