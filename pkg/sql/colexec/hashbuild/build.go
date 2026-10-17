@@ -259,7 +259,8 @@ func (hashBuild *HashBuild) finalizeBuildFailure(proc *process.Process, err erro
 		hashBuild.publishJoinMap(proc, nil)
 		err = nil
 	} else {
-		hashBuild.publishBuildError(proc, err)
+		hashBuild.publishBuildError(proc, normalized)
+		err = normalized
 	}
 	if !hashBuild.ctr.runtimeFilterDone {
 		message.FinalizeRuntimeFilterOnBuildError(hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
