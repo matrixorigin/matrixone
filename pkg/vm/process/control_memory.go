@@ -39,6 +39,27 @@ func HasControlMemoryAdmission(ctx context.Context) bool {
 	return marked
 }
 
+// CloseExecutionResourceGeneration ends this top-level statement's resource
+// ownership without opening a replacement generation. Internal SQL processes
+// have no later SetStmtProfile boundary, so their lifecycle owner must call
+// this after execution. Pipeline children share Base and must not call it.
+// Borrowed view-schema generations belong to their parent. Live allocation
+// tokens remain charged until their physical free, even after this close.
+func (proc *Process) CloseExecutionResourceGeneration() {
+	if proc == nil || proc.Base == nil {
+		return
+	}
+	proc.Base.executionResourceBudgetMu.Lock()
+	defer proc.Base.executionResourceBudgetMu.Unlock()
+	if generation := proc.Base.executionResourceBudget; generation != nil {
+		if !proc.Base.executionResourceBudgetBorrowed {
+			generation.Close()
+		}
+		proc.Base.executionResourceBudget = nil
+		proc.Base.executionResourceBudgetBorrowed = false
+	}
+}
+
 func (b *ExecutionResourceBudget) openControlProcessGeneration(id, memoryCap, spillDiskCap uint64, control bool) (*ExecutionResourceGeneration, error) {
 	return b.openControlProcessGenerationWithEntry(id, memoryCap, spillDiskCap, control, nil)
 }

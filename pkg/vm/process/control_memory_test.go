@@ -116,6 +116,60 @@ func TestControlGenerationProgressUnderOrdinaryPressure(t *testing.T) {
 	require.Zero(t, b.physicalLedger.Snapshot().ControlActive)
 }
 
+func TestCloseExecutionResourceGenerationRecyclesOwnedControlSlots(t *testing.T) {
+	b, _ := controlTestBudget(t, 0)
+	for i := range uint64(8) {
+		g, err := b.openControlProcessGeneration(i, 1<<30, 0, true)
+		require.NoError(t, err)
+		require.NotNil(t, g.controlMemory)
+		proc := &Process{Base: &BaseProcess{}}
+		require.NoError(t, proc.SetExecutionResourceBudgetForTesting(g))
+		require.NoError(t, g.AcquireAllocationCapacity(8))
+		g.ReleaseAllocationCapacity(8)
+		proc.CloseExecutionResourceGeneration()
+		proc.CloseExecutionResourceGeneration()
+		require.True(t, g.Closed())
+		require.False(t, proc.UsesExecutionResourceGeneration(g))
+		require.Zero(t, b.physicalLedger.Snapshot().ControlActive)
+		require.Zero(t, b.physicalLedger.Reserved())
+	}
+}
+
+func TestCloseExecutionResourceGenerationPreservesLiveAllocationOwnership(t *testing.T) {
+	b, _ := controlTestBudget(t, 0)
+	g, err := b.openControlProcessGeneration(1, 1<<30, 0, true)
+	require.NoError(t, err)
+	proc := &Process{Base: &BaseProcess{}}
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(g))
+	require.NoError(t, g.AcquireAllocationCapacity(8))
+	proc.CloseExecutionResourceGeneration()
+	require.Equal(t, uint64(1), b.physicalLedger.Snapshot().ControlActive)
+	require.Equal(t, uint64(8), b.physicalLedger.Snapshot().ControlReserved)
+	require.ErrorIs(t, g.AcquireAllocationCapacity(1), ErrExecutionResourceClosed)
+	g.ReleaseAllocationCapacity(8)
+	require.Zero(t, b.physicalLedger.Snapshot().ControlActive)
+	require.Zero(t, b.physicalLedger.Reserved())
+}
+
+func TestCloseExecutionResourceGenerationDoesNotCloseBorrowedOwner(t *testing.T) {
+	b, _ := controlTestBudget(t, 0)
+	g, err := b.openControlProcessGeneration(1, 1<<30, 0, true)
+	require.NoError(t, err)
+	defer g.Close()
+	parent := &Process{Base: &BaseProcess{}}
+	require.NoError(t, parent.SetExecutionResourceBudgetForTesting(g))
+	child := &Process{Base: &BaseProcess{}}
+	require.NoError(t, child.BorrowViewSchemaResources(parent, g))
+	child.CloseExecutionResourceGeneration()
+	require.False(t, g.Closed())
+	require.True(t, parent.UsesExecutionResourceGeneration(g))
+	require.False(t, child.UsesExecutionResourceGeneration(g))
+	require.NoError(t, g.AcquireAllocationCapacity(8))
+	g.ReleaseAllocationCapacity(8)
+	parent.CloseExecutionResourceGeneration()
+	require.Zero(t, b.physicalLedger.Snapshot().ControlActive)
+}
+
 func TestControlGenerationCannotSpendAnotherStatementsAllowance(t *testing.T) {
 	b, _ := controlTestBudget(t, 0)
 	controls := make([]*ExecutionResourceGeneration, 0, 4)

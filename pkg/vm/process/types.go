@@ -647,15 +647,7 @@ func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
 }
 
 func (proc *Process) SetStmtProfile(sp *StmtProfile) {
-	proc.Base.executionResourceBudgetMu.Lock()
-	if proc.Base.executionResourceBudget != nil {
-		if !proc.Base.executionResourceBudgetBorrowed {
-			proc.Base.executionResourceBudget.Close()
-		}
-		proc.Base.executionResourceBudget = nil
-		proc.Base.executionResourceBudgetBorrowed = false
-	}
-	proc.Base.executionResourceBudgetMu.Unlock()
+	proc.CloseExecutionResourceGeneration()
 	proc.Base.warningDiagnosticBudgetMu.Lock()
 	proc.Base.warningDiagnosticBudget = nil
 	proc.Base.warningDiagnosticBudgetMu.Unlock()

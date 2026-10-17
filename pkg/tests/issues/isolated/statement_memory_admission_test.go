@@ -23,10 +23,12 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -95,6 +97,127 @@ func TestStatementMemoryAdmissionColdConnectionUnderPressure(t *testing.T) {
 		t.Run(user, func(t *testing.T) {
 			testStatementMemoryAdmissionKillQueryUnderPressure(t, user)
 		})
+	}
+}
+
+// Coverage exposed ROLLBACK failures when a shared cgroup had less raw
+// headroom than the runtime floor. Verify real transaction finalization in
+// that band without granting ordinary SQL access to the control allowance.
+func TestStatementMemoryAdmissionTransactionFinalizationUnderPressure(t *testing.T) {
+	const capacity, healthyUsed = uint64(16 << 30), uint64(1 << 30)
+	var used atomic.Uint64
+	used.Store(healthyUsed)
+	b := system.NewMemoryAdmissionBudgetWithProvider(system.DefaultMemoryDomainReservePolicy(), func() (system.MemoryDomainSnapshot, error) {
+		return system.MemoryDomainSnapshot{Used: used.Load(), Limit: capacity,
+			Source: system.MemoryDomainSourceCgroupV1, Measured: true, ObservedAt: time.Now()}, nil
+	})
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(svc embed.ServiceOperator) {
+		if svc.ServiceType() == metadata.ServiceType_CN {
+			cleanup, setupErr := process.SetServiceMemoryAdmissionBudgetForTesting(svc.ServiceID(), b)
+			require.NoError(t, setupErr)
+			t.Cleanup(cleanup)
+		}
+	}))
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
+	require.NoError(t, err)
+	defer used.Store(healthyUsed)
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancel()
+	cn, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?multiStatements=true", cn.GetServiceConfig().CN.Frontend.Port))
+	require.NoError(t, err)
+	defer db.Close()
+	require.NoError(t, waitSystemBootstrap(ctx, db))
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	_, err = conn.ExecContext(ctx, "create database memory_txn_finalization; use memory_txn_finalization; create table t(id int primary key)")
+	require.NoError(t, err)
+	for _, command := range []string{"rollback", "commit"} {
+		t.Run(command, func(t *testing.T) {
+			used.Store(healthyUsed)
+			defer used.Store(healthyUsed)
+			_, err := conn.ExecContext(ctx, "begin; insert into t values (1)")
+			require.NoError(t, err)
+			// Between the 256 MiB runtime floor and its bounded 64 MiB
+			// control slice: ordinary admission must fail, cleanup may proceed.
+			used.Store(capacity - (224 << 20))
+			require.Zero(t, b.Snapshot().Available)
+			_, admitted := b.TryReserve(1)
+			require.False(t, admitted, "ordinary allocations must remain fail-closed")
+			_, err = conn.ExecContext(ctx, "select 1")
+			require.ErrorContains(t, err, "memory statement admission wait timed out")
+			require.ErrorContains(t, err, "control=false")
+			_, err = conn.ExecContext(ctx, command)
+			require.NoError(t, err, "transaction finalization must retain bounded control admission")
+			_, err = conn.ExecContext(ctx, "rollback; select 1")
+			require.ErrorContains(t, err, "memory statement admission wait timed out")
+			require.ErrorContains(t, err, "control=false", "a prior control statement must not privilege subsequent SQL")
+			require.Eventually(t, func() bool {
+				s := b.Snapshot()
+				return s.ControlActive == 0 && s.ControlReserved == 0 && s.StatementQueued == 0
+			}, time.Second, 10*time.Millisecond, "finalization must not leak control slots, bytes, or waiters")
+			used.Store(healthyUsed)
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from t").Scan(&count))
+			want := 0
+			if command == "commit" {
+				want = 1
+			}
+			require.Equal(t, want, count, "check transaction semantics, not just the command's return status")
+		})
+	}
+	_, err = conn.ExecContext(ctx, "drop database memory_txn_finalization")
+	require.NoError(t, err)
+}
+
+func TestStatementMemoryAdmissionInternalExecutorReleasesControlSlots(t *testing.T) {
+	const capacity, healthyUsed = uint64(16 << 30), uint64(1 << 30)
+	var used atomic.Uint64
+	used.Store(healthyUsed)
+	b := system.NewMemoryAdmissionBudgetWithProvider(system.DefaultMemoryDomainReservePolicy(), func() (system.MemoryDomainSnapshot, error) {
+		return system.MemoryDomainSnapshot{Used: used.Load(), Limit: capacity,
+			Source: system.MemoryDomainSourceCgroupV1, Measured: true, ObservedAt: time.Now()}, nil
+	})
+	cluster, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(svc embed.ServiceOperator) {
+		if svc.ServiceType() == metadata.ServiceType_CN {
+			cleanup, setupErr := process.SetServiceMemoryAdmissionBudgetForTesting(svc.ServiceID(), b)
+			require.NoError(t, setupErr)
+			t.Cleanup(cleanup)
+		}
+	}))
+	if cluster != nil {
+		t.Cleanup(func() { require.NoError(t, cluster.Close()) })
+	}
+	require.NoError(t, err)
+	defer used.Store(healthyUsed)
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	cn, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	exec := cn.RawService().(cnservice.Service).GetSQLExecutor()
+	ctx = process.WithControlMemoryAdmission(ctx, true)
+	used.Store(capacity - (224 << 20))
+	require.Zero(t, b.Snapshot().Available)
+	// More than the four available control slots. Exec's own generation must
+	// close on every return; freeing allocation bytes alone cannot recycle it.
+	for i := range 8 {
+		func() {
+			res, err := exec.Exec(ctx, "show databases", executor.Options{}.WithAccountID(0))
+			defer res.Close()
+			require.NoError(t, err, "bootstrap/readiness query %d", i)
+			// Exec has already closed its generation. Returned data must remain
+			// usable until the caller releases the independently owned Result.
+			require.NotEmpty(t, res.Batches)
+			require.Positive(t, res.Batches[0].RowCount())
+		}()
+		require.Eventually(t, func() bool {
+			s := b.Snapshot()
+			return s.ControlActive == 0 && s.ControlReserved == 0
+		}, time.Second, 10*time.Millisecond, "internal query %d retained a control owner after result cleanup", i)
 	}
 }
 
