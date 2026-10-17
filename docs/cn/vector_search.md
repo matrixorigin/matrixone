@@ -15,10 +15,19 @@ BY RANK WITH OPTION 'mode=auto';
 
 | 模式 | 行为 | 使用边界 |
 | --- | --- | --- |
-| `post` | 在有限的索引候选中搜索，再应用剩余过滤条件 | 即使表中有足够的匹配行，也可能返回不足 `LIMIT` 的结果 |
+| `post` | 在有限的索引候选中搜索，再应用剩余过滤条件 | 即使表中有足够的匹配行，也可能返回不足 `LIMIT` 的结果；INCLUDE 条件下的空页回退见下文 |
 | `pre` | 将可提前执行的过滤条件用于索引搜索或主键成员过滤 | 通常改善过滤检索，但有限探测仍可能遗漏近邻 |
+| `include` | 将索引覆盖的过滤条件下推到索引读取；无剩余过滤条件时可逐轮扩大探测范围 | 有未覆盖的过滤条件时转为 PRE 成员过滤；仍不保证精确召回 |
 | `auto` | 根据统计信息选择精确扫描，或在结果不足时依次尝试 POST、PRE、FORCE | 补足结果行数；满页的近似结果不保证精确召回 |
 | `force` | 对符合条件的原表数据计算距离并排序 | 用于需要精确结果的查询，也可作为召回率比较基准 |
+
+`include` 的过滤覆盖列包括索引的 INCLUDE 列和单列主键，复合主键不自动覆盖。
+只有查询所需列均被覆盖、没有剩余过滤条件且规划边界可确定等条件满足时，才可能
+只读索引而不回原表。读取实现背景见 [INCLUDE Top-K RFC](../rfcs/20260904_ivfflat_filtered_include_topk.md)，
+多轮探测与未覆盖条件示例见 [`vector_ivfflat_include_rounds.sql`](../../test/distributed/cases/vector/vector_ivfflat_include_rounds.sql)。
+
+显式 `mode=post` 若含可由 INCLUDE 列覆盖的过滤条件，且查询形状支持安全重放，
+首轮结果为空时会在该 Top-K 子树内回退到精确扫描；非空但不足 `LIMIT` 的页保留 POST 结果。
 
 AUTO 的回退在对应的 Top-K 子查询内进行，也处理非空但不足 `LIMIT` 的页。
 不适合安全重放的查询形状会直接使用精确路径。没有 `OFFSET` 时，若只有
@@ -60,7 +69,8 @@ SELECT @@session.probe_limit;  -- 仍为 4
 ```
 
 `nprobe` 也可单独使用，不要求同时指定 `mode`。AUTO 可以在这个基础探测数上
-自适应扩大搜索范围，因此它不是 AUTO 的硬上限。FORCE 不使用索引探测数。
+自适应扩大搜索范围，因此它不是 AUTO 的硬上限；实际访问的聚类数不超过 `lists`。
+FORCE 不使用索引探测数。
 可通过 `EXPLAIN VERBOSE` 的 `NProbe` 字段检查索引计划使用的探测参数。
 比较召回率时，应使用相同过滤条件下的 FORCE 结果作为独立基准。
 
@@ -71,7 +81,7 @@ MatrixOne 构建及相应 CUDA/cuVS 运行环境。IVFPQ 已有实现，并非�
 
 ```sql
 SET experimental_ivfpq_index = 1;
-CREATE INDEX ip USING ivfpq ON t(v) lists=10 OP_TYPE 'vector_l2_ops';
+CREATE INDEX ip USING ivfpq ON t(v) OP_TYPE 'vector_l2_ops' lists=10;
 ```
 
 实验开关控制功能启用，不能为 CPU 二进制添加 GPU 能力。CPU 构建接受这段语法，
