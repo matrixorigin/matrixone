@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pblock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -55,12 +56,14 @@ import (
 //     consumer, releasing the blocking lock must let the query finish with
 //     all rows written, all locks released, and later statements unblocked.
 //
-// It intentionally does NOT assert the absence of cleanup warnings: falling
-// back to the abort path is also a valid outcome; the guarded contract is
-// recovery correctness, not a specific cleanup path. Likewise it cannot wait
-// for a "terminal send" barrier from SQL: under the current protocol the
-// producer is backpressured in the data phase while the consumer waits on
-// the lock, so no terminal send happens during the hold window by design.
+// Hold-window rationale: on the unfixed protocol the terminal signal is only
+// lost after TWO successive cleanup timeouts (spool-enqueue ~30s, then
+// direct-signal ~30s, each bounded by process.PipelineSignalSendTimeout).
+// Releasing the blocker earlier than that is just the already-green early
+// control. The delayed sub-case therefore holds the backpressure for
+// 2*PipelineSignalSendTimeout plus margin, so a regression back to the old
+// protocol would already have lost the End signal before the lock is
+// released - and this test would fail with B never finishing.
 func TestIssue24971LockWaitBackpressureRecovery(t *testing.T) {
 	cluster, err := embed.StartTestCluster(
 		embed.WithCNCount(1),
@@ -78,13 +81,13 @@ func TestIssue24971LockWaitBackpressureRecovery(t *testing.T) {
 	}
 	require.NoError(t, err)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	cn, err := cluster.GetCNService(0)
 	require.NoError(t, err)
 	t.Logf("single CN=%s, SQL port=%d", cn.ServiceID(), cn.GetServiceConfig().CN.Frontend.Port)
 
-	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?timeout=10s&readTimeout=120s&writeTimeout=10s", cn.GetServiceConfig().CN.Frontend.Port))
+	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/?timeout=10s&readTimeout=300s&writeTimeout=10s", cn.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	defer db.Close()
 	db.SetMaxOpenConns(6)
@@ -117,7 +120,12 @@ func TestIssue24971LockWaitBackpressureRecovery(t *testing.T) {
 		"select w.id, w.v from issue24971.file_working w join seeds s on w.id % 2 = s.k"
 	issue24971RequirePlanShape(t, ctx, admin, query)
 
-	for _, holdWindow := range []time.Duration{0, 8 * time.Second} {
+	// The delayed window is aligned with the unfixed protocol's worst case:
+	// the End signal is lost only after two successive cleanup timeouts of
+	// process.PipelineSignalSendTimeout each. Margin covers scheduling slack.
+	ctrlWindow := time.Duration(0)
+	delayedWindow := 2*process.PipelineSignalSendTimeout + 10*time.Second
+	for _, holdWindow := range []time.Duration{ctrlWindow, delayedWindow} {
 		name := "release_immediately"
 		if holdWindow > 0 {
 			name = "release_after_backpressure_window"
