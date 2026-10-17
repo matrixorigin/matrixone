@@ -733,7 +733,18 @@ outside:
 			}
 			if bytes.Equal(parser.newLine, []byte{'\n'}) {
 				if n := len(parser.recordBuffer); n > 1 && parser.recordBuffer[n-1] == '\r' {
-					parser.recordBuffer = parser.recordBuffer[:n-1]
+					// The trailing CR may only be dropped when it belongs to the
+					// current (not yet bounded) field. If a separator has already
+					// recorded a boundary at or beyond n-1, this byte is content
+					// of an earlier field and dropping it would leave that
+					// boundary pointing past the end of the buffer.
+					lastIdx := 0
+					if m := len(parser.fieldIndexes); m > 0 {
+						lastIdx = parser.fieldIndexes[m-1]
+					}
+					if n-1 >= lastIdx {
+						parser.recordBuffer = parser.recordBuffer[:n-1]
+					}
 				}
 			}
 			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
