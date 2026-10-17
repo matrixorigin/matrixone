@@ -87,12 +87,13 @@ wrn(){  printf "  ${Y}[WARN]${N} %s\n" "$*"; WARN=$((WARN+1)); }
 hdr(){  printf "\n${C}== %s ==${N}\n" "$*"; }
 die(){  printf "${R}ERROR:${N} %s\n" "$*" >&2; exit 1; }
 
-# 打印命令时遮蔽口令：passwd/password='x'、-p 'x'、hacluster:x
+# 打印命令时遮蔽凭据：passwd/password='x'、-p 'x'、hacluster:x、snmp_community=x
 mask_secrets(){
   printf '%s' "$*" | sed -E \
     -e "s/(passwd|password)='[^']*'/\1='***'/g" \
     -e "s/-p '[^']*'/-p '***'/g" \
-    -e 's/(hacluster:)[^ '\''"]*/\1***/g'
+    -e 's/(hacluster:)[^ '\''"]*/\1***/g' \
+    -e 's/(snmp_community=)[^ ]*/\1***/g'
 }
 run(){  if [ "$DRY_RUN" = 1 ]; then printf "    (dry-run) %s\n" "$(mask_secrets "$*")"; else info "exec: $(mask_secrets "$*")"; bash -c "$*"; fi; }
 runq(){ if [ "$DRY_RUN" = 1 ]; then printf "    (dry-run) %s\n" "$(mask_secrets "$*")"; else bash -c "$*"; fi; }
@@ -138,7 +139,7 @@ mo-ha-deploy.sh — MatrixOne 双机主备(DRBD+Pacemaker/STONITH) 一键部署
   --fence-plug-self ID   map 类场景: 本机 plug(VM UUID/插座号/实例ID...)
   --fence-plug-peer ID   同上: 对端 plug
   --fence-login U --fence-password P --fence-snmp COMM
-  --fence-extra "k=v,k=v" --fence-delay-max N(默认 5)
+  --fence-extra "k=v,k=v" --fence-delay-max N(默认 5；fence-extra 值不会在日志中遮蔽，勿放敏感值)
   --fence-agent NAME     custom_http 场景的 agent 名
   --fence-addr-param KEY 带外地址参数名（默认 ipmi/redfish=ipaddr, custom_http=ip）
   --sbd-device /dev/sdX --watchdog /dev/watchdog
