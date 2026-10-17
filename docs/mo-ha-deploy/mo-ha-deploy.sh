@@ -556,6 +556,22 @@ require_nodes(){
   case "$SELF_IP$PEER_IP" in
     *[!0-9.]*) die "--self-ip/--peer-ip 需要裸 IPv4 地址（不要写主机名或 /掩码）：${SELF_IP} ${PEER_IP}" ;;
   esac
+  # 节点名直接生成 on <name> { ... }；含空格/花括号/换行会写出语法错误甚至被注入的配置。
+  local _n
+  for _n in "$SELF" "$PEER"; do
+    case "$_n" in
+      [A-Za-z0-9]*)
+        case "$_n" in
+          *[!A-Za-z0-9._-]*) die "--self/--peer 只允许字母数字与 . _ -（收到：${_n}）" ;;
+        esac;;
+      *) die "--self/--peer 必须以字母数字开头（收到：${_n}）" ;;
+    esac
+  done
+  # 资源名会作为 /etc/drbd.d/<name>.res 的路径片段，禁止穿越与空白
+  case "$DRBD_RESOURCE" in
+    ""|*/*|*..*|*[[:space:]]*) die "--drbd-resource 必须是纯名称（不含 / .. 空白），收到：${DRBD_RESOURCE}" ;;
+    *[!A-Za-z0-9._-]*) die "--drbd-resource 只允许字母数字与 . _ -（收到：${DRBD_RESOURCE}）" ;;
+  esac
 }
 
 # 破坏性操作前的护栏：拒绝把系统盘/已挂载盘当 DRBD 裸盘（wipefs/mkfs 不可逆）。
