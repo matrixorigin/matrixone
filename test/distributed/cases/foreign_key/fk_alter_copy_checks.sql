@@ -1,0 +1,30 @@
+-- COPY ALTER must install FK metadata without scanning old rows when checks are disabled.
+drop database if exists fk_alter_copy_checks;
+create database fk_alter_copy_checks;
+use fk_alter_copy_checks;
+create table parent(id int primary key);
+insert into parent values(1);
+create table child(id int primary key, parent_id int);
+insert into child values(1,99);
+set foreign_key_checks=1;
+alter table child add column extra int, add constraint fk_child foreign key(parent_id) references parent(id);
+select count(*) as fk_count from information_schema.table_constraints where constraint_schema='fk_alter_copy_checks' and table_name='child' and constraint_type='FOREIGN KEY';
+set foreign_key_checks=0;
+alter table child add column extra int, add constraint fk_child foreign key(parent_id) references parent(id);
+select id,parent_id,extra from child;
+select count(*) as fk_count from information_schema.table_constraints where constraint_schema='fk_alter_copy_checks' and table_name='child' and constraint_type='FOREIGN KEY';
+set foreign_key_checks=1;
+insert into child values(2,99,null);
+insert into child values(2,1,null);
+select id,parent_id from child order by id;
+-- Self-reference takes a separate detection path in COPY planning.
+create table self_child(id int primary key, parent_id int);
+insert into self_child values(1,99);
+set foreign_key_checks=0;
+alter table self_child add column extra int, add constraint fk_self foreign key(parent_id) references self_child(id);
+set foreign_key_checks=1;
+select id,parent_id from self_child;
+select count(*) as self_fk_count from information_schema.table_constraints where constraint_schema='fk_alter_copy_checks' and table_name='self_child' and constraint_type='FOREIGN KEY';
+set foreign_key_checks=0;
+drop database fk_alter_copy_checks;
+set foreign_key_checks=1;

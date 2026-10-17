@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -514,42 +515,54 @@ func TestAlterTableCopySupportsExternalForeignKeyOnAddedColumn(t *testing.T) {
 // orphan survives and only later DML is rejected. With checks enabled the
 // detect SQLs must still reject orphans at DDL time.
 func TestAlterTableCopyForeignKeyChecksDisabledSkipsDetectSqls(t *testing.T) {
-	for _, tc := range []struct {
-		name        string
-		checksOn    bool
-		wantDetects int
+	for _, parent := range []struct {
+		name      string
+		column    string
+		reference string
 	}{
-		{name: "checks enabled validates existing rows", checksOn: true, wantDetects: 1},
-		{name: "checks disabled skips existing-row validation", checksOn: false, wantDetects: 0},
+		{name: "external", column: "INT", reference: "constraint_test.replace_fk_p(id)"},
+		{name: "self", column: "BIGINT", reference: "constraint_test.t1(a)"},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			mock := NewMockOptimizer(false, newPlanTestProcess(t))
-			originalContext := mock.ctxt
-			mock.ctxt.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
-				if name == "foreign_key_checks" {
-					if tc.checksOn {
-						return int64(1), nil
+		for _, tc := range []struct {
+			name        string
+			checks      int64
+			resolveErr  error
+			wantDetects int
+		}{
+			{name: "enabled", checks: 1, wantDetects: 1},
+			{name: "disabled", checks: 0, wantDetects: 0},
+			{name: "resolution error", resolveErr: errors.New("foreign_key_checks unavailable")},
+		} {
+			t.Run(parent.name+"/"+tc.name, func(t *testing.T) {
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				originalContext := mock.ctxt
+				mock.ctxt.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+					if name == "foreign_key_checks" {
+						return tc.checks, tc.resolveErr
 					}
-					return int64(0), nil
+					return originalContext.ResolveVariable(name, system, global)
 				}
-				return originalContext.ResolveVariable(name, system, global)
-			}
 
-			logicPlan, err := buildSingleStmt(mock, t, `
-			ALTER TABLE constraint_test.t1
-				ADD COLUMN parent_id INT,
-				ADD CONSTRAINT fk_t1_external FOREIGN KEY (parent_id)
-					REFERENCES constraint_test.replace_fk_p(id)`)
-			require.NoError(t, err)
+				logicPlan, err := buildSingleStmt(mock, t, fmt.Sprintf(`
+					ALTER TABLE constraint_test.t1
+						ADD COLUMN parent_id %s,
+						ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id) REFERENCES %s`,
+					parent.column, parent.reference))
+				if tc.resolveErr != nil {
+					require.ErrorIs(t, err, tc.resolveErr)
+					return
+				}
+				require.NoError(t, err)
 
-			alter := logicPlan.GetDdl().GetAlterTable()
-			require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
-			require.Len(t, alter.CopyTableDef.Fkeys, 1,
-				"the constraint definition must be installed in both modes")
-			require.Len(t, alter.UpdateFkSqls, 1,
-				"catalog maintenance for the new FK must still be planned")
-			require.Len(t, alter.DetectSqls, tc.wantDetects)
-		})
+				alter := logicPlan.GetDdl().GetAlterTable()
+				require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+				require.Len(t, alter.CopyTableDef.Fkeys, 1,
+					"the constraint definition must be installed in both modes")
+				require.Len(t, alter.UpdateFkSqls, 1,
+					"catalog maintenance for the new FK must still be planned")
+				require.Len(t, alter.DetectSqls, tc.wantDetects)
+			})
+		}
 	}
 }
 
