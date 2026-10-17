@@ -654,6 +654,13 @@ stage_fence(){
   hdr "阶段 fence: STONITH ($FENCE_SCENARIO)"
   [ -n "$FENCE_SCENARIO" ] || die "缺少 --fence-scenario"
   [ "$BOOTSTRAP" = 1 ] || { info "非引导节点：跳过 fencing 创建"; return 0; }
+  # fencing 创建失败必须致命：否则会停在 "stonith-enabled=true 但无设备" 状态
+  stonith_create(){
+    if ! runq "$1"; then
+      die "fencing 设备创建失败，集群保持 stonith-enabled=false（无 fencing，不会自动切换）。
+       请修正参数后重跑：--stages fence"
+    fi
+  }
   # 幂等：重跑 fence 阶段时先删除既有设备，否则 create 会报 already exists。
   # 删除与重建之间不能开着 stonith：若某个 create 失败，集群会停在
   # "stonith-enabled=true 但没有设备" 状态，资源无法被停止/恢复。
@@ -683,7 +690,7 @@ SBD_WATCHDOG_DEV=${WATCHDOG}
 SBD_WATCHDOG_TIMEOUT=5
 SBD"
     runq "systemctl enable --now sbd" || die "sbd 启动失败：请确认 sbd 已安装且 $sbd_conf 与 watchdog 正确"
-    runq "pcs stonith create fence_${DRBD_RESOURCE} external/sbd pcmk_delay_max=${FENCE_DELAY_MAX} op monitor interval=30s"
+    stonith_create "pcs stonith create fence_${DRBD_RESOURCE} external/sbd pcmk_delay_max=${FENCE_DELAY_MAX} op monitor interval=30s"
     runq "pcs property set stonith-enabled=true"
     return 0
   fi
@@ -691,16 +698,16 @@ SBD"
   case "$FENCE_SCENARIO" in
     ipmi)
       [ -n "$FENCE_TARGET_SELF" ] && [ -n "$FENCE_TARGET_PEER" ] || die "ipmi 需要 --fence-target-self/peer"
-      runq "pcs stonith create fence_$SELF fence_ipmilan $addrkey=$FENCE_TARGET_SELF login=$FENCE_LOGIN passwd='$FENCE_PASSWORD' $ex pcmk_host_list=$SELF pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s"
-      runq "pcs stonith create fence_$PEER fence_ipmilan $addrkey=$FENCE_TARGET_PEER login=$FENCE_LOGIN passwd='$FENCE_PASSWORD' $ex pcmk_host_list=$PEER pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s";;
+      stonith_create "pcs stonith create fence_$SELF fence_ipmilan $addrkey=$FENCE_TARGET_SELF login=$FENCE_LOGIN passwd='$FENCE_PASSWORD' $ex pcmk_host_list=$SELF pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s"
+      stonith_create "pcs stonith create fence_$PEER fence_ipmilan $addrkey=$FENCE_TARGET_PEER login=$FENCE_LOGIN passwd='$FENCE_PASSWORD' $ex pcmk_host_list=$PEER pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s";;
     redfish)
       [ -n "$FENCE_TARGET_SELF" ] && [ -n "$FENCE_TARGET_PEER" ] || die "redfish 需要 --fence-target-self/peer"
-      runq "pcs stonith create fence_$SELF fence_redfish $addrkey=$FENCE_TARGET_SELF username=$FENCE_LOGIN password='$FENCE_PASSWORD' $ex pcmk_host_list=$SELF pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s"
-      runq "pcs stonith create fence_$PEER fence_redfish $addrkey=$FENCE_TARGET_PEER username=$FENCE_LOGIN password='$FENCE_PASSWORD' $ex pcmk_host_list=$PEER pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s";;
+      stonith_create "pcs stonith create fence_$SELF fence_redfish $addrkey=$FENCE_TARGET_SELF username=$FENCE_LOGIN password='$FENCE_PASSWORD' $ex pcmk_host_list=$SELF pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s"
+      stonith_create "pcs stonith create fence_$PEER fence_redfish $addrkey=$FENCE_TARGET_PEER username=$FENCE_LOGIN password='$FENCE_PASSWORD' $ex pcmk_host_list=$PEER pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s";;
     custom_http)
       [ -n "$FENCE_TARGET_SELF" ] && [ -n "$FENCE_TARGET_PEER" ] || die "custom_http 需要 --fence-target-self/peer"
-      runq "pcs stonith create fence_$SELF $agent $addrkey=$FENCE_TARGET_SELF $ex pcmk_host_list=$SELF pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s"
-      runq "pcs stonith create fence_$PEER $agent $addrkey=$FENCE_TARGET_PEER $ex pcmk_host_list=$PEER pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s";;
+      stonith_create "pcs stonith create fence_$SELF $agent $addrkey=$FENCE_TARGET_SELF $ex pcmk_host_list=$SELF pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s"
+      stonith_create "pcs stonith create fence_$PEER $agent $addrkey=$FENCE_TARGET_PEER $ex pcmk_host_list=$PEER pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s";;
     *)
       [ -n "$FENCE_PLUG_SELF" ] && [ -n "$FENCE_PLUG_PEER" ] || die "$FENCE_SCENARIO 需要 --fence-plug-self/peer"
       local map="$SELF:$FENCE_PLUG_SELF;$PEER:$FENCE_PLUG_PEER" ipar=""
@@ -709,7 +716,7 @@ SBD"
         vmware|proxmox) [ -n "$FENCE_SHARED_IP" ] || die "$FENCE_SCENARIO 需要 --fence-shared-ip"; ipar="ipaddr=$FENCE_SHARED_IP login=$FENCE_LOGIN passwd='$FENCE_PASSWORD'";;
         virsh) [ -n "$FENCE_SHARED_IP" ] || die "virsh 需要 --fence-shared-ip"; ipar="ipaddr=$FENCE_SHARED_IP login=$FENCE_LOGIN";;
       esac
-      runq "pcs stonith create fence_$DRBD_RESOURCE $agent $ipar $ex pcmk_host_map='$map' pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s";;
+      stonith_create "pcs stonith create fence_$DRBD_RESOURCE $agent $ipar $ex pcmk_host_map='$map' pcmk_delay_max=$FENCE_DELAY_MAX op monitor interval=30s";;
   esac
   runq "pcs property set stonith-enabled=true"
 }
