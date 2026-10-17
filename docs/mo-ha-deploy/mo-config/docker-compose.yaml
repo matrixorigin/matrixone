@@ -13,7 +13,7 @@ services:
     entrypoint: ["/mo-service"]
     command: ["-launch", "/etc/mo-conf/launch.toml", "-debug-http=:6060"]
     ports:
-      - "__MO_PORT__:6001"
+      - "__MO_BIND_IP__:__MO_PORT__:6001"
     volumes:
       - __DATA_DIR__:/mo-data
       - __MO_DIR__/conf:/etc/mo-conf:ro

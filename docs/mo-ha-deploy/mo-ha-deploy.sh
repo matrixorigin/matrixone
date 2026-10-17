@@ -39,6 +39,8 @@ DRBD_RESOURCE="${DRBD_RESOURCE:-mo}"; DRBD_PORT="${DRBD_PORT:-7789}"
 DATA_DIR="${DATA_DIR:-/mnt/mo-data}"
 MO_IMAGE="${MO_IMAGE:-matrixorigin/matrixone:latest}"
 MO_DIR="${MO_DIR:-/opt/mo-ha}"; MO_PORT="${MO_PORT:-6001}"; MO_HOSTNAME="${MO_HOSTNAME:-mo-ha}"
+# 对外发布地址：默认对所有网卡开放；生产建议改为内网 IP 或 VIP
+MO_BIND_IP="${MO_BIND_IP:-0.0.0.0}"
 MO_CONFIG_DIR="${MO_CONFIG_DIR:-}"; NO_MO="${NO_MO:-0}"
 DOCKER_MODE="${DOCKER_MODE:-official}"     # official | distro | skip
 # 部署时预拉 MO 镜像：docker-compose RA 的 start 默认超时 240s，
@@ -107,6 +109,7 @@ mo-ha-deploy.sh — MatrixOne 双机主备(DRBD+Pacemaker/STONITH) 一键部署
   --data-dir PATH        数据目录(默认 /mnt/mo-data)
   --mo-image IMAGE       MatrixOne 镜像(默认 matrixorigin/matrixone:latest)
   --mo-port PORT         MO 客户端端口(默认 6001)
+  --mo-bind-ip IP        MO 端口绑定的本机地址(默认 0.0.0.0，生产建议填内网 IP/VIP)
   --mo-dir PATH          MO 运行目录(默认 /opt/mo-ha)
   --mo-hostname NAME     explicit-hostname(默认 mo-ha，两台必须一致)
   --mo-config-dir PATH   配置载荷目录(默认脚本同级 mo-config/)
@@ -164,6 +167,7 @@ while [ $# -gt 0 ]; do
     --data-dir) DATA_DIR="${2:-}"; shift 2;;
     --mo-image) MO_IMAGE="${2:-}"; shift 2;;
     --mo-port) MO_PORT="${2:-}"; shift 2;;
+    --mo-bind-ip) MO_BIND_IP="${2:-}"; shift 2;;
     --mo-dir) MO_DIR="${2:-}"; shift 2;;
     --mo-hostname) MO_HOSTNAME="${2:-}"; shift 2;;
     --mo-config-dir) MO_CONFIG_DIR="${2:-}"; shift 2;;
@@ -481,7 +485,7 @@ stage_moconf(){
       "$([ -n "$S3_BUCKET" ] && echo S3 || echo DISK-V2)"
     return 0
   fi
-  sed -i "s#__MO_IMAGE__#${MO_IMAGE}#g; s#__MO_PORT__#${MO_PORT}#g; s#__DATA_DIR__#${DATA_DIR}#g; s#__MO_DIR__#${MO_DIR}#g" "$MO_DIR/docker-compose.yaml"
+  sed -i "s#__MO_IMAGE__#${MO_IMAGE}#g; s#__MO_PORT__#${MO_PORT}#g; s#__MO_BIND_IP__#${MO_BIND_IP}#g; s#__DATA_DIR__#${DATA_DIR}#g; s#__MO_DIR__#${MO_DIR}#g" "$MO_DIR/docker-compose.yaml"
   sed -i "s#__MO_HOSTNAME__#${MO_HOSTNAME}#g" "$MO_DIR/conf/log.toml" 2>/dev/null || true
   local blk; blk="$(mktemp)"; build_shared_block > "$blk"
   for f in "$MO_DIR/conf/tn.toml" "$MO_DIR/conf/cn.toml"; do
