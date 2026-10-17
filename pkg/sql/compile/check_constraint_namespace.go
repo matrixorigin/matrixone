@@ -23,7 +23,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 // introducedCheckConstraints excludes identities already owned by the source.
@@ -55,14 +57,11 @@ func (c *Compile) claimCheckConstraintNames(database string, checks []*plan.Chec
 	if c.disableLock || len(checks) == 0 {
 		return nil
 	}
-	// Synthetic namespace keys have no MVCC row. Optimistic commit cannot
-	// detect a competing claim, and a fixed SI snapshot cannot be refreshed
-	// after waiting. Keep new authoring fail-closed in these modes, just as
-	// other catalog lifecycle admissions require pessimistic RC ownership.
-	// Trusted restore/replacement and unchanged inherited names do not claim
-	// new identities and are handled before this point.
-	if !c.isLifecycleRC() {
-		return moerr.NewNotSupported(c.proc.Ctx, "new schema-wide CHECK constraint names require pessimistic RC transactions")
+	// Optimistic commit has no MVCC row to validate for a synthetic name key.
+	// Pessimistic SI keeps its snapshot and checks the grant watermark instead
+	// of using RC's applied-frontier refresh below.
+	if !c.proc.GetTxnOperator().Txn().IsPessimistic() {
+		return moerr.NewNotSupported(c.proc.Ctx, "new schema-wide CHECK constraint names require pessimistic transactions")
 	}
 	actor, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -83,15 +82,32 @@ func (c *Compile) claimCheckConstraintNames(database string, checks []*plan.Chec
 		if i > 0 && name == names[i-1] {
 			continue
 		}
-		if _, err = c.lockCatalogName(rel, actor, []string{database, "CHECK_CONSTRAINT", name},
-			lock.LockMode_Exclusive, lock.WaitPolicy_Wait); err != nil {
+		if err = c.lockCheckConstraintName(rel, actor, database, name); err != nil {
 			return err
 		}
+	}
+	if !c.proc.GetTxnOperator().Txn().IsRCIsolation() {
+		return nil
 	}
 	// The reservation is not a catalog row, so row-version probing cannot
 	// refresh it. Read an applied frontier after acquiring every name,
 	// including when the preceding owner committed before we began waiting.
 	return c.advanceLifecycleAdmissionSnapshot()
+}
+
+func (c *Compile) lockCheckConstraintName(rel engine.Relation, actor uint32, database, name string) error {
+	keys, err := getLockBatch(c.proc, actor, []string{database, "CHECK_CONSTRAINT", name})
+	if err != nil {
+		return err
+	}
+	defer keys.GetVector(0).Free(c.proc.Mp())
+	admit := lockop.LockRowsForAdmissionResult
+	if !c.proc.GetTxnOperator().Txn().IsRCIsolation() {
+		admit = lockop.LockRowsForFixedSnapshotAdmissionResult
+	}
+	_, err = admit(c.proc.Ctx, c.e, c.proc, rel.GetTableID(c.proc.Ctx),
+		keys, 0, *keys.GetVector(0).GetType(), lock.LockMode_Exclusive, actor, lock.WaitPolicy_Wait)
+	return err
 }
 
 func (c *Compile) validateIntroducedCheckConstraintNames(database, table string, previous, next []*plan.CheckDef) error {

@@ -80,6 +80,32 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			require.NoError(t, err)
 		}()
 
+		t.Run("repeatable read preserves check authoring", func(t *testing.T) {
+			exec(t, "set session transaction_isolation='REPEATABLE-READ'")
+			defer exec(t, "set session transaction_isolation='READ-COMMITTED'")
+			exec(t, "create table si_checked(x int check(x>0))")
+			exec(t, "create table si_add(x int)")
+			exec(t, "insert into si_add values(5)")
+			exec(t, "alter table si_add add check(x>0)")
+			exec(t, "create table si_like like si_checked")
+			expectError(t, "insert into si_checked values(-1)", 3819)
+			expectError(t, "insert into si_add values(-1)", 3819)
+			expectError(t, "insert into si_like values(-1)", 3819)
+			expectError(t, "create table si_duplicate(x int, constraint si_checked_chk_1 check(x<10))", 3822)
+			expectError(t, "alter table si_add add constraint si_checked_chk_1 check(x<10)", 3822)
+			count(t, "select count(*) from si_add where x=5", 1)
+			// Failure occurs during COPY validation, after the name was
+			// reserved. Autocommit rollback must preserve the old rows/checks
+			// and release the claim for an unrelated destination.
+			exec(t, "create table si_invalid(x int)")
+			exec(t, "insert into si_invalid values(-1)")
+			expectError(t, "alter table si_invalid add constraint si_reusable check(x>0)", 3819)
+			count(t, "select count(*) from si_invalid where x=-1", 1)
+			count(t, "select count(*) from information_schema.table_constraints where table_schema='"+database+"' and table_name='si_invalid' and constraint_type='CHECK'", 0)
+			exec(t, "create table si_reused(x int, constraint si_reusable check(x>0))")
+			exec(t, "insert into si_add values(11)")
+		})
+
 		t.Run("copy alter validates only newly introduced names", func(t *testing.T) {
 			exec(t, "create table a(x int, constraint ck check(x>0))")
 			exec(t, "create table b(x int)")
@@ -165,15 +191,17 @@ func TestCheckConstraintNamespace(t *testing.T) {
 		otherDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/%s", otherCN.GetServiceConfig().CN.Frontend.Port, database))
 		require.NoError(t, err)
 		defer otherDB.Close()
-		for _, commit := range []bool{true, false} {
-			t.Run(fmt.Sprintf("concurrent namespace owner commit=%t", commit), func(t *testing.T) {
-				checkConcurrentConstraintClaim(t, ctx, conn, otherDB, cn.ServiceID(), otherCN, commit)
-			})
+		for _, isolation := range []string{"READ-COMMITTED", "REPEATABLE-READ"} {
+			for _, commit := range []bool{true, false} {
+				t.Run(fmt.Sprintf("concurrent namespace %s owner commit=%t", isolation, commit), func(t *testing.T) {
+					checkConcurrentConstraintClaim(t, ctx, conn, otherDB, cn.ServiceID(), otherCN, isolation, commit)
+				})
+			}
 		}
 	})
 }
 
-func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner *sql.Conn, db *sql.DB, ownerServiceID string, cn ServiceOperator, commit bool) {
+func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner *sql.Conn, db *sql.DB, ownerServiceID string, cn ServiceOperator, isolation string, commit bool) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(parent, time.Minute)
 	defer cancel()
@@ -185,6 +213,7 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 		_, err := conn.ExecContext(ctx, query)
 		require.NoError(t, err, query)
 	}
+	exec(writer, "set session transaction_isolation='"+isolation+"'")
 	for _, table := range []string{"concurrent_a", "concurrent_b"} {
 		exec(owner, "drop table if exists "+table)
 	}
@@ -196,26 +225,31 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 		require.NoError(t, err)
 	}()
 	exec(owner, "create table concurrent_a(x int, constraint shared_ck check(x>0))")
-	exec(writer, "begin")
-	// Establish B's older snapshot before A publishes its CHECK identity.
+	if isolation == "READ-COMMITTED" {
+		exec(writer, "begin")
+	}
+	// An SI autocommit DDL starts its fixed snapshot when the statement
+	// begins. Explicit active-SI lifecycle DDL is a pre-existing frontend
+	// restriction, independent of CHECK-name admission.
 	var connectionID uint32
 	require.NoError(t, writer.QueryRowContext(ctx, "select connection_id()").Scan(&connectionID))
 	provider := cn.RawService().(interface {
 		SessionMgr() *queryservice.SessionManager
 	})
-	var writerTxn []byte
-	for _, session := range provider.SessionMgr().GetAllSessions() {
-		if identity, ok := session.(interface {
-			GetTxnId() uuid.UUID
-			GetConnectionID() uint32
-		}); ok {
-			id := identity.GetTxnId()
-			if id != (uuid.UUID{}) && identity.GetConnectionID() == connectionID {
-				writerTxn = append([]byte(nil), id[:]...)
+	writerTxn := func() []byte {
+		for _, session := range provider.SessionMgr().GetAllSessions() {
+			if identity, ok := session.(interface {
+				GetTxnId() uuid.UUID
+				GetConnectionID() uint32
+			}); ok {
+				id := identity.GetTxnId()
+				if id != (uuid.UUID{}) && identity.GetConnectionID() == connectionID {
+					return append([]byte(nil), id[:]...)
+				}
 			}
 		}
+		return nil
 	}
-	require.NotEmpty(t, writerTxn)
 	packer := types.NewPacker()
 	defer packer.Close()
 	packer.EncodeUint32(0)
@@ -243,18 +277,22 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 	}()
 	defer func() {
 		cancel()
-		// Join the SQL actor before replacing callbacks or returning its session.
+		// Join the SQL actor before returning its session.
 		<-done
 	}()
 	// Observe the exact normalized CHECK key in the real lock-service queue,
 	// not a timing window or an assumed ordinal of catalog lock callbacks.
 	require.Eventually(t, func() bool {
+		txnID := writerTxn()
+		if len(txnID) == 0 {
+			return false
+		}
 		found := false
 		for _, service := range services {
 			service.IterLocks(func(tableID uint64, keys [][]byte, held lockservice.Lock) bool {
 				if tableID == catalog.MO_TABLES_ID && len(keys) == 1 && bytes.Equal(keys[0], key) {
 					held.IterWaiters(func(waiter lock.WaitTxn) bool {
-						found = found || bytes.Equal(waiter.TxnID, writerTxn)
+						found = found || bytes.Equal(waiter.TxnID, txnID)
 						return !found
 					})
 				}
@@ -271,9 +309,13 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 	select {
 	case <-done:
 		if commit {
-			var serverError *mysql.MySQLError
-			require.True(t, errors.As(writerErr, &serverError), "%v", writerErr)
-			require.Equal(t, uint16(3822), serverError.Number)
+			if isolation == "READ-COMMITTED" {
+				var serverError *mysql.MySQLError
+				require.True(t, errors.As(writerErr, &serverError), "%v", writerErr)
+				require.Equal(t, uint16(3822), serverError.Number)
+			} else {
+				require.ErrorContains(t, writerErr, "w-w conflict", "SI must reject its stale snapshot instead of refreshing it")
+			}
 			exec(writer, "rollback")
 		} else {
 			require.NoError(t, writerErr)
