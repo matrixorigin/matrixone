@@ -21,6 +21,9 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
@@ -77,6 +80,47 @@ func TestPreparedFieldNumericModeAffectsTypes(t *testing.T) {
 		})
 	}
 	require.False(t, preparedFieldNumericModeAffectsTypes(nil, context.Background(), context.Background(), true))
+}
+
+func TestPreparedFieldNumericModeActualCastContract(t *testing.T) {
+	for _, tc := range []struct {
+		name, decimal string
+		changed       bool
+	}{
+		{"capped", "65,30", false},
+		{"uncapped", "10,2", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sql := "select field(case when ? then ? else null end,'A','a')," +
+				"cast(? as decimal(" + tc.decimal + "))/cast(1 as decimal(" + tc.decimal + "))"
+			ses, prepared, cw, _ := newPreparedExecuteEnvForSQL(t, 141, sql)
+			t.Cleanup(func() {
+				cw.proc.SetPrepareParams(nil)
+				prepared.Close()
+				ses.Close()
+			})
+			previous := function.WithDivPrecisionIncrement(context.Background(), 4)
+			stmt, err := parsers.ParseOne(previous, dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			compiler := ses.txnCompileCtx
+			old := compiler.GetContext()
+			defer compiler.SetContext(old)
+			bindings := []plan2.PreparedSourceBinding{
+				{Position: 0, Type: types.T_int64.ToType()},
+				{Position: 1, Type: types.T_text.ToType()},
+				{Position: 2, Type: types.T_int64.ToType()},
+			}
+			for _, increment := range []int32{8, 0} {
+				current := function.WithDivPrecisionIncrement(previous, increment)
+				compiler.SetContext(current)
+				bound, err := plan2.BuildPreparedExecutionPlan(compiler, stmt, bindings, []any{int64(1), "a", int64(5)})
+				require.NoError(t, err)
+				require.Equal(t, tc.changed, preparedFieldNumericModeAffectsTypes(bound.Plan, previous, current, false),
+					"an execution CAST1 declaration must survive an inner typed CAST0(P), increment %d", increment)
+			}
+		})
+	}
 }
 
 func TestPreparedFieldDependenciesChanged(t *testing.T) {

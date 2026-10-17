@@ -155,6 +155,88 @@ char_length((select first_value(coalesce(txt, bin)) over () from domains limit 1
 hex(left((select first_value(coalesce(txt, bin)) over () from domains limit 1), 1));
 ➤ char_length((select distinct coalesce(txt, bin) from domains limit 1))[-5,64,0]  ¦  hex(left((select distinct coalesce(txt, bin) from domains limit 1), 1))[-1,16383,0]  ¦  char_length((select coalesce(txt, bin) as x from domains where id = 1 union all select  order by x desc limit 1))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) as x from domains where id = 1 union all select  order by x desc limit 1), 1))[-1,16383,0]  ¦  char_length((select first_value(coalesce(txt, bin)) over () from domains limit 1))[-5,64,0]  ¦  hex(left((select first_value(coalesce(txt, bin)) over () from domains limit 1), 1))[-1,16383,0]  𝄀
 4  ¦  E4  ¦  4  ¦  E4  ¦  4  ¦  E4
+select id, char_length(coalesce(reverse(coalesce(txt, bin)), '')),
+hex(reverse(coalesce(reverse(coalesce(txt, bin)), ''))),
+char_length(coalesce(left(coalesce(txt, bin), 1), '')),
+hex(reverse(coalesce(left(coalesce(txt, bin), 1), ''))),
+char_length(coalesce(repeat(coalesce(txt, bin), 2), '')),
+char_length(coalesce(rpad(coalesce(txt, bin), 3, 'z'), ''))
+from domains order by id;
+➤ id[4,32,0]  ¦  char_length(coalesce(reverse(coalesce(txt, bin)), ))[-5,64,0]  ¦  hex(reverse(coalesce(reverse(coalesce(txt, bin)), )))[-1,16383,0]  ¦  char_length(coalesce(left(coalesce(txt, bin), 1), ))[-5,64,0]  ¦  hex(reverse(coalesce(left(coalesce(txt, bin), 1), )))[-1,16383,0]  ¦  char_length(coalesce(repeat(coalesce(txt, bin), 2), ))[-5,64,0]  ¦  char_length(coalesce(rpad(coalesce(txt, bin), 3, z), ))[-5,64,0]  𝄀
+1  ¦  2  ¦  E4BDA061  ¦  1  ¦  E4BDA0  ¦  4  ¦  3  𝄀
+2  ¦  4  ¦  E4BDA061  ¦  1  ¦  E4  ¦  8  ¦  3  𝄀
+3  ¦  2  ¦  E4BDA061  ¦  1  ¦  E4BDA0  ¦  4  ¦  3
+select id, char_length(if(id = 2, bin, coalesce(txt, bin))),
+hex(left(if(id = 2, bin, coalesce(txt, bin)), 1)),
+hex(reverse(if(id = 2, bin, coalesce(txt, bin)))),
+char_length(case when id = 2 then bin else coalesce(txt, bin) end),
+hex(left(case when id = 2 then bin else coalesce(txt, bin) end, 1)),
+hex(reverse(case when id = 2 then bin else coalesce(txt, bin) end))
+from domains order by id;
+➤ id[4,32,0]  ¦  char_length(if(id = 2, bin, coalesce(txt, bin)))[-5,64,0]  ¦  hex(left(if(id = 2, bin, coalesce(txt, bin)), 1))[12,2,0]  ¦  hex(reverse(if(id = 2, bin, coalesce(txt, bin))))[-1,16383,0]  ¦  char_length(case when id = 2 then bin else coalesce(txt, bin) end)[-5,64,0]  ¦  hex(left(case when id = 2 then bin else coalesce(txt, bin) end, 1))[12,2,0]  ¦  hex(reverse(case when id = 2 then bin else coalesce(txt, bin) end))[-1,16383,0]  𝄀
+1  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+2  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  4  ¦  E4  ¦  61A0BDE4  ¦  4  ¦  E4  ¦  61A0BDE4
+select id, locate('a', coalesce(txt, bin)), instr(coalesce(txt, bin), 'a'),
+coalesce(txt, bin) like '__', coalesce(txt, bin) like '____',
+char_length(coalesce(txt, bin)), hex(left(coalesce(txt, bin), 1))
+from domains order by id;
+➤ id[4,32,0]  ¦  locate(a, coalesce(txt, bin))[-5,64,0]  ¦  instr(coalesce(txt, bin), a)[-5,64,0]  ¦  coalesce(txt, bin) like __[-7,1,0]  ¦  coalesce(txt, bin) like ____[-7,1,0]  ¦  char_length(coalesce(txt, bin))[-5,64,0]  ¦  hex(left(coalesce(txt, bin), 1))[-1,16383,0]  𝄀
+1  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0  𝄀
+2  ¦  4  ¦  4  ¦  0  ¦  1  ¦  4  ¦  E4  𝄀
+3  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0
+select id, locate('a', x), instr(x, 'a'), x like '__', x like '____',
+char_length(x), hex(left(x, 1))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+➤ id[4,32,0]  ¦  locate(a, x)[-5,64,0]  ¦  instr(x, a)[-5,64,0]  ¦  x like __[-7,1,0]  ¦  x like ____[-7,1,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  𝄀
+1  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0  𝄀
+2  ¦  4  ¦  4  ¦  0  ¦  1  ¦  4  ¦  E4  𝄀
+3  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0
+select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
+from (select id, coalesce(txt, bin) x from domains having id > 0) d order by id;
+➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  ¦  hex(reverse(x))[-1,16383,0]  𝄀
+1  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  4  ¦  E4  ¦  61A0BDE4
+select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
+from (select id, coalesce(txt, bin) x from domains having true) d order by id;
+➤ id[4,32,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  ¦  hex(reverse(x))[-1,16383,0]  𝄀
+1  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
+3  ¦  4  ¦  E4  ¦  61A0BDE4
+select char_length((select coalesce(txt, bin) from domains group by coalesce(txt, bin))),
+hex(left((select coalesce(txt, bin) from domains group by coalesce(txt, bin)), 1)),
+hex(reverse((select coalesce(txt, bin) from domains group by coalesce(txt, bin))));
+➤ char_length((select coalesce(txt, bin) from domains group by coalesce(txt, bin)))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) from domains group by coalesce(txt, bin)), 1))[-1,16383,0]  ¦  hex(reverse((select coalesce(txt, bin) from domains group by coalesce(txt, bin))))[-1,16383,0]  𝄀
+4  ¦  E4  ¦  61A0BDE4
+select char_length((select coalesce(txt, bin) x from domains where id = 1 having x is not null)),
+hex(left((select coalesce(txt, bin) x from domains where id = 1 having x is not null), 1));
+➤ char_length((select coalesce(txt, bin) as x from domains where id = 1 having x is not null))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) as x from domains where id = 1 having x is not null), 1))[-1,16383,0]  𝄀
+2  ¦  E4BDA0
+create table singleton_domains (id int primary key, txt varchar(16), bin varbinary(16));
+insert into singleton_domains values (1, '你a', null);
+select char_length((select coalesce(txt, bin) from singleton_domains group by coalesce(txt, bin))),
+hex(left((select coalesce(txt, bin) from singleton_domains group by coalesce(txt, bin)), 1));
+➤ char_length((select coalesce(txt, bin) from singleton_domains group by coalesce(txt, bin)))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) from singleton_domains group by coalesce(txt, bin)), 1))[-1,16383,0]  𝄀
+4  ¦  E4
+select char_length((select coalesce(txt, bin) from singleton_domains where id = 1 group by coalesce(txt, bin))),
+hex(left((select coalesce(txt, bin) from singleton_domains where id = 1 group by coalesce(txt, bin)), 1));
+➤ char_length((select coalesce(txt, bin) from singleton_domains where id = 1 group by coalesce(txt, bin)))[-5,64,0]  ¦  hex(left((select coalesce(txt, bin) from singleton_domains where id = 1 group by coalesce(txt, bin)), 1))[-1,16383,0]  𝄀
+2  ¦  E4BDA0
+drop table singleton_domains;
+create table declared_conditional_slice as
+select id, left(if(d.x is not null, d.x, _binary 'x'), 1) sliced
+from (select id, if(id = 2, bin, txt) x from domains) d;
+select id, hex(sliced), char_length(sliced) from declared_conditional_slice order by id;
+➤ id[4,32,0]  ¦  hex(sliced)[12,2,0]  ¦  char_length(sliced)[-5,64,0]  𝄀
+1  ¦  E4  ¦  1  𝄀
+2  ¦  E4  ¦  1  𝄀
+3  ¦  E4  ¦  1
+select data_type, character_maximum_length from information_schema.columns
+where table_schema = database() and table_name = 'declared_conditional_slice' and column_name = 'sliced';
+➤ data_type[12,65535,0]  ¦  character_maximum_length[-5,64,0]  𝄀
+varbinary  ¦  1
+drop table declared_conditional_slice;
 select id, hex(left(invalid_bytes, 1)), hex(reverse(invalid_bytes)),
 char_length(invalid_bytes), invalid_bytes like '____'
 from domains order by id;

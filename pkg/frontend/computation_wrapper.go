@@ -876,6 +876,20 @@ func preparedFieldDependenciesChanged(previous, current []*plan.ObjectRef) bool 
 	return false
 }
 
+// Only inference CAST0 is transparent. CAST1 owns an execution declaration even
+// when it has no syntax flag, and may itself contain a typed transport CAST0(P).
+func preparedFieldNumericContractSource(source *plan.Expr) *plan.Expr {
+	for source.GetF() != nil && source.GetF().GetFunc().GetObjName() == "cast" &&
+		!source.GetF().SyntaxExplicitCast && len(source.GetF().Args) > 0 && source.GetF().Args[0].GetP() == nil {
+		_, overload := function.DecodeOverloadID(source.GetF().GetFunc().GetObj())
+		if overload != 0 {
+			break
+		}
+		source = source.GetF().Args[0]
+	}
+	return source
+}
+
 // Compare contracts in a fresh binding with actual parameter domains, not the
 // seed's provisional signed markers or casts imposed by historical FIELD facts.
 // This runs only after a numeric setting changes; no graph escapes the call.
@@ -894,12 +908,7 @@ func preparedFieldNumericModeAffectsTypes(p *plan.Plan, previous, current contex
 			case "-", "/":
 				args := make([]types.Type, len(fn.Args))
 				for i, source := range fn.Args {
-					// Remove inference casts, but retain explicit declarations and
-					// the last cast from a physical TEXT parameter transport.
-					for source.GetF() != nil && source.GetF().GetFunc().GetObjName() == "cast" &&
-						!source.GetF().SyntaxExplicitCast && len(source.GetF().Args) > 0 && source.GetF().Args[0].GetP() == nil {
-						source = source.GetF().Args[0]
-					}
+					source = preparedFieldNumericContractSource(source)
 					args[i] = types.New(types.T(source.Typ.Id), source.Typ.Width, source.Typ.Scale)
 				}
 				before, beforeErr := function.GetFunctionByName(previous, fn.Func.ObjName, args)
@@ -915,11 +924,7 @@ func preparedFieldNumericModeAffectsTypes(p *plan.Plan, previous, current contex
 					beforeCast != afterCast || !slices.Equal(beforeCasts, afterCasts)
 			case "sum", "avg":
 				if boolSumAvg && len(fn.Args) == 1 {
-					source := fn.Args[0]
-					for source.GetF() != nil && source.GetF().GetFunc().GetObjName() == "cast" &&
-						!source.GetF().SyntaxExplicitCast && len(source.GetF().Args) > 0 && source.GetF().Args[0].GetP() == nil {
-						source = source.GetF().Args[0]
-					}
+					source := preparedFieldNumericContractSource(fn.Args[0])
 					affected = source.Typ.Id == int32(types.T_bool)
 				}
 			}
