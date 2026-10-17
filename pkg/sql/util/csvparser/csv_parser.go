@@ -625,7 +625,11 @@ outside:
 		// (the default) disables comments entirely.
 		if len(parser.comment) > 0 && prevToken == csvTokenNewLine &&
 			len(parser.recordBuffer) == 0 && !foundStartingByThisLine {
-			if bs, perr := parser.peekBytes(len(parser.comment)); perr == nil && bytes.Equal(bs, parser.comment) {
+			bs, perr := parser.peekBytes(len(parser.comment))
+			if perr != nil && perr != io.EOF {
+				return perr
+			}
+			if perr == nil && bytes.Equal(bs, parser.comment) {
 				if _, _, rerr := parser.readUntilTerminator(); rerr != nil && rerr != io.EOF {
 					return rerr
 				}
@@ -644,13 +648,10 @@ outside:
 			oldPos := parser.pos
 			oldLineNo := parser.lineNo
 			content, _, err := parser.readUntilTerminator()
-			if err != nil {
-				if len(content) == 0 {
-					return err
-				}
-				// if we reached EOF, we should still check the content contains
-				// startingBy and try to put back and parse it.
+			if err != nil && (err != io.EOF || len(content) == 0) {
+				return err
 			}
+			// At EOF, remaining content can still contain startingBy and a final record.
 			idx := bytes.Index(content, parser.startingBy)
 			if idx == -1 {
 				continue

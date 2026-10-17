@@ -18,6 +18,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/stretchr/testify/require"
 )
@@ -37,6 +38,8 @@ func TestScanRecordMatchesReadFraming(t *testing.T) {
 		{name: "empty lines retained", data: "\n1,x\n", emptyLines: true, records: 2},
 		{name: "empty file"},
 		{name: "no final terminator", data: "1,x", records: 1},
+		{name: "comment without final terminator", data: "1,x", comment: "#", records: 1},
+		{name: "starting prefix without final terminator", data: "row:1,x", terminator: "\n", startingBy: "row:", records: 1},
 		{name: "header", data: "ID,\"NaMe\"\n1,\"a\nb\"\n2,x\n", header: true, records: 2},
 		{name: "unclosed quote", data: "1,\"a\nb", syntaxError: true},
 		{name: "dangling escape", data: "1,a\\", syntaxError: true},
@@ -88,4 +91,40 @@ func TestScanRecordThenRead(t *testing.T) {
 	require.ErrorIs(t, parser.ScanRecord(), io.EOF)
 	_, err = parser.Read(row)
 	require.ErrorIs(t, err, io.EOF)
+}
+
+func TestCSVLookaheadPropagatesReadError(t *testing.T) {
+	for _, tc := range []struct {
+		name, data, comment, startingBy string
+		completeRecords                 int
+	}{
+		{name: "comment", data: "1,xx\n2,y\n", comment: "#", completeRecords: 1},
+		{name: "starting prefix", data: "row:1,x\nrow:2,y\n", startingBy: "row:"},
+	} {
+		for _, scan := range []bool{false, true} {
+			method := "Read"
+			if scan {
+				method = "ScanRecord"
+			}
+			t.Run(tc.name+"/"+method, func(t *testing.T) {
+				cfg := CSVConfig{FieldsTerminatedBy: ",", LinesTerminatedBy: "\n",
+					Comment: tc.comment, LinesStartingBy: tc.startingBy}
+				// TimeoutReader fails only its second read; a third read would succeed.
+				input := iotest.TimeoutReader(strings.NewReader(tc.data))
+				parser, err := NewCSVParser(&cfg, input, 1, false)
+				require.NoError(t, err)
+				advance := func() error {
+					if scan {
+						return parser.ScanRecord()
+					}
+					_, err := parser.Read(nil)
+					return err
+				}
+				for range tc.completeRecords {
+					require.NoError(t, advance())
+				}
+				require.ErrorIs(t, advance(), iotest.ErrTimeout)
+			})
+		}
+	}
 }

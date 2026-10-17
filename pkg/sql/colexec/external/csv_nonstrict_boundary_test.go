@@ -320,6 +320,31 @@ func TestNonStrictBoundaryFailures(t *testing.T) {
 			})
 		}
 	}
+	t.Run("comment lookahead error", func(t *testing.T) {
+		opened, closed, reads := 0, 0, 0
+		input := strings.NewReader("1,x\n")
+		fs := boundaryTestFS{read: func(_ context.Context, vec *fileservice.IOVector) error {
+			opened++
+			r := boundaryReadFunc(func(p []byte) (int, error) {
+				reads++
+				if reads == 1 {
+					return 0, storageErr
+				}
+				return input.Read(p)
+			})
+			*vec.Entries[0].ReadCloserForRead = boundaryTestReader{Reader: r, close: func() { closed++ }}
+			return nil
+		}}
+		param := &tree.ExternParam{ExParamConst: tree.ExParamConst{
+			Tail: &tree.TailParameter{}, Option: []string{"comment", "#"},
+		}}
+		_, legacy, err := getNonStrictBoundary(param, fs, "unused", 0, 1)
+		require.ErrorIs(t, err, storageErr)
+		require.False(t, legacy)
+		require.Equal(t, 1, reads, "lookahead must not retry past a storage error")
+		require.Equal(t, 1, opened)
+		require.Equal(t, opened, closed)
+	})
 	t.Run("configuration", func(t *testing.T) {
 		closed := false
 		fs := boundaryTestFS{read: func(_ context.Context, vec *fileservice.IOVector) error {
