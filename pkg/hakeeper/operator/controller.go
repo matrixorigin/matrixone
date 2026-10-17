@@ -161,18 +161,49 @@ func (c *Controller) RemoveFinishedOperator(
 	}
 }
 
+// HasTNStartRetry identifies the extra batch requested by an owned TN start.
+func (c *Controller) HasTNStartRetry(ops []*Operator) bool {
+	for _, op := range ops {
+		if op != nil && !op.IsEnd() && len(op.steps) == 1 {
+			if _, ok := op.steps[0].(AddTnReplica); ok && slices.Contains(c.operators[op.shardID], op) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func (c *Controller) Dispatch(ops []*Operator, logState pb.LogState,
 	tnState pb.TNState, cnState pb.CNState, proxyState pb.ProxyState) (commands []pb.ScheduleCommand) {
-	for _, op := range ops {
-		registered := false
-		if len(op.steps) == 1 {
-			_, tnStart := op.steps[0].(AddTnReplica)
-			registered = tnStart && slices.Contains(c.operators[op.shardID], op)
+	// Only retry cohorts contain previously registered Log pointers. Ordinary
+	// fresh batches keep constant-time admission, including NoopShardID tasks.
+	var owned, emitted map[*Operator]bool
+	if c.HasTNStartRetry(ops) {
+		owned = make(map[*Operator]bool)
+		emitted = make(map[*Operator]bool, len(ops))
+		for _, existing := range c.operators {
+			for _, op := range existing {
+				owned[op] = true
+			}
 		}
-		if !registered {
+	}
+	for _, op := range ops {
+		if op == nil || op.IsEnd() {
+			continue
+		}
+		if owned != nil {
+			if emitted[op] {
+				continue
+			}
+			emitted[op] = true
+			if !owned[op] {
+				c.operators[op.shardID] = append(c.operators[op.shardID], op)
+				owned[op] = true
+			}
+		} else {
 			c.operators[op.shardID] = append(c.operators[op.shardID], op)
 		}
-		if step := op.Check(logState, tnState, cnState, proxyState); step != nil {
+		if step := op.Check(logState, tnState, cnState, proxyState); step != nil && !op.IsEnd() {
 			commands = append(commands, generateScheduleCommand(step))
 		}
 	}
