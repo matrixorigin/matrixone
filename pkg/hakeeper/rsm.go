@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -465,11 +466,14 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	}
 
 	s.state.Term = b.Term
+	commands := mergeTNReplicaStarts(s.state.ScheduleCommands, b.Commands)
 	s.state.ScheduleCommands = make(map[string]pb.CommandBatch)
 	for _, c := range b.Commands {
 		if c.Bootstrapping {
 			s.handleSetStateCmd(GetSetStateCmd(pb.HAKeeperBootstrapCommandsReceived))
 		}
+	}
+	for _, c := range commands {
 		if c.DeleteCNStore != nil {
 			s.handleDeleteCNCmd(c.UUID)
 			continue
@@ -492,12 +496,74 @@ func (s *stateMachine) handleUpdateCommandsCmd(cmd []byte) sm.Result {
 	return sm.Result{}
 }
 
+// mergeTNReplicaStarts carries unresolved TN starts through unrelated checker
+// batches. Accepted command order is authoritative; a later placement, local
+// removal or shutdown must revoke an older start before it can be replayed.
+func mergeTNReplicaStarts(previous map[string]pb.CommandBatch, incoming []pb.ScheduleCommand) []pb.ScheduleCommand {
+	var commands []pb.ScheduleCommand
+	var discarded []bool
+	starts := make(map[uint64]int)
+	appendCommand := func(cmd pb.ScheduleCommand) {
+		if cmd.ServiceType == pb.TNService {
+			if cmd.ShutdownStore != nil {
+				for shard, index := range starts {
+					if commands[index].UUID == cmd.UUID {
+						discarded[index] = true
+						delete(starts, shard)
+					}
+				}
+			}
+			if change := cmd.ConfigChange; change != nil {
+				shard := change.Replica.ShardID
+				if index, ok := starts[shard]; ok {
+					replace := change.ChangeType == pb.StartReplica || change.ChangeType == pb.AddReplica
+					remove := change.ChangeType == pb.StopReplica || change.ChangeType == pb.RemoveReplica
+					if replace || (remove && commands[index].UUID == cmd.UUID) {
+						discarded[index] = true
+						delete(starts, shard)
+					}
+				}
+				if change.ChangeType == pb.StartReplica {
+					starts[shard] = len(commands)
+				}
+			}
+		}
+		commands = append(commands, cmd)
+		discarded = append(discarded, false)
+	}
+
+	// Stable traversal also gives old snapshots with duplicate intents the same
+	// normalization on every HAKeeper replica.
+	stores := make([]string, 0, len(previous))
+	for uuid := range previous {
+		stores = append(stores, uuid)
+	}
+	sort.Strings(stores)
+	for _, uuid := range stores {
+		for _, cmd := range previous[uuid].Commands {
+			if cmd.ServiceType == pb.TNService && cmd.ConfigChange != nil && cmd.ConfigChange.ChangeType == pb.StartReplica {
+				appendCommand(cmd)
+			}
+		}
+	}
+	for _, cmd := range incoming {
+		appendCommand(cmd)
+	}
+	kept := commands[:0]
+	for index, cmd := range commands {
+		if !discarded[index] {
+			kept = append(kept, cmd)
+		}
+	}
+	return kept
+}
+
 func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 	if batch, ok := s.state.ScheduleCommands[uuid]; ok {
 		deliver := make([]pb.ScheduleCommand, 0, len(batch.Commands))
 		pending := make([]pb.ScheduleCommand, 0, len(batch.Commands))
 		for _, cmd := range batch.Commands {
-			retryable, applied := s.bootstrapReplicaCommandStatus(cmd)
+			retryable, applied := s.replicaStartCommandStatus(cmd)
 			if applied {
 				continue
 			}
@@ -526,17 +592,13 @@ func (s *stateMachine) getCommandBatch(uuid string) sm.Result {
 
 }
 
-// bootstrapReplicaCommandStatus returns whether a bootstrap command must be
-// retried until its target reports the replica, and whether that report has
-// already arrived. Heartbeat proposals can be committed after their caller's
-// context times out. Retaining these commands until a later heartbeat
-// acknowledges the replica prevents a committed-but-unobserved response from
-// permanently losing the command and stalling bootstrap.
-func (s *stateMachine) bootstrapReplicaCommandStatus(
+// replicaStartCommandStatus keeps real TN starts and bootstrap log starts until
+// their target reports completion. Committing a heartbeat does not mean its
+// caller received the command.
+func (s *stateMachine) replicaStartCommandStatus(
 	cmd pb.ScheduleCommand,
 ) (retryable bool, applied bool) {
-	if !cmd.Bootstrapping ||
-		cmd.ConfigChange == nil ||
+	if cmd.ConfigChange == nil ||
 		cmd.ConfigChange.ChangeType != pb.StartReplica {
 		return false, false
 	}
@@ -544,6 +606,9 @@ func (s *stateMachine) bootstrapReplicaCommandStatus(
 	replica := cmd.ConfigChange.Replica
 	switch cmd.ServiceType {
 	case pb.LogService:
+		if !cmd.Bootstrapping {
+			return false, false
+		}
 		store, ok := s.state.LogState.Stores[cmd.UUID]
 		if !ok {
 			return true, false
@@ -561,8 +626,10 @@ func (s *stateMachine) bootstrapReplicaCommandStatus(
 			return true, false
 		}
 		for _, current := range store.Shards {
-			if current.ShardID == replica.ShardID &&
-				current.ReplicaID == replica.ReplicaID {
+			if current.ShardID == replica.ShardID {
+				// A different replica ID cancels obsolete intent: TN LoadOrStore
+				// cannot replace an existing local shard, and the checker accepts
+				// its started report. This is not an exact replica acknowledgement.
 				return true, true
 			}
 		}
