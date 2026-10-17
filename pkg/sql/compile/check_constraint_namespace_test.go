@@ -21,6 +21,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
@@ -32,14 +33,19 @@ import (
 )
 
 func TestCheckConstraintAdmissionRevalidatesAfterAllClaims(t *testing.T) {
-	for _, outcome := range []string{"available", "committed_sibling", "lock_error", "frontier_error", "snapshot_error", "catalog_error"} {
+	for _, outcome := range []string{"available", "committed_sibling", "lock_error", "frontier_error", "snapshot_error", "catalog_error", "si_available", "si_duplicate", "si_stale"} {
 		t.Run(outcome, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, 0)
 			op := mock_frontend.NewMockTxnOperator(ctrl)
 			proc.Base.TxnOperator = op
-			op.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC}).AnyTimes()
+			isolation := txn.TxnIsolation_RC
+			if outcome == "si_available" || outcome == "si_duplicate" || outcome == "si_stale" {
+				isolation = txn.TxnIsolation_SI
+			}
+			snapshot := timestamp.Timestamp{PhysicalTime: 10}
+			op.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: isolation, SnapshotTS: snapshot}).AnyTimes()
 			op.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 			op.EXPECT().CreateTS().Return(timestamp.Timestamp{}).AnyTimes()
 			op.EXPECT().AddWaitLock(gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(1)).AnyTimes()
@@ -48,6 +54,9 @@ func TestCheckConstraintAdmissionRevalidatesAfterAllClaims(t *testing.T) {
 			eng := newStubEngine()
 			db := newStubDatabase("db")
 			eng.dbs["db"] = db
+			if outcome == "si_duplicate" {
+				db.rels["sibling"] = &stubRelation{tableDef: &plan.TableDef{Checks: []*plan.CheckDef{{Name: "a"}}}}
+			}
 			eng.dbs[catalog.MO_CATALOG].rels[catalog.MO_TABLES].tableID = catalog.MO_TABLES_ID
 			injected := errors.New(outcome)
 			if outcome == "catalog_error" {
@@ -63,7 +72,11 @@ func TestCheckConstraintAdmissionRevalidatesAfterAllClaims(t *testing.T) {
 				if outcome == "lock_error" {
 					return lock.Result{}, injected
 				}
-				return lock.Result{LockedOn: lock.LockTable{Table: table, Valid: true}}, nil
+				watermark := snapshot
+				if outcome == "si_stale" {
+					watermark = snapshot.Next()
+				}
+				return lock.Result{LockedOn: lock.LockTable{Table: table, Valid: true}, Timestamp: watermark}, nil
 			}}
 			frontier := timestamp.Timestamp{PhysicalTime: 20}
 			workspace := mock_frontend.NewMockWorkspace(ctrl)
@@ -90,6 +103,15 @@ func TestCheckConstraintAdmissionRevalidatesAfterAllClaims(t *testing.T) {
 			c := &Compile{proc: proc, e: barrier}
 			err := c.validateIntroducedCheckConstraintNames("db", "new_table", nil, []*plan.CheckDef{{Name: "Z"}, {Name: "A"}})
 			switch outcome {
+			case "si_available":
+				require.NoError(t, err)
+				require.Equal(t, []string{"lock", "lock"}, events, "no SI frontier acquisition or workspace refresh")
+			case "si_duplicate":
+				require.ErrorContains(t, err, "Duplicate check constraint name")
+				require.Equal(t, []string{"lock", "lock"}, events)
+			case "si_stale":
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict), "%v", err)
+				require.Equal(t, []string{"lock"}, events)
 			case "available":
 				require.NoError(t, err)
 				require.Equal(t, []string{"lock", "lock", "frontier", "snapshot"}, events)
@@ -114,11 +136,10 @@ func TestCheckConstraintReplayAndInheritedNamesDoNotClaim(t *testing.T) {
 	require.NoError(t, c.validateIntroducedCheckConstraintNames("db", "t", nil, checks))
 }
 
-func TestCheckConstraintClaimRequiresRefreshableTransactionalOwner(t *testing.T) {
+func TestCheckConstraintClaimRequiresPessimisticOwner(t *testing.T) {
 	for _, meta := range []txn.TxnMeta{
 		{Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_RC},
 		{Mode: txn.TxnMode_Optimistic, Isolation: txn.TxnIsolation_SI},
-		{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_SI},
 	} {
 		t.Run(meta.Mode.String()+"/"+meta.Isolation.String(), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -127,7 +148,7 @@ func TestCheckConstraintClaimRequiresRefreshableTransactionalOwner(t *testing.T)
 			proc.Base.TxnOperator = op
 			c := &Compile{proc: proc}
 			require.NoError(t, c.claimCheckConstraintNames("db", nil))
-			require.ErrorContains(t, c.claimCheckConstraintNames("db", []*plan.CheckDef{{Name: "ck"}}), "require pessimistic RC")
+			require.ErrorContains(t, c.claimCheckConstraintNames("db", []*plan.CheckDef{{Name: "ck"}}), "require pessimistic transactions")
 			c.disableLock = true
 			require.NoError(t, c.claimCheckConstraintNames("db", []*plan.CheckDef{{Name: "ck"}}))
 		})
