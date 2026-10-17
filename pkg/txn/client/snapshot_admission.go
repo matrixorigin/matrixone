@@ -49,8 +49,9 @@ func AcquireSnapshotAdmission(ctx context.Context, cli TxnClient, minimum timest
 	if snapshot.IsEmpty() || !snapshot.Greater(minimum) {
 		return nil, true, moerr.NewInternalError(ctx, "snapshot admission has no current snapshot")
 	}
-	origin, cancel := context.WithCancel(ctx)
-	return &SnapshotAdmission{owner: c, snapshot: snapshot, ctx: origin, cancel: cancel}, true, nil
+	// End is represented by ended under mu. A separate cancellation child is
+	// only needed if creation can wait; the direct path validates before return.
+	return &SnapshotAdmission{owner: c, snapshot: snapshot, ctx: ctx}, true, nil
 }
 
 func (a *SnapshotAdmission) validate(ctx context.Context, cli TxnClient, minimum timestamp.Timestamp) error {
@@ -145,7 +146,16 @@ func WithAuthorizationSnapshot(a *SnapshotAdmission) TxnOption {
 // Creation observes the statement lifetime without lending its cancellation
 // context to the long-lived transaction after New returns.
 func (a *SnapshotAdmission) creationContext(ctx context.Context) (context.Context, func()) {
+	a.mu.Lock()
+	if a.cancel == nil {
+		a.ctx, a.cancel = context.WithCancel(a.ctx)
+		if a.ended {
+			a.cancel()
+		}
+	}
+	lifetime := a.ctx
+	a.mu.Unlock()
 	child, cancel := context.WithCancelCause(ctx)
-	stop := context.AfterFunc(a.ctx, func() { cancel(a.ctx.Err()) })
+	stop := context.AfterFunc(lifetime, func() { cancel(lifetime.Err()) })
 	return child, func() { stop(); cancel(nil) }
 }

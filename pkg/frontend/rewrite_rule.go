@@ -132,13 +132,14 @@ func normalizeRewriteRulesWithSelected(
 	return normalized, originalKeys, nil
 }
 
-// roleRuleCacheVersion returns an opaque comparable catalog proof, or nil when
-// freshness cannot be proved. The latter requires a fresh, uncacheable read.
-func roleRuleCacheVersion(ctx context.Context, ses *Session) (any, error) {
+// roleRuleCacheVersion returns a comparable catalog proof. Zero requires a
+// fresh, uncacheable read. Keep the hot result typed to avoid boxing a complete
+// catalog vector on every prepared execution; only cache publication boxes it.
+func roleRuleCacheVersion(ctx context.Context, ses *Session) (disttae.PrivilegeCacheVersion, error) {
 	tenant := ses.GetTenantInfo()
 	pu := getPuIfPresent(ses.GetService())
 	if tenant == nil || pu == nil {
-		return nil, nil
+		return disttae.PrivilegeCacheVersion{}, nil
 	}
 	storage := pu.StorageEngine
 	if wrapped, ok := storage.(*engine.EntireEngine); ok {
@@ -146,16 +147,13 @@ func roleRuleCacheVersion(ctx context.Context, ses *Session) (any, error) {
 	}
 	eng, ok := storage.(*disttae.Engine)
 	if !ok {
-		return nil, nil
+		return disttae.PrivilegeCacheVersion{}, nil
 	}
 	version, minimum, err := statementCatalogVersion(ctx, ses, eng)
 	if err != nil {
-		return nil, err
+		return disttae.PrivilegeCacheVersion{}, err
 	}
 	ses.updateLastCommitTS(minimum)
-	if version == (disttae.PrivilegeCacheVersion{}) {
-		return nil, nil
-	}
 	return version, nil
 }
 
@@ -216,11 +214,7 @@ func preparedPolicyAlreadyRefreshed(ctx context.Context, ses *Session) bool {
 }
 
 func captureRewritePolicy(ctx context.Context, ses *Session) (*rewritePolicySnapshot, error) {
-	versionOf := ses.ruleCacheVersionProvider
-	if versionOf == nil {
-		versionOf = roleRuleCacheVersion
-	}
-	return captureRewritePolicyWithVersion(ctx, ses, versionOf)
+	return captureRewritePolicyWithVersion(ctx, ses, ses.ruleCacheVersionProvider)
 }
 
 // The provider is passed explicitly so tests can use private comparable tokens
@@ -235,11 +229,7 @@ func captureRewritePolicyWithVersion(ctx context.Context, ses *Session,
 // of maps already materialized when its plan was captured. Keep freshness and
 // invalidation in the same owner as ordinary policy capture.
 func refreshPreparedRewritePolicy(ctx context.Context, ses *Session) error {
-	versionOf := ses.ruleCacheVersionProvider
-	if versionOf == nil {
-		versionOf = roleRuleCacheVersion
-	}
-	_, err := refreshRewritePolicy(ctx, ses, versionOf, false)
+	_, err := refreshRewritePolicy(ctx, ses, ses.ruleCacheVersionProvider, false)
 	return err
 }
 
@@ -293,7 +283,14 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 		cachedIdentity := ses.ruleCacheIdentity
 		ses.ruleCacheMu.RUnlock()
 
-		version, err := versionOf(ctx, ses)
+		var version any
+		var typedVersion disttae.PrivilegeCacheVersion
+		var err error
+		if versionOf == nil {
+			typedVersion, err = roleRuleCacheVersion(ctx, ses)
+		} else {
+			version, err = versionOf(ctx, ses)
+		}
 		if err != nil {
 			if ctx.Err() != nil {
 				return fail(ctx.Err())
@@ -306,8 +303,14 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 			// never stamp the result with a reusable version. Read failures still
 			// fail closed, while grant-independent controls remain available.
 			version = nil
+			typedVersion = disttae.PrivilegeCacheVersion{}
 		}
-		if loaded && identity == cachedIdentity && (ses.GetTenantInfo() == nil || (version != nil && version == cachedVersion)) {
+		versionMatches := version != nil && version == cachedVersion
+		if versionOf == nil {
+			cached, ok := cachedVersion.(disttae.PrivilegeCacheVersion)
+			versionMatches = ok && typedVersion != (disttae.PrivilegeCacheVersion{}) && typedVersion == cached
+		}
+		if loaded && identity == cachedIdentity && (ses.GetTenantInfo() == nil || versionMatches) {
 			if identity != rewriteRuleSessionIdentity(ses) {
 				continue
 			}
@@ -347,6 +350,9 @@ func refreshRewritePolicy(ctx context.Context, ses *Session,
 		if loaded && !maps.Equal(ses.ruleCache, rules) {
 			ses.rewritePolicyGeneration++
 			ses.invalidateAllPreparedRewriteStatementsLocked()
+		}
+		if versionOf == nil && typedVersion != (disttae.PrivilegeCacheVersion{}) {
+			version = typedVersion
 		}
 		ses.ruleCache, ses.ruleCacheVersion = rules, version
 		ses.ruleCacheIdentity = identity

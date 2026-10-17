@@ -16,6 +16,7 @@ package client
 
 import (
 	"context"
+	"errors"
 	goruntime "runtime"
 	"sync/atomic"
 	"testing"
@@ -235,14 +236,14 @@ type admissionNotifyingWaiter struct {
 }
 
 // Hiding the parent's private cancel key makes context.AfterFunc use this
-// observer. It detects adapter registration without inspecting Go internals.
-type admissionAdapterObserver struct {
+// observer. It detects materialization of token cancellation without Go internals.
+type admissionCancellationObserver struct {
 	context.Context
 	registrations atomic.Uint64
 }
 
-func (*admissionAdapterObserver) Value(any) any { return nil }
-func (c *admissionAdapterObserver) AfterFunc(f func()) func() bool {
+func (*admissionCancellationObserver) Value(any) any { return nil }
+func (c *admissionCancellationObserver) AfterFunc(f func()) func() bool {
 	c.registrations.Add(1)
 	return context.AfterFunc(c.Context, f)
 }
@@ -255,7 +256,7 @@ func TestSnapshotAdmissionDirectCreationContext(t *testing.T) {
 			a, _, err := AcquireSnapshotAdmission(ctx, c, timestamp.Timestamp{})
 			require.NoError(t, err)
 			t.Cleanup(a.End)
-			observer := &admissionAdapterObserver{Context: a.ctx}
+			observer := &admissionCancellationObserver{Context: a.ctx}
 			a.ctx = observer
 			option := WithSnapshotAdmission(a)
 			switch kind {
@@ -275,14 +276,18 @@ func TestSnapshotAdmissionDirectCreationContext(t *testing.T) {
 			require.NoError(t, err)
 			t.Cleanup(func() { require.NoError(t, op.Rollback(ctx)) })
 			require.Equal(t, a.snapshot, op.SnapshotTS(), "a later native frontier must not replace A")
-			wantAdapters, wantAdmissions := uint64(0), uint64(1)
+			wantLifetimeChildren, wantAdmissions := uint64(0), uint64(1)
 			if kind == "custom" || kind == "authorization" {
-				wantAdapters = 1
+				wantLifetimeChildren = 1
 			}
 			if kind == "authorization" {
 				wantAdmissions++
 			}
-			require.Equal(t, wantAdapters, observer.registrations.Load())
+			require.Equal(t, wantLifetimeChildren, observer.registrations.Load())
+			a.mu.RLock()
+			materialized := a.cancel != nil
+			a.mu.RUnlock()
+			require.Equal(t, wantLifetimeChildren != 0, materialized)
 			require.Equal(t, wantAdmissions, limiter.calls.Load())
 			a.End()
 			require.Equal(t, a.snapshot, op.SnapshotTS(), "End does not own the created transaction")
@@ -361,7 +366,7 @@ func TestSnapshotAdmissionEndDuringDirectOpen(t *testing.T) {
 	a, _, err := AcquireSnapshotAdmission(t.Context(), c, timestamp.Timestamp{})
 	require.NoError(t, err)
 	t.Cleanup(a.End)
-	observer := &admissionAdapterObserver{Context: a.ctx}
+	observer := &admissionCancellationObserver{Context: a.ctx}
 	a.ctx = observer
 	c.timestampWaiter = nil
 	ctx := &admissionEndAtOpenContext{Context: t.Context(), end: a.End}
@@ -385,7 +390,7 @@ func TestSnapshotAdmissionEndDuringReadinessFallback(t *testing.T) {
 			a, _, err := AcquireSnapshotAdmission(ctx, c, timestamp.Timestamp{})
 			require.NoError(t, err)
 			t.Cleanup(a.End)
-			observer := &admissionAdapterObserver{Context: a.ctx}
+			observer := &admissionCancellationObserver{Context: a.ctx}
 			a.ctx = observer
 			c.timestampWaiter = nil
 			c.mu.Lock()
@@ -472,6 +477,84 @@ func TestAuthorizationSnapshotEndDuringLimiterWait(t *testing.T) {
 	require.Zero(t, users)
 	require.Zero(t, active)
 	require.Zero(t, queued)
+}
+
+func TestSnapshotAdmissionLazyCreationLifetime(t *testing.T) {
+	for _, kind := range []string{"end before creation", "end during creation", "caller canceled", "parent canceled"} {
+		t.Run(kind, func(t *testing.T) {
+			c, _ := admissionTestClient(t)
+			bound, cancelBound := context.WithTimeout(t.Context(), 5*time.Second)
+			t.Cleanup(cancelBound)
+			parent, cancelParent := context.WithCancel(bound)
+			t.Cleanup(cancelParent)
+			a, _, err := AcquireSnapshotAdmission(parent, c, timestamp.Timestamp{})
+			require.NoError(t, err)
+			t.Cleanup(a.End)
+			require.Nil(t, a.cancel, "acquisition has no creation waiter to cancel")
+			type key struct{}
+			caller, cancelCaller := context.WithCancelCause(context.WithValue(bound, key{}, "caller"))
+			t.Cleanup(func() { cancelCaller(nil) })
+			if kind == "end before creation" {
+				a.End()
+			}
+			child, finish := a.creationContext(caller)
+			t.Cleanup(finish)
+			require.Equal(t, "caller", child.Value(key{}))
+			deadline, _ := caller.Deadline()
+			gotDeadline, _ := child.Deadline()
+			require.Equal(t, deadline, gotDeadline)
+			want := error(context.Canceled)
+			switch kind {
+			case "end during creation":
+				a.End()
+			case "caller canceled":
+				want = errors.New("caller cause")
+				cancelCaller(want)
+			case "parent canceled":
+				cancelParent()
+			}
+			select {
+			case <-child.Done():
+				require.ErrorIs(t, context.Cause(child), want)
+			case <-bound.Done():
+				t.Fatal("creation cancellation did not propagate")
+			}
+		})
+	}
+}
+
+func TestSnapshotAdmissionEndRacesLazyInitialization(t *testing.T) {
+	c, _ := admissionTestClient(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	t.Cleanup(cancel)
+	a, _, err := AcquireSnapshotAdmission(ctx, c, timestamp.Timestamp{})
+	require.NoError(t, err)
+	t.Cleanup(a.End)
+	start, ended := make(chan struct{}), make(chan struct{})
+	type creation struct {
+		ctx    context.Context
+		finish func()
+	}
+	created := make(chan creation, 1)
+	go func() {
+		<-start
+		child, finish := a.creationContext(ctx)
+		created <- creation{child, finish}
+	}()
+	go func() { <-start; a.End(); close(ended) }()
+	close(start)
+	<-ended
+	got := <-created
+	t.Cleanup(got.finish)
+	select {
+	case <-got.ctx.Done():
+		require.ErrorIs(t, got.ctx.Err(), context.Canceled)
+	case <-ctx.Done():
+		t.Fatal("End/init race lost cancellation")
+	}
+	require.NoError(t, ctx.Err(), "token End cannot cancel its parent")
+	_, err = a.Snapshot(ctx, c, timestamp.Timestamp{})
+	require.Error(t, err)
 }
 
 func (w *admissionNotifyingWaiter) GetTimestampWithClose(ctx context.Context, ts timestamp.Timestamp, closed <-chan struct{}) (timestamp.Timestamp, error) {
