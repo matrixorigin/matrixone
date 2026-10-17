@@ -43,6 +43,7 @@ type scalarCapacityProfile struct {
 	Outer, InnerPerArm, Width, Concurrency int
 	Sparse, Distinct, ForceSpill           bool
 	ValueKinds                             int
+	ResourceError                          bool
 	Skew                                   bool
 }
 type scalarCapacitySample struct {
@@ -91,6 +92,12 @@ func BenchmarkScalarSetFallbackCapacity(b *testing.B) {
 		{Name: "skewed-two-values", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 1, Distinct: true, ValueKinds: 2, Skew: true},
 		{Name: "forced-spill", Outer: 64, InnerPerArm: 128, Concurrency: 1, ForceSpill: true},
 		{Name: "forced-spill-boundary-concurrent", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 2, ForceSpill: true},
+		{Name: "streamed-outer", Outer: 16384, InnerPerArm: 8, Concurrency: 1, Sparse: true},
+		{Name: "larger-candidates", Outer: 128, InnerPerArm: 4096, Concurrency: 1, Sparse: true},
+		{Name: "wide-concurrent", Outer: 128, InnerPerArm: 256, Width: 4096, Concurrency: 2},
+		{Name: "larger-dense", Outer: 512, InnerPerArm: 1024, Concurrency: 1},
+		{Name: "work-boundary-sparse", Outer: 4096, InnerPerArm: 2048, Concurrency: 1, Sparse: true},
+		{Name: "work-over-limit", Outer: 4097, InnerPerArm: 2048, Concurrency: 1, Sparse: true, ResourceError: true},
 	}
 	var results []scalarCapacityResult
 	embed.RunSingleCNBaseClusterTests(b, func(cluster embed.Cluster) {
@@ -99,7 +106,7 @@ func BenchmarkScalarSetFallbackCapacity(b *testing.B) {
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(b, err)
 		defer db.Close()
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 		_, err = db.ExecContext(ctx, "create database scalar_set_capacity")
 		require.NoError(b, err)
@@ -131,7 +138,7 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 	exec("use scalar_set_capacity")
 	exec("drop table if exists outer_rows")
 	exec("drop table if exists inner_rows")
-	exec("create table outer_rows(id int primary key,pad varchar(256))")
+	exec("create table outer_rows(id int primary key,pad varchar(8192))")
 	exec("create table inner_rows(id int primary key,v double)")
 	var values []string
 	for i := 0; i < p.Outer; i++ {
@@ -239,13 +246,13 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 		}()
 	}
 	if err != nil {
-		require.True(b, p.Distinct, "only the distinct profile may fail EXPLAIN")
+		require.NotZero(b, p.expectedCode(), "only expected errors may fail EXPLAIN")
 		var e *mysqlDriver.MySQLError
 		require.ErrorAs(b, err, &e)
 		result.AnalyzeErrorCode = int(e.Number)
-		require.Equal(b, 1242, result.AnalyzeErrorCode)
+		require.Equal(b, p.expectedCode(), result.AnalyzeErrorCode)
 	} else {
-		require.False(b, p.Distinct, "distinct profile must fail EXPLAIN with 1242")
+		require.Zero(b, p.expectedCode(), "error profile must fail EXPLAIN")
 		lower := strings.ToLower(result.Analyze)
 		require.Contains(b, lower, "row_number")
 		require.Contains(b, lower, "join type: left")
@@ -258,7 +265,7 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 
 	}
 
-	if !p.Distinct {
+	if p.expectedCode() == 0 {
 		physicalRows, physicalErr := conns[0].QueryContext(ctx, "explain phyplan analyze "+query)
 		require.NoError(b, physicalErr)
 		func() {
@@ -333,10 +340,10 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 	internalWG.Wait()
 	var accountPeakSum uint64
 	for worker, summary := range result.Internal {
-		if p.Distinct {
+		if p.expectedCode() != 0 {
 			var moError *moerr.Error
 			require.ErrorAs(b, internalErrors[worker], &moError)
-			require.Equal(b, moerr.ErrSubqueryNo1Row, moError.ErrorCode())
+			require.Equal(b, uint16(p.expectedCode()), moError.MySQLCode())
 		} else {
 			require.NoError(b, internalErrors[worker])
 		}
@@ -372,8 +379,8 @@ func measureScalarCapacity(ctx context.Context, conn *sql.Conn, query string, p 
 		sample.CompletionNS = sample.Finished.Sub(sample.Started).Nanoseconds()
 		if err != nil {
 			var e *mysqlDriver.MySQLError
-			if errors.As(err, &e) && p.Distinct && e.Number == 1242 {
-				sample.ErrorCode = 1242
+			if errors.As(err, &e) && int(e.Number) == p.expectedCode() {
+				sample.ErrorCode = p.expectedCode()
 				err = nil
 			}
 		}
@@ -409,11 +416,21 @@ func measureScalarCapacity(ctx context.Context, conn *sql.Conn, query string, p 
 	if err = rows.Err(); err != nil {
 		return sample, err
 	}
-	if p.Distinct {
-		return sample, fmt.Errorf("expected scalar cardinality error 1242")
+	if p.expectedCode() != 0 {
+		return sample, fmt.Errorf("expected error %d", p.expectedCode())
 	}
 	if sample.Rows != p.Outer {
 		return sample, fmt.Errorf("got %d rows, want %d", sample.Rows, p.Outer)
 	}
 	return sample, nil
+}
+
+func (p scalarCapacityProfile) expectedCode() int {
+	if p.ResourceError {
+		return int(moerr.ErrScalarSetResourceBudgetExceeded)
+	}
+	if p.Distinct {
+		return 1242
+	}
+	return 0
 }

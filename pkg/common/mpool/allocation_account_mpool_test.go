@@ -58,7 +58,7 @@ func TestMPoolAccountedAllocGrowFree(t *testing.T) {
 	require.Equal(t, uintptr(16), unsafe.Sizeof(allocationLease{}))
 	// Owner current/peak counters are fixed to this binary's catalog and remain
 	// allocation-free at physical allocation boundaries.
-	require.LessOrEqual(t, unsafe.Sizeof(AllocationAccount{}), uintptr(320))
+	require.LessOrEqual(t, unsafe.Sizeof(AllocationAccount{}), uintptr(96)+uintptr(AllocationOwnerCatalogMax+1)*unsafe.Sizeof(allocationAccountOwnerUsage{}))
 	require.LessOrEqual(t, unsafe.Sizeof(allocationAccountRegistrySlot{}), uintptr(32))
 
 	registry, account := newTestAllocationAccount(t, 1024, 8)

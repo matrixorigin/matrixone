@@ -105,7 +105,7 @@ func (builder *QueryBuilder) flattenScalarSetAfterCorrelation(
 			End:   &plan.FrameBound{Type: plan.FrameBound_FOLLOWING, UnBounded: true}},
 	}}}
 	outerID = builder.appendNode(&plan.Node{NodeType: plan.Node_WINDOW, Children: []int32{outerID},
-		BindingTags: []int32{identityTag}, WinSpecList: []*plan.Expr{identity}, SpillMem: builder.sortSpillMem}, ctx)
+		BindingTags: []int32{identityTag}, WinSpecList: []*plan.Expr{identity}, ScalarSetReaggregation: true}, ctx)
 	identityPos := int32(len(outerGroups))
 	outerGroups = append(outerGroups, GetColExpr(rowNumber.Typ, identityTag, 0))
 	// A separate marker distinguishes an empty match from one real NULL member.
@@ -133,7 +133,7 @@ func (builder *QueryBuilder) flattenScalarSetAfterCorrelation(
 	if len(filters) != 0 {
 		return fail()
 	}
-	joined := builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, Children: []int32{outerID, subID}, JoinType: plan.Node_LEFT, OnList: on, SpillMem: builder.joinSpillMem}, ctx)
+	joined := builder.appendNode(&plan.Node{NodeType: plan.Node_JOIN, Children: []int32{outerID, subID}, JoinType: plan.Node_LEFT, OnList: on, SpillMem: builder.joinSpillMem, ScalarSetReaggregation: true}, ctx)
 	value := GetColExpr(root.ProjectList[0].Typ, bagTag, 0)
 	value.Typ.NotNullable = false
 	marker := GetColExpr(projects[markerPos].Typ, bagTag, markerPos)

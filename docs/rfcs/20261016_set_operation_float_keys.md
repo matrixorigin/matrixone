@@ -1,6 +1,6 @@
 - Status: draft (pending independent approval)
 - Start Date: 2026-10-16
-- Revision: 10
+- Revision: 11
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
@@ -30,12 +30,14 @@ grouping-query-block semantics, advances the set-key allocation, and retains
 previous capacity receipts as historical evidence. These revisions do not assert
 repository approval or advance implementation approval.
 
-The proposal reuses existing WINDOW, JOIN, GROUP and SINGLE owners. It adds no
-wire field, worker, queue, persisted occurrence identity or recovery protocol.
-Its principal tradeoff is global outer materialization and potentially quadratic
-candidate work. The capacity envelope and independent design acceptance remain
-explicit pending items below. Publishing this documentation repair is distinct
-from accepting that tradeoff for rollout.
+Revision 11 addresses the automatic-activation capacity gap identified in
+review 5558405070. It replaces full outer materialization in the explicitly
+marked occurrence stage with streaming numbering and introduces enforced
+attempt-wide memory/work admission plus CN concurrency admission. It adds typed
+plan/pipeline markers; ordinary WINDOW and equality/set semantics keep their
+existing paths. Revisions 5–10 below are immutable historical receipts, not
+qualification of this revision. Independent design approval remains pending;
+publication of this repair does not self-grant that approval.
 
 ## Membership contract
 
@@ -110,8 +112,12 @@ DISTINCT, UNION ALL, JOIN or earlier scalar rewrite. Duplicate values and
 join-expanded occurrences receive different IDs. A base-table Row_ID or grouping
 by visible outer values would incorrectly merge such occurrences. The outer
 producer is evaluated once; numbering order need not be stable across executions.
-The compiler's `compileWin` creates a merge scope, so the unpartitioned numbering
-is global within this execution, rather than independently restarting per worker.
+The explicit `scalar_set_reaggregation` marker selects a streaming identity
+owner. Compilation confines the whole marked query to the coordinator at DOP 1;
+there is one sequence per marked stage in an attempt, with checked UINT64
+increment and a fresh sequence on Reset. It never invokes ordinary WINDOW's
+`receiveAll` path. The marker is preserved through plan copying and physical
+operator construction.
 
 The LEFT JOIN evaluates correlated predicates against candidate rows. A true
 marker identifies a real match even when the visible member is NULL; an unmatched
@@ -133,19 +139,36 @@ independent of candidate cardinality.
 
 ## Resource ownership and terminal paths
 
-These are delegated existing execution contracts, not a claim that this RFC
-revision adds or independently retests cleanup. The planner must not release
-executor-owned buffers, and carried/borrowed vectors follow their operator's
-batch lifetime.
+The planner does not release executor-owned buffers. Marked identity and
+candidate stages join the existing execution-account lifecycle, with the new
+attempt lease below; ordinary operators retain their existing cleanup owners.
 
 | Resource or state | Effective owner and lifetime | Success, error, cancel and reuse contract |
 | --- | --- | --- |
 | Tags, marker/key expressions, outer-output aliases | QueryBuilder/query plan | Planning failure discards the plan; aliases and occurrence IDs are not catalog state. A new execution creates fresh IDs. |
-| Global merge inputs, buffered outer batch, window vectors/executors/results | `compileWin` scope and [Window](../../pkg/sql/colexec/window/types.go) | Unpartitioned `receiveAll` copies input using `AppendWithCopy`. Returned batches live until the next Call/Reset. Reset clears generation state and releases accounted backing; Free releases terminal batch/vector/executor storage, including error exits. |
-| Candidate build state, condition executors, match tracking and output batches | Join compiler's selected build/probe owners, including [LoopJoin](../../pkg/sql/colexec/loopjoin/types.go) for general predicates | Existing build/message ownership governs transfer and cancellation. Reset discards generation-bound state; Free releases terminal storage. The planner's SpillMem field is not a separate cleanup or spill owner. |
+| Streamed outer batch, occurrence vector and output views | Explicitly marked [Window](../../pkg/sql/colexec/window/scalar_identity.go) | Retains one child batch and emits at most DefaultBatchSize rows per Call. Reserves its full retained backing before publication, including offset prefixes, buffer leases and NULL/grouping bitmap capacity. Measurement does not materialize borrowed validity. Previous output views are released before advancing the child. Reset/Free release the reservation and output; Reset restarts the counter. |
+| Candidate build state, condition executors, match tracking and output batches | Coordinator-local [LoopJoin](../../pkg/sql/colexec/loopjoin/types.go) for every marked candidate join | Hash/shuffle dispatch is disabled for this marker. All marked joins share one attempt work lease and charge actual predicate-window pairs before evaluation, including false matches. Cached condition results are not charged again after output yields. Existing build/message ownership and Reset/Free drain their allocations. |
 | Membership/outer group keys, representatives, aggregate states, spill/reload state | [Group and MergeGroup](../../pkg/sql/colexec/group/types2.go) | Their Reset/Free owners release or reset hash/aggregate state, projections, spill files/reservations and reload staging under existing contracts. Each logical AGG may compile to multiple physical owners. |
 | Scalar cardinality check and two-row constant input | Existing SINGLE join and value-scan owners | Zero/one-member success and multiple-member 1242 share ordinary pipeline cleanup; no special retry or retained scalar state is added. |
 | Partial Prepare, upstream waits, deadline/cancellation and scope shutdown | Process/scope lifecycle and each initialized operator | Errors propagate to scope teardown; cancellation must release build/message waits and terminate upstream work. Partial initialization must remain safe for cleanup. Reset/re-execution must not retain row-number counters, buffered rows or failed-generation execution resources. Immutable plan tags/aliases may be reused; occurrence identity is scoped to the new execution. |
+
+A marked attempt admits one CN permit before execution. The same CN execution
+budget admits at most **2** marked attempts concurrently. It opens an allocation
+account capped at **256 MiB**, or the smaller inherited limit. Retained borrowed
+input is conservatively reserved against that same account even when upstream
+physical provenance is unknown; an allocation selection alone never proves that
+the retained backing is charged. Shared backing may be charged twice. New owner
+catalog ID 14 covers the marked Window only.
+
+All candidate stages in an attempt share **16,777,216 candidate pairs**. This is
+a monotonic checked counter, not a per-join or per-output-batch allowance. Work
+and concurrency rejection use `ErrScalarSetResourceBudgetExceeded` (20833), a
+separate terminal error from OOM, spill recovery and transaction retry. Neither
+output yields nor a failed allocation refunds work. Reset starts a new lease.
+The CN permit is returned only after all scopes/owners drain and the exact
+account has a matching, sealed, valid zero-live terminal snapshot. Missing or
+panicking terminal proof retains the permit (fail closed); exporter failure
+after proven drainage does not. Partial initialization follows the same rule.
 
 Restart discards all execution-local numbering and aggregation state. It neither
 repairs nor removes persisted expressions. Required forced-budget and interrupted
@@ -161,7 +184,7 @@ across outer occurrences. Equal members in different occurrences count separatel
 
 | Stage | Logical cardinality or work |
 | --- | --- |
-| Global numbering | `O` rows, copying the carried outer columns and adding one ID |
+| Global numbering | `O` streamed rows, one borrowed child batch plus output views and a bounded identity vector |
 | Candidate matching | At most `O * I` pairs examined for a general range predicate, even when few qualify; LEFT JOIN emits `M + Z` |
 | First logical AGG | Consumes `M + Z`, emits `U + Z`, with `U <= M` |
 | Second logical AGG | Consumes `U + Z`, emits `O` |
@@ -173,8 +196,7 @@ lifetimes. Deduplication after matching does not remove candidate-predicate work
 Empty outer input gives no scalar rows; an empty candidate bag gives `Z = O`.
 
 Let `W_o` be carried outer-row width, `W_i` candidate width, and `W_k` membership
-key/representative width. Resident pressure includes full outer buffering
-proportional to `O * W_o`, retained inner/build payload up to `I * W_i`,
+key/representative width. Resident pressure includes one retained outer child batch and the current identity/output views, retained inner/build payload up to `I * W_i`,
 first-stage group payload up to `(U + Z) * (W_o + W_k)` carrying outer columns
 as well as keys/representatives, and second-stage payload proportional to
 `O * W_o` plus aggregate state. Hash metadata, aggregate states, transport
@@ -183,17 +205,21 @@ a component model, not an exact additive peak: overlapping scopes, parallelism
 and early release determine the actual peak. Wide outer rows matter even though
 the float key itself is only UINT64.
 
-The source sets WINDOW SpillMem from `sort_spill_mem`, JOIN SpillMem from
-`join_spill_mem`, and AGG SpillMem from `agg_spill_mem`. None is a query-wide
-memory cap. In particular, unpartitioned ROW_NUMBER uses `receiveAll`; window
-sort spilling is conditional on ordering work and does **not** establish spilling
-or a bound for its entire outer buffer. A general range LoopJoin has no universal
-spill guarantee merely because the node carries SpillMem. Eligible hash/shuffle
-joins have their own contracts. Group spilling reduces eligible group-state
-pressure but retains owner-specific reservations and reload costs. Existing
-execution budgets may reject allocations; they do not prove a universal bound
-on all memory retained by this composition. No new row cap, feature flag or
-automatic admission limit is introduced here.
+The marked identity stage does not use `sort_spill_mem` as a buffer bound and
+never invokes ordinary WINDOW materialization. JOIN and AGG still use their
+existing spill owners; assigning SpillMem alone does not imply universal JOIN
+spilling. Group spilling retains existing recovery reservations and reload costs.
+The enforced 256 MiB account covers this composition's participating allocation
+owners and retained input reservation; it is not a process-RSS or arbitrary
+upstream-producer bound. Ordinary upstream SQL can allocate before delivering a
+batch to the marked stage. Existing CN budgets still govern those producers.
+The memory admission occurs before that stage retains/publishes the batch;
+candidate admission occurs before evaluating a predicate window. Thus arbitrary
+client shapes cannot receive an unlimited fallback account or predicate counter,
+while a large or wide query may receive a resource error instead of a result.
+The budget is an availability guard, not a claim that every admitted SQL shape
+meets one latency SLA. The expanded qualification receipt below measures the
+specific automatic route, including sparse work and over-limit termination.
 
 ### Capacity acceptance protocol
 
@@ -218,8 +244,12 @@ recovery error, cancellation during merge/build/group, Reset and subsequent
 successful reuse. Verify terminal cleanup with the owning allocation/reservation
 and file oracles, rather than sleeps or a large stress fixture. The evidence must
 identify source SHA, commands, settings, topology, inputs and terminal outcomes.
-If the envelope or evidence is missing, design/capacity acceptance remains pending;
-this documentation delivery does not waive it or require an unrelated runtime fix.
+Independent design/capacity acceptance remains a separate decision; the runtime guards and current-code evidence below are required for this delivery.
+
+### Historical revisions 5–10
+
+The following receipts describe their exact historical code. Their materialization
+and S1-only rollout statements are superseded by revision 11 above and below.
 
 ### Revision 5 local qualification proposal and receipt
 
@@ -694,6 +724,78 @@ timing cause, production DROP latency or a flaky/non-PR classification. Fresh
 CI remains pending.
 This documentation does not grant independent design or capacity approval.
 
+
+### Revision 11 bounded automatic execution and current receipt
+
+The [source-bound receipt](validation/20261018_scalar_set_capacity_r11.json)
+records the revised implementation and benchmark on Darwin/arm64 CPU, Go 1.27.1,
+with the repository CGo wrapper. The full public signed-zero regression and
+manual benchmark completed successfully in 19.370 seconds. Official main was
+freshly verified at `d304047724bea6104c5c2be496107928034b0778`; its new HAKeeper
+and isolated-test commits do not change the implementation base or protocol 118.
+The delivered capability remains 119. Source fingerprints identify the exact
+production/test closure; earlier receipts are not reused as current capacity
+proof.
+
+Each of 21 profiles executed one separately labelled first invocation, one
+excluded warm-up and three measured rounds on the same input/settings. Concurrent
+profiles use two independent connections and assert overlapping query intervals.
+There are 135 public SQL samples. First invocation does not mean a cold OS/storage
+cache. Separately executed physical EXPLAIN and internal terminal summaries are
+stored independently; errors 1242 and 20833 cannot return physical EXPLAIN output.
+I is the total retained candidates across both arms, W the carried VARCHAR width.
+
+| Profile | O/I/W/C | First maximum ms | Measured maximum ms | Internal account maximum bytes | Expected error |
+| --- | --- | --- | --- | --- | --- |
+| baseline | 8/16/0/1 | 1.109 | 0.786 | 1,366,648 | 0 |
+| outer | 64/16/0/1 | 1.489 | 1.200 | 1,450,312 | 0 |
+| candidates | 8/256/0/1 | 1.610 | 1.322 | 1,545,376 | 0 |
+| sparse | 8/16/0/1 | 1.171 | 0.792 | 1,355,528 | 0 |
+| sparse-boundary | 64/256/256/1 | 1.956 | 1.669 | 1,481,312 | 0 |
+| sparse-boundary-concurrent | 64/256/256/2 | 3.346 | 2.089 | 1,481,312 | 0 |
+| distinct-cardinality-error | 8/16/0/1 | 1.137 | 1.076 | 1,365,624 | 1242 |
+| width | 8/16/256/1 | 1.147 | 0.828 | 1,417,848 | 0 |
+| concurrency | 8/16/0/2 | 1.656 | 1.226 | 1,366,648 | 0 |
+| combined | 64/256/256/2 | 6.552 | 6.099 | 4,840,768 | 0 |
+| high-distinctness-boundary | 64/256/256/2 | 19.266 | 19.379 | 8,525,400 | 1242 |
+| balanced-two-values | 64/256/256/1 | 5.640 | 8.287 | 4,840,768 | 1242 |
+| skewed-two-values | 64/256/256/1 | 5.695 | 6.531 | 4,840,768 | 1242 |
+| forced-spill | 64/256/0/1 | 60.639 | 59.177 | 2,107,648 | 0 |
+| forced-spill-boundary-concurrent | 64/256/256/2 | 60.429 | 68.460 | 4,840,768 | 0 |
+| streamed-outer | 16384/16/0/1 | 49.792 | 54.582 | 6,509,768 | 0 |
+| larger-candidates | 128/8192/0/1 | 29.098 | 32.611 | 1,537,944 | 0 |
+| wide-concurrent | 128/512/4096/2 | 46.015 | 51.160 | 63,507,040 | 0 |
+| larger-dense | 512/2048/0/1 | 199.070 | 198.149 | 2,195,168 | 0 |
+| work-boundary-sparse | 4096/4096/0/1 | 489.827 | 702.131 | 2,609,184 | 0 |
+| work-over-limit | 4097/4096/0/1 | 486.563 | 490.328 | 732,704 | 20833 |
+
+All fixed criteria pass: first invocation <= 10 seconds, measured completion
+<= 5 seconds, participating generation peak <= 256 MiB, concurrent conservative
+sum <= C * 256 MiB, process-lifetime RSS high-water <= 4 GiB, and existing
+physical operator/spill limits. Maximum observed participating account peak was
+63,507,040 bytes (wide C=2); maximum process-lifetime RSS high-water was
+658,096,128 bytes. RSS and reported operator MemorySize are separate quantities,
+not substitutes for the allocation account. Successful physical plans retain the
+marked local identity/LoopJoin/two-aggregation path. The exact-work sparse case
+has 4,096 outer rows and 4,096 candidates; 4,097 outer rows rejects at the shared
+16,777,216-pair limit with 20833. All internal summaries, including expected
+errors, have valid generations, zero failed generations, zero live terminal bytes
+and complete memory-domain quality.
+
+The deterministic layer independently covers one full source batch plus streamed
+chunks, offset/nested borrowed backing, zero-charge borrowed validity and ordinary
+bitmap capacity, counter overflow, memory rejection, false predicates and output
+yields. The composed mixed equality/range fixture preserves marked LEFT joins
+through costing, shares one permit/work lease across two fallback stages, and
+rejects their aggregate work after pre-consuming all but 12 pairs: each stage
+needs 8, together 16. Real Compile.Reset then acquires a different zero-work lease,
+returns the expected signed-zero/NULL results, and finishes with 16 consumed pairs;
+the old lease is closed. Missing terminal proof, owner cleanup panic, partial
+initialization and exporter panic controls distinguish permit retention from safe
+release. Existing composed cancellation, corrupt reload and forced spill recovery
+remain covered. Multi-CN scalar execution and universal upstream/RSS/latency bounds
+are not asserted. Independent RFC approval remains pending.
+
 ## Alternatives
 
 | Choice | Benefits | Costs and reason for the current proposal |
@@ -701,21 +803,26 @@ This documentation does not grant independent design or capacity approval.
 | Keep nonidentity scalar UNION unsupported | Smallest operational and compatibility footprint; no new global materialization | Leaves the admitted correlated workload unsupported. This remains the conservative alternative if the proposed capacity envelope is unacceptable. |
 | Per-outer correlated execution with local membership and early detection of a second distinct member | Simple occurrence identity and local per-occurrence membership state | Repeats scans/RPCs per outer occurrence; requires executor integration and care with evaluation/volatile semantics. It is not a planner-only substitution with proven lower total cost. |
 | Distributed `(producer, sequence)` IDs and partitioned aggregation | Avoids global numbering/outer merge bottleneck | Needs uniqueness across producer generations, retries and distributed boundaries; expands the identity and recovery contract beyond this proposal. |
-| Proposed WINDOW/LEFT JOIN/two logical AGGs/SINGLE composition | Reuses existing SQL semantics, cardinality checks and cleanup owners; directly testable through public SQL | Materializes outer input and can examine `O * I` candidates. Chosen as a proposal for existing-owner reuse, not as a measured performance improvement; acceptance of its envelope is outstanding. |
+| Marked streaming WINDOW/LEFT JOIN/two logical AGGs/SINGLE composition | Preserves occurrence and cardinality semantics using existing operators, with explicit local admission | Can examine `O * I` candidate pairs, bounded by one shared work lease; participating retained memory and CN concurrency have finite admission. Broader distributed execution remains outside this revision. |
 
 Within membership implementation, ordinary DISTINCT cannot distinguish signed
 zeros, unconditional multirow-arm reuse loses membership, and unchanged protocol
 advertisement exposes unknown-function execution on old workers. A set-specific
 physical key plus explicit capability admission avoids changing shared scalar or
-GROUP BY equality and avoids a new set executor/wire schema.
+GROUP BY equality and avoids a new set executor; the bounded scalar composition has explicit typed marker fields.
 
 ## Compatibility, rollout and rollback
 
 Official main at this revision ends at MORPC 118. This capability uses MORPC
 **119**. The feature walker recognizes encoded function identity 601 without
 depending on its display name. It sees hidden physical equality lists, grouping
-keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar
-composition adds no separate function identity or wire field. Official main
+keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar composition adds no separate function identity. It adds
+`plan.Node.scalar_set_reaggregation` field 95 and
+`pipeline.Instruction.scalar_set_reaggregation` field 65. Marker-only integer
+fallbacks require 119 too. Senders and receivers reject marked remote scopes at
+all versions, before operator decoding, because a remote attempt cannot share
+the coordinator's work/account lease. Local scope validation rejects remote
+nodes, DOP above one, and marker placement outside WINDOW/LEFT JOIN. Official main
 retains SELECT division diagnostics at 116, conditional on execution/session
 policy. Set keys require 119 regardless of that policy; a combined expression
 requires 119. Division diagnostics remain outside persisted-expression admission. Official main
@@ -731,7 +838,7 @@ destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
 missing or below 119. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 119. These checks add no per-row work or new resource owner.
+also require 119. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and

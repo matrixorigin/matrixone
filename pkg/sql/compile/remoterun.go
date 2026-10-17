@@ -916,6 +916,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		in.SpillMem = t.SpillThreshold
 	case *loopjoin.LoopJoin:
+		in.ScalarSetReaggregation = t.ScalarSetReaggregation
 		relList, colList := getRelColList(t.ResultCols)
 		in.LoopJoin = &pipeline.LoopJoin{
 			JoinType:   t.JoinType,
@@ -1542,6 +1543,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.LoopJoin:
 		t := opr.GetLoopJoin()
 		arg := loopjoin.NewArgument()
+		arg.ScalarSetReaggregation = opr.ScalarSetReaggregation
 		arg.ResultCols = convertToResultPos(t.RelList, t.ColList)
 		arg.LeftTypes = convertToTypes(t.LeftTypes)
 		arg.RightTypes = convertToTypes(t.RightTypes)
@@ -2268,7 +2270,13 @@ func validateRemoteExpressionPipelineProtocol(
 	if err != nil {
 		return err
 	}
-	return validateRemoteExpressionFeatures(proc, features)
+	if err := validateRemoteExpressionFeatures(proc, features); err != nil {
+		return err
+	}
+	if features.ScalarSetReaggregation {
+		return moerr.NewNotSupportedNoCtx("bounded scalar set reaggregation requires coordinator-local execution")
+	}
+	return nil
 }
 
 // The sender reuses analysis of its current pipeline; the receiver computes
@@ -2311,6 +2319,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.SetOperationFloatKeys && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion119) {
 		return moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 119")
+	}
+	if features.ScalarSetReaggregation && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion119) {
+		return moerr.NewNotSupportedNoCtx("bounded scalar set reaggregation requires MORPC protocol version 119")
 	}
 	if features.CalendarIntervalNormalization && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
 		return moerr.NewNotSupportedNoCtx("calendar interval normalization requires MORPC protocol version 115")

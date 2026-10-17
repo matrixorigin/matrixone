@@ -389,6 +389,7 @@ const (
 	ErrWindowNoInheritFrame                uint16 = 20830
 	ErrWindowNoRedefineOrderBy             uint16 = 20831
 	ErrWindowDuplicateName                 uint16 = 20832
+	ErrScalarSetResourceBudgetExceeded     uint16 = 20833
 
 	// Group 9: streaming
 	ErrUnsupportedOption   uint16 = 20901
@@ -707,6 +708,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTooManyPartitionFuncFields:          {ER_TOO_MANY_PARTITION_FUNC_FIELDS_ERROR, []string{MySQLDefaultSqlState}, "Too many fields in '%-.192s'"},
 	ErrTooManyParameter:                    {ER_PS_MANY_PARAM, []string{MySQLDefaultSqlState}, "Prepared statement contains too many placeholders"},
 	ErrCteMemoryQuotaExceeded:              {ErrCteMemoryQuotaExceeded, []string{MySQLDefaultSqlState}, "recursive CTE memory quota exceeded on this CN: projected %d bytes, query limit %d bytes; increase @@cte_max_memory_bytes or rewrite the query to converge"},
+	ErrScalarSetResourceBudgetExceeded:     {ErrScalarSetResourceBudgetExceeded, []string{MySQLDefaultSqlState}, "scalar set %s budget exceeded: used=%d requested=%d cap=%d"},
 	ErrTooManyWindows:                      {ER_TOO_MANY_WINDOWS, []string{MySQLDefaultSqlState}, "Too many windows in SELECT: %d. Maximum allowed is %d. Use named windows to share windows between window functions."},
 	ErrWindowNoSuchWindow:                  {ER_WINDOW_NO_SUCH_WINDOW, []string{MySQLDefaultSqlState}, "Window name '%s' is not defined."},
 	ErrWindowCircularityInWindowGraph:      {ER_WINDOW_CIRCULARITY_IN_WINDOW_GRAPH, []string{MySQLDefaultSqlState}, "There is a circularity in the window dependency graph."},
@@ -1977,6 +1979,12 @@ func NewCheckRecursiveLevel(ctx context.Context) *Error {
 
 func NewCteMemoryQuotaExceeded(ctx context.Context, projected, limit uint64) *Error {
 	return newError(ctx, ErrCteMemoryQuotaExceeded, projected, limit)
+}
+
+// Work and admission exhaustion are distinct from OOM: spilling or repeating
+// the same candidate window cannot create more work or concurrency capacity.
+func NewScalarSetResourceBudgetExceeded(ctx context.Context, resource string, used, requested, limit uint64) *Error {
+	return newError(ctx, ErrScalarSetResourceBudgetExceeded, resource, used, requested, limit)
 }
 
 func NewErrTooManyFields(ctx context.Context) *Error {

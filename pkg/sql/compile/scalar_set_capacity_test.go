@@ -26,6 +26,7 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -48,8 +50,13 @@ import (
 func TestScalarSetFallbackResourceLifecycle(t *testing.T) {
 	const query = `select o.id,cast((select i.v from (select 1 id,cast(-0e0 as double) v union all select 2,cast(-0e0 as double)) i where i.id>o.id union select i.v from (select 1 id,cast(-0e0 as double) v union all select 2,cast(-0e0 as double)) i where i.id>o.id) as varchar) from (select 0 id union all select 3) o order by o.id`
 	budget := process.MustNewExecutionResourceBudget(64<<20, 64<<20)
-	for index, mode := range []string{"normal", "budget-rejection", "cancel-after-materialization", "cancel-window-input", "cancel-group-before-reload", "corrupt-spill-reload", "forced-spill-control", "fresh-after-failures"} {
+	for index, mode := range []string{"normal", "budget-rejection", "cancel-after-materialization", "cancel-window-input", "cancel-group-before-reload", "corrupt-spill-reload", "forced-spill-control", "fresh-after-failures", "mixed-multiple-prepared"} {
 		t.Run(mode, func(t *testing.T) {
+			query := query
+			if mode == "mixed-multiple-prepared" {
+				query = `select o.id,cast((select i.v from (select 1 id,1 k,cast(-0e0 as double) v union all select 2,2,cast(-0e0 as double)) i where i.k=o.k and i.id>o.id union select i.v from (select 1 id,1 k,cast(-0e0 as double) v union all select 2,2,cast(-0e0 as double)) i where i.k=o.k and i.id>o.id) as varchar),cast((select i.v from (select 1 id,1 k,cast(-0e0 as double) v union all select 2,2,cast(-0e0 as double)) i where i.k=o.k and i.id>=o.id union select i.v from (select 1 id,1 k,cast(-0e0 as double) v union all select 2,2,cast(-0e0 as double)) i where i.k=o.k and i.id>=o.id) as varchar) from (select 0 id,1 k union all select 3,1) o order by o.id`
+			}
+
 			ctx, cancel := context.WithCancel(defines.AttachAccountId(context.Background(), catalog.System_Account))
 			defer cancel()
 			baseFS := testutil.NewFS(t)
@@ -103,24 +110,48 @@ func TestScalarSetFallbackResourceLifecycle(t *testing.T) {
 					lefts++
 				}
 			}
+
 			require.Positive(t, windows)
 			require.GreaterOrEqual(t, aggs, 2)
 			require.Positive(t, lefts)
 			proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithIsolation(gomock.NewController(t), txn.TxnIsolation_RC)
 			var got []string
 			var gotIDs []int64
+			var joins []*loopjoin.LoopJoin
+			var observedLeases []*process.ScalarSetExecutionLease
+			var leaseObserver *scalarFallbackLeaseObserver
+			var currentLease *process.ScalarSetExecutionLease
+			exhaustShared := mode == "mixed-multiple-prepared"
+			assertSharedWork := func() {
+				if mode != "mixed-multiple-prepared" {
+					return
+				}
+				require.NotNil(t, currentLease)
+				require.Positive(t, currentLease.CandidatePairs())
+				for _, join := range joins {
+					require.Same(t, currentLease, join.ScalarSetLease)
+				}
+			}
+			expected := []string{"-0", "NULL"}
+			if mode == "mixed-multiple-prepared" {
+				expected = []string{"-0", "-0", "NULL", "NULL"}
+			}
+
 			cancelOutput := mode == "cancel-after-materialization"
 			fill := func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
 				if bat == nil {
 					return nil
 				}
+				assertSharedWork()
 				ids := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])
 				for i := 0; i < bat.RowCount(); i++ {
 					gotIDs = append(gotIDs, ids[i])
-					if bat.Vecs[1].IsNull(uint64(i)) {
-						got = append(got, "NULL")
-					} else {
-						got = append(got, string(bat.Vecs[1].GetBytesAt(i)))
+					for _, vec := range bat.Vecs[1:] {
+						if vec.IsNull(uint64(i)) {
+							got = append(got, "NULL")
+						} else {
+							got = append(got, string(vec.GetBytesAt(i)))
+						}
 					}
 					if ids[i] != 0 && ids[i] != 3 {
 						return fmt.Errorf("unexpected outer identity %d", ids[i])
@@ -142,6 +173,65 @@ func TestScalarSetFallbackResourceLifecycle(t *testing.T) {
 			})
 			c.SetIsPrepare(true)
 			require.NoError(t, c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: logical}}, fill))
+			if mode == "mixed-multiple-prepared" {
+				var walk func(*Scope)
+				walk = func(scope *Scope) {
+					require.Equal(t, 1, scope.NodeInfo.Mcpu)
+					require.NoError(t, vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+						if join, ok := op.(*loopjoin.LoopJoin); ok && join.ScalarSetReaggregation {
+							joins = append(joins, join)
+							require.NotNil(t, join.NonEqCond)
+						}
+						if w, ok := op.(*window.Window); ok && w.ScalarSetReaggregation && leaseObserver == nil {
+							child := w.GetChildren(0)
+							hasEarlierIdentity := false
+							require.NoError(t, vm.HandleAllOp(child, func(_ vm.Operator, nested vm.Operator) error {
+								if earlier, ok := nested.(*window.Window); ok && earlier.ScalarSetReaggregation {
+									hasEarlierIdentity = true
+								}
+								return nil
+							}))
+							if hasEarlierIdentity {
+								return nil
+							}
+							if _, owned := child.(executionAllocationAccountOwner); !owned {
+								leaseObserver = &scalarFallbackLeaseObserver{Operator: child, before: func() {
+									require.GreaterOrEqual(t, len(joins), 2)
+									currentLease = joins[0].ScalarSetLease
+									require.NotNil(t, currentLease)
+									require.Zero(t, currentLease.CandidatePairs(), "new attempt starts with fresh work")
+									for _, join := range joins {
+										require.Same(t, currentLease, join.ScalarSetLease)
+									}
+									for _, old := range observedLeases {
+										require.NotSame(t, old, currentLease)
+									}
+									observedLeases = append(observedLeases, currentLease)
+									if exhaustShared {
+										require.NoError(t, currentLease.ChargeCandidatePairs(process.ScalarSetCandidatePairLimit-12))
+									}
+									probe, err := generation.AcquireScalarSetExecution()
+									require.NoError(t, err)
+									defer probe.Close()
+									_, err = generation.AcquireScalarSetExecution()
+									require.Error(t, err, "both fallback operators share one CN permit")
+									probe.Close()
+								}}
+								w.SetChild(leaseObserver, 0)
+							}
+						}
+						return nil
+					}))
+					for _, pre := range scope.PreScopes {
+						walk(pre)
+					}
+				}
+				for _, scope := range c.scopes {
+					walk(scope)
+				}
+				require.NotNil(t, leaseObserver)
+			}
+
 			var injection *scalarFallbackCancelInput
 			if mode == "cancel-window-input" {
 				require.True(t, c.IsTpQuery(), "test injection supports the TP fixture only")
@@ -178,6 +268,9 @@ func TestScalarSetFallbackResourceLifecycle(t *testing.T) {
 			}
 			_, err = c.Run(0)
 			switch mode {
+			case "mixed-multiple-prepared":
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrScalarSetResourceBudgetExceeded), "aggregate work must reject: %v", err)
+				require.Empty(t, got)
 			case "budget-rejection":
 				require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
 				t.Logf("budget rejection: %v", err)
@@ -199,7 +292,7 @@ func TestScalarSetFallbackResourceLifecycle(t *testing.T) {
 				require.NotEmpty(t, got)
 			default:
 				require.NoError(t, err)
-				require.Equal(t, []string{"-0", "NULL"}, got)
+				require.Equal(t, expected, got)
 				require.Equal(t, []int64{0, 3}, gotIDs)
 			}
 			first := generation.Snapshot()
@@ -224,11 +317,24 @@ func TestScalarSetFallbackResourceLifecycle(t *testing.T) {
 				gotIDs = nil
 				cancelOutput = false
 				proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
+				if leaseObserver != nil {
+					leaseObserver.seen = false
+					exhaustShared = false
+				}
 				require.NoError(t, c.Reset(proc, time.Now(), fill, query))
 				_, err = c.Run(0)
 				require.NoError(t, err)
-				require.Equal(t, []string{"-0", "NULL"}, got)
+				require.Equal(t, expected, got)
 				require.Equal(t, []int64{0, 3}, gotIDs)
+			}
+			if mode == "mixed-multiple-prepared" {
+				require.Len(t, observedLeases, 2)
+				// Each UNION retains four branch candidates including hidden identities;
+				// two outer rows times four candidates times two fallbacks is 16 pairs.
+				require.Equal(t, uint64(16), observedLeases[1].CandidatePairs())
+				for _, old := range observedLeases {
+					require.ErrorIs(t, old.ChargeCandidatePairs(1), process.ErrExecutionResourceClosed)
+				}
 			}
 			require.Zero(t, generation.Snapshot().Used, "terminal Run must release reservations before fixture destruction")
 			require.Zero(t, registry.LiveAllocationMetadata())
@@ -367,4 +473,20 @@ func assertScalarFallbackSpillClosed(t *testing.T, fs *scalarFallbackSpillFS, ph
 		require.ErrorIs(t, err, os.ErrClosed)
 	}
 	t.Logf("spill-terminal phase=%s created=%d reopened=%d removed=%d closed-handles=%d", phase, created, opened, removed, len(handles))
+}
+
+// The unowned input edge observes attempt setup during Prepare, before any
+// predicate can consume work; the original child retains its cleanup owner.
+type scalarFallbackLeaseObserver struct {
+	vm.Operator
+	before func()
+	seen   bool
+}
+
+func (o *scalarFallbackLeaseObserver) Prepare(proc *process.Process) error {
+	if !o.seen {
+		o.seen = true
+		o.before()
+	}
+	return o.Operator.Prepare(proc)
 }

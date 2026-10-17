@@ -154,7 +154,7 @@ const (
 	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
 	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
 	MORPCVersion118    int64 = 118 // transactional database defaults and table charset alteration
-	MORPCVersion119    int64 = 119 // signed-zero FLOAT/DOUBLE set-operation keys
+	MORPCVersion119    int64 = 119 // signed-zero set keys and bounded local scalar-set reaggregation
 	MORPCLatestVersion       = MORPCVersion119
 )
 

@@ -90,7 +90,7 @@ func (builder *QueryBuilder) tryRewriteLeftJoinNullFilter(
 	}
 	join := builder.qry.Nodes[joinID]
 	if join == nil || join.NodeType != plan.Node_JOIN || join.JoinType != plan.Node_LEFT ||
-		join.IsRightJoin || !builder.IsEquiJoin(join) {
+		join.IsRightJoin || join.ScalarSetReaggregation || !builder.IsEquiJoin(join) {
 		return nodeID, false
 	}
 	for _, expr := range join.OnList {
@@ -662,7 +662,7 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 				}
 			}
 
-			if canTurnInner && node.JoinType == plan.Node_LEFT && joinSides[i] == JoinSideRight && rejectsNull(filter, builder.compCtx.GetProcess()) {
+			if canTurnInner && !node.ScalarSetReaggregation && node.JoinType == plan.Node_LEFT && joinSides[i] == JoinSideRight && rejectsNull(filter, builder.compCtx.GetProcess()) {
 				for _, cond := range node.OnList {
 					filters = append(filters, splitPlanConjunction(applyDistributivity(
 						builder.GetContext(), cond, !builder.subqueryPredicatePlanningDisabled()))...)

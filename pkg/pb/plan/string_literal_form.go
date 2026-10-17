@@ -396,6 +396,7 @@ const (
 type RemoteExpressionFeatures struct {
 	CalendarIntervalNormalization bool
 	SetOperationFloatKeys         bool
+	ScalarSetReaggregation        bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
 	ScalarDivision                  bool
@@ -440,7 +441,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.SetOperationFloatKeys || features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.ScalarSetReaggregation || features.SetOperationFloatKeys || features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -913,7 +914,7 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 // can retain precise diagnostics, while sharing one owner walk so adding one
 // feature cannot accidentally replace another feature's compatibility gate.
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
-	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
+	err = walkExpressionOwners(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
 				_, encodedJSON := literal.Value.(*Literal_Sval)
@@ -1164,6 +1165,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			}
 			return nil
 		})
+	}, func(owner any) error {
+		if marked, ok := owner.(interface{ GetScalarSetReaggregation() bool }); ok && marked.GetScalarSetReaggregation() {
+			features.ScalarSetReaggregation = true
+		}
+		return nil
 	})
 	return
 }
@@ -1644,6 +1650,10 @@ func validateStringLiteralFormsInOwner(owner any) error {
 }
 
 func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
+	return walkExpressionOwners(owner, visitor, nil)
+}
+
+func walkExpressionOwners(owner any, visitor func(*Expr) error, ownerVisitor func(any) error) error {
 	seen := make(map[uintptr]struct{})
 	var walk func(reflect.Value) error
 	walk = func(value reflect.Value) error {
@@ -1659,6 +1669,11 @@ func walkExpressionsInOwner(owner any, visitor func(*Expr) error) error {
 		if value.Kind() == reflect.Pointer {
 			if value.IsNil() {
 				return nil
+			}
+			if ownerVisitor != nil && value.CanInterface() {
+				if err := ownerVisitor(value.Interface()); err != nil {
+					return err
+				}
 			}
 			if expr, ok := value.Interface().(*Expr); ok {
 				return visitor(expr)

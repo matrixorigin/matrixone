@@ -33,12 +33,13 @@ const (
 	AllocationOwnerDML
 	AllocationOwnerSample
 	AllocationOwnerExternal
+	AllocationOwnerWindow
 )
 
 const (
 	// AllocationOwnerCatalogMax is the largest owner implemented by this
 	// binary. Append new catalog entries immediately before it.
-	AllocationOwnerCatalogMax = AllocationOwnerExternal
+	AllocationOwnerCatalogMax = AllocationOwnerWindow
 	// AllocationOwnerMax preserves the existing public bound and reserves IDs
 	// for rolling-version terminal summaries. Unknown owners remain observable
 	// on the wire but cannot allocate locally until catalogued by this binary.
@@ -75,6 +76,8 @@ func (o AllocationOwner) String() string {
 		return "sample"
 	case AllocationOwnerExternal:
 		return "external"
+	case AllocationOwnerWindow:
+		return "window"
 	default:
 		return "owner-" + strconv.FormatUint(uint64(o), 10)
 	}
