@@ -12948,6 +12948,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
+	seedRewriteRuleCacheProofForTest(ses)
 	ses.priv = priv
 
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)

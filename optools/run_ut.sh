@@ -1320,13 +1320,13 @@ function handle_ut_termination(){
             fi
         fi
     fi
-    if (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) && [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
-        cleanup_embedded_prebuild
-    elif [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
-        logger "ERR" "UT cancellation: preserving embedded prebuild directory while an owner is undrained"
-    fi
     if (( CURRENT_UT_DRAIN_FAILED == 0 && CLUSTER_PREBUILD_DRAIN_FAILED == 0 )); then
-        consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY
+        # Keep preparation diagnostics until execution reporting has released
+        # ownership, including discovery aborts that have no report to append.
+        if consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY &&
+            [[ -z "${PREBUILT_RACE_REPORT}" && -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
+            cleanup_embedded_prebuild
+        fi
     else
         logger "ERR" "UT cancellation: preserving prebuilt race report and binary while an owner is undrained"
     fi

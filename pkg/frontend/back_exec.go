@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -1001,12 +1003,13 @@ func executeStmtInSameSession(
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
 	return doComQuery(ses, execCtx, &UserInput{
-		stmt:                  stmt,
-		isInternalInput:       true,
-		isSetExpression:       true,
-		isPreparedExpression:  preparedExpression,
-		preparedParamVals:     preparedParamVals,
-		preparedBinaryExecute: preparedBinaryExecute,
+		stmt:                       stmt,
+		isInternalInput:            true,
+		sameStatementAuthorization: true,
+		isSetExpression:            true,
+		isPreparedExpression:       preparedExpression,
+		preparedParamVals:          preparedParamVals,
+		preparedBinaryExecute:      preparedBinaryExecute,
 	})
 }
 
@@ -1101,6 +1104,7 @@ type backSession struct {
 	forcePessimisticRC                bool
 	cloneSnapshotUsesBackgroundTxn    bool
 	cancelTxnCreateWithRequest        bool
+	authorizationSnapshot             *txnclient.SnapshotAdmission
 	processHook                       backExecProcessHook
 	lineageOwnerLifecycleWritePending bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
@@ -1235,6 +1239,15 @@ func (backSes *backSession) Close() {
 		backSes.feSessionImpl.Reset()
 	}
 	backSes.upstream = nil
+	backSes.authorizationSnapshot = nil
+}
+
+// A read-only authorization transaction contributes no causal user writes.
+// Its internal completion must not advance the statement's authorization epoch.
+func (backSes *backSession) updateLastCommitTS(ts timestamp.Timestamp) {
+	if backSes.authorizationSnapshot == nil {
+		backSes.feSessionImpl.updateLastCommitTS(ts)
+	}
 }
 
 func (backSes *backSession) Clear() {
