@@ -158,6 +158,11 @@ func buildColumnAndConstraint(
 			defaultScope[i] = col
 		}
 	}
+	for _, col := range targetTableDef.Cols {
+		if err := validateLegacyCRC32GeneratedInputs(ctx.GetContext(), col.GetGeneratedCol().GetExpr(), defaultScope); err != nil {
+			return nil, err
+		}
+	}
 
 	// If the column null property is not specified, it defaults to allowing null
 	hasNullFlag := false
@@ -207,26 +212,36 @@ func buildColumnAndConstraint(
 			}
 			targetTableDef.Indexes = append(targetTableDef.Indexes, indexDef)
 		case *tree.AttributeDefault:
-			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
+			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope, unchangedCRC32ColumnClauses(oldCol, specNewColumn, colType))
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasDefaultValue = true
 		case *tree.AttributeNull:
-			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
+			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope, unchangedCRC32ColumnClauses(oldCol, specNewColumn, colType))
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasNullFlag = defaultValue.NullAbility
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
+			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope, unchangedCRC32ColumnClauses(oldCol, specNewColumn, colType))
 			if err != nil {
 				return nil, err
 			}
 			newCol.OnUpdate = onUpdateExpr
 		case *tree.AttributeGeneratedAlways:
+			if err := validateGeneratedColumnAttributes(ctx.GetContext(), specNewColumn); err != nil {
+				return nil, err
+			}
+			if preserved, handled, preserveErr := preserveLegacyCRC32Generated(ctx.GetContext(), oldCol, attribute, colType); handled {
+				if preserveErr != nil {
+					return nil, preserveErr
+				}
+				newCol.GeneratedCol = preserved
+				continue
+			}
 			generatedCol, err := buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
 			if err != nil {
 				return nil, err
@@ -240,6 +255,31 @@ func buildColumnAndConstraint(
 			// Type metadata was resolved centrally before constructing the column.
 		default:
 			return nil, moerr.NewNotSupportedf(ctx.GetContext(), "unsupport column definition %v", attribute)
+		}
+	}
+	// Attribute parsing above finalizes AutoIncr. Preserve the early representation
+	// check before binding, but do not let COPY retain an illegal final dependency.
+	for _, col := range targetTableDef.Cols {
+		for _, owner := range []struct {
+			subject string
+			expr    *plan.Expr
+		}{
+			{"generated column", col.GetGeneratedCol().GetExpr()},
+			{"default expression", col.GetDefault().GetExpr()},
+			{"on-update expression", col.GetOnUpdate().GetExpr()},
+		} {
+			expr := owner.expr
+			if !containsLegacyCRC32(expr) {
+				continue
+			}
+			if err := validateLegacyCRC32ExprInputs(ctx.GetContext(), expr, defaultScope, owner.subject); err != nil {
+				return nil, err
+			}
+			if owner.subject == "generated column" {
+				if err := checkGeneratedExprReferences(ctx.GetContext(), expr, col.GetOriginCaseName(), defaultScope, make(map[int32]bool)); err != nil {
+					return nil, err
+				}
+			}
 		}
 	}
 	if newCol.GeneratedCol != nil {
@@ -259,7 +299,7 @@ func buildColumnAndConstraint(
 			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
 		}
 		if !hasDefaultValue {
-			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
+			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope, unchangedCRC32ColumnClauses(oldCol, specNewColumn, colType))
 			if err != nil {
 				return nil, err
 			}

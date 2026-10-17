@@ -837,6 +837,15 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 	resp.LastInsertID = ses.GetLastInsertID()
 	resp.LastInsertIDExported = true
 	for _, st := range prepareStmts {
+		// The migration payload carries SQL, not the original CRC32 overload.
+		// Pin statements whose CRC identity cannot be proved replay-invariant,
+		// including identities hidden by folding or catalog dependencies.
+		if !crc32PreparedMigrationSafe(operationCtx, ses, st) {
+			if err := context.Cause(operationCtx); err != nil {
+				return err
+			}
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
+		}
 		// Migration replays SQL against the current assignment; it does not
 		// transfer this statement's original static type and row-domain binding.
 		// Keep the connection here until the statement is deallocated.

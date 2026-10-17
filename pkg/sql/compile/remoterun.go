@@ -2413,6 +2413,12 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 			"geodetic spatial-distance semantics require MORPC protocol version 90",
 		)
 	}
+	if features.CRC32JSONTextBytes &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
+		return moerr.NewNotSupportedNoCtx(
+			"CRC32 JSON text-byte semantics require MORPC protocol version 118",
+		)
+	}
 	return nil
 }
 

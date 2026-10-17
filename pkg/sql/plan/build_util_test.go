@@ -842,7 +842,7 @@ func TestBuildDefaultAndOnUpdateRejectOversizedCharVarchar(t *testing.T) {
 				&tree.AttributeOnUpdate{Expr: tree.NewNumVal("abcdef", "abcdef", false, tree.P_char)},
 			},
 		)
-		_, err = buildOnUpdate(proc.Ctx, onUpdateCol, typ, proc)
+		_, err = buildOnUpdate(proc.Ctx, onUpdateCol, typ, proc, nil)
 		require.Error(t, err, "oversized ON UPDATE for %v(3) must be rejected", oid)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 	}

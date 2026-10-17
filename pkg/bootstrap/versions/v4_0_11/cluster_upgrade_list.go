@@ -26,6 +26,11 @@ import (
 // handler would leave those clusters permanently without the CDC target
 // identity catalog state.
 var clusterUpgEntries = []versions.UpgradeEntry{
+	// Published catalogs can have passed 4.0.6 before its CDC columns were
+	// appended. Repair the prerequisites in this reachable upgrade, using
+	// their original types/defaults and the stricter common-writer v106 gate.
+	cdcWatermarkColumn("source_table_id", "bigint unsigned not null default 0 after watermark"),
+	cdcWatermarkColumn("owner_generation", "bigint unsigned not null default 0 after source_table_id"),
 	cdcWatermarkColumn("pending_source_table_id", "bigint unsigned null after owner_generation"),
 	cdcWatermarkColumn("target_identity", "varchar(256) null after pending_source_table_id"),
 }

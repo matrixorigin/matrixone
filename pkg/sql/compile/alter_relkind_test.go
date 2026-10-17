@@ -69,3 +69,9 @@ func TestAlterCopyCreateOptionsCarriesLogicalId(t *testing.T) {
 	none := &plan.AlterTable{TableDef: &plan.TableDef{TableType: "r"}}
 	require.Equal(t, uint64(0), alterCopyCreateOptions(none).KeepLogicalId())
 }
+
+func TestAlterCopyCarriesCRC32Expressions(t *testing.T) {
+	schema := &plan.TableDef{Name: "copy"}
+	qry := &plan.AlterTable{TableDef: &plan.TableDef{}, CopyTableDef: schema}
+	require.Same(t, schema, alterCopyCreateOptions(qry).CRC32CopyExpressions())
+}
