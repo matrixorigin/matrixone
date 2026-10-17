@@ -1010,6 +1010,8 @@ func remapDbInExpr(expr tree.Expr, remap remapDbContext) {
 		remapDbInExpr(e.Right, remap)
 	case *tree.CastExpr:
 		remapDbInExpr(e.Expr, remap)
+	case *tree.CollateExpr:
+		remapDbInExpr(e.Expr, remap)
 	case *tree.BitCastExpr:
 		remapDbInExpr(e.Expr, remap)
 	case *tree.SerialExtractExpr:

@@ -75,6 +75,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TenantInfo struct {
@@ -938,6 +939,7 @@ var (
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
+		catalog.MODatabaseDefaults:    0,
 		"mo_stages":                   0,
 		catalog.MOAutoIncrTable:       0,
 		"mo_sessions":                 0,
@@ -979,6 +981,7 @@ var (
 		"mo_user_defined_function":      0,
 		"mo_stored_procedure":           0,
 		"mo_mysql_compatibility_mode":   0,
+		catalog.MODatabaseDefaults:      0,
 		catalog.MOAutoIncrTable:         0,
 		"mo_indexes":                    0,
 		"mo_table_partitions":           0,
@@ -1039,6 +1042,7 @@ var (
 		MoCatalogMoRolePrivsDDL,
 		MoCatalogMoUserDefinedFunctionDDL,
 		MoCatalogMoMysqlCompatibilityModeDDL,
+		catalog.MoDatabaseDefaultsDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
 		MoCatalogMoSubsDDL,
@@ -3944,9 +3948,10 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 
 	if ok {
 		ses.ep.userConfig.StageFilePath = filePath
+	} else {
+		filePath = ep.FilePath
 	}
-
-	return
+	return process.AuthorizeSQLFileAccess(ses.proc, filePath)
 }
 
 func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err error) {
@@ -4354,6 +4359,10 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
 		// drop table mo_mysql_compatibility_mode
+		rtnErr = bh.Exec(deleteCtx, "drop table if exists mo_catalog.mo_database_defaults")
+		if rtnErr != nil {
+			return rtnErr
+		}
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
 		if rtnErr != nil {
 			return rtnErr
@@ -4710,6 +4719,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error) {
 	var vr *verifiedRole
 	var sql string
+	var roleDeleted bool
 	account := ses.GetTenantInfo()
 	err = normalizeNamesOfRoles(ctx, dr.Roles)
 	if err != nil {
@@ -4724,7 +4734,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
-		if err == nil {
+		if err == nil && roleDeleted {
 			invalidateRoleRuleCaches(ses)
 		}
 	}()
@@ -4776,6 +4786,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 				return err
 			}
 		}
+		roleDeleted = true
 	}
 
 	return err
@@ -6527,6 +6538,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		needMatchedRole = true
 		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
+	case *tree.AlterDatabase:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeAlterObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		dbName = string(st.Name)
+		writeDatabaseTargets = append(writeDatabaseTargets, dbName)
 	case *tree.DropDatabase:
 		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		writeDatabaseAndTableDirectly = true
@@ -10344,8 +10361,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		}
 
 		checkBackUpStartPrivilege := func() (bool, error) {
-			// only the moAdmin can execute the backup statement
-			return tenant.IsSysTenant(), nil
+			// Backup operates on server-owned files and requires system authority.
+			return verifyAccountCanExecMoCtrl(tenant), nil
 		}
 
 		checkCdcTaskPrivilege := func() (bool, error) {

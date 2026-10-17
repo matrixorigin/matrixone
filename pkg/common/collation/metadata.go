@@ -181,6 +181,35 @@ func ResolveSQL(name string) (Identity, bool) {
 	return d.LegacyIdentity, ok && d.LegacyIdentity != LegacyIdentity
 }
 
+// ResolveSession resolves a collation name for a live SQL session.  Legacy
+// compatibility spellings keep their historical identity and revision-zero
+// contract.  The native UCA400 collations are executable session domains, so
+// they retain their native identity and require the version-one metadata
+// contract.  Other native definitions remain closed until their complete
+// session and storage contracts are implemented.
+func ResolveSession(name string) (Identity, uint8, bool) {
+	d, ok := Lookup(name)
+	if !ok {
+		return LegacyIdentity, RevisionLegacy, false
+	}
+	if d.LegacyIdentity != LegacyIdentity {
+		return d.LegacyIdentity, RevisionLegacy, true
+	}
+	if d.Semantics == UCA400 {
+		return d.Identity, RevisionV1, true
+	}
+	return LegacyIdentity, RevisionLegacy, false
+}
+
+// IsProtocolAdmitted reports whether a protocol collation is backed by the
+// runtime session contract.  Native UCA400 collations are admitted because
+// their key/comparison implementation and revisioned metadata are complete;
+// other native/versioned definitions remain rejected rather than being
+// silently mapped to a different collation.
+func IsProtocolAdmitted(d Definition) bool {
+	return d.LegacyIdentity != LegacyIdentity || d.Semantics == UCA400
+}
+
 // ResolveDDLCollation preserves DDL-only compatibility spellings without
 // advertising a native UTF-32 domain or enabling them for session requests.
 func ResolveDDLCollation(name string) (Identity, bool) {

@@ -2557,9 +2557,16 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	ses.invalidateRewriteRuleCacheLocked()
 }
 
-func (ses *Session) invalidateRewriteRuleCache() {
+func (ses *Session) invalidateRewriteRuleCache(accountID uint32) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	// Check identity under the same lock as invalidation. A SessionManager
+	// snapshot may still contain a session that has since been closed; nil is
+	// not the sys account (ID zero). Account-local metadata cannot change
+	// another tenant's rewrite policy, even when their role IDs coincide.
+	if ses.tenant == nil || ses.tenant.GetTenantID() != accountID {
+		return
+	}
 	ses.invalidateRewriteRuleCacheLocked()
 	// ALTER ROLE ... ADD/DROP RULE changes the policy definition itself. The
 	// session cache may be unloaded or may describe the old role state, so every
@@ -2711,7 +2718,7 @@ func (ses *Session) AppendData(row []interface{}) {
 func (ses *Session) InitExportConfig(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep = &ExportConfig{userConfig: ep, service: ses.service}
+	ses.ep = &ExportConfig{userConfig: ep, service: ses.service, proc: ses.proc}
 }
 
 func (ses *Session) GetExportConfig() *ExportConfig {
@@ -4169,9 +4176,11 @@ func (ses *Session) inheritPhysicalConnection(prev *Session) {
 	ses.proxyAddr = prev.proxyAddr
 }
 
-// reset resets the ses instance and copy some fields of prev, then
-// close the prev.
-func (ses *Session) reset(ctx context.Context, prev *Session) error {
+// resetWith rebuilds the candidate session from the account-global snapshot
+// and optionally lets the caller publish connection-specific state before the
+// previous generation is retired. Keeping that hook before closeForReset makes
+// a failed candidate initialization leave the live session untouched.
+func (ses *Session) resetWith(ctx context.Context, prev *Session, beforeClose func() error) error {
 	if ses == nil || prev == nil {
 		return nil
 	}
@@ -4214,6 +4223,11 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	}
 	if err != nil {
 		return err
+	}
+	if beforeClose != nil {
+		if err = beforeClose(); err != nil {
+			return err
+		}
 	}
 
 	return prev.closeForReset(ctx)

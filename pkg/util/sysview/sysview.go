@@ -52,7 +52,7 @@ var (
 		InformationSchemaCharacterSetsDDL,
 		InformationSchemaCharacterSetsData,
 		InformationSchemaTriggersDDL,
-		InformationSchemaTablesDDL,
+		InformationSchemaTablesV118DDL,
 		InformationSchemaPartitionsDDL,
 		InformationSchemaViewsDDL,
 		InformationSchemaStatisticsDDL,
@@ -76,7 +76,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion109 {
+	if protocol >= defines.MORPCVersion118 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -85,12 +85,20 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 	sqls := make([]string, 0, len(InitInformationSchemaSysTables))
 	for _, sql := range InitInformationSchemaSysTables {
 		switch sql {
-		case InformationSchemaTablesDDL:
+		case InformationSchemaSchemataDDL:
+			if protocol < defines.MORPCVersion118 {
+				sql = InformationSchemaSchemataLegacyDDL
+			}
+		case InformationSchemaTablesV118DDL:
 			if protocol < defines.MORPCVersion46 {
 				sql = InformationSchemaTablesV41DDL
+			} else {
+				sql = InformationSchemaTablesDDL
 			}
 		case InformationSchemaColumnsDDL:
-			if protocol >= defines.MORPCVersion100 {
+			if protocol >= defines.MORPCVersion109 {
+				// Native column metadata was published independently by v4.0.14.
+			} else if protocol >= defines.MORPCVersion100 {
 				sql = InformationSchemaColumnsV100DDL()
 			} else if protocol >= defines.MORPCVersion58 {
 				sql = InformationSchemaColumnsV58DDL()
@@ -175,6 +183,12 @@ func initInformationSchemaTables(ctx context.Context, txn executor.TxnExecutor) 
 
 	begin := time.Now()
 	for _, sql := range InitInformationSchemaSysTables {
+		// Prerequisites commit before persisted-expression admission. The
+		// function-599 definition is installed with the other derived views
+		// after the v118 catalog barrier, before opening ingress.
+		if sql == InformationSchemaTablesV118DDL {
+			sql = InformationSchemaTablesDDL
+		}
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("[information_schema] init information_schema tables error: %v, sql: %s", err, sql))
 		}

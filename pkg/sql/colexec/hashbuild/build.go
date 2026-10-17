@@ -127,8 +127,7 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		case BuildHashMap:
 			if err := hashBuild.build(proc, analyzer); err != nil {
 				err = TerminalBudgetError(proc.Ctx, err)
-				hashBuild.finalizeBuildFailure(proc, err)
-				return result, err
+				return vm.CancelResult, hashBuild.finalizeBuildFailure(proc, err)
 			}
 
 			ctr.state = HandleRuntimeFilter
@@ -136,16 +135,14 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		case HandleRuntimeFilter:
 			if err := hashBuild.handleRuntimeFilter(proc); err != nil {
 				err = TerminalBudgetError(proc.Ctx, err)
-				hashBuild.finalizeBuildFailure(proc, err)
-				return result, err
+				return vm.CancelResult, hashBuild.finalizeBuildFailure(proc, err)
 			}
 
 			ctr.state = SendJoinMap
 
 		case SendJoinMap:
 			if err := hashBuild.sendJoinMap(proc); err != nil {
-				hashBuild.finalizeBuildFailure(proc, err)
-				return result, err
+				return vm.CancelResult, hashBuild.finalizeBuildFailure(proc, err)
 			}
 			ctr.state = SendSucceed
 
@@ -247,14 +244,29 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 // returns. Consumers may already be blocked in ReceiveJoinMap/RuntimeFilter;
 // deferring publication until Reset could deadlock a pipeline scheduler that
 // waits for those consumers before cleanup.
-func (hashBuild *HashBuild) finalizeBuildFailure(proc *process.Process, err error) {
+func (hashBuild *HashBuild) finalizeBuildFailure(proc *process.Process, err error) error {
 	hashBuild.ctr.terminalMu.Lock()
 	defer hashBuild.ctr.terminalMu.Unlock()
-	hashBuild.publishBuildError(proc, err)
+	queryCtx, _ := process.GetQueryCtxFromProc(proc)
+	if queryCtx == nil {
+		queryCtx = proc.GetTopContext()
+	}
+	normalized, _ := process.NormalizePipelineRunError(err, proc.Ctx, queryCtx)
+	if normalized == nil {
+		// A sibling can observe this terminal before ancestor cancellation
+		// reaches it. Publish normal retirement at the producer boundary.
+		// Keep the partial map/spill owned by cleanup: SendSucceed would transfer it.
+		hashBuild.publishJoinMap(proc, nil)
+		err = nil
+	} else {
+		hashBuild.publishBuildError(proc, normalized)
+		err = normalized
+	}
 	if !hashBuild.ctr.runtimeFilterDone {
 		message.FinalizeRuntimeFilterOnBuildError(hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
 		hashBuild.ctr.runtimeFilterDone = hashBuild.RuntimeFilterSpec != nil
 	}
+	return err
 }
 
 func (hashBuild *HashBuild) build(

@@ -846,6 +846,8 @@ func alterCopyPkColumnValueUnchanged(oldCol, newCol *plan.ColDef) bool {
 		oldTyp.GetAutoIncr() == newTyp.GetAutoIncr() &&
 		oldTyp.GetWidth() == newTyp.GetWidth() &&
 		oldTyp.GetScale() == newTyp.GetScale() &&
+		oldTyp.GetCharset() == newTyp.GetCharset() &&
+		oldTyp.GetCollationVersion() == newTyp.GetCollationVersion() &&
 		oldTyp.GetTable() == newTyp.GetTable() &&
 		oldTyp.GetEnumvalues() == newTyp.GetEnumvalues()
 }
@@ -2889,14 +2891,15 @@ func updateNewTableColId(c *Compile, copyRel engine.Relation, changeColDefMap ma
 	if err != nil {
 		return err
 	}
+	columnIDs := make(map[string]uint64, len(tableDefs))
 	for _, def := range tableDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok {
-			for _, colDef := range changeColDefMap {
-				if colDef.GetOriginCaseName() == attr.Attr.Name {
-					colDef.ColId = attr.Attr.ID
-					break
-				}
-			}
+			columnIDs[attr.Attr.Name] = attr.Attr.ID
+		}
+	}
+	for _, colDef := range changeColDefMap {
+		if id, ok := columnIDs[colDef.GetOriginCaseName()]; ok {
+			colDef.ColId = id
 		}
 	}
 	return nil

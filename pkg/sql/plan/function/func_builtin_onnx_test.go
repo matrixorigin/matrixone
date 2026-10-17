@@ -17,6 +17,7 @@ package function
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -253,6 +254,31 @@ func TestOnnxRunLifecycle(t *testing.T) {
 	// Close is idempotent.
 	require.NoError(t, op.Close())
 	require.NoError(t, op.Close())
+}
+
+func TestOnnxRunDatalinkResetRechecksAuthorization(t *testing.T) {
+	skipNoOnnxRuntime(t)
+	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
+	model := onnxTestModel(t, "sum_and_difference.onnx")
+	modelPath := filepath.Join(t.TempDir(), "model.onnx")
+	require.NoError(t, os.WriteFile(modelPath, model, 0o600))
+	raw := []byte("file://" + modelPath)
+
+	op := newOpOnnxRun()
+	defer func() { require.NoError(t, op.Close()) }()
+	require.NoError(t, op.ensureSession(proc, raw, true, true))
+	require.NotNil(t, op.sess)
+
+	// The cached session is deliberately discarded before the identity change.
+	// Rebuilding must pass through Datalink admission and its size/stat check
+	// again; a previously admitted model cannot carry authority into the next
+	// query.
+	require.NoError(t, op.Reset())
+	proc.Base.SessionInfo.Role = "public"
+	err := op.ensureSession(proc, raw, true, true)
+	require.ErrorContains(t, err, "only the sys account moadmin role")
 }
 
 // TestOnnxRunSelectList covers the filtered-row paths.

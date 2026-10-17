@@ -108,7 +108,7 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 		return false
 	}
 	for _, ov := range allSupportedFunctions[fid].Overloads {
-		if ov.CannotFold() || ov.IsRealTimeRelated() {
+		if ov.IsVolatile() || ov.IsRealTimeRelated() {
 			return true
 		}
 	}
@@ -135,6 +135,13 @@ func IsConstant(expr *plan.Expr, varAndParamIsConst bool) bool {
 	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForFolding)
 }
 
+// IsFoldCandidate admits deterministic expressions for speculative evaluation.
+// Unlike IsConstant, this is not permission to relocate or eliminate effects:
+// the folder must isolate diagnostics and publish only a warning-free result.
+func IsFoldCandidate(expr *plan.Expr, varAndParamIsConst bool) bool {
+	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForFoldCandidate)
+}
+
 // IsStatementConstant conservatively admits speculative evaluation and endpoint
 // CONST provenance. Parameters and variables must already be materialized.
 func IsStatementConstant(expr *plan.Expr) bool {
@@ -152,6 +159,7 @@ type constantPurpose uint8
 const (
 	constantForFolding constantPurpose = iota
 	constantForRuntime
+	constantForFoldCandidate
 )
 
 func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose constantPurpose) bool {
@@ -180,11 +188,13 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 			return false
 		}
 		fid, _ := DecodeOverloadID(e.F.Func.GetObj())
-		if fid == CASE && purpose == constantForFolding {
+		if fid == CASE && purpose != constantForRuntime {
 			return false
 		}
 		f, ok := GetFunctionByIdWithoutError(e.F.Func.GetObj())
-		if !ok || f.CannotFold() || (f.IsRealTimeRelated() && !currentExecution) {
+		if !ok || f.IsVolatile() ||
+			(f.HasRowScopedDiagnostics() && purpose != constantForFoldCandidate) ||
+			(f.IsRealTimeRelated() && !currentExecution) {
 			return false
 		}
 		if purpose == constantForRuntime && (allSupportedFunctions[fid].isAggregate() || allSupportedFunctions[fid].isWindow()) {
@@ -273,7 +283,7 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 		return false, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	f := allSupportedFunctions[fid]
-	if f.Overloads[oIndex].volatile {
+	if f.Overloads[oIndex].CannotFold() {
 		return false, nil
 	}
 	return f.testFlag(plan.Function_ZONEMAPPABLE), nil
@@ -502,7 +512,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 
 	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
 
-	fold := !f.CannotFold() && !f.IsRealTimeRelated()
+	fold := !f.IsVolatile() && !f.IsRealTimeRelated() && (!f.HasRowScopedDiagnostics() || length > 0)
 	evaluateLength := length
 	if fold {
 		for _, param := range inputs {
@@ -514,29 +524,41 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 			evaluateLength = 1
 		}
 	}
+	// Value constancy survives diagnostics; only effect-free folding may reduce
+	// the evaluation length. Keep this proof if the probe rejects folding.
+	scalarValue := fold
 
 	if err = result.PreExtendAndReset(evaluateLength); err != nil {
 		result.Free()
 		return nil, err
 	}
 	exec, _, execFree, _ := f.GetExecuteMethod()
-	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
-		result.Free()
-		if execFree != nil {
-			// NOTE: execFree is only applicable for serial and serial_full.
-			// if execFree is not nil, then make sure to call it after exec() is done.
-			_ = execFree()
-		}
-		return nil, err
-	}
 	if execFree != nil {
-		// NOTE: execFree is only applicable for serial and serial_full.
-		// if execFree is not nil, then make sure to call it after exec() is done.
-		_ = execFree()
+		defer func() { _ = execFree() }()
+	}
+	evalProc := proc
+	var probe *process.WarningProbe
+	if fold && f.HasRowScopedDiagnostics() {
+		probe = &process.WarningProbe{}
+		evalProc = proc.NewNoContextChildProc(0)
+		evalProc.Ctx = proc.Ctx
+		evalProc.WarningSink = probe
+	}
+	err = exec(inputs, result, evalProc, evaluateLength, nil)
+	if probe != nil && (err != nil || probe.Warned()) {
+		// The probe has no statement-visible effects. Re-evaluate at the
+		// requested cardinality so the caller owns diagnostics and errors.
+		if err = result.PreExtendAndReset(length); err == nil {
+			err = exec(inputs, result, proc, length, nil)
+		}
+	}
+	if err != nil {
+		result.Free()
+		return nil, err
 	}
 
 	vec := result.GetResultVector()
-	if fold {
+	if scalarValue {
 		vec.ToConst()
 		vec.SetLength(length)
 	}
@@ -911,14 +933,29 @@ type overload struct {
 	// TODO: there is not a good place to use that in plan now. the attribute is not effective.
 	cannotParallel bool
 
-	// if true, overload cannot be folded
+	// Volatile overloads can return different values for the same inputs.
 	volatile bool
+	// Deterministic values may still emit diagnostics once per evaluated row.
+	// Folding or changing their evaluation count would lose those effects.
+	rowScopedDiagnostics bool
 	// if realTimeRelated, overload cannot be folded when `Prepare`.
 	realTimeRelated bool
 }
 
-func (ov *overload) CannotFold() bool {
+// IsVolatile reports value instability, independently of diagnostic effects.
+// Use this for deterministic-expression admission, such as generated columns.
+func (ov *overload) IsVolatile() bool {
 	return ov.volatile
+}
+
+// CannotFold conservatively protects effects when no warning-free evaluation
+// proof is available. Speculative folders use IsFoldCandidate and a warning probe.
+func (ov *overload) CannotFold() bool {
+	return ov.volatile || ov.rowScopedDiagnostics
+}
+
+func (ov *overload) HasRowScopedDiagnostics() bool {
+	return ov.rowScopedDiagnostics
 }
 
 func (ov *overload) IsRealTimeRelated() bool {

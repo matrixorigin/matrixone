@@ -75,16 +75,18 @@ func (m *MemoryFS) List(ctx context.Context, dirPath string) iter.Seq2[*DirEntry
 		default:
 		}
 
-		m.RLock()
-		defer m.RUnlock()
-
 		path, err := ParsePathAtService(dirPath, m.name)
 		if err != nil {
 			yield(nil, err)
 			return
 		}
 
-		iter := m.tree.Iter()
+		// A consumer may write or delete files while iterating. Keep the
+		// copy-on-write tree snapshot, rather than either tree lock, across yield.
+		m.RLock()
+		tree := m.tree.Copy()
+		m.RUnlock()
+		iter := tree.Iter()
 		defer iter.Release()
 
 		pivot := &_MemFSEntry{

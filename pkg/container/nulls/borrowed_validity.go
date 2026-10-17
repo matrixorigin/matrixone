@@ -15,6 +15,9 @@
 package nulls
 
 import (
+	"encoding/binary"
+	"math/bits"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/bufferlease"
 )
@@ -67,12 +70,7 @@ func (nsp *Nulls) InitBorrowedWindow(dst *Nulls, start, end int) (bool, error) {
 		start < 0 || end < start || end > nsp.validityLength {
 		return false, moerr.NewInvalidInputNoCtx("invalid borrowed validity window")
 	}
-	nulls := 0
-	for row := start; row < end; row++ {
-		if nsp.validityContainsNull(uint64(row)) {
-			nulls++
-		}
-	}
+	nulls := nsp.CountRange(uint64(start), uint64(end))
 	dst.Reset()
 	if nulls == 0 {
 		return false, nil
@@ -93,6 +91,34 @@ func (nsp *Nulls) validityContainsNull(row uint64) bool {
 	}
 	bit := nsp.validityOffset + int(row)
 	return nsp.validity[bit>>3]&(byte(1)<<uint(bit&7)) == 0
+}
+
+// countValidityNulls counts a validated logical range without materializing
+// the borrowed bitmap. Mask the boundary bytes so parent rows and padding
+// cannot contribute, then consume complete words with population count.
+func (nsp *Nulls) countValidityNulls(start, end int) int {
+	count := end - start
+	start += nsp.validityOffset
+	end += nsp.validityOffset
+	if shift := start & 7; shift != 0 && start < end {
+		width := min(8-shift, end-start)
+		mask := byte((1<<width)-1) << shift
+		count -= bits.OnesCount8(nsp.validity[start>>3] & mask)
+		start += width
+	}
+	for end-start >= 64 {
+		count -= bits.OnesCount64(binary.LittleEndian.Uint64(nsp.validity[start>>3:]))
+		start += 64
+	}
+	for end-start >= 8 {
+		count -= bits.OnesCount8(nsp.validity[start>>3])
+		start += 8
+	}
+	if start < end {
+		mask := byte((1 << (end - start)) - 1)
+		count -= bits.OnesCount8(nsp.validity[start>>3] & mask)
+	}
+	return count
 }
 
 func (nsp *Nulls) releaseValidity() {

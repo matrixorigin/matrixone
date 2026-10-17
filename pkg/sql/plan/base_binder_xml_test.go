@@ -58,4 +58,21 @@ func TestXMLFunctionBinding(t *testing.T) {
 	fn, ok := function.GetFunctionByIdWithoutError(expr.GetF().Func.Obj)
 	require.True(t, ok)
 	require.True(t, fn.CannotFold())
+	// A marker remains execution-invariant through deterministic functions,
+	// even when their current binding must be probed for diagnostics.
+	textParam := &Expr{Typ: planpb.Type{Id: int32(types.T_varchar)}, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+	bits, err := BindFuncExprImplByPlanExpr(ctx, "bit_count", []*Expr{textParam})
+	require.NoError(t, err)
+	xpath, err := BindFuncExprImplByPlanExpr(ctx, "concat", []*Expr{
+		makePlan2StringConstExprWithType("/a["), bits, makePlan2StringConstExprWithType("]"),
+	})
+	require.NoError(t, err)
+	for _, name := range []string{"extractvalue", "updatexml"} {
+		args := []*Expr{makePlan2StringConstExprWithType("<a>x</a>"), xpath}
+		if name == "updatexml" {
+			args = append(args, makePlan2StringConstExprWithType("<b/>"))
+		}
+		_, err = BindFuncExprImplByPlanExpr(ctx, name, args)
+		require.NoError(t, err, name)
+	}
 }

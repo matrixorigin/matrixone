@@ -207,37 +207,17 @@ func TestInitTNServicesRetainsPublishedOwnersOnPartialBatchFailure(t *testing.T)
 	first.network.addresses = first.buildServiceAddresses()
 	first.tn.cfgs, first.tn.opts = first.buildTNConfigs()
 	first.fileservices = first.buildFileServices(ctx)
+	unusedLocal := first.fileservices.tnLocalFSs[1]
 
 	t.Cleanup(func() {
-		for _, svc := range first.tn.svcs {
-			_ = svc.Close()
-		}
-		for i, fs := range first.fileservices.tnLocalFSs {
-			if i == 1 && fs == first.fileservices.s3FS {
-				continue
-			}
-			if fs != nil {
-				fs.Close(ctx)
-			}
-		}
-		if first.fileservices.s3FS != nil {
-			first.fileservices.s3FS.Close(ctx)
-		}
-		if first.fileservices.etlFS != nil {
-			first.fileservices.etlFS.Close(ctx)
-		}
-		first.stopper.Stop()
+		unusedLocal.Close(ctx)
+		require.NoError(t, first.Close())
 	})
 	first.tn.cfgs[0].InStandalone = true
 	firstHAKeeper := partialBatchHAKeeperClient{}
 	first.tn.opts[0] = append(first.tn.opts[0], tnservice.WithHAKeeperClientFactory(
 		func() (logservice.TNHAKeeperClient, error) { return firstHAKeeper, nil },
 	))
-	for _, cfg := range first.tn.cfgs {
-		rt := first.newRuntime(cfg.UUID)
-		moruntime.SetupServiceBasedRuntime(cfg.UUID, rt)
-	}
-
 	// The second batch item fails while building its file-service graph. The
 	// first TN has already published its wrapper, so the caller must retain it
 	// for cleanup instead of losing it with a temporary local slice.

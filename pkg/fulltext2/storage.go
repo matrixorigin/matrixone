@@ -130,7 +130,7 @@ func SubIndexId(uid string, i int) string { return fmt.Sprintf("%s:%d", uid, i) 
 // maxInsertTuples bounds the (index_id, chunk_id, data, tag) rows per INSERT (base-segment and
 // batched CDC-tail persist). Its primary job is cutting RunSql round-trips — many tiny frames become
 // a few multi-row INSERTs. It is kept MODERATE (500, well below hnsw's 2000 in
-// pkg/vectorindex/hnsw/model.go) because each row's load_file data flows into the storage engine's
+// pkg/vectorindex/hnsw/model.go) because each row's binary data flows into the storage engine's
 // ASYNC object writer (file/S3), which buffers-and-flushes and thus accumulates memory as rows are
 // pushed; fulltext2 CDC persist is a BACKGROUND op, so a smaller batch hands that writer a bounded
 // slice (<= maxInsertTuples*MaxChunkSize ≈ 32 MiB) per statement instead of a large burst. NOTE: this is only
@@ -138,45 +138,55 @@ func SubIndexId(uid string, i int) string { return fmt.Sprintf("%s:%d", uid, i) 
 // tail delta), which the per-iteration work bound (not batch size) is what actually caps.
 const maxInsertTuples = 500
 
-// ToInsertSqls serializes the segment, spills it to a temp file under the LOCAL
-// fileservice's __fulltext2 dir (load_file reads it back by path), and emits the
-// SQL to persist it: one metadata row + the bytes split into <= MaxChunkSize
-// (index_id, chunk_id, data, tag) rows read via load_file. tag=0 is a compacted
-// base (sync CREATE/REINDEX build); tag=1 is a CDC delta. sqlproc resolves the LOCAL
-// SSD spill dir (falls back to /tmp when none is attached). The returned cleanup MUST
-// run after the SQLs execute (they read the temp file at execution).
-// ToInsertSqls persists this segment. buildTS is the base-table version the segment's content
-// reflects, recorded as metadata.build_ts; 0 means unknown.
-//
-// It is a parameter rather than something derived here because the two callers know different
-// things and the tag cannot tell them apart -- both write tag=0. A CREATE builds from the source
-// table inside this transaction, so its SnapshotTS is exactly the version captured. A MERGE
-// merges existing index segments and never reads the source table, so the compaction
-// transaction's SnapshotTS would claim coverage the content does not have; and since its inputs
-// include unversioned CDC tails there is no version to name, so it passes 0.
-func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int, buildTS int64) (sqls []string, cleanup func(), err error) {
+// Persist writes one sealed segment in the caller's existing transaction.
+// The segment owns its spill; SQL receives binary values with caller identity.
+func (s *Segment) Persist(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, tag int, buildTS int64) error {
+	fp, checksum, size, err := s.spill(sqlproc)
+	if err != nil {
+		return err
+	}
+	defer func() { fp.Close(); os.Remove(fp.Name()) }()
+	metadata := s.metadataInsertSQL(sqlproc, cfg, ts, checksum, size, buildTS)
+	return sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
+		stmt := sqlproc.StatementOption()
+		res, err := exec.Exec(metadata, stmt)
+		res.Close()
+		if err != nil {
+			return err
+		}
+		writer, err := sqlexec.NewChunkInserter(sqlproc.GetContext(), exec, stmt, cfg.DbName, cfg.IndexTable, maxInsertTuples)
+		if err != nil {
+			return err
+		}
+		if _, err = writer.WriteRange(fp, 0, size, s.Id, 0, tag); err != nil {
+			return err
+		}
+		return writer.Flush()
+	})
+}
+
+// End serialization-buffer lifetime before SQL parameter/expression allocation.
+func (s *Segment) spill(sqlproc *sqlexec.SqlProcess) (*os.File, string, int64, error) {
 	buf, err := s.Serialize()
 	if err != nil {
-		return nil, nil, err
+		return nil, "", 0, err
 	}
-	checksum := vectorindex.CheckSumFromBuffer(buf)
-	filesize := int64(len(buf))
-
 	fp, err := createLocalSpillFile(sqlproc, "ft2build")
 	if err != nil {
-		return nil, nil, err
+		return nil, "", 0, err
 	}
-	path := fp.Name()
-	cleanup = func() { fp.Close(); os.Remove(path) }
-	if _, err = fp.Write(buf); err != nil {
-		cleanup()
-		return nil, nil, err
+	if _, err = fp.Write(buf); err == nil {
+		err = fp.Sync()
 	}
-	if err = fp.Sync(); err != nil {
-		cleanup()
-		return nil, nil, err
+	if err != nil {
+		fp.Close()
+		os.Remove(fp.Name())
+		return nil, "", 0, err
 	}
+	return fp, vectorindex.CheckSumFromBuffer(buf), int64(len(buf)), nil
+}
 
+func (s *Segment) metadataInsertSQL(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, checksum string, filesize, buildTS int64) (sql string) {
 	metaTbl := sqlquote.QualifiedIdent(cfg.DbName, cfg.MetadataTable)
 	// build_ts is named only when the table has it. A fulltext2 index created before the column
 	// existed keeps the narrower shape until its tenant's v4_0_7 migration runs, and that
@@ -185,93 +195,23 @@ func (s *Segment) ToInsertSqls(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts 
 	// leaves the documented 0 = unknown.
 	if sqlexec.HasProvenanceColumns(sqlproc, cfg.DbName, cfg.MetadataTable,
 		catalog.FullText2Index_TblCol_Metadata_Build_Ts) {
-		sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d, %d)",
+		sql = fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d, %d)",
 			metaTbl,
 			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
 			catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 			catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
 			catalog.FullText2Index_TblCol_Metadata_Build_Ts,
 			sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N,
-			buildTS))
+			buildTS)
 	} else {
-		sqls = append(sqls, fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d)",
+		sql = fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s, %s, %s) VALUES (%s, %d, %s, %d, %d, %d)",
 			metaTbl,
 			catalog.FullText2Index_TblCol_Metadata_Index_Id, catalog.FullText2Index_TblCol_Metadata_Timestamp,
 			catalog.FullText2Index_TblCol_Metadata_Checksum, catalog.FullText2Index_TblCol_Metadata_Filesize,
 			catalog.FullText2Index_TblCol_Metadata_Recency, catalog.FullText2Index_TblCol_Metadata_Nrow,
-			sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N))
+			sqlquote.String(s.Id), ts, sqlquote.String(checksum), filesize, s.Recency, s.N)
 	}
-	sqls = append(sqls, fileChunkInsertSqls(cfg, s.Id, 0, path, 0, int(filesize), tag)...)
-	return sqls, cleanup, nil
-}
-
-// fileChunkRange is one contiguous [offset, offset+length) byte range of a spilled file to persist
-// as storage rows: offset 0 for a whole-file base segment, or a frame's offset within a PACKED CDC
-// spool file (many frames share one file).
-type fileChunkRange struct {
-	path   string
-	offset int64
-	length int
-}
-
-// framesInsertSqls emits the load_file storage-row tuples for a SEQUENCE of file ranges, each range
-// split into <= MaxChunkSize rows, batched at maxInsertTuples rows per INSERT statement
-// ACROSS range boundaries. chunk_ids are assigned contiguously from startChunkId in range order;
-// the next free chunk_id is returned. Batching across ranges is what keeps a burst of tiny CDC tail
-// frames to O(totalChunks/maxInsertTuples) statements instead of one INSERT per frame. Mirrors
-// bm25.wand.FileChunkInsertSqls (single-range) generalized to many ranges.
-func framesInsertSqls(cfg TableConfig, id string, startChunkId int64, ranges []fileChunkRange, tag int) (sqls []string, nextChunkId int64) {
-	prefix := fmt.Sprintf("INSERT INTO %s (%s, %s, %s, %s) VALUES ",
-		sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable),
-		catalog.FullText2Index_TblCol_Storage_Index_Id, catalog.FullText2Index_TblCol_Storage_Chunk_Id,
-		catalog.FullText2Index_TblCol_Storage_Data, catalog.FullText2Index_TblCol_Storage_Tag)
-	var vals []string
-	chunkID := startChunkId
-	for _, r := range ranges {
-		for off := 0; off < r.length; off += vectorindex.MaxChunkSize {
-			sz := vectorindex.MaxChunkSize
-			if off+sz > r.length {
-				sz = r.length - off
-			}
-			url := fmt.Sprintf("file://%s?offset=%d&size=%d", r.path, r.offset+int64(off), sz)
-			vals = append(vals, fmt.Sprintf("(%s, %d, load_file(cast(%s as datalink)), %d)",
-				sqlquote.String(id), chunkID, sqlquote.String(url), tag))
-			chunkID++
-			if len(vals) == maxInsertTuples {
-				sqls = append(sqls, prefix+strings.Join(vals, ", "))
-				vals = vals[:0]
-			}
-		}
-	}
-	if len(vals) > 0 {
-		sqls = append(sqls, prefix+strings.Join(vals, ", "))
-	}
-	return sqls, chunkID
-}
-
-// fileChunkInsertSqls splits a [baseOffset, baseOffset+dataLen) BYTE RANGE of a spilled file into
-// <= MaxChunkSize storage rows read via load_file (no hex/unhex). Single-range convenience over
-// framesInsertSqls (used by the base-segment persist).
-func fileChunkInsertSqls(cfg TableConfig, id string, startChunkId int64, path string, baseOffset int64, dataLen int, tag int) []string {
-	sqls, _ := framesInsertSqls(cfg, id, startChunkId, []fileChunkRange{{path: path, offset: baseOffset, length: dataLen}}, tag)
-	return sqls
-}
-
-// TailFileInsertSqls persists ONE spilled tag=1 CDC frame (index_id=CdcTailId) that lives at
-// [offset, offset+frameLen) within a packed spool file. Its chunk rows are contiguous from
-// startChunkId, so recency (chunk_id) ordering across frames is unchanged by the packing.
-func TailFileInsertSqls(cfg TableConfig, startChunkId int64, path string, offset int64, frameLen int) []string {
-	return fileChunkInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, path, offset, frameLen, int(vectorindex.Tag_CdcEvents))
-}
-
-// TailFramesInsertSqls persists ALL of an iteration's spilled tag=1 CDC frames as FEW multi-row
-// INSERTs: the per-chunk load_file tuples of every frame, batched at maxInsertTuples rows per
-// statement ACROSS frame boundaries — so N tiny frames cost ~N/maxInsertTuples statements (and
-// RunSql round-trips) instead of one INSERT per frame. chunk_ids are contiguous from startChunkId in frame
-// order (recency identical to a per-frame persist); the next free chunk_id (end of the tail range)
-// is returned.
-func TailFramesInsertSqls(cfg TableConfig, startChunkId int64, frames []TailSegment) (sqls []string, nextChunkId int64) {
-	return TailFramesInsertSqlsAt(nil, cfg, startChunkId, frames, 0)
+	return sql
 }
 
 // TailFrameMetaId / TailFrameMetaPrefix name a tail frame's metadata row. Defined once in
@@ -285,22 +225,6 @@ var (
 // means "the bases".
 func notTailFrame() string {
 	return vectorindex.NotTailFrameSQL(catalog.FullText2Index_TblCol_Metadata_Index_Id)
-}
-
-// TailFramesInsertSqlsAt persists the frames AND one metadata row each, recording the size of
-// the frame and the base-table version buildTS its content reflects.
-//
-// The row goes in the same statement batch as the chunks, so the two commit together: a
-// generation's recorded coverage can never disagree with the bytes actually stored. That is the
-// point of keeping it here rather than deriving it from an ISCP watermark elsewhere.
-func TailFramesInsertSqlsAt(sqlproc *sqlexec.SqlProcess, cfg TableConfig, startChunkId int64, frames []TailSegment, buildTS int64) (sqls []string, nextChunkId int64) {
-	ranges := make([]fileChunkRange, len(frames))
-	for i, f := range frames {
-		ranges[i] = fileChunkRange{path: f.Path, offset: f.Offset, length: f.FrameLen}
-	}
-	sqls, nextChunkId = framesInsertSqls(cfg, vectorindex.CdcTailId, startChunkId, ranges, int(vectorindex.Tag_CdcEvents))
-
-	return append(sqls, tailFrameMetaSqls(sqlproc, cfg, startChunkId, frames, buildTS)...), nextChunkId
 }
 
 // tailFrameMetaSqls writes the frames' rows, BATCHED at maxInsertTuples rows per statement the
@@ -630,7 +554,7 @@ func LoadFromStorage(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string) (*
 
 // ft2LocalDir is fulltext2's own subdir under the LOCAL fileservice (on the SSD
 // data-dir) for segment spill / mmap files — sibling to the JOIN spill's "__spill".
-// EVERY fulltext2 temp file (the build-side load_file spill, the CDC tail spill, and
+// EVERY fulltext2 temp file (the build-side segment spill, the CDC tail spill, and
 // the query-side mmap materialization) lives here so it lands on the fast SSD mount,
 // not /tmp (128 MB/s on AWS).
 const ft2LocalDir = "__fulltext2"
@@ -638,7 +562,7 @@ const ft2LocalDir = "__fulltext2"
 // localSpillDir returns the on-disk __fulltext2 scratch directory under the LOCAL
 // (SSD) fileservice, creating it if absent. Returns "" when no LOCAL fileservice is
 // attached (tests / one-shot tools) so callers fall back to the OS temp dir via
-// os.CreateTemp("", …)/os.MkdirTemp("", …). Used by the build-side spill (load_file
+// os.CreateTemp("", …)/os.MkdirTemp("", …). Used by the build-side spill (binary
 // needs a real path) — the query mmap path uses the anonymous createLocalTempFile.
 func localSpillDir(sqlproc *sqlexec.SqlProcess) string {
 	if sqlproc == nil || sqlproc.Proc == nil {
@@ -667,7 +591,7 @@ func LocalSpillDir(ctx context.Context, rootFS fileservice.FileService) string {
 }
 
 // createLocalSpillFile creates a NAMED temp file (prefix) under the LOCAL fileservice's
-// __fulltext2 dir — its absolute on-disk path is what load_file reads back. Falls back
+// __fulltext2 dir — its handle is read by the segment owner. Falls back
 // to the OS temp dir when no LOCAL fileservice is attached (localSpillDir=="").
 func createLocalSpillFile(sqlproc *sqlexec.SqlProcess, prefix string) (*os.File, error) {
 	return os.CreateTemp(localSpillDir(sqlproc), prefix)

@@ -1405,6 +1405,11 @@ var supportedStringBuiltIns = []FuncNew{
 					return greatestYearNumericFn
 				},
 			},
+			{
+				overloadId: LeastGreatestCollationOverload,
+				retType:    leastGreatestReturnType,
+				newOp:      func() executeLogicOfOverload { return greatestCollatedFn },
+			},
 		},
 	},
 
@@ -3173,6 +3178,11 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return leastYearNumericFn
 				},
+			},
+			{
+				overloadId: LeastGreatestCollationOverload,
+				retType:    leastGreatestReturnType,
+				newOp:      func() executeLogicOfOverload { return leastCollatedFn },
 			},
 		},
 	},
@@ -8671,6 +8681,9 @@ var supportedMathBuiltIns = []FuncNew{
 			{
 				overloadId: 13,
 				args:       []types.T{types.T_varchar},
+				// Values remain deterministic, but conversion diagnostics belong
+				// to every evaluated row, including selected literal branches.
+				rowScopedDiagnostics: true,
 				retType: func(parameters []types.Type) types.Type {
 					return types.T_uint64.ToType()
 				},
@@ -14929,6 +14942,21 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// Protocol 118 metadata consumer for the persistent table-default pair.
+	{
+		functionId: INTERNAL_TABLE_COLLATION,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0,
+			volatile:   true,
+			args:       []types.T{types.T_varchar},
+			retType:    func([]types.Type) types.Type { return types.New(types.T_varchar, 64, 0) },
+			newOp:      func() executeLogicOfOverload { return builtInInternalTableCollation },
+		}},
+	},
+
 	// function `internal_column_character_set`
 	{
 		functionId: INTERNAL_COLUMN_CHARACTER_SET,
@@ -15147,6 +15175,18 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	{
+		functionId: CHECK_ASYNC_DATALINK_SOURCE,
+		class:      plan.Function_INTERNAL,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0, volatile: true,
+			args:    []types.T{types.T_datalink, types.T_bool},
+			retType: func(_ []types.Type) types.Type { return types.T_bool.ToType() },
+			newOp:   func() executeLogicOfOverload { return CheckAsyncDatalinkSource },
+		}},
+	},
 	// function `load_text`
 	// Like load_file but returns the datalink's EXTRACTED plain text (PDF/DOCX
 	// parsed via GetPlainText), not the raw bytes — so it yields the same text the
