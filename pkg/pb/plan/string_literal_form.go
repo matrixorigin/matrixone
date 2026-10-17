@@ -404,9 +404,8 @@ type RemoteExpressionFeatures struct {
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
 	ScalarDivision bool
-	// ViewMetadataFunctions requires v118 for MO_VIEW_DEFINITION/CHECK_OPTION.
-	ViewMetadataFunctions bool
-
+	// ViewMetadataFunctions requires v119 for MO_VIEW_DEFINITION/CHECK_OPTION.
+	ViewMetadataFunctions           bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -985,7 +984,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				// The planner depends on this package, so registry IDs cannot be
 				// imported here. Compile tests bind these IDs to the registry.
-				if id == 600 || id == 601 { // MO_VIEW_DEFINITION / MO_VIEW_CHECK_OPTION
+				if id == 601 || id == 602 { // MO_VIEW_DEFINITION / MO_VIEW_CHECK_OPTION
 					features.ViewMetadataFunctions = true
 				}
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&

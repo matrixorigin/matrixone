@@ -77,7 +77,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion118 {
+	if protocol >= defines.MORPCVersion119 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -91,15 +91,17 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 				sql = InformationSchemaSchemataLegacyDDL
 			}
 		case InformationSchemaTablesV118DDL:
-			if protocol < defines.MORPCVersion46 {
-				sql = InformationSchemaTablesV41DDL
-			} else {
-				sql = InformationSchemaTablesDDL
+			if protocol < defines.MORPCVersion118 {
+				if protocol < defines.MORPCVersion46 {
+					sql = InformationSchemaTablesV41DDL
+				} else {
+					sql = InformationSchemaTablesDDL
+				}
 			}
 		case InformationSchemaColumnsDDL:
 			if protocol >= defines.MORPCVersion109 {
 				// Native Unicode collation identities are a separate v109
-				// contract from the v118 VIEWS function definitions.
+				// contract from the v119 VIEWS function definitions.
 				sql = InformationSchemaColumnsDDL
 			} else if protocol >= defines.MORPCVersion100 {
 				sql = InformationSchemaColumnsV100DDL()
@@ -149,11 +151,11 @@ func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 }
 
 // informationSchemaInitProtocol selects the catalog definition that this CN
-// is allowed to author during system bootstrap. A CN may advertise v118 before
+// is allowed to author during system bootstrap. A CN may advertise v119 before
 // its local catalog admission fence has completed; in that window the current
 // VIEWS definition would be rejected by persisted-expression admission. Keep
 // the VIEWS-specific predecessor while retaining the newer independent system
-// view contracts selected by protocol v106.
+// view contracts selected by their own protocol floors.
 func informationSchemaInitProtocol(txn executor.TxnExecutor) int64 {
 	protocol := int64(defines.MORPCLatestVersion)
 	if txn == nil || txn.Txn() == nil {
@@ -168,12 +170,14 @@ func informationSchemaInitProtocol(txn executor.TxnExecutor) int64 {
 			protocol = current
 		}
 	}
-	if protocol >= defines.MORPCVersion118 {
+	if protocol >= defines.MORPCVersion119 {
 		if value, present := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor); present {
 			floor, valid := value.(int64)
-			if !valid || floor < defines.MORPCVersion118 {
-				// Only VIEWS is deferred; retain main's independent v109 COLUMNS contract.
-				return defines.MORPCVersion109
+			if !valid || floor < defines.MORPCVersion119 {
+				// Defer only VIEWS. Main's database-default prerequisites are
+				// already present; TABLES is deferred separately below until
+				// post-admission publication by InitSystemViews.
+				return defines.MORPCVersion118
 			}
 		}
 	}
@@ -228,6 +232,11 @@ func initInformationSchemaTablesForProtocol(
 
 	begin := time.Now()
 	for _, sql := range InitInformationSchemaSysTablesForProtocol(protocol) {
+		// Bootstrap prerequisites precede the v118 table-collation fence.
+		// InitSystemViews publishes that consumer after catalog admission.
+		if sql == InformationSchemaTablesV118DDL {
+			sql = InformationSchemaTablesDDL
+		}
 		if _, err = txn.Exec(sql, executor.StatementOption{}); err != nil {
 			return moerr.NewInternalError(ctx, fmt.Sprintf("[information_schema] init information_schema tables error: %v, sql: %s", err, sql))
 		}

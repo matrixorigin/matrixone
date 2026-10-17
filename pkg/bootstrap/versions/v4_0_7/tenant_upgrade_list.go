@@ -62,7 +62,7 @@ func CheckInformationSchemaViewsDefinition(
 
 // InformationSchemaViewsAuthoringProtocolReady reports the local write-side
 // admission fence. The common protocol check only proves that every CN can
-// decode v118; the VIEWS DDL also persists function IDs that must not be
+// decode v119; the VIEWS DDL also persists function IDs that must not be
 // authored until this CN has consumed the catalog-fenced admission snapshot.
 // A missing runtime or key is retained as ready for bootstrap unit tests and
 // older standalone callers that predate the admission lifecycle.
@@ -79,7 +79,7 @@ func InformationSchemaViewsAuthoringProtocolReady(txn executor.TxnExecutor) bool
 		return true
 	}
 	floor, valid := value.(int64)
-	return valid && floor >= defines.MORPCVersion118
+	return valid && floor >= defines.MORPCVersion119
 }
 
 // upgradeInformationSchemaViews is deliberately scheduled in v4.0.7. The
@@ -92,7 +92,7 @@ func upgradeInformationSchemaViews() versions.UpgradeEntry {
 		TableName:               "VIEWS",
 		UpgType:                 versions.MODIFY_VIEW,
 		UpgSql:                  sysview.InformationSchemaViewsDDL,
-		RequiredProtocolVersion: defines.MORPCVersion118,
+		RequiredProtocolVersion: defines.MORPCVersion119,
 		CheckFunc: func(txn executor.TxnExecutor, accountID uint32) (bool, error) {
 			exists, viewDef, err := CheckInformationSchemaViewsDefinition(txn, accountID)
 			if err != nil {
