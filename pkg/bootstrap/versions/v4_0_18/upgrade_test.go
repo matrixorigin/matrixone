@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_15
+package v4_0_18
 
 import (
 	"context"
@@ -35,21 +35,21 @@ import (
 
 func TestPythonRevisionRepairUpgradePath(t *testing.T) {
 	metadata := Handler.Metadata()
-	require.Equal(t, "4.0.15", metadata.Version)
-	require.Equal(t, "4.0.14", metadata.MinUpgradeVersion)
+	require.Equal(t, "4.0.18", metadata.Version)
+	require.Equal(t, "4.0.17", metadata.MinUpgradeVersion)
 	require.Equal(t, versions.No, metadata.UpgradeCluster)
 	require.Equal(t, versions.Yes, metadata.UpgradeTenant)
-	require.Equal(t, int64(defines.MORPCVersion118), metadata.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion120), metadata.RequiredProtocolVersion)
 	require.Equal(t, uint32(len(v4_0_7.PythonRevisionUpgradeEntries())), metadata.VersionOffset)
-	require.True(t, metadata.CanDirectUpgrade("4.0.14"))
-	require.False(t, metadata.CanDirectUpgrade("4.0.13"))
+	require.True(t, metadata.CanDirectUpgrade("4.0.17"))
+	require.False(t, metadata.CanDirectUpgrade("4.0.16"))
 	require.Len(t, v4_0_7.PythonRevisionUpgradeEntries(), 9)
 }
 
 func TestPythonRevisionRepairRejectsOldProtocolBeforeCatalogAccess(t *testing.T) {
 	for _, response := range []string{
-		`{"result":"cn-a:117"}`,
-		`{"result":"cn-a:118,cn-b:117"}`,
+		`{"result":"cn-a:119"}`,
+		`{"result":"cn-a:120,cn-b:119"}`,
 		`{"result":""}`,
 		`invalid`,
 	} {
@@ -61,7 +61,7 @@ func TestPythonRevisionRepairRejectsOldProtocolBeforeCatalogAccess(t *testing.T)
 				return repairStringResult(t, response), nil
 			}, nil)
 			err := Handler.HandleTenantUpgrade(context.Background(), 7, txn)
-			require.ErrorContains(t, err, "upgrade requires all CNs to support protocol version 118")
+			require.ErrorContains(t, err, "upgrade requires all CNs to support protocol version 120")
 			require.Equal(t, []string{"SELECT mo_ctl('cn', 'GetProtocolVersion', '')"}, statements)
 		})
 	}
@@ -78,8 +78,8 @@ func TestPythonRevisionRepairIsIdempotentForCatalogStates(t *testing.T) {
 		wantFirstDDL  int
 	}{
 		{
-			name:         "upstream_final_4.0.14_missed_catalog",
-			schemaOrigin: "4.0.14",
+			name:         "upstream_final_4.0.17_missed_catalog",
+			schemaOrigin: "4.0.17",
 			legacyIndex:  true,
 			wantFirstDDL: 9,
 		},
@@ -166,7 +166,7 @@ func newRepairTxnExecutor(t *testing.T, state *pythonRevisionCatalogState) execu
 			}
 			return executor.Result{}, nil
 		case sql == "SELECT mo_ctl('cn', 'GetProtocolVersion', '')":
-			return repairStringResult(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:118"}`), nil
+			return repairStringResult(t, `{"method":"GETPROTOCOLVERSION","result":"cn-a:120"}`), nil
 		case strings.Contains(lower, "alter table mo_catalog.mo_user_defined_function add column"):
 			for column := range state.columns {
 				if strings.Contains(sql, "add column "+column+" ") {

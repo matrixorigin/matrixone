@@ -517,6 +517,11 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 			ArtifactDigest:        "artifact",
 			EnvironmentDigest:     "environment",
 		}},
+		Correlation: &planpb.CorrelationSpec{
+			Version:    planpb.CorrelationVersion,
+			StepOwners: []uint32{0, 1},
+			Programs:   []*planpb.CorrelationProgram{{RootNode: 7}},
+		},
 	}
 
 	encoded, err := (&planpb.Query{ViewReferences: source.ViewReferences}).Marshal()
@@ -562,10 +567,14 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	cloned.Headings[0] = "changed"
 	cloned.BackgroundQueries[0].Headings[0] = "changed"
 	cloned.RoutineDependencies[0].FunctionRef.Revision = 99
+	cloned.Correlation.StepOwners[0] = 99
+	cloned.Correlation.Programs[0].RootNode = 99
 	require.Equal(t, int32(3), source.Steps[0])
 	require.Equal(t, "id", source.Headings[0])
 	require.Equal(t, "background", source.BackgroundQueries[0].Headings[0])
 	require.Equal(t, uint64(7), source.RoutineDependencies[0].FunctionRef.Revision)
+	require.Equal(t, uint32(0), source.Correlation.StepOwners[0])
+	require.Equal(t, int32(7), source.Correlation.Programs[0].RootNode)
 }
 
 func TestDeepCopyDataDefinitionCreateTablePreservesExecutionFields(t *testing.T) {

@@ -22,6 +22,8 @@ import (
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_16"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_17"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
@@ -86,7 +88,12 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 			return executor.Result{}, nil
 		}, op)
 		s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-			func(s *service) { s.initUpgrade() })
+			func(s *service) {
+				// This fixture proves the published COLUMNS repair at 4.0.17.
+				// The scheduling and real-login tests cover the full registry
+				// including the separate Python revision repair.
+				s.handles = []VersionHandle{v4_0_16.Handler, v4_0_17.Handler}
+			})
 		t.Cleanup(s.stopper.Stop)
 		final := s.getFinalVersionHandle().Metadata()
 		require.NoError(t, s.doCheckUpgrade(t.Context()))
