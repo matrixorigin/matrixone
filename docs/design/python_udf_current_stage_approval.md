@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r17-2026-10-16`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r18-2026-10-17`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -316,3 +316,107 @@ production or security scope to Python UDFs.
 
 Independent Architecture and SQL/Planner approval of r17 remains pending.
 Mechanical rebase, protocol allocation and validation do not supply it.
+
+## r18 protocol and catalog allocation addendum (2026-10-17)
+
+Official main `b111224b0c624773389b390cd3cf1223126b6ee2` owns MORPC 118
+for transactional database defaults and table charset alteration, including
+its catalog 4.0.15 migration. The governing
+`python-udf-current-stage-r18-2026-10-17` revision preserves that handler and
+all earlier published handlers unchanged. Python's single new capability is
+119; its nine idempotent shared-function entries move to catalog 4.0.16,
+whose minimum direct source is 4.0.15. The historical 4.0.7 entries keep their
+original provenance and are not treated as current Python admission.
+
+Shared revision publication/read, cached/prepared/evaluator checks,
+remote destination/send/receive admission, repair metadata, login compensation
+and `GetPythonUdfStatus` require capability 119. Immediate predecessor 118
+and mixed 119/118 CNs are rejected before shared-function mutation. The
+independent table-collation/defaults contract remains at 118; LEAST/GREATEST
+remains at 117. Ordinary SQL UDFs retain their pre-floor legacy fallback.
+The real login-repair regression covers tenant versions 4.0.12 through
+4.0.15, rejection at 118, preserved legacy SQL results, and idempotent replay.
+
+Generated plan bindings combine the upstream database-defaults message with
+Python routine identities; the merged parser retains both charset DDL and
+Python function syntax. This mechanical rebase adds no Python execution,
+production or security scope. The earlier addenda describe their historical
+allocations, not the governing r18 admission floor.
+
+Independent Architecture and SQL/Planner approval of r18 remains pending.
+Rebase, allocation and validation do not provide independent approval.
+
+## r19 catalog allocation addendum (2026-10-18)
+
+Official main `a8be04735bcf6d2a7aa48d464f76c0b13c691ef5` publishes
+catalog 4.0.16 to refresh persisted COLLATIONS metadata. The governing
+`python-udf-current-stage-r19-2026-10-18` proposal preserves that handler,
+its protocol-118 admission and all earlier published handlers unchanged.
+Python's nine idempotent shared-function entries move to catalog 4.0.17,
+whose minimum direct source is 4.0.16. Official MORPC latest remains 118,
+so the single Python capability remains 119; immediate predecessor 118 and
+mixed 119/118 admission checks are unchanged.
+
+The upgrade registry and scheduling oracle retain the explicit 4.0.15,
+4.0.16 and 4.0.17 hops. Real first-login repair covers tenant versions
+4.0.12 through 4.0.16, rejection at protocol 118 before mutation, preserved
+legacy SQL results and two mutation-free replays. Upstream row-scoped scalar
+warning diagnostics and test-harness cleanup ownership remain intact.
+
+This allocation update adds no Python execution, production or security
+scope. Earlier addenda record historical allocations. Independent Architecture
+and SQL/Planner approval of r19 remains pending; rebase and validation do not
+provide that approval.
+
+
+## r20 protocol and shared-plan allocation addendum (2026-10-19)
+
+Official main `75d16a2b875905ffa4121783dcda4f538d3c05f7` owns protocol 119
+for coordinator-owned parameterized subquery programs and `Query.correlation`
+field 19. The current `python-udf-current-stage-r20-2026-10-19` proposal preserves
+both official allocations. Its single Python capability moves to 120, and
+`Query.routine_dependencies` uses field 20. The merged protobuf descriptor,
+marshal/unmarshal and deep-copy must preserve both contracts independently.
+
+Catalog versions and entries are unchanged: all published handlers through
+4.0.16 remain intact; the separate Python repair is 4.0.17 with minimum direct
+source 4.0.16. Catalog repair, SQL revision read/write, prepared-plan reuse,
+Python evaluator Prepare, remote sender/receiver and `GetPythonUdfStatus` use
+capability 120. Immediate predecessor 119 and mixed 120/119 workers fail closed
+before shared catalog mutation or Python execution. The main dependent-program
+contract stays at 119 and the independent table/defaults contract stays at 118.
+
+The acceptance evidence includes merged descriptor and mixed Query round-trip /
+deep-copy checks, both compiler gates, predecessor rejection, and real login
+repair from tenant versions 4.0.12 through 4.0.16 with legacy SQL UDF results and
+idempotent replay. These tests do not establish cross-binary downgrade or
+independent architecture approval. No new Python production, security or runtime
+scope is added. Independent Architecture and SQL/Planner approval of r20 remains
+pending; this allocation and rebase do not provide that approval.
+
+
+## r21 catalog allocation addendum (2026-10-19)
+
+Official main `def799e1260dd547cae2e0e54323ea20ec1b7685` publishes catalog
+4.0.17 for the persisted COLUMNS MEDIUMINT metadata refresh. The governing
+`python-udf-current-stage-r21-2026-10-19` proposal preserves that handler and
+its entries byte-for-byte, including its protocol-118 admission metadata.
+The shared COLUMNS entry used by 4.0.14 also retains the official implementation.
+Python's nine idempotent shared-function entries move to catalog 4.0.18,
+whose minimum direct source is 4.0.17. The registry retains both distinct hops;
+no published handler is replaced by the Python repair.
+
+Official MORPC latest remains 119, so the single Python capability remains 120.
+Catalog repair, revision publication/read, Prepare, prepared reuse, remote
+sender/receiver and status admission continue to reject predecessor 119 and
+mixed 120/119 workers before Python catalog mutation or execution. Query fields
+19 (correlation) and 20 (routine dependencies) remain unchanged.
+
+Scheduling covers the 4.0.17 to 4.0.18 transition. The existing real first-login
+fixture now includes tenant versions 4.0.12 through 4.0.17, predecessor rejection,
+legacy SQL UDF and nested correlated results, and two mutation-free repair
+replays. The COLUMNS fixture independently retains its published 4.0.17 boundary.
+These tests do not establish cross-binary downgrade or independent approval.
+No new Python runtime, production or security scope is added. Independent
+Architecture and SQL/Planner approval of r21 remains pending; rebase and
+validation do not provide that approval.
