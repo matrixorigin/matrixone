@@ -603,6 +603,15 @@ DRBD"
 # ----------------------------- 阶段 cluster --------------------------------
 stage_cluster(){
   hdr "阶段 cluster: corosync/pacemaker"
+  # 集群组建失败必须致命：否则后续阶段在没有 corosync/pacemaker 的机器上继续跑，
+  # 报错点会指向 fencing/资源，而不是真正的根因。
+  cluster_cmd(){
+    if ! runq "$1"; then
+      die "集群组建失败：$1
+       常见原因：两台 --hacluster-password 不一致、主机名/IP 解析不通、pcsd 未运行。
+       请修正后重跑：--stages cluster"
+    fi
+  }
   [ -n "$HACLUSTER_PW" ] || die "缺少 --hacluster-password（pcsd 认证密码，两台必须一致）"
   runq "systemctl enable --now pcsd || true"
   runq "echo 'hacluster:${HACLUSTER_PW}' | chpasswd"
@@ -612,14 +621,14 @@ stage_cluster(){
     info "非引导节点：pcsd/hacluster 已就绪，等待引导节点组建集群"
     return 0
   fi
-  runq "pcs host auth $SELF $PEER -u hacluster -p '${HACLUSTER_PW}'"
+  cluster_cmd "pcs host auth $SELF $PEER -u hacluster -p '${HACLUSTER_PW}'"
   # pcs cluster setup 只会分发已存在的 corosync authkey，缺失时需先生成
   if [ "$DRY_RUN" != 1 ]; then
     runq "mkdir -p /etc/corosync /var/lib/corosync /var/log/corosync"
     [ -f /etc/corosync/authkey ] || runq "corosync-keygen -l"
   fi
-  runq "pcs cluster setup $CLUSTER $SELF $PEER --start --enable --force"
-  runq "pcs cluster enable --all"
+  cluster_cmd "pcs cluster setup $CLUSTER $SELF $PEER --start --enable --force"
+  cluster_cmd "pcs cluster enable --all"
   info "等待集群形成 quorum..."
   if [ "$DRY_RUN" != 1 ]; then
     _q=0
@@ -628,6 +637,8 @@ stage_cluster(){
       sleep 2
     done
     [ "$_q" = 1 ] && ok "quorum 已形成" || wrn "等待 quorum 超时，请检查 corosync 与 /etc/hosts"
+    # 只有真正 quorate 时才继续，否则后面的资源会在无 quorum 的集群上创建
+    [ "$_q" = 1 ] || die "未取得 quorum，请修正 corosync/网络后重跑：--stages cluster"
   fi
   runq "pcs property set stonith-enabled=true"
   runq "pcs property set no-quorum-policy=stop"
