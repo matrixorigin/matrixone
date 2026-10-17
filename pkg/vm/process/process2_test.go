@@ -422,3 +422,25 @@ func TestGetPrepareParamsAtWithoutParams(t *testing.T) {
 	require.Error(t, err)
 	require.Nil(t, value)
 }
+
+func TestSQLFileAccessContextIsAcquisitionScoped(t *testing.T) {
+	root := t.Context()
+	proc := NewTopProcess(root, mpool.MustNewZero(), nil, nil, nil, nil, nil, nil, nil, nil, nil)
+	path := t.TempDir() + "/owned"
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
+	ctx := SQLFileAccessContext(proc.Ctx, proc)
+	require.Same(t, root, proc.Ctx, "ordinary SQL context is not changed")
+	fs, _, err := fileservice.GetForETL(ctx, nil, path)
+	require.NoError(t, err)
+	fs.Close(ctx)
+	proc.Base.SessionInfo.Role = "public"
+	restricted := SQLFileAccessContext(ctx, proc)
+	_, _, err = fileservice.GetForETL(restricted, nil, path)
+	require.ErrorContains(t, err, "only the sys account moadmin role")
+	_, _, err = fileservice.GetForETL(proc.Ctx, nil, path)
+	require.ErrorContains(t, err, "policy is required")
+	canceled, cancel := context.WithCancel(root)
+	cancel()
+	require.ErrorIs(t, SQLFileAccessContext(canceled, proc).Err(), context.Canceled)
+}

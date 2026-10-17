@@ -322,8 +322,10 @@ func Test_service_handleGoMaxProcs(t *testing.T) {
 
 func Test_service_handleGoMemLimit(t *testing.T) {
 	ctx := context.Background()
-	// set no limit
-	_ = debug.SetMemoryLimit(-1)
+	// A negative value only queries the limit. Establish this test's baseline
+	// explicitly and restore the process limit before the next test.
+	previous := debug.SetMemoryLimit(math.MaxInt64)
+	defer debug.SetMemoryLimit(previous)
 	type fields struct{}
 	type args struct {
 		ctx  context.Context
@@ -349,7 +351,7 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 			want:    &query.Response{GoMemLimitResponse: query.GoMemLimitResponse{MemLimitBytes: math.MaxInt64}},
 		},
 		{
-			name:   "set_no_limit",
+			name:   "query_current_limit",
 			fields: fields{},
 			args: args{
 				ctx:  ctx,
@@ -367,6 +369,7 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
 				"handleGoMemLimit(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, int64(4<<30), debug.SetMemoryLimit(-1), "a query must preserve the current limit")
 		})
 	}
 }

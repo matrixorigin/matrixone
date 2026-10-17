@@ -75,6 +75,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace/statistic"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type TenantInfo struct {
@@ -3944,9 +3945,10 @@ func doCheckFilePath(ctx context.Context, ses *Session, ep *tree.ExportParam) (e
 
 	if ok {
 		ses.ep.userConfig.StageFilePath = filePath
+	} else {
+		filePath = ep.FilePath
 	}
-
-	return
+	return process.AuthorizeSQLFileAccess(ses.proc, filePath)
 }
 
 func doAlterStage(ctx context.Context, ses *Session, as *tree.AlterStage) (err error) {
@@ -4710,6 +4712,7 @@ func doDropUser(ctx context.Context, ses *Session, du *tree.DropUser) (err error
 func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error) {
 	var vr *verifiedRole
 	var sql string
+	var roleDeleted bool
 	account := ses.GetTenantInfo()
 	err = normalizeNamesOfRoles(ctx, dr.Roles)
 	if err != nil {
@@ -4724,7 +4727,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 	err = bh.Exec(ctx, "begin;")
 	defer func() {
 		err = finishTxn(ctx, bh, err)
-		if err == nil {
+		if err == nil && roleDeleted {
 			invalidateRoleRuleCaches(ses)
 		}
 	}()
@@ -4776,6 +4779,7 @@ func doDropRole(ctx context.Context, ses *Session, dr *tree.DropRole) (err error
 				return err
 			}
 		}
+		roleDeleted = true
 	}
 
 	return err
@@ -10344,8 +10348,8 @@ func authenticateUserCanExecuteStatementWithObjectTypeNone(ctx context.Context, 
 		}
 
 		checkBackUpStartPrivilege := func() (bool, error) {
-			// only the moAdmin can execute the backup statement
-			return tenant.IsSysTenant(), nil
+			// Backup operates on server-owned files and requires system authority.
+			return verifyAccountCanExecMoCtrl(tenant), nil
 		}
 
 		checkCdcTaskPrivilege := func() (bool, error) {

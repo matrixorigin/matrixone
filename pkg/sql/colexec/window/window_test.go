@@ -3285,9 +3285,9 @@ func TestWindowConstantKeysWithForcedSpill(t *testing.T) {
 					require.Zero(t, budget.SpillFDUsed())
 				})
 				_, err = arg.Call(proc)
-				var resourceErr *process.ExecutionResourceError
-				require.ErrorAs(t, err, &resourceErr)
-				require.Equal(t, process.ExecutionResourceComponentSpillDisk, resourceErr.Component)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+				require.NotErrorIs(t, err, process.ErrExecutionResourceAdmission)
+				require.Contains(t, err.Error(), "window spill disk")
 				require.Equal(t, []int32{2, 1, 1, 1}, vector.MustFixedColWithTypeCheck[int32](input.Vecs[0]))
 				for i, order := range arg.Fs {
 					if order.Expr.GetLit() != nil {
@@ -4862,11 +4862,12 @@ func TestSearchLeftRightDateTimeTypes(t *testing.T) {
 
 func intervalExpr(diff int64, unit types.IntervalType) *plan.Expr {
 	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_interval)},
 		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
-			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 				Value: &plan.Literal_I64Val{I64Val: diff},
 			}}},
-			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 				Value: &plan.Literal_I64Val{I64Val: int64(unit)},
 			}}},
 		}}},

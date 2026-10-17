@@ -67,6 +67,45 @@ func varianceResult(t *testing.T, mp *mpool.MPool, exec AggFuncExec, typ types.T
 	return result
 }
 
+// YEAR is accepted by the binder as a numeric input to the statistical
+// aggregates; the executor must treat it as its numeric value (int16 years)
+// instead of failing with "unsupported type".
+func TestVarianceYearResults(t *testing.T) {
+	param := types.T_year.ToType()
+	mp := newAggExecTestPool(t)
+	input := varianceInput(t, mp, param, []types.MoYear{2020, 2021, 2022}, nil)
+	duplicateInput := varianceInput(t, mp, param, []types.MoYear{2020, 2020, 2021, 2022}, nil)
+	cases := []struct {
+		name string
+		id   int64
+		want float64
+	}{
+		{"var_pop", AggIdOfVarPop, 2.0 / 3.0},
+		{"var_samp", AggIdOfVarSample, 1.0},
+		{"stddev_pop", AggIdOfStdDevPop, math.Sqrt(2.0 / 3.0)},
+		{"stddev_samp", AggIdOfStdDevSample, 1.0},
+	}
+	for _, tc := range cases {
+		for _, distinct := range []bool{false, true} {
+			mode := "resident"
+			if distinct {
+				mode = "distinct"
+			}
+			t.Run(tc.name+"/"+mode, func(t *testing.T) {
+				exec := varianceExec(t, mp, tc.id, distinct, param)
+				require.NoError(t, exec.GroupGrow(1))
+				selected := input
+				if distinct {
+					selected = duplicateInput
+				}
+				require.NoError(t, exec.BulkFill(0, []*vector.Vector{selected}))
+				result := varianceResult(t, mp, exec, types.T_float64.ToType(), []bool{false})
+				require.InEpsilon(t, tc.want, vector.MustFixedColWithTypeCheck[float64](result)[0], 1e-15)
+			})
+		}
+	}
+}
+
 func TestVarianceStateLargeOffset(t *testing.T) {
 	mean, variance, varianceExponent, count := 0.0, 0.0, int64(0), int64(0)
 	for i := 0; i < 7; i++ {

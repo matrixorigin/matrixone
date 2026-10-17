@@ -53,6 +53,9 @@ type functionInformationForEval struct {
 	// stringToNumericCast is volatile for ordinary text parameters, but a
 	// prepared parameter with integer provenance can be folded safely.
 	stringToNumericCast bool
+	// Integer provenance excludes lexical warnings, but cannot prove that an
+	// explicit DECIMAL target has enough precision for the current value.
+	rowScopedDecimalCast bool
 
 	// the function's evalFn and freeFn.
 	evalFn func(
@@ -338,6 +341,14 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 	if !allParametersFolded || !canFold || (!atRuntime && expr.timeDependent) {
 		return nil
 	}
+	// A cached scalar result cannot represent per-evaluated-row diagnostics.
+	// Reject folding before evaluation emits a warning with execLen=1. Leaving
+	// this child non-folded also prevents its parents from caching the result;
+	// normal Eval then owns the real batch length and selected-row mask.
+	if (expr.fid == function.DIV || expr.fid == function.INTEGER_DIV || expr.fid == function.MOD) &&
+		function.ScalarDivisionNeedsRowEvaluation(expr.parameterResults, proc) {
+		return nil
+	}
 
 	// todo: I cannot understand these following codes, but I keep them here.
 	//  it seems to deal with some IN filter and very dangerous.
@@ -359,7 +370,7 @@ func (expr *FunctionExpressionExecutor) doFold(proc *process.Process, atRuntime 
 // integer provenance means the value cannot contain the trailing text that
 // requires row-level coercion warnings, making scalar folding safe.
 func (expr *FunctionExpressionExecutor) canFoldPreparedIntegerStringCast() bool {
-	if !expr.stringToNumericCast || len(expr.parameterResults) == 0 {
+	if !expr.stringToNumericCast || expr.rowScopedDecimalCast || len(expr.parameterResults) == 0 {
 		return false
 	}
 	parameter := expr.parameterResults[0]

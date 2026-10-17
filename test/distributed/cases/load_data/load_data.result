@@ -371,7 +371,7 @@ PRIMARY KEY (`col1`)
 );
 set @old_sql_mode = @@sql_mode;
 set sql_mode = concat_ws(',', @@sql_mode, 'NO_AUTO_VALUE_ON_ZERO');
-load data infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
+load data local infile '$resources/load_data/test_1.csv' into table test_table fields terminated by ',' parallel 'true';
 select * from test_table;
 ➤ col1[4,32,0]  ¦  col2[7,24,0]  ¦  col3[-7,1,0]  ¦  col4[91,64,0]  ¦  col5[12,-1,0]  ¦  col6[12,0,0]  𝄀
 0  ¦  0.1  ¦  1  ¦  1982-03-24  ¦  varchar_0  ¦  text_0  𝄀
@@ -898,17 +898,31 @@ create database test_load_db;
 use test_load_db;
 drop table if exists load_data_t8;
 create table load_data_t8(col1 int);
-LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+LOAD DATA local infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
 select * from load_data_t8;
 ➤ col1[4,32,0]  𝄀
 1  𝄀
 2
 set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES";
-LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
-invalid input: the data of row 1 contained is not equal to input columns
+LOAD DATA local infile '$resources/load_data/test_columnlist_03.csv' into table load_data_t8 FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+select count(*) as local_rows from load_data_t8;
+➤ local_rows[-5,64,0]  𝄀
+4
 drop table load_data_t8;
 drop database test_load_db;
 drop account test_load;
+
+set @server_width_old_mode = @@sql_mode;
+set sql_mode = 'STRICT_TRANS_TABLES';
+create table server_width_rows(col1 int);
+LOAD DATA infile '$resources/load_data/test_columnlist_03.csv' into table server_width_rows FIELDS TERMINATED BY ',' LINES TERMINATED BY '\n';
+invalid input: the data of row 1 contained is not equal to input columns
+select count(*) as server_rows from server_width_rows;
+➤ server_rows[-5,64,0]  𝄀
+0
+drop table server_width_rows;
+set sql_mode = @server_width_old_mode;
+
 set session sql_mode = "ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION,NO_ZERO_DATE,NO_ZERO_IN_DATE,ONLY_FULL_GROUP_BY";
 drop table if exists load_data_t9;
 create table load_data_t9(col1 int, col2 varchar(100), col3 varchar(100));

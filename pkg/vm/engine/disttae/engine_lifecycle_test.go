@@ -71,6 +71,149 @@ func TestEngineCloseStopsGCSchedulerBeforePushClient(t *testing.T) {
 	require.True(t, e.pClient.closed.Load())
 }
 
+// Keep a real accepted pool job alive after cancellation. Neither a root join
+// nor a timed pool release is a certificate that this job has left logtail.
+func TestEngineCloseDrainsStatisticsBeforeLogtail(t *testing.T) {
+	for _, producer := range []string{"alpha", "beta", "gama", "global"} {
+		t.Run(producer, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				e := &Engine{}
+				ctx, cancel := context.WithCancel(context.Background())
+				e.dynamicCtx.ctx, e.dynamicCtx.cancel = ctx, cancel
+				release := make(chan struct{})
+				done := make(chan error, 1)
+				var unblock sync.Once
+				started := false
+				t.Cleanup(func() {
+					unblock.Do(func() { close(release) })
+					cancel()
+					if started {
+						<-done
+					}
+				})
+				if producer == "global" {
+					gsCtx, gsCancel := context.WithCancel(context.Background())
+					e.globalStats = &GlobalStats{ctx: gsCtx, cancel: gsCancel}
+					e.globalStats.workers.Add(1)
+					go func() { defer e.globalStats.workers.Done(); <-release }()
+				} else {
+					pool, err := ants.NewPool(1)
+					require.NoError(t, err)
+					switch producer {
+					case "alpha":
+						e.dynamicCtx.alphaTaskPool = pool
+					case "beta":
+						e.dynamicCtx.beta.taskPool = pool
+					case "gama":
+						e.dynamicCtx.gama.taskPool = pool
+					}
+					require.NoError(t, pool.Submit(func() { <-release }))
+				}
+				started = true
+				go func() { done <- e.Close() }()
+				synctest.Wait()
+				require.False(t, e.pClient.closed.Load(), "logtail retired while a statistics producer still owns it")
+				// Advance virtual time beyond the old ignored three-second pool
+				// deadline; this is a timeout oracle, not a scheduling barrier.
+				time.Sleep(4 * time.Second)
+				synctest.Wait()
+				select {
+				case err := <-done:
+					started = false
+					t.Fatalf("engine closed before accepted job exited: %v", err)
+				default:
+				}
+				unblock.Do(func() { close(release) })
+				require.NoError(t, <-done)
+				started = false
+				require.True(t, e.pClient.closed.Load())
+				require.NoError(t, e.Close())
+			})
+		})
+	}
+}
+
+func TestEngineCloseRetainsDependenciesOnStatisticsDrainError(t *testing.T) {
+	e := &Engine{}
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	// An already released pool cannot certify a join of its accepted jobs.
+	// Preserve that real library error rather than silently proceeding.
+	require.NoError(t, pool.ReleaseContext(context.Background()))
+	e.dynamicCtx.alphaTaskPool = pool
+	const callers = 4
+	done := make(chan error, callers)
+	for range callers {
+		go func() { done <- e.Close() }()
+	}
+	for range callers {
+		require.ErrorIs(t, <-done, ants.ErrPoolClosed)
+	}
+	require.False(t, e.pClient.closed.Load())
+	require.ErrorIs(t, e.Close(), ants.ErrPoolClosed)
+	// Explicitly retire the test-owned dependency after every caller returned;
+	// this does not change the engine's failed terminal certificate.
+	require.NoError(t, e.pClient.Close())
+}
+
+func TestEngineConcurrentCloseJoinsStatisticsOnce(t *testing.T) {
+	// sync.Once's mutex wait is not durably blocked in synctest. Use the
+	// producer's real cancellation boundary instead of waiting for quiescence
+	// while concurrent closers are parked behind that mutex.
+	e := &Engine{}
+	pool, err := ants.NewPool(1)
+	require.NoError(t, err)
+	e.dynamicCtx.alphaTaskPool = pool
+	ctx, cancel := context.WithCancel(context.Background())
+	e.dynamicCtx.ctx = ctx
+	ownerStarted := make(chan struct{})
+	var cancelCalls atomic.Int32
+	var signalOwner sync.Once
+	e.dynamicCtx.cancel = func() {
+		cancelCalls.Add(1)
+		cancel()
+		signalOwner.Do(func() { close(ownerStarted) })
+	}
+	release, jobStarted := make(chan struct{}), make(chan struct{})
+	done := make(chan error, 4)
+	ready := make(chan struct{}, 3)
+	var unblock sync.Once
+	launched, returned := 0, 0
+	t.Cleanup(func() {
+		unblock.Do(func() { close(release) })
+		cancel()
+		for returned < launched {
+			<-done
+			returned++
+		}
+		if launched == 0 {
+			require.NoError(t, pool.ReleaseContext(context.Background()))
+		}
+	})
+	require.NoError(t, pool.Submit(func() { close(jobStarted); <-release }))
+	<-jobStarted
+	launched++
+	go func() { done <- e.Close() }()
+	<-ownerStarted
+	for range 3 {
+		launched++
+		go func() { ready <- struct{}{}; done <- e.Close() }()
+	}
+	for range 3 {
+		<-ready
+	}
+	require.False(t, e.pClient.closed.Load())
+	require.True(t, e.dynamicCtx.closed.Load())
+	unblock.Do(func() { close(release) })
+	for returned < launched {
+		err := <-done
+		returned++
+		require.NoError(t, err)
+	}
+	require.Equal(t, int32(1), cancelCalls.Load())
+	require.True(t, e.pClient.closed.Load())
+}
+
 // Observe the real constructor before any owner has been published. The option
 // sentinel prevents unrelated initialization after test cleanup opens readiness.
 func TestEngineConstructorReadinessCancellation(t *testing.T) {

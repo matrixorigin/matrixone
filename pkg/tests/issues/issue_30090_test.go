@@ -171,6 +171,13 @@ func TestIssue30090ReplaceViewLifecycleOrder(t *testing.T) {
 			require.NoError(t, stmt.QueryRowContext(ctx, 0).Scan(&id))
 			require.Equal(t, 3, id)
 			execSQLRequire(t, ctx, db1, "create or replace view "+database+".v as select id+4 as id from "+database+".t")
+			// The replacement committed on CN1. CN0's read snapshot is bounded by
+			// its own applied logtail watermark under sacrificing-freshness
+			// consistency, so the reader can still legally observe the
+			// pre-replacement view. Establish CN1 -> CN0 visibility through the
+			// existing SYNCCOMMIT fence before asserting prepared-plan
+			// revalidation, as #30334 does at other cross-CN boundaries.
+			execSQLRequire(t, ctx, db0, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 			require.NoError(t, stmt.QueryRowContext(ctx, 1).Scan(&id))
 			require.Equal(t, 5, id)
 		})
