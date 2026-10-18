@@ -941,3 +941,33 @@ The combined EXPLAIN consumer suite also passes (0.326 s), with its own
 vet and configured incremental lint reporting zero issues. This closes the
 additional auto-merged test consumer without changing source or existing
 semantic input fingerprints.
+
+
+## Coverage UT: cross-CN View description after source restore
+
+Run [39152640600](https://github.com/matrixorigin/matrixone/actions/runs/39152640600),
+head `3b4328cca234b829458a529e9a5eccb2dda97e89`, failed job
+`117749332951` (`UT Coverage on Ubuntu/x86`, Linux/amd64, Go 1.27.1).
+The retained diagnostic artifact `12146677048` identifies one failing test:
+`pkg/tests/sqlintegration/multicn/TestViewDescriptionTwoCN`. After CN0 restored
+only the source table, CN1's existing prepared SHOW COLUMNS returned
+`varchar(90)` where the test expected the restored `varchar(60)`. The normal UT,
+SCA, shared build, both BVTs, Iceberg and Connector/J passed on this head;
+coverage UT and consequently CI Required failed.
+
+The fixture used Push mode without transferring the writer's commit frontier
+before asserting freshness on the peer. Complete the cross-CN visibility
+precondition with the existing `mo_ctl('cn','synccommit','')` command, including
+ordinary metadata checks. After RESTORE, independently assert that CN1 sees the
+new physical source ID before executing the **same** prepared handle. A SELECT
+does not advance that session's DDL generation. Keep all literal type/value,
+physical replacement, stable View identity, CTAS and restart assertions; add no
+sleep, retry, reprepare or weaker expected result. No production source or CI
+policy changes are required by this correction. A local isolated run of the
+original test passed, so this does not claim a clean-main reproduction.
+
+The [scoped result ledger](materialized_view_cross_cn_visibility_results.json)
+records dependency-instrumented focused runs, the normal owning package,
+static checks and the cache counterexample. The protocol-120 production/native
+proof remains in its existing ledger because its product sources are unchanged.
+New-head remote CI remains a separate gate.

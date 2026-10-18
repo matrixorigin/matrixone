@@ -347,3 +347,13 @@ and [integration results](materialized_view_protocol120_integration_results.json
 The existing native consumer now has14 cases and the full entrypoint116.
 Parent95dd4c0d passed ALL CI39145960351 and both connector workflows; these are
 parent results, distinct from the new integration's CI.
+
+
+## Cross-CN coverage fixture visibility correction
+
+The [CI diagnosis](materialized_view_ci_triage.md#coverage-ut-cross-cn-view-description-after-source-restore)
+and [scoped results](materialized_view_cross_cn_visibility_results.json) document
+the commit-frontier handoff required before asserting post-RESTORE metadata on
+a Push-mode peer. This changes the existing ordinary-View test only; it does not
+change MV semantics or add a performance claim. Remote CI is checked separately
+at the published correction head.
