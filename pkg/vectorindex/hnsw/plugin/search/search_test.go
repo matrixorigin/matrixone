@@ -256,17 +256,21 @@ func TestExplainSettings(t *testing.T) {
 
 func TestHnswReaderSearchedGenerationSnapshot(t *testing.T) {
 	for _, tc := range []struct {
-		name                           string
-		build                          int64
-		source                         types.TS
-		historical, replace, wantRetry bool
+		name                              string
+		build                             int64
+		source                            types.TS
+		historical, skipSource, wantRetry bool
+		readPhysical, replacementBuild    int64
 	}{
-		{name: "same_tick", build: 100, source: types.BuildTS(99, 0), wantRetry: true},
+		{name: "same_tick", build: 100, source: types.BuildTS(99, 0), skipSource: true, wantRetry: true},
+		{name: "future", build: 101, source: types.BuildTS(99, 0), skipSource: true, wantRetry: true},
+		{name: "unknown", source: types.BuildTS(99, 0), skipSource: true, wantRetry: true},
 		{name: "older", build: 99, source: types.BuildTS(99, 0)},
 		{name: "source_logical", build: 99, source: types.BuildTS(99, 1), wantRetry: true},
-		{name: "historical_same_tick", build: 100, source: types.BuildTS(99, 0), historical: true, wantRetry: true},
+		{name: "historical_same_tick", build: 100, source: types.BuildTS(99, 0), historical: true, skipSource: true, wantRetry: true},
 		{name: "historical_older", build: 99, source: types.BuildTS(99, 0), historical: true},
-		{name: "receipt_survives_replacement", build: 100, source: types.BuildTS(99, 0), replace: true, wantRetry: true},
+		{name: "receipt_survives_future_replacement", build: 99, source: types.BuildTS(99, 0), replacementBuild: 100},
+		{name: "receipt_survives_caught_up_replacement", build: 99, source: types.BuildTS(100, 0), readPhysical: 101, replacementBuild: 100, wantRetry: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			limits, _ := stubAlgo(t)
@@ -274,6 +278,9 @@ func TestHnswReaderSearchedGenerationSnapshot(t *testing.T) {
 			spec := hnswSpec(t.Name())
 			spec.SourceTableDef.TblId = 1
 			read := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+			if tc.readPhysical != 0 {
+				read.PhysicalTime = tc.readPhysical
+			}
 			current := read
 			if tc.historical {
 				current = timestamp.Timestamp{PhysicalTime: 200}
@@ -301,8 +308,8 @@ func TestHnswReaderSearchedGenerationSnapshot(t *testing.T) {
 			require.NoError(t, seed(key, tc.build))
 			*limits = nil
 			var replacementErr error
-			if tc.replace {
-				source.afterSearch = func() { veccache.Cache.Remove(key); replacementErr = seed(key, 99) }
+			if tc.replacementBuild > 0 {
+				source.afterSearch = func() { veccache.Cache.Remove(key); replacementErr = seed(key, tc.replacementBuild) }
 			}
 			reader, err := Hooks{}.NewReader(proc, spec, f32Request([]float32{1, 2, 3}, 5))
 			require.NoError(t, err)
@@ -325,17 +332,26 @@ func TestHnswReaderSearchedGenerationSnapshot(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, done)
 			}
-			require.NotNil(t, source.readTxn)
-			require.Equal(t, read, source.readTxn.SnapshotTS())
-			if tc.historical {
-				require.NotSame(t, op, source.readTxn)
+			if tc.skipSource {
+				require.Nil(t, source.readTxn)
+				require.Zero(t, source.relationCalls)
+				require.Zero(t, source.sourceCalls)
 			} else {
-				require.Same(t, op, source.readTxn)
+				require.Equal(t, 1, source.relationCalls)
+				require.Equal(t, 1, source.sourceCalls)
+				require.NotNil(t, source.readTxn)
+				require.Equal(t, read, source.readTxn.SnapshotTS())
+				if tc.historical {
+					require.NotSame(t, op, source.readTxn)
+				} else {
+					require.Same(t, op, source.readTxn)
+				}
+
 			}
-			if tc.replace {
+			if tc.replacementBuild > 0 {
 				build, ok := veccache.Cache.GetBuildTS(key)
 				require.True(t, ok)
-				require.Equal(t, int64(99), build)
+				require.Equal(t, tc.replacementBuild, build)
 			}
 		})
 	}
@@ -354,24 +370,28 @@ func (t *hnswReaderTxn) CloneSnapshotOp(ts timestamp.Timestamp) client.TxnOperat
 
 type hnswReaderEngine struct {
 	engine.Engine
-	source      types.TS
-	readTxn     client.TxnOperator
-	afterSearch func()
+	source                     types.TS
+	readTxn                    client.TxnOperator
+	afterSearch                func()
+	relationCalls, sourceCalls int
 }
 
 func (e *hnswReaderEngine) GetRelationById(_ context.Context, op client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
+	e.relationCalls++
 	e.readTxn = op
 	if e.afterSearch != nil {
 		e.afterSearch()
 	}
-	return "db", "t", hnswReaderSource{source: e.source}, nil
+	return "db", "t", hnswReaderSource{source: e.source, calls: &e.sourceCalls}, nil
 }
 
 type hnswReaderSource struct {
 	engine.Relation
 	source types.TS
+	calls  *int
 }
 
 func (r hnswReaderSource) SourceCommitTS(context.Context, types.TS) (types.TS, error) {
+	*r.calls++
 	return r.source, nil
 }

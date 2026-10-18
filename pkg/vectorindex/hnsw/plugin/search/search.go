@@ -278,8 +278,13 @@ func (s *searcher) validateSearchedGeneration(buildTS int64) error {
 	readTxn := s.proc.GetTxnOperator()
 	readTS := types.TimestampToTS(readTxn.SnapshotTS())
 	if snapshotTS != nil {
-		readTxn = readTxn.CloneSnapshotOp(*snapshotTS)
 		readTS = types.TimestampToTS(*snapshotTS)
+	}
+	if !hnswcoverage.BuildPrecedesSnapshot(buildTS, readTS) {
+		return moerr.NewVectorNeedRetryWithPreModeNoCtx()
+	}
+	if snapshotTS != nil {
+		readTxn = readTxn.CloneSnapshotOp(*snapshotTS)
 	}
 	ctx := s.proc.GetTopContext()
 	if accountID, err := sp.EffectiveAccountID(); err == nil {

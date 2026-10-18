@@ -67,10 +67,13 @@ func BuildCoversSource(buildTS int64, sourceTS types.TS) bool {
 // Equal physical times are ambiguous because build_ts has lost its logical
 // component; only a strictly older physical generation is provably not newer.
 func BuildCoversSnapshot(buildTS int64, snapshotTS, sourceTS types.TS) bool {
-	if buildTS <= 0 || snapshotTS.IsEmpty() {
-		return false
-	}
-	return buildTS < snapshotTS.Physical() && BuildCoversSource(buildTS, sourceTS)
+	return BuildPrecedesSnapshot(buildTS, snapshotTS) && BuildCoversSource(buildTS, sourceTS)
+}
+
+// BuildPrecedesSnapshot checks the physical-only generation upper bound without
+// consulting the source. A failed bound cannot be repaired by a source lookup.
+func BuildPrecedesSnapshot(buildTS int64, snapshotTS types.TS) bool {
+	return buildTS > 0 && !snapshotTS.IsEmpty() && buildTS < snapshotTS.Physical()
 }
 
 // CoversSnapshot claims coverage for the generation execution will search. A
@@ -88,9 +91,12 @@ func (Hooks) CoversSnapshot(ctx context.Context, req indexcoverage.Request) (boo
 	if buildTS <= 0 {
 		return false, types.TS{}, nil
 	}
+	if !BuildPrecedesSnapshot(buildTS, req.Snapshot) {
+		return false, types.BuildTS(buildTS, 0), nil
+	}
 
 	sourceTS, err := req.SourceCommitTS(ctx, types.BuildTS(buildTS, 0))
-	if err != nil || !BuildCoversSnapshot(buildTS, req.Snapshot, sourceTS) {
+	if err != nil || !BuildCoversSource(buildTS, sourceTS) {
 		return false, types.BuildTS(buildTS, 0), err
 	}
 	return true, types.BuildTS(buildTS, 0), nil
@@ -98,13 +104,15 @@ func (Hooks) CoversSnapshot(ctx context.Context, req indexcoverage.Request) (boo
 
 func searchedBuildTS(ctx context.Context, req indexcoverage.Request) int64 {
 	key := req.IndexStorageTable
-	txn := req.Txn
 	if req.ScanSnapshotTS != nil {
 		key = veccache.SnapshotKey(key, *req.ScanSnapshotTS)
-		txn = req.Txn.CloneSnapshotOp(*req.ScanSnapshotTS)
 	}
 	if buildTS, ok := veccache.Cache.GetBuildTS(key); ok {
 		return buildTS
+	}
+	txn := req.Txn
+	if req.ScanSnapshotTS != nil {
+		txn = req.Txn.CloneSnapshotOp(*req.ScanSnapshotTS)
 	}
 	return maxDurableBuildTS(ctx, req, txn)
 }
