@@ -3776,12 +3776,12 @@ func (v *Vector) NeedDup() bool {
 
 // make sure the type check is done before calling this function
 func GetFixedAtNoTypeCheck[T any](v *Vector, idx int) T {
+	length := v.length
 	if v.IsConst() {
 		idx = 0
+		length = 1
 	}
-	var slice []T
-	ToSliceNoTypeCheck(v, &slice)
-	return slice[idx]
+	return toSliceOfLengthNoTypeCheck[T](v, length)[idx]
 }
 
 // Note:
@@ -3804,11 +3804,12 @@ func (v *Vector) CloneBytesAt(i int) []byte {
 }
 
 func (v *Vector) GetBytesAt(i int) []byte {
+	length := v.length
 	if v.IsConst() {
 		i = 0
+		length = 1
 	}
-	var bs []types.Varlena
-	ToSliceNoTypeCheck(v, &bs)
+	bs := toSliceOfLengthNoTypeCheck[types.Varlena](v, length)
 	return bs[i].GetByteSlice(v.area)
 }
 
@@ -8432,6 +8433,14 @@ func unionT[T int32 | int64](v, w *Vector, sels []T, mp *mpool.MPool) error {
 	if w.IsConst() {
 		if w.IsGrouping() {
 			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(oldLen+len(sels)))
+		} else if !w.gsp.EmptyByFlag() {
+			// Constants share one payload, but grouping belongs to logical
+			// rows and must follow the selection, including repeated rows.
+			for i, sel := range sels {
+				if w.gsp.Contains(uint64(sel)) {
+					nulls.Add(&v.gsp, uint64(oldLen+i))
+				}
+			}
 		}
 		if w.IsConstNull() {
 			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(oldLen+len(sels)))
@@ -8657,6 +8666,8 @@ func (v *Vector) unionBatch(
 		v.setLengthAfterExtend(v.length + addCnt)
 		if w.IsGrouping() {
 			nulls.AddRange(&v.gsp, uint64(oldLen), uint64(v.length))
+		} else {
+			appendBatchGrouping(v, w, oldLen, offset, cnt, flags)
 		}
 		if w.IsConstNull() {
 			nulls.AddRange(&v.nsp, uint64(oldLen), uint64(v.length))
@@ -9992,11 +10003,12 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 	if vec.typ.IsVarlen() {
 		vec.areaDisjoint = false
 	}
+	hasNull := slices.Contains(isNulls, true)
 	if err := extendWithBitmaps(
 		vec,
 		len(vals),
 		mp,
-		slices.Contains(isNulls, true),
+		hasNull,
 		false,
 	); err != nil {
 		return err
@@ -10011,6 +10023,23 @@ func appendList[T any](vec *Vector, vals []T, isNulls []bool, mp *mpool.MPool) e
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
 	col := MustFixedColWithTypeCheck[T](vec)
+	if len(vals) >= 16 && !hasNull && (len(isNulls) == 0 || len(isNulls) >= len(vals)) {
+		// An ordinary bulk append can copy the complete typed input at once.
+		// Keep small lists on the original loop to avoid the overlap check.
+		// Preserve the old forward-loop behavior if a caller passes a slice
+		// overlapping the destination (including unused vector capacity).
+		src := uintptr(unsafe.Pointer(unsafe.SliceData(vals)))
+		dst := uintptr(unsafe.Pointer(&col[length]))
+		bytes := uintptr(len(vals)) * unsafe.Sizeof(vals[0])
+		if bytes == 0 || (src <= dst && dst-src < bytes) || (dst < src && src-dst < bytes) {
+			for i, w := range vals {
+				col[length+i] = w
+			}
+		} else {
+			copy(col[length:], vals)
+		}
+		return nil
+	}
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
 			nulls.Add(&vec.nsp, uint64(length+i))
@@ -10028,6 +10057,7 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 			vec.RollbackAppend(checkpoint, len(vals))
 		}
 	}()
+	pregrow := len(vals) >= 16 && canPregrowRawByteList(vec, isNulls)
 	disjoint := vec.areaDisjoint
 	vec.areaDisjoint = false
 	if err = extendWithBitmaps(
@@ -10049,6 +10079,22 @@ func appendBytesList(vec *Vector, vals [][]byte, isNulls []bool, mp *mpool.MPool
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
+	if pregrow {
+		var total uint64
+		maxArea := min(uint64(^uint32(0)), uint64(^uint(0)>>1))
+		for _, w := range vals {
+			if len(w) > types.VarlenaInlineSize {
+				if uint64(len(w)) > maxArea-total {
+					total = 0 // keep the original per-row growth on overflow
+					break
+				}
+				total += uint64(len(w))
+			}
+		}
+		if err = pregrowVarlenaArea(vec, int(total), mp); err != nil {
+			return err
+		}
+	}
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
 			col[length+i] = types.Varlena{}
@@ -10073,6 +10119,7 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 			vec.RollbackAppend(checkpoint, len(vals))
 		}
 	}()
+	pregrow := len(vals) >= 16 && canPregrowRawByteList(vec, isNulls)
 	disjoint := vec.areaDisjoint
 	vec.areaDisjoint = false
 
@@ -10095,6 +10142,22 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 	length := vec.length
 	vec.setLengthAfterExtend(vec.length + len(vals))
 	col := MustFixedColNoTypeCheck[types.Varlena](vec)
+	if pregrow {
+		var total uint64
+		maxArea := min(uint64(^uint32(0)), uint64(^uint(0)>>1))
+		for _, w := range vals {
+			if len(w) > types.VarlenaInlineSize {
+				if uint64(len(w)) > maxArea-total {
+					total = 0 // keep the original per-row growth on overflow
+					break
+				}
+				total += uint64(len(w))
+			}
+		}
+		if err = pregrowVarlenaArea(vec, int(total), mp); err != nil {
+			return err
+		}
+	}
 	for i, w := range vals {
 		if len(isNulls) > 0 && isNulls[i] {
 			col[length+i] = types.Varlena{}
@@ -10111,6 +10174,24 @@ func appendStringList(vec *Vector, vals []string, isNulls []bool, mp *mpool.MPoo
 		vec.areaDisjoint = true
 	}
 	return nil
+}
+
+// A fresh, empty destination cannot own any input bytes, so reserving its
+// area cannot invalidate a caller's source slices. These types also have no
+// per-value JSON or Unicode admission that could change error precedence.
+func canPregrowRawByteList(vec *Vector, isNulls []bool) bool {
+	if cap(vec.data) != 0 || cap(vec.area) != 0 || len(isNulls) != 0 ||
+		vec.length != 0 || vec.HasBorrowedBacking() {
+		return false
+	}
+	switch vec.typ.Oid {
+	case types.T_varbinary:
+		return true
+	case types.T_varchar:
+		return !types.IsUnicodeCollation(vec.typ.Charset)
+	default:
+		return false
+	}
 }
 
 // appendArrayList mainly used for unit tests
@@ -10844,23 +10925,26 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		col := MustFixedColNoTypeCheck[bool](v)
 		if v.HasNull() {
 			first := true
-			for i, j := 0, len(col); i < j; i++ {
+			for i := range col {
 				if v.IsNull(uint64(i)) {
 					continue
 				}
+				value := col[i]
 				if first {
-					minVal, maxVal = col[i], col[i]
+					minVal, maxVal = value, value
 					first = false
-				} else {
-					minVal = minVal && col[i]
-					maxVal = maxVal || col[i]
+				} else if value != minVal {
+					minVal, maxVal = false, true
+					break
 				}
 			}
 		} else {
 			minVal, maxVal = col[0], col[0]
-			for i, j := 1, len(col); i < j; i++ {
-				minVal = minVal && col[i]
-				maxVal = maxVal || col[i]
+			for _, value := range col[1:] {
+				if value != minVal {
+					minVal, maxVal = false, true
+					break
+				}
 			}
 		}
 		minv = types.EncodeBool(&minVal)
@@ -10887,7 +10971,12 @@ func (v *Vector) GetMinMaxValue() (ok bool, minv, maxv []byte) {
 		maxv = types.EncodeInt32(&maxVal)
 
 	case types.T_int64:
-		minVal, maxVal := OrderedGetMinAndMax[int64](v)
+		var minVal, maxVal int64
+		if v.class == FLAT && v.length >= 32 && !v.HasNull() {
+			minVal, maxVal = int64MinMaxNoNull(MustFixedColNoTypeCheck[int64](v))
+		} else {
+			minVal, maxVal = OrderedGetMinAndMax[int64](v)
+		}
 		minv = types.EncodeInt64(&minVal)
 		maxv = types.EncodeInt64(&maxVal)
 
@@ -12218,8 +12307,12 @@ func buildVarlenaNoInlineFromByteJson(vec *Vector, v1 *types.Varlena, bj bytejso
 // BuildVarlenaFromVarlena requires v2/area to belong to an admitted source
 // vector of the same type. The source bytes must stay immutable during copy.
 func BuildVarlenaFromVarlena(vec *Vector, v1, v2 *types.Varlena, area *[]byte, m *mpool.MPool) error {
-	if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
-		return err
+	// Legacy domains need no collation admission. Check the domain before
+	// extracting bytes, especially for inline values copied in merge loops.
+	if types.IsUnicodeCollation(vec.typ.Charset) {
+		if err := types.ValidateCollationValue(vec.typ, v2.GetByteSlice(*area)); err != nil {
+			return err
+		}
 	}
 	if (*v2)[0] <= types.VarlenaInlineSize {
 		BuildVarlenaInline(v1, v2)

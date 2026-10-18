@@ -1,0 +1,50 @@
+# Copyright 2026 Matrix Origin
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+
+services:
+  kafka:
+    image: apache/kafka@sha256:fbc7d7c428e3755cf36518d4976596002477e4c052d1f80b5b9eafd06d0fff2f
+    environment:
+      KAFKA_LOG_DIRS: /var/lib/kafka/data
+      KAFKA_LISTENERS: INTERNAL://0.0.0.0:29092,HOST://0.0.0.0:9092,CONTROLLER://localhost:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,HOST://127.0.0.1:${KAFKA_PORT}
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,HOST:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+
+  connect:
+    image: ${KAFKA_CONNECT_IMAGE:-quay.io/debezium/connect@sha256:1290a7abb0c1fe957f8d732e43efbea24201d9ba0fa5ba79582f76438c05d0ba}
+    depends_on:
+      kafka:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:${CONNECT_PORT}:8083"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks: [kafka-e2e]
+    environment:
+      BOOTSTRAP_SERVERS: kafka:29092
+      GROUP_ID: mo-issue-29848-connect
+      CONFIG_STORAGE_TOPIC: __connect-configs
+      OFFSET_STORAGE_TOPIC: __connect-offsets
+      STATUS_STORAGE_TOPIC: __connect-status
+      CONNECT_CONFIG_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_STATUS_STORAGE_REPLICATION_FACTOR: 1
+      CONNECT_OFFSET_FLUSH_INTERVAL_MS: 1000
+      REST_HOST_NAME: 0.0.0.0
+      REST_PORT: 8083
+      ADVERTISED_HOST_NAME: connect
+      ADVERTISED_PORT: 8083
+      KEY_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_KEY_CONVERTER_SCHEMAS_ENABLE: "true"
+      VALUE_CONVERTER: org.apache.kafka.connect.json.JsonConverter
+      CONNECT_VALUE_CONVERTER_SCHEMAS_ENABLE: "true"
+      CONNECT_PLUGIN_PATH: /kafka/connect
+      CONNECT_CONSUMER_AUTO_OFFSET_RESET: earliest
+
+volumes:
+  kafka-data:

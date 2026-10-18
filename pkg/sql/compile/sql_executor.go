@@ -461,6 +461,11 @@ func (exec *txnExecutor) Exec(
 	if err != nil {
 		return executor.Result{}, err
 	}
+	if rewriteOption := getInternalExecutorRewriteOption(exec.ctx); rewriteOption != nil {
+		// CTAS carries the effective policy as typed AST state from the outer
+		// statement. Never recover execution semantics from redacted originSQL.
+		attachRewriteOptionToStatement(stmts[0], rewriteOption)
+	}
 
 	// TODO(volgariver6): we got a duplicate code logic in `func (cwft *TxnComputationWrapper) Compile`,
 	// maybe we should fix it.
@@ -477,6 +482,8 @@ func (exec *txnExecutor) Exec(
 		}
 	}
 
+	var sequenceState *internalSequenceState
+	exec.ctx, sequenceState = consumeInternalSequenceState(exec.ctx)
 	proc := process.NewTopProcess(
 		exec.ctx,
 		exec.s.mp,
@@ -490,6 +497,7 @@ func (exec *txnExecutor) Exec(
 		nil,
 		exec.s.taskservice,
 	)
+	initInternalSequenceState(proc, exec.getDatabase(), sequenceState)
 	// Internal DML (including CTAS population) needs the same expression error
 	// policy as frontend DML, before planning can fold any constants.
 	initInternalStatementProfile(proc, stmts[0])
@@ -530,7 +538,11 @@ func (exec *txnExecutor) Exec(
 
 	prepared := false
 	if statementOption.HasParams() {
-		vec := statementOption.Params(exec.s.mp)
+		vec, err := statementOption.Params(exec.s.mp)
+		if err != nil {
+			proc.Free()
+			return executor.Result{}, err
+		}
 		proc.SetPrepareParams(vec)
 		prepared = true
 		defer vec.Free(proc.Mp())
@@ -538,6 +550,10 @@ func (exec *txnExecutor) Exec(
 
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	// A child SQL process does not inherit the parent's mutable SessionInfo.
+	// Install the explicitly propagated authenticated names before planning so
+	// SQL file admission and all downstream execution paths observe them.
+	proc.Base.SessionInfo.Account, proc.Base.SessionInfo.Role = statementOption.SessionIdentity()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
 	proc.Base.QueryClient = exec.s.qc
@@ -713,6 +729,10 @@ func (exec *txnExecutor) Exec(
 		)
 	}
 
+	if sequenceState != nil {
+		state := captureSequenceStatementState(proc)
+		sequenceState.output = &state
+	}
 	result.LastInsertID = proc.GetStatementLastInsertID()
 	result.Batches = batches
 	result.AffectedRows = runResult.AffectRows

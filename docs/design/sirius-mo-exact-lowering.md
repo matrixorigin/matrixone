@@ -11,13 +11,12 @@ Semantic authority remains #29449 document blob
 Native B, Sirius #27, merged as
 `5ea60cd31955d0dced2adcbcd3df0772207b79ef`, is the native dependency.
 
-Current delivery gate: C pins merged
-[Sirius #29](https://github.com/matrixorigin/sirius/pull/29) at
-`908ffc75a58b3be496b2172795e416326416e7ec`. Kernel prerequisite
-[#29775](https://github.com/matrixorigin/matrixone/pull/29775) is merged.
-C is ready for review; passing required CI and review approval gate merging.
-Local integration covers all 22 native preparations and the complete public
-numeric fixture. D implementation follows merged C.
+Current status: numeric lowering (#29757), public campaign (#30021), and
+embedded cutover (#30251) are merged. All 22 canonical TPC-H queries have public
+numeric and campaign evidence. The [embedded guide](../guides/sirius-embedded.md)
+describes current configuration; the [cutover design](sirius-embedded-cutover.md)
+records acceptance. Dated evidence below retains its original source identities
+and the execution paths available at those revisions.
 
 ## Decision and invariant
 
@@ -32,7 +31,7 @@ The native runtime owns one immutable capability snapshot. Expose it through
 `Capabilities() uint64` on the bridge runtime and configured backend. Native
 ABI-v1 MO-input/result capabilities retain their existing mandatory check.
 Mask `16u` selects the complete MO exact-decimal v1 family; unknown bits do not
-enable another family. Flight returns no embedded numeric capability.
+enable another family.
 
 `ExportEmbeddedMO` accepts an explicit value export profile derived from that
 snapshot. Candidate owns a copy, and every validation, read-schema and build
@@ -68,8 +67,7 @@ Retain Native B's signature limits, including SUM/AVG results whose physical
 width is at least their input width. A physically wide, low-precision input
 whose MO-bound SUM returns Decimal128 is declined; changing that result to
 Decimal256 would violate descriptor identity. Scan-owned filters remain MO
-reader work in both validation and emission, rather than being validated as
-Flight expressions and then omitted from the embedded wire plan.
+reader work in both validation and emission.
 
 Embedded ordinary integer add/subtract/multiply remain ineligible: the pinned
 consumer uses unchecked cuDF arithmetic for those operations. An inherited
@@ -82,10 +80,9 @@ Typed DATE extraction guards MO's `ZeroDate` sentinel before year/month/day,
 returning zero for that sentinel and preserving normal/NULL dates. The pinned
 component function's physical INT16 result is normalized through the proven
 INT32 component domain to the declared BIGINT before conditional selection.
-No published reader bytes, native ABI, Flight encoding or SQL text changes.
+No published reader bytes, native ABI or SQL text changes.
 
-All decimal-bearing parts of one exact closure use the extension. Standard
-Flight emission stays on its existing type/function contract. Declaration
+All decimal-bearing parts of one exact closure use the extension. Declaration
 anchors and serialization are deterministic. Original and encoded plans retain
 the existing 16 MiB limit. Current-main Q1-Q22 inventory includes the complete
 reachable expression graph, not only the first reported decline.
@@ -144,20 +141,20 @@ global exporter toggle, mixed ordinary/exact decimal closure, float/narrowing
 conversion or post-selection fallback violate the invariant. A second result
 decoder/allocator would duplicate existing ownership without another need.
 
-## Delivery boundary
+## Delivery history
 
-C pins merged Native B and remains opt-in; current backend/default selection
-does not change. D starts after C merges and versions the real native-MO and
-embedded-MO campaign, with bounded transient row spools, all-22 SF1/SF10,
-streams=2 plus 1/4 controls, one excluded warm-up/five measured suites and ten
-separate Q9 repetitions. Existing performance/resource gates remain required.
+C introduced the exact lowering against merged native code. D subsequently
+qualified the native-MO and embedded-MO campaign with bounded row spools,
+all-22 SF1/SF10, streams=2 plus 1/4 controls, one excluded warm-up/five measured
+suites and ten separate Q9 repetitions. E completed embedded cutover and
+removed Flight execution. Performance and resource evidence is retained in the
+campaign and cutover records.
 
-E/F are excluded from this implementation round. Their separate design must
-resolve production recovery authority before default cutover and Flight
-retirement. A nil/unready lease manager is not proof that Flight is empty.
-No direct-TAE, storage/directory-lock, Docker image/base or fallback work is
-introduced here. #28968 remains open until D acceptance; #28966 remains open
-through cutover, verified release availability and retirement.
+Before upgrading an old Flight deployment, the previous release drains and
+recovers its consumers. The current release has no recovery bridge. #28968 is
+closed; #28966 tracks verified release availability. The abandoned sidecar
+repository needs no retirement PR. MO direct-TAE execution remains separate
+from the existing native TAE scanner and manifest tooling.
 
 ## Historical implementation evidence (2026-10-09)
 
@@ -337,7 +334,7 @@ release/owning-package/static delivery checks, then C.
 ## Merged native delivery and kernel prerequisite (2026-10-09)
 
 Sirius #29 merged as `908ffc75a58b3be496b2172795e416326416e7ec`
-on the authoritative `upstream-dev-merge` branch. C now pins that merged
+on the authoritative integration branch, now `perf/embedded-mo-scan`. C pins that merged
 revision. Its source tree is identical to the independently validated clean
 `2a39339beb0c2312dc4b71fbdd472e822450637c` tree; regenerate the release
 SDK and verify its merged source/artifact identity before using it for delivery.

@@ -545,15 +545,9 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		return nil, err
 	}
 
-	nProbe := int64(5)
-	if nProbeIf, err := builder.compCtx.ResolveVariable("probe_limit", true, false); err != nil {
+	nProbe, err := builder.resolveVectorNprobe(vecCtx.rankOption, 5)
+	if err != nil {
 		return nil, err
-	} else if nProbeIf != nil {
-		val, ok := nProbeIf.(int64)
-		if !ok {
-			return nil, moerr.NewInternalErrorNoCtx("ResolveVariable: probe_limit is not int64")
-		}
-		nProbe = val
 	}
 
 	// Dynamically amplify nprobe for auto mode.
@@ -945,6 +939,7 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 	if canIndexOnly {
 		joinRootID = candidateNodeID
 	} else if pushdownEnabled {
+		rowFetchFilters, membershipOnlyFilters := builder.ivfMembershipRowFetchFilters(scanNode)
 		// secondScanNode: copy original scanNode for JOIN(ivf, table)
 		secondScanNodeID := builder.copyNode(ctx, scanNode.NodeId)
 		secondScanNode := builder.qry.Nodes[secondScanNodeID]
@@ -1162,6 +1157,16 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 			OnList:   []*Expr{outerOn},
 			// Don't set Limit/Offset on JOIN - they should be applied after SORT
 		}, ctx)
+
+		// Every surviving PK passed the complete predicate on the copied scan.
+		// Commit this only after both exact PK joins have been built, so a declined
+		// rewrite retains its MATCH filters. The membership producer keeps them.
+		if len(membershipOnlyFilters) > 0 {
+			scanNode.FilterList = rowFetchFilters
+			if colRefCnt != nil {
+				increaseRefCntForExprList(membershipOnlyFilters, -1, colRefCnt)
+			}
+		}
 
 		// Outer join doesn't add extra project, let global column pruning optimizer handle it
 		joinRootID = outerJoinNodeID

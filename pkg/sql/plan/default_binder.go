@@ -38,19 +38,15 @@ func NewDefaultBinder(sysCtx context.Context, builder *QueryBuilder, ctx *BindCo
 // each referenced column in the same row, so resolving it against an outer
 // query would either report an ambiguous column or bind the wrong relation.
 // The referenced column types are retained because they need not match the
-// destination column's type.
+// destination column's type. The schema is borrowed for synchronous binding;
+// callers keep it stable until binding completes.
 func NewDefaultBinderWithColumns(sysCtx context.Context, typ Type, cols []*ColDef) *DefaultBinder {
-	names := make([]string, len(cols))
-	colTypes := make([]Type, len(cols))
-	for i, col := range cols {
-		if col == nil {
-			continue
-		}
-		names[i] = col.Name
-		colTypes[i] = col.Typ
+	b := NewDefaultBinder(sysCtx, nil, nil, typ, nil)
+	b.columns = cols
+	if b.columns == nil {
+		// Even an empty row schema is a local scope, not an outer query.
+		b.columns = []*ColDef{}
 	}
-	b := NewDefaultBinder(sysCtx, nil, nil, typ, names)
-	b.colTypes = colTypes
 	return b
 }
 
@@ -59,7 +55,7 @@ func (b *DefaultBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*
 }
 
 func (b *DefaultBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
-	if b.cols != nil {
+	if b.columns != nil || b.cols != nil {
 		return b.bindColRef(astExpr, depth, isRoot)
 	}
 	return b.baseBindColRef(astExpr, depth, isRoot)
@@ -75,19 +71,25 @@ func (b *DefaultBinder) bindColRef(astExpr *tree.UnresolvedName, _ int32, _ bool
 	}
 	col := astExpr.ColName()
 	idx := -1
-	for i, c := range b.cols {
-		if strings.EqualFold(c, col) {
-			idx = i
-			break
+	typ := b.typ
+	if b.columns != nil {
+		for i, c := range b.columns {
+			if c != nil && strings.EqualFold(c.Name, col) {
+				idx, typ = i, c.Typ
+				break
+			}
+		}
+	} else {
+		for i, name := range b.cols {
+			if strings.EqualFold(name, col) {
+				idx = i
+				break
+			}
 		}
 	}
 	if idx == -1 {
 		err = moerr.NewInvalidInputf(b.GetContext(), "column '%s' does not exist", astExpr.ColNameOrigin())
 		return
-	}
-	typ := b.typ
-	if idx < len(b.colTypes) {
-		typ = b.colTypes[idx]
 	}
 	expr = &plan.Expr{Typ: typ}
 	expr.Expr = &plan.Expr_Col{
@@ -111,6 +113,9 @@ func (b *DefaultBinder) BindWinFunc(funcName string, astExpr *tree.FuncExpr, dep
 func (b *DefaultBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
 	if !b.allowSubquery {
 		return nil, moerr.NewNYI(b.GetContext(), "subquery in JOIN condition")
+	}
+	if err := b.prepareValuesSubqueryContext(); err != nil {
+		return nil, err
 	}
 	return b.baseBindSubquery(astExpr, isRoot)
 }

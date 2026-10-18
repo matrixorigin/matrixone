@@ -356,6 +356,34 @@ type sqlUdfMockCompilerContext struct {
 
 func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*function.Udf, error) {
 	switch name {
+	case "f_values_constant":
+		return &function.Udf{
+			Body:     "1 + 1",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_increment":
+		return &function.Udf{
+			Body:     "$1 + 1",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_values_lookup":
+		return &function.Udf{
+			Body:     "select max(n_nationkey) from nation",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_values_nested_lookup":
+		return &function.Udf{
+			Body:     "f_values_lookup()",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_values_upper_lookup":
+		return &function.Udf{Body: "(SELECT max(n_nationkey) FROM nation)", Language: string(tree.SQL)}, nil
+	case "f_values_wrapped_lookup":
+		return &function.Udf{Body: "coalesce((SELECT max(n_nationkey) FROM nation),0)", Language: string(tree.SQL)}, nil
+	case "f_values_mixed_lookup":
+		return &function.Udf{Body: "(SeLeCt max(n_nationkey) FrOm nation)", Language: string(tree.SQL)}, nil
+	case "f_values_nested_upper_lookup":
+		return &function.Udf{Body: "f_values_upper_lookup()", Language: string(tree.SQL)}, nil
 	case "f_lookup":
 		return &function.Udf{
 			Body:     "select n_regionkey from nation where n_nationkey = $1",
@@ -383,6 +411,16 @@ func (c *sqlUdfMockCompilerContext) ResolveUdf(name string, _ []*plan.Expr) (*fu
 	case "f_slash_comment":
 		return &function.Udf{
 			Body:     "select 1 // '\n + $1",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_qualified_begin":
+		return &function.Udf{
+			Body:     "select t.begin + $1 from (select 7 as `begin`) t",
+			Language: string(tree.SQL),
+		}, nil
+	case "f_qualified_begin_comment":
+		return &function.Udf{
+			Body:     "select t. /* component */ begin + $1 from (select 7 as `begin`) t",
 			Language: string(tree.SQL),
 		}, nil
 	default:
@@ -422,6 +460,8 @@ func TestBindSQLUDFArgumentMarkersFollowLexerSemantics(t *testing.T) {
 		{name: "ANSI composite mode identifier", query: "select f_ansi(2)"},
 		{name: "executable comment", query: "select f_executable_comment(2)"},
 		{name: "slash line comment", query: "select f_slash_comment(2)"},
+		{name: "qualified BEGIN", query: "select f_qualified_begin(2)"},
+		{name: "comment separated qualified BEGIN", query: "select f_qualified_begin_comment(2)"},
 	}
 
 	for _, test := range tests {
@@ -488,9 +528,10 @@ func TestExpandSQLUdfArgumentsAvoidsIdentifierCollision(t *testing.T) {
 func TestReplaceSQLUdfArgMarkers(t *testing.T) {
 	marker := func(ordinal int) string { return fmt.Sprintf("<arg%d>", ordinal) }
 	tests := []struct {
-		name string
-		sql  string
-		want string
+		name    string
+		sql     string
+		sqlMode string
+		want    string
 	}{
 		{
 			name: "repeated parameter",
@@ -522,11 +563,73 @@ func TestReplaceSQLUdfArgMarkers(t *testing.T) {
 			sql:  "select $1suffix, $1",
 			want: "select $1suffix, <arg1>",
 		},
+		{
+			name: "qualified BEGIN",
+			sql:  "select t.begin + $1 from t",
+			want: "select t.begin + <arg1> from t",
+		},
+		{
+			name: "qualification across ordinary comment",
+			sql:  "select t. /* component */ begin + $1 from t",
+			want: "select t. /* component */ begin + <arg1> from t",
+		},
+		{
+			name: "quoted BEGIN control",
+			sql:  "select t.`begin` + $1 from t",
+			want: "select t.`begin` + <arg1> from t",
+		},
+		{
+			name: "qualified RANK control",
+			sql:  "select t.rank + $1 from t",
+			want: "select t.rank + <arg1> from t",
+		},
+		{
+			name: "parameters before and after qualified keyword",
+			sql:  "select $1, t.begin + $2 from t",
+			want: "select <arg1>, t.begin + <arg2> from t",
+		},
+		{
+			name: "comment marker after qualified keyword",
+			sql:  "select t.begin/* '$1 */ + $2 from t",
+			want: "select t.begin/* '$1 */ + <arg2> from t",
+		},
+		{
+			name: "qualified keyword inside executable comment",
+			sql:  "/*! select t.begin + $1 from t */",
+			want: "/*! select t.begin + <arg1> from t */",
+		},
+		{
+			name: "genuine lexical error retains remainder",
+			sql:  "select $1, t.begin, 'unterminated $2",
+			want: "select <arg1>, t.begin, 'unterminated $2",
+		},
+		{
+			name: "unqualified BEGIN retains lexical rules",
+			sql:  "select begin + $1",
+			want: "select begin + $1",
+		},
+		{
+			name:    "ANSI_QUOTES identifiers retain bytes",
+			sql:     `select t."begin" + $1 from t`,
+			sqlMode: "ANSI_QUOTES",
+			want:    `select t."begin" + <arg1> from t`,
+		},
+		{
+			name: "default backslash escape keeps unterminated string",
+			sql:  `select t.begin, 'x\', $1`,
+			want: `select t.begin, 'x\', $1`,
+		},
+		{
+			name:    "NO_BACKSLASH_ESCAPES string before parameter",
+			sql:     `select t.begin, 'x\', $1`,
+			sqlMode: "NO_BACKSLASH_ESCAPES",
+			want:    `select t.begin, 'x\', <arg1>`,
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			require.Equal(t, test.want, replaceSQLUdfArgMarkers(test.sql, 2, "", marker))
+			require.Equal(t, test.want, replaceSQLUdfArgMarkers(test.sql, 2, test.sqlMode, marker))
 		})
 	}
 }
@@ -1627,6 +1730,18 @@ func TestBindNameConstConstArgs(t *testing.T) {
 		sql  string
 	}{
 		{
+			name: "collated string literal",
+			sql:  "select name_const('myname', _utf8mb4'Á' collate utf8mb4_unicode_ci)",
+		},
+		{
+			name: "collated numeric literal",
+			sql:  "select name_const('myname', 1 collate utf8mb4_unicode_ci)",
+		},
+		{
+			name: "derived collated literal",
+			sql:  "select sub.myname from (select name_const('myname', ('Á') collate utf8mb4_unicode_ci)) sub",
+		},
+		{
 			name: "string name and int value",
 			sql:  "select name_const('myname', 14)",
 		},
@@ -1674,6 +1789,22 @@ func TestBindNameConstInvalidArgs(t *testing.T) {
 		name string
 		sql  string
 	}{
+		{
+			name: "collated name",
+			sql:  "select name_const('myname' collate utf8mb4_unicode_ci, 'a')",
+		},
+		{
+			name: "collated function value",
+			sql:  "select name_const('myname', lower('A') collate utf8mb4_unicode_ci)",
+		},
+		{
+			name: "collated explicit cast value",
+			sql:  "select name_const('myname', cast('a' as char) collate utf8mb4_unicode_ci)",
+		},
+		{
+			name: "collated column value",
+			sql:  "select name_const('myname', a collate utf8mb4_unicode_ci) from t",
+		},
 		{
 			name: "wrong arg count",
 			sql:  "select name_const('myname')",

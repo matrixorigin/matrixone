@@ -23,6 +23,7 @@ jobs:
     outputs:
       pr_valid: ${{ steps.check_pr_valid.outputs.pull_valid }}
       scope: ${{ steps.scope.outputs.scope }}
+      sdk_required: ${{ steps.scope.outputs.sdk_required }}
       compose_group: ${{ steps.plan.outputs.compose_group }}
       launch_group: ${{ steps.plan.outputs.launch_group }}
       generation: ${{ steps.plan.outputs.generation }}
@@ -62,9 +63,10 @@ jobs:
         with:
           script: |
             const { resolveScope } = require('./.github/ci/change-scope.cjs');
-            const scope = await resolveScope({ github, context, forceFull: process.env.FORCE_FULL === 'true' });
-            core.setOutput('scope', scope);
-            await core.summary.addHeading('CI change scope').addRaw(`Selected: ${scope}`).write();
+            const plan = await resolveScope({ github, context, forceFull: process.env.FORCE_FULL === 'true' });
+            core.setOutput('scope', plan.scope);
+            core.setOutput('sdk_required', String(plan.sdk_required));
+            await core.summary.addHeading('CI change scope').addRaw(`Selected: ${plan.scope}; SDK required: ${plan.sdk_required}`).write();
       - id: plan
         name: Assign both BVT groups
         if: ${{ steps.check_pr_valid.outputs.pull_valid == 'true' && contains(fromJSON('["full","bvt"]'), steps.scope.outputs.scope) && github.base_ref != '3.0-dev' }}
@@ -123,7 +125,7 @@ jobs:
     if: ${{ needs.preflight.outputs.pr_valid == 'true' && contains(fromJSON('["full","ut"]'), needs.preflight.outputs.scope) && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/ci.yaml@main
     with:
-      ut_parallel: 6
+      ut_parallel: 8
       ut_sharded: false
     secrets: inherit
 
@@ -173,10 +175,19 @@ jobs:
       build_artifact: ${{ needs.matrixone-shared-build.result == 'success' && needs.matrixone-shared-build.outputs.artifact_name || '' }}
     secrets: inherit
 
+  # The called workflow is trusted; SDK code is checked out separately with no secrets.
+  python-sdk:
+    name: Python SDK execution
+    needs: preflight
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.pr_valid == 'true' && needs.preflight.outputs.sdk_required == 'true' && github.base_ref != '3.0-dev' }}
+    permissions:
+      contents: read
+    uses: ./.github/workflows/python-sdk.yml
+
   matrixone-utils-ci:
     name: Matrixone Utils CI
     needs: preflight
-    if: ${{ needs.preflight.outputs.pr_valid == 'true' && github.base_ref != '3.0-dev' }}
+    if: ${{ needs.preflight.outputs.pr_valid == 'true' && needs.preflight.outputs.scope != 'sdk' && github.base_ref != '3.0-dev' }}
     uses: matrixorigin/CI/.github/workflows/utils-parallel.yaml@main
     secrets: inherit
 
@@ -197,7 +208,7 @@ jobs:
     # Keep cancellation fail-closed. ci-cancellation.yml independently escalates
     # cancellation of superseded runs if this always() job holds the group.
     if: ${{ always() && github.base_ref != '3.0-dev' }}
-    needs: [preflight, docs-check, matrixone-ci, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci, matrixone-coverage-merge]
+    needs: [preflight, docs-check, python-sdk, matrixone-ci, matrixone-ut-coverage, matrixone-compose-ci, matrixone-standalone-ci, matrixone-coverage-merge]
     runs-on: ${{ vars.CI_CONTROL_RUNNER_LABEL || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:

@@ -66,7 +66,7 @@ func newIvfpqCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param 
 			}
 		}
 	}
-	return ivfpqCreateTestCase{
+	ret := ivfpqCreateTestCase{
 		proc: proc,
 		arg: &TableFunction{
 			Attrs:    attrs,
@@ -82,6 +82,19 @@ func newIvfpqCreateTestCase(t *testing.T, m *mpool.MPool, attrs []string, param 
 			Params: []byte(param),
 		},
 	}
+	mockIndexTxn(t, proc, func(sql string, opt executor.StatementOption) (executor.Result, error) {
+		if opt.HasParams() {
+			v, err := opt.Params(proc.Mp())
+			require.NoError(t, err)
+			defer v.Free(proc.Mp())
+			require.Positive(t, v.Length())
+			require.NotEmpty(t, v.GetRawBytesAt(1))
+			require.NotContains(t, sql, "load_file")
+		}
+		return ivfpq_runSql(sqlexec.NewSqlProcess(proc), sql)
+	})
+	return ret
+
 }
 
 // mockIvfpqSrcRowCount is what mock_ivfpq_runSql returns for the

@@ -1531,7 +1531,7 @@ func TestWindowOrderedPercentileFullPartitionBroadcasts(t *testing.T) {
 }
 
 func TestWindowOrderedPercentileSpills(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc := newWindowSpillProcess(t)
 	const rows = 20_000
 	values := make([]int32, rows)
 	for i := range values {
@@ -1616,7 +1616,7 @@ func TestWindowOrderedPercentileFinalizationHonorsCancellation(t *testing.T) {
 }
 
 func TestWindowOrderedPercentileSpilledMergeCancellationClosesAndReuses(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc := newWindowSpillProcess(t)
 	trackingFS := installTrackingSpillFileService(t, proc)
 	const rows = 20_000
 	values := make([]int32, rows)
@@ -2379,16 +2379,42 @@ func TestWindowOrderFunctionsUsePeerBoundaries(t *testing.T) {
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
 }
 
-func TestNtileBucketCountRejectsNull(t *testing.T) {
-	mp := mpool.MustNewZero()
-	bucketVec := vector.NewConstNull(types.T_int64.ToType(), 1, mp)
-	defer bucketVec.Free(mp)
-
-	ctr := container{
-		aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bucketVec}}},
+func TestNtileBucketCountValidation(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		value   int64
+		isNull  bool
+		message string
+	}{
+		{"null", 0, true, "ntile bucket count cannot be NULL"},
+		{"zero", 0, false, "ntile bucket count must be positive"},
+		{"negative", -5, false, "ntile bucket count must be positive"},
+		{"one", 1, false, ""},
+		{"positive", 3, false, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mp.Free(nil)
+			defer func() {
+				require.Zero(t, mp.CurrNB())
+			}()
+			bucketVec, err := vector.NewConstFixed(types.T_int64.ToType(), tc.value, 1, mp)
+			require.NoError(t, err)
+			defer bucketVec.Free(mp)
+			if tc.isNull {
+				require.NoError(t, vector.SetConstNull(bucketVec, 1, mp))
+			}
+			ctr := container{aggVecs: []colexec.ExprEvalVector{{Vec: []*vector.Vector{bucketVec}}}}
+			value, err := ctr.ntileBucketCount(0)
+			if tc.message == "" {
+				require.NoError(t, err)
+				require.Equal(t, tc.value, value)
+			} else {
+				require.ErrorContains(t, err, tc.message)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			}
+		})
 	}
-	_, err := ctr.ntileBucketCount(0)
-	require.ErrorContains(t, err, "ntile bucket count cannot be NULL")
 }
 
 func TestWindowReuseWithEmptyInput(t *testing.T) {
@@ -3206,7 +3232,7 @@ func TestWindowConstantKeysWithForcedSpill(t *testing.T) {
 		{"spill_admission_failure", "rank", true, true, nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			proc := newWindowSpillProcess(t)
 			t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
 			t.Cleanup(proc.Free)
 			input := batch.NewWithSize(2)
@@ -3259,9 +3285,9 @@ func TestWindowConstantKeysWithForcedSpill(t *testing.T) {
 					require.Zero(t, budget.SpillFDUsed())
 				})
 				_, err = arg.Call(proc)
-				var resourceErr *process.ExecutionResourceError
-				require.ErrorAs(t, err, &resourceErr)
-				require.Equal(t, process.ExecutionResourceComponentSpillDisk, resourceErr.Component)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM), err)
+				require.NotErrorIs(t, err, process.ErrExecutionResourceAdmission)
+				require.Contains(t, err.Error(), "window spill disk")
 				require.Equal(t, []int32{2, 1, 1, 1}, vector.MustFixedColWithTypeCheck[int32](input.Vecs[0]))
 				for i, order := range arg.Fs {
 					if order.Expr.GetLit() != nil {
@@ -3379,7 +3405,7 @@ func TestWindowPartitionTopNCoalescesAndResetsRowNumber(t *testing.T) {
 }
 
 func TestWindowPartitionTopNSeparatesGroupingNullFromEmptyString(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc := newWindowSpillProcess(t)
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendStringList(input.Vecs[0], []string{"", "", ""}, nil, proc.Mp()))
@@ -4836,11 +4862,12 @@ func TestSearchLeftRightDateTimeTypes(t *testing.T) {
 
 func intervalExpr(diff int64, unit types.IntervalType) *plan.Expr {
 	return &plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_interval)},
 		Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{
-			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 				Value: &plan.Literal_I64Val{I64Val: diff},
 			}}},
-			{Expr: &plan.Expr_Lit{Lit: &plan.Literal{
+			{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{
 				Value: &plan.Literal_I64Val{I64Val: int64(unit)},
 			}}},
 		}}},

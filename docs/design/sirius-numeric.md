@@ -12,7 +12,9 @@ approved in #29449. Later delivery-map updates preserve that semantic contract;
 implementation PRs link the approved revision and rerun the executable inventory
 against their exact base. Merged Sirius #25 supplies representations, codecs
 and scalar primitives. Importer #3 and its unity-test correction #4 are merged.
-These milestones do not enable numeric admission or embedded execution by default.
+Numeric lowering (#29757), campaign acceptance (#30021), and embedded cutover
+(#30251) are now merged. Exact admission uses the native capability snapshot;
+the [embedded guide](../guides/sirius-embedded.md) describes current execution.
 
 ## 1. Decision and invariant
 
@@ -41,12 +43,10 @@ natively. It must not convert an exact value or intermediate to floating point,
 narrow a coefficient or declared type, execute an exact-numeric fragment back
 in MatrixOne, or retry/fall back after embedded execution has been selected.
 
-Until the complete capability is approved and implemented, the embedded
-exporter keeps declining unsupported signatures before MO readers or native
-execution start. The Flight exporter and its lease path are unchanged. Such
-declines are blockers for [#28968](https://github.com/matrixorigin/matrixone/issues/28968)
-and the default cutover in [#28966](https://github.com/matrixorigin/matrixone/issues/28966),
-not evidence of parity.
+The embedded exporter declines unsupported signatures before MO readers or
+native execution start. Exact-decimal v1 is implemented and the canonical
+Q1-Q22 acceptance is complete. Unsupported signatures outside that admitted
+domain remain explicit eligibility errors.
 
 ### Goals
 
@@ -63,18 +63,20 @@ not evidence of parity.
 - Making approximate `FLOAT` or `DOUBLE` behavior an oracle for `DECIMAL`.
 - Adding arbitrary-precision SQL numerics beyond MatrixOne's current domains.
 - Splitting one exact-numeric expression tree between Sirius and MatrixOne.
-- Changing on-disk table formats, Flight compatibility, or the migration
+- Changing on-disk table formats or the migration
   lifecycle defined in `docs/design/sirius-embedded.md`.
 - Admitting INSERT, UPDATE, or IGNORE through the embedded backend in v1.
 
-## 2. Current exporter inventory
+## 2. Historical exporter inventory before exact lowering
 
 `pkg/sql/plan/substrait/numeric_inventory_test.go` is the executable inventory.
 It binds every canonical TPC-H query, records the exact exporter outcome and
 failure, and keeps eligible queries as positive controls with exact output
-metadata.
+metadata. The table below records the pre-lowering baseline. The current exact
+profile admits all 22 canonical queries; current executable inventory and public
+evidence are recorded in the lowering and campaign designs.
 
-| Queries | Current result | Stable reason and representative evidence |
+| Queries | Baseline result | Stable reason and representative evidence |
 | --- | --- | --- |
 | Q2, Q4, Q12, Q13, Q16, Q18, Q21, Q22 | Eligible | Positive controls include `MIN(DECIMAL64(15,2))`, `SUM(BIGINT) -> DECIMAL128(38,0)`, `SUM(DECIMAL64(15,2)) -> DECIMAL128(37,2)`, and `AVG(DECIMAL64(15,2)) -> DECIMAL128(19,6)`. |
 | Q1, Q3, Q5, Q7, Q9, Q10, Q14, Q15, Q19 | Declined | `expression`: a wide `SUM` has no declared Sirius semantic equivalence; common paths publish `DECIMAL256(65,4)`. |
@@ -350,8 +352,8 @@ a terminal native execution failure, not a fallback signal.
 No persisted format changes. Mixed MO/Sirius revisions negotiate capability;
 if either side lacks exact-decimal v1, preparation fails before data access.
 Rollback disables the capability and restores the current explicit declines.
-Only the embedded exporter emits this extension; Flight plan emission and its
-numeric admission behavior remain unchanged during coexistence.
+Only the embedded exporter emits this extension. The current release uses
+embedded MO readers and has no Flight execution path.
 
 ## 6. Counterexamples and independent oracles
 
@@ -439,10 +441,11 @@ Numeric work is separate from the ten-PR embedding map in
    metadata, GPU, failure, and performance gates.
 
 The owner approved this two-PR native split on 2026-10-08. It does not reduce
-the full-family capability or acceptance gates. The remaining six-PR sequence,
-including MO cutover and sidecar retirement, is recorded in the parent migration
-design. Implementation branches begin from merged predecessors, not cumulative
-unmerged stacks.
+the full-family capability or acceptance gates. Native semantics, MO lowering,
+campaign acceptance, and MO cutover are merged. #28968 is closed; #28966 tracks
+release availability. No sidecar repository retirement is required.
+Implementation branches begin from merged predecessors, not cumulative unmerged
+stacks.
 
 There is a hard approval gate between N0 and production lowering. Before any
 MO or Sirius production path emits or accepts `mo_exact_decimal`, reviewers

@@ -20,6 +20,25 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestLoadGlobalIgnorePolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		stmt *Load
+		want bool
+	}{
+		{"nil", nil, false},
+		{"ordinary", &Load{DuplicateHandling: &DuplicateKeyError{}}, false},
+		{"ignore", &Load{DuplicateHandling: &DuplicateKeyIgnore{}}, true},
+		{"local", &Load{Local: true, DuplicateHandling: &DuplicateKeyError{}}, false},
+		{"local_ignore", &Load{Local: true, DuplicateHandling: &DuplicateKeyIgnore{}}, true},
+		{"local_replace", &Load{Local: true, DuplicateHandling: &DuplicateKeyReplace{}}, false},
+		{"replace", &Load{DuplicateHandling: &DuplicateKeyReplace{}}, false},
+		{"header_only", &Load{Param: &ExternParam{ExParamConst: ExParamConst{Tail: &TailParameter{IgnoredLines: 1}}}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, IsIgnoreStatement(tc.stmt)) })
+	}
+}
+
 func TestQueryType(t *testing.T) {
 	type fields struct {
 		types map[StatementType]string

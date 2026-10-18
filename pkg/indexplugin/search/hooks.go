@@ -112,9 +112,10 @@ type EmptyScanHooks interface {
 }
 
 // ExplainHooks optionally describes the algorithm settings of a scan for
-// EXPLAIN, as "Name: value" fragments in display order.
+// EXPLAIN, as "Name: value" fragments in display order. Detailed output is
+// requested by SQL JSON and explicit VERBOSE text; compact text stays stable.
 type ExplainHooks interface {
-	ExplainSettings(spec *plan.IndexSearchScan) ([]string, error)
+	ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]string, error)
 }
 
 // CandidateBudgetHooks optionally sizes the candidate budget of a scan whose

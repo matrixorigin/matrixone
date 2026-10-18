@@ -17,7 +17,6 @@ package siriusbridge
 import (
 	"context"
 	"strings"
-	"sync/atomic"
 	"testing"
 )
 
@@ -50,8 +49,6 @@ func TestDescriptorPreflightPrecedesNativeAllocation(t *testing.T) {
 			t.Cleanup(func() { _ = r.Close(context.Background()) })
 			req := testRequest()
 			req.Reads = []Read{{BindingID: 1, Database: "db", Table: "t", Columns: []ReadColumn{{Column: Column{Name: "c"}}}, Producer: func(context.Context, *Input) error { return nil }}}
-			var released atomic.Int32
-			req.Release = func(context.Context) error { released.Add(1); return nil }
 			test.change(&req)
 			if _, err := r.Prepare(context.Background(), req); err == nil {
 				t.Fatal("invalid descriptor accepted")
@@ -59,8 +56,8 @@ func TestDescriptorPreflightPrecedesNativeAllocation(t *testing.T) {
 			if d.prepares.Load() != 0 {
 				t.Fatal("rejected descriptor reached native preparation")
 			}
-			if released.Load() != 1 {
-				t.Fatalf("release count: %d", released.Load())
+			if r.inflight != 0 || len(r.queries) != 0 {
+				t.Fatal("rejected descriptor retained admission")
 			}
 		})
 	}
