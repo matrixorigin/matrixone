@@ -122,11 +122,6 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// before an old RPC callback is delivered; a closed captured sink then drops
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
-	if requiredVectorProtocol > 0 {
-		if err = sender.confirmProtocolOnStream(requiredVectorProtocol); err != nil {
-			return sender, err
-		}
-	}
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -135,7 +130,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 			debugMsg = fmt.Sprintf("inject_send_pipeline: client2server,compile = %p", c)
 		}
 	}
-	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
+	if err = sender.sendPipelineAfterProtocolCheck(requiredVectorProtocol, scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
 		return sender, err
 	}
 
@@ -641,10 +636,22 @@ func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) erro
 			response.GetCmd() != pipeline.Method_PipelineProtocolCheck ||
 			response.GetSid() != pipeline.Status_Last ||
 			response.GetProtocolVersion() < minimum {
-			return moerr.NewNotSupportedNoCtx("remote pipeline stream does not support vector partition zero")
+			return moerr.NewNotSupportedNoCtxf("remote pipeline stream does not support MORPC protocol version %d", minimum)
 		}
 		return nil
 	}
+}
+
+// sendPipelineAfterProtocolCheck confirms a nonzero minimum on the execution
+// stream before it sends the pipeline.
+func (sender *messageSenderOnClient) sendPipelineAfterProtocolCheck(
+	minimum int64, scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
+	if minimum > 0 {
+		if err := sender.confirmProtocolOnStream(minimum); err != nil {
+			return err
+		}
+	}
+	return sender.sendPipeline(scopeData, procData, noDataBack, eachMessageSizeLimitation, debugMsg)
 }
 
 func (sender *messageSenderOnClient) sendPipeline(

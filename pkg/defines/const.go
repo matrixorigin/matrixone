@@ -154,7 +154,8 @@ const (
 	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
 	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
 	MORPCVersion118    int64 = 118 // transactional database defaults and table charset alteration
-	MORPCLatestVersion       = MORPCVersion118
+	MORPCVersion119    int64 = 119 // bf16/float16/float8/float4/vecf8/vecf4 types and VECTOR_MATMUL/VECBLOCK functions
+	MORPCLatestVersion       = MORPCVersion119
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

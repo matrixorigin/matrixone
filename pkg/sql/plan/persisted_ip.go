@@ -156,6 +156,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
+	if features.LowPrecisionFloatContracts {
+		requiredVersion = max(requiredVersion, LowPrecisionFloatProtocolVersion)
+	}
 	return requiredVersion, nil
 }
 

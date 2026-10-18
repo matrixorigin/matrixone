@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	motestutil "github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/brute_force"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
@@ -284,15 +285,20 @@ func TestRequiredIVFProtocolCoversEveryPartitionAndNestedFragment(t *testing.T) 
 }
 
 func TestRequiredIVFWorkersRequireProtocol(t *testing.T) {
-	for _, mode := range []string{"supported", "old", "unknown", "canceled"} {
+	for _, mode := range []string{"supported", "old", "unknown", "canceled", "device"} {
 		t.Run(mode, func(t *testing.T) {
 			c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
 			moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
 			client.version = vectorscan.IndexSearchScanProtocolVersion
-			// gpu_mode off: the IVF centroid search runs on CPU workers.
+			// gpu_mode off: the IVF centroid search runs on CPU workers. gpu_mode on routes it
+			// to the device in a GPU build.
+			gpuMode := int8(0)
+			if mode == "device" {
+				gpuMode = 1
+			}
 			c.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
 				if name == "gpu_mode" {
-					return int8(0), nil
+					return gpuMode, nil
 				}
 				return nil, nil
 			})
@@ -336,11 +342,18 @@ func TestRequiredIVFWorkersRequireProtocol(t *testing.T) {
 				require.ErrorIs(t, err, context.Canceled)
 				return
 			}
-			if mode != "supported" {
+			if mode != "supported" && mode != "device" {
 				require.ErrorContains(t, err, fmt.Sprintf("MORPC protocol version %d", vectorscan.IndexSearchScanProtocolVersion))
 				return
 			}
 			require.NoError(t, err)
+			if mode == "device" && brute_force.DispatchesToDevice[float32](true) {
+				// a GPU centroid route runs the whole query on this CN
+				require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+				require.Len(t, c.cnList, 1)
+				require.Equal(t, c.addr, c.cnList[0].Addr)
+				return
+			}
 			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 			require.Len(t, c.cnList, 2)
 		})

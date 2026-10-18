@@ -187,6 +187,14 @@ func windowIntervalScalarText(vec *vector.Vector) (text string, numeric bool, er
 		text = strconv.FormatFloat(float64(vector.MustFixedColNoTypeCheck[float32](vec)[0]), 'f', -1, 32)
 	case types.T_float64:
 		text = strconv.FormatFloat(vector.MustFixedColNoTypeCheck[float64](vec)[0], 'f', -1, 64)
+	case types.T_bf16:
+		text = strconv.FormatFloat(float64(vector.MustFixedColNoTypeCheck[types.BF16](vec)[0].ToFloat32()), 'f', -1, 32)
+	case types.T_float16:
+		text = strconv.FormatFloat(float64(vector.MustFixedColNoTypeCheck[types.Float16](vec)[0].ToFloat32()), 'f', -1, 32)
+	case types.T_float8:
+		text = strconv.FormatFloat(float64(vector.MustFixedColNoTypeCheck[types.Float8](vec)[0].ToFloat32()), 'f', -1, 32)
+	case types.T_float4:
+		text = strconv.FormatFloat(float64(vector.MustFixedColNoTypeCheck[types.Float4](vec)[0].ToFloat32()), 'f', -1, 32)
 	case types.T_decimal64:
 		text = vector.MustFixedColNoTypeCheck[types.Decimal64](vec)[0].Format(vec.GetType().Scale)
 	case types.T_decimal128:

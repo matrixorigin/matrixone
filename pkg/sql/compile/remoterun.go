@@ -146,6 +146,12 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
 	}
+	// The destination probe uses another connection; remoteRun confirms the
+	// version on the execution stream too.
+	if features.LowPrecisionFloatContracts && requiredVectorProtocol != nil &&
+		*requiredVectorProtocol < plan2.LowPrecisionFloatProtocolVersion {
+		*requiredVectorProtocol = plan2.LowPrecisionFloatProtocolVersion
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -2086,11 +2092,11 @@ func requiredRemotePipelineExpressionFeatures(p *pipeline.Pipeline) (plan.Remote
 	if err != nil {
 		return features, err
 	}
-	collectDecimalStatisticalDescriptorFeatures(p, &features)
+	collectAggregateDescriptorFeatures(p, &features)
 	return features, nil
 }
 
-func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
+func collectAggregateDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
 	if p == nil {
 		return
 	}
@@ -2102,6 +2108,9 @@ func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features 
 			if wire == nil {
 				continue
 			}
+			if wire.Op>>32 == aggexec.AggIdOfVectorMatmul>>32 {
+				features.LowPrecisionFloatContracts = true
+			}
 			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
 			if isDecimalStatisticalAggregate(agg) {
 				features.DecimalStatisticalResultContracts = true
@@ -2111,7 +2120,7 @@ func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features 
 		}
 	}
 	for _, child := range p.Children {
-		collectDecimalStatisticalDescriptorFeatures(child, features)
+		collectAggregateDescriptorFeatures(child, features)
 	}
 }
 
@@ -2293,6 +2302,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.LowPrecisionFloatContracts && (!hasProtocolVersion || protocolVersion < plan2.LowPrecisionFloatProtocolVersion) {
+		return moerr.NewNotSupportedNoCtxf("bf16/float16/float8/float4/vecf8/vecf4 values and functions require MORPC protocol version %d", plan2.LowPrecisionFloatProtocolVersion)
 	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")

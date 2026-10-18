@@ -976,7 +976,7 @@ func makePlan2AssignmentCastExpr(ctx context.Context, expr *Expr, targetType Typ
 		return forceAssignmentCastExprWithName(
 			ctx, expr, targetType, assignmentCastFunctionName(targetType, false, nil))
 	}
-	if types.T(targetType.Id).IsArrayRelate() {
+	if types.T(targetType.Id).IsArray() {
 		// 生成列即使类型元数据相同，也必须校验实际载荷的维度。
 		return forceAssignmentCastExprWithName(ctx, expr, targetType, "cast")
 	}

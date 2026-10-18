@@ -86,6 +86,7 @@ func l2sqInt8SIMD(a, b []int8) (float64, error) {
 		acc = acc.Add(d.DotProductPairs(d))
 	}
 	sum := sumI32x16(acc)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		sum += int64(d * d)
@@ -108,6 +109,7 @@ func innerProductInt8SIMD(a, b []int8) (float64, error) {
 		acc = acc.Add(va.DotProductPairs(vb))
 	}
 	sum := sumI32x16(acc)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		sum += int64(int32(a[i]) * int32(b[i]))
 	}
@@ -139,6 +141,7 @@ func l1DistanceInt8SIMD(a, b []int8) (float64, error) {
 		usum += v
 	}
 	sum := int64(usum)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		d := int32(a[i]) - int32(b[i])
 		if d < 0 {
@@ -176,6 +179,7 @@ func cosineDistanceInt8SIMD(a, b []int8) (float64, error) {
 		nbA = nbA.Add(vb.DotProductPairs(vb))
 	}
 	dot, na2, nb2 := sumI32x16(dotA), sumI32x16(naA), sumI32x16(nbA)
+	archsimd.ClearAVXUpperBits()
 	for ; i < n; i++ {
 		ai8, bi8 := int64(a[i]), int64(b[i])
 		dot += ai8 * bi8

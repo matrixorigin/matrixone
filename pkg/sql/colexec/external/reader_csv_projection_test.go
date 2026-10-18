@@ -201,6 +201,8 @@ func TestJSONLineVectorArrayValues(t *testing.T) {
 			{types.T_array_float16, types.ArrayToBytes([]types.Float16{types.Float16FromFloat32(4), types.Float16FromFloat32(5), types.Float16FromFloat32(6)})},
 			{types.T_array_int8, types.ArrayToBytes([]int8{4, 5, 6})},
 			{types.T_array_uint8, types.ArrayToBytes([]uint8{4, 5, 6})},
+			{types.T_array_float8, mustBlockScaled(t, types.BlockScaledMXFP8, "[4,5,6]")},
+			{types.T_array_float4, mustBlockScaled(t, types.BlockScaledNVFP4, "[4,5,6]")},
 		} {
 			t.Run(shape+"/"+tc.typ.String(), func(t *testing.T) {
 				for _, value := range []string{`[4,5,6]`, `"[4,5,6]"`, `null`} {
@@ -347,4 +349,10 @@ func TestJSONLineVectorArrayErrorModeRecovery(t *testing.T) {
 			require.True(t, bat.Vecs[4].GetNulls().Contains(2))
 		})
 	}
+}
+
+func mustBlockScaled(t *testing.T, f types.BlockScaledFormat, s string) []byte {
+	cell, err := types.StringToBlockScaled(f, s)
+	require.NoError(t, err)
+	return cell
 }

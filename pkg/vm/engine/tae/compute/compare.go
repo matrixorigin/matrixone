@@ -76,6 +76,14 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 		return CompareOrdered(types.DecodeFloat32(a), types.DecodeFloat32(b))
 	case types.T_float64:
 		return CompareOrdered(types.DecodeFloat64(a), types.DecodeFloat64(b))
+	case types.T_bf16:
+		return CompareOrdered(types.DecodeFixed[types.BF16](a).ToFloat32(), types.DecodeFixed[types.BF16](b).ToFloat32())
+	case types.T_float16:
+		return CompareOrdered(types.DecodeFixed[types.Float16](a).ToFloat32(), types.DecodeFixed[types.Float16](b).ToFloat32())
+	case types.T_float8:
+		return CompareOrdered(types.DecodeFixed[types.Float8](a).ToFloat32(), types.DecodeFixed[types.Float8](b).ToFloat32())
+	case types.T_float4:
+		return CompareOrdered(types.DecodeFixed[types.Float4](a).ToFloat32(), types.DecodeFixed[types.Float4](b).ToFloat32())
 	case types.T_timestamp:
 		return CompareOrdered(types.DecodeTimestamp(a), types.DecodeTimestamp(b))
 	case types.T_date:
@@ -134,6 +142,8 @@ func Compare(a, b []byte, t types.T, scale1, scale2 int32) int {
 		return types.CompareArrayElementFromBytes[int8](a, b, false)
 	case types.T_array_uint8:
 		return types.CompareArrayElementFromBytes[uint8](a, b, false)
+	case types.T_array_float8, types.T_array_float4:
+		return types.CompareBlockScaledFromBytes(a, b, false)
 	case types.T_any:
 		return 0
 	default:
@@ -173,6 +183,14 @@ func CompareGeneric(a, b any, t types.T) int {
 		return CompareOrdered(a.(float32), b.(float32))
 	case types.T_float64:
 		return CompareOrdered(a.(float64), b.(float64))
+	case types.T_bf16:
+		return CompareOrdered(a.(types.BF16).ToFloat32(), b.(types.BF16).ToFloat32())
+	case types.T_float16:
+		return CompareOrdered(a.(types.Float16).ToFloat32(), b.(types.Float16).ToFloat32())
+	case types.T_float8:
+		return CompareOrdered(a.(types.Float8).ToFloat32(), b.(types.Float8).ToFloat32())
+	case types.T_float4:
+		return CompareOrdered(a.(types.Float4).ToFloat32(), b.(types.Float4).ToFloat32())
 	case types.T_timestamp:
 		return CompareOrdered(a.(types.Timestamp), b.(types.Timestamp))
 	case types.T_date:
@@ -216,6 +234,8 @@ func CompareGeneric(a, b any, t types.T) int {
 		return types.CompareArrayElementFromBytes[int8](a.([]byte), b.([]byte), false)
 	case types.T_array_uint8:
 		return types.CompareArrayElementFromBytes[uint8](a.([]byte), b.([]byte), false)
+	case types.T_array_float8, types.T_array_float4:
+		return types.CompareBlockScaledFromBytes(a.([]byte), b.([]byte), false)
 	case types.T_any:
 		return 0
 	default:

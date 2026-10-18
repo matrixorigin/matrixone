@@ -111,7 +111,8 @@ func groupConcatFieldBytes(vec *vector.Vector, row int, typ types.Type) []byte {
 	switch typ.Oid {
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_datalink,
 		types.T_varbinary, types.T_binary, types.T_json,
-		types.T_array_float32, types.T_array_float64:
+		types.T_array_float32, types.T_array_float64,
+		types.T_array_float8, types.T_array_float4:
 		return vec.GetBytesAt(row)
 	default:
 		return vec.GetRawBytesAt(row)
@@ -231,6 +232,12 @@ func writeGroupConcatData(
 	case types.T_array_float32, types.T_array_float64, types.T_array_bf16,
 		types.T_array_float16, types.T_array_int8, types.T_array_uint8:
 		return writeGroupConcatArrayData(writer, typ, data)
+	case types.T_array_float8, types.T_array_float4:
+		text, err := types.BlockScaledToString(data)
+		if err != nil {
+			return err
+		}
+		return writeBytes([]byte(text))
 	case types.T_blob, types.T_text, types.T_datalink, types.T_varbinary, types.T_binary,
 		types.T_char, types.T_varchar, types.T_enum:
 		return writeBytes(data)
