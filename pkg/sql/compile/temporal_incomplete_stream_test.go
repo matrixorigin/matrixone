@@ -65,10 +65,10 @@ func incompleteTemporalStreamScope(t *testing.T, c *Compile, name string, typ ty
 
 func TestIncompleteTemporalExecutionStream(t *testing.T) {
 	for _, name := range []string{"date_format", "datediff", "to_days", "to_seconds", "dayofweek", "week", "week_default", "last_day", "date_add", "date_sub"} {
-		for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion118} {
+		for _, version := range []int64{defines.MORPCVersion118, defines.MORPCVersion119} {
 			t.Run(fmt.Sprintf("%s/%d", name, version), func(t *testing.T) {
 				c, queryClient := expressionProtocolTestCompile(t)
-				queryClient.version = defines.MORPCVersion118
+				queryClient.version = defines.MORPCVersion119
 				scope := incompleteTemporalStreamScope(t, c, name, types.T_varchar)
 				var required int64
 				_, _, _, _, err := prepareRemoteRunSendingDataWithProtocol("", scope, c.proc, nil, uuid.Nil, &required)
@@ -84,7 +84,7 @@ func TestIncompleteTemporalExecutionStream(t *testing.T) {
 					case pipeline.Method_PipelineProtocolCheck:
 						checks++
 						require.Zero(t, payloads)
-						require.Equal(t, defines.MORPCVersion118, message.ProtocolVersion)
+						require.Equal(t, defines.MORPCVersion119, message.ProtocolVersion)
 						replies <- &pipeline.Message{Id: 17, Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: version}
 					case pipeline.Method_PipelineMessage:
 						payloads++
@@ -100,9 +100,9 @@ func TestIncompleteTemporalExecutionStream(t *testing.T) {
 				stream.EXPECT().Close(true).DoAndReturn(func(bool) error { closed++; return nil })
 				installIncompleteTemporalTestStream(t, c, stream)
 				err = scope.RemoteRun(c)
-				require.Equal(t, defines.MORPCVersion118, required)
-				if version < defines.MORPCVersion118 {
-					require.ErrorContains(t, err, "118")
+				require.Equal(t, defines.MORPCVersion119, required)
+				if version < defines.MORPCVersion119 {
+					require.ErrorContains(t, err, "119")
 					require.Zero(t, payloads)
 				} else {
 					require.NoError(t, err)
@@ -121,7 +121,7 @@ func TestIncompleteTemporalExecutionStreamFailures(t *testing.T) {
 	for _, failure := range []string{"wrong stream", "wrong method", "missing version", "closed", "send error", "canceled"} {
 		t.Run(failure, func(t *testing.T) {
 			c, queryClient := expressionProtocolTestCompile(t)
-			queryClient.version = defines.MORPCVersion118
+			queryClient.version = defines.MORPCVersion119
 			scope := incompleteTemporalStreamScope(t, c, "week", types.T_varchar)
 			ctx, cancel := context.WithCancel(scope.Proc.Ctx)
 			defer cancel()
@@ -138,7 +138,7 @@ func TestIncompleteTemporalExecutionStreamFailures(t *testing.T) {
 					return sendErr
 				}
 				checks++
-				response := &pipeline.Message{Id: 17, Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion118}
+				response := &pipeline.Message{Id: 17, Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion119}
 				switch failure {
 				case "wrong stream":
 					response.Id++

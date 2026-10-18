@@ -279,7 +279,7 @@ func TestRelease42TemporalProtocolBoundary(t *testing.T) {
 			required := defines.MORPCVersion98
 			if tc.id == function.LAST_DAY {
 				// The released string identity now diagnoses incomplete calendars.
-				required = defines.MORPCVersion118
+				required = defines.MORPCVersion119
 			}
 			expr := &planpb.Expr{Typ: planpb.Type{Id: int32(tc.result)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(tc.id, tc.overload)},

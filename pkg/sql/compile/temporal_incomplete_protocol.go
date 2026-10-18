@@ -25,7 +25,7 @@ import (
 // A cached plan cannot retain permission after the negotiated floor rolls back.
 func validateIncompleteTemporalStringProtocol(proc *process.Process, owner any) error {
 	if proc != nil {
-		if version, known := remoteMORPCProtocolVersion(proc.GetService()); known && version >= defines.MORPCVersion118 {
+		if version, known := remoteMORPCProtocolVersion(proc.GetService()); known && version >= defines.MORPCVersion119 {
 			return nil
 		}
 	}
@@ -34,7 +34,7 @@ func validateIncompleteTemporalStringProtocol(proc *process.Process, owner any) 
 		return err
 	}
 	if features.IncompleteTemporalStrings {
-		return moerr.NewNotSupportedNoCtx("incomplete temporal strings require MORPC protocol version 118")
+		return moerr.NewNotSupportedNoCtx("incomplete temporal strings require MORPC protocol version 119")
 	}
 	return nil
 }
