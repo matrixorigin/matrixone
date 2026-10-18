@@ -2318,6 +2318,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
 	}
+	if features.EnumSourceAssignment && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion123) {
+		return moerr.NewNotSupportedNoCtx("typed ENUM source assignment requires MORPC protocol version 123")
+	}
 	if features.TableCollationFunction && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
 		return moerr.NewNotSupportedNoCtx("internal table collation requires MORPC protocol version 118")
 	}
