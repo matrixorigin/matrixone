@@ -106,7 +106,7 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 		// v114-v117 already belong to Unicode keys, intervals, warnings and collation ordering.
 		for _, version := range []int64{defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-			require.False(t, supportsLockProtocolV118(""))
+			require.False(t, supportsLockProtocolV119(""))
 			for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
 				err := checkMethodVersion(context.Background(), "", &pb.Request{Method: method})
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported),
@@ -114,7 +114,7 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 			}
 		}
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
-		require.True(t, supportsLockProtocolV118(""))
+		require.True(t, supportsLockProtocolV119(""))
 		for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
 			require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
 		}

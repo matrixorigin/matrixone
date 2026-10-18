@@ -1290,6 +1290,23 @@ func TestCompileLockDisabledSkipsAllStatementLocks(t *testing.T) {
 	require.Nil(t, scope.RootOp)
 	require.Empty(t, c.lockTables)
 	require.Equal(t, []*plan.LockTarget{target}, node.LockTargets)
+
+	// A pessimistic transaction can still request an internal lock-free
+	// statement; nonblocking SQL must not silently bypass physical admission.
+	ctrl := gomock.NewController(t)
+	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Pessimistic}).AnyTimes()
+	c.proc.Base.TxnOperator = txnOp
+	target.LockTable = false
+	target.NoWait = true
+	got, err = c.compileLock(node, []*Scope{scope})
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+	require.Nil(t, got)
+	require.Nil(t, scope.RootOp)
+	require.Empty(t, c.lockTables)
+	require.Equal(t, []*plan.LockTarget{target}, node.LockTargets)
+
 }
 
 func TestCompileLockPrePipelineTargetAdmission(t *testing.T) {

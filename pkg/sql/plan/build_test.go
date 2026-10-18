@@ -3698,6 +3698,9 @@ func TestApplyLockTableFallbackGuardsAndModes(t *testing.T) {
 					markedAboveBoundary,
 					{Mode: lockpb.LockMode_Shared},
 					{Mode: lockpb.LockMode_Exclusive},
+					{Mode: lockpb.LockMode_Exclusive, NoWait: true},
+					{Mode: lockpb.LockMode_Shared, NoWait: true},
+					{Mode: lockpb.LockMode_Shared, NoWait: true, LockTable: true},
 				},
 			},
 		}},
@@ -3728,6 +3731,11 @@ func TestApplyLockTableFallbackGuardsAndModes(t *testing.T) {
 		"cardinality-known shared targets must upgrade before acquisition")
 	require.False(t, builder.qry.Nodes[3].LockTargets[2].LockTable,
 		"unmarked exclusive targets retain owner-side range escalation")
+	for _, target := range builder.qry.Nodes[3].LockTargets[3:5] {
+		require.False(t, target.LockTable, "cardinality estimates must not widen nonblocking row locks")
+	}
+	require.True(t, builder.qry.Nodes[3].LockTargets[5].LockTable,
+		"an explicit coarse target must remain visible to nonblocking admission")
 }
 
 func TestApplyLockTableFallbackUsesFullUpdateSourceCardinality(t *testing.T) {

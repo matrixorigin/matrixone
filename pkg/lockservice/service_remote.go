@@ -161,7 +161,7 @@ func supportsLockProtocolV99(serviceID string) bool {
 	return ok && version >= defines.MORPCVersion99
 }
 
-func supportsLockProtocolV118(serviceID string) bool {
+func supportsLockProtocolV119(serviceID string) bool {
 	rt := moruntime.ServiceRuntime(serviceID)
 	if rt == nil {
 		return false
@@ -436,7 +436,7 @@ func (s *service) handleRemoteTryLock(
 	resp *pb.Response,
 	cs morpc.ClientSession,
 ) {
-	if !supportsLockProtocolV118(s.cfg.ServiceID) ||
+	if !supportsLockProtocolV119(s.cfg.ServiceID) ||
 		!validNoWaitLockOptions(req.Lock.Options) {
 		_ = writeResponseWithDeadline(
 			s.logger,
@@ -480,7 +480,7 @@ func (s *service) setNoWaitConflictResponse(
 	expectedBind pb.LockTable,
 ) error {
 	if !contract.valid() ||
-		!supportsLockProtocolV118(s.cfg.ServiceID) ||
+		!supportsLockProtocolV119(s.cfg.ServiceID) ||
 		!supportsLockProtocolV28(s.cfg.ServiceID) ||
 		!supportsLockProtocolV31(s.cfg.ServiceID) ||
 		resp.NewBind != nil || !result.LockedOn.Valid ||
@@ -844,7 +844,7 @@ func (s *service) handleForwardTryLock(
 	resp *pb.Response,
 	cs morpc.ClientSession,
 ) {
-	if !supportsLockProtocolV118(s.cfg.ServiceID) ||
+	if !supportsLockProtocolV119(s.cfg.ServiceID) ||
 		!validNoWaitLockOptions(req.Lock.Options) {
 		_ = writeResponseWithDeadline(
 			s.logger,

@@ -9534,6 +9534,12 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	}
 
 	if c.disableLock {
+		for _, target := range node.LockTargets {
+			if target.GetNoWait() {
+				return nil, moerr.NewNotSupportedNoCtx(
+					"NOWAIT requires physical lock admission")
+			}
+		}
 		return ss, nil
 	}
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
