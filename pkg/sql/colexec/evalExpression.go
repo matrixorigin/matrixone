@@ -308,6 +308,19 @@ func NewExpressionExecutorWithAllocation(
 	return &memoRootExpressionExecutor{executor: executor, states: buildCtx.states}, nil
 }
 
+// Retained and directly constructed expressions recheck the current rollout
+// floor before allocating native state, including dependent expression programs.
+func validateSetOperationFloatKeyProtocol(proc *process.Process, overloadID int64) error {
+	if int32(overloadID>>32) != function.SET_OPERATION_FLOAT_KEY {
+		return nil
+	}
+	version, known := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
+	if floor, ok := version.(int64); !known || !ok || floor < defines.MORPCVersion120 {
+		return moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 120")
+	}
+	return nil
+}
+
 func newExpressionExecutorWithAllocation(
 	proc *process.Process,
 	planExpr *plan.Expr,
@@ -475,13 +488,8 @@ func newExpressionExecutorWithAllocation(
 				return nil, moerr.NewNotSupportedNoCtx("TIMESTAMP result vector contract mismatch requires rebinding")
 			}
 		}
-		// Prepare must recheck the current rollout floor, even for a retained
-		// or directly constructed expression that bypasses pipeline decoding.
-		if int32(overloadID>>32) == function.SET_OPERATION_FLOAT_KEY {
-			version, known := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
-			if floor, ok := version.(int64); !known || !ok || floor < defines.MORPCVersion119 {
-				return nil, moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 119")
-			}
+		if err := validateSetOperationFloatKeyProtocol(proc, overloadID); err != nil {
+			return nil, err
 		}
 		overload, err := function.GetFunctionById(proc.Ctx, overloadID)
 		if err != nil {

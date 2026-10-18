@@ -5049,7 +5049,7 @@ func TestBitCountDiagnosticFoldPreparedReuse(t *testing.T) {
 // Operator Prepare must reject a rolled-back coordinator before allocating a key
 // executor, even when the expression was specialized after initial planning.
 func TestSetOperationFloatKeyExecutorProtocol(t *testing.T) {
-	proc := testutil.NewProcess(t)
+	proc, allocation, _ := dependentTestAllocation(t)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	original, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -5061,18 +5061,29 @@ func TestSetOperationFloatKeyExecutorProtocol(t *testing.T) {
 	})
 	for _, typ := range []types.T{types.T_float32, types.T_float64} {
 		expr := bindTestFunction(t, proc, "set_operation_float_key", &plan.Expr{Typ: typ.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}})
-		for _, floor := range []any{defines.MORPCVersion118, "unknown", defines.MORPCVersion119} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+		retained, err := CompileDependentExpressions(proc.Ctx, []*plan.Expr{expr})
+		require.NoError(t, err)
+		budget, err := proc.GetExecutionResourceBudget()
+		require.NoError(t, err)
+		for _, floor := range []any{defines.MORPCVersion119, "unknown", defines.MORPCVersion120} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, floor)
-			before := proc.Mp().CurrNB()
-			executor, err := NewExpressionExecutor(proc, expr)
-			if floor == defines.MORPCVersion119 {
-				require.NoError(t, err)
-				executor.Free()
-			} else {
-				require.ErrorContains(t, err, "version 119")
-				require.Nil(t, executor)
+			for _, build := range []func() (ExpressionExecutor, error){
+				func() (ExpressionExecutor, error) { return NewExpressionExecutor(proc, expr) },
+				func() (ExpressionExecutor, error) { return retained.NewScalarExecutor(proc, allocation) },
+			} {
+				before, charged := proc.Mp().CurrNB(), budget.Used()
+				executor, err := build()
+				if floor == defines.MORPCVersion120 {
+					require.NoError(t, err)
+					executor.Free()
+				} else {
+					require.ErrorContains(t, err, "version 120")
+					require.Nil(t, executor)
+				}
+				require.Equal(t, before, proc.Mp().CurrNB())
+				require.Equal(t, charged, budget.Used())
 			}
-			require.Equal(t, before, proc.Mp().CurrNB())
 		}
 	}
 }

@@ -4988,7 +4988,7 @@ type Instruction struct {
 	// by MORPCVersion69 so an older receiver cannot silently drop RANK ties.
 	PartitionTopNWithTies bool `protobuf:"varint,64,opt,name=partition_top_n_with_ties,json=partitionTopNWithTies,proto3" json:"partition_top_n_with_ties,omitempty"`
 	// WINDOW/LOOP_JOIN only: compiler-generated bounded scalar reaggregation.
-	// Receivers must reject this contract before decoding below MORPC v119.
+	// Receivers must reject this contract before decoding below MORPC v120.
 	ScalarSetReaggregation bool     `protobuf:"varint,65,opt,name=scalar_set_reaggregation,json=scalarSetReaggregation,proto3" json:"scalar_set_reaggregation,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{} `json:"-"`
 	XXX_unrecognized       []byte   `json:"-"`

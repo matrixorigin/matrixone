@@ -1385,6 +1385,19 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	if qry.Correlation != nil {
+		// Dependent kernels reconstruct operators outside the scalar fallback's
+		// placement and lease binding. Reject their composition before readers
+		// or operators can start without that account, work limit and CN permit.
+		if queryUsesScalarSetReaggregation(qry) {
+			return nil, moerr.NewNotSupportedNoCtx("bounded scalar set reaggregation cannot execute inside dependent programs")
+		}
+		features, err := plan.RequiredRemoteExpressionFeatures(qry)
+		if err != nil {
+			return nil, err
+		}
+		if err = validateRemoteExpressionFeatures(c.proc, features); err != nil {
+			return nil, err
+		}
 		return c.compileDependentQuery(qry)
 	}
 	var err error

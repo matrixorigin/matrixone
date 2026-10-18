@@ -29,6 +29,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestScalarSetDependentQueryAdmissionBeforeSourceWork(t *testing.T) {
+	// The dependent entry point cannot reconstruct a marked fallback without
+	// its attempt lease. No process/engine is installed: reject before opening
+	// either execution owner, including when the marker is in a producer step.
+	for _, kind := range []plan.Node_NodeType{plan.Node_WINDOW, plan.Node_JOIN} {
+		q := &plan.Query{
+			Correlation: &plan.CorrelationSpec{},
+			Nodes:       []*plan.Node{{NodeType: kind, ScalarSetReaggregation: true}},
+		}
+		_, err := (&Compile{}).compileQuery(q)
+		require.ErrorContains(t, err, "bounded scalar set reaggregation cannot execute inside dependent programs")
+	}
+}
+
 func TestScalarSetMarkerProtocolAndPlacement(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)
 	n := &plan.Node{NodeType: plan.Node_WINDOW, ScalarSetReaggregation: true}
@@ -42,15 +56,15 @@ func TestScalarSetMarkerProtocolAndPlacement(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.ScalarSetReaggregation)
 	require.False(t, features.SetOperationFloatKeys)
-	require.Equal(t, defines.MORPCVersion119, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion120, remoteExpressionProtocolVersion(features))
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ScalarSetReaggregation: true}}}
 	data, err = p.Marshal()
 	require.NoError(t, err)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion118, defines.MORPCVersion119} {
+	for _, version := range []int64{defines.MORPCVersion119, defines.MORPCVersion120} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		if version == defines.MORPCVersion118 {
-			require.ErrorContains(t, validateRemoteExpressionFeatures(c.proc, features), "version 119")
+		if version == defines.MORPCVersion119 {
+			require.ErrorContains(t, validateRemoteExpressionFeatures(c.proc, features), "version 120")
 		} else {
 			require.NoError(t, validateRemoteExpressionFeatures(c.proc, features))
 		}

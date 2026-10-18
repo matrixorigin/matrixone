@@ -140,7 +140,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion118)
 	}
 	if features.SetOperationFloatKeys || features.ScalarSetReaggregation {
-		required = max(required, defines.MORPCVersion119)
+		required = max(required, defines.MORPCVersion120)
 	}
 	if features.CalendarIntervalNormalization {
 		required = max(required, defines.MORPCVersion115)

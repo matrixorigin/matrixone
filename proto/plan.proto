@@ -1364,7 +1364,7 @@ message Node {
   repeated Expr dedup_key_exprs = 95;
   // Compiler-generated scalar UNION reaggregation only. WINDOW streams a
   // global occurrence identity; LEFT JOIN charges actual candidate work.
-  // Both stages require the bounded execution contract introduced with v119.
+  // Both stages require the bounded execution contract introduced with v120.
   bool scalar_set_reaggregation = 96;
 }
 
