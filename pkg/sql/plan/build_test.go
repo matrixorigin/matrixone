@@ -6336,14 +6336,15 @@ func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
 func TestLoadCheckConstraintPolicy(t *testing.T) {
 	for _, table := range []string{"dept", "dept_composite_uk"} {
 		for _, tc := range []struct {
-			name, sql    string
-			filter, load bool
+			name, sql      string
+			filter, load   bool
+			wantLoadDedups int
 		}{
-			{"inline_ignore", "load data inline format='csv', data='1,Sales,NY' ignore into table %s fields terminated by ','", true, true},
-			{"local_ignore", "load data local infile 'client.csv' ignore into table %s fields terminated by ','", true, true},
-			{"plain", "load data inline format='csv', data='1,Sales,NY' into table %s fields terminated by ','", false, true},
-			{"local_without_ignore", "load data local infile 'client.csv' into table %s fields terminated by ','", false, true},
-			{"insert_ignore", "insert ignore into %s values (1,'Sales','NY')", true, false},
+			{"inline_ignore", "load data inline format='csv', data='1,Sales,NY' ignore into table %s fields terminated by ','", true, true, 0},
+			{"local_ignore", "load data local infile 'client.csv' ignore into table %s fields terminated by ','", true, true, 0},
+			{"plain", "load data inline format='csv', data='1,Sales,NY' into table %s fields terminated by ','", false, true, 1},
+			{"local_without_ignore", "load data local infile 'client.csv' into table %s fields terminated by ','", false, true, 1},
+			{"insert_ignore", "insert ignore into %s values (1,'Sales','NY')", true, false, 0},
 		} {
 			t.Run(table+"/"+tc.name, func(t *testing.T) {
 				mock := NewMockOptimizer(true, newPlanTestProcess(t))
@@ -6354,12 +6355,18 @@ func TestLoadCheckConstraintPolicy(t *testing.T) {
 				query, err := mock.Optimize(stmt)
 				require.NoError(t, err)
 				checks := 0
+				loadDedups := 0
 				ignoreArbitration := false
 				for id := range reachableODKUPlanNodes(query) {
 					node := query.Nodes[id]
 					multiDedup := node.GetPreInsertUkCtx().GetInsertIgnoreMultiDedup()
 					if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
-						require.False(t, tc.load, "LOAD must keep its existing dedup bypass")
+						if tc.load {
+							loadDedups++
+							require.Equal(t, plan.Node_FAIL, node.OnDuplicateAction, "ordinary LOAD rejects duplicate primary keys")
+							require.Equal(t, "deptno", node.DedupColName)
+							require.False(t, node.DedupInputKeysUnique, "external input cannot prove primary-key uniqueness")
+						}
 						ignoreArbitration = ignoreArbitration || node.OnDuplicateAction == plan.Node_IGNORE
 					}
 					if multiDedup {
@@ -6378,6 +6385,9 @@ func TestLoadCheckConstraintPolicy(t *testing.T) {
 						require.Equal(t, wantType, node.NodeType)
 						require.Equal(t, tc.filter, node.FilterIsBarrier)
 					}
+				}
+				if tc.load {
+					require.Equal(t, tc.wantLoadDedups, loadDedups, "ordinary LOAD checks its primary key; LOAD IGNORE retains the dedup bypass")
 				}
 				require.Equal(t, !tc.load, ignoreArbitration, "only INSERT IGNORE arbitrates duplicate keys")
 				require.Equal(t, 1, checks, "CHECK must run exactly once per candidate")
