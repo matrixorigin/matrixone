@@ -41,6 +41,8 @@ type arrowLoadClusterOptions struct {
 	useDefaults        bool
 }
 
+const arrowLoadFrontendReadyTimeout = 2 * time.Minute
+
 func startArrowLoadCluster(t testing.TB, cnCount int, enabled, s3Enabled, distributedEnabled bool) embed.Cluster {
 	t.Helper()
 	return startArrowLoadClusterWithOptions(t, arrowLoadClusterOptions{
@@ -154,10 +156,20 @@ func openArrowLoadDB(t testing.TB, c embed.Cluster, cnIndex int) *sql.DB {
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", port))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	require.NoError(t, db.PingContext(ctx))
+	// Service startup precedes frontend authentication/catalog readiness. Use
+	// the embedded-suite readiness budget rather than a ten-second CI race.
+	require.NoError(t, pingArrowLoadFrontend(t.Context(), db), "CN%d frontend readiness", cnIndex)
 	return db
+}
+
+func pingArrowLoadFrontend(parent context.Context, db *sql.DB) error {
+	started := time.Now()
+	ctx, cancel := context.WithTimeout(parent, arrowLoadFrontendReadyTimeout)
+	defer cancel()
+	if err := db.PingContext(ctx); err != nil {
+		return fmt.Errorf("frontend authentication/readiness after %s: %w", time.Since(started), err)
+	}
+	return nil
 }
 
 func mustExec(t testing.TB, db *sql.DB, stmt string, args ...any) {
