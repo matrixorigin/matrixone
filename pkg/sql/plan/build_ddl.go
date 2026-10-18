@@ -1969,9 +1969,6 @@ func buildCTASDefaultFromOrigin(
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), defaultExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
-		return nil, err
-	}
 	if exprHasLocalColumnRef(defaultExpr) {
 		if err := requireExpressionDefaultProtocol(ctx.GetProcess()); err != nil {
 			return nil, err
@@ -1979,6 +1976,9 @@ func buildCTASDefaultFromOrigin(
 	}
 	defaultExpr, err = makePlan2AssignmentCastExpr(ctx.GetContext(), defaultExpr, typ)
 	if err != nil {
+		return nil, err
+	}
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
 		return nil, err
 	}
 	defaultExpr, err = ConstantFold(

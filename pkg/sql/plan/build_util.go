@@ -1008,9 +1008,6 @@ func buildDefaultExprWithColumnsObserved(
 	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, planExpr); err != nil {
-		return nil, err
-	}
 	if exprHasLocalColumnRef(planExpr) {
 		if err := requireExpressionDefaultProtocol(proc); err != nil {
 			return nil, err
@@ -1028,6 +1025,9 @@ func buildDefaultExprWithColumnsObserved(
 	}
 	defaultExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
 	if err != nil {
+		return nil, err
+	}
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, defaultExpr); err != nil {
 		return nil, err
 	}
 	// Constant folding removes the function identity, so rolling-upgrade
@@ -1146,12 +1146,12 @@ func buildOnUpdate(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.T
 	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, planExpr); err != nil {
-		return nil, err
-	}
 
 	onUpdateExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
 	if err != nil {
+		return nil, err
+	}
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, onUpdateExpr); err != nil {
 		return nil, err
 	}
 
@@ -1236,9 +1236,6 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, planExpr); err != nil {
-		return nil, err
-	}
 
 	// Validate: generated column expression cannot contain non-deterministic functions
 	if err := checkExprForVolatileFunc(bindCtx, planExpr); err != nil {
@@ -1253,6 +1250,9 @@ func buildGeneratedExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ p
 	// when the active protocol supports those functions.
 	genExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
 	if err != nil {
+		return nil, err
+	}
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(bindCtx, proc, genExpr); err != nil {
 		return nil, err
 	}
 
@@ -1323,7 +1323,11 @@ func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
 		ov, exists := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
-		if exists && (ov.IsVolatile() || ov.IsRealTimeRelated()) {
+		functionID, overloadID := function.DecodeOverloadID(e.F.Func.Obj)
+		// Internal display conversions are deterministic despite their no-fold flags.
+		// Continue walking their arguments so volatile children are still rejected.
+		storageDisplay := overloadID == 0 && (functionID == function.CAST_INDEX_TO_VALUE || functionID == function.CAST_INDEX_TO_SET_VALUE)
+		if exists && !storageDisplay && (ov.IsVolatile() || ov.IsRealTimeRelated()) {
 			return moerr.NewInvalidInputf(ctx,
 				"expression of generated column cannot refer to a non-deterministic function '%s'", e.F.Func.ObjName)
 		}

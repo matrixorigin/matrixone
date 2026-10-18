@@ -178,6 +178,9 @@ func (c *Compile) Compile(
 	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
+	if err = validateEnumSourceAssignmentProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
 	if err = validateHexMySQLNumericProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
@@ -456,6 +459,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		return nil, err
 	}
 	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
+	if err = validateEnumSourceAssignmentProtocol(c.proc, c.pn); err != nil {
 		return nil, err
 	}
 	if err = validateHexMySQLNumericProtocol(c.proc, c.pn); err != nil {

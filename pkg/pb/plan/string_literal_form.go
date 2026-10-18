@@ -454,6 +454,8 @@ type RemoteExpressionFeatures struct {
 	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
 	// Released overload 0 retains its historical byte-order contract.
 	LeastGreatestCollationSemantics bool
+	// EnumSourceAssignment requires v132 for CAST_VALUE_TO_INDEX overload 1.
+	EnumSourceAssignment bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -489,7 +491,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.DateNumericResultContracts ||
 		features.IncompleteTemporalStrings ||
 		features.DecimalStatisticalResultContracts ||
-		features.TableCollationFunction ||
+		features.TableCollationFunction || features.EnumSourceAssignment ||
 		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
 		features.LeastGreatestCollationSemantics
 }
@@ -960,6 +962,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				features.JSONNumericComparisons = features.JSONNumericComparisons ||
 					isMixedJSONNumericComparison(fn) || ((id == 546 || id == internalJSONComparisonFunctionID) && overload == 1)
 
+				if id == 306 && overload == 1 { // CAST_VALUE_TO_INDEX with a typed ENUM source
+					features.EnumSourceAssignment = true
+				}
 				if id == internalTableCollationFunctionID {
 					features.TableCollationFunction = true
 				}
