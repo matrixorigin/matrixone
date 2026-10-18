@@ -802,6 +802,7 @@ func TestBlockDataReadWithFilterDefersPayload(t *testing.T) {
 func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 	ctx := context.Background()
 	fs := testutil.NewSharedFS()
+	t.Cleanup(func() { fs.Close(ctx) })
 	colTypes := []types.Type{
 		types.T_int32.ToType(),
 		types.New(types.T_array_float32, 2, 0),
@@ -815,7 +816,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 	firstCoordinates := []float32{9, 8, 1, 0, 5, 2, 3, 4}
 	for row, coordinate := range firstCoordinates {
 		require.NoError(t, vector.AppendFixed(input.Vecs[0], int32(row), false, writeMP))
-		require.NoError(t, vector.AppendArray(input.Vecs[1], []float32{coordinate, 0}, false, writeMP))
+		require.NoError(t, vector.AppendArray(input.Vecs[1], []float32{coordinate, 0}, row == 0, writeMP))
 		require.NoError(t, vector.AppendBytes(input.Vecs[2], []byte("payload-"+string(rune('0'+row))), false, writeMP))
 	}
 	input.SetRowCount(len(firstCoordinates))
@@ -836,6 +837,7 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 	for pos := range colTypes {
 		output.Vecs[pos] = vector.NewOffHeapVecWithType(colTypes[pos])
 	}
+	defer output.Clean(queryMP)
 	cacheVectors := containers.NewVectors(len(colTypes) + 2)
 	defer cacheVectors.Free(queryMP)
 	top := &objectio.IndexReaderTopOp{
@@ -974,8 +976,121 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 		require.Zero(t, vec.Length())
 	}
 
+	for _, tc := range []struct {
+		name        string
+		deleted     []uint64
+		storageRows []int64
+		filterSels  []int64 // nil means All; a non-nil empty slice rejects every row.
+		noTopK      bool
+		noWinners   bool
+		wantPre     int
+		wantIDs     []int32
+		wantDists   []float64
+	}{
+		{name: "all_no_deletes", wantPre: 8, wantIDs: []int32{2, 3}, wantDists: []float64{1, 0}},
+		{name: "all_no_winners", noWinners: true, wantPre: 8},
+		{name: "all_delete_before_winners", deleted: []uint64{1}, wantPre: 7, wantIDs: []int32{2, 3}, wantDists: []float64{1, 0}},
+		{name: "explicit_identity", filterSels: []int64{0, 1, 2, 3, 4, 5, 6, 7}, wantPre: 8, wantIDs: []int32{2, 3}, wantDists: []float64{1, 0}},
+		{name: "all_storage_selection", storageRows: []int64{1, 2, 4, 5, 7}, wantPre: 5, wantIDs: []int32{2, 5}, wantDists: []float64{1, 4}},
+		{name: "empty_residual", filterSels: []int64{}, wantPre: 8},
+		{name: "empty_storage_selection", storageRows: []int64{}},
+		{name: "only_null_vector", filterSels: []int64{0}, wantPre: 8},
+		{name: "all_without_topk", noTopK: true, wantPre: 8, wantIDs: []int32{0, 1, 2, 3, 4, 5, 6, 7}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output.CleanOnlyData()
+			defer output.CleanOnlyData()
+			var top *objectio.IndexReaderTopOp
+			if !tc.noTopK {
+				top = &objectio.IndexReaderTopOp{
+					ColPos: 1, Limit: 2, Typ: types.T_array_float32,
+					NumVec: types.ArrayToBytes([]float32{0, 0}), MetricType: metric.Metric_L2sqDistance,
+				}
+				if tc.noWinners {
+					top.UpperBoundType = plan.BoundType_EXCLUSIVE
+					top.UpperBound = 0
+				}
+			}
+			filter := func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+				require.Equal(t, []int{0}, loaded)
+				require.Zero(t, bat.Vecs[1].Length())
+				require.Zero(t, bat.Vecs[2].Length())
+				if tc.filterSels == nil {
+					return engine.ReaderFilterResult{All: true}, nil
+				}
+				bat.Vecs[0].Shrink(tc.filterSels, false)
+				bat.SetRowCount(len(tc.filterSels))
+				return engine.ReaderFilterResult{Sels: tc.filterSels}, nil
+			}
+			var preRows int
+			var readErr error
+			if tc.storageRows != nil {
+				readErr = blockDataReadWithFilter(
+					ctx, &info, nil, []uint16{0, 1, 2}, colTypes, -1, types.TS{},
+					tc.storageRows, fileservice.Policy(0), output, cacheVectors, queryMP, fs,
+					[]int{0}, filter, top, &preRows,
+				)
+			} else {
+				preRows, readErr = BlockDataReadWithFilter(
+					ctx, &info, &blockReadTestDataSource{deleted: tc.deleted},
+					[]uint16{0, 1, 2}, colTypes, -1, timestamp.Timestamp{}, nil, nil,
+					objectio.BlockReadFilter{}, top, fileservice.Policy(0), "filtered-topk-test",
+					output, cacheVectors, queryMP, fs, []int{0}, filter,
+				)
+			}
+			require.NoError(t, readErr)
+			require.Equal(t, tc.wantPre, preRows)
+			require.Equal(t, len(tc.wantIDs), output.RowCount())
+			if len(tc.wantIDs) == 0 {
+				for _, vec := range output.Vecs {
+					require.Zero(t, vec.Length())
+				}
+				return
+			}
+			require.Equal(t, tc.wantIDs, vector.MustFixedColWithTypeCheck[int32](output.Vecs[0]))
+			for pos, id := range tc.wantIDs {
+				require.Equal(t, "payload-"+string(rune('0'+id)), output.Vecs[2].GetStringAt(pos))
+			}
+			if tc.noTopK {
+				require.Equal(t, len(tc.wantIDs), output.Vecs[1].Length())
+				require.True(t, output.Vecs[1].IsNull(0))
+			} else {
+				require.Zero(t, output.Vecs[1].Length(), "Top-K must not materialize embeddings")
+				require.Equal(t, tc.wantDists, vector.MustFixedColWithTypeCheck[float64](output.Vecs[3]))
+			}
+		})
+	}
+
 	output.Clean(queryMP)
 	require.Zero(t, queryMP.CurrNB())
+}
+
+func TestPositionsOfSelectedRows(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		selected, subset, want []int64
+		wantError              bool
+	}{
+		{name: "implicit_identity", subset: []int64{3, 5}, want: []int64{3, 5}},
+		{name: "implicit_identity_empty"},
+		{name: "explicit_empty", selected: []int64{}, want: []int64{}},
+		{name: "nonidentity", selected: []int64{1, 3, 5}, subset: []int64{3, 5}, want: []int64{1, 2}},
+		{name: "missing_from_empty", selected: []int64{}, subset: []int64{3}, wantError: true},
+		{name: "missing_from_subset", selected: []int64{1, 5}, subset: []int64{3}, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			positions, err := positionsOfSelectedRows(tc.selected, tc.subset)
+			if tc.wantError {
+				require.ErrorContains(t, err, "not present in the filtered row set")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, positions)
+			if tc.selected == nil && len(tc.subset) > 0 {
+				require.Same(t, &tc.subset[0], &positions[0], "implicit identity must not allocate a row map")
+			}
+		})
+	}
 }
 
 func TestBlockDataReadInnerAppendableVisibility(t *testing.T) {
