@@ -23,6 +23,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -586,6 +587,7 @@ func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
 		typ.Charset = charset
+		typ.CollationVersion = uint32(types.CollationVersionLegacy)
 		if types.IsUnicodeCollation(uint8(charset)) {
 			typ.CollationVersion = uint32(types.CollationVersionV1)
 		}
@@ -611,6 +613,7 @@ func applyCharsetToPlanType(typ *plan.Type, charset uint32) {
 		return
 	}
 	typ.Charset = uint32(types.CharsetBinary)
+	typ.CollationVersion = uint32(types.CollationVersionLegacy)
 }
 
 func charsetForName(name string) (uint32, bool) {
@@ -1239,7 +1242,7 @@ func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
 		ov, exists := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
-		if exists && (ov.CannotFold() || ov.IsRealTimeRelated()) {
+		if exists && (ov.IsVolatile() || ov.IsRealTimeRelated()) {
 			return moerr.NewInvalidInputf(ctx,
 				"expression of generated column cannot refer to a non-deterministic function '%s'", e.F.Func.ObjName)
 		}
@@ -2341,6 +2344,16 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		return expr, nil
 	}
 	f := expr.GetF()
+	if alterCopyBinaryAssignment(builder.GetContext(), expr.Typ) {
+		target := expr.Typ
+		// Replace the persisted assignment wrapper, not a user-written
+		// explicit CAST inside the expression. Validate its final value once.
+		if f != nil && f.Func != nil && len(f.Args) > 0 &&
+			(f.Func.ObjName == "cast" || f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_strict" || f.Func.ObjName == "cast_ignore") {
+			expr = f.Args[0]
+		}
+		return builder.forceAssignmentCastExpr(expr, target, isIgnore)
+	}
 	if types.T(expr.Typ.Id).IsArrayRelate() && needsSameTypeAssignmentCast(expr.Typ) {
 		// 旧目录中的生成列表达式可能没有赋值 CAST；执行新 DML 时补齐，
 		// 已有的根 CAST 则继续复用，避免重复复制每个向量。
@@ -3015,4 +3028,20 @@ func RewriteCountNotNullColToStarcount(node *plan.Node, tableDef *plan.TableDef)
 		agg.Func.ObjName = "starcount"
 		agg.Func.Obj = function.EncodeOverloadID(int32(function.STARCOUNT), 0)
 	}
+}
+
+// equalFoldKey produces the same equivalence classes used by strings.EqualFold
+// so callers can detect duplicates without pairwise comparisons.
+func equalFoldKey(value string) string {
+	var folded strings.Builder
+	for _, r := range value {
+		min := r
+		for next := unicode.SimpleFold(r); next != r; next = unicode.SimpleFold(next) {
+			if next < min {
+				min = next
+			}
+		}
+		folded.WriteRune(min)
+	}
+	return folded.String()
 }

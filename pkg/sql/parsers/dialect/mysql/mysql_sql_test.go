@@ -61,6 +61,29 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestAlterConstraintDropIntent(t *testing.T) {
+	for _, test := range []struct {
+		clause string
+		typ    tree.AlterTableDropType
+	}{
+		{"drop check ck", tree.AlterTableDropCheck},
+		{"drop constraint ck", tree.AlterTableDropConstraint},
+		{"drop foreign key ck", tree.AlterTableDropForeignKey},
+	} {
+		t.Run(test.clause, func(t *testing.T) {
+			sql := "alter table t " + test.clause
+			stmt, err := ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			alter := stmt.(*tree.AlterTable)
+			drop := alter.Options[0].(*tree.AlterOptionDrop)
+			require.Equal(t, test.typ, drop.Typ)
+			require.Equal(t, tree.Identifier("ck"), drop.Name)
+			require.Equal(t, sql, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
 func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -5111,7 +5134,7 @@ var (
 			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
-			output: "alter table t1 charset = a collate = b",
+			output: "alter table t1 convert to character set a collate = b",
 		}, {
 			input:  "alter table t1 DISABLE KEYS",
 			output: "alter table t1 charset = DISABLE",
@@ -5287,7 +5310,7 @@ var (
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
-			output: "alter table tbl1 drop foreign key fk_name",
+			output: "alter table tbl1 drop constraint fk_name",
 		},
 		{
 			input:  "explain force execute st using @a",
@@ -7055,6 +7078,26 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, ast)
 			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
+
+func TestAlterDatabaseCollationSyntax(t *testing.T) {
+	for _, sql := range []string{
+		"alter database d character set utf8mb4 collate utf8mb4_bin",
+		"alter schema d default collate = utf8mb4_bin default character set = utf8mb4",
+		"alter database collate utf8mb4_bin",
+		"alter database d character set utf8mb4",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Contains(t, formatted, "alter database")
+			reparsed, err := ParseOne(t.Context(), formatted, 1)
+			require.NoError(t, err)
+			reparsed.Free()
 		})
 	}
 }

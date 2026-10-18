@@ -62,16 +62,19 @@ func getCheckState(
 
 type tnServiceChecker struct {
 	hakeeper.CheckerCommonFields
-	tnState pb.TNState
+	tnState    pb.TNState
+	controller *operator.Controller
 }
 
 func NewTNServiceChecker(
 	commonFields hakeeper.CheckerCommonFields,
 	tnState pb.TNState,
+	controller *operator.Controller,
 ) hakeeper.ModuleChecker {
 	return &tnServiceChecker{
 		CheckerCommonFields: commonFields,
 		tnState:             tnState,
+		controller:          controller,
 	}
 }
 
@@ -87,6 +90,7 @@ func (c *tnServiceChecker) Check() []*operator.Operator {
 	for _, node := range stores.ExpiredStores() {
 		runtime.ServiceRuntime(c.ServiceID).Logger().Info("node is expired", zap.String("uuid", node.ID))
 	}
+	pending := c.pendingStarts(stores, reportedShards)
 	if len(stores.WorkingStores()) < 1 {
 		runtime.ServiceRuntime(c.ServiceID).Logger().Warn("no working tn stores")
 		return nil
@@ -95,10 +99,18 @@ func (c *tnServiceChecker) Check() []*operator.Operator {
 	mapper := parseClusterInfo(c.Cluster)
 
 	var operators []*operator.Operator
+	for _, record := range c.Cluster.TNShards {
+		if op := pending[record.ShardID]; op != nil {
+			operators = append(operators, op)
+		}
+	}
+	slices.SortFunc(operators, func(a, b *operator.Operator) int {
+		return cmp.Compare(a.ShardID(), b.ShardID())
+	})
 
 	// 1. check reported tn state
 	operators = append(operators,
-		checkReportedState(c.ServiceID, reportedShards, mapper, stores.WorkingStores(), c.Alloc)...,
+		checkReportedState(c.ServiceID, reportedShards, mapper, stores.WorkingStores(), c.Alloc, pending)...,
 	)
 
 	// 2. check expected tn state
@@ -111,7 +123,7 @@ func (c *tnServiceChecker) Check() []*operator.Operator {
 			c.Alloc,
 			c.Cluster,
 			c.Cfg,
-			c.CurrentTick)...,
+			c.CurrentTick, pending)...,
 	)
 
 	if c.User.Username != "" {
@@ -124,6 +136,40 @@ func (c *tnServiceChecker) Check() []*operator.Operator {
 	}
 
 	return operators
+}
+
+// pendingStarts reconciles the controller's existing start attempts with real
+// reports. The per-check map is an index, not another owner of retry state.
+func (c *tnServiceChecker) pendingStarts(stores *util.ClusterStores, reports *reportedShards) map[uint64]*operator.Operator {
+	pending := make(map[uint64]*operator.Operator)
+	working := make(map[string]*util.Store, len(stores.WorkingStores()))
+	for _, store := range stores.WorkingStores() {
+		working[store.ID] = store
+	}
+	for _, record := range c.Cluster.TNShards {
+		// Removal mutates the registered slice, so walk a snapshot of its pointers.
+		for _, op := range slices.Clone(c.controller.GetOperators(record.ShardID)) {
+			steps := op.OpSteps()
+			if len(steps) != 1 {
+				continue
+			}
+			start, ok := steps[0].(operator.AddTnReplica)
+			if !ok {
+				continue
+			}
+			shard, err := reports.getShard(record.ShardID)
+			reported := err == nil && len(shard.workingReplicas()) != 0
+			if op.IsEnd() || working[start.StoreID] == nil || reported || pending[record.ShardID] != nil {
+				// Another replica ID can already own this shard: the receiver is
+				// shard-keyed and cannot replace it by replaying an obsolete start.
+				c.controller.RemoveOperator(op)
+				continue
+			}
+			pending[record.ShardID] = op
+			working[start.StoreID].Length++
+		}
+	}
+	return pending
 }
 
 // schedule generator operator as much as possible

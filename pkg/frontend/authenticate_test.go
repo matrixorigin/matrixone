@@ -4875,6 +4875,12 @@ func TestBackUpStatementPrivilege(t *testing.T) {
 		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
+		tenant.DefaultRole = publicRoleName
+		tenant.DefaultRoleID = publicRoleID
+		ok, _, err = authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+
 	})
 
 	convey.Convey("backup fail", t, func() {
@@ -10314,6 +10320,55 @@ func Test_doDropRole(t *testing.T) {
 	})
 }
 
+func TestDropRoleInvalidatesOnlyCommittedChanges(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		present    bool
+		failureSQL string
+	}{
+		{name: "all absent"},
+		{name: "one absent one present", present: true},
+		{name: "delete failure", present: true, failureSQL: fmt.Sprintf(deleteRoleFromMoRoleRuleFormat, int64(10))},
+		{name: "commit failure", present: true, failureSQL: "commit;"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+			bh := &backgroundExecTest{}
+			bh.init()
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+			ses := newSes(&privilege{}, ctrl)
+			ses.ruleCache = map[string]string{"db.t": "select * from db.t"}
+			stmt := &PrepareStmt{Name: "old", rewritePolicyCaptured: true, rewritePolicyEnabled: true}
+			ses.prepareStmts = map[string]*PrepareStmt{"old": stmt}
+			for _, name := range []string{"missing", "role10"} {
+				lookup, err := getSqlForRoleIdOfRole(context.Background(), name)
+				require.NoError(t, err)
+				var rows [][]interface{}
+				if name == "role10" && tc.present {
+					rows = [][]interface{}{{int64(10)}}
+				}
+				bh.sql2result[lookup] = newMrsForRoleIdOfRole(rows)
+			}
+			if tc.failureSQL != "" {
+				bh.sql2err[tc.failureSQL] = fmt.Errorf("injected SQL failure")
+			}
+			err := doDropRole(ses.GetTxnHandler().GetTxnCtx(), ses, &tree.DropRole{
+				IfExists: true, Roles: []*tree.Role{{UserName: "missing"}, {UserName: "role10"}},
+			})
+			if tc.failureSQL == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, "injected SQL failure")
+			}
+			changed := tc.present && tc.failureSQL == ""
+			require.Equal(t, changed, stmt.rewritePolicyInvalidated.Load())
+			require.Equal(t, changed, ses.ruleCache == nil)
+		})
+	}
+}
+
 func Test_doDropUser(t *testing.T) {
 	convey.Convey("drop user succ", t, func() {
 		ctrl := gomock.NewController(t)
@@ -12893,6 +12948,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
+	seedRewriteRuleCacheProofForTest(ses)
 	ses.priv = priv
 
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
@@ -13141,6 +13197,14 @@ func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
 		return bt.resultSets
 	}
 	result, ok := bt.sql2result[bt.currentSql]
+	// Legacy fixture databases have no persisted charset/collation row.
+	// Tests of the new metadata contract provide explicit results/errors.
+	if !ok && strings.HasPrefix(bt.currentSql, "select cast(dd.collation_id as varchar(10)), cast(dd.collation_revision as varchar(10)), cast(dd.version as varchar(20)) from mo_catalog.mo_database") {
+		return []interface{}{defaultsRestoreRows(nil)}
+	}
+	if !ok && strings.HasPrefix(bt.currentSql, "select relname from mo_catalog.mo_tables") && strings.HasSuffix(bt.currentSql, "relname = 'mo_database_defaults'") {
+		return []interface{}{newMrsForSqlForShowDatabases(nil)}
+	}
 	if !ok &&
 		strings.HasPrefix(bt.currentSql, "select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = ") {
 		return []interface{}{newMrsForInheritedRoleIdOfRoleId([][]interface{}{})}
@@ -14555,6 +14619,21 @@ func TestRevokedActiveRoleCannotUseAuthorizationFallbacks(t *testing.T) {
 		require.Equal(t, []string{"begin;", getSqlForCheckUserGrantForAuthorization(3, 2), "commit;"}, bh.executedSQLs, "revoked role must not reach ownership fallback")
 	})
 
+	for _, stmt := range []tree.Statement{&tree.ShowTables{DBName: "db"}, &tree.ShowColumns{Table: tree.NewUnresolvedObjectName("db", "t")}, &tree.ShowCreateTable{Name: tree.NewUnresolvedObjectName("db", "t")}} {
+		t.Run(fmt.Sprintf("revoked metadata %T", stmt), func(t *testing.T) {
+			ses := newRevokedSession(determinePrivilegeSetOfStatement(stmt))
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[getSqlForCheckUserGrantForAuthorization(3, 2)] = newMrsForCheckUserGrant(nil)
+			stub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer stub.Reset()
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(t.Context(), ses, stmt)
+			require.False(t, ok)
+			require.Error(t, err)
+			require.Equal(t, []string{"begin;", getSqlForCheckUserGrantForAuthorization(3, 2), "commit;"}, bh.executedSQLs, "revoked active role cannot enter metadata fallback")
+		})
+	}
+
 	t.Run("privilege grant option", func(t *testing.T) {
 		stmt := &tree.GrantPrivilege{
 			Privileges: []*tree.Privilege{{Type: tree.PRIVILEGE_TYPE_STATIC_SELECT}},
@@ -14679,6 +14758,8 @@ func TestDoRemoveStageFiles(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 
 	dir := t.TempDir()

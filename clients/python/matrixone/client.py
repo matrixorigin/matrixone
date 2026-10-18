@@ -1292,9 +1292,11 @@ class Client(BaseMatrixOneClient):
                         return result_set
 
             # String SQL - original implementation
-            final_sql = self._substitute_parameters(sql_or_stmt, params)
-
             with self._engine.begin() as conn:
+                from ._sql_literals import connection_sql_mode
+
+                mode = connection_sql_mode(conn) if params is not None and '\\' in sql_or_stmt else ''
+                final_sql = self._substitute_parameters(sql_or_stmt, params, sql_mode=mode)
                 # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
                 # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
                 if hasattr(conn, 'exec_driver_sql'):
@@ -1469,11 +1471,11 @@ class Client(BaseMatrixOneClient):
         executor = ClientExecutor(self)
         return executor.batch_insert(table_name, data_list)
 
-    def _substitute_parameters(self, sql: str, params=None) -> str:
+    def _substitute_parameters(self, sql: str, params=None, *, sql_mode='') -> str:
         """Render legacy parameters outside SQL literals, identifiers and comments."""
         from ._sql_literals import substitute_parameters
 
-        return substitute_parameters(sql, params)
+        return substitute_parameters(sql, params, sql_mode=sql_mode)
 
     def get_sqlalchemy_engine(self) -> Engine:
         """
@@ -3331,13 +3333,11 @@ class Session(SQLAlchemySession):
             # Check if this is a string SQL
             if isinstance(sql_or_stmt, str):
                 # String SQL - apply MatrixOne parameter substitution
-                final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
-                from sqlalchemy import text
+                from ._session_execution import execute_session_sql
 
-                # Call parent's execute() with text()
-                result = super().execute(text(final_sql.replace(':', r'\:')), **kwargs)
+                result = execute_session_sql(super().execute, sql_or_stmt, client=self.client, params=params, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)

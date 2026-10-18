@@ -82,6 +82,11 @@ func TestIssue29849LoadDataSetNullIfUserVariableSuppliesNotNullTarget(t *testing
 
 func assertIssue29849LoadUserVariablePlan(t *testing.T, plan *planpb.Plan) {
 	t.Helper()
+	assertLoadUserVariablePlan(t, plan, 0)
+}
+
+func assertLoadUserVariablePlan(t *testing.T, plan *planpb.Plan, expectedCollation uint32) *planpb.Expr {
+	t.Helper()
 	query := plan.GetQuery()
 	require.NotNil(t, query)
 	require.True(t, query.LoadTag)
@@ -111,7 +116,8 @@ func assertIssue29849LoadUserVariablePlan(t *testing.T, plan *planpb.Plan) {
 	require.NotEmpty(t, rawColumn)
 	require.Len(t, externalScan.TableDef.Cols, 4)
 	require.Equal(t, rawColumn, externalScan.TableDef.Cols[3].Name)
-	require.Equal(t, int32(types.T_varchar), externalScan.TableDef.Cols[3].Typ.Id)
+	require.Equal(t, int32(types.T_text), externalScan.TableDef.Cols[3].Typ.Id)
+	require.Equal(t, int32(types.MaxLongTextLen), externalScan.TableDef.Cols[3].Typ.Width)
 
 	var loadProject *planpb.Node
 	for _, node := range query.Nodes {
@@ -124,11 +130,28 @@ func assertIssue29849LoadUserVariablePlan(t *testing.T, plan *planpb.Plan) {
 	require.Len(t, loadProject.ProjectList, 4)
 	assignment := loadProject.ProjectList[3].GetF()
 	require.Equal(t, "cast_assign", assignment.GetFunc().GetObjName())
-	nullIf := assignment.GetArgs()[0].GetF()
+	operand := assignment.GetArgs()[0]
+	if expectedCollation != 0 {
+		require.Equal(t, expectedCollation, operand.Typ.Charset)
+		require.Equal(t, int32(types.T_text), operand.Typ.Id)
+		require.Equal(t, int32(types.MaxLongTextLen), operand.Typ.Width)
+		require.True(t, operand.Typ.CollationCoercibilitySet)
+		require.Zero(t, operand.Typ.CollationCoercibility)
+		for operand.GetF().GetFunc().GetObjName() == "cast" {
+			operand = operand.GetF().GetArgs()[0]
+		}
+	}
+	nullIf := operand.GetF()
 	require.Equal(t, "case", nullIf.GetFunc().GetObjName())
 	comparison := nullIf.GetArgs()[0].GetF()
 	require.Equal(t, "=", comparison.GetFunc().GetObjName())
 	require.Equal(t, int32(3), comparison.GetArgs()[0].GetCol().GetColPos())
-	require.Equal(t, "NULL", comparison.GetArgs()[1].GetLit().GetSval())
+	sentinel := comparison.GetArgs()[1]
+	// The raw LONGTEXT domain may require casting the VARCHAR sentinel.
+	for sentinel.GetF().GetFunc().GetObjName() == "cast" {
+		sentinel = sentinel.GetF().GetArgs()[0]
+	}
+	require.Equal(t, "NULL", sentinel.GetLit().GetSval())
 	require.Equal(t, int32(3), nullIf.GetArgs()[2].GetCol().GetColPos())
+	return assignment.GetArgs()[0]
 }

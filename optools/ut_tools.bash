@@ -100,11 +100,21 @@ function install_go_ut_analysis() {
            $1 == "=>" { replaced = 1 }
            END { exit !(pinned && !replaced) }
        '; then
+        printf '%s\n' "${installed_tool}"
         return 0
     fi
 
+    # Return the tool that Go installed, which may be outside PATH or shadowed
+    # there by a stale version. Keep install diagnostics out of the path result.
     retry_command "${max_attempts}" "${delay_seconds}" \
-        go install "github.com/matrixorigin/go-ut-analysis@${GO_UT_ANALYSIS_VERSION}"
+        go install "github.com/matrixorigin/go-ut-analysis@${GO_UT_ANALYSIS_VERSION}" >&2 || return $?
+    local tool_dir
+    tool_dir=$(go env GOBIN) || return $?
+    if [[ -z "${tool_dir}" ]]; then
+        tool_dir=$(go env GOPATH) || return $?
+        tool_dir="${tool_dir%%:*}/bin"
+    fi
+    printf '%s\n' "${tool_dir}/go-ut-analysis"
 }
 
 # Partition roots from the exact race binary. Keep each root indivisible so

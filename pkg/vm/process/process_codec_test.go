@@ -854,14 +854,16 @@ func TestCodecServiceEncodeDecodeAndLookup(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 
-	info, err := proc.BuildProcessInfo("select 3")
-	require.NoError(t, err)
+	var info pipeline.ProcessInfo
+	require.NoError(t, info.Unmarshal(data))
+	require.Equal(t, proc.Base.SessionInfo.Account, info.SessionInfo.Account)
 
 	decodedProc, err := svc.Decode(context.Background(), info)
 	require.NoError(t, err)
 	require.Equal(t, info.Id, decodedProc.QueryId())
 	require.Equal(t, info.UnixTime, decodedProc.Base.UnixTime)
 	require.Equal(t, info.SessionInfo.User, decodedProc.Base.SessionInfo.User)
+	require.Equal(t, info.SessionInfo.Account, decodedProc.Base.SessionInfo.Account)
 	require.Equal(t, info.SessionInfo.LockWaitTimeout, decodedProc.Base.SessionInfo.LockWaitTimeout)
 	require.Equal(t, info.SessionInfo.MatrixoneNativeMode, decodedProc.Base.SessionInfo.MatrixOneNativeMode)
 	require.False(t, decodedProc.Base.SessionInfo.ExplicitZeroTemporalCastReturnsNull)
@@ -1114,4 +1116,32 @@ func TestGetCodecServicePanicsWhenMissing(t *testing.T) {
 	require.Panics(t, func() {
 		_ = GetCodecService(rtSvc)
 	})
+}
+
+func TestSelectStatementProfileCodecRoundTrip(t *testing.T) {
+	proc, _ := newCodecTestProcess(t)
+	defer proc.Free()
+	proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
+	proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
+	info, err := proc.BuildProcessInfo("select 1/0")
+	require.NoError(t, err)
+	require.True(t, info.StatementRuntimeSelect)
+	data, err := info.Marshal()
+	require.NoError(t, err)
+	var decodedInfo pipeline.ProcessInfo
+	require.NoError(t, decodedInfo.Unmarshal(data))
+	svc := NewCodecService(fakeCodecTxnClient{op: fakeCodecTxnOperator{}}, nil, nil, nil, nil, nil, nil, nil).(*codecService)
+	for _, selectStatement := range []bool{true, false} {
+		func() {
+			decodedInfo.StatementRuntimeSelect = selectStatement
+			decoded, err := svc.Decode(defines.AttachAccountId(context.Background(), 42), decodedInfo)
+			require.NoError(t, err)
+			defer decoded.Free()
+			require.Equal(t, selectStatement, decoded.IsSelectStatement())
+			require.Equal(t, selectStatement, decoded.DivisionByZeroWarningsEnabled())
+			forwarded, err := decoded.BuildProcessInfo("select 1/0")
+			require.NoError(t, err)
+			require.Equal(t, selectStatement, forwarded.StatementRuntimeSelect)
+		}()
+	}
 }

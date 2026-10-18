@@ -259,7 +259,15 @@ type Session struct {
 
 	cache       *privilegeCache
 	ruleCache   map[string]string // rewrite rule cache, nil means not loaded
-	ruleCacheMu sync.RWMutex      // protects ruleCache and rewritePolicyGeneration
+	ruleCacheMu sync.RWMutex      // protects ruleCache, ruleCacheVersion and rewritePolicyGeneration
+	// ruleCacheVersion is the catalog proof stamped when ruleCache was loaded.
+	// A loaded cache is reused only while a fresh proof still matches it, so a
+	// rule change committed through another CN is observed here (issue #29133).
+	// The zero version never authorizes reuse.
+	ruleCacheIdentity        rewriteRuleIdentity
+	ruleCacheVersion         any
+	ruleCacheVersionProvider func(context.Context, *Session) (any, error)
+	ruleCacheRevision        uint64 // changes on every publication, including equal policy
 	// rewritePolicyGeneration changes whenever session policy state is
 	// invalidated. Prepared statements capture this generation at publication
 	// time so a request-frozen policy cannot be registered after a refresh.
@@ -2557,9 +2565,16 @@ func (ses *Session) InvalidatePrivilegeCache() {
 	ses.invalidateRewriteRuleCacheLocked()
 }
 
-func (ses *Session) invalidateRewriteRuleCache() {
+func (ses *Session) invalidateRewriteRuleCache(accountID uint32) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
+	// Check identity under the same lock as invalidation. A SessionManager
+	// snapshot may still contain a session that has since been closed; nil is
+	// not the sys account (ID zero). Account-local metadata cannot change
+	// another tenant's rewrite policy, even when their role IDs coincide.
+	if ses.tenant == nil || ses.tenant.GetTenantID() != accountID {
+		return
+	}
 	ses.invalidateRewriteRuleCacheLocked()
 	// ALTER ROLE ... ADD/DROP RULE changes the policy definition itself. The
 	// session cache may be unloaded or may describe the old role state, so every
@@ -2576,6 +2591,7 @@ func (ses *Session) invalidateRewriteRuleCacheLocked() {
 	ses.ruleCacheMu.Lock()
 	roleRulesActive := len(ses.ruleCache) > 0
 	ses.ruleCache = nil
+	ses.ruleCacheVersion = nil
 	ses.rewritePolicyGeneration++
 	ses.ruleCacheMu.Unlock()
 
@@ -2624,6 +2640,20 @@ func (ses *Session) validatePreparedStatementsAfterRewritePolicyRefresh(
 }
 
 func (ses *Session) refreshRewritePolicyAndValidatePrepared(ctx context.Context) {
+	if prior := authorizationEpochFor(ctx, ses); prior != nil {
+		prior.mu.Lock()
+		minimum := prior.minimum
+		prior.mu.Unlock()
+		if rewriteRuleSessionIdentity(ses) != prior.identity || ses.getLastCommitTS().Greater(minimum) {
+			// SET ROLE has completed its principal transition. Validate handles with
+			// a complete new policy owner; the earlier rewrite/admission cannot lend
+			// authorization to this new principal. The caller's epoch remains invalid
+			// for any further authorization and ends at its statement boundary.
+			var validation *authorizationEpoch
+			ctx, validation = beginAuthorizationEpoch(ctx, ses, nil)
+			defer validation.end()
+		}
+	}
 	policy, err := captureRewritePolicy(ctx, ses)
 	ses.validatePreparedStatementsAfterRewritePolicyRefresh(policy, err)
 }
@@ -2674,6 +2704,7 @@ func (ses *Session) InitBackExec(txnOp TxnOperator, db string, callBack outputCa
 		be.backSes.forcePessimisticRC = opts[0].forcePessimisticRC
 		be.backSes.cloneSnapshotUsesBackgroundTxn = opts[0].cloneSnapshotUsesBackgroundTxn
 		be.backSes.cancelTxnCreateWithRequest = opts[0].cancelTxnCreateWithRequest
+		be.backSes.authorizationSnapshot = opts[0].authorizationSnapshot
 	}
 	return be
 }
@@ -2711,7 +2742,7 @@ func (ses *Session) AppendData(row []interface{}) {
 func (ses *Session) InitExportConfig(ep *tree.ExportParam) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	ses.ep = &ExportConfig{userConfig: ep, service: ses.service}
+	ses.ep = &ExportConfig{userConfig: ep, service: ses.service, proc: ses.proc}
 }
 
 func (ses *Session) GetExportConfig() *ExportConfig {
@@ -3083,23 +3114,21 @@ func (ses *Session) GetPrepareStmt(ctx context.Context, name string) (*PrepareSt
 func (ses *Session) getPrepareStmt(ctx context.Context, name string, allowInvalidated bool) (*PrepareStmt, error) {
 	normalizedName := strings.ToLower(name)
 	ses.mu.Lock()
-	// Binary EXECUTE does not capture a COM_QUERY policy. A failed role switch
-	// can leave the cache unloaded and a previously disabled handle alive, so
-	// resolve the current mandatory rules before permitting that stale handle.
-	// Catalog I/O must stay outside ses.mu and ruleCacheMu.
+	// Binary EXECUTE has no COM_QUERY capture. Refresh through the same
+	// policy owner before looking up a live handle; cleanup never requires I/O.
 	if !allowInvalidated {
 		stmt := ses.prepareStmts[normalizedName]
-		ses.ruleCacheMu.RLock()
-		needsRefresh := stmt != nil && stmt.rewritePolicyCaptured &&
-			!stmt.rewritePolicyInvalidated.Load() &&
-			stmt.rewritePolicyGeneration != ses.rewritePolicyGeneration && ses.ruleCache == nil
-		ses.ruleCacheMu.RUnlock()
-		if needsRefresh {
+		if stmt != nil && stmt.rewritePolicyCaptured && !stmt.rewritePolicyInvalidated.Load() &&
+			!preparedPolicyAlreadyRefreshedLocked(ctx, ses) {
 			ses.mu.Unlock()
-			ses.refreshRewritePolicyAndValidatePrepared(ctx)
+			if err := refreshPreparedRewritePolicy(ctx, ses); err != nil {
+				// EXECUTE and FETCH own the error cleanup of this known handle.
+				return stmt, err
+			}
 			ses.mu.Lock()
 		}
 	}
+
 	defer ses.mu.Unlock()
 	if prepareStmt, ok := ses.prepareStmts[normalizedName]; ok {
 		if !allowInvalidated {
@@ -4169,9 +4198,11 @@ func (ses *Session) inheritPhysicalConnection(prev *Session) {
 	ses.proxyAddr = prev.proxyAddr
 }
 
-// reset resets the ses instance and copy some fields of prev, then
-// close the prev.
-func (ses *Session) reset(ctx context.Context, prev *Session) error {
+// resetWith rebuilds the candidate session from the account-global snapshot
+// and optionally lets the caller publish connection-specific state before the
+// previous generation is retired. Keeping that hook before closeForReset makes
+// a failed candidate initialization leave the live session untouched.
+func (ses *Session) resetWith(ctx context.Context, prev *Session, beforeClose func() error) error {
 	if ses == nil || prev == nil {
 		return nil
 	}
@@ -4214,6 +4245,11 @@ func (ses *Session) reset(ctx context.Context, prev *Session) error {
 	}
 	if err != nil {
 		return err
+	}
+	if beforeClose != nil {
+		if err = beforeClose(); err != nil {
+			return err
+		}
 	}
 
 	return prev.closeForReset(ctx)
@@ -4387,16 +4423,18 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 	if _, ok := leadingHintContent(innerSQL); ok {
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
-	policy, err := captureRewritePolicy(ctx, ses)
-	if err != nil {
-		return err
-	}
-
 	tempExecCtx := &ExecCtx{
 		reqCtx:            ctx,
 		inMigration:       true,
 		ses:               ses,
 		executeParamTypes: p.paramTypes,
+	}
+	var migrationEpoch *authorizationEpoch
+	tempExecCtx.reqCtx, migrationEpoch = beginAuthorizationEpoch(ctx, ses, tempExecCtx)
+	defer migrationEpoch.end()
+	policy, err := captureRewritePolicy(tempExecCtx.reqCtx, ses)
+	if err != nil {
+		return err
 	}
 	defer tempExecCtx.Close()
 	return doComQuery(ses, tempExecCtx, &UserInput{

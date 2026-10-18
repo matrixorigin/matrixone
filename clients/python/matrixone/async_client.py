@@ -874,6 +874,14 @@ class AsyncClient(BaseMatrixOneClient):
             echo=False,  # Set to True for SQL logging
         )
 
+        import sqlalchemy
+
+        version = getattr(sqlalchemy, '__version__', '')
+        if isinstance(version, str) and version.startswith('1.4.'):
+            # 1.4 infers ping's signature from PyMySQL, but the aiomysql
+            # adapter still requires reconnect=False even with PyMySQL 1.2.
+            engine.dialect._send_false_to_ping = True
+
         return engine
 
     def _initialize_vector_managers(self) -> None:
@@ -1360,9 +1368,13 @@ class AsyncClient(BaseMatrixOneClient):
                         return async_result
 
             # String SQL - original implementation
-            final_sql = self._substitute_parameters(sql_or_stmt, params)
-
             async with self._engine.begin() as conn:
+                from ._sql_literals import connection_sql_mode
+
+                mode = (
+                    await conn.run_sync(connection_sql_mode) if params is not None and '\\' in sql_or_stmt else ''
+                )
+                final_sql = self._substitute_parameters(sql_or_stmt, params, sql_mode=mode)
                 # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
                 # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
                 if hasattr(conn, 'exec_driver_sql'):
@@ -1407,11 +1419,11 @@ class AsyncClient(BaseMatrixOneClient):
 
             raise _classify_db_error(e, sql_or_stmt) from None
 
-    def _substitute_parameters(self, sql: str, params=None) -> str:
+    def _substitute_parameters(self, sql: str, params=None, *, sql_mode='') -> str:
         """Render legacy parameters outside SQL literals, identifiers and comments."""
         from ._sql_literals import substitute_parameters
 
-        return substitute_parameters(sql, params)
+        return substitute_parameters(sql, params, sql_mode=sql_mode)
 
     def _build_login_info(self, user: str, account: Optional[str] = None, role: Optional[str] = None) -> tuple[str, dict]:
         """

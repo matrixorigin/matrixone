@@ -47,7 +47,6 @@ func TestStatementParameterDiagnosticCapabilities(t *testing.T) {
 		{"period_add", []types.T{types.T_int64, types.T_int64}, true},
 		{"period_diff", []types.T{types.T_int64, types.T_int64}, true},
 		{"abs", []types.T{types.T_int64}, false},
-		{"str_to_date", []types.T{types.T_varchar, types.T_varchar, types.T_datetime}, false},
 		// Interval normalization communicates NULL/sentinel to its arithmetic
 		// consumer. It does not itself publish a SQL evaluation diagnostic.
 		{"to_interval_microsecond", []types.T{types.T_varchar, types.T_int64}, false},
@@ -59,6 +58,29 @@ func TestStatementParameterDiagnosticCapabilities(t *testing.T) {
 			expr.GetF().Args[0].Expr = &plan.Expr_Col{Col: &plan.ColRef{}}
 			require.False(t, IsStatementConstantInput(expr))
 			require.False(t, MayDiagnoseStatementParameter(expr))
+		})
+	}
+	// These calls own diagnostics per evaluated row. Parameters do not make
+	// them statement-level diagnostic owners; safe folding still uses a probe.
+	for _, tc := range []struct {
+		name string
+		args []types.T
+	}{
+		{"ln", []types.T{types.T_float64}},
+		{"log", []types.T{types.T_float64}},
+		{"log", []types.T{types.T_float64, types.T_float64}},
+		{"log2", []types.T{types.T_float64}},
+		{"log10", []types.T{types.T_float64}},
+		{"format", []types.T{types.T_varchar, types.T_int64, types.T_varchar}},
+		{"str_to_date", []types.T{types.T_varchar, types.T_varchar, types.T_datetime}},
+		{"str_to_date", []types.T{types.T_varchar, types.T_varchar, types.T_date}},
+		{"str_to_date", []types.T{types.T_varchar, types.T_varchar, types.T_time}},
+	} {
+		t.Run("row_diagnostics/"+tc.name, func(t *testing.T) {
+			expr := diagnosticTestCall(t, tc.name, tc.args...)
+			require.False(t, IsStatementConstantInput(expr))
+			require.False(t, MayDiagnoseStatementParameter(expr))
+			require.True(t, IsFoldCandidate(expr, true))
 		})
 	}
 	typedDate := diagnosticTestCall(t, "date", types.T_datetime)
@@ -96,6 +118,40 @@ func TestStatementParameterDiagnosticCapabilities(t *testing.T) {
 	require.False(t, MayDiagnoseStatementParameter(constant), "literals use isolated evaluation probing")
 	require.False(t, IsStatementConstantInput(nil))
 	require.False(t, MayDiagnoseStatementParameter(nil))
+}
+
+func TestExplicitDecimalCastDiagnosticOwnership(t *testing.T) {
+	for _, source := range []types.T{types.T_int64, types.T_float64, types.T_decimal128, types.T_varchar} {
+		for _, target := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
+			for _, representation := range []string{"implicit", "explicit overload", "explicit syntax"} {
+				t.Run(source.String()+"/"+target.String()+"/"+representation, func(t *testing.T) {
+					expr := diagnosticTestCall(t, "cast", source, target)
+					expr.Typ.Id = int32(target)
+					fn := expr.GetF()
+					fn.Args[1].Expr = &plan.Expr_T{T: &plan.TargetType{}}
+					if representation == "explicit overload" {
+						fn.Func.Obj = EncodeOverloadID(CAST, 1)
+					}
+					fn.SyntaxExplicitCast = representation == "explicit syntax"
+					want := representation != "implicit"
+					require.Equal(t, want, IsExplicitDecimalCast(expr))
+					require.Equal(t, want, ContainsRowScopedConversion(expr))
+					if want {
+						require.False(t, MayDiagnoseStatementParameter(expr))
+					}
+				})
+			}
+		}
+	}
+	require.False(t, IsExplicitDecimalCast(nil))
+	require.False(t, IsExplicitDecimalCast(&plan.Expr{Typ: plan.Type{Id: int32(types.T_decimal64)}}))
+	require.False(t, IsExplicitDecimalCast(&plan.Expr{
+		Typ: plan.Type{Id: int32(types.T_decimal64)},
+		Expr: &plan.Expr_F{F: &plan.Function{
+			Func: &plan.ObjectRef{Obj: EncodeOverloadID(CAST, 1)},
+			Args: []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_interval)}}},
+		}},
+	}), "classification must reject unsupported source domains without constructing a runtime type")
 }
 
 func diagnosticTestCall(t *testing.T, name string, kinds ...types.T) *plan.Expr {

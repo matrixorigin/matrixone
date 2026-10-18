@@ -396,24 +396,26 @@ func TestProperty10_CacheInvalidation(t *testing.T) {
 
 func TestInvalidateRoleRuleCachesAcrossSessions(t *testing.T) {
 	rm := &RoutineManager{sessionManager: queryservice.NewSessionManager()}
-	newSession := func() *Session {
+	newSession := func(accountID uint32) *Session {
 		ses := &Session{
 			feSessionImpl: feSessionImpl{
 				uuid:   uuid.New(),
-				tenant: &TenantInfo{Tenant: sysAccountName},
+				tenant: &TenantInfo{Tenant: fmt.Sprint(accountID), TenantID: accountID},
 			},
 			ruleCache: map[string]string{"db.t": "select 1 from db.t"},
 			prepareStmts: map[string]*PrepareStmt{
 				"old": {Name: "old", rewritePolicyCaptured: true, rewritePolicyEnabled: true},
 			},
 		}
+		seedRewriteRuleCacheProofForTest(ses)
 		ses.setRoutineManager(rm)
 		rm.sessionManager.AddSession(ses)
 		return ses
 	}
 
-	mutatingSession := newSession()
-	otherSession := newSession()
+	mutatingSession := newSession(0)
+	otherSession := newSession(0)
+	unrelatedSession := newSession(1)
 	invalidateRoleRuleCaches(mutatingSession)
 
 	mutatingSession.ruleCacheMu.RLock()
@@ -425,7 +427,48 @@ func TestInvalidateRoleRuleCachesAcrossSessions(t *testing.T) {
 	for _, ses := range []*Session{mutatingSession, otherSession} {
 		_, err := ses.GetPrepareStmt(context.Background(), "old")
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+		require.EqualValues(t, 1, ses.rewritePolicyGeneration, "invalidate each session exactly once")
 	}
+	_, err := unrelatedSession.GetPrepareStmt(context.Background(), "old")
+	require.NoError(t, err, "role metadata is account-local, even when role IDs coincide")
+	require.NotNil(t, unrelatedSession.ruleCache)
+	require.Zero(t, unrelatedSession.rewritePolicyGeneration)
+}
+
+func TestInvalidateRoleRuleCachesConcurrentAccounts(t *testing.T) {
+	rm := &RoutineManager{sessionManager: queryservice.NewSessionManager()}
+	sessions := make([]*Session, 0, 3)
+	for _, id := range []uint32{0, 1, 2} {
+		ses := &Session{feSessionImpl: feSessionImpl{
+			uuid: uuid.New(), tenant: &TenantInfo{Tenant: fmt.Sprint(id), TenantID: id},
+		}}
+		ses.setRoutineManager(rm)
+		rm.sessionManager.AddSession(ses)
+		sessions = append(sessions, ses)
+	}
+	// SessionManager snapshots can outlive removal/close. A nil tenant must
+	// not be mistaken for the sys account (ID zero).
+	closed := &Session{feSessionImpl: feSessionImpl{uuid: uuid.New()}}
+	rm.sessionManager.AddSession(closed)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, ses := range sessions[:2] {
+		wg.Add(1)
+		go func(ses *Session) {
+			defer wg.Done()
+			<-start
+			for range 20 {
+				invalidateRoleRuleCaches(ses)
+			}
+		}(ses)
+	}
+	close(start)
+	wg.Wait()
+	for _, ses := range sessions[:2] {
+		require.EqualValues(t, 20, ses.rewritePolicyGeneration)
+	}
+	require.Zero(t, sessions[2].rewritePolicyGeneration)
+	require.Zero(t, closed.rewritePolicyGeneration)
 }
 
 // TestConcurrentRuleCacheAccess tests concurrent access to rule cache
@@ -543,7 +586,7 @@ func TestCaptureRewritePolicyReloadsAfterInFlightInvalidation(t *testing.T) {
 
 	// The old result has been selected but has not been returned to the
 	// loader. Complete invalidation first, then let the in-flight load resume.
-	ses.invalidateRoleRuleCache()
+	ses.invalidateRoleRuleCache(sysAccountID)
 	bh.sql2result[ruleSQL] = newRules
 	close(barrier.resume)
 
@@ -1885,6 +1928,49 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
 	require.Error(t, err)
+}
+
+func TestMergeRewriteRulesCollatedProjection(t *testing.T) {
+	for _, tc := range []struct {
+		projection string
+		mergeable  bool
+	}{
+		{"a, age", true},
+		{"a, cast(age as char) as age", true},
+		{"a, age collate utf8mb4_bin as age", true},
+		{"a, cast(age as char) collate utf8mb4_bin as age", true},
+		{"a, (age collate utf8mb4_bin) collate utf8mb4_bin as age", true},
+		{"sum(age) collate utf8mb4_bin as age", false},
+		{"row_number() over () collate utf8mb4_bin as age", false},
+		{"(select age from db1.t2 limit 1) collate utf8mb4_bin as age", false},
+		{"@@sql_mode collate utf8mb4_bin as age", false},
+	} {
+		t.Run(tc.projection, func(t *testing.T) {
+			left := "select " + tc.projection + " from db1.t1 where a = 1"
+			right := "select " + tc.projection + " from db1.t1 where a = 2"
+			merged, err := mergeRewriteRules(t.Context(), left, right)
+			require.NoError(t, err)
+			if !tc.mergeable {
+				require.Equal(t, right, merged)
+				return
+			}
+			require.Contains(t, merged, "where (a = 1) or (a = 2)")
+			original, err := parsers.ParseOne(t.Context(), dialect.MYSQL, left, 1)
+			require.NoError(t, err)
+			defer original.Free()
+			combined, err := parsers.ParseOne(t.Context(), dialect.MYSQL, merged, 1)
+			require.NoError(t, err)
+			defer combined.Free()
+			require.Equal(t,
+				tree.String(&original.(*tree.Select).Select.(*tree.SelectClause).Exprs, dialect.MYSQL),
+				tree.String(&combined.(*tree.Select).Select.(*tree.SelectClause).Exprs, dialect.MYSQL))
+		})
+	}
+	left := "select age collate utf8mb4_bin as age from db1.t1 where a = 1"
+	right := "select age collate utf8mb4_general_ci as age from db1.t1 where a = 2"
+	merged, err := mergeRewriteRules(t.Context(), left, right)
+	require.NoError(t, err)
+	require.Equal(t, right, merged)
 }
 
 func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {

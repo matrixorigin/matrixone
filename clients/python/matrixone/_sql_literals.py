@@ -18,6 +18,35 @@ import numpy as np
 _NAME = re.compile(r'[A-Za-z_][A-Za-z0-9_]*')
 
 
+def _json_scalar(value):
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    raise TypeError('Unsupported JSON parameter type: %s' % type(value).__name__)
+
+
+def connection_sql_mode(connection):
+    # Only raw SQL containing a backslash needs mode discovery. Read from the
+    # connection that will execute it; engine defaults can be stale after SET.
+    if connection.dialect.name == 'sqlite':
+        return 'NO_BACKSLASH_ESCAPES'
+    closes_with_result = getattr(connection, 'should_close_with_result', False)
+    if closes_with_result:
+        connection.should_close_with_result = False
+    try:
+        result = connection.exec_driver_sql('SELECT @@SESSION.sql_mode')
+        try:
+            return result.scalar() or ''
+        finally:
+            result.close()
+    finally:
+        if closes_with_result:
+            connection.should_close_with_result = True
+
+
 _SIMPLE_IDENTIFIER = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*$')
 _RESERVED = {
     'select',
@@ -71,9 +100,9 @@ def sql_literal(value):
     if isinstance(value, (bytes, bytearray, memoryview)):
         return "X'%s'" % bytes(value).hex()
     if isinstance(value, dict):
-        value = json.dumps(value)
+        value = json.dumps(value, default=_json_scalar, allow_nan=False)
     elif isinstance(value, (list, tuple)):
-        value = json.dumps(value, separators=(',', ':'))
+        value = json.dumps(value, separators=(',', ':'), default=_json_scalar, allow_nan=False)
     elif isinstance(value, (date, datetime, time)):
         value = str(value)
     if not isinstance(value, str):
@@ -85,7 +114,7 @@ def sql_literal(value):
     return "'%s'" % value.replace("'", "''")
 
 
-def substitute_parameters(sql, params):
+def substitute_parameters(sql, params, *, sql_mode=''):
     if params is None:
         return sql
     named = isinstance(params, dict)
@@ -93,6 +122,7 @@ def substitute_parameters(sql, params):
         raise TypeError('SQL parameters must be a mapping, tuple or list')
     values = iter(params) if not named else None
     used = set()
+    modes = {mode.strip().upper() for mode in sql_mode.split(',')}
     output = []
     i = 0
     while i < len(sql):
@@ -101,7 +131,8 @@ def substitute_parameters(sql, params):
             start, quote = i, char
             i += 1
             while i < len(sql):
-                if sql[i] == '\\':
+                identifier = quote == '`' or (quote == '"' and 'ANSI_QUOTES' in modes)
+                if sql[i] == '\\' and not identifier and 'NO_BACKSLASH_ESCAPES' not in modes:
                     i += 2
                 elif sql[i] == quote:
                     i += 1
@@ -118,6 +149,12 @@ def substitute_parameters(sql, params):
             end = len(sql) if end < 0 else end
             output.append(sql[i:end])
             i = end
+            continue
+        if sql.startswith('/*!', i):
+            # MatrixOne executes MySQL version-comment bodies. Preserve the
+            # delimiter/version bytes, but scan their SQL like the outer SQL.
+            output.append('/*!')
+            i += 3
             continue
         if sql.startswith('/*', i):
             end = sql.find('*/', i + 2)

@@ -127,6 +127,8 @@ type Config struct {
 	}
 
 	GCCfg struct {
+		// Zero uses the engine's default catalog GC cadence.
+		CatalogGCInterval toml.Duration `toml:"catalog-gc-interval"`
 		GCTTL             toml.Duration `toml:"gc-ttl"`
 		GCInMemoryTTL     toml.Duration `toml:"gc-in-memory-ttl"`
 		ScanGCInterval    toml.Duration `toml:"scan-gc-interval"`
@@ -204,6 +206,9 @@ type Config struct {
 func (c *Config) Validate() error {
 	if c.UUID == "" {
 		return moerr.NewInternalError(context.Background(), "Config.UUID not set")
+	}
+	if c.GCCfg.CatalogGCInterval.Duration < 0 {
+		return moerr.NewBadConfigNoCtx("catalog GC interval must not be negative")
 	}
 	if c.DataDir == "" {
 		c.DataDir = defaultDataDir

@@ -6596,9 +6596,31 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return nil
 }
 
+// Issue #30217: MySQL emits warning 1649 (ER_UNKNOWN_LOCALE) when FORMAT
+// receives an unknown or NULL locale, while still falling back to en_US.
+func appendLocaleUnknownWarning(proc *process.Process, locale string) {
+	if proc == nil {
+		return
+	}
+	sink := proc.GetWarningSink()
+	if counter, ok := sink.(process.WarningDiagnosticCountAppender); ok && process.WarningDiagnosticRetentionLimitForProcess(proc) == 0 {
+		counter.AppendWarningCount(1)
+		return
+	}
+	if appender, ok := sink.(warningDiagnosticAppender); ok {
+		// Bound the echo before formatting; sink-side truncation is too late
+		// to prevent input-sized temporary allocations.
+		if len(locale) > 128 {
+			locale = locale[:128]
+		}
+		appender.AppendWarningDiagnostic(moerr.ER_UNKNOWN_LOCALE,
+			fmt.Sprintf("Unknown locale: '%s'", locale))
+	}
+}
+
 func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if ivecs[0].GetType().IsNumeric() {
-		return formatWithNumericFirst(ivecs, result, length, false)
+		return formatWithNumericFirst(ivecs, result, nil, length, false)
 	}
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6723,9 +6745,9 @@ func GetFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 	return nil
 }
 
-func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if ivecs[0].GetType().IsNumeric() {
-		return formatWithNumericFirst(ivecs, result, length, true)
+		return formatWithNumericFirst(ivecs, result, proc, length, true)
 	}
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6746,9 +6768,15 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			}
 		} else {
 			if null3 {
+				appendLocaleUnknownWarning(proc, "NULL")
 				val, err = format.GetNumberFormat(string(v1), string(v2), "en_US")
 			} else {
-				val, err = format.GetNumberFormat(string(v1), string(v2), string(v3))
+				locale := functionUtil.QuickBytesToStr(v3)
+				if !format.IsValidLocale(locale) {
+					appendLocaleUnknownWarning(proc, locale)
+					locale = "en_US"
+				}
+				val, err = format.GetNumberFormat(string(v1), string(v2), locale)
 			}
 			if err != nil {
 				return err
@@ -6764,6 +6792,7 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 func formatWithNumericFirst(
 	ivecs []*vector.Vector,
 	result vector.FunctionResultWrapper,
+	proc *process.Process,
 	length int,
 	withLocale bool,
 ) error {
@@ -6790,10 +6819,13 @@ func formatWithNumericFirst(
 		localeValue := "en_US"
 		if withLocale {
 			localeBytes, nullLocale := locale.GetStrValue(i)
-			if nullLocale {
-				localeValue = "en_US"
-			} else {
+			switch {
+			case nullLocale:
+				appendLocaleUnknownWarning(proc, "NULL")
+			case format.IsValidLocale(string(localeBytes)):
 				localeValue = string(localeBytes)
+			default:
+				appendLocaleUnknownWarning(proc, functionUtil.QuickBytesToStr(localeBytes))
 			}
 		}
 
@@ -8387,6 +8419,9 @@ func findInSetResult[Tr types.FixedSizeTExceptStrType](
 	}
 
 	findInStrList := func(str, strlist string) Tr {
+		if strlist == "" {
+			return toResult(0)
+		}
 		for j, s := range strings.Split(strlist, ",") {
 			if s == str {
 				return toResult(uint64(j + 1))

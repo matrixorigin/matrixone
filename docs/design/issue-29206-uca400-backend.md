@@ -86,6 +86,11 @@ sample digest freezes bytes; existing V1 golden tests must remain unchanged.
 
 ## Versioned supported subset
 
+Native Unicode UNIQUE activation is specified only by the separately reviewed
+amendment [`20261015-issue-29206-native-unicode-unique-amendment.md`](20261015-issue-29206-native-unicode-unique-amendment.md).
+This foundation document remains the baseline for all other collation
+consumers and does not itself approve that activation.
+
 This section is the versioned SQL integration contract for the first release of
 the backend.  It is intentionally narrower than MySQL's complete collation
 surface.  The maintainer approval recorded on PR #29601 applies to this

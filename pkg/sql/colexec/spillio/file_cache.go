@@ -21,10 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-const (
-	retainedWriteCacheBytes = int64(256 << 10)
-	writebackBatchBytes     = retainedWriteCacheBytes / 2
-)
+const retainedWriteCacheBytes = int64(256 << 10)
 
 var errInvalidSequentialWrite = moerr.NewInternalErrorNoCtx("invalid sequential spill write")
 
@@ -36,6 +33,24 @@ type SequentialWriteCache struct {
 	written   int64
 	submitted int64
 	dropped   int64
+	retained  int64
+}
+
+// NewSequentialWriteCache uses a larger window only when its caller has
+// admitted the full capacity. The zero value keeps the conservative default.
+func NewSequentialWriteCache(retained int64) SequentialWriteCache {
+	pageSize := int64(os.Getpagesize())
+	if retained < retainedWriteCacheBytes || retained%(2*pageSize) != 0 {
+		return SequentialWriteCache{}
+	}
+	return SequentialWriteCache{retained: retained}
+}
+
+func (c *SequentialWriteCache) window() int64 {
+	if c.retained == 0 {
+		return retainedWriteCacheBytes
+	}
+	return c.retained
 }
 
 // RecordWrite advances one successful sequential write. Small appends accumulate
@@ -49,25 +64,44 @@ func (c *SequentialWriteCache) RecordWrite(file *os.File, size int) error {
 		return errInvalidSequentialWrite
 	}
 	c.written += int64(size)
+	retained := c.window()
+	batchBytes := retained / 2
+	submitBytes := batchBytes
+	// Start I/O before the full retained window is populated. Reclamation
+	// still uses half-window batches, independently of writeback submission.
+	if submitBytes > 512<<10 {
+		submitBytes = 512 << 10
+	}
 	pageSize := int64(os.Getpagesize())
-	if c.written-c.submitted >= writebackBatchBytes {
+	if c.written-c.submitted >= submitBytes {
 		submitEnd := c.written - c.written%pageSize
 		startWriteback(file, c.submitted, submitEnd-c.submitted)
 		c.submitted = submitEnd
 	}
-	if c.written-c.dropped <= retainedWriteCacheBytes {
+	if c.written-c.dropped <= retained {
 		return nil
 	}
 	// DONTNEED ignores partial pages. Advance only over whole pages so an
 	// unaligned record boundary cannot strand a cached page at every flush.
 	// Round up to reclaim a whole batch rather than waiting on every append.
-	dropEnd := c.written - retainedWriteCacheBytes
-	if remainder := dropEnd % writebackBatchBytes; remainder != 0 {
-		dropEnd += writebackBatchBytes - remainder
+	dropEnd := c.written - retained
+	if remainder := dropEnd % batchBytes; remainder != 0 {
+		dropEnd += batchBytes - remainder
 	}
 	finishWritebackAndDrop(file, c.dropped, dropEnd-c.dropped)
 	c.dropped = dropEnd
 	return nil
+}
+
+// SubmitTail starts the remaining writeback after the final append. A caller
+// with several files can submit all tails before waiting in Finish, allowing
+// their I/O to overlap instead of serializing one small file at a time.
+func (c *SequentialWriteCache) SubmitTail(file *os.File) {
+	if c == nil || file == nil || c.submitted >= c.written {
+		return
+	}
+	startWriteback(file, c.submitted, c.written-c.submitted)
+	c.submitted = c.written
 }
 
 // Finish makes the complete written range reclaimable before ownership moves

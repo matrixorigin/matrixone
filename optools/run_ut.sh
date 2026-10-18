@@ -80,21 +80,18 @@ UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 # child a bounded TERM grace period, so the parent must retain the helper long
 # enough for both children to finish before escalating to KILL.
 UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
-# Keep the constrained runner's existing three-slot heavy-stage budget. The
-# engine race wave runs exclusively, then one slot is reserved for the plan
-# race wave while the resource-heavy packages use the remaining two slots.
-# This is a process/task budget, not a hard memory guarantee; stronger runners
-# may explicitly override it.
-HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
+# Keep an explicit caller cap for engine admission. Default the subsequent
+# heavy/plan wave to three only after the exclusive engine budget is resolved.
+HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-}
 PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 # Keep plan race processes bounded because each shard owns a race-instrumented
 # test process and its package resources. The default stays serial on the
 # constrained CI runner; stronger runners can opt into two independent shards.
 PLAN_RACE_PARALLEL=${PLAN_RACE_PARALLEL:-"1"}
-# Two engine shards cut the measured engine/test race runtime roughly in half.
-# They run as an exclusive wave so resource-heavy package work cannot delay the
-# ISCP progress made by either shard.
-ENGINE_RACE_SHARDS=2
+# Six exclusive engine shards reduced the measured phase from 100s to 44s,
+# with 5.2 GiB peak under the eight-CPU/16-GiB runner envelope. Admission still
+# respects UT_PARALLEL and an explicit caller heavy cap. Other stages wait.
+ENGINE_RACE_SHARDS=6
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
 UT_DIAGNOSTIC_DIR="${BUILD_WKSP}/ut-report"
@@ -283,10 +280,10 @@ function join_ut_owner(){
             trap 'handle_ut_join_term "$?" "$join_status" "$failed_flag_name"' TERM
         fi
         wait "${!pid_name}" || join_status=$?
+        # A killed raw Go driver can leave test/link children in its group,
+        # just as a helper shell can. Reaping either leader is not drainage.
+        wait_for_ut_process_group "${!pid_name}" 20 || join_status=125
         if (( requires_drain_ack )); then
-            # Preparation and ordinary fallback children share this helper's
-            # group. Reaping its shell must not release those descendants.
-            wait_for_ut_process_group "${!pid_name}" 20 || join_status=125
             local completion_path="${G_WKSP}/${G_TS}-owner-complete.${pid_name}"
             if [[ ! -f "${completion_path}" ]] ||
                 [[ "$(<"${completion_path}")" != "${join_status}" ]]; then
@@ -683,6 +680,8 @@ function start_ut_heartbeat(){
                 "${G_WKSP}/${G_TS}-issues-race-report.out".*
                 "${G_WKSP}/${G_TS}-embedded-race-report.out"
                 "${G_WKSP}/${G_TS}-embedded-race-report.out".*
+                "${G_WKSP}/${G_TS}-embedded-batched-race-report.out"
+                "${G_WKSP}/${G_TS}-embedded-batched-race-report.out".*
             )
             # Own the finite scan as a group. A large first scan or fallback
             # must not outlive heartbeat cancellation or keep its pipes open.
@@ -1321,13 +1320,13 @@ function handle_ut_termination(){
             fi
         fi
     fi
-    if (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) && [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
-        cleanup_embedded_prebuild
-    elif [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
-        logger "ERR" "UT cancellation: preserving embedded prebuild directory while an owner is undrained"
-    fi
     if (( CURRENT_UT_DRAIN_FAILED == 0 && CLUSTER_PREBUILD_DRAIN_FAILED == 0 )); then
-        consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY
+        # Keep preparation diagnostics until execution reporting has released
+        # ownership, including discovery aborts that have no report to append.
+        if consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY &&
+            [[ -z "${PREBUILT_RACE_REPORT}" && -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
+            cleanup_embedded_prebuild
+        fi
     else
         logger "ERR" "UT cancellation: preserving prebuilt race report and binary while an owner is undrained"
     fi
@@ -1417,7 +1416,7 @@ function run_engine_race_shards(){
 
     if ! [[ "${engine_race_shards}" =~ ^[1-9][0-9]*$ ]] ||
         (( engine_race_shards > ENGINE_RACE_SHARDS )); then
-        logger "ERR" "engine race shard count must be 1 or ${ENGINE_RACE_SHARDS}, got '${engine_race_shards}'"
+        logger "ERR" "engine race shard count must be 1 through ${ENGINE_RACE_SHARDS}, got '${engine_race_shards}'"
         return 2
     fi
 
@@ -2038,14 +2037,14 @@ function prebuilt_race_package_is_high_footprint(){
     case "$1" in
         github.com/matrixorigin/matrixone/pkg/embed|\
         github.com/matrixorigin/matrixone/pkg/tests/issues/isolated|\
-        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration|\
-        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn)
+        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration)
             return 0
             ;;
         github.com/matrixorigin/matrixone/pkg/tests/arrowload|\
         github.com/matrixorigin/matrixone/pkg/tests/dml|\
         github.com/matrixorigin/matrixone/pkg/tests/partition|\
         github.com/matrixorigin/matrixone/pkg/tests/shard|\
+        github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn|\
         github.com/matrixorigin/matrixone/pkg/tests/testutils|\
         github.com/matrixorigin/matrixone/pkg/tests/upgrade|\
         example/*)
@@ -2551,13 +2550,25 @@ function run_embedded_tests(){
             ordinary_scope=$(remove_packages_from_scope "${ordinary_scope}" "${batched_packages[@]}")
         fi
     fi
-    # Keep one Go driver for the remaining scope, including the exact original
-    # command/order when batching is disabled. Never pass an empty package list.
+    # Reuse Go's package scheduler and the existing cluster lease pool. Keep
+    # the complete wave serial if any owner requires high-footprint exclusion,
+    # including unknown packages and the unbatched rollback scopes.
     if [[ -n "${ordinary_scope}" ]]; then
+        local ordinary_parallel=${UT_EMBEDDED_PACKAGE_PARALLEL}
+        local -a ordinary_env=()
+        for package in ${ordinary_scope}; do
+            if prebuilt_race_package_is_high_footprint "${package}"; then
+                ordinary_parallel=1
+                break
+            fi
+        done
+        if (( ordinary_parallel > 1 )); then
+            ordinary_env=(MO_TEST_CLUSTER_ADMISSION_POOL_SIZE="${ordinary_parallel}" GOMAXPROCS=2)
+        fi
         run_ut_command embedded "embedded-cluster race-test packages" \
-            env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
+            env ${ordinary_env[@]+"${ordinary_env[@]}"} LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" CGO_CFLAGS="${CGO_CFLAGS}" CGO_LDFLAGS="${CGO_LDFLAGS}" \
             go test ${GO_MODULE_MODE} ${GO_TEST_VET_FLAGS} -short -v -json -tags "${TAGS}" \
-            -p 1 -timeout "${UT_TIMEOUT}m" -race ${ordinary_scope}
+            -p "${ordinary_parallel}" -timeout "${UT_TIMEOUT}m" -race ${ordinary_scope}
         test_status=$?
         if (( test_status == 125 )); then return 125; fi
     fi
@@ -2571,7 +2582,7 @@ function run_embedded_tests(){
             main_contract=cleanup-only
         fi
         run_ut_command embedded "batched embedded-cluster race-test package ${package}" \
-            run_race_test_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" 4 2 2 "${main_contract}"
+            run_race_test_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" 4 "${UT_EMBEDDED_PACKAGE_PARALLEL}" 2 "${main_contract}"
         package_status=$?
         if (( package_status == 125 )); then return 125; fi
         consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY || return $?
@@ -2606,7 +2617,7 @@ function run_tests(){
     echo "#  CLUSTER ADMISSION: process lifecycle"
     echo "#  UT CHECKPOINT:   $UT_CHECKPOINT"
     echo "#  UT STDERR:       $UT_STDERR"
-    echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL total package slots"
+    echo "#  HEAVY/PLAN UT:   ${HEAVY_RACE_PARALLEL:-3} total package slots"
     horiz_rule
     mark_ut_stage "routing" "validate shard and package partition" start
 
@@ -2673,9 +2684,10 @@ function run_tests(){
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
     fi
-    if [[ "${UT_ISSUES_BATCH_PARALLEL}" != 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 2 ]] ||
+    if [[ "${UT_ISSUES_BATCH_PARALLEL}" != 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 2 &&
+          "${UT_ISSUES_BATCH_PARALLEL}" != 3 && "${UT_ISSUES_BATCH_PARALLEL}" != 4 ]] ||
         [[ "${UT_ISSUES_BATCHES}" == 1 && "${UT_ISSUES_BATCH_PARALLEL}" != 1 ]]; then
-        logger "ERR" "UT_ISSUES_BATCH_PARALLEL must be 1..2 and no greater than UT_ISSUES_BATCHES (1 requires parallel=1), got '${UT_ISSUES_BATCH_PARALLEL}'"
+        logger "ERR" "UT_ISSUES_BATCH_PARALLEL must be 1..4 and no greater than UT_ISSUES_BATCHES (1 requires parallel=1), got '${UT_ISSUES_BATCH_PARALLEL}'"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
@@ -2686,8 +2698,9 @@ function run_tests(){
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
     fi
-    if [[ "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 1 && "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 2 ]]; then
-        logger "ERR" "UT_EMBEDDED_PACKAGE_PARALLEL must be 1..2, got '${UT_EMBEDDED_PACKAGE_PARALLEL}'"
+    if [[ "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 1 && "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 2 &&
+          "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 3 && "${UT_EMBEDDED_PACKAGE_PARALLEL}" != 4 ]]; then
+        logger "ERR" "UT_EMBEDDED_PACKAGE_PARALLEL must be 1..4, got '${UT_EMBEDDED_PACKAGE_PARALLEL}'"
         UT_TEST_STATUS=1
         mark_ut_stage "routing" "validate shard and package partition" finish 1
         return 0
@@ -2809,12 +2822,21 @@ function run_tests(){
             logger "INF" "Cap overlapping light package parallelism to UT_LIGHT_PARALLEL=${light_stage_parallel}"
         fi
 
-        if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
-            (( HEAVY_RACE_PARALLEL > 64 )); then
+        if ! [[ "${HEAVY_RACE_PARALLEL:-3}" =~ ^[1-9][0-9]*$ ]] ||
+            (( ${HEAVY_RACE_PARALLEL:-3} > 64 )); then
             logger "ERR" "HEAVY_RACE_PARALLEL must be an integer from 1 through 64, got '${HEAVY_RACE_PARALLEL}'"
             UT_TEST_STATUS=1
             return 0
         fi
+        engine_race_parallel=${ENGINE_RACE_SHARDS}
+        if (( engine_race_parallel > UT_PARALLEL )); then
+            engine_race_parallel=${UT_PARALLEL}
+        fi
+        if [[ -n "${HEAVY_RACE_PARALLEL}" ]] &&
+            (( engine_race_parallel > HEAVY_RACE_PARALLEL )); then
+            engine_race_parallel=${HEAVY_RACE_PARALLEL}
+        fi
+        local HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-3}
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
             logger "ERR" "Failed to resolve ./pkg/sql/plan"
             UT_TEST_STATUS=1
@@ -2987,7 +3009,7 @@ function run_tests(){
                     PREBUILT_RACE_REPORT="${G_WKSP}/${G_TS}-issues-race-report.out"
                     PREBUILT_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-issues-race.test"
                     local issues_go_budget=""
-                    if [[ "${UT_ISSUES_BATCHES}:${UT_ISSUES_BATCH_PARALLEL}" == 8:2 ]]; then issues_go_budget=2; fi
+                    if (( UT_ISSUES_BATCH_PARALLEL > 1 )); then issues_go_budget=2; fi
                     run_ut_command serial "batched exclusive race-test package ${package}" \
                         run_race_test_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" "${UT_ISSUES_BATCHES}" \
                             "${UT_ISSUES_BATCH_PARALLEL}" "${issues_go_budget}"
@@ -3034,10 +3056,6 @@ function run_tests(){
             # any resource-heavy package starts: those package lifecycles can
             # otherwise delay the engine's ISCP progress and make watermark
             # assertions depend on which runner process gets CPU first.
-            engine_race_parallel=${ENGINE_RACE_SHARDS}
-            if (( engine_race_parallel > HEAVY_RACE_PARALLEL )); then
-                engine_race_parallel=${HEAVY_RACE_PARALLEL}
-            fi
             ENGINE_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-engine-race.test"
             ENGINE_RACE_REPORT="${G_WKSP}/${G_TS}-engine-race-report.out"
             ENGINE_RACE_REPORT_READY="${ENGINE_RACE_REPORT}.ready"
@@ -3122,10 +3140,21 @@ function run_tests(){
 function ut_summary(){
   local report_path="${BUILD_WKSP}/ut-report"
   local analysis_status=0
+  local analysis_tool
   local failed_output=""
   local setup_summary=""
   local setup_status=0
 
+  # Failure files belong to this analysis, not an earlier run in the checkout.
+  # Preserve the previous generation beside the run-scoped raw report.
+  if [[ -d "${report_path}/failed" ]]; then
+    local previous_failed
+    if ! previous_failed=$(mktemp -d "${UT_REPORT}.previous-failed.XXXXXX") ||
+       ! mv "${report_path}/failed" "${previous_failed}/"; then
+      logger "ERR" "failed to archive the previous UT analysis"
+      exit 1
+    fi
+  fi
   # Keep the workflow's always-run report steps well-defined even when the
   # analyzer cannot parse a truncated/interleaved go test JSON stream.
   mkdir -p "${report_path}/failed/outputs"
@@ -3153,11 +3182,11 @@ function ut_summary(){
     fi
   fi
 
-  if ! install_go_ut_analysis; then
+  if ! analysis_tool=$(install_go_ut_analysis); then
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
   else
-    go-ut-analysis test -f "${UT_REPORT}" --first 10 --report-path "${report_path}" --stdout=false
+    "${analysis_tool}" test -f "${UT_REPORT}" --first 10 --report-path "${report_path}" --stdout=false
     analysis_status=$?
   fi
 

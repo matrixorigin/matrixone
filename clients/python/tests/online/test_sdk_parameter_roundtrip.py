@@ -10,6 +10,7 @@ import numpy as np
 import pytest
 
 from matrixone import Client
+from matrixone.async_client import AsyncClient
 
 pytestmark = pytest.mark.skipif(os.environ.get('MO_SDK_ONLINE') != '1', reason='isolated server required')
 
@@ -92,4 +93,59 @@ def test_native_numpy_scalar_insert_compatibility(client, mode):
             client.vector_ops.insert(table, row)
         assert client.execute('SELECT value,flag,label FROM ' + table).rows == [(7, True, '1.25')]
     finally:
+        client.execute('DROP TABLE ' + table)
+
+
+@pytest.mark.parametrize('mode', ['', 'NO_BACKSLASH_ESCAPES'])
+def test_native_raw_sql_lexical_boundaries(client, mode):
+    with client.session() as session:
+        session.execute('SET sql_mode = ?', (mode,))
+        assert tuple(session.execute('SELECT 1 AS `tail\\`, ?', (7,)).one()) == (1, 7)
+        if mode:
+            assert tuple(session.execute("SELECT '\\', ?", (8,)).one()) == ('\\', 8)
+        assert session.execute('SELECT /*!50000 ? */', (9,)).scalar() == 9
+        assert session.execute('SELECT /*! :id */ /* :ignored */', {'id': 10}).scalar() == 10
+        session.execute("SET sql_mode = ''")
+
+
+def test_native_numpy_vector_elements(client):
+    import json
+
+    table = 'sdk_vector_' + uuid.uuid4().hex[:12]
+    client.execute('CREATE TABLE ' + table + '(id INT, embedding VECF32(2))')
+    try:
+        for i, dtype in enumerate([np.float32, np.int64, np.float64]):
+            client.vector_ops.insert(table, {'id': i, 'embedding': list(np.array([1, 2], dtype=dtype))})
+        assert [
+            json.loads(row[0]) for row in client.execute('SELECT embedding FROM ' + table + ' ORDER BY id').rows
+        ] == [[1, 2], [1, 2], [1, 2]]
+    finally:
+        client.execute('DROP TABLE ' + table)
+
+
+@pytest.mark.asyncio
+async def test_async_native_vectors_and_sql_mode(client):
+    c = AsyncClient(logger=Mock())
+    await c.connect(
+        host=os.environ.get('MO_HOST', '127.0.0.1'),
+        port=int(os.environ.get('MO_PORT', '6001')),
+        user=os.environ.get('MO_USER', 'root'),
+        password=os.environ.get('MO_PASSWORD', '111'),
+        database=os.environ.get('MO_DATABASE', 'mo_sdk_regression'),
+        on_connect=[],
+    )
+    table = 'sdk_vector_' + uuid.uuid4().hex[:12]
+    client.execute('CREATE TABLE ' + table + '(id INT, embedding VECF32(2))')
+    try:
+        for i, dtype in enumerate([np.float32, np.int64, np.float64]):
+            await c.vector_ops.insert(table, {'id': i, 'embedding': list(np.array([1, 2], dtype=dtype))})
+        assert (await c.execute('SELECT count(*) FROM ' + table)).rows == [(3,)]
+        async with c.session() as session:
+            await session.execute("SET sql_mode = 'NO_BACKSLASH_ESCAPES'")
+            assert tuple((await session.execute("SELECT '\\', ?", (7,))).one()) == ('\\', 7)
+            assert tuple((await session.execute('SELECT 1 AS `tail\\`, ?', (8,))).one()) == (1, 8)
+            assert (await session.execute('SELECT /*!50000 ? */', (9,))).scalar() == 9
+            await session.execute("SET sql_mode = ''")
+    finally:
+        await c.disconnect()
         client.execute('DROP TABLE ' + table)

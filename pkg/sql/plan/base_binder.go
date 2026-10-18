@@ -78,6 +78,8 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 		expr, err = b.bindNumVal(numVal, b.defaultValueBindType())
 	case *tree.ParenExpr:
 		expr, err = b.impl.BindExpr(exprImpl.Expr, depth, isRoot)
+	case *tree.CollateExpr:
+		expr, err = b.bindCollateExpr(exprImpl, depth)
 
 	case *tree.OrExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("or", []tree.Expr{exprImpl.Left, exprImpl.Right}, depth)
@@ -1025,6 +1027,9 @@ func (b *baseBinder) baseBindSubquery(astExpr *tree.Subquery, isRoot bool) (*Exp
 		returnExpr.GetSub().Typ = plan.SubqueryRef_EXISTS
 	} else if rowSize == 1 {
 		returnExpr.Typ = subCtx.results[0].Typ
+		if source, ok := collationForExpression(subCtx.results[0]); ok {
+			source.apply(&returnExpr.Typ)
+		}
 	}
 
 	return returnExpr, nil
@@ -1840,6 +1845,9 @@ func (b *baseBinder) numericScalarSubqueryAstTypes(
 	subquery *tree.Subquery,
 	depth int32,
 ) (numericAstTypeScan, error) {
+	if err := b.prepareValuesSubqueryContext(); err != nil {
+		return numericAstTypeScan{}, err
+	}
 	var owner *tree.Select
 	switch selectStmt := subquery.Select.(type) {
 	case *tree.Select:
@@ -5117,40 +5125,38 @@ func bindFuncExprImplUdf(
 		// if does not contain SELECT, an expression. In order to pass the parser,
 		// make it start with a 'SELECT'.
 
-		var expr *plan.Expr
-
-		if !strings.Contains(sql, "select") {
+		expressionBody := !strings.Contains(sql, "select")
+		if expressionBody {
 			sql = "select " + sql
-			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
-			if err != nil {
-				return nil, err
+		}
+		substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
+		if err != nil {
+			return nil, err
+		}
+		defer func() {
+			for _, stmt := range substmts {
+				stmt.Free()
 			}
-			defer func() {
-				for _, stmt := range substmts {
-					stmt.Free()
-				}
-			}()
-			expr, err = b.impl.BindExpr(substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr, depth, false)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			substmts, err := parsers.ParseWithSQLMode(b.GetContext(), dialect.MYSQL, sql, 1, parserSQLMode)
-			if err != nil {
-				return nil, err
-			}
-			defer func() {
-				for _, stmt := range substmts {
-					stmt.Free()
-				}
-			}()
-			subquery := tree.NewSubquery(substmts[0], false)
-			expr, err = b.impl.BindSubquery(subquery, false)
-			if err != nil {
-				return nil, err
+		}()
+		var bodyExpr tree.Expr
+		if expressionBody {
+			bodyExpr = substmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+		}
+		if valueBinder, ok := b.impl.(*DefaultBinder); ok && valueBinder.allowSubquery &&
+			b.builder != nil && b.builder.valuesSubqueryBinding.rows != nil {
+			// The caller's VALUES AST does not contain subqueries introduced by
+			// a SQL UDF. Inspect the parsed expression as well as query bodies,
+			// before either binder can create a relational branch. SQL spelling
+			// and wrappers must not bypass the statement's admission boundary.
+			if !expressionBody || valueExprContainsSubquery(bodyExpr) {
+				return nil, moerr.NewNotSupported(b.GetContext(),
+					"SQL UDF subqueries in INSERT VALUES are not supported; use an explicit scalar subquery")
 			}
 		}
-		return expr, nil
+		if expressionBody {
+			return b.impl.BindExpr(bodyExpr, depth, false)
+		}
+		return b.impl.BindSubquery(tree.NewSubquery(substmts[0], false), false)
 	case string(tree.PYTHON):
 		expr, err := b.bindPythonUdf(udf, astArgs, depth)
 		if err != nil {
@@ -5521,6 +5527,14 @@ func bindFuncExprAndConstFoldInternal(
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {
+	case "ntile":
+		// The bucket count is execution configuration. Keep prepared parameters
+		// intact, but reject expressions whose value can vary with the input row.
+		args := retExpr.GetF().Args
+		if len(args) != 1 || !function.IsRuntimeConstant(args[0]) {
+			return nil, moerr.NewWrongArguments(ctx, "ntile")
+		}
+
 	case "nth_value":
 		if err := validateNthValueArgs(ctx, proc, retExpr.GetF().Args); err != nil {
 			return nil, err
@@ -5798,7 +5812,7 @@ func IsPercentileConfigExpr(expr *Expr) bool {
 	if expr == nil {
 		return false
 	}
-	if rule.IsConstant(expr, false) {
+	if function.IsFoldCandidate(expr, false) {
 		return true
 	}
 	return isPreparedPercentileExpr(expr)
@@ -5813,6 +5827,8 @@ func isPreparedPercentileExpr(expr *Expr) bool {
 		return true
 	case *plan.Expr_Lit:
 		return !value.Lit.GetIsnull() && makeTypeByPlan2Expr(expr).IsNumeric()
+	case *plan.Expr_Vec:
+		return rule.IsDecimal256ScalarConstant(expr)
 	case *plan.Expr_F:
 		if value.F == nil || value.F.Func == nil || !makeTypeByPlan2Expr(expr).IsNumeric() {
 			return false
@@ -6794,6 +6810,10 @@ func bindFuncExprImplByPlanExpr(
 	if name == "between" && preparedBetweenHasMixedNumericText(ctx, args) &&
 		(!containsVolatileFunction(args[0]) || args[0].AuxId < 0) {
 		return bindBetweenAsComparisons(ctx, args)
+	}
+	args, err = normalizeExpressionCollations(ctx, name, args)
+	if err != nil {
+		return nil, err
 	}
 	// HEX/BIT literals have a VARCHAR-shaped type but an exact unsigned numeric
 	// domain. Preserve their provenance before either prepared consumers or the
@@ -8134,13 +8154,96 @@ func bindFuncExprImplByPlanExpr(
 		}
 
 	case "lead", "lag":
-		// For lead/lag window functions, cast the default value (3rd arg)
-		// to match the value type (1st arg).
+		// For lead/lag window functions, the value argument (1st arg) and the
+		// default value (3rd arg) must share one common result type, mirroring
+		// MySQL: narrowing the default to the value type truncates longer
+		// string defaults and rounds decimal ones (issue #29974).
 		if len(args) >= 3 && !argsType[2].Eq(returnType) {
 			if len(argsCastType) == 0 {
 				argsCastType = append([]types.Type(nil), argsType...)
 			}
-			argsCastType[2] = returnType
+			commonType, ok, typeErr := reconcileLagLeadDefaultType(ctx, args[2], argsType[0], argsType[2])
+			if typeErr != nil {
+				return nil, typeErr
+			}
+			if ok {
+				// CHAR 重载的固定容量不能代表另一分支的完整字符串域。
+				// 先规范为可扩容的 VARCHAR，再统一推导容量和 LOB 家族。
+				if commonType.Oid == types.T_char {
+					commonType.Oid = types.T_varchar
+				} else if commonType.Oid == types.T_binary {
+					// 固定 BINARY cast 会补 NUL，不能作为可变长度值的公共域。
+					// BLOB 保留输入字节（包括原本的 NUL），并复用下方容量推导。
+					commonType = types.New(types.T_blob, commonType.Width, 0)
+				}
+				// COALESCE's mixed string/numeric overload starts with a generic
+				// VARCHAR capacity. Refine known display bounds, but never shrink
+				// TEXT/BLOB (including their width-zero/unknown domains) to VARCHAR.
+				if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text || commonType.Oid == types.T_blob {
+					// 重建公共字符串类型不能重置原有排序身份；字符集与版本必须一起传递。
+					commonType = types.MergeStringCollationMetadata(commonType, []types.Type{argsType[0], argsType[2]})
+					adjustControlFlowVarcharMetadata(args, argsType, []int{0, 2}, &commonType)
+					// An unknown result bound (for example JSON -> TEXT) cannot
+					// be bounded by only the other argument's declared capacity.
+					unbounded := commonType.Width == 0
+					for _, idx := range []int{0, 2} {
+						if argsType[idx].Oid == types.T_blob {
+							// 提升家族时也要保留 BLOB 的二进制类型身份。
+							commonType = types.New(types.T_blob, commonType.Width, 0)
+						} else if argsType[idx].Oid == types.T_text && commonType.Oid != types.T_blob {
+							commonType.Oid = types.T_text
+						}
+						if argsType[idx].Oid == types.T_text || argsType[idx].Oid == types.T_blob {
+							unbounded = unbounded || argsType[idx].Width == 0
+						}
+					}
+					for _, idx := range []int{0, 2} {
+						if !argsType[idx].Oid.IsMySQLString() {
+							continue
+						}
+						width := int64(argsType[idx].Width)
+						if _, known := controlFlowStringWidth(args[idx], argsType[idx]); !known {
+							unbounded = true
+						}
+						// VARCHAR/CHAR widths count characters, LOB limits count
+						// bytes. Convert only when the final family is a LOB.
+						if (commonType.Oid == types.T_text || commonType.Oid == types.T_blob) &&
+							(argsType[idx].Oid == types.T_char || argsType[idx].Oid == types.T_varchar) {
+							width *= int64(controlFlowMaxBytesPerCharacter(argsType[idx].Charset))
+						}
+						commonType.Width = max(commonType.Width, int32(min(width, int64(types.MaxLongTextLen))))
+					}
+					if unbounded {
+						// Width zero casts are unbounded at runtime, but persist as
+						// ordinary TEXT/BLOB with a 65535-byte assignment limit.
+						// Publish the largest SQL-valid LOB domain instead.
+						if commonType.Oid == types.T_varchar {
+							commonType.Oid = types.T_text
+						}
+						commonType.Width = types.MaxLongTextLen
+					} else if commonType.Oid == types.T_text || commonType.Oid == types.T_blob {
+						// Use a real SQL subtype, never an arbitrary byte count
+						// which would be exported as a narrower ordinary TEXT/BLOB.
+						switch {
+						case commonType.Width <= types.MaxTinyTextLen:
+							commonType.Width = types.MaxTinyTextLen
+						case commonType.Width <= types.MaxStringSize:
+							commonType.Width = 0 // Proven to fit ordinary TEXT/BLOB.
+						case commonType.Width <= types.MaxMediumTextLen:
+							commonType.Width = types.MaxMediumTextLen
+						default:
+							commonType.Width = types.MaxLongTextLen
+						}
+					}
+				}
+				returnType = commonType
+				argsCastType[0] = commonType
+				argsCastType[2] = commonType
+			} else {
+				// Fallback for the domainless NULL default and irreconcilable
+				// types: keep the historical narrowing of the default value.
+				argsCastType[2] = returnType
+			}
 		}
 	}
 
@@ -8162,11 +8265,21 @@ func bindFuncExprImplByPlanExpr(
 				if argsType[idx].Oid == castType.Oid && castType.Oid.IsDecimal() && argsType[idx].Scale == castType.Scale {
 					continue
 				}
-				// A direct BIT-to-text cast preserves the BIT payload bytes. In the
-				// LEAST/GREATEST type lattice BIT is numeric, so stringify its
-				// unsigned value instead when the comparison target is text.
-				if (name == "least" || name == "greatest") && argsType[idx].Oid == types.T_bit &&
-					(castType.Oid == types.T_char || castType.Oid == types.T_varchar || castType.Oid == types.T_text) {
+				// BOOL has no direct DECIMAL cast. Preserve its numeric 0/1
+				// value through INT64 before applying the window's exact domain.
+				if (name == "lag" || name == "lead") && argsType[idx].Oid == types.T_bool && castType.Oid.IsDecimal() {
+					integerType := types.T_int64.ToType()
+					args[idx], err = appendCastBeforeExpr(ctx, args[idx], makePlan2Type(&integerType))
+					if err != nil {
+						return nil, err
+					}
+				}
+				// BIT 到字符串的直接转换保留位载荷字节；这些函数把 BIT
+				// 视为无符号数值，因此先转 UINT64，再生成完整十进制字符串。
+				if argsType[idx].Oid == types.T_bit &&
+					(((name == "least" || name == "greatest") &&
+						(castType.Oid == types.T_char || castType.Oid == types.T_varchar || castType.Oid == types.T_text)) ||
+						((name == "lag" || name == "lead") && castType.Oid.IsMySQLString())) {
 					uint64Type := types.T_uint64.ToType()
 					args[idx], err = appendCastBeforeExpr(ctx, args[idx], makePlan2Type(&uint64Type))
 					if err != nil {
@@ -8174,6 +8287,13 @@ func bindFuncExprImplByPlanExpr(
 					}
 				}
 				typ := makePlan2Type(&castType)
+				if castType.Oid.IsMySQLString() && args[idx].Typ.CollationCoercibilitySet {
+					// Overload adaptation (including width promotion) is transparent
+					// to provenance. Runtime types do not carry these plan fields.
+					typ.CollationCoercibility = args[idx].Typ.CollationCoercibility
+					typ.CollationCoercibilitySet = true
+					typ.CollationMergeConflict = args[idx].Typ.CollationMergeConflict
+				}
 				if isPadSpaceComparisonFunction(name) &&
 					argsType[idx].Oid == types.T_char && castType.Oid == types.T_varchar {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)
@@ -8225,6 +8345,9 @@ func bindFuncExprImplByPlanExpr(
 		Typ.Enumvalues = args[2].Typ.Enumvalues
 	}
 	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
+	if err := setExpressionCollation(ctx, name, args, &Typ); err != nil {
+		return nil, err
+	}
 	if returnType.Oid == types.T_varchar || returnType.Oid == types.T_text {
 		for _, idx := range padSpaceValueArgumentIndexes(name, len(args)) {
 			if hasPadSpaceStringProvenance(args[idx]) {
@@ -8255,7 +8378,7 @@ func isXMLXPathConstant(expr *Expr) bool {
 	if expr.GetP() != nil {
 		return true
 	}
-	if rule.IsConstant(expr, false) {
+	if function.IsFoldCandidate(expr, false) {
 		return true
 	}
 	f := expr.GetF()
@@ -8263,7 +8386,7 @@ func isXMLXPathConstant(expr *Expr) bool {
 		return false
 	}
 	ov, ok := function.GetFunctionByIdWithoutError(f.Func.Obj)
-	if !ok || ov.CannotFold() || ov.IsRealTimeRelated() {
+	if !ok || ov.IsVolatile() || ov.IsRealTimeRelated() {
 		return false
 	}
 	for _, arg := range f.Args {
@@ -8272,6 +8395,154 @@ func isXMLXPathConstant(expr *Expr) bool {
 		}
 	}
 	return true
+}
+
+// reconcileLagLeadDefaultType refines COALESCE's common domain for LAG/LEAD.
+// Decimal values must retain their scale and have room for the default's
+// integer digits; a literal needs only its actual digits, while a column or
+// parameter requires its full type domain. An unrepresentable exact domain
+// is an error, not permission to fall back to a narrowing cast.
+func reconcileLagLeadDefaultType(ctx context.Context, defaultExpr *Expr, valueArg, defaultArg types.Type) (types.Type, bool, error) {
+	if valueArg.Oid == types.T_any || defaultArg.Oid == types.T_any {
+		return types.Type{}, false, nil
+	}
+	valueWidth, valueTemporal := temporalDisplayWidthForVarchar(valueArg)
+	defaultWidth, defaultTemporal := temporalDisplayWidthForVarchar(defaultArg)
+	if valueTemporal && defaultTemporal {
+		if (valueArg.Oid == types.T_time) != (defaultArg.Oid == types.T_time) {
+			// TIME 是带符号的时长，不是日期上的时刻。转换成 DATE 会丢值，
+			// 转成 DATETIME 又会引入今天；用有界字符串保留两个完整值域。
+			return types.New(types.T_varchar, max(valueWidth, defaultWidth), 0), true, nil
+		}
+		oid := valueArg.Oid
+		if oid != defaultArg.Oid {
+			// 日期类混合使用范围更宽的 DATETIME，不能收窄为 DATE/TIMESTAMP。
+			oid = types.T_datetime
+		}
+		scale := max(valueArg.Scale, defaultArg.Scale)
+		return types.New(oid, scale, scale), true, nil
+	}
+	if valueTemporal != defaultTemporal {
+		scalar, temporalWidth := valueArg, defaultWidth
+		if valueTemporal {
+			scalar, temporalWidth = defaultArg, valueWidth
+		}
+		if scalar.IsNumeric() || scalar.Oid == types.T_bool || scalar.Oid == types.T_year {
+			// 数值不是编码后的日期；用显示域合并，避免时间解析造成 NULL、
+			// 报错或舍入。FLOAT 无已知显示上界时保持未知容量。
+			width, known := controlFlowStringWidth(nil, scalar)
+			switch scalar.Oid {
+			case types.T_bit:
+				width, known = 20, true
+			case types.T_year:
+				width, known = 4, true
+			case types.T_bool:
+				width, known = 1, true
+			}
+			if known {
+				return types.New(types.T_varchar, max(width, temporalWidth), 0), true, nil
+			}
+			return types.New(types.T_varchar, 0, 0), true, nil
+		}
+	}
+	if (valueArg.IsNumeric() && defaultArg.Oid == types.T_bool) ||
+		(valueArg.Oid == types.T_bool && defaultArg.IsNumeric()) {
+		// A Boolean contributes 0/1 to a numeric value domain. COALESCE's
+		// Boolean overload instead truth-converts the numeric operand.
+		numeric := valueArg
+		digits := int32(1)
+		if valueArg.Oid == types.T_bool {
+			numeric = defaultArg
+		} else if lit := defaultExpr.GetLit(); lit != nil {
+			if value, ok := lit.Value.(*plan.Literal_Bval); lit.Isnull || (ok && !value.Bval) {
+				digits = 0
+			}
+		}
+		if !numeric.Oid.IsDecimal() {
+			return numeric, true, nil
+		}
+		common, ok := mergeExactDecimalComparisonType(makePlan2Type(&numeric), plan.Type{Width: digits})
+		if !ok || common.Width > 65 {
+			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
+		}
+		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
+	}
+	if (valueArg.Oid == types.T_bit || valueArg.Oid == types.T_year) && defaultArg.Oid.IsDecimal() {
+		// 将 DECIMAL 对齐到前面；原默认表达式不是 BIT/YEAR 源值，
+		// 因此交换后按完整声明域合并，不借用错误的字面量宽度。
+		valueArg, defaultArg = defaultArg, valueArg
+		defaultExpr = nil
+	}
+	if valueArg.Oid.IsDecimal() && (defaultArg.Oid.IsInteger() || defaultArg.Oid == types.T_bit || defaultArg.Oid == types.T_year) {
+		// Zero fits even DECIMAL(M,M); it needs no extra integer digit.
+		digits, known := decimalIntegerWidth(defaultExpr, defaultArg, true)
+		if defaultArg.Oid == types.T_bit && !known {
+			bits := defaultArg.Width
+			if bits <= 0 || bits > 64 {
+				bits = 64
+			}
+			digits = int32(len(strconv.FormatUint(math.MaxUint64>>uint(64-bits), 10)))
+		}
+		if defaultArg.Oid == types.T_year && !known {
+			// YEAR 的完整年份域最多四位，不按物理整数重载丢弃小数。
+			digits = 4
+		}
+		if lit := defaultExpr.GetLit(); lit != nil && lit.Isnull {
+			digits = 0
+		}
+		common, ok := mergeExactDecimalComparisonType(makePlan2Type(&valueArg), plan.Type{Width: digits})
+		// The shared exact-arithmetic helper permits 76 internal digits, but
+		// this public result must remain expressible in persisted SQL DDL.
+		if !ok || common.Width > 65 {
+			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
+		}
+		return types.New(types.T(common.Id), common.Width, common.Scale), true, nil
+	}
+	// YEAR 的完整值域可由 INT16 表示，但不能用 YEAR 接收普通数值。
+	if valueArg.Oid == types.T_year && defaultArg.IsNumeric() {
+		valueArg = types.T_int16.ToType()
+	}
+	if defaultArg.Oid == types.T_year && valueArg.IsNumeric() {
+		defaultArg = types.T_int16.ToType()
+	}
+	// BIT's payload is an unsigned integer. Resolve other numeric mixtures
+	// using that domain instead of the physical BIT overload's cast costs.
+	if valueArg.Oid == types.T_bit && defaultArg.IsNumeric() {
+		valueArg = types.T_uint64.ToType()
+	}
+	if defaultArg.Oid == types.T_bit && valueArg.IsNumeric() {
+		defaultArg = types.T_uint64.ToType()
+	}
+	resolved, err := function.GetFunctionByName(ctx, "coalesce", []types.Type{valueArg, defaultArg})
+	if err != nil {
+		if defaultArg.Oid.IsDecimal() && (valueArg.Oid.IsDecimal() || valueArg.Oid.IsInteger()) {
+			return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
+		}
+		return types.Type{}, false, nil
+	}
+	// Cast targets carry the aligned decimal scale and string capacity.
+	ret := resolved.GetReturnType()
+	if targets, shouldCast := resolved.ShouldDoImplicitTypeCast(); shouldCast && len(targets) == 2 {
+		ret = targets[0]
+	}
+	if ret.Oid == types.T_any {
+		return types.Type{}, false, nil
+	}
+	// COALESCE 按转换成本选择的数值/布尔/时间重载会丢失字符串内容。
+	// 窗口必须保留两个分支的值域，不能因未使用的默认值改写源值。
+	// 先选未知容量的字符串域，再由调用方统一推导容量及 SQL LOB 子类型。
+	if !ret.Oid.IsMySQLString() && (valueArg.Oid.IsMySQLString() || defaultArg.Oid.IsMySQLString()) {
+		if valueArg.Oid == types.T_blob || defaultArg.Oid == types.T_blob ||
+			valueArg.Oid == types.T_binary || defaultArg.Oid == types.T_binary ||
+			valueArg.Oid == types.T_varbinary || defaultArg.Oid == types.T_varbinary {
+			return types.New(types.T_blob, 0, 0), true, nil
+		}
+		return types.New(types.T_varchar, 0, 0), true, nil
+	}
+	if ret.Oid.IsDecimal() && ret.Width > 65 {
+		return types.Type{}, false, moerr.NewOutOfRange(ctx, "DECIMAL", "LAG/LEAD common precision exceeds SQL limit 65")
+	}
+	return ret, true, nil
 }
 
 func sameFunctionArgumentTypes(left, right []types.Type) bool {
@@ -9559,7 +9830,9 @@ func adjustControlFlowDecimalLiteralMetadata(args []*Expr, argTypes []types.Type
 	return changed
 }
 
-func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
+// zeroWithoutIntegerDigit is used when testing whether a default fits a
+// declared decimal domain. Other consumers retain zero's display precision.
+func decimalIntegerWidth(expr *Expr, typ types.Type, zeroWithoutIntegerDigit ...bool) (int32, bool) {
 	lit := expr.GetLit()
 	if lit == nil || lit.Isnull {
 		return integerMetadataWidth(typ.Oid), false
@@ -9567,6 +9840,9 @@ func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
 
 	decimalDigits := func(value string) int32 {
 		value = strings.TrimPrefix(value, "-")
+		if value == "0" && len(zeroWithoutIntegerDigit) > 0 && zeroWithoutIntegerDigit[0] {
+			return 0
+		}
 		return int32(len(value))
 	}
 	switch value := lit.Value.(type) {
@@ -9579,13 +9855,13 @@ func decimalIntegerWidth(expr *Expr, typ types.Type) (int32, bool) {
 	case *plan.Literal_I64Val:
 		return decimalDigits(strconv.FormatInt(value.I64Val, 10)), true
 	case *plan.Literal_U8Val:
-		return int32(len(strconv.FormatUint(uint64(value.U8Val), 10))), true
+		return decimalDigits(strconv.FormatUint(uint64(value.U8Val), 10)), true
 	case *plan.Literal_U16Val:
-		return int32(len(strconv.FormatUint(uint64(value.U16Val), 10))), true
+		return decimalDigits(strconv.FormatUint(uint64(value.U16Val), 10)), true
 	case *plan.Literal_U32Val:
-		return int32(len(strconv.FormatUint(uint64(value.U32Val), 10))), true
+		return decimalDigits(strconv.FormatUint(uint64(value.U32Val), 10)), true
 	case *plan.Literal_U64Val:
-		return int32(len(strconv.FormatUint(value.U64Val, 10))), true
+		return decimalDigits(strconv.FormatUint(value.U64Val, 10)), true
 	default:
 		return integerMetadataWidth(typ.Oid), false
 	}
@@ -10842,6 +11118,17 @@ func appendSyntaxExplicitCastBeforeExpr(ctx context.Context, expr *Expr, toType 
 }
 
 func appendComparisonCastBeforeExpr(ctx context.Context, expr *Expr, toType Type) (*Expr, error) {
+	if types.T(expr.Typ.Id).IsMySQLString() && types.T(toType.Id).IsMySQLString() &&
+		expr.Typ.Charset == toType.Charset && expr.Typ.CollationVersion == toType.CollationVersion &&
+		expr.Typ.CollationCoercibilitySet && !toType.CollationCoercibilitySet {
+		// Comparison canonicalization changes representation, not collation
+		// priority. PAD SPACE and window adapters rebuild targets from runtime
+		// types, which omit these plan-only fields. Keep an already resolved
+		// target's provenance when the caller supplies one.
+		toType.CollationCoercibility = expr.Typ.CollationCoercibility
+		toType.CollationCoercibilitySet = true
+		toType.CollationMergeConflict = expr.Typ.CollationMergeConflict
+	}
 	return appendCastBeforeExprWithOverload(ctx, expr, toType, 2)
 }
 
@@ -11113,9 +11400,9 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	if !hasSpecialArg {
 		return args
 	}
-	// Numeric aggregates consume ENUM ordinals and SET bitmaps. Resolve
-	// storage before the generic string-numeric conversion.
-	if usesMySQLSpecialNumericAggregateInput(name, len(args)) {
+	// Numeric aggregates and BIT_COUNT consume ENUM ordinals and SET bitmaps.
+	// Resolve storage even when a display string matches a string overload.
+	if usesMySQLSpecialNumericInput(name, len(args)) {
 		return rawArgs
 	}
 
@@ -11149,12 +11436,12 @@ func useStoredMySQLSpecialTypesForNumericContract(ctx context.Context, name stri
 	return result
 }
 
-func usesMySQLSpecialNumericAggregateInput(name string, argCount int) bool {
+func usesMySQLSpecialNumericInput(name string, argCount int) bool {
 	if argCount != 1 {
 		return false
 	}
 	switch name {
-	case "sum", "avg", "bit_and", "bit_or", "bit_xor":
+	case "sum", "avg", "bit_and", "bit_or", "bit_xor", "bit_count":
 		return true
 	default:
 		return false
@@ -11456,18 +11743,31 @@ func resetDateFunctionArgs(ctx context.Context, dateExpr *Expr, intervalExpr *Ex
 			return []*Expr{dateExpr, firstExpr, makePlan2Int64ConstExprWithType(int64(intervalType))}, nil
 		}
 	}
-	// DAY can carry a fractional day for these source types. Choose the
-	// result family from the static signature, including whole-valued rows;
-	// neither the spelling of a literal nor a row value may change metadata.
-	if dateExpr.Typ.Id == int32(types.T_date) && intervalType == types.Day {
+	// Calendar DAY uses integral days; SECOND truncates to microseconds.
+	// Preserve the evaluated source type so DECIMAL DAY can round while
+	// floating/text DAY truncate. TIME retains its separate raw contract above.
+	if dateExpr.Typ.Id != int32(types.T_time) && (intervalType == types.Day || intervalType == types.Second) {
 		switch types.T(firstExpr.Typ.Id) {
-		case types.T_float32, types.T_float64,
-			types.T_decimal64, types.T_decimal128, types.T_decimal256,
-			types.T_char, types.T_varchar, types.T_text, types.T_any:
-			dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, plan.Type{Id: int32(types.T_datetime), Scale: 6})
+		case types.T_char, types.T_varchar, types.T_text, types.T_any,
+			types.T_float32, types.T_float64,
+			types.T_decimal64, types.T_decimal128, types.T_decimal256:
+			number, err := BindFuncExprImplByPlanExpr(ctx, "to_calendar_interval", []*Expr{
+				firstExpr, makePlan2Int64ConstExprWithType(int64(intervalType)),
+			})
 			if err != nil {
 				return nil, err
 			}
+			unit := intervalType
+			if intervalType == types.Second {
+				unit = types.MicroSecond
+				if dateExpr.Typ.Id == int32(types.T_date) {
+					dateExpr, err = appendCastBeforeExpr(ctx, dateExpr, plan.Type{Id: int32(types.T_datetime)})
+					if err != nil {
+						return nil, err
+					}
+				}
+			}
+			return []*Expr{dateExpr, number, makePlan2Int64ConstExprWithType(int64(unit))}, nil
 		}
 	}
 
@@ -11926,6 +12226,13 @@ func validNameConstValueExpr(arg *plan.Expr, allowCanonicalStringCast bool) bool
 		return true
 	}
 	fn := arg.GetF()
+	if fn != nil && fn.Func != nil && fn.Func.ObjName == "cast" && !fn.SyntaxExplicitCast &&
+		len(fn.Args) == 2 && fn.Args[1].GetT() != nil &&
+		arg.Typ.CollationCoercibilitySet && arg.Typ.CollationCoercibility == 0 {
+		// COLLATE binds as a cast with explicit collation provenance. Validate
+		// its operand recursively instead of admitting arbitrary foldable code.
+		return validNameConstValueExpr(fn.Args[0], allowCanonicalStringCast)
+	}
 	if fn == nil || fn.Func == nil || len(fn.Args) != 1 {
 		return false
 	}
@@ -11958,6 +12265,8 @@ func validNameConstLiteralValueAst(expr tree.Expr, allowCanonicalStringCast bool
 	switch value := expr.(type) {
 	case *tree.NumVal:
 		return true
+	case *tree.CollateExpr:
+		return validNameConstLiteralValueAst(value.Expr, allowCanonicalStringCast)
 	case *tree.CastExpr:
 		return allowCanonicalStringCast && isCanonicalStringLiteralCastAst(value)
 	case *tree.UnaryExpr:
