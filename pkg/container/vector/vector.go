@@ -9108,6 +9108,19 @@ func implFixedRowToString[T types.FixedSizeT](v *Vector, idx int) string {
 	}
 }
 
+// Low-precision scalar storage contains bit codes; present their numeric values
+// using the same float32 convention as ordinary scalar rows.
+func implLowPrecisionFloatRowToString(v *Vector, idx int) string {
+	if v.IsConst() {
+		idx = 0
+	}
+	if v.IsConstNull() || v.nsp.Contains(uint64(idx)) {
+		return "null"
+	}
+	value, _ := GetLowPrecisionFloatAt(v, idx)
+	return fmt.Sprintf("%v", value)
+}
+
 func implTimestampRowToString(v *Vector, idx int) string {
 	if v.IsConstNull() {
 		return "null"
@@ -9255,14 +9268,8 @@ func (v *Vector) RowToString(idx int) string {
 		return implFixedRowToString[float32](v, idx)
 	case types.T_float64:
 		return implFixedRowToString[float64](v, idx)
-	case types.T_bf16:
-		return implFixedRowToString[types.BF16](v, idx)
-	case types.T_float16:
-		return implFixedRowToString[types.Float16](v, idx)
-	case types.T_float8:
-		return implFixedRowToString[types.Float8](v, idx)
-	case types.T_float4:
-		return implFixedRowToString[types.Float4](v, idx)
+	case types.T_bf16, types.T_float16, types.T_float8, types.T_float4:
+		return implLowPrecisionFloatRowToString(v, idx)
 	case types.T_date:
 		return implFixedRowToString[types.Date](v, idx)
 	case types.T_year:

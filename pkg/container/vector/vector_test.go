@@ -4092,6 +4092,20 @@ func BenchmarkMustFixedCol(b *testing.B) {
 }
 
 func TestRowToString(t *testing.T) {
+	t.Run("low_precision", func(t *testing.T) {
+		testLowPrecisionFloatRowStrings(t, types.T_bf16,
+			[]types.BF16{0x3fc0, 0xc000, 0, 0x8000, 0x7f7f, 1},
+			[]float32{1.5, -2, 0, float32(math.Copysign(0, -1)), math.Float32frombits(0x7f7f0000), float32(math.Ldexp(1, -133))})
+		testLowPrecisionFloatRowStrings(t, types.T_float16,
+			[]types.Float16{0x3e00, 0xc000, 0, 0x8000, 0x7bff, 1},
+			[]float32{1.5, -2, 0, float32(math.Copysign(0, -1)), 65504, float32(math.Ldexp(1, -24))})
+		testLowPrecisionFloatRowStrings(t, types.T_float8,
+			[]types.Float8{0x3c, 0xc0, 0, 0x80, 0x7e, 1},
+			[]float32{1.5, -2, 0, float32(math.Copysign(0, -1)), 448, 1.0 / 512})
+		testLowPrecisionFloatRowStrings(t, types.T_float4,
+			[]types.Float4{3, 12, 0, 8, 7, 1},
+			[]float32{1.5, -2, 0, float32(math.Copysign(0, -1)), 6, 0.5})
+	})
 	mp := mpool.MustNewZero()
 
 	{ // Array Float32
