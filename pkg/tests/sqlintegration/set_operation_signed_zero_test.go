@@ -122,6 +122,21 @@ func TestSetOperationSignedZero(t *testing.T) {
 			require.Equal(t, []string{"4:1:1:1"}, readWindowNullRows(t, rows))
 		})
 		t.Run("correlated-union", func(t *testing.T) {
+			t.Run("dependent-program-boundary", func(t *testing.T) {
+				deep := "(select (select i.id+o.id from zeros i where i.id=1) from zeros j where j.id=1)"
+				// The new dependent route remains executable on its own.
+				var value int
+				require.NoError(t, conn.QueryRowContext(ctx, "select "+deep+" from zeros o where o.id=1").Scan(&value))
+				require.Equal(t, 2, value)
+				// A separate scalar-set occurrence must not lose its admission
+				// marker when the query also selects that execution route.
+				scalar := "(select i.d from zeros i where i.id<=o.id union select i.d from zeros i where i.id<=o.id)"
+				var member string
+				require.NoError(t, conn.QueryRowContext(ctx, "select cast("+scalar+" as varchar) from zeros o where o.id=1").Scan(&member))
+				require.Equal(t, "-0", member)
+				err := conn.QueryRowContext(ctx, "select cast("+scalar+" as varchar),"+deep+" from zeros o where o.id=1").Scan(&member, &value)
+				require.ErrorContains(t, err, "bounded scalar set reaggregation cannot execute inside dependent programs")
+			})
 			for _, q := range []string{
 				"create table ci_inner(oref int,grp int,ie int)",
 				"insert into ci_inner values(1,1,1),(1,1,1),(1,2,NULL),(2,1,3),(3,1,4),(3,2,NULL)",
@@ -254,10 +269,13 @@ func TestSetOperationSignedZero(t *testing.T) {
 				require.Equal(t, []string{"3", "4"}, readWindowNullRows(t, rows))
 			})
 
-			t.Run("missing-arm-identity-diagnostic", func(t *testing.T) {
+			t.Run("missing-arm-identity-dependent-execution", func(t *testing.T) {
 				q := "select o.id from ci_outer o where exists (with q(n) as (select o.oref) select n from q union all select 7) and o.id=2"
-				_, err := conn.ExecContext(ctx, q)
-				require.EqualError(t, err, "Error 20102 (HY000): correlated local CTE: UNION ALL without matching row identities is not yet implemented")
+				// Main's dependent owner now executes the formerly rejected arm
+				// without inventing a missing identity in the decorrelation path.
+				rows, err := conn.QueryContext(ctx, q)
+				require.NoError(t, err)
+				require.Equal(t, []string{"2"}, readWindowNullRows(t, rows))
 			})
 
 			t.Run("existential-predicate-templates", func(t *testing.T) {

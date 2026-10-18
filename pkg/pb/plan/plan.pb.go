@@ -8400,7 +8400,7 @@ type Node struct {
 	DedupKeyExprs []*Expr `protobuf:"bytes,95,rep,name=dedup_key_exprs,json=dedupKeyExprs,proto3" json:"dedup_key_exprs,omitempty"`
 	// Compiler-generated scalar UNION reaggregation only. WINDOW streams a
 	// global occurrence identity; LEFT JOIN charges actual candidate work.
-	// Both stages require the bounded execution contract introduced with v119.
+	// Both stages require the bounded execution contract introduced with v120.
 	ScalarSetReaggregation bool     `protobuf:"varint,96,opt,name=scalar_set_reaggregation,json=scalarSetReaggregation,proto3" json:"scalar_set_reaggregation,omitempty"`
 	XXX_NoUnkeyedLiteral   struct{} `json:"-"`
 	XXX_unrecognized       []byte   `json:"-"`

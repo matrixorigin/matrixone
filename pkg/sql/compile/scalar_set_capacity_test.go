@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -75,6 +76,7 @@ func TestScalarSetFallbackResourceLifecycle(t *testing.T) {
 			require.NoError(t, err)
 			proc := testutil.NewProcess(t, testutil.WithFileService(fs))
 			t.Cleanup(proc.Free)
+			restoreRuntimeVariableForTest(t, proc.GetService(), moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
 			proc.Ctx = ctx
 			proc.ReplaceTopCtx(ctx)
 			cap := uint64(64 << 20)

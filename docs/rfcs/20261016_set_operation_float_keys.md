@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 11
+- Revision: 12
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 12 integration baseline: official main `f11dd8c5d700f215922835f314ea18d32471f482`
 - Revision 11 measurement baseline: official main `b111224b0c624773389b390cd3cf1223126b6ee2`
 - Design feedback: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784
 - Independently accepted revision: 11 at `e7dbe6a2cdd57d0c53221bafe35bae1c1f6b29e8`
@@ -44,6 +45,13 @@ at the exact commit recorded above; review 5559558038 separately approves that
 implementation. The acceptance record below preserves their distinct scope and
 limitations. This documentation update records those decisions without changing
 the accepted architecture or qualification protocol.
+
+Revision 12 integrates official parameterized subquery programs and ordinary
+analytic allocation/continuation owners. The bounded local fallback retains its
+accepted contract; queries combining that marker with dependent programs are
+rejected before compilation because those kernels do not bind its work lease or
+CN permit. Independent review records below apply to revision 11 at their stated
+commit; they are not an approval claim for this integration.
 
 ## Membership contract
 
@@ -163,8 +171,10 @@ budget admits at most **2** marked attempts concurrently. It opens an allocation
 account capped at **256 MiB**, or the smaller inherited limit. Retained borrowed
 input is conservatively reserved against that same account even when upstream
 physical provenance is unknown; an allocation selection alone never proves that
-the retained backing is charged. Shared backing may be charged twice. New owner
-catalog ID 14 covers the marked Window only.
+the retained backing is charged. Shared backing may be charged twice. The official owner
+catalog reserves Dependent ID 14 and Window ID 15. Marked streaming identity and
+ordinary analytic windows share the Window owner class, with their respective
+allocation bindings and cleanup paths.
 
 All candidate stages in an attempt share **16,777,216 candidate pairs**. This is
 a monotonic checked counter, not a per-join or per-output-batch allowance. Work
@@ -737,17 +747,17 @@ CI remains pending.
 This documentation does not grant independent design or capacity approval.
 
 
-### Revision 11 bounded automatic execution and current receipt
+### Revision 11 bounded automatic execution and measurement receipt
 
-The [source-bound receipt](validation/20261018_scalar_set_capacity_r11.json)
-records the revised implementation and benchmark on Darwin/arm64 CPU, Go 1.27.1,
+The historical [source-bound receipt](validation/20261018_scalar_set_capacity_r11.json)
+records the revision-11 implementation and benchmark on Darwin/arm64 CPU, Go 1.27.1,
 with the repository CGo wrapper. The full public signed-zero regression and
 manual benchmark completed successfully in 19.370 seconds. Official main was
 freshly verified at `d304047724bea6104c5c2be496107928034b0778`; its new HAKeeper
 and isolated-test commits do not change the implementation base or protocol 118.
-The delivered capability remains 119. Source fingerprints identify the exact
-production/test closure; earlier receipts are not reused as current capacity
-proof.
+The measured capability was 119. Source fingerprints identify that exact
+production/test closure; this receipt is retained unchanged and does not qualify
+the changed revision-12 inputs.
 
 Each of 21 profiles executed one separately labelled first invocation, one
 excluded warm-up and three measured rounds on the same input/settings. Concurrent
@@ -811,6 +821,50 @@ recorded below. The receipt's `Execution.IndependentApproval` field retains the
 pending state at measurement time; the immutable receipt is not rewritten to
 represent the subsequent review decisions.
 
+
+### Revision 12 dependent-program integration and refreshed qualification
+
+Official main `f11dd8c5d700f215922835f314ea18d32471f482` adds parameterized
+subquery programs at MORPC 119, ordinary analytic allocation and suspendable
+LoopJoin predicates. This integration preserves those owners, their continuation
+cursors and source admission, while retaining the marked fallback's streaming
+identity and shared resource leases. Window owner ID 15 is the official catalog
+entry; no second Window owner is introduced. Protobuf regeneration preserves
+both dependent/slot/correlation descriptors and the scalar marker 95.
+
+Both ordinary and dependent native function construction now recheck the
+set-key 120 floor before allocation. Dependent compilation checks expression
+features too; a retained template prepared at 120 rejects key execution after
+rollback to 119. Dependent-only queries retain 119. Mixed dependent-program and
+marked scalar fallback queries reject before source work, because the dependent
+kernel factories do not yet carry that fallback lease/placement contract.
+Public controls exercise each route separately and prove the mixed rejection.
+The formerly unsupported missing-identity CTE UNION ALL now executes through the
+upstream dependent owner; its public regression asserts the result row 2.
+
+The refreshed [source-bound receipt](validation/20261019_scalar_set_capacity_rebase.json)
+records the final integrated source, Darwin/arm64 CPU, Go 1.27.1 and the repository
+CGo wrapper. The public suite and benchmark passed in 22.050 s. All 21 profiles and
+135 samples execute the same separate first invocation, excluded warm-up and
+three measured rounds, with actual overlap for C2 profiles. Maximum first
+completion was 689.871 ms; maximum measured completion was 796.713 ms. Participating
+account peak was 63,507,040 bytes; process-lifetime RSS high-water was 686,178,304 bytes.
+Exact 2^24-pair input succeeds; excess work returns 20833. Every internal account
+summary has a valid generation and zero live terminal bytes. These measurements
+retain the stated local scope and are not universal latency, upstream-memory or
+process-RSS bounds. The revision 11 receipt remains immutable historical evidence.
+
+Owning planner/compile/colexec/dependent, Window/LoopJoin/process/mpool and protobuf
+checks passed. Focused race checks include retained protocol rollback, all nine
+composed fallback failure/reuse modes, continuation/scan caches and Window
+retention/account cleanup. The composed fixture explicitly installs and restores
+its rollout floor, independently of other protocol tests. Vet and incremental
+lint passed for the 17-package closure; the changed compile/colexec/public-test
+closure was checked again after the protocol correction. Plan/pipeline protobuf
+regeneration matches the committed generated sources, including postprocessors.
+The independent acceptance/approval links below remain decisions on revision 11;
+this integration does not rewrite their reviewed revision.
+
 ## Alternatives
 
 | Choice | Benefits | Costs and reason for the current proposal |
@@ -834,40 +888,40 @@ activation gates. Retain the terminal 20833 behavior, participating-account limi
 and coordinator-only scope when deploying; broader distributed execution and
 universal latency or process-RSS guarantees remain unqualified.
 
-Official main at this revision ends at MORPC 118. This capability uses MORPC
-**119**. The feature walker recognizes encoded function identity 601 without
+Official main at this revision ends at MORPC 119 for coordinator-owned
+parameterized subquery programs. This capability uses MORPC **120**. The feature walker recognizes encoded function identity 601 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar composition adds no separate function identity. It adds
 `plan.Node.scalar_set_reaggregation` field 95 and
 `pipeline.Instruction.scalar_set_reaggregation` field 65. Marker-only integer
-fallbacks require 119 too. Senders and receivers reject marked remote scopes at
+fallbacks require 120 too. Senders and receivers reject marked remote scopes at
 all versions, before operator decoding, because a remote attempt cannot share
 the coordinator's work/account lease. Local scope validation rejects remote
 nodes, DOP above one, and marker placement outside WINDOW/LEFT JOIN. Official main
 retains SELECT division diagnostics at 116, conditional on execution/session
-policy. Set keys require 119 regardless of that policy; a combined expression
-requires 119. Division diagnostics remain outside persisted-expression admission. Official main
+policy. Set keys require 120 regardless of that policy; a combined expression
+requires 120. Division diagnostics remain outside persisted-expression admission. Official main
 adds collation-aware LEAST/GREATEST at 117; that independent feature remains
-admitted at 117, and a combined expression with a set key requires 119.
+admitted at 117, and a combined expression with a set key requires 120.
 The released table-collation function retains identity 600 and floor 118;
 table-only expressions remain admitted at 118, while a combined expression
-with a set key requires 119.
+with a set key requires 120.
 
-Placement requires workers advertising 119 or newer; missing or old capabilities
+Placement requires workers advertising 120 or newer; missing or old capabilities
 fall back to one CN on the capable coordinator. Sending rechecks actual pipeline
 destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
-missing or below 119. Operator expression construction checks the same floor
+missing or below 120. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 119. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
+also require 120. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and
-then release the 119 requirement. A prepare-time ANY type is not capability proof.
-A new binary configured at immediate predecessor floor 118 rejects these
+then release the 120 requirement. A prepare-time ANY type is not capability proof.
+A new binary configured at immediate predecessor floor 119 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
-under a floor below 119. Lowering a new binary's floor does not rewrite existing
+under a floor below 120. Lowering a new binary's floor does not rewrite existing
 catalog expressions or teach an old binary identity 601.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected
@@ -884,6 +938,14 @@ official-main latest and the exact PR head; a rebase advances this single
 capability to latest + 1 and updates sender/receiver/Prepare/persistence gates,
 this document and immediate-predecessor rollback tests together. Other open PRs
 using the same candidate do not reserve it.
+
+Dependent-only queries retain their independently released protocol 119. A query
+with both `Query.correlation` and any scalar-set marker is unsupported: the
+dependent entry point would reconstruct marked WINDOW/join operators outside
+the fallback admission and placement owner. Compilation rejects the combination
+before source work. Ordinary depth-one scalar-set queries and independent
+dependent queries retain their existing paths; distributed or mixed-owner
+scalar fallback is not qualified by this RFC.
 
 ## Evidence and acceptance record
 
