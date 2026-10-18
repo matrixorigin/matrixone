@@ -2,7 +2,7 @@
 
 ## 0. 修订与审查边界
 
-修订 **r3，2026-10-18**，基于 main `adbdd5c718baca6e4c054194f888b48a4f84a0a2`。r3 的实现前设计经 `gpt-6.1-sol / xhigh` 独立审查 PASS（session `01a14e30-2309-7380-b4f0-2a2ab293c768`）；LOCAL policy 澄清在同一模型/effort 下补充设计 PASS，保留原 PR 的 LOCAL CHECK 行跳过契约；最终实现仍需独立总审查和当前版本验证。此记录不修改 GitHub reviewer 的决定。
+修订 **r3，2026-10-18**，基于 main `adbdd5c718baca6e4c054194f888b48a4f84a0a2`。r3 的实现前设计经 `gpt-6.1-sol / xhigh` 独立审查 PASS（session `01a14e30-2309-7380-b4f0-2a2ab293c768`）；LOCAL policy 澄清在同一模型/effort 下补充设计 PASS，保留原 PR 的 LOCAL CHECK 行跳过契约；实现与验证证据按当前版本单独记录在 PR 中。此记录不修改 GitHub reviewer 的决定。
 
 问题 [#28238](https://github.com/matrixorigin/matrixone/issues/28238)，实现 [#30107](https://github.com/matrixorigin/matrixone/pull/30107)。保留原始 13 个提交及 6 次合并的累计功能修改；不恢复已被 main 吸收、累计增量为零的 EXPLAIN prerequisite。
 
@@ -157,3 +157,7 @@ OrderedAutoIncrement 既有 1–5 字段和 OrderedForeignKey 1–6 字段保留
 保留原 lease-transfer/allocator/cache retirement、final-ID cursor、CHECK materialization 和原唯一接受 owner。查找描述只保存 planner 作出的物理访问决定；TxnOffset 保护 statement view。同步 build 消费现有预算/hash/refcount；witness 消费现有 row lock/retry。这些增量分别消除重复全扫、过宽锁和旧视图复用风险，不创建通用在线 spill 字典或另一套事务协议。
 
 后续真实 workload 若要求超预算磁盘查找，应另行设计可寻址的磁盘 lookup owner，不能把普通异步 JOIN spill 的单消费者 move-only payload 当随机访问缓存。本次没有隐藏 legacy fallback，也没有把旧 r2 小批 envelope 作为未执行的上线约束。
+
+### Unicode 前缀索引的准入
+
+Unicode UNIQUE 的字符前缀不能证明完整 SQL 等值关系：`ßa` 和 `ssa` 在 `utf8mb4_unicode_ci` 下相等，但各自第一个字符不同。这类索引复用每次执行只构建一次的 resident 路径，以 SQL 等值键匹配并锁定实际父行的物理主键。完整的版本化 Unicode 索引仍可点查；原生回归测试以 SQL 等值查询为参照，同时覆盖完整索引和前缀索引。

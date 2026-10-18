@@ -135,6 +135,22 @@ func TestOrderedInsertIgnoreForeignKeys(t *testing.T) {
 
 		})
 
+		for _, mode := range []string{"full", "prefix"} {
+			t.Run("unicode_"+mode, func(t *testing.T) {
+				suffix := "k"
+				if mode == "prefix" {
+					suffix = "k(1)"
+				}
+				parent, child := "unicode_parent_"+mode, "unicode_child_"+mode
+				exec(t, "create table "+parent+"(id int primary key,n int,k varchar(16) collate utf8mb4_unicode_ci,unique(n,"+suffix+"))")
+				exec(t, "insert into "+parent+" values(9,1,'ßa')")
+				count(t, "select count(*) from "+parent+" where n=1 and k='ssa'", 1)
+				exec(t, "create table "+child+"(id int auto_increment primary key,p varchar(16) collate utf8mb4_unicode_ci,foreign key(id,p) references "+parent+"(n,k))")
+				exec(t, "insert ignore into "+child+"(p) values('ssa')")
+				count(t, "select count(*) from "+child+" where id=1", 1)
+			})
+		}
+
 		exec(t, "create table self_pair(id int auto_increment primary key,p int,region int,child_region int,unique(id,region,p),foreign key(p,child_region) references self_pair(id,region))")
 		exec(t, "insert ignore into self_pair values(1,1,10,10),(NULL,1,20,10),(NULL,999,30,10),(NULL,2,30,20)")
 		count(t, "select count(*) from self_pair where (id,p,region,child_region) in ((1,1,10,10),(2,1,20,10),(3,2,30,20))", 3)

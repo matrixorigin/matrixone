@@ -164,7 +164,9 @@ func (builder *QueryBuilder) orderedForeignKeyAccess(bindCtx *BindContext, check
 		if !index.Unique || !index.TableExist || !foreignKeyIndexPartsEqual(index.Parts, names) {
 			continue
 		}
-		if indexUsesUnicodeCollation(index, parent) && index.KeyFormat != collation.KeyFormatV1 {
+		// Character prefixes do not preserve Unicode equality expansions (for example ß = ss).
+		if indexUsesUnicodeCollation(index, parent) &&
+			(index.KeyFormat != collation.KeyFormatV1 || regularIndexHasDeclaredPrefix(index)) {
 			continue
 		}
 		ref, table, err := builder.compCtx.ResolveIndexTableByRef(check.Ref, index.IndexTableName, bindCtx.snapshot)
