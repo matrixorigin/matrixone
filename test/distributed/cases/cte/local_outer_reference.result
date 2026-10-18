@@ -178,66 +178,81 @@ select p.id from pages p where exists (
 with q(n) as (select p.parent_id)
 select n from q union all select 7
 ) and p.id=2;
-correlated local CTE: UNION ALL without matching row identities is not yet implemented
+➤ id[4,32,0]  𝄀
+2
 select p.id, (with q(n) as (select p.parent_id)
 select count(*) from q having count(*)=0 limit 0) as c
 from pages p where p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  null
 select p.id, (with q(n) as (select p.parent_id)
 select count(*) from q having count(*)=0 limit 1 offset 1) as c
 from pages p where p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  null
 select p.id from pages p where exists (
 with q(n) as (select p.parent_id from pages a where a.id=-1)
 select count(*) from q having count(*)=0
 union all select count(*) from q having count(*)=0
 ) and p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+➤ id[4,32,0]  𝄀
+2
 select p.id, (with q(n) as (select p.parent_id)
 select count(*) from pages a left join q on a.id=q.n) as c
 from pages p where p.id=2;
-correlated local CTE: consumer outer join cannot pull up an identity predicate is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  5
 select p.id, (with q(n) as (select p.parent_id)
 select row_number() over (order by count(*)) from q having count(*)=1) as rn
 from pages p where p.id=2;
-correlated local CTE: consumer aggregate window cannot use COUNT empty-input fallback is not yet implemented
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+2  ¦  1
 select p.id, (with q(n) as (select p.parent_id)
 select count(n) from q where n<=p.id having count(n)=0) as c
 from pages p where p.id=2;
-correlated local CTE: consumer correlated filter must run before aggregation or window is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  null
 select p.id from pages p where exists (
 with q(n) as (select p.parent_id from pages a where a.id=-1)
 select count(*) from q
 ) and p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+➤ id[4,32,0]  𝄀
+2
 select p.id from pages p where 0 in (
 with q(n) as (select p.parent_id from pages a where a.id=-1)
 select count(*) from q
 ) and p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+➤ id[4,32,0]  𝄀
+2
 select p.id from pages p where exists (
 with q(n) as (select p.parent_id from pages a where a.id=-1)
 select count(*) from q union all select count(*) from q
 ) and p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+➤ id[4,32,0]  𝄀
+2
 select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
 select sum(c) from (select count(*) as c from q) s) as total
 from pages p where p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+➤ id[4,32,0]  ¦  total[3,38,0]  𝄀
+2  ¦  0
 select p.id, (with q(n) as (select a.id+p.parent_id-1 from pages a where a.id in (2, 5))
 select row_number() over (order by n desc) from q where n<=p.id) as rn
 from pages p where p.id=2;
-correlated local CTE: consumer correlated filter must run before aggregation or window is not yet implemented
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+2  ¦  1
 select p.id, (with q(n) as (select p.parent_id)
 select count(*) from q limit 0) as c from pages p where p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  null
 select p.id, (with q(n) as (select p.parent_id)
 select count(*) from q limit 1 offset 1) as c from pages p where p.id=2;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  null
 select p.id, (with q(n) as (select p.parent_id)
 select row_number() over (order by count(*)) from q) as rn
 from pages p where p.id=2;
-correlated local CTE: consumer aggregate window cannot use COUNT empty-input fallback is not yet implemented
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+2  ¦  1
 select p.id, (with q(n) as (select p.parent_id from pages a where a.id=-1)
 select count(*) from q group by n) as c
 from pages p where p.id=2;
@@ -257,11 +272,13 @@ from pages p where p.id in (2, 5) order by p.id;
 select p.id, (with q(n) as (select p.parent_id)
 select row_number() over (order by count(*)) from q group by n) as rn
 from pages p where p.id=2;
-correlated local CTE: consumer aggregate window cannot use COUNT empty-input fallback is not yet implemented
+➤ id[4,32,0]  ¦  rn[-5,64,0]  𝄀
+2  ¦  1
 select p.id, (with q(n) as (select p.parent_id)
 select count(*) from q join pages b on n=b.id and n=p.id) as c
 from pages p where p.id=2;
-correlated local CTE: consumer join ON has an unhandled outer reference is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  0
 select p.id, (select count(*) from pages a
 where a.id=p.id and a.id<2 order by count(*)) as c
 from pages p where p.id in (1, 2) order by p.id;
@@ -449,7 +466,9 @@ insert into guarded_values values (1,'bad'),(2,'2');
 select p.id, case when p.id=1 then 0 else
 (with q(n) as (select cast(p.val as signed)) select n from q) end as c
 from guarded_values p order by p.id;
-correlated local CTE: producer expression may fail outside the consumer evaluation domain is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2
 select p.id, case when p.id=1 then 0 else (select cast(p.val as signed)) end as c
 from guarded_values p order by p.id;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
@@ -564,7 +583,9 @@ insert into guarded_abs values (1,-9223372036854775808),(2,2);
 select p.id, case when p.id=1 then 0 else
 (with q(n) as (select abs(p.v)) select n from q) end as c
 from guarded_abs p order by p.id;
-correlated local CTE: producer expression may fail outside the consumer evaluation domain is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2
 select p.id, case when p.id=1 then 0 else (select abs(p.v)) end as c
 from guarded_abs p order by p.id;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
@@ -605,7 +626,9 @@ from guarded_abs p order by p.id;
 select p.id, (with q(n) as (select p.id where p.id<2)
 select count(*) in (0,1) from q limit 0) as c
 from guarded_abs p order by p.id;
-correlated local CTE: consumer scalar aggregate cannot preserve empty-input or result-row semantics is not yet implemented
+➤ id[4,32,0]  ¦  c[-7,1,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  null
 select p.id, (with q(n) as (select p.id where p.id<2)
 select count(*) in (0,1) from q group by n) as c
 from guarded_abs p order by p.id;
@@ -615,7 +638,9 @@ from guarded_abs p order by p.id;
 select p.id, case when p.id=1 then 0 else
 (with q(n) as (select p.v) select abs(n) from q) end as c
 from guarded_abs p order by p.id;
-correlated local CTE: consumer expression may fail outside the consumer evaluation domain is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2
 select p.id from guarded_abs p where p.id=2 and
 (with q(n) as (select abs(p.v)) select n from q)>0;
 ➤ id[4,32,0]  𝄀
@@ -636,12 +661,18 @@ select p.id, b.id from guarded_abs p left join guarded_abs b on
 case when p.id=1 then false else
 (with q(n) as (select abs(p.v)) select n from q)>0 end
 order by p.id, b.id;
-correlated local CTE: producer expression may fail outside the consumer evaluation domain is not yet implemented
+➤ id[4,32,0]  ¦  id[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  1  𝄀
+2  ¦  2
 select p.id, b.id from guarded_abs p left join guarded_abs b on
 case when p.id=1 then false else
 (with q(n) as (select p.v) select abs(n) from q)>0 end
 order by p.id, b.id;
-correlated local CTE: consumer expression may fail outside the consumer evaluation domain is not yet implemented
+➤ id[4,32,0]  ¦  id[4,32,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  1  𝄀
+2  ¦  2
 select p.id, b.id from guarded_abs p left join guarded_abs b on
 case when p.id=1 then false else
 (with q(n) as (select p.v) select n from q)>0 end
@@ -659,16 +690,19 @@ order by p.id, b.id;
 2  ¦  2
 select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
 from guarded_abs p order by p.id desc limit 1;
-correlated local CTE: producer expression may fail outside the consumer evaluation domain is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  2
 select p.id, (with q(n) as (select p.v) select abs(n) from q) as c
 from guarded_abs p order by p.id limit 1 offset 1;
-correlated local CTE: consumer expression may fail outside the consumer evaluation domain is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  2
 select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
 from guarded_abs p order by p.id limit 0;
-correlated local CTE: producer expression may fail outside the consumer evaluation domain is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]
 select p.id, (with q(n) as (select abs(p.v)) select n from q) as c
 from guarded_abs p where p.id=2 order by p.id desc limit 1;
-correlated local CTE: producer expression may fail outside the consumer evaluation domain is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+2  ¦  2
 select p.id, (with q(n) as (select p.v) select n from q) as c
 from guarded_abs p where p.id=2 order by p.id desc limit 1;
 ➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
@@ -838,7 +872,7 @@ select p.id, (with recursive q(n) as (
 select p.id union all select n from q where n=1
 ) select count(*) from q where abs(p.v)=2) as c
 from guarded_abs p order by p.id;
-correlated local CTE: recursive producer may fail outside the consumer evaluation domain is not yet implemented
+Data truncation: data out of range: data type int, '-9223372036854775808'
 select p.id, (with recursive q(n) as (
 select p.id union all select n from q where n=1
 ) select count(*) from q where p.id=2) as c
@@ -851,7 +885,9 @@ select p.id, case when p.id=2 then
 select p.id union all select n from q where n=1
 ) select count(*) from q) else 0 end as c
 from guarded_abs p order by p.id;
-correlated local CTE: recursive producer may fail outside the consumer evaluation domain is not yet implemented
+➤ id[4,32,0]  ¦  c[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  1
 select p.id, (with recursive q(n) as (
 select p.id union all select n from q where n=1
 ) select count(*) from q) as c

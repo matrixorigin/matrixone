@@ -64,9 +64,14 @@ func runFinalizeFixture(
 		}
 		require.Zero(t, cloneMP.CurrNB())
 	})
-	for {
+	for calls := 0; ; calls++ {
+		require.Less(t, calls, 8+4*buildBat.RowCount(), "action replay did not make progress")
 		res, err = vm.Exec(dedupArg, proc)
 		require.NoError(t, err)
+		if res.Status == vm.ExecYield {
+			require.Nil(t, res.Batch, "an incomplete action must not publish a result")
+			continue
+		}
 		if res.Batch == nil {
 			break
 		}
@@ -125,7 +130,20 @@ func TestDedupJoinEmitsOrderedODKUActions(t *testing.T) {
 		wantFKEligibility []bool
 		compactActions    bool
 		fkTracksKey       bool
+		suspendUpdate     bool
 	}{
+		{
+			name: "suspended existing actions preserve the partial output batch", buildPayload: []int32{100, 200}, probeKey: 10,
+			suspendUpdate: true, wantBatchCount: 1,
+			wantPayload: []int32{777, 777}, wantAffected: []uint64{0, 2},
+			wantPhysical: []bool{false, true}, wantFinal: []bool{false, true}, wantFKEligibility: []bool{true, false},
+		},
+		{
+			name: "suspended finalize action preserves the initial insert", buildPayload: []int32{100, 200}, probeKey: 99,
+			suspendUpdate: true, wantBatchCount: 1,
+			wantPayload: []int32{100, 777}, wantAffected: []uint64{0, 3},
+			wantPhysical: []bool{false, true}, wantFinal: []bool{false, true}, wantFKEligibility: []bool{true, true},
+		},
 		{
 			name: "compact existing row emits one final update action", buildPayload: []int32{100}, probeKey: 10,
 			wantBatchCount: 1,
@@ -266,7 +284,27 @@ func TestDedupJoinEmitsOrderedODKUActions(t *testing.T) {
 				proc.Free()
 			})
 
+			updateCalls := 0
+			if tc.suspendUpdate {
+				value := testutil.MakeInt32Vector([]int32{777}, nil, proc.Mp())
+				t.Cleanup(func() { value.Free(proc.Mp()) })
+				dedupArg.UpdateExpressions = func(_ *process.Process, current, incoming *batch.Batch) ([]*vector.Vector, error) {
+					updateCalls++
+					if updateCalls%2 == 1 {
+						return nil, nil
+					}
+					return []*vector.Vector{value}, nil
+				}
+			}
+
 			out := runFinalizeFixture(t, dedupArg, buildArg, proc, buildBat, probeBat)
+			if tc.suspendUpdate {
+				actions := len(tc.buildPayload)
+				if tc.probeKey != 10 {
+					actions--
+				}
+				require.Equal(t, 2*actions, updateCalls)
+			}
 			require.Len(t, out, tc.wantBatchCount)
 			payload := make([]int32, 0, len(out))
 			affected := make([]uint64, 0, len(out))
@@ -308,8 +346,10 @@ func TestDedupJoinResetClearsSuspendedActionReplay(t *testing.T) {
 	arg.ctr.finalizeActionIdx = 23
 	arg.ctr.finalizeActionActive = true
 	arg.ctr.finalizeLogicalAffect = 29
+	arg.ctr.updateSuspended = true
 
 	arg.Reset(proc, true, nil)
+	require.False(t, arg.ctr.updateSuspended)
 	require.Equal(t, 123, arg.ctr.resultBatchByteLimit,
 		"execution cleanup must preserve the configured batching policy")
 	require.Nil(t, arg.ctr.probeBat)

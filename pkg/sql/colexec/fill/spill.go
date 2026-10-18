@@ -1056,22 +1056,25 @@ func (ctr *container) beginSpill(
 	return nil
 }
 
-func (ctr *container) collectSpill(ap *Fill, proc *process.Process, analyzer process.Analyzer) error {
+func (ctr *container) collectSpill(ap *Fill, proc *process.Process, analyzer process.Analyzer) (yielded bool, err error) {
 	for {
 		result, err := vm.ChildrenCall(ap.GetChildren(0), proc, analyzer)
+		if result.Status == vm.ExecYield && err == nil {
+			return true, nil
+		}
 		if err != nil {
-			return err
+			return false, err
 		}
 		if result.Batch == nil {
 			ctr.childDone = true
 			ctr.spill.safeWatermark = ctr.spill.segmentRows
-			return ctr.spill.finalizeSegment(ctr, ap, proc)
+			return false, ctr.spill.finalizeSegment(ctr, ap, proc)
 		}
 		if err = ctr.appendSpillSource(ap, proc, analyzer, result.Batch); err != nil {
-			return err
+			return false, err
 		}
 		if ctr.spill.safeWatermark > ctr.spill.segmentStart {
-			return ctr.spill.finalizeSegment(ctr, ap, proc)
+			return false, ctr.spill.finalizeSegment(ctr, ap, proc)
 		}
 	}
 }

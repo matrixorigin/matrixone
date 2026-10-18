@@ -95,12 +95,18 @@ func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
 	}
 
 	err = tableScan.PrepareProjection(proc)
+	if err != nil {
+		return err
+	}
 	if tableScan.ctr.buf == nil {
 		tableScan.ctr.buf = batch.NewOffHeapWithSize(len(tableScan.Types))
 		tableScan.ctr.buf.Attrs = append(tableScan.ctr.buf.Attrs, tableScan.Attrs...)
 		for i := range tableScan.Types {
 			tableScan.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(plan.MakeTypeByPlan2Type(tableScan.Types[i]))
 		}
+	}
+	if tableScan.OutputAllocation != nil {
+		err = tableScan.ctr.buf.SetAllocationAccount(tableScan.OutputAllocation)
 	}
 	return
 }
