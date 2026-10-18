@@ -244,8 +244,16 @@ func TestTableDumpDefaultTimeZones(t *testing.T) {
 				bindingCtx := &tableDumpCancellingContext{Context: ctx, cancel: cancel}
 				compiler.SetContext(bindingCtx)
 				proc.GetSessionInfo().TimeZone = time.UTC
-				_, err := AnalyzeTableDumpBindings(compiler, def, def)
+				// A valid default may find its witness before cancellation.
+				// Force the same impossible value already rejected above so the
+				// search reaches its cancellation checkpoint on every host.
+				forged := proto.Clone(def).(*planpb.TableDef)
+				require.True(t, tamperTableDumpDefaultValue(forged.Cols[0].Default.Expr))
+				forgedBefore := proto.Clone(forged)
+				_, err := AnalyzeTableDumpBindings(compiler, def, forged)
 				require.ErrorIs(t, err, context.Canceled)
+				require.True(t, proto.Equal(before, def))
+				require.True(t, proto.Equal(forgedBefore, forged))
 				require.GreaterOrEqual(t, bindingCtx.calls.Load(), int32(8))
 				require.Same(t, time.UTC, proc.GetSessionInfo().TimeZone)
 			}

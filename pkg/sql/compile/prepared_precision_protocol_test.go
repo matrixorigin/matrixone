@@ -487,17 +487,17 @@ func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
 	require.True(t, features.Any())
 	require.True(t, features.TimestampAddSecondIntervals)
 	require.False(t, features.CalendarIntervalNormalization)
-	require.Equal(t, defines.MORPCVersion119, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion120, remoteExpressionProtocolVersion(features))
 	floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion119, floor)
+	require.Equal(t, defines.MORPCVersion120, floor)
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
-	for _, version := range []int64{defines.MORPCVersion118, defines.MORPCVersion119} {
+	for _, version := range []int64{defines.MORPCVersion119, defines.MORPCVersion120} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-		if version < defines.MORPCVersion119 {
+		if version < defines.MORPCVersion120 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 		} else {
 			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
@@ -506,16 +506,16 @@ func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
 		rt := moruntime.ServiceRuntime(c.proc.GetService())
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		err = validateRemoteExpressionPipelineProtocol(c.proc, p)
-		if version < defines.MORPCVersion119 {
-			require.ErrorContains(t, err, "version 119")
+		if version < defines.MORPCVersion120 {
+			require.ErrorContains(t, err, "version 120")
 		} else {
 			require.NoError(t, err)
 		}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
 		p.Node = &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}
 		err = validateRemoteExpressionDestination(c.proc, p, features)
-		if version < defines.MORPCVersion119 {
-			require.ErrorContains(t, err, "version 119")
+		if version < defines.MORPCVersion120 {
+			require.ErrorContains(t, err, "version 120")
 		} else {
 			require.NoError(t, err)
 		}

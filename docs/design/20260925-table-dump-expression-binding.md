@@ -1,7 +1,7 @@
 # Table dump expression binding (PR #29241, issue #28594)
 
-Status: revision 11; timezone-witness correction pending independent approval.
-Revision: 11, 2026-10-19. Revision 10 passed independent design review.
+Status: revision 11; timezone-witness design approved by independent gpt-6.1-sol/xhigh review.
+Revision: 11, 2026-10-19. Rebase design review: 2026-10-18; validation is recorded in the PR.
 
 ## Current extension: migration-era binding and format 3
 
@@ -32,8 +32,8 @@ remain excluded by their eligibility owner; ordinary indexes over generated
 results remain supported. Additional classification cost is confined to DDL,
 DUMP and LOAD; per-row normalization is unchanged.
 
-Current frozen-base allocations: main charset118 and functions599/600 stay
-published; fractional TIMESTAMPADD uses capability119, normalizer601 and end602.
+Current frozen-base allocations: main charset118, coordinator subquery119 and functions599/600 stay
+published; fractional TIMESTAMPADD uses capability120, normalizer601 and end602.
 No protobuf schema change or provisional-function-ID guessing is introduced.
 Historical revision10 evidence below retains its original input identity.
 
@@ -232,10 +232,10 @@ catalog migration is required.
 ## Cost, safety and operations
 
 There is no change in row evaluation or query-plan hot paths. Both DUMP and
-LOAD perform bounded candidate rebinding only for expressions containing
-exact division. Either operation can bind at most 248
-candidates (31 increments × eight parser modes) per persisted expression, with
-memory bounded by the manifest cap and one candidate expression at a time.
+LOAD verify persisted expressions through the applicable binding eras. Only
+division expressions enumerate all 31 precision increments; parser modes and
+the bounded timezone witnesses above share the same table-wide candidate-node
+budget. Memory is bounded by the manifest cap and one candidate expression at a time.
 Most expressions use the first parser mode, so measure both common and worst
 case. The shared 1 MiB text, 16,384 AST-node and one-million candidate-node
 visit limits above prevent planning cost from being hidden behind the 64 MiB
