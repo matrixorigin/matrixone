@@ -492,7 +492,7 @@ func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion120, floor)
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
-	for _, version := range []int64{defines.MORPCVersion119, defines.MORPCVersion120} {
+	for _, version := range []int64{defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion119} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
