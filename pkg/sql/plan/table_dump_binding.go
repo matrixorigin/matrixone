@@ -181,7 +181,11 @@ const (
 	tableDumpBindingImplicitTimestamp
 )
 
-func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode) (*planpb.Expr, error) {
+type tableDumpDefaultTimeZone struct {
+	mayDepend, folded bool
+}
+
+func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, timeZone *tableDumpDefaultTimeZone) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
 	switch mode {
 	case tableDumpBindingLegacyTimestampAdd:
@@ -208,9 +212,19 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 				&tree.AttributeDefault{Expr: ast},
 			},
 		}
-		bound, err := buildDefaultExprWithColumns(bindCtx, col, item.col.Typ, proc, def.Cols)
+		var unfolded *planpb.Expr
+		bound, err := buildDefaultExprWithColumnsObserved(bindCtx, col, item.col.Typ, proc, def.Cols, func(source, assigned *planpb.Expr) {
+			// Observe before assignment/folding can fail in the reading zone.
+			// Inspect the resolved source, not the assignment cast's target type:
+			// a plain NULL/zero TIMESTAMP needs no timezone reconstruction.
+			timeZone.mayDepend = timeZone.mayDepend || tableDumpDefaultUsesTimeZone(source)
+			unfolded = assigned
+		})
 		if err != nil {
 			return nil, err
+		}
+		if timeZone.mayDepend && !sameTableDumpBoundExpression(unfolded, bound.Expr) {
+			timeZone.folded = true
 		}
 		return bound.Expr, nil
 	case "on_update":
@@ -325,6 +339,47 @@ func tableDumpTimestampLiteral(expr *planpb.Expr) (int64, bool) {
 	return value.Timestampval, true
 }
 
+// Inspect resolved types before constant folding. Implicit TIMESTAMP casts can
+// occur anywhere in a default, including beneath a non-temporal result. The
+// lexical conversions below read the session zone without a TIMESTAMP input;
+// UUID's deterministic datetime overload does so at its epoch conversion too.
+func tableDumpDefaultUsesTimeZone(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.Typ.Id == int32(types.T_timestamp) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		switch fn.Func.ObjName {
+		case "from_unixtime", "unix_timestamp", "microsecond":
+			return true
+		case "uuid", "uuid_v1", "uuid_v6", "uuid_v7":
+			for _, arg := range fn.Args {
+				if arg.Typ.Id == int32(types.T_datetime) {
+					return true
+				}
+			}
+		}
+		for _, arg := range fn.Args {
+			if tableDumpDefaultUsesTimeZone(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, entry := range list.List {
+			if tableDumpDefaultUsesTimeZone(entry) {
+				return true
+			}
+		}
+	}
+	if literal := expr.GetLit(); literal != nil {
+		return tableDumpDefaultUsesTimeZone(literal.Src)
+	}
+	return false
+}
+
 func matchTableDumpTimestampDefault(want, candidate *planpb.Expr, zone *time.Location, bind func(*time.Location) (*planpb.Expr, error)) bool {
 	utc := candidate
 	if zone != time.UTC || utc == nil {
@@ -437,9 +492,10 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			if tableDumpImplicitTimestamp(item, ast) {
 				modes = append(modes, tableDumpBindingImplicitTimestamp)
 			}
-			// At most two timezone reconstructions supplement an ordinary
-			// candidate. They share the same cancellation and total visit budget.
+			// All timezone witnesses share the ordinary cancellation and total
+			// candidate-node budget. Only complete rebound trees can match.
 			var fatal error
+			var defaultTimeZone tableDumpDefaultTimeZone
 			bind := func(increment int64, mode tableDumpBindingMode, tz *time.Location) (*planpb.Expr, error) {
 				if fatal = ctx.GetContext().Err(); fatal != nil {
 					return nil, fatal
@@ -450,7 +506,7 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 					return nil, fatal
 				}
 				proc.GetSessionInfo().TimeZone = tz
-				return bindTableDumpExpression(ctx, target, item, ast, increment, mode)
+				return bindTableDumpExpression(ctx, target, item, ast, increment, mode, &defaultTimeZone)
 			}
 			var first *planpb.Expr
 			want := item.expr
@@ -479,21 +535,39 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 						sensitive = true
 					}
 					matched = matched || sameTableDumpBoundExpression(want, candidate)
-					if item.kind == "default" && item.col.Typ.Id == int32(types.T_timestamp) {
+					if item.kind == "default" {
 						_, folded := tableDumpTimestampLiteral(candidate)
 						_, stored := tableDumpTimestampLiteral(want)
-						if folded || stored {
+						if folded || stored || defaultTimeZone.folded || err != nil && defaultTimeZone.mayDepend {
 							// Even a same-zone match needs a binding witness: LOAD
 							// may run in a different zone from CREATE and DUMP.
-							// Conservatively capture constant TIMESTAMP defaults.
+							// Capture folded session dependencies for every result type.
 							sensitive = true
 							if !matched {
-								matched = matchTableDumpTimestampDefault(want, candidate, zone, func(tz *time.Location) (*planpb.Expr, error) {
-									return bind(increment, mode, tz)
-								})
+								if folded || stored {
+									matched = matchTableDumpTimestampDefault(want, candidate, zone, func(tz *time.Location) (*planpb.Expr, error) {
+										return bind(increment, mode, tz)
+									})
+								}
 								if fatal != nil {
 									stmt.Free()
 									return false, fatal
+								}
+								if !matched {
+									for tz := range tableDumpTimeZones {
+										rebound, _ := bind(increment, mode, tz)
+										if fatal != nil {
+											break
+										}
+										if sameTableDumpBoundExpression(want, rebound) {
+											matched = true
+											break
+										}
+									}
+									if fatal != nil {
+										stmt.Free()
+										return false, fatal
+									}
 								}
 							}
 						}

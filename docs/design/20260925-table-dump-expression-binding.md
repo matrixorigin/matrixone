@@ -1,7 +1,7 @@
 # Table dump expression binding (PR #29241, issue #28594)
 
-Status: revision 10 passed independent design review.
-Revision: 10, 2026-09-25.
+Status: revision 11; timezone-witness correction pending independent approval.
+Revision: 11, 2026-10-19. Revision 10 passed independent design review.
 
 ## Current extension: migration-era binding and format 3
 
@@ -36,6 +36,47 @@ Current frozen-base allocations: main charset118 and functions599/600 stay
 published; fractional TIMESTAMPADD uses capability119, normalizer601 and end602.
 No protobuf schema change or provisional-function-ID guessing is introduced.
 Historical revision10 evidence below retains its original input identity.
+
+## Revision 11: folded defaults and timezone witnesses
+
+Default verification observes the ordinary DDL owner's resolved expression
+before folding. TIMESTAMP conversions and session-dependent epoch/UUID
+conversions can fold to DATETIME, VARCHAR, numeric or UUID values. Such folded
+bindings require a format-3 witness even when CREATE and DUMP use the same
+timezone; LOAD may use another one. Ordinary integer/string expressions,
+timezone-independent DATETIME literals, and an unchanged executable
+UNIX_TIMESTAMP default retain their existing classification. Literal NULL and
+zero TIMESTAMP controls remain unchanged; a timezone-dependent expression
+folding to either value still requires capture. Dependencies are observed before
+assignment and folding, so a reading-zone overflow cannot suppress reconstruction
+under a valid authoring zone. This is a conservative capture rule,
+not a claim to recover the creation session from a folded value.
+
+On mismatch, verification rebinds the complete origin through the same default
+owner under UTC, the local location, 598 IANA names (including aliases, from
+Go 1.27.1's tzdata 2026c inventory), and the 1,680 numeric minute offsets admitted
+by SET time_zone. Named rules always come from time.LoadLocation, the frontend's
+owner. This supports historical second offsets and a single expression spanning
+different DST offsets; an arbitrary second-offset FixedZone is not a legal
+witness. The existing checked TIMESTAMP delta remains only a minute-offset
+fast path. No substring, output-delta or partial-tree equivalence is accepted.
+
+Candidates are yielded one at a time without goroutines or a global cache.
+Every bind uses the existing private process, cancellation and shared
+one-million-node candidate-visit budget; matching or exhaustion stops the
+search. The finite timezone search can add at most 2,280 witnesses per binding
+era/precision, still constrained by that shared table budget. Invalid or
+unavailable locations are skipped. The parent session, diagnostics and catalog
+trees remain untouched. The change is confined to administrative binding
+validation; no row-evaluation, manifest-layout or protocol version changes.
+
+Catalogs do not record custom ZONEINFO names, old machine-local rules or the
+creation tzdata version. Missing/changed historical rules can therefore still
+fail closed; this revision does not claim universal environment recovery.
+Retaining creation timezone provenance would require a separate catalog
+contract. Cross-zone public roundtrips, exact binding readback, future writes,
+type/value tamper rejection, cancellation and budget controls are the acceptance
+boundary for this correction.
 
 ## Problem and evidence
 

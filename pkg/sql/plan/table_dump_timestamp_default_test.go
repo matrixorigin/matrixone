@@ -15,8 +15,10 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 	"math"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -144,4 +146,157 @@ func TestTableDumpRejectsExpressionsForEmptyTarget(t *testing.T) {
 	supplied.Cols[0].Default = &planpb.Default{OriginString: "1", Expr: makePlan2Int64ConstExprWithType(1)}
 	_, err := AnalyzeTableDumpBindings(compiler, target, supplied)
 	require.ErrorContains(t, err, "expression count does not match")
+}
+
+func TestTableDumpDefaultTimeZones(t *testing.T) {
+	for _, tc := range []struct {
+		name, declaration, creationZone string
+		capture                         bool
+	}{
+		{"datetime_expression", "datetime default (from_unixtime(1704067200))", "UTC", true},
+		{"varchar_expression", "varchar(64) default (from_unixtime(1704067200,'%Y-%m-%d %H:%i:%s'))", "UTC", true},
+		{"named_timezone", "timestamp default '1971-01-01 00:00:00'", "Africa/Monrovia", true},
+		{"numeric_expression", "int default (hour(from_unixtime(1704067200)))", "Pacific/Chatham", true},
+		{"unfolded_unix_timestamp", "bigint default (unix_timestamp('1971-01-01 00:00:00'))", "Africa/Monrovia", false},
+		{"dst_expression", "varchar(64) default (concat(from_unixtime(1704067200,'%H'),':',from_unixtime(1719792000,'%H')))", "America/New_York", true},
+		{"uuid_datetime", "uuid default (uuid(cast('2024-01-01 00:00:00' as datetime)))", "Africa/Monrovia", true},
+		{"datetime_literal", "datetime default '2024-01-01 00:00:00'", "UTC", false},
+		{"ordinary_arithmetic", "int default (1+1)", "UTC", false},
+		{"ordinary_text", "varchar(64) default 'literal'", "UTC", false},
+		{"ordinary_string_function", "varchar(64) default (concat('a','b'))", "UTC", false},
+		{"literal_null", "timestamp default null", "UTC", false},
+		{"literal_zero", "timestamp default '0000-00-00 00:00:00'", "UTC", false},
+		{"nullable_utc", "int default (if(hour(from_unixtime(1704067200))=0,null,1))", "UTC", true},
+		{"nullable_east", "int default (if(hour(from_unixtime(1704067200))=0,null,1))", "Asia/Shanghai", true},
+		{"zero_result", "timestamp default (if(hour(from_unixtime(1704067200))=0,'0000-00-00 00:00:00','2024-01-01 00:00:00'))", "UTC", true},
+		{"backup_overflow", "tinyint default (hour(from_unixtime(1704067200))+120)", "UTC", true},
+		{"budget_control", "varchar(64) default (from_unixtime(cast(1704067200 as decimal(20,6))+cast(1 as decimal(20,6))/cast(3 as decimal(20,6)),'%Y'))", "UTC", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			location, err := time.LoadLocation(tc.creationZone)
+			require.NoError(t, err)
+			proc.GetSessionInfo().TimeZone = location
+			compiler := NewMockCompilerContext(false, proc)
+			compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+				if name == "div_precision_increment" {
+					return int64(4), nil
+				}
+				if name == "explicit_defaults_for_timestamp" {
+					return true, nil
+				}
+				return "", nil
+			}
+			stmt, err := mysql.ParseOne(t.Context(), "create table t(a "+tc.declaration+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false)
+			require.NoError(t, err)
+			def := built.GetDdl().GetCreateTable().TableDef
+			before := proto.Clone(def)
+			backupZones := []*time.Location{time.FixedZone("backup", 8*3600), location}
+			if location != time.UTC {
+				backupZones = append(backupZones, time.UTC)
+			}
+			for _, backupZone := range backupZones {
+				proc.GetSessionInfo().TimeZone = backupZone
+				warnings := &process.WarningProbe{}
+				proc.WarningSink = warnings
+				sensitive, err := AnalyzeTableDumpBindings(compiler, def, def)
+				require.NoError(t, err)
+				require.Equal(t, tc.capture, sensitive, "same-zone capture must protect a subsequent cross-zone LOAD")
+				require.True(t, proto.Equal(before, def))
+				require.Same(t, backupZone, proc.GetSessionInfo().TimeZone)
+				require.False(t, warnings.Warned())
+			}
+			if tc.name == "budget_control" {
+				forged := proto.Clone(def).(*planpb.TableDef)
+				require.True(t, tamperTableDumpDefaultValue(forged.Cols[0].Default.Expr))
+				started := time.Now()
+				_, err := AnalyzeTableDumpBindings(compiler, def, forged)
+				require.ErrorContains(t, err, "expression binding exceeds limit")
+				t.Logf("unmatched division/timezone search stopped at shared budget after %s", time.Since(started))
+				return
+			}
+			if tc.capture {
+				for _, mutation := range []string{"value", "type"} {
+					t.Run("reject_"+mutation, func(t *testing.T) {
+						forged := proto.Clone(def).(*planpb.TableDef)
+						expr := forged.Cols[0].Default.Expr
+						if mutation == "type" {
+							expr.Typ.Scale++
+						} else {
+							require.True(t, tamperTableDumpDefaultValue(expr))
+						}
+						zone := proc.GetSessionInfo().TimeZone
+						_, err := AnalyzeTableDumpBindings(compiler, def, forged)
+						require.ErrorContains(t, err, "cannot verify bound default")
+						require.Same(t, zone, proc.GetSessionInfo().TimeZone)
+						require.True(t, proto.Equal(before, def))
+					})
+				}
+			}
+			if tc.name == "dst_expression" {
+				// Cancel while an unmatched origin is being rebound, rather than
+				// cancelling before Analyze enters its timezone witness search.
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				bindingCtx := &tableDumpCancellingContext{Context: ctx, cancel: cancel}
+				compiler.SetContext(bindingCtx)
+				proc.GetSessionInfo().TimeZone = time.UTC
+				_, err := AnalyzeTableDumpBindings(compiler, def, def)
+				require.ErrorIs(t, err, context.Canceled)
+				require.GreaterOrEqual(t, bindingCtx.calls.Load(), int32(8))
+				require.Same(t, time.UTC, proc.GetSessionInfo().TimeZone)
+			}
+		})
+	}
+}
+
+func tamperTableDumpDefaultValue(expr *planpb.Expr) bool {
+	if literal := expr.GetLit(); literal != nil {
+		if literal.Isnull {
+			literal.Isnull = false
+			literal.Value = &planpb.Literal_I32Val{I32Val: 777}
+			return true
+		}
+		switch value := literal.Value.(type) {
+		case *planpb.Literal_Datetimeval:
+			value.Datetimeval++
+		case *planpb.Literal_Timestampval:
+			value.Timestampval++
+		case *planpb.Literal_Sval:
+			value.Sval = "unreachable formatted default"
+		case *planpb.Literal_I8Val:
+			value.I8Val = -128
+		case *planpb.Literal_I32Val:
+			value.I32Val = 777
+		case *planpb.Literal_I64Val:
+			value.I64Val = 777
+		default:
+			return false
+		}
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if tamperTableDumpDefaultValue(arg) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+type tableDumpCancellingContext struct {
+	context.Context
+	cancel context.CancelFunc
+	calls  atomic.Int32
+}
+
+func (c *tableDumpCancellingContext) Err() error {
+	if c.calls.Add(1) == 8 {
+		c.cancel()
+	}
+	return c.Context.Err()
 }

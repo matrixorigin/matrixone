@@ -925,6 +925,19 @@ func buildDefaultExprWithColumns(
 	proc *process.Process,
 	columns []*ColDef,
 ) (*plan.Default, error) {
+	return buildDefaultExprWithColumnsObserved(bindCtx, col, typ, proc, columns, nil)
+}
+
+// Dump verification needs resolved session dependencies before folding removes
+// them. Ordinary DDL uses the same owner without retaining an extra tree.
+func buildDefaultExprWithColumnsObserved(
+	bindCtx context.Context,
+	col *tree.ColumnTableDef,
+	typ plan.Type,
+	proc *process.Process,
+	columns []*ColDef,
+	observe func(source, assigned *plan.Expr),
+) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
 	for _, attr := range col.Attributes {
@@ -998,6 +1011,9 @@ func buildDefaultExprWithColumns(
 		}
 	}
 
+	if observe != nil {
+		observe(planExpr, nil)
+	}
 	defaultExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -1006,6 +1022,9 @@ func buildDefaultExprWithColumns(
 	// admission must happen while the resolved HEX overload is still present.
 	if err = requireHexMySQLNumericProtocol(proc, defaultExpr); err != nil {
 		return nil, err
+	}
+	if observe != nil {
+		observe(planExpr, defaultExpr)
 	}
 
 	// try to calculate default value, return err if fails
