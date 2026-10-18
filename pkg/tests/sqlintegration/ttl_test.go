@@ -163,8 +163,17 @@ func TestTTLPolicyLifecycleAndStaleDiscovery(t *testing.T) {
 		}
 		ttlExec(t, ctx, exec, db, fmt.Sprintf("alter table events ttl ts + interval %d second", ttlTestSeconds), 0)
 		current = ttlCandidate(t, ctx, exec, db, "events", 0)
-		ttlExec(t, ctx, exec, db, "alter table events add column extra int", 0)
-		current = ttlCandidate(t, ctx, exec, db, "events", 0)
+		// Main's constraint and charset COPY paths must preserve the same policy.
+		for _, statement := range []string{
+			"alter table events add column extra varchar(10)",
+			"alter table events add constraint positive_id check (id > 0)",
+			"alter table events convert to character set utf8mb4 collate utf8mb4_bin",
+		} {
+			ttlExec(t, ctx, exec, db, statement, 0)
+			after := ttlCandidate(t, ctx, exec, db, "events", 0)
+			require.Equal(t, current.Policy, after.Policy)
+			current = after
+		}
 		ttlExec(t, ctx, exec, db, "create table cloned like events", 0)
 		cloned := ttlCandidate(t, ctx, exec, db, "cloned", 0)
 		require.Equal(t, current.Policy, cloned.Policy)
