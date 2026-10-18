@@ -457,6 +457,7 @@ class FileRelation:
 
     def __init__(self, manager, schema, sql, tables, source_checks=None):
         self._manager = manager
+        self._engine = manager.engine
         self.schema = schema
         self._sql = sql
         self._tables = tables
@@ -506,7 +507,7 @@ class FileRelation:
         first_error = None
         for table in list(reversed(self._tables)):
             try:
-                with self._manager.engine.begin() as conn:
+                with self._engine.begin() as conn:
                     conn.exec_driver_sql("DROP TABLE IF EXISTS " + _identifier(table))
                 self._tables.remove(table)
             except Exception as exc:
@@ -655,9 +656,26 @@ class AnalyticsManager:
                 if format == "csv":
                     ddl += " FIELDS TERMINATED BY %s ENCLOSED BY %s IGNORE 1 LINES"
                     params.extend([delimiter, '"'])
-                with self.engine.begin() as conn:
-                    conn.exec_driver_sql(ddl, tuple(params))
-                tables.append(table)
+                # Reserve the cleanup owner before CREATE/COMMIT can have an
+                # uncertain outcome. A failed construction returns no relation.
+                try:
+                    with self.engine.begin() as conn:
+                        tables.append(table)
+                        conn.exec_driver_sql(ddl, tuple(params))
+                except Exception as error:
+                    from sqlalchemy.exc import DBAPIError
+
+                    # A definite collision proves this name was not ours,
+                    # whether CREATE or its transaction reports the rejection.
+                    if (
+                        isinstance(error, DBAPIError)
+                        and not error.connection_invalidated
+                        and getattr(error.orig, 'args', ())
+                        and error.orig.args[0] == 1050
+                        and table in tables
+                    ):
+                        tables.remove(table)
+                    raise
                 projections = []
                 for f in merged:
                     if f.name in part:
@@ -686,11 +704,18 @@ class AnalyticsManager:
                 selects.append("SELECT %s FROM %s" % (", ".join(projections), _identifier(table)))
             relation._sql = "(" + " UNION ALL ".join(selects) + ")"
             return relation
-        except BaseException:
+        except BaseException as primary:
+            primary.attempted_tables = tuple(tables)
+            primary.file_relation = relation
             try:
                 relation.close()
-            except Exception as cleanup_error:
-                self.client.logger.warning("External table cleanup failed for %s: %s" % (tables, cleanup_error))
+            except BaseException as cleanup_error:
+                primary.cleanup_error = cleanup_error
+                try:
+                    self.client.logger.warning("External table cleanup failed for %s: %s" % (tables, cleanup_error))
+                except Exception:
+                    pass  # Recovery evidence and the primary failure take precedence.
+            primary.owned_tables = tuple(tables)
             raise
 
     def upload_arrow(

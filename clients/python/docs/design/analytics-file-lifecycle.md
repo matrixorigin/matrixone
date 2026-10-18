@@ -16,9 +16,13 @@ Make file relations safe to use in context-managed notebooks and services: own t
 
 `FileRelation` holds the merged schema, SQL expression, owned external-table names and source-check closures. Use `with ... as files`; close result streams before closing the relation.
 
-Construction reserves each generated UUID name in the relation's owned list **before** issuing CREATE or entering its transaction. The reservation covers an attempted creation, including a CREATE or COMMIT whose acknowledgement is lost; it is not proof that creation committed. No CREATE is retried. The SDK does not reuse a caller-provided name for these reservations.
+After acquiring its transaction connection, construction reserves each generated UUID name in the relation's owned list **before** issuing CREATE. Connection acquisition failures have not attempted any CREATE and need no DROP. The reservation covers an attempted creation, including a CREATE or COMMIT whose acknowledgement is lost; it is not proof that creation committed. No CREATE is retried. The SDK does not reuse a caller-provided name for these reservations.
+
+A definite, non-disconnect MySQL table-exists rejection (1050) releases that reservation without DROP. The pre-existing object is not owned by this relation; even a forced UUID collision must preserve its contents. The rejected CREATE is not retried.
 
 On any construction failure, close the partially constructed relation using a new transaction/usable pooled connection. `DROP TABLE IF EXISTS` is restricted to its exact reserved names, so both committed and rolled-back CREATE outcomes can be reclaimed. Remove a name only after the DROP transaction returns successfully. A failed or ambiguously acknowledged DROP remains reserved and can be retried through the same relation. There is no prefix scan, background reaper, or blind construction retry. Account-level isolation follows MatrixOne's catalog and privileges, not a Python-only namespace.
+
+The relation retains its original SQLAlchemy engine for cleanup. Reconnecting the Client to a different database/endpoint does not retarget a pending cleanup; a new connection still comes from the original engine, and caller-supplied names/engines are not accepted by recovery.
 
 The original construction exception remains primary. It exposes `attempted_tables` (all reservations at failure), `owned_tables` (reservations still pending after cleanup), and `file_relation` (the scoped owner whose `close()` can be called again). If cleanup also fails, attach `cleanup_error`. Successful cleanup leaves `owned_tables=()` and a closed relation. Diagnostic logging cannot replace the original error or this recovery evidence.
 
@@ -60,6 +64,7 @@ Successful/failed normal contexts leave no owned tables or checked-out connectio
 | L08 | Kill client while holding an external relation | Record orphan owned names; restart/reconnect and explicitly reclaim only those names | `run_chaos.py` (`client_external`) |
 | L09 | CREATE commits but its COMMIT acknowledgement is dropped | Original error retained; fresh-connection DROP reclaims the exact reserved UUID; independent catalog check finds no orphan | `test_relation_create_lost_commit_acknowledgement` |
 | L10 | CREATE failure plus failed DROP or lost DROP acknowledgement | Original error includes attempted/pending names, cleanup error and retryable scoped relation; no CREATE retry; later close reclaims only pending names | `test_relation_construction_ownership_faults` |
+| L11 | Forced UUID collision or a definite table-exists transaction rejection | Existing object and its values preserved; no DROP and no CREATE retry | `test_relation_name_collision_preserves_existing_table`, `test_commit_collision_does_not_drop_foreign_table` |
 
 ## Implementation and validation
 

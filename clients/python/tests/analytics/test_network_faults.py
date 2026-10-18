@@ -15,6 +15,56 @@ from test_adversarial import hard_client, trial
 pa = pytest.importorskip("pyarrow", minversion="18.0.0")
 
 
+def test_relation_create_lost_commit_acknowledgement(trial):
+    import pyarrow.parquet as pq
+
+    path = trial.directory / 'relation.parquet'
+    pq.write_table(pa.table({'id': [1, 2]}), path)
+    unrelated = trial.table()
+    trial.client.execute('CREATE TABLE ' + unrelated + '(id INT)')
+    with FaultProxy('drop_create_commit_ack', target_port=int(os.environ.get('MO_PORT', '6001'))) as proxy:
+        client = proxied(proxy)
+        try:
+            with pytest.raises(Exception) as caught:
+                client.analytics.read_parquet(path)
+            assert proxy.triggered.is_set() and proxy.commit_ack_seen
+            assert proxy.create_requests == 1
+            assert len(caught.value.attempted_tables) == 1
+            assert caught.value.owned_tables == ()
+            assert caught.value.file_relation._closed
+            assert client._engine.pool.checkedout() == 0
+        finally:
+            client.disconnect()
+    catalog = {row[0] for row in trial.client.execute('SHOW TABLES').rows}
+    assert not set(caught.value.attempted_tables) & catalog
+    assert unrelated in catalog
+
+
+def test_relation_name_collision_preserves_existing_table(trial, monkeypatch):
+    import uuid
+    from types import SimpleNamespace
+
+    import pyarrow.parquet as pq
+    import matrixone.analytics as module
+
+    identifier = uuid.uuid4()
+    table = 'mo_py_files_' + identifier.hex
+    path = trial.directory / 'collision.parquet'
+    pq.write_table(pa.table({'id': [1]}), path)
+    trial.client.execute('CREATE TABLE ' + table + '(id INT)')
+    trial.client.execute('INSERT INTO ' + table + ' VALUES (42)')
+    try:
+        with monkeypatch.context() as patch:
+            patch.setattr(module, 'uuid', SimpleNamespace(uuid4=lambda: identifier))
+            with pytest.raises(Exception) as caught:
+                trial.analytics.read_parquet(path)
+        assert caught.value.orig.args[0] == 1050
+        assert caught.value.owned_tables == ()
+        assert trial.client.execute('SELECT id FROM ' + table).rows == [(42,)]
+    finally:
+        trial.client.execute('DROP TABLE IF EXISTS ' + table)
+
+
 def proxied(proxy):
     return Client(
         host="127.0.0.1",

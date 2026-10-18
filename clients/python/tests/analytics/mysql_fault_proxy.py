@@ -8,6 +8,7 @@ change network policy or touch any remote database. Capture SQL command names,
 never authentication packets or credentials.
 """
 
+import os
 import socket
 import socketserver
 import threading
@@ -30,11 +31,16 @@ def _packet(sock):
 
 
 class FaultProxy:
-    def __init__(self, mode, target_port=6001, stall_sql=None):
-        self.mode, self.target_port, self.stall_sql = mode, target_port, stall_sql
+    def __init__(self, mode, target_port=None, stall_sql=None):
+        self.mode, self.target_port, self.stall_sql = (
+            mode,
+            int(os.environ.get('MO_PORT', '6001')) if target_port is None else target_port,
+            stall_sql,
+        )
         self.triggered = threading.Event()
         self.stop_event = threading.Event()
         self.commit_ack_seen = False
+        self.create_requests = 0
         self._sockets = set()
         self._lock = threading.Lock()
         self._used = False
@@ -47,7 +53,7 @@ class FaultProxy:
                 upstream.settimeout(None)
                 with proxy._lock:
                     proxy._sockets.update((upstream, downstream))
-                state = {"loaded": False, "query": ""}
+                state = {"loaded": False, "created": False, "query": ""}
                 terminal = threading.Event()
 
                 def pump_requests():
@@ -59,6 +65,10 @@ class FaultProxy:
                                 state["query"] = sql
                                 if sql.startswith("LOAD DATA"):
                                     state["loaded"] = True
+                                if sql.startswith("CREATE EXTERNAL TABLE"):
+                                    state["created"] = True
+                                    with proxy._lock:
+                                        proxy.create_requests += 1
                                 if proxy.mode == "disconnect_before_commit" and state["loaded"] and sql == "COMMIT":
                                     proxy.triggered.set()
                                     raise EOFError
@@ -76,7 +86,10 @@ class FaultProxy:
                 try:
                     while not terminal.is_set():
                         pkt = _packet(upstream)
-                        drop = state["loaded"] and state["query"] == "COMMIT" and proxy.mode == "drop_commit_ack"
+                        drop = state["query"] == "COMMIT" and (
+                            (state["loaded"] and proxy.mode == "drop_commit_ack")
+                            or (state["created"] and proxy.mode == "drop_create_commit_ack")
+                        )
                         stall = (
                             proxy.mode == "stall_result"
                             and proxy.stall_sql
