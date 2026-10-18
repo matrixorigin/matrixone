@@ -606,6 +606,8 @@ message PrepareStmt {
   string Name = 1;
   string SQL = 2;
   bytes ParamTypes = 3;
+  // Minimum target protocol needed to rebind this prepared SQL faithfully.
+  int64 RequiredProtocolVersion = 4;
 }
 
 message MigrateTempTable {
@@ -633,6 +635,8 @@ message MigrateConnFromRequest {
   // True when Proxy understands the complete LAST_INSERT_ID migration
   // contract, including the export marker and target compatibility checks.
   bool LastInsertIDMigrationSupported = 5;
+  // Proxy checks each prepared statement's target protocol before handoff.
+  bool PreparedStatementProtocolSupported = 6;
 }
 
 message MigrateConnFromResponse {

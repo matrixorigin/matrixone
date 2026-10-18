@@ -544,6 +544,7 @@ func (rm *RoutineManager) MigrateConnectionFromWithContext(
 		req.TempTableMigrationSupported,
 		req.LastInsertIDMigrationSupported,
 		resp,
+		req.PreparedStatementProtocolSupported,
 	)
 }
 
