@@ -434,6 +434,27 @@ select name from export_format_test into outfile 'stage://export_test_stage/test
 -- Test 10.4: Export with all NULL row
 select nullable_int, nullable_str, nullable_decimal from export_null_test where id = 2 into outfile 'stage://export_test_stage/test_all_null_row.csv' format 'csv';
 
+-- VARIANT round trip keeps exact numbers, nested values, JSON null and SQL NULL.
+create table export_variant_source(id int primary key, doc json);
+insert into export_variant_source values
+(1, json_parse_exact('{"cost":9007199254740993.001,"active":true,"events":[1,null,{"a":"v"}]}')),
+(2, json_parse_exact('{"cost":0.125,"active":false,"events":[]}')),
+(3, 'null'), (4, NULL);
+select * from export_variant_source into outfile 'stage://export_test_stage/variant_roundtrip.parquet' format 'parquet_variant';
+create table export_variant_verify(id int primary key, doc json);
+load data infile {'filepath'='stage://export_test_stage/variant_roundtrip.parquet', 'format'='parquet'} into table export_variant_verify;
+-- @metacmp(true)
+select a.id, b.id = a.id as present, a.doc <=> b.doc as same_document,
+       cast(json_extract(b.doc, '$.cost') as decimal(38,3)) as exact_cost,
+       b.doc is null as sql_null
+from export_variant_source a left join export_variant_verify b on a.id = b.id order by a.id;
+select * from export_variant_source where id < 0 into outfile 'stage://export_test_stage/variant_empty.parquet' format 'parquet_variant';
+truncate table export_variant_verify;
+load data infile {'filepath'='stage://export_test_stage/variant_empty.parquet', 'format'='parquet'} into table export_variant_verify;
+select count(*) from export_variant_verify;
+drop table export_variant_verify;
+drop table export_variant_source;
+
 -- ============================================================================
 -- PART 11: Cleanup
 -- ============================================================================

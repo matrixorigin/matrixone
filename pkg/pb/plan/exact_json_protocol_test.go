@@ -51,8 +51,10 @@ func TestExactJSONExecutionContracts(t *testing.T) {
 		{"string decimal", fn(21, 0, 33, col(61)), false, false},
 		{"JSON decimal256 unchanged", fn(21, 0, 34, col(62)), false, false},
 		{"calendar interval identity", fn(598, 0, 61, col(61)), false, false},
-		{"async datalink identity", fn(599, 0, 61, col(61)), false, false},
-		{"table collation identity", fn(600, 0, 61, col(61)), false, false},
+		{"main datalink identity", fn(599, 0, 10, col(61)), false, false},
+		{"main table collation identity", fn(600, 0, 61, col(61)), false, false},
+		{"legacy least identity", fn(122, 0, 61, col(61), col(61)), false, false},
+		{"collation least identity", fn(122, 4, 61, col(61), col(61)), false, false},
 		{"unrelated function", fn(1, 0, 33, col(62)), false, false},
 		{"no source", fn(21, 0, 33), false, false},
 	} {
@@ -65,6 +67,8 @@ func TestExactJSONExecutionContracts(t *testing.T) {
 				features, err := RequiredRemoteExpressionFeatures(expr)
 				require.NoError(t, err)
 				require.Equal(t, test.name == "calendar interval identity", features.CalendarIntervalNormalization)
+				require.Equal(t, test.name == "main table collation identity", features.TableCollationFunction)
+				require.Equal(t, test.name == "collation least identity", features.LeastGreatestCollationSemantics)
 				require.Equal(t, test.parse, features.ExactJSONParsing)
 				require.Equal(t, test.cast, features.ExactJSONDecimalCast)
 				if test.parse || test.cast {

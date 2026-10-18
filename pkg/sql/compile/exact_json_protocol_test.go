@@ -46,6 +46,10 @@ func boundExactJSONProtocolExpressions(t *testing.T) map[string]*planpb.Expr {
 		require.NoError(t, err)
 		return expr
 	}
+	unicodeType := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	unicodeType.CollationVersion = 1
+	unicodeCol := &planpb.Expr{Typ: unicodeType.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	least := bind("least", unicodeCol, unicodeCol)
 	parse := bind("json_parse_exact", col(types.T_varchar))
 	nested := bind("json_extract_string", parse, plan2.MakePlan2StringConstExprWithType("$.x"))
 	cast := func(oid types.T) *planpb.Expr {
@@ -55,6 +59,8 @@ func boundExactJSONProtocolExpressions(t *testing.T) map[string]*planpb.Expr {
 	}
 	return map[string]*planpb.Expr{"parse": parse, "nested scan filter": nested,
 		"stored JSON decimal64": cast(types.T_decimal64), "stored JSON decimal128": cast(types.T_decimal128),
+		"collation least over exact JSON":   bind("concat", nested, least),
+		"table collation over exact JSON":   bind("internal_table_collation", nested),
 		"division of stored JSON":           bind("div", cast(types.T_decimal128), plan2.MakePlan2Int64ConstExprWithType(1)),
 		"decimal variance of stored JSON":   bind("var_pop", cast(types.T_decimal128)),
 		"calendar interval over exact JSON": bind("to_calendar_interval", nested, plan2.MakePlan2Int64ConstExprWithType(int64(types.Day)))}
@@ -82,6 +88,14 @@ func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
 			if name == "calendar interval over exact JSON" {
 				require.True(t, features.ExactJSONParsing)
 				require.True(t, features.CalendarIntervalNormalization)
+			}
+			if name == "collation least over exact JSON" {
+				require.True(t, features.ExactJSONParsing)
+				require.True(t, features.LeastGreatestCollationSemantics)
+			}
+			if name == "table collation over exact JSON" {
+				require.True(t, features.ExactJSONParsing)
+				require.True(t, features.TableCollationFunction)
 			}
 			if name == "division of stored JSON" {
 				require.True(t, features.ExactJSONDecimalCast)
@@ -217,6 +231,45 @@ func TestExactJSONProtocolPlacementProbeTransitions(t *testing.T) {
 			}
 			require.Equal(t, 1, client.calls)
 			require.Equal(t, client.calls, client.releases)
+		})
+	}
+}
+
+// The new floor must not relabel or lower independent main contracts.
+func TestExactJSONProtocolKeepsUpstreamFloors(t *testing.T) {
+	typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	typ.CollationVersion = 1
+	col := &planpb.Expr{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(t.Context(), name, args)
+		require.NoError(t, err)
+		return expr
+	}
+	least := bind("least", col, col)
+	collation := bind("internal_table_collation", col)
+	exact := bind("json_parse_exact", col)
+	for _, tc := range []struct {
+		name        string
+		expressions []*planpb.Expr
+		floor       int64
+	}{
+		{"least", []*planpb.Expr{least}, defines.MORPCVersion117},
+		{"table collation", []*planpb.Expr{collation}, defines.MORPCVersion118},
+		{"both upstream", []*planpb.Expr{least, collation}, defines.MORPCVersion118},
+		{"both with exact", []*planpb.Expr{least, collation, exact}, exactJSONTestProtocol},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			owner := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: tc.expressions}}}
+			encoded, err := owner.Marshal()
+			require.NoError(t, err)
+			decoded := new(planpb.Query)
+			require.NoError(t, decoded.Unmarshal(encoded))
+			features, err := planpb.RequiredRemoteExpressionFeatures(decoded)
+			require.NoError(t, err)
+			require.Equal(t, tc.floor, remoteExpressionProtocolVersion(features))
+			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(decoded)
+			require.NoError(t, err)
+			require.Equal(t, tc.floor, floor)
 		})
 	}
 }

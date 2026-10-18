@@ -552,6 +552,13 @@ func ReadProjectedJSONColumns(ctx context.Context, header ObjectMeta, name strin
 				}
 			}
 
+			// Path depths are invariant for this column. Keep ancestors last so
+			// their exact stored containers replace synthesized descendants.
+			order := make([]int, len(matched))
+			for i := range order {
+				order[i] = i
+			}
+			sort.SliceStable(order, func(i, j int) bool { return len(matched[order[i]].Keys) > len(matched[order[j]].Keys) })
 			for row := 0; row < rows; row++ {
 				if row%256 == 0 {
 					if e := context.Cause(ctx); e != nil {
@@ -568,12 +575,6 @@ func ReadProjectedJSONColumns(ctx context.Context, header ObjectMeta, name strin
 					continue
 				}
 				fields := make(map[string]any, len(matched))
-				// Ancestors are inserted last and keep the exact stored container value.
-				order := make([]int, len(matched))
-				for i := range order {
-					order[i] = i
-				}
-				sort.SliceStable(order, func(i, j int) bool { return len(matched[order[i]].Keys) > len(matched[order[j]].Keys) })
 				for _, i := range order {
 					v := vectors[i+1]
 					if v.IsNull(uint64(row)) {
