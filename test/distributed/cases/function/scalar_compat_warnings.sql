@@ -58,6 +58,17 @@ set @good=1;
 execute warning_stmt using @good;
 show count(*) warnings;
 deallocate prepare warning_stmt;
+-- UTF-8 diagnostics preserve complete characters at the 128-byte echo bound.
+select format(1234.5,2,repeat('界',43)) as v;
+show warnings;
+select format(1234.5,2,concat('a',repeat('😀',32))) as v;
+show warnings;
+select str_to_date(repeat('界',43),'%Y-%m-%d') as v;
+show warnings;
+select str_to_date(concat('a',repeat('😀',32)),'%Y-%m-%d') as v;
+show warnings;
+select str_to_date(concat('2024-01-02',repeat('界',43)),'%Y-%m-%d') as v;
+show warnings;
 set max_error_count=0;
 select format(1234.5,2,repeat('X',129)) as v from warning_rows order by id;
 show count(*) warnings;
