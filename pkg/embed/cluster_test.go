@@ -448,6 +448,7 @@ func TestSharedBaseClusterCanWorkWithConcurrentCluster(t *testing.T) {
 	second, err := StartTestCluster(
 		WithCNCount(1),
 		WithConcurrentTestClusters(),
+		withFunctionalTestMemoryAdmission(),
 	)
 	if second != nil {
 		t.Cleanup(func() { require.NoError(t, second.Close()) })

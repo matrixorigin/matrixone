@@ -19,6 +19,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
 )
 
@@ -74,6 +75,16 @@ func WithTesting() Option {
 		if c.options.storeTimeout == 0 {
 			c.options.storeTimeout = testHAKeeperStoreTimeout
 		}
+	}
+}
+
+// WithTestMemoryAdmissionBudget gives an explicitly testing cluster a finite,
+// fixture-owned physical ledger. It leaves production defaults unchanged and
+// must not be used by tests asserting the real host/cgroup pressure boundary.
+// CN shutdown owns restoration, including startup failure and restart.
+func WithTestMemoryAdmissionBudget(budget *system.MemoryAdmissionBudget) Option {
+	return func(c *cluster) {
+		c.options.testMemoryBudget = budget
 	}
 }
 
