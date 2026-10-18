@@ -14772,12 +14772,18 @@ func TestCheckpointTableIDBatch2(t *testing.T) {
 	}
 
 	// This checkpoint merges the 100k historical table-ID fixture above. Keep
-	// the timeout local to this stress case: the generic test helper uses 5s,
-	// which is shorter than this merge can take under race-enabled CI load.
-	checkpointCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	// the timeout local to this stress case. ForceCheckpoint shares one budget
+	// between flushing and merging; parallel race-enabled CI can spend most
+	// of a short budget on the flush alone. Use the existing checkpoint budget
+	// while retaining the complete historical row-count assertion below.
+	checkpointCtx, cancel := context.WithTimeout(ctx, testutil.TestCheckpointTimeout)
+	checkpointStarted := time.Now()
 	err = tae.DB.ForceCheckpoint(checkpointCtx, tae.TxnMgr.Now())
+	checkpointElapsed := time.Since(checkpointStarted)
+	checkpointContextErr := checkpointCtx.Err()
 	cancel()
-	require.NoError(t, err)
+	require.NoError(t, err, "flush and historical table-ID merge took %s (budget %s, context error %v)",
+		checkpointElapsed, testutil.TestCheckpointTimeout, checkpointContextErr)
 
 	ickp = tae.BGCheckpointRunner.MaxIncrementalCheckpoint()
 

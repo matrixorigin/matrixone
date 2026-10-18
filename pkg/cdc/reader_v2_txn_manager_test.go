@@ -1064,15 +1064,19 @@ func TestTransactionManager_SlowSinker_NoDeadlock(t *testing.T) {
 	wg.Add(numGoroutines)
 
 	done := make(chan struct{})
-	start := time.Now()
+	start := make(chan struct{})
+	errCh := make(chan error, numGoroutines)
 
 	for i := 0; i < numGoroutines; i++ {
 		go func() {
 			defer wg.Done()
-			// Repeatedly attempt begin on a new range; should not deadlock
-			_ = tm.BeginTransaction(ctx, toTs1, toTs2)
+			<-start
+			// Each begin must roll back the unfinished transaction without
+			// recursively acquiring the manager mutex.
+			errCh <- tm.BeginTransaction(ctx, toTs1, toTs2)
 		}()
 	}
+	close(start)
 
 	go func() {
 		wg.Wait()
@@ -1081,10 +1085,19 @@ func TestTransactionManager_SlowSinker_NoDeadlock(t *testing.T) {
 
 	select {
 	case <-done:
-		// Completed; assert time bound is reasonable (no deadlock)
-		elapsed := time.Since(start)
-		require.Less(t, elapsed, 500*time.Millisecond, "should not take too long; no deadlock expected")
+		// Completion, not sub-second throughput under parallel race-enabled
+		// CI, is the contract. Workers have joined before inspecting state.
 	case <-time.After(2 * time.Second):
 		t.Fatal("timeout indicates potential deadlock with slow sinker")
 	}
+	close(errCh)
+	for err := range errCh {
+		require.NoError(t, err)
+	}
+	wantOps := make([]string, 0, 4*numGoroutines)
+	for i := 0; i < numGoroutines; i++ {
+		wantOps = append(wantOps, "clear", "rollback", "dummy", "begin")
+	}
+	require.Equal(t, wantOps, sinker.opsSnapshot())
+	require.True(t, tm.tracker.NeedsRollback(), "last successful begin remains active")
 }
