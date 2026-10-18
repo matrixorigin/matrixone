@@ -38,7 +38,7 @@ func (c *Compile) constrainStrictWriteWorkers() error {
 	if !required {
 		return nil
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, defines.MORPCVersion68)
+	supported, err := remoteWorkersSupportProtocolForPlacement(c.proc, c.cnList, defines.MORPCVersion68)
 	if err != nil {
 		return err
 	}
