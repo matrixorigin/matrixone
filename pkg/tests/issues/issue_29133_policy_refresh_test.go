@@ -47,9 +47,8 @@ func TestIssue29133RoleRulesTrackRemoteChanges(t *testing.T) {
 		admin := open(0, "dump")
 		mustExec(t, ctx, admin, "create account rule_refresh admin_name 'admin' identified by '111'")
 		defer func() {
-			cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
-			defer stop()
-			mustExec(t, cleanup, admin, "drop account rule_refresh")
+			require.NoError(t, cleanupSQLResource(admin, "drop account rule_refresh",
+				"select count(*) from mo_catalog.mo_account where account_name=?", "rule_refresh"))
 		}()
 		owner := open(0, "rule_refresh#admin#accountadmin")
 		for _, statement := range []string{

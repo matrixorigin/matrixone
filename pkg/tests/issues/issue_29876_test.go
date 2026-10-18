@@ -37,9 +37,19 @@ func execIssue29876SQL(parent context.Context, db *sql.DB, statement string) (sq
 	return db.ExecContext(ctx, statement)
 }
 
-func cleanupIssue29876Resource(db *sql.DB, statement, verification string, args ...any) error {
+type issueCleanupSQLClient interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+// cleanupSQLResource gives each cleanup operation its own bounded lifetime and
+// verifies absence. Both pooled DBs and dedicated connections use this policy.
+func cleanupSQLResource(db issueCleanupSQLClient, statement, verification string, args ...any) error {
 	started := time.Now()
-	if _, err := execIssue29876SQL(context.Background(), db, statement); err != nil {
+	cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), issue29876SQLOperationTimeout)
+	_, err := db.ExecContext(cleanupCtx, statement)
+	cleanupCancel()
+	if err != nil {
 		return fmt.Errorf("cleanup %q after %s: %w", statement, time.Since(started), err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), issue29876SQLOperationTimeout)
@@ -72,7 +82,7 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 		for _, name := range []string{main, stage} {
 			exec(t, "create database "+name)
 			defer func() {
-				assert.NoError(t, cleanupIssue29876Resource(db, "drop database if exists "+name,
+				assert.NoError(t, cleanupSQLResource(db, "drop database if exists "+name,
 					"select count(*) from mo_catalog.mo_database where account_id = 0 and datname = ?", name))
 			}()
 		}
@@ -188,7 +198,7 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 			account, publication := strings.ToLower(main)+"_acct", strings.ToLower(main)+"_pub"
 			exec(t, "create account "+account+" admin_name 'admin' identified by '111'")
 			t.Cleanup(func() {
-				assert.NoError(t, cleanupIssue29876Resource(db, "drop account if exists "+account,
+				assert.NoError(t, cleanupSQLResource(db, "drop account if exists "+account,
 					"select count(*) from mo_catalog.mo_account where account_name = ?", account))
 			})
 			exec(t, "use "+main)
@@ -202,7 +212,7 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 			}
 			exec(t, "create publication "+publication+" database "+main+" account "+account)
 			t.Cleanup(func() {
-				assert.NoError(t, cleanupIssue29876Resource(db, "drop publication if exists "+publication,
+				assert.NoError(t, cleanupSQLResource(db, "drop publication if exists "+publication,
 					"select count(*) from mo_catalog.mo_pubs where account_id = 0 and pub_name = ?", publication))
 			})
 			sub, err := sql.Open("mysql", fmt.Sprintf("%s#admin#accountadmin:111@tcp(127.0.0.1:%d)/", account, cn.GetServiceConfig().CN.Frontend.Port))
