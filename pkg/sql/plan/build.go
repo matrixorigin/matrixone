@@ -681,6 +681,9 @@ func requireBoundPlanCollations(result *Plan) error {
 	if prepared := result.GetDcl().GetPrepare(); prepared != nil {
 		return requireBoundPlanCollations(prepared.Plan)
 	}
+	if ddl := result.GetDdl(); ddl != nil && (ddl.GetCreateView() != nil || ddl.GetAlterView() != nil) {
+		return plan.RequirePersistedCollations(result)
+	}
 	return plan.RequireLegacyCollations(result)
 }
 

@@ -12258,6 +12258,9 @@ func (builder *QueryBuilder) bindView(
 	if err != nil {
 		return 0, err
 	}
+	if err = requireViewCollationMarker(builder.GetContext(), viewData); err != nil {
+		return 0, err
+	}
 	restoreCollationBinding, err := enterPersistedCollationBinding(builder.compCtx, viewData.CollationBindingRevision)
 	if err != nil {
 		return 0, err
@@ -13018,7 +13021,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// replacing scans, after preserving the existing snapshot-scope error.
 		// The final plan fence cannot see metadata erased by those rewrites,
 		// even when the query only projects a constant.
-		if err = plan.RequireLegacyCollations(tableDef); err != nil {
+		if err = RequireCatalogCollations(builder.GetContext(), builder.compCtx.GetProcess(), tableDef); err != nil {
 			return 0, "", err
 		}
 

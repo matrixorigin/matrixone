@@ -62,11 +62,14 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 		if parent == nil && builder.persistedViewTarget != "" {
 			requiredProtocol := int64(0)
 			bc.persistedExpressionProtocolRequirement = &requiredProtocol
+			bindingRevision := uint32(0)
+			bc.persistedCollationBindingRevision = &bindingRevision
 		}
 	}
 
 	if parent != nil {
 		bc.persistedExpressionProtocolRequirement = parent.persistedExpressionProtocolRequirement
+		bc.persistedCollationBindingRevision = parent.persistedCollationBindingRevision
 		bc.existentialBlock = parent.existentialBlock
 		bc.subqueryNestingDepth = parent.subqueryNestingDepth
 		bc.lower = parent.lower

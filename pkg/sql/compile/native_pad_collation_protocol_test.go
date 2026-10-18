@@ -37,6 +37,43 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestNativePADViewWriteGateBeforeSideEffects(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	key := moruntime.PersistedExpressionProtocolAuthoringFloor
+	previous, existed := rt.GetGlobalVariables(key)
+	t.Cleanup(func() {
+		if existed {
+			rt.SetGlobalVariables(key, previous)
+		} else if current, ok := rt.GetGlobalVariables(key); ok {
+			rt.CompareAndDeleteGlobalVariables(key, current)
+		}
+	})
+	table := &planpb.TableDef{Name: "v", ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci = 'a' as b","collation_binding_revision":1,"required_protocol_version":119}`}, Cols: []*planpb.ColDef{{Name: "b", Typ: types.T_bool.ToType().PlanType()}}}
+	rt.SetGlobalVariables(key, defines.MORPCVersion119)
+	require.NoError(t, plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, table))
+	// 计划生成后写门回落：即使只剩bool类型，CREATE OR REPLACE不能先DROP，
+	// ALTER不能先查/删旧对象。nil engine意味着任何触达存储都会使本例失败。
+	c.e = nil
+	rt.SetGlobalVariables(key, defines.MORPCVersion118)
+	for _, alter := range []bool{false, true} {
+		ddl := &planpb.DataDefinition{}
+		if alter {
+			ddl.Definition = &planpb.DataDefinition_AlterView{AlterView: &planpb.AlterView{TableDef: table}}
+		} else {
+			ddl.Definition = &planpb.DataDefinition_CreateView{CreateView: &planpb.CreateView{TableDef: table, Replace: true}}
+		}
+		scope := &Scope{Proc: c.proc, Plan: &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: ddl}}}
+		var err error
+		if alter {
+			err = scope.AlterView(c)
+		} else {
+			err = scope.CreateView(c)
+		}
+		require.ErrorContains(t, err, "protocol version 119")
+	}
+}
+
 func TestNativePADProtocolPlacementSourceDestinationReceiver(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	native := planpb.Type{Id: int32(types.T_varchar), Width: 8, Charset: 3, CollationVersion: 1}

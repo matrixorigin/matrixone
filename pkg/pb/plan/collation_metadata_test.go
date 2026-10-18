@@ -60,7 +60,7 @@ func TestCollationMetadataWireAndAdmission(t *testing.T) {
 	require.True(t, legacy.SameCollation(legacy))
 }
 
-func TestExecutableCollationAdmissionIsNotPersistenceAdmission(t *testing.T) {
+func TestExecutableCollationAdmissionRetainsLegacyFence(t *testing.T) {
 	for _, id := range []int32{planCharTypeID, planVarcharTypeID, planTextTypeID, planBlobTypeID} {
 		for _, charset := range []uint32{2, 3} {
 			native := Type{Id: id, Charset: charset, CollationVersion: 1}
@@ -72,7 +72,7 @@ func TestExecutableCollationAdmissionIsNotPersistenceAdmission(t *testing.T) {
 				features, err := RequiredExecutableRemoteExpressionFeatures(owner)
 				require.NoError(t, err)
 				require.True(t, features.NativePADCollation)
-				require.Error(t, RequireLegacyCollations(owner), "%T必须继续拒绝持久化准入", owner)
+				require.Error(t, RequireLegacyCollations(owner), "%T必须继续被legacy准入拒绝", owner)
 			}
 			native.CollationCoercibilitySet = true
 			native.CollationCoercibility = 7
@@ -91,8 +91,10 @@ func TestExecutableCollationAdmissionIsNotPersistenceAdmission(t *testing.T) {
 		_, err := RequiredExecutableRemoteExpressionFeatures(typ)
 		require.Error(t, err)
 	}
-	// 执行值准入不打开表默认值和物理索引域。
-	require.Error(t, RequireExecutableCollations(&TableDef{DefaultCharset: 3, CollationVersion: 1}))
+	// C的schema形状可传输，但legacy入口和未授权物理格式仍关闭。
+	table := &TableDef{DefaultCharset: 3, CollationVersion: 1}
+	require.NoError(t, RequireExecutableCollations(table))
+	require.Error(t, RequireLegacyCollations(table))
 	require.Error(t, RequireExecutableCollations(&IndexDef{KeyFormat: 1}))
 	require.NoError(t, RequireExecutableCollations((*Plan)(nil)))
 }

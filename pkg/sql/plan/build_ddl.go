@@ -233,6 +233,7 @@ type viewColumnInference struct {
 	provenance          []OutputColumnProvenance
 	dependencies        []ViewDependency
 	requiredProtocol    int64
+	bindingRevision     uint32
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
 }
 
@@ -251,6 +252,7 @@ func inferViewColumns(
 	// persisted view. Keep the requirement observed on the bound plan so the
 	// catalog marker cannot depend on whether that fold happened to run.
 	var preOptimizeViewRequiredProtocol int64
+	var bindingRevision uint32
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
 			if node != nil && node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef.GetTblFunc().GetName() == "json_table" {
@@ -284,6 +286,9 @@ func inferViewColumns(
 	var outputColumnProvenance []OutputColumnProvenance
 	var expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
 	captureColumnTypes := func(bindCtx *BindContext) {
+		if bindCtx.persistedCollationBindingRevision != nil {
+			bindingRevision = *bindCtx.persistedCollationBindingRevision
+		}
 		if bindCtx.persistedExpressionProtocolRequirement != nil &&
 			*bindCtx.persistedExpressionProtocolRequirement > preOptimizeViewRequiredProtocol {
 			preOptimizeViewRequiredProtocol = *bindCtx.persistedExpressionProtocolRequirement
@@ -328,6 +333,9 @@ func inferViewColumns(
 	}
 	if preOptimizeViewRequiredProtocol > viewRequiredProtocol {
 		viewRequiredProtocol = preOptimizeViewRequiredProtocol
+	}
+	if bindingRevision == 1 {
+		viewRequiredProtocol = max(viewRequiredProtocol, defines.MORPCVersion119)
 	}
 	if viewRequiredProtocol > 0 {
 		if forAuthoring {
@@ -386,6 +394,7 @@ func inferViewColumns(
 		provenance:          outputColumnProvenance,
 		dependencies:        dependencyCapture.dependencies(),
 		requiredProtocol:    viewRequiredProtocol,
+		bindingRevision:     bindingRevision,
 		expandedSelectLists: expandedSelectLists,
 	}, nil
 }
@@ -429,13 +438,14 @@ func genViewTableDef(
 		persistedRequiredProtocol = &inferred.requiredProtocol
 	}
 	viewData, err := json.Marshal(ViewData{
-		Stmt:                    viewSql,
-		DefaultDatabase:         ctx.DefaultDatabase(),
-		SQLMode:                 parserSQLModeFromContext(ctx),
-		SecurityType:            getViewSecurityTypeFromContext(ctx),
-		LowerCaseTableNames:     &lowerCaseTableNames,
-		Dependencies:            inferred.dependencies,
-		RequiredProtocolVersion: persistedRequiredProtocol,
+		Stmt:                     viewSql,
+		DefaultDatabase:          ctx.DefaultDatabase(),
+		SQLMode:                  parserSQLModeFromContext(ctx),
+		SecurityType:             getViewSecurityTypeFromContext(ctx),
+		LowerCaseTableNames:      &lowerCaseTableNames,
+		Dependencies:             inferred.dependencies,
+		RequiredProtocolVersion:  persistedRequiredProtocol,
+		CollationBindingRevision: inferred.bindingRevision,
 	})
 	if err != nil {
 		return nil, err

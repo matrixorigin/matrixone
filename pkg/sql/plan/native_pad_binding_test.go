@@ -54,7 +54,6 @@ func TestNativePADPlanAndPreFoldPersistence(t *testing.T) {
 		})
 	}
 	for _, sql := range []string{
-		"create view native_guard as select 'a' collate utf8mb4_general_ci = 'A' as b",
 		"create table native_guard as select 'a' collate utf8mb4_general_ci = 'A' as b",
 		"create table native_guard (b bool default ('a' collate utf8mb4_general_ci = 'A'))",
 		"create table native_guard (a int, b bool generated always as ('a' collate utf8mb4_general_ci = 'A') stored)",

@@ -12,6 +12,7 @@ package plan
 
 import (
 	"reflect"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
@@ -76,6 +77,7 @@ type collationVisitMode uint8
 const (
 	legacyCollationAdmission collationVisitMode = iota
 	executableCollationAdmission
+	persistedCollationAdmission
 	collationFeatureCollection
 )
 
@@ -103,18 +105,23 @@ func (v *legacyCollationVisitor) checkType(value Type) error {
 	if v.mode == collationFeatureCollection {
 		return nil
 	}
-	if v.mode == executableCollationAdmission && native {
+	if (v.mode == executableCollationAdmission || v.mode == persistedCollationAdmission) && native {
 		return value.ValidateCollation()
 	}
 	return requireLegacyType(value)
 }
 
 func (v *legacyCollationVisitor) checkTable(value *TableDef) error {
-	if v.mode == collationFeatureCollection {
+	if v.mode == collationFeatureCollection || v.collectExpressions {
 		v.features.NativePADCollation = v.features.NativePADCollation || HasNativePADCollation(Type{
 			Id: planVarcharTypeID, Charset: value.DefaultCharset, CollationVersion: value.CollationVersion,
 		})
+	}
+	if v.mode == collationFeatureCollection {
 		return nil
+	}
+	if v.mode == persistedCollationAdmission || v.mode == executableCollationAdmission {
+		return requirePersistedTable(value)
 	}
 	return requireLegacyTable(value)
 }
@@ -320,6 +327,84 @@ func requireLegacyTableIndex(table *TableDef, index *IndexDef) error {
 		}
 	}
 	return requireLegacySchema(0, 0, index.KeyFormat)
+}
+
+// requirePersistedTable只放行原值列的语义metadata，不授权新的物理key。
+// catalog完整定义必须在任何列裁剪前验证；后续执行shell只保留可见列。
+func requirePersistedTable(table *TableDef) error {
+	if table == nil {
+		return nil
+	}
+	if err := table.ValidateCollation(); err != nil {
+		return err
+	}
+	native := make(map[string]struct{})
+	for _, col := range table.Cols {
+		if col != nil && HasNativePADCollation(col.Typ) {
+			if col.Primary || col.ClusterBy {
+				return moerr.NewNotSupportedNoCtxf("native PAD collation physical key on column %s is disabled", col.Name)
+			}
+			native[strings.ToLower(col.Name)] = struct{}{}
+		}
+	}
+	check := func(name string) error {
+		name = strings.TrimPrefix(strings.ToLower(name), "__mo_alias_")
+		if _, exists := native[name]; exists {
+			return moerr.NewNotSupportedNoCtxf("native PAD collation physical key on column %s is disabled", name)
+		}
+		return nil
+	}
+	if len(native) != 0 {
+		if table.Pkey != nil {
+			for _, name := range append([]string{table.Pkey.PkeyColName}, table.Pkey.Names...) {
+				if err := check(name); err != nil {
+					return err
+				}
+			}
+		}
+		for _, index := range table.Indexes {
+			if index == nil {
+				continue
+			}
+			for _, part := range index.Parts {
+				if err := check(part); err != nil {
+					return err
+				}
+			}
+		}
+		if table.ClusterBy != nil {
+			name := table.ClusterBy.Name
+			if strings.HasPrefix(name, "__mo_cbkey_") {
+				for rest := strings.TrimPrefix(name, "__mo_cbkey_"); rest != ""; {
+					if len(rest) < 3 {
+						return moerr.NewInvalidInputNoCtx("invalid composite cluster key metadata")
+					}
+					n, err := strconv.Atoi(rest[:3])
+					if err != nil || n <= 0 || n > len(rest)-3 {
+						return moerr.NewInvalidInputNoCtx("invalid composite cluster key metadata")
+					}
+					if err = check(rest[3 : 3+n]); err != nil {
+						return err
+					}
+					rest = rest[3+n:]
+				}
+			} else if err := check(name); err != nil {
+				return err
+			}
+		}
+	}
+	if table.KeyFormat == collation.KeyFormatLegacy && HasNativePADCollation(Type{
+		Id: planVarcharTypeID, Charset: table.DefaultCharset, CollationVersion: table.CollationVersion,
+	}) {
+		return nil
+	}
+	return requireLegacyTable(table)
+}
+
+// RequirePersistedCollations校验可持久化的metadata/物理key形状。
+// 调用方仍必须在读取或发布前独立验证集群read/authoring floor。
+func RequirePersistedCollations(owner any) error {
+	return walkCollationMetadata(owner, &legacyCollationVisitor{mode: persistedCollationAdmission})
 }
 
 // RequireLegacyCollations admits mutable plans and foreign pipeline owners.

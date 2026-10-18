@@ -19,6 +19,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 type collationBindingRevisionKey struct{}
@@ -40,8 +41,8 @@ func explicitCollationBindingRevision(ctx context.Context) (uint32, error) {
 // persistedCollationBindingRevision 校验SQL重绑定来源，不能根据当前会话、
 // RequiredProtocolVersion或结果列类型猜测历史对象的绑定代际。
 func persistedCollationBindingRevision(ctx context.Context, revision uint32) error {
-	// 新代际的持久化reader/authoring尚未启用；不把未知marker降级成legacy。
-	if revision != uint32(collation.RevisionLegacy) {
+	// 未知marker不得降级成legacy；revision1还须通过调用方的read floor。
+	if revision > uint32(collation.RevisionV1) {
 		return moerr.NewNotSupportedf(ctx, "persisted collation binding revision %d is disabled", revision)
 	}
 	return nil
@@ -53,6 +54,11 @@ func enterPersistedCollationBinding(ctx CompilerContext, revision uint32) (resto
 	previous := ctx.GetContext()
 	if err = persistedCollationBindingRevision(previous, revision); err != nil {
 		return nil, err
+	}
+	if revision == uint32(collation.RevisionV1) {
+		if err = RequirePersistedProtocolVersion(previous, ctx.GetProcess(), defines.MORPCVersion119); err != nil {
+			return nil, err
+		}
 	}
 	parent := previous
 	if parent == nil {

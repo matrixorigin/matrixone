@@ -1040,6 +1040,61 @@ func TestRegenerateConstantViewUsingPersistedEnvironment(t *testing.T) {
 	require.Empty(t, regenerated.Dependencies)
 }
 
+func TestNativePADViewRefreshRechecksAuthoringFloor(t *testing.T) {
+	for _, pending := range []bool{false, true} {
+		t.Run(fmt.Sprintf("pending=%v", pending), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			rt := moruntime.ServiceRuntime(proc.GetService())
+			for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
+				old, existed := rt.GetGlobalVariables(key)
+				t.Cleanup(func() {
+					if existed {
+						rt.SetGlobalVariables(key, old)
+					} else if current, ok := rt.GetGlobalVariables(key); ok {
+						rt.CompareAndDeleteGlobalVariables(key, current)
+					}
+				})
+				rt.SetGlobalVariables(key, defines.MORPCVersion119)
+			}
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion118)
+			ownership := executor.NewMemResult([]types.Type{types.T_uint32.ToType(), types.T_uint32.ToType(), types.T_timestamp.ToType()}, proc.Mp())
+			ownership.NewBatchWithRowCount(1)
+			require.NoError(t, executor.AppendFixedRows(ownership, 0, []uint32{3}))
+			require.NoError(t, executor.AppendFixedRows(ownership, 1, []uint32{5}))
+			require.NoError(t, executor.AppendFixedRows(ownership, 2, []types.Timestamp{7}))
+			results := []executor.Result{ownership.GetResult()}
+			if pending {
+				results = append([]executor.Result{{}}, results...)
+			}
+			exec := &viewMetadataCleanupRecordingExecutor{results: results}
+			installViewMetadataTestExecutor(t, proc, exec)
+			ctrl := gomock.NewController(t)
+			storage := mock_frontend.NewMockEngine(ctrl)
+			database := mock_frontend.NewMockDatabase(ctrl)
+			relation := mock_frontend.NewMockRelation(ctrl)
+			proc.GetSessionInfo().StorageEngine = storage
+			storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
+			database.EXPECT().Relation(gomock.Any(), "v", gomock.Any()).Return(relation, nil)
+			relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
+			current := &planpb.TableDef{Name: "v", Version: 23, LogicalId: 17, ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci = 'a' as b","DefaultDatabase":"db","collation_binding_revision":1,"required_protocol_version":119}`}}
+			relation.EXPECT().CopyTableDef(gomock.Any()).Return(current)
+			// 不注册AlterTable：读门允许重绑定，但写门不允许发布replacement。
+			target := viewRefreshTarget{accountID: 7, databaseID: 11, relationID: 13, logicalID: 17, databaseName: "db", relationName: "v", generation: 19}
+			parent := proc.GetTopContext()
+			var err error
+			if pending {
+				var wrote bool
+				wrote, err = refreshPendingView(proc, &pendingViewRefresh{viewRefreshTarget: target})
+				require.False(t, wrote)
+			} else {
+				err = (&Compile{proc: proc, e: storage, pn: &planpb.Plan{}}).refreshOneView(target, viewRelationMutation{})
+			}
+			require.ErrorContains(t, err, "protocol version 119")
+			require.Same(t, parent, proc.GetTopContext())
+		})
+	}
+}
+
 func TestRefreshPendingConstantViewCommitsReplacementAndLifecycleState(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	ownership := executor.NewMemResult([]types.Type{

@@ -52,7 +52,7 @@ func (b *baseBinder) bindCollateExpr(ast *tree.CollateExpr, depth int32) (*Expr,
 	}
 	selectedType := plan.Type{Id: int32(types.T_varchar), Charset: uint32(identity), CollationVersion: version}
 	if plan.HasNativePADCollation(selectedType) && (b.persistedExpressionBinding ||
-		b.ctx != nil && b.ctx.persistedExpressionProtocolRequirement != nil) {
+		b.ctx != nil && b.ctx.persistedExpressionProtocolRequirement != nil && b.ctx.persistedCollationBindingRevision == nil) {
 		return nil, moerr.NewNotSupported(ctx, "native PAD collation persistence is disabled")
 	}
 	if err := plan.RequireExecutableCollations(selectedType); err != nil {
@@ -125,7 +125,11 @@ func (b *baseBinder) bindCollateExpr(ast *tree.CollateExpr, depth int32) (*Expr,
 	selected.apply(&target)
 	// A real cast preserves the raw source column for projection, index safety,
 	// and runtime parameter rebinding. Relabeling a shared node loses all three.
-	return appendCastBeforeExpr(ctx, expr, target)
+	result, err := appendCastBeforeExpr(ctx, expr, target)
+	if err == nil && plan.HasNativePADCollation(target) && b.ctx != nil && b.ctx.persistedCollationBindingRevision != nil {
+		*b.ctx.persistedCollationBindingRevision = 1
+	}
+	return result, err
 }
 
 func (c expressionCollation) apply(typ *plan.Type) {

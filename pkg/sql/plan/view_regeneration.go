@@ -191,7 +191,7 @@ func parsePersistedViewDefinition(
 	if err := json.Unmarshal([]byte(persistedViewData), &viewData); err != nil {
 		return nil, err
 	}
-	if err := persistedCollationBindingRevision(ctx.GetContext(), viewData.CollationBindingRevision); err != nil {
+	if err := requireViewCollationMarker(ctx.GetContext(), viewData); err != nil {
 		return nil, err
 	}
 	if viewData.RequiredProtocolVersion != nil {

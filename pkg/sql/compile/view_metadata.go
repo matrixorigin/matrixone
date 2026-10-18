@@ -854,6 +854,9 @@ func (c *Compile) refreshOneView(
 	replacement := plan2.DeepCopyTableDef(currentDef, true)
 	replacement.Cols = plan2.DeepCopyColDefList(regenerated.TableDef.Cols)
 	replacement.ViewSql = regenerated.TableDef.ViewSql
+	if err = plan2.RequireCatalogCollationsForAuthoring(targetContext, c.proc, replacement); err != nil {
+		return err
+	}
 	if err = relation.AlterTable(targetContext, nil, []*api.AlterTableReq{
 		api.NewGuardedReplaceDefReq(
 			target.databaseID, target.relationID, currentDef.Version,
