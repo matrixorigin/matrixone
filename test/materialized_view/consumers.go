@@ -20,9 +20,11 @@ import (
 	"reflect"
 	"strings"
 	"time"
+
+	mysql "github.com/go-sql-driver/mysql"
 )
 
-func runConsumerCases() {
+func runConsumerCases(dsn, secondDSN string) {
 	db.SetMaxOpenConns(1)
 	exec("create database mv_consumer_validation")
 	defer func() {
@@ -52,15 +54,40 @@ func runConsumerCases() {
 	exec("create table facts(id int primary key,k int unique,skey int,index sk(skey))")
 	const insert = "insert into facts values(1,11,10),(2,22,20)"
 	exec(insert)
+	if secondDSN == "" {
+		secondDSN = dsn
+	}
+	config, err := mysql.ParseDSN(secondDSN)
+	if err != nil {
+		panic(err)
+	}
+	config.DBName = "mv_consumer_validation"
+	other, err := openConfigured(config)
+	if err != nil {
+		panic(err)
+	}
+	defer other.Close()
+	other.SetMaxOpenConns(1)
+	otherExec := func(sql string) {
+		if _, err := other.ExecContext(ctx, sql); err != nil {
+			panic(err)
+		}
+	}
+	otherExec("set experimental_materialized_view=1")
+	otherExec("set time_zone='+00:00'")
 	// This statement predates dependency creation: cached eligibility must not
-	// turn valid source DML into a rejected physical-identity replacement.
+	// turn valid source DML into a rejected physical-identity replacement. Use
+	// another session/CN so the owner's session DDL generation cannot mask it.
 	prepared, err := db.PrepareContext(ctx, "delete from facts")
 	if err != nil {
 		panic(err)
 	}
 	defer prepared.Close()
-	exec("create materialized view stored refresh manual as select id,k,skey from facts")
-	exec("refresh materialized view stored")
+	// Cross-CN assertions use the existing causal commit-frontier handoff.
+	rows("select mo_ctl('cn','synccommit','')")
+	otherExec("create materialized view stored refresh manual as select id,k,skey from facts")
+	otherExec("refresh materialized view stored")
+	rows("select mo_ctl('cn','synccommit','')")
 	const publication = "select successful_sequence,last_run,source_physical,source_logical from mo_catalog.mo_materialized_views where account_id=0 and database_name='mv_consumer_validation' and name='stored'"
 	before := rows(publication)
 	exec("set experimental_materialized_view=0")

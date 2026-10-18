@@ -43,7 +43,7 @@ python3 "${repo_root}/test/materialized_view/native_probe/check.py" \
     -output "${report_dir}/functional.json"
 "${build_dir}/mv-validation" -dsn "${primary_dsn}" -edge-check \
     -output "${report_dir}/failure.json"
-"${build_dir}/mv-validation" -dsn "${primary_dsn}" -consumer-check \
+"${build_dir}/mv-validation" -dsn "${primary_dsn}" -consumer-check -second-dsn "${second_dsn}" \
     -output "${report_dir}/consumers.json"
 "${build_dir}/mv-validation" -dsn "${primary_dsn}" -second-dsn "${second_dsn}" \
     -output "${report_dir}/multi-cn.json"

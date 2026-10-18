@@ -128,3 +128,14 @@ processes exit0, all five independent metadata/task cleanup queries return zero.
 The11,214-file tracked input map outside `docs/` is unchanged after execution;
 canonical SHA256 is `928d2d01820842e8100fac336eac67ebb12854fd7513fecfefe587691df4fd4d`.
 See [integration receipts](materialized_view_copy_integration_results.json).
+
+## Cross-CN prepared DELETE cache follow-up
+
+Further native validation found that the same-session prepared case was masked
+by the session DDL generation. A handle prepared on CN1 before CN2 creates an MV
+retained its truncate eligibility and rejected valid DELETE; direct DELETE worked.
+The cache owners now rebind that metadata-dependent decision. The consumer mode
+uses another session/CN and causal commit handoffs. See the [cache requirement,
+design and cases](materialized_view_cached_delete.md) and [paired native/unit
+receipts](materialized_view_cached_delete_results.json). Allocations, refresh
+publication and task ownership are unchanged.

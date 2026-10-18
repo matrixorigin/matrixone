@@ -157,10 +157,17 @@ and cleans its own database. Validate both transaction modes by configuring
 `-consumer-check` selects the native consumer regressions for review5562448876.
 It reuses the existing authenticated BVT service and owns a two-row indexed
 source, manual MVs and one altered periodic policy. Ten checks cover prepared
-DELETE before MV creation, unrestricted DELETE with creation disabled, affected
+DELETE before MV creation in a different session/CN, unrestricted DELETE with creation disabled, affected
 rows including an empty source, unique/secondary maintenance, explicit TRUNCATE
 protection and ALTER COPY rejection without preparation residue, DUMP/LOAD kind admission before file access with unchanged publication,
 and SHOW CREATE TABLE equality/replay for manual and altered periodic policies.
 The fixture drops its MVs before its database on both success and failure. The
 normal BVT entrypoint includes the mode and requires a nonempty successful JSON
 report, using the same deployment and coverage path.
+
+The consumer mode accepts `-second-dsn` for the MV-creating connection; without
+it, it opens a second session on the primary endpoint. The BVT entrypoint uses
+the second CN. Creating the MV on the prepared statement's own session would
+advance its DDL generation and mask stale truncate eligibility. Truncating
+DELETE plans now bypass ordinary and physical prepared caches and rebind on
+EXECUTE; filtered/row DELETE and ordinary SELECT retain their existing policy.

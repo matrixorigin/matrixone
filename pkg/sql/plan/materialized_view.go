@@ -34,6 +34,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
+// PreparedPlanDependsOnMaterializedViewDependencies identifies a destructive
+// DELETE optimization whose eligibility is not captured by table schema versions.
+// Another session can create an MV without changing the source definition.
+func PreparedPlanDependsOnMaterializedViewDependencies(p *Plan) bool {
+	q := p.GetQuery()
+	if q == nil || q.GetStmtType() != pb.Query_DELETE {
+		return false
+	}
+	for _, node := range q.GetNodes() {
+		if node.GetNodeType() == pb.Node_DELETE && node.GetDeleteCtx().GetCanTruncate() {
+			return true
+		}
+	}
+	return false
+}
+
 // ValidateMaterializedViewSelect is a bounded definition-time AST check. This
 // deliberately admits a smaller language than ordinary SELECT in the first release.
 func ValidateMaterializedViewSelect(ctx CompilerContext, stmt *tree.Select) error {

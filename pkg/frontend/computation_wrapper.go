@@ -2658,6 +2658,9 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	if p == nil {
 		return true
 	}
+	if plan2.PreparedPlanDependsOnMaterializedViewDependencies(p) {
+		return false
+	}
 	if plan2.PreparedPlanHasPercentileParams(p) {
 		// The percentile marker is evaluated while the physical aggregate is
 		// constructed and becomes immutable executor configuration. Reusing that
@@ -2704,6 +2707,7 @@ func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 	query := p.GetQuery()
 	return query != nil && (query.GetHasForeignKeyAction() ||
 		query.GetViewMetadataDependsOnUdf() ||
+		plan2.PreparedPlanDependsOnMaterializedViewDependencies(p) ||
 		plan2.PreparedPlanDependsOnSubscriptionMetadata(p) ||
 		plan2.PreparedPlanDependsOnIndexCoverage(p))
 }

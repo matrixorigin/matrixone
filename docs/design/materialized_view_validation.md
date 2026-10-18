@@ -321,3 +321,9 @@ mode includes prepared-before-creation and feature-disabled DELETE, affected-row
 boundaries, unique/secondary controls, unchanged publication, native import
 rejection and manual/altered-policy DDL replay. See
 [consumer corrections](materialized_view_consumer_fixes.md) and its evidence JSON.
+## Additional cross-CN cache boundary
+
+Prepare source DELETE on one CN, create/refresh its MV on another, then EXECUTE
+without changing the prepared owner's DDL generation. Require row deletion,
+unchanged last-good MV rows/full publication and zero fixture residue in RC and
+SI. [Requirement, design, controls and execution receipts](materialized_view_cached_delete.md).

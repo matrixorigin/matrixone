@@ -6941,7 +6941,10 @@ func checkNodeCanCache(p *plan2.Plan) bool {
 	// otherwise reject it. Do not admit any plan with this dependency to the
 	// ordinary COM_QUERY cache: creating the first subscription does not change
 	// a table schema version and therefore cannot invalidate such a cached plan.
-	if plan2.PreparedPlanDependsOnSubscriptionMetadata(p) {
+	// Truncating DELETE also depends on reverse MV dependencies outside the
+	// source schema version. Its eligibility must be rebound for each statement.
+	if plan2.PreparedPlanDependsOnSubscriptionMetadata(p) ||
+		plan2.PreparedPlanDependsOnMaterializedViewDependencies(p) {
 		return false
 	}
 	if q, ok := p.Plan.(*plan2.Plan_Query); ok {

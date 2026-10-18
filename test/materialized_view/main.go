@@ -184,7 +184,7 @@ func main() {
 	}
 	if *consumerCheck {
 		evidence.Rows = 0
-		runConsumerCases()
+		runConsumerCases(*dsn, *secondDSN)
 		return
 	}
 	if *tenantCheck {
