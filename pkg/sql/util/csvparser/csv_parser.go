@@ -16,6 +16,7 @@ package csvparser
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -77,6 +78,11 @@ type CSVConfig struct {
 	NotNull           bool
 
 	AllowEmptyLine bool
+	// SkipWhitespaceRecords keeps unquoted single-field whitespace records out
+	// of JSONLINE record accounting. CSV callers leave it disabled.
+	SkipWhitespaceRecords bool
+	// Context is borrowed from the reader owner; nil disables cancellation checks.
+	Context context.Context
 	// For non-empty FieldsEnclosedBy (for example quotes), null elements inside quotes are not considered as null except for
 	// `\N` (when escape-by is `\`). That is to say, `\N` is special for null because it always means null.
 	QuotedNullIsText bool
@@ -602,6 +608,11 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 }
 
 func (parser *CSVParser) readRecord() error {
+	if parser.cfg.Context != nil {
+		if err := parser.cfg.Context.Err(); err != nil {
+			return err
+		}
+	}
 	parser.recordStartLine = parser.lineNo
 	parser.recordBuffer = parser.recordBuffer[:0]
 	parser.fieldIndexes = parser.fieldIndexes[:0]
@@ -746,6 +757,21 @@ outside:
 					}
 				}
 			}
+			if parser.cfg.SkipWhitespaceRecords && len(parser.fieldIndexes) == 0 &&
+				!fieldIsQuoted && len(parser.recordBuffer) > 0 && len(bytes.TrimSpace(parser.recordBuffer)) == 0 {
+				if err == io.EOF {
+					return io.EOF
+				}
+				if parser.cfg.Context != nil {
+					if err := parser.cfg.Context.Err(); err != nil {
+						return err
+					}
+				}
+				parser.recordBuffer = parser.recordBuffer[:0]
+				parser.recordStartLine = parser.lineNo
+				isEmptyLine = true
+				continue
+			}
 			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
 			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)
 			// the loop is end, no need to reset fieldIsQuoted
@@ -884,6 +910,11 @@ func (parser *CSVParser) readUntilTerminator() ([]byte, int64, error) {
 }
 
 func (parser *CSVParser) readBlock() error {
+	if parser.cfg.Context != nil {
+		if err := parser.cfg.Context.Err(); err != nil {
+			return err
+		}
+	}
 	n, err := io.ReadFull(parser.reader, parser.blockBuf)
 
 	switch {

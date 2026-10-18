@@ -165,15 +165,6 @@ func (r *CsvReader) makeBatchRows(proc *process.Process, bat *batch.Batch) (file
 			break
 		}
 
-		// CSV whitespace records are data, but JSONLINE keeps its existing
-		// blank-line policy. Skip before ignore/batch accounting, as the shared
-		// parser used to do; quoted scalars and split records still need validation.
-		if param.Extern.Format == tree.JSONLINE && len(row) == 1 &&
-			!row[0].HasStringQuote && strings.TrimSpace(row[0].Val) == "" {
-			i--
-			continue
-		}
-
 		if r.ignoreLine > 0 {
 			if !param.Extern.Parallel || param.FileOffset[0] == 0 {
 				r.ignoreLine--
