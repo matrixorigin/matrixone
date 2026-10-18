@@ -648,15 +648,7 @@ run_embedded_tests "$scope" 2
 			var transform func(string) string
 			mock := embeddedGoMock
 			switch phase {
-			case "active-publication":
-				transform = func(text string) string {
-					const anchor = "            test_pids[index]=$!\n"
-					if strings.Count(text, anchor) != 1 {
-						t.Fatal("missing active pid publication")
-					}
-					return strings.Replace(text, anchor, "        ut_test_execution_spawned\n"+anchor, 1)
-				}
-			case "watchdog-publication", "cleanup":
+			case "active-publication", "watchdog-publication", "cleanup":
 				mock = strings.Replace(mock, `trap 'touch "$CASE_DIR/stopped-execute-a"; exit 143' TERM`, `trap 'fixture_self_pid fixture_pid; printf "MOCK_TERM shell=%s\n" "$fixture_pid" >&16; touch "$CASE_DIR/stopped-execute-a"; printf "MOCK_STOPPED shell=%s\n" "$fixture_pid" >&16; exit 143' TERM`, 1)
 				script = strings.Replace(script, " printf 'EXECUTE_CANCELLED %s\\n' \"$status\"", " cat \"$CASE_DIR/ut-signal-trace.log\"\n printf 'EXECUTE_CANCELLED %s\\n' \"$status\"", 1)
 				script = strings.Replace(script, "function ut_test_execution_spawned() {", `exec 16>"$CASE_DIR/ut-signal-trace.log"
@@ -687,7 +679,10 @@ function ut_test_execution_spawned() {`, 1)
   printf 'OBSERVER_RELEASE shell=%s\n' "$observer_pid" >&16) &`, 1)
 				}
 				transform = func(text string) string {
-					const anchor = "            watchdog_pids[index]=$!\n"
+					anchor := "            watchdog_pids[index]=$!\n"
+					if phase == "active-publication" {
+						anchor = "            test_pids[index]=$!\n"
+					}
 					if strings.Count(text, anchor) != 1 {
 						t.Fatal("missing watchdog pid publication")
 					}
@@ -714,10 +709,14 @@ function ut_test_execution_spawned() {`, 1)
         (( sweep_status == 0 )) || exit 125`, 1)
 					text = strings.Replace(text, "        wait 2>/dev/null || true\n", "        fixture_self_pid fixture_pid\n        printf 'DRAINED shell=%s\\n' \"$fixture_pid\" >&16\n        jobs -l >&16\n        wait 2>/dev/null || true\n        printf 'JOINED shell=%s\\n' \"$fixture_pid\" >&16\n", 1)
 					hook := ""
-					if phase == "watchdog-publication" {
+					if phase == "watchdog-publication" || phase == "active-publication" {
 						hook = "        ut_test_execution_spawned \"$!\"\n"
 					}
-					return prefix + strings.Replace(text, anchor, hook+anchor+"            fixture_self_pid fixture_pid\n            printf 'PUBLISHED shell=%s watchdog=%s\\n' \"$fixture_pid\" \"${watchdog_pids[index]}\" >&16\n", 1)
+					published := "watchdog_pids"
+					if phase == "active-publication" {
+						published = "test_pids"
+					}
+					return prefix + strings.Replace(text, anchor, hook+anchor+"            fixture_self_pid fixture_pid\n            printf 'PUBLISHED shell=%s watchdog=%s\\n' \"$fixture_pid\" \"${"+published+"[index]}\" >&16\n", 1)
 				}
 			}
 			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform,
@@ -757,6 +756,129 @@ function ut_test_execution_spawned() {`, 1)
 				}
 			}
 		})
+	}
+}
+
+// Deliver TERM to the helper at PID publication and its normal poll boundary.
+// The trap records the request instead of reentering cleanup from an arbitrary
+// command. The parent then delivers a second TERM; the owner must still drain
+// every admitted process group before acknowledging cancellation.
+func TestEmbeddedPrebuiltPublicationCancellationLatch(t *testing.T) {
+	t.Parallel()
+	for _, owner := range []string{"test_pids", "watchdog_pids", "poll"} {
+		t.Run(owner, func(t *testing.T) {
+			script := embeddedSetup + `
+scope=$'example/b\ngithub.com/matrixorigin/matrixone/pkg/embed\nexample/c'
+cleanup_check() {
+ status=$?
+ [[ -f "$CASE_DIR/stopped-execute-a" ]] || status=90
+ if kill -0 "$(<"$CASE_DIR/pid-execute-a")" 2>/dev/null; then status=91; fi
+ [[ ! -d "$artifact_dir" ]] || status=92
+ [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=93
+ [[ ! -d "$CASE_DIR/executed-b" && ! -d "$CASE_DIR/executed-c" ]] || status=94
+ [[ -f "$CASE_DIR/publication-latched" ]] || status=95
+ printf 'PUBLICATION_LATCHED\n'
+ printf 'PUBLICATION_CANCELLED %s\n' "$status"
+ exit "$status"
+}
+function cancel_during_publication() {
+ local helper_pid
+ read -r _ <&8
+ fixture_self_pid helper_pid
+ kill -TERM "$helper_pid"
+ [[ "$term_pending" == 1 ]] || exit 95
+ : > "$CASE_DIR/publication-latched"
+ kill -TERM $$
+}
+trap cleanup_check EXIT
+start_embedded_prebuild "$scope" 1
+artifact_dir=$CLUSTER_PREBUILD_DIR
+run_embedded_tests "$scope" 2
+`
+			transform := func(text string) string {
+				if owner == "poll" {
+					boundary := strings.Index(text, "function run_prebuilt_race_commands(){")
+					if boundary < 0 {
+						t.Fatal("missing prebuilt execution owner")
+					}
+					const anchor = "        progress=0\n"
+					if strings.Count(text[boundary:], anchor) != 1 {
+						t.Fatal("missing prebuilt polling boundary")
+					}
+					return text[:boundary] + strings.Replace(text[boundary:], anchor, "        cancel_during_publication\n"+anchor, 1)
+				}
+				anchor := "            " + owner + "[index]=$!\n"
+				if strings.Count(text, anchor) != 1 {
+					t.Fatal("missing PID publication: " + owner)
+				}
+				// The hook starts no background job, preserving the unpublished $!.
+				return strings.Replace(text, anchor, "            cancel_during_publication\n"+anchor, 1)
+			}
+			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, transform,
+				"MODE=execute-cancel", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "PUBLICATION_LATCHED") ||
+				!strings.Contains(string(out), "PUBLICATION_CANCELLED 143") {
+				t.Fatalf("publication cancellation %s: %v\n%s", owner, err, out)
+			}
+		})
+	}
+}
+
+func TestEmbeddedPrebuiltCancellationRequestPreparation(t *testing.T) {
+	t.Parallel()
+	out, err := scheduleHarness(t, `source ./run_ut.sh UT
+path="$G_WKSP/$G_TS-owner-complete.CURRENT_UT_PID"
+: > "$path.cancel"
+failed=0
+prepare_ut_helper_completion CURRENT_UT_PID failed || exit 90
+[[ "$failed" == 0 && -f "$path" && ! -e "$path.cancel" ]] || exit 91
+mkdir "$path.cancel"
+status=0
+prepare_ut_helper_completion CURRENT_UT_PID failed || status=$?
+[[ "$status" == 125 && "$failed" == 1 && -d "$path.cancel" ]] || exit 92
+printf 'REQUEST_PREPARED\n'
+`)
+	if err != nil || !strings.Contains(string(out), "REQUEST_PREPARED") {
+		t.Fatalf("cancellation request preparation: %v\n%s", err, out)
+	}
+}
+
+func TestEmbeddedPrebuiltCancellationRequestSurvivesLostTERM(t *testing.T) {
+	t.Parallel()
+	script := embeddedSetup + `
+scope=$'example/b\ngithub.com/matrixorigin/matrixone/pkg/embed\nexample/c'
+eval "$(declare -f terminate_ut_process_group | sed '1s/terminate_ut_process_group/original_terminate_ut_process_group/')"
+function terminate_ut_process_group() {
+ if [[ "$1" == "${CURRENT_UT_PID:-}" && "${2:-TERM}" == TERM && "$UT_TERMINATING" == 1 ]]; then
+  : > "$CASE_DIR/helper-term-suppressed"
+  return 0
+ fi
+ original_terminate_ut_process_group "$@"
+}
+cleanup_check() {
+ status=$?
+ [[ -f "$CASE_DIR/helper-term-suppressed" && -f "$CASE_DIR/stopped-execute-a" ]] || status=90
+ if kill -0 "$(<"$CASE_DIR/pid-execute-a")" 2>/dev/null; then status=91; fi
+ [[ ! -d "$artifact_dir" ]] || status=92
+ [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=93
+ [[ ! -d "$CASE_DIR/executed-b" && ! -d "$CASE_DIR/executed-c" ]] || status=94
+ completion="$G_WKSP/$G_TS-owner-complete.CURRENT_UT_PID"
+ [[ -f "$completion" && "$(<"$completion")" == 143 && ! -e "$completion.cancel" ]] || status=95
+ printf 'REQUEST_CANCELLED %s\n' "$status"
+ exit "$status"
+}
+trap cleanup_check EXIT
+start_embedded_prebuild "$scope" 1
+artifact_dir=$CLUSTER_PREBUILD_DIR
+(read -r _ <&8; kill -TERM $$) &
+run_embedded_tests "$scope" 2
+`
+	out, err := scheduleHarnessWithMock(t, script, embeddedGoMock,
+		"MODE=execute-cancel", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "REQUEST_CANCELLED 143") {
+		t.Fatalf("lost helper TERM must not lose cancellation: %v\n%s", err, out)
 	}
 }
 
