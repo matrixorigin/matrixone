@@ -1,7 +1,8 @@
 # Incomplete temporal strings — revision 7
 
 Issue: #30234. Implementation: https://github.com/matrixorigin/matrixone/pull/30311.
-Status: proposed; independent approval remains external to this repair.
+Status: revision 7 design approved by gpt-6.1-sol / xhigh on 2026-10-18.
+The PR records the independent review and current validation evidence.
 
 ## Problem and invariant
 
@@ -103,5 +104,6 @@ DATE_ADD, SELECT division and collation-aware LEAST retains all predicates;
 LEAST alone remains at 117 while the combined expression requires 120.
 Run focused tests, owning packages and incremental
 static checks. Reuse the PR's passing BVT evidence for unchanged value semantics.
-No throughput claim, benchmark or new cluster fixture is needed for the bounded
-feature predicates. Independent design approval is not asserted by this file.
+The bounded feature predicates require no new cluster fixture. Measure the
+TO_SECONDS hot path with the existing real-bound expression benchmark; scalar
+CPU measurements do not establish whole-query throughput.
