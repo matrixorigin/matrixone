@@ -1318,9 +1318,14 @@ func blockDataReadWithFilter(
 		if topErr != nil {
 			return topErr
 		}
-		winnerPositions, mapErr := positionsOfSelectedRows(selectedPhysicalRows, topRows)
-		if mapErr != nil {
-			return mapErr
+		// Nil selection means the full, uncompressed block: physical Top-K
+		// rows are already early-column positions. TopN returns owned, sorted rows.
+		winnerPositions := topRows
+		if selectedPhysicalRows != nil {
+			winnerPositions, err = positionsOfSelectedRows(selectedPhysicalRows, topRows)
+			if err != nil {
+				return err
+			}
 		}
 		for _, pos := range earlyColumns {
 			if pos == topColPos || len(winnerPositions) == 0 {
