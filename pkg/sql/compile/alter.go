@@ -1517,23 +1517,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		return err
 	}
 
-	//5. Private preparation suppresses transient index tasks; preserve this
-	// cleanup only for callers that did not opt out of registration.
-	if !createTmpOpts.SkipIndexTaskRegistration() {
-		newTmpTableDef := newRel.CopyTableDef(c.proc.Ctx)
-		err = DropAllIndexCdcTasks(c, newTmpTableDef, dbName, copyTblName)
-		if err != nil {
-			return err
-		}
-
-		// Idxcron: remove index update tasks with temp table id
-		err = DropAllIndexUpdateTasks(c, newTmpTableDef, dbName, copyTblName)
-		if err != nil {
-			return err
-		}
-	}
-
-	// 6. copy the original table data to the temporary replica table
+	//5. copy the original table data to the temporary replica table
 	alterCopyOpt, err := c.precheckAlterCopyPkDedup(dbName, tblName, qry)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "precheck primary key for alter table copy",
@@ -1575,14 +1559,25 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 			zap.Error(err))
 		return err
 	}
-	if err = c.reconcileAlterCopyAutoIncrement(
-		dbName,
-		qry.TableDef,
-		qry.CopyTableDef,
-		newRel,
-		hasAlterAutoIncrementReset(qry.Actions),
-		cleanup,
-	); err != nil {
+	if err = func() error {
+		// Allocator reconciliation runs before the publication gate on the
+		// outer ALTER context, and its allocator UPDATE publishes offsets for
+		// the private replacement's own keys through a service executor. Mark
+		// the statement tree so that SQL inherits the private-preparation
+		// lock policy instead of arming catalog locks admission cannot
+		// certify as private.
+		originalCtx := c.proc.Ctx
+		c.proc.Ctx = context.WithValue(originalCtx, lockFreeStatementTree{}, true)
+		defer func() { c.proc.Ctx = originalCtx }()
+		return c.reconcileAlterCopyAutoIncrement(
+			dbName,
+			qry.TableDef,
+			qry.CopyTableDef,
+			newRel,
+			hasAlterAutoIncrementReset(qry.Actions),
+			cleanup,
+		)
+	}(); err != nil {
 		return err
 	}
 
@@ -1727,7 +1722,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		}
 	}
 
-	// 7. drop original table.
+	//6. drop original table.
 	// ISCP: That will also drop ISCP related jobs and pitr of the original table.
 	dropSql := fmt.Sprintf("drop table `%s`.`%s`", dbName, tblName)
 	if isTemp {
@@ -1758,7 +1753,7 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 	}
 
 	//-------------------------------------------------------------------------
-	// 8. rename temporary replica table into the original table(Table Id remains unchanged)
+	//7. rename temporary replica table into the original table(Table Id remains unchanged)
 	req := api.NewRenameTableReq(
 		newRel.GetDBID(c.proc.Ctx),
 		newRel.GetTableID(c.proc.Ctx),

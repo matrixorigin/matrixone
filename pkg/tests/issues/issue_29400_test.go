@@ -886,65 +886,107 @@ func TestIssue29400IndependentCopyAltersProgressInPessimisticRC(t *testing.T) {
 				defer done()
 				_, _ = conn0.ExecContext(cleanupCtx, "drop database if exists "+database)
 			}()
-			for _, query := range []string{
-				"create table " + database + ".t1(id int primary key, v int)",
-				"create table " + database + ".t2(id int primary key, v vecf32(2))",
-				"insert into " + database + ".t1 values(1, 1)",
-				"create index idx using ivfflat on " + database +
-					".t2(v) lists=1 op_type 'vector_l2_ops'",
-				"insert into " + database + ".t2 values(1, '[1,0]')",
+
+			// Each independent publisher must wait behind the held gate instead
+			// of failing FastFail on locks retained by preparation. The victim
+			// layouts select every service-owned catalog write COPY triggers:
+			// an unaffected IVF-FLAT index (hidden-table cleanup), a HASH
+			// partitioned source (partition-service metadata writes), and an
+			// AUTO_INCREMENT source (allocator column writes).
+			for _, victim := range []struct {
+				name       string
+				table      string
+				setup      []string
+				afterAlter string
+			}{
+				{
+					name:  "unaffected_ivfflat_index",
+					table: "t2_ivfflat",
+					setup: []string{
+						"create table %s(id int primary key, v vecf32(2))",
+						"create index idx using ivfflat on %s(v) lists=1 op_type 'vector_l2_ops'",
+						"insert into %s values(1, '[1,0]')",
+					},
+					afterAlter: "insert into %s values(2, '[2,0]', 2)",
+				},
+				{
+					name:  "hash_partitioned",
+					table: "t2_hash",
+					setup: []string{
+						"create table %s(id int primary key, v int) partition by hash(id) partitions 2",
+						"insert into %s values(1, 1)",
+					},
+					afterAlter: "insert into %s values(2, 2, 2)",
+				},
+				{
+					name:  "auto_increment",
+					table: "t2_autoinc",
+					setup: []string{
+						"create table %s(id int primary key auto_increment, v int)",
+						"insert into %s(v) values(1)",
+					},
+					afterAlter: "insert into %s(v) values(2)",
+				},
 			} {
-				execSQLRequire(t, ctx, db0, query)
-			}
+				t.Run(victim.name, func(t *testing.T) {
+					execSQLRequire(t, ctx, db0, "drop table if exists "+database+".t1")
+					execSQLRequire(t, ctx, db0, "drop table if exists "+database+"."+victim.table)
+					execSQLRequire(t, ctx, db0, "create table "+database+".t1(id int primary key, v int)")
+					execSQLRequire(t, ctx, db0, "insert into "+database+".t1 values(1, 1)")
+					for _, query := range victim.setup {
+						execSQLRequire(t, ctx, db0, fmt.Sprintf(query, database+"."+victim.table))
+					}
 
-			holder, err := conn0.BeginTx(ctx, nil)
-			require.NoError(t, err)
-			defer holder.Rollback()
-			_, err = holder.ExecContext(ctx,
-				"alter table "+database+".t1 algorithm=copy, add column extra int")
-			require.NoError(t, err, "the explicit COPY ALTER must complete while retaining publication admission")
+					holder, err := conn0.BeginTx(ctx, nil)
+					require.NoError(t, err)
+					defer holder.Rollback()
+					_, err = holder.ExecContext(ctx,
+						"alter table "+database+".t1 algorithm=copy, add column extra int")
+					require.NoError(t, err, "the explicit COPY ALTER must complete while retaining publication admission")
 
-			waitingAtGate := make(chan struct{}, 1)
-			restoreHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
-				if tableID == registryID {
+					waitingAtGate := make(chan struct{}, 1)
+					restoreHook := lockservice.SetWaiterEnqueuedHookForTest(func(tableID uint64, _ []byte, _ [][]byte) {
+						if tableID == registryID {
+							select {
+							case waitingAtGate <- struct{}{}:
+							default:
+							}
+						}
+					})
+					defer restoreHook()
+					otherCtx, cancelOther := context.WithTimeout(ctx, 30*time.Second)
+					defer cancelOther()
+					otherDone := make(chan error, 1)
+					go func() {
+						_, otherErr := conn1.ExecContext(otherCtx,
+							"alter table "+database+"."+victim.table+" algorithm=copy, add column extra int")
+						otherDone <- otherErr
+					}()
 					select {
-					case waitingAtGate <- struct{}{}:
+					case <-waitingAtGate:
+					case otherErr := <-otherDone:
+						t.Fatalf("independent COPY ALTER finished before the holder committed: %v", otherErr)
+					case <-time.After(15 * time.Second):
+						t.Fatal("independent COPY ALTER never waited at the publication gate")
+					}
+					select {
+					case otherErr := <-otherDone:
+						t.Fatalf("independent COPY ALTER failed while the holder retained the gate: %v", otherErr)
 					default:
 					}
-				}
-			})
-			defer restoreHook()
-			otherCtx, cancelOther := context.WithTimeout(ctx, 30*time.Second)
-			defer cancelOther()
-			otherDone := make(chan error, 1)
-			go func() {
-				_, otherErr := conn1.ExecContext(otherCtx,
-					"alter table "+database+".t2 algorithm=copy, add column extra int")
-				otherDone <- otherErr
-			}()
-			select {
-			case <-waitingAtGate:
-			case otherErr := <-otherDone:
-				t.Fatalf("independent COPY ALTER finished before the holder committed: %v", otherErr)
-			case <-time.After(15 * time.Second):
-				t.Fatal("independent COPY ALTER never waited at the publication gate")
+					require.NoError(t, holder.Commit())
+					select {
+					case otherErr := <-otherDone:
+						require.NoError(t, otherErr)
+					case <-time.After(15 * time.Second):
+						t.Fatal("independent COPY ALTER did not finish after the holder committed")
+					}
+					execSQLRequire(t, ctx, db0,
+						"insert into "+database+".t1 values(2, 2, 2)")
+					execSQLRequire(t, ctx, db0,
+						fmt.Sprintf(victim.afterAlter, database+"."+victim.table))
+				})
 			}
-			select {
-			case otherErr := <-otherDone:
-				t.Fatalf("independent COPY ALTER failed while the holder retained the gate: %v", otherErr)
-			default:
-			}
-			require.NoError(t, holder.Commit())
-			select {
-			case otherErr := <-otherDone:
-				require.NoError(t, otherErr)
-			case <-time.After(15 * time.Second):
-				t.Fatal("independent COPY ALTER did not finish after the holder committed")
-			}
-			execSQLRequire(t, ctx, db0,
-				"insert into "+database+".t1 values(2, 2, 2)")
-			execSQLRequire(t, ctx, db0,
-				"insert into "+database+".t2 values(2, '[2,0]', 2)")
 		})
 
 		t.Run("overlapping_autocommit_publishers", func(t *testing.T) {
