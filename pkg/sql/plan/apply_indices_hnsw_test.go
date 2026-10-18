@@ -889,7 +889,7 @@ func TestHnswWarmGenerationSnapshotRewrite(t *testing.T) {
 			scan.TableDef.TblId = 1
 			scan.Stats = &plan.Stats{TableCnt: 2, Outcnt: 2, Selectivity: 1, Cost: 2}
 			idx := newVectorJoinHnswIndex()
-			var definitions []*plan.IndexDef
+			definitions := make([]*plan.IndexDef, 0, len(idx.IndexDefs))
 			storage := t.Name() + "_storage"
 			for role, def := range idx.IndexDefs {
 				def.Parts = []string{"vec"}
