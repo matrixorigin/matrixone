@@ -54,10 +54,27 @@ func TestBuildCoversSource(t *testing.T) {
 }
 
 func TestBuildCoversSnapshotRejectsNewerResidentGeneration(t *testing.T) {
-	source := types.BuildTS(200, 0)
-	require.False(t, BuildCoversSnapshot(300, types.BuildTS(200, 0), source))
-	require.True(t, BuildCoversSnapshot(200, types.BuildTS(200, 7), source))
-	require.False(t, BuildCoversSnapshot(199, types.BuildTS(200, 7), source))
+	for _, tc := range []struct {
+		name         string
+		build        int64
+		read, source types.TS
+		want         bool
+	}{
+		{name: "future", build: 101, read: types.BuildTS(100, 1), source: types.BuildTS(99, 0)},
+		{name: "same physical logical zero", build: 100, read: types.BuildTS(100, 0), source: types.BuildTS(99, 0)},
+		{name: "same physical logical one", build: 100, read: types.BuildTS(100, 1), source: types.BuildTS(99, 0)},
+		{name: "same physical logical seven", build: 100, read: types.BuildTS(100, 7), source: types.BuildTS(99, 0)},
+		{name: "older physical", build: 99, read: types.BuildTS(100, 1), source: types.BuildTS(99, 0), want: true},
+		{name: "source equality", build: 100, read: types.BuildTS(101, 0), source: types.BuildTS(100, 0), want: true},
+		{name: "source physical gap", build: 99, read: types.BuildTS(101, 0), source: types.BuildTS(100, 0)},
+		{name: "source logical gap", build: 99, read: types.BuildTS(100, 1), source: types.BuildTS(99, 1)},
+		{name: "unknown build", read: types.BuildTS(100, 1), source: types.BuildTS(99, 0)},
+		{name: "negative build", build: -1, read: types.BuildTS(100, 1), source: types.BuildTS(99, 0)},
+		{name: "empty read", build: 99, source: types.BuildTS(99, 0)},
+		{name: "empty source", build: 99, read: types.BuildTS(100, 1)},
+	} {
+		t.Run(tc.name, func(t *testing.T) { require.Equal(t, tc.want, BuildCoversSnapshot(tc.build, tc.read, tc.source)) })
+	}
 }
 
 type fakeTxn struct{ client.TxnOperator }
@@ -95,7 +112,7 @@ func TestCoversSnapshotUsesDurableMetadataWhenCacheIsCold(t *testing.T) {
 		IndexStorageTable:  "cold_hnsw_storage",
 		IndexMetadataDB:    "db",
 		IndexMetadataTable: "cold_hnsw_meta",
-		Snapshot:           types.BuildTS(100, 0),
+		Snapshot:           types.BuildTS(101, 0),
 		SourceCommitTS: func(context.Context, types.TS) (types.TS, error) {
 			return types.BuildTS(100, 0), nil
 		},
@@ -105,6 +122,10 @@ func TestCoversSnapshotUsesDurableMetadataWhenCacheIsCold(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, covered)
 	require.Equal(t, types.BuildTS(100, 0), buildTS)
+	req.Snapshot = types.BuildTS(100, 1)
+	covered, _, err = Hooks{}.CoversSnapshot(context.Background(), req)
+	require.NoError(t, err)
+	require.False(t, covered, "equal physical provenance is ambiguous even when metadata is snapshot-visible")
 }
 
 func TestCoversSnapshotRejectsGenerationNewerThanReadSnapshot(t *testing.T) {
@@ -199,4 +220,52 @@ func TestExecWithResultFailsWithoutInternalExecutor(t *testing.T) {
 
 	_, err := execWithResultImpl(context.Background(), "select 1", sid, fakeTxn{})
 	require.Error(t, err)
+}
+
+func TestCoversSnapshotColdHistoricalTransaction(t *testing.T) {
+	previousCache := veccache.Cache
+	veccache.Cache = veccache.NewVectorIndexCache()
+	t.Cleanup(func() { veccache.Cache = previousCache })
+	previousExec := execWithResult
+	t.Cleanup(func() { execWithResult = previousExec })
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	snapshot := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+	cloned := &metadataSnapshotTxn{snapshot: snapshot}
+	parent := &metadataSnapshotTxn{snapshot: timestamp.Timestamp{PhysicalTime: 200}, clone: cloned}
+	var execCtx, sourceCtx context.Context
+	var execTxn client.TxnOperator
+	execWithResult = func(ctx context.Context, _ string, _ string, op client.TxnOperator) (executor.Result, error) {
+		execCtx = ctx
+		execTxn = op
+		return metadataResult(t, 99), nil
+	}
+	req := indexcoverage.Request{
+		CNUUID: "cn0", Txn: parent, TableID: 1, IndexDef: &plan.IndexDef{IndexName: "idx_hnsw"},
+		IndexStorageTable: t.Name(), IndexMetadataDB: "db", IndexMetadataTable: "meta",
+		Snapshot: types.TimestampToTS(snapshot), ScanSnapshotTS: &snapshot,
+		SourceCommitTS: func(ctx context.Context, _ types.TS) (types.TS, error) {
+			sourceCtx = ctx
+			return types.BuildTS(99, 0), nil
+		},
+	}
+	covered, _, err := Hooks{}.CoversSnapshot(ctx, req)
+	require.NoError(t, err)
+	require.True(t, covered)
+	require.Equal(t, snapshot, parent.clonedAt)
+	require.Same(t, cloned, execTxn)
+	require.Same(t, ctx, execCtx)
+	require.Same(t, ctx, sourceCtx)
+}
+
+type metadataSnapshotTxn struct {
+	client.TxnOperator
+	snapshot, clonedAt timestamp.Timestamp
+	clone              *metadataSnapshotTxn
+}
+
+func (t *metadataSnapshotTxn) SnapshotTS() timestamp.Timestamp { return t.snapshot }
+func (t *metadataSnapshotTxn) CloneSnapshotOp(ts timestamp.Timestamp) client.TxnOperator {
+	t.clonedAt = ts
+	return t.clone
 }

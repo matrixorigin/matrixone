@@ -51,8 +51,8 @@ func execWithResultImpl(ctx context.Context, sql, cnUUID string, txn client.TxnO
 
 // BuildCoversSource is kept small and deterministic so the timestamp invariant
 // can be tested without constructing a live SQL process. HNSW currently stores
-// the physical part of the CDC upper bound, hence the comparison uses the same
-// physical-only timestamp representation.
+// the physical part of the CDC upper bound. (buildTS, 0) is a conservative
+// lower bound on the generation HLC and must cover the full source watermark.
 func BuildCoversSource(buildTS int64, sourceTS types.TS) bool {
 	if buildTS <= 0 || sourceTS.IsEmpty() {
 		return false
@@ -64,12 +64,13 @@ func BuildCoversSource(buildTS int64, sourceTS types.TS) bool {
 // BuildCoversSnapshot adds the read-snapshot bound to BuildCoversSource. A
 // newer resident generation is not safe for an older read: updates may change
 // the vector used for ranking even when the base-table join hides future rows.
+// Equal physical times are ambiguous because build_ts has lost its logical
+// component; only a strictly older physical generation is provably not newer.
 func BuildCoversSnapshot(buildTS int64, snapshotTS, sourceTS types.TS) bool {
 	if buildTS <= 0 || snapshotTS.IsEmpty() {
 		return false
 	}
-	built := types.BuildTS(buildTS, 0)
-	return !built.GT(&snapshotTS) && BuildCoversSource(buildTS, sourceTS)
+	return buildTS < snapshotTS.Physical() && BuildCoversSource(buildTS, sourceTS)
 }
 
 // CoversSnapshot claims coverage for the generation execution will search. A

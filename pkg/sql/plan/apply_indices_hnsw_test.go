@@ -23,9 +23,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/assert"
@@ -857,4 +861,128 @@ type relationLookupErrorEngine struct{ engine.Engine }
 
 func (relationLookupErrorEngine) GetRelationById(context.Context, client.TxnOperator, uint64) (string, string, engine.Relation, error) {
 	return "", "", nil, moerr.NewInternalErrorNoCtx("source relation unavailable")
+}
+
+// Physical-only generation provenance cannot certify an equal-physical read.
+// Drive the actual rewrite, including the pre-mode path used after runtime retry.
+func TestHnswWarmGenerationSnapshotRewrite(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		build                      int64
+		pre, historical, wantIndex bool
+	}{
+		{name: "same_tick", build: 100},
+		{name: "same_tick_pre", build: 100, pre: true},
+		{name: "older", build: 99, wantIndex: true},
+		{name: "older_pre", build: 99, pre: true, wantIndex: true},
+		{name: "historical_same_tick", build: 100, historical: true},
+		{name: "historical_older", build: 99, historical: true, wantIndex: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var rank *plan.RankOption
+			if tc.pre {
+				rank = &plan.RankOption{Mode: "pre"}
+			}
+			b, project, sortID, _ := newExactVectorFallbackApplyIndicesCase(t, 0, rank)
+			scan := b.qry.Nodes[b.qry.Nodes[sortID].Children[0]]
+			scan.ObjRef = &plan.ObjectRef{SchemaName: "db", ObjName: scan.TableDef.Name}
+			scan.TableDef.TblId = 1
+			scan.Stats = &plan.Stats{TableCnt: 2, Outcnt: 2, Selectivity: 1, Cost: 2}
+			idx := newVectorJoinHnswIndex()
+			var definitions []*plan.IndexDef
+			storage := t.Name() + "_storage"
+			for role, def := range idx.IndexDefs {
+				def.Parts = []string{"vec"}
+				def.TableExist = true
+				def.IndexTableName = t.Name() + "_meta"
+				if role == catalog.Hnsw_TblType_Storage {
+					def.IndexTableName = storage
+				}
+				definitions = append(definitions, def)
+			}
+			scan.TableDef.Indexes = definitions
+			read := timestamp.Timestamp{PhysicalTime: 100, LogicalTime: 1}
+			current := read
+			if tc.historical {
+				current = timestamp.Timestamp{PhysicalTime: 200}
+				scan.ScanSnapshot = &plan.Snapshot{TS: &read}
+			}
+			op := &hnswPlanTxn{snapshot: current}
+			proc := b.compCtx.GetProcess()
+			proc.Base.TxnOperator = op
+			source := &hnswPlanEngine{}
+			proc.Base.SessionInfo.StorageEngine = source
+			t.Cleanup(func() { veccache.Cache.RemoveAllGenerations(storage, "test_cleanup") })
+			key := storage
+			if tc.historical {
+				key = veccache.SnapshotKey(storage, read)
+				// The ordinary entry has the opposite eligibility, exposing wrong-key use.
+				other := int64(100)
+				if tc.build == 100 {
+					other = 99
+				}
+				_, _, err := veccache.Cache.Search(nil, storage, &hnswPlanGeneration{build: other}, nil, vectorindex.RuntimeConfig{})
+				require.NoError(t, err)
+			}
+			_, _, err := veccache.Cache.Search(nil, key, &hnswPlanGeneration{build: tc.build}, nil, vectorindex.RuntimeConfig{})
+			require.NoError(t, err)
+			build, found := veccache.Cache.GetBuildTS(key)
+			require.True(t, found)
+			require.Equal(t, tc.build, build)
+			result, err := b.applyIndices(project, nil, nil)
+			require.NoError(t, err)
+			node := findHnswTableFunctionNode(b, result)
+			if tc.wantIndex {
+				require.NotNil(t, node)
+			} else {
+				require.Nil(t, node)
+				require.Equal(t, []int32{sortID}, b.qry.Nodes[result].Children)
+				require.Equal(t, []int32{scan.NodeId}, b.qry.Nodes[sortID].Children)
+				require.Equal(t, plan.Node_SORT, b.qry.Nodes[sortID].NodeType)
+				require.Equal(t, plan.Node_TABLE_SCAN, scan.NodeType)
+			}
+			require.NotNil(t, source.readTxn)
+			require.Equal(t, read, source.readTxn.SnapshotTS())
+			if tc.historical {
+				require.NotSame(t, op, source.readTxn)
+			} else {
+				require.Same(t, op, source.readTxn)
+			}
+		})
+	}
+}
+
+type hnswPlanTxn struct {
+	client.TxnOperator
+	snapshot timestamp.Timestamp
+}
+
+func (t *hnswPlanTxn) SnapshotTS() timestamp.Timestamp { return t.snapshot }
+func (t *hnswPlanTxn) Txn() txn.TxnMeta                { return txn.TxnMeta{SnapshotTS: t.snapshot} }
+func (t *hnswPlanTxn) CloneSnapshotOp(ts timestamp.Timestamp) client.TxnOperator {
+	return &hnswPlanTxn{snapshot: ts}
+}
+
+type hnswPlanEngine struct {
+	engine.Engine
+	readTxn client.TxnOperator
+}
+
+func (e *hnswPlanEngine) GetRelationById(_ context.Context, op client.TxnOperator, _ uint64) (string, string, engine.Relation, error) {
+	e.readTxn = op
+	return "db", "t", fakeSourceRel{}, nil
+}
+
+type hnswPlanGeneration struct {
+	veccache.VectorIndexSearchIf
+	build int64
+}
+
+func (*hnswPlanGeneration) Preload(*sqlexec.SqlProcess) error { return nil }
+func (*hnswPlanGeneration) Load(*sqlexec.SqlProcess) error    { return nil }
+func (*hnswPlanGeneration) Destroy()                          {}
+func (*hnswPlanGeneration) GetIndexSize() (int64, int64)      { return 0, 0 }
+func (g *hnswPlanGeneration) BuildTS() int64                  { return g.build }
+func (*hnswPlanGeneration) Search(*sqlexec.SqlProcess, any, vectorindex.RuntimeConfig) (any, []float64, error) {
+	return []int64{1}, []float64{0}, nil
 }
