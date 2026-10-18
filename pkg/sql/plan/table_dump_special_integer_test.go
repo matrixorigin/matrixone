@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -224,11 +225,25 @@ func TestTableDumpExactBaseTimestampAddBindings(t *testing.T) {
 	var fixtures map[string][]byte
 	require.NoError(t, json.Unmarshal(data, &fixtures))
 	require.Len(t, fixtures, 2)
+	// This direct, division-free tree was independently captured from the exact
+	// published main binder, not synthesized by a compatibility context.
+	directData, err := os.ReadFile("testdata/timestampadd_direct_baseline.json")
+	require.NoError(t, err)
+	require.Equal(t, "76c95a9bbb3f8ea55e0cc589717e664b9cbfccaaa4033e97dd05718e07d2ad67", fmt.Sprintf("%x", sha256.Sum256(directData)))
+	var direct struct {
+		Source     string `json:"source"`
+		DDL        string `json:"ddl"`
+		Definition []byte `json:"definition"`
+	}
+	require.NoError(t, json.Unmarshal(directData, &direct))
+	require.Equal(t, "3fc00709eccc277c175c7a09eed2605ca1aaee29", direct.Source)
+	require.NotContains(t, direct.DDL, "/")
+	fixtures["direct_decimal"] = direct.Definition
 	proc := newPlanTestProcess(t)
 	compiler := NewMockCompilerContext(false, proc)
 	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
 	ctx := divPrecisionCompilerContext{CompilerContext: compiler, increment: 4}
-	for name, interval := range map[string]string{"decimal_division": "a/2", "modern_format": "format(a/2,2)"} {
+	for name, interval := range map[string]string{"decimal_division": "a/2", "modern_format": "format(a/2,2)", "direct_decimal": "a"} {
 		t.Run(name, func(t *testing.T) {
 			var source planpb.TableDef
 			require.NoError(t, proto.Unmarshal(fixtures[name], &source))
@@ -245,28 +260,44 @@ func TestTableDumpExactBaseTimestampAddBindings(t *testing.T) {
 			legacyFeatures, err := planpb.RequiredRemoteExpressionFeatures(&source)
 			require.NoError(t, err)
 			require.False(t, legacyFeatures.TimestampAddSecondIntervals)
+			if name == "direct_decimal" {
+				t.Run("dump_before_protocol_promotion", func(t *testing.T) {
+					setPlanTestGlobalVariable(t, proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion118)
+					sensitive, err := AnalyzeTableDumpBindings(compiler, &source, &source)
+					require.NoError(t, err)
+					require.True(t, sensitive, "a denied current candidate cannot prove binding independence")
+				})
+			}
 			snapshot := proto.Clone(&source)
 			for _, tc := range []struct {
 				name           string
 				target, source *planpb.TableDef
 			}{{"dump_old", &source, &source}, {"restore_old", target, &source}, {"current", target, target}} {
 				t.Run(tc.name, func(t *testing.T) {
-					_, err := AnalyzeTableDumpBindings(compiler, tc.target, tc.source)
+					sensitive, err := AnalyzeTableDumpBindings(compiler, tc.target, tc.source)
 					require.NoError(t, err)
+					require.True(t, sensitive, "capture classification must compare complete eras even after a current match")
 				})
 			}
 			require.True(t, proto.Equal(snapshot, &source))
+			sensitive, err := AnalyzeTableDumpBindings(compiler, target, nil)
+			require.NoError(t, err)
+			require.True(t, sensitive, "v1 cannot disambiguate historical bindings")
 			// Restored trees retain old execution; new DDL keeps fractional seconds.
 			for _, tc := range []struct {
 				name       string
 				definition *planpb.TableDef
 				want       string
-			}{{"legacy_execution", &source, map[string]string{"decimal_division": "2024-01-01 00:00:02.000000", "modern_format": "2024-01-01 00:00:01.000000"}[name]}, {"new_execution", target, "2024-01-01 00:00:01.500000"}} {
+			}{{"legacy_execution", &source, map[string]string{"decimal_division": "2024-01-01 00:00:02.000000", "modern_format": "2024-01-01 00:00:01.000000", "direct_decimal": "2024-01-01 00:00:02.000000"}[name]}, {"new_execution", target, "2024-01-01 00:00:01.500000"}} {
 				t.Run(tc.name, func(t *testing.T) {
 					input := batch.NewWithSize(1)
 					defer input.Clean(proc.Mp())
 					input.Vecs[0] = vector.NewVec(types.New(types.T_decimal64, 10, 2))
-					require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Decimal64(300), false, proc.Mp()))
+					value := types.Decimal64(300)
+					if name == "direct_decimal" {
+						value = 150
+					}
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
 					input.SetRowCount(1)
 					executor, err := colexec.NewExpressionExecutor(proc, tc.definition.Cols[1].GeneratedCol.Expr)
 					require.NoError(t, err)
@@ -313,4 +344,30 @@ func TestTableDumpExactBaseTimestampAddBindings(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestTableDumpDirectDefaultUsesHistoricalEra(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	setPlanTestGlobalVariable(t, compiler.GetProcess().GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCLatestVersion))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(d datetime(6) default(timestampadd(second,cast(1.50 as decimal(10,2)),cast('2024-01-01' as datetime(6)))))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	current, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	legacyCtx := tableDumpBindContext{CompilerContext: compiler, ctx: function.WithLegacyTimestampAddSecond(compiler.GetContext()), increment: 4}
+	legacy, err := BuildPlan(legacyCtx, stmt, false)
+	require.NoError(t, err)
+	currentDef, legacyDef := current.GetDdl().GetCreateTable().TableDef, legacy.GetDdl().GetCreateTable().TableDef
+	require.False(t, sameTableDumpBoundExpression(currentDef.Cols[0].Default.Expr, legacyDef.Cols[0].Default.Expr))
+	for _, source := range []*planpb.TableDef{currentDef, legacyDef, nil} {
+		sensitive, err := AnalyzeTableDumpBindings(compiler, currentDef, source)
+		require.NoError(t, err)
+		require.True(t, sensitive)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	before := proto.Clone(currentDef)
+	_, err = AnalyzeTableDumpBindings(tableDumpBindContext{CompilerContext: compiler, ctx: ctx, increment: 4}, currentDef, currentDef)
+	require.ErrorIs(t, err, context.Canceled)
+	require.True(t, proto.Equal(before, currentDef))
 }

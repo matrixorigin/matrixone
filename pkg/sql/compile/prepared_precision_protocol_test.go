@@ -471,6 +471,12 @@ func TestTemporalResultProtocolPlacementAndReceive(t *testing.T) {
 }
 
 func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
+	for _, published := range []int32{function.CHECK_ASYNC_DATALINK_SOURCE, function.INTERNAL_TABLE_COLLATION} {
+		control := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(published, 0)}}}}
+		features, err := planpb.RequiredRemoteExpressionFeatures(control)
+		require.NoError(t, err)
+		require.False(t, features.TimestampAddSecondIntervals, "released function IDs must not alias the new normalizer")
+	}
 	c, client := expressionProtocolTestCompile(t)
 	expr := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_F{F: &planpb.Function{
 		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.TIMESTAMPADD_SECOND_INTERVAL, 5)},
@@ -481,17 +487,17 @@ func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
 	require.True(t, features.Any())
 	require.True(t, features.TimestampAddSecondIntervals)
 	require.False(t, features.CalendarIntervalNormalization)
-	require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion119, remoteExpressionProtocolVersion(features))
 	floor, err := plan2.RequiredPersistedExpressionProtocolVersion(expr)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion118, floor)
+	require.Equal(t, defines.MORPCVersion119, floor)
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
-	for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion118} {
+	for _, version := range []int64{defines.MORPCVersion118, defines.MORPCVersion119} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-		if version < defines.MORPCVersion118 {
+		if version < defines.MORPCVersion119 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 		} else {
 			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
@@ -500,16 +506,16 @@ func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
 		rt := moruntime.ServiceRuntime(c.proc.GetService())
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		err = validateRemoteExpressionPipelineProtocol(c.proc, p)
-		if version < defines.MORPCVersion118 {
-			require.ErrorContains(t, err, "version 118")
+		if version < defines.MORPCVersion119 {
+			require.ErrorContains(t, err, "version 119")
 		} else {
 			require.NoError(t, err)
 		}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
 		p.Node = &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}
 		err = validateRemoteExpressionDestination(c.proc, p, features)
-		if version < defines.MORPCVersion118 {
-			require.ErrorContains(t, err, "version 118")
+		if version < defines.MORPCVersion119 {
+			require.ErrorContains(t, err, "version 119")
 		} else {
 			require.NoError(t, err)
 		}

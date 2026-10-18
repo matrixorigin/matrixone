@@ -1009,7 +1009,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
 					features.LegacyIntervalUnits = true
 				}
-				if id == 599 { // TIMESTAMPADD_SECOND_INTERVAL
+				if id == 601 { // TIMESTAMPADD_SECOND_INTERVAL
 					features.TimestampAddSecondIntervals = true
 				}
 				if id == 583 { // TO_INTERVAL_MICROSECOND

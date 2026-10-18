@@ -105,18 +105,18 @@ func tableDumpExpressions(def *planpb.TableDef) []tableDumpExpression {
 		if col == nil {
 			continue
 		}
-		if col.Default != nil && col.Default.Expr != nil && strings.Contains(col.Default.OriginString, "/") {
+		if col.Default != nil && col.Default.Expr != nil {
 			result = append(result, tableDumpExpression{"default", col.Name, col.Default.OriginString, col, nil, col.Default.Expr})
 		}
-		if col.OnUpdate != nil && col.OnUpdate.Expr != nil && strings.Contains(col.OnUpdate.OriginString, "/") {
+		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
 			result = append(result, tableDumpExpression{"on_update", col.Name, col.OnUpdate.OriginString, col, nil, col.OnUpdate.Expr})
 		}
-		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil && strings.Contains(col.GeneratedCol.OriginString, "/") {
+		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
 			result = append(result, tableDumpExpression{"generated", col.Name, col.GeneratedCol.OriginString, col, nil, col.GeneratedCol.Expr})
 		}
 	}
 	for _, check := range def.Checks {
-		if check != nil && check.Check != nil && strings.Contains(check.OriginSql, "/") {
+		if check != nil && check.Check != nil {
 			result = append(result, tableDumpExpression{"check", check.Name, check.OriginSql, nil, check, check.Check})
 		}
 	}
@@ -283,7 +283,7 @@ func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 
 // AnalyzeTableDumpBindings proves that every supplied bound expression is
 // reachable from its SQL origin through ordinary DDL binding. It reports
-// whether any expression's value or bound type depends on the division setting.
+// whether a binding varies across supported migration eras or division precision.
 // A nil supplied definition classifies a v1 target without trusting a payload.
 func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.TableDef) (bool, error) {
 	if ctx == nil || target == nil {
@@ -300,16 +300,14 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 	budget := &tableDumpBindingBudget{}
 	var sensitive bool
 	for i, item := range items {
+		if err := ctx.GetContext().Err(); err != nil {
+			return false, err
+		}
 		if supplied != nil && (sourceItems[i].kind != item.kind || !strings.EqualFold(sourceItems[i].name, item.name) || sourceItems[i].origin != item.origin) {
 			return false, moerr.NewInvalidInputNoCtx("table dump expression declaration does not match target")
 		}
 		if len(item.origin) == 0 {
 			return false, moerr.NewInvalidInputNoCtx("persisted table expression has no SQL origin")
-		}
-		// div_precision_increment only affects exact division. Avoid planning
-		// ordinary defaults and checks on the common v1 path.
-		if !strings.Contains(item.origin, "/") {
-			continue
 		}
 		budget.text += len(item.origin)
 		if budget.text > tableDumpMaxExpressionText {
@@ -341,17 +339,17 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			if visit.hasSpecial {
 				modes = append(modes, tableDumpBindingLegacySpecial)
 			}
-			var first [3]*planpb.Expr
-			var matchedMode tableDumpBindingMode
+			var first *planpb.Expr
 			want := item.expr
 			if supplied != nil {
 				want = sourceItems[i].expr
 			}
 			for increment := int64(0); increment <= maxIncrement; increment++ {
+				if err := ctx.GetContext().Err(); err != nil {
+					stmt.Free()
+					return false, err
+				}
 				for _, mode := range modes {
-					if mode != tableDumpBindingCurrent && matched && mode != matchedMode {
-						continue
-					}
 					budget.visits += visit.nodes
 					if budget.visits > tableDumpMaxCandidateVisits {
 						stmt.Free()
@@ -359,19 +357,18 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 					}
 					candidate, err := bindTableDumpExpression(ctx, target, item, ast, increment, mode)
 					if err != nil {
+						// An unavailable era (for example, before protocol promotion)
+						// cannot prove that the successful bindings are independent.
+						// Still require an exact successful match before capture.
+						sensitive = true
 						continue
 					}
-					if first[mode] == nil {
-						first[mode] = candidate
-					} else if visit.hasDivision && !sameTableDumpBoundExpression(first[mode], candidate) {
+					if first == nil {
+						first = candidate
+					} else if !sameTableDumpBoundExpression(first, candidate) {
 						sensitive = true
 					}
-					if sameTableDumpBoundExpression(want, candidate) {
-						if !matched {
-							matchedMode = mode
-						}
-						matched = true
-					}
+					matched = matched || sameTableDumpBoundExpression(want, candidate)
 				}
 				if matched && sensitive {
 					break

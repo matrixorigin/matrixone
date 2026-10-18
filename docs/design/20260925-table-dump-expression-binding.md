@@ -3,6 +3,40 @@
 Status: revision 10 passed independent design review.
 Revision: 10, 2026-09-25.
 
+## Current extension: migration-era binding and format 3
+
+The precision-only admission was incomplete for direct fractional TIMESTAMPADD
+SECOND expressions. Historical main3fc00709 binds DECIMAL1.50 to rounded2
+seconds; newly authored SQL uses fractional1.5 seconds, even without division.
+DUMP/LOAD must preserve verified stored bindings for future writes as well as
+copied rows. The frozen direct baseline and public roundtrip controls record
+this boundary; a compatibility-mode seed alone is not historical provenance.
+
+The existing planner enumerates DEFAULT, ON UPDATE, generated and CHECK
+expressions without lexical slash filters. It verifies each complete supplied
+binding through current binding and applicable complete historical eras, and
+separately classifies whether candidates differ. A current match cannot skip
+legacy comparison. Only an AST containing division enumerates precision0..30.
+Existing budgets, cancellation, declaration matching, private replacement and
+single guarded catalog publication remain the owners; no parallel codec,
+validator, execution path or expression cache is added.
+
+Binding-dependent dumps now emit format3 with the existing payload layout.
+New readers accept v1/v2/v3; v2/v3 share validation/restoration. Older v2 readers
+explicitly reject v3 instead of accepting and ignoring non-division bindings.
+An ambiguous v1 restore requests a new dump before object/catalog mutation.
+Whole declaration origins, positions, nullability, storage and types are checked;
+only expression fields are transplanted, preserving destination identity.
+Fresh SQL retains current normalization. Direct TIMESTAMPADD functional indexes
+remain excluded by their eligibility owner; ordinary indexes over generated
+results remain supported. Additional classification cost is confined to DDL,
+DUMP and LOAD; per-row normalization is unchanged.
+
+Current frozen-base allocations: main charset118 and functions599/600 stay
+published; fractional TIMESTAMPADD uses capability119, normalizer601 and end602.
+No protobuf schema change or provisional-function-ID guessing is introduced.
+Historical revision10 evidence below retains its original input identity.
+
 ## Problem and evidence
 
 `div_precision_increment` is resolved while a persistent expression is bound.
