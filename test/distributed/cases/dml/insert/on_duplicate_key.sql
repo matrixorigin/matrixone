@@ -207,8 +207,435 @@ drop table t_pk_only_noop;
 
 -- test for on duplicate key update with NULL values in multi-row insert
 drop table if exists t_null_dup;
+
+-- #28160: MySQL-compatible INSERT VALUES/SET row and column aliases.
+drop table if exists t_odku_row_alias;
+create table t_odku_row_alias (id int primary key, a int, b int);
+insert into t_odku_row_alias values (1, 10, 100);
+insert into t_odku_row_alias (b, id, a) values (30, 1, 20) as incoming(new_b, new_id, new_a) on duplicate key update a = t_odku_row_alias.a + incoming.new_a, b = incoming.new_b;
+select * from t_odku_row_alias order by id;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 100);
+insert into t_odku_row_alias values (1, 7, 0) as n on duplicate key update a = t_odku_row_alias.a + 1, b = n.a, a = t_odku_row_alias.a + n.a;
+select * from t_odku_row_alias order by id;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 2, 0), (1, 3, 0), (2, 4, 0) as n on duplicate key update a = t_odku_row_alias.a + n.a, b = n.a;
+select * from t_odku_row_alias order by id;
+
+drop table if exists t_odku_scope_source;
+create table t_odku_scope_source (x int primary key, y int);
+insert into t_odku_scope_source values (1, 70);
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+-- Correlated ODKU subqueries are fail-closed until the UPDATE-only subtree can
+-- be evaluated lazily after duplicate-key arbitration.
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
+
+-- A correlated assignment followed by an uncorrelated scalar is rejected as a
+-- whole statement; no earlier assignment may make the unsafe subtree visible.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id), b = (select max(s.y) from t_odku_scope_source as s);
+
+-- Target-correlated subqueries are rejected before they can read a stale
+-- target snapshot after an earlier ordered assignment.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update a = t_odku_row_alias.a + 1, b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n(x, y, z) on duplicate key update b = (select n.y + t_odku_row_alias.a from t_odku_scope_source as n where n.x = t_odku_row_alias.id);
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("target-correlated subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias (id, a, b) select 1, 5, 0 on duplicate key update b = (select s.y + t_odku_row_alias.a from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
+
+-- A target-correlated subquery is rejected even when the source alias does not
+-- shadow the row alias; the whole UPDATE-only subtree must remain unevaluated.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 100);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (1, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = t_odku_row_alias.id);
+
+-- A scalar UPDATE expression must not run for a non-conflicting insert. Since
+-- the current executor cannot defer the whole RHS subtree, reject it before
+-- planning rather than relying on a target-match predicate.
+drop table if exists t_odku_scope_multi;
+create table t_odku_scope_multi (x int, y int);
+insert into t_odku_scope_multi values (0, 10), (0, 20);
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
+
+-- Candidate-row correlation is rejected for the same pre-DEDUP safety reason.
+insert into t_odku_scope_multi values (2, 30), (2, 40);
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select s.y from t_odku_scope_multi as s where s.x = n.id);
+
+-- A candidate-correlated scalar cannot be evaluated safely for a multi-row
+-- candidate input before DEDUP selects each row's duplicate-key action.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (1, 5, 0), (1, 6, 0) as n on duplicate key update b = (select s.y from t_odku_scope_source as s where s.x = n.id);
+
+-- A local FROM alias may have the same spelling as the ODKU target table. It
+-- must remain local even when its expression contains another subquery.
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (2, 5, 0) on duplicate key update b = (select t_odku_row_alias.y + (select 1) from t_odku_scope_source as t_odku_row_alias);
+select * from t_odku_row_alias order by id;
+
+-- A nested candidate-correlated scalar is also rejected before its inner input
+-- can execute for a row that does not conflict.
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = n.id);
+
+-- The same nested candidate-correlated shape must be rejected when the
+-- incoming row alias is referenced by a bare column name.
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (2, 5, 0) as n(k, incoming_a, incoming_b) on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = k);
+
+-- A nested subquery input cannot be guarded by the outer target-match
+-- predicate. Reject it before the unused UPDATE branch can execute.
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action",true)
+insert into t_odku_row_alias values (2, 5, 0) as n on duplicate key update b = (select (select q.y from t_odku_scope_multi as q) from t_odku_scope_multi as s where s.x = coalesce(t_odku_row_alias.id, 0));
+drop table t_odku_scope_multi;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias values (1, 6, 0) as n on duplicate key update b = case when n.a > 5 then n.a else NULL end;
+select * from t_odku_row_alias order by id;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_row_alias values (1, 5, 0) as n(x, y, z) on duplicate key update b = (select n.y + s.y from t_odku_scope_source as s where s.x = n.x);
+drop table t_odku_scope_source;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+insert into t_odku_row_alias set id = 1, a = 8, b = 9 as n on duplicate key update a = n.a, b = n.b;
+insert into t_odku_row_alias set id = 2, a = 6, b = 7 as n on duplicate key update a = n.a, b = n.b;
+select * from t_odku_row_alias order by id;
+
+delete from t_odku_row_alias;
+insert into t_odku_row_alias values (1, 10, 0);
+prepare s_row_alias from insert into t_odku_row_alias values (?, ?, ?) as n(k, x, y) on duplicate key update a = t_odku_row_alias.a + n.x, b = n.y;
+set @row_id = 1;
+set @row_a = 4;
+set @row_b = 8;
+execute s_row_alias using @row_id, @row_a, @row_b;
+set @row_a = 3;
+set @row_b = 9;
+execute s_row_alias using @row_id, @row_a, @row_b;
+set @row_id = 2;
+set @row_a = 7;
+set @row_b = 6;
+execute s_row_alias using @row_id, @row_a, @row_b;
+select * from t_odku_row_alias order by id;
+deallocate prepare s_row_alias;
+drop table t_odku_row_alias;
+
+-- A generated DEFAULT keeps the original row-alias positions while the
+-- no-key ODKU route falls back to a plain insert.
+drop table if exists t_odku_no_key_generated;
+create table t_odku_no_key_generated (
+    a int,
+    g int generated always as (a + 1) stored
+);
+insert into t_odku_no_key_generated(a, g) values (1, default) as n(x, y) on duplicate key update a = n.x;
+select * from t_odku_no_key_generated;
+prepare s_odku_no_key_generated from insert into t_odku_no_key_generated(a, g) values (?, default) as n(x, y) on duplicate key update a = n.x + ?;
+set @odku_no_key_a = 2;
+set @odku_no_key_delta = 3;
+execute s_odku_no_key_generated using @odku_no_key_a, @odku_no_key_delta;
+select * from t_odku_no_key_generated order by a;
+deallocate prepare s_odku_no_key_generated;
+insert into t_odku_no_key_generated values (3, default) as n on duplicate key update a = n.a;
+select * from t_odku_no_key_generated order by a;
+prepare s_odku_no_key_generated_implicit from insert into t_odku_no_key_generated values (?, default) as n on duplicate key update a = n.a;
+set @odku_no_key_implicit_a = 4;
+execute s_odku_no_key_generated_implicit using @odku_no_key_implicit_a;
+select * from t_odku_no_key_generated order by a;
+deallocate prepare s_odku_no_key_generated_implicit;
+insert into t_odku_no_key_generated values (5, default) as n(x, y) on duplicate key update a = n.x;
+insert into t_odku_no_key_generated values (6, default) as n on duplicate key update a = n.g;
+select * from t_odku_no_key_generated order by a;
+prepare s_odku_no_key_generated_implicit_alias from insert into t_odku_no_key_generated values (?, default) as n(x, y) on duplicate key update a = n.x + ?;
+set @odku_no_key_implicit_alias_a = 7;
+set @odku_no_key_implicit_alias_delta = 1;
+execute s_odku_no_key_generated_implicit_alias using @odku_no_key_implicit_alias_a, @odku_no_key_implicit_alias_delta;
+select * from t_odku_no_key_generated order by a;
+deallocate prepare s_odku_no_key_generated_implicit_alias;
+prepare s_odku_no_key_generated_implicit_generated from insert into t_odku_no_key_generated values (?, default) as n on duplicate key update a = n.g + ?;
+set @odku_no_key_implicit_generated_a = 8;
+set @odku_no_key_implicit_generated_delta = 1;
+execute s_odku_no_key_generated_implicit_generated using @odku_no_key_implicit_generated_a, @odku_no_key_implicit_generated_delta;
+select * from t_odku_no_key_generated order by a;
+deallocate prepare s_odku_no_key_generated_implicit_generated;
+drop table t_odku_no_key_generated;
+
+-- A volatile DEFAULT must be evaluated once before a stored generated column
+-- reads it on the no-key ODKU fallback path.
+drop table if exists t_odku_no_key_volatile;
+create table t_odku_no_key_volatile (
+    id int,
+    a double default (rand()),
+    g double generated always as (a) stored
+);
+insert into t_odku_no_key_volatile(id) values (1) as n on duplicate key update id = n.id;
+select a = g from t_odku_no_key_volatile;
+drop table t_odku_no_key_volatile;
+
 create table t_null_dup (id int primary key, a int, b int);
 insert into t_null_dup values (1, 100, 100), (3, 300, 300);
 insert into t_null_dup (id, a, b) values (1, NULL, NULL), (3, NULL, 30) on duplicate key update a = values(a), b = values(b);
 select * from t_null_dup order by id;
 drop table if exists t_null_dup;
+
+-- #28160: reject every row-alias RHS subquery before keyed/no-key execution.
+drop table if exists t_odku_subquery_gate;
+drop table if exists t_odku_subquery_nokey;
+drop table if exists t_odku_subquery_source;
+create table t_odku_subquery_gate (id int primary key, b int not null);
+create table t_odku_subquery_nokey (id int, b int);
+create table t_odku_subquery_source (y int);
+insert into t_odku_subquery_source values (10), (20);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_subquery_gate values (1, 5) as n on duplicate key update b = n.b + (select y from t_odku_subquery_source);
+select id, b from t_odku_subquery_gate order by id;
+insert into t_odku_subquery_gate values (1, 5) as n on duplicate key update b = n.b;
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_subquery_gate values (1, 6) as n on duplicate key update b = if(exists (select 1), n.b, 0);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_subquery_gate values (2, 7) as n on duplicate key update b = case when false then (select missing from nonexistent) else n.b end;
+select id, b from t_odku_subquery_gate order by id;
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_subquery_nokey values (1, 5) as n on duplicate key update b = (select y from t_odku_subquery_source);
+-- @regex("row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action", true)
+insert into t_odku_subquery_nokey values (1, 5) as n on duplicate key update b = n.b in (select y from t_odku_subquery_source);
+select id, b from t_odku_subquery_nokey order by id;
+insert into t_odku_subquery_nokey values (1, 5) as n on duplicate key update b = n.b;
+select id, b from t_odku_subquery_nokey order by id;
+prepare s_odku_gate_reuse from insert into t_odku_subquery_gate values (?, ?) as n on duplicate key update b = n.b;
+set @odku_gate_id = 1;
+set @odku_gate_b = 9;
+execute s_odku_gate_reuse using @odku_gate_id, @odku_gate_b;
+set @odku_gate_b = NULL;
+execute s_odku_gate_reuse using @odku_gate_id, @odku_gate_b;
+select id, b from t_odku_subquery_gate order by id;
+set @odku_gate_b = 11;
+execute s_odku_gate_reuse using @odku_gate_id, @odku_gate_b;
+select id, b from t_odku_subquery_gate order by id;
+deallocate prepare s_odku_gate_reuse;
+drop table t_odku_subquery_gate;
+drop table t_odku_subquery_nokey;
+drop table t_odku_subquery_source;
+
+-- #28160: an empty tuple keeps the full visible alias mapping.
+drop table if exists t_odku_default_alias;
+create table t_odku_default_alias (id int primary key default 1, b int default 7);
+insert into t_odku_default_alias values (1, 99);
+insert into t_odku_default_alias values () as n(k, v) on duplicate key update b = n.v;
+select id, b from t_odku_default_alias order by id;
+insert into t_odku_default_alias values () as n(k) on duplicate key update b = n.k;
+select id, b from t_odku_default_alias order by id;
+insert into t_odku_default_alias values () as n(k, k) on duplicate key update b = n.k;
+insert into t_odku_default_alias (missing, b) values (1, 7) as n(k, v) on duplicate key update b = n.v;
+insert into t_odku_default_alias values () as n(k, v) on duplicate key update b = n.missing;
+select id, b from t_odku_default_alias order by id;
+drop table t_odku_default_alias;
+drop table if exists t_odku_default_generated;
+create table t_odku_default_generated (id int primary key default 1, a int default 7, g int generated always as (a + 1) stored);
+insert into t_odku_default_generated (id, a) values (1, 99);
+insert into t_odku_default_generated values () as n(k, x, y) on duplicate key update a = n.y;
+select id, a, g from t_odku_default_generated order by id;
+insert into t_odku_default_generated (id, a, g) values (1, 9, default) as n(k, x, y) on duplicate key update a = n.x, g = default;
+select id, a, g from t_odku_default_generated order by id;
+insert into t_odku_default_generated (id, a, g) values (1, 9, 100) as n(k, x, y) on duplicate key update a = n.x;
+select id, a, g from t_odku_default_generated order by id;
+drop table t_odku_default_generated;
+drop table if exists t_odku_hidden_alias;
+create table t_odku_hidden_alias (a int default 7, g int generated always as (a + 1) stored);
+insert into t_odku_hidden_alias values () as n(x, y) on duplicate key update a = n.y;
+select a, g from t_odku_hidden_alias order by a;
+insert into t_odku_hidden_alias (__mo_fake_pk_col, a) values (1, 9) as n(k, x) on duplicate key update a = n.x;
+select a, g from t_odku_hidden_alias order by a;
+insert into t_odku_hidden_alias values () as n(x, y) on duplicate key update __mo_fake_pk_col = n.x;
+insert into t_odku_hidden_alias values () as n(x, y) on duplicate key update a = t_odku_hidden_alias.__mo_fake_pk_col;
+select a, g from t_odku_hidden_alias order by a;
+drop table t_odku_hidden_alias;
+
+-- #28160: actual main-table writes before a later batch fails (ValueScan boundary8192).
+-- The observation point runs after successful engine writes, never on constructed batches.
+set @r8_old_group_concat = @@group_concat_max_len;
+set group_concat_max_len = 1048576;
+create table t_odku_action_batches (id int primary key, v int not null);
+insert into t_odku_action_batches values (1, 10);
+set @r8_fault_enabled = enable_fault_injection();
+set @r8_added = add_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches', ':::', 'echo', 0, '');
+set @r8_added = add_fault_point('row_alias_batch_count', ':::', 'getcount', 0, 'fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches');
+insert into t_odku_action_batches values (1, NULL), (2, 12) as n(id, v) on duplicate key update v = n.v;
+select trigger_fault_point('row_alias_batch_count') = 0 as no_action_on_first_batch_error;
+set @r8_bad_sql = (select concat('insert into t_odku_action_batches values ', group_concat(concat('(', result, ',', if(result = 8193, 'NULL', cast(result + 10 as varchar)), ')') order by result separator ','), ' as n(id,v) on duplicate key update v=n.v') from generate_series(1, 8193) g);
+prepare row_alias_batch from @r8_bad_sql;
+start transaction;
+insert into t_odku_action_batches values (90000, 90);
+set @r8_removed = remove_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches');
+set @r8_added = add_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches', ':::', 'echo', 0, '');
+execute row_alias_batch;
+select trigger_fault_point('row_alias_batch_count') = 1 as first_batch_action_completed;
+select count(*) = 2 and sum(v) = 100 as failed_statement_rows_rolled_back from t_odku_action_batches;
+rollback;
+select count(*) = 1 and sum(v) = 10 as transaction_marker_rolled_back from t_odku_action_batches;
+deallocate prepare row_alias_batch;
+set @r8_good_sql = replace(@r8_bad_sql, ',NULL)', ',8203)');
+prepare row_alias_batch from @r8_good_sql;
+set @r8_removed = remove_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches');
+set @r8_added = add_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches', ':::', 'echo', 0, '');
+execute row_alias_batch;
+select trigger_fault_point('row_alias_batch_count') = 2 as two_real_write_batches;
+select count(*) = 8193 and sum(v) = 33648651 as reused_statement_data from t_odku_action_batches;
+deallocate prepare row_alias_batch;
+set @r8_removed = remove_fault_point('fj/sql/main_table_write/on_duplicate_key/t_odku_action_batches');
+set @r8_removed = remove_fault_point('row_alias_batch_count');
+set @r8_fault_disabled = disable_fault_injection();
+drop table t_odku_action_batches;
+set group_concat_max_len = @r8_old_group_concat;
+
+-- #28160: review counterexamples and exact frozen legacy L1-L5 controls.
+drop table if exists t_odku_correlated_nokey;
+create table t_odku_correlated_nokey (a int);
+insert into t_odku_correlated_nokey values (1) on duplicate key update a = (select t_odku_correlated_nokey.a);
+prepare s_odku_correlated_plain from insert into t_odku_correlated_nokey values (2) on duplicate key update a = (select t_odku_correlated_nokey.a);
+prepare s_odku_correlated_param from insert into t_odku_correlated_nokey values (3) on duplicate key update a = (select t_odku_correlated_nokey.a + ?);
+select count(*) = 0 as no_correlated_insert from t_odku_correlated_nokey;
+insert into t_odku_correlated_nokey values (4) on duplicate key update a = (select 7);
+insert into t_odku_correlated_nokey values (5) on duplicate key update a = (select missing from nonexistent);
+insert into t_odku_correlated_nokey values (6) on duplicate key update a = (select t_odku_correlated_nokey.a from t_odku_correlated_nokey as t_odku_correlated_nokey limit 1);
+select count(*) = 3 and sum(a) = 15 as unreachable_legacy_preserved from t_odku_correlated_nokey;
+drop table t_odku_correlated_nokey;
+create table t_odku_priority (id int primary key, a int, g int generated always as (a + 1) stored);
+insert into t_odku_priority (id, a, g) values (1) as n(k, x, y) on duplicate key update g = 1;
+select count(*) = 0 as invalid_tuple_unchanged from t_odku_priority;
+drop table t_odku_priority;
+create table t_odku_values_hidden_nokey (a int);
+insert into t_odku_values_hidden_nokey values (1) as n on duplicate key update a = values(__mo_fake_pk_col);
+select count(*) = 0 as hidden_nokey_not_inserted from t_odku_values_hidden_nokey;
+drop table t_odku_values_hidden_nokey;
+create table t_odku_values_hidden_keyed (id int, u int, a varchar(128), primary key (id, u));
+insert into t_odku_values_hidden_keyed values (1, 2, 'seed');
+insert into t_odku_values_hidden_keyed values (1, 2, 'incoming') as n on duplicate key update a = values(__mo_cpkey_col);
+select a = 'seed' as hidden_keyed_unchanged from t_odku_values_hidden_keyed;
+insert into t_odku_values_hidden_keyed values (1, 2, 'incoming') on duplicate key update a = values(__mo_cpkey_col);
+select hex(a) = '3A15013A1502' as legacy_values_preserved from t_odku_values_hidden_keyed;
+drop table t_odku_values_hidden_keyed;
+create table odku_legacy_v1 (id int primary key, u int unique, v int not null);
+insert into odku_legacy_v1 values (1, 10, 100), (2, 20, 200);
+insert into odku_legacy_v1 values (1, 11, 101) on duplicate key update v = v + 1;
+insert into odku_legacy_v1 values (1, 12, 102) on duplicate key update v = values(v);
+insert into odku_legacy_v1 values (1, 13, 103) on duplicate key update v = (select 13);
+insert into odku_legacy_v1 values (1, 14, 104) on duplicate key update v = if(exists (select 1), values(v), v);
+select id, u, v from odku_legacy_v1 order by id;
+drop table odku_legacy_v1;
+create table odku_legacy_v1_nokey (a int, b int);
+insert into odku_legacy_v1_nokey values (1, 2) on duplicate key update b = b + 1;
+select a, b from odku_legacy_v1_nokey order by a;
+drop table odku_legacy_v1_nokey;
+
+create table t_odku_scope_no_key(a int, b varchar(30));
+insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(t_odku_scope_no_key.b,missing_column));
+insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,t_odku_scope_no_key.b));
+prepare odku_scope_stmt from insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(t_odku_scope_no_key.b,missing_column));
+prepare odku_scope_stmt from insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,t_odku_scope_no_key.b,?));
+insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,b));
+select a from t_odku_scope_no_key;
+insert into t_odku_scope_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,'x'));
+select a from t_odku_scope_no_key;
+create table t_odku_scope_key(a int primary key, b varchar(30));
+insert into t_odku_scope_key values(1,'seed');
+insert into t_odku_scope_key values(1,'x') on duplicate key update b=(select concat(missing_column,t_odku_scope_key.b));
+insert into t_odku_scope_key values(1,'x') on duplicate key update b=(select concat(on_duplicate_key.t_odku_scope_key.b,(select 'z')) from on_duplicate_key.t_odku_scope_key limit 1);
+select a,cast(b='seedz' as int) as ok from t_odku_scope_key;
+insert into t_odku_scope_no_key values(2,'y') on duplicate key update b=(select concat(on_duplicate_key.t_odku_scope_no_key.b,(select 'z')) from on_duplicate_key.t_odku_scope_no_key limit 1);
+select a from t_odku_scope_no_key order by a;
+drop table t_odku_scope_key;
+drop table t_odku_scope_no_key;
+
+-- #28160: canonical clause aliases and local-FROM partial failure.
+create table t_odku_scope_local(c int);
+insert into t_odku_scope_local values(7);
+create table t_odku_scope_alias_key(a int primary key,b varchar(30));
+insert into t_odku_scope_alias_key values(1,'seed');
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(select 'local' as b order by b);
+select cast(b='local' as int) as local_alias from t_odku_scope_alias_key;
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(select 'local' as b having b='local');
+select cast(b='local' as int) as local_alias from t_odku_scope_alias_key;
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(select 'local' as b group by b);
+select cast(b='local' as int) as local_alias from t_odku_scope_alias_key;
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(with q as (select 'cte' as b) select b from q);
+select cast(b='cte' as int) as local_cte from t_odku_scope_alias_key;
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(select b as b order by b);
+insert into t_odku_scope_alias_key values(1,'x') on duplicate key update b=(select 'local' as b where b='cte' order by b);
+create table t_odku_scope_alias_no_key(a int,b varchar(30));
+insert into t_odku_scope_alias_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,b) from t_odku_scope_local limit 1);
+prepare odku_scope_stmt from insert into t_odku_scope_alias_no_key values(1,'x') on duplicate key update b=(select concat(missing_column,b,?) from t_odku_scope_local limit 1);
+insert into t_odku_scope_alias_no_key values(1,'x') on duplicate key update b=(select concat(b,missing_column) from t_odku_scope_local limit 1);
+prepare odku_scope_stmt from insert into t_odku_scope_alias_no_key values(1,'x') on duplicate key update b=(select concat(b,missing_column,?) from t_odku_scope_local limit 1);
+select a from t_odku_scope_alias_no_key;
+insert into t_odku_scope_alias_no_key values(1,'x') on duplicate key update b=(select 'local' as b having b='local');
+insert into t_odku_scope_alias_no_key values(2,'y') on duplicate key update b=(select concat(missing_column,'local') from t_odku_scope_local limit 1);
+select a from t_odku_scope_alias_no_key order by a;
+drop table t_odku_scope_alias_key;
+drop table t_odku_scope_alias_no_key;
+drop table t_odku_scope_local;
+
+-- #28160: whole RHS admission precedes an unrelated earlier binding failure.
+create table t_odku_rhs_no_key(a int,b varchar(30));
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_no_key.b));
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat((select t_odku_rhs_no_key.b),missing_column);
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=ifnull(1,2,(select t_odku_rhs_no_key.b));
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select 'local'),(select t_odku_rhs_no_key.b));
+prepare odku_whole_rhs from insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_no_key.b));
+prepare odku_whole_rhs from insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select concat(t_odku_rhs_no_key.b,?)));
+select a from t_odku_rhs_no_key;
+insert into t_odku_rhs_no_key values(1,'x') on duplicate key update b=concat(missing_column,(select 'local'));
+select a from t_odku_rhs_no_key;
+create table t_odku_rhs_key(a int primary key,b varchar(30));
+insert into t_odku_rhs_key values(1,'seed');
+insert into t_odku_rhs_key values(1,'x') on duplicate key update b=concat(missing_column,(select t_odku_rhs_key.b));
+select cast(b='seed' as int) as whole_rhs_unchanged from t_odku_rhs_key;
+drop table t_odku_rhs_key;
+drop table t_odku_rhs_no_key;
+
+-- #28160: discarded no-key alias arms still validate scalar assignment types.
+create table t_odku_assignment_no_key(a varchar(20));
+insert into t_odku_assignment_no_key values('x') as n on duplicate key update a=(n.a,n.a);
+prepare odku_tuple_assignment from insert into t_odku_assignment_no_key values(?) as n on duplicate key update a=(n.a,?);
+select cast(count(*) as int) as alias_assignment_rows from t_odku_assignment_no_key;
+create table t_odku_assignment_key(id int primary key,a varchar(20));
+insert into t_odku_assignment_key values(1,'x') as n on duplicate key update a=(n.a,n.a);
+select cast(count(*) as int) as alias_assignment_rows from t_odku_assignment_key;
+prepare odku_scalar_assignment from insert into t_odku_assignment_no_key values(?) as n on duplicate key update a=coalesce(n.a,?);
+set @alias_assignment_in='y';
+set @alias_assignment_rhs='unused';
+execute odku_scalar_assignment using @alias_assignment_in,@alias_assignment_rhs;
+deallocate prepare odku_scalar_assignment;
+insert into t_odku_assignment_no_key values('z') as n on duplicate key update a=null;
+insert into t_odku_assignment_no_key values('d') as n on duplicate key update a=default;
+select cast(count(*) as int) as alias_assignment_rows from t_odku_assignment_no_key;
+drop table t_odku_assignment_no_key;
+drop table t_odku_assignment_key;

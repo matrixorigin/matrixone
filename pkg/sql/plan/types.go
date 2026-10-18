@@ -434,17 +434,18 @@ type QueryBuilder struct {
 	// this the SORT-anchored entry point would claim the classic
 	// PROJECT -> SORT -> SCAN shape before the project ever ran, losing the project's
 	// column information and with it the index-only scan.
-	projectAnchoredSorts        map[int32]struct{}
-	setBitmapByDisplayNode      map[[2]int32]int32
-	indexHintsByScan            map[int32]*indexHintSet
-	indexHintOwnerByNode        map[int32]int32
-	preserveSinkProjection      map[int32]struct{}
-	preserveLockProjection      map[int32]struct{}
-	preserveFilterProjection    map[int32]struct{}
-	preservePreInsertProjection map[int32]struct{}
-	preserveInsertProjection    map[int32]struct{}
-	preserveScanProjection      map[int32]struct{}
-	positionalSinkScans         map[int32]struct{}
+	projectAnchoredSorts             map[int32]struct{}
+	setBitmapByDisplayNode           map[[2]int32]int32
+	indexHintsByScan                 map[int32]*indexHintSet
+	indexHintOwnerByNode             map[int32]int32
+	preserveSinkProjection           map[int32]struct{}
+	preserveLockProjection           map[int32]struct{}
+	preserveFilterProjection         map[int32]struct{}
+	preservePreInsertProjection      map[int32]struct{}
+	preserveInsertProjection         map[int32]struct{}
+	preserveInsertSubqueryProjection map[int32]struct{}
+	preserveScanProjection           map[int32]struct{}
+	positionalSinkScans              map[int32]struct{}
 	// fullTableUpdateLockTargets contains only the exclusive targets admitted for
 	// an unrestricted, single-target UPDATE after complete-keyspace and lock-order
 	// checks. Planner-local metadata lets the final cardinality pass choose table
@@ -517,6 +518,8 @@ type QueryBuilder struct {
 	checkLoadPrimaryKey bool
 
 	insertHasOnDuplicateUpdate bool // statement-local: keep pure INSERT IGNORE auto-increment handling out of ODKU
+	// Non-nil only on a discarded validation builder, never an executable plan.
+	odkuAdmission *odkuAdmissionState
 
 	// spill memory for aggregate function
 	// jsonProbeFtNodes marks the fulltext index-scan nodes built for a json
@@ -844,6 +847,7 @@ type orderResolutionMetadata struct {
 }
 
 type BindContext struct {
+	odkuAdmission        *odkuAdmissionState // validation-only expression recovery
 	existentialBlock     uint64
 	subqueryNestingDepth uint32
 
@@ -1199,12 +1203,18 @@ type UpdateBinder struct {
 
 type OndupUpdateBinder struct {
 	baseBinder
-	scanTag             int32
-	selectTag           int32
-	tableDef            *plan.TableDef
-	targetDBName        string
-	targetTableName     string
-	lowerCaseTableNames int64
+	scanTag   int32
+	selectTag int32
+	// targetCorrelationTag is a planner-only relation tag used while a
+	// correlated ODKU subquery is flattened. The target row is joined into the
+	// candidate side before flattening, so a depth-one target reference has a
+	// real input subtree instead of pointing at the sibling DEDUP build scan.
+	targetCorrelationTag int32
+	tableDef             *plan.TableDef
+	rowAlias             *insertRowAliasBinding
+	targetDBName         string
+	targetTableName      string
+	lowerCaseTableNames  int64
 }
 
 type TableBinder struct {
