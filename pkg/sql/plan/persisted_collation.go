@@ -14,11 +14,29 @@ import (
 	"context"
 	"encoding/json"
 
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// V1物理格式的旧表将CollationVersion用作UCA unique proof，而不是
+// legacy general-ci/bin默认值的语义代际。不能重新解释历史双用途字段。
+func tableColumnCollationRevision(table *TableDef) uint32 {
+	if table.KeyFormat == collation.KeyFormatV1 && !types.IsUnicodeCollation(uint8(table.DefaultCharset)) {
+		return 0
+	}
+	return table.CollationVersion
+}
+
+func rejectNativePADColumnRelabel(ctx context.Context, old, next Type) error {
+	if (planpb.HasNativePADCollation(old) || planpb.HasNativePADCollation(next)) && !old.SameCollation(next) {
+		return moerr.NewNotSupported(ctx, "online native PAD collation conversion is disabled; use explicit copy/reload")
+	}
+	return nil
+}
 
 // requireViewCollationMarker不从结果Type或floor推断绑定来源；即使结果
 // 折叠成bool，revision1也必须携带119的durable要求。
@@ -28,6 +46,32 @@ func requireViewCollationMarker(ctx context.Context, data ViewData) error {
 	}
 	if data.CollationBindingRevision == 1 && (data.RequiredProtocolVersion == nil || *data.RequiredProtocolVersion < defines.MORPCVersion119) {
 		return moerr.NewInvalidInput(ctx, "collation binding revision 1 requires persisted protocol version 119")
+	}
+	return nil
+}
+
+// RequireCreateTableCollationsForAuthoring同时检查schema和CTAS fold前来源。
+// 即使输出全是bool，写门回落也必须先于建表、锁、catalog修改而拒绝。
+func RequireCreateTableCollationsForAuthoring(ctx context.Context, proc *process.Process, create *planpb.CreateTable) error {
+	if create == nil {
+		return nil
+	}
+	if err := requireViewCollationMarker(ctx, ViewData{CollationBindingRevision: create.CollationBindingRevision, RequiredProtocolVersion: &create.RequiredProtocolVersion}); err != nil {
+		return err
+	}
+	if create.RequiredProtocolVersion < 0 {
+		return moerr.NewInvalidInput(ctx, "CTAS protocol version must not be negative")
+	}
+	if err := RequirePersistedProtocolVersionForAuthoring(ctx, proc, create.RequiredProtocolVersion); err != nil {
+		return err
+	}
+	if err := RequireCatalogCollationsForAuthoring(ctx, proc, create.TableDef); err != nil {
+		return err
+	}
+	for _, index := range create.IndexTables {
+		if err := RequireCatalogCollationsForAuthoring(ctx, proc, index); err != nil {
+			return err
+		}
 	}
 	return nil
 }

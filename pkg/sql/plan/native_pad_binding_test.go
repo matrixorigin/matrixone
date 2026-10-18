@@ -54,7 +54,6 @@ func TestNativePADPlanAndPreFoldPersistence(t *testing.T) {
 		})
 	}
 	for _, sql := range []string{
-		"create table native_guard as select 'a' collate utf8mb4_general_ci = 'A' as b",
 		"create table native_guard (b bool default ('a' collate utf8mb4_general_ci = 'A'))",
 		"create table native_guard (a int, b bool generated always as ('a' collate utf8mb4_general_ci = 'A') stored)",
 		"create table native_guard (a int, check ('a' collate utf8mb4_general_ci = 'A'))",
@@ -262,6 +261,7 @@ func TestNativePADBoundExpressionSemantics(t *testing.T) {
 		{"'Á ' collate utf8mb4_general_ci = 'a'", true},
 		{"'a ' collate utf8mb4_bin = 'a'", true},
 		{"'A' collate utf8mb4_bin = 'a'", false},
+		{"'A' collate utf8mb4_0900_ai_ci = 'a'", false},
 		{"_binary'a ' = _binary'a'", false},
 		{"'Á' collate utf8mb4_unicode_ci = 'a'", true},
 		{"'Á' collate utf8_general_ci in ('a','z')", true},

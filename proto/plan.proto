@@ -2000,6 +2000,10 @@ message CreateTable {
   // Cached metadata-name owner observed before catalog-dependent planning.
   lock.LockTable fk_name_binding = 17;
   DatabaseDefaults database_defaults = 18;
+  // CTAS binds before folding; execution rechecks this floor before publication.
+  int64 required_protocol_version = 19;
+  // Binding provenance for the internal INSERT ... SELECT replay, not session state.
+  uint32 collation_binding_revision = 20;
 }
 
 message AlterTableDrop {

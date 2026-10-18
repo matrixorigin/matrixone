@@ -145,7 +145,7 @@ func TestDDLVarcharWidthPreservesInternalDDL(t *testing.T) {
 			defer stmt.Free()
 			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 			ctx := context.WithValue(t.Context(), defines.InternalExecutorKey{}, true)
-			typ, err := getColumnTypeFromAst(ctx, col, uint32(types.CharsetUTF8), nil)
+			typ, err := getColumnTypeFromAst(ctx, col, uint32(types.CharsetUTF8), 0, nil)
 			require.NoError(t, err)
 			require.Equal(t, int32(types.MaxVarcharLen), typ.Width)
 		})
@@ -175,7 +175,7 @@ func TestDDLVarcharWidthReplayAdmission(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
-			_, err = getColumnTypeFromAst(t.Context(), col, uint32(types.CharsetUTF8), replay)
+			_, err = getColumnTypeFromAst(t.Context(), col, uint32(types.CharsetUTF8), 0, replay)
 			if tc.wantError {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooBigFieldLength), err)
 			} else {
@@ -192,7 +192,7 @@ func TestDDLVarcharWidthAdmissionDoesNotMutateAST(t *testing.T) {
 	col := stmt.(*tree.CreateTable).Defs[0].(*tree.ColumnTableDef)
 	astType := col.Type.(*tree.T)
 
-	_, err = getColumnTypeFromAst(t.Context(), col, uint32(types.CharsetUTF8), nil)
+	_, err = getColumnTypeFromAst(t.Context(), col, uint32(types.CharsetUTF8), 0, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooBigFieldLength), err)
 	require.Equal(t, int32(65536), astType.InternalType.DisplayWith)
 
@@ -200,7 +200,7 @@ func TestDDLVarcharWidthAdmissionDoesNotMutateAST(t *testing.T) {
 	_, err = getTypeFromAst(t.Context(), col.Type)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 	internal := context.WithValue(t.Context(), defines.InternalExecutorKey{}, true)
-	_, err = getColumnTypeFromAst(internal, col, uint32(types.CharsetUTF8), nil)
+	_, err = getColumnTypeFromAst(internal, col, uint32(types.CharsetUTF8), 0, nil)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrOutOfRange), err)
 	require.Equal(t, int32(65536), astType.InternalType.DisplayWith)
 }

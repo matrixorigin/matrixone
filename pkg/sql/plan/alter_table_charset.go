@@ -86,7 +86,13 @@ func applyAlterTableCharsetDefault(ctx CompilerContext, table *plan.TableDef, op
 		return err
 	}
 	table.DefaultCharset = identity
-	table.CollationVersion = uint32(types.CollationVersionLegacy)
+	table.CollationVersion, err = tableDefaultCollationRevision(ctx.GetContext(), defaults, identity)
+	if err != nil {
+		return err
+	}
+	if table.KeyFormat == collation.KeyFormatV1 && table.CollationVersion == 1 && !types.IsUnicodeCollation(uint8(identity)) {
+		return moerr.NewNotSupported(ctx.GetContext(), "native PAD table default with versioned unique indexes is disabled")
+	}
 	// V1 physical unique keys also own this schema marker; changing only
 	// inheritance must not revoke optimizer-pruned native-unique table shells.
 	if types.IsUnicodeCollation(uint8(identity)) || table.KeyFormat == collation.KeyFormatV1 {
@@ -99,7 +105,7 @@ func applyAlterTableCharsetDefault(ctx CompilerContext, table *plan.TableDef, op
 // only the Type tag. COPY owns row validation, index rebuild, publication and
 // failure cleanup. The parsed replay schema and its added attributes stay local.
 func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTable, state *AlterTableContext, conversion *plan.DatabaseDefaults) error {
-	_, parsed, err := constructCreateTableSQL(ctx, alter.CopyTableDef, nil, true, nil, true, nil)
+	_, parsed, err := constructCreateTableSQLForReplay(ctx, alter.CopyTableDef, nil, true, nil, true, nil)
 	if err != nil {
 		return err
 	}
@@ -127,7 +133,7 @@ func convertAlterTableCharacterColumns(ctx CompilerContext, alter *plan.AlterTab
 			column.Attributes = append(column.Attributes,
 				tree.NewAttributeCharset(conversion.CharacterSet),
 				tree.NewAttributeCollate(conversion.Collation))
-			old.Typ, err = getColumnTypeFromAst(ctx.GetContext(), column, target.DefaultCharset, nil)
+			old.Typ, err = getColumnTypeFromAst(ctx.GetContext(), column, target.DefaultCharset, tableColumnCollationRevision(target), nil)
 			if err != nil {
 				return err
 			}

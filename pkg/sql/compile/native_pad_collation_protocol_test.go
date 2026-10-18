@@ -37,6 +37,31 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestNativePADCreateTableWriteGateBeforeSideEffects(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	key := moruntime.PersistedExpressionProtocolAuthoringFloor
+	previous, exists := rt.GetGlobalVariables(key)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(key, previous)
+		} else if current, ok := rt.GetGlobalVariables(key); ok {
+			rt.CompareAndDeleteGlobalVariables(key, current)
+		}
+	})
+	c.e = nil
+	for _, create := range []*planpb.CreateTable{
+		{TableDef: &planpb.TableDef{Name: "n", Cols: []*planpb.ColDef{{Name: "s", Typ: planpb.Type{Id: int32(types.T_varchar), Charset: 3, CollationVersion: 1}}}}},
+		{TableDef: &planpb.TableDef{Name: "n", Cols: []*planpb.ColDef{{Name: "b", Typ: types.T_bool.ToType().PlanType()}}}, CreateAsSelectSql: "insert into n select 'A' collate utf8mb4_general_ci='a'", CollationBindingRevision: 1, RequiredProtocolVersion: defines.MORPCVersion119},
+	} {
+		rt.SetGlobalVariables(key, defines.MORPCVersion119)
+		require.NoError(t, plan2.RequireCreateTableCollationsForAuthoring(c.proc.Ctx, c.proc, create))
+		rt.SetGlobalVariables(key, defines.MORPCVersion118)
+		scope := &Scope{Proc: c.proc, Plan: &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_CreateTable{CreateTable: create}}}}}
+		require.ErrorContains(t, scope.CreateTable(c), "protocol version 119")
+	}
+}
+
 func TestNativePADViewWriteGateBeforeSideEffects(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())

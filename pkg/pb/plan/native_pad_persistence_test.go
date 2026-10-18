@@ -15,6 +15,16 @@ import (
 	"testing"
 )
 
+func TestNativePADDoesNotReinterpretUnicodePhysicalMarker(t *testing.T) {
+	table := &TableDef{DefaultCharset: 3, CollationVersion: 1, KeyFormat: 1, Cols: []*ColDef{{Name: "u", Typ: Type{Id: planVarcharTypeID, Charset: 10, CollationVersion: 1}}}, Indexes: []*IndexDef{{Unique: true, KeyFormat: 1, Parts: []string{"u"}}}}
+	require.NoError(t, RequireLegacyCollations(table))
+	for _, collect := range []func(any) (RemoteExpressionFeatures, error){RequiredRemoteExpressionFeatures, RequiredExecutableRemoteExpressionFeatures} {
+		features, err := collect(table)
+		require.NoError(t, err)
+		require.False(t, features.NativePADCollation, "旧表V1物理格式标记不是新的PAD默认语义")
+	}
+}
+
 func TestNativePADExecutableAdmissionCollectsTableDefaults(t *testing.T) {
 	for _, identity := range []uint32{2, 3} {
 		table := &TableDef{DefaultCharset: identity, CollationVersion: 1}

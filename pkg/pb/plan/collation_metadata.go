@@ -113,7 +113,7 @@ func (v *legacyCollationVisitor) checkType(value Type) error {
 
 func (v *legacyCollationVisitor) checkTable(value *TableDef) error {
 	if v.mode == collationFeatureCollection || v.collectExpressions {
-		v.features.NativePADCollation = v.features.NativePADCollation || HasNativePADCollation(Type{
+		v.features.NativePADCollation = v.features.NativePADCollation || value.KeyFormat == collation.KeyFormatLegacy && HasNativePADCollation(Type{
 			Id: planVarcharTypeID, Charset: value.DefaultCharset, CollationVersion: value.CollationVersion,
 		})
 	}

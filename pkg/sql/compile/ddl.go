@@ -1790,6 +1790,9 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetCreateTable()
+	if err := plan2.RequireCreateTableCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	if !qry.GetTemporary() && createTablePublishesForeignKeys(qry) {
 		if err := c.admitForeignKeyCreate(); err != nil {
 			return err
@@ -2552,6 +2555,7 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 			oldCtx := c.proc.Ctx
 			// CTAS follow-up SQL needs frontend session for temp-table alias resolution.
 			ctxWithSession := attachInternalExecutorSession(c.proc.Ctx, c.proc.GetSession())
+			ctxWithSession = plan2.WithCollationBindingRevision(ctxWithSession, qry.CollationBindingRevision)
 			if helper := c.proc.GetSessionInfo().SqlHelper; helper != nil {
 				if compilerContext, ok := helper.GetCompilerContext().(plan2.CompilerContext); ok {
 					ctxWithSession = attachInternalExecutorCompilerContext(ctxWithSession, compilerContext)

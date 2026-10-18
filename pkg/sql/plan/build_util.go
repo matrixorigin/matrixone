@@ -178,7 +178,7 @@ func getTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 func getColumnTypeFromAst(
 	ctx context.Context,
 	column *tree.ColumnTableDef,
-	tableCharset uint32,
+	tableCharset, tableRevision uint32,
 	replay *persistedDDLReplay,
 ) (plan.Type, error) {
 	astType, isVarchar := column.Type.(*tree.T)
@@ -200,8 +200,22 @@ func getColumnTypeFromAst(
 	if isVarchar && astType.InternalType.DisplayWith > types.MaxVarcharLen {
 		typ.Width = astType.InternalType.DisplayWith
 	}
-	if err = applyDefaultAndColumnAttributesToType(ctx, &typ, tableCharset, column.Attributes); err != nil {
+	if err = applyDefaultAndColumnAttributesToType(ctx, &typ, tableCharset, tableRevision, column.Attributes); err != nil {
 		return plan.Type{}, err
+	}
+	if replay != nil {
+		if target, ok := replay.columnTypes[strings.ToLower(column.Name.ColName())]; ok {
+			// SQL skeleton只有拼写；代际属于已校验的typed目标，不属于执行时session。
+			if typ.Id != target.Id || (typ.Charset != target.Charset && !(target.Charset == 0 && typ.Charset == uint32(types.CharsetUTF8MB4Bin))) {
+				// Legacy replay also carries new declarations for width admission;
+				// retain that path, but never lose a versioned comparison domain.
+				if typ.CollationVersion != 0 || target.CollationVersion != 0 {
+					return plan.Type{}, moerr.NewInvalidInput(ctx, "reconstructed column collation differs from typed schema")
+				}
+			} else {
+				typ.CollationVersion = target.CollationVersion
+			}
+		}
 	}
 	if internal {
 		// Trusted internal DDL includes bootstrap and versioned catalog upgrades.
@@ -504,13 +518,13 @@ func GetTypeFromAst(ctx context.Context, typ tree.ResolvableTypeReference) (plan
 }
 
 func applyColumnAttributesToType(ctx context.Context, colType *plan.Type, attrs []tree.ColumnAttribute) error {
-	return applyDefaultAndColumnAttributesToType(ctx, colType, colType.Charset, attrs)
+	return applyDefaultAndColumnAttributesToType(ctx, colType, colType.Charset, colType.CollationVersion, attrs)
 }
 
 func applyDefaultAndColumnAttributesToType(
 	ctx context.Context,
 	colType *plan.Type,
-	tableCharset uint32,
+	tableCharset, tableRevision uint32,
 	attrs []tree.ColumnAttribute,
 ) error {
 	isGeometry := isGeometryPlanType(colType)
@@ -574,6 +588,17 @@ func applyDefaultAndColumnAttributesToType(
 		applyTextCharsetToPlanType(colType, collation)
 	default:
 		applyTableDefaultCharsetToPlanType(colType, tableCharset)
+	}
+	if oid := types.T(colType.Id); oid == types.T_char || oid == types.T_varchar || oid == types.T_text {
+		if columnCollation != "" {
+			revision, err := authoredCollationRevision(ctx, columnCollation, colType.Charset)
+			if err != nil {
+				return err
+			}
+			colType.CollationVersion = revision
+		} else if columnCharset == "" {
+			colType.CollationVersion = tableRevision
+		}
 	}
 	if isGeometry {
 		// Scale (subtype) is already set by getTypeFromAst; an SRID column
@@ -748,6 +773,22 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 		}
 	}
 	return tableCharset, nil
+}
+
+func tableDefaultCollationRevision(ctx context.Context, options []tree.TableOption, identity uint32) (uint32, error) {
+	name := ""
+	for _, option := range options {
+		if opt, ok := option.(*tree.TableOptionCollate); ok {
+			name = opt.Collate
+		}
+	}
+	if name != "" {
+		return authoredCollationRevision(ctx, name, identity)
+	}
+	if types.IsUnicodeCollation(uint8(identity)) {
+		return uint32(types.CollationVersionV1), nil
+	}
+	return uint32(types.CollationVersionLegacy), nil
 }
 
 func buildDefaultExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {

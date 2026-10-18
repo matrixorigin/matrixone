@@ -69,6 +69,14 @@ func createTableIndexVisible(indexDef *plan.IndexDef) bool {
 	return true
 }
 
+// 仅供携带typed replay的内部DDL骨架；不能把此SQL独立交给dump/CDC。
+func constructCreateTableSQLForReplay(ctx CompilerContext, tableDef *plan.TableDef, snapshot *Snapshot, useDbName bool, cloneStmt *tree.CloneTable, includeChecks bool, sourceSubscription *SubscriptionMeta) (string, tree.Statement, error) {
+	parent := ctx.GetContext()
+	ctx.SetContext(WithPersistedDDLReplay(parent, tableDef, tableDef))
+	defer ctx.SetContext(parent)
+	return constructCreateTableSQL(ctx, tableDef, snapshot, useDbName, cloneStmt, includeChecks, sourceSubscription)
+}
+
 func constructCreateTableSQL(
 	ctx CompilerContext,
 	tableDef *plan.TableDef,
@@ -78,9 +86,12 @@ func constructCreateTableSQL(
 	includeChecks bool,
 	sourceSubscription *SubscriptionMeta,
 ) (string, tree.Statement, error) {
-	// Replaying native metadata through a legacy SQL alias would change its
-	// semantics. Until activation, reject rather than emit a lossy dump.
-	if err := plan.RequireLegacyCollations(tableDef); err != nil {
+	// 内部骨架有独立typed replay。普通SHOW/dump不能仅凭拼写复原代际。
+	admit := plan.RequireLegacyCollations
+	if ctx != nil && ddlReplayForTable(ctx.GetContext(), tableDef.Name) != nil {
+		admit = plan.RequirePersistedCollations
+	}
+	if err := admit(tableDef); err != nil {
 		return "", nil, err
 	}
 	var err error

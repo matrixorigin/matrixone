@@ -24,6 +24,15 @@ import (
 
 type collationBindingRevisionKey struct{}
 
+// WithCollationBindingRevision由已校验marker/floor的内部SQL replay owner使用。
+// 不设置session变量，不修改借用的父context；非法revision仍由binder拒绝。
+func WithCollationBindingRevision(ctx context.Context, revision uint32) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return context.WithValue(ctx, collationBindingRevisionKey{}, revision)
+}
+
 // explicitCollationBindingRevision 使用当前绑定来源，不从session默认或
 // protocol推断。公开入口仍保持legacy，直到原生SQL验证与持久化隔离闭合。
 func explicitCollationBindingRevision(ctx context.Context) (uint32, error) {
@@ -34,6 +43,24 @@ func explicitCollationBindingRevision(ctx context.Context) (uint32, error) {
 			}
 			return 0, moerr.NewNotSupportedf(ctx, "unsupported collation binding revision %v", value)
 		}
+	}
+	return uint32(collation.RevisionLegacy), nil
+}
+
+// authoredCollationRevision仅升级本批支持的canonical/utf8/utf8mb3拼写。
+// 0900及DDL-only兼容别名仍是历史映射，不得借用新general-ci语义。
+func authoredCollationRevision(ctx context.Context, name string, identity uint32) (uint32, error) {
+	revision, err := explicitCollationBindingRevision(ctx)
+	if err != nil {
+		return 0, err
+	}
+	definition, known := collation.Lookup(name)
+	if known && definition.Semantics == collation.UCA400 {
+		return uint32(collation.RevisionV1), nil
+	}
+	if known && (definition.Semantics == collation.GeneralCI || definition.Semantics == collation.BinPadSpace) &&
+		(identity == uint32(collation.UTF8MB4GeneralCIIdentity) || identity == uint32(collation.UTF8MB4BinIdentity)) {
+		return revision, nil
 	}
 	return uint32(collation.RevisionLegacy), nil
 }

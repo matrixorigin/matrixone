@@ -36,19 +36,15 @@ func (b *baseBinder) bindCollateExpr(ast *tree.CollateExpr, depth int32) (*Expr,
 		return nil, moerr.NewUnknownCollation(ctx, ast.Collation)
 	}
 	identity, admitted := collation.ResolveSQL(ast.Collation)
-	version := uint32(collation.RevisionLegacy)
 	if definition.Semantics == collation.UCA400 {
-		identity, admitted, version = definition.Identity, true, uint32(collation.RevisionV1)
+		identity, admitted = definition.Identity, true
 	}
 	if !admitted {
 		return nil, moerr.NewNotSupportedf(ctx, "collation '%s' is disabled", ast.Collation)
 	}
-	bindingRevision, err := explicitCollationBindingRevision(ctx)
+	version, err := authoredCollationRevision(ctx, ast.Collation, uint32(identity))
 	if err != nil {
 		return nil, err
-	}
-	if identity == collation.UTF8MB4GeneralCIIdentity || identity == collation.UTF8MB4BinIdentity {
-		version = bindingRevision
 	}
 	selectedType := plan.Type{Id: int32(types.T_varchar), Charset: uint32(identity), CollationVersion: version}
 	if plan.HasNativePADCollation(selectedType) && (b.persistedExpressionBinding ||

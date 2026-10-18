@@ -52,7 +52,7 @@ func AddColumn(
 			"column name %s is reserved for external table scans", newColName)
 	}
 
-	colType, err := getColumnTypeFromAst(ctx.GetContext(), specNewColumn, tableDef.DefaultCharset, nil)
+	colType, err := getColumnTypeFromAst(ctx.GetContext(), specNewColumn, tableDef.DefaultCharset, tableColumnCollationRevision(tableDef), nil)
 	if err != nil {
 		return false, err
 	}
