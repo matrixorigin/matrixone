@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
@@ -177,4 +178,44 @@ func TestOrderedForeignKeyResidentWorkAndCleanup(t *testing.T) {
 			t.Logf("ranges=%d readers_closed=%d read_calls=%d returned_rows=%d candidates=%d constraints=%d charged_bytes=%d", ranges, closed, reads, rows, tc.candidates, tc.constraints, account.Snapshot().Used)
 		})
 	}
+}
+
+func TestOrderedForeignKeyResidentReleasesStringIterator(t *testing.T) {
+	proc := testutil.NewProc(t)
+	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
+	arg := &PreInsertUnique{}
+	account := installODKUTestAllocation(t, arg)
+	var builder hashbuild.HashmapBuilder
+	defer builder.Free(proc)
+	require.NoError(t, builder.SetAllocationAccount(account))
+	typ := types.NewWithCharset(types.T_varchar, 64, 0, types.CharsetUTF8MB4UnicodeCI)
+	require.NoError(t, builder.Prepare([]*plan.Expr{plan2.GetColExpr(typ.PlanType(), 0, 0)}, -1, -1, nil, proc))
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(typ)
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("Résumé"), false, proc.Mp()))
+	input.SetRowCount(1)
+	defer input.Clean(proc.Mp())
+	require.NoError(t, builder.AppendResidentBatch(input, proc))
+	parents, err := builder.FinishResidentBuild(proc)
+	require.NoError(t, err)
+	builder.Free(proc)
+	lookup := &orderedFKLookup{parents: parents, iterator: parents.NewIterator()}
+	defer func() {
+		if lookup.parents != nil {
+			lookup.free(proc)
+		}
+	}()
+	probe := vector.NewVec(typ)
+	require.NoError(t, vector.AppendBytes(probe, []byte("RESUME"), false, proc.Mp()))
+	defer probe.Free(proc.Mp())
+	before := account.Snapshot().Used
+	ids, zs, err := lookup.iterator.Find(0, 1, []*vector.Vector{probe})
+	require.NoError(t, err)
+	require.EqualValues(t, 1, ids[0])
+	require.EqualValues(t, 1, zs[0])
+	require.Greater(t, account.Snapshot().Used, before, "probe iterator owns accounted key scratch")
+	lookup.free(proc)
+	lookup.iterator = nil
+	require.Zero(t, account.Snapshot().Used, "detach iterator through its owner API before freeing the map")
+	require.NoError(t, arg.ClearAllocationAccount(account))
 }

@@ -215,6 +215,11 @@ func (preInsertUnique *PreInsertUnique) recordOrderedForeignKeyParents(proc *pro
 			if err != nil {
 				return err
 			}
+			// SQL join equality is non-reflexive for NaN, unlike GROUP BY
+			// or a generic key set. Match the storage HashmapBuilder owner.
+			if err := state.parents.SetRejectNaN(); err != nil {
+				return err
+			}
 			state.iterator = state.parents.NewIterator()
 		}
 		if _, err := state.iterator.DetectDup(l.selfValues, 0); err != nil {

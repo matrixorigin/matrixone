@@ -90,11 +90,7 @@ func TestLoadLocalCheckPolicyWithOrderedAllocation(t *testing.T) {
 				for _, expr := range node.FilterList {
 					if exprContainsFuncName(expr, "_check_constraint_assert") {
 						checks++
-						want := plan.Node_ASSERT
-						if mode == "ignore" {
-							want = plan.Node_FILTER
-						}
-						require.Equal(t, want, node.NodeType, "CHECK follows explicit IGNORE independently of LOCAL row ignore")
+						require.Equal(t, plan.Node_FILTER, node.NodeType, "LOCAL and explicit IGNORE skip invalid rows through CHECK filtering")
 					}
 				}
 			}

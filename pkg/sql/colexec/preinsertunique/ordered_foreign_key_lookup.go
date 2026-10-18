@@ -135,6 +135,7 @@ type orderedFKLookup struct {
 }
 
 func (l *orderedFKLookup) free(proc *process.Process) {
+	hashmap.IteratorClearOwner(l.iterator)
 	l.iterator = nil
 	if l.parents != nil {
 		l.parents.Free()

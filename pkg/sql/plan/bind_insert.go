@@ -2944,7 +2944,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// image (handled earlier, with appendOnDupIrregularMaintSource).
 	// LOAD IGNORE skips CHECK-invalid rows independently of its duplicate-key
 	// policy. INSERT IGNORE uses the same filter with its own duplicate policy.
-	ignoreCheckViolations := (onDupAction == plan.Node_IGNORE && !builder.qry.LoadTag) || loadCheckIgnore
+	ignoreCheckViolations := onDupAction == plan.Node_IGNORE || loadCheckIgnore
 	// The reordered path already materialized CHECK eligibility before
 	// PRE_INSERT. Keep that single evaluation while retaining LOAD's policy.
 	filterCheckRows := ignoreCheckViolations && autoIncrementGeneratedColumn < 0
@@ -5063,7 +5063,7 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 		lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForReplaceStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 		return lastNodeID, colName2Idx, skipUniqueIdx, -1, err
 	} else {
-		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore, builder.isInsertIgnore)
+		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore)
 	}
 }
 
@@ -5316,7 +5316,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	tableDef *TableDef,
 	objRef *ObjectRef,
 	insertColToExpr map[string]*Expr,
-	assignmentIgnore, checkIgnore bool,
+	assignmentIgnore bool,
 ) (int32, map[string]int32, []bool, int32, error) {
 	colName2Idx := make(map[string]int32)
 	hasAutoCol := false
@@ -5547,7 +5547,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	markerPhysicalPos, trackAutoIncrementGenerated := builder.insertIgnoreAutoIncrementReorderable(
 		tableDef, skipUniqueIdx, compPkeyExpr, clusterByExpr)
 	var checkEligibility *plan.ColRef
-	if checkIgnore && trackAutoIncrementGenerated && len(tableDef.Checks) > 0 {
+	if trackAutoIncrementGenerated && len(tableDef.Checks) > 0 {
 		inputProjection := builder.qry.Nodes[lastNodeID].ProjectList
 		lastNodeID, err = appendCheckConstraintPlan(
 			builder, tmpCtx, tableDef, lastNodeID, materializedTag, colName2Idx, true)

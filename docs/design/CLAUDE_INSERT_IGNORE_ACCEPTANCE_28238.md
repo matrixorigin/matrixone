@@ -1,14 +1,14 @@
 # #28238 / #30107：接受感知的 AUTO_INCREMENT 与约束仲裁设计
 
-## 0. 修订、范围与审查状态
+## 0. 修订与审查边界
 
-- 修订：**r2，2026-10-15，协议重分配与性能资格补件，待独立复审**。
-- 问题：[#28238](https://github.com/matrixorigin/matrixone/issues/28238)；实现系列：[PR #30107](https://github.com/matrixorigin/matrixone/pull/30107)，承接已合并的 #28349。
-- r1 实现对照：`6bbac783645040a2ee97e017b196240d83755b9c` / main `a53390c57de48ac280249ff0e88831e502e20fb0`。r2 合并 main `17a6200f59e764729e5544908fffd5480ae88279`，保留上游 DECIMAL 聚合 ABI 元数据并将本功能能力顺延至 114。性能对照必须使用同一 main 基线，不能把上游变化归因于本 PR。
-- 本文是对缺失设计门禁的补件，**不声称设计先于已有实现获批**。设计修订以 Git commit 固定，PR 正文必须链接该精确版本；修订变化重新审查受影响决策。
-- 完整范围是跨 allocator、PRE_INSERT、行仲裁、FK 存储读取、最终键锁及 wire 的所有权/协议重构，满足规模和复杂度门禁，不能因 PR 类型为 BUG 而豁免。
-- [旧 IGNORE 设计](20260908-auto-increment-boundaries.md)只提出后续 acceptance cursor；[#23371 设计](CLAUDE_AUTO_INCREMENT_23371.md)明确排除本问题。其批准、实现 APPROVE、CI 成功均不构成本文的设计批准。
-- 当前审查记录：`设计 r2 / 受影响决策待独立复审`。XuPeng-SH 对 r1 的独立审查已认可所有权/生命周期/兼容方案并关闭缺失 artifact 的疑虑，但明确因默认 ordered-FK 缺少性能资格保持 REQUEST_CHANGES；iamlinjunhong 同样提出该 P2。本文补齐测量，不把它自动变为设计 PASS。不得提前 resolve 设计门禁线程。独立审查应记录设计 commit、决定、阻塞项及接受的权衡，不要求额外 human-approval 标签或 RFC 转换。
+修订 **r3，2026-10-18**，基于 main `adbdd5c718baca6e4c054194f888b48a4f84a0a2`。r3 的实现前设计经 `gpt-6.1-sol / xhigh` 独立审查 PASS（session `01a14e30-2309-7380-b4f0-2a2ab293c768`）；LOCAL policy 澄清在同一模型/effort 下补充设计 PASS，保留原 PR 的 LOCAL CHECK 行跳过契约；最终实现仍需独立总审查和当前版本验证。此记录不修改 GitHub reviewer 的决定。
+
+问题 [#28238](https://github.com/matrixorigin/matrixone/issues/28238)，实现 [#30107](https://github.com/matrixorigin/matrixone/pull/30107)。保留原始 13 个提交及 6 次合并的累计功能修改；不恢复已被 main 吸收、累计增量为零的 EXPLAIN prerequisite。
+
+r2 实测发现逐候选扫描和无条件共享父表锁的实际退化，其 N/P/F 限制仅是文档提案。**r3 撤回该限制提案并替换对应算法**：安全的 PK/UNIQUE 点查，其余情况每次执行按需构建一次有预算的 resident JoinMap；锁定实际匹配的物理父键。没有 SQL 形状限制、禁用配置、旧错误路径回退或动态 spill 承诺。
+
+历史 r2 文档和数据保存在 [原修订](https://github.com/ck89119/matrixone/blob/27812a3c3816c0db490618183177403119c5df63/docs/design/CLAUDE_INSERT_IGNORE_ACCEPTANCE_28238.md)及[原测量附件](CLAUDE_INSERT_IGNORE_FK_BENCH_30107.md)。其中的 coarse-lock/O(N·F·P) 与小批上线提案均属于旧实现，不是当前执行契约。
 
 ## 1. 问题、依据与成功条件
 
@@ -44,7 +44,7 @@
 | 全部约束预过滤 | 普通 CHECK 可用且便宜；ID-dependent FK/生成键必须先知道最终 ID，循环依赖仍未解决 | 只用作可独立判断部分 |
 | 回退 allocator / 按接受行重新发号 | 回退破坏跨 CN 租约独占；逐行 allocator 事务增加 I/O/争用，取消恢复复杂 | 拒绝 |
 | 批量投机 ID 加向量 FK、失败再重算 | 有机会降低 FK I/O，但拒绝改变后继 ID，需迭代重算/撤销所有键、结果和 volatile 求值 | 暂不选择，不能无界重试 |
-| 语句私有租约游标 + 完整接受仲裁 | 保留共享 allocator，准确延后显式推进；需要新所有权/wire 和部分逐候选 FK 读取 | 选择；接受下述扫描和表锁权衡 |
+| 语句私有租约游标 + 完整接受仲裁 | 保留共享 allocator，准确延后显式推进；需要明确所有权/wire 和接受后才能决定的 FK probe | 选择；配套下述 point/resident lookup、物理 witness 锁与预算 |
 
 选择不是吞吐保证。未来向量化必须保持接受顺序、最终键、self visibility 和单次求值，不可作为静默语义 fallback。
 
@@ -68,7 +68,7 @@ SQL/session snapshot + typed table/epoch
 
 生成来源标志在把零转 NULL 的既有 sql_mode 规则后捕获。deferred 路径对 AUTO_INCREMENT 的暂时 NULL 不提前做最终 NOT NULL 判断，其它列保持既有检查。FK eligibility 在 arbiter 处消费；资格为 NULL/false 的行不发布键。
 
-LOCAL（非 REPLACE）的行拒绝与显式 IGNORE 的 decoder 放宽是两种策略。`tree.IsIgnoreStatement` 供行/表达式 profile 使用；两个 LOAD binder 从语法重算 `ExternParam.LoadExplicitIgnore`，通过 Createsql JSON 传递。compiler 对 LOCAL 只因显式 IGNORE 放宽严格输入解析；非严格模式仍非严格。TIME 的原始文本/assignment cast 是上游独立契约，不可把 LOCAL row-profile=true 当作所有输入列都应宽松解析。复用 AST 重绑必须重置该标志。
+LOCAL（非 REPLACE）的行拒绝与显式 IGNORE 的 decoder 放宽是两种策略。CHECK 通过原有 loadCheckIgnore 和 statement profile 选择 FILTER；LOCAL（非 REPLACE）和显式 IGNORE 都跳过失败行。main 的旧 LOCAL ASSERT 测试以前依赖 LOCAL 不启用 IGNORE 的假设，随本 PR 的 shared profile 扩展同步更新；非 LOCAL/非 IGNORE 与 REPLACE 仍 ASSERT。decoder 的显式放宽保持独立。`tree.IsIgnoreStatement` 供行/表达式 profile 使用；两个 LOAD binder 从语法重算 `ExternParam.LoadExplicitIgnore`，通过 Createsql JSON 传递。compiler 对 LOCAL 只因显式 IGNORE 放宽严格输入解析；非严格模式仍非严格。TIME 的原始文本/assignment cast 是上游独立契约，不可把 LOCAL row-profile=true 当作所有输入列都应宽松解析。复用 AST 重绑必须重置该标志。
 
 ## 4. 租约、游标与线性化点
 
@@ -93,142 +93,67 @@ VALUES 的首次请求使用 `ValuesRows`；未知流按 1、2、4…扩张，�
 
 无进展分配至多沿用 **8** 次 guard，不新增无限重试。retire/epoch 更新返回 definition-change retry；旧 callback 不复活 retired cache。Wait-for 链仍为 caller → 原在途 allocator 完成或 ctx cancellation，不能把取消改成普通约束拒绝。
 
-## 5. FK 可见性、锁与最终键
+## 5. FK 查找、可见性与锁
 
-### 有序 FK 读取
+只有 ID 依赖或自引用 FK 进入现有全局有序 arbiter；其它 FK 保留普通向量化路径。每个候选仍按原顺序经过 eligibility、PK/UK 和全部 FK；最终接受之前不发布键、不消耗当前候选号。
 
-1. 将待查 child tuple（必要时替换为最终生成 ID）绑定进完整 parent 等值 predicate；任意 child NULL 按 MATCH SIMPLE 通过。
-2. parent relation 使用当前 txn、workspace snapshot-write offset。`Ranges`/reader pushdown 仅用于 pruning；每个返回批次必须再执行完整 SQL predicate，不能把“reader 返回了行”当父键匹配。
-3. 逐个 reader 读到匹配或终止；ctx/Read/Eval 错误向上返回，所有已建立 readers 统一 Close，临时 batch/vector/executor 释放。
-4. 只缓存单列生成 auto-ID 非 self-FK 的最后一次 `(value, exists)`，每个约束一项，避免同一拒绝候选反复读取；不是跨语句或无限值缓存。
+每个 FK 的存储查找只选择一条路径：
 
-self-FK 的查找顺序：完整当前行 child/parent tuple 用 SQL `=` 与 `and` 比较 → 同语句已接受 parent 集合 → txn 存储读取。当前行比对不发布键；多列不能只比较其中的自动列。通过所有 CHECK/PK/UK/FK 才记录 self-parent，所以拒绝的父行不能支持后继子行；后输入的父行不会倒流改变此前拒绝结果。此前接受行尚未写入存储时由语句集合提供可见性。
+| 路径 | 资格与 owner | 匹配及保护 |
+|---|---|---|
+| PK point | 复用现有 Unicode/浮点/类型 guard，完整物理 PK 可安全裁剪 | 实际父行完整 SQL 等式复核，锁 base PK |
+| UNIQUE point | 现有 index 定义、prefix 与 KeyFormat owner；真实隐藏表再回表 | 用实际父行计算 hidden UNIQUE key，锁该 namespace |
+| resident | 其余既有 FK 形状，包括非唯一前缀和不能安全点查的比较域 | 固定视图扫描一次最小父 projection，经 HashmapBuilder 构建标准 JoinMap；取 SQL 等值组的一条实际父行，锁其 base PK |
 
-### 并发与锁闭环
+LookupFilter 是物理裁剪条件，Predicate 是完整 SQL 真值，两者不可混淆。point filter 共用 `ConstantFold → BuildFoldedFilterExprs`，storage Fold 是裁剪字节，不能交给普通表达式执行器。复合 PK 的 serial 只用于物理访问，已从完整 SQL 等式中删除。
 
-pessimistic txn 对 ordered FK 父表按 TblId 排序、去重获取共享表锁，一次获取后复用，最长存活至原 txn lock owner 释放；optimistic txn 不新增这组锁，继续依赖既有 MVCC/commit 冲突协议。排序只约束这组 acquisition，**不保证整个 DML 图无死锁**；与其它事务/最终 PK 锁的冲突、升级、取消、deadlock victim 和 retry 交给现有 lock service/txn context。
+resident build/probe、current-self 和 earlier-accepted-self 都从原始 SQL 等式派生同一类型及 collation 域，不能以 raw vector bytes 替代。accepted-self 集合使用标准 SetRejectNaN 模式，NaN 不能因为 hash 命中而绕过 SQL 的非自反等式；有符号零仍按 SQL 等值匹配。任一 child 分量为 NULL 按 MATCH SIMPLE 通过。自引用依次查当前完整行、此前**完全接受**的行、固定存储视图；不读未来或已拒绝的候选。重复 tuple 使用标准 GroupSels 的一个 witness；标准 builder 省略 GroupSels 的全唯一表示直接使用 group ordinal。
 
-共享父表锁是粗粒度代价，可能降低父更新/删除并发。它不能被文档包装成无成本 point lock，也不能把“sort”当作所有 wait 的释放证明。部分取锁失败时已取锁归原 txn cleanup，不由 reader.Close 释放。
+编译时捕获 `Compile.TxnOffset`，本地、远端和 retry 更新均传递该值。lookup 不重新读取 workspace 的当前 write offset；当前语句的自引用可见性只有既有 accepted overlay 一份 owner。prepared/retry reuse 清除整个旧 attempt。
 
-generated PK 的旧输入为 NULL，不能沿用旧键锁。arbiter 完成最终行后追加 `LOCK_OP`，使用最终输出 physical ordinal；显式行保留此前的锁。原 UK 锁、约束优先级与 index-key remapping 仍保持，ID-dependent 生成表达式受 eligibility guard 排除。最老租约 TS 的 `PrimaryKeysMayBeUpserted` 检查覆盖可能已被另一个 CN 显式 writer 占用的旧租约，临时表沿用既有例外；缺少 txn/workspace 不伪造安全结果。
+全部 FK 通过后，最多收集 F 个 witness，按现有 `SortForeignKeyLockTargets` namespace 次序调用保留 refresh/retry 的 `LockRows`。成功后才发布 accepted keys 和输出。parent DELETE/key UPDATE 使用对应 base/hidden exclusive namespace；非唯一引用锁住一个仍存在的 witness 即可维持存在性。**删除无条件共享父表锁**；仍遵循既有锁升级、deadlock 和 retry 机制，不承诺升级之后无关写入永不等待。
 
-锁触发 snapshot refresh/retry、历史检查失败、输出分配失败均不能提交已接受的私有映像；重试/rollback 清理所有 maps，已消费 lease 不回收。不能声称仅看 LAST_INSERT_ID 或主表 count 就证明 index 与锁正确。
+## 6. Wire 与资源生命周期
 
-## 6. 精确 wire 契约与版本兼容
+最低能力 **MORPC 119**；published 114–118 的含义保持 main 原样。发送端、接收端及实际目标 CN 均执行能力拒绝，不能丢弃新字段后走旧 scalar 语义。
 
-最低能力为 **MORPC 114**；112 已归 signed WEEK/DAYOFYEAR，113 已归 DECIMAL variance/stddev 的 DOUBLE 结果 ABI，不能复用。当前 schema 对既有 messages 是 **7 个字段**，不是 PR 早期正文中的六个；另有两个新 messages。
-
-| producer / 字段号 | 内容与 consumer |
+| message / 字段 | 用途 |
 |---|---|
-| plan.PreInsertCtx 15 / 16 | `check_eligibility` / `defer_auto_increment` → compile PRE_INSERT |
-| pipeline.PreInsert 19 / 20 | 上述两字段的 operator wire → receiver PRE_INSERT |
-| plan.PreInsertUkCtx 19 | `row_eligibility` → arbiter 输入资格列 |
-| plan.PreInsertUkCtx 20 | `ordered_auto_increment` → table/epoch/column/VALUES 预算/FK |
-| plan.PreInsertUkCtx 21 | `ordered_foreign_keys` → 无 AUTO_INCREMENT 的 self-FK arbiter |
+| plan.PreInsertCtx 15 / 16 | check_eligibility / defer_auto_increment |
+| pipeline.PreInsert 19 / 20 | 上述 operator wire |
+| plan.PreInsertUkCtx 19 / 20 / 21 | row_eligibility / ordered_auto_increment / ordered_foreign_keys |
+| OrderedForeignKey 7 | parent_access：kind、真实 lookup ref/table、filter、base-PK selector、lock target、witness expression |
+| pipeline.PreInsertUnique 2 | 固定 txn_offset |
 
-`OrderedAutoIncrement` 字段 1–5：ref、table_def、column_index、values_rows、foreign_keys；`OrderedForeignKey` 字段 1–6：ref、table_def、child_columns、parent_columns、predicate、self_parent_columns。child/self positions 是最终物理输入位置；parent positions 是 parent TableDef ordinals，predicate relation 1 为待绑定 child tuple slot。Deepcopy、引用收集、pruning/remapping、encode/decode 必须同改；不能只追加 protobuf。
+OrderedAutoIncrement 既有 1–5 字段和 OrderedForeignKey 1–6 字段保留。新 access kind 只能是 PK_POINT、UNIQUE_POINT、RESIDENT；unspecified/unknown、缺失元数据、错误 namespace/列界、负 offset 在共享校验边界拒绝。local Prepare、remote sender/receiver 共用 `ValidateOrderedInsertIgnore`；输入 batch 的实际列界仍由执行器检查。旧 eager AutoIncrementReorder wire 保留，新 ordered spec 同时带该 flag 是有效形状；无 spec 的 eager+eligibility 混合形状不由 planner 产生，应拒绝。
 
-发送 encoding 及 receiver instruction admission 用 `validateRemoteInsertIgnoreEligibilityProtocol`；发送前递归 pipeline 校验再通过 `validateRemoteInsertIgnoreEligibilityDestination` 查实际 Node.Id/Addr。任一 metadata 存在即要求 114；未知/缺失能力或低版本拒绝，不能因为本机 latest=114 就推断 worker 也支持。缺失 metadata 的普通旧路径保持既有契约；格式错误由 operator validation/运行列界检查失败。
+没有新的 WAL/catalog 格式，也不持久化 cursor、JoinMap 或 capability。混版要先升级参与执行的 CN；降级先 drain 在途语句和 prepared contexts，allocator 高水位不回退。
 
-不新增 WAL/catalog/storage schema。这些字段是执行计划/临时 operator 数据，不能在旧 CN 上丢字段后继续执行，也不跨重启恢复 Runs/maps/prepared execution。降级不转换在途计划。
-
-## 7. 资源、复杂度与安全预算
-
-令 N 为待处理行、A 为接受行、U 为参与唯一键数、F 为 ordered FK 数、T≤F 为不同父表数、R 为当前租约段数、P 为一次查找最坏需读的父表行、W 为相关键/tuple 宽度。
-
-| 资源 | 峰值/代价、owner、终止 |
+| 资源 | 分配和终态 |
 |---|---|
-| 私有候选段 | O(R)，非逐 ID 对象；R≤请求 Count。未知流 Count≤65535，VALUES Count≤已解析输入行数；mpool-backed stream 在 exhausted 时复用/compact，Reset/Free 释放 |
-| 临时 request.Runs | Go heap O(R)，一次同步申请存活；部分结果仅由 caller 持有，**不宣称全部 Go heap 都已纳入 mpool admission**；不能把上述上界说成常数空间 |
-| PK/UK 与 self-parent sets | O(A·U·W + A·F·W)，复用 hashAllocation/mpool admission，resize 峰值含旧+新容量；容量错误终止；Reset/Free 释放 |
-| FK 固定缓存/tuple/executor | O(F·W + predicates)，末次 point cache O(F)；部分初始化立即挂到 operator，失败也能清理 |
-| FK reader 工作区 | 一个 lookup 同步完成才开始下一 lookup；读批次遵循 engine 现有 batch/byte admission，Close + batch/executor Free；不跨行保留整个父表 |
-| table locks | 至多 T 组本路径共享父锁，归 txn；ctx/deadlock/retry/txn end 终止等待与所有权 |
-| 输出 | 一个正常批次 O(batch rows·row width)，借用输入不 shrink，最终 PK 只构造一次 |
-| 分配 I/O | 按实际 cache/需求块摊销，拒绝生成候选不要求每行新的 allocator txn；显式接受仍可能有推进 I/O |
+| 租约流、accepted keys、自引用 overlay | 原 arbiter owner；ordered 路径激活既有 statement allocation account，实际容量准入；失败不回收已消费租约 |
+| resident parent | HashmapBuilder 共用同一 account；append 完成后再推进 retained row count；finish 成功才转移 JoinMap、row count 和一个引用 |
+| reader / build 临时状态 | 同步调用拥有；BuildReaders 部分成功亦关闭全部 reader；读取、关闭、表达式、取消和预算错误均向上传递，不伪装成 FK miss |
+| published JoinMap | 通过 IteratorClearOwner 释放已记账 scratch 并解除 iterator，再 Free map；ready-empty 避免空表反复构建；Reset/Free 后旧 map 不跨 attempt |
+| tuple、executor、witness | F 组有界 probe scratch；partial preparation 失败立即清理；先清除全部 operator 资源，再 ClearAllocationAccount |
 
-ordered FK 的最坏读取是 **O(N·F·P)**，不是保证 O(N·F) 的索引点查。完整 PK equality/序列化复合 PK 可帮助 pruning，但没有专用新 FK 索引，也没有每个 probe 的固定扫描行数上限；通过既有 query admission、deadline/cancellation、engine 批次预算终止工作，不静默跳过大型父表。父表锁生命周期与长事务相同，不只持续一行。
+正常 attempt 的父读取是 `Σ(需要 resident 的父行) + qualified native point work`，probe 随到达的 N·F 增长。resident 内存随最小父 projection 增长，由现有 statement/CN 预算准入；不足时 statement 失败并回滚。它不是无界隐式缓存，也没有自建 queue、worker、第二份 accepted 状态或 spill 状态机。普通 DQL/DML 和普通非有序 FK 不构建该状态；共享 PK guard 和 Fold preparation 是移动现有 owner 的实现。
 
-接受这些可测成本，而不是编造常数 I/O 或端到端提速。普通非有序 FK/path 不应被新增 probe/table-lock 覆盖；该 guard 是成本的第一隔离边界。运维容量评估必须包括 Go heap transient Runs、native hash resize 峰值及长 txn lock wait，而不是只报 B/op。
+## 7. 本次验证与可复核边界
 
-本期不新增每行日志、无界缓存、后台 queue 或线程。租户/身份/表权限沿用 binder 与 existing authenticated pipeline/process context；parent metadata 来自合法 FK 绑定，relation lookup 仍使用同一 txn/context，不新开跨租户 privileged SQL。执行元数据属于可信 compiler/远端执行协议，不是用户可直接提交的 SQL API；版本和列界拒绝不代替既有鉴权。
+当前 normal/native receipts 使用 Go 1.27.1、darwin/arm64、GOMAXPROCS=4；复用经过 provenance 核对的 native artifacts，无全仓构建或重复 race stress。
 
-## 8. 上线、回退、恢复与观测
+- 首轮 8 个完整 normal owning packages：512 个 root tests 通过，覆盖 defines、两个 protobuf 包、incrservice、preinsert、preinsertunique、tree、readutil。最终修正后 plan/compile/preinsertunique 三个完整包另以 5378 个 root tests 通过；未改动包的证据复用。
+- `TestOrderedForeignKeyResidentWorkAndCleanup`：P=64 时 N=1/8/32 均只读 64 行；P=1024/N=32 单 FK 读 1024 行、双 FK 读 2048 行。还覆盖空表、重复与全唯一 tuple、8195 行跨标准 chunk、partial reader/close/预算失败；关闭和 account release 均检查。
+- 同一 authenticated one-CN fixture 通过 PK/UNIQUE/非唯一前缀、自引用复合与 Unicode、prepared reuse、FK-setting 控制、LOAD IGNORE、实际行/ID/affected rows/rollback 验证。
+- 最终 QA 红绿验证：LOCAL 原 ASSERT/profile 组合实际提交了 2 个 CHECK-invalid 行，NaN accepted-self 实际多接受了 1 行；修复后实际 LOCAL 行/ID/每行 CHECK warning、普通 LOAD 与 LOCAL REPLACE 失败无写入、NaN/有符号零通过。额外的 committed Unicode parent 查找暴露并修复了 consumer iterator 的记账 scratch 清理；不使用仅 nil 掉引用替代 owner release。
+- 九个真实并发场景：精确 base/hidden namespace 的 `mo_locks()` waiter 作 barrier；无关 parent UPDATE 在 child holder 释放前完成；双向取消后无子行提交、无遗留 waiter；删除 parent 后重试必须弃用旧 witness。重试允许新 lease/ID，不要求重用已消费号码，最终逐行验证无 orphan。
+- 12 个小型 public SQL workload：P=64/1024 × N=1/8/32 × ordinary/ordered。fixture/DDL/oracle 不计时；本轮 SQL execution 为 7.875–11.391ms。它们是 warm in-memory 单次诊断，不是历史旧二进制对比、冷盘、多 CN、吞吐或 p99 资格。owner work counters 也不冒充持久块或物理 I/O counters。
 
-- 无新配置开关，planner 的 eligibility 与 114 capability 是准入。先升级执行相关 CN，再放行命中该路径的 workload；旧 direct CN 仍有旧语义，不承诺升级期间任意入口一致。可以先停止旧入口/定向到升级入口；不能仅改本机 latest 值冒充全量升级。
-- 先运行本文矩阵、协议 rejection 和真实多 CN 功能检查，再对有 ordered FK 的代表性 workload 观察 allocator 请求数、reader rows/bytes、native/Go 峰值、锁等待/取消尾部。锁/读取代价超过既有资源预算时暂停该 workload 的扩大，不取消约束或降级成丢 metadata 路径。
-- 启用后没有 rollback migration：停写并 drain 新执行/txn，结束 prepared contexts 后可回旧 binary；持久 allocator 高水位不回退。旧版本重新运行将恢复原 compatibility gap，必须明确是功能回退，不宣称同一结果。
-- restart/backup/restore 只沿用已有数据和 allocator 持久高水位；未用 leased slots 和私有 maps 丢弃，允许洞。禁止把 transient stream 纳入备份或恢复后复用。无新的 schema/WAL format，但现有 AUTO_ID_CACHE/epoch 等独立版本要求仍适用。
-- 复用 query/operator analyzer、allocator 请求、mpool/account 错误和 lock-service 诊断。没有新增专属生产指标；定位时保留 head/plan、版本、txn snapshot/lease TS、查询取消或 retry 类型。不能把错误重试后 count 正确当作无争用证明。
+增量 normal consumer closure、一次 focused race、configured incremental SCA 和最终独立实现审查由 PR 的当前验证记录收口；历史 r2 的 540 SQL/72 contention 样本仅用于说明本次消除的旧退化。没有运行旧 CN binary 或新的多 CN 部署，不将单 CN wire tests 报成真实混版测试。新 GitHub CI 仍以当前 head 的 checks 为准。
 
-## 9. 确定性验证与证据分层
+## 8. 决策与维护成本
 
-| 不变量/边界 | 最便宜的独立 oracle |
-|---|---|
-| reservation ownership/series/bounds | `TestStatementReservation`、`TestStatementReservationSessionSeries`、`TestStatementReservationConcurrentOwnership`；enumeration 对照整数界、step/offset、无交集 |
-| cancel/retire/partial failure | `TestStatementReservationWaitLifecycle`、`TestStatementReservationPartialFailure`、`TestStatementReservationTypedTableBoundary`；barrier 注入、已消耗段不归还、准确错误类型 |
-| CHECK 选行及借用输入 | `TestPreInsertDeferredCheckSelection`，零/全/部分资格、pool cleanup 与输入不变 |
-| 最终候选/显式推进/溢出 | `TestOrderedAutoIncrementAllocation`、malformed context 控制；tinyint、session series、先拒绝后接受、across batches |
-| FK reader 与 residual | `TestOrderedForeignKeyProbe`；返回行不匹配、NULL、read/range/build/eval error、reader Close |
-| current self / accepted parent | `TestOrderedForeignKeyCurrentRow`、`TestOrderedSelfReferenceCompositeTuple`；完整 tuple、当前行、自根/后继、拒绝 parent、未投机发布 |
-| logical→physical 与消费者 | plan owning UT、deepcopy/remapping、最终 LOCK_OP ordinal 与 indexes，共用接受行而非临时 ID |
-| protocol | `TestInsertIgnoreEligibilityRemoteProtocol`：encode/decode、113 拒绝/114 接受、实际旧 destination、递归和独立 metadata |
-| LOAD/prepared策略 | explicit JSON、两 binder TIME rebind/profile UT，既有 prepared/FK setting 失效矩阵；普通与 LOCAL/IGNORE 相邻控制 |
-| SQL 行/事务/索引 | mo-tester `insert_ignore_constraints.sql`、`insert_ignore_reservations.sql`、`issue_25366.sql`、`external_time_assignment.sql`；准确值、错误/零提交、cleanup、同实例第二轮 |
+保留原 lease-transfer/allocator/cache retirement、final-ID cursor、CHECK materialization 和原唯一接受 owner。查找描述只保存 planner 作出的物理访问决定；TxnOffset 保护 statement view。同步 build 消费现有预算/hash/refcount；witness 消费现有 row lock/retry。这些增量分别消除重复全扫、过宽锁和旧视图复用风险，不创建通用在线 spill 字典或另一套事务协议。
 
-共享 fixture 的各场景恢复 session/runtime/global 状态；资源成功获取后立即登记清理，FailNow/ctx cancellation 同样执行；不新增 sleep、skip 或大数据概率 witness。allocator shared-state 改动需 focused race（按测得耗时决定重复次数）及 owning race；跨 CN 要检查真实 final row/PK/UK/FK 和 lease 不相交，不只比 count。
-
-### 可追溯的已知证据与缺口
-
-- 实现 head `6bbac78364` 的 [CI run 38531158789](https://github.com/matrixorigin/matrixone/actions/runs/38531158789)：Ubuntu UT、SCA、PROXY BVT、pessimistic BVT、coverage、CI Required 成功；不是设计批准。skipped Darwin/upgrade jobs 不计通过。
-- 相同 source tree 的本地 owning 8 包、静态检查、build 与上述 4 个 SQL 各两轮已通过（每轮 59/121/95/128），本地日志不在 Git 中；不能要求外部 reviewer 仅凭本机路径复核。
-- PR 早期正文报告 allocator race 100 次、MySQL 8.4.11、16,384 输入的真实 two-CN 结果；它们没有在 reviewer 的冻结输入中携带 receipts，本文只标为**作者报告、待独立验证证据**，不升级为独立通过。
-- 未部署旧版本 CN binary；混版现有证据是确定性 codec/admission rejection，不宣称真实 upgrade/topology 演练通过。
-- r2 已提供 [生产入口对照与逐样本附件](CLAUDE_INSERT_IGNORE_FK_BENCH_30107.md)；baseline `17a6200f59e764729e5544908fffd5480ae88279`，head `b812d7b6b3`。两端各 270 个成功 SQL 样本及 36 个争用样本；源代码不含运行期 benchmark hook，插桩仅存在于独立测量产物且已还原。旧 #28349 benchmark 仍不能替代本次证据。
-
-上线接受条件：功能与 terminal/resource 矩阵非空且真实退出成功；变更代码覆盖率≥75%；所有真实失败可清理且无 partial publication；所需 race/真实 topology receipts 能被复核；mixed-version refusal 保持；allocator 仍按块请求，probe 工作区不会随 N 累积父表数据，pool/ctx 的容量和取消路径有效。ordered FK 的扫描量、锁等待和峰值已由下节补齐，但测量揭示真实成本放大；**未获得对以下限制/权衡的独立接受前，不声明默认大批量路径或全面生产 rollout 就绪**。
-
-### 9.1 r2 性能资格：测得的代价与待接受限制
-
-工具为 [有界 SQL 驱动与方法](../../optools/insert_ignore_fk_bench/CLAUDE_README.md)，fixture/计量代码可重跑；完整 540 个 SQL 与 72 个锁样本见附件，而不是仅给不可访问的 `/tmp` 日志。相同 Go 1.27.1 / darwin-arm64 / GOEXPERIMENT=simd、单 CN/TN/LOG、GOMAXPROCS=2、GOGC=50；父表显式 flush，**允许缓存，不是冷盘测试**。执行、commit 分开计时，DDL/fixture/oracle 不计入吞吐。存在其它构建负载，绝对延迟与两端比值有时序噪声，不能声称统计等价、多 CN 或 p99。
-
-以下是 P=4096、N=256、F=1、INSERT IGNORE 的三次中位数（ms），逻辑 reader 行数为 residual 前的实际返回量：
-
-| 路径 | base / head 执行 ms | base / head reader rows | head batch bytes | head storage-layer bytes（含缓存） |
-| --- | --- | --- | --- | --- |
-| ordinary-FK 控制 | 13.967 / 13.235 | 4096 / 4096 | 32768 | 16417 |
-| auto PK FK | 13.870 / 20.894 | 4096 / 1048576 | 8388608 | 4202752 |
-| auto 非主 UNIQUE FK | 14.569 / 31.336 | 4096 / 1048576 | 8388608 | 4202752 |
-| auto 复合非主 UNIQUE FK | 66.376 / 64.696 | 4096 / 1048576 | 16777216 | 4249600 |
-| 非 auto 复合 self-FK | 310.723 / 275.648 | 12800 / 1052672 | 16809984 | 8432161 |
-
-不能只挑 INSERT 的较好结果：**self-composite / P4096 / N256 / LOAD IGNORE** 的 base 样本为 10.953/4.319/4.956ms，head 为 270.913/386.453/464.742ms，中位比 **77.98x**；对应逻辑读取由 8704 增至 1052672 行。LOCAL 同规模中位比 **8.70x**，最慢 head 样本 **636.342ms**。这是本次实测的吞吐退化，不再仅是理论验证缺口，不能用绿色 CI 或其它组合更快来抵消。
-
-父写实验更新未引用的父行：baseline 和 ordinary 控制均不等待；head 三类 auto FK 的 27 个样本均通过公共 `mo_locks()` 确认真实等待，证明 shared table lock 带来额外串行化。holder commit 后完成范围 **12.025–55.862ms**；取消被阻塞父 writer **0.382–4.707ms**，反向取消被父写阻塞的 child **0.406–4.196ms**，均返回 `(1317, context canceled)`，取消 child 零提交。三次观察的 max 不是 tail percentile，也不限制用户刻意延长事务造成的总等待。
-
-allocator store requests 在所有计量窗口均为 **0**，因为独立 CREATE/seed 已预分配；它证明该 warm-cache fixture 没有窗口内逐行 store 请求，**不证明冷 miss/耗尽时零请求**。进程采样峰值 base/head RSS **462.281/738.312MiB**、heap objects **338.767/347.885MiB**；包含服务/native/cache/历史 DDL，不能归因成每语句增量或据此断言泄漏/精确 native 峰值。
-
-**接受提案而非已批准 SLO：**本轮只建议审查“小批、正确性优先”的单 CN、单约束范围：每语句候选 **N≤64**，父 footprint **P≤4096**，**F=1**，应用禁止长事务持有该 parent table lock、与热 parent 写入口隔离。该子矩阵实际最大执行 **111.591ms**、逻辑 rows **266240**、batch bytes **4227072**、storage-layer bytes **2120353**。建议预算为每语句执行 ≤250ms、逻辑 batch bytes ≤5MiB、storage-layer bytes ≤3MiB；取消/释放 trigger→completion ≤100ms；隔离服务 RSS ≤1GiB。它们是供独立 reviewer 决定的工程预算，不是预先声明并统计验证的生产承诺。
-
-- **N256 大批量、F>1、大父表、长事务/热父写、冷 I/O、多 CN 不在接受提案中**；N256 是暴露放大效应的诊断规模，不因运行成功而获得资格。
-- planner 当前没有执行期规模阈值/feature flag，以上只是部署/应用准入要求，**不是已实现的自动保护**。无法约束入口时，应暂停该 rollout；不得退回会丢候选的旧 FK 路径、关闭 FK 检查或自动拆分语句改变原子性/发号语义。
-- 若要默认开放大 bulk，需另行设计并独立批准批量 parent lookup / 有界缓存 / 更细粒度保护的等价性、所有权、排序/NULL/collation/self 可见性及 unhappy-path，再实现并重测。本轮不在设计门禁未 PASS 前暗中引入该架构扩展。
-- r2 的结论是**比较证据已补齐、粗锁及放大成本已量化；大 bulk 性能资格未通过、小批预算等待独立接受**。不提前 resolve 性能设计线程。
-
-## 10. 实现索引与决策记录
-
-- [reservation](../../pkg/incrservice/statement_reservation.go)、[unused saturation](../../pkg/incrservice/unused_reservation.go)、[table admission/lifecycle](../../pkg/incrservice/table_cache.go)：消费/transfer owner 与失败不回收。
-- [planner eligibility/final locks](../../pkg/sql/plan/bind_insert.go)、[资格/ordered FK](../../pkg/sql/plan/insert_ignore_candidates.go)、[physical remap](../../pkg/sql/plan/query_builder.go)、[deepcopy](../../pkg/sql/plan/deepcopy.go)。
-- [PRE_INSERT](../../pkg/sql/colexec/preinsert/preinsert.go)、[CHECK buffer](../../pkg/sql/colexec/preinsert/check_reservations.go)、[row acceptance](../../pkg/sql/colexec/preinsertunique/preinsertunique.go)、[candidate/TS](../../pkg/sql/colexec/preinsertunique/ordered_auto_increment.go)、[FK reader/self](../../pkg/sql/colexec/preinsertunique/ordered_foreign_key.go)、[cleanup](../../pkg/sql/colexec/preinsertunique/types.go)。
-- [schema](../../proto/plan.proto)、[operator schema](../../proto/pipeline.proto)、[三向 gate](../../pkg/sql/compile/remoterun.go)、[LOAD decoder](../../pkg/sql/compile/compile.go)。生成文件由工具维护，不手写 descriptor。
-
-| 决策 | 理由/代价 |
-|---|---|
-| 共享 lease 不回滚；statement cursor 私有 | 保证跨 CN 独占，错误/重试留洞；不追求全局连续 |
-| 只提前独立 CHECK，普通 FK 保持批路径 | 单次求值和来源不丢失，避免扩大 I/O blast radius |
-| 有序 FK 完整 residual + 当前/已接受 self 可见性 | 不依赖 pruning 的假阳性；只缓存固定最后值与实际接受 parent |
-| pessimistic shared parent table locks | 用既有并发保护换取写争用；不宣称更细粒度或绝无 deadlock |
-| 最终输出后 PK lock + lease TS 检查 | 不锁临时 NULL、不制造未验证号码；失败使用既有 txn retry |
-| 114 三向拒绝而非降级丢字段 | 混版不能 silent orphan/错误 ID 映射；没有新的存储 migration |
-
-设计级阻塞：**本文精确修订尚待独立设计审查/PASS**。功能代码不能因补了一份文档就自动获批。benchmark 已补件但发现的 bulk 退化及小批预算仍待权衡接受；旧 binary / topology / race receipts 的其余缺口由 PR 作者与实现 reviewer 在 rollout 决策前处理，它们不是本文暗中承诺的成功结果。r2 的协议号重分配与性能预算须独立复审，不能沿用 r1 的任何认可替代新决策审查。
+后续真实 workload 若要求超预算磁盘查找，应另行设计可寻址的磁盘 lookup owner，不能把普通异步 JOIN spill 的单消费者 move-only payload 当随机访问缓存。本次没有隐藏 legacy fallback，也没有把旧 r2 小批 envelope 作为未执行的上线约束。

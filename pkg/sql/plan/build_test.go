@@ -6343,7 +6343,7 @@ func TestLoadCheckConstraintPolicy(t *testing.T) {
 			{"inline_ignore", "load data inline format='csv', data='1,Sales,NY' ignore into table %s fields terminated by ','", true, true, true, 0},
 			{"local_ignore", "load data local infile 'client.csv' ignore into table %s fields terminated by ','", true, true, true, 0},
 			{"plain", "load data inline format='csv', data='1,Sales,NY' into table %s fields terminated by ','", false, true, false, 1},
-			{"local_without_ignore", "load data local infile 'client.csv' into table %s fields terminated by ','", false, true, true, 0},
+			{"local_without_ignore", "load data local infile 'client.csv' into table %s fields terminated by ','", true, true, true, 0},
 			{"insert_ignore", "insert ignore into %s values (1,'Sales','NY')", true, false, true, 0},
 		} {
 			t.Run(table+"/"+tc.name, func(t *testing.T) {

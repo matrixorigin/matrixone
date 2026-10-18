@@ -291,7 +291,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		},
 		&preinsert.PreInsert{},
 		&lockop.LockOp{},
-		&preinsertunique.PreInsertUnique{},
+		&preinsertunique.PreInsertUnique{PreInsertCtx: &planpb.PreInsertUkCtx{Columns: []int32{0}, PkColumn: 0, PkType: types.T_int64.ToType().PlanType(), UkType: types.T_int64.ToType().PlanType()}},
 		&shuffle.Shuffle{},
 		&dispatch.Dispatch{},
 		&group.Group{},
@@ -368,7 +368,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Insert), Insert: &pipeline.Insert{}},
 		{Op: int32(vm.PreInsert), PreInsert: &pipeline.PreInsert{}},
 		{Op: int32(vm.LockOp), LockOp: &pipeline.LockOp{}},
-		{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{}},
+		{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{PreInsertUkCtx: &planpb.PreInsertUkCtx{Columns: []int32{0}, PkColumn: 0, PkType: types.T_int64.ToType().PlanType(), UkType: types.T_int64.ToType().PlanType()}}},
 		{Op: int32(vm.Shuffle), Shuffle: &pipeline.Shuffle{}},
 		{Op: int32(vm.Dispatch), Dispatch: &pipeline.Dispatch{}},
 		{Op: int32(vm.Group), Agg: &pipeline.Group{}},
@@ -5529,4 +5529,15 @@ func TestRemoteStatementSendErrorPreservesCauseWithoutMaskingInvariant(t *testin
 			}
 		})
 	}
+}
+
+func TestPreInsertUniqueRejectsMissingRemoteContext(t *testing.T) {
+	proc := testutil.NewProc(t)
+	arg := preinsertunique.NewArgument()
+	defer arg.Release()
+	defer arg.Free(proc, false, nil)
+	_, _, err := convertToPipelineInstruction(arg, proc, &scopeContext{}, 0)
+	require.ErrorContains(t, err, "missing pre-insert unique context")
+	_, err = convertToVmOperator(&pipeline.Instruction{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{}}, &scopeContext{}, nil)
+	require.ErrorContains(t, err, "missing pre-insert unique context")
 }

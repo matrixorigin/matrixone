@@ -236,6 +236,7 @@ func (preInsertUnique *PreInsertUnique) freeAcceptedState(proc *process.Process)
 	}
 	for i := range preInsertUnique.ctr.ordered.foreignKeyResults {
 		state := &preInsertUnique.ctr.ordered.foreignKeyResults[i]
+		hashmap.IteratorClearOwner(state.iterator)
 		state.iterator = nil
 		if state.lookup != nil {
 			state.lookup.free(proc)
