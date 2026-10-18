@@ -3286,10 +3286,8 @@ class SnapshotClient:
 
         snapshot_sql = re.sub(pattern, replace_func, sql, count=1)
 
-        # Handle parameter substitution for MatrixOne compatibility
-        final_sql = self.client._substitute_parameters(snapshot_sql, params)
-
-        return self.client.execute(final_sql)
+        # The execution connection owns mode-sensitive parameter rendering.
+        return self.client.execute(snapshot_sql, params)
 
 
 class Session(SQLAlchemySession):
