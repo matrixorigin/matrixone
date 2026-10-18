@@ -335,7 +335,7 @@ func (s *Source) Next(ctx context.Context, readerID, position int) (bat *batch.B
 			return nil, true, moerr.NewInternalErrorNoCtx("invalid materialized sink reader")
 		}
 		if position >= 0 && position < len(s.batches) {
-			bat, err = s.batches[position].Dup(s.mp)
+			bat, err = cloneMaterializedBatch(s.batches[position], s.mp, s.allocation)
 			s.mu.Unlock()
 			return bat, false, err
 		}

@@ -259,7 +259,9 @@ type container struct {
 	batches       []*batch.Batch
 	batchRowCount int64
 
-	exprExecs []colexec.ExpressionExecutor
+	exprExecs         []colexec.ExpressionExecutor
+	updateExpressions func(*process.Process, *batch.Batch, *batch.Batch) ([]*vector.Vector, error)
+	updateSuspended   bool
 
 	joinBat1 *batch.Batch
 	cfs1     []func(*vector.Vector, *vector.Vector, int64, int) error
@@ -339,14 +341,18 @@ type DedupJoin struct {
 	DedupDeleteKeepColIdxList []int32
 	UpdateColIdxList          []int32
 	UpdateColExprList         []*plan.Expr
-	HasODKUAffectedRows       bool
-	AffectedRowsResultPos     int32
-	PhysicalChangedResultPos  int32
-	UpdateCheckColIdxList     []int32
-	CountFoundRows            bool
-	EmitActionRows            bool
-	ActionFinalResultPos      int32
-	ForeignKeyChecks          []ODKUForeignKeyCheck
+	// UpdateExpressions evaluates one ordered action against its current row
+	// image. A nil result requests ExecYield without publishing that action.
+	// Results remain borrowed until the next invocation or operator cleanup.
+	UpdateExpressions        func(*process.Process, *batch.Batch, *batch.Batch) ([]*vector.Vector, error)
+	HasODKUAffectedRows      bool
+	AffectedRowsResultPos    int32
+	PhysicalChangedResultPos int32
+	UpdateCheckColIdxList    []int32
+	CountFoundRows           bool
+	EmitActionRows           bool
+	ActionFinalResultPos     int32
+	ForeignKeyChecks         []ODKUForeignKeyCheck
 
 	// OldColCapturePlaceholderIdxList / OldColCaptureProbeIdxList are parallel
 	// arrays. For each i, when probe hits a build bucket the probe-side column
@@ -511,6 +517,7 @@ func (dedupJoin *DedupJoin) Reset(proc *process.Process, pipelineFailed bool, er
 	ctr.cleanEvalVectors()
 	ctr.roundStatusPublished = false
 	ctr.state = Build
+	ctr.updateSuspended = false
 	ctr.lastPos = 0
 }
 

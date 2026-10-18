@@ -1509,3 +1509,44 @@ func TestTimeWinGroupConcatTruncationDiagnostic(t *testing.T) {
 	require.Equal(t, uint64(1), sink.total)
 	arg.Free(proc, false, nil)
 }
+
+func TestTimeWindowBoundsBudgetFailureAndReuse(t *testing.T) {
+	op := NewArgument()
+	defer op.Release()
+	for _, limit := range []uint64{8, 1 << 20, 1 << 20} {
+		func() {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			shared := process.MustNewExecutionResourceBudget(limit, limit)
+			budget, err := shared.OpenGeneration(1)
+			require.NoError(t, err)
+			defer shared.Close()
+			defer budget.Close()
+			require.NoError(t, proc.SetExecutionResourceBudgetForTesting(budget))
+			registry, err := mpool.NewAllocationAccountRegistry(1, 128)
+			require.NoError(t, err)
+			account, err := registry.OpenWithController(1<<20, budget)
+			require.NoError(t, err)
+			require.NoError(t, op.SetAllocationAccount(account))
+			defer func() {
+				op.Reset(proc, false, nil)
+				op.Free(proc, false, nil)
+				require.NoError(t, op.ClearAllocationAccount(account))
+				require.Zero(t, budget.Used())
+				require.Zero(t, account.Snapshot().Used)
+			}()
+			err = op.ctr.appendWindowBounds(proc, 1, 2)
+			if limit == 8 {
+				require.Error(t, err)
+				require.Equal(t, uint64(8), budget.Used())
+				require.Nil(t, op.ctr.wEnd)
+				return
+			}
+			require.NoError(t, err)
+			require.NoError(t, op.ctr.appendWindowBounds(proc, 3, 4))
+			require.Equal(t, []types.Datetime{1, 3}, op.ctr.wStart)
+			require.Equal(t, []types.Datetime{2, 4}, op.ctr.wEnd)
+			require.Equal(t, uint64(32), budget.Used())
+		}()
+	}
+}
