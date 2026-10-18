@@ -67,6 +67,9 @@ func (tableFunction *TableFunction) Call(proc *process.Process) (vm.CallResult, 
 				if err != nil {
 					return input, err
 				}
+				if input.Status == vm.ExecYield {
+					return input, nil
+				}
 				tableFunction.ctr.inputBatch = input.Batch
 				if input.Batch.IsDone() {
 					// End of Input

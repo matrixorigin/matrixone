@@ -51,9 +51,11 @@ type container struct {
 }
 
 type TableScan struct {
-	ctr            container
-	TopValueMsgTag int32
-	Reader         engine.Reader
+	// OutputAllocation belongs to the caller execution and is installed before reading.
+	OutputAllocation *vector.AllocationAccountSelection
+	ctr              container
+	TopValueMsgTag   int32
+	Reader           engine.Reader
 	// letter case: origin
 	Attrs              []string
 	Types              []plan.Type
