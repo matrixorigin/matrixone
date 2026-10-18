@@ -178,7 +178,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
 	}
 	if features.IncompleteTemporalStrings {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion119)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion120)
 	}
 	return requiredVersion, nil
 }

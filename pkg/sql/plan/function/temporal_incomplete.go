@@ -208,6 +208,10 @@ func stringCalendarTotal(ivecs []*vector.Vector, result vector.FunctionResultWra
 	}
 	source := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[int64](result)
+	unit, offset := intervalUnitDAY, int64(ADZeroDays)
+	if seconds {
+		unit, offset = intervalUnitSECOND, ADZeroSeconds
+	}
 	for i := uint64(0); i < uint64(length); i++ {
 		if functionRowSkipped(selectList, i) {
 			if err := rs.Append(0, true); err != nil {
@@ -244,10 +248,7 @@ func stringCalendarTotal(ivecs []*vector.Vector, result vector.FunctionResultWra
 			}
 			continue
 		}
-		n := DateTimeDiff(intervalUnitDAY, types.DatetimeEpoch, dt) + ADZeroDays
-		if seconds {
-			n = DateTimeDiff(intervalUnitSECOND, types.DatetimeEpoch, dt) + ADZeroSeconds
-		}
+		n := DateTimeDiff(unit, types.DatetimeEpoch, dt) + offset
 		if err := rs.Append(n, false); err != nil {
 			return err
 		}

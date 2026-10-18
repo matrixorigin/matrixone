@@ -35,7 +35,7 @@ func TestIncompleteTemporalExecutionStreamControls(t *testing.T) {
 	for _, name := range []string{"typed week", "typed to_days", "literal"} {
 		t.Run(name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
-			client.version = defines.MORPCVersion119
+			client.version = defines.MORPCVersion120
 			fn := "week"
 			if name == "typed to_days" {
 				fn = "to_days"
@@ -55,7 +55,7 @@ func TestIncompleteTemporalExecutionStreamControls(t *testing.T) {
 
 func TestIncompleteTemporalExecutionStreamNestedAndFolded(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
-	client.version = defines.MORPCVersion119
+	client.version = defines.MORPCVersion120
 	scope := incompleteTemporalStreamScope(t, c, "week", types.T_varchar)
 	expr := scope.RootOp.(*projection.Projection).ProjectList[0]
 	mode := makeTestVarExprWithType("week_mode", types.T_int64.ToType())
@@ -69,7 +69,7 @@ func TestIncompleteTemporalExecutionStreamNestedAndFolded(t *testing.T) {
 	data, _, _, folded, err := prepareRemoteRunSendingDataWithProtocol("", outer, c.proc, nil, uuid.Nil, &required)
 	require.NoError(t, err)
 	require.True(t, folded)
-	require.Equal(t, defines.MORPCVersion119, required)
+	require.Equal(t, defines.MORPCVersion120, required)
 	var wire pipeline.Pipeline
 	require.NoError(t, wire.Unmarshal(data))
 	require.Len(t, wire.Children, 1)
@@ -80,8 +80,8 @@ func TestIncompleteTemporalExecutionStreamNestedAndFolded(t *testing.T) {
 func TestIncompleteTemporalExecutionStreamComposesWithVector(t *testing.T) {
 	c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}})
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
-	client.version = defines.MORPCVersion119
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+	client.version = defines.MORPCVersion120
 	scopes, err := c.compileIndexSearchScan(vectorPlacementNode())
 	require.NoError(t, err)
 	t.Cleanup(func() { ReleaseScopes(scopes) })
@@ -95,5 +95,5 @@ func TestIncompleteTemporalExecutionStreamComposesWithVector(t *testing.T) {
 	combined.RootOp = temporal.RootOp
 	_, err = encodeRemoteScopeWithProtocol(&combined, c.proc, &required)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion119, required, "temporal floor must raise, not replace or lose, the vector requirement")
+	require.Equal(t, defines.MORPCVersion120, required, "temporal floor must raise, not replace or lose, the vector requirement")
 }

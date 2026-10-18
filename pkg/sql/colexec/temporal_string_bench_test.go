@@ -35,7 +35,7 @@ func BenchmarkTemporalStringExpressions(b *testing.B) {
 		{"complete_datetime", "2024-02-29 12:34:56"},
 		{"incomplete_date", "2024-00-00"},
 	} {
-		for _, name := range []string{"date_format", "to_days", "week"} {
+		for _, name := range []string{"date_format", "to_days", "to_seconds", "week"} {
 			b.Run(input.name+"/"+name, func(b *testing.B) {
 				proc := testutil.NewProcess(b, testutil.WithFileService(nil))
 				bat := batch.NewWithSize(1)
@@ -62,6 +62,19 @@ func BenchmarkTemporalStringExpressions(b *testing.B) {
 				result, err := executor.Eval(proc, batches, nil)
 				require.NoError(b, err)
 				require.Equal(b, rows, result.Length())
+				if name == "to_seconds" {
+					want := int64(63876384000)
+					if input.name == "complete_datetime" {
+						want += 12*3600 + 34*60 + 56
+					}
+					for row := 0; row < rows; row++ {
+						incomplete := input.name == "incomplete_date"
+						require.Equal(b, incomplete, result.IsNull(uint64(row)))
+						if !incomplete {
+							require.Equal(b, want, vector.GetFixedAtNoTypeCheck[int64](result, row))
+						}
+					}
+				}
 				b.ReportAllocs()
 				b.ResetTimer()
 				for i := 0; i < b.N; i++ {

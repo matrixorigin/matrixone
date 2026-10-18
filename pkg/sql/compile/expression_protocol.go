@@ -149,7 +149,7 @@ if features.JSONNumericComparisons {
 		required = max(required, defines.MORPCVersion128)
 	}
 	if features.IncompleteTemporalStrings {
-		required = max(required, defines.MORPCVersion119)
+		required = max(required, defines.MORPCVersion120)
 	}
 	return required
 }

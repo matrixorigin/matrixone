@@ -149,8 +149,8 @@ func TestDateNumericPersistedAdmissionAndFoldedView(t *testing.T) {
 		call     string
 		required int64
 	}{
-		{"week('2024-12-31',3)", defines.MORPCVersion119},
-		{"week('2024-12-31')", defines.MORPCVersion119},
+		{"week('2024-12-31',3)", defines.MORPCVersion120},
+		{"week('2024-12-31')", defines.MORPCVersion120},
 		{"week(cast('2024-12-31' as date),3)", defines.MORPCVersion112},
 		{"dayofyear('2024-12-31')", defines.MORPCVersion112},
 	} {
