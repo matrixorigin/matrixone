@@ -440,6 +440,8 @@ func collectScalarSubqueries(expr tree.Expr, subqueries *[]*tree.Subquery) {
 		collectScalarSubqueries(current.Expr, subqueries)
 	case *tree.CastExpr:
 		collectScalarSubqueries(current.Expr, subqueries)
+	case *tree.CollateExpr:
+		collectScalarSubqueries(current.Expr, subqueries)
 	case *tree.BitCastExpr:
 		collectScalarSubqueries(current.Expr, subqueries)
 	case *tree.IntervalExpr:
@@ -2327,10 +2329,12 @@ type UserInput struct {
 	// a leading hint. Nested ANALYZE queries use it to enable hint decoding
 	// without injecting the same rules a second time.
 	rewritePolicyMaterialized bool
-	preparePlan               *plan.Plan // binary protocol execute
-	sqlSourceType             []string
-	isRestore                 bool
-	isBinaryProtExecute       bool
+	// Trusted derived SQL is part of its parent statement authorization.
+	sameStatementAuthorization bool
+	preparePlan                *plan.Plan // binary protocol execute
+	sqlSourceType              []string
+	isRestore                  bool
+	isBinaryProtExecute        bool
 	// preparedDefaultDatabase is captured from COM_STMT_EXECUTE before txn
 	// admission; binary execution passes the inner AST rather than tree.Execute.
 	preparedDefaultDatabase string

@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -59,6 +61,9 @@ func newHnswCreateTestCaseF64(t *testing.T, m *mpool.MPool, attrs []string, para
 			Params: []byte(param),
 		},
 	}
+	mockIndexTxn(t, proc, func(sql string, _ executor.StatementOption) (executor.Result, error) {
+		return hnsw_runSql(sqlexec.NewSqlProcess(proc), sql)
+	})
 	return ret
 }
 

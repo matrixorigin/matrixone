@@ -156,7 +156,7 @@ func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
 		return true
 	}
 
-	if builder.qry.LoadTag || builder.isRestore {
+	if (builder.qry.LoadTag && !builder.checkLoadPrimaryKey) || builder.isRestore {
 		return true
 	}
 
@@ -3414,7 +3414,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			replaceColRefTag(expr, oldSelectTag, selectTag)
 		}
 	} else if builder.canSkipDedup(tableDef) && onDupAction != plan.Node_UPDATE {
-		// load do not handle primary/unique key confliction
+		// Explicit exemptions and LOAD modes without primary-key validation.
 		for i, idxDef := range tableDef.Indexes {
 			if skipUniqueIdx[i] {
 				continue
@@ -3770,7 +3770,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				return 0, err
 			}
 
-			if !idxDef.Unique {
+			// LOAD still maintains index tables, but unique-key conflict handling
+			// is separate from ordinary LOAD's primary-key validation.
+			if !idxDef.Unique || builder.qry.LoadTag {
 				continue
 			}
 
@@ -4414,6 +4416,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if err != nil {
 			return 0, err
 		}
+	}
+
+	var asyncEligible *plan.Expr
+	if onDupAction == plan.Node_UPDATE && physicalChangedRowsInputPos >= 0 {
+		asyncEligible = &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: physicalChangedRowsInputPos}}}
+	}
+	lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, dmlCtx.asyncDatalinkColumns[0], lastNodeID, selectTag, func(name string) (int32, bool) { pos, ok := colName2Idx[tableDef.Name+"."+name]; return pos, ok }, asyncEligible)
+	if err != nil {
+		return 0, err
 	}
 
 	dmlNode.Children = append(dmlNode.Children, lastNodeID)
@@ -5559,9 +5570,9 @@ func valuesExprIsFuncCall(e tree.Expr) bool {
 // subquery plan nodes; the branches feed a blocking ordinal sort and do not
 // inherit the normal operator DOP bound. Thirty-two permits moderate batches
 // without letting one statement create hundreds of source scopes.
-const maxReplaceValuesSubqueryBranches = 32
+const maxValuesSubqueryBranches = 32
 
-func replaceValueExprContainsSubquery(expr tree.Expr) bool {
+func valueExprContainsSubquery(expr tree.Expr) bool {
 	// Keep ordinary literal/default/parameter VALUES rows on an allocation-free
 	// classification path. The reflective walker is only needed for expression
 	// trees that can contain nested subqueries.
@@ -5569,7 +5580,7 @@ func replaceValueExprContainsSubquery(expr tree.Expr) bool {
 	case nil, *tree.NumVal, *tree.StrVal, *tree.UnresolvedName, *tree.ParamExpr, *tree.UpdateVal, *tree.MaxValue:
 		return false
 	case *tree.DefaultVal:
-		return replaceValueExprContainsSubquery(typedExpr.Expr)
+		return valueExprContainsSubquery(typedExpr.Expr)
 	}
 
 	found := false
@@ -5583,18 +5594,18 @@ func replaceValueExprContainsSubquery(expr tree.Expr) bool {
 	return found
 }
 
-func validateReplaceValuesSubqueryBranchLimit(ctx context.Context, rows []tree.Exprs) error {
+func validateValuesSubqueryBranchLimit(ctx context.Context, rows []tree.Exprs) error {
 	subqueryRows := 0
 	for _, row := range rows {
 		for _, expr := range row {
-			if !replaceValueExprContainsSubquery(expr) {
+			if !valueExprContainsSubquery(expr) {
 				continue
 			}
 			subqueryRows++
-			if subqueryRows > maxReplaceValuesSubqueryBranches {
+			if subqueryRows > maxValuesSubqueryBranches {
 				return moerr.NewInvalidInputf(ctx,
-					"REPLACE VALUES supports at most %d rows containing subqueries",
-					maxReplaceValuesSubqueryBranches)
+					"VALUES supports at most %d rows containing subqueries",
+					maxValuesSubqueryBranches)
 			}
 			break
 		}
@@ -5602,10 +5613,38 @@ func validateReplaceValuesSubqueryBranchLimit(ctx context.Context, rows []tree.E
 	return nil
 }
 
+type valuesSubqueryBinding struct {
+	rows   *tree.ValuesClause
+	parent *BindContext
+	ctx    *BindContext
+}
+
+// Called only when the existing binder/type analyzer reaches a scalar subquery.
+// Do not classify every VALUES expression or eagerly allocate a BindContext:
+// ordinary literal, parameter and function inserts retain their original path.
+func (b *baseBinder) prepareValuesSubqueryContext() error {
+	valueBinder, ok := b.impl.(*DefaultBinder)
+	if !ok || !valueBinder.allowSubquery || b.ctx != nil || b.builder == nil {
+		return nil
+	}
+	scope := &b.builder.valuesSubqueryBinding
+	if scope.rows == nil {
+		return nil
+	}
+	if scope.ctx == nil {
+		if err := validateValuesSubqueryBranchLimit(b.GetContext(), scope.rows.Rows); err != nil {
+			return err
+		}
+		scope.ctx = NewBindContext(b.builder, scope.parent)
+	}
+	b.ctx = scope.ctx
+	return nil
+}
+
 func (builder *QueryBuilder) buildValueScan(
 	isAllDefault bool,
 	colRefAsDefault bool,
-	allowSubquery bool,
+	isReplace bool,
 	bindCtx *BindContext,
 	tableDef *TableDef,
 	stmt *tree.ValuesClause,
@@ -5614,10 +5653,14 @@ func (builder *QueryBuilder) buildValueScan(
 	var err error
 	effectiveColNames := append([]string(nil), colNames...)
 
-	if allowSubquery {
-		if err = validateReplaceValuesSubqueryBranchLimit(builder.GetContext(), stmt.Rows); err != nil {
+	if isReplace {
+		if err = validateValuesSubqueryBranchLimit(builder.GetContext(), stmt.Rows); err != nil {
 			return 0, nil, err
 		}
+	} else {
+		previous := builder.valuesSubqueryBinding
+		builder.valuesSubqueryBinding = valuesSubqueryBinding{rows: stmt, parent: bindCtx}
+		defer func() { builder.valuesSubqueryBinding = previous }()
 	}
 
 	proc := builder.compCtx.GetProcess()
@@ -5637,7 +5680,7 @@ func (builder *QueryBuilder) buildValueScan(
 	}
 	projectList := make([]*plan.Expr, colCount)
 	var valueBindCtx *BindContext
-	if allowSubquery {
+	if isReplace {
 		valueBindCtx = NewBindContext(builder, bindCtx)
 	}
 	appendValueExpr := func(colIdx int, expr *plan.Expr) {
@@ -5679,7 +5722,7 @@ func (builder *QueryBuilder) buildValueScan(
 				funcBinder = funcReplaceBinder
 			} else {
 				defaultBinder := NewDefaultBinder(builder.GetContext(), builder, valueBindCtx, col.Typ, nil)
-				defaultBinder.allowSubquery = allowSubquery
+				defaultBinder.allowSubquery = true
 				binder = defaultBinder
 
 				// Non-numeric destinations need a target-free function binder. The
@@ -5688,7 +5731,7 @@ func (builder *QueryBuilder) buildValueScan(
 				// the target-aware binder below, which resolves each function argument
 				// from overload metadata before the final assignment cast.
 				defaultFuncBinder := NewDefaultBinder(builder.GetContext(), builder, valueBindCtx, plan.Type{}, nil)
-				defaultFuncBinder.allowSubquery = allowSubquery
+				defaultFuncBinder.allowSubquery = true
 				funcBinder = defaultFuncBinder
 			}
 			for _, r := range stmt.Rows {
@@ -5834,7 +5877,7 @@ func (builder *QueryBuilder) buildValueScan(
 		projectList[i] = expr
 	}
 
-	if allowSubquery {
+	if isReplace || builder.valuesSubqueryBinding.ctx != nil {
 		hasAnySubquery := false
 		for _, col := range rowsetData.Cols {
 			for _, row := range col.Data {
@@ -5844,7 +5887,7 @@ func (builder *QueryBuilder) buildValueScan(
 		if hasAnySubquery {
 			if hasLocalDefaultRefs {
 				return 0, nil, moerr.NewNotSupported(builder.GetContext(),
-					"REPLACE VALUES cannot combine subqueries with row-local default dependencies")
+					"VALUES cannot combine subqueries with row-local default dependencies")
 			}
 			// Build the column-major view only for the relational lowering. The
 			// ordinary RowsetData path keeps a single set of expression slices.
@@ -6133,8 +6176,8 @@ func (builder *QueryBuilder) buildValueScanWithSubqueries(
 	}
 
 	// UNION ALL may execute branches concurrently. Sort by the carried ordinal
-	// before REPLACE conflict arbitration so the syntactically last VALUES row
-	// remains the winner for duplicate keys.
+	// before INSERT/REPLACE conflict arbitration so duplicate actions observe
+	// the original syntactic VALUES order.
 	orderedID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_SORT,
 		Children: []int32{lastNodeID},

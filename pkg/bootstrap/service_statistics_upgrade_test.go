@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_11"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_12"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_13"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_14"
+	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_15"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_6"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_7"
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_8"
@@ -76,7 +78,9 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 		{name: "current_4.0.11", version: "4.0.11", offset: v4_0_11.Handler.Metadata().VersionOffset, upgrade: true},
 		{name: "current_4.0.12", version: "4.0.12", offset: v4_0_12.Handler.Metadata().VersionOffset, upgrade: true},
 		{name: "current_4.0.13", version: "4.0.13", offset: v4_0_13.Handler.Metadata().VersionOffset, upgrade: true},
-		{name: "current_4.0.14", version: final.Version, offset: final.VersionOffset},
+		{name: "current_4.0.14", version: "4.0.14", offset: v4_0_14.Handler.Metadata().VersionOffset, upgrade: true},
+		{name: "current_4.0.15", version: "4.0.15", offset: v4_0_15.Handler.Metadata().VersionOffset, upgrade: true},
+		{name: "current", version: final.Version, offset: final.VersionOffset},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			runtime.RunTest("", func(runtime.Runtime) {
@@ -111,6 +115,12 @@ func TestDoCheckUpgradeQueuesStatisticsRefresh(t *testing.T) {
 				require.NoError(t, b.doCheckUpgrade(context.Background()))
 				if test.upgrade {
 					hops := []versions.Version{final}
+					if versions.Compare(test.version, "4.0.15") < 0 {
+						hops = append([]versions.Version{v4_0_15.Handler.Metadata()}, hops...)
+					}
+					if versions.Compare(test.version, "4.0.14") < 0 {
+						hops = append([]versions.Version{v4_0_14.Handler.Metadata()}, hops...)
+					}
 					if versions.Compare(test.version, "4.0.13") < 0 {
 						hops = append([]versions.Version{v4_0_13.Handler.Metadata()}, hops...)
 					}

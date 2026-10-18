@@ -17,6 +17,7 @@ package plan
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/gogo/protobuf/proto"
@@ -34,7 +35,175 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+func TestConstantFoldBitCountDiagnostics(t *testing.T) {
+	for _, folder := range []string{"generic", "rule", "prepared_rule"} {
+		for _, value := range []string{"3 ", "3x"} {
+			t.Run(folder+"/"+value, func(t *testing.T) {
+				proc := testutil.NewProcess(t)
+				sink := &process.WarningProbe{}
+				proc.WarningSink = sink
+				expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, "bit_count", []*Expr{makePlan2StringConstExprWithType(value)})
+				require.NoError(t, err)
+				var folded *Expr
+				if folder == "generic" {
+					folded, err = ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+					require.NoError(t, err)
+				} else {
+					node := &planpb.Node{ProjectList: []*Expr{expr}}
+					rule.NewConstantFold(folder == "prepared_rule").Apply(node, nil, proc)
+					folded = node.ProjectList[0]
+				}
+				require.False(t, sink.Warned(), "speculation must not publish statement warnings")
+				require.Same(t, sink, proc.WarningSink)
+				if value == "3x" {
+					require.NotNil(t, folded.GetF())
+				} else {
+					require.NotNil(t, folded.GetLit())
+					require.Equal(t, uint64(2), folded.GetLit().GetU64Val())
+				}
+			})
+		}
+	}
+}
+
+// Wide explicit constants must remain valid in consumers that inspect their
+// configuration or comparison expressions before execution.
+func TestWideExplicitConstantConsumers(t *testing.T) {
+	for _, sql := range []string{
+		"select approx_percentile((? + cast(5 as decimal(65,1))) / 100.0) within group (order by n_nationkey desc) from nation",
+		"select percentile_cont((? + cast(5 as decimal(65,1))) / 100.0) within group (order by n_nationkey) from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			prepare := buildPreparedAggregatePlan(t, sql)
+			require.NotEmpty(t, preparedParamPositions(prepare))
+			require.True(t, PreparedPlanHasPercentileParams(prepare.Plan))
+		})
+	}
+	for _, predicate := range []string{
+		"id=(select cast(3 as decimal(65,1)))",
+		"id<(select cast(3 as decimal(65,1)))",
+	} {
+		t.Run(predicate, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			addIndexHintChoiceTableForTest(mock)
+			query, err := runOneStmt(mock, t, "select id from index_hint_t use index() where "+predicate)
+			require.NoError(t, err)
+			require.NotNil(t, query.GetQuery())
+		})
+	}
+}
+
+func TestDecimal256ConstantFoldBoundaries(t *testing.T) {
+	for _, api := range []string{"public", "rule"} {
+		t.Run(api, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			sink := &loadAssignmentWarningSink{}
+			proc.WarningSink = sink
+			wide := types.New(types.T_decimal256, 65, 1)
+			makeCast := func(value string, null bool) *planpb.Expr {
+				input := makePlan2StringConstExprWithType(value)
+				input.GetLit().Isnull = null
+				expr, err := appendExplicitCastBeforeExpr(proc.Ctx, input, wide.PlanType())
+				require.NoError(t, err)
+				return expr
+			}
+			fold := func(expr *planpb.Expr) *planpb.Expr {
+				if api == "rule" {
+					node := &planpb.Node{ProjectList: []*planpb.Expr{expr}}
+					rule.NewConstantFold(false).Apply(node, nil, proc)
+					return node.ProjectList[0]
+				}
+				got, err := ConstantFold(batch.EmptyForConstFoldBatch, expr, proc, false, true)
+				require.NoError(t, err)
+				return got
+			}
+			for _, tc := range []struct {
+				value    string
+				null     bool
+				overflow bool
+			}{
+				{value: "900.0"},
+				{value: "1234567890123456789012345678901234567890123456789012345678901234.5"},
+				{null: true},
+				{value: "1" + strings.Repeat("0", 64), overflow: true},
+			} {
+				func() {
+					sink.codes = nil
+					expr := makeCast(tc.value, tc.null)
+					originalType := expr.Typ
+					got := fold(expr)
+					require.Equal(t, originalType, got.Typ)
+					require.Empty(t, sink.codes, "folding may not publish diagnostics")
+					if tc.overflow {
+						require.NotNil(t, got.GetF())
+					} else if tc.null {
+						require.True(t, got.GetLit().GetIsnull())
+					} else {
+						require.NotNil(t, got.GetVec())
+						require.True(t, got.GetVec().DecimalLiteralRequiresV82)
+						required, err := planpb.RequiresMORPCVersion89DecimalLiteralSemantics(got)
+						require.NoError(t, err)
+						require.True(t, required)
+						encoded, err := got.Marshal()
+						require.NoError(t, err)
+						decoded := new(planpb.Expr)
+						require.NoError(t, decoded.Unmarshal(encoded))
+						got = decoded
+					}
+					input := batch.New(nil)
+					defer input.Clean(proc.Mp())
+					input.SetRowCount(3)
+					result, free, err := colexec.GetReadonlyResultFromExpression(proc, got, []*batch.Batch{input})
+					require.NoError(t, err)
+					defer free()
+					if !tc.overflow {
+						require.True(t, result.IsConst())
+					}
+					parameter := vector.GenerateFunctionFixedTypeParameter[types.Decimal256](result)
+					for row := range 3 {
+						value, null := parameter.GetValue(uint64(row))
+						require.Equal(t, tc.null, null)
+						if !null {
+							want := tc.value
+							if tc.overflow {
+								want = strings.Repeat("9", 64) + ".9"
+							}
+							require.Equal(t, want, value.Format(1))
+						}
+					}
+					if tc.overflow {
+						require.Equal(t, []uint16{1264, 1264, 1264}, sink.codes)
+					}
+				}()
+			}
+			abs, err := function.GetFunctionByName(proc.Ctx, "abs", []types.Type{wide})
+			require.NoError(t, err)
+			nested := fold(&planpb.Expr{Typ: wide.PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
+				Func: &planpb.ObjectRef{ObjName: "abs", Obj: abs.GetEncodedOverloadID()}, Args: []*planpb.Expr{makeCast("-900.0", false)},
+			}}})
+			require.NotNil(t, nested.GetVec(), "parents must still fold above the new scalar representation")
+			result, free, err := colexec.GetReadonlyResultFromExpression(proc, nested, []*batch.Batch{batch.EmptyForConstFoldBatch})
+			require.NoError(t, err)
+			defer free()
+			require.Equal(t, "900.0", vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0).Format(1))
+			for _, target := range []types.Type{wide, types.New(types.T_decimal64, 10, 1)} {
+				nestedCast, err := appendExplicitCastBeforeExpr(proc.Ctx, makeCast("900.0", false), target.PlanType())
+				require.NoError(t, err)
+				folded := fold(nestedCast)
+				if target.Oid == types.T_decimal64 {
+					require.NotNil(t, folded.GetLit(), "a scalar vector child must not turn a narrow scalar into a list")
+				}
+				value, cleanup, err := colexec.GetReadonlyResultFromExpression(proc, folded, []*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.NoError(t, err)
+				defer cleanup()
+				require.True(t, value.IsConst(), "a silent nested CAST must retain scalar broadcasting")
+			}
+		})
+	}
+}
 
 func TestConstantFoldPreservesSerializedLiteralProvenance(t *testing.T) {
 	proc := testutil.NewProcess(t)

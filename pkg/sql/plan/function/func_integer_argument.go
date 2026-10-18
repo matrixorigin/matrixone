@@ -218,6 +218,13 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 		if err != nil {
 			return err
 		}
+		if !source.GetIsBin() {
+			// Keep the original value policy and diagnose only successfully
+			// evaluated text arguments. Binary literals carry numeric bytes.
+			text := convertByteSliceToString(value)
+			prefix := leadingDecimalIntegerPrefix(text)
+			appendIntegerNumericCoercionWarning(proc, text, prefix, prefix != "", false)
+		}
 		if err = result.Append(integer, false); err != nil {
 			return err
 		}

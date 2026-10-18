@@ -46,16 +46,6 @@ func execIssue26114SQLMaybe(ctx context.Context, db *sql.DB, statement string) e
 	return err
 }
 
-func cleanupIssue26114Catalog(ctx context.Context, db *sql.DB, statements ...string) error {
-	var cleanupErr error
-	for _, statement := range statements {
-		if err := execIssue26114SQLMaybe(ctx, db, statement); err != nil {
-			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%s: %w", statement, err))
-		}
-	}
-	return cleanupErr
-}
-
 type issue26114SnapshotSource struct {
 	database string
 	tables   []string
@@ -63,13 +53,14 @@ type issue26114SnapshotSource struct {
 
 func verifyIssue26114NoBranchArtifacts(
 	t *testing.T,
-	ctx context.Context,
 	db *sql.DB,
 	accountID int32,
 	branchTableIDs []uint64,
 	snapshotSources ...issue26114SnapshotSource,
 ) {
 	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	checks := []struct {
 		name  string
 		query string
@@ -509,9 +500,7 @@ func runIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(
 	var branchTableIDs []uint64
 	var accountID int32
 	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		cleanupErr := cleanupIssue26114Catalog(cleanupCtx, sysDB,
+		cleanupErr := cleanupSQLIntegrationCatalog(sysDB,
 			"drop snapshot if exists "+tableSnapshot,
 			"drop snapshot if exists "+dbSnapshot,
 			"drop database if exists `"+sourceDB+"`",
@@ -524,7 +513,6 @@ func runIssue26114CrossAccountBranchUsesTargetQuotaAndOwnership(
 		if accountID != 0 {
 			verifyIssue26114NoBranchArtifacts(
 				t,
-				cleanupCtx,
 				sysDB,
 				accountID,
 				branchTableIDs,
@@ -650,22 +638,24 @@ func runIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(
 	var legacyTableID uint64
 	var accountID int32
 	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
 		// The scenario deliberately rewrites creator=0 to model metadata from a
 		// released binary. Restore that test-only mutation before DROP ACCOUNT;
 		// account cleanup intentionally keys ownership by creator, so leaving the
 		// synthetic value in place would turn the fixture teardown into a false
 		// leak rather than test the quota behavior under test.
 		if accountID != 0 && legacyTableID != 0 {
-			restoreErr := execIssue26114Internal(cleanupCtx, c, fmt.Sprintf(
-				"update mo_catalog.mo_branch_metadata set creator = %d where table_id = %d",
-				accountID, legacyTableID))
+			restoreErr := func() error {
+				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				return execIssue26114Internal(ctx, c, fmt.Sprintf(
+					"update mo_catalog.mo_branch_metadata set creator = %d where table_id = %d",
+					accountID, legacyTableID))
+			}()
 			if restoreErr != nil {
 				t.Errorf("issue 26114 legacy metadata ownership restore failed: %v", restoreErr)
 			}
 		}
-		cleanupErr := cleanupIssue26114Catalog(cleanupCtx, sysDB,
+		cleanupErr := cleanupSQLIntegrationCatalog(sysDB,
 			"drop snapshot if exists "+snapshot,
 			"drop database if exists `"+sourceDB+"`",
 			"drop account if exists "+accountName,
@@ -676,7 +666,6 @@ func runIssue26114LegacyCrossAccountMetadataCountsTowardTargetQuota(
 		if accountID != 0 {
 			verifyIssue26114NoBranchArtifacts(
 				t,
-				cleanupCtx,
 				sysDB,
 				accountID,
 				[]uint64{legacyTableID},
