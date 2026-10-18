@@ -625,7 +625,7 @@ func (builder *QueryBuilder) bindMultiInsertGroup(
 	}
 
 	rootID, err := builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		tCtx, group.dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn)
+		tCtx, group.dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn, false)
 	if err != nil {
 		return err
 	}
