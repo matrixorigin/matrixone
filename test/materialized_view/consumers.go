@@ -182,7 +182,22 @@ func runConsumerCases(dsn, secondDSN string) {
 	if len(initialPolicy) != 1 || !strings.Contains(initialPolicy[0][1], "every interval 60 second") {
 		panic("initial export lost periodic policy")
 	}
-	exec("alter materialized view policy refresh every interval 120 second")
+	rows("select mo_ctl('cn','synccommit','')")
+	preparedPolicy, err := db.PrepareContext(ctx, "show create table policy")
+	if err != nil {
+		panic(err)
+	}
+	defer preparedPolicy.Close()
+	if !reflect.DeepEqual(preparedRows(preparedPolicy), initialPolicy) {
+		panic("initial prepared SHOW disagrees with current policy")
+	}
+	otherExec("alter materialized view policy refresh every interval 120 second")
+	rows("select mo_ctl('cn','synccommit','')")
+	preparedDDL := preparedRows(preparedPolicy)
+	if len(preparedDDL) != 1 || len(preparedDDL[0]) != 2 || !strings.Contains(preparedDDL[0][1], "every interval 120 second") || !reflect.DeepEqual(preparedDDL, rows("show create table policy")) {
+		panic("prepared SHOW retained the other CN's old policy")
+	}
+	pass("prepared SHOW CREATE observes policy altered on another CN")
 	replay("policy", "policy_copy")
 	if !reflect.DeepEqual(rows("select interval_seconds from mo_catalog.mo_materialized_views where account_id=0 and database_name='mv_consumer_validation' and name='policy_copy'"), [][]string{{"120"}}) {
 		panic("export replay lost current altered policy")

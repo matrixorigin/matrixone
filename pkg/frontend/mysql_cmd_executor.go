@@ -3179,6 +3179,7 @@ func createPrepareStmtInSession(
 	if !executionSes.IsBackgroundSession() &&
 		isQueryPlan && len(prepareControl.ParamTypes) == 0 &&
 		shouldCachePrepareCompile(prepareControl.Plan) &&
+		!preparedStatementNeedsMetadataRebind(saveStmt) &&
 		(!prepareSchedulingIntent.Explicit ||
 			schedule.ValidateSchedulingIntent(prepareSchedulingIntent) != "") {
 		//only DQL & DML will pre compile

@@ -156,7 +156,7 @@ and cleans its own database. Validate both transaction modes by configuring
 
 `-consumer-check` selects the native consumer regressions for review5562448876.
 It reuses the existing authenticated BVT service and owns a two-row indexed
-source, manual MVs and one altered periodic policy. Ten checks cover prepared
+source, manual MVs and one altered periodic policy. Eleven checks cover prepared
 DELETE before MV creation in a different session/CN, unrestricted DELETE with creation disabled, affected
 rows including an empty source, unique/secondary maintenance, explicit TRUNCATE
 protection and ALTER COPY rejection without preparation residue, DUMP/LOAD kind admission before file access with unchanged publication,
@@ -171,3 +171,24 @@ the second CN. Creating the MV on the prepared statement's own session would
 advance its DDL generation and mask stale truncate eligibility. Truncating
 DELETE plans now bypass ordinary and physical prepared caches and rebind on
 EXECUTE; filtered/row DELETE and ordinary SELECT retain their existing policy.
+
+The policy export case also prepares SHOW CREATE TABLE at60 seconds, changes
+the policy to120 from the other connection/CN, and executes the same handle.
+Both prepared and direct export must return the current120-second definition.
+Prepared SHOW CREATE TABLE rebinds from its original AST instead of retaining
+its lowered literal SELECT; ordinary SHOW already bypasses the SQL plan cache.
+
+To validate refresh crash/replay without repeating migration tests, reuse the
+native recovery fixture with a fresh directory:
+
+```bash
+python3 optools/materialized_view_recovery.py --refresh-only \
+  --service /absolute/path/to/mo-service --probe /absolute/path/to/mv-native-probe \
+  --work-dir /absolute/path/to/new-fixture
+```
+
+This runs durable commit-response loss, SIGKILL before/after publication,
+same-run queue replay after each restart, and catalog/history/task cleanup.
+The current production binary supports these SQL-enabled refresh failpoints;
+the `matrixone_mv_faults` build tag is required for startup migration injection
+in the full upgrade mode. The original full mode still requires `--old-service`.

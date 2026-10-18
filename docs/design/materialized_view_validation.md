@@ -327,3 +327,14 @@ Prepare source DELETE on one CN, create/refresh its MV on another, then EXECUTE
 without changing the prepared owner's DDL generation. Require row deletion,
 unchanged last-good MV rows/full publication and zero fixture residue in RC and
 SI. [Requirement, design, controls and execution receipts](materialized_view_cached_delete.md).
+
+## Prepared metadata and retirement follow-up (2026-10-18)
+
+See [the design and failure analysis](materialized_view_prepared_metadata.md)
+and [source-bound results](materialized_view_prepared_metadata_results.json)
+for live prepared SHOW metadata, the common lifecycle fence, fixed SI
+publication under an outer RC lock, both 113-check native transaction modes,
+and commit-loss/SIGKILL/replay validation. The merge regenerates the MySQL
+parser to retain main's empty-CTE rejection and MV grammar. Native candidates,
+merged package checks, discarded trials and historical evidence are scoped
+explicitly in those records.

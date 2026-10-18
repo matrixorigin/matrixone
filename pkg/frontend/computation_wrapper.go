@@ -1364,7 +1364,8 @@ func initExecuteStmtParamWithResolverInSession(
 			change = true
 		}
 	}
-	rebuildEveryExecute := shouldRebuildPreparePlan(false, executionPlan)
+	rebuildEveryExecute := preparedStatementNeedsMetadataRebind(prepareStmt.PrepareStmt) ||
+		shouldRebuildPreparePlan(false, executionPlan)
 	schemaChanged, schemasValidated, err := validateCapturedPrepareSchemas(
 		owner.GetAccountId(), preparePlan.GetSchemas(), resolve, catalogCache,
 		prepareStmt.Ts, validateSubscriptions, rebuildEveryExecute)
@@ -1556,7 +1557,8 @@ func initExecuteStmtParamWithResolverInSession(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
 		if !executionSes.IsBackgroundSession() && !executionIntent.Explicit {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
-				shouldCachePrepareCompile(preparePlan.Plan) {
+				shouldCachePrepareCompile(preparePlan.Plan) &&
+				!preparedStatementNeedsMetadataRebind(prepareStmt.PrepareStmt) {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
 				comp, err := createCompile(
@@ -2690,6 +2692,13 @@ func (prepareStmt *PrepareStmt) refreshGenerateSeriesParamMetadata(p *plan.Plan)
 	positions := slices.Concat(prepareStmt.numericOverloadParamPositions, endpoints)
 	slices.Sort(positions)
 	prepareStmt.temporalRuntimeParamPositions = slices.Compact(positions)
+}
+
+// SHOW CREATE TABLE is lowered to a literal SELECT. Its live catalog policy is
+// not represented by those literals or by the source table's schema version.
+func preparedStatementNeedsMetadataRebind(stmt tree.Statement) bool {
+	_, showCreateTable := stmt.(*tree.ShowCreateTable)
+	return showCreateTable
 }
 
 func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {

@@ -16,7 +16,6 @@ package frontend
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -24,7 +23,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -197,24 +195,7 @@ func handleAlterMaterializedView(ctx context.Context, ses *Session, stmt *tree.A
 	if err != nil {
 		return err
 	}
-	next := "null"
-	if stmt.IntervalSeconds > 0 {
-		if _, err := def.RefreshTimeZone(); err != nil {
-			return err
-		}
-		next = fmt.Sprintf("date_add(current_timestamp(),interval %d second)", stmt.IntervalSeconds)
-	}
-	def.IntervalSeconds = stmt.IntervalSeconds
-	definitionJSON, err := json.Marshal(def)
-	if err != nil {
-		return err
-	}
-	r, err := svc.SQL.Exec(ctx, fmt.Sprintf("update mo_catalog.mo_materialized_views set epoch=epoch+1,definition='%s',interval_seconds=%d,next_due=%s where account_id=%d and mv_id=%d", sqlquote.EscapeString(string(definitionJSON)), stmt.IntervalSeconds, next, key.Account, key.ID), executor.Options{}.WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied())
-	if err != nil {
-		return err
-	}
-	r.Close()
-	return nil
+	return svc.AlterPolicy(ctx, key, stmt.IntervalSeconds)
 }
 func handleShowMaterializedViews(ctx context.Context, ses *Session, stmt *tree.ShowMaterializedViews) error {
 	svc, err := materializedViewService(ctx, ses)

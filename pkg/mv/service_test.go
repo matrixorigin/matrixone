@@ -91,6 +91,8 @@ type refreshExecutor struct {
 	executor.SQLExecutor
 	t                  *testing.T
 	op                 client.TxnOperator
+	txnOpts            executor.Options
+	lifecycleLocked    bool
 	mp                 *mpool.MPool
 	state              State
 	failInsert         bool
@@ -98,6 +100,7 @@ type refreshExecutor struct {
 	conflictOnce       bool
 	changeEpoch        bool
 	loseCommitResponse bool
+	loseFenceResponse  bool
 	prior              *refreshRun
 	lastPublication    string
 	failureRecords     int
@@ -113,6 +116,9 @@ func (e *refreshExecutor) ExecTxn(ctx context.Context, f func(executor.TxnExecut
 	}
 	_, bounded := ctx.Deadline()
 	require.True(e.t, bounded, "native transaction operations require a deadline")
+	priorOpts, priorLock := e.txnOpts, e.lifecycleLocked
+	e.txnOpts = opts
+	defer func() { e.txnOpts, e.lifecycleLocked = priorOpts, priorLock }()
 	tx := executor.NewMemTxnExecutor(e.statement, e.op)
 	err := f(tx)
 	if err != nil {
@@ -125,6 +131,10 @@ func (e *refreshExecutor) ExecTxn(ctx context.Context, f func(executor.TxnExecut
 		if e.changeEpoch && e.commits == 1 {
 			e.state.Epoch++
 		}
+		if e.loseFenceResponse && opts.TxnMode() == txn.TxnMode_Pessimistic && e.publications > 0 {
+			e.loseFenceResponse = false
+			return errors.New("lost read-only fence completion response")
+		}
 		if e.loseCommitResponse && e.publications > 0 {
 			e.loseCommitResponse = false
 			e.state.LastRun = e.lastPublication
@@ -135,6 +145,12 @@ func (e *refreshExecutor) ExecTxn(ctx context.Context, f func(executor.TxnExecut
 }
 func (e *refreshExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
 	if strings.HasPrefix(sql, "delete from `db`.`stored`") || strings.HasPrefix(sql, "insert into `db`.`stored`") {
+		require.True(e.t, e.lifecycleLocked, "data replacement must hold the outer lifecycle lock until publication completes")
+		require.Equal(e.t, txn.TxnMode_Optimistic, e.txnOpts.TxnMode())
+		require.Equal(e.t, txn.TxnIsolation_SI, e.txnOpts.TxnIsolation())
+		require.False(e.t, e.txnOpts.MinCommittedTS().IsEmpty(), "SI snapshot must follow fence admission")
+		require.Equal(e.t, txn.TxnMode_Optimistic, opts.TxnMode(), "data publication retains native SI")
+		require.Equal(e.t, txn.TxnIsolation_SI, opts.TxnIsolation())
 		require.Same(e.t, e.op, opts.Txn())
 		require.True(e.t, defines.CanWriteMaterializedView(ctx, 7, 99, e.op.Txn().ID))
 		e.dataWrites++
@@ -145,6 +161,9 @@ func (e *refreshExecutor) Exec(ctx context.Context, sql string, opts executor.Op
 	return e.statement(sql)
 }
 func (e *refreshExecutor) statement(sql string) (executor.Result, error) {
+	if sql == "select revision from mo_catalog.mo_mv_account_state where account_id=7 for update" {
+		e.lifecycleLocked = true
+	}
 	if strings.Contains(sql, "set status='FAILED'") {
 		e.failureRecords++
 	}
@@ -217,12 +236,12 @@ func TestMaterializedViewRefreshTransaction(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, 2, e.dataWrites)
 				require.Equal(t, 1, e.publications)
-				require.Equal(t, 2, e.commits)
+				require.Equal(t, 3, e.commits)
 			case "insert failure":
 				require.ErrorContains(t, err, "injected")
 				require.Equal(t, 2, e.dataWrites)
 				require.Zero(t, e.publications)
-				require.Equal(t, 1, e.rollbacks)
+				require.Equal(t, 2, e.rollbacks)
 			case "obsolete epoch":
 				require.ErrorContains(t, err, "obsolete")
 				require.Zero(t, e.dataWrites)
@@ -233,7 +252,7 @@ func TestMaterializedViewRefreshTransaction(t *testing.T) {
 }
 
 func TestMaterializedViewRefreshFailureBoundaries(t *testing.T) {
-	for _, scenario := range []string{"metadata publication failure", "source snapshot drift", "definition changed", "lost commit response", "injected post-commit response loss", "retry conflict", "task replay", "obsolete replay epoch", "invalid task account"} {
+	for _, scenario := range []string{"metadata publication failure", "source snapshot drift", "definition changed", "lost commit response", "lost fence completion response", "injected post-commit response loss", "retry conflict", "task replay", "obsolete replay epoch", "invalid task account"} {
 		t.Run(scenario, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
@@ -243,7 +262,7 @@ func TestMaterializedViewRefreshFailureBoundaries(t *testing.T) {
 			op.EXPECT().SnapshotTS().DoAndReturn(func() timestamp.Timestamp {
 				snapshots++
 				ts := timestamp.Timestamp{PhysicalTime: 123, LogicalTime: 17}
-				if scenario == "source snapshot drift" && snapshots > 1 {
+				if scenario == "source snapshot drift" && snapshots > 2 {
 					ts.LogicalTime++
 				}
 				return ts
@@ -258,6 +277,8 @@ func TestMaterializedViewRefreshFailureBoundaries(t *testing.T) {
 				e.changeEpoch = true
 			case "lost commit response":
 				e.loseCommitResponse = true
+			case "lost fence completion response":
+				e.loseFenceResponse = true
 			case "injected post-commit response loss":
 				enabledHere := fault.Enable()
 				t.Cleanup(func() {
@@ -284,7 +305,7 @@ func TestMaterializedViewRefreshFailureBoundaries(t *testing.T) {
 			service := NewService(e)
 			err := service.Refresh(ctx, Key{7, 99}, 2)
 			switch scenario {
-			case "retry conflict", "lost commit response", "injected post-commit response loss":
+			case "retry conflict", "lost commit response", "lost fence completion response", "injected post-commit response loss":
 				require.NoError(t, err)
 				require.Equal(t, 2, e.dataWrites)
 				require.Equal(t, 1, e.publications)

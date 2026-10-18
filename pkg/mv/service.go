@@ -267,7 +267,7 @@ func (s *Service) Refresh(ctx context.Context, key Key, expectedEpoch uint64) er
 	var definition catalog.MVDefinition
 	var zone *time.Location
 	opts := executor.Options{}.WithAccountID(key.Account).WithTxnIsolation(txn.TxnIsolation_SI).WithTxnMode(txn.TxnMode_Optimistic).WithWaitCommittedLogApplied()
-	err := s.retryTxn(ctx, func(tx executor.TxnExecutor) error {
+	err := s.metadataTxn(ctx, key, func(tx executor.TxnExecutor) error {
 		st, err := Load(tx, key)
 		if err != nil {
 			return err
@@ -324,51 +324,53 @@ func (s *Service) Refresh(ctx context.Context, key Key, expectedEpoch uint64) er
 		}
 		return nil, moerr.NewInvalidInputNoCtx("unsupported refresh session variable")
 	})
-	err = s.retryTxn(ctx, func(tx executor.TxnExecutor) error {
-		st, err := Load(tx, key)
-		if err != nil {
-			return err
-		}
-		if st.LastRun == runID {
-			return nil
-		}
-		if st.Successful >= sequence {
-			return consume(tx, fmt.Sprintf("update mo_catalog.mo_mv_refresh_runs set status='SUPERSEDED',finished_at=current_timestamp() where account_id=%d and mv_id=%d and run_id=%s and status='RUNNING'", key.Account, key.ID, literal(runID)))
-		}
-		if st.Epoch != epoch {
-			return moerr.NewInvalidInputNoCtx("materialized view definition changed during refresh")
-		}
-		if err := ValidateSources(tx, st); err != nil {
-			return err
-		}
-		if err := consume(tx, fmt.Sprintf("update mo_catalog.mo_materialized_views set successful_sequence=%d where account_id=%d and mv_id=%d and epoch=%d", sequence, key.Account, key.ID, epoch)); err != nil {
-			return err
-		}
-		ts := tx.Txn().SnapshotTS()
-		writeCtx := defines.WithMaterializedViewBudget(defines.WithMaterializedViewWrite(ctx, key.Account, key.ID, tx.Txn().Txn().ID), key.ID, 512<<20)
-		writeOpts := sourceOpts.WithTxn(tx.Txn())
-		target := Quote(st.Database) + "." + Quote(st.Name)
-		for _, sql := range []string{"delete from " + target, "insert into " + target + " " + definition.Query} {
-			r, err := s.SQL.Exec(writeCtx, sql, writeOpts)
+	err = s.metadataTxn(ctx, key, func(fence executor.TxnExecutor) error {
+		return s.SQL.ExecTxn(ctx, func(tx executor.TxnExecutor) error {
+			st, err := Load(tx, key)
 			if err != nil {
 				return err
 			}
-			r.Close()
-		}
-		if !tx.Txn().SnapshotTS().Equal(ts) {
-			return moerr.NewInternalErrorNoCtx("materialized view refresh source snapshot changed")
-		}
-		if err := consume(tx, fmt.Sprintf("update mo_catalog.mo_materialized_views set populated=true,last_run=%s,source_physical=%d,source_logical=%d,last_success=current_timestamp(),next_due=%s where account_id=%d and mv_id=%d and epoch=%d", literal(runID), ts.PhysicalTime, ts.LogicalTime, nextDueSQL(st.Interval), key.Account, key.ID, epoch)); err != nil {
-			return err
-		}
-		if err := consume(tx, fmt.Sprintf("update mo_catalog.mo_mv_refresh_runs set status='SUCCEEDED',finished_at=current_timestamp(),source_physical=%d,source_logical=%d where account_id=%d and mv_id=%d and run_id=%s", ts.PhysicalTime, ts.LogicalTime, key.Account, key.ID, literal(runID))); err != nil {
-			return err
-		}
-		// Native recovery tests stop the CN with all replacement writes still
-		// uncommitted. Disabled fault injection is a single atomic pointer read.
-		fault.TriggerFaultWithContext(ctx, "mv_refresh_before_commit")
-		return nil
-	}, opts)
+			if st.LastRun == runID {
+				return nil
+			}
+			if st.Successful >= sequence {
+				return consume(tx, fmt.Sprintf("update mo_catalog.mo_mv_refresh_runs set status='SUPERSEDED',finished_at=current_timestamp() where account_id=%d and mv_id=%d and run_id=%s and status='RUNNING'", key.Account, key.ID, literal(runID)))
+			}
+			if st.Epoch != epoch {
+				return moerr.NewInvalidInputNoCtx("materialized view definition changed during refresh")
+			}
+			if err := ValidateSources(tx, st); err != nil {
+				return err
+			}
+			if err := consume(tx, fmt.Sprintf("update mo_catalog.mo_materialized_views set successful_sequence=%d where account_id=%d and mv_id=%d and epoch=%d", sequence, key.Account, key.ID, epoch)); err != nil {
+				return err
+			}
+			ts := tx.Txn().SnapshotTS()
+			writeCtx := defines.WithMaterializedViewBudget(defines.WithMaterializedViewWrite(ctx, key.Account, key.ID, tx.Txn().Txn().ID), key.ID, 512<<20)
+			writeOpts := sourceOpts.WithTxn(tx.Txn())
+			target := Quote(st.Database) + "." + Quote(st.Name)
+			for _, sql := range []string{"delete from " + target, "insert into " + target + " " + definition.Query} {
+				r, err := s.SQL.Exec(writeCtx, sql, writeOpts)
+				if err != nil {
+					return err
+				}
+				r.Close()
+			}
+			if !tx.Txn().SnapshotTS().Equal(ts) {
+				return moerr.NewInternalErrorNoCtx("materialized view refresh source snapshot changed")
+			}
+			if err := consume(tx, fmt.Sprintf("update mo_catalog.mo_materialized_views set populated=true,last_run=%s,source_physical=%d,source_logical=%d,last_success=current_timestamp(),next_due=%s where account_id=%d and mv_id=%d and epoch=%d", literal(runID), ts.PhysicalTime, ts.LogicalTime, nextDueSQL(st.Interval), key.Account, key.ID, epoch)); err != nil {
+				return err
+			}
+			if err := consume(tx, fmt.Sprintf("update mo_catalog.mo_mv_refresh_runs set status='SUCCEEDED',finished_at=current_timestamp(),source_physical=%d,source_logical=%d where account_id=%d and mv_id=%d and run_id=%s", ts.PhysicalTime, ts.LogicalTime, key.Account, key.ID, literal(runID))); err != nil {
+				return err
+			}
+			// Native recovery tests stop the CN with all replacement writes still
+			// uncommitted. Disabled fault injection is a single atomic pointer read.
+			fault.TriggerFaultWithContext(ctx, "mv_refresh_before_commit")
+			return nil
+		}, opts.WithMinCommittedTS(fence.Txn().SnapshotTS()))
+	}, executor.Options{}.WithAccountID(key.Account))
 	if err == nil {
 		// This boundary is after durable publication and before the task runner
 		// receives its acknowledgement. ECHO(1) models a lost commit response;
@@ -387,16 +389,42 @@ func (s *Service) Refresh(ctx context.Context, key Key, expectedEpoch uint64) er
 			return nil
 		}
 		message := "refresh failed" // Do not persist raw SQL/data/connection error strings.
-		r, recordErr := s.SQL.Exec(cleanupCtx, fmt.Sprintf("update mo_catalog.mo_mv_refresh_runs set status='FAILED',finished_at=current_timestamp(),error_message=%s where account_id=%d and mv_id=%d and run_id=%s and status='RUNNING'", literal(message), key.Account, key.ID, literal(runID)), executor.Options{}.WithAccountID(catalog.System_Account))
-		if recordErr == nil {
-			r.Close()
-		}
-		r, scheduleErr := s.SQL.Exec(cleanupCtx, fmt.Sprintf("update mo_catalog.mo_materialized_views set next_due=date_add(current_timestamp(),interval 60 second) where account_id=%d and mv_id=%d and epoch=%d and interval_seconds>0 and last_run<>%s", key.Account, key.ID, epoch, literal(runID)), executor.Options{}.WithAccountID(catalog.System_Account))
-		if scheduleErr == nil {
-			r.Close()
-		}
+		_ = s.metadataTxn(cleanupCtx, key, func(tx executor.TxnExecutor) error {
+			if err := consume(tx, fmt.Sprintf("update mo_catalog.mo_mv_refresh_runs set status='FAILED',finished_at=current_timestamp(),error_message=%s where account_id=%d and mv_id=%d and run_id=%s and status='RUNNING'", literal(message), key.Account, key.ID, literal(runID))); err != nil {
+				return err
+			}
+			return consume(tx, fmt.Sprintf("update mo_catalog.mo_materialized_views set next_due=date_add(current_timestamp(),interval 60 second) where account_id=%d and mv_id=%d and epoch=%d and interval_seconds>0 and last_run<>%s", key.Account, key.ID, epoch, literal(runID)))
+		}, executor.Options{}.WithAccountID(catalog.System_Account))
 	}
 	return err
+}
+
+// AlterPolicy is called after frontend owner authorization. Read the live
+// definition under the same metadata lifecycle fence used by DROP.
+func (s *Service) AlterPolicy(ctx context.Context, key Key, interval int64) error {
+	ctx, cancel := context.WithTimeout(ctx, Timeout)
+	defer cancel()
+	if interval != 0 && interval < 60 {
+		return moerr.NewInvalidInputNoCtx("materialized view interval must be at least 60 seconds")
+	}
+	return s.metadataTxn(ctx, key, func(tx executor.TxnExecutor) error {
+		st, err := Load(tx, key)
+		if err != nil {
+			return err
+		}
+		definition := st.Definition
+		if interval > 0 {
+			if _, err = definition.RefreshTimeZone(); err != nil {
+				return err
+			}
+		}
+		definition.IntervalSeconds = interval
+		data, err := json.Marshal(definition)
+		if err != nil {
+			return err
+		}
+		return consume(tx, fmt.Sprintf("update mo_catalog.mo_materialized_views set epoch=epoch+1,definition=%s,interval_seconds=%d,next_due=%s where account_id=%d and mv_id=%d", literal(string(data)), interval, nextDueSQL(interval), key.Account, key.ID))
+	}, executor.Options{}.WithAccountID(catalog.System_Account).WithWaitCommittedLogApplied())
 }
 
 func (s *Service) State(ctx context.Context, key Key) (*State, error) {
@@ -427,6 +455,20 @@ func loadRun(tx executor.TxnExecutor, key Key, id string) (*refreshRun, error) {
 	})
 	return run, nil
 }
+
+// Metadata-only writers hold DROP's existing lifecycle row lock through RC.
+// Publication holds this read-only fence while a separate optimistic SI txn
+// replaces data; its fixed snapshot starts after fence admission. Do not write
+// the dependency revision or recreate retired account state here.
+func (s *Service) metadataTxn(ctx context.Context, key Key, fn func(executor.TxnExecutor) error, opts executor.Options) error {
+	return s.retryTxn(ctx, func(tx executor.TxnExecutor) error {
+		if err := consume(tx, fmt.Sprintf("select revision from mo_catalog.mo_mv_account_state where account_id=%d for update", key.Account)); err != nil {
+			return err
+		}
+		return fn(tx)
+	}, opts.WithTxnMode(txn.TxnMode_Pessimistic).WithTxnIsolation(txn.TxnIsolation_RC))
+}
+
 func (s *Service) retryTxn(ctx context.Context, fn func(executor.TxnExecutor) error, opts executor.Options) error {
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {

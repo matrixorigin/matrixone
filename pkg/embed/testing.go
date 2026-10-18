@@ -564,6 +564,9 @@ func adjustBasicClusterService(svc ServiceOperator) {
 				config.CN.LockService.MaxFixedSliceSize = 10001
 				config.CN.LockService.MaxLockRowCount = 10000
 				config.CN.Frontend.SkipCheckUser = false
+				// Bounded success-path tests own their spill allowance instead of
+				// depending on the production policy's 16 GiB free-disk headroom.
+				config.CN.Frontend.ProcessLimitationSpillSize = 64 << 20
 				// The shared feature-test fixture is a fully upgraded cluster.
 				config.CN.AutoIncrement.EnableAutoIDCache = true
 				config.CN.Frontend.Iceberg.Enable = true

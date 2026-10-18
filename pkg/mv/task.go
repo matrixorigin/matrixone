@@ -28,7 +28,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
-	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -123,7 +122,7 @@ func (s *Service) TaskExecutor(ts taskservice.TaskService, factory func() ie.Int
 func (s *Service) recordTaskFailure(ctx context.Context, spec TaskSpec) {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
-	_ = s.retryTxn(ctx, func(tx executor.TxnExecutor) error {
+	_ = s.metadataTxn(ctx, spec.Key, func(tx executor.TxnExecutor) error {
 		st, err := Load(tx, spec.Key)
 		if err != nil {
 			return err
@@ -145,7 +144,7 @@ func (s *Service) recordTaskFailure(ctx context.Context, spec TaskSpec) {
 			}
 		}
 		return consume(tx, fmt.Sprintf("update mo_catalog.mo_materialized_views set next_due=date_add(current_timestamp(),interval 60 second) where account_id=%d and mv_id=%d and interval_seconds>0", st.Account, st.ID))
-	}, executor.Options{}.WithAccountID(spec.Key.Account).WithTxnIsolation(txn.TxnIsolation_SI).WithTxnMode(txn.TxnMode_Optimistic).WithWaitCommittedLogApplied())
+	}, executor.Options{}.WithAccountID(spec.Key.Account).WithWaitCommittedLogApplied())
 }
 func (s *Service) reconcile(ctx context.Context, ts taskservice.TaskService) error {
 	ctx, cancel := context.WithTimeout(ctx, Timeout)
@@ -168,12 +167,12 @@ func (s *Service) reconcile(ctx context.Context, ts taskservice.TaskService) err
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		err := s.retryTxn(ctx, func(tx executor.TxnExecutor) error {
+		err := s.metadataTxn(ctx, spec.Key, func(tx executor.TxnExecutor) error {
 			if err := consume(tx, fmt.Sprintf("update mo_catalog.mo_materialized_views set next_due=date_add(current_timestamp(),interval 60 second) where account_id=%d and mv_id=%d and epoch=%d and interval_seconds>0 and last_run<>%s and exists(select 1 from mo_catalog.mo_mv_refresh_runs where account_id=%d and mv_id=%d and run_id=%s and status='RUNNING' and started_at<date_sub(current_timestamp(),interval 360 second))", spec.Key.Account, spec.Key.ID, spec.Epoch, literal(spec.RunID), spec.Key.Account, spec.Key.ID, literal(spec.RunID))); err != nil {
 				return err
 			}
 			return consume(tx, fmt.Sprintf("update mo_catalog.mo_mv_refresh_runs set status='ABORTED',finished_at=current_timestamp(),error_message='refresh interrupted' where account_id=%d and mv_id=%d and run_id=%s and status='RUNNING' and started_at<date_sub(current_timestamp(),interval 360 second)", spec.Key.Account, spec.Key.ID, literal(spec.RunID)))
-		}, opts.WithTxnIsolation(txn.TxnIsolation_SI).WithTxnMode(txn.TxnMode_Optimistic))
+		}, opts)
 		if err != nil {
 			return err
 		}
@@ -249,11 +248,14 @@ func (s *Service) cleanupHistory(ctx context.Context) error {
 		if more {
 			next = "current_timestamp()"
 		}
-		r, err := s.SQL.Exec(ctx, fmt.Sprintf("update mo_catalog.mo_materialized_views set next_cleanup=%s where account_id=%d and mv_id=%d", next, key.Account, key.ID), opts)
+		// A stale maintenance intent must not race definition retirement. Share
+		// DROP's lifecycle fence and transaction mode before writing the cursor.
+		err := s.metadataTxn(ctx, key, func(tx executor.TxnExecutor) error {
+			return consume(tx, fmt.Sprintf("update mo_catalog.mo_materialized_views set next_cleanup=%s where account_id=%d and mv_id=%d", next, key.Account, key.ID))
+		}, opts)
 		if err != nil {
 			return err
 		}
-		r.Close()
 	}
 	return nil
 }

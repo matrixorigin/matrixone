@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/task"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	ie "github.com/matrixorigin/matrixone/pkg/util/internalExecutor"
@@ -40,6 +41,89 @@ type scheduledTasks struct {
 	crons   []task.TaskMetadata
 	exprs   []string
 	cronErr error
+}
+
+type maintenanceTxnExecutor struct {
+	executor.SQLExecutor
+	execTxn func(context.Context, func(executor.TxnExecutor) error, executor.Options) error
+}
+
+func (e *maintenanceTxnExecutor) ExecTxn(ctx context.Context, f func(executor.TxnExecutor) error, opts executor.Options) error {
+	return e.execTxn(ctx, f, opts)
+}
+
+func TestMaterializedViewMaintenanceLifecycleFence(t *testing.T) {
+	for _, phase := range []string{"success", "fence failure", "cancelled fence", "cursor failure"} {
+		t.Run(phase, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			failure := errors.New("maintenance lifecycle fence unavailable")
+			inTxn, fenced := false, false
+			txns, fences, cursors := 0, 0, 0
+			query := func(q string) (executor.Result, error) {
+				switch {
+				case strings.HasPrefix(q, "select account_id,mv_id from"):
+					r := executor.NewMemResult([]types.Type{types.T_uint32.ToType(), types.T_uint64.ToType()}, mp)
+					r.NewBatchWithRowCount(1)
+					require.NoError(t, executor.AppendFixedRows(r, 0, []uint32{7}))
+					require.NoError(t, executor.AppendFixedRows(r, 1, []uint64{99}))
+					return r.GetResult(), nil
+				case strings.HasPrefix(q, "select run_id"):
+					return executor.Result{}, nil
+				case strings.HasPrefix(q, "select revision from mo_catalog.mo_mv_account_state "):
+					require.True(t, inTxn)
+					require.Zero(t, cursors)
+					require.Equal(t, "select revision from mo_catalog.mo_mv_account_state where account_id=7 for update", q)
+					fences++
+					if phase == "fence failure" {
+						return executor.Result{}, failure
+					}
+					if phase == "cancelled fence" {
+						cancel()
+						return executor.Result{}, ctx.Err()
+					}
+					fenced = true
+				case strings.HasPrefix(q, "update mo_catalog.mo_materialized_views set next_cleanup="):
+					require.True(t, inTxn && fenced, "cursor and lifecycle fence must share one transaction")
+					require.Contains(t, q, "account_id=7 and mv_id=99")
+					cursors++
+					if phase == "cursor failure" {
+						return executor.Result{}, failure
+					}
+				default:
+					t.Fatalf("unexpected maintenance SQL (retired account state must not be inserted): %s", q)
+				}
+				return executor.Result{}, nil
+			}
+			sql := &maintenanceTxnExecutor{SQLExecutor: executor.NewMemExecutor(query)}
+			sql.execTxn = func(ctx context.Context, f func(executor.TxnExecutor) error, opts executor.Options) error {
+				require.Equal(t, txn.TxnMode_Pessimistic, opts.TxnMode())
+				require.Equal(t, txn.TxnIsolation_RC, opts.TxnIsolation())
+				require.Equal(t, uint32(catalog.System_Account), opts.AccountID())
+				txns++
+				inTxn = true
+				defer func() { inTxn = false }()
+				return f(executor.NewMemTxnExecutor(query, nil))
+			}
+			err := NewService(sql).cleanupHistory(ctx)
+			if phase == "success" {
+				require.NoError(t, err)
+			} else if phase == "cancelled fence" {
+				require.ErrorIs(t, err, context.Canceled)
+			} else {
+				require.ErrorIs(t, err, failure)
+			}
+			require.Equal(t, 1, txns)
+			require.Equal(t, 1, fences)
+			if phase == "success" || phase == "cursor failure" {
+				require.Equal(t, 1, cursors)
+			} else {
+				require.Zero(t, cursors)
+			}
+		})
+	}
 }
 
 func (s *scheduledTasks) CreateCronTask(_ context.Context, metadata task.TaskMetadata, expression string) error {
@@ -145,8 +229,14 @@ func TestMaterializedViewTaskAdmission(t *testing.T) {
 			metadataError := errors.New("metadata unavailable")
 			definerError := errors.New("definer permission revoked")
 			var writes []string
-			loads, calls := 0, 0
+			loads, calls, fences := 0, 0, 0
 			sql := executor.NewMemExecutor(func(query string) (executor.Result, error) {
+				if strings.HasPrefix(query, "select revision from mo_catalog.mo_mv_account_state ") {
+					require.Empty(t, writes)
+					require.Contains(t, query, "where account_id=7")
+					fences++
+					return executor.Result{}, nil
+				}
 				if strings.HasPrefix(query, "select database_name,") {
 					loads++
 					if name == "metadata failure" {
@@ -237,6 +327,11 @@ func TestMaterializedViewTaskAdmission(t *testing.T) {
 			if name != "definer failure" {
 				require.Empty(t, writes)
 			}
+			if name == "definer failure" || name == "already published failure" {
+				require.Equal(t, 1, fences)
+			} else {
+				require.Zero(t, fences)
+			}
 			if name == "definer success" || name == "definer failure" || name == "already published failure" {
 				require.Equal(t, 1, calls)
 			} else {
@@ -289,6 +384,11 @@ func TestMaterializedViewInterruptedTaskRecovery(t *testing.T) {
 			failure := errors.New("interrupted task recovery unavailable")
 			var writes []string
 			sql := executor.NewMemExecutor(func(query string) (executor.Result, error) {
+				if strings.HasPrefix(query, "select revision from mo_catalog.mo_mv_account_state ") {
+					require.Empty(t, writes)
+					require.Contains(t, query, "where account_id=7")
+					return executor.Result{}, nil
+				}
 				if strings.HasPrefix(query, "select account_id,mv_id,run_id,") {
 					require.Contains(t, query, "status='RUNNING'")
 					require.Contains(t, query, "interval 360 second")
@@ -345,7 +445,7 @@ func TestMaterializedViewInterruptedTaskRecovery(t *testing.T) {
 }
 
 func TestMaterializedViewHistoryRetention(t *testing.T) {
-	for _, phase := range []string{"overlapping pages", "key scan failure", "count page failure", "age page failure", "delete failure", "cursor failure", "cancelled page"} {
+	for _, phase := range []string{"overlapping pages", "key scan failure", "count page failure", "age page failure", "delete failure", "fence failure", "cursor failure", "cancelled page"} {
 		t.Run(phase, func(t *testing.T) {
 			mp := mpool.MustNewZero()
 			t.Cleanup(func() { require.Zero(t, mp.CurrNB()) })
@@ -393,6 +493,11 @@ func TestMaterializedViewHistoryRetention(t *testing.T) {
 					require.Contains(t, query, "account_id=7 and mv_id=99")
 					require.Contains(t, query, "run_id='old-terminal-run' and status<>'RUNNING'")
 					if phase == "delete failure" {
+						return executor.Result{}, failure
+					}
+				case strings.HasPrefix(query, "select revision from mo_catalog.mo_mv_account_state "):
+					require.Contains(t, query, "where account_id=7")
+					if phase == "fence failure" {
 						return executor.Result{}, failure
 					}
 				case strings.HasPrefix(query, "update "):
@@ -507,6 +612,8 @@ func TestMaterializedViewHistoryBacklogConverges(t *testing.T) {
 					require.Contains(t, q, "and status<>'RUNNING'")
 					require.False(t, deleted[q], "overlapping pages must delete each terminal ID once")
 					deleted[q] = true
+				case strings.HasPrefix(q, "select revision from mo_catalog.mo_mv_account_state "):
+					require.Contains(t, q, "where account_id=7")
 				case strings.HasPrefix(q, "update "):
 					cursors = append(cursors, q)
 				default:

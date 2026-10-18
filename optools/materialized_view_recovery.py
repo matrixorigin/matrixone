@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
 """Opt-in native upgrade/crash validation; owns every service it starts.
 
-Requires the pinned pre-feature mo-service (default: main 4.0.16), a current mo-service built with
-the matrixone_mv_faults tag, and test/materialized_view/native_probe. Uses only
-the Python standard library. Run from the repository root; see the validation
+Full mode requires the pinned pre-feature mo-service (default: main 4.0.16),
+a current mo-service built with the matrixone_mv_faults tag, and
+test/materialized_view/native_probe. --refresh-only needs the current production
+service and probe; it skips startup migration injection. Uses only the Python
+standard library. Run from the repository root; see the validation
 document for build commands and the tested old revision.
 """
 
@@ -39,7 +41,7 @@ class Fixture:
         self.logs = []
         self.started = time.monotonic()
         self.report = {"passed_cases": [], "observations": {}, "binaries": {}, "sql_observations": {}}
-        for key in ("service", "old_service", "probe"):
+        for key in ("service", "probe") + (("old_service",) if args.old_service else ()):
             path = pathlib.Path(getattr(args, key)).resolve()
             with path.open("rb") as binary:
                 digest = hashlib.sha256()
@@ -305,26 +307,35 @@ class Fixture:
         return current
 
     def run(self):
-        current = self.native_upgrade()
+        if self.args.refresh_only:
+            self.start("storage", storage=True)
+            current = self.start("initial")
+            self.ready(current)
+            self.sql("create database mv_recovery")
+            self.sql("create table mv_recovery.facts(id int primary key,v bigint)")
+            self.sql("insert into mv_recovery.facts values(1,10),(2,20)")
+        else:
+            current = self.native_upgrade()
         self.sql("set experimental_materialized_view=1")
         self.sql("create materialized view mv_recovery.result refresh every interval 1 day as select count(*) as n,sum(v) as s from mv_recovery.facts")
         self.sql("refresh materialized view mv_recovery.result")
         initial = self.snapshot()
         assert initial[0][:2] == ["2", "30"], initial
-        # Normal automatic-upgrade startup of an actual old binary must refuse
-        # the persisted newer cluster before admitting SQL or scheduled work.
-        old = self.start("unsafe-downgrade", old=True)
-        wait_for("unsafe old-binary startup refused", lambda: old.poll() is not None, seconds=120)
-        log = (self.root / "unsafe-downgrade.log").read_text(errors="replace")
-        fences = (f"cannot startup a old version {self.args.old_version} to join cluster, current version is 4.0.17",
-                  f"requires persisted expression protocol version 119 (local version {self.args.old_protocol})")
-        reason = next((fence for fence in fences if fence in log), None)
-        assert old.returncode != 0 and reason, log[-3000:]
-        assert self.snapshot() == initial
-        assert self.q("select count(*) from mo_task.sys_async_task where task_metadata_executor=17 and task_runner='ee1dccb4-4d3c-41f8-b482-5251dc7a41bf'") == [["0"]]
-        self.passed("old binary refuses downgrade with populated periodic MV before SQL/task admission", {"exit_code": old.returncode, "fence": reason})
-        # Wait for failed old-node liveness to leave the protocol inventory.
-        wait_for("old node removed from protocol inventory", lambda: not self.q("select mo_ctl('cn','GetProtocolVersion','')", allow_error=True)["error"], seconds=240)
+        if not self.args.refresh_only:
+            # Normal automatic-upgrade startup of an actual old binary must refuse
+            # the persisted newer cluster before admitting SQL or scheduled work.
+            old = self.start("unsafe-downgrade", old=True)
+            wait_for("unsafe old-binary startup refused", lambda: old.poll() is not None, seconds=120)
+            log = (self.root / "unsafe-downgrade.log").read_text(errors="replace")
+            fences = (f"cannot startup a old version {self.args.old_version} to join cluster, current version is 4.0.17",
+                      f"requires persisted expression protocol version 119 (local version {self.args.old_protocol})")
+            reason = next((fence for fence in fences if fence in log), None)
+            assert old.returncode != 0 and reason, log[-3000:]
+            assert self.snapshot() == initial
+            assert self.q("select count(*) from mo_task.sys_async_task where task_metadata_executor=17 and task_runner='ee1dccb4-4d3c-41f8-b482-5251dc7a41bf'") == [["0"]]
+            self.passed("old binary refuses downgrade with populated periodic MV before SQL/task admission", {"exit_code": old.returncode, "fence": reason})
+            # Wait for failed old-node liveness to leave the protocol inventory.
+            wait_for("old node removed from protocol inventory", lambda: not self.q("select mo_ctl('cn','GetProtocolVersion','')", allow_error=True)["error"], seconds=240)
         self.sql("update mv_recovery.facts set v=25")
         self.enable("mv_refresh_after_commit", action="echo", argument=1)
         self.sql("refresh materialized view mv_recovery.result")
@@ -338,6 +349,7 @@ class Fixture:
         current = self.crash_refresh(current, "after_commit", 60)
         self.sql("drop materialized view mv_recovery.result")
         self.sql("drop database mv_recovery")
+        assert self.q("select count(*) from mo_catalog.mo_database where datname='mv_recovery'") == [["0"]]
         for table in ("mo_materialized_views", "mo_mv_dependencies", "mo_mv_refresh_runs"):
             assert self.q("select count(*) from mo_catalog." + table) == [["0"]]
         # Queue completion precedes HAKeeper's periodic GC. A completed row is
@@ -372,14 +384,18 @@ class Fixture:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--refresh-only", action="store_true",
+                        help="fresh current cluster: run commit-loss and refresh crash/replay cases without upgrade/downgrade")
     parser.add_argument("--service", required=True)
-    parser.add_argument("--old-service", required=True)
+    parser.add_argument("--old-service", help="required unless --refresh-only is selected")
     parser.add_argument("--old-version", default="4.0.16", help="catalog version of the pinned old binary")
     parser.add_argument("--old-protocol", type=int, default=118,
                         help="expected protocol of the pinned old binary (118 by default)")
     parser.add_argument("--probe", required=True)
     parser.add_argument("--work-dir", required=True)
     args = parser.parse_args()
+    if not args.refresh_only and not args.old_service:
+        parser.error("--old-service is required for upgrade/downgrade validation")
     fixture = Fixture(args)
     try:
         fixture.run()

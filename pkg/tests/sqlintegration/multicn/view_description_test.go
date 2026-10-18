@@ -163,7 +163,7 @@ func TestViewDescriptionTwoCN(t *testing.T) {
 	first = nil
 	require.NoError(t, second.Close())
 	second = nil
-	require.NoError(t, cluster.Close())
+	require.NoError(t, cluster.Stop())
 	cancel()
 	require.NoError(t, cluster.Start())
 	// Lifecycle admission must not consume the restarted generation's query budget.
