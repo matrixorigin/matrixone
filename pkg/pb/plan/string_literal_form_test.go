@@ -40,6 +40,18 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600, features.Any())
 		})
 	}
+	for name, expr := range map[string]*Expr{
+		"dependent_program": {Expr: &Expr_Dependent{Dependent: &DependentExpr{ProgramId: 1}}},
+		"correlation_slot":  {Expr: &Expr_Slot{Slot: &CorrelationSlot{ProgramId: 1}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.True(t, features.DependentPrograms)
+			require.True(t, features.Any(), "the independent v119 capability must survive the VIEWS gate")
+			require.False(t, features.ViewMetadataFunctions)
+		})
+	}
 }
 
 func TestValidateStringLiteralFormsAfterWireDecode(t *testing.T) {

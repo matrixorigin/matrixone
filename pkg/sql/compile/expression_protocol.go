@@ -136,7 +136,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion115)
 	}
 	if features.ViewMetadataFunctions {
-		required = max(required, defines.MORPCVersion119)
+		required = max(required, defines.MORPCVersion120)
 	}
 	return required
 }

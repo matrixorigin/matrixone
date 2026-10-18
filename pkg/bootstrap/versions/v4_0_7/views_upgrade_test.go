@@ -91,7 +91,7 @@ func TestViewsDefinitionProbePropagatesCatalogErrors(t *testing.T) {
 func TestViewsUpgradeIsScheduledForCompletedV406Tenants(t *testing.T) {
 	require.Equal(t, "4.0.7", Handler.Metadata().Version)
 	require.Equal(t, "4.0.6", Handler.Metadata().MinUpgradeVersion)
-	require.Equal(t, int64(defines.MORPCVersion119), Handler.Metadata().RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion120), Handler.Metadata().RequiredProtocolVersion)
 	require.Len(t, tenantUpgEntries, 1)
 
 	entry := tenantUpgEntries[0]
@@ -99,11 +99,11 @@ func TestViewsUpgradeIsScheduledForCompletedV406Tenants(t *testing.T) {
 	require.Equal(t, "VIEWS", entry.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
 	require.Equal(t, sysview.InformationSchemaViewsDDL, entry.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion119), entry.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion120), entry.RequiredProtocolVersion)
 }
 
 func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
-	for _, peer := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119} {
+	for _, peer := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120} {
 		t.Run(fmt.Sprintf("peer-%d", peer), func(t *testing.T) {
 			var executed []string
 			txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
@@ -120,8 +120,8 @@ func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
 				return false, nil
 			}
 			err := entry.Upgrade(txn, 0)
-			if peer < defines.MORPCVersion119 {
-				require.ErrorContains(t, err, "requires all CNs to support protocol version 119")
+			if peer < defines.MORPCVersion120 {
+				require.ErrorContains(t, err, "requires all CNs to support protocol version 120")
 				require.Empty(t, executed)
 			} else {
 				require.NoError(t, err)
@@ -156,9 +156,9 @@ func TestViewsUpgradeAuthoringProtocolGate(t *testing.T) {
 	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion116))
 	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion118))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion119))
 	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
 
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion119))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion120))
 	require.True(t, InformationSchemaViewsAuthoringProtocolReady(txn))
 }
