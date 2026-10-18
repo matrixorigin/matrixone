@@ -70,20 +70,22 @@ func TestDependentCoordinatorAdmissionBeforeSourceWork(t *testing.T) {
 	defer proc.Free()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	require.NotNil(t, rt)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+	previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 	c := &Compile{proc: proc}
 	// Neither source metadata nor a cached execution may initialize when the
 	// deployment capability is below the program's contract.
 	_, err := c.compileDependentQuery(nil)
-	require.ErrorContains(t, err, "protocol version 112")
+	require.ErrorContains(t, err, "protocol version 119")
 	op := &dependent.Operator{}
-	require.ErrorContains(t, op.Prepare(proc), "protocol version 112")
+	require.ErrorContains(t, op.Prepare(proc), "protocol version 119")
 }
 
 func TestDependentWriteTargetAdmission(t *testing.T) {
 	proc := testutil.NewProcessWithOwnedMPool(t, t.Name(), mpool.MustNewZero())
 	defer proc.Free()
-	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
 	shared := &plan.TableDef{Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{
 		Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: catalog.PropFromPublication, Value: "true"}}},
 	}}}}

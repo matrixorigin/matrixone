@@ -150,6 +150,17 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 			if copy := existenceNodes[id]; copy != nil {
 				n = copy
 			}
+			if n.NodeType == plan.Node_LOCK_OP && len(n.ProjectList) == 0 && len(n.Children) == 1 {
+				// Legacy DML locks forward the native input without an explicit
+				// projection. Preserve that payload in the continuation template,
+				// without publishing a specialization into the cached query.
+				input := query.Nodes[n.Children[0]]
+				n = proto.Clone(n).(*plan.Node)
+				for j, expr := range input.ProjectList {
+					n.ProjectList = append(n.ProjectList, &plan.Expr{Typ: expr.Typ,
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(j)}}})
+				}
+			}
 			nt := &nodeTemplate{node: n, children: append([]int32(nil), n.Children...)}
 			nt.limitIndex, nt.offsetIndex = -1, -1
 			var bounds []*plan.Expr
@@ -276,7 +287,10 @@ func Compile(ctx context.Context, query *plan.Query, compileSource SourceCompile
 
 func (n *nodeTemplate) compileExpressions(ctx context.Context, roots []*plan.Expr) error {
 	var err error
-	n.expressions, err = colexec.CompileDependentExpressions(ctx, roots)
+	// rowTask evaluates these projections/filters over one materialized node
+	// output, including native-kernel and virtual input projections. JOIN's
+	// two-input condition and reducer comparisons use their own namespaces.
+	n.expressions, err = colexec.CompileDependentSingleInputExpressions(ctx, roots)
 	if err != nil {
 		return err
 	}

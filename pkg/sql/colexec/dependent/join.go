@@ -28,8 +28,8 @@ import (
 	"unsafe"
 )
 
-// JoinKernel sequences the native build and probe on one lane. LoopJoin is the
-// sole owner of candidate cursors, matched bits and null-extension decisions.
+// JoinKernel sequences the native build and probe on one lane. The native join
+// owns candidate cursors, matched bits and null-extension decisions.
 type JoinKernel struct {
 	vm.OperatorBase
 	Build          *hashbuild.HashBuild

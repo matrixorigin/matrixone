@@ -39,6 +39,17 @@ func TestDependentPreparedMigrationProtocol(t *testing.T) {
 	ses, prepared, _, execCtx := newPreparedExecuteEnvForSQL(t, 112,
 		"select (select (select t.k limit 1)) from (select 1 as k union all select 2) t")
 	defer ses.Close()
+	prepared.rewritePolicyCaptured = true
+	prepared.rewritePolicyGeneration = ses.rewritePolicyGeneration
+	// A sparse snapshot must retain the dependent handle's protocol identity.
+	ses.mu.Lock()
+	ses.prepareStmts["empty_handle"] = nil
+	ses.mu.Unlock()
+	defer func() {
+		ses.mu.Lock()
+		delete(ses.prepareStmts, "empty_handle")
+		ses.mu.Unlock()
+	}()
 	require.NotNil(t, prepared.PreparePlan.GetDcl().GetPrepare().Plan.GetQuery().Correlation)
 	rt := &Routine{mc: newMigrateController()}
 	rt.setSession(ses)
@@ -48,8 +59,17 @@ func TestDependentPreparedMigrationProtocol(t *testing.T) {
 	require.Empty(t, resp.PrepareStmts)
 	require.NoError(t, rt.migrateConnectionFromActionWithCapabilities(execCtx.reqCtx, query.MigrateConnFromAction_MigrateConnFromExport, true, true, resp, true))
 	require.Len(t, resp.PrepareStmts, 1)
-	require.Equal(t, defines.MORPCVersion112, resp.PrepareStmts[0].RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion119, resp.PrepareStmts[0].RequiredProtocolVersion)
 	require.Equal(t, prepared.Sql, resp.PrepareStmts[0].SQL)
+
+	// The protocol capability cannot override an invalidated rewrite policy.
+	ses.rewriteEnabled.Store(true)
+	prepared.rewritePolicyEnabled = true
+	ses.InvalidatePrivilegeCache()
+	resp = &query.MigrateConnFromResponse{}
+	err = rt.migrateConnectionFromActionWithCapabilities(execCtx.reqCtx, query.MigrateConnFromAction_MigrateConnFromExport, true, true, resp, true)
+	require.True(t, moerr.IsMoErrCode(err, moerr.OkExpectedNotSafeToStartTransfer))
+	require.Empty(t, resp.PrepareStmts)
 }
 
 func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) {
@@ -61,20 +81,24 @@ func TestDependentPreparedMigrationRejectsTargetBeforeStateChange(t *testing.T) 
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 		}
 	}()
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
 	ses.SetLastFoundRows(23)
 	ses.SetLastInsertID(7)
 	err := Migrate(context.Background(), ses, &query.MigrateConnToRequest{
 		LastInsertIDExported: true, LastInsertID: 99, FoundRows: 42,
-		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion112}},
+		PrepareStmts: []*query.PrepareStmt{{Name: "p", SQL: "select 1", RequiredProtocolVersion: defines.MORPCVersion119}},
 	})
-	require.ErrorContains(t, err, "requires protocol version 112")
+	require.ErrorContains(t, err, "requires protocol version 119")
 	require.Equal(t, uint64(23), ses.GetLastFoundRows())
 	require.Equal(t, uint64(7), ses.GetLastInsertID())
-	require.Equal(t, []*PrepareStmt{prepared}, ses.GetPrepareStmts())
+	ses.mu.Lock()
+	retained, count := ses.prepareStmts[prepared.Name], len(ses.prepareStmts)
+	ses.mu.Unlock()
+	require.Same(t, prepared, retained)
+	require.Equal(t, 1, count)
 }
 
 func TestMigrateConnectionFromPreservesPreparedVariableBinding(t *testing.T) {

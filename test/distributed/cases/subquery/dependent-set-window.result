@@ -31,4 +31,41 @@ select sum(id) over (partition by (select 1)) as total from outer_keys order by 
 ➤ total[-5,64,0]  𝄀
 3  𝄀
 3
+create table join_keys (id int);
+insert into join_keys values (1), (1), (null), (3);
+select a.id, b.id, (select (select a.id)) as captured
+from outer_keys a join join_keys b on a.id=b.id order by a.id, b.id;
+➤ id[4,32,0]  ¦  id[4,32,0]  ¦  captured[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+1  ¦  1  ¦  1
+select a.id, b.id, (select (select a.id)) as captured
+from outer_keys a left join join_keys b on a.id=b.id order by a.id, b.id;
+➤ id[4,32,0]  ¦  id[4,32,0]  ¦  captured[4,32,0]  𝄀
+1  ¦  1  ¦  1  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  null  ¦  2
+select a.id, b.id, (select (select a.id)) as captured
+from outer_keys a full join join_keys b on a.id=b.id order by a.id, b.id;
+➤ id[4,32,0]  ¦  id[4,32,0]  ¦  captured[4,32,0]  𝄀
+null  ¦  null  ¦  null  𝄀
+null  ¦  3  ¦  null  𝄀
+1  ¦  1  ¦  1  𝄀
+1  ¦  1  ¦  1  𝄀
+2  ¦  null  ¦  2
+select a.id, b.id, (select (select a.id)) as captured
+from outer_keys a join join_keys b on a.id=b.id and b.id>1 order by a.id, b.id;
+➤ id[4,32,0]  ¦  id[4,32,0]  ¦  captured[4,32,0]
+select a.id, b.id, (select (select a.id)) as captured
+from outer_keys a join join_keys b on a.id<b.id order by a.id, b.id;
+➤ id[4,32,0]  ¦  id[4,32,0]  ¦  captured[4,32,0]  𝄀
+1  ¦  3  ¦  1  𝄀
+2  ¦  3  ¦  2
+select a.id, (select (select a.id)) as captured from outer_keys a
+where a.id in (select b.id from join_keys b) order by a.id;
+➤ id[4,32,0]  ¦  captured[4,32,0]  𝄀
+1  ¦  1
+select a.id, (select (select a.id)) as captured from outer_keys a
+where a.id not in (select b.id from join_keys b where b.id is not null) order by a.id;
+➤ id[4,32,0]  ¦  captured[4,32,0]  𝄀
+2  ¦  2
 drop database dependent_set_window;

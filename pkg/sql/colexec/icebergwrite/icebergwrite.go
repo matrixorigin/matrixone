@@ -79,6 +79,9 @@ func (w *IcebergWrite) Call(proc *process.Process) (vm.CallResult, error) {
 	if err != nil {
 		return result, err
 	}
+	if result.Status == vm.ExecYield {
+		return result, nil
+	}
 	if result.Batch == nil {
 		if w.ctr.opened && !w.ctr.finished {
 			if err := w.Coordinator.Commit(proc.Ctx); err != nil {

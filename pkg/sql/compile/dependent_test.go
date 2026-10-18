@@ -140,6 +140,13 @@ func TestDependentNativeStages(t *testing.T) {
 		name, sql string
 		want      []string
 	}{
+		{"independent_equi_join", `SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a JOIN NATION b ON a.N_NATIONKEY=b.N_NATIONKEY`, []string{"1", "2", "3"}},
+		{"independent_left_join", `SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a LEFT JOIN NATION b ON a.N_NATIONKEY=b.N_NATIONKEY+1`, []string{"1", "2", "3"}},
+		{"independent_full_join", `SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a FULL JOIN NATION b ON a.N_NATIONKEY+1=b.N_NATIONKEY`, []string{"1", "2", "3", "NULL"}},
+		{"independent_semi_join", `SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a WHERE a.N_NATIONKEY IN (SELECT b.N_NATIONKEY FROM NATION b WHERE b.N_NATIONKEY<3)`, []string{"1", "2"}},
+		{"independent_anti_join", `SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a WHERE a.N_NATIONKEY NOT IN (SELECT b.N_NATIONKEY FROM NATION b WHERE b.N_NATIONKEY<3)`, []string{"3"}},
+		{"independent_equi_residual", `SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a JOIN NATION b ON a.N_NATIONKEY=b.N_NATIONKEY AND a.N_REGIONKEY>b.N_NATIONKEY`, []string{"1", "2", "3"}},
+		{"independent_empty_join", `SELECT (SELECT (SELECT a.N_NATIONKEY)) FROM NATION a JOIN NATION b ON a.N_NATIONKEY=b.N_NATIONKEY AND a.N_REGIONKEY<b.N_NATIONKEY`, []string{}},
 		{"found_rows_limit", `SELECT SQL_CALC_FOUND_ROWS (SELECT (SELECT n1.N_NATIONKEY)) FROM NATION n1 LIMIT 1`, []string{"1"}},
 		{"found_rows_offset", `SELECT SQL_CALC_FOUND_ROWS (SELECT (SELECT n1.N_NATIONKEY)) FROM NATION n1 LIMIT 1 OFFSET 1`, []string{"2"}},
 		{"found_rows_zero", `SELECT SQL_CALC_FOUND_ROWS (SELECT (SELECT n1.N_NATIONKEY FROM NATION n2)) FROM NATION n1 LIMIT 0`, []string{}},

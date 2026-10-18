@@ -190,12 +190,12 @@ func overlayPreparedGroupConcatResultMetadata(
 	if query == nil || groupConcatMaxLen == 0 || len(query.Steps) == 0 {
 		return
 	}
-	step := len(query.Steps) - 1
+	step := query.MainOutputStep()
 	if query.HasReturning {
-		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
-			return
-		}
-		step = int(query.ReturningStep)
+		step = query.ReturningStep
+	}
+	if step < 0 || int(step) >= len(query.Steps) {
+		return
 	}
 	rootID := query.Steps[step]
 	if rootID < 0 || int(rootID) >= len(query.Nodes) {

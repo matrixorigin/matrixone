@@ -101,13 +101,15 @@ func TestDependentProtocolGenerationFence(t *testing.T) {
 	defer proc.Free()
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	require.NotNil(t, rt)
-	for _, version := range []any{int64(defines.MORPCVersion111), "112", nil} {
+	previous, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	defer rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+	for _, version := range []any{int64(defines.MORPCVersion118), int64(defines.MORPCVersion117), int64(defines.MORPCVersion116), int64(defines.MORPCVersion115), int64(defines.MORPCVersion114), int64(defines.MORPCVersion113), int64(defines.MORPCVersion112), int64(defines.MORPCVersion111), "119", nil} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		require.ErrorContains(t, proc.RequireDependentProtocol(), "protocol version 112")
+		require.ErrorContains(t, proc.RequireDependentProtocol(), "protocol version 119")
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
 	require.NoError(t, proc.RequireDependentProtocol())
 	// A cached operator must consult the current generation's admission again.
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion111)
-	require.ErrorContains(t, proc.RequireDependentProtocol(), "protocol version 112")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+	require.ErrorContains(t, proc.RequireDependentProtocol(), "protocol version 119")
 }

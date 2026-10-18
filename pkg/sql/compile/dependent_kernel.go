@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersect"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/intersectall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
@@ -299,7 +300,27 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 			case plan.Node_PRE_INSERT_SK:
 				op = constructPreInsertSk(n)
 			case plan.Node_INSERT:
-				op, err = constructInsert(proc, n, c.e, false)
+				if iceberg, checkErr := isIcebergAppendInsert(proc.Ctx, n); checkErr != nil {
+					return nil, checkErr
+				} else if iceberg {
+					// Use the execution process without mutating/copying the shared
+					// compiler. Overwrite and row-level DML need the same security,
+					// scan metadata and object-IO ownership as ordinary Iceberg DML.
+					writerCompile := &Compile{
+						proc: proc, db: c.db,
+						icebergScanPlanner: c.icebergScanPlanner,
+						icebergScanPlans:   c.icebergScanPlans,
+					}
+					var nodes []*plan.Node
+					if c.anal != nil && c.anal.qry != nil {
+						nodes = c.anal.qry.Nodes
+					}
+					op, err = writerCompile.constructIcebergInsert(nodes, n)
+				} else if isExternalWriteInsert(n) {
+					op, err = constructExternalInsert(proc, n, c.e, externalInsertStmtTime(proc, c.startAt))
+				} else {
+					op, err = constructInsert(proc, n, c.e, false)
+				}
 			case plan.Node_MULTI_UPDATE:
 				op, err = constructMultiUpdate(n, c.e, proc, multi_update.UpdateWriteTable, false)
 			case plan.Node_DELETE:
@@ -418,6 +439,24 @@ func (c *Compile) compileDependentJoin(n *plan.Node, children []*plan.Node) (dep
 	default:
 		return nil, moerr.NewNYIf(c.proc.Ctx, "dependent native join %s", n.JoinType)
 	}
+	needsPairEvaluation := false
+	for _, expr := range n.OnList {
+		_ = plan.VisitExprTree(expr, func(expr *plan.Expr) error {
+			needsPairEvaluation = needsPairEvaluation || expr.GetDependent() != nil
+			return nil
+		})
+		needsPairEvaluation = needsPairEvaluation ||
+			plan2.ContainsGuardedJoinDiagnosticWithProof(c.proc, expr, c.preparedJoinDiagnosticFree)
+	}
+	if !needsPairEvaluation {
+		if n.JoinType == plan.Node_MARK {
+			if canUseHashMarkJoinWithInputs(n, children[0], children[1]) {
+				return c.compileDependentHashJoin(n, children)
+			}
+		} else if c.broadcastJoinUsesHash(n) {
+			return c.compileDependentHashJoin(n, children)
+		}
+	}
 	cond := colexec.RewriteFilterExprList(n.OnList)
 	var program *colexec.DependentExpressionProgram
 	var err error
@@ -503,10 +542,21 @@ func (c *Compile) compileDependentHashJoin(n *plan.Node, children []*plan.Node) 
 		if n.JoinType == plan.Node_DEDUP {
 			join = constructDedupJoin(n, inputTypes[0], inputTypes[1], proc)
 		} else {
-			join = constructHashJoin(n, children[0], inputTypes[0], inputTypes[1], proc)
+			var hashJoin *hashjoin.HashJoin
+			if n.JoinType == plan.Node_MARK {
+				hashJoin = constructBroadcastHashMarkJoin(n, children[0], inputTypes[0], inputTypes[1], proc)
+			} else {
+				hashJoin = constructHashJoin(n, children[0], inputTypes[0], inputTypes[1], proc)
+			}
+			// The continuation lane has one broadcast build, even if the ordinary
+			// planner's placement statistics selected distributed shuffle.
+			hashJoin.IsShuffle = false
+			join = hashJoin
 		}
 		build := constructBroadcastHashBuild(join, proc, 1)
-		build.DirectInput = true
+		// The direct-input lane owns materialized build batches, including when
+		// the ordinary pipeline could keep only primary-key membership.
+		build.NeedBatches, build.DirectInput = true, true
 		root := &dependent.JoinKernel{Build: build, Join: join, Updates: updates, UpdateCols: updateCols}
 		root.SetAnalyzeControl(int(n.NodeId), false)
 		join.GetOperatorBase().SetAnalyzeControl(int(n.NodeId), false)

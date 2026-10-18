@@ -357,6 +357,22 @@ func (builder *QueryBuilder) finalizeCorrelationBindings() error {
 			q.Steps = append(q.Steps, p.RootNode)
 		}
 	}
+	return builder.refreshCorrelationBindings()
+}
+
+// Late DML graph rewrites keep the main output identity but can add or remove
+// materialized steps and expression owners. Derive their directory from the
+// final graph rather than extending a stale step-owner slice.
+func (builder *QueryBuilder) refreshCorrelationBindings() error {
+	q := builder.qry
+	spec := q.Correlation
+	if spec == nil {
+		return nil
+	}
+	stepByRoot := make(map[int32]int, len(q.Steps))
+	for i, root := range q.Steps {
+		stepByRoot[root] = i
+	}
 	spec.StepOwners = make([]uint32, len(q.Steps))
 	nodeOwner := make(map[int32]uint32)
 	for i, p := range spec.Programs {
@@ -388,6 +404,20 @@ func (builder *QueryBuilder) finalizeCorrelationBindings() error {
 		}
 	}
 	return builder.assignCorrelationStages()
+}
+
+// A legacy DML source was remapped before its writer nodes were built. Keep its
+// directory slot until the final writer can replace it, so appended program
+// steps and every SourceStep retain their indexes.
+func (builder *QueryBuilder) replaceLegacyDMLSourceStep(sourceStep int32) {
+	q := builder.qry
+	if q.Correlation == nil {
+		return
+	}
+	last := len(q.Steps) - 1
+	q.Steps[sourceStep] = q.Steps[last]
+	q.Steps = q.Steps[:last]
+	q.Correlation.MainOutputStep = sourceStep
 }
 
 func (builder *QueryBuilder) assignCorrelationStages() error {
