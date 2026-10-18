@@ -1066,12 +1066,30 @@ func TestBlockDataReadWithFilterAppliesVectorTopKAfterResidual(t *testing.T) {
 }
 
 func TestPositionsOfSelectedRows(t *testing.T) {
-	positions, err := positionsOfSelectedRows([]int64{1, 3, 5}, []int64{3, 5})
-	require.NoError(t, err)
-	require.Equal(t, []int64{1, 2}, positions)
-	for _, selected := range [][]int64{nil, {}, {1, 5}} {
-		_, err = positionsOfSelectedRows(selected, []int64{3})
-		require.ErrorContains(t, err, "not present in the filtered row set")
+	for _, tc := range []struct {
+		name                   string
+		selected, subset, want []int64
+		wantError              bool
+	}{
+		{name: "implicit_identity", subset: []int64{3, 5}, want: []int64{3, 5}},
+		{name: "implicit_identity_empty"},
+		{name: "explicit_empty", selected: []int64{}, want: []int64{}},
+		{name: "nonidentity", selected: []int64{1, 3, 5}, subset: []int64{3, 5}, want: []int64{1, 2}},
+		{name: "missing_from_empty", selected: []int64{}, subset: []int64{3}, wantError: true},
+		{name: "missing_from_subset", selected: []int64{1, 5}, subset: []int64{3}, wantError: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			positions, err := positionsOfSelectedRows(tc.selected, tc.subset)
+			if tc.wantError {
+				require.ErrorContains(t, err, "not present in the filtered row set")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, positions)
+			if tc.selected == nil && len(tc.subset) > 0 {
+				require.Same(t, &tc.subset[0], &positions[0], "implicit identity must not allocate a row map")
+			}
+		})
 	}
 }
 

@@ -1318,14 +1318,9 @@ func blockDataReadWithFilter(
 		if topErr != nil {
 			return topErr
 		}
-		// Nil selection means the full, uncompressed block: physical Top-K
-		// rows are already early-column positions. TopN returns owned, sorted rows.
-		winnerPositions := topRows
-		if selectedPhysicalRows != nil {
-			winnerPositions, err = positionsOfSelectedRows(selectedPhysicalRows, topRows)
-			if err != nil {
-				return err
-			}
+		winnerPositions, mapErr := positionsOfSelectedRows(selectedPhysicalRows, topRows)
+		if mapErr != nil {
+			return mapErr
 		}
 		for _, pos := range earlyColumns {
 			if pos == topColPos || len(winnerPositions) == 0 {
@@ -1536,7 +1531,11 @@ func blockDataReadWithSelectedFilterTopK(
 	return nil
 }
 
+// A nil selection is the implicit identity map; its result aliases subsetRows.
 func positionsOfSelectedRows(selectedRows, subsetRows []int64) ([]int64, error) {
+	if selectedRows == nil {
+		return subsetRows, nil
+	}
 	positions := make([]int64, 0, len(subsetRows))
 	next := 0
 	for _, row := range subsetRows {
