@@ -590,6 +590,7 @@ func cloneBindContextForWindowValidation(ctx *BindContext) *BindContext {
 }
 
 type windowValidationCTERefSnapshot struct {
+	ast          *tree.CTE
 	ref          *CTERef
 	isRecursive  bool
 	occurrences  []cteOccurrence
@@ -606,7 +607,7 @@ type windowValidationContextSnapshot struct {
 // publishing its node ids through the mutable CTE metadata shared by the real
 // query builder. CTE declaration contexts are included because binding a CTE
 // can also record view dependencies on the declaration root.
-func snapshotWindowValidationCTEState(ctx *BindContext) func() {
+func snapshotWindowValidationCTEState(ctx *BindContext, isolateAST ...bool) func() {
 	cteSnapshots := make(map[*CTERef]windowValidationCTERefSnapshot)
 	contextSnapshots := make(map[*BindContext]windowValidationContextSnapshot)
 
@@ -619,11 +620,17 @@ func snapshotWindowValidationCTEState(ctx *BindContext) func() {
 			return
 		}
 		cteSnapshots[ref] = windowValidationCTERefSnapshot{
+			ast:          ref.ast,
 			ref:          ref,
 			isRecursive:  ref.isRecursive,
 			occurrences:  append([]cteOccurrence(nil), ref.occurrences...),
 			hasNestedRef: ref.hasNestedRef,
 			hasNestedUse: ref.hasNestedUse,
+		}
+		if len(isolateAST) > 0 && isolateAST[0] && ref.ast != nil {
+			ref.ast = cloneTreeValue(reflect.ValueOf(ref.ast), make(map[treeClonePointer]reflect.Value)).Interface().(*tree.CTE)
+			ref.occurrences = nil // Node IDs belong to the real builder.
+			ref.hasNestedRef, ref.hasNestedUse = false, false
 		}
 		collectContext(ref.declarationCtx)
 	}
@@ -651,6 +658,7 @@ func snapshotWindowValidationCTEState(ctx *BindContext) func() {
 
 	return func() {
 		for _, snapshot := range cteSnapshots {
+			snapshot.ref.ast = snapshot.ast
 			snapshot.ref.isRecursive = snapshot.isRecursive
 			snapshot.ref.occurrences = snapshot.occurrences
 			snapshot.ref.hasNestedRef = snapshot.hasNestedRef

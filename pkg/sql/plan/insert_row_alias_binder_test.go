@@ -1,0 +1,947 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package plan
+
+import (
+	"context"
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/stretchr/testify/require"
+)
+
+// This is the internal bound-plan walk contract, not an expansion of the
+// supported row-alias RHS subquery admission boundary.
+func TestInsertRowAliasSubqueryRetargetsIndexSearchExpressions(t *testing.T) {
+	const oldTag, newTag, otherTag int32 = 11, 22, 33
+	column := func(tag, pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: tag, ColPos: pos}}}
+	}
+	query, limit, budget := column(oldTag, 0), column(oldTag, 1), column(oldTag, 2)
+	filter, lower, upper := column(oldTag, 3), column(oldTag, 4), column(otherTag, 5)
+	correlated := &planpb.Expr{Expr: &planpb.Expr_Corr{Corr: &planpb.CorrColRef{RelPos: oldTag, ColPos: 6, Depth: 1}}}
+	scan := &planpb.IndexSearchScan{
+		Index:        &planpb.IndexDef{IndexName: "idx", IndexAlgo: "ivfflat"},
+		QueryPayload: query, CandidateLimit: limit,
+		AlgoExprNames: []string{"first_round_limit"}, AlgoExprs: []*planpb.Expr{budget},
+		PreFilters:    []*planpb.Expr{filter, correlated},
+		DistanceRange: &planpb.DistRange{LowerBound: lower, UpperBound: upper},
+	}
+	builder := &QueryBuilder{qry: &planpb.Query{Nodes: []*planpb.Node{{
+		NodeId: 0, NodeType: planpb.Node_INDEX_SEARCH_SCAN, IndexSearchScan: scan,
+	}}}}
+	root := &planpb.Expr{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{NodeId: 0}}}
+	builder.rewriteInsertSubqueryOuterTag(root, oldTag, newTag)
+	for pos, expr := range []*planpb.Expr{query, limit, budget, filter, lower} {
+		require.Equal(t, newTag, expr.GetCol().RelPos)
+		require.Equal(t, int32(pos), expr.GetCol().ColPos)
+	}
+	require.Equal(t, otherTag, upper.GetCol().RelPos)
+	require.Equal(t, int32(5), upper.GetCol().ColPos)
+	require.Equal(t, newTag, correlated.GetCorr().RelPos)
+	require.Equal(t, int32(6), correlated.GetCorr().ColPos)
+	require.Equal(t, int32(1), correlated.GetCorr().Depth)
+	// Repeating the walk must not alter unrelated identity or offsets.
+	builder.rewriteInsertSubqueryOuterTag(root, oldTag, newTag)
+	require.Equal(t, newTag, budget.GetCol().RelPos)
+	require.Equal(t, otherTag, upper.GetCol().RelPos)
+	require.Equal(t, int32(1), correlated.GetCorr().Depth)
+}
+
+func testInsertAliasTable() *planpb.TableDef {
+	return &planpb.TableDef{
+		Name: "t",
+		Cols: []*planpb.ColDef{
+			{Name: "id"},
+			{Name: "a"},
+			{Name: "b"},
+		},
+		Name2ColIndex: map[string]int32{"id": 0, "a": 1, "b": 2},
+	}
+}
+
+func testInsertAliasName(parts ...string) *tree.UnresolvedName {
+	cstrs := make([]*tree.CStr, len(parts))
+	for i, part := range parts {
+		cstrs[i] = tree.NewCStr(part, 1)
+	}
+	return tree.NewUnresolvedName(cstrs...)
+}
+
+func testInsertAliasNameWithTableCase(table, column string, lowerCaseTableNames int64) *tree.UnresolvedName {
+	return tree.NewUnresolvedName(tree.NewCStr(table, lowerCaseTableNames), tree.NewCStr(column, 1))
+}
+
+func TestInsertRowAliasBindingMapsTargetIdentity(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	binding, err := validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"x", "y"}},
+		[]string{"b", "a"}, tableDef, "db", "t", 1,
+	)
+	require.NoError(t, err)
+	require.Equal(t, insertRowAliasColumn{targetIdx: 2, incomingPos: 2}, binding.cols["x"])
+	require.Equal(t, insertRowAliasColumn{targetIdx: 1, incomingPos: 1}, binding.cols["y"])
+
+	require.NoError(t, binding.remapIncomingPositions(context.Background(), tableDef, map[string]int32{
+		"t.a": 4,
+		"t.b": 3,
+	}))
+	require.Equal(t, 3, binding.cols["x"].incomingPos)
+	require.Equal(t, 4, binding.cols["y"].incomingPos)
+}
+
+func TestInsertRowAliasBindingRemapsGeneratedColumnByIdentity(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{
+		Name:         "g",
+		GeneratedCol: &planpb.GeneratedCol{},
+	})
+	tableDef.Name2ColIndex["g"] = 3
+	binding, err := validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"id", "g"}},
+		[]string{"id", "g"}, tableDef, "db", "t", 1,
+	)
+	require.NoError(t, err)
+	require.NoError(t, binding.remapIncomingPositions(context.Background(), tableDef, map[string]int32{
+		"t.id": 5,
+		"t.g":  2,
+	}))
+	require.Equal(t, 5, binding.cols["id"].incomingPos)
+	require.Equal(t, 2, binding.cols["g"].incomingPos)
+}
+
+func TestInsertRowAliasBinderResolvesIncomingAndTargetRows(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	binding, err := validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"x", "y"}},
+		[]string{"b", "a"}, tableDef, "db", "t", 1,
+	)
+	require.NoError(t, err)
+	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, binding)
+
+	expr, err := binder.BindColRef(testInsertAliasName("n", "x"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(7), expr.GetCol().RelPos)
+	require.Equal(t, int32(2), expr.GetCol().ColPos)
+
+	expr, err = binder.BindColRef(testInsertAliasName("t", "a"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(11), expr.GetCol().RelPos)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
+
+	expr, err = binder.BindColRef(testInsertAliasName("n", "x"), 2, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(2), expr.GetCorr().Depth)
+	require.Equal(t, int32(7), expr.GetCorr().RelPos)
+	require.Equal(t, int32(2), expr.GetCorr().ColPos)
+}
+
+func TestInsertRowAliasBinderUsesVisibleTargetForCorrelation(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	binding, err := validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"id", "x", "y"}},
+		[]string{"id", "a", "b"}, tableDef, "db", "t", 1,
+	)
+	require.NoError(t, err)
+	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, binding)
+	binder.SetTargetCorrelationTag(13)
+
+	expr, err := binder.BindColRef(testInsertAliasName("t", "a"), 1, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), expr.GetCorr().Depth)
+	require.Equal(t, int32(13), expr.GetCorr().RelPos)
+	require.Equal(t, int32(1), expr.GetCorr().ColPos)
+}
+
+func TestInsertRowAliasCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select cast(e.ename as json) from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.dept.deptno)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasTargetCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
+			"where e.deptno = coalesce(constraint_test.dept.deptno, 0))")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasCandidateCorrelatedSubqueryIsRejectedBeforeBuild(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
+			"where e.deptno = n.id)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasCandidateCorrelatedRejectsMultiRowInput(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(id, name, location) "+
+			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
+			"where e.deptno = n.id)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasNestedCandidateCorrelationIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
+			"from constraint_test.emp as e where e.deptno = n.id)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestLegacyOndupIgnoresLocalAliasMatchingTarget(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') "+
+			"on duplicate key update loc = (select dept.ename from constraint_test.emp as dept "+
+			"where dept.deptno = (select 1))")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
+func TestInsertRowAliasCorrelatedRejectsOrderedAssignmentComposition(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update dname = 'changed', loc = (select max(e.ename) from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.dept.deptno)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasCorrelatedRejectsMultiRowInput(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(id, name, location) "+
+			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.dept.deptno)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasTargetCorrelatedSubqueryWithUniqueConflictIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select e.ename from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.dept.deptno)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasTargetCorrelatedSubqueryWithFakePrimaryIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.fake_pk_t(a, b) values (1, 'x') as n(k, v) "+
+			"on duplicate key update b = (select e.ename from constraint_test.emp as e "+
+			"where e.deptno = constraint_test.fake_pk_t.a)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasNestedCorrelationIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n(id, name, location) "+
+			"on duplicate key update loc = (select max(e.ename) from constraint_test.emp as e "+
+			"where e.deptno = (select max(e2.deptno) from constraint_test.emp as e2 "+
+			"where e2.deptno = constraint_test.dept.deptno))")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasNestedBareCandidateCorrelationIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY'), (1, 'Marketing', 'LA') as n(k, incoming_a, incoming_b) "+
+			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
+			"from constraint_test.emp as s where s.deptno = k)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasNestedBareCandidateCorrelationSingleRowIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') as n(k, incoming_a, incoming_b) "+
+			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
+			"from constraint_test.emp as s where s.deptno = k)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestLegacyOndupNestedBareLocalColumnDoesNotCountAsCandidate(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY'), (1000, 'Marketing', 'LA') "+
+			"on duplicate key update loc = (select (select q.ename from constraint_test.emp as q) "+
+			"from constraint_test.emp as s where s.deptno = empno)")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
+func TestInsertRowAliasNestedBareTargetCorrelationIsRejected(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.single_idx_t(id, val) values (1, 10) as n(k, v) "+
+			"on duplicate key update val = (select (select q.empno from constraint_test.emp as q) "+
+			"from constraint_test.emp as s where s.empno = id)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestLegacyOndupNestedBareLocalColumnDoesNotCountAsTarget(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.single_idx_t(id, val) values (1, 10) "+
+			"on duplicate key update val = (select (select q.empno from constraint_test.emp as q) "+
+			"from constraint_test.self_ref as s where s.parent_id = id)")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
+func TestInsertRowAliasGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.fake_pk_no_unique_gen(a, g) values (1, default) as n(x, y) "+
+			"on duplicate key update a = n.x")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
+func TestInsertRowAliasImplicitGeneratedDefaultNoKeyFallbackBuilds(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.fake_pk_no_unique_gen values (1, default) as n "+
+			"on duplicate key update a = n.a")
+	require.NoError(t, err)
+	require.NotNil(t, logicPlan)
+}
+
+func TestInsertRowAliasImplicitGeneratedColumnsRemainInAlias(t *testing.T) {
+	for _, sql := range []string{
+		"insert into constraint_test.fake_pk_no_unique_gen values (1, default) as n(x, y) on duplicate key update a = n.x",
+		"insert into constraint_test.fake_pk_no_unique_gen values (1, default) as n on duplicate key update a = n.g",
+	} {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+		require.NoError(t, err, sql)
+		require.NotNil(t, logicPlan, sql)
+	}
+}
+
+func TestLegacyOndupUncorrelatedScalarSubqueryDoesNotAddTargetLookup(t *testing.T) {
+	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno, dname, loc) values (999, 'Sales', 'NY') "+
+			"on duplicate key update loc = (select max(e.deptno) from constraint_test.emp as e)")
+	require.NoError(t, err)
+
+	targetScans := 0
+	for _, node := range logicPlan.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef != nil && node.TableDef.Name == "dept" {
+			targetScans++
+		}
+	}
+	require.Equal(t, 2, targetScans,
+		"an uncorrelated ODKU subquery must not add a target-correlation lookup")
+}
+
+func TestInsertRowAliasTargetCorrelationThenUncorrelatedSubqueryKeepsBindings(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.emp(empno, ename, job, sal, comm) values (999, 'Sales', 'X', 1, 2) as n(id, name, role, salary, commission) "+
+			"on duplicate key update sal = (select max(e.sal) from constraint_test.emp as e "+
+			"where e.empno = constraint_test.emp.empno), comm = (select max(e.sal) from constraint_test.emp as e)")
+	require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+}
+
+func TestInsertRowAliasBinderRejectsAmbiguousAndInvalidNames(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	binding, err := validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "n"}, []string{"a", "b"}, tableDef, "db", "t", 1,
+	)
+	require.NoError(t, err)
+	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, binding)
+	_, err = binder.BindColRef(testInsertAliasName("a"), 0, true)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "ambiguous")
+
+	for _, alias := range []*tree.AliasClause{
+		{Alias: "t"},
+		{Alias: "n", Cols: tree.IdentifierList{"x", "x"}},
+		{Alias: "n", Cols: tree.IdentifierList{"x"}},
+	} {
+		_, err = validateInsertRowAlias(context.Background(), alias, []string{"a", "b"}, tableDef, "db", "t", 1)
+		require.Error(t, err)
+	}
+}
+
+func TestInsertRowAliasColumnNamesIgnoreTableCaseSetting(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	binding, err := validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "N", Cols: tree.IdentifierList{"K", "X", "Y"}},
+		[]string{"id", "a", "b"}, tableDef, "db", "t", 0,
+	)
+	require.NoError(t, err)
+	require.Equal(t, "N", binding.name)
+	require.Contains(t, binding.cols, "x")
+	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 0, binding)
+	// The parser stores column identifier parts with the column normalization
+	// (lower=1), even when lower_case_table_names=0.
+	expr, err := binder.BindColRef(testInsertAliasNameWithTableCase("N", "X", 0), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(7), expr.GetCol().RelPos)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
+
+	_, err = validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"X", "x", "Y"}},
+		[]string{"id", "a", "b"}, tableDef, "db", "t", 0,
+	)
+	require.Error(t, err)
+	require.ErrorContains(t, err, "column name")
+}
+
+func TestInsertRowAliasFallbackCollectsNestedParameters(t *testing.T) {
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"insert into t values (1) as n on duplicate key update a = case when ? then n.a + ? else (select ?) end", 1,
+	)
+	require.NoError(t, err)
+	insert := stmt.(*tree.Insert)
+	require.Equal(t, []int{1, 2, 3}, collectParamExprOffsets(insert.OnDuplicateUpdate[0].Expr))
+}
+
+func TestInsertRowAliasValidationEdges(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	tests := []struct {
+		name        string
+		rowAlias    *tree.AliasClause
+		insertCols  []string
+		table       *planpb.TableDef
+		wantFailure bool
+	}{
+		{name: "nil alias", insertCols: []string{"a"}, table: tableDef},
+		{name: "empty alias", rowAlias: &tree.AliasClause{}, insertCols: []string{"a"}, table: tableDef, wantFailure: true},
+		{name: "target conflict", rowAlias: &tree.AliasClause{Alias: "t"}, insertCols: []string{"a"}, table: tableDef, wantFailure: true},
+		{name: "missing table", rowAlias: &tree.AliasClause{Alias: "n"}, insertCols: []string{"a"}, wantFailure: true},
+		{name: "column count mismatch", rowAlias: &tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"x"}}, insertCols: []string{"a", "b"}, table: tableDef, wantFailure: true},
+		{name: "empty target column", rowAlias: &tree.AliasClause{Alias: "n"}, insertCols: []string{""}, table: tableDef, wantFailure: true},
+		{name: "empty alias column", rowAlias: &tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{""}}, insertCols: []string{"a"}, table: tableDef, wantFailure: true},
+		{name: "missing target column", rowAlias: &tree.AliasClause{Alias: "n"}, insertCols: []string{"missing"}, table: tableDef, wantFailure: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			binding, err := validateInsertRowAlias(
+				context.Background(), test.rowAlias, test.insertCols, test.table, "db", "t", 1,
+			)
+			if test.wantFailure {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Nil(t, binding)
+		})
+	}
+}
+
+func TestInsertRowAliasSourceColumnResolutionEdges(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
+	tableDef := testInsertAliasTable()
+
+	columns, err := builder.getInsertColsForRowAlias(nil, tableDef)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "a", "b"}, columns)
+
+	_, err = builder.getInsertColsForRowAlias(tree.IdentifierList{"a", "A"}, tableDef)
+	require.Error(t, err)
+	_, err = builder.getInsertColsForRowAlias(tree.IdentifierList{"missing"}, tableDef)
+	require.Error(t, err)
+	require.Nil(t, cloneInsertRowsForGeneratedRewrite(nil))
+}
+
+func TestInsertRowAliasUpdateTargetValidationEdges(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	valid := func(name *tree.UnresolvedName) *tree.UpdateExpr {
+		return &tree.UpdateExpr{Names: []*tree.UnresolvedName{name}}
+	}
+	tests := []struct {
+		name        string
+		table       *planpb.TableDef
+		updates     tree.UpdateExprs
+		wantFailure bool
+	}{
+		{name: "missing table", updates: tree.UpdateExprs{}, wantFailure: true},
+		{name: "nil updates", table: tableDef},
+		{name: "nil update item", table: tableDef, updates: tree.UpdateExprs{nil}},
+		{name: "empty update", table: tableDef, updates: tree.UpdateExprs{&tree.UpdateExpr{}}, wantFailure: true},
+		{name: "nil update name", table: tableDef, updates: tree.UpdateExprs{&tree.UpdateExpr{Names: []*tree.UnresolvedName{nil}}}, wantFailure: true},
+		{name: "wrong table", table: tableDef, updates: tree.UpdateExprs{valid(testInsertAliasName("other", "a"))}, wantFailure: true},
+		{name: "missing column", table: tableDef, updates: tree.UpdateExprs{valid(testInsertAliasName("missing"))}, wantFailure: true},
+		{name: "valid column", table: tableDef, updates: tree.UpdateExprs{valid(testInsertAliasName("a"))}},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := validateOndupUpdateTargets(
+				context.Background(), test.updates, test.table, "db", "t", 1,
+			)
+			if test.wantFailure {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+		})
+	}
+}
+
+func TestInsertRowAliasBinderResolvesBareAndRejectsQualifiedEdges(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	binding, err := validateInsertRowAlias(
+		context.Background(),
+		&tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"x", "y"}},
+		[]string{"a", "b"}, tableDef, "db", "t", 1,
+	)
+	require.NoError(t, err)
+	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, binding)
+
+	for _, name := range []*tree.UnresolvedName{
+		testInsertAliasName("db", "n", "x"),
+		testInsertAliasName("n", "missing"),
+		testInsertAliasName("other", "a"),
+		testInsertAliasName("t", "missing"),
+	} {
+		_, err = binder.BindColRef(name, 0, true)
+		require.Error(t, err)
+	}
+
+	_, err = binder.BindColRef(testInsertAliasName("other", "a"), 1, true)
+	require.Error(t, err)
+
+	expr, err := binder.BindColRef(testInsertAliasName("x"), 0, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(7), expr.GetCol().RelPos)
+	require.Equal(t, int32(1), expr.GetCol().ColPos)
+
+	binder.SetTargetCorrelationTag(13)
+	expr, err = binder.BindColRef(testInsertAliasName("a"), 1, true)
+	require.NoError(t, err)
+	require.Equal(t, int32(1), expr.GetCorr().Depth)
+	require.Equal(t, int32(13), expr.GetCorr().RelPos)
+	require.Equal(t, int32(1), expr.GetCorr().ColPos)
+
+	_, err = binder.BindColRef(testInsertAliasName("missing"), 0, true)
+	require.Error(t, err)
+}
+
+func TestInsertRowAliasScopeRefsTraverseAndRewrite(t *testing.T) {
+	col := func(tag, pos int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: tag, ColPos: pos}}}
+	}
+	corr := func(tag, pos, depth int32) *planpb.Expr {
+		return &planpb.Expr{Expr: &planpb.Expr_Corr{Corr: &planpb.CorrColRef{RelPos: tag, ColPos: pos, Depth: depth}}}
+	}
+	emptyExprs := []*planpb.Expr{
+		{Expr: &planpb.Expr_Col{}},
+		{Expr: &planpb.Expr_Corr{}},
+		{Expr: &planpb.Expr_F{}},
+		{Expr: &planpb.Expr_List{}},
+		{Expr: &planpb.Expr_W{}},
+		{Expr: &planpb.Expr_Sub{}},
+	}
+
+	refs := make([]insertScopeRef, 0)
+	seen := make(map[[2]int32]struct{})
+	collectInsertScopeRefs(nil, &refs, seen)
+	for _, expr := range emptyExprs {
+		collectInsertScopeRefs(expr, &refs, seen)
+	}
+
+	listExpr := &planpb.Expr{Expr: &planpb.Expr_List{List: &planpb.ExprList{List: []*planpb.Expr{
+		col(22, 6), corr(22, 6, 2), col(88, 12),
+	}}}}
+	windowExpr := &planpb.Expr{Expr: &planpb.Expr_W{W: &planpb.WindowSpec{
+		WindowFunc:  col(7, 7),
+		PartitionBy: []*planpb.Expr{col(11, 8)},
+		OrderBy:     []*planpb.OrderBySpec{nil, {Expr: col(99, 9)}},
+		Frame:       &planpb.FrameClause{Start: &planpb.FrameBound{Val: col(7, 10)}, End: &planpb.FrameBound{Val: col(11, 11)}},
+	}}}
+	subqueryExpr := &planpb.Expr{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{}}}
+	expr := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{Args: []*planpb.Expr{
+		col(7, 1),
+		corr(7, 2, 1),
+		corr(7, 3, 2),
+		col(11, 3),
+		col(99, 4),
+		col(0, 5),
+		col(7, 1),
+		listExpr,
+		corr(11, 13, 2),
+		corr(88, 13, 2),
+		windowExpr,
+		subqueryExpr,
+	}}}}
+	collectInsertScopeRefs(expr, &refs, seen)
+
+	got := make([][2]int32, 0, len(refs))
+	for _, ref := range refs {
+		got = append(got, [2]int32{ref.tag, ref.pos})
+	}
+	require.Equal(t, [][2]int32{
+		{7, 1}, {7, 2}, {7, 3}, {11, 3}, {99, 4}, {22, 6}, {88, 12},
+		{11, 13}, {88, 13}, {7, 7}, {11, 8}, {99, 9}, {7, 10}, {11, 11},
+	}, got)
+
+	rewriteInsertScopeRefs(nil, 7, 20, 11, 4, map[[2]int32]int32{})
+	for _, empty := range emptyExprs {
+		rewriteInsertScopeRefs(empty, 7, 20, 11, 4, map[[2]int32]int32{})
+	}
+	rewriteInsertScopeRefs(expr, 7, 20, 11, 4, map[[2]int32]int32{
+		{99, 4}: 8,
+		{22, 6}: 10,
+		{99, 9}: 11,
+	})
+
+	args := expr.GetF().Args
+	require.Equal(t, int32(20), args[0].GetCol().RelPos)
+	require.Equal(t, int32(2), args[1].GetCol().ColPos)
+	require.Equal(t, int32(20), args[2].GetCorr().RelPos)
+	require.Equal(t, int32(7), args[3].GetCol().ColPos)
+	require.Equal(t, int32(8), args[4].GetCol().ColPos)
+	require.Equal(t, int32(0), args[5].GetCol().RelPos)
+	require.Equal(t, int32(10), args[7].GetList().List[0].GetCol().ColPos)
+	require.Equal(t, int32(10), args[7].GetList().List[1].GetCorr().ColPos)
+	require.Equal(t, int32(88), args[7].GetList().List[2].GetCol().RelPos)
+	require.Equal(t, int32(17), args[8].GetCorr().ColPos)
+	require.Equal(t, int32(88), args[9].GetCorr().RelPos)
+	require.Equal(t, int32(20), args[10].GetW().WindowFunc.GetCol().RelPos)
+	require.Equal(t, int32(20), args[10].GetW().OrderBy[1].Expr.GetCol().RelPos)
+	require.Equal(t, int32(20), args[10].GetW().Frame.Start.Val.GetCol().RelPos)
+}
+
+func TestInsertRowAliasParamOffsetsHandleEmptyExpressions(t *testing.T) {
+	require.Nil(t, collectParamExprOffsets(nil))
+	stmt, err := parsers.ParseOne(
+		context.Background(), dialect.MYSQL,
+		"insert into t values (1) as n on duplicate key update a = 1", 1,
+	)
+	require.NoError(t, err)
+	insert := stmt.(*tree.Insert)
+	require.Nil(t, collectParamExprOffsets(insert.OnDuplicateUpdate[0].Expr))
+}
+
+// The approved row-alias subset excludes all RHS subqueries, including an
+// uncorrelated query whose cardinality would otherwise fail before DEDUP.
+func TestInsertRowAliasRejectsEveryRHSSubqueryBeforeFallback(t *testing.T) {
+	for _, target := range []struct{ name, prefix string }{
+		{"keyed", "insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n on duplicate key update loc = "},
+		{"no_key", "insert into constraint_test.insert_fk_no_key_c(id, pid) values (1, 2) as n on duplicate key update pid = "},
+	} {
+		for i, rhs := range []string{
+			"(select 1)", "coalesce((select 1), 0)",
+			"case when false then (select 1) else 2 end",
+			"exists (select 1)", "1 in (select 1)",
+			"(select (select 1))", "(select missing from nonexistent)",
+			"(select n.pid)", "(select ?)",
+		} {
+			t.Run(fmt.Sprintf("%s/%d", target.name, i), func(t *testing.T) {
+				sql := target.prefix + rhs
+				if rhs == "(select ?)" {
+					sql = "prepare rejected_alias from " + sql
+				}
+				_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML), "%v", err)
+				require.EqualError(t, err, "unsupported DML: row-alias subqueries in on duplicate key update cannot be evaluated before duplicate-key action")
+			})
+		}
+	}
+}
+
+func TestInsertRowAliasDirectRHSAndLegacyNoKeySubqueryRemainSupported(t *testing.T) {
+	for _, sql := range []string{
+		"insert into constraint_test.dept(deptno, dname, loc) values (1, 'Sales', 'NY') as n on duplicate key update loc = coalesce(n.loc, 'X')",
+		"prepare direct_alias from insert into constraint_test.insert_fk_no_key_c(id, pid) values (?, ?) as n on duplicate key update pid = coalesce(n.pid + ?, 0)",
+		"insert into constraint_test.insert_fk_no_key_c(id, pid) values (1, 2) on duplicate key update pid = (select 1)",
+	} {
+		p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+		require.NoError(t, err, sql)
+		require.NotNil(t, p, sql)
+	}
+}
+
+func TestInsertRowAliasAssignmentTypesBeforeNoKeyFallback(t *testing.T) {
+	for _, target := range []struct {
+		insert string
+		column string
+	}{
+		{"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') as n", "loc"},
+		{"insert into constraint_test.fake_pk_no_unique_gen(a,g) values(1,default) as n", "a"},
+	} {
+		for _, rhs := range []string{"(n." + target.column + ",n." + target.column + ")", "(n." + target.column + ",?)"} {
+			for _, prefix := range []string{"", "prepare invalid_assignment from "} {
+				if prefix == "" && rhs == "(n."+target.column+",?)" {
+					continue
+				}
+				sql := prefix + target.insert + " on duplicate key update " + target.column + "=" + rhs
+				_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidArg), sql)
+				require.Contains(t, err.Error(), "TUPLE", sql)
+			}
+		}
+		for _, rhs := range []string{"n." + target.column, "null", "default", "?"} {
+			sql := "prepare valid_assignment from " + target.insert + " on duplicate key update " + target.column + "=" + rhs
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err, sql)
+		}
+	}
+}
+
+func TestInsertRowAliasExcludesHiddenTargetIdentities(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{Name: catalog.FakePrimaryKeyColName, Hidden: true})
+	tableDef.Name2ColIndex[catalog.FakePrimaryKeyColName] = 3
+	builder := NewQueryBuilder(planpb.Query_INSERT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
+	columns, err := builder.getInsertColsForRowAlias(nil, tableDef)
+	require.NoError(t, err)
+	require.Equal(t, []string{"id", "a", "b"}, columns)
+	_, err = builder.getInsertColsForRowAlias(tree.IdentifierList{catalog.FakePrimaryKeyColName}, tableDef)
+	require.Error(t, err, "an explicit INSERT list must not introduce a hidden alias identity")
+	_, err = validateInsertRowAlias(context.Background(), &tree.AliasClause{Alias: "n"}, []string{catalog.FakePrimaryKeyColName}, tableDef, "db", "t", 1)
+	require.Error(t, err, "alias validation must reject a hidden target independently of list construction")
+	binding, err := validateInsertRowAlias(context.Background(), &tree.AliasClause{Alias: "n", Cols: tree.IdentifierList{"x"}}, []string{"a"}, tableDef, "db", "t", 1)
+	require.NoError(t, err)
+	binder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, binding)
+	for _, name := range []*tree.UnresolvedName{testInsertAliasName("n", catalog.FakePrimaryKeyColName), testInsertAliasName("t", catalog.FakePrimaryKeyColName), testInsertAliasName(catalog.FakePrimaryKeyColName)} {
+		_, err := binder.BindColRef(name, 0, true)
+		require.Error(t, err, "a row-alias RHS cannot read hidden target identities")
+	}
+	err = validateOndupUpdateTargets(context.Background(), tree.UpdateExprs{&tree.UpdateExpr{Names: []*tree.UnresolvedName{testInsertAliasName(catalog.FakePrimaryKeyColName)}, Expr: tree.NewNumVal(int64(1), "1", false, tree.P_int64)}}, tableDef, "db", "t", 1)
+	require.Error(t, err, "a row-alias UPDATE target cannot write hidden identities")
+}
+
+func TestInsertRowAliasAllDefaultExcludesGeneratedSourceSlots(t *testing.T) {
+	p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.fake_pk_no_unique_gen values () as n(x,y) on duplicate key update a=n.y")
+	require.NoError(t, err)
+	sawSource := false
+	for _, node := range p.GetQuery().Nodes {
+		if node.NodeType == planpb.Node_VALUE_SCAN && node.RowsetData != nil {
+			sawSource = true
+			require.Len(t, node.RowsetData.Cols, 1, "generated g must be materialized after the writable a source")
+		}
+	}
+	require.True(t, sawSource, "the actual fallback plan must contain its value scan")
+}
+
+func TestLegacyOndupNoKeyCorrelatedAdmission(t *testing.T) {
+	for _, rhs := range []string{"(select fake_pk_t.b)", "(select b)", "(select (select fake_pk_t.b))"} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.fake_pk_t(a,b) values(1,'x') on duplicate key update b="+rhs)
+		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, rhs)
+	}
+	for _, rhs := range []string{"(select 'safe')", "(select fake_pk_t.b from constraint_test.fake_pk_t as fake_pk_t limit 1)"} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.fake_pk_t(a,b) values(1,'x') on duplicate key update b="+rhs)
+		require.NoError(t, err, rhs)
+	}
+}
+
+func TestInsertRowAliasTupleWidthBeforeGeneratedUpdate(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.fake_pk_no_unique_gen(a,g) values(1) as n(x,y) on duplicate key update g=1")
+	require.ErrorContains(t, err, "Column count doesn't match value count")
+}
+
+func TestInsertRowAliasValuesExcludesHiddenIdentity(t *testing.T) {
+	tableDef := testInsertAliasTable()
+	tableDef.Cols = append(tableDef.Cols, &planpb.ColDef{Name: catalog.FakePrimaryKeyColName, Hidden: true})
+	tableDef.Name2ColIndex[catalog.FakePrimaryKeyColName] = 3
+	rowAlias, err := validateInsertRowAlias(context.Background(), &tree.AliasClause{Alias: "n"}, []string{"id", "a", "b"}, tableDef, "db", "t", 1)
+	require.NoError(t, err)
+	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+		"insert into t values(1,2,3) as n on duplicate key update a=values(__mo_fake_pk_col)", 1)
+	require.NoError(t, err)
+	expr := stmt.(*tree.Insert).OnDuplicateUpdate[0].Expr
+	aliasBinder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1, rowAlias)
+	_, err = aliasBinder.BindExpr(expr, 0, true)
+	require.Error(t, err)
+	legacyBinder := NewOndupUpdateBinder(context.Background(), nil, nil, 11, 7, tableDef, "db", "t", 1)
+	_, err = legacyBinder.BindExpr(expr, 0, true)
+	require.NoError(t, err)
+}
+
+func TestLegacyOndupCorrelationSurvivesInvalidSibling(t *testing.T) {
+	for _, table := range []string{"dept", "fake_pk_no_unique_gen"} {
+		column := "loc"
+		insert := "(deptno,dname,loc) values(1,'Sales','NY')"
+		if table == "fake_pk_no_unique_gen" {
+			column = "a"
+			insert = "(a) values(1)"
+		}
+		for _, args := range []string{table + "." + column + ",missing_column", "missing_column," + table + "." + column, column + ",missing_column", "missing_column," + column} {
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+				"insert into constraint_test."+table+insert+" on duplicate key update "+column+"=(select concat("+args+"))")
+			require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, table, args)
+		}
+	}
+}
+
+func TestLegacyOndupDatabaseQualifiedLocalScope(t *testing.T) {
+	for _, reference := range []string{"dept.loc", "constraint_test.dept.loc"} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(select concat("+reference+",(select 'x')) from constraint_test.dept limit 1)")
+		require.NoError(t, err)
+	}
+	for _, from := range []string{"", " from constraint_test.emp as dept limit 1"} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(select concat(constraint_test.dept.loc,(select 'x'))"+from+")")
+		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause)
+	}
+}
+
+func TestLegacyOndupInvalidQualifiedTargetColumnStillDiscards(t *testing.T) {
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a=(select fake_pk_no_unique_gen.missing_column)")
+	require.NoError(t, err)
+}
+
+func TestLegacyOndupCanonicalAdmissionScope(t *testing.T) {
+	for _, clause := range []string{"order by", "having", "group by"} {
+		for _, alias := range []string{"loc", "local_loc"} {
+			_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+				"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(select 'local' as "+alias+" "+clause+" "+alias+")")
+			require.NoError(t, err, clause, alias)
+		}
+	}
+	for _, rhs := range []string{
+		"(select concat(missing_column,loc) from constraint_test.emp limit 1)",
+		"(select concat(loc,missing_column) from constraint_test.emp limit 1)",
+		"(select ifnull(missing_column,loc,1) from constraint_test.emp limit 1)",
+		"(select (missing_column,loc)=(1,2,3) from constraint_test.emp limit 1)",
+		"(select match(missing_column,dept.loc) against(missing_pattern) from constraint_test.emp limit 1)",
+		"(select concat(empno,dept.loc) from constraint_test.emp e join constraint_test.emp e2 on e.empno=e2.empno limit 1)",
+		"(select loc as loc order by loc)",
+		"(select 'local' as loc where loc='NY' order by loc)",
+		"(select (select dept.loc) from constraint_test.emp limit 1)",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="+rhs)
+		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, rhs)
+	}
+}
+
+func TestLegacyOndupAdmissionCTEOwnership(t *testing.T) {
+	for _, rhs := range []string{
+		"(with q as (select 'local' as loc) select loc from q)",
+		"(select loc from (select 'local' as loc) q)",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="+rhs)
+		require.NoError(t, err, rhs)
+	}
+	for _, rhs := range []string{
+		"(with q as (select dept.loc as x) select x from q)",
+		"(with q as (select concat(missing_column,dept.loc) as x) select x from q)",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="+rhs)
+		require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, rhs)
+	}
+	// Recovery in the discarded admission plan must not make the real CTE valid.
+	_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+		"insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc=(with q as (select missing_column as x) select x from q)")
+	require.Error(t, err)
+	require.NotContains(t, err.Error(), odkuTargetCorrelatedSubqueryCause)
+}
+
+func TestOdkuAdmissionRestoresSharedCTEAST(t *testing.T) {
+	original := &tree.CTE{}
+	ref := &CTERef{ast: original, hasNestedRef: true, hasNestedUse: true,
+		occurrences: []cteOccurrence{{rootID: 99}}}
+	ctx := NewBindContext(nil, nil)
+	ctx.cteByName = map[string]*CTERef{"q": ref}
+	restore := snapshotWindowValidationCTEState(ctx, true)
+	require.NotSame(t, original, ref.ast)
+	require.Empty(t, ref.occurrences)
+	ref.ast.Name = &tree.AliasClause{Alias: "probe_only"}
+	restore()
+	require.Same(t, original, ref.ast)
+	require.Nil(t, original.Name)
+	require.Equal(t, int32(99), ref.occurrences[0].rootID)
+	require.True(t, ref.hasNestedRef)
+	require.True(t, ref.hasNestedUse)
+}
+
+func TestLegacyOndupWholeRHSAdmission(t *testing.T) {
+	for _, table := range []string{"dept", "fake_pk_no_unique_gen"} {
+		column, insert := "loc", "(deptno,dname,loc) values(1,'Sales','NY')"
+		if table == "fake_pk_no_unique_gen" {
+			column, insert = "a", "(a) values(1)"
+		}
+		outer := "(select " + table + "." + column + ")"
+		for _, rhs := range []string{
+			"concat(missing_column," + outer + ")", "concat(" + outer + ",missing_column)",
+			"ifnull(1,2," + outer + ")", "cast(" + outer + " as char(256))",
+			"row_number() over(order by " + outer + ")",
+			"concat(missing_column,(select 'local')," + outer + ")",
+			"concat(missing_column," + outer + ",(select 'local'))",
+		} {
+			for _, prefix := range []string{"", "prepare whole_rhs from "} {
+				_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+					prefix+"insert into constraint_test."+table+insert+" on duplicate key update "+column+"="+rhs)
+				require.ErrorContains(t, err, odkuTargetCorrelatedSubqueryCause, table, rhs)
+			}
+		}
+	}
+	for _, rhs := range []string{"concat(missing_column,(select 1))", "concat(missing_column,(select deptno from constraint_test.dept limit 1))", "row_number() over(order by (select 1))"} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a="+rhs)
+		require.NoError(t, err, rhs)
+	}
+}
+
+type odkuAdmissionCountingContext struct {
+	CompilerContext
+	udfCalls int
+}
+
+func (c *odkuAdmissionCountingContext) ResolveUdf(name string, args []*planpb.Expr) (*function.Udf, error) {
+	c.udfCalls++
+	return nil, moerr.NewInvalidInputf(c.GetContext(), "unknown function '%s'", name)
+}
+
+func TestLegacyOndupAdmissionRecoveryDoesNotRebindVisitedChildren(t *testing.T) {
+	for _, wrappers := range []int{1, 2, 4, 8} {
+		for _, keyed := range []bool{false, true} {
+			t.Run(fmt.Sprintf("wrappers%d/keyed%t", wrappers, keyed), func(t *testing.T) {
+				ctx := &odkuAdmissionCountingContext{CompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+				insert := "insert into constraint_test.fake_pk_no_unique_gen(a) values(1) on duplicate key update a="
+				if keyed {
+					insert = "insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY') on duplicate key update loc="
+				}
+				rhs := strings.Repeat("missing_fn(", wrappers) + "(select 1)" + strings.Repeat(")", wrappers)
+				stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, insert+rhs, 1)
+				require.NoError(t, err)
+				defer stmts[0].Free()
+				p, err := BuildPlan(ctx, stmts[0], false)
+				if keyed {
+					require.ErrorContains(t, err, "unknown function 'missing_fn'")
+					require.Equal(t, wrappers+1, ctx.udfCalls, "one admission visit per wrapper plus the ordinary binding failure")
+				} else {
+					require.NoError(t, err, "unreachable uncorrelated UPDATE keeps its legacy admission")
+					require.NotNil(t, p)
+					require.Equal(t, wrappers, ctx.udfCalls, "the discarded admission probe visits each wrapper once")
+				}
+			})
+		}
+	}
+}
