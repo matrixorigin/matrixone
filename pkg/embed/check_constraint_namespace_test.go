@@ -28,6 +28,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -129,17 +130,23 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			svc := cn.RawService().(cnservice.Service)
 			legacy := func(t *testing.T, name, check string) {
 				t.Helper()
+				attempts := 0
 				// Only fixture installation may replay historical duplicate names;
 				// the ALTER statements below use the ordinary public connection.
 				res, err := svc.GetSQLExecutor().Exec(defines.AttachAccountId(ctx, 0),
 					"create table "+database+"."+name+"(x int, constraint "+check+" check(x>0))",
 					executor.Options{}.WithWaitCommittedLogApplied().
 						WithStatementOption(executor.StatementOption{}.WithTrustedCheckConstraintNames()).WithAdjustTableExtraFunc(func(extra *api.SchemaExtra) error {
+						attempts++
+						if attempts == 1 {
+							return moerr.NewTxnNeedRetryNoCtx()
+						}
 						extra.Checks = nil
 						return nil
 					}))
 				require.NoError(t, err)
 				res.Close()
+				require.GreaterOrEqual(t, attempts, 2, "legacy fixture must survive a physical-attempt retry")
 				var encoded []byte
 				var createSQL string
 				require.NoError(t, conn.QueryRowContext(ctx,
