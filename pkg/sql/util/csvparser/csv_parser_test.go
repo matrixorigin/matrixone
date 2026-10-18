@@ -868,12 +868,12 @@ func TestTrailingCRBelongsToSealedField(t *testing.T) {
 	})
 
 	t.Run("strip and reuse across a small read block", func(t *testing.T) {
-		// A 1-block buffer (5 bytes) forces readUntil's refill loop around the
-		// CR and readBlock's buffering across the CR strip and the next record.
-		parser, err := NewCSVParser(crStripIssueConfig(true), NewStringReader("a~\r0x\ny0z\n"), 1, false)
+		// A 1-block buffer (5 bytes) ends at the first CR. Refilling seals
+		// that field; the next record then exercises ordinary CRLF stripping.
+		parser, err := NewCSVParser(crStripIssueConfig(true), NewStringReader("abc~\r0\ny0z\r\n"), 1, false)
 		require.NoError(t, err)
 		for _, want := range [][]Field{
-			{newStringField("a~\r", false, false), newStringField("x", false, false)},
+			{newStringField("abc~\r", false, false), newStringField("", false, false)},
 			{newStringField("y", false, false), newStringField("z", false, false)},
 		} {
 			row, err := parser.Read(nil)
