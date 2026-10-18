@@ -119,6 +119,9 @@ func TestStaticRollbackSetIsInfrastructureOnly(t *testing.T) {
 	// a genuine infrastructure failure still ends the transaction, with or
 	// without the session variable
 	require.True(t, isErrorRollbackWholeTxn(moerr.NewDeadLockDetectedNoCtx()))
+	require.True(t, isErrorRollbackWholeTxn(
+		moerr.NewTxnWriteConflict(context.Background(), "concurrent source change"),
+	))
 }
 
 // unknownVarSession is a FeSession whose system-variable lookup fails, which
@@ -264,6 +267,8 @@ func newErrorRollbackWholeTxn(code uint16) error {
 		return moerr.NewNoAvailableBackendNoCtx()
 	case moerr.ErrBackendCannotConnect:
 		return moerr.NewBackendCannotConnectNoCtx("test")
+	case moerr.ErrTxnWriteConflict:
+		return moerr.NewTxnWriteConflictNoCtx("test")
 	default:
 		panic(fmt.Sprintf("unsupported error code %d", code))
 	}
