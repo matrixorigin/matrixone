@@ -470,6 +470,10 @@ func (b *OndupUpdateBinder) validateSubqueryAdmission(astExpr tree.Expr) error {
 }
 
 func (b *OndupUpdateBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.Expr, error) {
+	// SQL UDF expansion can introduce subqueries after the whole-RHS AST gate.
+	if b.rowAlias != nil {
+		return nil, moerr.NewUnsupportedDML(b.GetContext(), odkuRowAliasSubqueryCause)
+	}
 	return b.baseBindSubquery(astExpr, isRoot)
 }
 

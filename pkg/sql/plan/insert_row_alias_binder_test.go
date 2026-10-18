@@ -945,3 +945,39 @@ func TestLegacyOndupAdmissionRecoveryDoesNotRebindVisitedChildren(t *testing.T) 
 		}
 	}
 }
+
+// UDF expansion happens after AST admission; the binder must retain the same
+// row-alias boundary without changing ordinary expression or legacy UDFs.
+func TestInsertRowAliasRejectsExpandedUDFSubqueries(t *testing.T) {
+	for _, table := range []string{"dept", "fake_pk_no_unique_gen"} {
+		for _, name := range []string{"f_values_lookup", "f_values_nested_lookup", "f_values_wrapped_lookup", "f_values_nested_upper_lookup", "f_values_constant"} {
+			for _, alias := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/alias%t", table, name, alias), func(t *testing.T) {
+					ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+					query := "insert into constraint_test." + table + "(a) values(1)"
+					column := "a"
+					if table == "dept" {
+						query = "insert into constraint_test.dept(deptno,dname,loc) values(1,'Sales','NY')"
+						column = "loc"
+					}
+					if alias {
+						query += " as incoming"
+					}
+					query += " on duplicate key update " + column + "=" + name + "()"
+					stmts, err := parsers.Parse(ctx.GetContext(), dialect.MYSQL, query, 1)
+					require.NoError(t, err)
+					defer stmts[0].Free()
+					p, err := BuildPlan(ctx, stmts[0], false)
+					if alias && name != "f_values_constant" {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrUnsupportedDML), "%v", err)
+						require.ErrorContains(t, err, odkuRowAliasSubqueryCause)
+						require.Nil(t, p)
+					} else {
+						require.NoError(t, err)
+						require.NotNil(t, p)
+					}
+				})
+			}
+		}
+	}
+}
