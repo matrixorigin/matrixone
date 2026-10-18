@@ -196,6 +196,19 @@ func TestLowPrecisionFloatContractExecutionStreamCheck(t *testing.T) {
 			aggexec.AggIdOfVectorMatmul, false, []*planpb.Expr{lowPrecisionColExpr(types.T_int64), vecf32}, nil)}
 		return &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}, op.Release
 	}
+	charsetArg := &planpb.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: ""}}}}
+	charset, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "internal_table_collation", []*planpb.Expr{charsetArg})
+	require.NoError(t, err)
+	charsetFeatures, err := planpb.RequiredRemoteExpressionFeatures(charset)
+	require.NoError(t, err)
+	require.True(t, charsetFeatures.TableCollationFunction)
+	require.False(t, charsetFeatures.LowPrecisionFloatContracts, "main's published function identity must not become VECTOR_MATMUL")
+	require.Equal(t, defines.MORPCVersion118, remoteExpressionProtocolVersion(charsetFeatures))
+	scopes["table collation and bf16"] = func() (*Scope, func()) {
+		op := projection.NewArgument()
+		op.ProjectList = []*planpb.Expr{charset, lowPrecisionColExpr(types.T_bf16)}
+		return &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}, op.Release
+	}
 	for name, newScope := range scopes {
 		t.Run(name, func(t *testing.T) {
 			scope, release := newScope()
