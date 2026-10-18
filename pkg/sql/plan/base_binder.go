@@ -6383,21 +6383,23 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		if domain.kind != fieldStringBinary || domain.inferredBinary {
 			continue
 		}
-		target := types.T_blob.ToType()
+		blobType := types.T_blob.ToType()
+		target := makePlan2Type(&blobType)
 		if kind == fieldStringBinary {
-			// Consume the row override without upgrading a bounded declaration
-			// to BLOB. Fixed binary transport must not add padding to the value.
-			target = makeTypeByPlan2Expr(arg)
-			if target.Oid == types.T_binary {
-				target.Oid = types.T_varbinary
-			} else if target.Oid == types.T_varchar && target.Width <= 0 {
+			// Keep the complete declaration, including plan-only collation
+			// provenance, when consuming a row-domain override. A runtime Type
+			// round trip would silently demote an explicit COLLATE.
+			target = arg.Typ
+			if target.Id == int32(types.T_binary) {
+				target.Id = int32(types.T_varbinary) // fixed transport must not add padding
+			} else if target.Id == int32(types.T_varchar) && target.Width <= 0 {
 				// A binary-charset VARCHAR transport has no declared capacity.
 				// CAST1 VARCHAR(0) would truncate it to empty, not consume its
 				// row-domain override. Use the unbounded byte representation.
-				target = types.T_blob.ToType()
+				target.Id, target.Width, target.Scale = int32(types.T_blob), 0, 0
 			}
 		}
-		converted, err := appendExplicitCastBeforeExpr(b.GetContext(), arg, makePlan2Type(&target))
+		converted, err := appendExplicitCastBeforeExpr(b.GetContext(), arg, target)
 		if err != nil {
 			return nil, err
 		}
