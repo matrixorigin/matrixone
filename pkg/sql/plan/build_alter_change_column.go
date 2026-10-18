@@ -159,6 +159,17 @@ func buildColumnAndConstraint(
 		}
 	}
 
+	preserved, err := charsetConversionExpressions(ctx, targetTableDef.Name, newColName, colType)
+	if err != nil {
+		return nil, err
+	}
+	buildColumnDefault := func() (*plan.Default, error) {
+		if preserved != nil && preserved.defaultExpr != nil {
+			return preserved.defaultExpr, nil
+		}
+		return buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
+	}
+
 	// If the column null property is not specified, it defaults to allowing null
 	hasNullFlag := false
 	auto_incr := false
@@ -207,27 +218,35 @@ func buildColumnAndConstraint(
 			}
 			targetTableDef.Indexes = append(targetTableDef.Indexes, indexDef)
 		case *tree.AttributeDefault:
-			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
+			defaultValue, err := buildColumnDefault()
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasDefaultValue = true
 		case *tree.AttributeNull:
-			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
+			defaultValue, err := buildColumnDefault()
 			if err != nil {
 				return nil, err
 			}
 			newCol.Default = defaultValue
 			hasNullFlag = defaultValue.NullAbility
 		case *tree.AttributeOnUpdate:
-			onUpdateExpr, err := buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
-			if err != nil {
-				return nil, err
+			if preserved != nil && preserved.onUpdate != nil {
+				newCol.OnUpdate = preserved.onUpdate
+			} else {
+				newCol.OnUpdate, err = buildOnUpdate(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess())
+				if err != nil {
+					return nil, err
+				}
 			}
-			newCol.OnUpdate = onUpdateExpr
 		case *tree.AttributeGeneratedAlways:
-			generatedCol, err := buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
+			var generatedCol *plan.GeneratedCol
+			if preserved != nil && preserved.generated != nil {
+				generatedCol = preserved.generated
+			} else {
+				generatedCol, err = buildGeneratedExpr(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, targetTableDef.Cols, ctx.GetProcess())
+			}
 			if err != nil {
 				return nil, err
 			}
@@ -259,7 +278,7 @@ func buildColumnAndConstraint(
 			return nil, moerr.NewErrInvalidDefault(ctx.GetContext(), newColNameOrigin)
 		}
 		if !hasDefaultValue {
-			defaultValue, err := buildDefaultExprWithColumns(ddlExpressionContext(ctx, ctx.GetProcess().Ctx), specNewColumn, colType, ctx.GetProcess(), defaultScope)
+			defaultValue, err := buildColumnDefault()
 			if err != nil {
 				return nil, err
 			}
@@ -349,7 +368,9 @@ func checkIndexedColumnTypeChange(ctx context.Context, tableDef *plan.TableDef, 
 				}
 
 				if indexInfo.Unique {
-					return checkUniqueKeyPartType(ctx, newCol.Typ, newCol.OriginName)
+					if err := checkUniqueKeyPartType(ctx, newCol.Typ, newCol.OriginName); err != nil {
+						return err
+					}
 				}
 				if isGeometryPlanType(&newCol.Typ) {
 					return moerr.NewNotSupported(ctx, fmt.Sprintf("GEOMETRY column '%s' cannot be in index", newCol.OriginName))

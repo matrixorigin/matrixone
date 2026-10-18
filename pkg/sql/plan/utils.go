@@ -2058,7 +2058,7 @@ func constantFoldWithPreparedExactSource(
 		}
 		spatialChecked = true
 	}
-	if f.CannotFold() {
+	if f.IsVolatile() {
 		return expr, nil
 	}
 	if rule.IsLegacyTimeAssignmentOutsideInternalRange(fn) {
@@ -2095,7 +2095,7 @@ func constantFoldWithPreparedExactSource(
 	if f.IsAgg() || f.IsWin() {
 		return expr, nil
 	}
-	if !rule.IsConstant(expr, varAndParamIsConst) {
+	if !function.IsFoldCandidate(expr, varAndParamIsConst) {
 		return expr, nil
 	}
 	if isVec && !rule.CanMaterializeConstantVector(expr) {

@@ -708,23 +708,47 @@ func ReadFileOffset(param *tree.ExternParam, mcpu int, fileSize int64, visibleCo
 
 	offsets = append(offsets, param.FileStartOff)
 	batchSize := (fileSize - param.FileStartOff) / int64(mcpu)
+	legacyBoundary := param.Format != tree.CSV
 
 	for i := 1; i < mcpu; i++ {
-		vec.Entries[0].Offset = offsets[i-1] + batchSize
-		if vec.Entries[0].Offset >= fileSize {
+		guess := offsets[i-1] + batchSize
+		if guess >= fileSize {
 			break
 		}
+		if !param.Strict {
+			var boundary int64
+			if !legacyBoundary {
+				boundary, legacyBoundary, err = getNonStrictBoundary(param, fs, readPath, offsets[i-1], guess)
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					return nil, err
+				}
+			}
+			if legacyBoundary {
+				boundary, err = getNonStrictFallbackBoundary(param, fs, readPath, guess)
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					return nil, err
+				}
+			}
+			if boundary >= fileSize {
+				break
+			}
+			offsets = append(offsets, boundary)
+			continue
+		}
+		vec.Entries[0].Offset = guess
 		if err = fs.Read(param.Ctx, &vec); err != nil {
 			return nil, err
 		}
 		tailSize, err := getTailSize(param, visibleCols, r)
 		closeErr := r.Close()
 		if err != nil {
-			// Strict scanning retains its existing parser-resynchronization
-			// fallback. A fast scan may only fall back on EOF, not on I/O errors.
-			if !param.Strict && !errors.Is(err, io.EOF) {
-				return nil, err
-			}
+			// Strict scanning retains its existing parser-resynchronization fallback.
 			break
 		}
 		if closeErr != nil {
@@ -873,6 +897,106 @@ func getTailSizeNoStrict(param *tree.ExternParam, r io.Reader) (int64, error) {
 			matched = prefix[matched-1]
 		}
 	}
+}
+
+// getNonStrictBoundary scans from a known record start to the first record end
+// at or after guess, using the same grammar as CsvReader. Starting at guess
+// cannot recover quote state when it lands inside a multiline enclosed field.
+// Across valid splits this adds one serial parse pass, plus per-reader read-ahead.
+// No row-width or type validation applies to non-strict boundary selection.
+//
+// A syntax error requests legacy physical-line splitting for this and all later
+// splits: a legacy boundary is no longer a known CSV record start. Other errors
+// propagate. The reader is closed before the caller opens a fallback reader.
+func getNonStrictBoundary(param *tree.ExternParam, fs fileservice.ETLFileService, readPath string, start, guess int64) (boundary int64, legacy bool, err error) {
+	ctx := param.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, false, err
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Policy:   fileservice.SkipAllCache,
+		Entries:  []fileservice.IOEntry{{Offset: start, Size: -1, ReadCloserForRead: &r}},
+	}
+	if err := fs.Read(ctx, &vec); err != nil {
+		return 0, false, err
+	}
+	defer func() {
+		if closeErr := r.Close(); closeErr != nil && (err == nil || err == io.EOF) {
+			err = closeErr
+		}
+	}()
+	csvReader, err := newCSVParserFromReader(param, boundaryContextReader{ctx: ctx, Reader: r})
+	if err != nil {
+		return 0, false, err
+	}
+	for {
+		if err := ctx.Err(); err != nil {
+			return 0, false, err
+		}
+		err = csvReader.ScanRecord()
+		if err == io.EOF {
+			return start + csvReader.Pos(), false, io.EOF
+		}
+		if err != nil {
+			if csvparser.IsSyntaxError(err) {
+				return 0, true, nil
+			}
+			return 0, false, err
+		}
+		if start+csvReader.Pos() >= guess {
+			return start + csvReader.Pos(), false, nil
+		}
+	}
+}
+
+// boundaryContextReader checks cancellation at read-block boundaries, including
+// inside a long record. The file service owns cancellation of a blocked read.
+type boundaryContextReader struct {
+	ctx context.Context
+	io.Reader
+}
+
+func (r boundaryContextReader) Read(p []byte) (int, error) {
+	if err := r.ctx.Err(); err != nil {
+		return 0, err
+	}
+	return r.Reader.Read(p)
+}
+
+// getNonStrictFallbackBoundary uses the configured physical line terminator for
+// malformed CSV and non-CSV formats, retaining bounded overlap-aware scanning.
+func getNonStrictFallbackBoundary(param *tree.ExternParam, fs fileservice.ETLFileService, readPath string, guess int64) (boundary int64, err error) {
+	ctx := param.Ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
+	var r io.ReadCloser
+	vec := fileservice.IOVector{
+		FilePath: readPath,
+		Policy:   fileservice.SkipAllCache,
+		Entries:  []fileservice.IOEntry{{Offset: guess, Size: -1, ReadCloserForRead: &r}},
+	}
+	if err := fs.Read(ctx, &vec); err != nil {
+		return 0, err
+	}
+	defer func() {
+		if closeErr := r.Close(); closeErr != nil && (err == nil || err == io.EOF) {
+			err = closeErr
+		}
+	}()
+	tailSize, err := getTailSizeNoStrict(param, boundaryContextReader{ctx: ctx, Reader: r})
+	if err != nil && !errors.Is(err, io.EOF) {
+		return 0, err
+	}
+	return guess + tailSize, err
 }
 
 func getTailSizeStrict(param *tree.ExternParam, cols []*plan.ColDef, r io.ReadCloser) (int64, error) {

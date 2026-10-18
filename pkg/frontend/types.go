@@ -773,6 +773,7 @@ type BackgroundExecOption struct {
 	// cancelTxnCreateWithRequest is reserved for short-lived background
 	// transactions whose request context owns a blocked TxnClient.New call.
 	cancelTxnCreateWithRequest bool
+	authorizationSnapshot      *client.SnapshotAdmission
 }
 
 // BackgroundExec executes the sql in background session without network output.
@@ -1836,6 +1837,9 @@ func (ses *feSessionImpl) GetSessionSysVars() *SystemVariables {
 
 func (ses *Session) GetSessionSysVar(name string) (interface{}, error) {
 	name = strings.ToLower(name)
+	if value, handled, err := databaseDefaultSystemVariable(ses, name); handled {
+		return value, err
+	}
 	if _, ok := gSysVarsDefs[name]; !ok {
 		return nil, moerr.NewInternalErrorNoCtx(errorSystemVariableDoesNotExist())
 	}

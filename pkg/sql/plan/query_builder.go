@@ -5303,6 +5303,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		ctx.results = ctx.projects[:resultLen]
 	}
 
+	if shareGroupingInput && !distinct {
+		// A grouping extension owns its sentinel NULLs only until this query
+		// block's output. Keep them through its HAVING and ORDER BY, then expose
+		// ordinary SQL values to outer grouping and set operations. Reuse the
+		// final projection so branch sharing and direct expansion stay intact.
+		result := builder.qry.Nodes[lastNodeID]
+		normalized, normalizeErr := normalizeGroupingSetProjects(
+			builder.GetContext(), result.ProjectList[:resultLen], subCtxList[0].projects[:resultLen], true)
+		if normalizeErr != nil {
+			return 0, normalizeErr
+		}
+		result.ProjectList = normalized
+		ctx.results = normalized
+	}
+
 	ctx.headings = ctx.headings[:resultLen]
 	truncateHeadingProvenances(&ctx.headingProvenance, int32(resultLen))
 
@@ -9885,13 +9900,21 @@ type groupingSetOrderResolution struct {
 	bindDistinct []bool
 }
 
-func normalizeGroupingSetDistinctProjects(
+func normalizeGroupingSetProjects(
 	ctx context.Context,
 	projects []*plan.Expr,
 	originalProjects []*plan.Expr,
+	preserveOutputType bool,
 ) ([]*plan.Expr, error) {
 	normalized := make([]*plan.Expr, len(projects))
 	for i, project := range projects {
+		// Inactive grouping keys are nullable even for NOT NULL source columns.
+		// Proven non-null outputs (COUNT, constants, always-active keys) cannot
+		// carry a sentinel and need neither a copy nor a nullable result type.
+		if preserveOutputType && project.Typ.NotNullable {
+			normalized[i] = DeepCopyExpr(project)
+			continue
+		}
 		if fn := originalProjects[i].GetF(); fn != nil && fn.Func != nil &&
 			strings.EqualFold(fn.Func.ObjName, "grouping") {
 			normalized[i] = DeepCopyExpr(project)
@@ -9916,6 +9939,11 @@ func normalizeGroupingSetDistinctProjects(
 		)
 		if err != nil {
 			return nil, err
+		}
+		if preserveOutputType {
+			// Binding IF may infer new collation provenance; the completed
+			// grouping query still exports the original column value domain.
+			normalized[i].Typ = project.Typ
 		}
 		normalized[i].Typ.NotNullable = false
 	}
@@ -11319,10 +11347,11 @@ func (builder *QueryBuilder) appendGroupingSetDistinctProjectionNode(
 	for i, project := range originalProjects {
 		materializedProjects[i] = GetColExpr(project.Typ, materializedTag, int32(i))
 	}
-	normalized, normalizeErr := normalizeGroupingSetDistinctProjects(
+	normalized, normalizeErr := normalizeGroupingSetProjects(
 		builder.GetContext(),
 		materializedProjects[:resultLen],
 		originalProjects[:resultLen],
+		false,
 	)
 	if normalizeErr != nil {
 		err = normalizeErr

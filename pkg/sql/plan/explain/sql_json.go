@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strconv"
 	"strings"
@@ -641,6 +642,9 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 		"direction="+direction,
 		"post_filter_over_fetch="+strconv.FormatBool(spec.PostFilterOverFetch),
 	)
+	if len(spec.AlgoOptions) > 0 {
+		values = append(values, fmt.Sprintf("algo_options=0x%X", spec.AlgoOptions))
+	}
 	settings, err := indexSearchScanSettings(spec, true)
 	if err != nil {
 		return nil, err
@@ -671,15 +675,23 @@ func sqlJSONIndexSearchExpressions(ctx context.Context, spec *plan.IndexSearchSc
 	if len(spec.AlgoExprNames) != len(spec.AlgoExprs) {
 		return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression names do not match expressions")
 	}
-	for i, expr := range spec.AlgoExprs {
-		if spec.AlgoExprNames[i] == "" || expr == nil {
-			return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression metadata is missing")
+	seen := make(map[string]struct{}, len(spec.AlgoExprNames))
+	for i, name := range spec.AlgoExprNames {
+		if strings.TrimSpace(name) == "" {
+			return nil, moerr.NewInvalidInput(ctx, "index search scan algorithm expression name is empty")
 		}
-		value, err := sqlJSONExpr(ctx, expr, options)
+		if _, duplicate := seen[name]; duplicate {
+			return nil, moerr.NewInvalidInputf(ctx, "duplicate index search scan algorithm expression %s", name)
+		}
+		seen[name] = struct{}{}
+		value, err := sqlJSONExpr(ctx, spec.AlgoExprs[i], options)
 		if err != nil {
 			return nil, err
 		}
-		values = append(values, spec.AlgoExprNames[i]+"="+value)
+		if value == "" {
+			return nil, moerr.NewInvalidInputf(ctx, "index search scan algorithm expression %s is missing", name)
+		}
+		values = append(values, name+"="+value)
 	}
 	if spec.DistanceRange != nil {
 		for _, bound := range []struct {

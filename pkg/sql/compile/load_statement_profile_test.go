@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -163,6 +164,57 @@ func TestLoadTimeReaderPlacement(t *testing.T) {
 				t.Cleanup(scope.release)
 				require.NotEqual(t, c.addr, scope.NodeInfo.Addr)
 			}
+		})
+	}
+}
+
+func TestNonStrictMultilineRangesFitWorkers(t *testing.T) {
+	// A sparse prefix admits three workers without allocating/scanning a large
+	// fixture. Only the 20-byte CSV suffix belongs to this scan.
+	const data = "1,\"aaaaaaaaa\nb\"\n2,x\n"
+	const size = int64(colexec.WriteS3Threshold) * 3
+	start := size - int64(len(data))
+	file := filepath.Join(t.TempDir(), "multiline.csv")
+	func() {
+		f, err := os.Create(file)
+		require.NoError(t, err)
+		defer f.Close()
+		_, err = f.WriteAt([]byte(data), start)
+		require.NoError(t, err)
+	}()
+	for _, tc := range []struct {
+		name  string
+		nodes engine.Nodes
+	}{
+		{"one stage", engine.Nodes{{Addr: "cn1:6001", Mcpu: 3}}},
+		{"empty last stage", engine.Nodes{{Addr: "cn1:6001", Mcpu: 2}, {Addr: "cn2:6001", Mcpu: 1}}},
+		{"partial last stage", engine.Nodes{{Addr: "cn1:6001", Mcpu: 1}, {Addr: "cn2:6001", Mcpu: 2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewMockCompile(t)
+			c.addr, c.cnList = "cn1:6001", tc.nodes
+			c.execType = plan2.ExecTypeAP_MULTICN
+			c.anal = &AnalyzeModule{qry: &plan.Query{}}
+			n := &plan.Node{TableDef: &plan.TableDef{}, ExternScan: &plan.ExternScan{Type: int32(plan.ExternType_LOAD)}}
+			param := &tree.ExternParam{
+				ExParamConst: tree.ExParamConst{Filepath: file, FileStartOff: start, Format: tree.CSV, ScanType: tree.INFILE, CompressType: tree.NOCOMPRESS, Tail: &tree.TailParameter{}},
+				ExParam:      tree.ExParam{Ctx: fileservice.WithSQLFileAccess(c.proc.Ctx, "sys", "moadmin"), Parallel: true, Strict: false, ExternType: int32(plan.ExternType_LOAD)},
+			}
+			ss, err := c.compileExternScanParallelReadWrite(n, param, []string{file}, []int64{size}, false)
+			require.NoError(t, err)
+			for _, scope := range ss {
+				t.Cleanup(scope.release)
+			}
+			require.Len(t, ss, len(tc.nodes))
+			var got []int64
+			workers := 0
+			for _, scope := range ss {
+				workers += scope.NodeInfo.Mcpu
+				got = append(got, scope.RootOp.(*external.External).Es.FileOffsetTotal[0].Offset...)
+			}
+			require.Equal(t, 3, workers)
+			require.Equal(t, []int64{start, start + int64(len(data)-len("2,x\n")), start + int64(len(data)-len("2,x\n")), -1}, got,
+				"two intact ranges must be assigned exactly once across three workers")
 		})
 	}
 }

@@ -408,6 +408,7 @@ func TestInvalidateRoleRuleCachesAcrossSessions(t *testing.T) {
 				"old": {Name: "old", rewritePolicyCaptured: true, rewritePolicyEnabled: true},
 			},
 		}
+		seedRewriteRuleCacheProofForTest(ses)
 		ses.setRoutineManager(rm)
 		rm.sessionManager.AddSession(ses)
 		return ses

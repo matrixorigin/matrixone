@@ -164,7 +164,11 @@ func TestViewDescriptionTwoCN(t *testing.T) {
 	require.NoError(t, second.Close())
 	second = nil
 	require.NoError(t, cluster.Close())
+	cancel()
 	require.NoError(t, cluster.Start())
+	// Lifecycle admission must not consume the restarted generation's query budget.
+	ctx, restartCancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer restartCancel()
 	require.Equal(t, firstID, cn0.ServiceID())
 	require.Equal(t, secondID, cn1.ServiceID())
 	require.NotSame(t, oldFirst, cn0.RawService())

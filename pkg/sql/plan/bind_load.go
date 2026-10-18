@@ -55,7 +55,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// LOAD never carries ON DUPLICATE KEY UPDATE, so the irregular-index
 	// maintenance source is the pre-dedup new-row image set up inside
 	// appendDedupAndMultiUpdateNodesForBindInsert (insert-only, no old-row delete).
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn, tree.IsIgnoreStatement(stmt))
 }
 
 func (builder *QueryBuilder) bindExternalScan(
@@ -204,7 +204,7 @@ func (builder *QueryBuilder) bindExternalScan(
 	}
 	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
 		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
-	applyLoadParallelAdmission(stmt.Param, offset)
+	applyLoadParallelAdmission(stmt.Param, offset, ctx.GetProcess().GetService())
 
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.Tail.Assignments = nil
