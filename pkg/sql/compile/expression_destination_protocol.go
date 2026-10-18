@@ -124,12 +124,15 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		}
 		if !probed {
 			ctx, cancel := context.WithTimeoutCause(parent, 5*time.Second, errRemoteCapabilityProbeTimeout)
-			version, versionKnown, err := remoteWorkerProtocolVersion(ctx, proc, engine.Node{Id: p.Node.Id, Addr: p.Node.Addr})
+			version, versionKnown, probeErr := remoteWorkerProtocolVersion(ctx, proc, engine.Node{Id: p.Node.Id, Addr: p.Node.Addr})
 			cancel()
-			if err != nil && parent.Err() != nil {
-				return parent.Err()
+			if err := parent.Err(); err != nil {
+				return err
 			}
-			observed, known, probed = version, versionKnown && err == nil, true
+			if probeErr != nil {
+				return probeErr
+			}
+			observed, known, probed = version, versionKnown, true
 		}
 		if !known || observed < gate.version {
 			return moerr.NewNotSupportedNoCtxf(gate.unsupported, gate.version)
