@@ -32,6 +32,35 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestCheckConstraintSourceIdentities(t *testing.T) {
+	ctx := context.Background()
+	for _, checks := range [][]*plan.CheckDef{nil, {nil}} {
+		previous, err := checkConstraintIdentities(ctx, &plan.TableDef{
+			Checks: checks, Createsql: "create table old(x int, constraint __mo_chk_1 check(x>0))",
+		})
+		require.NoError(t, err)
+		require.Equal(t, []*plan.CheckDef{{Name: "__mo_chk_1"}}, previous)
+		next := []*plan.CheckDef{{Name: "__MO_CHK_1"}, {Name: "new_distinct"}}
+		require.Equal(t, next[1:], introducedCheckConstraints(previous, next))
+	}
+	structured := []*plan.CheckDef{{Name: "current"}}
+	previous, err := checkConstraintIdentities(ctx, &plan.TableDef{
+		Checks: structured, Createsql: "invalid SQL containing check",
+	})
+	require.NoError(t, err)
+	require.Same(t, structured[0], previous[0])
+	previous, err = checkConstraintIdentities(ctx, nil)
+	require.NoError(t, err)
+	require.Empty(t, previous)
+	for _, kind := range []string{catalog.SystemViewRel, catalog.SystemExternalRel, catalog.SystemSourceRel} {
+		previous, err = checkConstraintIdentities(ctx, &plan.TableDef{TableType: kind, Createsql: "stage://bucket/check.csv"})
+		require.NoError(t, err)
+		require.Empty(t, previous)
+	}
+	_, err = checkConstraintIdentities(ctx, &plan.TableDef{Createsql: "invalid SQL containing check"})
+	require.Error(t, err)
+}
+
 func TestCheckConstraintAdmissionRevalidatesAfterAllClaims(t *testing.T) {
 	for _, outcome := range []string{"available", "committed_sibling", "lock_error", "frontier_error", "snapshot_error", "catalog_error", "si_available", "si_duplicate", "si_stale"} {
 		t.Run(outcome, func(t *testing.T) {

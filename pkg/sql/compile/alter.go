@@ -1363,8 +1363,12 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		// The replica is a trusted physical replacement, but ADD CHECK still
 		// authors new logical identities. Validate them before any replica or
 		// lineage catalog effects, excluding the source's inherited names.
+		previous, err := checkConstraintIdentities(c.proc.Ctx, qry.TableDef)
+		if err != nil {
+			return err
+		}
 		if err := c.validateIntroducedCheckConstraintNames(dbName, tblName,
-			qry.TableDef.GetChecks(), qry.CopyTableDef.GetChecks()); err != nil {
+			previous, qry.CopyTableDef.GetChecks()); err != nil {
 			return err
 		}
 	}

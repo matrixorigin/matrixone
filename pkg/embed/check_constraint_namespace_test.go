@@ -120,14 +120,100 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			expectError(t, "insert into rename_legacy_source values(-1)", 3819)
 		})
 
+		t.Run("legacy source identities survive combined alter", func(t *testing.T) {
+			defer func() {
+				for _, table := range []string{"legacy_move", "moved", "move_owner", "legacy_a", "legacy_b", "distinct_owner"} {
+					exec(t, "drop table if exists "+table)
+				}
+			}()
+			svc := cn.RawService().(cnservice.Service)
+			legacy := func(t *testing.T, name, check string) {
+				t.Helper()
+				// Only fixture installation may replay historical duplicate names;
+				// the ALTER statements below use the ordinary public connection.
+				res, err := svc.GetSQLExecutor().Exec(defines.AttachAccountId(ctx, 0),
+					"create table "+database+"."+name+"(x int, constraint "+check+" check(x>0))",
+					executor.Options{}.WithWaitCommittedLogApplied().
+						WithStatementOption(executor.StatementOption{}.WithTrustedCheckConstraintNames()).WithAdjustTableExtraFunc(func(extra *api.SchemaExtra) error {
+						extra.Checks = nil
+						return nil
+					}))
+				require.NoError(t, err)
+				res.Close()
+				var encoded []byte
+				var createSQL string
+				require.NoError(t, conn.QueryRowContext(ctx,
+					"select extra_info, rel_createsql from mo_catalog.mo_tables where reldatabase=? and relname=?", database, name).Scan(&encoded, &createSQL))
+				var extra api.SchemaExtra
+				require.NoError(t, extra.Unmarshal(encoded))
+				require.Empty(t, extra.Checks)
+				require.Contains(t, createSQL, check)
+			}
+			t.Run("combined rename", func(t *testing.T) {
+				legacy(t, "legacy_move", "legacy_move_chk_1")
+				exec(t, "insert into legacy_move values(1)")
+				exec(t, "create table move_owner(x int, constraint moved_chk_1 check(x>0))")
+				for _, statement := range []string{
+					"alter table legacy_move rename to moved, rename column x to y",
+					"alter table legacy_move rename column x to y, rename to moved",
+				} {
+					expectError(t, statement, 3822)
+					count(t, "select count(*) from legacy_move where x=1", 1)
+					count(t, "select count(*) from information_schema.tables where table_schema='"+database+"' and table_name='moved'", 0)
+					count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and constraint_name='moved_chk_1'", 1)
+					// This old-format fixture deliberately has no executable
+					// structured checks. Rejection must preserve that catalog
+					// representation, not manufacture an enforcement definition.
+					var encoded []byte
+					require.NoError(t, conn.QueryRowContext(ctx,
+						"select extra_info from mo_catalog.mo_tables where reldatabase=? and relname='legacy_move'", database).Scan(&encoded))
+					var extra api.SchemaExtra
+					require.NoError(t, extra.Unmarshal(encoded))
+					require.Empty(t, extra.Checks)
+				}
+				exec(t, "drop table move_owner")
+				exec(t, "alter table legacy_move rename to moved, rename column x to y")
+				count(t, "select count(*) from moved where y=1", 1)
+				expectError(t, "insert into moved values(-1)", 3819)
+			})
+			t.Run("inherited add", func(t *testing.T) {
+				legacy(t, "legacy_a", "__mo_chk_1")
+				legacy(t, "legacy_b", "__mo_chk_1")
+				exec(t, "insert into legacy_a values(5)")
+				exec(t, "alter table legacy_a add constraint new_distinct check(x<10)")
+				count(t, "select count(*) from legacy_a where x=5", 1)
+				count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and constraint_name='__mo_chk_1'", 2)
+				expectError(t, "insert into legacy_a values(-1)", 3819)
+				expectError(t, "insert into legacy_a values(10)", 3819)
+				expectError(t, "create table distinct_owner(x int, constraint new_distinct check(x>0))", 3822)
+			})
+		})
+
 		t.Run("repeatable read preserves check authoring", func(t *testing.T) {
 			exec(t, "set session transaction_isolation='REPEATABLE-READ'")
 			defer exec(t, "set session transaction_isolation='READ-COMMITTED'")
-			exec(t, "create table si_checked(x int check(x>0))")
+			// The accepted SI protocol conservatively rejects grants newer than
+			// its fixed snapshot, even after an unrelated catalog commit. Retry
+			// only that error in a new autocommit transaction; never refresh an
+			// active SI snapshot or retry duplicate-name/enforcement failures.
+			execSI := func(statement string) {
+				t.Helper()
+				var err error
+				for range 3 {
+					_, err = conn.ExecContext(ctx, statement)
+					var serverError *mysql.MySQLError
+					if !errors.As(err, &serverError) || serverError.Number != 20619 ||
+						!strings.Contains(serverError.Message, "catalog namespace snapshot is stale") {
+						break
+					}
+				}
+				require.NoError(t, err, statement)
+			}
+			execSI("create table si_checked(x int check(x>0))")
 			exec(t, "create table si_add(x int)")
 			exec(t, "insert into si_add values(5)")
-			exec(t, "alter table si_add add check(x>0)")
-			exec(t, "create table si_like like si_checked")
+			execSI("alter table si_add add check(x>0)")
+			execSI("create table si_like like si_checked")
 			expectError(t, "insert into si_checked values(-1)", 3819)
 			expectError(t, "insert into si_add values(-1)", 3819)
 			expectError(t, "insert into si_like values(-1)", 3819)
@@ -142,7 +228,7 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			expectError(t, "alter table si_invalid add constraint si_reusable check(x>0)", 3819)
 			count(t, "select count(*) from si_invalid where x=-1", 1)
 			count(t, "select count(*) from information_schema.table_constraints where table_schema='"+database+"' and table_name='si_invalid' and constraint_type='CHECK'", 0)
-			exec(t, "create table si_reused(x int, constraint si_reusable check(x>0))")
+			execSI("create table si_reused(x int, constraint si_reusable check(x>0))")
 			exec(t, "insert into si_add values(11)")
 		})
 

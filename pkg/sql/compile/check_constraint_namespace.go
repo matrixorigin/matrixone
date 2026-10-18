@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"context"
 	"sort"
 	"strings"
 
@@ -27,6 +28,32 @@ import (
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
+
+// checkConstraintIdentities is shared by sibling and source admission. Older
+// catalog rows expose CHECK names through retained CREATE SQL, not Checks.
+// These name-only definitions are for ownership checks, never enforcement.
+func checkConstraintIdentities(ctx context.Context, def *plan.TableDef) ([]*plan.CheckDef, error) {
+	if def == nil {
+		return nil, nil
+	}
+	for _, check := range def.Checks {
+		if check != nil {
+			return def.Checks, nil
+		}
+	}
+	if def.TableType != "" && def.TableType != catalog.SystemOrdinaryRel {
+		return nil, nil
+	}
+	legacy, err := plan2.RecoverLegacyCheckConstraints(ctx, def.Createsql)
+	if err != nil {
+		return nil, err
+	}
+	checks := make([]*plan.CheckDef, 0, len(legacy))
+	for _, check := range legacy {
+		checks = append(checks, &plan.CheckDef{Name: check.Name})
+	}
+	return checks, nil
+}
 
 // introducedCheckConstraints excludes identities already owned by the source.
 // COPY and RENAME may retain historical names shared by legacy logical tables;
