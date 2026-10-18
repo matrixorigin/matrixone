@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"regexp"
 	"sort"
 	"strconv"
@@ -25,7 +26,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -542,7 +542,7 @@ func TestTTLTaskBoundsFatalAndTableDiagnostics(t *testing.T) {
 			}
 		})
 	}
-	require.LessOrEqual(t, 4*int(unsafe.Sizeof(Candidate{})), candidateFixedCredit, "fixed credit must cover candidate/slice allocation growth")
+	require.LessOrEqual(t, 4*int(reflect.TypeOf(Candidate{}).Size()), candidateFixedCredit, "fixed credit must cover candidate/slice allocation growth")
 }
 
 type changedConstraintTxn struct {
