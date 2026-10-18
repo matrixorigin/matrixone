@@ -26,4 +26,18 @@ rollback;
 commit;
 select * from target_row;
 
+-- Repeated partition references must be fully substituted for ODKU routing
+-- and equality reads; ordinary update/delete also consume RowID metadata.
+create table repeated_target(id int primary key, u int unique, v int) partition by range(id*id) (partition p0 values less than (0), partition p1 values less than maxvalue);
+insert into repeated_target values (1,10,1);
+insert into repeated_target values (-1,10,999) on duplicate key update v=v+1;
+insert into repeated_target values (-1,10,999) on duplicate key update v=v+1;
+select id,u,v from repeated_target;
+select id,u,v from repeated_target where id=1;
+select id,u,v from repeated_target where u=10;
+update repeated_target set v=v+1 where id=1;
+select id,u,v from repeated_target where id=1;
+delete from repeated_target where id=1;
+select count(*) from repeated_target;
+
 drop database odku_resolved_target_lock;

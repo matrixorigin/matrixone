@@ -803,14 +803,31 @@ func (entry *TableEntry) RemoveEntry(objectEntry *ObjectEntry) (err error) {
 }
 
 func (entry *TableEntry) PrepareRollback() (err error) {
-	// Safety: in commit queue, that's ok without lock
+	entry.RLock()
 	t := entry.GetLatestNodeLocked()
-	if schema := t.BaseNode.Schema; schema.Extra.OldName != "" {
+	txnID := ""
+	if t.Txn != nil {
+		txnID = t.Txn.GetID()
+	}
+	schema := t.BaseNode.Schema
+	entry.RUnlock()
+	db := entry.GetDB()
+	db.Lock()
+	journaled, err := db.undoRenameLocked(entry.ID, txnID)
+	if err != nil {
+		db.Unlock()
+		return err
+	}
+	if !journaled && schema.Extra.OldName != "" {
 		fullname := genTblFullName(schema.AcInfo.TenantID, schema.Name)
-		entry.GetDB().RollbackRenameTable(fullname, entry.ID)
+		db.removeNameIndexLocked(fullname, entry.ID)
 	}
 	var isEmpty bool
 	isEmpty, err = entry.BaseEntryImpl.PrepareRollback()
+	if err == nil && journaled {
+		delete(db.renameUndo, entry.ID)
+	}
+	db.Unlock()
 	if err != nil {
 		return
 	}
@@ -840,7 +857,17 @@ Append Txn:
 	           s----------------------p         No, schema at s is not same with schema at p
 */
 func (entry *TableEntry) ApplyCommit(id string) (err error) {
+	db := entry.GetDB()
+	db.Lock()
+	if undo := db.renameUndo[entry.ID]; undo != nil && undo.txnID != id {
+		db.Unlock()
+		return moerr.NewInternalErrorNoCtx("rename commit transaction mismatch")
+	}
 	err = entry.BaseEntryImpl.ApplyCommit(id)
+	if err == nil {
+		delete(db.renameUndo, entry.ID)
+	}
+	db.Unlock()
 	if err != nil {
 		return
 	}
@@ -975,13 +1002,24 @@ func (entry *TableEntry) CreateWithTxnAndSchema(txn txnif.AsyncTxn, schema *Sche
 }
 
 func (entry *TableEntry) GetVisibilityAndName(txn txnif.TxnReader) (visible, dropped bool, name string) {
+	for {
+		var waitTxn txnif.TxnReader
+		visible, dropped, name, waitTxn = entry.tryVisibilityAndName(txn)
+		if waitTxn == nil {
+			return
+		}
+		waitTxn.GetTxnState(true)
+	}
+}
+
+// Namespace callers must release their DB/list locks before waiting and retry
+// the current name map, since rollback may remove or replace the old list.
+func (entry *TableEntry) tryVisibilityAndName(txn txnif.TxnReader) (visible, dropped bool, name string, waitTxn txnif.TxnReader) {
 	entry.RLock()
 	defer entry.RUnlock()
 	needWait, txnToWait := entry.NeedWaitCommittingLocked(txn.GetStartTS())
 	if needWait {
-		entry.RUnlock()
-		txnToWait.GetTxnState(true)
-		entry.RLock()
+		return false, false, "", txnToWait
 	}
 	un := entry.GetVisibleNodeLocked(txn)
 	if un == nil {

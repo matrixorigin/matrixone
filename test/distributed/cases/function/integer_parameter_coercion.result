@@ -202,7 +202,7 @@ select ceil(12.345,2.5),floor(12.345,2.5),round(12.345,2.5),truncate(12.345,2.5)
 ➤ ceil(12.345, 2.5)[3,5,3]  ¦  floor(12.345, 2.5)[3,5,3]  ¦  round(12.345, 2.5)[3,5,3]  ¦  truncate(12.345, 2.5)[3,5,3]  𝄀
 12.345  ¦  12.345  ¦  12.345  ¦  12.345
 select from_days(d),week(cast('2026-09-20' as date),d),yearweek(cast('2026-09-20' as date),d),timestampadd(day,d,cast('2026-09-20' as date)) from sources order by id;
-➤ from_days(d)[91,10,0]  ¦  week(cast(2026-09-20 as date), d)[-6,8,0]  ¦  yearweek(cast(2026-09-20 as date), d)[-5,64,0]  ¦  timestampadd(day, d, cast(2026-09-20 as date))[91,10,0]  𝄀
+➤ from_days(d)[91,10,0]  ¦  week(cast(2026-09-20 as date), d)[-5,3,0]  ¦  yearweek(cast(2026-09-20 as date), d)[-5,64,0]  ¦  timestampadd(day, d, cast(2026-09-20 as date))[91,10,0]  𝄀
 0000-00-00  ¦  38  ¦  202638  ¦  2026-09-23  𝄀
 0000-00-00  ¦  38  ¦  202638  ¦  2026-09-22  𝄀
 null  ¦  38  ¦  202638  ¦  null
@@ -229,15 +229,44 @@ Data truncation: data out of range: data type int64, integer argument
 prepare utility_source from 'select period_add(202401,?),round(12.345,?),from_days(?),week(cast("2026-09-20" as date),?),timestampadd(day,?,cast("2026-09-20" as date)),split_part("a.b.c",".",?),sha2("matrixone",?),regexp_instr("abcabc","b",?)';
 set @v=1.5;
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
-➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
+➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-5,3,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
 202403  ¦  12.350  ¦  0000-00-00  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
 set @v='2.5tail';
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
-➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
+➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-5,3,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
 202403  ¦  12.350  ¦  0000-00-00  ¦  38  ¦  2026-09-22  ¦  b  ¦  null  ¦  2
 set @v=null;
 execute utility_source using @v,@v,@v,@v,@v,@v,@v,@v;
-➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-6,8,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
+➤ period_add(202401, ?)[-5,64,0]  ¦  round(12.345, ?)[3,5,3]  ¦  from_days(?)[91,10,0]  ¦  week(cast(2026-09-20 as date), ?)[-5,3,0]  ¦  timestampadd(day, ?, cast(2026-09-20 as date))[91,10,0]  ¦  split_part(a.b.c, ., ?)[12,5,0]  ¦  sha2(matrixone, ?)[12,128,0]  ¦  regexp_instr(abcabc, b, ?)[-5,64,0]  𝄀
 null  ¦  null  ¦  null  ¦  38  ¦  null  ¦  null  ¦  null  ¦  null
 deallocate prepare utility_source;
+SELECT HEX(LPAD('x','3x','0')) = '303078' AS ok;
+➤ ok[-7,1,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '3x'
+SELECT SUBSTRING('abcdef',1,'2x') = 'ab' AS ok;
+➤ ok[-7,1,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '2x'
+SELECT BIT_COUNT('3x') = 2 AS ok;
+➤ ok[-7,1,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '3x'
+SELECT ROUND(12.345,'2x') = 12.350 AS ok;
+➤ ok[-7,1,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '2x'
+SELECT REPEAT('x','3 ') = 'xxx' AS ok;
+➤ ok[-7,1,0]  𝄀
+1
+SHOW WARNINGS;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
 drop database integer_parameter_coercion;

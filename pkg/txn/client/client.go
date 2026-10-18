@@ -624,15 +624,37 @@ func (client *txnClient) doCreateTxn(
 		v2.TxnCreateTotalDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	// Admission throttling obeys both the caller's cancellation and client
-	// shutdown. No client ownership exists yet, so failure closes only this
-	// unadmitted operator generation.
-	if err = client.limiter.Wait(ctx, client.closeCtx); err != nil {
-		if client.isClosed() {
-			err = moerr.NewClientClosedNoCtx()
-		}
+	admission := op.opts.snapshotAdmission
+	authorization := op.opts.authorizationSnapshot
+	// Creation-only capabilities never survive into a RestartTxn generation or
+	// retain a completed statement's context for the data transaction's lifetime.
+	explicitSnapshot := op.opts.explicitSnapshot
+	op.opts.snapshotAdmission, op.opts.authorizationSnapshot, op.opts.explicitSnapshot = nil, nil, false
+	if (admission != nil && authorization != nil) ||
+		((admission != nil || authorization != nil) && explicitSnapshot) ||
+		(authorization != nil && op.opts.options.CacheWriteEnabled()) {
+		err = moerr.NewInternalError(ctx, "conflicting snapshot admission options")
 		op.closeUnadmitted(err)
 		return nil, err
+	}
+	if authorization != nil {
+		// Apply after every option so option order cannot restore RC advancement.
+		op.mu.txn.Isolation = txn.TxnIsolation_SI
+		op.opts.options = op.opts.options.WithReadOnly()
+	}
+	var admittedSnapshot timestamp.Timestamp
+	if admission != nil || authorization != nil {
+		capability := admission
+		if authorization != nil {
+			capability = authorization
+			admittedSnapshot, err = capability.Snapshot(ctx, client, minTS)
+		} else {
+			admittedSnapshot, err = capability.claim(ctx, client, minTS)
+		}
+		if err != nil {
+			op.closeUnadmitted(err)
+			return nil, err
+		}
 	}
 
 	op.timestampWaiter = client.timestampWaiter
@@ -644,9 +666,36 @@ func (client *txnClient) doCreateTxn(
 	}
 	op.setDefaultEventCallbacks(&client.sharedEventCallbacks)
 
-	if err = client.openTxn(ctx, op); err != nil {
-		op.closeUnadmitted(err)
-		return nil, err
+	// A direct data admission with an already applied native frontier has no
+	// cancellation-dependent wait. Transfer ownership under the readiness lock;
+	// final capability validation below still rejects End racing publication.
+	// Every potentially waiting path retains the combined creation context.
+	opened := admission != nil && client.tryOpenAdmittedTxn(ctx, op, admittedSnapshot)
+	if !opened {
+		capability := admission
+		if capability == nil {
+			capability = authorization
+		}
+		if capability != nil {
+			var finishCreation func()
+			ctx, finishCreation = capability.creationContext(ctx)
+			defer finishCreation()
+		}
+		// Authorization readers still pay ordinary admission. No ownership has
+		// transferred on this path until openTxn succeeds.
+		if admission == nil {
+			err = client.limiter.Wait(ctx, client.closeCtx)
+		}
+		if err == nil {
+			err = client.openTxn(ctx, op)
+		}
+		if err != nil {
+			if client.isClosed() {
+				err = moerr.NewClientClosedNoCtx()
+			}
+			op.closeUnadmitted(err)
+			return nil, err
+		}
 	}
 	// Direct admission is already published. Queued admission may still be
 	// unpublished, but recording an older abort observation is safe and preserves
@@ -672,7 +721,10 @@ func (client *txnClient) doCreateTxn(
 		return nil, err
 	}
 
-	ts := client.determineTxnSnapshot(minTS)
+	ts := admittedSnapshot
+	if ts.IsEmpty() {
+		ts = client.determineTxnSnapshot(minTS)
+	}
 	if !op.opts.skipWaitPushClient {
 		snapshotCtx := ctx
 		var closeC <-chan struct{}
@@ -684,7 +736,14 @@ func (client *txnClient) doCreateTxn(
 				defer cancelOnClose()
 			}
 		}
-		if err := op.updateSnapshotWithClose(snapshotCtx, ts, closeC); err != nil {
+		waitMinimum := ts
+		if !admittedSnapshot.IsEmpty() {
+			// Snapshot A is exclusive: its completed admission proves logtail
+			// application through A.Prev(). Waiting for A would unnecessarily
+			// require the next notification before every transaction creation.
+			waitMinimum = admittedSnapshot.Prev()
+		}
+		if err := op.updateSnapshotWithClose(snapshotCtx, waitMinimum, closeC); err != nil {
 			if op.reset.waiter != nil {
 				if waitErr, completed := op.reset.waiter.result(); completed && waitErr != nil {
 					return nil, waitErr
@@ -701,6 +760,11 @@ func (client *txnClient) doCreateTxn(
 			// be relied on to release active/queued client ownership.
 			return nil, createErr
 		}
+	}
+	if !admittedSnapshot.IsEmpty() {
+		// A waiter may return a later applied timestamp. Authorization reads
+		// must remain at exactly A; ordinary RC data advancement happens later.
+		op.SetSnapshotTS(admittedSnapshot)
 	}
 
 	util.LogTxnSnapshotTimestamp(
@@ -729,6 +793,17 @@ func (client *txnClient) doCreateTxn(
 	if closed {
 		err := moerr.NewClientClosedNoCtx()
 		return nil, err
+	}
+	if admission != nil || authorization != nil {
+		capability := admission
+		if capability == nil {
+			capability = authorization
+		}
+		capability.mu.RLock()
+		defer capability.mu.RUnlock()
+		if err = capability.validate(ctx, client, minTS); err != nil {
+			return nil, err
+		}
 	}
 	admissionComplete = true
 	return op, nil
@@ -1093,6 +1168,39 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 		client.mu.Unlock()
 		return err
 	}
+	client.openReadyTxnLocked(op)
+	return nil
+}
+
+// tryOpenAdmittedTxn only succeeds when no creation wait can follow. The native
+// frontier is monotonic; A.Prev() therefore remains applied after this check.
+// Readiness/capacity and the actual admission transition share one lock, so a
+// pause, abort barrier or queue cannot appear between the proof and opening.
+func (client *txnClient) tryOpenAdmittedTxn(ctx context.Context, op *txnOperator, snapshot timestamp.Timestamp) bool {
+	if op.timestampWaiter != nil {
+		waiter, native := op.timestampWaiter.(*timestampWaiter)
+		if !native {
+			return false
+		}
+		latest := waiter.latestTS.Load()
+		if latest == nil || latest.Less(snapshot.Prev()) {
+			return false
+		}
+	}
+	client.mu.Lock()
+	if client.isClosed() || ctx.Err() != nil || client.mu.state == paused ||
+		client.mu.waitMarkAllActiveAbortedC != nil || op.reset.waiter != nil ||
+		(op.opts.options.UserTxn() && client.mu.users >= client.maxActiveTxn) {
+		client.mu.Unlock()
+		return false
+	}
+	client.openReadyTxnLocked(op)
+	return true
+}
+
+// openReadyTxnLocked consumes client.mu and performs the sole admission
+// transition, shared by ordinary creation and the proven non-waiting path.
+func (client *txnClient) openReadyTxnLocked(op *txnOperator) {
 
 	if !op.opts.options.UserTxn() ||
 		client.mu.users < client.maxActiveTxn {
@@ -1106,7 +1214,7 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 		// Update metrics after actual operation
 		v2.TxnActiveQueueSizeGauge.Set(float64(client.atomic.activeTxnCount.Load()))
 		v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
-		return nil
+		return
 	}
 
 	op.reset.waiter = newActiveTxnWaiter()
@@ -1116,7 +1224,6 @@ func (client *txnClient) openTxn(ctx context.Context, op *txnOperator) error {
 	client.mu.Unlock()
 	v2.TxnActiveQueueSizeGauge.Set(float64(activeCount))
 	v2.TxnWaitActiveQueueSizeGauge.Set(float64(waitQueueSize))
-	return nil
 }
 
 func (client *txnClient) closeTxn(ctx context.Context, txnOp TxnOperator, event TxnEvent, value any) (err error) {

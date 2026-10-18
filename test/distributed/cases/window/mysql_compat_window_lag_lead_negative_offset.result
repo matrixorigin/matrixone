@@ -26,7 +26,7 @@ Incorrect arguments to lead
 select id, lag(v, if(id = 2, null, 1), 77) over (order by id) from t order by id;
 Incorrect arguments to lag
 select id, lead(v, 9223372036854775807, 88) over (order by id) lead_v from t order by id;
-➤ id[4,32,0]  ¦  lead_v[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  lead_v[-5,64,0]  𝄀
 1  ¦  88  𝄀
 2  ¦  88  𝄀
 3  ¦  88
@@ -77,25 +77,25 @@ execute lead_offset using @offset;
 Incorrect arguments to lead
 set @offset = false;
 execute lead_offset using @offset;
-➤ id[4,32,0]  ¦  lead_v[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  lead_v[-5,64,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  20  𝄀
 3  ¦  30
 set @offset = true;
 execute lead_offset using @offset;
-➤ id[4,32,0]  ¦  lead_v[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  lead_v[-5,64,0]  𝄀
 1  ¦  20  𝄀
 2  ¦  30  𝄀
 3  ¦  88
 set @offset = 0;
 execute lead_offset using @offset;
-➤ id[4,32,0]  ¦  lead_v[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  lead_v[-5,64,0]  𝄀
 1  ¦  10  𝄀
 2  ¦  20  𝄀
 3  ¦  30
 set @offset = 1;
 execute lead_offset using @offset;
-➤ id[4,32,0]  ¦  lead_v[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  lead_v[-5,64,0]  𝄀
 1  ¦  20  𝄀
 2  ¦  30  𝄀
 3  ¦  88

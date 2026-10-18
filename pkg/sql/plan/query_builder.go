@@ -37,6 +37,7 @@ import (
 	sqldatastream "github.com/matrixorigin/matrixone/pkg/sql/datastream"
 	"github.com/matrixorigin/matrixone/pkg/sql/foreignext"
 	sqliceberg "github.com/matrixorigin/matrixone/pkg/sql/iceberg"
+	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	sqlkafka "github.com/matrixorigin/matrixone/pkg/sql/kafka"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1041,6 +1042,295 @@ func externalScanTolerates(node *plan.Node, colTag int32, colRefCnt map[[2]int32
 	return false
 }
 
+func isSetOperation(nodeType plan.Node_NodeType) bool {
+	switch nodeType {
+	case plan.Node_UNION, plan.Node_UNION_ALL, plan.Node_INTERSECT, plan.Node_INTERSECT_ALL, plan.Node_MINUS, plan.Node_MINUS_ALL:
+		return true
+	}
+	return false
+}
+
+// These untagged nodes preserve their child's logical output schema before remapping.
+func isSetOperationInputWrapper(node *plan.Node) bool {
+	if len(node.BindingTags) != 0 || len(node.Children) != 1 {
+		return false
+	}
+	switch node.NodeType {
+	case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_SORT, plan.Node_PARTITION:
+		return true
+	}
+	return false
+}
+
+func (builder *QueryBuilder) setOperationInput(nodeID int32) *plan.Node {
+	node := builder.qry.Nodes[nodeID]
+	for isSetOperationInputWrapper(node) {
+		node = builder.qry.Nodes[node.Children[0]]
+	}
+	return node
+}
+
+func (builder *QueryBuilder) setOperationOutputCanPrune(node *plan.Node, pos int, memo map[[2]int32]bool) bool {
+	key := [2]int32{node.NodeId, int32(pos)}
+	if result, ok := memo[key]; ok {
+		return result
+	}
+	// A false entry also closes a cyclic lineage conservatively, without a
+	// second state table. Every owner/ordinal is expanded at most once.
+	memo[key] = false
+	if pos < 0 || pos >= len(node.ProjectList) {
+		return false
+	}
+	if isSetOperation(node.NodeType) {
+		// A nested set retains its own observable evaluations. Discarding an
+		// already-evaluated output vector here neither removes nor repeats them.
+		// Stopping at this owner also avoids rescanning a UNION chain at each level.
+		memo[key] = true
+		return true
+	}
+	expr := node.ProjectList[pos]
+	result := exprCanRemoveProject(expr) && builder.setOperationAliasesCanPrune(expr, memo)
+	memo[key] = result
+	return result
+}
+
+// sharedCTESinkOutputCanPrune proves totality inside the producer subtree.
+// Reader tags point back to SINK_SCAN, so following the global tag owner would
+// close a self-reference rather than establish the producer output contract.
+func (builder *QueryBuilder) sharedCTESinkOutputCanPrune(sink *plan.Node, pos int, memo map[[2]int32]bool) bool {
+	if sink == nil || sink.NodeType != plan.Node_SINK || sink.ExtraOptions != materialized.CTESinkOption ||
+		len(sink.BindingTags) != 1 || len(sink.Children) != 1 || pos < 0 || pos >= len(sink.ProjectList) {
+		return false
+	}
+	if _, preserve := builder.preserveSinkProjection[sink.NodeId]; preserve {
+		return false
+	}
+	root := sink.Children[0]
+	if root < 0 || int(root) >= len(builder.qry.Nodes) || builder.qry.Nodes[root] == nil {
+		return false
+	}
+	expr := sink.ProjectList[pos]
+	if expr == nil {
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil || col.RelPos != sink.BindingTags[0] || col.ColPos != int32(pos) {
+		return false
+	}
+	key := [2]int32{sink.NodeId, int32(pos)}
+	if result, ok := memo[key]; ok {
+		return result
+	}
+	memo[key] = false
+	var ctx *BindContext
+	if int(sink.NodeId) < len(builder.ctxByNode) && sink.NodeId >= 0 {
+		ctx = builder.ctxByNode[sink.NodeId]
+	}
+	result := builder.cteExprIsTotal(root, expr, ctx, make(map[[2]int32]bool))
+	memo[key] = result
+	return result
+}
+
+func (builder *QueryBuilder) sharedCTEScanOutputCanPrune(scan *plan.Node, pos int, memo map[[2]int32]bool) bool {
+	if scan == nil || scan.NodeType != plan.Node_SINK_SCAN || len(scan.SourceStep) != 1 || len(scan.BindingTags) != 1 ||
+		pos < 0 || pos >= len(scan.ProjectList) {
+		return false
+	}
+	if _, preserve := builder.preserveScanProjection[scan.NodeId]; preserve {
+		return false
+	}
+	step := scan.SourceStep[0]
+	if step < 0 || int(step) >= len(builder.qry.Steps) {
+		return false
+	}
+	sinkID := builder.qry.Steps[step]
+	if sinkID < 0 || int(sinkID) >= len(builder.qry.Nodes) {
+		return false
+	}
+	sink := builder.qry.Nodes[sinkID]
+	expr := scan.ProjectList[pos]
+	if expr == nil || sink == nil || len(scan.ProjectList) != len(sink.ProjectList) {
+		return false
+	}
+	if pos >= len(sink.ProjectList) || sink.ProjectList[pos] == nil {
+		return false
+	}
+	typ := sink.ProjectList[pos].Typ
+	if expr.Typ.Id != typ.Id || expr.Typ.Width != typ.Width || expr.Typ.Scale != typ.Scale || expr.Typ.Enumvalues != typ.Enumvalues || expr.Typ.Charset != typ.Charset {
+		return false
+	}
+	col := expr.GetCol()
+	if col == nil || col.RelPos != scan.BindingTags[0] || col.ColPos != int32(pos) {
+		return false
+	}
+	return builder.sharedCTESinkOutputCanPrune(sink, pos, memo)
+}
+
+// A pure expression may reference a side effect behind a projection alias.
+// Follow column lineage even inside arithmetic/casts, using the existing tag owner.
+func (builder *QueryBuilder) setOperationAliasesCanPrune(expr *plan.Expr, memo map[[2]int32]bool) bool {
+	if col := expr.GetCol(); col != nil {
+		sourceID, ok := builder.tag2NodeID[col.RelPos]
+		if !ok {
+			return false
+		}
+		source := builder.qry.Nodes[sourceID]
+		switch source.NodeType {
+		case plan.Node_TABLE_SCAN, plan.Node_VALUE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_FUNCTION_SCAN:
+			// Function scans retain their invocation, arguments, filters and row
+			// carrier independently of pruning an unused output column.
+			// Scan owners prune unused columns while retaining their own demands,
+			// including full records needed by external error-reporting outputs.
+			return true
+		case plan.Node_AGG, plan.Node_SAMPLE, plan.Node_TIME_WINDOW:
+			// These owners prune computed slots while retaining effects,
+			// grouping/HAVING, time boundaries and row-count/row-set safeguards.
+			return len(source.BindingTags) >= 2
+		case plan.Node_WINDOW, plan.Node_FILL:
+			// These owners retain effects, filter consumers and partition inputs.
+			return len(source.BindingTags) == 1
+		case plan.Node_PROJECT, plan.Node_MATERIAL:
+			return builder.setOperationOutputCanPrune(source, int(col.ColPos), memo)
+		case plan.Node_SINK_SCAN:
+			return builder.sharedCTEScanOutputCanPrune(source, int(col.ColPos), memo)
+		default:
+			// Other schema owners can expose self references or computed slots,
+			// not projection definitions. Preserve unresolved evaluations.
+			return isSetOperation(source.NodeType)
+		}
+	}
+	if f := expr.GetF(); f != nil {
+		for _, arg := range f.Args {
+			if !builder.setOperationAliasesCanPrune(arg, memo) {
+				return false
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if !builder.setOperationAliasesCanPrune(item, memo) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// Align already-evaluated input vectors at this edge, keeping a nested set
+// operator's complete equality tuple intact. The common identity layout adds no node.
+func (builder *QueryBuilder) alignSetOperationInput(nodeID int32, refs [][2]int32, positions []int, mapping *ColRefRemapping) (int32, error) {
+	node := builder.qry.Nodes[nodeID]
+	identity := len(node.ProjectList) == len(positions)
+	for i, pos := range positions {
+		local, ok := mapping.globalToLocal[refs[pos]]
+		if !ok || local[0] != 0 || local[1] < 0 || int(local[1]) >= len(node.ProjectList) {
+			return 0, moerr.NewInternalError(builder.GetContext(), "missing set operation input column after remap")
+		}
+		identity = identity && local[1] == int32(i)
+	}
+	if identity {
+		return nodeID, nil
+	}
+	projects := make([]*plan.Expr, len(positions))
+	for i, pos := range positions {
+		local := mapping.globalToLocal[refs[pos]]
+		projects[i] = &plan.Expr{Typ: node.ProjectList[local[1]].Typ,
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: local[1]}}}
+	}
+	// This is a physical projection added after logical remapping. Its stats
+	// and cardinality are inherited; appendNode would recalculate logical stats.
+	projectID := int32(len(builder.qry.Nodes))
+	builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+		NodeId: projectID, NodeType: plan.Node_PROJECT, Children: []int32{nodeID},
+		ProjectList: projects, Stats: node.Stats,
+	})
+	builder.ctxByNode = append(builder.ctxByNode, nil)
+	return projectID, nil
+}
+
+func (builder *QueryBuilder) remapSetOperation(node *plan.Node, step int32, colRefCnt map[[2]int32]int,
+	colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int, remapping *ColRefRemapping) error {
+	left := builder.setOperationInput(node.Children[0])
+	right := builder.setOperationInput(node.Children[1])
+	width := len(node.ProjectList)
+	if len(left.BindingTags) != 1 || len(right.BindingTags) != 1 ||
+		len(left.ProjectList) != width || len(right.ProjectList) != width {
+		return moerr.NewInternalError(builder.GetContext(), "invalid set operation input schema before remap")
+	}
+	positions := make([]int, 0, width)
+	var pruneMemo map[[2]int32]bool
+	if node.NodeType == plan.Node_UNION_ALL {
+		pruneMemo = make(map[[2]int32]bool)
+	}
+	for i := range node.ProjectList {
+		if node.NodeType != plan.Node_UNION_ALL || colRefCnt[[2]int32{node.BindingTags[0], int32(i)}] != 0 ||
+			!builder.setOperationOutputCanPrune(left, i, pruneMemo) || !builder.setOperationOutputCanPrune(right, i, pruneMemo) {
+			positions = append(positions, i)
+		}
+	}
+	if len(positions) == 0 && width > 0 {
+		positions = append(positions, chooseUnionRowCarrier(left.ProjectList, right.ProjectList, width))
+	}
+	leftRefs := make([][2]int32, width)
+	rightRefs := make([][2]int32, width)
+	for i := range leftRefs {
+		leftRefs[i] = [2]int32{left.BindingTags[0], int32(i)}
+		rightRefs[i] = [2]int32{right.BindingTags[0], int32(i)}
+	}
+	for _, pos := range positions {
+		colRefCnt[leftRefs[pos]]++
+		colRefCnt[rightRefs[pos]]++
+	}
+	// Only these edge-owned demands are released, including child-remap failures.
+	defer func() {
+		for _, pos := range positions {
+			colRefCnt[leftRefs[pos]]--
+			colRefCnt[rightRefs[pos]]--
+		}
+	}()
+	leftMapping, err := builder.remapAllColRefs(node.Children[0], step, colRefCnt, colRefBool, sinkColRef)
+	if err != nil {
+		return err
+	}
+	rightMapping, err := builder.remapAllColRefs(node.Children[1], step, colRefCnt, colRefBool, sinkColRef)
+	if err != nil {
+		return err
+	}
+	node.Children[0], err = builder.alignSetOperationInput(node.Children[0], leftRefs, positions, leftMapping)
+	if err != nil {
+		return err
+	}
+	node.Children[1], err = builder.alignSetOperationInput(node.Children[1], rightRefs, positions, rightMapping)
+	if err != nil {
+		return err
+	}
+	left = builder.qry.Nodes[node.Children[0]]
+	right = builder.qry.Nodes[node.Children[1]]
+	if len(left.ProjectList) != len(positions) || len(right.ProjectList) != len(positions) {
+		return moerr.NewInternalError(builder.GetContext(), "set operation child projection width mismatch after remap")
+	}
+	alignedLeft := make(map[[2]int32][2]int32, len(positions))
+	output := node.ProjectList[:0]
+	for i, pos := range positions {
+		expr := node.ProjectList[pos]
+		alignedLeft[leftRefs[pos]] = [2]int32{0, int32(i)}
+		expr.Expr = &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: int32(i)}}
+		expr.Typ = setOperationOutputType(node.NodeType, left.ProjectList[i].Typ, right.ProjectList[i].Typ)
+		output = append(output, expr)
+		remapping.addColRef([2]int32{node.BindingTags[0], int32(pos)})
+	}
+	clear(node.ProjectList[len(output):])
+	node.ProjectList = output
+	info := RemapInfo{step: step, node: node, tip: "PhysicalEqualityKeyList"}
+	for i, expr := range node.PhysicalEqualityKeyList {
+		info.srcExprIdx = i
+		if err := builder.remapColRefForExpr(expr, alignedLeft, &info); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (builder *QueryBuilder) remapAllColRefs(nodeID int32, step int32, colRefCnt map[[2]int32]int, colRefBool map[[2]int32]bool, sinkColRef map[[2]int32]int) (*ColRefRemapping, error) {
 	return builder.remapAllColRefsForConsumer(
 		nodeID, step, colRefCnt, colRefBool, sinkColRef, false)
@@ -1224,8 +1514,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 			remapping.addColRef(internalRemapping.localToGlobal[i])
 
+			inputType := col.Typ
+			if node.NodeType == plan.Node_EXTERNAL_SCAN && node.ExternScan != nil &&
+				node.ExternScan.Type == int32(plan.ExternType_LOAD) {
+				inputType = loadTimeInputType(node.ExternScan.Format, inputType)
+			}
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: col.Typ,
+				Typ: inputType,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -1238,8 +1533,13 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		if remapping.preserveRowCount && len(node.ProjectList) == 0 && len(node.TableDef.Cols) > 0 {
 			remapping.addColRef(internalRemapping.localToGlobal[0])
+			inputType := node.TableDef.Cols[0].Typ
+			if node.NodeType == plan.Node_EXTERNAL_SCAN && node.ExternScan != nil &&
+				node.ExternScan.Type == int32(plan.ExternType_LOAD) {
+				inputType = loadTimeInputType(node.ExternScan.Format, inputType)
+			}
 			node.ProjectList = append(node.ProjectList, &plan.Expr{
-				Typ: node.TableDef.Cols[0].Typ,
+				Typ: inputType,
 				Expr: &plan.Expr_Col{
 					Col: &plan.ColRef{
 						RelPos: 0,
@@ -1503,143 +1803,8 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		plan.Node_UNION, plan.Node_UNION_ALL,
 		plan.Node_MINUS, plan.Node_MINUS_ALL:
 
-		thisTag := node.BindingTags[0]
-		leftID := node.Children[0]
-		rightID := node.Children[1]
-		leftNode := builder.qry.Nodes[leftID]
-		rightNode := builder.qry.Nodes[rightID]
-		pruneOutput := node.NodeType == plan.Node_UNION_ALL
-		var neededProj []int
-		if pruneOutput {
-			neededProj = make([]int, 0, len(node.ProjectList))
-			for i, expr := range node.ProjectList {
-				globalRef := [2]int32{thisTag, int32(i)}
-				// UNION ALL only concatenates rows, so an unreferenced position
-				// can be removed from both children unless evaluating that
-				// position has an observable side effect.
-				canPrune := colRefCnt[globalRef] == 0
-				if i < len(leftNode.ProjectList) && !exprCanRemoveProject(leftNode.ProjectList[i]) {
-					canPrune = false
-				}
-				if i < len(rightNode.ProjectList) && !exprCanRemoveProject(rightNode.ProjectList[i]) {
-					canPrune = false
-				}
-				if canPrune {
-					continue
-				}
-				neededProj = append(neededProj, i)
-				increaseRefCnt(expr, 1, colRefCnt)
-				remapping.addColRef(globalRef)
-			}
-			if remapping.preserveRowCount && len(neededProj) == 0 && len(node.ProjectList) > 0 {
-				carrier := chooseUnionRowCarrier(leftNode.ProjectList, rightNode.ProjectList, len(node.ProjectList))
-				if carrier < 0 {
-					carrier = chooseRowCarrier(node.ProjectList, false)
-				}
-				if carrier >= 0 {
-					neededProj = append(neededProj, carrier)
-					increaseRefCnt(node.ProjectList[carrier], 1, colRefCnt)
-					remapping.addColRef([2]int32{thisTag, int32(carrier)})
-				}
-			}
-		} else {
-			// The other set operators use every input column to determine
-			// duplicate counts or set membership.
-			for i, expr := range node.ProjectList {
-				increaseRefCnt(expr, 1, colRefCnt)
-				remapping.addColRef([2]int32{thisTag, int32(i)})
-			}
-		}
-
-		// Set-operation expressions reference the left branch's project tags.
-		// Pin the same ordinal positions on the right branch explicitly, even
-		// when a transparent operator (for example a pushed-down FILTER) sits
-		// between the set operation and its output PROJECT. Otherwise pruning
-		// may keep the right branch's first column in place of a used second one.
-		for outputID := rightID; ; {
-			output := builder.qry.Nodes[outputID]
-			if output.NodeType == plan.Node_PROJECT {
-				projectTag := output.BindingTags[0]
-				if pruneOutput {
-					for _, i := range neededProj {
-						colRefCnt[[2]int32{projectTag, int32(i)}]++
-					}
-				} else {
-					for i := range output.ProjectList {
-						colRefCnt[[2]int32{projectTag, int32(i)}]++
-					}
-				}
-				break
-			}
-			if len(output.Children) != 1 {
-				break
-			}
-			switch output.NodeType {
-			case plan.Node_FILTER, plan.Node_ASSERT, plan.Node_SORT, plan.Node_PARTITION:
-				outputID = output.Children[0]
-			default:
-				outputID = -1
-			}
-			if outputID < 0 {
-				break
-			}
-		}
-		leftRemapping, err := builder.remapAllColRefs(leftID, step, colRefCnt, colRefBool, sinkColRef)
-		if err != nil {
+		if err := builder.remapSetOperation(node, step, colRefCnt, colRefBool, sinkColRef, remapping); err != nil {
 			return nil, err
-		}
-
-		_, err = builder.remapAllColRefs(rightID, step, colRefCnt, colRefBool, sinkColRef)
-		if err != nil {
-			return nil, err
-		}
-
-		expectedOutputCount := len(node.ProjectList)
-		if pruneOutput {
-			expectedOutputCount = len(neededProj)
-		}
-		if len(leftNode.ProjectList) != expectedOutputCount ||
-			len(rightNode.ProjectList) != expectedOutputCount {
-			return nil, moerr.NewInternalErrorf(
-				builder.GetContext(),
-				"set operation child projection width mismatch after remap: left %d, right %d, output %d",
-				len(leftNode.ProjectList), len(rightNode.ProjectList), expectedOutputCount,
-			)
-		}
-
-		remapInfo.tip = "ProjectList"
-		if pruneOutput {
-			newProjectList := node.ProjectList[:0]
-			for _, needed := range neededProj {
-				expr := node.ProjectList[needed]
-				increaseRefCnt(expr, -1, colRefCnt)
-				remapInfo.srcExprIdx = needed
-				if err := builder.remapColRefForExpr(expr, leftRemapping.globalToLocal, &remapInfo); err != nil {
-					return nil, err
-				}
-				outputIdx := len(newProjectList)
-				expr.Typ = setOperationOutputType(
-					node.NodeType,
-					leftNode.ProjectList[outputIdx].Typ,
-					rightNode.ProjectList[outputIdx].Typ,
-				)
-				newProjectList = append(newProjectList, expr)
-			}
-			clear(node.ProjectList[len(newProjectList):])
-			node.ProjectList = newProjectList
-		} else {
-			for idx, expr := range node.ProjectList {
-				increaseRefCnt(expr, -1, colRefCnt)
-				remapInfo.srcExprIdx = idx
-				if err := builder.remapColRefForExpr(expr, leftRemapping.globalToLocal, &remapInfo); err != nil {
-					return nil, err
-				}
-				expr.Typ = setOperationOutputType(
-					node.NodeType,
-					leftNode.ProjectList[idx].Typ,
-					rightNode.ProjectList[idx].Typ,
-				)
-			}
 		}
 
 	case plan.Node_JOIN:
@@ -3014,6 +3179,16 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		}
 		if len(newProjList) == 0 && len(node.ProjectList) > 0 {
+			// A count-only reader still emits the fallback projection. Publish
+			// those reads before a shared CTE producer compacts its output.
+			sharedCTESource := int32(-1)
+			if node.NodeType == plan.Node_SINK_SCAN && len(node.SourceStep) == 1 && node.SourceStep[0] < step {
+				sourceStep := node.SourceStep[0]
+				source := builder.qry.Nodes[builder.qry.Steps[sourceStep]]
+				if source.NodeType == plan.Node_SINK && source.ExtraOptions == materialized.CTESinkOption {
+					sharedCTESource = sourceStep
+				}
+			}
 			for i, expr := range node.ProjectList {
 				globalRef := [2]int32{tag, int32(i)}
 				newProjList = append(newProjList, &plan.Expr{
@@ -3024,6 +3199,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 					}},
 				})
 				remapping.addColRef(globalRef)
+				if sharedCTESource >= 0 {
+					colRefBool[[2]int32{sharedCTESource, int32(i)}] = true
+				}
 			}
 		}
 		node.ProjectList = newProjList
@@ -4095,6 +4273,8 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		// filter/message generations, execute those regions exactly once with the
 		// existing FORCE path rather than replaying either side.
 		builder.forceMultipleAdaptiveVectorRegions(rootID)
+		// Keep the current root visible to vector rules that prove ancestor consumers.
+		builder.qry.Steps[i] = rootID
 		earlyIndexColMap := make(map[[2]int32]*plan.Expr)
 		rootID, err = builder.applyVectorIndicesEarly(rootID, colRefCnt, earlyIndexColMap)
 		builder.resetSpecialIndexGuards()
@@ -4196,9 +4376,31 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		rootID := builder.qry.Steps[i]
 		rootNode := builder.qry.Nodes[rootID]
 		colRefCnt := make(map[[2]int32]int)
+
 		if len(rootNode.BindingTags) > 0 {
 			resultTag := rootNode.BindingTags[0]
+			// A shared SINK reuses its producer tag. Seeding every root output
+			// pins unused producer work even after readers narrow colRefBool.
+			// Keep legacy seeding unless a real materialized column is demanded.
+			pruneSharedSink := false
+			if rootNode.NodeType == plan.Node_SINK && rootNode.ExtraOptions == materialized.CTESinkOption {
+				for j := range rootNode.ProjectList {
+					if colRefBool[[2]int32{int32(i), int32(j)}] {
+						pruneSharedSink = true
+						break
+					}
+				}
+			}
+			var sinkMemo map[[2]int32]bool
 			for j := range rootNode.ProjectList {
+				if pruneSharedSink && !colRefBool[[2]int32{int32(i), int32(j)}] {
+					if sinkMemo == nil {
+						sinkMemo = make(map[[2]int32]bool)
+					}
+					if builder.sharedCTESinkOutputCanPrune(rootNode, j, sinkMemo) {
+						continue
+					}
+				}
 				colRefCnt[[2]int32{resultTag, int32(j)}] = 1
 			}
 		}
@@ -4565,6 +4767,14 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
+			branchExprs := make([]*Expr, len(nodes))
+			for i, id := range nodes {
+				branchExprs[i] = builder.qry.Nodes[id].ProjectList[columnIdx]
+			}
+			if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
+				return 0, err
+			}
+			targetArgType = makeTypeByPlan2Type(targetType)
 
 			preparedDeferredColumn := false
 			if builder.isPrepareStatement {
@@ -4576,7 +4786,8 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				}
 			}
 			for idx, tmpID := range nodes {
-				needsCast := !argsType[idx].Eq(targetArgType)
+				needsCast := !argsType[idx].Eq(targetArgType) ||
+					(targetType.CollationCoercibilitySet && !builder.qry.Nodes[tmpID].ProjectList[columnIdx].Typ.SameCollation(targetType))
 				sameMediumIntStorageWidth := argsType[idx].Oid == targetArgType.Oid &&
 					(argsType[idx].IsMediumInt() || targetArgType.IsMediumInt()) &&
 					argsType[idx].Scale == targetArgType.Scale &&
@@ -5061,7 +5272,7 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		node := builder.qry.Nodes[lastNodeID]
 		node.Limit = boundLimit
 		node.Offset = boundOffset
-		if unionRankOption != nil && unionRankOption.Mode != "" {
+		if unionRankOption != nil {
 			node.RankOption = unionRankOption
 		}
 	}
@@ -5090,6 +5301,21 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		}, ctx)
 	} else {
 		ctx.results = ctx.projects[:resultLen]
+	}
+
+	if shareGroupingInput && !distinct {
+		// A grouping extension owns its sentinel NULLs only until this query
+		// block's output. Keep them through its HAVING and ORDER BY, then expose
+		// ordinary SQL values to outer grouping and set operations. Reuse the
+		// final projection so branch sharing and direct expansion stay intact.
+		result := builder.qry.Nodes[lastNodeID]
+		normalized, normalizeErr := normalizeGroupingSetProjects(
+			builder.GetContext(), result.ProjectList[:resultLen], subCtxList[0].projects[:resultLen], true)
+		if normalizeErr != nil {
+			return 0, normalizeErr
+		}
+		result.ProjectList = normalized
+		ctx.results = normalized
 	}
 
 	ctx.headings = ctx.headings[:resultLen]
@@ -5913,7 +6139,10 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			}
 			selectClause.GroupBy.GroupByExprsList = groupByExprsList
 			if len(groupByExprsList) > 1 && !selectClause.GroupBy.Apart {
-				if rewrittenSelect, hasWindow := rewriteRollupWindowSelectWithHeadingProvenance(ctx, selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
+				if rewrittenSelect, hasWindow, rewriteErr := rewriteRollupWindowSelectWithHeadingProvenance(ctx, selectClause, astOrderBy, astLimit, astRankOption); hasWindow {
+					if rewriteErr != nil {
+						return 0, rewriteErr
+					}
 					if rewrittenSelect == nil {
 						return 0, moerr.NewNotSupported(builder.GetContext(), "window functions with ROLLUP or CUBE for this expression")
 					}
@@ -5930,12 +6159,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 				}
 				hiddenResultLen := len(branchExprs) - len(selectClause.Exprs)
 				groupingCount := len(groupByExprsList)
+				// SAMPLE already emits no rows on empty input and cannot mix with
+				// the ordinary aggregate used by the ROLLUP guard.
+				guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 				selectStmts := make([]*tree.SelectClause, groupingCount)
 				if groupingCount > 1 {
 					for i, list := range groupByExprsList {
-						if selectClause.Having != nil {
-							selectClause.Having.RollupHaving = true
-						}
 						selectStmts[i] = &tree.SelectClause{
 							// Keep branch-local duplicate elimination after
 							// grouping NULL normalization to reduce rows before
@@ -5952,7 +6181,7 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 								Cube:             false,
 								Rollup:           false,
 							},
-							Having:  selectClause.Having,
+							Having:  groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 							Windows: selectClause.Windows,
 							Option:  selectClause.Option,
 						}
@@ -6614,6 +6843,8 @@ func seedPreparedNumericAggregateExprColumnTargets(
 	case *tree.ParenExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
 	case *tree.CastExpr:
+		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
+	case *tree.CollateExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
 	case *tree.BitCastExpr:
 		seedPreparedNumericAggregateExprColumnTargets(binder, sources, item.Expr)
@@ -7354,8 +7585,35 @@ func rewriteRollupWindowSelect(
 	astLimit *tree.Limit,
 	astRankOption *tree.RankOption,
 ) (*tree.Select, bool) {
-	return rewriteRollupWindowSelectWithHeadingProvenance(
+	rewritten, hasWindow, _ := rewriteRollupWindowSelectWithHeadingProvenance(
 		nil, selectClause, astOrderBy, astLimit, astRankOption)
+	return rewritten, hasWindow
+}
+
+// ROLLUP follows MySQL's empty-input contract. Apply the same row-count guard
+// to every branch so aggregate binding stays identical for shared input plans.
+// Keep fresh wrappers because a CTE declaration can be bound more than once.
+func groupingSetBranchHaving(having *tree.Where, guardEmptyInput bool) *tree.Where {
+	if having == nil && !guardEmptyInput {
+		return nil
+	}
+	result := &tree.Where{Type: tree.AstHaving, RollupHaving: true}
+	if having != nil {
+		result.Expr = having.Expr
+	}
+	if guardEmptyInput {
+		count := &tree.FuncExpr{
+			Func:  tree.ResolvableFunctionReference{FunctionReference: tree.NewUnresolvedName(tree.NewCStr("count", 1))},
+			Exprs: tree.Exprs{tree.NewNumVal("*", "*", false, tree.P_star)},
+		}
+		positive := tree.NewComparisonExpr(tree.GREAT_THAN, count, tree.NewNumVal(int64(0), "0", false, tree.P_int64))
+		if result.Expr == nil {
+			result.Expr = positive
+		} else {
+			result.Expr = tree.NewAndExpr(tree.NewParentExpr(result.Expr), positive)
+		}
+	}
+	return result
 }
 
 func rewriteRollupWindowSelectWithHeadingProvenance(
@@ -7364,9 +7622,9 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 	astOrderBy tree.OrderBy,
 	astLimit *tree.Limit,
 	astRankOption *tree.RankOption,
-) (*tree.Select, bool) {
+) (*tree.Select, bool, error) {
 	if selectClause == nil {
-		return nil, false
+		return nil, false, nil
 	}
 
 	hasWindow := false
@@ -7380,49 +7638,57 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 		hasWindow = hasWindow || rollupWindowExprContainsWindow(selectClause.Having.Expr)
 	}
 	if !hasWindow {
-		return nil, false
+		return nil, false, nil
 	}
 	if selectClause.GroupBy == nil || selectClause.GroupBy.Apart ||
 		len(selectClause.GroupBy.GroupByExprsList) <= 1 ||
 		selectClause.Distinct ||
 		(selectClause.Having != nil && rollupWindowExprContainsWindow(selectClause.Having.Expr)) {
-		return nil, true
+		return nil, true, nil
 	}
 
 	rewriteState := newRollupWindowRewriteState(selectClause.Exprs)
 	rewriteState.addGroupingSourceNames(selectClause.GroupBy.GroupByExprsList)
 	outerExprs, ok := buildRollupWindowSelectExprs(selectClause.Exprs, rewriteState)
 	if !ok {
-		return nil, true
+		return nil, true, nil
 	}
-	var rewrittenHaving *tree.Where
+	groupingAliases := rollupWindowGroupingAliases(selectClause.Exprs, selectClause.GroupBy.GroupByExprsList)
+	branchAliases := groupingAliases
 	if selectClause.Having != nil {
 		// Keep HAVING in the original FROM scope so AliasAfterColumn can resolve
 		// source columns (including ambiguity) before SELECT aliases. Hidden
 		// projections retain the original non-window aliases for the fallback.
-		rewriteState.addHavingAliasExprs(selectClause.Exprs)
-		nextHaving := *selectClause.Having
-		nextHaving.RollupHaving = true
-		rewrittenHaving = &nextHaving
+		branchAliases = selectClause.Exprs
 	}
+	rewriteState.addBranchAliasExprs(branchAliases)
 	rewrittenOrderBy, ok := rewriteRollupWindowOrderByWithNameAliases(astOrderBy, rewriteState, rewriteState.outputAliases)
 	if !ok {
-		return nil, true
+		return nil, true, nil
 	}
 	if len(rewriteState.innerExprs)+len(rewriteState.orderExprs) == 0 {
 		_, ok = rewriteState.ensureInnerExpr(tree.NewNumVal(int64(1), "1", false, tree.P_int64))
 		if !ok {
-			return nil, true
+			return nil, true, nil
 		}
 	}
 
-	groupingCount := len(selectClause.GroupBy.GroupByExprsList)
+	groupingSets := selectClause.GroupBy.GroupByExprsList
+	if len(groupingAliases) > 0 {
+		var err error
+		groupingSets, err = rewriteState.remapGroupingOrdinals(selectClause.Exprs, groupingSets)
+		if err != nil {
+			return nil, true, err
+		}
+	}
+	groupingCount := len(groupingSets)
+	guardEmptyInput := selectClause.GroupBy.Rollup && !selectClauseHasSampleExpr(selectClause)
 	selectStmts := make([]*tree.SelectClause, groupingCount)
 	originalOutputExprs := make([]tree.Expr, len(selectClause.Exprs))
 	for i := range selectClause.Exprs {
 		originalOutputExprs[i] = selectClause.Exprs[i].Expr
 	}
-	for i, list := range selectClause.GroupBy.GroupByExprsList {
+	for i, list := range groupingSets {
 		innerExprs := make(tree.SelectExprs, 0, len(rewriteState.innerExprs)+len(rewriteState.orderExprs))
 		innerExprs = append(innerExprs, rewriteState.innerExprs...)
 		innerExprs = append(innerExprs, rewriteState.orderExprs...)
@@ -7432,7 +7698,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 			Where:   selectClause.Where,
 			Windows: selectClause.Windows,
 			GroupBy: &tree.GroupByClause{
-				GroupByExprsList:             selectClause.GroupBy.GroupByExprsList,
+				GroupByExprsList:             groupingSets,
 				GroupingSet:                  list,
 				Apart:                        true,
 				GroupingSetOrderHiddenCount:  len(rewriteState.orderExprs),
@@ -7442,7 +7708,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 				Cube:                         false,
 				Rollup:                       false,
 			},
-			Having: rewrittenHaving,
+			Having: groupingSetBranchHaving(selectClause.Having, guardEmptyInput),
 			Option: selectClause.Option,
 		}
 	}
@@ -7490,7 +7756,7 @@ func rewriteRollupWindowSelectWithHeadingProvenance(
 			}
 		}
 	}
-	return rewritten, true
+	return rewritten, true, nil
 }
 
 const rollupWindowInternalAliasPrefix = "__mo_rollup_window_col_"
@@ -7567,7 +7833,71 @@ func (state *rollupWindowRewriteState) addGroupingSourceNames(groupingSets []tre
 	}
 }
 
-func (state *rollupWindowRewriteState) addHavingAliasExprs(selectExprs tree.SelectExprs) {
+// Collect candidates before FROM binding; the branch binder still owns source
+// precedence and ambiguity. Function names and subquery scopes are excluded.
+func rollupWindowGroupingAliases(selectExprs tree.SelectExprs, groupingSets []tree.Exprs) tree.SelectExprs {
+	names := make(map[string]struct{})
+	for _, list := range groupingSets {
+		for _, group := range list {
+			walkGroupingSetOrderByExpr(group, func(expr tree.Expr) bool {
+				if _, subquery := expr.(*tree.Subquery); subquery {
+					return false
+				}
+				if name, ok := expr.(*tree.UnresolvedName); ok && !name.Star && name.NumParts == 1 {
+					names[name.ColName()] = struct{}{}
+				}
+				return true
+			})
+		}
+	}
+	var aliases tree.SelectExprs
+	for _, expr := range selectExprs {
+		if expr.As == nil || expr.As.Empty() || rollupWindowExprContainsWindow(expr.Expr) {
+			continue
+		}
+		if _, referenced := names[expr.As.Compare()]; referenced {
+			aliases = append(aliases, expr)
+		}
+	}
+	return aliases
+}
+
+// Alias copies must not make an original ordinal select a different internal
+// projection. Resolve it against the original output, then keep its identity
+// through the existing materialized projection (including numeric literals).
+func (state *rollupWindowRewriteState) remapGroupingOrdinals(selectExprs tree.SelectExprs, groupingSets []tree.Exprs) ([]tree.Exprs, error) {
+	positions := make(map[string]int64, len(state.innerExprs))
+	for i, expr := range state.innerExprs {
+		positions[expr.As.Compare()] = int64(i + 1)
+	}
+	remapped := make([]tree.Exprs, len(groupingSets))
+	for i, list := range groupingSets {
+		remapped[i] = append(tree.Exprs(nil), list...)
+		for j, group := range list {
+			ordinal, ok := unwrapParenExpr(group).(*tree.NumVal)
+			if !ok || ordinal.Kind() != tree.Int {
+				continue
+			}
+			pos, _ := ordinal.Int64()
+			if pos < 1 || pos > int64(len(selectExprs)) {
+				return nil, moerr.NewSyntaxErrorNoCtxf("GROUP BY position %v is not in select list", pos)
+			}
+			original := selectExprs[pos-1].Expr
+			if rollupWindowExprContainsWindow(original) {
+				return nil, moerr.NewInvalidInputNoCtx("GROUP BY clause cannot contain window functions")
+			}
+			alias, found := state.lookupExprAlias(original)
+			mapped, exists := positions[alias]
+			if !found || !exists {
+				return nil, moerr.NewInternalErrorNoCtx("GROUP BY projection not found in ROLLUP window input")
+			}
+			remapped[i][j] = tree.NewNumVal(mapped, strconv.FormatInt(mapped, 10), false, tree.P_int64)
+		}
+	}
+	return remapped, nil
+}
+
+func (state *rollupWindowRewriteState) addBranchAliasExprs(selectExprs tree.SelectExprs) {
 	for _, selectExpr := range selectExprs {
 		if selectExpr.As == nil || selectExpr.As.Empty() || rollupWindowExprContainsWindow(selectExpr.Expr) {
 			continue
@@ -8050,6 +8380,14 @@ func rewriteRollupWindowExpr(expr tree.Expr, state *rollupWindowRewriteState) (t
 		next := *e
 		next.Expr = child
 		return &next, true
+	case *tree.CollateExpr:
+		child, ok := rewriteRollupWindowExpr(e.Expr, state)
+		if !ok {
+			return nil, false
+		}
+		next := *e
+		next.Expr = child
+		return &next, true
 	case *tree.BitCastExpr:
 		child, ok := rewriteRollupWindowExpr(e.Expr, state)
 		if !ok {
@@ -8476,6 +8814,8 @@ func rollupWindowExprContainsWindow(expr tree.Expr) bool {
 		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.CastExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
+	case *tree.CollateExpr:
+		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.BitCastExpr:
 		return rollupWindowExprContainsWindow(e.Expr)
 	case *tree.SerialExtractExpr:
@@ -8528,40 +8868,16 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
-	// The catalog-only shortcut belongs to this SELECT, not to its siblings
-	// or its nested View/CTE bodies. In particular, an inner LIMIT 0 must not
-	// let a later ordinary SELECT bypass semantic binding.
-	previousSkipResolve := builder.isSkipResolveTableDef
-	builder.isSkipResolveTableDef = false
-	defer func() { builder.isSkipResolveTableDef = previousSkipResolve }()
-
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return
 	}
 
 	if len(clause.Exprs) == 1 {
-		switch clause.Exprs[0].Expr.(type) {
-		case tree.UnqualifiedStar:
-			if astLimit != nil && astLimit.Count != nil {
-				var limitExpr *plan.Expr
-				limitBinder := NewLimitBinder(builder, ctx, false)
-				if limitExpr, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
-					return
-				}
-
-				if cExpr, ok := limitExpr.Expr.(*plan.Expr_Lit); ok {
-					if c, ok := cExpr.Lit.Value.(*plan.Literal_U64Val); ok {
-						if c.U64Val == 0 {
-							// View metadata generation needs the complete catalog identity
-							// exposed by Resolve so it can persist reverse dependencies.
-							// Keep the mo_columns-only shortcut for ordinary LIMIT 0 queries.
-							if _, capturingViewDependencies := builder.compCtx.(viewDependencyScope); !capturingViewDependencies {
-								builder.isSkipResolveTableDef = true
-							}
-						}
-					}
-				}
+		if _, ok := clause.Exprs[0].Expr.(tree.UnqualifiedStar); ok && astLimit != nil && astLimit.Count != nil {
+			limitBinder := NewLimitBinder(builder, ctx, false)
+			if _, err = limitBinder.BindExpr(astLimit.Count, 0, true); err != nil {
+				return
 			}
 		}
 	}
@@ -8887,25 +9203,30 @@ func (builder *QueryBuilder) bindGroupBy(
 	allowScalarSubquery := clause != nil && astTimeWindow == nil &&
 		!clause.Apart && !clause.Cube && !clause.GroupingSets && !clause.Rollup
 	groupBinder := NewGroupBinder(builder, ctx, selectList, allowScalarSubquery)
+	bindGroup := func(group tree.Expr) error {
+		if name, ok := group.(*tree.UnresolvedName); ok && name.TblName() == "" {
+			col := name.ColName()
+			_, sourceColumn := ctx.bindingByCol[col]
+			alias, aliasExists := ctx.aliasMap[col]
+			if !sourceColumn && aliasExists && alias.astExpr != nil && ctx.aliasFrequency[col] == 1 {
+				_, bindErr := groupBinder.BindProjectionExpr(alias.idx)
+				return bindErr
+			}
+		}
+		// ROLLUP prefixes and repeated CTE references share grouping AST nodes.
+		// Resolve registration and active-set marking without changing that template.
+		qualified, bindErr := ctx.qualifyColumnNames(cloneTreeExpr(group), AliasAfterColumn)
+		if bindErr != nil {
+			return bindErr
+		}
+		_, bindErr = groupBinder.BindExpr(qualified, 0, true)
+		return bindErr
+	}
 
 	if clause != nil {
 		for _, list := range clause.GroupByExprsList {
 			for _, group := range list {
-				if name, ok := group.(*tree.UnresolvedName); ok && name.TblName() == "" {
-					col := name.ColName()
-					_, sourceColumn := ctx.bindingByCol[col]
-					alias, aliasExists := ctx.aliasMap[col]
-					if !sourceColumn && aliasExists && alias.astExpr != nil && ctx.aliasFrequency[col] == 1 {
-						if _, err = groupBinder.BindProjectionExpr(alias.idx); err != nil {
-							return
-						}
-						continue
-					}
-				}
-				if group, err = ctx.qualifyColumnNames(group, AliasAfterColumn); err != nil {
-					return
-				}
-				if _, err = groupBinder.BindExpr(group, 0, true); err != nil {
+				if err = bindGroup(group); err != nil {
 					return
 				}
 			}
@@ -8915,7 +9236,7 @@ func (builder *QueryBuilder) bindGroupBy(
 		if clause.Apart {
 			ctx.isGroupingSet = true
 			for _, group := range clause.GroupingSet {
-				if _, err = groupBinder.BindExpr(group, 0, true); err != nil {
+				if err = bindGroup(group); err != nil {
 					return
 				}
 			}
@@ -9579,13 +9900,21 @@ type groupingSetOrderResolution struct {
 	bindDistinct []bool
 }
 
-func normalizeGroupingSetDistinctProjects(
+func normalizeGroupingSetProjects(
 	ctx context.Context,
 	projects []*plan.Expr,
 	originalProjects []*plan.Expr,
+	preserveOutputType bool,
 ) ([]*plan.Expr, error) {
 	normalized := make([]*plan.Expr, len(projects))
 	for i, project := range projects {
+		// Inactive grouping keys are nullable even for NOT NULL source columns.
+		// Proven non-null outputs (COUNT, constants, always-active keys) cannot
+		// carry a sentinel and need neither a copy nor a nullable result type.
+		if preserveOutputType && project.Typ.NotNullable {
+			normalized[i] = DeepCopyExpr(project)
+			continue
+		}
 		if fn := originalProjects[i].GetF(); fn != nil && fn.Func != nil &&
 			strings.EqualFold(fn.Func.ObjName, "grouping") {
 			normalized[i] = DeepCopyExpr(project)
@@ -9610,6 +9939,11 @@ func normalizeGroupingSetDistinctProjects(
 		)
 		if err != nil {
 			return nil, err
+		}
+		if preserveOutputType {
+			// Binding IF may infer new collation provenance; the completed
+			// grouping query still exports the original column value domain.
+			normalized[i].Typ = project.Typ
 		}
 		normalized[i].Typ.NotNullable = false
 	}
@@ -10532,6 +10866,10 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	}
 
 	commonPlanType := makePlan2Type(&commonType)
+	if err := setExpressionCollation(builder.GetContext(), "values", exprs, &commonPlanType); err != nil {
+		return plan.Type{}, err
+	}
+	commonType = makeTypeByPlan2Type(commonPlanType)
 	// Physical types do not carry CHAR-derived comparison provenance. Retain
 	// it on the column so comparisons and DISTINCT use the PAD SPACE domain.
 	if commonType.Oid == types.T_varchar || commonType.Oid == types.T_text {
@@ -10556,7 +10894,7 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 			expr.Typ.NotNullable = false
 			continue
 		}
-		if sourceType.Eq(commonType) {
+		if sourceType.Eq(commonType) && expr.Typ.SameCollation(commonPlanType) {
 			continue
 		}
 
@@ -11009,10 +11347,11 @@ func (builder *QueryBuilder) appendGroupingSetDistinctProjectionNode(
 	for i, project := range originalProjects {
 		materializedProjects[i] = GetColExpr(project.Typ, materializedTag, int32(i))
 	}
-	normalized, normalizeErr := normalizeGroupingSetDistinctProjects(
+	normalized, normalizeErr := normalizeGroupingSetProjects(
 		builder.GetContext(),
 		materializedProjects[:resultLen],
 		originalProjects[:resultLen],
+		false,
 	)
 	if normalizeErr != nil {
 		err = normalizeErr
@@ -12112,6 +12451,10 @@ func (builder *QueryBuilder) bindView(
 			viewCtx.setHeading(i, string(colName), headingProvenance{})
 		}
 	}
+	nodeID, err = builder.applyRewriteMetadataVisibility(nodeID, viewCtx, schema, table)
+	if err != nil {
+		return
+	}
 	// Expanding a view removes the view catalog object from the executable
 	// scan nodes. Preserve that object's identity so every plan consumer,
 	// including the ordinary COM_QUERY cache, can validate the complete
@@ -12642,33 +12985,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			sqlDatabase = catalogDatabase
 		}
 
-		var subMeta *SubscriptionMeta
-		subMeta, err = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
-		if err == nil && builder.isSkipResolveTableDef && len(ctx.viewPath) == 0 && snapshot == nil && subMeta == nil {
-			var tableDef *TableDef
-			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(catalogDatabase, table)
-			if err != nil {
-				return 0, "", err
-			}
-
-			// Both frontend and internal compiler contexts must identify Views.
-			// Their persisted columns are not an output schema, even for no rows.
-			if tableDef != nil && tableDef.TableType != catalog.SystemViewRel && tableDef.ViewSql == nil {
-				object := &plan.ObjectRef{DbName: catalogDatabase, SchemaName: catalogDatabase, ObjName: table,
-					Db: int64(tableDef.DbId), Obj: int64(tableDef.TblId)}
-				builder.qry.CatalogDependencies = appendPrepareSchemas(
-					builder.qry.CatalogDependencies, prepareSchemaRef(object, tableDef))
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType:     plan.Node_TABLE_SCAN,
-					Stats:        nil,
-					ObjRef:       object,
-					TableDef:     tableDef,
-					BindingTags:  []int32{builder.genNewBindTag()},
-					ScanSnapshot: snapshot,
-				}, ctx)
-				return
-			}
-		}
+		// Preserve the existing probe; full resolution below owns error handling.
+		_, _ = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
 
 		// TODO
 		obj, tableDef, err := builder.compCtx.Resolve(catalogDatabase, table, snapshot)
@@ -12682,6 +13000,13 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			err = ValidateSnapshotScope(snapshot, catalogDatabase, table, tableDef.DbId, SnapshotTableID(tableDef))
 		}
 		if err != nil {
+			return 0, "", err
+		}
+		// Admit the complete catalog schema before pruning unused columns or
+		// replacing scans, after preserving the existing snapshot-scope error.
+		// The final plan fence cannot see metadata erased by those rewrites,
+		// even when the query only projects a constant.
+		if err = plan.RequireLegacyCollations(tableDef); err != nil {
 			return 0, "", err
 		}
 
@@ -13876,15 +14201,29 @@ func (builder *QueryBuilder) checkPlanningCanceled() error {
 }
 
 // parseRankOption parses rank options from a map of option key-value pairs.
-// It extracts the "mode" option case-insensitively and validates it.
-// Returns a RankOption with the parsed mode if valid, or nil if no mode is specified.
-// Returns an error if the mode value is invalid (must be "pre", "post", "force", or "include").
+// Supported options are mode and nprobe. Unsupported keys and invalid values
+// must fail here rather than silently falling back to session defaults.
 func parseRankOption(options map[string]string, ctx context.Context) (*plan.RankOption, error) {
 	if len(options) == 0 {
 		return nil, nil
 	}
 
 	rankOption := &plan.RankOption{}
+	for key, value := range options {
+		switch strings.ToLower(key) {
+		case "mode":
+			// Validated below, retaining case-insensitive mode lookup.
+		case "nprobe":
+			nprobe, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+			// Match the supported probe_limit session-variable domain.
+			if err != nil || nprobe < 1 || nprobe > 80000 {
+				return nil, moerr.NewInvalidInputf(ctx, "nprobe must be an integer between 1 and 80000, got '%s'", value)
+			}
+			rankOption.Nprobe = nprobe
+		default:
+			return nil, moerr.NewInvalidInputf(ctx, "unsupported rank option '%s'", key)
+		}
+	}
 
 	// Helper function to get value from map case-insensitively
 	getOptionValue := func(key string) (string, bool) {
@@ -13909,10 +14248,6 @@ func parseRankOption(options map[string]string, ctx context.Context) (*plan.Rank
 			return nil, moerr.NewInvalidInputf(ctx, "mode must be 'pre', 'post', 'force', 'auto', or 'include', got '%s'", mode)
 		}
 		rankOption.Mode = modeLower
-	}
-
-	if rankOption.Mode == "" {
-		return nil, nil
 	}
 
 	return rankOption, nil

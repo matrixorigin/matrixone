@@ -1133,7 +1133,7 @@ func (t *combinedTxnTable) PrimaryKeysMayBeModified(
 	pkIndex int32,
 	partitionIndex int32,
 ) (bool, error) {
-	relations, err := t.prunePKFunc(bat, partitionIndex)
+	relations, err := t.relationsForPKCheck(ctx, bat, pkIndex, partitionIndex)
 	if err != nil {
 		return false, err
 	}

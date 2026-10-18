@@ -123,47 +123,45 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 	if m.ResolveVariableFunc != nil {
 		return m.ResolveVariableFunc(varName, isSystemVar, isGlobalVar)
 	}
-	vars := make(map[string]interface{})
-	vars["str_var"] = "str"
-	vars["int_var"] = 20
-	vars["bool_var"] = false
-	vars["float_var"] = 20.20
-	dec, _ := types.ParseDecimal128("200.001", 38, 3)
-	vars["decimal_var"] = dec
-	vars["null_var"] = nil
-	vars["delete_opt_to_truncate"] = int64(1)
-
-	if m.sqlModeOverride != nil {
-		vars["sql_mode"] = *m.sqlModeOverride
-	} else if m.mysqlCompatible {
-		vars["sql_mode"] = ""
-	} else {
-		vars["sql_mode"] = "ONLY_FULL_GROUP_BY"
+	switch varName {
+	case "str_var":
+		return "str", nil
+	case "int_var":
+		return 20, nil
+	case "bool_var":
+		return false, nil
+	case "float_var":
+		return 20.20, nil
+	case "decimal_var":
+		dec, _ := types.ParseDecimal128("200.001", 38, 3)
+		return dec, nil
+	case "null_var":
+		return nil, nil
+	case "collation_server":
+		return "utf8mb4_general_ci", nil
+	case "sql_mode":
+		if m.sqlModeOverride != nil {
+			return *m.sqlModeOverride, nil
+		}
+		if m.mysqlCompatible {
+			return "", nil
+		}
+		return "ONLY_FULL_GROUP_BY", nil
+	case "delete_opt_to_truncate", "foreign_key_checks", "lower_case_table_names",
+		"cagra_threads_build", "cagra_threads_search", "ivfpq_threads_build", "ivfpq_threads_search",
+		"hnsw_threads_build", "hnsw_threads_search", "ivf_threads_build", "ivf_threads_search":
+		return int64(1), nil
+	case "sort_spill_mem", "cagra_batch_window", "ivfpq_batch_window", "gpu_multi_simulation":
+		return int64(0), nil
+	case windowPartitionAlgorithmVariable:
+		return "SORT", nil
+	case "probe_limit":
+		return int64(20), nil
+	case "div_precision_increment":
+		if isSystemVar {
+			return int64(function.DefaultDivPrecisionIncrement), nil
+		}
 	}
-
-	vars["foreign_key_checks"] = int64(1)
-	vars["sort_spill_mem"] = int64(0)
-	vars["lower_case_table_names"] = int64(1)
-
-	// Vector-index build/search variables (resolved by the hnsw/ivf/ivfpq/cagra
-	// plugin DDL and search paths).
-	vars["cagra_threads_build"] = int64(1)
-	vars["cagra_threads_search"] = int64(1)
-	vars["cagra_batch_window"] = int64(0)
-	vars["ivfpq_threads_build"] = int64(1)
-	vars["ivfpq_threads_search"] = int64(1)
-	vars["ivfpq_batch_window"] = int64(0)
-	vars["hnsw_threads_build"] = int64(1)
-	vars["hnsw_threads_search"] = int64(1)
-	vars["ivf_threads_build"] = int64(1)
-	vars["ivf_threads_search"] = int64(1)
-	vars["gpu_multi_simulation"] = int64(0)
-	vars["probe_limit"] = int64(20)
-
-	if result, ok := vars[varName]; ok {
-		return result, nil
-	}
-
 	return nil, moerr.NewInternalErrorf(m.ctx, "var not found: %s", varName)
 }
 
@@ -468,6 +466,16 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},
+	}
+	moSchema[catalog.MODatabaseDefaults] = &Schema{
+		cols: []col{
+			{"account_id", types.T_uint32, false, 0, 0},
+			{"database_id", types.T_uint64, false, 0, 0},
+			{"collation_id", types.T_uint32, false, 0, 0},
+			{"collation_revision", types.T_uint32, false, 0, 0},
+			{"version", types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		}, pks: []int{0, 1},
 	}
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{

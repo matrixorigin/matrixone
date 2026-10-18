@@ -302,7 +302,17 @@ func (s *SqlProcess) executionStatementOption() executor.StatementOption {
 	if id := s.resolveAccountID(); id != nil {
 		option = option.WithAccountID(*id)
 	}
+	if s.Proc != nil && s.Proc.Base != nil {
+		info := s.Proc.GetSessionInfo()
+		option = option.WithSessionIdentity(info.Account, info.Role)
+	}
 	return option
+}
+
+// StatementOption exposes the scoped identity carried by this SQL process to
+// transaction callbacks that execute statements through TxnExecutor directly.
+func (s *SqlProcess) StatementOption() executor.StatementOption {
+	return s.executionStatementOption()
 }
 
 func (s *SqlProcess) GetContext() context.Context {
@@ -587,24 +597,26 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 		}
 
 		//-------------------------------------------------------
-		topContext := proc.GetTopContext()
+		topContext := sqlproc.executionContext(proc.GetTopContext())
 		accountId, err := defines.GetAccountId(proc.Ctx)
 		if err != nil {
 			return err
 		}
 		//-------------------------------------------------------
 
+		accountId = sqlproc.executionAccountID(accountId)
 		exec := v.(executor.SQLExecutor)
 		opts := executor.Options{}.
 			// All runSql and runSqlWithResult is a part of input sql, can not incr statement.
 			// All these sub-sql's need to be rolled back and retried en masse when they conflict in pessimistic mode
 			WithDisableIncrStatement().
 			WithTxn(sqlproc.txnForRun(proc)).
-			WithDatabase(proc.GetSessionInfo().Database).
+			WithDatabase(sqlproc.executionDatabase(proc.GetSessionInfo().Database)).
 			WithTimeZone(proc.GetSessionInfo().TimeZone).
 			WithAccountID(accountId).
 			WithResolveVariableFunc(proc.GetResolveVariableFunc()).
-			WithFrontend(proc.Base.IsFrontend)
+			WithFrontend(proc.Base.IsFrontend).
+			WithStatementOption(sqlproc.StatementOption())
 		return exec.ExecTxn(topContext, execFunc, opts)
 	} else {
 
@@ -614,7 +626,7 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			panic("missing lock service")
 		}
 
-		accountId := sqlctx.AccountId
+		accountId := sqlproc.executionAccountID(sqlctx.AccountId)
 
 		exec := v.(executor.SQLExecutor)
 		// SqlCtx is the background entry point (no frontend session) —
@@ -625,8 +637,10 @@ func RunTxn(sqlproc *SqlProcess, execFunc func(executor.TxnExecutor) error) erro
 			WithDisableIncrStatement().
 			WithTxn(sqlctx.Txn()).
 			WithAccountID(accountId).
+			WithDatabase(sqlproc.executionDatabase("")).
+			WithStatementOption(sqlproc.StatementOption()).
 			WithResolveVariableFunc(sqlctx.GetResolveVariableFunc())
-		return exec.ExecTxn(sqlctx.Ctx, execFunc, opts)
+		return exec.ExecTxn(sqlproc.executionContext(sqlctx.Ctx), execFunc, opts)
 	}
 }
 

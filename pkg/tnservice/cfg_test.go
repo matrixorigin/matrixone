@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	btoml "github.com/BurntSushi/toml"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
@@ -75,4 +76,31 @@ func TestDefaulValue(t *testing.T) {
 	c := Config{}
 	c.SetDefaultValue()
 	assert.Equal(t, options.DefaultCheckpointIncrementalInterval, c.Ckp.IncrementalInterval.Duration)
+}
+
+func TestCatalogGCIntervalConfig(t *testing.T) {
+	for _, tc := range []struct {
+		name, input string
+		want        time.Duration
+		invalid     bool
+	}{
+		{name: "omitted"},
+		{name: "explicit", input: "[GCCfg]\ncatalog-gc-interval = '1s'", want: time.Second},
+		{name: "negative", input: "[GCCfg]\ncatalog-gc-interval = '-1s'", invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{UUID: "tn1"}
+			if _, err := btoml.Decode(tc.input, &cfg); !assert.NoError(t, err) {
+				return
+			}
+			cfg.SetDefaultValue()
+			err := cfg.Validate()
+			if tc.invalid {
+				assert.ErrorContains(t, err, "catalog GC interval")
+				return
+			}
+			assert.NoError(t, err)
+			assert.Equal(t, tc.want, cfg.GCCfg.CatalogGCInterval.Duration)
+		})
+	}
 }

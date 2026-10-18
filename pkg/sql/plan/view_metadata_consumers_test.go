@@ -24,9 +24,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// Model both compiler contexts: the catalog-only frontend and the internal
-// executor. The fast path must not treat either one's persisted View columns
-// as the current result schema.
+// Model the frontend's columns-only catalog result so LIMIT 0 tests can detect
+// accidental use of incomplete table metadata. The real frontend decoder is
+// exercised in pkg/frontend's LIMIT 0 admission test.
 type viewMetadataConsumerContext struct {
 	*MockCompilerContext
 	fastCalls int
@@ -35,7 +35,21 @@ type viewMetadataConsumerContext struct {
 func (c *viewMetadataConsumerContext) BuildTableDefByMoColumns(db, name string) (*TableDef, error) {
 	c.fastCalls++
 	_, def, err := c.MockCompilerContext.Resolve(db, name, nil)
-	return def, err
+	if err != nil || def == nil {
+		return def, err
+	}
+	if def.TableType == catalog.SystemViewRel || def.ViewSql != nil {
+		return &TableDef{Name: def.Name, DbName: def.DbName, TableType: def.TableType}, nil
+	}
+	return &TableDef{
+		Name:      def.Name,
+		DbName:    def.DbName,
+		Cols:      def.Cols,
+		TableType: def.TableType,
+		TblId:     def.TblId,
+		DbId:      def.DbId,
+		Version:   def.Version,
+	}, nil
 }
 
 func newViewMetadataConsumerContext(t *testing.T) *viewMetadataConsumerContext {
@@ -88,19 +102,19 @@ func TestViewMetadataLimitZeroBindsCurrentColumns(t *testing.T) {
 			require.Equal(t, int32(5), ctx.tables["v1"].Cols[0].Typ.Width, "description must not rewrite stored columns")
 		})
 	}
-	t.Run("LIMIT 0 flag does not leak into UNION sibling", func(t *testing.T) {
+	t.Run("nested LIMIT 0 uses complete metadata", func(t *testing.T) {
 		ctx := newViewMetadataConsumerContext(t)
 		p, err := buildViewMetadataConsumerPlan(t, ctx,
 			"select * from (select * from v1 limit 0) d union all select * from v1", false)
 		require.NoError(t, err)
 		require.Equal(t, int32(60), GetResultColumnsFromPlan(p)[0].Typ.Width)
-		require.Equal(t, 1, ctx.fastCalls, "only the inner LIMIT 0 may probe the catalog-only path")
+		require.Zero(t, ctx.fastCalls, "LIMIT 0 must not use the incomplete catalog-only result")
 	})
-	t.Run("ordinary table keeps catalog fast path", func(t *testing.T) {
+	t.Run("ordinary table LIMIT 0 resolves complete metadata", func(t *testing.T) {
 		ctx := newViewMetadataConsumerContext(t)
 		p, err := buildViewMetadataConsumerPlan(t, ctx, "select * from nation limit 0", false)
 		require.NoError(t, err)
-		require.Equal(t, 1, ctx.fastCalls)
+		require.Zero(t, ctx.fastCalls, "the columns-only catalog path omits admission metadata")
 		require.Len(t, p.GetQuery().CatalogDependencies, 1, "the table may later be replaced by a View")
 		require.Equal(t, "nation", p.GetQuery().CatalogDependencies[0].ObjName)
 	})

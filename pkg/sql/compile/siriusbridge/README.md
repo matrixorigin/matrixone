@@ -2,20 +2,17 @@
 
 This package owns the ABI-v1 engine/query/input/result handles from Sirius's
 generated `sirius_c.h`. CN constructs the bridge and adapts it to the compiler's
-backend interface; the bridge and compiler do not import each other.
+execution interface; the bridge and compiler do not import each other.
 
-This is the opt-in bridge milestone of the
-[embedded Sirius migration](../../../../docs/design/sirius-embedded.md), not
-the completed SQL offload. It can build and start an embedded runtime and run
-the native bridge integration tests. The real MO-reader SQL path, TPC-H parity,
-default cutover, and Flight retirement are separate later milestones. Do not
-use a successful build or bridge smoke test as evidence that all 22 queries
-work through embedded Sirius.
+Enabled Sirius uses this bridge with MO readers. The compiler owns each query;
+CN owns the engine. See the [execution design](../../../../docs/design/sirius-embedded.md)
+and [clean cutover](../../../../docs/design/sirius-embedded-cutover.md) for the
+configuration, lifecycle and acceptance contracts. A successful build or bridge
+smoke test alone does not prove all-22 SQL correctness or performance.
 
 ## Input reservation contract
 
-The CN-facing `compile.SiriusInput` exposes `Acquire`; it does not expose the
-already-materialized `Push` convenience operation. Reserve payload bytes before
+The CN-facing `compile.SiriusInput` exposes `Acquire`. Reserve payload bytes before
 allocating or copying the outgoing vectors, and register cleanup immediately:
 
 ```go
@@ -50,7 +47,7 @@ bounded prefetch; this bridge milestone does not implement that SQL path.
   compilers, and `patchelf` come from Sirius's frozen `mo` Pixi environment;
   `/usr/local/cuda` is not required.
 - The Sirius commit pinned by MatrixOne at `third_party/sirius`. For a release,
-  that commit must be merged into `matrixorigin/sirius:upstream-dev-merge`; the
+  that commit must be merged into `matrixorigin/sirius:perf/embedded-mo-scan`; the
   `SIRIUS_MERGED_REF` used below must contain the exact SDK source revision.
   An unmerged pin requires an explicit development build and is not a release
   artifact.
@@ -67,7 +64,7 @@ export MO_SRC=/absolute/path/to/matrixone
 export SIRIUS_SRC="$MO_SRC/third_party/sirius"
 git -C "$MO_SRC" submodule update --init third_party/sirius
 cd "$SIRIUS_SRC"
-git fetch origin upstream-dev-merge
+git fetch origin perf/embedded-mo-scan
 git submodule update --init duckdb substrait cucascade tae-scanner vcpkg
 pixi install --frozen -e mo
 pixi run --frozen -e mo mo-build-embedding-sdk
@@ -83,7 +80,7 @@ pixi run --frozen -e mo sh -c '
   cd "$MO_SRC"
   MO_CL_CUDA=1 MO_SIRIUS=1 \
     SIRIUS_SDK="$SIRIUS_SRC/build/mo/extension/sirius/embedding-sdk" \
-    SIRIUS_MERGED_REF=origin/upstream-dev-merge \
+    SIRIUS_MERGED_REF=origin/perf/embedded-mo-scan \
     make -j8 build
 '
 ```
@@ -93,7 +90,7 @@ pixi run --frozen -e mo sh -c '
 matching `cgo/libmo.so` and `thirdparties/install`; it is not the first-build
 command. SDK preparation and packaging reject a source path or revision that
 does not match MO's committed Sirius submodule pin. CPU-only builds remain
-unchanged. Selecting `backend="embedded"` in
+unchanged. Enabling Sirius in
 a binary without `MO_SIRIUS=1` returns an explicit configuration error.
 
 The output is `mo-service` with an adjacent `lib/` directory (and MO's normal
@@ -128,11 +125,11 @@ known integration-test example, not a production capacity profile.
 ```toml
 [cn.sirius]
 enabled = true
-backend = "embedded"
-input-mode = "mo"
 native-config-path = "/absolute/path/to/sirius/test/cpp/operator/result.yaml"
 gpu-streams = 2
 max-waiting-queries = 16
+request-timeout = "15m"
+cleanup-timeout = "30s"
 ```
 
 The example YAML selects one GPU (`device_id: 0`), reserves 2 GiB of GPU
@@ -151,11 +148,12 @@ sirius:
         memory_capacity: 4294967296
 ```
 
-Choose capacities appropriate for the host before deployment. The embedded
-route needs no Flight address,
-certificates, resolver, direct-TAE leases, or TN `disable-gc` setting. The
-default remains `backend="flight"` during coexistence; embedded selection is
-explicit, and `input-mode="tae"` is rejected before native preparation.
+Choose capacities appropriate for the host before deployment. Enabled Sirius
+always uses MO readers and the embedded C ABI. The six fields above are the
+complete configuration schema; unknown Sirius keys fail parsing even when
+Sirius is disabled. The old Flight runtime, transport settings and lease
+recovery are removed. An old deployment must drain and recover using its
+previous release before upgrading; see the cutover design for rollout.
 
 After building, a local startup check is:
 

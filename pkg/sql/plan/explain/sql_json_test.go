@@ -17,6 +17,7 @@ package explain
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -368,8 +369,18 @@ func TestBuildSQLJSONPlanResolvesPrunedUpdateAssignments(t *testing.T) {
 				}},
 			},
 			{
-				NodeId:      2,
-				NodeType:    plan.Node_LOCK_OP,
+				NodeId:   2,
+				NodeType: plan.Node_LOCK_OP,
+				Children: []int32{3},
+				ProjectList: []*plan.Expr{
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 0}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1}}},
+					{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 2}}},
+				},
+			},
+			{
+				NodeId:      3,
+				NodeType:    plan.Node_PROJECT,
 				ProjectList: []*plan.Expr{sqlJSONTestInt32(1), sqlJSONTestInt32(2), sqlJSONTestInt32(3)},
 			},
 		},
@@ -384,6 +395,184 @@ func TestBuildSQLJSONPlanResolvesPrunedUpdateAssignments(t *testing.T) {
 	require.Len(t, decoded.MatrixOne.Nodes[0].Assignments, 2)
 	require.Equal(t, sqlJSONAssignment{Target: "db.t.id", Value: "1"}, decoded.MatrixOne.Nodes[0].Assignments[0])
 	require.Equal(t, sqlJSONAssignment{Target: "db.t.v", Value: "2"}, decoded.MatrixOne.Nodes[0].Assignments[1])
+}
+
+func TestBuildSQLJSONPlanResolvesUpdateExpressionInputs(t *testing.T) {
+	ref := func(rel, col int32, name string) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel, ColPos: col, Name: name}}}
+	}
+	// Both arguments read the same right input: reuse is not a reference cycle.
+	sum, err := planpkg.BindFuncExprImplByPlanExpr(t.Context(), "+", []*plan.Expr{ref(1, 0, ""), ref(1, 0, "")})
+	require.NoError(t, err)
+	query := &plan.Query{StmtType: plan.Query_UPDATE, Steps: []int32{0}, Nodes: []*plan.Node{
+		{NodeId: 1, NodeType: plan.Node_MULTI_UPDATE, Children: []int32{2}, UpdateCtxList: []*plan.UpdateCtx{{
+			TableDef:   &plan.TableDef{DbName: "db", Name: "t", Cols: []*plan.ColDef{sqlJSONTestColumn("id"), sqlJSONTestColumn("v"), sqlJSONTestColumn("w")}},
+			InsertCols: []plan.ColRef{{RelPos: 0, ColPos: 0, Name: "target.id"}, {RelPos: 0, ColPos: 1}, {RelPos: 0, ColPos: 2}},
+		}}},
+		{NodeId: 2, NodeType: plan.Node_LOCK_OP, Children: []int32{3}, ProjectList: []*plan.Expr{ref(0, 1, ""), ref(0, 0, ""), ref(0, 2, "")}},
+		{NodeId: 3, NodeType: plan.Node_JOIN, Children: []int32{4, 5}, ProjectList: []*plan.Expr{sum, ref(0, 0, ""), ref(0, 1, "left.v")}},
+		{NodeId: 4, NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{sqlJSONTestInt32(1), sqlJSONTestInt32(99)}},
+		{NodeId: 5, NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{sqlJSONTestInt32(2)}},
+	}}
+	before, err := json.Marshal(query)
+	require.NoError(t, err)
+	data, err := BuildSQLJSONPlan(t.Context(), query)
+	require.NoError(t, err)
+	var decoded sqlJSONPlan
+	require.NoError(t, json.Unmarshal(data, &decoded))
+	require.Equal(t, []sqlJSONAssignment{
+		{Target: "db.t.id", Value: "1"},
+		{Target: "db.t.v", Value: "(2 + 2)"},
+		{Target: "db.t.w", Value: "left.v"},
+	}, decoded.MatrixOne.Nodes[0].Assignments)
+	after, err := json.Marshal(query)
+	require.NoError(t, err)
+	require.Equal(t, before, after, "rendering must not mutate execution expressions")
+	second, err := BuildSQLJSONPlan(t.Context(), query)
+	require.NoError(t, err)
+	require.Equal(t, data, second)
+}
+
+func TestResolveUpdateExpressionBoundaries(t *testing.T) {
+	ref := func(rel, col int32) *plan.Expr {
+		return &plan.Expr{Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel, ColPos: col}}}
+	}
+	for _, tc := range []struct {
+		name string
+		expr *plan.Expr
+		want string
+	}{
+		{"logical_chain", ref(42, 0), "7"},
+		{"null", &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}, "(null)"},
+		{"list", &plan.Expr{Expr: &plan.Expr_List{List: &plan.ExprList{List: []*plan.Expr{ref(42, 0), sqlJSONTestInt32(8)}}}}, "7, 8"},
+		{"missing_binding", ref(43, 0), ""},
+		{"negative_column", ref(42, -1), ""},
+		{"out_of_range", ref(42, 1), ""},
+		{"nil_column", &plan.Expr{Expr: &plan.Expr_Col{}}, ""},
+		{"nil_function", &plan.Expr{Expr: &plan.Expr_F{}}, ""},
+		{"nil_list", &plan.Expr{Expr: &plan.Expr_List{}}, ""},
+		{"nil_expression", nil, ""},
+		{"logical_cycle", ref(41, 0), ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			producer := &plan.Node{ProjectList: []*plan.Expr{tc.expr}}
+			value := &plan.Node{ProjectList: []*plan.Expr{sqlJSONTestInt32(7)}}
+			builder := &sqlJSONPlanBuilder{ctx: t.Context(), bindings: map[int32][]*plan.Node{41: {producer}, 42: {value}}}
+			expr, ok := builder.resolveUpdateColumnExpr(nil, &plan.ColRef{RelPos: 41, ColPos: 0})
+			if tc.want == "" {
+				require.False(t, ok)
+				return
+			}
+			require.True(t, ok)
+			text, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{})
+			require.NoError(t, err)
+			require.Equal(t, tc.want, text)
+		})
+	}
+	// A malformed local slot must not fall back to an unrelated binding tag 0.
+	builder := &sqlJSONPlanBuilder{ctx: t.Context(), byID: map[int32]*plan.Node{2: {}}, bindings: map[int32][]*plan.Node{0: {{ProjectList: []*plan.Expr{sqlJSONTestInt32(7)}}}}}
+	_, ok := builder.resolveUpdateColumnExpr(&plan.Node{Children: []int32{2}}, &plan.ColRef{})
+	require.False(t, ok)
+}
+
+func TestResolveUpdateProducerOutputs(t *testing.T) {
+	ref := func(rel, col int32) *plan.Expr {
+		return &plan.Expr{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: rel, ColPos: col}}}
+	}
+	for _, tc := range []struct {
+		name     string
+		kind     plan.Node_NodeType
+		rel, col int32
+		want     string
+		change   func(*plan.Node, *plan.Query)
+		cancel   bool
+	}{
+		{name: "source_projection_reordering", kind: plan.Node_SINK_SCAN, want: "7"},
+		{name: "missing_source", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, _ *plan.Query) { n.SourceStep = nil }},
+		{name: "multiple_sources", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, _ *plan.Query) { n.SourceStep = []int32{0, 1} }},
+		{name: "negative_source", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, _ *plan.Query) { n.SourceStep = []int32{-1} }},
+		{name: "source_out_of_range", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, _ *plan.Query) { n.SourceStep = []int32{2} }},
+		{name: "missing_root", kind: plan.Node_SINK_SCAN, change: func(_ *plan.Node, q *plan.Query) { q.Steps[1] = 99 }},
+		{name: "wrong_source_type", kind: plan.Node_SINK_SCAN, change: func(_ *plan.Node, q *plan.Query) { q.Nodes[1].NodeType = plan.Node_PROJECT }},
+		{name: "source_slot_out_of_range", kind: plan.Node_SINK_SCAN, col: 2},
+		{name: "source_cycle", kind: plan.Node_SINK_SCAN, change: func(n *plan.Node, q *plan.Query) { q.Nodes[1].Children = []int32{n.NodeId} }},
+		{name: "group_slot", kind: plan.Node_AGG, rel: -1, want: "8"},
+		{name: "positional_group_slot", kind: plan.Node_AGG, rel: -2, want: "8"},
+		{name: "aggregate_slot", kind: plan.Node_AGG, rel: -2, col: 1, want: "any_value(7)"},
+		{name: "aggregate_out_of_range", kind: plan.Node_AGG, rel: -2, col: 2},
+		{name: "window_slot", kind: plan.Node_WINDOW, rel: -1, col: 2, want: "row_number(); Partition By: 7; Order By: 8"},
+		{name: "window_input_slot", kind: plan.Node_WINDOW, rel: -1, col: 1},
+		{name: "window_out_of_range", kind: plan.Node_WINDOW, rel: -1, col: 3},
+		{name: "missing_window", kind: plan.Node_WINDOW, rel: -1, col: 2, change: func(n *plan.Node, _ *plan.Query) { n.WinSpecList = nil }},
+		{name: "union_both_branches", kind: plan.Node_UNION_ALL, want: "UNION_ALL[branch 1: 7; branch 2: 9]"},
+		{name: "union_null_branch", kind: plan.Node_UNION, col: 1, want: "UNION[branch 1: 8; branch 2: (null)]"},
+		{name: "union_out_of_range", kind: plan.Node_UNION_ALL, col: 2},
+		{name: "missing_union_input", kind: plan.Node_UNION_ALL, change: func(n *plan.Node, _ *plan.Query) { n.Children[1] = 99 }},
+		{name: "union_cycle", kind: plan.Node_UNION_ALL, change: func(n *plan.Node, _ *plan.Query) { n.Children[1] = n.NodeId }},
+		{name: "mark_predicate_inputs", kind: plan.Node_JOIN, rel: -1, want: "MARK[on: (7 = 9)]"},
+		{name: "mark_multiple_predicates", kind: plan.Node_JOIN, rel: -1, want: "MARK[on: (7 = 9) AND (8 = (null))]", change: func(n *plan.Node, _ *plan.Query) {
+			n.OnList = append(n.OnList, &plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: n.OnList[0].GetF().Func, Args: []*plan.Expr{ref(0, 1), ref(1, 1)}}}})
+		}},
+		{name: "mark_no_predicates", kind: plan.Node_JOIN, rel: -1, want: "MARK[on: TRUE]", change: func(n *plan.Node, _ *plan.Query) { n.OnList = nil }},
+		{name: "mark_invalid_slot", kind: plan.Node_JOIN, rel: -1, col: 1},
+		{name: "non_mark_join", kind: plan.Node_JOIN, rel: -1, change: func(n *plan.Node, _ *plan.Query) { n.JoinType = plan.Node_INNER }},
+		{name: "mark_missing_input", kind: plan.Node_JOIN, rel: -1, change: func(n *plan.Node, _ *plan.Query) { n.Children[1] = 99 }},
+		{name: "mark_predicate_cycle", kind: plan.Node_JOIN, rel: -1, change: func(n *plan.Node, _ *plan.Query) { n.OnList = n.ProjectList }},
+		{name: "mark_canceled", kind: plan.Node_JOIN, rel: -1, cancel: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			leaf := &plan.Node{NodeId: 10, NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{sqlJSONTestInt32(7), sqlJSONTestInt32(8)}}
+			sink := &plan.Node{NodeId: 20, NodeType: plan.Node_SINK, Children: []int32{10}, ProjectList: []*plan.Expr{ref(0, 1), ref(0, 0)}}
+			node := &plan.Node{NodeId: 30, NodeType: tc.kind, Children: []int32{10}, ProjectList: []*plan.Expr{ref(tc.rel, tc.col)}}
+			right := &plan.Node{NodeId: 40, NodeType: plan.Node_PROJECT, ProjectList: []*plan.Expr{sqlJSONTestInt32(9), {Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}}}
+			query := &plan.Query{Nodes: []*plan.Node{leaf, sink, node, right}, Steps: []int32{2, 1}}
+			switch tc.kind {
+			case plan.Node_SINK_SCAN:
+				node.Children, node.SourceStep = nil, []int32{1}
+				node.ProjectList = []*plan.Expr{ref(0, tc.col+1)}
+			case plan.Node_AGG:
+				node.GroupBy = []*plan.Expr{ref(0, 1)}
+				value, err := planpkg.BindFuncExprImplByPlanExpr(t.Context(), "any_value", []*plan.Expr{ref(0, 0)})
+				require.NoError(t, err)
+				node.AggList = []*plan.Expr{value}
+			case plan.Node_WINDOW:
+				function, err := planpkg.BindFuncExprImplByPlanExpr(t.Context(), "row_number", nil)
+				require.NoError(t, err)
+				node.WinSpecList = []*plan.Expr{{Expr: &plan.Expr_W{W: &plan.WindowSpec{WindowFunc: function, PartitionBy: []*plan.Expr{ref(0, 0)}, OrderBy: []*plan.OrderBySpec{{Expr: ref(0, 1)}}}}}}
+			case plan.Node_UNION, plan.Node_UNION_ALL:
+				node.Children = []int32{10, 40}
+			case plan.Node_JOIN:
+				node.JoinType, node.Children = plan.Node_MARK, []int32{10, 40}
+				predicate, err := planpkg.BindFuncExprImplByPlanExpr(t.Context(), "=", []*plan.Expr{ref(0, 0), ref(1, 0)})
+				require.NoError(t, err)
+				node.OnList = []*plan.Expr{predicate}
+			}
+			if tc.change != nil {
+				tc.change(node, query)
+			}
+			before, err := json.Marshal(query)
+			require.NoError(t, err)
+			ctx := t.Context()
+			if tc.cancel {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+			builder := &sqlJSONPlanBuilder{ctx: ctx, query: query, byID: map[int32]*plan.Node{10: leaf, 20: sink, 30: node, 40: right}}
+			expr, ok := builder.resolveUpdateExpr(node, node.ProjectList[0], make(map[sqlJSONUpdateExprKey]bool))
+			if tc.want == "" {
+				require.False(t, ok)
+			} else {
+				require.True(t, ok)
+				value, err := sqlJSONExpr(t.Context(), expr, &ExplainOptions{})
+				require.NoError(t, err)
+				require.Equal(t, tc.want, value)
+			}
+			after, err := json.Marshal(query)
+			require.NoError(t, err)
+			require.Equal(t, before, after, "producer expansion must not mutate the plan")
+		})
+	}
 }
 
 func TestBuildSQLJSONPlanUsesBoundAliasesForSelfJoin(t *testing.T) {
@@ -724,6 +913,107 @@ func buildPlannerSQLJSONNodes(t *testing.T, sql string) []sqlJSONNode {
 	return decoded.MatrixOne.Nodes
 }
 
+func TestBuildSQLJSONPlanResolvesPlannerUpdateAssignments(t *testing.T) {
+	for _, tc := range []struct{ name, value, want string }{
+		{"constant", "2", "2"},
+		{"expression", "n_regionkey + 1", "+ 1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := buildPlannerSQLJSONNodes(t, "update nation set n_regionkey = "+tc.value+" where n_nationkey = 1")
+			values := make(map[string]string)
+			for _, node := range nodes {
+				for _, assignment := range node.Assignments {
+					require.NotContains(t, assignment.Value, "#[")
+					values[assignment.Target] = assignment.Value
+				}
+			}
+			var foundValue, foundKey bool
+			for target, value := range values {
+				if strings.HasSuffix(target, ".n_regionkey") {
+					foundValue = true
+					if tc.name == "expression" {
+						require.Contains(t, value, "n_regionkey")
+						require.Contains(t, value, tc.want)
+					} else {
+						require.Equal(t, tc.want, value)
+					}
+				}
+				if strings.HasSuffix(target, ".n_nationkey") {
+					foundKey = true
+					require.Equal(t, "nation.n_nationkey", value)
+				}
+			}
+			require.True(t, foundValue, "assigned column must appear in row image")
+			require.True(t, foundKey, "unchanged column must appear in row image")
+		})
+	}
+}
+
+func TestBuildSQLJSONPlanResolvesMultiTargetUpdateAssignments(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		want      map[string]string
+	}{
+		{
+			name: "different_tables",
+			sql:  "update nation n join region r on n.n_regionkey = r.r_regionkey set n.n_regionkey = 2, r.r_name = 'changed'",
+			want: map[string]string{".n_regionkey": "2", ".r_name": "'changed'", ".n_nationkey": "n.n_nationkey"},
+		},
+		{
+			name: "same_table_aliases",
+			sql:  "update nation n join nation m on n.n_nationkey = m.n_nationkey set n.n_regionkey = 2, m.n_name = 'changed'",
+			want: map[string]string{".n_regionkey": "2", ".n_name": "'changed'", ".n_nationkey": "n.n_nationkey"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := buildPlannerSQLJSONNodes(t, tc.sql)
+			found := make(map[string]bool)
+			for _, node := range nodes {
+				for _, assignment := range node.Assignments {
+					require.NotContains(t, assignment.Value, "#[")
+					for suffix, want := range tc.want {
+						if strings.HasSuffix(assignment.Target, suffix) && strings.Contains(assignment.Value, want) {
+							found[suffix] = true
+						}
+					}
+				}
+			}
+			for suffix := range tc.want {
+				require.True(t, found[suffix], "missing assigned value for %s", suffix)
+			}
+		})
+	}
+}
+
+func TestBuildSQLJSONPlanResolvesMarkUpdateAssignments(t *testing.T) {
+	for _, tc := range []struct{ name, condition, wrapper string }{
+		{"exists", "exists (select 1 from region r where r.r_regionkey = n.n_regionkey)", "IS TRUE"},
+		{"in", "n.n_regionkey in (select r_regionkey from region)", ""},
+		{"not_exists", "not exists (select 1 from region r where r.r_regionkey = n.n_regionkey)", "not"},
+		{"not_in", "n.n_regionkey not in (select r_regionkey from region)", "not"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			nodes := buildPlannerSQLJSONNodes(t, "update nation n set n_regionkey = case when "+tc.condition+" then 1 else 0 end")
+			found := false
+			for _, node := range nodes {
+				for _, assignment := range node.Assignments {
+					require.NotContains(t, assignment.Value, "#[")
+					if strings.HasSuffix(assignment.Target, ".n_regionkey") {
+						found = true
+						require.Contains(t, assignment.Value, "MARK")
+						require.Contains(t, assignment.Value, "n.n_regionkey")
+						require.Contains(t, assignment.Value, "r_regionkey")
+						if tc.wrapper != "" {
+							require.Contains(t, assignment.Value, tc.wrapper)
+						}
+					}
+				}
+			}
+			require.True(t, found)
+		})
+	}
+}
+
 func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
 	buildExpressions := func(opts ivfflatplan.ScanOptions, direction plan.OrderBySpec_OrderByFlag, overfetch bool) []string {
 		settings, err := ivfflatplan.EncodeScanOptions(opts)
@@ -759,6 +1049,9 @@ func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
 	require.Contains(t, low, "direction=ASC")
 	require.Contains(t, high, "NProbe: 16")
 	require.Contains(t, high, "direction=DESC")
+	options, err := ivfflatplan.EncodeScanOptions(ivfflatplan.ScanOptions{InitialProbeCount: 16})
+	require.NoError(t, err)
+	require.Contains(t, high, fmt.Sprintf("algo_options=0x%X", options))
 	require.Contains(t, high, "post_filter_over_fetch=true")
 	base := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1}, plan.OrderBySpec_ASC, false)
 	expanded := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1, BucketExpandStep: 8}, plan.OrderBySpec_ASC, false)
@@ -817,6 +1110,40 @@ func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
 		"distance_upper_bound_type=INCLUSIVE",
 		"distance_upper_bound=50",
 	}, upper)
+}
+
+func TestSQLJSONIndexSearchRejectsInvalidMetadata(t *testing.T) {
+	index := &plan.IndexDef{IndexName: "idx_embedding", IndexAlgo: "ivfflat"}
+	for _, tc := range []struct {
+		name string
+		spec *plan.IndexSearchScan
+	}{
+		{"nil", nil},
+		{"missing_index", &plan.IndexSearchScan{}},
+		{"invalid_direction", &plan.IndexSearchScan{Index: index, Direction: plan.OrderBySpec_OrderByFlag(1 << 10)}},
+		{"invalid_options", &plan.IndexSearchScan{Index: index, AlgoOptions: []byte(`{`)}},
+		{"missing_named_value", &plan.IndexSearchScan{Index: index, AlgoExprNames: []string{"first_round_limit"}}},
+		{"empty_name", &plan.IndexSearchScan{Index: index, AlgoExprNames: []string{""}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)}}},
+		{"duplicate_name", &plan.IndexSearchScan{Index: index, AlgoExprNames: []string{"first_round_limit", "first_round_limit"}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1), sqlJSONTestInt32(2)}}},
+		{"nil_value", &plan.IndexSearchScan{Index: index, AlgoExprNames: []string{"first_round_limit"}, AlgoExprs: []*plan.Expr{nil}}},
+		{"invalid_value", &plan.IndexSearchScan{Index: index, AlgoExprNames: []string{"first_round_limit"}, AlgoExprs: []*plan.Expr{{}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := sqlJSONIndexSearchExpressions(t.Context(), tc.spec, &ExplainOptions{CompleteLiteralVectors: true})
+			require.Error(t, err)
+		})
+	}
+	values, err := sqlJSONIndexSearchExpressions(t.Context(), &plan.IndexSearchScan{
+		Index:           &plan.IndexDef{IndexName: "custom", IndexAlgo: "unregistered"},
+		AlgoOptions:     []byte{0x00, 0xff},
+		AlgoExprNames:   []string{"custom_budget"},
+		AlgoExprs:       []*plan.Expr{sqlJSONTestInt32(7)},
+		IncludedColumns: []string{"tag"},
+	}, &ExplainOptions{CompleteLiteralVectors: true})
+	require.NoError(t, err)
+	require.Contains(t, values, "algo_options=0x00FF")
+	require.Contains(t, values, "custom_budget=7")
+	require.Contains(t, values, "included_column[0]=tag")
 }
 
 func TestSQLJSONHelpersRejectMalformedInputsAndPreserveStatistics(t *testing.T) {
@@ -885,6 +1212,14 @@ func TestSQLJSONHelpersRejectMalformedInputsAndPreserveStatistics(t *testing.T) 
 		}},
 	})
 	require.Error(t, err)
+	for _, spec := range []*plan.IndexSearchScan{
+		{Index: &plan.IndexDef{IndexName: "idx_embedding"}, AlgoExprNames: []string{"first_round_limit"}},
+		{Index: &plan.IndexDef{IndexName: "idx_embedding"}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(4)}},
+		{Index: &plan.IndexDef{IndexName: "idx_embedding"}, AlgoExprNames: []string{"first_round_limit"}, AlgoExprs: []*plan.Expr{{}}},
+	} {
+		_, err = sqlJSONIndexSearchExpressions(context.Background(), spec, &ExplainOptions{Format: EXPLAIN_FORMAT_TEXT})
+		require.Error(t, err)
+	}
 	_, err = BuildSQLJSONPlan(context.Background(), &plan.Query{
 		StmtType: plan.Query_SELECT,
 		Steps:    []int32{0},

@@ -75,7 +75,7 @@ func runCDCGenerationContract(t *testing.T, cnCount int, fn func(Cluster)) {
 		require.NoError(t, state.CloseIfActive())
 	})
 	state.Run(t, func() (Cluster, error) {
-		return startBasicCluster(cnCount, basicClusterSetupTracer(t, cnCount), adjustCDCGenerationContractService)
+		return startBasicCluster(cnCount, basicClusterSetupTracer(t, cnCount))
 	}, func(cluster Cluster) {
 		for i := 0; i < cnCount; i++ {
 			cn, err := cluster.GetCNService(i)
@@ -84,16 +84,6 @@ func runCDCGenerationContract(t *testing.T, cnCount int, fn func(Cluster)) {
 		}
 		fn(cluster)
 	})
-}
-
-// The test covers task transitions, not the production polling cadence.
-// Configure before CN construction; leave heartbeat and capacity unchanged.
-func adjustCDCGenerationContractService(service ServiceOperator) {
-	if service.ServiceType() == metadata.ServiceType_CN {
-		service.Adjust(func(config *ServiceConfig) {
-			config.CN.TaskRunner.FetchInterval.Duration = time.Second
-		})
-	}
 }
 
 func TestCDCGenerationContractFetchConfiguration(t *testing.T) {
@@ -110,7 +100,7 @@ func TestCDCGenerationContractFetchConfiguration(t *testing.T) {
 			if kind == metadata.ServiceType_CN {
 				expected.FetchInterval.Duration = time.Second
 			}
-			adjustCDCGenerationContractService(service)
+			adjustTestingClusterTiming(service)
 			require.Equal(t, expected, service.GetServiceConfig().CN.TaskRunner)
 		})
 	}
@@ -735,13 +725,13 @@ func TestCDCTargetGuardRejectsOptimisticModeBeforeTargetCreate(t *testing.T) {
 	_, err = db.ExecContext(ctx, "TRUNCATE TABLE cdc_optimistic_probe.t")
 	require.NoError(t, err)
 	_, err = db.ExecContext(ctx, "RENAME TABLE cdc_optimistic_probe.t TO cdc_optimistic_probe.renamed")
-	require.NoError(t, err)
+	require.ErrorContains(t, err, "table rename is not supported outside pessimistic read-committed transactions")
 	activeTx, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	_, err = activeTx.ExecContext(ctx, "CREATE TABLE cdc_optimistic_probe.rejected (id INT PRIMARY KEY)")
 	require.ErrorContains(t, err, "require an existing pessimistic RC transaction")
 	require.NoError(t, activeTx.Rollback())
-	_, err = db.ExecContext(ctx, "DROP TABLE cdc_optimistic_probe.renamed")
+	_, err = db.ExecContext(ctx, "DROP TABLE cdc_optimistic_probe.t")
 	require.NoError(t, err)
 }
 

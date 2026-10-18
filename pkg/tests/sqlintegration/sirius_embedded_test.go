@@ -43,7 +43,7 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 	c, err := embed.StartTestCluster(embed.WithCNCount(1), embed.WithPreStart(func(op embed.ServiceOperator) {
 		if op.ServiceType() == metadata.ServiceType_CN {
 			op.Adjust(func(cfg *embed.ServiceConfig) {
-				cfg.CN.Sirius = cnservice.SiriusConfig{Enabled: true, Backend: "embedded", InputMode: "mo", NativeConfigPath: config, GPUStreams: 2}
+				cfg.CN.Sirius = cnservice.SiriusConfig{Enabled: true, NativeConfigPath: config, GPUStreams: 2}
 			})
 		}
 	}))
@@ -66,6 +66,30 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 		execSQLRequire(t, ctx, db, statement)
 	}
 	t.Cleanup(func() { cleanupSQLIntegration(t, cn, "drop database if exists sirius_reader_contract") })
+	t.Run("existing hints select embedded GPU", func(t *testing.T) {
+		statement := "select n,s from t order by n"
+		names, values := readSiriusPublicRows(t, ctx, db, statement)
+		for _, hint := range []string{"/*+ SIDECAR */ ", "/*+ SIDECAR GPU */ "} {
+			gpuNames, gpuValues := readSiriusPublicRows(t, ctx, db, hint+statement)
+			require.Equal(t, names, gpuNames)
+			require.Equal(t, values, gpuValues)
+		}
+	})
+	t.Run("removed HTTP configuration", func(t *testing.T) {
+		for _, statement := range []string{
+			"select @@session.sidecar_url", "select @@global.sidecar_url",
+			"set session sidecar_url='http://unused'", "set global sidecar_url='http://unused'",
+		} {
+			err := readSiriusPublicError(t, ctx, db, statement)
+			var mysqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &mysqlErr, statement)
+			require.Contains(t, mysqlErr.Message, "the system variable does not exist", statement)
+		}
+		for _, statement := range []string{"show session variables like 'sidecar_url'", "show global variables like 'sidecar_url'"} {
+			_, values := readSiriusPublicRows(t, ctx, db, statement)
+			require.Empty(t, values, statement)
+		}
+	})
 	compare := func(statement string) {
 		t.Helper()
 		names, values := readSiriusPublicRows(t, ctx, db, statement)
@@ -73,7 +97,6 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 		require.Equal(t, names, gpuNames)
 		require.Equal(t, values, gpuValues)
 	}
-	compare("select n,s from t order by n")
 	compare("select n,s from t where n>0 order by n limit 1 offset 1")
 	execSQLRequire(t, ctx, db, "delete from t where n=1")
 	compare("select n,s from t order by n")

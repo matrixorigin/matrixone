@@ -803,9 +803,9 @@ func TestCompleteDateFunctionsReturnNullForZeroTemporal(t *testing.T) {
 		expect FunctionTestResult
 		fn     executeLogicOfOverload
 	}{
-		{name: "dayofyear date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_uint16.ToType(), false, []uint16{0}, []bool{true}), fn: DayOfYear},
-		{name: "week date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, []bool{true}), fn: DateToWeek},
-		{name: "week datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_uint8.ToType(), false, []uint8{0}, []bool{true}), fn: DatetimeToWeek},
+		{name: "dayofyear date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_int32.ToType(), false, []int32{0}, []bool{true}), fn: DayOfYear},
+		{name: "week date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_int32.ToType(), false, []int32{0}, []bool{true}), fn: DateToWeek},
+		{name: "week datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_int32.ToType(), false, []int32{0}, []bool{true}), fn: DatetimeToWeek},
 		{name: "weekofyear date", input: NewFunctionTestInput(types.T_date.ToType(), []types.Date{types.ZeroDate}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: DateToWeekOfYear},
 		{name: "weekofyear datetime", input: NewFunctionTestInput(types.T_datetime.ToType(), []types.Datetime{types.ZeroDatetime}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: DatetimeToWeekOfYear},
 		{name: "weekofyear timestamp", input: NewFunctionTestInput(types.T_timestamp.ToType(), []types.Timestamp{types.ZeroTimestamp}, nil), expect: NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}), fn: TimestampToWeekOfYear},
