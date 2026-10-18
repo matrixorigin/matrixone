@@ -703,7 +703,7 @@ func (c *Compile) prepareCreateNamePlan(p *plan.Plan) (*plan.Plan, error) {
 
 // Pin replacement endpoints before any DROP/COPY effects. G excludes FK
 // publication, while endpoint name pins also exclude index-definition writers.
-func (c *Compile) admitReplacementNames(database, source, target string, rel engine.Relation, added []*plan.AlterTableAddFk) (map[plan2.FkReferKey]struct{}, error) {
+func (c *Compile) admitReplacementNames(database, source, target string, rel engine.Relation, added []*plan.AlterTableAddFk, policy lock.WaitPolicy) (map[plan2.FkReferKey]struct{}, error) {
 	domain := map[plan2.FkReferKey]struct{}{{Db: database, Tbl: target}: {}, {Db: database, Tbl: source}: {}}
 	actor, err := defines.GetAccountId(c.proc.Ctx)
 	if err != nil {
@@ -777,10 +777,10 @@ func (c *Compile) admitReplacementNames(database, source, target string, rel eng
 		return nil, err
 	}
 	for _, key := range keys {
-		if _, err := c.lockCatalogName(dbs, actor, []string{key.Db}, lock.LockMode_Shared, lock.WaitPolicy_FastFail); err != nil {
+		if _, err := c.lockCatalogName(dbs, actor, []string{key.Db}, lock.LockMode_Shared, policy); err != nil {
 			return nil, err
 		}
-		if _, err := c.lockCatalogName(tables, actor, []string{key.Db, key.Tbl}, lock.LockMode_Exclusive, lock.WaitPolicy_FastFail); err != nil {
+		if _, err := c.lockCatalogName(tables, actor, []string{key.Db, key.Tbl}, lock.LockMode_Exclusive, policy); err != nil {
 			return nil, err
 		}
 	}
