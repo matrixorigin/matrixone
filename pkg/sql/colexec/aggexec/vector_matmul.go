@@ -21,11 +21,11 @@ import (
 	"encoding/json"
 	"io"
 	"math"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"unsafe"
 
 	"github.com/bytedance/sonic"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
@@ -468,7 +468,7 @@ func (cfg *vectorMatmulConfig) setBlockScaledCells(oid types.T, dim int, cells [
 			return err
 		}
 	}
-	cfg.retained = cap(cfg.queryCells) + cap(ops)*int(unsafe.Sizeof(metric.VecBlockOperand{}))
+	cfg.retained = cap(cfg.queryCells) + cap(ops)*int(reflect.TypeFor[metric.VecBlockOperand]().Size())
 	// the distance as inner_product, cosine_distance and l2_distance_sq return it; an
 	// inner product overflow NaN ranks last
 	m := metric.Metric_InnerProduct
