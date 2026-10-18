@@ -89,14 +89,14 @@ var upg_information_schema_schemata = versions.UpgradeEntry{
 	Schema:    sysview.InformationDBConst,
 	TableName: "SCHEMATA",
 	UpgType:   versions.MODIFY_VIEW,
-	UpgSql:    sysview.InformationSchemaSchemataDDL,
+	UpgSql:    sysview.InformationSchemaSchemataLegacyDDL,
 	CheckFunc: func(txn executor.TxnExecutor, accountId uint32) (bool, error) {
 		exists, viewDef, err := versions.CheckViewDefinition(txn, accountId, sysview.InformationDBConst, "SCHEMATA")
 		if err != nil {
 			return false, err
 		}
 
-		if exists && viewDef == sysview.InformationSchemaSchemataDDL {
+		if exists && viewDef == sysview.InformationSchemaSchemataLegacyDDL {
 			return true, nil
 		}
 		return false, nil

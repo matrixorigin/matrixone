@@ -38,8 +38,6 @@ import (
 
 func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 	runAuthenticatedClusterTest(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
-		defer cancel()
 		cn0, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		cn1, err := cluster.GetCNService(1)
@@ -51,6 +49,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 		require.NoError(t, err)
 		defer db1.Close()
 		t.Run("replacement_revalidation", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
 			const database = "issue29400_revalidation"
 			execSQLRequire(t, ctx, db0, "create database "+database)
 			defer func() {
@@ -93,6 +93,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					parent, child := fmt.Sprintf("parent_%t", dropped), fmt.Sprintf("child_%t", dropped)
 					execSQLRequire(t, ctx, db0, "create table "+database+"."+parent+"(id int primary key, v int)")
 					oldID := idOf(parent)
+					// CN1 must resolve the parent created on CN0 before joining the gate.
+					execSQLRequire(t, ctx, db1, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 					holder, err := db0.BeginTx(ctx, nil)
 					require.NoError(t, err)
 					operationCtx, stop := context.WithTimeout(ctx, 20*time.Second)
@@ -155,6 +157,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 						require.Zero(t, n)
 					} else {
 						require.NoError(t, err)
+						// The child CREATE committed on CN1; later CN0 statements consume it.
+						execSQLRequire(t, ctx, db0, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 						require.NotEqual(t, oldID, idOf(parent))
 						execSQLRequire(t, ctx, db0, "insert into "+database+"."+parent+" values(1,7)")
 						execSQLRequire(t, ctx, db0, "insert into "+database+"."+child+" values(1,1)")
@@ -169,6 +173,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					execSQLRequire(t, ctx, db0, "create table "+database+"."+table+"(id int primary key,v int)")
 					execSQLRequire(t, ctx, db0, "insert into "+database+"."+table+" values(1,7)")
 					oldID := idOf(table)
+					// Establish CN0 -> CN1 visibility before the negative preflight.
+					execSQLRequire(t, ctx, db1, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 					rt := moruntime.ServiceRuntime(cn1.GetServiceConfig().CN.UUID)
 					original, ok := rt.GetGlobalVariables(moruntime.InternalSQLExecutor)
 					require.True(t, ok)
@@ -218,6 +224,9 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					var n int
 					if protection == "snapshot" {
 						require.NoError(t, err)
+						// TRUNCATE committed on CN1. CN0 has no cross-session freshness
+						// guarantee until it consumes that commit through the existing fence.
+						execSQLRequire(t, ctx, db0, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 						require.NotEqual(t, oldID, idOf(table))
 						require.NoError(t, db0.QueryRowContext(ctx, "select count(*) from "+database+"."+table).Scan(&n))
 						require.Zero(t, n)
@@ -238,6 +247,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 			}
 		})
 		t.Run("tenant_logical_snapshot_uses_broad_gate", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
 			const account = "issue29400_history_tenant"
 			execSQLRequire(t, ctx, db0, "create account "+account+" admin_name 'admin' identified by '111'")
 			defer func() {
@@ -320,6 +331,10 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 
 			execSQLRequire(t, ctx, tenant, "drop snapshot issue29400_history")
 		})
+		// The promotion setup and each independent scenario own their deadlines.
+		// Time spent in earlier subtests must not consume a later waiter's budget.
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
 		const target, witness, solo = "issue_29400_promotion", "issue_29400_promotion_witness", "issue_29400_promotion_solo"
 		defer func() {
 			cleanupCtx, done := context.WithTimeout(context.Background(), 20*time.Second)
@@ -426,6 +441,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 			"select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname='mo_feature_registry'").Scan(&registryID))
 		for index, terminal := range []string{"commit", "rollback", "cancel", "timeout"} {
 			t.Run("fresh_truncate/"+terminal, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
 				execSQLRequire(t, ctx, db0, "drop table if exists "+solo+".w")
 				execSQLRequire(t, ctx, db0, "create table "+solo+".w (i int)")
 				execSQLRequire(t, ctx, db0, "truncate table "+solo+".v")
@@ -530,6 +547,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 		}
 
 		t.Run("same_table_dml", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+			defer cancel()
 			execSQLRequire(t, ctx, db0, "create table "+solo+".same (i int primary key)")
 			execSQLRequire(t, ctx, db0, "insert into "+solo+".same values (1)")
 			var oldID, oldLogicalID uint64
@@ -594,6 +613,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 
 		for _, forward := range []bool{false, true} {
 			t.Run(fmt.Sprintf("fk_publication/forward_%t", forward), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
 				parent := fmt.Sprintf("fk_parent_%t", forward)
 				child := fmt.Sprintf("fk_child_%t", forward)
 				if !forward {
@@ -682,6 +703,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 			{"exclusive_gate", "alter table %s.t modify column v bigint", "drop table %s.u"},
 		} {
 			t.Run(scenario.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+				defer cancel()
 				database := "issue_29400_prior_dml_" + scenario.name
 				unrelated := database + "_other"
 				for _, query := range []string{

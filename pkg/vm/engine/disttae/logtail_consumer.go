@@ -238,12 +238,32 @@ func (c *PushClient) LatestLogtailAppliedTime() timestamp.Timestamp {
 func (c *PushClient) AcquireLogtailReadBarrier(
 	ctx context.Context,
 ) (timestamp.Timestamp, error) {
-	if c.subscriber == nil {
+	c.lifecycleMu.Lock()
+	ownerCtx := c.ctx
+	subscriber := c.subscriber
+	closed := c.closed.Load()
+	c.lifecycleMu.Unlock()
+	if closed {
+		return timestamp.Timestamp{}, context.Canceled
+	}
+	if subscriber == nil {
 		return timestamp.Timestamp{}, moerr.NewInternalError(
 			ctx, "logtail subscriber is not initialized")
 	}
+	// Reconnect may replace a transport while this caller is waiting. Keep
+	// the read bounded by both the request and the existing PushClient owner.
+	if ownerCtx != nil {
+		barrierCtx, cancel := context.WithCancelCause(ctx)
+		stop := context.AfterFunc(ownerCtx, func() { cancel(context.Cause(ownerCtx)) })
+		defer cancel(context.Canceled)
+		defer stop()
+		if ownerCtx.Err() != nil {
+			cancel(context.Cause(ownerCtx))
+		}
+		ctx = barrierCtx
+	}
 	return acquireAppliedLogtailReadBarrier(
-		ctx, c.timestampWaiter, c.subscriber.readBarrier,
+		ctx, c.timestampWaiter, subscriber.readBarrier,
 	)
 }
 
@@ -561,10 +581,11 @@ func (c *PushClient) skipSubIfSubscribed(
 	acctId uint64,
 	tableID uint64,
 	dbID uint64,
+	accessTime *int64,
 ) (bool, *logtailreplay.PartitionState, bool) {
 
 	//if table has been subscribed, return quickly.
-	if ps, ok, _, pending := c.isSubscribedWithPending(ctx, acctId, dbID, tableID); ok {
+	if ps, ok, _, pending := c.isSubscribedWithPendingAccessTime(ctx, acctId, dbID, tableID, accessTime); ok {
 		return true, ps, pending
 	}
 	return false, nil, false
@@ -577,6 +598,20 @@ func (c *PushClient) toSubscribeTable(
 	tableName string,
 	dbID uint64,
 	dbName string,
+	pendingOut ...*bool,
+) (ps *logtailreplay.PartitionState, err error) {
+	return c.toSubscribeTableWithAccessTime(ctx, accId, tableID, tableName, dbID, dbName, nil, pendingOut...)
+}
+
+// accessTime is a caller-local idle-GC bookkeeping sample shared only across
+// consecutive warm reads. It has no role in snapshot visibility or readiness.
+func (c *PushClient) toSubscribeTableWithAccessTime(
+	ctx context.Context,
+	accId, tableID uint64,
+	tableName string,
+	dbID uint64,
+	dbName string,
+	accessTime *int64,
 	pendingOut ...*bool,
 ) (ps *logtailreplay.PartitionState, err error) {
 	var pending *bool
@@ -598,11 +633,16 @@ func (c *PushClient) toSubscribeTable(
 			moerr.NewInternalErrorNoCtx("injected subscribe table err")
 	}
 
-	if skip, ps, initialPending = c.skipSubIfSubscribed(ctx, accId, tableID, dbID); skip {
+	if skip, ps, initialPending = c.skipSubIfSubscribed(ctx, accId, tableID, dbID, accessTime); skip {
 		if pending != nil {
 			*pending = initialPending
 		}
 		return ps, nil
+	}
+	if accessTime != nil {
+		// Cold/waiting paths sample their own current time below. The next warm
+		// access must not inherit a value from before that potentially long wait.
+		*accessTime = 0
 	}
 
 	state, err = c.toSubIfUnsubscribed(ctx, dbID, tableID)
@@ -1468,6 +1508,14 @@ func (c *PushClient) isSubscribedWithPending(
 	ctx context.Context,
 	accId, dbId, tId uint64,
 ) (*logtailreplay.PartitionState, bool, SubscribeState, bool) {
+	return c.isSubscribedWithPendingAccessTime(ctx, accId, dbId, tId, nil)
+}
+
+func (c *PushClient) isSubscribedWithPendingAccessTime(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+	accessTime *int64,
+) (*logtailreplay.PartitionState, bool, SubscribeState, bool) {
 
 	s := &c.subscribed
 
@@ -1486,7 +1534,16 @@ func (c *PushClient) isSubscribedWithPending(
 	}
 	// Update timestamp (with sampling) while holding the read lock to keep
 	// state consistent with the partition creation below.
-	now := time.Now().UnixNano()
+	var now int64
+	if accessTime != nil {
+		now = *accessTime
+	}
+	if now == 0 {
+		now = time.Now().UnixNano()
+		if accessTime != nil {
+			*accessTime = now
+		}
+	}
 	if now-ent.lastTs.Load() > int64(time.Minute) {
 		ent.lastTs.Store(now)
 	}
@@ -2285,11 +2342,26 @@ func (s *logTailSubscriber) receiveResponse(deadlineCtx context.Context) logTail
 }
 
 func (s *logTailSubscriber) readBarrier(ctx context.Context) (timestamp.Timestamp, error) {
-	client, err := s.waitReadyClient(ctx)
-	if err != nil {
-		return timestamp.Timestamp{}, err
+	for {
+		client, err := s.waitReadyClient(ctx)
+		if err != nil {
+			return timestamp.Timestamp{}, err
+		}
+		frontier, err := client.ReadBarrier(ctx)
+		if err == nil {
+			return frontier, nil
+		}
+		if ctx.Err() != nil {
+			return timestamp.Timestamp{}, context.Cause(ctx)
+		}
+		// The old stream's private cancellation must not cancel a live SQL
+		// caller. Retry only this read-only barrier, only after its transport
+		// was replaced, and obtain a new TN frontier before the apply wait.
+		if (!errors.Is(err, context.Canceled) && !moerr.IsMoErrCode(err, moerr.ErrStreamClosed)) ||
+			s.client() == client {
+			return timestamp.Timestamp{}, err
+		}
 	}
-	return client.ReadBarrier(ctx)
 }
 
 func waitServerReady(ctx context.Context, addr string) error {

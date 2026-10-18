@@ -35,6 +35,8 @@ func TestLoadFileChunks(t *testing.T) {
 	require.NoError(t, err)
 
 	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	tf := &TableFunction{
 		Attrs:    []string{"chunk_id", "offset", "data"},
 		Rets:     loadFileChunksTestCols(),
@@ -115,6 +117,39 @@ func TestLoadFileChunks(t *testing.T) {
 	require.Equal(t, []int64{0, 1}, ids)
 	require.Equal(t, []int64{0, 4}, offsets)
 	require.Equal(t, []string{"abcd", "ef"}, chunks)
+}
+
+func TestLoadFileChunksRejectsUnprivilegedLocalPath(t *testing.T) {
+	dir := t.TempDir()
+	filePath := filepath.Join(dir, "test")
+	require.NoError(t, os.WriteFile(filePath, []byte("abcdef"), 0o600))
+
+	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.Account = "tenant"
+	proc.Base.SessionInfo.Role = "public"
+	tf := &TableFunction{
+		Attrs:    []string{"chunk_id", "offset", "data"},
+		Rets:     loadFileChunksTestCols(),
+		FuncName: "load_file_chunks",
+	}
+	tf.Args = []*plan.Expr{
+		{Typ: plan.Type{Id: int32(types.T_varchar), Width: 256}, Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{Value: &plan.Literal_Sval{Sval: "file://" + filePath}},
+		}},
+		{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{
+			Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 4}},
+		}},
+	}
+	tf.ctr.retSchema = []types.Type{types.T_int64.ToType(), types.T_int64.ToType(), types.T_blob.ToType()}
+
+	state, err := loadFileChunksPrepare(proc, tf)
+	require.NoError(t, err)
+	for i := range tf.ctr.executorsForArgs {
+		tf.ctr.argVecs[i], err = tf.ctr.executorsForArgs[i].Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+		require.NoError(t, err)
+	}
+	require.ErrorContains(t, state.start(tf, proc, 0, nil), "only the sys account moadmin role")
+	state.free(tf, proc, false, err)
 }
 
 func loadFileChunksTestCols() []*plan.ColDef {

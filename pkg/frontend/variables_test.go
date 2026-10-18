@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -37,6 +38,39 @@ func TestEventSchedulerDefaultDisabled(t *testing.T) {
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(got, convey.ShouldEqual, "DISABLED")
 	})
+}
+
+func TestRemovedSidecarVariable(t *testing.T) {
+	ses := &Session{}
+	ctx := context.Background()
+	for _, name := range []string{"sidecar_url", "SIDECAR_URL"} {
+		t.Run(name, func(t *testing.T) {
+			assert.NotContains(t, gSysVarsDefs, name)
+			_, err := ses.GetSessionSysVar(name)
+			assert.ErrorContains(t, err, errorSystemVariableDoesNotExist())
+			_, err = ses.GetGlobalSysVar(name)
+			assert.ErrorContains(t, err, errorSystemVariableDoesNotExist())
+			assert.ErrorContains(t, ses.SetSessionSysVar(ctx, name, "http://unused"), errorSystemVariableDoesNotExist())
+			assert.ErrorContains(t, ses.SetGlobalSysVar(ctx, name, "http://unused"), errorSystemVariableDoesNotExist())
+		})
+	}
+}
+
+func TestWindowPartitionAlgorithmVariable(t *testing.T) {
+	sv, ok := gSysVarsDefs["window_partition_algorithm"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeSession, sv.Scope)
+	assert.True(t, sv.Dynamic)
+	assert.False(t, sv.SetVarHintApplies)
+	assert.Equal(t, "SORT", sv.Default)
+
+	for _, value := range []string{"cost", "sort", "hash"} {
+		converted, err := sv.Type.Convert(value)
+		assert.NoError(t, err)
+		assert.Equal(t, strings.ToUpper(value), converted)
+	}
+	_, err := sv.Type.Convert("invalid")
+	assert.Error(t, err)
 }
 
 func TestSystemVariableSetTypeBits2String(t *testing.T) {

@@ -46,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/panjf2000/ants/v2"
 )
 
@@ -1584,6 +1585,7 @@ func writeCSV(
 
 	ctx, cancelCtx := context.WithCancel(inputCtx)
 	defer cancelCtx()
+	ctx = process.SQLFileAccessContext(ctx, ses.proc)
 
 	// SQLExecutor do not support snapshot read, we must use the MO_TS
 	snap := ""
@@ -1622,6 +1624,7 @@ func writeCSV(
 	}
 
 	ep := &ExportConfig{
+		proc:       ses.proc,
 		userConfig: newDiffCSVUserConfig(),
 		service:    ses.service,
 	}
@@ -1657,7 +1660,7 @@ func writeCSV(
 			return
 		}
 		cleanup = func() {
-			removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.StageFilePath)
+			removeFileIgnoreError(ctx, ep.service, ep.userConfig.StageFilePath)
 		}
 	} else {
 		ep.userConfig.FilePath = path.Join(stmt.OutputOpt.DirPath, fileName)
@@ -1665,7 +1668,7 @@ func writeCSV(
 			return
 		}
 		cleanup = func() {
-			removeFileIgnoreError(context.Background(), ep.service, ep.userConfig.FilePath)
+			removeFileIgnoreError(ctx, ep.service, ep.userConfig.FilePath)
 		}
 	}
 
@@ -2295,6 +2298,8 @@ func prepareFSForDiffAsFile(
 	cleanup func(),
 	err error,
 ) {
+	ctx = process.SQLFileAccessContext(ctx, ses.proc)
+
 	var (
 		ok           bool
 		stagePath    string
@@ -2331,6 +2336,10 @@ func prepareFSForDiffAsFile(
 	)
 
 	if fsPath, err = fileservice.ParsePath(fullFilePath); err != nil {
+		return
+	}
+
+	if err = process.AuthorizeSQLFileAccessPath(ses.proc, fsPath); err != nil {
 		return
 	}
 
@@ -2473,6 +2482,9 @@ func removeFileIgnoreError(ctx context.Context, service, filePath string) {
 	if err != nil {
 		return
 	}
+	// Cleanup completes an already admitted operation, even after cancellation.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), diffOutputCleanupTimeout)
+	defer cancel()
 
 	var (
 		targetFS   fileservice.FileService
@@ -2487,11 +2499,11 @@ func removeFileIgnoreError(ctx context.Context, service, filePath string) {
 		if etlFS, targetPath, err = fileservice.GetForETL(ctx, nil, filePath); err != nil {
 			return
 		}
+		defer etlFS.Close(ctx)
 		targetFS = etlFS
 	}
 
 	_ = targetFS.Delete(ctx, targetPath)
-	targetFS.Close(ctx)
 }
 
 func tryFlushDeletesOrInserts(
@@ -3129,6 +3141,8 @@ func flushSqlValues(
 	return err
 }
 func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (err error) {
+	ctx = process.SQLFileAccessContext(ctx, ses.proc)
+
 	if len(dirPath) == 0 {
 		return nil
 	}
@@ -3147,6 +3161,10 @@ func validateOutputDirPath(ctx context.Context, ses *Session, dirPath string) (e
 
 	var fsPath fileservice.Path
 	if fsPath, err = fileservice.ParsePath(dirPath); err != nil {
+		return
+	}
+
+	if err = process.AuthorizeSQLFileAccessPath(ses.proc, fsPath); err != nil {
 		return
 	}
 

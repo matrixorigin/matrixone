@@ -22,32 +22,59 @@ const { runInNewContext } = require('node:vm');
 const { classify, resolveScope, verifyResults } = require('./change-scope.cjs');
 
 const modified = filename => ({ filename, status: 'modified' });
-test('only narrow test and documentation paths receive exemptions', () => {
+test('only narrow kernel test, documentation and SDK paths receive exemptions', () => {
   for (const [paths, expected] of [
     [['README.md', 'docs/design/a.md'], 'docs'],
+    [['BUILD.md', 'pkg/common/moerr/error_handling.md', 'etc/DEV_README.md'], 'docs'],
+    [['.agents/skills/mo-dev/SKILL.md', '.claude/skills/mo-dev/SKILL.md', '.github/copilot-instructions.md'], 'docs'],
+    [['docs/cn/source/index.rst', 'pkg/sql/README.MD', 'optools/guide.RST'], 'docs'],
+    [['fixtures.md', 'pkg/fixtures-notes/README.md'], 'docs'],
+    [['docs/design/a.svg'], 'docs'],
     [['pkg/sql/plan/a_test.go'], 'ut'],
-    [['pkg/tests/upgrade/a_test.go', 'docs/a.md'], 'ut'],
+    [['pkg/tests/upgrade/a_test.go', 'pkg/sql/README.md'], 'ut'],
     [['test/distributed/cases/a.test', 'test/distributed/cases/a.result'], 'bvt'],
-    [['test/distributed/cases/a.sql', 'README_CN.md'], 'bvt'],
+    [['test/distributed/cases/a.sql', 'BUILD.md'], 'bvt'],
     [['pkg/a_test.go', 'test/distributed/cases/a.test'], 'full'],
     [['pkg/a_test.go', 'pkg/a.go'], 'full'],
     [['pkg/tests/testutils/helper.go'], 'full'],
     [['pkg/embed/testing.go'], 'full'],
     [['pkg/a/testdata/input.json'], 'full'],
+    [['pkg/a/testdata/input.md'], 'full'],
+    [['pkg/Fixtures/input.rst'], 'full'],
+    [['pkg/fixtures/a_test.go'], 'full'],
+    [['docs/fixtures/example.svg'], 'full'],
+    [['pkg/a/README.md', 'pkg/a.go'], 'full'],
+    [['docs/example.mdx'], 'full'], [['docs/input.txt'], 'full'],
+    [['docs/example.html'], 'full'], [['pkg/a.svg'], 'full'],
+    [['pkg/input.md\n'], 'full'], [['docs/input.rst\r\n'], 'full'],
     [['go.mod'], 'full'], [['Makefile'], 'full'],
     [['.github/workflows/entrypoint.yaml'], 'full'],
     [['test/distributed/run.sh'], 'full'],
     [['docs/example.sh'], 'full'], [['etc/cn.toml'], 'full'],
     [['pkg/../main_test.go'], 'full'],
-  ]) assert.equal(classify(paths.map(modified), paths.length), expected, paths.join(','));
+    [['clients/python/matrixone/client.py'], 'sdk'],
+    [['clients/python/tests/offline/a.py', 'pkg/sql/README.md'], 'sdk'],
+    [['clients/python/tests/fixtures/input.md'], 'sdk'],
+    [['clients/python/pyproject.toml', 'clients/python/requirements.txt'], 'sdk'],
+    [['clients/python/client.py', 'pkg/a_test.go'], 'full'],
+    [['clients/python/client.py', 'test/distributed/cases/a.sql'], 'full'],
+  ]) assert.equal(classify(paths.map(modified), paths.length).scope, expected, paths.join(','));
 });
 
 test('renames consider the old path, including production-to-doc and production-to-test', () => {
-  for (const filename of ['docs/a.md', 'pkg/a_test.go']) {
-    assert.equal(classify([{ filename, previous_filename: 'pkg/a.go', status: 'renamed' }], 1), 'full');
+  for (const filename of ['docs/a.md', 'pkg/README.md', 'BUILD.rst', 'pkg/a_test.go']) {
+    assert.deepEqual(classify([{ filename, previous_filename: 'pkg/a.go', status: 'renamed' }], 1), { scope: 'full', sdk_required: false });
   }
-  assert.equal(classify([{ filename: 'pkg/b_test.go', previous_filename: 'pkg/a_test.go', status: 'renamed' }], 1), 'ut');
-  assert.equal(classify([{ filename: 'pkg/a_test.go', status: 'removed' }], 1), 'ut');
+  assert.deepEqual(classify([{ filename: 'pkg/b_test.go', previous_filename: 'pkg/a_test.go', status: 'renamed' }], 1), { scope: 'ut', sdk_required: false });
+  assert.deepEqual(classify([{ filename: 'pkg/a_test.go', status: 'removed' }], 1), { scope: 'ut', sdk_required: false });
+  assert.deepEqual(classify([{ filename: 'pkg/README.md', previous_filename: 'BUILD.rst', status: 'renamed' }], 1), { scope: 'docs', sdk_required: false });
+  for (const [filename, previous_filename] of [
+    ['pkg/README.md', 'pkg/testdata/input.md'],
+    ['pkg/fixtures/input.rst', 'BUILD.rst'],
+  ]) assert.deepEqual(classify([{ filename, previous_filename, status: 'renamed' }], 1), { scope: 'full', sdk_required: false });
+  for (const status of ['added', 'removed']) {
+    assert.deepEqual(classify([{ filename: 'pkg/README.md', status }], 1), { scope: 'docs', sdk_required: false });
+  }
 });
 
 test('empty, capped, incomplete, duplicate and malformed lists fail closed', () => {
@@ -57,8 +84,8 @@ test('empty, capped, incomplete, duplicate and malformed lists fail closed', () 
     [[{ ...file, status: 'renamed' }], 1], [[{ ...file, status: 'unknown' }], 1],
     [[null], 1], [[modified(null)], 1],
     [Array.from({ length: 3000 }, (_, i) => modified(`pkg/a${i}_test.go`)), 3000],
-  ]) assert.equal(classify(files, count), 'full');
-  assert.equal(classify([file], 1, true), 'full');
+  ]) assert.deepEqual(classify(files, count), { scope: 'full', sdk_required: true });
+  assert.deepEqual(classify([file], 1, true), { scope: 'full', sdk_required: true });
 });
 
 function client({ files = [modified('pkg/a_test.go')], revisions, error = false } = {}) {
@@ -80,8 +107,8 @@ function client({ files = [modified('pkg/a_test.go')], revisions, error = false 
 }
 
 test('API failure falls back to full and both sides of pagination check the revision', async () => {
-  assert.equal(await resolveScope(client()), 'ut');
-  assert.equal(await resolveScope(client({ error: true })), 'full');
+  assert.deepEqual(await resolveScope(client()), { scope: 'ut', sdk_required: false });
+  assert.deepEqual(await resolveScope(client({ error: true })), { scope: 'full', sdk_required: true });
   const { pr } = client();
   const movedHead = { ...pr, head: { sha: 'new' } };
   const movedBase = { ...pr, base: { sha: 'new' } };
@@ -91,11 +118,11 @@ test('API failure falls back to full and both sides of pagination check the revi
 });
 
 function results() {
-  const needs = Object.fromEntries(['docs-check', 'matrixone-ci',
+  const needs = Object.fromEntries(['docs-check', 'python-sdk', 'matrixone-ci',
     'matrixone-ut-coverage', 'matrixone-compose-ci', 'matrixone-standalone-ci',
     'matrixone-coverage-merge'].map(job => [job, { result: 'success' }]));
   needs.preflight = { result: 'success', outputs: {
-    pr_valid: 'true', compose_group: '0', launch_group: '1', generation: '123-1',
+    pr_valid: 'true', sdk_required: 'false', compose_group: '0', launch_group: '1', generation: '123-1',
   } };
   needs['matrixone-ut-coverage'].outputs = { coverage_ready: 'true' };
   return needs;
@@ -106,6 +133,38 @@ function entrypointJobs() {
   return Object.fromEntries([...workflow.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gm)]
     .map(match => [match[1], match[2]]));
 }
+
+test('actual preflight script publishes the authoritative plan as strict string outputs', async () => {
+  const block = entrypointJobs().preflight;
+  const script = block.match(/          script: \|\n([\s\S]*?)(?=      - id: plan)/)[1]
+    .split('\n').map(line => line.slice(12)).join('\n');
+  for (const [paths, expected] of [
+    [['BUILD.md', 'pkg/sql/README.md', 'docs/cn/source/index.rst'], { scope: 'docs', sdk_required: 'false' }],
+    [['clients/python/pyproject.toml'], { scope: 'sdk', sdk_required: 'true' }],
+    [['clients/python/client.py', '.agents/skills/mo-dev/SKILL.md'], { scope: 'sdk', sdk_required: 'true' }],
+    [['clients/python/client.py', 'pkg/a.go'], { scope: 'full', sdk_required: 'true' }],
+    [['pkg/a_test.go', 'BUILD.md'], { scope: 'ut', sdk_required: 'false' }],
+    [['test/distributed/cases/a.sql', 'pkg/sql/README.md'], { scope: 'bvt', sdk_required: 'false' }],
+    [['pkg/testdata/input.md'], { scope: 'full', sdk_required: 'false' }],
+    [['pkg/a.go'], { scope: 'full', sdk_required: 'false' }],
+  ]) {
+    const fixture = client({ files: paths.map(modified) });
+    fixture.pr.changed_files = paths.length;
+    const outputs = {};
+    const summary = { addHeading() { return this; }, addRaw() { return this; }, async write() {} };
+    await runInNewContext(`(async () => { ${script} })()`, {
+      ...fixture,
+      require(path) {
+        assert.equal(path, './.github/ci/change-scope.cjs');
+        return { resolveScope };
+      },
+      process: { env: {} },
+      core: { setOutput: (name, value) => { outputs[name] = value; }, summary },
+    });
+    assert.deepEqual(outputs, expected);
+  }
+  assert.match(block, /sdk_required: \$\{\{ steps\.scope\.outputs\.sdk_required \}\}/);
+});
 
 function checkoutSpec(block) {
   const lines = block.split('\n');
@@ -166,13 +225,14 @@ function provenanceScript(block) {
 
 test('gates accept intentional omissions but reject failed, cancelled, skipped or missing required work', () => {
   const jobs = {
-    docs: ['docs-check'], ut: ['matrixone-ci'],
+    docs: ['docs-check'], sdk: ['python-sdk'], ut: ['matrixone-ci'],
     bvt: ['matrixone-compose-ci', 'matrixone-standalone-ci'],
     full: ['matrixone-ci', 'matrixone-ut-coverage', 'matrixone-compose-ci',
       'matrixone-standalone-ci', 'matrixone-coverage-merge'],
   };
   for (const [scope, required] of Object.entries(jobs)) {
     const needs = results();
+    needs.preflight.outputs.sdk_required = scope === 'sdk' ? 'true' : 'false';
     for (const job of Object.keys(needs)) {
       if (!['preflight', ...required].includes(job)) needs[job].result = 'skipped';
     }
@@ -212,7 +272,7 @@ test('successful preflight cannot hide a missing or non-complementary BVT plan',
   }
   for (const scope of ['docs', 'ut']) {
     const needs = results();
-    needs.preflight.outputs = { pr_valid: 'true' };
+    needs.preflight.outputs = { pr_valid: 'true', sdk_required: 'false' };
     assert.match(verifyResults(scope, needs), /passed/);
   }
 });
@@ -272,15 +332,19 @@ test('entrypoint routes each scope through one required check', () => {
   const blocks = entrypointJobs();
   const routed = ['docs-check', 'matrixone-shared-build', 'matrixone-ci',
     'matrixone-ut-coverage', 'matrixone-upgrade-ci', 'matrixone-compose-ci',
-    'matrixone-standalone-ci', 'matrixone-coverage-merge'];
-  const expected = {
-    docs: ['docs-check'], ut: ['matrixone-ci'],
-    bvt: ['matrixone-shared-build', 'matrixone-compose-ci', 'matrixone-standalone-ci'],
-    full: routed.filter(job => job !== 'docs-check'),
-  };
-  for (const [scope, wanted] of Object.entries(expected)) {
+    'matrixone-standalone-ci', 'matrixone-coverage-merge', 'matrixone-utils-ci', 'python-sdk'];
+  const cases = [
+    ['docs', false, ['docs-check', 'matrixone-utils-ci']],
+    ['ut', false, ['matrixone-ci', 'matrixone-utils-ci']],
+    ['bvt', false, ['matrixone-shared-build', 'matrixone-compose-ci', 'matrixone-standalone-ci', 'matrixone-utils-ci']],
+    ['sdk', true, ['python-sdk']],
+    ['full', false, routed.filter(job => !['docs-check', 'python-sdk'].includes(job))],
+    ['full', true, routed.filter(job => job !== 'docs-check')],
+  ];
+  for (const [scope, sdkRequired, wanted] of cases) {
     const needs = results();
     needs.preflight.outputs.scope = scope;
+    needs.preflight.outputs.sdk_required = String(sdkRequired);
     needs['matrixone-shared-build'] = { result: 'success' };
     const selected = routed.filter(job => {
       const expression = blocks[job].match(/^    if: \$\{\{ (.*) \}\}$/m)[1]
@@ -388,7 +452,7 @@ test('workflow provenance selects both helpers from the actual checkout config',
 
     const workflowHelper = loadFixtureHelper(workflowPath);
     const headHelper = loadFixtureHelper(headPath);
-    assert.equal(await workflowHelper.resolveScope(client({ files: [modified('pkg/a.go')] })), 'full');
+    assert.deepEqual(await workflowHelper.resolveScope(client({ files: [modified('pkg/a.go')] })), { scope: 'full', sdk_required: false });
     assert.match(workflowHelper.verifyResults('full', results()), /all required jobs passed/);
     assert.equal(await headHelper.resolveScope(client({ files: [modified('pkg/a.go')] })), 'docs');
     assert.throws(() => headHelper.verifyResults('full', results()), /untrusted helper selected/);
@@ -400,5 +464,118 @@ test('workflow provenance selects both helpers from the actual checkout config',
 test('entrypoint runs the complete race-UT suite on one runner', () => {
   const caller = entrypointJobs()['matrixone-ci'];
   assert.match(caller, /^    uses: matrixorigin\/CI\/\.github\/workflows\/ci\.yaml@main$/m);
-  assert.match(caller, /^    with:\n      ut_parallel: 6\n      ut_sharded: false$/m);
+  assert.match(caller, /^    with:\n      ut_parallel: 8\n      ut_sharded: false$/m);
+});
+
+test('SDK impact is retained across mixed changes, control files and both rename paths', () => {
+  for (const [files, expected] of [
+    [[modified('clients/python/README.md')], { scope: 'sdk', sdk_required: true }],
+    [[{ filename: 'clients/python/requirements.txt', status: 'removed' }], { scope: 'sdk', sdk_required: true }],
+    [[modified('clients/python/pyproject.toml'), modified('README.md')], { scope: 'sdk', sdk_required: true }],
+    [[modified('pkg/a.go'), modified('clients/python/a.py')], { scope: 'full', sdk_required: true }],
+    [[modified('pkg/a.go')], { scope: 'full', sdk_required: false }],
+    [[modified('.github/workflows/python-sdk.yml')], { scope: 'full', sdk_required: true }],
+    [[modified('.github/ci/change-scope.cjs')], { scope: 'full', sdk_required: true }],
+    [[modified('.github/workflows/entrypoint.yaml')], { scope: 'full', sdk_required: true }],
+    [[{ filename: 'clients/python/a.py', previous_filename: 'pkg/a.go', status: 'renamed' }], { scope: 'full', sdk_required: true }],
+    [[{ filename: 'pkg/a.go', previous_filename: 'clients/python/a.py', status: 'renamed' }], { scope: 'full', sdk_required: true }],
+    [[{ filename: 'clients/python/b.py', previous_filename: 'clients/python/a.py', status: 'renamed' }], { scope: 'sdk', sdk_required: true }],
+    [[{ filename: 'pkg/README.md', previous_filename: 'clients/python/README.md', status: 'renamed' }], { scope: 'sdk', sdk_required: true }],
+    [[{ filename: 'clients/python/README.md', previous_filename: 'BUILD.rst', status: 'renamed' }], { scope: 'sdk', sdk_required: true }],
+    [[modified('clients/python//a.py')], { scope: 'full', sdk_required: true }],
+    [[{ filename: 'clients/python/a.py', previous_filename: 'pkg/../a.go', status: 'renamed' }], { scope: 'full', sdk_required: true }],
+  ]) assert.deepEqual(classify(files, files.length), expected, JSON.stringify(files));
+  assert.deepEqual(classify([modified('clients/python/a.py')], 1, true), { scope: 'full', sdk_required: true });
+});
+
+test('the required check enforces SDK flags and SDK results for mixed full runs', () => {
+  for (const value of [undefined, true, false, '', 'yes', 'TRUE']) {
+    const needs = results();
+    needs.preflight.outputs.sdk_required = value;
+    assert.throws(() => verifyResults('full', needs), /SDK requirement/);
+  }
+  for (const scope of ['docs', 'ut', 'bvt']) {
+    const needs = results();
+    needs.preflight.outputs.sdk_required = 'true';
+    assert.throws(() => verifyResults(scope, needs), /SDK requirement/);
+  }
+  assert.throws(() => verifyResults('sdk', results()), /SDK requirement/);
+  const needs = results();
+  needs.preflight.outputs.sdk_required = 'true';
+  assert.match(verifyResults('full', needs), /passed/);
+  for (const result of ['failure', 'cancelled', 'skipped', undefined]) {
+    assert.throws(() => verifyResults('full', { ...needs, 'python-sdk': { result } }), /python-sdk/);
+  }
+  const missing = { ...needs };
+  delete missing['python-sdk'];
+  assert.throws(() => verifyResults('full', missing), /python-sdk/);
+  needs['matrixone-ci'].result = 'failure';
+  assert.throws(() => verifyResults('full', needs), /matrixone-ci/);
+});
+
+test('SDK routing rejects invalid preflight, cancellations and legacy branches', () => {
+  const block = entrypointJobs()['python-sdk'];
+  const expression = block.match(/^    if: \$\{\{ (.*) \}\}$/m)[1]
+    .replace(/needs\.([\w-]+)/g, "needs['$1']");
+  for (const [overrides, cancelled, base, expected] of [
+    [{}, false, 'main', true],
+    [{ result: 'failure' }, false, 'main', false],
+    [{ outputs: { pr_valid: 'false', sdk_required: 'true' } }, false, 'main', false],
+    [{}, true, 'main', false],
+    [{}, false, '3.0-dev', false],
+    [{ outputs: { pr_valid: 'true', sdk_required: 'false' } }, false, 'main', false],
+  ]) {
+    const preflight = { result: 'success', outputs: { pr_valid: 'true', sdk_required: 'true' }, ...overrides };
+    assert.equal(runInNewContext(expression, {
+      needs: { preflight }, github: { base_ref: base }, cancelled: () => cancelled,
+    }), expected);
+  }
+  assert.match(block, /^    uses: \.\/\.github\/workflows\/python-sdk.yml$/m);
+  assert.match(block, /^    permissions:\n      contents: read$/m);
+  assert.doesNotMatch(block, /secrets:|environment:/);
+});
+
+test('the reusable SDK owner preserves the matrix and isolates untrusted checkout', () => {
+  const sdk = readFileSync(join(__dirname, '../workflows/python-sdk.yml'), 'utf8');
+  const sections = Object.fromEntries([...sdk.matchAll(/^  ([\w-]+):\n([\s\S]*?)(?=^  [\w-]+:\n|$(?![\s\S]))/gm)]
+    .map(match => [match[1], match[2]]));
+  assert.match(sdk, /^  workflow_call:$/m);
+  assert.doesNotMatch(sdk, /^  pull_request(?:_target)?:$/m);
+  assert.match(sdk, /branches: \[main, develop\]/);
+  const offline = sections.offline;
+  assert.match(offline, /timeout-minutes: 30/);
+  assert.match(offline, /runs-on: ubuntu-latest/);
+  assert.doesNotMatch(offline, /secrets\.|environment:|actions\/cache/);
+  assert.doesNotMatch(sdk, /continue-on-error:/);
+  const checkout = checkoutSpec(offline);
+  assert.equal(checkout.repository, '${{ github.event.pull_request.head.repo.full_name || github.repository }}');
+  assert.equal(checkout.ref, '${{ github.event.pull_request.head.sha || github.sha }}');
+  assert.equal(checkout['persist-credentials'], 'false');
+  assert.equal(checkout['allow-unsafe-pr-checkout'], "${{ github.event_name == 'pull_request_target' }}");
+  assert.match(offline, /actions\/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1/);
+  assert.ok(offline.indexOf('Record SDK provenance') < offline.indexOf('Install package'));
+  assert.match(offline, /WORKFLOW_SHA: \$\{\{ github.workflow_sha \}\}/);
+  assert.match(offline, /flake8 matrixone --select=E9,F63,F7,F82/);
+  assert.match(offline, /if: \$\{\{ matrix.python == '3.12' && matrix.sqlalchemy == '>=2.0,<2.1' \}\}/);
+  assert.match(offline, /fail-fast: false/);
+  const pythons = ['3.10', '3.12'];
+  const sqlalchemy = ['>=1.4,<1.5', '>=2.0,<2.1', '>=2.1,<3'];
+  for (const python of pythons) assert.ok(offline.includes(`'${python}'`));
+  for (const range of sqlalchemy) assert.ok(offline.includes(`'${range}'`));
+  assert.match(offline, /exclude:\n          - python: '3.10'\n            sqlalchemy: '>=2.1,<3'/);
+  assert.match(offline, /include:[\s\S]*?- python: '3.11'\n            sqlalchemy: '>=2.1,<3'/);
+  assert.match(offline, /name: python-sdk-\$\{\{ github.event.pull_request.head.sha \|\| github.sha \}\}-\$\{\{ github.run_id \}\}-\$\{\{ github.run_attempt \}\}-\$\{\{ strategy.job-index \}\}/);
+  assert.match(offline, /if: \$\{\{ !cancelled\(\) \}\}/);
+  const onlineExpression = sections.online.match(/^    if: (.*)$/m)[1];
+  for (const [event, enabled, expected] of [
+    ['pull_request_target', true, false], ['workflow_call', true, false],
+    ['push', true, false], ['workflow_dispatch', false, false], ['workflow_dispatch', true, true],
+  ]) assert.equal(runInNewContext(onlineExpression, { github: { event_name: event }, inputs: { online: enabled } }), expected);
+  assert.match(sections.online, /environment: matrixone-sdk-integration/);
+  const group = sdk.match(/^  group: (.*)$/m)[1];
+  assert.ok(group.startsWith('python-sdk/'));
+  assert.ok(group.includes('github.event.pull_request.head.repo.full_name || github.repository'));
+  assert.ok(group.includes('github.event.pull_request.head.ref || github.ref'));
+  assert.notEqual(group, readFileSync(join(__dirname, '../workflows/entrypoint.yaml'), 'utf8').match(/^  group: (.*)$/m)[1]);
+  assert.match(readFileSync(join(__dirname, '../workflows/ci-scope-check.yml'), 'utf8'), /'\.github\/workflows\/python-sdk.yml'/);
 });

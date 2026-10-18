@@ -314,6 +314,14 @@ func (s *service) fenceViewMetadataCatalog(
 }
 
 func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool {
+	// AttachCause adds a diagnostic leaf to an expired refresh. It must not
+	// turn an eligible deadline into an independent failure. Keep every real
+	// error branch subject to the existing retry policy.
+	refreshDiagnostic := upgradeOwnerActive && errors.Is(err, context.DeadlineExceeded)
+	return classifyViewMetadataCatalogFenceError(err, upgradeOwnerActive, refreshDiagnostic)
+}
+
+func classifyViewMetadataCatalogFenceError(err error, upgradeOwnerActive, refreshDiagnostic bool) bool {
 	if err == nil {
 		return false
 	}
@@ -323,7 +331,7 @@ func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool 
 			if child == nil {
 				continue
 			}
-			if !viewMetadataCatalogFenceRetryable(child, upgradeOwnerActive) {
+			if !classifyViewMetadataCatalogFenceError(child, upgradeOwnerActive, refreshDiagnostic) {
 				return false
 			}
 			retryable = true
@@ -332,8 +340,11 @@ func viewMetadataCatalogFenceRetryable(err error, upgradeOwnerActive bool) bool 
 	}
 	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
 		if child := wrapped.Unwrap(); child != nil {
-			return viewMetadataCatalogFenceRetryable(child, upgradeOwnerActive)
+			return classifyViewMetadataCatalogFenceError(child, upgradeOwnerActive, refreshDiagnostic)
 		}
+	}
+	if errors.Is(err, moerr.CauseRefresh) {
+		return refreshDiagnostic
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return upgradeOwnerActive

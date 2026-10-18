@@ -20,21 +20,57 @@ import (
 	"math/rand"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"testing/quick"
+	"time"
 	"unicode/utf8"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/constant"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
+
+// The production lifecycle hook runs against a real backExec process. Unit
+// tests use a SQL-recording executor, so preserve the sequencing point without
+// requiring an engine-backed process.
+func (bt *backgroundExecTest) execWithProcessHook(
+	ctx context.Context,
+	sql string,
+	_ backExecProcessHook,
+) error {
+	return bt.Exec(ctx, sql)
+}
+
+// ruleCacheLoadBarrierExec pauses after selecting the catalog result and
+// before returning it to loadRuleCache. This makes the invalidation/load
+// interleaving deterministic without changing the production loader.
+type ruleCacheLoadBarrierExec struct {
+	*backgroundExecTest
+	entered chan struct{}
+	resume  chan struct{}
+	once    sync.Once
+}
+
+func (bt *ruleCacheLoadBarrierExec) GetExecResultSet() []interface{} {
+	result := bt.backgroundExecTest.GetExecResultSet()
+	if strings.Contains(bt.currentSql, "mo_role_rule") {
+		bt.once.Do(func() {
+			close(bt.entered)
+			<-bt.resume
+		})
+	}
+	return result
+}
 
 // Feature: role-rewrite-rules, Property 9: Hint 序列化往返一致性
 // Validates: Requirements 8.1, 8.2, 8.3, 8.4
@@ -358,6 +394,83 @@ func TestProperty10_CacheInvalidation(t *testing.T) {
 	}
 }
 
+func TestInvalidateRoleRuleCachesAcrossSessions(t *testing.T) {
+	rm := &RoutineManager{sessionManager: queryservice.NewSessionManager()}
+	newSession := func(accountID uint32) *Session {
+		ses := &Session{
+			feSessionImpl: feSessionImpl{
+				uuid:   uuid.New(),
+				tenant: &TenantInfo{Tenant: fmt.Sprint(accountID), TenantID: accountID},
+			},
+			ruleCache: map[string]string{"db.t": "select 1 from db.t"},
+			prepareStmts: map[string]*PrepareStmt{
+				"old": {Name: "old", rewritePolicyCaptured: true, rewritePolicyEnabled: true},
+			},
+		}
+		seedRewriteRuleCacheProofForTest(ses)
+		ses.setRoutineManager(rm)
+		rm.sessionManager.AddSession(ses)
+		return ses
+	}
+
+	mutatingSession := newSession(0)
+	otherSession := newSession(0)
+	unrelatedSession := newSession(1)
+	invalidateRoleRuleCaches(mutatingSession)
+
+	mutatingSession.ruleCacheMu.RLock()
+	require.Nil(t, mutatingSession.ruleCache)
+	mutatingSession.ruleCacheMu.RUnlock()
+	otherSession.ruleCacheMu.RLock()
+	require.Nil(t, otherSession.ruleCache)
+	otherSession.ruleCacheMu.RUnlock()
+	for _, ses := range []*Session{mutatingSession, otherSession} {
+		_, err := ses.GetPrepareStmt(context.Background(), "old")
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+		require.EqualValues(t, 1, ses.rewritePolicyGeneration, "invalidate each session exactly once")
+	}
+	_, err := unrelatedSession.GetPrepareStmt(context.Background(), "old")
+	require.NoError(t, err, "role metadata is account-local, even when role IDs coincide")
+	require.NotNil(t, unrelatedSession.ruleCache)
+	require.Zero(t, unrelatedSession.rewritePolicyGeneration)
+}
+
+func TestInvalidateRoleRuleCachesConcurrentAccounts(t *testing.T) {
+	rm := &RoutineManager{sessionManager: queryservice.NewSessionManager()}
+	sessions := make([]*Session, 0, 3)
+	for _, id := range []uint32{0, 1, 2} {
+		ses := &Session{feSessionImpl: feSessionImpl{
+			uuid: uuid.New(), tenant: &TenantInfo{Tenant: fmt.Sprint(id), TenantID: id},
+		}}
+		ses.setRoutineManager(rm)
+		rm.sessionManager.AddSession(ses)
+		sessions = append(sessions, ses)
+	}
+	// SessionManager snapshots can outlive removal/close. A nil tenant must
+	// not be mistaken for the sys account (ID zero).
+	closed := &Session{feSessionImpl: feSessionImpl{uuid: uuid.New()}}
+	rm.sessionManager.AddSession(closed)
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for _, ses := range sessions[:2] {
+		wg.Add(1)
+		go func(ses *Session) {
+			defer wg.Done()
+			<-start
+			for range 20 {
+				invalidateRoleRuleCaches(ses)
+			}
+		}(ses)
+	}
+	close(start)
+	wg.Wait()
+	for _, ses := range sessions[:2] {
+		require.EqualValues(t, 20, ses.rewritePolicyGeneration)
+	}
+	require.Zero(t, sessions[2].rewritePolicyGeneration)
+	require.Zero(t, closed.rewritePolicyGeneration)
+}
+
 // TestConcurrentRuleCacheAccess tests concurrent access to rule cache
 // to ensure thread safety with the new locking mechanism.
 func TestConcurrentRuleCacheAccess(t *testing.T) {
@@ -396,7 +509,10 @@ func TestConcurrentRuleCacheAccess(t *testing.T) {
 			for j := 0; j < numIterations; j++ {
 				ses.ruleCacheMu.RLock()
 				_ = ses.ruleCache // Just read the cache
+				generation := ses.rewritePolicyGeneration
 				ses.ruleCacheMu.RUnlock()
+				ses.validatePreparedStatementsAfterRewritePolicyRefresh(
+					&rewritePolicySnapshot{generation: generation}, nil)
 			}
 		}()
 	}
@@ -414,6 +530,95 @@ func TestConcurrentRuleCacheAccess(t *testing.T) {
 	if finalCache != nil {
 		t.Errorf("Expected cache to be nil after concurrent invalidations, got: %v", finalCache)
 	}
+}
+
+func TestCaptureRewritePolicyReloadsAfterInFlightInvalidation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] =
+		newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	ruleSQL := getSqlForRoleRulesOfRoleIDs([]int64{10})
+	oldRules := newMrsForRewriteRules([][]interface{}{
+		{10, "db.t", "select * from db.t where version = 1"},
+	})
+	newRules := newMrsForRewriteRules([][]interface{}{
+		{10, "db.t", "select * from db.t where version = 2"},
+	})
+	bh.sql2result[ruleSQL] = oldRules
+	barrier := &ruleCacheLoadBarrierExec{
+		backgroundExecTest: bh,
+		entered:            make(chan struct{}),
+		resume:             make(chan struct{}),
+	}
+	stub := gostub.StubFunc(&NewBackgroundExec, barrier)
+	defer stub.Reset()
+
+	ses := newSes(&privilege{}, ctrl)
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          "test_rule_user",
+		DefaultRole:   "role10",
+		TenantID:      sysAccountID,
+		UserID:        42,
+		DefaultRoleID: 10,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	type captureResult struct {
+		policy *rewritePolicySnapshot
+		err    error
+	}
+	resultCh := make(chan captureResult, 1)
+	go func() {
+		policy, err := captureRewritePolicy(ctx, ses)
+		resultCh <- captureResult{policy: policy, err: err}
+	}()
+
+	select {
+	case <-barrier.entered:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for the loader to read the old catalog result")
+	}
+
+	// The old result has been selected but has not been returned to the
+	// loader. Complete invalidation first, then let the in-flight load resume.
+	ses.invalidateRoleRuleCache(sysAccountID)
+	bh.sql2result[ruleSQL] = newRules
+	close(barrier.resume)
+
+	var captured captureResult
+	select {
+	case captured = <-resultCh:
+	case <-ctx.Done():
+		t.Fatal("timed out waiting for cache reload")
+	}
+	require.NoError(t, captured.err)
+	require.Equal(t, "select * from db.t where version = 2", captured.policy.roleRules["db.t"])
+	require.Equal(t, ses.rewritePolicyGeneration, captured.policy.generation)
+
+	// The stale in-flight result must not have been published. The next
+	// request uses the fresh cache without another catalog read.
+	ruleQueryCount := 0
+	for _, sql := range bh.executedSQLs {
+		if sql == ruleSQL {
+			ruleQueryCount++
+		}
+	}
+	require.Equal(t, 2, ruleQueryCount)
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+	require.Equal(t, "select * from db.t where version = 2", policy.roleRules["db.t"])
+	ruleQueryCountAfter := 0
+	for _, sql := range bh.executedSQLs {
+		if sql == ruleSQL {
+			ruleQueryCountAfter++
+		}
+	}
+	require.Equal(t, ruleQueryCount, ruleQueryCountAfter)
 }
 
 // TestRuleCacheDoubleCheckLocking tests the double-check locking pattern
@@ -512,6 +717,43 @@ func TestLoadRuleCacheReturnsParseErrorForConflictingRules(t *testing.T) {
 	_, err := loadRuleCache(context.Background(), ses)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "failed to parse rewrite rule")
+}
+
+func TestCaptureRewritePolicyValidatesExistingPreparedHandlesOnReload(t *testing.T) {
+	for _, mandatory := range []bool{false, true} {
+		t.Run(fmt.Sprintf("mandatory=%v", mandatory), func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			bh := &backgroundExecTest{}
+			bh.init()
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+			ses := newSes(&privilege{}, ctrl)
+			t.Cleanup(ses.Close)
+			ses.SetTenantInfo(&TenantInfo{
+				Tenant: sysAccountName, TenantID: sysAccountID, UserID: 42, DefaultRoleID: 10,
+			})
+			ses.rewriteEnabled.Store(false)
+			old := &PrepareStmt{Name: "old", rewritePolicyCaptured: true}
+			ses.prepareStmts = map[string]*PrepareStmt{"old": old}
+			ses.rewritePolicyGeneration = 1
+			bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+			rules := [][]interface{}{}
+			if mandatory {
+				rules = append(rules, []interface{}{10, "db.t", "select id from db.t where tenant = 1"})
+			}
+			bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules(rules)
+			policy, err := captureRewritePolicy(context.Background(), ses)
+			require.NoError(t, err)
+			require.Equal(t, mandatory, policy.enabled)
+			require.Equal(t, mandatory, old.rewritePolicyInvalidated.Load())
+			_, err = ses.GetPrepareStmt(context.Background(), "old")
+			if mandatory {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNeedReprepare))
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }
 
 func TestRewriteSQLPropagatesRuleCacheLoadError(t *testing.T) {
@@ -629,6 +871,29 @@ func TestRewriteSQLMaterializesPolicyPerStatement(t *testing.T) {
 		require.NoError(t, err)
 		return chains["db.t"]
 	}
+	t.Run("executable comment statements retain rewrite and source boundaries", func(t *testing.T) {
+		ses := newSession(t, "select id from db.t where id = 1", "")
+		defer ses.Close()
+		sql := "/*!50000 select * from db.t; /* save_result */ select * from db.t */"
+		rewritten, err := rewriteSQL(ctx, ses, sql)
+		require.NoError(t, err)
+		stmts, err := parsers.Parse(ctx, dialect.MYSQL, rewritten, 1)
+		require.NoError(t, err)
+		defer freeStatements(stmts)
+		require.Len(t, stmts, 2)
+		require.NoError(t, parsers.AddRewriteHints(ctx, stmts, rewritten))
+		fragments, sources, err := schedulingSQLByStatementWithSQLMode(ctx, rewritten, "", false)
+		require.NoError(t, err)
+		require.Len(t, fragments, 2)
+		require.Equal(t, []string{constant.ExternSql, constant.CloudUserSql}, sources)
+		for _, fragment := range fragments {
+			require.Equal(t, []string{"select id from db.t where id = 1"}, decodeChain(t, fragment))
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, fragment, 1)
+			require.NoError(t, err)
+			stmt.Free()
+		}
+	})
+
 	t.Run("source indexes survive materialization", func(t *testing.T) {
 		ses := newSession(t, "select id from db.t where id = 1", "")
 		defer ses.Close()
@@ -873,6 +1138,21 @@ func TestRewritePolicySnapshotUsesCurrentSQLModeAndFrozenEnablement(t *testing.T
 		require.NoError(t, err)
 		require.Equal(t, map[string]string{"src": "dst"}, remapDb)
 	}
+}
+
+func TestDisabledRewritePolicySnapshotCapturesGeneration(t *testing.T) {
+	ctx := context.Background()
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	ses.rewriteEnabled.Store(false)
+	ses.ruleCache = map[string]string{}
+	ses.bumpRewritePolicyGeneration()
+
+	policy, err := captureRewritePolicy(ctx, ses)
+	require.NoError(t, err)
+	require.True(t, policy.captured)
+	require.False(t, policy.enabled)
+	require.Equal(t, uint64(1), policy.generation)
 }
 
 func TestRewriteSQLFromMaterializedPolicy(t *testing.T) {
@@ -1416,7 +1696,7 @@ func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) 
 	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
 	defer bhStub.Reset()
 
-	ctx := context.Background()
+	ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
 	ses := newSes(&privilege{}, ctrl)
 	ses.ruleCache = map[string]string{"db1.t1": "select old_a from db1.t1"}
 	execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
@@ -1424,6 +1704,9 @@ func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) 
 	roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
 	require.NoError(t, err)
 	bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+	targetSQL, err := getSqlForCheckDatabaseTable(ctx, "db1", "t1")
+	require.NoError(t, err)
+	bh.sql2result[targetSQL] = newMrsForCheckDatabaseTable([][]interface{}{{int64(100)}})
 
 	stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from db1.t1", "db1", "t1")
 	require.NoError(t, handleAlterRoleAddRule(ses, execCtx, stmt))
@@ -1449,6 +1732,57 @@ func TestHandleAlterRoleAddRuleWritesValidRuleAndInvalidatesCache(t *testing.T) 
 	ses.ruleCacheMu.RLock()
 	defer ses.ruleCacheMu.RUnlock()
 	require.Nil(t, ses.ruleCache)
+}
+
+func TestHandleAlterRoleRuleCommitFailuresPreserveCache(t *testing.T) {
+	for _, action := range []string{"add", "drop"} {
+		t.Run(action, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			bh := &backgroundExecTest{}
+			bh.init()
+			commitErr := fmt.Errorf("%s rule commit failed", action)
+			bh.sql2err["commit;"] = commitErr
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			ctx := context.WithValue(context.Background(), defines.TenantIDKey{}, uint32(0))
+			ses := newSes(&privilege{}, ctrl)
+			originalCache := map[string]string{"db1.t1": "select old_a from db1.t1"}
+			ses.ruleCache = originalCache
+			execCtx := &ExecCtx{reqCtx: ctx, ses: ses}
+
+			roleSQL, err := getSqlForRoleIdOfRole(ctx, "role10")
+			require.NoError(t, err)
+			bh.sql2result[roleSQL] = newMrsForRoleIdOfRole([][]interface{}{{int64(10)}})
+
+			var runErr error
+			switch action {
+			case "add":
+				targetSQL, getErr := getSqlForCheckDatabaseTable(ctx, "db1", "t1")
+				require.NoError(t, getErr)
+				bh.sql2result[targetSQL] = newMrsForCheckDatabaseTable([][]interface{}{{int64(100)}})
+				stmt := tree.NewAlterRoleAddRule("role10", "db1.t1", "select a from db1.t1", "db1", "t1")
+				runErr = handleAlterRoleAddRule(ses, execCtx, stmt)
+			case "drop":
+				ruleSQL := fmt.Sprintf(
+					"select `rule` from mo_catalog.mo_role_rule where role_id = 10 and rule_name = %s",
+					escapeSQLString("db1.t1"),
+				)
+				bh.sql2result[ruleSQL] = newMrsForRewriteRules([][]interface{}{{
+					int64(10), "db1.t1", "select a from db1.t1",
+				}})
+				stmt := tree.NewAlterRoleDropRule("role10", "db1", "t1")
+				runErr = handleAlterRoleDropRule(ses, execCtx, stmt)
+			}
+
+			require.ErrorIs(t, runErr, commitErr)
+			require.Contains(t, bh.executedSQLs, "commit;")
+			require.Contains(t, bh.executedSQLs, "rollback;")
+			require.Equal(t, originalCache, ses.ruleCache)
+		})
+	}
 }
 
 func TestHandleAlterRoleAddRuleRejectsNonSelectRuleSQLBeforeWriting(t *testing.T) {
@@ -1594,6 +1928,49 @@ func TestMergeRewriteRules(t *testing.T) {
 
 	_, err = mergeRewriteRules(ctx, "select a from", "select a from db1.t1")
 	require.Error(t, err)
+}
+
+func TestMergeRewriteRulesCollatedProjection(t *testing.T) {
+	for _, tc := range []struct {
+		projection string
+		mergeable  bool
+	}{
+		{"a, age", true},
+		{"a, cast(age as char) as age", true},
+		{"a, age collate utf8mb4_bin as age", true},
+		{"a, cast(age as char) collate utf8mb4_bin as age", true},
+		{"a, (age collate utf8mb4_bin) collate utf8mb4_bin as age", true},
+		{"sum(age) collate utf8mb4_bin as age", false},
+		{"row_number() over () collate utf8mb4_bin as age", false},
+		{"(select age from db1.t2 limit 1) collate utf8mb4_bin as age", false},
+		{"@@sql_mode collate utf8mb4_bin as age", false},
+	} {
+		t.Run(tc.projection, func(t *testing.T) {
+			left := "select " + tc.projection + " from db1.t1 where a = 1"
+			right := "select " + tc.projection + " from db1.t1 where a = 2"
+			merged, err := mergeRewriteRules(t.Context(), left, right)
+			require.NoError(t, err)
+			if !tc.mergeable {
+				require.Equal(t, right, merged)
+				return
+			}
+			require.Contains(t, merged, "where (a = 1) or (a = 2)")
+			original, err := parsers.ParseOne(t.Context(), dialect.MYSQL, left, 1)
+			require.NoError(t, err)
+			defer original.Free()
+			combined, err := parsers.ParseOne(t.Context(), dialect.MYSQL, merged, 1)
+			require.NoError(t, err)
+			defer combined.Free()
+			require.Equal(t,
+				tree.String(&original.(*tree.Select).Select.(*tree.SelectClause).Exprs, dialect.MYSQL),
+				tree.String(&combined.(*tree.Select).Select.(*tree.SelectClause).Exprs, dialect.MYSQL))
+		})
+	}
+	left := "select age collate utf8mb4_bin as age from db1.t1 where a = 1"
+	right := "select age collate utf8mb4_general_ci as age from db1.t1 where a = 2"
+	merged, err := mergeRewriteRules(t.Context(), left, right)
+	require.NoError(t, err)
+	require.Equal(t, right, merged)
 }
 
 func TestMergeRewriteRulesFallbackWhenEitherSideIsUnmergeable(t *testing.T) {

@@ -98,6 +98,7 @@ func TestTestingTCPOnlyPreservesCallerOverrideOnValidationError(t *testing.T) {
 
 func TestTestingTCPOnlySnapshotAppliesToAdditionalCN(t *testing.T) {
 	t.Setenv(testClusterTCPOnlyEnv, "1")
+	require.NoError(t, CloseBaseClusterTests())
 	require.NoError(t, CloseSingleCNBaseClusterTests())
 	c, err := StartTestCluster(WithCNCount(1))
 	if c != nil {

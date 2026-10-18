@@ -17,7 +17,6 @@ package updates
 import (
 	"context"
 	"testing"
-	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -41,36 +40,38 @@ func TestMutationControllerAppend(t *testing.T) {
 	obj, _ := table.CreateObject(nil, &objectio.CreateObjOpt{Stats: stats}, nil)
 	mc := NewAppendMVCCHandle(obj)
 
-	nodeCnt := 10000
-	rowsPerNode := uint32(5)
-	//ts := uint64(2)
-	//ts = 4
+	// Cross the 64-bit and 128-bit hole-bitmap boundaries while checking
+	// every visible prefix. More nodes repeat the same quadratic scan.
+	const nodeCnt = 26
+	const rowsPerNode = uint32(5)
 
 	ts := types.NextGlobalTsForTest()
 	ts = ts.Next()
 	ts = ts.Next()
-	//queries := make([]uint64, 0)
-	//queries = append(queries, ts-1)
-	queries := make([]types.TS, 0)
+	row, visible, holes, err := mc.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(ts.Prev()))
+	require.NoError(t, err)
+	require.False(t, visible)
+	require.Zero(t, row)
+	require.True(t, holes.IsEmpty())
+	queries := make([]types.TS, 0, nodeCnt+1)
 	queries = append(queries, ts.Prev())
 
 	for i := 0; i < nodeCnt; i++ {
 		txn := mockTxn()
 		txn.CommitTS = ts
 		txn.PrepareTS = ts
-		node, _ := mc.AddAppendNodeLocked(txn, rowsPerNode*uint32(i), rowsPerNode*(uint32(i)+1))
-		err := node.ApplyCommit(txn.ID)
-		assert.Nil(t, err)
-		//queries = append(queries, ts+1)
+		node, created := mc.AddAppendNodeLocked(txn, rowsPerNode*uint32(i), rowsPerNode*(uint32(i)+1))
+		require.True(t, created)
+		require.NoError(t, node.ApplyCommit(txn.ID))
 		queries = append(queries, ts.Next())
-		//ts += 2
 		ts = ts.Next()
 		ts = ts.Next()
 	}
 
-	st := time.Now()
 	for i, qts := range queries {
-		row, ok, _, _ := mc.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(qts))
+		row, ok, holes, err := mc.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(qts))
+		require.NoError(t, err)
+		require.True(t, holes.IsEmpty())
 		if i == 0 {
 			assert.False(t, ok)
 		} else {
@@ -78,7 +79,6 @@ func TestMutationControllerAppend(t *testing.T) {
 			assert.Equal(t, uint32(i)*rowsPerNode, row)
 		}
 	}
-	t.Logf("%s -- %d ops", time.Since(st), len(queries))
 }
 
 // AppendNode Start Prepare End Aborted

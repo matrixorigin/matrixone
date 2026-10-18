@@ -1,0 +1,656 @@
+drop database if exists window_lag_lead_default_type;
+create database window_lag_lead_default_type;
+use window_lag_lead_default_type;
+create table wdefault (id int primary key, s varchar(10), v int);
+insert into wdefault values (1, 'a', 100), (2, 'b', 10), (3, null, 20);
+select id,
+lag(s, 1, 'long default') over (order by id) as lg,
+lead(s, 1, 'long default') over (order by id) as ld
+from wdefault order by id;
+➤ id[4,32,0]  ¦  lg[12,12,0]  ¦  ld[12,12,0]  𝄀
+1  ¦  long default  ¦  b  𝄀
+2  ¦  a  ¦  null  𝄀
+3  ¦  b  ¦  long default
+select id,
+lag(v, 1, 0.5) over (order by id) as lv,
+lead(v, 1, 0.5) over (order by id) as vd
+from wdefault order by id;
+➤ id[4,32,0]  ¦  lv[3,11,1]  ¦  vd[3,11,1]  𝄀
+1  ¦  0.5  ¦  10.0  𝄀
+2  ¦  100.0  ¦  20.0  𝄀
+3  ¦  10.0  ¦  0.5
+create table wcopy as
+select id, lag(s, 1, 'long default') over (order by id) as lg from wdefault;
+show columns from wcopy;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+lg  ¦  varchar(12)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wcopy order by id;
+➤ id[4,32,0]  ¦  lg[12,12,0]  𝄀
+1  ¦  long default  𝄀
+2  ¦  a  𝄀
+3  ¦  b
+create view wv as
+select id, lag(v, 1, 0.5) over (order by id) as lv from wdefault;
+show columns from wv;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+lv  ¦  decimal(11,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wv order by id;
+➤ id[4,32,0]  ¦  lv[3,11,1]  𝄀
+1  ¦  0.5  𝄀
+2  ¦  100.0  𝄀
+3  ¦  10.0
+select id, lag(s, 1, null) over (order by id) as lg from wdefault order by id;
+➤ id[4,32,0]  ¦  lg[12,10,0]  𝄀
+1  ¦  null  𝄀
+2  ¦  a  𝄀
+3  ¦  b
+select id, lag(s, 1, 'def') over (order by id) as lg from wdefault order by id;
+➤ id[4,32,0]  ¦  lg[12,10,0]  𝄀
+1  ¦  def  𝄀
+2  ¦  a  𝄀
+3  ¦  b
+select id, lag(v, 1, -1) over (order by id) as lv from wdefault order by id;
+➤ id[4,32,0]  ¦  lv[-5,64,0]  𝄀
+1  ¦  -1  𝄀
+2  ¦  100  𝄀
+3  ¦  10
+prepare st_lag_default from 'select id, lag(s, 1, ?) over (order by id) as lg from wdefault order by id';
+set @short_default = 'x';
+set @long_default = 'a very long default value';
+execute st_lag_default using @short_default;
+➤ id[4,32,0]  ¦  lg[12,65535,0]  𝄀
+1  ¦  x  𝄀
+2  ¦  a  𝄀
+3  ¦  b
+execute st_lag_default using @long_default;
+➤ id[4,32,0]  ¦  lg[12,65535,0]  𝄀
+1  ¦  a very long default value  𝄀
+2  ¦  a  𝄀
+3  ¦  b
+deallocate prepare st_lag_default;
+create table wtext (v mediumtext, j json);
+insert into wtext values (repeat('a', 65536), '{}');
+select length(v) as original_length,
+length(lag(v, 0) over ()) as control_length,
+length(lag(v, 0, 0) over ()) as lag_length,
+length(lead(v, 0, 0) over ()) as lead_length from wtext;
+➤ original_length[-5,64,0]  ¦  control_length[-5,64,0]  ¦  lag_length[-5,64,0]  ¦  lead_length[-5,64,0]  𝄀
+65536  ¦  65536  ¦  65536  ¦  65536
+select length(lag(v, 1, 0) over ()) as default_length from wtext;
+➤ default_length[-5,64,0]  𝄀
+1
+select length(lag(0, 1, v) over ()) as text_default_length from wtext;
+➤ text_default_length[-5,64,0]  𝄀
+65536
+set @wdefault_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wtext_json_strict as select lag(v,0,j) over () as lg, lead(v,0,j) over () as ld from wtext;
+show create table wtext_json_strict;
+➤ Table[12,17,0]  ¦  Create Table[12,95,0]  𝄀
+wtext_json_strict  ¦  CREATE TABLE `wtext_json_strict` (
+  `lg` longtext DEFAULT NULL,
+  `ld` longtext DEFAULT NULL
+)
+select length(lg) as lg_length, length(ld) as ld_length,
+lg = repeat('a',65536) as lg_equal, ld = repeat('a',65536) as ld_equal from wtext_json_strict;
+➤ lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_equal[-7,1,0]  ¦  ld_equal[-7,1,0]  𝄀
+65536  ¦  65536  ¦  1  ¦  1
+set session sql_mode = '';
+create table wtext_json_permissive as select lag(v,0,j) over () as lg, lead(v,0,j) over () as ld from wtext;
+show create table wtext_json_permissive;
+➤ Table[12,21,0]  ¦  Create Table[12,99,0]  𝄀
+wtext_json_permissive  ¦  CREATE TABLE `wtext_json_permissive` (
+  `lg` longtext DEFAULT NULL,
+  `ld` longtext DEFAULT NULL
+)
+select length(lg) as lg_length, length(ld) as ld_length,
+lg = repeat('a',65536) as lg_equal, ld = repeat('a',65536) as ld_equal from wtext_json_permissive;
+➤ lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_equal[-7,1,0]  ¦  ld_equal[-7,1,0]  𝄀
+65536  ¦  65536  ¦  1  ¦  1
+create view wtext_json_view as select lag(v,0,j) over () as lg, lead(v,0,j) over () as ld from wtext;
+show columns from wtext_json_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+lg  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦  
+select length(lg) as lg_length, length(ld) as ld_length from wtext_json_view;
+➤ lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  𝄀
+65536  ¦  65536
+set session sql_mode = @wdefault_sql_mode;
+select lag(42,0,true) over () as lg, lead(42,0,false) over () as ld;
+➤ lg[-5,64,0]  ¦  ld[-5,64,0]  𝄀
+42  ¦  42
+select lag(cast(42.5 as double),0,true) over () as lg,
+lead(cast(42.5 as float),0,false) over () as ld;
+➤ lg[8,53,31]  ¦  ld[7,23,31]  𝄀
+42.5  ¦  42.5
+select lag(42,1,true) over () as lg, lead(42,1,false) over () as ld;
+➤ lg[-5,64,0]  ¦  ld[-5,64,0]  𝄀
+1  ¦  0
+select lag(true,0,42) over () as lg, lead(false,1,42) over () as ld;
+➤ lg[-5,64,0]  ¦  ld[-5,64,0]  𝄀
+1  ¦  42
+select lag(cast(0.1 as decimal(2,2)),1,true) over () as lg,
+lead(cast(0.1 as decimal(65,65)),0,false) over () as ld;
+➤ lg[3,3,2]  ¦  ld[3,65,65]  𝄀
+1.00  ¦  0.10000000000000000000000000000000000000000000000000000000000000000
+select id, lag(v,0,v>0) over (order by id) as numeric_source,
+lead(v,1,v<10) over (order by id) as bool_default,
+lag(cast(0.1 as decimal(2,2)),1,v>0) over (order by id) as decimal_bool_default,
+lag(v>0,1,42) over (order by id) as bool_source from wdefault order by id;
+➤ id[4,32,0]  ¦  numeric_source[4,32,0]  ¦  bool_default[4,32,0]  ¦  decimal_bool_default[3,3,2]  ¦  bool_source[-5,64,0]  𝄀
+1  ¦  100  ¦  10  ¦  1.00  ¦  42  𝄀
+2  ¦  10  ¦  20  ¦  0.10  ¦  1  𝄀
+3  ¦  20  ¦  0  ¦  0.10  ¦  1
+create table wbool_copy as select lag(42,0,true) over () as lg,
+lead(cast(42.5 as double),0,false) over () as ld;
+show columns from wbool_copy;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+lg  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wbool_copy;
+➤ lg[-5,64,0]  ¦  ld[8,53,31]  𝄀
+42  ¦  42.5
+create view wbool_view as select lag(42,0,true) over () as lg,
+lead(cast(42.5 as double),0,false) over () as ld;
+show columns from wbool_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+lg  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  double  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wbool_view;
+➤ lg[-5,64,0]  ¦  ld[8,53,31]  𝄀
+42  ¦  42.5
+select lag(7,0,0.5) over () as num, lag(7,0,'0.5') over () as str;
+➤ num[3,20,1]  ¦  str[12,3,0]  𝄀
+7.0  ¦  7
+select lag(7,0,'0.5') over () as str, lag(7,0,0.5) over () as num;
+➤ str[12,3,0]  ¦  num[3,20,1]  𝄀
+7  ¦  7.0
+select lag(7,0,0.5) over () as num;
+➤ num[3,20,1]  𝄀
+7.0
+select lag(7,0,'0.5') over () as str;
+➤ str[12,3,0]  𝄀
+7
+select lead(7,0,0.5) over () as num, lead(7,0,'0.5') over () as str;
+➤ num[3,20,1]  ¦  str[12,3,0]  𝄀
+7.0  ¦  7
+select lead(7,0,'0.5') over () as str, lead(7,0,0.5) over () as num;
+➤ str[12,3,0]  ¦  num[3,20,1]  𝄀
+7  ¦  7.0
+select lead(7,0,0.5) over () as num;
+➤ num[3,20,1]  𝄀
+7.0
+select lead(7,0,'0.5') over () as str;
+➤ str[12,3,0]  𝄀
+7
+select length(lag(7,0,0.5) over ()) as num_length,
+length(lag(7,0,'0.5') over ()) as str_length;
+➤ num_length[-5,64,0]  ¦  str_length[-5,64,0]  𝄀
+3  ¦  1
+create table wdecimal as select lag(cast(1 as decimal(2,1)), 1, 1000) over () as v;
+show columns from wdecimal;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+v  ¦  decimal(5,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v from wdecimal;
+➤ v[3,5,1]  𝄀
+1000.0
+create table wdecimal_column as
+select id, lag(cast(1 as decimal(2,1)), 1, v) over (order by id) as d from wdefault;
+show columns from wdecimal_column;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+d  ¦  decimal(11,1)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wdecimal_column order by id;
+➤ id[4,32,0]  ¦  d[3,11,1]  𝄀
+1  ¦  100.0  𝄀
+2  ¦  1.0  𝄀
+3  ¦  1.0
+select lag(cast(1 as decimal(38,30)), 1, 999999999999) over () as lg,
+lead(cast(1 as decimal(38,30)), 1, 999999999999) over () as ld;
+➤ lg[3,42,30]  ¦  ld[3,42,30]  𝄀
+999999999999.000000000000000000000000000000  ¦  999999999999.000000000000000000000000000000
+select lag(cast(1 as decimal(38,30)), 0, 999999999999) over () as source_value;
+➤ source_value[3,42,30]  𝄀
+1.000000000000000000000000000000
+create table wblob (v mediumblob, wide mediumblob, c char(1));
+insert into wblob values (unhex('610062ff'), repeat(unhex('610062ff'),16384), 'x');
+create table wblob_copy as select lag(v,0,0) over () as lg, lead(v,0,0) over () as ld from wblob;
+show create table wblob_copy;
+➤ Table[12,10,0]  ¦  Create Table[12,92,0]  𝄀
+wblob_copy  ¦  CREATE TABLE `wblob_copy` (
+  `lg` mediumblob DEFAULT NULL,
+  `ld` mediumblob DEFAULT NULL
+)
+select hex(lg) as lg, hex(ld) as ld from wblob_copy;
+➤ lg[-1,16383,0]  ¦  ld[-1,16383,0]  𝄀
+610062FF  ¦  610062FF
+select hex(lag(v,1,0) over ()) as lg, hex(lead(v,1,0) over ()) as ld from wblob;
+➤ lg[-1,16383,0]  ¦  ld[-1,16383,0]  𝄀
+30  ¦  30
+create view wblob_view as select lag(v,0,0) over () as v from wblob;
+show columns from wblob_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+v  ¦  mediumblob  ¦  YES  ¦    ¦  null  ¦    ¦  
+select hex(v) as v from wblob_view;
+➤ v[-1,16383,0]  𝄀
+610062FF
+select length(wide) as original_length, length(lag(wide,0) over ()) as control_length,
+length(lag(wide,0,c) over ()) as lg_length, length(lead(wide,0,c) over ()) as ld_length,
+lag(wide,0,c) over () = wide as lg_equal, lead(wide,0,c) over () = wide as ld_equal from wblob;
+➤ original_length[-5,64,0]  ¦  control_length[-5,64,0]  ¦  lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_equal[-7,1,0]  ¦  ld_equal[-7,1,0]  𝄀
+65536  ¦  65536  ¦  65536  ¦  65536  ¦  1  ¦  1
+select length(lag(c,1,wide) over ()) as lg_default_length,
+length(lead(c,1,wide) over ()) as ld_default_length from wblob;
+➤ lg_default_length[-5,64,0]  ¦  ld_default_length[-5,64,0]  𝄀
+65536  ¦  65536
+set @wblob_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wblob_char_copy as select lag(wide,0,c) over () as lg, lead(wide,0,c) over () as ld from wblob;
+show create table wblob_char_copy;
+➤ Table[12,15,0]  ¦  Create Table[12,97,0]  𝄀
+wblob_char_copy  ¦  CREATE TABLE `wblob_char_copy` (
+  `lg` mediumblob DEFAULT NULL,
+  `ld` mediumblob DEFAULT NULL
+)
+select length(lg) as lg_length, length(ld) as ld_length,
+lg = repeat(unhex('610062ff'),16384) as lg_equal,
+ld = repeat(unhex('610062ff'),16384) as ld_equal from wblob_char_copy;
+➤ lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_equal[-7,1,0]  ¦  ld_equal[-7,1,0]  𝄀
+65536  ¦  65536  ¦  1  ¦  1
+set session sql_mode = @wblob_sql_mode;
+create table wdecimal_max_zero as select lag(cast(0.1 as decimal(65,65)),0,0) over () as v;
+show create table wdecimal_max_zero;
+➤ Table[12,17,0]  ¦  Create Table[12,70,0]  𝄀
+wdecimal_max_zero  ¦  CREATE TABLE `wdecimal_max_zero` (
+  `v` decimal(65,65) DEFAULT NULL
+)
+select v from wdecimal_max_zero;
+➤ v[3,65,65]  𝄀
+0.10000000000000000000000000000000000000000000000000000000000000000
+select lag(cast(0.1 as decimal(65,65)),1,0) over () as lg,
+lead(cast(0.1 as decimal(65,65)),1,0) over () as ld;
+➤ lg[3,65,65]  ¦  ld[3,65,65]  𝄀
+0E-65  ¦  0E-65
+create table wdecimal_max_control as
+select lag(cast(0.1 as decimal(65,65)),0) over () as no_default,
+lag(cast(0.1 as decimal(65,65)),0,cast(0 as decimal(65,65))) over () as same_default;
+show create table wdecimal_max_control;
+➤ Table[12,20,0]  ¦  Create Table[12,128,0]  𝄀
+wdecimal_max_control  ¦  CREATE TABLE `wdecimal_max_control` (
+  `no_default` decimal(65,65) DEFAULT NULL,
+  `same_default` decimal(65,65) DEFAULT NULL
+)
+select * from wdecimal_max_control;
+➤ no_default[3,65,65]  ¦  same_default[3,65,65]  𝄀
+0.10000000000000000000000000000000000000000000000000000000000000000  ¦  0.10000000000000000000000000000000000000000000000000000000000000000
+create view wdecimal_max_view as select lead(cast(0.1 as decimal(65,65)),0,0) over () as v;
+show columns from wdecimal_max_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+v  ¦  decimal(65,65)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wdecimal_max_view;
+➤ v[3,65,65]  𝄀
+0.10000000000000000000000000000000000000000000000000000000000000000
+create table wjson (j json, d254 varchar(254), d255 varchar(255), d256 varchar(256));
+insert into wjson values (json_object('s', repeat('a',300)), '{}', '{}', '{}');
+select length(cast(j as char)) as original_length,
+length(cast(lag(j,0) over () as char)) as lag_control,
+length(cast(lead(j,0) over () as char)) as lead_control,
+length(cast(coalesce(j,d255) as char)) as coalesce_control,
+length(cast(lag(j,0,d254) over () as char)) as lag_254,
+length(cast(lag(j,0,d255) over () as char)) as lag_255,
+length(cast(lag(j,0,d256) over () as char)) as lag_256,
+length(cast(lead(j,0,d254) over () as char)) as lead_254,
+length(cast(lead(j,0,d255) over () as char)) as lead_255,
+length(cast(lead(j,0,d256) over () as char)) as lead_256 from wjson;
+➤ original_length[-5,64,0]  ¦  lag_control[-5,64,0]  ¦  lead_control[-5,64,0]  ¦  coalesce_control[-5,64,0]  ¦  lag_254[-5,64,0]  ¦  lag_255[-5,64,0]  ¦  lag_256[-5,64,0]  ¦  lead_254[-5,64,0]  ¦  lead_255[-5,64,0]  ¦  lead_256[-5,64,0]  𝄀
+309  ¦  309  ¦  309  ¦  309  ¦  309  ¦  309  ¦  309  ¦  309  ¦  309  ¦  309
+select cast(lag(j,0,d255) over () as char) = cast(j as char) as lag_equal,
+cast(lead(j,0,d255) over () as char) = cast(j as char) as lead_equal,
+json_valid(lag(j,0,d255) over ()) as lag_valid,
+json_valid(lead(j,0,d255) over ()) as lead_valid from wjson;
+➤ lag_equal[-7,1,0]  ¦  lead_equal[-7,1,0]  ¦  lag_valid[-7,1,0]  ¦  lead_valid[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+select lag(j,1,d255) over () as lg, lead(j,1,d255) over () as ld from wjson;
+➤ lg[-1,536870911,0]  ¦  ld[-1,536870911,0]  𝄀
+{}  ¦  {}
+select length(lag(d255,1,j) over ()) as lag_default_length,
+length(lead(d255,1,j) over ()) as lead_default_length,
+json_valid(lag(d255,1,j) over ()) as lag_default_valid,
+json_valid(lead(d255,1,j) over ()) as lead_default_valid from wjson;
+➤ lag_default_length[-5,64,0]  ¦  lead_default_length[-5,64,0]  ¦  lag_default_valid[-7,1,0]  ¦  lead_default_valid[-7,1,0]  𝄀
+309  ¦  309  ¦  1  ¦  1
+create table wjson_copy as select lag(j,0,d255) over () as lg, lead(j,0,d255) over () as ld from wjson;
+show create table wjson_copy;
+➤ Table[12,10,0]  ¦  Create Table[12,88,0]  𝄀
+wjson_copy  ¦  CREATE TABLE `wjson_copy` (
+  `lg` longtext DEFAULT NULL,
+  `ld` longtext DEFAULT NULL
+)
+select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_valid(ld) as ld_valid from wjson_copy;
+➤ lg[-5,64,0]  ¦  ld[-5,64,0]  ¦  lg_valid[-7,1,0]  ¦  ld_valid[-7,1,0]  𝄀
+309  ¦  309  ¦  1  ¦  1
+create view wjson_view as select lag(j,0,d255) over () as lg, lead(j,0,d255) over () as ld from wjson;
+show columns from wjson_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+lg  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦  
+select length(lg) as lg, length(ld) as ld, json_valid(lg) as lg_valid, json_valid(ld) as ld_valid from wjson_view;
+➤ lg[-5,64,0]  ¦  ld[-5,64,0]  ¦  lg_valid[-7,1,0]  ¦  ld_valid[-7,1,0]  𝄀
+309  ¦  309  ¦  1  ¦  1
+create table wbit (d decimal(5,2), b bit(3), u bit(64));
+insert into wbit values (12.34, 7, 18446744073709551615);
+select d as original_value, lag(d,0) over () as control_value,
+lag(d,0,b) over () as lg, lead(d,0,b) over () as ld from wbit;
+➤ original_value[3,5,2]  ¦  control_value[3,5,2]  ¦  lg[3,5,2]  ¦  ld[3,5,2]  𝄀
+12.34  ¦  12.34  ¦  12.34  ¦  12.34
+select lag(d,1,b) over () as bit_default, lead(d,1,u) over () as uint64_default,
+lag(b,0,d) over () as bit_source, lead(u,0,d) over () as uint64_source from wbit;
+➤ bit_default[3,5,2]  ¦  uint64_default[3,22,2]  ¦  bit_source[3,5,2]  ¦  uint64_source[3,22,2]  𝄀
+7.00  ¦  18446744073709551615.00  ¦  7.00  ¦  18446744073709551615.00
+create table wbit_copy as select lag(d,0,b) over () as d, lead(b,0,d) over () as b,
+lag(u,0,d) over () as u from wbit;
+show create table wbit_copy;
+➤ Table[12,9,0]  ¦  Create Table[12,127,0]  𝄀
+wbit_copy  ¦  CREATE TABLE `wbit_copy` (
+  `d` decimal(5,2) DEFAULT NULL,
+  `b` decimal(5,2) DEFAULT NULL,
+  `u` decimal(22,2) DEFAULT NULL
+)
+select * from wbit_copy;
+➤ d[3,5,2]  ¦  b[3,5,2]  ¦  u[3,22,2]  𝄀
+12.34  ¦  7.00  ¦  18446744073709551615.00
+create view wbit_view as select lag(d,0,b) over () as d, lead(b,0,d) over () as b from wbit;
+show columns from wbit_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+d  ¦  decimal(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  decimal(5,2)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wbit_view;
+➤ d[3,5,2]  ¦  b[3,5,2]  𝄀
+12.34  ¦  7.00
+create table wunicode (id int, v varchar(100), wide varchar(16383), t tinytext, b tinyblob);
+insert into wunicode values (1,repeat('汉',100),repeat('😀',16383),'x',x'78'),
+(2,repeat('😀',100),null,'x',x'78');
+select id, length(v) as original_length, length(lag(v,0) over (order by id)) as control_length,
+length(lag(v,0,t) over (order by id)) as lg, length(lead(v,0,t) over (order by id)) as ld,
+length(lag(v,0,b) over (order by id)) as blob_control,
+lag(v,0,t) over (order by id) = v as text_equal from wunicode order by id;
+➤ id[4,32,0]  ¦  original_length[-5,64,0]  ¦  control_length[-5,64,0]  ¦  lg[-5,64,0]  ¦  ld[-5,64,0]  ¦  blob_control[-5,64,0]  ¦  text_equal[-7,1,0]  𝄀
+1  ¦  300  ¦  300  ¦  300  ¦  300  ¦  300  ¦  1  𝄀
+2  ¦  400  ¦  400  ¦  400  ¦  400  ¦  400  ¦  1
+select id, length(lag(t,2,v) over (order by id)) as text_default,
+length(lead(b,2,v) over (order by id)) as blob_default from wunicode order by id;
+➤ id[4,32,0]  ¦  text_default[-5,64,0]  ¦  blob_default[-5,64,0]  𝄀
+1  ¦  300  ¦  300  𝄀
+2  ¦  400  ¦  400
+set @wunicode_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wunicode_strict as select id, lag(v,0,t) over (order by id) as v,
+lead(v,0,b) over (order by id) as b, lag(wide,0,t) over (order by id) as wide from wunicode;
+show create table wunicode_strict;
+➤ Table[12,15,0]  ¦  Create Table[12,140,0]  𝄀
+wunicode_strict  ¦  CREATE TABLE `wunicode_strict` (
+  `id` int DEFAULT NULL,
+  `v` text DEFAULT NULL,
+  `b` longblob DEFAULT NULL,
+  `wide` text DEFAULT NULL
+)
+select id,length(v) as v_length,length(b) as b_length,length(wide) as wide_length from wunicode_strict order by id;
+➤ id[4,32,0]  ¦  v_length[-5,64,0]  ¦  b_length[-5,64,0]  ¦  wide_length[-5,64,0]  𝄀
+1  ¦  300  ¦  300  ¦  65532  𝄀
+2  ¦  400  ¦  400  ¦  null
+set session sql_mode = '';
+create table wunicode_permissive as select id, lag(v,0,t) over (order by id) as v,
+lead(v,0,b) over (order by id) as b from wunicode;
+select id,length(v) as v_length,length(b) as b_length from wunicode_permissive order by id;
+➤ id[4,32,0]  ¦  v_length[-5,64,0]  ¦  b_length[-5,64,0]  𝄀
+1  ¦  300  ¦  300  𝄀
+2  ¦  400  ¦  400
+create view wunicode_view as select id, lag(v,0,t) over (order by id) as v from wunicode;
+show columns from wunicode_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+v  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  
+select id,length(v) as v_length from wunicode_view order by id;
+➤ id[4,32,0]  ¦  v_length[-5,64,0]  𝄀
+1  ¦  300  𝄀
+2  ¦  400
+set session sql_mode = @wunicode_sql_mode;
+create table wstring (v varchar(20), t text, b blob, ts text, bitval bit(64), flag bool, d date);
+insert into wstring values ('00123','123',x'610062FF','2024-01-02 03:04:05',18446744073709551615,true,'2024-01-01');
+select v, lag(v,0) over () as control_value, lag(v,0,bitval) over () as lg, lead(v,0,bitval) over () as ld from wstring;
+➤ v[12,20,0]  ¦  control_value[12,20,0]  ¦  lg[-1,536870911,0]  ¦  ld[-1,536870911,0]  𝄀
+00123  ¦  00123  ¦  00123  ¦  00123
+select t, lag(t,0,true) over () as lg, lead(t,0,false) over () as ld,
+hex(b) as original_blob, hex(lag(b,0,flag) over ()) as lg_blob, hex(lead(b,0,flag) over ()) as ld_blob from wstring;
+➤ t[-1,16383,0]  ¦  lg[-1,536870911,0]  ¦  ld[-1,536870911,0]  ¦  original_blob[-1,16383,0]  ¦  lg_blob[-1,16383,0]  ¦  ld_blob[-1,16383,0]  𝄀
+123  ¦  123  ¦  123  ¦  610062FF  ¦  610062FF  ¦  610062FF
+select ts, lag(ts,0,d) over () as lg, lead(ts,0,d) over () as ld from wstring;
+➤ ts[-1,16383,0]  ¦  lg[-1,536870911,0]  ¦  ld[-1,536870911,0]  𝄀
+2024-01-02 03:04:05  ¦  2024-01-02 03:04:05  ¦  2024-01-02 03:04:05
+select lag(v,1,bitval) over () as bit_default, lead(bitval,0,v) over () as bit_source,
+lag(bitval,1,v) over () as string_default, lead(flag,1,t) over () as text_default,
+hex(lag(flag,1,b) over ()) as blob_default, lead(d,1,ts) over () as temporal_text_default from wstring;
+➤ bit_default[-1,536870911,0]  ¦  bit_source[-1,536870911,0]  ¦  string_default[-1,536870911,0]  ¦  text_default[-1,536870911,0]  ¦  blob_default[-1,16383,0]  ¦  temporal_text_default[-1,536870911,0]  𝄀
+18446744073709551615  ¦  18446744073709551615  ¦  00123  ¦  123  ¦  610062FF  ¦  2024-01-02 03:04:05
+select lag(t,1,flag) over () as bool_default, lead(flag,0,t) over () as bool_source,
+lag(ts,1,d) over () as date_default, lead(d,0,ts) over () as date_source,
+hex(lag(b,1,flag) over ()) as blob_bool_default,
+lead(b,1,bitval) over () as blob_bit_default from wstring;
+➤ bool_default[-1,536870911,0]  ¦  bool_source[-1,536870911,0]  ¦  date_default[-1,536870911,0]  ¦  date_source[-1,536870911,0]  ¦  blob_bool_default[-1,16383,0]  ¦  blob_bit_default[-4,2147483647,0]  𝄀
+1  ¦  1  ¦  2024-01-01  ¦  2024-01-01  ¦  31  ¦  18446744073709551615
+create table wstring_copy as select lag(v,0,bitval) over () as v, lead(t,0,flag) over () as t,
+lag(b,0,flag) over () as b, lead(ts,0,d) over () as ts from wstring;
+show create table wstring_copy;
+➤ Table[12,12,0]  ¦  Create Table[12,147,0]  𝄀
+wstring_copy  ¦  CREATE TABLE `wstring_copy` (
+  `v` longtext DEFAULT NULL,
+  `t` longtext DEFAULT NULL,
+  `b` longblob DEFAULT NULL,
+  `ts` longtext DEFAULT NULL
+)
+select v, t, hex(b) as b, ts from wstring_copy;
+➤ v[-1,536870911,0]  ¦  t[-1,536870911,0]  ¦  b[-1,16383,0]  ¦  ts[-1,536870911,0]  𝄀
+00123  ¦  123  ¦  610062FF  ¦  2024-01-02 03:04:05
+create view wstring_view as select lag(v,0,bitval) over () as v, lead(t,0,flag) over () as t,
+lag(b,0,flag) over () as b, lead(ts,0,d) over () as ts from wstring;
+show columns from wstring_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+v  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+t  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+b  ¦  longblob  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ts  ¦  longtext  ¦  YES  ¦    ¦  null  ¦    ¦  
+select v, t, hex(b) as b, ts from wstring_view;
+➤ v[-1,536870911,0]  ¦  t[-1,536870911,0]  ¦  b[-1,16383,0]  ¦  ts[-1,536870911,0]  𝄀
+00123  ¦  123  ¦  610062FF  ¦  2024-01-02 03:04:05
+create table wstring_exact as select lag(cast('true' as text),0,true) over () as lg_text,
+lead(cast('true' as text),0,false) over () as ld_text,
+lag(cast('0012' as varchar(4)),0,cast(7 as bit(3))) over () as lg_varchar,
+lead(cast('0012' as varchar(4)),0,cast(7 as bit(3))) over () as ld_varchar;
+show create table wstring_exact;
+➤ Table[12,13,0]  ¦  Create Table[12,177,0]  𝄀
+wstring_exact  ¦  CREATE TABLE `wstring_exact` (
+  `lg_text` longtext DEFAULT NULL,
+  `ld_text` longtext DEFAULT NULL,
+  `lg_varchar` longtext DEFAULT NULL,
+  `ld_varchar` longtext DEFAULT NULL
+)
+select * from wstring_exact;
+➤ lg_text[-1,536870911,0]  ¦  ld_text[-1,536870911,0]  ¦  lg_varchar[-1,536870911,0]  ¦  ld_varchar[-1,536870911,0]  𝄀
+true  ¦  true  ¦  0012  ¦  0012
+create table wtemporal (id int, v time(6), d date, dt datetime(6));
+insert into wtemporal values (1,'12:34:56.123456','2024-01-02','2024-01-02 03:04:05.654321'),
+(2,'-838:59:58.123456','1000-01-01','1000-01-01 03:04:05.654321'),
+(3,null,'2024-01-03',null);
+select id, v, lag(v,0) over (order by id) as control_value,
+lag(v,0,d) over (order by id) as lg, lead(v,0,d) over (order by id) as ld from wtemporal order by id;
+➤ id[4,32,0]  ¦  v[92,17,0]  ¦  control_value[92,17,0]  ¦  lg[12,24,0]  ¦  ld[12,24,0]  𝄀
+1  ¦  12:34:56.123456000  ¦  12:34:56.123456000  ¦  12:34:56.123456  ¦  12:34:56.123456  𝄀
+2  ¦  -838:59:58.123456000  ¦  -838:59:58.123456000  ¦  -838:59:58.123456  ¦  -838:59:58.123456  𝄀
+3  ¦  null  ¦  null  ¦  null  ¦  null
+select id, lag(d,0,v) over (order by id) as date_source,
+lead(d,3,v) over (order by id) as time_default,
+lag(v,3,d) over (order by id) as date_default,
+lead(v,0,dt) over (order by id) as time_datetime from wtemporal order by id;
+➤ id[4,32,0]  ¦  date_source[12,24,0]  ¦  time_default[12,24,0]  ¦  date_default[12,24,0]  ¦  time_datetime[12,26,0]  𝄀
+1  ¦  2024-01-02  ¦  12:34:56.123456  ¦  2024-01-02  ¦  12:34:56.123456  𝄀
+2  ¦  1000-01-01  ¦  -838:59:58.123456  ¦  1000-01-01  ¦  -838:59:58.123456  𝄀
+3  ¦  2024-01-03  ¦  null  ¦  2024-01-03  ¦  null
+select id, lag(dt,0,d) over (order by id) as datetime_source,
+lead(d,3,dt) over (order by id) as datetime_default from wtemporal order by id;
+➤ id[4,32,0]  ¦  datetime_source[93,26,0]  ¦  datetime_default[93,26,0]  𝄀
+1  ¦  2024-01-02 03:04:05.654321000  ¦  2024-01-02 03:04:05.654321000  𝄀
+2  ¦  1000-01-01 03:04:05.654321000  ¦  1000-01-01 03:04:05.654321000  𝄀
+3  ¦  null  ¦  null
+create table wtemporal_copy as select id, lag(v,0,d) over (order by id) as lg,
+lead(v,0,d) over (order by id) as ld, lag(dt,0,d) over (order by id) as dt from wtemporal;
+show create table wtemporal_copy;
+➤ Table[12,14,0]  ¦  Create Table[12,156,0]  𝄀
+wtemporal_copy  ¦  CREATE TABLE `wtemporal_copy` (
+  `id` int DEFAULT NULL,
+  `lg` varchar(24) DEFAULT NULL,
+  `ld` varchar(24) DEFAULT NULL,
+  `dt` datetime(6) DEFAULT NULL
+)
+select * from wtemporal_copy order by id;
+➤ id[4,32,0]  ¦  lg[12,24,0]  ¦  ld[12,24,0]  ¦  dt[93,26,0]  𝄀
+1  ¦  12:34:56.123456  ¦  12:34:56.123456  ¦  2024-01-02 03:04:05.654321000  𝄀
+2  ¦  -838:59:58.123456  ¦  -838:59:58.123456  ¦  1000-01-01 03:04:05.654321000  𝄀
+3  ¦  null  ¦  null  ¦  null
+create view wtemporal_view as select id, lag(v,0,d) over (order by id) as lg,
+lead(v,0,d) over (order by id) as ld from wtemporal;
+show columns from wtemporal_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+lg  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+ld  ¦  varchar(24)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wtemporal_view order by id;
+➤ id[4,32,0]  ¦  lg[12,24,0]  ¦  ld[12,24,0]  𝄀
+1  ¦  12:34:56.123456  ¦  12:34:56.123456  𝄀
+2  ¦  -838:59:58.123456  ¦  -838:59:58.123456  𝄀
+3  ¦  null  ¦  null
+create table wcollation (v varchar(100) collate utf8mb4_unicode_ci, t text collate utf8mb4_unicode_ci, b bit(3), flag bool);
+insert into wcollation values ('ß','ß',7,true);
+select v = 'ss' as source_equal, lag(v,0) over () = 'ss' as control_equal,
+lag(v,0,b) over () = 'ss' as lg_v, lead(v,0,b) over () = 'ss' as ld_v,
+lag(t,0,flag) over () = 'ss' as lg_t, lead(t,0,flag) over () = 'ss' as ld_t from wcollation;
+➤ source_equal[-7,1,0]  ¦  control_equal[-7,1,0]  ¦  lg_v[-7,1,0]  ¦  ld_v[-7,1,0]  ¦  lg_t[-7,1,0]  ¦  ld_t[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1
+select lag(b,1,v) over () = 'ss' as varchar_default,
+lead(flag,1,t) over () = 'ss' as text_default from wcollation;
+➤ varchar_default[-7,1,0]  ¦  text_default[-7,1,0]  𝄀
+1  ¦  1
+create table wcollation_copy as select lag(v,0,b) over () as lg_v, lead(v,0,b) over () as ld_v,
+lag(t,0,flag) over () as lg_t, lead(t,0,flag) over () as ld_t from wcollation;
+show create table wcollation_copy;
+➤ Table[12,15,0]  ¦  Create Table[12,269,0]  𝄀
+wcollation_copy  ¦  CREATE TABLE `wcollation_copy` (
+  `lg_v` longtext COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `ld_v` longtext COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `lg_t` longtext COLLATE utf8mb4_unicode_ci DEFAULT NULL,
+  `ld_t` longtext COLLATE utf8mb4_unicode_ci DEFAULT NULL
+)
+select lg_v = 'ss' as lg_v, ld_v = 'ss' as ld_v, lg_t = 'ss' as lg_t, ld_t = 'ss' as ld_t from wcollation_copy;
+➤ lg_v[-7,1,0]  ¦  ld_v[-7,1,0]  ¦  lg_t[-7,1,0]  ¦  ld_t[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+create view wcollation_view as select lag(v,0,b) over () as lg_v, lead(v,0,b) over () as ld_v,
+lag(t,0,flag) over () as lg_t, lead(t,0,flag) over () as ld_t from wcollation;
+select column_name, collation_name from information_schema.columns
+where table_schema = 'window_lag_lead_default_type' and table_name = 'wcollation_view' order by ordinal_position;
+➤ column_name[12,256,0]  ¦  collation_name[12,18,0]  𝄀
+lg_v  ¦  utf8mb4_unicode_ci  𝄀
+ld_v  ¦  utf8mb4_unicode_ci  𝄀
+lg_t  ¦  utf8mb4_unicode_ci  𝄀
+ld_t  ¦  utf8mb4_unicode_ci
+select lg_v = 'ss' as lg_v, ld_v = 'ss' as ld_v, lg_t = 'ss' as lg_t, ld_t = 'ss' as ld_t from wcollation_view;
+➤ lg_v[-7,1,0]  ¦  ld_v[-7,1,0]  ¦  lg_t[-7,1,0]  ¦  ld_t[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+create table wyear (id int, d decimal(20,4), y year, n bigint, ts timestamp(6));
+insert into wyear values (1,12.3456,2024,1000000000000,'2024-01-02 03:04:05.123456'),
+(2,null,0,-1000000000000,null);
+select id, d, lag(d,0) over (order by id) as control_value,
+lag(d,0,y) over (order by id) as lg, lead(d,0,y) over (order by id) as ld,
+lag(y,0,d) over (order by id) as year_source, lead(d,2,y) over (order by id) as year_default from wyear order by id;
+➤ id[4,32,0]  ¦  d[3,20,4]  ¦  control_value[3,20,4]  ¦  lg[3,20,4]  ¦  ld[3,20,4]  ¦  year_source[3,20,4]  ¦  year_default[3,20,4]  𝄀
+1  ¦  12.3456  ¦  12.3456  ¦  12.3456  ¦  12.3456  ¦  2024.0000  ¦  2024.0000  𝄀
+2  ¦  null  ¦  null  ¦  null  ¦  null  ¦  0.0000  ¦  0.0000
+select id, n, lag(n,0,ts) over (order by id) as lg_n, lead(n,0,ts) over (order by id) as ld_n,
+lag(d,0,ts) over (order by id) as lg_d, lead(d,0,ts) over (order by id) as ld_d from wyear order by id;
+➤ id[4,32,0]  ¦  n[-5,64,0]  ¦  lg_n[12,26,0]  ¦  ld_n[12,26,0]  ¦  lg_d[12,26,0]  ¦  ld_d[12,26,0]  𝄀
+1  ¦  1000000000000  ¦  1000000000000  ¦  1000000000000  ¦  12.3456  ¦  12.3456  𝄀
+2  ¦  -1000000000000  ¦  -1000000000000  ¦  -1000000000000  ¦  null  ¦  null
+select id, lag(n,2,ts) over (order by id) as timestamp_default,
+lead(ts,0,n) over (order by id) as timestamp_source,
+lag(ts,2,n) over (order by id) as integer_default,
+lead(ts,2,d) over (order by id) as decimal_default from wyear order by id;
+➤ id[4,32,0]  ¦  timestamp_default[12,26,0]  ¦  timestamp_source[12,26,0]  ¦  integer_default[12,26,0]  ¦  decimal_default[12,26,0]  𝄀
+1  ¦  2024-01-02 03:04:05.123456  ¦  2024-01-02 03:04:05.123456  ¦  1000000000000  ¦  12.3456  𝄀
+2  ¦  null  ¦  null  ¦  -1000000000000  ¦  null
+create table wyear_copy as select id, lag(d,0,y) over (order by id) as yd,
+lead(n,0,ts) over (order by id) as tn, lag(d,0,ts) over (order by id) as td from wyear;
+show create table wyear_copy;
+➤ Table[12,10,0]  ¦  Create Table[12,154,0]  𝄀
+wyear_copy  ¦  CREATE TABLE `wyear_copy` (
+  `id` int DEFAULT NULL,
+  `yd` decimal(20,4) DEFAULT NULL,
+  `tn` varchar(26) DEFAULT NULL,
+  `td` varchar(26) DEFAULT NULL
+)
+select * from wyear_copy order by id;
+➤ id[4,32,0]  ¦  yd[3,20,4]  ¦  tn[12,26,0]  ¦  td[12,26,0]  𝄀
+1  ¦  12.3456  ¦  1000000000000  ¦  12.3456  𝄀
+2  ¦  null  ¦  -1000000000000  ¦  null
+create view wyear_view as select id, lag(d,0,y) over (order by id) as yd,
+lead(n,0,ts) over (order by id) as tn, lag(d,0,ts) over (order by id) as td from wyear;
+show columns from wyear_view;
+➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
+id  ¦  int  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+yd  ¦  decimal(20,4)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+tn  ¦  varchar(26)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+td  ¦  varchar(26)  ¦  YES  ¦    ¦  null  ¦    ¦  
+select * from wyear_view order by id;
+➤ id[4,32,0]  ¦  yd[3,20,4]  ¦  tn[12,26,0]  ¦  td[12,26,0]  𝄀
+1  ¦  12.3456  ¦  1000000000000  ¦  12.3456  𝄀
+2  ¦  null  ¦  -1000000000000  ¦  null
+create table wuuid (u uuid, b binary(36), padded binary(40));
+insert into wuuid values ('00000000-0000-0000-0000-000000000001',
+'00000000-0000-0000-0000-000000000002','00000000-0000-0000-0000-000000000002');
+select length(cast(u as char)) as original_length, length(cast(lag(u,0) over () as char)) as control_length,
+length(lag(u,0,b) over ()) as lg_length, length(lead(u,0,b) over ()) as ld_length,
+cast(cast(lag(u,0,b) over () as char) as uuid) = u as lg_roundtrip,
+cast(cast(lead(u,0,b) over () as char) as uuid) = u as ld_roundtrip from wuuid;
+➤ original_length[-5,64,0]  ¦  control_length[-5,64,0]  ¦  lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_roundtrip[-7,1,0]  ¦  ld_roundtrip[-7,1,0]  𝄀
+36  ¦  36  ¦  36  ¦  36  ¦  1  ¦  1
+select length(lag(u,1,b) over ()) as default_length,
+hex(lag(u,1,b) over ()) = hex(b) as default_equal,
+hex(lag(b,0,u) over ()) = hex(b) as binary_source_equal,
+cast(cast(lead(b,1,u) over () as char) as uuid) = u as reverse_default,
+length(lag(u,0,padded) over ()) as uuid_with_padded_default,
+length(lead(u,1,padded) over ()) as padded_length,
+hex(lead(u,1,padded) over ()) = hex(padded) as padded_equal from wuuid;
+➤ default_length[-5,64,0]  ¦  default_equal[-7,1,0]  ¦  binary_source_equal[-7,1,0]  ¦  reverse_default[-7,1,0]  ¦  uuid_with_padded_default[-5,64,0]  ¦  padded_length[-5,64,0]  ¦  padded_equal[-7,1,0]  𝄀
+36  ¦  1  ¦  1  ¦  1  ¦  36  ¦  40  ¦  1
+set @wuuid_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
+create table wuuid_copy as select lag(u,0,b) over () as lg, lead(u,0,b) over () as ld from wuuid;
+show create table wuuid_copy;
+➤ Table[12,10,0]  ¦  Create Table[12,88,0]  𝄀
+wuuid_copy  ¦  CREATE TABLE `wuuid_copy` (
+  `lg` tinyblob DEFAULT NULL,
+  `ld` tinyblob DEFAULT NULL
+)
+select length(lg) as lg_length, length(ld) as ld_length,
+cast(cast(lg as char) as uuid) as lg_uuid, cast(cast(ld as char) as uuid) as ld_uuid from wuuid_copy;
+➤ lg_length[-5,64,0]  ¦  ld_length[-5,64,0]  ¦  lg_uuid[12,-1,0]  ¦  ld_uuid[12,-1,0]  𝄀
+36  ¦  36  ¦  00000000-0000-0000-0000-000000000001  ¦  00000000-0000-0000-0000-000000000001
+set session sql_mode = @wuuid_sql_mode;
+create table wdecimal_rejected as select lag(cast(0.1 as decimal(65,65)),0,1) over () as v;
+Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
+show tables like 'wdecimal_rejected';
+➤ Tables_in_window_lag_lead_default_type[12,5000,0]
+create table wdecimal_rejected as select lead(cast(0.1 as decimal(65,64)),0,cast(10 as decimal(3,1))) over () as v;
+Data truncation: data out of range: data type DECIMAL, LAG/LEAD common precision exceeds SQL limit 65
+show tables like 'wdecimal_rejected';
+➤ Tables_in_window_lag_lead_default_type[12,5000,0]
+drop database window_lag_lead_default_type;

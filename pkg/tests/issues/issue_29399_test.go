@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
@@ -598,6 +599,15 @@ func TestIssue29399AccountPITRRebindsPrivileges(t *testing.T) {
 		))
 		require.NoError(t, err)
 		defer readerDB.Close()
+		// A commit on CN0 does not order the next statement in CN1's existing
+		// session. Fence catalog visibility without clearing its warm cache or
+		// replacing the prepared handle whose reauthorization is under test.
+		waitReader := func() {
+			t.Helper()
+			committed := cn.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+			require.False(t, committed.IsEmpty())
+			testutils.WaitLogtailApplied(t, committed, readerCN)
+		}
 		var count int
 		require.NoError(t, readerDB.QueryRowContext(ctx,
 			"select count(*) from `"+databaseName+"`.orders").Scan(&count))
@@ -611,28 +621,33 @@ func TestIssue29399AccountPITRRebindsPrivileges(t *testing.T) {
 		require.NoError(t, err)
 		defer reader.Close()
 		execSQLRequire(t, ctx, adminDB, "grant delete on table `"+databaseName+"`.orders to pitr_reader")
+		waitReader()
 		prepared, err := reader.PrepareContext(ctx, "delete from `"+databaseName+"`.orders where id = ?")
 		require.NoError(t, err)
 		defer prepared.Close()
 		_, err = prepared.ExecContext(ctx, -1)
 		require.NoError(t, err)
 		execSQLRequire(t, ctx, adminDB, "revoke delete on table `"+databaseName+"`.orders from pitr_reader")
+		waitReader()
 		_, err = prepared.ExecContext(ctx, -1)
 		require.ErrorContains(t, err, "do not have privilege")
 
 		for _, scope := range []string{"database `" + databaseName + "` table orders", "database `" + databaseName + "`"} {
 			for range 2 {
 				execSQLRequire(t, ctx, adminDB, "restore "+scope+" from pitr "+pitrName+" '"+restoreAt+"'")
-				require.NoError(t, reader.QueryRowContext(ctx, "select count(*) from `"+databaseName+"`.orders").Scan(&count))
-				require.Equal(t, 1, count)
+				waitReader()
 				_, err = prepared.ExecContext(ctx, -1)
 				require.ErrorContains(t, err, "do not have privilege", "partial PITR resurrected a revoked grant")
+				require.NoError(t, reader.QueryRowContext(ctx, "select count(*) from `"+databaseName+"`.orders").Scan(&count))
+				require.Equal(t, 1, count)
 			}
 		}
 		execSQLRequire(t, ctx, adminDB, "grant delete on table `"+databaseName+"`.orders to pitr_reader")
+		waitReader()
 		_, err = prepared.ExecContext(ctx, -1)
 		require.NoError(t, err)
 		execSQLRequire(t, ctx, adminDB, "restore from pitr "+pitrName+" '"+restoreAt+"'")
+		waitReader()
 		_, err = prepared.ExecContext(ctx, -1)
 		require.ErrorContains(t, err, "do not have privilege", "account PITR left a stale prepared privilege")
 	})

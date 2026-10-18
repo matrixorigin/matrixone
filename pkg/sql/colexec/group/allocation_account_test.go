@@ -286,11 +286,30 @@ func installGroupTestAllocation(
 	op any,
 	proc *process.Process,
 	limit uint64,
+	selected ...*process.ExecutionResourceGeneration,
 ) groupTestAllocation {
 	t.Helper()
 	proc.Base.Lim.Size = int64(limit)
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
+	var generation *process.ExecutionResourceGeneration
+	if len(selected) != 0 && selected[0] != nil {
+		generation = selected[0]
+	} else {
+		// Account/spill behavior is the oracle, not the host's emergency disk
+		// headroom. The fixture closes this private generation after its operators.
+		budget := process.MustNewExecutionResourceBudget(limit, limit)
+		require.NoError(t, budget.SetSpillCaps(1<<30, budget.SpillFDCap()))
+		var err error
+		generation, err = budget.OpenGeneration(1)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			defer generation.Close()
+			snapshot := generation.Snapshot()
+			require.Zero(t, snapshot.Used, "private Group generation: %+v", snapshot)
+			require.Zero(t, snapshot.SpillDiskUsed)
+			require.Zero(t, snapshot.SpillFDUsed)
+		})
+		require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+	}
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<16)
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(limit, generation)
@@ -1044,9 +1063,9 @@ func TestAccountedMergeGroupVectorDistinctSpillConsumer(t *testing.T) {
 					finalizeGroupTestAllocation(t, partial, partialAllocation)
 				}
 			})
-			partialAllocation = installGroupTestAllocation(t, partial, proc, 64<<20)
+			partialAllocation = installGroupTestAllocation(t, partial, proc, 64<<20, generation)
 			partialBound = true
-			mergeAllocation = installGroupTestAllocation(t, merge, proc, 64<<20)
+			mergeAllocation = installGroupTestAllocation(t, merge, proc, 64<<20, generation)
 			mergeBound = true
 			require.NoError(t, partial.Prepare(proc))
 			require.NoError(t, merge.Prepare(proc))
@@ -2514,7 +2533,7 @@ func TestAccountedGroupQueuedSpillDoesNotRetainFDs(t *testing.T) {
 		// opens a bucket. Queue length must not consume the reader's FD budget.
 		proc.Ctx = newCancelOnDoneCheckContext(proc.Ctx, nonEmptyBuckets+4)
 	}))
-	allocation = installGroupTestAllocation(t, g, proc, 64<<20)
+	allocation = installGroupTestAllocation(t, g, proc, 64<<20, generation)
 	require.NoError(t, g.Prepare(proc))
 	result, err := g.Call(proc)
 	require.ErrorIs(t, err, context.Canceled)
@@ -3341,7 +3360,7 @@ func TestAccountedGroupAndMergeGroupAcceptOrderedGroupConcat(t *testing.T) {
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{
 		orderedGroupConcatAgg(false),
 	})
-	allocation := installGroupTestAllocation(t, merge, proc, 64<<20)
+	allocation := installGroupTestAllocation(t, merge, proc, 64<<20, groupAllocation.generation)
 	require.NoError(t, merge.Prepare(proc))
 	merge.Free(proc, false, nil)
 	finalizeGroupTestAllocation(t, merge, allocation)

@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -39,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	txnclient "github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
@@ -52,6 +54,12 @@ type backExec struct {
 	backSes    *backSession
 	statsArray *statistic.StatsArray
 }
+
+// backExecProcessHook runs after a background statement has created its
+// process, but before the statement is compiled or executed. It is used for
+// control-plane protocols that must operate on the same transaction and
+// process as the following background SQL statements.
+type backExecProcessHook func(context.Context, *process.Process) error
 
 type backgroundExecRowCount interface {
 	GetLastAffectedRows() int64
@@ -143,6 +151,22 @@ func installBackExecStatsInfo(
 }
 
 func (back *backExec) Exec(ctx context.Context, sql string) (retErr error) {
+	return back.exec(ctx, sql, "", false)
+}
+
+func (back *backExec) execWithProcessHook(
+	ctx context.Context,
+	sql string,
+	hook backExecProcessHook,
+) error {
+	if back == nil || back.backSes == nil {
+		return moerr.NewInternalError(ctx, "background executor is closed")
+	}
+	previous := back.backSes.processHook
+	back.backSes.processHook = hook
+	defer func() {
+		back.backSes.processHook = previous
+	}()
 	return back.exec(ctx, sql, "", false)
 }
 
@@ -979,12 +1003,13 @@ func executeStmtInSameSession(
 		logutil.ConnectionIdField(ses.GetConnectionID()))
 	//3. execute the statement
 	return doComQuery(ses, execCtx, &UserInput{
-		stmt:                  stmt,
-		isInternalInput:       true,
-		isSetExpression:       true,
-		isPreparedExpression:  preparedExpression,
-		preparedParamVals:     preparedParamVals,
-		preparedBinaryExecute: preparedBinaryExecute,
+		stmt:                       stmt,
+		isInternalInput:            true,
+		sameStatementAuthorization: true,
+		isSetExpression:            true,
+		isPreparedExpression:       preparedExpression,
+		preparedParamVals:          preparedParamVals,
+		preparedBinaryExecute:      preparedBinaryExecute,
 	})
 }
 
@@ -1079,6 +1104,8 @@ type backSession struct {
 	forcePessimisticRC                bool
 	cloneSnapshotUsesBackgroundTxn    bool
 	cancelTxnCreateWithRequest        bool
+	authorizationSnapshot             *txnclient.SnapshotAdmission
+	processHook                       backExecProcessHook
 	lineageOwnerLifecycleWritePending bool
 	// lastAffectedRows carries the previous statement's ROW_COUNT() value into
 	// the next process created by this background executor.
@@ -1212,6 +1239,15 @@ func (backSes *backSession) Close() {
 		backSes.feSessionImpl.Reset()
 	}
 	backSes.upstream = nil
+	backSes.authorizationSnapshot = nil
+}
+
+// A read-only authorization transaction contributes no causal user writes.
+// Its internal completion must not advance the statement's authorization epoch.
+func (backSes *backSession) updateLastCommitTS(ts timestamp.Timestamp) {
+	if backSes.authorizationSnapshot == nil {
+		backSes.feSessionImpl.updateLastCommitTS(ts)
+	}
 }
 
 func (backSes *backSession) Clear() {
@@ -1412,6 +1448,9 @@ func (backSes *backSession) SetUserDefinedVar(name string, value interface{}, sq
 }
 
 func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
+	if value, handled, err := databaseDefaultSystemVariable(backSes, strings.ToLower(name)); handled {
+		return value, err
+	}
 	switch strings.ToLower(name) {
 	case "autocommit":
 		return true, nil
@@ -1430,6 +1469,16 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 			return backSes.parentBackSession.GetSessionSysVar(name)
 		}
 		return int64(process.WarningDiagnosticDefaultRetentionLimit), nil
+	case "experimental_hnsw_index":
+		// Procedure DDL runs through a frontend back session and must see
+		// the caller's feature gate rather than the executor default.
+		if backSes.upstream != nil {
+			return backSes.upstream.GetSessionSysVar(name)
+		}
+		if backSes.parentBackSession != nil {
+			return backSes.parentBackSession.GetSessionSysVar(name)
+		}
+		return nil, nil
 	case "foreign_key_checks", "mo_table_stats.force_update", "mo_table_stats.use_old_impl", "mo_table_stats.reset_update_time":
 		return backSes.upstream.GetSessionSysVar(name)
 	}

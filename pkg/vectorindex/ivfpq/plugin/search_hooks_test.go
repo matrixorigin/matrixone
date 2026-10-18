@@ -17,9 +17,17 @@ package plugin
 import (
 	"testing"
 
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPluginHasSearchHooks(t *testing.T) {
-	require.NotNil(t, New().Search())
+	hooks := New().Search()
+	require.NotNil(t, hooks)
+	explainer, ok := hooks.(searchplugin.ExplainHooks)
+	require.True(t, ok)
+	got, err := explainer.ExplainSettings(&plan.IndexSearchScan{}, true)
+	require.NoError(t, err)
+	require.Equal(t, []string{"NProbe: 0", "ThreadsSearch: 0", "BatchWindow: 0", "GpuMultiSimulation: 0", "KeyPartType: 0"}, got)
 }

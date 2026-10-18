@@ -35,7 +35,7 @@ create table r1(c1 int,c2 varchar(20));
 internal error: do not have enough storage to execute the statement
 insert into r_test values(8,'c');
 internal error: do not have enough storage to execute the statement
-load data infile '$resources/load_data/integer_numbers_1.csv' into table r_test fields terminated by ',';
+load data local infile '$resources/load_data/integer_numbers_1.csv' into table r_test fields terminated by ',';
 internal error: do not have enough storage to execute the statement
 update r_test set c1=5 where c2='h';
 internal error: do not have enough storage to execute the statement
@@ -86,7 +86,7 @@ c2    varchar(20)    YES        null
 show full columns from r_test;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 c1    int    null    YES    UNI    null        select,insert,update,references    
-c2    varchar(20)    utf8mb4_general_ci    YES        null        select,insert,update,references    
+c2    varchar(20)    utf8mb4_general_ci    YES        null        select,insert,update,references
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne
@@ -263,7 +263,7 @@ c2    varchar(20)    YES        null
 show full columns from r_test;
 Field    Type    Collation    Null    Key    Default    Extra    Privileges    Comment
 c1    int    null    YES    UNI    null        select,insert,update,references    
-c2    varchar(20)    utf8mb4_general_ci    YES        null        select,insert,update,references    
+c2    varchar(20)    utf8mb4_general_ci    YES        null        select,insert,update,references
 show variables where value = 'MatrixOne';
 Variable_name    Value
 version_comment    MatrixOne

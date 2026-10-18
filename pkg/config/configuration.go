@@ -750,13 +750,6 @@ type FrontendParameters struct {
 	// including mysql protocol handshake, checking user, loading session variables
 	ConnectTimeout toml.Duration `toml:"connectTimeout" user_setting:"advanced"`
 
-	// SidecarURL is the DuckDB sidecar HTTP endpoint for offloading queries
-	// via /*+ SIDECAR */ or /*+ SIDECAR GPU */ hints.
-	// When set, this becomes the default for the sidecar_url session variable.
-	// Can be overridden per-session with SET sidecar_url = '...' or
-	// globally for new sessions with SET GLOBAL sidecar_url = '...'.
-	SidecarURL string `toml:"sidecarUrl" user_setting:"advanced"`
-
 	Iceberg   IcebergParameters   `toml:"iceberg" user_setting:"advanced"`
 	MongoDB   MongoDBParameters   `toml:"mongodb" user_setting:"advanced"`
 	ArrowLoad ArrowLoadParameters `toml:"arrow-load" user_setting:"advanced"`

@@ -853,3 +853,21 @@ func TestTime_ToDecimal_ScaleGreaterThan6(t *testing.T) {
 		})
 	}
 }
+
+func TestTruncateTemporalFractionForParse(t *testing.T) {
+	for _, tc := range []struct {
+		input string
+		scale int32
+		want  string
+	}{
+		{" 00:00:00.9999999 ", 6, "00:00:00.999999"},
+		{"-00:00:00.9999999", 0, "-00:00:00"},
+		{"2024-01-02 03:04:05.1234567", 3, "2024-01-02 03:04:05.123"},
+		{"00:00:00.12", 3, "00:00:00.12"},
+		{"00:00:00.9999999tail", 6, "00:00:00.9999999tail"},
+		{"00:00:00.", 6, "00:00:00."},
+		{"00:00:00", 6, "00:00:00"},
+	} {
+		require.Equal(t, tc.want, TruncateTemporalFractionForParse(tc.input, tc.scale))
+	}
+}

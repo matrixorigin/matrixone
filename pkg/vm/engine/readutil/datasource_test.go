@@ -457,29 +457,24 @@ func TestFastApplyDeletesByRowIdsRandom(t *testing.T) {
 				}
 			}
 
-			old := make([]int64, len(leftRows))
-			copy(old, leftRows)
+			// Build an independent membership oracle before the in-place operation.
+			// Compare every survivor so dropping an undeleted row also fails.
+			deleted := make(map[types.Rowid]struct{}, len(deletedRowIds))
+			for _, rowID := range deletedRowIds {
+				deleted[rowID] = struct{}{}
+			}
+			expected := make([]int64, 0, len(leftRows))
+			for _, offset := range leftRows {
+				if _, removed := deleted[types.NewRowid(&checkBid, uint32(offset))]; !removed {
+					expected = append(expected, offset)
+				}
+			}
 
 			sorted := slices.IsSortedFunc(deletedRowIds, func(a, b types.Rowid) int { return a.Compare(&b) })
 			require.True(t, sorted)
 
 			FastApplyDeletesByRowIds(&checkBid, &leftRows, nil, deletedRowIds, i%2 == 0)
-
-			for j := range leftRows {
-				x := types.NewRowid(&checkBid, uint32(leftRows[j]))
-				idx := slices.IndexFunc(deletedRowIds, func(a types.Rowid) bool { return x.EQ(&a) })
-				if idx != -1 {
-					fmt.Println(x.String())
-					fmt.Println(len(leftRows), leftRows)
-					fmt.Println(len(old), old)
-					fmt.Println()
-
-					for k := range deletedRowIds {
-						fmt.Println(k, deletedRowIds[k])
-					}
-				}
-				require.Equal(t, -1, idx)
-			}
+			require.Equal(t, expected, leftRows)
 		}
 	}
 
@@ -523,12 +518,16 @@ func TestFastApplyDeletesByRowOffsets(t *testing.T) {
 			}
 			leftRows = leftRows[:ll]
 
-			FastApplyDeletesByRowOffsets(&leftRows, nil, offsets)
-
-			for j := range leftRows {
-				_, ok := mm[leftRows[j]]
-				require.False(t, ok, fmt.Sprintf("\nhit: %v\noffsets: %v\nleftRows: %v;", leftRows[j], offsets, leftRows))
+			// Compute the complete survivor set before the in-place operation.
+			// Checking only returned rows would also accept dropping every row.
+			expected := make([]int64, 0, len(leftRows))
+			for _, row := range leftRows {
+				if _, deleted := mm[row]; !deleted {
+					expected = append(expected, row)
+				}
 			}
+			FastApplyDeletesByRowOffsets(&leftRows, nil, offsets)
+			require.Equal(t, expected, leftRows)
 		}
 	}
 
