@@ -214,7 +214,7 @@ func TestParquetVariantSplitExportKeepsSchemaAndValues(t *testing.T) {
 				mrs.AddColumn(c)
 			}
 			dir := t.TempDir()
-			ec := &ExportConfig{ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet_variant", SplitSize: 8 << 10}}
+			ec := &ExportConfig{proc: sysFileAccessTestProcess(), ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet_variant", SplitSize: 8 << 10}}
 			execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
 			expected := make([]string, n)
 			if n > 0 {

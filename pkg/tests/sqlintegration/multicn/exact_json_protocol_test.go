@@ -113,7 +113,7 @@ func TestExactJSONProtocolSQLFallbackAndUpgrade(t *testing.T) {
 	})
 	const parserQuery = `select cast(id as varchar) from t where json_extract_string(json_parse_exact(s),'$.x')='v' order by id`
 	const castQuery = `select cast(cast(json_extract(j,'$.cost') as decimal(38,3)) as varchar) from t where id <= 2 order by id`
-	for _, version := range []int64{defines.MORPCVersion118, defines.MORPCVersion117} {
+	for _, version := range []int64{defines.MORPCVersion118, defines.MORPCVersion119} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		require.Equal(t, []string{"1", "2"}, query(parserQuery))
 		require.Equal(t, []string{"9007199254740993.001", "0.125"}, query(castQuery))

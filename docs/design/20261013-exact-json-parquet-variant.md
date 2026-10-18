@@ -42,7 +42,8 @@ The SQL function ID is appended after the IDs allocated by current main; existin
 
 Main reserves v113 for DOUBLE results of DECIMAL statistical aggregates,
 v114 for native Unicode UNIQUE keys, v115 for calendar intervals, and
-v116 for SELECT scalar division warning diagnostics.
+v116 for SELECT scalar division warning diagnostics, v117 for collation-aware
+LEAST/GREATEST, and v118 for table-collation execution.
 Those workers do not implement exact JSON or standard Parquet VARIANT reads;
 the independent feature floor is therefore v119 after main synchronization.
 
@@ -51,6 +52,15 @@ identity 601, and existing JSON-to-DECIMAL64/128 CAST semantics. Executors
 sharing the JSON scalar cast path are covered. A JSON column cast needs this
 floor even without the parser in its query. FLOAT conversion and
 JSON-to-DECIMAL256 retain their unchanged contracts.
+
+Fresh compilation and cached execution recheck the current local floor before
+execution. At v119 or newer, this is a constant-time check without a plan walk;
+below that floor, only affected exact-JSON expressions or Parquet scans reject.
+Local placement avoids a second Parquet metadata parse.
+
+The unmerged historical parser identity 599 and floor 117 are not aliases of the
+current ABI. Existing development catalog expressions from that branch must be
+rebound or rebuilt through their catalog owner before reuse.
 
 Placement takes the maximum required capability and collapses to the coordinator
 when a worker is old or unknown. The sender checks actual identity/address again
@@ -69,7 +79,7 @@ the expression gates.
 
 Protocol tests cover bound identities, wire round trips, controls, worker
 placement/replacement, cancellation, failed probes and persisted owners/views.
-A real two-CN SQL test forces multi-CN placement, advertises v116 on a current
+A real two-CN SQL test forces multi-CN placement, advertises v118 on a current
 worker and requires its address to be absent from exact-query execution; with
 v119 restored, that address must occur in distributed execution. Historical
 native worker-wire tests at pre-feature main reproduce missing function 598
