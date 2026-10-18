@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"go.uber.org/zap"
@@ -102,7 +103,7 @@ func NewMemPKFilter(
 	// The membership filter selects a separate key column for IVF/fulltext and
 	// remains useful even when the SQL predicate cannot produce a PK fast path.
 	filter.setFilterHint(tableDef, filterHint)
-	if tablePrimaryKeyUsesUnicodeCollation(tableDef) {
+	if plan2.PrimaryKeyUsesUnicodeCollation(tableDef) {
 		// The in-memory primary-key iterator also compares packed original bytes;
 		// do not publish a raw probe for a UCA text key. The independent
 		// membership hint above remains available for index/fulltext readers.

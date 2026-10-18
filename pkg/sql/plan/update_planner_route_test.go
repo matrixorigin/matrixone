@@ -1499,7 +1499,7 @@ func TestSortForeignKeyLockTargetsUsesBaseBeforeHiddenTables(t *testing.T) {
 	hidden := &planpb.LockTarget{TableId: 10, ObjRef: &planpb.ObjectRef{ObjName: "__mo_index_a"}}
 	targets := []*planpb.LockTarget{hidden, base}
 
-	sortForeignKeyLockTargets(targets, map[uint64]struct{}{base.TableId: {}})
+	SortForeignKeyLockTargets(targets, map[uint64]struct{}{base.TableId: {}})
 	require.Same(t, base, targets[0])
 	require.Same(t, hidden, targets[1])
 }

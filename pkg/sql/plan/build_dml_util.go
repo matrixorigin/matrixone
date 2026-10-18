@@ -929,7 +929,7 @@ func appendRecursiveCascadeLockNode(
 		}
 	}
 
-	sortForeignKeyLockTargets(lockTargets, map[uint64]struct{}{delCtx.tableDef.TblId: {}})
+	SortForeignKeyLockTargets(lockTargets, map[uint64]struct{}{delCtx.tableDef.TblId: {}})
 	if len(lockProject) > len(rowProject) {
 		sourceNodeID = builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT, Children: []int32{sourceNodeID},

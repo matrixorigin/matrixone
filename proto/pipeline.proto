@@ -275,6 +275,8 @@ message LockOp {
 
 message PreInsertUnique {
   plan.PreInsertUkCtx pre_insert_uk_ctx = 1;
+  // Statement-boundary view; an adaptive lookup must not observe later writes.
+  int64 txn_offset = 2;
 }
 
 message PreInsertSecondaryIndex {

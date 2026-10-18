@@ -15,11 +15,13 @@
 package preinsertunique
 
 import (
+	"testing"
+
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestOrderedSelfReferenceCompositeTuple(t *testing.T) {
@@ -53,6 +55,19 @@ func TestOrderedSelfReferenceCompositeTuple(t *testing.T) {
 			input.SetRowCount(1)
 			t.Cleanup(func() { input.Clean(proc.Mp()) })
 			fk := &plan.OrderedForeignKey{ChildColumns: []*plan.ColRef{{ColPos: 2}, {ColPos: 3}}, SelfParentColumns: []*plan.ColRef{{ColPos: 0}, {ColPos: 1}}}
+			fk.ParentColumns = []int32{0, 1}
+			for i := range 2 {
+				equal, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{
+					{Typ: input.Vecs[i].GetType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: int32(i)}}},
+					{Typ: input.Vecs[i+2].GetType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: int32(i)}}}})
+				require.NoError(t, err)
+				if fk.Predicate == nil {
+					fk.Predicate = equal
+				} else {
+					fk.Predicate, err = plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "and", []*plan.Expr{fk.Predicate, equal})
+					require.NoError(t, err)
+				}
+			}
 			state := &arg.ctr.ordered.foreignKeyResults[0]
 			valid, err := arg.fillOrderedForeignKeyTuple(proc, state, fk.ChildColumns, input, 0, tc.generated, 7)
 			require.NoError(t, err)

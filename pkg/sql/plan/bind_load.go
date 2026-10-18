@@ -30,6 +30,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// IGNORE and LOCAL share row rejection; decoder strictness is independent.
 	builder.checkLoadPrimaryKey = false
 	assignmentIgnore := loadAssignmentIgnore(stmt)
+	_, checkIgnore := stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
 	builder.isInsertIgnore = assignmentIgnore
 	builder.insertValuesRows = 0
 	builder.insertHasOnDuplicateUpdate = false
@@ -50,7 +51,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// strips them. HNSW/CAGRA/IVF-PQ are cron-maintained and ride the modern path.
 	irregularIndexes := getIrregularIndexes(tableDef)
 
-	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr, assignmentIgnore)
+	lastNodeID, colName2Idx, skipUniqueIdx, autoIncrementGeneratedColumn, err := builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, dmlCtx.objRefs[0], insertColToExpr, assignmentIgnore, checkIgnore)
 	if err != nil {
 		return -1, err
 	}
@@ -58,7 +59,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// LOAD never carries ON DUPLICATE KEY UPDATE, so the irregular-index
 	// maintenance source is the pre-dedup new-row image set up inside
 	// appendDedupAndMultiUpdateNodesForBindInsert (insert-only, no old-row delete).
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn, tree.IsIgnoreStatement(stmt))
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn, checkIgnore)
 }
 
 func (builder *QueryBuilder) bindExternalScan(

@@ -1417,7 +1417,7 @@ func (builder *QueryBuilder) appendUpdateParentKeyLocks(
 			}
 		}
 	}
-	sortForeignKeyLockTargets(lockTargets, map[uint64]struct{}{parentTableDef.TblId: {}})
+	SortForeignKeyLockTargets(lockTargets, map[uint64]struct{}{parentTableDef.TblId: {}})
 
 	lockInputID := builder.appendNode(&plan.Node{
 		NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
@@ -1470,7 +1470,9 @@ func updateForeignKeyPartsEqual(left, right []string) bool {
 	return true
 }
 
-func sortForeignKeyLockTargets(lockTargets []*plan.LockTarget, baseTableIDs map[uint64]struct{}) {
+// SortForeignKeyLockTargets keeps parent and physical-index namespaces in the
+// same order for planned lock operators and synchronous FK witnesses.
+func SortForeignKeyLockTargets(lockTargets []*plan.LockTarget, baseTableIDs map[uint64]struct{}) {
 	sort.SliceStable(lockTargets, func(i, j int) bool {
 		_, leftBase := baseTableIDs[lockTargets[i].TableId]
 		_, rightBase := baseTableIDs[lockTargets[j].TableId]
@@ -2408,7 +2410,7 @@ func (builder *QueryBuilder) appendUpdateParentMutation(
 			)
 		}
 	}
-	sortForeignKeyLockTargets(lockTargets, map[uint64]struct{}{childTableDef.TblId: {}})
+	SortForeignKeyLockTargets(lockTargets, map[uint64]struct{}{childTableDef.TblId: {}})
 	actionNodeID = builder.appendNode(&plan.Node{
 		NodeType:    plan.Node_LOCK_OP,
 		Children:    []int32{actionNodeID},

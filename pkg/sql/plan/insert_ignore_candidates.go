@@ -15,7 +15,6 @@
 package plan
 
 import (
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
@@ -154,39 +153,9 @@ func (builder *QueryBuilder) orderedAutoIncrementForeignKeys(bindCtx *BindContex
 				}
 			}
 		}
-		// Expose a complete composite primary-key equality to the existing
-		// reader lookup. Keep the original component predicates as residuals.
-		if parent.Pkey != nil && parent.Pkey.PkeyColName == catalog.CPrimaryKeyColName {
-			args := make([]*plan.Expr, 0, len(parent.Pkey.Names))
-			for _, name := range parent.Pkey.Names {
-				for i, pos := range check.ParentColumns {
-					if parent.Cols[pos].Name == name {
-						args = append(args, &plan.Expr{Typ: parent.Cols[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 1, ColPos: int32(i)}}})
-						break
-					}
-				}
-			}
-			if len(args) == len(parent.Pkey.Names) {
-				key, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", args)
-				if err != nil {
-					return nil, err
-				}
-				pos, ok := parent.Name2ColIndex[parent.Pkey.PkeyColName]
-				if !ok {
-					return nil, moerr.NewInternalError(builder.GetContext(), "missing foreign-key parent composite key")
-				}
-				check.ParentColumns = append(check.ParentColumns, pos)
-				equal, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{
-					{Typ: parent.Cols[pos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos, Name: parent.Pkey.PkeyColName}}}, key,
-				})
-				if err != nil {
-					return nil, err
-				}
-				check.Predicate, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{check.Predicate, equal})
-				if err != nil {
-					return nil, err
-				}
-			}
+		check.ParentAccess, err = builder.orderedForeignKeyAccess(bindCtx, check)
+		if err != nil {
+			return nil, err
 		}
 		result = append(result, check)
 	}

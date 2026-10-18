@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -62,10 +63,7 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 		preInsertUnique.OpAnalyzer.Reset()
 	}
 
-	if preInsertUnique.PreInsertCtx == nil {
-		return moerr.NewInvalidInput(proc.Ctx, "missing pre-insert unique context")
-	}
-	if err := preInsertUnique.validateOrderedAutoIncrement(proc); err != nil {
+	if err := plan2.ValidateOrderedInsertIgnore(proc.Ctx, preInsertUnique.PreInsertCtx); err != nil {
 		return err
 	}
 	insertIgnore := preInsertUnique.PreInsertCtx.GetInsertIgnoreMultiDedup()
@@ -97,7 +95,7 @@ func (preInsertUnique *PreInsertUnique) Prepare(proc *process.Process) error {
 	if odkuArbitration && len(preInsertUnique.PreInsertCtx.KeyColumns) != len(preInsertUnique.PreInsertCtx.TargetColumns) {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid ODKU target arbitration context")
 	}
-	if odkuArbitration && preInsertUnique.allocationAccount == nil {
+	if preInsertUnique.ActivatesAllocationAccountLifecycle() && preInsertUnique.allocationAccount == nil {
 		return mpool.ErrAllocationAccountInvalid
 	}
 	if len(preInsertUnique.ctr.acceptedMaps) == 0 {

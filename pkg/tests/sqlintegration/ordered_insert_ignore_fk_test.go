@@ -1,0 +1,193 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package sqlintegration
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/stretchr/testify/require"
+)
+
+func TestOrderedInsertIgnoreForeignKeys(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		conn, err := db.Conn(ctx)
+		require.NoError(t, err)
+		defer conn.Close()
+		exec := func(t *testing.T, statement string, args ...any) sql.Result {
+			t.Helper()
+			r, e := conn.ExecContext(ctx, statement, args...)
+			require.NoError(t, e, statement)
+			return r
+		}
+		count := func(t *testing.T, statement string, want int) {
+			t.Helper()
+			var got int
+			require.NoError(t, conn.QueryRowContext(ctx, statement).Scan(&got), statement)
+			require.Equal(t, want, got, statement)
+		}
+		const schema = "ordered_ignore_fk"
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
+		exec(t, "create database "+schema)
+		exec(t, "use "+schema)
+		for _, kind := range []string{"pk", "unique", "resident"} {
+			t.Run(kind, func(t *testing.T) {
+				key := "id"
+				extra := ""
+				if kind != "pk" {
+					key = "k"
+				}
+				if kind == "unique" {
+					extra = ", unique(k)"
+				} else if kind == "resident" {
+					extra = ",unique(k,id)"
+				}
+				parent, child := "parent_"+kind, "child_"+kind
+				exec(t, "create table "+parent+"(id int primary key,k int,payload int"+extra+")")
+				exec(t, "insert into "+parent+" values(1,1,0),(2,2,0),(3,3,0)")
+				exec(t, "create table "+child+"(id int auto_increment primary key,u int unique,foreign key(id) references "+parent+"("+key+"))")
+				r := exec(t, "insert ignore into "+child+"(u) values(10),(10),(20),(30),(40)")
+				affected, e := r.RowsAffected()
+				require.NoError(t, e)
+				require.EqualValues(t, 3, affected)
+				count(t, "select count(*) from "+child+" where (id,u) in ((1,10),(2,20),(3,30))", 3)
+				count(t, "select count(*) from "+child+" c left join "+parent+" p on c.id=p."+key+" where p.id is null", 0)
+				exec(t, "begin")
+				exec(t, "insert ignore into "+child+" values(2,99)")
+				exec(t, "rollback")
+				count(t, "select count(*) from "+child, 3)
+			})
+		}
+		if t.Failed() {
+			return
+		}
+		exec(t, "create table self_pair(id int auto_increment primary key,p int,region int,child_region int,unique(id,region,p),foreign key(p,child_region) references self_pair(id,region))")
+		exec(t, "insert ignore into self_pair values(1,1,10,10),(NULL,1,20,10),(NULL,999,30,10),(NULL,2,30,20)")
+		count(t, "select count(*) from self_pair where (id,p,region,child_region) in ((1,1,10,10),(2,1,20,10),(3,2,30,20))", 3)
+		exec(t, "create table self_text(id int auto_increment primary key,label varchar(16) collate utf8mb4_unicode_ci,ref varchar(16) collate utf8mb4_unicode_ci, unique(label,id), foreign key(ref) references self_text(label))")
+		exec(t, "insert ignore into self_text values(1,'Résumé','resume'),(NULL,'X','RESUME'),(NULL,'bad','absent')")
+		count(t, "select count(*) from self_text", 2)
+		exec(t, "create table prepare_child(id int auto_increment primary key,u int,foreign key(id) references parent_pk(id))")
+		prepared, err := conn.PrepareContext(ctx, "insert ignore into prepare_child(u) values(?)")
+		require.NoError(t, err)
+		defer prepared.Close()
+		for i := range 2 {
+			_, err = prepared.ExecContext(ctx, i)
+			require.NoError(t, err)
+		}
+		count(t, "select count(*) from prepare_child", 2)
+		exec(t, "set foreign_key_checks=0")
+		exec(t, "insert into prepare_child values(999,999)")
+		exec(t, "set foreign_key_checks=1")
+		count(t, "select count(*) from prepare_child", 3)
+		exec(t, "create table load_child(id int auto_increment primary key,u int unique,foreign key(id) references parent_pk(id))")
+		exec(t, "load data inline format='csv', data='10\n10\n20\n30\n40' ignore into table load_child fields terminated by ',' (u)")
+		count(t, "select count(*) from load_child where (id,u) in ((1,10),(2,20),(3,30))", 3)
+		exec(t, "create table rollback_child(id int auto_increment primary key,u int unique,foreign key(id) references parent_pk(id))")
+		exec(t, "begin")
+		exec(t, "insert ignore into rollback_child(u) values(1),(2)")
+		exec(t, "rollback")
+		count(t, "select count(*) from rollback_child", 0)
+		for _, kind := range []string{"pk", "unique", "resident"} {
+			for _, action := range []string{"cancel_parent", "cancel_child", "refresh"} {
+				t.Run(kind+"/"+action, func(t *testing.T) { testOrderedFKWitnessLocks(t, db, schema, kind, action) })
+			}
+		}
+	})
+}
+
+// Observe an actual lock-service waiter before cancellation or refresh. The
+// unrelated parent write must finish while the child transaction still holds
+// its witness; elapsed time without completion is never the wait oracle.
+func testOrderedFKWitnessLocks(t *testing.T, db *sql.DB, schema, kind, action string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
+	parent := schema + ".lock_parent_" + kind + "_" + action
+	child := schema + ".lock_child_" + kind + "_" + action
+	exec := func(q string) { t.Helper(); _, err := db.ExecContext(ctx, q); require.NoError(t, err, q) }
+	key, extra := "id", ""
+	if kind != "pk" {
+		key = "k"
+		extra = ",unique(k,id)"
+	}
+	if kind == "unique" {
+		extra = ",unique(k)"
+	}
+	exec("create table " + parent + "(id int primary key,k int,payload int" + extra + ")")
+	exec("insert into " + parent + " values(1,1,0),(2,2,0)")
+	exec("create table " + child + "(id int auto_increment primary key,u int,foreign key(id) references " + parent + "(" + key + "))")
+	holder, err := db.BeginTx(ctx, nil)
+	require.NoError(t, err)
+	defer holder.Rollback()
+	childSQL := "insert ignore into " + child + "(u) values(1)"
+	parentSQL := "delete from " + parent + " where id=1"
+	held, competing := childSQL, parentSQL
+	if action != "cancel_parent" {
+		held, competing = parentSQL, childSQL
+	}
+	_, err = holder.ExecContext(ctx, held)
+	require.NoError(t, err)
+	if action == "cancel_parent" {
+		// A table lock would block this statement until the holder ends.
+		progressCtx, progressCancel := context.WithTimeout(ctx, 3*time.Second)
+		_, err = db.ExecContext(progressCtx, "update "+parent+" set payload=1 where id=2")
+		progressCancel()
+		require.NoError(t, err, "unreferenced parent writes must progress before lock escalation")
+	}
+	writerCtx, cancelWriter := context.WithCancel(ctx)
+	defer cancelWriter()
+	done := make(chan error, 1)
+	go func() { _, e := db.ExecContext(writerCtx, competing); done <- e }()
+	require.Eventually(t, func() bool {
+		var waiting int
+		e := db.QueryRowContext(ctx, "select count(*) from mo_locks() l where l.lock_wait<>'' and l.table_id in (select rel_id from mo_catalog.mo_tables where reldatabase=?)", schema).Scan(&waiting)
+		require.NoError(t, e)
+		return waiting > 0
+	}, 5*time.Second, 10*time.Millisecond, "must observe a real waiter on a base or hidden-index namespace")
+	if action == "refresh" {
+		require.NoError(t, holder.Commit())
+	} else {
+		cancelWriter()
+	}
+	select {
+	case err = <-done:
+		if action == "refresh" {
+			require.NoError(t, err, "refreshed input must be replayed instead of reusing its old witness")
+		} else {
+			require.Error(t, err)
+			require.ErrorIs(t, writerCtx.Err(), context.Canceled)
+		}
+	case <-ctx.Done():
+		t.Fatal("writer did not finish after cancellation/refresh")
+	}
+	if action != "refresh" {
+		require.NoError(t, holder.Rollback())
+	}
+	var children int
+	require.NoError(t, db.QueryRowContext(ctx, "select count(*) from "+child).Scan(&children))
+	require.Zero(t, children, "cancelled/rolled-back or now-parentless children must not become visible")
+}

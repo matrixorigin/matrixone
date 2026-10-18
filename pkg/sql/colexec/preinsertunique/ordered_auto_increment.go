@@ -38,11 +38,11 @@ type orderedForeignKeyResult struct {
 	tuple         []*vector.Vector
 	selfTuple     []*vector.Vector
 	selfExecutor  colexec.ExpressionExecutor
+	lookup        *orderedFKLookup
 }
 
 type orderedAutoIncrementState struct {
 	foreignKeyResults []orderedForeignKeyResult
-	foreignKeysLocked bool
 	started           bool
 	remaining         uint64
 	nextBlock         uint64
@@ -222,41 +222,5 @@ func (preInsertUnique *PreInsertUnique) ensureOrderedWorkspace(proc *process.Pro
 	ws := disttae.NewTxnWorkSpace(eng, proc)
 	op.AddWorkspace(ws)
 	ws.BindTxnOp(op)
-	return nil
-}
-
-func (preInsertUnique *PreInsertUnique) validateOrderedAutoIncrement(proc *process.Process) error {
-	ctx := preInsertUnique.PreInsertCtx
-	spec := ctx.OrderedAutoIncrement
-	if spec != nil {
-		if !ctx.InsertIgnoreMultiDedup || !ctx.AutoIncrementReorder || spec.TableDef == nil || spec.ColumnIndex < 0 || int(spec.ColumnIndex) >= len(spec.TableDef.Cols) {
-			return moerr.NewInvalidInput(proc.Ctx, "invalid ordered AUTO_INCREMENT context")
-		}
-		col := spec.TableDef.Cols[spec.ColumnIndex]
-		if col == nil || !col.Typ.AutoIncr || !types.T(col.Typ.Id).ToType().IsIntOrUint() {
-			return moerr.NewInvalidInput(proc.Ctx, "invalid ordered AUTO_INCREMENT column")
-		}
-	}
-	if len(ctx.OrderedForeignKeys) > 0 && (!ctx.InsertIgnoreMultiDedup || spec != nil) {
-		return moerr.NewInvalidInput(proc.Ctx, "invalid independent ordered foreign-key context")
-	}
-	for _, fk := range preInsertUnique.orderedForeignKeys() {
-		if fk == nil || fk.TableDef == nil || fk.TableDef.Pkey == nil || fk.Predicate == nil || len(fk.ChildColumns) == 0 || len(fk.ParentColumns) < len(fk.ChildColumns) {
-			return moerr.NewInvalidInput(proc.Ctx, "invalid ordered foreign-key context")
-		}
-		if (spec == nil || len(fk.SelfParentColumns) > 0) && len(fk.SelfParentColumns) != len(fk.ChildColumns) {
-			return moerr.NewInvalidInput(proc.Ctx, "invalid self-referencing foreign-key context")
-		}
-		for _, child := range append(fk.ChildColumns[:len(fk.ChildColumns):len(fk.ChildColumns)], fk.SelfParentColumns...) {
-			if child == nil || child.ColPos < 0 {
-				return moerr.NewInvalidInput(proc.Ctx, "invalid ordered foreign-key child column")
-			}
-		}
-		for _, pos := range fk.ParentColumns {
-			if pos < 0 || int(pos) >= len(fk.TableDef.Cols) || fk.TableDef.Cols[pos] == nil {
-				return moerr.NewInvalidInput(proc.Ctx, "invalid ordered foreign-key parent column")
-			}
-		}
-	}
 	return nil
 }

@@ -1692,32 +1692,6 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 		}
 	}
 
-	parentColNames := func(parent *plan.TableDef, colIDs []uint64) ([]string, error) {
-		idToName := make(map[uint64]string, len(parent.Cols))
-		for _, col := range parent.Cols {
-			idToName[col.ColId] = col.Name
-		}
-		names := make([]string, len(colIDs))
-		for i, id := range colIDs {
-			var ok bool
-			if names[i], ok = idToName[id]; !ok {
-				return nil, moerr.NewInternalErrorf(builder.GetContext(),
-					"foreign-key parent column %d not found", id)
-			}
-		}
-		return names, nil
-	}
-	partsEqual := func(parts, names []string) bool {
-		if len(parts) != len(names) {
-			return false
-		}
-		for i := range parts {
-			if catalog.ResolveAlias(parts[i]) != names[i] {
-				return false
-			}
-		}
-		return true
-	}
 	validationFks := nonSelfFks
 	type foreignKeyLock struct {
 		tableDef  *plan.TableDef
@@ -1741,7 +1715,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			if parentTableDef == nil {
 				return 0, nil, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 			}
-			referencedNames, err := parentColNames(parentTableDef, fk.ForeignCols)
+			referencedNames, err := foreignKeyParentColumnNames(builder.GetContext(), parentTableDef, fk.ForeignCols)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -1756,12 +1730,12 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			// REPLACE pre-phase. Hidden targets then use the physical index-table
 			// name as the stable order shared by both sides.
 			targetKey := "0:"
-			if !partsEqual(pkeyNames, referencedNames) {
+			if !foreignKeyIndexPartsEqual(pkeyNames, referencedNames) {
 				if err := validateTableIndexDefinitions(parentTableDef); err != nil {
 					return 0, nil, err
 				}
 				for _, idxDef := range parentTableDef.Indexes {
-					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
+					if idxDef.Unique && foreignKeyIndexPartsEqual(idxDef.Parts, referencedNames) {
 						targetKey = "1:" + idxDef.IndexTableName
 						break
 					}
@@ -1790,7 +1764,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 			if parentTableDef == nil {
 				return 0, nil, moerr.NewInternalErrorf(builder.GetContext(), "parent table %d not found", fk.ForeignTbl)
 			}
-			referencedNames, err := parentColNames(parentTableDef, fk.ForeignCols)
+			referencedNames, err := foreignKeyParentColumnNames(builder.GetContext(), parentTableDef, fk.ForeignCols)
 			if err != nil {
 				return 0, nil, err
 			}
@@ -1833,7 +1807,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 					pkeyNames = []string{parentTableDef.Pkey.PkeyColName}
 				}
 			}
-			if partsEqual(pkeyNames, referencedNames) {
+			if foreignKeyIndexPartsEqual(pkeyNames, referencedNames) {
 				lockTableDef = parentTableDef
 				lockObjRef = parentObjRef
 				if len(childExprs) == 1 {
@@ -1850,7 +1824,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 				}
 				var matchedIndex *plan.IndexDef
 				for _, idxDef := range parentTableDef.Indexes {
-					if idxDef.Unique && partsEqual(idxDef.Parts, referencedNames) {
+					if idxDef.Unique && foreignKeyIndexPartsEqual(idxDef.Parts, referencedNames) {
 						matchedIndex = idxDef
 						break
 					}
@@ -1922,7 +1896,7 @@ func (builder *QueryBuilder) appendModernChildFkMarkOks(
 		for _, fk := range nonSelfFks {
 			baseTableIDs[fk.ForeignTbl] = struct{}{}
 		}
-		sortForeignKeyLockTargets(lockTargets, baseTableIDs)
+		SortForeignKeyLockTargets(lockTargets, baseTableIDs)
 		lockInputID := builder.appendNode(&plan.Node{
 			NodeType: plan.Node_PROJECT, Children: []int32{lastNodeID},
 			ProjectList: lockProject, BindingTags: []int32{lockTag},
@@ -2970,7 +2944,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// image (handled earlier, with appendOnDupIrregularMaintSource).
 	// LOAD IGNORE skips CHECK-invalid rows independently of its duplicate-key
 	// policy. INSERT IGNORE uses the same filter with its own duplicate policy.
-	ignoreCheckViolations := onDupAction == plan.Node_IGNORE || loadCheckIgnore
+	ignoreCheckViolations := (onDupAction == plan.Node_IGNORE && !builder.qry.LoadTag) || loadCheckIgnore
 	// The reordered path already materialized CHECK eligibility before
 	// PRE_INSERT. Keep that single evaluation while retaining LOAD's policy.
 	filterCheckRows := ignoreCheckViolations && autoIncrementGeneratedColumn < 0
@@ -5089,7 +5063,7 @@ func (builder *QueryBuilder) appendInsertReplaceSourceCasts(bindCtx *BindContext
 		lastNodeID, colName2Idx, skipUniqueIdx, err := builder.appendNodesForReplaceStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr)
 		return lastNodeID, colName2Idx, skipUniqueIdx, -1, err
 	} else {
-		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore)
+		return builder.appendNodesForInsertStmt(bindCtx, lastNodeID, tableDef, objRef, insertColToExpr, builder.isInsertIgnore, builder.isInsertIgnore)
 	}
 }
 
@@ -5342,7 +5316,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	tableDef *TableDef,
 	objRef *ObjectRef,
 	insertColToExpr map[string]*Expr,
-	assignmentIgnore bool,
+	assignmentIgnore, checkIgnore bool,
 ) (int32, map[string]int32, []bool, int32, error) {
 	colName2Idx := make(map[string]int32)
 	hasAutoCol := false
@@ -5573,7 +5547,7 @@ func (builder *QueryBuilder) appendNodesForInsertStmt(
 	markerPhysicalPos, trackAutoIncrementGenerated := builder.insertIgnoreAutoIncrementReorderable(
 		tableDef, skipUniqueIdx, compPkeyExpr, clusterByExpr)
 	var checkEligibility *plan.ColRef
-	if trackAutoIncrementGenerated && len(tableDef.Checks) > 0 {
+	if checkIgnore && trackAutoIncrementGenerated && len(tableDef.Checks) > 0 {
 		inputProjection := builder.qry.Nodes[lastNodeID].ProjectList
 		lastNodeID, err = appendCheckConstraintPlan(
 			builder, tmpCtx, tableDef, lastNodeID, materializedTag, colName2Idx, true)

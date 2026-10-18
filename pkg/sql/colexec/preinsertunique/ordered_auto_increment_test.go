@@ -24,6 +24,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
@@ -88,6 +89,7 @@ func TestOrderedAutoIncrementAllocation(t *testing.T) {
 					return 0, nil
 				}).AnyTimes()
 			proc.Base.IncrService = service
+			installODKUTestAllocation(t, arg)
 			require.NoError(t, arg.Prepare(proc))
 			result, err := arg.Call(proc)
 			require.NoError(t, err)
@@ -128,7 +130,7 @@ func TestOrderedAutoIncrementRejectsMalformedContext(t *testing.T) {
 			case "parent":
 				spec.ForeignKeys = []*plan.OrderedForeignKey{{TableDef: &plan.TableDef{Pkey: &plan.PrimaryKeyDef{}}, Predicate: &plan.Expr{}, ChildColumns: []*plan.ColRef{{}}, ParentColumns: []int32{1}}}
 			}
-			require.Error(t, p.validateOrderedAutoIncrement(proc))
+			require.Error(t, plan2.ValidateOrderedInsertIgnore(proc.Ctx, p.PreInsertCtx))
 		})
 	}
 }

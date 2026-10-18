@@ -2082,7 +2082,7 @@ func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
 	})
 	arg.PreInsertCtx = &planpb.PreInsertUkCtx{
 		InsertIgnoreMultiDedup: true, AutoIncrementReorder: true,
-		OrderedAutoIncrement: &planpb.OrderedAutoIncrement{ValuesRows: 3},
+		OrderedAutoIncrement: &planpb.OrderedAutoIncrement{ValuesRows: 3, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: planpb.Type{Id: int32(types.T_int32), AutoIncr: true}}}}},
 	}
 	scope := &Scope{Proc: proc, RootOp: arg, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}}
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
@@ -2101,13 +2101,22 @@ func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
 	require.NoError(t, validateRemoteInsertIgnoreEligibilityProtocol(proc, false))
 	require.Error(t, validateRemoteInsertIgnoreEligibilityProtocol(nil, true))
 
-	arg.PreInsertCtx = &planpb.PreInsertUkCtx{
-		InsertIgnoreMultiDedup: true,
-		OrderedForeignKeys: []*planpb.OrderedForeignKey{{
-			ChildColumns:      []*planpb.ColRef{{ColPos: 1}},
-			SelfParentColumns: []*planpb.ColRef{{ColPos: 0}},
-		}},
-	}
+	typ := types.T_int32.ToType().PlanType()
+	table := &planpb.TableDef{TblId: 99, Cols: []*planpb.ColDef{{Name: "id", Typ: typ}}, Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}, Name2ColIndex: map[string]int32{"id": 0}}
+	predicate, err := plan.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*planpb.Expr{
+		{Typ: typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		{Typ: typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}}})
+	require.NoError(t, err)
+	arg.TxnOffset = 7
+	arg.PreInsertCtx = &planpb.PreInsertUkCtx{InsertIgnoreMultiDedup: true,
+		OrderedForeignKeys: []*planpb.OrderedForeignKey{{TableDef: table, Predicate: predicate, ParentColumns: []int32{0},
+			ChildColumns: []*planpb.ColRef{{ColPos: 1}}, SelfParentColumns: []*planpb.ColRef{{ColPos: 0}},
+			ParentAccess: &planpb.OrderedForeignKeyAccess{Kind: planpb.OrderedForeignKeyAccess_PK_POINT,
+				LookupTableDef: table, LookupFilter: predicate,
+				LockTarget:     &planpb.LockTarget{TableId: 99, PrimaryColTyp: typ, Mode: lockpb.LockMode_Shared},
+				WitnessLockKey: &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+		}}}
+
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
 	data, err = encodeRemoteScope(scope, proc)
 	require.NoError(t, err)
@@ -2119,6 +2128,7 @@ func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
 		decodedArg.Release()
 	})
 	require.Equal(t, arg.PreInsertCtx.OrderedForeignKeys, decodedArg.PreInsertCtx.OrderedForeignKeys)
+	require.Equal(t, 7, decodedArg.TxnOffset)
 	destination.version = defines.MORPCVersion118
 	_, err = encodeRemoteScope(scope, proc)
 	require.ErrorContains(t, err, "protocol version 119")

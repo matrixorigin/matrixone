@@ -172,6 +172,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkOrderedAutoIncrement(p)
 	case *OrderedForeignKey:
 		return true, v.walkOrderedForeignKey(p)
+	case *OrderedForeignKeyAccess:
+		return true, v.walkOrderedForeignKeyAccess(p)
 	case *OriginTableMessageForFuzzy:
 		return true, v.walkOriginTableMessageForFuzzy(p)
 	case *Partition:
@@ -1223,6 +1225,30 @@ func (v *legacyCollationVisitor) walkOrderedForeignKey(p *OrderedForeignKey) err
 		return err
 	}
 	if err := v.walkExpr(p.Predicate); err != nil {
+		return err
+	}
+	if err := v.walkOrderedForeignKeyAccess(p.ParentAccess); err != nil {
+		return err
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkOrderedForeignKeyAccess(p *OrderedForeignKeyAccess) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkTableDef(p.LookupTableDef); err != nil {
+		return err
+	}
+	if err := v.walkExpr(p.LookupFilter); err != nil {
+		return err
+	}
+	if err := v.walkExpr(p.LookupBasePk); err != nil {
+		return err
+	}
+	if err := v.walkLockTarget(p.LockTarget); err != nil {
+		return err
+	}
+	if err := v.walkExpr(p.WitnessLockKey); err != nil {
 		return err
 	}
 	return nil

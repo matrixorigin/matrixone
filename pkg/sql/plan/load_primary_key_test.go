@@ -33,7 +33,7 @@ func TestLoadPrimaryKeyValidationPlan(t *testing.T) {
 	}{
 		{"primary", "nation", "1,n,1,c", "", 1},
 		{"primary and unique", "dept", "1,d,l", "", 1},
-		{"ignore unchanged", "nation", "1,n,1,c", "ignore", 0},
+		{"ignore accepted-row arbiter", "nation", "1,n,1,c", "ignore", 1},
 		{"replace unchanged", "nation", "1,n,1,c", "replace", 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -45,7 +45,11 @@ func TestLoadPrimaryKeyValidationPlan(t *testing.T) {
 			for _, n := range pn.GetQuery().Nodes {
 				if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP {
 					dedups++
-					require.Equal(t, planpb.Node_FAIL, n.OnDuplicateAction)
+					if tc.mode == "ignore" {
+						require.Equal(t, planpb.Node_IGNORE, n.OnDuplicateAction)
+					} else {
+						require.Equal(t, planpb.Node_FAIL, n.OnDuplicateAction)
+					}
 					require.False(t, n.DedupInputKeysUnique, "external input cannot prove primary-key uniqueness")
 				}
 			}

@@ -814,6 +814,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.PreInsertUnique:
+		if err := plan2.ValidateOrderedInsertIgnore(proc.Ctx, t.PreInsertCtx); err != nil {
+			return ctxId, nil, err
+		}
 		if err := validateRemoteInsertIgnoreEligibilityProtocol(proc, t.PreInsertCtx.GetRowEligibility() != nil || t.PreInsertCtx.GetOrderedAutoIncrement() != nil || len(t.PreInsertCtx.GetOrderedForeignKeys()) > 0); err != nil {
 			return ctxId, nil, err
 		}
@@ -827,6 +830,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
 			PreInsertUkCtx: t.PreInsertCtx,
+			TxnOffset:      int64(t.TxnOffset),
 		}
 	case *preinsertsecondaryindex.PreInsertSecIdx:
 		in.PreInsertSecondaryIndex = &pipeline.PreInsertSecondaryIndex{
@@ -1417,8 +1421,15 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = lockArg
 	case vm.PreInsertUnique:
 		t := opr.GetPreInsertUnique()
+		if t.GetTxnOffset() < 0 || int64(int(t.GetTxnOffset())) != t.GetTxnOffset() {
+			return nil, moerr.NewInvalidInputNoCtx("invalid ordered FK statement offset")
+		}
+		if err := plan2.ValidateOrderedInsertIgnore(context.Background(), t.GetPreInsertUkCtx()); err != nil {
+			return nil, err
+		}
 		arg := preinsertunique.NewArgument()
 		arg.PreInsertCtx = t.GetPreInsertUkCtx()
+		arg.TxnOffset = int(t.GetTxnOffset())
 		op = arg
 	case vm.PreInsertSecondaryIndex:
 		t := opr.GetPreInsertSecondaryIndex()

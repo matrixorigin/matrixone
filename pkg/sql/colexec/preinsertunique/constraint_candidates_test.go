@@ -15,7 +15,14 @@
 package preinsertunique
 
 import (
+	"context"
 	"testing"
+
+	"github.com/golang/mock/gomock"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -41,7 +48,7 @@ func TestInsertIgnoreConstraintCandidates(t *testing.T) {
 		{"non_default_series", []int32{2, 5, 8}, []int32{1, 2, 3},
 			[]bool{true, true, true}, []bool{false, true, true}, []int32{2, 5}, []int32{2, 3}},
 		{"rejected_explicit_does_not_lend", []int32{100, 101}, []int32{7, 7},
-			[]bool{false, true}, []bool{false, true}, []int32{101}, []int32{7}},
+			[]bool{false, true}, []bool{false, true}, []int32{1}, []int32{7}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProc(t)
@@ -55,6 +62,11 @@ func TestInsertIgnoreConstraintCandidates(t *testing.T) {
 			}
 			arg := newInsertIgnoreAutoIncrementArgument(input)
 			arg.PreInsertCtx.RowEligibility = &plan.ColRef{ColPos: 5}
+			if tc.name == "non_default_series" {
+				installOrderedConstraintAllocation(t, proc, arg, 2, 3)
+			} else {
+				installOrderedConstraintAllocation(t, proc, arg, 1, 1)
+			}
 			t.Cleanup(func() { arg.Free(proc, false, nil) })
 			require.NoError(t, arg.Prepare(proc))
 			result, err := arg.Call(proc)
@@ -87,6 +99,7 @@ func TestInsertIgnoreConstraintCandidatesEligibilityBoundary(t *testing.T) {
 			}
 			arg := newInsertIgnoreAutoIncrementArgument(input)
 			arg.PreInsertCtx.RowEligibility = &plan.ColRef{ColPos: 5}
+			installOrderedConstraintAllocation(t, proc, arg, 1, 1)
 			t.Cleanup(func() { arg.Free(proc, false, nil) })
 			require.NoError(t, arg.Prepare(proc))
 			result, err := arg.Call(proc)
@@ -115,6 +128,7 @@ func TestInsertIgnoreConstraintCandidatesAcrossEmptyBatch(t *testing.T) {
 	t.Cleanup(func() { require.Zero(t, proc.Mp().CurrNB()) })
 	arg := newInsertIgnoreAutoIncrementArgument(makeInput(1, false), makeInput(2, true))
 	arg.PreInsertCtx.RowEligibility = &plan.ColRef{ColPos: 5}
+	installOrderedConstraintAllocation(t, proc, arg, 1, 1)
 	t.Cleanup(func() { arg.Free(proc, false, nil) })
 	require.NoError(t, arg.Prepare(proc))
 	result, err := arg.Call(proc)
@@ -125,4 +139,25 @@ func TestInsertIgnoreConstraintCandidatesAcrossEmptyBatch(t *testing.T) {
 	require.Equal(t, []int32{1}, vector.MustFixedColNoTypeCheck[int32](result.Batch.Vecs[0])[:result.Batch.RowCount()])
 	arg.Reset(proc, false, nil)
 	require.Empty(t, arg.ctr.autoIncrementCandidates.runs)
+}
+
+// The planner produces ordered allocation with row eligibility. Exercise that
+// real contract instead of the old, unproduced eager-allocation hybrid.
+func installOrderedConstraintAllocation(t *testing.T, proc *process.Process, arg *PreInsertUnique, next, step uint64) {
+	t.Helper()
+	arg.PreInsertCtx.OrderedAutoIncrement = &plan.OrderedAutoIncrement{TableDef: &plan.TableDef{TblId: 44, IsTemporary: true,
+		Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int32), AutoIncr: true}}}}}
+	installODKUTestAllocation(t, arg)
+	service := mock_frontend.NewMockAutoIncrementService(gomock.NewController(t))
+	service.EXPECT().InsertValues(gomock.Any(), uint64(44), uint32(0), gomock.Any(), gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+		func(ctx context.Context, _ uint64, _ uint32, _ client.TxnOperator, vecs []*vector.Vector, rows int, _ int64) (uint64, error) {
+			request, ok := incrservice.AutoIncrementReservationFromContext(ctx)
+			require.True(t, ok, "these cases never accept an explicit fence")
+			require.Zero(t, rows)
+			require.Empty(t, vecs)
+			request.Runs = []incrservice.AutoIncrementRun{{First: next, Step: step, Count: request.Count}}
+			next += request.Count * step
+			return 0, nil
+		}).AnyTimes()
+	proc.Base.IncrService = service
 }

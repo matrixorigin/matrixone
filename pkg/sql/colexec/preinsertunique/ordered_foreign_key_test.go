@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -72,7 +73,9 @@ func TestOrderedForeignKeyProbe(t *testing.T) {
 			if mode == "self" {
 				check.SelfParentColumns = []*plan.ColRef{{ColPos: 1}}
 			}
-			arg := &PreInsertUnique{PreInsertCtx: &plan.PreInsertUkCtx{AutoIncrementColumn: 0, OrderedAutoIncrement: &plan.OrderedAutoIncrement{ForeignKeys: []*plan.OrderedForeignKey{check}}}}
+			addOrderedFKTestAccess(t, check, typ)
+			arg := &PreInsertUnique{TxnOffset: 7, PreInsertCtx: &plan.PreInsertUkCtx{AutoIncrementColumn: 0, OrderedAutoIncrement: &plan.OrderedAutoIncrement{ForeignKeys: []*plan.OrderedForeignKey{check}}}}
+			installODKUTestAllocation(t, arg)
 			t.Cleanup(func() { arg.freeAcceptedState(proc) })
 			injected := moerr.NewInternalErrorNoCtx("probe failed")
 			if mode != "null" && mode != "cancelled" {
@@ -92,8 +95,8 @@ func TestOrderedForeignKeyProbe(t *testing.T) {
 					}
 					reader := mock_frontend.NewMockReader(ctrl)
 					rel.EXPECT().BuildReaders(gomock.Any(), proc, gomock.Any(), nil, 1, 7, false, engine.TombstoneApplyPolicy(engine.Policy_CheckAll), engine.FilterHint{}).Return([]engine.Reader{reader}, readerErr)
+					reader.EXPECT().Close().Return(nil)
 					if readerErr == nil {
-						reader.EXPECT().Close().Return(nil)
 						reader.EXPECT().Read(gomock.Any(), []string{"id"}, nil, proc.Mp(), gomock.Any()).DoAndReturn(func(_ context.Context, _ []string, _ *plan.Expr, mp *mpool.MPool, out *batch.Batch) (bool, error) {
 							require.Equal(t, []string{"id"}, out.Attrs)
 							if mode == "read_error" {
@@ -138,4 +141,16 @@ func TestOrderedForeignKeyProbe(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Use the same complete descriptor that planning sends to a remote arbiter.
+func addOrderedFKTestAccess(t *testing.T, check *plan.OrderedForeignKey, typ plan.Type) {
+	t.Helper()
+	pos := check.ParentColumns[0]
+	check.TableDef.Pkey = &plan.PrimaryKeyDef{PkeyColName: check.TableDef.Cols[pos].Name, Names: []string{check.TableDef.Cols[pos].Name}}
+	check.TableDef.Name2ColIndex = map[string]int32{check.TableDef.Cols[pos].Name: pos}
+	check.ParentAccess = &plan.OrderedForeignKeyAccess{Kind: plan.OrderedForeignKeyAccess_PK_POINT,
+		LookupTableDef: check.TableDef, LookupFilter: plan2.DeepCopyExpr(check.Predicate),
+		LockTarget:     &plan.LockTarget{TableId: check.TableDef.TblId, PrimaryColTyp: typ, Mode: lockpb.LockMode_Shared},
+		WitnessLockKey: &plan.Expr{Typ: typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}}
 }

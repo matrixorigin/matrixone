@@ -1588,6 +1588,27 @@ message OrderedForeignKey {
   Expr predicate = 5;
   // Non-empty only for self references; final accepted parent tuple inputs.
   repeated ColRef self_parent_columns = 6;
+  // Immutable physical access and witness-lock decisions made by the planner.
+  OrderedForeignKeyAccess parent_access = 7;
+}
+
+message OrderedForeignKeyAccess {
+  enum Kind {
+    UNSPECIFIED = 0;
+    PK_POINT = 1;
+    UNIQUE_POINT = 2;
+    RESIDENT = 3;
+  }
+  Kind kind = 1;
+  ObjectRef lookup_ref = 2;
+  TableDef lookup_table_def = 3;
+  // Relation 0 names the access relation; relation 1 is the final child tuple.
+  Expr lookup_filter = 4;
+  // UNIQUE access projects the base parent's physical PK from the index row.
+  Expr lookup_base_pk = 5;
+  LockTarget lock_target = 6;
+  // Expression over base-parent ordinals, evaluated on the actual witness row.
+  Expr witness_lock_key = 7;
 }
 
 message PreInsertCtx {
