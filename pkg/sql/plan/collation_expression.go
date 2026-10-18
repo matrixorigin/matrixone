@@ -43,7 +43,19 @@ func (b *baseBinder) bindCollateExpr(ast *tree.CollateExpr, depth int32) (*Expr,
 	if !admitted {
 		return nil, moerr.NewNotSupportedf(ctx, "collation '%s' is disabled", ast.Collation)
 	}
-	if err := collation.RequireLegacy(uint32(identity), version, 0); err != nil {
+	bindingRevision, err := explicitCollationBindingRevision(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if identity == collation.UTF8MB4GeneralCIIdentity || identity == collation.UTF8MB4BinIdentity {
+		version = bindingRevision
+	}
+	selectedType := plan.Type{Id: int32(types.T_varchar), Charset: uint32(identity), CollationVersion: version}
+	if plan.HasNativePADCollation(selectedType) && (b.persistedExpressionBinding ||
+		b.ctx != nil && b.ctx.persistedExpressionProtocolRequirement != nil) {
+		return nil, moerr.NewNotSupported(ctx, "native PAD collation persistence is disabled")
+	}
+	if err := plan.RequireExecutableCollations(selectedType); err != nil {
 		return nil, err
 	}
 	expr, err := func() (*Expr, error) {

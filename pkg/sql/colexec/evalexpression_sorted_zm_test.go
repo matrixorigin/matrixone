@@ -17,6 +17,7 @@ package colexec
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -30,6 +31,48 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+// 解码owner必须自己否定raw-order证明；外层Expr可能是tuple或旧声明。
+// 这是内部保守性契约，不把人工构造的声明错配声称为可达SQL故障。
+func TestZoneMapMembershipRejectsNativeOrder(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
+	for _, charset := range []uint8{2, 3} {
+		for _, revision := range []uint8{0, 1} {
+			for _, shape := range []string{"empty", "sorted", "const", "null"} {
+				t.Run(fmt.Sprintf("%d/%d/%s", charset, revision, shape), func(t *testing.T) {
+					typ := types.NewWithCharset(types.T_varchar, 8, 0, charset)
+					typ.CollationVersion = revision
+					var vec *vector.Vector
+					var err error
+					switch shape {
+					case "const":
+						vec, err = vector.NewConstBytes(typ, []byte("a "), 2, mp)
+					case "null":
+						vec = vector.NewConstNull(typ, 2, mp)
+					default:
+						vec = vector.NewVec(typ)
+					}
+					require.NoError(t, err)
+					defer vec.Free(mp)
+					if shape == "sorted" {
+						require.NoError(t, vector.AppendBytes(vec, []byte("a "), false, mp))
+						vec.InplaceSortAndCompact()
+					}
+					data, err := vec.MarshalBinary()
+					require.NoError(t, err)
+					for _, prefix := range []bool{false, true} {
+						decoded, usable := zoneMapInVector(data, prefix)
+						if decoded != nil {
+							defer decoded.Free(mp)
+						}
+						require.Equal(t, revision == 0, usable)
+					}
+				})
+			}
+		}
+	}
+}
 
 func zmVarcharPayload(t *testing.T, mp *mpool.MPool, values ...string) []byte {
 	t.Helper()

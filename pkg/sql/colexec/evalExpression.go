@@ -2636,6 +2636,11 @@ func zoneMapInVector(data []byte, prefixSearch bool) (*vector.Vector, bool) {
 	if err := vec.UnmarshalBinary(data); err != nil {
 		return nil, false
 	}
+	// 外层tuple/Fold声明不是编码域的证明。原生域的sorted标志、常量和
+	// NULL快捷路径也不能授权对persisted raw-byte元数据剪枝。
+	if vec.GetType().CollationVersion != types.CollationVersionLegacy {
+		return nil, false
+	}
 	if !prefixSearch && vec.GetType().Oid == types.T_char {
 		// IN dispatches on the decoded item type; SQL CHAR trims spaces,
 		// whereas AnyIn searches persisted raw-byte metadata.

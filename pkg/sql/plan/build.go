@@ -672,10 +672,22 @@ func selectTreeHasExportParam(value reflect.Value) bool {
 	return false
 }
 
+// requireBoundPlanCollations 不将可执行表达式准入扩展到catalog/schema。
+// PREPARE只是包装，其内层DDL仍走原来的持久化门。
+func requireBoundPlanCollations(result *Plan) error {
+	if result.GetQuery() != nil {
+		return plan.RequireExecutableCollations(result)
+	}
+	if prepared := result.GetDcl().GetPrepare(); prepared != nil {
+		return requireBoundPlanCollations(prepared.Plan)
+	}
+	return plan.RequireLegacyCollations(result)
+}
+
 func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (result *Plan, err error) {
 	defer func() {
 		if err == nil {
-			err = plan.RequireLegacyCollations(result)
+			err = requireBoundPlanCollations(result)
 			if err != nil {
 				result = nil
 			}

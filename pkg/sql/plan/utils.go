@@ -2021,7 +2021,7 @@ func constantFoldWithPreparedExactSource(
 		}
 
 		return &plan.Expr{
-			Typ: expr.Typ,
+			Typ: rule.FoldedVectorType(expr.Typ, vec),
 			Expr: &plan.Expr_Vec{
 				Vec: &plan.LiteralVec{
 					Len:                       int32(vec.Length()),

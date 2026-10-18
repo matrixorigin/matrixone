@@ -88,6 +88,13 @@ func resolveDivPrecisionIncrement(ctx CompilerContext) int32 {
 // expressions with the same statement setting as ordinary SELECT expressions.
 func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Context {
 	bound := function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
+	// 独立DEFAULT/generated binder从process借用基础context，但绑定来源
+	// 属于compiler/object，不能因为换了context owner而丢掉历史/原生代际。
+	if source := ctx.GetContext(); source != nil {
+		if revision := source.Value(collationBindingRevisionKey{}); revision != nil {
+			bound = context.WithValue(bound, collationBindingRevisionKey{}, revision)
+		}
+	}
 	if function.LegacySpecialConsumers(ctx.GetContext()) {
 		return function.WithLegacySpecialConsumers(bound)
 	}

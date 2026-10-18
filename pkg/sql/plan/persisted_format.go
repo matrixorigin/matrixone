@@ -29,9 +29,11 @@ import (
 // transient integer precision contract. Keep the mode scoped to this authoring
 // operation; nested non-FORMAT consumers retain their own argument contracts.
 func (b *baseBinder) bindPersistedExpr(ast tree.Expr, depth int32, isRoot bool) (*planpb.Expr, error) {
-	previous := b.persistedFormatCompatibility
-	b.persistedFormatCompatibility = true
-	defer func() { b.persistedFormatCompatibility = previous }()
+	previous, previousBinding := b.persistedFormatCompatibility, b.persistedExpressionBinding
+	b.persistedFormatCompatibility, b.persistedExpressionBinding = true, true
+	defer func() {
+		b.persistedFormatCompatibility, b.persistedExpressionBinding = previous, previousBinding
+	}()
 	return b.impl.BindExpr(ast, depth, isRoot)
 }
 

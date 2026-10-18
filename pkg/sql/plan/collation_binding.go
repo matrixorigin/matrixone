@@ -23,6 +23,20 @@ import (
 
 type collationBindingRevisionKey struct{}
 
+// explicitCollationBindingRevision 使用当前绑定来源，不从session默认或
+// protocol推断。公开入口仍保持legacy，直到原生SQL验证与持久化隔离闭合。
+func explicitCollationBindingRevision(ctx context.Context) (uint32, error) {
+	if ctx != nil {
+		if value := ctx.Value(collationBindingRevisionKey{}); value != nil {
+			if revision, ok := value.(uint32); ok && revision <= uint32(collation.RevisionV1) {
+				return revision, nil
+			}
+			return 0, moerr.NewNotSupportedf(ctx, "unsupported collation binding revision %v", value)
+		}
+	}
+	return uint32(collation.RevisionLegacy), nil
+}
+
 // persistedCollationBindingRevision 校验SQL重绑定来源，不能根据当前会话、
 // RequiredProtocolVersion或结果列类型猜测历史对象的绑定代际。
 func persistedCollationBindingRevision(ctx context.Context, revision uint32) error {

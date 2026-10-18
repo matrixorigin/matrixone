@@ -1142,6 +1142,8 @@ type baseBinder struct {
 	// Catalog FORMAT must choose its legacy string contract before binding
 	// precision: some historical source types (e.g. DATE) cannot cast to INT64.
 	persistedFormatCompatibility bool
+	// 绑定期持久化边界不能等到常量折叠后才检查原生域。
+	persistedExpressionBinding bool
 	// Integer consumers own the source domain of their operands. An enclosing
 	// default/assignment target must not pre-convert their numeric literals.
 	integerArgumentSourceContext     bool

@@ -1526,6 +1526,9 @@ func genAsSelectCols(
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
+	// CTAS也是持久化边界，不能让fold为bool的原生表达式绕过准入。
+	requiredProtocol := int64(0)
+	bindCtx.persistedExpressionProtocolRequirement = &requiredProtocol
 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
