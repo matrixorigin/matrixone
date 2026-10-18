@@ -229,7 +229,7 @@ func TestTableDumpExactBaseTimestampAddBindings(t *testing.T) {
 	// published main binder, not synthesized by a compatibility context.
 	directData, err := os.ReadFile("testdata/timestampadd_direct_baseline.json")
 	require.NoError(t, err)
-	require.Equal(t, "76c95a9bbb3f8ea55e0cc589717e664b9cbfccaaa4033e97dd05718e07d2ad67", fmt.Sprintf("%x", sha256.Sum256(directData)))
+	require.Equal(t, "b4377672e0a97f09f81fac985143c89caf30ea08b363831bbf42faaa3d9c8f97", fmt.Sprintf("%x", sha256.Sum256(directData)))
 	var direct struct {
 		Source     string `json:"source"`
 		DDL        string `json:"ddl"`
@@ -248,7 +248,11 @@ func TestTableDumpExactBaseTimestampAddBindings(t *testing.T) {
 			var source planpb.TableDef
 			require.NoError(t, proto.Unmarshal(fixtures[name], &source))
 			expression := "timestampadd(second," + interval + ",cast('2024-01-01' as datetime(6)))"
-			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(a decimal(10,2),g datetime(6) generated always as ("+expression+") stored,check ("+expression+" is not null))", 1)
+			check := expression + " is not null"
+			if name == "direct_decimal" {
+				check = expression + " < cast('2024-01-01 00:01:00' as datetime(6))"
+			}
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(a decimal(10,2),g datetime(6) generated always as ("+expression+") stored,check ("+check+"))", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
 			built, err := BuildPlan(ctx, stmt, false)

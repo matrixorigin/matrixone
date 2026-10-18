@@ -1993,6 +1993,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.createSql = oldCreateSQL
 				tbl.extraInfo.Checks = oldChecks
 			case api.AlterKind_ReplaceDef:
+				tbl.extraInfo.Checks = oldChecks
 				tbl.extraInfo.DefaultCharset = oldDefaultCharset
 				tbl.extraInfo.CollationVersion = oldCollationVersion
 			case api.AlterKind_RenameColumn:
@@ -2097,7 +2098,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			return err
 		}
 		// Catalog regeneration uses extraInfo independently of the property
-		// factory in baseDefs. Publish the validated pair through both owners.
+		// factory in baseDefs. Publish CHECKs and charset/collation through both
+		// owners without retaining aliases to the replacement request.
+		tbl.extraInfo.Checks = api.CloneExtra(&api.SchemaExtra{Checks: replacementExtra.Checks}).Checks
 		tbl.extraInfo.DefaultCharset = replacementExtra.DefaultCharset
 		tbl.extraInfo.CollationVersion = replacementExtra.CollationVersion
 		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)

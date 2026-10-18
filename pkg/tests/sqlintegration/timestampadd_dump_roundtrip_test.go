@@ -26,7 +26,7 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/gogo/protobuf/proto"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -65,7 +65,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		exec("use " + schema)
 		exec("set time_zone='+00:00'")
 		create := func(name string) {
-			exec("create table " + name + "(a decimal(10,2),g datetime(6) generated always as(timestampadd(second,a,cast('2024-01-01' as datetime(6)))) stored,check(timestampadd(second,a,cast('2024-01-01' as datetime(6))) is not null))")
+			exec("create table " + name + "(a decimal(10,2),g datetime(6) generated always as(timestampadd(second,a,cast('2024-01-01' as datetime(6)))) stored,check(timestampadd(second,a,cast('2024-01-01' as datetime(6))) < cast('2024-01-01 00:01:00' as datetime(6))))")
 		}
 		for _, name := range []string{"seed_current", "historical_source", "restored", "fresh_control", "rejected_legacy"} {
 			create(name)
@@ -122,6 +122,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 			for _, dest := range transport.Checks {
 				if dest.Name == source.Name {
 					require.Equal(t, source.OriginSql, dest.OriginSql)
+					require.False(t, proto.Equal(source.Check, dest.Check), "fresh and historical CHECKs must differ")
 					dest.Check = source.Check
 					copied++
 				}
@@ -158,11 +159,26 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion118)
 		exec("dump table historical_source to '" + dataPath + "'")
 		exported := readManifest(dataPath)
+		assertHistoricalChecks := func(manifest map[string]json.RawMessage) {
+			t.Helper()
+			var payload []byte
+			require.NoError(t, json.Unmarshal(manifest["bound_expressions"], &payload))
+			var published planpb.TableDef
+			require.NoError(t, proto.Unmarshal(payload, &published))
+			require.Equal(t, len(def.Checks), len(published.Checks))
+			for i, check := range def.Checks {
+				require.True(t, proto.Equal(check, published.Checks[i]), "catalog must retain the complete historical CHECK")
+			}
+		}
+		assertHistoricalChecks(exported)
 		var metadataOnly bool
 		require.NoError(t, json.Unmarshal(exported["metadata_only"], &metadataOnly))
 		require.False(t, metadataOnly)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion119)
 		exec("load table restored from '" + dataPath + "'")
+		restoredMetadata := filepath.Join(root, "restored-metadata")
+		exec("dump table restored to '" + restoredMetadata + "' metadata only")
+		assertHistoricalChecks(readManifest(restoredMetadata))
 		scalar("select cast(g as char) from restored", "2024-01-01 00:00:02.000000")
 		func() {
 			rows, err := conn.QueryContext(ctx, "select g from restored")
@@ -193,6 +209,15 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		exec("insert into rejected_legacy(a) values(1.50)")
 		scalar("select cast(g as char) from rejected_legacy", "2024-01-01 00:00:01.500000")
 
+		// 59.50 is valid under fractional semantics (<60s), but rounds to 60s
+		// under the preserved CHECK. Observe enforcement, not only metadata.
+		_, err = conn.ExecContext(ctx, "insert into restored(a) values(59.50)")
+		var checkErr *mysql.MySQLError
+		require.ErrorAs(t, err, &checkErr)
+		require.Equal(t, uint16(3819), checkErr.Number)
+		scalar("select count(*) from restored where a=59.50", "0")
+		exec("insert into fresh_control(a) values(59.50)")
+		scalar("select cast(g as char) from fresh_control where a=59.50", "2024-01-01 00:00:59.500000")
 		exec("insert into restored(a) values(2.50)")
 		scalar("select cast(g as char) from restored where a=2.50", "2024-01-01 00:00:03.000000")
 		exec("update restored set a=3.50 where a=1.50")
