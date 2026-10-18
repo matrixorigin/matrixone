@@ -46,11 +46,34 @@ func TestMaterializedViewExecutionCapability(t *testing.T) {
 	proc.Base.TxnOperator = op
 	c := &Compile{proc: proc}
 	def := &plan.TableDef{TableType: catalog.SystemMaterializedViewRel, TblId: 99}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+	t.Cleanup(func() {
+		if present {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+		}
+	})
+	nodes := []*plan.Node{
+		{NodeType: plan.Node_INSERT, InsertCtx: &plan.InsertCtx{TableDef: def}},
+		{NodeType: plan.Node_DELETE, DeleteCtx: &plan.DeleteCtx{TableDef: def}},
+		{NodeType: plan.Node_MULTI_UPDATE, UpdateCtxList: []*plan.UpdateCtx{{TableDef: &plan.TableDef{}}, {TableDef: def}}},
+	}
+	for _, node := range nodes {
+		// Admission precedes source/compiler/engine setup, as in the shared-table fixture.
+		_, err := c.compileDependentQuery(&plan.Query{Steps: []int32{0}, Nodes: []*plan.Node{node}})
+		require.ErrorContains(t, err, "materialized view is read only", node.NodeType.String())
+	}
 	require.Error(t, c.validateMaterializedViewWrite(def))
 	proc.Ctx = defines.WithMaterializedViewWrite(proc.Ctx, 7, 99, []byte("binding"))
 	require.Error(t, c.validateMaterializedViewWrite(def))
 	proc.Ctx = defines.WithMaterializedViewWrite(proc.Ctx, 7, 99, []byte("execution"))
 	require.NoError(t, c.validateMaterializedViewWrite(def))
+	for _, node := range nodes {
+		require.NoError(t, c.validateDMLTarget(node), "authorized refresh capability must remain valid")
+	}
 	def.TblId = 100
 	require.Error(t, c.validateMaterializedViewWrite(def))
 	def.TableType = catalog.SystemOrdinaryRel
@@ -64,12 +87,16 @@ func TestMaterializedViewCompileProtocolAdmission(t *testing.T) {
 		register        bool
 		ordinary        bool
 		wantErr         bool
+		dependent       bool
 	}{
-		{"old scan protocol", defines.MORPCVersion118, defines.MORPCVersion119, false, false, true},
-		{"current scan protocol", defines.MORPCVersion119, defines.MORPCVersion119, false, false, false},
-		{"ordinary scan", defines.MORPCVersion118, defines.MORPCVersion118, false, true, false},
-		{"old registration protocol", defines.MORPCVersion118, defines.MORPCVersion119, true, false, true},
-		{"old registration floor", defines.MORPCVersion119, defines.MORPCVersion118, true, false, true},
+		{"old scan protocol", defines.MORPCVersion119, defines.MORPCVersion120, false, false, true, false},
+		{"current scan protocol", defines.MORPCVersion120, defines.MORPCVersion120, false, false, false, false},
+		{"ordinary scan", defines.MORPCVersion119, defines.MORPCVersion119, false, true, false, false},
+		{"old registration protocol", defines.MORPCVersion119, defines.MORPCVersion120, true, false, true, false},
+		{"old registration floor", defines.MORPCVersion120, defines.MORPCVersion119, true, false, true, false},
+		{"old dependent scan protocol", defines.MORPCVersion119, defines.MORPCVersion120, false, false, true, true},
+		{"current dependent scan protocol", defines.MORPCVersion120, defines.MORPCVersion120, false, false, false, true},
+		{"ordinary dependent scan", defines.MORPCVersion119, defines.MORPCVersion119, false, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
@@ -103,6 +130,8 @@ func TestMaterializedViewCompileProtocolAdmission(t *testing.T) {
 			if tc.register {
 				// Rejection must precede relation lookup and catalog publication.
 				err = c.registerMaterializedView(nil, "db", "mv", def)
+			} else if tc.dependent {
+				_, err = c.compileDependentSource(&plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: def})
 			} else {
 				err = c.validateMaterializedViewScan(def)
 			}

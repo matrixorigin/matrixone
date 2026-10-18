@@ -19,7 +19,9 @@ Its original division precision cannot be reconstructed: refresh requires
 recreation, without guessing from output scale or adopting default 4. Migration
 4.0.17 pauses legacy periodic policies and advances the existing epoch so queued
 work cannot refresh them. Preserve main migrations through 4.0.16 and charset
-protocol118; MV authoring, scans, task registration and upgrade share protocol119.
+protocol118 and correlated-program protocol119. MV authoring, scans, task
+registration and upgrade require protocol120 after the main integration; see
+[the compatibility and execution-consumer follow-up](materialized_view_protocol120_integration.md).
 
 Preserve main's full table-definition resolution before LIMIT 0 pruning. For MV
 subtrees only, the compiler's empty-result shortcut yields to its existing scan

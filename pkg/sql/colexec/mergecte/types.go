@@ -16,8 +16,10 @@ package mergecte
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/cteaccount"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 
@@ -37,11 +39,15 @@ const (
 )
 
 type container struct {
-	buf        *batch.Batch
-	bats       []*batch.Batch
-	curNodeCnt int32
-	status     int32
-	last       bool
+	allocation  colexec.SetOperationAllocation
+	directories colexec.AnalyticAllocation
+	accounted   bool
+	iterator    hashmap.Iterator
+	buf         *batch.Batch
+	bats        []*batch.Batch
+	curNodeCnt  int32
+	status      int32
+	last        bool
 	// freeBats owns the cached batches. buf and bats are only aliases.
 	freeBats       []*batch.Batch
 	i              int
@@ -61,6 +67,25 @@ type MergeCTE struct {
 	Distinct bool
 
 	vm.OperatorBase
+}
+
+func (mergeCTE *MergeCTE) SetAllocationAccount(account *mpool.AllocationAccount) error {
+	if err := mergeCTE.ctr.allocation.SetAllocationAccount(account); err != nil {
+		return err
+	}
+	mergeCTE.ctr.accounted = true
+	mergeCTE.ctr.directories.Account = account
+	return nil
+}
+func (mergeCTE *MergeCTE) ClearAllocationAccount(account *mpool.AllocationAccount) error {
+	if err := mergeCTE.ctr.directories.Clear(account); err != nil {
+		return err
+	}
+	if err := mergeCTE.ctr.allocation.ClearAllocationAccount(account); err != nil {
+		return err
+	}
+	mergeCTE.ctr.accounted = false
+	return nil
 }
 
 func (mergeCTE *MergeCTE) GetOperatorBase() *vm.OperatorBase {
@@ -105,6 +130,11 @@ func (mergeCTE *MergeCTE) Release() {
 }
 
 func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	defer func() {
+		if mergeCTE.ctr.accounted {
+			mergeCTE.Free(proc, pipelineFailed, err)
+		}
+	}()
 	ctr := &mergeCTE.ctr
 	// Discard references from the previous execution without destroying the
 	// reusable cache owned by freeBats.
@@ -116,7 +146,7 @@ func (mergeCTE *MergeCTE) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.last = false
 	ctr.recursiveLevel = 0
 	ctr.hasRecursiveRows = false
-	ctr.cleanHashTable()
+	ctr.cleanHashTable(proc.Mp())
 }
 
 func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err error) {
@@ -132,14 +162,20 @@ func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.freeBats = nil
 	ctr.i = 0
 	ctr.hasRecursiveRows = false
-	ctr.cleanHashTable()
+	ctr.cleanHashTable(proc.Mp())
+	ctr.directories.FreeMetadata()
 }
 
 func (mergeCTE *MergeCTE) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
 	return input, nil
 }
 
-func (ctr *container) cleanHashTable() {
+func (ctr *container) cleanHashTable(mp *mpool.MPool) {
+	hashmap.IteratorClearOwner(ctr.iterator)
+	ctr.iterator = nil
+	if cap(ctr.insertedRows) > 0 {
+		mpool.FreeSlice(mp, ctr.insertedRows)
+	}
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil

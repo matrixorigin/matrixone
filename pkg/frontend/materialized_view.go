@@ -72,7 +72,7 @@ func checkMaterializedViewTransaction(ctx context.Context, ses *Session) error {
 	if ses.GetTxnHandler().InMultiStmtTransactionMode() {
 		return moerr.NewInvalidInput(ctx, "materialized view DDL/refresh cannot execute in an active user transaction")
 	}
-	return plan2.RequirePersistedProtocolVersionForAuthoring(ctx, ses.GetTxnCompileCtx().GetProcess(), defines.MORPCVersion119)
+	return plan2.RequirePersistedProtocolVersionForAuthoring(ctx, ses.GetTxnCompileCtx().GetProcess(), defines.MORPCVersion120)
 }
 func handleRefreshMaterializedView(ctx context.Context, ses *Session, stmt *tree.RefreshMaterializedView) error {
 	if err := checkMaterializedViewTransaction(ctx, ses); err != nil {

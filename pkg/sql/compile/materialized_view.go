@@ -51,7 +51,7 @@ func (c *Compile) registerMaterializedView(db engine.Database, dbName, name stri
 	if definition == nil {
 		return nil
 	}
-	if err := plan2.RequirePersistedProtocolVersionForAuthoring(c.proc.Ctx, c.proc, defines.MORPCVersion119); err != nil {
+	if err := plan2.RequirePersistedProtocolVersionForAuthoring(c.proc.Ctx, c.proc, defines.MORPCVersion120); err != nil {
 		return err
 	}
 	r, err := db.Relation(c.proc.Ctx, name, nil)
@@ -75,7 +75,7 @@ func (c *Compile) validateMaterializedViewScan(def *plan.TableDef) error {
 	if def == nil || def.TableType != catalog.SystemMaterializedViewRel {
 		return nil
 	}
-	if err := plan2.RequirePersistedProtocolVersion(c.proc.Ctx, c.proc, defines.MORPCVersion119); err != nil {
+	if err := plan2.RequirePersistedProtocolVersion(c.proc.Ctx, c.proc, defines.MORPCVersion120); err != nil {
 		return err
 	}
 	account, err := defines.GetAccountId(c.proc.Ctx)
@@ -154,6 +154,28 @@ func (c *Compile) guardMaterializedViewDDL(dbName, name string, allowMV bool) er
 		}
 		return nil
 	})
+}
+
+// Both ordinary scopes and dependent programs enter through validateDMLTarget.
+// Keep the transaction-bound write capability check before any target operator.
+func (c *Compile) validateMaterializedViewDML(node *plan.Node) error {
+	switch node.NodeType {
+	case plan.Node_INSERT:
+		if node.InsertCtx != nil {
+			return c.validateMaterializedViewWrite(node.InsertCtx.TableDef)
+		}
+	case plan.Node_DELETE:
+		if node.DeleteCtx != nil {
+			return c.validateMaterializedViewWrite(node.DeleteCtx.TableDef)
+		}
+	case plan.Node_MULTI_UPDATE:
+		for _, update := range node.UpdateCtxList {
+			if err := c.validateMaterializedViewWrite(update.TableDef); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Compile) validateMaterializedViewWrite(def *plan.TableDef) error {

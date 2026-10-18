@@ -156,7 +156,7 @@ and cleans its own database. Validate both transaction modes by configuring
 
 `-consumer-check` selects the native consumer regressions for review5562448876.
 It reuses the existing authenticated BVT service and owns a two-row indexed
-source, manual MVs and one altered periodic policy. Eleven checks cover prepared
+source, manual MVs and one altered periodic policy. Fourteen checks cover prepared
 DELETE before MV creation in a different session/CN, unrestricted DELETE with creation disabled, affected
 rows including an empty source, unique/secondary maintenance, explicit TRUNCATE
 protection and ALTER COPY rejection without preparation residue, DUMP/LOAD kind admission before file access with unchanged publication,
@@ -192,3 +192,11 @@ same-run queue replay after each restart, and catalog/history/task cleanup.
 The current production binary supports these SQL-enabled refresh failpoints;
 the `matrixone_mv_faults` build tag is required for startup migration injection
 in the full upgrade mode. The original full mode still requires `--old-service`.
+
+After integrating coordinator-owned correlated programs (protocol119), MV
+admission requires protocol120. The consumer fixture also checks deep correlated
+reads of unpopulated/populated MVs, LIMIT0/WHERE FALSE controls and read-only
+INSERT/UPDATE/DELETE with dependent expressions. Both compiler paths share the
+transaction-bound target capability check. Historical119 MV receipts predate
+this main integration.
+The consumer report retains the correlated MV query EXPLAIN in `raw_plan`.

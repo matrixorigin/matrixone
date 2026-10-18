@@ -166,9 +166,9 @@ func TestMaterializedViewCronAdmission(t *testing.T) {
 				if name == "empty inventory" {
 					return executor.Result{}, nil
 				}
-				value := `{"result":"cn-new:119,tn-new:119"}`
+				value := `{"result":"cn-new:120,tn-new:120"}`
 				if name == "old consumer" {
-					value = `{"result":"cn-new:119,cn-old:118,tn-new:119"}`
+					value = `{"result":"cn-new:120,cn-old:119,tn-new:120"}`
 				}
 				r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
 				r.NewBatchWithRowCount(1)

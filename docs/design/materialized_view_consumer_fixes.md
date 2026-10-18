@@ -150,3 +150,12 @@ and commit-loss/SIGKILL/replay validation. The merge regenerates the MySQL
 parser to retain main's empty-CTE rejection and MV grammar. Native candidates,
 merged package checks, discarded trials and historical evidence are scoped
 explicitly in those records.
+
+## Protocol120 and dependent execution integration (2026-10-18)
+
+Main75d16a2b allocated119 to correlated programs. MV admission now requires120
+across authoring, reads, registration, migration and cron. See [design/cases](materialized_view_protocol120_integration.md)
+and [integration results](materialized_view_protocol120_integration_results.json).
+The existing native consumer now has14 cases and the full entrypoint116.
+Parent95dd4c0d passed ALL CI39145960351 and both connector workflows; these are
+parent results, distinct from the new integration's CI.

@@ -86,11 +86,41 @@ func runConsumerCases(dsn, secondDSN string) {
 	// Cross-CN assertions use the existing causal commit-frontier handoff.
 	rows("select mo_ctl('cn','synccommit','')")
 	otherExec("create materialized view stored refresh manual as select id,k,skey from facts")
+	rows("select mo_ctl('cn','synccommit','')")
+	const dependentRead = "select (select (select s.id)) from stored s"
+	for _, suffix := range []string{"", " limit 0", " where false"} {
+		_, err := db.ExecContext(ctx, dependentRead+suffix)
+		requireServerRejection("dependent unpopulated MV scan", err)
+		if !strings.Contains(err.Error(), "MV_NOT_POPULATED") {
+			panic(err)
+		}
+	}
+	pass("dependent scans retain unpopulated MV admission including empty results")
 	otherExec("refresh materialized view stored")
 	rows("select mo_ctl('cn','synccommit','')")
 	const publication = "select successful_sequence,last_run,source_physical,source_logical from mo_catalog.mo_materialized_views where account_id=0 and database_name='mv_consumer_validation' and name='stored'"
 	before := rows(publication)
+	if !reflect.DeepEqual(rows(dependentRead+" order by s.id"), [][]string{{"1"}, {"2"}}) || len(rows(dependentRead+" limit 0")) != 0 || len(rows(dependentRead+" where false")) != 0 {
+		panic("populated dependent MV scan changed result semantics")
+	}
+	evidence.RawPlan = rows("explain " + dependentRead)
+	pass("dependent scans read populated MV including empty-result controls")
 	exec("set experimental_materialized_view=0")
+	for _, statement := range []string{
+		"insert into stored select f.id,(select (select f.k)),f.skey from facts f",
+		"update stored s set k=(select (select s.k))",
+		"delete from stored where id=(select (select stored.id))",
+	} {
+		_, err := db.ExecContext(ctx, statement)
+		requireServerRejection("dependent MV write target", err)
+		if !strings.Contains(err.Error(), "materialized view is read only") {
+			panic(err)
+		}
+	}
+	if !reflect.DeepEqual(before, rows(publication)) || !reflect.DeepEqual(rows("select count(*) from stored"), [][]string{{"2"}}) {
+		panic("rejected dependent DML changed MV publication")
+	}
+	pass("dependent insert update and delete keep MV read only")
 	deleted, err := prepared.ExecContext(ctx)
 	if err != nil {
 		panic(fmt.Errorf("prepared source DELETE after MV creation: %w", err))

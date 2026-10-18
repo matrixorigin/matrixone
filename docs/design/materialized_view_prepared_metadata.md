@@ -1,5 +1,7 @@
 # Prepared metadata and materialized-view retirement
 
+This capture describes95dd4c0d. The subsequent [main/protocol120 integration](materialized_view_protocol120_integration.md) supersedes its protocol and current-head status; the execution results below remain source-bound historical evidence.
+
 This follow-up to PR #30085 fixes two failures found during cross-CN validation
 of 14a213e5. It introduces no catalog fields, protocol change or scheduler.
 

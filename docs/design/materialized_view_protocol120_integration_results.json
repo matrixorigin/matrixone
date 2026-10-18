@@ -1,0 +1,616 @@
+{
+  "parent": "95dd4c0d57b47d143f1257e7aea7be60334e98a1",
+  "merged_main": "75d16a2b875905ffa4121783dcda4f538d3c05f7",
+  "allocation": {
+    "upstream_dependent_programs": 119,
+    "materialized_views": 120,
+    "catalog_version": "4.0.17",
+    "catalog_offset": 5,
+    "definition_format": 2,
+    "executor": 17
+  },
+  "source": {
+    "non_doc_input_count": 11275,
+    "non_doc_inputs_sha256": "185ce660a1fd954ca04f91f1ae6f2c355cc9a084ab884525f8d03aeb02121823",
+    "native_binary": "95dd4c0d plus staged main75 and working integration changes; vcs.modified=true",
+    "native_binary_sha256": "8aab12b303d375e5ddb04307efb0b2ec7431f5a45e9c794dea29684ed5caa5f3",
+    "native_candidate_includes_final_production_and_client_sources": true
+  },
+  "unit": {
+    "receipt": "oct18-protocol120-owning-network.jsonl",
+    "terminal": [
+      {
+        "Package": "github.com/matrixorigin/matrixone/pkg/bootstrap/versions/v4_0_17",
+        "Action": "pass",
+        "Elapsed": 0.073
+      },
+      {
+        "Package": "github.com/matrixorigin/matrixone/pkg/mv",
+        "Action": "pass",
+        "Elapsed": 0.141
+      },
+      {
+        "Package": "github.com/matrixorigin/matrixone/pkg/sql/plan",
+        "Action": "pass",
+        "Elapsed": 25.051
+      },
+      {
+        "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+        "Action": "pass",
+        "Elapsed": 10.826
+      },
+      {
+        "Package": "github.com/matrixorigin/matrixone/pkg/frontend",
+        "Action": "pass",
+        "Elapsed": 17.175
+      }
+    ],
+    "root_passes": 7882
+  },
+  "static": {
+    "packages": [
+      "pkg/defines",
+      "pkg/bootstrap/versions/v4_0_17",
+      "pkg/mv",
+      "pkg/sql/plan",
+      "pkg/sql/compile",
+      "pkg/frontend",
+      "test/materialized_view"
+    ],
+    "vet": "PASS",
+    "lint": "0 issues."
+  },
+  "counterexamples": {
+    "read": {
+      "exit": 1,
+      "failed_roots": [
+        "TestMaterializedViewCompileProtocolAdmission"
+      ],
+      "CCPR_controls": "PASS",
+      "observed_errors": [
+        "        \tError:      \tShould be true\n"
+      ]
+    },
+    "write": {
+      "exit": 1,
+      "failed_roots": [
+        "TestMaterializedViewExecutionCapability"
+      ],
+      "CCPR_controls": "PASS",
+      "observed_errors": [
+        "        \tError:      \tError \"internal error: missing dependent descriptor\" does not contain \"materialized view is read only\"\n"
+      ]
+    }
+  },
+  "counterexample_scope": "Removing shared write admission changes the required early read-only error to missing dependent descriptor; this is a phase-ordering counterexample, not a native row-mutation claim. Public correlated DML is separately rejected without publication changes.",
+  "native": [
+    {
+      "receipt": "oct18-protocol120-si-bvt-results.json",
+      "configured_mode": "optimistic/SI",
+      "passed_cases": {
+        "functional": 70,
+        "failure": 5,
+        "consumers": 14,
+        "multi-cn": 9
+      },
+      "bridge_requests": 18,
+      "standalone_consumers": 14,
+      "standalone_topology": 9,
+      "entry_sha256": "c1d47f1c7f61aad21f23c1cc1e4a332bcd580e84a6380f200b23bb130d3637c4",
+      "elapsed_seconds": 268.971004486084,
+      "entry_seconds": 244.72478090700315,
+      "protocol_inventory": {
+        "error": "",
+        "rows": [
+          [
+            "{\n  \"method\": \"GETPROTOCOLVERSION\",\n  \"result\": \"dd1dccb4-4d3c-41f8-b482-5251dc7a41bf:120, ee1dccb4-4d3c-41f8-b482-5251dc7a41bf:120\"\n}\n"
+          ]
+        ]
+      },
+      "plain_prepared_boundary": {
+        "affected": 2,
+        "mv_rows": 2,
+        "prepared_error": "<nil>",
+        "publication_after": "1:8d22b768-fa39-40cf-87c4-94c498e48cbe:1792345422912927894:1",
+        "publication_before": "1:8d22b768-fa39-40cf-87c4-94c498e48cbe:1792345422912927894:1",
+        "remaining": 0,
+        "show_direct_after": "create materialized view `mv_prepared_boundary`.`stored` refresh every interval 120 second as select `facts`.`id` as `id` from `facts`",
+        "show_prepared_after": "create materialized view `mv_prepared_boundary`.`stored` refresh every interval 120 second as select `facts`.`id` as `id` from `facts`",
+        "show_prepared_before": "create materialized view `mv_prepared_boundary`.`stored` refresh manual as select `facts`.`id` as `id` from `facts`"
+      },
+      "consumer_cases": [
+        "dependent scans retain unpopulated MV admission including empty results",
+        "dependent scans read populated MV including empty-result controls",
+        "dependent insert update and delete keep MV read only",
+        "prepared unrestricted source DELETE preserves MV publication",
+        "source DELETE maintains secondary and unique indexes",
+        "explicit source TRUNCATE remains protected",
+        "ALTER COPY rejects dependent source without preparation residue",
+        "direct unrestricted source DELETE keeps dependency identity",
+        "empty dependent source DELETE returns zero affected rows",
+        "MV rejected at native boundary: dump table stored to ",
+        "MV rejected at native boundary: load table stored from ",
+        "SHOW CREATE TABLE round-trips a manual MV",
+        "prepared SHOW CREATE observes policy altered on another CN",
+        "SHOW CREATE TABLE exports the authoritative altered refresh policy"
+      ],
+      "consumer_raw_plan": [
+        [
+          "Plan 0:"
+        ],
+        [
+          "Project"
+        ],
+        [
+          "  ->  Table Scan on mv_consumer_validation.stored"
+        ],
+        [
+          "Plan 1:"
+        ],
+        [
+          "Project"
+        ],
+        [
+          "  ->  Values Scan \"*VALUES*\" "
+        ],
+        [
+          "Plan 2:"
+        ],
+        [
+          "Project"
+        ],
+        [
+          "  ->  Values Scan \"*VALUES*\" "
+        ]
+      ],
+      "cleanup": [
+        {
+          "sql": "select count(*) from mo_catalog.mo_database where datname in ('mv_consumer_validation','mv_prepared_boundary')",
+          "response": {
+            "error": "",
+            "rows": [
+              [
+                "0"
+              ]
+            ]
+          }
+        },
+        {
+          "sql": "select count(*) from mo_catalog.mo_materialized_views where database_name like 'mv_%'",
+          "response": {
+            "error": "",
+            "rows": [
+              [
+                "0"
+              ]
+            ]
+          }
+        },
+        {
+          "sql": "select count(*) from mo_catalog.mo_mv_dependencies",
+          "response": {
+            "error": "",
+            "rows": [
+              [
+                "0"
+              ]
+            ]
+          }
+        },
+        {
+          "sql": "select count(*) from mo_catalog.mo_mv_refresh_runs",
+          "response": {
+            "error": "",
+            "rows": [
+              [
+                "0"
+              ]
+            ]
+          }
+        },
+        {
+          "sql": "select count(*) from mo_task.sys_async_task where task_metadata_id like 'mv:%'",
+          "response": {
+            "error": "",
+            "rows": [
+              [
+                "0"
+              ]
+            ]
+          }
+        }
+      ],
+      "process_exits": {
+        "second": 0,
+        "primary": 0
+      }
+    },
+    {
+      "receipt": "oct18-protocol120-bvt-results.json",
+      "configured_mode": "pessimistic/RC",
+      "passed_cases": {
+        "functional": 70,
+        "failure": 5,
+        "consumers": 14,
+        "multi-cn": 9
+      },
+      "bridge_requests": 18,
+      "standalone_consumers": 14,
+      "standalone_topology": 9,
+      "entry_sha256": "c1d47f1c7f61aad21f23c1cc1e4a332bcd580e84a6380f200b23bb130d3637c4",
+      "elapsed_seconds": 243.7512469291687,
+      "entry_seconds": 222.57420687799458,
+      "protocol_inventory": {
+        "error": "",
+        "rows": [
+          [
+            "{\n  \"method\": \"GETPROTOCOLVERSION\",\n  \"result\": \"dd1dccb4-4d3c-41f8-b482-5251dc7a41bf:120, ee1dccb4-4d3c-41f8-b482-5251dc7a41bf:120\"\n}\n"
+          ]
+        ]
+      },
+      "plain_prepared_boundary": {
+        "affected": 2,
+        "mv_rows": 2,
+        "prepared_error": "<nil>",
+        "publication_after": "1:af45b5dc-6bf1-45f8-a553-36c727fe0c73:1792345689356264486:1",
+        "publication_before": "1:af45b5dc-6bf1-45f8-a553-36c727fe0c73:1792345689356264486:1",
+        "remaining": 0,
+        "show_direct_after": "create materialized view `mv_prepared_boundary`.`stored` refresh every interval 120 second as select `facts`.`id` as `id` from `facts`",
+        "show_prepared_after": "create materialized view `mv_prepared_boundary`.`stored` refresh every interval 120 second as select `facts`.`id` as `id` from `facts`",
+        "show_prepared_before": "create materialized view `mv_prepared_boundary`.`stored` refresh manual as select `facts`.`id` as `id` from `facts`"
+      },
+      "consumer_cases": [
+        "dependent scans retain unpopulated MV admission including empty results",
+        "dependent scans read populated MV including empty-result controls",
+        "dependent insert update and delete keep MV read only",
+        "prepared unrestricted source DELETE preserves MV publication",
+        "source DELETE maintains secondary and unique indexes",
+        "explicit source TRUNCATE remains protected",
+        "ALTER COPY rejects dependent source without preparation residue",
+        "direct unrestricted source DELETE keeps dependency identity",
+        "empty dependent source DELETE returns zero affected rows",
+        "MV rejected at native boundary: dump table stored to ",
+        "MV rejected at native boundary: load table stored from ",
+        "SHOW CREATE TABLE round-trips a manual MV",
+        "prepared SHOW CREATE observes policy altered on another CN",
+        "SHOW CREATE TABLE exports the authoritative altered refresh policy"
+      ],
+      "consumer_raw_plan": [
+        [
+          "Plan 0:"
+        ],
+        [
+          "Project"
+        ],
+        [
+          "  ->  Table Scan on mv_consumer_validation.stored"
+        ],
+        [
+          "Plan 1:"
+        ],
+        [
+          "Project"
+        ],
+        [
+          "  ->  Values Scan \"*VALUES*\" "
+        ],
+        [
+          "Plan 2:"
+        ],
+        [
+          "Project"
+        ],
+        [
+          "  ->  Values Scan \"*VALUES*\" "
+        ]
+      ],
+      "cleanup": [
+        [
+          {
+            "sql": "select count(*) from mo_catalog.mo_database where datname in ('mv_validation','mv_validation_multi_cn','mv_consumer_validation')",
+            "response": {
+              "error": "",
+              "rows": [
+                [
+                  "0"
+                ]
+              ]
+            }
+          },
+          {
+            "sql": "select count(*) from mo_catalog.mo_materialized_views where database_name like 'mv_%'",
+            "response": {
+              "error": "",
+              "rows": [
+                [
+                  "0"
+                ]
+              ]
+            }
+          },
+          {
+            "sql": "select count(*) from mo_catalog.mo_mv_dependencies",
+            "response": {
+              "error": "",
+              "rows": [
+                [
+                  "0"
+                ]
+              ]
+            }
+          },
+          {
+            "sql": "select count(*) from mo_catalog.mo_mv_refresh_runs",
+            "response": {
+              "error": "",
+              "rows": [
+                [
+                  "0"
+                ]
+              ]
+            }
+          },
+          {
+            "sql": "select count(*) from mo_task.sys_async_task where task_metadata_id like 'mv:%'",
+            "response": {
+              "error": "",
+              "rows": [
+                [
+                  "0"
+                ]
+              ]
+            }
+          }
+        ]
+      ],
+      "process_exits": {
+        "second": 0,
+        "primary": 0
+      }
+    }
+  ],
+  "independent_dependent_route": {
+    "request": {
+      "dsn": "dump:111@tcp(127.0.0.1:6201)/mv_validation?timeout=5s&readTimeout=30s&writeTimeout=30s",
+      "sql": "explain verbose select (select (select s.k)) from totals s",
+      "query": true
+    },
+    "response": {
+      "error": "",
+      "rows": [
+        [
+          "Plan 0:"
+        ],
+        [
+          "Project[4] (cost=1000.00 outcnt=1000.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)"
+        ],
+        [
+          "  Output: dependent program=2 occurrence=2 reducer=SCALAR"
+        ],
+        [
+          "  ->  Table Scan[5] on mv_validation.totals (cost=1000.00 outcnt=1000.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)"
+        ],
+        [
+          "        Output: s.k"
+        ],
+        [
+          "        Table: 'totals' (0:'k')"
+        ],
+        [
+          "Plan 1:"
+        ],
+        [
+          "Project[2] (cost=1.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)"
+        ],
+        [
+          "  Output: slot[1,0]"
+        ],
+        [
+          "  ->  Values Scan[3] \"*VALUES*\"  (cost=1.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)"
+        ],
+        [
+          "        Output: 0"
+        ],
+        [
+          "Plan 2:"
+        ],
+        [
+          "Project[0] (cost=1.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)"
+        ],
+        [
+          "  Output: dependent program=1 occurrence=1 reducer=SCALAR"
+        ],
+        [
+          "  ->  Values Scan[1] \"*VALUES*\"  (cost=1.00 outcnt=1.00 selectivity=1.0000 dop=0 blockNum=1 rowsize=100.00)"
+        ],
+        [
+          "        Output: 0"
+        ]
+      ]
+    },
+    "probe_exit": 0
+  },
+  "crash": {
+    "passed_cases": [
+      "native durable commit response loss resolves to success",
+      "SIGKILL periodic refresh before_commit",
+      "restart and same-run replay before_commit",
+      "SIGKILL periodic refresh after_commit",
+      "restart and same-run replay after_commit",
+      "native fixture removes MV rows, dependencies, history and per-view tasks"
+    ],
+    "observations": {
+      "native durable commit response loss resolves to success": [
+        [
+          "2",
+          "50",
+          "c66b6eb4-ebaa-4f0a-808a-8f6232f63ce6",
+          "2",
+          "1792346134423842508",
+          "1",
+          "SUCCEEDED",
+          "1792346134423842508",
+          "1"
+        ]
+      ],
+      "SIGKILL periodic refresh before_commit": {
+        "before": [
+          [
+            "2",
+            "50",
+            "c66b6eb4-ebaa-4f0a-808a-8f6232f63ce6",
+            "2",
+            "1792346134423842508",
+            "1",
+            "SUCCEEDED",
+            "1792346134423842508",
+            "1"
+          ]
+        ],
+        "at_barrier": [
+          [
+            "2",
+            "50",
+            "c66b6eb4-ebaa-4f0a-808a-8f6232f63ce6",
+            "2",
+            "1792346134423842508",
+            "1",
+            "SUCCEEDED",
+            "1792346134423842508",
+            "1"
+          ]
+        ],
+        "run": [
+          "95a0a6feabb71e3b5b416d5b616a7f8c7d454ab2290419286ecee528eba95ee9",
+          "3",
+          "RUNNING"
+        ],
+        "queue": [
+          [
+            "1",
+            "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+          ]
+        ]
+      },
+      "restart and same-run replay before_commit": {
+        "after_restart": [
+          [
+            "2",
+            "50",
+            "c66b6eb4-ebaa-4f0a-808a-8f6232f63ce6",
+            "2",
+            "1792346134423842508",
+            "1",
+            "SUCCEEDED",
+            "1792346134423842508",
+            "1"
+          ]
+        ],
+        "after_ack": [
+          [
+            "2",
+            "80",
+            "95a0a6feabb71e3b5b416d5b616a7f8c7d454ab2290419286ecee528eba95ee9",
+            "3",
+            "1792346215828290670",
+            "1",
+            "SUCCEEDED",
+            "1792346215828290670",
+            "1"
+          ]
+        ]
+      },
+      "SIGKILL periodic refresh after_commit": {
+        "before": [
+          [
+            "2",
+            "80",
+            "95a0a6feabb71e3b5b416d5b616a7f8c7d454ab2290419286ecee528eba95ee9",
+            "3",
+            "1792346215828290670",
+            "1",
+            "SUCCEEDED",
+            "1792346215828290670",
+            "1"
+          ]
+        ],
+        "at_barrier": [
+          [
+            "2",
+            "120",
+            "e6103a8432ae562fcb878d7f65e5b0c0c8466743d85c8caa8402b1109b194a25",
+            "4",
+            "1792346235780006015",
+            "1",
+            "SUCCEEDED",
+            "1792346235780006015",
+            "1"
+          ]
+        ],
+        "run": [
+          "e6103a8432ae562fcb878d7f65e5b0c0c8466743d85c8caa8402b1109b194a25",
+          "4",
+          "SUCCEEDED"
+        ],
+        "queue": [
+          [
+            "1",
+            "dd1dccb4-4d3c-41f8-b482-5251dc7a41bf"
+          ]
+        ]
+      },
+      "restart and same-run replay after_commit": {
+        "after_restart": [
+          [
+            "2",
+            "120",
+            "e6103a8432ae562fcb878d7f65e5b0c0c8466743d85c8caa8402b1109b194a25",
+            "4",
+            "1792346235780006015",
+            "1",
+            "SUCCEEDED",
+            "1792346235780006015",
+            "1"
+          ]
+        ],
+        "after_ack": [
+          [
+            "2",
+            "120",
+            "e6103a8432ae562fcb878d7f65e5b0c0c8466743d85c8caa8402b1109b194a25",
+            "4",
+            "1792346235780006015",
+            "1",
+            "SUCCEEDED",
+            "1792346235780006015",
+            "1"
+          ]
+        ]
+      }
+    },
+    "process_exits": {
+      "storage-log": 0,
+      "storage-tn": 0,
+      "initial": -9,
+      "recovery-before_commit": -9,
+      "recovery-after_commit": 0
+    },
+    "elapsed_seconds": 155.86776459500106,
+    "binaries": {
+      "service": {
+        "path": "/tmp/mo-service-mv-protocol120-final",
+        "sha256": "8aab12b303d375e5ddb04307efb0b2ec7431f5a45e9c794dea29684ed5caa5f3"
+      },
+      "probe": {
+        "path": "/tmp/mv-native-probe",
+        "sha256": "5a8b8c6ce12fffb59ebd1d12e47cf87d6daeef21417ee0c57537b24bfa9b1b52"
+      }
+    }
+  },
+  "evidence_scope": {
+    "parent_CI": "ALL CI39145960351, Iceberg39145962602 and Connector/J39145962621 all terminal SUCCESS on95dd4c0d; not final-integration CI",
+    "race_reuse": "Service metadata synchronization/lifecycle code is byte-identical to95dd4c0d. Reuse final owning MV race and focused100 captures in materialized_view_prepared_metadata_results.json for that owner. Compiler admission adds no Go shared state; typed early-failure, existing borrowed-statement ownership and real dependent/concurrent/crash consumers cover the new paths.",
+    "upgrade_reuse": "No repeated full native upgrade claim. Same migration DDL/layout; new unit boundary rejects119 before DDL/task publication, fresh native inventory is120. Older atomic upgrade captures remain historical.",
+    "performance": "No new benchmark claim. Existing publication fence adds a read-only transaction and serializes account refresh, as recorded in parent design."
+  }
+}

@@ -937,7 +937,7 @@ func selectHasExplicitTopLevelLimit(stmt *tree.Select) bool {
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
-		step := len(query.Steps) - 1
+		step := int(query.MainOutputStep())
 		if query.HasReturning {
 			if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
 				return nil
