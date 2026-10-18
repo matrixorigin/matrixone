@@ -16,7 +16,9 @@ package plan
 
 import (
 	"context"
+	"math"
 	"strings"
+	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -71,9 +73,17 @@ type tableDumpBindContext struct {
 	CompilerContext
 	ctx       context.Context
 	increment int64
+	proc      *process.Process
 }
 
 func (c tableDumpBindContext) GetContext() context.Context { return c.ctx }
+
+func (c tableDumpBindContext) GetProcess() *process.Process {
+	if c.proc != nil {
+		return c.proc
+	}
+	return c.CompilerContext.GetProcess()
+}
 
 // Rebinding changes expression policy, not ownership of catalog execution.
 func (c tableDumpBindContext) getInternalSQLExecutor(proc *process.Process) (executor.SQLExecutor, bool) {
@@ -168,6 +178,7 @@ const (
 	tableDumpBindingCurrent tableDumpBindingMode = iota
 	tableDumpBindingLegacyTimestampAdd
 	tableDumpBindingLegacySpecial
+	tableDumpBindingImplicitTimestamp
 )
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode) (*planpb.Expr, error) {
@@ -181,6 +192,12 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	proc := ctx.GetProcess()
 	if proc == nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "table dump expression binding requires a process")
+	}
+	if mode == tableDumpBindingImplicitTimestamp {
+		// Old implicit defaults and ON UPDATE clauses saved CURRENT_TIMESTAMP()
+		// as their origin, but used the column precision and this distinct DDL
+		// owner. Reproduce that whole tree, including its assignment cast.
+		return buildImplicitCurrentTimestampExpr(item.col.Typ, proc)
 	}
 	switch item.kind {
 	case "default":
@@ -281,6 +298,66 @@ func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	return proto.Equal(left, right)
 }
 
+func tableDumpImplicitTimestamp(item tableDumpExpression, ast tree.Expr) bool {
+	if item.col == nil || item.col.Typ.Id != int32(types.T_timestamp) ||
+		(item.kind != "default" && item.kind != "on_update") {
+		return false
+	}
+	if item.kind == "default" && item.col.Default.NullAbility {
+		return false
+	}
+	fn, ok := unwrapParenExpr(ast).(*tree.FuncExpr)
+	return ok && numericAstFunctionName(fn) == "current_timestamp" && len(fn.Exprs) == 0
+}
+
+func tableDumpTimestampLiteral(expr *planpb.Expr) (int64, bool) {
+	if expr == nil || expr.Typ.Id != int32(types.T_timestamp) {
+		return 0, false
+	}
+	lit := expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return 0, false
+	}
+	value, ok := lit.Value.(*planpb.Literal_Timestampval)
+	if !ok || value.Timestampval == int64(types.ZeroTimestamp) {
+		return 0, false
+	}
+	return value.Timestampval, true
+}
+
+func matchTableDumpTimestampDefault(want, candidate *planpb.Expr, zone *time.Location, bind func(*time.Location) (*planpb.Expr, error)) bool {
+	utc := candidate
+	if zone != time.UTC || utc == nil {
+		var err error
+		utc, err = bind(time.UTC)
+		if err != nil {
+			return false
+		}
+	}
+	utcValue, utcOK := tableDumpTimestampLiteral(utc)
+	storedValue, storedOK := tableDumpTimestampLiteral(want)
+	if !utcOK || !storedOK {
+		return false
+	}
+	// A probe in UTC may cross a TIMESTAMP boundary that the creation offset
+	// avoided. Check subtraction itself rather than rejecting that probe.
+	if (storedValue < 0 && utcValue > math.MaxInt64+storedValue) ||
+		(storedValue > 0 && utcValue < math.MinInt64+storedValue) {
+		return false
+	}
+	// A legal fixed offset proves origin reachability, not payload authenticity.
+	// The full
+	// rebind still verifies the expression's type, precision and every field.
+	delta := utcValue - storedValue
+	const minute = 60 * types.MicroSecsPerSec
+	if delta%minute != 0 || delta <= -14*60*minute || delta > 14*60*minute {
+		return false
+	}
+	tz := time.FixedZone("table dump binding", int(delta/types.MicroSecsPerSec))
+	rebound, err := bind(tz)
+	return err == nil && sameTableDumpBoundExpression(want, rebound)
+}
+
 // AnalyzeTableDumpBindings proves that every supplied bound expression is
 // reachable from its SQL origin through ordinary DDL binding. It reports
 // whether a binding varies across supported migration eras or division precision.
@@ -297,6 +374,24 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			return false, moerr.NewInvalidInputNoCtx("table dump expression count does not match target")
 		}
 	}
+	if len(items) == 0 {
+		return false, nil
+	}
+	parent := ctx.GetProcess()
+	if parent == nil {
+		return false, moerr.NewInternalError(ctx.GetContext(), "table dump expression binding requires a process")
+	}
+	// Candidate evaluation owns its session configuration and diagnostics. It
+	// must not change the backup session or publish speculative warnings.
+	proc := parent.NewViewBindingProcess(ctx.GetContext())
+	defer proc.Free()
+	proc.WarningSink = &process.WarningProbe{}
+	proc.Base.UnixTime = parent.Base.UnixTime
+	proc.GetSessionInfo().DefaultWeekFormat = parent.GetSessionInfo().DefaultWeekFormat
+	proc.GetSessionInfo().DefaultWeekFormatSet = parent.GetSessionInfo().DefaultWeekFormatSet
+	proc.GetSessionInfo().LCTimeNames = parent.GetSessionInfo().LCTimeNames
+	zone := proc.GetSessionInfo().TimeZone
+	ctx = tableDumpBindContext{CompilerContext: ctx, ctx: ctx.GetContext(), proc: proc}
 	budget := &tableDumpBindingBudget{}
 	var sensitive bool
 	for i, item := range items {
@@ -339,6 +434,24 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			if visit.hasSpecial {
 				modes = append(modes, tableDumpBindingLegacySpecial)
 			}
+			if tableDumpImplicitTimestamp(item, ast) {
+				modes = append(modes, tableDumpBindingImplicitTimestamp)
+			}
+			// At most two timezone reconstructions supplement an ordinary
+			// candidate. They share the same cancellation and total visit budget.
+			var fatal error
+			bind := func(increment int64, mode tableDumpBindingMode, tz *time.Location) (*planpb.Expr, error) {
+				if fatal = ctx.GetContext().Err(); fatal != nil {
+					return nil, fatal
+				}
+				budget.visits += visit.nodes
+				if budget.visits > tableDumpMaxCandidateVisits {
+					fatal = moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
+					return nil, fatal
+				}
+				proc.GetSessionInfo().TimeZone = tz
+				return bindTableDumpExpression(ctx, target, item, ast, increment, mode)
+			}
 			var first *planpb.Expr
 			want := item.expr
 			if supplied != nil {
@@ -350,25 +463,41 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 					return false, err
 				}
 				for _, mode := range modes {
-					budget.visits += visit.nodes
-					if budget.visits > tableDumpMaxCandidateVisits {
+					candidate, err := bind(increment, mode, zone)
+					if fatal != nil {
 						stmt.Free()
-						return false, moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
+						return false, fatal
 					}
-					candidate, err := bindTableDumpExpression(ctx, target, item, ast, increment, mode)
 					if err != nil {
 						// An unavailable era (for example, before protocol promotion)
 						// cannot prove that the successful bindings are independent.
 						// Still require an exact successful match before capture.
 						sensitive = true
-						continue
-					}
-					if first == nil {
+					} else if first == nil {
 						first = candidate
 					} else if !sameTableDumpBoundExpression(first, candidate) {
 						sensitive = true
 					}
 					matched = matched || sameTableDumpBoundExpression(want, candidate)
+					if item.kind == "default" && item.col.Typ.Id == int32(types.T_timestamp) {
+						_, folded := tableDumpTimestampLiteral(candidate)
+						_, stored := tableDumpTimestampLiteral(want)
+						if folded || stored {
+							// Even a same-zone match needs a binding witness: LOAD
+							// may run in a different zone from CREATE and DUMP.
+							// Conservatively capture constant TIMESTAMP defaults.
+							sensitive = true
+							if !matched {
+								matched = matchTableDumpTimestampDefault(want, candidate, zone, func(tz *time.Location) (*planpb.Expr, error) {
+									return bind(increment, mode, tz)
+								})
+								if fatal != nil {
+									stmt.Free()
+									return false, fatal
+								}
+							}
+						}
+					}
 				}
 				if matched && sensitive {
 					break
