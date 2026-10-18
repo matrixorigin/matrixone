@@ -132,10 +132,10 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	goroutines.Add(1)
 	go func() {
 		defer goroutines.Done()
-		shutdownResult <- cluster.Close()
+		shutdownResult <- cluster.Stop()
 	}()
 	// This boundary is reached by the TN transaction server from the real
-	// cluster.Close path only after quiesce has started and while the accepted
+	// cluster.Stop path only after quiesce has started and while the accepted
 	// commit is still counted as an active handler.
 	waitIssue28012And28013FaultWaiters(t, drainWaiters, 1, 30*time.Second)
 	_, _, ok := fault.TriggerFault(drainRelease)

@@ -42,7 +42,7 @@ const recoveryAdminUser = "upgrade_recovery_admin"
 
 // Recovery has one five-minute workload budget across all cluster generations.
 // Startup, including runner admission, does not consume that budget. Call only
-// after the preceding generation has been closed and its SQL calls have returned.
+// after the preceding generation has been stopped and its SQL calls have returned.
 func newRecoveryClusterStarter(
 	parent context.Context,
 	startCluster func() error,
@@ -183,7 +183,7 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				require.NoError(t, err)
 				res.Close()
 			}
-			require.NoError(t, c.Close())
+			require.NoError(t, c.Stop())
 
 			interrupted := &interruptedUpgradeHandler{VersionHandle: retainedHandler, entered: make(chan struct{}), tenant: tc.manual}
 			retainedHandles := []bootstrap.VersionHandle{v4_0_10.Handler}
@@ -214,7 +214,7 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				retainedTasks = recoveryTenantTaskIDs(t, ctx, cn, steps[len(steps)-1].ID, versions.No)
 				require.NotEmpty(t, retainedTasks) // CN configuration determines the account range batch size.
 			}
-			require.NoError(t, c.Close())
+			require.NoError(t, c.Stop())
 
 			manualSQL := "upgrade account 'recovery_tenant' with retry 1"
 			if tc.stepsReady {
@@ -243,7 +243,7 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 					require.Equal(t, versions.StateReady, step.State)
 					require.Equal(t, step.TotalTenant, step.ReadyTenant)
 				}
-				require.NoError(t, c.Close())
+				require.NoError(t, c.Stop())
 			}
 
 			handles := []bootstrap.VersionHandle{v4_0_10.Handler, v4_0_11.Handler, v4_0_12.Handler}
@@ -306,7 +306,7 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 					require.NoError(t, err)
 				}()
 			}
-			require.NoError(t, c.Close())
+			require.NoError(t, c.Stop())
 			ctx, err = start()
 			require.NoError(t, err)
 			checkRecovered()
