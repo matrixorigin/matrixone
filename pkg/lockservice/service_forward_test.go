@@ -81,6 +81,141 @@ func TestForwardLock(t *testing.T) {
 	}
 }
 
+func TestRemoteTryLockConflictReturnsOwnerBindingAndUnlocksPrefix(t *testing.T) {
+	runLockServiceTests(t, []string{"try-lock-origin", "try-lock-owner"},
+		func(_ *lockTableAllocator, services []*service) {
+			origin, owner := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const tableID = uint64(26791)
+			_, err := owner.getLockTableWithCreate(ctx, 0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+			remoteTable, err := origin.getLockTableWithCreate(ctx, 0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+			require.Equal(t, owner.serviceID, remoteTable.getBind().ServiceID)
+			ownerTable := owner.tableGroups.get(0, tableID).(*localLockTable)
+
+			holderTxn := []byte("remote-try-lock-holder")
+			probeTxn := []byte("remote-try-lock-probe")
+			_, err = owner.Lock(ctx, tableID, newTestRows(2), holderTxn, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			defer func() { require.NoError(t, owner.Unlock(ctx, holderTxn, timestamp.Timestamp{})) }()
+
+			options := newTestRowExclusiveOptions()
+			options.NoWait = true
+			options.Policy = pb.WaitPolicy_FastFail
+			result, err := origin.Lock(ctx, tableID, newTestRows(1, 2), probeTxn, options)
+			require.ErrorIs(t, err, ErrLockConflict)
+			require.True(t, result.LockedOn.Valid)
+			require.Equal(t, owner.serviceID, result.LockedOn.ServiceID)
+			checkLock(t, ownerTable, []byte{1}, [][]byte{probeTxn}, nil, nil)
+			checkLock(t, ownerTable, []byte{2}, [][]byte{holderTxn}, nil, nil)
+
+			probe := origin.activeTxnHolder.getActiveTxn(probeTxn, false, "")
+			require.NotNil(t, probe)
+			probe.RLock()
+			require.True(t, probe.isRemoteUnlockRequiredLocked(0, tableID))
+			require.True(t, probe.isBatchUnlockSupportedLocked(0, tableID))
+			require.True(t, probe.hasOwnerLocalWaitSnapshotLocked(0, tableID))
+			probe.RUnlock()
+
+			require.NoError(t, origin.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+			checkLock(t, ownerTable, []byte{1}, nil, nil, nil)
+			checkLock(t, ownerTable, []byte{2}, [][]byte{holderTxn}, nil, nil)
+		})
+}
+
+func TestRemoteFirstReadOnlyTryLockConflictStillRegistersCleanupRoute(t *testing.T) {
+	runLockServiceTests(t, []string{"try-lock-readonly-origin", "try-lock-readonly-owner"},
+		func(_ *lockTableAllocator, services []*service) {
+			origin, owner := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			const tableID = uint64(26792)
+			_, err := owner.getLockTableWithCreate(ctx, 0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+			remoteTable, err := origin.getLockTableWithCreate(ctx, 0, tableID, nil, pb.Sharding_None)
+			require.NoError(t, err)
+			require.Equal(t, owner.serviceID, remoteTable.getBind().ServiceID)
+			ownerTable := owner.tableGroups.get(0, tableID).(*localLockTable)
+
+			holderTxn := []byte("readonly-try-lock-holder")
+			probeTxn := []byte("readonly-first-try-lock-conflict")
+			_, err = owner.Lock(ctx, tableID, newTestRows(7), holderTxn, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			defer func() { require.NoError(t, owner.Unlock(ctx, holderTxn, timestamp.Timestamp{})) }()
+
+			options := newTestRowExclusiveOptions()
+			options.NoWait = true
+			options.Policy = pb.WaitPolicy_FastFail
+			result, err := origin.Lock(ctx, tableID, newTestRows(7), probeTxn, options)
+			require.ErrorIs(t, err, ErrLockConflict)
+			require.True(t, result.LockedOn.Valid)
+			require.Equal(t, owner.serviceID, result.LockedOn.ServiceID)
+			checkLock(t, ownerTable, []byte{7}, [][]byte{holderTxn}, nil, nil)
+
+			// This first read-only attempt granted no rows, but it still needs a
+			// registered owner route so transaction termination can retire the
+			// owner-side txn created while recording the negative acknowledgement.
+			probe := origin.activeTxnHolder.getActiveTxn(probeTxn, false, "")
+			require.NotNil(t, probe)
+			probe.RLock()
+			require.True(t, probe.isRemoteUnlockRequiredLocked(0, tableID))
+			require.True(t, probe.isBatchUnlockSupportedLocked(0, tableID))
+			require.True(t, probe.hasOwnerLocalWaitSnapshotLocked(0, tableID))
+			probe.RUnlock()
+
+			require.NoError(t, origin.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+			require.False(t, owner.activeTxnHolder.hasActiveTxn(probeTxn))
+			checkLock(t, ownerTable, []byte{7}, [][]byte{holderTxn}, nil, nil)
+		})
+}
+
+func TestTryLockMethodsMissingOnOldPeerHaveNoAdmissionSideEffect(t *testing.T) {
+	for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
+		t.Run(method.String(), func(t *testing.T) {
+			runLockServiceTests(t, []string{"old-try-origin", "old-try-owner"},
+				func(_ *lockTableAllocator, services []*service) {
+					origin, owner := services[0], services[1]
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+
+					const tableID = uint64(26793)
+					_, err := owner.getLockTableWithCreate(ctx, 0, tableID, nil, pb.Sharding_None)
+					require.NoError(t, err)
+					remoteTable, err := origin.getLockTableWithCreate(ctx, 0, tableID, nil, pb.Sharding_None)
+					require.NoError(t, err)
+					require.Equal(t, owner.serviceID, remoteTable.getBind().ServiceID)
+					ownerTable := owner.tableGroups.get(0, tableID).(*localLockTable)
+
+					// Model an older server which has no capability-bearing RPC
+					// method. Its dispatch layer rejects before handleRemoteLock can
+					// create an owner transaction or acquire the row.
+					oldPeer := owner.remote.server.(*server)
+					delete(oldPeer.handlers, method)
+					probeTxn := []byte("old-peer-no-wait-probe-" + method.String())
+					options := newTestRowExclusiveOptions()
+					options.NoWait = true
+					options.Policy = pb.WaitPolicy_FastFail
+					var result pb.Result
+					if method == pb.Method_TryLock {
+						result, err = origin.Lock(ctx, tableID, newTestRows(11), probeTxn, options)
+					} else {
+						options.ForwardTo = owner.serviceID
+						result, err = origin.Lock(ctx, tableID, newTestRows(11), probeTxn, options)
+					}
+					require.Error(t, err)
+					require.True(t, result.LockedOn.Valid,
+						"the caller still needs the known table binding for transaction cleanup")
+					require.Nil(t, owner.activeTxnHolder.getActiveTxn(probeTxn, false, ""))
+					checkLock(t, ownerTable, []byte{11}, nil, nil, nil)
+				})
+		})
+	}
+}
+
 func TestForwardLockLetsForwardTargetHeartbeatThirdPartyOwner(t *testing.T) {
 	for _, enableProxy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("remote-local-proxy=%t", enableProxy), func(t *testing.T) {
