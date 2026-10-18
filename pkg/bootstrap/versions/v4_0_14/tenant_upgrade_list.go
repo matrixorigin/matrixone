@@ -16,8 +16,4 @@ package v4_0_14
 
 import "github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 
-var tenantUpgEntries = []versions.UpgradeEntry{upgradeInformationSchemaColumns()}
-
-func upgradeInformationSchemaColumns() versions.UpgradeEntry {
-	return versions.InformationSchemaColumnsUpgradeEntry()
-}
+var tenantUpgEntries = []versions.UpgradeEntry{versions.InformationSchemaColumnsUpgradeEntry()}
