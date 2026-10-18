@@ -35,13 +35,22 @@ func MigrateLegacyFloatStringTableDef(ctx CompilerContext, def *planpb.TableDef)
 	if ctx == nil || def == nil {
 		return nil
 	}
+	if err := ctx.GetContext().Err(); err != nil {
+		return err
+	}
 	budget := &tableDumpBindingBudget{}
 	for _, item := range persistedTableExpressions(def, false) {
+		if err := ctx.GetContext().Err(); err != nil {
+			return err
+		}
 		if !hasLegacyFloatStringCast(item.expr) {
 			continue
 		}
 		rebound, err := rebindLegacyFloatStringExpression(ctx, def, item, budget)
 		if err != nil {
+			return err
+		}
+		if err := ctx.GetContext().Err(); err != nil {
 			return err
 		}
 		if rebound == nil {
@@ -85,7 +94,7 @@ func MigrateLegacyFloatStringTableDef(ctx CompilerContext, def *planpb.TableDef)
 			}
 		}
 	}
-	return nil
+	return ctx.GetContext().Err()
 }
 
 func hasLegacyFloatStringCast(expr *planpb.Expr) bool {
@@ -124,9 +133,52 @@ func isLegacyFloatStringCast(expr *planpb.Expr) bool {
 		fn.Args[1].GetT() != nil && fn.Args[1].Typ.Id == expr.Typ.Id && fn.Args[1].Typ.Width == 32
 }
 
-// Only this origin-proof comparison tolerates missing syntax markers. The
-// AST-bound candidate supplies authoritative markers before any rewrite.
-// Dump payload verification continues to compare provenance exactly.
+// Historical byte-string binders omitted implicit coercibility. Reconstruct only
+// that bounded candidate era; explicit and native collation provenance stays exact.
+func omitHistoricalFloatCoercibility(stored, candidate *planpb.Expr) {
+	a, b := &stored.Typ, &candidate.Typ
+	if !types.T(a.Id).IsMySQLString() || !types.T(b.Id).IsMySQLString() ||
+		a.Charset != b.Charset ||
+		(a.Charset != uint32(types.CharsetLegacy) && a.Charset != uint32(types.CharsetBinary) &&
+			a.Charset != uint32(types.CharsetUTF8MB4Bin) && a.Charset != uint32(types.CharsetUTF8)) ||
+		a.CollationVersion != 0 || b.CollationVersion != 0 ||
+		a.CollationMergeConflict || b.CollationMergeConflict ||
+		a.CollationCoercibilitySet || a.CollationCoercibility != 0 ||
+		!b.CollationCoercibilitySet || b.CollationCoercibility == 0 || b.CollationCoercibility > 6 {
+		return
+	}
+	b.CollationCoercibility, b.CollationCoercibilitySet = 0, false
+}
+
+func sameHistoricalFloatBoundExpression(stored, candidate *planpb.Expr) bool {
+	right := proto.Clone(candidate).(*planpb.Expr)
+	var recover func(*planpb.Expr, *planpb.Expr)
+	recover = func(a, b *planpb.Expr) {
+		if a == nil || b == nil {
+			return
+		}
+		omitHistoricalFloatCoercibility(a, b)
+		if x, y := a.GetF(), b.GetF(); x != nil && y != nil {
+			for i := 0; i < len(x.Args) && i < len(y.Args); i++ {
+				recover(x.Args[i], y.Args[i])
+			}
+		}
+		if x, y := a.GetList(), b.GetList(); x != nil && y != nil {
+			for i := 0; i < len(x.List) && i < len(y.List); i++ {
+				recover(x.List[i], y.List[i])
+			}
+		}
+		if x, y := a.GetLit(), b.GetLit(); x != nil && y != nil {
+			recover(x.Src, y.Src)
+		}
+	}
+	recover(stored, right)
+	return sameTableDumpBoundExpression(stored, right)
+}
+
+// SQL-origin proof also recovers missing explicit-cast syntax markers from the
+// AST before rewriting. DUMP uses only the coercibility-only historical candidate
+// and continues to require exact syntax provenance.
 func sameLegacyFloatOrigin(stored, candidate *planpb.Expr) bool {
 	right := proto.Clone(candidate).(*planpb.Expr)
 	var recoverMissingMarkers func(*planpb.Expr, *planpb.Expr)
@@ -134,6 +186,7 @@ func sameLegacyFloatOrigin(stored, candidate *planpb.Expr) bool {
 		if old == nil || bound == nil {
 			return
 		}
+		omitHistoricalFloatCoercibility(old, bound)
 		if a, b := old.GetF(), bound.GetF(); a != nil && b != nil && b.Func != nil {
 			id, overload := function.DecodeOverloadID(b.Func.Obj)
 			if id == function.CAST && overload == 0 && !a.SyntaxExplicitCast {
@@ -148,6 +201,9 @@ func sameLegacyFloatOrigin(stored, candidate *planpb.Expr) bool {
 				recoverMissingMarkers(a.List[i], b.List[i])
 			}
 		}
+		if a, b := old.GetLit(), bound.GetLit(); a != nil && b != nil {
+			recoverMissingMarkers(a.Src, b.Src)
+		}
 	}
 	recoverMissingMarkers(stored, right)
 	return sameTableDumpBoundExpression(stored, right)
@@ -159,6 +215,9 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 		return nil, moerr.NewInvalidInputNoCtx("catalog expression text exceeds limit")
 	}
 	for _, mode := range tableDumpParserModes() {
+		if err := ctx.GetContext().Err(); err != nil {
+			return nil, err
+		}
 		stmt, ast, visit, err := parseTableDumpExpression(ctx.GetContext(), item.origin, mode)
 		if err != nil {
 			continue
@@ -174,6 +233,10 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 		}
 		for increment := int64(0); increment <= maxIncrement; increment++ {
 			for _, legacySpecial := range []bool{false, true} {
+				if err := ctx.GetContext().Err(); err != nil {
+					stmt.Free()
+					return nil, err
+				}
 				if legacySpecial && !visit.hasSpecial {
 					continue
 				}
@@ -239,12 +302,15 @@ func rebindLegacyFloatStringExpression(ctx CompilerContext, def *planpb.TableDef
 					// A different binder change is not authorized by this compatibility repair.
 					return nil, nil
 				}
+				if err := ctx.GetContext().Err(); err != nil {
+					return nil, err
+				}
 				return current, nil
 			}
 		}
 		stmt.Free()
 	}
-	return nil, nil
+	return nil, ctx.GetContext().Err()
 }
 
 // An unsupported local reconstruction rejects the whole candidate, including

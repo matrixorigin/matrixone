@@ -8872,8 +8872,17 @@ func bindFuncExprImplByPlanExpr(
 			}
 		}
 
-	case "repeat", "substring", "substr", "mid", "left", "right", "lpad", "rpad":
-		refineStringLiteralReturnType(name, args, &returnType)
+	case "repeat":
+		refineRepeatLiteralReturnType(args, &returnType)
+
+	case "substring", "substr", "mid":
+		refineSubstringLiteralReturnType(args, &returnType)
+
+	case "left", "right":
+		refineLeftRightLiteralReturnType(args, &returnType)
+
+	case "lpad", "rpad":
+		refinePadLiteralReturnType(args, &returnType)
 
 	case "python_user_defined_function":
 		size := (argsLength - 2) / 2
@@ -9437,22 +9446,6 @@ func castOctFunctionArgsForNumericContext(ctx context.Context, args []*plan.Expr
 		args[idx] = cast
 	}
 	return args, nil
-}
-
-// refineStringLiteralReturnType supplements overload type inference with literal
-// argument bounds. Catalog compatibility must apply the same refinements when
-// recomputing a verified expression after widening an implicit string cast.
-func refineStringLiteralReturnType(name string, args []*plan.Expr, returnType *types.Type) {
-	switch name {
-	case "repeat":
-		refineRepeatLiteralReturnType(args, returnType)
-	case "substring", "substr", "mid":
-		refineSubstringLiteralReturnType(args, returnType)
-	case "left", "right":
-		refineLeftRightLiteralReturnType(args, returnType)
-	case "lpad", "rpad":
-		refinePadLiteralReturnType(args, returnType)
-	}
 }
 
 func refineRepeatLiteralReturnType(args []*plan.Expr, returnType *types.Type) {

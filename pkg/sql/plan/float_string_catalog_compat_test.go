@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -180,6 +181,112 @@ func TestLegacyFloatStringCatalogProofBounds(t *testing.T) {
 	snapshot := proto.Clone(source)
 	require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, source))
 	require.True(t, proto.Equal(snapshot, source), "folded literal values and their provenance remain unchanged")
+}
+
+func TestLegacyFloatStringCatalogCollationProvenance(t *testing.T) {
+	compiler := floatCatalogCompiler(t)
+	for _, tc := range []struct {
+		name   string
+		mutate func(*planpb.Type)
+	}{
+		{"recorded", nil},
+		{"historical", func(typ *planpb.Type) { typ.CollationCoercibility, typ.CollationCoercibilitySet = 0, false }},
+		{"explicit_rank", func(typ *planpb.Type) { typ.CollationCoercibility = 0 }},
+		{"different_rank", func(typ *planpb.Type) { typ.CollationCoercibility = 4 }},
+		{"invalid_unset_rank", func(typ *planpb.Type) { typ.CollationCoercibilitySet = false }},
+		{"merge_conflict", func(typ *planpb.Type) { typ.CollationMergeConflict = true }},
+		{"charset", func(typ *planpb.Type) { typ.Charset = uint32(types.CharsetUTF8MB4Bin) }},
+		{"collation_revision", func(typ *planpb.Type) { typ.CollationVersion = 1 }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			source := legacyFloatTable(t, "division")
+			source.Checks = nil
+			col := source.Cols[2]
+			stmt, ast, _, err := parseTableDumpExpression(t.Context(), col.GeneratedCol.OriginString, "")
+			require.NoError(t, err)
+			defer stmt.Free()
+			item := tableDumpExpression{kind: "generated", name: col.Name, col: col}
+			bound, err := bindTableDumpExpression(compiler, source, item, ast, 0, false, true)
+			require.NoError(t, err)
+			col.GeneratedCol.Expr = bound
+			concat := bound.GetF().Args[0]
+			require.Equal(t, "concat", concat.GetF().Func.ObjName)
+			require.True(t, concat.Typ.CollationCoercibilitySet)
+			require.Equal(t, uint32(2), concat.Typ.CollationCoercibility)
+			recorded := DeepCopyExpr(bound)
+			if tc.mutate != nil {
+				tc.mutate(&concat.Typ)
+			}
+			require.Equal(t, tc.mutate == nil, sameTableDumpBoundExpression(recorded, bound), "ordinary equality must retain provenance")
+			snapshot := proto.Clone(source)
+			require.NotEmpty(t, tableDumpExpressions(source))
+			_, dumpErr := AnalyzeTableDumpBindings(compiler, source, source)
+			accept := tc.name == "recorded" || tc.name == "historical"
+			if accept {
+				require.NoError(t, dumpErr)
+			} else {
+				require.ErrorContains(t, dumpErr, "cannot verify bound generated expression")
+			}
+			execution := CloneTableDefForPlan(source, true)
+			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
+			require.True(t, proto.Equal(snapshot, source))
+			if !accept {
+				require.True(t, proto.Equal(source, execution), "contradictory provenance must reject the repair")
+			} else {
+				require.False(t, hasLegacyFloatStringCast(execution.Cols[2].GeneratedCol.Expr))
+			}
+		})
+	}
+}
+
+func TestLegacyFloatStringCatalogNativeProvenance(t *testing.T) {
+	compiler := floatCatalogCompiler(t)
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(a double, g varchar(100) collate utf8mb4_unicode_ci generated always as (concat(a/1) collate utf8mb4_unicode_ci) stored)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	source := built.GetDdl().GetCreateTable().GetTableDef()
+	col := source.Cols[1]
+	parsed, ast, _, err := parseTableDumpExpression(t.Context(), col.GeneratedCol.OriginString, "")
+	require.NoError(t, err)
+	defer parsed.Free()
+	item := tableDumpExpression{kind: "generated", name: col.Name, col: col}
+	bound, err := bindTableDumpExpression(compiler, source, item, ast, 0, false, true)
+	require.NoError(t, err)
+	col.GeneratedCol.Expr = bound
+	require.NotEmpty(t, tableDumpExpressions(source))
+	require.True(t, hasLegacyFloatStringCast(bound))
+	_, err = AnalyzeTableDumpBindings(compiler, source, source)
+	require.NoError(t, err, "recorded native provenance remains admissible")
+	edited := false
+	require.NoError(t, planpb.VisitExprTree(bound, func(expr *planpb.Expr) error {
+		if !edited && expr.Typ.CollationVersion == uint32(types.CollationVersionV1) && expr.Typ.CollationCoercibilitySet {
+			expr.Typ.CollationCoercibility, expr.Typ.CollationCoercibilitySet = 0, false
+			edited = true
+		}
+		return nil
+	}))
+	require.True(t, edited)
+	snapshot := proto.Clone(source)
+	_, err = AnalyzeTableDumpBindings(compiler, source, source)
+	require.ErrorContains(t, err, "cannot verify bound generated expression")
+	execution := CloneTableDefForPlan(source, true)
+	require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
+	require.True(t, proto.Equal(source, execution), "missing native provenance cannot authorize repair")
+	require.True(t, proto.Equal(snapshot, source))
+}
+
+func TestLegacyFloatStringCatalogCanceled(t *testing.T) {
+	compiler := floatCatalogCompiler(t)
+	ctx, cancel := context.WithCancel(compiler.GetContext())
+	cancel()
+	compiler.SetContext(ctx)
+	source := legacyFloatTable(t, "generated")
+	execution := CloneTableDefForPlan(source, true)
+	require.ErrorIs(t, MigrateLegacyFloatStringTableDef(compiler, execution), context.Canceled)
+	require.True(t, proto.Equal(source, execution), "canceled resolution must not publish a repair")
 }
 
 const floatDivisionDDL = "create table t(a decimal(10,2), b decimal(10,2), g varchar(100) generated always as (concat(cast(a/b as double))) stored, check (length(concat(cast(a/b as double))) < 100))"

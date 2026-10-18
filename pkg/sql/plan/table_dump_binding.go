@@ -870,6 +870,9 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						sensitive = true
 					}
 					matched = matched || sameTableDumpBoundExpression(want, candidate)
+					if !matched && mode&tableDumpBindingLegacyFloat != 0 {
+						matched = sameHistoricalFloatBoundExpression(want, candidate)
+					}
 
 					if item.kind == "default" {
 						_, folded := tableDumpTimestampLiteral(candidate)
@@ -911,7 +914,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						stmt.Free()
 						return false, fatal
 					}
-					if sameTableDumpBoundExpression(want, rebound) {
+					if sameTableDumpBoundExpression(want, rebound) || search.mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, rebound) {
 						matched = true
 						break
 					}
@@ -943,7 +946,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 							if fatal != nil {
 								break
 							}
-							if sameTableDumpBoundExpression(want, rebound) {
+							if sameTableDumpBoundExpression(want, rebound) || search.mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, rebound) {
 								matched = true
 								break
 							}
