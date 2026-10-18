@@ -1724,7 +1724,7 @@ func builtInMoLogDate(parameters []*vector.Vector, result vector.FunctionResultW
 				}
 			} else {
 				generalTime.ResetTime()
-				success := coreStrToDate(proc.Ctx, generalTime, parsedInput, formatMask)
+				success, _ := coreStrToDate(proc.Ctx, generalTime, parsedInput, formatMask)
 				if success && types.ValidDate(int32(generalTime.year), generalTime.month, generalTime.day) {
 					val := types.DateFromCalendar(int32(generalTime.year), generalTime.month, generalTime.day)
 					if err = rs.Append(val, false); err != nil {
@@ -4856,13 +4856,21 @@ func builtInRadians(parameters []*vector.Vector, result vector.FunctionResultWra
 }
 
 func builtInLn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	// The LN/LOG kernel returns NULL for invalid arguments (executed for both
+	// LN(x) and the unary LOG(x) overload). Per-row warning 3020 diagnostics
+	// are reported by the shared post-pass, which also keeps folded scalar
+	// calls from collapsing the per-row warning count (#30214).
+	if err := opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Ln(v)
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
+	if err := opBinaryFixedFixedToFixedWithNullOnError[float64, float64, float64](parameters, result, proc, length, func(v1, v2 float64) (float64, error) {
 		if v1 == 1 {
 			return 0, moerr.NewInvalidArg(proc.Ctx, "log base", 1)
 		}
@@ -4875,19 +4883,31 @@ func builtInLog(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			return 0, moerr.NewInvalidArg(proc.Ctx, "log input", "<= 0")
 		}
 		return tempV2 / tempV1, nil
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 func builtInLog2(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	if err := opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Log2(v)
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 func builtInLog10(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
+	if err := opUnaryFixedToFixedWithNullOnError[float64, float64](parameters, result, proc, length, func(v float64) (float64, error) {
 		return momath.Lg(v)
-	}, selectList)
+	}, selectList); err != nil {
+		return err
+	}
+	appendLogarithmArgWarnings(parameters, result.GetResultVector(), proc, length, selectList)
+	return nil
 }
 
 type opBuiltInRand struct {

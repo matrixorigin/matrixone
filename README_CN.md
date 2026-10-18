@@ -256,6 +256,7 @@ for row in results.rows:
 
 | 教程 | 使用场景 | 相关 MatrixOne 特性 |
 |----------|----------|---------------------------|
+| [向量检索模式与 IVF 参数](docs/cn/vector_search.md) | AI 与搜索 | 模式选择、probe_limit/nprobe、IVFPQ 构建要求 |
 | [Pinecone 兼容向量检索](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/pinecone-vector-demo.html) | AI 与搜索 | 向量检索，Pinecone 兼容 API |
 | [IVF 索引健康监控](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/ivf-index-health-demo.html) | AI 与搜索 | 向量检索，IVF 索引 |
 | [HNSW 向量索引](https://docs.matrixorigin.cn/mo/en/latest/MatrixOne/Tutorial/hnsw-vector-demo.html) | AI 与搜索 | 向量检索，HNSW 索引 |

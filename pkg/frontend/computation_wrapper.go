@@ -2848,8 +2848,7 @@ func compileStatementContexts(
 }
 
 func siriusStatementSelected(sql string, stmt tree.Statement) bool {
-	selected, _ := isSidecarQuery(sql)
-	return selected && !isPerformStatement(stmt)
+	return hasSiriusHint(sql) && !isPerformStatement(stmt)
 }
 
 // EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute the inner query only to collect

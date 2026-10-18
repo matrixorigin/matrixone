@@ -174,6 +174,7 @@ func WithTxnCacheWrite() TxnOption {
 // WithSnapshotTS use a spec snapshot timestamp to build TxnOperator.
 func WithSnapshotTS(ts timestamp.Timestamp) TxnOption {
 	return func(tc *txnOperator) {
+		tc.opts.explicitSnapshot = true
 		tc.mu.txn.SnapshotTS = ts
 	}
 }
@@ -307,10 +308,13 @@ type txnOperator struct {
 	}
 
 	opts struct {
-		coordinator        bool
-		skipWaitPushClient bool
-		options            txn.TxnOptions
-		waitActiveHandle   func()
+		coordinator           bool
+		skipWaitPushClient    bool
+		options               txn.TxnOptions
+		waitActiveHandle      func()
+		snapshotAdmission     *SnapshotAdmission
+		authorizationSnapshot *SnapshotAdmission
+		explicitSnapshot      bool
 	}
 }
 

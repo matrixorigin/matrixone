@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -8266,16 +8267,19 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		}
 	}
 
-	var backgroundExecOptions []*BackgroundExecOption
+	backgroundExecOption := &BackgroundExecOption{}
 	if roleGrantNeedsCheck && !roleGrantCached {
 		// Active role membership is external authorization state. Revalidate it
 		// in a private RC transaction so a user transaction opened before REVOKE
 		// cannot continue authorizing through its older catalog snapshot.
-		backgroundExecOptions = append(backgroundExecOptions, &BackgroundExecOption{
-			forcePessimisticRC: true,
-		})
+		backgroundExecOption.forcePessimisticRC = true
 	}
-	bh := ses.GetBackgroundExec(ctx, backgroundExecOptions...)
+	backgroundExecOption, err = authorizationReadOption(ctx, ses, backgroundExecOption)
+	if err != nil {
+		return false, stats, err
+	}
+	_, _, _ = fault.TriggerFaultInDomainWithContext(ctx, fault.DomainFrontend, "authorization_before_grant_read")
+	bh := ses.GetBackgroundExec(ctx, backgroundExecOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8557,7 +8561,11 @@ func validateActiveRoleGrantForAuthorization(
 
 	// WITH GRANT OPTION authorization can bypass the general privilege walk,
 	// but must use the same latest-committed membership semantics.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{forcePessimisticRC: true})
+	if err != nil {
+		return false, stats, err
+	}
+	bh := ses.GetBackgroundExec(ctx, readOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8752,7 +8760,11 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 	}
 
 	// step2: decide the current user
-	bh := ses.GetBackgroundExec(ctx)
+	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{})
+	if err != nil {
+		return false, stats, err
+	}
+	bh := ses.GetBackgroundExec(ctx, readOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -10114,7 +10126,11 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	// step1: normalize the names of roles and users
 	// step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{})
+	if err != nil {
+		return false, stats, err
+	}
+	bh := ses.GetBackgroundExec(ctx, readOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
