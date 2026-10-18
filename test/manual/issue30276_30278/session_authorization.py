@@ -111,15 +111,15 @@ def visibility(conn, other_id):
 def main():
     with contextlib.ExitStack() as stack:
         admin = stack.enter_context(contextlib.closing(connect()))
-        for statement in [f'drop user if exists {USER}', f'drop role if exists {ROLE}',
-                          f'drop database if exists {DB}', f'create database {DB}',
-                          f'create table {DB}.t(a int)', f'create role {ROLE}',
-                          f'grant connect on account * to {ROLE}',
-                          f'grant select on table {DB}.t to {ROLE}',
-                          f"create user {USER} identified by '{args.password}' default role {ROLE}",
-                          f'grant {ROLE} to root']:
-            sql(admin, statement)
         try:
+            for statement in [f'drop user if exists {USER}', f'drop role if exists {ROLE}',
+                              f'drop database if exists {DB}', f'create database {DB}',
+                              f'create table {DB}.t(a int)', f'create role {ROLE}',
+                              f'grant connect on account * to {ROLE}',
+                              f'grant select on table {DB}.t to {ROLE}',
+                              f"create user {USER} identified by '{args.password}' default role {ROLE}",
+                              f'grant {ROLE} to root']:
+                sql(admin, statement)
             actor = stack.enter_context(contextlib.closing(connect(user=USER)))
             sql(actor, f'set role {ROLE}')
             cns = [stack.enter_context(contextlib.closing(connect(port))) for port in args.cn_ports]

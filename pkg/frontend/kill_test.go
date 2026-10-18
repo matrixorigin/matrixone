@@ -243,7 +243,10 @@ func TestKillRoutingLocalAndAddressSnapshot(t *testing.T) {
 	previous := getRtMgr("")
 	setRtMgr("", rm)
 	defer setRtMgr("", previous)
-	getPu("").QueryClient = &killRoutingClient{send: func(context.Context, string, *query.Request) (*query.Response, error) {
+	pu := getPu("")
+	previousClient := pu.QueryClient
+	t.Cleanup(func() { pu.QueryClient = previousClient })
+	pu.QueryClient = &killRoutingClient{send: func(context.Context, string, *query.Request) (*query.Response, error) {
 		t.Fatal("local action or denial must not route")
 		return nil, nil
 	}}

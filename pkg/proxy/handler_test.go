@@ -1166,6 +1166,8 @@ func TestDisconnectCleanupSealsMigrationBeforeCapture(t *testing.T) {
 	rt := runtime.DefaultRuntime()
 	h := &handler{logger: rt.Logger()}
 	entered, release := make(chan struct{}), make(chan struct{})
+	releaseWaiter := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseWaiter)
 	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true, ctxCancel: func() { close(entered); <-release }}
 	markTunnelInFlight(tun)
 	current := &killCurrentServerConn{cn: &CNServer{connID: 10}}
@@ -1187,7 +1189,7 @@ func TestDisconnectCleanupSealsMigrationBeforeCapture(t *testing.T) {
 	replacement := &killCurrentServerConn{cn: &CNServer{connID: 20}, closeFn: func() error { replacementClosed = true; return nil }}
 	require.ErrorIs(t, tun.replaceServerConn(nil, replacement, false), errPipeClosed)
 	require.True(t, replacementClosed)
-	close(release)
+	releaseWaiter()
 	require.True(t, <-done)
 	require.Same(t, current, <-killed)
 	require.Same(t, current, tun.getServerConn())

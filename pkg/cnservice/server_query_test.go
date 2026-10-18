@@ -1849,9 +1849,9 @@ func TestSessionControlHandlersRejectRollback(t *testing.T) {
 			continue
 		}
 		rsp := &query.Response{}
-		require.ErrorContains(t, s.handleKillSession(ctx, kill, rsp, nil), "unsupported protocol version 117")
+		require.ErrorContains(t, s.handleKillSession(ctx, kill, rsp, nil), "unsupported protocol version 120")
 		require.Nil(t, rsp.KillSessionResponse)
-		require.ErrorContains(t, s.handleDisconnectSession(ctx, disconnect, rsp, nil), "unsupported protocol version 117")
+		require.ErrorContains(t, s.handleDisconnectSession(ctx, disconnect, rsp, nil), "unsupported protocol version 120")
 		require.Nil(t, rsp.DisconnectSessionResponse)
 	}
 }
