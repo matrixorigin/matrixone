@@ -82,3 +82,49 @@ owned database/definition/dependency/history/per-view-task residue. Fresh main
 local merge-tree preflight is conflict-free. That preflight is not a claim of
 executing the unmerged main tree. Complete source fingerprints have zero delivery
 mismatches. Publication-head CI remains a separately observed result.
+
+
+## Integration with two-phase ALTER COPY
+
+Main `e97e54ff72957f05abee2c1676218f19b7493f02` includes the two-phase COPY
+implementation from #29798. Physical preparation precedes publication admission.
+An MV can be created in that interval without changing the source definition or
+data commit timestamp. Those upstream source checks therefore cannot substitute
+for checking durable MV dependencies.
+
+Keep the existing fail-fast check before creating/copying the private relation,
+and check dependencies again after publication locks, RC snapshot advancement
+and source identity/schema validation. The existing source-name locks exclude
+subsequent pessimistic MV creation; optimistic SI retains its existing
+transactional dependency write fence. This adds no gate, worker, cache or per-row
+operation. Each check uses the existing statement transaction and closes its
+bounded result; query cancellation aborts before lineage/source publication.
+
+`TestMaterializedViewAlterCopyRechecksDependencies` reuses the upstream COPY
+phase fixture. It covers an existing dependency, a dependency published during
+preparation while source ID/version/data timestamp remain unchanged, an
+independent source, and cancellation of the publication probe. The late cases
+must reach physical preparation and publication admission; rejected cases must
+publish no lineage, drop no source and rename no replacement. A source overlay
+removing only the late guard provides the corresponding failing counterexample.
+This is a database transaction interleaving modeled at an existing phase boundary;
+it introduces no Go shared-memory synchronization. Native consumer check ten
+also verifies public COPY rejection and unchanged relation inventory/publication.
+The existing authenticated two-CN BVT entrypoint remains the execution owner.
+
+Earlier 9/111-check captures above describe the pre-integration source only.
+Fresh integration results are recorded separately; historical upgrade, recovery
+and performance evidence is not relabeled as a new run.
+
+Fresh integration validation: complete compiler suite **1,499 root tests**, exit0;
+focused MV/planner/frontend/compiler **36 root tests**, exit0; owning compiler
+and client `vet=all`, exit0; configured incremental golangci-lint2.14.0 reports
+zero issues. The four COPY phase cases pass; removing only the
+late guard makes the late-dependency subcase fail at its independent publication
+oracle. A fresh production service and authenticated two-CN entrypoint pass
+**112 checks** (70 functional,5 failure,10 consumer,9 cross-CN,18 SQL bridge),
+plus separate10/10 consumer smoke. Entrypoint elapsed214.634s, both service
+processes exit0, all five independent metadata/task cleanup queries return zero.
+The11,214-file tracked input map outside `docs/` is unchanged after execution;
+canonical SHA256 is `928d2d01820842e8100fac336eac67ebb12854fd7513fecfefe587691df4fd4d`.
+See [integration receipts](materialized_view_copy_integration_results.json).

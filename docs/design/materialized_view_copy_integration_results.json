@@ -1,0 +1,450 @@
+{
+  "scope": {
+    "parent": "2bab46e6e740072173976ed495428e52141acef6",
+    "actual_merged_main": "e97e54ff72957f05abee2c1676218f19b7493f02",
+    "working_tree": "/workspace/matrixone-mv-review-794",
+    "native_binary_source": "2bab46e6 + actual e97 merge + late dependency guard; vcs.modified=true, not a pristine delivery-head binary",
+    "allocations_unchanged": {
+      "protocol": 119,
+      "catalog": "4.0.17 offset5",
+      "task_executor": 17
+    },
+    "not_claimed": [
+      "new upgrade/recovery execution",
+      "new benchmark or speedup",
+      "new-head CI success"
+    ]
+  },
+  "source_fingerprint": {
+    "head": "2bab46e6e740072173976ed495428e52141acef6",
+    "merged_main": "e97e54ff72957f05abee2c1676218f19b7493f02",
+    "dirty": true,
+    "selection": "all tracked regular files outside docs/",
+    "count": 11214,
+    "sha256": "928d2d01820842e8100fac336eac67ebb12854fd7513fecfefe587691df4fd4d"
+  },
+  "unit": {
+    "copy-focused": {
+      "terminal": [
+        {
+          "Time": "2026-10-18T13:07:44.130393247Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Elapsed": 0.169
+        }
+      ],
+      "root_passes": 1,
+      "tests": [
+        {
+          "Time": "2026-10-18T13:07:44.122610661Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Test": "TestMaterializedViewAlterCopyRechecksDependencies/existing_dependency",
+          "Elapsed": 0
+        },
+        {
+          "Time": "2026-10-18T13:07:44.123495641Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Test": "TestMaterializedViewAlterCopyRechecksDependencies/published_during_preparation",
+          "Elapsed": 0
+        },
+        {
+          "Time": "2026-10-18T13:07:44.124561792Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Test": "TestMaterializedViewAlterCopyRechecksDependencies/independent_source",
+          "Elapsed": 0
+        },
+        {
+          "Time": "2026-10-18T13:07:44.125317721Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Test": "TestMaterializedViewAlterCopyRechecksDependencies/publication_probe_canceled",
+          "Elapsed": 0
+        },
+        {
+          "Time": "2026-10-18T13:07:44.12532943Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Test": "TestMaterializedViewAlterCopyRechecksDependencies",
+          "Elapsed": 0
+        }
+      ]
+    },
+    "compile-full": {
+      "terminal": [
+        {
+          "Time": "2026-10-18T13:10:16.293570991Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Elapsed": 9.301
+        }
+      ],
+      "root_passes": 1499,
+      "tests": []
+    },
+    "focused-all": {
+      "terminal": [
+        {
+          "Time": "2026-10-18T13:11:49.376617244Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/mv",
+          "Elapsed": 0.068
+        },
+        {
+          "Time": "2026-10-18T13:13:01.679569121Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/plan",
+          "Elapsed": 0.239
+        },
+        {
+          "Time": "2026-10-18T13:14:26.526294086Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/frontend",
+          "Elapsed": 0.176
+        },
+        {
+          "Time": "2026-10-18T13:14:35.866614623Z",
+          "Action": "pass",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Elapsed": 0.253
+        }
+      ],
+      "root_passes": 36,
+      "tests": []
+    },
+    "counterexample": {
+      "terminal": [
+        {
+          "Time": "2026-10-18T13:11:24.853380495Z",
+          "Action": "fail",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Elapsed": 0.112
+        }
+      ],
+      "root_passes": 0,
+      "tests": [
+        {
+          "Time": "2026-10-18T13:11:24.84938634Z",
+          "Action": "fail",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Test": "TestMaterializedViewAlterCopyRechecksDependencies/published_during_preparation",
+          "Elapsed": 0
+        },
+        {
+          "Time": "2026-10-18T13:11:24.849496627Z",
+          "Action": "fail",
+          "Package": "github.com/matrixorigin/matrixone/pkg/sql/compile",
+          "Test": "TestMaterializedViewAlterCopyRechecksDependencies",
+          "Elapsed": 0
+        }
+      ]
+    }
+  },
+  "static": {
+    "gofmt_and_diff_check": "PASS",
+    "owning_compile_and_client_vet_all": "PASS exit0; no tests selected for vet invocation",
+    "configured_incremental_golangci_lint": "PASS exit0, 0 issues; golangci-lint2.14.0, Go1.27.1, matrixone_test, compiler/client closure, --new-from-rev2bab46e6"
+  },
+  "counterexample": {
+    "selection": "^TestMaterializedViewAlterCopyRechecksDependencies$/^published_during_preparation$",
+    "overlay_removes": "only publication-stage dependency guard",
+    "expected_exit": 1,
+    "actual_exit": 1,
+    "observed": "lineage-publication sentinel reached instead of dependency rejection",
+    "overlay_sha256": "e1c683cf447b44989f7d57d7a0914b293baad681585f0a2d95139bf883d733b6"
+  },
+  "native": {
+    "runs": [
+      {
+        "run": 1,
+        "exit": 0,
+        "elapsed": 214.63425446700057,
+        "entry_sha256": "87f1863e4cc6fc8a1701be52b7e95bc697ff67ea6ba480e63c2726214c86153c",
+        "modes": {
+          "functional": {
+            "experiments": null,
+            "started": "2026-10-18T13:12:18.373620655Z",
+            "passed_cases": [
+              "experimental gate",
+              "deferred population",
+              "NULL and aggregate semantics",
+              "independent typed aggregate oracle",
+              "last committed materialization",
+              "insert update delete refresh",
+              "read only: insert into totals(k) values(4)",
+              "read only: update totals set k=4",
+              "read only: delete from totals",
+              "read only: truncate table totals",
+              "read only: replace into totals(k) values(4)",
+              "read only: alter table totals add x int",
+              "read only: drop table totals",
+              "dependency restrict: alter table facts add x int",
+              "dependency restrict: truncate table facts",
+              "dependency restrict: drop table facts",
+              "dependency restrict: drop database mv_validation",
+              "failed DROP preserves current database",
+              "unsupported definition: select rand() from facts",
+              "unsupported definition: select now() from facts",
+              "unsupported definition: select distinct k from facts",
+              "unsupported definition: select count(distinct k) from facts",
+              "unsupported definition: select * from facts limit 1",
+              "unsupported definition: select row_number() over(order by id) from facts",
+              "unsupported definition: select * from totals",
+              "inner join refresh",
+              "empty aggregate",
+              "refresh in user transaction",
+              "SHOW CREATE",
+              "scheduled refresh",
+              "SHOW state and full source timestamp",
+              "refresh history",
+              "repeat refresh idempotent rows",
+              "IF NOT EXISTS no replacement",
+              "object kind collision",
+              "duplicate output heading",
+              "minimum schedule interval",
+              "MV nesting",
+              "outer join",
+              "random sample",
+              "temporary source",
+              "grouped empty has zero rows",
+              "all NULL typed oracle",
+              "projection and filter",
+              "dimension mutation",
+              "captured SQL mode",
+              "captured context with escaped source identity",
+              "captured fixed-offset timezone",
+              "create MV in user transaction",
+              "rename dependent source",
+              "foreign key into MV",
+              "prepared read after refresh",
+              "concurrent readers see complete publications",
+              "concurrent refresh publication",
+              "MV grant requires source SELECT",
+              "MV plus source grant permits read",
+              "prepared source ACL revocation",
+              "nonowner refresh rejected",
+              "nonowner drop rejected",
+              "SHOW owner isolation",
+              "scheduled refresh blocked for suspend account preserves rows and provenance",
+              "scheduled refresh resumes after reopening suspend account",
+              "scheduled refresh blocked for restricted account preserves rows and provenance",
+              "scheduled refresh resumes after reopening restricted account",
+              "same-name multi-tenant source and MV isolation",
+              "tenant DROP DATABASE restricts surviving MVs",
+              "DROP ACCOUNT failure rolls back retired objects, policy and metadata",
+              "DROP ACCOUNT retires surviving populated and periodic MVs",
+              "cancelled client read",
+              "drop cleanup"
+            ],
+            "source_rows": 0,
+            "refresh_ms": 0,
+            "baseline_ms": null,
+            "materialized_ms": null,
+            "median_speedup": 0,
+            "raw_plan": null,
+            "materialized_plan": null,
+            "materialized_rows": 0
+          },
+          "failure": {
+            "experiments": null,
+            "started": "2026-10-18T13:15:48.984581853Z",
+            "passed_cases": [
+              "native source-expression refresh failure",
+              "native failed refresh preserves rows",
+              "native failed refresh diagnostic",
+              "drop removes MV state",
+              "dependency cleanup permits database drop"
+            ],
+            "source_rows": 1000000,
+            "refresh_ms": 0,
+            "baseline_ms": null,
+            "materialized_ms": null,
+            "median_speedup": 0,
+            "raw_plan": null,
+            "materialized_plan": null,
+            "materialized_rows": 0
+          },
+          "consumers": {
+            "experiments": null,
+            "started": "2026-10-18T13:15:49.257692586Z",
+            "passed_cases": [
+              "prepared unrestricted source DELETE preserves MV publication",
+              "source DELETE maintains secondary and unique indexes",
+              "explicit source TRUNCATE remains protected",
+              "ALTER COPY rejects dependent source without preparation residue",
+              "direct unrestricted source DELETE keeps dependency identity",
+              "empty dependent source DELETE returns zero affected rows",
+              "MV rejected at native boundary: dump table stored to ",
+              "MV rejected at native boundary: load table stored from ",
+              "SHOW CREATE TABLE round-trips a manual MV",
+              "SHOW CREATE TABLE exports the authoritative altered refresh policy"
+            ],
+            "source_rows": 0,
+            "refresh_ms": 0,
+            "baseline_ms": null,
+            "materialized_ms": null,
+            "median_speedup": 0,
+            "raw_plan": null,
+            "materialized_plan": null,
+            "materialized_rows": 0
+          },
+          "multi-cn": {
+            "experiments": null,
+            "started": "2026-10-18T13:15:49.756951305Z",
+            "passed_cases": [
+              "second CN rejects unpopulated view",
+              "cross-CN publication visibility",
+              "second CN can refresh independently",
+              "two-CN concurrent publication version 2",
+              "two-CN concurrent publication version 3",
+              "two-CN concurrent publication version 4",
+              "two-CN concurrent publication version 5",
+              "two-CN concurrent publication version 6",
+              "cross-CN terminal history"
+            ],
+            "source_rows": 4,
+            "refresh_ms": 0,
+            "baseline_ms": null,
+            "materialized_ms": null,
+            "median_speedup": 0,
+            "raw_plan": null,
+            "materialized_plan": null,
+            "materialized_rows": 0
+          },
+          "native-probe": {
+            "runs": [
+              {
+                "passed_requests": 9,
+                "process_exit": 0
+              },
+              {
+                "passed_requests": 9,
+                "process_exit": 0
+              }
+            ]
+          }
+        }
+      }
+    ],
+    "cleanup": [
+      [
+        {
+          "sql": "select count(*) from mo_catalog.mo_database where datname in ('mv_validation','mv_validation_multi_cn','mv_consumer_validation')",
+          "response": {
+            "error": "",
+            "rows": [
+              [
+                "0"
+              ]
+            ]
+          }
+        },
+        {
+          "sql": "select count(*) from mo_catalog.mo_materialized_views where database_name like 'mv_%'",
+          "response": {
+            "error": "",
+            "rows": [
+              [
+                "0"
+              ]
+            ]
+          }
+        },
+        {
+          "sql": "select count(*) from mo_catalog.mo_mv_dependencies",
+          "response": {
+            "error": "",
+            "rows": [
+              [
+                "0"
+              ]
+            ]
+          }
+        },
+        {
+          "sql": "select count(*) from mo_catalog.mo_mv_refresh_runs",
+          "response": {
+            "error": "",
+            "rows": [
+              [
+                "0"
+              ]
+            ]
+          }
+        },
+        {
+          "sql": "select count(*) from mo_task.sys_async_task where task_metadata_id like 'mv:%'",
+          "response": {
+            "error": "",
+            "rows": [
+              [
+                "0"
+              ]
+            ]
+          }
+        }
+      ]
+    ],
+    "process_exits": {
+      "second": 0,
+      "primary": 0
+    },
+    "started": 1792329116.0805583,
+    "protocol_inventory": {
+      "error": "",
+      "rows": [
+        [
+          "{\n  \"method\": \"GETPROTOCOLVERSION\",\n  \"result\": \"ee1dccb4-4d3c-41f8-b482-5251dc7a41bf:119, dd1dccb4-4d3c-41f8-b482-5251dc7a41bf:119\"\n}\n"
+        ]
+      ]
+    },
+    "consumer_smoke": {
+      "experiments": null,
+      "started": "2026-10-18T13:12:15.083683621Z",
+      "passed_cases": [
+        "prepared unrestricted source DELETE preserves MV publication",
+        "source DELETE maintains secondary and unique indexes",
+        "explicit source TRUNCATE remains protected",
+        "ALTER COPY rejects dependent source without preparation residue",
+        "direct unrestricted source DELETE keeps dependency identity",
+        "empty dependent source DELETE returns zero affected rows",
+        "MV rejected at native boundary: dump table stored to ",
+        "MV rejected at native boundary: load table stored from ",
+        "SHOW CREATE TABLE round-trips a manual MV",
+        "SHOW CREATE TABLE exports the authoritative altered refresh policy"
+      ],
+      "source_rows": 0,
+      "refresh_ms": 0,
+      "baseline_ms": null,
+      "materialized_ms": null,
+      "median_speedup": 0,
+      "raw_plan": null,
+      "materialized_plan": null,
+      "materialized_rows": 0
+    },
+    "elapsed": 236.1719708442688
+  },
+  "native_assertion_total": 112,
+  "separate_consumer_smoke_checks": 10,
+  "binary": {
+    "sha256": "3d41f26229dcc044fa3f502434d5180835133086c1dc1bf9ff9c493472b66067",
+    "bytes": 274961472,
+    "buildinfo": [
+      "\tbuild\tCGO_ENABLED=1",
+      "\tbuild\tGOEXPERIMENT=simd",
+      "\tbuild\tGOAMD64=v3",
+      "\tbuild\tvcs.revision=2bab46e6e740072173976ed495428e52141acef6",
+      "\tbuild\tvcs.time=2026-10-18T12:45:20Z",
+      "\tbuild\tvcs.modified=true"
+    ]
+  },
+  "review": {
+    "decision": "no known source blockers in integration closure",
+    "ownership": "same statement transaction, result cleanup and existing locks/write fence; no new worker/cache/state/test hook",
+    "race_scope": "database interleaving modeled synchronously at existing COPY gate; no new Go shared-memory synchronization, no new race result claimed",
+    "cost": "one additional bounded metadata check per non-temporary COPY at publication, no per-row work",
+    "fixture": "reuses upstream phase fixture and authenticated two-CN BVT; independent cleanup, zero residue, service exit0"
+  }
+}

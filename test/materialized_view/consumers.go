@@ -87,6 +87,17 @@ func runConsumerCases() {
 		panic(err)
 	}
 	pass("explicit source TRUNCATE remains protected")
+	tablesBefore := rows("select relname from mo_catalog.mo_tables where account_id=0 and reldatabase='mv_consumer_validation' order by relname")
+	_, err = db.ExecContext(ctx, "alter table facts algorithm=copy, add column copy_col int")
+	requireServerRejection("dependent source ALTER COPY", err)
+	if !strings.Contains(err.Error(), "dependent materialized views") {
+		panic(err)
+	}
+	if !reflect.DeepEqual(before, rows(publication)) || !reflect.DeepEqual(tablesBefore, rows("select relname from mo_catalog.mo_tables where account_id=0 and reldatabase='mv_consumer_validation' order by relname")) {
+		panic("rejected ALTER COPY changed publication or left a prepared relation")
+	}
+	pass("ALTER COPY rejects dependent source without preparation residue")
+
 	deleted, err = db.ExecContext(ctx, "delete from facts")
 	if err != nil {
 		panic(err)

@@ -315,3 +315,82 @@ func TestMaterializedViewLimitZeroRetainsScanValidation(t *testing.T) {
 		}
 	}
 }
+
+// This executor publishes a dependency at the existing publication gate, after
+// the real Scope has completed physical preparation. No new production hook.
+type materializedViewCopyExecutor struct {
+	*alterCopyLateOwnerExecutor
+	existing, late bool
+	lateError      error
+	checks         int
+}
+
+func (e *materializedViewCopyExecutor) Exec(ctx context.Context, sql string, opts executor.Options) (executor.Result, error) {
+	if sql == mv.CatalogReadinessSQL {
+		r := executor.NewMemResult([]types.Type{types.T_int64.ToType()}, e.mp)
+		r.NewBatchWithRowCount(1)
+		require.NoError(e.t, executor.AppendFixedRows(r, 0, []int64{4}))
+		return r.GetResult(), nil
+	}
+	if strings.HasPrefix(sql, "select mv_id from mo_catalog.mo_mv_dependencies") {
+		e.checks++
+		if e.ownerPublished && e.lateError != nil {
+			return executor.Result{}, e.lateError
+		}
+		r := executor.NewMemResult([]types.Type{types.T_uint64.ToType()}, e.mp)
+		if e.existing || e.late && e.ownerPublished {
+			r.NewBatchWithRowCount(1)
+			require.NoError(e.t, executor.AppendFixedRows(r, 0, []uint64{99}))
+		}
+		return r.GetResult(), nil
+	}
+	return e.alterCopyLateOwnerExecutor.Exec(ctx, sql, opts)
+}
+func (e *materializedViewCopyExecutor) ExecTxn(ctx context.Context, f func(executor.TxnExecutor) error, opts executor.Options) error {
+	return f(executor.NewMemTxnExecutor(func(sql string) (executor.Result, error) { return e.Exec(ctx, sql, opts) }, opts.Txn()))
+}
+func TestMaterializedViewAlterCopyRechecksDependencies(t *testing.T) {
+	for _, name := range []string{"existing dependency", "published during preparation", "independent source", "publication probe canceled"} {
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			e := &materializedViewCopyExecutor{alterCopyLateOwnerExecutor: &alterCopyLateOwnerExecutor{t: t}, existing: name == "existing dependency", late: name == "published during preparation"}
+			if name == "publication probe canceled" {
+				e.lateError = context.Canceled
+			}
+			stubAlterCopySourceLocks(t, nil)
+			scope, c := newAlterCopyGateConcurrencyFixture(t, ctrl, e, "mv-copy-"+strings.ReplaceAll(name, " ", "-"), 123456789)
+			e.mp = c.proc.Mp()
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			previous, present := rt.GetGlobalVariables(mv.RuntimeKey)
+			marker := &mv.Service{}
+			rt.SetGlobalVariables(mv.RuntimeKey, marker)
+			t.Cleanup(func() {
+				if present {
+					rt.SetGlobalVariables(mv.RuntimeKey, previous)
+				} else {
+					rt.CompareAndDeleteGlobalVariables(mv.RuntimeKey, marker)
+				}
+			})
+			err := scope.AlterTableCopy(c)
+			switch name {
+			case "independent source":
+				require.ErrorContains(t, err, "stop after snapshot lineage publication")
+				require.NotEmpty(t, e.metadataSQL)
+			case "publication probe canceled":
+				require.ErrorIs(t, err, context.Canceled)
+				require.Empty(t, e.metadataSQL)
+			default:
+				require.ErrorContains(t, err, "dependent materialized views")
+				require.Empty(t, e.metadataSQL)
+			}
+			require.Empty(t, e.dropSourceSQL)
+			require.False(t, e.sourceRenamed)
+			require.Equal(t, !e.existing, e.physicalStarted)
+			if e.existing {
+				require.Equal(t, 1, e.checks)
+			} else {
+				require.Equal(t, 2, e.checks)
+			}
+		})
+	}
+}

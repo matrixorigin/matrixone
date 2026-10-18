@@ -156,10 +156,10 @@ and cleans its own database. Validate both transaction modes by configuring
 
 `-consumer-check` selects the native consumer regressions for review5562448876.
 It reuses the existing authenticated BVT service and owns a two-row indexed
-source, manual MVs and one altered periodic policy. Nine checks cover prepared
+source, manual MVs and one altered periodic policy. Ten checks cover prepared
 DELETE before MV creation, unrestricted DELETE with creation disabled, affected
 rows including an empty source, unique/secondary maintenance, explicit TRUNCATE
-protection, DUMP/LOAD kind admission before file access with unchanged publication,
+protection and ALTER COPY rejection without preparation residue, DUMP/LOAD kind admission before file access with unchanged publication,
 and SHOW CREATE TABLE equality/replay for manual and altered periodic policies.
 The fixture drops its MVs before its database on both success and failure. The
 normal BVT entrypoint includes the mode and requires a nonempty successful JSON
