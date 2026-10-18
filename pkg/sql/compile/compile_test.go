@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	goruntime "runtime"
+	godebug "runtime/debug"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -158,6 +160,71 @@ func TestCompileClearResetsExecutionType(t *testing.T) {
 	c.clear()
 	require.True(t, c.IsTpQuery())
 	require.Zero(t, c.prePipelineLockTableID, "pooled compiles must not retain a backfill lock request")
+}
+
+func TestCompileClearResetsSkipIndexTaskRegistration(t *testing.T) {
+	// The ALTER COPY private replica create opts out of index task
+	// registration on its executor Compile. Exercise the pool reset directly,
+	// independent of which object sync.Pool would choose for the next
+	// allocation: a released Compile must not hand that suppression to an
+	// unrelated frontend statement.
+	c := &Compile{
+		proc:                      testutil.NewProcess(t),
+		MessageBoard:              message.NewMessageBoard(),
+		affectRows:                new(atomic.Uint64),
+		skipIndexTaskRegistration: true,
+	}
+	c.clear()
+	require.False(t, c.skipIndexTaskRegistration,
+		"a pooled compile must not retain the private index-registration policy")
+}
+
+func TestCompilePoolHandoffClearsPrivateIndexRegistrationPolicy(t *testing.T) {
+	// Reproduce the frontend ownership boundary: the private ALTER COPY
+	// executor releases its Compile, then an ordinary frontend statement
+	// allocates the next generation from the global reuse pool. Two layers
+	// hold that boundary: Release runs clear() before sync.Pool.Put, and
+	// NewCompile re-initializes the flag after sync.Pool.Get.
+	//
+	// sync.Pool's documented contract permits Put to discard values and Get
+	// to return an unrelated object, and the race runtime drops Put values
+	// deliberately (runtime_randn(4) in sync/pool.go), so pointer identity
+	// between the released and the reallocated compile cannot be required.
+	// The oracle is the policy of every object the public constructor
+	// returns: each round seeds the pool with the exact leak payload and
+	// asserts the ordinary registration policy on the constructed frontend
+	// compile. A leak can only travel through a Put that the pool kept, and
+	// every kept Put is a round whose frontend object is unconditionally
+	// checked, so drops never mask a leaked policy. The deterministic
+	// clear() reset layer stays covered, pool-free, by
+	// TestCompileClearResetsSkipIndexTaskRegistration.
+	oldProcs := goruntime.GOMAXPROCS(1)
+	defer goruntime.GOMAXPROCS(oldProcs)
+	oldPercent := godebug.SetGCPercent(-1)
+	defer godebug.SetGCPercent(oldPercent)
+
+	const handoffs = 16
+	sameObject := 0
+	for round := 0; round < handoffs; round++ {
+		private := NewCompile("test", "test", "create table __mo_alter_copy_replica", "", "",
+			nil, testutil.NewProcess(t), nil, false, nil, time.Now())
+		// txnExecutor.Exec sets this for the private replica create's nested
+		// compiler (sql_executor.go), which Release returns to the pool.
+		private.skipIndexTaskRegistration = true
+		private.Release()
+
+		frontend := NewCompile("test", "test", "create table ordinary", "", "",
+			nil, testutil.NewProcess(t), nil, false, nil, time.Now())
+		require.False(t, frontend.skipIndexTaskRegistration,
+			"round %d: a frontend compile must not inherit the private preparation policy", round)
+		frontend.Release()
+		if frontend == private {
+			sameObject++
+		}
+	}
+	// Informational only: the race runtime drops Put values purposefully, so
+	// zero reuse observations is a legitimate outcome, never a failure.
+	t.Logf("pool handed back the released compile in %d/%d rounds", sameObject, handoffs)
 }
 
 func TestCompileMongoDBQueryDiagnosticsAreRedacted(t *testing.T) {
@@ -1146,6 +1213,21 @@ func TestCompileLockNonCandidatePreservesExactMainMutation(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Empty(t, node.LockTargets)
 	require.Same(t, target, c.lockTables[target.TableId])
+}
+
+func TestCompileLockDisabledSkipsAllStatementLocks(t *testing.T) {
+	c := NewMockCompile(t)
+	c.disableLock = true
+	target := &plan.LockTarget{TableId: 42, LockTable: true}
+	node := &plan.Node{LockTargets: []*plan.LockTarget{target}}
+	scope := &Scope{}
+
+	got, err := c.compileLock(node, []*Scope{scope})
+	require.NoError(t, err)
+	require.Equal(t, []*Scope{scope}, got)
+	require.Nil(t, scope.RootOp)
+	require.Empty(t, c.lockTables)
+	require.Equal(t, []*plan.LockTarget{target}, node.LockTargets)
 }
 
 func TestCompileLockPrePipelineTargetAdmission(t *testing.T) {
