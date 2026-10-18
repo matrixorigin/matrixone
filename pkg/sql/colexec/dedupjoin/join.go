@@ -1469,9 +1469,11 @@ func odkuValuesEqual(left, right *vector.Vector) bool {
 			types.DecodeJson(left.GetBytesAt(0)),
 			types.DecodeJson(right.GetBytesAt(0)),
 		) == 0
+	case types.T_array_float8, types.T_array_float4:
+		l, r := left.GetBytesAt(0), right.GetBytesAt(0)
+		return bytes.Equal(l, r) || types.CompareBlockScaledFromBytes(l, r, false) == 0
 	case types.T_varchar, types.T_blob, types.T_text, types.T_binary,
-		types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32,
-		types.T_array_float8, types.T_array_float4:
+		types.T_varbinary, types.T_datalink, types.T_geometry, types.T_geometry32:
 		return bytes.Equal(left.GetBytesAt(0), right.GetBytesAt(0))
 	default:
 		// ODKU target columns cannot use pseudo/internal tuple types. Fail closed
