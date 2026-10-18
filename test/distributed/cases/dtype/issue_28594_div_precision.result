@@ -110,7 +110,7 @@ select q from ctas_precision_nullable where a = 2;
 ➤ q[3,30,12]  𝄀
 0.666666666667
 select q is null as q_is_null from ctas_precision_nullable where a is null;
-➤ q_is_null[-7,1,0]  𝄀
+➤ q_is_null[-6,8,0]  𝄀
 1
 set session div_precision_increment = 10;
 create table ddl_replay (
