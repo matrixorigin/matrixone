@@ -8110,9 +8110,9 @@ func TestSnapshotMeta(t *testing.T) {
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().DisableGC()
 	snapshots := make([]int64, 0)
-	// Only distinct ordered timestamp values are needed; elapsed wall time is
-	// not part of snapshot metadata reconstruction.
-	firstSnapshot := time.Now().UTC().Add(-time.Second).UnixNano()
+	// Begin after GC is disabled; older history may already have been collected.
+	// Nanosecond offsets provide distinct ordered metadata values without sleeps.
+	firstSnapshot := time.Now().UTC().UnixNano()
 	for i := 0; i < 10; i++ {
 		snapshots = append(snapshots, firstSnapshot+int64(i))
 	}
