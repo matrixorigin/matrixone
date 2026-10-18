@@ -33,6 +33,8 @@ Native file scans truncate nanosecond timestamps/time, so reject those metadata 
 
 Create one uniquely named ordinary external table per source file using bound path/format parameters, then produce a parenthesized `UNION ALL` with aligned projections and typed missing fields. Native MatrixOne executes the query; DuckDB is only a test oracle. These are not connection-private temporary tables or new native SQL table functions.
 
+Reserve each generated name before CREATE, including its transaction's COMMIT. A lost acknowledgement must leave a cleanup owner even when construction never returns a relation. See [the lifecycle design](analytics-file-lifecycle.md) for scoped cleanup, uncertain outcomes and recovery evidence on the original exception.
+
 ### Validation and consistency
 
 Validate all CSV record widths, quoting and UTF-8 in bounded blocks because the native scanner can silently ignore extra fields. This costs additional client I/O, including remote reads. CSV uses MatrixOne's `\N` null convention. Quoted newlines and BOM are supported.

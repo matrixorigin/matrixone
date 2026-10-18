@@ -16,7 +16,13 @@ Make file relations safe to use in context-managed notebooks and services: own t
 
 `FileRelation` holds the merged schema, SQL expression, owned external-table names and source-check closures. Use `with ... as files`; close result streams before closing the relation.
 
-Construction creates uniquely named ordinary external tables. Record each name only after successful creation. If a later creation fails, close the partially constructed relation. Normal `close()` drops only recorded owned names and retains failed drops for a possible retry. Preserve primary query/construction exceptions when cleanup also fails. Account-level isolation follows MatrixOne's catalog and privileges, not a Python-only namespace.
+Construction reserves each generated UUID name in the relation's owned list **before** issuing CREATE or entering its transaction. The reservation covers an attempted creation, including a CREATE or COMMIT whose acknowledgement is lost; it is not proof that creation committed. No CREATE is retried. The SDK does not reuse a caller-provided name for these reservations.
+
+On any construction failure, close the partially constructed relation using a new transaction/usable pooled connection. `DROP TABLE IF EXISTS` is restricted to its exact reserved names, so both committed and rolled-back CREATE outcomes can be reclaimed. Remove a name only after the DROP transaction returns successfully. A failed or ambiguously acknowledged DROP remains reserved and can be retried through the same relation. There is no prefix scan, background reaper, or blind construction retry. Account-level isolation follows MatrixOne's catalog and privileges, not a Python-only namespace.
+
+The original construction exception remains primary. It exposes `attempted_tables` (all reservations at failure), `owned_tables` (reservations still pending after cleanup), and `file_relation` (the scoped owner whose `close()` can be called again). If cleanup also fails, attach `cleanup_error`. Successful cleanup leaves `owned_tables=()` and a closed relation. Diagnostic logging cannot replace the original error or this recovery evidence.
+
+The state transitions are **unreserved → reserved before CREATE → returned relation after acknowledged COMMIT → removed only after acknowledged DROP**. Failure at any point after reservation goes to cleanup; a cleanup failure retains the same owner and pending names. This ordinary exception path is separate from the SIGKILL limitation below.
 
 `files.sql`, `files.query(...)` and `files.import_into(...)` rerun source checks. The SQL expression remains reusable inside aggregate/filter SQL, but the SDK cannot enforce later checks after a caller caches that string. No immutable snapshot is implied.
 
@@ -52,6 +58,8 @@ Successful/failed normal contexts leave no owned tables or checked-out connectio
 | L06 | Two accounts, same logical names; read-only role | Account isolation; unauthorized creation/import rejected | `test_external_catalog_is_account_isolated`, `test_read_only_user_cannot_create_or_append` |
 | L07 | 8-thread mixed 90-second measured soak after 30-second warmup | Zero unexpected errors, owned catalog leaks and outstanding connections; FD/RSS thresholds enforced | `run_soak.py` |
 | L08 | Kill client while holding an external relation | Record orphan owned names; restart/reconnect and explicitly reclaim only those names | `run_chaos.py` (`client_external`) |
+| L09 | CREATE commits but its COMMIT acknowledgement is dropped | Original error retained; fresh-connection DROP reclaims the exact reserved UUID; independent catalog check finds no orphan | `test_relation_create_lost_commit_acknowledgement` |
+| L10 | CREATE failure plus failed DROP or lost DROP acknowledgement | Original error includes attempted/pending names, cleanup error and retryable scoped relation; no CREATE retry; later close reclaims only pending names | `test_relation_construction_ownership_faults` |
 
 ## Implementation and validation
 
