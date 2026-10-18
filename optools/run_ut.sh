@@ -80,21 +80,18 @@ UT_OVERLAP_LIGHT_PARALLEL=${UT_OVERLAP_LIGHT_PARALLEL:-"2"}
 # child a bounded TERM grace period, so the parent must retain the helper long
 # enough for both children to finish before escalating to KILL.
 UT_HELPER_TERM_GRACE_TICKS=${UT_HELPER_TERM_GRACE_TICKS:-"60"}
-# Keep the constrained runner's existing three-slot heavy-stage budget. The
-# engine race wave runs exclusively, then one slot is reserved for the plan
-# race wave while the resource-heavy packages use the remaining two slots.
-# This is a process/task budget, not a hard memory guarantee; stronger runners
-# may explicitly override it.
-HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-"3"}
+# Keep an explicit caller cap for engine admission. Default the subsequent
+# heavy/plan wave to three only after the exclusive engine budget is resolved.
+HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-}
 PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 # Keep plan race processes bounded because each shard owns a race-instrumented
 # test process and its package resources. The default stays serial on the
 # constrained CI runner; stronger runners can opt into two independent shards.
 PLAN_RACE_PARALLEL=${PLAN_RACE_PARALLEL:-"1"}
-# Two engine shards cut the measured engine/test race runtime roughly in half.
-# They run as an exclusive wave so resource-heavy package work cannot delay the
-# ISCP progress made by either shard.
-ENGINE_RACE_SHARDS=2
+# Six exclusive engine shards reduced the measured phase from 100s to 44s,
+# with 5.2 GiB peak under the eight-CPU/16-GiB runner envelope. Admission still
+# respects UT_PARALLEL and an explicit caller heavy cap. Other stages wait.
+ENGINE_RACE_SHARDS=6
 SCA_REPORT="$G_WKSP/$G_TS-SCA-Report.out"
 UT_REPORT="$G_WKSP/$G_TS-UT-Report.out"
 UT_DIAGNOSTIC_DIR="${BUILD_WKSP}/ut-report"
@@ -283,10 +280,10 @@ function join_ut_owner(){
             trap 'handle_ut_join_term "$?" "$join_status" "$failed_flag_name"' TERM
         fi
         wait "${!pid_name}" || join_status=$?
+        # A killed raw Go driver can leave test/link children in its group,
+        # just as a helper shell can. Reaping either leader is not drainage.
+        wait_for_ut_process_group "${!pid_name}" 20 || join_status=125
         if (( requires_drain_ack )); then
-            # Preparation and ordinary fallback children share this helper's
-            # group. Reaping its shell must not release those descendants.
-            wait_for_ut_process_group "${!pid_name}" 20 || join_status=125
             local completion_path="${G_WKSP}/${G_TS}-owner-complete.${pid_name}"
             if [[ ! -f "${completion_path}" ]] ||
                 [[ "$(<"${completion_path}")" != "${join_status}" ]]; then
@@ -1323,13 +1320,13 @@ function handle_ut_termination(){
             fi
         fi
     fi
-    if (( CLUSTER_PREBUILD_DRAIN_FAILED == 0 && CURRENT_UT_DRAIN_FAILED == 0 )) && [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
-        cleanup_embedded_prebuild
-    elif [[ -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
-        logger "ERR" "UT cancellation: preserving embedded prebuild directory while an owner is undrained"
-    fi
     if (( CURRENT_UT_DRAIN_FAILED == 0 && CLUSTER_PREBUILD_DRAIN_FAILED == 0 )); then
-        consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY
+        # Keep preparation diagnostics until execution reporting has released
+        # ownership, including discovery aborts that have no report to append.
+        if consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY &&
+            [[ -z "${PREBUILT_RACE_REPORT}" && -n "${CLUSTER_PREBUILD_REPORT}" ]]; then
+            cleanup_embedded_prebuild
+        fi
     else
         logger "ERR" "UT cancellation: preserving prebuilt race report and binary while an owner is undrained"
     fi
@@ -1419,7 +1416,7 @@ function run_engine_race_shards(){
 
     if ! [[ "${engine_race_shards}" =~ ^[1-9][0-9]*$ ]] ||
         (( engine_race_shards > ENGINE_RACE_SHARDS )); then
-        logger "ERR" "engine race shard count must be 1 or ${ENGINE_RACE_SHARDS}, got '${engine_race_shards}'"
+        logger "ERR" "engine race shard count must be 1 through ${ENGINE_RACE_SHARDS}, got '${engine_race_shards}'"
         return 2
     fi
 
@@ -2620,7 +2617,7 @@ function run_tests(){
     echo "#  CLUSTER ADMISSION: process lifecycle"
     echo "#  UT CHECKPOINT:   $UT_CHECKPOINT"
     echo "#  UT STDERR:       $UT_STDERR"
-    echo "#  HEAVY RACE UT:   $HEAVY_RACE_PARALLEL total package slots"
+    echo "#  HEAVY/PLAN UT:   ${HEAVY_RACE_PARALLEL:-3} total package slots"
     horiz_rule
     mark_ut_stage "routing" "validate shard and package partition" start
 
@@ -2825,12 +2822,21 @@ function run_tests(){
             logger "INF" "Cap overlapping light package parallelism to UT_LIGHT_PARALLEL=${light_stage_parallel}"
         fi
 
-        if ! [[ "${HEAVY_RACE_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
-            (( HEAVY_RACE_PARALLEL > 64 )); then
+        if ! [[ "${HEAVY_RACE_PARALLEL:-3}" =~ ^[1-9][0-9]*$ ]] ||
+            (( ${HEAVY_RACE_PARALLEL:-3} > 64 )); then
             logger "ERR" "HEAVY_RACE_PARALLEL must be an integer from 1 through 64, got '${HEAVY_RACE_PARALLEL}'"
             UT_TEST_STATUS=1
             return 0
         fi
+        engine_race_parallel=${ENGINE_RACE_SHARDS}
+        if (( engine_race_parallel > UT_PARALLEL )); then
+            engine_race_parallel=${UT_PARALLEL}
+        fi
+        if [[ -n "${HEAVY_RACE_PARALLEL}" ]] &&
+            (( engine_race_parallel > HEAVY_RACE_PARALLEL )); then
+            engine_race_parallel=${HEAVY_RACE_PARALLEL}
+        fi
+        local HEAVY_RACE_PARALLEL=${HEAVY_RACE_PARALLEL:-3}
         if ! plan_package=$(go list ${GO_MODULE_MODE} ./pkg/sql/plan); then
             logger "ERR" "Failed to resolve ./pkg/sql/plan"
             UT_TEST_STATUS=1
@@ -3050,10 +3056,6 @@ function run_tests(){
             # any resource-heavy package starts: those package lifecycles can
             # otherwise delay the engine's ISCP progress and make watermark
             # assertions depend on which runner process gets CPU first.
-            engine_race_parallel=${ENGINE_RACE_SHARDS}
-            if (( engine_race_parallel > HEAVY_RACE_PARALLEL )); then
-                engine_race_parallel=${HEAVY_RACE_PARALLEL}
-            fi
             ENGINE_RACE_TEST_BINARY="${G_WKSP}/${G_TS}-engine-race.test"
             ENGINE_RACE_REPORT="${G_WKSP}/${G_TS}-engine-race-report.out"
             ENGINE_RACE_REPORT_READY="${ENGINE_RACE_REPORT}.ready"

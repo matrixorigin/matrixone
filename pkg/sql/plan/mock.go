@@ -137,6 +137,8 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		return dec, nil
 	case "null_var":
 		return nil, nil
+	case "collation_server":
+		return "utf8mb4_general_ci", nil
 	case "sql_mode":
 		if m.sqlModeOverride != nil {
 			return *m.sqlModeOverride, nil
@@ -464,6 +466,16 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
 		},
 		pks: []int{0},
+	}
+	moSchema[catalog.MODatabaseDefaults] = &Schema{
+		cols: []col{
+			{"account_id", types.T_uint32, false, 0, 0},
+			{"database_id", types.T_uint64, false, 0, 0},
+			{"collation_id", types.T_uint32, false, 0, 0},
+			{"collation_revision", types.T_uint32, false, 0, 0},
+			{"version", types.T_uint64, false, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		}, pks: []int{0, 1},
 	}
 	moSchema["mo_tables"] = &Schema{
 		cols: []col{

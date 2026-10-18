@@ -2693,6 +2693,14 @@ func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 	if schemaChanged || p == nil {
 		return schemaChanged
 	}
+	if ddl := p.GetDdl(); ddl != nil {
+		if create := ddl.GetCreateTable(); create != nil && create.DatabaseDefaults != nil {
+			return true
+		}
+		if ddl.GetAlterDatabase() != nil || ddl.GetCreateDatabase().GetDefaults() != nil {
+			return true
+		}
+	}
 	query := p.GetQuery()
 	return query != nil && (query.GetHasForeignKeyAction() ||
 		query.GetViewMetadataDependsOnUdf() ||
@@ -2840,8 +2848,7 @@ func compileStatementContexts(
 }
 
 func siriusStatementSelected(sql string, stmt tree.Statement) bool {
-	selected, _ := isSidecarQuery(sql)
-	return selected && !isPerformStatement(stmt)
+	return hasSiriusHint(sql) && !isPerformStatement(stmt)
 }
 
 // EXPLAIN ANALYZE and EXPLAIN PHYPLAN execute the inner query only to collect

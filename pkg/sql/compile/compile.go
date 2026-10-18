@@ -156,6 +156,10 @@ func NewCompile(
 	c.startAt = startAt
 	c.disableRetry = false
 	c.retryTimes = 0
+	// Start every new compilation with the ordinary index-registration policy.
+	// The ALTER COPY private preparation opts out through its executor options;
+	// that opt-out must not survive into this object's next pool generation.
+	c.skipIndexTaskRegistration = false
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
 	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
@@ -566,6 +570,7 @@ func (c *Compile) clear() {
 	c.keepAutoIncrement = 0
 	c.lastInsertIDBaseline = 0
 	c.disableLock = false
+	c.skipIndexTaskRegistration = false
 	c.prePipelineLockTableID = 0
 	c.icebergScanPlanner = nil
 
@@ -658,6 +663,8 @@ func (c *Compile) run(s *Scope) error {
 		return err
 	case CreateDatabase:
 		return s.CreateDatabase(c)
+	case AlterDatabase:
+		return s.AlterDatabase(c)
 	case DropDatabase:
 		err := s.DropDatabase(c)
 		if err != nil {
@@ -733,7 +740,7 @@ func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResul
 
 // Capture before publication: cleanup must never change an already owned result.
 func newScopeRunResultForContext(err error, pipelineCtx, queryCtx context.Context) scopeRunResult {
-	err, _ = normalizeScopeRunError(err, pipelineCtx, queryCtx)
+	err, _ = process.NormalizePipelineRunError(err, pipelineCtx, queryCtx)
 	return scopeRunResult{err: err}
 }
 
@@ -746,78 +753,6 @@ func scopeRunQueryContext(proc *process.Process) context.Context {
 		return queryCtx
 	}
 	return proc.GetTopContext()
-}
-
-func isScopeCancellationError(err error) bool {
-	return process.IsPipelineCancellationError(err)
-}
-
-// isScopeCancellationFrom reports whether every leaf in err can be attributed
-// to the same canceled context. A joined error is attributable only as a whole;
-// one matching cancellation leaf must not hide an independent deadline leaf.
-func isScopeCancellationFrom(err error, contextErr error) bool {
-	if err == nil || contextErr == nil || process.IsPipelineFailure(err) {
-		return false
-	}
-	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		children := joined.Unwrap()
-		if len(children) == 0 {
-			return false
-		}
-		for _, child := range children {
-			if !isScopeCancellationFrom(child, contextErr) {
-				return false
-			}
-		}
-		return true
-	}
-	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
-		if child := wrapped.Unwrap(); child != nil {
-			return isScopeCancellationFrom(child, contextErr)
-		}
-	}
-	return errors.Is(err, contextErr) ||
-		(errors.Is(contextErr, context.Canceled) && errors.Is(err, process.ErrPipelineStopped))
-}
-
-// normalizeScopeRunError distinguishes a substantive execution failure from
-// cancellation fallout.  A child pipeline canceled by a successfully finished
-// consumer is secondary and may be ignored, while a real error carried as the
-// pipeline cancel cause must survive.  Query-level cancellation remains owned
-// by the query context and is reported by Compile.Run.
-func normalizeScopeRunError(
-	err error,
-	pipelineCtx context.Context,
-	queryCtx context.Context,
-) (error, bool) {
-	if err == nil {
-		return nil, false
-	}
-	if !isScopeCancellationError(err) {
-		return process.MarkPipelineFailure(err), false
-	}
-	if queryCtx != nil && queryCtx.Err() != nil && isScopeCancellationFrom(err, queryCtx.Err()) {
-		if errors.Is(queryCtx.Err(), context.DeadlineExceeded) {
-			return process.MarkPipelineFailure(queryCtx.Err()), true
-		}
-		if cause := context.Cause(queryCtx); cause != nil {
-			return process.MarkPipelineFailure(cause), true
-		}
-		return process.MarkPipelineFailure(queryCtx.Err()), true
-	}
-	if pipelineCtx == nil || pipelineCtx.Err() == nil || !isScopeCancellationFrom(err, pipelineCtx.Err()) {
-		return process.MarkPipelineFailure(err), false
-	}
-	cause := context.Cause(pipelineCtx)
-	if cause == process.ErrPipelineStopped && queryCtx != nil {
-		// A first-wins consumer stop can outlive its query's deadline. It is
-		// successful only while that query remains live.
-		return process.MarkPipelineFailure(queryCtx.Err()), true
-	}
-	if cause != nil {
-		return process.MarkPipelineFailure(cause), true
-	}
-	return process.MarkPipelineFailure(err), false
 }
 
 // preferPrimaryScopeResult arbitrates frozen results at every scope boundary.
@@ -909,15 +844,19 @@ func (c *Compile) printPipeline() {
 // 1. lock table.
 // 2. init data source.
 func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Source, err error) {
-	// do table lock.
-	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
-		return nil, err
+	if !c.disableLock {
+		// do table lock.
+		if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
+			return nil, err
+		}
 	}
 	if err = c.unresolvedIndexHintError(); err != nil {
 		return nil, err
 	}
-	if err = c.lockTable(); err != nil {
-		return nil, err
+	if !c.disableLock {
+		if err = c.lockTable(); err != nil {
+			return nil, err
+		}
 	}
 	if err = c.maybePromoteLoadUniqueIndexes(); err != nil {
 		return nil, err
@@ -1272,6 +1211,8 @@ func (c *Compile) compileScope(pn *plan.Plan) ([]*Scope, error) {
 				newScope(CreateDatabase).
 					withPlan(pn),
 			}, nil
+		case plan.DataDefinition_ALTER_DATABASE:
+			return []*Scope{newScope(AlterDatabase).withPlan(pn)}, nil
 		case plan.DataDefinition_DROP_DATABASE:
 			return []*Scope{
 				newScope(DropDatabase).
@@ -3682,7 +3623,11 @@ func (c *Compile) compileExternScanParallelWrite(node *plan.Node, param *tree.Ex
 }
 
 func GetExternParallelSize(totalSize int64, cpuNum int) int {
-	parallelSize := int(totalSize / int64(colexec.WriteS3Threshold))
+	return externParallelSize(totalSize, cpuNum, int64(colexec.WriteS3Threshold))
+}
+
+func externParallelSize(totalSize int64, cpuNum int, sizePerReader int64) int {
+	parallelSize := int(totalSize / sizePerReader)
 	if parallelSize < 1 {
 		return 1
 	} else if parallelSize < cpuNum {
@@ -5121,12 +5066,20 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 
 	var mcpu int
 	var ID2Addr map[int]int = make(map[int]int, 0)
+	testConfig, observeRanges := moruntime.GetLoadDataTestConfig(c.proc.GetService(), param.Filepath)
 	stageNodes := c.externalScanStageNodes(node, param)
 	if len(stageNodes) == 0 && loadTimeScanNeedsCoordinator(node, param) {
 		stageNodes = engine.Nodes{{Addr: c.addr, Mcpu: c.capFanoutByMaxDop(max(c.ncpu, 1))}}
 	}
 	if len(stageNodes) == 0 {
 		return nil, moerr.NewInternalErrorNoCtx("external scan stage has no query workers")
+	}
+	if observeRanges && len(stageNodes) == 1 && stageNodes[0].Addr == c.addr {
+		// Small SQL fixtures otherwise retain a one-worker TP budget even
+		// after admission. Keep the selected local CN, and size a private
+		// worker budget by the test threshold, actual CPUs, and query max_dop.
+		stageNodes = slices.Clone(stageNodes)
+		stageNodes[0].Mcpu = c.capFanoutByMaxDop(externParallelSize(fileSize[0], c.ncpu, testConfig.MinSize))
 	}
 
 	if param.ScanType == tree.S3 {
@@ -5148,6 +5101,9 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 	}
 
 	parallelSize := GetExternParallelSize(fileSize[0], mcpu)
+	if observeRanges {
+		parallelSize = externParallelSize(fileSize[0], mcpu, testConfig.MinSize)
+	}
 
 	var fileOffset [][]int64
 	for i := 0; i < len(fileList); i++ {
@@ -5156,6 +5112,9 @@ func (c *Compile) compileExternScanParallelReadWrite(node *plan.Node, param *tre
 		fileOffset = append(fileOffset, arr)
 		if err != nil {
 			return nil, err
+		}
+		if observeRanges && testConfig.OnRanges != nil {
+			testConfig.OnRanges(parallelSize, slices.Clone(arr))
 		}
 	}
 
@@ -9574,6 +9533,9 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 		return nil, err
 	}
 
+	if c.disableLock {
+		return ss, nil
+	}
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
 	coordinatorLock := false
 	localizeLockPlan := c.loadUniqueIndexPromotion != nil || c.prePipelineLockTableID != 0
@@ -11243,6 +11205,8 @@ func (c *Compile) runSqlWithResultAndOptions(
 
 	lower := c.getLower()
 
+	options = c.internalStatementOption(options)
+
 	if c.pn != nil {
 		if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
 			if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
@@ -11304,6 +11268,13 @@ func (c *Compile) runSqlWithResultAndOptions(
 	}
 	ctx = process.ContextWithWarningSink(ctx, c.proc.WarningSink)
 	return exec.Exec(ctx, sql, opts)
+}
+
+func (c *Compile) internalStatementOption(options executor.StatementOption) executor.StatementOption {
+	if c.disableLock {
+		return options.WithDisableLock()
+	}
+	return options
 }
 
 func (c *Compile) fatalLog(retry int, err error) {

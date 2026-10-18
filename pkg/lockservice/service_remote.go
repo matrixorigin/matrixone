@@ -95,9 +95,9 @@ func (c *asyncLockAdmissionCompletion) finalize() {
 var methodVersions = map[pb.Method]int64{
 	pb.Method_Lock:                         defines.MORPCVersion1,
 	pb.Method_LockWriterFair:               defines.MORPCVersion99,
-	pb.Method_TryLock:                      defines.MORPCVersion118,
+	pb.Method_TryLock:                      defines.MORPCVersion119,
 	pb.Method_ForwardLock:                  defines.MORPCVersion1,
-	pb.Method_ForwardTryLock:               defines.MORPCVersion118,
+	pb.Method_ForwardTryLock:               defines.MORPCVersion119,
 	pb.Method_Unlock:                       defines.MORPCVersion1,
 	pb.Method_BatchUnlock:                  defines.MORPCVersion31,
 	pb.Method_GetTxnLock:                   defines.MORPCVersion1,
@@ -171,7 +171,7 @@ func supportsLockProtocolV118(serviceID string) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion118
+	return ok && version >= defines.MORPCVersion119
 }
 
 func (s *service) initRemote() {

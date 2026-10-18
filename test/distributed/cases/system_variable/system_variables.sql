@@ -263,3 +263,11 @@ set optimizer_switch='semijoin=off';
 select @@optimizer_switch;
 show variables like 'optimizer_switch';
 SET profiling_history_size = default;
+
+-- Removed remote HTTP configuration uses ordinary unknown-variable behavior.
+select @@session.sidecar_url;
+select @@global.sidecar_url;
+set session sidecar_url = 'http://unused';
+set global sidecar_url = 'http://unused';
+show session variables like 'sidecar_url';
+show global variables like 'sidecar_url';
