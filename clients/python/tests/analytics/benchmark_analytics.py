@@ -15,6 +15,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -34,7 +35,10 @@ def client():
     )
 
 
-def worker(mode, batch_size):
+def worker(mode, batch_size, table):
+    # Workers receive only a generated simple identifier, never SQL.
+    if not table.startswith("analytics_benchmark_") or not table[len("analytics_benchmark_") :].isalnum():
+        raise ValueError("Invalid benchmark table name")
     c = client()
     c.execute("SELECT 1")
     # Arrow's first conversion can import pandas/numpy. Warm the exact same
@@ -44,11 +48,11 @@ def worker(mode, batch_size):
     start = time.perf_counter()
     count, checksum, max_batch = 0, 0, 0
     if mode == "buffered":
-        result = c.execute("SELECT id, payload FROM analytics_benchmark")
+        result = c.execute("SELECT id, payload FROM `" + table + "`")
         count = len(result.rows)
         checksum = sum(row[0] for row in result.rows)
     else:
-        with c.analytics.query("SELECT id, payload FROM analytics_benchmark", batch_size=batch_size) as stream:
+        with c.analytics.query("SELECT id, payload FROM `" + table + "`", batch_size=batch_size) as stream:
             for batch in stream:
                 count += batch.num_rows
                 checksum += pc.sum(batch.column(0)).as_py()
@@ -82,27 +86,41 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--worker", choices=["buffered", "streamed"])
     parser.add_argument("--staging-dir")
+    parser.add_argument("--table", help="Parent-owned table passed to a worker")
     parser.add_argument("--rows", type=int, default=250000)
     parser.add_argument("--batch-size", type=int, default=4096)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--output")
     args = parser.parse_args()
     if args.worker:
-        print(json.dumps(worker(args.worker, args.batch_size)))
+        print(json.dumps(worker(args.worker, args.batch_size, args.table or "")))
         return
     if not args.staging_dir:
         parser.error("--staging-dir is required")
     c = client()
     records = pa.table({"id": range(args.rows), "payload": ["x" * 128] * args.rows})
     start = time.perf_counter()
+    target = "analytics_benchmark_" + uuid.uuid4().hex
+    created = False
     try:
-        c.analytics.upload_arrow("analytics_benchmark", records, args.staging_dir)
+        c.analytics.upload_arrow(target, records, args.staging_dir)
+        created = True
         upload_seconds = time.perf_counter() - start
         samples = []
         for repeat in range(args.repeats):
             for mode in ("buffered", "streamed"):
                 out = subprocess.check_output(
-                    [sys.executable, __file__, "--worker", mode, "--batch-size", str(args.batch_size)], text=True
+                    [
+                        sys.executable,
+                        __file__,
+                        "--worker",
+                        mode,
+                        "--batch-size",
+                        str(args.batch_size),
+                        "--table",
+                        target,
+                    ],
+                    text=True,
                 )
                 sample = json.loads(out.strip().splitlines()[-1])
                 assert sample["rows"] == args.rows
@@ -125,8 +143,11 @@ def main():
                 f.write(text + "\n")
         print(text)
     finally:
-        c.execute("DROP TABLE IF EXISTS analytics_benchmark")
-        c.disconnect()
+        try:
+            if created:
+                c.execute("DROP TABLE IF EXISTS `" + target + "`")
+        finally:
+            c.disconnect()
 
 
 if __name__ == "__main__":

@@ -63,3 +63,7 @@ All supported scalar edge cases round-trip, precision loss fails, late failures 
 The implementation PR is linked from the parent and sub-feature issues. Design review and merge acceptance are pending.
 
 Native Arrow LOAD must be enabled/available. Local validation used a current-source server; support is not inferred from the server's advertised version. Published-release and production-cloud certification are not claimed.
+
+### Runnable example ownership
+
+The example and RSS benchmark generate a unique table name per run. Cleanup is enabled only after upload returns successfully; a rejected CREATE (including a forced UUID collision) never authorizes DROP. Benchmark subprocesses receive the exact parent-owned name and validate it before constructing SQL. The example also uses a unique local Parquet path and unlinks it even if connecting fails. `test_example_ownership.py` runs both real CLI entry points against SQLite CREATE/DROP boundaries, preserving existing rows (sentinel 42), and checks cleanup after success and after a later query/worker failure. Unknown upload outcomes do not authorize speculative deletion.

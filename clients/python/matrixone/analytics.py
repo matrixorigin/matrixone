@@ -248,7 +248,8 @@ def _as_reader(data, schema=None):
 def _protocol_schema(cursor):
     """Use protocol types, not the first batch, so empty/all-NULL results work."""
     pa = _arrow()
-    from pymysql.constants import FIELD_TYPE as ft, FLAG
+    from pymysql.constants import FIELD_TYPE as ft
+    from pymysql.constants import FLAG
 
     fields = []
     for f in cursor._result.fields:
@@ -370,7 +371,11 @@ class ArrowStream:
                     values = [None if v is None else _time_microseconds(v) for v in values]
                 if not f.nullable and any(v is None for v in values):
                     raise ValueError("NULL in non-nullable result column %s" % f.name)
-                if pa.types.is_boolean(f.type) or pa.types.is_time(f.type):
+                if pa.types.is_time(f.type):
+                    # The driver conversion above always yields microseconds.
+                    # Arrow must rescale and reject fractional narrowing.
+                    array = pa.array(values, type=pa.time64("us"), safe=True).cast(f.type, safe=True)
+                elif pa.types.is_boolean(f.type):
                     array = pa.array(values, type=f.type, safe=True)
                 else:
                     # pa.array([1.5], type=int64, safe=True) still truncates. Cast
