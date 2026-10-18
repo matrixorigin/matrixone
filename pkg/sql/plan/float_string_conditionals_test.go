@@ -147,7 +147,14 @@ func TestLegacyFloatStringConditionals(t *testing.T) {
 			defer stmt.Free()
 			fresh, err := bindTableDumpExpression(compiler, source, tableDumpExpression{kind: kind, name: "g", col: col}, ast, 0, false)
 			require.NoError(t, err)
-			require.True(t, sameTableDumpBoundExpression(fresh, migratedExpr), "migrated tree must match ordinary binding")
+			if tc.name == "direct_coalesce" || tc.name == "explicit_source" {
+				// These controls have no implicit width-32 float cast. Migration
+				// must not upgrade unrelated historical collation annotations.
+				require.False(t, hasLegacyFloatStringCast(col.GeneratedCol.Expr))
+				require.True(t, proto.Equal(source, execution), "ineligible catalog must stay unchanged")
+			} else {
+				require.True(t, sameTableDumpBoundExpression(fresh, migratedExpr), "migrated tree must match ordinary binding")
+			}
 			require.True(t, proto.Equal(snapshot, source))
 			migrated := proto.Clone(execution)
 			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
