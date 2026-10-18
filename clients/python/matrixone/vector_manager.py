@@ -40,6 +40,23 @@ class _VectorManagerBase:
     """
 
     @staticmethod
+    def _validate_batch(data_list, batch_size):
+        if not isinstance(batch_size, int) or isinstance(batch_size, bool) or batch_size <= 0:
+            raise ValueError("batch_size must be a positive integer")
+        if data_list:
+            columns = set(data_list[0])
+            if not columns or any(set(row) != columns for row in data_list):
+                raise ValueError("Batch records must have identical nonempty column sets")
+
+    @staticmethod
+    def _batch_sql(table_name, data_list, batch_size):
+        from .base_client import BaseMatrixOneClient
+
+        builder = BaseMatrixOneClient()
+        for offset in range(0, len(data_list), batch_size):
+            yield builder._build_batch_insert_sql(table_name, data_list[offset : offset + batch_size])
+
+    @staticmethod
     def _build_create_ivf_sql(table_name: str, name: str, column: str, lists: int, op_type: "VectorOpType") -> tuple:
         """Build SQL for creating IVF index."""
         from .sqlalchemy_ext import IVFVectorIndex, VectorOpType
@@ -310,14 +327,29 @@ class VectorManager(_VectorManagerBase):
         except Exception as e:
             raise QueryError(f"Failed to insert vector data into table {table_name}: {e}")
 
-    def batch_insert(self, table_name: Union[str, type], data_list: List[Dict[str, Any]]) -> "VectorManager":
-        """Batch insert vector data."""
-        try:
-            for record in data_list:
-                self.insert(table_name, record)
+    def batch_insert(
+        self, table_name: Union[str, type], data_list: List[Dict[str, Any]], batch_size: int = 1000
+    ) -> "VectorManager":
+        """Insert bounded multi-row chunks in one transaction.
+
+        A Client owns the transaction; an existing Session keeps its caller's
+        transaction. Unknown commit outcomes must be reconciled before retry.
+        """
+        self._validate_batch(data_list, batch_size)
+        if not data_list:
             return self
-        except Exception as e:
-            raise QueryError(f"Failed to batch insert vector data into table {table_name}: {e}")
+        table_name = _extract_table_name(table_name)
+        try:
+            if self.executor is self.client:
+                with self.client.session() as executor:
+                    for sql in self._batch_sql(table_name, data_list, batch_size):
+                        executor.execute(sql)
+            else:
+                for sql in self._batch_sql(table_name, data_list, batch_size):
+                    self.executor.execute(sql)
+            return self
+        except Exception as error:
+            raise QueryError(f"Failed to batch insert vector data into table {table_name}: {error}") from error
 
     def similarity_search(
         self,
@@ -664,14 +696,25 @@ class AsyncVectorManager(_VectorManagerBase):
         except Exception as e:
             raise QueryError(f"Failed to insert vector data into table {table_name}: {e}")
 
-    async def batch_insert(self, table_name: Union[str, type], data_list: List[Dict[str, Any]]) -> "AsyncVectorManager":
-        """Batch insert vector data."""
-        try:
-            for record in data_list:
-                await self.insert(table_name, record)
+    async def batch_insert(
+        self, table_name: Union[str, type], data_list: List[Dict[str, Any]], batch_size: int = 1000
+    ) -> "AsyncVectorManager":
+        """Async multi-row chunks; caller-supplied Sessions retain ownership."""
+        self._validate_batch(data_list, batch_size)
+        if not data_list:
             return self
-        except Exception as e:
-            raise QueryError(f"Failed to batch insert vector data into table {table_name}: {e}")
+        table_name = _extract_table_name(table_name)
+        try:
+            if self.executor is self.client:
+                async with self.client.session() as executor:
+                    for sql in self._batch_sql(table_name, data_list, batch_size):
+                        await executor.execute(sql)
+            else:
+                for sql in self._batch_sql(table_name, data_list, batch_size):
+                    await self.executor.execute(sql)
+            return self
+        except Exception as error:
+            raise QueryError(f"Failed to batch insert vector data into table {table_name}: {error}") from error
 
     async def similarity_search(
         self,
