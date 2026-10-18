@@ -50,6 +50,9 @@ func TestLoadPrimaryKeyValidationPlan(t *testing.T) {
 				}
 			}
 			require.Equal(t, tc.want, dedups)
+			if tc.want > 0 {
+				requireLoadValidationIndependentOfWrites(t, pn.GetQuery())
+			}
 			if tc.table == "dept" {
 				maintained := 0
 				for _, n := range pn.GetQuery().Nodes {
@@ -142,4 +145,50 @@ func TestLoadCompositePrimaryKeyValidationPlan(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+	requireLoadValidationIndependentOfWrites(t, pn.GetQuery())
+}
+
+// A successful FAIL check preserves the input row set, but its hash partitions
+// must not become the bulk writer's partitions. Check both sides of the shared
+// source so retaining an unreachable DEDUP node cannot satisfy this contract.
+func requireLoadValidationIndependentOfWrites(t *testing.T, qry *planpb.Query) {
+	t.Helper()
+	var validationSources, writeSources []int32
+	var visit func(int32, bool)
+	visit = func(id int32, writing bool) {
+		n := qry.Nodes[id]
+		if writing {
+			require.False(t, n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP,
+				"bulk writers must read the prepared input, independently of validation partitioning")
+		}
+		if n.NodeType == planpb.Node_SINK_SCAN {
+			if writing {
+				writeSources = append(writeSources, n.SourceStep...)
+			} else {
+				validationSources = append(validationSources, n.SourceStep...)
+			}
+		}
+		for _, child := range n.Children {
+			visit(child, writing)
+		}
+	}
+	for _, n := range qry.Nodes {
+		if n.NodeType == planpb.Node_MULTI_UPDATE {
+			visit(n.NodeId, true)
+		}
+	}
+	for _, root := range qry.Steps {
+		n := qry.Nodes[root]
+		if n.NodeType == planpb.Node_PROJECT && len(n.Children) == 1 {
+			child := qry.Nodes[n.Children[0]]
+			if child.NodeType == planpb.Node_JOIN && child.JoinType == planpb.Node_DEDUP {
+				require.Equal(t, planpb.Node_FAIL, child.OnDuplicateAction)
+				require.Len(t, n.ProjectList, 1, "validation retains only the primary-key identity")
+				visit(root, false)
+			}
+		}
+	}
+	require.NotEmpty(t, validationSources, "the independent validation must be an executable step")
+	require.NotEmpty(t, writeSources)
+	require.Equal(t, validationSources, writeSources, "both branches consume one prepared image")
 }
