@@ -396,3 +396,13 @@ func TestMaterializedViewLegacyRefreshDoesNotPublish(t *testing.T) {
 	require.Zero(t, e.publications)
 	require.Equal(t, "last-good", e.state.LastRun)
 }
+
+func TestMaterializedViewCreateSQL(t *testing.T) {
+	for _, tc := range []struct {
+		interval int64
+		policy   string
+	}{{0, "manual"}, {120, "every interval 120 second"}} {
+		state := &State{Database: "db`name", Name: "mv`name", Interval: tc.interval, Definition: catalog.MVDefinition{Query: "select k from `source`", IntervalSeconds: 60}}
+		require.Equal(t, "create materialized view `db``name`.`mv``name` refresh "+tc.policy+" as select k from `source`", state.CreateSQL())
+	}
+}

@@ -16,13 +16,17 @@ package plan
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/mv"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -260,4 +264,39 @@ func materializedViewOwnerName(wire string) string {
 		return parts[1]
 	}
 	return wire
+}
+
+// hasMaterializedViewDependents prevents a row DELETE from replacing the
+// physical identity pinned by an MV. Resolve admits pre-migration catalogs;
+// the indexed probe shares the statement transaction and tenant identity.
+func hasMaterializedViewDependents(ctx CompilerContext, table *TableDef) (bool, error) {
+	proc := ctx.GetProcess()
+	if proc == nil {
+		return false, nil
+	}
+	if _, available := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(mv.RuntimeKey); !available {
+		return false, nil
+	}
+	_, dependencies, err := ctx.Resolve(catalog.MO_CATALOG, catalog.MO_MV_DEPENDENCIES, nil)
+	if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if dependencies == nil {
+		return false, nil
+	}
+	account, err := ctx.GetAccountId()
+	if err != nil {
+		return false, err
+	}
+	result, err := runSql(ctx, fmt.Sprintf("select mv_id from mo_catalog.mo_mv_dependencies where account_id=%d and source_table_id=%d limit 1", account, table.TblId))
+	if err != nil {
+		return false, err
+	}
+	defer result.Close()
+	found := false
+	result.ReadRows(func(n int, _ []*vector.Vector) bool { found = n > 0; return !found })
+	return found, nil
 }

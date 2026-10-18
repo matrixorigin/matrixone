@@ -1115,10 +1115,18 @@ func buildDeletePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		}
 	}
 
+	if canTruncate {
+		dependent, err := hasMaterializedViewDependents(ctx, delCtx.tableDef)
+		if err != nil {
+			return err
+		}
+		canTruncate = !dependent
+	}
+
 	lastNodeId := appendDeleteSourceScan()
 	if !delCtx.skipTargetDelete {
 		// create delete index plans
-		err = buildDeleteIndexPlans(ctx, builder, bindCtx, delCtx)
+		err = buildDeleteIndexPlans(ctx, builder, bindCtx, delCtx, canTruncate)
 		if err != nil {
 			return err
 		}
@@ -7083,7 +7091,7 @@ func indexNeedsRewriteForUpdate(tableDef *TableDef, indexdef *IndexDef, updateCo
 }
 
 // make delete index plans here
-func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx) error {
+func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindContext, delCtx *dmlPlanCtx, canTruncate bool) error {
 
 	isUpdate := delCtx.updateColLength > 0
 
@@ -7093,26 +7101,9 @@ func buildDeleteIndexPlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *
 	// both UK and SK. To handle SK case, we will have flags to indicate if it's UK or SK.
 	hasUniqueKey := haveUniqueKey(delCtx.tableDef)
 	hasSecondaryKey := haveSecondaryKey(delCtx.tableDef)
-	// Keep temporary index maintenance on the same row-delete path as its base
-	// table; skipping it would leave stale index entries after DELETE.
-	canTruncate := delCtx.isUnrestrictedDelete && !delCtx.tableDef.IsTemporary && delCtx.tableDef.TableType != catalog.SystemMaterializedViewRel
-
-	accountId, err := ctx.GetAccountId()
-	if err != nil {
-		return err
-	}
-
-	enabled, err := IsForeignKeyChecksEnabled(ctx)
-	if err != nil {
-		return err
-	}
-
-	if enabled && len(delCtx.tableDef.RefChildTbls) > 0 ||
-		delCtx.tableDef.ViewSql != nil ||
-		(util.TableIsClusterTable(delCtx.tableDef.GetTableType()) && accountId != catalog.System_Account) ||
-		delCtx.objRef.PubInfo != nil {
-		canTruncate = false
-	}
+	// Share the base-table decision, including MV dependencies, partitions and
+	// delete_opt_to_truncate. Otherwise skipped index deletes leave stale keys.
+	var err error
 
 	if (hasUniqueKey || hasSecondaryKey) && !canTruncate {
 		typMap := make(map[string]plan.Type)

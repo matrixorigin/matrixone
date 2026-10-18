@@ -137,6 +137,7 @@ func main() {
 	output := flag.String("output", "/workspace/mv-build/sql-results.json", "evidence JSON")
 	n := flag.Int("rows", 1000000, "benchmark source rows")
 	catalogMissing := flag.Bool("catalog-missing", false, "isolated pre-MV kernel fixture only: validate ordinary DDL without catalogs")
+	consumerCheck := flag.Bool("consumer-check", false, "verify MV native loading, source DELETE and SHOW export consumers")
 	tenantCheck := flag.Bool("tenant-check", false, "run isolated account lifecycle contracts only")
 	functional := flag.Bool("functional", false, "run SQL contracts without performance experiments")
 	keep := flag.Bool("keep", false, "retain test database for restart checks")
@@ -179,6 +180,11 @@ func main() {
 	if *catalogMissing {
 		evidence.Rows = 0
 		runMissingMaterializedViewCatalog()
+		return
+	}
+	if *consumerCheck {
+		evidence.Rows = 0
+		runConsumerCases()
 		return
 	}
 	if *tenantCheck {

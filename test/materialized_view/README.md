@@ -152,3 +152,15 @@ the compiler guard, with privilege checks still enabled. This scoped fixture is
 not mixed-version or login-compatibility evidence. It never edits system schemas
 and cleans its own database. Validate both transaction modes by configuring
 `cn.txn.mode` to `pessimistic` or `optimistic` on that isolated CN.
+
+
+`-consumer-check` selects the native consumer regressions for review5562448876.
+It reuses the existing authenticated BVT service and owns a two-row indexed
+source, manual MVs and one altered periodic policy. Nine checks cover prepared
+DELETE before MV creation, unrestricted DELETE with creation disabled, affected
+rows including an empty source, unique/secondary maintenance, explicit TRUNCATE
+protection, DUMP/LOAD kind admission before file access with unchanged publication,
+and SHOW CREATE TABLE equality/replay for manual and altered periodic policies.
+The fixture drops its MVs before its database on both success and failure. The
+normal BVT entrypoint includes the mode and requires a nonempty successful JSON
+report, using the same deployment and coverage path.

@@ -529,7 +529,7 @@ func validateTableDumpSchema(def *plan.TableDef) error {
 	switch def.TableType {
 	case catalog.SystemExternalRel, catalog.SystemSourceRel:
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with external or source tables")
-	case catalog.SystemViewRel:
+	case catalog.SystemViewRel, catalog.SystemMaterializedViewRel:
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with views")
 	case catalog.SystemSequenceRel:
 		return moerr.NewNotSupportedNoCtx("DUMP TABLE and LOAD TABLE with sequences")

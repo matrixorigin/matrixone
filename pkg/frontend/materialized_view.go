@@ -242,11 +242,7 @@ func handleShowMaterializedViews(ctx context.Context, ses *Session, stmt *tree.S
 			if err != nil {
 				return err
 			}
-			policy := "manual"
-			if state.Interval > 0 {
-				policy = fmt.Sprintf("every interval %d second", state.Interval)
-			}
-			m.AddRow([]interface{}{string(stmt.Name.ObjectName), "create materialized view " + mv.Quote(state.Database) + "." + mv.Quote(state.Name) + " refresh " + policy + " as " + def.Query})
+			m.AddRow([]interface{}{string(stmt.Name.ObjectName), state.CreateSQL()})
 			return nil
 		}
 		query = fmt.Sprintf("select run_id,status,sequence,epoch,error_message from mo_catalog.mo_mv_refresh_runs where account_id=%d and mv_id=%d order by sequence desc limit 100", key.Account, key.ID)

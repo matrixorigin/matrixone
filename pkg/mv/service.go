@@ -51,6 +51,16 @@ type State struct {
 	Interval                     int64
 }
 
+// CreateSQL reconstructs the logical object using its authoritative policy.
+// Internal storage properties and refresh provenance are never export DDL.
+func (st *State) CreateSQL() string {
+	policy := "manual"
+	if st.Interval > 0 {
+		policy = fmt.Sprintf("every interval %d second", st.Interval)
+	}
+	return "create materialized view " + Quote(st.Database) + "." + Quote(st.Name) + " refresh " + policy + " as " + st.Definition.Query
+}
+
 // Service owns bounded per-CN admission, not cluster-wide publication locks.
 // Fixed account buckets conservatively serialize collisions without a growing
 // tenant-to-semaphore map. Transaction conflict detection fences publishers.

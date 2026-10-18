@@ -308,3 +308,16 @@ privilege checks retained, and proves six DDL guards in each transaction mode.
 Normal account/ACL cases use authenticated sessions. This does not satisfy the
 separate normal-login/mixed-version release gate. Case-level/source hashes and
 functional fixture cost are in materialized_view_review_lifecycle_results.json.
+
+
+## Native consumer regression follow-up (2026-10-18)
+
+Review5562448876 adds three acceptance boundaries: native object loading must
+reject MV targets before file/Write admission; unrestricted source DELETE must
+use row DML when dependencies pin identity, with matching index maintenance;
+and standard SHOW CREATE TABLE must export the same logical MV/current policy
+as explicit SHOW CREATE MATERIALIZED VIEW. The executable `-consumer-check`
+mode includes prepared-before-creation and feature-disabled DELETE, affected-row
+boundaries, unique/secondary controls, unchanged publication, native import
+rejection and manual/altered-policy DDL replay. See
+[consumer corrections](materialized_view_consumer_fixes.md) and its evidence JSON.
