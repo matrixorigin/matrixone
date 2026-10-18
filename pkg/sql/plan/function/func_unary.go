@@ -1013,11 +1013,8 @@ func BitCountDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrap
 
 func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	uniformBinary, perRow := stringDomainMode(ivecs[0])
-	if !perRow {
-		if uniformBinary {
-			return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
-		}
-		return opUnaryBytesToFixedWithErrorCheck[uint64](ivecs, result, proc, length, bitCountFromNonBinaryString, selectList)
+	if !perRow && uniformBinary {
+		return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
 	}
 	param := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[uint64](result)
@@ -1037,13 +1034,19 @@ func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResul
 		}
 		var count uint64
 		var err error
-		if binaryStringAt(ivecs[0], int(row), uniformBinary, perRow) {
+		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
+		if binary {
 			count = bitCountFromBinaryString(value)
 		} else {
 			count, err = bitCountFromNonBinaryString(value)
 		}
 		if err != nil {
 			return err
+		}
+		if !binary {
+			text := convertByteSliceToString(value)
+			prefix := leadingDecimalIntegerPrefix(text)
+			appendIntegerNumericCoercionWarning(proc, text, prefix, prefix != "", false)
 		}
 		if err = rs.Append(count, false); err != nil {
 			return err

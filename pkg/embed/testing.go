@@ -34,9 +34,9 @@ var (
 )
 
 // SharedTestCluster serializes tests that reuse an expensive embedded cluster
-// and preserves the first initialization result. Initialization callbacks must
-// return errors instead of failing the current test from inside sync.Once, so a
-// failed startup is reported consistently to every later caller.
+// and reuses each successfully initialized generation. Initialization callbacks
+// must return an error and any incomplete cleanup owner. A failed root retains
+// its diagnostic; a later root may start fresh only after cleanup is complete.
 type SharedTestCluster struct {
 	mu          sync.Mutex
 	runCondOnce sync.Once
@@ -186,6 +186,11 @@ func (c *SharedTestCluster) Run(
 		c.mu.Lock()
 		defer func() {
 			if activeClaimed && !setupComplete {
+				// A panic/Goexit during rollback has not established cleanup
+				// completion. Retain the owner for explicit recovery.
+				if c.cluster != nil {
+					c.closed = true
+				}
 				c.releaseRunLocked()
 			}
 			c.mu.Unlock()
@@ -216,7 +221,15 @@ func (c *SharedTestCluster) Run(
 		c.once.Do(func() {
 			initialized = true
 			c.generation++
+			returned := false
+			defer func() {
+				if !returned {
+					// Panic/Goexit supplies no affirmative cleanup completion.
+					c.closed = true
+				}
+			}()
 			c.cluster, c.err = init()
+			returned = true
 			if c.err == nil && c.cluster == nil {
 				c.err = moerr.NewInternalErrorNoCtx("cluster initializer returned nil without an error")
 			}
@@ -230,24 +243,31 @@ func (c *SharedTestCluster) Run(
 				"MO_UT_SETUP fixture=shared-cluster phase=initialize-total duration=%s status=%s",
 				time.Since(initStarted), status)
 		}
-		if c.err != nil && c.cluster != nil {
-			cleanupStarted := time.Now()
-			cleanupErr := c.cluster.Close()
-			cleanupStatus := "ready"
-			if cleanupErr != nil {
-				cleanupStatus = "error"
-			}
-			logTestSetup(t,
-				"MO_UT_SETUP fixture=shared-cluster phase=rollback-cleanup duration=%s status=%s",
-				time.Since(cleanupStarted), cleanupStatus)
-			complete := closeComplete(c.cluster, cleanupErr)
-			c.err = errors.Join(c.err, cleanupErr)
-			if complete {
-				c.cluster = nil
-			}
-		}
 		if c.err != nil {
 			initErr = c.err
+			complete := c.cluster == nil
+			if c.cluster != nil {
+				cleanupStarted := time.Now()
+				cleanupErr := c.cluster.Close()
+				complete = closeComplete(c.cluster, cleanupErr)
+				cleanupStatus := "ready"
+				if cleanupErr != nil || !complete {
+					cleanupStatus = "error"
+				}
+				logTestSetup(t,
+					"MO_UT_SETUP fixture=shared-cluster phase=rollback-cleanup duration=%s status=%s complete=%t",
+					time.Since(cleanupStarted), cleanupStatus, complete)
+				initErr = errors.Join(initErr, cleanupErr)
+			}
+			if complete {
+				c.resetGenerationLocked()
+			} else {
+				// Retain ownership and prevent implicit retries by later roots.
+				// CloseIfActive is the explicit path to complete this cleanup.
+				c.closed = true
+				c.err = errors.Join(initErr, moerr.NewInvalidStateNoCtx("failed shared cluster initialization cleanup is incomplete"))
+				initErr = c.err
+			}
 			return
 		}
 
@@ -403,13 +423,7 @@ func (c *SharedTestCluster) finishFailureCleanup(
 	// The old generation has released all resources, including admission and
 	// ports. Reset only after CloseComplete; a later Run can safely initialize a
 	// new generation without paying this cost on successful tests.
-	c.cluster = nil
-	c.err = nil
-	c.once = sync.Once{}
-	c.closed = c.terminalClose
-	c.sealed = false
-	c.cleanupTried = false
-	c.cleanupRegistrations = nil
+	c.resetGenerationLocked()
 	return err
 }
 
@@ -436,7 +450,7 @@ func (c *SharedTestCluster) Close() error {
 	err := c.cluster.Close()
 	if !closeComplete(c.cluster, err) {
 		c.closed = true
-		return err
+		return errors.Join(err, moerr.NewInvalidStateNoCtx("shared cluster cleanup is incomplete"))
 	}
 	c.cluster = nil
 	c.closed = true
@@ -472,15 +486,9 @@ func (c *SharedTestCluster) CloseIfActive() error {
 		// scenario from observing a partially closed fixture. A subsequent
 		// CloseIfActive call can retry the underlying cleanup.
 		c.closed = true
-		return err
+		return errors.Join(err, moerr.NewInvalidStateNoCtx("shared cluster cleanup is incomplete"))
 	}
-	c.cluster = nil
-	c.err = nil
-	c.once = sync.Once{}
-	c.closed = c.terminalClose
-	c.sealed = false
-	c.cleanupTried = false
-	c.cleanupRegistrations = nil
+	c.resetGenerationLocked()
 	return err
 }
 
@@ -720,4 +728,17 @@ func RunSingleCNBaseClusterTests(
 // later shared test still initializes normally.
 func CloseSingleCNBaseClusterTests() error {
 	return singleCNClusterState.CloseIfActive()
+}
+
+// Admission is exclusive and all owners of this generation have completed
+// cleanup. Keep the generation number monotonic so stale finalizers cannot
+// affect a replacement fixture.
+func (c *SharedTestCluster) resetGenerationLocked() {
+	c.cluster = nil
+	c.err = nil
+	c.once = sync.Once{}
+	c.closed = c.terminalClose
+	c.sealed = false
+	c.cleanupTried = false
+	c.cleanupRegistrations = nil
 }

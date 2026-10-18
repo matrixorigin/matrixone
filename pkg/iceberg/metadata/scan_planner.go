@@ -100,6 +100,12 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		profile.PlanningCacheMiss++
 	}
 
+	// Fresh tables have a schema but no snapshot or implicit main ref yet.
+	// Explicit selectors and dangling refs must still be resolved normally.
+	if isSnapshotlessScan(loaded.Metadata, selector) {
+		return p.planSnapshotlessScan(planningCtx, req, loaded.Metadata, selector, profile, cfg)
+	}
+
 	snapshot, err := p.Metadata.ResolveSnapshot(planningCtx, loaded.Metadata, selector)
 	if err != nil {
 		return nil, planContextError(planningCtx, err)
@@ -373,6 +379,52 @@ func (p LocalScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanRequest)
 		},
 		DataTasks:            dataTasks,
 		DeleteTasks:          deleteTasks,
+		ColumnMapping:        columnMapping,
+		ResidualFilter:       residualFilter(req.ResidualSQL),
+		Profile:              profile,
+		DeleteMaxMemoryBytes: req.DeleteMaxMemoryBytes,
+		EnableDeleteSpill:    req.EnableDeleteSpill,
+	}, nil
+}
+
+func isSnapshotlessScan(meta *api.TableMetadata, selector api.SnapshotSelector) bool {
+	ref := strings.TrimSpace(selector.RefName)
+	return meta != nil && len(meta.Snapshots) == 0 && !HasCurrentSnapshot(meta) && len(meta.Refs) == 0 &&
+		!selector.HasSnapshotID && !selector.HasTimestampMS &&
+		(ref == "" || ref == model.DefaultRefMain)
+}
+
+func (p LocalScanPlanner) planSnapshotlessScan(ctx context.Context, req api.ScanPlanRequest, meta *api.TableMetadata, selector api.SnapshotSelector, profile api.PlanningProfile, cfg localPlannerConfig) (*api.IcebergScanPlan, error) {
+	schema, schemaID, err := scanSchema(meta, api.Snapshot{}, selector)
+	if err != nil {
+		return nil, err
+	}
+	if features, err := p.Metadata.DetectUnsupportedP0(ctx, meta, nil, nil); err != nil {
+		return nil, planContextError(ctx, err)
+	} else if len(features) > 0 {
+		return nil, unsupportedFeaturesError(features)
+	}
+	planningMemoryUsed := profile.MetadataBytes
+	if err := reservePlanningMemory(&planningMemoryUsed, saturatingPlanningMul(int64(len(schema.Fields)), 512), cfg.planningMaxMemory, cfg.serverPlanningMode); err != nil {
+		return nil, err
+	}
+	columnMapping, err := buildColumnMapping(schema, req.ProjectionIDs)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkPlanningContext(ctx); err != nil {
+		return nil, err
+	}
+	return &api.IcebergScanPlan{
+		Snapshot: api.SnapshotPlan{
+			SnapshotID:           NoCurrentSnapshotID,
+			SchemaID:             schemaID,
+			PartitionSpecIDs:     partitionSpecIDs(meta, nil),
+			MetadataLocation:     meta.MetadataLocationRed,
+			MetadataLocationHash: meta.MetadataLocationHash,
+			RefName:              strings.TrimSpace(selector.RefName),
+			PlanningMode:         localPlanningMode,
+		},
 		ColumnMapping:        columnMapping,
 		ResidualFilter:       residualFilter(req.ResidualSQL),
 		Profile:              profile,

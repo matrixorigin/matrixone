@@ -581,10 +581,11 @@ func (c *PushClient) skipSubIfSubscribed(
 	acctId uint64,
 	tableID uint64,
 	dbID uint64,
+	accessTime *int64,
 ) (bool, *logtailreplay.PartitionState, bool) {
 
 	//if table has been subscribed, return quickly.
-	if ps, ok, _, pending := c.isSubscribedWithPending(ctx, acctId, dbID, tableID); ok {
+	if ps, ok, _, pending := c.isSubscribedWithPendingAccessTime(ctx, acctId, dbID, tableID, accessTime); ok {
 		return true, ps, pending
 	}
 	return false, nil, false
@@ -597,6 +598,20 @@ func (c *PushClient) toSubscribeTable(
 	tableName string,
 	dbID uint64,
 	dbName string,
+	pendingOut ...*bool,
+) (ps *logtailreplay.PartitionState, err error) {
+	return c.toSubscribeTableWithAccessTime(ctx, accId, tableID, tableName, dbID, dbName, nil, pendingOut...)
+}
+
+// accessTime is a caller-local idle-GC bookkeeping sample shared only across
+// consecutive warm reads. It has no role in snapshot visibility or readiness.
+func (c *PushClient) toSubscribeTableWithAccessTime(
+	ctx context.Context,
+	accId, tableID uint64,
+	tableName string,
+	dbID uint64,
+	dbName string,
+	accessTime *int64,
 	pendingOut ...*bool,
 ) (ps *logtailreplay.PartitionState, err error) {
 	var pending *bool
@@ -618,11 +633,16 @@ func (c *PushClient) toSubscribeTable(
 			moerr.NewInternalErrorNoCtx("injected subscribe table err")
 	}
 
-	if skip, ps, initialPending = c.skipSubIfSubscribed(ctx, accId, tableID, dbID); skip {
+	if skip, ps, initialPending = c.skipSubIfSubscribed(ctx, accId, tableID, dbID, accessTime); skip {
 		if pending != nil {
 			*pending = initialPending
 		}
 		return ps, nil
+	}
+	if accessTime != nil {
+		// Cold/waiting paths sample their own current time below. The next warm
+		// access must not inherit a value from before that potentially long wait.
+		*accessTime = 0
 	}
 
 	state, err = c.toSubIfUnsubscribed(ctx, dbID, tableID)
@@ -1488,6 +1508,14 @@ func (c *PushClient) isSubscribedWithPending(
 	ctx context.Context,
 	accId, dbId, tId uint64,
 ) (*logtailreplay.PartitionState, bool, SubscribeState, bool) {
+	return c.isSubscribedWithPendingAccessTime(ctx, accId, dbId, tId, nil)
+}
+
+func (c *PushClient) isSubscribedWithPendingAccessTime(
+	ctx context.Context,
+	accId, dbId, tId uint64,
+	accessTime *int64,
+) (*logtailreplay.PartitionState, bool, SubscribeState, bool) {
 
 	s := &c.subscribed
 
@@ -1506,7 +1534,16 @@ func (c *PushClient) isSubscribedWithPending(
 	}
 	// Update timestamp (with sampling) while holding the read lock to keep
 	// state consistent with the partition creation below.
-	now := time.Now().UnixNano()
+	var now int64
+	if accessTime != nil {
+		now = *accessTime
+	}
+	if now == 0 {
+		now = time.Now().UnixNano()
+		if accessTime != nil {
+			*accessTime = now
+		}
+	}
 	if now-ent.lastTs.Load() > int64(time.Minute) {
 		ent.lastTs.Store(now)
 	}

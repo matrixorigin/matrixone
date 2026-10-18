@@ -17,6 +17,7 @@ package explain
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -1048,6 +1049,9 @@ func TestBuildSQLJSONPlanPreservesVectorExecutionSettings(t *testing.T) {
 	require.Contains(t, low, "direction=ASC")
 	require.Contains(t, high, "NProbe: 16")
 	require.Contains(t, high, "direction=DESC")
+	options, err := ivfflatplan.EncodeScanOptions(ivfflatplan.ScanOptions{InitialProbeCount: 16})
+	require.NoError(t, err)
+	require.Contains(t, high, fmt.Sprintf("algo_options=0x%X", options))
 	require.Contains(t, high, "post_filter_over_fetch=true")
 	base := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1}, plan.OrderBySpec_ASC, false)
 	expanded := buildExpressions(ivfflatplan.ScanOptions{InitialProbeCount: 1, BucketExpandStep: 8}, plan.OrderBySpec_ASC, false)
@@ -1106,6 +1110,40 @@ func TestBuildSQLJSONPlanPreservesVectorIndexDistanceRange(t *testing.T) {
 		"distance_upper_bound_type=INCLUSIVE",
 		"distance_upper_bound=50",
 	}, upper)
+}
+
+func TestSQLJSONIndexSearchRejectsInvalidMetadata(t *testing.T) {
+	index := &plan.IndexDef{IndexName: "idx_embedding", IndexAlgo: "ivfflat"}
+	for _, tc := range []struct {
+		name string
+		spec *plan.IndexSearchScan
+	}{
+		{"nil", nil},
+		{"missing_index", &plan.IndexSearchScan{}},
+		{"invalid_direction", &plan.IndexSearchScan{Index: index, Direction: plan.OrderBySpec_OrderByFlag(1 << 10)}},
+		{"invalid_options", &plan.IndexSearchScan{Index: index, AlgoOptions: []byte(`{`)}},
+		{"missing_named_value", &plan.IndexSearchScan{Index: index, AlgoExprNames: []string{"first_round_limit"}}},
+		{"empty_name", &plan.IndexSearchScan{Index: index, AlgoExprNames: []string{""}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1)}}},
+		{"duplicate_name", &plan.IndexSearchScan{Index: index, AlgoExprNames: []string{"first_round_limit", "first_round_limit"}, AlgoExprs: []*plan.Expr{sqlJSONTestInt32(1), sqlJSONTestInt32(2)}}},
+		{"nil_value", &plan.IndexSearchScan{Index: index, AlgoExprNames: []string{"first_round_limit"}, AlgoExprs: []*plan.Expr{nil}}},
+		{"invalid_value", &plan.IndexSearchScan{Index: index, AlgoExprNames: []string{"first_round_limit"}, AlgoExprs: []*plan.Expr{{}}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := sqlJSONIndexSearchExpressions(t.Context(), tc.spec, &ExplainOptions{CompleteLiteralVectors: true})
+			require.Error(t, err)
+		})
+	}
+	values, err := sqlJSONIndexSearchExpressions(t.Context(), &plan.IndexSearchScan{
+		Index:           &plan.IndexDef{IndexName: "custom", IndexAlgo: "unregistered"},
+		AlgoOptions:     []byte{0x00, 0xff},
+		AlgoExprNames:   []string{"custom_budget"},
+		AlgoExprs:       []*plan.Expr{sqlJSONTestInt32(7)},
+		IncludedColumns: []string{"tag"},
+	}, &ExplainOptions{CompleteLiteralVectors: true})
+	require.NoError(t, err)
+	require.Contains(t, values, "algo_options=0x00FF")
+	require.Contains(t, values, "custom_budget=7")
+	require.Contains(t, values, "included_column[0]=tag")
 }
 
 func TestSQLJSONHelpersRejectMalformedInputsAndPreserveStatistics(t *testing.T) {

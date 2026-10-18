@@ -1144,7 +1144,12 @@ func (rt *Routine) resetSessionWithAdmission(
 	}()
 
 	// reset the old and new session.
-	if err := newSession.reset(operationCtx, oldSession); err != nil {
+	if err := newSession.resetWith(operationCtx, oldSession, func() error {
+		if protocol, ok := rt.getProtocol().(*MysqlProtocolImpl); ok {
+			return protocol.applyNegotiatedSessionCharsetTo(operationCtx, newSession)
+		}
+		return nil
+	}); err != nil {
 		return err
 	}
 

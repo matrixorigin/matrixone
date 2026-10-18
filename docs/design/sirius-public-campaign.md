@@ -321,7 +321,8 @@ The Go public runner consumes MO_SIRIUS_CAMPAIGN_RUN and private configuration,
 streams typed NDJSON rows to 0600 relative spools beneath a 0700 scratch root,
 and returns only bounded metadata/count/bytes/digest. Rows are bounded to 1 MiB;
 comparison uses 32 MiB working memory and 4 GiB total comparison scratch.
-V1 dispatch, routes, artifacts and tests retain their meaning.
+The current runner accepts V2 campaigns. E removed V1 dispatch, routes and
+tests; historical V1 artifacts retain their original evidence identities.
 
 The controller owns persistent separate LOG/TN/CN roles. The worker and services
 are siblings. Both the worker and controller enter exclusive subreaping; the
