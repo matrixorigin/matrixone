@@ -266,7 +266,15 @@ func (external *External) Prepare(proc *process.Process) error {
 			colIndex := int(attr.ColIndex)
 			colType := &param.Cols[colIndex].Typ
 			typ := makeType(colType, flag || loadTimeTextInput(param, types.T(colType.Id)))
-			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+			if external.OutputAllocation != nil {
+				vec, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, external.OutputAllocation)
+				if err != nil {
+					return err
+				}
+				external.ctr.buf.Vecs[i] = vec
+			} else {
+				external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
+			}
 		}
 	}
 	return nil

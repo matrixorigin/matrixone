@@ -49,7 +49,21 @@ func (unionall *UnionAll) Prepare(proc *process.Process) error {
 func (unionall *UnionAll) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := unionall.OpAnalyzer
 	for {
-		result, err := vm.ChildrenCall(unionall.GetChildren(0), proc, analyzer)
+		child := 0
+		if unionall.DirectInputs {
+			child = unionall.currentBranch
+		}
+		result, err := vm.ChildrenCall(unionall.GetChildren(child), proc, analyzer)
+		if unionall.DirectInputs {
+			if err != nil || result.Status == vm.ExecYield || result.Batch != nil {
+				return result, err
+			}
+			if unionall.currentBranch+1 == unionall.NumChildren() {
+				return vm.CancelResult, nil
+			}
+			unionall.currentBranch++
+			continue
+		}
 		if err != nil || result.Status != vm.ExecStop ||
 			unionall.SequentialBranches <= 1 ||
 			unionall.currentBranch+1 >= unionall.SequentialBranches {

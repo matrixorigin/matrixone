@@ -59,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -105,11 +106,43 @@ func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
 		bind("=", leftID, rightID), bind("=", leftTime, guard),
 	}}
 	c := &Compile{proc: proc}
+	assertDependentAlgorithm := func(want vm.OpType) {
+		children := []*plan.Node{
+			{ProjectList: []*plan.Expr{leftID, leftTime}},
+			{ProjectList: []*plan.Expr{rightID, rightTime}},
+		}
+		factory, err := c.compileDependentJoin(plan2.DeepCopyNode(node), children)
+		require.NoError(t, err)
+		op, err := factory(proc, []*dependent.DemandInput{{}, {}})
+		require.NoError(t, err)
+		root := op.(*dependent.JoinKernel)
+		defer func() {
+			root.Free(proc, false, nil)
+			root.Join.Free(proc, false, nil)
+			root.Build.Free(proc, false, nil)
+			root.Join.Release()
+			root.Build.Release()
+		}()
+		require.Equal(t, want, root.Join.OpType())
+	}
 	require.False(t, c.broadcastJoinUsesHash(node), "unproved guarded ON retains LoopJoin")
+	assertDependentAlgorithm(vm.LoopJoin)
 	c.SetPreparedJoinDiagnosticFree(true)
 	require.True(t, c.broadcastJoinUsesHash(node), "current clean binding permits HashJoin")
+	assertDependentAlgorithm(vm.HashJoin)
 	c.SetPreparedJoinDiagnosticFree(false)
 	require.False(t, c.broadcastJoinUsesHash(node), "a subsequent execution must not inherit proof")
+	assertDependentAlgorithm(vm.LoopJoin)
+
+	// A single nullable MARK key is otherwise hash eligible, but must retain
+	// pair-local guarded diagnostics until this execution proves them clean.
+	node.JoinType = plan.Node_MARK
+	node.OnList = node.OnList[1:]
+	assertDependentAlgorithm(vm.LoopJoin)
+	c.SetPreparedJoinDiagnosticFree(true)
+	assertDependentAlgorithm(vm.HashJoin)
+	c.SetPreparedJoinDiagnosticFree(false)
+	assertDependentAlgorithm(vm.LoopJoin)
 }
 
 func TestHasOrderedGroupConcat(t *testing.T) {
