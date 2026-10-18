@@ -3,6 +3,7 @@
 
 """Explicit connection security and timeout options shared by SDK clients."""
 
+import json
 import math
 import ssl
 
@@ -18,7 +19,28 @@ def positive_timeout(value, name):
 
 def redact_error(error, password):
     message = str(error)
-    return message.replace(password, '***') if password else message
+    if not password:
+        return message
+    # DBAPI errors format their args with repr(), and SQLAlchemy embeds that
+    # representation in its own message. Match escaped forms before the raw
+    # password so replacing a raw substring cannot break the escaped match.
+    quoted = repr(password)
+    # Remove only the enclosing quote's escape, preserving escaped backslashes
+    # and printable Unicode. The surrounding error can choose either quote.
+    escaped = quoted[1:-1].replace('\\' + quoted[0], quoted[0])
+    representations = {
+        password,
+        repr(password)[1:-1],
+        ascii(password)[1:-1],
+        escaped,
+        escaped.replace("'", "\\'"),
+        escaped.replace('"', '\\"'),
+        json.dumps(password)[1:-1],
+        json.dumps(password, ensure_ascii=False)[1:-1],
+    }
+    for value in sorted(representations, key=len, reverse=True):
+        message = message.replace(value, '***')
+    return message
 
 
 def tls_options(params):
