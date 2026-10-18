@@ -464,10 +464,11 @@ type Compile struct {
 	keepAutoIncrement        uint64
 	// lastInsertIDBaseline is the session-visible LAST_INSERT_ID when this
 	// statement started; a retry restores it.
-	lastInsertIDBaseline    uint64
-	ignorePublish           bool
-	ignoreCheckExperimental bool
-	disableLock             bool
+	lastInsertIDBaseline      uint64
+	ignorePublish             bool
+	ignoreCheckExperimental   bool
+	skipIndexTaskRegistration bool
+	disableLock               bool
 
 	icebergScanPlanner icebergapi.ScanPlanner
 	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan
