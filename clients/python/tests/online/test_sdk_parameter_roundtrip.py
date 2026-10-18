@@ -149,3 +149,87 @@ async def test_async_native_vectors_and_sql_mode(client):
     finally:
         await c.disconnect()
         client.execute('DROP TABLE ' + table)
+
+
+@pytest.mark.parametrize('exported', [False, True])
+@pytest.mark.parametrize('transformed', [False, True])
+def test_native_mode_follows_unbound_session_hook(client, exported, transformed):
+    from sqlalchemy import create_engine, event
+
+    from matrixone.client import Session as ClientSession
+    from matrixone.session import Session as ExportedSession
+
+    routed = create_engine(client._engine.url, connect_args={'init_command': "SET sql_mode='NO_BACKSLASH_ESCAPES'"})
+    default_probes, routed_probes = [], []
+
+    def record(target):
+        def observe(c, cur, sql, *args):
+            if sql == 'SELECT @@SESSION.sql_mode':
+                target.append(c)
+
+        return observe
+
+    default_observer = record(default_probes)
+    event.listen(client._engine, 'before_cursor_execute', default_observer)
+    event.listen(routed, 'before_cursor_execute', record(routed_probes))
+
+    def route(state):
+        state.bind_arguments['bind'] = routed
+        if transformed:
+            state.statement = state.statement.columns()
+
+    cls = ExportedSession if exported else ClientSession
+    try:
+        with cls(client=client) as session:
+            event.listen(session, 'do_orm_execute', route)
+            assert tuple(session.execute("SELECT '\\', ?", (7,)).one()) == ('\\', 7)
+        assert default_probes == []
+        assert len(routed_probes) == 1
+        assert routed.pool.checkedout() == 0
+    finally:
+        event.remove(client._engine, 'before_cursor_execute', default_observer)
+        routed.dispose()
+
+
+def test_native_snapshot_mode_is_owned_by_connection(client):
+    from matrixone.client import SnapshotClient
+
+    with client._engine.begin() as connection:
+        connection.exec_driver_sql("SET sql_mode='NO_BACKSLASH_ESCAPES'")
+    try:
+        assert SnapshotClient(client, 'unused_without_from').execute("SELECT '\\', ?", (7,)).rows == [('\\', 7)]
+    finally:
+        with client._engine.begin() as connection:
+            connection.exec_driver_sql("SET sql_mode=''")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('transformed', [False, True])
+async def test_native_async_mode_follows_unbound_session_hook(client, transformed):
+    from sqlalchemy import event
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from matrixone.session import AsyncSession
+
+    routed = create_async_engine(
+        client._engine.url.set(drivername='mysql+aiomysql'),
+        connect_args={'init_command': "SET sql_mode='NO_BACKSLASH_ESCAPES'"},
+        pool_pre_ping=False,
+    )
+    probes = []
+    event.listen(routed.sync_engine, 'before_cursor_execute', lambda c, cur, sql, *a: probes.append(sql))
+    async_client = AsyncClient(logger=Mock())
+
+    def route(state):
+        state.bind_arguments['bind'] = routed.sync_engine
+        if transformed:
+            state.statement = state.statement.columns()
+
+    try:
+        async with AsyncSession(client=async_client) as session:
+            event.listen(session.sync_session, 'do_orm_execute', route)
+            assert tuple((await session.execute("SELECT '\\', ?", (7,))).one()) == ('\\', 7)
+        assert probes == ['SELECT @@SESSION.sql_mode', "SELECT '\\', 7"]
+        assert routed.sync_engine.pool.checkedout() == 0
+    finally:
+        await routed.dispose()

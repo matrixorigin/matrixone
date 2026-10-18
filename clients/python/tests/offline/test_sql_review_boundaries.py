@@ -7,7 +7,7 @@ from unittest.mock import Mock
 import numpy as np
 import pytest
 import sqlalchemy
-from sqlalchemy import create_engine, event
+from sqlalchemy import Integer, String, bindparam, create_engine, event, select
 from sqlalchemy.pool import QueuePool
 
 from matrixone import Client
@@ -154,3 +154,77 @@ def test_mode_probe_retains_result_connection_ownership(tmp_path, cls, transform
         assert client._engine.pool.checkedout() == 0
     finally:
         client.disconnect()
+
+
+@pytest.mark.parametrize('cls', [ClientSession, ExportedSession])
+@pytest.mark.parametrize('bound', [False, True])
+@pytest.mark.parametrize('transformed', [False, 'columns', 'subquery'])
+def test_mode_discovery_follows_execution_hook(client, cls, tmp_path, bound, transformed):
+    alternate = create_engine('sqlite:///' + str(tmp_path / 'hook.sqlite'))
+    default_probes, routed_probes = [], []
+    mode_transport(client._engine, default_probes, {'value': ''})
+    mode_transport(alternate, routed_probes, {'value': 'NO_BACKSLASH_ESCAPES'})
+
+    def route(state):
+        state.bind_arguments['bind'] = alternate
+        if transformed:
+            state.statement = state.statement.columns(marker=String(), value=Integer())
+            if transformed == 'subquery':
+                leaf = state.statement.subquery()
+                state.statement = select(leaf.c.marker, leaf.c.value, bindparam('outer', 9))
+
+    try:
+        with cls(bind=client._engine if bound else None, client=client) as session:
+            event.listen(session, 'do_orm_execute', route)
+            assert tuple(session.execute("SELECT '\\' AS marker, ? AS value", (7,)).one()) == (
+                ('\\', 7, 9) if transformed == 'subquery' else ('\\', 7)
+            )
+        assert default_probes == []
+        assert len(routed_probes) == 1
+        assert routed_probes[0].engine is alternate
+    finally:
+        alternate.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('bound', [False, True])
+@pytest.mark.parametrize('transformed', [False, 'columns', 'subquery'])
+async def test_async_mode_discovery_follows_execution_hook(async_client, tmp_path, bound, transformed):
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    from matrixone.session import AsyncSession
+
+    alternate = create_async_engine('sqlite+aiosqlite:///' + str(tmp_path / 'async-hook.sqlite'))
+    default_probes, routed_probes = [], []
+    mode_transport(async_client._engine.sync_engine, default_probes, {'value': ''})
+    mode_transport(alternate.sync_engine, routed_probes, {'value': 'NO_BACKSLASH_ESCAPES'})
+
+    def route(state):
+        state.bind_arguments['bind'] = alternate.sync_engine
+        if transformed:
+            state.statement = state.statement.columns(marker=String(), value=Integer())
+            if transformed == 'subquery':
+                leaf = state.statement.subquery()
+                state.statement = select(leaf.c.marker, leaf.c.value, bindparam('outer', 9))
+
+    try:
+        async with AsyncSession(bind=async_client._engine if bound else None, client=async_client) as session:
+            event.listen(session.sync_session, 'do_orm_execute', route)
+            assert tuple((await session.execute("SELECT '\\' AS marker, ? AS value", (7,))).one()) == (
+                ('\\', 7, 9) if transformed == 'subquery' else ('\\', 7)
+            )
+        assert default_probes == []
+        assert len(routed_probes) == 1
+        assert routed_probes[0].engine is alternate.sync_engine
+    finally:
+        await alternate.dispose()
+
+
+def test_snapshot_defers_parameters_to_execution_connection(client):
+    from matrixone.client import SnapshotClient
+
+    probes = []
+    mode_transport(client._engine, probes, {'value': 'NO_BACKSLASH_ESCAPES'})
+    snapshot = SnapshotClient(client, 'existing_snapshot')
+    assert snapshot.execute("SELECT '\\', ?", (7,)).rows == [('\\', 7)]
+    assert len(probes) == 1
