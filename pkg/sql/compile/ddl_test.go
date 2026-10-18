@@ -2304,6 +2304,33 @@ func TestCheckConstraintNamesAvailable(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestCheckConstraintNamesAvailableLegacySQL(t *testing.T) {
+	ctx := context.Background()
+	for _, checks := range [][]*plan2.CheckDef{nil, {nil}} {
+		db := newStubDatabase("db")
+		db.rels["legacy"] = &stubRelation{tableDef: &plan2.TableDef{
+			Checks:    checks,
+			Createsql: "create table legacy(x int check(x>0), constraint legacy_ck check(x<10))",
+		}}
+		for _, name := range []string{"__mo_chk_1", "LEGACY_CK"} {
+			err := checkConstraintNamesAvailable(ctx, db, "new_table", []*plan2.CheckDef{{Name: name}})
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateCheckConstraintName), "%v", err)
+		}
+		require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_table", []*plan2.CheckDef{{Name: "fresh"}}))
+		require.NoError(t, checkConstraintNamesAvailable(ctx, db, "legacy", []*plan2.CheckDef{{Name: "legacy_ck"}}))
+	}
+	// Structured definitions remain authoritative over retained CREATE SQL.
+	db := newStubDatabase("db")
+	db.rels["structured"] = &stubRelation{tableDef: &plan2.TableDef{
+		Checks:    []*plan2.CheckDef{{Name: "current_ck"}},
+		Createsql: "create table structured(x int, constraint old_ck check(x>0))",
+	}}
+	for _, kind := range []string{catalog.SystemExternalRel, catalog.SystemViewRel, catalog.SystemSourceRel} {
+		db.rels[kind] = &stubRelation{tableDef: &plan2.TableDef{TableType: kind, Createsql: "stage://bucket/check.csv"}}
+	}
+	require.NoError(t, checkConstraintNamesAvailable(ctx, db, "new_table", []*plan2.CheckDef{{Name: "old_ck"}}))
+}
+
 func TestValidateRenamedCheckConstraintNames(t *testing.T) {
 	db := newStubDatabase("db")
 	eng := newStubEngine()

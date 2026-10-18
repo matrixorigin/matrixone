@@ -711,9 +711,32 @@ func checkConstraintNamesAvailable(ctx context.Context, dbSource engine.Database
 		if def == nil || features.IsPartition(def.FeatureFlag) || features.IsIndexTable(def.FeatureFlag) {
 			continue
 		}
+		hasStructuredChecks := false
 		for _, check := range def.GetChecks() {
+			if check == nil {
+				continue
+			}
+			hasStructuredChecks = true
 			if _, dup := wanted[strings.ToLower(check.GetName())]; dup {
 				return moerr.NewDuplicateCheckConstraintName(ctx, check.GetName())
+			}
+		}
+		if !hasStructuredChecks {
+			// Match the metadata reader's ordinary-table domain. External and
+			// source payloads can contain CHECK without being CREATE TABLE SQL.
+			if def.TableType != "" && def.TableType != catalog.SystemOrdinaryRel {
+				continue
+			}
+			// information_schema exposes these identities even when old catalog
+			// rows have no SchemaExtra.Checks. Admission must use its same decoder.
+			legacy, err := plan2.RecoverLegacyCheckConstraints(ctx, def.Createsql)
+			if err != nil {
+				return err
+			}
+			for _, check := range legacy {
+				if _, dup := wanted[strings.ToLower(check.Name)]; dup {
+					return moerr.NewDuplicateCheckConstraintName(ctx, check.Name)
+				}
 			}
 		}
 	}

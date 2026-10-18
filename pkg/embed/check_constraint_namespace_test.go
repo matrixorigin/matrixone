@@ -31,6 +31,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -79,6 +80,45 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			_, err = conn.ExecContext(cleanupCtx, "drop database if exists "+database)
 			require.NoError(t, err)
 		}()
+
+		t.Run("legacy SQL-only owners reject new claims", func(t *testing.T) {
+			defer func() {
+				// The artificial old-format rows must not affect later restore
+				// scenarios, including when an admission assertion fails.
+				for _, table := range []string{"legacy_duplicate", "structured_duplicate", "renamed_legacy", "sql_only_owner", "legacy_add_target", "rename_legacy_source", "structured_owner"} {
+					exec(t, "drop table if exists "+table)
+				}
+			}()
+			svc := cn.RawService().(cnservice.Service)
+			res, err := svc.GetSQLExecutor().Exec(defines.AttachAccountId(ctx, 0),
+				"create table "+database+".sql_only_owner(x int, constraint legacy_create check(x>0), constraint legacy_add check(x<10), constraint renamed_legacy_chk_1 check(x<>5))",
+				executor.Options{}.WithWaitCommittedLogApplied().WithAdjustTableExtraFunc(func(extra *api.SchemaExtra) error {
+					extra.Checks = nil
+					return nil
+				}))
+			require.NoError(t, err)
+			res.Close()
+			var encoded []byte
+			var createSQL string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select extra_info, rel_createsql from mo_catalog.mo_tables where reldatabase=? and relname='sql_only_owner'", database).Scan(&encoded, &createSQL))
+			var extra api.SchemaExtra
+			require.NoError(t, extra.Unmarshal(encoded))
+			require.Empty(t, extra.Checks)
+			require.Contains(t, createSQL, "legacy_create")
+			count(t, "select count(*) from information_schema.table_constraints where table_schema='"+database+"' and table_name='sql_only_owner' and constraint_type='CHECK'", 3)
+			expectError(t, "create table legacy_duplicate(x int, constraint LEGACY_CREATE check(x<0))", 3822)
+			exec(t, "create table legacy_add_target(x int)")
+			expectError(t, "alter table legacy_add_target add constraint legacy_add check(x>0)", 3822)
+			exec(t, "create table rename_legacy_source(x int check(x>0))")
+			expectError(t, "rename table rename_legacy_source to renamed_legacy", 3822)
+			count(t, "select count(*) from information_schema.tables where table_schema='"+database+"' and table_name in ('legacy_duplicate','renamed_legacy')", 0)
+			count(t, "select count(*) from information_schema.table_constraints where table_schema='"+database+"' and table_name='legacy_add_target' and constraint_type='CHECK'", 0)
+			exec(t, "create table structured_owner(x int, constraint structured_ck check(x>0))")
+			expectError(t, "create table structured_duplicate(x int, constraint structured_ck check(x<0))", 3822)
+			count(t, "select count(*) from information_schema.table_constraints t join information_schema.check_constraints c on t.constraint_schema=c.constraint_schema and t.constraint_name=c.constraint_name where t.table_schema='"+database+"' and t.table_name='sql_only_owner'", 3)
+			expectError(t, "insert into rename_legacy_source values(-1)", 3819)
+		})
 
 		t.Run("repeatable read preserves check authoring", func(t *testing.T) {
 			exec(t, "set session transaction_isolation='REPEATABLE-READ'")
