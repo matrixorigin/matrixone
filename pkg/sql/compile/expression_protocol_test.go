@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -105,7 +106,25 @@ func TestExpressionProtocolUnknownAndCanceledWorkers(t *testing.T) {
 	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{}}, defines.MORPCVersion67)
 	require.NoError(t, err)
 	require.False(t, supported)
-	ctx, cancel := context.WithCancel(c.proc.Ctx)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	value, _ := rt.GetGlobalVariables(moruntime.ClusterService)
+	cluster := value.(*schedulerTestCluster)
+	cluster.cns[0].QueryAddress = ""
+	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}, defines.MORPCVersion67)
+	require.NoError(t, err)
+	require.False(t, supported)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, "unknown")
+	supported, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}, defines.MORPCVersion67)
+	require.NoError(t, err)
+	require.False(t, supported)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCLatestVersion)
+	expired, expire := context.WithDeadline(c.proc.Ctx, time.Now().Add(-time.Second))
+	defer expire()
+	parent := c.proc.Ctx
+	c.proc.Ctx = expired
+	_, err = remoteWorkersSupportProtocol(c.proc, nil, defines.MORPCVersion67)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	ctx, cancel := context.WithCancel(parent)
 	cancel()
 	c.proc.Ctx = ctx
 	_, err = remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker"}}, defines.MORPCVersion67)
@@ -134,6 +153,9 @@ func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 		{"missing version", &query.Response{}, nil},
 		{"error without response", nil, errors.New("probe failed")},
 		{"error with response", &query.Response{}, errors.New("probe failed")},
+		{"error with supported version", &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{Version: defines.MORPCLatestVersion}}, errors.New("probe failed")},
+		{"deadline with live parent", nil, context.DeadlineExceeded},
+		{"canceled probe with live parent", nil, context.Canceled},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
@@ -141,8 +163,9 @@ func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 			client.response = tc.response
 			client.sendErr = tc.err
 			ok, err := remoteWorkersSupportProtocol(c.proc, engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}, defines.MORPCVersion67)
-			require.NoError(t, err)
-			require.False(t, ok, "unknown capabilities must select local placement")
+			require.ErrorIs(t, err, tc.err)
+			require.NoError(t, c.proc.Ctx.Err())
+			require.False(t, ok, "failed or unknown observations cannot verify support")
 			want := 0
 			if tc.response != nil {
 				want = 1
@@ -150,6 +173,22 @@ func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 			require.Equal(t, want, client.releases)
 		})
 	}
+}
+
+func TestExpressionProtocolDiscoveryFailure(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	old, _ := rt.GetGlobalVariables(moruntime.ClusterService)
+	t.Cleanup(func() { rt.SetGlobalVariables(moruntime.ClusterService, old) })
+	rt.SetGlobalVariables(moruntime.ClusterService, "invalid cluster")
+	workers := engine.Nodes{{Id: "old-worker", Addr: "remote:6001"}}
+	supported, err := remoteWorkersSupportProtocol(c.proc, workers, defines.MORPCVersion67)
+	require.False(t, supported)
+	require.ErrorContains(t, err, "invalid mocluster service")
+	supported, err = remoteWorkersSupportProtocolForPlacement(c.proc, workers, defines.MORPCVersion67)
+	require.False(t, supported)
+	require.NoError(t, err)
+	require.Zero(t, client.calls)
 }
 
 func TestRemoteExpressionPlacementRechecksGenerationAndWorkers(t *testing.T) {
@@ -224,6 +263,30 @@ func TestRemoteExpressionPlacementLocalRebindAndErrors(t *testing.T) {
 	require.ErrorIs(t, c.constrainRemoteExpressionWorkers(qry), context.Canceled)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	require.Zero(t, client.calls)
+}
+
+func TestRemoteExpressionPlacementProbeFailure(t *testing.T) {
+	for _, probeErr := range []error{errors.New("transport unavailable"), context.DeadlineExceeded, context.Canceled} {
+		t.Run(probeErr.Error(), func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{decimalDivisionProtocolExpr(types.T_decimal128)}}}}
+			workers := engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+			client.customResponse, client.sendErr = true, probeErr
+			c.execType, c.cnList = plan2.ExecTypeAP_MULTICN, workers
+			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+			require.NoError(t, c.proc.Ctx.Err())
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+			require.Len(t, c.cnList, 1)
+			require.Equal(t, c.addr, c.cnList[0].Addr)
+			ctx, cancel := context.WithCancel(c.proc.Ctx)
+			defer cancel()
+			c.proc.Ctx, client.onSend = ctx, cancel
+			c.execType, c.cnList = plan2.ExecTypeAP_MULTICN, workers
+			require.ErrorIs(t, c.constrainRemoteExpressionWorkers(qry), context.Canceled)
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			require.Equal(t, workers, c.cnList)
+		})
+	}
 }
 
 // Exercise the real send boundary, including serialization and all fences;
@@ -303,12 +366,19 @@ func TestRemoteExpressionSendReusesProbeAndRechecksNextSend(t *testing.T) {
 		require.Equal(t, 1, client.calls-calls)
 		require.Equal(t, 1, client.releases-releases)
 	}
+	client.customResponse, client.sendErr = true, errors.New("destination unavailable")
+	calls := client.calls
+	data, err := encodeRemoteScope(scope, c.proc)
+	require.ErrorIs(t, err, client.sendErr)
+	require.Empty(t, data)
+	require.Equal(t, calls+1, client.calls)
+	client.customResponse, client.sendErr = false, nil
 	// Reuse the same Scope, changing its expression generation after successful
 	// encoding: an old observation cannot authorize a later send.
 	op.ProjectList = []*planpb.Expr{integer}
 	client.version = defines.MORPCVersion71
 	before := client.calls
-	_, err := encodeRemoteScope(scope, c.proc)
+	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.Equal(t, 1, client.calls-before)
 	op.ProjectList = nil
@@ -318,14 +388,21 @@ func TestRemoteExpressionSendReusesProbeAndRechecksNextSend(t *testing.T) {
 }
 
 func TestRemoteExpressionDestinationPreservesLiveGuards(t *testing.T) {
-	for _, mode := range []string{"cancel", "downgrade", "upgrade"} {
+	for _, mode := range []string{"cancel", "cancel-error", "cancel-unknown", "downgrade", "upgrade"} {
 		t.Run(mode, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
 			client.version = defines.MORPCLatestVersion
 			p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
 			features := planpb.RemoteExpressionFeatures{IntegerArithmeticDomains: true, RowDependentConvBases: true}
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			if mode == "cancel" {
+			if mode == "cancel" || mode == "cancel-error" || mode == "cancel-unknown" {
+				features = planpb.RemoteExpressionFeatures{IntegerArithmeticDomains: true}
+				if mode != "cancel" {
+					client.customResponse = true
+				}
+				if mode == "cancel-error" {
+					client.sendErr = errors.New("transport failure during cancel")
+				}
 				ctx, cancel := context.WithCancel(c.proc.Ctx)
 				defer cancel()
 				c.proc.Ctx = ctx
@@ -338,7 +415,7 @@ func TestRemoteExpressionDestinationPreservesLiveGuards(t *testing.T) {
 				client.onSend = func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion97) }
 			}
 			err := validateRemoteExpressionDestination(c.proc, p, features)
-			if mode == "cancel" {
+			if mode == "cancel" || mode == "cancel-error" || mode == "cancel-unknown" {
 				require.ErrorIs(t, err, context.Canceled)
 			} else if mode == "downgrade" {
 				require.ErrorContains(t, err, "row-dependent CONV bases (MORPC version 70)")
@@ -346,7 +423,11 @@ func TestRemoteExpressionDestinationPreservesLiveGuards(t *testing.T) {
 				require.NoError(t, err)
 			}
 			require.Equal(t, 1, client.calls)
-			require.Equal(t, 1, client.releases)
+			releases := 1
+			if mode == "cancel-error" || mode == "cancel-unknown" {
+				releases = 0
+			}
+			require.Equal(t, releases, client.releases)
 		})
 	}
 }
@@ -384,6 +465,8 @@ func TestRemoteExpressionDestinationUnknownEvidence(t *testing.T) {
 			err := validateRemoteExpressionDestination(c.proc, p, f)
 			if mode == "no-features" {
 				require.NoError(t, err)
+			} else if client.sendErr != nil {
+				require.ErrorIs(t, err, client.sendErr)
 			} else if mode == "no-node" {
 				require.ErrorContains(t, err, "versioned remote destination")
 			} else {
