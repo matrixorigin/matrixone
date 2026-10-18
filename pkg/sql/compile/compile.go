@@ -6039,6 +6039,29 @@ func planHasUserVariableAssignment(queryPlan *plan.Plan) bool {
 	return false
 }
 
+func (c *Compile) validateUserVariableAssignmentSessionLimit() error {
+	qry := c.pn.GetQuery()
+	if qry == nil || !qry.ApplySqlSelectLimit ||
+		!c.proc.Base.SessionInfo.ApplySQLSelectLimit ||
+		c.proc.GetResolveVariableFunc() == nil || !planHasUserVariableAssignment(c.pn) {
+		return nil
+	}
+	// Use the same session resolver as makeSQLSelectLimitExpr, but at every Run,
+	// including prepared reuse after a successful unlimited execution.
+	value, err := c.proc.GetResolveVariableFunc()(plan2.SQLSelectLimitVariable, true, false)
+	if err != nil {
+		return err
+	}
+	limit, ok := value.(uint64)
+	if !ok {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "unexpected %s type %T", plan2.SQLSelectLimitVariable, value)
+	}
+	if limit != ^uint64(0) {
+		return moerr.NewNotSupported(c.proc.Ctx, "LIMIT with user-variable assignment is not supported")
+	}
+	return nil
+}
+
 func (c *Compile) needsCoordinatorConstantFilterDiagnostic(node *plan.Node) bool {
 	if node == nil {
 		return false

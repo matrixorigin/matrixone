@@ -52,6 +52,19 @@ func TestBindUserVariableAssignmentPlan(t *testing.T) {
 	require.True(t, found, "the bound projection must retain the user-variable assignment")
 }
 
+func TestUserVariableAssignmentRejectsResolvedGroupingReferences(t *testing.T) {
+	for _, reference := range []string{"1", "k"} {
+		t.Run(reference, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(ctx.GetContext(), "select @a:=1 as k group by "+reference, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			_, err = BuildPlan(ctx, stmt, false)
+			require.ErrorContains(t, err, "GROUP BY")
+		})
+	}
+}
+
 func TestBindNestedUserVariableAssignmentPlan(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	stmt, err := mysql.ParseOne(ctx.GetContext(), "select @a := @b := 1", 1)

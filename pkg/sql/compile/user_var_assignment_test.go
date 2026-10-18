@@ -80,3 +80,29 @@ func TestUserVariableAssignmentPlanDisablesRetry(t *testing.T) {
 	}
 	require.True(t, c.disableRetry)
 }
+
+func TestUserVariableAssignmentSessionLimitAdmission(t *testing.T) {
+	c := newLazyUnionAllTestCompile(t)
+	c.proc.Base.SessionInfo.ApplySQLSelectLimit = true
+	query := &plan.Query{ApplySqlSelectLimit: true, Nodes: []*plan.Node{{
+		ProjectList: []*plan.Expr{{Expr: &plan.Expr_UserVarAssignment{UserVarAssignment: &plan.UserVarAssignment{Name: "a"}}}},
+	}}}
+	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+	limit := ^uint64(0)
+	c.proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return limit, nil })
+	for _, cap := range []uint64{^uint64(0), 1, 0, ^uint64(0)} {
+		limit = cap
+		err := c.validateUserVariableAssignmentSessionLimit()
+		if cap == ^uint64(0) {
+			require.NoError(t, err)
+		} else {
+			require.ErrorContains(t, err, "LIMIT")
+		}
+	}
+	limit = 1
+	query.ApplySqlSelectLimit = false
+	require.NoError(t, c.validateUserVariableAssignmentSessionLimit())
+	query.ApplySqlSelectLimit = true
+	c.proc.Base.SessionInfo.ApplySQLSelectLimit = false
+	require.NoError(t, c.validateUserVariableAssignmentSessionLimit())
+}

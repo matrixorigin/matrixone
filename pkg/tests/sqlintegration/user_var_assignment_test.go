@@ -26,6 +26,68 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestUserVariableAssignmentResolvedAdmissionBoundaries(t *testing.T) {
+	runSQLIntegration(t, func(c embed.Cluster) {
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer db.Close()
+		db.SetMaxOpenConns(1)
+		const schema = "user_var_admission_29909"
+		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
+		exec := func(statement string) {
+			t.Helper()
+			_, err := db.ExecContext(ctx, statement)
+			require.NoError(t, err, statement)
+		}
+		exec("create database " + schema)
+		exec("use " + schema)
+		exec("create table src(id int primary key)")
+		exec("insert into src values(1),(2),(3)")
+		defer func() { _, _ = db.ExecContext(context.Background(), "set session sql_select_limit=default") }()
+		unchanged := func(t *testing.T) {
+			t.Helper()
+			var a int
+			require.NoError(t, db.QueryRowContext(ctx, "select @a").Scan(&a))
+			require.Zero(t, a, "rejected execution must not publish any assignment")
+		}
+		for _, group := range []string{"1", "k"} {
+			t.Run("group by "+group, func(t *testing.T) {
+				exec("set @a=0")
+				_, err := db.ExecContext(ctx, "select @a:=id as k from src group by "+group)
+				require.ErrorContains(t, err, "GROUP BY")
+				unchanged(t)
+			})
+		}
+		var groups int
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from (select id as k from src group by k) s").Scan(&groups))
+		require.Equal(t, 3, groups)
+		// Reuse the same prepared pipeline after a successful unlimited run.
+		exec("prepare assignment_limit from 'select @a:=@a+1 from src'")
+		defer func() { _, _ = db.ExecContext(context.Background(), "deallocate prepare assignment_limit") }()
+		for round := 0; round < 2; round++ {
+			exec("set session sql_select_limit=default")
+			exec("set @a=0")
+			exec("execute assignment_limit")
+			var a int
+			require.NoError(t, db.QueryRowContext(ctx, "select @a").Scan(&a))
+			require.Equal(t, 3, a)
+			exec("set session sql_select_limit=1")
+			for _, statement := range []string{"select @a:=@a+1 from src", "execute assignment_limit"} {
+				t.Run(fmt.Sprintf("round %d %s", round, statement), func(t *testing.T) {
+					exec("set @a=0")
+					_, err := db.ExecContext(ctx, statement)
+					require.ErrorContains(t, err, "LIMIT")
+					unchanged(t)
+				})
+			}
+		}
+	})
+}
+
 func TestUserVariableAssignmentViewAuthoringIsRejected(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
