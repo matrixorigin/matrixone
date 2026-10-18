@@ -494,6 +494,15 @@ func getUpdateTableInfo(ctx CompilerContext, stmt *tree.Update) (*dmlTableInfo, 
 }
 
 func checkTableType(ctx context.Context, tableDef *TableDef, op string) error {
+	if tableDef.TableType == catalog.SystemMaterializedViewRel {
+		account, err := defines.GetAccountId(ctx)
+		if err != nil {
+			return err
+		}
+		if !defines.HasMaterializedViewWrite(ctx, account, tableDef.TblId) {
+			return moerr.NewInvalidInput(ctx, "materialized view is read only")
+		}
+	}
 	if tableDef.TableType == catalog.SystemSourceRel {
 		return moerr.NewInvalidInput(ctx, "cannot insert/update/delete from source")
 	} else if tableDef.TableType == catalog.SystemExternalRel {

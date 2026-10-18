@@ -450,3 +450,25 @@ func TestLoadRolePrivilegesAtSnapshotValidatesCatalogRows(t *testing.T) {
 		})
 	}
 }
+
+func TestClusterRestorePreservesMaterializedViewCatalogs(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	bh := &backgroundExecTest{}
+	bh.init()
+	metadata := []string{catalog.MO_MATERIALIZED_VIEWS, catalog.MO_MV_DEPENDENCIES, catalog.MO_MV_REFRESH_RUNS, catalog.MO_MV_ACCOUNT_STATE}
+	rows := make([][]interface{}, 0, len(metadata)+3)
+	for _, name := range metadata {
+		rows = append(rows, []interface{}{name, string(clusterTable), catalog.SystemClusterRel, ""})
+		require.True(t, needSkipTable(sysAccountID, moCatalog, name))
+	}
+	rows = append(rows, []interface{}{catalog.MO_VIEW_DEPENDENCIES, string(clusterTable), catalog.SystemClusterRel, ""},
+		[]interface{}{catalog.MO_VIEW_REFRESH, string(clusterTable), catalog.SystemClusterRel, ""},
+		[]interface{}{"user_cluster", string(clusterTable), catalog.SystemClusterRel, ""})
+	query := buildTableInfoListSQL(moCatalog, "", 0, sysAccountID)
+	bh.sql2result[query] = newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, rows)
+	require.NoError(t, dropClusterTable(ctx, "", bh, "snapshot", sysAccountID))
+	require.Equal(t, []string{query, "delete from mo_catalog.mo_view_dependencies", "delete from mo_catalog.mo_view_refresh", dropTableIfExistsSQL(moCatalog, "user_cluster")}, bh.executedSQLs)
+	for _, name := range metadata {
+		require.NotContains(t, bh.executedSQLs, dropTableIfExistsSQL(moCatalog, name))
+	}
+}

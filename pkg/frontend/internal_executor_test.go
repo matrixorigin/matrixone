@@ -207,3 +207,38 @@ func Test_WriteResultSetRow2(t *testing.T) {
 	err := ip.WriteResultSetRow2(nil, nil, 1)
 	assert.NoError(t, err)
 }
+
+func TestInternalExecutorSessionAccountIdentity(t *testing.T) {
+	runtime.RunTest("", func(rt runtime.Runtime) {
+		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+		setPu("", pu)
+		for _, tc := range []struct {
+			name                                              string
+			contextAccount, baseAccount, commandAccount, want uint32
+			setBase, setCommand                               bool
+		}{
+			{"context", 7, 0, 0, 7, false, false},
+			{"base override", 7, 8, 0, 8, true, false},
+			{"command override", 7, 8, 9, 9, true, true},
+			{"system override", 7, 8, 0, 0, true, true},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ctx := defines.AttachAccount(context.Background(), tc.contextAccount, 11, 12)
+				internal := newIe("")
+				if tc.setBase {
+					internal.ApplySessionOverride(ie.NewOptsBuilder().AccountId(tc.baseAccount).Finish())
+				}
+				opts := ie.NewOptsBuilder().UserId(11).DefaultRoleId(12).Internal(false)
+				if tc.setCommand {
+					opts.AccountId(tc.commandAccount)
+				}
+				sess := internal.newCmdSession(ctx, opts.Finish())
+				defer sess.Close()
+				assert.Equal(t, tc.want, sess.GetAccountId())
+				assert.Equal(t, tc.want, sess.GetTenantInfo().GetTenantID())
+				assert.Equal(t, uint32(11), sess.GetTenantInfo().GetUserID())
+				assert.Equal(t, uint32(12), sess.GetTenantInfo().GetDefaultRoleID())
+			})
+		}
+	})
+}

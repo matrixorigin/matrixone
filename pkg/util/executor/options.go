@@ -666,3 +666,10 @@ func (opts StatementOption) WithDisableLock() StatementOption {
 func (opts StatementOption) DisableLock() bool {
 	return opts.disableLock
 }
+
+// WithParserSQLMode captures the authoring mode of persisted executable SQL.
+func (opts Options) WithParserSQLMode(mode string) Options {
+	opts.parserSQLMode = mode
+	return opts
+}
+func (opts Options) ParserSQLMode() string { return opts.parserSQLMode }

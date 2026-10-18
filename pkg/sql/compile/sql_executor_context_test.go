@@ -738,12 +738,15 @@ func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
 		if strings.EqualFold(name, "div_precision_increment") {
 			return int64(10), nil
 		}
+		if strings.EqualFold(name, "sql_mode") {
+			return "", nil // Empty SQL mode is a real captured value.
+		}
 		return nil, errors.New("unexpected variable")
 	})
 	query := build(compiler, "select cast(1.23 as decimal(10,2)) / cast(3.45 as decimal(10,2))").GetQuery()
 	require.Equal(t, int64(1), query.MaxDop)
 	require.Equal(t, int32(12), query.Nodes[query.Steps[0]].ProjectList[0].Typ.Scale)
-	for _, name := range []string{"MAX_DOP", "DIV_PRECISION_INCREMENT"} {
+	for _, name := range []string{"MAX_DOP", "DIV_PRECISION_INCREMENT", "SQL_MODE"} {
 		_, err := compiler.ResolveVariable(name, true, false)
 		require.NoError(t, err)
 	}
@@ -755,6 +758,7 @@ func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
 		{"max_dop", false, false}, {"max_dop", true, true},
 		{"div_precision_increment", false, false}, {"div_precision_increment", true, true},
 		{"foreign_key_checks", true, false},
+		{"sql_mode", false, false}, {"sql_mode", true, true},
 	} {
 		v, err := compiler.ResolveVariable(tc.name, tc.system, tc.global)
 		require.NoError(t, err)

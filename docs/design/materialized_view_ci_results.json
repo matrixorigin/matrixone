@@ -1,0 +1,327 @@
+{
+  "failed_ci": {
+    "run": 38345343672,
+    "attempt": 1,
+    "head": "417811f5949dc04c9bd6d74d624bce2b852506c2"
+  },
+  "local_platform": "linux/amd64",
+  "go_version": "1.27.1",
+  "mo_tester_commit": "309a0ca650e0c55e90292767fd61e4976818d66d",
+  "bvt": {
+    "topology": "two CNs, shared TN/log, fresh task-owned cluster; isolated mo-tester invocation per file",
+    "flags": [
+      "-n",
+      "-g",
+      "-o"
+    ],
+    "cases": [
+      {
+        "case": "clone_sys_db_table_to_new_db_table.sql",
+        "total": 203,
+        "success": 203,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "5d2962578b466b4b8ae428ee17b0f545ad9d382532e10c1008265f925e2599ae"
+      },
+      {
+        "case": "create_account.sql",
+        "total": 150,
+        "success": 150,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "6681274129a2f8b20a3d02b7247c154cef2023d26b513953d3547c4bb6fd7f1c"
+      },
+      {
+        "case": "database_statistics.sql",
+        "total": 218,
+        "success": 196,
+        "failed": 0,
+        "ignored": 22,
+        "abnoraml": 0,
+        "log_sha256": "c2c95f3575d598c9918213a844b0169281a47eceea6527e4382c7bb59d18185d"
+      },
+      {
+        "case": "mo_cloud.sql",
+        "total": 170,
+        "success": 170,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "c3b5a96cd5c70dad2241ce802266e9a393291f00067951448186cf6d8a15cd9b"
+      },
+      {
+        "case": "restore_cluster_fk.sql",
+        "total": 478,
+        "success": 478,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "e5fd146661ad1e4f1cae3ae6354fbeb7d6311051b273e4a69eb72766941e6e77"
+      },
+      {
+        "case": "restore_cluster_simple.sql",
+        "total": 429,
+        "success": 429,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "347361f2438a8a1fd2e970b953ccbcd635c1f0805866b1047a77351392e90850"
+      },
+      {
+        "case": "restore_cluster_table.sql",
+        "total": 330,
+        "success": 330,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "b4e2327f55aa144ce5af4536f1dc91d70cac480c27b70205768b750f84df7011"
+      },
+      {
+        "case": "restore_cluster_view.sql",
+        "total": 307,
+        "success": 307,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "ec841395f8e3c6525367848feecb8f8e14bd7b8cf1fe5dc84edf3678f4e4daed"
+      },
+      {
+        "case": "restore_dropped_account_with_cluster.sql",
+        "total": 204,
+        "success": 204,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "d9f8b9567b654694dbc4ce40e8869ee8cea956455426cd305c7c2a6bb7519547"
+      },
+      {
+        "case": "restore_skip_experimental_index_flag_check.sql",
+        "total": 83,
+        "success": 83,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "e785a464b088d7acd58af118faf55c994a0400ddea23f99c09275e71cb29633a"
+      },
+      {
+        "case": "show.test",
+        "total": 189,
+        "success": 189,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "36931e827c146fd54a0f42247d7d6a096d4466e117831167113a9ede03d56c93"
+      },
+      {
+        "case": "sp_table.sql",
+        "total": 2,
+        "success": 2,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "bdc9848450fd53f541b651d7b0bdd93272a6323ed2327b3383279cb7db985893"
+      }
+    ],
+    "total": 2763,
+    "passed_statements": 2741,
+    "ignored_by_existing_cases": 22,
+    "failed": 0
+  },
+  "native_mv": {
+    "main_passed": 67,
+    "source_rows": 10000,
+    "two_cn_passed": 9,
+    "performance_classification": "diagnostic only; the earlier isolated benchmark evidence is unchanged"
+  },
+  "owning_packages": {
+    "mode": [
+      "-short",
+      "-tags matrixone_test",
+      "-count=1"
+    ],
+    "passed": [
+      "pkg/bootstrap",
+      "pkg/cnservice",
+      "pkg/frontend",
+      "pkg/sql/compile",
+      "pkg/mv"
+    ],
+    "log_sha256": "55d2015d8041fff8f61818471145897d5120be4f1c29feba330bc0cd2e5baa44"
+  },
+  "static": {
+    "license_eye": "0.4.0",
+    "valid_headers": 54,
+    "ignored_headers": 6,
+    "invalid_headers": 0,
+    "golangci_lint": "2.14.0",
+    "new_issues": 0,
+    "closure": [
+      "./pkg/bootstrap",
+      "./pkg/bootstrap/versions/v4_0_15",
+      "./pkg/catalog",
+      "./pkg/cnservice",
+      "./pkg/defines",
+      "./pkg/frontend",
+      "./pkg/logservice",
+      "./pkg/mv",
+      "./pkg/pb/task",
+      "./pkg/sql/colexec/insert",
+      "./pkg/sql/colexec/multi_update",
+      "./pkg/sql/compile",
+      "./pkg/sql/parsers/dialect/mysql",
+      "./pkg/sql/parsers/tree",
+      "./pkg/sql/plan",
+      "./pkg/util/executor",
+      "./test/materialized_view"
+    ],
+    "molint_exit": 0
+  },
+  "source_sha256": {
+    "pkg/bootstrap/service_statistics_upgrade_test.go": "dfe30494572b9618328e29f805f4e15d65ac2531af1be6c9055530840420da28",
+    "pkg/bootstrap/upgrade.go": "80167fa58e624ba7b2b847d4e438ef5a5b94099c8a3cb52d4b7fab523d870141",
+    "pkg/bootstrap/versions/v4_0_15/upgrade.go": "dc88766e43126eced67701bc92833166ceccc778410e67787fa8054ea70f68cd",
+    "pkg/bootstrap/versions/v4_0_15/upgrade_test.go": "b74fb36a4ec91726eb1718cb48cac61d28cccb15c2041143aa233deb4853a8b2",
+    "pkg/catalog/materialized_view.go": "a568c44a3716ecb9cf11de62cd66245b1bc39812089bde6c0806708e6d26aab3",
+    "pkg/catalog/materialized_view_test.go": "43e6d2f3521710dcfe64c427a84809de339e5d20c23a4ad546284a8cbf3a6984",
+    "pkg/cnservice/server.go": "d7288ce0ae8c01b2a65c3856b846dd8ce70f606490b0d41b7db4e382df15a414",
+    "pkg/cnservice/server_task.go": "b52fef49c3bf5281f094d45ffd586948ae6a24b5cab7fc873c16af239a58843a",
+    "pkg/cnservice/server_task_test.go": "600368a26ea98222ee24e165daca7a4320c2ff52d239b3c40f0527dc63e0b87d",
+    "pkg/defines/const.go": "f73595a7d2e6b43765f24b0cc3602b5e4f14bae45005eebc7cc028ad229e4d63",
+    "pkg/defines/materialized_view.go": "535786df3c5e948d2f279beaefb24d1c7b0b7c92ec7077a9a00de5722743f131",
+    "pkg/defines/materialized_view_test.go": "dd2952ee6d5c79045e9181dabc8825c82c2034b756cedff8a2bd87f912690435",
+    "pkg/frontend/authenticate.go": "9f9ae9bb714d0b25b0b738dad4298c5be93e6b1f1c3c9ab5314d55dd2404edb4",
+    "pkg/frontend/materialized_view.go": "b23818c201006c03b91cbc3df19a5cddd6d7ddae088bec25848a1682350fef99",
+    "pkg/frontend/materialized_view_test.go": "693516dabc6144c7c836d83c2e330a79d8f03a0bf203fb232620ee3d02c5c657",
+    "pkg/frontend/mysql_cmd_executor.go": "4403758c4ff5dde96db38def86201daf97cfdc3681b48c361a98d55b806b4dba",
+    "pkg/frontend/pitr.go": "2519045ac3670fd0ca19640b410ef260302d47de2b1ca2086ef83550be66c337",
+    "pkg/frontend/self_handle.go": "b9ba6c39cc7c729278953d7b6d7fe0bf1df73e4d71a1b72bc9f734427897b5e0",
+    "pkg/frontend/snapshot.go": "95617900cd682cb3e8238cad0c6d88c4a2a47a1f9bafedc386337cea388e61f7",
+    "pkg/frontend/snapshot_catalog_restore_test.go": "b41c4354f76c0dc91fb240fe4ab6f67e4b1470aa3ad4c2edbeebe76188630df8",
+    "pkg/frontend/status_stmt.go": "cfe26f2a4849b7aaebf862882dd90a148d193ee888d16d3b4f741b58510f56c2",
+    "pkg/frontend/stmt_kind.go": "c8ca02e5e7072653b1968ef3c95cf142a98cfeece8bb20e4b3894d0e5896cd54",
+    "pkg/frontend/variables.go": "deb022dd1e5611947607bf317ccc27ccec6f0eb36c40d63ab0499b7e6a36f84e",
+    "pkg/logservice/gossip_fixture_test.go": "e03e61bbdc053ab4a316eeaaa553d865f35acc9df4d889815284b6160e717255",
+    "pkg/mv/service.go": "f8fd435b54c49197d6eb6dd6d315229119fb2e5debac9e6d7154bcfd17a734b9",
+    "pkg/mv/service_test.go": "6af5334dd74bc3e825c6451496a98307d8d675a2239d63231d0e725a013911d4",
+    "pkg/mv/task.go": "41d2c860c5d564318c4c750f6849159ef7834c10851fbf8345964db91255a51c",
+    "pkg/mv/task_test.go": "f2ccf07a8a4805cc884a860e20e8788c0c19303e8ae1f210ab682c55fa80b833",
+    "pkg/pb/task/task.pb.go": "8d5e61880176cd8e77e9f7ac42fa42254fe6f606930cc7d75d888d7cc8d213a6",
+    "pkg/sql/colexec/insert/insert.go": "b7ab1e1f3e292938ca1fd0d0d911eaf24582c56cc7f7590dcda113dc06981a01",
+    "pkg/sql/colexec/insert/materialized_view_test.go": "c39fd9157382b14b3ecd79c0e74f54829c12791f8aa00fd0da89d7d1092bb79a",
+    "pkg/sql/colexec/multi_update/materialized_view_test.go": "3b53302391b9035f48ea667672061ee31b73bd4b2157c039552d78c901ad9c9e",
+    "pkg/sql/colexec/multi_update/multi_update.go": "359c3b81787cd0ef48496dcb9737d4b8eca00a22b75b45213b72aa259121601d",
+    "pkg/sql/compile/alter.go": "1eb4f6da07d9f3848d5099e1eb6c0d0f2549b7579b680ac8ad633f939963d7ec",
+    "pkg/sql/compile/compile.go": "b57ebebbbe53c3ff1e924416396ce3e91835ffa406b69a5c6dc535ce5d723db4",
+    "pkg/sql/compile/ddl.go": "6e51550dd971db2c2dc2ac7316cf020f608d475cd702dbc9a4a1c9abbcf06d16",
+    "pkg/sql/compile/lifecycle_fk_scope.go": "5cc7f41a3c23511d7f4c89ef87814ffbfb8d34c8807ffc1e05c198db7b3f49f3",
+    "pkg/sql/compile/materialized_view.go": "cf367f04644c5c388e9f6cf080ca32ab4368a4d581292225f74bffe2149ba09b",
+    "pkg/sql/compile/materialized_view_test.go": "1981593b60f1a43a87ec3494a2134e94e4bff70aa7db2f1d66a17d5524d68b36",
+    "pkg/sql/compile/scheduler.go": "63ef97313b5fd442ff23dc53b9953dc0c5b45d482686b054e34e01feec045550",
+    "pkg/sql/compile/sql_executor.go": "ca2f24116dd585ceb313bfc3232aeb7c2cf8f3b6f0460a9bf4b628c43ee9c884",
+    "pkg/sql/parsers/dialect/mysql/keywords.go": "fdfbb26912b1f3ae3ade81e6eaf212b0a53897075b7f543876c81b8f7edd8820",
+    "pkg/sql/parsers/dialect/mysql/materialized_view_test.go": "4814e6378df8889a097a37f93efa00e4ee6c78a9d58ca600a9bd7b680823f708",
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.go": "a5e23edd3b7dcfe64094e33b6db93823334bc89b6c6195c567217165eba9f77c",
+    "pkg/sql/parsers/tree/materialized_view.go": "017f1efce475417e61f409adcaa34b1f5b1057cc9b11d6498376b872f7a64cd7",
+    "pkg/sql/plan/build.go": "d5bd90fd3978c93a40300f01581bdec9e56b9b1395f911f41ac3181c3c8bca8e",
+    "pkg/sql/plan/build_constraint_util.go": "c28aa58d0892285bc0247160068106341beb9a9fb5af15304a6c31196bc485d0",
+    "pkg/sql/plan/build_ddl.go": "4d324458178634d1b8b33d92bdf4802ee0a202ee41687dc1628c9be8cb0ae306",
+    "pkg/sql/plan/build_dml_util.go": "9e21e4bb6226606df56a6a5061a2b5762f3d6bfe64df2a9fe5e2690a8a9825ba",
+    "pkg/sql/plan/build_show.go": "810f03f8e4696eec910f0b9889a0262b420744f60442729fc64e9ec773f6dc40",
+    "pkg/sql/plan/build_table_clone.go": "97aa426b0bc78c05b4476b276de1397cfa6baeb662225df4b7008eef23568a6c",
+    "pkg/sql/plan/materialized_view.go": "908996a02a54f7dd4b02a6948a590c6adb1d78ebb266f78cb41f2b4b97156f80",
+    "pkg/sql/plan/materialized_view_test.go": "e4b3664e697048ba1507181b8808b36cd5eebe43b4ee0ceea76a2e4036ab8b02",
+    "pkg/sql/plan/query_builder.go": "6eb31e57919e38bf8c9b853170e2687620cf908f93c114d04592c62359bb016c",
+    "pkg/util/executor/options.go": "87aa92b3b99269c4d236e752a9f0ecba7321c04d29627fd53f9debd8cc1ae856",
+    "pkg/util/executor/types.go": "fd02fa4802018ab672d2f5a366abf899420ae83cb86c6b402d34463d8dbed5d6",
+    "proto/task.proto": "d621c511f41cc2a244e6d682e63f7fd4e5148ffd13bfc52a6a28175bc61711a9",
+    "test/distributed/cases/dml/select/sp_table.result": "9778bcb2ad020d2fb425a317690e0402fe57158d9232c1bd85ee235a2d477665",
+    "test/distributed/cases/dml/show/database_statistics.result": "d7e9c46570410bb0a303e3433d210a69edcbc61707e5dc363ad897179e8b1327",
+    "test/distributed/cases/dml/show/show.result": "c10ded4eaea04156076fead8ac6baaf14b3c65c0ea83123a47a8774b4d07fe16",
+    "test/distributed/cases/git4data/clone/clone_sys_db_table_to_new_db_table.result": "7797115addd2886f2845e98cb8c1fb8066cad15ee41d88b894b1015ac9b79c4c",
+    "test/distributed/cases/mo_cloud/mo_cloud.result": "adeed677b463a25e8976cf67326d8877011ea0d111f16bf265a5e553edfe69c1",
+    "test/distributed/cases/snapshot/cluster/restore_cluster_table.result": "0329d5365c3dbdd4efeaf38f96d0702e4e72f970c87a4248a45d853f279e3fdd",
+    "test/distributed/cases/zz_accesscontrol/create_account.result": "b17866c7cf09605dafbbae1a2dd2ae720f6de5c42225e598e7830fc5efbb5190",
+    "test/materialized_view/additional.go": "77d16e6914bda7986f784482569993019fe3788d9245ad461d6b50797ccbba68",
+    "test/materialized_view/main.go": "1d6ffcc617d807964cb6045f9f5d95bcbae6331ad83aef645a594e7797577640",
+    "test/materialized_view/multi_cn.go": "236b8b3ad561db85b7890ab5ef71abc7b484670191980627d6248c8fea9ca145",
+    "test/materialized_view/performance.go": "3e14c1055f34f40bf7d6154e0beba5b449489fbc20140a386d422394b15ddc94",
+    "test/distributed/cases/snapshot/cluster_level_snapshot_restore_cluster.result": "d4ae4a1f71a20d6747770ab4ca426bc66bfa6ad3361f8e25745ce268008fa44c",
+    "test/distributed/cases/tenant/privilege/create_user_default_role.result": "2c3701b7ab3d60dac5f595e7d8e1b0c1a6d0c8a9d209467aff4645e7b0a1f0b6"
+  },
+  "full_ci": "new correction-head CI must be tracked separately; local results are not full CI green",
+  "cron_race": {
+    "package": "pkg/cnservice",
+    "mode": [
+      "-race",
+      "-count=20"
+    ],
+    "tests": [
+      "TestLineageGCCronRegistrationDoesNotBlockCNClose",
+      "TestLineageGCCronRegistrationRetriesAndStops",
+      "TestMaterializedViewCronRegistrationOwnsRetry"
+    ],
+    "top_level_passes": 60,
+    "data_races": 0,
+    "log_sha256": "a7955d34ede5b5b014662a330711637cbba500c623934ff5b541e88b0da91001"
+  },
+  "policy_followup": {
+    "failed_run": 38370142556,
+    "failed_head": "7b0d6f04a72a060bd6a1b739e0a9b5dbc9f7f8dd",
+    "step": "Static Code Analysis / make err-check",
+    "correction": "use moerr for missing/unsupported stored metadata; assert engine error class",
+    "make_err_check_exit": 0,
+    "catalog_suite_exit": 0,
+    "catalog_lint_new_issues": 0,
+    "evidence_reuse": "prior success-path/native/cron evidence remains unchanged; error-class behavior verified in complete catalog suite",
+    "full_ci": "pending follow-up head"
+  },
+  "current_code_ci": {
+    "run": 38372120590,
+    "head": "955c3f787a1698fdf0c9a8c0ac50029d4b20b41d",
+    "shared_build": "success",
+    "arm64_sca": "success, full-repository lint: 0 issues",
+    "coverage_ut": "success, command exit 0; no failed package/test events",
+    "proxy_bvt": {
+      "total": 45474,
+      "success": 44841,
+      "ignored": 633,
+      "failed": 0
+    },
+    "pessimistic_bvt": {
+      "total": 83520,
+      "success": 83062,
+      "ignored": 455,
+      "failed": 3,
+      "cause": "four new catalog rows missing from two result fixtures"
+    },
+    "ordinary_ut": "queued, no runner assigned; label amd64-mo-shanghai-8c16g"
+  },
+  "fixture_followup": {
+    "code_changed": false,
+    "complete_inventory_files_audited": 8,
+    "cases": [
+      {
+        "case": "cluster_level_snapshot_restore_cluster.sql",
+        "total": 296,
+        "success": 296,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "95951d1689385a97cb3c595633efacca0bd1868ef5aff45be3bb16b9895e3aa8"
+      },
+      {
+        "case": "create_user_default_role.sql",
+        "total": 127,
+        "success": 127,
+        "failed": 0,
+        "ignored": 0,
+        "abnoraml": 0,
+        "log_sha256": "3677900d1bae90112803289d044f2e9349be058b7577c037eb4b07c069bd2236"
+      }
+    ],
+    "source_behavior": "all Go/native source matches the successful current-code CI checks; only two exact result fixtures and evidence docs changed",
+    "full_ci": "new fixture-head CI must confirm the full pessimistic group and ordinary UT"
+  }
+}

@@ -961,12 +961,16 @@ var (
 		catalog.MO_FEATURE_REGISTRY:   0,
 	}
 	sysAccountTables = map[string]struct{}{
-		catalog.MOVersionTable:       {},
-		catalog.MOUpgradeTable:       {},
-		catalog.MOUpgradeTenantTable: {},
-		catalog.MO_PITR:              {},
-		catalog.MOPartitionMetadata:  {},
-		catalog.MOPartitionTables:    {},
+		catalog.MO_MATERIALIZED_VIEWS: {},
+		catalog.MO_MV_DEPENDENCIES:    {},
+		catalog.MO_MV_REFRESH_RUNS:    {},
+		catalog.MO_MV_ACCOUNT_STATE:   {},
+		catalog.MOVersionTable:        {},
+		catalog.MOUpgradeTable:        {},
+		catalog.MOUpgradeTenantTable:  {},
+		catalog.MO_PITR:               {},
+		catalog.MOPartitionMetadata:   {},
+		catalog.MOPartitionTables:     {},
 	}
 	// predefined tables of the database mo_catalog in every account
 	predefinedTables = map[string]int8{
@@ -1049,6 +1053,10 @@ var (
 		MoCatalogMoSubsDDL,
 		MoCatalogMoViewDependenciesDDL,
 		MoCatalogMoViewRefreshDDL,
+		catalog.MoMaterializedViewsDDL,
+		catalog.MoMVDependenciesDDL,
+		catalog.MoMVRefreshRunsDDL,
+		catalog.MoMVAccountStateDDL,
 		MoCatalogMoStoredProcedureDDL,
 		MoCatalogMoStagesDDL,
 		MoCatalogMoSessionsDDL,
@@ -4232,6 +4240,12 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 			}
 		}
 
+		// Retire native MVs in this transaction before tenant database guards
+		// inspect their definitions. Ordinary DROP DATABASE stays RESTRICT.
+		if rtnErr = retireAccountMaterializedViews(ctx, bh, uint32(accountId)); rtnErr != nil {
+			return rtnErr
+		}
+
 		// drop tables of the tenant
 		// NOTE!!!: single DDL drop statement per single transaction
 		// SWITCH TO THE CONTEXT of the deleted context
@@ -6585,6 +6599,17 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 			clusterTableOperation = clusterTableCreate
 		}
 		dbName = string(st.Table.SchemaName)
+	case *tree.CreateMaterializedView:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		appendWriteTableNameDatabaseName(st.Name)
+		if st.Name != nil {
+			dbName = string(st.Name.SchemaName)
+		}
+	case *tree.RefreshMaterializedView, *tree.DropMaterializedView, *tree.AlterMaterializedView, *tree.ShowMaterializedViews:
+		objType = objectTypeNone
+		kind = privilegeKindNone
 	case *tree.CreateView:
 		objType = objectTypeDatabase
 		typs = append(typs, PrivilegeTypeCreateView, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
@@ -7211,6 +7236,15 @@ func extractPrivilegeTipsFromPlan(p *plan2.Plan) (privilegeTipsArray, error) {
 
 		for nodeID, node := range q.Nodes {
 			if isPrivilegeBearingTableScan(node) || isMongoDBExternalTableScan(node) {
+				definition, err := catalog.MaterializedViewDefinition(node.TableDef)
+				if err != nil {
+					return nil, err
+				}
+				if definition != nil {
+					for _, source := range definition.Sources {
+						appendPt(privilegeTips{typ: PrivilegeTypeSelect, objType: objectTypeTable, databaseName: source.Database, tableName: source.Table, clusterTableOperation: clusterTableSelect})
+					}
+				}
 				if _, ok := insertDedupScans[int32(nodeID)]; ok {
 					continue
 				}
@@ -9267,6 +9301,9 @@ func authenticateUserCanExecuteStatementWithObjectTypeDatabaseAndTable(ctx conte
 	var stats statistic.StatsArray
 	stats.Reset()
 
+	if st, ok := stmt.(*tree.CreateMaterializedView); ok {
+		return authenticateCreateTableAsSelectSourcePrivilege(ctx, ses, &tree.CreateTable{AsSource: st.AsSource})
+	}
 	if st, ok := stmt.(*tree.CreateTable); ok && st.IsAsSelect {
 		if !checkProtectedDatabaseWrite(ctx, ses, string(st.Table.SchemaName)) {
 			return false, stats, nil
@@ -10908,6 +10945,10 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 			strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_refresh") {
 			return true
 		}
+		if isMaterializedViewCatalogDDL(sql) {
+			return true
+		}
+
 		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
 			return true
 		}
@@ -12522,6 +12563,12 @@ func doGrantPrivilegeImplicitly(ctx context.Context, ses *Session, stmt tree.Sta
 	switch st := stmt.(type) {
 	case *tree.CreateDatabase:
 		sql = getSqlForGrantOwnershipOnDatabase(string(st.Name), curRole)
+	case *tree.CreateMaterializedView:
+		dbName := string(st.Name.SchemaName)
+		if dbName == "" {
+			dbName = ses.GetDatabaseName()
+		}
+		sql = getSqlForGrantOwnershipOnTable(dbName, string(st.Name.ObjectName), curRole)
 	case *tree.CreateTable:
 		// get database name
 		var dbName string

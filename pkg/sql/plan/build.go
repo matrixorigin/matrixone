@@ -773,6 +773,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		return buildAlterSequence(stmt, ctx)
 	case *tree.DropView:
 		return buildDropView(stmt, ctx)
+	case *tree.CreateMaterializedView:
+		return buildCreateMaterializedView(stmt, ctx, isPrepareStmt)
 	case *tree.CreateView:
 		return buildCreateView(stmt, ctx)
 	case *tree.AlterView:

@@ -50,6 +50,7 @@ func applyOverride(sess *Session, opts ie.SessionOverrideOptions) {
 	if acc != nil {
 		if opts.AccountId != nil {
 			acc.SetTenantID(*opts.AccountId)
+			sess.SetAccountId(*opts.AccountId)
 		}
 
 		if opts.UserId != nil {
@@ -229,6 +230,7 @@ func (ie *internalExecutor) newCmdSession(ctx context.Context, opts ie.SessionOv
 		t, _ = GetTenantInfo(ctx, DefaultTenantMoAdmin)
 	}
 	sess.SetTenantInfo(t)
+	sess.SetAccountId(t.GetTenantID())
 	applyOverride(sess, ie.baseSessOpts)
 	applyOverride(sess, opts)
 

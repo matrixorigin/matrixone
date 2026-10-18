@@ -1292,6 +1292,11 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		}
 	}
 
+	if !isTemp {
+		if err := c.guardMaterializedViewDDL(dbName, tblName, false); err != nil {
+			return err
+		}
+	}
 	if lineagePlan.enabled {
 		if columnName, replaced := alterCopySameStatementColumnReplacement(qry); replaced {
 			return moerr.NewNotSupportedNoCtxf(
