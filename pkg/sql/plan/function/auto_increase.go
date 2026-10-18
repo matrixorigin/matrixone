@@ -21,7 +21,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -41,8 +40,11 @@ func builtInInternalAutoIncrement(parameters []*vector.Vector, result vector.Fun
 			return moerr.NewInvalidInput(proc.Ctx, "unsupported parameter `null` for internal_auto_increment")
 		}
 
-		dbName := functionUtil.QuickBytesToStr(s1)
-		tableName := functionUtil.QuickBytesToStr(s2)
+		// Database/Relation retain these names in the transaction cache. SHOW
+		// TABLE STATUS reuses that cache after this projection's vectors are
+		// released, so the names must not borrow the input vector storage.
+		dbName := string(s1)
+		tableName := string(s2)
 
 		database, err := eng.Database(proc.Ctx, dbName, proc.GetTxnOperator())
 		if err != nil {
