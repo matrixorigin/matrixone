@@ -68,6 +68,10 @@ func (apply *Apply) Prepare(proc *process.Process) (err error) {
 		return moerr.NewInvalidState(proc.Ctx, "apply operator missing parameterized source")
 	}
 
+	apply.ctr.preserveSourceBatch = false
+	if source, ok := apply.Source.(interface{ ApplyPreserveBatch() bool }); ok {
+		apply.ctr.preserveSourceBatch = source.ApplyPreserveBatch()
+	}
 	err = apply.Source.ApplyPrepare(proc)
 	if err != nil {
 		return
@@ -199,7 +203,7 @@ func (ctr *container) probe(ap *Apply, proc *process.Process, result *vm.CallRes
 				}
 			}
 			ctr.rbat.SetRowCount(ctr.rbat.RowCount() + rowCountIncrease)
-			if ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
+			if ctr.preserveSourceBatch || ctr.rbat.RowCount() >= colexec.DefaultBatchSize {
 				ctr.batIdx = i
 				break
 			}
