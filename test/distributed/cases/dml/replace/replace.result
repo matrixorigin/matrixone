@@ -585,12 +585,12 @@ select * from replace_fk_c order by id;
 id    pid
 10    1
 replace into replace_fk_c values (10,2);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from replace_fk_c order by id;
 id    pid
 10    1
 replace into replace_fk_c values (11,99);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from replace_fk_c order by id;
 id    pid
 10    1

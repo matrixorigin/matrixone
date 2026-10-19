@@ -57,6 +57,10 @@ loopback deployment. DuckDB uses a persistent database file. Loading verifies
 complete typed input contents, composite-key uniqueness and every input foreign
 relationship. Ordered DBGEN key groups are checked and sorted within a bounded
 buffer, allowing streaming validation without duplicating an entire table.
+Database verification reads contiguous leading-key windows, preserving each
+composite-key group. The initial unbounded lower range and final upper-tail
+probe also reject rows outside the input domain. This checks every value while
+avoiding a whole-table external sort during large-scale preparation.
 Both loading and standalone verification check every input file against its
 manifest hash before reading database contents.
 

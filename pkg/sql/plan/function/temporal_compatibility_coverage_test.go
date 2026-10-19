@@ -1456,3 +1456,55 @@ func TestIntegerDateIntervalAdmission(t *testing.T) {
 		})
 	}
 }
+
+func TestDynamicTimeResultCalendarDurationAndMask(t *testing.T) {
+	for name, fn := range map[string]executeLogicOfOverload{"add": AddTime, "sub": SubTime} {
+		t.Run(name, func(t *testing.T) {
+			proc := newTmpProcess(t)
+			warnings := &numericWarningSession{}
+			proc.WarningSink = warnings
+			delta := "02:00:00.000001"
+			if name == "sub" {
+				delta = "-" + delta
+			}
+			c := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"2024-02-29 23:30:00.123456", "23:30:00.123456", "2024-02-29 invalid", "invalid", "9999-12-31 23:59:59.999999", "9999-12-31 23:59:59.999999", ""}, []bool{false, false, false, false, false, false, true}),
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{delta}, nil),
+			}, NewFunctionTestResult(types.New(types.T_time, 6, 6), false, []types.Time{parseTimestampPairTime(t, "01:30:00.123457", 6), parseTimestampPairTime(t, "25:30:00.123457", 6), 0, 0, 0, 0, 0}, []bool{false, false, true, true, true, true, true}), fn).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, false, true}})
+			ok, info := c.RunAndFree()
+			require.True(t, ok, info)
+			require.Len(t, warnings.warnings, 1)
+			require.Equal(t, uint16(moerr.ER_DATETIME_FUNCTION_OVERFLOW), warnings.warnings[0].code)
+		})
+	}
+}
+
+func TestDynamicTimeResultTypedCalendarAndMask(t *testing.T) {
+	for name, fn := range map[string]executeLogicOfOverload{"add": AddTime, "sub": SubTime} {
+		for _, oid := range []types.T{types.T_datetime, types.T_timestamp} {
+			t.Run(name+"/"+oid.String(), func(t *testing.T) {
+				proc := newTmpProcess(t)
+				proc.GetSessionInfo().TimeZone = time.UTC
+				warnings := &numericWarningSession{}
+				proc.WarningSink = warnings
+				base := parseTimestampPairDatetime(t, "2024-02-29 23:30:00.123456", 6)
+				maximum := parseTimestampPairDatetime(t, "9999-12-31 23:59:59.999999", 6)
+				input := NewFunctionTestInput(types.New(oid, 6, 6), []types.Datetime{base, maximum, maximum, types.ZeroDatetime, base}, []bool{false, false, false, false, true})
+				if oid == types.T_timestamp {
+					input.values = []types.Timestamp{base.ToTimestamp(time.UTC), maximum.ToTimestamp(time.UTC), maximum.ToTimestamp(time.UTC), types.ZeroTimestamp, base.ToTimestamp(time.UTC)}
+				}
+				delta, overflow := "02:00:00.000001", "00:00:00.000001"
+				if name == "sub" {
+					delta, overflow = "-"+delta, "-"+overflow
+				}
+				c := NewFunctionTestCase(proc, []FunctionTestInput{input,
+					NewFunctionTestInput(types.T_varchar.ToType(), []string{delta, overflow, overflow, overflow, delta}, nil),
+				}, NewFunctionTestResult(types.New(types.T_time, 6, 6), false, []types.Time{parseTimestampPairTime(t, "01:30:00.123457", 6), 0, 0, 0, 0}, []bool{false, true, true, true, true}), fn).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, false, true, true}})
+				ok, info := c.RunAndFree()
+				require.True(t, ok, info)
+				require.Len(t, warnings.warnings, 1)
+				require.Equal(t, uint16(moerr.ER_DATETIME_FUNCTION_OVERFLOW), warnings.warnings[0].code)
+			})
+		}
+	}
+}

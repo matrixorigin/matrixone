@@ -228,7 +228,9 @@ func equalCell(a, b Cell, c Column, pa, pb PhysicalColumn) (bool, error) {
 // drain closes the cursor on every path and optionally streams rows directly to
 // a verifier. The callback borrows its row until it returns; retaining consumers
 // must copy it. Result capture never buffers an entire result in Go memory.
-func drain(ctx context.Context, conn *sql.Conn, s string, columns []Column, consume func(Row) error) (physical []PhysicalColumn, count int64, first, last *time.Time, retErr error) {
+func drain(ctx context.Context, conn interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}, s string, columns []Column, consume func(Row) error) (physical []PhysicalColumn, count int64, first, last *time.Time, retErr error) {
 	rows, err := conn.QueryContext(ctx, s)
 	if err != nil {
 		return nil, 0, nil, nil, err
