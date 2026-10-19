@@ -213,6 +213,11 @@ insert into vbin values (3, cast(unhex('01020000110000006CB2553B7E7A070000000000
 select id, vecblock_json(v), vecblock_json(e) from vbin order by id;
 select count(distinct vecblock_binary(v)), count(distinct vecblock_binary(e)) from vbin;
 select vecblock_binary(cast(vecblock_binary(e) as vecf8)) = vecblock_binary(e) from vbin where id = 1;
+-- a negative-zero element keeps its code through the exact text
+create table nz (id int, e vecf8(1), v vecf4(1));
+insert into nz values (1, cast(unhex('01010000010000000000803F7F80') as blob), cast(unhex('01020000010000000000803F3808') as blob));
+select hex(vecblock_binary(e)), hex(vecblock_binary(v)), vecblock_json(e), vecblock_json(v) from nz;
+select hex(vecblock_binary(cast(vecblock_json(e) as vecf8(1)))), hex(vecblock_binary(cast(vecblock_json(v) as vecf4(1)))) from nz;
 -- a BLOB of cell length that is not a valid cell is an error
 -- an unsized cast of a cell of the other format is an error
 select vecblock_json(cast(vecblock_binary(cast('[1,2,3,4,5]' as vecf4(5))) as vecf8));

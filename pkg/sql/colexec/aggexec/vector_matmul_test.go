@@ -346,9 +346,18 @@ func TestVectorMatmulConfigErrors(t *testing.T) {
 		{2, `[1,2]`, ``, `JSON array of vectors`},
 		{2, `[[1,0,0]]`, ``, `different dimensions`},
 		{2, `[[1,0,0,"x"]]`, ``, `JSON array of vectors`},
+		{2, `[[null,1,0,0]]`, ``, `query 0: coordinate 0 is null`},
+		{2, `[[1,0,0,0],[0,1,0,null]]`, ``, `query 1: coordinate 3 is null`},
+		{2, `[[1,0,0,0],null]`, ``, `query 1 is null`},
 	} {
 		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(tc.topk, tc.queries, tc.options, false), vt)
 		require.ErrorContains(t, err, tc.want, "%d %s %s", tc.topk, tc.queries, tc.options)
+	}
+	// a null coordinate is an error for every column type
+	for _, oid := range []types.T{types.T_array_float32, types.T_array_float16, types.T_array_bf16,
+		types.T_array_float8, types.T_array_float4, types.T_array_int8, types.T_array_uint8} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[null,1,0,0]]`, "", false), types.New(oid, 4, 0))
+		require.ErrorContains(t, err, "coordinate 0 is null", oid.String())
 	}
 	many := "[" + strings.TrimSuffix(strings.Repeat(`[1,0,0,0],`, vectorMatmulMaxEntries/vectorMatmulMaxTopK+1), ",") + "]"
 	_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(vectorMatmulMaxTopK, many, "", false), vt)

@@ -208,12 +208,9 @@ func blockScaleCode(f BlockScaledFormat, v float32) (uint8, bool) {
 	return c, ok && c <= f8e4m3MaxBits
 }
 
-// blockElemCode returns the element code whose value is v; a zero of either sign is code 0,
-// as the encoder stores it.
+// blockElemCode returns the element code whose value is v; -0 is the negative-zero code, so
+// the text of a stored cell restores its bytes.
 func blockElemCode(f BlockScaledFormat, v float32) (uint8, bool) {
-	if v == 0 {
-		return 0, true
-	}
 	if f == BlockScaledMXFP8 {
 		c, ok := f8e4m3CodeOf[math.Float32bits(v)]
 		return c, ok

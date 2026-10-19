@@ -64,6 +64,7 @@ select vector_matmul('abc', id, a, '[[1,0,0,0]]') from t;
 select vector_matmul(0, id, a, '[[1,0,0,0]]') from t;
 select vector_matmul(2, id, a, '[[1,0,0]]') from t;
 select vector_matmul(2, id, a, '[]') from t;
+select vector_matmul(2, id, a, '[[null,1,0,0]]') from t;
 select vector_matmul(id, id, a, '[[1,0,0,0]]') from t;
 select vector_matmul(2, id, a, cat) from t;
 select vector_matmul(2, id, a) from t;

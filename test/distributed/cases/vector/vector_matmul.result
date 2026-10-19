@@ -101,6 +101,8 @@ select vector_matmul(2, id, a, '[[1,0,0]]') from t;
 invalid input: vector ops between different dimensions (4, 3) is not permitted.
 select vector_matmul(2, id, a, '[]') from t;
 invalid input: vector_matmul: query count 0 out of range [1, 4096]
+select vector_matmul(2, id, a, '[[null,1,0,0]]') from t;
+invalid input: vector_matmul: query 0: coordinate 0 is null
 select vector_matmul(id, id, a, '[[1,0,0,0]]') from t;
 invalid input: topk, queries and options arguments of vector_matmul must be non-null constants, parameters or variables
 select vector_matmul(2, id, a, cat) from t;

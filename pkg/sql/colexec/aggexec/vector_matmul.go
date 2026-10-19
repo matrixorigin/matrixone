@@ -302,8 +302,8 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 		if queries, err = decodeVectorMatmulBinaryQueries(queriesText, int(vecType.Width)); err != nil {
 			return nil, err
 		}
-	} else if err := sonic.UnmarshalString(queriesText, &queries); err != nil {
-		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
+	} else if queries, err = decodeVectorMatmulJSONQueries(queriesText); err != nil {
+		return nil, err
 	}
 	if len(queries) == 0 || len(queries) > vectorMatmulMaxQueries {
 		return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query count %d out of range [1, %d]", len(queries), vectorMatmulMaxQueries)
@@ -373,6 +373,34 @@ func decodeVectorMatmulBinaryQueries(b string, dim int) ([][]float32, error) {
 	queries := make([][]float32, nq)
 	for q := range queries {
 		queries[q] = values[q*dim : (q+1)*dim : (q+1)*dim]
+	}
+	return queries, nil
+}
+
+// decodeVectorMatmulJSONQueries reads a JSON array of vectors. A null coordinate is an
+// error: unmarshalling into float32 reads it as 0, so text holding "null" is read again
+// with a pointer per coordinate.
+func decodeVectorMatmulJSONQueries(text string) ([][]float32, error) {
+	var queries [][]float32
+	if err := sonic.UnmarshalString(text, &queries); err != nil {
+		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
+	}
+	if !strings.Contains(text, "null") {
+		return queries, nil
+	}
+	var coords [][]*float32
+	if err := sonic.UnmarshalString(text, &coords); err != nil {
+		return nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must be a JSON array of vectors")
+	}
+	for i, q := range coords {
+		if q == nil {
+			return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d is null", i)
+		}
+		for j, v := range q {
+			if v == nil {
+				return nil, moerr.NewInvalidInputNoCtxf("vector_matmul: query %d: coordinate %d is null", i, j)
+			}
+		}
 	}
 	return queries, nil
 }
