@@ -3,32 +3,7 @@ name: Iceberg Connector E2E
 on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
-    paths:
-      - '.github/workflows/entrypoint.yaml'
-      - '.github/workflows/iceberg-connector.yml'
-      - 'Makefile'
-      - 'go.mod'
-      - 'go.sum'
-      - 'optools/iceberg_ci.bash'
-      - 'optools/iceberg_external_runner.py'
-      - 'etc/launch-minio-local/**'
-      - 'test/iceberg/**'
-      - 'pkg/iceberg/**'
-      - 'pkg/sql/iceberg/**'
-      - 'pkg/sql/plan/**'
-      - 'pkg/sql/compile/**'
-      - 'pkg/frontend/**'
-      - 'pkg/sql/parsers/**'
-      - 'pkg/config/**'
-      - 'pkg/bootstrap/**'
-      - 'pkg/sql/colexec/external/**'
-      - 'pkg/sql/colexec/icebergdelete/**'
-      - 'pkg/sql/colexec/icebergwrite/**'
-      - 'pkg/embed/**'
-      - 'cmd/mo-service/**'
-      - 'pkg/cnservice/**'
-      - 'proto/pipeline.proto'
-      - 'pkg/pb/pipeline/**'
+    # Tidy includes transitive root-module test dependencies, so any PR can affect it.
 
 permissions:
   contents: read
