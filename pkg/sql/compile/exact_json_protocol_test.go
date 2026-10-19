@@ -190,6 +190,9 @@ func TestExactJSONProtocolUnknownChangedAndCanceledDestination(t *testing.T) {
 			err := validateRemoteExpressionDestination(c.proc, p, features)
 			if name == "cancel before" || name == "cancel during" {
 				require.ErrorIs(t, err, context.Canceled)
+			} else if name == "failed response" {
+				// Main preserves transport failures at required send gates.
+				require.ErrorIs(t, err, client.sendErr)
 			} else {
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
 			}
@@ -250,17 +253,19 @@ func TestExactJSONProtocolKeepsUpstreamFloors(t *testing.T) {
 	exact := bind("json_parse_exact", col)
 	dependent := &planpb.Expr{Typ: types.T_int64.ToType().PlanType(),
 		Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}}}
+	// Dependent expressions are coordinator-owned: they add no scalar worker
+	// floor here, while their durable catalog owner retains main's v119 floor.
 	for _, tc := range []struct {
-		name        string
-		expressions []*planpb.Expr
-		floor       int64
+		name                        string
+		expressions                 []*planpb.Expr
+		workerFloor, persistedFloor int64
 	}{
-		{"least", []*planpb.Expr{least}, defines.MORPCVersion117},
-		{"table collation", []*planpb.Expr{collation}, defines.MORPCVersion118},
-		{"both upstream", []*planpb.Expr{least, collation}, defines.MORPCVersion118},
-		{"dependent program", []*planpb.Expr{dependent}, defines.MORPCVersion119},
-		{"dependent with exact", []*planpb.Expr{dependent, exact}, exactJSONTestProtocol},
-		{"both with exact", []*planpb.Expr{least, collation, exact}, exactJSONTestProtocol},
+		{"least", []*planpb.Expr{least}, defines.MORPCVersion117, defines.MORPCVersion117},
+		{"table collation", []*planpb.Expr{collation}, defines.MORPCVersion118, defines.MORPCVersion118},
+		{"both upstream", []*planpb.Expr{least, collation}, defines.MORPCVersion118, defines.MORPCVersion118},
+		{"dependent program", []*planpb.Expr{dependent}, 0, defines.MORPCVersion119},
+		{"dependent with exact", []*planpb.Expr{dependent, exact}, exactJSONTestProtocol, exactJSONTestProtocol},
+		{"both with exact", []*planpb.Expr{least, collation, exact}, exactJSONTestProtocol, exactJSONTestProtocol},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			owner := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: tc.expressions}}}
@@ -270,10 +275,10 @@ func TestExactJSONProtocolKeepsUpstreamFloors(t *testing.T) {
 			require.NoError(t, decoded.Unmarshal(encoded))
 			features, err := planpb.RequiredRemoteExpressionFeatures(decoded)
 			require.NoError(t, err)
-			require.Equal(t, tc.floor, remoteExpressionProtocolVersion(features))
+			require.Equal(t, tc.workerFloor, remoteExpressionProtocolVersion(features))
 			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(decoded)
 			require.NoError(t, err)
-			require.Equal(t, tc.floor, floor)
+			require.Equal(t, tc.persistedFloor, floor)
 		})
 	}
 }
