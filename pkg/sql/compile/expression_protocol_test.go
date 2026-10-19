@@ -571,30 +571,63 @@ func TestPythonRoutineProtocolChecksActualRemoteDestination(t *testing.T) {
 		{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: ""}}}},
 	})
 	require.NoError(t, err)
-	p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr, calendar, division, least, tableCollation}}}}
+	decimalDiv := decimalDivisionProtocolExpr(types.T_uint64)
+	decimalDiv.Typ = planpb.Type{Id: int32(types.T_uint64), Width: 7, Scale: 0}
+	decimalDiv.GetF().Func.Obj = function.EncodeOverloadID(function.INTEGER_DIV, function.DecimalIntegerDivUnsignedOverload)
+	p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr, calendar, division, least, tableCollation, decimalDiv}}}}
 	features, err := planpb.RequiredRemoteExpressionFeatures(p)
 	require.NoError(t, err)
 	require.True(t, features.PythonRoutineContract)
+	require.True(t, features.DecimalIntegerDivisionSemantics)
 	require.True(t, features.CalendarIntervalNormalization)
 	require.True(t, features.ScalarDivision)
 	require.True(t, features.LeastGreatestCollationSemantics)
 	require.True(t, features.TableCollationFunction)
-	require.Equal(t, defines.MORPCVersion121, remoteExpressionProtocolVersion(features))
-	require.Equal(t, defines.MORPCVersion121, executionRemoteExpressionProtocolVersion(c.proc, features))
+	require.Equal(t, defines.MORPCVersion122, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion122, executionRemoteExpressionProtocolVersion(c.proc, features))
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion120, defines.MORPCVersion121} {
+	for _, version := range []int64{defines.MORPCVersion121, defines.MORPCVersion122} {
 		client.version = version
 		err := validateRemoteExpressionDestination(c.proc, p, features)
-		if version < defines.MORPCVersion121 {
+		if version < defines.MORPCVersion122 {
 			require.ErrorContains(t, err, "remote destination does not support Python")
 		} else {
 			require.NoError(t, err)
 		}
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "Python routine execution requires")
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "Python routine execution requires")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
+
+	// Capability does not transfer the coordinator's dependent-program owner.
+	dependent := &planpb.Expr{Typ: decimalDiv.Typ, Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{
+		ProgramId: 1, Inputs: []*planpb.Expr{expr, decimalDiv},
+	}}}
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = []*planpb.Expr{dependent}
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "coordinator execution owner")
+	data, err := (&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{dependent}}}}).Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.ErrorContains(t, err, "coordinator execution owner")
+
+	// Immediate-predecessor rollback disables Python but preserves DIV alone.
+	client.version = defines.MORPCVersion121
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
+	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "remote destination does not support Python")
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "Python routine execution requires")
+	divOnly := &pipeline.Pipeline{Node: p.Node, InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{decimalDiv}}}}
+	divFeatures, err := planpb.RequiredRemoteExpressionFeatures(divOnly)
+	require.NoError(t, err)
+	require.False(t, divFeatures.PythonRoutineContract)
+	require.True(t, divFeatures.DecimalIntegerDivisionSemantics)
+	require.Equal(t, defines.MORPCVersion121, remoteExpressionProtocolVersion(divFeatures))
+	require.NoError(t, validateRemoteExpressionDestination(c.proc, divOnly, divFeatures))
+	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, divOnly))
 	require.Equal(t, client.calls, client.releases)
 }
 
@@ -633,14 +666,14 @@ func TestPythonRoutineProtocolInsideIndexSearchScan(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(&received)
 			require.NoError(t, err)
 			require.True(t, features.PythonRoutineContract)
-			require.Equal(t, defines.MORPCVersion121, remoteExpressionProtocolVersion(features))
+			require.Equal(t, defines.MORPCVersion122, remoteExpressionProtocolVersion(features))
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			client.version = defines.MORPCVersion120
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, &received, features), "remote destination does not support Python")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &received), "Python routine execution requires")
 			client.version = defines.MORPCVersion121
+			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, &received, features), "remote destination does not support Python")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, &received), "Python routine execution requires")
+			client.version = defines.MORPCVersion122
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
 			require.NoError(t, validateRemoteExpressionDestination(c.proc, &received, features))
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, &received))
 			require.Equal(t, client.calls, client.releases)
