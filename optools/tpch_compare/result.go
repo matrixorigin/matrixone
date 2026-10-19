@@ -414,7 +414,7 @@ func compareCaptures(rootA, rootB string, a, b Capture, q Query) (retErr error) 
 			return errors.Join(ea, eb)
 		}
 		if len(x) != len(y) {
-			return fmt.Errorf("Q%d peer-group row count differs at row %d", q.Number, count)
+			return fmt.Errorf("query Q%d peer-group row count differs at row %d", q.Number, count)
 		}
 		less := func(a, b Row) int {
 			for _, approx := range []bool{false, true} {
@@ -437,7 +437,7 @@ func compareCaptures(rootA, rootB string, a, b Capture, q Query) (retErr error) 
 					return err
 				}
 				if !ok {
-					return fmt.Errorf("Q%d mismatch at row %d column %d: %q / %q", q.Number, count+int64(i), j+1, x[i][j].Value, y[i][j].Value)
+					return fmt.Errorf("query Q%d mismatch at row %d column %d: %q / %q", q.Number, count+int64(i), j+1, x[i][j].Value, y[i][j].Value)
 				}
 			}
 		}

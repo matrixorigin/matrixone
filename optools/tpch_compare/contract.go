@@ -169,8 +169,9 @@ func canonicalTables() []Table {
 		return Column{Name: name, Kind: kind, SQLType: typ, Char: strings.HasPrefix(typ, "CHAR(")}
 	}
 	cols := func(spec string) []Column {
-		var out []Column
-		for _, pair := range strings.Fields(spec) {
+		fields := strings.Fields(spec)
+		out := make([]Column, 0, len(fields))
+		for _, pair := range fields {
 			p := strings.SplitN(pair, ":", 2)
 			out = append(out, c(p[0], p[1]))
 		}
@@ -320,7 +321,7 @@ func loadDataset(root string, verifyData bool) (Dataset, error) {
 		}
 		want.Source = q.Source
 		if !reflect.DeepEqual(q, want) {
-			return d, fmt.Errorf("Q%d differs from its reviewed source translation", q.Number)
+			return d, fmt.Errorf("query Q%d differs from its reviewed source translation", q.Number)
 		}
 	}
 	for _, t := range d.Tables {

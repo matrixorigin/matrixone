@@ -83,7 +83,7 @@ func validateLimit(rootLimited, rootFull string, limited, full Capture, q Query)
 				j++
 			}
 			if j == len(want) || cmp(want[j], row) != 0 {
-				return fmt.Errorf("Q%d illegal LIMIT boundary member", q.Number)
+				return fmt.Errorf("query Q%d illegal LIMIT boundary member", q.Number)
 			}
 			j++
 		}

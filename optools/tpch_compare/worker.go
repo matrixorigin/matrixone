@@ -24,7 +24,6 @@ import (
 	"regexp"
 	"runtime"
 	"runtime/debug"
-	"strconv"
 	"strings"
 	"time"
 
@@ -186,7 +185,7 @@ func runWorker(ctx context.Context, r WorkerRequest) (out WorkerReceipt, retErr 
 					q.Statements[q.ResultStatement] = strings.TrimSuffix(q.Statements[q.ResultStatement], fmt.Sprintf(" LIMIT %d", q.Limit))
 					q.Limit = 0
 				}
-				queryCtx, cancel := context.WithTimeoutCause(ctx, time.Duration(r.QueryDeadlineNS), fmt.Errorf("Q%d execution deadline", n))
+				queryCtx, cancel := context.WithTimeoutCause(ctx, time.Duration(r.QueryDeadlineNS), fmt.Errorf("query Q%d execution deadline", n))
 				cap, err := executeUnit(queryCtx, conn, q, filepath.Join(r.OutputRoot, fmt.Sprintf("q%02d-%04d.rows", n, rep)), captureDisk)
 				cancel()
 				receipt := QueryReceipt{Query: n, Repetition: rep, Capture: cap}
@@ -213,29 +212,4 @@ func runWorker(ctx context.Context, r WorkerRequest) (out WorkerReceipt, retErr 
 	default:
 		return out, fmt.Errorf("unsupported worker operation %q", r.Operation)
 	}
-}
-
-func allQueries() []int {
-	out := make([]int, 22)
-	for i := range out {
-		out[i] = i + 1
-	}
-	return out
-}
-
-func parseQueries(s string) ([]int, error) {
-	if s == "all" {
-		return allQueries(), nil
-	}
-	var out []int
-	seen := map[int]bool{}
-	for _, p := range strings.Split(s, ",") {
-		n, err := strconv.Atoi(p)
-		if err != nil || n < 1 || n > 22 || seen[n] {
-			return nil, errors.New("queries must be distinct Q1-Q22 numbers or all")
-		}
-		seen[n] = true
-		out = append(out, n)
-	}
-	return out, nil
 }

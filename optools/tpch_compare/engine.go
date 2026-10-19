@@ -51,7 +51,8 @@ func openEngine(ctx context.Context, e Engine) (*sql.DB, error) {
 		if !strings.HasPrefix(e.Database, "tpch_compare_") {
 			return nil, errors.New("MO database must use the private tpch_compare_ prefix")
 		}
-		cfg, err := mysql.ParseDSN(os.Getenv(e.DSNEnv))
+		var cfg *mysql.Config
+		cfg, err = mysql.ParseDSN(os.Getenv(e.DSNEnv))
 		if err != nil {
 			return nil, errors.New("invalid MO DSN")
 		}
@@ -437,7 +438,7 @@ func qualifyReference(root string, d Dataset, q Query, capRoot string, cap Captu
 					got = strings.TrimRight(got, " ")
 				}
 				if strings.TrimRight(got, " ") != ref {
-					return fmt.Errorf("Q%d reference string differs at row %d column %d", q.Number, count, i+1)
+					return fmt.Errorf("query Q%d reference string differs at row %d column %d", q.Number, count, i+1)
 				}
 				continue
 			}
@@ -457,7 +458,7 @@ func qualifyReference(root string, d Dataset, q Query, capRoot string, cap Captu
 				return err
 			}
 			if !referenceNumberEqual(x, y, c.Reference) {
-				return fmt.Errorf("Q%d reference numeric differs row %d column %d: %s / %s", q.Number, count, i+1, row[i].Value, ref)
+				return fmt.Errorf("query Q%d reference numeric differs row %d column %d: %s / %s", q.Number, count, i+1, row[i].Value, ref)
 			}
 		}
 		count++

@@ -146,7 +146,7 @@ func renderQGen(n int, raw string) (Query, error) {
 			limit, _ := strconv.Atoi(m[1])
 			if limit > 0 {
 				if len(q.Statements) == 0 || limit != q.Limit {
-					return q, fmt.Errorf("Q%d unexpected limit directive", n)
+					return q, fmt.Errorf("query Q%d unexpected limit directive", n)
 				}
 				q.Statements[len(q.Statements)-1] += fmt.Sprintf(" LIMIT %d", limit)
 			}
@@ -165,10 +165,10 @@ func renderQGen(n int, raw string) (Query, error) {
 		q.ResultStatement = 1
 		q.Cleanup = "DROP VIEW IF EXISTS {{view}}"
 	} else if len(q.Statements) != 1 || !strings.HasPrefix(strings.ToLower(q.Statements[0]), "select") {
-		return q, fmt.Errorf("Q%d must contain one SELECT", n)
+		return q, fmt.Errorf("query Q%d must contain one SELECT", n)
 	}
 	if q.Limit > 0 && !strings.HasSuffix(strings.ToUpper(q.Statements[q.ResultStatement]), fmt.Sprintf("LIMIT %d", q.Limit)) {
-		return q, fmt.Errorf("Q%d missing required outer LIMIT", n)
+		return q, fmt.Errorf("query Q%d missing required outer LIMIT", n)
 	}
 	return q, nil
 }

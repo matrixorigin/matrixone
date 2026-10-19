@@ -100,6 +100,13 @@ func cli(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
+		identity, err := identify(filepath.Join(*dataset, "dataset.json"))
+		if err != nil {
+			return err
+		}
+		if a.Version != formatVersion || b.Version != formatVersion || a.Dataset.SHA256 != identity.SHA256 || b.Dataset.SHA256 != identity.SHA256 {
+			return errors.New("worker dataset identity or receipt version differs")
+		}
 		if a.Error != "" || b.Error != "" || a.Cleanup != "complete" || b.Cleanup != "complete" || len(a.Queries) == 0 || len(a.Queries) != len(b.Queries) {
 			return errors.New("failed/incomplete worker receipt")
 		}
