@@ -3917,7 +3917,7 @@ func (b *baseBinder) bindPreparedMathFuncExpr(
 	}
 	expr, err := bindBoundFuncExprAndConstFoldWithObserver(
 		b.GetContext(), b.builder.compCtx.GetProcess(), name, args,
-		b.observePersistedExpressionProtocol,
+		b.observeExpressionProtocol,
 	)
 	if err != nil {
 		return nil, err
