@@ -4181,6 +4181,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("hnsw_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"fulltext2_threads_search": {
+		Name:              "fulltext2_threads_search",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("fulltext2_threads_search", 0, 1024, false),
+		Default:           int64(0),
+	},
 	"hnsw_max_index_capacity": {
 		Name:              "hnsw_max_index_capacity",
 		Scope:             ScopeBoth,

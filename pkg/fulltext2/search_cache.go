@@ -109,7 +109,18 @@ type Fulltext2Search struct {
 	// Load. A generation with neither serves no docs (see EmptyGeneration).
 	baseSegs int
 	tailSegs int
+
+	// threadsSearch is the fulltext2_threads_search degree of parallelism for the
+	// multi-segment top-k search, set by the reader (SetThreadsSearch) before Load and
+	// baked onto the Index at Load. 0 = use GOMAXPROCS. Perf-only hint.
+	threadsSearch int
 }
+
+// SetThreadsSearch records the per-query search parallelism (fulltext2_threads_search)
+// before Load bakes it onto the Index. Called by the search reader on the handle it
+// hands the cache; a warm cache entry keeps the value from its own cold Load (like the
+// vector plugins' ThreadsSearch), which is safe because it is a perf-only hint.
+func (s *Fulltext2Search) SetThreadsSearch(n int) { s.threadsSearch = n }
 
 var _ veccache.VectorIndexSearchIf = (*Fulltext2Search)(nil)
 
@@ -169,6 +180,7 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	}
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
+	s.idx.threadsSearch = s.threadsSearch
 	s.loaded = true
 	s.baseSegs = len(bases)
 	s.tailSegs = len(tails)

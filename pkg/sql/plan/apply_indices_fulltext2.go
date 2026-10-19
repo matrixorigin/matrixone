@@ -26,7 +26,9 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext"
 	fulltext2engine "github.com/matrixorigin/matrixone/pkg/fulltext2"
 	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
@@ -186,6 +188,7 @@ func (builder *QueryBuilder) buildFulltext2SearchScan(
 	pattern, guard *plan.Expr,
 	colDefs []*plan.ColDef,
 ) (int32, error) {
+	opts.ThreadsSearch = builder.fulltext2ThreadsSearch()
 	algoOptions, err := ft2plan.EncodeScanOptions(opts)
 	if err != nil {
 		return -1, err
@@ -306,4 +309,31 @@ func (builder *QueryBuilder) findFulltext2IndexTables(scanNode *plan.Node, idxde
 		}
 	}
 	return storeTbl, metaTbl, storeTbl != "" && metaTbl != ""
+}
+
+// fulltext2ThreadsSearch resolves the fulltext2_threads_search session variable
+// that sizes the multi-segment parallel top-k search. It is gated on
+// MORPCVersion123: a mixed-version cluster returns 0 (serial) until every CN
+// understands the option, so the option never rides an IndexSearchScan to a CN
+// that would ignore it and run serial while its peers parallelize. 0 also means
+// "use GOMAXPROCS" at the search site (vectorindex.GetConcurrency).
+func (builder *QueryBuilder) fulltext2ThreadsSearch() int64 {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return 0
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return 0
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion123 {
+		return 0
+	}
+	n, err := builder.resolveInt64Variable("fulltext2_threads_search", 0)
+	if err != nil {
+		return 0
+	}
+	return n
 }

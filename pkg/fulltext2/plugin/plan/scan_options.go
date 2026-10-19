@@ -32,6 +32,11 @@ type ScanOptions struct {
 	// ScoreRange is the fulltext2.ScoreRange JSON of the pushed score bounds;
 	// empty means none.
 	ScoreRange string `json:"score_range,omitempty"`
+	// ThreadsSearch is the per-query degree of parallelism for the multi-segment
+	// top-k search, resolved from the fulltext2_threads_search session variable at
+	// plan time (0 = use GOMAXPROCS, see vectorindex.GetConcurrency). omitempty so
+	// an older CN that lacks the field simply ignores it (serial search).
+	ThreadsSearch int64 `json:"threads_search,omitempty"`
 }
 
 // EncodeScanOptions returns the algo_options bytes of opts.

@@ -743,6 +743,7 @@ func (u *reader) start() (err error) {
 	}
 
 	newsearch := fulltext2.NewFulltext2Search(u.tblcfg)
+	newsearch.SetThreadsSearch(int(u.opts.ThreadsSearch))
 	q := fulltext2.Fulltext2Query{
 		ScoreRange:       scoreRange,
 		Pattern:          []byte(pattern),

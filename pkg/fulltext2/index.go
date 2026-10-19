@@ -19,6 +19,7 @@ import (
 	"iter"
 	"sort"
 	"strconv"
+	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
@@ -50,6 +51,13 @@ type Index struct {
 	// derive it is local and discarded (it was O(live docs) of Go heap — the dominant
 	// load-time floor). Mirrors bm25's ComputeLiveness []Membership.
 	liveOrd [][]bool
+
+	// threadsSearch is the degree of parallelism for the multi-segment top-k search
+	// (SearchBoolean), resolved from the fulltext2_threads_search session variable and
+	// baked here once at Load (single-threaded), so it is read-only during the
+	// concurrent search and never races. 0 means use GOMAXPROCS (vectorindex.GetConcurrency).
+	// It is a perf-only hint: any value yields identical results.
+	threadsSearch int
 }
 
 type docLoc struct {
@@ -362,7 +370,12 @@ type globalStats struct {
 	n         int64
 	avgDocLen float64
 	idx       *Index
-	dfCache   map[string]int
+	// mu guards dfCache/phraseDfCache. The serial search path never contends; the
+	// parallel multi-segment search (SearchBoolean with threadsSearch) shares ONE gs
+	// across worker goroutines, so every cache read/write is taken under mu. Each df/
+	// phraseDf is still computed at most once (the lock is held across the compute).
+	mu      sync.Mutex
+	dfCache map[string]int
 	// phraseDfCache memoizes only the corpus-global phrase COUNT per phrase (an int),
 	// never the per-segment hit slices — see phraseDf. Retaining the slices would defeat
 	// the no-LIMIT streaming O(one segment) bound: a low-selectivity phrase over many
@@ -394,6 +407,8 @@ func (gs *globalStats) phraseHits(seg *Segment, slots []phraseSlot) []docTf {
 // block at a time while fully-live segments use raw df directly; the result is memoized so the
 // scan is paid once per query term.
 func (gs *globalStats) df(term string) int {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
 	if d, ok := gs.dfCache[term]; ok {
 		return d
 	}
@@ -434,6 +449,8 @@ func (gs *globalStats) idfFor(seg *Segment, term string, pl *termPostings) float
 // are counted (mirrors the live term df above and streamPhrase's pass 1), so a dirty tail does
 // not inflate the phrase idf relative to the compacted corpus.
 func (gs *globalStats) phraseDf(slots []phraseSlot) int {
+	gs.mu.Lock()
+	defer gs.mu.Unlock()
 	key := slotsKey(slots)
 	if d, ok := gs.phraseDfCache[key]; ok {
 		return d
@@ -480,13 +497,58 @@ func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter *pref
 		return nil, nil
 	}
 	gs := idx.newGlobalStats()
-	matched := make(map[any]Result)
-	for si, seg := range idx.segments {
+	nseg := len(idx.segments)
+	// Each segment is a fully independent top-k search (own dense ord space, own WAND
+	// threshold, own per-segment heap), so the segment loop fans out across
+	// threadsSearch workers. The only shared state is gs, whose df caches are
+	// mutex-guarded; each worker writes ONLY its own perSeg[si] slot (no shared result
+	// map during the walk). The merge below runs serially in segment order, so the
+	// winning live copy per pk is chosen exactly as the serial walk did -- parallelism
+	// is a perf hint that yields an identical top-k.
+	perSeg := make([][]Result, nseg)
+	errs := make([]error, nseg)
+	workers := int(vectorindex.GetConcurrency(int64(idx.threadsSearch)))
+	if workers < 1 {
+		workers = 1
+	}
+	if workers > nseg {
+		workers = nseg
+	}
+	searchSeg := func(si int) {
+		seg := idx.segments[si]
 		allow := andAllow(mkAllow(seg, filter), &livenessMembership{idx: idx, si: si})
 		res, err := seg.SearchBoolean(q, algo, k, allow, gs)
 		if err != nil {
-			return nil, err
+			errs[si] = err
+			return
 		}
+		perSeg[si] = res
+	}
+	if workers <= 1 || nseg <= 1 {
+		for si := range idx.segments {
+			searchSeg(si)
+		}
+	} else {
+		sem := make(chan struct{}, workers)
+		var wg sync.WaitGroup
+		for si := range idx.segments {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(si int) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				searchSeg(si)
+			}(si)
+		}
+		wg.Wait()
+	}
+	for _, e := range errs {
+		if e != nil {
+			return nil, e
+		}
+	}
+	matched := make(map[any]Result)
+	for _, res := range perSeg {
 		for _, r := range res {
 			matched[normalizeKey(r.Pk)] = r // liveness inside the walk → one live copy per pk
 		}

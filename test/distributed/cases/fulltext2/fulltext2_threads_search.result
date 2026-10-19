@@ -1,0 +1,35 @@
+set experimental_fulltext2_index = 1;
+drop database if exists ft2_threads;
+create database ft2_threads;
+use ft2_threads;
+select @@fulltext2_threads_search as default_val;
+➤ default_val[-1,16383,0]  𝄀
+0
+set fulltext2_threads_search = 4;
+select @@fulltext2_threads_search as after_set;
+➤ after_set[-1,16383,0]  𝄀
+4
+create table t(id bigint primary key, body text);
+insert into t values
+(1,'apple banana cherry'),(2,'banana cherry date'),(3,'cherry date elder'),
+(4,'apple elder fig'),(5,'banana fig grape');
+create fulltext2 index ft on t(body);
+select id, match(body) against('banana cherry' in bm25 mode) as score
+from t where match(body) against('banana cherry' in bm25 mode)
+order by score desc, id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.09843373  𝄀
+2  ¦  0.09843373  𝄀
+3  ¦  0.049216866  𝄀
+5  ¦  0.049216866
+set fulltext2_threads_search = 1;
+select id, match(body) against('banana cherry' in bm25 mode) as score
+from t where match(body) against('banana cherry' in bm25 mode)
+order by score desc, id;
+➤ id[-5,64,0]  ¦  score[7,5,0]  𝄀
+1  ¦  0.09843373  𝄀
+2  ¦  0.09843373  𝄀
+3  ¦  0.049216866  𝄀
+5  ¦  0.049216866
+set fulltext2_threads_search = 0;
+drop database ft2_threads;
