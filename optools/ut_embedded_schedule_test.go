@@ -353,6 +353,19 @@ artifact_dir=$CLUSTER_PREBUILD_DIR
  trap 'exit 143' TERM INT
  # The harness deadline bounds the fixture, including prebuild and metadata
  # discovery. FIFO reads assert event ordering, not preparation latency.
+ # Model expiry of any readiness-local clock without a wall-clock sleep.
+ # This override belongs only to the controller; dispatcher and child reads
+ # stay real. Untimed reads must consume all five real readiness messages.
+ ready_observations=0
+ function read() {
+  local argument
+  for argument in "$@"; do
+   [[ "$argument" != -t* ]] || return 142
+  done
+  builtin read "$@" || return $?
+  ready_observations=$((ready_observations + 1))
+ }
+ # Readiness is a barrier, bounded by the harness's existing outer deadline.
  for heavy in embed bootstrap; do
   read -r leaf pid <&8 || exit 100
   [[ "$leaf" == "$heavy" ]] || exit 101
@@ -381,6 +394,7 @@ artifact_dir=$CLUSTER_PREBUILD_DIR
    esac
   done
  fi
+ [[ "$ready_observations" == 5 ]] || exit 116
 ) &
 driver_pid=$!
 status=0
@@ -392,7 +406,7 @@ driver_pid=""
 if [[ "$MODE" == heavy-failure ]]; then [[ "$status" != 0 ]] || exit 112; else [[ "$status" == 0 ]] || exit 113; fi
 [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" && ! -d "$artifact_dir" ]] || exit 114
 # Reconstruction proves every exclusion interval, not a sampled absence.
-awk -v limit="$UT_EMBEDDED_PACKAGE_PARALLEL" '
+awk -v limit="$UT_EMBEDDED_PACKAGE_PARALLEL" -v mode="$MODE" '
 $5 == "stage=embedded" && /detail=package_index=[0-4] .*prebuilt=true/ {
  package=substr($6,7); heavy=(package !~ /\/(arrowload|dml)$/)
  if ($4 == "event=start") {
@@ -401,6 +415,8 @@ $5 == "stage=embedded" && /detail=package_index=[0-4] .*prebuilt=true/ {
   if (heavy) heavy_active++
  } else if ($4 == "event=finish") {
   if (!started[package] || finished[package]++) bad=1
+  expected_status=(mode == "heavy-failure" && package ~ /\/embed$/) ? "status=7" : "status=0"
+  if ($7 != expected_status) bad=1
   active--; if (heavy) heavy_active--
  }
  if (active<0 || active>limit) bad=1
