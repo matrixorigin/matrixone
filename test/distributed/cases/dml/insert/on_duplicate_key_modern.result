@@ -72,7 +72,7 @@ select * from t_odku_child order by cid;
 10  ¦  1  ¦  999  𝄀
 20  ¦  2  ¦  200
 insert into t_odku_child values (30, 99, 300) on duplicate key update v = 300;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from t_odku_child order by cid;
 ➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  v[4,32,0]  𝄀
 10  ¦  1  ¦  999  𝄀
@@ -84,7 +84,7 @@ select * from t_odku_child order by cid;
 20  ¦  2  ¦  200  𝄀
 40  ¦  1  ¦  400
 insert into t_odku_child values (50, 99, 500);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from t_odku_child order by cid;
 ➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  v[4,32,0]  𝄀
 10  ¦  1  ¦  999  𝄀
@@ -380,9 +380,9 @@ select cid, pid, val from t_odku_fk_child order by cid;
 2  ¦  99  ¦  201  𝄀
 4  ¦  2  ¦  400
 insert into t_odku_fk_child values (1, 1, 5) on duplicate key update pid = 999;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into t_odku_fk_child values (3, 888, 1) on duplicate key update val = val + 1;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select cid, pid, val from t_odku_fk_child order by cid;
 ➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  val[4,32,0]  𝄀
 1  ¦  1  ¦  101  𝄀
@@ -394,13 +394,13 @@ select row_count(), cid, pid, val from t_odku_fk_child where cid = 2;
 2  ¦  2  ¦  2  ¦  201
 insert into t_odku_fk_child values (1, 999, 0), (1, 1, 0)
 on duplicate key update pid = values(pid);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select cid, pid, val from t_odku_fk_child where cid = 1;
 ➤ cid[4,32,0]  ¦  pid[4,32,0]  ¦  val[4,32,0]  𝄀
 1  ¦  1  ¦  101
 insert into t_odku_fk_child values (5, 999, 0), (5, 1, 0)
 on duplicate key update pid = values(pid);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select count(*) from t_odku_fk_child where cid = 5;
 ➤ count(*)[5,64,0]  𝄀
 0
@@ -460,7 +460,7 @@ foreign key(pid) references t_odku_final_insert_fk_parent(id)
 insert into t_odku_final_insert_fk_parent values (1);
 insert into t_odku_final_insert_fk_child values (1, 999, 0), (1, 1, 1)
 on duplicate key update v = values(v);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select count(*) from t_odku_final_insert_fk_child;
 ➤ count(*)[5,64,0]  𝄀
 0
@@ -495,7 +495,7 @@ insert into t_odku_mfk_p1 values (1);
 insert into t_odku_mfk_p2 values (1);
 insert into t_odku_mfk_child values (1, 1, 1);
 insert into t_odku_mfk_child values (1, 1, 1) on duplicate key update a = NULL, b = 999;
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into t_odku_mfk_child values (1, 1, 1) on duplicate key update a = NULL, b = 1;
 select cid, a, b from t_odku_mfk_child order by cid;
 ➤ cid[4,32,0]  ¦  a[4,32,0]  ¦  b[4,32,0]  𝄀
@@ -823,3 +823,54 @@ select id, pid, attr_id, val from t_odku_fk_uk_child order by id;
 1  ¦  1  ¦  5  ¦  new
 drop table if exists t_odku_fk_uk_child;
 drop table if exists t_odku_fk_uk_parent;
+drop table if exists t_odku_nested;
+create table t_odku_nested(k int primary key, v int);
+insert into t_odku_nested values(1,10);
+insert into t_odku_nested values(1,3),(1,4),(2,8),(2,9)
+on duplicate key update v=v+1,v=(select (select t_odku_nested.v+values(v)));
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+7
+select * from t_odku_nested order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  19  𝄀
+2  ¦  18
+start transaction;
+insert into t_odku_nested values(1,50)
+on duplicate key update v=(select (select t_odku_nested.v+1)),v=(select (select t_odku_nested.v+2));
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+2
+select * from t_odku_nested order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  22  𝄀
+2  ¦  18
+rollback;
+select * from t_odku_nested order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  19  𝄀
+2  ¦  18
+insert into t_odku_nested values(3,1),(1,2)
+on duplicate key update v=(select u.x+t_odku_nested.v from (select 1 as x union all select 2) u);
+Subquery returns more than 1 row
+select * from t_odku_nested order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  19  𝄀
+2  ¦  18
+prepare od_nested from 'insert into t_odku_nested values(?,?) on duplicate key update v=(select (select t_odku_nested.v+values(v)))';
+set @od_k=1,@od_v=1;
+execute od_nested using @od_k,@od_v;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+2
+set @od_k=2,@od_v=2;
+execute od_nested using @od_k,@od_v;
+select row_count();
+➤ row_count()[-5,64,0]  𝄀
+2
+select * from t_odku_nested order by k;
+➤ k[4,32,0]  ¦  v[4,32,0]  𝄀
+1  ¦  20  𝄀
+2  ¦  20
+deallocate prepare od_nested;
+drop table t_odku_nested;

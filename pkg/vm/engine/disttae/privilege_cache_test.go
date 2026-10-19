@@ -43,7 +43,7 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 	e.pClient.subscribed = subscribedTable{eng: e, m: make(map[uint64]*subEntry)}
 	workspace := &Transaction{proc: testutil.NewProc(t)}
 	defer workspace.proc.Free()
-	for i, name := range []string{catalog.MO_DATABASE, catalog.MO_TABLES, "mo_user", "mo_role", "mo_user_grant", "mo_role_grant", "mo_role_privs"} {
+	for i, name := range []string{catalog.MO_DATABASE, catalog.MO_TABLES, "mo_user", "mo_role", "mo_user_grant", "mo_role_grant", "mo_role_privs", catalog.MO_ROLE_RULE} {
 		id := uint64(i + 1)
 		account := uint32(0)
 		if i >= 2 {
@@ -66,6 +66,11 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 	}
 	original := read()
 	require.True(t, original != (PrivilegeCacheVersion{}))
+	accessTime := e.pClient.subscribed.m[catalog.MO_DATABASE_ID].lastTs.Load()
+	require.NotZero(t, accessTime)
+	for _, entry := range e.pClient.subscribed.m {
+		require.Equal(t, accessTime, entry.lastTs.Load(), "one proof shares idle bookkeeping across all eight tables")
+	}
 	require.True(t, original == read())
 	e.pClient.subscribed.setTablePendingUpdate(1, 1, timestamp.Timestamp{PhysicalTime: 15})
 	require.True(t, read() == (PrivilegeCacheVersion{}), "pending catalog application must not authorize reuse")
@@ -80,6 +85,19 @@ func TestPrivilegeCacheVersionRejectsUnprovenCatalog(t *testing.T) {
 	require.True(t, advanced != (PrivilegeCacheVersion{}))
 	require.True(t, original != advanced, "unchanged rows do not imply unchanged physical version")
 	require.True(t, advanced == read(), "a stable proven state permits reuse")
+	// Role-rule contents participate in the same proof as active-role grants.
+	state, done = e.GetOrCreateLatestPart(ctx, 7, catalog.MO_CATALOG_ID, 18).MutateState()
+	state.UpdateAppliedTo(types.BuildTS(12, 0))
+	done()
+	changedRule := read()
+	require.NotEqual(t, advanced, changedRule)
+	require.Equal(t, changedRule, read())
+	delete(e.partitions, [2]uint64{catalog.MO_CATALOG_ID, 18})
+	state, done = e.GetOrCreateLatestPart(ctx, 7, catalog.MO_CATALOG_ID, 18).MutateState()
+	state.UpdateDuration(types.TS{}, types.MaxTs())
+	state.UpdateAppliedTo(types.BuildTS(12, 0))
+	done()
+	require.True(t, changedRule != read(), "reconstructed role-rule partition has a new identity")
 	e.pClient.receivedLogTailTime.ready.Store(false)
 	unready, observed, err := e.GetPrivilegeCacheVersion(ctx, 7, snapshot)
 	require.NoError(t, err)

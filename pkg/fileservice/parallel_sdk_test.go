@@ -22,6 +22,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/http/httptrace"
 	"net/url"
 	"strconv"
 	"strings"
@@ -281,9 +282,24 @@ func TestAwsParallelMultipartSuccess(t *testing.T) {
 	defer server.Close()
 	state.uploadID = "uid-success"
 
-	sdk := newTestAWSClient(t, server)
+	upstream := server.Client().Transport
+	var traceMu sync.Mutex
+	traces := make(map[*httptrace.ClientTrace]struct{})
+	transport := wrapRoundTripper(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		tr := httptrace.ContextClientTrace(req.Context())
+		if tr == nil {
+			return nil, errors.New("multipart request has no HTTP trace")
+		}
+		traceMu.Lock()
+		traces[tr] = struct{}{}
+		traceMu.Unlock()
+		return upstream.RoundTrip(req)
+	}))
+	sdk := newObjectStorageHTTPTrace(newTestAWSClientWithTransport(t, server, transport))
 	counter := new(perfcounter.CounterSet)
 	ctx := perfcounter.WithCounterSet(context.Background(), counter)
+	var callerHooks atomic.Int64
+	ctx = httptrace.WithClientTrace(ctx, &httptrace.ClientTrace{GotConn: func(httptrace.GotConnInfo) { callerHooks.Add(1) }})
 
 	data := bytes.Repeat([]byte("a"), int(minMultipartPartSize+1))
 	size := int64(len(data))
@@ -303,6 +319,11 @@ func TestAwsParallelMultipartSuccess(t *testing.T) {
 	if len(state.completeBody) == 0 {
 		t.Fatalf("complete body not recorded")
 	}
+	traceMu.Lock()
+	traceCount := len(traces)
+	traceMu.Unlock()
+	require.GreaterOrEqual(t, traceCount, 4, "create, two parts and completion need independent traces")
+	require.Equal(t, int64(traceCount), callerHooks.Load(), "caller hooks must be composed exactly once per request")
 	if got := counter.FileService.S3.Put.Load(); got != 2 {
 		t.Fatalf("expected 2 physical PUT requests, got %d", got)
 	}

@@ -491,7 +491,6 @@ func TestServicePollCommandsIsNonDestructiveAndDeduplicable(t *testing.T) {
 	fn := func(t *testing.T, s *Service) {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 		defer cancel()
-		activateCommandDelivery(t, ctx, s)
 
 		command := pb.ScheduleCommand{
 			UUID:        "uuid1",
@@ -507,26 +506,32 @@ func TestServicePollCommandsIsNonDestructiveAndDeduplicable(t *testing.T) {
 		require.NoError(t,
 			s.store.addScheduleCommands(ctx, 1, []pb.ScheduleCommand{command}))
 
-		pollResp := s.handleGetScheduleCommands(ctx, pb.Request{
+		query := pb.Request{
 			Method: pb.GET_SCHEDULE_COMMANDS,
 			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
 				UUID:        "uuid1",
 				ServiceType: pb.TNService,
 			},
-		})
+		}
+		// A concurrent poll cannot apply legacy commands without stable IDs.
+		legacy := s.handleGetScheduleCommands(ctx, query)
+		require.Equal(t, uint32(moerr.Ok), legacy.ErrorCode)
+		require.Empty(t, legacy.CommandBatch.Commands)
+		stored, err := s.store.getCommandBatch(ctx, command.UUID)
+		require.NoError(t, err)
+		require.Equal(t, []pb.ScheduleCommand{command}, stored.Commands)
+		require.Zero(t, stored.BatchID)
+		require.Empty(t, stored.CommandIDs)
+		activateCommandDelivery(t, ctx, s)
+
+		pollResp := s.handleGetScheduleCommands(ctx, query)
 		require.Equal(t, uint32(moerr.Ok), pollResp.ErrorCode)
 		require.Equal(t, []pb.ScheduleCommand{command}, pollResp.CommandBatch.Commands)
 		require.NotZero(t, pollResp.CommandBatch.BatchID)
 		require.True(t, ScheduleCommandBatchHasStableIDs(*pollResp.CommandBatch))
 
 		// A retry observes the same stable batch ID and does not mutate the RSM.
-		secondResp := s.handleGetScheduleCommands(ctx, pb.Request{
-			Method: pb.GET_SCHEDULE_COMMANDS,
-			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
-				UUID:        "uuid1",
-				ServiceType: pb.TNService,
-			},
-		})
+		secondResp := s.handleGetScheduleCommands(ctx, query)
 		require.Equal(t, *pollResp.CommandBatch, *secondResp.CommandBatch)
 
 		// An upgraded heartbeat remains the delivery path; a heartbeat without
@@ -549,13 +554,7 @@ func TestServicePollCommandsIsNonDestructiveAndDeduplicable(t *testing.T) {
 		})
 		require.Empty(t, ackedResp.CommandBatch.Commands)
 
-		afterDelivery := s.handleGetScheduleCommands(ctx, pb.Request{
-			Method: pb.GET_SCHEDULE_COMMANDS,
-			ScheduleCommandQuery: &pb.ScheduleCommandQuery{
-				UUID:        "uuid1",
-				ServiceType: pb.TNService,
-			},
-		})
+		afterDelivery := s.handleGetScheduleCommands(ctx, query)
 		require.Empty(t, afterDelivery.CommandBatch.Commands)
 	}
 	runServiceTest(t, true, true, fn)

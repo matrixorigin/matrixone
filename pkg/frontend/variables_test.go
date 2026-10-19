@@ -40,6 +40,22 @@ func TestEventSchedulerDefaultDisabled(t *testing.T) {
 	})
 }
 
+func TestRemovedSidecarVariable(t *testing.T) {
+	ses := &Session{}
+	ctx := context.Background()
+	for _, name := range []string{"sidecar_url", "SIDECAR_URL"} {
+		t.Run(name, func(t *testing.T) {
+			assert.NotContains(t, gSysVarsDefs, name)
+			_, err := ses.GetSessionSysVar(name)
+			assert.ErrorContains(t, err, errorSystemVariableDoesNotExist())
+			_, err = ses.GetGlobalSysVar(name)
+			assert.ErrorContains(t, err, errorSystemVariableDoesNotExist())
+			assert.ErrorContains(t, ses.SetSessionSysVar(ctx, name, "http://unused"), errorSystemVariableDoesNotExist())
+			assert.ErrorContains(t, ses.SetGlobalSysVar(ctx, name, "http://unused"), errorSystemVariableDoesNotExist())
+		})
+	}
+}
+
 func TestWindowPartitionAlgorithmVariable(t *testing.T) {
 	sv, ok := gSysVarsDefs["window_partition_algorithm"]
 	assert.True(t, ok)
@@ -673,4 +689,35 @@ func TestIndexCacheSizeVariablesStayGlobalScope(t *testing.T) {
 			"%s must stay dynamic: a cache budget an operator can only change by restarting "+
 				"every CN is not usable during the memory pressure that prompts the change", name)
 	}
+}
+
+// MySQL 8.0 declares information_schema_stats_expiry in both global and
+// session scopes, and mysqldump issues
+// `SET SESSION information_schema_stats_expiry=0` unconditionally against any
+// server that reports 8.0.x. Declaring the variable global-only makes that
+// statement fail with "the system variable is global" and aborts the dump.
+// The variable is a pure compatibility stub here (nothing reads it), so the
+// whole contract is: accept the session-scope assignment and remember it for
+// the rest of the session, without touching the global value.
+func TestInformationSchemaStatsExpirySessionScope(t *testing.T) {
+	def, ok := gSysVarsDefs["information_schema_stats_expiry"]
+	assert.True(t, ok)
+	assert.Equal(t, ScopeBoth, def.Scope,
+		"mysqldump sets information_schema_stats_expiry at session scope")
+	assert.True(t, def.Dynamic)
+	assert.Equal(t, int64(86400), def.Default)
+
+	// the statement mysqldump actually sends
+	ses := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	assert.NoError(t, ses.SetSessionSysVar(context.Background(),
+		"information_schema_stats_expiry", int64(0)))
+	got, err := ses.GetSessionSysVar("information_schema_stats_expiry")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), got)
+
+	// the assignment is session-local: a fresh session still sees the default
+	fresh := &Session{errInfo: &errInfo{maxCnt: MoDefaultErrorCount}}
+	got, err = fresh.GetSessionSysVar("information_schema_stats_expiry")
+	assert.NoError(t, err)
+	assert.Equal(t, int64(86400), got)
 }

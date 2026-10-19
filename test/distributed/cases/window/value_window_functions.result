@@ -149,7 +149,7 @@ select id, val, lag(val, 1, cast(-1 as decimal(10, 4))) over (order by id) as la
 1  ¦  100.1234  ¦  -1.0000  𝄀
 2  ¦  200.5678  ¦  100.1234
 select id, val, lead(id, 1, -1) over (order by id) as lead_id from test_decimal_window order by id;
-➤ id[4,32,0]  ¦  val[3,10,4]  ¦  lead_id[4,32,0]  𝄀
+➤ id[4,32,0]  ¦  val[3,10,4]  ¦  lead_id[-5,64,0]  𝄀
 1  ¦  100.1234  ¦  2  𝄀
 2  ¦  200.5678  ¦  -1
 select id, revenue, lag(revenue, 1, -1) over (order by year_col) as lag_revenue from test_value_window where category = 'A';

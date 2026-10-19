@@ -157,7 +157,7 @@ func isMySQLFullGroupBySingleValueExpr(expr *Expr) bool {
 		return true
 	case *pbplan.Expr_F:
 		overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
-		if !ok || overload.CannotFold() {
+		if !ok || overload.IsVolatile() {
 			return false
 		}
 		for _, arg := range e.F.Args {

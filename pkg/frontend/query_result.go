@@ -768,6 +768,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		mrs.Data[i] = make([]interface{}, columnCount)
 	}
 	exportParam := &ExportConfig{
+		proc:       ses.proc,
 		userConfig: eParam,
 		mrs:        mrs,
 		service:    ses.GetService(),

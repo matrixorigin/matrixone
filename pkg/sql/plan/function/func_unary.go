@@ -1013,11 +1013,8 @@ func BitCountDecimal256(ivecs []*vector.Vector, result vector.FunctionResultWrap
 
 func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	uniformBinary, perRow := stringDomainMode(ivecs[0])
-	if !perRow {
-		if uniformBinary {
-			return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
-		}
-		return opUnaryBytesToFixedWithErrorCheck[uint64](ivecs, result, proc, length, bitCountFromNonBinaryString, selectList)
+	if !perRow && uniformBinary {
+		return opUnaryBytesToFixed[uint64](ivecs, result, proc, length, bitCountFromBinaryString, selectList)
 	}
 	param := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[uint64](result)
@@ -1037,13 +1034,19 @@ func BitCountNonBinaryString(ivecs []*vector.Vector, result vector.FunctionResul
 		}
 		var count uint64
 		var err error
-		if binaryStringAt(ivecs[0], int(row), uniformBinary, perRow) {
+		binary := binaryStringAt(ivecs[0], int(row), uniformBinary, perRow)
+		if binary {
 			count = bitCountFromBinaryString(value)
 		} else {
 			count, err = bitCountFromNonBinaryString(value)
 		}
 		if err != nil {
 			return err
+		}
+		if !binary {
+			text := convertByteSliceToString(value)
+			prefix := leadingDecimalIntegerPrefix(text)
+			appendIntegerNumericCoercionWarning(proc, text, prefix, prefix != "", false)
 		}
 		if err = rs.Append(count, false); err != nil {
 			return err
@@ -5850,17 +5853,16 @@ func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 	)
 }
 
-func ReadFromFile(Filepath string, fs fileservice.FileService) (io.ReadCloser, error) {
-	return ReadFromFileOffsetSize(Filepath, fs, 0, -1)
-}
-
-func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
-	fs, readPath, err := fileservice.GetForETL(context.TODO(), fs, Filepath)
+func readFromParsedPath(ctx context.Context, rawPath string, path fileservice.Path, fs fileservice.FileService, offset, size int64) (io.ReadCloser, error) {
+	ownsService := path.Service == "" || len(path.ServiceArguments) > 0
+	fs, readPath, err := fileservice.GetForETLWithParsedPath(ctx, fs, rawPath, path)
 	if fs == nil || err != nil {
+		if fs != nil && ownsService {
+			fs.Close(ctx)
+		}
 		return nil, err
 	}
 	var r io.ReadCloser
-	ctx := context.TODO()
 	vec := fileservice.IOVector{
 		FilePath: readPath,
 		Entries: []fileservice.IOEntry{
@@ -5873,13 +5875,23 @@ func ReadFromFileOffsetSize(Filepath string, fs fileservice.FileService, offset,
 	}
 	err = fs.Read(ctx, &vec)
 	if err != nil {
+		if ownsService {
+			fs.Close(ctx)
+		}
 		return nil, err
+	}
+	if ownsService {
+		return fileservice.NewReadCloserWithOwnedFileService(ctx, r, fs), nil
 	}
 	return r, nil
 }
 
 func readLoadFileContents(filePath string, proc *process.Process) ([]byte, error) {
-	r, err := ReadFromFile(filePath, proc.GetFileService())
+	path, err := fileservice.ParsePath(filePath)
+	if err != nil {
+		return nil, err
+	}
+	r, err := readFromParsedPath(process.SQLFileAccessContext(proc.Ctx, proc), filePath, path, proc.GetFileService(), 0, -1)
 	if err != nil {
 		return nil, err
 	}
@@ -5964,11 +5976,7 @@ func readLoadFileDatalinkContents(filePath string, proc *process.Process) ([]byt
 	}
 	size := dl.Size
 	if size < 0 {
-		etlFS, readPath, err := fileservice.GetForETL(proc.Ctx, proc.GetFileService(), dl.MoPath)
-		if err != nil {
-			return nil, err
-		}
-		entry, err := etlFS.StatFile(proc.Ctx, readPath)
+		entry, err := dl.StatFile(proc)
 		if err != nil {
 			return nil, err
 		}
@@ -6064,9 +6072,22 @@ func LoadFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 // CDC parity with the synchronous build.
 func LoadText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Varlena](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
 	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.AppendBytes(nil, true); err != nil {
+				return err
+			}
+			continue
+		}
 		_filePath, null1 := filePathVec.GetStrValue(i)
 		if null1 {
 			if err := rs.AppendBytes(nil, true); err != nil {
@@ -6103,10 +6124,23 @@ func LoadText(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 // WriteFileDatalink write content to file service and return number of byte written
 func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[int64](result)
+	if length == 0 {
+		return nil
+	}
+	if selectList.IgnoreAllRow() {
+		rs.SetNullResult(uint64(length))
+		return nil
+	}
 	filePathVec := vector.GenerateFunctionStrParameter(ivecs[0])
 	contentVec := vector.GenerateFunctionStrParameter(ivecs[1])
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList.Contains(i) {
+			if err := rs.Append(int64(0), true); err != nil {
+				return err
+			}
+			continue
+		}
 		_filePath, null1 := filePathVec.GetStrValue(i)
 		if null1 {
 			if err := rs.Append(int64(0), true); err != nil {
@@ -6115,11 +6149,6 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 			continue
 		}
 		filePath := util.UnsafeBytesToString(_filePath)
-
-		dl, err := datalink.NewDatalink(filePath, proc)
-		if err != nil {
-			return err
-		}
 
 		_content, null2 := contentVec.GetStrValue(i)
 		if null2 {
@@ -6130,24 +6159,28 @@ func WriteFileDatalink(ivecs []*vector.Vector, result vector.FunctionResultWrapp
 		}
 		content := util.UnsafeBytesToString(_content)
 
+		dl, err := datalink.NewDatalink(filePath, proc)
+		if err != nil {
+			return err
+		}
+
 		err = func() error {
 			writer, err := dl.NewWriter(proc)
 			if err != nil {
 				return err
 			}
 
-			defer writer.Close()
-
 			n, err := writer.Write([]byte(content))
 			if err != nil {
+				writer.Abort(err)
 				return err
 			}
 
-			if err = rs.Append(int64(n), false); err != nil {
+			if err = writer.Close(); err != nil {
 				return err
 			}
 
-			return nil
+			return rs.Append(int64(n), false)
 		}()
 
 		if err != nil {
@@ -14067,6 +14100,29 @@ func GroupingFunc(parameters []*vector.Vector,
 			power++
 		}
 		rs.AppendMustValue(ans)
+	}
+	return nil
+}
+
+// CheckAsyncDatalinkSource validates only final rows eligible for a database write.
+// NULLs and inactive targets pass without resolving stage metadata or opening I/O.
+func CheckAsyncDatalinkSource(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	rs := vector.MustFunctionResult[bool](result)
+	values := vector.GenerateFunctionStrParameter(ivecs[0])
+	eligible := vector.GenerateFunctionFixedTypeParameter[bool](ivecs[1])
+	for i := uint64(0); i < uint64(length); i++ {
+		active, inactive := eligible.GetValue(i)
+		if !selectList.Contains(i) && !inactive && active {
+			value, null := values.GetStrValue(i)
+			if !null {
+				if err := datalink.ValidateAsyncDatalinkSource(string(value), proc); err != nil {
+					return err
+				}
+			}
+		}
+		if err := rs.Append(true, false); err != nil {
+			return err
+		}
 	}
 	return nil
 }

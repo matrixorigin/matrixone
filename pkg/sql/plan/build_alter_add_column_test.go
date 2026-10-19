@@ -174,3 +174,21 @@ func TestCheckIndexedColumnTypeChangeGeometry(t *testing.T) {
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "GEOMETRY column 'id' cannot be in primary key")
 }
+
+func TestDropColumnAfterDroppingPrimaryKeyInSameAlter(t *testing.T) {
+	t.Run("previous action removed primary key", func(t *testing.T) {
+		tableDef := &TableDef{Pkey: nil}
+		require.NoError(t, handleDropColumnWithPrimaryKey(context.Background(), "b", tableDef))
+		require.Nil(t, tableDef.Pkey)
+	})
+
+	t.Run("unrelated dropped column retains existing primary key", func(t *testing.T) {
+		tableDef := &TableDef{
+			Pkey: &plan.PrimaryKeyDef{Names: []string{"id"}, PkeyColName: "id"},
+			Cols: []*ColDef{{Name: "id"}, {Name: "b"}},
+		}
+		require.NoError(t, handleDropColumnWithPrimaryKey(context.Background(), "b", tableDef))
+		require.Equal(t, []string{"id"}, tableDef.Pkey.Names)
+		require.Equal(t, "id", tableDef.Pkey.PkeyColName)
+	})
+}

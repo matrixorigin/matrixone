@@ -37,7 +37,7 @@ func TestJSONGroupConcatLoweredDescriptorProtocol(t *testing.T) {
 				t.Run(fmt.Sprintf("merge%t/distinct%t/%s", merge, distinct, oid), func(t *testing.T) {
 					c, client := expressionProtocolTestCompile(t)
 					rt := moruntime.ServiceRuntime(c.proc.GetService())
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
 					args := []*planpb.Expr{{Typ: oid.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}}
 					aggs := []aggexec.AggFuncExecExpression{aggexec.MakeAggFunctionExpression(aggexec.AggIdOfGroupConcat, distinct, args, nil)}
 					var op vm.Operator
@@ -55,9 +55,9 @@ func TestJSONGroupConcatLoweredDescriptorProtocol(t *testing.T) {
 					leaf := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
 					// A child pipeline must retain the descriptor's independent floor.
 					scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: leaf.NodeInfo, PreScopes: []*Scope{leaf}}
-					client.version = defines.MORPCVersion118
+					client.version = defines.MORPCVersion123
 					minimum := int64(0)
-					data, err := encodeRemoteScopeWithVectorProtocol(scope, c.proc, &minimum)
+					data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &minimum)
 					require.NoError(t, err)
 					p := new(pipeline.Pipeline)
 					require.NoError(t, p.Unmarshal(data))
@@ -66,18 +66,18 @@ func TestJSONGroupConcatLoweredDescriptorProtocol(t *testing.T) {
 					affected := oid == types.T_json
 					require.Equal(t, affected, features.JSONOpaqueTextContracts)
 					if affected {
-						require.Equal(t, defines.MORPCVersion118, minimum)
-						client.version = defines.MORPCVersion117
+						require.Equal(t, defines.MORPCVersion123, minimum)
+						client.version = defines.MORPCVersion122
 						_, sendErr := encodeRemoteScope(scope, c.proc)
-						require.ErrorContains(t, sendErr, "version 118")
-						rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
-						require.ErrorContains(t, validateRemoteAggregateProtocol(c.proc, aggs), "version 118")
-						require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 118")
+						require.ErrorContains(t, sendErr, "version 123")
+						rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
+						require.ErrorContains(t, validateRemoteAggregateProtocol(c.proc, aggs), "version 123")
+						require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 123")
 						_, receiveErr := decodeScope(data, c.proc, true, nil)
-						require.ErrorContains(t, receiveErr, "version 118")
+						require.ErrorContains(t, receiveErr, "version 123")
 					} else {
 						require.Zero(t, minimum)
-						client.version = defines.MORPCVersion117
+						client.version = defines.MORPCVersion122
 						_, sendErr := encodeRemoteScope(scope, c.proc)
 						require.NoError(t, sendErr)
 					}

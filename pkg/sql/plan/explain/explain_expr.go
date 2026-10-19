@@ -183,6 +183,12 @@ func describeExpr(ctx context.Context, expr *plan.Expr, options *ExplainOptions,
 	case *plan.Expr_Sub:
 		subqryExpr := expr.Expr.(*plan.Expr_Sub)
 		buf.WriteString("subquery nodeId = " + strconv.FormatInt(int64(subqryExpr.Sub.NodeId), 10))
+	case *plan.Expr_Dependent:
+		d := exprImpl.Dependent
+		buf.WriteString("dependent program=" + strconv.FormatUint(uint64(d.ProgramId), 10) + " occurrence=" + strconv.FormatUint(uint64(d.OccurrenceId), 10) + " reducer=" + d.Reducer.String())
+	case *plan.Expr_Slot:
+		s := exprImpl.Slot
+		buf.WriteString("slot[" + strconv.FormatUint(uint64(s.ProgramId), 10) + "," + strconv.FormatUint(uint64(s.Ordinal), 10) + "]")
 	case *plan.Expr_Corr:
 		buf.WriteString("#[")
 		buf.WriteString(strconv.FormatInt(int64(exprImpl.Corr.RelPos), 10))
@@ -670,7 +676,20 @@ func funcExprExplain(ctx context.Context, funcExpr *plan.Function, Typ *plan.Typ
 		}
 		buf.WriteString(")")
 	case function.UNKNOW_KIND_FUNCTION:
-		return moerr.NewInvalidInput(ctx, "explain contains UNKNOW_KIND_FUNCTION")
+		// Only the sequence functions (NEXTVAL/SETVAL/CURRVAL/LASTVAL) use
+		// this layout. They are ordinary calls from EXPLAIN's point of view;
+		// failing here rejected valid DISTINCT/GROUP BY plans (#30366).
+		buf.WriteString(funcExpr.Func.GetObjName() + "(")
+		for i := range funcExpr.Args {
+			if i > 0 {
+				buf.WriteString(",")
+			}
+			err = describeExpr(ctx, funcExpr.Args[i], options, buf)
+			if err != nil {
+				return err
+			}
+		}
+		buf.WriteString(")")
 	}
 	return nil
 }

@@ -90,29 +90,39 @@ type Options struct {
 
 // StatementOption statement execute option.
 type StatementOption struct {
-	waitPolicy               lock.WaitPolicy
-	accountId                uint32
-	hasAccountID             bool
-	roleId                   uint32
-	userId                   uint32
-	disableLog               bool
-	ignoreForeignKey         bool
-	ignorePublish            bool
-	ignoreCheckExperimental  bool
-	params                   []string
-	paramNulls               []bool
-	preparedParamValues      []ParamValue
-	alterCopyOpt             *plan.AlterCopyOpt
-	prePipelineLockTableID   uint64
-	disableDropAutoIncrement bool
-	skipDataBranchReclaim    bool
-	keepAutoIncrement        uint64
-	keepLogicalId            uint64
-	keepRelKind              string
-	hasKeepRelKind           bool
-	disableLock              bool
-	allowMoColumnsUpdate     bool
-	optimizerHints           string
+	waitPolicy   lock.WaitPolicy
+	accountId    uint32
+	hasAccountID bool
+	roleId       uint32
+	userId       uint32
+	// accountName and roleName carry the trusted session identity for
+	// synchronous child SQL.  Numeric account/role overrides above remain
+	// catalog execution scope and must not be used as SQL file authority.
+	accountName               string
+	roleName                  string
+	disableLog                bool
+	ignoreForeignKey          bool
+	ignorePublish             bool
+	ignoreCheckExperimental   bool
+	params                    []string
+	paramNulls                []bool
+	preparedParamValues       []ParamValue
+	alterCopyOpt              *plan.AlterCopyOpt
+	prePipelineLockTableID    uint64
+	disableDropAutoIncrement  bool
+	skipDataBranchReclaim     bool
+	keepAutoIncrement         uint64
+	keepLogicalId             uint64
+	keepRelKind               string
+	hasKeepRelKind            bool
+	skipIndexTaskRegistration bool
+	disableLock               bool
+	allowMoColumnsUpdate      bool
+	optimizerHints            string
+	// trustedCheckConstraintNames lets an internal CREATE keep CHECK names it
+	// inherited from an owned source (ALTER ... COPY replica, partition backing
+	// table, TRUNCATE recreate) instead of tripping the 3822 sibling scan.
+	trustedCheckConstraintNames bool
 }
 
 // Result exec sql result

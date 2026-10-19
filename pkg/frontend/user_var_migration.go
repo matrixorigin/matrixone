@@ -166,7 +166,10 @@ func (ses *Session) snapshotSessionSystemVars(ctx context.Context) ([]*query.Mig
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
-		value, err := ses.GetSessionSysVar(name)
+		value, handled, err := databaseDefaultSystemVariableWithContext(ctx, ses, name)
+		if !handled {
+			value, err = ses.GetSessionSysVar(name)
+		}
 		if err != nil {
 			return nil, err
 		}

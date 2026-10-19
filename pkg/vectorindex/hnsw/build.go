@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"sync"
 	"sync/atomic"
 
@@ -315,7 +314,7 @@ func (h *HnswBuild[T]) addVector(key int64, vec []T) error {
 // generations; buildTS is the transaction SnapshotTS (physical) the content was built from, i.e.
 // the base-table version this generation reflects. provenance says whether the metadata table
 // carries the nrow/build_ts columns yet -- see sqlexec.HasProvenanceColumns.
-func (h *HnswBuild[T]) ToInsertSql(ts int64, buildTS int64, provenance bool) ([]string, error) {
+func (h *HnswBuild[T]) PreparePersistence(ts int64, buildTS int64, provenance bool) ([]string, error) {
 
 	// Surface any worker error from the multi-threaded build. Without this a worker
 	// that failed on the last queued vector (after Add already returned nil) would be
@@ -332,32 +331,36 @@ func (h *HnswBuild[T]) ToInsertSql(ts int64, buildTS int64, provenance bool) ([]
 
 	metas := make([]string, 0, len(h.indexes))
 	for _, idx := range h.indexes {
-		indexsqls, err := idx.ToSql(h.tblcfg)
-		if err != nil {
+		if err := idx.PreparePersistence(); err != nil {
 			return nil, err
 		}
-
-		sqls = append(sqls, indexsqls...)
 
 		//os.Stderr.WriteString(fmt.Sprintf("Sql: %s\n", sql))
-		chksum, err := vectorindex.CheckSum(idx.Path)
-		if err != nil {
-			return nil, err
+		if idx.FileSize == 0 {
+			continue
 		}
-
-		finfo, err := os.Stat(idx.Path)
-		if err != nil {
-			return nil, err
-		}
-		fs := finfo.Size()
+		chksum, fs := idx.Checksum, idx.FileSize
 
 		metas = append(metas, catalog.IndexMetadataRow(provenance, idx.Id, chksum, ts, fs, idx.Len.Load(), buildTS))
 	}
 
+	if len(metas) == 0 {
+		return nil, nil
+	}
 	metasql := catalog.IndexMetadataInsertSql(h.tblcfg.DbName, h.tblcfg.MetadataTable, provenance, metas)
 
 	sqls = append(sqls, metasql)
 	return sqls, nil
+}
+
+// PersistChunks runs only after preparation and any device admission succeeds.
+func (h *HnswBuild[T]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+	for _, idx := range h.indexes {
+		if err := idx.PersistChunks(writer); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (h *HnswBuild[T]) GetIndexes() []*HnswModel[T] {

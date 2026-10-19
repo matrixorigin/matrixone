@@ -174,6 +174,13 @@ func (d *localCTEDomain) admitConsumer(root int32) error {
 		case plan.Node_WINDOW:
 			windowed = true
 		case plan.Node_UNION_ALL:
+			for _, child := range n.Children {
+				probe := &localCTEDomain{builder: d.builder, nodes: make(map[int32]bool)}
+				probe.collect(child)
+				if !probe.needsDomain(child) {
+					return d.unsupported("consumer UNION ALL arm has no replay identity")
+				}
+			}
 			branched = true
 		case plan.Node_JOIN:
 			for _, on := range n.OnList {
