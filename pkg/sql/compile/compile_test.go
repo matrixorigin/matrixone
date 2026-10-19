@@ -1289,27 +1289,56 @@ func TestCompileLockRejectsOptimisticNonBlockingBeforeScopeExecution(t *testing.
 }
 
 func TestCompileRejectsOptimisticNonBlockingBeforeScopeConstruction(t *testing.T) {
-	c := NewMockCompile(t)
-	ctrl := gomock.NewController(t)
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Optimistic}).AnyTimes()
-	c.proc.Base.TxnOperator = txnOp
-
-	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		StmtType: plan.Query_SELECT,
-		Nodes: []*plan.Node{{
-			NodeType: plan.Node_LOCK_OP,
-			LockTargets: []*plan.LockTarget{{
-				TableId: 42, Mode: lockpb.LockMode_Shared, SkipLocked: true,
-			}},
-		}},
-	}}}
-
-	err := c.Compile(context.Background(), queryPlan, nil)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
-	require.Nil(t, c.scopes, "rejection must happen before constructing any source scopes")
-	require.Nil(t, c.cnList, "rejection must happen before scheduling remote workers")
+	for _, mode := range []struct {
+		name       string
+		noWait     bool
+		skipLocked bool
+	}{{name: "NOWAIT", noWait: true},
+		{name: "SKIP alone", skipLocked: true}} {
+		for _, tc := range []struct {
+			name                                    string
+			optimistic, disabled, coarse, coarseEnd bool
+			message                                 string
+		}{
+			{name: "optimistic", optimistic: true, message: "pessimistic transaction"},
+			{name: "disabled", disabled: true, message: "physical lock admission"},
+			{name: "coarse", coarse: true, message: "exact row lock targets"},
+			{name: "coarse at EOF", coarseEnd: true, message: "exact row lock targets"},
+		} {
+			for _, correlated := range []bool{false, true} {
+				shape := "ordinary"
+				if correlated {
+					shape = "dependent"
+				}
+				t.Run(mode.name+"/"+tc.name+"/"+shape, func(t *testing.T) {
+					c := NewMockCompile(t)
+					c.disableLock = tc.disabled
+					ctrl := gomock.NewController(t)
+					txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+					txnMode := txn.TxnMode_Pessimistic
+					if tc.optimistic {
+						txnMode = txn.TxnMode_Optimistic
+					}
+					txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txnMode}).AnyTimes()
+					c.proc.Base.TxnOperator = txnOp
+					target := &plan.LockTarget{TableId: 42, Mode: lockpb.LockMode_Shared, NoWait: mode.noWait, SkipLocked: mode.skipLocked, LockTable: tc.coarse, LockTableAtTheEnd: tc.coarseEnd}
+					query := &plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{NodeType: plan.Node_LOCK_OP, LockTargets: []*plan.LockTarget{target}}}}
+					if correlated {
+						query.Correlation = &plan.CorrelationSpec{Programs: []*plan.CorrelationProgram{{RootNode: 0}}}
+					}
+					queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+					err := c.Compile(context.Background(), queryPlan, nil)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+					require.ErrorContains(t, err, tc.message)
+					require.Nil(t, c.scopes, "rejection must precede source construction")
+					require.Nil(t, c.cnList, "rejection must precede remote scheduling")
+					require.Empty(t, c.lockTables)
+					require.Same(t, target, query.Nodes[0].LockTargets[0])
+				})
+			}
+		}
+	}
 }
 
 func TestCompileLockDisabledSkipsAllStatementLocks(t *testing.T) {

@@ -8601,12 +8601,15 @@ func TestSelectLockPoliciesReachOnlyTheirQueryBlockTargets(t *testing.T) {
 		sql        string
 		mode       lockpb.LockMode
 		noWait     bool
+		correlated bool
 		skipLocked bool
 	}{
 		{name: "ordinary share", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE", mode: lockpb.LockMode_Shared},
 		{name: "update nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR UPDATE NOWAIT", mode: lockpb.LockMode_Exclusive, noWait: true},
 		{name: "share nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT", mode: lockpb.LockMode_Shared, noWait: true},
+		{name: "correlated nowait", sql: "SELECT N_NATIONKEY FROM NATION WHERE N_NATIONKEY=1 AND N_NATIONKEY=(SELECT (SELECT NATION.N_NATIONKEY)) FOR SHARE NOWAIT", mode: lockpb.LockMode_Shared, noWait: true, correlated: true},
 		{name: "share skip locked", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE SKIP LOCKED", mode: lockpb.LockMode_Shared, skipLocked: true},
+		{name: "correlated skip", sql: "SELECT CAST(N_NATIONKEY AS CHAR CHARACTER SET binary) FROM NATION WHERE N_NATIONKEY=(SELECT (SELECT NATION.N_NATIONKEY)) ORDER BY N_NATIONKEY LIMIT 1 OFFSET 1 FOR SHARE SKIP LOCKED", mode: lockpb.LockMode_Shared, skipLocked: true, correlated: true},
 		{
 			name:   "nested clause does not leak to outer target",
 			sql:    "SELECT N_NATIONKEY FROM NATION WHERE N_NATIONKEY IN (SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT)",
@@ -8619,6 +8622,9 @@ func TestSelectLockPoliciesReachOnlyTheirQueryBlockTargets(t *testing.T) {
 			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			logicPlan, err := runOneStmt(mock, t, test.sql)
 			require.NoError(t, err)
+			if test.correlated {
+				require.NotNil(t, logicPlan.GetQuery().Correlation, "the regression must reach the dependent compiler")
+			}
 
 			var targets []*plan.LockTarget
 			for _, node := range logicPlan.GetQuery().Nodes {

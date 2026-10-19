@@ -9544,19 +9544,14 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	// MergeRun can start a source. Waiting until LockOp.Prepare is too late for
 	// coordinator plans: MergeRun may start PreScopes before preparing its root
 	// operator. Keep the runtime guard as defense against malformed remote plans.
-	if err := validateNonBlockingLockTargets(c.proc, node.LockTargets); err != nil {
+	if err := c.validateNonBlockingLockTargets(node.LockTargets); err != nil {
 		return nil, err
 	}
 
 	if c.disableLock {
-		for _, target := range node.LockTargets {
-			if target.GetNoWait() || target.GetSkipLocked() {
-				return nil, moerr.NewNotSupportedNoCtx(
-					"NOWAIT and SKIP LOCKED require physical lock admission")
-			}
-		}
 		return ss, nil
 	}
+
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
 	coordinatorLock := false
 	localizeLockPlan := c.loadUniqueIndexPromotion != nil || c.prePipelineLockTableID != 0
@@ -9574,10 +9569,6 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 			continue
 		}
 		if canonicalTarget.GetNoWait() || canonicalTarget.GetSkipLocked() {
-			if canonicalTarget.GetLockTable() || canonicalTarget.GetLockTableAtTheEnd() {
-				return nil, moerr.NewNotSupportedNoCtx(
-					"NOWAIT and SKIP LOCKED require exact row lock targets")
-			}
 			coordinatorLock = true
 		}
 		if filterPromotedRows && c.loadUniqueIndexPromotion.coversRowTarget(canonicalTarget) {
@@ -9660,25 +9651,33 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	return ss, nil
 }
 
-func validateNonBlockingLockTargets(proc *process.Process, targets []*plan.LockTarget) error {
+// Dependent query kernels construct LockOps without compileLock. Enforce the
+// same admission contract before either physical compiler can publish sources.
+func (c *Compile) validateNonBlockingLockTargets(targets []*plan.LockTarget) error {
 	for _, target := range targets {
 		if target == nil || (!target.GetNoWait() && !target.GetSkipLocked()) {
 			continue
 		}
-		if proc == nil {
+		if c.proc == nil {
 			return moerr.NewNotSupportedNoCtx(
 				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
 		}
-		txnOp := proc.GetTxnOperator()
+		txnOp := c.proc.GetTxnOperator()
 		if txnOp == nil || !txnOp.Txn().IsPessimistic() {
 			return moerr.NewNotSupportedNoCtx(
 				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
+		}
+		if c.disableLock {
+			return moerr.NewNotSupportedNoCtx("NOWAIT and SKIP LOCKED require physical lock admission")
+		}
+		if target.GetLockTable() || target.GetLockTableAtTheEnd() {
+			return moerr.NewNotSupportedNoCtx("NOWAIT and SKIP LOCKED require exact row lock targets")
 		}
 	}
 	return nil
 }
 
-func validateNonBlockingLockPlan(proc *process.Process, logicalPlan *plan.Plan) error {
+func (c *Compile) validateNonBlockingLockPlan(logicalPlan *plan.Plan) error {
 	if logicalPlan == nil || logicalPlan.GetQuery() == nil {
 		return nil
 	}
@@ -9686,7 +9685,7 @@ func validateNonBlockingLockPlan(proc *process.Process, logicalPlan *plan.Plan) 
 		if node == nil {
 			continue
 		}
-		if err := validateNonBlockingLockTargets(proc, node.GetLockTargets()); err != nil {
+		if err := c.validateNonBlockingLockTargets(node.GetLockTargets()); err != nil {
 			return err
 		}
 	}

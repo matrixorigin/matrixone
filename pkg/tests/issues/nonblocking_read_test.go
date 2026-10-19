@@ -119,6 +119,7 @@ func TestNoWaitAcrossCNs(t *testing.T) {
 		lockReadExec(t, ctx, reader, "UPDATE t SET v=21 WHERE id=2")
 		for _, mode := range []string{"UPDATE", "SHARE"} {
 			lockReadNoWait(t, ctx, reader, "SELECT id FROM t WHERE id=1 FOR "+mode+" NOWAIT")
+			lockReadNoWait(t, ctx, reader, "SELECT id FROM t WHERE id=1 AND id=(SELECT (SELECT t.id)) FOR "+mode+" NOWAIT")
 			func() {
 				stmt, err := reader.PrepareContext(ctx, "SELECT id FROM t WHERE id=? FOR "+mode+" NOWAIT")
 				require.NoError(t, err)
@@ -157,6 +158,7 @@ func TestShareSkipLockedAcrossCNs(t *testing.T) {
 		lockReadExec(t, ctx, reader, "BEGIN")
 		require.Equal(t, []int{2, 3}, lockReadInts(t, ctx, reader, "SELECT CAST(id AS CHAR CHARACTER SET binary) FROM t ORDER BY id LIMIT 2 FOR SHARE SKIP LOCKED"))
 		require.Equal(t, []int{3}, lockReadInts(t, ctx, reader, "SELECT id FROM t ORDER BY id LIMIT 1 OFFSET 1 FOR SHARE SKIP LOCKED"))
+		require.Equal(t, []int{3}, lockReadInts(t, ctx, reader, "SELECT CAST(id AS CHAR CHARACTER SET binary) FROM t WHERE id=(SELECT (SELECT t.id)) ORDER BY id LIMIT 1 OFFSET 1 FOR SHARE SKIP LOCKED"))
 		lockReadExec(t, ctx, probe, "BEGIN")
 		for _, id := range []int{2, 3} {
 			lockReadNoWait(t, ctx, probe, fmt.Sprintf("SELECT id FROM t WHERE id=%d FOR UPDATE NOWAIT", id))
