@@ -17,12 +17,14 @@ package compile
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
@@ -177,7 +179,7 @@ func TestTransactionLocalReplacementRequiresBothGenerations(t *testing.T) {
 }
 
 func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
-	for _, mode := range []string{"unknown_binding", "stable_binding", "changed_domain", "canceled", "ctas_refresh"} {
+	for _, mode := range []string{"unknown_binding", "stable_binding", "changed_domain", "canceled", "ctas_refresh", "unsupported_temporal", "unsupported_ctas", "unsupported_temporary_ctas", "ctas_rollback"} {
 		t.Run(mode, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
@@ -190,7 +192,11 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			op.EXPECT().Txn().DoAndReturn(func() txn.TxnMeta {
 				return txn.TxnMeta{Mode: txn.TxnMode_Pessimistic, Isolation: txn.TxnIsolation_RC, SnapshotTS: now}
 			}).AnyTimes()
-			op.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{LockTables: []lock.LockTable{{Table: 33, Valid: true}}}, nil).AnyTimes()
+			snapshot := txn.CNTxnSnapshot{LockTables: []lock.LockTable{{Table: 33, Valid: true}}}
+			if strings.HasPrefix(mode, "unsupported_") {
+				snapshot.LockTables = nil
+			}
+			op.EXPECT().Snapshot().Return(snapshot, nil).AnyTimes()
 			op.EXPECT().TxnOptions().Return(txn.TxnOptions{}).AnyTimes()
 			op.EXPECT().CreateTS().Return(timestamp.Timestamp{}).AnyTimes()
 			op.EXPECT().AddWaitLock(gomock.Any(), gomock.Any(), gomock.Any()).Return(uint64(1)).AnyTimes()
@@ -222,13 +228,20 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			original := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_CREATE_TABLE, Definition: &plan.DataDefinition_CreateTable{CreateTable: q}}}}
 			var source tree.Statement
 			var planner *plan2.MockCompilerContext
-			if mode == "ctas_refresh" {
+			if mode == "ctas_refresh" || strings.HasPrefix(mode, "unsupported_") || mode == "ctas_rollback" {
 				var err error
-				source, err = parsers.ParseOne(t.Context(), dialect.MYSQL, "create table db.t as select a + 1 from select_test.bind_select", 1)
+				sql := "create table db.t as select a + 1 from select_test.bind_select"
+				if strings.HasPrefix(mode, "unsupported_") || mode == "ctas_rollback" {
+					sql = "create table db.t as select timestamp(granted_time) from mo_catalog.mo_role_privs"
+				}
+				if mode == "unsupported_temporary_ctas" {
+					sql = strings.Replace(sql, "create table", "create temporary table", 1)
+				}
+				source, err = parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 				require.NoError(t, err)
 				defer source.Free()
 				planner = plan2.NewMockCompilerContext(true, testutil.NewProcess(t))
-				original, err = plan2.BuildPlan(planner, source, false)
+				original, err = plan2.BuildPlan(planner, source, mode == "unsupported_temporal")
 				require.NoError(t, err)
 			}
 			builds := 0
@@ -254,9 +267,26 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 				proc.Ctx = ctx
 				proc.ReplaceTopCtx(ctx)
 			}
+			if strings.HasPrefix(mode, "unsupported_") || mode == "ctas_rollback" {
+				rt := moruntime.ServiceRuntime(proc.GetService())
+				old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+				t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
+				if mode == "ctas_rollback" {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
+				} else {
+					eng.dbErr = errors.New("catalog accessed before temporal admission")
+				}
+			}
 			err := c.Compile(proc.Ctx, original, nil)
 			got := c.GetPlan()
 			switch mode {
+			case "unsupported_temporal", "unsupported_ctas", "unsupported_temporary_ctas":
+				require.ErrorContains(t, err, "version 122")
+				require.NotErrorIs(t, err, eng.dbErr, "unsupported CTAS must not access catalog names")
+				require.Zero(t, builds)
+				require.Zero(t, advances)
+				require.Zero(t, locks)
 			case "canceled":
 				require.ErrorIs(t, err, context.Canceled)
 				require.Zero(t, builds)
@@ -280,6 +310,13 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			if mode == "ctas_refresh" {
 				require.Equal(t, "a + 1", got.GetDdl().GetCreateTable().TableDef.Cols[0].Name)
 				require.Equal(t, original.GetDdl().GetCreateTable().CreateAsSelectSql, got.GetDdl().GetCreateTable().CreateAsSelectSql)
+			}
+			if mode == "ctas_rollback" {
+				before := locks
+				moruntime.ServiceRuntime(proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
+				_, runErr := c.Run(0)
+				require.ErrorContains(t, runErr, "version 122")
+				require.Equal(t, before, locks)
 			}
 			// No workspace rollback, statement increment or token cancellation method
 			// is expected on these mocks: planning is not an execution retry.

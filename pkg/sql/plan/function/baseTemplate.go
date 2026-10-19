@@ -66,7 +66,7 @@ type templateDec interface {
 }
 
 type templateDecOut interface {
-	types.Decimal64 | types.Decimal128 | types.Decimal256 | int64
+	types.Decimal64 | types.Decimal128 | types.Decimal256 | int64 | uint64
 }
 
 // decimalBatchArith is the batch arithmetic framework for all Decimal types.
