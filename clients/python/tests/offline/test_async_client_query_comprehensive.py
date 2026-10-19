@@ -247,6 +247,7 @@ class TestAsyncClientConnection(unittest.IsolatedAsyncioTestCase):
         class MockEngine:
             def __init__(self, connection):
                 self.connection = connection
+                self.dialect = Mock()
 
             def begin(self):
                 return MockBeginContext(self.connection)

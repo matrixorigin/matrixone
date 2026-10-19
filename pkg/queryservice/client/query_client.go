@@ -25,6 +25,8 @@ import (
 )
 
 var methodVersions = map[pb.CmdMethod]int64{
+	pb.CmdMethod_KillSession:           defines.MORPCVersion120,
+	pb.CmdMethod_DisconnectSession:     defines.MORPCVersion120,
 	pb.CmdMethod_ShowProcessList:       defines.MORPCVersion1,
 	pb.CmdMethod_AlterAccount:          defines.MORPCVersion1,
 	pb.CmdMethod_KillConn:              defines.MORPCVersion1,
@@ -124,7 +126,7 @@ func (c *queryClient) SendMessage(ctx context.Context, address string, req *pb.R
 	if address == "" {
 		return nil, moerr.NewInternalErrorf(ctx, "invalid CN query address %s", address)
 	}
-	if err := checkMethodVersion(ctx, c.serviceID, req); err != nil {
+	if err := CheckMethodVersion(ctx, c.serviceID, req); err != nil {
 		return nil, err
 	}
 	f, err := c.client.Send(ctx, address, req)
@@ -171,6 +173,8 @@ func (c *queryClient) unwrapResponseError(resp *pb.Response) (*pb.Response, erro
 	return resp, nil
 }
 
-func checkMethodVersion(ctx context.Context, service string, req *pb.Request) error {
+// CheckMethodVersion validates the current service protocol for a query RPC.
+// Senders and effectful receivers share the same method requirements.
+func CheckMethodVersion(ctx context.Context, service string, req *pb.Request) error {
 	return runtime.CheckMethodVersion(ctx, service, methodVersions, req)
 }
