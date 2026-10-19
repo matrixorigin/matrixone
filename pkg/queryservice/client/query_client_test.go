@@ -24,9 +24,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.uber.org/zap"
 )
 
 func testCreateQueryClient(t *testing.T) QueryClient {
@@ -173,10 +175,6 @@ func TestMongoDBClientRetireRequiresProtocolVersion5(t *testing.T) {
 	assert.Equal(t, defines.MORPCVersion5, methodVersions[query.CmdMethod_MongoDBClientRetire])
 }
 
-func TestGetPythonUdfStatusRequiresProtocolVersion118(t *testing.T) {
-	assert.Equal(t, defines.MORPCVersion119, methodVersions[query.CmdMethod_GetPythonUdfStatus])
-}
-
 // The name says 54 because that is the contract: the protocol RefreshSessionAuth shipped with.
 func TestRefreshSessionAuthRequiresProtocolVersion54(t *testing.T) {
 	// A method's entry in methodVersions records the protocol it SHIPPED with, not whatever is
@@ -257,16 +255,24 @@ func TestUnwrapResponseError(t *testing.T) {
 
 func TestSessionControlProtocol(t *testing.T) {
 	sid := "session-control-version"
-	rt := runtime.DefaultRuntime()
+	rt := runtime.NewRuntime(metadata.ServiceType_CN, sid, zap.NewNop())
 	runtime.SetupServiceBasedRuntime(sid, rt)
 	t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
-	for _, method := range []query.CmdMethod{query.CmdMethod_KillSession, query.CmdMethod_DisconnectSession} {
-		req := &query.Request{CmdMethod: method}
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion119)
+	for _, test := range []struct {
+		method query.CmdMethod
+		floor  int64
+	}{
+		{query.CmdMethod_KillSession, defines.MORPCVersion120},
+		{query.CmdMethod_DisconnectSession, defines.MORPCVersion120},
+		{query.CmdMethod_GetPythonUdfStatus, defines.MORPCVersion121},
+	} {
+		require.Equal(t, test.floor, methodVersions[test.method])
+		req := &query.Request{CmdMethod: test.method}
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, test.floor-1)
 		require.Error(t, CheckMethodVersion(context.Background(), sid, req))
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion120)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, test.floor)
 		require.NoError(t, CheckMethodVersion(context.Background(), sid, req))
-		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion119)
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, test.floor-1)
 		require.Error(t, CheckMethodVersion(context.Background(), sid, req))
 	}
 	request := &query.Request{CmdMethod: query.CmdMethod_KillSession, KillSessionRequest: &query.KillSessionRequest{ConnID: 1<<32 + 7, KillConnection: true, StatementID: "stmt", Principal: &query.KillSessionPrincipal{AccountID: 10, UserID: 20, Account: "acme", User: "alice", Role: "reader"}}}
@@ -281,7 +287,17 @@ func TestSessionControlProtocol(t *testing.T) {
 	decoded = query.Request{}
 	require.NoError(t, decoded.Unmarshal(data))
 	require.Equal(t, request, &decoded)
-	for _, response := range []*query.Response{{CmdMethod: query.CmdMethod_KillSession, KillSessionResponse: &query.KillSessionResponse{Found: true}}, {CmdMethod: query.CmdMethod_DisconnectSession, DisconnectSessionResponse: &query.DisconnectSessionResponse{}}} {
+	require.Equal(t, query.CmdMethod(45), query.CmdMethod_KillSession)
+	require.Equal(t, query.CmdMethod(46), query.CmdMethod_DisconnectSession)
+	require.Equal(t, query.CmdMethod(47), query.CmdMethod_CountCachedObjectFiles)
+	require.Equal(t, query.CmdMethod(48), query.CmdMethod_GetPythonUdfStatus)
+	request = &query.Request{CmdMethod: query.CmdMethod_GetPythonUdfStatus}
+	data, err = request.Marshal()
+	require.NoError(t, err)
+	decoded = query.Request{}
+	require.NoError(t, decoded.Unmarshal(data))
+	require.Equal(t, request, &decoded)
+	for _, response := range []*query.Response{{CmdMethod: query.CmdMethod_KillSession, KillSessionResponse: &query.KillSessionResponse{Found: true}}, {CmdMethod: query.CmdMethod_DisconnectSession, DisconnectSessionResponse: &query.DisconnectSessionResponse{}}, {CmdMethod: query.CmdMethod_GetPythonUdfStatus, GetPythonUdfStatus: query.GetPythonUdfStatusResponse{CNUUID: "cn", Ready: true}}} {
 		data, err = response.Marshal()
 		require.NoError(t, err)
 		var got query.Response
