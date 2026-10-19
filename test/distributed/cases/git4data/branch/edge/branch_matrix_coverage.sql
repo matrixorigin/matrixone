@@ -138,6 +138,12 @@ create table child(
 insert into child(parent_id, code, qty) values (1, 'base-a', 10.00), (2, 'base-b', 20.00);
 
 data branch create table child_branch from child;
+-- Ordinary branch creation uses ExecRestore internally, but must regenerate
+-- CHECK names without changing the source table's constraint identity.
+-- @regex("Check constraint 'child_branch_chk_1' is violated",true)
+insert into child_branch(parent_id, code, qty) values (1, 'bad-check', -1.00);
+-- @regex("Check constraint 'chk_qty' is violated",true)
+insert into child(parent_id, code, qty) values (1, 'bad-check', -1.00);
 update child_branch set qty = qty + 5 where code = 'base-a';
 insert into child_branch(parent_id, qty) values (2, 77.75);
 -- @regex("Column 'code' cannot be null",true)

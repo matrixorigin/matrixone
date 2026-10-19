@@ -100,13 +100,16 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 				warnings                    int
 				want                        [][3]int
 			}{
-				{"single", "unique(k), constraint chk_pos check(v>0)", "v*2", 1, [][3]int{{2, 5, 10}, {3, 8, 16}, {4, 999, 999}}},
-				{"multiple", "unique(k), constraint chk_pos check(v>0), constraint chk_upper check(v<7)", "v*2", 2, [][3]int{{2, 5, 10}, {4, 999, 999}}},
-				{"generated_composite", "g int generated always as (v*2) stored, unique(k,tag), constraint chk_gen check(g>0)", "g", 1, [][3]int{{2, 5, 10}, {3, 8, 16}, {4, 999, 999}}},
+				{"single", "unique(k), constraint %[1]s_chk_pos check(v>0)", "v*2", 1, [][3]int{{2, 5, 10}, {3, 8, 16}, {4, 999, 999}}},
+				{"multiple", "unique(k), constraint %[1]s_chk_pos check(v>0), constraint %[1]s_chk_upper check(v<7)", "v*2", 2, [][3]int{{2, 5, 10}, {4, 999, 999}}},
+				{"generated_composite", "g int generated always as (v*2) stored, unique(k,tag), constraint %[1]s_chk_gen check(g>0)", "g", 1, [][3]int{{2, 5, 10}, {3, 8, 16}, {4, 999, 999}}},
 			} {
 				t.Run(fmt.Sprintf("local_%t/%s", local, tc.name), func(t *testing.T) {
-					table := fmt.Sprintf("%s.t_%t_%d", database, local, index)
-					exec(t, "create table "+table+"(id int primary key,k varchar(20),tag int,v int,"+tc.definition+")")
+					// CHECK names are schema-scoped, and earlier case tables remain
+					// alive. Qualify fixture identities without weakening LOAD checks.
+					name := fmt.Sprintf("t_%t_%d", local, index)
+					table := database + "." + name
+					exec(t, "create table "+table+"(id int primary key,k varchar(20),tag int,v int,"+fmt.Sprintf(tc.definition, name)+")")
 					prefix := "load data "
 					if local {
 						prefix += "local "
