@@ -290,7 +290,7 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 }
 
 func informationSchemaCurrentColumnsDDL() string {
-	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsNativeUnicodeDDL())
+	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsWithMediumIntDDL())
 }
 
 // AdaptLegacyInformationSchemaColumnsDDL changes only the column authority of
@@ -303,6 +303,12 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	// stable when binding historical snapshots; re-deriving it would duplicate
 	// those branches and could change the persisted legacy projection.
 	if definition == InformationSchemaColumnsV100DDL() {
+		return definition, true
+	}
+	// V109 already has the derived View-column branches and native Unicode
+	// selectors. Keep this historical template byte-stable apart from the
+	// lowercase view-name normalization above.
+	if definition == InformationSchemaColumnsV109DDL() {
 		return definition, true
 	}
 	for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
@@ -319,9 +325,9 @@ func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 
 // IsInformationSchemaColumnsMigrationDDL reports whether a persisted COLUMNS
 // definition has the on-demand View-column migration needed by historical
-// snapshot binding. The protocol-100 definition intentionally keeps the
-// historical selector projection, while the protocol-109 definition adds the
-// native Unicode selectors; both definitions are safe migration gates.
+// snapshot binding. The protocol-100 definition and current definition are
+// migration gates; the historical protocol-109 definition is an input to the
+// adapter, not a migration gate.
 func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
 	definition = canonicalColumnsViewName(definition)
 	return definition == InformationSchemaColumnsV100DDL() ||
@@ -385,9 +391,17 @@ func InformationSchemaColumnsV100DDL() string {
 	return informationSchemaDerivedColumnsDDL(InformationSchemaColumnsV58DDL())
 }
 
+// InformationSchemaColumnsV109DDL is the exact pre-MEDIUMINT COLUMNS view
+// template. It includes native Unicode selectors and the derived View-column
+// branches, but keeps the historical DATA_TYPE mapping.
+func InformationSchemaColumnsV109DDL() string {
+	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsNativeUnicodeDDL())
+}
+
 // informationSchemaColumnsNativeUnicodeDDL extends the V58 selector
 // projection with the native UCA 4.0.0 identities introduced after the
-// historical protocol-100 view.
+// historical protocol-100 view. This function remains the frozen protocol-109
+// projection; newer DATA_TYPE mappings are layered on separately.
 func informationSchemaColumnsNativeUnicodeDDL() string {
 	return strings.NewReplacer(
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
@@ -395,6 +409,13 @@ func informationSchemaColumnsNativeUnicodeDDL() string {
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end) AS COLLATION_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' WHEN 4 then 'utf8_unicode_ci' WHEN 5 then 'utf8mb4_unicode_ci' else NULL end) AS COLLATION_NAME,",
 	).Replace(InformationSchemaColumnsV58DDL())
+}
+
+func informationSchemaColumnsWithMediumIntDDL() string {
+	return strings.NewReplacer(
+		"upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' ",
+		"upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' when upper(mo_show_visible_bin(mc.atttyp,3)) like 'MEDIUMINT%' then 'MEDIUMINT' ",
+	).Replace(informationSchemaColumnsNativeUnicodeDDL())
 }
 
 func informationSchemaSubscriptionViewAuthorizationPredicate() string {
