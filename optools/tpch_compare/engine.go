@@ -599,7 +599,8 @@ func referenceTextValues(root string, d Dataset, q Query, ref FileID, source ref
 			if bytes > captureMemory {
 				return nil, errors.New("reference text keys exceed their memory bound")
 			}
-			out[key] = nil
+			// A trimmed key may otherwise retain the entire padded reference line.
+			out[strings.Clone(key)] = nil
 		}
 	}
 	if err := scan.Err(); err != nil {
@@ -641,14 +642,19 @@ func referenceTextValues(root string, d Dataset, q Query, ref FileID, source ref
 			}
 			continue
 		}
-		bytes += int64(len(row)) * 32
-		for _, cell := range row {
+		retained := make(Row, len(row))
+		bytes += int64(len(retained)) * 32
+		for _, column := range source.columns {
+			cell := row[column]
+			// Retain only projected values, with storage matching the byte budget.
+			cell.Value = strings.Clone(cell.Value)
+			retained[column] = cell
 			bytes += int64(len(cell.Value))
 		}
 		if bytes > captureMemory {
 			return nil, errors.New("reference text values exceed their memory bound")
 		}
-		out[key] = row
+		out[strings.Clone(key)] = retained
 	}
 	return out, nil
 }
