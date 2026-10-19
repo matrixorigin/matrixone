@@ -66,6 +66,62 @@ func TestLoadPrimaryKeyValidationPlan(t *testing.T) {
 	}
 }
 
+func TestLoadPrimaryKeyValidationJoinOrientation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		spillMem int64
+		right    bool
+	}{
+		{"right map fits", 512 << 20, true},
+		{"left spill fallback", 1 << 20, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			proc.Base.Lim.Size = 2 << 30 // Budget the estimated keys, without allocating rows.
+			mock := NewMockOptimizer(true, proc)
+			pn, err := runOneStmt(mock, t, "load data inline format='csv', data='1,d,l' into table dept fields terminated by ','")
+			require.NoError(t, err)
+			qry := pn.GetQuery()
+			var check *planpb.Node
+			for _, n := range qry.Nodes {
+				if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP {
+					require.Nil(t, check)
+					check = n
+				}
+			}
+			require.NotNil(t, check)
+			// Restore logical roles before rerunning the real orientation passes.
+			if check.IsRightJoin {
+				check.Children[0], check.Children[1] = check.Children[1], check.Children[0]
+				check.IsRightJoin = false
+			}
+			// Runtime filters are generated after these passes. Remove that later
+			// physical dependency before changing the costing inputs and replaying.
+			check.RuntimeFilterBuildList = nil
+			check.RuntimeFilterProbeList = nil
+			target, input := check.Children[0], check.Children[1]
+			require.Equal(t, planpb.Node_TABLE_SCAN, qry.Nodes[target].NodeType)
+			require.Equal(t, planpb.Node_SINK_SCAN, qry.Nodes[input].NodeType)
+			qry.Nodes[target].Stats = &planpb.Stats{Outcnt: 100, Rowsize: 8}
+			qry.Nodes[input].Stats = &planpb.Stats{Outcnt: 1 << 20, Rowsize: 1 << 10}
+			builder := NewQueryBuilder(planpb.Query_INSERT, &mock.ctxt, false, true)
+			builder.qry = qry
+			builder.joinSpillMem = tc.spillMem
+			builder.determineBuildAndProbeSide(check.NodeId, false)
+			require.True(t, check.IsRightJoin, "costing chooses the smaller existing target")
+			builder.disableMemoryUnsafeRightDedup(check.NodeId)
+			require.Equal(t, tc.right, check.IsRightJoin)
+			builder.swapJoinChildren(check.NodeId)
+			want := []int32{target, input}
+			if tc.right {
+				want = []int32{input, target}
+			}
+			require.Equal(t, want, check.Children)
+			requireLoadValidationIndependentOfWrites(t, qry)
+		})
+	}
+}
+
 func TestLoadPrimaryKeyValidationFallback(t *testing.T) {
 	old := config.CNPrimaryCheck.Load()
 	t.Cleanup(func() { config.CNPrimaryCheck.Store(old) })

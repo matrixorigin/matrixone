@@ -449,11 +449,19 @@ func loadUniqueIndexPromotionTopology(qry *plan.Query, writer, lock, external in
 	}
 	check := loadPromotionSkipProjects(qry.Nodes, validation)
 	if check.NodeType != plan.Node_JOIN || check.JoinType != plan.Node_DEDUP ||
-		check.OnDuplicateAction != plan.Node_FAIL || len(check.Children) != 2 ||
-		!sharedScan(loadPromotionSkipProjects(qry.Nodes, check.Children[1])) {
+		check.OnDuplicateAction != plan.Node_FAIL || len(check.Children) != 2 {
 		return false
 	}
-	scan := loadPromotionSkipProjects(qry.Nodes, check.Children[0])
+	// swapJoinChildren exchanges the physical inputs for RIGHT DEDUP while
+	// retaining IsRightJoin. Resolve the logical roles before checking sources.
+	target, input := check.Children[0], check.Children[1]
+	if check.IsRightJoin {
+		target, input = input, target
+	}
+	if !sharedScan(loadPromotionSkipProjects(qry.Nodes, input)) {
+		return false
+	}
+	scan := loadPromotionSkipProjects(qry.Nodes, target)
 	base := qry.Nodes[lock].TableDef
 	return scan.NodeType == plan.Node_TABLE_SCAN && len(scan.Children) == 0 &&
 		base != nil && scan.TableDef != nil && scan.TableDef.TblId == base.TblId &&

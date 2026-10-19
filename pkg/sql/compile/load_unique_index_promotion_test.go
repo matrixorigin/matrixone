@@ -527,6 +527,26 @@ func TestAnalyzeLoadUniqueIndexPromotionSharedImage(t *testing.T) {
 		q.Steps = []int32{3, 8, 2} // Source step 0 resolves node 3, not node 0.
 		return pn
 	}
+	assertAdmission := func(t *testing.T, pn *plan.Plan, want bool) {
+		t.Helper()
+		for _, right := range []bool{false, true} {
+			if right {
+				check := pn.GetQuery().Nodes[7]
+				if len(check.Children) == 2 {
+					check.Children[0], check.Children[1] = check.Children[1], check.Children[0]
+				}
+				check.IsRightJoin = !check.IsRightJoin
+			}
+			targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks)
+			require.Equal(t, want, ok, "swapped orientation: %t", right)
+			if want {
+				require.Len(t, targets, 1)
+				original := pn.GetQuery().Nodes[1].LockTargets[1]
+				require.Equal(t, original, targets[0].rowTarget)
+				require.NotSame(t, original, targets[0].rowTarget)
+			}
+		}
+	}
 	for _, tc := range []struct {
 		name   string
 		mutate func(*plan.Query)
@@ -535,6 +555,13 @@ func TestAnalyzeLoadUniqueIndexPromotionSharedImage(t *testing.T) {
 		{"reordered steps", func(q *plan.Query) {
 			q.Steps = []int32{2, 3, 8}
 			q.Nodes[4].SourceStep[0], q.Nodes[5].SourceStep[0] = 1, 1
+		}},
+		{"validation projection wrappers", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes,
+				&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{6}},
+				&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{5}},
+			)
+			q.Nodes[7].Children = []int32{9, 10}
 		}},
 		{"projection wrappers", func(q *plan.Query) {
 			q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{4}})
@@ -551,12 +578,7 @@ func TestAnalyzeLoadUniqueIndexPromotionSharedImage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pn := newPlan()
 			tc.mutate(pn.GetQuery())
-			targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks)
-			require.True(t, ok)
-			require.Len(t, targets, 1)
-			original := pn.GetQuery().Nodes[1].LockTargets[1]
-			require.Equal(t, original, targets[0].rowTarget)
-			require.NotSame(t, original, targets[0].rowTarget)
+			assertAdmission(t, pn, true)
 		})
 	}
 	for _, tc := range []struct {
@@ -590,6 +612,10 @@ func TestAnalyzeLoadUniqueIndexPromotionSharedImage(t *testing.T) {
 		{"foreign validation identity", func(q *plan.Query) {
 			q.Nodes[6].ObjRef = &plan.ObjectRef{Obj: 99, ObjName: "other"}
 		}},
+		{"orientation flag without swapping", func(q *plan.Query) { q.Nodes[7].IsRightJoin = true }},
+		{"children swapped without orientation flag", func(q *plan.Query) {
+			q.Nodes[7].Children[0], q.Nodes[7].Children[1] = q.Nodes[7].Children[1], q.Nodes[7].Children[0]
+		}},
 		{"non FAIL validation", func(q *plan.Query) { q.Nodes[7].OnDuplicateAction = plan.Node_IGNORE }},
 		{"non DEDUP validation", func(q *plan.Query) { q.Nodes[7].JoinType = plan.Node_INNER }},
 		{"extra validation input", func(q *plan.Query) { q.Nodes[7].Children = append(q.Nodes[7].Children, 0) }},
@@ -613,8 +639,7 @@ func TestAnalyzeLoadUniqueIndexPromotionSharedImage(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			pn := newPlan()
 			tc.mutate(pn.GetQuery())
-			_, ok := analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks)
-			require.False(t, ok)
+			assertAdmission(t, pn, false)
 		})
 	}
 }
