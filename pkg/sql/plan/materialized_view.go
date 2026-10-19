@@ -208,19 +208,23 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 			return err
 		}
 		resolvedSources[materializedViewSourceKey(database, name)] = def
-		// CREATE resolves unqualified names in the defining session. Persist
-		// that binding in the refresh SQL so a later worker does not have to
-		// resolve the same spelling against an ambiguous set of databases.
-		source.SchemaName = tree.Identifier(database)
-		source.ExplicitSchema = true
 		version := def.Version
 		d.Sources = append(d.Sources, mvdefinition.Source{Relation: mvdefinition.Relation{Database: database, Name: name, DatabaseID: def.DbId, ID: def.TblId}, Version: &version})
+	}
+	// Source identities are deduplicated above, but every FROM/JOIN occurrence
+	// needs the database captured by CREATE, including aliases of the same table.
+	references, _ := materializedViewDefinitionSourceReferences(stmt.AsSource)
+	for _, source := range references {
+		if source.SchemaName == "" {
+			source.SchemaName = tree.Identifier(ctx.DefaultDatabase())
+		}
+		source.ExplicitSchema = true
 	}
 	// Re-render after source resolution so complete-refresh workers consume the
 	// same database binding accepted by CREATE, including cross-database joins.
 	d.RefreshSQL = materializedViewRefreshSQL(stmt.AsSource)
 	incrementalSpec := ""
-	unsupportedSourceCollation := false
+	unsupportedSourceReason := ""
 	if stmt.RefreshTiming == tree.MaterializedViewRefreshOnChange && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete {
 		var stateCols []*ColDef
 		var refreshSQL string
@@ -230,9 +234,9 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 			if err != nil {
 				return err
 			}
-			if !materializedViewIncrementalSourceTypesSupported(desc, resolvedSources) {
+			if reason := materializedViewIncrementalUnsupportedSourceReason(desc, resolvedSources); reason != "" {
 				incrementalSpec = ""
-				unsupportedSourceCollation = true
+				unsupportedSourceReason = reason
 			} else {
 				for _, col := range stateCols {
 					col.ColId = uint64(len(target.Cols))
@@ -247,8 +251,8 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 		}
 	}
 	if stmt.RefreshMethod == tree.MaterializedViewRefreshFast && incrementalSpec == "" {
-		if unsupportedSourceCollation {
-			return moerr.NewNotSupported(ctx.GetContext(), "materialized view FAST refresh is not supported: MV_FAST_UNSUPPORTED_SOURCE_COLLATION")
+		if unsupportedSourceReason != "" {
+			return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view FAST refresh is not supported: %s", unsupportedSourceReason)
 		}
 		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view FAST refresh is not supported: %s", materializedViewIncrementalUnsupportedReason(stmt.AsSource))
 	}
@@ -315,43 +319,54 @@ func materializedViewSourceKey(database, table string) string {
 	return strings.ToLower(database) + "\x00" + strings.ToLower(table)
 }
 
-// Delta VALUES transport and serial_full currently use raw string bytes. A
-// source column with collation-aware equality would change comparisons,
-// DISTINCT membership or state keys after a refresh, even when the output
-// group itself is an integer (for example CASE WHEN text = 'x').
-func materializedViewIncrementalSourceTypesSupported(
+// Delta VALUES transport and serial_full currently use raw bytes. A source
+// column with collation-aware equality can change comparisons or state keys;
+// a floating DISTINCT value can compare equal in SQL despite a different
+// signed-zero byte representation.
+func materializedViewIncrementalUnsupportedSourceReason(
 	desc *mvdefinition.Incremental,
 	sources map[string]*TableDef,
-) bool {
+) string {
 	if desc == nil {
-		return false
+		return "MV_FAST_UNSUPPORTED_SOURCE_TYPE"
 	}
 	if len(desc.Branches) > 0 {
 		for _, branch := range desc.Branches {
-			if !materializedViewIncrementalSourceTypesSupported(branch.Description, sources) {
-				return false
+			if reason := materializedViewIncrementalUnsupportedSourceReason(branch.Description, sources); reason != "" {
+				return reason
 			}
 		}
-		return true
+		return ""
 	}
 	def := sources[materializedViewSourceKey(desc.SourceDatabase, desc.SourceTable)]
 	if def == nil {
-		return false
+		return "MV_FAST_UNSUPPORTED_SOURCE_TYPE"
+	}
+	hasDistinct := false
+	for _, agg := range desc.Aggregates {
+		if agg.Kind == "count_distinct" || agg.Kind == "sum_distinct" || agg.Kind == "avg_distinct" {
+			hasDistinct = true
+			break
+		}
 	}
 	for _, name := range desc.SourceColumns {
 		found := false
 		for _, col := range def.Cols {
 			if col != nil && strings.EqualFold(col.Name, name) {
-				if !materializedViewIncrementalGroupTypeSupported(col.Typ) {
-					return false
+				if hasDistinct && (types.T(col.Typ.Id) == types.T_float32 || types.T(col.Typ.Id) == types.T_float64) {
+					return "MV_FAST_UNSUPPORTED_FLOAT_DISTINCT_KEY"
+				}
+				if !materializedViewIncrementalGroupTypeSupported(col.Typ) &&
+					types.T(col.Typ.Id) != types.T_float32 && types.T(col.Typ.Id) != types.T_float64 {
+					return "MV_FAST_UNSUPPORTED_SOURCE_COLLATION"
 				}
 				found = true
 				break
 			}
 		}
 		if !found {
-			return false
+			return "MV_FAST_UNSUPPORTED_SOURCE_TYPE"
 		}
 	}
-	return true
+	return ""
 }

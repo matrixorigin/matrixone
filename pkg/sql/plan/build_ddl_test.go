@@ -1962,7 +1962,13 @@ func TestMaterializedViewIncrementalSpecRequiresCompleteSemantics(t *testing.T) 
 			defer stmt.Free()
 			outputCols := make([]*ColDef, len(tc.outputs))
 			for i, name := range tc.outputs {
-				outputCols[i] = &ColDef{Name: name, Typ: Type{Id: int32(types.T_float64)}}
+				kind := types.T_float64 // aggregate output; not part of the state key
+				if name == "service" || name == "region" {
+					kind = types.T_varbinary
+				} else if name == "minute" {
+					kind = types.T_datetime
+				}
+				outputCols[i] = &ColDef{Name: name, Typ: Type{Id: int32(kind)}}
 			}
 			spec, stateCols, refreshSQL := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputCols, "__state")
 			assertSQL := strings.ReplaceAll(strings.ToLower(refreshSQL), "`", "")
@@ -2106,6 +2112,44 @@ func TestMaterializedViewIncrementalRejectsCollationAwareGroups(t *testing.T) {
 	require.Empty(t, encoded, "CHAR has PAD SPACE equality even with a binary charset")
 }
 
+func TestMaterializedViewIncrementalRejectsFloatingGroupKey(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select k, count(*) c from src group by k", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	for _, kind := range []types.T{types.T_float32, types.T_float64} {
+		outputs := []*ColDef{
+			{Name: "k", Typ: Type{Id: int32(kind)}},
+			{Name: "c", Typ: Type{Id: int32(types.T_int64)}},
+		}
+		encoded, _, _ := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputs)
+		require.Empty(t, encoded, "signed zero must not split a SQL group")
+	}
+}
+
+func TestMaterializedViewSourceReferencesKeepSelfJoins(t *testing.T) {
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"select a.id from src a join src b on a.id=b.id join db2.src c on a.id=c.id", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	refs, ok := materializedViewDefinitionSourceReferences(stmt.(*tree.Select))
+	require.True(t, ok)
+	require.Len(t, refs, 3)
+	sources, ok := materializedViewDefinitionSources(stmt.(*tree.Select), "db1")
+	require.True(t, ok)
+	require.Len(t, sources, 2)
+	for _, source := range refs {
+		if source.SchemaName == "" {
+			source.SchemaName = tree.Identifier("db1")
+		}
+		source.ExplicitSchema = true
+	}
+	refreshSQL := materializedViewRefreshSQL(stmt.(*tree.Select))
+	require.Contains(t, refreshSQL, "db1")
+	require.Equal(t, 2, strings.Count(refreshSQL, "`db1`.`src`"))
+	require.Equal(t, 1, strings.Count(refreshSQL, "`db2`.`src`"))
+}
+
 func TestMaterializedViewIncrementalChecksSourceCollation(t *testing.T) {
 	queries := []struct {
 		name string
@@ -2168,6 +2212,31 @@ func TestMaterializedViewIncrementalChecksSourceCollation(t *testing.T) {
 			require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_SOURCE_COLLATION")
 		})
 	}
+}
+
+func TestMaterializedViewIncrementalRejectsFloatingDistinctInput(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	for _, def := range mock.ctxt.tables {
+		def.DbName = "tpch"
+		def.DbId = 1
+	}
+	nation := mock.ctxt.tables["nation"]
+	require.NotNil(t, nation)
+	for _, col := range nation.Cols {
+		if col.Name == "n_name" {
+			col.Typ.Id = int32(types.T_float64)
+			break
+		}
+	}
+	query := "select n_regionkey k, count(distinct n_name) c from nation group by n_regionkey"
+	_, err := runOneStmt(mock, t, "create materialized view mv_bad refresh fast on change as "+query)
+	require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_FLOAT_DISTINCT_KEY")
+	p, err := runOneStmt(mock, t, "create materialized view mv_fallback refresh force on change as "+query)
+	require.NoError(t, err)
+	def := p.GetDdl().GetCreateView().GetTableDef()
+	mv, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
+	require.NoError(t, err)
+	require.Empty(t, mv.Incremental)
 }
 
 func TestMaterializedViewUnionAllIncrementalPlan(t *testing.T) {

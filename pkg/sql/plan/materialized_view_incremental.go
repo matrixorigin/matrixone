@@ -215,7 +215,14 @@ func buildMaterializedViewIncrementalBranchPlan(
 		}
 		agg := materializedViewIncrementalAggregate{Kind: name, OutputColumn: outputName}
 		if fn.Type == tree.FUNC_TYPE_DISTINCT {
-			if (name != "count" && name != "sum" && name != "avg") || len(fn.Exprs) != 1 || !materializedViewIncrementalScalarSupported(fn.Exprs[0]) || !collector.collect(fn.Exprs[0]) {
+			// DISTINCT state uses a byte-serialized value key. Until expression
+			// result types are available here, admit only a source column; an
+			// arithmetic expression can produce floating signed zero even when
+			// all of its source columns are integral.
+			if (name != "count" && name != "sum" && name != "avg") || len(fn.Exprs) != 1 {
+				return "", nil, ""
+			}
+			if _, directColumn := fn.Exprs[0].(*tree.UnresolvedName); !directColumn || !materializedViewIncrementalScalarSupported(fn.Exprs[0]) || !collector.collect(fn.Exprs[0]) {
 				return "", nil, ""
 			}
 			agg.Kind = name + "_distinct"
@@ -642,6 +649,9 @@ func materializedViewIncrementalHavingAliases(exprs tree.SelectExprs) map[string
 
 func materializedViewIncrementalGroupTypeSupported(typ Type) bool {
 	switch types.T(typ.Id) {
+	case types.T_float32, types.T_float64:
+		// SQL equates +0 and -0, while serial_full preserves their sign bit.
+		return false
 	case types.T_char:
 		// CHAR comparisons pad trailing spaces even under a binary charset.
 		return false

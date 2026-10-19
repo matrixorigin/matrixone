@@ -2393,6 +2393,30 @@ func materializedViewSourceTables(expr tree.TableExpr) ([]*tree.TableName, bool)
 const materializedViewMaxDirectInputs = mvdefinition.MaxSources
 
 func materializedViewDefinitionSources(stmt *tree.Select, defaultDB string) ([]*tree.TableName, bool) {
+	references, ok := materializedViewDefinitionSourceReferences(stmt)
+	if !ok {
+		return nil, false
+	}
+	sources := make([]*tree.TableName, 0, len(references))
+	seen := make(map[string]struct{}, len(references))
+	for _, source := range references {
+		dbName := string(source.SchemaName)
+		if dbName == "" {
+			dbName = defaultDB
+		}
+		key := strings.ToLower(dbName) + "\x00" + strings.ToLower(string(source.ObjectName))
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		sources = append(sources, source)
+	}
+	return sources, len(sources) > 0
+}
+
+// Keep every AST reference so callers can persist the defining database on
+// aliases and self joins independently of the deduplicated source identities.
+func materializedViewDefinitionSourceReferences(stmt *tree.Select) ([]*tree.TableName, bool) {
 	if stmt == nil {
 		return nil, false
 	}
@@ -2403,7 +2427,6 @@ func materializedViewDefinitionSources(stmt *tree.Select, defaultDB string) ([]*
 	// A non-UNION SelectClause retains the existing direct FROM/JOIN support.
 	isUnion := len(clauses) > 1
 	sources := make([]*tree.TableName, 0, len(clauses))
-	seen := make(map[string]struct{})
 	for _, clause := range clauses {
 		if clause == nil || clause.From == nil || len(clause.From.Tables) == 0 {
 			return nil, false
@@ -2417,15 +2440,6 @@ func materializedViewDefinitionSources(stmt *tree.Select, defaultDB string) ([]*
 				return nil, false
 			}
 			for _, source := range found {
-				dbName := string(source.SchemaName)
-				if dbName == "" {
-					dbName = defaultDB
-				}
-				key := strings.ToLower(dbName) + "\x00" + strings.ToLower(string(source.ObjectName))
-				if _, exists := seen[key]; exists {
-					continue
-				}
-				seen[key] = struct{}{}
 				sources = append(sources, source)
 			}
 		}
