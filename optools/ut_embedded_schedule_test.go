@@ -73,23 +73,23 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
   trap 'touch "$CASE_DIR/stopped-execute-a"; exit 143' TERM
   printf '%s\n' "$$" > "$CASE_DIR/pid-execute-a"
   printf 'ready\n' >&8
-  while :; do read -r -t 0.01 _ <&9 || true; done
+  while :; do read -r _ <&9 || true; done
  fi
  if [[ "$MODE" == execute-timeout && "$leaf" == a ]]; then
   ps -o pgid= -p $$ | tr -d ' ' > "$CASE_DIR/pgid-execute-timeout-a"
   trap '' TERM
-  while :; do read -r -t 0.01 _ <&9 || true; done
+  while :; do read -r _ <&9 || true; done
  fi
  if [[ "$MODE" == execute-timeout-zero && "$leaf" == a ]]; then
   ps -o pgid= -p $$ | tr -d ' ' > "$CASE_DIR/pgid-execute-timeout-zero-a"
   trap 'printf "{\"Action\":\"pass\",\"Package\":\"%s\"}\\n" "$package"; exit 0' TERM
-  while :; do read -r -t 0.01 _ <&9 || true; done
+  while :; do read -r _ <&9 || true; done
  fi
  if [[ "$MODE" == execute-cancel-resistant && "$leaf" == a ]]; then
   ps -o pgid= -p $$ | tr -d ' ' > "$CASE_DIR/pgid-execute-resistant-a"
   printf 'ready\n' >&8
   trap '' TERM
-  while :; do read -r -t 0.01 _ <&9 || true; done
+  while :; do read -r _ <&9 || true; done
  fi
  if [[ "$MODE" == test-failure && "$leaf" == b ]]; then
   printf '{"Action":"fail","Package":"%s"}\n' "$package"
@@ -118,7 +118,7 @@ if [[ " $* " == *' -c '* ]]; then
     if [[ -e "$CASE_DIR/join-waiting" ]]; then
      if mkdir "$CASE_DIR/term-sent" 2>/dev/null; then kill -TERM "$RUNNER_PID"; fi
     fi
-    read -r -t 0.01 _ <&9 || true
+    read -r -t 1 _ <&9 || true
    done
   else
    read -r _ <&9
@@ -700,10 +700,10 @@ function ut_test_execution_spawned() {`, 1)
 					text = strings.Replace(text, `            child_pids[index*2]=${test_pids[index]}`, `            child_pids[index*2]=${test_pids[index]}
             fixture_self_pid fixture_pid
             printf 'TEST_PUBLISHED shell=%s test=%s\n' "$fixture_pid" "${test_pids[index]}" >&16`, 1)
-					text = strings.Replace(text, "    function cancel_prebuilt_race_commands(){\n", "    function cancel_prebuilt_race_commands(){\n        fixture_self_pid fixture_pid\n        printf 'CANCEL shell=%s test=%s watchdog=%s\\n' \"$fixture_pid\" \"${test_pids[*]}\" \"${watchdog_pids[*]}\" >&16\n", 1)
+					text = strings.Replace(text, "    function cancel_prebuilt_race_commands(){\n", "    function cancel_prebuilt_race_commands(){\n        fixture_self_pid fixture_pid\n        printf 'CANCEL shell=%s test=%s watchdog=%s\\n' \"$fixture_pid\" \"${test_pids[*]-}\" \"${watchdog_pids[*]-}\" >&16\n", 1)
 					text = strings.Replace(text, `        if ! terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2; then exit 125; fi`, `        local sweep_status=0
         fixture_self_pid fixture_pid
-        printf 'SWEEP_START shell=%s owners=%s\n' "$fixture_pid" "${child_pids[*]}" >&16
+        printf 'SWEEP_START shell=%s owners=%s\n' "$fixture_pid" "${child_pids[*]-}" >&16
         terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2 || sweep_status=$?
         printf 'SWEEP_RESULT shell=%s status=%s\n' "$fixture_pid" "$sweep_status" >&16
         (( sweep_status == 0 )) || exit 125`, 1)
