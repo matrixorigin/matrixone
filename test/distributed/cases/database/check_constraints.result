@@ -65,3 +65,156 @@ and constraint_name = 'chk_tmp_positive';
 use check_constraints_metadata;
 drop temporary table check_values_tmp;
 drop database check_constraints_metadata;
+
+drop database if exists check_names_30343;
+create database check_names_30343;
+use check_names_30343;
+create table plain1 (x int, check (x > 0));
+create table plain2 (y int, check (y < 10));
+show create table plain1;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+plain1  ¦  CREATE TABLE `plain1` (
+  `x` int DEFAULT NULL,
+  CONSTRAINT `plain1_chk_1` CHECK (`x` > 0)
+)
+show create table plain2;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+plain2  ¦  CREATE TABLE `plain2` (
+  `y` int DEFAULT NULL,
+  CONSTRAINT `plain2_chk_1` CHECK (`y` < 10)
+)
+create table src (id int primary key, x int, constraint ck_positive check (x > 0));
+create table dst like src;
+show create table dst;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+dst  ¦  CREATE TABLE `dst` (
+  `id` int NOT NULL,
+  `x` int DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  CONSTRAINT `dst_chk_1` CHECK (`x` > 0)
+)
+create table dup1 (z int, constraint ck_positive check (z > 0));
+Duplicate check constraint name 'ck_positive'
+select constraint_name, check_clause
+from information_schema.check_constraints
+where constraint_schema = 'check_names_30343'
+order by constraint_name;
+➤ constraint_name[12,64,0]  ¦  check_clause[12,65535,0]  𝄀
+ck_positive  ¦  `x` > 0  𝄀
+dst_chk_1  ¦  `x` > 0  𝄀
+plain1_chk_1  ¦  `x` > 0  𝄀
+plain2_chk_1  ¦  `y` < 10
+select tc.table_name, cc.check_clause
+from information_schema.table_constraints tc
+join information_schema.check_constraints cc
+on tc.constraint_schema = cc.constraint_schema
+and tc.constraint_name = cc.constraint_name
+where tc.constraint_schema = 'check_names_30343'
+and tc.constraint_type = 'CHECK'
+order by tc.table_name;
+➤ table_name[12,5000,0]  ¦  check_clause[12,65535,0]  𝄀
+dst  ¦  `x` > 0  𝄀
+plain1  ¦  `x` > 0  𝄀
+plain2  ¦  `y` < 10  𝄀
+src  ¦  `x` > 0
+insert into dst values (2, -1);
+constraint violation: Check constraint 'dst_chk_1' is violated
+select count(*) from dst;
+➤ count(*)[-5,64,0]  𝄀
+0
+create table multi_chk (a int, check (a > 0), constraint named_chk check (a < 10), check (a > -5));
+show create table multi_chk;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+multi_chk  ¦  CREATE TABLE `multi_chk` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `multi_chk_chk_1` CHECK (`a` > 0),
+  CONSTRAINT `named_chk` CHECK (`a` < 10),
+  CONSTRAINT `multi_chk_chk_3` CHECK (`a` > -5)
+)
+drop database check_names_30343;
+
+drop database if exists check_rename_30343;
+create database check_rename_30343;
+use check_rename_30343;
+create table t (a int, check (a > 0));
+rename table t to u;
+show create table u;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+u  ¦  CREATE TABLE `u` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `u_chk_1` CHECK (`a` > 0)
+)
+create table t (a int, check (a < 100));
+show create table t;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+t  ¦  CREATE TABLE `t` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `t_chk_1` CHECK (`a` < 100)
+)
+insert into u values (-1);
+constraint violation: Check constraint 'u_chk_1' is violated
+insert into t values (200);
+constraint violation: Check constraint 't_chk_1' is violated
+select count(*) from u;
+➤ count(*)[-5,64,0]  𝄀
+0
+select count(*) from t;
+➤ count(*)[-5,64,0]  𝄀
+0
+truncate table u;
+show create table u;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+u  ¦  CREATE TABLE `u` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `u_chk_1` CHECK (`a` > 0)
+)
+insert into u values (-1);
+constraint violation: Check constraint 'u_chk_1' is violated
+select count(*) from u;
+➤ count(*)[-5,64,0]  𝄀
+0
+select constraint_name, check_clause
+from information_schema.check_constraints
+where constraint_schema = 'check_rename_30343'
+order by constraint_name;
+➤ constraint_name[12,64,0]  ¦  check_clause[12,65535,0]  𝄀
+t_chk_1  ¦  `a` < 100  𝄀
+u_chk_1  ¦  `a` > 0
+create table conflict_src (a int, check (a > 0), constraint u2_chk_1 check (a < 100));
+rename table conflict_src to u2;
+Duplicate check constraint name 'u2_chk_1'
+show create table conflict_src;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+conflict_src  ¦  CREATE TABLE `conflict_src` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `conflict_src_chk_1` CHECK (`a` > 0),
+  CONSTRAINT `u2_chk_1` CHECK (`a` < 100)
+)
+create table owner (a int, constraint u3_chk_1 check (a < 0));
+create table mover (a int, check (a > 0));
+rename table mover to u3;
+Duplicate check constraint name 'u3_chk_1'
+show create table mover;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+mover  ¦  CREATE TABLE `mover` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `mover_chk_1` CHECK (`a` > 0)
+)
+create table combo (a int, check (a > 0));
+alter table combo rename to combo2, rename column a to b;
+show create table combo2;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+combo2  ¦  CREATE TABLE `combo2` (
+  `b` int DEFAULT NULL,
+  CONSTRAINT `combo2_chk_1` CHECK (`b` > 0)
+)
+insert into combo2 values (-1);
+constraint violation: Check constraint 'combo2_chk_1' is violated
+create table combo (a int, check (a > 0));
+show create table combo;
+➤ Table[12,-1,0]  ¦  Create Table[12,-1,0]  𝄀
+combo  ¦  CREATE TABLE `combo` (
+  `a` int DEFAULT NULL,
+  CONSTRAINT `combo_chk_1` CHECK (`a` > 0)
+)
+drop database check_rename_30343;
