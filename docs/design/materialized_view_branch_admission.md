@@ -4,6 +4,11 @@ Tracker: [#30079](https://github.com/matrixorigin/matrixone/issues/30079).
 PR: [#30085](https://github.com/matrixorigin/matrixone/pull/30085).
 Review: 5564803316 on `50e7f92bd08e6ba0491d8c63368f8720f874d9f5`.
 
+This document's original native reader capture used MV catalog4.0.17. A later
+main merge moves the active MV migration to4.0.18 while preserving main's4.0.17
+handler; see [the current integration record](materialized_view_catalog418.md).
+The endpoint admission and final prepared-session test boundary are unchanged.
+
 ## Requirement and observed failure
 
 An unrefreshed MV must not be treated as valid empty data. The review's native

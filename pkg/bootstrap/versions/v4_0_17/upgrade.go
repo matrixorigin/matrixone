@@ -16,24 +16,25 @@ package v4_0_17
 
 import (
 	"context"
-	"strings"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/bootstrap/versions"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
-	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"go.uber.org/zap"
 )
 
 var Handler = &versionHandle{
 	metadata: versions.Version{
 		Version:                 "4.0.17",
 		MinUpgradeVersion:       "4.0.16",
-		UpgradeCluster:          versions.Yes,
-		UpgradeTenant:           versions.No,
-		VersionOffset:           uint32(len(catalog.MaterializedViewCatalogDDLs) + 1),
-		RequiredProtocolVersion: defines.MORPCVersion120,
+		UpgradeCluster:          versions.No,
+		UpgradeTenant:           versions.Yes,
+		VersionOffset:           uint32(len(tenantUpgEntries)),
+		RequiredProtocolVersion: defines.MORPCVersion118,
 	},
 }
 
@@ -51,31 +52,27 @@ func (v *versionHandle) Prepare(_ context.Context, txn executor.TxnExecutor, _ b
 }
 
 func (v *versionHandle) HandleTenantUpgrade(_ context.Context, tenantID int32, txn executor.TxnExecutor) error {
+	logger := runtime.ServiceRuntime(txn.Txn().TxnOptions().CN).Logger()
+	for _, entry := range tenantUpgEntries {
+		start := time.Now()
+		if err := entry.Upgrade(txn, uint32(tenantID)); err != nil {
+			logger.Error("tenant upgrade entry execute error",
+				zap.Error(err),
+				zap.Int32("tenantId", tenantID),
+				zap.String("version", v.metadata.Version),
+				zap.String("upgrade entry", entry.String()))
+			return err
+		}
+		logger.Info("tenant upgrade entry complete",
+			zap.Int32("tenantId", tenantID),
+			zap.String("upgrade entry", entry.String()),
+			zap.Int64("time cost(ms)", time.Since(start).Milliseconds()),
+			zap.String("toVersion", v.metadata.Version))
+	}
 	return nil
 }
 
-func (v *versionHandle) HandleClusterUpgrade(ctx context.Context, tx executor.TxnExecutor) error {
-	// This version has no tenant-upgrade phase, so the framework's tenant
-	// protocol check does not run. Fence old CNs before installing MV catalogs.
-	if err := versions.CheckCommonProtocolVersion(tx, v.metadata.RequiredProtocolVersion); err != nil {
-		return err
-	}
-	for _, ddl := range catalog.MaterializedViewCatalogDDLs {
-		ddl = strings.Replace(ddl, "create cluster table ", "create cluster table if not exists ", 1)
-		result, err := tx.Exec(ddl, executor.StatementOption{}.WithAccountID(catalog.System_Account))
-		if err != nil {
-			return err
-		}
-		result.Close()
-		fault.TriggerFaultWithContext(ctx, "mv_catalog_upgrade_after_ddl")
-	}
-	// Format 1 lacks the captured division context. Pause legacy policies and
-	// fence queued work without guessing semantics or rewriting stored rows.
-	r, err := tx.Exec("update mo_catalog.mo_materialized_views set interval_seconds=0,next_due=null,epoch=epoch+1 where interval_seconds>0 and cast(json_extract(definition,'$.format_version') as int)=1", executor.StatementOption{}.WithAccountID(catalog.System_Account))
-	if err != nil {
-		return err
-	}
-	r.Close()
+func (v *versionHandle) HandleClusterUpgrade(_ context.Context, _ executor.TxnExecutor) error {
 	return nil
 }
 

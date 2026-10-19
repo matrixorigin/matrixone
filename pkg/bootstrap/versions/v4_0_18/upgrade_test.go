@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package v4_0_17
+package v4_0_18
 
 import (
 	"context"
@@ -28,7 +28,9 @@ import (
 )
 
 func TestMaterializedViewUpgrade(t *testing.T) {
-	require.Equal(t, "4.0.17", Handler.Metadata().Version)
+	require.Equal(t, "4.0.18", Handler.Metadata().Version)
+	require.Equal(t, "4.0.17", Handler.Metadata().MinUpgradeVersion)
+	require.Equal(t, uint32(5), Handler.Metadata().VersionOffset)
 	require.Equal(t, defines.MORPCVersion120, Handler.Metadata().RequiredProtocolVersion)
 	for _, scenario := range []string{"ready", "DDL failure", "old CN", "protocol query failure"} {
 		t.Run(scenario, func(t *testing.T) {

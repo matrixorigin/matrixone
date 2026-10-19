@@ -26,11 +26,13 @@ MatrixOne's existing SQL planner, transaction-scoped SQL executor, task service,
 and native storage. Do not port StarRocks FE edit-log or partition-version
 protocols into MO.
 
-The MV capability requires protocol 118 at catalog migration, task publication,
-DDL authoring and relation execution. Protocol 117 belongs to upstream's
-collation-aware LEAST/GREATEST semantics and is insufficient for MV support.
-The protocol allocation follows main; catalog 4.0.15 and task executor 17 retain
-their existing identities.
+The current MV capability requires protocol120 at catalog migration, task
+publication, DDL authoring and relation execution. Main owns correlated-program
+protocol119 and the4.0.17 MEDIUMINT tenant repair. Allocate MV migration4.0.18
+(offset5), preserving all earlier main handlers and task executor17. Historical
+allocation notes below retain their original implementation context; the current
+[4.0.18 integration and compatibility record](../design/materialized_view_catalog418.md)
+records the next-version move and its native validation.
 
 Transparent rewrite is a separate release. By default a base-table query must
 retain its current transactional semantics. An asynchronous MV is not safe for

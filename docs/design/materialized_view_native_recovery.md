@@ -2,10 +2,10 @@
 
 ## Current integration revision
 
-The current MV migration is 4.0.17/offset5 and protocol119; main owns
-4.0.15/4.0.16 and charset118. Current native comparison uses exact main
-3fc00709eccc277c175c7a09eed2605ca1aaee29 as the pre-feature control
-(`--old-version 4.0.16 --old-protocol 118`). Historical tables/results below
+The current MV migration is 4.0.18/offset5 and protocol120. Main owns
+4.0.17's MEDIUMINT tenant repair and correlated-program protocol119. The current
+pre-feature control is clean main `def799e1260dd547cae2e0e54323ea20ec1b7685`
+(`--old-version 4.0.17 --old-protocol 119`). Historical tables/results below
 retain their original input identity and are not current-head rerun claims.
 The driver pins UTC for its sessions; named/fixed authoring semantics have
 separate current public SQL controls.

@@ -17,8 +17,8 @@ session snapshot or parallel resolver is introduced.
 Format 1 remains readable for stored rows, SHOW, disabling policies and cleanup.
 Its original division precision cannot be reconstructed: refresh requires
 recreation, without guessing from output scale or adopting default 4. Migration
-4.0.17 pauses legacy periodic policies and advances the existing epoch so queued
-work cannot refresh them. Preserve main migrations through 4.0.16 and charset
+4.0.18 pauses legacy periodic policies and advances the existing epoch so queued
+work cannot refresh them. Preserve main migrations through 4.0.17 (including the MEDIUMINT tenant repair) and charset
 protocol118 and correlated-program protocol119. MV authoring, scans, task
 registration and upgrade require protocol120 after the main integration; see
 [the compatibility and execution-consumer follow-up](materialized_view_protocol120_integration.md).

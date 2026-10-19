@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Opt-in native upgrade/crash validation; owns every service it starts.
 
-Full mode requires the pinned pre-feature mo-service (default: main 4.0.16),
+Full mode requires the pinned pre-feature mo-service (default: main 4.0.17),
 a current mo-service built with the matrixone_mv_faults tag, and
 test/materialized_view/native_probe. --refresh-only needs the current production
 service and probe; it skips startup migration injection. Uses only the Python
@@ -225,7 +225,7 @@ class Fixture:
             try:
                 with urllib.request.urlopen("http://127.0.0.1:7603/debug/pprof/goroutine?debug=2", timeout=3) as response:
                     stack = response.read().decode()
-                if "v4_0_17.(*versionHandle).HandleClusterUpgrade" in stack and "fault.(*faultEntry).doWithContext" in stack:
+                if "v4_0_18.(*versionHandle).HandleClusterUpgrade" in stack and "fault.(*faultEntry).doWithContext" in stack:
                     (self.root / "interrupted-upgrade.stack").write_text(stack)
                     return True
             except OSError:
@@ -248,7 +248,7 @@ class Fixture:
         return current
 
     def assert_catalogs(self):
-        assert self.q("select version,version_offset,state from mo_catalog.mo_version where version='4.0.17'") == [["4.0.17", "5", "2"]]
+        assert self.q("select version,version_offset,state from mo_catalog.mo_version where version='4.0.18'") == [["4.0.18", "5", "2"]]
         assert self.q("select relname,count(*) from mo_catalog.mo_tables where account_id=0 and reldatabase='mo_catalog' and relname in ('mo_materialized_views','mo_mv_dependencies','mo_mv_refresh_runs','mo_mv_account_state') group by relname order by relname") == [
             ["mo_materialized_views", "1"], ["mo_mv_account_state", "1"], ["mo_mv_dependencies", "1"], ["mo_mv_refresh_runs", "1"]]
 
@@ -327,7 +327,7 @@ class Fixture:
             old = self.start("unsafe-downgrade", old=True)
             wait_for("unsafe old-binary startup refused", lambda: old.poll() is not None, seconds=120)
             log = (self.root / "unsafe-downgrade.log").read_text(errors="replace")
-            fences = (f"cannot startup a old version {self.args.old_version} to join cluster, current version is 4.0.17",
+            fences = (f"cannot startup a old version {self.args.old_version} to join cluster, current version is 4.0.18",
                       f"requires persisted expression protocol version 120 (local version {self.args.old_protocol})")
             reason = next((fence for fence in fences if fence in log), None)
             assert old.returncode != 0 and reason, log[-3000:]
@@ -388,9 +388,9 @@ def main():
                         help="fresh current cluster: run commit-loss and refresh crash/replay cases without upgrade/downgrade")
     parser.add_argument("--service", required=True)
     parser.add_argument("--old-service", help="required unless --refresh-only is selected")
-    parser.add_argument("--old-version", default="4.0.16", help="catalog version of the pinned old binary")
-    parser.add_argument("--old-protocol", type=int, default=118,
-                        help="expected protocol of the pinned old binary (118 by default)")
+    parser.add_argument("--old-version", default="4.0.17", help="catalog version of the pinned old binary")
+    parser.add_argument("--old-protocol", type=int, default=119,
+                        help="expected protocol of the pinned old binary (119 by default)")
     parser.add_argument("--probe", required=True)
     parser.add_argument("--work-dir", required=True)
     args = parser.parse_args()

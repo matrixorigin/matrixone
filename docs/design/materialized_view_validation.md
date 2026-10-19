@@ -367,3 +367,12 @@ P1, before diff output or merge writes. The same delivery preserves main's
 foreign-key-check propagation and MV's captured SQL mode in the internal compiler.
 [Source-bound results](materialized_view_branch_admission_results.json) distinguish
 native negative/positive controls, merged suites and final-head CI.
+
+
+## Catalog4.0.18 integration (2026-10-19)
+
+Main def799e126 allocated4.0.17 to its MEDIUMINT tenant repair. Preserve that
+handler and move MV migration to4.0.18/offset5, still requiring protocol120.
+[Integration design/case map](materialized_view_catalog418.md) and
+[source-bound unit/native results](materialized_view_catalog418_results.json)
+separate the real clean-main417 upgrade control from older captures.

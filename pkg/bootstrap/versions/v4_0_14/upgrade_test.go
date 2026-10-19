@@ -48,7 +48,7 @@ func TestColumnsUpgradeMetadata(t *testing.T) {
 
 func TestColumnsUpgradeAdmissionAndIdempotence(t *testing.T) {
 	const protocolSQL = "SELECT mo_ctl('cn', 'GetProtocolVersion', '')"
-	entry := upgradeInformationSchemaColumns()
+	entry := tenantUpgEntries[0]
 	injected := errors.New("injected columns upgrade failure")
 	for _, tc := range []struct {
 		name       string
