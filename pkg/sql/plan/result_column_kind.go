@@ -32,11 +32,12 @@ const (
 // An output slot, its selected expression, and a binding reference are distinct
 // addresses. In particular, a selected ColRef must never select a sibling slot.
 type resultColumnValue struct {
-	node                  int32
-	address               resultColumnAddress
-	expr                  *pb.Expr
-	rel, col              int32
-	name, table, database string
+	node    int32
+	address resultColumnAddress
+	expr    *pb.Expr
+	col     int32
+	// References belong to the immutable plan; retain their identity without copying names.
+	ref *pb.ColRef
 }
 
 type resultColumnValueState struct {
@@ -128,7 +129,7 @@ func (k *resultColumnKinds) reference(id int, node int32, ref *pb.ColRef) {
 	if ref == nil {
 		return
 	}
-	k.depend(id, resultColumnValue{node: node, address: resultColumnReference, rel: ref.RelPos, col: ref.ColPos, name: ref.Name, table: ref.TblName, database: ref.DbName})
+	k.depend(id, resultColumnValue{node: node, address: resultColumnReference, ref: ref})
 }
 
 func (k *resultColumnKinds) node(id int32) *pb.Node {
@@ -160,7 +161,7 @@ func (k *resultColumnKinds) expand(id int) {
 		return
 	}
 	if value.address == resultColumnReference {
-		ref := &pb.ColRef{RelPos: value.rel, ColPos: value.col, Name: value.name, TblName: value.table, DbName: value.database}
+		ref := value.ref
 		if node.NodeType == pb.Node_JOIN {
 			k.join(id, node, nil, ref, len(node.BindingTags) == 0)
 			return

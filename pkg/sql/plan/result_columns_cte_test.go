@@ -152,3 +152,22 @@ func BenchmarkBooleanJoinClassification(b *testing.B) {
 		})
 	}
 }
+
+func TestResultColumnReferenceIdentityRemainsBounded(t *testing.T) {
+	q := &pb.Query{Nodes: []*pb.Node{
+		{NodeType: pb.Node_JOIN, Children: []int32{1}},
+		{NodeType: pb.Node_JOIN, BindingTags: []int32{42}, Children: []int32{0}},
+	}}
+	first := &pb.Expr{Expr: &pb.Expr_Col{Col: &pb.ColRef{RelPos: 42, ColPos: 0, Name: "flag"}}}
+	second := DeepCopyExpr(first)
+	require.NotSame(t, first.GetCol(), second.GetCol())
+	k := newResultColumnKinds(q)
+	require.False(t, k.computed(0, first))
+	firstStates := len(k.states)
+	require.False(t, k.computed(0, second))
+	require.LessOrEqual(t, len(k.states), 2*firstStates)
+	states := len(k.states)
+	require.False(t, k.computed(0, first))
+	require.False(t, k.computed(0, second))
+	require.Len(t, k.states, states)
+}
