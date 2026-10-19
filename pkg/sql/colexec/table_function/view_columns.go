@@ -184,8 +184,8 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 // ApplyPreserveBatch prevents APPLY from coalescing many large metadata pages
 // merely because their row count is low. Only the opt-in signature needs it;
 // the capability is reconstructed from existing arguments, not a wire flag.
-func (tf *TableFunction) ApplyPreserveBatch() bool {
-	return (tf.FuncName == plan.ViewColumnsFunctionName || tf.FuncName == plan.SubscriptionViewColumnsFunctionName) && len(tf.Args) == 3
+func (tableFunction *TableFunction) ApplyPreserveBatch() bool {
+	return (tableFunction.FuncName == plan.ViewColumnsFunctionName || tableFunction.FuncName == plan.SubscriptionViewColumnsFunctionName) && len(tableFunction.Args) == 3
 }
 
 func (s *viewColumnsState) startDerived(tf *TableFunction, proc *process.Process, nthRow int) error {
