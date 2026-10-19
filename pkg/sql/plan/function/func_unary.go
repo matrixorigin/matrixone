@@ -1161,17 +1161,15 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			continue
 		}
 		value, null := source.GetStrValue(i)
-		if null {
-			if err := rs.Append(0, true); err != nil {
-				return err
-			}
-			continue
+		var parsed types.Datetime
+		var err error
+		if !null {
+			// ParseDatetime reports only invalid-input errors. Malformed strings
+			// share the input-NULL path without consulting the zero-date policy.
+			parsed, err = types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
+			null = err != nil
 		}
-		parsed, err := types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
-		if err != nil {
-			if !isTemporalLexicalConversionError(err) {
-				return err
-			}
+		if null {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
