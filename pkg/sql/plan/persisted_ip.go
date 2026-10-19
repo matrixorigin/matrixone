@@ -144,6 +144,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.DateNumericResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
 	}
+	if features.DependentPrograms {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion119)
+	}
 	if features.LeastGreatestCollationSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
 	}
@@ -154,7 +157,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
 	}
 	if features.NativePADCollation {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion119)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion120)
 	}
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)

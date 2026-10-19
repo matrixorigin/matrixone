@@ -83,7 +83,7 @@ func enterPersistedCollationBinding(ctx CompilerContext, revision uint32) (resto
 		return nil, err
 	}
 	if revision == uint32(collation.RevisionV1) {
-		if err = RequirePersistedProtocolVersion(previous, ctx.GetProcess(), defines.MORPCVersion119); err != nil {
+		if err = RequirePersistedProtocolVersion(previous, ctx.GetProcess(), defines.MORPCVersion120); err != nil {
 			return nil, err
 		}
 	}

@@ -45,7 +45,7 @@ func TestCollationMetadataRemoteBatchAdmission(t *testing.T) {
 	require.NoError(t, err)
 	before := mp.CurrNB()
 	decoded, err := decodeBatch(mp, data, nil)
-	require.ErrorContains(t, err, "version 119")
+	require.ErrorContains(t, err, "version 120")
 	require.Nil(t, decoded)
 	require.Equal(t, before, mp.CurrNB(), "rejection must release all decoded columns")
 }

@@ -37,6 +37,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -6611,7 +6612,7 @@ func appendLocaleUnknownWarning(proc *process.Process, locale string) {
 		// Bound the echo before formatting; sink-side truncation is too late
 		// to prevent input-sized temporary allocations.
 		if len(locale) > 128 {
-			locale = locale[:128]
+			locale = locale[:util.UTF8PrefixLen(locale, 128)]
 		}
 		appender.AppendWarningDiagnostic(moerr.ER_UNKNOWN_LOCALE,
 			fmt.Sprintf("Unknown locale: '%s'", locale))

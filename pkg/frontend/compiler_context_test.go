@@ -565,14 +565,14 @@ func TestNativePADCatalogFloorBeforeRecovery(t *testing.T) {
 			}
 		})
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion118)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion119)
 	tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, proc: proc}}
 	table := &pbplan.TableDef{DefaultCharset: 3, CollationVersion: 1}
 	before, err := table.Marshal()
 	require.NoError(t, err)
 	err = tcc.recoverLegacyTinyText(proc.Ctx, "db", table, nil, nil)
-	require.ErrorContains(t, err, "protocol version 119")
+	require.ErrorContains(t, err, "protocol version 120")
 	after, err := table.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, before, after, "拒绝必须先于legacy恢复和元数据改写")

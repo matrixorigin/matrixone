@@ -51,7 +51,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IntegerParameterCoercion || features.SpecialIntegerConsumers, integerArgumentsVersion,
 			"integer parameter coercion requires a versioned remote destination",
 			"remote destination does not support integer parameter execution (MORPC version %d)"},
-		{features.NativePADCollation, defines.MORPCVersion119,
+		{features.NativePADCollation, defines.MORPCVersion120,
 			"native PAD collation requires a versioned remote destination",
 			"remote destination does not support native PAD collation (MORPC version %d)"},
 		{features.TableCollationFunction, defines.MORPCVersion118,

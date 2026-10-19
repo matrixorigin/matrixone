@@ -57,13 +57,13 @@ func TestNativePADViewBindingPersistence(t *testing.T) {
 		"create view native_v as select n_name collate utf8mb3_bin as s from nation",
 	} {
 		t.Run(sql, func(t *testing.T) {
-			for _, floors := range [][3]int64{{118, 119, 119}, {119, 119, 118}} {
+			for _, floors := range [][3]int64{{119, 120, 120}, {120, 120, 119}} {
 				set(floors[0], floors[1], floors[2])
 				p, err := build(sql)
-				require.ErrorContains(t, err, "protocol version 119")
+				require.ErrorContains(t, err, "protocol version 120")
 				require.Nil(t, p)
 			}
-			set(119, 119, 119)
+			set(120, 120, 120)
 			p, err := build(sql)
 			require.NoError(t, err)
 			table := p.GetDdl().GetCreateView().GetTableDef()
@@ -71,10 +71,10 @@ func TestNativePADViewBindingPersistence(t *testing.T) {
 			require.NoError(t, json.Unmarshal([]byte(table.ViewSql.View), &data))
 			require.Equal(t, uint32(1), data.CollationBindingRevision)
 			require.NotNil(t, data.RequiredProtocolVersion)
-			require.Equal(t, defines.MORPCVersion119, *data.RequiredProtocolVersion)
+			require.Equal(t, defines.MORPCVersion120, *data.RequiredProtocolVersion)
 			require.NoError(t, RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), table))
-			for _, floors := range [][2]int64{{118, 119}, {119, 118}, {119, 119}} {
-				set(floors[0], floors[1], 118)
+			for _, floors := range [][2]int64{{119, 120}, {120, 119}, {120, 120}} {
+				set(floors[0], floors[1], 119)
 				for _, reader := range []string{"catalog", "describe", "regenerate", "expand"} {
 					var err error
 					switch reader {
@@ -94,16 +94,16 @@ func TestNativePADViewBindingPersistence(t *testing.T) {
 						b := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
 						_, err = b.bindView(NewBindContext(b, nil), table, nil, &ObjectRef{}, "tpch", "native_v", nil)
 					}
-					if floors[0] < 119 || floors[1] < 119 {
-						require.ErrorContains(t, err, "protocol version 119", reader)
+					if floors[0] < 120 || floors[1] < 120 {
+						require.ErrorContains(t, err, "protocol version 120", reader)
 					} else {
 						require.NoError(t, err, reader)
 					}
 					require.Same(t, outer, ctx.GetContext())
 				}
 			}
-			set(119, 119, 118)
-			require.ErrorContains(t, RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), table), "protocol version 119")
+			set(120, 120, 119)
+			require.ErrorContains(t, RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), table), "protocol version 120")
 			data.RequiredProtocolVersion = nil
 			malformed, err := json.Marshal(data)
 			require.NoError(t, err)

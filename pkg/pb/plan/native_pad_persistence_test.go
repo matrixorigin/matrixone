@@ -15,6 +15,27 @@ import (
 	"testing"
 )
 
+func TestNativePADAndDependentFeatureCollection(t *testing.T) {
+	for _, native := range []bool{false, true} {
+		typ := Type{Id: planVarcharTypeID, Charset: 3}
+		if native {
+			typ.CollationVersion = 1
+		}
+		owner := &Query{Correlation: &CorrelationSpec{Programs: []*CorrelationProgram{{InputTypes: []Type{typ}, OutputTypes: []Type{typ}}}}, Nodes: []*Node{{ProjectList: []*Expr{{Typ: Type{Id: 22}, Expr: &Expr_Dependent{Dependent: &DependentExpr{ProgramId: 1, Inputs: []*Expr{{Typ: typ}}}}}}}}}
+		separate, err := RequiredRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		combined, err := RequiredExecutableRemoteExpressionFeatures(owner)
+		require.NoError(t, err)
+		require.Equal(t, separate, combined)
+		require.True(t, combined.DependentPrograms)
+		require.Equal(t, native, combined.NativePADCollation)
+		// 裸program没有Expr，不能依赖dependent表达式恰巧引用其全部类型。
+		bare, err := RequiredExecutableRemoteExpressionFeatures(owner.Correlation)
+		require.NoError(t, err)
+		require.Equal(t, native, bare.NativePADCollation)
+	}
+}
+
 func TestNativePADDoesNotReinterpretUnicodePhysicalMarker(t *testing.T) {
 	table := &TableDef{DefaultCharset: 3, CollationVersion: 1, KeyFormat: 1, Cols: []*ColDef{{Name: "u", Typ: Type{Id: planVarcharTypeID, Charset: 10, CollationVersion: 1}}}, Indexes: []*IndexDef{{Unique: true, KeyFormat: 1, Parts: []string{"u"}}}}
 	require.NoError(t, RequireLegacyCollations(table))

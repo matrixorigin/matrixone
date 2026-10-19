@@ -42,7 +42,7 @@ func nativePADDDLContext(t *testing.T) (*MockCompilerContext, func(string) (*Pla
 				rt.CompareAndDeleteGlobalVariables(key, value)
 			}
 		})
-		rt.SetGlobalVariables(key, defines.MORPCVersion119)
+		rt.SetGlobalVariables(key, defines.MORPCVersion120)
 	}
 	return ctx, func(sql string) (*Plan, error) {
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
@@ -88,9 +88,9 @@ func TestNativePADColumnAndTableAuthoring(t *testing.T) {
 		})
 	}
 	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion118)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion119)
 	p, err := build("create table n (s varchar(8) collate utf8mb4_bin)")
-	require.ErrorContains(t, err, "protocol version 119")
+	require.ErrorContains(t, err, "protocol version 120")
 	require.Nil(t, p)
 }
 
@@ -102,7 +102,7 @@ func TestNativePADCTASRetainsPreFoldProtocolAndBinding(t *testing.T) {
 			require.NoError(t, err)
 			create := p.GetDdl().GetCreateTable()
 			require.Equal(t, uint32(1), create.CollationBindingRevision)
-			require.Equal(t, defines.MORPCVersion119, create.RequiredProtocolVersion)
+			require.Equal(t, defines.MORPCVersion120, create.RequiredProtocolVersion)
 			wire, err := p.Marshal()
 			require.NoError(t, err)
 			var decoded Plan
@@ -110,12 +110,12 @@ func TestNativePADCTASRetainsPreFoldProtocolAndBinding(t *testing.T) {
 			require.True(t, proto.Equal(create, decoded.GetDdl().GetCreateTable()))
 			require.True(t, proto.Equal(create, DeepCopyCreateTable(create)))
 			rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion118)
-			require.ErrorContains(t, RequireCreateTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), create), "protocol version 119")
-			p, err = build(sql)
-			require.ErrorContains(t, err, "protocol version 119")
-			require.Nil(t, p)
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion119)
+			require.ErrorContains(t, RequireCreateTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), create), "protocol version 120")
+			p, err = build(sql)
+			require.ErrorContains(t, err, "protocol version 120")
+			require.Nil(t, p)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
 		})
 	}
 }

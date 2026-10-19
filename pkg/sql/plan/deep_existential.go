@@ -46,14 +46,39 @@ func (builder *QueryBuilder) tryDeepExistential(id int32, sub *plan.SubqueryRef,
 		return 0, nil, false, nil
 	}
 	if pending := builder.pendingExistentials[sc.existentialBlock]; pending != nil {
-		if builder.isForUpdate || consumer == existentialIneligible || (sub.Typ != plan.SubqueryRef_EXISTS && sub.Typ != plan.SubqueryRef_NOT_EXISTS && sub.Typ != plan.SubqueryRef_IN) {
-			return 0, nil, true, builder.existentialNYI()
+		eligible := !builder.isForUpdate && consumer != existentialIneligible &&
+			(sub.Typ == plan.SubqueryRef_EXISTS || sub.Typ == plan.SubqueryRef_NOT_EXISTS || sub.Typ == plan.SubqueryRef_IN)
+		if eligible {
+			root, expr, admitted, err := builder.lowerDeepExistential(id, sub, pending, ctx)
+			if admitted || err != nil {
+				if err == nil {
+					delete(builder.pendingExistentials, sc.existentialBlock)
+				}
+				return root, expr, true, err
+			}
 		}
-		root, expr, err := builder.lowerDeepExistential(id, sub, pending, ctx)
-		if err == nil {
-			delete(builder.pendingExistentials, sc.existentialBlock)
+		// Admission did not mutate the relation. Close the deferred inner
+		// boundary in place, then let the general binder close its parent.
+		bound, err := builder.bindDependentSubquery(pending.sub)
+		if err != nil {
+			return 0, nil, true, err
 		}
-		return root, expr, true, err
+		q := &plan.Query{Nodes: builder.qry.Nodes, Steps: append(append([]int32(nil), builder.qry.Steps...), sub.NodeId)}
+		err = plan.WalkQueryNodes(q, func(_ int32, n *plan.Node) error {
+			return plan.VisitExpressionsInOwner(n, func(e *plan.Expr) error {
+				return plan.VisitExprTree(e, func(e *plan.Expr) error {
+					if e.GetSub() == pending.sub {
+						*e = *DeepCopyExpr(bound)
+					}
+					return nil
+				})
+			})
+		})
+		if err != nil {
+			return 0, nil, true, err
+		}
+		delete(builder.pendingExistentials, sc.existentialBlock)
+		return 0, nil, false, nil
 	}
 	if consumer != existentialFilterTrue || ctx == nil || sc.subqueryNestingDepth != 2 ||
 		(sub.Typ != plan.SubqueryRef_EXISTS && sub.Typ != plan.SubqueryRef_IN) {
@@ -66,7 +91,7 @@ func (builder *QueryBuilder) tryDeepExistential(id int32, sub *plan.SubqueryRef,
 		builder.pendingExistentials = make(map[uint64]*pendingExistential)
 	}
 	if builder.pendingExistentials[ctx.existentialBlock] != nil {
-		return 0, nil, true, builder.existentialNYI()
+		return 0, nil, false, nil
 	}
 	builder.pendingExistentials[ctx.existentialBlock] = &pendingExistential{sub: sub}
 	builder.hadPendingExistentials = true
@@ -372,17 +397,17 @@ func (builder *QueryBuilder) planExistentialArm(preds []*plan.Expr, i, j, anchor
 	return arm, true
 }
 
-func (builder *QueryBuilder) lowerDeepExistential(id int32, outer *plan.SubqueryRef, pending *pendingExistential, ctx *BindContext) (int32, *plan.Expr, error) {
+func (builder *QueryBuilder) lowerDeepExistential(id int32, outer *plan.SubqueryRef, pending *pendingExistential, ctx *BindContext) (int32, *plan.Expr, bool, error) {
 	if err := builder.checkPlanningCanceled(); err != nil {
-		return 0, nil, err
+		return 0, nil, false, err
 	}
 	middle, ok := builder.readExistentialRelation(outer.NodeId)
 	if !ok {
-		return 0, nil, builder.existentialNYI()
+		return 0, nil, false, nil
 	}
 	inner, ok := builder.readExistentialRelation(pending.sub.NodeId)
 	if !ok {
-		return 0, nil, builder.existentialNYI()
+		return 0, nil, false, nil
 	}
 	outerTags := builder.collectBindingTags(builder.qry.Nodes[id])
 	middleTags := map[int32]bool{middle.tag: true}
@@ -398,13 +423,13 @@ func (builder *QueryBuilder) lowerDeepExistential(id int32, outer *plan.Subquery
 			}
 			e, valid := resolveExistentialExpr(p, middle, []map[int32]bool{outerTags})
 			if !valid {
-				return 0, nil, builder.existentialNYI()
+				return 0, nil, false, nil
 			}
 			common = append(common, e)
 		}
 	}
 	if occurrences != 1 {
-		return 0, nil, builder.existentialNYI()
+		return 0, nil, false, nil
 	}
 	// Bind the same scalar equality as generateRowComparison, using copies of
 	// the original typed operands. Never infer IN semantics from display types.
@@ -421,11 +446,11 @@ func (builder *QueryBuilder) lowerDeepExistential(id int32, outer *plan.Subquery
 		}
 		sc := builder.ctxByNode[item.sub.NodeId]
 		if item.sub.RowSize != 1 || item.sub.Child == nil || len(sc.results) != 1 {
-			return 0, nil, builder.existentialNYI()
+			return 0, nil, false, nil
 		}
 		right, valid := resolveExistentialExpr(sc.results[0], item.rel, item.parents)
 		if !valid {
-			return 0, nil, builder.existentialNYI()
+			return 0, nil, false, nil
 		}
 		left := DeepCopyExpr(item.sub.Child)
 		if item.parent != nil {
@@ -434,14 +459,14 @@ func (builder *QueryBuilder) lowerDeepExistential(id int32, outer *plan.Subquery
 			valid = left.GetCol() != nil && outerTags[left.GetCol().RelPos]
 		}
 		if !valid {
-			return 0, nil, builder.existentialNYI()
+			return 0, nil, false, nil
 		}
 		eq, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{left, right})
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, false, err
 		}
 		if !existentialEquality(eq) {
-			return 0, nil, builder.existentialNYI()
+			return 0, nil, false, nil
 		}
 		common = append(common, eq)
 	}
@@ -451,15 +476,15 @@ func (builder *QueryBuilder) lowerDeepExistential(id int32, outer *plan.Subquery
 	for _, pred := range inner.filters {
 		p, valid := resolveExistentialExpr(pred, inner, []map[int32]bool{middleTags, outerTags})
 		if !valid {
-			return 0, nil, builder.existentialNYI()
+			return 0, nil, false, nil
 		}
 		var parts []*plan.Expr
 		if !existentialSplit(p, "or", &parts, maxExistentialArms) {
-			return 0, nil, builder.existentialNYI()
+			return 0, nil, false, nil
 		}
 		if len(parts) > 1 {
 			if len(arms) != 0 {
-				return 0, nil, builder.existentialNYI()
+				return 0, nil, false, nil
 			}
 			arms = parts
 		} else {
@@ -478,13 +503,13 @@ func (builder *QueryBuilder) lowerDeepExistential(id int32, outer *plan.Subquery
 			arm, valid = builder.planExistentialArm(preds, middle.tag, inner.tag, inner.tag)
 		}
 		if !valid {
-			return 0, nil, builder.existentialNYI()
+			return 0, nil, false, nil
 		}
 		if len(arms) > 1 && len(arm.outer) > 1 {
 			for _, key := range arm.outer {
 				for _, arg := range key.GetF().Args {
 					if !arg.Typ.NotNullable || (outerTags[arg.GetCol().RelPos] && !builder.exprEffectivelyNotNullableBeforeRemap(arg, id)) {
-						return 0, nil, builder.existentialNYI()
+						return 0, nil, false, nil
 					}
 				}
 			}
@@ -496,23 +521,23 @@ func (builder *QueryBuilder) lowerDeepExistential(id int32, outer *plan.Subquery
 	markers := make([]*plan.Expr, 0, len(descriptors))
 	for _, arm := range descriptors {
 		if err := builder.checkPlanningCanceled(); err != nil {
-			return 0, nil, err
+			return 0, nil, true, err
 		}
 		root, marker, err := builder.emitExistentialArm(id, middle, inner, arm, ctx, len(arms) == 1, outer.Typ == plan.SubqueryRef_NOT_EXISTS)
 		if err != nil {
-			return 0, nil, err
+			return 0, nil, true, err
 		}
 		id = root
 		markers = append(markers, marker)
 	}
 	if len(arms) == 1 {
-		return id, markers[0], nil
+		return id, markers[0], true, nil
 	}
 	result, err := combinePlanExprsBalanced(builder.GetContext(), "or", markers)
 	if err == nil && outer.Typ == plan.SubqueryRef_NOT_EXISTS {
 		result, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*plan.Expr{result})
 	}
-	return id, result, err
+	return id, result, true, err
 }
 
 func (builder *QueryBuilder) emitExistentialArm(id int32, middle, inner *existentialRelation, arm *existentialArm, ctx *BindContext, single, negate bool) (int32, *plan.Expr, error) {

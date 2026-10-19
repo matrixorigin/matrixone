@@ -52,13 +52,13 @@ func TestNativePADCreateTableWriteGateBeforeSideEffects(t *testing.T) {
 	c.e = nil
 	for _, create := range []*planpb.CreateTable{
 		{TableDef: &planpb.TableDef{Name: "n", Cols: []*planpb.ColDef{{Name: "s", Typ: planpb.Type{Id: int32(types.T_varchar), Charset: 3, CollationVersion: 1}}}}},
-		{TableDef: &planpb.TableDef{Name: "n", Cols: []*planpb.ColDef{{Name: "b", Typ: types.T_bool.ToType().PlanType()}}}, CreateAsSelectSql: "insert into n select 'A' collate utf8mb4_general_ci='a'", CollationBindingRevision: 1, RequiredProtocolVersion: defines.MORPCVersion119},
+		{TableDef: &planpb.TableDef{Name: "n", Cols: []*planpb.ColDef{{Name: "b", Typ: types.T_bool.ToType().PlanType()}}}, CreateAsSelectSql: "insert into n select 'A' collate utf8mb4_general_ci='a'", CollationBindingRevision: 1, RequiredProtocolVersion: defines.MORPCVersion120},
 	} {
-		rt.SetGlobalVariables(key, defines.MORPCVersion119)
+		rt.SetGlobalVariables(key, defines.MORPCVersion120)
 		require.NoError(t, plan2.RequireCreateTableCollationsForAuthoring(c.proc.Ctx, c.proc, create))
-		rt.SetGlobalVariables(key, defines.MORPCVersion118)
+		rt.SetGlobalVariables(key, defines.MORPCVersion119)
 		scope := &Scope{Proc: c.proc, Plan: &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_CreateTable{CreateTable: create}}}}}
-		require.ErrorContains(t, scope.CreateTable(c), "protocol version 119")
+		require.ErrorContains(t, scope.CreateTable(c), "protocol version 120")
 	}
 }
 
@@ -74,13 +74,13 @@ func TestNativePADViewWriteGateBeforeSideEffects(t *testing.T) {
 			rt.CompareAndDeleteGlobalVariables(key, current)
 		}
 	})
-	table := &planpb.TableDef{Name: "v", ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci = 'a' as b","collation_binding_revision":1,"required_protocol_version":119}`}, Cols: []*planpb.ColDef{{Name: "b", Typ: types.T_bool.ToType().PlanType()}}}
-	rt.SetGlobalVariables(key, defines.MORPCVersion119)
+	table := &planpb.TableDef{Name: "v", ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci = 'a' as b","collation_binding_revision":1,"required_protocol_version":120}`}, Cols: []*planpb.ColDef{{Name: "b", Typ: types.T_bool.ToType().PlanType()}}}
+	rt.SetGlobalVariables(key, defines.MORPCVersion120)
 	require.NoError(t, plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, table))
 	// 计划生成后写门回落：即使只剩bool类型，CREATE OR REPLACE不能先DROP，
 	// ALTER不能先查/删旧对象。nil engine意味着任何触达存储都会使本例失败。
 	c.e = nil
-	rt.SetGlobalVariables(key, defines.MORPCVersion118)
+	rt.SetGlobalVariables(key, defines.MORPCVersion119)
 	for _, alter := range []bool{false, true} {
 		ddl := &planpb.DataDefinition{}
 		if alter {
@@ -95,7 +95,7 @@ func TestNativePADViewWriteGateBeforeSideEffects(t *testing.T) {
 		} else {
 			err = scope.CreateView(c)
 		}
-		require.ErrorContains(t, err, "protocol version 119")
+		require.ErrorContains(t, err, "protocol version 120")
 	}
 }
 
@@ -106,43 +106,43 @@ func TestNativePADProtocolPlacementSourceDestinationReceiver(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
 	require.True(t, features.NativePADCollation)
-	require.Equal(t, defines.MORPCVersion119, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion120, remoteExpressionProtocolVersion(features))
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 	op := projection.NewArgument()
 	defer op.Release()
 	op.ProjectList = []*planpb.Expr{expr}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	for _, version := range []int64{117, 118, 119, 118} {
+	for _, version := range []int64{118, 119, 120, 119} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{scope.NodeInfo}
 		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 		_, err = encodeRemoteScope(scope, c.proc)
-		if version < 119 {
+		if version < 120 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-			require.ErrorContains(t, err, "version 119")
+			require.ErrorContains(t, err, "version 120")
 		} else {
 			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 			require.NoError(t, err)
 		}
 	}
 	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
-	require.ErrorContains(t, validateRemoteExpressionDestination(nil, &pipeline.Pipeline{Node: &pipeline.NodeInfo{}}, features), "version 119")
+	require.ErrorContains(t, validateRemoteExpressionDestination(nil, &pipeline.Pipeline{Node: &pipeline.NodeInfo{}}, features), "version 120")
 	client.customResponse = true
 	client.response = &query.Response{}
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 119")
+	require.ErrorContains(t, err, "version 120")
 	require.Equal(t, client.calls, client.releases)
 	client.customResponse = false
-	client.version = defines.MORPCVersion119
+	client.version = defines.MORPCVersion120
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []any{nil, "119", int64(118), int64(119), int64(118)} {
+	for _, version := range []any{nil, "120", int64(119), int64(120), int64(119)} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		_, err = encodeRemoteScope(scope, c.proc)
-		if version == int64(119) {
+		if version == int64(120) {
 			require.NoError(t, err)
 		} else {
-			require.ErrorContains(t, err, "version 119")
+			require.ErrorContains(t, err, "version 120")
 		}
 	}
 	for _, instruction := range []*pipeline.Instruction{
@@ -160,10 +160,10 @@ func TestNativePADProtocolPlacementSourceDestinationReceiver(t *testing.T) {
 			require.True(t, f.NativePADCollation, "没有Expr的聚合/join类型也必须进入协议门")
 			data, err := p.Marshal()
 			require.NoError(t, err)
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 119")
-			for _, version := range []any{nil, "119", int64(118), int64(119)} {
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 120")
+			for _, version := range []any{nil, "120", int64(119), int64(120)} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-				if version == int64(119) {
+				if version == int64(120) {
 					require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 					// 完整算子解码正例使用可执行projection；裸类型另行验证完整owner遍历。
 					if instruction.Op != int32(vm.Projection) {
@@ -174,10 +174,10 @@ func TestNativePADProtocolPlacementSourceDestinationReceiver(t *testing.T) {
 				if decoded != nil {
 					decoded.release()
 				}
-				if version == int64(119) {
+				if version == int64(120) {
 					require.NoError(t, err)
 				} else {
-					require.ErrorContains(t, err, "version 119")
+					require.ErrorContains(t, err, "version 120")
 					require.Nil(t, decoded, "拒绝发生在算子owner分配前")
 				}
 			}
@@ -211,28 +211,28 @@ func TestNativePADResultBatchProtocolAndCleanup(t *testing.T) {
 		data, err := source.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
 		require.NoError(t, err)
 		before := mp.CurrNB()
-		for _, version := range []any{nil, "119", int64(118), int64(119), int64(118)} {
+		for _, version := range []any{nil, "120", int64(119), int64(120), int64(119)} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			decoded, err := decodeBatch(mp, data, c.proc)
-			if version == int64(119) {
+			if version == int64(120) {
 				require.NoError(t, err)
 				require.Equal(t, native, *decoded.Vecs[1].GetType())
 				decoded.Clean(mp)
 			} else {
-				require.ErrorContains(t, err, "version 119")
+				require.ErrorContains(t, err, "version 120")
 				require.Nil(t, decoded)
 			}
 			require.Equal(t, before, mp.CurrNB(), "所有列必须在拒绝后释放，包括空/all-NULL批次")
 		}
 		source.Clean(mp)
 	}
-	// codec合法性与执行能力仍分离：119也不能接受已知但禁用的0900域。
+	// codec合法性与执行能力仍分离：120也不能接受已知但禁用的0900域。
 	native.Charset = 4
 	source := batch.NewWithSize(1)
 	source.Vecs[0] = vector.NewVec(native)
 	data, err := source.MarshalBinaryForPipeline(&bytes.Buffer{}, true, true)
 	require.NoError(t, err)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(119))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(120))
 	decoded, err := decodeBatch(mp, data, c.proc)
 	require.ErrorContains(t, err, "disabled")
 	require.Nil(t, decoded)
@@ -255,9 +255,9 @@ func TestNativePADResultSendRejectsBeforePublication(t *testing.T) {
 	session := mock_morpc.NewMockClientSession(gomock.NewController(t))
 	receiver := &messageReceiverOnServer{messageCtx: context.Background(), connectionCtx: context.Background(),
 		clientSession: session, messageAcquirer: func() morpc.Message { return &pipeline.Message{} }, maxMessageSize: 1 << 20}
-	for _, version := range []any{nil, "119", int64(118)} {
+	for _, version := range []any{nil, "120", int64(119)} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		require.ErrorContains(t, receiver.sendBatch(source), "version 119")
+		require.ErrorContains(t, receiver.sendBatch(source), "version 120")
 	}
 	session.EXPECT().Write(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, message any) error {
 		decoded, err := decodeBatch(mp, message.(*pipeline.Message).Data, c.proc)
@@ -265,8 +265,8 @@ func TestNativePADResultSendRejectsBeforePublication(t *testing.T) {
 		decoded.Clean(mp)
 		return nil
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(119))
-	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, int64(119))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(120))
+	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, int64(120))
 	require.NoError(t, receiver.sendBatch(source))
 	source.Vecs[0].GetType().Charset = 4
 	require.ErrorContains(t, receiver.sendBatch(source), "disabled", "高版本也不能发布未准入域")
@@ -280,7 +280,7 @@ func TestNativePADWireRejectsInvalidUTF8(t *testing.T) {
 					c, _ := expressionProtocolTestCompile(t)
 					rt := moruntime.ServiceRuntime("")
 					old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
 					t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
 					mp := mpool.MustNewZero()
 					defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
