@@ -1,8 +1,9 @@
 # Materialized views: implemented contract (D2)
 
 Status: implementation contract for this PR. The persisted definition is format
-1 and requires the dedicated protocol 110 capability. This document describes the implemented aggregate
-and UNION ALL variants; it does not specify a future operator-graph format.
+1 and requires the dedicated protocol 120 capability. This document describes
+the implemented aggregate and UNION ALL variants; it does not specify a future
+operator-graph format.
 
 ## Design traceability and approval
 
@@ -25,6 +26,9 @@ semantics. Unsupported expressions, set operations or incompatible branch state
 are rejected for FAST. FORCE selects COMPLETE when the definition is outside the
 incremental subset. COMPLETE supports up to 16 direct base sources, including
 joins. Temporary, external and view sources are rejected.
+FAST string grouping keys require binary collation because its persisted group
+identity uses byte equality; collation-aware grouping falls back to COMPLETE
+under FORCE or is rejected under FAST.
 All refresh modes reject subqueries, CTEs, session variables/parameters and
 volatile or time-dependent functions before binding. Their inputs are not
 represented by the direct-source scheduling and snapshot contract.

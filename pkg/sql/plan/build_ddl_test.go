@@ -2064,6 +2064,7 @@ func TestMaterializedViewIncrementalRejectsCollationAwareGroups(t *testing.T) {
 		want    bool
 	}{
 		{name: "binary collation", charset: types.CharsetUTF8MB4Bin, want: true},
+		{name: "default text collation", charset: types.CharsetUTF8, want: false},
 		{name: "unicode case insensitive collation", charset: types.CharsetUTF8MB4UnicodeCI, want: false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

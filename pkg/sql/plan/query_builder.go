@@ -13029,36 +13029,8 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			sqlDatabase = catalogDatabase
 		}
 
-		var subMeta *SubscriptionMeta
-		subMeta, err = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
-		if err == nil && builder.isSkipResolveTableDef && len(ctx.viewPath) == 0 && snapshot == nil && subMeta == nil {
-			var tableDef *TableDef
-			tableDef, err = builder.compCtx.BuildTableDefByMoColumns(catalogDatabase, table)
-			if err != nil {
-				return 0, "", err
-			}
-			if err = ValidateMaterializedViewSources(builder.compCtx, tableDef); err != nil {
-				return 0, "", err
-			}
-
-			// Both frontend and internal compiler contexts must identify Views.
-			// Their persisted columns are not an output schema, even for no rows.
-			if tableDef != nil && tableDef.TableType != catalog.SystemViewRel && tableDef.ViewSql == nil {
-				object := &plan.ObjectRef{DbName: catalogDatabase, SchemaName: catalogDatabase, ObjName: table,
-					Db: int64(tableDef.DbId), Obj: int64(tableDef.TblId)}
-				builder.qry.CatalogDependencies = appendPrepareSchemas(
-					builder.qry.CatalogDependencies, prepareSchemaRef(object, tableDef))
-				nodeID = builder.appendNode(&plan.Node{
-					NodeType:     plan.Node_TABLE_SCAN,
-					Stats:        nil,
-					ObjRef:       object,
-					TableDef:     tableDef,
-					BindingTags:  []int32{builder.genNewBindTag()},
-					ScanSnapshot: snapshot,
-				}, ctx)
-				return
-			}
-		}
+		// Preserve the subscription probe; full resolution below owns errors.
+		_, _ = builder.compCtx.GetSubscriptionMeta(catalogDatabase, snapshot)
 
 		// TODO
 		obj, tableDef, err := builder.compCtx.Resolve(catalogDatabase, table, snapshot)
