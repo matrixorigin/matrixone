@@ -676,14 +676,16 @@ func TestRecordLine(t *testing.T) {
 
 	t.Run("skipped blank lines still count", func(t *testing.T) {
 		// line 1: a,1   lines 2-3 blank   line 4: b,2   line 5 whitespace
-		// line 6: c,3 -- a record starts where its content starts, not where
-		// the scan for it started.
+		// line 6: c,3. Whitespace is field data; only lines 2-3 are skipped.
 		parser, err := NewCSVParser(&cfg, NewStringReader("a,1\n\n\nb,2\n   \nc,3\n"), int64(ReadBlockSize), false)
 		require.NoError(t, err)
-		for _, want := range []int64{1, 4, 6} {
-			_, err = parser.Read(nil)
+		for _, want := range []int64{1, 4, 5, 6} {
+			row, err := parser.Read(nil)
 			require.NoError(t, err)
 			require.Equal(t, want, parser.RecordLine())
+			if want == 5 {
+				require.Equal(t, []Field{newStringField("   ", false, false)}, row)
+			}
 		}
 	})
 
@@ -725,12 +727,13 @@ func TestRecordLine(t *testing.T) {
 	// Each skip path must move the candidate record start forward, while a
 	// multi-line quoted record must keep the line where its first field began.
 	for _, tc := range []struct {
-		name       string
-		input      string
-		comment    string
-		startingBy string
-		lines      []int64
-		rows       [][]string
+		name           string
+		input          string
+		comment        string
+		startingBy     string
+		skipWhitespace bool
+		lines          []int64
+		rows           [][]string
 	}{
 		{
 			name:  "comments before and between records",
@@ -750,6 +753,11 @@ func TestRecordLine(t *testing.T) {
 		{
 			name:  "comments and blanks before multiline record",
 			input: "#h\n\n   \n#c\na,\"x\ny\"\n#d\nb,2", comment: "#",
+			lines: []int64{3, 5, 8}, rows: [][]string{{"   "}, {"a", "x\ny"}, {"b", "2"}},
+		},
+		{
+			name:  "opt-in whitespace skipping before multiline record",
+			input: "#h\n\n   \n#c\na,\"x\ny\"\n#d\nb,2", comment: "#", skipWhitespace: true,
 			lines: []int64{5, 8}, rows: [][]string{{"a", "x\ny"}, {"b", "2"}},
 		},
 		{
@@ -780,6 +788,7 @@ func TestRecordLine(t *testing.T) {
 					skipCfg.Comment = tc.comment
 					skipCfg.LinesStartingBy = tc.startingBy
 					skipCfg.LinesTerminatedBy = "\n"
+					skipCfg.SkipWhitespaceRecords = tc.skipWhitespace
 					parser, err := NewCSVParser(&skipCfg, NewStringReader(tc.input), blockSize, false)
 					require.NoError(t, err)
 					for i, want := range tc.lines {
@@ -979,4 +988,55 @@ func TestTrailingCRBelongsToSealedField(t *testing.T) {
 		_, err = parser.Read(nil)
 		require.ErrorIs(t, err, io.EOF)
 	})
+}
+
+func TestWhitespaceOnlyRecord(t *testing.T) {
+	for _, tc := range []struct {
+		name, input, terminator, comment, startingBy string
+		allowEmpty                                   bool
+		rows                                         [][]Field
+		lines                                        []int64
+	}{
+		{name: "lf", input: "\n \n\t\n \t \nx\n", rows: [][]Field{
+			{newStringField(" ", false, false)}, {newStringField("\t", false, false)},
+			{newStringField(" \t ", false, false)}, {newStringField("x", false, false)}}, lines: []int64{2, 3, 4, 5}},
+		{name: "explicit crlf", terminator: "\r\n", input: "\r\n \r\n\t\r\nx\r\n", rows: [][]Field{
+			{newStringField(" ", false, false)}, {newStringField("\t", false, false)}, {newStringField("x", false, false)}}, lines: []int64{2, 3, 4}},
+		{name: "eof", input: " \nx\n\t", rows: [][]Field{
+			{newStringField(" ", false, false)}, {newStringField("x", false, false)}, {newStringField("\t", false, false)}}, lines: []int64{1, 2, 3}},
+		{name: "unicode whitespace", input: "\u00a0\n\u2003\n", rows: [][]Field{
+			{newStringField("\u00a0", false, false)}, {newStringField("\u2003", false, false)}}, lines: []int64{1, 2}},
+		{name: "quoted controls", terminator: "\n", input: "\"\"\n\" \"\n\"\r\"\n", rows: [][]Field{
+			{newStringField("", false, true)}, {newStringField(" ", false, true)}, {newStringField("\r", false, true)}}, lines: []int64{1, 2, 3}},
+		{name: "allow empty", allowEmpty: true, input: "\n \n", rows: [][]Field{
+			{newStringField("", false, false)}, {newStringField(" ", false, false)}}, lines: []int64{1, 2}},
+		{name: "allow empty crlf", allowEmpty: true, terminator: "\r\n", input: "\r\n \r\n", rows: [][]Field{
+			{newStringField("", false, false)}, {newStringField(" ", false, false)}}, lines: []int64{1, 2}},
+		{name: "comments", comment: "#", input: "# skip\n \n# skip\nx\n", rows: [][]Field{
+			{newStringField(" ", false, false)}, {newStringField("x", false, false)}}},
+		{name: "starting by", startingBy: "p:", terminator: "\n", input: "skip\np: \np:x\n", rows: [][]Field{
+			{newStringField(" ", false, false)}, {newStringField("x", false, false)}}},
+		{name: "multiple columns", input: " ,\n,\n", rows: [][]Field{
+			{newStringField(" ", false, false), newStringField("", false, false)},
+			{newStringField("", false, false), newStringField("", false, false)}}, lines: []int64{1, 2}},
+		{name: "cr at eof", terminator: "\n", input: "\r", rows: [][]Field{{newStringField("\r", false, false)}}, lines: []int64{1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := CSVConfig{FieldsTerminatedBy: ",", FieldsEnclosedBy: `"`, LinesTerminatedBy: tc.terminator,
+				Comment: tc.comment, LinesStartingBy: tc.startingBy, AllowEmptyLine: tc.allowEmpty}
+			parser, err := NewCSVParser(&cfg, strings.NewReader(tc.input), 1, false)
+			require.NoError(t, err)
+			var row []Field
+			for i, want := range tc.rows {
+				row, err = parser.Read(row)
+				require.NoError(t, err)
+				require.Equal(t, want, row)
+				if tc.lines != nil {
+					require.Equal(t, tc.lines[i], parser.RecordLine())
+				}
+			}
+			_, err = parser.Read(row)
+			require.ErrorIs(t, err, io.EOF)
+		})
+	}
 }
