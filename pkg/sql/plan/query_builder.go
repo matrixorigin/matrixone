@@ -8248,7 +8248,7 @@ func rollupWindowOutputAliasWithProvenance(selectExpr tree.SelectExpr) (*tree.CS
 		}
 		expr = parenExpr.Expr
 	}
-	if heading, ok := nameConstHeading(expr); ok {
+	if heading, ok := tree.NameConstHeading(expr); ok {
 		return tree.NewCStr(heading, 1), headingProvenance{}
 	}
 	heading, provenance := formatSelectExpressionHeading(expr)
@@ -11947,7 +11947,7 @@ func appendSelectListWithGroupingOrder(
 						break
 					}
 				}
-				if heading, ok := nameConstHeading(expr); ok {
+				if heading, ok := tree.NameConstHeading(expr); ok {
 					ctx.appendHeading(heading, headingProvenance{})
 				} else {
 					heading, provenance := formatSelectExpressionHeading(expr)
@@ -12073,28 +12073,6 @@ func qualifyGroupingSetHiddenOrderExpr(
 	orderCtx := *ctx
 	orderCtx.aliasMap = aliasMap
 	return orderCtx.qualifyColumnNames(qualified, AliasAfterColumn)
-}
-
-func nameConstHeading(expr tree.Expr) (string, bool) {
-	fn, ok := expr.(*tree.FuncExpr)
-	if !ok || fn.FuncName == nil || !strings.EqualFold(fn.FuncName.Origin(), "name_const") || len(fn.Exprs) != 2 {
-		return "", false
-	}
-
-	nameExpr := fn.Exprs[0]
-	for {
-		paren, ok := nameExpr.(*tree.ParenExpr)
-		if !ok {
-			break
-		}
-		nameExpr = paren.Expr
-	}
-
-	name, ok := nameExpr.(*tree.NumVal)
-	if !ok || !validNameConstNameLiteral(name) {
-		return "", false
-	}
-	return name.String(), true
 }
 
 // DATE_FORMAT and TIME_FORMAT patterns are case-sensitive SQL string literals.

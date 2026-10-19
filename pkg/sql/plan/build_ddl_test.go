@@ -7426,3 +7426,42 @@ func TestValidateIdentifierEncoding(t *testing.T) {
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%q: %v", statement, err)
 	}
 }
+
+func TestBuildCreateViewNameConstMetadataReplay(t *testing.T) {
+	for _, selectSQL := range []string{
+		`select name_const('c', 'plain') as c`,
+		`select name_const('c', _binary 'a\\b') as c`,
+		`select length(name_const('c', 'a\\b')) as c`,
+		`select name_const('c', 'a\\b') as c`,
+		`select name_const('c', ('a\\b'))`,
+		`select name_const('c', 'a\\b' collate utf8mb4_bin)`,
+		`select c from (select name_const('c', 'a\\b')) src`,
+		`select name_const('c', 'a\\b$''é') as c`,
+	} {
+		t.Run(selectSQL, func(t *testing.T) {
+			build := func(sqlText, mode string) *TableDef {
+				stmt, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, sqlText, 1, mode)
+				require.NoError(t, err)
+				defer stmt.Free()
+				ctx := &rootSQLCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), rootSQL: sqlText}
+				ctx.SetSqlModeOverride(mode)
+				built, err := BuildPlan(ctx, stmt, false)
+				require.NoError(t, err, sqlText)
+				return built.GetDdl().GetCreateView().GetTableDef()
+			}
+			original := build("create view v as "+selectSQL, "")
+			var data ViewData
+			require.NoError(t, json.Unmarshal([]byte(original.GetViewSql().GetView()), &data))
+			for _, mode := range []string{"", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+				replayed := build("create view replayed as "+data.Definition, mode)
+				require.Len(t, replayed.Cols, len(original.Cols))
+				for i, col := range original.Cols {
+					require.Equal(t, col.Name, replayed.Cols[i].Name)
+					require.Equal(t, col.Typ.Id, replayed.Cols[i].Typ.Id)
+					require.Equal(t, col.Typ.Charset, replayed.Cols[i].Typ.Charset)
+					require.Equal(t, col.Typ.CollationVersion, replayed.Cols[i].Typ.CollationVersion)
+				}
+			}
+		})
+	}
+}

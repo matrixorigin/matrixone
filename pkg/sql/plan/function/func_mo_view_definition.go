@@ -184,8 +184,7 @@ func viewMetadataFromPersistedData(ctx context.Context, persisted string) (persi
 	}
 	selectStmt = tree.WithViewColumnNames(selectStmt, columnNames)
 	return persistedViewMetadata{definition: tree.StringWithOpts(
-		selectStmt, dialect.MYSQL, tree.WithSingleQuoteString(),
-		tree.WithQuoteIdentifier(), tree.WithModeIndependentStringLiterals()), checkOption: checkOption}, true
+		selectStmt, dialect.MYSQL, tree.WithViewDefinition()), checkOption: checkOption}, true
 }
 
 // legacyViewSelectWithStableOutputHeadings preserves implicit output headings
@@ -253,6 +252,9 @@ func legacyViewOutputHeading(expr tree.Expr) (string, bool) {
 			break
 		}
 		expr = paren.Expr
+	}
+	if heading, ok := tree.NameConstHeading(expr); ok {
+		return heading, true
 	}
 	detectCtx := tree.NewFmtCtx(dialect.MYSQL, tree.WithDateTimeFormatDetection())
 	expr.Format(detectCtx)

@@ -17,6 +17,7 @@ package sqlintegration
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"testing"
 	"time"
@@ -79,6 +80,51 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					var equal int
 					require.NoError(t, db.QueryRowContext(ctx, definition).Scan(&equal))
 					require.Equal(t, tc.want, equal, definition)
+				}
+				// A metadata round trip retains NAME_CONST's public column name,
+				// bytes, character set and collation for new and Stmt-only rows.
+				for index, tc := range []struct{ selectSQL, want string }{
+					{`select name_const('c', 1)`, "1"},
+					{`select name_const('c', 'plain') as c`, "plain"},
+					{`select name_const('c', _binary 'a\\b') as c`, "a\\b"},
+					{`select length(name_const('c', 'a\\b')) as c`, "3"},
+					{`select name_const('c', 'a\\b') as c`, "a\\b"},
+					{`select name_const('c', ('a\\b'))`, "a\\b"},
+					{`select name_const('c', 'a\\b' collate utf8mb4_bin)`, "a\\b"},
+					{`select c from (select name_const('c', 'a\\b')) src`, "a\\b"},
+					{`select name_const('c', 'a\\b$''é') as c`, "a\\b$'é"},
+				} {
+					source := fmt.Sprintf("%s.name_const_source_%d", schema, index)
+					execSQLRequire(t, ctx, db, "create view "+source+" as "+tc.selectSQL)
+					read := func(view string) [3]string {
+						var values [3]string
+						require.NoError(t, db.QueryRowContext(ctx,
+							"select hex(cast(c as char)), charset(c), collation(c) from "+view).Scan(&values[0], &values[1], &values[2]))
+						rows, err := db.QueryContext(ctx, "select * from "+view+" limit 0")
+						require.NoError(t, err)
+						defer rows.Close()
+						names, err := rows.Columns()
+						require.NoError(t, err)
+						require.Equal(t, []string{"c"}, names)
+						require.False(t, rows.Next())
+						require.NoError(t, rows.Err())
+						return values
+					}
+					want := read(source)
+					require.Equal(t, fmt.Sprintf("%X", []byte(tc.want)), want[0])
+					var currentDefinition string
+					require.NoError(t, db.QueryRowContext(ctx,
+						"select mo_view_definition(viewdef) from mo_catalog.mo_tables where account_id=0 and reldatabase=? and relname=?",
+						schema, fmt.Sprintf("name_const_source_%d", index)).Scan(&currentDefinition))
+					persisted, err := json.Marshal(map[string]string{"Stmt": "create view old as " + tc.selectSQL})
+					require.NoError(t, err)
+					var legacyDefinition string
+					require.NoError(t, db.QueryRowContext(ctx, "select mo_view_definition(?)", string(persisted)).Scan(&legacyDefinition))
+					for generation, definition := range []string{currentDefinition, legacyDefinition} {
+						replayed := fmt.Sprintf("%s.name_const_replayed_%d_%d", schema, index, generation)
+						execSQLRequire(t, ctx, db, "create view "+replayed+" as "+definition)
+						require.Equal(t, want, read(replayed), definition)
+					}
 				}
 				execSQLRequire(t, ctx, db, "drop database "+schema)
 			})

@@ -632,3 +632,20 @@ func TestBuiltInViewCheckOption(t *testing.T) {
 		}
 	}
 }
+
+func TestViewDefinitionReplayPreservesNameConstHeading(t *testing.T) {
+	for _, tc := range []struct{ statement, heading string }{
+		{"create view v as select name_const('c', 1)", "c"},
+		{"create view v as select (name_const(('c'), 1))", "c"},
+		{"create view v as select name_const(123, 1)", "123"},
+		{"create view v as select name_const('c', 1) as explicit_name", "explicit_name"},
+	} {
+		t.Run(tc.statement, func(t *testing.T) {
+			encoded, err := json.Marshal(map[string]string{"Stmt": tc.statement})
+			require.NoError(t, err)
+			definition, ok := viewDefinitionFromPersistedData(t.Context(), string(encoded))
+			require.True(t, ok)
+			require.Contains(t, definition, "as `"+tc.heading+"`")
+		})
+	}
+}

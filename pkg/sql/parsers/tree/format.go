@@ -39,6 +39,7 @@ type FmtCtx struct {
 	// as hex-to-varchar casts so the SQL reparses identically with or without
 	// NO_BACKSLASH_ESCAPES.
 	modeIndependentStringLiterals bool
+	viewDefinition                bool
 	paramExprOffset               bool
 	detectDateTimeFormat          bool
 	sawDateTimeFormat             bool
@@ -133,6 +134,18 @@ func WithModeIndependentStringLiterals() FmtCtxOption {
 
 func (ctx *FmtCtx) ModeIndependentStringLiterals() bool {
 	return ctx.modeIndependentStringLiterals
+}
+
+// WithViewDefinition exports executable SELECT metadata. NAME_CONST values that
+// require canonical string casts are emitted as literals with their named output
+// preserved, including inside derived tables. Normal binding remains strict.
+func WithViewDefinition() FmtCtxOption {
+	return FmtCtxOption(func(ctx *FmtCtx) {
+		ctx.viewDefinition = true
+		ctx.modeIndependentStringLiterals = true
+		ctx.singleQuoteString = true
+		ctx.quoteIdentifier = true
+	})
 }
 
 // WithParamExprOffset includes a parameter's parser-assigned offset in its

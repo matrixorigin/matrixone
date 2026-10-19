@@ -164,18 +164,18 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 					require.Equal(t, mode == "normalized_interval", features.CalendarIntervalNormalization)
 					require.Equal(t, mode == "mixed" || mode == "division_warning", features.ScalarDivision)
 					require.Equal(t, mode == "collation", features.LeastGreatestCollationSemantics)
-					require.Equal(t, defines.MORPCVersion121, executionRemoteExpressionProtocolVersion(c.proc, features))
-					require.Equal(t, defines.MORPCVersion121, remoteExpressionProtocolVersion(features))
+					require.Equal(t, defines.MORPCVersion122, executionRemoteExpressionProtocolVersion(c.proc, features))
+					require.Equal(t, defines.MORPCVersion122, remoteExpressionProtocolVersion(features))
 					persistedVersion, err := plan2.RequiredPersistedExpressionProtocolVersion(op.ProjectList)
 					require.NoError(t, err)
-					require.Equal(t, defines.MORPCVersion121, persistedVersion)
+					require.Equal(t, defines.MORPCVersion122, persistedVersion)
 					// No capability observation survives a send, including after
 					// success followed by rollback of the very same endpoint.
-					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion121, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
+					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion122, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion120, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
 						client.version = version
 						calls, releases := client.calls, client.releases
 						data, err := encodeRemoteScope(scope, c.proc)
-						if version == defines.MORPCVersion121 {
+						if version == defines.MORPCVersion122 {
 							require.NoError(t, err)
 							require.NotEmpty(t, data)
 						} else if version < defines.MORPCVersion117 && mode == "collation" {
@@ -191,7 +191,7 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 						} else if version < defines.MORPCVersion113 && mode == "statistical" {
 							require.ErrorContains(t, err, "remote destination does not support decimal statistical DOUBLE results")
 						} else {
-							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 121)")
+							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 122)")
 						}
 						require.Equal(t, 1, client.calls-calls)
 						require.Equal(t, 1, client.releases-releases)

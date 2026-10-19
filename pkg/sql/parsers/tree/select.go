@@ -1553,6 +1553,12 @@ func (node *SelectExpr) Format(ctx *FmtCtx) {
 	if node.As != nil && !node.As.Empty() {
 		ctx.WriteString(" as ")
 		ctx.WriteIdentifier(Identifier(node.As.Origin()))
+	} else if ctx.viewDefinition {
+		if _, ok := viewNameConstValue(node.Expr); ok {
+			heading, _ := NameConstHeading(node.Expr)
+			ctx.WriteString(" as ")
+			ctx.WriteIdentifier(Identifier(heading))
+		}
 	}
 }
 
