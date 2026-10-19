@@ -26,6 +26,17 @@ import (
 )
 
 func TestTerminalBudgetError(t *testing.T) {
+	t.Run("diagnostic headroom reason survives terminal conversion", func(t *testing.T) {
+		err := TerminalBudgetError(context.Background(), &process.ExecutionResourceError{
+			Kind:      process.ExecutionResourceErrorAdmission,
+			Component: process.ExecutionResourceComponentMemory,
+			Requested: 496,
+			Message:   "headroom-diagnostic sample_bytes=100 safety_bytes=100; " + process.ErrExecutionResourceAdmission.Error() + ": requested=496 used=0 cap=0",
+		})
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrOOM))
+		require.Contains(t, err.Error(), "headroom-diagnostic sample_bytes=100 safety_bytes=100")
+		require.Contains(t, err.Error(), "requested=496")
+	})
 	t.Run("nil and unrelated pass through", func(t *testing.T) {
 		require.NoError(t, TerminalBudgetError(context.Background(), nil))
 		other := errors.New("other")

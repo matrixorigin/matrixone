@@ -15,6 +15,7 @@
 package process
 
 import (
+	"fmt"
 	"sync/atomic"
 	"time"
 
@@ -120,23 +121,48 @@ func (b *ExecutionResourceBudget) memoryHeadroomRefreshNeededLocked() bool {
 // process working set while preserving the runtime safety margin. It adjusts a
 // cached OS sample by all charged bytes not backed before that sample. Freed
 // backing loses its credit even if a new allocation replaces it. b.mu must be held.
-func (b *ExecutionResourceBudget) physicalGrowthHeadroomLocked() (uint64, bool) {
+func (b *ExecutionResourceBudget) physicalGrowthHeadroomLocked() (uint64, bool, uint64) {
 	if b == nil || !b.memoryHeadroomMeasured {
-		return 0, false
+		return 0, false, 0
 	}
 	remaining := b.memoryHeadroomBytes
 	committed := b.memoryHeadroomBacking.RetainedCapacity()
 	if b.aggregateUsed > committed {
 		growth := b.aggregateUsed - committed
 		if growth >= remaining {
-			return 0, true
+			return 0, true, committed
 		}
 		remaining -= growth
 	}
 	if remaining <= b.memoryHeadroomSafety {
-		return 0, true
+		return 0, true, committed
 	}
-	return remaining - b.memoryHeadroomSafety, true
+	return remaining - b.memoryHeadroomSafety, true, committed
+}
+
+// annotateHeadroomRejectionLocked only copies already-owned observations. It
+// performs no filesystem reads, logging, collection or additional reservations.
+// backing is the very same retained snapshot used to decide this rejection.
+// Put diagnostics before the generic error: hashbuild deliberately strips
+// messages which start with the generic admission-error prefix.
+func (b *ExecutionResourceBudget) annotateHeadroomRejectionLocked(err *ExecutionResourceError, headroom, backing, queryUsed uint64) {
+	if !b.headroomDiagnosticEnabled || b.headroomDiagnosticCount >= 120 {
+		return
+	}
+	now := time.Now
+	if b.memoryHeadroomNow != nil {
+		now = b.memoryHeadroomNow
+	}
+	at := now()
+	if b.headroomDiagnosticCount != 0 && at.Sub(b.headroomDiagnosticAt) < time.Second {
+		return
+	}
+	b.headroomDiagnosticAt = at
+	b.headroomDiagnosticCount++
+	err.Message = fmt.Sprintf("headroom-diagnostic sample_bytes=%d safety_bytes=%d retained_backing=%d effective_headroom=%d aggregate_used=%d aggregate_cap=%d query_used=%d unused_recovery=%d sample_age_ns=%d sequence=%d; %s",
+		b.memoryHeadroomBytes, b.memoryHeadroomSafety, backing, headroom,
+		b.aggregateUsed, b.aggregateCap, queryUsed, b.recoveryCapacityUnused,
+		at.Sub(b.memoryHeadroomAt).Nanoseconds(), b.headroomDiagnosticCount, err.Error())
 }
 
 // RetainedLimit reports current retained bytes and returns this participant's
@@ -210,7 +236,7 @@ func (p *ExecutionMemoryGrowthParticipant) RetainedLimit(
 	cnLimit := cnPool / b.memoryGrowthParticipants
 	limit := min(queryLimit, cnLimit)
 	if physicalMeasured {
-		growthHeadroom, _ := b.physicalGrowthHeadroomLocked()
+		growthHeadroom, _, _ := b.physicalGrowthHeadroomLocked()
 		physicalShare := growthHeadroom / b.memoryGrowthParticipants
 		physicalLimit := current
 		if physicalShare > ^uint64(0)-physicalLimit {

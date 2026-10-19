@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -309,6 +310,12 @@ type ExecutionResourceBudget struct {
 	// reserve again would double-count it.
 	memoryHeadroomSafety uint64
 
+	// Diagnostic branch only: bounded annotations on the existing rejection
+	// path. Protected by mu; never used to decide admission or initiate reclaim.
+	headroomDiagnosticEnabled bool
+	headroomDiagnosticCount   uint32
+	headroomDiagnosticAt      time.Time
+
 	allocationRegistryOnce sync.Once
 	allocationRegistry     atomic.Pointer[mpool.AllocationAccountRegistry]
 	allocationRegistryErr  error
@@ -328,7 +335,8 @@ func NewExecutionResourceBudget(aggregateCap, queryCap uint64) (*ExecutionResour
 	}
 	configuredFDCap := configuredSpillFDCap(aggregateCap)
 	return &ExecutionResourceBudget{
-		aggregateCap: aggregateCap, queryCap: queryCap,
+		headroomDiagnosticEnabled: os.Getenv("MO_DEBUG_ADMISSION_HEADROOM") == "1",
+		aggregateCap:              aggregateCap, queryCap: queryCap,
 		spillDiskCap:         defaultSpillCap(aggregateCap),
 		spillFDConfiguredCap: configuredFDCap,
 		spillFDCap:           clampSpillFDCapToProcess(configuredFDCap),
@@ -1483,7 +1491,7 @@ func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 		observeExecutionResourceBudget("memory", "reject", "query", size)
 		return &ExecutionResourceError{Kind: ExecutionResourceErrorClosed, Requested: size, Used: g.used, Cap: g.cap}, false
 	}
-	if physicalHeadroom, measured := b.physicalGrowthHeadroomLocked(); measured && size > physicalHeadroom {
+	if physicalHeadroom, measured, backing := b.physicalGrowthHeadroomLocked(); measured && size > physicalHeadroom {
 		g.rejectCount++
 		observeExecutionResourceBudget("memory", "reject", "cn", size)
 		physicalCap := b.aggregateUsed
@@ -1492,7 +1500,9 @@ func (g *ExecutionResourceGeneration) acquireMemoryLocked(
 		} else {
 			physicalCap = ^uint64(0)
 		}
-		return newAdmissionError(size, b.aggregateUsed, physicalCap), false
+		err := newAdmissionError(size, b.aggregateUsed, physicalCap)
+		b.annotateHeadroomRejectionLocked(err.(*ExecutionResourceError), physicalHeadroom, backing, g.used)
+		return err, false
 	}
 	// Check by subtraction rather than used+size: this is safe for
 	// math.MaxUint64 and rejects every overflow-sized request.

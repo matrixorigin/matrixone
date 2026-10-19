@@ -15,6 +15,7 @@
 package process
 
 import (
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -338,6 +339,107 @@ func TestExecutionMemoryAdmissionMeasuredHeadroomBoundary(t *testing.T) {
 			require.Zero(t, budget.aggregateUsed)
 		})
 	}
+}
+
+func TestExecutionHeadroomDiagnosticPreservesDecision(t *testing.T) {
+	for _, tc := range []struct {
+		name                                      string
+		sample, used, safety, requested, headroom uint64
+	}{
+		{"physical-zero", 0, 0, 100, 1, 0},
+		{"safety-only", 100, 0, 100, 1, 0},
+		{"unbacked-reservation", 300, 200, 100, 1, 0},
+		{"nonzero-insufficient", 300, 100, 100, 101, 100},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			budget := MustNewExecutionResourceBudget(1000, 800)
+			defer budget.Close()
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			defer generation.Close()
+			budget.memoryHeadroomBytes = tc.sample
+			budget.memoryHeadroomSafety = tc.safety
+			budget.memoryHeadroomMeasured = true
+			budget.memoryHeadroomAt = time.Unix(10, 0)
+			budget.memoryHeadroomNow = func() time.Time { return time.Unix(10, 125) }
+			// Model existing charges without allocating memory. Restore before Close.
+			budget.aggregateUsed = tc.used
+			defer func() { budget.aggregateUsed = 0 }()
+			for _, enabled := range []bool{false, true} {
+				budget.headroomDiagnosticEnabled = enabled
+				budget.mu.Lock()
+				err, aggregateRejected := generation.acquireMemoryLocked(tc.requested, true, false)
+				budget.mu.Unlock()
+				require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+				require.False(t, aggregateRejected)
+				var resourceErr *ExecutionResourceError
+				require.ErrorAs(t, err, &resourceErr)
+				require.Equal(t, tc.requested, resourceErr.Requested)
+				require.Equal(t, tc.used, resourceErr.Used)
+				require.Equal(t, tc.used+tc.headroom, resourceErr.Cap)
+				require.Equal(t, ExecutionResourceComponentMemory, resourceErr.Component)
+				require.Equal(t, enabled, strings.Contains(err.Error(), "headroom-diagnostic"))
+				if enabled {
+					require.Contains(t, err.Error(), "sample_age_ns=125 sequence=1")
+				}
+				require.Equal(t, tc.used, budget.aggregateUsed)
+			}
+		})
+	}
+}
+
+func TestExecutionHeadroomDiagnosticRateAndCountBound(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1000, 800)
+	defer budget.Close()
+	budget.headroomDiagnosticEnabled = true
+	at := time.Unix(10, 0)
+	budget.memoryHeadroomNow = func() time.Time { return at }
+	annotate := func() bool {
+		err := newAdmissionError(1, 0, 0).(*ExecutionResourceError)
+		budget.mu.Lock()
+		budget.annotateHeadroomRejectionLocked(err, 0, 0, 0)
+		budget.mu.Unlock()
+		return strings.Contains(err.Error(), "headroom-diagnostic")
+	}
+	for i := 0; i < 120; i++ {
+		require.True(t, annotate())
+		require.False(t, annotate(), "no repeated annotation at the same time")
+		at = at.Add(time.Second)
+	}
+	for i := 0; i < 10; i++ {
+		at = at.Add(time.Hour)
+		require.False(t, annotate(), "lifetime bound cannot reset after idle")
+	}
+	require.Equal(t, uint32(120), budget.headroomDiagnosticCount)
+}
+
+func TestExecutionHeadroomDiagnosticConcurrentRejections(t *testing.T) {
+	budget := MustNewExecutionResourceBudget(1000, 800)
+	defer budget.Close()
+	budget.headroomDiagnosticEnabled = true
+	budget.memoryHeadroomProvider = func() (uint64, bool) { return 0, true }
+	budget.memoryHeadroomNow = func() time.Time { return time.Unix(10, 0) }
+	budget.memoryHeadroomTTL = time.Second
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	var group sync.WaitGroup
+	errors := make(chan error, 32)
+	for i := 0; i < cap(errors); i++ {
+		group.Add(1)
+		go func() { defer group.Done(); errors <- generation.acquireMemory(1) }()
+	}
+	group.Wait()
+	close(errors)
+	annotated := 0
+	for err := range errors {
+		require.ErrorIs(t, err, ErrExecutionResourceAdmission)
+		if strings.Contains(err.Error(), "headroom-diagnostic") {
+			annotated++
+		}
+	}
+	require.Equal(t, 1, annotated)
+	require.Zero(t, generation.Used())
 }
 
 func TestExecutionRecoveryBorrowsAlreadyAdmittedPhysicalHeadroom(t *testing.T) {
