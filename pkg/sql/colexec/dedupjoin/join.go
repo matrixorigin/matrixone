@@ -149,6 +149,10 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 	if len(dedupJoin.UpdateColIdxList) != len(dedupJoin.UpdateColExprList) {
 		return moerr.NewInternalError(proc.Ctx, "dedup join update column/expression count mismatch")
 	}
+	if dedupJoin.UpdateExpressions != nil && !dedupJoin.EmitActionRows {
+		return moerr.NewInternalError(proc.Ctx, "suspending ODKU requires an action cursor")
+	}
+	dedupJoin.ctr.updateExpressions = dedupJoin.UpdateExpressions
 	for _, pos := range dedupJoin.UpdateColIdxList {
 		if pos < 0 || int(pos) >= len(dedupJoin.LeftTypes) {
 			return moerr.NewInternalError(proc.Ctx, "dedup join update column out of range")
@@ -234,7 +238,7 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 	dedupJoin.ctr.autoSpill = dedupJoin.SpillThreshold == 0
 	dedupJoin.ctr.spillThreshold = colexec.ResolveSpillThreshold(dedupJoin.SpillThreshold)
 	newEvalVectors := len(dedupJoin.ctr.vecs) == 0
-	newUpdateExecs := len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0
+	newUpdateExecs := dedupJoin.UpdateExpressions == nil && len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0
 	var evalExecs, updateExecs []colexec.ExpressionExecutor
 	if newEvalVectors {
 		evalExecs, err = hashbuild.NewExpressionExecutors(
@@ -315,6 +319,9 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
+				if result.Status == vm.ExecYield {
+					return result, nil
+				}
 				bat = result.Batch
 				if bat == nil {
 					ctr.state = Finalize
@@ -338,6 +345,9 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				err := ctr.finalize(dedupJoin, proc)
 				if err != nil {
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
+				}
+				if ctr.updateSuspended {
+					return vm.CallResult{Status: vm.ExecYield}, nil
 				}
 				if ctr.state == End {
 					continue
@@ -601,8 +611,10 @@ func (ctr *container) finalizeODKUActionRows(
 		ctr.finalizeDone = true
 		return nil
 	}
-	if err := ap.resetRBat(); err != nil {
-		return err
+	if !ctr.updateSuspended {
+		if err := ap.resetRBat(); err != nil {
+			return err
+		}
 	}
 
 	zeroSels := ctr.mp.GetSels(0)
@@ -700,6 +712,9 @@ func (ctr *container) finalizeODKUActionRows(
 				if err != nil {
 					return err
 				}
+				if ctr.updateSuspended {
+					return nil
+				}
 				ctr.finalizeCurrentVecs = snapshotVectors(
 					ctr.finalizeCurrentVecs, ctr.joinBat1, ap.UpdateColIdxList)
 				ctr.finalizeLogicalAffect += odkuAffectedRows(changed, ap.CountFoundRows)
@@ -723,6 +738,9 @@ func (ctr *container) finalizeODKUActionRows(
 		})
 		if err != nil {
 			return err
+		}
+		if ctr.updateSuspended {
+			return nil
 		}
 		if ctr.finalizeActionIdx == len(sels) {
 			ctr.finalizeActionActive = false
@@ -1257,12 +1275,29 @@ func (ctr *container) applyUpdateExpressions(
 		ctr.actionImageBeforeVecs = snapshotVectors(ctr.actionImageBeforeVecs, ctr.joinBat1, updateCols)
 		actionImageBefore = ctr.actionImageBeforeVecs
 	}
-	for i, exprExec := range ctr.exprExecs {
-		vec, err := exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
+	if ctr.updateExpressions != nil {
+		values, err := ctr.updateExpressions(proc, ctr.joinBat1, ctr.joinBat2)
 		if err != nil {
 			return false, err
 		}
-		ctr.joinBat1.Vecs[updateCols[i]] = vec
+		ctr.updateSuspended = values == nil
+		if ctr.updateSuspended {
+			return false, nil
+		}
+		if len(values) != len(updateCols) {
+			return false, moerr.NewInternalError(proc.Ctx, "ODKU assignment result count mismatch")
+		}
+		for i, vec := range values {
+			ctr.joinBat1.Vecs[updateCols[i]] = vec
+		}
+	} else {
+		for i, exprExec := range ctr.exprExecs {
+			vec, err := exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
+			if err != nil {
+				return false, err
+			}
+			ctr.joinBat1.Vecs[updateCols[i]] = vec
+		}
 	}
 	// A column expression may return a vector owned by joinBat2 (VALUES(...)),
 	// and a function executor may reuse its result on the next Eval. Materialize
@@ -1741,8 +1776,10 @@ func (ctr *container) probeODKUActionRows(
 	proc *process.Process,
 	result *vm.CallResult,
 ) error {
-	if err := ap.resetRBat(); err != nil {
-		return err
+	if !ctr.updateSuspended {
+		if err := ap.resetRBat(); err != nil {
+			return err
+		}
 	}
 	if ctr.probeBat == nil {
 		if err := ctr.evalJoinCondition(bat, proc); err != nil {
@@ -1810,6 +1847,9 @@ func (ctr *container) probeODKUActionRows(
 					if err != nil {
 						return err
 					}
+					if ctr.updateSuspended {
+						return nil
+					}
 					ctr.probeCurrentVecs = snapshotVectors(
 						ctr.probeCurrentVecs, ctr.joinBat1, ap.UpdateColIdxList)
 					ctr.probeLogicalAffected += odkuAffectedRows(changed, ap.CountFoundRows)
@@ -1836,6 +1876,10 @@ func (ctr *container) probeODKUActionRows(
 			})
 			if err != nil {
 				return err
+			}
+			if ctr.updateSuspended {
+				*result = vm.CallResult{Status: vm.ExecYield}
+				return nil
 			}
 			if ctr.probeActionIdx == ctr.actionCount(group) {
 				ctr.matched.Add(group - 1)

@@ -693,7 +693,7 @@ func testArrowClusterRestart(t *testing.T, c embed.Cluster, db *sql.DB) {
 	require.Equal(t, int64(1), queryCount(t, db, "select count(*) from restart_persistence"))
 
 	require.NoError(t, db.Close())
-	require.NoError(t, c.Close())
+	require.NoError(t, c.Stop())
 	require.NoError(t, c.Start())
 
 	restartedDB := openArrowLoadDB(t, c, 0)

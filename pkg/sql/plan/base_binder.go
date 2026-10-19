@@ -3265,6 +3265,20 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	if strings.EqualFold(funcName, "values") {
+		// VALUES in a nested ODKU subquery still names the incoming row of
+		// that assignment owner. Count query blocks, skipping binderless
+		// namespace contexts just as correlated column lookup does.
+		var levels int32
+		for ctx := b.ctx; ctx != nil; ctx = ctx.parent {
+			if owner, ok := ctx.binder.(*OndupUpdateBinder); ok {
+				return owner.BindExpr(astExpr, levels, isRoot)
+			}
+			if ctx.binder != nil {
+				levels++
+			}
+		}
+	}
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}
@@ -5066,6 +5080,31 @@ func (b *baseBinder) markVolatileInLeft(left *plan.Expr) error {
 func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*Expr, error) {
 	if len(args) != 2 {
 		return args, nil
+	}
+
+	// DIV's precision and unsigned domain belong to the original operands.
+	// Infer only unknown markers here; the function resolver owns physical casts.
+	if name == "div" {
+		original := []types.Type{makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1])}
+		if (original[0].Oid.IsDecimal() || original[1].Oid.IsDecimal()) &&
+			(original[0].Oid.IsDecimal() || original[0].Oid.IsInteger() || original[0].Oid == types.T_any) &&
+			(original[1].Oid.IsDecimal() || original[1].Oid.IsInteger() || original[1].Oid == types.T_any) {
+			for i := range args {
+				if original[i].Oid != types.T_any {
+					continue
+				}
+				hint, ok := function.InferNumericParameterType([]types.Type{original[1-i]}, nil)
+				if !ok {
+					return args, nil
+				}
+				cast, err := appendCastBeforeExpr(b.GetContext(), args[i], makePlan2Type(&hint))
+				if err != nil {
+					return nil, err
+				}
+				args[i] = cast
+			}
+			return args, nil
+		}
 	}
 
 	left, right, _, ok := function.ResolveNumericBinaryTypes(

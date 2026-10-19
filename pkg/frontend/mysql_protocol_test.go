@@ -564,6 +564,11 @@ func TestKill(t *testing.T) {
 	require.NoError(t, err)
 	logutil.Infof("get the connection id of conn2 done")
 	logutil.Infof("conn==>%v %v", conn1Id, conn2Id)
+	// SkipCheckUser bypasses catalog authentication in this protocol fixture.
+	// Install the authenticated administrator identities required by KILL.
+	for _, id := range []uint32{uint32(conn1Id), uint32(conn2Id)} {
+		temp.getRoutineByConnID(id).getSession().SetTenantInfo(killTestIdentity("sys", 0, "root", 0, "moadmin"))
+	}
 
 	wgSleep := sync.WaitGroup{}
 	wgSleep.Add(1)

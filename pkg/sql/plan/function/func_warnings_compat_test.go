@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -446,6 +447,61 @@ func TestFormatDirectDiagnostics(t *testing.T) {
 					}
 					require.Len(t, sink.warnings, want)
 				}()
+			}
+		})
+	}
+}
+
+func TestScalarWarningUTF8Boundary(t *testing.T) {
+	for _, tc := range []struct{ name, input, prefix string }{
+		{"ascii_at", strings.Repeat("a", 128), strings.Repeat("a", 128)},
+		{"ascii_over", strings.Repeat("a", 129), strings.Repeat("a", 128)},
+		{"two_byte_at", strings.Repeat("é", 64), strings.Repeat("é", 64)},
+		{"two_byte_split", "a" + strings.Repeat("é", 64), "a" + strings.Repeat("é", 63)},
+		{"three_byte_under", strings.Repeat("界", 42), strings.Repeat("界", 42)},
+		{"three_byte_split", strings.Repeat("界", 43), strings.Repeat("界", 42)},
+		{"four_byte_at", strings.Repeat("😀", 32), strings.Repeat("😀", 32)},
+		{"four_byte_split", "a" + strings.Repeat("😀", 32), "a" + strings.Repeat("😀", 31)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			sink := &numericWarningSession{}
+			proc.WarningSink = sink
+			input := NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.input}, nil)
+			formatCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{1234}, nil),
+				NewFunctionTestInput(types.T_int64.ToType(), []int64{2}, nil), input},
+				NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"1,234.00"}, nil), formatIntegerPrecision)
+			ok, info := formatCase.RunAndFree()
+			require.True(t, ok, info)
+			dateCase := NewFunctionTestCase(proc, []FunctionTestInput{input,
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y-%m-%d"}, nil)},
+				NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{0}, []bool{true}), builtInStrToDate)
+			ok, info = dateCase.RunAndFree()
+			require.True(t, ok, info)
+			trailing := "2024-01-02" + tc.input
+			// The prefix is counted from the entire input, including the valid date.
+			var trailingPrefix string
+			for _, r := range trailing {
+				if len(trailingPrefix)+utf8.RuneLen(r) > 128 {
+					break
+				}
+				trailingPrefix += string(r)
+			}
+			trailingCase := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{trailing}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y-%m-%d"}, nil)},
+				NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{types.DateFromCalendar(2024, 1, 2)}, nil), builtInStrToDate)
+			ok, info = trailingCase.RunAndFree()
+			require.True(t, ok, info)
+			require.Equal(t, []numericWarning{
+				{code: moerr.ER_UNKNOWN_LOCALE, msg: "Unknown locale: '" + tc.prefix + "'"},
+				{code: moerr.ER_WRONG_VALUE_FOR_TYPE, msg: "Incorrect datetime value: '" + tc.prefix + "' for function str_to_date"},
+				{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Truncated incorrect date value: '" + trailingPrefix + "'"},
+			}, sink.warnings)
+			for _, w := range sink.warnings {
+				require.True(t, utf8.ValidString(w.msg), "%x", w.msg)
 			}
 		})
 	}

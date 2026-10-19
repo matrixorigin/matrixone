@@ -7421,6 +7421,13 @@ cte_list:
 common_table_expr:
     ident column_list_opt AS '(' stmt ')'
     {
+        // stmt has an EMPTY alternative used for bare trailing semicolons.
+        // Inside a CTE body that produces a nil Stmt and panics in Format
+        // (CTAS / PREPARE). Reject like MySQL. See #30146.
+        if $5 == nil {
+            yylex.Error("empty common table expression body")
+            goto ret1
+        }
         $$ = &tree.CTE{
             Name: &tree.AliasClause{Alias: tree.Identifier($1.Compare()), Cols: $2},
             Stmt: $5,

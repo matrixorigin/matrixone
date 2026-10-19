@@ -24,6 +24,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	mock_morpc "github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -31,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	motestutil "github.com/matrixorigin/matrixone/pkg/testutil"
@@ -106,7 +108,7 @@ func TestVectorScanProtocolCheckReportsReceivingInstanceVersion(t *testing.T) {
 
 func TestIndexSearchScanPlacementRequiresProtocol(t *testing.T) {
 	workers := engine.Nodes{{Id: "b", Addr: "b:6001"}, {Id: "a", Addr: "a:6001"}}
-	for _, mode := range []string{"supported", "old worker", "old coordinator", "unknown worker", "probe failure", "canceled", "forced local"} {
+	for _, mode := range []string{"supported", "old worker", "old coordinator", "unknown worker", "probe failure", "probe deadline", "canceled", "cancel during probe", "forced local"} {
 		t.Run(mode, func(t *testing.T) {
 			c, client := vectorPlacementCompile(t, workers)
 			node := vectorPlacementNode()
@@ -119,6 +121,12 @@ func TestIndexSearchScanPlacementRequiresProtocol(t *testing.T) {
 				client.customResponse = true
 			case "probe failure":
 				client.customResponse, client.sendErr = true, errors.New("unavailable")
+			case "probe deadline":
+				client.customResponse, client.sendErr = true, context.DeadlineExceeded
+			case "cancel during probe":
+				ctx, cancel := context.WithCancel(c.proc.Ctx)
+				defer cancel()
+				c.proc.Ctx, client.onSend = ctx, cancel
 			case "canceled":
 				ctx, cancel := context.WithCancel(c.proc.Ctx)
 				cancel()
@@ -127,8 +135,16 @@ func TestIndexSearchScanPlacementRequiresProtocol(t *testing.T) {
 				node.Stats.ForceOneCN = true
 			}
 			scopes, err := c.compileIndexSearchScan(node)
-			if mode == "canceled" {
+			t.Cleanup(func() { ReleaseScopes(scopes) })
+			if mode == "canceled" || mode == "cancel during probe" {
 				require.ErrorIs(t, err, context.Canceled)
+				require.Empty(t, scopes)
+				return
+			}
+			if client.sendErr != nil {
+				require.ErrorIs(t, err, client.sendErr)
+				require.False(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				require.NoError(t, c.proc.Ctx.Err())
 				require.Empty(t, scopes)
 				return
 			}
@@ -138,7 +154,6 @@ func TestIndexSearchScanPlacementRequiresProtocol(t *testing.T) {
 				return
 			}
 			require.NoError(t, err)
-			t.Cleanup(func() { ReleaseScopes(scopes) })
 			if mode == "forced local" {
 				require.Len(t, scopes, 1)
 				require.Equal(t, c.addr, scopes[0].NodeInfo.Addr)
@@ -183,6 +198,14 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	require.True(t, decoded.IsRemote)
 	require.Equal(t, remote.NodeInfo.CNIDX, decoded.NodeInfo.CNIDX)
 	require.Equal(t, remote.NodeInfo.CNCNT, decoded.NodeInfo.CNCNT)
+
+	client.customResponse, client.sendErr = true, context.DeadlineExceeded
+	client.response = &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{Version: vectorscan.IndexSearchScanProtocolVersion}}
+	dataOnError, err := encodeRemoteScope(remote, c.proc)
+	require.ErrorIs(t, err, context.DeadlineExceeded)
+	require.Empty(t, dataOnError)
+	require.NoError(t, c.proc.Ctx.Err())
+	client.customResponse, client.sendErr, client.response = false, nil, nil
 
 	// The execution mapping stays frozen if the destination rolls back.
 	client.version = defines.MORPCVersion106
@@ -285,7 +308,7 @@ func TestRequiredIVFProtocolCoversEveryPartitionAndNestedFragment(t *testing.T) 
 }
 
 func TestRequiredIVFWorkersRequireProtocol(t *testing.T) {
-	for _, mode := range []string{"supported", "old", "unknown", "canceled", "device"} {
+	for _, mode := range []string{"supported", "old", "unknown", "probe failure", "probe deadline", "canceled", "device"} {
 		t.Run(mode, func(t *testing.T) {
 			c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "a", Addr: "a:6001"}, {Id: "b", Addr: "b:6001"}})
 			moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
@@ -332,6 +355,10 @@ func TestRequiredIVFWorkersRequireProtocol(t *testing.T) {
 				client.version = defines.MORPCVersion106
 			case "unknown":
 				client.customResponse = true
+			case "probe failure":
+				client.customResponse, client.sendErr = true, errors.New("unavailable")
+			case "probe deadline":
+				client.customResponse, client.sendErr = true, context.DeadlineExceeded
 			case "canceled":
 				ctx, cancel := context.WithCancel(c.proc.Ctx)
 				cancel()
@@ -340,6 +367,13 @@ func TestRequiredIVFWorkersRequireProtocol(t *testing.T) {
 			err := c.constrainRequiredIVFWorkers(q)
 			if mode == "canceled" {
 				require.ErrorIs(t, err, context.Canceled)
+				return
+			}
+			if client.sendErr != nil {
+				require.ErrorIs(t, err, client.sendErr)
+				require.False(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
+				require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+				require.Len(t, c.cnList, 2)
 				return
 			}
 			if mode != "supported" && mode != "device" {

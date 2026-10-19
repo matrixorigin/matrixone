@@ -341,7 +341,7 @@ func inferViewColumns(
 			return nil, err
 		}
 	}
-	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	projectList := query.Nodes[query.Steps[query.MainOutputStep()]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
 	}
@@ -363,6 +363,10 @@ func inferViewColumns(
 			if sourceType := mysqlSpecialTypeFromProvenance(outputColumnProvenance[idx]); sourceType != nil {
 				typ = sourceType
 			}
+		}
+		if idx < len(outputColumnProvenance) {
+			narrowed := decimalDivSchemaType(*typ, outputColumnProvenance[idx])
+			typ = &narrowed
 		}
 		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
 		if idx < len(outputColumnProvenance) {
@@ -1547,7 +1551,7 @@ func genAsSelectCols(
 	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
 		return nil, nil, err
 	}
-	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
@@ -1559,6 +1563,7 @@ func genAsSelectCols(
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
+		typ = decimalDivSchemaType(typ, provenance)
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.
@@ -6952,8 +6957,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						},
 					},
 				}
-				// for new fk in this alter table, the data in the table must
-				// be checked to confirm that it is compliant with foreign key constraints.
+				// Declarations with checks disabled install metadata without
+				// validating historical rows, just as COPY ALTER does.
+				fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+				if err != nil {
+					return nil, err
+				}
 				if fkData.IsSelfRefer {
 					// fk self refer.
 					// check columns of fk self refer are valid
@@ -6961,17 +6970,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					if err != nil {
 						return nil, err
 					}
-					sqls, err := genSqlsForCheckFKSelfRefer(
-						ctx.GetContext(),
-						databaseName,
-						finalTableName,
-						currentTableDef.Cols,
-						[]*plan.ForeignKeyDef{fkData.Def},
-					)
-					if err != nil {
-						return nil, err
+					if fkChecksEnabled {
+						sqls, err := genSqlsForCheckFKSelfRefer(
+							ctx.GetContext(),
+							databaseName,
+							finalTableName,
+							currentTableDef.Cols,
+							[]*plan.ForeignKeyDef{fkData.Def},
+						)
+						if err != nil {
+							return nil, err
+						}
+						detectSqls = append(detectSqls, sqls...)
 					}
-					detectSqls = append(detectSqls, sqls...)
 					if !slices.ContainsFunc(currentTableDef.RefChildTbls, func(tableID uint64) bool {
 						return tableID == 0 || tableID == currentTableDef.TblId
 					}) {
@@ -7006,18 +7017,20 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 							fkData.ParentTableName,
 						)
 					}
-					sql, err := genSqlForCheckFKConstraints(
-						ctx.GetContext(),
-						fkData.Def,
-						databaseName, finalTableName, tableDef.Cols,
-						fkData.ParentDbName,
-						fkData.ParentTableName,
-						parentTableDef.Cols,
-					)
-					if err != nil {
-						return nil, err
+					if fkChecksEnabled {
+						sql, err := genSqlForCheckFKConstraints(
+							ctx.GetContext(),
+							fkData.Def,
+							databaseName, finalTableName, tableDef.Cols,
+							fkData.ParentDbName,
+							fkData.ParentTableName,
+							parentTableDef.Cols,
+						)
+						if err != nil {
+							return nil, err
+						}
+						detectSqls = append(detectSqls, sql)
 					}
-					detectSqls = append(detectSqls, sql)
 				}
 				updateSqls = append(updateSqls, fkData.UpdateSql)
 			case *tree.UniqueIndex:
@@ -8910,4 +8923,32 @@ func findColInTableDefCaseInsensitive(cols []*plan.ColDef, name string) *plan.Co
 		}
 	}
 	return nil
+}
+
+// MySQL materializes integer function results as INT when their display length
+// is below nine. Keep this separate from DIV's 64-bit evaluation domain.
+func decimalDivSchemaType(typ plan.Type, provenance OutputColumnProvenance) plan.Type {
+	if provenance.DecimalDivDisplayLength == 0 {
+		return typ
+	}
+	switch types.T(typ.Id) {
+	case types.T_int64:
+		if provenance.DecimalDivDisplayLength < 9 {
+			typ.Id = int32(types.T_int32)
+			typ.Width = 32
+		} else {
+			typ.Width = 64
+		}
+	case types.T_uint64:
+		if provenance.DecimalDivDisplayLength < 9 {
+			typ.Id = int32(types.T_uint32)
+			typ.Width = 32
+		} else {
+			typ.Width = 64
+		}
+	default:
+		return typ
+	}
+	typ.Scale = -1
+	return typ
 }

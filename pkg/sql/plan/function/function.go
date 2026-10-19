@@ -416,6 +416,7 @@ func getFunctionByName(
 	if err == nil {
 		r.applyDivPrecisionIncrement(ctx, args)
 		r.applyDecimalModMetadata(args)
+		r.applyDecimalIntegerDivMetadata(args)
 	}
 
 	return r, err
@@ -444,6 +445,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 		r.applyDivPrecisionIncrement(context.Background(), args)
 		r.applyDecimalModMetadata(args)
+		r.applyDecimalIntegerDivMetadata(args)
 		return r, true
 
 	case succeedWithCast:
@@ -454,6 +456,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 		r.applyDivPrecisionIncrement(context.Background(), args)
 		r.applyDecimalModMetadata(args)
+		r.applyDecimalIntegerDivMetadata(args)
 		return r, true
 
 	default:
@@ -485,6 +488,13 @@ func GetFunctionByNameWithOverload(
 	if !f.bindsOverload(int(overloadID)) {
 		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d is legacy execution only", name, overloadID)
 	}
+	if r.fid == INTEGER_DIV && overloadID == DecimalIntegerDivUnsignedOverload {
+		if _, scoped := DecimalIntegerDivReturnType(originalArgs); !scoped {
+			return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "invalid decimal integer division signature %v", originalArgs)
+		}
+		r.targetTypes = decimalIntegerDivOperandTypes(originalArgs)
+		r.needCast = !originalArgs[0].Eq(r.targetTypes[0]) || !originalArgs[1].Eq(r.targetTypes[1])
+	}
 	r.overloadId = overloadID
 	if r.needCast {
 		args = r.targetTypes
@@ -493,6 +503,7 @@ func GetFunctionByNameWithOverload(
 	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
 	r.applyDivPrecisionIncrement(ctx, originalArgs)
 	r.applyDecimalModMetadata(originalArgs)
+	r.applyDecimalIntegerDivMetadata(originalArgs)
 	return r, nil
 }
 

@@ -217,9 +217,8 @@ insert first
 select id, s from esrc;
 select count(*) from e1;
 select count(*) from e2;
--- A subquery in a later WHEN cannot be gated by the mask (flattening turns it
--- into a join over the whole batch), so INSERT FIRST refuses the shape rather
--- than silently evaluating an unreachable clause.
+-- A later WHEN subquery executes only for unclaimed rows. Here id=0
+-- reaches the bad cast, so the entire statement must roll back.
 create table bad (s varchar(16));
 insert into bad values ('bad');
 insert first
@@ -234,9 +233,7 @@ insert first
 select id, s from esrc;
 select count(*) from e1;
 select count(*) from e2;
--- A subquery in the VALUES of a CONDITIONAL clause has the same problem: the
--- flattened join's build side runs as a PreScope even when the branch selects
--- no rows, so an unreachable ELSE value would still be evaluated. Refused.
+-- The selected ELSE row reaches its bad cast; earlier branch writes roll back.
 delete from e1; delete from e2;
 insert first
   when id = 1 then into e1 (id) values (id)
@@ -298,6 +295,31 @@ insert first
   else              into t_rest (id, val) values (id, val)
 select id, cat, val from src where id <= 10;
 commit;
+select count(*) from t_even;
+select count(*) from t_rest;
+
+-- Nested captures execute in the selected branch and retain statement atomicity.
+delete from t_even; delete from t_rest; delete from t_big;
+insert first
+  when id=1 then into t_even(id,val) values(id,(select (select id+10)))
+  when (select (select id))<=3 then into t_rest(id,val) values(id,(select (select id+20)))
+  else into t_big(id,val) values(id,(select s.id from src s where s.id<=2))
+select id from src where id<=3;
+select * from t_even order by id;
+select * from t_rest order by id;
+select count(*) from t_big;
+-- The first WHEN wins, so the later scalar's cardinality error stays unobserved.
+delete from t_even; delete from t_rest;
+insert first when id=1 then into t_even(id,val) values(id,id)
+  when (select s.id from src s where s.id<=2)>0 then into t_rest(id,val) values(id,id)
+select id from src where id=1;
+select * from t_even order by id;
+select count(*) from t_rest;
+-- An error reached after an earlier branch write rolls back both branches.
+delete from t_even;
+insert first when id=1 then into t_even(id,val) values(id,(select (select id+10)))
+  else into t_rest(id,val) values(id,(select s.id from src s where s.id<=2))
+select id from src where id<=2;
 select count(*) from t_even;
 select count(*) from t_rest;
 

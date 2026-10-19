@@ -2818,3 +2818,16 @@ func TestGetColDataEmptyDomains(t *testing.T) {
 		}
 	}
 }
+
+func TestExternalOwnerPreservesCloseError(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	cause := errors.New("source terminal failure")
+	op := &External{reader: &closeErrorExternalReader{err: cause}, fileOpened: true}
+	require.ErrorIs(t, op.CloseReader(), cause)
+	require.NoError(t, op.CloseReader())
+	op.Reset(proc, true, cause)
+	op.Free(proc, true, cause)
+	require.Nil(t, op.reader)
+	require.False(t, op.fileOpened)
+}

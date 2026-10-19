@@ -5,14 +5,14 @@ drop table if exists t_default;
 create external table t_default(a varchar(20), b varchar(20))
 infile{'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv'}
 fields terminated by ',';
-select a, b from t_default order by a;
-➤ a[12,-1,0]  ¦  b[12,-1,0]  𝄀
-#c1  ¦  c2  𝄀
-#quoted  ¦  enc  𝄀
-1  ¦  alice  𝄀
-2  ¦  bob  𝄀
-3  ¦  #midhash  𝄀
-REMx  ¦  REMy
+select a, b, __mo_file_line from t_default order by a;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  __mo_file_line[-5,64,0]  𝄀
+#c1  ¦  c2  ¦  1  𝄀
+#quoted  ¦  enc  ¦  5  𝄀
+1  ¦  alice  ¦  2  𝄀
+2  ¦  bob  ¦  4  𝄀
+3  ¦  #midhash  ¦  6  𝄀
+REMx  ¦  REMy  ¦  3
 select count(*) from t_default;
 ➤ count(*)[-5,64,0]  𝄀
 6
@@ -20,13 +20,13 @@ drop table if exists t_hash;
 create external table t_hash(a varchar(20), b varchar(20))
 infile{'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv', 'comment'='#'}
 fields terminated by ',';
-select a, b from t_hash order by a;
-➤ a[12,-1,0]  ¦  b[12,-1,0]  𝄀
-#quoted  ¦  enc  𝄀
-1  ¦  alice  𝄀
-2  ¦  bob  𝄀
-3  ¦  #midhash  𝄀
-REMx  ¦  REMy
+select a, b, __mo_file_line from t_hash order by a;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  __mo_file_line[-5,64,0]  𝄀
+#quoted  ¦  enc  ¦  5  𝄀
+1  ¦  alice  ¦  2  𝄀
+2  ¦  bob  ¦  4  𝄀
+3  ¦  #midhash  ¦  6  𝄀
+REMx  ¦  REMy  ¦  3
 select count(*) from t_hash;
 ➤ count(*)[-5,64,0]  𝄀
 5
@@ -34,16 +34,24 @@ drop table if exists t_rem;
 create external table t_rem(a varchar(20), b varchar(20))
 infile{'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv', 'comment'='REM'}
 fields terminated by ',';
-select a, b from t_rem order by a;
-➤ a[12,-1,0]  ¦  b[12,-1,0]  𝄀
-#c1  ¦  c2  𝄀
-#quoted  ¦  enc  𝄀
-1  ¦  alice  𝄀
-2  ¦  bob  𝄀
-3  ¦  #midhash
+select a, b, __mo_file_line from t_rem order by a;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  __mo_file_line[-5,64,0]  𝄀
+#c1  ¦  c2  ¦  1  𝄀
+#quoted  ¦  enc  ¦  5  𝄀
+1  ¦  alice  ¦  2  𝄀
+2  ¦  bob  ¦  4  𝄀
+3  ¦  #midhash  ¦  6
 select count(*) from t_rem;
 ➤ count(*)[-5,64,0]  𝄀
 5
+drop table if exists t_start;
+create external table t_start(a varchar(20), b varchar(20))
+infile{'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv', 'comment'='#'}
+fields terminated by ',' lines starting by 'REM';
+select a, b, __mo_file_line from t_start order by a;
+➤ a[12,-1,0]  ¦  b[12,-1,0]  ¦  __mo_file_line[-5,64,0]  𝄀
+x  ¦  REMy  ¦  3
+drop table if exists t_start;
 drop table if exists t_default;
 drop table if exists t_hash;
 drop table if exists t_rem;

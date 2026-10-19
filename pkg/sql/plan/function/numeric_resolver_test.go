@@ -395,9 +395,9 @@ func TestResolveNumericIntegerDivDomains(t *testing.T) {
 			name:       "unsigned dividend and decimal divisor",
 			left:       types.T_uint64.ToType(),
 			right:      types.New(types.T_decimal64, 10, 2),
-			wantLeft:   types.T_uint64,
+			wantLeft:   types.T_decimal256,
 			wantRight:  types.T_decimal256,
-			wantResult: types.T_int64,
+			wantResult: types.T_uint64,
 		},
 		{
 			name:       "floating point fallback",

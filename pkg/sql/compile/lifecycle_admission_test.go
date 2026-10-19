@@ -57,17 +57,21 @@ func TestLifecycleAdmissionWaitPolicyFollowsRetainedOwnership(t *testing.T) {
 		name      string
 		exclusive bool
 		retained  bool
+		allowed   []uint64
 		policy    lock.WaitPolicy
 	}{
-		{"fresh_exclusive", true, false, lock.WaitPolicy_Wait},
-		{"retained_exclusive", true, true, lock.WaitPolicy_FastFail},
-		{"shared", false, false, lock.WaitPolicy_Wait},
-		{"retained_shared", false, true, lock.WaitPolicy_FastFail},
+		{"fresh_exclusive", true, false, nil, lock.WaitPolicy_Wait},
+		{"retained_exclusive", true, true, nil, lock.WaitPolicy_FastFail},
+		{"retained_private_exclusive", true, true, []uint64{123}, lock.WaitPolicy_Wait},
+		{"shared", false, false, nil, lock.WaitPolicy_Wait},
+		{"retained_shared", false, true, nil, lock.WaitPolicy_FastFail},
+		{"retained_private_shared", false, true, []uint64{123}, lock.WaitPolicy_Wait},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
 			proc.Ctx = defines.AttachAccountId(proc.Ctx, catalog.System_Account)
+			proc.Base.WaitPolicy = lock.WaitPolicy_FastFail
 			proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
 			op := proc.Base.TxnOperator
 			// Use the real admission/lockop path, stopping at G before the
@@ -109,11 +113,44 @@ func TestLifecycleAdmissionWaitPolicyFollowsRetainedOwnership(t *testing.T) {
 				return lock.Result{LockedOn: lock.LockTable{Table: table, Valid: true, Version: 1}}, nil
 			}}
 			c := &Compile{proc: proc, e: eng}
-			require.ErrorIs(t, c.admitLifecycleRC(nil, tc.exclusive), stop)
+			require.ErrorIs(t, c.admitLifecycleRC(nil, tc.exclusive, tc.allowed...), stop)
 			require.Equal(t, []uint64{catalog.MO_TABLES_ID, registryID}, tables)
-			require.Equal(t, lock.WaitPolicy_Wait, proc.GetWaitPolicy(), "override must remain request-local")
+			require.Equal(t, lock.WaitPolicy_FastFail, proc.GetWaitPolicy(), "override must remain request-local")
 		})
 	}
+}
+
+func TestPrivatePreparationLockTablesRequireNewTransactionCreatedTables(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+	proc := testutil.NewProcess(t)
+	proc.Base.TxnOperator = mock_frontend.NewMockTxnOperator(ctrl)
+	op := proc.Base.TxnOperator.(*mock_frontend.MockTxnOperator)
+
+	before := map[uint64]struct{}{20: {}}
+	current := []lock.LockTable{
+		{Table: 20, Valid: true},
+		{Table: 21, Valid: true},
+		{Table: 22, Valid: true},
+	}
+	op.EXPECT().Snapshot().Return(txn.CNTxnSnapshot{LockTables: current}, nil).Times(1)
+	workspace := &lifecycleTableCreationView{created: map[uint64]struct{}{21: {}}}
+	op.EXPECT().GetWorkspace().Return(workspace).Times(1)
+
+	c := &Compile{proc: proc}
+	allowed, err := c.privatePreparationLockTables(before)
+	require.NoError(t, err)
+	require.Equal(t, []uint64{21}, allowed)
+}
+
+type lifecycleTableCreationView struct {
+	client.Workspace
+	created map[uint64]struct{}
+}
+
+func (v *lifecycleTableCreationView) IsTableCreatedInTxn(tableID uint64) bool {
+	_, ok := v.created[tableID]
+	return ok
 }
 
 // Only unpublished logical identities may bypass the global replacement gate.
