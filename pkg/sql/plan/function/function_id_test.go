@@ -830,7 +830,8 @@ var predefinedFunids = map[int]int{
 	TO_CALENDAR_INTERVAL:        598,
 	CHECK_ASYNC_DATALINK_SOURCE: 599,
 	INTERNAL_TABLE_COLLATION:    600,
-	FUNCTION_END_NUMBER:         601,
+	STATEMENT_DIGEST_TEXT:       601,
+	FUNCTION_END_NUMBER:         602,
 }
 
 func Test_funids(t *testing.T) {

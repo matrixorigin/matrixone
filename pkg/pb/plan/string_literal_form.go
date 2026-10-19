@@ -339,6 +339,7 @@ const (
 	planUint32TypeID                  int32 = 27
 	planAnyTypeID                     int32 = 0
 	internalTableCollationFunctionID  int32 = 600
+	statementDigestTextFunctionID     int32 = 601
 	maxVarcharWidth                   int32 = 65535
 )
 
@@ -346,7 +347,8 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. TypedConversionFunctions requires MORPC v64 because BIN/CONV
+// MORPC v59. StatementDigestText requires MORPC v122. TypedConversionFunctions
+// requires MORPC v64 because BIN/CONV
 // overload identities and their fixed-width execution contracts changed in
 // the same release. ASCIIInt32Result requires MORPC v65 because ASCII keeps
 // its overload IDs but changes its physical result vector from UINT8 to INT32.
@@ -437,6 +439,8 @@ type RemoteExpressionFeatures struct {
 	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
 	// Released overload 0 retains its historical byte-order contract.
 	LeastGreatestCollationSemantics bool
+	// StatementDigestText requires v122 for the MySQL statement-digest function.
+	StatementDigestText bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
@@ -471,7 +475,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.DecimalStatisticalResultContracts ||
 		features.TableCollationFunction ||
 		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
-		features.LeastGreatestCollationSemantics
+		features.LeastGreatestCollationSemantics || features.StatementDigestText
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -932,6 +936,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == statementDigestTextFunctionID {
+					features.StatementDigestText = true
+				}
 				if id == internalTableCollationFunctionID {
 					features.TableCollationFunction = true
 				}

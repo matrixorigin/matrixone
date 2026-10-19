@@ -882,8 +882,9 @@ const (
 	TO_CALENDAR_INTERVAL        = 598
 	CHECK_ASYNC_DATALINK_SOURCE = 599
 	INTERNAL_TABLE_COLLATION    = 600
+	STATEMENT_DIGEST_TEXT       = 601
 
-	FUNCTION_END_NUMBER = 601
+	FUNCTION_END_NUMBER = 602
 )
 
 // functionIdRegister is what function we have registered already.
@@ -892,6 +893,7 @@ var functionIdRegister = map[string]int32{
 
 	"format_bytes":            FORMAT_BYTES,
 	"format_pico_time":        FORMAT_PICO_TIME,
+	"statement_digest_text":   STATEMENT_DIGEST_TEXT,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
 	"to_calendar_interval":    TO_CALENDAR_INTERVAL,
 	"extractvalue":            EXTRACTVALUE,
