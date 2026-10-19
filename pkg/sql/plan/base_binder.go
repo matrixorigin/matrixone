@@ -4837,6 +4837,9 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 		builtinExpr, err := bindFuncExprImplByPlanExpr(
 			b.GetContext(), name, args, false, nil, nil, findInSetInternalArgs)
 		if err == nil {
+			if isNullIf {
+				b.rememberPreparedFieldNullIfDomain(builtinExpr, args)
+			}
 			if isIfNull {
 				if err := b.recordIfNullContract(builtinExpr, args); err != nil {
 					return nil, err

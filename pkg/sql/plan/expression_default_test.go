@@ -16,18 +16,70 @@ package plan
 
 import (
 	"context"
+	"encoding/hex"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestExpressionDefaultNullIfStringSource(t *testing.T) {
+	for _, tc := range []struct {
+		name, sourceType, expression, input, wantHex string
+		nullInput, nullResult                        bool
+	}{
+		{name: "selected text", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "without NULLIF", sourceType: "varchar(16)", expression: "reverse(coalesce(txt,_binary ''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "independent text owner", sourceType: "varchar(16)", expression: "reverse(nullif(txt,''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "independent binary owner", sourceType: "varbinary(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61a0bde4"},
+		{name: "genuine CASE owner", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", input: "你a", wantHex: "61a0bde4"},
+		{name: "nested NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(nullif(coalesce(txt,_binary ''),''),'x'))", input: "你a", wantHex: "61e4bda0"},
+		{name: "matching value", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", nullResult: true},
+		{name: "NULL input", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", nullInput: true, nullResult: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			ctx := NewMockCompilerContext(false, proc)
+			stmt, err := mysql.ParseOne(proc.Ctx, "create table t(txt "+tc.sourceType+
+				", result varbinary(64) default ("+tc.expression+"))", 1)
+			require.NoError(t, err)
+			t.Cleanup(stmt.Free)
+			bound, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			cols := bound.GetDdl().GetCreateTable().TableDef.Cols
+			expr := cols[1].Default.Expr
+			require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
+			require.Equal(t, int32(64), expr.Typ.Width)
+			snapshot := DeepCopyExpr(expr)
+
+			input := batch.NewWithSize(1)
+			t.Cleanup(func() { input.Clean(proc.Mp()) })
+			input.Vecs[0] = vector.NewVec(makeTypeByPlan2Expr(&Expr{Typ: cols[0].Typ}))
+			require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(tc.input), tc.nullInput, proc.Mp()))
+			input.SetRowCount(1)
+			executor, err := colexec.NewExpressionExecutor(proc, expr)
+			require.NoError(t, err)
+			t.Cleanup(executor.Free)
+			result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+			require.NoError(t, err)
+			require.Equal(t, tc.nullResult, result.IsNull(0))
+			if !tc.nullResult {
+				require.Equal(t, tc.wantHex, hex.EncodeToString(result.GetBytesAt(0)))
+			}
+			require.Equal(t, snapshot, expr, "executing a DEFAULT must not mutate its bound declaration or source proof")
+		})
+	}
+}
 
 func TestExpressionDefaultProtocolAdmission(t *testing.T) {
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))

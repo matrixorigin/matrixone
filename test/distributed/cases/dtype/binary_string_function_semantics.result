@@ -252,6 +252,20 @@ from (select id, coalesce(txt, bin) x from domains) d order by id;
 1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  𝄀
 2  ¦  4  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0
+create table nullif_default_domains (
+id int,
+txt varchar(16),
+forwarded varbinary(64) default (reverse(nullif(coalesce(txt, _binary ''), ''))),
+control varbinary(64) default (reverse(coalesce(txt, _binary ''))),
+declared varbinary(64) default (reverse(cast(nullif(coalesce(txt, _binary ''), '') as binary(4))))
+);
+insert into nullif_default_domains (id, txt) values (1, '你a'), (2, ''), (3, null);
+select id, hex(forwarded), hex(control), hex(declared) from nullif_default_domains order by id;
+➤ id[4,32,0]  ¦  hex(forwarded)[12,128,0]  ¦  hex(control)[12,128,0]  ¦  hex(declared)[12,128,0]  𝄀
+1  ¦  61E4BDA0  ¦  61E4BDA0  ¦  61A0BDE4  𝄀
+2  ¦  null  ¦    ¦  null  𝄀
+3  ¦  null  ¦    ¦  null
+drop table nullif_default_domains;
 select id, bit_count(coalesce(txt, bin)) from domains order by id;
 ➤ id[4,32,0]  ¦  bit_count(coalesce(txt, bin))[-5,64,0]  𝄀
 1  ¦  15  𝄀

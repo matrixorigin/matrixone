@@ -163,6 +163,18 @@ select id, char_length(nullif(x, '')), hex(left(nullif(x, ''), 1)),
        hex(reverse(nullif(x, '')))
 from (select id, coalesce(txt, bin) x from domains) d order by id;
 
+-- Expression DEFAULT binding preserves NULLIF's first value source without a query builder.
+create table nullif_default_domains (
+    id int,
+    txt varchar(16),
+    forwarded varbinary(64) default (reverse(nullif(coalesce(txt, _binary ''), ''))),
+    control varbinary(64) default (reverse(coalesce(txt, _binary ''))),
+    declared varbinary(64) default (reverse(cast(nullif(coalesce(txt, _binary ''), '') as binary(4))))
+);
+insert into nullif_default_domains (id, txt) values (1, '你a'), (2, ''), (3, null);
+select id, hex(forwarded), hex(control), hex(declared) from nullif_default_domains order by id;
+drop table nullif_default_domains;
+
 -- BIT_COUNT consumes the binary declaration without changing sibling row-domain consumers.
 select id, bit_count(coalesce(txt, bin)) from domains order by id;
 select id, bit_count(x), char_length(x), hex(left(x, 1))
