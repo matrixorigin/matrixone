@@ -32,8 +32,10 @@ remain excluded by their eligibility owner; ordinary indexes over generated
 results remain supported. Additional classification cost is confined to DDL,
 DUMP and LOAD; per-row normalization is unchanged.
 
-Current frozen-base allocations: main charset118, coordinator subquery119 and functions599/600 stay
-published; fractional TIMESTAMPADD uses capability120, normalizer601 and end602.
+Current frozen-base allocations: main charset118, coordinator subquery119, session
+authorization120 and functions599/600 stay published; fractional TIMESTAMPADD uses
+capability121, normalizer601 and end602. The allocation follows official main
+8e315d1fe5cdf6661bbf2802515695190dc1c221; rollback coverage cycles120→121→120.
 No protobuf schema change or provisional-function-ID guessing is introduced.
 Historical revision10 evidence below retains its original input identity.
 
