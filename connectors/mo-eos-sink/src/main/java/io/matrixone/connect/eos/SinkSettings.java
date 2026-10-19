@@ -1,0 +1,68 @@
+package io.matrixone.connect.eos;
+
+import java.nio.charset.StandardCharsets;
+import java.util.Map;
+
+final class SinkSettings {
+    final String jdbcUrl;
+    final String jdbcUser;
+    final String jdbcPassword;
+    final String scope;
+    final byte[] scopeBytes;
+    final int batchSize;
+    final String bootstrap;
+
+    private SinkSettings(String jdbcUrl, String jdbcUser, String jdbcPassword,
+                         String scope, int batchSize, String bootstrap) {
+        this.jdbcUrl = jdbcUrl;
+        this.jdbcUser = jdbcUser;
+        this.jdbcPassword = jdbcPassword;
+        this.scope = scope;
+        this.scopeBytes = scope.getBytes(StandardCharsets.UTF_8);
+        this.batchSize = batchSize;
+        this.bootstrap = bootstrap;
+    }
+
+    static SinkSettings from(Map<String, String> props) {
+        requireValue(props, "consumer.override.isolation.level", "read_committed");
+        requireValue(props, "consumer.override.auto.offset.reset", "earliest");
+        String tolerance = props.getOrDefault("errors.tolerance", "none");
+        if (!"none".equals(tolerance) || !props.getOrDefault("transforms", "").isEmpty()) {
+            throw new IllegalArgumentException("errors.tolerance must be none and transforms must be absent");
+        }
+        if (props.containsKey("mo.kafka.client.bootstrap.servers")) {
+            throw new IllegalArgumentException("mo.kafka.client.bootstrap.servers must not override the preflight broker");
+        }
+        String url = required(props, AtomicSinkConnector.JDBC_URL);
+        String user = required(props, AtomicSinkConnector.JDBC_USER);
+        String password = props.get(AtomicSinkConnector.JDBC_PASSWORD);
+        if (password == null) {
+            throw new IllegalArgumentException("missing " + AtomicSinkConnector.JDBC_PASSWORD);
+        }
+        String scope = required(props, AtomicSinkConnector.SCOPE);
+        int scopeLength = scope.getBytes(StandardCharsets.UTF_8).length;
+        if (scopeLength > 128) {
+            throw new IllegalArgumentException("mo.scope exceeds 128 UTF-8 bytes");
+        }
+        int batch = Integer.parseInt(props.getOrDefault(AtomicSinkConnector.BATCH_SIZE, "64"));
+        if (batch < 1 || batch > 1000) {
+            throw new IllegalArgumentException("mo.batch.size must be 1..1000");
+        }
+        return new SinkSettings(url, user, password, scope, batch,
+            required(props, AtomicSinkConnector.BOOTSTRAP));
+    }
+
+    private static String required(Map<String, String> props, String name) {
+        String value = props.get(name);
+        if (value == null || value.isEmpty()) {
+            throw new IllegalArgumentException("missing " + name);
+        }
+        return value;
+    }
+
+    private static void requireValue(Map<String, String> props, String name, String expected) {
+        if (!expected.equals(props.get(name))) {
+            throw new IllegalArgumentException(name + " must be " + expected);
+        }
+    }
+}
