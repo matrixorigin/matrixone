@@ -35,6 +35,32 @@ type MySQLParser struct {
 	// parser  yyParserImpl
 }
 
+// MayHaveMultipleStatements is a conservative lexical preflight, not a syntax
+// validator or statement splitter. Strings, identifiers and comments follow the
+// same scanner and SQL mode as parsing. Compound statements and lexical errors
+// can return true; only the parser can decide their actual statement boundaries.
+func MayHaveMultipleStatements(sql, sqlMode string) bool {
+	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, ParseSQLModeFlags(sqlMode))
+	defer PutScanner(scanner)
+	seenToken, delimiter := false, false
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case 0, EofChar():
+			return false
+		case LEX_ERROR:
+			return true
+		case int(';'):
+			delimiter = seenToken
+		default:
+			if delimiter {
+				return true
+			}
+			seenToken = true
+		}
+	}
+}
+
 func integralToUint64(v any) uint64 {
 	switch value := v.(type) {
 	case int64:

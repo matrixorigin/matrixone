@@ -25,6 +25,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -33,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/options"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -178,6 +180,7 @@ func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvpars
 }
 
 func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, err error) {
+	param.Ctx = process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return 0, err
@@ -194,10 +197,10 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 		},
 	}
 
-	param.Ctx = ctx.GetContext()
 	if err = fs.Read(param.Ctx, &vec); err != nil {
 		return 0, err
 	}
+	defer r.Close()
 
 	bufR := bufio.NewReader(r)
 	skipLines := param.Tail.IgnoredLines
@@ -505,6 +508,9 @@ func readExternalFirstLineSize(param *tree.ExternParam, inputSize int64, offset 
 		return 0
 	}
 
+	oldCtx := param.Ctx
+	param.Ctx = ctx
+	defer func() { param.Ctx = oldCtx }()
 	fs, readPath, err := GetForETLWithType(param, param.Filepath)
 	if err != nil {
 		return 0
@@ -686,7 +692,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 	stmt.Param.ArrowMatchByPosition = stmt.Param.Format == tree.ARROW &&
 		stmt.Param.Tail != nil && len(stmt.Param.Tail.ColumnList) > 0
-	applyLoadParallelAdmission(stmt.Param, offset)
+	applyLoadParallelAdmission(stmt.Param, offset, ctx.GetProcess().GetService())
 
 	stmt.Param.Tail.ColumnList = nil
 	stmt.Param.Tail.Assignments = nil
@@ -699,6 +705,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
+	builder.checkLoadPrimaryKey = loadChecksPrimaryKey(stmt, originTableDef)
 	bindCtx := NewBindContext(builder, nil)
 	terminated := ","
 	enclosedBy := []byte("\"")
@@ -721,7 +728,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 
 	externalScanNode := &plan.Node{
 		NodeType:    plan.Node_EXTERNAL_SCAN,
-		Stats:       makeLoadExternalStats(stmt.Param, tableDef, offset, ctx.GetContext()),
+		Stats:       makeLoadExternalStats(stmt.Param, tableDef, offset, process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())),
 		ProjectList: externalProject,
 		ObjRef:      objRef,
 		TableDef:    tableDef,
@@ -914,9 +921,12 @@ func systemVariableInt64(value any) (int64, bool) {
 	}
 }
 
-func applyLoadParallelAdmission(param *tree.ExternParam, offset int64) {
+func applyLoadParallelAdmission(param *tree.ExternParam, offset int64, service string) {
 	if param == nil {
 		return
+	}
+	if cfg, ok := moruntime.GetLoadDataTestConfig(service, param.Filepath); ok {
+		param.ParallelLoadMinSize = cfg.MinSize
 	}
 	param.ParallelLoadRequested = param.ParallelLoadRequested || param.Parallel
 	minSize := int64(LoadParallelMinSize)
@@ -945,6 +955,10 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 			return "", err
 		}
 	}
+	if err := AuthorizeExternalFileAccess(param, ctx.GetProcess()); err != nil {
+		return "", err
+	}
+
 	// Stage resolution may reveal an S3-backed source. Recheck the sub-gate
 	// before ReadDir or StatFile can perform object-store I/O.
 	if _, err := RequireArrowLoadEnabled(ctx.GetProcess(), param); err != nil {
@@ -957,7 +971,7 @@ func checkFileExist(param *tree.ExternParam, ctx CompilerContext) (string, error
 		return "", nil
 	}
 
-	param.Ctx = ctx.GetContext()
+	param.Ctx = process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())
 	if LoadMayListFiles(param) {
 		fileList, fileSize, err := ReadDir(param)
 		param.Ctx = nil
@@ -1110,18 +1124,8 @@ func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
 	param.NullMap = make(map[string][]string)
 
 	for i := 0; i < len(param.Tail.Assignments); i++ {
-		expr, ok := param.Tail.Assignments[i].Expr.(*tree.FuncExpr)
-		if !ok {
-			param.Tail.Assignments[i].Expr = nil
-			continue
-		}
-		if len(expr.Exprs) != 2 {
-			param.Tail.Assignments[i].Expr = nil
-			continue
-		}
-
-		expr2, ok := expr.Func.FunctionReference.(*tree.UnresolvedName)
-		if !ok || !strings.EqualFold(expr2.ColName(), "nullif") {
+		expr, collated := loadNullIfFunction(param.Tail.Assignments[i].Expr)
+		if expr == nil {
 			param.Tail.Assignments[i].Expr = nil
 			continue
 		}
@@ -1133,6 +1137,13 @@ func InitNullMap(param *tree.ExternParam, ctx CompilerContext) error {
 				continue
 			}
 			return moerr.NewInvalidInput(ctx.GetContext(), "the nullif func first param is not UnresolvedName form")
+		}
+
+		// NullMap stores raw field sentinels, not expression metadata. Row
+		// variables above have a projection owner that binds the full wrapper;
+		// column mappings cannot safely discard COLLATE's type validation.
+		if collated {
+			return moerr.NewNotSupported(ctx.GetContext(), "COLLATE on column NULLIF in LOAD/external SET requires an expression projection")
 		}
 
 		expr4, ok := expr.Exprs[1].(*tree.NumVal)

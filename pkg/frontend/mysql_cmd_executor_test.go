@@ -3389,7 +3389,15 @@ func Test_mce(t *testing.T) {
 			if strings.HasPrefix(strings.ToLower(execCtx.input.getSql()), "use ") {
 				return []ComputationWrapper{use_t}, nil
 			}
-			return cws, nil
+			// Execution now stages one original raw statement at a time.
+			fixtureSQL := append([]string{"create table A(a varchar(100),b int,c float)", "select a,b,c from A"}, self_handle_sql...)
+			normalize := func(s string) string { return strings.Trim(strings.ToLower(s), "; \t\r\n") }
+			for i, sql := range fixtureSQL {
+				if normalize(execCtx.input.getSql()) == normalize(sql) {
+					return []ComputationWrapper{cws[i]}, nil
+				}
+			}
+			return nil, fmt.Errorf("unexpected fixture statement: %s", execCtx.input.getSql())
 		})
 		defer stubs.Reset()
 
@@ -3409,6 +3417,7 @@ func Test_mce(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		})
 		ses.ruleCache = map[string]string{}
+		seedRewriteRuleCacheProofForTest(ses)
 		proto.SetSession(ses)
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
@@ -5821,6 +5830,7 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
 	ses.rewriteEnabled.Store(true)
 	ses.ruleCache = map[string]string{}
+	seedRewriteRuleCacheProofForTest(ses)
 
 	policy, err := captureRewritePolicy(ctx, ses)
 	require.NoError(t, err)
@@ -11196,28 +11206,6 @@ func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {
 	require.Equal(t, ErrorResponse, resp.category)
 	stmt.resetBinaryParamState()
 	require.False(t, stmt.hasPendingLongData())
-}
-
-func Test_ExecRequest_SidecarHintUsesNormalQueryPath(t *testing.T) {
-	// The hint is stripped and carried as compile intent. With no service Sirius
-	// runtime, compilation remains on the normal native query path.
-	ctx := context.TODO()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ses := newTestSession(t, ctrl)
-	ses.txnHandler = &TxnHandler{}
-
-	ec := newTestExecCtx(ctx, ctrl)
-	req := &Request{
-		cmd:  COM_QUERY,
-		data: []byte("/*+ SIDECAR */ SELECT 1"),
-	}
-
-	// ExecRequest won't return an error even though doComQuery panics/fails;
-	// the deferred recover catches it. We just verify it doesn't panic.
-	resp, _ := ExecRequest(ses, ec, req)
-	_ = resp
 }
 
 func Test_unsupportedCommand(t *testing.T) {

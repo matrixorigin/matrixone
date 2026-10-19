@@ -12,11 +12,15 @@ package frontend
 
 import (
 	"encoding/binary"
+	"strconv"
+	"testing"
+
+	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
-	"testing"
 )
 
 func TestCharsetAdmissionParsedRequests(t *testing.T) {
@@ -33,6 +37,8 @@ func TestCharsetAdmissionParsedRequests(t *testing.T) {
 		{"set names utf8 collate 'binary'", "utf8", "is not valid for CHARACTER SET"},
 		{"set names utf8mb3 collate utf8_bin", "utf8mb3", ""},
 		{"set names utf8mb4 collate utf8mb4_0900_ai_ci", "utf8mb4", ""},
+		{"set names utf8 collate utf8_unicode_ci", "utf8", ""},
+		{"set names utf8mb4 collate utf8mb4_unicode_ci", "utf8mb4", ""},
 		{"set character set utf8mb3", "utf8mb3", ""},
 		{"set names default", "default", ""},
 		{"set charset default", "default", ""},
@@ -84,8 +90,11 @@ func TestCharsetAdmissionBeforeSessionOrGlobalMutation(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, name, got)
 	}
-	for _, name := range []string{"utf8_general_ci", "utf8mb3_bin", "utf8mb4_0900_ai_ci"} {
+	for _, name := range []string{"utf8_general_ci", "utf8mb3_bin", "utf8mb4_0900_ai_ci", "utf8_unicode_ci", "utf8mb4_unicode_ci"} {
 		require.NoError(t, ses.SetSessionSysVar(t.Context(), "collation_connection", name))
+		got, err := ses.GetSessionSysVar("collation_connection")
+		require.NoError(t, err)
+		require.Equal(t, name, got)
 	}
 	require.Error(t, ses.SetSessionSysVar(t.Context(), "default_collation_for_utf8mb4", "utf8mb4_0900_bin"))
 	require.Error(t, validateCharsetSystemVariable("default_collation_for_utf8mb4", "utf8mb4_0900_bin"))
@@ -93,6 +102,243 @@ func TestCharsetAdmissionBeforeSessionOrGlobalMutation(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(t.Context(), "collation_connection", "default"))
 	require.NoError(t, validateCharsetSystemVariable("unrelated_variable", nil))
 	require.Error(t, validateCharsetSystemVariable("character_set_client", 123))
+}
+
+func TestSetNamesCollationUpdatesConnectionCollation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+
+	for _, tc := range []struct {
+		sql         string
+		wantCharset string
+		wantName    string
+	}{
+		{sql: "set names utf8 collate utf8_unicode_ci", wantCharset: "utf8", wantName: "utf8_unicode_ci"},
+		{sql: "set names utf8mb4 collate utf8mb4_unicode_ci", wantCharset: "utf8mb4", wantName: "utf8mb4_unicode_ci"},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			charsetVars := []string{
+				"character_set_client", "character_set_connection", "character_set_results",
+			}
+			for _, name := range charsetVars {
+				require.NoError(t, ses.SetSessionSysVar(t.Context(), name, "binary"))
+				require.NoError(t, ses.SetUserDefinedVar(name, "user-before", t.Name()))
+			}
+			stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			execCtx := newTestExecCtx(ctx, ctrl)
+			execCtx.ses = ses
+			execCtx.singleStatementQuery = true
+			require.NoError(t, doSetVar(ses, execCtx, stmt.(*tree.SetVar), tc.sql, false))
+			for _, name := range charsetVars {
+				got, err := ses.GetSessionSysVar(name)
+				require.NoError(t, err)
+				require.Equal(t, tc.wantCharset, got)
+
+				userVar, err := ses.GetUserDefinedVar(name)
+				require.NoError(t, err)
+				require.Equal(t, "user-before", userVar.Value)
+			}
+			got, err := ses.GetSessionSysVar("collation_connection")
+			require.NoError(t, err)
+			require.Equal(t, tc.wantName, got)
+		})
+	}
+}
+
+func TestSetNamesDefaultCompatibility(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+
+	// Start from a valid native-UCA connection setup. A subsequent plain
+	// SET NAMES DEFAULT must reset the implicit connection collation as well as
+	// the three character-set variables.
+	setupStmt, err := parsers.ParseOne(ctx, dialect.MYSQL,
+		"set names utf8 collate utf8_unicode_ci", 1)
+	require.NoError(t, err)
+	setupExecCtx := newTestExecCtx(ctx, ctrl)
+	setupExecCtx.ses = ses
+	setupExecCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(ses, setupExecCtx, setupStmt.(*tree.SetVar),
+		"set names utf8 collate utf8_unicode_ci", false))
+	setupStmt.Free()
+	setupCollation, err := ses.GetSessionSysVar("collation_connection")
+	require.NoError(t, err)
+	require.Equal(t, "utf8_unicode_ci", setupCollation)
+
+	charsetVars := []string{
+		"character_set_client", "character_set_connection", "character_set_results",
+	}
+	for _, name := range charsetVars {
+		require.NoError(t, ses.SetUserDefinedVar(name, "user-before", t.Name()))
+	}
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set names default", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.singleStatementQuery = true
+	require.NoError(t, doSetVar(ses, execCtx, stmt.(*tree.SetVar), "set names default", false))
+
+	wantCharset, err := ses.GetGlobalSysVar("character_set_server")
+	require.NoError(t, err)
+	if wantCharset == nil {
+		wantCharset = gSysVarsDefs["character_set_server"].Default
+	}
+	for _, name := range charsetVars {
+		got, err := ses.GetSessionSysVar(name)
+		require.NoError(t, err)
+		require.Equal(t, wantCharset, got)
+
+		userVar, err := ses.GetUserDefinedVar(name)
+		require.NoError(t, err)
+		require.Equal(t, "user-before", userVar.Value)
+	}
+	wantCollation, err := ses.GetGlobalSysVar("collation_server")
+	require.NoError(t, err)
+	got, err := ses.GetSessionSysVar("collation_connection")
+	require.NoError(t, err)
+	require.Equal(t, wantCollation, got)
+}
+
+func TestSetNamesDefaultRejectsIncompatibleServerDefaults(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+
+	// The two server defaults have independent catalog entries. Simulate an
+	// old/manual catalog containing a collation from a different charset and
+	// ensure SET NAMES DEFAULT rejects it before changing session state.
+	globalVars := ses.gSysVars.Clone()
+	globalVars.Set("character_set_server", "utf8mb4")
+	globalVars.Set("collation_server", "utf8_unicode_ci")
+	ses.gSysVars = globalVars
+	ses.sesSysVars = globalVars.Clone()
+	for _, name := range []string{
+		"character_set_client", "character_set_connection", "character_set_results",
+	} {
+		require.NoError(t, ses.SetSessionSysVar(ctx, name, "binary"))
+	}
+	require.NoError(t, ses.SetSessionSysVar(ctx, "collation_connection", "binary"))
+
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "set names default", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	execCtx := newTestExecCtx(ctx, ctrl)
+	execCtx.ses = ses
+	execCtx.singleStatementQuery = true
+	err = doSetVar(ses, execCtx, stmt.(*tree.SetVar), "set names default", false)
+	require.ErrorContains(t, err, "not valid for CHARACTER SET")
+
+	for _, name := range []string{
+		"character_set_client", "character_set_connection", "character_set_results",
+	} {
+		got, getErr := ses.GetSessionSysVar(name)
+		require.NoError(t, getErr)
+		require.Equal(t, "binary", got)
+	}
+	got, err := ses.GetSessionSysVar("collation_connection")
+	require.NoError(t, err)
+	require.Equal(t, "binary", got)
+}
+
+func TestValidateCharsetCollationPair(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		charset   interface{}
+		collation string
+		err       string
+	}{
+		{name: "non-string charset", charset: 1, collation: "utf8mb4_general_ci", err: "character set must be a string"},
+		{name: "unknown charset", charset: "latin1", collation: "latin1_swedish_ci", err: "unsupported character set"},
+		{name: "unknown collation", charset: "utf8mb4", collation: "utf8mb4_0900_bin", err: "unsupported collation"},
+		{name: "native mismatch", charset: "utf8mb4", collation: "utf8_unicode_ci", err: "not valid for CHARACTER SET"},
+		{name: "native utf8 pair", charset: "utf8", collation: "utf8_unicode_ci"},
+		{name: "legacy utf8mb4 pair", charset: "utf8mb4", collation: "utf8mb4_general_ci"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateCharsetCollationPair(tc.charset, tc.collation)
+			if tc.err == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.err)
+			}
+		})
+	}
+}
+
+func TestSetNamesImplicitCollation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+
+	wantUTF8MB4, err := ses.GetSessionSysVar("default_collation_for_utf8mb4")
+	require.NoError(t, err)
+	if wantUTF8MB4 == nil {
+		wantUTF8MB4 = gSysVarsDefs["default_collation_for_utf8mb4"].Default
+	}
+
+	cases := []struct {
+		sql         string
+		wantCharset string
+		wantName    string
+	}{
+		{sql: "set names utf8mb4", wantCharset: "utf8mb4", wantName: wantUTF8MB4.(string)},
+		{sql: "set names utf8", wantCharset: "utf8", wantName: "utf8_general_ci"},
+		{sql: "set names binary", wantCharset: "binary", wantName: "binary"},
+	}
+
+	for _, tc := range cases {
+		for _, prepared := range []bool{false, true} {
+			t.Run(tc.sql+"/prepared="+strconv.FormatBool(prepared), func(t *testing.T) {
+				setup, setupErr := parsers.ParseOne(ctx, dialect.MYSQL,
+					"set names utf8 collate utf8_unicode_ci", 1)
+				require.NoError(t, setupErr)
+				setupExecCtx := newTestExecCtx(ctx, ctrl)
+				setupExecCtx.ses = ses
+				setupExecCtx.singleStatementQuery = true
+				require.NoError(t, doSetVar(ses, setupExecCtx, setup.(*tree.SetVar),
+					"set names utf8 collate utf8_unicode_ci", prepared))
+				setup.Free()
+
+				stmt, parseErr := parsers.ParseOne(ctx, dialect.MYSQL, tc.sql, 1)
+				require.NoError(t, parseErr)
+				defer stmt.Free()
+				execCtx := newTestExecCtx(ctx, ctrl)
+				execCtx.ses = ses
+				execCtx.singleStatementQuery = true
+				require.NoError(t, doSetVar(ses, execCtx, stmt.(*tree.SetVar), tc.sql, prepared))
+				for _, name := range []string{
+					"character_set_client", "character_set_connection", "character_set_results",
+				} {
+					got, getErr := ses.GetSessionSysVar(name)
+					require.NoError(t, getErr)
+					require.Equal(t, tc.wantCharset, got)
+				}
+				got, getErr := ses.GetSessionSysVar("collation_connection")
+				require.NoError(t, getErr)
+				require.Equal(t, tc.wantName, got)
+			})
+		}
+	}
+}
+
+func TestResolveImplicitSetNamesCollationRejectsInvalidRequests(t *testing.T) {
+	ses := &Session{}
+
+	_, err := resolveImplicitSetNamesCollation(ses, 123)
+	require.ErrorContains(t, err, "character set must be a string")
+
+	_, err = resolveImplicitSetNamesCollation(ses, "latin1")
+	require.ErrorContains(t, err, "unsupported character set")
 }
 
 func TestCharsetAdmissionHandshake(t *testing.T) {
@@ -108,6 +354,10 @@ func TestCharsetAdmissionHandshake(t *testing.T) {
 		if admitted {
 			require.NoError(t, err, "ID=%d", id)
 			require.Equal(t, int(id), proto.collationID)
+			name, ok := lookupSupportedProtocolCollation(int(id))
+			require.True(t, ok)
+			require.Equal(t, name.collationName, proto.collationName)
+			require.Equal(t, name.charset, proto.charset)
 		} else {
 			require.ErrorContains(t, err, "unsupported handshake character set", "ID=%d", id)
 			require.Equal(t, 45, proto.collationID)
@@ -117,13 +367,72 @@ func TestCharsetAdmissionHandshake(t *testing.T) {
 	}
 }
 
+func TestNegotiatedSessionCharsetInitializesSessionVariables(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		charset   string
+		collation string
+	}{
+		{name: "utf8mb4 general", charset: "utf8mb4", collation: "utf8mb4_general_ci"},
+		{name: "native utf8", charset: "utf8", collation: "utf8_unicode_ci"},
+		{name: "native utf8mb4", charset: "utf8mb4", collation: "utf8mb4_unicode_ci"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := &Session{}
+			proto := &MysqlProtocolImpl{
+				ses:           ses,
+				charset:       tc.charset,
+				collationName: tc.collation,
+			}
+
+			require.NoError(t, proto.applyNegotiatedSessionCharset(t.Context()))
+			for _, name := range []string{
+				"character_set_client",
+				"character_set_connection",
+				"character_set_results",
+			} {
+				got, err := ses.GetSessionSysVar(name)
+				require.NoError(t, err)
+				require.Equal(t, tc.charset, got, name)
+			}
+			got, err := ses.GetSessionSysVar("collation_connection")
+			require.NoError(t, err)
+			require.Equal(t, tc.collation, got)
+		})
+	}
+}
+
+func TestNegotiatedSessionCharsetRejectsIncompleteState(t *testing.T) {
+	// A protocol object can reach the publication boundary before handshake
+	// negotiation (for example, on an auth-switch path).  An incomplete pair
+	// must be a no-op rather than mutating the session.
+	empty := &MysqlProtocolImpl{}
+	require.NoError(t, empty.applyNegotiatedSessionCharsetTo(t.Context(), &Session{}))
+
+	invalid := &MysqlProtocolImpl{
+		charset:       "utf8mb4",
+		collationName: "utf8_unicode_ci",
+	}
+	require.ErrorContains(t,
+		invalid.applyNegotiatedSessionCharsetTo(t.Context(), &Session{}),
+		"not valid for CHARACTER SET")
+
+	valid := &MysqlProtocolImpl{
+		charset:       "utf8mb4",
+		collationName: "utf8mb4_unicode_ci",
+	}
+	require.ErrorContains(t,
+		valid.applyNegotiatedSessionCharsetTo(t.Context(), nil),
+		"cannot initialize negotiated charset without a session")
+}
+
 func TestCharsetAdmissionChangeUserProtocol(t *testing.T) {
 	for _, tc := range []struct {
 		id       int
 		admitted bool
 	}{
 		{33, true}, {45, true}, {46, true}, {63, true}, {83, true}, {255, true},
-		{8, false}, {47, false}, {65, false}, {28, false}, {87, false}, {192, false}, {224, false}, {309, false}, {65535, false},
+		{8, false}, {47, false}, {65, false}, {28, false}, {87, false}, {192, true}, {224, true}, {309, false}, {65535, false},
 	} {
 		proto := &MysqlProtocolImpl{io: gIO, capability: CLIENT_SECURE_CONNECTION | CLIENT_PROTOCOL_41}
 		// username, empty secure auth, empty database, full uint16 protocol ID.

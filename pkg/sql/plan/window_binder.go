@@ -127,7 +127,10 @@ func isGroupConcatAggregateExpr(astExpr tree.Expr) bool {
 
 func semanticNodeKey(node tree.NodeFormatter) string {
 	display := tree.String(node, dialect.MYSQL)
-	identity := tree.StringWithOpts(node, dialect.MYSQL, tree.WithParamExprOffset())
+	// Display formatting omits string quotes: 0.5 and '0.5' look equal
+	// but bind to different domains. Preserve literal boundaries as well as
+	// parameter offsets in every consumer of the shared semantic key.
+	identity := tree.StringWithOpts(node, dialect.MYSQL, tree.WithParamExprOffset(), tree.WithSingleQuoteString())
 	if identity == display {
 		return display
 	}
@@ -217,6 +220,8 @@ func findNestedWindowFuncName(expr tree.Expr) (string, bool) {
 	case *tree.ParenExpr:
 		return findNestedWindowFuncName(e.Expr)
 	case *tree.CastExpr:
+		return findNestedWindowFuncName(e.Expr)
+	case *tree.CollateExpr:
 		return findNestedWindowFuncName(e.Expr)
 	case *tree.BitCastExpr:
 		return findNestedWindowFuncName(e.Expr)
@@ -1195,6 +1200,8 @@ func hasWindowFrameParam(expr tree.Expr) bool {
 	case *tree.ParenExpr:
 		return hasWindowFrameParam(expr.Expr)
 	case *tree.CastExpr:
+		return hasWindowFrameParam(expr.Expr)
+	case *tree.CollateExpr:
 		return hasWindowFrameParam(expr.Expr)
 	case *tree.BitCastExpr:
 		return hasWindowFrameParam(expr.Expr)

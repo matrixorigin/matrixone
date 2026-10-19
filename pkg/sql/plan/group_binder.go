@@ -343,10 +343,6 @@ func (b *GroupBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRo
 		return nil, err
 	}
 
-	if _, ok := expr.Expr.(*plan.Expr_Corr); ok {
-		return nil, moerr.NewNYI(b.GetContext(), "correlated columns in GROUP BY clause")
-	}
-
 	return expr, nil
 }
 
@@ -376,9 +372,6 @@ func (b *GroupBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan.E
 	if subquery.NodeId < 0 || int(subquery.NodeId) >= len(b.builder.ctxByNode) ||
 		b.builder.ctxByNode[subquery.NodeId] == nil {
 		return nil, moerr.NewInternalError(b.GetContext(), "GROUP BY scalar subquery has no bind context")
-	}
-	if b.builder.ctxByNode[subquery.NodeId].isCorrelated {
-		return nil, moerr.NewNYI(b.GetContext(), "correlated subquery in GROUP BY clause")
 	}
 	return expr, nil
 }

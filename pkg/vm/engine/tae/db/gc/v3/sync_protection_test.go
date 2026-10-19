@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -105,6 +106,41 @@ func TestSyncProtectionManager_GCRunningBlock(t *testing.T) {
 	// Register should succeed now
 	err = mgr.RegisterSyncProtection(jobID, bfData, validTS, "test-task-1")
 	require.NoError(t, err)
+}
+
+func TestSyncProtectionManager_GCBarrierRejectsRegistration(t *testing.T) {
+	for _, running := range []bool{false, true} {
+		name := "before running flag"
+		if running {
+			name = "during GC cleanup"
+		}
+		t.Run(name, func(t *testing.T) {
+			mgr := NewSyncProtectionManager()
+			bfData := buildTestBF(t, []string{"object1"})
+			mgr.protectionBarrier.Lock()
+			mgr.gcRunning.Store(running)
+			// GC also owns this lock while cleaning the map. Rejection must
+			// not wait for that cleanup, even before the running flag is set.
+			mgr.Lock()
+			result := make(chan error, 1)
+			done := make(chan struct{})
+			t.Cleanup(func() {
+				mgr.Unlock()
+				mgr.protectionBarrier.Unlock()
+				<-done
+			})
+			go func() {
+				defer close(done)
+				result <- mgr.RegisterSyncProtection("job", bfData, time.Now().UnixNano(), "task")
+			}()
+			select {
+			case err := <-result:
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrGCIsRunning), "unexpected error: %v", err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("registration waited for GC cleanup")
+			}
+		})
+	}
 }
 
 func TestSyncProtectionManager_Renew(t *testing.T) {

@@ -34,6 +34,7 @@ const (
 )
 
 type Minus struct {
+	colexec.SetOperationAllocation
 	ctr      container
 	KeyExprs []*plan.Expr
 
@@ -88,6 +89,11 @@ type container struct {
 
 func (minus *Minus) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	minus.ctr.state = buildingHashMap
+	// PREPARE retains the operator, not resources from the retired account.
+	if minus.ExpressionAllocation() != nil {
+		minus.Free(proc, pipelineFailed, err)
+		return
+	}
 	if minus.ctr.bat != nil {
 		minus.ctr.bat.CleanOnlyData()
 	}
@@ -100,6 +106,7 @@ func (minus *Minus) Free(proc *process.Process, pipelineFailed bool, err error) 
 	minus.ctr.cleanBatch(mp)
 	minus.ctr.cleanHashMap()
 	minus.ctr.keyEvaluator.Free()
+	minus.FreeMetadata()
 }
 
 func (minus *Minus) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

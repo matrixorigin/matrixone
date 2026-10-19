@@ -20,7 +20,9 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"os"
 	"path"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -243,6 +245,8 @@ func TestOpenLocalTableDump(t *testing.T) {
 func TestOpenStageTableDump(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	root := t.TempDir()
 	ses.proc.GetStageCache().Set("fixture", stage.StageDef{
@@ -771,6 +775,8 @@ func TestSubmitTableDumpObjectsRejectsInvalidMetadata(t *testing.T) {
 func TestHandleLoadTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	ses.SetDatabaseName("tpch")
 
@@ -849,6 +855,8 @@ func TestHandleLoadTable(t *testing.T) {
 func TestHandleLoadTableRejectsMissingAutoIncrementState(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	ses.SetDatabaseName("tpcc")
 
@@ -929,6 +937,8 @@ func TestHandleLoadTableRejectsMissingAutoIncrementState(t *testing.T) {
 func TestHandleDumpTable(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	ses.SetDatabaseName("tpch")
 
@@ -1000,6 +1010,8 @@ func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
 	ctx := context.Background()
 	ctrl := gomock.NewController(t)
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 	ses.SetDatabaseName("tpch")
 
@@ -2169,4 +2181,31 @@ func TestTableDumpRelationSchemaMatches(t *testing.T) {
 	require.False(t, tableDumpRelationSchemaMatches(target, tableDumpRelation{
 		SchemaHash: "legacy", LogicalSchemaHash: "other",
 	}), "a present logical hash must not fall back to the legacy hash")
+}
+
+func TestTableDumpRequiresServerFileAuthority(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "denied")
+	ctrl := gomock.NewController(t)
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+	ses.proc.Base.SessionInfo.Account = "tenant"
+	ses.proc.Base.SessionInfo.Role = "accountadmin"
+	for _, tc := range []struct{ name, prefix, suffix string }{
+		{"absolute", "", "/denied"},
+		{"file URL", "file://", "/denied"},
+		{"service syntax in local name", "", "/unused,remote:x/../denied"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			target := tc.prefix + root + tc.suffix
+			_, closeFS, err := openTableDumpFS(t.Context(), ses, target)
+			if closeFS != nil {
+				t.Cleanup(closeFS)
+			}
+			require.ErrorContains(t, err, "only the sys account moadmin role")
+			_, err = os.Stat(filepath.Join(root, "denied"))
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
+	require.ErrorContains(t, validateOutputDirPath(t.Context(), ses, dir), "only the sys account moadmin role")
 }

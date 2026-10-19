@@ -131,6 +131,18 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 	if err := c.e.Create(ctx, dbName, c.proc.GetTxnOperator()); err != nil {
 		return err
 	}
+	if createDatabase.Defaults != nil {
+		if err := plan2.RequireDatabaseDefaults(ctx, c.proc.GetService()); err != nil {
+			return err
+		}
+		db, err := c.e.Database(ctx, dbName, c.proc.GetTxnOperator())
+		if err != nil {
+			return err
+		}
+		if err = c.insertDatabaseDefaults(db, createDatabase.Defaults, 1); err != nil {
+			return err
+		}
+	}
 	c.setAffectedRows(1)
 	return nil
 }
@@ -394,6 +406,11 @@ func (s *Scope) DropDatabase(c *Compile) error {
 		return err
 	}
 
+	if !plan2.DatabaseDefaultsSystemDatabase(dbName) && plan2.DatabaseDefaultsEnabled(c.proc.GetService()) {
+		if err = c.deleteDatabaseDefaults(droppedDatabaseID); err != nil {
+			return err
+		}
+	}
 	err = c.e.Delete(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 	if err != nil {
 		return err
@@ -668,7 +685,13 @@ func isMissingTableByIdForFkCleanup(err error) bool {
 func (s *Scope) AlterView(c *Compile) error {
 	qry := s.Plan.GetDdl().GetAlterView()
 
-	dbName := c.db
+	// The planner has already resolved the (possibly schema-qualified) target
+	// database into the plan. Use it instead of the current database so that
+	// `ALTER VIEW other_db.v` does not touch `current_db.v`.
+	dbName := qry.GetDatabase()
+	if dbName == "" {
+		dbName = c.db
+	}
 	tblName := qry.GetTableDef().GetName()
 
 	if err := lockMoDatabase(c, dbName, lock.LockMode_Shared); err != nil {
@@ -1916,6 +1939,10 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		return convertDBEOB(c.proc.Ctx, err, dbName)
 	}
 
+	if err = c.validateDatabaseDefaults(dbSource, qry.DatabaseDefaults); err != nil {
+		return err
+	}
+
 	exists, err := dbSource.RelationExists(c.proc.Ctx, tblName, nil)
 	if err != nil {
 		c.proc.Error(c.proc.Ctx, "check table relation exists failed",
@@ -2356,16 +2383,17 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 		}
 		for _, constraint := range ct.Cts {
 			if idxdef, ok := constraint.(*engine.IndexDef); ok && len(idxdef.Indexes) > 0 {
-				tableID := newRelation.GetTableID(c.proc.Ctx)
-				err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
-				if err != nil {
-					return err
-				}
+				if !c.skipIndexTaskRegistration {
+					tableID := newRelation.GetTableID(c.proc.Ctx)
+					err = CreateAllIndexCdcTasks(c, idxdef.Indexes, dbName, tblName, tableID, false, qry.GetTableDef())
+					if err != nil {
+						return err
+					}
 
-				// register index update for IVFFLAT
-				err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
-				if err != nil {
-					return err
+					err = CreateAllIndexUpdateTasks(c, idxdef.Indexes, dbName, tblName, tableID)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
@@ -2543,15 +2571,20 @@ func (c *Compile) populateCreatedTable(qry *plan.CreateTable, isTemp bool, dbNam
 				ctxWithSession, c.ctasRewriteOption())
 			// Force privilege checking for CTAS follow-up INSERT ... SELECT.
 			// Internal executor skips auth by default unless this flag is present.
+			ctxWithSession, sequenceState := attachInternalSequenceState(ctxWithSession, c.proc)
 			c.proc.Ctx = attachInternalExecutorPrivilegeCheck(ctxWithSession)
 			defer func() {
 				c.proc.Ctx = oldCtx
 			}()
-			return c.runSqlWithResultAndOptions(
+			result, err := c.runSqlWithResultAndOptions(
 				createAsSelectSql,
 				NoAccountId,
 				statementOption,
 			)
+			if err == nil && sequenceState.output != nil {
+				sequenceState.output.apply(c.proc)
+			}
+			return result, err
 		}()
 		if err != nil {
 			return err
@@ -4185,7 +4218,7 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		replacementAdmission = *scalarAdmission
 		replacementAdmission.createNames = map[plan2.FkReferKey]struct{}{{Db: db, Tbl: table}: {}}
 	} else if !isTemp && c.isLifecycleRC() {
-		replacementAdmission.createNames, err = c.admitReplacementNames(db, table, table, rel, nil)
+		replacementAdmission.createNames, err = c.admitReplacementNames(db, table, table, rel, nil, lock.WaitPolicy_FastFail)
 		if err != nil {
 			return err
 		}

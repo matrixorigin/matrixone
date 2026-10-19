@@ -432,6 +432,22 @@ func (c *cluster) Close() {
 func (c *cluster) DebugUpdateCNLabel(uuid string, kvs map[string][]string) error {
 	ctx, cancel := context.WithTimeoutCause(context.TODO(), time.Second*3, moerr.CauseDebugUpdateCNLabel)
 	defer cancel()
+	return c.DebugUpdateCNLabelWithContext(ctx, uuid, kvs)
+}
+
+// DebugUpdateCNLabelWithContext submits a CN label update using the caller's
+// deadline. The legacy method above remains the default for existing
+// operational callers.
+func (c *cluster) DebugUpdateCNLabelWithContext(ctx context.Context, uuid string, kvs map[string][]string) error {
+	if ctx == nil {
+		return moerr.NewInvalidInputNoCtx("nil context")
+	}
+	if _, ok := ctx.Deadline(); !ok {
+		return moerr.NewInvalidInput(ctx, "HAKeeper client context deadline not set")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	convert := make(map[string]metadata.LabelList)
 	for k, v := range kvs {
 		convert[k] = metadata.LabelList{Labels: v}

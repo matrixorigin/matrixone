@@ -371,6 +371,98 @@ def _allocation_summary(path, pid, runs):
             connection.close()
 
 
+def reconcile_host_pool(allocation, first, last, cleanup_query_id, config):
+    """Reconcile physical growth with free capacity in the one native host pool.
+
+    The pinned ABI creates an empty result-window reservation before QueryBegin
+    and activates inputs afterward. At that boundary, allocated bytes minus that
+    virtual reservation are physical live blocks; the remaining blocks are free.
+    The fixed-size pool retains expansions until engine destruction.
+    """
+    def host(record):
+        pools = record.get("native_pools", {})
+        found = [item for item in pools.get("pools", []) if item.get("tier") == "host"]
+        if (
+            pools.get("source") != "sirius-tagged-pools"
+            or pools.get("scope") != "query-window"
+            or pools.get("public_query_id") != record.get("query_id")
+            or type(pools.get("window")) is not int
+            or len(found) != 1
+            or type(found[0].get("space")) is not int
+        ):
+            raise CampaignError("native host pool attribution missing")
+        return pools, found[0]
+
+    first_pools, first_host = host(first)
+    last_pools, last_host = host(last)
+    before, after = first_host.get("begin", {}), last_host.get("after_close", {})
+    if (
+        first_host.get("space") != last_host.get("space")
+        or first_pools["window"] > last_pools["window"]
+        or after.get("source") != "next-query-window-begin"
+        or after.get("window") != last_pools["window"] + 1
+        or after.get("query_id") != cleanup_query_id
+    ):
+        raise CampaignError("native host cleanup successor differs")
+    block = config["native_host_block_bytes"]
+    reservation = config["result_window_bytes"]
+    limit = config["native_host_memory_bytes"]
+    if any(type(value) is not int or value <= 0 for value in (block, reservation, limit)):
+        raise CampaignError("native host pool limits invalid")
+    for snapshot in (before, after):
+        if any(
+            type(snapshot.get(key)) is not int or snapshot[key] < 0
+            for key in ("allocated_bytes", "free_blocks")
+        ):
+            raise CampaignError("native host pool snapshot missing")
+    if (
+        before["allocated_bytes"] != after["allocated_bytes"]
+        or before["allocated_bytes"] < reservation
+    ):
+        raise CampaignError("native host pool live allocation baseline differs")
+    capacities = [
+        snapshot["free_blocks"] * block + snapshot["allocated_bytes"] - reservation
+        for snapshot in (before, after)
+    ]
+    if not 0 <= capacities[0] <= capacities[1] <= limit:
+        raise CampaignError("native host pool capacity outside budget")
+    physical_before = allocation["warmed_baseline_bytes"]
+    physical_after = allocation["post_cleanup_bytes"]
+    final = allocation["final_bytes"]
+    for snapshot in (physical_before, physical_after, final):
+        if set(snapshot) != {"pinned", "device"} or any(
+            type(value) is not int or value < 0 for value in snapshot.values()
+        ):
+            raise CampaignError("physical allocation snapshot invalid")
+    external = physical_before["pinned"] - capacities[0]
+    if (
+        external < 0
+        or physical_after["pinned"] - capacities[1] != external
+        or final["pinned"] != external
+        or physical_before["device"] != physical_after["device"]
+        or final["device"] > physical_before["device"]
+    ):
+        raise CampaignError("physical allocation growth is not free native host capacity")
+    return {
+        "source": "native-host-pool-and-cupti",
+        "space": first_host["space"],
+        "first_query_id": first["query_id"],
+        "cleanup_query_id": cleanup_query_id,
+        "block_bytes": block,
+        "empty_result_reservation_bytes": reservation,
+        "capacity_limit_bytes": limit,
+        "capacity_before_bytes": capacities[0],
+        "capacity_after_bytes": capacities[1],
+        "physical_growth_bytes": physical_after["pinned"] - physical_before["pinned"],
+        "free_capacity_growth_bytes": capacities[1] - capacities[0],
+        "unexplained_growth_bytes": (
+            physical_after["pinned"] - physical_before["pinned"]
+            - (capacities[1] - capacities[0])
+        ),
+        "external_pinned_baseline_bytes": external,
+    }
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("sqlite", type=Path)

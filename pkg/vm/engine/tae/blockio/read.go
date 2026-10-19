@@ -1531,7 +1531,11 @@ func blockDataReadWithSelectedFilterTopK(
 	return nil
 }
 
+// A nil selection is the implicit identity map; its result aliases subsetRows.
 func positionsOfSelectedRows(selectedRows, subsetRows []int64) ([]int64, error) {
+	if selectedRows == nil {
+		return subsetRows, nil
+	}
 	positions := make([]int64, 0, len(subsetRows))
 	next := 0
 	for _, row := range subsetRows {

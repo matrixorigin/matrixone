@@ -210,6 +210,21 @@ func buildInsertPlans(
 
 	// add plan: -> preinsert -> sink
 	lastNodeId = appendPreInsertNode(builder, bindCtx, objRef, tableDef, lastNodeId, false)
+	asyncColumns, err := asyncDatalinkColumns(tableDef)
+	if err != nil {
+		return err
+	}
+	lastNodeId, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, asyncColumns, lastNodeId, 0, func(name string) (int32, bool) {
+		for i, col := range tableDef.Cols {
+			if col.Name == name {
+				return int32(i), true
+			}
+		}
+		return 0, false
+	}, nil)
+	if err != nil {
+		return err
+	}
 
 	checkColName2Idx := make(map[string]int32, len(tableDef.Cols))
 	for i, col := range tableDef.Cols {
@@ -237,7 +252,7 @@ func buildInsertPlans(
 	updatePkCol := true
 	addAffectedRows := true
 	isFkRecursionCall := false
-	ifNeedCheckPkDup := !builder.qry.LoadTag
+	ifNeedCheckPkDup := !builder.qry.LoadTag || builder.checkLoadPrimaryKey
 	var indexSourceColTypes []*plan.Type
 	var fuzzymessage *OriginTableMessageForFuzzy
 	var skipIndexesCoyp map[string]bool
@@ -368,6 +383,21 @@ func buildUpdatePlans(ctx CompilerContext, builder *QueryBuilder, bindCtx *BindC
 		builder.preservePreInsertProjection[lastNodeId] = struct{}{}
 	}
 
+	asyncColumns, err := asyncDatalinkColumns(updatePlanCtx.tableDef)
+	if err != nil {
+		return err
+	}
+	lastNodeId, err = appendAsyncDatalinkAdmission(builder, bindCtx, updatePlanCtx.tableDef, asyncColumns, lastNodeId, 0, func(name string) (int32, bool) {
+		for i, col := range updatePlanCtx.tableDef.Cols {
+			if col.Name == name {
+				return int32(i), true
+			}
+		}
+		return 0, false
+	}, nil)
+	if err != nil {
+		return err
+	}
 	//append sink node
 	lastNodeId = appendSinkNode(builder, bindCtx, lastNodeId)
 	if updatePlanCtx.preserveUpdateSourceProjection {
@@ -5555,6 +5585,9 @@ func reduceSinkSinkScanNodes(qry *Query) {
 	pointToNodeMap := make(map[int32][]*sinkScanMeta)
 	for sinkNodeId, meta := range sinks {
 		if len(meta.scans) == 1 &&
+			// A frozen main output is an execution root, not an interchangeable
+			// materialization slot. Preserve it when folding late DML sinks.
+			(qry.Correlation == nil || int32(meta.step) != qry.MainOutputStep()) &&
 			// Replacing all of a multi-input parent's children with the sink input
 			// would drop its other branches (for example, the tokenizer side of an
 			// APPLY). This direct fold is valid only for a unary consumer.
@@ -5582,6 +5615,9 @@ func reduceSinkSinkScanNodes(qry *Query) {
 		for _, key := range keys {
 			nodeId := stepMaps[key]
 			newStepIdx := len(newSteps)
+			if qry.Correlation != nil && int32(key) == qry.Correlation.MainOutputStep {
+				qry.Correlation.MainOutputStep = int32(newStepIdx)
+			}
 			newSteps = append(newSteps, nodeId)
 			if scanMetas, ok := pointToNodeMap[nodeId]; ok {
 				for _, scanMeta := range scanMetas {
@@ -7291,7 +7327,9 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			Typ: ftcols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: tablefunc.BindingTags[0],
+					// This maintenance branch is appended after createQuery remaps
+					// the main query, so use the local two-input APPLY ABI.
+					RelPos: 1,
 					ColPos: int32(i),
 				},
 			},
@@ -7306,8 +7344,6 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		ProjectList: apply_project,
 	}, bindCtx)
 
-	crossapply := builder.qry.Nodes[lastNodeId]
-
 	// fulltext index projection = (fulltext_index_tokenize output(doc_id, pos, word), __mo_fake_pk_col)
 	project := make([]*plan.Expr, len(ftcols), len(ftcols)+1)
 	for i := range ftcols {
@@ -7315,7 +7351,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			Typ: ftcols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: crossapply.BindingTags[0],
+					RelPos: 0,
 					ColPos: int32(i),
 				},
 			},

@@ -747,6 +747,8 @@ func BuildPlan(ctx CompilerContext, stmt tree.Statement, isPrepareStmt bool) (re
 		return buildRollbackTransaction(stmt, ctx)
 	case *tree.CreateDatabase:
 		return buildCreateDatabase(stmt, ctx)
+	case *tree.AlterDatabase:
+		return buildAlterDatabase(stmt, ctx)
 	case *tree.DropDatabase:
 		return buildDropDatabase(stmt, ctx)
 	case *tree.CreateTable:
@@ -935,7 +937,7 @@ func selectHasExplicitTopLevelLimit(stmt *tree.Select) bool {
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
-		step := len(query.Steps) - 1
+		step := int(query.MainOutputStep())
 		if query.HasReturning {
 			if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
 				return nil

@@ -16,9 +16,11 @@ package mergecte
 
 import (
 	"bytes"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -51,12 +53,13 @@ func (mergeCTE *MergeCTE) Prepare(proc *process.Process) error {
 		return err
 	}
 	if mergeCTE.Distinct && mergeCTE.ctr.hashTable == nil {
-		hashTable, err := hashmap.NewStrHashMap(true, proc.Mp())
+		hashTable, err := mergeCTE.ctr.allocation.NewHashMap(proc)
 		if err != nil {
 			mergeCTE.ctr.memory.Release()
 			return err
 		}
 		mergeCTE.ctr.hashTable = hashTable
+		mergeCTE.ctr.iterator = hashTable.NewIterator()
 	}
 	return nil
 }
@@ -76,6 +79,9 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, err
 		}
 
+		if result.Status == vm.ExecYield {
+			return result, nil
+		}
 		if result.Batch == nil {
 			ctr.status = sendLastTag
 		} else {
@@ -108,6 +114,9 @@ func (mergeCTE *MergeCTE) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				result.Status = vm.ExecStop
 				return result, err
+			}
+			if result.Status == vm.ExecYield {
+				return result, nil
 			}
 			if result.Batch == nil {
 				result.Status = vm.ExecStop
@@ -176,10 +185,15 @@ func (ctr *container) cacheBatch(
 	analyzer process.Analyzer,
 	src *batch.Batch,
 ) (*batch.Batch, error) {
+	if ctr.i == len(ctr.freeBats) {
+		if err := ctr.admitCachedBatch(proc, len(src.Vecs), len(src.Attrs)); err != nil {
+			return nil, err
+		}
+	}
 	var insertedRows []int64
 	if ctr.hashTable != nil && !src.Last() && !src.IsEmpty() {
 		var err error
-		insertedRows, err = ctr.filterInsertedRows(src, analyzer)
+		insertedRows, err = ctr.filterInsertedRows(proc, src, analyzer)
 		if err != nil {
 			return nil, err
 		}
@@ -265,12 +279,17 @@ func (ctr *container) cacheBatch(
 }
 
 func (ctr *container) filterInsertedRows(
+	proc *process.Process,
 	src *batch.Batch,
 	analyzer process.Analyzer,
 ) ([]int64, error) {
-	ctr.insertedRows = ctr.insertedRows[:0]
-	itr := ctr.hashTable.NewIterator()
 	count := src.RowCount()
+	rows, err := colexec.GrowSetOperationSlice(ctr.insertedRows, count, proc.Mp(), &ctr.allocation)
+	if err != nil {
+		return nil, err
+	}
+	ctr.insertedRows = rows[:0]
+	itr := ctr.iterator
 	oldSize := ctr.hashTable.Size()
 	for i := 0; i < count; i += hashmap.UnitLimit {
 		n := count - i
@@ -310,6 +329,11 @@ func sameBatchSchema(left, right *batch.Batch) bool {
 }
 
 func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, error) {
+	if ctr.i == len(ctr.freeBats) {
+		if err := ctr.admitCachedBatch(proc, 1, 1); err != nil {
+			return nil, err
+		}
+	}
 	var cached *batch.Batch
 	if ctr.i < len(ctr.freeBats) {
 		cached = ctr.freeBats[ctr.i]
@@ -338,6 +362,14 @@ func (ctr *container) cacheRecursiveBatch(proc *process.Process) (*batch.Batch, 
 	}
 	ctr.i++
 	return b, nil
+}
+
+// freeBats retains every cached batch until Reset. Charge its headers plus
+// the two pointer directories at the same lifetime, including append growth
+// and the fixed recursive marker payload.
+func (ctr *container) admitCachedBatch(proc *process.Process, vectors, attrs int) error {
+	size := uint64(unsafe.Sizeof(batch.Batch{})) + uint64(vectors)*uint64(unsafe.Sizeof(vector.Vector{})+unsafe.Sizeof((*vector.Vector)(nil))) + uint64(attrs)*16 + 128
+	return ctr.directories.ReserveMetadata(proc, size)
 }
 
 func (ctr *container) bindMemory(proc *process.Process) error {

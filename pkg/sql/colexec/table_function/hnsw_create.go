@@ -27,6 +27,7 @@ import (
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw"
 	hnswrt "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/runtime"
@@ -71,14 +72,15 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 	// still empty the index), so the DELETEs run before the early-out on a nil builder. Cross-CN
 	// cache freshness is a per-model checksum multiset (see hnsw generation.go), so the metadata
 	// timestamp plays no role in freshness — plain wall-clock is fine here.
-	sqls := hnsw.ClearIndexSqls(u.tblcfg)
+	deletes := hnsw.ClearIndexSqls(u.tblcfg)
+	var sqls []string
 
 	ts := time.Now().UnixMicro()
 	provenance := metadataProvenance(proc, u.tblcfg.DbName, u.tblcfg.MetadataTable)
 	switch u.idxcfg.Usearch.Quantization {
 	case usearch.F32:
 		if u.buildf32 != nil {
-			insertSqls, err := u.buildf32.ToInsertSql(ts, buildSnapshotTS(proc), provenance)
+			insertSqls, err := u.buildf32.PreparePersistence(ts, buildSnapshotTS(proc), provenance)
 			if err != nil {
 				return err
 			}
@@ -86,7 +88,7 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		}
 	case usearch.F64:
 		if u.buildf64 != nil {
-			insertSqls, err := u.buildf64.ToInsertSql(ts, buildSnapshotTS(proc), provenance)
+			insertSqls, err := u.buildf64.PreparePersistence(ts, buildSnapshotTS(proc), provenance)
 			if err != nil {
 				return err
 			}
@@ -94,15 +96,42 @@ func (u *hnswCreateState) end(tf *TableFunction, proc *process.Process) error {
 		}
 	}
 
-	for _, s := range sqls {
-		res, err := hnsw_runSql(sqlproc, s)
+	return sqlexec.RunTxn(sqlproc, func(exec executor.TxnExecutor) error {
+		stmt := sqlproc.StatementOption()
+		for _, sql := range deletes {
+			res, err := exec.Exec(sql, stmt)
+			res.Close()
+			if err != nil {
+				return err
+			}
+		}
+		writer, err := sqlexec.NewChunkInserter(sqlproc.GetContext(), exec, stmt, u.tblcfg.DbName, u.tblcfg.IndexTable, 2000)
 		if err != nil {
 			return err
 		}
-		res.Close()
-	}
-
-	return nil
+		switch u.idxcfg.Usearch.Quantization {
+		case usearch.F32:
+			if u.buildf32 != nil {
+				if err := u.buildf32.PersistChunks(writer); err != nil {
+					return err
+				}
+			}
+		case usearch.F64:
+			if u.buildf64 != nil {
+				if err := u.buildf64.PersistChunks(writer); err != nil {
+					return err
+				}
+			}
+		}
+		for _, sql := range sqls {
+			res, err := exec.Exec(sql, stmt)
+			res.Close()
+			if err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (u *hnswCreateState) reset(tf *TableFunction, proc *process.Process) {

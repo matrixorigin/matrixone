@@ -1,0 +1,249 @@
+drop database if exists scalar_compat_warnings;
+create database scalar_compat_warnings;
+use scalar_compat_warnings;
+create table warning_rows(id int primary key, x double, locale varchar(20), date_text varchar(40));
+insert into warning_rows values(1,0,'bad_locale','bad'),(2,1,'de_DE','2024-01-02'),(3,null,null,null);
+select format(1234.5,2,'bad_locale') as v;
+➤ v[12,65535,0]  𝄀
+1,234.50
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1649  ¦  Unknown locale: 'bad_locale'
+select format('1234.5',2,'') as v;
+➤ v[12,65535,0]  𝄀
+1,234.50
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1649  ¦  Unknown locale: ''
+select format(1234.5,2,null) as v;
+➤ v[12,65535,0]  𝄀
+1,234.50
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1649  ¦  Unknown locale: 'NULL'
+select format(1234.5,2,'de_DE') as v;
+➤ v[12,65535,0]  𝄀
+1.234,50
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select format(1234.5,2,'bad_locale') as v from warning_rows order by id;
+➤ v[12,65535,0]  𝄀
+1,234.50  𝄀
+1,234.50  𝄀
+1,234.50
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1649  ¦  Unknown locale: 'bad_locale'  𝄀
+Warning  ¦  1649  ¦  Unknown locale: 'bad_locale'  𝄀
+Warning  ¦  1649  ¦  Unknown locale: 'bad_locale'
+select ln(0) as v from warning_rows order by id;
+➤ v[8,53,31]  𝄀
+null  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  3020  ¦  Invalid argument for logarithm  𝄀
+Warning  ¦  3020  ¦  Invalid argument for logarithm  𝄀
+Warning  ¦  3020  ¦  Invalid argument for logarithm
+select log(1,2) as v from warning_rows order by id;
+➤ v[8,53,31]  𝄀
+null  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  3020  ¦  Invalid argument for logarithm  𝄀
+Warning  ¦  3020  ¦  Invalid argument for logarithm  𝄀
+Warning  ¦  3020  ¦  Invalid argument for logarithm
+select str_to_date('bad','%Y-%m-%d') as v from warning_rows order by id;
+➤ v[91,10,0]  𝄀
+null  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1411  ¦  Incorrect datetime value: 'bad' for function str_to_date  𝄀
+Warning  ¦  1411  ¦  Incorrect datetime value: 'bad' for function str_to_date  𝄀
+Warning  ¦  1411  ¦  Incorrect datetime value: 'bad' for function str_to_date
+select str_to_date('2024-01-02xyz','%Y-%m-%d') as v from warning_rows order by id;
+➤ v[91,10,0]  𝄀
+2024-01-02  𝄀
+2024-01-02  𝄀
+2024-01-02
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect date value: '2024-01-02xyz'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect date value: '2024-01-02xyz'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect date value: '2024-01-02xyz'
+select ln(x) as v from warning_rows order by id;
+➤ v[8,53,31]  𝄀
+null  𝄀
+0.0  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  3020  ¦  Invalid argument for logarithm
+select log(2,x) as v from warning_rows order by id;
+➤ v[8,53,31]  𝄀
+null  𝄀
+0.0  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  3020  ¦  Invalid argument for logarithm
+select log2(x) as v from warning_rows order by id;
+➤ v[8,53,31]  𝄀
+null  𝄀
+0.0  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  3020  ¦  Invalid argument for logarithm
+select log10(x) as v from warning_rows order by id;
+➤ v[8,53,31]  𝄀
+null  𝄀
+0.0  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  3020  ¦  Invalid argument for logarithm
+select format(1234.5,2,locale) as v from warning_rows order by id;
+➤ v[12,65535,0]  𝄀
+1,234.50  𝄀
+1.234,50  𝄀
+1,234.50
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1649  ¦  Unknown locale: 'bad_locale'  𝄀
+Warning  ¦  1649  ¦  Unknown locale: 'NULL'
+select str_to_date(date_text,'%Y-%m-%d') as v from warning_rows order by id;
+➤ v[91,10,0]  𝄀
+null  𝄀
+2024-01-02  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1411  ¦  Incorrect datetime value: 'bad' for function str_to_date
+select str_to_date('2024-02-30','%Y-%m-%d') as v from warning_rows order by id;
+➤ v[91,10,0]  𝄀
+null  𝄀
+null  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1411  ¦  Incorrect datetime value: '2024-02-30' for function str_to_date  𝄀
+Warning  ¦  1411  ¦  Incorrect datetime value: '2024-02-30' for function str_to_date  𝄀
+Warning  ¦  1411  ¦  Incorrect datetime value: '2024-02-30' for function str_to_date
+select str_to_date('2024-01-02 10:30:45xyz','%Y-%m-%d %H:%i:%s') as v from warning_rows order by id;
+➤ v[93,19,0]  𝄀
+2024-01-02 10:30:45  𝄀
+2024-01-02 10:30:45  𝄀
+2024-01-02 10:30:45
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect datetime value: '2024-01-02 10:30:45xyz'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect datetime value: '2024-01-02 10:30:45xyz'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect datetime value: '2024-01-02 10:30:45xyz'
+select str_to_date('10:30:45xyz','%H:%i:%s') as v from warning_rows order by id;
+➤ v[92,10,0]  𝄀
+10:30:45  𝄀
+10:30:45  𝄀
+10:30:45
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '10:30:45xyz'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '10:30:45xyz'  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect time value: '10:30:45xyz'
+select case when id=2 then str_to_date(date_text,'%Y-%m-%d') else null end as v from warning_rows order by id;
+➤ v[91,10,0]  𝄀
+null  𝄀
+2024-01-02  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select case when id=2 then ln(x) else null end as v from warning_rows order by id;
+➤ v[8,53,31]  𝄀
+null  𝄀
+0.0  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+prepare warning_stmt from "select ln(?) as v from warning_rows order by id";
+set @bad=0;
+execute warning_stmt using @bad;
+➤ v[8,53,31]  𝄀
+null  𝄀
+null  𝄀
+null
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+set @good=1;
+execute warning_stmt using @good;
+➤ v[8,53,31]  𝄀
+0.0  𝄀
+0.0  𝄀
+0.0
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+0
+deallocate prepare warning_stmt;
+select format(1234.5,2,repeat('界',43)) as v;
+➤ v[12,65535,0]  𝄀
+1,234.50
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1649  ¦  Unknown locale: '界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界'
+select format(1234.5,2,concat('a',repeat('😀',32))) as v;
+➤ v[12,65535,0]  𝄀
+1,234.50
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1649  ¦  Unknown locale: 'a😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀'
+select str_to_date(repeat('界',43),'%Y-%m-%d') as v;
+➤ v[91,10,0]  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1411  ¦  Incorrect datetime value: '界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界' for function str_to_date
+select str_to_date(concat('a',repeat('😀',32)),'%Y-%m-%d') as v;
+➤ v[91,10,0]  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1411  ¦  Incorrect datetime value: 'a😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀' for function str_to_date
+select str_to_date(concat('2024-01-02',repeat('界',43)),'%Y-%m-%d') as v;
+➤ v[91,10,0]  𝄀
+2024-01-02
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect date value: '2024-01-02界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界界'
+set max_error_count=0;
+select format(1234.5,2,repeat('X',129)) as v from warning_rows order by id;
+➤ v[12,65535,0]  𝄀
+1,234.50  𝄀
+1,234.50  𝄀
+1,234.50
+show count(*) warnings;
+➤ @@session.warning_count[-5,0,0]  𝄀
+3
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+set max_error_count=default;
+drop database scalar_compat_warnings;

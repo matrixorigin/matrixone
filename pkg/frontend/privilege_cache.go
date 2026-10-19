@@ -45,8 +45,7 @@ func (ses *Session) refreshPrivilegeCache(ctx context.Context) error {
 		cache.invalidate()
 		return nil
 	}
-	version, minimum, err := eng.GetPrivilegeCacheVersion(
-		ctx, ses.GetTenantInfo().GetTenantID(), ses.getLastCommitTS())
+	version, minimum, err := statementCatalogVersion(ctx, ses, eng)
 	if err != nil {
 		cache.invalidate()
 		return err

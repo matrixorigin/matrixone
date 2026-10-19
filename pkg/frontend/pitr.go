@@ -1551,7 +1551,7 @@ func restoreToDatabaseOrTableWithPitr(
 
 		return
 	} else {
-		createDbSql = createDatabaseIfNotExistsSQL(dbName)
+		createDbSql = appendDatabaseDefaultsSQL(createDatabaseIfNotExistsSQL(dbName), definition.defaults)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", pitrName, dbName, createDbSql))
 		if err = execRestoreCreateDatabase(ctx, bh, dbName, createDbSql); err != nil {
@@ -1678,6 +1678,10 @@ func reCreateTableWithPitr(
 
 	var isMasterTable bool
 	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, pitrName, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		// A failed FK/master-table lookup must not allow destructive restore DDL.
+		return err
+	}
 	if isMasterTable {
 		// skip restore the table which is master table
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore master table: %v.%v", pitrName, tblInfo.dbName, tblInfo.tblName))
@@ -2612,7 +2616,12 @@ func getCreateDatabaseSqlInPitr(ctx context.Context,
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(ctx, dbName)
 	}
-	return newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
+	definition, err := newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
+	if err != nil {
+		return logicalRestoreDatabaseDefinition{}, err
+	}
+	definition.defaults, err = readDatabaseDefaultsForRestore(ctx, bh, dbName, accountId, ts)
+	return definition, err
 }
 
 // createPubByPitr create pub after the database is created by pitr
