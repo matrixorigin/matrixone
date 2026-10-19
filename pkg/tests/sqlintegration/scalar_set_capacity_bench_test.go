@@ -105,6 +105,13 @@ func BenchmarkScalarSetFallbackCapacity(b *testing.B) {
 		{Name: "mixed-work-boundary", Outer: 4096, InnerPerArm: 2048, Concurrency: 1, Sparse: true, MixedDependent: true},
 		{Name: "mixed-work-over-limit", Outer: 4097, InnerPerArm: 2048, Concurrency: 1, Sparse: true, ResourceError: true, MixedDependent: true},
 	}
+	selection, selected := os.LookupEnv("MO_SCALAR_SET_CAPACITY_PROFILES")
+	profiles, err := selectScalarCapacityProfiles(profiles, selection, selected)
+	require.NoError(b, err)
+	selectedNames := make([]string, 0, len(profiles))
+	for _, p := range profiles {
+		selectedNames = append(selectedNames, p.Name)
+	}
 	var results []scalarCapacityResult
 	embed.RunSingleCNBaseClusterTests(b, func(cluster embed.Cluster) {
 		cn, err := cluster.GetCNService(0)
@@ -123,19 +130,21 @@ func BenchmarkScalarSetFallbackCapacity(b *testing.B) {
 			require.NoError(b, cleanupErr)
 		}()
 		for _, p := range profiles {
-			result := runScalarCapacityProfile(b, ctx, db, cn.RawService().(cnservice.Service).GetSQLExecutor(), p)
+			result := runScalarCapacityProfile(b, ctx, db, cn.RawService().(cnservice.Service).GetSQLExecutor(), p, selected)
 			results = append(results, result)
 		}
 	})
 	data, err := json.MarshalIndent(struct {
 		Protocol, Platform, Toolchain, MemorySemantics string
 		Results                                        []scalarCapacityResult
-	}{"first-invocation; excluded warm-up; three measured rounds; separate EXPLAIN ANALYZE", runtime.GOOS + "/" + runtime.GOARCH, runtime.Version(), "RSS is process lifetime high-water; MemorySize is operator-reported, neither is query-accounted peak", results}, "", "  ")
+		SelectedProfiles                               []string
+		CompleteQualification                          bool
+	}{"first-invocation; excluded warm-up; three measured rounds; separate EXPLAIN ANALYZE", runtime.GOOS + "/" + runtime.GOARCH, runtime.Version(), "RSS is process lifetime high-water; MemorySize is operator-reported, neither is query-accounted peak", results, selectedNames, !selected}, "", "  ")
 	require.NoError(b, err)
 	require.NoError(b, os.WriteFile(report, append(data, '\n'), 0600))
 }
 
-func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, internal executor.SQLExecutor, p scalarCapacityProfile) scalarCapacityResult {
+func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, internal executor.SQLExecutor, p scalarCapacityProfile, diagnostic bool) scalarCapacityResult {
 	b.Helper()
 	conn, err := db.Conn(ctx)
 	require.NoError(b, err)
@@ -225,8 +234,25 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 				samples[worker].Worker = worker
 			}(worker)
 		}
+		var before scalarCapacityProcessSnapshot
+		if diagnostic {
+			before = snapshotScalarCapacityProcess(b)
+		}
 		close(start)
 		wg.Wait()
+		// Diagnostics are outside each query's timed interval. They describe the
+		// whole process and cannot replace statement-account measurements.
+		if diagnostic {
+			after := snapshotScalarCapacityProcess(b)
+			b.Logf("process-diagnostic profile=%s phase=%s round=%d before=%+v after=%+v", p.Name, phase, round, before, after)
+		}
+		for i := range samples {
+			// Emit before acceptance assertions so a failed qualification retains
+			// the actual phase, rows, error code and timing instead of losing it.
+			data, marshalErr := json.Marshal(samples[i])
+			require.NoError(b, marshalErr)
+			b.Logf("sample profile=%s data=%s", p.Name, data)
+		}
 		for i := range samples {
 			require.NoError(b, errs[i], "profile=%s phase=%s worker=%d", p.Name, phase, i)
 			// These fixed qualification budgets are benchmark acceptance criteria,
@@ -450,4 +476,66 @@ func (p scalarCapacityProfile) expectedCode() int {
 		return 1242
 	}
 	return 0
+}
+
+// Selection is diagnostic only; an unset selector is the complete qualification.
+// Reject misspellings, duplicates and empty selections before starting a cluster.
+func selectScalarCapacityProfiles(profiles []scalarCapacityProfile, selection string, selected bool) ([]scalarCapacityProfile, error) {
+	if !selected {
+		return profiles, nil
+	}
+	wanted := make(map[string]bool)
+	for _, name := range strings.Split(selection, ",") {
+		if name == "" || wanted[name] {
+			return nil, fmt.Errorf("empty or duplicate capacity profile %q", name)
+		}
+		wanted[name] = true
+	}
+	var result []scalarCapacityProfile
+	for _, p := range profiles {
+		if wanted[p.Name] {
+			result = append(result, p)
+			delete(wanted, p.Name)
+		}
+	}
+	if len(wanted) != 0 {
+		return nil, fmt.Errorf("unknown capacity profiles: %v", wanted)
+	}
+	return result, nil
+}
+
+type scalarCapacityProcessSnapshot struct {
+	At                                  time.Time
+	Usage                               syscall.Rusage
+	NumGC                               uint32
+	PauseTotalNS, TotalAlloc, HeapAlloc uint64
+}
+
+func snapshotScalarCapacityProcess(b *testing.B) scalarCapacityProcessSnapshot {
+	b.Helper()
+	var result scalarCapacityProcessSnapshot
+	var memory runtime.MemStats
+	runtime.ReadMemStats(&memory)
+	require.NoError(b, syscall.Getrusage(syscall.RUSAGE_SELF, &result.Usage))
+	result.At = time.Now()
+	result.NumGC, result.PauseTotalNS = memory.NumGC, memory.PauseTotalNs
+	result.TotalAlloc, result.HeapAlloc = memory.TotalAlloc, memory.HeapAlloc
+	return result
+}
+
+func TestScalarCapacityProfileSelection(t *testing.T) {
+	profiles := []scalarCapacityProfile{{Name: "ordinary"}, {Name: "mixed"}}
+	all, err := selectScalarCapacityProfiles(profiles, "", false)
+	require.NoError(t, err)
+	require.Equal(t, profiles, all)
+	chosen, err := selectScalarCapacityProfiles(profiles, "mixed,ordinary", true)
+	require.NoError(t, err)
+	require.Equal(t, profiles, chosen, "selection preserves declared execution order")
+	chosen, err = selectScalarCapacityProfiles(profiles, "mixed", true)
+	require.NoError(t, err)
+	require.Equal(t, profiles[1:], chosen)
+	for _, invalid := range []string{"", "unknown", "mixed,unknown", "mixed,mixed", "mixed,", " mixed"} {
+		_, err = selectScalarCapacityProfiles(profiles, invalid, true)
+		require.Error(t, err, invalid)
+	}
 }
