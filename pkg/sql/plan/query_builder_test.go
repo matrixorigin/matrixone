@@ -6308,12 +6308,14 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			notNullable: true,
 		},
 		{
+			// String-to-DATETIME expressions may synthesize NULL; precision
+			// must still grow to the common type regardless of row order.
 			name:        "datetime scale grows",
 			rows:        "row(cast('2024-01-02 12:34:56.123' as datetime(3))), row(cast('2024-01-02 12:34:56.123456' as datetime(6)))",
 			oid:         types.T_datetime,
 			width:       6,
 			scale:       6,
-			notNullable: true,
+			notNullable: false,
 		},
 		{
 			name:        "datetime scale is order independent",
@@ -6321,7 +6323,7 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			oid:         types.T_datetime,
 			width:       6,
 			scale:       6,
-			notNullable: true,
+			notNullable: false,
 		},
 		{
 			name:        "char width grows",
