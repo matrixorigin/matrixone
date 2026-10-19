@@ -18,7 +18,7 @@ drop table if exists t_default;
 create external table t_default(a varchar(20), b varchar(20))
 infile{'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv'}
 fields terminated by ',';
-select a, b from t_default order by a;
+select a, b, __mo_file_line from t_default order by a;
 select count(*) from t_default;
 
 -- ---------- comment = '#': lines whose raw prefix is '#' are skipped ----------
@@ -28,7 +28,7 @@ drop table if exists t_hash;
 create external table t_hash(a varchar(20), b varchar(20))
 infile{'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv', 'comment'='#'}
 fields terminated by ',';
-select a, b from t_hash order by a;
+select a, b, __mo_file_line from t_hash order by a;
 select count(*) from t_hash;
 
 -- ---------- comment = 'REM': lines whose raw prefix is 'REM' are skipped ----------
@@ -37,9 +37,18 @@ drop table if exists t_rem;
 create external table t_rem(a varchar(20), b varchar(20))
 infile{'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv', 'comment'='REM'}
 fields terminated by ',';
-select a, b from t_rem order by a;
+select a, b, __mo_file_line from t_rem order by a;
 select count(*) from t_rem;
 
+-- ---------- starting by: two preceding lines are discarded ----------
+-- Only physical line 3 contains REM; COMMENT and STARTING BY skips compose.
+drop table if exists t_start;
+create external table t_start(a varchar(20), b varchar(20))
+infile{'filepath'='$resources/external_table_file/csv_comment.csv', 'format'='csv', 'comment'='#'}
+fields terminated by ',' lines starting by 'REM';
+select a, b, __mo_file_line from t_start order by a;
+
+drop table if exists t_start;
 drop table if exists t_default;
 drop table if exists t_hash;
 drop table if exists t_rem;
