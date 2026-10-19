@@ -7394,6 +7394,16 @@ func TestLowPrecisionFloatLiteralNarrowing(t *testing.T) {
 		{"SELECT id FROM vecblock_t WHERE h <= '6'", true},
 		{"SELECT id FROM vecblock_t WHERE g <= 448", true},
 		{"SELECT id FROM vecblock_t WHERE g >= -448.0", true},
+		// float16 (±65504) and bf16: just above the maximum rounds back to it, and is outside
+		{"SELECT id FROM vecblock_t WHERE k < 65505", false},
+		{"SELECT id FROM vecblock_t WHERE k = 65505", false},
+		{"SELECT id FROM vecblock_t WHERE k > -65505", false},
+		{"SELECT id FROM vecblock_t WHERE k <= '65504.5'", false},
+		{"SELECT id FROM vecblock_t WHERE f < 3.39e38", false},
+		{"SELECT id FROM vecblock_t WHERE f > -3.39e38", false},
+		{"SELECT id FROM vecblock_t WHERE k <= 65504", true},
+		{"SELECT id FROM vecblock_t WHERE k >= -65504", true},
+		{"SELECT id FROM vecblock_t WHERE f <= 3.38e38", true},
 	} {
 		args := firstFilter(tc.sql).GetF().Args
 		require.Equal(t, tc.narrow, args[0].GetCol() != nil, tc.sql)

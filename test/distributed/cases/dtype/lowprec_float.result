@@ -589,6 +589,71 @@ Data truncation: data out of range: data type FLOAT4, value 6.0000001
 SELECT count(*) FROM fp;
 ➤ count(*)[-5,64,0]  𝄀
 2
+CREATE TABLE fh (id INT, k float16, b bf16);
+INSERT INTO fh VALUES (1, 65504, 3.38e38), (2, -65504, -3.38e38);
+SELECT count(*) FROM fh WHERE k < 65505;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fh WHERE k = 65505;
+➤ count(*)[-5,64,0]  𝄀
+0
+SELECT count(*) FROM fh WHERE k > -65505;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fh WHERE k <= 65504;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fh WHERE k IN (65505, 65504);
+➤ count(*)[-5,64,0]  𝄀
+1
+SELECT count(*) FROM fh WHERE b < 3.39e38;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT count(*) FROM fh WHERE b > -3.39e38;
+➤ count(*)[-5,64,0]  𝄀
+2
+SET @h = 65505;
+PREPARE s3 FROM 'SELECT count(*) FROM fh WHERE k < ?';
+EXECUTE s3 USING @h;
+➤ count(*)[-5,64,0]  𝄀
+2
+SET @h = 65504;
+EXECUTE s3 USING @h;
+➤ count(*)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE s3;
+SELECT CAST(65504 AS float16), CAST(-65504 AS float16);
+➤ cast(65504 as float16)[7,23,31]  ¦  cast(-65504 as float16)[7,23,31]  𝄀
+65504.0  ¦  -65504.0
+SELECT CAST(65505 AS float16);
+Data truncation: data out of range: data type FLOAT16, value 65505
+SELECT CAST(-65505 AS float16);
+Data truncation: data out of range: data type FLOAT16, value -65505
+SELECT CAST('65504.5' AS float16);
+Data truncation: data out of range: data type FLOAT16, value 65504.5
+SELECT CAST(3.39e38 AS bf16);
+Data truncation: data out of range: data type BF16, value 3.39e+38
+SELECT CAST(CAST('3.3895314e+38' AS bf16) AS char), CAST(CAST('-3.3895314e+38' AS bf16) AS char);
+➤ cast(cast(3.3895314e+38 as bf16) as varchar)[12,65535,0]  ¦  cast(cast(-3.3895314e+38 as bf16) as varchar)[12,65535,0]  𝄀
+3.3895314E+38  ¦  -3.3895314E+38
+SELECT CAST('3.3895316e+38' AS bf16);
+Data truncation: data out of range: data type BF16, value 3.3895316e+38
+INSERT INTO fh VALUES (3, 65505, 0);
+Data truncation: data out of range: data type FLOAT16, value 65505
+SELECT count(*) FROM fh;
+➤ count(*)[-5,64,0]  𝄀
+2
+SELECT CAST('[65504,-65504]' AS vecf16(2));
+➤ cast([65504,-65504] as vecf16(2))[12,2,0]  𝄀
+[65504, -65504]
+SELECT CAST('[65505]' AS vecf16(1));
+Data truncation: data out of range: data type VECF16, element 65505
+SELECT CAST(CAST('[65505]' AS vecf32(1)) AS vecf16(1));
+Data truncation: data out of range: data type VECF16, element 65505
+SELECT CAST('[3.39e38]' AS vecbf16(1));
+Data truncation: data out of range: data type VECBF16, element 3.39e38
+SELECT CAST(CAST('[-3.39e38]' AS vecf32(1)) AS vecbf16(1));
+Data truncation: data out of range: data type VECBF16, element -3.39e+38
 CREATE TABLE sp (id INT, b bf16, h float16, e float8, q float4);
 INSERT INTO sp SELECT result, result % 7, result % 5, result % 3, result % 2 FROM generate_series(1, 50) g;
 SELECT count(*) FROM (SELECT sample(b, 5 rows) FROM sp) x;

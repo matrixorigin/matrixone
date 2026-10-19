@@ -325,13 +325,11 @@ func parseVectorMatmulConfig(raw []byte, vecType types.Type) (*vectorMatmulConfi
 		err = setVectorMatmulPlain(cfg, vectorMatmulEngineF32, queries, func(v float32) (float32, bool) { return v, true })
 	case types.T_array_float16:
 		err = setVectorMatmulPlain(cfg, vectorMatmulEngineF16, queries, func(v float32) (types.Float16, bool) {
-			h := types.Float16FromFloat32(v)
-			return h, isFinite32(h.ToFloat32())
+			return types.Float16FromFloat32(v), v >= -types.Float16MaxFinite && v <= types.Float16MaxFinite
 		})
 	case types.T_array_bf16:
 		err = setVectorMatmulPlain(cfg, vectorMatmulEngineBF16, queries, func(v float32) (types.BF16, bool) {
-			b := types.BF16FromFloat32(v)
-			return b, isFinite32(b.ToFloat32())
+			return types.BF16FromFloat32(v), v >= -types.BF16MaxFinite && v <= types.BF16MaxFinite
 		})
 	case types.T_array_int8:
 		err = setVectorMatmulPlain(cfg, vectorMatmulEngineI8, queries, func(v float32) (int8, bool) {
@@ -530,11 +528,6 @@ func (cfg *vectorMatmulConfig) setBlockScaledCells(oid types.T, dim int, cells [
 
 // setVectorMatmulPlain converts the queries to the element type T and scores cells with the
 // inner product kernel of T. conv reports whether a value is representable.
-// isFinite32 reports whether v is neither NaN nor infinite.
-func isFinite32(v float32) bool {
-	return !math.IsNaN(float64(v)) && !math.IsInf(float64(v), 0)
-}
-
 func setVectorMatmulPlain[T types.ArrayElement](cfg *vectorMatmulConfig, engineFormat int, queries [][]float32, conv func(float32) (T, bool)) error {
 	// the distance kernel as inner_product, cosine_distance and l2_distance_sq resolve it
 	m := metric.Metric_InnerProduct

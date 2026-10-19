@@ -112,8 +112,72 @@ func TestRejectNonFiniteNarrowFloat(t *testing.T) {
 	require.Error(t, RejectNonFiniteNarrowFloat(7, T_float4), "float4 max is 6")
 	require.NoError(t, RejectNonFiniteNarrowFloat(6, T_float4))
 	require.Error(t, RejectNonFiniteNarrowFloat(-7, T_float4))
-	// bf16 shares float32's exponent range, so a normal float32 never overflows it.
 	require.NoError(t, RejectNonFiniteNarrowFloat(3.0e38, T_bf16))
+	// A value just above the largest finite bf16/float16 rounds back to it, not to Inf,
+	// and is still out of range.
+	for _, tc := range []struct {
+		oid T
+		max float32
+	}{{T_float16, 65504}, {T_bf16, BF16(0x7f7f).ToFloat32()}} {
+		above := math.Nextafter32(tc.max, float32(math.Inf(1)))
+		require.NoError(t, RejectNonFiniteNarrowFloat(tc.max, tc.oid), "%s max", tc.oid)
+		require.NoError(t, RejectNonFiniteNarrowFloat(-tc.max, tc.oid), "%s -max", tc.oid)
+		require.Error(t, RejectNonFiniteNarrowFloat(above, tc.oid), "%s %v", tc.oid, above)
+		require.Error(t, RejectNonFiniteNarrowFloat(-above, tc.oid), "%s %v", tc.oid, -above)
+	}
+	require.Error(t, RejectNonFiniteNarrowFloat(65505, T_float16))
+	require.Equal(t, Float16(0x7bff), Float16FromFloat32(65505), "65505 rounds to the float16 maximum")
+	require.Error(t, RejectNonFiniteNarrowFloat(3.39e38, T_bf16))
+	require.Equal(t, BF16(0x7f7f), BF16FromFloat32(3.39e38), "3.39e38 rounds to the bf16 maximum")
+
+	// A text or wider input: float16 is checked by its exact value, bf16 by its float32
+	// value, so the printed bf16 maximum loads back.
+	for _, tc := range []struct {
+		oid   T
+		input string
+		ok    bool
+	}{
+		{T_float16, "65504", true},
+		{T_float16, "65505", false},
+		{T_float16, "65504.001", false},
+		{T_bf16, "3.3895314e+38", true},
+		{T_bf16, "-3.3895314e+38", true},
+		{T_bf16, "3.38953139e38", true},
+		{T_bf16, "3.3895316e+38", false},
+		{T_bf16, "3.39e38", false},
+	} {
+		f, d, err := Float32RoundToOddString(tc.input)
+		require.NoError(t, err)
+		err = RejectNarrowFloatInput(f, tc.oid, d, tc.input)
+		if tc.ok {
+			require.NoError(t, err, "%s %s", tc.oid, tc.input)
+		} else {
+			require.ErrorContains(t, err, tc.input, "%s %s", tc.oid, tc.input)
+		}
+	}
+}
+
+// TestNarrowVectorElementRange checks that a vecbf16/vecf16 text element just above the
+// type's largest finite value is out of range, not rounded to it.
+func TestNarrowVectorElementRange(t *testing.T) {
+	_, err := StringToArray[Float16]("[65504,-65504]")
+	require.NoError(t, err)
+	for _, s := range []string{"[65505]", "[-65505]", "[1,65519]"} {
+		_, err = StringToArray[Float16](s)
+		require.ErrorContains(t, err, "out of range", s)
+	}
+	// the exact largest bf16, and float32's shortest text of it, which is above it
+	for _, s := range []string{"[338953138925153547590470800371487866880]", "[3.3895314e38]", "[-3.3895314e+38]"} {
+		v, err := StringToArray[BF16](s)
+		require.NoError(t, err, s)
+		require.Equal(t, BF16MaxFinite, float32(math.Abs(float64(v[0].ToFloat32()))), s)
+	}
+	for _, s := range []string{"[3.39e38]", "[-3.39e38]"} {
+		_, err = StringToArray[BF16](s)
+		require.ErrorContains(t, err, "out of range", s)
+	}
+	_, err = StringToArray[Float16]("[70000]")
+	require.ErrorContains(t, err, "out of range")
 }
 
 // TestLowPrecInfConversion covers +/-Inf conversion for all four low-precision float

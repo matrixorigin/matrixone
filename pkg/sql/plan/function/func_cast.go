@@ -9941,6 +9941,18 @@ func rejectNonFiniteVectorElems[T types.ArrayElement](out []T) error {
 	return nil
 }
 
+// narrowVectorElemMax returns the largest finite element of a vecbf16 or vecf16 type, or 0.
+func narrowVectorElemMax(oid types.T) float32 {
+	// typeswitch:partial only vecbf16 and vecf16 round elements back to their maximum
+	switch oid {
+	case types.T_array_bf16:
+		return types.BF16MaxFinite
+	case types.T_array_float16:
+		return types.Float16MaxFinite
+	}
+	return 0
+}
+
 func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 	_ context.Context,
 	from vector.FunctionParameterWrapper[types.Varlena],
@@ -9996,6 +10008,15 @@ func arrayToArray[I types.ArrayElement, O types.ArrayElement](
 				f32 = make([]float32, len(f64))
 				for k, x := range f64 {
 					f32[k] = types.Float32RoundToOdd(x)
+				}
+			}
+			// a finite element above the largest finite bf16/float16 value is out of range,
+			// also when it rounds back to that value
+			if lim := narrowVectorElemMax(to.GetType().Oid); lim > 0 {
+				for _, x := range f32 {
+					if (x > lim || x < -lim) && !math.IsInf(float64(x), 0) {
+						return moerr.NewOutOfRangeNoCtxf(to.GetType().Oid.String(), "element %v", x)
+					}
 				}
 			}
 			out := types.FromFloat32Array[O](f32)

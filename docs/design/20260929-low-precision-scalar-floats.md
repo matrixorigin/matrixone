@@ -82,7 +82,10 @@ GPU kernels agree on the encoding.
   side of a tie. Vector elements (`vecbf16`, `vecf16`, `vecf64` casts to narrower vectors)
   round the same way. An out-of-range error names the value given. Every
   cast and write rejects a value outside the type's finite range with a "data out of
-  range" error (e.g. `float8` above ±448, `float4` above ±6) and NaN or ±Inf with an
+  range" error (e.g. `float16` above ±65504, `float8` above ±448, `float4` above ±6), also
+  a value just above the maximum that rounds back to it (`65505` for `float16`); a `bf16`
+  text or wider source is checked by its float32 value, so the printed maximum
+  `3.3895314e+38`, above the exact maximum, loads back. NaN or ±Inf is an
   invalid-input error, so no SQL path stores a saturated or non-finite value. The
   codec's own float32 conversion saturates and keeps NaN where the format has a NaN
   slot; it is only reached after these checks.

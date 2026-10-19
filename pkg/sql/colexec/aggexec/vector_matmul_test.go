@@ -353,6 +353,22 @@ func TestVectorMatmulConfigErrors(t *testing.T) {
 		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(tc.topk, tc.queries, tc.options, false), vt)
 		require.ErrorContains(t, err, tc.want, "%d %s %s", tc.topk, tc.queries, tc.options)
 	}
+	// a vecf16/vecbf16 query value just above the largest finite element is not representable,
+	// although it rounds back to it
+	for _, tc := range []struct {
+		oid          types.T
+		above, limit string
+	}{
+		{types.T_array_float16, "65505", "65504"},
+		{types.T_array_bf16, "3.39e38", "3.38e38"},
+	} {
+		_, err := parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[`+tc.above+`,0,0,0]]`, "", false), types.New(tc.oid, 4, 0))
+		require.ErrorContains(t, err, "not representable", tc.oid.String())
+		_, err = parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[-`+tc.above+`,0,0,0]]`, "", false), types.New(tc.oid, 4, 0))
+		require.ErrorContains(t, err, "not representable", tc.oid.String())
+		_, err = parseVectorMatmulConfig(EncodeVectorMatmulConfig(1, `[[`+tc.limit+`,0,0,0]]`, "", false), types.New(tc.oid, 4, 0))
+		require.NoError(t, err, tc.oid.String())
+	}
 	// a null coordinate is an error for every column type
 	for _, oid := range []types.T{types.T_array_float32, types.T_array_float16, types.T_array_bf16,
 		types.T_array_float8, types.T_array_float4, types.T_array_int8, types.T_array_uint8} {

@@ -130,8 +130,13 @@ func Float32RoundToOddInt(v int64) float32 {
 }
 
 // RejectNarrowFloatInput is RejectNonFiniteNarrowFloat for f rounded from a finite input d;
-// an out-of-range error names input, the value the user gave.
+// an out-of-range error names input, the value the user gave. A bf16 input is checked by
+// its float32 value: bf16 values print as float32 text, and the largest one,
+// 3.3895314e+38, is above the exact maximum.
 func RejectNarrowFloatInput(f float32, oid T, d float64, input any) error {
+	if oid == T_bf16 && !math.IsNaN(d) && !math.IsInf(d, 0) {
+		f = float32(d)
+	}
 	err := RejectNonFiniteNarrowFloat(f, oid)
 	if err == nil || math.IsNaN(d) || math.IsInf(d, 0) {
 		return err
@@ -142,10 +147,9 @@ func RejectNarrowFloatInput(f float32, oid T, d float64, input any) error {
 // RejectNonFiniteNarrowFloat returns an error if v (widened to float32) is NaN, Inf,
 // or outside the finite range of the low-precision float type oid. Strict SQL string
 // parsing and LOAD use it so an out-of-range value errors -- MySQL-style -- instead of
-// silently saturating (bf16/float16 have Inf, so overflow is detected as Inf after
-// narrowing; float8/float4 saturate, so their input magnitude is range-checked). This
-// mirrors the narrow-vector element parser's rejectNonFiniteArrayElem. oid must be one
-// of T_bf16/T_float16/T_float8/T_float4.
+// silently saturating. The input magnitude is compared with the type's largest finite
+// value: a value just above it rounds to it (bf16, float16) or saturates (float8,
+// float4). oid must be one of T_bf16/T_float16/T_float8/T_float4.
 func RejectNonFiniteNarrowFloat(v float32, oid T) error {
 	f := float64(v)
 	if math.IsNaN(f) || math.IsInf(f, 0) {
@@ -153,11 +157,11 @@ func RejectNonFiniteNarrowFloat(v float32, oid T) error {
 	}
 	switch oid {
 	case T_bf16:
-		if math.IsInf(float64(BF16FromFloat32(v).ToFloat32()), 0) {
+		if v > BF16MaxFinite || v < -BF16MaxFinite {
 			return moerr.NewOutOfRangeNoCtxf(oid.String(), "value %v", v)
 		}
 	case T_float16:
-		if math.IsInf(float64(Float16FromFloat32(v).ToFloat32()), 0) {
+		if v > Float16MaxFinite || v < -Float16MaxFinite {
 			return moerr.NewOutOfRangeNoCtxf(oid.String(), "value %v", v)
 		}
 	case T_float8:

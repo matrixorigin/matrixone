@@ -315,6 +315,41 @@ SELECT CAST(6.0000001 AS float4);
 INSERT INTO fp VALUES (3, 6.0000001, 0);
 SELECT count(*) FROM fp;
 
+-- float16 (±65504) and bf16: a value just above the maximum rounds back to it under
+-- round-to-nearest-even, and is still outside the type: CAST rejects it and a comparison
+-- with it stays wide
+CREATE TABLE fh (id INT, k float16, b bf16);
+INSERT INTO fh VALUES (1, 65504, 3.38e38), (2, -65504, -3.38e38);
+SELECT count(*) FROM fh WHERE k < 65505;
+SELECT count(*) FROM fh WHERE k = 65505;
+SELECT count(*) FROM fh WHERE k > -65505;
+SELECT count(*) FROM fh WHERE k <= 65504;
+SELECT count(*) FROM fh WHERE k IN (65505, 65504);
+SELECT count(*) FROM fh WHERE b < 3.39e38;
+SELECT count(*) FROM fh WHERE b > -3.39e38;
+SET @h = 65505;
+PREPARE s3 FROM 'SELECT count(*) FROM fh WHERE k < ?';
+EXECUTE s3 USING @h;
+SET @h = 65504;
+EXECUTE s3 USING @h;
+DEALLOCATE PREPARE s3;
+SELECT CAST(65504 AS float16), CAST(-65504 AS float16);
+SELECT CAST(65505 AS float16);
+SELECT CAST(-65505 AS float16);
+SELECT CAST('65504.5' AS float16);
+SELECT CAST(3.39e38 AS bf16);
+-- a bf16 is checked by its float32 value: its printed maximum loads back
+SELECT CAST(CAST('3.3895314e+38' AS bf16) AS char), CAST(CAST('-3.3895314e+38' AS bf16) AS char);
+SELECT CAST('3.3895316e+38' AS bf16);
+INSERT INTO fh VALUES (3, 65505, 0);
+SELECT count(*) FROM fh;
+-- the same bound for vecf16 and vecbf16 elements, from text and from a wider vector
+SELECT CAST('[65504,-65504]' AS vecf16(2));
+SELECT CAST('[65505]' AS vecf16(1));
+SELECT CAST(CAST('[65505]' AS vecf32(1)) AS vecf16(1));
+SELECT CAST('[3.39e38]' AS vecbf16(1));
+SELECT CAST(CAST('[-3.39e38]' AS vecf32(1)) AS vecbf16(1));
+
 -- SAMPLE ... ROWS replaces pooled rows of every low-precision type
 CREATE TABLE sp (id INT, b bf16, h float16, e float8, q float4);
 INSERT INTO sp SELECT result, result % 7, result % 5, result % 3, result % 2 FROM generate_series(1, 50) g;

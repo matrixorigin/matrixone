@@ -1881,6 +1881,12 @@ func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
 		{"float8 above max binary double", "g <= ?", []param{{"448.000001", types.T_float64.ToType()}}, true, 0},
 		{"float8 below min binary text", "g >= ?", []param{{"-448.000001", types.T_varchar.ToType()}}, true, 0},
 		{"float8 max binary double", "g <= ?", []param{{"448", types.T_float64.ToType()}}, true, 1},
+		{"float16 above max binary double", "k < ?", []param{{"65505", types.T_float64.ToType()}}, true, 0},
+		{"float16 below min binary text", "k > ?", []param{{"-65505", types.T_varchar.ToType()}}, true, 0},
+		{"float16 above max sql integer", "k < ?", []param{{int64(65505), types.T_int64.ToType()}}, false, 0},
+		{"float16 max binary double", "k <= ?", []param{{"65504", types.T_float64.ToType()}}, true, 1},
+		{"bf16 above max binary double", "f < ?", []param{{"3.39e38", types.T_float64.ToType()}}, true, 0},
+		{"bf16 below min binary text", "f > ?", []param{{"-3.39e38", types.T_varchar.ToType()}}, true, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
