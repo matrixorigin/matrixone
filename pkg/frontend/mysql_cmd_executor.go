@@ -3086,6 +3086,14 @@ func parsePreparedStatement(execCtx *ExecCtx, ses *Session, rewritten string) (s
 		sessionSQLModeForParser(ses),
 	)
 	if err != nil {
+		// The inner statement's syntax failures arrive as plain parser
+		// errors (PositionedErr), not moerr.Error. Report them as
+		// ER_PARSE_ERROR (1064/42000) the same way the statement would be
+		// rejected when executed directly, instead of a generic 1105
+		// internal error.
+		if _, positioned := err.(mysql.PositionedErr); positioned {
+			err = moerr.NewParseError(execCtx.reqCtx, err.Error())
+		}
 		return rewritten, nil, nil, err
 	}
 	if len(stmts) != 1 {
