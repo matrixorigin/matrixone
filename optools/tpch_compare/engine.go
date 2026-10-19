@@ -370,6 +370,7 @@ func verifyTableWindows(ctx context.Context, conn *sql.Conn, root string, t Tabl
 	firstKey := t.Key[0]
 	var pending Row
 	var upper string
+	var total int64
 	done := false
 	for !done || pending != nil {
 		batch := make([]Row, 0, windowRows)
@@ -425,6 +426,7 @@ func verifyTableWindows(ctx context.Context, conn *sql.Conn, root string, t Tabl
 		if n != len(batch) {
 			return errors.New("database is missing input rows")
 		}
+		total += int64(n)
 		upper = end
 	}
 	where := ""
@@ -436,6 +438,13 @@ func verifyTableWindows(ctx context.Context, conn *sql.Conn, root string, t Tabl
 	})
 	if err != nil {
 		return err
+	}
+	var count int64
+	if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+t.Name).Scan(&count); err != nil {
+		return err
+	}
+	if count != total {
+		return errors.New("database row count differs from complete input")
 	}
 	return tx.Commit()
 }
