@@ -159,7 +159,8 @@ func bulkLoad(ctx context.Context, conn *sql.Conn, e Engine, root string, d Data
 		if e.Name == "mo" {
 			// The owned server reads the immutable local file, avoiding a second
 			// client-side data generator or a row-at-a-time insert path.
-			s = "LOAD DATA INFILE " + quoteSQL(path) + " INTO TABLE " + t.Name + " FIELDS TERMINATED BY '|' LINES TERMINATED BY '\\n'"
+			// CSV loads require an explicit opt-in to use the application's cores.
+			s = "LOAD DATA INFILE " + quoteSQL(path) + " INTO TABLE " + t.Name + " FIELDS TERMINATED BY '|' LINES TERMINATED BY '\\n' PARALLEL 'true'"
 		} else {
 			f, err := os.Open(path)
 			if err != nil {
@@ -184,7 +185,7 @@ func bulkLoad(ctx context.Context, conn *sql.Conn, e Engine, root string, d Data
 			if strings.HasSuffix(line, "|") {
 				specs = append(specs, "'_trailing': 'VARCHAR'")
 			}
-			s = "INSERT INTO " + t.Name + " SELECT " + strings.Join(names, ",") + " FROM read_csv(" + quoteSQL(path) + ", delim='|', header=false, quote='', escape='', columns={" + strings.Join(specs, ",") + "})"
+			s = "INSERT INTO " + t.Name + " SELECT " + strings.Join(names, ",") + " FROM read_csv(" + quoteSQL(path) + ", delim='|', header=false, quote='', escape='', parallel=true, columns={" + strings.Join(specs, ",") + "})"
 		}
 		if _, err := conn.ExecContext(ctx, s); err != nil {
 			return receipt, fmt.Errorf("load %s: %w", t.Name, err)
