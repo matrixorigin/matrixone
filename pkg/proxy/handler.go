@@ -468,6 +468,9 @@ func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *
 	}
 	var currentSC ServerConn
 	if t != nil {
+		// Error publication can precede Close. Seal migration publication before
+		// selecting the terminal backend for synchronous disconnect cleanup.
+		_ = t.Close()
 		currentSC = t.getServerConn()
 	}
 	if t != nil && t.hasExpectedCacheQuit() {

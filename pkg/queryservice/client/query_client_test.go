@@ -15,6 +15,9 @@
 package client
 
 import (
+	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
+	"github.com/stretchr/testify/require"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -110,4 +113,39 @@ func TestUnwrapResponseError(t *testing.T) {
 	resp2, err = client.unwrapResponseError(resp1)
 	assert.Equal(t, "internal error: test", err.Error())
 	assert.Same(t, resp1, resp2)
+}
+
+func TestSessionControlProtocol(t *testing.T) {
+	sid := "session-control-version"
+	rt := runtime.DefaultRuntime()
+	runtime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { runtime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	for _, method := range []query.CmdMethod{query.CmdMethod_KillSession, query.CmdMethod_DisconnectSession} {
+		req := &query.Request{CmdMethod: method}
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion119)
+		require.Error(t, CheckMethodVersion(context.Background(), sid, req))
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion120)
+		require.NoError(t, CheckMethodVersion(context.Background(), sid, req))
+		rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion119)
+		require.Error(t, CheckMethodVersion(context.Background(), sid, req))
+	}
+	request := &query.Request{CmdMethod: query.CmdMethod_KillSession, KillSessionRequest: &query.KillSessionRequest{ConnID: 1<<32 + 7, KillConnection: true, StatementID: "stmt", Principal: &query.KillSessionPrincipal{AccountID: 10, UserID: 20, Account: "acme", User: "alice", Role: "reader"}}}
+	data, err := request.Marshal()
+	require.NoError(t, err)
+	var decoded query.Request
+	require.NoError(t, decoded.Unmarshal(data))
+	require.Equal(t, request, &decoded)
+	request = &query.Request{CmdMethod: query.CmdMethod_DisconnectSession, DisconnectSessionRequest: &query.DisconnectSessionRequest{ConnID: 123}}
+	data, err = request.Marshal()
+	require.NoError(t, err)
+	decoded = query.Request{}
+	require.NoError(t, decoded.Unmarshal(data))
+	require.Equal(t, request, &decoded)
+	for _, response := range []*query.Response{{CmdMethod: query.CmdMethod_KillSession, KillSessionResponse: &query.KillSessionResponse{Found: true}}, {CmdMethod: query.CmdMethod_DisconnectSession, DisconnectSessionResponse: &query.DisconnectSessionResponse{}}} {
+		data, err = response.Marshal()
+		require.NoError(t, err)
+		var got query.Response
+		require.NoError(t, got.Unmarshal(data))
+		require.Equal(t, response, &got)
+	}
 }
