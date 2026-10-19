@@ -52,6 +52,8 @@ func runConsumerCases(dsn, secondDSN string) {
 	exec("set time_zone='+00:00'")
 	exec("set delete_opt_to_truncate=1")
 	exec("create table facts(id int primary key,k int unique,skey int,index sk(skey))")
+	// Complete fixture DDL before PREPARE so the cached DELETE owner stays unchanged.
+	exec("create table comparison(id int not null,k int,skey int)")
 	const insert = "insert into facts values(1,11,10),(2,22,20)"
 	exec(insert)
 	if secondDSN == "" {
@@ -87,10 +89,21 @@ func runConsumerCases(dsn, secondDSN string) {
 	rows("select mo_ctl('cn','synccommit','')")
 	otherExec("create materialized view stored refresh manual as select id,k,skey from facts")
 	rows("select mo_ctl('cn','synccommit','')")
-	exec("create table comparison(id int not null,k int,skey int)")
-	if len(rows("data branch diff comparison against comparison")) != 0 {
-		panic("ordinary branch diff should remain empty")
-	}
+	// Branch mutations run on the other session too; they must not invalidate
+	// the prepared DELETE owner's DDL generation, even on rejected statements.
+	func() {
+		result, err := other.QueryContext(ctx, "data branch diff comparison against comparison")
+		if err != nil {
+			panic(err)
+		}
+		defer result.Close()
+		if len(decodeRows(result)) != 0 {
+			panic("ordinary branch diff should remain empty")
+		}
+		if err := result.Err(); err != nil {
+			panic(err)
+		}
+	}()
 	pass("ordinary native branch readers remain supported")
 	checkBranchRejection := func() {
 		for _, statement := range []string{
@@ -100,7 +113,7 @@ func runConsumerCases(dsn, secondDSN string) {
 			"data branch merge stored into comparison",
 			"data branch merge comparison into stored",
 		} {
-			_, err := db.ExecContext(ctx, statement)
+			_, err := other.ExecContext(ctx, statement)
 			requireServerRejection("MV branch endpoint", err)
 			if !strings.Contains(err.Error(), "materialized view") {
 				panic(err)

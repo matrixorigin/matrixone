@@ -60,3 +60,15 @@ controls and the real expression-binding precision and SQL-mode controls.
   checks. Prior race, crash/recovery, compatibility and benchmark captures remain
   evidence only for unchanged owners; no new performance claim or full native
   upgrade claim is made by this change. New-head remote CI is separate.
+
+
+## Preserve the prepared DELETE cache boundary
+
+The first combined harness created its comparison table after PREPARE on the
+prepared owner, which advanced that session's DDL generation and masked the
+older cached-DELETE regression. This is a test-quality defect, not a new product
+fix. Complete all comparison-table DDL before PREPARE and run added branch
+queries/mutations on the existing other session. Keep the same prepared handle
+and all original source DELETE/provenance/index assertions. Revalidate the final
+client against the old branch-reader negative control and both RC/SI candidates;
+previous product package/static evidence remains scoped to unchanged sources.
