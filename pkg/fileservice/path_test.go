@@ -15,12 +15,64 @@
 package fileservice
 
 import (
+	"encoding/csv"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func FuzzParseService(f *testing.F) {
+	for _, input := range []string{
+		"s3", "s3,endpoint,region,bucket,key,secret,prefix", "hdfs,endpoint=host:9000\n",
+		"", "\n", "\n\n", ",", "s3,,", " s3, key= value ", "\u2003s3,key=x", `\.`,
+		"s3,key=x\n", "s3,key=x\n\n", "\ns3,key=x", "s3,key=x\r\n", "s3,key=x\r",
+		`s3,""`, `s3,"a,b"`, `s3,"a""b"`, "s3,\"a\r\nb\"", "s3,\"a\nb\"",
+		`s3,a"b`, `s3,"unclosed`, "s3,key=x\nother,key=y", "s3,key=x\nother",
+		"s3,secret=" + strings.Repeat("x", 8192), "s3,key=\xff",
+	} {
+		f.Add(input)
+	}
+	f.Fuzz(func(t *testing.T, input string) {
+		// The original standard-library parser is the compatibility oracle,
+		// independent of stage's serializer and its fast path.
+		records, wantErr := csv.NewReader(strings.NewReader(input)).ReadAll()
+		service, arguments, err := parseService(input)
+		if wantErr != nil {
+			require.IsType(t, wantErr, err)
+			require.Equal(t, wantErr, err)
+			return
+		}
+		if len(records) != 1 {
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+			require.Equal(t, moerr.NewInvalidInputNoCtxf("bad service: %v", input).Error(), err.Error())
+			return
+		}
+		require.NoError(t, err)
+		require.Equal(t, records[0][0], service)
+		require.Equal(t, records[0][1:], arguments)
+	})
+}
+
+func BenchmarkParseService(b *testing.B) {
+	for _, input := range []struct{ name, value string }{
+		{"plain", "s3-opts,endpoint=http://localhost,region=r,bucket=b,key=k,secret=s\n"},
+		{"quoted", "s3-opts,\"secret=a,b\"\n"},
+		{"long", "s3-opts,secret=" + strings.Repeat("x", 8192) + "\n"},
+		{"quoted-long", "s3-opts,\"secret=" + strings.Repeat("x", 8192) + ",end\"\n"},
+	} {
+		b.Run(input.name, func(b *testing.B) {
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, _, err := parseService(input.value); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
 
 func TestParseS3OrFilePath(t *testing.T) {
 	// S3

@@ -48,8 +48,8 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	}
 	if features.CRC32JSONTextBytes {
 		version, known := remoteMORPCProtocolVersion(c.proc.GetService())
-		if !known || version < defines.MORPCVersion118 {
-			return moerr.NewNotSupportedNoCtx("CRC32 JSON text-byte semantics require MORPC protocol version 118")
+		if !known || version < defines.MORPCVersion121 {
+			return moerr.NewNotSupportedNoCtx("CRC32 JSON text-byte semantics require MORPC protocol version 121")
 		}
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
@@ -59,7 +59,7 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	if required == 0 {
 		return nil
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, required)
+	supported, err := remoteWorkersSupportProtocolForPlacement(c.proc, c.cnList, required)
 	if err != nil || supported {
 		return err
 	}
@@ -122,11 +122,14 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.DecimalStatisticalResultContracts {
 		required = max(required, defines.MORPCVersion113)
 	}
+	if features.TableCollationFunction {
+		required = max(required, defines.MORPCVersion118)
+	}
 	if features.CalendarIntervalNormalization {
 		required = max(required, defines.MORPCVersion115)
 	}
 	if features.CRC32JSONTextBytes {
-		required = max(required, defines.MORPCVersion118)
+		required = max(required, defines.MORPCVersion121)
 	}
 	return required
 }
@@ -160,6 +163,8 @@ var errRemoteCapabilityProbeTimeout = moerr.NewInternalError(
 
 // Probe the selected workers as well as the coordinator's rollout gate.
 // Capabilities are not cached across executions or sender checks.
+// A false result without an error means support could not be verified;
+// observation failures retain their cause for required gates and send checks.
 func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, minimum int64) (bool, error) {
 	if proc == nil {
 		return false, nil
@@ -178,15 +183,31 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 	ctx, cancel := context.WithTimeoutCause(parent, 5*time.Second, errRemoteCapabilityProbeTimeout)
 	defer cancel()
 	for _, worker := range workers {
-		version, known, err := remoteWorkerProtocolVersion(ctx, proc, worker)
-		if err != nil {
-			return false, parent.Err()
+		version, known, probeErr := remoteWorkerProtocolVersion(ctx, proc, worker)
+		if err := parent.Err(); err != nil {
+			return false, err
+		}
+		if probeErr != nil {
+			return false, probeErr
 		}
 		if !known || version < minimum {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+// Optional placement may safely fall back locally when remote support cannot
+// be verified. Only statement cancellation is fatal here, even when a probe's
+// own error is context.Canceled or context.DeadlineExceeded.
+func remoteWorkersSupportProtocolForPlacement(proc *process.Process, workers engine.Nodes, minimum int64) (bool, error) {
+	supported, err := remoteWorkersSupportProtocol(proc, workers, minimum)
+	if proc != nil && proc.Ctx != nil {
+		if parentErr := proc.Ctx.Err(); parentErr != nil {
+			return false, parentErr
+		}
+	}
+	return supported && err == nil, nil
 }
 
 // remoteWorkerProtocolVersion resolves the actual pipeline endpoint and owns

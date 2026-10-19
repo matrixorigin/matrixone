@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires candidate MORPC v118. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires MORPC v121. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at candidate v118; receiving checks the new identity. Old coordinators send identity
+worker at candidate v121; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -51,13 +51,13 @@ IndexSearchScan for every vector/fulltext index with algo_options/algo_exprs,
 v112's signed date results, v113's DECIMAL statistical DOUBLE results,
 v114's Unicode UNIQUE keys, v115's calendar intervals, v116's scalar division warnings,
 and v117's collation-aware LEAST/GREATEST ordering.
-CRC32 uses candidate v118. This number is
+CRC32 uses v121. This number is
 not claimed unique among other unmerged maintenance
 candidates. Before landing, reallocate it against the actual cumulative main and
 rerun the predecessor/admission tests; a higher number cannot advertise missing
 predecessor capabilities. Cross-PR allocation coordination remains open.
 
-Publishing new persisted expressions requires the durable candidate v118 authoring barrier.
+Publishing new persisted expressions requires the durable v121 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.
@@ -96,7 +96,7 @@ mock version values and same-version CI do not prove them.
 
 The bounded maintenance candidate merges frozen upstream
 `b3d6b21fe9d260c91e1777529a48a9d93061af33`, whose v117 implements
-collation-aware LEAST/GREATEST. CRC32 therefore moves to v118 throughout its
+collation-aware LEAST/GREATEST. CRC32 therefore moves to v121 throughout its
 execution, placement, send/receive, catalog-read and authoring guards.
 Predecessor tests now include v117 rejection and preserve LEAST/GREATEST's
 independent v117 floor.

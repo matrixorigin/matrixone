@@ -2430,6 +2430,29 @@ func TestBuildCreateIndexStatementsFromMoIndexes_FullTextParserAndCatalogOrder(t
 	}, got)
 }
 
+func TestDecodeMoColumnEncodedSQLType_TextBlobFamily(t *testing.T) {
+	for _, tc := range []struct {
+		typ  types.Type
+		want string
+	}{
+		{types.New(types.T_text, 0, 0), "TEXT"},
+		{types.New(types.T_text, types.MaxTinyTextLen, 0), "TINYTEXT"},
+		{types.New(types.T_text, types.MaxMediumTextLen, 0), "MEDIUMTEXT"},
+		{types.New(types.T_text, types.MaxLongTextLen, 0), "LONGTEXT"},
+		{types.New(types.T_blob, types.MaxTinyTextLen, 0), "TINYBLOB"},
+		{types.New(types.T_blob, types.MaxStringSize, 0), "BLOB"},
+		{types.New(types.T_blob, types.MaxMediumTextLen, 0), "MEDIUMBLOB"},
+		{types.New(types.T_blob, types.MaxLongTextLen, 0), "LONGBLOB"},
+		{types.New(types.T_blob, 0, 0), "LONGBLOB"},
+	} {
+		t.Run(tc.want+fmt.Sprint(tc.typ.Width), func(t *testing.T) {
+			got, ok := decodeMoColumnEncodedSQLType(encodedSQLType(t, tc.typ))
+			require.True(t, ok)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestDecodeMoColumnEncodedSQLType_TemporalScale(t *testing.T) {
 	sqlType, ok := decodeMoColumnEncodedSQLType(encodedSQLType(t, types.New(types.T_time, 0, 6)))
 	require.True(t, ok)

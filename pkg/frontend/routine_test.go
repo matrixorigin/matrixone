@@ -1979,10 +1979,10 @@ func wireOKPacketStatus(t *testing.T, payload []byte) uint16 {
 }
 
 func wireHandshakeResponse(username string) []byte {
-	return wireHandshakeResponseWithDatabase(username, "")
+	return wireHandshakeResponseWithCollation(username, "", Utf8mb4CollationID)
 }
 
-func wireHandshakeResponseWithDatabase(username, database string) []byte {
+func wireHandshakeResponseWithCollation(username, database string, collationID uint8) []byte {
 	capability := uint32(CLIENT_PROTOCOL_41 | CLIENT_SECURE_CONNECTION | CLIENT_PLUGIN_AUTH)
 	if database != "" {
 		capability |= CLIENT_CONNECT_WITH_DB
@@ -1990,7 +1990,7 @@ func wireHandshakeResponseWithDatabase(username, database string) []byte {
 	payload := make([]byte, 4+4+1+23)
 	binary.LittleEndian.PutUint32(payload, capability)
 	binary.LittleEndian.PutUint32(payload[4:], 1<<24)
-	payload[8] = byte(Utf8mb4CollationID)
+	payload[8] = byte(collationID)
 	payload = append(payload, username...)
 	payload = append(payload, 0, 0) // username terminator and empty auth response
 	if database != "" {
@@ -2008,6 +2008,22 @@ func wireChangeUserRequest(username, plugin string) []byte {
 	payload = append(payload, byte(Utf8mb4CollationID), 0)
 	payload = append(payload, plugin...)
 	return append(payload, 0)
+}
+
+func assertNegotiatedSessionCharset(t *testing.T, ses *Session, charset, collation string) {
+	t.Helper()
+	for _, name := range []string{
+		"character_set_client",
+		"character_set_connection",
+		"character_set_results",
+	} {
+		got, err := ses.GetSessionSysVar(name)
+		require.NoError(t, err)
+		require.Equal(t, charset, got, name)
+	}
+	got, err := ses.GetSessionSysVar("collation_connection")
+	require.NoError(t, err)
+	require.Equal(t, collation, got)
 }
 
 func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
@@ -2048,6 +2064,9 @@ func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
 	_, response := readWirePacket(t, clientConn)
 	require.NotEmpty(t, response)
 	require.Equal(t, byte(defines.OKHeader), response[0])
+	routine := rm.getRoutineByConnID(connectionID)
+	require.NotNil(t, routine)
+	assertNegotiatedSessionCharset(t, routine.getSession(), "utf8mb4", "utf8mb4_general_ci")
 
 	// Connector/J 8.0.15 falls back to COM_CHANGE_USER and has to answer the
 	// server's mysql_native_password authentication-switch packet. Exercise the
@@ -2069,6 +2088,7 @@ func TestMySQLWireChangeUserAuthSwitchAndRepeatedBorrow(t *testing.T) {
 		require.NotNil(t, routine)
 		require.Equal(t, connectionID, routine.getConnectionID())
 		require.Equal(t, "dump", routine.getSession().GetTenantInfo().GetUser())
+		assertNegotiatedSessionCharset(t, routine.getSession(), "utf8mb4", "utf8mb4_general_ci")
 	}
 
 	require.NoError(t, clientConn.Close())
@@ -2113,7 +2133,7 @@ func TestMySQLWireResetConnectionPreservesDatabase(t *testing.T) {
 	}
 	require.Greater(t, len(handshake), versionEnd+4)
 	connectionID := binary.LittleEndian.Uint32(handshake[versionEnd+1:])
-	writeWirePacket(t, clientConn, 1, wireHandshakeResponseWithDatabase("dump", "db1"))
+	writeWirePacket(t, clientConn, 1, wireHandshakeResponseWithCollation("dump", "db1", utf8mb4UnicodeCollationID))
 	_, response := readWirePacket(t, clientConn)
 	require.NotEmpty(t, response)
 	require.Equal(t, byte(defines.OKHeader), response[0])
@@ -2123,6 +2143,7 @@ func TestMySQLWireResetConnectionPreservesDatabase(t *testing.T) {
 	// transaction merely to populate it.
 	routine := rm.getRoutineByConnID(connectionID)
 	require.NotNil(t, routine)
+	assertNegotiatedSessionCharset(t, routine.getSession(), "utf8mb4", "utf8mb4_unicode_ci")
 	routine.getSession().gSysVars = &SystemVariables{mp: map[string]interface{}{}}
 
 	// Connector/J 8.4 and later use COM_RESET_CONNECTION before exposing each
@@ -2138,6 +2159,7 @@ func TestMySQLWireResetConnectionPreservesDatabase(t *testing.T) {
 		require.NotNil(t, routine)
 		require.Equal(t, connectionID, routine.getConnectionID())
 		require.Equal(t, "db1", routine.getSession().GetDatabaseName())
+		assertNegotiatedSessionCharset(t, routine.getSession(), "utf8mb4", "utf8mb4_unicode_ci")
 	}
 
 	require.NoError(t, clientConn.Close())

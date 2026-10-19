@@ -17,6 +17,7 @@ package plan
 import (
 	"fmt"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -372,7 +373,20 @@ func (builder *QueryBuilder) pushdownFilters(nodeID int32, filters []*plan.Expr,
 			// happen after set-operation columns are replaced by branch literals.
 			if len(node.GroupBy) == 0 && !exprHasColRef(filter) {
 				node.FilterList = append(node.FilterList, filter)
-			} else if !containsTag(filter, aggregateTag) && !containGrouping(filter) &&
+				continue
+			}
+			hasAggregate := containsTag(filter, aggregateTag)
+			hasGrouping := false
+			if !hasAggregate {
+				hasGrouping = containGrouping(filter)
+				if hasGrouping {
+					// Only revisit predicates already blocked by GROUPING. Ordinary
+					// aggregate filters keep their existing expression walks.
+					filter = simplifyActiveGroupingFilter(filter, groupTag, len(node.GroupBy), node.GroupingFlag)
+					hasGrouping = containGrouping(filter)
+				}
+			}
+			if !hasAggregate && !hasGrouping &&
 				!referencesSyntheticGroupKey(filter, groupTag, len(node.GroupBy), node.GroupingFlag) {
 				canPushdown = append(canPushdown, replaceColRefs(filter, groupTag, node.GroupBy))
 			} else {
@@ -1462,6 +1476,82 @@ func unwrapIsTrueFromMarkJoinEqualities(
 	}
 
 	return conditions
+}
+
+// simplifyActiveGroupingFilter removes output NULL normalization only for this
+// static branch's active-key expressions. Their GROUPING bit is zero, making
+// the wrapper a value identity in a predicate. Keep synthetic/dynamic keys and
+// real GROUPING observers intact; output projections retain their boundary.
+func simplifyActiveGroupingFilter(expr *plan.Expr, groupTag int32, groupCount int, flags []bool) *plan.Expr {
+	if len(flags) == 0 {
+		return expr
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return expr
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.Obj)
+	if id == function.GROUPING {
+		return expr
+	}
+	if id == function.IFF && len(fn.Args) == 3 {
+		key := fn.Args[2]
+		probe := fn.Args[0].GetF()
+		null := fn.Args[1]
+		if key != nil &&
+			probe != nil && probe.Func != nil && len(probe.Args) == 1 &&
+			proto.Equal(probe.Args[0], key) && null.GetLit() != nil && null.GetLit().Isnull {
+			probeID, _ := function.DecodeOverloadID(probe.Func.Obj)
+			keyType, nullType, resultType := key.Typ, null.Typ, expr.Typ
+			keyType.NotNullable, nullType.NotNullable, resultType.NotNullable = false, false, false
+			if probeID == function.GROUPING && proto.Equal(&keyType, &nullType) && proto.Equal(&keyType, &resultType) &&
+				containsTag(key, groupTag) && groupingFilterHasOnlyActiveKeys(key, groupTag, groupCount, flags) &&
+				exprCanRemoveProject(key) && !function.ContainsRowScopedConversion(key) {
+				return key
+			}
+		}
+	}
+	for i, arg := range fn.Args {
+		fn.Args[i] = simplifyActiveGroupingFilter(arg, groupTag, groupCount, flags)
+	}
+	return expr
+}
+
+// Ordinary literals and scalar operations on active keys cannot introduce a
+// grouping sentinel. Prove every input's ownership and scalar shape;
+// unknown expression forms and foreign/inactive keys retain the boundary.
+func groupingFilterHasOnlyActiveKeys(expr *plan.Expr, groupTag int32, groupCount int, flags []bool) bool {
+	if expr == nil || groupCount == 0 || len(flags) != groupCount {
+		return false
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		return e.Col != nil && e.Col.RelPos == groupTag && e.Col.ColPos >= 0 &&
+			int(e.Col.ColPos) < groupCount && flags[e.Col.ColPos]
+	case *plan.Expr_Lit:
+		return e.Lit != nil
+	case *plan.Expr_T:
+		return e.T != nil
+	case *plan.Expr_P:
+		return e.P != nil && e.P.Pos >= 0
+	case *plan.Expr_F:
+		if e.F == nil || e.F.Func == nil {
+			return false
+		}
+		id, _ := function.DecodeOverloadID(e.F.Func.Obj)
+		overload, ok := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
+		if !ok || id == function.GROUPING || overload.IsAgg() || overload.IsWin() {
+			return false
+		}
+		for _, arg := range e.F.Args {
+			if !groupingFilterHasOnlyActiveKeys(arg, groupTag, groupCount, flags) {
+				return false
+			}
+		}
+		return true
+	default:
+		return false
+	}
 }
 
 // referencesSyntheticGroupKey reports whether expr cannot be rewritten below

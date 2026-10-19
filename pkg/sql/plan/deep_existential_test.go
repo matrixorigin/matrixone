@@ -116,8 +116,10 @@ func TestDeepExistentialAdmission(t *testing.T) {
 		{"two_pending", "select 1 from nation o where exists(select 1 from nation i where " + deep + " and " + deep + ")"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
-			require.Error(t, err)
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			require.NotNil(t, p.GetQuery().Correlation)
+			require.NoError(t, p.GetQuery().ValidateCorrelation())
 		})
 	}
 	for _, n := range []int{8, 9} {
@@ -127,11 +129,13 @@ func TestDeepExistentialAdmission(t *testing.T) {
 				arms[i] = fmt.Sprintf("(j.n_regionkey=o.n_regionkey and j.n_nationkey=i.n_nationkey and j.n_nationkey=%d)", i)
 			}
 			sql := "select 1 from nation o where exists(select 1 from nation i where exists(select 1 from nation j where " + strings.Join(arms, " or ") + "))"
-			_, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, sql)
 			if n <= maxExistentialArms {
 				require.NoError(t, err)
 			} else {
-				require.Error(t, err)
+				require.NoError(t, err)
+				require.NotNil(t, p.GetQuery().Correlation)
+				require.NoError(t, p.GetQuery().ValidateCorrelation())
 			}
 		})
 	}

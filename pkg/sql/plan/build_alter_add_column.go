@@ -163,17 +163,7 @@ func buildAddColumnAndConstraint(ctx CompilerContext, alterPlan *plan.AlterTable
 			if err != nil {
 				return nil, err
 			}
-			uniqueIndex := &tree.UniqueIndex{
-				KeyParts: []*tree.KeyPart{{ColName: specNewColumn.Name}},
-			}
-
-			constrNames := map[string]bool{}
-			// Check not empty constraint name whether is duplicated.
-			for _, idx := range alterPlan.CopyTableDef.Indexes {
-				constrNames[indexNameKey(idx.IndexName)] = true
-			}
-			// set empty constraint names(index and unique index)
-			setEmptyUniqueIndexName(constrNames, uniqueIndex)
+			uniqueIndex := newAlterColumnUniqueIndex(alterPlan.CopyTableDef, specNewColumn)
 
 			indexDef, err := checkAddColumWithUniqueKey(ctx.GetContext(), alterPlan.CopyTableDef, uniqueIndex)
 			if err != nil {
@@ -563,7 +553,9 @@ func handleDropColumnWithIndex(ctx context.Context, colName string, tbInfo *Tabl
 }
 
 func handleDropColumnWithPrimaryKey(ctx context.Context, colName string, tbInfo *TableDef) error {
-	if tbInfo.Pkey != nil && tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
+	// DROP PRIMARY KEY in an earlier action of the same ALTER leaves Pkey nil.
+	// Dropping a different column must not dereference that removed key.
+	if tbInfo.Pkey == nil || tbInfo.Pkey.PkeyColName == catalog.FakePrimaryKeyColName {
 		return nil
 	} else {
 		tbInfo.Pkey.Names = RemoveIf[string](tbInfo.Pkey.Names, func(t string) bool {

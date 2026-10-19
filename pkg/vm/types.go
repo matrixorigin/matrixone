@@ -122,6 +122,8 @@ const (
 	MinusAll
 	// VectorQuery and its materialized source are coordinator-local only.
 	VectorQuery
+	// Dependent owns coordinator-local parameter programs and continuations.
+	Dependent
 	// OpTypeEnd is the exclusive upper bound for executable operator types.
 	// New operator types must be added before it.
 	OpTypeEnd
@@ -200,6 +202,7 @@ func init() {
 		PreInsertAutoIDCache:    "PreInsertAutoIDCache",
 		AdaptiveTop:             "AdaptiveTop",
 		VectorQuery:             "VectorQuery",
+		Dependent:               "Dependent",
 		MinusAll:                "MinusAll",
 	}
 
@@ -413,6 +416,9 @@ func Exec(op Operator, proc *process.Process) (CallResult, error) {
 	if err != nil {
 		return result, err
 	}
+	if result.Status == ExecYield {
+		return result, nil
+	}
 	result.Batch, err = op.ExecProjection(proc, result.Batch)
 	analyzer.Output(result.Batch)
 	return result, err
@@ -434,6 +440,9 @@ const (
 	ExecStop ExecStatus = iota
 	ExecNext
 	ExecHasMore
+	// ExecYield is local to continuation-adapted kernels. No EOF or error has
+	// occurred: the kernel has saved its state and needs another input batch.
+	ExecYield
 )
 
 type CtrState int

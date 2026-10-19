@@ -360,13 +360,11 @@ func (builder *QueryBuilder) shareGroupingSetInput(
 	}
 	producerID := first.Children[0]
 	// A grouping sentinel belongs to the grouping extension that created it.
-	// Legacy outer aggregates intentionally hash an inherited sentinel like SQL
-	// NULL when the corresponding outer key is active. Dynamic grouping must
-	// distinguish its own sentinel from SQL NULL, so feeding it an inherited
-	// sentinel would split one SQL NULL group into two. Until relational
-	// boundaries normalize grouping provenance, keep the legacy plan whenever a
-	// producer can expose one. Follow materialized source steps as well as child
-	// edges because an already-shared inner grouping set lives behind SINK_SCAN.
+	// Query outputs normalize its provenance before another grouping extension
+	// consumes it. Keep the conservative admission rule for nested producers:
+	// admitting their sharing requires a separate cost and error-order proof.
+	// Follow materialized source steps as well as child edges because an
+	// already-shared inner grouping set lives behind SINK_SCAN.
 	if builder.subtreeMayExposeGroupingSentinel(producerID, make(map[int32]bool)) {
 		return false
 	}

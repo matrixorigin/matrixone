@@ -123,6 +123,9 @@ func (sample *Sample) Call(proc *process.Process) (vm.CallResult, error) {
 	if lastErr != nil {
 		return result, lastErr
 	}
+	if result.Status == vm.ExecYield {
+		return result, nil
+	}
 
 	if sample.ctr.buf != nil {
 		sample.ctr.buf.Clean(proc.GetMPool())

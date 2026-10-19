@@ -26,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 const (
@@ -69,6 +71,16 @@ type tableDumpBindContext struct {
 }
 
 func (c tableDumpBindContext) GetContext() context.Context { return c.ctx }
+
+// Rebinding changes expression policy, not ownership of catalog execution.
+func (c tableDumpBindContext) getInternalSQLExecutor(proc *process.Process) (executor.SQLExecutor, bool) {
+	if provider, ok := c.CompilerContext.(interface {
+		getInternalSQLExecutor(*process.Process) (executor.SQLExecutor, bool)
+	}); ok {
+		return provider.getInternalSQLExecutor(proc)
+	}
+	return nil, false
+}
 
 func (c tableDumpBindContext) ResolveVariable(name string, system, global bool) (any, error) {
 	if strings.EqualFold(name, "div_precision_increment") && system && !global {

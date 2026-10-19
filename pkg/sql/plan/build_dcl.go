@@ -129,6 +129,12 @@ func buildPrepare(stmt tree.Prepare, ctx CompilerContext) (*Plan, error) {
 		}
 		stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), pstmt.Sql, v.(int64), sqlMode)
 		if err != nil {
+			// Same parse-error normalization as the frontend prepare path:
+			// report inner syntax failures as ER_PARSE_ERROR (1064/42000)
+			// rather than an untyped parser value that surfaces as 1105.
+			if _, positioned := err.(mysql.PositionedErr); positioned {
+				err = moerr.NewParseError(ctx.GetContext(), err.Error())
+			}
 			return nil, err
 		}
 		defer func() {

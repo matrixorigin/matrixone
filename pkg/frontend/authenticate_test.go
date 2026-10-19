@@ -4875,6 +4875,12 @@ func TestBackUpStatementPrivilege(t *testing.T) {
 		ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
 		convey.So(err, convey.ShouldBeNil)
 		convey.So(ok, convey.ShouldBeTrue)
+		tenant.DefaultRole = publicRoleName
+		tenant.DefaultRoleID = publicRoleID
+		ok, _, err = authenticateUserCanExecuteStatementWithObjectTypeNone(ses.GetTxnHandler().GetTxnCtx(), ses, stmt)
+		convey.So(err, convey.ShouldBeNil)
+		convey.So(ok, convey.ShouldBeFalse)
+
 	})
 
 	convey.Convey("backup fail", t, func() {
@@ -12942,6 +12948,7 @@ func newSes(priv *privilege, ctrl *gomock.Controller) *Session {
 		DefaultRoleID: moAdminRoleID,
 	}
 	ses.SetTenantInfo(tenant)
+	seedRewriteRuleCacheProofForTest(ses)
 	ses.priv = priv
 
 	stubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
@@ -13190,6 +13197,14 @@ func (bt *backgroundExecTest) GetExecResultSet() []interface{} {
 		return bt.resultSets
 	}
 	result, ok := bt.sql2result[bt.currentSql]
+	// Legacy fixture databases have no persisted charset/collation row.
+	// Tests of the new metadata contract provide explicit results/errors.
+	if !ok && strings.HasPrefix(bt.currentSql, "select cast(dd.collation_id as varchar(10)), cast(dd.collation_revision as varchar(10)), cast(dd.version as varchar(20)) from mo_catalog.mo_database") {
+		return []interface{}{defaultsRestoreRows(nil)}
+	}
+	if !ok && strings.HasPrefix(bt.currentSql, "select relname from mo_catalog.mo_tables") && strings.HasSuffix(bt.currentSql, "relname = 'mo_database_defaults'") {
+		return []interface{}{newMrsForSqlForShowDatabases(nil)}
+	}
 	if !ok &&
 		strings.HasPrefix(bt.currentSql, "select granted_id,with_grant_option from mo_catalog.mo_role_grant where grantee_id = ") {
 		return []interface{}{newMrsForInheritedRoleIdOfRoleId([][]interface{}{})}
@@ -14743,6 +14758,8 @@ func TestDoRemoveStageFiles(t *testing.T) {
 	defer ctrl.Finish()
 	ctx := context.Background()
 	ses := newTestSession(t, ctrl)
+	ses.proc.Base.SessionInfo.Account = sysAccountName
+	ses.proc.Base.SessionInfo.Role = moAdminRoleName
 	defer ses.Close()
 
 	dir := t.TempDir()

@@ -39,8 +39,18 @@ import (
 // CN. Current CREATE validation stays enabled throughout the public scenario.
 func TestLegacyPartitionColumnLimitCopy(t *testing.T) {
 	runSQLIntegration(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(t.Context(), 180*time.Second)
-		defer cancel()
+		// 多次宽表 COPY 验证的是功能边界，而不是整个场景的耗时上限。
+		// 每个独立阶段保留180秒 hang guard，整体仍限制在10分钟内。
+		testCtx, stopTest := context.WithTimeout(t.Context(), 10*time.Minute)
+		defer stopTest()
+		ctx, cancel := context.WithTimeout(testCtx, 180*time.Second)
+		defer func() { cancel() }()
+		nextPhase := func(name string) {
+			t.Helper()
+			cancel()
+			ctx, cancel = context.WithTimeout(testCtx, 180*time.Second)
+			t.Logf("legacy partition COPY phase=%s", name)
+		}
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
@@ -181,6 +191,7 @@ func TestLegacyPartitionColumnLimitCopy(t *testing.T) {
 			require.Zero(t, count)
 		}
 		verify(4098)
+		nextPhase("rollback")
 		execSQL("begin")
 		execSQL("alter table wide drop c4097")
 		// In-transaction partition COPY visibility also fails with ordinary-width
@@ -188,8 +199,10 @@ func TestLegacyPartitionColumnLimitCopy(t *testing.T) {
 		// committed COPY data is checked below.
 		execSQL("rollback")
 		verify(4098)
+		nextPhase("committed shrink")
 		execSQL("alter table wide drop c4097")
 		verify(4097)
+		nextPhase("replacement")
 		execSQL("alter table wide add replacement int, drop c4096")
 		verify(4097)
 		_, err = conn.ExecContext(ctx, "alter table wide add forbidden int")
@@ -199,11 +212,13 @@ func TestLegacyPartitionColumnLimitCopy(t *testing.T) {
 		require.Equal(t, uint16(1117), packet.Number)
 		require.Equal(t, "HY000", string(packet.SQLState[:]))
 		verify(4097)
+		nextPhase("final reduction")
 		execSQL("alter table wide drop replacement")
 		verify(4096)
 		_, err = conn.ExecContext(ctx, "alter table wide add forbidden int")
 		require.ErrorContains(t, err, "Too many columns")
 		verify(4096)
+		nextPhase("cleanup")
 		execSQL("create table session_alive(id int)")
 		execSQL("drop database " + database)
 		var count int

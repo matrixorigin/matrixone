@@ -16,7 +16,9 @@
 Base client functionality for MatrixOne clients
 """
 
-# No imports needed for this module
+from numbers import Number
+
+from numpy import bool_ as numpy_bool
 
 
 class BaseMatrixOneClient:
@@ -104,6 +106,9 @@ class BaseMatrixOneClient:
         Returns:
 
             SQL batch INSERT statement string
+
+        Numeric and boolean values retain their SQL type. Pass a string when
+        textual storage is intended.
         """
         import json
 
@@ -122,6 +127,11 @@ class BaseMatrixOneClient:
                 value = data[col]
                 if value is None:
                     formatted_values.append("NULL")
+                elif isinstance(value, str):
+                    escaped_value = str(value).replace("'", "''")
+                    formatted_values.append(f"'{escaped_value}'")
+                elif isinstance(value, (int, float)):
+                    formatted_values.append(str(value))
                 elif isinstance(value, dict):
                     # JSON type: serialize dict to JSON string
                     json_str = json.dumps(value)
@@ -131,6 +141,8 @@ class BaseMatrixOneClient:
                 elif isinstance(value, list):
                     # Vector type: format as [1,2,3]
                     formatted_values.append("'" + "[" + ",".join(map(str, value)) + "]" + "'")
+                elif isinstance(value, (Number, numpy_bool)):
+                    formatted_values.append(str(value))
                 else:
                     # Escape single quotes in string values to prevent SQL injection
                     escaped_value = str(value).replace("'", "''")
