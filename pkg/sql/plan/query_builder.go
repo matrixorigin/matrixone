@@ -7303,7 +7303,13 @@ func resolveNumericProjectionSourceOutputs(
 		}
 		if sources[i].source == nil {
 			if sources[i].sourceName != "" {
-				sources[i].outputNames = numericPhysicalTableOutputNames(builder, sources[i])
+				source := sources[i]
+				if source.sourceSchema == "" && ctx != nil {
+					// Metadata probes must use the same View/CTE namespace as
+					// binding, not the statement owner's default database.
+					source.sourceSchema = ctx.defaultDatabase
+				}
+				sources[i].outputNames = numericPhysicalTableOutputNames(builder, source)
 				sources[i].outputKnown = sources[i].outputNames != nil
 			}
 			continue
@@ -12496,10 +12502,14 @@ func (builder *QueryBuilder) bindView(
 	// scan nodes. Preserve that object's identity so every plan consumer,
 	// including the ordinary COM_QUERY cache, can validate the complete
 	// catalog dependency closure before reusing the expanded plan.
-	builder.qry.CatalogDependencies = appendPrepareSchemas(
-		builder.qry.CatalogDependencies,
-		prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
-	)
+	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state == nil || !state.planning {
+		// Scoped planning already captured the effective catalog account. A
+		// View's executable input identifies subscription entry semantics only.
+		builder.qry.CatalogDependencies = appendPrepareSchemas(
+			builder.qry.CatalogDependencies,
+			prepareSchemaRefWithSnapshot(obj, tableDef, snapshot),
+		)
+	}
 	// Authorization belongs to the bound query, including views whose entire
 	// executable subtree is removed by optimization.
 	builder.qry.ViewReferences = append(builder.qry.ViewReferences, &plan.ViewReference{
@@ -13061,8 +13071,10 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		// Empty-result rewrites can remove scans, not semantic dependencies.
 		// Capture evidence before optimization, including intermediate Views,
 		// snapshots, and ordinary tables that may later be replaced by Views.
-		builder.qry.CatalogDependencies = appendPrepareSchemas(
-			builder.qry.CatalogDependencies, prepareSchemaRefWithSnapshot(obj, tableDef, snapshot))
+		if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state == nil || !state.planning || tableDef.TableType != catalog.SystemViewRel {
+			builder.qry.CatalogDependencies = appendPrepareSchemas(
+				builder.qry.CatalogDependencies, prepareSchemaRefWithSnapshot(obj, tableDef, snapshot))
+		}
 
 		// Compiler contexts return immutable catalog metadata. Own the planner
 		// shell and column slice, which are replaced locally, without copying the

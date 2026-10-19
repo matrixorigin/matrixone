@@ -230,12 +230,18 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 			if err != nil {
 				return nil, nil, err
 			}
-			if obj.PubInfo == nil && dep.AccountID != account {
-				// Execution and reusable-plan validation must both resolve the
-				// physical source in its publisher catalog, not the subscriber.
+			if obj.PubInfo == nil && dep.AccountID != account && def.TableType != catalog.SystemViewRel {
+				// Physical scans need their execution account. For Views, PubInfo
+				// identifies a resolved subscription entry, not merely ownership;
+				// ordinary publisher Views inherit the active binding domain.
 				obj.PubInfo = &planpb.PubInfo{TenantId: int32(dep.AccountID)}
 			}
 			ref := prepareSchemaRefWithSnapshot(obj, def, snapshot)
+			if ref.PubInfo == nil && dep.AccountID != account {
+				// Dependency validation still needs every View's actual account,
+				// without changing how bindView classifies its executable input.
+				ref.PubInfo = &planpb.PubInfo{TenantId: int32(dep.AccountID)}
+			}
 			c.state.planDependencies = appendPrepareSchemas(c.state.planDependencies, ref)
 		}
 	}

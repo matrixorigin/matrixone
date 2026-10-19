@@ -119,33 +119,58 @@ func TestViewSchemaPlanningPreservesCorrelatedMainOutput(t *testing.T) {
 
 func TestViewSchemaPlanningExecutionObjectAccount(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		account uint32
-		pub     *planpb.PubInfo
+		name         string
+		account      uint32
+		pub          *planpb.PubInfo
+		view         bool
+		subscription string
 	}{
-		{"local", 42, nil},
-		{"publisher", 7, nil},
-		{"system publisher", 0, nil},
-		{"existing publisher", 7, &planpb.PubInfo{TenantId: 7, XXX_unrecognized: []byte{0x10, 0x07}}},
+		{"local", 42, nil, false, ""},
+		{"publisher", 7, nil, false, ""},
+		{"system publisher", 0, nil, false, ""},
+		{"existing publisher", 7, &planpb.PubInfo{TenantId: 7, XXX_unrecognized: []byte{0x10, 0x07}}, false, ""},
+		{"publisher intermediate view", 7, nil, true, ""},
+		{"subscription entry view", 7, &planpb.PubInfo{TenantId: 7}, true, "sub"},
+		{"invalid subscription entry view", 7, &planpb.PubInfo{TenantId: 7}, true, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newViewSchemaTestFixture(t)
-			catalogObject := f.compiler.objects["nation"]
+			name := "nation"
+			def := f.compiler.tables[name]
+			if tc.view {
+				name = "inner_v"
+				def = f.addView(t, name, "select n_nationkey from nation")
+			}
+			catalogObject := f.compiler.objects[name]
 			catalogObject.PubInfo = tc.pub
+			catalogObject.SubscriptionName = tc.subscription
 			before := DeepCopyObjectRef(catalogObject)
 			request := f.request(t)
 			require.NoError(t, request.open())
 			state := newViewSchemaDerivation(request)
 			defer state.close()
 			state.planning = true
-			obj, _, err := state.compiler.record(catalogObject, f.compiler.tables["nation"],
-				&Snapshot{Tenant: &SnapshotTenant{TenantID: tc.account}}, "tpch", "nation")
+			obj, _, err := state.compiler.record(catalogObject, def,
+				&Snapshot{Tenant: &SnapshotTenant{TenantID: tc.account}}, "tpch", name)
 			require.NoError(t, err)
 			require.Equal(t, before, catalogObject, "catalog-owned identity must not be mutated")
 			require.NotSame(t, catalogObject, obj)
 			require.Len(t, state.planDependencies, 1)
-			if tc.account == 42 {
-				require.Nil(t, obj.PubInfo)
+			require.Equal(t, tc.subscription, obj.SubscriptionName)
+			if tc.view && tc.pub != nil {
+				_, _, err := viewSchemaSubscriptionContext(t.Context(), obj, nil, "tpch")
+				if tc.subscription == "" {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput))
+				} else {
+					require.NoError(t, err)
+				}
+			}
+			if tc.account != 42 {
+				require.NotNil(t, state.planDependencies[0].PubInfo)
+				require.EqualValues(t, tc.account, state.planDependencies[0].PubInfo.TenantId)
+			}
+			if tc.account == 42 || tc.view && tc.pub == nil {
+				require.Nil(t, obj.PubInfo, "a publisher-owned intermediate View is not a subscription entry")
 			} else {
 				require.NotNil(t, obj.PubInfo, "execution needs the same account as dependency validation")
 				require.EqualValues(t, tc.account, obj.PubInfo.TenantId)
@@ -155,6 +180,34 @@ func TestViewSchemaPlanningExecutionObjectAccount(t *testing.T) {
 					require.Equal(t, tc.pub.XXX_unrecognized, obj.PubInfo.XXX_unrecognized)
 				}
 			}
+		})
+	}
+}
+
+func TestViewSchemaPlanningNumericProbeDatabase(t *testing.T) {
+	for _, tc := range []struct{ name, scope, qualified, want string }{
+		{"view default", "view_db", "", "view_db"},
+		{"explicit qualifier", "view_db", "explicit_db", "explicit_db"},
+		{"statement default", "", "", "statement_db"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			statementDB := "statement_db"
+			f.compiler.defaultDatabase = &statementDB
+			var lookups []string
+			f.compiler.resolve = func(_ context.Context, database, _ string, _ *Snapshot) error {
+				lookups = append(lookups, database)
+				return nil
+			}
+			builder := NewQueryBuilder(planpb.Query_SELECT, f.compiler, true, true)
+			ctx := NewBindContext(builder, nil)
+			ctx.defaultDatabase = tc.scope
+			sources := []numericProjectionSourceInfo{{sourceName: "nation", sourceSchema: tc.qualified}}
+			resolveNumericProjectionSourceOutputs(builder, &tree.Select{}, ctx, sources, make(map[*tree.Select]bool))
+			require.Equal(t, []string{tc.want}, lookups)
+			require.True(t, sources[0].outputKnown)
+			require.Contains(t, sources[0].outputNames, "n_nationkey")
+			require.Equal(t, tc.qualified, sources[0].sourceSchema)
 		})
 	}
 }

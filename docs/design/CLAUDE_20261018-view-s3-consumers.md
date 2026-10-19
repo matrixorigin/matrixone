@@ -3,7 +3,7 @@
 ## 1. 范围与依据
 
 - 任务：[#29438](https://github.com/matrixorigin/matrixone/issues/29438)，父任务 [#29433](https://github.com/matrixorigin/matrixone/issues/29433)。
-- PR 交付同步基线：`def799e1260dd547cae2e0e54323ea20ec1b7685`，以 merge 纳入；此前本地验收基线为 `8f600318beffd82185ee8fdd92a8f0b625b8e5e7`，最初核查/反例基线为 `68e642fdc533e96ed8f83ac44659119ad8be97af`。上游同步不改变 S1/S2 契约和本次默认未激活的边界；主输出步与 correlation 采用上游共同 binder/复制语义，不拷贝另一套实现。
+- PR 交付同步基线：`57fb9530859d92791100098d312ea8cacc671910`，以 merge 纳入；此前 PR 基线为 `def799e1260dd547cae2e0e54323ea20ec1b7685`，本地验收基线为 `8f600318beffd82185ee8fdd92a8f0b625b8e5e7`，最初核查/反例基线为 `68e642fdc533e96ed8f83ac44659119ad8be97af`。上游同步不改变 S1/S2 契约和本次默认未激活的边界；主输出步与 correlation 采用上游共同 binder/复制语义，不拷贝另一套实现。
 - 依据：[系列契约](CLAUDE_20260922-view-metadata-on-demand.md)、[S1 精确批准记录](CLAUDE_20260928-view-metadata-s1-review.md)、[已批准的 S2 v2.1 修订](CLAUDE_20261005-view-s2-scope-revision.md)。S1/S2 分别通过 #29456/#29633 合入。
 - 本文记录上述设计的 S3 接线、边界和验证要求，不是新的上线批准。默认 SQL、PREPARE、cursor 路由不激活新模式；S4、S5/S6、S8/S9 的退出条件没有被本次测试替代。
 
@@ -51,7 +51,7 @@ S2 nested memo 中的 synthetic View scan 只服务 schema 描述，不能执行
 
 View 定义、环境、身份、owner/权限和版本继续来自可见目录；resolver 先创建无 `Cols`/`Name2ColIndex` 的 View 壳，再进行请求副本的计费和复制。旧列数量、default、类型不进入推导准入。普通表完整 schema 仍须经过既有兼容/协议及资源检查。
 
-实际 catalog account 同时进入请求私有的执行 `ObjectRef.PubInfo` 与依赖副本；跨库 publisher 来源不能只在依赖记录带账户而让扫描按 subscriber 解析。原目录对象不被修改，已有 PubInfo 及未知字节保留。
+物理来源的实际 catalog account 同时进入请求私有的扫描 `ObjectRef.PubInfo` 与依赖副本，不能让扫描按 subscriber 解析。View 的 PubInfo 则表示已解析的订阅入口身份；普通跨库中间 View 继承 publisher 绑定域，不能仅凭账户不同合成 PubInfo、将它误当新订阅入口。其依赖副本仍独立记录实际账户；`ViewReferences` 保留 publisher snapshot tenant 和原始空 SubscriptionName。原目录对象不被修改，已有 PubInfo 及未知字节保留。
 
 这是只读隔离，不更新目录列、ViewSql、依赖表或刷新状态。raw catalog 和备份载荷仍保持物理快照语义。
 
@@ -68,7 +68,7 @@ View 定义、环境、身份、owner/权限和版本继续来自可见目录；
 
 继续使用 `CatalogDependencies`/`Prepare.Schemas`，不新增 schema cache 或 durable invalidation。
 
-- scoped resolver 捕获根、中间 View、基对象及按 ID/index/subscription 解析的来源。证据包括数据库/关系身份、版本、实际 publisher 账户、订阅与 snapshot。
+- scoped resolver 捕获根、中间 View、基对象及按 ID/index/subscription 解析的来源。证据包括数据库/关系身份、版本、实际 publisher 账户、订阅与 snapshot。S3 planning 的 View 依赖以该捕获为唯一来源，普通 builder 不再从 View 执行入口 ref 重复推断账户；普通表、默认 binder 与 Describe 的捕获不变。
 - 数据子树被 LIMIT 0、where false 或裁剪移除，依赖证据仍存在。
 - 对有完整捕获的 S3 PREPARE，`collectPrepareViewSchemas` 使用这些证据，不在 subscriber 名称域重新解析 publisher 的中间 View。
 - source 在 publisher 域解析但没有可供 caller 按名访问的 subscription 别名时，保留实际账户证据；既有 name-only validator 无法证明其有效性就重绑，不借用同名 subscriber 对象。S6 再测这种保守旁路的成本。
@@ -129,7 +129,7 @@ View 定义、环境、身份、owner/权限和版本继续来自可见目录；
 - 拒绝和控制：缺少创建环境、未冻结 star、丢失 source、损坏定义、授权失败；默认入口保留 legacy 兼容；授权 context 不带私有 marker；数据库错误/snapshot 原样传播。
 - 生命周期：失败/panic 后下一次规划成功；blocked catalog lookup 与 Close/BUSY 的确定性 barrier；资源归零，父事务/执行代可继续使用。
 - frontend：真正由新 binder 生成的空结果计划，在基表 metadata-only、COPY physical ID、同名重建、中间 View 变化后由既有 cache validator 拒绝。
-- native：复用 S2 的两个单 CN fixture；真实 own-DDL/历史/订阅/权限域、严格源 View authorizer 下的无写 CTAS 规划，以及 request 关闭后实际编译执行嵌套/跨库订阅 View 的行与类型。publisher/subscriber 同名源采用不同类型/行值；直接/嵌套/历史、普通与 prepared 计划均实际执行，各自使用独立父语句资源代。
+- native：复用 S2 的两个单 CN fixture；真实 own-DDL/历史/订阅/权限域、严格源 View authorizer 下的无写 CTAS 规划，以及 request 关闭后实际编译执行嵌套/跨库订阅 View 的行与类型。publisher/subscriber 同名源采用不同类型/行值；直接/嵌套/跨库中间 View/历史、普通与 prepared 计划均实际执行，各自使用独立父语句资源代；跨库中间 View 的普通与 prepared CTAS 另做无写规划控制。
 - 公共协议控制：已有 `TestViewDescriptionPublicSQL` 的独立 reader/writer、SQL/binary prepare 和 empty-result schema 变化；它验证默认路径无回归，**不是宣称默认 binary 服务已激活 S3**。
 - 定向 UT 后执行 owning packages、风险对应 race、增量 gofmt/vet/CI 同版 lint及修改代码覆盖率 ≥75%。未通过的门禁不得标记 PASS。
 

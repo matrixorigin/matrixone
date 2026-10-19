@@ -410,8 +410,11 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 				require.Zero(t, count, "publication DB cannot stand in for the historical source")
 			}
 		}
+		otherPublisher := openNativeViewSchemaSQL(t, ctx, cn, "dump:111", "schema_other")
+		_, err := otherPublisher.ExecContext(ctx, "create view inner_v as select id from collision_source")
+		require.NoError(t, err)
 		publisher := openNativeViewSchemaSQL(t, ctx, cn, "dump:111", "schema_publisher")
-		_, err := publisher.ExecContext(ctx, "create view published as select id from source")
+		_, err = publisher.ExecContext(ctx, "create view published as select id from source")
 		require.NoError(t, err)
 		_, err = publisher.ExecContext(ctx, "create view qualified as select id from schema_publisher.source")
 		require.NoError(t, err)
@@ -420,6 +423,7 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			"create view v_nested as select id from schema_publisher.v_collision",
 			"create view v_other as select id from schema_other.collision_source",
 			"create view v_other_nested as select id from schema_publisher.v_other",
+			"create view v_cross_middle as select id from schema_other.inner_v",
 			fmt.Sprintf("create view v_history_collision as select id from subscribed.collision_source {MO_TS = '%s'}", sourceHistory.DebugString()),
 			"create view v_history_nested as select id from schema_publisher.v_history_collision",
 			fmt.Sprintf("create view v_history_other as select id from schema_other.collision_source {MO_TS = '%s'}", sourceHistory.DebugString()),
@@ -459,12 +463,13 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		tenant := &frontend.TenantInfo{Tenant: "schema_subscriber", User: "root", DefaultRole: frontend.GetAccountAdminRole(),
 			TenantID: account, UserID: frontend.GetAdminUserId(), DefaultRoleID: frontend.GetAccountAdminRoleId()}
 		tenantCtx := defines.AttachAccount(ctx, account, tenant.UserID, tenant.DefaultRoleID)
-		cases := []struct{ view, sourceDatabase string }{
-			{"v_collision", "subscribed"}, {"v_nested", "subscribed"},
-			{"v_saved_collision", "subscribed"}, {"v_other", "schema_other"},
-			{"v_other_nested", "schema_other"},
-			{"v_history_collision", "subscribed"}, {"v_history_nested", "subscribed"},
-			{"v_history_other", "schema_other"},
+		cases := []struct{ view, sourceDatabase, sourceView string }{
+			{"v_collision", "subscribed", ""}, {"v_nested", "subscribed", ""},
+			{"v_saved_collision", "subscribed", ""}, {"v_other", "schema_other", ""},
+			{"v_other_nested", "schema_other", ""},
+			{"v_cross_middle", "schema_other", "inner_v"},
+			{"v_history_collision", "subscribed", ""}, {"v_history_nested", "subscribed", ""},
+			{"v_history_other", "schema_other", ""},
 		}
 		var historical timestamp.Timestamp
 		var baseline nativeViewSchemaValue
@@ -521,15 +526,61 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 							foundPublisherSource := false
 							for _, ref := range p.GetQuery().CatalogDependencies {
 								if ref.ObjName == "collision_source" && ref.PubInfo != nil && ref.PubInfo.TenantId == int32(catalog.System_Account) {
-									require.Equal(t, test.sourceDatabase, ref.SchemaName)
+									require.Equal(t, test.sourceDatabase, ref.SchemaName, "prepared=%t dependency=%+v", prepared, ref)
 									foundPublisherSource = true
 								}
 							}
 							require.True(t, foundPublisherSource, "reusable plans need the actual publisher catalog account")
+							if test.sourceView != "" {
+								foundMiddle := false
+								for _, ref := range p.GetQuery().CatalogDependencies {
+									if ref.ObjName == test.sourceView {
+										require.Equal(t, test.sourceDatabase, ref.SchemaName)
+										require.NotNil(t, ref.PubInfo)
+										require.EqualValues(t, catalog.System_Account, ref.PubInfo.TenantId)
+										require.Empty(t, ref.SubscriptionName)
+										foundMiddle = true
+									}
+								}
+								require.True(t, foundMiddle)
+								foundPath := false
+								for _, ref := range p.GetQuery().ViewReferences {
+									for _, step := range ref.ViewPath {
+										if step.ViewName == test.sourceView {
+											require.Equal(t, test.sourceDatabase, step.DatabaseName)
+											require.Empty(t, step.SubscriptionName)
+											require.EqualValues(t, catalog.System_Account, step.Snapshot.Tenant.TenantID)
+											foundPath = true
+										}
+									}
+								}
+								require.True(t, foundPath)
+							}
 						}()
 					}
 				})
 			}
+			t.Run("cross_middle_ctas", func(t *testing.T) {
+				for _, prepared := range []bool{false, true} {
+					query := "create table schema_other.plan_only_middle as select id from subscribed.v_cross_middle"
+					if prepared {
+						query = "prepare middle_ctas from '" + query + "'"
+					}
+					func() {
+						statements, err := mysql.Parse(tenantCtx, query, 1)
+						require.NoError(t, err)
+						defer statements[0].Free()
+						p, err := compiler.BuildPlanWithViewSchema(tenantCtx, statements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+						require.NoError(t, err, "prepared=%t", prepared)
+						if prepared {
+							p = p.GetDcl().GetPrepare().Plan
+						}
+						columns := p.GetDdl().GetCreateTable().TableDef.Cols
+						require.Equal(t, "id", columns[0].Name)
+						require.EqualValues(t, types.T_int32, columns[0].Typ.Id)
+					}()
+				}
+			})
 			// Alternate domains within one request, including memo reuse and an
 			// error between successful roots. Inherited state must govern neither
 			// the local root's identity nor its nested source binding.
