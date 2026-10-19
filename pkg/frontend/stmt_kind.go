@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -382,6 +383,11 @@ func preparedSQLCanBeExecutedInUncommittedTransaction(
 	}
 	preStmt, err := mysql.ParseOneWithSQLMode(ctx, sql, v.(int64), sessionSQLModeForParser(parserSes))
 	if err != nil {
+		// Transaction admission parses PREPARE text before the normal prepare
+		// path. Preserve its ER_PARSE_ERROR contract at this earlier boundary.
+		if _, positioned := err.(mysql.PositionedErr); positioned {
+			err = moerr.NewParseError(ctx, err.Error())
+		}
 		return false, err
 	}
 	defer preStmt.Free()

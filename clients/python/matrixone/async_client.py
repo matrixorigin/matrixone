@@ -606,7 +606,7 @@ class AsyncClient(BaseMatrixOneClient):
         account: Optional[str] = None,
         role: Optional[str] = None,
         charset: str = "utf8mb4",
-        connection_timeout: int = 30,
+        connection_timeout: Optional[int] = None,
         auto_commit: bool = True,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
     ):
@@ -624,7 +624,7 @@ class AsyncClient(BaseMatrixOneClient):
             account: Optional account name (will be combined with user if user doesn't contain '#' or ':')
             role: Optional role name (will be combined with user if user doesn't contain '#' or ':')
             charset: Character set for the connection (default: utf8mb4)
-            connection_timeout: Connection timeout in seconds (default: 30)
+            connection_timeout: Override constructor connection timeout; None inherits it
             auto_commit: Enable autocommit (default: True)
             on_connect: Connection hook to execute after successful connection.
                        Can be:
@@ -650,6 +650,14 @@ class AsyncClient(BaseMatrixOneClient):
             await client.connect(host, port, user, password, database,
                                on_connect=my_callback)
         """
+        from ._connection_options import positive_timeout
+
+        positive_timeout(self.query_timeout, 'query_timeout')
+        timeout = self.connection_timeout if connection_timeout is None else connection_timeout
+        positive_timeout(timeout, 'connection_timeout')
+        if self._engine is not None:
+            await self.disconnect()
+        self.connection_timeout = timeout
         try:
             # Build final login info based on user parameter and optional account/role
             final_user, parsed_info = self._build_login_info(user, account, role)
@@ -666,15 +674,20 @@ class AsyncClient(BaseMatrixOneClient):
                 "database": database,
                 "charset": charset,
                 "autocommit": auto_commit,
-                "connect_timeout": connection_timeout,
+                "connect_timeout": timeout,
             }
 
             # Create SQLAlchemy async engine instead of direct aiomysql connection
             self._engine = self._create_async_engine()
 
             # Test the connection by executing a simple query
-            async with self._engine.begin() as conn:
-                await conn.execute(text("SELECT 1"))
+            import asyncio
+
+            async def probe():
+                async with self._engine.begin() as conn:
+                    await conn.execute(text("SELECT 1"))
+
+            await asyncio.wait_for(probe(), timeout=timeout)
 
             # Initialize vector managers after successful connection
             self._initialize_vector_managers()
@@ -694,21 +707,31 @@ class AsyncClient(BaseMatrixOneClient):
                 # Execute the hook once immediately for the initial connection
                 await self._execute_connection_hook_immediately(on_connect)
 
-        except Exception as e:
+        except BaseException as e:
+            engine, self._engine = self._engine, None
+            if engine is not None:
+                try:
+                    await engine.dispose()
+                except Exception:
+                    pass
+            if not isinstance(e, Exception):
+                raise
+            from ._connection_options import redact_error
+
+            error_msg = redact_error(e, password)
             self.logger.log_connection(host, port, final_user, database or "default", success=False)
-            self.logger.log_error(e, context="Async connection")
+            self.logger.log_error(ConnectionError(error_msg), context="Async connection")
 
             # Provide user-friendly error messages for common issues
-            error_msg = str(e)
             if 'Unknown database' in error_msg or '1049' in error_msg:
                 db_name = database or "default"
                 raise ConnectionError(
                     f"Database '{db_name}' does not exist. Please create it first:\n"
-                    f"  mysql -h{host} -P{port} -u{user.split('#')[0] if '#' in user else user} -p{password} "
+                    f"  mysql -h{host} -P{port} -u{user.split('#')[0] if '#' in user else user} -p "
                     f"-e \"CREATE DATABASE {db_name}\""
-                ) from e
+                ) from None
             else:
-                raise ConnectionError(f"Failed to connect to MatrixOne: {e}") from e
+                raise ConnectionError(f"Failed to connect to MatrixOne: {error_msg}") from None
 
     def _setup_connection_hook(
         self, on_connect: Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]
@@ -871,8 +894,17 @@ class AsyncClient(BaseMatrixOneClient):
             pool_recycle=3600,  # Recycle connections after 1 hour
             pool_pre_ping=True,  # Verify connections before use
             pool_reset_on_return="commit",  # Reset connections on return
+            connect_args={'connect_timeout': self._connection_params['connect_timeout']},
             echo=False,  # Set to True for SQL logging
         )
+
+        import sqlalchemy
+
+        version = getattr(sqlalchemy, '__version__', '')
+        if isinstance(version, str) and version.startswith('1.4.'):
+            # 1.4 infers ping's signature from PyMySQL, but the aiomysql
+            # adapter still requires reconnect=False even with PyMySQL 1.2.
+            engine.dialect._send_false_to_ping = True
 
         return engine
 
@@ -1060,6 +1092,18 @@ class AsyncClient(BaseMatrixOneClient):
             raise _classify_db_error(e, sql) from None
 
     async def execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> AsyncResultSet:
+        """Execute with a deadline covering pool wait, execution, fetch and commit.
+
+        A timeout cancels this call. A timed-out write's commit outcome must be
+        reconciled before retrying; cancellation does not prove rollback.
+        """
+        import asyncio
+        from ._connection_options import positive_timeout
+
+        timeout = positive_timeout(self.query_timeout, 'query_timeout')
+        return await asyncio.wait_for(self._execute(sql_or_stmt, params, log_mode), timeout=timeout)
+
+    async def _execute(self, sql_or_stmt, params: Optional[Tuple] = None, log_mode: str = None) -> AsyncResultSet:
         """
         Execute SQL query or SQLAlchemy statement asynchronously without transaction isolation.
 

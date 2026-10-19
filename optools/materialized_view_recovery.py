@@ -194,7 +194,7 @@ class Fixture:
         # Retain the real old CN and LOG/TN while starting the new CN. Catalog
         # installation must wait for the protocol barrier across this topology.
         current = self.start("new-mixed", fault="mv_catalog_upgrade_after_ddl#2:2::#wait#0##false")
-        self.await_log("new-mixed", "requires all CNs to support protocol version 120", current)
+        self.await_log("new-mixed", "requires all CNs to support protocol version 122", current)
         self.await_log("new-mixed", "materialized view catalogs are not installed", current)
         control = self.q("select count(*) from mo_catalog.mo_tables where reldatabase='mo_catalog' and relname in ('mo_materialized_views','mo_mv_dependencies','mo_mv_refresh_runs','mo_mv_account_state')", old=True, allow_error=True)
         if not control["error"]:
@@ -328,7 +328,7 @@ class Fixture:
             wait_for("unsafe old-binary startup refused", lambda: old.poll() is not None, seconds=120)
             log = (self.root / "unsafe-downgrade.log").read_text(errors="replace")
             fences = (f"cannot startup a old version {self.args.old_version} to join cluster, current version is 4.0.18",
-                      f"requires persisted expression protocol version 120 (local version {self.args.old_protocol})")
+                      f"requires persisted expression protocol version 122 (local version {self.args.old_protocol})")
             reason = next((fence for fence in fences if fence in log), None)
             assert old.returncode != 0 and reason, log[-3000:]
             assert self.snapshot() == initial
@@ -389,8 +389,8 @@ def main():
     parser.add_argument("--service", required=True)
     parser.add_argument("--old-service", help="required unless --refresh-only is selected")
     parser.add_argument("--old-version", default="4.0.17", help="catalog version of the pinned old binary")
-    parser.add_argument("--old-protocol", type=int, default=119,
-                        help="expected protocol of the pinned old binary (119 by default)")
+    parser.add_argument("--old-protocol", type=int, default=121,
+                        help="expected protocol of the pinned old binary (121 by default)")
     parser.add_argument("--probe", required=True)
     parser.add_argument("--work-dir", required=True)
     args = parser.parse_args()
