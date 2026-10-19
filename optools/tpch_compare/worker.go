@@ -31,16 +31,20 @@ import (
 )
 
 type WorkerRequest struct {
-	Version         int    `json:"version"`
-	Operation       string `json:"operation"`
-	Engine          Engine `json:"engine"`
-	DatasetRoot     string `json:"dataset_root"`
-	OutputRoot      string `json:"output_root"`
-	Queries         []int  `json:"queries,omitempty"`
-	Repetitions     int    `json:"repetitions,omitempty"`
-	QueryDeadlineNS int64  `json:"query_deadline_ns"`
-	Reference       bool   `json:"reference,omitempty"`
-	Unlimited       bool   `json:"unlimited_diagnostic,omitempty"`
+	Version         int           `json:"version"`
+	Operation       string        `json:"operation"`
+	Engine          Engine        `json:"engine"`
+	DatasetRoot     string        `json:"dataset_root"`
+	OutputRoot      string        `json:"output_root"`
+	Queries         []int         `json:"queries,omitempty"`
+	Repetitions     int           `json:"repetitions,omitempty"`
+	QueryDeadlineNS int64         `json:"query_deadline_ns"`
+	Reference       bool          `json:"reference,omitempty"`
+	Unlimited       bool          `json:"unlimited_diagnostic,omitempty"`
+	Clients         int           `json:"clients,omitempty"`
+	Warmup          bool          `json:"warmup,omitempty"`
+	Seed            uint64        `json:"seed,omitempty"`
+	DeadlinesNS     map[int]int64 `json:"deadlines_ns,omitempty"`
 }
 type QueryReceipt struct {
 	Query      int     `json:"query"`
@@ -48,6 +52,7 @@ type QueryReceipt struct {
 	Capture    Capture `json:"capture"`
 	Error      string  `json:"error,omitempty"`
 	Reference  string  `json:"reference,omitempty"`
+	Stream     int     `json:"stream,omitempty"`
 }
 type WorkerReceipt struct {
 	Version       int               `json:"version"`
@@ -65,6 +70,9 @@ type WorkerReceipt struct {
 	Load          *LoadReceipt      `json:"load,omitempty"`
 	Error         string            `json:"error,omitempty"`
 	Cleanup       string            `json:"cleanup"`
+	WaveNS        int64             `json:"wave_ns,omitempty"`
+	Controlled    bool              `json:"controlled,omitempty"`
+	Clients       int               `json:"clients,omitempty"`
 }
 
 var identifier = regexp.MustCompile(`^[a-z][a-z0-9_]{0,62}$`)
@@ -91,9 +99,14 @@ func createMODatabase(ctx context.Context, e Engine) error {
 	return err
 }
 
-func runWorker(ctx context.Context, r WorkerRequest) (out WorkerReceipt, retErr error) {
+func runWorker(ctx context.Context, r WorkerRequest, control *workerControl) (out WorkerReceipt, retErr error) {
 	out = WorkerReceipt{Version: formatVersion, Engine: r.Engine.Name, GoVersion: runtime.Version(), Started: time.Now().UTC(), Cleanup: "failed"}
 	out.Variant = "qualification"
+	if r.Clients == 0 {
+		r.Clients = 1
+	}
+	out.Clients = r.Clients
+	out.Controlled = control != nil
 	if r.Unlimited {
 		out.Variant = "unlimited_diagnostic"
 	}
@@ -106,7 +119,7 @@ func runWorker(ctx context.Context, r WorkerRequest) (out WorkerReceipt, retErr 
 			out.Error = retErr.Error()
 		}
 	}()
-	if r.Version != formatVersion || r.Engine.Threads < 1 || r.Engine.Threads > 64 || r.Engine.MemoryBytes < 128<<20 || r.Repetitions < 0 || r.Repetitions > 2000 || r.QueryDeadlineNS <= 0 {
+	if r.Version != formatVersion || r.Engine.Threads < 1 || r.Engine.Threads > 64 || r.Engine.MemoryBytes < 128<<20 || r.Repetitions < 0 || r.Repetitions > 2000 || r.QueryDeadlineNS <= 0 || r.Clients < 1 || r.Clients > 8 || r.Repetitions*r.Clients*len(r.Queries) > 4000 {
 		return out, errors.New("invalid bounded worker request")
 	}
 	if err := os.Mkdir(r.OutputRoot, 0750); err != nil {
@@ -118,6 +131,11 @@ func runWorker(ctx context.Context, r WorkerRequest) (out WorkerReceipt, retErr 
 	d, err := loadDataset(r.DatasetRoot, r.Operation == "load")
 	if err != nil {
 		return out, err
+	}
+	if r.Operation == "load" {
+		if err := evictTree(r.DatasetRoot); err != nil {
+			return out, err
+		}
 	}
 	out.Dataset, err = identify(filepath.Join(r.DatasetRoot, "dataset.json"))
 	if err != nil {
@@ -160,6 +178,8 @@ func runWorker(ctx context.Context, r WorkerRequest) (out WorkerReceipt, retErr 
 		return out, err
 	}
 	switch r.Operation {
+	case "fixtures":
+		return out, qualifyFixtures(ctx, conn, r.OutputRoot)
 	case "load":
 		receipt, err := bulkLoad(ctx, conn, r.Engine, r.DatasetRoot, d)
 		out.Load = &receipt
@@ -175,40 +195,8 @@ func runWorker(ctx context.Context, r WorkerRequest) (out WorkerReceipt, retErr 
 		if r.Repetitions < 1 || len(r.Queries) < 1 || len(r.Queries) > 22 {
 			return out, errors.New("nonempty bounded query selection required")
 		}
-		for rep := 0; rep < r.Repetitions; rep++ {
-			for _, n := range r.Queries {
-				if n < 1 || n > 22 {
-					return out, errors.New("query outside Q1-Q22")
-				}
-				q := d.Queries[n-1].rendered(fmt.Sprintf("%d_%d_%d", os.Getpid(), rep, n))
-				if r.Unlimited && q.Limit > 0 {
-					q.Statements[q.ResultStatement] = strings.TrimSuffix(q.Statements[q.ResultStatement], fmt.Sprintf(" LIMIT %d", q.Limit))
-					q.Limit = 0
-				}
-				queryCtx, cancel := context.WithTimeoutCause(ctx, time.Duration(r.QueryDeadlineNS), fmt.Errorf("query Q%d execution deadline", n))
-				cap, err := executeUnit(queryCtx, conn, q, filepath.Join(r.OutputRoot, fmt.Sprintf("q%02d-%04d.rows", n, rep)), captureDisk)
-				cancel()
-				receipt := QueryReceipt{Query: n, Repetition: rep, Capture: cap}
-				if err != nil {
-					receipt.Error = err.Error()
-					out.Queries = append(out.Queries, receipt)
-					return out, err
-				}
-				if r.Reference {
-					err = qualifyReference(r.DatasetRoot, d, q, r.OutputRoot, cap)
-					receipt.Reference = "pass"
-					if err != nil {
-						receipt.Reference = "failed"
-						receipt.Error = err.Error()
-					}
-				}
-				out.Queries = append(out.Queries, receipt)
-				if err != nil {
-					return out, err
-				}
-			}
-		}
-		return out, nil
+		out.Queries, out.WaveNS, err = runQueryStreams(ctx, db, conn, r, d, control)
+		return out, err
 	default:
 		return out, fmt.Errorf("unsupported worker operation %q", r.Operation)
 	}

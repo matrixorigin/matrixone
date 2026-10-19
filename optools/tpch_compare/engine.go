@@ -76,8 +76,8 @@ func openEngine(ctx context.Context, e Engine) (*sql.DB, error) {
 	if err != nil {
 		return nil, err
 	}
-	db.SetMaxOpenConns(e.Threads + 1)
-	db.SetMaxIdleConns(e.Threads + 1)
+	db.SetMaxOpenConns(max(e.Threads+1, 9))
+	db.SetMaxIdleConns(max(e.Threads+1, 9))
 	if err := db.PingContext(ctx); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("%s readiness: %w", e.Name, err)

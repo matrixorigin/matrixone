@@ -79,3 +79,49 @@ rules are distinct from the stricter full-precision cross-engine contract.
 
 Keep generated datasets, databases and raw captures outside Git. Large benchmark
 campaigns are explicit operations; ordinary tests use only tiny fixtures.
+
+## Controlled measurement
+
+Start from `campaign.example.json`, replace paths and build identities, and
+reserve an exclusive host window. It defines the complete matrix from the
+methodology. `sf1-smoke` mode requires only SF1 and runs one paired suite; its
+report is explicitly separate from the full campaign.
+
+```sh
+./tpch-compare preflight --config /nvme/tpch/campaign.json
+systemd-run --user --scope --unit=tpch-compare-prepare -p Delegate=yes \
+  ./tpch-compare run --config /nvme/tpch/campaign.json --phase prepare
+systemd-run --user --scope --unit=tpch-compare-measure -p Delegate=yes \
+  ./tpch-compare run --config /nvme/tpch/campaign.json --phase measure --id baseline
+./tpch-compare report --config /nvme/tpch/campaign.json \
+  --run-dir /nvme/tpch/comparison/runs/baseline --output /nvme/tpch/report
+```
+
+The runner manages private MO ports and deployment directories. One delegated
+application cgroup contains every service and query worker. Its total memory and
+CPU set are enforced before exec, including child threads. Swap is disabled for
+that application. Controller work uses the other CCD. Source data and database
+cache ownership are controlled without dropping the host's entire cache.
+
+Preparation loads fresh databases, reopens and verifies them, checks independent
+NULL/decimal/date/string fixtures, and qualifies all 22 query outputs. Full mode
+uses three loads per scale/engine and retains the first qualified database.
+Later load replicas are discarded only after their owned processes have joined;
+all receipts remain. The pilot freezes symmetric query deadlines, throughput
+wave lengths and the balanced schedule before scored runs.
+
+Workers report progress through bounded pipes. Parent deadlines and cgroup
+termination can stop a blocked driver independently. CPU/memory/I/O accounting
+is gated around the measured queries, after connection setup and warmup. Eight
+concurrent clients share one DuckDB instance and the original application budget.
+A sampled disk guard checks allocated space and reserve every second; its disk
+measurements are identified as observations rather than an exact filesystem
+quota or unsampled peak. Runtime/cancellation errors and partial artifacts remain
+failures. Each measurement invocation uses a new run identifier and preserves
+earlier attempts.
+
+Reports contain Markdown, query CSV and whole-window resource CSV. Bootstrap
+intervals resample paired blocks/waves, preserving dependencies among calls in a
+concurrent wave. Missing or failed blocks invalidate the cell's score. Suite/wave
+medians, sums of query medians and geometric mean speedups have separate labels.
+Whole-window CPU or memory is never assigned to an arbitrary query.
