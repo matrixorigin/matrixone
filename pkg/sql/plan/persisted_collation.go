@@ -39,13 +39,13 @@ func rejectNativePADColumnRelabel(ctx context.Context, old, next Type) error {
 }
 
 // requireViewCollationMarker不从结果Type或floor推断绑定来源；即使结果
-// 折叠成bool，revision1也必须携带120的durable要求。
+// 折叠成bool，revision1也必须携带native能力的durable要求。
 func requireViewCollationMarker(ctx context.Context, data ViewData) error {
 	if err := persistedCollationBindingRevision(ctx, data.CollationBindingRevision); err != nil {
 		return err
 	}
-	if data.CollationBindingRevision == 1 && (data.RequiredProtocolVersion == nil || *data.RequiredProtocolVersion < defines.MORPCVersion120) {
-		return moerr.NewInvalidInput(ctx, "collation binding revision 1 requires persisted protocol version 120")
+	if data.CollationBindingRevision == 1 && (data.RequiredProtocolVersion == nil || *data.RequiredProtocolVersion < defines.MORPCVersion121) {
+		return moerr.NewInvalidInput(ctx, "collation binding revision 1 requires persisted protocol version 121")
 	}
 	return nil
 }

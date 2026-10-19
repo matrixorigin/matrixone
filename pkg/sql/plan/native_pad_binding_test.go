@@ -194,7 +194,7 @@ func TestNativePADFoldedListPublishesDomain(t *testing.T) {
 		require.Equal(t, uint32(1), expr.Typ.CollationVersion)
 		features, err := pb.RequiredRemoteExpressionFeatures(expr)
 		require.NoError(t, err)
-		require.True(t, features.NativePADCollation, "folded carrier仍必须要求120")
+		require.True(t, features.NativePADCollation, "folded carrier仍必须要求native协议")
 		func() {
 			vec := vector.NewVec(types.T_any.ToType())
 			defer vec.Free(proc.Mp())

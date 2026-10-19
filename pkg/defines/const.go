@@ -155,8 +155,9 @@ const (
 	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
 	MORPCVersion118    int64 = 118 // transactional database defaults and table charset alteration
 	MORPCVersion119    int64 = 119 // coordinator-owned parameterized subquery programs
-	MORPCVersion120    int64 = 120 // revision-aware native general-ci/bin execution and persistence
-	MORPCLatestVersion       = MORPCVersion120
+	MORPCVersion120    int64 = 120 // current-session KILL authorization and proxy disconnect cleanup
+	MORPCVersion121    int64 = 121 // revision-aware native general-ci/bin execution and persistence
+	MORPCLatestVersion       = MORPCVersion121
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

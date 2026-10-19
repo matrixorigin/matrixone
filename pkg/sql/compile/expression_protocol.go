@@ -120,7 +120,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion118)
 	}
 	if features.NativePADCollation {
-		required = max(required, defines.MORPCVersion120)
+		required = max(required, defines.MORPCVersion121)
 	}
 	if features.CalendarIntervalNormalization {
 		required = max(required, defines.MORPCVersion115)

@@ -1281,5 +1281,5 @@ func TestPersistedDependentProgramRequiresV119(t *testing.T) {
 	owner.Cols = append(owner.Cols, &planpb.ColDef{Typ: planpb.Type{Id: int32(types.T_varchar), Charset: 3, CollationVersion: 1}})
 	version, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion120, version, "native PAD must not reuse dependent program protocol 119")
+	require.Equal(t, defines.MORPCVersion121, version, "native PAD must not reuse dependent program protocol 119")
 }

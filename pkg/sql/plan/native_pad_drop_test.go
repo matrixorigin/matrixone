@@ -32,7 +32,7 @@ func TestNativePADDropRetainsAdmissionMetadata(t *testing.T) {
 	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
 	for _, sql := range []string{"drop table n", "drop table n, n", "drop view v"} {
 		t.Run(sql, func(t *testing.T) {
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion121)
 			p, err := build(sql)
 			require.NoError(t, err)
 			drop := p.GetDdl().GetDropTable()
@@ -40,9 +40,9 @@ func TestNativePADDropRetainsAdmissionMetadata(t *testing.T) {
 				drop = drop.Tables[0]
 			}
 			require.NotNil(t, drop.TableDef)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion119)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
 			_, err = build(sql)
-			require.ErrorContains(t, err, "protocol version 120")
+			require.ErrorContains(t, err, "protocol version 121")
 		})
 	}
 	_, err = build("drop table if exists absent")

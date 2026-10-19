@@ -2312,8 +2312,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
 	}
-	if features.NativePADCollation && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion120) {
-		return moerr.NewNotSupportedNoCtx("native PAD collation requires MORPC protocol version 120")
+	if features.NativePADCollation && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion121) {
+		return moerr.NewNotSupportedNoCtx("native PAD collation requires MORPC protocol version 121")
 	}
 	if features.TableCollationFunction && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
 		return moerr.NewNotSupportedNoCtx("internal table collation requires MORPC protocol version 118")
