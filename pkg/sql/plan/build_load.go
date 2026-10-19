@@ -626,6 +626,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	// the generic external-table error for consistency with all DML on externals.
 
 	stmt.Param.Local = stmt.Local
+	_, stmt.Param.LoadExplicitIgnore = stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
 		return nil, err

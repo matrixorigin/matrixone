@@ -79,6 +79,10 @@ func (preInsert *PreInsert) Prepare(proc *process.Process) (err error) {
 			return
 		}
 	}
+	if (preInsert.CheckEligibility != nil || preInsert.DeferAutoIncrement) && (!preInsert.HasAutoCol || !preInsert.TrackAutoIncrementGenerated ||
+		preInsert.IsOldUpdate || preInsert.IsNewUpdate || preInsert.HasTargetSelector || preInsert.ColOffset != 0) {
+		return moerr.NewInvalidInput(proc.Ctx, "invalid CHECK-before-allocation context")
+	}
 	if preInsert.TrackAutoIncrementGenerated && preInsert.AutoIncrementGeneratedColumn < 0 {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid auto-increment provenance column")
 	}
@@ -240,13 +244,35 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 		return result, err
 	}
 
-	if result.Batch == nil || result.Batch.IsEmpty() {
+	if result.Batch == nil {
+		return result, nil
+	}
+	if result.Batch.IsEmpty() {
 		return result, nil
 	}
 	bat := result.Batch
+	rows := bat.RowCount()
+	var selected []int64
+	if preInsert.CheckEligibility != nil {
+		sels := vector.GetSels()
+		defer vector.PutSels(sels)
+		selected, err = preInsert.selectCheckRows(proc, bat, sels[:0])
+		if err != nil {
+			return result, err
+		}
+		rows = len(selected)
+		if rows == 0 {
+			result.Batch = batch.EmptyBatch
+			return result, nil
+		}
+	}
 
 	first := preInsert.ctr.buf == nil
-	err = preInsert.constructColBuf(proc, bat, first)
+	if rows != bat.RowCount() {
+		err = preInsert.constructCheckSelectedBuf(proc, bat, selected)
+	} else {
+		err = preInsert.constructColBuf(proc, bat, first)
+	}
 	if err != nil {
 		return result, err
 	}
@@ -270,7 +296,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	}
 	// keep shuffleIDX unchanged
 	preInsert.ctr.buf.ShuffleIDX = bat.ShuffleIDX
-	preInsert.ctr.buf.AddRowCount(bat.RowCount())
+	preInsert.ctr.buf.AddRowCount(rows)
 
 	if preInsert.HasAutoCol && (!preInsert.HasTargetSelector || len(selectedRows) > 0) {
 		if shouldConvertZeroToNull(preInsert, proc) {
@@ -280,10 +306,13 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 			return result, err
 		}
 		start := time.Now()
-		err = genAutoIncrCol(workBat, proc, preInsert)
+		if !preInsert.DeferAutoIncrement {
+			err = genAutoIncrCol(workBat, proc, preInsert)
+		}
 		if err != nil {
 			return result, err
 		}
+
 		if preInsert.HasTargetSelector {
 			for idx, col := range preInsert.TableDef.Cols {
 				if !col.Typ.AutoIncr {
@@ -305,6 +334,14 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if !preInsert.HasTargetSelector || len(selectedRows) > 0 {
 		// check new rows not null
 		tempVecs := workBat.Vecs[preInsert.ColOffset : int(preInsert.ColOffset)+len(preInsert.Attrs)]
+		if preInsert.DeferAutoIncrement {
+			tempVecs = slices.Clone(tempVecs)
+			for i, col := range preInsert.TableDef.Cols {
+				if col.Typ.AutoIncr {
+					tempVecs[i] = nil
+				}
+			}
+		}
 		err = colexec.BatchDataNotNullCheck(tempVecs, preInsert.Attrs, preInsert.TableDef, proc.Ctx)
 		if err != nil {
 			return result, err
@@ -314,7 +351,7 @@ func (preInsert *PreInsert) Call(proc *proc) (vm.CallResult, error) {
 	if err = preInsert.constructHiddenColBuf(proc, bat, first); err != nil {
 		return result, err
 	}
-	if err = preInsert.constructAutoIncrementGeneratedCol(proc, bat, first); err != nil {
+	if err = preInsert.constructAutoIncrementGeneratedCol(proc, first); err != nil {
 		return result, err
 	}
 
@@ -356,7 +393,6 @@ func (preInsert *PreInsert) captureAutoIncrementGeneratedRows(bat *batch.Batch) 
 
 func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 	proc *proc,
-	bat *batch.Batch,
 	first bool,
 ) error {
 	if !preInsert.TrackAutoIncrementGenerated {
@@ -386,10 +422,10 @@ func (preInsert *PreInsert) constructAutoIncrementGeneratedCol(
 	}
 	generated := preInsert.ctr.autoIncrementGenerated
 	preInsert.ctr.autoIncrementGenerated = nil
-	if len(generated) != bat.RowCount() {
+	if len(generated) != preInsert.ctr.buf.RowCount() {
 		return moerr.NewInternalErrorf(proc.Ctx,
 			"auto-increment provenance rows %d do not match batch rows %d",
-			len(generated), bat.RowCount())
+			len(generated), preInsert.ctr.buf.RowCount())
 	}
 	for _, value := range generated {
 		if err := vector.AppendFixed(

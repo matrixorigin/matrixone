@@ -238,6 +238,8 @@ message PreInsert {
   int32 target_row_id_col = 16;
   bool track_auto_increment_generated = 17;
   int32 auto_increment_generated_column = 18;
+  plan.ColRef check_eligibility = 19;
+  bool defer_auto_increment = 20;
 }
 
 message PostDml {
@@ -273,6 +275,8 @@ message LockOp {
 
 message PreInsertUnique {
   plan.PreInsertUkCtx pre_insert_uk_ctx = 1;
+  // Statement-boundary view; an adaptive lookup must not observe later writes.
+  int64 txn_offset = 2;
 }
 
 message PreInsertSecondaryIndex {

@@ -4301,7 +4301,7 @@ func TestInsertIgnoreAutoIncrementProvenanceNameDoesNotCollideWithUserColumn(t *
 	}
 }
 
-func TestInsertIgnoreAutoIncrementReorderSkipsDependentUniqueIndex(t *testing.T) {
+func TestInsertIgnoreAutoIncrementReorderAllowsRedundantUniqueIndex(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	tableDef := mock.ctxt.tables["dept"]
 	tableDef.Cols[0].Typ.AutoIncr = true
@@ -4317,8 +4317,8 @@ func TestInsertIgnoreAutoIncrementReorderSkipsDependentUniqueIndex(t *testing.T)
 			continue
 		}
 		found = true
-		require.False(t, node.PreInsertUkCtx.GetAutoIncrementReorder(),
-			"a unique index containing the reassigned primary key must keep the established path")
+		require.True(t, node.PreInsertUkCtx.GetAutoIncrementReorder(),
+			"a unique index containing the primary key is covered by final PK arbitration")
 	}
 	require.True(t, found)
 }
@@ -6349,15 +6349,15 @@ func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
 func TestLoadCheckConstraintPolicy(t *testing.T) {
 	for _, table := range []string{"dept", "dept_composite_uk"} {
 		for _, tc := range []struct {
-			name, sql      string
-			filter, load   bool
-			wantLoadDedups int
+			name, sql               string
+			filter, load, rowIgnore bool
+			wantLoadDedups          int
 		}{
-			{"inline_ignore", "load data inline format='csv', data='1,Sales,NY' ignore into table %s fields terminated by ','", true, true, 0},
-			{"local_ignore", "load data local infile 'client.csv' ignore into table %s fields terminated by ','", true, true, 0},
-			{"plain", "load data inline format='csv', data='1,Sales,NY' into table %s fields terminated by ','", false, true, 1},
-			{"local_without_ignore", "load data local infile 'client.csv' into table %s fields terminated by ','", false, true, 1},
-			{"insert_ignore", "insert ignore into %s values (1,'Sales','NY')", true, false, 0},
+			{"inline_ignore", "load data inline format='csv', data='1,Sales,NY' ignore into table %s fields terminated by ','", true, true, true, 0},
+			{"local_ignore", "load data local infile 'client.csv' ignore into table %s fields terminated by ','", true, true, true, 0},
+			{"plain", "load data inline format='csv', data='1,Sales,NY' into table %s fields terminated by ','", false, true, false, 1},
+			{"local_without_ignore", "load data local infile 'client.csv' into table %s fields terminated by ','", true, true, true, 0},
+			{"insert_ignore", "insert ignore into %s values (1,'Sales','NY')", true, false, true, 0},
 		} {
 			t.Run(table+"/"+tc.name, func(t *testing.T) {
 				mock := NewMockOptimizer(true, newPlanTestProcess(t))
@@ -6374,7 +6374,7 @@ func TestLoadCheckConstraintPolicy(t *testing.T) {
 					node := query.Nodes[id]
 					multiDedup := node.GetPreInsertUkCtx().GetInsertIgnoreMultiDedup()
 					if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
-						if tc.load {
+						if tc.load && !tc.rowIgnore {
 							loadDedups++
 							require.Equal(t, plan.Node_FAIL, node.OnDuplicateAction, "ordinary LOAD rejects duplicate primary keys")
 							require.Equal(t, "deptno", node.DedupColName)
@@ -6383,7 +6383,7 @@ func TestLoadCheckConstraintPolicy(t *testing.T) {
 						ignoreArbitration = ignoreArbitration || node.OnDuplicateAction == plan.Node_IGNORE
 					}
 					if multiDedup {
-						require.False(t, tc.load, "CHECK filtering must not enable INSERT IGNORE arbitration for LOAD")
+						require.True(t, tc.rowIgnore, "only the duplicate-row policy enables arbitration; CHECK policy is independent")
 						ignoreArbitration = true
 					}
 					for _, expr := range node.FilterList {
@@ -6400,9 +6400,9 @@ func TestLoadCheckConstraintPolicy(t *testing.T) {
 					}
 				}
 				if tc.load {
-					require.Equal(t, tc.wantLoadDedups, loadDedups, "ordinary LOAD checks its primary key; LOAD IGNORE retains the dedup bypass")
+					require.Equal(t, tc.wantLoadDedups, loadDedups, "ordinary LOAD checks its primary key; row IGNORE uses its accepted-row arbiter")
 				}
-				require.Equal(t, !tc.load, ignoreArbitration, "only INSERT IGNORE arbitrates duplicate keys")
+				require.Equal(t, tc.rowIgnore, ignoreArbitration, "INSERT IGNORE, LOAD IGNORE and LOCAL arbitrate duplicate rows independently of CHECK filtering")
 				require.Equal(t, 1, checks, "CHECK must run exactly once per candidate")
 			})
 		}

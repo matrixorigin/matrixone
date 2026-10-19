@@ -83,6 +83,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/partition"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/sample"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
@@ -462,8 +463,11 @@ func supportsStableStringShuffleHash(service string) bool {
 func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 	scope.TxnOffset = txnOffset
 	_ = vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
-		if applyOp, ok := op.(*apply.Apply); ok {
-			applyOp.TxnOffset = txnOffset
+		switch current := op.(type) {
+		case *apply.Apply:
+			current.TxnOffset = txnOffset
+		case *preinsertunique.PreInsertUnique:
+			current.TxnOffset = txnOffset
 		}
 		return nil
 	})
@@ -2570,6 +2574,11 @@ func StrictSqlMode(proc *process.Process) (error, bool) {
 func effectiveExternalStrictMode(proc *process.Process, param *tree.ExternParam, strict bool) bool {
 	if !strict || proc == nil || param == nil || param.ExternType != int32(plan.ExternType_LOAD) {
 		return strict
+	}
+	if param.Local {
+		// LOCAL rejects rows like IGNORE, but only explicit IGNORE relaxes
+		// strict input parsing. The statement profile intentionally combines both.
+		return !param.LoadExplicitIgnore
 	}
 	return !proc.GetStmtProfile().GetStatementIgnore()
 }
@@ -5673,40 +5682,6 @@ func prepareIndexSearchScanForExecution(source *Source, proc *process.Process) (
 	return spec, nil
 }
 
-// buildFoldedFilterExprs prepares an isolated copy of a filter list and its
-// fold executors. The caller publishes both only after every expression has
-// been rewritten (and, for storage filters, evaluated) successfully.
-func buildFoldedFilterExprs(
-	proc *process.Process,
-	exprs []*plan.Expr,
-	existing []colexec.ExpressionExecutor,
-	evaluate bool,
-) ([]*plan.Expr, []colexec.ExpressionExecutor, error) {
-	filters := plan2.DeepCopyExprList(exprs)
-	executors := append([]colexec.ExpressionExecutor(nil), existing...)
-	firstNewExecutor := len(executors)
-	rollback := func(err error) ([]*plan.Expr, []colexec.ExpressionExecutor, error) {
-		for _, executor := range executors[firstNewExecutor:] {
-			executor.Free()
-		}
-		return nil, existing, err
-	}
-
-	for _, expr := range filters {
-		if _, err := plan2.ReplaceFoldExpr(proc, expr, &executors); err != nil {
-			return rollback(err)
-		}
-	}
-	if evaluate {
-		for _, expr := range filters {
-			if err := plan2.EvalFoldExpr(proc, expr, &executors); err != nil {
-				return rollback(err)
-			}
-		}
-	}
-	return filters, executors, nil
-}
-
 func prepareFoldedFilterExprs(
 	proc *process.Process,
 	exprs []*plan.Expr,
@@ -5715,7 +5690,7 @@ func prepareFoldedFilterExprs(
 	evaluate bool,
 ) ([]*plan.Expr, []colexec.ExpressionExecutor, bool, error) {
 	if len(exprs) != len(cached) {
-		filters, nextExecutors, err := buildFoldedFilterExprs(
+		filters, nextExecutors, err := plan2.BuildFoldedFilterExprs(
 			proc, exprs, executors, evaluate)
 		return filters, nextExecutors, err == nil, err
 	}
@@ -9473,6 +9448,7 @@ func (c *Compile) compilePreInsertUk(node *plan.Node, ss []*Scope) []*Scope {
 	}
 	for i := range ss {
 		preInsertUkArg := constructPreInsertUk(node)
+		preInsertUkArg.TxnOffset = c.TxnOffset
 		preInsertUkArg.SetAnalyzeControl(c.anal.curNodeIdx, currentFirstFlag)
 		ss[i].setRootOperator(preInsertUkArg)
 	}

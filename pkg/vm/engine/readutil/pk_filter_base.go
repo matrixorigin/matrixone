@@ -19,7 +19,6 @@ import (
 	"fmt"
 	"math"
 	"math/bits"
-	"strings"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -27,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
@@ -157,7 +157,7 @@ func ConstructBasePKFilter(
 	// true match (for example `A = 'a'`) before the residual row comparator
 	// runs. Leave this optional fast path disabled until the persisted summary
 	// format carries the same collation domain.
-	if tablePrimaryKeyUsesUnicodeCollation(tblDef) || exprUsesUnicodeCollationColumn(expr, tblDef) {
+	if plan2.PrimaryKeyUsesUnicodeCollation(tblDef) || exprUsesUnicodeCollationColumn(expr, tblDef) {
 		return BasePKFilter{}, nil
 	}
 	filter, err = constructBasePKFilter(expr, tblDef, mp, cleanup)
@@ -172,44 +172,6 @@ func ConstructBasePKFilter(
 		filter.cleanup = cleanup
 	}
 	return filter, nil
-}
-
-func tablePrimaryKeyUsesUnicodeCollation(tblDef *plan.TableDef) bool {
-	if tblDef == nil || tblDef.Pkey == nil {
-		return false
-	}
-	check := func(name string) bool {
-		if name == "" {
-			return false
-		}
-		if tblDef.Name2ColIndex != nil {
-			if pos, ok := tblDef.Name2ColIndex[name]; ok && pos >= 0 &&
-				int(pos) < len(tblDef.Cols) && tblDef.Cols[pos] != nil {
-				return types.IsUnicodeCollation(uint8(tblDef.Cols[pos].Typ.Charset))
-			}
-		}
-		// Reader table definitions assembled from a snapshot or an index path
-		// are not required to carry Name2ColIndex. Failing to find the column in
-		// that optional map must not re-enable a raw-byte PK probe.
-		for _, col := range tblDef.Cols {
-			if col != nil && strings.EqualFold(col.Name, name) {
-				return types.IsUnicodeCollation(uint8(col.Typ.Charset))
-			}
-		}
-		return false
-	}
-	if check(tblDef.Pkey.PkeyColName) {
-		return true
-	}
-	for _, name := range tblDef.Pkey.Names {
-		if check(name) {
-			return true
-		}
-	}
-	if tblDef.Pkey.CompPkeyCol != nil {
-		return types.IsUnicodeCollation(uint8(tblDef.Pkey.CompPkeyCol.Typ.Charset))
-	}
-	return false
 }
 
 func constructBasePKFilter(

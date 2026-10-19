@@ -20,7 +20,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestLoadGlobalIgnorePolicy(t *testing.T) {
+func TestLoadStatementIgnorePolicy(t *testing.T) {
 	for _, tc := range []struct {
 		name string
 		stmt *Load
@@ -29,7 +29,7 @@ func TestLoadGlobalIgnorePolicy(t *testing.T) {
 		{"nil", nil, false},
 		{"ordinary", &Load{DuplicateHandling: &DuplicateKeyError{}}, false},
 		{"ignore", &Load{DuplicateHandling: &DuplicateKeyIgnore{}}, true},
-		{"local", &Load{Local: true, DuplicateHandling: &DuplicateKeyError{}}, false},
+		{"local", &Load{Local: true, DuplicateHandling: &DuplicateKeyError{}}, true},
 		{"local_ignore", &Load{Local: true, DuplicateHandling: &DuplicateKeyIgnore{}}, true},
 		{"local_replace", &Load{Local: true, DuplicateHandling: &DuplicateKeyReplace{}}, false},
 		{"replace", &Load{DuplicateHandling: &DuplicateKeyReplace{}}, false},

@@ -15,21 +15,24 @@
 package plan
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
 func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (int32, error) {
-	// LOAD never carries INSERT's duplicate-key ignore policy. Reset the
-	// statement-local flag in case a QueryBuilder is reused across DML binds.
-	builder.isInsertIgnore = false
+	// IGNORE and LOCAL share row rejection; decoder strictness is independent.
 	builder.checkLoadPrimaryKey = false
 	assignmentIgnore := loadAssignmentIgnore(stmt)
+	builder.isInsertIgnore = assignmentIgnore
+	builder.insertValuesRows = 0
+	builder.insertHasOnDuplicateUpdate = false
 	dmlCtx := NewDMLContext()
 	builder.qry.LoadTag = true
 	lastNodeID, insertColToExpr, err := builder.bindExternalScan(stmt, bindCtx, dmlCtx, assignmentIgnore)
@@ -64,13 +67,17 @@ func (builder *QueryBuilder) bindExternalScan(
 	dmlCtx *DMLContext,
 	assignmentIgnore bool) (int32, map[string]*plan.Expr, error) {
 	externalScanTag := builder.genNewBindTag()
+	originalCtx := builder.GetContext()
+	builder.compCtx.SetContext(context.WithValue(originalCtx, defines.IgnoreForeignKey{}, true))
 	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
+	builder.compCtx.SetContext(originalCtx)
 	if err != nil {
 		return -1, nil, err
 	}
 
 	ctx := builder.compCtx
 	stmt.Param.Local = stmt.Local
+	_, stmt.Param.LoadExplicitIgnore = stmt.DuplicateHandling.(*tree.DuplicateKeyIgnore)
 	fileName, err := checkFileExist(stmt.Param, ctx)
 	if err != nil {
 		return -1, nil, err
@@ -274,16 +281,7 @@ func loadChecksPrimaryKey(stmt *tree.Load, tableDef *plan.TableDef) bool {
 }
 
 func loadAssignmentIgnore(stmt *tree.Load) bool {
-	if stmt == nil {
-		return false
-	}
-	if tree.IsIgnoreStatement(stmt) {
-		return true
-	}
-	// Assignment policy is distinct from decoder/global IGNORE. In particular,
-	// LOCAL must not relax strict parsing of unrelated input column types.
-	_, replace := stmt.DuplicateHandling.(*tree.DuplicateKeyReplace)
-	return stmt.Local && !replace
+	return tree.IsIgnoreStatement(stmt)
 }
 
 func (builder *QueryBuilder) applyLoadAssignmentCasts(

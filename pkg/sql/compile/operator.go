@@ -585,6 +585,8 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 		op.RejectZeroTemporal = t.RejectZeroTemporal
 		op.TrackAutoIncrementGenerated = t.TrackAutoIncrementGenerated
 		op.AutoIncrementGeneratedColumn = t.AutoIncrementGeneratedColumn
+		op.CheckEligibility = t.CheckEligibility
+		op.DeferAutoIncrement = t.DeferAutoIncrement
 		op.HasTargetSelector = t.HasTargetSelector
 		op.TargetRowNumberCol = t.TargetRowNumberCol
 		op.TargetActiveCol = t.TargetActiveCol
@@ -929,6 +931,8 @@ func constructPreInsert(nodes []*plan.Node, node *plan.Node, eng engine.Engine, 
 	op.ColOffset = preCtx.ColOffset
 	op.TrackAutoIncrementGenerated = preCtx.TrackAutoIncrementGenerated
 	op.AutoIncrementGeneratedColumn = preCtx.AutoIncrementGeneratedColumn
+	op.CheckEligibility = preCtx.CheckEligibility
+	op.DeferAutoIncrement = preCtx.DeferAutoIncrement
 	op.HasTargetSelector = preCtx.HasTargetSelector
 	op.TargetRowNumberCol = preCtx.TargetRowNumberCol
 	op.TargetActiveCol = preCtx.TargetActiveCol

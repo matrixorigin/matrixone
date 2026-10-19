@@ -168,10 +168,13 @@ func TestLoadIgnoreCheckPrecedesIrregularMaintenance(t *testing.T) {
 		if n.NodeType == planpb.Node_SINK && reachesCheck(id) {
 			images++
 			require.Len(t, n.Children, 1)
-			image := q.Nodes[n.Children[0]]
-			require.Equal(t, planpb.Node_PROJECT, image.NodeType, "the shared image must execute its row projection after filtering")
-			require.Len(t, image.Children, 1)
-			input := q.Nodes[image.Children[0]]
+			arbiter := q.Nodes[n.Children[0]]
+			require.Equal(t, planpb.Node_PRE_INSERT_UK, arbiter.NodeType)
+			require.True(t, arbiter.GetPreInsertUkCtx().GetInsertIgnoreMultiDedup())
+		}
+		if n.NodeType == planpb.Node_PROJECT && len(n.Children) == 1 && q.Nodes[n.Children[0]].NodeType == planpb.Node_FILTER && q.Nodes[n.Children[0]].FilterIsBarrier && reachesCheck(id) {
+			image := n
+			input := q.Nodes[n.Children[0]]
 			columns := 0
 			for _, col := range table.Cols {
 				if col.Name != catalog.Row_ID {

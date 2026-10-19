@@ -291,7 +291,7 @@ func Test_convertToPipelineInstruction(t *testing.T) {
 		},
 		&preinsert.PreInsert{},
 		&lockop.LockOp{},
-		&preinsertunique.PreInsertUnique{},
+		&preinsertunique.PreInsertUnique{PreInsertCtx: &planpb.PreInsertUkCtx{Columns: []int32{0}, PkColumn: 0, PkType: types.T_int64.ToType().PlanType(), UkType: types.T_int64.ToType().PlanType()}},
 		&shuffle.Shuffle{},
 		&dispatch.Dispatch{},
 		&group.Group{},
@@ -368,7 +368,7 @@ func Test_convertToVmInstruction(t *testing.T) {
 		{Op: int32(vm.Insert), Insert: &pipeline.Insert{}},
 		{Op: int32(vm.PreInsert), PreInsert: &pipeline.PreInsert{}},
 		{Op: int32(vm.LockOp), LockOp: &pipeline.LockOp{}},
-		{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{}},
+		{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{PreInsertUkCtx: &planpb.PreInsertUkCtx{Columns: []int32{0}, PkColumn: 0, PkType: types.T_int64.ToType().PlanType(), UkType: types.T_int64.ToType().PlanType()}}},
 		{Op: int32(vm.Shuffle), Shuffle: &pipeline.Shuffle{}},
 		{Op: int32(vm.Dispatch), Dispatch: &pipeline.Dispatch{}},
 		{Op: int32(vm.Group), Agg: &pipeline.Group{}},
@@ -2060,6 +2060,104 @@ func TestArrowLoadRemoteProtocolValidationAtSendAndReceiveBoundaries(t *testing.
 	require.ErrorContains(t, err, "MORPC protocol version 57")
 	_, err = decodeScope(data, proc, true, nil)
 	require.ErrorContains(t, err, "MORPC protocol version 57")
+}
+
+func TestInsertIgnoreEligibilityRemoteProtocol(t *testing.T) {
+	c, destination := expressionProtocolTestCompile(t)
+	destination.version = defines.MORPCVersion122
+	proc := c.proc
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, hadPrevious := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if hadPrevious {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
+		}
+	})
+	arg := preinsertunique.NewArgument()
+	t.Cleanup(func() {
+		arg.Free(proc, false, nil)
+		arg.Release()
+	})
+	arg.PreInsertCtx = &planpb.PreInsertUkCtx{
+		InsertIgnoreMultiDedup: true, AutoIncrementReorder: true,
+		OrderedAutoIncrement: &planpb.OrderedAutoIncrement{ValuesRows: 3, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: planpb.Type{Id: int32(types.T_int32), AutoIncr: true}}}}},
+	}
+	scope := &Scope{Proc: proc, RootOp: arg, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
+	data, err := encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	// Version 121 supports exact DECIMAL DIV, not ordered IGNORE.
+	destination.version = defines.MORPCVersion121
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 122")
+	destination.version = defines.MORPCVersion122
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 122")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "protocol version 122")
+	require.NoError(t, validateRemoteInsertIgnoreEligibilityProtocol(proc, false))
+	require.Error(t, validateRemoteInsertIgnoreEligibilityProtocol(nil, true))
+
+	typ := types.T_int32.ToType().PlanType()
+	table := &planpb.TableDef{TblId: 99, Cols: []*planpb.ColDef{{Name: "id", Typ: typ}}, Pkey: &planpb.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}}, Name2ColIndex: map[string]int32{"id": 0}}
+	predicate, err := plan.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*planpb.Expr{
+		{Typ: typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		{Typ: typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}}}})
+	require.NoError(t, err)
+	arg.TxnOffset = 7
+	arg.PreInsertCtx = &planpb.PreInsertUkCtx{InsertIgnoreMultiDedup: true,
+		OrderedForeignKeys: []*planpb.OrderedForeignKey{{TableDef: table, Predicate: predicate, ParentColumns: []int32{0},
+			ChildColumns: []*planpb.ColRef{{ColPos: 1}}, SelfParentColumns: []*planpb.ColRef{{ColPos: 0}},
+			ParentAccess: &planpb.OrderedForeignKeyAccess{Kind: planpb.OrderedForeignKeyAccess_PK_POINT,
+				LookupTableDef: table, LookupFilter: predicate,
+				LockTarget:     &planpb.LockTarget{TableId: 99, PrimaryColTyp: typ, Mode: lockpb.LockMode_Shared},
+				WitnessLockKey: &planpb.Expr{Typ: typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+		}}}
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
+	data, err = encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	decoded, err := decodeScope(data, proc, true, nil)
+	require.NoError(t, err)
+	decodedArg := decoded.RootOp.(*preinsertunique.PreInsertUnique)
+	t.Cleanup(func() {
+		decodedArg.Free(proc, false, nil)
+		decodedArg.Release()
+	})
+	require.Equal(t, arg.PreInsertCtx.OrderedForeignKeys, decodedArg.PreInsertCtx.OrderedForeignKeys)
+	require.Equal(t, 7, decodedArg.TxnOffset)
+	destination.version = defines.MORPCVersion121
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 122")
+	destination.version = defines.MORPCVersion122
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "protocol version 122")
+
+	pre := preinsert.NewArgument()
+	t.Cleanup(func() {
+		pre.Free(proc, false, nil)
+		pre.Release()
+	})
+	pre.HasAutoCol = true
+	pre.TrackAutoIncrementGenerated = true
+	pre.DeferAutoIncrement = true
+	scope.RootOp = pre
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
+	data, err = encodeRemoteScope(scope, proc)
+	require.NoError(t, err)
+	destination.version = defines.MORPCVersion121
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 122")
+	destination.version = defines.MORPCVersion122
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
+	_, err = encodeRemoteScope(scope, proc)
+	require.ErrorContains(t, err, "protocol version 122")
+	_, err = decodeScope(data, proc, true, nil)
+	require.ErrorContains(t, err, "protocol version 122")
 }
 
 func TestExternalScanArrowRuntimeRoundtrip(t *testing.T) {
@@ -5431,4 +5529,15 @@ func TestRemoteStatementSendErrorPreservesCauseWithoutMaskingInvariant(t *testin
 			}
 		})
 	}
+}
+
+func TestPreInsertUniqueRejectsMissingRemoteContext(t *testing.T) {
+	proc := testutil.NewProc(t)
+	arg := preinsertunique.NewArgument()
+	defer arg.Release()
+	defer arg.Free(proc, false, nil)
+	_, _, err := convertToPipelineInstruction(arg, proc, &scopeContext{}, 0)
+	require.ErrorContains(t, err, "missing pre-insert unique context")
+	_, err = convertToVmOperator(&pipeline.Instruction{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{}}, &scopeContext{}, nil)
+	require.ErrorContains(t, err, "missing pre-insert unique context")
 }

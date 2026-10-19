@@ -3814,6 +3814,12 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			break
 		}
 
+		var checkEligibilityRef [2]int32
+		if node.PreInsertCtx.CheckEligibility != nil {
+			input := builder.qry.Nodes[node.Children[0]]
+			checkEligibilityRef = [2]int32{input.BindingTags[0], node.PreInsertCtx.CheckEligibility.ColPos}
+			colRefCnt[checkEligibilityRef]++
+		}
 		var selectorRefs [3][2]int32
 		if node.PreInsertCtx.HasTargetSelector {
 			selectorInput := builder.qry.Nodes[node.Children[0]]
@@ -3854,6 +3860,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			return nil, err
 		}
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
+		if node.PreInsertCtx.CheckEligibility != nil {
+			colRefCnt[checkEligibilityRef]--
+			pos, ok := childRemapping.globalToLocal[checkEligibilityRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing PRE_INSERT CHECK eligibility")
+			}
+			node.PreInsertCtx.CheckEligibility.ColPos = pos[1]
+		}
 		selectorOutputPos := [3]int32{-1, -1, -1}
 		for i, globalRef := range childRemapping.localToGlobal {
 			if colRefCnt[globalRef] == 0 {
@@ -3963,6 +3977,23 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			auxRefs[i] = [2]int32{childTag, pos}
 			colRefCnt[auxRefs[i]]++
 		}
+		var eligibilityRef [2]int32
+		if node.PreInsertUkCtx.RowEligibility != nil {
+			eligibilityRef = [2]int32{childTag, node.PreInsertUkCtx.RowEligibility.ColPos}
+			colRefCnt[eligibilityRef]++
+		}
+		var orderedForeignKeyRefs [][2]int32
+		orderedForeignKeys := node.PreInsertUkCtx.OrderedForeignKeys
+		if spec := node.PreInsertUkCtx.OrderedAutoIncrement; spec != nil {
+			orderedForeignKeys = spec.ForeignKeys
+		}
+		for _, fk := range orderedForeignKeys {
+			for _, col := range append(slices.Clone(fk.ChildColumns), fk.SelfParentColumns...) {
+				ref := [2]int32{childTag, col.ColPos}
+				orderedForeignKeyRefs = append(orderedForeignKeyRefs, ref)
+				colRefCnt[ref]++
+			}
+		}
 		var autoIncrementRef, autoIncrementGeneratedRef [2]int32
 		if node.PreInsertUkCtx.AutoIncrementReorder {
 			autoIncrementRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementColumn}
@@ -4012,6 +4043,27 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				node.PreInsertUkCtx.TargetColumns[i] = pos[1]
 			} else {
 				node.PreInsertUkCtx.ConflictColumns[i] = pos[1]
+			}
+		}
+		if node.PreInsertUkCtx.RowEligibility != nil {
+			colRefCnt[eligibilityRef]--
+			pos, ok := childRemapping.globalToLocal[eligibilityRef]
+			if !ok {
+				return nil, moerr.NewInternalError(builder.GetContext(), "missing INSERT IGNORE row eligibility column")
+			}
+			node.PreInsertUkCtx.RowEligibility.ColPos = pos[1]
+		}
+		orderedForeignKeyRefIndex := 0
+		for _, fk := range orderedForeignKeys {
+			for _, col := range append(slices.Clone(fk.ChildColumns), fk.SelfParentColumns...) {
+				ref := orderedForeignKeyRefs[orderedForeignKeyRefIndex]
+				orderedForeignKeyRefIndex++
+				colRefCnt[ref]--
+				pos, ok := childRemapping.globalToLocal[ref]
+				if !ok {
+					return nil, moerr.NewInternalError(builder.GetContext(), "missing ordered foreign-key column")
+				}
+				col.ColPos = pos[1]
 			}
 		}
 		if node.PreInsertUkCtx.OdkuTargetArbitration {

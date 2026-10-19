@@ -122,10 +122,23 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 					require.Equal(t, want, read(t, table, tc.generated))
 					exec(t, "truncate table "+table)
 					_, err := conn.ExecContext(ctx, prefix+suffix)
+					if local {
+						require.NoError(t, err, "LOCAL implies row rejection without relaxing strict decoding")
+						requireWarningCodes(t, ctx, conn, map[uint16]int{3819: tc.warnings})
+						require.Equal(t, tc.want, read(t, table, tc.generated), "LOCAL must commit only CHECK-valid rows")
+						exec(t, "truncate table "+table)
+					} else {
+						var checkError *mysql.MySQLError
+						require.ErrorAs(t, err, &checkError)
+						require.Equal(t, uint16(3819), checkError.Number)
+						require.Empty(t, read(t, table, tc.generated), "ordinary LOAD must roll back all rows")
+					}
+					// REPLACE retains strict CHECK enforcement for both server and LOCAL files.
+					_, err = conn.ExecContext(ctx, prefix+"replace "+suffix)
 					var checkError *mysql.MySQLError
 					require.ErrorAs(t, err, &checkError)
 					require.Equal(t, uint16(3819), checkError.Number)
-					require.Empty(t, read(t, table, tc.generated), "ordinary LOAD must roll back all rows")
+					require.Empty(t, read(t, table, tc.generated), "LOAD REPLACE must roll back all rows")
 					exec(t, "insert ignore into "+table+"(id,k,tag,v) values(1,'k_bad',1,-1),(2,'k_ok',1,5)")
 					requireWarningCodes(t, ctx, conn, map[uint16]int{3819: 1})
 					require.Equal(t, [][3]int{{2, 5, 10}}, read(t, table, tc.generated))
@@ -152,14 +165,36 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 			requireWarningCodes(t, ctx, conn, map[uint16]int{1062: 1})
 			require.Equal(t, [][3]int{{2, 5, 10}, {3, 8, 16}}, read(t, database+".dup", "v*2"))
 		})
-		t.Run("load ignore keeps foreign key rejection", func(t *testing.T) {
+		t.Run("load foreign key row policy", func(t *testing.T) {
 			validCSV := filepath.Join(filepath.Dir(csv), "valid_checks.csv")
-			require.NoError(t, os.WriteFile(validCSV, []byte("2,k_input,1,6\n3,k_tail,1,8\n"), 0o600))
+			require.NoError(t, os.WriteFile(validCSV, []byte("2,k_input,1,6\n3,k_tail,2,8\n"), 0o600))
+			mysql.RegisterLocalFile(validCSV)
+			defer mysql.DeregisterLocalFile(validCSV)
 			exec(t, "create table "+database+".parent(id int primary key)")
-			exec(t, "create table "+database+".child(id int primary key,k varchar(20),tag int,v int,check(v>0),foreign key(tag) references "+database+".parent(id))")
-			_, err := conn.ExecContext(ctx, "load data infile '"+validCSV+"' ignore into table "+database+".child fields terminated by ','")
-			require.ErrorContains(t, err, "foreign key constraint fails")
-			require.Empty(t, read(t, database+".child", "v*2"))
+			exec(t, "insert into "+database+".parent values(1)")
+			table := database + ".child"
+			exec(t, "create table "+table+"(id int primary key,k varchar(20),tag int,v int,check(v>0),foreign key(tag) references "+database+".parent(id))")
+			for _, local := range []bool{false, true} {
+				t.Run(fmt.Sprintf("local_%t", local), func(t *testing.T) {
+					prefix := "load data "
+					if local {
+						prefix += "local "
+					}
+					prefix += "infile '" + validCSV + "' "
+					suffix := "into table " + table + " fields terminated by ','"
+					for _, handling := range []string{"ignore ", "", "replace "} {
+						exec(t, "truncate table "+table)
+						_, err := conn.ExecContext(ctx, prefix+handling+suffix)
+						if handling == "ignore " || (local && handling == "") {
+							require.NoError(t, err, "row IGNORE must skip the orphan, not fail the valid row")
+							require.Equal(t, [][3]int{{2, 6, 12}}, read(t, table, "v*2"))
+						} else {
+							require.ErrorContains(t, err, "foreign key constraint fails")
+							require.Empty(t, read(t, table, "v*2"), "strict FK failure must roll back the valid row too")
+						}
+					}
+				})
+			}
 		})
 		exec(t, "set experimental_fulltext_index=1")
 		files := make(map[string]string)

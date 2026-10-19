@@ -41,6 +41,7 @@ const (
 )
 
 type container struct {
+	ordered         orderedAutoIncrementState
 	buf             *batch.Batch
 	acceptedMaps    []*hashmap.StrHashMap
 	acceptedIters   []hashmap.Iterator
@@ -67,6 +68,8 @@ type container struct {
 type PreInsertUnique struct {
 	ctr          container
 	PreInsertCtx *plan.PreInsertUkCtx
+	// TxnOffset is fixed at the statement boundary, including prepared retries.
+	TxnOffset int
 	// warningKeyMetadata is immutable for one prepared plan.  Build it lazily
 	// on the first warning-producing batch so ordinary INSERT IGNORE keeps the
 	// existing no-diagnostic fast path, while INSERT ... SELECT does not copy
@@ -83,12 +86,14 @@ type PreInsertUnique struct {
 	vm.OperatorBase
 }
 
-// ActivatesAllocationAccountLifecycle limits the new statement-retained
-// accounting requirement to ordered ODKU arbitration. Ordinary unique-index
-// preprocessing and INSERT IGNORE retain their existing lifecycle.
+// ActivatesAllocationAccountLifecycle accounts statement-retained arbitration
+// and ordered FK lookup state. Ordinary unique preprocessing keeps its owner.
 func (preInsertUnique *PreInsertUnique) ActivatesAllocationAccountLifecycle() bool {
-	return preInsertUnique != nil && preInsertUnique.PreInsertCtx != nil &&
-		preInsertUnique.PreInsertCtx.GetOdkuTargetArbitration()
+	if preInsertUnique == nil || preInsertUnique.PreInsertCtx == nil {
+		return false
+	}
+	ctx := preInsertUnique.PreInsertCtx
+	return ctx.GetOdkuTargetArbitration() || ctx.GetOrderedAutoIncrement() != nil || len(ctx.GetOrderedForeignKeys()) != 0
 }
 
 func (preInsertUnique *PreInsertUnique) SetAllocationAccount(
@@ -104,7 +109,8 @@ func (preInsertUnique *PreInsertUnique) SetAllocationAccount(
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if len(preInsertUnique.ctr.acceptedMaps) != 0 ||
-		preInsertUnique.ctr.acceptedTarget != nil || len(preInsertUnique.ctr.acceptedRows) != 0 {
+		preInsertUnique.ctr.acceptedTarget != nil || len(preInsertUnique.ctr.acceptedRows) != 0 ||
+		len(preInsertUnique.ctr.ordered.foreignKeyResults) != 0 || preInsertUnique.ctr.acceptedAutoIncrementValues != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	hashAllocation, err := hashtable.NewAllocationAccountSelection(
@@ -143,7 +149,8 @@ func (preInsertUnique *PreInsertUnique) ClearAllocationAccount(
 		return mpool.ErrAllocationAccountMismatch
 	}
 	if len(preInsertUnique.ctr.acceptedMaps) != 0 ||
-		preInsertUnique.ctr.acceptedTarget != nil || len(preInsertUnique.ctr.acceptedRows) != 0 {
+		preInsertUnique.ctr.acceptedTarget != nil || len(preInsertUnique.ctr.acceptedRows) != 0 ||
+		len(preInsertUnique.ctr.ordered.foreignKeyResults) != 0 || preInsertUnique.ctr.acceptedAutoIncrementValues != nil {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	preInsertUnique.allocationAccount = nil
@@ -224,6 +231,31 @@ func (preInsertUnique *PreInsertUnique) freeAcceptedState(proc *process.Process)
 	}
 	preInsertUnique.ctr.acceptedRows = nil
 	preInsertUnique.ctr.autoIncrementCandidates.reset(proc.Mp())
+	if preInsertUnique.ctr.ordered.manual != nil {
+		preInsertUnique.ctr.ordered.manual.Free(proc.Mp())
+	}
+	for i := range preInsertUnique.ctr.ordered.foreignKeyResults {
+		state := &preInsertUnique.ctr.ordered.foreignKeyResults[i]
+		hashmap.IteratorClearOwner(state.iterator)
+		state.iterator = nil
+		if state.lookup != nil {
+			state.lookup.free(proc)
+		}
+		if state.parents != nil {
+			state.parents.Free()
+		}
+		for _, vectors := range [][]*vector.Vector{state.tuple, state.selfTuple} {
+			for _, vec := range vectors {
+				if vec != nil {
+					vec.Free(proc.Mp())
+				}
+			}
+		}
+		if state.selfExecutor != nil {
+			state.selfExecutor.Free()
+		}
+	}
+	preInsertUnique.ctr.ordered = orderedAutoIncrementState{}
 	if preInsertUnique.ctr.acceptedAutoIncrementValues != nil {
 		preInsertUnique.ctr.acceptedAutoIncrementValues.Free()
 	}

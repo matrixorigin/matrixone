@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/preinsertunique"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
@@ -665,6 +666,8 @@ func TestNormalizeIndexSearchScanSnapshot(t *testing.T) {
 func TestUpdateScopeTxnOffsetRefreshesApplyOperators(t *testing.T) {
 	rootApply := &apply.Apply{TxnOffset: 3}
 	preScopeApply := &apply.Apply{TxnOffset: 3}
+	ordered := &preinsertunique.PreInsertUnique{TxnOffset: 3}
+	preScopeApply.AppendChild(ordered)
 	scope := &Scope{
 		TxnOffset: 3,
 		RootOp:    rootApply,
@@ -676,6 +679,7 @@ func TestUpdateScopeTxnOffsetRefreshesApplyOperators(t *testing.T) {
 	require.Equal(t, 9, rootApply.TxnOffset)
 	require.Equal(t, 9, scope.PreScopes[0].TxnOffset)
 	require.Equal(t, 9, preScopeApply.TxnOffset)
+	require.Equal(t, 9, ordered.TxnOffset)
 }
 
 func TestGenerateNodesKeepsLargeScanOnCurrentCNWhenNoWorkers(t *testing.T) {

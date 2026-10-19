@@ -273,3 +273,45 @@ func (hb *HashmapBuilder) marshalRuntimeFilterVector(
 		HashBuildAllocationSiteRuntimeFilterPayload,
 	)
 }
+
+// AppendResidentBatch retains one ingress batch and advances its physical row
+// accounting only after a successful copy. The caller owns the source batch.
+// Unlike spill ingress, this synchronous path never replays a rejected copy.
+func (hb *HashmapBuilder) AppendResidentBatch(src *batch.Batch, proc *process.Process) error {
+	if hb == nil || hb.mapAllocationAccount == nil {
+		return mpool.ErrAllocationAccountInvalid
+	}
+	if src == nil || src.RowCount() == 0 {
+		return nil
+	}
+	if src.RowCount() < 0 || src.RowCount() > math.MaxInt-hb.InputBatchRowCount {
+		return process.ErrExecutionResourceInvalid
+	}
+	if err := hb.copyBuildBatch(src, proc); err != nil {
+		return err
+	}
+	hb.InputBatchRowCount += src.RowCount()
+	return nil
+}
+
+// FinishResidentBuild transfers one complete resident lookup to its consumer.
+// Partial failures remain owned by the builder and are released by Free.
+func (hb *HashmapBuilder) FinishResidentBuild(proc *process.Process) (*message.JoinMap, error) {
+	if hb.mapAllocationAccount == nil {
+		return nil, mpool.ErrAllocationAccountInvalid
+	}
+	if hb.InputBatchRowCount == 0 {
+		return nil, nil
+	}
+	if err := hb.BuildHashmap(false, true, false, proc); err != nil {
+		return nil, err
+	}
+	rows := hb.InputBatchRowCount
+	jm := hb.GetJoinMap(proc.Mp())
+	if jm == nil {
+		return nil, process.ErrExecutionResourceInvalid
+	}
+	jm.SetRowCount(int64(rows))
+	jm.IncRef(1)
+	return jm, nil
+}

@@ -152,6 +152,9 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteInsertIgnoreEligibilityDestination(proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
 	}
@@ -778,6 +781,9 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			RuntimeFilterSpec:  t.RuntimeFilterSpec,
 		}
 	case *preinsert.PreInsert:
+		if err := validateRemoteInsertIgnoreEligibilityProtocol(proc, t.CheckEligibility != nil || t.DeferAutoIncrement); err != nil {
+			return ctxId, nil, err
+		}
 		if size := t.TableDef.GetAutoIdCache(); size != 0 {
 			if proc == nil {
 				return ctxId, nil, moerr.NewNotSupportedNoCtx("AUTO_ID_CACHE remote execution requires a process")
@@ -807,6 +813,8 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			ColOffset:                    t.ColOffset,
 			TrackAutoIncrementGenerated:  t.TrackAutoIncrementGenerated,
 			AutoIncrementGeneratedColumn: t.AutoIncrementGeneratedColumn,
+			CheckEligibility:             t.CheckEligibility,
+			DeferAutoIncrement:           t.DeferAutoIncrement,
 			RejectZeroTemporal:           t.RejectZeroTemporal,
 			HasTargetSelector:            t.HasTargetSelector,
 			TargetRowNumberCol:           t.TargetRowNumberCol,
@@ -818,6 +826,12 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			Targets: t.CopyToPipelineTarget(),
 		}
 	case *preinsertunique.PreInsertUnique:
+		if err := plan2.ValidateOrderedInsertIgnore(proc.Ctx, t.PreInsertCtx); err != nil {
+			return ctxId, nil, err
+		}
+		if err := validateRemoteInsertIgnoreEligibilityProtocol(proc, t.PreInsertCtx.GetRowEligibility() != nil || t.PreInsertCtx.GetOrderedAutoIncrement() != nil || len(t.PreInsertCtx.GetOrderedForeignKeys()) > 0); err != nil {
+			return ctxId, nil, err
+		}
 		if err := validateRemoteAutoIncrementSessionOptionsProtocol(
 			proc, t.PreInsertCtx.GetAutoIncrementReorder()); err != nil {
 			return ctxId, nil, err
@@ -828,6 +842,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		}
 		in.PreInsertUnique = &pipeline.PreInsertUnique{
 			PreInsertUkCtx: t.PreInsertCtx,
+			TxnOffset:      int64(t.TxnOffset),
 		}
 	case *preinsertsecondaryindex.PreInsertSecIdx:
 		in.PreInsertSecondaryIndex = &pipeline.PreInsertSecondaryIndex{
@@ -1395,6 +1410,8 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.ColOffset = t.ColOffset
 		arg.TrackAutoIncrementGenerated = t.GetTrackAutoIncrementGenerated()
 		arg.AutoIncrementGeneratedColumn = t.GetAutoIncrementGeneratedColumn()
+		arg.CheckEligibility = t.GetCheckEligibility()
+		arg.DeferAutoIncrement = t.GetDeferAutoIncrement()
 		arg.RejectZeroTemporal = t.GetRejectZeroTemporal()
 		arg.HasTargetSelector = t.GetHasTargetSelector()
 		arg.TargetRowNumberCol = t.GetTargetRowNumberCol()
@@ -1416,8 +1433,15 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		op = lockArg
 	case vm.PreInsertUnique:
 		t := opr.GetPreInsertUnique()
+		if t.GetTxnOffset() < 0 || int64(int(t.GetTxnOffset())) != t.GetTxnOffset() {
+			return nil, moerr.NewInvalidInputNoCtx("invalid ordered FK statement offset")
+		}
+		if err := plan2.ValidateOrderedInsertIgnore(context.Background(), t.GetPreInsertUkCtx()); err != nil {
+			return nil, err
+		}
 		arg := preinsertunique.NewArgument()
 		arg.PreInsertCtx = t.GetPreInsertUkCtx()
+		arg.TxnOffset = int(t.GetTxnOffset())
 		op = arg
 	case vm.PreInsertSecondaryIndex:
 		t := opr.GetPreInsertSecondaryIndex()
@@ -2565,12 +2589,18 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 	}
 	for _, instruction := range p.InstructionList {
 		if preInsert := instruction.GetPreInsert(); preInsert != nil {
+			if err := validateRemoteInsertIgnoreEligibilityProtocol(proc, preInsert.GetCheckEligibility() != nil || preInsert.GetDeferAutoIncrement()); err != nil {
+				return err
+			}
 			if err := validateRemoteStatementLastInsertIDProtocol(
 				proc, preInsert.HasAutoCol, preInsert.TrackAutoIncrementGenerated); err != nil {
 				return err
 			}
 		}
 		if preInsertUnique := instruction.GetPreInsertUnique(); preInsertUnique != nil {
+			if err := validateRemoteInsertIgnoreEligibilityProtocol(proc, preInsertUnique.PreInsertUkCtx.GetRowEligibility() != nil || preInsertUnique.PreInsertUkCtx.GetOrderedAutoIncrement() != nil || len(preInsertUnique.PreInsertUkCtx.GetOrderedForeignKeys()) > 0); err != nil {
+				return err
+			}
 			if err := validateRemoteAutoIncrementSessionOptionsProtocol(
 				proc, preInsertUnique.PreInsertUkCtx.GetAutoIncrementReorder()); err != nil {
 				return err
@@ -2583,6 +2613,53 @@ func validateRemoteStatementLastInsertIDPipelineProtocol(
 		}
 	}
 	return nil
+}
+
+func validateRemoteInsertIgnoreEligibilityProtocol(proc *process.Process, required bool) error {
+	if !required {
+		return nil
+	}
+	if proc != nil {
+		if version, ok := remoteMORPCProtocolVersion(proc.GetService()); ok && version >= defines.MORPCVersion122 {
+			return nil
+		}
+	}
+	return moerr.NewNotSupported(context.Background(), "INSERT IGNORE constraint candidate preservation requires protocol version 122")
+}
+
+func pipelineRequiresInsertIgnoreEligibility(p *pipeline.Pipeline) bool {
+	if p == nil {
+		return false
+	}
+	for _, instruction := range p.InstructionList {
+		if instruction.GetPreInsert().GetCheckEligibility() != nil || instruction.GetPreInsert().GetDeferAutoIncrement() ||
+			(instruction.GetPreInsertUnique().GetPreInsertUkCtx().GetRowEligibility() != nil || instruction.GetPreInsertUnique().GetPreInsertUkCtx().GetOrderedAutoIncrement() != nil || len(instruction.GetPreInsertUnique().GetPreInsertUkCtx().GetOrderedForeignKeys()) > 0) {
+			return true
+		}
+	}
+	for _, child := range p.Children {
+		if pipelineRequiresInsertIgnoreEligibility(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func validateRemoteInsertIgnoreEligibilityDestination(proc *process.Process, p *pipeline.Pipeline) error {
+	if !pipelineRequiresInsertIgnoreEligibility(p) {
+		return nil
+	}
+	if p.Node != nil {
+		supported, err := remoteWorkersSupportProtocol(proc,
+			engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion122)
+		if err != nil {
+			return err
+		}
+		if supported {
+			return nil
+		}
+	}
+	return moerr.NewNotSupportedNoCtx("remote INSERT IGNORE constraint candidate preservation requires protocol version 122")
 }
 
 func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required bool) error {

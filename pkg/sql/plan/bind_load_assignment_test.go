@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"fmt"
 	"testing"
 
@@ -47,6 +48,34 @@ func TestLoadAssignmentIgnorePolicy(t *testing.T) {
 	}))
 }
 
+func TestLoadExplicitIgnoreScanMetadata(t *testing.T) {
+	for _, tc := range []struct {
+		name, policy string
+		explicit     bool
+	}{
+		{"local", "", false},
+		{"local_ignore", "ignore", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			p, err := runOneStmt(mock, t, "load data local infile '/unused.csv' "+tc.policy+" into table self_ref fields terminated by ','")
+			require.NoError(t, err)
+			found := false
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType != planpb.Node_EXTERNAL_SCAN {
+					continue
+				}
+				found = true
+				var param tree.ExternParam
+				require.NoError(t, json.Unmarshal([]byte(node.TableDef.Createsql), &param))
+				require.True(t, param.Local)
+				require.Equal(t, tc.explicit, param.LoadExplicitIgnore)
+			}
+			require.True(t, found)
+		})
+	}
+}
+
 func TestLocalLoadTimeAssignmentAndDecoderPolicies(t *testing.T) {
 	for _, legacy := range []bool{false, true} {
 		t.Run(fmt.Sprintf("legacy%v", legacy), func(t *testing.T) {
@@ -76,25 +105,35 @@ func TestLocalLoadTimeAssignmentAndDecoderPolicies(t *testing.T) {
 			for _, tc := range []struct {
 				duplicate tree.DuplicateKey
 				cast      string
-				global    bool
+				rowIgnore bool
+				explicit  bool
 			}{
-				{&tree.DuplicateKeyIgnore{}, "cast_ignore", true},
-				{&tree.DuplicateKeyError{}, "cast_ignore", false},
-				{&tree.DuplicateKeyReplace{}, "cast_assign", false},
-				{&tree.DuplicateKeyError{}, "cast_ignore", false},
+				{&tree.DuplicateKeyIgnore{}, "cast_ignore", true, true},
+				{&tree.DuplicateKeyError{}, "cast_ignore", true, false},
+				{&tree.DuplicateKeyReplace{}, "cast_assign", false, false},
+				{&tree.DuplicateKeyError{}, "cast_ignore", true, false},
 			} {
 				stmt.DuplicateHandling = tc.duplicate
-				require.Equal(t, tc.global, tree.IsIgnoreStatement(stmt))
+				require.Equal(t, tc.rowIgnore, tree.IsIgnoreStatement(stmt))
 				result, err := build()
 				require.NoError(t, err)
+				foundScan := false
 				var assignment *planpb.Expr
 				for _, n := range result.GetQuery().Nodes {
+					if n.NodeType == planpb.Node_EXTERNAL_SCAN {
+						foundScan = true
+						var param tree.ExternParam
+						require.NoError(t, json.Unmarshal([]byte(n.TableDef.Createsql), &param))
+						require.True(t, param.Local)
+						require.Equal(t, tc.explicit, param.LoadExplicitIgnore, "rebinding must reset the decoder policy independently of row IGNORE")
+					}
 					for _, expr := range n.ProjectList {
 						if fn := expr.GetF(); fn != nil && expr.Typ.Id == int32(types.T_time) && (fn.Func.ObjName == "cast_assign" || fn.Func.ObjName == "cast_ignore") {
 							assignment = expr
 						}
 					}
 				}
+				require.True(t, foundScan)
 				require.NotNil(t, assignment)
 				require.Equal(t, tc.cast, assignment.GetF().Func.ObjName)
 				require.Equal(t, int32(types.T_varchar), assignment.GetF().Args[0].Typ.Id)
