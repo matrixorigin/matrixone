@@ -1193,6 +1193,13 @@ type RelationHandleFactory interface {
 	NewRelationHandle() Relation
 }
 
+// RelationCreatedInCurrentTxn reports whether the relation was created by the
+// transaction bound to the relation. Engines without a transaction-local
+// relation cache do not implement it.
+type RelationCreatedInCurrentTxn interface {
+	CreatedInCurrentTxn(context.Context) (bool, error)
+}
+
 // SourceCommitTSProvider is an optional relation capability used by async
 // indexes that must prove their source-table coverage.  It is intentionally not
 // part of Relation: engines without a logtail partition state simply do not
@@ -1206,6 +1213,14 @@ type RelationHandleFactory interface {
 // is always a valid lower bound: >= mustExceed when it short-circuits, else exact.
 type SourceCommitTSProvider interface {
 	SourceCommitTS(ctx context.Context, mustExceed types.TS) (types.TS, error)
+}
+
+// SourceCommitTSAfterCopyProvider returns committed source mutations while
+// excluding writes made by the current transaction. ALTER COPY has already
+// copied transaction-visible writes; it still must detect commits by other
+// transactions after the copy timestamp.
+type SourceCommitTSAfterCopyProvider interface {
+	SourceCommitTSAfterCopy(ctx context.Context, mustExceed types.TS) (types.TS, error)
 }
 
 // NewRelationHandle returns an exclusively owned handle when the engine

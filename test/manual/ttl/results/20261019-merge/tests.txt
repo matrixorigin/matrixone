@@ -1,0 +1,4 @@
+go: downloading github.com/matrixorigin/dragonboat/v4 v4.0.0-20261016015224-0b20c95f67f8
+ok  	github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql	0.157s
+ok  	github.com/matrixorigin/matrixone/pkg/sql/plan	15.840s
+ok  	github.com/matrixorigin/matrixone/pkg/sql/ttl	0.485s

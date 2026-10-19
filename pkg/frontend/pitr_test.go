@@ -2539,6 +2539,10 @@ func Test_doRestorePitr_Account_Sys_Restore_Normal_To_new_Using_cluster(t *testi
 		})
 		bh.sql2result[sql] = mrs
 
+		masterSQL := fmt.Sprintf(checkTableIsMasterFormat,
+			quoteSQLStringLiteral(moCatalog), quoteSQLStringLiteral("mo_user"))
+		bh.sql2result[masterSQL] = newMrsForRestoreStringRows([]string{"db_name", "table_name"}, nil)
+
 		// CLONE owns the historical schema lookup; inject its failure rather
 		// than relying on an absent result for a redundant SHOW CREATE.
 		cloneSQL := restoreTableDataByTsSQL(moCatalog, "mo_user", resovleTs)

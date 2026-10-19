@@ -1,0 +1,43 @@
+drop database if exists dependent_external_dml;
+create database dependent_external_dml;
+use dependent_external_dml;
+drop stage if exists dependent_ownership_stage;
+create stage dependent_ownership_stage url='file:///$resources/into_outfile/stage';
+remove files from stage if exists 'stage://dependent_ownership_stage/dependent_ownership_*.csv';
+create table src(id int primary key, label varchar(20));
+insert into src values (1, 'one'), (2, 'two');
+create external table dst(id int, label varchar(20))
+infile{'filepath'='stage://dependent_ownership_stage/dependent_ownership_*.csv', 'format'='csv', 'write_file_pattern'='stage://dependent_ownership_stage/dependent_ownership_%U.csv'}
+fields terminated by ',';
+insert into dst select (select (select s.id)), s.label from src s;
+select id, label from dst order by id;
+➤ id[4,32,0]  ¦  label[12,20,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two
+select count(*) from dst;
+➤ count(*)[-5,64,0]  𝄀
+2
+insert into dst select (select (select s.id)), s.label from src s where s.id=3;
+select count(*) from dst;
+➤ count(*)[-5,64,0]  𝄀
+2
+prepare stmt from 'insert into dst select (select (select s.id+?)), s.label from src s';
+set @offset=10;
+execute stmt using @offset;
+set @offset=20;
+execute stmt using @offset;
+deallocate prepare stmt;
+select id, label from dst order by id;
+➤ id[4,32,0]  ¦  label[12,20,0]  𝄀
+1  ¦  one  𝄀
+2  ¦  two  𝄀
+11  ¦  one  𝄀
+12  ¦  two  𝄀
+21  ¦  one  𝄀
+22  ¦  two
+select count(*) from dst;
+➤ count(*)[-5,64,0]  𝄀
+6
+remove files from stage if exists 'stage://dependent_ownership_stage/dependent_ownership_*.csv';
+drop database dependent_external_dml;
+drop stage dependent_ownership_stage;

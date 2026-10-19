@@ -1,0 +1,20 @@
+{
+  "parents": [
+    "6b38fcd09af96073175588c6eac78fbfe3d9aee5",
+    "75ff736835c3d00d40dc00a0a1d3b11129388e5b"
+  ],
+  "source_sha256": {
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.go": "ff4d3ca3bd9395c200d25e09a85bd20143650223de6b6a32d22d64c706b136ff",
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.y": "4b713dc1f0acc8cb7dcddf03dd33d31e3366bc031088cc784bc04d4dcc06765a"
+  },
+  "log_sha256": {
+    "lint.txt": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+    "tests.txt": "cb27a211194410c87c8913d0ff8171bf52909d8ef937860c9f37461c5b93aec6",
+    "integration.txt": "6f97a683d74c0910922718c076a3e1e68f853497b1999192df2b8f9d6a979c3e"
+  },
+  "generator_exit": 0,
+  "repeat_generation_identical": true,
+  "tests_exit": 0,
+  "integration_registration_exit": 0,
+  "lint_exit": 0
+}

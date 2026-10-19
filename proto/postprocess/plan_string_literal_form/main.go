@@ -41,10 +41,16 @@ func patch(path string) error {
 		return err
 	}
 	start := bytes.Index(data, []byte("func (m *Expr) Unmarshal(dAtA []byte) error {"))
-	next := bytes.Index(data, []byte("func (m *FoldVal) Unmarshal(dAtA []byte) error {"))
-	if start < 0 || next <= start {
+	if start < 0 {
 		return fmt.Errorf("generated Expr.Unmarshal boundary not found")
 	}
+	// Message additions may change the next generated receiver. Restrict the
+	// patch to this function instead of using a particular neighboring type.
+	relativeNext := bytes.Index(data[start:], []byte("\nfunc "))
+	if relativeNext < 0 {
+		return fmt.Errorf("generated Expr.Unmarshal boundary not found")
+	}
+	next := start + relativeNext + 1
 	body := data[start:next]
 	old := []byte("\treturn nil\n}\n")
 	replacement := []byte("\treturn m.validateOwnStringLiteralForm()\n}\n")

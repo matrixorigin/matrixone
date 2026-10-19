@@ -550,11 +550,61 @@ printf '\nREPORT\n'
 	}
 }
 
+// These cases assert cooperative cancellation, not forced-stop timing. Hold the
+// real helper acknowledgement past the old four-tick fixture deadline while
+// retaining the runner's default grace, liveness probes and KILL escalation.
+func withDelayedHelperCompletion(t *testing.T, script, owner, report, event string) string {
+	t.Helper()
+	const anchor = "source ./run_ut.sh UT\n"
+	if strings.Count(script, anchor) != 1 {
+		t.Fatal("missing unique runner source")
+	}
+	probe := "delayed_owner=" + owner + "\ndelayed_report=" + report + "\ndelayed_event=" + event + "\n" + `
+[[ "$UT_HELPER_TERM_GRACE_TICKS" == 60 ]] || exit 99
+function ut_test_publish_completion() {
+ printf 'held\n' >&9
+ IFS= read -r -t 10 token <&8 && [[ "$token" == release ]] || exit 96
+ publish_ut_helper_completion 143 || exit 125
+ printf 'published\n' >&9
+}
+wait_function=$(declare -f wait_for_ut_process_group)
+wait_anchor='tick=$((tick + 1))'
+[[ "$wait_function" == *"$wait_anchor"* ]] || exit 99
+wait_suffix=${wait_function#*"$wait_anchor"}
+[[ "$wait_suffix" != *"$wait_anchor"* ]] || exit 99
+eval "${wait_function/wait_for_ut_process_group/wait_for_ut_unobserved_group}"
+wait_function=${wait_function/wait_for_ut_process_group/wait_for_ut_observed_group}
+# shellcheck disable=SC2016 # Expand the copied wait's locals at execution time.
+wait_function=${wait_function/"$wait_anchor"/'tick=$((tick + 1)); ut_test_grace_tick "$tick"'}
+eval "$wait_function"
+function ut_test_grace_tick() {
+ local token completion="$G_WKSP/$G_TS-owner-complete.$delayed_owner"
+ if (( $1 == 1 )); then
+  IFS= read -r -t 10 token <&9 && [[ "$token" == held ]] || exit 96
+  [[ -f "$completion" && ! -s "$completion" && -s "${!delayed_report}" ]] || exit 97
+  if [[ -f "$UT_REPORT" ]] && grep -q "^$delayed_event" "$UT_REPORT"; then exit 97; fi
+ fi
+ if (( $1 == 5 )); then
+  printf 'release\n' >&8
+  IFS= read -r -t 10 token <&9 && [[ "$token" == published ]] || exit 96
+  [[ "$(<"$completion")" == 143 ]] || exit 97
+ fi
+}
+function wait_for_ut_process_group() {
+ if (( UT_TERMINATING == 1 )) && [[ "$1" == "${!delayed_owner}" && "$2" == "$UT_HELPER_TERM_GRACE_TICKS" ]]; then
+  wait_for_ut_observed_group "$@"
+ else
+  wait_for_ut_unobserved_group "$@"
+ fi
+}
+`
+	return strings.Replace(script, anchor, anchor+probe, 1)
+}
+
 func TestEngineLaunchRegistrationSurvivesCancellation(t *testing.T) {
 	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
-UT_HELPER_TERM_GRACE_TICKS=4
 trap handle_ut_termination TERM
 UT_REPORT="$CASE_DIR/ut-report.json"
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
@@ -563,7 +613,7 @@ mkfifo "$CASE_DIR/engine-ready" "$CASE_DIR/engine-hold"
 exec 8<>"$CASE_DIR/engine-hold"
 exec 9<>"$CASE_DIR/engine-ready"
 function run_engine_race_shards() {
-	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; publish_ut_helper_completion 143; exit 143' TERM
+	trap 'if grep -q "^engine$" "$UT_REPORT"; then touch "$CASE_DIR/report-consumed-early"; fi; touch "$CASE_DIR/engine-stopped"; ut_test_publish_completion; exit 143' TERM
 	printf 'engine\n' > "$ENGINE_RACE_REPORT"
 	touch "$CASE_DIR/engine-started"
 	printf 'ready\n' >&9
@@ -591,6 +641,7 @@ start_engine_race example/engine 2
 		}
 		return strings.Replace(text, anchor, "    invoke_ut_helper ENGINE_RACE_JOB_PID run_engine_race_shards \"$1\" \"$2\" &\n    ut_test_after_engine_spawn \"$!\"\n    ENGINE_RACE_JOB_PID=$!\n", 1)
 	}
+	script = withDelayedHelperCompletion(t, script, "ENGINE_RACE_JOB_PID", "ENGINE_RACE_REPORT", "engine")
 	script = "function ut_test_after_engine_spawn() {\n printf '%s\\n' \"$1\" > \"$CASE_DIR/engine-pid\"\n IFS= read -r -t 10 _ <&9 || exit 94\n kill -TERM \"$$\"\n}\n" + script
 	out, err := scheduleHarnessWithMockTransform(t, script, `#!/bin/bash
 if [[ "$1" == version ]]; then exit 0; fi
@@ -946,7 +997,6 @@ func TestHeavyPlanCancellationStopsWritersBeforeMerge(t *testing.T) {
 	t.Parallel()
 	script := `source ./run_ut.sh UT
 function logger() { :; }
-UT_HELPER_TERM_GRACE_TICKS=4
 trap handle_ut_termination TERM
 trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
@@ -960,7 +1010,7 @@ start_ut_command heavy 'heavy writer' bash -c '
  IFS= read -r _ <&8
 '
 function run_plan_race_shards() {
- trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; publish_ut_helper_completion 143 || exit 125; exit 143' TERM
+ trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; ut_test_publish_completion; exit 143' TERM
  printf 'plan-start\n' > "$PLAN_RACE_REPORT"
  printf 'plan\n' >&9
  IFS= read -r _ <&8
@@ -971,6 +1021,7 @@ IFS= read -r -t 10 second <&9 || exit 92
 [[ "$first:$second" == heavy:plan || "$first:$second" == plan:heavy ]] || exit 93
 kill -TERM "$$"
 `
+	script = withDelayedHelperCompletion(t, script, "PLAN_RACE_JOB_PID", "PLAN_RACE_REPORT", "plan")
 	out, err := scheduleHarness(t, script)
 	exit, ok := err.(*exec.ExitError)
 	if !ok || exit.ExitCode() != 143 {
@@ -1452,7 +1503,6 @@ exit 99
 `
 	script := `source ./run_ut.sh UT
 function logger() { :; }
-UT_HELPER_TERM_GRACE_TICKS=4
 trap handle_ut_termination TERM
 trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
 start_light_race example/light-package 2
