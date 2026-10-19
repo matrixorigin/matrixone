@@ -115,7 +115,7 @@ func runWorker(ctx context.Context, r WorkerRequest) (out WorkerReceipt, retErr 
 	if err := publishJSON(filepath.Join(r.OutputRoot, "owner.json"), map[string]any{"purpose": "tpch-compare worker", "version": formatVersion}); err != nil {
 		return out, err
 	}
-	d, err := loadDataset(r.DatasetRoot, r.Operation == "load" || r.Operation == "verify")
+	d, err := loadDataset(r.DatasetRoot, r.Operation == "verify")
 	if err != nil {
 		return out, err
 	}
