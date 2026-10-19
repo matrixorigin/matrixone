@@ -49,6 +49,7 @@ func TestNormalizeStatementDigest(t *testing.T) {
 		{sql: "SELECT /*!80000 1 # ignored */\n + 2 */", max: 1024, want: "SELECT ? + ?"},
 		{sql: "SELECT /*!80000 */ /*+ MAX_EXECUTION_TIME(1000) */ 1", max: 1024, want: "SELECT ?"},
 		{sql: "SELECT /*+ MAX_EXECUTION_TIME(1000) */ 1", max: 2, want: "SELECT"},
+		{sql: "SELECT !!1", max: 1024, want: "SELECT ! ?"},
 		{sql: "SELECT CAST('x' AS NCHAR), 'a' SOUNDS LIKE 'b'", max: 1024, want: "SELECT CAST ( ? AS NCHAR ) , ? SOUNDS LIKE ?"},
 		{sql: "SELECT _utf8mb4 /* charset */ -- literal\n X'4142'", max: 1024, want: "SELECT (_charset) ?"},
 		{sql: "SELECT /*+ MAX_EXECUTION_TIME(1000) */ * FROM t WHERE id=1", max: 1024, want: "SELECT /*+ MAX_EXECUTION_TIME (?) */ * FROM `t` WHERE `id` = ?"},
