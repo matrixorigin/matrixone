@@ -133,7 +133,10 @@ type container struct {
 }
 
 type Fill struct {
-	ctr container
+	// ValueSetup supplies invocation-owned constants after a continuation.
+	// A nil result suspends initialization; the provider owns the vectors.
+	ValueSetup func(*process.Process) ([]*vector.Vector, error)
+	ctr        container
 
 	ColLen   int
 	FillType plan.Node_FillType

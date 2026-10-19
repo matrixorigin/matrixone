@@ -20,6 +20,7 @@ import (
 	"unicode"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/functionUtil"
@@ -61,7 +62,7 @@ func appendStrToDateWarning(proc *process.Process, code uint16, prefix, suffix s
 		return
 	}
 	if len(input) > strToDateWarningInputMax {
-		input = input[:strToDateWarningInputMax]
+		input = input[:util.UTF8PrefixLen(functionUtil.QuickBytesToStr(input), strToDateWarningInputMax)]
 	}
 	appender.AppendWarningDiagnostic(code, fmt.Sprintf("%s: '%s'%s", prefix, input, suffix))
 }

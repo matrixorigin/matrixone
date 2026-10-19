@@ -1400,7 +1400,10 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 	builder.tempOptimizeForDML()
 	builder.determineShuffleForDMLSteps()
 	applyLockTableFallback(builder)
-	return nil
+	if err := builder.refreshCorrelationBindings(); err != nil {
+		return err
+	}
+	return query.ValidateCorrelation()
 }
 
 func (builder *QueryBuilder) determineShuffleForDMLSteps() {
@@ -2874,7 +2877,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 
 		for i, updateExpr := range updateColExprList {
-			lastNodeID, updateExpr, err = builder.flattenSubqueries(lastNodeID, updateExpr, bindCtx)
+			// An UPDATE subquery belongs to the current conflict-row image.
+			// Pulling it into the INSERT input would observe the wrong stage.
+			updateExpr, err = builder.bindDependentJoinCondition(updateExpr)
 			if err != nil {
 				return 0, err
 			}
@@ -3107,8 +3112,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 		}
 	}
+	hasDependentUpdate := false
+	for _, expr := range updateColExprList {
+		_ = plan.VisitExprTree(expr, func(e *plan.Expr) error {
+			hasDependentUpdate = hasDependentUpdate || e.GetDependent() != nil
+			return nil
+		})
+	}
 	emitODKUActionRows := onDupAction == plan.Node_UPDATE &&
-		(len(odkuActionConstraintDef.Checks) > 0 || len(odkuActionConstraintDef.Fkeys) > 0 || len(odkuNotNullColIdxList) > 0)
+		(hasDependentUpdate || len(odkuActionConstraintDef.Checks) > 0 || len(odkuActionConstraintDef.Fkeys) > 0 || len(odkuNotNullColIdxList) > 0)
 	appendODKUFinalOnlyChecks := func(nodeID, inputTag int32) (int32, error) {
 		if len(odkuFinalOnlyCheckDef.Checks) == 0 {
 			return nodeID, nil

@@ -98,6 +98,27 @@ func applyRuleToWindowSpec(rule VisitPlanRule, window *plan.WindowSpec) error {
 	return nil
 }
 
+func applyDependentOperands(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {
+	d := e.GetDependent()
+	for _, operands := range [][]*plan.Expr{d.Inputs, d.Lhs} {
+		for i, operand := range operands {
+			next, err := apply(operand)
+			if err != nil {
+				return nil, err
+			}
+			operands[i] = next
+		}
+	}
+	if d.Comparison != nil {
+		var err error
+		d.Comparison, err = apply(d.Comparison)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return e, nil
+}
+
 func NewGetParamRule() *GetParamRule {
 	return &GetParamRule{
 		params:   make(map[int]int),
@@ -194,6 +215,8 @@ func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
@@ -301,6 +324,8 @@ func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
@@ -390,6 +415,8 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			var err error
@@ -2527,6 +2554,8 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_P:
 		return e, nil
 	case *plan.Expr_F:
@@ -2875,6 +2904,8 @@ func (rule *ResetParamRefRule) resolvePreparedRegexpStringDomainCheckModes(name 
 func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		var originalTemporalExpr *Expr
 		if exprImpl.F.Func != nil {

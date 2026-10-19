@@ -92,6 +92,9 @@ func (apply *Apply) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
+			if input.Status == vm.ExecYield {
+				return input, nil
+			}
 			ctr.inbat = input.Batch
 			if ctr.inbat == nil {
 				result.Batch = nil

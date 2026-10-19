@@ -2,7 +2,7 @@
 
 ## 0. 修订与审查边界
 
-修订 **r3，2026-10-18**，基于 main `adbdd5c718baca6e4c054194f888b48a4f84a0a2`。r3 的实现前设计经 `gpt-6.1-sol / xhigh` 独立审查 PASS（session `01a14e30-2309-7380-b4f0-2a2ab293c768`）；LOCAL policy 澄清在同一模型/effort 下补充设计 PASS，保留原 PR 的 LOCAL CHECK 行跳过契约；实现与验证证据按当前版本单独记录在 PR 中。此记录不修改 GitHub reviewer 的决定。
+修订 **r3，2026-10-18**，原实现基于 main `adbdd5c718baca6e4c054194f888b48a4f84a0a2`；2026-10-19 合并 main `def799e1260dd547cae2e0e54323ea20ec1b7685`，仅顺延本功能协议门槛至 120 并保留上游 119 dependent-program 元数据，不改变 r3 查找/锁/接受算法。r3 的实现前设计经 `gpt-6.1-sol / xhigh` 独立审查 PASS（session `01a14e30-2309-7380-b4f0-2a2ab293c768`）；LOCAL policy 澄清在同一模型/effort 下补充设计 PASS，保留原 PR 的 LOCAL CHECK 行跳过契约；实现与验证证据按当前版本单独记录在 PR 中。此记录不修改 GitHub reviewer 的决定。
 
 问题 [#28238](https://github.com/matrixorigin/matrixone/issues/28238)，实现 [#30107](https://github.com/matrixorigin/matrixone/pull/30107)。保留原始 13 个提交及 6 次合并的累计功能修改；不恢复已被 main 吸收、累计增量为零的 EXPLAIN prerequisite。
 
@@ -115,7 +115,7 @@ resident build/probe、current-self 和 earlier-accepted-self 都从原始 SQL �
 
 ## 6. Wire 与资源生命周期
 
-最低能力 **MORPC 119**；published 114–118 的含义保持 main 原样。发送端、接收端及实际目标 CN 均执行能力拒绝，不能丢弃新字段后走旧 scalar 语义。
+最低能力 **MORPC 120**；published 114–119 的含义保持 main 原样，其中 119 已由上游用于 coordinator-owned parameterized subquery programs，不能与本功能共用。发送端、接收端及实际目标 CN 均执行能力拒绝，不能丢弃新字段后走旧 scalar 语义。
 
 | message / 字段 | 用途 |
 |---|---|

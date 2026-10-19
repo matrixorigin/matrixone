@@ -154,8 +154,9 @@ const (
 	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
 	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
 	MORPCVersion118    int64 = 118 // transactional database defaults and table charset alteration
-	MORPCVersion119    int64 = 119 // ordered INSERT IGNORE allocation, eligibility and foreign-key lookup
-	MORPCLatestVersion       = MORPCVersion119
+	MORPCVersion119    int64 = 119 // coordinator-owned parameterized subquery programs
+	MORPCVersion120    int64 = 120 // ordered INSERT IGNORE allocation, eligibility and foreign-key lookup
+	MORPCLatestVersion       = MORPCVersion120
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

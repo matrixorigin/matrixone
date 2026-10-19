@@ -360,6 +360,21 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 				return err
 			}
 		}
+	case *plan.Expr_List:
+		for _, arg := range ne.List.List {
+			if err := builder.remapColRefForExpr(arg, colMap, remapInfo); err != nil {
+				return err
+			}
+		}
+	case *plan.Expr_Dependent:
+		for _, args := range [][]*plan.Expr{ne.Dependent.Inputs, ne.Dependent.Lhs} {
+			for _, arg := range args {
+				if err := builder.remapColRefForExpr(arg, colMap, remapInfo); err != nil {
+					return err
+				}
+			}
+		}
+		// Comparison already addresses the materialized lhs/rhs tuples.
 	case *plan.Expr_W:
 		err := builder.remapColRefForExpr(ne.W.WindowFunc, colMap, remapInfo)
 		if err != nil {
@@ -4256,6 +4271,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 	}
+	if builder.qry.Correlation != nil {
+		return builder.createDependentQuery()
+	}
 	var err error
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
@@ -6455,6 +6473,12 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	if ctx.sampleFunc.hasSampleFunc {
+		for i, expr := range ctx.sampleFunc.columns {
+			ctx.sampleFunc.columns[i], err = builder.bindDependentJoinCondition(expr)
+			if err != nil {
+				return 0, err
+			}
+		}
 		for _, group := range ctx.groups {
 			if hasSubquery(group) {
 				return 0, moerr.NewNYI(builder.GetContext(), "subquery in GROUP BY with SAMPLE")
@@ -9247,7 +9271,7 @@ func (builder *QueryBuilder) bindGroupBy(
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
 ) (boundTimeWindowGroupBy *plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewParseErrorf(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(clause, dialect.MYSQL))
 		return
 	}
@@ -9345,7 +9369,7 @@ func (builder *QueryBuilder) bindHaving(
 	clause *tree.Where,
 	havingBinder *HavingBinder,
 ) (boundHavingList []*plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewParseErrorf(builder.GetContext(), "not support having in recursive cte: '%v'", tree.String(clause, dialect.MYSQL))
 		return
 	}
@@ -11218,6 +11242,12 @@ func (builder *QueryBuilder) appendTimeWindowNode(
 	}
 
 	if astTimeWindow.Fill != nil {
+		for i, expr := range fillVals {
+			fillVals[i], err = builder.bindDependentJoinCondition(expr)
+			if err != nil {
+				return
+			}
+		}
 		nodeID = builder.appendNode(&plan.Node{
 			NodeType:    plan.Node_FILL,
 			Children:    []int32{nodeID},
@@ -12659,7 +12689,7 @@ func (builder *QueryBuilder) normalizeTransparentCorrelatedDerivedTable(
 ) error {
 	corrRefs := make(map[*plan.CorrColRef]struct{})
 	if !builder.analyzeTransparentCorrelatedDerivedTable(nodeID, ctx, corrRefs) || len(corrRefs) == 0 {
-		return moerr.NewNYI(builder.GetContext(), "correlated subquery in FROM clause")
+		return builder.normalizeDependentDerivedTable(nodeID, ctx)
 	}
 
 	for corr := range corrRefs {
@@ -13923,7 +13953,7 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 		nodeID = builder.appendNode(node, ctx)
 	}
 
-	if joinType == plan.Node_INNER || joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT ||
+	if joinType == plan.Node_INNER || joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT || joinType == plan.Node_OUTER ||
 		joinType == plan.Node_ASOF || joinType == plan.Node_ASOF_LEFT {
 		ctx.binder = NewJoinOnBinder(builder, ctx)
 	} else {
@@ -13961,6 +13991,13 @@ func (builder *QueryBuilder) buildJoinTable(tbl *tree.JoinTableExpr, ctx *BindCo
 					Children:   []int32{nodeID},
 					FilterList: filterConds,
 				}, ctx)
+			}
+		} else if joinType == plan.Node_OUTER {
+			for i, cond := range joinConds {
+				joinConds[i], err = builder.bindDependentJoinCondition(cond)
+				if err != nil {
+					return 0, err
+				}
 			}
 		} else if joinType == plan.Node_LEFT || joinType == plan.Node_RIGHT {
 			leftTags := builder.collectBindingTags(builder.qry.Nodes[leftChildID])

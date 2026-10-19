@@ -64,6 +64,10 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkColDef(p)
 	case *Column:
 		return true, v.walkColumn(p)
+	case *CorrelationProgram:
+		return true, v.walkCorrelationProgram(p)
+	case *CorrelationSpec:
+		return true, v.walkCorrelationSpec(p)
 	case *CreateIndex:
 		return true, v.walkCreateIndex(p)
 	case *CreateSequence:
@@ -112,6 +116,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkDefault(p)
 	case *DeleteCtx:
 		return true, v.walkDeleteCtx(p)
+	case *DependentExpr:
+		return true, v.walkDependentExpr(p)
 	case *DistRange:
 		return true, v.walkDistRange(p)
 	case *DropTable:
@@ -122,6 +128,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkExpr(p)
 	case *ExprList:
 		return true, v.walkExprList(p)
+	case *Expr_Dependent:
+		return true, v.walkExpr_Dependent(p)
 	case *Expr_F:
 		return true, v.walkExpr_F(p)
 	case *Expr_List:
@@ -427,6 +435,33 @@ func (v *legacyCollationVisitor) walkColumn(p *Column) error {
 	}
 	return nil
 }
+func (v *legacyCollationVisitor) walkCorrelationProgram(p *CorrelationProgram) error {
+	if p == nil {
+		return nil
+	}
+	for _, item0 := range p.InputTypes {
+		if err := v.walkType(&item0); err != nil {
+			return err
+		}
+	}
+	for _, item0 := range p.OutputTypes {
+		if err := v.walkType(&item0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkCorrelationSpec(p *CorrelationSpec) error {
+	if p == nil {
+		return nil
+	}
+	for _, item0 := range p.Programs {
+		if err := v.walkCorrelationProgram(item0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (v *legacyCollationVisitor) walkCreateIndex(p *CreateIndex) error {
 	if p == nil {
 		return nil
@@ -714,6 +749,25 @@ func (v *legacyCollationVisitor) walkDeleteCtx(p *DeleteCtx) error {
 	}
 	return nil
 }
+func (v *legacyCollationVisitor) walkDependentExpr(p *DependentExpr) error {
+	if p == nil {
+		return nil
+	}
+	for _, item0 := range p.Inputs {
+		if err := v.walkExpr(item0); err != nil {
+			return err
+		}
+	}
+	for _, item0 := range p.Lhs {
+		if err := v.walkExpr(item0); err != nil {
+			return err
+		}
+	}
+	if err := v.walkExpr(p.Comparison); err != nil {
+		return err
+	}
+	return nil
+}
 func (v *legacyCollationVisitor) walkDistRange(p *DistRange) error {
 	if p == nil {
 		return nil
@@ -765,6 +819,10 @@ func (v *legacyCollationVisitor) walkExpr(p *Expr) error {
 		return err
 	}
 	switch x := p.Expr.(type) {
+	case *Expr_Dependent:
+		if err := v.walkExpr_Dependent(x); err != nil {
+			return err
+		}
 	case *Expr_F:
 		if err := v.walkExpr_F(x); err != nil {
 			return err
@@ -799,6 +857,15 @@ func (v *legacyCollationVisitor) walkExprList(p *ExprList) error {
 		if err := v.walkExpr(item0); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkExpr_Dependent(p *Expr_Dependent) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkDependentExpr(p.Dependent); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1422,6 +1489,9 @@ func (v *legacyCollationVisitor) walkQuery(p *Query) error {
 		if err := v.walkQuery(item0); err != nil {
 			return err
 		}
+	}
+	if err := v.walkCorrelationSpec(p.Correlation); err != nil {
+		return err
 	}
 	return nil
 }
