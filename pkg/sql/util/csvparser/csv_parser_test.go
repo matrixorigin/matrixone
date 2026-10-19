@@ -727,12 +727,13 @@ func TestRecordLine(t *testing.T) {
 	// Each skip path must move the candidate record start forward, while a
 	// multi-line quoted record must keep the line where its first field began.
 	for _, tc := range []struct {
-		name       string
-		input      string
-		comment    string
-		startingBy string
-		lines      []int64
-		rows       [][]string
+		name           string
+		input          string
+		comment        string
+		startingBy     string
+		skipWhitespace bool
+		lines          []int64
+		rows           [][]string
 	}{
 		{
 			name:  "comments before and between records",
@@ -752,6 +753,11 @@ func TestRecordLine(t *testing.T) {
 		{
 			name:  "comments and blanks before multiline record",
 			input: "#h\n\n   \n#c\na,\"x\ny\"\n#d\nb,2", comment: "#",
+			lines: []int64{3, 5, 8}, rows: [][]string{{"   "}, {"a", "x\ny"}, {"b", "2"}},
+		},
+		{
+			name:  "opt-in whitespace skipping before multiline record",
+			input: "#h\n\n   \n#c\na,\"x\ny\"\n#d\nb,2", comment: "#", skipWhitespace: true,
 			lines: []int64{5, 8}, rows: [][]string{{"a", "x\ny"}, {"b", "2"}},
 		},
 		{
@@ -782,6 +788,7 @@ func TestRecordLine(t *testing.T) {
 					skipCfg.Comment = tc.comment
 					skipCfg.LinesStartingBy = tc.startingBy
 					skipCfg.LinesTerminatedBy = "\n"
+					skipCfg.SkipWhitespaceRecords = tc.skipWhitespace
 					parser, err := NewCSVParser(&skipCfg, NewStringReader(tc.input), blockSize, false)
 					require.NoError(t, err)
 					for i, want := range tc.lines {
