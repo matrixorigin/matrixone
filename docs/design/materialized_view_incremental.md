@@ -26,9 +26,11 @@ semantics. Unsupported expressions, set operations or incompatible branch state
 are rejected for FAST. FORCE selects COMPLETE when the definition is outside the
 incremental subset. COMPLETE supports up to 16 direct base sources, including
 joins. Temporary, external and view sources are rejected.
-FAST string grouping keys require binary collation because its persisted group
-identity uses byte equality; collation-aware grouping falls back to COMPLETE
-under FORCE or is rejected under FAST.
+FAST requires raw-byte equality for every referenced string source column, not
+only the visible grouping columns. This also covers DISTINCT inputs, filters and
+comparisons inside computed groups. Legacy bytewise and opaque binary identities
+are supported; utf8mb4_bin has PAD SPACE equality and is not raw-byte identity.
+Other collations fall back to COMPLETE under FORCE or are rejected under FAST.
 All refresh modes reject subqueries, CTEs, session variables/parameters and
 volatile or time-dependent functions before binding. Their inputs are not
 represented by the direct-source scheduling and snapshot contract.

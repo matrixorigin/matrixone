@@ -15,6 +15,12 @@ create table spoof(a int) properties('mv_materialized'='true');
 create table __mo_mv_state_spoof(a int);
 create table src(k int primary key,v int);
 insert into src values(7,5);
+-- FAST must reject collation-sensitive inputs even when the visible group is integer.
+create table collated_src(id int primary key,g int,k varchar(20) collate utf8mb4_unicode_ci);
+create materialized view mv_bad_distinct refresh fast on change as select g,count(distinct k) c from collated_src group by g;
+create materialized view mv_bad_case refresh fast on change as select case when k='A' then 1 else 0 end g,count(*) c from collated_src group by case when k='A' then 1 else 0 end;
+select count(*)=0 as rejected_collated_fast from mo_catalog.mo_tables where reldatabase='mv_identity' and relname in ('mv_bad_distinct','mv_bad_case');
+drop table collated_src;
 -- Every refresh mode must have complete tracked inputs. Ordinary views retain subqueries.
 create materialized view hidden_input refresh complete on change as select k,sum(v) s from src where exists(select 1 from src s2 where s2.k=src.k) group by k;
 create materialized view volatile_input refresh fast on change as select k,count(*) c from src group by k having rand()>0.5;

@@ -193,6 +193,7 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 			d.Columns = append(d.Columns, column.Name)
 		}
 	}
+	resolvedSources := make(map[string]*TableDef, len(sources))
 	for _, source := range sources {
 		database := string(source.SchemaName)
 		if database == "" {
@@ -206,6 +207,7 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 		if err != nil {
 			return err
 		}
+		resolvedSources[materializedViewSourceKey(database, name)] = def
 		// CREATE resolves unqualified names in the defining session. Persist
 		// that binding in the refresh SQL so a later worker does not have to
 		// resolve the same spelling against an ambiguous set of databases.
@@ -218,27 +220,36 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 	// same database binding accepted by CREATE, including cross-database joins.
 	d.RefreshSQL = materializedViewRefreshSQL(stmt.AsSource)
 	incrementalSpec := ""
+	unsupportedSourceCollation := false
 	if stmt.RefreshTiming == tree.MaterializedViewRefreshOnChange && stmt.RefreshMethod != tree.MaterializedViewRefreshComplete {
 		var stateCols []*ColDef
 		var refreshSQL string
 		incrementalSpec, stateCols, refreshSQL = buildMaterializedViewIncrementalPlanForDatabase(stmt.AsSource, target.Cols, ctx.DefaultDatabase(), materializedViewStateTableName(createView.Database, target.Name))
 		if incrementalSpec != "" {
-			for _, col := range stateCols {
-				col.ColId = uint64(len(target.Cols))
-				target.Cols = append(target.Cols, col)
-			}
-			d.RefreshSQL = refreshSQL
-			d.Incremental = incrementalSpec
 			desc, err := mvdefinition.DecodeIncremental(incrementalSpec)
 			if err != nil {
 				return err
 			}
-			if desc.StateTable != "" {
-				d.State = &mvdefinition.Relation{Database: createView.Database, Name: desc.StateTable}
+			if !materializedViewIncrementalSourceTypesSupported(desc, resolvedSources) {
+				incrementalSpec = ""
+				unsupportedSourceCollation = true
+			} else {
+				for _, col := range stateCols {
+					col.ColId = uint64(len(target.Cols))
+					target.Cols = append(target.Cols, col)
+				}
+				d.RefreshSQL = refreshSQL
+				d.Incremental = incrementalSpec
+				if desc.StateTable != "" {
+					d.State = &mvdefinition.Relation{Database: createView.Database, Name: desc.StateTable}
+				}
 			}
 		}
 	}
 	if stmt.RefreshMethod == tree.MaterializedViewRefreshFast && incrementalSpec == "" {
+		if unsupportedSourceCollation {
+			return moerr.NewNotSupported(ctx.GetContext(), "materialized view FAST refresh is not supported: MV_FAST_UNSUPPORTED_SOURCE_COLLATION")
+		}
 		return moerr.NewNotSupportedf(ctx.GetContext(), "materialized view FAST refresh is not supported: %s", materializedViewIncrementalUnsupportedReason(stmt.AsSource))
 	}
 	if primaryKeys := materializedViewIncrementalPrimaryKey(incrementalSpec); len(primaryKeys) > 0 {
@@ -298,4 +309,49 @@ func buildMaterializedViewDefinition(ctx CompilerContext, stmt *tree.CreateView,
 	}
 	target.Defs = append(target.Defs, &plan.TableDef_DefType{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: []*plan.Property{{Key: mvdefinition.Property, Value: encoded}}}}})
 	return nil
+}
+
+func materializedViewSourceKey(database, table string) string {
+	return strings.ToLower(database) + "\x00" + strings.ToLower(table)
+}
+
+// Delta VALUES transport and serial_full currently use raw string bytes. A
+// source column with collation-aware equality would change comparisons,
+// DISTINCT membership or state keys after a refresh, even when the output
+// group itself is an integer (for example CASE WHEN text = 'x').
+func materializedViewIncrementalSourceTypesSupported(
+	desc *mvdefinition.Incremental,
+	sources map[string]*TableDef,
+) bool {
+	if desc == nil {
+		return false
+	}
+	if len(desc.Branches) > 0 {
+		for _, branch := range desc.Branches {
+			if !materializedViewIncrementalSourceTypesSupported(branch.Description, sources) {
+				return false
+			}
+		}
+		return true
+	}
+	def := sources[materializedViewSourceKey(desc.SourceDatabase, desc.SourceTable)]
+	if def == nil {
+		return false
+	}
+	for _, name := range desc.SourceColumns {
+		found := false
+		for _, col := range def.Cols {
+			if col != nil && strings.EqualFold(col.Name, name) {
+				if !materializedViewIncrementalGroupTypeSupported(col.Typ) {
+					return false
+				}
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
 }

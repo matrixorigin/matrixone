@@ -2063,7 +2063,8 @@ func TestMaterializedViewIncrementalRejectsCollationAwareGroups(t *testing.T) {
 		charset uint8
 		want    bool
 	}{
-		{name: "binary collation", charset: types.CharsetUTF8MB4Bin, want: true},
+		{name: "pad space collation", charset: types.CharsetUTF8MB4Bin, want: false},
+		{name: "opaque binary", charset: types.CharsetBinary, want: true},
 		{name: "default text collation", charset: types.CharsetUTF8, want: false},
 		{name: "unicode case insensitive collation", charset: types.CharsetUTF8MB4UnicodeCI, want: false},
 	} {
@@ -2078,6 +2079,67 @@ func TestMaterializedViewIncrementalRejectsCollationAwareGroups(t *testing.T) {
 			} else {
 				require.Empty(t, encoded)
 			}
+		})
+	}
+}
+
+func TestMaterializedViewIncrementalChecksSourceCollation(t *testing.T) {
+	queries := []struct {
+		name string
+		sql  string
+	}{
+		{"distinct input", "select n_regionkey k, count(distinct n_name) c from nation group by n_regionkey"},
+		{"comparison inside integer group", "select case when n_name = 'A' then 1 else 0 end k, count(*) c from nation group by case when n_name = 'A' then 1 else 0 end"},
+	}
+	for _, tc := range queries {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			for _, def := range mock.ctxt.tables {
+				def.DbName = "tpch"
+				def.DbId = 1
+			}
+			nation := mock.ctxt.tables["nation"]
+			require.NotNil(t, nation)
+			var nameCol *ColDef
+			for _, col := range nation.Cols {
+				if col.Name == "n_name" {
+					nameCol = col
+					break
+				}
+			}
+			require.NotNil(t, nameCol)
+			for _, charset := range []uint8{types.CharsetUTF8MB4UnicodeCI, types.CharsetUTF8MB4Bin} {
+				nameCol.Typ.Charset = uint32(charset)
+				nameCol.Typ.CollationVersion = 0
+				if charset == types.CharsetUTF8MB4UnicodeCI {
+					nameCol.Typ.CollationVersion = uint32(types.CollationVersionV1)
+				}
+				_, err := runOneStmt(mock, t, "create materialized view mv_bad refresh fast on change as "+tc.sql)
+				require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_SOURCE_COLLATION")
+				p, err := runOneStmt(mock, t, "create materialized view mv_fallback refresh force on change as "+tc.sql)
+				require.NoError(t, err)
+				def := p.GetDdl().GetCreateView().GetTableDef()
+				mv, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
+				require.NoError(t, err)
+				require.Empty(t, mv.Incremental)
+			}
+			nameCol.Typ.Charset = uint32(types.CharsetUTF8MB4UnicodeCI)
+			nameCol.Typ.CollationVersion = uint32(types.CollationVersionV1)
+			unrelated, err := runOneStmt(mock, t,
+				"create materialized view mv_unrelated refresh fast on change as select n_regionkey k, count(*) c from nation group by n_regionkey")
+			require.NoError(t, err)
+			unrelatedDef := unrelated.GetDdl().GetCreateView().GetTableDef()
+			unrelatedMV, err := mvdefinition.Decode(mvdefinition.PropertyValue(unrelatedDef, mvdefinition.Property), false)
+			require.NoError(t, err)
+			require.NotEmpty(t, unrelatedMV.Incremental)
+			nameCol.Typ.Charset = uint32(types.CharsetBinary)
+			nameCol.Typ.CollationVersion = 0
+			p, err := runOneStmt(mock, t, "create materialized view mv_binary refresh fast on change as "+tc.sql)
+			require.NoError(t, err)
+			def := p.GetDdl().GetCreateView().GetTableDef()
+			mv, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
+			require.NoError(t, err)
+			require.NotEmpty(t, mv.Incremental)
 		})
 	}
 }

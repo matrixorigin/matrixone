@@ -6,9 +6,9 @@ use mv_e2e;
 -- compares the persisted MV rows with an independent source-table aggregate.
 create table events (
     id bigint primary key,
-    service varchar(20) collate utf8mb4_bin,
+    service varbinary(20),
     duration int,
-    trace_id varchar(20) collate utf8mb4_bin
+    trace_id varbinary(20)
 );
 
 insert into events values
@@ -161,7 +161,7 @@ select row_count=1 and duration_sum=10 and trace_count=1 as rebuilt_group from m
 
 -- DISTINCT averages persist sum/count through snapshot, duplicate deletion,
 -- last-value deletion and group movement, independently of MIN/MAX recompute.
-create table distinct_events(id int primary key,k varchar(20) collate utf8mb4_bin,v int);
+create table distinct_events(id int primary key,k varbinary(20),v int);
 insert into distinct_events values(1,null,10),(2,null,20),(3,null,10),(4,null,null),(5,'api',5);
 create materialized view mv_distinct refresh fast on change as select k,count(*) c,sum(distinct v) s,avg(distinct v) a from distinct_events group by k;
 -- @wait_expect(2, 30)
@@ -189,15 +189,15 @@ drop table distinct_events;
 -- routed only to its own incremental branch.
 create table union_events (
     id bigint primary key,
-    service varchar(20) collate utf8mb4_bin,
+    service varbinary(20),
     duration int,
-    trace_id varchar(20) collate utf8mb4_bin
+    trace_id varbinary(20)
 );
 create table union_archive (
     id bigint primary key,
-    service varchar(20) collate utf8mb4_bin,
+    service varbinary(20),
     duration int,
-    trace_id varchar(20) collate utf8mb4_bin
+    trace_id varbinary(20)
 );
 insert into union_events values (1, 'api', 10, 't1'), (2, 'web', 8, 't2');
 insert into union_archive values (10, 'api', 20, 'u1'), (11, 'db', 30, 'u2');
