@@ -5726,6 +5726,23 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
 	proc := &process.Process{Base: &process.BaseProcess{}}
+	ses.SetTenantInfo(killTestIdentity("sys", 0, "root", 0, "moadmin"))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, "sys", proc.Base.SessionInfo.Account)
+	require.Equal(t, "root", proc.Base.SessionInfo.User)
+	require.Equal(t, "moadmin", proc.Base.SessionInfo.Role)
+	// Statements within one request reuse proc, including prepared EXECUTE.
+	ses.tenant.SetDefaultRole("public")
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, "public", proc.Base.SessionInfo.Role)
+	ses.tenant.SetDefaultRole("moadmin")
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, "moadmin", proc.Base.SessionInfo.Role)
+	ses.SetTenantInfo(nil)
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Empty(t, proc.Base.SessionInfo.Account)
+	require.Empty(t, proc.Base.SessionInfo.User)
+	require.Empty(t, proc.Base.SessionInfo.Role)
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	refreshStatementScopedSessionInfo(ses, proc)
