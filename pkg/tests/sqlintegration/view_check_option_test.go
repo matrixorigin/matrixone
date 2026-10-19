@@ -84,6 +84,14 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 				// A metadata round trip retains NAME_CONST's public column name,
 				// bytes, character set and collation for new and Stmt-only rows.
 				for index, tc := range []struct{ selectSQL, want string }{
+					{`select src.ab as c from (select _binary 'ab') src`, "ab"},
+					{`select src.ab as c from (select _binary 'ab' as ab) src`, "ab"},
+					{`select src.` + "`n + 1`" + ` as c from (select n + 1 from (select 1 as n) t) src`, "2"},
+					{`select src.` + "`a\\b`" + ` as c from (select name_const('a\\b', 1)) src`, "1"},
+					{`select src.ab as c from (select _binary 'ab') src(ab)`, "ab"},
+					{`with src as (select _binary 'ab') select ab as c from src`, "ab"},
+					{`select src.ab as c from ((select _binary 'ab') union all (select _binary 'cd' where false)) src`, "ab"},
+					{`select (select src.ab from (select _binary 'ab') src) as c`, "ab"},
 					{`select name_const('c', 1)`, "1"},
 					{`select name_const('c', 'plain') as c`, "plain"},
 					{`select name_const('c', _binary 'a\\b') as c`, "a\\b"},

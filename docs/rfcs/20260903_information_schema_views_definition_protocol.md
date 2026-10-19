@@ -95,6 +95,15 @@ normal binding: arbitrary CAST/function arguments remain invalid NAME_CONST
 inputs. Both CREATE/ALTER metadata and Stmt-only reads use the same formatter;
 already-frozen definition strings remain unchanged.
 
+Output-name preservation applies to every query block, including derived
+tables, CTEs, UNION branches and scalar/filter subqueries. Current metadata
+uses the resolved projection capture even when a query contains no wildcard;
+only expressions whose rendering changes their name need a generated alias.
+Legacy metadata applies the parser heading rule during each SELECT projection's
+export formatting, including beneath explicit view/derived column lists.
+Explicit aliases, names used by HAVING/ORDER BY, and ordinary star/SAMPLE
+semantics remain intact. Formatting does not mutate the source AST.
+
 The fallback cannot infer metadata that is absent from a legacy row. In
 particular, it does not promise to reconstruct the historical expansion of a
 wildcard; the authoritative freeze begins when the additive fields are written
@@ -533,3 +542,19 @@ Darwin/arm64, CGo CPU wrapper, `matrixone_test`, GOMAXPROCS=2, `-p=2`,
 `-benchtime=200ms`). All nine variants and 27 measured samples report 0 B/op and
 0 allocs/op. Shared-host activity prevents an absolute latency or SQL throughput
 claim; real multi-CN rolling-upgrade fault injection is not claimed.
+
+The subsequent nested-output-name repair reuses resolved names for all current
+query blocks and moves legacy heading preservation into export formatting.
+Before the fix, the planner replay matrix reproduced missing binary-literal,
+qualified-arithmetic and escaped-NAME_CONST names; explicit aliases were
+passing controls. The final matrix covers derived and explicit column lists,
+CTEs, UNION, deeper nesting, scalar/filter subqueries and both replay SQL modes.
+Existing stable-column/integer SQL-shape checks remain unchanged and pass.
+Normal tests passed across the six parser/function/planner/explain packages
+(6,514 roots). Both public SQL roots passed, including two cleanup-checked
+rounds on the same CN comparing current and Stmt-only replay names, bytes,
+charset and collation. That owning integration package took 7.383 seconds on
+this shared Darwin/arm64 host; this is fixture execution evidence, not a speed
+claim. Incremental vet and lint passed for seven affected/consumer packages.
+No protocol or sender-feature inputs changed, so the preceding v122 allocation
+and separate warm-up/three-round sender measurements remain applicable.

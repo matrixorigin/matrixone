@@ -436,6 +436,11 @@ func genViewTableDef(
 			viewSql = stableViewSQL
 			persistedCreateSQL = stableViewSQL
 		}
+	} else if stableSelect, ok := viewSelectWithExpandedStars(stmt, inferred.expandedSelectLists); ok {
+		// The capture contains resolved names for every bound query block, even
+		// without stars. Nested projections need these names before qualified
+		// identifiers or canonical literals are formatted for metadata replay.
+		definitionStmt = stableSelect
 	}
 	if len(colNames) == 0 {
 		definitionStmt = viewSelectWithStableOutputHeadings(definitionStmt, inferred.headings)
@@ -1097,25 +1102,24 @@ func viewSelectExprsWithStableOutputHeadings(
 		if stableExprs[i].As != nil && !stableExprs[i].As.Empty() {
 			continue
 		}
-		if i >= len(headings) || headings[i] == "" {
-			continue
-		}
-		if _, ok := unwrapParenExpr(stableExprs[i].Expr).(*tree.UnresolvedName); ok {
-			continue
-		}
-		persistedExpr := tree.StringWithOpts(
-			stableExprs[i].Expr,
-			dialect.MYSQL,
-			tree.WithSingleQuoteString(),
-			tree.WithQuoteIdentifier(),
-			tree.WithModeIndependentStringLiterals(),
-		)
-		if persistedExpr == headings[i] {
+		if i >= len(headings) || !viewExprNeedsHeadingAlias(stableExprs[i].Expr, headings[i]) {
 			continue
 		}
 		stableExprs[i].As = tree.NewCStr(headings[i], 1)
 	}
 	return stableExprs
+}
+
+func viewExprNeedsHeadingAlias(expr tree.Expr, heading string) bool {
+	if heading == "" {
+		return false
+	}
+	if _, ok := unwrapParenExpr(expr).(*tree.UnresolvedName); ok {
+		return false
+	}
+	return tree.StringWithOpts(expr, dialect.MYSQL,
+		tree.WithSingleQuoteString(), tree.WithQuoteIdentifier(),
+		tree.WithModeIndependentStringLiterals()) != heading
 }
 
 func viewSelectExprsWithExpandedStableHeadings(
@@ -1133,6 +1137,13 @@ func viewSelectExprsWithExpandedStableHeadings(
 		}
 		if i >= len(originalExprs) {
 			continue
+		}
+		// Capture records every resolved heading, but a stable expression such
+		// as a bare column or integer does not need a synthetic alias. Retain
+		// explicit aliases and only publish captured names that formatting needs.
+		if (originalExprs[i].As == nil || originalExprs[i].As.Empty()) &&
+			stableExprs[i].As != nil && !viewExprNeedsHeadingAlias(stableExprs[i].Expr, stableExprs[i].As.Origin()) {
+			stableExprs[i].As = nil
 		}
 		if rewriteClonedExprSubqueriesWithExpandedStars(
 			reflect.ValueOf(originalExprs[i].Expr),

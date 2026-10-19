@@ -7427,8 +7427,21 @@ func TestValidateIdentifierEncoding(t *testing.T) {
 	}
 }
 
-func TestBuildCreateViewNameConstMetadataReplay(t *testing.T) {
+func TestBuildCreateViewMetadataReplay(t *testing.T) {
 	for _, selectSQL := range []string{
+		`select src.ab from (select _binary 'ab') src`,
+		`select src.ab from (select _binary 'ab' as ab) src`,
+		`select src.` + "`n_nationkey + 1`" + ` from (select n_nationkey + 1 from nation) src`,
+		`select src.` + "`a\\b`" + ` from (select name_const('a\\b', 1)) src`,
+		`select src.ab from (select _binary 'ab') src (ab)`,
+		`with src as (select _binary 'ab') select ab from src`,
+		`with src(ab) as (select _binary 'ab') select ab from src`,
+		`select src.ab from ((select _binary 'ab') union all (select _binary 'cd')) src`,
+		`select src.ab from (select x.ab from (select _binary 'ab') x) src`,
+		`select (select src.ab from (select _binary 'ab') src) as c`,
+		`select 1 as c where exists (select src.ab from (select _binary 'ab') src)`,
+		`select * from (select src.ab from (select _binary 'ab') src) x`,
+		`select _binary 'ab' as ab having ab = _binary 'ab' order by ab`,
 		`select name_const('c', 'plain') as c`,
 		`select name_const('c', _binary 'a\\b') as c`,
 		`select length(name_const('c', 'a\\b')) as c`,

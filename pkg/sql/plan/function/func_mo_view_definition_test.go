@@ -127,6 +127,12 @@ func TestViewDefinitionFromPersistedData(t *testing.T) {
 			ok:        true,
 		},
 		{
+			name:      "legacy nested heading survives explicit view columns",
+			persisted: `{"Stmt":"CREATE VIEW v (c) AS SELECT src.ab FROM (SELECT _binary 'ab') src"}`,
+			want:      "(select _binary 0x6162 as `ab`)",
+			ok:        true,
+		},
+		{
 			name:      "legacy explicit view columns are replayable as output aliases",
 			persisted: `{"Stmt":"CREATE VIEW v (view_name) AS SELECT 1"}`,
 			want:      "select `__mo_view_definition`.`view_name` as `view_name` from (select 1) as `__mo_view_definition`(`view_name`)",

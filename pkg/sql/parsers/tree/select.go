@@ -19,6 +19,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 )
 
 type SelectStatement interface {
@@ -1549,13 +1551,16 @@ type SelectExpr struct {
 }
 
 func (node *SelectExpr) Format(ctx *FmtCtx) {
+	start := ctx.Len()
 	node.Expr.Format(ctx)
 	if node.As != nil && !node.As.Empty() {
 		ctx.WriteString(" as ")
 		ctx.WriteIdentifier(Identifier(node.As.Origin()))
 	} else if ctx.viewDefinition {
-		if _, ok := viewNameConstValue(node.Expr); ok {
-			heading, _ := NameConstHeading(node.Expr)
+		// Every query block is formatted through SelectExpr, including CTEs,
+		// UNION branches and subqueries. Preserve its original implicit name
+		// when canonical literal/identifier rendering would change that name.
+		if heading, ok := viewOutputHeading(node.Expr); ok && heading != ctx.String()[start:] {
 			ctx.WriteString(" as ")
 			ctx.WriteIdentifier(Identifier(heading))
 		}
@@ -1945,4 +1950,47 @@ func (node *IndexHint) Format(ctx *FmtCtx) {
 		}
 	}
 	ctx.WriteString(")")
+}
+
+// viewOutputHeading mirrors the parser-derived heading rules for legacy view
+// metadata. Bound view projections carry their resolved aliases from planning.
+func viewOutputHeading(expr Expr) (string, bool) {
+	if expr == nil {
+		return "", false
+	}
+	for {
+		paren, ok := expr.(*ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.Expr
+	}
+	// These projections derive names from their binding or expand to multiple
+	// columns; an expression alias would change their SQL semantics.
+	switch expr.(type) {
+	case *UnresolvedName, UnqualifiedStar, *SampleExpr:
+		return "", false
+	}
+	if heading, ok := NameConstHeading(expr); ok {
+		return heading, true
+	}
+	detectCtx := NewFmtCtx(dialect.MYSQL, WithDateTimeFormatDetection())
+	expr.Format(detectCtx)
+	heading := detectCtx.String()
+	if !detectCtx.HasDateTimeFormatFunction() {
+		return heading, heading != ""
+	}
+
+	var positions []StringLiteralPosition
+	formattedCtx := NewFmtCtx(
+		dialect.MYSQL,
+		WithSingleQuoteString(),
+		WithStringLiteralPositions(&positions),
+	)
+	expr.Format(formattedCtx)
+	if len(positions) == 0 {
+		return heading, heading != ""
+	}
+	formatted := formattedCtx.String()
+	return formatted, formatted != ""
 }
