@@ -567,7 +567,10 @@ func copyFileAndGetMetaFiles(
 	var checksum []byte
 	for i, file := range mFiles {
 		if file.IsDir {
-			panic("not support dir")
+			// GC now owns durable cleanup intents below gc/unpublished/. A
+			// backup of the GC root must not treat that namespace directory as
+			// a GC metadata file.
+			continue
 		}
 		meta := decoder(file.Name)
 		meta.SetIdx(i)

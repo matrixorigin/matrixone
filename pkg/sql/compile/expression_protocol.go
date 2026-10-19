@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -42,6 +43,9 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	// behind the remote-placement fast path or an earlier worker fallback.
 	if features.InvalidDecimalStatisticalResultContract {
 		return moerr.NewNotSupportedNoCtx("decimal statistical result contract requires rebinding")
+	}
+	if features.InvalidTemporalResultContract {
+		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch requires rebinding")
 	}
 	if features.LegacyIntervalUnits {
 		return moerr.NewNotSupportedNoCtx("legacy interval unit contract requires rebinding")
@@ -74,6 +78,9 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
+	if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
+		required = max(required, defines.MORPCVersion122)
+	}
 	if features.IntegerArithmeticDomains {
 		required = max(required, defines.MORPCVersion71)
 	}
@@ -252,4 +259,46 @@ func remoteWorkerProtocolVersion(ctx context.Context, proc *process.Process, wor
 		return 0, false, nil
 	}
 	return resp.GetProtocolVersion.Version, true, nil
+}
+
+// Cached compilations can survive a cluster capability rollback. Reject only
+// the changed result contracts here, before Prepare or statement effects; the
+// existing placement/receiver owners retain all other expression policies.
+func validateTemporalResultProtocol(proc *process.Process, owner any) error {
+	var required int64
+	if queryPlan, ok := owner.(*plan.Plan); ok {
+		if create := createTableForNameAdmission(queryPlan); create != nil {
+			required = create.CtasExecutionProtocolVersion
+		}
+	}
+	var version int64
+	var known bool
+	if proc != nil {
+		if rt := moruntime.ServiceRuntime(proc.GetService()); rt != nil {
+			value, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+			var valid bool
+			version, valid = value.(int64)
+			known = exists && valid
+		}
+	}
+	if required < 0 {
+		return moerr.NewNotSupportedNoCtx("invalid CTAS population protocol requirement requires rebinding")
+	}
+	if required > 0 && (!known || version < required) {
+		return moerr.NewNotSupportedf(context.Background(), "CTAS population requires MORPC protocol version %d", required)
+	}
+	if known && version >= defines.MORPCVersion122 {
+		return nil
+	}
+	features, err := plan.RequiredRemoteExpressionFeatures(owner)
+	if err != nil {
+		return err
+	}
+	if features.InvalidTemporalResultContract {
+		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch requires rebinding")
+	}
+	if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
+		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 122")
+	}
+	return nil
 }
