@@ -670,6 +670,101 @@ func (s *Scope) removeFkeysRelationships(c *Compile, dbName string) error {
 	return nil
 }
 
+// checkConstraintNamesAvailable reports ER_CHECK_CONSTRAINT_DUP_NAME (3822)
+// when any CHECK of the new table reuses a name already declared by another
+// table in the same database.
+func checkConstraintNamesAvailable(ctx context.Context, dbSource engine.Database, newTable string, checks []*plan.CheckDef) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	wanted := make(map[string]struct{}, len(checks))
+	for _, check := range checks {
+		if check != nil {
+			wanted[strings.ToLower(check.GetName())] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return nil
+	}
+	relNames, err := dbSource.Relations(ctx)
+	if err != nil {
+		return err
+	}
+	for _, relName := range relNames {
+		if relName == newTable {
+			continue
+		}
+		rel, err := dbSource.Relation(ctx, relName, nil)
+		if err != nil {
+			// A sibling may vanish between Relations and Relation when an
+			// internal recreate (e.g. TRUNCATE) drops it in the same
+			// transaction, or when a concurrent DROP commits. Nothing remains
+			// to collide with.
+			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				continue
+			}
+			return err
+		}
+		def := rel.GetTableDef(ctx)
+		// Physical partitions and index tables borrow their logical owner's
+		// identities. Only logical tables participate in the schema namespace.
+		if def == nil || features.IsPartition(def.FeatureFlag) || features.IsIndexTable(def.FeatureFlag) {
+			continue
+		}
+		checks, err := checkConstraintIdentities(ctx, def)
+		if err != nil {
+			return err
+		}
+		for _, check := range checks {
+			if check == nil {
+				continue
+			}
+			if _, dup := wanted[strings.ToLower(check.GetName())]; dup {
+				return moerr.NewDuplicateCheckConstraintName(ctx, check.GetName())
+			}
+		}
+	}
+	return nil
+}
+
+// validateRenamedCheckConstraintNames rejects a table rename whose CHECK
+// names would collide once generated <table>_chk_<n> names move with the
+// table. An intra-table duplicate (a rewritten generated name landing on an
+// explicit name of the same table) or a name already owned by a sibling
+// breaks per-schema uniqueness and mis-attributes information_schema
+// metadata, so the rename is refused with ER_CHECK_CONSTRAINT_DUP_NAME (3822)
+// before any alter request applies. oldName is passed as the sibling scan's
+// self reference because the catalog still stores the pre-rename name here.
+func (c *Compile) validateRenamedCheckConstraintNames(database, oldName, newName string, checks []*plan.CheckDef) error {
+	if len(checks) == 0 {
+		return nil
+	}
+	renamed := plan2.RenameGeneratedCheckConstraintNames(checks, oldName, newName)
+	return c.validateIntroducedCheckConstraintNames(database, oldName, checks, renamed)
+}
+
+// composeCheckNamesAcrossAlterActions folds table-generated CHECK name moves
+// into the check definitions carried by a rename-column request. A combined
+// `ALTER TABLE t RENAME TO u, RENAME COLUMN a TO b` must present the final
+// names in one set: the rename-column request overwrites the catalog checks,
+// so carrying the pre-rename names would leave the renamed table owning
+// <t>_chk_<n> and block recreating `t`.
+func composeCheckNamesAcrossAlterActions(qry *plan.AlterTable, checks []*plan.CheckDef) []*plan.CheckDef {
+	if len(checks) == 0 {
+		return checks
+	}
+	composed := checks
+	for _, action := range qry.GetActions() {
+		if action == nil {
+			continue
+		}
+		if act, ok := action.Action.(*plan.AlterTable_Action_AlterName); ok {
+			composed = plan2.RenameGeneratedCheckConstraintNames(composed, act.AlterName.OldName, act.AlterName.NewName)
+		}
+	}
+	return composed
+}
+
 func isMissingTableByNameForDropDatabase(err error) bool {
 	return moerr.IsMoErrCode(err, moerr.ErrNoSuchTable)
 }
@@ -1576,6 +1671,26 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				}
 				oldName = tblName
 				newName = physicalTemporaryTableName(c.proc, dbName, newName)
+			} else if trusted, _ := c.proc.Ctx.Value(defines.TrustedCheckConstraintNames{}).(bool); !trusted {
+				// Generated CHECK names follow the table; validate the
+				// resulting set before the rename commits. Temporary tables
+				// mirror CREATE TABLE's exemption, and their generated names
+				// are tied to a session-scoped physical name.
+				// A prior step of the same RENAME TABLE may already have moved
+				// this relation and its generated CHECK names. The logical plan
+				// still carries the original names; admit the transaction's current
+				// identities, which are the ones storage will actually rename.
+				currentDef := rel.GetTableDef(c.proc.Ctx)
+				if currentDef == nil {
+					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				}
+				catalogChecks, err := checkConstraintIdentities(c.proc.Ctx, currentDef)
+				if err != nil {
+					return err
+				}
+				if err := c.validateRenamedCheckConstraintNames(dbName, oldName, newName, catalogChecks); err != nil {
+					return err
+				}
 			}
 
 			reqs = append(reqs, api.NewRenameTableReq(
@@ -1585,15 +1700,21 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			))
 		case *plan.AlterTable_Action_AlterRenameColumn:
 			hasDefReplace = true
-			if err := c.requireCheckRenameProtocol(qry.GetCopyTableDef().GetChecks()); err != nil {
+			checks := qry.GetCopyTableDef().GetChecks()
+			if err := c.requireCheckRenameProtocol(checks); err != nil {
 				return err
 			}
+			// When the same ALTER also renames the table, this request must
+			// already carry the final CHECK names; it overwrites the catalog
+			// checks below, so the separate rename-table rewrite must not be
+			// lost.
+			checks = composeCheckNamesAcrossAlterActions(qry, checks)
 			reqs = append(reqs, api.NewRenameColumnReqWithChecks(
 				did, tid,
 				act.AlterRenameColumn.OldName, // origin name
 				act.AlterRenameColumn.NewName, // origin name
 				uint32(act.AlterRenameColumn.SequenceNum),
-				qry.GetCopyTableDef().GetChecks(),
+				checks,
 			))
 
 		case *plan.AlterTable_Action_AlterReplaceDef:
@@ -1947,6 +2068,25 @@ func (s *Scope) createTable(c *Compile, tableCreated func()) error {
 			return nil
 		}
 		return moerr.NewTableAlreadyExists(c.proc.Ctx, tblName)
+	}
+
+	// MySQL semantics: CHECK constraint names are unique per schema. The
+	// information_schema tables join constraints on
+	// (CONSTRAINT_SCHEMA, CONSTRAINT_NAME) only, so a duplicate name would
+	// attribute another table's CHECK expression to the new table. Validate
+	// both explicit names and generated <table>_chk_<n> names against the
+	// sibling tables before creating.
+	//
+	// Internal recreations that keep an owned source's identity (ALTER ...
+	// COPY replica, partition backing tables, TRUNCATE's drop+create) carry
+	// defines.TrustedCheckConstraintNames and skip this scan: the source of
+	// their CHECK names is replaced or shares ownership, it is not an
+	// unrelated sibling.
+	trustedChecks, _ := c.proc.Ctx.Value(defines.TrustedCheckConstraintNames{}).(bool)
+	if !qry.GetTemporary() && !trustedChecks {
+		if err := c.validateIntroducedCheckConstraintNames(dbName, tblName, nil, qry.GetTableDef().GetChecks()); err != nil {
+			return err
+		}
 	}
 
 	if !c.disableLock && !c.createNamePinsAdmitted {
@@ -4183,8 +4323,9 @@ func (s *Scope) TruncateTable(c *Compile) error {
 		createOpts = createOpts.WithKeepLogicalId(oldLogicalId)
 	}
 	// Same reason as the ALTER ... COPY replica: the recreate goes through regenerated
-	// DDL, which cannot express relkind.
-	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType())
+	// DDL, which cannot express relkind. It also keeps the table's CHECK constraint
+	// names, so skip the 3822 sibling scan for this internal recreate.
+	createOpts = createOpts.WithKeepRelKind(tableDef.GetTableType()).WithTrustedCheckConstraintNames()
 	if truncate.IsDelete {
 		rows, err := rel.Rows(c.proc.Ctx)
 		if err != nil {
@@ -5260,7 +5401,16 @@ func (s *Scope) TableClone(c *Compile) error {
 
 	if clonePlan.CreateTable != nil {
 		s.Plan = clonePlan.CreateTable
-		if err = s.createTable(c, func() { created = true }); err != nil {
+		originalCtx := c.proc.Ctx
+		marked := c.proc.GetSessionInfo() != nil && c.proc.GetSessionInfo().IsRestore
+		if plan2.IsCheckConstraintRestoreReplay(originalCtx, marked) {
+			c.proc.Ctx = context.WithValue(originalCtx, defines.TrustedCheckConstraintNames{}, true)
+		}
+		err = func() error {
+			defer func() { c.proc.Ctx = originalCtx }()
+			return s.createTable(c, func() { created = true })
+		}()
+		if err != nil {
 			return err
 		}
 		if !created {

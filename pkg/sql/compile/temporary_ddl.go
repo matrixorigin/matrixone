@@ -116,6 +116,8 @@ func (s *Scope) createSessionTemporaryTable(c *Compile, owner process.TemporaryT
 	physical := stage.TemporaryTableName(db, alias)
 	schemaPlan := planutil.DeepCopyPlan(s.Plan)
 	schemaPlan.GetDdl().GetCreateTable().CreateAsSelectSql = ""
+	schemaPlan.GetDdl().GetCreateTable().CtasExecutionProtocolVersion = 0
+	schemaPlan.GetDdl().Query = nil
 	v, ok := moruntime.ServiceRuntime(c.proc.GetService()).GetGlobalVariables(moruntime.InternalSQLExecutor)
 	if !ok {
 		return moerr.NewInternalError(c.proc.Ctx, "temporary DDL executor is unavailable")

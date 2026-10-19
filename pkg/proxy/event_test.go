@@ -17,6 +17,7 @@ package proxy
 import (
 	"context"
 	"fmt"
+	"io"
 	"net"
 	"os"
 	"testing"
@@ -27,14 +28,13 @@ import (
 	"github.com/lni/goutils/leaktest"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 )
 
 func TestEventTypeDesc(t *testing.T) {
-	e1 := TypeKill
-	assert.Equal(t, "Kill", e1.String())
-	e1 = TypeSetVar
+	e1 := TypeSetVar
 	assert.Equal(t, "SetVar", e1.String())
 	e1 = TypeQuit
 	assert.Equal(t, "Quit", e1.String())
@@ -55,12 +55,12 @@ func TestMakeEvent(t *testing.T) {
 		require.False(t, r)
 
 		e, r = makeEvent(makeSimplePacket("kill query 123"), nil)
-		require.NotNil(t, e)
-		require.True(t, r)
+		require.Nil(t, e)
+		require.False(t, r)
 
 		e, r = makeEvent(makeSimplePacket("kiLL Query 12"), nil)
-		require.NotNil(t, e)
-		require.True(t, r)
+		require.Nil(t, e)
+		require.False(t, r)
 
 		e, r = makeEvent(makeSimplePacket("set "), nil)
 		require.Nil(t, e)
@@ -332,29 +332,45 @@ func runEventTest(t *testing.T,
 	checkFn(res, cn1, errC, cc2)
 }
 
-func TestKillEvent(t *testing.T) {
-	runEventTest(t,
-		func(connID uint32, client net.Conn, errC chan error) {
-			// client2 send kill query 10, which is on server1.
-			if _, err := client.Write(makeSimplePacket(fmt.Sprintf("kill query %d", connID))); err != nil {
-				errC <- err
-				return
-			}
-		},
-		func(res chan []byte, cn *CNServer, errC chan error, _ ClientConn) {
-			addr := string(<-res)
-			// This test case is mainly focus on if the query is route to the
-			// right cn server, but not the result of the query. So we just
-			// check the address which is handled is equal to cn1, but not cn2.
-			require.Equal(t, cn.addr, addr)
-
-			select {
-			case err := <-errC:
-				t.Fatalf("require no error, but got %v", err)
-			default:
-			}
-		},
-	)
+func TestKillUsesAuthenticatedTunnel(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	rt := runtime.DefaultRuntime()
+	tun := newTunnel(ctx, rt.Logger(), newCounterSet())
+	clientProxy, clientSide := net.Pipe()
+	backendProxy, backendSide := net.Pipe()
+	defer clientSide.Close()
+	defer backendSide.Close()
+	defer tun.Close()
+	cc := newMockClientConn(clientProxy, "current-identity", clientInfo{}, nil, tun)
+	sc := newMockServerConn(backendProxy)
+	require.NoError(t, tun.run(cc, sc))
+	request := makeSimplePacket("kill query 123 /* keep original bytes */")
+	writeDone := make(chan error, 1)
+	go func() { _, err := clientSide.Write(request); writeDone <- err }()
+	require.NoError(t, backendSide.SetReadDeadline(time.Now().Add(5*time.Second)))
+	got := make([]byte, len(request))
+	_, err := io.ReadFull(backendSide, got)
+	require.NoError(t, err)
+	require.NoError(t, <-writeDone)
+	require.Equal(t, request, got)
+	require.True(t, tun.hasInFlightClientRequest())
+	response := makeOKPacket(8)
+	go func() { _, err := backendSide.Write(response); writeDone <- err }()
+	require.NoError(t, clientSide.SetReadDeadline(time.Now().Add(5*time.Second)))
+	got = make([]byte, len(response))
+	_, err = io.ReadFull(clientSide, got)
+	require.NoError(t, err)
+	require.NoError(t, <-writeDone)
+	require.Equal(t, response, got)
+	// A following command and its response remain synchronized on the same socket.
+	request = makeSimplePacket("select 1")
+	go func() { _, err := clientSide.Write(request); writeDone <- err }()
+	got = make([]byte, len(request))
+	_, err = io.ReadFull(backendSide, got)
+	require.NoError(t, err)
+	require.NoError(t, <-writeDone)
+	require.Equal(t, request, got)
 }
 
 func TestSetVarEvent(t *testing.T) {

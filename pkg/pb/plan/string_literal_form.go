@@ -392,6 +392,10 @@ const (
 // TableCollationFunction requires MORPC v118 for INTERNAL_TABLE_COLLATION's
 // execution identity, including directly authored catalog expressions.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
+// TimestampDatetimeResultContracts requires MORPC v122 for appended unary
+// TIMESTAMP identities; released unary identities retain TIMESTAMP vectors.
+// DynamicTimeResultContracts uses the same epoch for prepared TIME results
+// over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
 type RemoteExpressionFeatures struct {
 	DependentPrograms             bool
 	CalendarIntervalNormalization bool
@@ -421,6 +425,7 @@ type RemoteExpressionFeatures struct {
 	SpatialDistanceSemantics          bool
 	PreparedPrecisionScalar           bool
 	DecimalDivisionSemantics          bool
+	DecimalIntegerDivisionSemantics   bool // v121: unsigned DIV overload and display precision
 	// SpecialIntegerConsumers requires v98 independently of private CASTs.
 	SpecialIntegerConsumers                 bool
 	TemporalResultContracts                 bool
@@ -430,6 +435,8 @@ type RemoteExpressionFeatures struct {
 	WeekSessionDefault                      bool
 	MediumIntAssignmentBounds               bool
 	DateNumericResultContracts              bool
+	TimestampDatetimeResultContracts        bool
+	DynamicTimeResultContracts              bool
 	DecimalStatisticalResultContracts       bool
 	TableCollationFunction                  bool
 	InvalidDecimalStatisticalResultContract bool
@@ -459,12 +466,14 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.PreparedPrecisionScalar ||
 		features.SpecialIntegerConsumers ||
 		features.DecimalDivisionSemantics ||
+		features.DecimalIntegerDivisionSemantics ||
 		features.TemporalResultContracts ||
 		features.InvalidTemporalResultContract ||
 		features.NormalizedIntervalUnits ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
 		features.MediumIntAssignmentBounds ||
+		features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
 		features.TableCollationFunction ||
@@ -990,6 +999,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					(current.Typ.Id == 32 || current.Typ.Id == 33 || current.Typ.Id == 34) {
 					features.DecimalDivisionSemantics = true
 				}
+				if id == 14 && (overload == 1 || (overload == 0 && current.Typ.Width > 0 && current.Typ.Width <= 20 && current.Typ.Scale == 0)) {
+					features.DecimalIntegerDivisionSemantics = true
+				}
 				// Function IDs live in the function registry, which cannot be
 				// imported here because the planner depends on this package.
 				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
@@ -1010,6 +1022,16 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
 					features.WeekSessionDefault = true
+				}
+				timestamp, dynamicTime := TemporalResultContractFeatures(current)
+				features.TimestampDatetimeResultContracts = features.TimestampDatetimeResultContracts || timestamp
+				features.DynamicTimeResultContracts = features.DynamicTimeResultContracts || dynamicTime
+				if id == 250 && overload >= 0 && overload <= 10 { // TIMESTAMP
+					want := planTimestampTypeID
+					if overload >= 5 {
+						want = planDatetimeTypeID
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
 				}
 				// Released overloads retain their physical vector ABI. The new
 				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended
@@ -1714,4 +1736,17 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 	default:
 		return false
 	}
+}
+
+// TemporalResultContractFeatures classifies one expression before folding.
+// Native TIME inputs keep their released physical result contract.
+func TemporalResultContractFeatures(expr *Expr) (timestampDatetime, dynamicTime bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false, false
+	}
+	id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+	return id == 250 && overload >= 6 && overload <= 10,
+		(id == 41 || id == 378) && expr.Typ.Id == planTimeTypeID &&
+			len(fn.Args) == 2 && fn.Args[0] != nil && fn.Args[0].Typ.Id != planTimeTypeID
 }
