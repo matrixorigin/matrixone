@@ -57,7 +57,7 @@ const (
 	cnPortBaseCount                    = uint64(2)
 
 	// ArrowLoadRolloutShutdown is a test-only boundary at the beginning of
-	// Cluster.Close. It is inactive unless a test installs the matching fault
+	// Cluster.Stop or Cluster.Close. It is inactive unless a test installs the matching fault
 	// point, and lets a lifecycle test observe that shutdown has actually
 	// entered before it releases an admitted statement.
 	ArrowLoadRolloutShutdown = "fj/embed/arrow_load_rollout_shutdown"
@@ -258,9 +258,20 @@ func (c *cluster) startServiceLocked(op *operator) error {
 	return nil
 }
 
+// Stop shuts down services and releases test admission while retaining the
+// port lease for Start, including configuration changes made while stopped.
+// The caller must eventually call Close to release the retained lease.
+func (c *cluster) Stop() error {
+	return c.shutdown(false)
+}
+
 func (c *cluster) Close() error {
+	return c.shutdown(true)
+}
+
+func (c *cluster) shutdown(releasePorts bool) error {
 	// Keep this before the cluster lock and service teardown. A WAIT fault here
-	// observes the real Close invocation, rather than merely the launch of a
+	// observes the real shutdown invocation, rather than merely the launch of a
 	// goroutine that may not have entered shutdown yet.
 	if c.options.testing {
 		fault.TriggerFault(ArrowLoadRolloutShutdown)
@@ -277,7 +288,7 @@ func (c *cluster) Close() error {
 	}
 	admissionErr := c.releaseTestAdmissionLocked()
 	err = errors.Join(err, admissionErr)
-	if admissionErr == nil {
+	if admissionErr == nil && releasePorts {
 		started = time.Now()
 		portErr := c.releasePortLeaseLocked()
 		c.logTestSetup("port-lease-release", time.Since(started), portErr)

@@ -19,10 +19,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"os"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -280,88 +278,46 @@ func (idx *HnswModel[T]) SaveToFile() error {
 	destroyed = true
 	idx.Index = nil
 
-	// Do NOT set filesize here. filesize == 0 means file didn't save to database yet
-	/*
-		fi, err := os.Stat(idx.Path)
-		if err != nil {
-			return err
-		}
-		idx.FileSize := fi.Size()
-	*/
-
 	return nil
 }
 
-// Generate the SQL to update the secondary index tables.
-// 1. store the index file into the index table
-func (idx *HnswModel[T]) ToSql(cfg vectorindex.IndexTableConfig) ([]string, error) {
-
-	err := idx.SaveToFile()
-	if err != nil {
-		return nil, err
+// PreparePersistence finishes the model artifact before SQL or admission checks.
+func (idx *HnswModel[T]) PreparePersistence() error {
+	if err := idx.SaveToFile(); err != nil {
+		return err
 	}
-
-	if len(idx.Path) == 0 {
-		// file path is empty string. No file is written
-		return []string{}, nil
+	if idx.Path == "" {
+		idx.FileSize = 0
+		return nil
 	}
-
 	fi, err := os.Stat(idx.Path)
 	if err != nil {
-		return nil, err
+		return err
 	}
-
-	filesz := fi.Size()
-	offset := int64(0)
-	chunksz := int64(0)
-	chunkid := int64(0)
-
-	idx.FileSize = filesz
-
-	if idx.FileSize == 0 {
-		return []string{}, nil
+	if !fi.Mode().IsRegular() {
+		return moerr.NewInvalidInputNoCtx("index artifact must be a regular file")
 	}
-
-	logutil.Infof("HnswModel.ToSql idx %s, len = %d\n", idx.Id, idx.Len.Load())
-
-	sqls := make([]string, 0, 5)
-
-	sql := fmt.Sprintf("INSERT INTO %s VALUES ", sqlquote.QualifiedIdent(cfg.DbName, cfg.IndexTable))
-	values := make([]string, 0, int64(math.Ceil(float64(filesz)/float64(vectorindex.MaxChunkSize))))
-	n := 0
-	for offset = 0; offset < filesz; {
-		if offset+vectorindex.MaxChunkSize < filesz {
-			chunksz = vectorindex.MaxChunkSize
-
-		} else {
-			chunksz = filesz - offset
-		}
-
-		url := fmt.Sprintf("file://%s?offset=%d&size=%d", idx.Path, offset, chunksz)
-		tuple := fmt.Sprintf("('%s', %d, load_file(cast('%s' as datalink)), 0)", idx.Id, chunkid, url)
-		values = append(values, tuple)
-
-		// offset and chunksz
-		offset += chunksz
-		chunkid++
-
-		n++
-		if n == 2000 {
-			newsql := sql + strings.Join(values, ", ")
-			sqls = append(sqls, newsql)
-			values = values[:0]
-			n = 0
-		}
+	idx.FileSize = fi.Size()
+	if idx.Checksum == "" {
+		idx.Checksum, err = vectorindex.CheckSum(idx.Path)
 	}
+	return err
+}
 
-	if len(values) > 0 {
-		newsql := sql + strings.Join(values, ", ")
-		sqls = append(sqls, newsql)
+// PersistChunks opens only the artifact prepared by this model's native owner.
+func (idx *HnswModel[T]) PersistChunks(writer *sqlexec.ChunkInserter) error {
+	if idx.Path == "" || idx.FileSize == 0 {
+		return nil
 	}
-
-	//sql += strings.Join(values, ", ")
-	//return []string{sql}, nil
-	return sqls, nil
+	fp, err := os.Open(idx.Path)
+	if err != nil {
+		return err
+	}
+	defer fp.Close()
+	if _, err = writer.WriteRange(fp, 0, idx.FileSize, idx.Id, 0, int(vectorindex.Tag_ModelChunk)); err != nil {
+		return err
+	}
+	return writer.Flush()
 }
 
 func (idx *HnswModel[T]) ToDeleteSql(cfg vectorindex.IndexTableConfig) ([]string, error) {

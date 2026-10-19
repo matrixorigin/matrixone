@@ -21,8 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
-	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
@@ -43,18 +42,15 @@ func (minusAll *MinusAll) Prepare(proc *process.Process) error {
 	} else {
 		minusAll.OpAnalyzer.Reset()
 	}
-	minusAll.ctr.hashTable, err = hashmap.NewStrHashMap(true, proc.Mp())
+	minusAll.ctr.hashTable, err = minusAll.NewHashMap(proc)
 	if err != nil {
 		return err
 	}
-	if err = minusAll.ctr.keyEvaluator.Prepare(proc, minusAll.KeyExprs); err != nil {
+	if err = minusAll.ctr.keyEvaluator.Prepare(proc, minusAll.KeyExprs, minusAll.ExpressionAllocation()); err != nil {
 		minusAll.ctr.cleanHashMap()
 		return err
 	}
-	if len(minusAll.ctr.selected) == 0 {
-		minusAll.ctr.selected = make([]uint8, hashmap.UnitLimit)
-		minusAll.ctr.zeroes = make([]uint8, hashmap.UnitLimit)
-	}
+	minusAll.ctr.iterator = minusAll.ctr.hashTable.NewIterator()
 	return nil
 }
 
@@ -63,8 +59,12 @@ func (minusAll *MinusAll) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch minusAll.ctr.state {
 		case buildingHashMap:
-			if err := minusAll.build(proc, analyzer); err != nil {
+			done, err := minusAll.build(proc, analyzer)
+			if err != nil {
 				return vm.CancelResult, err
+			}
+			if !done {
+				return vm.CallResult{Status: vm.ExecYield}, nil
 			}
 			analyzer.Alloc(minusAll.ctr.hashTable.Size())
 			minusAll.ctr.state = probingHashMap
@@ -85,37 +85,40 @@ func (minusAll *MinusAll) Call(proc *process.Process) (vm.CallResult, error) {
 	}
 }
 
-func (minusAll *MinusAll) build(proc *process.Process, analyzer process.Analyzer) error {
+func (minusAll *MinusAll) build(proc *process.Process, analyzer process.Analyzer) (bool, error) {
 	ctr := &minusAll.ctr
 	child, err := vm.GetChild(minusAll, 1)
 	if err != nil {
-		return err
+		return false, err
 	}
 	for {
 		input, err := vm.ChildrenCall(child, proc, analyzer)
 		if err != nil {
-			return err
+			return false, err
+		}
+		if input.Status == vm.ExecYield {
+			return false, nil
 		}
 		if input.Batch == nil {
-			return nil
+			return true, nil
 		}
 		if input.Batch.IsEmpty() {
 			continue
 		}
 		keyVecs, err := ctr.keyEvaluator.Eval(proc, input.Batch)
 		if err != nil {
-			return err
+			return false, err
 		}
-		itr := ctr.hashTable.NewIterator()
+		itr := ctr.iterator
 		count := input.Batch.RowCount()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
 			values, _, err := itr.Insert(i, n, keyVecs)
 			if err != nil {
-				return err
+				return false, err
 			}
-			if err = ctr.ensureRemaining(int(ctr.hashTable.GroupCount()), proc.Mp()); err != nil {
-				return err
+			if err = ctr.ensureRemaining(int(ctr.hashTable.GroupCount()), proc.Mp(), &minusAll.SetOperationAllocation); err != nil {
+				return false, err
 			}
 			for _, value := range values {
 				if value == 0 {
@@ -123,7 +126,7 @@ func (minusAll *MinusAll) build(proc *process.Process, analyzer process.Analyzer
 				}
 				idx := value - 1
 				if ctr.remaining[idx] == math.MaxUint64 {
-					return moerr.NewInternalErrorNoCtx("EXCEPT ALL multiplicity overflow")
+					return false, moerr.NewInternalErrorNoCtx("EXCEPT ALL multiplicity overflow")
 				}
 				ctr.remaining[idx]++
 			}
@@ -142,6 +145,10 @@ func (minusAll *MinusAll) probe(proc *process.Process, analyzer process.Analyzer
 		if err != nil {
 			return false, err
 		}
+		if input.Status == vm.ExecYield {
+			*result = input
+			return false, nil
+		}
 		if input.Batch == nil {
 			return true, nil
 		}
@@ -153,9 +160,9 @@ func (minusAll *MinusAll) probe(proc *process.Process, analyzer process.Analyzer
 			continue
 		}
 		if ctr.bat == nil {
-			ctr.bat = batch.NewWithSize(len(input.Batch.Vecs))
-			for i := range input.Batch.Vecs {
-				ctr.bat.Vecs[i] = vector.NewVec(*input.Batch.Vecs[i].GetType())
+			ctr.bat, err = minusAll.NewBatch(proc, input.Batch)
+			if err != nil {
+				return false, err
 			}
 		}
 		ctr.bat.CleanOnlyData()
@@ -163,11 +170,12 @@ func (minusAll *MinusAll) probe(proc *process.Process, analyzer process.Analyzer
 		if err != nil {
 			return false, err
 		}
-		itr := ctr.hashTable.NewIterator()
+		itr := ctr.iterator
 		count := input.Batch.RowCount()
 		for i := 0; i < count; i += hashmap.UnitLimit {
 			n := min(count-i, hashmap.UnitLimit)
-			copy(ctr.selected[:n], ctr.zeroes[:n])
+			selection, zeroes := minusAll.Scratch()
+			copy(selection[:n], zeroes[:n])
 			values, _, err := itr.Find(i, n, keyVecs)
 			if err != nil {
 				return false, err
@@ -178,13 +186,13 @@ func (minusAll *MinusAll) probe(proc *process.Process, analyzer process.Analyzer
 					ctr.remaining[value-1]--
 					continue
 				}
-				ctr.selected[row] = 1
+				selection[row] = 1
 				selected++
 			}
 			ctr.bat.AddRowCount(selected)
 			if selected > 0 {
 				for col := range input.Batch.Vecs {
-					if err := ctr.bat.Vecs[col].UnionBatch(input.Batch.Vecs[col], int64(i), selected, ctr.selected[:n], proc.Mp()); err != nil {
+					if err := ctr.bat.Vecs[col].UnionBatch(input.Batch.Vecs[col], int64(i), selected, selection[:n], proc.Mp()); err != nil {
 						return false, err
 					}
 				}
@@ -199,36 +207,8 @@ func (minusAll *MinusAll) probe(proc *process.Process, analyzer process.Analyzer
 	}
 }
 
-func (ctr *container) ensureRemaining(length int, mp *mpool.MPool) error {
-	if length <= len(ctr.remaining) {
-		return nil
-	}
-	oldLength := len(ctr.remaining)
-	if length <= cap(ctr.remaining) {
-		ctr.remaining = ctr.remaining[:length]
-		clear(ctr.remaining[oldLength:])
-		return nil
-	}
-	capacity := cap(ctr.remaining)
-	if capacity == 0 {
-		capacity = 1
-	}
-	for capacity < length {
-		if capacity > math.MaxInt/2 {
-			capacity = length
-			break
-		}
-		capacity *= 2
-	}
-	next, err := mpool.MakeSlice[uint64](capacity, mp, true)
-	if err != nil {
-		return err
-	}
-	copy(next, ctr.remaining)
-	clear(next[oldLength:])
-	if cap(ctr.remaining) > 0 {
-		mpool.FreeSlice(mp, ctr.remaining)
-	}
-	ctr.remaining = next[:length]
-	return nil
+func (ctr *container) ensureRemaining(length int, mp *mpool.MPool, allocation *colexec.SetOperationAllocation) error {
+	var err error
+	ctr.remaining, err = colexec.GrowSetOperationSlice(ctr.remaining, length, mp, allocation)
+	return err
 }

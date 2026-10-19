@@ -617,7 +617,7 @@ func TestCheckpointCleanerCleanupSurvivesRestart(t *testing.T) {
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }
 
-func TestCheckpointCleanerCleanupFailureDoesNotFailStopProcess(t *testing.T) {
+func TestCheckpointCleanerCleanupFailureDoesNotFailReplayOrProcess(t *testing.T) {
 	ctx := context.Background()
 	objectBase, err := fileservice.NewMemoryFS(
 		"shared", fileservice.DisabledCacheConfig, nil)
@@ -628,6 +628,7 @@ func TestCheckpointCleanerCleanupFailureDoesNotFailStopProcess(t *testing.T) {
 	require.NoError(t, err)
 	cleaner := NewCheckpointCleaner(
 		ctx, "", objectFS, nil, nil, WithUnpublishedCleanupFS(markerFS),
+		WithUnpublishedCleanupTNShardID(3),
 	).(*checkpointCleaner)
 	cleaner.DisableGC()
 	name := objectio.MockObjectName().String()
@@ -638,6 +639,12 @@ func TestCheckpointCleanerCleanupFailureDoesNotFailStopProcess(t *testing.T) {
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte{1}}},
 	}))
 	cleaner.AbandonUnpublishedObject(name)
+	marker, err := ioutil.RecordCCPRUnpublishedObjectCleanup(ctx, objectFS,
+		ioutil.UnpublishedObject{
+			File: name, DBID: 1, TableID: 2, TNShardID: 3,
+			SyncProtectionJobID: "expired-job", SyncProtectionValidTS: 1,
+		})
+	require.NoError(t, err)
 	objectFS.rejectObjectDelete.Store(true)
 
 	// The cleanup error is logged and retained, but Process returns the ordinary
@@ -645,6 +652,20 @@ func TestCheckpointCleanerCleanupFailureDoesNotFailStopProcess(t *testing.T) {
 	require.NoError(t, cleaner.Process(ctx, nil))
 	_, err = objectBase.StatFile(ctx, name)
 	require.NoError(t, err)
+	// Auxiliary cleanup failure must also preserve startup availability and
+	// retain its durable owner for retry after the object service recovers.
+	require.NoError(t, cleaner.Replay(ctx))
+	require.True(t, cleaner.mutation.replayDone)
+	_, err = objectBase.StatFile(ctx, name)
+	require.NoError(t, err)
+	_, err = objectBase.StatFile(ctx, marker)
+	require.NoError(t, err)
+	objectFS.rejectObjectDelete.Store(false)
+	require.NoError(t, cleaner.Process(ctx, nil))
+	_, err = objectBase.StatFile(ctx, name)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+	_, err = objectBase.StatFile(ctx, marker)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
 }
 
 func TestCheckpointCleanerCleanupAdmissionIsBounded(t *testing.T) {

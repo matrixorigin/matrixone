@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -131,6 +132,7 @@ func newAutoIncrementAlterOptimizer(t testing.TB) *MockOptimizer {
 }
 
 func TestAlterTableCharsetAdmission(t *testing.T) {
+	databaseDefaultsProtocol(t, defines.MORPCVersion118)
 	for _, tc := range []struct {
 		option string
 		err    string
@@ -506,6 +508,82 @@ func TestAlterTableCopySupportsExternalForeignKeyOnAddedColumn(t *testing.T) {
 	require.Equal(t, uint64(77001), addFk.Fkey.ForeignTbl)
 	require.Contains(t, alter.CreateTmpTableSql, "CONSTRAINT `fk_t1_external`")
 	require.Contains(t, alter.DetectSqls[0], "`constraint_test`.`replace_fk_p`")
+}
+
+// Issue #30254: MySQL installs a FOREIGN KEY declared under
+// foreign_key_checks=0 without validating pre-existing child rows; the
+// orphan survives and only later DML is rejected. With checks enabled the
+// detect SQLs must still reject orphans at DDL time.
+func TestAlterTableForeignKeyChecksDisabledSkipsDetectSqls(t *testing.T) {
+	for _, parent := range []struct {
+		name      string
+		column    string
+		reference string
+	}{
+		{name: "external", column: "INT", reference: "constraint_test.replace_fk_p(id)"},
+		{name: "self", column: "BIGINT", reference: "constraint_test.t1(a)"},
+	} {
+		for _, algorithm := range []plan.AlterTable_AlgorithmType{plan.AlterTable_COPY, plan.AlterTable_INPLACE} {
+			for _, tc := range []struct {
+				name        string
+				checks      int64
+				resolveErr  error
+				wantDetects int
+			}{
+				{name: "enabled", checks: 1, wantDetects: 1},
+				{name: "disabled", checks: 0, wantDetects: 0},
+				{name: "resolution error", resolveErr: errors.New("foreign_key_checks unavailable")},
+			} {
+				t.Run(parent.name+"/"+algorithm.String()+"/"+tc.name, func(t *testing.T) {
+					mock := NewMockOptimizer(false, newPlanTestProcess(t))
+					originalContext := mock.ctxt
+					mock.ctxt.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+						if name == "foreign_key_checks" {
+							return tc.checks, tc.resolveErr
+						}
+						return originalContext.ResolveVariable(name, system, global)
+					}
+
+					addColumn := fmt.Sprintf("ADD COLUMN parent_id %s,", parent.column)
+					if algorithm == plan.AlterTable_INPLACE {
+						typ := types.T_int32
+						if parent.column == "BIGINT" {
+							typ = types.T_int64
+						}
+						table := mock.ctxt.tablesByQualifiedName[mockQualifiedTableName("constraint_test", "t1")]
+						table.Cols = append(table.Cols, &plan.ColDef{Name: "parent_id", OriginName: "parent_id", ColId: 10, Typ: typ.ToType().PlanType(), Default: &plan.Default{}})
+						addColumn = ""
+					}
+					logicPlan, err := buildSingleStmt(mock, t, fmt.Sprintf(`
+					ALTER TABLE constraint_test.t1 %s
+						ADD CONSTRAINT fk_t1_parent FOREIGN KEY (parent_id) REFERENCES %s`,
+						addColumn, parent.reference))
+					if tc.resolveErr != nil {
+						require.ErrorIs(t, err, tc.resolveErr)
+						return
+					}
+					require.NoError(t, err)
+
+					alter := logicPlan.GetDdl().GetAlterTable()
+					require.Equal(t, algorithm, alter.AlgorithmType)
+					addFKs := 0
+					for _, action := range alter.Actions {
+						if action.GetAddFk() != nil {
+							addFKs++
+							require.Equal(t, "fk_t1_parent", action.GetAddFk().Fkey.Name)
+						}
+					}
+					require.Equal(t, 1, addFKs, "the constraint definition must be installed in both modes")
+					if algorithm == plan.AlterTable_COPY {
+						require.Len(t, alter.CopyTableDef.Fkeys, 1)
+					}
+					require.Len(t, alter.UpdateFkSqls, 1,
+						"catalog maintenance for the new FK must still be planned")
+					require.Len(t, alter.DetectSqls, tc.wantDetects)
+				})
+			}
+		}
+	}
 }
 
 func TestAlterTableCopyRejectsDuplicateForeignKeyName(t *testing.T) {
@@ -1018,20 +1096,24 @@ func TestAlterTableInplaceForeignKeysUseFinalTableName(t *testing.T) {
 			require.Equal(t, "t1", alter.TableDef.Name, "execution must still open the original relation")
 			require.Equal(t, "t1", table.Name)
 			require.Len(t, table.Fkeys, 1, "planning must not mutate catalog state")
-			require.Len(t, alter.DetectSqls, 1)
-			finalIdent := "`tpch`.`" + strings.ReplaceAll(tc.finalName, "`", "``") + "`"
-			require.Contains(t, alter.DetectSqls[0], "from "+finalIdent)
-			if tc.finalName != "t1" {
-				require.NotContains(t, alter.DetectSqls[0], "`tpch`.`t1`")
-			}
-			if tc.parent == "t1" {
-				require.Equal(t, 2, strings.Count(alter.DetectSqls[0], "from "+finalIdent))
+			if strings.HasPrefix(tc.name, "checks disabled") {
+				require.Empty(t, alter.DetectSqls, "FK catalog updates must survive without historical-row detection")
 			} else {
-				require.Contains(t, alter.DetectSqls[0], "from `tpch`.`fk_parent`")
+				require.Len(t, alter.DetectSqls, 1)
+				finalIdent := "`tpch`.`" + strings.ReplaceAll(tc.finalName, "`", "``") + "`"
+				require.Contains(t, alter.DetectSqls[0], "from "+finalIdent)
+				if tc.finalName != "t1" {
+					require.NotContains(t, alter.DetectSqls[0], "`tpch`.`t1`")
+				}
+				if tc.parent == "t1" {
+					require.Equal(t, 2, strings.Count(alter.DetectSqls[0], "from "+finalIdent))
+				} else {
+					require.Contains(t, alter.DetectSqls[0], "from `tpch`.`fk_parent`")
+				}
+				parsed, err := mysql.ParseOne(t.Context(), alter.DetectSqls[0], 1)
+				require.NoError(t, err)
+				parsed.Free()
 			}
-			parsed, err := mysql.ParseOne(t.Context(), alter.DetectSqls[0], 1)
-			require.NoError(t, err)
-			parsed.Free()
 			for _, action := range alter.Actions {
 				if fk := action.GetAddFk(); fk != nil {
 					require.Equal(t, tc.parent, fk.TableName, "declaration binding retains its original parent")

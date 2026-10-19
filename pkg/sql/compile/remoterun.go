@@ -94,6 +94,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateRemoteCorrelation(p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteBoundStringVariables(p); err != nil {
 		return nil, err
 	}
@@ -122,6 +125,9 @@ func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
 func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiredVectorProtocol *int64) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateRemoteCorrelation(p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteBoundStringVariables(p); err != nil {
@@ -252,6 +258,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteCorrelation(p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteBoundStringVariables(p); err != nil {
 			return nil, err
 		}
@@ -705,6 +714,9 @@ func (s *Scope) restoreBinarySetChildren(op vm.Operator) error {
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
 func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+	if op.OpType() == vm.Dependent {
+		return -1, nil, moerr.NewNotSupportedNoCtx("dependent programs require the coordinator execution owner")
+	}
 	opBase := op.GetOperatorBase()
 	in := &pipeline.Instruction{
 		Op:      int32(op.OpType()),
@@ -2294,11 +2306,20 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
+	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
+		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
+	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.TableCollationFunction && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
+		return moerr.NewNotSupportedNoCtx("internal table collation requires MORPC protocol version 118")
+	}
+	if features.LeastGreatestCollationSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
+		return moerr.NewNotSupportedNoCtx("collation-aware LEAST/GREATEST requires MORPC protocol version 117")
 	}
 	if features.CalendarIntervalNormalization && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
 		return moerr.NewNotSupportedNoCtx("calendar interval normalization requires MORPC protocol version 115")

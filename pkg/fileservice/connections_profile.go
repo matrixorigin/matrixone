@@ -19,6 +19,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"runtime"
 	"sync/atomic"
 
@@ -121,6 +122,11 @@ type ctxKeyConnsProfileSample struct{}
 var CtxKeyConnsProfileSample ctxKeyConnsProfileSample
 
 func (p *profilerRoundTripper[T]) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Context().Value(httpTraceKey{}) != nil {
+		// Hooks may run concurrently and after RoundTrip returns. Each actual
+		// request owns its trace; callback/context references keep it alive.
+		req = req.WithContext(httptrace.WithClientTrace(req.Context(), newTraceInfo().trace))
+	}
 	req = req.WithContext(
 		context.WithValue(
 			req.Context(),

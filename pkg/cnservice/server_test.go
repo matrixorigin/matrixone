@@ -107,18 +107,18 @@ type closeOnlyRPCServer struct {
 	onClose  func()
 }
 
-type closeOnlySiriusBackend struct {
-	compile.SiriusBackend
+type closeOnlySiriusEngine struct {
+	compile.SiriusEngine
 	closeFn func() error
 }
 
-func (b closeOnlySiriusBackend) Close(context.Context) error { return b.closeFn() }
+func (b closeOnlySiriusEngine) Close(context.Context) error { return b.closeFn() }
 
 func TestCloseSiriusRuntimeRetainsFailedOwner(t *testing.T) {
 	moruntime.RunTest(t.Name(), func(rt moruntime.Runtime) {
 		failure := errors.New("runtime cleanup failed")
 		var closeErr error = failure
-		owner := &compile.SiriusRuntime{Backend: closeOnlySiriusBackend{closeFn: func() error { return closeErr }}}
+		owner := &compile.SiriusRuntime{Engine: closeOnlySiriusEngine{closeFn: func() error { return closeErr }}}
 		s := &service{cfg: &Config{UUID: t.Name()}, siriusRuntime: owner}
 		rt.SetGlobalVariables(compile.SiriusRuntimeKey, owner)
 		t.Cleanup(func() { rt.CompareAndDeleteGlobalVariables(compile.SiriusRuntimeKey, owner) })
@@ -829,7 +829,8 @@ func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
 					ctrl := gomock.NewController(t)
 					defer ctrl.Finish()
 					ls := mock_lock.NewMockLockService(ctrl)
-					ls.EXPECT().Close().Return(nil).Times(1)
+					var lockCloses atomic.Int32
+					ls.EXPECT().Close().DoAndReturn(func() error { lockCloses.Add(1); return nil }).AnyTimes()
 
 					incrCloseStarted := make(chan struct{})
 					releaseIncrClose := make(chan struct{})
@@ -900,11 +901,17 @@ func TestServiceCloseDrainsAutoIncrementBeforeTxnClient(t *testing.T) {
 					}
 					require.Equal(t, engineErr == nil, s.CloseComplete())
 					require.Equal(t, err, s.Close(), "repeat Close must not replay engine retirement")
+					if engineErr == nil {
+						require.Equal(t, int32(1), lockCloses.Load())
+					} else {
+						require.Zero(t, lockCloses.Load(), "failed engine drain must retain lock service")
+					}
 					require.False(t, txnClientClosedEarly, "transaction client closed before auto-increment service drained")
 					select {
 					case <-txnClientClosed:
+						require.NoError(t, engineErr, "failed engine drain must retain transaction dependencies")
 					default:
-						t.Fatal("transaction client was not closed")
+						require.Error(t, engineErr, "transaction client was not closed after successful engine drain")
 					}
 				},
 			)
@@ -1260,7 +1267,7 @@ func TestServiceCloseCancelsAdmittedPipeline(t *testing.T) {
 			s.stopper.Stop()
 		})
 		var runtimeClosed bool
-		s.siriusRuntime = &compile.SiriusRuntime{Backend: closeOnlySiriusBackend{closeFn: func() error {
+		s.siriusRuntime = &compile.SiriusRuntime{Engine: closeOnlySiriusEngine{closeFn: func() error {
 			select {
 			case <-handlerExited:
 				runtimeClosed = true

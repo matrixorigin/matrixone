@@ -317,6 +317,34 @@ func BenchmarkBlockDataReadPersistedFilteredVectorTopN(b *testing.B) {
 	}
 }
 
+// Compare equivalent all-row filters without allocating an identity selection
+// on the All path. Both cases must successfully return the same bounded Top-K.
+func BenchmarkBlockDataReadPersistedAllFilteredVectorTopN(b *testing.B) {
+	for _, tc := range []struct {
+		name        string
+		selectEvery int64
+	}{
+		{name: "all"},
+		{name: "explicit_identity", selectEvery: 1},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			fixture := newVectorRangeTopNBenchmarkFixture(b)
+			b.Cleanup(fixture.close)
+			if err := fixture.readFiltered(true, false, tc.selectEvery); err != nil {
+				b.Fatal(err)
+			}
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if err := fixture.readFiltered(true, false, tc.selectEvery); err != nil {
+					b.Fatal(err)
+				}
+			}
+			b.StopTimer()
+		})
+	}
+}
+
 type vectorRangeTopNBenchmarkFixture struct {
 	ctx         context.Context
 	fs          fileservice.FileService
@@ -432,6 +460,9 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 	defer cacheVectors.Free(mp)
 
 	filter := func(bat *batch.Batch, loaded []int) (engine.ReaderFilterResult, error) {
+		if selectEvery == 0 {
+			return engine.ReaderFilterResult{All: true}, nil
+		}
 		ids := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])
 		sels := make([]int64, 0, len(ids)/int(selectEvery)+1)
 		for pos, id := range ids {
@@ -473,6 +504,12 @@ func (f *vectorRangeTopNBenchmarkFixture) readFiltered(
 			return moerr.NewInternalErrorNoCtxf(
 				"filtered storage Top-K returned %d rows and %d embeddings",
 				output.RowCount(), output.Vecs[2].Length())
+		}
+		if selectEvery <= 1 {
+			return validateVectorRangeTopNBenchmarkResult(
+				vector.MustFixedColWithTypeCheck[int64](output.Vecs[0]),
+				vector.MustFixedColWithTypeCheck[float64](output.Vecs[len(f.columns)]),
+			)
 		}
 		return nil
 	}

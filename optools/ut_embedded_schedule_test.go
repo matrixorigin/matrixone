@@ -1066,7 +1066,7 @@ func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
 	const isolated = "github.com/matrixorigin/matrixone/pkg/tests/issues/isolated"
 	const dml = "github.com/matrixorigin/matrixone/pkg/tests/dml"
 	const sql = "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration"
-	const batches = "batch:" + dml + ":4:2:2:independent\nconsume\nbatch:" + sql + ":4:2:2:cleanup-only\nconsume\n"
+	const batches = "batch:" + dml + ":4:1:2:independent\nconsume\nbatch:" + sql + ":4:1:2:cleanup-only\nconsume\n"
 	for _, tc := range []struct {
 		name, scope, mode, ordinaryStatus, batchStatus, consumeStatus, want string
 		parallel, goParallel                                                string
@@ -1075,26 +1075,29 @@ func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
 	}{
 		{name: "rollback", scope: "example/a\n" + dml + "\n" + sql, mode: "1", want: "ordinary:example/a " + dml + " " + sql + "\n"},
 		{name: "embed-rollback", scope: embed + "\nexample/a", mode: "1", want: "ordinary:" + embed + " example/a\n"},
-		{name: "only-embed", scope: embed, mode: "4", want: "batch:" + embed + ":4:2:2:independent\nconsume\n"},
-		{name: "only-isolated", scope: isolated, mode: "4", want: "batch:" + isolated + ":4:2:2:independent\nconsume\n"},
+		{name: "only-embed", scope: embed, mode: "4", want: "batch:" + embed + ":4:1:2:independent\nconsume\n"},
+		{name: "only-isolated", scope: isolated, mode: "4", want: "batch:" + isolated + ":4:1:2:independent\nconsume\n"},
 		{name: "isolated-rollback", scope: isolated + "\nexample/a", mode: "1", want: "ordinary:" + isolated + " example/a\n"},
-		{name: "embed-with-existing", scope: embed + "\nexample/a\n" + dml + "\n" + sql, mode: "4", want: "ordinary:example/a\nbatch:" + embed + ":4:2:2:independent\nconsume\n" + batches},
+		{name: "embed-with-existing", scope: embed + "\nexample/a\n" + dml + "\n" + sql, mode: "4", want: "ordinary:example/a\nbatch:" + embed + ":4:1:2:independent\nconsume\n" + batches},
 		{name: "both", scope: "example/a\n" + dml + "\nexample/b\n" + sql, mode: "4", want: "ordinary:example/a example/b\n" + batches},
 		{name: "only-audited", scope: dml + "\n" + sql, mode: "4", want: batches},
-		{name: "only-dml", scope: dml, mode: "4", want: "batch:" + dml + ":4:2:2:independent\nconsume\n"},
-		{name: "only-sql", scope: sql, mode: "4", want: "batch:" + sql + ":4:2:2:cleanup-only\nconsume\n"},
+		{name: "only-dml", scope: dml, mode: "4", want: "batch:" + dml + ":4:1:2:independent\nconsume\n"},
+		{name: "only-sql", scope: sql, mode: "4", want: "batch:" + sql + ":4:1:2:cleanup-only\nconsume\n"},
 		{name: "neither", scope: "example/a", mode: "4", want: "ordinary:example/a\n"},
 		{name: "ordinary-pool", scope: "example/a\nexample/b", mode: "4", parallel: "2", goParallel: "2", want: "ordinary:example/a example/b\n"},
 		{name: "unknown-stays-serial", scope: "github.com/matrixorigin/matrixone/pkg/newcluster\nexample/a", mode: "4", parallel: "2", want: "ordinary:github.com/matrixorigin/matrixone/pkg/newcluster example/a\n"},
 		{name: "high-footprint-rollback-stays-serial", scope: embed + "\nexample/a", mode: "1", parallel: "2", want: "ordinary:" + embed + " example/a\n"},
 		{name: "measured-multicn-pool", scope: "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn\nexample/a", mode: "4", parallel: "2", goParallel: "2", want: "ordinary:github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn example/a\n"},
+		{name: "four-workers", scope: dml + "\n" + sql, mode: "4", parallel: "4", want: "batch:" + dml + ":4:4:2:independent\nconsume\nbatch:" + sql + ":4:4:2:cleanup-only\nconsume\n"},
+		{name: "four-workers-failed-drain", scope: dml + "\n" + sql, mode: "4", parallel: "4", batchStatus: "125", want: "batch:" + dml + ":4:4:2:independent\n", status: 125},
+		{name: "four-workers-ordinary", scope: "example/a\nexample/b", mode: "4", parallel: "4", goParallel: "4", want: "ordinary:example/a example/b\n"},
 		{name: "empty", mode: "4"},
-		{name: "ordinary-failure-continues", parallel: "2", goParallel: "2", scope: "example/a\n" + dml + "\n" + sql, mode: "4", ordinaryStatus: "7", want: "ordinary:example/a\n" + batches, status: 7},
+		{name: "ordinary-failure-continues", parallel: "2", goParallel: "2", scope: "example/a\n" + dml + "\n" + sql, mode: "4", ordinaryStatus: "7", want: "ordinary:example/a\n" + strings.ReplaceAll(batches, ":4:1:", ":4:2:"), status: 7},
 		{name: "batch-failure-continues", scope: dml + "\n" + sql, mode: "4", batchStatus: "7", want: batches, status: 1},
 		{name: "ordinary-undrained-stops", parallel: "2", goParallel: "2", scope: "example/a\n" + dml, mode: "4", ordinaryStatus: "125", want: "ordinary:example/a\n", status: 125},
-		{name: "batch-undrained-retains", scope: dml + "\n" + sql, mode: "4", batchStatus: "125", want: "batch:" + dml + ":4:2:2:independent\n", status: 125},
-		{name: "consume-no-source-retains", scope: dml + "\n" + sql, mode: "4", retainOwner: true, want: "batch:" + dml + ":4:2:2:independent\nconsume\n", status: 1},
-		{name: "consume-failure-retains", scope: dml + "\n" + sql, mode: "4", consumeStatus: "1", want: "batch:" + dml + ":4:2:2:independent\nconsume\n", status: 1},
+		{name: "batch-undrained-retains", scope: dml + "\n" + sql, mode: "4", batchStatus: "125", want: "batch:" + dml + ":4:1:2:independent\n", status: 125},
+		{name: "consume-no-source-retains", scope: dml + "\n" + sql, mode: "4", retainOwner: true, want: "batch:" + dml + ":4:1:2:independent\nconsume\n", status: 1},
+		{name: "consume-failure-retains", scope: dml + "\n" + sql, mode: "4", consumeStatus: "1", want: "batch:" + dml + ":4:1:2:independent\nconsume\n", status: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.parallel == "" {
@@ -1113,8 +1116,8 @@ function run_ut_command() {
  if [[ "$1" == run_race_test_batches ]]; then "$@"; return $?; fi
  [[ -z "$PREBUILT_RACE_REPORT" && -z "$PREBUILT_RACE_TEST_BINARY" ]] || return 91
  [[ " $* " == *" -p $EXPECTED_GO_PARALLEL "* ]] || return 100
- if [[ "$EXPECTED_GO_PARALLEL" == 2 ]]; then
-  [[ " $* " == *' MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=2 '* && " $* " == *' GOMAXPROCS=2 '* ]] || return 101
+ if (( EXPECTED_GO_PARALLEL > 1 )); then
+  [[ " $* " == *" MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=$EXPECTED_GO_PARALLEL "* && " $* " == *' GOMAXPROCS=2 '* ]] || return 101
  else
   [[ " $* " != *' MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=2 '* ]] || return 102
  fi

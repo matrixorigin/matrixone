@@ -338,6 +338,7 @@ const (
 	planInt64TypeID                   int32 = 23
 	planUint32TypeID                  int32 = 27
 	planAnyTypeID                     int32 = 0
+	internalTableCollationFunctionID  int32 = 600
 	maxVarcharWidth                   int32 = 65535
 )
 
@@ -388,9 +389,15 @@ const (
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
+// TableCollationFunction requires MORPC v118 for INTERNAL_TABLE_COLLATION's
+// execution identity, including directly authored catalog expressions.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
 type RemoteExpressionFeatures struct {
-	CalendarIntervalNormalization   bool
+	DependentPrograms             bool
+	CalendarIntervalNormalization bool
+	// ScalarDivision is syntactic only. SELECT warning policy supplies its
+	// execution-only floor; persisted expression contracts remain unchanged.
+	ScalarDivision                  bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -424,11 +431,15 @@ type RemoteExpressionFeatures struct {
 	MediumIntAssignmentBounds               bool
 	DateNumericResultContracts              bool
 	DecimalStatisticalResultContracts       bool
+	TableCollationFunction                  bool
 	InvalidDecimalStatisticalResultContract bool
+	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
+	// Released overload 0 retains its historical byte-order contract.
+	LeastGreatestCollationSemantics bool
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.DependentPrograms || features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -456,7 +467,9 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.MediumIntAssignmentBounds ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
-		features.InvalidDecimalStatisticalResultContract
+		features.TableCollationFunction ||
+		features.InvalidDecimalStatisticalResultContract || features.ScalarDivision ||
+		features.LeastGreatestCollationSemantics
 }
 
 func isPlanMediumIntType(typ Type) bool {
@@ -901,6 +914,7 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			features.DependentPrograms = features.DependentPrograms || current.GetDependent() != nil || current.GetSlot() != nil
 			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
 				_, encodedJSON := literal.Value.(*Literal_Sval)
 				features.JSONScalarLiteralContracts = features.JSONScalarLiteralContracts || encodedJSON
@@ -916,8 +930,20 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == internalTableCollationFunctionID {
+					features.TableCollationFunction = true
+				}
+				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
+					features.LeastGreatestCollationSemantics = true
+				}
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true
+				}
+				// Scalar /, DIV and MOD use function IDs 13..15. Numeric
+				// storage domains are 20..34; BIT uses the uint64 domain.
+				if id >= 13 && id <= 15 && len(fn.Args) == 2 && fn.Args[1] != nil {
+					denominator := fn.Args[1].Typ.Id
+					features.ScalarDivision = features.ScalarDivision || (denominator >= 20 && denominator <= 34) || denominator == 11
 				}
 				// Aliases and DISTINCT share these aggregate IDs. Inspect the
 				// argument domain even for legacy DECIMAL-typed result plans.
@@ -1542,60 +1568,61 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 	if expr == nil {
 		return nil
 	}
-	if err := visitor(expr); err != nil {
-		return err
-	}
-	if lit := expr.GetLit(); lit != nil {
-		if err := VisitExprTree(lit.Src, visitor); err != nil {
+	pending := []*Expr{expr}
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if current == nil {
+			continue
+		}
+		if err := visitor(current); err != nil {
 			return err
 		}
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if err := VisitExprTree(arg, visitor); err != nil {
-				return err
+		// Push in reverse visitation order; dependent operands are part of the
+		// caller expression while the program root belongs to the query graph.
+		if d := current.GetDependent(); d != nil {
+			pending = append(pending, d.Comparison)
+			for i := len(d.Lhs) - 1; i >= 0; i-- {
+				pending = append(pending, d.Lhs[i])
+			}
+			for i := len(d.Inputs) - 1; i >= 0; i-- {
+				pending = append(pending, d.Inputs[i])
 			}
 		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if err := VisitExprTree(item, visitor); err != nil {
-				return err
-			}
-		}
-	}
-	if sub := expr.GetSub(); sub != nil {
-		if err := VisitExprTree(sub.Child, visitor); err != nil {
-			return err
-		}
-	}
-	if window := expr.GetW(); window != nil {
-		if err := VisitExprTree(window.WindowFunc, visitor); err != nil {
-			return err
-		}
-		for _, item := range window.PartitionBy {
-			if err := VisitExprTree(item, visitor); err != nil {
-				return err
-			}
-		}
-		for _, order := range window.OrderBy {
-			if order != nil {
-				if err := VisitExprTree(order.Expr, visitor); err != nil {
-					return err
+		if w := current.GetW(); w != nil {
+			if w.Frame != nil {
+				if w.Frame.End != nil {
+					pending = append(pending, w.Frame.End.Val)
+				}
+				if w.Frame.Start != nil {
+					pending = append(pending, w.Frame.Start.Val)
 				}
 			}
+			for i := len(w.OrderBy) - 1; i >= 0; i-- {
+				if w.OrderBy[i] != nil {
+					pending = append(pending, w.OrderBy[i].Expr)
+				}
+			}
+			for i := len(w.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, w.PartitionBy[i])
+			}
+			pending = append(pending, w.WindowFunc)
 		}
-		if window.Frame != nil {
-			if window.Frame.Start != nil {
-				if err := VisitExprTree(window.Frame.Start.Val, visitor); err != nil {
-					return err
-				}
+		if sub := current.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := current.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
 			}
-			if window.Frame.End != nil {
-				if err := VisitExprTree(window.Frame.End.Val, visitor); err != nil {
-					return err
-				}
+		}
+		if fn := current.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
 			}
+		}
+		if lit := current.GetLit(); lit != nil {
+			pending = append(pending, lit.Src)
 		}
 	}
 	return nil

@@ -755,3 +755,35 @@ insert into t_odku_fk_uk_child(pid, attr_id, val) values (1, 5, 'new')
 select id, pid, attr_id, val from t_odku_fk_uk_child order by id;
 drop table if exists t_odku_fk_uk_child;
 drop table if exists t_odku_fk_uk_parent;
+
+-- Nested subqueries read the image left by the preceding assignment. Each
+-- duplicate in the incoming stream has its own VALUES row and affected count.
+drop table if exists t_odku_nested;
+create table t_odku_nested(k int primary key, v int);
+insert into t_odku_nested values(1,10);
+insert into t_odku_nested values(1,3),(1,4),(2,8),(2,9)
+  on duplicate key update v=v+1,v=(select (select t_odku_nested.v+values(v)));
+select row_count();
+select * from t_odku_nested order by k;
+start transaction;
+insert into t_odku_nested values(1,50)
+  on duplicate key update v=(select (select t_odku_nested.v+1)),v=(select (select t_odku_nested.v+2));
+select row_count();
+select * from t_odku_nested order by k;
+rollback;
+select * from t_odku_nested order by k;
+-- A later scalar-cardinality error rolls back an earlier insert in the same
+-- statement. The next prepared execution starts with fresh invocation state.
+insert into t_odku_nested values(3,1),(1,2)
+  on duplicate key update v=(select u.x+t_odku_nested.v from (select 1 as x union all select 2) u);
+select * from t_odku_nested order by k;
+prepare od_nested from 'insert into t_odku_nested values(?,?) on duplicate key update v=(select (select t_odku_nested.v+values(v)))';
+set @od_k=1,@od_v=1;
+execute od_nested using @od_k,@od_v;
+select row_count();
+set @od_k=2,@od_v=2;
+execute od_nested using @od_k,@od_v;
+select row_count();
+select * from t_odku_nested order by k;
+deallocate prepare od_nested;
+drop table t_odku_nested;
