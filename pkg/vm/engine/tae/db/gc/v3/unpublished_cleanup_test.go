@@ -109,6 +109,54 @@ type controllableUnpublishedCleanupFS struct {
 	markerDeleteCalls      atomic.Int64
 }
 
+func TestCheckpointCleanerReplayPreservesAdoptedGCDataAfterMetadataMarkerRelease(t *testing.T) {
+	for _, adopted := range []bool{true, false} {
+		t.Run(fmt.Sprintf("adopted=%t", adopted), func(t *testing.T) {
+			ctx := context.Background()
+			objectFS, err := fileservice.NewMemoryFS(
+				"shared-data", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			markerFS, err := fileservice.NewMemoryFS(
+				"local-markers", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			cleaner := NewCheckpointCleaner(ctx, "", objectFS, nil, nil,
+				WithUnpublishedCleanupFS(markerFS)).(*checkpointCleaner)
+			name := objectio.MockObjectName()
+			dataFile := name.String()
+			metadataMarker := ioutil.UnpublishedObjectCleanupPath(
+				ioutil.UnpublishedObject{
+					File: "gc/gc_1-0_2-0.ckp", CleanupID: "published-attempt",
+				})
+			_, err = ioutil.RecordUnpublishedObjectCleanup(ctx, markerFS,
+				ioutil.UnpublishedObject{
+					File: dataFile, DependsOn: []string{metadataMarker},
+				})
+			require.NoError(t, err)
+			require.NoError(t, objectFS.Write(ctx, fileservice.IOVector{
+				FilePath: dataFile,
+				Entries: []fileservice.IOEntry{{
+					Offset: 0, Size: 1, Data: []byte{1},
+				}},
+			}))
+			cleaner.mutation.replayDone = true
+			cleaner.unpublishedCleanupGeneration.Add(1)
+			if adopted {
+				stats := objectio.NewObjectStats()
+				require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+				cleaner.mutation.scanned = NewGCWindow(cleaner.mp, objectFS)
+				cleaner.mutation.scanned.files = []objectio.ObjectStats{*stats}
+			}
+			require.NoError(t, cleaner.replayUnpublishedObjectCleanup(ctx))
+			_, err = objectFS.StatFile(ctx, dataFile)
+			if adopted {
+				require.NoError(t, err)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound))
+			}
+		})
+	}
+}
+
 func (fs *controllableUnpublishedCleanupFS) Write(
 	ctx context.Context,
 	vector fileservice.IOVector,

@@ -626,7 +626,9 @@ func (c *checkpointCleaner) mutAddScannedLocked(window *GCWindow) {
 		c.mutation.scanned = window
 	} else {
 		c.mutation.scanned.Merge(window)
-		window.Close()
+		if len(window.prepared) == 0 {
+			window.Close()
+		}
 	}
 }
 
@@ -2270,8 +2272,32 @@ func (c *checkpointCleaner) decideUnpublishedObjectCleanup(
 	if c.isAdoptedGCMetadata(object.File) {
 		return ioutil.ReleaseUnpublishedObjectCleanup, nil
 	}
+	gcData := false
 	for _, dependency := range object.DependsOn {
+		if strings.HasPrefix(dependency, "gc/unpublished/") {
+			gcData = true
+		}
 		if c.isAdoptedGCMetadata(dependency) {
+			return ioutil.ReleaseUnpublishedObjectCleanup, nil
+		}
+	}
+	if gcData {
+		c.mutation.Lock()
+		if !c.mutation.replayDone {
+			c.mutation.Unlock()
+			return ioutil.RetryUnpublishedObjectCleanup, nil
+		}
+		adopted := false
+		if c.mutation.scanned != nil {
+			for _, stats := range c.mutation.scanned.files {
+				if stats.ObjectName().String() == object.File {
+					adopted = true
+					break
+				}
+			}
+		}
+		c.mutation.Unlock()
+		if adopted {
 			return ioutil.ReleaseUnpublishedObjectCleanup, nil
 		}
 	}
@@ -2442,6 +2468,11 @@ func (c *checkpointCleaner) tryScanLocked(
 		return
 	}
 	c.mutAddScannedLocked(window)
+	// Release write ownership only after the scanned window references its
+	// data files. Concurrent cleanup replay can then recognize adopted data.
+	if publishErr := window.Publish(ctx); publishErr != nil {
+		logutil.Warn("GC-UNPUBLISHED-PUBLISH-DEFERRED", zap.Error(publishErr))
+	}
 	c.updateScanWaterMark(candidates[len(candidates)-1])
 	files := tmpNewFiles
 	for _, stats := range c.GetScannedWindowLocked().files {
@@ -2810,9 +2841,6 @@ func (c *checkpointCleaner) scanCheckpointsLocked(
 			gcWindow.tsRange.end,
 		),
 	)
-	if publishErr := gcWindow.Publish(ctx); publishErr != nil {
-		err = errors.Join(err, publishErr)
-	}
 	return
 }
 

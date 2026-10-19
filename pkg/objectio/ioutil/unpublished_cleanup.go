@@ -453,7 +453,7 @@ func replayUnpublishedObjectCleanupMarkers(
 			continue
 		}
 		if decision == DeleteUnpublishedObject &&
-			!unpublishedObjectDependenciesReady(ctx, objectFS, intent.Object.DependsOn) {
+			!unpublishedObjectDependenciesReady(ctx, markerFS, objectFS, intent.Object.DependsOn) {
 			hasRemaining = true
 			continue
 		}
@@ -491,12 +491,17 @@ func replayUnpublishedObjectCleanupMarkers(
 
 func unpublishedObjectDependenciesReady(
 	ctx context.Context,
-	fs fileservice.FileService,
+	markerFS, objectFS fileservice.FileService,
 	dependencies []string,
 ) bool {
 	for _, dependency := range dependencies {
 		if dependency == "" {
 			continue
+		}
+		fs := objectFS
+		if strings.HasPrefix(dependency, unpublishedObjectCleanupDir) ||
+			strings.HasPrefix(dependency, ccprUnpublishedObjectCleanupDir) {
+			fs = markerFS
 		}
 		_, err := fs.StatFile(ctx, dependency)
 		if err == nil {

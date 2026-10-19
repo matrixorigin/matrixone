@@ -257,6 +257,7 @@ func TestGCWindowRetryKeepsCleanupOwnershipPerMetadataAttempt(t *testing.T) {
 			window.tsRange.end,
 		),
 	}
+	cleaner.mutation.replayDone = true
 	cleaner.mutation.Unlock()
 
 	// The adopted metadata belongs to the retry. The old metadata marker must
