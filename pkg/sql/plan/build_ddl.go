@@ -1763,14 +1763,14 @@ func genAsSelectCols(
 	); err != nil {
 		return nil, nil, 0, err
 	}
-	if !isPrepareStmt && executionProtocol == 0 {
-		features, featureErr := plan.RequiredRemoteExpressionFeatures(query)
+	if !isPrepareStmt {
+		// The population query is released for deferred compilation. Preserve
+		// all its execution requirements before CREATE can have effects.
+		required, featureErr := RequiredPersistedExpressionProtocolVersion(query)
 		if featureErr != nil {
 			return nil, nil, 0, featureErr
 		}
-		if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
-			executionProtocol = defines.MORPCVersion122
-		}
+		executionProtocol = max(executionProtocol, required)
 	}
 	return cols, query, executionProtocol, nil
 }

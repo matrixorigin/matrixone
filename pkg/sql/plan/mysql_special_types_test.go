@@ -1159,47 +1159,53 @@ func TestSpecialAssignmentStorageAndGuardExecution(t *testing.T) {
 }
 
 func TestSpecialAssignmentStorageCachePreservesDomain(t *testing.T) {
-	for _, numericFirst := range []bool{true, false} {
-		t.Run(map[bool]string{true: "numeric-first", false: "assignment-first"}[numericFirst], func(t *testing.T) {
-			mock := newMySQLSpecialOrderMock(t)
-			builder := NewQueryBuilder(plan.Query_SELECT, &mock.ctxt, false, true)
-			typ := plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a,b"}
-			raw := GetColExpr(typ, 10, 0)
-			display, err := makeEnumOrSetDisplayValue(context.Background(), raw)
-			require.NoError(t, err)
-			builder.qry.Nodes = []*plan.Node{
-				{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{10}},
-				{NodeType: plan.Node_PROJECT, BindingTags: []int32{20}, Children: []int32{0}, ProjectList: []*plan.Expr{display}},
-				{NodeType: plan.Node_PROJECT, BindingTags: []int32{30}, Children: []int32{1}, ProjectList: []*plan.Expr{GetColExpr(display.Typ, 20, 0)}},
-			}
-			builder.tag2NodeID[10] = 0
-			builder.tag2NodeID[20] = 1
-			builder.tag2NodeID[30] = 2
-			source := GetColExpr(display.Typ, 30, 0)
-			numeric := func() {
-				v, ok := builder.materializeProjectedSetBitmap(source, make(map[[2]int32]struct{}))
-				require.True(t, ok)
-				require.Empty(t, v.Typ.Enumvalues)
-			}
-			assignment := func() {
-				v, ok := builder.materializeTransparentMySQLSpecialAssignmentValue(source)
-				require.True(t, ok)
-				require.Equal(t, typ.Enumvalues, v.Typ.Enumvalues)
-			}
-			if numericFirst {
-				numeric()
-				assignment()
-			} else {
-				assignment()
-				numeric()
-			}
-			for range 3 {
-				numeric()
-				assignment()
-			}
-			require.Len(t, builder.qry.Nodes[1].ProjectList, 2)
-			require.Len(t, builder.qry.Nodes[2].ProjectList, 2)
-			require.Len(t, builder.setBitmapByDisplayNode, 2)
-		})
+	for _, limited := range []bool{false, true} {
+		for _, numericFirst := range []bool{true, false} {
+			t.Run(map[bool]string{true: "numeric-first", false: "assignment-first"}[numericFirst]+"/limited="+strconv.FormatBool(limited), func(t *testing.T) {
+				mock := newMySQLSpecialOrderMock(t)
+				builder := NewQueryBuilder(plan.Query_SELECT, &mock.ctxt, false, true)
+				typ := plan.Type{Id: int32(types.T_uint64), Enumvalues: ",a,b"}
+				raw := GetColExpr(typ, 10, 0)
+				display, err := makeEnumOrSetDisplayValue(context.Background(), raw)
+				require.NoError(t, err)
+				builder.qry.Nodes = []*plan.Node{
+					{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{10}},
+					{NodeType: plan.Node_PROJECT, BindingTags: []int32{20}, Children: []int32{0}, ProjectList: []*plan.Expr{display}},
+					{NodeType: plan.Node_PROJECT, BindingTags: []int32{30}, Children: []int32{1}, ProjectList: []*plan.Expr{GetColExpr(display.Typ, 20, 0)}},
+				}
+				if limited {
+					builder.qry.Nodes[1].Limit = makePlan2Int64ConstExprWithType(2)
+					builder.qry.Nodes[2].Offset = makePlan2Int64ConstExprWithType(1)
+				}
+				builder.tag2NodeID[10] = 0
+				builder.tag2NodeID[20] = 1
+				builder.tag2NodeID[30] = 2
+				source := GetColExpr(display.Typ, 30, 0)
+				numeric := func() {
+					v, ok := builder.materializeProjectedSetBitmap(source, make(map[[2]int32]struct{}))
+					require.True(t, ok)
+					require.Empty(t, v.Typ.Enumvalues)
+				}
+				assignment := func() {
+					v, ok := builder.materializeTransparentMySQLSpecialAssignmentValue(source)
+					require.True(t, ok)
+					require.Equal(t, typ.Enumvalues, v.Typ.Enumvalues)
+				}
+				if numericFirst {
+					numeric()
+					assignment()
+				} else {
+					assignment()
+					numeric()
+				}
+				for range 3 {
+					numeric()
+					assignment()
+				}
+				require.Len(t, builder.qry.Nodes[1].ProjectList, 2)
+				require.Len(t, builder.qry.Nodes[2].ProjectList, 2)
+				require.Len(t, builder.setBitmapByDisplayNode, 2)
+			})
+		}
 	}
 }

@@ -179,7 +179,7 @@ func TestTransactionLocalReplacementRequiresBothGenerations(t *testing.T) {
 }
 
 func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
-	for _, mode := range []string{"unknown_binding", "stable_binding", "changed_domain", "canceled", "ctas_refresh", "unsupported_temporal", "unsupported_ctas", "unsupported_temporary_ctas", "unsupported_enum", "ctas_rollback"} {
+	for _, mode := range []string{"unknown_binding", "stable_binding", "changed_domain", "canceled", "ctas_refresh", "unsupported_temporal", "unsupported_ctas", "unsupported_temporary_ctas", "unsupported_enum", "unsupported_enum_ctas", "unsupported_enum_temporary_ctas", "ctas_rollback"} {
 		t.Run(mode, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
@@ -237,7 +237,10 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 				if strings.HasPrefix(mode, "unsupported_") || mode == "ctas_rollback" {
 					sql = "create table db.t as select timestamp(granted_time) from mo_catalog.mo_role_privs"
 				}
-				if mode == "unsupported_temporary_ctas" {
+				if strings.HasPrefix(mode, "unsupported_enum_") {
+					sql = "create table db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v"
+				}
+				if mode == "unsupported_temporary_ctas" || mode == "unsupported_enum_temporary_ctas" {
 					sql = strings.Replace(sql, "create table", "create temporary table", 1)
 				}
 				source, err = parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
@@ -275,7 +278,7 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 				old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 				t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
-				if mode == "unsupported_enum" {
+				if strings.HasPrefix(mode, "unsupported_enum") {
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
 					eng.dbErr = errors.New("catalog accessed before ENUM admission")
 				} else if mode == "ctas_rollback" {
@@ -287,7 +290,7 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			err := c.Compile(proc.Ctx, original, nil)
 			got := c.GetPlan()
 			switch mode {
-			case "unsupported_enum":
+			case "unsupported_enum", "unsupported_enum_ctas", "unsupported_enum_temporary_ctas":
 				require.ErrorContains(t, err, "version 123")
 				require.NotErrorIs(t, err, eng.dbErr)
 				require.Zero(t, builds)
