@@ -5063,6 +5063,30 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 	})
 }
 
+// SQL PREPARE whose inner text is malformed must surface ER_PARSE_ERROR
+// (1064/42000), matching direct execution of the same SQL, not 1105 (#30434).
+func Test_HandlePrepareStringSyntaxErrorCode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	// 'SELECT FROM' is valid PREPARE outer syntax; the quoted inner text is
+	// malformed, so the parse of the inner statement must fail.
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "prepare bad_stmt from 'SELECT FROM'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	prepareString, ok := stmt.(*tree.PrepareString)
+	require.True(t, ok)
+
+	ec := newTestExecCtx(ctx, gomock.NewController(t))
+	runTestHandle("handlePrepareString", t, func(ses *Session) error {
+		defer ses.Close()
+		ec.resper = ses.respr
+		_, handleErr := handlePrepareString(ses, ec, prepareString)
+		require.Error(t, handleErr)
+		require.True(t, moerr.IsMoErrCode(handleErr, moerr.ErrParseError),
+			"expected 1064/42000 for inner syntax error, got: %v", handleErr)
+		return nil
+	})
+}
+
 func Test_HandlePrepareStmt(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	for _, tc := range []struct {
@@ -5702,6 +5726,23 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
 	proc := &process.Process{Base: &process.BaseProcess{}}
+	ses.SetTenantInfo(killTestIdentity("sys", 0, "root", 0, "moadmin"))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, "sys", proc.Base.SessionInfo.Account)
+	require.Equal(t, "root", proc.Base.SessionInfo.User)
+	require.Equal(t, "moadmin", proc.Base.SessionInfo.Role)
+	// Statements within one request reuse proc, including prepared EXECUTE.
+	ses.tenant.SetDefaultRole("public")
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, "public", proc.Base.SessionInfo.Role)
+	ses.tenant.SetDefaultRole("moadmin")
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, "moadmin", proc.Base.SessionInfo.Role)
+	ses.SetTenantInfo(nil)
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Empty(t, proc.Base.SessionInfo.Account)
+	require.Empty(t, proc.Base.SessionInfo.User)
+	require.Empty(t, proc.Base.SessionInfo.Role)
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	refreshStatementScopedSessionInfo(ses, proc)

@@ -48,6 +48,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/stopper"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	metricv2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
@@ -419,7 +420,7 @@ func TestHandler_cleanupBackendOnClientDisconnect(t *testing.T) {
 			return nil
 		},
 	}
-	tun := &tunnel{}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 	tun.mu.sc = expectedSC
 	markTunnelInFlight(tun)
 	cc := &mockClientConn{
@@ -461,7 +462,7 @@ func TestHandler_handleTunnelErrCleansUpWrappedClientDisconnect(t *testing.T) {
 			return nil
 		},
 	}
-	tun := &tunnel{}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 	tun.mu.sc = expectedSC
 	cc := &mockClientConn{
 		killFn: func(sc ServerConn) error {
@@ -489,7 +490,7 @@ func TestHandler_handleTunnelErrClosesBackendForIdleEOFClientDisconnect(t *testi
 
 	killCalled := 0
 	closeCalled := 0
-	tun := &tunnel{}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 	tun.mu.sc = &killCurrentServerConn{
 		cn: &CNServer{connID: 11, uuid: "cn-new"},
 		closeFn: func() error {
@@ -521,7 +522,7 @@ func TestHandler_handleTunnelErrKillsBackendForInFlightEOFClientDisconnect(t *te
 
 	killCalled := 0
 	closeCalled := 0
-	tun := &tunnel{}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 	markTunnelInFlight(tun)
 	tun.mu.sc = &killCurrentServerConn{
 		cn: &CNServer{connID: 11, uuid: "cn-new"},
@@ -554,7 +555,7 @@ func TestHandler_handleTunnelErrKillsBackendForTrackedInFlightClientRequest(t *t
 
 	killCalled := 0
 	closeCalled := 0
-	tun := &tunnel{}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 	// Exercise the explicit request-in-flight marker.
 	tun.trackClientRequest(makeSimplePacket("select 1"))
 	tun.mu.sc = &killCurrentServerConn{
@@ -624,7 +625,7 @@ func TestHandler_handleTunnelErrClosesBackendForWrappedConnEndClientDisconnectWi
 		t.Run(tc.name, func(t *testing.T) {
 			killCalled := 0
 			closeCalled := 0
-			tun := &tunnel{}
+			tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 			tun.mu.sc = &killCurrentServerConn{
 				cn: &CNServer{connID: 11, uuid: "cn-new"},
 				closeFn: func() error {
@@ -658,7 +659,7 @@ func TestHandler_handleTunnelErrSkipsBackendCleanupForExpectedCacheQuit(t *testi
 
 	killCalled := 0
 	closeCalled := 0
-	tun := &tunnel{}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 	tun.markExpectedCacheQuit()
 	tun.mu.sc = &killCurrentServerConn{
 		cn: &CNServer{connID: 11, uuid: "cn-new"},
@@ -691,7 +692,7 @@ func TestHandler_handleTunnelErrSkipsKillForForwardedClientQuit(t *testing.T) {
 
 	killCalled := 0
 	closeCalled := 0
-	tun := &tunnel{}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 	tun.markExpectedClientQuit()
 	markTunnelInFlight(tun)
 	tun.mu.sc = &killCurrentServerConn{
@@ -725,7 +726,7 @@ func TestHandler_handleTunnelErrDiscardsBackendWhenKillFails(t *testing.T) {
 
 	killCalled := 0
 	closeCalled := 0
-	tun := &tunnel{}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 	markTunnelInFlight(tun)
 	tun.mu.sc = &killCurrentServerConn{
 		cn: &CNServer{connID: 11, uuid: "cn-new"},
@@ -774,7 +775,7 @@ func TestHandlerClientDisconnectCancellationMatrix(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &handler{logger: rt.Logger(), counterSet: newCounterSet()}
 			closeCalled := 0
-			tun := &tunnel{}
+			tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 			if tc.inFlight {
 				tun.trackClientRequest(makeSimplePacket("select 1"))
 			}
@@ -819,7 +820,7 @@ func TestHandler_handleTunnelErrDoesNotKillConcurrentIdleEOFs(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			tun := &tunnel{}
+			tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 			tun.mu.sc = &killCurrentServerConn{
 				cn: &CNServer{connID: 11, uuid: "cn-new"},
 				closeFn: func() error {
@@ -866,24 +867,21 @@ func TestHandler_handleTunnelErrSkipsConnCacheCleanupAfterAbortKill(t *testing.T
 			return nil
 		},
 	}
-	execSC := &killExecServerConn{}
-	tun := &tunnel{}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 	markTunnelInFlight(tun)
 	tun.mu.sc = currentSC
 	tun.mu.scp = &pipe{}
 	tun.mu.scp.mu.cond = sync.NewCond(&tun.mu.scp.mu)
 	cc := &clientConn{
 		connID: 42,
-		log:    rt.Logger(),
-		router: &killTestRouter{
-			connectFn: func(c *CNServer, handshakeResp *frontend.Packet, tun *tunnel) (ServerConn, []byte, error) {
-				require.Equal(t, currentCN.uuid, c.uuid)
-				require.Equal(t, currentCN.addr, c.addr)
-				return execSC, makeOKPacket(8), nil
-			},
-		},
-		tun: tun,
-		sc:  currentSC,
+		queryClient: &disconnectQueryClient{send: func(ctx context.Context, addr string, req *query.Request) (*query.Response, error) {
+			require.Equal(t, uint32(42), req.DisconnectSessionRequest.ConnID)
+			return &query.Response{DisconnectSessionResponse: &query.DisconnectSessionResponse{}}, nil
+		}},
+		moCluster: disconnectCluster(),
+		log:       rt.Logger(),
+		tun:       tun,
+		sc:        currentSC,
 		connCache: &mockConnCache{
 			pushFn: func(key cacheKey, sc ServerConn) bool {
 				t.Fatalf("killed backend connection must not be returned to conn cache")
@@ -894,8 +892,6 @@ func TestHandler_handleTunnelErrSkipsConnCacheCleanupAfterAbortKill(t *testing.T
 
 	ret := h.handleTunnelErr(withCode(io.EOF, codeClientDisconnect), cc, tun, 733923, 100)
 	require.NoError(t, ret)
-	require.Equal(t, cmdQuery, execSC.stmt.cmdType)
-	require.Equal(t, "kill connection 42", execSC.stmt.s)
 	require.Equal(t, 1, closeCalled)
 	require.Equal(t, int64(0), h.counterSet.clientDisconnect.Load())
 }
@@ -922,7 +918,7 @@ func TestHandler_handleTunnelErrSkipsConnCacheCleanupAfterAbortKillFailure(t *te
 			return nil
 		},
 	}
-	tun := &tunnel{}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
 	markTunnelInFlight(tun)
 	tun.mu.sc = currentSC
 	tun.mu.scp = &pipe{}
@@ -1164,4 +1160,37 @@ func TestHandler_HandleEventUpgrade(t *testing.T) {
 
 		require.Equal(t, int64(1), s.counterSet.connAccepted.Load())
 	})
+}
+
+func TestDisconnectCleanupSealsMigrationBeforeCapture(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	h := &handler{logger: rt.Logger()}
+	entered, release := make(chan struct{}), make(chan struct{})
+	releaseWaiter := sync.OnceFunc(func() { close(release) })
+	t.Cleanup(releaseWaiter)
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true, ctxCancel: func() { close(entered); <-release }}
+	markTunnelInFlight(tun)
+	current := &killCurrentServerConn{cn: &CNServer{connID: 10}}
+	tun.mu.sc = current
+	killed := make(chan ServerConn, 1)
+	cc := &mockClientConn{killFn: func(sc ServerConn) error { killed <- sc; return nil }}
+	done := make(chan bool, 1)
+	go func() {
+		done <- h.cleanupBackendOnClientDisconnect(withCode(syscall.ECONNRESET, codeClientDisconnect), cc, tun)
+	}()
+	<-entered
+	// The handler must complete terminal Close before selecting its backend.
+	select {
+	case <-killed:
+		t.Fatal("cleanup raced unfinished terminal close")
+	default:
+	}
+	replacementClosed := false
+	replacement := &killCurrentServerConn{cn: &CNServer{connID: 20}, closeFn: func() error { replacementClosed = true; return nil }}
+	require.ErrorIs(t, tun.replaceServerConn(nil, replacement, false), errPipeClosed)
+	require.True(t, replacementClosed)
+	releaseWaiter()
+	require.True(t, <-done)
+	require.Same(t, current, <-killed)
+	require.Same(t, current, tun.getServerConn())
 }

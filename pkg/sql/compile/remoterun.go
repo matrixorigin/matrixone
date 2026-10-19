@@ -2617,11 +2617,11 @@ func validateRemoteInsertIgnoreEligibilityProtocol(proc *process.Process, requir
 		return nil
 	}
 	if proc != nil {
-		if version, ok := remoteMORPCProtocolVersion(proc.GetService()); ok && version >= defines.MORPCVersion120 {
+		if version, ok := remoteMORPCProtocolVersion(proc.GetService()); ok && version >= defines.MORPCVersion121 {
 			return nil
 		}
 	}
-	return moerr.NewNotSupported(context.Background(), "INSERT IGNORE constraint candidate preservation requires protocol version 120")
+	return moerr.NewNotSupported(context.Background(), "INSERT IGNORE constraint candidate preservation requires protocol version 121")
 }
 
 func pipelineRequiresInsertIgnoreEligibility(p *pipeline.Pipeline) bool {
@@ -2648,7 +2648,7 @@ func validateRemoteInsertIgnoreEligibilityDestination(proc *process.Process, p *
 	}
 	if p.Node != nil {
 		supported, err := remoteWorkersSupportProtocol(proc,
-			engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion120)
+			engine.Nodes{{Id: p.Node.Id, Addr: p.Node.Addr}}, defines.MORPCVersion121)
 		if err != nil {
 			return err
 		}
@@ -2656,7 +2656,7 @@ func validateRemoteInsertIgnoreEligibilityDestination(proc *process.Process, p *
 			return nil
 		}
 	}
-	return moerr.NewNotSupportedNoCtx("remote INSERT IGNORE constraint candidate preservation requires protocol version 120")
+	return moerr.NewNotSupportedNoCtx("remote INSERT IGNORE constraint candidate preservation requires protocol version 121")
 }
 
 func validateRemoteAffectedRowsSelectorsProtocol(proc *process.Process, required bool) error {
