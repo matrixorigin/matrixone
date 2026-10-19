@@ -2991,7 +2991,7 @@ func (txn *Transaction) delTransaction() {
 	txn.removed = true
 
 	//txn.transfer.workerPool.Release()
-	txn.transfer.timestamps = nil
+	txn.transfer.statements = nil
 	txn.transfer.lastTransferred = types.TS{}
 	txn.transfer.pendingTransfer = false
 

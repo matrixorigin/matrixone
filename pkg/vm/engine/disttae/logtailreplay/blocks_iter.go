@@ -209,8 +209,9 @@ func (p *PartitionState) GetChangedTombstoneObjsBetween(from types.TS) (objs []o
 
 // GetChangedObjsBetween gets object changes in (begin, end]. Objects at begin
 // are already part of the transaction snapshot. An object created and deleted
-// wholly inside the interval is ignored because the transaction cannot have a
-// tombstone that references it.
+// wholly inside the interval is ignored by this snapshot-based projection.
+// In-memory tombstone transfer uses its own projection below because retained
+// RowIDs may have already been rewritten into intermediate objects.
 func (p *PartitionState) GetChangedObjsBetween(
 	begin types.TS,
 	end types.TS,
@@ -218,6 +219,21 @@ func (p *PartitionState) GetChangedObjsBetween(
 	deleted map[objectio.ObjectNameShort]struct{},
 	inserted map[objectio.ObjectNameShort]struct{},
 ) {
+	return p.getChangedObjsBetween(begin, end, false)
+}
+
+// GetChangedObjsBetweenForTombstoneTransfer includes deleted intermediate
+// objects: in-memory RowIDs can reference them after a statement rollback
+// because an earlier transfer rewrites retained batches in place.
+func (p *PartitionState) GetChangedObjsBetweenForTombstoneTransfer(
+	begin, end types.TS,
+) (deleted, inserted map[objectio.ObjectNameShort]struct{}) {
+	return p.getChangedObjsBetween(begin, end, true)
+}
+
+func (p *PartitionState) getChangedObjsBetween(
+	begin, end types.TS, includeIntermediateDeletes bool,
+) (deleted, inserted map[objectio.ObjectNameShort]struct{}) {
 	inserted = make(map[objectio.ObjectNameShort]struct{})
 	deleted = make(map[objectio.ObjectNameShort]struct{})
 
@@ -237,12 +253,10 @@ func (p *PartitionState) GetChangedObjsBetween(
 		}
 
 		if entry.IsDelete {
-			// if the object is inserted and deleted between [begin, end], it will be ignored.
-			if _, ok := inserted[entry.ShortObjName]; !ok {
+			if _, created := inserted[entry.ShortObjName]; !created || includeIntermediateDeletes {
 				deleted[entry.ShortObjName] = struct{}{}
-			} else {
-				delete(inserted, entry.ShortObjName)
 			}
+			delete(inserted, entry.ShortObjName)
 		} else {
 			inserted[entry.ShortObjName] = struct{}{}
 		}
