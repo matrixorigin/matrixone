@@ -119,16 +119,15 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					replayCases = append(replayCases, struct{ selectSQL, want string }{
 						"select name_const('c', '" + strings.ReplaceAll(value, `\`, `\\`) + "') as c", value})
 				}
+				metadataNames := make([][3]string, 0, len(replayCases))
 				for index, tc := range replayCases {
+					names := [3]string{fmt.Sprintf("name_const_source_%d", index)}
 					source := fmt.Sprintf("%s.name_const_source_%d", schema, index)
 					execSQLRequire(t, ctx, db, "create view "+source+" as "+tc.selectSQL)
-					read := func(view string) [4]string {
-						var values [4]string
+					read := func(view string) [3]string {
+						var values [3]string
 						require.NoError(t, db.QueryRowContext(ctx,
 							"select c, charset(c), collation(c) from "+view).Scan(&values[0], &values[1], &values[2]))
-						require.NoError(t, db.QueryRowContext(ctx,
-							"select column_type from information_schema.columns where table_schema=? and concat(table_schema, '.', table_name)=? and column_name='c'",
-							schema, view).Scan(&values[3]))
 						rows, err := db.QueryContext(ctx, "select * from "+view+" limit 0")
 						require.NoError(t, err)
 						defer rows.Close()
@@ -153,9 +152,37 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					legacyInput := strings.ReplaceAll(strings.ReplaceAll(string(persisted), `\`, `\\`), "'", "''")
 					require.NoError(t, db.QueryRowContext(ctx, "select mo_view_definition('"+legacyInput+"')").Scan(&legacyDefinition))
 					for generation, definition := range []string{currentDefinition, legacyDefinition} {
-						replayed := fmt.Sprintf("%s.name_const_replayed_%d_%d", schema, index, generation)
+						names[generation+1] = fmt.Sprintf("name_const_replayed_%d_%d", index, generation)
+						replayed := schema + "." + names[generation+1]
 						execSQLRequire(t, ctx, db, "create view "+replayed+" as "+definition)
 						require.Equal(t, want, read(replayed), definition)
+					}
+					metadataNames = append(metadataNames, names)
+				}
+				// The column catalog is stable after CREATE. Read it once for
+				// the round instead of repeating an information_schema scan for
+				// every source and replay; retain the same per-view type oracle.
+				columnTypes := func() map[string]string {
+					rows, err := db.QueryContext(ctx,
+						"select table_name, column_type from information_schema.columns where table_schema=? and column_name='c'", schema)
+					require.NoError(t, err)
+					defer rows.Close()
+					result := make(map[string]string, len(metadataNames)*3)
+					for rows.Next() {
+						var name, columnType string
+						require.NoError(t, rows.Scan(&name, &columnType))
+						require.NotContains(t, result, name)
+						require.NotEmpty(t, columnType)
+						result[name] = columnType
+					}
+					require.NoError(t, rows.Err())
+					return result
+				}()
+				require.Len(t, columnTypes, len(metadataNames)*3)
+				for _, names := range metadataNames {
+					for _, name := range names {
+						require.Contains(t, columnTypes, name)
+						require.Equal(t, columnTypes[names[0]], columnTypes[name], name)
 					}
 				}
 				execSQLRequire(t, ctx, db, "drop database "+schema)
