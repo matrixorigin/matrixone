@@ -78,21 +78,45 @@ func TestResultColumnKindsSharedGraphIsBounded(t *testing.T) {
 	}
 }
 
+func nestedResultColumnCTEPlan(t testing.TB, expression string, depth int) *pb.Plan {
+	t.Helper()
+	ctes := []string{"c0 AS (SELECT DISTINCT " + expression + " n FROM mo_catalog.mo_role_privs)"}
+	for level := 1; level <= depth; level++ {
+		ctes = append(ctes, fmt.Sprintf("c%d AS (SELECT n FROM c%d UNION ALL SELECT n FROM c%d)", level, level-1, level-1))
+	}
+	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
+		"WITH "+strings.Join(ctes, ",")+fmt.Sprintf(" SELECT n FROM c%d", depth))
+	require.NoError(t, err)
+	return p
+}
+
+func TestIntegerResultColumnsSkipBooleanGraph(t *testing.T) {
+	// Use the actual planner at the review's twelve-level scale, not a small
+	// synthetic DAG. Plan construction is outside the measured extraction.
+	p := nestedResultColumnCTEPlan(t, "role_id", 12)
+	require.GreaterOrEqual(t, len(p.GetQuery().Nodes), 32000)
+	var columns []*pb.ColDef
+	allocs := testing.AllocsPerRun(3, func() { columns = GetResultColumnsFromPlan(p) })
+	require.Len(t, columns, 1)
+	require.NotEqual(t, int32(types.T_bool), columns[0].Typ.Id)
+	require.Equal(t, pb.ResultColumnKind_RESULT_COLUMN_KIND_UNKNOWN, columns[0].ResultColumnKind)
+	// A non-BOOLEAN output must not allocate one provenance state per node.
+	// This generous constant permits ordinary column/origin bookkeeping.
+	require.LessOrEqual(t, allocs, 32.0)
+	t.Logf("nodes=%d metadata allocs/op=%.0f", len(p.GetQuery().Nodes), allocs)
+}
+
 func BenchmarkResultColumnsSharedProducers(b *testing.B) {
 	for _, expression := range []string{"role_id", "with_grant_option", "role_id>0"} {
 		b.Run(expression, func(b *testing.B) {
-			mock := NewMockOptimizer(false, newPlanTestProcess(b))
-			ctes := []string{"c0 AS (SELECT DISTINCT " + expression + " n FROM mo_catalog.mo_role_privs)"}
-			for level := 1; level <= 10; level++ {
-				ctes = append(ctes, fmt.Sprintf("c%d AS (SELECT n FROM c%d UNION ALL SELECT n FROM c%d)", level, level-1, level-1))
-			}
-			p, err := runOneStmt(mock, b, "WITH "+strings.Join(ctes, ",")+" SELECT n FROM c10")
-			require.NoError(b, err)
+			p := nestedResultColumnCTEPlan(b, expression, 12)
 			b.ReportAllocs()
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
 				GetResultColumnsFromPlan(p)
 			}
+			b.StopTimer()
+			b.ReportMetric(float64(len(p.GetQuery().Nodes)), "plan-nodes")
 		})
 	}
 }
