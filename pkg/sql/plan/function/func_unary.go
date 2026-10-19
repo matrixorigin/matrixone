@@ -1169,7 +1169,13 @@ func DateStringToDate(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 		}
 		parsed, err := types.ParseDatetime(functionUtil.QuickBytesToStr(value), 6)
 		if err != nil {
-			return moerr.NewOutOfRangeNoCtxf("date", "'%s'", value)
+			if !isTemporalLexicalConversionError(err) {
+				return err
+			}
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
 		}
 		if parsed == types.ZeroDatetime {
 			if !modeChecked {
