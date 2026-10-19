@@ -89,6 +89,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	if features.PreparedPrecisionScalar {
 		required = max(required, defines.MORPCVersion95)
 	}
+	if features.DecimalIntegerDivisionSemantics {
+		required = max(required, defines.MORPCVersion121)
+	}
 	if features.DecimalDivisionSemantics {
 		required = max(required, defines.MORPCVersion97)
 	}

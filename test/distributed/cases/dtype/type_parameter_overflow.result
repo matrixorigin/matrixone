@@ -58,7 +58,7 @@ SQL parser error: You have an error in your SQL syntax; check the manual that co
 select cast(1 as decimal(10,4294967297));
 SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. value is out of range int32 at line 1 column 39 near "));";
 prepare rejected_stmt from 'create table rejected (a varchar(4294967297))';
-You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. value is out of range int32 at line 1 column 44 near "))";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. value is out of range int32 at line 1 column 44 near "))";
 show tables like 'rejected';
 ➤ Tables_in_type_parameter_overflow[12,5000,0]
 select cast('abc' as char(3));

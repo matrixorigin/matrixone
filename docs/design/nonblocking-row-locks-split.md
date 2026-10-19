@@ -46,12 +46,12 @@ the existing rollback policy. This is not a promise to recover transport failure
 
 ## Physical protocol and state transitions
 
-MORPC v121 introduces `TryLock` method 25, `ForwardTryLock` method 26,
+MORPC v122 introduces `TryLock` method 25, `ForwardTryLock` method 26,
 `LockOptions.NoWait` field 15 and `LockResponse.NoWaitConflict` field 4.
 Coordinator, forwarder and owner enforce admission before any grant. An owner
-below v121 fails closed; the ordinary Lock method is never a compatibility retry.
+below v122 fails closed; the ordinary Lock method is never a compatibility retry.
 Main's v112 WEEK/DAYOFYEAR, v113 DECIMAL, v114 Unicode UNIQUE, v115 calendar
-interval, v116 SELECT division warnings, v117 collation ordering, v118 database/table defaults and v119 parameterized subquery and v120 KILL/session-control contracts remain unchanged.
+interval, v116 SELECT division warnings, v117 collation ordering, v118 database/table defaults and v119 parameterized subquery and v120 KILL/session-control and v121 unsigned DECIMAL DIV contracts remain unchanged.
 
 Plan NoWait field 18 and pipeline no_wait field 13 are additive; Part B adds
 SkipLocked fields 19/14. Existing numbers, unknown fields and result ABI remain
@@ -84,7 +84,7 @@ Late response capability/binding validation remains independent of that snapshot
 
 Part A has no SkipLocked flag, row filter, LIMIT refill or borrowed output state;
 it explicitly rejects SHARE SKIP LOCKED until Part B. Both reject UPDATE SKIP.
-Part B uses the same v121 exact-row Shared API, with no new physical RPC. A v121
+Part B uses the same v122 exact-row Shared API, with no new physical RPC. A v122
 NOWAIT-only physical owner can serve it; an older SQL coordinator can reject the
 new syntax. All targets must have consistent Shared/SkipLocked policy.
 
@@ -126,7 +126,7 @@ performance must be evaluated before adopting this syntax for a production queue
 
 ## Compatibility, rollout and diagnosis
 
-Upgrade coordinators/forwarders/owners to v121 before enabling application use.
+Upgrade coordinators/forwarders/owners to v122 before enabling application use.
 Do not route new syntax through an older SQL coordinator and assume it works.
 Unsupported owners fail closed; homogeneous dual-CN tests do not constitute a
 mixed-binary upgrade test. Existing capability/old-peer/two-service tests prove
@@ -134,7 +134,7 @@ no-grant rejection and cleanup boundaries at their stated source revisions.
 
 Rollback is to stop issuing the new syntax and drain affected transactions before
 downgrading; do not transparently rewrite NOWAIT/SKIP into ordinary waiting reads.
-There is no persisted-data migration. Prepared plans and active v121 requests
+There is no persisted-data migration. Prepared plans and active v122 requests
 must not be carried into an unsupported coordinator/owner generation.
 
 Existing SQL privilege checks, tenant/table routing and transaction ownership
@@ -250,8 +250,15 @@ The current main adds a dependent-query compiler which directly constructs LockO
 Maintenance design approval: independent reviewer `/root/contextual_lock_phrase_review` approved this narrow integration before implementation on 2026-10-19. Final implementation validation remains required. Both PRs remain Ready with `do-not-merge/wip`; Part B still requires Part A. FOR UPDATE SKIP LOCKED remains unsupported.
 
 
-## Current protocol allocation amendment (2026-10-19, main 95eb0f0c)
+## Earlier protocol allocation amendment (2026-10-19, main 95eb0f0c)
 
 Official main `95eb0f0ca39ff33af4d8d6d3e902d6609f08eff0` assigns v120 to current-session KILL authorization and proxy disconnect cleanup. Preserve that contract and its v120 method gates. Nonblocking row-lock admission therefore requires v121: reject v120 and earlier peers before dispatch and again before acknowledging a grant, including forwarding. The existing method numbers, wire fields, cleanup ownership and Compile-boundary validator remain unchanged. No FOR UPDATE SKIP LOCKED support is added.
 
 Independent reviewer `/root/contextual_lock_phrase_review` approved this narrow maintenance design before implementation. Existing protocol controls must demonstrate KILL admission at v120, nonblocking rejection at v120, nonblocking admission at v121 and rejection after a downgrade to v120 before acknowledgement. Prior approval and CI records apply to their recorded revisions; final implementation and new-head CI require separate verification. Recheck the official allocation before delivery. Both PRs remain Ready with `do-not-merge/wip`; Part B still requires Part A.
+
+
+## Current protocol allocation amendment (2026-10-19, main 87328274)
+
+Official main `873282742714436bff407dfcdbbe879147162bd3` assigns v121 to the exact unsigned DECIMAL DIV result domain. Preserve its compiler, expression, persisted-plan and dependent-program gates at v121, together with main's v120 KILL/session-control contract. Nonblocking row-lock admission therefore requires v122: reject v121 and earlier before dispatch and before acknowledging a grant, including forwarding. Method numbers, wire fields, cleanup ownership and Compile-boundary validation are unchanged. FOR UPDATE SKIP LOCKED remains unsupported.
+
+Independent reviewer `/root/contextual_lock_phrase_review` approved this narrow maintenance design before implementation. Verify v121 rejection, v122 admission and a downgrade from v122 to v121 before acknowledgement; retain separate DIV v121 controls. Rerun affected compiler/planner, PREPARE, two-CN and SQL BVT evidence; unchanged canonical generation/native inputs may reuse source-qualified receipts. Historical approvals and CI apply only to their recorded revisions. Both PRs remain Ready with `do-not-merge/wip`; Part B still requires Part A.

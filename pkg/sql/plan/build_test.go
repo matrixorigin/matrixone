@@ -357,6 +357,19 @@ func BenchmarkInsert(b *testing.B) {
 	}
 }
 
+// A syntax failure inside SQL PREPARE text must report ER_PARSE_ERROR
+// (1064/42000) like the same statement executed directly, not the generic
+// 1105 for unclassified errors (#30434).
+func TestBuildPrepareStringSyntaxErrorIsParseError(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt := tree.NewPrepareString("bad_stmt", "SELECT FROM")
+	defer stmt.Free()
+	_, err := buildPrepare(stmt, ctx)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrParseError),
+		"expected 1064/42000 for inner syntax error, got: %v", err)
+}
+
 func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
 	ctx := &sqlModeMockCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
