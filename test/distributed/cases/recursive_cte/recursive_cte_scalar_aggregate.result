@@ -100,6 +100,131 @@ EXECUTE p_29135 USING @limit_29135;
 3  𝄀
 4
 DEALLOCATE PREPARE p_29135;
+WITH RECURSIVE grouped_anchor(n, row_count) AS (
+SELECT limit_n, COUNT(*) FROM limits_29135
+WHERE limit_n = 2 GROUP BY limit_n HAVING COUNT(*) > 0
+UNION ALL
+SELECT n + 1, row_count FROM grouped_anchor WHERE n < 4
+)
+SELECT n, row_count FROM grouped_anchor ORDER BY n;
+➤ n[4,32,0]  ¦  row_count[-5,64,0]  𝄀
+2  ¦  1  𝄀
+3  ¦  1  𝄀
+4  ¦  1
+WITH RECURSIVE grouped_projection(n, row_count) AS (
+SELECT 1, 0
+UNION ALL
+SELECT n + 1, (SELECT COUNT(*) FROM sales_29135 GROUP BY YEAR(dt))
+FROM grouped_projection WHERE n < 3
+)
+SELECT n, row_count FROM grouped_projection ORDER BY n;
+➤ n[-5,64,0]  ¦  row_count[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2  𝄀
+3  ¦  2
+WITH RECURSIVE scalar_having(n, present_count, absent_count) AS (
+SELECT 1, 0, 0
+UNION ALL
+SELECT n + 1,
+(SELECT COUNT(*) FROM sales_29135 HAVING COUNT(*) > 0),
+(SELECT COUNT(*) FROM sales_29135 HAVING COUNT(*) > 2)
+FROM scalar_having WHERE n < 2
+)
+SELECT n, present_count, absent_count FROM scalar_having ORDER BY n;
+➤ n[-5,64,0]  ¦  present_count[-5,64,0]  ¦  absent_count[-5,64,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  2  ¦  null
+WITH RECURSIVE grouped_predicate(n) AS (
+SELECT 1
+UNION ALL
+SELECT n + 1 FROM grouped_predicate
+WHERE n < (SELECT MAX(limit_n) FROM limits_29135
+GROUP BY limit_n HAVING limit_n = 2)
+)
+SELECT n FROM grouped_predicate ORDER BY n;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2
+WITH RECURSIVE correlated_group(n, row_count) AS (
+SELECT 1, 0
+UNION ALL
+SELECT n + 1, (SELECT COUNT(*) FROM limits_29135
+WHERE limit_n = correlated_group.n GROUP BY limit_n)
+FROM correlated_group WHERE n < 4
+)
+SELECT n, row_count FROM correlated_group ORDER BY n;
+➤ n[-5,64,0]  ¦  row_count[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  null  𝄀
+3  ¦  1  𝄀
+4  ¦  null
+WITH RECURSIVE group_boundaries(n, null_count, empty_count) AS (
+SELECT 1, 0, 0
+UNION ALL
+SELECT n + 1,
+(SELECT COUNT(*) FROM null_bounds_29135 GROUP BY dt),
+(SELECT COUNT(*) FROM empty_bounds_29135 GROUP BY dt)
+FROM group_boundaries WHERE n < 2
+)
+SELECT n, null_count, empty_count FROM group_boundaries ORDER BY n;
+➤ n[-5,64,0]  ¦  null_count[-5,64,0]  ¦  empty_count[-5,64,0]  𝄀
+1  ¦  0  ¦  0  𝄀
+2  ¦  2  ¦  null
+WITH RECURSIVE nested_group(n, row_count) AS (
+SELECT 1, 0
+UNION ALL
+SELECT n + 1, (SELECT (SELECT COUNT(*) FROM sales_29135 GROUP BY YEAR(dt)))
+FROM nested_group WHERE n < 2
+)
+SELECT n, row_count FROM nested_group ORDER BY n;
+➤ n[-5,64,0]  ¦  row_count[-5,64,0]  𝄀
+1  ¦  0  𝄀
+2  ¦  2
+PREPARE grouped_23077 FROM 'WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < (SELECT MAX(limit_n) FROM limits_29135 WHERE limit_n = ? GROUP BY limit_n HAVING COUNT(*) > 0)) SELECT n FROM r ORDER BY n';
+SET @grouped_limit = 2;
+EXECUTE grouped_23077 USING @grouped_limit;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2
+SET @grouped_limit = 4;
+EXECUTE grouped_23077 USING @grouped_limit;
+➤ n[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3  𝄀
+4
+SET @grouped_limit = 3;
+EXECUTE grouped_23077 USING @grouped_limit;
+➤ n[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE grouped_23077;
+WITH RECURSIVE multiple_groups(n, row_count) AS (
+SELECT 1, 0
+UNION ALL
+SELECT n + 1, (SELECT COUNT(*) FROM limits_29135 GROUP BY limit_n)
+FROM multiple_groups WHERE n < 2
+)
+SELECT n, row_count FROM multiple_groups;
+-- @regex("Subquery returns more than 1 row", true)
+Subquery returns more than 1 row
+WITH RECURSIVE direct_group(n) AS (
+SELECT 1 UNION ALL SELECT n + 1 FROM direct_group WHERE n < 3 GROUP BY n
+)
+SELECT * FROM direct_group;
+-- @regex("not support group by in recursive cte", true)
+SQL parser error: not support group by in recursive cte: 'group by n'
+WITH RECURSIVE nested_source(n, row_count) AS (
+SELECT 1, 0
+UNION ALL
+SELECT n + 1, (SELECT COUNT(*) FROM nested_source GROUP BY n)
+FROM nested_source WHERE n < 2
+)
+SELECT * FROM nested_source;
+-- @regex("not in any subquery", true)
+SQL parser error: In recursive query block of Recursive Common Table Expression nested_source, the recursive table must be referenced only once, and not in any subquery
+SELECT 'after grouped scalar errors' AS service_status;
+➤ service_status[12,27,0]  𝄀
+after grouped scalar errors
 WITH RECURSIVE rejected_29135(n) AS (
 SELECT 1
 UNION ALL
