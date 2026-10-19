@@ -63,9 +63,12 @@ type SourceColumn struct {
 }
 
 type OutputColumnProvenance struct {
-	State             ProvenanceState
-	Source            *SourceColumn
-	CTASDefaultPolicy CTASDefaultPolicy
+	// Planner-local display length of a DECIMAL DIV expression, captured before
+	// optimization and carried only across transparent query boundaries.
+	DecimalDivDisplayLength int32
+	State                   ProvenanceState
+	Source                  *SourceColumn
+	CTASDefaultPolicy       CTASDefaultPolicy
 }
 
 func snapshotSourceColumnMetadata(col *plan.ColDef) SourceColumnMetadata {
@@ -136,6 +139,8 @@ func (bc *BindContext) markViewCTASDefaultBoundary() {
 			provenance.Source = &source
 			provenance.CTASDefaultPolicy = ctasViewDefaultPolicy(provenance.Source.Metadata)
 		}
+		// The executable view boundary has already restored its schema domain.
+		provenance.DecimalDivDisplayLength = 0
 		bc.setOutputColumnProvenance(int32(i), provenance)
 	}
 }
@@ -174,6 +179,11 @@ func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) OutputColu
 	if expr == nil {
 		return OutputColumnProvenance{State: ProvenanceNone}
 	}
+	if literal := expr.GetLit(); literal != nil && literal.Src != nil {
+		if provenance := bc.outputColumnProvenanceForExpr(literal.Src); provenance.DecimalDivDisplayLength > 0 {
+			return provenance
+		}
+	}
 	if isPureNullLiteralExpr(expr) {
 		return OutputColumnProvenance{State: ProvenancePureNull}
 	}
@@ -181,6 +191,12 @@ func (bc *BindContext) outputColumnProvenanceForExpr(expr *plan.Expr) OutputColu
 		return bc.outputColumnProvenanceForExpr(sourceExpr)
 	}
 
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		id, _ := planfunction.DecodeOverloadID(fn.Func.Obj)
+		if id == planfunction.INTEGER_DIV && expr.Typ.Width > 0 && expr.Typ.Width <= 20 && expr.Typ.Scale == 0 {
+			return OutputColumnProvenance{State: ProvenanceNone, DecimalDivDisplayLength: expr.Typ.Width}
+		}
+	}
 	col := expr.GetCol()
 	if col == nil {
 		return OutputColumnProvenance{State: ProvenanceNone}
