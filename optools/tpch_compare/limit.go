@@ -29,6 +29,9 @@ func validateLimit(rootLimited, rootFull string, limited, full Capture, q Query)
 	if q.Limit <= 0 || len(q.Order) == 0 {
 		return errors.New("LIMIT membership requires an ordered limited query")
 	}
+	if limited.Version != formatVersion || full.Version != formatVersion || limited.Rows < 0 || full.Rows < 0 || len(limited.Columns) != len(q.Columns) || len(full.Columns) != len(q.Columns) {
+		return errors.New("LIMIT capture count/schema mismatch")
+	}
 	for _, c := range q.Columns {
 		if c.Kind == "approximate" {
 			return errors.New("approximate LIMIT membership has no qualified contract")
