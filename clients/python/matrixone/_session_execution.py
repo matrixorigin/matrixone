@@ -19,14 +19,16 @@ class _LiteralSQL(TextClause):
         self._literal_client = client
         self._literal_params = params
 
-    def _render_on_connection(self, connection):
+    def _render_on_connection(self, connection, *, sql_mode=None):
         if self._literal_client is None:
             return self
         from ._sql_literals import connection_sql_mode
 
         return _LiteralSQL(
             self._literal_client._substitute_parameters(
-                self.text, self._literal_params, sql_mode=connection_sql_mode(connection)
+                self.text,
+                self._literal_params,
+                sql_mode=connection_sql_mode(connection) if sql_mode is None else sql_mode,
             )
         )
 
@@ -63,20 +65,34 @@ def _compile_literal_sql(statement, compiler, **kwargs):
 
 @event.listens_for(Engine, 'before_execute', retval=True)
 def _render_wrapped_literals(connection, statement, multiparams, params, execution_options):
-    # A do_orm_execute hook may turn the SDK literal into a TextualSelect or
-    # embed it in a larger expression. This connection event runs after all
-    # Session routing hooks, including invoke_statement(), on sync/async engines.
-    # Only our deferred leaves are replaced; ordinary SQLAlchemy statements and
-    # their bind parameters are returned unchanged.
-    deferred = [
-        node
-        for node in visitors.iterate(statement)
-        if isinstance(node, _LiteralSQL) and node._literal_client is not None
-    ]
-    if not deferred:
+    # Session supplies this option only for the current mode-sensitive SDK call.
+    # Unrelated Core/ORM engines and cached queries must never walk their graph.
+    if not execution_options.get('_matrixone_deferred_literals', False):
         return statement, multiparams, params
     try:
-        rendered = {id(node): node._render_on_connection(connection) for node in deferred}
+        pending, seen, deferred = [statement], set(), {}
+        while pending:
+            node = pending.pop()
+            identity = id(node)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            if isinstance(node, _LiteralSQL) and node._literal_client is not None:
+                deferred[identity] = node
+            else:
+                # CTE/subquery references form a DAG. Discover each object once,
+                # regardless of how many parent expressions refer to it.
+                pending.extend(node.get_children())
+        if not deferred:
+            return statement, multiparams, params
+        from ._sql_literals import connection_sql_mode
+
+        mode = connection_sql_mode(connection)
+        rendered = {
+            identity: node._render_on_connection(connection, sql_mode=mode) for identity, node in deferred.items()
+        }
+        # SQLAlchemy memoizes its clones, retaining shared graph identities and
+        # outer binds without revisiting the same subtree for every reference.
         statement = visitors.replacement_traverse(statement, {}, lambda node: rendered.get(id(node)))
         return statement, multiparams, params
     except BaseException:
@@ -88,15 +104,17 @@ def _render_wrapped_literals(connection, statement, multiparams, params, executi
 def execute_session_sql(
     parent_execute, sql, *, bind_arguments=None, execution_options=None, client=None, params=None, **kwargs
 ):
+    options = dict(execution_options or {})
     if client is not None and params is not None and '\\' in sql:
         # Keep mode-sensitive SQL unrendered until the parent has selected its
         # actual connection. No eager Session.connection() or duplicate routing.
         statement = _LiteralSQL(sql, client, params)
+        options['_matrixone_deferred_literals'] = True
     else:
         statement = _LiteralSQL(client._substitute_parameters(sql, params) if client is not None else sql)
     return parent_execute(
         statement,
         bind_arguments=dict(bind_arguments) if bind_arguments is not None else None,
-        execution_options=dict(execution_options or {}),
+        execution_options=options,
         **kwargs,
     )
