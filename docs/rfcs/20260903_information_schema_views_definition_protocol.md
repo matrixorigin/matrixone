@@ -90,7 +90,10 @@ retains ordinary NAME_CONST calls, but exports a backslash-containing text value
 as its equivalent mode-independent literal expression. Its implicit projection
 name is retained as an alias, including in derived tables. Parentheses and
 explicit COLLATE on the value remain intact. Binary literal values keep their
-function call and binary type. This export mode does not mutate the AST or relax
+function call and binary type. Escaped text uses `VARCHAR(n)` with the decoded
+literal's character width, rather than the unsized cast's default width of
+65535, so both current and legacy export preserve column types on replay.
+This export mode does not mutate the AST or relax
 normal binding: arbitrary CAST/function arguments remain invalid NAME_CONST
 inputs. Both CREATE/ALTER metadata and Stmt-only reads use the same formatter;
 already-frozen definition strings remain unchanged.

@@ -112,9 +112,9 @@ func TestViewDefinitionNameConstFormattingIsScoped(t *testing.T) {
 		valueType P_TYPE
 		want      string
 	}{
-		{"text literal", P_char, P_char, "(cast(0x615c62 as varchar)) as `c`"},
+		{"text literal", P_char, P_char, "(cast(0x615c62 as varchar(3))) as `c`"},
 		{"binary value keeps function", P_char, P_ScoreBinary, "name_const('c', _binary 0x615c62) as `c`"},
-		{"invalid name keeps function", P_null, P_char, "name_const(null, cast(0x615c62 as varchar)) as `name_const(null, a\\\\b)`"},
+		{"invalid name keeps function", P_null, P_char, "name_const(null, cast(0x615c62 as varchar(3))) as `name_const(null, a\\\\b)`"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			name := NewUnresolvedColName("name_const")

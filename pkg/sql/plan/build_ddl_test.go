@@ -7429,6 +7429,9 @@ func TestValidateIdentifierEncoding(t *testing.T) {
 
 func TestBuildCreateViewMetadataReplay(t *testing.T) {
 	for _, selectSQL := range []string{
+		`select 'ab' as c`,
+		`select 'a\\b' as c`,
+		`select 'é\\界' as c`,
 		`select src.ab from (select _binary 'ab') src`,
 		`select src.ab from (select _binary 'ab' as ab) src`,
 		`select src.` + "`n_nationkey + 1`" + ` from (select n_nationkey + 1 from nation) src`,
@@ -7471,6 +7474,7 @@ func TestBuildCreateViewMetadataReplay(t *testing.T) {
 				for i, col := range original.Cols {
 					require.Equal(t, col.Name, replayed.Cols[i].Name)
 					require.Equal(t, col.Typ.Id, replayed.Cols[i].Typ.Id)
+					require.Equal(t, col.Typ.Width, replayed.Cols[i].Typ.Width, data.Definition)
 					require.Equal(t, col.Typ.Charset, replayed.Cols[i].Typ.Charset)
 					require.Equal(t, col.Typ.CollationVersion, replayed.Cols[i].Typ.CollationVersion)
 				}

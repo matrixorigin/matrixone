@@ -138,7 +138,8 @@ func (ctx *FmtCtx) ModeIndependentStringLiterals() bool {
 
 // WithViewDefinition exports executable SELECT metadata. NAME_CONST values that
 // require canonical string casts are emitted as literals with their named output
-// preserved, including inside derived tables. Normal binding remains strict.
+// preserved, including inside derived tables. Text casts retain the literal's
+// character width for schema-preserving replay. Normal binding remains strict.
 func WithViewDefinition() FmtCtxOption {
 	return FmtCtxOption(func(ctx *FmtCtx) {
 		ctx.viewDefinition = true

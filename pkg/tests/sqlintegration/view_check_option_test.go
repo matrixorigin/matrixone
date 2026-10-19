@@ -82,8 +82,11 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					require.Equal(t, tc.want, equal, definition)
 				}
 				// A metadata round trip retains NAME_CONST's public column name,
-				// bytes, character set and collation for new and Stmt-only rows.
+				// bytes, column type, character set and collation for new and Stmt-only rows.
 				for index, tc := range []struct{ selectSQL, want string }{
+					{`select 'ab' as c`, "ab"},
+					{`select 'a\\b' as c`, "a\\b"},
+					{`select 'é\\界' as c`, "é\\界"},
 					{`select src.ab as c from (select _binary 'ab') src`, "ab"},
 					{`select src.ab as c from (select _binary 'ab' as ab) src`, "ab"},
 					{`select src.` + "`n + 1`" + ` as c from (select n + 1 from (select 1 as n) t) src`, "2"},
@@ -104,10 +107,13 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 				} {
 					source := fmt.Sprintf("%s.name_const_source_%d", schema, index)
 					execSQLRequire(t, ctx, db, "create view "+source+" as "+tc.selectSQL)
-					read := func(view string) [3]string {
-						var values [3]string
+					read := func(view string) [4]string {
+						var values [4]string
 						require.NoError(t, db.QueryRowContext(ctx,
 							"select hex(cast(c as char)), charset(c), collation(c) from "+view).Scan(&values[0], &values[1], &values[2]))
+						require.NoError(t, db.QueryRowContext(ctx,
+							"select column_type from information_schema.columns where table_schema=? and concat(table_schema, '.', table_name)=? and column_name='c'",
+							schema, view).Scan(&values[3]))
 						rows, err := db.QueryContext(ctx, "select * from "+view+" limit 0")
 						require.NoError(t, err)
 						defer rows.Close()

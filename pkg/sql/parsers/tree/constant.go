@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 )
@@ -192,6 +193,13 @@ func (node *NumVal) Format(ctx *FmtCtx) {
 		switch node.ValType {
 		case P_char:
 			if strings.Contains(node.origString, "\\") {
+				if ctx.viewDefinition {
+					// Binding a text literal infers its width in characters.
+					// An unsized VARCHAR cast instead defaults to 65535 on
+					// replay, changing the exported view's column schema.
+					fmt.Fprintf(ctx, "cast(0x%x as varchar(%d))", []byte(node.origString), utf8.RuneCountInString(node.origString))
+					return
+				}
 				fmt.Fprintf(ctx, "cast(0x%x as varchar)", []byte(node.origString))
 				return
 			}
