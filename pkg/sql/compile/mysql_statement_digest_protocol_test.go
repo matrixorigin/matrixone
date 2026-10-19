@@ -52,10 +52,10 @@ func TestStatementDigestTextRejectsUnsupportedWorker(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(scope.RootOp.(*projection.Projection).ProjectList[0])
 	require.NoError(t, err)
 	require.True(t, features.StatementDigestText)
-	require.Equal(t, defines.MORPCVersion121, remoteExpressionProtocolVersion(features))
-	client.version = defines.MORPCVersion119
+	require.Equal(t, defines.MORPCVersion122, remoteExpressionProtocolVersion(features))
+	client.version = defines.MORPCVersion121
 	data, err := encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "remote destination does not support STATEMENT_DIGEST_TEXT (MORPC version 121)")
+	require.ErrorContains(t, err, "remote destination does not support STATEMENT_DIGEST_TEXT (MORPC version 122)")
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported))
 	require.Empty(t, data)
 	require.Equal(t, 1, client.calls)
@@ -65,14 +65,14 @@ func TestStatementDigestTextRejectsUnsupportedWorker(t *testing.T) {
 func TestStatementDigestTextRechecksAfterWorkerDowngrade(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	scope := mysqlStatementDigestTextProtocolTestScope(t, c, "statement_digest_text")
-	client.version = defines.MORPCVersion121
+	client.version = defines.MORPCVersion122
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	require.NotEmpty(t, data)
 	require.Equal(t, 1, client.calls)
 
 	// A replacement worker must not inherit the previous capability result.
-	client.version = defines.MORPCVersion119
+	client.version = defines.MORPCVersion121
 	data, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "remote destination")
 	require.Empty(t, data)

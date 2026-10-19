@@ -806,7 +806,7 @@ message SessionInfo {
   // Effective locale captured for locale-sensitive temporal functions.
   string lc_time_names = 22;
   // MySQL statement digest text length captured on the initiating CN; zero is
-  // meaningful when present. These fields belong to MORPC v121.
+  // meaningful when present. These fields belong to MORPC v122.
   int64 max_digest_length = 23;
   bool max_digest_length_set = 24;
 }

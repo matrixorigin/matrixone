@@ -39,7 +39,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
-		{features.StatementDigestText, defines.MORPCVersion121,
+		{features.StatementDigestText, defines.MORPCVersion122,
 			"STATEMENT_DIGEST_TEXT requires a versioned remote destination",
 			"remote destination does not support STATEMENT_DIGEST_TEXT (MORPC version %d)"},
 		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
