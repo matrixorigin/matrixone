@@ -48,19 +48,22 @@ func TestIssue28579PreparedIntegerDivKeepsPrecision(t *testing.T) {
 
 func TestIssue28578UnsignedDividendRejectsNegativeQuotient(t *testing.T) {
 	tests := []struct {
-		name  string
-		sql   string
-		param ParamValue
+		name     string
+		sql      string
+		param    ParamValue
+		wantLeft types.T
 	}{
 		{
-			name:  "signed divisor",
-			sql:   "prepare issue28578_signed from 'select cast(10 as unsigned) div cast(? as signed)'",
-			param: ParamValue{Value: "-3", PrepareParamKind: vector.PrepareParamInteger},
+			name:     "signed divisor",
+			wantLeft: types.T_uint64,
+			sql:      "prepare issue28578_signed from 'select cast(10 as unsigned) div cast(? as signed)'",
+			param:    ParamValue{Value: "-3", PrepareParamKind: vector.PrepareParamInteger},
 		},
 		{
-			name:  "decimal divisor",
-			sql:   "prepare issue28578_decimal from 'select cast(10 as unsigned) div cast(? as decimal(10, 2))'",
-			param: ParamValue{Value: "-3.00", PrepareParamKind: vector.PrepareParamDecimal},
+			name:     "decimal divisor",
+			wantLeft: types.T_decimal256,
+			sql:      "prepare issue28578_decimal from 'select cast(10 as unsigned) div cast(? as decimal(10, 2))'",
+			param:    ParamValue{Value: "-3.00", PrepareParamKind: vector.PrepareParamDecimal},
 		},
 	}
 
@@ -71,7 +74,7 @@ func TestIssue28578UnsignedDividendRejectsNegativeQuotient(t *testing.T) {
 			queryPlan := prepared.GetDcl().GetPrepare().Plan
 			fn := findPlanFunctionExpr(queryPlan, "div")
 			require.NotNil(t, fn)
-			require.Equal(t, int32(types.T_uint64), fn.GetF().Args[0].Typ.Id)
+			require.Equal(t, int32(test.wantLeft), fn.GetF().Args[0].Typ.Id)
 			require.NotEqual(t, int32(types.T_float64), fn.GetF().Args[1].Typ.Id)
 
 			filled, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), queryPlan, []any{test.param})
