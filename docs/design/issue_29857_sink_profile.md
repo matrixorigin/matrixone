@@ -1,10 +1,13 @@
 # Transactional event-ledger sink profile
 
-Status: design review requested for issue #29857. The first implementation
-will be a runnable Kafka Connect sink and a NiFi ingress route through Kafka
-to that sink. A direct NiFi-to-MatrixOne processor is outside this first
-implementation. The generic JDBC sink and NiFi `PutSQL` do not provide this
-contract.
+Status: design review requested for issue #29857; implementation PR #30561.
+Design approval for this exact revision is pending. Implementation review
+remains blocked until that approval is recorded separately.
+
+The first implementation will be a runnable Kafka Connect sink and a NiFi
+ingress route through Kafka to that sink. A direct NiFi-to-MatrixOne processor
+is outside this first implementation. The generic JDBC sink and NiFi `PutSQL`
+do not provide this contract.
 
 ## Implementation decision
 
