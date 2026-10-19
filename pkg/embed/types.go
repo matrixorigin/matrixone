@@ -22,6 +22,8 @@ import (
 type Cluster interface {
 	ID() uint64
 	Start() error
+	// Stop retains ports for a later Start; Close releases all cluster resources.
+	Stop() error
 	Close() error
 	StartNewCNService(n int) error
 	GetService(sid string) (ServiceOperator, error)

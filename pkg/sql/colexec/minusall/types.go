@@ -36,16 +36,16 @@ const (
 type container struct {
 	state int
 
+	iterator  hashmap.Iterator
 	hashTable *hashmap.StrHashMap
 	remaining []uint64
-	selected  []uint8
-	zeroes    []uint8
 	bat       *batch.Batch
 
 	keyEvaluator colexec.SetOperationKeyEvaluator
 }
 
 type MinusAll struct {
+	colexec.SetOperationAllocation
 	ctr      container
 	KeyExprs []*plan.Expr
 
@@ -75,6 +75,11 @@ func (minusAll *MinusAll) Release() {
 func (minusAll *MinusAll) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	ctr := &minusAll.ctr
 	ctr.state = buildingHashMap
+	// Account-bound batches and key evaluators cannot survive EXECUTE reset.
+	if minusAll.ExpressionAllocation() != nil {
+		minusAll.Free(proc, pipelineFailed, err)
+		return
+	}
 	ctr.cleanHashMap()
 	ctr.cleanRemaining(proc.Mp())
 	ctr.keyEvaluator.Reset()
@@ -92,6 +97,7 @@ func (minusAll *MinusAll) Free(proc *process.Process, pipelineFailed bool, err e
 		ctr.bat.Clean(proc.Mp())
 		ctr.bat = nil
 	}
+	minusAll.FreeMetadata()
 }
 
 func (minusAll *MinusAll) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -99,6 +105,8 @@ func (minusAll *MinusAll) ExecProjection(proc *process.Process, input *batch.Bat
 }
 
 func (ctr *container) cleanHashMap() {
+	hashmap.IteratorClearOwner(ctr.iterator)
+	ctr.iterator = nil
 	if ctr.hashTable != nil {
 		ctr.hashTable.Free()
 		ctr.hashTable = nil

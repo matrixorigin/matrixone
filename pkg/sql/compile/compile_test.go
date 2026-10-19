@@ -59,6 +59,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashbuild"
@@ -105,11 +106,43 @@ func TestBroadcastJoinUsesHashAfterPreparedDiagnosticProof(t *testing.T) {
 		bind("=", leftID, rightID), bind("=", leftTime, guard),
 	}}
 	c := &Compile{proc: proc}
+	assertDependentAlgorithm := func(want vm.OpType) {
+		children := []*plan.Node{
+			{ProjectList: []*plan.Expr{leftID, leftTime}},
+			{ProjectList: []*plan.Expr{rightID, rightTime}},
+		}
+		factory, err := c.compileDependentJoin(plan2.DeepCopyNode(node), children)
+		require.NoError(t, err)
+		op, err := factory(proc, []*dependent.DemandInput{{}, {}})
+		require.NoError(t, err)
+		root := op.(*dependent.JoinKernel)
+		defer func() {
+			root.Free(proc, false, nil)
+			root.Join.Free(proc, false, nil)
+			root.Build.Free(proc, false, nil)
+			root.Join.Release()
+			root.Build.Release()
+		}()
+		require.Equal(t, want, root.Join.OpType())
+	}
 	require.False(t, c.broadcastJoinUsesHash(node), "unproved guarded ON retains LoopJoin")
+	assertDependentAlgorithm(vm.LoopJoin)
 	c.SetPreparedJoinDiagnosticFree(true)
 	require.True(t, c.broadcastJoinUsesHash(node), "current clean binding permits HashJoin")
+	assertDependentAlgorithm(vm.HashJoin)
 	c.SetPreparedJoinDiagnosticFree(false)
 	require.False(t, c.broadcastJoinUsesHash(node), "a subsequent execution must not inherit proof")
+	assertDependentAlgorithm(vm.LoopJoin)
+
+	// A single nullable MARK key is otherwise hash eligible, but must retain
+	// pair-local guarded diagnostics until this execution proves them clean.
+	node.JoinType = plan.Node_MARK
+	node.OnList = node.OnList[1:]
+	assertDependentAlgorithm(vm.LoopJoin)
+	c.SetPreparedJoinDiagnosticFree(true)
+	assertDependentAlgorithm(vm.HashJoin)
+	c.SetPreparedJoinDiagnosticFree(false)
+	assertDependentAlgorithm(vm.LoopJoin)
 }
 
 func TestHasOrderedGroupConcat(t *testing.T) {
@@ -1254,27 +1287,54 @@ func TestCompileLockRejectsOptimisticNonBlockingBeforeScopeExecution(t *testing.
 }
 
 func TestCompileRejectsOptimisticNonBlockingBeforeScopeConstruction(t *testing.T) {
-	c := NewMockCompile(t)
-	ctrl := gomock.NewController(t)
-	txnOp := mock_frontend.NewMockTxnOperator(ctrl)
-	txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txn.TxnMode_Optimistic}).AnyTimes()
-	c.proc.Base.TxnOperator = txnOp
-
-	queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
-		StmtType: plan.Query_SELECT,
-		Nodes: []*plan.Node{{
-			NodeType: plan.Node_LOCK_OP,
-			LockTargets: []*plan.LockTarget{{
-				TableId: 42, Mode: lockpb.LockMode_Shared, NoWait: true,
-			}},
-		}},
-	}}}
-
-	err := c.Compile(context.Background(), queryPlan, nil)
-	require.Error(t, err)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
-	require.Nil(t, c.scopes, "rejection must happen before constructing any source scopes")
-	require.Nil(t, c.cnList, "rejection must happen before scheduling remote workers")
+	for _, mode := range []struct {
+		name   string
+		noWait bool
+	}{{name: "NOWAIT", noWait: true}} {
+		for _, tc := range []struct {
+			name                                    string
+			optimistic, disabled, coarse, coarseEnd bool
+			message                                 string
+		}{
+			{name: "optimistic", optimistic: true, message: "requires a pessimistic transaction"},
+			{name: "disabled", disabled: true, message: "requires physical lock admission"},
+			{name: "coarse", coarse: true, message: "requires exact row lock targets"},
+			{name: "coarse at EOF", coarseEnd: true, message: "requires exact row lock targets"},
+		} {
+			for _, correlated := range []bool{false, true} {
+				shape := "ordinary"
+				if correlated {
+					shape = "dependent"
+				}
+				t.Run(mode.name+"/"+tc.name+"/"+shape, func(t *testing.T) {
+					c := NewMockCompile(t)
+					c.disableLock = tc.disabled
+					ctrl := gomock.NewController(t)
+					txnOp := mock_frontend.NewMockTxnOperator(ctrl)
+					txnMode := txn.TxnMode_Pessimistic
+					if tc.optimistic {
+						txnMode = txn.TxnMode_Optimistic
+					}
+					txnOp.EXPECT().Txn().Return(txn.TxnMeta{Mode: txnMode}).AnyTimes()
+					c.proc.Base.TxnOperator = txnOp
+					target := &plan.LockTarget{TableId: 42, Mode: lockpb.LockMode_Shared, NoWait: mode.noWait, LockTable: tc.coarse, LockTableAtTheEnd: tc.coarseEnd}
+					query := &plan.Query{StmtType: plan.Query_SELECT, Steps: []int32{0}, Nodes: []*plan.Node{{NodeType: plan.Node_LOCK_OP, LockTargets: []*plan.LockTarget{target}}}}
+					if correlated {
+						query.Correlation = &plan.CorrelationSpec{Programs: []*plan.CorrelationProgram{{RootNode: 0}}}
+					}
+					queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: query}}
+					err := c.Compile(context.Background(), queryPlan, nil)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+					require.ErrorContains(t, err, tc.message)
+					require.Nil(t, c.scopes, "rejection must precede source construction")
+					require.Nil(t, c.cnList, "rejection must precede remote scheduling")
+					require.Empty(t, c.lockTables)
+					require.Same(t, target, query.Nodes[0].LockTargets[0])
+				})
+			}
+		}
+	}
 }
 
 func TestCompileLockDisabledSkipsAllStatementLocks(t *testing.T) {

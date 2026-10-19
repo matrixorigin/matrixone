@@ -8594,14 +8594,16 @@ func TestReplaceAndChildInsertUseCanonicalForeignKeyLockOrder(t *testing.T) {
 
 func TestSelectLockPoliciesReachOnlyTheirQueryBlockTargets(t *testing.T) {
 	tests := []struct {
-		name   string
-		sql    string
-		mode   lockpb.LockMode
-		noWait bool
+		name       string
+		sql        string
+		mode       lockpb.LockMode
+		noWait     bool
+		correlated bool
 	}{
 		{name: "ordinary share", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE", mode: lockpb.LockMode_Shared},
 		{name: "update nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR UPDATE NOWAIT", mode: lockpb.LockMode_Exclusive, noWait: true},
 		{name: "share nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT", mode: lockpb.LockMode_Shared, noWait: true},
+		{name: "correlated nowait", sql: "SELECT N_NATIONKEY FROM NATION WHERE N_NATIONKEY=1 AND N_NATIONKEY=(SELECT (SELECT NATION.N_NATIONKEY)) FOR SHARE NOWAIT", mode: lockpb.LockMode_Shared, noWait: true, correlated: true},
 		{
 			name:   "nested clause does not leak to outer target",
 			sql:    "SELECT N_NATIONKEY FROM NATION WHERE N_NATIONKEY IN (SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT)",
@@ -8614,6 +8616,9 @@ func TestSelectLockPoliciesReachOnlyTheirQueryBlockTargets(t *testing.T) {
 			mock := NewMockOptimizer(true, newPlanTestProcess(t))
 			logicPlan, err := runOneStmt(mock, t, test.sql)
 			require.NoError(t, err)
+			if test.correlated {
+				require.NotNil(t, logicPlan.GetQuery().Correlation, "the regression must reach the dependent compiler")
+			}
 
 			var targets []*plan.LockTarget
 			for _, node := range logicPlan.GetQuery().Nodes {
@@ -8778,11 +8783,10 @@ func TestSubQuery(t *testing.T) {
 				OR n3.N_REGIONKEY = 1
 		)
 	)`
-	_, err := runOneStmt(mock, t, sql)
-	assert.Error(t, err)
-	if err != nil {
-		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
-	}
+	p, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation)
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
 }
 
 func TestCorrelatedScalarAggregatePushdown(t *testing.T) {
@@ -10485,13 +10489,13 @@ func TestSubqueryInOuterJoinOn(t *testing.T) {
 	_, err := runOneStmt(mock, t,
 		"SELECT a.n_nationkey FROM nation a LEFT JOIN nation b ON EXISTS ("+
 			"SELECT 1 FROM region z WHERE z.r_regionkey = a.n_regionkey AND z.r_regionkey = b.n_regionkey)")
-	require.ErrorContains(t, err, "referencing both join inputs")
+	require.NoError(t, err)
 
 	_, err = runOneStmt(mock, t,
 		"SELECT outer_n.n_nationkey FROM nation outer_n WHERE EXISTS ("+
 			"SELECT 1 FROM nation a LEFT JOIN nation b ON EXISTS ("+
 			"SELECT 1 FROM region z WHERE z.r_regionkey = outer_n.n_regionkey))")
-	require.ErrorContains(t, err, "deeply correlated subquery")
+	require.NoError(t, err)
 }
 func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 	for _, sql := range []string{

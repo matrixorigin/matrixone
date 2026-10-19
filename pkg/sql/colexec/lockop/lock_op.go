@@ -168,6 +168,9 @@ func callNonBlocking(
 			return result, err
 		}
 
+		if result.Status == vm.ExecYield {
+			return result, nil
+		}
 		if result.Batch == nil {
 			if lockOp.ctr.retryError == nil {
 				if err := lockTalbeIfLockCountIsZero(proc, lockOp); err != nil {

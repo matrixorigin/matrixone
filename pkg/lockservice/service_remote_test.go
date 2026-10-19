@@ -103,18 +103,18 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 			require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
 		}
 
-		// v114-v117 already belong to Unicode keys, intervals, warnings and collation ordering.
-		for _, version := range []int64{defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118} {
+		// Protocols through v119 predate nonblocking lock admission.
+		for _, version := range []int64{defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-			require.False(t, supportsLockProtocolV119(""))
+			require.False(t, supportsNonblockingLockProtocol(""))
 			for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
 				err := checkMethodVersion(context.Background(), "", &pb.Request{Method: method})
 				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported),
 					"old protocol peers must reject nonblocking lock admission before dispatch")
 			}
 		}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
-		require.True(t, supportsLockProtocolV119(""))
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+		require.True(t, supportsNonblockingLockProtocol(""))
 		for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
 			require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
 		}
@@ -3158,7 +3158,7 @@ func TestNoWaitFatalBindFenceRetainsReadOnlyCleanupRoute(t *testing.T) {
 			require.True(t, ok)
 			ownerRuntime.SetGlobalVariables(
 				moruntime.MOProtocolVersion,
-				defines.MORPCVersion119,
+				defines.MORPCVersion120,
 			)
 			defer ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
 
@@ -3194,11 +3194,11 @@ func TestNoWaitFatalBindFenceRetainsReadOnlyCleanupRoute(t *testing.T) {
 			var downgraded atomic.Bool
 			owner.option.beforeRemoteLockBindCheck = func() {
 				if downgraded.CompareAndSwap(false, true) {
-					// The method admission check has accepted V118. Downgrade after
+					// The method admission check has accepted V120. Downgrade after
 					// admission but before row 1 is granted and row 2 conflicts.
 					ownerRuntime.SetGlobalVariables(
 						moruntime.MOProtocolVersion,
-						defines.MORPCVersion119-1,
+						defines.MORPCVersion120-1,
 					)
 				}
 			}
@@ -3238,7 +3238,7 @@ func TestNoWaitFatalBindFenceRetainsReadOnlyCleanupRoute(t *testing.T) {
 
 			// The caller uses LockedOn only to register an unlock route. Unlock
 			// removes the partial owner prefix and retires both active transactions.
-			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
 			require.NoError(t, origin.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
 			_, found, err = owner.GetLockHolder(
 				ctx,
@@ -3288,7 +3288,7 @@ func TestAsyncRemoteLockCompletionUsesPooledRequestSnapshot(t *testing.T) {
 			require.NotNil(t, ownerRuntime)
 			oldVersion, ok := ownerRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
 			require.True(t, ok)
-			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
 			defer ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
 
 			row := []byte{1}

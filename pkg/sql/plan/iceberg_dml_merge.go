@@ -98,7 +98,7 @@ func buildIcebergMergePlan(stmt *tree.Merge, ctx CompilerContext, isPrepareStmt 
 	if err != nil {
 		return nil, err
 	}
-	dmlTableDef, err := appendIcebergDMLMetadataProjection(ctx.GetContext(), query, query.Steps[len(query.Steps)-1], clauses.hasNotMatched(), true)
+	dmlTableDef, err := appendIcebergDMLMetadataProjection(ctx.GetContext(), query, query.Steps[query.MainOutputStep()], clauses.hasNotMatched(), true)
 	if err != nil {
 		return nil, err
 	}
@@ -464,7 +464,7 @@ func rewriteIcebergMergeProjection(ctx CompilerContext, query *planpb.Query, cla
 	if query == nil || len(query.Steps) == 0 {
 		return moerr.NewInvalidInput(ctx.GetContext(), "Iceberg MERGE plan requires a query root")
 	}
-	root := query.Nodes[query.Steps[len(query.Steps)-1]]
+	root := query.Nodes[query.Steps[query.MainOutputStep()]]
 	if root == nil {
 		return moerr.NewInvalidInput(ctx.GetContext(), "Iceberg MERGE plan root is missing")
 	}

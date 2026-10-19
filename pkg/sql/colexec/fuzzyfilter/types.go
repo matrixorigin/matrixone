@@ -16,6 +16,7 @@ package fuzzyfilter
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
+	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -67,6 +68,9 @@ type FuzzyFilter struct {
 	ctr                     container
 	allocationAccount       *mpool.AllocationAccount
 	runtimeFilterAllocation *vector.AllocationAccountSelection
+	filterBudget            *process.ExecutionResourceGeneration
+	filterCharge            uint64
+	keyCharge               uint64
 
 	// Estimates of the number of data items obtained from statistical information
 	N                  float64
@@ -117,7 +121,7 @@ func (fuzzyFilter *FuzzyFilter) ClearAllocationAccount(
 	if fuzzyFilter.allocationAccount != account {
 		return mpool.ErrAllocationAccountMismatch
 	}
-	if fuzzyFilter.ctr.pass2RuntimeFilter != nil {
+	if fuzzyFilter.ctr.pass2RuntimeFilter != nil || fuzzyFilter.filterCharge != 0 {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	fuzzyFilter.allocationAccount = nil
@@ -165,6 +169,11 @@ func (fuzzyFilter *FuzzyFilter) getProbeIdx() int {
 }
 
 func (fuzzyFilter *FuzzyFilter) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	defer func() {
+		if fuzzyFilter.allocationAccount != nil {
+			fuzzyFilter.Free(proc, pipelineFailed, err)
+		}
+	}()
 	runtimeSucceed := fuzzyFilter.ctr.state > HandleRuntimeFilter
 
 	if !fuzzyFilter.ctr.runtimeFilterDone {
@@ -210,7 +219,76 @@ func (fuzzyFilter *FuzzyFilter) Free(proc *process.Process, pipelineFailed bool,
 		fuzzyFilter.ctr.pass2RuntimeFilter.Free(proc.GetMPool())
 		fuzzyFilter.ctr.pass2RuntimeFilter = nil
 	}
+	if fuzzyFilter.filterBudget != nil {
+		fuzzyFilter.filterBudget.ReleaseAllocationCapacity(fuzzyFilter.filterCharge)
+	}
+	fuzzyFilter.filterBudget, fuzzyFilter.filterCharge, fuzzyFilter.keyCharge = nil, 0, 0
 
+}
+
+func (fuzzyFilter *FuzzyFilter) reserveFilter(proc *process.Process, size uint64) error {
+	if fuzzyFilter.allocationAccount == nil || size == 0 {
+		return nil
+	}
+	budget, err := proc.GetExecutionResourceBudget()
+	if err != nil {
+		return err
+	}
+	if err = budget.AcquireAllocationCapacity(size); err != nil {
+		return err
+	}
+	fuzzyFilter.filterBudget = budget
+	fuzzyFilter.filterCharge += size
+	return nil
+}
+
+// admitFilterInput covers the copy peak of dynamic Go backing. Roaring adds
+// at most one small array/container per input value; conversion to a bitmap
+// replaces a similarly sized array. Reconcile that upper bound after use.
+func (fuzzyFilter *FuzzyFilter) admitFilterInput(proc *process.Process, v *vector.Vector) (func(), error) {
+	if fuzzyFilter.allocationAccount == nil {
+		return func() {}, nil
+	}
+	if fuzzyFilter.ctr.roaringFilter != nil {
+		current := fuzzyFilter.roaringMemoryBound()
+		target := current + uint64(v.Length())*256
+		if target > fuzzyFilter.filterCharge {
+			if err := fuzzyFilter.reserveFilter(proc, target-fuzzyFilter.filterCharge); err != nil {
+				return nil, err
+			}
+		}
+		return func() {
+			retained := fuzzyFilter.roaringMemoryBound()
+			if retained < fuzzyFilter.filterCharge {
+				fuzzyFilter.filterBudget.ReleaseAllocationCapacity(fuzzyFilter.filterCharge - retained)
+				fuzzyFilter.filterCharge = retained
+			}
+		}, nil
+	}
+	width := uint64(v.GetType().TypeSize())
+	if !v.GetType().IsFixedLen() {
+		width = 0
+		for row := 0; row < v.Length(); row++ {
+			width = max(width, uint64(len(v.GetBytesAt(row))))
+		}
+	}
+	// Go append can hold the old and new key buffers simultaneously. Include
+	// its size-class rounding, the null marker, and the hash padding.
+	target := (4*width + 128) * uint64(hashmap.UnitLimit)
+	if target > fuzzyFilter.keyCharge {
+		if err := fuzzyFilter.reserveFilter(proc, target-fuzzyFilter.keyCharge); err != nil {
+			return nil, err
+		}
+		fuzzyFilter.keyCharge = target
+	}
+	return func() {}, nil
+}
+
+func (fuzzyFilter *FuzzyFilter) roaringMemoryBound() uint64 {
+	b := fuzzyFilter.ctr.roaringFilter.b
+	// GetSizeInBytes describes live payload lengths; include spare capacity,
+	// Go container headers, and the three high-key directory slices as well.
+	return 2*b.GetSizeInBytes() + uint64(b.Stats().Containers)*192 + 128
 }
 
 func (fuzzyFilter *FuzzyFilter) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
@@ -228,6 +306,7 @@ func (fuzzyFilter *FuzzyFilter) add(pkCol *vector.Vector) {
 
 func (fuzzyFilter *FuzzyFilter) test(proc *process.Process, pkCol *vector.Vector) error {
 	ctr := &fuzzyFilter.ctr
+	var appendErr error
 	if ctr.roaringFilter != nil {
 		idx, dupVal := ctr.roaringFilter.testFunc(ctr.roaringFilter, pkCol)
 		if idx == -1 {
@@ -237,18 +316,19 @@ func (fuzzyFilter *FuzzyFilter) test(proc *process.Process, pkCol *vector.Vector
 		}
 	} else {
 		ctr.bloomFilter.Test(pkCol, func(exist bool, i int) {
-			if exist {
+			if exist && appendErr == nil {
 				if ctr.collisionCnt < maxCheckDupCount {
-					fuzzyFilter.appendCollisionKey(proc, i, pkCol)
+					appendErr = fuzzyFilter.appendCollisionKey(proc, i, pkCol)
 				}
 			}
 		})
 	}
-	return nil
+	return appendErr
 }
 
 func (fuzzyFilter *FuzzyFilter) testAndAdd(proc *process.Process, pkCol *vector.Vector) error {
 	ctr := &fuzzyFilter.ctr
+	var appendErr error
 	if ctr.roaringFilter != nil {
 		idx, dupVal := ctr.roaringFilter.testAndAddFunc(ctr.roaringFilter, pkCol)
 		if idx == -1 {
@@ -258,16 +338,16 @@ func (fuzzyFilter *FuzzyFilter) testAndAdd(proc *process.Process, pkCol *vector.
 		}
 	} else {
 		ctr.bloomFilter.TestAndAdd(pkCol, func(exist bool, i int) {
-			if exist {
+			if exist && appendErr == nil {
 				if ctr.collisionCnt < maxCheckDupCount {
-					fuzzyFilter.appendCollisionKey(proc, i, pkCol)
+					appendErr = fuzzyFilter.appendCollisionKey(proc, i, pkCol)
 					return
 				}
 				logutil.Debugf("too many collision for fuzzy filter")
 			}
 		})
 	}
-	return nil
+	return appendErr
 }
 
 func IfCanUseRoaringFilter(t types.T) bool {

@@ -119,6 +119,7 @@ func TestNoWaitAcrossCNs(t *testing.T) {
 		lockReadExec(t, ctx, reader, "UPDATE t SET v=21 WHERE id=2")
 		for _, mode := range []string{"UPDATE", "SHARE"} {
 			lockReadNoWait(t, ctx, reader, "SELECT id FROM t WHERE id=1 FOR "+mode+" NOWAIT")
+			lockReadNoWait(t, ctx, reader, "SELECT id FROM t WHERE id=1 AND id=(SELECT (SELECT t.id)) FOR "+mode+" NOWAIT")
 			func() {
 				stmt, err := reader.PrepareContext(ctx, "SELECT id FROM t WHERE id=? FOR "+mode+" NOWAIT")
 				require.NoError(t, err)

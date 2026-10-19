@@ -95,9 +95,9 @@ func (c *asyncLockAdmissionCompletion) finalize() {
 var methodVersions = map[pb.Method]int64{
 	pb.Method_Lock:                         defines.MORPCVersion1,
 	pb.Method_LockWriterFair:               defines.MORPCVersion99,
-	pb.Method_TryLock:                      defines.MORPCVersion119,
+	pb.Method_TryLock:                      defines.MORPCVersion120,
 	pb.Method_ForwardLock:                  defines.MORPCVersion1,
-	pb.Method_ForwardTryLock:               defines.MORPCVersion119,
+	pb.Method_ForwardTryLock:               defines.MORPCVersion120,
 	pb.Method_Unlock:                       defines.MORPCVersion1,
 	pb.Method_BatchUnlock:                  defines.MORPCVersion31,
 	pb.Method_GetTxnLock:                   defines.MORPCVersion1,
@@ -161,7 +161,7 @@ func supportsLockProtocolV99(serviceID string) bool {
 	return ok && version >= defines.MORPCVersion99
 }
 
-func supportsLockProtocolV119(serviceID string) bool {
+func supportsNonblockingLockProtocol(serviceID string) bool {
 	rt := moruntime.ServiceRuntime(serviceID)
 	if rt == nil {
 		return false
@@ -171,7 +171,7 @@ func supportsLockProtocolV119(serviceID string) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion119
+	return ok && version >= defines.MORPCVersion120
 }
 
 func (s *service) initRemote() {
@@ -436,7 +436,7 @@ func (s *service) handleRemoteTryLock(
 	resp *pb.Response,
 	cs morpc.ClientSession,
 ) {
-	if !supportsLockProtocolV119(s.cfg.ServiceID) ||
+	if !supportsNonblockingLockProtocol(s.cfg.ServiceID) ||
 		!validNoWaitLockOptions(req.Lock.Options) {
 		_ = writeResponseWithDeadline(
 			s.logger,
@@ -480,7 +480,7 @@ func (s *service) setNoWaitConflictResponse(
 	expectedBind pb.LockTable,
 ) error {
 	if !contract.valid() ||
-		!supportsLockProtocolV119(s.cfg.ServiceID) ||
+		!supportsNonblockingLockProtocol(s.cfg.ServiceID) ||
 		!supportsLockProtocolV28(s.cfg.ServiceID) ||
 		!supportsLockProtocolV31(s.cfg.ServiceID) ||
 		resp.NewBind != nil || !result.LockedOn.Valid ||
@@ -844,7 +844,7 @@ func (s *service) handleForwardTryLock(
 	resp *pb.Response,
 	cs morpc.ClientSession,
 ) {
-	if !supportsLockProtocolV119(s.cfg.ServiceID) ||
+	if !supportsNonblockingLockProtocol(s.cfg.ServiceID) ||
 		!validNoWaitLockOptions(req.Lock.Options) {
 		_ = writeResponseWithDeadline(
 			s.logger,

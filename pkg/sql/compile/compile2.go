@@ -151,7 +151,7 @@ func (c *Compile) Compile(
 
 	// Reject unsupported lock policies before query scheduling, source/scope
 	// construction, Sirius offload, or any later MergeRun can publish work.
-	if err = validateNonBlockingLockPlan(c.proc, queryPlan); err != nil {
+	if err = c.validateNonBlockingLockPlan(queryPlan); err != nil {
 		return err
 	}
 
