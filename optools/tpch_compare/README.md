@@ -56,7 +56,10 @@ MO loading creates a new `tpch_compare_` database on an explicitly selected owne
 loopback deployment. DuckDB uses a persistent database file. Both native CSV
 load paths explicitly enable parallel reading. Loading verifies
 complete typed input contents, composite-key uniqueness and every input foreign
-relationship. Ordered DBGEN key groups are checked and sorted within a bounded
+relationship. Catalog checks reject changed column domains, nullability, column
+order, or primary-key order before normalizing values. DuckDB normalizes declared
+CHAR(n) and VARCHAR(n) to its native VARCHAR domain. Ordered DBGEN key groups are
+checked and sorted within a bounded
 buffer, allowing streaming validation without duplicating an entire table.
 Database verification reads contiguous leading-key windows, preserving each
 composite-key group. The initial unbounded lower range and final upper-tail
@@ -97,6 +100,9 @@ With `reference: true`, SF1 workers additionally check the pinned independent
 answer files using TPC-H 3.0.1 clause 2.1.3.5: counts/singletons/quantity sums are
 exact, monetary sums allow $100, and rounded AVG/ratios allow 1%. These reference
 rules are distinct from the stricter full-precision cross-engine contract.
+For VARCHAR fields, hash-verified input records recover the boundary between
+data spaces and fixed-width answer-file padding. The published values are still
+checked; added or removed data spaces and ambiguous input mappings fail.
 
 Keep generated datasets, databases and raw captures outside Git. Large benchmark
 campaigns are explicit operations; ordinary tests use only tiny fixtures.
