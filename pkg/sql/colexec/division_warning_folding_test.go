@@ -27,7 +27,7 @@ import (
 )
 
 func TestDivisionWarningRuntimeFolding(t *testing.T) {
-	for _, name := range []string{"/", "div", "%"} {
+	for _, name := range []string{"/", "div", "%", "unsigned decimal div"} {
 		for _, parent := range []string{"direct", "coalesce"} {
 			t.Run(name+"/"+parent, func(t *testing.T) {
 				proc := testutil.NewProcess(t, testutil.WithFileService(nil))
@@ -38,12 +38,23 @@ func TestDivisionWarningRuntimeFolding(t *testing.T) {
 				sink := &preparedCastWarningSession{}
 				proc.WarningSink = sink
 				literal := func(n int64) *plan.Expr {
+					if name == "unsigned decimal div" {
+						return &plan.Expr{Typ: types.T_uint64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: uint64(n)}}}}
+					}
 					if name == "/" {
 						return &plan.Expr{Typ: types.T_float64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Dval{Dval: float64(n)}}}}
 					}
 					return &plan.Expr{Typ: types.T_int64.ToType().PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: n}}}}
 				}
-				expr := bindTestFunction(t, proc, name, literal(1), literal(0))
+				var expr *plan.Expr
+				if name == "unsigned decimal div" {
+					dividend := &plan.Expr{Typ: types.New(types.T_decimal64, 10, 3).PlanType(), Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Decimal64Val{Decimal64Val: &plan.Decimal64{A: 1000}}}}}
+					expr = bindTestFunction(t, proc, "div", dividend, literal(0))
+					expr.GetF().Args[0] = bindTestCast(t, proc, 0, dividend, types.New(types.T_decimal256, 10, 3))
+					expr.GetF().Args[1] = bindTestCast(t, proc, 0, literal(0), types.New(types.T_decimal256, 20, 0))
+				} else {
+					expr = bindTestFunction(t, proc, name, literal(1), literal(0))
+				}
 				if parent == "coalesce" {
 					expr = bindTestFunction(t, proc, "coalesce", expr, literal(7))
 				}
