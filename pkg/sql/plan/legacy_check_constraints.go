@@ -41,13 +41,21 @@ func RecoverLegacyCheckConstraints(
 	ctx context.Context,
 	createSQL string,
 ) ([]LegacyCheckConstraint, error) {
+	rows, _, err := recoverLegacyCheckConstraints(ctx, createSQL)
+	return rows, err
+}
+
+// Return one verified parser mode as well, so token-preserving edits can use
+// the same interpretation as the existing metadata authority.
+func recoverLegacyCheckConstraints(ctx context.Context, createSQL string) ([]LegacyCheckConstraint, string, error) {
 	if strings.TrimSpace(createSQL) == "" ||
 		!strings.Contains(strings.ToUpper(createSQL), "CHECK") {
-		return nil, nil
+		return nil, "", nil
 	}
 	var canonical []LegacyCheckConstraint
 	var firstErr error
 	parsed := 0
+	var canonicalMode string
 	for _, sqlMode := range mysql.ParserSQLModeCombinations() {
 		stmt, err := parsers.ParseOneWithSQLMode(ctx, dialect.MYSQL, createSQL, 1, sqlMode)
 		if err != nil {
@@ -65,16 +73,17 @@ func RecoverLegacyCheckConstraints(
 		stmt.Free()
 		if parsed == 0 {
 			canonical = rows
+			canonicalMode = sqlMode
 		} else if !equalLegacyCheckRows(canonical, rows) {
-			return nil, moerr.NewInvalidInput(ctx,
+			return nil, "", moerr.NewInvalidInput(ctx,
 				"cannot recover legacy CHECK constraints with ambiguous SQL mode")
 		}
 		parsed++
 	}
 	if parsed == 0 {
-		return nil, firstErr
+		return nil, "", firstErr
 	}
-	return canonical, nil
+	return canonical, canonicalMode, nil
 }
 
 func legacyCheckRowsFromCreateTable(

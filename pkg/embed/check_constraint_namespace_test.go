@@ -123,7 +123,7 @@ func TestCheckConstraintNamespace(t *testing.T) {
 
 		t.Run("legacy source identities survive combined alter", func(t *testing.T) {
 			defer func() {
-				for _, table := range []string{"legacy_move", "moved", "move_owner", "legacy_a", "legacy_b", "distinct_owner"} {
+				for _, table := range []string{"legacy_move", "moved", "move_owner", "legacy_a", "legacy_b", "distinct_owner", "legacy_plain", "moved_plain", "final_plain"} {
 					exec(t, "drop table if exists "+table)
 				}
 			}()
@@ -194,6 +194,69 @@ func TestCheckConstraintNamespace(t *testing.T) {
 				expectError(t, "insert into legacy_a values(10)", 3819)
 				expectError(t, "create table distinct_owner(x int, constraint new_distinct check(x>0))", 3822)
 			})
+			t.Run("plain legacy rename persists identities", func(t *testing.T) {
+				legacy(t, "legacy_plain", "legacy_plain_chk_1")
+				exec(t, "insert into legacy_plain values(5)")
+				exec(t, "rename table legacy_plain to moved_plain")
+				count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and constraint_name='legacy_plain_chk_1'", 0)
+				count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and constraint_name='moved_plain_chk_1'", 1)
+				var encoded []byte
+				var createSQL string
+				require.NoError(t, conn.QueryRowContext(ctx, "select extra_info,rel_createsql from mo_catalog.mo_tables where reldatabase=? and relname='moved_plain'", database).Scan(&encoded, &createSQL))
+				var extra api.SchemaExtra
+				require.NoError(t, extra.Unmarshal(encoded))
+				require.Empty(t, extra.Checks, "renaming metadata must not invent executable CHECK definitions")
+				require.Contains(t, createSQL, "moved_plain_chk_1")
+				peer, err := cluster.GetCNService(1)
+				require.NoError(t, err)
+				peerDB, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", peer.GetServiceConfig().CN.Frontend.Port))
+				require.NoError(t, err)
+				defer peerDB.Close()
+				var n int
+				require.NoError(t, peerDB.QueryRowContext(ctx, "select count(*) from information_schema.check_constraints where constraint_schema=? and constraint_name='moved_plain_chk_1'", database).Scan(&n))
+				require.Equal(t, 1, n, "a different CN must read the persisted identity")
+				exec(t, "create table legacy_plain(x int check(x>0))")
+				exec(t, "rename table moved_plain to final_plain")
+				exec(t, "create table moved_plain(x int check(x>0))")
+				count(t, "select count(*) from final_plain where x=5", 1)
+				count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and constraint_name='final_plain_chk_1'", 1)
+			})
+			t.Run("chained rename validates current identities", func(t *testing.T) {
+				for _, oldFormat := range []bool{false, true} {
+					t.Run(fmt.Sprintf("legacy=%t", oldFormat), func(t *testing.T) {
+						defer func() {
+							for _, name := range []string{"chain_source", "chain_middle", "chain_final", "chain_owner"} {
+								exec(t, "drop table if exists "+name)
+							}
+						}()
+						if oldFormat {
+							legacy(t, "chain_source", "chain_source_chk_1")
+						} else {
+							exec(t, "create table chain_source(x int check(x>0))")
+						}
+						exec(t, "insert into chain_source values(5)")
+						exec(t, "create table chain_owner(x int, constraint CHAIN_FINAL_CHK_1 check(x<0))")
+						var originalSQL string
+						require.NoError(t, conn.QueryRowContext(ctx, "select rel_createsql from mo_catalog.mo_tables where reldatabase=? and relname='chain_source'", database).Scan(&originalSQL))
+						expectError(t, "rename table chain_source to chain_middle, chain_middle to chain_final", 3822)
+						var rolledBackSQL string
+						require.NoError(t, conn.QueryRowContext(ctx, "select rel_createsql from mo_catalog.mo_tables where reldatabase=? and relname='chain_source'", database).Scan(&rolledBackSQL))
+						require.Equal(t, originalSQL, rolledBackSQL, "failed later rename must roll back the earlier SQL rewrite")
+						count(t, "select count(*) from chain_source where x=5", 1)
+						count(t, "select count(*) from information_schema.tables where table_schema='"+database+"' and table_name in ('chain_middle','chain_final')", 0)
+						count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and constraint_name='chain_source_chk_1'", 1)
+						count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and lower(constraint_name)='chain_final_chk_1'", 1)
+						exec(t, "drop table chain_owner")
+						exec(t, "rename table chain_source to chain_middle, chain_middle to chain_final")
+						count(t, "select count(*) from chain_final where x=5", 1)
+						count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and constraint_name='chain_final_chk_1'", 1)
+						exec(t, "create table chain_source(x int check(x>0))")
+						if !oldFormat {
+							expectError(t, "insert into chain_final values(-1)", 3819)
+						}
+					})
+				}
+			})
 		})
 
 		t.Run("repeatable read preserves check authoring", func(t *testing.T) {
@@ -203,7 +266,7 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			// its fixed snapshot, even after an unrelated catalog commit. Retry
 			// only that error in a new autocommit transaction; never refresh an
 			// active SI snapshot or retry duplicate-name/enforcement failures.
-			execSI := func(statement string) {
+			execFreshSI := func(statement string) error {
 				t.Helper()
 				var err error
 				for range 3 {
@@ -214,7 +277,18 @@ func TestCheckConstraintNamespace(t *testing.T) {
 						break
 					}
 				}
-				require.NoError(t, err, statement)
+				return err
+			}
+			execSI := func(statement string) {
+				t.Helper()
+				require.NoError(t, execFreshSI(statement), statement)
+			}
+			expectSIError := func(statement string, code uint16) {
+				t.Helper()
+				err := execFreshSI(statement)
+				var serverError *mysql.MySQLError
+				require.True(t, errors.As(err, &serverError), "%s: %v", statement, err)
+				require.Equal(t, code, serverError.Number, "%s: %v", statement, err)
 			}
 			execSI("create table si_checked(x int check(x>0))")
 			exec(t, "create table si_add(x int)")
@@ -224,15 +298,15 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			expectError(t, "insert into si_checked values(-1)", 3819)
 			expectError(t, "insert into si_add values(-1)", 3819)
 			expectError(t, "insert into si_like values(-1)", 3819)
-			expectError(t, "create table si_duplicate(x int, constraint si_checked_chk_1 check(x<10))", 3822)
-			expectError(t, "alter table si_add add constraint si_checked_chk_1 check(x<10)", 3822)
+			expectSIError("create table si_duplicate(x int, constraint si_checked_chk_1 check(x<10))", 3822)
+			expectSIError("alter table si_add add constraint si_checked_chk_1 check(x<10)", 3822)
 			count(t, "select count(*) from si_add where x=5", 1)
 			// Failure occurs during COPY validation, after the name was
 			// reserved. Autocommit rollback must preserve the old rows/checks
 			// and release the claim for an unrelated destination.
 			exec(t, "create table si_invalid(x int)")
 			exec(t, "insert into si_invalid values(-1)")
-			expectError(t, "alter table si_invalid add constraint si_reusable check(x>0)", 3819)
+			expectSIError("alter table si_invalid add constraint si_reusable check(x>0)", 3819)
 			count(t, "select count(*) from si_invalid where x=-1", 1)
 			count(t, "select count(*) from information_schema.table_constraints where table_schema='"+database+"' and table_name='si_invalid' and constraint_type='CHECK'", 0)
 			execSI("create table si_reused(x int, constraint si_reusable check(x>0))")

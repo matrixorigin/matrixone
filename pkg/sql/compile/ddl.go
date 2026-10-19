@@ -1676,7 +1676,15 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 				// resulting set before the rename commits. Temporary tables
 				// mirror CREATE TABLE's exemption, and their generated names
 				// are tied to a session-scoped physical name.
-				catalogChecks, err := checkConstraintIdentities(c.proc.Ctx, qry.GetTableDef())
+				// A prior step of the same RENAME TABLE may already have moved
+				// this relation and its generated CHECK names. The logical plan
+				// still carries the original names; admit the transaction's current
+				// identities, which are the ones storage will actually rename.
+				currentDef := rel.GetTableDef(c.proc.Ctx)
+				if currentDef == nil {
+					return moerr.NewTxnNeedRetryWithDefChanged(c.proc.Ctx)
+				}
+				catalogChecks, err := checkConstraintIdentities(c.proc.Ctx, currentDef)
 				if err != nil {
 					return err
 				}
