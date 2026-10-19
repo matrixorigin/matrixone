@@ -179,7 +179,7 @@ func TestTransactionLocalReplacementRequiresBothGenerations(t *testing.T) {
 }
 
 func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
-	for _, mode := range []string{"unknown_binding", "stable_binding", "changed_domain", "canceled", "ctas_refresh", "unsupported_temporal", "unsupported_ctas", "unsupported_temporary_ctas", "ctas_rollback"} {
+	for _, mode := range []string{"unknown_binding", "stable_binding", "changed_domain", "canceled", "ctas_refresh", "unsupported_temporal", "unsupported_ctas", "unsupported_temporary_ctas", "unsupported_enum", "ctas_rollback"} {
 		t.Run(mode, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
@@ -226,9 +226,12 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 				q.FkNameBinding = &binding
 			}
 			original := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{DdlType: plan.DataDefinition_CREATE_TABLE, Definition: &plan.DataDefinition_CreateTable{CreateTable: q}}}}
+			if mode == "unsupported_enum" {
+				q.TableDef.Cols = []*plan.ColDef{{Name: "v", GeneratedCol: &plan.GeneratedCol{Expr: enumSourceAssignmentTestExpr(t, proc.Ctx)}}}
+			}
 			var source tree.Statement
 			var planner *plan2.MockCompilerContext
-			if mode == "ctas_refresh" || strings.HasPrefix(mode, "unsupported_") || mode == "ctas_rollback" {
+			if mode != "unsupported_enum" && (mode == "ctas_refresh" || strings.HasPrefix(mode, "unsupported_") || mode == "ctas_rollback") {
 				var err error
 				sql := "create table db.t as select a + 1 from select_test.bind_select"
 				if strings.HasPrefix(mode, "unsupported_") || mode == "ctas_rollback" {
@@ -272,7 +275,10 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 				old, _ := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 				t.Cleanup(func() { rt.SetGlobalVariables(moruntime.MOProtocolVersion, old) })
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion121)
-				if mode == "ctas_rollback" {
+				if mode == "unsupported_enum" {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
+					eng.dbErr = errors.New("catalog accessed before ENUM admission")
+				} else if mode == "ctas_rollback" {
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
 				} else {
 					eng.dbErr = errors.New("catalog accessed before temporal admission")
@@ -281,6 +287,12 @@ func TestBorrowedCreateNameRefreshBeforeEffects(t *testing.T) {
 			err := c.Compile(proc.Ctx, original, nil)
 			got := c.GetPlan()
 			switch mode {
+			case "unsupported_enum":
+				require.ErrorContains(t, err, "version 123")
+				require.NotErrorIs(t, err, eng.dbErr)
+				require.Zero(t, builds)
+				require.Zero(t, advances)
+				require.Zero(t, locks)
 			case "unsupported_temporal", "unsupported_ctas", "unsupported_temporary_ctas":
 				require.ErrorContains(t, err, "version 122")
 				require.NotErrorIs(t, err, eng.dbErr, "unsupported CTAS must not access catalog names")
