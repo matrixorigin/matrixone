@@ -57,6 +57,10 @@ func TestBalancedFiniteSchedule(t *testing.T) {
 			t.Fatal(first)
 		}
 	}
+	c.Mode = "warm"
+	if warm := schedule(c); len(warm) != 30 || !reflect.DeepEqual(warm, trials[:30]) {
+		t.Fatal("warm campaign must retain the balanced primary cells")
+	}
 	for _, raw := range []string{"0-7", "0,1,2,3,4,5,6,7"} {
 		cpus, err := parseCPUSet(raw)
 		if err != nil || len(cpus) != 8 {

@@ -69,7 +69,7 @@ func readArm(root string, record ArmRecord) (WorkerReceipt, string, error) {
 	return r, filepath.Dir(path), err
 }
 
-func comparePair(ctx context.Context,c Campaign, p Preflight, manager *cgroupManager, prepared map[string]PreparedEngine, t Trial, root string, records map[string]ArmRecord) error {
+func comparePair(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager, prepared map[string]PreparedEngine, t Trial, root string, records map[string]ArmRecord) error {
 	a, ra, err := readArm(filepath.Join(root, "mo"), records["mo"])
 	if err != nil {
 		return err
@@ -120,7 +120,9 @@ func comparePair(ctx context.Context,c Campaign, p Preflight, manager *cgroupMan
 				full[engine] = receipt.Queries[0].Capture
 				fullRoots[engine] = dir
 			}
-			if e := compareCaptures(fullRoots["mo"], fullRoots["duckdb"], full["mo"], full["duckdb"], q); e != nil {
+			unlimited := q
+			unlimited.Limit = 0
+			if e := compareCaptures(fullRoots["mo"], fullRoots["duckdb"], full["mo"], full["duckdb"], unlimited); e != nil {
 				return errors.Join(err, e)
 			}
 			if e := validateLimit(ra, fullRoots["mo"], x.Capture, full["mo"], q); e != nil {
@@ -142,11 +144,11 @@ func prepareCampaign(ctx context.Context, c Campaign, p Preflight, manager *cgro
 		return f, err
 	}
 	loadReps := 3
-	if c.Mode == "sf1-smoke" {
+	if c.Mode != "full" {
 		loadReps = 1
 	}
 	scales := []string{"1"}
-	if c.Mode == "full" {
+	if c.Mode != "sf1-smoke" {
 		scales = []string{"1", "10", "100"}
 	}
 	for _, sf := range scales {
@@ -376,7 +378,7 @@ func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, man
 			pairErr = errors.Join(pairErr, err)
 		}
 		if pairErr == nil {
-			pairErr = comparePair(ctx,c, p, manager, f.Prepared[t.Scale], t, pairRoot, pair.Arms)
+			pairErr = comparePair(ctx, c, p, manager, f.Prepared[t.Scale], t, pairRoot, pair.Arms)
 		}
 		if pairErr != nil {
 			pair.Error = pairErr.Error()

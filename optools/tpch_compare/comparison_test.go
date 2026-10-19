@@ -93,7 +93,7 @@ func TestVerifyRejectsChangedInputIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	r := WorkerRequest{Version: formatVersion, Operation: "verify", Engine: e, DatasetRoot: root, OutputRoot: filepath.Join(t.TempDir(), "clean"), QueryDeadlineNS: int64(time.Second)}
-	if receipt, err := runWorker(ctx, r); err != nil || receipt.Cleanup != "complete" {
+	if receipt, err := runWorker(ctx, r, nil); err != nil || receipt.Cleanup != "complete" {
 		t.Fatalf("unchanged input verification: %+v, %v", receipt, err)
 	}
 	if err := os.WriteFile(filepath.Join(root, "region.tbl"), []byte("0|AFRICA|new|\n"), 0600); err != nil {
@@ -103,7 +103,7 @@ func TestVerifyRejectsChangedInputIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	r.OutputRoot = filepath.Join(t.TempDir(), "changed")
-	if _, err := runWorker(ctx, r); err == nil || !strings.Contains(err.Error(), "artifact changed: region.tbl") {
+	if _, err := runWorker(ctx, r, nil); err == nil || !strings.Contains(err.Error(), "artifact changed: region.tbl") {
 		t.Fatalf("changed input and matching database must reject the old identity: %v", err)
 	}
 }
@@ -128,9 +128,11 @@ func TestCompareQualificationLimitsAndProofs(t *testing.T) {
 		left, right                                         []Row
 		proof, oneProof, mismatchProof                      bool
 		secondQuery                                         bool
+		secondStream                                        bool
 		edit                                                func(string, *WorkerReceipt)
 	}{
 		{name: "qualification", left: rows[:10], right: rows[:10]},
+		{name: "same query on independent streams", left: rows[:10], right: rows[:10], secondStream: true},
 		{name: "fewer than LIMIT", left: rows[:1], right: rows[:1]},
 		{name: "empty result"},
 		{name: "too many rows", left: rows[:11], right: rows[:11], want: "LIMIT"},
@@ -176,6 +178,16 @@ func TestCompareQualificationLimitsAndProofs(t *testing.T) {
 				r.Queries[0].Capture.Version++
 			}
 		}},
+		{name: "different query streams", left: rows[:10], right: rows[:10], want: "schedules", edit: func(name string, r *WorkerReceipt) {
+			if name == "right" {
+				r.Queries[0].Stream++
+			}
+		}},
+		{name: "wrong proof stream", left: rows[:10], right: tied, proof: true, want: "stream", edit: func(name string, r *WorkerReceipt) {
+			if strings.HasPrefix(name, "full-") {
+				r.Queries[0].Stream++
+			}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
@@ -187,6 +199,11 @@ func TestCompareQualificationLimitsAndProofs(t *testing.T) {
 				capture := testCapture(t, root, name+".rows", values)
 				capture.Columns = []PhysicalColumn{{Type: "BIGINT"}, {Type: "DECIMAL", Scale: 2, HasScale: true}, {Type: "DATE"}, {Type: "BIGINT"}}
 				receipt := WorkerReceipt{Version: formatVersion, Engine: engine, Dataset: id, Variant: variant, Cleanup: "complete", Queries: []QueryReceipt{{Query: 3, Capture: capture}}}
+				if tc.secondStream {
+					other := receipt.Queries[0]
+					other.Stream = 1
+					receipt.Queries = append(receipt.Queries, other)
+				}
 				if tc.secondQuery && !strings.HasPrefix(name, "full-") {
 					other := testCapture(t, root, name+"-q6.rows", []Row{{{Value: "1"}}})
 					other.Columns = []PhysicalColumn{{Type: "DECIMAL", Scale: 2, HasScale: true}}
