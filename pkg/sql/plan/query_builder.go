@@ -12279,6 +12279,8 @@ func (builder *QueryBuilder) bindView(
 		return 0, nil
 	}
 	viewCtx := NewBindContext(builder, nil)
+	// Preserve execution admission while keeping view name resolution isolated.
+	viewCtx.ctasExecutionProtocolRequirement = ctx.ctasExecutionProtocolRequirement
 	viewCtx.cteDatabase = schema
 	// View expansion has its own name-resolution scope, but it must retain the
 	// outer query's row-rewrite policy so base-table access rules still apply

@@ -156,7 +156,7 @@ insert into child_branch(parent_id, code, qty) values (1, 'base-a', 1.00);
 Duplicate entry 'base-a' for key 'code'
 insert into child_branch(parent_id, code, qty) values (99, 'bad-fk', 1.00);
 -- @regex("foreign key constraint fails", true)
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 data branch merge child_branch into child;
 select count(*) as child_rows from child;
 ➤ child_rows[-5,64,0]  𝄀
