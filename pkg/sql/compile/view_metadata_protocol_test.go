@@ -99,13 +99,21 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(tc.id, 0), ObjName: tc.name},
 				Args: []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("{}", false)},
 			}}}
-			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical", "normalized_interval", "division_warning", "collation"} {
+			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical", "normalized_interval", "division_warning", "collation", "timestamp"} {
 				t.Run(mode, func(t *testing.T) {
 					op.ProjectList = []*planpb.Expr{expr}
 					c.proc.SetStmtProfile(&process.StmtProfile{})
 					c.proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
 					c.proc.GetSessionInfo().SqlMode = ""
 					c.proc.SetResolveVariableFunc(nil)
+					if mode == "timestamp" {
+						temporal, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "timestamp", []*planpb.Expr{{
+							Typ:  types.T_datetime.ToTypeWithScale(3).PlanType(),
+							Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+						}})
+						require.NoError(t, err)
+						op.ProjectList = append(op.ProjectList, temporal)
+					}
 					if mode == "division_warning" {
 						c.proc.GetSessionInfo().SqlMode = "ERROR_FOR_DIVISION_BY_ZERO"
 						division, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "div", []*planpb.Expr{
@@ -158,26 +166,29 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 					features, err := planpb.RequiredRemoteExpressionFeatures(&pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: op.ProjectList}}})
 					require.NoError(t, err)
 					require.True(t, features.ViewMetadataFunctions, "shared analysis must match the actual registry IDs")
+					require.Equal(t, mode == "timestamp", features.TimestampDatetimeResultContracts)
 					require.Equal(t, mode == "mixed", features.DecimalDivisionSemantics)
 					require.Equal(t, mode == "calendar", features.DateNumericResultContracts)
 					require.Equal(t, mode == "statistical", features.DecimalStatisticalResultContracts)
 					require.Equal(t, mode == "normalized_interval", features.CalendarIntervalNormalization)
 					require.Equal(t, mode == "mixed" || mode == "division_warning", features.ScalarDivision)
 					require.Equal(t, mode == "collation", features.LeastGreatestCollationSemantics)
-					require.Equal(t, defines.MORPCVersion122, executionRemoteExpressionProtocolVersion(c.proc, features))
-					require.Equal(t, defines.MORPCVersion122, remoteExpressionProtocolVersion(features))
+					require.Equal(t, defines.MORPCVersion123, executionRemoteExpressionProtocolVersion(c.proc, features))
+					require.Equal(t, defines.MORPCVersion123, remoteExpressionProtocolVersion(features))
 					persistedVersion, err := plan2.RequiredPersistedExpressionProtocolVersion(op.ProjectList)
 					require.NoError(t, err)
-					require.Equal(t, defines.MORPCVersion122, persistedVersion)
+					require.Equal(t, defines.MORPCVersion123, persistedVersion)
 					// No capability observation survives a send, including after
 					// success followed by rollback of the very same endpoint.
-					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion122, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion120, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
+					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion123, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion120, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
 						client.version = version
 						calls, releases := client.calls, client.releases
 						data, err := encodeRemoteScope(scope, c.proc)
-						if version == defines.MORPCVersion122 {
+						if version == defines.MORPCVersion123 {
 							require.NoError(t, err)
 							require.NotEmpty(t, data)
+						} else if version < defines.MORPCVersion122 && mode == "timestamp" {
+							require.ErrorContains(t, err, "remote destination does not support temporal result contracts")
 						} else if version < defines.MORPCVersion117 && mode == "collation" {
 							require.ErrorContains(t, err, "remote destination does not support collation-aware LEAST/GREATEST")
 						} else if version < defines.MORPCVersion116 && mode == "division_warning" {
@@ -191,7 +202,7 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 						} else if version < defines.MORPCVersion113 && mode == "statistical" {
 							require.ErrorContains(t, err, "remote destination does not support decimal statistical DOUBLE results")
 						} else {
-							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 122)")
+							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 123)")
 						}
 						require.Equal(t, 1, client.calls-calls)
 						require.Equal(t, 1, client.releases-releases)
