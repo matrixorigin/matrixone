@@ -7,7 +7,7 @@ create table child(id int primary key, parent_id int);
 insert into child values(1,99);
 set foreign_key_checks=1;
 alter table child add column extra int, add constraint fk_child foreign key(parent_id) references parent(id);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select count(*) as fk_count from information_schema.table_constraints where constraint_schema='fk_alter_copy_checks' and table_name='child' and constraint_type='FOREIGN KEY';
 ➤ fk_count[-5,64,0]  𝄀
 0
@@ -21,7 +21,7 @@ select count(*) as fk_count from information_schema.table_constraints where cons
 1
 set foreign_key_checks=1;
 insert into child values(2,99,null);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into child values(2,1,null);
 select id,parent_id from child order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
@@ -59,7 +59,7 @@ select count(*) as fk_catalog_count from mo_catalog.mo_foreign_keys where db_nam
 1
 set foreign_key_checks=1;
 insert into inplace_child values(2,99);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into inplace_child values(2,1);
 select id,parent_id from inplace_child order by id;
 ➤ id[4,32,0]  ¦  parent_id[4,32,0]  𝄀
