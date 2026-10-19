@@ -1444,7 +1444,10 @@ func (c *checkpointCleaner) doGCAgainstGlobalCheckpointLocked(
 		scannedWindow.tsRange.end,
 	))
 	if publishErr := scannedWindow.Publish(ctx); publishErr != nil {
-		return nil, publishErr
+		// The metadata is already adopted by the WAL/catalog. Marker cleanup is
+		// retryable, but the objects excluded by this window must still be
+		// physically deleted: a later scan cannot rediscover them.
+		logutil.Warn("GC-UNPUBLISHED-PUBLISH-DEFERRED", zap.Error(publishErr))
 	}
 	softDuration = time.Since(now)
 	// Record GC filter duration
