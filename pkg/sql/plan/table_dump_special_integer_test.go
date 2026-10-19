@@ -66,6 +66,16 @@ func TestTableDumpExactBaseSpecialIntegerBindings(t *testing.T) {
 			built, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
 			target := built.GetDdl().GetCreateTable().GetTableDef()
+			// The fixture predates table-prefixed CHECK naming: freshly planned
+			// tables name anonymous CHECKs <table>_chk_<n> while the dump
+			// captured the historic __mo_chk_<n>. Name identity is irrelevant to
+			// this test's division-sensitivity analysis, so align the rebuilt
+			// declaration names with the persisted ones.
+			for i := range target.Checks {
+				if i < len(source.Checks) && source.Checks[i] != nil && target.Checks[i] != nil {
+					target.Checks[i].Name = source.Checks[i].Name
+				}
+			}
 			snapshot := proto.Clone(&source)
 			_, err = AnalyzeTableDumpBindings(compiler, &source, &source)
 			require.NoError(t, err)

@@ -169,7 +169,7 @@ insert into crc32_check_clauses(id,j,x) values(3,'2',1);
 update crc32_check_clauses set x=4 where id=1;
 update crc32_check_clauses set j='2' where id=1;
 select id,x from crc32_check_clauses order by id;
-create table crc32_check_reverse(id int primary key,j json,x int,constraint ck_crc32_clauses check(crc32(j)=2212294583));
+create table crc32_check_reverse(id int primary key,j json,x int,constraint ck_crc32_reverse check(crc32(j)=2212294583));
 insert into crc32_check_reverse values(1,'1',2);
 alter table crc32_check_reverse modify column x int,modify column j json after x;
 insert into crc32_check_reverse(id,j,x) values(2,'1',3);
