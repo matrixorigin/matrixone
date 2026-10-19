@@ -420,3 +420,30 @@ These tests do not establish cross-binary downgrade or independent approval.
 No new Python runtime, production or security scope is added. Independent
 Architecture and SQL/Planner approval of r21 remains pending; rebase and
 validation do not provide that approval.
+
+
+## r22 protocol and query allocation addendum (2026-10-19)
+
+Official main `8e315d1fe5cdf6661bbf2802515695190dc1c221` owns MORPC 120
+for current-session KILL authorization and proxy disconnect cleanup. The governing
+`python-udf-current-stage-r22-2026-10-19` proposal preserves that behavior and
+allocates the single Python capability 121. Catalog repair, revision publication
+and reads, Prepare, prepared reuse, remote sender/receiver and status admission
+reject predecessor 120 and mixed 121/120 CNs before Python mutation or execution.
+The status client now explicitly enforces the same floor; its old mapping at 119
+did not enforce the previously documented Python floor.
+
+Official query methods 45/46, request fields 47/48 and response fields 48/49
+remain unchanged. Python status uses method 47, request field 49 and response
+field 50. Regenerated bindings, status wire fixtures and the existing combined
+client fixture cover coexistence, immediate predecessor rejection, acceptance and
+rollback. Independent dependent-program capability 119, table/defaults capability
+118, plan correlation field 19 and routine-dependency field 20 remain unchanged.
+Published catalog handlers through 4.0.17 and the separate Python 4.0.18 repair
+(minimum source 4.0.17) retain their allocation.
+
+Validation must refresh overlapping query, frontend, CN/proxy, admission and
+login-repair evidence after this rebase. Unchanged worker, transport and storage
+evidence retains only its original demonstrated scope. This maintenance adds no
+Python runtime, production or security scope. Independent Architecture and
+SQL/Planner approval of r22 remains pending; these repairs do not provide it.
