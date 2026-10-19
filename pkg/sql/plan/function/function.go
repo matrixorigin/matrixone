@@ -371,6 +371,9 @@ func getFunctionByName(
 	}
 
 	check := f.checkArgumentTypes(args, stringDomainModes)
+	if r.fid == INTEGER_DIV && LegacyDecimalIntegerDiv(ctx) {
+		check = legacyIntegerDivCheck(args)
+	}
 	if (r.fid == FORMAT || r.fid == MAKEDATE || r.fid == MAKETIME) && LegacySpecialConsumers(ctx) {
 		if legacy, ok := legacySpecialConsumerCheck(r.fid, f.Overloads, args); ok {
 			check = legacy
@@ -416,7 +419,9 @@ func getFunctionByName(
 	if err == nil {
 		r.applyDivPrecisionIncrement(ctx, args)
 		r.applyDecimalModMetadata(args)
-		r.applyDecimalIntegerDivMetadata(args)
+		if !LegacyDecimalIntegerDiv(ctx) {
+			r.applyDecimalIntegerDivMetadata(args)
+		}
 	}
 
 	return r, err

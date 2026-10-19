@@ -1,7 +1,7 @@
 # Table dump expression binding (PR #29241, issue #28594)
 
-Status: revision 12; locale-witness design approved by independent gpt-6-astra/medium review.
-Revision: 12, 2026-10-19. Revision 11 passed independent timezone-witness review; validation is recorded in the PR.
+Status: revision 13; DIV migration reconstruction design approved by independent gpt-6-astra/medium review.
+Revision: 13, 2026-10-19. Revision 12 passed independent locale-witness review; validation is recorded in the PR.
 
 ## Current extension: migration-era binding and format 3
 
@@ -33,11 +33,29 @@ results remain supported. Additional classification cost is confined to DDL,
 DUMP and LOAD; per-row normalization is unchanged.
 
 Current frozen-base allocations: main charset118, coordinator subquery119, session
-authorization120 and functions599/600 stay published; fractional TIMESTAMPADD uses
-capability121, normalizer601 and end602. The allocation follows official main
-8e315d1fe5cdf6661bbf2802515695190dc1c221; rollback coverage cycles120→121→120.
+authorization120, unsigned DECIMAL DIV121 and functions599/600 stay published;
+fractional TIMESTAMPADD uses capability122, normalizer601 and end602. The allocation follows official main
+873282742714436bff407dfcdbbe879147162bd3; rollback coverage cycles121→122→121.
 No protobuf schema change or provisional-function-ID guessing is introduced.
 Historical revision10 evidence below retains its original input identity.
+
+## Revision 13: DECIMAL DIV rebase compatibility
+
+Official main v121 changed DECIMAL DIV result width and unsigned overloads.
+The complete-origin verifier must also reproduce the pre-v121 physical casts,
+signed overload zero and unannotated result width. A dump-only context selects
+that historical checker and numeric resolver; ordinary SQL keeps main semantics.
+The finite candidates follow published migration order: current, pre-fractional
+with current DIV, pre-DIV with pre-fractional, and pre-special. Each candidate
+must match the whole expression and uses the existing cancellation/node budget;
+no per-node era mixing or semantic metadata normalization is accepted.
+
+Frozen signed/unsigned generated-column and CHECK definitions were captured by
+the actual binder at 0f9b9cc6c4d7d8afa19a24624f5c3aa019614eb1, before the DIV
+change. Regression coverage verifies both old definitions, current-domain
+controls, forged-expression rejection and public DUMP/LOAD followed by writes.
+The transport remains format 3; no new runtime function or protocol capability
+is added for compatibility reconstruction.
 
 ## Revision 12: locale-dependent defaults
 

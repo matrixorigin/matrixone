@@ -43,16 +43,18 @@ type tableDumpBindingBudget struct {
 }
 
 type tableDumpExpressionVisitor struct {
-	nodes           int
-	hasDivision     bool
-	hasSpecial      bool
-	hasTimestampAdd bool
+	nodes              int
+	hasDivision        bool
+	hasIntegerDivision bool
+	hasSpecial         bool
+	hasTimestampAdd    bool
 }
 
 func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 	v.nodes++
-	if binary, ok := e.(*tree.BinaryExpr); ok && binary.Op == tree.DIV {
-		v.hasDivision = true
+	if binary, ok := e.(*tree.BinaryExpr); ok {
+		v.hasDivision = v.hasDivision || binary.Op == tree.DIV
+		v.hasIntegerDivision = v.hasIntegerDivision || binary.Op == tree.INTEGER_DIV
 	}
 	if fn, ok := e.(*tree.FuncExpr); ok {
 		switch numericAstFunctionName(fn) {
@@ -177,6 +179,7 @@ type tableDumpBindingMode uint8
 const (
 	tableDumpBindingCurrent tableDumpBindingMode = iota
 	tableDumpBindingLegacyTimestampAdd
+	tableDumpBindingLegacyDecimalIntegerDiv
 	tableDumpBindingLegacySpecial
 	tableDumpBindingImplicitTimestamp
 )
@@ -190,6 +193,8 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	switch mode {
 	case tableDumpBindingLegacyTimestampAdd:
 		bindCtx = function.WithLegacyTimestampAddSecond(bindCtx)
+	case tableDumpBindingLegacyDecimalIntegerDiv:
+		bindCtx = function.WithLegacyDecimalIntegerDiv(bindCtx)
 	case tableDumpBindingLegacySpecial:
 		bindCtx = function.WithLegacySpecialConsumers(bindCtx)
 	}
@@ -499,6 +504,9 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			modes := []tableDumpBindingMode{tableDumpBindingCurrent}
 			if visit.hasTimestampAdd {
 				modes = append(modes, tableDumpBindingLegacyTimestampAdd)
+			}
+			if visit.hasIntegerDivision {
+				modes = append(modes, tableDumpBindingLegacyDecimalIntegerDiv)
 			}
 			if visit.hasSpecial {
 				modes = append(modes, tableDumpBindingLegacySpecial)

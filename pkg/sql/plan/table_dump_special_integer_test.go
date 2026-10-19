@@ -375,3 +375,143 @@ func TestTableDumpDirectDefaultUsesHistoricalEra(t *testing.T) {
 	require.ErrorIs(t, err, context.Canceled)
 	require.True(t, proto.Equal(before, currentDef))
 }
+
+// Captured by the real pre-v121 binder at 0f9b9cc6c4d7d8afa19a24624f5c3aa019614eb1.
+// This fixture is independent of the compatibility mode under test.
+func TestTableDumpExactPreDecimalDivBindings(t *testing.T) {
+	data, err := os.ReadFile("testdata/decimal_div_pre121_baseline.json")
+	require.NoError(t, err)
+	require.Equal(t, "441b72a7d111cad67b3a148eecd06ecd587990b87cb1f9054c2011cb60c666d9", fmt.Sprintf("%x", sha256.Sum256(data)))
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 2)
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	for name, sql := range map[string]string{
+		"signed":   "create table t(a decimal(10,2), b decimal(10,2), g bigint generated always as (a div b) stored, check(a div b > 0))",
+		"unsigned": "create table t(a decimal(10,2), b bigint unsigned, g bigint generated always as (a div b) stored, check(a div b > 0))",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var source planpb.TableDef
+			require.NoError(t, proto.Unmarshal(fixtures[name], &source))
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false)
+			require.NoError(t, err)
+			target := built.GetDdl().GetCreateTable().GetTableDef()
+			oldNodes := tableDumpIntegerDivNodes(source.Cols[2].GeneratedCol.Expr)
+			newNodes := tableDumpIntegerDivNodes(target.Cols[2].GeneratedCol.Expr)
+			require.Len(t, oldNodes, 1)
+			require.Len(t, newNodes, 1)
+			_, oldOverload := function.DecodeOverloadID(oldNodes[0].GetF().Func.Obj)
+			_, newOverload := function.DecodeOverloadID(newNodes[0].GetF().Func.Obj)
+			require.Equal(t, int32(0), oldOverload)
+			require.Equal(t, int32(types.T_int64), oldNodes[0].Typ.Id)
+			require.Zero(t, oldNodes[0].Typ.Width)
+			require.Positive(t, newNodes[0].Typ.Width)
+			if name == "unsigned" {
+				require.Equal(t, int32(function.DecimalIntegerDivUnsignedOverload), newOverload)
+				require.Equal(t, int32(types.T_uint64), newNodes[0].Typ.Id)
+			} else {
+				require.Equal(t, int32(0), newOverload)
+			}
+			snapshot := proto.Clone(&source)
+			sensitive, err := AnalyzeTableDumpBindings(compiler, &source, &source)
+			require.NoError(t, err)
+			require.True(t, sensitive)
+			_, err = AnalyzeTableDumpBindings(compiler, target, &source)
+			require.NoError(t, err)
+			require.True(t, proto.Equal(snapshot, &source))
+			tampered := proto.Clone(&source).(*planpb.TableDef)
+			tampered.Checks[0].Check = &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: true}}}}
+			_, err = AnalyzeTableDumpBindings(compiler, target, tampered)
+			require.ErrorContains(t, err, "cannot verify bound check expression")
+		})
+	}
+}
+
+func tableDumpIntegerDivNodes(expr *planpb.Expr) []*planpb.Expr {
+	var result []*planpb.Expr
+	var visit func(*planpb.Expr)
+	visit = func(e *planpb.Expr) {
+		if e == nil {
+			return
+		}
+		if f := e.GetF(); f != nil {
+			id, _ := function.DecodeOverloadID(f.Func.Obj)
+			if id == function.INTEGER_DIV {
+				result = append(result, e)
+			}
+			for _, arg := range f.Args {
+				visit(arg)
+			}
+		}
+	}
+	visit(expr)
+	return result
+}
+
+func TestTableDumpRejectsMixedDecimalDivEra(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(a decimal(10,2),b bigint unsigned,check((a div b)+(a div b)>0))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	build := func(ctx CompilerContext) *planpb.TableDef {
+		p, err := BuildPlan(ctx, stmt, false)
+		require.NoError(t, err)
+		return p.GetDdl().GetCreateTable().GetTableDef()
+	}
+	current := build(compiler)
+	legacy := build(tableDumpBindContext{CompilerContext: compiler, ctx: function.WithLegacyDecimalIntegerDiv(compiler.GetContext()), increment: 4})
+	for _, source := range []*planpb.TableDef{current, legacy} {
+		_, err := AnalyzeTableDumpBindings(compiler, current, source)
+		require.NoError(t, err)
+	}
+	oldNodes := tableDumpIntegerDivNodes(legacy.Checks[0].Check)
+	require.Len(t, oldNodes, 2)
+	mixed := proto.Clone(current).(*planpb.TableDef)
+	newNodes := tableDumpIntegerDivNodes(mixed.Checks[0].Check)
+	require.Len(t, newNodes, 2)
+	require.False(t, proto.Equal(oldNodes[0], newNodes[0]))
+	*newNodes[0] = *proto.Clone(oldNodes[0]).(*planpb.Expr)
+	before := proto.Clone(mixed)
+	_, err = AnalyzeTableDumpBindings(compiler, current, mixed)
+	require.ErrorContains(t, err, "cannot verify bound check expression")
+	require.True(t, proto.Equal(before, mixed))
+}
+
+func TestTableDumpDecimalDivEraComposition(t *testing.T) {
+	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+	compiler.tables["t"] = &planpb.TableDef{Name: "t"}
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+		"create table t(a decimal(10,2),b bigint unsigned,g datetime(6) generated always as(timestampadd(second,(a div b)+0.5,cast('2024-01-01' as datetime(6)))) stored)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	var target *planpb.TableDef
+	for _, era := range []struct {
+		name string
+		ctx  context.Context
+	}{
+		{"current", compiler.GetContext()},
+		{"before_fractional", function.WithLegacyTimestampAddSecond(compiler.GetContext())},
+		{"before_div", function.WithLegacyDecimalIntegerDiv(compiler.GetContext())},
+	} {
+		t.Run(era.name, func(t *testing.T) {
+			ctx := tableDumpBindContext{CompilerContext: compiler, ctx: era.ctx, increment: 4}
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			source := built.GetDdl().GetCreateTable().GetTableDef()
+			if target == nil {
+				target = source
+			}
+			before := proto.Clone(source)
+			sensitive, err := AnalyzeTableDumpBindings(compiler, target, source)
+			require.NoError(t, err)
+			require.True(t, sensitive)
+			require.True(t, proto.Equal(before, source))
+		})
+	}
+}

@@ -76,7 +76,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		seedPath := filepath.Join(root, "seed")
 		dataPath := filepath.Join(root, "data")
 		exec("dump table seed_current to '" + seedPath + "' metadata only")
-		readManifest := func(path string) map[string]json.RawMessage {
+		readManifest := func(t *testing.T, path string) map[string]json.RawMessage {
 			t.Helper()
 			data, err := os.ReadFile(filepath.Join(path, "manifest.json"))
 			require.NoError(t, err)
@@ -87,7 +87,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 			require.Equal(t, 3, version, "old readers must reject the new binding-dependent format")
 			return m
 		}
-		manifest := readManifest(seedPath)
+		manifest := readManifest(t, seedPath)
 		raw, err := os.ReadFile(filepath.Join("..", "..", "sql", "plan", "testdata", "timestampadd_direct_baseline.json"))
 		require.NoError(t, err)
 		var frozen struct {
@@ -158,7 +158,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		}()
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion118)
 		exec("dump table historical_source to '" + dataPath + "'")
-		exported := readManifest(dataPath)
+		exported := readManifest(t, dataPath)
 		assertHistoricalChecks := func(manifest map[string]json.RawMessage) {
 			t.Helper()
 			var payload []byte
@@ -178,7 +178,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		exec("load table restored from '" + dataPath + "'")
 		restoredMetadata := filepath.Join(root, "restored-metadata")
 		exec("dump table restored to '" + restoredMetadata + "' metadata only")
-		assertHistoricalChecks(readManifest(restoredMetadata))
+		assertHistoricalChecks(readManifest(t, restoredMetadata))
 		scalar("select cast(g as char) from restored", "2024-01-01 00:00:02.000000")
 		func() {
 			rows, err := conn.QueryContext(ctx, "select g from restored")
@@ -238,5 +238,92 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		}
 		require.NoError(t, rows.Err())
 		require.Contains(t, text.String(), "__mo_index_", "the result oracle must exercise an actual physical index")
+		require.NoError(t, rows.Close())
+		// Reuse this cluster to prove that historical DIV bindings survive the
+		// same public transport owner after main changes their result domains.
+		rawDiv, err := os.ReadFile(filepath.Join("..", "..", "sql", "plan", "testdata", "decimal_div_pre121_baseline.json"))
+		require.NoError(t, err)
+		var divFixtures map[string][]byte
+		require.NoError(t, json.Unmarshal(rawDiv, &divFixtures))
+		for _, tc := range []struct{ name, divisor string }{{"signed", "decimal(10,2)"}, {"unsigned", "bigint unsigned"}} {
+			t.Run("historical_div_"+tc.name, func(t *testing.T) {
+
+				exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
+				scalar := func(q, want string) {
+					t.Helper()
+					var got string
+					require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&got), q)
+					require.Equal(t, want, got, q)
+				}
+				seedName, sourceName, restoredName := "div_seed_"+tc.name, "div_source_"+tc.name, "div_restored_"+tc.name
+				for _, name := range []string{seedName, sourceName, restoredName} {
+					exec("create table " + name + "(a decimal(10,2),b " + tc.divisor + ",g bigint generated always as(a div b) stored,check(a div b > 0))")
+				}
+				seedDir := filepath.Join(root, "div-seed-"+tc.name)
+				exec("dump table " + seedName + " to '" + seedDir + "' metadata only")
+				m := readManifest(t, seedDir)
+				var payload []byte
+				require.NoError(t, json.Unmarshal(m["bound_expressions"], &payload))
+				var transport, frozen planpb.TableDef
+				require.NoError(t, proto.Unmarshal(payload, &transport))
+				require.NoError(t, proto.Unmarshal(divFixtures[tc.name], &frozen))
+				copied := 0
+				for _, old := range frozen.Cols {
+					if old.GeneratedCol == nil {
+						continue
+					}
+					for _, current := range transport.Cols {
+						if current.Name == old.Name {
+							require.Equal(t, old.GeneratedCol.OriginString, current.GeneratedCol.OriginString)
+							current.GeneratedCol = old.GeneratedCol
+							copied++
+						}
+					}
+				}
+				require.Len(t, transport.Checks, 1)
+				require.Len(t, frozen.Checks, 1)
+				require.Equal(t, frozen.Checks[0].OriginSql, transport.Checks[0].OriginSql)
+				transport.Checks[0].Check = frozen.Checks[0].Check
+				require.Equal(t, 1, copied)
+				payload, err = proto.Marshal(&transport)
+				require.NoError(t, err)
+				m["bound_expressions"], err = json.Marshal(payload)
+				require.NoError(t, err)
+				m["expression_hash"], err = json.Marshal(fmt.Sprintf("%x", sha256.Sum256(payload)))
+				require.NoError(t, err)
+				encoded, err := json.Marshal(m)
+				require.NoError(t, err)
+				require.NoError(t, os.WriteFile(filepath.Join(seedDir, "manifest.json"), encoded, 0600))
+				exec("load table " + sourceName + " from '" + seedDir + "'")
+				exec("insert into " + sourceName + "(a,b) values(5.50,2)")
+				var flush string
+				require.NoError(t, conn.QueryRowContext(ctx, "select mo_ctl('dn','flush','"+schema+"."+sourceName+"')").Scan(&flush))
+				dataDir := filepath.Join(root, "div-data-"+tc.name)
+				exec("dump table " + sourceName + " to '" + dataDir + "'")
+				exec("load table " + restoredName + " from '" + dataDir + "'")
+				metadataDir := filepath.Join(root, "div-restored-"+tc.name)
+				exec("dump table " + restoredName + " to '" + metadataDir + "' metadata only")
+				for _, dir := range []string{dataDir, metadataDir} {
+					m := readManifest(t, dir)
+					var payload []byte
+					require.NoError(t, json.Unmarshal(m["bound_expressions"], &payload))
+					var published planpb.TableDef
+					require.NoError(t, proto.Unmarshal(payload, &published))
+					require.True(t, proto.Equal(frozen.Cols[2].GeneratedCol.Expr, published.Cols[2].GeneratedCol.Expr))
+					require.True(t, proto.Equal(frozen.Checks[0].Check, published.Checks[0].Check))
+				}
+				scalar("select g from "+restoredName, "2")
+				exec("insert into " + restoredName + "(a,b) values(7.50,2)")
+				scalar("select g from "+restoredName+" where a=7.50", "3")
+				exec("update " + restoredName + " set a=9.50 where a=5.50")
+				scalar("select g from "+restoredName+" where a=9.50", "4")
+				_, err = conn.ExecContext(ctx, "insert into "+restoredName+"(a,b) values(0,2)")
+				var checkErr *mysql.MySQLError
+				require.ErrorAs(t, err, &checkErr)
+				require.Equal(t, uint16(3819), checkErr.Number)
+				scalar("select count(*) from "+restoredName, "2")
+			})
+		}
+
 	})
 }

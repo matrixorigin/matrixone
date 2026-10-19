@@ -5090,7 +5090,7 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 
 	// DIV's precision and unsigned domain belong to the original operands.
 	// Infer only unknown markers here; the function resolver owns physical casts.
-	if name == "div" {
+	if name == "div" && !function.LegacyDecimalIntegerDiv(b.GetContext()) {
 		original := []types.Type{makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1])}
 		if (original[0].Oid.IsDecimal() || original[1].Oid.IsDecimal()) &&
 			(original[0].Oid.IsDecimal() || original[0].Oid.IsInteger() || original[0].Oid == types.T_any) &&
@@ -5113,8 +5113,8 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 		}
 	}
 
-	left, right, _, ok := function.ResolveNumericBinaryTypes(
-		name,
+	left, right, _, ok := function.ResolveNumericBinaryTypesWithContext(
+		b.GetContext(), name,
 		makeTypeByPlan2Expr(args[0]),
 		makeTypeByPlan2Expr(args[1]),
 		nil,
