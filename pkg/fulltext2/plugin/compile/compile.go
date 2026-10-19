@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	fulltext2runtime "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/runtime"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	compileplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/compile"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -44,6 +45,21 @@ func parserFromParams(params string) string {
 		return ""
 	}
 	return p.Parser
+}
+
+// tokenFiltersFromParams extracts the token_filter analyzer chain from an index's
+// IndexAlgoParams JSON so the build strips the same tokens the query does.
+func tokenFiltersFromParams(params string) []string {
+	if len(params) == 0 {
+		return nil
+	}
+	var p struct {
+		TokenFilter string `json:"token_filter"`
+	}
+	if err := json.Unmarshal([]byte(params), &p); err != nil {
+		return nil
+	}
+	return tokenfilter.ParseNames(p.TokenFilter)
 }
 
 // jsonTermShapeFromParams reads the json word breaker's persisted option. The
@@ -256,6 +272,7 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 		MetadataTable:   metaDef.IndexTableName,
 		PKey:            origTable.Pkey.PkeyColName,
 		Parser:          parserFromParams(storeDef.IndexAlgoParams),
+		TokenFilters:    tokenFiltersFromParams(storeDef.IndexAlgoParams),
 		Capacity:        capacity,
 		PostingCapacity: postingCap,
 		PositionFree:    positionFree,
@@ -433,6 +450,16 @@ func (Hooks) ValidateReindexParams(old map[string]string, alter compileplugin.Re
 			}
 			merged[catalog.IndexAlgoParamPositionFree] = "true"
 		} else {
+			// A token_filter index is bag-of-words only — it is BUILT with stopwords stripped,
+			// and only the BM25 query strips them back. Turning POSITION_FREE off would leave a
+			// positional index whose NL/boolean phrase queries (no longer rejected) cannot match
+			// the stripped terms. Reject rather than mint that broken state via REINDEX, which
+			// would otherwise bypass the CREATE-time token_filter⇒POSITION_FREE guard.
+			if old[catalog.IndexAlgoParamTokenFilter] != "" {
+				return nil, moerr.NewInvalidInputNoCtx(
+					"fulltext2: cannot turn POSITION_FREE off on a token_filter index (it is bag-of-words only); " +
+						"drop and recreate the index without token_filter for a positional index")
+			}
 			delete(merged, catalog.IndexAlgoParamPositionFree) // false ⇒ positional (param absent)
 		}
 	}

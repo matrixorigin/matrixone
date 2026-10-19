@@ -57,6 +57,13 @@ type TableConfig struct {
 	MetadataTable string `json:"metadata"` // metadata (FullText2Index_TblType_Metadata)
 	PKey          string `json:"pkey"`
 	Parser        string `json:"parser,omitempty"`
+	// TokenFilters is the ordered token_filter chain (currently only "stop"),
+	// sourced from the persisted token_filter algo_param so the build (create, CDC
+	// tail, compact) and the BM25 query strip the SAME tokens. It is a bag-of-words
+	// analyzer: NL / BOOLEAN phrase queries against a token_filter index are rejected
+	// at plan time (a dropped stopword's bytes stay in the surviving positions).
+	// gojieba parser only. nil ⇒ no filters.
+	TokenFilters []string `json:"token_filter,omitempty"`
 	// Capacity is max_index_capacity: the create build splits the tag=0 base into
 	// sub-indexes of at most Capacity docs each (0 => DefaultBuildCapacity).
 	Capacity int64 `json:"capacity,omitempty"`

@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -55,6 +56,7 @@ type fulltext2CreateState struct {
 	capacity     int64              // docs per sealed segment (floored to DefaultBuildCapacity)
 	postingCap   int64              // postings per sealed segment (floored to DefaultPostingCapacity)
 	pkType       int32
+	filters      []tokenfilter.TokenFilter // token_filter chain (stop), applied at tokenize
 	bopts        []fulltext2.BuildOpt
 	uid          string // per-build-unique sub-index id prefix (IndexTable:ts)
 	ts           int64
@@ -106,6 +108,9 @@ func (u *fulltext2CreateState) start(tf *TableFunction, proc *process.Process, n
 			return moerr.NewInternalError(proc.Ctx, "fulltext2_create: config is empty")
 		}
 		if err = sonic.Unmarshal([]byte(cfgstr), &u.tblcfg); err != nil {
+			return err
+		}
+		if u.filters, err = tokenfilter.Build(u.tblcfg.TokenFilters); err != nil {
 			return err
 		}
 		pkVec := tf.ctr.argVecs[1]
@@ -357,6 +362,9 @@ func (u *fulltext2CreateState) rowTerms(tf *TableFunction, proc *process.Process
 		}
 		tok = t
 	}
+	// Apply the token_filter chain (stop) so build drops the same tokens the query
+	// drops. Empty filters ⇒ tok unchanged.
+	tok = tokenfilter.Apply(tok, u.filters)
 
 	// token count is unknown up front; estimate from input length to avoid regrowth.
 	terms := make([]fulltext2.WordPos, 0, content.Len()/4)

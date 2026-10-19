@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
 )
@@ -44,8 +45,14 @@ func RunFulltext2(c *IndexConsumer, ctx context.Context, errch chan error, r Dat
 
 	// Parser-aware tokenize (ngram/gojieba/json) so build and query tokens match.
 	// The json term shape travels with the config so this path and the CREATE
-	// build agree on the terms they emit.
-	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(w.cfg.Parser, w.cfg.JSONTermOptions())
+	// build agree on the terms they emit. The token_filter chain (stop) travels the
+	// same way so the CDC tail strips the same tokens as create/query.
+	filters, err := tokenfilter.Build(w.cfg.TokenFilters)
+	if err != nil {
+		errch <- err
+		return
+	}
+	tokenize, err := fulltext2.CdcTokenizerWithJSONOptions(w.cfg.Parser, w.cfg.JSONTermOptions(), filters...)
 	if err != nil {
 		errch <- err
 		return

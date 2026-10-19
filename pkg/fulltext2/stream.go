@@ -330,7 +330,7 @@ func (idx *Index) StreamBagOfWords(pattern []byte, parser string, algo ScoreAlgo
 	if idx.globalN == 0 {
 		return nil
 	}
-	q, err := buildBagOfWordsQuery(string(pattern), normalizeParser(parser))
+	q, err := buildBagOfWordsQuery(string(pattern), normalizeParser(parser), idx.tokenFilters...)
 	if err != nil {
 		return err
 	}

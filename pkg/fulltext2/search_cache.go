@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	veccache "github.com/matrixorigin/matrixone/pkg/vectorindex/cache"
@@ -181,6 +182,14 @@ func (s *Fulltext2Search) Load(sqlproc *sqlexec.SqlProcess) error {
 	segs := append(bases, tails...)
 	s.idx = NewIndex(segs, deletes)
 	s.idx.threadsSearch = s.threadsSearch
+	// Bake the token_filter chain from the index's config so every query path
+	// strips the same tokens (stopwords) the build/CDC paths stripped.
+	filters, ferr := tokenfilter.Build(s.cfg.TokenFilters)
+	if ferr != nil {
+		freeSegs(segs)
+		return ferr
+	}
+	s.idx.tokenFilters = filters
 	s.loaded = true
 	s.baseSegs = len(bases)
 	s.tailSegs = len(tails)

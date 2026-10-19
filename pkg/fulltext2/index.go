@@ -22,6 +22,7 @@ import (
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2/tokenfilter"
 	"github.com/matrixorigin/matrixone/pkg/monlp/tokenizer"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -58,6 +59,13 @@ type Index struct {
 	// concurrent search and never races. 0 means use GOMAXPROCS (vectorindex.GetConcurrency).
 	// It is a perf-only hint: any value yields identical results.
 	threadsSearch int
+
+	// tokenFilters is the token_filter analyzer chain (currently "stop"), baked here
+	// once at Load from the index's TableConfig. It is applied ONLY on the BM25
+	// bag-of-words query path (SearchBagOfWords/StreamBagOfWords) so the query strips
+	// the SAME tokens the build/CDC paths stripped; NL/boolean are rejected at plan
+	// time for a token_filter index. Empty ⇒ no filtering. Read-only during search.
+	tokenFilters []tokenfilter.TokenFilter
 }
 
 type docLoc struct {

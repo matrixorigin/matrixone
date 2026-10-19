@@ -2121,6 +2121,7 @@ type IndexOption struct {
 	PositionFreeSet          bool  // whether POSITION_FREE was specified (tri-state for REINDEX: distinguishes =FALSE from unset)
 	QuantizerTrainLimit      int64
 	IncludeColumns           []*UnresolvedName
+	TokenFilters             []string // fulltext2: token_filter analyzer chain (e.g. ["stop"])
 }
 
 // Must follow the following sequence when test
@@ -2138,7 +2139,7 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 		node.MaxIndexCapacity != 0 || node.MaxPostingsCapacity != 0 ||
 		node.QuantizerTrainLimit != 0 || node.PositionFree ||
 		node.Merge || node.ForceSync ||
-		len(node.IncludeColumns) != 0 {
+		len(node.IncludeColumns) != 0 || len(node.TokenFilters) != 0 {
 		ctx.WriteByte(' ')
 	}
 	if node.KeyBlockSize != 0 {
@@ -2276,6 +2277,11 @@ func (node *IndexOption) Format(ctx *FmtCtx) {
 	}
 	if node.PositionFree {
 		ctx.WriteString("POSITION_FREE=TRUE ")
+	}
+	if len(node.TokenFilters) != 0 {
+		ctx.WriteString("TOKEN_FILTER = '")
+		ctx.WriteString(strings.Join(node.TokenFilters, ","))
+		ctx.WriteString("' ")
 	}
 	if len(node.IncludeColumns) != 0 {
 		ctx.WriteString("INCLUDE (")

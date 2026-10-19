@@ -60,3 +60,37 @@ func ClusterHasIndexProvenance(ctx CompilerContext) bool {
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion61
 }
+
+// ClusterSupportsFulltext2Analyzer reports whether every live service understands the
+// fulltext2 token_filter analyzer (MORPCVersion123), and is the gate for CREATING a
+// token_filter index.
+//
+// token_filter strips stopwords at every WRITE path (CREATE build, CDC tail, idxcron
+// rebuild), so the index's invariant is that NO segment holds a stopword posting. An
+// older CN that ran the async CDC tail build or a scheduled rebuild would NOT strip,
+// leaking stopword postings into some segments — breaking that invariant (inconsistent
+// results for a stopword query, lost size reduction). Gating CREATE on the cluster-wide
+// version ensures every CN that could build or maintain the index strips identically.
+// (The READ side needs no gate: a stripped index has no stopword postings, so a stopword
+// query term matches nothing and contributes 0 to BM25 whether or not the reader strips —
+// query-side stripping is a score-neutral optimization.)
+// Unavailable answers false — the safe default is to reject the new option.
+func ClusterSupportsFulltext2Analyzer(ctx CompilerContext) bool {
+	if ctx == nil {
+		return false
+	}
+	proc := ctx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	rt := runtime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion123
+}

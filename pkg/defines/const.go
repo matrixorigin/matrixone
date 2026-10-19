@@ -158,7 +158,7 @@ const (
 	MORPCVersion120    int64 = 120 // current-session KILL authorization and proxy disconnect cleanup
 	MORPCVersion121    int64 = 121 // exact unsigned DECIMAL DIV result domain
 	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
-	MORPCVersion123    int64 = 123 // fulltext2 parallel search threads_search option
+	MORPCVersion123    int64 = 123 // fulltext2 parallel search threads_search option and token_filter (stop) analyzer
 	MORPCLatestVersion       = MORPCVersion123
 )
 
