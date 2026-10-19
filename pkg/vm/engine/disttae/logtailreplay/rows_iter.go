@@ -133,9 +133,31 @@ type primaryKeyIter struct {
 	tombstoneRowIdIdx *btree.BTreeG[*PrimaryIndexEntry]
 	curRow            *RowEntry
 
+	// advances counts the underlying index-iterator moves (Seek/Next), and
+	// surfaced counts the entries the match spec surfaced, and validated
+	// counts the rows-tree visibility checks performed on them. They make
+	// the iteration cost observable at the exact advance, candidate, and
+	// validation boundaries, so tests can prove the iterator follows
+	// predicate selectivity instead of table size.
+	advances  int
+	surfaced  int
+	validated int
+
 	specHint struct {
 		isDelIter bool
 	}
+}
+
+// seekEntry and nextEntry wrap the underlying index iterator so every
+// physical entry advance is counted.
+func (p *primaryKeyIter) seekEntry(e *PrimaryIndexEntry) bool {
+	p.advances++
+	return p.iter.Seek(e)
+}
+
+func (p *primaryKeyIter) nextEntry() bool {
+	p.advances++
+	return p.iter.Next()
 }
 
 type PrimaryKeyMatchSpec struct {
@@ -232,12 +254,12 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 				pivot.Bytes = key
 				pivot.Time = p.ts
 
-				if ok = p.iter.Seek(&pivot); !ok {
+				if ok = p.seekEntry(&pivot); !ok {
 					return false
 				}
 
 			} else {
-				ok = p.iter.Next()
+				ok = p.nextEntry()
 
 				if !p.specHint.isDelIter {
 					cnt--
@@ -304,9 +326,9 @@ func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 				pivot.Bytes = prefix
 				pivot.Time = p.ts
 
-				ok = p.iter.Seek(&pivot)
+				ok = p.seekEntry(&pivot)
 			} else {
-				ok = p.iter.Next()
+				ok = p.nextEntry()
 			}
 
 			if !ok {
@@ -340,6 +362,94 @@ func MinMax(min []byte, max []byte) PrimaryKeyMatchSpec {
 	return PrimaryKeyMatchSpec{}
 }
 
+// ExactNonUnique matches every index entry whose key bytes equal the given
+// value. Cluster keys are nonunique: unlike Exact, which stops after a bounded
+// number of moves to exploit primary-key uniqueness, this spec visits all
+// entries sharing the value so no duplicate cluster key is lost.
+func ExactNonUnique(key []byte) PrimaryKeyMatchSpec {
+	// if bytes and time matched, we hope scan from the first
+	var pivot = PrimaryIndexEntry{
+		RowEntryID: math.MaxInt64,
+	}
+
+	first := true
+	spec := PrimaryKeyMatchSpec{
+		Name: "ExactNonUnique",
+		moveInner: func(p *primaryKeyIter) bool {
+			var ok bool
+			if first {
+				first = false
+
+				pivot.Bytes = key
+				pivot.Time = p.ts
+
+				ok = p.seekEntry(&pivot)
+			} else {
+				ok = p.nextEntry()
+			}
+
+			return ok
+		},
+	}
+
+	spec.Move = func(p *primaryKeyIter) bool {
+		var ok bool
+		for {
+			if ok = spec.moveInner(p); !ok {
+				return false
+			}
+
+			if p.specHint.isDelIter != p.iter.Item().Deleted {
+				continue
+			}
+
+			return bytes.Equal(p.iter.Item().Bytes, key)
+		}
+	}
+
+	return spec
+}
+
+// fullKeySuccessor returns the smallest byte string strictly greater than
+// key: appending one zero byte, since no string lies between key and
+// key||0x00.
+func fullKeySuccessor(key []byte) []byte {
+	out := make([]byte, 0, len(key)+1)
+	out = append(out, key...)
+	return append(out, 0x00)
+}
+
+// prefixSuccessor returns a byte string that sorts after every string
+// carrying prefix as a prefix and before any string whose prefix-long head
+// is greater: increment the last non-0xFF byte and truncate after it. ok is
+// false when prefix is all 0xFF, where no bound below the remaining keys
+// exists.
+func prefixSuccessor(prefix []byte) ([]byte, bool) {
+	out := make([]byte, len(prefix))
+	copy(out, prefix)
+	for i := len(out) - 1; i >= 0; i-- {
+		if out[i] != 0xFF {
+			out[i]++
+			return out[:i+1], true
+		}
+	}
+	return nil, false
+}
+
+// seekPastKeyRun seeks the iterator to the first entry whose key is at or
+// after successor, jumping over an entire run of equal or prefix-equal
+// lower-bound entries with one counted seek instead of a linear walk. The
+// pivot keeps the snapshot timestamp so entries committed after ts stay
+// skipped, matching the initial seek's convention.
+func seekPastKeyRun(p *primaryKeyIter, successor []byte) bool {
+	pivot := PrimaryIndexEntry{
+		Bytes:      successor,
+		Time:       p.ts,
+		RowEntryID: math.MaxInt64,
+	}
+	return p.seekEntry(&pivot)
+}
+
 func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 	// 0: [,]
 	// 1: (,]
@@ -350,72 +460,58 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 	// 6: prefix between [,)
 	// 7: prefix between (,)
 	var validCheck func(bb []byte) bool
-	var seek2First func(iter *btree.IterG[*PrimaryIndexEntry]) bool
+	var seek2First func(p *primaryKeyIter) bool
 	switch kind {
 	case 0:
 		validCheck = func(bb []byte) bool {
 			return bytes.Compare(bb, ub) <= 0
 		}
-		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
+		seek2First = func(p *primaryKeyIter) bool { return true }
 	case 1:
 		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) <= 0 }
-		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
-			for bytes.Equal(iter.Item().Bytes, lb) {
-				if ok := iter.Next(); !ok {
-					return false
-				}
-			}
-			return true
-		}
+		seek2First = func(p *primaryKeyIter) bool { return seekPastKeyRun(p, fullKeySuccessor(lb)) }
 	case 2:
 		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) < 0 }
-		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
+		seek2First = func(p *primaryKeyIter) bool { return true }
 	case 3:
 		validCheck = func(bb []byte) bool { return bytes.Compare(bb, ub) < 0 }
-		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
-			for bytes.Equal(iter.Item().Bytes, lb) {
-				if ok := iter.Next(); !ok {
-					return false
-				}
-			}
-			return true
-		}
+		seek2First = func(p *primaryKeyIter) bool { return seekPastKeyRun(p, fullKeySuccessor(lb)) }
 	case 4:
 		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) <= 0 }
-		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
+		seek2First = func(p *primaryKeyIter) bool { return true }
 	case 5:
 		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) <= 0 }
-		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
+		seek2First = func(p *primaryKeyIter) bool {
 			if len(lb) == 0 {
 				return false
 			}
-			for types.PrefixCompare(iter.Item().Bytes, lb) == 0 {
-				if ok := iter.Next(); !ok {
-					return false
-				}
+			succ, ok := prefixSuccessor(lb)
+			if !ok {
+				// An all-0xFF prefix excludes everything that can follow.
+				return false
 			}
-			return true
+			return seekPastKeyRun(p, succ)
 		}
 	case 6:
 		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) < 0 }
-		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
+		seek2First = func(p *primaryKeyIter) bool { return true }
 	case 7:
 		validCheck = func(bb []byte) bool { return types.PrefixCompare(bb, ub) < 0 }
-		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool {
+		seek2First = func(p *primaryKeyIter) bool {
 			if len(lb) == 0 {
 				return false
 			}
-			for types.PrefixCompare(iter.Item().Bytes, lb) == 0 {
-				if ok := iter.Next(); !ok {
-					return false
-				}
+			succ, ok := prefixSuccessor(lb)
+			if !ok {
+				// An all-0xFF prefix excludes everything that can follow.
+				return false
 			}
-			return true
+			return seekPastKeyRun(p, succ)
 		}
 	default:
 		logutil.Infof("between kind missed: kind: %d, lb=%v, ub=%v\n", kind, lb, ub)
 		validCheck = func(bb []byte) bool { return true }
-		seek2First = func(iter *btree.IterG[*PrimaryIndexEntry]) bool { return true }
+		seek2First = func(p *primaryKeyIter) bool { return true }
 	}
 
 	// if bytes and time matched, we hope scan from the first
@@ -434,11 +530,11 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 				pivot.Bytes = lb
 				pivot.Time = p.ts
 
-				if ok = p.iter.Seek(&pivot); ok {
-					ok = seek2First(&p.iter)
+				if ok = p.seekEntry(&pivot); ok {
+					ok = seek2First(p)
 				}
 			} else {
-				ok = p.iter.Next()
+				ok = p.nextEntry()
 			}
 
 			if !ok {
@@ -488,7 +584,7 @@ func LessKind(ub []byte, closed bool) PrimaryKeyMatchSpec {
 				return ok
 			}
 
-			ok = p.iter.Next()
+			ok = p.nextEntry()
 			if !ok {
 				return false
 			}
@@ -511,7 +607,7 @@ func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 			var ok bool
 			if first {
 				first = false
-				ok = p.iter.Seek(&PrimaryIndexEntry{
+				ok = p.seekEntry(&PrimaryIndexEntry{
 					Bytes: lb,
 					Time:  p.ts,
 					// if bytes and time matched, we hope scan from the first
@@ -519,12 +615,12 @@ func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 				})
 
 				for ok && !closed && bytes.Equal(p.iter.Item().Bytes, lb) {
-					ok = p.iter.Next()
+					ok = p.nextEntry()
 				}
 				return ok
 			}
 
-			return p.iter.Next()
+			return p.nextEntry()
 		},
 	}
 }
@@ -587,7 +683,7 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 					pivot.Bytes = encoded
 					pivot.Time = p.ts
 
-					if !p.iter.Seek(&pivot) {
+					if !p.seekEntry(&pivot) {
 						return false
 					}
 					if match(p.iter.Item().Bytes, encoded) {
@@ -596,7 +692,7 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 					}
 
 				case scan:
-					if !p.iter.Next() {
+					if !p.nextEntry() {
 						return false
 					}
 					if match(p.iter.Item().Bytes, encoded) {
@@ -673,9 +769,11 @@ func (p *primaryKeyIter) Next() bool {
 		if !p.spec.Move(p) {
 			return false
 		}
+		p.surfaced++
 
 		entry := p.iter.Item()
 
+		p.validated++
 		if p.isPKItemValid(*entry) {
 			return true
 		}
@@ -981,4 +1079,72 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 
 	delIter.specHint.isDelIter = true
 	return delIter
+}
+
+// buildClusterSpec is buildSpec for the nonunique cluster-key index: primary-key
+// equality becomes a full-value scan, every other op reuses the shared spec.
+func buildClusterSpec(op int, keys [][]byte) PrimaryKeyMatchSpec {
+	if op == function.EQUAL {
+		return ExactNonUnique(keys[0])
+	}
+	return buildSpec(op, keys)
+}
+
+// NewClusterKeyIter returns an iterator over the partition state's cluster-key
+// index. Matching candidates are validated against the authoritative rows tree
+// at ts through the same isPKItemValid used by the primary-key iterator, so
+// visibility (deletes, MVCC versions, future commits) is decided by row
+// identity rather than by the index entry.
+//
+// The caller is responsible for having verified the index covers the queried
+// schema; NewClusterKeyIterWithFilters is the guarded production entry.
+func (p *PartitionState) NewClusterKeyIter(
+	ts types.TS,
+	op int,
+	keys [][]byte,
+) *primaryKeyIter {
+	index := p.rowClusterIndex
+	return &primaryKeyIter{
+		ts:           ts,
+		spec:         buildClusterSpec(op, keys),
+		iter:         index.Iter(),
+		primaryIndex: index,
+		rows:         p.rows,
+	}
+}
+
+// ClusterIndexReadyFor reports whether cluster-key pruning is sound for a
+// query on the given compound column name: the index must be complete and
+// built under the same name. A rename or reorder of the cluster parts, or any
+// unindexed retained version, makes it false.
+func (p *PartitionState) ClusterIndexReadyFor(colName string) bool {
+	return !p.clusterIndexIncomplete &&
+		p.clusterIndexAttrName != "" &&
+		p.clusterIndexAttrName == colName
+}
+
+// NewClusterKeyIterWithFilters is the guarded cluster-key read entry shared by
+// both committed in-memory datasources. When the index cannot prove complete
+// coverage of the queried compound column it fails open to the general row
+// iteration, so no committed version can be missed; only the pruning is lost.
+func (p *PartitionState) NewClusterKeyIterWithFilters(
+	ts types.TS,
+	colName string,
+	filters []readutil.MemPKFilterSpec,
+) RowsIter {
+	if !p.ClusterIndexReadyFor(colName) {
+		return p.NewRowsIter(ts, nil, false)
+	}
+
+	if len(filters) == 1 {
+		return p.NewClusterKeyIter(ts, filters[0].Op, filters[0].Keys)
+	}
+
+	children := make([]primaryKeyOrderedIter, 0, len(filters))
+	for idx := range filters {
+		children = append(children, p.NewClusterKeyIter(ts, filters[idx].Op, filters[idx].Keys))
+	}
+	return &primaryKeyUnionIter{
+		heap: primaryKeyIterHeap{children: children},
+	}
 }

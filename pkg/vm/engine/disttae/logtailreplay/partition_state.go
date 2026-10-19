@@ -30,6 +30,7 @@ import (
 
 	"github.com/tidwall/btree"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
@@ -77,8 +78,19 @@ type PartitionState struct {
 	dataObjectsNameIndex      *btree.BTreeG[objectio.ObjectEntry]
 	tombstoneObjectsNameIndex *btree.BTreeG[objectio.ObjectEntry]
 
-	rowPrimaryKeyIndex       *btree.BTreeG[*PrimaryIndexEntry]
-	inMemTombstoneRowIdIndex *btree.BTreeG[*PrimaryIndexEntry]
+	rowPrimaryKeyIndex *btree.BTreeG[*PrimaryIndexEntry]
+	rowClusterIndex    *btree.BTreeG[*PrimaryIndexEntry]
+
+	// Cluster-index era tracking. Pruning through rowClusterIndex is only
+	// sound while every retained insert version is indexed under one
+	// compound column name, so each replayed insert batch updates this
+	// descriptor and any inconsistency marks the index incomplete (sticky,
+	// for this state and every copy) to force reads back to the general row
+	// iteration.
+	clusterIndexAttrName      string
+	clusterIndexIncomplete    bool
+	clusterIndexSawPlainBatch bool
+	inMemTombstoneRowIdIndex  *btree.BTreeG[*PrimaryIndexEntry]
 
 	dataObjectTSIndex       *btree.BTreeG[ObjectIndexByTSEntry]
 	tombstoneObjectDTSIndex *btree.BTreeG[objectio.ObjectEntry]
@@ -529,13 +541,7 @@ func (p *PartitionState) handleDataObjectEntry(
 				p.rows.Delete(entry)
 
 				// delete the row's primary index
-				if len(entry.PrimaryIndexBytes) > 0 {
-					p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-						Bytes:      entry.PrimaryIndexBytes,
-						RowEntryID: entry.ID,
-						Time:       entry.Time,
-					})
-				}
+				p.deleteRowIndexes(entry)
 				numDeleted++
 			}
 
@@ -642,13 +648,7 @@ func (p *PartitionState) handleTombstoneObjectEntry(
 
 			p.rows.Delete(deletedRow)
 			p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
-			if len(deletedRow.PrimaryIndexBytes) > 0 {
-				p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-					Bytes:      deletedRow.PrimaryIndexBytes,
-					RowEntryID: deletedRow.ID,
-					Time:       deletedRow.Time,
-				})
-			}
+			p.deleteRowIndexes(deletedRow)
 		}
 	}
 
@@ -804,13 +804,7 @@ func (p *PartitionState) HandleDataObjectList(
 					}
 					if entry.Time.LE(&trunctPoint) {
 						p.rows.Delete(entry)
-						if len(entry.PrimaryIndexBytes) > 0 {
-							p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-								Bytes:      entry.PrimaryIndexBytes,
-								RowEntryID: entry.ID,
-								Time:       entry.Time,
-							})
-						}
+						p.deleteRowIndexes(entry)
 						numDeleted++
 						blockDeleted++
 					}
@@ -929,13 +923,7 @@ func (p *PartitionState) HandleTombstoneObjectList(
 
 			p.rows.Delete(deletedRow)
 			p.inMemTombstoneRowIdIndex.Delete(tbIter.Item())
-			if len(deletedRow.PrimaryIndexBytes) > 0 {
-				p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
-					Bytes:      deletedRow.PrimaryIndexBytes,
-					RowEntryID: deletedRow.ID,
-					Time:       deletedRow.Time,
-				})
-			}
+			p.deleteRowIndexes(deletedRow)
 		}
 
 		p.prefetchObject(fs, objEntry)
@@ -1052,6 +1040,9 @@ func (p *PartitionState) HandleRowsInsert(
 		packer,
 	)
 
+	clusterKeys, clusterAttrName, clusterStatus := encodeClusterIndexKeys(batch, packer)
+	clusterKeys = p.trackClusterIndexEra(clusterKeys, clusterAttrName, clusterStatus)
+
 	var numInserted int64
 	for i, rowID := range rowIDVector {
 		blockID := rowID.CloneBlockID()
@@ -1072,6 +1063,9 @@ func (p *PartitionState) HandleRowsInsert(
 			entry.Offset = int64(i)
 		}
 		entry.PrimaryIndexBytes = primaryKeys[i]
+		if clusterKeys != nil {
+			entry.ClusterIndexBytes = clusterKeys[i]
+		}
 		p.rows.Set(entry)
 
 		{
@@ -1085,12 +1079,154 @@ func (p *PartitionState) HandleRowsInsert(
 			}
 			p.rowPrimaryKeyIndex.Set(pe)
 		}
+
+		if clusterKeys != nil {
+			pe := &PrimaryIndexEntry{
+				Bytes:      clusterKeys[i],
+				RowEntryID: entry.ID,
+				BlockID:    blockID,
+				RowID:      rowID,
+				Time:       entry.Time,
+				Deleted:    entry.Deleted,
+			}
+			p.rowClusterIndex.Set(pe)
+		}
 	}
 
 	perfcounter.Update(ctx, func(c *perfcounter.CounterSet) {
 	})
 
 	return
+}
+
+// clusterAttrStatus describes how a replayed insert batch exposes the hidden
+// compound cluster-by column.
+type clusterAttrStatus int
+
+const (
+	// clusterAttrAbsent: no attr carries the compound prefix. Ordinary tables
+	// never carry one; a batch of a previously clustered table that lost its
+	// compound column also reports absent.
+	clusterAttrAbsent clusterAttrStatus = iota
+	// clusterAttrFound: exactly one attr carries the compound prefix.
+	clusterAttrFound
+	// clusterAttrAmbiguous: more than one attr carries the prefix. User
+	// columns are not barred from the reserved __mo_cbkey_ prefix, so a
+	// user column can coexist with the real compound column.
+	clusterAttrAmbiguous
+)
+
+// encodeClusterIndexKeys returns the encoded hidden composite cluster-by key
+// of every row in a replayed insert batch, the compound attr it was read
+// from, and how the batch exposed the column.
+//
+// The compound cluster column is a real schema column whose name starts with
+// __mo_cbkey_; its vector sits among the batch's user columns and is matched
+// by prefix, so its position is independent of sequence-number changes. A
+// placeholder has an empty attr name and never matches the prefix.
+func encodeClusterIndexKeys(
+	bat *batch.Batch,
+	packer *types.Packer,
+) (keys [][]byte, name string, status clusterAttrStatus) {
+	clusterIdx := -1
+	for i, attr := range bat.Attrs {
+		if !strings.HasPrefix(attr, catalog.PrefixCBColName) {
+			continue
+		}
+		if clusterIdx != -1 {
+			return nil, "", clusterAttrAmbiguous
+		}
+		clusterIdx = i
+	}
+	if clusterIdx == -1 {
+		return nil, "", clusterAttrAbsent
+	}
+	if clusterIdx < 2 || clusterIdx >= len(bat.Vecs) {
+		// 2 for rowid and commitTS: anything before them cannot be a user
+		// column, and a name without a vector is malformed.
+		return nil, "", clusterAttrAmbiguous
+	}
+	if bat.Vecs[clusterIdx].GetType().Oid != types.T_varchar {
+		// A user column may legally carry the reserved prefix with any type;
+		// only the real compound column is a serialized VARCHAR. Reporting
+		// absence keeps the batch unindexed (the key encoder supports a
+		// limited type set and would panic on, e.g., GEOMETRY) and lets the
+		// era tracking treat this batch like a plain non-cluster batch.
+		return nil, "", clusterAttrAbsent
+	}
+	return readutil.EncodePrimaryKeyVector(bat.Vecs[clusterIdx], packer),
+		bat.Attrs[clusterIdx], clusterAttrFound
+}
+
+// trackClusterIndexEra folds one replayed insert batch into the cluster-index
+// descriptor. It reports whether the batch's rows may be indexed: pruning is
+// disabled permanently once any retained version escapes the index (an
+// ambiguous compound attr, or a schema era that added, removed, or renamed the
+// compound column), because the rows tree would still hold versions the index
+// can never surface.
+func (p *PartitionState) trackClusterIndexEra(
+	keys [][]byte,
+	name string,
+	status clusterAttrStatus,
+) (indexKeys [][]byte) {
+	if p.clusterIndexIncomplete {
+		// Sticky: earlier versions are already unindexed, later ones cannot
+		// repair that, so skip their maintenance cost too.
+		return nil
+	}
+	switch status {
+	case clusterAttrFound:
+		switch {
+		case p.clusterIndexAttrName == "":
+			if p.clusterIndexSawPlainBatch {
+				// The compound column appeared after plain versions were
+				// retained; those versions can never be indexed.
+				p.clusterIndexIncomplete = true
+				return nil
+			}
+			p.clusterIndexAttrName = name
+			return keys
+		case p.clusterIndexAttrName == name:
+			return keys
+		default:
+			// The compound column was renamed or its parts changed: the two
+			// eras serialize keys in different domains.
+			p.clusterIndexIncomplete = true
+			return nil
+		}
+	case clusterAttrAmbiguous:
+		p.clusterIndexIncomplete = true
+		return nil
+	default: // clusterAttrAbsent
+		if p.clusterIndexAttrName != "" {
+			// The compound column disappeared: era change.
+			p.clusterIndexIncomplete = true
+		} else {
+			p.clusterIndexSawPlainBatch = true
+		}
+		return nil
+	}
+}
+
+// deleteRowIndexes removes a row version's primary-key and cluster-key index
+// entries. It is the single removal path shared by every physical
+// row-removal site (appendable-object GC), so the two indexes cannot drift
+// apart.
+func (p *PartitionState) deleteRowIndexes(entry *RowEntry) {
+	if len(entry.PrimaryIndexBytes) > 0 {
+		p.rowPrimaryKeyIndex.Delete(&PrimaryIndexEntry{
+			Bytes:      entry.PrimaryIndexBytes,
+			RowEntryID: entry.ID,
+			Time:       entry.Time,
+		})
+	}
+	if len(entry.ClusterIndexBytes) > 0 {
+		p.rowClusterIndex.Delete(&PrimaryIndexEntry{
+			Bytes:      entry.ClusterIndexBytes,
+			RowEntryID: entry.ID,
+			Time:       entry.Time,
+		})
+	}
 }
 
 func (p *PartitionState) Copy() *PartitionState {
@@ -1101,6 +1237,10 @@ func (p *PartitionState) Copy() *PartitionState {
 		dataObjectsNameIndex:      p.dataObjectsNameIndex.Copy(),
 		tombstoneObjectsNameIndex: p.tombstoneObjectsNameIndex.Copy(),
 		rowPrimaryKeyIndex:        p.rowPrimaryKeyIndex.Copy(),
+		rowClusterIndex:           p.rowClusterIndex.Copy(),
+		clusterIndexAttrName:      p.clusterIndexAttrName,
+		clusterIndexIncomplete:    p.clusterIndexIncomplete,
+		clusterIndexSawPlainBatch: p.clusterIndexSawPlainBatch,
 		inMemTombstoneRowIdIndex:  p.inMemTombstoneRowIdIndex.Copy(),
 		noData:                    p.noData,
 		dataObjectTSIndex:         p.dataObjectTSIndex.Copy(),
@@ -1168,6 +1308,7 @@ func NewPartitionState(
 		dataObjectsNameIndex:      btree.NewBTreeGOptions(objectio.ObjectEntry.ObjectNameIndexLess, opts),
 		tombstoneObjectsNameIndex: btree.NewBTreeGOptions(objectio.ObjectEntry.ObjectNameIndexLess, opts),
 		rowPrimaryKeyIndex:        btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
+		rowClusterIndex:           btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 		inMemTombstoneRowIdIndex:  btree.NewBTreeGOptions((*PrimaryIndexEntry).Less, opts),
 		dataObjectTSIndex:         btree.NewBTreeGOptions(ObjectIndexByTSEntry.Less, opts),
 		tombstoneObjectDTSIndex:   btree.NewBTreeGOptions(objectio.ObjectEntry.ObjectDTSIndexLess, opts),
