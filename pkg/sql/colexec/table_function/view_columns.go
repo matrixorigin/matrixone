@@ -25,10 +25,16 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
-const maxViewDescriptionsPerScan = 65536
+const (
+	maxViewDescriptionsPerScan = 65536
+	viewColumnsBatchRows       = 1024
+	viewColumnsBatchBytes      = 1 << 20
+	viewColumnsBatchHardBytes  = 16 << 20
+)
 
 // Only catalog/column lookup failures prove that a previously valid View
 // definition has become invalid. Other errors may indicate protocol, resource,
@@ -43,11 +49,34 @@ func skippableViewDescriptionError(err error) bool {
 type viewColumnsState struct {
 	simpleOneBatchState
 	described uint64
+	derived   bool
+	columns   []*planpb.ColDef
+	next      int
+	result    *plan.ViewSchemaResult
+}
+
+func (s *viewColumnsState) releaseColumns() {
+	s.columns, s.next = nil, 0
+	s.result.Release()
+	s.result = nil
 }
 
 func (s *viewColumnsState) reset(tf *TableFunction, proc *process.Process) {
+	s.releaseColumns()
 	s.simpleOneBatchState.reset(tf, proc)
 	s.described = 0
+	s.derived = false
+}
+
+func (s *viewColumnsState) free(tf *TableFunction, proc *process.Process, pipelineFailed bool, err error) {
+	s.releaseColumns()
+	s.simpleOneBatchState.free(tf, proc, pipelineFailed, err)
+	s.batch = nil
+}
+
+func (s *viewColumnsState) end(_ *TableFunction, _ *process.Process) error {
+	s.releaseColumns()
+	return nil
 }
 
 func viewColumnsPrepare(proc *process.Process, tf *TableFunction) (tvfState, error) {
@@ -61,12 +90,22 @@ func viewColumnsPrepare(proc *process.Process, tf *TableFunction) (tvfState, err
 	return state, nil
 }
 
-func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRow int, _ process.Analyzer) error {
+func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRow int, _ process.Analyzer) (err error) {
+	s.releaseColumns()
+	defer func() {
+		if err != nil {
+			s.releaseColumns()
+		}
+	}()
 	s.startPreamble(tf, proc, nthRow)
 	if err := proc.Ctx.Err(); err != nil {
 		return err
 	}
-	if len(tf.ctr.argVecs) != 1 && len(tf.ctr.argVecs) != 2 {
+	s.derived = len(tf.ctr.argVecs) == 3
+	if s.derived {
+		return s.startDerived(tf, proc, nthRow)
+	}
+	if plan.HasViewMetadataRequest(proc.Ctx) || (len(tf.ctr.argVecs) != 1 && len(tf.ctr.argVecs) != 2) {
 		return moerr.NewInvalidInput(proc.Ctx, "invalid View column metadata arguments")
 	}
 	idArgs := vector.GenerateFunctionFixedTypeParameter[uint64](tf.ctr.argVecs[len(tf.ctr.argVecs)-1])
@@ -138,28 +177,133 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 	if len(columns) > plan.MaxViewMetadataColumns {
 		return moerr.NewInternalError(proc.Ctx, "View metadata exceeds its column budget")
 	}
-	for i, col := range columns {
-		if err := proc.Ctx.Err(); err != nil {
+	s.columns = columns
+	return nil
+}
+
+// ApplyPreserveBatch prevents APPLY from coalescing many large metadata pages
+// merely because their row count is low. Only the opt-in signature needs it;
+// the capability is reconstructed from existing arguments, not a wire flag.
+func (tableFunction *TableFunction) ApplyPreserveBatch() bool {
+	return (tableFunction.FuncName == plan.ViewColumnsFunctionName || tableFunction.FuncName == plan.SubscriptionViewColumnsFunctionName) && len(tableFunction.Args) == 3
+}
+
+func (s *viewColumnsState) startDerived(tf *TableFunction, proc *process.Process, nthRow int) error {
+	for _, arg := range tf.ctr.argVecs {
+		if arg.IsNull(uint64(nthRow)) {
+			return nil
+		}
+	}
+	database := tf.ctr.argVecs[0].GetStringAt(nthRow)
+	name := tf.ctr.argVecs[1].GetStringAt(nthRow)
+	ids := vector.GenerateFunctionFixedTypeParameter[uint64](tf.ctr.argVecs[2])
+	id, _ := ids.GetValue(uint64(nthRow))
+	result, invalid, err := plan.DescribeViewMetadataCandidate(proc.Ctx, database, name, tf.ScanSnapshot)
+	if err != nil {
+		if cause := proc.Ctx.Err(); cause != nil {
+			return cause
+		}
+		if !invalid {
 			return err
 		}
-		typ := plan.MakeTypeByPlan2Type(col.Typ)
-		typeBytes, err := types.Encode(&typ)
+		process.AppendWarningBatch(proc, 1, []uint16{moerr.ER_VIEW_INVALID}, []string{
+			fmt.Sprintf("View '%s.%s' references invalid table(s) or column(s) or function(s) or definer/invoker of view lack rights to use them", database, name),
+		})
+		return nil
+	}
+	s.result = result
+	dependencies, err := result.Dependencies()
+	if err != nil {
+		return err
+	}
+	matched := false
+	for _, dep := range dependencies {
+		if dep.RelationID == id && dep.BindingDatabaseName == database && dep.BindingRelationName == name {
+			matched = true
+			break
+		}
+	}
+	if !matched {
+		return plan.ErrViewSchemaChanged
+	}
+	s.columns, err = result.Columns()
+	return err
+}
+
+// call emits a bounded page of an already completed description. Derivation is
+// once per candidate, never once per output column. No terminal pipeline signal
+// is sent here: Reset/Free keep their existing ownership.
+func (s *viewColumnsState) call(tf *TableFunction, proc *process.Process) (result vm.CallResult, err error) {
+	result = vm.CancelResult
+	defer func() {
 		if err != nil {
-			return err
+			s.releaseColumns()
+			if s.batch != nil {
+				s.batch.CleanOnlyData()
+			}
+		}
+	}()
+	if err = proc.Ctx.Err(); err != nil {
+		return result, err
+	}
+	if s.next >= len(s.columns) {
+		s.releaseColumns()
+		return result, nil
+	}
+	if s.batch == nil {
+		s.batch = tf.createResultBatch()
+	} else {
+		s.batch.CleanOnlyData()
+	}
+	rows, bytes := 0, 0
+	for s.next < len(s.columns) && (!s.derived || rows < viewColumnsBatchRows) {
+		if err = proc.Ctx.Err(); err != nil {
+			return result, err
+		}
+		col := s.columns[s.next]
+		if col == nil || (s.derived && col.ProtoSize() > viewColumnsBatchHardBytes) {
+			return result, plan.ErrViewSchemaLimit
+		}
+		typ := plan.MakeTypeByPlan2Type(col.Typ)
+		typeBytes, encodeErr := types.Encode(&typ)
+		if encodeErr != nil {
+			return result, encodeErr
 		}
 		defaultDef := col.Default
 		if defaultDef == nil {
 			defaultDef = &planpb.Default{NullAbility: !col.Typ.NotNullable}
 		}
-		defaultBytes, err := types.Encode(defaultDef)
-		if err != nil {
-			return err
+		defaultBytes, encodeErr := types.Encode(defaultDef)
+		if encodeErr != nil {
+			return result, encodeErr
+		}
+		// Include vector slots and all projected variable-width payloads. This
+		// is a conservative output-size bound, not a claim about total Go RSS.
+		rowBytes := 0
+		for _, attr := range tf.Attrs {
+			rowBytes += 32
+			switch attr {
+			case "attname":
+				rowBytes += len(col.GetOriginCaseName())
+			case "atttyp":
+				rowBytes += len(typeBytes)
+			case "att_default":
+				rowBytes += len(defaultBytes)
+			case "attr_enum":
+				rowBytes += len(col.Typ.Enumvalues)
+			}
+		}
+		if s.derived && rowBytes > viewColumnsBatchHardBytes {
+			return result, plan.ErrViewSchemaLimit
+		}
+		if s.derived && rows > 0 && rowBytes > viewColumnsBatchBytes-bytes {
+			break
 		}
 		for j, attr := range tf.Attrs {
 			v := s.batch.Vecs[j]
 			switch attr {
 			case "attnum":
-				err = vector.AppendFixed(v, int32(i+1), false, proc.Mp())
+				err = vector.AppendFixed(v, int32(s.next+1), false, proc.Mp())
 			case "attnotnull":
 				var notNull int8
 				if col.Typ.NotNullable {
@@ -181,13 +325,19 @@ func (s *viewColumnsState) start(tf *TableFunction, proc *process.Process, nthRo
 			case "att_constraint_type", "att_comment":
 				err = vector.AppendBytes(v, nil, false, proc.Mp())
 			default:
-				return moerr.NewInternalErrorf(proc.Ctx, "unknown View column metadata field %s", attr)
+				err = moerr.NewInternalErrorf(proc.Ctx, "unknown View column metadata field %s", attr)
 			}
 			if err != nil {
-				return err
+				return result, err
 			}
 		}
+		bytes += rowBytes
+		rows++
+		s.next++
 	}
-	s.batch.SetRowCount(len(columns))
-	return nil
+	s.batch.SetRowCount(rows)
+	if s.next == len(s.columns) {
+		s.releaseColumns()
+	}
+	return vm.CallResult{Status: vm.ExecNext, Batch: s.batch}, nil
 }
