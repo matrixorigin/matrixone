@@ -35,7 +35,7 @@ id    pid    v
 1    1    1
 2    null    null
 insert into checked_rows values (3,999,2);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into checked_rows values (3,1,1);
 Duplicate entry '1' for key 'v'
 delete from checked_rows where id=1;
@@ -68,7 +68,7 @@ where constraint_schema=database() order by constraint_name;
 constraint_name
 ck_limit
 insert into checked_rows values (4,999,2);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into checked_rows values (4,1,1);
 Duplicate entry '1' for key 'v'
 delete from checked_rows where id=1;
@@ -110,7 +110,7 @@ PRIMARY    0    id
 idx_pid    1    pid
 uv    0    v
 insert into checked_rows values (5,999,2);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 delete from checked_rows where id=1;
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from parent_rows where id=1;
