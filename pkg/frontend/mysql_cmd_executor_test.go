@@ -5063,6 +5063,30 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 	})
 }
 
+// SQL PREPARE whose inner text is malformed must surface ER_PARSE_ERROR
+// (1064/42000), matching direct execution of the same SQL, not 1105 (#30434).
+func Test_HandlePrepareStringSyntaxErrorCode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	// 'SELECT FROM' is valid PREPARE outer syntax; the quoted inner text is
+	// malformed, so the parse of the inner statement must fail.
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "prepare bad_stmt from 'SELECT FROM'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	prepareString, ok := stmt.(*tree.PrepareString)
+	require.True(t, ok)
+
+	ec := newTestExecCtx(ctx, gomock.NewController(t))
+	runTestHandle("handlePrepareString", t, func(ses *Session) error {
+		defer ses.Close()
+		ec.resper = ses.respr
+		_, handleErr := handlePrepareString(ses, ec, prepareString)
+		require.Error(t, handleErr)
+		require.True(t, moerr.IsMoErrCode(handleErr, moerr.ErrParseError),
+			"expected 1064/42000 for inner syntax error, got: %v", handleErr)
+		return nil
+	})
+}
+
 func Test_HandlePrepareStmt(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	for _, tc := range []struct {
