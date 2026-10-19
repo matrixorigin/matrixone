@@ -372,6 +372,31 @@ func requirePersistedTable(table *TableDef) error {
 				}
 			}
 		}
+		if len(table.Fkeys) != 0 {
+			nativeIDs := make(map[uint64]struct{}, len(native))
+			for _, col := range table.Cols {
+				if col != nil && HasNativePADCollation(col.Typ) {
+					nativeIDs[col.ColId] = struct{}{}
+				}
+			}
+			for _, fk := range table.Fkeys {
+				if fk == nil {
+					continue
+				}
+				for _, id := range fk.Cols {
+					if _, exists := nativeIDs[id]; exists {
+						return moerr.NewNotSupportedNoCtx("native PAD collation foreign keys are disabled")
+					}
+				}
+				if fk.ForeignTbl == 0 {
+					for _, id := range fk.ForeignCols {
+						if _, exists := nativeIDs[id]; exists {
+							return moerr.NewNotSupportedNoCtx("native PAD collation foreign keys are disabled")
+						}
+					}
+				}
+			}
+		}
 		if table.ClusterBy != nil {
 			name := table.ClusterBy.Name
 			if strings.HasPrefix(name, "__mo_cbkey_") {

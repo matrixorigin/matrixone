@@ -893,6 +893,9 @@ func (s *Scope) AlterTableInplace(c *Compile) (err error) {
 
 func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	if err := plan2.RequireAlterTableCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	dbName := qry.Database
 	if dbName == "" {
 		dbName = c.db
@@ -1664,6 +1667,9 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 		reqs = append(reqs, api.NewUpdateConstraintReq(did, tid, string(ct)))
 	}
 
+	if err := plan2.RequireAlterTableCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	err = rel.AlterTable(c.proc.Ctx, newCt, reqs)
 	if err != nil {
 		return err
@@ -4546,6 +4552,11 @@ func (c *Compile) finishTemporaryDropRetry() {
 }
 
 func (s *Scope) DropTable(c *Compile) error {
+	if qry := s.Plan.GetDdl().GetDropTable(); len(qry.GetTables()) == 0 {
+		if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+			return err
+		}
+	}
 	// Unpublished scalar cleanup uses the same proof as local replacement.
 	// Protected, multi-target and already-certified DROP retain their owners.
 	if _, borrowed := c.proc.Ctx.Value(dropLifecycleKey{}).(*dropLifecycleReceipt); !borrowed && c.isLifecycleRC() {
@@ -4690,6 +4701,11 @@ func (s *Scope) dropTableSingleResolved(
 	if tblName == "" {
 		return nil
 	}
+	// Keep multi-target DROP's ordered ownership: validate each member here,
+	// rather than moving a later member's rejection before earlier temporary effects.
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, qry.GetTableDef()); err != nil {
+		return err
+	}
 	if temporaryRetire != nil && qry.GetTableDef().GetIsTemporary() && temporaryRetire.contains(dbName, tblName) {
 		if qry.GetIfExists() {
 			return nil
@@ -4773,7 +4789,11 @@ func (s *Scope) dropTableSingleResolved(
 	}
 	if isTemp {
 		if owner, ok := sessionTemporaryDDLOwner(c); ok {
-			indexes := temporaryIndexNames(rel.GetTableDef(c.proc.Ctx))
+			tableDef := rel.GetTableDef(c.proc.Ctx)
+			if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, tableDef); err != nil {
+				return err
+			}
+			indexes := temporaryIndexNames(tableDef)
 			if temporaryRetire != nil {
 				temporaryRetire.add(owner, dbName, originTableName, tblName, indexes)
 			} else {
@@ -4821,6 +4841,11 @@ func (s *Scope) dropTableSingleResolved(
 		}
 	}
 
+	// Admission may have waited on lifecycle locks. Validate the actual catalog
+	// definition and current writer floor before any publication or deletion.
+	if err := plan2.RequireCatalogCollationsForAuthoring(c.proc.Ctx, c.proc, droppedTableDef); err != nil {
+		return err
+	}
 	// if dbSource is a pub, update tableList
 	if !c.ignorePublish {
 		if err = updatePubTableList(c.proc.Ctx, c, dbName, tblName); err != nil {

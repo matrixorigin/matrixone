@@ -581,6 +581,9 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
+	if err := RequireAlterTableCollationsForAuthoring(ctx, cctx.GetProcess(), alterTablePlan); err != nil {
+		return nil, err
+	}
 	if err := validateAlterColumnCount(ctx, tableDef, copyTableDef); err != nil {
 		return nil, err
 	}

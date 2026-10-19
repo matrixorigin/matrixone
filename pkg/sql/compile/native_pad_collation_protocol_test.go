@@ -14,7 +14,13 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"strings"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/prashantv/gostub"
 
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -26,9 +32,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -36,6 +45,152 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 )
+
+type nativePADAlterCopyExecutor struct {
+	executor.SQLExecutor
+	renamed bool
+}
+
+func (e *nativePADAlterCopyExecutor) alterCopySourceCommitTS(_ context.Context, _ types.TS) (types.TS, error) {
+	return types.TS{}, nil
+}
+func (e *nativePADAlterCopyExecutor) markSourceRenamed() { e.renamed = true }
+
+func TestNativePADAlterCopyRechecksBeforePublication(t *testing.T) {
+	lockDB := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error { return nil })
+	t.Cleanup(lockDB.Reset)
+	lockMetadata := gostub.Stub(&lockMoTable, func(*Compile, string, string, lock.LockMode) error { return nil })
+	t.Cleanup(lockMetadata.Reset)
+	lockRelation := gostub.Stub(&lockTable, func(context.Context, engine.Engine, *process.Process, engine.Relation, string, bool) error {
+		return nil
+	})
+	t.Cleanup(lockRelation.Reset)
+	var c *Compile
+	inserted, dropped := false, false
+	exec := &nativePADAlterCopyExecutor{SQLExecutor: executor.NewMemExecutor(func(sql string) (executor.Result, error) {
+		if strings.HasPrefix(sql, "insert into dept_copy") {
+			inserted = true
+			moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion119)
+		}
+		if strings.HasPrefix(sql, "drop table") {
+			dropped = true
+			return executor.Result{}, moerr.NewInternalErrorNoCtx("unexpected publication after writer floor fell")
+		}
+		return executor.Result{}, nil
+	})}
+	scope, compile := newAlterCopyGateConcurrencyFixture(t, gomock.NewController(t), exec, "native-floor", 100)
+	c = compile
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	key := moruntime.PersistedExpressionProtocolAuthoringFloor
+	previous, exists := rt.GetGlobalVariables(key)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(key, previous)
+		} else if value, ok := rt.GetGlobalVariables(key); ok {
+			rt.CompareAndDeleteGlobalVariables(key, value)
+		}
+	})
+	rt.SetGlobalVariables(key, defines.MORPCVersion120)
+	alter := scope.Plan.GetDdl().GetAlterTable()
+	for _, table := range []*planpb.TableDef{alter.TableDef, alter.CopyTableDef} {
+		table.DefaultCharset, table.CollationVersion = 3, 1
+		table.Cols = []*planpb.ColDef{{Name: "id", ColId: 1, Typ: types.T_int32.ToType().PlanType()}}
+	}
+	require.ErrorContains(t, scope.AlterTableCopy(c), "protocol version 120")
+	require.True(t, inserted, "必须真实到达物理准备之后的检查")
+	require.False(t, dropped)
+	require.False(t, exec.renamed)
+}
+
+func TestNativePADAlterInplaceRechecksBeforePublication(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	c, _ := expressionProtocolTestCompile(t)
+	c.proc.Base.TxnClient, c.proc.Base.TxnOperator = newTestTxnClientAndOpWithModeIsolation(ctrl, txn.TxnMode_Optimistic, txn.TxnIsolation_SI)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	restoreRuntimeVariableForTest(t, c.proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
+	source := &planpb.TableDef{Name: "n", DefaultCharset: 3, CollationVersion: 1, Cols: []*planpb.ColDef{{Name: "i", ColId: 1, Typ: types.T_int32.ToType().PlanType()}}}
+	alter := &planpb.AlterTable{Database: "db", TableDef: source, Actions: []*planpb.AlterTable_Action{{Action: &planpb.AlterTable_Action_AlterComment{AlterComment: &planpb.AlterTableComment{NewComment: "new"}}}}}
+	scope := &Scope{Proc: c.proc, Plan: &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_AlterTable{AlterTable: alter}}}}}
+	c.pn = scope.Plan
+	eng := mock_frontend.NewMockEngine(ctrl)
+	db := mock_frontend.NewMockDatabase(ctrl)
+	rel := mock_frontend.NewMockRelation(ctrl)
+	c.e = eng
+	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(db, nil)
+	db.EXPECT().GetDatabaseId(gomock.Any()).Return("1")
+	db.EXPECT().Relation(gomock.Any(), "n", nil).Return(rel, nil)
+	rel.EXPECT().GetTableID(gomock.Any()).Return(uint64(2)).AnyTimes()
+	rel.EXPECT().GetExtraInfo().Return(&api.SchemaExtra{})
+	rel.EXPECT().TableDefs(gomock.Any()).Return(nil, nil)
+	rel.EXPECT().GetDBID(gomock.Any()).DoAndReturn(func(context.Context) uint64 {
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion119)
+		return 1
+	})
+	// 没有AlterTable期望：必须在真正schema发布前拒绝。
+	require.ErrorContains(t, scope.AlterTableInplace(c), "protocol version 120")
+}
+
+func TestNativePADAlterWriteGateBeforeSideEffects(t *testing.T) {
+	for _, copyMode := range []bool{false, true} {
+		t.Run(fmt.Sprintf("copy_%t", copyMode), func(t *testing.T) {
+			c, _ := expressionProtocolTestCompile(t)
+			c.e = nil
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			key := moruntime.PersistedExpressionProtocolAuthoringFloor
+			previous, exists := rt.GetGlobalVariables(key)
+			t.Cleanup(func() {
+				if exists {
+					rt.SetGlobalVariables(key, previous)
+				} else if value, ok := rt.GetGlobalVariables(key); ok {
+					rt.CompareAndDeleteGlobalVariables(key, value)
+				}
+			})
+			source := &planpb.TableDef{Name: "n", Cols: []*planpb.ColDef{{Name: "s", ColId: 1, Typ: planpb.Type{Id: int32(types.T_varchar), Charset: 3, CollationVersion: 1}}}}
+			alter := &planpb.AlterTable{TableDef: source, CopyTableDef: plan2.DeepCopyTableDef(source, true)}
+			scope := &Scope{Proc: c.proc, Plan: &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_AlterTable{AlterTable: alter}}}}}
+			rt.SetGlobalVariables(key, defines.MORPCVersion119)
+			var err error
+			if copyMode {
+				err = scope.AlterTableCopy(c)
+			} else {
+				err = scope.AlterTableInplace(c)
+			}
+			require.ErrorContains(t, err, "protocol version 120")
+			rt.SetGlobalVariables(key, defines.MORPCVersion120)
+			for _, action := range []*planpb.AlterTable_Action{
+				{Action: &planpb.AlterTable_Action_AddIndex{AddIndex: &planpb.AlterTableAddIndex{IndexInfo: &planpb.CreateTable{TableDef: &planpb.TableDef{Indexes: []*planpb.IndexDef{{Parts: []string{"s"}}}}}}}},
+				{Action: &planpb.AlterTable_Action_AddFk{AddFk: &planpb.AlterTableAddFk{Fkey: &planpb.ForeignKeyDef{Cols: []uint64{1}, ForeignTbl: 10}}}},
+			} {
+				alter.Actions = []*planpb.AlterTable_Action{action}
+				if copyMode {
+					err = scope.AlterTableCopy(c)
+				} else {
+					err = scope.AlterTableInplace(c)
+				}
+				require.ErrorContains(t, err, "native PAD")
+			}
+		})
+	}
+}
+
+func TestNativePADAlterDroppingLastNativeColumnNeedsWriterGate(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	c.e = nil
+	restoreRuntimeVariableForTest(t, c.proc.GetService(), moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion119)
+	source := &planpb.TableDef{Name: "n", Cols: []*planpb.ColDef{
+		{Name: "s", ColId: 0, Typ: planpb.Type{Id: int32(types.T_varchar), Charset: 3, CollationVersion: 1}},
+		{Name: "i", ColId: 1, Typ: types.T_int32.ToType().PlanType()},
+	}}
+	target := plan2.DeepCopyTableDef(source, true)
+	target.Cols = target.Cols[1:]
+	alter := &planpb.AlterTable{TableDef: source, CopyTableDef: target}
+	scope := &Scope{Proc: c.proc, Plan: &planpb.Plan{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_AlterTable{AlterTable: alter}}}}}
+	// The replacement has no native domain, but COPY must still retire its
+	// native source. Reject before private preparation, not only at that DROP.
+	require.NotPanics(t, func() {
+		require.ErrorContains(t, scope.AlterTableCopy(c), "protocol version 120")
+	})
+}
 
 func TestNativePADCreateTableWriteGateBeforeSideEffects(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)

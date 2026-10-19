@@ -61,8 +61,8 @@ func TestNativePADExecutableAdmissionCollectsTableDefaults(t *testing.T) {
 func TestNativePADPersistedMetadataKeepsPhysicalKeysClosed(t *testing.T) {
 	for _, identity := range []uint32{2, 3} {
 		base := &TableDef{Name: "t", DefaultCharset: identity, CollationVersion: 1, Cols: []*ColDef{
-			{Name: "s", Typ: Type{Id: planVarcharTypeID, Charset: identity, CollationVersion: 1}},
-			{Name: "i", Typ: Type{Id: 22}},
+			{Name: "s", ColId: 1, Typ: Type{Id: planVarcharTypeID, Charset: identity, CollationVersion: 1}},
+			{Name: "i", ColId: 2, Typ: Type{Id: 22}},
 		}}
 		require.NoError(t, RequirePersistedCollations(base))
 		require.NoError(t, RequireExecutableCollations(base))
@@ -75,6 +75,13 @@ func TestNativePADPersistedMetadataKeepsPhysicalKeysClosed(t *testing.T) {
 			{"primary_flag", func(d *TableDef) { d.Cols[0].Primary = true }, true},
 			{"cluster_flag", func(d *TableDef) { d.Cols[0].ClusterBy = true }, true},
 			{"int_pk", func(d *TableDef) { d.Pkey = &PrimaryKeyDef{Names: []string{"i"}, PkeyColName: "i"} }, false},
+			{"int_fk", func(d *TableDef) {
+				d.Fkeys = []*ForeignKeyDef{{Cols: []uint64{2}, ForeignTbl: 10, ForeignCols: []uint64{1}}}
+			}, false},
+			{"native_fk", func(d *TableDef) {
+				d.Fkeys = []*ForeignKeyDef{{Cols: []uint64{1}, ForeignTbl: 10, ForeignCols: []uint64{2}}}
+			}, true},
+			{"native_self_fk", func(d *TableDef) { d.Fkeys = []*ForeignKeyDef{{Cols: []uint64{2}, ForeignCols: []uint64{1}}} }, true},
 			{"native_pk", func(d *TableDef) { d.Pkey = &PrimaryKeyDef{Names: []string{"i", "s"}, PkeyColName: "__mo_cpkey_col"} }, true},
 			{"single_pk", func(d *TableDef) { d.Pkey = &PrimaryKeyDef{PkeyColName: "s"} }, true},
 			{"int_index", func(d *TableDef) { d.Indexes = []*IndexDef{{Parts: []string{"i"}}} }, false},

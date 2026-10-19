@@ -21,6 +21,7 @@ import (
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -174,6 +175,88 @@ func TestNativePADDDLReplayRetainsGenerations(t *testing.T) {
 			require.Same(t, parent, ctx.GetContext())
 		})
 	}
+}
+
+func TestNativePADAlterPreservesDomains(t *testing.T) {
+	for _, tc := range []struct{ sql, failure string }{
+		{"alter table n add column extra varchar(8) collate utf8mb4_bin", ""},
+		{"alter table n rename column s to renamed", ""},
+		{"alter table n modify s varchar(16) collate utf8mb4_general_ci, algorithm=copy", ""},
+		{"alter table n modify s varchar(8) comment 'new', algorithm=inplace", ""},
+		{"alter table n collate utf8mb4_bin", ""},
+		{"alter table n add index k(id)", ""},
+		{"alter table n add unique index k(id)", ""},
+		{"alter table n drop column raw_s", ""},
+		{"alter table n drop column s, add column s varchar(8) collate utf8mb4_bin", ""},
+		{"alter table n add index k(s)", "native PAD"},
+		{"alter table n add primary key(s)", "native PAD"},
+		{"alter table n modify raw_s varchar(8) collate utf8mb4_general_ci", "native PAD"},
+		{"alter table n convert to character set utf8mb4 collate utf8mb4_bin", "native PAD"},
+	} {
+		t.Run(tc.sql, func(t *testing.T) {
+			ctx, build := nativePADDDLContext(t)
+			p, err := build("create table n (id int, raw_s varchar(8) character set utf8mb4, s varchar(8)) collate utf8mb4_general_ci")
+			require.NoError(t, err)
+			source := p.GetDdl().GetCreateTable().TableDef
+			source.TblId = 1001
+			for i, col := range source.Cols {
+				col.ColId = uint64(i + 1)
+			}
+			ctx.tables["n"] = source
+			ctx.objects["n"] = &ObjectRef{Obj: 1001, SchemaName: "tpch", ObjName: "n"}
+			before := proto.Clone(source)
+			parent := ctx.GetContext()
+			p, err = build(tc.sql)
+			if tc.failure != "" {
+				require.ErrorContains(t, err, tc.failure)
+				require.Nil(t, p)
+			} else {
+				require.NoError(t, err)
+				alter := p.GetDdl().GetAlterTable()
+				target := alter.CopyTableDef
+				if target == nil {
+					target = alter.TableDef
+				}
+				for _, old := range source.Cols {
+					for _, next := range target.Cols {
+						if old.ColId == next.ColId {
+							require.Equal(t, old.Typ.Charset, next.Typ.Charset)
+							require.Equal(t, old.Typ.CollationVersion, next.Typ.CollationVersion)
+						}
+					}
+				}
+				rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion119)
+				_, err = build(tc.sql)
+				require.ErrorContains(t, err, "protocol version 120")
+			}
+			require.True(t, proto.Equal(before, source), "ALTER不得修改共享来源schema")
+			require.Same(t, parent, ctx.GetContext())
+		})
+	}
+}
+
+func TestNativePADAlterRenameZeroIDCannotRelabel(t *testing.T) {
+	ctx, build := nativePADDDLContext(t)
+	p, err := build("create table n (s varchar(8)) collate utf8mb4_general_ci")
+	require.NoError(t, err)
+	source := p.GetDdl().GetCreateTable().TableDef
+	for i, col := range source.Cols {
+		col.ColId = uint64(i)
+	}
+	require.Zero(t, FindColumn(source.Cols, "s").ColId)
+	ctx.tables["n"] = source
+	ctx.objects["n"] = &ObjectRef{Obj: 1001, SchemaName: "tpch", ObjName: "n"}
+	_, err = build("alter table n rename column s to renamed, algorithm=copy")
+	require.NoError(t, err)
+	_, err = build("alter table n rename column s to renamed, convert to character set utf8mb4 collate utf8mb4_bin")
+	require.ErrorContains(t, err, "online native PAD collation conversion")
+	// SQL绑定已有MODIFY保护；接收的typed ALTER也必须独立校验零值列ID。
+	target := DeepCopyTableDef(source, true)
+	col := FindColumn(target.Cols, "s")
+	col.Name, col.OriginName, col.Typ.Charset = "renamed", "renamed", 2
+	err = RequireAlterTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), &planpb.AlterTable{TableDef: source, CopyTableDef: target})
+	require.ErrorContains(t, err, "online native PAD collation conversion")
 }
 
 func TestNativePADDDLRejectsPhysicalKeys(t *testing.T) {

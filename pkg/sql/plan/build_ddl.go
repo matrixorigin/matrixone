@@ -6011,6 +6011,9 @@ func buildDropTableSingle(ifExists bool, temporary bool, name *tree.TableName, c
 		}
 	}
 
+	if err := RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+		return nil, err
+	}
 	dropTable.TableDef = tableDef
 	if !tableDef.IsTemporary {
 		dropTable.UpdateFkSqls = []string{getSqlForDeleteTable(dropTable.Database, dropTable.Table)}
@@ -6061,6 +6064,13 @@ func buildDropView(stmt *tree.DropView, ctx CompilerContext) (*Plan, error) {
 		}
 	}
 	dropTable.IsView = true
+	if tableDef != nil && tableDef.ViewSql != nil {
+		if err := RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+			return nil, err
+		}
+		// A bool-only View still carries binding provenance needed by the writer.
+		dropTable.TableDef = tableDef
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -7537,6 +7547,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		return nil, err
 	}
 
+	if err := RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), currentTableDef); err != nil {
+		return nil, err
+	}
+	if err := RequireAlterTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), alterTable); err != nil {
+		return nil, err
+	}
 	alterTable.DetectSqls = detectSqls
 	// Ordered ADD/DROP catalog mutations use the original identity. Rename
 	// their surviving rows and incoming references only after all mutations.

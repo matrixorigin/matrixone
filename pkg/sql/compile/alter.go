@@ -1313,6 +1313,9 @@ func (s *Scope) AlterTableCopy(c *Compile) (err error) {
 
 func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetCleanup) error {
 	qry := s.Plan.GetDdl().GetAlterTable()
+	if err := plan2.RequireAlterTableCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	dbName := qry.Database
 
 	if dbName == "" {
@@ -1694,6 +1697,11 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		}
 	}
 
+	// Private preparation and lifecycle admission may outlive the writer
+	// capability. Recheck before publishing lineage, FK rows, or replacing the source.
+	if err = plan2.RequireAlterTableCollationsForAuthoring(c.proc.Ctx, c.proc, qry); err != nil {
+		return err
+	}
 	newId := newRel.GetTableID(c.proc.Ctx)
 	if err = c.preserveAlterDataBranchLineage(
 		lineagePlan, oldId, newId, dbName, tblName,

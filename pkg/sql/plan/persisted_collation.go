@@ -76,6 +76,97 @@ func RequireCreateTableCollationsForAuthoring(ctx context.Context, proc *process
 	return nil
 }
 
+// RequireAlterTableCollationsForAuthoring validates replacement schemas and
+// action-only key additions together. CopyTableDef is optional for INPLACE;
+// checking it alone would miss a new key over an existing native column.
+// The validation view borrows columns but never mutates the source or plan.
+func RequireAlterTableCollationsForAuthoring(ctx context.Context, proc *process.Process, alter *planpb.AlterTable) error {
+	if alter == nil {
+		return nil
+	}
+	if err := planpb.RequirePersistedCollations(alter); err != nil {
+		return err
+	}
+	// COPY must also retire its source, even when the replacement drops the
+	// last native column. Do not defer that rejection to the internal DROP.
+	if err := RequireCatalogCollationsForAuthoring(ctx, proc, alter.TableDef); err != nil {
+		return err
+	}
+	target := alter.CopyTableDef
+	if target == nil {
+		target = alter.TableDef
+	}
+	if target == nil {
+		return nil
+	}
+	if alter.CopyTableDef != nil && alter.TableDef != nil {
+		byID := make(map[uint64]*planpb.ColDef, len(alter.TableDef.Cols))
+		byName := make(map[string]*planpb.ColDef, len(alter.TableDef.Cols))
+		nativeSource := false
+		for _, col := range alter.TableDef.Cols {
+			if col != nil {
+				// Zero is a valid column ID. Duplicate IDs in old synthetic
+				// definitions are not identity proof for a renamed column.
+				if _, exists := byID[col.ColId]; exists {
+					byID[col.ColId] = nil
+				} else {
+					byID[col.ColId] = col
+				}
+				byName[col.Name] = col
+				nativeSource = nativeSource || planpb.HasNativePADCollation(col.Typ)
+			}
+		}
+		for _, col := range target.Cols {
+			if col == nil {
+				continue
+			}
+			old, exists := byID[col.ColId]
+			if exists && old == nil {
+				old = byName[col.Name]
+				if old == nil && (nativeSource || planpb.HasNativePADCollation(col.Typ)) {
+					return moerr.NewInvalidInput(ctx, "ambiguous native PAD collation ALTER column identity")
+				}
+			}
+			// A fresh ID (including DROP+ADD with the same name) is a new
+			// column, not a semantic relabel of the source column.
+			if old != nil {
+				if err := rejectNativePADColumnRelabel(ctx, old.Typ, col.Typ); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	if err := RequireCatalogCollationsForAuthoring(ctx, proc, target); err != nil {
+		return err
+	}
+	for _, action := range alter.Actions {
+		if action == nil {
+			continue
+		}
+		// Validate each addition against the complete column set, not the
+		// action's partial TableDef. An unsupported key may not be transiently
+		// created either, even if a later action drops it.
+		view := *target
+		if add := action.GetAddIndex(); add != nil && add.IndexInfo != nil {
+			if err := RequireCreateTableCollationsForAuthoring(ctx, proc, add.IndexInfo); err != nil {
+				return err
+			}
+			if definition := add.IndexInfo.TableDef; definition != nil {
+				view.Cols = append(append([]*planpb.ColDef(nil), target.Cols...), definition.Cols...)
+				view.Indexes = append(append([]*planpb.IndexDef(nil), target.Indexes...), definition.Indexes...)
+			}
+		} else if add := action.GetAddFk(); add != nil {
+			view.Fkeys = append(append([]*planpb.ForeignKeyDef(nil), target.Fkeys...), add.Fkey)
+		} else {
+			continue
+		}
+		if err := planpb.RequirePersistedCollations(&view); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // RequireCatalogCollations用于完整catalog定义，必须先于恢复/裁剪等重写。
 func RequireCatalogCollations(ctx context.Context, proc *process.Process, table *TableDef) error {
 	return requireCatalogCollations(ctx, proc, table, false)
