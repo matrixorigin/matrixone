@@ -23,6 +23,7 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,32 +63,27 @@ func TestIssue29095RewriteMetadataVisibility(t *testing.T) {
 				const user = "rewrite_metadata_user"
 				const snapshot = "rewrite_metadata_snapshot"
 				defer func() {
-					cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
-					defer stop()
 					cleanupOwner := owner
 					if mode == 2 {
 						// DROP's internal catalog lookup currently normalizes names.
 						// Clean preserved-case objects in mode0 through a fresh session.
-						execSQLRequire(t, cleanup, owner, "set global lower_case_table_names=0")
+						_, err := execIssue29876SQL(context.Background(), owner, "set global lower_case_table_names=0")
+						require.NoError(t, err)
 						cleanupOwner = open("dump")
 						defer cleanupOwner.Close()
 					}
-					for _, statement := range []string{
-						"drop user if exists " + user,
-						"drop role if exists " + role,
-						"drop snapshot if exists " + snapshot,
-						"drop database if exists " + database,
-						"drop database if exists " + callerDatabase,
+					// Teardown is not part of the workload deadline. Each DROP and
+					// its catalog verification gets an independent finite budget;
+					// one failed cleanup must not skip the remaining resources.
+					for _, resource := range []struct{ statement, verification, name string }{
+						{"drop user if exists " + user, "select count(*) from mo_catalog.mo_user where user_name=?", user},
+						{"drop role if exists " + role, "select count(*) from mo_catalog.mo_role where role_name=?", role},
+						{"drop snapshot if exists " + snapshot, "select count(*) from mo_catalog.mo_snapshots where sname=?", snapshot},
+						{"drop database if exists " + database, "select count(*) from mo_catalog.mo_database where lower(datname)=lower(?)", database},
+						{"drop database if exists " + callerDatabase, "select count(*) from mo_catalog.mo_database where lower(datname)=lower(?)", callerDatabase},
 					} {
-						execSQLRequire(t, cleanup, cleanupOwner, statement)
+						assert.NoError(t, cleanupSQLResource(cleanupOwner, resource.statement, resource.verification, resource.name))
 					}
-					var n int
-					require.NoError(t, cleanupOwner.QueryRowContext(cleanup, "select count(*) from mo_catalog.mo_user where user_name='"+user+"'").Scan(&n))
-					require.Zero(t, n)
-					require.NoError(t, cleanupOwner.QueryRowContext(cleanup, "select count(*) from mo_catalog.mo_role where role_name='"+role+"'").Scan(&n))
-					require.Zero(t, n)
-					require.NoError(t, cleanupOwner.QueryRowContext(cleanup, "select count(*) from mo_catalog.mo_database where lower(datname) in (lower('"+database+"'),lower('"+callerDatabase+"'))").Scan(&n))
-					require.Zero(t, n)
 				}()
 				for _, statement := range []string{
 					"create database " + database,

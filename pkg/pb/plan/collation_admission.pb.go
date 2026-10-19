@@ -138,6 +138,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkExpr_Lit(p)
 	case *Expr_Sub:
 		return true, v.walkExpr_Sub(p)
+	case *Expr_UserVarAssignment:
+		return true, v.walkExpr_UserVarAssignment(p)
 	case *Expr_W:
 		return true, v.walkExpr_W(p)
 	case *ExternScan:
@@ -228,6 +230,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkType(p)
 	case *UpdateCtx:
 		return true, v.walkUpdateCtx(p)
+	case *UserVarAssignment:
+		return true, v.walkUserVarAssignment(p)
 	case *WindowSpec:
 		return true, v.walkWindowSpec(p)
 	case Type:
@@ -833,6 +837,10 @@ func (v *legacyCollationVisitor) walkExpr(p *Expr) error {
 		if err := v.walkExpr_Sub(x); err != nil {
 			return err
 		}
+	case *Expr_UserVarAssignment:
+		if err := v.walkExpr_UserVarAssignment(x); err != nil {
+			return err
+		}
 	case *Expr_W:
 		if err := v.walkExpr_W(x); err != nil {
 			return err
@@ -895,6 +903,15 @@ func (v *legacyCollationVisitor) walkExpr_Sub(p *Expr_Sub) error {
 		return nil
 	}
 	if err := v.walkSubqueryRef(p.Sub); err != nil {
+		return err
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkExpr_UserVarAssignment(p *Expr_UserVarAssignment) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkUserVarAssignment(p.UserVarAssignment); err != nil {
 		return err
 	}
 	return nil
@@ -1589,6 +1606,15 @@ func (v *legacyCollationVisitor) walkUpdateCtx(p *UpdateCtx) error {
 		return nil
 	}
 	if err := v.walkTableDef(p.TableDef); err != nil {
+		return err
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkUserVarAssignment(p *UserVarAssignment) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkExpr(p.Value); err != nil {
 		return err
 	}
 	return nil

@@ -349,6 +349,9 @@ func (builder *QueryBuilder) remapSingleColRef(col *plan.ColRef, colMap map[[2]i
 }
 
 func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32][2]int32, remapInfo *RemapInfo) error {
+	if expr == nil {
+		return nil
+	}
 	switch ne := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		return builder.remapSingleColRef(ne.Col, colMap, remapInfo)
@@ -385,6 +388,10 @@ func (builder *QueryBuilder) remapColRefForExpr(expr *Expr, colMap map[[2]int32]
 			if err != nil {
 				return err
 			}
+		}
+	case *plan.Expr_UserVarAssignment:
+		if ne.UserVarAssignment != nil {
+			return builder.remapColRefForExpr(ne.UserVarAssignment.Value, colMap, remapInfo)
 		}
 	}
 	return nil
@@ -5970,6 +5977,9 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	if !isRoot && selectContainsUserVarAssignment(stmt) {
+		return 0, userVarAssignmentNotSupported(builder.GetContext(), "a derived, CTE, or set-operation query")
+	}
 	leaveBinding, bindErr := enterViewSchemaBinding(builder.GetContext())
 	if bindErr != nil {
 		return 0, bindErr
@@ -6016,6 +6026,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	ctx.windowTag = builder.genNewBindTag()
 	ctx.sampleTag = builder.genNewBindTag()
 	if astTimeWindow != nil {
+		if err = validateUserVarAssignmentTimeWindow(builder.GetContext(), astTimeWindow); err != nil {
+			return
+		}
 		if err = validateTimeWindowIntervalUnits(builder.GetContext(), astTimeWindow); err != nil {
 			return
 		}
@@ -6262,8 +6275,14 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			rollupFilter = selectClause.Having.RollupHaving
 		}
 	case *tree.UnionClause:
+		if selectContainsUserVarAssignment(stmt) {
+			return 0, userVarAssignmentNotSupported(builder.GetContext(), "UNION")
+		}
 		return builder.buildUnion(selectClause, astOrderBy, astLimit, astRankOption, ctx, isRoot)
 	case *tree.ValuesClause:
+		if selectContainsUserVarAssignment(stmt) {
+			return 0, userVarAssignmentNotSupported(builder.GetContext(), "VALUES")
+		}
 		if nodeID, selectList, err = builder.bindValues(ctx, selectClause); err != nil {
 			return
 		}
@@ -8892,6 +8911,10 @@ func (builder *QueryBuilder) bindSelectClause(
 	boundHavingList []*plan.Expr,
 	err error,
 ) {
+	if err = validateUserVarAssignmentScope(builder.GetContext(), clause, astOrderBy, astLimit); err != nil {
+		return
+	}
+
 	if ctx.bindingRecurStmt() && clause.Distinct {
 		err = moerr.NewParseError(builder.GetContext(), "not support DISTINCT in recursive cte")
 		return

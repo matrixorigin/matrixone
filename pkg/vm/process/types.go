@@ -555,6 +555,30 @@ type BaseProcess struct {
 	// background paths also attach resolvers (idxcron via the task's
 	// captured Metadata, ProcessInitSQL via executor.DefaultResolveVariable).
 	IsFrontend bool
+
+	// userVariableAssignments is a statement-local overlay used by SELECT
+	// user-variable assignments. It is deliberately kept on BaseProcess so all
+	// local operators in one frontend statement observe the same staged values;
+	// it is never serialized to a remote process.
+	userVariableAssignmentMu         sync.RWMutex
+	userVariableAssignmentValues     map[string]UserVariableAssignment
+	userVariableAssignmentRows       map[string][]UserVariableAssignment
+	userVariableAssignmentRowValid   map[string][]bool
+	userVariableAssignmentBatchRows  int
+	userVariableAssignmentCurrentRow int
+	userVariableAssignmentActive     bool
+	userVariableAssignmentCommit     func(UserVariableAssignment) error
+}
+
+// UserVariableAssignment is the execution representation of one staged
+// assignment. Value is copied out of the evaluated vector before the vector
+// can be reused by the pipeline.
+type UserVariableAssignment struct {
+	Name         string
+	Value        any
+	Type         plan.Type
+	IsBin        bool
+	StringDomain types.RuntimeStringDomain
 }
 
 // StringShuffleHashAlgorithm identifies the exact owner mapping used for
@@ -784,6 +808,301 @@ func (proc *Process) SetResolveVariableFunc(f func(varName string, isSystemVar, 
 
 func (proc *Process) GetResolveVariableFunc() func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error) {
 	return proc.Base.resolveVariableFunc
+}
+
+func canonicalUserVariableAssignmentName(name string) string {
+	return strings.ToLower(name)
+}
+
+// SetUserVariableAssignmentCommitFunc installs the statement-boundary
+// publisher. The callback is invoked once per variable by
+// CommitUserVariableAssignments, never once per row.
+func (proc *Process) SetUserVariableAssignmentCommitFunc(
+	f func(UserVariableAssignment) error,
+) {
+	proc.Base.userVariableAssignmentMu.Lock()
+	proc.Base.userVariableAssignmentCommit = f
+	proc.Base.userVariableAssignmentMu.Unlock()
+}
+
+// BeginUserVariableAssignment starts (or joins) the statement-local overlay
+// for name. Scalar values are retained so a later projection can read a
+// value written by an earlier projection, while the row values are reset for
+// the next input batch.
+func (proc *Process) BeginUserVariableAssignment(name string, rowCount int) {
+	name = canonicalUserVariableAssignmentName(name)
+	if rowCount < 0 {
+		rowCount = 0
+	}
+	proc.Base.userVariableAssignmentMu.Lock()
+	defer proc.Base.userVariableAssignmentMu.Unlock()
+	nested := proc.Base.userVariableAssignmentActive && proc.Base.userVariableAssignmentCurrentRow >= 0
+	if !proc.Base.userVariableAssignmentActive {
+		// A zero-value Process must not expose row zero as an active
+		// row-specific read before the first assignment has started.
+		proc.Base.userVariableAssignmentCurrentRow = -1
+	}
+	if proc.Base.userVariableAssignmentRows == nil {
+		proc.Base.userVariableAssignmentRows = make(map[string][]UserVariableAssignment)
+	}
+	if proc.Base.userVariableAssignmentRowValid == nil {
+		proc.Base.userVariableAssignmentRowValid = make(map[string][]bool)
+	}
+	if nested {
+		// A nested assignment is evaluated for the one outer row currently
+		// selected by the parent executor. Preserve the statement-sized row
+		// history so a later projection can still read every nested value.
+		effectiveRowCount := proc.Base.userVariableAssignmentBatchRows
+		if effectiveRowCount < rowCount {
+			effectiveRowCount = rowCount
+		}
+		rows := proc.Base.userVariableAssignmentRows[name]
+		valid := proc.Base.userVariableAssignmentRowValid[name]
+		if len(rows) != effectiveRowCount {
+			grown := make([]UserVariableAssignment, effectiveRowCount)
+			copy(grown, rows)
+			rows = grown
+		}
+		if len(valid) != effectiveRowCount {
+			grown := make([]bool, effectiveRowCount)
+			copy(grown, valid)
+			valid = grown
+		}
+		proc.Base.userVariableAssignmentRows[name] = rows
+		proc.Base.userVariableAssignmentRowValid[name] = valid
+	} else {
+		// Each top-level executor invocation owns one input batch. Reset every
+		// variable's row vector, not just the variable written by this executor:
+		// a nested assignment such as @a := @b := @b + 1 can read b's row
+		// history while evaluating a. Keeping b's rows across batches would
+		// make the result depend on the physical batch partition. The scalar
+		// values map remains intact so self-referential assignments continue
+		// from the last value published by the previous batch.
+		proc.Base.userVariableAssignmentBatchRows = rowCount
+		for variableName := range proc.Base.userVariableAssignmentRows {
+			proc.Base.userVariableAssignmentRows[variableName] = make([]UserVariableAssignment, rowCount)
+			proc.Base.userVariableAssignmentRowValid[variableName] = make([]bool, rowCount)
+		}
+		if _, ok := proc.Base.userVariableAssignmentRows[name]; !ok {
+			proc.Base.userVariableAssignmentRows[name] = make([]UserVariableAssignment, rowCount)
+			proc.Base.userVariableAssignmentRowValid[name] = make([]bool, rowCount)
+		}
+	}
+	proc.Base.userVariableAssignmentActive = true
+}
+
+// EnsureUserVariableAssignmentRows prepares row-history storage for name
+// without resetting an already active statement overlay. Conditional
+// expression executors use this when an assignment target is in a skipped
+// subtree: the subtree must record the value visible for each row, but its
+// side effects must not be evaluated or published.
+func (proc *Process) EnsureUserVariableAssignmentRows(name string, rowCount int) {
+	name = canonicalUserVariableAssignmentName(name)
+	if rowCount < 0 {
+		rowCount = 0
+	}
+	proc.Base.userVariableAssignmentMu.Lock()
+	defer proc.Base.userVariableAssignmentMu.Unlock()
+	if proc.Base.userVariableAssignmentRows == nil {
+		proc.Base.userVariableAssignmentRows = make(map[string][]UserVariableAssignment)
+	}
+	if proc.Base.userVariableAssignmentRowValid == nil {
+		proc.Base.userVariableAssignmentRowValid = make(map[string][]bool)
+	}
+	if !proc.Base.userVariableAssignmentActive {
+		proc.Base.userVariableAssignmentCurrentRow = -1
+		proc.Base.userVariableAssignmentBatchRows = rowCount
+		proc.Base.userVariableAssignmentActive = true
+	} else if proc.Base.userVariableAssignmentBatchRows < rowCount {
+		proc.Base.userVariableAssignmentBatchRows = rowCount
+	}
+	effectiveRows := proc.Base.userVariableAssignmentBatchRows
+	for variableName, rows := range proc.Base.userVariableAssignmentRows {
+		if len(rows) != effectiveRows {
+			grown := make([]UserVariableAssignment, effectiveRows)
+			copy(grown, rows)
+			proc.Base.userVariableAssignmentRows[variableName] = grown
+		}
+		valid := proc.Base.userVariableAssignmentRowValid[variableName]
+		if len(valid) != effectiveRows {
+			grown := make([]bool, effectiveRows)
+			copy(grown, valid)
+			proc.Base.userVariableAssignmentRowValid[variableName] = grown
+		}
+	}
+	rows := proc.Base.userVariableAssignmentRows[name]
+	valid := proc.Base.userVariableAssignmentRowValid[name]
+	if len(rows) != effectiveRows {
+		grown := make([]UserVariableAssignment, effectiveRows)
+		copy(grown, rows)
+		rows = grown
+	}
+	if len(valid) != effectiveRows {
+		grown := make([]bool, effectiveRows)
+		copy(grown, valid)
+		valid = grown
+	}
+	proc.Base.userVariableAssignmentRows[name] = rows
+	proc.Base.userVariableAssignmentRowValid[name] = valid
+}
+
+// SetUserVariableAssignmentCurrentRow selects the row whose staged value is
+// visible to a row-wise assignment evaluation. A negative value disables the
+// row-specific view and makes a later variable read materialize the whole
+// staged vector.
+func (proc *Process) SetUserVariableAssignmentCurrentRow(row int) {
+	proc.Base.userVariableAssignmentMu.Lock()
+	proc.Base.userVariableAssignmentCurrentRow = row
+	proc.Base.userVariableAssignmentMu.Unlock()
+}
+
+func (proc *Process) GetUserVariableAssignmentCurrentRow() int {
+	proc.Base.userVariableAssignmentMu.RLock()
+	row := proc.Base.userVariableAssignmentCurrentRow
+	if !proc.Base.userVariableAssignmentActive {
+		row = -1
+	}
+	proc.Base.userVariableAssignmentMu.RUnlock()
+	return row
+}
+
+func (proc *Process) StageUserVariableAssignment(value UserVariableAssignment, row int) {
+	value.Name = canonicalUserVariableAssignmentName(value.Name)
+	proc.Base.userVariableAssignmentMu.Lock()
+	defer proc.Base.userVariableAssignmentMu.Unlock()
+	if proc.Base.userVariableAssignmentValues == nil {
+		proc.Base.userVariableAssignmentValues = make(map[string]UserVariableAssignment)
+	}
+	if proc.Base.userVariableAssignmentRows == nil {
+		proc.Base.userVariableAssignmentRows = make(map[string][]UserVariableAssignment)
+	}
+	if proc.Base.userVariableAssignmentRowValid == nil {
+		proc.Base.userVariableAssignmentRowValid = make(map[string][]bool)
+	}
+	proc.Base.userVariableAssignmentValues[value.Name] = value
+	if row >= 0 {
+		rows := proc.Base.userVariableAssignmentRows[value.Name]
+		valid := proc.Base.userVariableAssignmentRowValid[value.Name]
+		if row < len(rows) && row < len(valid) {
+			rows[row] = value
+			valid[row] = true
+		}
+	}
+	proc.Base.userVariableAssignmentActive = true
+}
+
+// SnapshotUserVariableAssignmentRow records the value visible for one row
+// without marking the variable as assigned by the current statement. This is
+// used for an assignment expression in a branch that was not selected (for
+// example, a skipped IF/CASE arm): the row history must remain complete for a
+// later projection, but the skipped expression must not be published at the
+// statement boundary.
+func (proc *Process) SnapshotUserVariableAssignmentRow(value UserVariableAssignment, row int) {
+	value.Name = canonicalUserVariableAssignmentName(value.Name)
+	proc.Base.userVariableAssignmentMu.Lock()
+	defer proc.Base.userVariableAssignmentMu.Unlock()
+	if proc.Base.userVariableAssignmentRows == nil {
+		proc.Base.userVariableAssignmentRows = make(map[string][]UserVariableAssignment)
+	}
+	if proc.Base.userVariableAssignmentRowValid == nil {
+		proc.Base.userVariableAssignmentRowValid = make(map[string][]bool)
+	}
+	if row >= 0 {
+		rows := proc.Base.userVariableAssignmentRows[value.Name]
+		valid := proc.Base.userVariableAssignmentRowValid[value.Name]
+		if row < len(rows) && row < len(valid) {
+			rows[row] = value
+			valid[row] = true
+		}
+	}
+	proc.Base.userVariableAssignmentActive = true
+}
+
+// ResolveUserVariableAssignment resolves the row-local overlay. The bool is
+// false when the statement has not assigned this variable yet.
+func (proc *Process) ResolveUserVariableAssignment(name string, row int) (UserVariableAssignment, bool) {
+	name = canonicalUserVariableAssignmentName(name)
+	proc.Base.userVariableAssignmentMu.RLock()
+	defer proc.Base.userVariableAssignmentMu.RUnlock()
+	if !proc.Base.userVariableAssignmentActive {
+		return UserVariableAssignment{}, false
+	}
+	if row >= 0 {
+		rows := proc.Base.userVariableAssignmentRows[name]
+		valid := proc.Base.userVariableAssignmentRowValid[name]
+		if row < len(rows) && row < len(valid) && valid[row] {
+			return rows[row], true
+		}
+	}
+	value, ok := proc.Base.userVariableAssignmentValues[name]
+	return value, ok
+}
+
+// GetUserVariableAssignmentRows returns a snapshot of the rows staged for a
+// variable. It is used when a later, non-row-wise projection reads the value.
+func (proc *Process) GetUserVariableAssignmentRows(name string, rowCount int) ([]UserVariableAssignment, []bool, bool) {
+	name = canonicalUserVariableAssignmentName(name)
+	proc.Base.userVariableAssignmentMu.RLock()
+	defer proc.Base.userVariableAssignmentMu.RUnlock()
+	rows := proc.Base.userVariableAssignmentRows[name]
+	valid := proc.Base.userVariableAssignmentRowValid[name]
+	if !proc.Base.userVariableAssignmentActive || len(rows) != rowCount || len(valid) != rowCount {
+		return nil, nil, false
+	}
+	rowsCopy := append([]UserVariableAssignment(nil), rows...)
+	validCopy := append([]bool(nil), valid...)
+	for i := range rowsCopy {
+		if !validCopy[i] {
+			return nil, nil, false
+		}
+	}
+	return rowsCopy, validCopy, true
+}
+
+// CommitUserVariableAssignments publishes the final value for every variable
+// staged by this statement. It clears the overlay even when the publisher
+// returns an error so a reused Process cannot leak statement state.
+func (proc *Process) CommitUserVariableAssignments() error {
+	proc.Base.userVariableAssignmentMu.Lock()
+	values := make([]UserVariableAssignment, 0, len(proc.Base.userVariableAssignmentValues))
+	for _, value := range proc.Base.userVariableAssignmentValues {
+		values = append(values, value)
+	}
+	commit := proc.Base.userVariableAssignmentCommit
+	proc.clearUserVariableAssignmentsLocked()
+	proc.Base.userVariableAssignmentMu.Unlock()
+
+	// Map iteration order is not part of SQL semantics. Sort the values only to
+	// keep diagnostics and tests deterministic when several variables are set.
+	for i := 1; i < len(values); i++ {
+		for j := i; j > 0 && values[j].Name < values[j-1].Name; j-- {
+			values[j], values[j-1] = values[j-1], values[j]
+		}
+	}
+	if commit == nil {
+		return nil
+	}
+	for _, value := range values {
+		if err := commit(value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (proc *Process) DiscardUserVariableAssignments() {
+	proc.Base.userVariableAssignmentMu.Lock()
+	proc.clearUserVariableAssignmentsLocked()
+	proc.Base.userVariableAssignmentMu.Unlock()
+}
+
+func (proc *Process) clearUserVariableAssignmentsLocked() {
+	proc.Base.userVariableAssignmentValues = nil
+	proc.Base.userVariableAssignmentRows = nil
+	proc.Base.userVariableAssignmentRowValid = nil
+	proc.Base.userVariableAssignmentBatchRows = 0
+	proc.Base.userVariableAssignmentCurrentRow = -1
+	proc.Base.userVariableAssignmentActive = false
 }
 
 func (proc *Process) SetResolveVariableTypeFunc(

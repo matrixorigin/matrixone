@@ -50,11 +50,18 @@ func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
 		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
 		admin := open(account + "#admin#accountadmin")
 		defer func() {
-			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			execSQLRequire(t, cleanup, admin, "drop snapshot if exists issue_29399_owner_scope_s")
-			execSQLRequire(t, cleanup, admin, "drop pitr if exists issue_29399_owner_scope_p")
-			execSQLRequire(t, cleanup, sys, "drop account if exists "+account)
+			// Snapshot/PITR work must not consume the account teardown budget.
+			// Continue cleaning even if one earlier resource cannot be removed.
+			for _, stmt := range []string{"drop snapshot if exists issue_29399_owner_scope_s", "drop pitr if exists issue_29399_owner_scope_p"} {
+				cleanup, stop := context.WithTimeout(context.Background(), 30*time.Second)
+				_, err := admin.ExecContext(cleanup, stmt)
+				stop()
+				if err != nil {
+					t.Errorf("cleanup %s: %v", stmt, err)
+				}
+			}
+			require.NoError(t, cleanupSQLResource(sys, "drop account if exists "+account,
+				"select count(*) from mo_catalog.mo_account where account_name=?", account))
 		}()
 		for _, stmt := range []string{
 			"create role builder", "create user db_creator identified by '111' default role builder",

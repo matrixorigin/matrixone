@@ -290,6 +290,8 @@ func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, nod
 
 func exprCanRemoveProject(expr *Expr) bool {
 	switch ne := expr.Expr.(type) {
+	case *plan.Expr_UserVarAssignment:
+		return false
 	case *plan.Expr_F:
 		// fulltext_match is a planner placeholder: applyIndices replaces it
 		// with the score column produced by the fulltext search scan.  Inlining a
@@ -503,6 +505,11 @@ func replaceColumnsForExpr(expr *plan.Expr, projMap map[[2]int32]*plan.Expr) *pl
 	case *plan.Expr_Sub:
 		if ne.Sub != nil {
 			ne.Sub.Child = replaceColumnsForExpr(ne.Sub.Child, projMap)
+		}
+
+	case *plan.Expr_UserVarAssignment:
+		if ne.UserVarAssignment != nil {
+			ne.UserVarAssignment.Value = replaceColumnsForExpr(ne.UserVarAssignment.Value, projMap)
 		}
 	}
 	return expr

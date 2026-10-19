@@ -253,6 +253,16 @@ func (b *GroupBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*pl
 		return nil, err
 	}
 	if isRoot {
+		// Ordinals and aliases can substitute a projection containing an
+		// assignment. Validate the resolved expression before registering it.
+		if err = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+			if current.GetUserVarAssignment() != nil {
+				return userVarAssignmentNotSupported(b.GetContext(), "GROUP BY")
+			}
+			return nil
+		}); err != nil {
+			return nil, err
+		}
 		if err = rejectStandaloneIntervalExpr(b.GetContext(), expr, "GROUP BY"); err != nil {
 			return nil, err
 		}

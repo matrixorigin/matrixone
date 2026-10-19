@@ -5993,11 +5993,73 @@ func (c *Compile) compileProjection(node *plan.Node, ss []*Scope) []*Scope {
 }
 
 func (c *Compile) ensureCoordinatorOnlyFunctions(node *plan.Node, ss []*Scope) []*Scope {
-	if (!nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
+	if (!nodeHasUserVariableAssignment(node) && !nodeHasUserLevelLockFunction(node) && !nodeHasFoundRowsFunction(node) &&
 		!c.needsCoordinatorIgnoreCheck(node) && !c.needsCoordinatorConstantFilterDiagnostic(node)) || c.scopesRunOnCoordinator(ss) {
 		return ss
 	}
 	return []*Scope{c.newMergeScope(ss)}
+}
+
+// User-variable assignment is a session side effect. Keep the projection that
+// contains it on the coordinator instead of attaching it to a distributed
+// TableScan/Group scope, where the remote process has no session publisher and
+// could evaluate the assignment more than once or in an arbitrary order.
+func nodeHasUserVariableAssignment(node *plan.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, expr := range node.ProjectList {
+		found := false
+		_ = plan.VisitExprTree(expr, func(current *plan.Expr) error {
+			if current.GetUserVarAssignment() != nil {
+				found = true
+			}
+			return nil
+		})
+		if found {
+			return true
+		}
+	}
+	return false
+}
+
+func planHasUserVariableAssignment(queryPlan *plan.Plan) bool {
+	if queryPlan == nil {
+		return false
+	}
+	query := queryPlan.GetQuery()
+	if query == nil {
+		return false
+	}
+	for _, node := range query.Nodes {
+		if nodeHasUserVariableAssignment(node) {
+			return true
+		}
+	}
+	return false
+}
+
+func (c *Compile) validateUserVariableAssignmentSessionLimit() error {
+	qry := c.pn.GetQuery()
+	if qry == nil || !qry.ApplySqlSelectLimit ||
+		!c.proc.Base.SessionInfo.ApplySQLSelectLimit ||
+		c.proc.GetResolveVariableFunc() == nil || !planHasUserVariableAssignment(c.pn) {
+		return nil
+	}
+	// Use the same session resolver as makeSQLSelectLimitExpr, but at every Run,
+	// including prepared reuse after a successful unlimited execution.
+	value, err := c.proc.GetResolveVariableFunc()(plan2.SQLSelectLimitVariable, true, false)
+	if err != nil {
+		return err
+	}
+	limit, ok := value.(uint64)
+	if !ok {
+		return moerr.NewInternalErrorf(c.proc.Ctx, "unexpected %s type %T", plan2.SQLSelectLimitVariable, value)
+	}
+	if limit != ^uint64(0) {
+		return moerr.NewNotSupported(c.proc.Ctx, "LIMIT with user-variable assignment is not supported")
+	}
+	return nil
 }
 
 func (c *Compile) needsCoordinatorConstantFilterDiagnostic(node *plan.Node) bool {

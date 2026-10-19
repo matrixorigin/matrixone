@@ -246,6 +246,11 @@ func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.Sub.Child, _ = rule.ApplyExpr(exprImpl.Sub.Child)
 		}
 		return e, nil
+	case *plan.Expr_UserVarAssignment:
+		if exprImpl.UserVarAssignment != nil {
+			exprImpl.UserVarAssignment.Value, _ = rule.ApplyExpr(exprImpl.UserVarAssignment.Value)
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -344,6 +349,11 @@ func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	case *plan.Expr_Sub:
 		if exprImpl.Sub != nil {
 			exprImpl.Sub.Child, _ = rule.ApplyExpr(exprImpl.Sub.Child)
+		}
+		return e, nil
+	case *plan.Expr_UserVarAssignment:
+		if exprImpl.UserVarAssignment != nil {
+			exprImpl.UserVarAssignment.Value, _ = rule.ApplyExpr(exprImpl.UserVarAssignment.Value)
 		}
 		return e, nil
 	default:
@@ -2621,6 +2631,19 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 			exprImpl.List.List[i] = rewritten
 		}
 		return e, nil
+	case *plan.Expr_UserVarAssignment:
+		if exprImpl.UserVarAssignment == nil || exprImpl.UserVarAssignment.Value == nil {
+			return e, nil
+		}
+		value, valueErr := rule.ApplyExpr(exprImpl.UserVarAssignment.Value)
+		if valueErr != nil {
+			return nil, valueErr
+		}
+		exprImpl.UserVarAssignment.Value = value
+		if value != nil {
+			e.Typ = value.Typ
+		}
+		return e, nil
 	default:
 		return e, nil
 	}
@@ -3965,6 +3988,19 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			exprImpl.Sub.Child = child
 			e.Typ = child.Typ
 			rule.specialized = true
+		}
+		return e, nil
+	case *plan.Expr_UserVarAssignment:
+		if exprImpl.UserVarAssignment == nil || exprImpl.UserVarAssignment.Value == nil {
+			return e, nil
+		}
+		value, valueErr := rule.ApplyExpr(exprImpl.UserVarAssignment.Value)
+		if valueErr != nil {
+			return nil, valueErr
+		}
+		exprImpl.UserVarAssignment.Value = value
+		if value != nil {
+			e.Typ = value.Typ
 		}
 		return e, nil
 	default:

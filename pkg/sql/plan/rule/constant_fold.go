@@ -157,6 +157,10 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 
 	fn := expr.GetF()
 	if fn == nil {
+		if assignment := expr.GetUserVarAssignment(); assignment != nil {
+			assignment.Value = r.constantFold(assignment.Value, proc)
+			return expr
+		}
 		if elist := expr.GetList(); elist != nil {
 			exprList := elist.List
 			cannotFold := false

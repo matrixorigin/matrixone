@@ -30,6 +30,9 @@ import (
 // their diagnostic order. One send observes its actual destination once; no
 // observation survives a later send, placement, or receiver validation.
 func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipeline, features plan.RemoteExpressionFeatures) error {
+	if err := validateNoRemoteUserVariableAssignment(p); err != nil {
+		return err
+	}
 	integerArgumentsVersion := defines.MORPCVersion85
 	if features.SpecialIntegerConsumers {
 		integerArgumentsVersion = defines.MORPCVersion98
@@ -137,6 +140,33 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		if !known || observed < gate.version {
 			return moerr.NewNotSupportedNoCtxf(gate.unsupported, gate.version)
 		}
+	}
+	return nil
+}
+
+// validateNoRemoteUserVariableAssignment is the send/receive safety fence for
+// the new side-effecting expression. The coordinator-only placement rule keeps
+// normal plans away from RemoteRun; this second fence prevents a future plan
+// rewrite or an older receiver from silently dropping the unknown oneof field.
+func validateNoRemoteUserVariableAssignment(p *pipeline.Pipeline) error {
+	if p == nil {
+		return nil
+	}
+	found := false
+	err := plan.VisitExpressionsInOwner(p, func(root *plan.Expr) error {
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			if expr.GetUserVarAssignment() != nil {
+				found = true
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return err
+	}
+	if found {
+		return moerr.NewNotSupportedNoCtx(
+			"user-variable assignment must execute on the coordinator and cannot be sent to a remote CN")
 	}
 	return nil
 }

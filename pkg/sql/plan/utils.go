@@ -68,6 +68,10 @@ func doGetBindings(expr *plan.Expr) map[int32]bool {
 	switch expr := expr.Expr.(type) {
 	case *plan.Expr_Col:
 		res[expr.Col.RelPos] = true
+	case *plan.Expr_UserVarAssignment:
+		for id := range doGetBindings(expr.UserVarAssignment.Value) {
+			res[id] = true
+		}
 
 	case *plan.Expr_F:
 		for _, child := range expr.F.Args {
@@ -94,6 +98,8 @@ func hasCorrCol(expr *plan.Expr) bool {
 			}
 		}
 		return false
+	case *plan.Expr_UserVarAssignment:
+		return hasCorrCol(exprImpl.UserVarAssignment.Value)
 	case *plan.Expr_Corr:
 		return true
 
@@ -120,6 +126,8 @@ func hasCorrCol(expr *plan.Expr) bool {
 
 func hasSubquery(expr *plan.Expr) bool {
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_UserVarAssignment:
+		return hasSubquery(exprImpl.UserVarAssignment.Value)
 	case *plan.Expr_Sub:
 		return true
 
@@ -146,6 +154,8 @@ func hasSubquery(expr *plan.Expr) bool {
 
 func HasTag(expr *plan.Expr, tag int32) bool {
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_UserVarAssignment:
+		return HasTag(exprImpl.UserVarAssignment.Value, tag)
 	case *plan.Expr_Col:
 		return exprImpl.Col.RelPos == tag
 
@@ -190,6 +200,8 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 	var correlated bool
 
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_UserVarAssignment:
+		exprImpl.UserVarAssignment.Value, correlated = decreaseDepth(exprImpl.UserVarAssignment.Value)
 	case *plan.Expr_Corr:
 		if exprImpl.Corr.Depth > 1 {
 			exprImpl.Corr.Depth--
@@ -216,6 +228,8 @@ func decreaseDepth(expr *plan.Expr) (*plan.Expr, bool) {
 
 func getJoinSide(expr *plan.Expr, leftTags, rightTags map[int32]bool, markTag int32) (side int8) {
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_UserVarAssignment:
+		side = getJoinSide(exprImpl.UserVarAssignment.Value, leftTags, rightTags, markTag)
 	case *plan.Expr_F:
 		for _, arg := range exprImpl.F.Args {
 			side |= getJoinSide(arg, leftTags, rightTags, markTag)
@@ -1631,6 +1645,9 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 }
 
 func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
+	if expr == nil {
+		return
+	}
 	switch exprImpl := expr.Expr.(type) {
 	case *plan.Expr_Dependent:
 		for _, args := range [][]*plan.Expr{exprImpl.Dependent.Inputs, exprImpl.Dependent.Lhs} {
@@ -1656,6 +1673,10 @@ func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 		//}
 		for _, order := range exprImpl.W.OrderBy {
 			increaseRefCnt(order.Expr, inc, colRefCnt)
+		}
+	case *plan.Expr_UserVarAssignment:
+		if exprImpl.UserVarAssignment != nil {
+			increaseRefCnt(exprImpl.UserVarAssignment.Value, inc, colRefCnt)
 		}
 	}
 }

@@ -206,6 +206,13 @@ func (c *Compile) Compile(
 	// initialize some attributes for Compile.
 	c.fill = resultWriteBack
 	c.pn = queryPlan
+	// User-variable assignments are ordered session side effects. Retrying the
+	// physical pipeline after a partial execution would replay already staged
+	// rows (and any volatile/sequence RHS), so this statement must fail at the
+	// first retryable error instead of rebuilding and executing again.
+	if planHasUserVariableAssignment(queryPlan) {
+		c.disableRetry = true
+	}
 	c.prepareLoadUniqueIndexPromotion(queryPlan)
 
 	// combine top context with some values and replace.
@@ -414,6 +421,11 @@ func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	defer func() { err = process.UnwrapPipelineFailure(err) }()
+	// A cached prepared pipeline can outlive the session row cap used to build
+	// it. Reject before any projection stages assignments or publishes a prefix.
+	if err = c.validateUserVariableAssignmentSessionLimit(); err != nil {
+		return nil, err
+	}
 	if c.pn.GetDdl().GetDropTable() != nil {
 		// Retry generations share this statement owner. Other statements do
 		// not need a temporary DROP retirement journal.
