@@ -3167,11 +3167,11 @@ func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
 	require.False(t, supportsMultiSourceISCP(service))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion99)
 	require.False(t, supportsMultiSourceISCP(service), "the MV capability must be newer than the current predecessor")
-	for _, version := range []int64{defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
+	for _, version := range []int64{defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119} {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
 		require.False(t, supportsMultiSourceISCP(service))
 	}
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion117)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion120)
 	require.True(t, supportsMultiSourceISCP(service))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
@@ -3196,11 +3196,11 @@ func TestMaterializedViewCapabilityAndReadValidationGuards(t *testing.T) {
 	require.Error(t, requireMaterializedViewCapability(c))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion106)
 	require.Error(t, requireMaterializedViewCapability(c))
-	for _, version := range []int64{defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116} {
+	for _, version := range []int64{defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119} {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, version)
 		require.Error(t, requireMaterializedViewCapability(c))
 	}
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion117)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion120)
 	require.NoError(t, requireMaterializedViewCapability(c))
 }
 
