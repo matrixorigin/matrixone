@@ -174,7 +174,7 @@ func TestTimestampAddHistoricalDumpRoundtrip(t *testing.T) {
 		var metadataOnly bool
 		require.NoError(t, json.Unmarshal(exported["metadata_only"], &metadataOnly))
 		require.False(t, metadataOnly)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion119)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
 		exec("load table restored from '" + dataPath + "'")
 		restoredMetadata := filepath.Join(root, "restored-metadata")
 		exec("dump table restored to '" + restoredMetadata + "' metadata only")
