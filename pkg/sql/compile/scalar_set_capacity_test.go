@@ -175,52 +175,28 @@ func TestScalarSetFallbackResourceLifecycle(t *testing.T) {
 			})
 			c.SetIsPrepare(true)
 			require.NoError(t, c.Compile(ctx, &plan.Plan{Plan: &plan.Plan_Query{Query: logical}}, fill))
+			var assertObserverOrder func()
 			if mode == "mixed-multiple-prepared" {
+				require.True(t, c.IsTpQuery(), "observer uses the serial prepared fixture")
+				owners, err := collectAllocationAccountOwners(c.scopes)
+				require.NoError(t, err)
+				var observerScope *Scope
+				var observerParent, observerOp vm.Operator
 				var walk func(*Scope)
 				walk = func(scope *Scope) {
 					require.Equal(t, 1, scope.NodeInfo.Mcpu)
-					require.NoError(t, vm.HandleAllOp(scope.RootOp, func(_ vm.Operator, op vm.Operator) error {
+					require.NoError(t, vm.HandleAllOp(scope.RootOp, func(parent vm.Operator, op vm.Operator) error {
 						if join, ok := op.(*loopjoin.LoopJoin); ok && join.ScalarSetReaggregation {
 							joins = append(joins, join)
 							require.NotNil(t, join.NonEqCond)
 						}
-						if w, ok := op.(*window.Window); ok && w.ScalarSetReaggregation && leaseObserver == nil {
-							child := w.GetChildren(0)
-							hasEarlierIdentity := false
-							require.NoError(t, vm.HandleAllOp(child, func(_ vm.Operator, nested vm.Operator) error {
-								if earlier, ok := nested.(*window.Window); ok && earlier.ScalarSetReaggregation {
-									hasEarlierIdentity = true
-								}
-								return nil
-							}))
-							if hasEarlierIdentity {
-								return nil
-							}
-							if _, owned := child.(executionAllocationAccountOwner); !owned {
-								leaseObserver = &scalarFallbackLeaseObserver{Operator: child, before: func() {
-									require.GreaterOrEqual(t, len(joins), 2)
-									currentLease = joins[0].ScalarSetLease
-									require.NotNil(t, currentLease)
-									require.Zero(t, currentLease.CandidatePairs(), "new attempt starts with fresh work")
-									for _, join := range joins {
-										require.Same(t, currentLease, join.ScalarSetLease)
-									}
-									for _, old := range observedLeases {
-										require.NotSame(t, old, currentLease)
-									}
-									observedLeases = append(observedLeases, currentLease)
-									if exhaustShared {
-										require.NoError(t, currentLease.ChargeCandidatePairs(process.ScalarSetCandidatePairLimit-12))
-									}
-									probe, err := generation.AcquireScalarSetExecution()
-									require.NoError(t, err)
-									defer probe.Close()
-									_, err = generation.AcquireScalarSetExecution()
-									require.Error(t, err, "both fallback operators share one CN permit")
-									probe.Close()
-								}}
-								w.SetChild(leaseObserver, 0)
-							}
+						_, owned := op.(executionAllocationAccountOwner)
+						_, drainer := op.(executionAllocationAccountDrainer)
+						_, childPreparer := op.(interface {
+							PrepareChildrenProcess(*process.Process) *process.Process
+						})
+						if !owned && !drainer && !childPreparer {
+							observerScope, observerParent, observerOp = scope, parent, op
 						}
 						return nil
 					}))
@@ -231,7 +207,66 @@ func TestScalarSetFallbackResourceLifecycle(t *testing.T) {
 				for _, scope := range c.scopes {
 					walk(scope)
 				}
-				require.NotNil(t, leaseObserver)
+				require.NotNil(t, observerOp, "find an unowned edge after the marked joins")
+				// Match the full owner's postorder traversal, including PreScopes.
+				// SetAllocationAccount observes published join leases synchronously,
+				// before Compile.Run can start any scope.
+				leaseObserver = &scalarFallbackLeaseObserver{Operator: observerOp, before: func() {
+					require.GreaterOrEqual(t, len(joins), 2)
+					currentLease = joins[0].ScalarSetLease
+					require.NotNil(t, currentLease)
+					require.Zero(t, currentLease.CandidatePairs(), "new attempt starts with fresh work")
+					for _, join := range joins {
+						require.Same(t, currentLease, join.ScalarSetLease)
+					}
+					for _, old := range observedLeases {
+						require.NotSame(t, old, currentLease)
+					}
+					observedLeases = append(observedLeases, currentLease)
+					if exhaustShared {
+						require.NoError(t, currentLease.ChargeCandidatePairs(process.ScalarSetCandidatePairLimit-12))
+					}
+					probe, err := generation.AcquireScalarSetExecution()
+					require.NoError(t, err)
+					defer probe.Close()
+					_, err = generation.AcquireScalarSetExecution()
+					require.Error(t, err, "both fallback operators share one CN permit")
+					probe.Close()
+				}}
+				if observerParent == nil {
+					observerScope.RootOp = leaseObserver
+				} else {
+					for i, child := range observerParent.GetOperatorBase().Children {
+						if child == observerOp {
+							observerParent.GetOperatorBase().SetChild(leaseObserver, i)
+							break
+						}
+					}
+				}
+				assertObserverOrder = func() {
+					installed, err := collectAllocationAccountOwners(c.scopes)
+					require.NoError(t, err)
+					require.Len(t, installed, len(owners)+1)
+					observerIndex := -1
+					realIndex := 0
+					for i, owner := range installed {
+						if owner == leaseObserver {
+							observerIndex = i
+							continue
+						}
+						require.Less(t, realIndex, len(owners), "unexpected allocation owner")
+						require.Same(t, owners[realIndex], owner, "preserve every real owner and its order")
+						realIndex++
+					}
+					require.Equal(t, len(owners), realIndex)
+					require.NotEqual(t, -1, observerIndex)
+					for i, owner := range installed {
+						if join, ok := owner.(*loopjoin.LoopJoin); ok && join.ScalarSetReaggregation {
+							require.Less(t, i, observerIndex, "observe after every marked join publishes its lease")
+						}
+					}
+				}
+				assertObserverOrder()
 			}
 
 			var injection *scalarFallbackCancelInput
@@ -320,10 +355,12 @@ func TestScalarSetFallbackResourceLifecycle(t *testing.T) {
 				cancelOutput = false
 				proc.ReplaceTopCtx(defines.AttachAccountId(context.Background(), catalog.System_Account))
 				if leaseObserver != nil {
-					leaseObserver.seen = false
 					exhaustShared = false
 				}
 				require.NoError(t, c.Reset(proc, time.Now(), fill, query))
+				if assertObserverOrder != nil {
+					assertObserverOrder()
+				}
 				_, err = c.Run(0)
 				require.NoError(t, err)
 				require.Equal(t, expected, got)
@@ -477,18 +514,18 @@ func assertScalarFallbackSpillClosed(t *testing.T, fs *scalarFallbackSpillFS, ph
 	t.Logf("spill-terminal phase=%s created=%d reopened=%d removed=%d closed-handles=%d", phase, created, opened, removed, len(handles))
 }
 
-// The unowned input edge observes attempt setup during Prepare, before any
-// predicate can consume work; the original child retains its cleanup owner.
+// This collector-visible owner observes synchronous attempt setup before
+// any pipeline starts. The unowned operator retains its ordinary lifecycle.
 type scalarFallbackLeaseObserver struct {
 	vm.Operator
 	before func()
-	seen   bool
 }
 
-func (o *scalarFallbackLeaseObserver) Prepare(proc *process.Process) error {
-	if !o.seen {
-		o.seen = true
-		o.before()
-	}
-	return o.Operator.Prepare(proc)
+func (o *scalarFallbackLeaseObserver) SetAllocationAccount(*mpool.AllocationAccount) error {
+	o.before()
+	return nil
+}
+
+func (o *scalarFallbackLeaseObserver) ClearAllocationAccount(*mpool.AllocationAccount) error {
+	return nil
 }
