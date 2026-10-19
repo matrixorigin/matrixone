@@ -17,21 +17,10 @@ package plan
 import (
 	"context"
 
-	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/runtime"
-	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func requireLoadFKIgnoreProtocol(ctx context.Context, proc *process.Process) error {
-	if proc != nil {
-		if rt := runtime.ServiceRuntime(proc.GetService()); rt != nil {
-			value, ok := rt.GetGlobalVariables(runtime.MOProtocolVersion)
-			version, valid := value.(int64)
-			if ok && valid && version >= defines.MORPCVersion123 {
-				return nil
-			}
-		}
-	}
-	return moerr.NewNotSupported(ctx, "LOAD IGNORE foreign-key filtering requires all CNs to support protocol version 123")
+	return function.RequireLoadFKIgnoreProtocol(ctx, proc)
 }

@@ -121,15 +121,29 @@ func TestLoadForeignKeyRoutingAndPolicy(t *testing.T) {
 func TestLoadForeignKeyIgnoreProtocolGate(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	service := mock.ctxt.GetProcess().GetService()
-	for _, version := range []int64{defines.MORPCVersion122, defines.MORPCVersion123} {
+	for _, version := range []int64{defines.MORPCVersion124, defines.MORPCVersion125} {
 		setPlanTestGlobalVariable(t, service, runtime.MOProtocolVersion, version)
-		_, err := runOneStmt(mock, t, "load data inline format='csv', data='1,1' ignore into table replace_fk_c fields terminated by ',' (id,pid)")
-		if version < defines.MORPCVersion123 {
+		p, err := runOneStmt(mock, t, "load data inline format='csv', data='1,1' ignore into table replace_fk_c fields terminated by ',' (id,pid)")
+		if version < defines.MORPCVersion125 {
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), err)
-			require.ErrorContains(t, err, "protocol version 123")
+			require.ErrorContains(t, err, "protocol version 125")
 		} else {
 			require.NoError(t, err)
+			wire, err := p.Marshal()
+			require.NoError(t, err)
+			var decoded pb.Plan
+			require.NoError(t, decoded.Unmarshal(wire))
+			features, err := pb.RequiredRemoteExpressionFeatures(&decoded)
+			require.NoError(t, err)
+			require.True(t, features.LoadFKIgnoreCheck)
 		}
+		// Ordinary FK LOAD has no new diagnostic identity, even on main's
+		// immediate predecessor epoch. Its assertion semantics are unchanged.
+		ordinary, err := runOneStmt(mock, t, "load data inline format='csv', data='1,1' into table replace_fk_c fields terminated by ',' (id,pid)")
+		require.NoError(t, err)
+		features, err := pb.RequiredRemoteExpressionFeatures(ordinary)
+		require.NoError(t, err)
+		require.False(t, features.LoadFKIgnoreCheck)
 	}
 }
 

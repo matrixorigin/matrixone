@@ -15,10 +15,29 @@
 package function
 
 import (
+	"context"
+
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
+
+// RequireLoadFKIgnoreProtocol fences binding and native executor construction.
+// Observe the current rollout floor rather than retaining a binding-time value.
+func RequireLoadFKIgnoreProtocol(ctx context.Context, proc *process.Process) error {
+	if proc != nil {
+		if rt := runtime.ServiceRuntime(proc.GetService()); rt != nil {
+			value, ok := rt.GetGlobalVariables(runtime.MOProtocolVersion)
+			version, valid := value.(int64)
+			if ok && valid && version >= defines.MORPCVersion125 {
+				return nil
+			}
+		}
+	}
+	return moerr.NewNotSupported(ctx, "LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")
+}
 
 // loadFKIgnoreCheck is emitted only at explicit LOAD IGNORE's admission barrier.
 // Parent existence and MATCH SIMPLE are resolved before this predicate. One
