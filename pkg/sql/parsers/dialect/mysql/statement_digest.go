@@ -1381,7 +1381,8 @@ func digestOptimizerHintTokens(source string, allowed, ansiQuotes bool) []digest
 	if len(body) == 0 {
 		return nil
 	}
-	result := []digestToken{{kind: digestTokenPlain, text: "/*+", size: 2}}
+	result := make([]digestToken, 1, 1+len(body)+1)
+	result[0] = digestToken{kind: digestTokenPlain, text: "/*+", size: 2}
 	result = append(result, body...)
 	result = append(result, digestToken{kind: digestTokenPlain, text: "*/", size: 2})
 	return result

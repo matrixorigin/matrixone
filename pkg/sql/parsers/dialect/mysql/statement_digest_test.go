@@ -52,6 +52,7 @@ func TestNormalizeStatementDigest(t *testing.T) {
 		{sql: "SELECT _utf8mb4 /* charset */ -- literal\n X'4142'", max: 1024, want: "SELECT (_charset) ?"},
 		{sql: "SELECT /*+ MAX_EXECUTION_TIME(1000) */ * FROM t WHERE id=1", max: 1024, want: "SELECT /*+ MAX_EXECUTION_TIME (?) */ * FROM `t` WHERE `id` = ?"},
 		{sql: "SELECT /*+ SET_VAR(max_execution_time=1.5) */ 1", max: 1024, want: "SELECT /*+ SET_VAR ( `max_execution_time` = ? ) */ ?"},
+		{sql: "SELECT /*+ SET_VAR(max_execution_time=.5) */ 1", max: 1024, want: "SELECT /*+ SET_VAR ( `max_execution_time` = ? ) */ ?"},
 		{sql: "SELECT /*+ QB_NAME(qb) INDEX(t@qb idx) SET_VAR(sort_buffer_size=16M) */ 1", max: 1024, want: "SELECT /*+ QB_NAME ( `qb` ) INDEX ( `t`@`qb` `idx` ) SET_VAR ( `sort_buffer_size` = ? ) */ ?"},
 		{sql: "SELECT /*+ QB_NAME(@qb) SET_VAR(sort_buffer_size=1G) */ 1", max: 1024, want: "SELECT /*+ QB_NAME ( @`qb` ) SET_VAR ( `sort_buffer_size` = ? ) */ ?"},
 		{sql: "SELECT /*+ QB_NAME(123qb) JOIN_ORDER(@`123qb` `t`) SET_VAR(optimizer_switch='index_merge=off') */ * FROM t", max: 1024, want: "SELECT /*+ QB_NAME ( `123qb` ) JOIN_ORDER ( @`123qb` `t` ) SET_VAR ( `optimizer_switch` = ? ) */ * FROM `t`"},

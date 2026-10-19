@@ -510,8 +510,8 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrCantChangeTxn:           {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
 	ErrInvalidGroupFuncUse:     {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
 	ErrInvalidJSONPathWildcard: {ER_INVALID_JSON_PATH_WILDCARD, []string{"42000"}, "In this situation, path expressions may not contain the * and ** tokens or an array range."},
-	ErrDigestParse:            {ER_PARSE_ERROR_IN_DIGEST_FN, []string{MySQLDefaultSqlState}, "Could not parse argument to digest function: \"%s\"."},
-	ErrDigestParseUndisclosed: {ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN, []string{MySQLDefaultSqlState}, "Could not parse argument to digest function."},
+	ErrDigestParse:             {ER_PARSE_ERROR_IN_DIGEST_FN, []string{MySQLDefaultSqlState}, "Could not parse argument to digest function: \"%s\"."},
+	ErrDigestParseUndisclosed:  {ER_UNDISCLOSED_PARSE_ERROR_IN_DIGEST_FN, []string{MySQLDefaultSqlState}, "Could not parse argument to digest function."},
 	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
 	ErrFtMatchingKeyNotFound:               {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
