@@ -133,7 +133,7 @@ individually so unrelated log replay can continue.
 
 ## Upgrade and rollback
 
-All creation, including ON DEMAND, requires protocol 110. Admission is a rollout
+All creation, including ON DEMAND, requires protocol 122. Admission is a rollout
 check; safety also relies on representations understood by predecessor readers.
 On disk, the job uses the existing IndexSync discriminator with an empty index
 selector and an additive MVReference. A predecessor's writer registry rejects
