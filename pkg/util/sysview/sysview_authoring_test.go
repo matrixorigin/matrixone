@@ -48,7 +48,7 @@ func TestInitSchemaDefersViewsUntilAuthoringFence(t *testing.T) {
 			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion120))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion121))
 
 	var statements []string
 	ctrl := gomock.NewController(t)
@@ -84,7 +84,7 @@ func TestInitSchemaDefersViewsUntilAuthoringFence(t *testing.T) {
 	statements = nil
 	rt.SetGlobalVariables(
 		moruntime.PersistedExpressionProtocolAuthoringFloor,
-		int64(defines.MORPCVersion120))
+		int64(defines.MORPCVersion121))
 	require.NoError(t, InitSchema(context.Background(), txnExecutor))
 	joined = strings.Join(statements, "\n")
 	require.Contains(t, joined, InformationSchemaViewsDDL)

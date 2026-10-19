@@ -77,7 +77,7 @@ var (
 )
 
 func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
-	if protocol >= defines.MORPCVersion120 {
+	if protocol >= defines.MORPCVersion121 {
 		return InitInformationSchemaSysTables
 	}
 
@@ -101,7 +101,7 @@ func InitInformationSchemaSysTablesForProtocol(protocol int64) []string {
 		case InformationSchemaColumnsDDL:
 			if protocol >= defines.MORPCVersion109 {
 				// Native Unicode collation identities are a separate v109
-				// contract from the v120 VIEWS function definitions.
+				// contract from the v121 VIEWS function definitions.
 				sql = InformationSchemaColumnsDDL
 			} else if protocol >= defines.MORPCVersion100 {
 				sql = InformationSchemaColumnsV100DDL()
@@ -151,7 +151,7 @@ func InitSchema(ctx context.Context, txn executor.TxnExecutor) error {
 }
 
 // informationSchemaInitProtocol selects the catalog definition that this CN
-// is allowed to author during system bootstrap. A CN may advertise v120 before
+// is allowed to author during system bootstrap. A CN may advertise v121 before
 // its local catalog admission fence has completed; in that window the current
 // VIEWS definition would be rejected by persisted-expression admission. Keep
 // the VIEWS-specific predecessor while retaining the newer independent system
@@ -170,10 +170,10 @@ func informationSchemaInitProtocol(txn executor.TxnExecutor) int64 {
 			protocol = current
 		}
 	}
-	if protocol >= defines.MORPCVersion120 {
+	if protocol >= defines.MORPCVersion121 {
 		if value, present := rt.GetGlobalVariables(runtime.PersistedExpressionProtocolAuthoringFloor); present {
 			floor, valid := value.(int64)
-			if !valid || floor < defines.MORPCVersion120 {
+			if !valid || floor < defines.MORPCVersion121 {
 				// Defer only VIEWS. Main's database-default prerequisites are
 				// already present; TABLES is deferred separately below until
 				// post-admission publication by InitSystemViews.
