@@ -409,8 +409,11 @@ func compareKey(a, b Row, q Query) int {
 // A pair of monotonically ordered outputs can differ only within peer groups.
 // Each group is bounded; oversized groups fail explicitly instead of growing.
 func compareCaptures(rootA, rootB string, a, b Capture, q Query) (retErr error) {
-	if a.Version != formatVersion || b.Version != formatVersion || a.Rows != b.Rows || len(a.Columns) != len(q.Columns) || len(b.Columns) != len(q.Columns) {
+	if a.Version != formatVersion || b.Version != formatVersion || a.Rows < 0 || a.Rows != b.Rows || len(a.Columns) != len(q.Columns) || len(b.Columns) != len(q.Columns) {
 		return errors.New("capture count/schema mismatch")
+	}
+	if q.Limit > 0 && a.Rows > int64(q.Limit) {
+		return fmt.Errorf("query Q%d result exceeds qualification LIMIT %d", q.Number, q.Limit)
 	}
 	if err := a.File.verify(rootA); err != nil {
 		return err

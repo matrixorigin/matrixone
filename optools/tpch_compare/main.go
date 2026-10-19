@@ -22,7 +22,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -137,41 +136,16 @@ func cli(ctx context.Context, args []string, out, errOut io.Writer) error {
 		dataset := f.String("dataset", "", "prepared dataset directory")
 		left := f.String("left", "", "left worker receipt")
 		right := f.String("right", "", "right worker receipt")
+		leftUnlimited := f.String("left-unlimited", "", "left unlimited diagnostic receipt for LIMIT membership")
+		rightUnlimited := f.String("right-unlimited", "", "right unlimited diagnostic receipt for LIMIT membership")
 		if err := f.Parse(args[1:]); err != nil {
 			return err
 		}
-		d, err := loadDataset(*dataset, false)
+		count, err := compareReceipts(*dataset, *left, *right, *leftUnlimited, *rightUnlimited)
 		if err != nil {
 			return err
 		}
-		a, err := readJSON[WorkerReceipt](*left)
-		if err != nil {
-			return err
-		}
-		b, err := readJSON[WorkerReceipt](*right)
-		if err != nil {
-			return err
-		}
-		identity, err := identify(filepath.Join(*dataset, "dataset.json"))
-		if err != nil {
-			return err
-		}
-		if a.Version != formatVersion || b.Version != formatVersion || a.Dataset.SHA256 != identity.SHA256 || b.Dataset.SHA256 != identity.SHA256 {
-			return errors.New("worker dataset identity or receipt version differs")
-		}
-		if a.Error != "" || b.Error != "" || a.Cleanup != "complete" || b.Cleanup != "complete" || len(a.Queries) == 0 || len(a.Queries) != len(b.Queries) {
-			return errors.New("failed/incomplete worker receipt")
-		}
-		for i, x := range a.Queries {
-			y := b.Queries[i]
-			if x.Query < 1 || x.Query > 22 || x.Error != "" || y.Error != "" || x.Query != y.Query || x.Repetition != y.Repetition {
-				return errors.New("worker query schedules differ")
-			}
-			if err := compareCaptures(filepath.Dir(*left), filepath.Dir(*right), x.Capture, y.Capture, d.Queries[x.Query-1]); err != nil {
-				return err
-			}
-		}
-		_, err = fmt.Fprintf(out, "full typed comparison passed: %d query executions\n", len(a.Queries))
+		_, err = fmt.Fprintf(out, "full typed comparison passed: %d query executions\n", count)
 		return err
 	default:
 		return fmt.Errorf("unknown command %q", args[0])
