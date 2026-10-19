@@ -30,8 +30,6 @@ type eventType uint8
 // String returns the string of event type.
 func (t eventType) String() string {
 	switch t {
-	case TypeKill:
-		return "Kill"
 	case TypeSetVar:
 		return "SetVar"
 	case TypeQuit:
@@ -45,8 +43,6 @@ func (t eventType) String() string {
 }
 
 const (
-	// TypeKill indicates the kill query statement.
-	TypeKill eventType = 1
 	// TypeSetVar indicates the set variable statement.
 	TypeSetVar eventType = 2
 	// TypeQuit indicates the exit cmd.
@@ -121,8 +117,6 @@ func makeEvent(msg []byte, b *msgBuf) (IEvent, bool) {
 			return nil, false
 		}
 		switch s := stmts[0].(type) {
-		case *tree.Kill:
-			return makeKillEvent(sql, s.ConnectionId), true
 		case *tree.SetVar:
 			// This event should be sent to dst, so return false,
 			return makeSetVarEvent(sql, s), false
@@ -151,33 +145,6 @@ func makeIdentityChangeEvent() IEvent {
 	e.typ = TypeIdentityChange
 	return e
 }
-
-// killEvent is the event that "kill query" or "kill connection" statement is captured.
-// We need to send this statement to a specified CN server which has
-// the connection ID on it.
-type killEvent struct {
-	baseEvent
-	// stmt is the statement that will be sent to server.
-	stmt string
-	// The ID of connection that needs to be killed.
-	connID uint32
-}
-
-// makeKillEvent creates a event with TypeKill type.
-func makeKillEvent(stmt string, connID uint64) IEvent {
-	e := &killEvent{
-		stmt:   stmt,
-		connID: uint32(connID),
-	}
-	e.typ = TypeKill
-	return e
-}
-
-// notify implements the IEvent interface.
-func (e *killEvent) notify() {}
-
-// wait implements the IEvent interface.
-func (e *killEvent) wait() {}
 
 // setVarEvent is the event that set session variable or set user variable.
 // We need to check if the execution of this statement is successful, and
