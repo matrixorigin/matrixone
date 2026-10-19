@@ -2,7 +2,7 @@
 
 ## 0. 修订与审查边界
 
-修订 **r3，2026-10-18**，原实现基于 main `adbdd5c718baca6e4c054194f888b48a4f84a0a2`；2026-10-19 合并 main `def799e1260dd547cae2e0e54323ea20ec1b7685`，仅顺延本功能协议门槛至 120 并保留上游 119 dependent-program 元数据，不改变 r3 查找/锁/接受算法。r3 的实现前设计经 `gpt-6.1-sol / xhigh` 独立审查 PASS（session `01a14e30-2309-7380-b4f0-2a2ab293c768`）；LOCAL policy 澄清在同一模型/effort 下补充设计 PASS，保留原 PR 的 LOCAL CHECK 行跳过契约；实现与验证证据按当前版本单独记录在 PR 中。此记录不修改 GitHub reviewer 的决定。
+修订 **r3，2026-10-18**，原实现基于 main `adbdd5c718baca6e4c054194f888b48a4f84a0a2`；2026-10-19 合并 main `57fb9530859d92791100098d312ea8cacc671910`，顺延本功能协议门槛至 121，保留上游 119 dependent-program 元数据与 120 KILL 授权/连接清理。另修复点查运行值缺少 scalar Literal carrier 的表示边界，不改变 r3 查找/锁/接受算法。r3 的实现前设计经 `gpt-6.1-sol / xhigh` 独立审查 PASS（session `01a14e30-2309-7380-b4f0-2a2ab293c768`）；LOCAL policy 澄清在同一模型/effort 下补充设计 PASS，保留原 PR 的 LOCAL CHECK 行跳过契约；实现与验证证据按当前版本单独记录在 PR 中。此记录不修改 GitHub reviewer 的决定。
 
 问题 [#28238](https://github.com/matrixorigin/matrixone/issues/28238)，实现 [#30107](https://github.com/matrixorigin/matrixone/pull/30107)。保留原始 13 个提交及 6 次合并的累计功能修改；不恢复已被 main 吸收、累计增量为零的 EXPLAIN prerequisite。
 
@@ -107,6 +107,8 @@ VALUES 的首次请求使用 `ValuesRows`；未知流按 1、2、4…扩张，�
 
 LookupFilter 是物理裁剪条件，Predicate 是完整 SQL 真值，两者不可混淆。point filter 共用 `ConstantFold → BuildFoldedFilterExprs`，storage Fold 是裁剪字节，不能交给普通表达式执行器。复合 PK 的 serial 只用于物理访问，已从完整 SQL 等式中删除。
 
+点查中的 child tuple 和 UNIQUE locator 回表值共用原生类型绑定边界：能由 `Literal` 表示的值保留原路径；UUID、YEAR、Decimal256 等没有该标量载体的值，用既有 Vector codec 复制选中行，保存完整 Type，并编码为单行、物理 const 的 `LiteralVec`。不能把“无 Literal carrier”视作非法 SQL 类型，不能用字符串往返代替原生等式。payload 不借用可重用 reader/tuple batch；临时 vector 在成功或错误返回时释放。表达式内按 scalar 广播，再由既有 Fold preparation 生成存储裁剪字节；完整 SQL residual、witness 及锁顺序保持原样，不增加共享缓存、spill、wire 字段或新混版承诺。
+
 resident build/probe、current-self 和 earlier-accepted-self 都从原始 SQL 等式派生同一类型及 collation 域，不能以 raw vector bytes 替代。accepted-self 集合使用标准 SetRejectNaN 模式，NaN 不能因为 hash 命中而绕过 SQL 的非自反等式；有符号零仍按 SQL 等值匹配。任一 child 分量为 NULL 按 MATCH SIMPLE 通过。自引用依次查当前完整行、此前**完全接受**的行、固定存储视图；不读未来或已拒绝的候选。重复 tuple 使用标准 GroupSels 的一个 witness；标准 builder 省略 GroupSels 的全唯一表示直接使用 group ordinal。
 
 编译时捕获 `Compile.TxnOffset`，本地、远端和 retry 更新均传递该值。lookup 不重新读取 workspace 的当前 write offset；当前语句的自引用可见性只有既有 accepted overlay 一份 owner。prepared/retry reuse 清除整个旧 attempt。
@@ -115,7 +117,7 @@ resident build/probe、current-self 和 earlier-accepted-self 都从原始 SQL �
 
 ## 6. Wire 与资源生命周期
 
-最低能力 **MORPC 120**；published 114–119 的含义保持 main 原样，其中 119 已由上游用于 coordinator-owned parameterized subquery programs，不能与本功能共用。发送端、接收端及实际目标 CN 均执行能力拒绝，不能丢弃新字段后走旧 scalar 语义。
+最低能力 **MORPC 121**；published 114–120 的含义保持 main 原样，其中 119 已由上游用于 coordinator-owned parameterized subquery programs，120 用于 KILL authorization / proxy disconnect cleanup，不能与本功能共用。发送端、接收端及实际目标 CN 均执行能力拒绝，不能丢弃新字段后走旧 scalar 语义。
 
 | message / 字段 | 用途 |
 |---|---|

@@ -91,6 +91,49 @@ func TestOrderedInsertIgnoreForeignKeys(t *testing.T) {
 		if t.Failed() {
 			return
 		}
+		for _, tc := range []struct {
+			name, typ              string
+			parent, plain, ignored string
+			missing                string
+		}{
+			{"uuid", "uuid", "cast('00000000-0000-0000-0000-000000000001' as uuid)", "cast('00000000-0000-0000-0000-000000000002' as uuid)", "cast('00000000-0000-0000-0000-000000000003' as uuid)", "cast('00000000-0000-0000-0000-000000000099' as uuid)"},
+			{"year", "year", "2020", "2021", "2022", "2099"},
+			{"decimal256", "decimal(65,0)", "cast('10000000000000000000000000000000000000000000000000000000000000001' as decimal(65,0))", "cast('10000000000000000000000000000000000000000000000000000000000000002' as decimal(65,0))", "cast('10000000000000000000000000000000000000000000000000000000000000003' as decimal(65,0))", "cast('10000000000000000000000000000000000000000000000000000000000000099' as decimal(65,0))"},
+		} {
+			t.Run("typed_self_point/"+tc.name, func(t *testing.T) {
+				table := "typed_self_" + tc.name
+				exec(t, "create table "+table+"(id "+tc.typ+" primary key,p "+tc.typ+",foreign key(p) references "+table+"(id))")
+				exec(t, "insert into "+table+" values("+tc.parent+",NULL)")
+				exec(t, "insert into "+table+" values("+tc.plain+","+tc.parent+")")
+				exec(t, "delete from "+table+" where id="+tc.plain)
+				exec(t, "insert ignore into "+table+" values("+tc.ignored+","+tc.parent+"),("+tc.missing+","+tc.plain+")")
+				count(t, "select count(*) from "+table+" where id="+tc.ignored+" and p="+tc.parent, 1)
+				count(t, "select count(*) from "+table+" where id="+tc.missing, 0)
+				count(t, "select count(*) from "+table, 2)
+				// A current complete self tuple is visible without speculative publication.
+				exec(t, "insert ignore into "+table+" values("+tc.missing+","+tc.missing+")")
+				count(t, "select count(*) from "+table, 3)
+				tx, err := conn.BeginTx(ctx, nil)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = tx.Rollback() })
+				_, err = tx.ExecContext(ctx, "insert ignore into "+table+" values("+tc.plain+","+tc.parent+")")
+				require.NoError(t, err)
+				require.NoError(t, tx.Rollback())
+				count(t, "select count(*) from "+table+" where id="+tc.plain, 0)
+			})
+			t.Run("typed_unique_locator/"+tc.name, func(t *testing.T) {
+				parent, child := "typed_parent_"+tc.name, "typed_child_"+tc.name
+				exec(t, "create table "+parent+"(id "+tc.typ+" primary key,k int unique)")
+				exec(t, "insert into "+parent+" values("+tc.parent+",1),("+tc.plain+",2)")
+				exec(t, "create table "+child+"(id int auto_increment primary key,u int unique,foreign key(id) references "+parent+"(k))")
+				exec(t, "insert into "+child+" values(1,99)")
+				exec(t, "truncate table "+child)
+				exec(t, "insert ignore into "+child+"(u) values(10),(10),(20),(30)")
+				count(t, "select count(*) from "+child+" where (id,u) in ((1,10),(2,20))", 2)
+				count(t, "select count(*) from "+child, 2)
+				count(t, "select count(*) from "+child+" c left join "+parent+" p on c.id=p.k where p.id is null", 0)
+			})
+		}
 		t.Run("nan", func(t *testing.T) {
 			exec(t, "create table self_nan(id int primary key,k double,p double,unique(k,id),foreign key(p) references self_nan(k))")
 			exec(t, "insert ignore into self_nan values(1,cast('NaN' as double),NULL),(2,1,cast('NaN' as double))")

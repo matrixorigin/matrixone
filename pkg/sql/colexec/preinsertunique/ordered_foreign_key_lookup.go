@@ -405,11 +405,11 @@ func bindOrderedFKTuple(proc *process.Process, expr *plan.Expr, tuple []*vector.
 				return moerr.NewInvalidInput(proc.Ctx, "invalid foreign-key child tuple slot")
 			}
 			v := tuple[col.ColPos]
-			literal := rule.GetConstantValue(v, true, uint64(vectorRowIndex(v, 0)))
-			if literal == nil {
-				return moerr.NewInvalidInput(proc.Ctx, "unsupported foreign-key child value")
+			value, err := orderedFKValueExpr(proc, v, 0)
+			if err != nil {
+				return err
 			}
-			*e = plan.Expr{Typ: v.GetType().PlanType(), Expr: &plan.Expr_Lit{Lit: literal}}
+			*e = *value
 		}
 		if f := e.GetF(); f != nil {
 			for _, arg := range f.Args {
@@ -424,6 +424,34 @@ func bindOrderedFKTuple(proc *process.Process, expr *plan.Expr, tuple []*vector.
 		return nil, err
 	}
 	return plan2.ConstantFold(batch.EmptyForConstFoldBatch, bound, proc, true, true)
+}
+
+// orderedFKValueExpr binds a runtime key without SQL text conversion. Literal
+// has no carrier for every key type (notably UUID, YEAR and Decimal256). Use
+// the existing typed Vector codec for those values, with physical constness so
+// expression evaluation broadcasts the scalar instead of treating it as a list.
+// The encoded payload owns its bytes; lookup/tuple batches may be reused next.
+func orderedFKValueExpr(proc *process.Process, value *vector.Vector, row int) (*plan.Expr, error) {
+	row = vectorRowIndex(value, row)
+	expr := &plan.Expr{Typ: value.GetType().PlanType()}
+	if lit := rule.GetConstantValue(value, true, uint64(row)); lit != nil {
+		expr.Expr = &plan.Expr_Lit{Lit: lit}
+		return expr, nil
+	}
+	scalar := vector.NewVec(*value.GetType())
+	defer scalar.Free(proc.Mp())
+	if err := scalar.UnionOne(value, int64(row), proc.Mp()); err != nil {
+		return nil, err
+	}
+	scalar.ToConst()
+	data, err := scalar.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	expr.Expr = &plan.Expr_Vec{Vec: &plan.LiteralVec{
+		Len: 1, Data: data, StringSource: uint32(value.GetStringSourceAt(row)),
+	}}
+	return expr, nil
 }
 
 func prepareOrderedFKFilter(proc *process.Process, expr *plan.Expr) (*plan.Expr, []colexec.ExpressionExecutor, error) {
@@ -516,15 +544,15 @@ func (preInsertUnique *PreInsertUnique) pointOrderedFKParent(proc *process.Proce
 			if matches.IsNull(uint64(i)) || !vector.GetFixedAtNoTypeCheck[bool](matches, i) {
 				continue
 			}
-			key := rule.GetConstantValue(keys, true, uint64(vectorRowIndex(keys, row)))
-			if key == nil {
-				return false, moerr.NewInvalidInput(proc.Ctx, "invalid foreign-key base-row locator")
+			key, err := orderedFKValueExpr(proc, keys, row)
+			if err != nil {
+				return false, err
 			}
 			pkPos := check.TableDef.Name2ColIndex[check.TableDef.Pkey.PkeyColName]
 			pkType := check.TableDef.Cols[pkPos].Typ
 			expr, err := plan2.BindFuncExprImplByPlanExpr(proc.Ctx, "=", []*plan.Expr{
 				{Typ: pkType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pkPos, Name: check.TableDef.Pkey.PkeyColName}}},
-				{Typ: keys.GetType().PlanType(), Expr: &plan.Expr_Lit{Lit: key}},
+				key,
 			})
 			if err != nil {
 				return false, err

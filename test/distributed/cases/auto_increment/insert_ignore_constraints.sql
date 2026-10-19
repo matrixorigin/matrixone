@@ -158,4 +158,61 @@ set foreign_key_checks=1;
 insert ignore into self_load values (5,5),(6,5);
 select id,p from self_load order by id;
 
+-- Native point keys without a scalar protobuf Literal carrier. Both self-FK
+-- tuple binding and UNIQUE-index base-PK locators must preserve the exact type.
+set @typed_parent=cast('00000000-0000-0000-0000-000000000001' as uuid);
+set @typed_plain=cast('00000000-0000-0000-0000-000000000002' as uuid);
+set @typed_accepted=cast('00000000-0000-0000-0000-000000000003' as uuid);
+set @typed_missing=cast('00000000-0000-0000-0000-000000000099' as uuid);
+create table typed_self_uuid(id uuid primary key,p uuid,foreign key(p) references typed_self_uuid(id));
+insert into typed_self_uuid values(@typed_parent,NULL);
+insert into typed_self_uuid values(@typed_plain,@typed_parent);
+delete from typed_self_uuid where id=@typed_plain;
+insert ignore into typed_self_uuid values(@typed_accepted,@typed_parent),(@typed_missing,@typed_plain);
+select id,p from typed_self_uuid order by id;
+create table typed_parent_uuid(id uuid primary key,k int unique);
+insert into typed_parent_uuid values(@typed_parent,1),(@typed_plain,2);
+create table typed_child_uuid(id int auto_increment primary key,u int unique,foreign key(id) references typed_parent_uuid(k));
+insert into typed_child_uuid values(1,99);
+truncate table typed_child_uuid;
+insert ignore into typed_child_uuid(u) values(10),(10),(20),(30);
+select id,u from typed_child_uuid order by id;
+
+set @typed_parent=2020;
+set @typed_plain=2021;
+set @typed_accepted=2022;
+set @typed_missing=2099;
+create table typed_self_year(id year primary key,p year,foreign key(p) references typed_self_year(id));
+insert into typed_self_year values(@typed_parent,NULL);
+insert into typed_self_year values(@typed_plain,@typed_parent);
+delete from typed_self_year where id=@typed_plain;
+insert ignore into typed_self_year values(@typed_accepted,@typed_parent),(@typed_missing,@typed_plain);
+select id,p from typed_self_year order by id;
+create table typed_parent_year(id year primary key,k int unique);
+insert into typed_parent_year values(@typed_parent,1),(@typed_plain,2);
+create table typed_child_year(id int auto_increment primary key,u int unique,foreign key(id) references typed_parent_year(k));
+insert into typed_child_year values(1,99);
+truncate table typed_child_year;
+insert ignore into typed_child_year(u) values(10),(10),(20),(30);
+select id,u from typed_child_year order by id;
+
+-- Values differ below Decimal128 precision; no float/string round-trip is valid.
+set @typed_parent=cast('10000000000000000000000000000000000000000000000000000000000000001' as decimal(65,0));
+set @typed_plain=cast('10000000000000000000000000000000000000000000000000000000000000002' as decimal(65,0));
+set @typed_accepted=cast('10000000000000000000000000000000000000000000000000000000000000003' as decimal(65,0));
+set @typed_missing=cast('10000000000000000000000000000000000000000000000000000000000000099' as decimal(65,0));
+create table typed_self_decimal256(id decimal(65,0) primary key,p decimal(65,0),foreign key(p) references typed_self_decimal256(id));
+insert into typed_self_decimal256 values(@typed_parent,NULL);
+insert into typed_self_decimal256 values(@typed_plain,@typed_parent);
+delete from typed_self_decimal256 where id=@typed_plain;
+insert ignore into typed_self_decimal256 values(@typed_accepted,@typed_parent),(@typed_missing,@typed_plain);
+select id,p from typed_self_decimal256 order by id;
+create table typed_parent_decimal256(id decimal(65,0) primary key,k int unique);
+insert into typed_parent_decimal256 values(@typed_parent,1),(@typed_plain,2);
+create table typed_child_decimal256(id int auto_increment primary key,u int unique,foreign key(id) references typed_parent_decimal256(k));
+insert into typed_child_decimal256 values(1,99);
+truncate table typed_child_decimal256;
+insert ignore into typed_child_decimal256(u) values(10),(10),(20),(30);
+select id,u from typed_child_decimal256 order by id;
+
 drop database auto_increment_ignore_constraints;
