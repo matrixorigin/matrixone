@@ -983,9 +983,9 @@ type FuncExpr struct {
 func (node *FuncExpr) Format(ctx *FmtCtx) {
 	if ctx.viewDefinition {
 		if value, ok := viewNameConstValue(node); ok {
-			// NAME_CONST returns its literal value. Its syntax forbids the
-			// hex-to-varchar cast needed for mode-independent string export.
-			// Emit that value directly; SelectExpr retains its named heading.
+			// NAME_CONST returns its literal value. Keep the view export
+			// independent of its literal-only argument syntax; SelectExpr
+			// retains the named heading when emitting that value directly.
 			ctx.WriteByte('(')
 			value.Format(ctx)
 			ctx.WriteByte(')')

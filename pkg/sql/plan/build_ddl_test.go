@@ -7428,14 +7428,15 @@ func TestValidateIdentifierEncoding(t *testing.T) {
 }
 
 func TestBuildCreateViewMetadataReplay(t *testing.T) {
-	for _, selectSQL := range []string{
+	selects := make([]string, 0, 27)
+	selects = append(selects,
 		`select 'ab' as c`,
 		`select 'a\\b' as c`,
 		`select 'é\\界' as c`,
 		`select src.ab from (select _binary 'ab') src`,
 		`select src.ab from (select _binary 'ab' as ab) src`,
-		`select src.` + "`n_nationkey + 1`" + ` from (select n_nationkey + 1 from nation) src`,
-		`select src.` + "`a\\b`" + ` from (select name_const('a\\b', 1)) src`,
+		`select src.`+"`n_nationkey + 1`"+` from (select n_nationkey + 1 from nation) src`,
+		`select src.`+"`a\\b`"+` from (select name_const('a\\b', 1)) src`,
 		`select src.ab from (select _binary 'ab') src (ab)`,
 		`with src as (select _binary 'ab') select ab from src`,
 		`with src(ab) as (select _binary 'ab') select ab from src`,
@@ -7453,8 +7454,16 @@ func TestBuildCreateViewMetadataReplay(t *testing.T) {
 		`select name_const('c', 'a\\b' collate utf8mb4_bin)`,
 		`select c from (select name_const('c', 'a\\b')) src`,
 		`select name_const('c', 'a\\b$''é') as c`,
-	} {
-		t.Run(selectSQL, func(t *testing.T) {
+	)
+	for _, width := range []int{65534, 65535, 65536} {
+		selects = append(selects, "select '"+strings.Repeat("a", width-1)+`\\' as c`)
+	}
+	for index, selectSQL := range selects {
+		name := selectSQL
+		if len(name) > 200 {
+			name = fmt.Sprintf("long_literal_%d", index)
+		}
+		t.Run(name, func(t *testing.T) {
 			build := func(sqlText, mode string) *TableDef {
 				stmt, err := parsers.ParseOneWithSQLMode(t.Context(), dialect.MYSQL, sqlText, 1, mode)
 				require.NoError(t, err)

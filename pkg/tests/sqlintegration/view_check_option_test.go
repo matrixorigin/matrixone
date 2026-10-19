@@ -19,6 +19,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -83,7 +84,8 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 				}
 				// A metadata round trip retains NAME_CONST's public column name,
 				// bytes, column type, character set and collation for new and Stmt-only rows.
-				for index, tc := range []struct{ selectSQL, want string }{
+				replayCases := make([]struct{ selectSQL, want string }, 0, 25)
+				replayCases = append(replayCases, []struct{ selectSQL, want string }{
 					{`select 'ab' as c`, "ab"},
 					{`select 'a\\b' as c`, "a\\b"},
 					{`select 'é\\界' as c`, "é\\界"},
@@ -104,13 +106,26 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					{`select name_const('c', 'a\\b' collate utf8mb4_bin)`, "a\\b"},
 					{`select c from (select name_const('c', 'a\\b')) src`, "a\\b"},
 					{`select name_const('c', 'a\\b$''é') as c`, "a\\b$'é"},
-				} {
+				}...)
+				// The accepted literal domain crosses the declared VARCHAR limit.
+				// Include both sides of that boundary and a multi-byte value whose
+				// byte count crosses it while its character count does not.
+				for _, width := range []int{65534, 65535, 65536} {
+					value := strings.Repeat("a", width-1) + `\`
+					replayCases = append(replayCases, struct{ selectSQL, want string }{
+						"select '" + strings.ReplaceAll(value, `\`, `\\`) + "' as c", value})
+				}
+				for _, value := range []string{strings.Repeat("界", 32768) + `\`, strings.Repeat("界", 65535) + `\`} {
+					replayCases = append(replayCases, struct{ selectSQL, want string }{
+						"select name_const('c', '" + strings.ReplaceAll(value, `\`, `\\`) + "') as c", value})
+				}
+				for index, tc := range replayCases {
 					source := fmt.Sprintf("%s.name_const_source_%d", schema, index)
 					execSQLRequire(t, ctx, db, "create view "+source+" as "+tc.selectSQL)
 					read := func(view string) [4]string {
 						var values [4]string
 						require.NoError(t, db.QueryRowContext(ctx,
-							"select hex(cast(c as char)), charset(c), collation(c) from "+view).Scan(&values[0], &values[1], &values[2]))
+							"select c, charset(c), collation(c) from "+view).Scan(&values[0], &values[1], &values[2]))
 						require.NoError(t, db.QueryRowContext(ctx,
 							"select column_type from information_schema.columns where table_schema=? and concat(table_schema, '.', table_name)=? and column_name='c'",
 							schema, view).Scan(&values[3]))
@@ -125,7 +140,7 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 						return values
 					}
 					want := read(source)
-					require.Equal(t, fmt.Sprintf("%X", []byte(tc.want)), want[0])
+					require.Equal(t, tc.want, want[0])
 					var currentDefinition string
 					require.NoError(t, db.QueryRowContext(ctx,
 						"select mo_view_definition(viewdef) from mo_catalog.mo_tables where account_id=0 and reldatabase=? and relname=?",
@@ -133,7 +148,10 @@ func TestViewCheckOptionCanonicalization(t *testing.T) {
 					persisted, err := json.Marshal(map[string]string{"Stmt": "create view old as " + tc.selectSQL})
 					require.NoError(t, err)
 					var legacyDefinition string
-					require.NoError(t, db.QueryRowContext(ctx, "select mo_view_definition(?)", string(persisted)).Scan(&legacyDefinition))
+					// A SQL literal keeps this input's actual width; an untyped
+					// prepared parameter can acquire a default VARCHAR bound.
+					legacyInput := strings.ReplaceAll(strings.ReplaceAll(string(persisted), `\`, `\\`), "'", "''")
+					require.NoError(t, db.QueryRowContext(ctx, "select mo_view_definition('"+legacyInput+"')").Scan(&legacyDefinition))
 					for generation, definition := range []string{currentDefinition, legacyDefinition} {
 						replayed := fmt.Sprintf("%s.name_const_replayed_%d_%d", schema, index, generation)
 						execSQLRequire(t, ctx, db, "create view "+replayed+" as "+definition)

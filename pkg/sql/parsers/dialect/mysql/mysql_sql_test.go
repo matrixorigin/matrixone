@@ -6186,6 +6186,20 @@ func TestCharsetIntroducerLiteralValue(t *testing.T) {
 	require.True(t, clause.Exprs[0].As.Empty())
 }
 
+func TestCharsetIntroducerHexLiteralValue(t *testing.T) {
+	for _, mode := range []string{"", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+		stmt, err := ParseOneWithSQLMode(context.Background(), "SELECT _utf8mb4 X'c3a95ce7958c'", 1, mode)
+		require.NoError(t, err)
+		func() {
+			defer stmt.Free()
+			literal := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.NumVal)
+			require.Equal(t, tree.P_char, literal.ValType)
+			require.Equal(t, `é\界`, literal.String())
+		}()
+	}
+
+}
+
 func TestUnquotedSupplementaryIdentifiersRejected(t *testing.T) {
 	for _, sql := range []string{
 		"CREATE TABLE 😀 (a INT)",
