@@ -472,3 +472,32 @@ source 4.0.17) also retain their allocation. This is a protocol admission and
 integration repair, with no new Python runtime, production or security scope.
 Independent Architecture and SQL/Planner approval of r23 remains pending; this
 allocation repair and its validation do not provide it.
+
+
+## r24 temporal/Python integration addendum (2026-10-19)
+
+Official main `d82e828b0a4df9ce635fe573c1e90c5cde978bf9` owns MORPC 122
+for unary TIMESTAMP and dynamic TIME result contracts. The governing
+`python-udf-current-stage-r24-2026-10-19` proposal preserves that capability and
+allocates the single Python capability 123 (`latest + 1`). Catalog repair,
+revision publication and reads, Prepare, prepared reuse, evaluator, remote
+sender/receiver and status admission reject predecessor 122 and mixed 123/122
+CNs before Python mutation or execution. Rolling back the active floor from
+123 to 122 disables Python while preserving temporal 122 and DECIMAL DIV 121.
+
+Shared expression feature detection retains Python, temporal and DIV contracts.
+Their combined pipeline requires 123; temporal-only requires 122 and DIV-only
+requires 121. The existing execution-stream handshake carries the maximum
+required by the encoded Python/temporal scope and vector partition contract;
+a replacement receiver at 122 cannot admit a Python scope after a 123 probe.
+No second handshake or protocol round trip is introduced. Coordinator-owned
+dependent-program execution remains mandatory regardless of capability.
+
+The merged plan schema preserves routine identities and query dependencies as
+well as the upstream execution-only CTAS population scalar at CreateTable field
+19. Temporal prepared binding, released overload identities, pre-fold CTAS/view
+observation, borrowed-plan admission and schema-only clone cleanup retain their
+upstream owners and protocol 122 gates. Query status wire fields and catalog
+4.0.18 allocations are unchanged. This repair adds no Python runtime, production
+or security scope. Independent Architecture and SQL/Planner approval of r24
+remains pending; rebase and validation do not supply that approval.
