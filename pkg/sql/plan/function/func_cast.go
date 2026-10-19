@@ -9277,6 +9277,15 @@ func strToDatetime(proc *process.Process,
 					}
 					continue
 				}
+				// Expression conversions tolerate malformed strings; assignment
+				// and dedicated comparison/set-operation modes retain their errors.
+				if (mode == castModeNormal || mode == castModeExplicit) &&
+					from.GetType().Oid.IsMySQLString() && isTemporalLexicalConversionError(err) {
+					if err = to.Append(dft, true); err != nil {
+						return err
+					}
+					continue
+				}
 				return err
 			}
 			if truncateFractional {

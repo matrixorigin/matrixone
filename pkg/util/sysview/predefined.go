@@ -319,6 +319,32 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	return "", false
 }
 
+// ViewMetadataColumnsDDL adapts only known system templates for an explicitly
+// owned derived-metadata statement. Pass subscriber-visible names, not a bare
+// publisher ID, to the common request so authorization and root resolution use
+// the caller's namespace. The persisted templates and projections do not change.
+func ViewMetadataColumnsDDL(definition string) (string, bool) {
+	definition = canonicalColumnsViewName(definition)
+	known := definition == InformationSchemaColumnsDDL ||
+		definition == InformationSchemaColumnsV100DDL() || definition == InformationSchemaColumnsV109DDL()
+	if !known {
+		for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
+			derived := informationSchemaDerivedColumnsDDL(legacy)
+			if definition == legacy || definition == derived {
+				definition, known = derived, true
+				break
+			}
+		}
+	}
+	if !known {
+		return "", false
+	}
+	return strings.NewReplacer(
+		"mo_view_columns(mt.rel_id)", "mo_view_columns(mt.reldatabase, mt.relname, mt.rel_id)",
+		"mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)", "mo_subscription_view_columns(mt.reldatabase, mt.relname, mt.rel_id)",
+	).Replace(definition), true
+}
+
 func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 	return canonicalColumnsViewName(definition) == InformationSchemaColumnsDDL
 }
