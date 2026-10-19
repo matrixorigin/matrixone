@@ -103,7 +103,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	requiredVersion := int64(0)
 	if features.ExactJSONParsing || features.ExactJSONDecimalCast {
-		requiredVersion = defines.MORPCVersion119
+		requiredVersion = defines.MORPCVersion120
 	}
 	if features.IPFunctionSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion72)
@@ -146,6 +146,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.DateNumericResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
+	}
+	if features.DependentPrograms {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion119)
 	}
 	if features.LeastGreatestCollationSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion117)

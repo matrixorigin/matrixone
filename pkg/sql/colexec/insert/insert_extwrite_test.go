@@ -16,6 +16,7 @@ package insert
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/resource"
+	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -219,4 +221,82 @@ func TestExternalWriterOwnsAsyncCountersAndWait(t *testing.T) {
 	require.Positive(t, delta.Usage.WaitNS[resource.WaitFilesystem])
 	require.Nil(t, ins.ctr.extWriter)
 	require.Nil(t, ins.ctr.extCounter)
+}
+
+type externalYieldInput struct {
+	*colexec.MockOperator
+	results []vm.CallResult
+	next    int
+}
+
+func (input *externalYieldInput) Call(*process.Process) (vm.CallResult, error) {
+	result := input.results[input.next]
+	input.next++
+	return result, nil
+}
+
+func TestExternalInsertPreservesWriterAcrossYield(t *testing.T) {
+	for _, outcome := range []string{"eof", "cancel", "write_failure"} {
+		t.Run(outcome, func(t *testing.T) {
+			proc := testutil.NewProc(t)
+			bat := batch.NewWithSize(0)
+			bat.SetRowCount(1)
+			writer := &mockExtWriter{}
+			ins := NewArgument()
+			defer ins.Release()
+			ins.ToExternal = true
+			ins.InsertCtx = &InsertCtx{AddAffectedRows: true}
+			ins.OpAnalyzer = process.NewAnalyzer(0, false, false, "external-insert")
+			ins.ctr.extWriter = writer
+			ins.ctr.extCounter = new(perfcounter.CounterSet)
+			ins.AppendChild(&externalYieldInput{MockOperator: colexec.NewMockOperator(), results: []vm.CallResult{
+				{Status: vm.ExecYield}, {Batch: bat}, {Status: vm.ExecYield}, {Status: vm.ExecStop},
+			}})
+			call := func() (vm.CallResult, error) {
+				ins.OpAnalyzer.Start()
+				defer ins.OpAnalyzer.Stop()
+				return ins.Call(proc)
+			}
+			result, err := call()
+			require.NoError(t, err)
+			require.Equal(t, vm.ExecYield, result.Status)
+			require.Same(t, writer, ins.ctr.extWriter)
+			require.Zero(t, writer.closes)
+			require.Zero(t, writer.aborts)
+			if outcome == "cancel" {
+				ins.Reset(proc, true, context.Canceled)
+			} else {
+				if outcome == "write_failure" {
+					writer.failure = errors.New("write failed")
+				}
+				_, err = call()
+				if outcome == "write_failure" {
+					require.ErrorIs(t, err, writer.failure)
+					ins.Reset(proc, true, err)
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, uint64(1), writer.rows)
+					require.Equal(t, uint64(1), ins.ctr.affectedRows)
+					result, err = call()
+					require.NoError(t, err)
+					require.Equal(t, vm.ExecYield, result.Status)
+					require.Same(t, writer, ins.ctr.extWriter)
+					require.Zero(t, writer.closes)
+					_, err = call()
+					require.NoError(t, err)
+					require.Equal(t, 1, writer.closes)
+					ins.Reset(proc, false, nil)
+				}
+			}
+			ins.Free(proc, outcome != "eof", nil)
+			require.Nil(t, ins.ctr.extWriter)
+			require.Nil(t, ins.ctr.extCounter)
+			if outcome == "eof" {
+				require.Zero(t, writer.aborts)
+			} else {
+				require.Equal(t, 1, writer.aborts)
+				require.Zero(t, writer.closes)
+			}
+		})
+	}
 }

@@ -57,7 +57,7 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	if required == 0 {
 		return nil
 	}
-	supported, err := remoteWorkersSupportProtocol(c.proc, c.cnList, required)
+	supported, err := remoteWorkersSupportProtocolForPlacement(c.proc, c.cnList, required)
 	if err != nil || supported {
 		return err
 	}
@@ -80,7 +80,7 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 // deployments avoid both expression traversal and external metadata parsing.
 func validateExactJSONProtocol(proc *process.Process, owner *plan.Plan) error {
 	if proc != nil {
-		if version, known := remoteMORPCProtocolVersion(proc.GetService()); known && version >= defines.MORPCVersion119 {
+		if version, known := remoteMORPCProtocolVersion(proc.GetService()); known && version >= defines.MORPCVersion120 {
 			return nil
 		}
 	}
@@ -89,7 +89,7 @@ func validateExactJSONProtocol(proc *process.Process, owner *plan.Plan) error {
 		return err
 	}
 	if features.ExactJSONParsing || features.ExactJSONDecimalCast {
-		return moerr.NewNotSupportedNoCtx("exact JSON execution requires MORPC protocol version 119")
+		return moerr.NewNotSupportedNoCtx("exact JSON execution requires MORPC protocol version 120")
 	}
 	if owner != nil {
 		required, err := parquetQueryRequiresVariantReader(owner.GetQuery())
@@ -97,7 +97,7 @@ func validateExactJSONProtocol(proc *process.Process, owner *plan.Plan) error {
 			return err
 		}
 		if required {
-			return moerr.NewNotSupportedNoCtx("Parquet VARIANT reads require MORPC protocol version 119")
+			return moerr.NewNotSupportedNoCtx("Parquet VARIANT reads require MORPC protocol version 120")
 		}
 	}
 	return nil
@@ -106,7 +106,7 @@ func validateExactJSONProtocol(proc *process.Process, owner *plan.Plan) error {
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
 	if features.ExactJSONParsing || features.ExactJSONDecimalCast || features.ParquetVariantRead {
-		required = max(required, defines.MORPCVersion119)
+		required = max(required, defines.MORPCVersion120)
 	}
 	if features.IntegerArithmeticDomains {
 		required = max(required, defines.MORPCVersion71)
@@ -188,6 +188,8 @@ var errRemoteCapabilityProbeTimeout = moerr.NewInternalError(
 
 // Probe the selected workers as well as the coordinator's rollout gate.
 // Capabilities are not cached across executions or sender checks.
+// A false result without an error means support could not be verified;
+// observation failures retain their cause for required gates and send checks.
 func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, minimum int64) (bool, error) {
 	if proc == nil {
 		return false, nil
@@ -206,12 +208,12 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 	ctx, cancel := context.WithTimeoutCause(parent, 5*time.Second, errRemoteCapabilityProbeTimeout)
 	defer cancel()
 	for _, worker := range workers {
-		version, known, err := remoteWorkerProtocolVersion(ctx, proc, worker)
-		if cause := parent.Err(); cause != nil {
-			return false, cause
+		version, known, probeErr := remoteWorkerProtocolVersion(ctx, proc, worker)
+		if err := parent.Err(); err != nil {
+			return false, err
 		}
-		if err != nil {
-			return false, parent.Err()
+		if probeErr != nil {
+			return false, probeErr
 		}
 		if !known || version < minimum {
 			return false, nil
@@ -219,6 +221,19 @@ func remoteWorkersSupportProtocol(proc *process.Process, workers engine.Nodes, m
 	}
 	version, known = remoteMORPCProtocolVersion(proc.GetService())
 	return known && version >= minimum, nil
+}
+
+// Optional placement may safely fall back locally when remote support cannot
+// be verified. Only statement cancellation is fatal here, even when a probe's
+// own error is context.Canceled or context.DeadlineExceeded.
+func remoteWorkersSupportProtocolForPlacement(proc *process.Process, workers engine.Nodes, minimum int64) (bool, error) {
+	supported, err := remoteWorkersSupportProtocol(proc, workers, minimum)
+	if proc != nil && proc.Ctx != nil {
+		if parentErr := proc.Ctx.Err(); parentErr != nil {
+			return false, parentErr
+		}
+	}
+	return supported && err == nil, nil
 }
 
 // remoteWorkerProtocolVersion resolves the actual pipeline endpoint and owns

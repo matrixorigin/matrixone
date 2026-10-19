@@ -80,18 +80,6 @@ func TestBuildPlanKeepsUnsupportedGroupSubqueriesFailClosed(t *testing.T) {
 		wantErr string
 	}{
 		{
-			name: "correlated scalar",
-			sql: "select count(*) from tpch.nation n group by " +
-				"(select max(r.r_regionkey) from tpch.region r where r.r_regionkey = n.n_regionkey)",
-			wantErr: "correlated subquery in GROUP BY clause",
-		},
-		{
-			name: "correlated group expression",
-			sql: "select n.n_nationkey, " +
-				"(select count(*) from tpch.region r group by n.n_nationkey) from tpch.nation n",
-			wantErr: "correlated columns in GROUP BY clause",
-		},
-		{
 			name: "multiple columns",
 			sql: "select count(*) from tpch.nation group by " +
 				"(select r_regionkey, r_name from tpch.region limit 1)",
@@ -177,4 +165,19 @@ func assertScalarGroupKeysFlattened(t *testing.T, query *planpb.Query, wantJoin 
 	}
 	require.True(t, foundAggregate)
 	require.Equal(t, wantJoin, foundJoinBelowAggregate)
+}
+
+func TestBuildPlanBindsCorrelatedGroupKeys(t *testing.T) {
+	for _, sql := range []string{
+		"select count(*) from tpch.nation n group by (select max(r.r_regionkey) from tpch.region r where r.r_regionkey = n.n_regionkey)",
+		"select n.n_nationkey, (select count(*) from tpch.region r group by n.n_nationkey) from tpch.nation n",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err)
+			if p.GetQuery().Correlation != nil {
+				require.NoError(t, p.GetQuery().ValidateCorrelation())
+			}
+		})
+	}
 }

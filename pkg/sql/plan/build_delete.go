@@ -52,11 +52,14 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		return nil, err
 	}
 	sourceStep := builder.appendStep(lastNodeId)
+	sourceOutputStep := sourceStep
 	query, err := builder.createQuery()
 	if err != nil {
 		return nil, err
 	}
-	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
+	if query.Correlation == nil {
+		builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
+	}
 
 	// append sink node
 	lastNodeId = appendSinkNode(builder, queryBindCtx, lastNodeId)
@@ -110,9 +113,16 @@ func buildDelete(stmt *tree.Delete, ctx CompilerContext, isPrepareStmt bool) (*P
 		putDmlPlanCtx(delPlanCtx)
 	}
 
+	builder.replaceLegacyDMLSourceStep(sourceOutputStep)
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
 	applyLockTableFallback(builder)
+	if err = builder.refreshCorrelationBindings(); err != nil {
+		return nil, err
+	}
+	if err = query.ValidateCorrelation(); err != nil {
+		return nil, err
+	}
 	query.StmtType = plan.Query_DELETE
 	return &Plan{
 		Plan: &plan.Plan_Query{

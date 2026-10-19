@@ -195,9 +195,9 @@ ORDER BY ordinal_position`, strings.ToLower(dbName))
 		// The persisted catalog uses the existing int32/uint32 OIDs plus width
 		// 24. Check that identity and its existing rows survive a full restart.
 		require.NoError(t, db.Close())
-		require.NoError(t, cluster.Close())
+		require.NoError(t, cluster.Stop())
 		require.NoError(t, cluster.Start())
-		// The original SQL deadline includes cluster.Close/Start. Restart can
+		// The original SQL deadline includes cluster.Stop/Start. Restart can
 		// take longer than that deadline under coverage instrumentation, so use
 		// a fresh bounded context for reconnect and persisted-catalog checks.
 		cancel()

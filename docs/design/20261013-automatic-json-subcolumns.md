@@ -2,7 +2,7 @@
 
 Status: implemented with conservative object-key projection; tested locally. Feature request: [#30087](https://github.com/matrixorigin/matrixone/issues/30087); implementation: [PR #30071](https://github.com/matrixorigin/matrixone/pull/30071). This extends [exact JSON and Parquet VARIANT](20261013-exact-json-parquet-variant.md). Native scalar zone maps, path predicates in storage, online historical backfill and complex/distributed query proofs are future work.
 
-The combined R1 design was [approved at b4fcf49c](https://github.com/matrixorigin/matrixone/pull/30142#pullrequestreview-5512860139). Default-on write-cost budgets, rollback limits and release validation remain conditional gates. The additive projection hint permits older readers to fall back to full source; actual exact parsing/JSON-to-DECIMAL expressions independently require MORPC v119 under the [execution admission contract](20261013-exact-json-parquet-variant.md#remote-execution-and-durable-admission).
+The combined R1 design was [approved at b4fcf49c](https://github.com/matrixorigin/matrixone/pull/30142#pullrequestreview-5512860139). Default-on write-cost budgets, rollback limits and release validation remain conditional gates. The additive projection hint permits older readers to fall back to full source; actual exact parsing/JSON-to-DECIMAL expressions independently require MORPC v120 under the [execution admission contract](20261013-exact-json-parquet-variant.md#remote-execution-and-durable-admission).
 
 ## Requirements
 

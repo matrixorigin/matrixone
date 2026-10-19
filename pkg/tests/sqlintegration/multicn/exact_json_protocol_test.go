@@ -113,7 +113,7 @@ func TestExactJSONProtocolSQLFallbackAndUpgrade(t *testing.T) {
 	})
 	const parserQuery = `select cast(id as varchar) from t where json_extract_string(json_parse_exact(s),'$.x')='v' order by id`
 	const castQuery = `select cast(cast(json_extract(j,'$.cost') as decimal(38,3)) as varchar) from t where id <= 2 order by id`
-	for _, version := range []int64{defines.MORPCVersion118, defines.MORPCVersion119} {
+	for _, version := range []int64{defines.MORPCVersion119, defines.MORPCVersion120} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		require.Equal(t, []string{"1", "2"}, query(parserQuery))
 		require.Equal(t, []string{"9007199254740993.001", "0.125"}, query(castQuery))
@@ -121,7 +121,7 @@ func TestExactJSONProtocolSQLFallbackAndUpgrade(t *testing.T) {
 		for _, statement := range []string{parserQuery, castQuery} {
 			physical := strings.Join(query("explain phyplan analyze "+statement), "\n")
 			require.Contains(t, physical, "DataSource: "+schema+".t[")
-			if version == defines.MORPCVersion118 {
+			if version == defines.MORPCVersion119 {
 				require.NotContains(t, physical, "addr:"+workerAddress,
 					"unsupported worker must be absent from execution:\n%s", physical)
 			} else {

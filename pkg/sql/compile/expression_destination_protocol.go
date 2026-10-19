@@ -39,13 +39,13 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
-		{features.ExactJSONParsing, defines.MORPCVersion119,
+		{features.ExactJSONParsing, defines.MORPCVersion120,
 			"exact JSON parsing requires a versioned remote destination",
 			"remote destination does not support exact JSON parsing (MORPC version %d)"},
-		{features.ExactJSONDecimalCast, defines.MORPCVersion119,
+		{features.ExactJSONDecimalCast, defines.MORPCVersion120,
 			"exact JSON decimal casts require a versioned remote destination",
 			"remote destination does not support exact JSON decimal casts (MORPC version %d)"},
-		{features.ParquetVariantRead, defines.MORPCVersion119,
+		{features.ParquetVariantRead, defines.MORPCVersion120,
 			"Parquet VARIANT reads require a versioned remote destination",
 			"remote destination does not support Parquet VARIANT reads (MORPC version %d)"},
 		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
@@ -133,12 +133,15 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		}
 		if !probed {
 			ctx, cancel := context.WithTimeoutCause(parent, 5*time.Second, errRemoteCapabilityProbeTimeout)
-			version, versionKnown, err := remoteWorkerProtocolVersion(ctx, proc, engine.Node{Id: p.Node.Id, Addr: p.Node.Addr})
+			version, versionKnown, probeErr := remoteWorkerProtocolVersion(ctx, proc, engine.Node{Id: p.Node.Id, Addr: p.Node.Addr})
 			cancel()
-			if cause := parent.Err(); cause != nil {
-				return cause
+			if err := parent.Err(); err != nil {
+				return err
 			}
-			observed, known, probed = version, versionKnown && err == nil, true
+			if probeErr != nil {
+				return probeErr
+			}
+			observed, known, probed = version, versionKnown, true
 		}
 		if !known || observed < gate.version {
 			return moerr.NewNotSupportedNoCtxf(gate.unsupported, gate.version)

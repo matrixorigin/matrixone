@@ -16,10 +16,12 @@ package mongoscan
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -33,19 +35,22 @@ const mongoCleanupTimeout = 10 * time.Second
 var _ vm.Operator = new(MongoScan)
 
 type container struct {
-	cursor       mongodb.Cursor
-	lease        *mongodb.ClientLease
-	converter    *mongodb.Converter
-	userQuery    *mongodb.UserQuery
-	buf          *batch.Batch
-	done         bool
-	rows         int64
-	rawBytes     int64
-	generation   uint64
-	pendingRaw   []byte
-	releaseLimit func()
-	queryCtx     context.Context
-	cancelQuery  context.CancelFunc
+	cursor        mongodb.Cursor
+	lease         *mongodb.ClientLease
+	converter     *mongodb.Converter
+	userQuery     *mongodb.UserQuery
+	buf           *batch.Batch
+	done          bool
+	rows          int64
+	rawBytes      int64
+	generation    uint64
+	pendingRaw    []byte
+	pendingBudget *process.ExecutionResourceGeneration
+	pendingCharge uint64
+	releaseLimit  func()
+	queryCtx      context.Context
+	cancelQuery   context.CancelFunc
+	closeErr      error
 }
 
 // MongoScan performs source I/O and BSON-to-vector conversion. Ordinary SQL
@@ -53,7 +58,8 @@ type container struct {
 // an explicit, validated __mo_query may opt into MongoDB filter or aggregation
 // semantics before conversion.
 type MongoScan struct {
-	Scan *plan.MongoScan
+	Scan             *plan.MongoScan
+	OutputAllocation *vector.AllocationAccountSelection
 
 	// Dependencies is set only by unit tests and embedded deployments. Normal
 	// CN execution obtains the same object from the service runtime.
@@ -90,6 +96,7 @@ func (scan *MongoScan) Release() {
 
 func (scan *MongoScan) Reset(proc *process.Process, _ bool, _ error) {
 	scan.closeResources(proc.Ctx)
+	scan.ctr.closeErr = nil
 	if scan.ctr.buf != nil {
 		scan.ctr.buf.Clean(proc.Mp())
 		scan.ctr.buf = nil
@@ -121,6 +128,7 @@ func (scan *MongoScan) Free(proc *process.Process, _ bool, _ error) {
 }
 
 func (scan *MongoScan) closeResources(_ context.Context) {
+	scan.clearPendingRaw()
 	// Reset/Free and cursor-error cleanup frequently run after the statement
 	// context has been canceled. Give the driver a separate bounded window to
 	// send killCursors and retire a stale client generation; using the canceled
@@ -134,18 +142,54 @@ func (scan *MongoScan) closeResources(_ context.Context) {
 	}
 	scan.ctr.queryCtx = nil
 	if scan.ctr.cursor != nil {
-		_ = scan.ctr.cursor.Close(cleanupCtx)
+		scan.ctr.closeErr = errors.Join(scan.ctr.closeErr, scan.ctr.cursor.Close(cleanupCtx))
 		metric.MongoDBCursorEventCounter.WithLabelValues("close").Inc()
 		scan.ctr.cursor = nil
 	}
 	if scan.ctr.lease != nil {
-		_ = scan.ctr.lease.Release(cleanupCtx)
+		scan.ctr.closeErr = errors.Join(scan.ctr.closeErr, scan.ctr.lease.Release(cleanupCtx))
 		scan.ctr.lease = nil
 	}
 	if scan.ctr.releaseLimit != nil {
 		scan.ctr.releaseLimit()
 		scan.ctr.releaseLimit = nil
 	}
+}
+
+func (scan *MongoScan) clearPendingRaw() {
+	scan.ctr.pendingRaw = nil
+	if scan.ctr.pendingBudget != nil {
+		scan.ctr.pendingBudget.ReleaseAllocationCapacity(scan.ctr.pendingCharge)
+	}
+	scan.ctr.pendingBudget, scan.ctr.pendingCharge = nil, 0
+}
+
+func (scan *MongoScan) retainPendingRaw(proc *process.Process, raw []byte) error {
+	// A previously retained document is already immutable and accounted.
+	if len(scan.ctr.pendingRaw) != 0 {
+		return nil
+	}
+	if scan.OutputAllocation != nil {
+		budget, err := proc.GetExecutionResourceBudget()
+		if err != nil {
+			return err
+		}
+		if err = budget.AcquireAllocationCapacity(uint64(len(raw))); err != nil {
+			return err
+		}
+		scan.ctr.pendingBudget, scan.ctr.pendingCharge = budget, uint64(len(raw))
+	}
+	scan.ctr.pendingRaw = make([]byte, len(raw))
+	copy(scan.ctr.pendingRaw, raw)
+	return nil
+}
+
+// CloseReader lets a dependent source retire I/O before publishing its scalar
+// result. EOF may have already closed the cursor, so retain that terminal error
+// until Reset starts the next generation.
+func (scan *MongoScan) CloseReader() error {
+	scan.closeResources(context.Background())
+	return scan.ctr.closeErr
 }
 
 func (scan *MongoScan) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {

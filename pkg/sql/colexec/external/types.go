@@ -219,6 +219,9 @@ type container struct {
 }
 
 type External struct {
+	// OutputAllocation belongs to the coordinator source owner. Reader-specific
+	// scratch retains its native allocation provenance.
+	OutputAllocation  *vector.AllocationAccountSelection
 	ctr               container
 	Es                *ExternalParam
 	reader            ExternalFileReader // unified file reader
@@ -356,6 +359,19 @@ func (external *External) Release() {
 	if external != nil {
 		reuse.Free(external, nil)
 	}
+}
+
+// CloseReader lets a synchronous owner preserve a terminal reader error before
+// Reset publishes deferred source progress. It is safe after EOF and partial
+// Prepare and does not destroy the output batch borrowed by the caller.
+func (external *External) CloseReader() error {
+	if external.reader == nil {
+		return nil
+	}
+	err := external.reader.Close()
+	external.reader = nil
+	external.fileOpened = false
+	return err
 }
 
 func (external *External) Reset(proc *process.Process, pipelineFailed bool, err error) {
