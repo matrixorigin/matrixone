@@ -68,6 +68,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/stage"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
@@ -939,6 +940,7 @@ var (
 		"mo_user_defined_function":    0,
 		"mo_stored_procedure":         0,
 		"mo_mysql_compatibility_mode": 0,
+		catalog.MODatabaseDefaults:    0,
 		"mo_stages":                   0,
 		catalog.MOAutoIncrTable:       0,
 		"mo_sessions":                 0,
@@ -980,6 +982,7 @@ var (
 		"mo_user_defined_function":      0,
 		"mo_stored_procedure":           0,
 		"mo_mysql_compatibility_mode":   0,
+		catalog.MODatabaseDefaults:      0,
 		catalog.MOAutoIncrTable:         0,
 		"mo_indexes":                    0,
 		"mo_table_partitions":           0,
@@ -1040,6 +1043,7 @@ var (
 		MoCatalogMoRolePrivsDDL,
 		MoCatalogMoUserDefinedFunctionDDL,
 		MoCatalogMoMysqlCompatibilityModeDDL,
+		catalog.MoDatabaseDefaultsDDL,
 		MoCatalogMoSnapshotsDDL,
 		MoCatalogMoPubsDDL,
 		MoCatalogMoSubsDDL,
@@ -4356,6 +4360,10 @@ func doDropAccount(ctx context.Context, bh BackgroundExec, ses *Session, da *dro
 
 		ses.Infof(ctx, "dropAccount %s sql: %s", da.Name, dropMoMysqlCompatibilityModeSql)
 		// drop table mo_mysql_compatibility_mode
+		rtnErr = bh.Exec(deleteCtx, "drop table if exists mo_catalog.mo_database_defaults")
+		if rtnErr != nil {
+			return rtnErr
+		}
 		rtnErr = bh.Exec(deleteCtx, dropMoMysqlCompatibilityModeSql)
 		if rtnErr != nil {
 			return rtnErr
@@ -6531,6 +6539,12 @@ func determinePrivilegeSetOfStatement(stmt tree.Statement) *privilege {
 		typs = append(typs, PrivilegeTypeCreateDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		needMatchedRole = true
 		writeDatabaseTargets = append(writeDatabaseTargets, string(st.Name))
+	case *tree.AlterDatabase:
+		objType = objectTypeDatabase
+		typs = append(typs, PrivilegeTypeAlterObject, PrivilegeTypeDatabaseAll, PrivilegeTypeDatabaseOwnership)
+		writeDatabaseAndTableDirectly = true
+		dbName = string(st.Name)
+		writeDatabaseTargets = append(writeDatabaseTargets, dbName)
 	case *tree.DropDatabase:
 		typs = append(typs, PrivilegeTypeDropDatabase, PrivilegeTypeAccountAll /*, PrivilegeTypeAccountOwnership*/)
 		writeDatabaseAndTableDirectly = true
@@ -8253,16 +8267,19 @@ func determineUserHasPrivilegeSet(ctx context.Context, ses *Session, priv *privi
 		}
 	}
 
-	var backgroundExecOptions []*BackgroundExecOption
+	backgroundExecOption := &BackgroundExecOption{}
 	if roleGrantNeedsCheck && !roleGrantCached {
 		// Active role membership is external authorization state. Revalidate it
 		// in a private RC transaction so a user transaction opened before REVOKE
 		// cannot continue authorizing through its older catalog snapshot.
-		backgroundExecOptions = append(backgroundExecOptions, &BackgroundExecOption{
-			forcePessimisticRC: true,
-		})
+		backgroundExecOption.forcePessimisticRC = true
 	}
-	bh := ses.GetBackgroundExec(ctx, backgroundExecOptions...)
+	backgroundExecOption, err = authorizationReadOption(ctx, ses, backgroundExecOption)
+	if err != nil {
+		return false, stats, err
+	}
+	_, _, _ = fault.TriggerFaultInDomainWithContext(ctx, fault.DomainFrontend, "authorization_before_grant_read")
+	bh := ses.GetBackgroundExec(ctx, backgroundExecOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8544,7 +8561,11 @@ func validateActiveRoleGrantForAuthorization(
 
 	// WITH GRANT OPTION authorization can bypass the general privilege walk,
 	// but must use the same latest-committed membership semantics.
-	bh := ses.GetBackgroundExec(ctx, &BackgroundExecOption{forcePessimisticRC: true})
+	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{forcePessimisticRC: true})
+	if err != nil {
+		return false, stats, err
+	}
+	bh := ses.GetBackgroundExec(ctx, readOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -8739,7 +8760,11 @@ func determineUserCanGrantRolesToOthers(ctx context.Context, ses *Session, fromR
 	}
 
 	// step2: decide the current user
-	bh := ses.GetBackgroundExec(ctx)
+	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{})
+	if err != nil {
+		return false, stats, err
+	}
+	bh := ses.GetBackgroundExec(ctx, readOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()
@@ -10101,7 +10126,11 @@ func determineUserCanGrantPrivilegesToOthers(ctx context.Context, ses *Session, 
 	// step1: normalize the names of roles and users
 	// step2: decide the current user
 	account := ses.GetTenantInfo()
-	bh := ses.GetBackgroundExec(ctx)
+	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{})
+	if err != nil {
+		return false, stats, err
+	}
+	bh := ses.GetBackgroundExec(ctx, readOption)
 	defer func() {
 		stats = bh.GetExecStatsArray()
 		bh.Close()

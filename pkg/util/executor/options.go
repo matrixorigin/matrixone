@@ -96,6 +96,17 @@ func (opts StatementOption) WithIgnoreForeignKey() StatementOption {
 	return opts
 }
 
+// WithTrustedCheckConstraintNames marks a CREATE that intentionally reuses
+// CHECK constraint names inherited from an owned source: the ALTER ... COPY
+// replica, partition backing tables, and TRUNCATE's internal recreate. Those
+// creates keep the source's logical identity, so Scope.createTable skips the
+// schema-wide duplicate-name scan for them. Never set this for user-visible
+// CREATE TABLE statements.
+func (opts StatementOption) WithTrustedCheckConstraintNames() StatementOption {
+	opts.trustedCheckConstraintNames = true
+	return opts
+}
+
 // WithTxn exec sql in a exists txn
 func (opts Options) WithTxn(txnOp client.TxnOperator) Options {
 	opts.txnOp = txnOp
@@ -330,6 +341,12 @@ func (opts StatementOption) OptimizerHints() string {
 
 func (opts StatementOption) IgnoreForeignKey() bool {
 	return opts.ignoreForeignKey
+}
+
+// TrustedCheckConstraintNames reports whether the internal CREATE keeps CHECK
+// names inherited from an owned source, without a 3822 sibling name scan.
+func (opts StatementOption) TrustedCheckConstraintNames() bool {
+	return opts.trustedCheckConstraintNames
 }
 
 func (opts Options) WithDisableWaitPaused() Options {
@@ -638,6 +655,15 @@ func (opts StatementOption) WithKeepRelKind(kind string) StatementOption {
 	opts.keepRelKind = kind
 	opts.hasKeepRelKind = true
 	return opts
+}
+
+func (opts StatementOption) WithSkipIndexTaskRegistration() StatementOption {
+	opts.skipIndexTaskRegistration = true
+	return opts
+}
+
+func (opts StatementOption) SkipIndexTaskRegistration() bool {
+	return opts.skipIndexTaskRegistration
 }
 
 func (opts StatementOption) WithIgnorePublish() StatementOption {

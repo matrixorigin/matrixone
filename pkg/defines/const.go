@@ -153,8 +153,13 @@ const (
 	MORPCVersion115    int64 = 115 // type-sensitive calendar DAY and truncating SECOND intervals
 	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
 	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
-	MORPCVersion118    int64 = 118 // provisional seven-argument JSON_VALUE plan contract
-	MORPCLatestVersion       = MORPCVersion118
+	MORPCVersion118    int64 = 118 // transactional database defaults and table charset alteration
+	MORPCVersion119    int64 = 119 // coordinator-owned parameterized subquery programs
+	MORPCVersion120    int64 = 120 // current-session KILL authorization and proxy disconnect cleanup
+	MORPCVersion121    int64 = 121 // exact unsigned DECIMAL DIV result domain
+	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
+	MORPCVersion123    int64 = 123 // seven-argument JSON_VALUE plan contract
+	MORPCLatestVersion       = MORPCVersion123
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

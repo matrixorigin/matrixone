@@ -609,7 +609,7 @@ func TestRaceInventoryPreservesRunnableRootsAndStress(t *testing.T) {
 	root := t.TempDir()
 	writeScopeFixture(t, root, "go.mod", "module inventoryfixture\n\ngo 1.27.0\n")
 	writeScopeFixture(t, root, "inventory_test.go", `package inventoryfixture
-import ("fmt"; "os"; "testing")
+import ("context"; "fmt"; "os"; "sync/atomic"; "testing"; "time")
 func record(name string) {
  f, err := os.OpenFile(os.Getenv("INVENTORY_RECORD"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
  if err != nil { panic(err) }; defer f.Close()
@@ -618,6 +618,19 @@ func record(name string) {
 func TestOne(t *testing.T) { record("one") }
 func TestTwentyRounds(t *testing.T) {
  for i:=0;i<20;i++ { t.Run(fmt.Sprint(i),func(t *testing.T) { record("round") }) }
+}
+func TestParallelResolvers(t *testing.T) {
+ var started atomic.Int32
+ ready := make(chan struct{})
+ ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+ t.Cleanup(cancel)
+ for worker:=0;worker<4;worker++ {
+  t.Run(fmt.Sprint(worker),func(t *testing.T) {
+   t.Parallel()
+   if started.Add(1)==4 { close(ready) }
+   select { case <-ready: record("parallel"); case <-ctx.Done(): t.Fatal("four resolvers were serialized") }
+  })
+ }
 }
 func FuzzSeeds(f *testing.F) {
  for _,s:=range []string{"a","b","c"} { f.Add(s) }
@@ -673,7 +686,7 @@ printf '%s\n' "${shard_patterns[@]}"`, "bash", inventory).CombinedOutput()
 	}
 	control := run(filepath.Join(root, "control"), []string{".*"})
 	batched := run(filepath.Join(root, "batched"), strings.Split(strings.TrimSpace(string(patterns)), "\n"))
-	want := map[string]int{"one": 1, "round": 20, "seed:a": 1, "seed:b": 1, "seed:c": 1, "example": 1}
+	want := map[string]int{"one": 1, "round": 20, "seed:a": 1, "seed:b": 1, "seed:c": 1, "example": 1, "parallel": 4}
 	if !reflect.DeepEqual(control, want) || !reflect.DeepEqual(batched, control) {
 		t.Fatalf("runtime coverage/stress changed: control=%v batched=%v want=%v", control, batched, want)
 	}
@@ -832,5 +845,62 @@ esac
 	out, err := scheduleHarnessWithMock(t, script, mock)
 	if err != nil {
 		t.Fatalf("completion accepted live fallback group: %v\n%s", err, out)
+	}
+}
+
+func TestOuterCancellationPrebuildReportTransfer(t *testing.T) {
+	t.Parallel()
+	for _, mode := range []string{"transferred", "transfer-failed", "unpublished", "not-started"} {
+		t.Run(mode, func(t *testing.T) {
+			script := `source ./run_ut.sh UT
+function logger() { :; }
+function checkpoint_ut_event() { :; }
+function stop_ut_heartbeat() { :; }
+function snapshot_ut_diagnostics() { :; }
+function report_slow_ut_cases() { :; }
+function report_active_ut_cases() { :; }
+CLUSTER_PREBUILD_DIR="$CASE_DIR/prebuild"
+CLUSTER_PREBUILD_REPORT="$CLUSTER_PREBUILD_DIR/build"
+mkdir "$CLUSTER_PREBUILD_DIR"
+: > "$CLUSTER_PREBUILD_REPORT"
+: > "$CLUSTER_PREBUILD_REPORT.package.0.test"
+: > "$CLUSTER_PREBUILD_REPORT.package.0.meta"
+PREBUILT_RACE_REPORT="$CASE_DIR/execution"
+UT_REPORT="$CASE_DIR/authoritative"
+case "$MODE" in
+ transferred|transfer-failed)
+  printf '{"Action":"pass","Package":"example/a"}\n' > "$PREBUILT_RACE_REPORT"
+  ;;
+ not-started) PREBUILT_RACE_REPORT="" ;;
+esac
+if [[ "$MODE" == transfer-failed ]]; then UT_REPORT="$CASE_DIR/missing/authoritative"; fi
+check_transfer() {
+ status=$?
+ [[ "$status" == 143 ]] || status=90
+ case "$MODE" in
+  transferred|not-started)
+   [[ ! -d "$CASE_DIR/prebuild" ]] || status=91
+   [[ -z "$PREBUILT_RACE_REPORT$CLUSTER_PREBUILD_REPORT" ]] || status=92
+   if [[ "$MODE" == transferred ]]; then
+    grep -q '"Action":"pass"' "$UT_REPORT" || status=93
+   fi
+   ;;
+  *)
+   [[ -f "$CASE_DIR/prebuild/build.package.0.test" && -f "$CASE_DIR/prebuild/build.package.0.meta" ]] || status=94
+   [[ -n "$PREBUILT_RACE_REPORT" && -n "$CLUSTER_PREBUILD_REPORT" ]] || status=95
+   if [[ "$MODE" == transfer-failed ]]; then [[ -s "$PREBUILT_RACE_REPORT" ]] || status=96; fi
+   ;;
+ esac
+ exit "$status"
+}
+trap check_transfer EXIT
+handle_ut_termination
+`
+			out, err := scheduleHarnessWithMock(t, script, scheduleHarnessMock(), "MODE="+mode)
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 143 {
+				t.Fatalf("cancellation must preserve untransferred diagnostics: %v\n%s", err, out)
+			}
+		})
 	}
 }

@@ -1256,11 +1256,11 @@ func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
 	require.True(t, features.LeastGreatestCollationSemantics)
 	required, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion118, required)
+	require.Equal(t, defines.MORPCVersion123, required)
 	owner.Nodes[0].ProjectList = []*planpb.Expr{collated, calendar, mediumInt, jsonInput, jsonValue}
 	required, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion118, required, "feature order must not lower the cumulative floor")
+	require.Equal(t, defines.MORPCVersion123, required, "feature order must not lower the cumulative floor")
 	owner.Nodes[0].ProjectList = []*planpb.Expr{collated, calendar, mediumInt, jsonInput}
 	required, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
@@ -1359,27 +1359,27 @@ func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			required, err := RequiredPersistedExpressionProtocolVersion(tc.owner)
 			require.NoError(t, err)
-			require.Equal(t, int64(defines.MORPCVersion118), required)
+			require.Equal(t, int64(defines.MORPCVersion123), required)
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion117))
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion122))
 			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 118")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion118))
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 123")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion123))
 			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner))
 		})
 	}
 
 	for _, tc := range owners {
 		owner := tc.owner
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion118))
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion117))
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion123))
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion122))
 		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner))
 		require.ErrorContains(t,
-			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 118")
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion118))
+			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 123")
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion123))
 		require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner))
 	}
 
@@ -1441,9 +1441,10 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 		{"old CN", defines.MORPCVersion107, defines.MORPCVersion107, false},
 		{"Unicode predecessor", defines.MORPCVersion109, defines.MORPCVersion109, false},
 		{"MEDIUMINT predecessor", defines.MORPCVersion110, defines.MORPCVersion110, false},
-		{"immediate predecessor", defines.MORPCVersion117, defines.MORPCVersion117, false},
-		{"read only admission", defines.MORPCVersion118, defines.MORPCVersion117, false},
-		{"authoring admitted", defines.MORPCVersion118, defines.MORPCVersion118, true},
+		{"pre-main-feature baseline", defines.MORPCVersion117, defines.MORPCVersion117, false},
+		{"immediate predecessor", defines.MORPCVersion122, defines.MORPCVersion122, false},
+		{"read only admission", defines.MORPCVersion123, defines.MORPCVersion122, false},
+		{"authoring admitted", defines.MORPCVersion123, defines.MORPCVersion123, true},
 	} {
 		t.Run(state.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, state.protocol)
@@ -1456,14 +1457,14 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 					defer stmt.Free()
 					built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
 					if !state.allowed {
-						require.ErrorContains(t, err, "protocol version 118")
+						require.ErrorContains(t, err, "protocol version 123")
 						return
 					}
 					require.NoError(t, err)
 					if table := built.GetDdl().GetCreateTable(); table != nil && table.GetTableDef().GetName() == "jv_index" {
 						required, err := RequiredPersistedExpressionProtocolVersion(table.GetTableDef())
 						require.NoError(t, err)
-						require.Equal(t, int64(defines.MORPCVersion118), required)
+						require.Equal(t, int64(defines.MORPCVersion123), required)
 						require.Len(t, table.GetIndexTables(), 1)
 						// The SQL builder's physical index stores materialized
 						// keys, not the generated expression owned by its table.
@@ -1475,10 +1476,84 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 						var data ViewData
 						require.NoError(t, json.Unmarshal([]byte(view.GetTableDef().GetViewSql().GetView()), &data))
 						require.NotNil(t, data.RequiredProtocolVersion)
-						require.Equal(t, int64(defines.MORPCVersion118), *data.RequiredProtocolVersion)
+						require.Equal(t, int64(defines.MORPCVersion123), *data.RequiredProtocolVersion)
 					}
 				})
 			}
 		})
 	}
+}
+
+func TestPersistedDependentProgramRequiresV119(t *testing.T) {
+	for _, expr := range []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}}},
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Slot{Slot: &planpb.CorrelationSlot{ProgramId: 1}}},
+	} {
+		version, err := RequiredPersistedExpressionProtocolVersion(expr)
+		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion119, version)
+	}
+	dateExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.DAYOFYEAR, 0)},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+		}},
+	}
+	owner := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{GeneratedCol: &planpb.GeneratedCol{Expr: dateExpr}},
+		{GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}},
+		}}},
+	}}
+	statistical := &planpb.Expr{Typ: types.T_float64.ToType().PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.VAR_POP, 0)},
+		Args: []*planpb.Expr{{Typ: types.New(types.T_decimal128, 38, 18).PlanType()}},
+	}}}
+	statisticalVersion, err := RequiredPersistedExpressionProtocolVersion(statistical)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion113, statisticalVersion)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: statistical}})
+	// Upstream owns each independent capability; dependent programs compose above them.
+	textType := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	textType.CollationVersion = 1
+	col := &planpb.Expr{Typ: textType.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	least, err := BindFuncExprImplByPlanExpr(context.Background(), "least", []*planpb.Expr{col, DeepCopyExpr(col)})
+	require.NoError(t, err)
+	leastVersion, err := RequiredPersistedExpressionProtocolVersion(least)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion117, leastVersion)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: least}})
+	tableCollation := &planpb.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.INTERNAL_TABLE_COLLATION, 0)},
+	}}}
+	tableVersion, err := RequiredPersistedExpressionProtocolVersion(tableCollation)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion118, tableVersion)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: tableCollation}})
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.TableCollationFunction)
+	require.True(t, features.DateNumericResultContracts)
+	require.True(t, features.DependentPrograms)
+	require.True(t, features.DecimalStatisticalResultContracts)
+	require.True(t, features.LeastGreatestCollationSemantics)
+	version, err := RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion119, version, "compose independent capabilities by maximum")
+
+	decimal := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64), Width: 7, Scale: 0}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.INTEGER_DIV, function.DecimalIntegerDivUnsignedOverload)},
+	}}}
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: decimal}})
+	version, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion121, version, "main decimal capability remains independent")
+	timestamp, err := BindFuncExprImplByPlanExpr(context.Background(), "timestamp", []*planpb.Expr{{Typ: types.T_datetime.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}})
+	require.NoError(t, err)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: timestamp}})
+	version, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion122, version, "new result contract composes above all main capabilities")
 }

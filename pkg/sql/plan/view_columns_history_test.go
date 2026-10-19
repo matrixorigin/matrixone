@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -61,6 +62,10 @@ func TestHistoricalViewColumnsSQL(t *testing.T) {
 		{name: "already current", definition: sysview.InformationSchemaColumnsDDL},
 		{name: "before migration", current: legacy, wantResolve: true},
 		{name: "protocol100 migration remains active before protocol109", current: sysview.InformationSchemaColumnsV100DDL(), wantResolve: true, wantAdapt: true},
+		{name: "current v110 gate adapts v109 template", current: sysview.InformationSchemaColumnsDDL, definition: sysview.InformationSchemaColumnsV109DDL(), wantResolve: true, wantAdapt: true},
+		{name: "current v110 gate normalizes lowercase v109 template", current: sysview.InformationSchemaColumnsDDL, definition: strings.Replace(sysview.InformationSchemaColumnsV109DDL(), "information_schema.COLUMNS", "information_schema.columns", 1), wantResolve: true, wantAdapt: true},
+		{name: "current v110 gate rejects modified v109 template", current: sysview.InformationSchemaColumnsDDL, definition: sysview.InformationSchemaColumnsV109DDL() + " ", wantResolve: true, wantError: true},
+		{name: "pre-migration gate keeps v109 template unchanged", current: legacy, definition: sysview.InformationSchemaColumnsV109DDL(), wantResolve: true},
 		{name: "after migration", current: sysview.InformationSchemaColumnsDDL, wantResolve: true, wantAdapt: true},
 		{name: "cross tenant", current: sysview.InformationSchemaColumnsDDL, crossTenant: true, wantResolve: true, wantAdapt: true},
 		{name: "cross tenant protocol100 migration", current: sysview.InformationSchemaColumnsV100DDL(), crossTenant: true, wantResolve: true, wantAdapt: true},

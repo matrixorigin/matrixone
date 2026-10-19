@@ -316,6 +316,8 @@ message Expr {
     MaxValue max = 13;
     LiteralVec vec = 14;
     FoldVal fold = 15;
+    DependentExpr dependent = 24;
+    CorrelationSlot slot = 25;
   }
 
   int32 aux_id = 16;
@@ -328,6 +330,57 @@ message Expr {
   // refresh its ColRef type after the inner projection is rebound.
   PreparedNumericMetadata prepared_numeric = 19;
   reserved 20 to 23;
+}
+
+// A parameter read from the current invocation, never a SQL prepared marker.
+// Program ids are one-based indexes into CorrelationSpec.programs.
+message CorrelationSlot {
+  uint32 program_id = 1;
+  uint32 ordinal = 2;
+}
+
+// A demand-owned invocation. Inputs are evaluated in the caller's stage;
+// comparison consumes the once-evaluated lhs (relation 0) and an output tuple
+// (relation 1). No executable Go state is stored in the plan.
+message DependentExpr {
+  uint32 program_id = 1;
+  uint32 occurrence_id = 2;
+  uint32 stage_id = 3;
+  SubqueryRef.Type reducer = 4;
+  repeated Expr inputs = 5;
+  repeated Expr lhs = 6;
+  Expr comparison = 7;
+}
+
+message CorrelationProgram {
+  int32 root_node = 1;
+  repeated Type input_types = 2 [(gogoproto.nullable) = false];
+  repeated Type output_types = 3 [(gogoproto.nullable) = false];
+}
+
+message CorrelationStage {
+  enum Kind {
+    INPUT = 0;
+    JOIN_PAIR = 1;
+    GROUP = 2;
+    WINDOW_SETUP = 3;
+    WINDOW_ROW = 4;
+    ASSIGNMENT = 5;
+    ROUTE = 6;
+  }
+  int32 owner_node = 1;
+  Kind kind = 2;
+  uint32 image_version = 3;
+}
+
+// Steps remain a stable global catalog. Owner 0 is the main execution;
+// owner n is program n. A program's steps activate only with its invocation.
+message CorrelationSpec {
+  uint32 version = 1;
+  int32 main_output_step = 2;
+  repeated uint32 step_owners = 3;
+  repeated CorrelationProgram programs = 4;
+  repeated CorrelationStage stages = 5;
 }
 
 message FoldVal {
@@ -1750,6 +1803,7 @@ message Query {
 
   // Logical access paths, not grants or resolved security roles.
   repeated ViewReference view_references = 18;
+  CorrelationSpec correlation = 19;
 }
 
 message TransationControl {
@@ -1920,11 +1974,13 @@ message CreateDatabase {
   string database = 2;
   SubscriptionOption subscription_option = 3;
   string sql = 4;
+  DatabaseDefaults defaults = 5;
 }
 
 message AlterDatabase {
   bool if_exists = 1;
   string database = 2;
+  DatabaseDefaults defaults = 3;
 }
 
 message DropDatabase {
@@ -1997,6 +2053,10 @@ message CreateTable {
   repeated ObjectRef unresolved_fk_parents = 16;
   // Cached metadata-name owner observed before catalog-dependent planning.
   lock.LockTable fk_name_binding = 17;
+  DatabaseDefaults database_defaults = 18;
+  // Execution-only requirement for retained CTAS population SQL.
+  // Zero means no additional requirement; this is not a catalog format floor.
+  int64 ctas_execution_protocol_version = 19;
 }
 
 message AlterTableDrop {
@@ -2438,4 +2498,15 @@ message ViewStep {
   string view_name = 2;
   Snapshot snapshot = 3;
   string subscription_name = 4;
+}
+
+// A zero version represents a legacy database without a persisted default.
+// Names are derived display values; identity/revision own the effective domain.
+message DatabaseDefaults {
+  uint64 database_id = 1;
+  string character_set = 2;
+  string collation = 3;
+  uint64 version = 4;
+  uint32 collation_id = 5;
+  uint32 collation_revision = 6;
 }

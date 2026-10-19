@@ -1018,11 +1018,9 @@ func (a *QCloudSDK) getObjectWithIdentity(
 					}
 					return &readCloser{
 						r: resp.Body,
-						closeFunc: func() error {
-							// drain
-							io.Copy(io.Discard, resp.Body)
-							return resp.Body.Close()
-						},
+						// A caller may stop after a boundary probe. Let the transport
+						// manage connection reuse instead of downloading the remaining object.
+						closeFunc: resp.Body.Close,
 					}, nil
 				},
 			)

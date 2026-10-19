@@ -86,6 +86,7 @@ setup(
         "dev": [
             "pytest>=6.0",
             "pytest-asyncio>=0.18.0",
+            "aiosqlite>=0.20",
             "pytest-cov>=3.0",
             "pyarrow>=10.0.0",  # For Parquet file generation in tests/examples
             "Faker>=10.0.0",
@@ -101,6 +102,7 @@ setup(
         "test": [
             "pytest>=6.0",
             "pytest-asyncio>=0.18.0",
+            "aiosqlite>=0.20",
             "pytest-cov>=3.0",
             "pyarrow>=10.0.0",  # For Parquet file generation in tests/examples
             "Faker>=10.0.0",

@@ -135,10 +135,13 @@ func (m *Metadata) ResolveVariableFunc(varName string, isSystemVar, isGlobalVar 
 //     their own context-aware default (txnTimeout / procSessionLockWaitTimeout) on
 //     nil, which a fixed value would wrongly override; this matches backSession,
 //     which returns nil for it too.
+//   - foreign_key_checks: 1 — internal DDL/DML inherits this setting, so a
+//     background rebuild without a user session keeps FK checking enabled.
 var sessionSystemVarDefaults = map[string]any{
 	"sql_mode":            "",
 	"lock_wait_timeout":   nil,
 	"default_week_format": int64(0),
+	"foreign_key_checks":  int64(1),
 }
 
 // captured reports whether varName was written into this blob's cfg — i.e. it is

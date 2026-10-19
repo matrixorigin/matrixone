@@ -380,7 +380,9 @@ type ViewData struct {
 }
 
 type QueryBuilder struct {
-	preparedBindingProof *bool
+	correlationRouteNodes map[int32]bool
+	dependentRelations    map[int32]bool
+	preparedBindingProof  *bool
 	// Deep existential regions are owned by a SQL block, never by a partially
 	// constructed node. The registry stays nil on the ordinary flattening path.
 	nextExistentialBlock    uint64
@@ -512,6 +514,9 @@ type QueryBuilder struct {
 	skipStats             bool
 	isInsertIgnore        bool             // INSERT IGNORE: over-length CHAR/VARCHAR writes are truncated instead of rejected
 	deleteNode            map[uint64]int32 //delete node in this query. key is tableId, value is the nodeId of sinkScan node in the delete plan
+
+	// Ordinary LOAD validates real primary keys while retaining the bulk-write plan.
+	checkLoadPrimaryKey bool
 
 	insertHasOnDuplicateUpdate bool // statement-local: keep pure INSERT IGNORE auto-increment handling out of ODKU
 
@@ -927,6 +932,7 @@ type BindContext struct {
 	// expressions immediately after function binding, before a bind-time fold
 	// can erase the function from the persisted plan.
 	persistedExpressionProtocolRequirement *int64
+	ctasExecutionProtocolRequirement       *int64
 	// expandedSelectLists records the expanded output for each SELECT clause
 	// participating in a view definition, including UNION branches.
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
