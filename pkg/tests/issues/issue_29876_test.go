@@ -156,7 +156,7 @@ func TestIssue29876CrossDatabaseCorrelation(t *testing.T) {
 			account, publication := strings.ToLower(main)+"_acct", strings.ToLower(main)+"_pub"
 			exec(t, "create account "+account+" admin_name 'admin' identified by '111'")
 			defer func() {
-				cleanup, stop := context.WithTimeout(context.Background(), 20*time.Second)
+				cleanup, stop := context.WithTimeout(context.Background(), time.Minute)
 				defer stop()
 				_, err := db.ExecContext(cleanup, "drop publication if exists "+publication)
 				assert.NoError(t, err)
