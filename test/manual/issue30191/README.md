@@ -35,12 +35,18 @@ actual Java value classes, NULL extension, and exact row multisets. All 64 SQL
 shapes run in Statement, client-prepared, and verified server-prepared mode
 (192 cases); server-prepared fallback is disabled.
 
-The same probe also checks ten compositions in all three modes: a grouped
+The same probe also checks 21 compositions: a grouped
 aggregate with a nonzero group-column offset, repeated DISTINCT outputs,
 MINUS and INTERSECT with a computed right input, and repeated recursive CTE
 outputs. LAG/LEAD computed, stored and NULL defaults, plus grouped SAMPLE and stored
-SAMPLE controls, are included. These add 30 cases (222 total), checking exact values as well as
-prepare/execute metadata and Java classes.
+SAMPLE controls are included. VALUES producers are exercised directly and through
+derived tables, DISTINCT, reordered/repeated outputs, UNION and a value-preserving
+window. SAMPLE covers omitted grouping prefixes in both computed/stored directions
+and multiple omitted keys. These add 62 positive cases (254 total), checking exact
+values as well as prepare/execute metadata and Java classes. Bare VALUES runs in
+Statement and client-prepared mode; the existing PREPARE grammar rejects that form,
+which is asserted separately as a 1064/42000 control. Derived VALUES and every other
+composition must pass actual server preparation, with no fallback.
 
 Compile and run it with Connector/J 8.4.0 and `tinyInt1isBit=true`:
 

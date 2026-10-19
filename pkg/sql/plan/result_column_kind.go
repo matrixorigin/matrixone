@@ -233,6 +233,27 @@ func (k *resultColumnKinds) expand(id int) {
 		}
 	}
 	switch node.NodeType {
+	case pb.Node_VALUE_SCAN:
+		cols := node.GetRowsetData().GetCols()
+		if ref.ColPos < 0 || int(ref.ColPos) >= len(cols) {
+			return
+		}
+		// Rowset columns are pruned/remapped with the VALUE_SCAN projection.
+		// Only values in the referenced column contribute to its provenance.
+		for _, row := range cols[ref.ColPos].GetData() {
+			producer := row.GetExpr()
+			if producer == nil {
+				continue
+			}
+			if producer.GetCol() == nil && producer.GetW() == nil {
+				// The ordinary scalar-expression rule is affirmative here. Stop
+				// without building one graph state per row of a large VALUES.
+				k.mark(id)
+				return
+			}
+			k.expression(id, value.node, producer)
+		}
+		return
 	case pb.Node_SINK_SCAN, pb.Node_RECURSIVE_CTE, pb.Node_RECURSIVE_SCAN:
 		for _, step := range node.SourceStep {
 			if step >= 0 && int(step) < len(k.query.Steps) {

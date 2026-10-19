@@ -3,6 +3,7 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.ResultSetMetaData;
+import java.sql.SQLException;
 import java.sql.Statement;
 import java.sql.Types;
 import java.util.HashMap;
@@ -141,19 +142,49 @@ public final class JoinBooleanMetadataProbe {
             "SELECT LEAD(flag,1,flag) OVER(ORDER BY id) FROM " + table,
             "SELECT LAG(flag,1,NULL) OVER(ORDER BY id) FROM " + table,
             "SELECT SAMPLE(n>0,1 ROWS),flag FROM " + table + " GROUP BY flag",
-            "SELECT SAMPLE(flag,1 ROWS) FROM " + table + " WHERE id=1"
+            "SELECT SAMPLE(flag,1 ROWS) FROM " + table + " WHERE id=1",
+            "VALUES ROW(1=1),ROW(1=0)",
+            "SELECT p FROM (VALUES ROW(1=1),ROW(1=0)) d(p)",
+            "SELECT DISTINCT p FROM (VALUES ROW(1=1),ROW(1=0)) d(p)",
+            "SELECT p FROM (VALUES ROW(NULL),ROW(1=0)) d(p)",
+            "SELECT q,p,q FROM (VALUES ROW(1=1,1=0),ROW(1=0,1=1)) d(p,q)",
+            "SELECT p FROM (VALUES ROW(1=1),ROW(1=0)) d(p) UNION ALL SELECT flag FROM " + table,
+            "SELECT FIRST_VALUE(p) OVER() FROM (VALUES ROW(1=1),ROW(1=0)) d(p)",
+            "SELECT p FROM (SELECT SAMPLE(n,1 ROWS) s,n>0 p FROM " + table + " GROUP BY flag,n>0) d",
+            "SELECT flag FROM (SELECT SAMPLE(n,1 ROWS) s,flag FROM " + table + " GROUP BY n>0,flag) d",
+            "SELECT p FROM (SELECT SAMPLE(n,1 ROWS) s,n>0 p FROM " + table + " GROUP BY flag,n+1,n>0) d",
+            "SELECT SAMPLE(n IS NULL,1 ROWS),flag FROM " + table + " GROUP BY n>0,flag"
         };
         boolean[][] nativeColumns = {{false,true},{false,true,false,true},{true},{true},{false,true,false,true},
-            {false},{true},{true},{false,true},{true}};
+            {false},{true},{true},{false,true},{true},
+            {false},{false},{false},{false},{false,false,false},{false},{false},
+            {false},{true},{false},{false,true}};
         String[][] expected = {
             {"1:true", "null:false", "0:null"},
             {"1:true:1:true", "null:false:null:false", "0:null:0:null"},
             {}, {"true", "false", "null"},
             {"1:true:1:true", "1:true:1:true", "0:true:0:true"},
             {"0","1","0"}, {"false","null","null"}, {"null","true","false"},
-            {"1:true","null:false","0:null"}, {"true"}
+            {"1:true","null:false","0:null"}, {"true"},
+            {"1","0"}, {"1","0"}, {"1","0"}, {"null","0"}, {"0:1:0","1:0:1"},
+            {"1","0","1","0","null"}, {"1","1"},
+            {"1","null","0"}, {"true","false","null"}, {"1","null","0"},
+            {"0:true","1:false","0:null"}
         };
+        int count = 0;
         for (int c = 0; c < queries.length; c++) {
+            if (mode.equals("server-prepared") && queries[c].startsWith("VALUES ")) {
+                // Bare VALUES is not in the existing PREPARE grammar. Keep that
+                // limitation explicit; derived VALUES below must really prepare.
+                try (PreparedStatement ignored = connection.prepareStatement(queries[c])) {
+                    throw new AssertionError("bare VALUES PREPARE unexpectedly accepted; add positive coverage");
+                } catch (SQLException error) {
+                    check(error.getErrorCode() == 1064 && "42000".equals(error.getSQLState()),
+                            "unexpected bare VALUES PREPARE failure: " + error);
+                }
+                System.out.println("CONTROL server-prepared: bare VALUES rejected with 1064/42000");
+                continue;
+            }
             try (Statement statement = mode.equals("statement") ? connection.createStatement()
                     : connection.prepareStatement(queries[c])) {
                 statement.setQueryTimeout(30);
@@ -184,9 +215,10 @@ public final class JoinBooleanMetadataProbe {
             } catch (Exception | AssertionError error) {
                 throw new AssertionError(mode + ": " + queries[c],error);
             }
+            count++;
         }
-        System.out.println("PASS " + mode + ": " + queries.length + " composed cases");
-        return queries.length;
+        System.out.println("PASS " + mode + ": " + count + " composed cases");
+        return count;
     }
 
     public static void main(String[] args) throws Exception {

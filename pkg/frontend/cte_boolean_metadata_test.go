@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/stretchr/testify/require"
@@ -30,6 +31,19 @@ func TestComposedBooleanResultsKeepWireMetadata(t *testing.T) {
 		sql     string
 		lengths []uint32
 	}{
+		{"values predicates", "values row(1=1),row(1=0)", []uint32{8}},
+		{"values derived", "select p from (values row(1=1),row(1=0)) d(p)", []uint32{8}},
+		{"values distinct", "select distinct p from (values row(1=1),row(1=0)) d(p)", []uint32{8}},
+		{"values null first", "select p from (values row(null),row(1=0)) d(p)", []uint32{8}},
+		{"values reordered repeated", "select q,p,q from (values row(1=1,1=0),row(1=0,1=1)) d(p,q)", []uint32{8, 8, 8}},
+		{"values union", "select p from (values row(1=1),row(1=0)) d(p) union all select with_grant_option from mo_catalog.mo_role_privs", []uint32{8}},
+		{"values window", "select first_value(p) over () from (values row(1=1),row(1=0)) d(p)", []uint32{8}},
+		{"sample omitted stored grouping prefix", "select sample(role_id,1 rows),role_id>0 from mo_catalog.mo_role_privs group by with_grant_option,role_id>0", []uint32{0, 8}},
+		{"sample omitted computed grouping prefix", "select sample(role_id,1 rows),with_grant_option from mo_catalog.mo_role_privs group by role_id>0,with_grant_option", []uint32{0, 1}},
+		{"sample omitted two grouping keys", "select sample(role_id,1 rows),role_id>0 from mo_catalog.mo_role_privs group by with_grant_option,role_id+1,role_id>0", []uint32{0, 8}},
+		{"sample computed grouping first control", "select sample(role_id,1 rows),role_id>0 from mo_catalog.mo_role_privs group by role_id>0,with_grant_option", []uint32{0, 8}},
+		{"sample reordered grouping outputs", "select role_id>0,sample(role_id,1 rows),with_grant_option from mo_catalog.mo_role_privs group by with_grant_option,role_id>0", []uint32{8, 0, 1}},
+		{"sample derived grouping", "select p,p from (select sample(role_id,1 rows) n,role_id>0 p from mo_catalog.mo_role_privs group by with_grant_option,role_id>0) d", []uint32{8, 8}},
 		{"lag computed default", "select lag(with_grant_option,1,role_id is null) over(order by role_id) from mo_catalog.mo_role_privs", []uint32{8}},
 		{"lead stored default", "select lead(with_grant_option,1,with_grant_option) over(order by role_id) from mo_catalog.mo_role_privs", []uint32{1}},
 		{"lag null default", "select lag(with_grant_option,1,null) over(order by role_id) from mo_catalog.mo_role_privs", []uint32{1}},
@@ -75,6 +89,11 @@ func TestComposedBooleanResultsKeepWireMetadata(t *testing.T) {
 			require.Len(t, columns, len(tc.lengths))
 			proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
 			for i, def := range columns {
+				if tc.lengths[i] == 0 {
+					// These controls also project a non-BOOLEAN sampled column.
+					require.NotEqual(t, int32(types.T_bool), def.Typ.Id)
+					continue
+				}
 				column, err := colDef2MysqlColumn(t.Context(), def)
 				require.NoError(t, err)
 				for _, cmd := range []int{int(COM_QUERY), int(COM_STMT_PREPARE)} {
