@@ -445,7 +445,7 @@ func TestSearchKnobScopeRefusesPriorEpochDestination(t *testing.T) {
 	require.Equal(t, "a", remote.NodeInfo.Id)
 
 	var required int64
-	data, err := encodeRemoteScopeWithVectorProtocol(remote, c.proc, &required)
+	data, err := encodeRemoteScopeWithProtocol(remote, c.proc, &required)
 	require.NoError(t, err)
 	require.Equal(t, vectorscan.SearchKnobsProtocolVersion, required)
 
@@ -473,7 +473,7 @@ func TestSearchKnobScopeRefusesPriorEpochDestination(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { ReleaseScopes(plain) })
 	required = 0
-	plainData, err := encodeRemoteScopeWithVectorProtocol(plain[0], c.proc, &required)
+	plainData, err := encodeRemoteScopeWithProtocol(plain[0], c.proc, &required)
 	require.NoError(t, err)
 	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, required)
 	decoded, err := decodeScope(plainData, c.proc, true, nil)
