@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 14
+- Revision: 15
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 15 integration baseline: official main `873282742714436bff407dfcdbbe879147162bd3`
 - Revision 14 integration baseline: official main `57fb9530859d92791100098d312ea8cacc671910`
 - Revision 11 measurement baseline: official main `b111224b0c624773389b390cd3cf1223126b6ee2`
 - Design feedback: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784
@@ -54,7 +55,9 @@ review 5566330907. Revision 13 removes that rejection by binding dynamic native
 operators to the existing statement account and scalar-set lease, including
 nested invocations. Independent review 5567698353 subsequently accepted revision
 13 at `40eb8f3d0dd45085649d1f7a0345c1ea419a8542`. Revision 14 integrates the
-new official protocol allocation and retains that reviewed architecture.
+new official protocol allocation and retains that reviewed architecture. Revision 15
+preserves the released DECIMAL DIV capability while advancing set-key admission
+to 122; it retains the same execution and ownership design.
 
 ## Membership contract
 
@@ -940,7 +943,7 @@ their source provenance and approval scope. Independent reviews 5567698353 and
 5566840311 subsequently accepted the revision-13 design and implementation at
 `40eb8f3d0dd45085649d1f7a0345c1ea419a8542`.
 
-### Revision 14 official protocol allocation and integration
+### Historical revision 14 official protocol allocation and integration
 
 Official main `57fb9530859d92791100098d312ea8cacc671910` allocates MORPC 120 to
 current-session KILL authorization and proxy disconnect cleanup. This PR's
@@ -999,6 +1002,42 @@ collision; the 121 gates and predecessor rejection above address that specific
 counterexample. This mechanical integration does not rewrite historical approval
 or capacity evidence.
 
+### Revision 15 DECIMAL DIV integration and evidence validity
+
+Official main `873282742714436bff407dfcdbbe879147162bd3` assigns MORPC 121 to
+the exact unsigned DECIMAL DIV result domain (existing function 14, overload 1).
+This PR's single set-key/scalar-fallback capability advances to 122. Function
+601, marker fields 95/65 and all allocation/lifecycle owners stay unchanged.
+Every set-specific placement, destination, receiver, executor/retained-template
+and persisted guard advances together; immediate predecessor 121 rejects the
+capability. DIV's 120-reject/121-accept and legacy-overload controls retain their
+released contracts. Typed and public composition tests cover independent DIV,
+DIV with set membership, and DIV with a coordinator-only scalar marker.
+
+The revision-14 capacity receipt remains immutable and records its original
+source and measurements. Its 26 profiles contain no DECIMAL DIV, CTAS or view
+operations; the mixed expression uses integer addition. The new numeric resolver
+branch is DIV-specific, and the metadata hook returns immediately for non-DIV
+functions. No dependent, WINDOW, LoopJoin, account/work/permit owner, membership
+kernel, native dependency, module, build input or benchmark dataset changed.
+The validity ledger distinguishes matching fingerprints from mechanical guards,
+upstream DIV-only changes and refreshed tests. Reuse concerns the same fallback
+workload and participating-account envelope; the old package time and process-RSS
+sample remain historical. This revision does not claim a new exact-head capacity
+measurement. Public DIV/view/prepared integration is separately validated.
+
+The [revision-15 source-bound receipt](validation/20261019_set_key_protocol122_rebase.json)
+records the complete official-121 source overlay, candidate FLOAT/DOUBLE wire
+fixtures, native ABS/unsigned-DIV construction controls, and real query-service
+response replay. Official 121 lacks function 601; candidate placement excludes
+it and actual destination encoding rejects before producing pipeline bytes.
+This proves native implementation and response-replay boundaries, not a live
+mixed-binary cluster. Refreshed five-package normal tests, the public signed-zero
+and upstream DIV suites, and incremental 18-package vet/lint all pass. The new
+protocol-composition test uses explicit sender/receiver floors and releases
+successful decoded scopes; its earlier fixture failures remain recorded as
+failures in the receipt.
+
 ## Alternatives
 
 | Choice | Benefits | Costs and reason for the current proposal |
@@ -1022,40 +1061,46 @@ activation gates. Retain the terminal 20833 behavior, participating-account limi
 and coordinator-only scope when deploying; broader distributed execution and
 universal latency or process-RSS guarantees remain unqualified.
 
-Official main at this revision ends at MORPC 120 for current-session KILL
-authorization and proxy disconnect cleanup. This capability uses MORPC **121**. The feature walker recognizes encoded function identity 601 without
+Official main at this revision ends at MORPC 121 for the unsigned DECIMAL DIV
+result domain; current-session KILL and proxy cleanup retain 120. This capability
+uses MORPC **122**. The feature walker recognizes encoded function identity 601 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar composition adds no separate function identity. It adds
 `plan.Node.scalar_set_reaggregation` field 95 and
 `pipeline.Instruction.scalar_set_reaggregation` field 65. Marker-only integer
-fallbacks require 121 too. Senders and receivers reject marked remote scopes at
+fallbacks require 122 too. Senders and receivers reject marked remote scopes at
 all versions, before operator decoding, because a remote attempt cannot share
 the coordinator's work/account lease. Local scope validation rejects remote
 nodes, DOP above one, and marker placement outside WINDOW/LEFT JOIN. Official main
 retains SELECT division diagnostics at 116, conditional on execution/session
-policy. Set keys require 121 regardless of that policy; a combined expression
-requires 121. Division diagnostics remain outside persisted-expression admission. Official main
+policy. Set keys require 122 regardless of that policy; a combined expression
+requires 122. Division diagnostics remain outside persisted-expression admission. Official main
 adds collation-aware LEAST/GREATEST at 117; that independent feature remains
-admitted at 117, and a combined expression with a set key requires 121.
+admitted at 117, and a combined expression with a set key requires 122.
 The released table-collation function retains identity 600 and floor 118;
 table-only expressions remain admitted at 118, while a combined expression
-with a set key requires 121.
+with a set key requires 122.
 
-Placement requires workers advertising 121 or newer; missing or old capabilities
+Unsigned DECIMAL DIV alone retains its released floor 121. Combining DIV with a
+set key or local scalar marker requires 122; a marker still prohibits remote
+execution at every version. Historical DIV overload zero keeps its prior
+compatibility contract.
+
+Placement requires workers advertising 122 or newer; missing or old capabilities
 fall back to one CN on the capable coordinator. Sending rechecks actual pipeline
 destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
-missing or below 121. Operator expression construction checks the same floor
+missing or below 122. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 121. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
+also require 122. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and
-then release the 121 requirement. A prepare-time ANY type is not capability proof.
-A new binary configured at immediate predecessor floor 120 rejects these
+then release the 122 requirement. A prepare-time ANY type is not capability proof.
+A new binary configured at immediate predecessor floor 121 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
-under a floor below 121. Lowering a new binary's floor does not rewrite existing
+under a floor below 122. Lowering a new binary's floor does not rewrite existing
 catalog expressions or teach an old binary identity 601.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected
@@ -1074,7 +1119,7 @@ this document and immediate-predecessor rollback tests together. Other open PRs
 using the same candidate do not reserve it.
 
 Dependent-only queries retain their independently released protocol 119.
-Mixed dependent/scalar-set queries require the set-key floor 121 as well as
+Mixed dependent/scalar-set queries require the set-key floor 122 as well as
 coordinator-local DOP 1 placement. The final scope graph, including detached
 producer scopes, is validated before any execution. The statement attempt
 acquires one scalar-set CN permit and one bounded participating account; all

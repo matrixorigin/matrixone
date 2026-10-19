@@ -576,6 +576,41 @@ func TestSetOperationSignedZero(t *testing.T) {
 			})
 		})
 
+		t.Run("decimal-DIV-composition", func(t *testing.T) {
+			// Reuse the signed-zero rows and real client. A completed view
+			// restores the narrow unsigned DIV domain before set-key planning.
+			t.Cleanup(func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_, cleanupErr := conn.ExecContext(cleanupCtx, "drop view if exists div_set_view")
+				require.NoError(t, cleanupErr)
+			})
+			_, err := conn.ExecContext(ctx, "create view div_set_view as select id,d,cast(5.678 as decimal(10,3)) div cast(2 as unsigned) as q from zeros")
+			require.NoError(t, err)
+			var domain string
+			require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema='set_signed_zero' and table_name='div_set_view' and column_name='q'").Scan(&domain))
+			require.Equal(t, "int unsigned", domain)
+			for _, query := range []string{
+				"select cast(d as varchar),q from (select d,q from div_set_view where id=1 union select d,q from div_set_view where id=2) s order by serial(d)",
+				"select cast(d as varchar),cast(5.678 as decimal(10,3)) div cast(2 as unsigned) from (select d from zeros where id=1 union select d from zeros where id=2) s order by serial(d)",
+			} {
+				rows, err := conn.QueryContext(ctx, query)
+				require.NoError(t, err)
+				require.Equal(t, []string{"-0:2", "0:2"}, readWindowNullRows(t, rows))
+			}
+			stmt, err := conn.PrepareContext(ctx, "select cast(d as varchar),cast(? as decimal(10,3)) div cast(? as unsigned) from (select d from zeros where id=? union select d from zeros where id=?) s order by serial(d)")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct {
+				value string
+				right int
+				want  []string
+			}{{"5.678", 2, []string{"-0:2", "0:2"}}, {"7.678", 3, []string{"-0:3"}}, {"5.678", 2, []string{"-0:2", "0:2"}}} {
+				rows, err := stmt.QueryContext(ctx, tc.value, uint64(2), 1, tc.right)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, readWindowNullRows(t, rows))
+			}
+		})
 		t.Run("keyed-filter-results", func(t *testing.T) {
 			for _, op := range []string{"union", "intersect", "except"} {
 				q := "select id,cast(d as varchar) from (select id,d from zeros " + op + " select id,d from zeros) u where id=1"
