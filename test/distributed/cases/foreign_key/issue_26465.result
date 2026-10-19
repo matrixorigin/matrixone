@@ -34,12 +34,12 @@ alter table users add column copied_child_marker int;
 drop table departments;
 internal error: can not drop table 'departments' referenced by some foreign key constraint
 insert into users (id, department_id_1) values (2, 999);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into users (id, department_id_1) values (2, 1);
 alter table departments change name name varchar(100) not null comment 'department name';
 alter table departments add column copied_parent_marker int;
 insert into users (id, department_id_1) values (3, 999);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into users (id, department_id_1) values (3, 1);
 create table jobs (id int primary key);
 create table talent_pools (id int primary key);
@@ -74,7 +74,7 @@ alter table candidates add column copied_child_marker int;
 drop table jobs;
 internal error: can not drop table 'jobs' referenced by some foreign key constraint
 insert into candidates (id, job_id_1) values (2, 999);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into candidates (id, job_id_1, talent_pool_id_1, owner_id_1) values (2, 1, 1, 1);
 select count(*) from users;
 ➤ count(*)[-5,64,0]  𝄀

@@ -15,7 +15,7 @@ create table fk_foreign_key_checks3_db1.t3(c int primary key,d int);
 insert into t1 values (2,2);
 SET FOREIGN_KEY_CHECKS=1;
 insert into t1 values (1,1);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into fk_foreign_key_checks3_db0.t2 values (1,1);
 insert into fk_foreign_key_checks3_db1.t3 values (1,1);
 insert into t1 values (1,1);
@@ -52,14 +52,14 @@ create table fk_foreign_key_checks3_db0.t2(a int primary key,b int);
 create database fk_foreign_key_checks3_db1;
 create table fk_foreign_key_checks3_db1.t3(c int primary key,d int);
 insert into t1 values (3,3);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into t1 values (4,4);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into fk_foreign_key_checks3_db0.t2 values (4,4);
 insert into fk_foreign_key_checks3_db1.t3 values (4,4);
 insert into t1 values (4,4);
 insert into t1 values (3,3);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 drop table fk_foreign_key_checks3.t1;
 select count(*) = 0 as removed_fks from mo_catalog.mo_foreign_keys where db_name = 'fk_foreign_key_checks3';
 ➤ removed_fks[-7,1,0]  𝄀
