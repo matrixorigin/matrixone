@@ -2046,12 +2046,21 @@ func getRelations(
 		return
 	}
 
+	// Native branch readers bypass compiled scan admission. P1 MVs do not
+	// support branch history/merge semantics, including an unpopulated endpoint.
+	// Reject both sides before readers, diff output or merge writes are created.
+	tarDef, baseDef := tarRel.GetTableDef(ctx), baseRel.GetTableDef(ctx)
+	if tarDef.TableType == catalog.SystemMaterializedViewRel || baseDef.TableType == catalog.SystemMaterializedViewRel {
+		err = moerr.NewNotSupported(ctx, "DATA BRANCH does not support materialized view endpoints")
+		return
+	}
+
 	logutil.Info(
 		"DataBranch-GetRelations-Done",
 		zap.Uint64("target-table-id", tarRel.GetTableID(ctx)),
 		zap.Uint64("base-table-id", baseRel.GetTableID(ctx)),
-		zap.String("target-db", tarRel.GetTableDef(ctx).DbName),
-		zap.String("base-db", baseRel.GetTableDef(ctx).DbName),
+		zap.String("target-db", tarDef.DbName),
+		zap.String("base-db", baseDef.DbName),
 	)
 
 	return

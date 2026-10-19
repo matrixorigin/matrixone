@@ -156,7 +156,7 @@ and cleans its own database. Validate both transaction modes by configuring
 
 `-consumer-check` selects the native consumer regressions for review5562448876.
 It reuses the existing authenticated BVT service and owns a two-row indexed
-source, manual MVs and one altered periodic policy. Fourteen checks cover prepared
+source, manual MVs and one altered periodic policy. Seventeen checks cover native branch endpoint rejection (including unpopulated/populated MVs, both DIFF/MERGE directions and OUTPUT AS), ordinary DIFF controls, prepared
 DELETE before MV creation in a different session/CN, unrestricted DELETE with creation disabled, affected
 rows including an empty source, unique/secondary maintenance, explicit TRUNCATE
 protection and ALTER COPY rejection without preparation residue, DUMP/LOAD kind admission before file access with unchanged publication,

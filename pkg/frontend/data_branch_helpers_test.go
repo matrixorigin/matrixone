@@ -21,6 +21,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -442,4 +443,50 @@ func buildRunSQLResultSet() *MysqlResultSet {
 
 func vectorValueAsInt64(bat *batch.Batch, colIdx int, rowIdx int) int64 {
 	return vector.MustFixedColWithTypeCheck[int64](bat.Vecs[colIdx])[rowIdx]
+}
+
+func TestDataBranchRelationsRejectMaterializedViewEndpoints(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		targetKind, baseKind string
+		wantReject           bool
+	}{
+		{name: "ordinary endpoints"},
+		{name: "materialized target", targetKind: catalog.SystemMaterializedViewRel, wantReject: true},
+		{name: "materialized base", baseKind: catalog.SystemMaterializedViewRel, wantReject: true},
+		{name: "both materialized", targetKind: catalog.SystemMaterializedViewRel, baseKind: catalog.SystemMaterializedViewRel, wantReject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			ses := newTestSession(t, ctrl)
+			t.Cleanup(ses.Close)
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			db := mock_frontend.NewMockDatabase(ctrl)
+			target, base := mock_frontend.NewMockRelation(ctrl), mock_frontend.NewMockRelation(ctrl)
+			ses.proc.Base.SessionInfo.StorageEngine = eng
+			back := &backSession{}
+			back.txnHandler = &TxnHandler{txnOp: op}
+			bh := &backExec{backSes: back}
+			eng.EXPECT().Database(gomock.Any(), "db", op).Return(db, nil).Times(2)
+			db.EXPECT().Relation(gomock.Any(), "target", nil).Return(target, nil)
+			db.EXPECT().Relation(gomock.Any(), "base", nil).Return(base, nil)
+			target.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{TableType: tc.targetKind})
+			base.EXPECT().GetTableDef(gomock.Any()).Return(&planpb.TableDef{TableType: tc.baseKind})
+			if !tc.wantReject {
+				target.EXPECT().GetTableID(gomock.Any()).Return(uint64(1))
+				base.EXPECT().GetTableID(gomock.Any()).Return(uint64(2))
+			}
+			targetName := *tree.NewTableName("target", tree.ObjectNamePrefix{SchemaName: "db"}, nil)
+			baseName := targetName
+			baseName.ObjectName = "base"
+			_, _, _, _, err := getRelations(context.Background(), ses, bh, targetName, baseName)
+			if tc.wantReject {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				require.ErrorContains(t, err, "materialized view endpoints")
+			} else {
+				require.NoError(t, err)
+			}
+		})
+	}
 }

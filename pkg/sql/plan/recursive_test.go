@@ -108,6 +108,84 @@ func TestRecursiveCteAggregateQueryBlockScope(t *testing.T) {
 		wantError string
 	}{
 		{
+			name: "grouped anchor with having",
+			sql: `with recursive r(n, total) as (
+				select a, count(*) from cte_test.t1 group by a having count(*) > 0
+				union all
+				select n + 1, total from r where n < 3
+			) select * from r`,
+		},
+		{
+			name: "grouped scalar projection",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1, (select count(*) from cte_test.t1 group by b)
+				from r where n < 3
+			) select * from r`,
+		},
+		{
+			name: "grouped scalar predicate with having",
+			sql: `with recursive r(n) as (
+				select 1
+				union all
+				select n + 1 from r where n < (
+					select max(a) from cte_test.t1 where b = 'b'
+					group by b having count(*) > 0)
+			) select * from r`,
+		},
+		{
+			name: "scalar having without grouping",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1, (select count(*) from cte_test.t1 having count(*) > 0)
+				from r where n < 3
+			) select * from r`,
+		},
+		{
+			name: "correlated grouped scalar projection",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1, (select count(*) from cte_test.t1 where a = r.n group by a)
+				from r where n < 3
+			) select * from r`,
+		},
+		{
+			name: "nested grouped scalar projection",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1, (select (select count(*) from cte_test.t1 group by b))
+				from r where n < 3
+			) select * from r`,
+		},
+		{
+			name: "grouping directly in recursive member remains rejected",
+			sql: `with recursive r(n) as (
+				select 1 union all select n + 1 from r where n < 3 group by n
+			) select * from r`,
+			wantError: "not support group by in recursive cte",
+		},
+		{
+			name: "having directly in recursive member remains rejected",
+			sql: `with recursive r(n) as (
+				select 1 union all select n + 1 from r having n < 3
+			) select * from r`,
+			wantError: "not support having in recursive cte",
+		},
+		{
+			name: "grouped nested recursive source remains rejected",
+			sql: `with recursive r(n, total) as (
+				select 1, 0
+				union all
+				select n + 1, (select count(*) from r group by n)
+				from r where n < 3
+			) select * from r`,
+			wantError: "must be referenced only once, and not in any subquery",
+		},
+		{
 			name: "independent scalar aggregate in predicate",
 			sql: `with recursive r(n) as (
 				select 1

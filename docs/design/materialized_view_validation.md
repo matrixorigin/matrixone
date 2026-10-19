@@ -357,3 +357,13 @@ the commit-frontier handoff required before asserting post-RESTORE metadata on
 a Push-mode peer. This changes the existing ordinary-View test only; it does not
 change MV semantics or add a performance claim. Remote CI is checked separately
 at the published correction head.
+
+
+## Native branch endpoint admission (2026-10-19)
+
+[Requirement, design and regression map](materialized_view_branch_admission.md)
+close review5564803316: native branch readers explicitly reject MV endpoints in
+P1, before diff output or merge writes. The same delivery preserves main's
+foreign-key-check propagation and MV's captured SQL mode in the internal compiler.
+[Source-bound results](materialized_view_branch_admission_results.json) distinguish
+native negative/positive controls, merged suites and final-head CI.

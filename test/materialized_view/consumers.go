@@ -87,6 +87,31 @@ func runConsumerCases(dsn, secondDSN string) {
 	rows("select mo_ctl('cn','synccommit','')")
 	otherExec("create materialized view stored refresh manual as select id,k,skey from facts")
 	rows("select mo_ctl('cn','synccommit','')")
+	exec("create table comparison(id int not null,k int,skey int)")
+	if len(rows("data branch diff comparison against comparison")) != 0 {
+		panic("ordinary branch diff should remain empty")
+	}
+	pass("ordinary native branch readers remain supported")
+	checkBranchRejection := func() {
+		for _, statement := range []string{
+			"data branch diff stored against comparison",
+			"data branch diff comparison against stored",
+			"data branch diff stored against comparison output as forbidden_diff",
+			"data branch merge stored into comparison",
+			"data branch merge comparison into stored",
+		} {
+			_, err := db.ExecContext(ctx, statement)
+			requireServerRejection("MV branch endpoint", err)
+			if !strings.Contains(err.Error(), "materialized view") {
+				panic(err)
+			}
+		}
+		if got := rows("select count(*) from mo_catalog.mo_tables where reldatabase='mv_consumer_validation' and relname='forbidden_diff'"); !reflect.DeepEqual(got, [][]string{{"0"}}) {
+			panic("rejected branch diff created an output table")
+		}
+	}
+	checkBranchRejection()
+	pass("unpopulated MV branch readers reject both endpoints before diff output")
 	const dependentRead = "select (select (select s.id)) from stored s"
 	for _, suffix := range []string{"", " limit 0", " where false"} {
 		_, err := db.ExecContext(ctx, dependentRead+suffix)
@@ -100,6 +125,11 @@ func runConsumerCases(dsn, secondDSN string) {
 	rows("select mo_ctl('cn','synccommit','')")
 	const publication = "select successful_sequence,last_run,source_physical,source_logical from mo_catalog.mo_materialized_views where account_id=0 and database_name='mv_consumer_validation' and name='stored'"
 	before := rows(publication)
+	checkBranchRejection()
+	if !reflect.DeepEqual(before, rows(publication)) || !reflect.DeepEqual(rows("select count(*) from comparison"), [][]string{{"0"}}) || !reflect.DeepEqual(rows("select id,k,skey from facts order by id"), rows("select id,k,skey from stored order by id")) {
+		panic("rejected branch operation changed MV publication or source rows")
+	}
+	pass("populated MV branch operations remain unsupported with unchanged publication")
 	if !reflect.DeepEqual(rows(dependentRead+" order by s.id"), [][]string{{"1"}, {"2"}}) || len(rows(dependentRead+" limit 0")) != 0 || len(rows(dependentRead+" where false")) != 0 {
 		panic("populated dependent MV scan changed result semantics")
 	}

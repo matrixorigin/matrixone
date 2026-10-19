@@ -638,7 +638,7 @@ func TestCompilerContextResolveVariableDelegatesToAttachedSession(t *testing.T) 
 	require.Equal(t, int64(10), value)
 	// Internal SQL callers can install a resolver for only a subset of
 	// session variables. Unrelated planner lookups retain their nil default.
-	value, err = processOnly.ResolveVariable("foreign_key_checks", true, false)
+	value, err = processOnly.ResolveVariable("group_concat_max_len", true, false)
 	require.NoError(t, err)
 	require.Nil(t, value)
 	value, err = processOnly.ResolveVariable("other", false, true)
@@ -757,7 +757,7 @@ func TestInternalCompilerPlanConsumesScopedDOP(t *testing.T) {
 	}{
 		{"max_dop", false, false}, {"max_dop", true, true},
 		{"div_precision_increment", false, false}, {"div_precision_increment", true, true},
-		{"foreign_key_checks", true, false},
+		{"foreign_key_checks", false, false}, {"foreign_key_checks", true, true},
 		{"sql_mode", false, false}, {"sql_mode", true, true},
 	} {
 		v, err := compiler.ResolveVariable(tc.name, tc.system, tc.global)
@@ -912,4 +912,35 @@ func TestBorrowedExecutorSealsFatalErrorBeforeCallbackCanSuppressIt(t *testing.T
 			require.NoError(t, callback())
 		})
 	}
+}
+
+// Internal COPY INSERT compilation must use the session's FK-check mode,
+// while absent resolvers keep the enabled default and resolution errors fail.
+func TestInternalCompilerForeignKeyChecks(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	compiler := &compilerContext{ctx: context.Background(), proc: proc}
+	for _, value := range []any{int64(0), int64(1), int8(0), int8(1), nil} {
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+			require.Equal(t, "foreign_key_checks", name)
+			require.True(t, system)
+			require.False(t, global)
+			return value, nil
+		})
+		enabled, err := plan.IsForeignKeyChecksEnabled(compiler)
+		require.NoError(t, err)
+		require.Equal(t, value != int64(0) && value != int8(0), enabled)
+	}
+	proc.SetResolveVariableFunc(nil)
+	enabled, err := plan.IsForeignKeyChecksEnabled(compiler)
+	require.NoError(t, err)
+	require.True(t, enabled)
+	sentinel := errors.New("foreign key mode unavailable")
+	proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) { return nil, sentinel })
+	_, err = plan.IsForeignKeyChecksEnabled(compiler)
+	require.ErrorIs(t, err, sentinel)
+	proc.ReplaceTopCtx(context.WithValue(proc.GetTopContext(), defines.IgnoreForeignKey{}, true))
+	enabled, err = plan.IsForeignKeyChecksEnabled(compiler)
+	require.NoError(t, err)
+	require.False(t, enabled, "explicit internal ignore takes precedence over session resolver")
 }
