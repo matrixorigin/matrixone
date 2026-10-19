@@ -450,49 +450,65 @@ func TestScalarSetReaggregationAdmission(t *testing.T) {
 }
 
 func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
-	arm := "select cast(i.N_NATIONKEY as double) from NATION i where i.N_NATIONKEY>o.N_NATIONKEY"
-	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select o.N_NATIONKEY,("+arm+" union "+arm+") from NATION o")
-	require.NoError(t, err)
-	single, memberGroups, outerGroups := false, false, false
-	identities := 0
-	seen := make(map[int32]bool)
-	var visit func(int32)
-	visit = func(id int32) {
-		if seen[id] {
-			return
-		}
-		seen[id] = true
-		node := p.GetQuery().Nodes[id]
-		if node.NodeType == planpb.Node_WINDOW {
-			for _, expr := range node.WinSpecList {
-				window := expr.GetW()
-				if window.WindowFunc.GetF().Func.ObjName == "row_number" {
-					require.Empty(t, window.PartitionBy)
-					require.Empty(t, window.OrderBy)
-					identities++
+	for _, tc := range []struct{ name, source, key string }{
+		{"table", "NATION", "N_NATIONKEY"},
+		{"function", "generate_series(1,3)", "result"},
+		{"function-alias", "(select result k from generate_series(1,3) g)", "k"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			arm := "select cast(i.N_NATIONKEY as double) from NATION i where i.N_NATIONKEY>o." + tc.key
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select o."+tc.key+",("+arm+" union "+arm+") from "+tc.source+" o")
+			require.NoError(t, err)
+			single, memberGroups, outerGroups := false, false, false
+			marked := 0
+			identities := 0
+			seen := make(map[int32]bool)
+			var visit func(int32)
+			visit = func(id int32) {
+				if seen[id] {
+					return
+				}
+				seen[id] = true
+				node := p.GetQuery().Nodes[id]
+				if node.ScalarSetReaggregation {
+					marked++
+				}
+				if node.NodeType == planpb.Node_WINDOW {
+					for _, expr := range node.WinSpecList {
+						window := expr.GetW()
+						if window.WindowFunc.GetF().Func.ObjName == "row_number" {
+							require.Empty(t, window.PartitionBy)
+							require.Empty(t, window.OrderBy)
+							identities++
+						}
+					}
+				}
+				if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_SINGLE {
+					single = true
+					require.Len(t, node.OnList, 1)
+					require.Equal(t, "or", node.OnList[0].GetF().Func.ObjName)
+				}
+				if node.NodeType == planpb.Node_AGG {
+					memberGroups = memberGroups || len(node.GroupByHashKey) == 3
+					outerGroups = outerGroups || len(node.GroupByHashKey) == 1
+				}
+				for _, child := range node.Children {
+					visit(child)
 				}
 			}
-		}
-		if node.NodeType == planpb.Node_JOIN && node.JoinType == planpb.Node_SINGLE {
-			single = true
-			require.Len(t, node.OnList, 1)
-			require.Equal(t, "or", node.OnList[0].GetF().Func.ObjName)
-		}
-		if node.NodeType == planpb.Node_AGG {
-			memberGroups = memberGroups || len(node.GroupByHashKey) == 3
-			outerGroups = outerGroups || len(node.GroupByHashKey) == 1
-		}
-		for _, child := range node.Children {
-			visit(child)
-		}
+			for _, step := range p.GetQuery().Steps {
+				visit(step)
+			}
+			require.True(t, single, "the final optimizer must preserve scalar cardinality checking")
+			require.True(t, memberGroups, "membership must retain outer identity, marker and visible set key")
+			require.True(t, outerGroups, "final scalar aggregation must partition by outer identity")
+			require.Equal(t, 1, identities, "outer identity must survive optimization as a global WINDOW")
+			require.Equal(t, 2, marked, "identity and candidate join retain bounded local fallback markers")
+			floor, err := RequiredPersistedExpressionProtocolVersion(p.GetQuery())
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion123, floor)
+		})
 	}
-	for _, step := range p.GetQuery().Steps {
-		visit(step)
-	}
-	require.True(t, single, "the final optimizer must preserve scalar cardinality checking")
-	require.True(t, memberGroups, "membership must retain outer identity, marker and visible set key")
-	require.True(t, outerGroups, "final scalar aggregation must partition by outer identity")
-	require.Equal(t, 1, identities, "outer identity must survive optimization as a global WINDOW")
 }
 
 func TestScalarSetCompositionRetainsOuterProducer(t *testing.T) {
@@ -664,4 +680,25 @@ func TestVolatileBoundaryUnionKeepsIndependentArms(t *testing.T) {
 		}
 		require.True(t, found, "volatile evaluations cannot be reused")
 	}
+}
+
+func TestScalarFunctionOuterOutputBoundary(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
+	integer, floating := types.T_int64.ToType().PlanType(), types.T_float64.ToType().PlanType()
+	builder.qry.Nodes = []*planpb.Node{
+		{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: integer}}}},
+		{NodeType: planpb.Node_FUNCTION_SCAN, BindingTags: []int32{20}, Children: []int32{0}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: integer}, {Typ: floating}}}},
+		{NodeType: planpb.Node_PROJECT, BindingTags: []int32{30}, Children: []int32{1}, ProjectList: []*planpb.Expr{GetColExpr(floating, 20, 1)}},
+	}
+	ctx := &BindContext{}
+	outputs, ok := builder.collectScalarOuterOutputs(1, -1, 0, ctx)
+	require.True(t, ok)
+	require.Equal(t, []scalarOuterOutput{{ref: [2]int32{20, 0}, typ: integer}, {ref: [2]int32{20, 1}, typ: floating}}, outputs)
+	outputs, ok = builder.collectScalarOuterOutputs(2, -1, 0, ctx)
+	require.True(t, ok)
+	require.Equal(t, []scalarOuterOutput{{ref: [2]int32{30, 0}, typ: floating, aliases: [][2]int32{{20, 1}}}}, outputs)
+	builder.qry.Nodes[1].TableDef = nil
+	_, ok = builder.collectScalarOuterOutputs(1, -1, 0, ctx)
+	require.False(t, ok, "missing function output schema must fail closed")
+	require.Empty(t, builder.scalarProjectionAliases(1, GetColExpr(floating, 20, 1)))
 }

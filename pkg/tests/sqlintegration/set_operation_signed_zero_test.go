@@ -303,6 +303,63 @@ func TestSetOperationSignedZero(t *testing.T) {
 				require.Equal(t, []string{"2"}, readWindowNullRows(t, rows))
 			})
 
+			t.Run("scalar-function-outer", func(t *testing.T) {
+				for _, q := range []string{
+					"create table scalar_function_inner(k int,d double)",
+					"insert into scalar_function_inner values(3,1.25)",
+				} {
+					_, err := conn.ExecContext(ctx, q)
+					require.NoError(t, err, q)
+				}
+				arm := "select i.d from scalar_function_inner i where i.k>o.result"
+				scalar := "cast((" + arm + " union " + arm + ") as varchar)"
+				want := []string{"1:1.25", "2:1.25", "3:NULL"}
+				for _, tc := range []struct {
+					name, query string
+					want        []string
+				}{
+					{"single-arm-control", "select o.result,cast((" + arm + ") as varchar) from generate_series(1,3) o order by o.result", want},
+					{"derived-control", "select o.result," + scalar + " from (select result from generate_series(1,3) g) o order by o.result", want},
+					{"direct", "select o.result," + scalar + " from generate_series(1,3) o order by o.result", want},
+					{"aliases", "select o.result,o.copy," + scalar + " from (select result,result copy from generate_series(1,3) g) o order by o.result", []string{"1:1:1.25", "2:2:1.25", "3:3:NULL"}},
+					{"duplicate-occurrences", "select o.result," + scalar + " from generate_series(1,3) o cross join generate_series(1,2) d order by o.result", []string{"1:1.25", "1:1.25", "2:1.25", "2:1.25", "3:NULL", "3:NULL"}},
+					{"empty-outer", "select o.result," + scalar + " from generate_series(1,3) o where o.result<0", nil},
+				} {
+					t.Run(tc.name, func(t *testing.T) {
+						rows, err := conn.QueryContext(ctx, tc.query)
+						require.NoError(t, err, tc.query)
+						require.Equal(t, tc.want, readWindowNullRows(t, rows))
+					})
+				}
+				t.Run("prepared-bounds", func(t *testing.T) {
+					stmt, err := conn.PrepareContext(ctx, "select o.result,"+scalar+" from generate_series(?,?,1) o order by o.result")
+					require.NoError(t, err)
+					defer stmt.Close()
+					for _, tc := range []struct {
+						first, last int
+						want        []string
+					}{
+						{1, 3, want}, {3, 1, nil}, {2, 3, []string{"2:1.25", "3:NULL"}}, {1, 3, want},
+					} {
+						rows, err := stmt.QueryContext(ctx, tc.first, tc.last)
+						require.NoError(t, err)
+						require.Equal(t, tc.want, readWindowNullRows(t, rows))
+					}
+				})
+				_, err := conn.ExecContext(ctx, "update scalar_function_inner set d=NULL")
+				require.NoError(t, err)
+				rows, err := conn.QueryContext(ctx, "select o.result,"+scalar+" from generate_series(1,3) o order by o.result")
+				require.NoError(t, err)
+				require.Equal(t, []string{"1:NULL", "2:NULL", "3:NULL"}, readWindowNullRows(t, rows))
+				_, err = conn.ExecContext(ctx, "update scalar_function_inner set d=1.25")
+				require.NoError(t, err)
+				_, err = conn.ExecContext(ctx, "insert into scalar_function_inner values(3,2.5)")
+				require.NoError(t, err)
+				var rejected string
+				err = conn.QueryRowContext(ctx, "select "+scalar+" from generate_series(1,1) o").Scan(&rejected)
+				require.EqualError(t, err, "Error 1242 (21000): Subquery returns more than 1 row")
+			})
+
 			t.Run("existential-predicate-templates", func(t *testing.T) {
 				for _, q := range []string{
 					"create table predicate_inner(a int,b int,f double)",

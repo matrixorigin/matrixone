@@ -3426,7 +3426,7 @@ func (builder *QueryBuilder) scalarProjectionAliases(childID int32, expr *plan.E
 				return aliases
 			}
 			childID = child.Children[0]
-		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_FUNCTION_SCAN:
 			if len(child.BindingTags) == 1 && child.TableDef != nil &&
 				col.RelPos == child.BindingTags[0] && col.ColPos >= 0 &&
 				int(col.ColPos) < len(child.TableDef.Cols) {
@@ -3442,6 +3442,8 @@ func (builder *QueryBuilder) scalarProjectionAliases(childID int32, expr *plan.E
 
 // collectScalarOuterOutputs walks only output boundaries. Descending through
 // an AGG or PROJECT would admit columns that the next JOIN cannot read.
+// FUNCTION_SCAN likewise owns its schema; its children produce arguments, not
+// additional columns visible above the scan.
 func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCols int32, ctx *BindContext) ([]scalarOuterOutput, bool) {
 	var outputs []scalarOuterOutput
 	seen := make(map[[2]int32]bool)
@@ -3465,7 +3467,7 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 		}
 		node := builder.qry.Nodes[id]
 		switch node.NodeType {
-		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_FUNCTION_SCAN:
 			if len(node.BindingTags) != 1 || node.TableDef == nil {
 				return false
 			}
