@@ -31,13 +31,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -148,6 +153,7 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 		for _, query := range []string{
 			"create database " + database,
 			"create table " + database + ".source (id int not null default 7, label varchar(20) default 'value')",
+			"insert into " + database + ".source values (3, 'first')",
 			"create view " + database + ".target as select id from " + database + ".source",
 			"create view " + database + ".middle as select id, label from " + database + ".source",
 			"create view " + database + ".outer_a as select id, label from " + database + ".middle",
@@ -275,7 +281,7 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 			stale.Close()
 		})
 		// 外层事务由 fixture 回滚；未提交的真实 DDL 不能泄漏至下一事务。
-		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(_ *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
+		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
 			db, err := svc.GetEngine().Database(ctx, database, op)
 			require.NoError(t, err)
 			for _, name := range []string{"owned", "rollback_only"} {
@@ -283,6 +289,57 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 				require.NoError(t, err)
 				require.False(t, exists, name)
 			}
+			ctasStatements, err := mysql.Parse(ctx, "create table plan_only_target as select id_alias, label_alias from outer_b", 1)
+			require.NoError(t, err)
+			defer ctasStatements[0].Free()
+			beforeStamp, beforeRevision := nativeViewSchemaStamp(t, op)
+			ctas, err := compiler.BuildPlanWithViewSchema(ctx, ctasStatements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+			require.NoError(t, err)
+			ctasColumns := ctas.GetDdl().GetCreateTable().TableDef.Cols
+			require.Equal(t, "id_alias", ctasColumns[0].Name)
+			require.Equal(t, "0", ctasColumns[0].Default.OriginString)
+			require.EqualValues(t, 40, ctasColumns[1].Typ.Width)
+			afterStamp, afterRevision := nativeViewSchemaStamp(t, op)
+			require.Equal(t, beforeStamp, afterStamp, "planning CTAS must not advance its borrowed transaction")
+			require.Equal(t, beforeRevision, afterRevision)
+			exists, err := db.RelationExists(ctx, "plan_only_target", proc)
+			require.NoError(t, err)
+			require.False(t, exists, "planning cannot execute CTAS")
+			// Explicit S3 binding must produce an executable base-table subtree,
+			// not a metadata-only View memo scan. The parent owns execution.
+			const query = "select id_alias, label_alias from outer_b"
+			statements, err := mysql.Parse(ctx, query, 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+			p, err := compiler.BuildPlanWithViewSchema(ctx, statements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(p)
+			require.Len(t, columns, 2)
+			require.EqualValues(t, 40, columns[1].Typ.Width)
+			names := make([]string, 0, len(p.GetQuery().CatalogDependencies))
+			for _, ref := range p.GetQuery().CatalogDependencies {
+				names = append(names, ref.ObjName)
+			}
+			require.ElementsMatch(t, []string{"outer_b", "middle", "source"}, names)
+			c := compile.NewCompile(cn.GetServiceConfig().CN.ServiceAddress, database, query, "", "",
+				svc.GetEngine(), proc, statements[0], false, nil, time.Now())
+			defer c.Release()
+			var gotIDs []int32
+			var gotLabels []string
+			require.NoError(t, c.Compile(ctx, p, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+				if bat != nil && bat.RowCount() > 0 {
+					ids := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+					for i := 0; i < bat.RowCount(); i++ {
+						gotIDs = append(gotIDs, ids[i])
+						gotLabels = append(gotLabels, bat.Vecs[1].GetStringAt(i))
+					}
+				}
+				return nil
+			}))
+			_, err = c.Run(0)
+			require.NoError(t, err)
+			require.Equal(t, []int32{3}, gotIDs)
+			require.Equal(t, []string{"first"}, gotLabels)
 		})
 	})
 }
@@ -425,6 +482,31 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 						}
 						require.True(t, found)
 					}
+					for _, prepared := range []bool{false, true} {
+						query := "select id from subscribed." + test.view
+						if prepared {
+							query = "prepare derived_schema from '" + query + "'"
+						}
+						statements, err := mysql.Parse(tenantCtx, query, 1)
+						require.NoError(t, err)
+						func() {
+							defer statements[0].Free()
+							p, err := compiler.BuildPlanWithViewSchema(tenantCtx, statements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+							require.NoError(t, err, "prepared=%v", prepared)
+							if prepared {
+								p = p.GetDcl().GetPrepare().Plan
+							}
+							require.EqualValues(t, types.T_int32, plan.GetResultColumnsFromPlan(p)[0].Typ.Id)
+							foundPublisherSource := false
+							for _, ref := range p.GetQuery().CatalogDependencies {
+								if ref.ObjName == "collision_source" && ref.PubInfo != nil && ref.PubInfo.TenantId == int32(catalog.System_Account) {
+									require.Equal(t, test.sourceDatabase, ref.SchemaName)
+									foundPublisherSource = true
+								}
+							}
+							require.True(t, foundPublisherSource, "reusable plans need the actual publisher catalog account")
+						}()
+					}
 				})
 			}
 			// Alternate domains within one request, including memo reuse and an
@@ -536,6 +618,14 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 				require.Nil(t, result)
 				require.ErrorContains(t, err, "view schema access denied")
 				require.False(t, errors.Is(err, plan.ErrViewSchemaChanged), "真实权限查询自身不得推进请求代号")
+				statements, parseErr := mysql.Parse(deniedCtx, "select * from subscribed."+name, 1)
+				require.NoError(t, parseErr)
+				func() {
+					defer statements[0].Free()
+					p, planErr := compiler.BuildPlanWithViewSchema(deniedCtx, statements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+					require.Nil(t, p)
+					require.ErrorContains(t, planErr, "view schema access denied")
+				}()
 			}
 			request.Close()
 			afterStamp, afterRevision := nativeViewSchemaStamp(t, op)

@@ -23,8 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -54,6 +56,8 @@ type viewSchemaDerivation struct {
 	lower                                               int64
 	leases                                              []*process.ExecutionTransientMemoryReservation
 	memoEligible                                        bool
+	planning                                            bool
+	planDependencies                                    []*ObjectRef
 	dependencyLog                                       []ViewDependency
 	memoScans                                           map[*QueryBuilder]map[int32]bool
 	request                                             *ViewSchemaRequest
@@ -78,15 +82,39 @@ func newViewSchemaDerivation(request *ViewSchemaRequest) *viewSchemaDerivation {
 	state.capture = newViewDependencyCaptureContext(compiler.CompilerContext)
 	return state
 }
+func (c *viewSchemaCompiler) getInternalSQLExecutor(proc *process.Process) (executor.SQLExecutor, bool) {
+	if provider, ok := c.CompilerContext.(interface {
+		getInternalSQLExecutor(*process.Process) (executor.SQLExecutor, bool)
+	}); ok {
+		return provider.getInternalSQLExecutor(proc)
+	}
+	return nil, false
+}
+
 func (c *viewSchemaCompiler) GetLowerCaseTableNames() int64 { return c.state.lower }
 func (c *viewSchemaCompiler) GetContext() context.Context   { return c.ctx }
 func (c *viewSchemaCompiler) SetContext(ctx context.Context) {
 	c.ctx = ctx
 	c.CompilerContext.SetContext(ctx)
 }
+
+// Database existence must use the same publisher/snapshot domain as source
+// resolution. The bool-only legacy probe can both lose storage errors and
+// switch back to the subscriber before binding a qualified nested View.
+func (c *viewSchemaCompiler) CheckViewDatabase(name string, snapshot *Snapshot) (bool, error) {
+	_, err := c.CompilerContext.GetDatabaseId(name, snapshot)
+	if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
+	}
+	if c.state.planning && c.state.depth == 0 {
+		return c.resolveRoot(database, name, snapshot)
 	}
 	obj, def, err := c.CompilerContext.Resolve(database, name, snapshot)
 	if err != nil {
@@ -102,7 +130,11 @@ func (c *viewSchemaCompiler) resolveRoot(database, name string, snapshot *Snapsh
 		ResolveViewSchemaRoot(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
 	})
 	if !ok {
-		return c.Resolve(database, name, snapshot)
+		obj, def, err := c.CompilerContext.Resolve(database, name, snapshot)
+		if err != nil {
+			return nil, nil, err
+		}
+		return c.record(obj, def, snapshot, database, name)
 	}
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
@@ -139,6 +171,13 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 	if len(c.state.capture.deps) >= viewSchemaWorkLimit {
 		return nil, nil, ErrViewSchemaLimit
 	}
+	// A View's physical column snapshot is compatibility data, not an input
+	// to inference or its admission. Do not inspect/copy stale columns or let
+	// their count reject an otherwise small, valid semantic definition.
+	if def.TableType == catalog.SystemViewRel {
+		def = CloneTableDefForPlan(def, false)
+		def.Name2ColIndex = nil
+	}
 	if len(def.Cols) > MaxViewMetadataColumns {
 		return nil, nil, ErrViewSchemaLimit
 	}
@@ -171,6 +210,20 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 	for _, dep := range single.deps {
 		c.state.capture.deps[viewSchemaDependencyKey(dep)] = dep
 		c.state.dependencyLog = append(c.state.dependencyLog, dep)
+		if c.state.planning {
+			ref := prepareSchemaRefWithSnapshot(obj, def, snapshot)
+			account, err := c.state.request.binding.Compiler.GetAccountId()
+			if err != nil {
+				return nil, nil, err
+			}
+			if ref.PubInfo == nil && dep.AccountID != account {
+				// Physical publisher sources need their actual catalog account.
+				// Name-only reusable-plan validators must rebind these references
+				// rather than resolve a same-named subscriber object.
+				ref.PubInfo = &planpb.PubInfo{TenantId: int32(dep.AccountID)}
+			}
+			c.state.planDependencies = appendPrepareSchemas(c.state.planDependencies, ref)
+		}
 	}
 	if def.TableType != catalog.SystemViewRel && (def.TableType != "" && def.TableType != catalog.SystemOrdinaryRel || def.IsTemporary) {
 		c.state.memoEligible = false
@@ -179,6 +232,16 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 	// It may only mutate this request's copy, never the catalog resolver's graph.
 	return DeepCopyObjectRef(obj), DeepCopyTableDef(def, true), nil
 }
+
+// SELECT/CTAS use the same logical column budget as description inference.
+// inferViewColumns may wrap this compiler in its own capture context; that
+// wrapper charges directly, so each bound select list is still charged once.
+func (c *viewSchemaCompiler) enterNestedView() error { return c.state.request.check() }
+func (c *viewSchemaCompiler) leaveNestedView()       {}
+func (c *viewSchemaCompiler) chargeViewColumns(count int) error {
+	return c.state.charge(0, count)
+}
+
 func (c *viewSchemaCompiler) ResolveSnapshotWithSnapshotName(name string) (*Snapshot, error) {
 	snapshot, err := c.CompilerContext.ResolveSnapshotWithSnapshotName(name)
 	if err == nil && snapshot != nil {

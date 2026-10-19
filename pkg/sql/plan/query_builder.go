@@ -12312,19 +12312,26 @@ func (builder *QueryBuilder) bindView(
 		previousLower := state.lower
 		state.lower = viewLowerCaseTableNames
 		defer func() { state.lower = previousLower }()
-		memoFrame = state.beginMemo(obj, tableDef, snapshot, viewLowerCaseTableNames)
 		if viewData.RequiredProtocolVersion != nil {
-			memoFrame.requiredProtocol = *viewData.RequiredProtocolVersion
 			state.observeProtocol(*viewData.RequiredProtocolVersion)
 		}
-		state.memoEligible = state.memoEligible && transparentViewProjection(viewStmt.AsSource) && obj.PubInfo == nil && builder.compCtx.GetQueryingSubscription() == nil && metadataSubscription == nil
-		if cached, hit, loadErr := memoFrame.load(builder, viewCtx, obj, tableDef, snapshot, table); loadErr != nil {
-			return 0, loadErr
-		} else if hit {
-			return cached, nil
+		// Description memo entries contain synthetic metadata-only scans.
+		// Executable consumers must always bind their own real source subtree;
+		// a warm Describe request cannot substitute a View scan for that tree.
+		if !state.planning {
+			memoFrame = state.beginMemo(obj, tableDef, snapshot, viewLowerCaseTableNames)
+			if viewData.RequiredProtocolVersion != nil {
+				memoFrame.requiredProtocol = *viewData.RequiredProtocolVersion
+			}
+			state.memoEligible = state.memoEligible && transparentViewProjection(viewStmt.AsSource) && obj.PubInfo == nil && builder.compCtx.GetQueryingSubscription() == nil && metadataSubscription == nil
+			if cached, hit, loadErr := memoFrame.load(builder, viewCtx, obj, tableDef, snapshot, table); loadErr != nil {
+				return 0, loadErr
+			} else if hit {
+				return cached, nil
+			}
+			state.memoFrames = append(state.memoFrames, memoFrame)
+			defer func() { memoFrame.finish(viewCtx, err) }()
 		}
-		state.memoFrames = append(state.memoFrames, memoFrame)
-		defer func() { memoFrame.finish(viewCtx, err) }()
 	}
 
 	isSubscriptionStatistics := isSubscriptionStatisticsView(schema, table, metadataSubscription)
@@ -12956,6 +12963,17 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		var snapshot *Snapshot
 		if ctx.snapshot != nil {
 			snapshot = ctx.snapshot
+		}
+
+		if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning && state.depth == 0 {
+			// Root visibility precedes database/publication metadata probes too.
+			// Nested source execution privileges remain in ViewReferences.
+			// Authorization can run catalog SQL. As in Describe, give it the
+			// request context, not the private derivation marker: its own binder
+			// must not recursively authorize metadata probes as new user roots.
+			if err = state.request.binding.Authorize(state.request.workCtx, schema, table, snapshot); err != nil {
+				return 0, "", err
+			}
 		}
 
 		// Published View SQL keeps its creation namespace. Only its implicit
