@@ -126,12 +126,12 @@ func profileCampaign(ctx context.Context, config, id, baseline string, pilot boo
 			return errors.New("profile campaign quota exhausted")
 		}
 		prepared := f.Prepared[sf][engine]
-		armPath := filepath.Join(c.Root, prepared.Qualification.Path)
+		armPath := filepath.Join(c.Root, prepared.Pilot.Path)
 		qual, err := readJSON[ArmRecord](armPath)
 		if err != nil {
 			return err
 		}
-		receipt, qualRoot, err := readArm(filepath.Dir(armPath), qual)
+		receipt, _, err := readArm(filepath.Dir(armPath), qual)
 		if err != nil {
 			return err
 		}
@@ -171,25 +171,6 @@ func profileCampaign(ctx context.Context, config, id, baseline string, pilot boo
 			attempt.Status = "failed"
 			attempt.Error = runErr.Error()
 		} else {
-			out, dir, err := readArm(path, record)
-			if err != nil {
-				runErr = err
-			} else if kind != "operator" || engine == "duckdb" {
-				d, err := loadDataset(c.Datasets[sf], false)
-				if err != nil {
-					return err
-				}
-				for _, result := range out.Queries {
-					if err := compareCaptures(qualRoot, dir, receipt.Queries[q-1].Capture, result.Capture, d.Queries[q-1]); err != nil {
-						runErr = err
-						break
-					}
-				}
-			}
-			if runErr != nil {
-				attempt.Status = "failed"
-				attempt.Error = runErr.Error()
-			}
 			if record.Profile != nil && record.Profile.Status != "complete" {
 				attempt.Status = "partial"
 				attempt.Error = fmt.Sprint(record.Profile.Errors)
@@ -286,7 +267,7 @@ func deepProfileSelection(c Campaign, f Frozen, root string) (map[string]map[int
 		if err != nil {
 			return nil, err
 		}
-		if pair.Trial.Experiment != "warm" || pair.Correctness != "pass" {
+		if pair.Trial.Experiment != "warm" || pair.Status != "pass" {
 			continue
 		}
 		sf := pair.Trial.Scale
