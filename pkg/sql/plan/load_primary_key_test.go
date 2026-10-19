@@ -50,6 +50,9 @@ func TestLoadPrimaryKeyValidationPlan(t *testing.T) {
 				}
 			}
 			require.Equal(t, tc.want, dedups)
+			if tc.want > 0 {
+				requireLoadValidationIndependentOfWrites(t, pn.GetQuery())
+			}
 			if tc.table == "dept" {
 				maintained := 0
 				for _, n := range pn.GetQuery().Nodes {
@@ -59,6 +62,62 @@ func TestLoadPrimaryKeyValidationPlan(t *testing.T) {
 				}
 				require.Equal(t, 1+len(mock.ctxt.tables[tc.table].Indexes), maintained, "LOAD must retain base and index writes")
 			}
+		})
+	}
+}
+
+func TestLoadPrimaryKeyValidationJoinOrientation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		spillMem int64
+		right    bool
+	}{
+		{"right map fits", 512 << 20, true},
+		{"left spill fallback", 1 << 20, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			proc.Base.Lim.Size = 2 << 30 // Budget the estimated keys, without allocating rows.
+			mock := NewMockOptimizer(true, proc)
+			pn, err := runOneStmt(mock, t, "load data inline format='csv', data='1,d,l' into table dept fields terminated by ','")
+			require.NoError(t, err)
+			qry := pn.GetQuery()
+			var check *planpb.Node
+			for _, n := range qry.Nodes {
+				if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP {
+					require.Nil(t, check)
+					check = n
+				}
+			}
+			require.NotNil(t, check)
+			// Restore logical roles before rerunning the real orientation passes.
+			if check.IsRightJoin {
+				check.Children[0], check.Children[1] = check.Children[1], check.Children[0]
+				check.IsRightJoin = false
+			}
+			// Runtime filters are generated after these passes. Remove that later
+			// physical dependency before changing the costing inputs and replaying.
+			check.RuntimeFilterBuildList = nil
+			check.RuntimeFilterProbeList = nil
+			target, input := check.Children[0], check.Children[1]
+			require.Equal(t, planpb.Node_TABLE_SCAN, qry.Nodes[target].NodeType)
+			require.Equal(t, planpb.Node_SINK_SCAN, qry.Nodes[input].NodeType)
+			qry.Nodes[target].Stats = &planpb.Stats{Outcnt: 100, Rowsize: 8}
+			qry.Nodes[input].Stats = &planpb.Stats{Outcnt: 1 << 20, Rowsize: 1 << 10}
+			builder := NewQueryBuilder(planpb.Query_INSERT, &mock.ctxt, false, true)
+			builder.qry = qry
+			builder.joinSpillMem = tc.spillMem
+			builder.determineBuildAndProbeSide(check.NodeId, false)
+			require.True(t, check.IsRightJoin, "costing chooses the smaller existing target")
+			builder.disableMemoryUnsafeRightDedup(check.NodeId)
+			require.Equal(t, tc.right, check.IsRightJoin)
+			builder.swapJoinChildren(check.NodeId)
+			want := []int32{target, input}
+			if tc.right {
+				want = []int32{input, target}
+			}
+			require.Equal(t, want, check.Children)
+			requireLoadValidationIndependentOfWrites(t, qry)
 		})
 	}
 }
@@ -142,4 +201,50 @@ func TestLoadCompositePrimaryKeyValidationPlan(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+	requireLoadValidationIndependentOfWrites(t, pn.GetQuery())
+}
+
+// A successful FAIL check preserves the input row set, but its hash partitions
+// must not become the bulk writer's partitions. Check both sides of the shared
+// source so retaining an unreachable DEDUP node cannot satisfy this contract.
+func requireLoadValidationIndependentOfWrites(t *testing.T, qry *planpb.Query) {
+	t.Helper()
+	var validationSources, writeSources []int32
+	var visit func(int32, bool)
+	visit = func(id int32, writing bool) {
+		n := qry.Nodes[id]
+		if writing {
+			require.False(t, n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP,
+				"bulk writers must read the prepared input, independently of validation partitioning")
+		}
+		if n.NodeType == planpb.Node_SINK_SCAN {
+			if writing {
+				writeSources = append(writeSources, n.SourceStep...)
+			} else {
+				validationSources = append(validationSources, n.SourceStep...)
+			}
+		}
+		for _, child := range n.Children {
+			visit(child, writing)
+		}
+	}
+	for _, n := range qry.Nodes {
+		if n.NodeType == planpb.Node_MULTI_UPDATE {
+			visit(n.NodeId, true)
+		}
+	}
+	for _, root := range qry.Steps {
+		n := qry.Nodes[root]
+		if n.NodeType == planpb.Node_PROJECT && len(n.Children) == 1 {
+			child := qry.Nodes[n.Children[0]]
+			if child.NodeType == planpb.Node_JOIN && child.JoinType == planpb.Node_DEDUP {
+				require.Equal(t, planpb.Node_FAIL, child.OnDuplicateAction)
+				require.Len(t, n.ProjectList, 1, "validation retains only the primary-key identity")
+				visit(root, false)
+			}
+		}
+	}
+	require.NotEmpty(t, validationSources, "the independent validation must be an executable step")
+	require.NotEmpty(t, writeSources)
+	require.Equal(t, validationSources, writeSources, "both branches consume one prepared image")
 }

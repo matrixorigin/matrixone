@@ -109,7 +109,12 @@ func NewViewSchemaRequest(ctx context.Context, provider ViewSchemaProvider) *Vie
 	return r
 }
 
-func (r *ViewSchemaRequest) Describe(database, name string, snapshot *Snapshot) (result *ViewSchemaResult, err error) {
+func (r *ViewSchemaRequest) Describe(database, name string, snapshot *Snapshot) (*ViewSchemaResult, error) {
+	result, err := r.describe(database, name, snapshot)
+	return result, unwrapViewSchemaDefinitionError(err)
+}
+
+func (r *ViewSchemaRequest) describe(database, name string, snapshot *Snapshot) (result *ViewSchemaResult, err error) {
 	select {
 	case <-r.ctx.Done():
 		return nil, context.Cause(r.ctx)
