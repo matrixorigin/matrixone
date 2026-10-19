@@ -26,6 +26,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -687,4 +688,30 @@ func Test_rewriteCloneCreateSQL_PreservesCaseSensitiveIdentifiers(t *testing.T) 
 	)
 	require.NoError(t, err)
 	require.Equal(t, "create view `DstDB`.`ViewName` as select `ID` from `DstDB`.`TableName`;", got)
+}
+
+func TestTryToIncreaseTxnPhysicalTSUsesWorkspace(t *testing.T) {
+	for _, tenant := range []bool{false, true} {
+		t.Run(map[bool]string{false: "without tenant", true: "with tenant"}[tenant], func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			op := mock_frontend.NewMockTxnOperator(ctrl)
+			ctx := context.Background()
+			op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 1000})
+			want := int64(1000)
+			if tenant {
+				ctx = context.WithValue(ctx, defines.TenantIDKey{}, uint32(0))
+				ws := mock_frontend.NewMockWorkspace(ctrl)
+				gomock.InOrder(
+					op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 1000}),
+					op.EXPECT().GetWorkspace().Return(ws),
+					ws.EXPECT().AdvanceSnapshot(ctx, timestamp.Timestamp{PhysicalTime: 2000}).Return(nil),
+					op.EXPECT().SnapshotTS().Return(timestamp.Timestamp{PhysicalTime: 2001}),
+				)
+				want = 2000
+			}
+			physical, err := tryToIncreaseTxnPhysicalTS(ctx, op)
+			require.NoError(t, err)
+			require.Equal(t, want, physical)
+		})
+	}
 }
