@@ -90,7 +90,7 @@ func configureConn(ctx context.Context, db *sql.DB, e Engine) (*sql.Conn, error)
 	if err != nil {
 		return nil, err
 	}
-	settings := []string{"SET time_zone = '+00:00'", "SET sql_mode = 'ANSI,ONLY_FULL_GROUP_BY'", "SET div_precision_increment = 6", "SET save_query_result = off"}
+	settings := []string{"SET time_zone = '+00:00'", "SET sql_mode = 'ANSI,ONLY_FULL_GROUP_BY'", "SET div_precision_increment = 6", "SET save_query_result = off", "SET SESSION agg_spill_mem = 2147483648"}
 	if e.Name == "duckdb" {
 		settings = []string{"SET TimeZone = 'UTC'", fmt.Sprintf("SET threads = %d", e.Threads), fmt.Sprintf("SET memory_limit = '%dB'", e.MemoryBytes*4/5), "SET enable_progress_bar = false", "SET default_null_order = 'NULLS_FIRST_ON_ASC_LAST_ON_DESC'"}
 	}
@@ -106,7 +106,7 @@ func configureConn(ctx context.Context, db *sql.DB, e Engine) (*sql.Conn, error)
 func effectiveSettings(ctx context.Context, conn *sql.Conn, engine string) (map[string]string, error) {
 	out := map[string]string{}
 	if engine == "mo" {
-		for _, name := range []string{"sql_mode", "time_zone", "div_precision_increment", "save_query_result"} {
+		for _, name := range []string{"sql_mode", "time_zone", "div_precision_increment", "save_query_result", "agg_spill_mem"} {
 			var v string
 			if err := conn.QueryRowContext(ctx, "SELECT @@session."+name).Scan(&v); err != nil {
 				return nil, err

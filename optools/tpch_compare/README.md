@@ -52,6 +52,12 @@ they do not by themselves establish isolated benchmark measurements.
 
 Engine settings include `name` (`mo` or `duckdb`), `database`, `threads` and
 `memory_bytes`. MO credentials come from a named `dsn_env`, never a result file.
+Every MO connection sets session `agg_spill_mem` to 2 GiB (2147483648 bytes),
+including connections for concurrent query streams, and records its effective
+value in the worker receipt. This is an aggregation-worker threshold within the
+campaign's total application memory cap. It uses an explicit threshold in place
+of auto mode's adaptive spill policy. Published runs made with auto mode retain
+their original configuration and results.
 MO loading creates a new `tpch_compare_` database on an explicitly selected owned
 loopback deployment. DuckDB uses a persistent database file. Both native CSV
 load paths explicitly enable parallel reading. Loading creates the schema,

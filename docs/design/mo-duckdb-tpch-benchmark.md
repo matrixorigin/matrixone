@@ -1,7 +1,7 @@
 # MatrixOne versus DuckDB: TPC-H comparison
 
-Version: 0.5. Status: implementation approved; benchmark verification removed
-at the user's explicit request, 2026-10-20.
+Version: 0.6. Status: implementation approved; MO benchmark aggregation threshold
+set to 2 GiB at the user's explicit request, 2026-10-20.
 Approval: the user accepted the comparison plan and requested implementation.
 Revision 0.4 fixes the workstation, resource accounting, and three-part delivery.
 Owners: benchmark runner, MO SQL/storage, and performance analysis.
@@ -202,6 +202,14 @@ engine's internal budgets and effective settings, and use the application cgroup
 as the authoritative total cap. Include page-cache charges, background workers,
 temporary files and client allocations. An OOM is a capacity outcome, not a slow
 query to discard.
+
+Pin session `agg_spill_mem = 2147483648` on every MO benchmark connection and
+record the effective value. This is a per-aggregation-worker threshold; the
+application cgroup retains its original total memory allowance. The explicit
+positive value bypasses auto mode's adaptive spill decision, while execution
+allocation accounting and hard resource limits remain active. Runs using this
+setting have a new worker identity and must be distinguished from the published
+auto-setting baseline. Correctness verification remains outside benchmark scripts.
 
 Keep the application cgroup across deliberate process restarts in warm-OS-cache
 trials so cached file pages remain charged to its allowance. For cold trials,
