@@ -151,6 +151,9 @@ const (
 	// contract without reusing main's codes or the digest dependency's 20338/20339.
 	ErrInvalidJSONPathWildcard  uint16 = 20340
 	ErrCollationCharsetMismatch uint16 = 20341
+	// ErrDuplicateCheckConstraintName reports a CHECK constraint name already
+	// used by another table in the same schema (MySQL 3822).
+	ErrDuplicateCheckConstraintName uint16 = 20342
 
 	// Group 4: unexpected state and io errors
 	ErrInvalidState                             uint16 = 20400
@@ -481,35 +484,36 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrGroupConcatCut:              {ER_CUT_VALUE_GROUP_CONCAT, []string{"HY000"}, "%s"},
 
 	// Group 3: invalid input
-	ErrBadConfig:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
-	ErrInvalidInput:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
-	ErrSyntaxError:             {ER_SYNTAX_ERROR, []string{"42000"}, "SQL syntax error: %s"},
-	ErrParseError:              {ER_PARSE_ERROR, []string{"42000"}, "SQL parser error: %s"},
-	ErrConstraintViolation:     {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
-	ErrDuplicate:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
-	ErrRoleGrantedToSelf:       {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
-	ErrDuplicateEntry:          {ER_DUP_ENTRY, []string{"23000"}, "Duplicate entry '%s' for key '%s'"},
-	ErrWrongValueCountOnRow:    {ER_WRONG_VALUE_COUNT_ON_ROW, []string{"21S01"}, "Column count doesn't match value count at row %d"},
-	ErrBadFieldError:           {ER_BAD_FIELD_ERROR, []string{"42S22"}, "Unknown column '%s' in '%s'"},
-	ErrWrongDatetimeSpec:       {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
-	ErrUpgrateError:            {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
-	ErrUnsupportedDML:          {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
-	ErrOperandColumns:          {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
-	ErrSubqueryNo1Row:          {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
-	ErrInvalidTypeForJSON:      {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
-	ErrInvalidJSONCharset:      {ER_INVALID_JSON_CHARSET, []string{"22032"}, "Cannot create a JSON value from a string with CHARACTER SET '%s'."},
-	ErrUnknownStmtHandler:      {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
-	ErrViewWrongList:           {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
-	ErrWrongArguments:          {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
-	ErrDerivedMustHaveAlias:    {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
-	ErrWrongUsage:              {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
-	ErrUpdateTableUsed:         {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
-	ErrWindowInvalidUse:        {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
-	ErrViewSelectTmpTable:      {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
-	ErrTooManyRows:             {ER_TOO_MANY_ROWS, []string{"42000"}, "Result consisted of more than one row"},
-	ErrCantChangeTxn:           {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
-	ErrInvalidGroupFuncUse:     {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
-	ErrInvalidJSONPathWildcard: {ER_INVALID_JSON_PATH_WILDCARD, []string{"42000"}, "In this situation, path expressions may not contain the * and ** tokens or an array range."},
+	ErrBadConfig:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
+	ErrInvalidInput:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid input: %s"},
+	ErrSyntaxError:                  {ER_SYNTAX_ERROR, []string{"42000"}, "SQL syntax error: %s"},
+	ErrParseError:                   {ER_PARSE_ERROR, []string{"42000"}, "SQL parser error: %s"},
+	ErrConstraintViolation:          {ER_CHECK_CONSTRAINT_VIOLATED, []string{MySQLDefaultSqlState}, "constraint violation: %s"},
+	ErrDuplicateCheckConstraintName: {ER_CHECK_CONSTRAINT_DUP_NAME, []string{MySQLDefaultSqlState}, "Duplicate check constraint name '%-.192s'"},
+	ErrDuplicate:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "tae data: duplicate"},
+	ErrRoleGrantedToSelf:            {ER_ROLE_GRANTED_TO_ITSELF, []string{MySQLDefaultSqlState}, "cannot grant role %s to %s"},
+	ErrDuplicateEntry:               {ER_DUP_ENTRY, []string{"23000"}, "Duplicate entry '%s' for key '%s'"},
+	ErrWrongValueCountOnRow:         {ER_WRONG_VALUE_COUNT_ON_ROW, []string{"21S01"}, "Column count doesn't match value count at row %d"},
+	ErrBadFieldError:                {ER_BAD_FIELD_ERROR, []string{"42S22"}, "Unknown column '%s' in '%s'"},
+	ErrWrongDatetimeSpec:            {ER_WRONG_DATETIME_SPEC, []string{MySQLDefaultSqlState}, "wrong date/time format specifier: %s"},
+	ErrUpgrateError:                 {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "CN upgrade table or view '%s.%s' under tenant '%s:%d' reports error: %s"},
+	ErrUnsupportedDML:               {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "unsupported DML: %s"},
+	ErrOperandColumns:               {ER_OPERAND_COLUMNS, []string{"21000"}, "Operand should contain %d column(s)"},
+	ErrSubqueryNo1Row:               {ER_SUBQUERY_NO_1_ROW, []string{"21000"}, "Subquery returns more than 1 row"},
+	ErrInvalidTypeForJSON:           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "Invalid data type for JSON data in argument %d to function %s; a JSON string or JSON type is required."},
+	ErrInvalidJSONCharset:           {ER_INVALID_JSON_CHARSET, []string{"22032"}, "Cannot create a JSON value from a string with CHARACTER SET '%s'."},
+	ErrUnknownStmtHandler:           {ER_UNKNOWN_STMT_HANDLER, []string{MySQLDefaultSqlState}, "Unknown prepared statement handler (%s) given to %s"},
+	ErrViewWrongList:                {ER_VIEW_WRONG_LIST, []string{MySQLDefaultSqlState}, "In definition of view, derived table or common table expression, SELECT list and column names list have different column counts"},
+	ErrWrongArguments:               {ER_WRONG_ARGUMENTS, []string{MySQLDefaultSqlState}, "Incorrect arguments to %s"},
+	ErrDerivedMustHaveAlias:         {ER_DERIVED_MUST_HAVE_ALIAS, []string{"42000"}, "Every derived table must have its own alias"},
+	ErrWrongUsage:                   {ER_WRONG_USAGE, []string{MySQLDefaultSqlState}, "Incorrect usage of %s and %s"},
+	ErrUpdateTableUsed:              {ER_UPDATE_TABLE_USED, []string{MySQLDefaultSqlState}, "You can't specify target table '%-.192s' for update in FROM clause"},
+	ErrWindowInvalidUse:             {ER_WINDOW_INVALID_WINDOW_FUNC_USE, []string{"HY000"}, "You cannot use the window function '%s' in this context"},
+	ErrViewSelectTmpTable:           {ER_VIEW_SELECT_TMPTABLE, []string{MySQLDefaultSqlState}, "View's SELECT refers to a temporary table '%-.192s'"},
+	ErrTooManyRows:                  {ER_TOO_MANY_ROWS, []string{"42000"}, "Result consisted of more than one row"},
+	ErrCantChangeTxn:                {ER_CANT_CHANGE_TX_CHARACTERISTICS, []string{"25001"}, "Transaction characteristics can't be changed while a transaction is in progress"},
+	ErrInvalidGroupFuncUse:          {ER_INVALID_GROUP_FUNC_USE, []string{MySQLDefaultSqlState}, "Invalid use of group function"},
+	ErrInvalidJSONPathWildcard:      {ER_INVALID_JSON_PATH_WILDCARD, []string{"42000"}, "In this situation, path expressions may not contain the * and ** tokens or an array range."},
 	// Maps to MySQL's ER_FT_MATCHING_KEY_NOT_FOUND (1191), which rejects the same no-index
 	// CREATE / ALTER / CREATE OR REPLACE VIEW, so clients see the code and text they expect.
 	ErrFtMatchingKeyNotFound:               {ER_FT_MATCHING_KEY_NOT_FOUND, []string{MySQLDefaultSqlState}, FtMatchingKeyNotFoundMsg},
@@ -1311,6 +1315,12 @@ func NewConstraintViolationf(ctx context.Context, format string, args ...any) *E
 
 func NewConstraintViolation(ctx context.Context, msg string) *Error {
 	return newError(ctx, ErrConstraintViolation, msg)
+}
+
+// NewDuplicateCheckConstraintName reports MySQL's ER_CHECK_CONSTRAINT_DUP_NAME
+// (3822): another table in the same schema already uses the CHECK name.
+func NewDuplicateCheckConstraintName(ctx context.Context, name string) *Error {
+	return newError(ctx, ErrDuplicateCheckConstraintName, name)
 }
 
 func NewUnsupportedDML(ctx context.Context, format string, args ...any) *Error {

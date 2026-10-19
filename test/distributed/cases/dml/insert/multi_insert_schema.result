@@ -122,7 +122,7 @@ insert all
 into with_check (id, amount) values (id, amount)
 into no_pk (id, name) values (id + 1000, name)
 select id, name, amount from src;
-constraint violation: Check constraint '__mo_chk_1' is violated
+constraint violation: Check constraint 'with_check_chk_1' is violated
 select count(*) from with_check;
 ➤ count(*)[-5,64,0]  𝄀
 0
