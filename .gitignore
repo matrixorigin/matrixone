@@ -90,6 +90,18 @@ thirdparties/StringZilla-*/*
 thirdparties/fp16/*
 thirdparties/install/*
 thirdparties/usearch-*/*
+# Scratch trees the thirdparties Makefile extracts and compiles in while
+# producing install/. They are recreated from the tracked tarballs on demand,
+# so their contents are never native *inputs*; without these rules the
+# git-status checks in cgo/mo-native-provenance misjudge an in-flight,
+# interrupted, or leftover native build as user-edited inputs (#30235).
+thirdparties/_croaring_build/*
+thirdparties/_fp16/*
+thirdparties/_jemalloc_build/*
+thirdparties/_simsimd/*
+thirdparties/_stringzilla/*
+thirdparties/_usearch_build/*
+thirdparties/_xxhash_build/*
 **/lib
 # Staged at the repo root by `make jieba-dict`, alongside `lib/` from thirdparties.
 # Source-of-truth dict lives at pkg/monlp/tokenizer/dict and stays tracked.
