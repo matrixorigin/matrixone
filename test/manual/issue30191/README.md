@@ -94,6 +94,31 @@ java -cp "$probe_classes:$CONNECTOR_JAR" TimeWindowBooleanMetadataProbe
 The same connection overrides apply. It creates a uniquely named database and
 drops only that database on exit.
 
+## DML RETURNING row images
+
+`ReturningBooleanMetadataProbe.java` checks INSERT/UPDATE/DELETE RETURNING
+against declared BOOLEAN columns. Literal, NULL, predicate, default and
+INSERT-SELECT assignments must not change stored-column BIT/Boolean metadata;
+expressions evaluated by RETURNING remain TINYINT/Number. Reordered/repeated
+outputs, qualified columns, `RETURNING *`, ordinary SELECT, DELETE, and
+`SET flag=flag` controls check metadata and exact value multisets including NULLs.
+
+All 15 queries run in Statement, client-prepared and verified server-prepared
+mode (45 cases). The probe uses JDBC `execute()`/`getResultSet()` for DML,
+checks every executed result and server-prepare metadata, and disables server
+prepare fallback. Client-emulated prepare metadata is not requested before DML
+to avoid driver metadata discovery executing a mutation a second time.
+
+```sh
+probe_classes=$(mktemp -d "${TMPDIR:-/tmp}/returning-boolean-jdbc.XXXXXX")
+javac -cp "$CONNECTOR_JAR" -d "$probe_classes" \
+  test/manual/issue30191/ReturningBooleanMetadataProbe.java
+java -cp "$probe_classes:$CONNECTOR_JAR" ReturningBooleanMetadataProbe
+```
+
+The same connection overrides apply; only the uniquely named fixture database
+is created and dropped by this probe.
+
 ## MARK JOIN predicate results
 
 `MarkBooleanMetadataProbe.java` covers `IN (SELECT ...)` and `= ANY (SELECT ...)`,

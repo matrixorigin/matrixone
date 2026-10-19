@@ -31,6 +31,17 @@ func TestComposedBooleanResultsKeepWireMetadata(t *testing.T) {
 		sql     string
 		lengths []uint32
 	}{
+		{"returning insert literal", "insert into returning_bool values(1,true,7) returning flag", []uint32{1}},
+		{"returning insert null", "insert into returning_bool values(1,null,7) returning flag", []uint32{1}},
+		{"returning insert select predicate", "insert into returning_bool select 1,1>0,7 returning flag", []uint32{1}},
+		{"returning update literal", "update returning_bool set flag=false returning flag", []uint32{1}},
+		{"returning update predicate", "update returning_bool set flag=n>0 returning flag", []uint32{1}},
+		{"returning update self", "update returning_bool set flag=flag returning flag", []uint32{1}},
+		{"returning delete", "delete from returning_bool returning flag", []uint32{1}},
+		{"returning mixed", "update returning_bool set flag=false returning flag,n>0", []uint32{1, 8}},
+		{"returning reordered repeated", "insert into returning_bool values(1,true,7) returning n>0,flag,n>0,flag", []uint32{8, 1, 8, 1}},
+		{"returning expression", "update returning_bool set flag=false returning not flag,flag,true", []uint32{8, 1, 8}},
+		{"returning star", "insert into returning_bool values(1,true,7) returning *", []uint32{0, 1, 0}},
 		{"time window stored first", "select with_grant_option,max(role_id>0) from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute)", []uint32{1, 8}},
 		{"time window aggregate first", "select max(role_id>0),with_grant_option from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute)", []uint32{8, 1}},
 		{"time window repeated", "select max(role_id>0),with_grant_option,max(role_id>0),with_grant_option from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute)", []uint32{8, 1, 8, 1}},

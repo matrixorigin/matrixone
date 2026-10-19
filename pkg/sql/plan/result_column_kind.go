@@ -52,19 +52,51 @@ type resultColumnValueState struct {
 // remain stored; a computed producer reaches every dependent regardless of the
 // order in which outputs or recursive producers are visited.
 type resultColumnKinds struct {
-	query       *pb.Query
-	ids         map[resultColumnValue]int
-	states      []resultColumnValueState
-	expanded    int
-	ready       []int
-	windows     map[int32]map[*pb.Expr]*pb.WindowSpec
-	projections map[int32]*resultColumnProjectionIndex
-	bindings    map[int32]map[int32]int
-	timeWindows map[int32]TimeWindowLayout
+	query          *pb.Query
+	ids            map[resultColumnValue]int
+	states         []resultColumnValueState
+	expanded       int
+	ready          []int
+	windows        map[int32]map[*pb.Expr]*pb.WindowSpec
+	projections    map[int32]*resultColumnProjectionIndex
+	bindings       map[int32]map[int32]int
+	timeWindows    map[int32]TimeWindowLayout
+	returningImage int32
 }
 
 func newResultColumnKinds(query *pb.Query) *resultColumnKinds {
-	return &resultColumnKinds{query: query, ids: make(map[resultColumnValue]int)}
+	return &resultColumnKinds{
+		query: query, ids: make(map[resultColumnValue]int),
+		returningImage: resultColumnReturningImage(query),
+	}
+}
+
+// appendReturningProjection exposes the target row image through a dedicated
+// SINK_SCAN below the RETURNING projection (and optional selector FILTER).
+// Locate that owner from the RETURNING step, not from TableDef alone: ordinary
+// materialized expressions also have schemas and must retain their producers.
+func resultColumnReturningImage(query *pb.Query) int32 {
+	if query == nil || !query.HasReturning || query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
+		return -1
+	}
+	nodeID := query.Steps[query.ReturningStep]
+	for hops := 0; hops < len(query.Nodes); hops++ {
+		if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+			return -1
+		}
+		node := query.Nodes[nodeID]
+		if node.NodeType == pb.Node_SINK_SCAN {
+			if node.TableDef != nil {
+				return nodeID
+			}
+			return -1
+		}
+		if len(node.Children) != 1 {
+			return -1
+		}
+		nodeID = node.Children[0]
+	}
+	return -1
 }
 
 func (k *resultColumnKinds) kind(node int32, expr *pb.Expr) pb.ResultColumnKind {
@@ -292,6 +324,12 @@ func (k *resultColumnKinds) expand(id int) {
 		}
 		return
 	case pb.Node_SINK_SCAN, pb.Node_RECURSIVE_CTE, pb.Node_RECURSIVE_SCAN:
+		if value.node == k.returningImage {
+			// A reference here reads a declared target column, not its
+			// INSERT/UPDATE assignment. Expressions above this row-image
+			// boundary are still classified independently as computations.
+			return
+		}
 		for _, step := range node.SourceStep {
 			if step >= 0 && int(step) < len(k.query.Steps) {
 				k.slot(id, k.query.Steps[step], ref.ColPos)
