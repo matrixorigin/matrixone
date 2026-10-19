@@ -96,6 +96,63 @@ func TestVerifyRejectsChangedInputIdentity(t *testing.T) {
 	if receipt, err := runWorker(ctx, r); err != nil || receipt.Cleanup != "complete" {
 		t.Fatalf("unchanged input verification: %+v, %v", receipt, err)
 	}
+	for _, tc := range []struct {
+		name, table, from, to string
+	}{
+		{"integer becomes text", "region", "r_regionkey INTEGER", "r_regionkey VARCHAR"},
+		{"integer width", "region", "r_regionkey INTEGER", "r_regionkey BIGINT"},
+		{"unsigned integer", "region", "r_regionkey INTEGER", "r_regionkey UINTEGER"},
+		{"nullable column", "region", "r_comment VARCHAR(152) NOT NULL", "r_comment VARCHAR(152)"},
+		{"missing primary key", "region", ",PRIMARY KEY (r_regionkey)", ""},
+		{"extra column", "region", ",PRIMARY KEY", ",extra INTEGER DEFAULT 0,PRIMARY KEY"},
+		{"decimal scale", "supplier", "DECIMAL(15,2)", "DECIMAL(15,3)"},
+		{"decimal precision", "supplier", "DECIMAL(15,2)", "DECIMAL(14,2)"},
+		{"decimal becomes float", "supplier", "DECIMAL(15,2)", "DOUBLE"},
+		{"date becomes text", "orders", "o_orderdate DATE", "o_orderdate VARCHAR"},
+		{"composite key order", "partsupp", "PRIMARY KEY (ps_partkey,ps_suppkey)", "PRIMARY KEY (ps_suppkey,ps_partkey)"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var table Table
+			for _, candidate := range d.Tables {
+				if candidate.Name == tc.table {
+					table = candidate
+				}
+			}
+			ddl := strings.Replace(table.ddl(), tc.from, tc.to, 1)
+			if ddl == table.ddl() {
+				t.Fatal("schema mutation did not change the fixture")
+			}
+			if _, err := db.ExecContext(ctx, "DROP TABLE "+table.Name); err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				for _, sql := range []string{"DROP TABLE IF EXISTS " + table.Name, table.ddl()} {
+					if _, err := db.ExecContext(ctx, sql); err != nil {
+						t.Error(err)
+					}
+				}
+				if table.Name == "region" {
+					if _, err := db.ExecContext(ctx, "INSERT INTO region VALUES (0,'AFRICA','old')"); err != nil {
+						t.Error(err)
+					}
+				}
+			})
+			if _, err := db.ExecContext(ctx, ddl); err != nil {
+				t.Fatal(err)
+			}
+			if table.Name == "region" {
+				if _, err := db.ExecContext(ctx, "INSERT INTO region (r_regionkey,r_name,r_comment) VALUES (0,'AFRICA','old')"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			request := r
+			request.OutputRoot = filepath.Join(t.TempDir(), "drift")
+			receipt, err := runWorker(ctx, request)
+			if err == nil || !strings.Contains(err.Error(), "schema") || receipt.Cleanup != "complete" {
+				t.Fatalf("schema drift must fail with cleanup=%s: %v", receipt.Cleanup, err)
+			}
+		})
+	}
 	if err := os.WriteFile(filepath.Join(root, "region.tbl"), []byte("0|AFRICA|new|\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +162,129 @@ func TestVerifyRejectsChangedInputIdentity(t *testing.T) {
 	r.OutputRoot = filepath.Join(t.TempDir(), "changed")
 	if _, err := runWorker(ctx, r); err == nil || !strings.Contains(err.Error(), "artifact changed: region.tbl") {
 		t.Fatalf("changed input and matching database must reject the old identity: %v", err)
+	}
+}
+
+func TestReferencePreservesVarchar(t *testing.T) {
+	root, d := testDataset(t)
+	const supplier = "Supplier#000000001"
+	for name, content := range map[string]string{
+		"q20.sql":       "SELECT name,address FROM reference_strings ORDER BY name; limit -1;",
+		"reference.out": fmt.Sprintf("s_name|s_address\n%-25s|%-40s\n", supplier, "address"),
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	q, err := renderQGen(20, "SELECT name,address FROM reference_strings ORDER BY name; limit -1;")
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Source, err = identify(filepath.Join(root, "q20.sql"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	q.Source.Path = "q20.sql"
+	d.Queries[19] = q
+	id, err := identify(filepath.Join(root, "reference.out"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	id.Path = "reference.out"
+	d.References = map[string]FileID{"20": id}
+	if err := os.Remove(filepath.Join(root, "dataset.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := publishJSON(filepath.Join(root, "dataset.json"), d); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 15*time.Second, errors.New("reference string fixture deadline"))
+	defer cancel()
+	e := Engine{Name: "duckdb", Database: filepath.Join(t.TempDir(), "reference.db"), Threads: 1, MemoryBytes: 256 << 20}
+	db, err := openEngine(ctx, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	if _, err := db.ExecContext(ctx, "CREATE TABLE reference_strings (name VARCHAR,address VARCHAR)"); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, supplier, address, input, reference, want string
+		pass, ambiguous, tamper                         bool
+	}{
+		{name: "exact varchar and formatted reference", address: "address", pass: true},
+		{name: "char padding", supplier: supplier + " ", address: "address", pass: true},
+		{name: "varchar trailing space", address: "address "},
+		{name: "varchar leading space", address: " address"},
+		{name: "varchar interior space", address: "add ress"},
+		{name: "varchar changed text", address: "addressx"},
+		{name: "legitimate varchar trailing space", address: "address ", input: "address ", pass: true},
+		{name: "removed varchar trailing space", address: "address", input: "address "},
+		{name: "published reference remains authoritative", address: "address", reference: "different"},
+		{name: "ambiguous input value", address: "address", ambiguous: true, want: "ambiguous"},
+		{name: "changed decoding input hash", address: "address", tamper: true, want: "artifact changed"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			input, reference, name := tc.input, tc.reference, tc.supplier
+			if input == "" {
+				input = "address"
+			}
+			if reference == "" {
+				reference = "address"
+			}
+			if name == "" {
+				name = supplier
+			}
+			rows := "1|" + supplier + "|" + input + "|0|00-000-000-0000|0.00|comment|\n"
+			if tc.ambiguous {
+				rows += "2|" + supplier + "|address |0|00-000-000-0000|0.00|comment|\n"
+			}
+			for file, content := range map[string]string{
+				"supplier.tbl":  rows,
+				"reference.out": fmt.Sprintf("s_name|s_address\n%-25s|%-40s\n", supplier, reference),
+			} {
+				if err := os.WriteFile(filepath.Join(root, file), []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+				id, err := identify(filepath.Join(root, file))
+				if err != nil {
+					t.Fatal(err)
+				}
+				id.Path = file
+				if file == "supplier.tbl" {
+					d.Inputs["supplier"] = id
+				} else {
+					d.References["20"] = id
+				}
+			}
+			if err := os.Remove(filepath.Join(root, "dataset.json")); err != nil {
+				t.Fatal(err)
+			}
+			if err := publishJSON(filepath.Join(root, "dataset.json"), d); err != nil {
+				t.Fatal(err)
+			}
+			if tc.tamper {
+				if err := os.WriteFile(filepath.Join(root, "supplier.tbl"), []byte(strings.ReplaceAll(rows, "address", "changed")), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := db.ExecContext(ctx, "DELETE FROM reference_strings"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := db.ExecContext(ctx, "INSERT INTO reference_strings VALUES (?,?)", name, tc.address); err != nil {
+				t.Fatal(err)
+			}
+			r := WorkerRequest{Version: formatVersion, Operation: "queries", Engine: e, DatasetRoot: root, OutputRoot: filepath.Join(t.TempDir(), "capture"), QueryDeadlineNS: int64(time.Second), Queries: []int{20}, Repetitions: 1, Reference: true}
+			receipt, err := runWorker(ctx, r)
+			want := tc.want
+			if want == "" {
+				want = "reference string differs"
+			}
+			if tc.pass && err != nil || !tc.pass && (err == nil || !strings.Contains(err.Error(), want)) || receipt.Cleanup != "complete" {
+				t.Fatalf("reference exact-string result, cleanup=%s: %v", receipt.Cleanup, err)
+			}
+		})
 	}
 }
 

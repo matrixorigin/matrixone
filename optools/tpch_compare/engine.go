@@ -213,6 +213,9 @@ func bulkLoad(ctx context.Context, conn *sql.Conn, e Engine, root string, d Data
 	}
 	receipt.CheckpointNS = time.Since(start).Nanoseconds()
 	for _, t := range d.Tables {
+		if err := verifyTableSchema(ctx, conn, e.Name, t); err != nil {
+			return receipt, err
+		}
 		if err := verifyTable(ctx, conn, root, t, d.Inputs[t.Name]); err != nil {
 			return receipt, err
 		}
@@ -223,6 +226,63 @@ func bulkLoad(ctx context.Context, conn *sql.Conn, e Engine, root string, d Data
 		receipt.Tables[t.Name] = count
 	}
 	return receipt, verifyRelationships(ctx, conn)
+}
+
+// Check catalog domains before content normalization can hide schema drift.
+// DuckDB stores both CHAR(n) and VARCHAR(n) as its unbounded VARCHAR domain.
+func verifyTableSchema(ctx context.Context, conn *sql.Conn, engine string, t Table) (retErr error) {
+	typeColumn, scope := "c.column_type", "c.table_schema=DATABASE()"
+	if engine == "duckdb" {
+		typeColumn, scope = "c.data_type", "c.table_catalog=current_database() AND c.table_schema=current_schema()"
+	} else if engine != "mo" {
+		return errors.New("unknown schema verification engine")
+	}
+	query := "SELECT c.column_name," + typeColumn + ",c.is_nullable,pk.ordinal_position FROM information_schema.columns c LEFT JOIN (" +
+		"SELECT k.table_catalog,k.table_schema,k.table_name,k.column_name,k.ordinal_position FROM information_schema.key_column_usage k " +
+		"JOIN information_schema.table_constraints tc ON tc.constraint_catalog=k.constraint_catalog AND tc.constraint_schema=k.constraint_schema " +
+		"AND tc.constraint_name=k.constraint_name AND tc.table_schema=k.table_schema AND tc.table_name=k.table_name WHERE tc.constraint_type='PRIMARY KEY'" +
+		") pk ON pk.table_catalog=c.table_catalog AND pk.table_schema=c.table_schema AND pk.table_name=c.table_name AND pk.column_name=c.column_name " +
+		"WHERE " + scope + " AND c.table_name=? ORDER BY c.ordinal_position"
+	rows, err := conn.QueryContext(ctx, query, t.Name)
+	if err != nil {
+		return err
+	}
+	defer func() { retErr = errors.Join(retErr, rows.Close()) }()
+	keyPositions := make([]int64, len(t.Columns))
+	for i, k := range t.Key {
+		keyPositions[k] = int64(i + 1)
+	}
+	i := 0
+	for rows.Next() {
+		var name, typ, nullable string
+		var key sql.NullInt64
+		if err := rows.Scan(&name, &typ, &nullable, &key); err != nil {
+			return err
+		}
+		if i >= len(t.Columns) {
+			return fmt.Errorf("schema has extra columns in %s", t.Name)
+		}
+		c := t.Columns[i]
+		want := c.SQLType
+		if engine == "mo" && want == "INTEGER" {
+			want = "INT"
+		}
+		if engine == "duckdb" && c.Kind == "text" {
+			want = "VARCHAR"
+		}
+		typ = strings.ReplaceAll(strings.ToUpper(typ), " ", "")
+		if !strings.EqualFold(name, c.Name) || typ != want || nullable != "NO" || key.Int64 != keyPositions[i] {
+			return fmt.Errorf("schema differs for %s.%s: column=%s type=%s nullable=%s key_position=%d; want type=%s NOT NULL key_position=%d", t.Name, c.Name, name, typ, nullable, key.Int64, want, keyPositions[i])
+		}
+		i++
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if i != len(t.Columns) {
+		return fmt.Errorf("schema has %d columns in %s; want %d", i, t.Name, len(t.Columns))
+	}
+	return nil
 }
 
 type inputRows struct {
@@ -473,12 +533,137 @@ func verifyRelationships(ctx context.Context, conn *sql.Conn) error {
 	return nil
 }
 
+type referenceTextSource struct {
+	table             string
+	referenceKey, key int
+	columns           map[int]int
+}
+
+func referenceTextProjection(n int) referenceTextSource {
+	switch n {
+	case 2:
+		return referenceTextSource{"supplier", 1, 1, map[int]int{5: 2, 7: 6}}
+	case 10:
+		return referenceTextSource{"customer", 0, 0, map[int]int{1: 1, 5: 2, 7: 7}}
+	case 15:
+		return referenceTextSource{"supplier", 0, 0, map[int]int{2: 2}}
+	case 16:
+		return referenceTextSource{"part", 1, 4, map[int]int{1: 4}}
+	case 18:
+		return referenceTextSource{"customer", 1, 0, map[int]int{0: 1}}
+	case 20:
+		return referenceTextSource{"supplier", 0, 1, map[int]int{1: 2}}
+	}
+	return referenceTextSource{}
+}
+
+func referenceTextKey(value string, c Column) (string, error) {
+	if c.Kind == "int" {
+		key, err := normalize(strings.TrimSpace(value), c)
+		return key.Value, err
+	}
+	return strings.TrimRight(value, " "), nil
+}
+
+// Fixed-width reference files lose the boundary between VARCHAR data spaces
+// and display padding. Restore it from hash-verified input records, keyed by
+// the independent reference, while retaining the reference's value check.
+func referenceTextValues(root string, d Dataset, q Query, ref FileID, source referenceTextSource) (out map[string]Row, retErr error) {
+	if source.table == "" {
+		return nil, nil
+	}
+	f, err := os.Open(filepath.Join(root, ref.Path))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { retErr = errors.Join(retErr, f.Close()) }()
+	scan := bufio.NewScanner(f)
+	scan.Buffer(make([]byte, 64<<10), 1<<20)
+	scan.Scan() // The caller validates the reference header.
+	out = map[string]Row{}
+	var bytes int64
+	for scan.Scan() {
+		if strings.TrimSpace(scan.Text()) == "" {
+			continue
+		}
+		fields := strings.Split(scan.Text(), "|")
+		if len(fields) != len(q.Columns) {
+			return nil, errors.New("reference width differs from canonical projection")
+		}
+		key, err := referenceTextKey(fields[source.referenceKey], q.Columns[source.referenceKey])
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := out[key]; !ok {
+			bytes += int64(len(key)) + 64
+			if bytes > captureMemory {
+				return nil, errors.New("reference text keys exceed their memory bound")
+			}
+			out[key] = nil
+		}
+	}
+	if err := scan.Err(); err != nil {
+		return nil, err
+	}
+	var table Table
+	for _, t := range d.Tables {
+		if t.Name == source.table {
+			table = t
+		}
+	}
+	id := d.Inputs[source.table]
+	if err := id.verify(root); err != nil {
+		return nil, err
+	}
+	input, err := openInput(filepath.Join(root, id.Path), table)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { retErr = errors.Join(retErr, input.f.Close()) }()
+	for {
+		row, err := input.next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+		key := strings.TrimRight(row[source.key].Value, " ")
+		previous, wanted := out[key]
+		if !wanted {
+			continue
+		}
+		if previous != nil {
+			for _, column := range source.columns {
+				if previous[column] != row[column] {
+					return nil, errors.New("ambiguous VARCHAR value in fixed-width reference")
+				}
+			}
+			continue
+		}
+		bytes += int64(len(row)) * 32
+		for _, cell := range row {
+			bytes += int64(len(cell.Value))
+		}
+		if bytes > captureMemory {
+			return nil, errors.New("reference text values exceed their memory bound")
+		}
+		out[key] = row
+	}
+	return out, nil
+}
+
 func qualifyReference(root string, d Dataset, q Query, capRoot string, cap Capture) (retErr error) {
 	id, ok := d.References[strconv.Itoa(q.Number)]
 	if !ok {
 		return errors.New("missing independent SF1 reference")
 	}
 	if err := id.verify(root); err != nil {
+		return err
+	}
+	source := referenceTextProjection(q.Number)
+	textValues, err := referenceTextValues(root, d, q, id, source)
+	if err != nil {
 		return err
 	}
 	f, err := os.Open(filepath.Join(root, id.Path))
@@ -522,8 +707,18 @@ func qualifyReference(root string, d Dataset, q Query, capRoot string, cap Captu
 				got := row[i].Value
 				if c.Char {
 					got = strings.TrimRight(got, " ")
+				} else if column, ok := source.columns[i]; ok {
+					key, err := referenceTextKey(parts[source.referenceKey], q.Columns[source.referenceKey])
+					if err != nil {
+						return err
+					}
+					input := textValues[key]
+					if input == nil || strings.TrimRight(input[column].Value, " ") != ref {
+						return fmt.Errorf("query Q%d reference string differs from input at row %d column %d", q.Number, count, i+1)
+					}
+					ref = input[column].Value
 				}
-				if strings.TrimRight(got, " ") != ref {
+				if got != ref {
 					return fmt.Errorf("query Q%d reference string differs at row %d column %d", q.Number, count, i+1)
 				}
 				continue

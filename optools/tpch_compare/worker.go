@@ -166,6 +166,9 @@ func runWorker(ctx context.Context, r WorkerRequest) (out WorkerReceipt, retErr 
 		return out, err
 	case "verify":
 		for _, t := range d.Tables {
+			if err := verifyTableSchema(ctx, conn, r.Engine.Name, t); err != nil {
+				return out, err
+			}
 			if err := verifyTable(ctx, conn, r.DatasetRoot, t, d.Inputs[t.Name]); err != nil {
 				return out, err
 			}
