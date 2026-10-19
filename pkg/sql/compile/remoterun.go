@@ -164,6 +164,9 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if requiredProtocol != nil && features.LoadFKIgnoreCheck {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion125)
 	}
+	if requiredProtocol != nil && features.SetOperationFloatKeys {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion126)
+	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
 	}
@@ -2417,11 +2420,11 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if features.LeastGreatestCollationSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
 		return moerr.NewNotSupportedNoCtx("collation-aware LEAST/GREATEST requires MORPC protocol version 117")
 	}
-	if features.SetOperationFloatKeys && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion122) {
-		return moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 122")
+	if features.SetOperationFloatKeys && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion123) {
+		return moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 123")
 	}
-	if features.ScalarSetReaggregation && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion122) {
-		return moerr.NewNotSupportedNoCtx("bounded scalar set reaggregation requires MORPC protocol version 122")
+	if features.ScalarSetReaggregation && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion123) {
+		return moerr.NewNotSupportedNoCtx("bounded scalar set reaggregation requires MORPC protocol version 123")
 	}
 	if features.CalendarIntervalNormalization && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
 		return moerr.NewNotSupportedNoCtx("calendar interval normalization requires MORPC protocol version 115")

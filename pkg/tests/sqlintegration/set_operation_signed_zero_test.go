@@ -611,6 +611,40 @@ func TestSetOperationSignedZero(t *testing.T) {
 				require.Equal(t, tc.want, readWindowNullRows(t, rows))
 			}
 		})
+		t.Run("temporal-result-composition", func(t *testing.T) {
+			t.Cleanup(func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_, cleanupErr := conn.ExecContext(cleanupCtx, "drop table if exists temporal_set_ctas")
+				require.NoError(t, cleanupErr)
+			})
+			_, err := conn.ExecContext(ctx, "create table temporal_set_ctas as select d,timestamp('2024-02-29 12:34:56.123456') as ts from zeros where id=1 union select d,timestamp('2024-02-29 12:34:56.123456') as ts from zeros where id=2")
+			require.NoError(t, err)
+			var domain string
+			require.NoError(t, conn.QueryRowContext(ctx, "select column_type from information_schema.columns where table_schema='set_signed_zero' and table_name='temporal_set_ctas' and column_name='ts'").Scan(&domain))
+			require.Equal(t, "datetime(6)", domain)
+			rows, err := conn.QueryContext(ctx, "select cast(d as varchar),cast(ts as varchar) from temporal_set_ctas order by serial(d)")
+			require.NoError(t, err)
+			require.Equal(t, []string{"-0:2024-02-29 12:34:56.123456", "0:2024-02-29 12:34:56.123456"}, readWindowNullRows(t, rows))
+			// Share the existing rows and connection; only the timestamp marker
+			// changes between executions of the same prepared set operation.
+			stmt, err := conn.PrepareContext(ctx, "select cast(d as varchar),cast(timestamp(?) as varchar) from (select d from zeros where id=? union select d from zeros where id=?) s order by serial(d)")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct {
+				stamp string
+				right int
+				want  []string
+			}{
+				{"2024-02-29 12:34:56.123456", 2, []string{"-0:2024-02-29 12:34:56.123456", "0:2024-02-29 12:34:56.123456"}},
+				{"2024-03-01 01:02:03.654321", 3, []string{"-0:2024-03-01 01:02:03.654321"}},
+				{"2024-02-29 12:34:56.123456", 2, []string{"-0:2024-02-29 12:34:56.123456", "0:2024-02-29 12:34:56.123456"}},
+			} {
+				rows, err := stmt.QueryContext(ctx, tc.stamp, 1, tc.right)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, readWindowNullRows(t, rows))
+			}
+		})
 		t.Run("keyed-filter-results", func(t *testing.T) {
 			for _, op := range []string{"union", "intersect", "except"} {
 				q := "select id,cast(d as varchar) from (select id,d from zeros " + op + " select id,d from zeros) u where id=1"

@@ -1763,13 +1763,16 @@ func genAsSelectCols(
 	); err != nil {
 		return nil, nil, 0, err
 	}
-	if !isPrepareStmt && executionProtocol == 0 {
+	if !isPrepareStmt {
 		features, featureErr := plan.RequiredRemoteExpressionFeatures(query)
 		if featureErr != nil {
 			return nil, nil, 0, featureErr
 		}
 		if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
-			executionProtocol = defines.MORPCVersion122
+			executionProtocol = max(executionProtocol, defines.MORPCVersion122)
+		}
+		if features.SetOperationFloatKeys || features.ScalarSetReaggregation {
+			executionProtocol = max(executionProtocol, defines.MORPCVersion123)
 		}
 	}
 	return cols, query, executionProtocol, nil
