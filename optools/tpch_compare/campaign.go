@@ -30,7 +30,7 @@ import (
 type Campaign struct {
 	Version        int               `json:"version"`
 	Root           string            `json:"root"`
-	Mode           string            `json:"mode"` // full or sf1-smoke
+	Mode           string            `json:"mode"` // full, warm, or sf1-smoke
 	Datasets       map[string]string `json:"datasets"`
 	MOSource       string            `json:"mo_source"`
 	MOBinary       string            `json:"mo_binary"`
@@ -51,8 +51,8 @@ func (c Campaign) validate() error {
 	if c.Version != formatVersion || !filepath.IsAbs(c.Root) || !filepath.IsAbs(c.MOSource) || !filepath.IsAbs(c.MOBinary) || c.MORevision == "" || c.MOBuild == "" {
 		return errors.New("campaign needs absolute paths and explicit MO source/build identity")
 	}
-	if c.Mode != "full" && c.Mode != "sf1-smoke" {
-		return errors.New("mode must be full or sf1-smoke")
+	if c.Mode != "full" && c.Mode != "warm" && c.Mode != "sf1-smoke" {
+		return errors.New("mode must be full, warm, or sf1-smoke")
 	}
 	if len(c.CPUs) != 8 || len(c.ControllerCPUs) == 0 || c.MemoryBytes != 32<<30 || c.DiskBytes <= 0 || c.ReserveBytes < 8<<30 || c.ProfileBytes <= 0 || c.PortBase < 10000 || c.PortBase > 64000 {
 		return errors.New("invalid frozen resource envelope")
@@ -70,7 +70,7 @@ func (c Campaign) validate() error {
 		return errors.New("an exclusive benchmark window must be declared before admission")
 	}
 	needed := []string{"1"}
-	if c.Mode == "full" {
+	if c.Mode != "sf1-smoke" {
 		needed = []string{"1", "10", "100"}
 	}
 	if len(c.Datasets) != len(needed) {
@@ -132,6 +132,9 @@ func schedule(c Campaign) []Trial {
 	}
 	for _, sf := range []string{"1", "10", "100"} {
 		add("warm", sf, 8, c.MemoryBytes, 1, 10, allQueries())
+	}
+	if c.Mode == "warm" {
+		return out
 	}
 	for _, cores := range []int{1, 2, 4} {
 		add("cpu", "10", cores, c.MemoryBytes, 1, 5, allQueries())

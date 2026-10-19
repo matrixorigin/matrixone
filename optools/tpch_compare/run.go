@@ -120,7 +120,9 @@ func comparePair(ctx context.Context, c Campaign, p Preflight, manager *cgroupMa
 				full[engine] = receipt.Queries[0].Capture
 				fullRoots[engine] = dir
 			}
-			if e := compareCaptures(fullRoots["mo"], fullRoots["duckdb"], full["mo"], full["duckdb"], q); e != nil {
+			unlimited := q
+			unlimited.Limit = 0
+			if e := compareCaptures(fullRoots["mo"], fullRoots["duckdb"], full["mo"], full["duckdb"], unlimited); e != nil {
 				return errors.Join(err, e)
 			}
 			if e := validateLimit(ra, fullRoots["mo"], x.Capture, full["mo"], q); e != nil {
@@ -142,11 +144,11 @@ func prepareCampaign(ctx context.Context, c Campaign, p Preflight, manager *cgro
 		return f, err
 	}
 	loadReps := 3
-	if c.Mode == "sf1-smoke" {
+	if c.Mode != "full" {
 		loadReps = 1
 	}
 	scales := []string{"1"}
-	if c.Mode == "full" {
+	if c.Mode != "sf1-smoke" {
 		scales = []string{"1", "10", "100"}
 	}
 	for _, sf := range scales {

@@ -338,7 +338,9 @@ func verifyBoundaryArtifacts(root, left, right string, a, b QueryReceipt, q Quer
 		full[engine] = receipt.Queries[0].Capture
 		dirs[engine] = dir
 	}
-	if err := compareCaptures(dirs["mo"], dirs["duckdb"], full["mo"], full["duckdb"], q); err != nil {
+	unlimited := q
+	unlimited.Limit = 0
+	if err := compareCaptures(dirs["mo"], dirs["duckdb"], full["mo"], full["duckdb"], unlimited); err != nil {
 		return err
 	}
 	if err := validateLimit(left, dirs["mo"], a.Capture, full["mo"], q); err != nil {

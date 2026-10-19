@@ -96,6 +96,12 @@ rules are distinct from the stricter full-precision cross-engine contract.
 Keep generated datasets, databases and raw captures outside Git. Large benchmark
 campaigns are explicit operations; ordinary tests use only tiny fixtures.
 
+Campaign mode `warm` runs the primary SF1/SF10/SF100 latency comparison: ten
+balanced paired suites per scale, with the same budgets, warmup, and correctness
+checks as `full`. It prepares one qualified persistent image per engine/scale;
+the three-replicate loading experiment, scaling, cache, and profiling studies
+remain separate parts of `full`.
+
 ## Controlled measurement
 
 Start from `campaign.example.json`, replace paths and build identities, and
