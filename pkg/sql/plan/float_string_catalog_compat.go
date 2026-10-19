@@ -152,27 +152,27 @@ func omitHistoricalFloatCoercibility(stored, candidate *planpb.Expr) {
 
 func sameHistoricalFloatBoundExpression(stored, candidate *planpb.Expr) bool {
 	right := proto.Clone(candidate).(*planpb.Expr)
-	var recover func(*planpb.Expr, *planpb.Expr)
-	recover = func(a, b *planpb.Expr) {
+	var project func(*planpb.Expr, *planpb.Expr)
+	project = func(a, b *planpb.Expr) {
 		if a == nil || b == nil {
 			return
 		}
 		omitHistoricalFloatCoercibility(a, b)
 		if x, y := a.GetF(), b.GetF(); x != nil && y != nil {
 			for i := 0; i < len(x.Args) && i < len(y.Args); i++ {
-				recover(x.Args[i], y.Args[i])
+				project(x.Args[i], y.Args[i])
 			}
 		}
 		if x, y := a.GetList(), b.GetList(); x != nil && y != nil {
 			for i := 0; i < len(x.List) && i < len(y.List); i++ {
-				recover(x.List[i], y.List[i])
+				project(x.List[i], y.List[i])
 			}
 		}
 		if x, y := a.GetLit(), b.GetLit(); x != nil && y != nil {
-			recover(x.Src, y.Src)
+			project(x.Src, y.Src)
 		}
 	}
-	recover(stored, right)
+	project(stored, right)
 	return sameTableDumpBoundExpression(stored, right)
 }
 

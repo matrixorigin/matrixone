@@ -199,9 +199,8 @@ func TestLegacyFloatStringCatalogCollationProvenance(t *testing.T) {
 		{"collation_revision", func(typ *planpb.Type) { typ.CollationVersion = 1 }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			source := legacyFloatTable(t, "division")
-			source.Checks = nil
-			col := source.Cols[2]
+			source := legacyFloatTable(t, "generated")
+			col := source.Cols[1]
 			stmt, ast, _, err := parseTableDumpExpression(t.Context(), col.GeneratedCol.OriginString, "")
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -219,21 +218,17 @@ func TestLegacyFloatStringCatalogCollationProvenance(t *testing.T) {
 			}
 			require.Equal(t, tc.mutate == nil, sameTableDumpBoundExpression(recorded, bound), "ordinary equality must retain provenance")
 			snapshot := proto.Clone(source)
-			require.NotEmpty(t, tableDumpExpressions(source))
-			_, dumpErr := AnalyzeTableDumpBindings(compiler, source, source)
 			accept := tc.name == "recorded" || tc.name == "historical"
-			if accept {
-				require.NoError(t, dumpErr)
-			} else {
-				require.ErrorContains(t, dumpErr, "cannot verify bound generated expression")
-			}
+			candidateBefore := proto.Clone(recorded)
+			require.Equal(t, accept, sameHistoricalFloatBoundExpression(bound, recorded))
+			require.True(t, proto.Equal(candidateBefore, recorded), "DUMP candidate comparison must not mutate its input")
 			execution := CloneTableDefForPlan(source, true)
 			require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
 			require.True(t, proto.Equal(snapshot, source))
 			if !accept {
 				require.True(t, proto.Equal(source, execution), "contradictory provenance must reject the repair")
 			} else {
-				require.False(t, hasLegacyFloatStringCast(execution.Cols[2].GeneratedCol.Expr))
+				require.False(t, hasLegacyFloatStringCast(execution.Cols[1].GeneratedCol.Expr))
 			}
 		})
 	}
@@ -306,13 +301,29 @@ func TestTableDumpLegacyFloatStringBindings(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, sensitive)
 	}
+	// Both actual predecessor bytes and a marked legacy-width binder era must
+	// be admitted by the DUMP owner; the per-marker guard matrix is tested once
+	// through its shared candidate comparison above.
+	marked := proto.Clone(source).(*planpb.TableDef)
+	col := marked.Cols[2]
+	legacyStmt, legacyAST, _, err := parseTableDumpExpression(t.Context(), col.GeneratedCol.OriginString, "")
+	require.NoError(t, err)
+	defer legacyStmt.Free()
+	col.GeneratedCol.Expr, err = bindTableDumpExpression(compiler, marked,
+		tableDumpExpression{kind: "generated", name: col.Name, col: col}, legacyAST, 0, false, true)
+	require.NoError(t, err)
+	markedBefore := proto.Clone(marked)
+	sensitive, err := AnalyzeTableDumpBindings(compiler, target, marked)
+	require.NoError(t, err)
+	require.True(t, sensitive)
+	require.True(t, proto.Equal(markedBefore, marked))
 	require.True(t, proto.Equal(snapshot, source))
 	execution := CloneTableDefForPlan(source, true)
 	require.NoError(t, MigrateLegacyFloatStringTableDef(compiler, execution))
 	require.True(t, sameTableDumpBoundExpression(target.Cols[2].GeneratedCol.Expr, execution.Cols[2].GeneratedCol.Expr))
 	require.True(t, sameTableDumpBoundExpression(target.Checks[0].Check, execution.Checks[0].Check))
 	require.True(t, proto.Equal(snapshot, source), "CHECK wrappers must also be detached")
-	for _, mutation := range []string{"width", "overload", "literal", "reference", "explicit provenance"} {
+	for _, mutation := range []string{"width", "overload", "literal", "reference", "explicit provenance", "explicit coercibility"} {
 		t.Run(mutation, func(t *testing.T) {
 			tampered := proto.Clone(source).(*planpb.TableDef)
 			root := tampered.Cols[2].GeneratedCol.Expr
@@ -339,6 +350,8 @@ func TestTableDumpLegacyFloatStringBindings(t *testing.T) {
 					fn.Args[0] = makePlan2Float64ConstExprWithType(1)
 				case "explicit provenance":
 					fn.SyntaxExplicitCast = true
+				case "explicit coercibility":
+					expr.Typ.CollationCoercibility, expr.Typ.CollationCoercibilitySet = 0, true
 				default:
 					return nil
 				}
