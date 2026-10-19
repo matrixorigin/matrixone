@@ -53,7 +53,8 @@ they do not by themselves establish isolated benchmark measurements.
 Engine settings include `name` (`mo` or `duckdb`), `database`, `threads` and
 `memory_bytes`. MO credentials come from a named `dsn_env`, never a result file.
 MO loading creates a new `tpch_compare_` database on an explicitly selected owned
-loopback deployment. DuckDB uses a persistent database file. Loading verifies
+loopback deployment. DuckDB uses a persistent database file. Both native CSV
+load paths explicitly enable parallel reading. Loading verifies
 complete typed input contents, composite-key uniqueness and every input foreign
 relationship. Ordered DBGEN key groups are checked and sorted within a bounded
 buffer, allowing streaming validation without duplicating an entire table.
