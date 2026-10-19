@@ -12,11 +12,35 @@ r2 实测发现逐候选扫描和无条件共享父表锁的实际退化，其 N
 
 ## 1. 问题、依据与成功条件
 
-旧链路先在 PRE_INSERT 发号，再过滤 CHECK/FK，最后执行 PK/UK 仲裁。被提前过滤的行丢失候选来源；被拒绝的正显式大 ID 已推进共享分配器，甚至使后续有效行提前溢出。下游不能恢复这些信息，更不能回退全局高水位。
+### 为什么做：兼容性目标，不是无间隙保证
 
-问题讨论给出的四行 CHECK witness 为 `(NULL,1,-1),(NULL,2,1),(NULL,2,1),(NULL,3,1)`：先前 MO 接受 `(id,uk)=(2,2),(3,3)`，MySQL 8.4.10 接受 `(1,2),(2,3)`。另一个 TINYINT witness 中，因重复 UK 拒绝的显式 127 不应使后续有效生成行尝试 128。两者不是要求全局无间隙。
+**AUTO_INCREMENT 有空洞本身不是 bug。** 如果产品契约只要求生成合法且唯一的键，接受行得到 `2,4` 或 `2,3` 都可以成立；不能仅因结果与某次 MySQL 执行不同，就断言旧实现违反 SQL 正确性。失败、回滚、缓存预留、重试及并发都仍可留下空洞，应用不能依赖 `LAST_INSERT_ID()+行号` 推算全部生成键。
 
-参考 MySQL 8.4 的 [AUTO_INCREMENT](https://dev.mysql.com/doc/refman/8.4/en/innodb-auto-increment-handling.html)、[INSERT](https://dev.mysql.com/doc/refman/8.4/en/insert.html)、[LOAD DATA](https://dev.mysql.com/doc/refman/8.4/en/load-data.html) 和 [外键约束](https://dev.mysql.com/doc/refman/8.4/en/create-table-foreign-keys.html)。MySQL 行映射是兼容性参照；MO 的分布式独占号段、事务快照和锁协议仍是实现约束，不复制 InnoDB 自增锁模式。错误文本和 warning 完整兼容不在本次目标内。
+本 PR 选择的是更窄的 **#28238 MySQL 接受行映射兼容目标**。原问题中的重复 PK/UK 场景已由 [#28349](https://github.com/matrixorigin/matrixone/pull/28349) 合入；[合并后的范围说明](https://github.com/matrixorigin/matrixone/issues/28238#issuecomment-5578664583) 明确保留 CHECK/FK 提前拒绝与被拒绝显式大 ID 的后续工作。该历史解释本 PR 的来源，并不替代当前维护者对兼容收益与复杂度的取舍。
+
+[CHECK/FK 历史比较](https://github.com/matrixorigin/matrixone/issues/28238#issuecomment-5577776634)给出的四行输入为 `(NULL,1,-1),(NULL,2,1),(NULL,2,1),(NULL,3,1)`，列依次是自动主键、UNIQUE 键与 `CHECK(v>0)`：当时 #28349 验证版本接受 `(id,uk)=(2,2),(3,3)`，MySQL 8.4.10 接受 `(1,2),(2,3)`。两端接受的业务行相同；这是键与行的映射差异，不是已证明的数据丢失或重复键问题。统一重复键、CHECK 和 FK 的接受决策，是本 PR 的兼容性动机；没有以此证明实际客户事故或复制故障。
+
+### 不止键值不同：被拒绝的显式 ID 可触发提前溢出
+
+另一个边界会改变整句成功/失败，而不只是空洞位置。以下是[已有独立比较](https://github.com/matrixorigin/matrixone/pull/28349#pullrequestreview-5135792541)和[历史设计限制](20260908-auto-increment-boundaries.md#open-limitation-a-rejected-positive-explicit-id-advances-eager-allocation)记录的最小反例：
+
+```sql
+CREATE TABLE t(id TINYINT AUTO_INCREMENT PRIMARY KEY, uk INT UNIQUE, v INT);
+INSERT INTO t(uk,v) VALUES(10,0);
+INSERT IGNORE INTO t(id,uk,v)
+VALUES(NULL,20,1),(127,10,2),(NULL,30,3);
+SELECT id,uk,v FROM t ORDER BY v;
+```
+
+历史精确 MO base `0b195e4f5a23c06a40552a8db3e7fdf182979a3a` 和 #28349 head `a669b5819c04d2f1273b188de6219336e910da07` 均报 tinyint 128 / error 1690，只保留 seed；MySQL 8.0.44 成功得到 `(1,10,0),(2,20,1),(3,30,3)`。显式 127 那行因 `uk=10` 已存在而被拒绝，但旧 PRE_INSERT 在完整接受决策前已经据此推进分配并检查后续候选，仲裁器来不及修复。这些是所链接历史版本的证据，不冒充本次新跑的最新 main/MySQL 对比。
+
+当前回归 [`insert_ignore_reservations.sql`](../../test/distributed/cases/auto_increment/insert_ignore_reservations.sql) 的 `explicit_uk` 固定同一边界的最小变体：seed 为 `(1,1)`，拒绝 `(127,1)`，接受 `(NULL,2),(NULL,3)` 为 ID 2、3；下一条 INSERT 的 ID **仍为 5**，而不是回收预留的 4。这一结果明确区分“接受前不让被拒绝显式值改变候选”与“无间隙分配”。接受的显式高 ID 仍推进后续候选，真正耗尽仍报错，共享 allocator 绝不倒退。
+
+CHECK/FK 的旧提前过滤会丢失候选来源，显式高 ID 的旧提前推进则可能在仲裁前报错；两者解释为何不能仅在输出端改编号，也不能让主表与索引独立重写 ID。当前设计把这部分决策收敛到同一接受 owner，代价是下文列出的协议、查找和资源复杂度。
+
+**需求决策仍与实现验证分开。** 是否值得为该 MySQL 行映射及错误行为兼容目标承担这些成本，需要维护者认可；此前合并、独立技术设计 PASS、回归通过均不代表 [当前需求质疑](https://github.com/matrixorigin/matrixone/pull/30107#pullrequestreview-5567113246)已解决。本说明不要求批准，也不把“与 MySQL 不同”一概归类为 correctness bug。若不接受此兼容目标，应重新明确问题范围，而不是靠更多绿色测试、文档文字或未经同意的默认关闭来代替决策。
+
+参考 MySQL 8.4 的 [AUTO_INCREMENT](https://dev.mysql.com/doc/refman/8.4/en/innodb-auto-increment-handling.html)、[INSERT](https://dev.mysql.com/doc/refman/8.4/en/insert.html)、[LOAD DATA](https://dev.mysql.com/doc/refman/8.4/en/load-data.html) 和 [外键约束](https://dev.mysql.com/doc/refman/8.4/en/create-table-foreign-keys.html)。不把上述特定版本的比较扩展为所有版本、锁模式或拓扑的相同 ID 保证；MO 的分布式独占号段、事务快照和锁协议仍是实现约束，不复制 InnoDB 自增锁模式。错误文本和 warning 完整兼容不在本次目标内。
 
 ### 必须保持的不变量
 
