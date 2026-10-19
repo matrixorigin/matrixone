@@ -67,6 +67,33 @@ java -cp "$probe_classes:$CONNECTOR_JAR" JoinBooleanMetadataProbe
 The same `DB_URL`, `DB_USER`, and `DB_PASSWORD` overrides apply. This probe
 creates a uniquely named database and drops only that database on exit.
 
+## TIME_WINDOW output layout
+
+`TimeWindowBooleanMetadataProbe.java` checks that grouped `INTERVAL` results
+follow TIME_WINDOW's aggregate/boundary/partition layout rather than its child
+AGG's grouping-first layout. Stored BOOLEAN stays BIT/Boolean; computed Boolean
+aggregates stay TINYINT/Number. Six projections cover both orders, repeated
+columns, repeated/reordered `_wstart`/`_wend`, aggregate-only output, and
+partition-plus-boundary output. Each runs without FILL and with actual
+`GAPFILL(PARTITION)` rows under NULL/value/prev/next FILL. Exact row multisets
+include stored NULLs and NULL aggregate results. Ordinary GROUP BY and a derived
+projection with pruned aggregates/boundaries are additional controls.
+
+All 32 queries run in Statement, client-prepared, and verified server-prepared
+mode (96 cases), with prepare/execute metadata, Java value classes, and exact
+values checked. Server-prepared fallback is disabled. The probe fixes both the
+JVM and SQL session time zones to UTC so boundary assertions are host-independent.
+
+```sh
+probe_classes=$(mktemp -d "${TMPDIR:-/tmp}/time-window-boolean-jdbc.XXXXXX")
+javac -cp "$CONNECTOR_JAR" -d "$probe_classes" \
+  test/manual/issue30191/TimeWindowBooleanMetadataProbe.java
+java -cp "$probe_classes:$CONNECTOR_JAR" TimeWindowBooleanMetadataProbe
+```
+
+The same connection overrides apply. It creates a uniquely named database and
+drops only that database on exit.
+
 ## MARK JOIN predicate results
 
 `MarkBooleanMetadataProbe.java` covers `IN (SELECT ...)` and `= ANY (SELECT ...)`,

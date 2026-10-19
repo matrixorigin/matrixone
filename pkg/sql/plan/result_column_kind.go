@@ -60,6 +60,7 @@ type resultColumnKinds struct {
 	windows     map[int32]map[*pb.Expr]*pb.WindowSpec
 	projections map[int32]*resultColumnProjectionIndex
 	bindings    map[int32]map[int32]int
+	timeWindows map[int32]TimeWindowLayout
 }
 
 func newResultColumnKinds(query *pb.Query) *resultColumnKinds {
@@ -245,6 +246,30 @@ func (k *resultColumnKinds) expand(id int) {
 		}
 	}
 	switch node.NodeType {
+	case pb.Node_TIME_WINDOW:
+		// TIME_WINDOW emits aggregates, boundaries, then partition keys;
+		// its child AGG emits group keys first. Never treat an emitted slot
+		// as the same ordinal in the child. Cache the shared operator layout
+		// once per extraction so many BOOL outputs do not rebuild it.
+		if k.timeWindows == nil {
+			k.timeWindows = make(map[int32]TimeWindowLayout)
+		}
+		layout, ok := k.timeWindows[value.node]
+		if !ok {
+			layout = BuildTimeWindowLayout(node)
+			k.timeWindows[value.node] = layout
+		}
+		if ref.ColPos < 0 || ref.ColPos >= layout.ColCnt {
+			return
+		}
+		partition := ref.ColPos - (layout.ColCnt - int32(len(layout.PartitionSlot)))
+		if partition >= 0 {
+			k.inputExpression(id, node, node.TimeWindowPartitionBy[partition])
+		} else {
+			// Real aggregates and synthetic window boundaries are computations.
+			k.mark(id)
+		}
+		return
 	case pb.Node_VALUE_SCAN:
 		cols := node.GetRowsetData().GetCols()
 		if ref.ColPos < 0 || int(ref.ColPos) >= len(cols) {

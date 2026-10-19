@@ -31,6 +31,19 @@ func TestComposedBooleanResultsKeepWireMetadata(t *testing.T) {
 		sql     string
 		lengths []uint32
 	}{
+		{"time window stored first", "select with_grant_option,max(role_id>0) from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute)", []uint32{1, 8}},
+		{"time window aggregate first", "select max(role_id>0),with_grant_option from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute)", []uint32{8, 1}},
+		{"time window repeated", "select max(role_id>0),with_grant_option,max(role_id>0),with_grant_option from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute)", []uint32{8, 1, 8, 1}},
+		{"time window boundaries", "select _wend,with_grant_option,max(role_id>0),_wstart,_wend from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute)", []uint32{0, 1, 8, 0, 0}},
+		{"time window aggregate only", "select max(role_id>0) from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute)", []uint32{8}},
+		{"time window partition and boundary", "select with_grant_option,_wstart from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute)", []uint32{1, 0}},
+		{"time window fill null", "select with_grant_option,max(role_id>0) from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute) fill(null)", []uint32{1, 8}},
+		{"time window fill value", "select max(role_id>0),with_grant_option,_wstart from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute) fill(value,0)", []uint32{8, 1, 0}},
+		{"time window fill prev", "select with_grant_option,_wend,max(role_id>0) from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute) fill(prev)", []uint32{1, 0, 8}},
+		{"time window fill next", "select max(role_id>0),with_grant_option from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute) fill(next)", []uint32{8, 1}},
+		{"time window computed partition", "select role_id>0,with_grant_option,max(role_id is null) from mo_catalog.mo_role_privs group by with_grant_option,role_id>0 interval(granted_time,1,minute)", []uint32{8, 1, 8}},
+		{"time window pruned derived", "select p,b,p,b from (select _wstart s,max(role_id>0) p,with_grant_option b,min(role_id is null) q from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute) fill(prev)) d", []uint32{8, 1, 8, 1}},
+		{"time window linear numeric aggregate", "select with_grant_option,max(role_id),_wstart from mo_catalog.mo_role_privs group by with_grant_option interval(granted_time,1,minute) fill(linear)", []uint32{1, 0, 0}},
 		{"values predicates", "values row(1=1),row(1=0)", []uint32{8}},
 		{"values derived", "select p from (values row(1=1),row(1=0)) d(p)", []uint32{8}},
 		{"values distinct", "select distinct p from (values row(1=1),row(1=0)) d(p)", []uint32{8}},
