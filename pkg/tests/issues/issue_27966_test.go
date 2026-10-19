@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -34,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -77,71 +79,85 @@ func TestIssue27966FrontendIVFInternalSQLPreservesQueryPool(t *testing.T) {
 	apID := cnServices[3].ServiceID()
 	tpLabels := map[string][]string{"account": {"tp"}, "role": {"tp"}}
 	apLabels := map[string][]string{"account": {"ap"}, "role": {"ap"}}
-	setLabels := func(labels map[string][]string) error {
-		control := clusterservice.GetMOCluster(cnServices[0].ServiceID())
-		for id := range tpIDs {
-			if updateErr := control.DebugUpdateCNLabel(id, labels); updateErr != nil {
-				return updateErr
-			}
-		}
-		if updateErr := control.DebugUpdateCNLabel(apID, apLabels); updateErr != nil {
-			return updateErr
-		}
-		for _, service := range cnServices {
-			clusterservice.GetMOCluster(service.ServiceID()).ForceRefresh(true)
-		}
-		return nil
+	updater, ok := clusterservice.GetMOCluster(cnServices[0].ServiceID()).(clusterservice.CNLabelUpdaterWithContext)
+	require.True(t, ok)
+	views := make([]clusterservice.MOCluster, len(cnServices))
+	for i, service := range cnServices {
+		views[i] = clusterservice.GetMOCluster(service.ServiceID())
+		_, ok := views[i].(clusterservice.AuthoritativeRefresher)
+		require.True(t, ok)
 	}
-	require.NoError(t, setLabels(tpLabels))
-	require.Eventually(t, func() bool {
-		for _, service := range cnServices {
-			mc := clusterservice.GetMOCluster(service.ServiceID())
-			mc.ForceRefresh(true)
-			seen := 0
-			matched := true
-			mc.GetCNServiceWithoutWorkingState(clusterservice.NewSelector(), func(cn metadata.CNService) bool {
-				seen++
-				want := "ap"
-				if _, ok := tpIDs[cn.ServiceID]; ok {
-					want = "tp"
-				}
-				account, ok := cn.Labels["account"]
-				matched = matched && ok && len(account.Labels) == 1 && account.Labels[0] == want
-				return matched
-			})
-			if !matched || seen != len(cnServices) {
-				return false
-			}
+	targets := make([]issue27966LabelTarget, len(cnServices))
+	for i, service := range cnServices {
+		labels := tpLabels
+		if service.ServiceID() == apID {
+			labels = apLabels
 		}
-		return true
-	}, 20*time.Second, 100*time.Millisecond)
+		targets[i] = issue27966LabelTarget{id: service.ServiceID(), labels: labels}
+	}
+	var invalidation struct {
+		sync.Mutex
+		armed, done bool
+		err         error
+	}
+	var conn *sql.Conn
+	var db *sql.DB
+	var dbName string
+	// Registered before any mutation: partial/ambiguous updates also need cleanup.
+	defer func() {
+		cancel()
+		invalidation.Lock()
+		invalidation.armed = false
+		invalidation.Unlock() // joins a callback that is still mutating labels
+		cleanupCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
+		defer stop()
+		assert.NoError(t, issue27966RestoreLabels(cleanupCtx, updater, views, targets), "restore labels")
+		if conn != nil {
+			_, cleanupErr := conn.ExecContext(cleanupCtx, "set query_pool_strict = off")
+			assert.NoError(t, cleanupErr, "reset strict query pool")
+			if dbName != "" {
+				_, cleanupErr = conn.ExecContext(cleanupCtx, "drop database if exists `"+dbName+"`")
+				assert.NoError(t, cleanupErr, "drop test database")
+			}
+			assert.NoError(t, conn.Close())
+		}
+		if db != nil {
+			assert.NoError(t, db.Close())
+		}
+	}()
+	phase := func(parent context.Context, changes, expected []issue27966LabelTarget) error {
+		phaseCtx, stop := context.WithTimeout(parent, 30*time.Second)
+		defer stop()
+		if err := issue27966UpdateLabels(phaseCtx, updater, changes); err != nil {
+			return err
+		}
+		return issue27966RefreshLabels(phaseCtx, views, expected)
+	}
+	require.NoError(t, phase(ctx, targets, targets), "initial labels")
 
 	var observations struct {
 		sync.Mutex
 		values []compile.QueryScheduleObservation
-	}
-	var invalidateAfterOuter atomic.Bool
-	var invalidated atomic.Bool
-	var invalidationErr struct {
-		sync.Mutex
-		err error
 	}
 	observe := func(observation compile.QueryScheduleObservation) {
 		observations.Lock()
 		observations.values = append(observations.values, observation)
 		observations.Unlock()
 
-		if !invalidateAfterOuter.Load() ||
-			!strings.Contains(observation.SQL, "issue27966_strict_boundary") ||
-			!observation.Satisfied ||
-			!invalidated.CompareAndSwap(false, true) {
+		if !strings.Contains(observation.SQL, "issue27966_strict_boundary") || !observation.Satisfied {
 			return
 		}
-		if updateErr := setLabels(apLabels); updateErr != nil {
-			invalidationErr.Lock()
-			invalidationErr.err = updateErr
-			invalidationErr.Unlock()
+		invalidation.Lock()
+		defer invalidation.Unlock()
+		if !invalidation.armed || invalidation.done {
+			return
 		}
+		invalidation.done = true
+		invalidTargets := make([]issue27966LabelTarget, len(targets))
+		for i, target := range targets {
+			invalidTargets[i] = issue27966LabelTarget{id: target.id, labels: apLabels}
+		}
+		invalidation.err = phase(ctx, invalidTargets[:3], invalidTargets)
 	}
 	for _, service := range cnServices {
 		cleanup := compile.SetQueryScheduleObserverForTesting(service.ServiceID(), observe)
@@ -176,26 +192,18 @@ func TestIssue27966FrontendIVFInternalSQLPreservesQueryPool(t *testing.T) {
 		return conn, nil
 	})
 	t.Cleanup(func() { mysqlDriver.DeregisterDialContext(dialName) })
-	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@%s(127.0.0.1:%d)/", dialName, port))
+	db, err = sql.Open("mysql", fmt.Sprintf("dump:111@%s(127.0.0.1:%d)/", dialName, port))
 	require.NoError(t, err)
-	defer db.Close()
 	db.SetMaxOpenConns(1)
 	connectCtx, connectCancel := context.WithTimeout(ctx, 30*time.Second)
-	conn, err := db.Conn(connectCtx)
+	conn, err = db.Conn(connectCtx)
 	connectCancel()
 	require.NoError(t, err)
-	defer conn.Close()
 
-	dbName := strings.ToLower(testutils.GetDatabaseName(t))
+	dbName = strings.ToLower(testutils.GetDatabaseName(t))
 	execIssue27966SQL(t, ctx, conn, "drop database if exists `"+dbName+"`")
 	execIssue27966SQL(t, ctx, conn, "create database `"+dbName+"`")
-	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cleanupCancel()
-		_ = setLabels(tpLabels)
-		_, _ = conn.ExecContext(cleanupCtx, "set query_pool_strict = off")
-		_, _ = conn.ExecContext(cleanupCtx, "drop database if exists `"+dbName+"`")
-	}()
+
 	execIssue27966SQL(t, ctx, conn, "use `"+dbName+"`")
 	execIssue27966SQL(t, ctx, conn, "set ivf_preload_entries = 0")
 	execIssue27966SQL(t, ctx, conn, "set probe_limit = 4")
@@ -242,20 +250,21 @@ func TestIssue27966FrontendIVFInternalSQLPreservesQueryPool(t *testing.T) {
 		assertIssue27966TPWorkerCap(t, observation, tpIDs)
 	}
 
-	require.NoError(t, setLabels(tpLabels))
 	observations.Lock()
 	observations.values = nil
 	observations.Unlock()
-	invalidated.Store(false)
-	invalidateAfterOuter.Store(true)
+	invalidation.Lock()
+	invalidation.armed = true
+	invalidation.Unlock()
 	strictQuery := `select /* issue27966_strict_boundary */ id
 		from t order by l2_distance(embedding, '[0,0,0,0]') limit 4`
 	strictErr := drainIssue27966Query(ctx, conn, strictQuery)
-	invalidateAfterOuter.Store(false)
-	require.True(t, invalidated.Load(), "the outer frontend placement must run before the pool is invalidated")
-	invalidationErr.Lock()
-	require.NoError(t, invalidationErr.err)
-	invalidationErr.Unlock()
+	invalidation.Lock()
+	invalidation.armed = false
+	invalidated, invalidationErr := invalidation.done, invalidation.err
+	invalidation.Unlock()
+	require.True(t, invalidated, "the outer frontend placement must run before the pool is invalidated")
+	require.NoError(t, invalidationErr)
 	require.Error(t, strictErr)
 	require.Contains(t, strictErr.Error(), schedule.ReasonNoCandidateCN)
 
@@ -286,6 +295,50 @@ func TestIssue27966FrontendIVFInternalSQLPreservesQueryPool(t *testing.T) {
 	require.Equal(t, schedule.WorkerSetMax, nestedFailure.WorkerSetMode)
 	require.Equal(t, 2, nestedFailure.MaxWorkers)
 	require.Empty(t, nestedFailure.SelectedWorkers)
+}
+
+type issue27966LabelTarget struct {
+	id     string
+	labels map[string][]string
+}
+
+func issue27966UpdateLabels(ctx context.Context, updater clusterservice.CNLabelUpdaterWithContext, targets []issue27966LabelTarget) error {
+	for _, target := range targets {
+		if err := updater.DebugUpdateCNLabelWithContext(ctx, target.id, target.labels); err != nil {
+			return fmt.Errorf("update labels for CN %s: %w", target.id, err)
+		}
+	}
+	return nil
+}
+
+func issue27966RefreshLabels(ctx context.Context, views []clusterservice.MOCluster, expected []issue27966LabelTarget) error {
+	for i, view := range views {
+		refresher, ok := view.(clusterservice.AuthoritativeRefresher)
+		if !ok {
+			return fmt.Errorf("view %d lacks authoritative refresh", i)
+		}
+		if err := refresher.Refresh(ctx); err != nil {
+			return fmt.Errorf("refresh view %d: %w", i, err)
+		}
+		seen := make(map[string]metadata.CNService)
+		view.GetCNServiceWithoutWorkingState(clusterservice.NewSelector(), func(cn metadata.CNService) bool { seen[cn.ServiceID] = cn; return true })
+		if len(seen) != len(expected) {
+			return fmt.Errorf("view %d: expected %d CNs, got %d", i, len(expected), len(seen))
+		}
+		for _, target := range expected {
+			cn, ok := seen[target.id]
+			if !ok {
+				return fmt.Errorf("view %d missing CN %s", i, target.id)
+			}
+			for key, want := range target.labels {
+				got, ok := cn.Labels[key]
+				if !ok || !slices.Equal(got.Labels, want) {
+					return fmt.Errorf("view %d CN %s: unexpected %s labels %v", i, target.id, key, got.Labels)
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func queryIssue27966IDs(ctx context.Context, conn *sql.Conn, statement string) (ids []int64, err error) {
@@ -374,4 +427,86 @@ func assertIssue27966TPWorkerCap(
 		remoteSelected = remoteSelected || worker.Route == schedule.WorkerRouteRemote
 	}
 	require.True(t, remoteSelected, "AP multi-CN placement must select a RemoteRun worker")
+}
+
+func issue27966RestoreLabels(ctx context.Context, updater clusterservice.CNLabelUpdaterWithContext, views []clusterservice.MOCluster, targets []issue27966LabelTarget) error {
+	errs := make([]error, 0, len(targets)+1)
+	for _, target := range targets {
+		errs = append(errs, issue27966UpdateLabels(ctx, updater, []issue27966LabelTarget{target}))
+	}
+	return errors.Join(append(errs, issue27966RefreshLabels(ctx, views, targets))...)
+}
+
+func TestIssue27966LabelPhases(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
+	defer cancel()
+	targets := []issue27966LabelTarget{
+		{id: "tp", labels: map[string][]string{"account": {"tp"}, "role": {"tp"}}},
+		{id: "ap", labels: map[string][]string{"account": {"ap"}, "role": {"ap"}}},
+	}
+	injected := errors.New("injected label RPC failure")
+	fake := &issue27966LabelControl{failID: "tp", updateErr: injected}
+	err := issue27966UpdateLabels(ctx, fake, targets)
+	require.ErrorIs(t, err, injected)
+	require.ErrorContains(t, err, "CN tp")
+	require.Equal(t, []string{"tp"}, fake.updated, "a normal phase stops at its first error")
+	require.Same(t, ctx, fake.ctx)
+
+	// Restoration includes the failed target and continues through later targets and refresh.
+	fake.updated = nil
+	fake.refreshErr = errors.New("injected refresh failure")
+	err = issue27966RestoreLabels(ctx, fake, []clusterservice.MOCluster{fake}, targets)
+	require.ErrorIs(t, err, injected)
+	require.ErrorIs(t, err, fake.refreshErr)
+	require.Equal(t, []string{"tp", "ap"}, fake.updated)
+	require.Equal(t, 1, fake.refreshed)
+	require.NoError(t, fake.ctx.Err())
+
+	fake.refreshErr = nil
+	fake.services = []metadata.CNService{
+		{ServiceID: "tp", Labels: map[string]metadata.LabelList{"account": {Labels: []string{"tp"}}, "role": {Labels: []string{"ap"}}}},
+		{ServiceID: "ap", Labels: map[string]metadata.LabelList{"account": {Labels: []string{"ap"}}, "role": {Labels: []string{"ap"}}}},
+	}
+	require.ErrorContains(t, issue27966RefreshLabels(ctx, []clusterservice.MOCluster{fake}, targets), "role")
+	fake.services[0].Labels["role"] = metadata.LabelList{Labels: []string{"tp"}}
+	require.NoError(t, issue27966RefreshLabels(ctx, []clusterservice.MOCluster{fake}, targets))
+	fake.services[0].ServiceID = "unexpected"
+	require.ErrorContains(t, issue27966RefreshLabels(ctx, []clusterservice.MOCluster{fake}, targets), "missing CN tp")
+}
+
+type issue27966LabelControl struct {
+	clusterservice.MOCluster
+	failID                string
+	updateErr, refreshErr error
+	updated               []string
+	refreshed             int
+	ctx                   context.Context
+	services              []metadata.CNService
+}
+
+func (c *issue27966LabelControl) DebugUpdateCNLabelWithContext(ctx context.Context, id string, _ map[string][]string) error {
+	c.ctx = ctx
+	c.updated = append(c.updated, id)
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if id == c.failID {
+		return c.updateErr
+	}
+	return nil
+}
+func (c *issue27966LabelControl) Refresh(ctx context.Context) error {
+	c.ctx = ctx
+	c.refreshed++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return c.refreshErr
+}
+func (c *issue27966LabelControl) GetCNServiceWithoutWorkingState(_ clusterservice.Selector, apply func(metadata.CNService) bool) {
+	for _, cn := range c.services {
+		if !apply(cn) {
+			break
+		}
+	}
 }

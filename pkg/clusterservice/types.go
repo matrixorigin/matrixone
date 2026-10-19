@@ -109,6 +109,15 @@ type MOCluster interface {
 	UpdateCN(metadata.CNService)
 }
 
+// CNLabelUpdaterWithContext is an optional capability for callers that need a
+// CN label update to share their own bounded operation deadline. The context
+// must be non-nil and have a deadline. The legacy
+// MOCluster.DebugUpdateCNLabel method retains its fixed timeout for existing
+// operational callers.
+type CNLabelUpdaterWithContext interface {
+	DebugUpdateCNLabelWithContext(ctx context.Context, uuid string, kvs map[string][]string) error
+}
+
 // AuthoritativeRefresher is an optional capability for callers that must know
 // whether a synchronous cluster snapshot refresh actually succeeded. The
 // legacy ForceRefresh API intentionally has no result and is unsuitable for
