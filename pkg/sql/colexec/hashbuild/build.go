@@ -51,6 +51,9 @@ func (hashBuild *HashBuild) OpType() vm.OpType {
 }
 
 func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
+	if hashBuild.DirectInput && (!hashBuild.NeedBatches || hashBuild.IsShuffle || hashBuild.RuntimeFilterSpec != nil) {
+		return moerr.NewInternalError(proc.Ctx, "invalid direct hash build")
+	}
 	if hashBuild.ctr.spillBundle != nil {
 		hashBuild.ctr.spillBundle.release()
 		if hashBuild.ctr.spillBundle.cleanupPending() {
@@ -132,10 +135,19 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 	for {
 		switch ctr.state {
 		case BuildHashMap:
-			if err := hashBuild.build(proc, analyzer); err != nil {
+			var err error
+			if hashBuild.DirectInput {
+				var done bool
+				done, err = hashBuild.buildDirectBatches(proc, analyzer)
+				if err == nil && !done {
+					return vm.CallResult{Status: vm.ExecYield}, nil
+				}
+			} else {
+				err = hashBuild.build(proc, analyzer)
+			}
+			if err != nil {
 				err = TerminalBudgetError(proc.Ctx, err)
-				hashBuild.finalizeBuildFailure(proc, err)
-				return result, err
+				return vm.CancelResult, hashBuild.finalizeBuildFailure(proc, err)
 			}
 
 			ctr.state = HandleRuntimeFilter
@@ -143,16 +155,14 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 		case HandleRuntimeFilter:
 			if err := hashBuild.handleRuntimeFilter(proc); err != nil {
 				err = TerminalBudgetError(proc.Ctx, err)
-				hashBuild.finalizeBuildFailure(proc, err)
-				return result, err
+				return vm.CancelResult, hashBuild.finalizeBuildFailure(proc, err)
 			}
 
 			ctr.state = SendJoinMap
 
 		case SendJoinMap:
 			if err := hashBuild.sendJoinMap(proc); err != nil {
-				hashBuild.finalizeBuildFailure(proc, err)
-				return result, err
+				return vm.CancelResult, hashBuild.finalizeBuildFailure(proc, err)
 			}
 			ctr.state = SendSucceed
 
@@ -161,6 +171,44 @@ func (hashBuild *HashBuild) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
+	}
+}
+
+// buildDirectBatches retains each input once in the existing HashmapBuilder.
+// There is no terminal publication until the upstream has actually ended.
+func (hashBuild *HashBuild) buildDirectBatches(proc *process.Process, analyzer process.Analyzer) (bool, error) {
+	for {
+		if err := checkHashBuildCanceled(proc); err != nil {
+			return false, err
+		}
+		input, err := vm.ChildrenCall(hashBuild.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return false, err
+		}
+		if input.Status == vm.ExecYield {
+			return false, nil
+		}
+		if input.Batch == nil {
+			if !hashBuild.NeedHashMap {
+				return true, nil
+			}
+			builder := &hashBuild.ctr.hashmapBuilder
+			defer builder.FreeTemporaryVectors(proc)
+			defer builder.FreeExecutors()
+			err := builder.BuildHashmap(hashBuild.HashOnPK, hashBuild.NeedAllocateSels, false, proc)
+			return err == nil, err
+		}
+		if input.Batch.IsEmpty() {
+			continue
+		}
+		if err = checkHashBuildCanceled(proc); err != nil {
+			return false, err
+		}
+		if err = hashBuild.ctr.hashmapBuilder.copyBuildBatch(input.Batch, proc); err != nil {
+			return false, err
+		}
+		hashBuild.ctr.hashmapBuilder.InputBatchRowCount += input.Batch.RowCount()
+		analyzer.Alloc(int64(input.Batch.Size()))
 	}
 }
 
@@ -255,14 +303,29 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 // returns. Consumers may already be blocked in ReceiveJoinMap/RuntimeFilter;
 // deferring publication until Reset could deadlock a pipeline scheduler that
 // waits for those consumers before cleanup.
-func (hashBuild *HashBuild) finalizeBuildFailure(proc *process.Process, err error) {
+func (hashBuild *HashBuild) finalizeBuildFailure(proc *process.Process, err error) error {
 	hashBuild.ctr.terminalMu.Lock()
 	defer hashBuild.ctr.terminalMu.Unlock()
-	hashBuild.publishBuildError(proc, err)
+	queryCtx, _ := process.GetQueryCtxFromProc(proc)
+	if queryCtx == nil {
+		queryCtx = proc.GetTopContext()
+	}
+	normalized, _ := process.NormalizePipelineRunError(err, proc.Ctx, queryCtx)
+	if normalized == nil {
+		// A sibling can observe this terminal before ancestor cancellation
+		// reaches it. Publish normal retirement at the producer boundary.
+		// Keep the partial map/spill owned by cleanup: SendSucceed would transfer it.
+		hashBuild.publishJoinMap(proc, nil)
+		err = nil
+	} else {
+		hashBuild.publishBuildError(proc, normalized)
+		err = normalized
+	}
 	if !hashBuild.ctr.runtimeFilterDone {
 		message.FinalizeRuntimeFilterOnBuildError(hashBuild.RuntimeFilterSpec, proc.GetMessageBoard())
 		hashBuild.ctr.runtimeFilterDone = hashBuild.RuntimeFilterSpec != nil
 	}
+	return err
 }
 
 func (hashBuild *HashBuild) build(
@@ -1097,7 +1160,7 @@ func (hashBuild *HashBuild) handleScalarRuntimeFilter(
 ) error {
 	ctr := &hashBuild.ctr
 	buildExpr := runtimefilter.BuildKeyExpr(spec)
-	if hashBuild.NeedHashMap || !hashBuild.NeedBatches ||
+	if !hashBuild.NeedBatches ||
 		spec.UseMembershipFilter || spec.MatchPrefix ||
 		len(spec.KeyComponentProbeTypes) != 0 || spec.UpperLimit != 1 ||
 		buildExpr == nil ||

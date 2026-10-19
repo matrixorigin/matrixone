@@ -22,6 +22,7 @@ package operator
 
 import (
 	"testing"
+	"time"
 
 	pb "github.com/matrixorigin/matrixone/pkg/pb/logservice"
 	"github.com/stretchr/testify/assert"
@@ -81,4 +82,42 @@ func TestRemoveFinishedOperator(t *testing.T) {
 	}
 	c.RemoveFinishedOperator(logState, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
 	assert.Equal(t, []*Operator(nil), c.GetOperators(1))
+}
+
+func TestDispatchRegisteredOperatorDoesNotDuplicateOwnership(t *testing.T) {
+	c := NewController()
+	op := NewOperator("", 2, NoopEpoch, AddTnReplica{StoreID: "tn", ShardID: 2, ReplicaID: 10, LogShardID: 1})
+	for i := 0; i < 3; i++ {
+		commands := c.Dispatch([]*Operator{op}, pb.LogState{}, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
+		assert.Len(t, commands, 1)
+		assert.Equal(t, []*Operator{op}, c.GetOperators(2))
+	}
+	op.Cancel()
+	assert.Empty(t, c.Dispatch([]*Operator{op}, pb.LogState{}, pb.TNState{}, pb.CNState{}, pb.ProxyState{}))
+	// Passing no fresh operations never implicitly replays log/removal commands.
+	other := NewOperator("", 3, NoopEpoch, RemoveTnReplica{StoreID: "tn", ShardID: 3, ReplicaID: 11})
+	c.Dispatch([]*Operator{other}, pb.LogState{}, pb.TNState{Stores: map[string]pb.TNStoreInfo{"tn": {Shards: []pb.TNShardInfo{{ShardID: 3, ReplicaID: 11}}}}}, pb.CNState{}, pb.ProxyState{})
+	assert.Empty(t, c.Dispatch(nil, pb.LogState{}, pb.TNState{}, pb.CNState{}, pb.ProxyState{}))
+}
+
+func TestDispatchMixedRetryPreservesPointerOwnership(t *testing.T) {
+	c := NewController()
+	tn := NewOperator("", 2, NoopEpoch, AddTnReplica{StoreID: "tn", ShardID: 2, ReplicaID: 10})
+	log := CreateStartReplica("", "log", 1, 3)
+	state := pb.LogState{Stores: map[string]pb.LogStoreInfo{"log": {}}, Shards: map[uint64]pb.LogShardInfo{1: {ShardID: 1, Replicas: map[uint64]string{3: "log"}}}}
+	c.Dispatch([]*Operator{log, tn}, state, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
+	task1 := CreateTaskServiceOp("", "log", pb.LogService, pb.TaskTableUser{})
+	task2 := CreateTaskServiceOp("", "log", pb.LogService, pb.TaskTableUser{})
+	for i := 0; i < 3; i++ {
+		got := c.Dispatch([]*Operator{log, log, tn, tn, task1, task2}, state, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
+		assert.Len(t, got, 4)
+		assert.Equal(t, []*Operator{log}, c.GetOperators(1))
+		assert.Equal(t, []*Operator{tn}, c.GetOperators(2))
+		assert.Equal(t, []*Operator{task1, task2}, c.GetOperators(NoopShardID))
+	}
+	// Expiry reached inside Check must not dispatch its stale returned step.
+	log.status.reachTimes[STARTED] = time.Now().Add(-2 * ExpireTime)
+	got := c.Dispatch([]*Operator{log, tn}, state, pb.TNState{}, pb.CNState{}, pb.ProxyState{})
+	assert.Len(t, got, 1)
+	assert.Equal(t, EXPIRED, log.Status())
 }

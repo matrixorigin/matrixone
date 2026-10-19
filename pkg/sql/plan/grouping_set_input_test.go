@@ -421,10 +421,9 @@ func TestGroupingSetInputSharingRejectsInheritedGroupingSentinel(t *testing.T) {
 		group by rollup(d.l_returnflag)`
 
 	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
-	// Dynamic grouping distinguishes its own sentinel from SQL NULL. The outer
-	// ROLLUP therefore cannot accept the inner sentinel, and sharing the inner
-	// ROLLUP cannot change the sentinel's legacy representation before the outer
-	// active grouping branch consumes it.
+	// Query outputs normalize inner sentinels. Nested sharing nevertheless
+	// retains its conservative admission policy until its cost and error-order
+	// contract is proved independently of output normalization.
 	require.Zero(t, shape.expandProjects)
 	require.Zero(t, shape.sinkScans)
 }

@@ -1681,6 +1681,37 @@ func CheckPassword(pwd, salt, auth []byte) bool {
 	return bytes.Equal(pwd, hash2)
 }
 
+// applyNegotiatedSessionCharsetTo publishes the charset/collation selected by
+// the MySQL protocol handshake into a newly initialized session. The handshake
+// identity is already validated by HandleHandshake; validating the pair again
+// keeps this boundary atomic if a protocol state is constructed by another
+// path (for example COM_CHANGE_USER or COM_RESET_CONNECTION).
+func (mp *MysqlProtocolImpl) applyNegotiatedSessionCharsetTo(ctx context.Context, ses *Session) error {
+	if mp.collationName == "" || mp.charset == "" {
+		return nil
+	}
+	if err := validateCharsetCollationPair(mp.charset, mp.collationName); err != nil {
+		return err
+	}
+	if ses == nil {
+		return moerr.NewInternalError(ctx, "cannot initialize negotiated charset without a session")
+	}
+	for _, name := range []string{
+		"character_set_client",
+		"character_set_connection",
+		"character_set_results",
+	} {
+		if err := ses.SetSessionSysVar(ctx, name, mp.charset); err != nil {
+			return err
+		}
+	}
+	return ses.SetSessionSysVar(ctx, "collation_connection", mp.collationName)
+}
+
+func (mp *MysqlProtocolImpl) applyNegotiatedSessionCharset(ctx context.Context) error {
+	return mp.applyNegotiatedSessionCharsetTo(ctx, mp.GetSession())
+}
+
 // the server authenticate that the client can connect and use the database
 func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse []byte) error {
 	var psw []byte
@@ -1738,6 +1769,9 @@ func (mp *MysqlProtocolImpl) authenticateUser(ctx context.Context, authResponse 
 				return moerr.NewInternalError(ctx, "check password failed")
 			}
 		}
+	}
+	if err = mp.applyNegotiatedSessionCharset(ctx); err != nil {
+		return err
 	}
 	return nil
 }

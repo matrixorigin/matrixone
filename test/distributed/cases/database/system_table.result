@@ -193,8 +193,8 @@ show columns from `SCHEMATA`;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 catalog_name  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
 schema_name  ¦  varchar(5000)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-default_character_set_name  ¦  varchar(7)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
-default_collation_name  ¦  varchar(18)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+default_character_set_name  ¦  varchar(7)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
+default_collation_name  ¦  varchar(18)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 sql_path  ¦  char(0)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 default_encryption  ¦  varchar(3)  ¦  NO  ¦    ¦  null  ¦    ¦  
 show columns from `CHARACTER_SETS`;
@@ -246,7 +246,7 @@ auto_increment  ¦  bigint unsigned  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 create_time  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 update_time  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 check_time  ¦  timestamp  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-table_collation  ¦  varchar(18)  ¦  NO  ¦    ¦  null  ¦    ¦    𝄀
+table_collation  ¦  varchar(64)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 checksum  ¦  bigint  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 create_options  ¦  varchar(256)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 table_comment  ¦  text  ¦  YES  ¦    ¦  null  ¦    ¦  

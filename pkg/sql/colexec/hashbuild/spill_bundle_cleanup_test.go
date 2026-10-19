@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -262,8 +263,17 @@ func TestHashBuildHandedOffFileRetriesTransientRemoval(t *testing.T) {
 }
 
 func TestSpillBundleReleaseRetainsFailedRemoval(t *testing.T) {
-	for _, blocked := range []bool{false, true} {
-		t.Run(map[bool]string{false: "control", true: "remove-error"}[blocked], func(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		blocked     bool
+		directInput bool
+	}{
+		{name: "control"},
+		{name: "remove-error", blocked: true},
+		{name: "direct-input/control", directInput: true},
+		{name: "direct-input/remove-error", blocked: true, directInput: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
 			defer proc.Free()
 			budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
@@ -289,20 +299,20 @@ func TestSpillBundleReleaseRetainsFailedRemoval(t *testing.T) {
 			fdToken, err := generation.ReserveSpillFD(1)
 			require.NoError(t, err)
 			defer fdToken.Release()
-			fault := &blockedBundleRemoveFS{MutableFileService: baseFS, blocked: blocked}
+			fault := &blockedBundleRemoveFS{MutableFileService: baseFS, blocked: tc.blocked}
 			bundle := &spillFileBundle{entries: map[int]*spillFileEntry{
 				0: {fs: fault, name: name, created: true, cleanupToken: cleanupToken, file: fd, diskToken: token, fdToken: fdToken},
 				1: nil,
 			}}
 			defer func() { fault.blocked = false; bundle.release() }()
-			op := &HashBuild{ctr: container{spillBundle: bundle}}
+			op := &HashBuild{ctr: container{spillBundle: bundle}, DirectInput: tc.directInput, NeedBatches: true}
 			bundle.release() // Preserve the pre-Reset Prepare retry contract.
 			_, statErr := fd.Stat()
 			require.Error(t, statErr, "terminal cleanup closes the descriptor even if removal fails")
 			require.Zero(t, generation.SpillFDUsed())
 			_, handoffErr := bundle.accountedFiles(context.Background(), generation)
 			require.ErrorIs(t, handoffErr, process.ErrExecutionSpillReservationInactive)
-			if blocked {
+			if tc.blocked {
 				physical, openErr := baseFS.OpenFile(context.Background(), name)
 				require.NoError(t, openErr)
 				require.NoError(t, physical.Close())
@@ -319,6 +329,41 @@ func TestSpillBundleReleaseRetainsFailedRemoval(t *testing.T) {
 			require.Zero(t, generation.SpillDiskUsed())
 			_, err = baseFS.OpenFile(context.Background(), name)
 			require.Error(t, err)
+		})
+	}
+}
+
+func TestHashBuildPrepareInvalidDirectInputPreservesPriorGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*HashBuild)
+	}{
+		{name: "without-batches", configure: func(arg *HashBuild) { arg.NeedBatches = false }},
+		{name: "shuffle", configure: func(arg *HashBuild) { arg.IsShuffle = true }},
+		{name: "runtime-filter", configure: func(arg *HashBuild) { arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			// A nil entry needs no physical cleanup, but still detects whether
+			// validation incorrectly releases the previous generation's bundle.
+			bundle := &spillFileBundle{entries: map[int]*spillFileEntry{0: nil}}
+			arg := &HashBuild{DirectInput: true, NeedBatches: true}
+			tc.configure(arg)
+			arg.ctr.spillBundle = bundle
+			atomic.StoreUint32(&arg.ctr.terminalPublished, 1)
+			arg.ctr.runtimeFilterDone = true
+			require.ErrorContains(t, arg.Prepare(proc), "invalid direct hash build")
+			require.Same(t, bundle, arg.ctr.spillBundle)
+			require.False(t, bundle.released)
+			require.Len(t, bundle.entries, 1)
+			require.Equal(t, uint32(1), atomic.LoadUint32(&arg.ctr.terminalPublished))
+			require.True(t, arg.ctr.runtimeFilterDone)
+
+			arg.NeedBatches, arg.IsShuffle, arg.RuntimeFilterSpec = true, false, nil
+			require.ErrorIs(t, arg.Prepare(proc), mpool.ErrAllocationAccountInvalid)
+			require.True(t, bundle.released)
+			require.Nil(t, arg.ctr.spillBundle)
 		})
 	}
 }

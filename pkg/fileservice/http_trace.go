@@ -17,25 +17,57 @@ package fileservice
 import (
 	"crypto/tls"
 	"net/http/httptrace"
+	"sync"
 	"time"
 
-	"github.com/matrixorigin/matrixone/pkg/common/reuse"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"go.uber.org/zap"
 )
 
 type traceInfo struct {
+	mu    sync.Mutex
 	times traceTimes
 	trace *httptrace.ClientTrace
 }
 
+// A phase without a callback identity is measurable only when its start and
+// completion are unambiguous. Overlapping/repeated starts must not fabricate a
+// duration or pair a late completion with another attempt.
+type tracePhase struct {
+	started time.Time
+	starts  int
+	pending int
+}
+
+func (p *tracePhase) start() {
+	p.starts++
+	p.pending++
+	if p.starts == 1 {
+		p.started = time.Now()
+	}
+}
+
+func (p *tracePhase) finish() time.Time {
+	if p.pending == 0 {
+		return time.Time{}
+	}
+	p.pending--
+	if p.starts != 1 || p.pending != 0 {
+		return time.Time{}
+	}
+	return p.started
+}
+
+type traceConnectKey struct{ network, address string }
+
 type traceTimes struct {
-	GetConn           time.Time
-	GotConn           time.Time
-	DNSStart          time.Time
-	ConnectStart      time.Time
-	TSLHandshakeStart time.Time
+	GetConn       tracePhase
+	GotConn       time.Time
+	DNS           tracePhase
+	TLS           tracePhase
+	Connect       map[traceConnectKey]*tracePhase
+	firstResponse bool
 }
 
 func newTraceInfo() *traceInfo {
@@ -55,29 +87,20 @@ func newTraceInfo() *traceInfo {
 	return info
 }
 
-func init() {
-	reuse.CreatePool(
-		newTraceInfo,
-		resetTracePoint,
-		reuse.DefaultOptions[traceInfo]().
-			WithEnableChecker())
-}
-
-func (traceInfo) TypeName() string {
-	return "fileservice.traceInfo"
-}
-
-func resetTracePoint(info *traceInfo) {
-	info.times = traceTimes{}
-}
-
 func (t *traceInfo) GetConn(hostPort string) {
-	t.times.GetConn = time.Now()
+	t.mu.Lock()
+	t.times.GetConn.start()
+	t.mu.Unlock()
 	metric.FSHTTPTraceCounter.WithLabelValues("GetConn").Inc()
 }
 
 func (t *traceInfo) GotConn(info httptrace.GotConnInfo) {
-	t.times.GotConn = time.Now()
+	t.mu.Lock()
+	start := t.times.GetConn.finish()
+	if !start.IsZero() {
+		t.times.GotConn = time.Now()
+	}
+	t.mu.Unlock()
 	metric.FSHTTPTraceCounter.WithLabelValues("GotConn").Inc()
 	if info.Reused {
 		metric.FSHTTPTraceCounter.WithLabelValues("GotConnReused").Inc()
@@ -98,7 +121,9 @@ func (t *traceInfo) GotConn(info httptrace.GotConnInfo) {
 			trackConnActive(info.Conn)
 		}
 	}
-	metric.S3GetConnDurationHistogram.Observe(time.Since(t.times.GetConn).Seconds())
+	if !start.IsZero() {
+		metric.S3GetConnDurationHistogram.Observe(time.Since(start).Seconds())
+	}
 }
 
 func (t *traceInfo) PutIdleConn(err error) {
@@ -118,11 +143,22 @@ func (t *traceInfo) PutIdleConn(err error) {
 }
 
 func (t *traceInfo) GotFirstResponseByte() {
-	metric.S3GotFirstResponseDurationHistogram.Observe(time.Since(t.times.GotConn).Seconds())
+	t.mu.Lock()
+	start := t.times.GotConn
+	if t.times.GetConn.starts != 1 || t.times.firstResponse {
+		start = time.Time{}
+	}
+	t.times.firstResponse = true
+	t.mu.Unlock()
+	if !start.IsZero() {
+		metric.S3GotFirstResponseDurationHistogram.Observe(time.Since(start).Seconds())
+	}
 }
 
 func (t *traceInfo) DNSStart(di httptrace.DNSStartInfo) {
-	t.times.DNSStart = time.Now()
+	t.mu.Lock()
+	t.times.DNS.start()
+	t.mu.Unlock()
 	metric.FSHTTPTraceCounter.WithLabelValues("DNSStart").Inc()
 }
 
@@ -134,11 +170,27 @@ func (t *traceInfo) DNSDone(di httptrace.DNSDoneInfo) {
 		)
 	}
 	// Record duration regardless of success/failure to track all DNS resolution attempts
-	metric.S3DNSResolveDurationHistogram.Observe(time.Since(t.times.DNSStart).Seconds())
+	t.mu.Lock()
+	start := t.times.DNS.finish()
+	t.mu.Unlock()
+	if !start.IsZero() {
+		metric.S3DNSResolveDurationHistogram.Observe(time.Since(start).Seconds())
+	}
 }
 
 func (t *traceInfo) ConnectStart(network, addr string) {
-	t.times.ConnectStart = time.Now()
+	t.mu.Lock()
+	if t.times.Connect == nil {
+		t.times.Connect = make(map[traceConnectKey]*tracePhase)
+	}
+	key := traceConnectKey{network, addr}
+	phase := t.times.Connect[key]
+	if phase == nil {
+		phase = new(tracePhase)
+		t.times.Connect[key] = phase
+	}
+	phase.start()
+	t.mu.Unlock()
 	metric.FSHTTPTraceCounter.WithLabelValues("ConnectStart").Inc()
 }
 
@@ -152,12 +204,26 @@ func (t *traceInfo) ConnectDone(network, addr string, err error) {
 		)
 	}
 	// Record duration regardless of success/failure to track all connection attempts
-	metric.S3ConnectDurationHistogram.Observe(time.Since(t.times.ConnectStart).Seconds())
+	t.mu.Lock()
+	key := traceConnectKey{network, addr}
+	var start time.Time
+	if phase := t.times.Connect[key]; phase != nil {
+		start = phase.finish()
+		if phase.pending == 0 {
+			delete(t.times.Connect, key)
+		}
+	}
+	t.mu.Unlock()
+	if !start.IsZero() {
+		metric.S3ConnectDurationHistogram.Observe(time.Since(start).Seconds())
+	}
 }
 
 func (t *traceInfo) TLSHandshakeStart() {
 	metric.FSHTTPTraceCounter.WithLabelValues("TLSHandshakeStart").Inc()
-	t.times.TSLHandshakeStart = time.Now()
+	t.mu.Lock()
+	t.times.TLS.start()
+	t.mu.Unlock()
 }
 
 func (t *traceInfo) TLSHandshakeDone(cs tls.ConnectionState, err error) {
@@ -168,5 +234,10 @@ func (t *traceInfo) TLSHandshakeDone(cs tls.ConnectionState, err error) {
 		)
 	}
 	// Record duration regardless of success/failure to track all TLS handshake attempts
-	metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(t.times.TSLHandshakeStart).Seconds())
+	t.mu.Lock()
+	start := t.times.TLS.finish()
+	t.mu.Unlock()
+	if !start.IsZero() {
+		metric.S3TLSHandshakeDurationHistogram.Observe(time.Since(start).Seconds())
+	}
 }

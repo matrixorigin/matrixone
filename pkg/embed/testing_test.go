@@ -289,7 +289,11 @@ func TestSharedTestClusterCompletedErrorDropsOwnership(t *testing.T) {
 					state.Run(panicTestReporter{}, func() (Cluster, error) { return value, failure }, func(Cluster) { t.Fatal("failed init callback") })
 				})
 				require.Nil(t, state.cluster)
-				require.ErrorIs(t, state.err, failure)
+				require.NoError(t, state.err, "completed rollback must not poison the next root")
+				initialized := false
+				state.Run(panicTestReporter{}, func() (Cluster, error) { initialized = true; return &cluster{}, nil }, func(Cluster) {})
+				require.True(t, initialized)
+				require.NoError(t, state.Close())
 			}
 			require.True(t, value.CloseComplete())
 			require.NoError(t, value.Close())
@@ -631,7 +635,7 @@ func TestSharedTestClusterReportsInitializationError(t *testing.T) {
 			},
 		)
 	}
-	require.Equal(t, 1, initCalls)
+	require.Equal(t, 2, initCalls)
 	require.Zero(t, testCalls)
 }
 
@@ -705,14 +709,19 @@ func TestSharedTestClusterRetainsFailedCleanupOwner(t *testing.T) {
 	require.Equal(t, int32(1), service.closeCount.Load())
 
 	service.closeErr = nil
-	require.Panics(t, func() {
+	require.PanicsWithValue(t, "shared cluster is closed", func() {
 		state.Run(panicTestReporter{}, init, func(Cluster) {
-			t.Fatal("test callback must not run")
+			t.Fatal("test callback must not run before explicit cleanup")
 		})
 	})
 	require.Equal(t, 1, initCalls)
+	require.Equal(t, int32(1), service.closeCount.Load())
+	require.NoError(t, state.CloseIfActive())
 	require.Equal(t, int32(2), service.closeCount.Load())
 	require.Nil(t, state.cluster)
+	called := false
+	state.Run(panicTestReporter{}, func() (Cluster, error) { return &cluster{}, nil }, func(Cluster) { called = true })
+	require.True(t, called)
 	require.NoError(t, state.Close())
 }
 
@@ -902,4 +911,77 @@ func TestSharedTestClusterCloseIfActiveBlocksReuseAfterFailure(t *testing.T) {
 	require.NoError(t, state.CloseIfActive())
 	require.False(t, state.closed)
 	require.Nil(t, state.cluster)
+}
+
+func TestSharedTestClusterReplacesFullyReleasedInitializationFailure(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		t.Run(fmt.Sprint(partial), func(t *testing.T) {
+			state := SharedTestCluster{}
+			failed := errors.New("startup failed")
+			value := &cluster{}
+			require.PanicsWithValue(t, "failed to initialize shared cluster: startup failed", func() {
+				state.Run(panicTestReporter{}, func() (Cluster, error) {
+					if partial {
+						return value, failed
+					}
+					return nil, failed
+				}, func(Cluster) { t.Fatal("failed initialization entered callback") })
+			})
+			require.Equal(t, uint64(1), state.generation)
+			called := false
+			state.Run(panicTestReporter{}, func() (Cluster, error) { return &cluster{}, nil }, func(Cluster) { called = true })
+			require.True(t, called)
+			require.Equal(t, uint64(2), state.generation)
+			require.NoError(t, state.Close())
+		})
+	}
+}
+
+func TestSharedTestClusterInitializerPanicClosesAdmission(t *testing.T) {
+	state := SharedTestCluster{}
+	require.PanicsWithValue(t, "initializer panic", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) { panic("initializer panic") }, func(Cluster) { t.Fatal("uninitialized callback") })
+	})
+	require.PanicsWithValue(t, "shared cluster is closed", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) { t.Fatal("initializer must not retry"); return nil, nil }, func(Cluster) {})
+	})
+}
+
+type panickingRollbackCluster struct {
+	Cluster
+	closeCalls int
+	panicClose bool
+	complete   bool
+}
+
+func (c *panickingRollbackCluster) Close() error {
+	c.closeCalls++
+	if c.panicClose {
+		panic("rollback panic")
+	}
+	return nil
+}
+func (c *panickingRollbackCluster) CloseComplete() bool { return c.complete }
+
+func TestSharedTestClusterRollbackPanicRetainsClosedAdmission(t *testing.T) {
+	owner := &panickingRollbackCluster{panicClose: true}
+	state := SharedTestCluster{}
+	require.PanicsWithValue(t, "rollback panic", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) { return owner, errors.New("startup failed") }, func(Cluster) { t.Fatal("failed startup entered callback") })
+	})
+	require.Same(t, owner, state.cluster)
+	require.PanicsWithValue(t, "shared cluster is closed", func() {
+		state.Run(panicTestReporter{}, func() (Cluster, error) { t.Fatal("initializer retried before cleanup"); return nil, nil }, func(Cluster) {})
+	})
+	require.Equal(t, 1, owner.closeCalls, "later roots must not implicitly retry rollback")
+	owner.panicClose = false
+	// Nil Close is not completion when the owner says resources remain.
+	require.ErrorContains(t, state.CloseIfActive(), "cleanup is incomplete")
+	require.Same(t, owner, state.cluster)
+	owner.complete = true
+	require.NoError(t, state.CloseIfActive())
+	called := false
+	state.Run(panicTestReporter{}, func() (Cluster, error) { return &cluster{}, nil }, func(Cluster) { called = true })
+	require.True(t, called)
+	require.NoError(t, state.Close())
 }

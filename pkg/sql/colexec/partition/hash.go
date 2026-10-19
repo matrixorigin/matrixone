@@ -113,6 +113,9 @@ func (partition *Partition) callHash(proc *process.Process) (vm.CallResult, erro
 			if err != nil {
 				return result, err
 			}
+			if result.Status == vm.ExecYield {
+				return result, nil
+			}
 			if result.Batch == nil {
 				if err, canceled := vm.CancelCheck(proc); canceled {
 					return vm.CancelResult, err

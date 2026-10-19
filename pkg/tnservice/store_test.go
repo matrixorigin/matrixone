@@ -356,6 +356,13 @@ func TestStartReplica(t *testing.T) {
 		r := s.getReplica(1)
 		assert.NoError(t, r.waitStarted(context.Background()))
 		assert.Equal(t, newTestTNShard(1, 2, 3), r.shard)
+		// Legacy redelivery reuses the local shard, including a later checker ID.
+		assert.NoError(t, s.StartTNReplica(newTestTNShard(1, 2, 3)))
+		assert.NoError(t, s.StartTNReplica(newTestTNShard(1, 4, 3)))
+		assert.Same(t, r, s.getReplica(1))
+		assert.Equal(t, newTestTNShard(1, 2, 3), s.getReplica(1).shard)
+		assert.Len(t, s.getTNShardInfo(), 1)
+		assert.Len(t, s.mu.metadata.Shards, 1)
 	})
 }
 

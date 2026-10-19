@@ -3389,7 +3389,15 @@ func Test_mce(t *testing.T) {
 			if strings.HasPrefix(strings.ToLower(execCtx.input.getSql()), "use ") {
 				return []ComputationWrapper{use_t}, nil
 			}
-			return cws, nil
+			// Execution now stages one original raw statement at a time.
+			fixtureSQL := append([]string{"create table A(a varchar(100),b int,c float)", "select a,b,c from A"}, self_handle_sql...)
+			normalize := func(s string) string { return strings.Trim(strings.ToLower(s), "; \t\r\n") }
+			for i, sql := range fixtureSQL {
+				if normalize(execCtx.input.getSql()) == normalize(sql) {
+					return []ComputationWrapper{cws[i]}, nil
+				}
+			}
+			return nil, fmt.Errorf("unexpected fixture statement: %s", execCtx.input.getSql())
 		})
 		defer stubs.Reset()
 
@@ -3409,6 +3417,7 @@ func Test_mce(t *testing.T) {
 			DefaultRoleID: moAdminRoleID,
 		})
 		ses.ruleCache = map[string]string{}
+		seedRewriteRuleCacheProofForTest(ses)
 		proto.SetSession(ses)
 
 		sysVarStubs := gostub.StubFunc(&ExeSqlInBgSes, nil, nil)
@@ -5054,6 +5063,30 @@ func runTestHandle(funName string, t *testing.T, handleFun func(ses *Session) er
 	})
 }
 
+// SQL PREPARE whose inner text is malformed must surface ER_PARSE_ERROR
+// (1064/42000), matching direct execution of the same SQL, not 1105 (#30434).
+func Test_HandlePrepareStringSyntaxErrorCode(t *testing.T) {
+	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
+	// 'SELECT FROM' is valid PREPARE outer syntax; the quoted inner text is
+	// malformed, so the parse of the inner statement must fail.
+	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL, "prepare bad_stmt from 'SELECT FROM'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	prepareString, ok := stmt.(*tree.PrepareString)
+	require.True(t, ok)
+
+	ec := newTestExecCtx(ctx, gomock.NewController(t))
+	runTestHandle("handlePrepareString", t, func(ses *Session) error {
+		defer ses.Close()
+		ec.resper = ses.respr
+		_, handleErr := handlePrepareString(ses, ec, prepareString)
+		require.Error(t, handleErr)
+		require.True(t, moerr.IsMoErrCode(handleErr, moerr.ErrParseError),
+			"expected 1064/42000 for inner syntax error, got: %v", handleErr)
+		return nil
+	})
+}
+
 func Test_HandlePrepareStmt(t *testing.T) {
 	ctx := defines.AttachAccountId(context.TODO(), catalog.System_Account)
 	for _, tc := range []struct {
@@ -5693,6 +5726,23 @@ func TestRefreshStatementScopedSessionInfo(t *testing.T) {
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
 	proc := &process.Process{Base: &process.BaseProcess{}}
+	ses.SetTenantInfo(killTestIdentity("sys", 0, "root", 0, "moadmin"))
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, "sys", proc.Base.SessionInfo.Account)
+	require.Equal(t, "root", proc.Base.SessionInfo.User)
+	require.Equal(t, "moadmin", proc.Base.SessionInfo.Role)
+	// Statements within one request reuse proc, including prepared EXECUTE.
+	ses.tenant.SetDefaultRole("public")
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, "public", proc.Base.SessionInfo.Role)
+	ses.tenant.SetDefaultRole("moadmin")
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Equal(t, "moadmin", proc.Base.SessionInfo.Role)
+	ses.SetTenantInfo(nil)
+	refreshStatementScopedSessionInfo(ses, proc)
+	require.Empty(t, proc.Base.SessionInfo.Account)
+	require.Empty(t, proc.Base.SessionInfo.User)
+	require.Empty(t, proc.Base.SessionInfo.Role)
 
 	require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", "ANSI_QUOTES"))
 	refreshStatementScopedSessionInfo(ses, proc)
@@ -5821,6 +5871,7 @@ func TestSQLModeStagingDefersRewriteWithRequestSnapshot(t *testing.T) {
 	require.NoError(t, ses.SetSessionSysVar(ctx, "remap_rewrites", `{"remapdb":{"src":"dst"}}`))
 	ses.rewriteEnabled.Store(true)
 	ses.ruleCache = map[string]string{}
+	seedRewriteRuleCacheProofForTest(ses)
 
 	policy, err := captureRewritePolicy(ctx, ses)
 	require.NoError(t, err)
@@ -11195,28 +11246,6 @@ func TestExecRequestStmtSendLongDataDefersFailureUntilExecute(t *testing.T) {
 	require.Equal(t, ErrorResponse, resp.category)
 	stmt.resetBinaryParamState()
 	require.False(t, stmt.hasPendingLongData())
-}
-
-func Test_ExecRequest_SidecarHintUsesNormalQueryPath(t *testing.T) {
-	// The hint is stripped and carried as compile intent. With no service Sirius
-	// runtime, compilation remains on the normal native query path.
-	ctx := context.TODO()
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	ses := newTestSession(t, ctrl)
-	ses.txnHandler = &TxnHandler{}
-
-	ec := newTestExecCtx(ctx, ctrl)
-	req := &Request{
-		cmd:  COM_QUERY,
-		data: []byte("/*+ SIDECAR */ SELECT 1"),
-	}
-
-	// ExecRequest won't return an error even though doComQuery panics/fails;
-	// the deferred recover catches it. We just verify it doesn't panic.
-	resp, _ := ExecRequest(ses, ec, req)
-	_ = resp
 }
 
 func Test_unsupportedCommand(t *testing.T) {

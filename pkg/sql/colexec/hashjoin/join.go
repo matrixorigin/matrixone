@@ -275,6 +275,9 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
+				if input.Status == vm.ExecYield {
+					return input, nil
+				}
 				bat := input.Batch
 
 				if bat == nil {

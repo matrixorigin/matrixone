@@ -103,6 +103,16 @@ func markInternalJSONMergeWarningContext(ctx context.Context) context.Context {
 	)
 }
 
+// lockFreeStatementTree is carried on the statement tree of an internal
+// statement executed with WithDisableLock. SQL such a statement triggers
+// indirectly on the same transaction — partition-service metadata writes and
+// auto-increment column writes run on service-owned executors with fresh
+// statement options — must inherit the lock-free policy. Those nested catalog
+// writes address keys private to the in-flight preparation, so letting them
+// silently re-arm catalog locks would accumulate public ownership that
+// publication admission cannot certify as private preparation.
+type lockFreeStatementTree struct{}
+
 // NewSQLExecutor returns a internal used sql service. It can execute sql in current CN.
 func NewSQLExecutor(
 	addr string,
@@ -392,6 +402,16 @@ func (exec *txnExecutor) Exec(
 		exec.ctx = parentCtx
 	}()
 
+	// A lock-free internal statement stays lock-free through the SQL it
+	// triggers on the same transaction: the nested service executors inherit
+	// the policy from the statement context instead of re-arming catalog
+	// locks for private-preparation catalog rows.
+	if statementOption.DisableLock() {
+		exec.ctx = context.WithValue(exec.ctx, lockFreeStatementTree{}, true)
+	} else if _, ok := exec.ctx.Value(lockFreeStatementTree{}).(bool); ok {
+		statementOption = statementOption.WithDisableLock()
+	}
+
 	// NOTE: This code is to restore tenantID information in the Context when temporarily switching tenants
 	// so that it can be restored to its original state after completing the task.
 	var originCtx context.Context
@@ -538,7 +558,11 @@ func (exec *txnExecutor) Exec(
 
 	prepared := false
 	if statementOption.HasParams() {
-		vec := statementOption.Params(exec.s.mp)
+		vec, err := statementOption.Params(exec.s.mp)
+		if err != nil {
+			proc.Free()
+			return executor.Result{}, err
+		}
 		proc.SetPrepareParams(vec)
 		prepared = true
 		defer vec.Free(proc.Mp())
@@ -546,6 +570,10 @@ func (exec *txnExecutor) Exec(
 
 	proc.Base.WaitPolicy = statementOption.WaitPolicy()
 	proc.Base.SessionInfo.TimeZone = exec.opts.GetTimeZone()
+	// A child SQL process does not inherit the parent's mutable SessionInfo.
+	// Install the explicitly propagated authenticated names before planning so
+	// SQL file admission and all downstream execution paths observe them.
+	proc.Base.SessionInfo.Account, proc.Base.SessionInfo.Role = statementOption.SessionIdentity()
 	proc.Base.SessionInfo.Buf = exec.s.buf
 	proc.Base.SessionInfo.StorageEngine = exec.s.eng
 	proc.Base.QueryClient = exec.s.qc
@@ -618,6 +646,7 @@ func (exec *txnExecutor) Exec(
 	c.keepAutoIncrement = statementOption.KeepAutoIncrement()
 	c.ignorePublish = statementOption.IgnorePublish()
 	c.ignoreCheckExperimental = statementOption.IgnoreCheckExperimental()
+	c.skipIndexTaskRegistration = statementOption.SkipIndexTaskRegistration()
 	c.disableLock = statementOption.DisableLock()
 	c.prePipelineLockTableID = statementOption.PrePipelineLockTable()
 

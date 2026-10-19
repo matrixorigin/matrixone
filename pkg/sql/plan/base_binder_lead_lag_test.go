@@ -271,7 +271,8 @@ func TestBindFuncExprImplByPlanExpr_LeadLagDefaultNoCast(t *testing.T) {
 		require.Equal(t, int32(4), arg2.Typ.Scale)
 	})
 
-	// Test lead with INT32 value and INT64 default — should cast because types differ
+	// Test lead with INT32 value and INT64 default — reconciled to the common
+	// int64 type instead of narrowing the default to int32 (#29974)
 	t.Run("lead int32 with int64 default", func(t *testing.T) {
 		valueExpr := makeInt32ConstPlanExpr(100)
 		offsetExpr := makeInt64ConstPlanExpr(1)
@@ -285,9 +286,15 @@ func TestBindFuncExprImplByPlanExpr_LeadLagDefaultNoCast(t *testing.T) {
 		require.NotNil(t, funcExpr)
 		require.Equal(t, 3, len(funcExpr.Args))
 
+		// The result type and the value argument are widened to int64; the
+		// default already matches and must NOT be narrowed back to int32.
+		require.Equal(t, int32(types.T_int64), result.Typ.Id)
+		arg0 := funcExpr.Args[0]
+		require.True(t, isCastExpr(arg0), "value int32 should be widened to int64")
+		require.Equal(t, int32(types.T_int64), arg0.Typ.Id)
 		arg2 := funcExpr.Args[2]
-		require.True(t, isCastExpr(arg2), "default int64 should be cast to int32")
-		require.Equal(t, int32(types.T_int32), arg2.Typ.Id)
+		require.False(t, isCastExpr(arg2), "default int64 should NOT be narrowed to int32")
+		require.Equal(t, int32(types.T_int64), arg2.Typ.Id)
 	})
 }
 

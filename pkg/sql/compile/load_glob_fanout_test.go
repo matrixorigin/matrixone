@@ -76,7 +76,7 @@ func TestPreparedLoadStageAuthorization(t *testing.T) {
 		bound := &tree.ExternParam{ExParamConst: tree.ExParamConst{
 			ScanType: tree.S3, Filepath: "bound/input.csv", StageFilepath: "stage://load_stage/input.csv",
 			FileSize: 123, FileStartOff: 17, Format: tree.CSV, Tail: &tree.TailParameter{IgnoredLines: 2},
-		}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "bound", APIKey: "bound-key"}}}
+		}, ExParam: tree.ExParam{S3Param: &tree.S3Parameter{Bucket: "bound", APIKey: "bound-key", APISecret: "bound-secret"}}}
 		payload, err := json.Marshal(bound)
 		require.NoError(t, err)
 		c := &Compile{proc: proc}

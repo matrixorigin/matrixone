@@ -125,3 +125,81 @@ func TestInsertImageSinkScanRetainsAuxiliaryColumns(t *testing.T) {
 	require.True(t, n.TableDef.Cols[1].Hidden)
 	require.Equal(t, auxType, n.TableDef.Cols[1].Typ)
 }
+
+func TestLoadIgnoreCheckPrecedesIrregularMaintenance(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	table := mock.ctxt.tables["docs_ft"]
+	addPositiveCheck(t, mock, table.Name, "payload")
+	unique := *mock.ctxt.tables["dept"].Indexes[0]
+	unique.IndexName = "uk_body_payload"
+	unique.Parts = []string{"body", "payload"}
+	table.Indexes = append(table.Indexes, &unique)
+	idxTable := mock.ctxt.tables[unique.IndexTableName]
+	idxTable.Cols[idxTable.Name2ColIndex[catalog.IndexTablePrimaryColName]].Typ = table.Cols[0].Typ
+	p, err := runOneStmt(mock, t, "load data inline format='csv', data='1,alpha,-1' ignore into table docs_ft fields terminated by ',' (id,body,payload)")
+	require.NoError(t, err)
+	q := p.GetQuery()
+	assertEverySinkStepHasConsumer(t, q)
+	var reachesCheck func(int32) bool
+	reachesCheck = func(id int32) bool {
+		n := q.Nodes[id]
+		if n.NodeType == planpb.Node_FILTER && n.FilterIsBarrier {
+			for _, expr := range n.FilterList {
+				if exprContainsFuncName(expr, "_check_constraint_assert") {
+					return true
+				}
+			}
+		}
+		for _, child := range n.Children {
+			if reachesCheck(child) {
+				return true
+			}
+		}
+		for _, step := range n.SourceStep {
+			if reachesCheck(q.Steps[step]) {
+				return true
+			}
+		}
+		return false
+	}
+	writes, tokenizers, images := 0, 0, 0
+	for id := range reachableODKUPlanNodes(q) {
+		n := q.Nodes[id]
+		if n.NodeType == planpb.Node_SINK && reachesCheck(id) {
+			images++
+			require.Len(t, n.Children, 1)
+			image := q.Nodes[n.Children[0]]
+			require.Equal(t, planpb.Node_PROJECT, image.NodeType, "the shared image must execute its row projection after filtering")
+			require.Len(t, image.Children, 1)
+			input := q.Nodes[image.Children[0]]
+			columns := 0
+			for _, col := range table.Cols {
+				if col.Name != catalog.Row_ID {
+					columns++
+				}
+			}
+			require.Len(t, image.ProjectList, columns+1, "preserve table columns and the computed composite unique lock key")
+			for _, expr := range image.ProjectList {
+				// Remapping has consumed binding tags; executable references must
+				// address real columns of the filtered input batch.
+				col := expr.GetCol()
+				require.NotNil(t, col, "restoring the row image must not re-evaluate expressions")
+				require.Zero(t, col.RelPos)
+				require.GreaterOrEqual(t, col.ColPos, int32(0))
+				require.Less(t, int(col.ColPos), len(input.ProjectList))
+				require.Equal(t, input.ProjectList[col.ColPos].Typ, expr.Typ)
+			}
+		}
+		if n.NodeType == planpb.Node_MULTI_UPDATE {
+			writes++
+			require.True(t, reachesCheck(id), "base and index writes must read filtered rows")
+		}
+		if n.NodeType == planpb.Node_APPLY {
+			tokenizers++
+			require.True(t, reachesCheck(id), "fulltext tokenization must read filtered rows")
+		}
+	}
+	require.Positive(t, writes)
+	require.Positive(t, tokenizers)
+	require.Equal(t, 1, images, "base and fulltext writes share one accepted row image")
+}
