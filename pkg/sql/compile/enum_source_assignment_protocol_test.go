@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -26,6 +27,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
@@ -47,7 +50,7 @@ func TestEnumSourceAssignmentProtocolPlacementSendReceive(t *testing.T) {
 	defer op.Release()
 	op.ProjectList = []*planpb.Expr{expr}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	for _, version := range []int64{122, 123, 122} {
+	for _, version := range []int64{118, 119, 120, 121, 122, 123, 122} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{scope.NodeInfo}
@@ -92,7 +95,7 @@ func TestEnumSourceAssignmentProtocolPlacementSendReceive(t *testing.T) {
 		data, err := p.Marshal()
 		require.NoError(t, err)
 		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 123")
-		for _, version := range []any{nil, "123", int64(122), int64(123)} {
+		for _, version := range []any{nil, "123", int64(119), int64(122), int64(123)} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			decoded, err := decodeScope(data, c.proc, true, nil)
 			if decoded != nil {
@@ -122,7 +125,7 @@ func TestEnumSourceAssignmentLocalAndCachedAdmission(t *testing.T) {
 		require.NoError(t, validateEnumSourceAssignmentProtocol(c.proc, pn))
 		require.Zero(t, testing.AllocsPerRun(10, func() { require.NoError(t, validateEnumSourceAssignmentProtocol(c.proc, pn)) }))
 		c.pn = pn
-		for _, version := range []any{int64(122), nil, "123"} {
+		for _, version := range []any{int64(119), int64(122), nil, "123"} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			require.ErrorContains(t, c.Compile(context.Background(), pn, nil), "protocol version 123")
 			_, err := c.Run(0)
@@ -133,4 +136,107 @@ func TestEnumSourceAssignmentLocalAndCachedAdmission(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, validateEnumSourceAssignmentProtocol(nil, legacy))
 	require.ErrorContains(t, validateEnumSourceAssignmentProtocol(nil, expr), "protocol version 123")
+}
+
+func enumSourceAssignmentTestExpr(t *testing.T, ctx context.Context) *planpb.Expr {
+	t.Helper()
+	domain := plan2.MakePlan2StringConstExprWithType("red,blue")
+	expr, err := plan2.BindFuncExprImplByPlanExpr(ctx, "cast_value_to_index", []*planpb.Expr{domain, domain, {Typ: types.T_enum.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}})
+	require.NoError(t, err)
+	return expr
+}
+
+func TestEnumSourceAssignmentExecutionStream(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCVersion123
+	enumExpr := enumSourceAssignmentTestExpr(t, c.proc.Ctx)
+	temporal, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "timestamp", []*planpb.Expr{{Typ: types.T_datetime.ToTypeWithScale(3).PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}})
+	require.NoError(t, err)
+	legacy := plan2.DeepCopyExpr(enumExpr)
+	legacy.GetF().Func.Obj = function.EncodeOverloadID(function.CAST_VALUE_TO_INDEX, 0)
+	legacy.GetF().Args = legacy.GetF().Args[:2]
+	op := projection.NewArgument()
+	defer op.Release()
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	var enumRequirement int64
+	for _, tc := range []struct {
+		name  string
+		exprs []*planpb.Expr
+		want  int64
+	}{
+		{"enum", []*planpb.Expr{enumExpr}, defines.MORPCVersion123},
+		{"enum and temporal", []*planpb.Expr{enumExpr, temporal}, defines.MORPCVersion123},
+		{"temporal", []*planpb.Expr{temporal}, defines.MORPCVersion122},
+		{"legacy", []*planpb.Expr{legacy}, 0},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op.ProjectList = tc.exprs
+			var required int64
+			_, err := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, required)
+			if tc.name == "enum" {
+				enumRequirement = required
+			}
+		})
+	}
+	require.Equal(t, client.calls, client.releases)
+	require.Equal(t, defines.MORPCVersion123, enumRequirement)
+	for _, tc := range []struct {
+		name            string
+		version         int64
+		cmd             pipeline.Method
+		id              uint64
+		closed, wantErr bool
+	}{
+		{"supported", defines.MORPCVersion123, pipeline.Method_PipelineProtocolCheck, 0, false, false},
+		{"replaced by old receiver", defines.MORPCVersion122, pipeline.Method_PipelineProtocolCheck, 0, false, true},
+		{"unknown version", 0, pipeline.Method_PipelineProtocolCheck, 0, false, true},
+		{"unknown method", defines.MORPCVersion123, pipeline.Method_UnknownMethod, 0, false, true},
+		{"wrong stream", defines.MORPCVersion123, pipeline.Method_PipelineProtocolCheck, 1, false, true},
+		{"closed stream", 0, pipeline.Method_PipelineProtocolCheck, 0, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stream := &fakeStreamSender{}
+			receive := make(chan morpc.Message, 1)
+			if tc.closed {
+				close(receive)
+			} else {
+				receive <- &pipeline.Message{Id: tc.id, Cmd: tc.cmd, Sid: pipeline.Status_Last, ProtocolVersion: tc.version}
+			}
+			// Balance the gauge token released by the production sender cleanup.
+			v2.PipelineMessageSenderGauge.Inc()
+			sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: receive, safeToClose: true}
+			t.Cleanup(func() { sender.close(context.Background()) })
+			err := sender.confirmProtocolOnStream(enumRequirement)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			require.Equal(t, 1, stream.sentCnt, "only the capability check, no pipeline")
+			request := stream.sent[0].(*pipeline.Message)
+			require.Equal(t, pipeline.Method_PipelineProtocolCheck, request.GetCmd())
+			require.Equal(t, defines.MORPCVersion123, request.GetProtocolVersion())
+		})
+	}
+}
+
+func TestEnumSourceAssignmentComposesWithVectorStream(t *testing.T) {
+	c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "b", Addr: "b:6001"}, {Id: "a", Addr: "a:6001"}})
+	client.version = defines.MORPCVersion123
+	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+	scopes, err := c.compileIndexSearchScan(vectorPlacementNode())
+	require.NoError(t, err)
+	t.Cleanup(func() { ReleaseScopes(scopes) })
+	remote := scopes[0]
+	op := projection.NewArgument()
+	op.ProjectList = []*planpb.Expr{enumSourceAssignmentTestExpr(t, c.proc.Ctx)}
+	op.AppendChild(remote.RootOp)
+	remote.RootOp = op
+	var required int64
+	_, err = encodeRemoteScopeWithProtocol(remote, c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion123, required)
+	require.Equal(t, client.calls, client.releases)
 }

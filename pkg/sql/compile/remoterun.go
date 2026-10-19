@@ -158,8 +158,8 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
 	}
-	if requiredProtocol != nil && (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion122)
+	if requiredProtocol != nil && (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts || features.EnumSourceAssignment) {
+		*requiredProtocol = max(*requiredProtocol, remoteExpressionProtocolVersion(features))
 	}
 	if requiredProtocol != nil && features.LoadFKIgnoreCheck {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion125)

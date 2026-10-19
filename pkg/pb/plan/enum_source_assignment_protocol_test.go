@@ -41,3 +41,20 @@ func TestEnumSourceAssignmentFeature(t *testing.T) {
 		}
 	}
 }
+
+func TestEnumSourceAssignmentInDependentExpressions(t *testing.T) {
+	expr := &Expr{Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: 306<<32 | 1}}}}
+	for _, owner := range []*Query{
+		{Nodes: []*Node{{ProjectList: []*Expr{{Expr: &Expr_Dependent{Dependent: &DependentExpr{Inputs: []*Expr{expr}}}}}}}},
+		{Nodes: []*Node{{}, {ProjectList: []*Expr{expr}}}, Correlation: &CorrelationSpec{Programs: []*CorrelationProgram{{RootNode: 1}}}},
+	} {
+		data, err := owner.Marshal()
+		require.NoError(t, err)
+		var decoded Query
+		require.NoError(t, decoded.Unmarshal(data))
+		features, err := RequiredRemoteExpressionFeatures(&decoded)
+		require.NoError(t, err)
+		require.True(t, features.EnumSourceAssignment)
+		require.True(t, features.Any())
+	}
+}

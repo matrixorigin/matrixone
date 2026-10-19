@@ -161,6 +161,9 @@ func (c *Compile) Compile(
 		if err = validateTemporalResultProtocol(c.proc, queryPlan); err != nil {
 			return err
 		}
+		if err = validateEnumSourceAssignmentProtocol(c.proc, queryPlan); err != nil {
+			return err
+		}
 		queryPlan, err = c.prepareCreateNamePlan(queryPlan)
 		if err != nil {
 			return err
