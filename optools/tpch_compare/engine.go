@@ -332,12 +332,32 @@ func (r *inputRows) next() (Row, error) {
 	return row, nil
 }
 
-func verifyTable(ctx context.Context, conn *sql.Conn, root string, t Table, id FileID) (retErr error) {
+func verifyTable(ctx context.Context, conn *sql.Conn, root string, t Table, id FileID) error {
+	return verifyTableWindows(ctx, conn, root, t, id, 65536)
+}
+
+// Verify contiguous first-key ranges instead of sorting the complete table.
+// Keep a first-key group together, so composite keys remain fully ordered.
+// The first range has no lower bound and a final probe covers the upper tail;
+// together these ranges detect extra rows even outside the input key domain.
+func verifyTableWindows(ctx context.Context, conn *sql.Conn, root string, t Table, id FileID, windowRows int) (retErr error) {
+	if windowRows < 1 || len(t.Key) == 0 || t.Columns[t.Key[0]].Kind != "int" {
+		return errors.New("verification requires an integer leading key and positive window size")
+	}
 	expected, err := openInput(filepath.Join(root, id.Path), t)
 	if err != nil {
 		return err
 	}
 	defer func() { retErr = errors.Join(retErr, expected.f.Close()) }()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if err := tx.Rollback(); !errors.Is(err, sql.ErrTxDone) {
+			retErr = errors.Join(retErr, err)
+		}
+	}()
 	var names, keys []string
 	for _, c := range t.Columns {
 		names = append(names, c.Name)
@@ -345,23 +365,79 @@ func verifyTable(ctx context.Context, conn *sql.Conn, root string, t Table, id F
 	for _, k := range t.Key {
 		keys = append(keys, t.Columns[k].Name)
 	}
-	_, _, _, _, err = drain(ctx, conn, "SELECT "+strings.Join(names, ",")+" FROM "+t.Name+" ORDER BY "+strings.Join(keys, ","), t.Columns, func(got Row) error {
-		want, err := expected.next()
+	base := "SELECT " + strings.Join(names, ",") + " FROM " + t.Name
+	order := " ORDER BY " + strings.Join(keys, ",")
+	firstKey := t.Key[0]
+	var pending Row
+	var upper string
+	done := false
+	for !done || pending != nil {
+		batch := make([]Row, 0, windowRows)
+		var bytes int64
+		for {
+			row := pending
+			pending = nil
+			if row == nil {
+				row, err = expected.next()
+				if errors.Is(err, io.EOF) {
+					done = true
+					break
+				}
+				if err != nil {
+					return err
+				}
+			}
+			if len(batch) >= windowRows && row[firstKey].Value != batch[len(batch)-1][firstKey].Value {
+				pending = row
+				break
+			}
+			bytes += 32
+			for _, c := range row {
+				bytes += int64(len(c.Value)) + 32
+			}
+			if bytes > 2*captureMemory {
+				return errors.New("verification window exceeds its memory bound")
+			}
+			batch = append(batch, row)
+		}
+		if len(batch) == 0 {
+			break
+		}
+		end := batch[len(batch)-1][firstKey].Value
+		where := " WHERE " + keys[0] + " <= " + end
+		if upper != "" {
+			where += " AND " + keys[0] + " > " + upper
+		}
+		n := 0
+		_, _, _, _, err = drain(ctx, tx, base+where+order, t.Columns, func(got Row) error {
+			if n >= len(batch) {
+				return fmt.Errorf("%s unexpected database row", t.Name)
+			}
+			if !slices.Equal(batch[n], got) {
+				return fmt.Errorf("%s content differs at key %s", t.Name, batch[n][firstKey].Value)
+			}
+			n++
+			return nil
+		})
 		if err != nil {
-			return fmt.Errorf("%s unexpected database row: %w", t.Name, err)
+			return err
 		}
-		if !slices.Equal(want, got) {
-			return fmt.Errorf("%s content differs at key %s", t.Name, want[0].Value)
+		if n != len(batch) {
+			return errors.New("database is missing input rows")
 		}
-		return nil
+		upper = end
+	}
+	where := ""
+	if upper != "" {
+		where = " WHERE " + keys[0] + " > " + upper + " OR " + keys[0] + " IS NULL"
+	}
+	_, _, _, _, err = drain(ctx, tx, base+where+order+" LIMIT 1", t.Columns, func(Row) error {
+		return fmt.Errorf("%s unexpected database row beyond input", t.Name)
 	})
 	if err != nil {
 		return err
 	}
-	if _, err := expected.next(); !errors.Is(err, io.EOF) {
-		return errors.Join(errors.New("database is missing input rows"), err)
-	}
-	return nil
+	return tx.Commit()
 }
 
 func verifyRelationships(ctx context.Context, conn *sql.Conn) error {
