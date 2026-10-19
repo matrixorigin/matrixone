@@ -125,7 +125,7 @@ func requireArrowLoadPolicy(t testing.TB, c embed.Cluster, cnIndex int, enabled,
 }
 
 // adjustArrowLoadCluster changes only the next CN generation's rollout
-// settings. Callers close the current generation before adjustment and restart
+// settings. Callers Stop the current generation before adjustment and restart
 // afterward, so an admitted statement always keeps the policy snapshot carried
 // in its compiled external-scan payload.
 func adjustArrowLoadCluster(c embed.Cluster, options arrowLoadClusterOptions) {
