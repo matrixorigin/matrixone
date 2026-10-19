@@ -1,15 +1,16 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 13
+- Revision: 14
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
-- Revision 13 integration baseline: official main `f11dd8c5d700f215922835f314ea18d32471f482`
+- Revision 14 integration baseline: official main `57fb9530859d92791100098d312ea8cacc671910`
 - Revision 11 measurement baseline: official main `b111224b0c624773389b390cd3cf1223126b6ee2`
 - Design feedback: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784
-- Independently accepted revision: 11 at `e7dbe6a2cdd57d0c53221bafe35bae1c1f6b29e8`
-- Design acceptance: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5559536863
-- Implementation approval: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5559558038
+- Independently accepted revision: 13 at `40eb8f3d0dd45085649d1f7a0345c1ea419a8542`
+- Design acceptance: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5567698353
+- Implementation approval: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5566840311
+- Protocol allocation correction: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5567799063
 
 # Signed-zero set membership and scalar reaggregation
 
@@ -51,8 +52,9 @@ analytic allocation/continuation owners. Its query-wide rejection of mixed
 scalar fallback and dependent programs caused the compatibility regression in
 review 5566330907. Revision 13 removes that rejection by binding dynamic native
 operators to the existing statement account and scalar-set lease, including
-nested invocations. Independent review records below apply to revision 11 at
-their stated commit; they are not an approval claim for this integration.
+nested invocations. Independent review 5567698353 subsequently accepted revision
+13 at `40eb8f3d0dd45085649d1f7a0345c1ea419a8542`. Revision 14 integrates the
+new official protocol allocation and retains that reviewed architecture.
 
 ## Membership contract
 
@@ -934,8 +936,68 @@ changed packages. Full dependent, Window, LoopJoin, compile and colexec package 
 under `-race`. Delivery review is recorded with the final evidence.
 The receipt binds 86 source/build/test inputs and the exact source patch against
 `ca6cbe14a44935f6e0b7e854803e5e157bc93a9a`. Historical revision-11/12 receipts retain
-their source provenance and approval scope; revision 13 awaits independent
-acceptance.
+their source provenance and approval scope. Independent reviews 5567698353 and
+5566840311 subsequently accepted the revision-13 design and implementation at
+`40eb8f3d0dd45085649d1f7a0345c1ea419a8542`.
+
+### Revision 14 official protocol allocation and integration
+
+Official main `57fb9530859d92791100098d312ea8cacc671910` allocates MORPC 120 to
+current-session KILL authorization and proxy disconnect cleanup. This PR's
+single set-key/scalar-fallback capability moves to 121, with immediate predecessor
+120 rejection in placement, destination, receiver, Prepare, retained dependent
+and persisted-expression tests. Dependent-only 119, table collation 118,
+LEAST/GREATEST 117 and division 116 retain their released floors. Function 601,
+marker fields 95/65 and allocation owners remain unchanged.
+
+The [official-120 implementation probe](validation/20261019_set_key_protocol121_main120.json)
+compiles all official Go sources using a complete temporary overlay, including
+its generated protobufs. Candidate-bound FLOAT/DOUBLE pipelines unmarshal and
+pass admission there, but function 601 is absent and native construction fails
+with unknown overload; ordinary ABS controls construct successfully. The real
+official query-service handler returns 120. Replaying that serialized response
+through candidate placement and actual-destination encoding chooses the
+coordinator and rejects sending either key with a nil pipeline payload. This is
+isolated native execution plus response replay, not a live mixed-binary cluster.
+
+The rebase retains upstream `bindingRecurQueryBlock()` checks in GROUP BY and
+HAVING: aggregates in a scalar query block inside a recursive CTE remain legal,
+while direct recursive-member aggregation remains rejected. Scalar comparison
+still returns true for `-0 = +0`; the set-specific key preserves the separate
+members recorded for MySQL in issue 30155. Correlation and resource preservation
+closures remain as accepted in revision 13.
+
+The revision-14 [source-bound qualification](validation/20261019_scalar_set_capacity_protocol121.json)
+passes all 26 profiles and 165 public samples at source snapshot
+`15230a9f349b391813383b526de781f449c7a4d7` in 54.930 s. The maximum first-invocation
+and measured completion are 2,206.798/2,167.900 ms, within the unchanged 10 s/5 s
+limits. Maximum participating-account peak is 63,507,040 bytes; process-lifetime
+RSS high-water is 705,347,584 bytes. All internal terminal summaries are valid
+with zero live accounted bytes. The receipt records 95 source/build/test hashes.
+Public timing, EXPLAIN and internal accounting remain separate executions; this
+is local single-CN Darwin/arm64 qualification, not a universal latency claim.
+
+Two earlier full attempts failed the unchanged 5 s measured-completion gate for `mixed-streamed-outer`
+(6.143 s and 5.282 s). After the first failure, a separate diagnostic selection
+of ordinary and mixed streamed profiles preserved the first invocation, one
+excluded warm-up and three measured rounds; the mixed measured rounds were
+2.161/2.242/2.162 s. This selected run is not a complete qualification. The second
+full attempt's process record shows independently owned compiler jobs overlapping
+the mixed measurements. Shared-host contention is observed, but has not been
+proved to be the sole cause. No threshold, data size, sample or oracle was relaxed.
+The opt-in benchmark now logs samples before acceptance assertions and supports
+an exact, fail-closed diagnostic selector; an unset selector still runs all 26
+profiles. A selected report is explicitly marked incomplete. The subsequent complete qualification ran only after those competing jobs ended
+and a recorded 30-second window contained no compiler/test/lint process above
+10% CPU. That controlled pass does not establish the sole cause of earlier
+failures. The earlier failed runs and selected/profile diagnostics remain
+separately identified in the receipt; they are not counted as qualification.
+
+Historical receipts retain their measured source and approval scope. Revision-13 design acceptance and implementation evidence apply to their exact
+head. Review 5567799063 supersedes one approval for the official-120 capability
+collision; the 121 gates and predecessor rejection above address that specific
+counterexample. This mechanical integration does not rewrite historical approval
+or capacity evidence.
 
 ## Alternatives
 
@@ -960,40 +1022,40 @@ activation gates. Retain the terminal 20833 behavior, participating-account limi
 and coordinator-only scope when deploying; broader distributed execution and
 universal latency or process-RSS guarantees remain unqualified.
 
-Official main at this revision ends at MORPC 119 for coordinator-owned
-parameterized subquery programs. This capability uses MORPC **120**. The feature walker recognizes encoded function identity 601 without
+Official main at this revision ends at MORPC 120 for current-session KILL
+authorization and proxy disconnect cleanup. This capability uses MORPC **121**. The feature walker recognizes encoded function identity 601 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar composition adds no separate function identity. It adds
 `plan.Node.scalar_set_reaggregation` field 95 and
 `pipeline.Instruction.scalar_set_reaggregation` field 65. Marker-only integer
-fallbacks require 120 too. Senders and receivers reject marked remote scopes at
+fallbacks require 121 too. Senders and receivers reject marked remote scopes at
 all versions, before operator decoding, because a remote attempt cannot share
 the coordinator's work/account lease. Local scope validation rejects remote
 nodes, DOP above one, and marker placement outside WINDOW/LEFT JOIN. Official main
 retains SELECT division diagnostics at 116, conditional on execution/session
-policy. Set keys require 120 regardless of that policy; a combined expression
-requires 120. Division diagnostics remain outside persisted-expression admission. Official main
+policy. Set keys require 121 regardless of that policy; a combined expression
+requires 121. Division diagnostics remain outside persisted-expression admission. Official main
 adds collation-aware LEAST/GREATEST at 117; that independent feature remains
-admitted at 117, and a combined expression with a set key requires 120.
+admitted at 117, and a combined expression with a set key requires 121.
 The released table-collation function retains identity 600 and floor 118;
 table-only expressions remain admitted at 118, while a combined expression
-with a set key requires 120.
+with a set key requires 121.
 
-Placement requires workers advertising 120 or newer; missing or old capabilities
+Placement requires workers advertising 121 or newer; missing or old capabilities
 fall back to one CN on the capable coordinator. Sending rechecks actual pipeline
 destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
-missing or below 120. Operator expression construction checks the same floor
+missing or below 121. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 120. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
+also require 121. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and
-then release the 120 requirement. A prepare-time ANY type is not capability proof.
-A new binary configured at immediate predecessor floor 119 rejects these
+then release the 121 requirement. A prepare-time ANY type is not capability proof.
+A new binary configured at immediate predecessor floor 120 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
-under a floor below 120. Lowering a new binary's floor does not rewrite existing
+under a floor below 121. Lowering a new binary's floor does not rewrite existing
 catalog expressions or teach an old binary identity 601.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected
@@ -1012,7 +1074,7 @@ this document and immediate-predecessor rollback tests together. Other open PRs
 using the same candidate do not reserve it.
 
 Dependent-only queries retain their independently released protocol 119.
-Mixed dependent/scalar-set queries require the set-key floor 120 as well as
+Mixed dependent/scalar-set queries require the set-key floor 121 as well as
 coordinator-local DOP 1 placement. The final scope graph, including detached
 producer scopes, is validated before any execution. The statement attempt
 acquires one scalar-set CN permit and one bounded participating account; all
