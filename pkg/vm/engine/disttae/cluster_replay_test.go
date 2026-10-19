@@ -121,10 +121,6 @@ func newClusterVecOwner(t *testing.T, pool *mpool.MPool, vs ...*vector.Vector) *
 	return o
 }
 
-func (o *clusterVecOwner) track(vs ...*vector.Vector) {
-	o.vecs = append(o.vecs, vs...)
-}
-
 func (o *clusterVecOwner) Free() {
 	for _, v := range o.vecs {
 		v.Free(o.pool)

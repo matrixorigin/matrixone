@@ -425,7 +425,7 @@ func TestClusterKeyIterMatchesRowsIter(t *testing.T) {
 	// afterwards; re-insert some deleted values under fresh row ids (the
 	// update shape).
 	rowSerial := make(map[types.Rowid][]byte)
-	var insertRows []clusterRow
+	insertRows := make([]clusterRow, 0, len(keys))
 	nextPK := int64(0)
 	for i, k := range keys {
 		rowID := objectio.NewRowid(objectio.NewBlockid(sid, uint16(i%8), 0), uint32(i))
@@ -1326,7 +1326,6 @@ func TestClusterKeyIterMatchesRowsIterRandomReplay(t *testing.T) {
 	buildOps := func(sameTS bool) []func(state *PartitionState) {
 		var ops []func(state *PartitionState)
 		for i := 0; i < n; i++ {
-			i := i
 			rowID := insertRowID(i)
 			ts := types.BuildTS(int64(10+i), 0)
 			serial := serialOfRow(i)
@@ -1337,7 +1336,6 @@ func TestClusterKeyIterMatchesRowsIterRandomReplay(t *testing.T) {
 			})
 		}
 		for i := 0; i < n; i += 3 {
-			i := i
 			rowID := insertRowID(i)
 			ts := types.BuildTS(int64(100+i), 0)
 			if sameTS {
@@ -1350,7 +1348,6 @@ func TestClusterKeyIterMatchesRowsIterRandomReplay(t *testing.T) {
 			})
 		}
 		for i := 0; i < n; i += 3 {
-			i := i
 			rowID := reinsertRowID(i)
 			ts := types.BuildTS(int64(200+i), 0)
 			serial := serialOfRow(i)
