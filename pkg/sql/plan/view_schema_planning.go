@@ -71,6 +71,9 @@ func (r *ViewSchemaRequest) BuildPlan(stmt tree.Statement, isPrepare bool) (resu
 	state.compiler.SetQueryingSubscription(nil)
 	defer state.compiler.SetQueryingSubscription(previousSub)
 	result, err = BuildPlan(state.compiler, stmt, isPrepare)
+	if state.rootAuthorizationErr != nil {
+		return nil, r.cause(state.rootAuthorizationErr)
+	}
 	if err != nil {
 		return nil, r.cause(err)
 	}

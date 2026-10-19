@@ -50,6 +50,7 @@ func viewSchemaSubscriptionContext(ctx context.Context, obj *ObjectRef, previous
 
 type viewSchemaContextKey struct{}
 type viewSchemaDerivation struct {
+	rootAuthorizationErr                                error
 	requiredProtocol                                    int64
 	memoFrames                                          []*viewSchemaMemoFrame
 	inputBytes                                          int
@@ -76,6 +77,18 @@ func (c viewSchemaCatalogContext) Value(key any) any {
 		return nil
 	}
 	return c.Context.Value(key)
+}
+
+// Optional metadata inference may discard lookup errors. A denied user root
+// must remain denied for this derivation, even if inference attempts it again.
+// Successful checks are not cached; each user catalog action is authorized.
+func (s *viewSchemaDerivation) authorizeRoot(database, name string, snapshot *Snapshot) error {
+	if s.rootAuthorizationErr == nil {
+		// Authorization can execute catalog SQL; do not expose our private
+		// planning marker to that independent trusted query.
+		s.rootAuthorizationErr = s.request.binding.Authorize(s.request.workCtx, database, name, snapshot)
+	}
+	return s.rootAuthorizationErr
 }
 
 type viewSchemaCompiler struct {

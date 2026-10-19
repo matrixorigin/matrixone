@@ -7222,6 +7222,13 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 	if schema == "" {
 		schema = builder.compCtx.DefaultDatabase()
 	}
+	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning && state.depth == 0 {
+		// This optional name/type probe can run before buildTable, including
+		// for a plain prepared SELECT. It is still a user-root catalog read.
+		if err := state.authorizeRoot(schema, source.sourceName, nil); err != nil {
+			return nil
+		}
+	}
 	_, tableDef, err := builder.compCtx.Resolve(schema, source.sourceName, nil)
 	if err != nil || tableDef == nil {
 		return nil
@@ -13058,7 +13065,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 			// Authorization can run catalog SQL. As in Describe, give it the
 			// request context, not the private derivation marker: its own binder
 			// must not recursively authorize metadata probes as new user roots.
-			if err = state.request.binding.Authorize(state.request.workCtx, schema, table, snapshot); err != nil {
+			if err = state.authorizeRoot(schema, table, snapshot); err != nil {
 				return 0, "", err
 			}
 		}

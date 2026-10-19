@@ -19,6 +19,7 @@ import (
 	"errors"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -409,27 +410,127 @@ func TestViewSchemaPlanningRejectsInvalidDefinitionsWithoutFallback(t *testing.T
 	}
 }
 
-func TestViewSchemaPlanningAuthorizesRootsBeforeLookup(t *testing.T) {
-	f := newViewSchemaTestFixture(t)
-	f.addView(t, "root_v", "select n_name from nation")
-	failure := errors.New("denied root")
-	f.authErr = failure
-	authorize := f.binding.Authorize
-	f.binding.Authorize = func(ctx context.Context, database, name string, snapshot *Snapshot) error {
-		require.Nil(t, ctx.Value(viewSchemaContextKey{}), "authorization catalog SQL must not inherit the private planning mode")
-		return authorize(ctx, database, name, snapshot)
-	}
-	request := f.request(t)
-	p, err := buildViewSchemaTestPlan(t, request, "select * from root_v", false)
-	require.ErrorIs(t, err, failure)
-	require.Nil(t, p)
-	require.Zero(t, f.compiler.lookups.Load())
-	f.authErr = nil
-	p, err = buildViewSchemaTestPlan(t, request, "select * from root_v", false)
+type viewSchemaAuthorizationCompiler struct {
+	*viewSchemaTestCompiler
+	subscriptionProbes int
+}
+
+func (c *viewSchemaAuthorizationCompiler) GetSubscriptionMeta(database string, snapshot *Snapshot) (*SubscriptionMeta, error) {
+	c.subscriptionProbes++
+	return c.viewSchemaTestCompiler.GetSubscriptionMeta(database, snapshot)
+}
+
+func buildViewSchemaAuthorizationPlan(t *testing.T, request *ViewSchemaRequest, mode string) (*Plan, error) {
+	t.Helper()
+	const query = "select id from tpch.root_v"
+	statements, err := mysql.Parse(t.Context(), query, 1)
 	require.NoError(t, err)
-	require.NotNil(t, p)
-	require.EqualValues(t, 2, f.authorizes.Load(), "nested execution authorization belongs to ViewReferences")
-	require.NotEmpty(t, p.GetQuery().ViewReferences)
+	defer statements[0].Free()
+	var input tree.Statement = statements[0]
+	switch mode {
+	case "text":
+		input = &tree.PrepareString{Name: "auth_plan", Sql: query}
+	case "typed":
+		input = &tree.PrepareStmt{Name: "auth_plan", Stmt: statements[0]}
+	}
+	return request.BuildPlan(input, mode == "direct")
+}
+
+func TestViewSchemaPlanningAuthorizesRootsBeforeLookup(t *testing.T) {
+	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			f.addView(t, "root_v", "select n_name as id from nation")
+			failure := errors.New("denied root")
+			f.authErr = failure
+			databaseProbes := 0
+			getDatabaseID := f.compiler.GetDatabaseIdFunc
+			f.compiler.GetDatabaseIdFunc = func(database string, snapshot *Snapshot) (uint64, error) {
+				databaseProbes++
+				return getDatabaseID(database, snapshot)
+			}
+			authorize := f.binding.Authorize
+			f.binding.Authorize = func(ctx context.Context, database, name string, snapshot *Snapshot) error {
+				require.Nil(t, ctx.Value(viewSchemaContextKey{}), "authorization catalog SQL must not inherit the private planning mode")
+				require.Equal(t, "tpch", database)
+				require.Equal(t, "root_v", name, "nested execution authorization belongs to ViewReferences")
+				err := authorize(ctx, database, name, snapshot)
+				// Only the first check denies: optional metadata inference must
+				// not swallow it and retry the policy into an allow decision.
+				f.authErr = nil
+				return err
+			}
+			compiler := &viewSchemaAuthorizationCompiler{viewSchemaTestCompiler: f.compiler}
+			f.binding.Compiler = compiler
+			request := f.request(t)
+			p, err := buildViewSchemaAuthorizationPlan(t, request, mode)
+			require.ErrorIs(t, err, failure)
+			require.Nil(t, p)
+			require.Zero(t, f.compiler.lookups.Load())
+			require.Zero(t, databaseProbes)
+			require.Zero(t, compiler.subscriptionProbes)
+			require.EqualValues(t, 1, f.authorizes.Load())
+			f.authErr = nil
+			p, err = buildViewSchemaAuthorizationPlan(t, request, mode)
+			require.NoError(t, err)
+			require.NotNil(t, p)
+			if mode == "text" || mode == "typed" {
+				p = p.GetDcl().GetPrepare().Plan
+			}
+			require.NotEmpty(t, p.GetQuery().ViewReferences)
+		})
+	}
+}
+
+func TestViewSchemaPlanningDeniedRootDoesNotWaitForCatalog(t *testing.T) {
+	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			f.addView(t, "root_v", "select n_name as id from nation")
+			failure := errors.New("denied before blocked catalog")
+			f.authErr = failure
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+			defer cancel()
+			entered := make(chan struct{}, 1)
+			f.compiler.resolve = func(ctx context.Context, _, _ string, _ *Snapshot) error {
+				entered <- struct{}{}
+				<-ctx.Done()
+				return context.Cause(ctx)
+			}
+			request := NewViewSchemaRequest(ctx, f.provider)
+			defer request.Close()
+			const query = "select id from tpch.root_v"
+			statements, err := mysql.Parse(ctx, query, 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+			var input tree.Statement = statements[0]
+			if mode == "text" {
+				input = &tree.PrepareString{Name: "blocked_auth", Sql: query}
+			} else if mode == "typed" {
+				input = &tree.PrepareStmt{Name: "blocked_auth", Stmt: statements[0]}
+			}
+			done := make(chan error, 1)
+			go func() {
+				p, err := request.BuildPlan(input, mode == "direct")
+				if p != nil {
+					err = errors.New("denied planning returned a plan")
+				}
+				done <- err
+			}()
+			select {
+			case err := <-done:
+				require.ErrorIs(t, err, failure)
+			case <-entered:
+				cancel()
+				<-done
+				t.Fatal("denied user root entered the blocking catalog resolver")
+			case <-ctx.Done():
+				<-done
+				t.Fatal("denied root failed to finish without catalog access")
+			}
+			require.Zero(t, f.compiler.lookups.Load())
+		})
+	}
 }
 
 func TestViewSchemaPlanningFailureRestoresOwnership(t *testing.T) {
