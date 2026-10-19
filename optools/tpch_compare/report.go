@@ -147,18 +147,17 @@ func reportCampaign(config, root, output string) (retErr error) {
 		}
 		key := cellKey(pair.Trial)
 		cell := cells[key]
-		if pair.Correctness != "pass" || pair.Error != "" {
+		if pair.Status != "pass" || pair.Error != "" {
 			cell.Failures = append(cell.Failures, pair.Trial.ID+": "+pair.Error)
 			continue
 		}
 		receipts := map[string]WorkerReceipt{}
-		dirs := map[string]string{}
 		for _, engine := range []string{"mo", "duckdb"} {
 			record, ok := pair.Arms[engine]
 			if !ok {
 				return errors.New("paired arm missing")
 			}
-			receipt, dir, err := readArm(filepath.Join(filepath.Dir(path), engine), record)
+			receipt, _, err := readArm(filepath.Join(filepath.Dir(path), engine), record)
 			if err != nil {
 				return err
 			}
@@ -180,31 +179,17 @@ func reportCampaign(config, root, output string) (retErr error) {
 				return errors.New("worker executable changed")
 			}
 			receipts[engine] = receipt
-			dirs[engine] = dir
 			cell.Arms = append(cell.Arms, record)
 		}
 		a, b := receipts["mo"], receipts["duckdb"]
 		if len(a.Queries) != len(b.Queries) {
 			return errors.New("paired stream sizes differ")
 		}
-		d, err := loadDataset(c.Datasets[pair.Trial.Scale], false)
-		if err != nil {
-			return err
-		}
 		blockTimes := map[int][]pairedTimes{}
 		for i, x := range a.Queries {
 			y := b.Queries[i]
 			if x.Query < 1 || x.Query > 22 || x.Query != y.Query || x.Stream != y.Stream || x.Repetition != y.Repetition || x.Error != "" || y.Error != "" || x.Capture.ElapsedNS <= 0 || y.Capture.ElapsedNS <= 0 {
 				return errors.New("invalid paired query timing")
-			}
-			q := d.Queries[x.Query-1]
-			if err := compareCaptures(dirs["mo"], dirs["duckdb"], x.Capture, y.Capture, q); err != nil {
-				if q.Limit == 0 {
-					return err
-				}
-				if err := verifyBoundaryArtifacts(filepath.Dir(path), dirs["mo"], dirs["duckdb"], x, y, q); err != nil {
-					return err
-				}
 			}
 			blockTimes[x.Query] = append(blockTimes[x.Query], pairedTimes{float64(x.Capture.ElapsedNS) / 1e9, float64(y.Capture.ElapsedNS) / 1e9})
 		}
@@ -246,6 +231,7 @@ func reportCampaign(config, root, output string) (retErr error) {
 		}
 	}
 	_, _ = fmt.Fprintf(md, "# MatrixOne versus DuckDB TPC-H\n\nMode: %s. Run status: **%s**. Completed paired blocks: %d/%d.\n\nSpeedup is DuckDB / MO; values above 1 favor MO. Scales, cache conditions and budgets are separate.\n", c.Mode, status, len(run.Pairs), len(f.Trials))
+	_, _ = fmt.Fprintln(md, "\nThis benchmark does not perform correctness verification. Completion describes execution and collection of timing samples.")
 	_, _ = fmt.Fprintf(md, "\nMO source: `%s`. MO binary SHA-256: `%s`. Worker SHA-256: `%s`.\n\nApplication CPUs: `%s`; controller CPUs: `%s`; primary memory: %d bytes; disk allowance: %d bytes/engine.\n\nMO build: `%s`.\n", c.MORevision, p.MO.SHA256, p.Worker.SHA256, cpuSet(c.CPUs), cpuSet(c.ControllerCPUs), c.MemoryBytes, c.DiskBytes, c.MOBuild)
 	keys := make([]string, 0, len(cells))
 	for key := range cells {
@@ -317,36 +303,6 @@ func reportCampaign(config, root, output string) (retErr error) {
 	_, _ = fmt.Fprintln(md, "\nCPU and peak memory belong to whole measured windows. Per-query resource attribution requires the dedicated profiling replays; operator timings are not OS CPU time. Tail percentiles require larger per-query samples.")
 	writer.Flush()
 	return errors.Join(writer.Error(), md.Flush(), writeWindows(output, cells), writeLoads(md, c, f))
-}
-
-func verifyBoundaryArtifacts(root, left, right string, a, b QueryReceipt, q Query) error {
-	full := map[string]Capture{}
-	dirs := map[string]string{}
-	for _, engine := range []string{"mo", "duckdb"} {
-		path := filepath.Join(root, fmt.Sprintf("boundary-q%02d-s%d-r%d-%s", a.Query, a.Stream, a.Repetition, engine))
-		record, err := readJSON[ArmRecord](filepath.Join(path, "arm.json"))
-		if err != nil {
-			return err
-		}
-		receipt, dir, err := readArm(path, record)
-		if err != nil {
-			return err
-		}
-		if receipt.Variant != "unlimited_diagnostic" || len(receipt.Queries) != 1 {
-			return errors.New("LIMIT membership proof is incomplete")
-		}
-		full[engine] = receipt.Queries[0].Capture
-		dirs[engine] = dir
-	}
-	unlimited := q
-	unlimited.Limit = 0
-	if err := compareCaptures(dirs["mo"], dirs["duckdb"], full["mo"], full["duckdb"], unlimited); err != nil {
-		return err
-	}
-	if err := validateLimit(left, dirs["mo"], a.Capture, full["mo"], q); err != nil {
-		return err
-	}
-	return validateLimit(right, dirs["duckdb"], b.Capture, full["duckdb"], q)
 }
 
 func writeWindows(output string, cells map[string]*reportCell) (retErr error) {

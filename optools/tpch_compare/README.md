@@ -108,8 +108,8 @@ Keep generated datasets, databases and raw captures outside Git. Large benchmark
 campaigns are explicit operations; ordinary tests use only tiny fixtures.
 
 Campaign mode `warm` runs the primary SF1/SF10/SF100 latency comparison: ten
-balanced paired suites per scale, with the same budgets, warmup, and correctness
-checks as `full`. It prepares one qualified persistent image per engine/scale;
+balanced paired suites per scale, with the same budgets and warmup as `full`.
+It prepares one checkpointed persistent image per engine/scale;
 the three-replicate loading experiment, scaling, cache, and profiling studies
 remain separate parts of `full`.
 
@@ -136,9 +136,11 @@ CPU set are enforced before exec, including child threads. Swap is disabled for
 that application. Controller work uses the other CCD. Source data and database
 cache ownership are controlled without dropping the host's entire cache.
 
-Preparation loads fresh databases, reopens and verifies them, checks independent
-NULL/decimal/date/string fixtures, and qualifies all 22 query outputs. Full mode
-uses three loads per scale/engine and retains the first qualified database.
+Preparation loads fresh databases and collects statistics and checkpoints.
+Benchmark scripts perform no dataset scans, reference checks, cross-engine result
+comparisons or correctness replays. Correctness tests and explicit diagnostic
+commands are separate from every benchmark mode. Full mode uses three loads per
+scale/engine and retains the first database.
 Later load replicas are discarded only after their owned processes have joined;
 all receipts remain. The pilot freezes symmetric query deadlines, throughput
 wave lengths and the balanced schedule before scored runs.

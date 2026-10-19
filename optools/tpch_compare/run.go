@@ -26,10 +26,9 @@ import (
 )
 
 type PreparedEngine struct {
-	Deployment    deployment `json:"deployment"`
-	Loads         []FileID   `json:"loads"`
-	Verification  FileID     `json:"verification"`
-	Qualification FileID     `json:"qualification"`
+	Deployment deployment `json:"deployment"`
+	Loads      []FileID   `json:"loads"`
+	Pilot      FileID     `json:"pilot"`
 }
 type Frozen struct {
 	Version         int                                  `json:"version"`
@@ -67,73 +66,6 @@ func readArm(root string, record ArmRecord) (WorkerReceipt, string, error) {
 	path := filepath.Join(root, record.Worker.Path)
 	r, err := readJSON[WorkerReceipt](path)
 	return r, filepath.Dir(path), err
-}
-
-func comparePair(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager, prepared map[string]PreparedEngine, t Trial, root string, records map[string]ArmRecord) error {
-	a, ra, err := readArm(filepath.Join(root, "mo"), records["mo"])
-	if err != nil {
-		return err
-	}
-	b, rb, err := readArm(filepath.Join(root, "duckdb"), records["duckdb"])
-	if err != nil {
-		return err
-	}
-	if len(a.Queries) == 0 || len(a.Queries) != len(b.Queries) {
-		return errors.New("paired result selection is incomplete")
-	}
-	d, err := loadDataset(c.Datasets[t.Scale], false)
-	if err != nil {
-		return err
-	}
-	for i, x := range a.Queries {
-		y := b.Queries[i]
-		if x.Query != y.Query || x.Repetition != y.Repetition || x.Stream != y.Stream || x.Error != "" || y.Error != "" {
-			return errors.New("paired query schedules differ or failed")
-		}
-		q := d.Queries[x.Query-1]
-		if err := compareCaptures(ra, rb, x.Capture, y.Capture, q); err != nil {
-			if q.Limit == 0 {
-				return err
-			}
-			// A differing LIMIT boundary is accepted only after two independent
-			// unlimited replays agree and prove both selected multisets legal.
-			full := map[string]Capture{}
-			fullRoots := map[string]string{}
-			for _, engine := range []string{"mo", "duckdb"} {
-				diag := t
-				diag.Experiment = "limit-membership"
-				diag.Clients = 1
-				diag.Queries = []int{x.Query}
-				request := runRequest(diag, true)
-				request.Unlimited = true
-				path := filepath.Join(root, fmt.Sprintf("boundary-q%02d-s%d-r%d-%s", x.Query, x.Stream, x.Repetition, engine))
-				diagCtx, cancel := context.WithTimeoutCause(ctx, time.Hour, errors.New("LIMIT reference deadline"))
-				record, runErr := runArm(diagCtx, c, p, manager, prepared[engine].Deployment, diag, path, request)
-				cancel()
-				if runErr != nil {
-					return errors.Join(err, runErr)
-				}
-				receipt, dir, readErr := readArm(path, record)
-				if readErr != nil || len(receipt.Queries) != 1 {
-					return errors.Join(err, readErr, errors.New("incomplete unlimited replay"))
-				}
-				full[engine] = receipt.Queries[0].Capture
-				fullRoots[engine] = dir
-			}
-			unlimited := q
-			unlimited.Limit = 0
-			if e := compareCaptures(fullRoots["mo"], fullRoots["duckdb"], full["mo"], full["duckdb"], unlimited); e != nil {
-				return errors.Join(err, e)
-			}
-			if e := validateLimit(ra, fullRoots["mo"], x.Capture, full["mo"], q); e != nil {
-				return errors.Join(err, e)
-			}
-			if e := validateLimit(rb, fullRoots["duckdb"], y.Capture, full["duckdb"], q); e != nil {
-				return errors.Join(err, e)
-			}
-		}
-	}
-	return nil
 }
 
 func prepareCampaign(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager) (f Frozen, retErr error) {
@@ -182,35 +114,15 @@ func prepareCampaign(ctx context.Context, c Campaign, p Preflight, manager *cgro
 				}
 				_ = record
 			}
-			// The independent verification uses a newly reopened deployment.
-			t := Trial{ID: "reopen-sf" + sf + "-" + engine, Experiment: "verify", Scale: sf, Cores: 8, MemoryBytes: c.MemoryBytes, Clients: 1}
+			// This pilot sizes deadlines; correctness testing is a separate task.
+			t := Trial{ID: "pilot-sf" + sf + "-" + engine, Experiment: "pilot", Scale: sf, Cores: 8, MemoryBytes: c.MemoryBytes, Clients: 1, Queries: allQueries()}
 			root := filepath.Join(c.Root, "preparation", t.ID)
-			record, err := runArm(ctx, c, p, manager, kept.Deployment, t, root, WorkerRequest{Operation: "verify", QueryDeadlineNS: int64(30 * time.Minute)})
-			if err != nil {
-				return f, err
-			}
-			kept.Verification, err = artifact(c.Root, filepath.Join(root, "arm.json"))
-			if err != nil {
-				return f, err
-			}
-			_ = record
-			fixture := t
-			fixture.ID = "fixtures-sf" + sf + "-" + engine
-			fixture.Experiment = "fixtures"
-			if _, err := runArm(ctx, c, p, manager, kept.Deployment, fixture, filepath.Join(c.Root, "preparation", fixture.ID), WorkerRequest{Operation: "fixtures", QueryDeadlineNS: int64(30 * time.Minute)}); err != nil {
-				return f, err
-			}
-			t.ID = "qualify-sf" + sf + "-" + engine
-			t.Experiment = "qualification"
-			t.Queries = allQueries()
-			root = filepath.Join(c.Root, "preparation", t.ID)
 			request := runRequest(t, true)
-			request.Reference = sf == "1"
-			record, err = runArm(ctx, c, p, manager, kept.Deployment, t, root, request)
+			record, err := runArm(ctx, c, p, manager, kept.Deployment, t, root, request)
 			if err != nil {
 				return f, err
 			}
-			kept.Qualification, err = artifact(c.Root, filepath.Join(root, "arm.json"))
+			kept.Pilot, err = artifact(c.Root, filepath.Join(root, "arm.json"))
 			if err != nil {
 				return f, err
 			}
@@ -223,31 +135,6 @@ func prepareCampaign(ctx context.Context, c Campaign, p Preflight, manager *cgro
 				f.DeadlinesNS[sf][q.Query] = max(f.DeadlinesNS[sf][q.Query], deadline)
 			}
 			f.Prepared[sf][engine] = kept
-		}
-		// Qualify both complete outputs before any scored schedule is frozen.
-		d, err := loadDataset(c.Datasets[sf], false)
-		if err != nil {
-			return f, err
-		}
-		roots := map[string]string{}
-		receipts := map[string]WorkerReceipt{}
-		for _, engine := range []string{"mo", "duckdb"} {
-			armPath := filepath.Join(c.Root, f.Prepared[sf][engine].Qualification.Path)
-			r, err := readJSON[ArmRecord](armPath)
-			if err != nil {
-				return f, err
-			}
-			receipt, dir, err := readArm(filepath.Dir(armPath), r)
-			if err != nil {
-				return f, err
-			}
-			roots[engine] = dir
-			receipts[engine] = receipt
-		}
-		for i, q := range d.Queries {
-			if err := compareCaptures(roots["mo"], roots["duckdb"], receipts["mo"].Queries[i].Capture, receipts["duckdb"].Queries[i].Capture, q); err != nil {
-				return f, fmt.Errorf("SF%s qualification: %w", sf, err)
-			}
 		}
 	}
 	if c.Mode == "full" {
@@ -303,11 +190,11 @@ func discardDeployment(c Campaign, d deployment) error {
 }
 
 type PairRecord struct {
-	Version     int                  `json:"version"`
-	Trial       Trial                `json:"trial"`
-	Arms        map[string]ArmRecord `json:"arms"`
-	Correctness string               `json:"correctness"`
-	Error       string               `json:"error,omitempty"`
+	Version int                  `json:"version"`
+	Trial   Trial                `json:"trial"`
+	Arms    map[string]ArmRecord `json:"arms"`
+	Status  string               `json:"status"`
+	Error   string               `json:"error,omitempty"`
 }
 type RunManifest struct {
 	Version  int       `json:"version"`
@@ -347,7 +234,7 @@ func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, man
 		if err := ctx.Err(); err != nil {
 			return manifest, context.Cause(ctx)
 		}
-		pair := PairRecord{Version: formatVersion, Trial: t, Arms: map[string]ArmRecord{}, Correctness: "failed"}
+		pair := PairRecord{Version: formatVersion, Trial: t, Arms: map[string]ArmRecord{}, Status: "failed"}
 		pairRoot := filepath.Join(root, t.ID)
 		if err := os.Mkdir(pairRoot, 0750); err != nil {
 			return manifest, err
@@ -377,13 +264,10 @@ func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, man
 			pair.Arms[engine] = record
 			pairErr = errors.Join(pairErr, err)
 		}
-		if pairErr == nil {
-			pairErr = comparePair(ctx, c, p, manager, f.Prepared[t.Scale], t, pairRoot, pair.Arms)
-		}
 		if pairErr != nil {
 			pair.Error = pairErr.Error()
 		} else {
-			pair.Correctness = "pass"
+			pair.Status = "pass"
 		}
 		path := filepath.Join(pairRoot, "pair.json")
 		if err := publishJSON(path, pair); err != nil {
@@ -394,7 +278,7 @@ func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, man
 			return manifest, err
 		}
 		manifest.Pairs = append(manifest.Pairs, pin)
-		_, _ = fmt.Fprintf(os.Stderr, "%s: %s\n", t.ID, pair.Correctness)
+		_, _ = fmt.Fprintf(os.Stderr, "%s: %s\n", t.ID, pair.Status)
 	}
 	return manifest, nil
 }
