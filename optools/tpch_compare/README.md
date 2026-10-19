@@ -57,6 +57,8 @@ loopback deployment. DuckDB uses a persistent database file. Loading verifies
 complete typed input contents, composite-key uniqueness and every input foreign
 relationship. Ordered DBGEN key groups are checked and sorted within a bounded
 buffer, allowing streaming validation without duplicating an entire table.
+Both loading and standalone verification check every input file against its
+manifest hash before reading database contents.
 
 Every query consumes through EOF, checks cursor errors, closes resources, and
 captures typed rows. The timer includes conversion/capture and Q15's DDL. File
@@ -69,8 +71,22 @@ row counts, complete duplicate multiplicity, required ordering, and all values.
 Only declared CHAR padding is normalized. Exact decimal operations stay exact.
 Final AVG/division bounds come from qualified physical decimal scales plus a
 `1e-12` relative floating-point allowance; missing scale/type coverage fails.
-LIMIT-boundary ambiguity remains unresolved unless an unlimited reference proves
-legal membership. It cannot silently pass through a checksum comparison.
+Qualification captures must respect the declared LIMIT. Unlimited diagnostic
+receipts cannot be supplied as qualification results. To resolve a boundary tie,
+run workers with `unlimited_diagnostic: true` for the affected limited queries
+and repetitions on each unchanged database, then provide their receipts:
+
+```sh
+./tpch-compare compare --dataset DIR --left LEFT --right RIGHT \
+  --left-unlimited LEFT_FULL --right-unlimited RIGHT_FULL
+```
+
+The two proof receipts must match each other in query selection and repetitions,
+and match the qualification dataset and each engine's build. Proofs may cover
+only the affected limited queries. Both unlimited results must agree before
+the comparator checks the required preceding groups and legal boundary members
+of each qualification capture. A missing or invalid proof leaves a differing
+LIMIT result unresolved.
 
 With `reference: true`, SF1 workers additionally check the pinned independent
 answer files using TPC-H 3.0.1 clause 2.1.3.5: counts/singletons/quantity sums are
