@@ -226,6 +226,21 @@ func TestDuckDBBoundaryFixture(t *testing.T) {
 	if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM duckdb_views() WHERE view_name='tpch_revenue_fixture'").Scan(&count); err != nil || count != 0 {
 		t.Fatal(count, err)
 	}
+	t.Run("load without correctness scans", func(t *testing.T) {
+		root := t.TempDir()
+		// Native loading accepts unordered input. Correctness checks belong in
+		// separate tests, not in the benchmark preparation path.
+		if err := os.WriteFile(filepath.Join(root, "region.tbl"), []byte("1|AMERICA|x|\n0|AFRICA|y|\n"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		d := Dataset{Tables: canonicalTables()[:1], Inputs: map[string]FileID{"region": {Path: "region.tbl"}}}
+		if _, err := bulkLoad(ctx, conn, e, root, d); err != nil {
+			t.Fatal(err)
+		}
+		if err := conn.QueryRowContext(ctx, "SELECT count(*) FROM region").Scan(&count); err != nil || count != 2 {
+			t.Fatal(count, err)
+		}
+	})
 }
 
 func TestArtifactBoundsAndPaths(t *testing.T) {

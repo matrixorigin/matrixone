@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"slices"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -81,6 +82,15 @@ func (db *stubDatabase) RelationExists(ctx context.Context, name string, op any)
 	}
 	_, ok := db.rels[name]
 	return ok, nil
+}
+
+func (db *stubDatabase) Relations(_ context.Context) ([]string, error) {
+	names := make([]string, 0, len(db.rels))
+	for name := range db.rels {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names, nil
 }
 
 func (db *stubDatabase) Create(ctx context.Context, name string, defs []engine.TableDef) error {

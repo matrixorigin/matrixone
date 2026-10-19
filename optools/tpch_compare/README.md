@@ -54,19 +54,12 @@ Engine settings include `name` (`mo` or `duckdb`), `database`, `threads` and
 `memory_bytes`. MO credentials come from a named `dsn_env`, never a result file.
 MO loading creates a new `tpch_compare_` database on an explicitly selected owned
 loopback deployment. DuckDB uses a persistent database file. Both native CSV
-load paths explicitly enable parallel reading. Loading verifies
-complete typed input contents, composite-key uniqueness and every input foreign
-relationship. Catalog checks reject changed column domains, nullability, column
-order, or primary-key order before normalizing values. DuckDB normalizes declared
-CHAR(n) and VARCHAR(n) to its native VARCHAR domain. Ordered DBGEN key groups are
-checked and sorted within a bounded
-buffer, allowing streaming validation without duplicating an entire table.
-Database verification reads contiguous leading-key windows, preserving each
-composite-key group. The initial unbounded lower range and final upper-tail
-probe also reject rows outside the input domain. This checks every value while
-avoiding a whole-table external sort during large-scale preparation.
-Both loading and standalone verification check every input file against its
-manifest hash before reading database contents.
+load paths explicitly enable parallel reading. Loading creates the schema,
+imports the files, gathers statistics and checkpoints. Benchmark loading performs
+no correctness scans, input rehashing, catalog comparisons or relationship checks.
+Correctness tests run separately from benchmark scripts. The explicit diagnostic
+`verify` operation is available only when separately requested; benchmark
+campaigns never invoke it.
 
 Every query consumes through EOF, checks cursor errors, closes resources, and
 captures typed rows. The timer includes conversion/capture and Q15's DDL. File
