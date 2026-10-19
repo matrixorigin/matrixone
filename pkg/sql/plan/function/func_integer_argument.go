@@ -203,7 +203,8 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 			}
 			continue
 		}
-		normalized := textIntegerArgument(value, source.GetIsBinAt(int(i)))
+		isBinary := source.GetIsBinAt(int(i))
+		normalized := textIntegerArgument(value, isBinary)
 		var integer R
 		var err error
 		if textBits && normalized.negative {
@@ -218,7 +219,7 @@ func integerArgumentTextRows[R int64 | uint64](source *vector.Vector, result *ve
 		if err != nil {
 			return err
 		}
-		if !source.GetIsBin() {
+		if !isBinary {
 			// Keep the original value policy and diagnose only successfully
 			// evaluated text arguments. Binary literals carry numeric bytes.
 			text := convertByteSliceToString(value)
