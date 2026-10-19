@@ -273,4 +273,8 @@ alter table crc32_gen_attributes change column g g bigint unsigned generated alw
 alter table crc32_gen_attributes modify column g bigint unsigned generated always as (crc32(j)) stored auto_increment;
 select g from crc32_gen_attributes;
 drop table crc32_gen_attributes;
+-- Closed dependent SELECTs remain replayable without reading catalog expressions.
+prepare crc32_closed_subquery from 'select (select (select t.k limit 1)) as k from (select 42 as k) t';
+execute crc32_closed_subquery;
+deallocate prepare crc32_closed_subquery;
 drop database test;

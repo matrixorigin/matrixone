@@ -418,4 +418,9 @@ select g from crc32_gen_attributes;
 g
 4012824821
 drop table crc32_gen_attributes;
+prepare crc32_closed_subquery from 'select (select (select t.k limit 1)) as k from (select 42 as k) t';
+execute crc32_closed_subquery;
+k
+42
+deallocate prepare crc32_closed_subquery;
 drop database test;

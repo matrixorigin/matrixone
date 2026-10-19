@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires MORPC v121. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires MORPC v123. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at candidate v121; receiving checks the new identity. Old coordinators send identity
+worker at candidate v123; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -51,13 +51,14 @@ IndexSearchScan for every vector/fulltext index with algo_options/algo_exprs,
 v112's signed date results, v113's DECIMAL statistical DOUBLE results,
 v114's Unicode UNIQUE keys, v115's calendar intervals, v116's scalar division warnings,
 and v117's collation-aware LEAST/GREATEST ordering.
-CRC32 uses v121. This number is
-not claimed unique among other unmerged maintenance
-candidates. Before landing, reallocate it against the actual cumulative main and
-rerun the predecessor/admission tests; a higher number cannot advertise missing
-predecessor capabilities. Cross-PR allocation coordination remains open.
+CRC32 uses v123 after integrating main through v121 (DECIMAL DIV).
+The frozen Ready-owner ledger on 2026-10-19 has a maximum of v122 in
+the unmerged functional-key series. Leave that number reserved and do not
+import or claim that series' implementation. CRC32 receivers reject v121 and
+v122; the candidate retains every capability in its actual main ancestry.
+Recheck this allocation at landing and after a relevant base/source change.
 
-Publishing new persisted expressions requires the durable v121 authoring barrier.
+Publishing new persisted expressions requires the durable v123 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.
@@ -67,7 +68,7 @@ export therefore pins JSON/ANY CRC32 and uncertain statements until DEALLOCATE;
 the new destination checks the entire SQL payload before USE, state restoration
 or PREPARE, including payloads from old sources. Both checks use parsed AST and
 the source additionally checks bound plans and folded Literal.Src. No wire field
-is added. Only closed scalar SELECTs with explicitly understood expressions are
+is added. Only catalog-free SELECTs with explicitly understood expressions are
 replayable: ordinary literal CRC32(text/numeric) remains overload zero, while
 CRC32(parameters/variables/casts) is conservatively pinned. Views, table-dependent
 queries, UDFs and unrecognized forms can hide a CRC identity and are also pinned;
@@ -92,14 +93,21 @@ Real two-binary rolling upgrade, persistent old-table DML after restart and
 post-floor downgrade rejection remain separate environment acceptance tests;
 mock version values and same-version CI do not prove them.
 
-## Current main integration candidate on 2026-10-16
+## Current main integration candidate on 2026-10-19
 
 The bounded maintenance candidate merges frozen upstream
-`b3d6b21fe9d260c91e1777529a48a9d93061af33`, whose v117 implements
-collation-aware LEAST/GREATEST. CRC32 therefore moves to v121 throughout its
+`873282742714436bff407dfcdbbe879147162bd3`, whose v121 implements
+unsigned DECIMAL DIV. CRC32 therefore moves to v123 throughout its
 execution, placement, send/receive, catalog-read and authoring guards.
-Predecessor tests now include v117 rejection and preserve LEAST/GREATEST's
-independent v117 floor.
+Predecessor tests include v121/v122 rejection and preserve main's independent
+DECIMAL DIV v121 floor.
+
+The replay proof now follows closed derived tables, UNION branches and scalar
+subqueries, including correlated names and LIMIT expressions. Every FROM leaf
+must remain catalog-free and every expression/branch must pass the same CRC32
+identity proof; nested views, unknown functions and JSON/ANY CRC32 remain
+pinned. This admits the upstream dependent-program migration regression without
+changing the table-backed migration contract below.
 
 The unvalidated-rewrite-generation scalar fixture now supplies a real prepared
 plan; all upstream rejection and known-empty-policy assertions remain intact.
@@ -112,10 +120,10 @@ behind a view or changed dependency. Resolving that contract needs a separately
 reviewed migration-identity/catalog-validation design; this candidate adds no
 such protocol and retains the CRC fences and upstream assertions.
 
-Native CGo focused and owning-package checks, the binary-prepared embedded
-consumer, and proportional vet/lint pass for this bounded increment. BVT and
-mixed-binary execution remain unverified. The table-migration contract above
-still blocks full CI repair; the prior CI failures are not claimed closed.
+Current-candidate commands and results are recorded in the PR maintenance
+update. Historical checks do not prove this allocation. BVT and mixed-binary
+execution remain separate evidence; the table-migration contract above remains
+open and full CI repair is not claimed.
 
 ## Historical main integration candidate: scalar-division prefix
 

@@ -147,19 +147,45 @@ func crc32ReplaySQLSafe(ctx context.Context, sql, mode string, unwrapPrepare boo
 }
 
 // Without bound-plan transport even a CRC-free SELECT from a view can hide a
-// legacy CRC32 expression. Only a closed scalar SELECT has a local proof here.
+// legacy CRC32 expression. Closed SELECTs, including derived/scalar subqueries,
+// have a local proof only when every leaf is independent of catalog objects.
 // Unknown statement/expression/function forms stay on the original CN until
 // DEALLOCATE; this is deliberately an availability restriction, not a claim
 // that every rejected statement contains CRC32. No catalog lookup or SQL runs.
 func crc32ReplayStatementSafe(stmt tree.Statement) bool {
 	sel, ok := stmt.(*tree.Select)
-	if !ok || sel == nil || sel.IsPerform || sel.With != nil || sel.RewriteOption != nil ||
-		sel.TimeWindow != nil || sel.RankOption != nil || sel.Limit != nil || len(sel.OrderBy) != 0 ||
-		sel.Ep != nil || len(sel.IntoVars) != 0 || sel.SelectLockInfo != nil {
+	return ok && crc32ReplaySelectSafe(sel, 0, false)
+}
+
+func crc32ReplaySelectSafe(stmt tree.SelectStatement, depth int, allowNames bool) bool {
+	if depth >= 64 {
 		return false
 	}
-	clause, ok := sel.Select.(*tree.SelectClause)
-	if !ok || clause == nil || clause.Where != nil || clause.GroupBy != nil || clause.Having != nil ||
+	switch sel := stmt.(type) {
+	case *tree.Select:
+		if sel == nil || sel.IsPerform || sel.With != nil || sel.RewriteOption != nil ||
+			sel.TimeWindow != nil || sel.RankOption != nil || len(sel.OrderBy) != 0 ||
+			sel.Ep != nil || len(sel.IntoVars) != 0 || sel.SelectLockInfo != nil {
+			return false
+		}
+		if sel.Limit != nil && (!crc32ReplayExprSafe(sel.Limit.Count, depth+1, allowNames) ||
+			(sel.Limit.Offset != nil && !crc32ReplayExprSafe(sel.Limit.Offset, depth+1, allowNames))) {
+			return false
+		}
+		return crc32ReplaySelectSafe(sel.Select, depth+1, allowNames)
+	case *tree.ParenSelect:
+		return sel != nil && crc32ReplaySelectSafe(sel.Select, depth+1, allowNames)
+	case *tree.UnionClause:
+		return sel != nil && sel.Type == tree.UNION &&
+			crc32ReplaySelectSafe(sel.Left, depth+1, allowNames) && crc32ReplaySelectSafe(sel.Right, depth+1, allowNames)
+	case *tree.SelectClause:
+		return sel != nil && crc32ReplaySelectClauseSafe(sel, depth+1, allowNames)
+	}
+	return false
+}
+
+func crc32ReplaySelectClauseSafe(clause *tree.SelectClause, depth int, allowNames bool) bool {
+	if depth >= 64 || clause.Where != nil || clause.GroupBy != nil || clause.Having != nil ||
 		len(clause.Windows) != 0 || clause.IntoExport != nil || len(clause.IntoVars) != 0 || len(clause.Exprs) == 0 {
 		return false
 	}
@@ -168,28 +194,58 @@ func crc32ReplayStatementSafe(stmt tree.Statement) bool {
 		if len(clause.From.Tables) != 1 {
 			return false
 		}
-		alias, ok := clause.From.Tables[0].(*tree.AliasedTableExpr)
+		tableExpr := clause.From.Tables[0]
+		// A real FROM is wrapped in a single-sided CROSS join by the parser.
+		// Do not admit a second relation, join condition or temporal expression.
+		if join, ok := tableExpr.(*tree.JoinTableExpr); ok {
+			if join == nil || join.Right != nil || join.Cond != nil || join.Tolerance != nil || join.Option != "" || join.JoinType != tree.JOIN_TYPE_CROSS {
+				return false
+			}
+			tableExpr = join.Left
+		}
+		alias, ok := tableExpr.(*tree.AliasedTableExpr)
 		if !ok || alias == nil {
 			return false
 		}
-		table, ok := alias.Expr.(*tree.TableName)
-		if !ok || table == nil || table.ObjectName != "" || table.ExplicitSchema || table.ExplicitCatalog {
+		switch table := alias.Expr.(type) {
+		case *tree.TableName:
+			if table == nil || table.ObjectName != "" || table.ExplicitSchema || table.ExplicitCatalog {
+				return false
+			}
+		case *tree.ParenTableExpr:
+			if table == nil {
+				return false
+			}
+			derived, ok := table.Expr.(*tree.Select)
+			if !ok || !crc32ReplaySelectSafe(derived, depth+1, allowNames) {
+				return false
+			}
+			allowNames = true
+		default:
 			return false
 		}
 	}
 	for _, expr := range clause.Exprs {
-		if !crc32ReplayExprSafe(expr.Expr, 0) {
+		if !crc32ReplayExprSafe(expr.Expr, depth+1, allowNames) {
 			return false
 		}
 	}
 	return true
 }
 
-func crc32ReplayExprSafe(expr tree.Expr, depth int) bool {
+func crc32ReplayExprSafe(expr tree.Expr, depth int, allowNames bool) bool {
 	if depth >= 64 {
 		return false
 	}
 	switch e := expr.(type) {
+	case *tree.Subquery:
+		return e != nil && crc32ReplaySelectSafe(e.Select, depth+1, allowNames)
+	case *tree.UnresolvedName:
+		// All FROM leaves in the entire statement are proved catalog-free.
+		// A name can therefore only bind a derived or correlated row, not a
+		// stored expression hidden behind a table/view. CRC32 arguments still
+		// require the literal proof below, independently of name resolution.
+		return e != nil && allowNames
 	case *tree.NumVal:
 		return e != nil
 	case *tree.ParamExpr:
@@ -197,43 +253,43 @@ func crc32ReplayExprSafe(expr tree.Expr, depth int) bool {
 	case *tree.VarExpr:
 		return e != nil && e.Expr == nil // a value, not SQL containing an expression
 	case *tree.ParenExpr:
-		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1, allowNames)
 	case *tree.UnaryExpr:
-		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1, allowNames)
 	case *tree.BinaryExpr:
-		return e != nil && crc32ReplayExprSafe(e.Left, depth+1) && crc32ReplayExprSafe(e.Right, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Left, depth+1, allowNames) && crc32ReplayExprSafe(e.Right, depth+1, allowNames)
 	case *tree.ComparisonExpr:
-		return e != nil && crc32ReplayExprSafe(e.Left, depth+1) && crc32ReplayExprSafe(e.Right, depth+1) &&
-			(e.Escape == nil || crc32ReplayExprSafe(e.Escape, depth+1))
+		return e != nil && crc32ReplayExprSafe(e.Left, depth+1, allowNames) && crc32ReplayExprSafe(e.Right, depth+1, allowNames) &&
+			(e.Escape == nil || crc32ReplayExprSafe(e.Escape, depth+1, allowNames))
 	case *tree.AndExpr:
-		return e != nil && crc32ReplayExprSafe(e.Left, depth+1) && crc32ReplayExprSafe(e.Right, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Left, depth+1, allowNames) && crc32ReplayExprSafe(e.Right, depth+1, allowNames)
 	case *tree.OrExpr:
-		return e != nil && crc32ReplayExprSafe(e.Left, depth+1) && crc32ReplayExprSafe(e.Right, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Left, depth+1, allowNames) && crc32ReplayExprSafe(e.Right, depth+1, allowNames)
 	case *tree.XorExpr:
-		return e != nil && crc32ReplayExprSafe(e.Left, depth+1) && crc32ReplayExprSafe(e.Right, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Left, depth+1, allowNames) && crc32ReplayExprSafe(e.Right, depth+1, allowNames)
 	case *tree.NotExpr:
-		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1, allowNames)
 	case *tree.IsNullExpr:
-		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1, allowNames)
 	case *tree.IsNotNullExpr:
-		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1, allowNames)
 	case *tree.RangeCond:
-		return e != nil && crc32ReplayExprSafe(e.Left, depth+1) &&
-			crc32ReplayExprSafe(e.From, depth+1) && crc32ReplayExprSafe(e.To, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Left, depth+1, allowNames) &&
+			crc32ReplayExprSafe(e.From, depth+1, allowNames) && crc32ReplayExprSafe(e.To, depth+1, allowNames)
 	case *tree.CaseExpr:
-		if e == nil || len(e.Whens) == 0 || (e.Expr != nil && !crc32ReplayExprSafe(e.Expr, depth+1)) ||
-			(e.Else != nil && !crc32ReplayExprSafe(e.Else, depth+1)) {
+		if e == nil || len(e.Whens) == 0 || (e.Expr != nil && !crc32ReplayExprSafe(e.Expr, depth+1, allowNames)) ||
+			(e.Else != nil && !crc32ReplayExprSafe(e.Else, depth+1, allowNames)) {
 			return false
 		}
 		// Inspect every branch, including ones the optimizer may later prune.
 		for _, when := range e.Whens {
-			if when == nil || !crc32ReplayExprSafe(when.Cond, depth+1) || !crc32ReplayExprSafe(when.Val, depth+1) {
+			if when == nil || !crc32ReplayExprSafe(when.Cond, depth+1, allowNames) || !crc32ReplayExprSafe(when.Val, depth+1, allowNames) {
 				return false
 			}
 		}
 		return true
 	case *tree.CastExpr:
-		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1)
+		return e != nil && crc32ReplayExprSafe(e.Expr, depth+1, allowNames)
 	case *tree.FuncExpr:
 		if e == nil || e.FuncName == nil || e.IsGeneric || e.WindowSpec != nil || len(e.OrderBy) != 0 || e.Type != tree.FUNC_TYPE_DEFAULT {
 			return false
@@ -259,7 +315,7 @@ func crc32ReplayExprSafe(expr tree.Expr, depth int) bool {
 			}
 		case "char_length", "length", "charset", "concat", "coalesce", "ifnull":
 			for _, arg := range e.Exprs {
-				if !crc32ReplayExprSafe(arg, depth+1) {
+				if !crc32ReplayExprSafe(arg, depth+1, allowNames) {
 					return false
 				}
 			}
