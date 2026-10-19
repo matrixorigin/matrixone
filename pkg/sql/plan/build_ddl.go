@@ -1525,17 +1525,21 @@ func genAsSelectCols(
 	stmt *tree.Select,
 	isPrepareStmt bool,
 	explicitTargetColumns map[string]struct{},
-) ([]*ColDef, *Query, error) {
+) ([]*ColDef, *Query, int64, error) {
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
+	var executionProtocol int64
+	if !isPrepareStmt {
+		bindCtx.ctasExecutionProtocolRequirement = &executionProtocol
+	}
 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
 	}
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
 	for i := range outputColumnProvenance {
@@ -1546,10 +1550,10 @@ func genAsSelectCols(
 	// subqueries can synthesize NULLs even when their source columns are NOT NULL.
 	query, err := builder.createQuery()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
@@ -1587,7 +1591,7 @@ func genAsSelectCols(
 						defaultDef, err = buildCTASDefaultFromOrigin(
 							ctx, typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
-							return nil, nil, err
+							return nil, nil, 0, err
 						}
 					}
 				}
@@ -1600,7 +1604,7 @@ func genAsSelectCols(
 		if provenance.CTASDefaultPolicy == CTASDefaultUseTypeDefault {
 			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
@@ -1612,12 +1616,12 @@ func genAsSelectCols(
 		if inheritedAutoIncr && defaultDef.Expr == nil && defaultDef.OriginString == "" {
 			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
 		if err := validateIdentifier(ctx.GetContext(), bindCtx.headings[i]); err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		cols[i] = &plan.ColDef{
 			Name: normalizeCTASColumnName(
@@ -1634,9 +1638,18 @@ func genAsSelectCols(
 	if err := remapCTASSourceDefaultsToOutput(
 		ctx.GetContext(), cols, outputColumnProvenance, explicitTargetColumns,
 	); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	return cols, query, nil
+	if !isPrepareStmt && executionProtocol == 0 {
+		features, featureErr := plan.RequiredRemoteExpressionFeatures(query)
+		if featureErr != nil {
+			return nil, nil, 0, featureErr
+		}
+		if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
+			executionProtocol = defines.MORPCVersion122
+		}
+	}
+	return cols, query, executionProtocol, nil
 }
 
 // remapCTASSourceDefaultsToOutput converts inherited source-table column
@@ -2796,7 +2809,7 @@ func buildCreateTable(
 				explicitTargetColumns[strings.ToLower(colDef.Name.ColName())] = struct{}{}
 			}
 		}
-		if asSelectCols, asSelectQuery, err = genAsSelectCols(
+		if asSelectCols, asSelectQuery, createTable.CtasExecutionProtocolVersion, err = genAsSelectCols(
 			ctx, stmt.AsSource, isPrepareStmt, explicitTargetColumns,
 		); err != nil {
 			return nil, err

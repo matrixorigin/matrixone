@@ -2893,6 +2893,32 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			}
 
 			canMerge := !(hasPrefixEq && hasEquality)
+			if canMerge && hasEquality && len(inArgs) > 0 {
+				// Equality may compare compatible but physically distinct domains
+				// (for example TIMESTAMP and DATETIME). A typed IN vector cannot.
+				// Retain those OR arms rather than imposing a lossy column cast.
+				leftType := makeTypeByPlan2Expr(firstEquiExpr.GetF().Args[0])
+				for _, candidate := range mergeCandidates {
+					if !makeTypeByPlan2Expr(candidate.GetF().Args[0]).Eq(leftType) {
+						canMerge = false
+						break
+					}
+				}
+				for _, value := range inArgs {
+					if value == nil {
+						canMerge = false
+						break
+					}
+					valueType := makeTypeByPlan2Expr(value)
+					// Text and binary strings share the existing collation-aware
+					// IN kernel. Preserve that path, including serialized bytes.
+					if !valueType.Eq(leftType) &&
+						!(leftType.Oid.IsMySQLString() && valueType.Oid.IsMySQLString()) {
+						canMerge = false
+						break
+					}
+				}
+			}
 
 			if len(inArgs) == 0 {
 				// no merge candidates

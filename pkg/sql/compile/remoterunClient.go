@@ -83,14 +83,14 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
 	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
-	var requiredVectorProtocol int64
-	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithVectorProtocol(
+	var requiredProtocol int64
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithProtocol(
 		c.sql,
 		s,
 		c.proc,
 		remoteFragmentCounts,
 		remoteExecutionID,
-		&requiredVectorProtocol,
+		&requiredProtocol,
 	)
 	if err != nil {
 		return nil, err
@@ -122,6 +122,11 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// before an old RPC callback is delivered; a closed captured sink then drops
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
+	if requiredProtocol > 0 {
+		if err = sender.confirmProtocolOnStream(requiredProtocol); err != nil {
+			return sender, err
+		}
+	}
 
 	debugMsg := ""
 	_, sub_sql, exist := fault.TriggerFault("inject_send_pipeline")
@@ -130,7 +135,7 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 			debugMsg = fmt.Sprintf("inject_send_pipeline: client2server,compile = %p", c)
 		}
 	}
-	if err = sender.sendPipelineAfterProtocolCheck(requiredVectorProtocol, scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
+	if err = sender.sendPipeline(scopeEncodeData, processEncodeData, withoutOutput, maxMessageSizeToMoRpc, debugMsg); err != nil {
 		return sender, err
 	}
 
@@ -245,16 +250,16 @@ func prepareRemoteRunSendingData(
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
-	return prepareRemoteRunSendingDataWithVectorProtocol(sqlStr, s, proc, remoteFragmentCounts, remoteExecutionID, nil)
+	return prepareRemoteRunSendingDataWithProtocol(sqlStr, s, proc, remoteFragmentCounts, remoteExecutionID, nil)
 }
 
-func prepareRemoteRunSendingDataWithVectorProtocol(
+func prepareRemoteRunSendingDataWithProtocol(
 	sqlStr string,
 	s *Scope,
 	proc *process.Process,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
-	requiredVectorProtocol *int64,
+	requiredProtocol *int64,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	// The output dispatch executes on the initiating CN and is stripped from
 	// the encoded scope below. Validate its consumers before losing that edge.
@@ -283,7 +288,7 @@ func prepareRemoteRunSendingDataWithVectorProtocol(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeRemoteScopeWithVectorProtocol(encodedScope, proc, requiredVectorProtocol); err != nil {
+	if scopeData, err = encodeRemoteScopeWithProtocol(encodedScope, proc, requiredProtocol); err != nil {
 		return nil, false, nil, false, err
 	}
 
@@ -607,7 +612,7 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 }
 
 // The capability query uses a different RPC connection. Confirm on the stream
-// that will carry the pipeline so a replacement old CN cannot run partition zero.
+// that will carry the pipeline so a replacement old CN cannot execute a newer contract.
 func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) error {
 	ctx, cancel := context.WithTimeout(sender.ctx, 5*time.Second)
 	defer cancel()
@@ -636,22 +641,10 @@ func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) erro
 			response.GetCmd() != pipeline.Method_PipelineProtocolCheck ||
 			response.GetSid() != pipeline.Status_Last ||
 			response.GetProtocolVersion() < minimum {
-			return moerr.NewNotSupportedNoCtxf("remote pipeline stream does not support MORPC protocol version %d", minimum)
+			return moerr.NewNotSupportedNoCtxf("remote pipeline stream requires MORPC protocol version %d", minimum)
 		}
 		return nil
 	}
-}
-
-// sendPipelineAfterProtocolCheck confirms a nonzero minimum on the execution
-// stream before it sends the pipeline.
-func (sender *messageSenderOnClient) sendPipelineAfterProtocolCheck(
-	minimum int64, scopeData, procData []byte, noDataBack bool, eachMessageSizeLimitation int, debugMsg string) error {
-	if minimum > 0 {
-		if err := sender.confirmProtocolOnStream(minimum); err != nil {
-			return err
-		}
-	}
-	return sender.sendPipeline(scopeData, procData, noDataBack, eachMessageSizeLimitation, debugMsg)
 }
 
 func (sender *messageSenderOnClient) sendPipeline(

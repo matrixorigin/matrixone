@@ -2530,10 +2530,11 @@ func appendForeignConstrantPlan(
 				if err != nil {
 					return err
 				}
-				assertArgs := []*Expr{nullCheckExpr, errExpr}
-				if isUpdate {
-					assertArgs = append(assertArgs, makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert))
-				}
+				// the typed assert reports ErrFKNoReferencedRow2 for both
+				// insert and update so the client receives MySQL errno 1452
+				// (ER_NO_REFERENCED_ROW_2) instead of an internal error
+				assertArgs := []*Expr{nullCheckExpr, errExpr,
+					makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)}
 				filterExpr, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", assertArgs)
 				if err != nil {
 					return err

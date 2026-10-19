@@ -640,9 +640,9 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		}
 		return true
 	case TIMESTAMP:
-		if len(args) == 2 {
-			return false
-		}
+		// Calendar parsing and zero-date handling can produce NULL even for
+		// non-NULL operands, in both unary and pair forms.
+		return false
 	case ADDTIME:
 		// These overloads can return NULL for an out-of-range TIME result
 		// even when every operand is NOT NULL. The intervening legacy

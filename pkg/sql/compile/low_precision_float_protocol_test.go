@@ -214,7 +214,7 @@ func TestLowPrecisionFloatContractExecutionStreamCheck(t *testing.T) {
 			scope, release := newScope()
 			defer release()
 			var required int64
-			data, err := encodeRemoteScopeWithVectorProtocol(scope, c.proc, &required)
+			data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
 			require.NoError(t, err)
 			if name == "control float32" {
 				require.Zero(t, required)
@@ -227,7 +227,14 @@ func TestLowPrecisionFloatContractExecutionStreamCheck(t *testing.T) {
 				receiveCh := make(chan morpc.Message, 1)
 				receiveCh <- &pipeline.Message{Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: peer}
 				sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: receiveCh}
-				err = sender.sendPipelineAfterProtocolCheck(required, data, nil, false, maxMessageSizeToMoRpc, "")
+				// remoteRun confirms a nonzero minimum on the stream before it sends the pipeline.
+				err = nil
+				if required > 0 {
+					err = sender.confirmProtocolOnStream(required)
+				}
+				if err == nil {
+					err = sender.sendPipeline(data, nil, false, maxMessageSizeToMoRpc, "")
+				}
 				cmds := make([]pipeline.Method, 0, len(stream.sent))
 				for _, m := range stream.sent {
 					cmds = append(cmds, m.(*pipeline.Message).GetCmd())
