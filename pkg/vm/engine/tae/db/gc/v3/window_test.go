@@ -16,22 +16,488 @@ package gc
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/matrixorigin/matrixone/pkg/common/bitmap"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/stretchr/testify/require"
 )
+
+type failingCKPDataReader struct{}
+
+func (*failingCKPDataReader) Read(context.Context, *batch.Batch, *mpool.MPool) (bool, error) {
+	return false, errors.New("checkpoint reader failure")
+}
+
+func (*failingCKPDataReader) Reset(context.Context) {}
+
+func injectCKPDataReader(reader *logtail.CKPReader, dataReader interface{}) {
+	field := reflect.ValueOf(reader).Elem().FieldByName("ckpDataReader")
+	reflect.NewAt(field.Type(), unsafe.Pointer(field.UnsafeAddr())).Elem().Set(
+		reflect.ValueOf(dataReader),
+	)
+}
+
+func injectFailingCKPDataReader(reader *logtail.CKPReader) {
+	injectCKPDataReader(reader, &failingCKPDataReader{})
+}
+
+type spillingCKPDataReader struct {
+	rows    int
+	emitted bool
+}
+
+func (r *spillingCKPDataReader) Read(_ context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
+	if r.emitted {
+		return true, nil
+	}
+	for i := 0; i < r.rows; i++ {
+		var uuid types.Uuid
+		for j := range uuid {
+			uuid[j] = byte(uint64(i+1) >> (j * 8))
+		}
+		stats := objectio.NewObjectStats()
+		if err := objectio.SetObjectStatsObjectName(stats, objectio.BuildObjectName(&uuid, 0)); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_Accout_Idx], uint32(0), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DB_Idx], uint64(1), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_Table_Idx], uint64(i+1), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], ckputil.ObjectType_Data, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendBytes(bat.Vecs[ckputil.TableObjectsAttr_ID_Idx], stats[:], false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], types.BuildTS(1, 0), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], types.Rowid{}, false, mp); err != nil {
+			return false, err
+		}
+	}
+	bat.SetRowCount(r.rows)
+	r.emitted = true
+	return false, nil
+}
+
+func (r *spillingCKPDataReader) Reset(context.Context) {
+	r.emitted = false
+}
+
+type recordingMemoryFS struct {
+	*fileservice.MemoryFS
+	writes    int
+	deleteErr error
+}
+
+func (fs *recordingMemoryFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	fs.writes++
+	return fs.MemoryFS.Write(ctx, vector)
+}
+
+func (fs *recordingMemoryFS) Delete(ctx context.Context, files ...string) error {
+	if fs.deleteErr != nil {
+		return fs.deleteErr
+	}
+	return fs.MemoryFS.Delete(ctx, files...)
+}
+
+type persistThenErrorGCMetadataFS struct {
+	*recordingMemoryFS
+	metadataFailed bool
+}
+
+func (fs *persistThenErrorGCMetadataFS) Write(ctx context.Context, vector fileservice.IOVector) error {
+	if err := fs.recordingMemoryFS.Write(ctx, vector); err != nil {
+		return err
+	}
+	if !fs.metadataFailed && strings.Contains(vector.FilePath, "gc_") {
+		fs.metadataFailed = true
+		return errors.New("injected post-persist GC metadata write failure")
+	}
+	return nil
+}
+
+func TestGCWindowScanCheckpointsPropagatesReaderError(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	window := NewGCWindow(mp, nil, WithWindowDir(t.TempDir()))
+	buffer := containers.NewOneSchemaBatchBuffer(16*mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
+	defer buffer.Close(mp)
+	entry := checkpoint.NewCheckpointEntry(
+		"",
+		types.BuildTS(1, 0),
+		types.BuildTS(2, 0),
+		checkpoint.ET_Incremental,
+	)
+
+	_, err := window.ScanCheckpoints(
+		context.Background(),
+		[]*checkpoint.CheckpointEntry{entry},
+		func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error) {
+			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
+			injectFailingCKPDataReader(reader)
+			return reader, nil
+		},
+		nil,
+		nil,
+		buffer,
+	)
+	require.ErrorContains(t, err, "checkpoint reader failure")
+}
+
+func TestGCWindowCloseAbandonsPreparedOwnership(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	var abandoned []string
+	window := NewGCWindow(
+		mp,
+		nil,
+		WithUnpublishedObjectLifecycle(
+			func(context.Context, ioutil.UnpublishedObject) (string, error) { return "", nil },
+			func(context.Context, string, string) error { return nil },
+			func(file string) { abandoned = append(abandoned, file) },
+		),
+	)
+	require.NoError(t, window.prepareObject(context.Background(), "prepared-object"))
+
+	window.Close()
+	window.Close()
+
+	require.Equal(t, []string{"prepared-object"}, abandoned)
+	require.Empty(t, window.prepared)
+}
+
+func TestGCWindowRetryKeepsCleanupOwnershipPerMetadataAttempt(t *testing.T) {
+	ctx := context.Background()
+	fs, err := fileservice.NewMemoryFS(
+		"gc-window-retry", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	cleaner := NewCheckpointCleaner(ctx, "", fs, nil, nil).(*checkpointCleaner)
+
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	window := NewGCWindow(
+		mp,
+		fs,
+		WithWindowDir(ioutil.GetGCDir()),
+		WithUnpublishedObjectLifecycle(
+			cleaner.prepareUnpublishedObjectIntent,
+			cleaner.FinishUnpublishedObject,
+			cleaner.AbandonUnpublishedObject,
+		),
+	)
+	window.tsRange.start = types.BuildTS(1, 0)
+	window.tsRange.end = types.BuildTS(2, 0)
+	metadataFile := ioutil.MakeFullName(
+		window.dir,
+		ioutil.EncodeGCMetadataName(window.tsRange.start, window.tsRange.end),
+	)
+	oldData := objectio.MockObjectName().String()
+	newData := objectio.MockObjectName().String()
+	require.NotEqual(t, oldData, newData)
+
+	window.cleanupID = "old-attempt"
+	require.NoError(t, window.prepareObject(ctx, oldData))
+	oldDataMarker := window.prepared[oldData]
+	require.NoError(t, window.prepareObject(ctx, metadataFile))
+	oldMetadataMarker := window.prepared[metadataFile]
+	require.NotEqual(t, oldDataMarker, oldMetadataMarker)
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: oldData,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("x")}},
+	}))
+	window.abandonPrepared()
+
+	window.cleanupID = "new-attempt"
+	require.NoError(t, window.prepareObject(ctx, newData))
+	require.NoError(t, window.prepareObject(ctx, metadataFile))
+	require.NoError(t, fs.Write(ctx, fileservice.IOVector{
+		FilePath: newData,
+		Entries:  []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("y")}},
+	}))
+	require.NoError(t, window.Publish(ctx))
+
+	cleaner.mutation.Lock()
+	cleaner.mutation.metaFiles = map[string]ioutil.TSRangeFile{
+		ioutil.EncodeGCMetadataName(window.tsRange.start, window.tsRange.end): ioutil.NewTSRangeFile(
+			ioutil.EncodeGCMetadataName(window.tsRange.start, window.tsRange.end),
+			ioutil.GCMetaExt,
+			window.tsRange.start,
+			window.tsRange.end,
+		),
+	}
+	cleaner.mutation.replayDone = true
+	cleaner.mutation.Unlock()
+
+	// The adopted metadata belongs to the retry. The old metadata marker must
+	// be released first; only then may replay delete the old data it references.
+	for i := 0; i < 4; i++ {
+		_ = cleaner.replayUnpublishedObjectCleanup(ctx)
+		_, statErr := fs.StatFile(ctx, oldData)
+		if moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
+			break
+		}
+	}
+	_, err = fs.StatFile(ctx, oldData)
+	require.Error(t, err)
+	markers, remaining, err := ioutil.ListUnpublishedObjectCleanup(ctx, fs, 10)
+	require.NoError(t, err)
+	require.False(t, remaining)
+	require.Empty(t, markers)
+}
+
+func TestGCWindowScanCheckpointsDeletesSpilledObjectsOnReaderError(t *testing.T) {
+	ctx := context.Background()
+	baseFS, err := fileservice.NewMemoryFS("gc-window", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &recordingMemoryFS{MemoryFS: baseFS}
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	window := NewGCWindow(mp, fs, WithWindowDir(t.TempDir()))
+	buffer := containers.NewOneSchemaBatchBuffer(32*mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
+	defer buffer.Close(mp)
+	entries := []*checkpoint.CheckpointEntry{
+		checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(2, 0), checkpoint.ET_Incremental),
+		checkpoint.NewCheckpointEntry("", types.BuildTS(2, 0), types.BuildTS(3, 0), checkpoint.ET_Incremental),
+	}
+
+	for attempt := 0; attempt < 2; attempt++ {
+		readerCalls := 0
+		_, err = window.ScanCheckpoints(
+			ctx,
+			entries,
+			func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error) {
+				readerCalls++
+				if readerCalls == 1 {
+					reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
+					injectCKPDataReader(reader, &spillingCKPDataReader{rows: 300000})
+					return reader, nil
+				}
+				reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
+				injectFailingCKPDataReader(reader)
+				return reader, nil
+			},
+			nil,
+			nil,
+			buffer,
+		)
+		require.ErrorContains(t, err, "checkpoint reader failure")
+		require.Greater(t, fs.writes, 0, "the first checkpoint must spill before the second fails")
+		files, listErr := fileservice.SortedList(fs.List(ctx, ""))
+		require.NoError(t, listErr)
+		require.Empty(t, files, "failed scans must not accumulate unpublished objects")
+	}
+}
+
+func TestGCWindowScanCheckpointsRollsBackPersistedMetadataOnWriteError(t *testing.T) {
+	ctx := context.Background()
+	baseFS, err := fileservice.NewMemoryFS("gc-window-meta", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &persistThenErrorGCMetadataFS{
+		recordingMemoryFS: &recordingMemoryFS{MemoryFS: baseFS},
+	}
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+
+	window := NewGCWindow(mp, fs, WithWindowDir("gc/"))
+	buffer := containers.NewOneSchemaBatchBuffer(32*mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
+	defer buffer.Close(mp)
+	entry := checkpoint.NewCheckpointEntry(
+		"", types.BuildTS(1, 0), types.BuildTS(2, 0), checkpoint.ET_Incremental,
+	)
+
+	_, err = window.ScanCheckpoints(
+		ctx,
+		[]*checkpoint.CheckpointEntry{entry},
+		func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error) {
+			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
+			injectCKPDataReader(reader, &spillingCKPDataReader{rows: 300000})
+			return reader, nil
+		},
+		nil,
+		nil,
+		buffer,
+	)
+	require.ErrorContains(t, err, "injected post-persist GC metadata write failure")
+	files, listErr := fileservice.SortedList(fs.List(ctx, ""))
+	require.NoError(t, listErr)
+	require.Empty(t, files)
+}
+
+func TestGCWindowRetainsMetadataWithItsDependencies(t *testing.T) {
+	ctx := context.Background()
+	baseFS, err := fileservice.NewMemoryFS(
+		"gc-window-meta-dependency", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &persistThenErrorGCMetadataFS{
+		recordingMemoryFS: &recordingMemoryFS{
+			MemoryFS:  baseFS,
+			deleteErr: errors.New("injected GC metadata delete failure"),
+		},
+	}
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	var retained []string
+	window := NewGCWindow(
+		mp,
+		fs,
+		WithWindowDir("gc/"),
+		WithUnpublishedCleanup(func(_ context.Context, files []string) error {
+			retained = append(retained, files...)
+			return nil
+		}),
+	)
+	buffer := containers.NewOneSchemaBatchBuffer(
+		32*mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
+	defer buffer.Close(mp)
+	entry := checkpoint.NewCheckpointEntry(
+		"", types.BuildTS(1, 0), types.BuildTS(2, 0), checkpoint.ET_Incremental,
+	)
+	_, err = window.ScanCheckpoints(
+		ctx,
+		[]*checkpoint.CheckpointEntry{entry},
+		func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error) {
+			reader := logtail.NewCKPReader(
+				logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
+			injectCKPDataReader(reader, &spillingCKPDataReader{rows: 300000})
+			return reader, nil
+		},
+		nil,
+		nil,
+		buffer,
+	)
+	require.ErrorContains(t, err, "injected post-persist GC metadata write failure")
+	require.Contains(t, retained, "gc/gc_1-0_2-0.ckp")
+	require.NotEmpty(t, retained)
+}
+
+func TestGCWindowScanCheckpointsTransfersCleanupOnDeleteError(t *testing.T) {
+	ctx := context.Background()
+	baseFS, err := fileservice.NewMemoryFS("gc-window-delete", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	fs := &recordingMemoryFS{
+		MemoryFS:  baseFS,
+		deleteErr: errors.New("injected GC object delete failure"),
+	}
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	var retained []string
+	window := NewGCWindow(
+		mp,
+		fs,
+		WithWindowDir("gc/"),
+		WithUnpublishedCleanup(func(_ context.Context, files []string) error {
+			retained = append(retained, files...)
+			return nil
+		}),
+	)
+	buffer := containers.NewOneSchemaBatchBuffer(32*mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
+	defer buffer.Close(mp)
+	entries := []*checkpoint.CheckpointEntry{
+		checkpoint.NewCheckpointEntry("", types.BuildTS(1, 0), types.BuildTS(2, 0), checkpoint.ET_Incremental),
+		checkpoint.NewCheckpointEntry("", types.BuildTS(2, 0), types.BuildTS(3, 0), checkpoint.ET_Incremental),
+	}
+	readerCalls := 0
+	_, err = window.ScanCheckpoints(
+		ctx,
+		entries,
+		func(context.Context, *checkpoint.CheckpointEntry) (*logtail.CKPReader, error) {
+			readerCalls++
+			reader := logtail.NewCKPReader(logtail.CheckpointCurrentVersion, objectio.Location{}, mp, nil)
+			if readerCalls == 1 {
+				injectCKPDataReader(reader, &spillingCKPDataReader{rows: 300000})
+			} else {
+				injectFailingCKPDataReader(reader)
+			}
+			return reader, nil
+		},
+		nil,
+		nil,
+		buffer,
+	)
+	require.ErrorContains(t, err, "checkpoint reader failure")
+	require.NotEmpty(t, retained)
+}
+
+func TestCheckpointCleanerRetainsUnpublishedObjects(t *testing.T) {
+	cleaner := createTestCheckpointCleaner(t)
+	file := objectio.MockObjectName().String()
+	require.NoError(t, cleaner.retainUnpublishedObjects(context.Background(), []string{file, file}))
+
+	markers, remaining, err := ioutil.ListUnpublishedObjectCleanup(
+		context.Background(), cleaner.fs, 10,
+	)
+	require.NoError(t, err)
+	require.False(t, remaining)
+	require.Len(t, markers, 1)
+}
+
+func TestCheckpointCleanerRetainsObjectsWhenAdmissionIsFull(t *testing.T) {
+	cleaner := createTestCheckpointCleaner(t)
+	cleaner.unpublishedCleanupOwnership.initialized = true
+	cleaner.unpublishedCleanupOwnership.pending = unpublishedCleanupMaxPending
+	file := objectio.MockObjectName().String()
+	require.NoError(t, cleaner.retainUnpublishedObjects(
+		context.Background(), []string{file}))
+
+	markers, _, err := ioutil.ListUnpublishedObjectCleanup(
+		context.Background(), cleaner.fs, 10,
+	)
+	require.NoError(t, err)
+	require.Len(t, markers, 1)
+}
+
+func TestCheckpointCleanerScanRestoresSnapshotOnError(t *testing.T) {
+	cleaner := createTestCheckpointCleaner(t)
+	buffer := containers.NewOneSchemaBatchBuffer(
+		mpool.MB, ObjectTableAttrs, ObjectTableTypes, false)
+	defer buffer.Close(cleaner.mp)
+	entry := checkpoint.NewCheckpointEntry(
+		"", types.BuildTS(1, 0), types.BuildTS(2, 0), checkpoint.ET_Incremental,
+	)
+	_, _, err := cleaner.scanCheckpointsLocked(
+		context.Background(), []*checkpoint.CheckpointEntry{entry}, buffer,
+	)
+	require.Error(t, err)
+}
+
+func TestObjectStatsNames(t *testing.T) {
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectio.MockObjectName()))
+	require.Equal(t, []string{stats.ObjectName().String()}, objectStatsNames([]objectio.ObjectStats{*stats}))
+}
 
 // Constants for test module
 const (
