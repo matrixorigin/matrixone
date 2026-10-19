@@ -336,11 +336,17 @@ func (builder *QueryBuilder) findFulltext2IndexTables(scanNode *plan.Node, idxde
 }
 
 // fulltext2ThreadsSearch resolves the fulltext2_threads_search session variable
-// that sizes the multi-segment parallel top-k search. It is gated on
-// MORPCVersion123: a mixed-version cluster returns 0 (serial) until every CN
-// understands the option, so the option never rides an IndexSearchScan to a CN
-// that would ignore it and run serial while its peers parallelize. 0 also means
-// "use GOMAXPROCS" at the search site (vectorindex.GetConcurrency).
+// that sizes the multi-segment parallel top-k search. 0 (the default) is the
+// NEUTRAL value, which the search site (vectorindex.GetConcurrency) resolves to
+// the deployment's effective parallelism (GOMAXPROCS) — NOT serial. A positive
+// value caps the worker count. Parallel search yields an identical top-k at any
+// value, so a mixed-version cluster is correctness-safe either way.
+//
+// The gate on MORPCVersion123 therefore does not disable parallelism; it only
+// withholds an EXPLICIT operator value until every CN understands the option,
+// emitting the neutral default so no CN is handed a value its peers would not
+// honor. Below the epoch a CN that predates the option ignores it and runs its
+// own search; at/above it, every CN honors the resolved value.
 func (builder *QueryBuilder) fulltext2ThreadsSearch() int64 {
 	proc := builder.compCtx.GetProcess()
 	if proc == nil {

@@ -1,0 +1,240 @@
+# FULLTEXT2 parallel segment search and token_filter analyzer
+
+- Status: Review required
+- Tracking issue: [#30402](https://github.com/matrixorigin/matrixone/issues/30402)
+- Implementation PR: [#30618](https://github.com/matrixorigin/matrixone/pull/30618)
+- Design revision: 1
+- Last updated: 2026-10-19
+
+## Problem and intent
+
+A FULLTEXT2 index answers a query by searching every live segment (a tag=0 base
+plus tag=1 CDC-tail deltas) and merging their top-k. Two independent, opt-in
+improvements share this PR because they ship in one binary and touch the same
+search and build paths:
+
+1. **Parallel segment search.** The multi-segment top-k walk is CPU-bound and was
+   serial. A new per-index worker count lets the independent per-segment searches
+   run concurrently, lowering BM25 query latency. It is a performance-only change:
+   the merged top-k is identical at any worker count.
+
+2. **`token_filter` analyzer (`stop`).** A Lucene-style analyzer chain on the index.
+   Step 1 is the `stop` filter: it drops stopwords (the builtin English+Chinese
+   list) so the index never stores their postings. It shrinks the index and removes
+   the highest-frequency posting lists from query work.
+
+Neither change alters the segment on-disk format, the posting layout, the
+transaction protocol, or CDC/cron ownership of the asynchronously maintained
+index. Both are off by default in behavior: parallelism yields identical results,
+and `token_filter` is only present when explicitly requested at CREATE.
+
+## Scope and non-goals
+
+In scope: the per-index search worker count and its resolution/activation; the
+peak result-memory and error/cancellation contract of the concurrent search; the
+`token_filter` WITH option and the `stop` filter; the symmetry of tokenization
+across the build, CDC, and query paths; and the maintenance (REINDEX, idxcron)
+behavior of a `token_filter` index.
+
+Out of scope: any posting/segment format or wire change; a positional (phrase)
+analyzer; non-`stop` filters (`synonym` and others are reserved names only);
+parallelizing the build or the per-segment phrase walk; and changing the vector
+index's own search-thread knob.
+
+## Parallel segment search contract
+
+### Results-identical invariant
+
+The worker count is a performance hint only. For every query, score formula, k,
+prefilter, and segment set, the merged top-k — doc ids, scores, and order — is
+identical for any worker count, including one worker. Each per-segment search is
+fully independent (its own dense ord space, WAND cursors, and local heap); a
+worker writes only its own result slot, and the merge runs serially in segment
+order after all workers finish. No scoring input is shared mutably across workers.
+This invariant is what lets the knob be an ungated performance control rather than
+a correctness-affecting one.
+
+### Worker-count semantics (decision)
+
+The control is an integer per-index search worker count, resolved from a
+session/global variable, mirroring the vector index's existing search-thread
+knob so operators learn one model:
+
+- **unset / `0` → the deployment's effective scheduler parallelism** (bounded by
+  the process's effective GOMAXPROCS, which is container-quota aware). This is the
+  default and matches the vector-index knob; a fresh index therefore parallelizes.
+- **`N > 0` → at most `N` worker goroutines**, capped by the segment count.
+
+Worker goroutines are multiplexed by the Go scheduler onto the deployment's
+GOMAXPROCS OS threads, so concurrent queries share one CPU budget rather than
+multiplying it: the goroutine count rises with concurrency, but true CPU
+parallelism stays bounded by GOMAXPROCS regardless of how many queries run at
+once. The knob bounds goroutine fan-out per query, not a separate CPU pool.
+
+### Warm-cache knob ownership (decision)
+
+A loaded index is cached and reused across queries. The worker count is bound once,
+when an index generation is first loaded into the cache, and every subsequent query
+served from that warm generation uses that bound value — a later query's own
+variable setting does not re-tune a generation already resident. This is an
+accepted consequence of caching a read-only search object: because the knob is
+results-neutral, a stale worker count only changes latency, never answers. An
+operator who must change the effective worker count forces a fresh load (a new
+generation via CDC/REBUILD, or a cache eviction); the knob is not a per-execution
+guarantee and is documented as a per-load hint. Correctness never depends on which
+value won the first load.
+
+### Peak result-memory and drainage bound
+
+Each per-segment search returns at most k results, so the concurrent phase holds
+at most `segments × k` Result values simultaneously before the serial merge
+reduces them to k. A Result is a doc id, a score, and any requested INCLUDE values
+— it is independent of posting-list length and corpus size. This is a higher peak
+than a strictly incremental single-heap merge (which would hold ≈k), and it
+applies even at one worker, because all per-segment slots are materialized before
+the merge. The bound is `O(segments × k)` small records, chosen for a simple,
+race-free merge; it is not proportional to matches, postings, or document size.
+
+Every spawned worker is bounded by a semaphore and completes — writing its slot or
+its error — before the call returns; no worker outlives the search. A per-segment
+error is recorded per slot and surfaced after all workers drain, so a failing
+segment neither leaks a goroutine nor blocks the others; the merge is skipped on
+error. Query cancellation is the caller's existing context on the surrounding
+pipeline; the bounded worker set drains rather than being abandoned.
+
+### Activation and compatibility (decision)
+
+Parallel search plumbs the per-index worker count through the index scan options.
+A node that predates the option ignores an unknown scan option and runs its own
+search; a node that understands it honors the resolved value. Because the result
+is identical regardless, a mixed deployment is always correctness-safe — some
+nodes may parallelize while others do not, with no observable difference. The
+planner therefore does **not** honor an explicit operator value until every node
+understands the option (a cluster-wide capability epoch); before that it emits the
+neutral default so no node is handed a value its peers would interpret differently.
+"Neutral default" here is the same unset/`0` the search site resolves to effective
+parallelism — it is not a request for serial execution. (Earlier code comments
+describing the pre-epoch value as "serial" were inaccurate and are corrected to
+this contract.)
+
+## token_filter analyzer contract
+
+### Bag-of-words-only invariant (decision)
+
+`token_filter` drops tokens at index time, so the index physically omits their
+postings. A positional phrase query reasons about byte gaps between stored tokens;
+a dropped stopword leaves a gap the phrase cannot account for, so phrase matching
+against a stop-filtered index is ill-defined. The contract resolves this by
+restricting `token_filter` to a **bag-of-words** index: it requires
+`POSITION_FREE=TRUE`, which stores no positions and is already answerable only by
+the ranked bag-of-words (BM25) mode. `POSITION_FREE` in turn requires the word
+parser (gojieba), so `token_filter` inherits that. Natural-language and boolean
+(phrase) modes are rejected for such an index by the existing position-free check;
+no new rejection path is needed. A query that is entirely stopwords matches nothing
+and returns an empty result (not an error), the same as querying any term the index
+does not contain — matching standard stopword semantics.
+
+### Build/CDC/query symmetry invariant
+
+The filter chain is persisted as an index parameter and reconstructed identically
+on every path that tokenizes: the CREATE build, the CDC tail build, the scheduled
+(idxcron) rebuild, and the BM25 query. All build the same filter from the same
+persisted names over the same word tokenizer, so a token dropped at index time is
+also dropped from the query. Because a stop-filtered index has no stopword
+postings, applying the filter on the query side is a results-neutral optimization
+(a stopword query term would find zero postings and contribute zero to BM25
+either way); it is applied for clarity and to avoid setting up empty cursors.
+
+### Write-side consistency and activation (decision)
+
+The invariant a `token_filter` index promises is that **no segment holds a stopword
+posting**. Every writer must therefore strip identically. A node that predates the
+analyzer and ran the index's asynchronous tail build or a scheduled rebuild would
+not strip, leaking stopword postings into some segments and breaking the invariant
+(inconsistent results for a stopword query, and the lost size reduction). CREATE of
+a `token_filter` index is therefore gated on the same cluster-wide capability epoch
+as the parallel-search option, so no such index can exist until every node that
+could build or maintain it strips identically. This gate is a write-side
+consistency requirement; the read side needs no gate, per the results-neutral
+argument above.
+
+### Maintenance invariant (REINDEX / idxcron)
+
+`token_filter` and `POSITION_FREE` are immutable index properties after CREATE. A
+rebuild (manual REINDEX or scheduled idxcron) re-derives the index from the source
+table and re-reads both from the persisted parameters, so the stripped, bag-of-words
+shape is preserved. A merge folds the tail into the base by re-serializing
+already-tokenized live documents; it never re-tokenizes, so it cannot reintroduce a
+stopword. Turning `POSITION_FREE` off on a `token_filter` index via REINDEX is
+rejected: it would otherwise leave a positional index built with stopwords stripped,
+re-enabling the phrase modes against an index that cannot answer them — the very
+state the bag-of-words invariant forbids, reached by bypassing the CREATE guard. To
+make such an index positional, drop and recreate it without `token_filter`.
+
+## Source fan-out and resource bounds
+
+Parallel search adds, per query, at most `min(workers, segments)` concurrent
+worker goroutines and the `O(segments × k)` result buffer described above; it adds
+no process-global state and nothing proportional to posting or corpus size.
+
+`token_filter` adds one process-wide stopword set, loaded once from the builtin
+dictionary and shared read-only across all indexes and queries; the per-token cost
+is one set membership test. It adds no per-query growth. The builtin set is loaded
+lazily and fails closed: if the dictionary file is absent the build or query that
+needs it fails cleanly rather than silently indexing or querying every token (the
+word parser already validates the same dictionary directory at initialization, so a
+working gojieba deployment always has the file).
+
+## Alternatives considered
+
+- **Parallelize at a coarser (statement) granularity instead of per segment:**
+  would not help a single MATCH, which is one scan node; per-segment is the unit of
+  independent work.
+- **Incremental single-heap merge to hold ≈k instead of `segments × k`:** lower
+  peak, but requires a concurrency-safe shared heap across workers (lock contention
+  on the hot path) or a serial merge interleaved with the walk; the per-segment
+  slot model keeps each worker lock-free and the merge trivial, and the peak is
+  small records bounded by k and segment count.
+- **A positional `token_filter` (strip stopwords but keep positions) to support
+  phrase modes:** re-introduces the byte-gap ambiguity; deferred as a separate
+  design with explicit position-increment semantics.
+- **`token_filter` on the trigram/ngram or json parsers:** those tokenize
+  differently at query time (overlapping trigrams / atomic values), so a
+  stopword-stripped build would not match; restricted to the word parser.
+- **Making the worker count a strict per-execution guarantee:** would require
+  bypassing or re-tuning the shared read-only cache per query, coupling a
+  performance knob to cache lifetime for no correctness benefit.
+
+## Rollout and rollback
+
+Both features are additive and opt-in. Parallelism defaults to the deployment's
+effective parallelism and yields identical results, so it needs no data migration
+and is safe in a mixed deployment; its explicit operator value is withheld until
+the cluster-wide capability epoch is met. `token_filter` is absent unless requested
+at CREATE and is gated on the same epoch, so no stop-filtered index exists until
+every node can build and maintain it consistently. Rollback is a source revert; no
+catalog, hidden-table, persisted-metadata, or protocol migration is introduced. A
+rollback after a `token_filter` index exists keeps the index readable (a positional
+rollback would simply stop stripping on future writes — the general rolling-upgrade
+caveat for any persisted opt-in, not specific to this change).
+
+## Validation contract
+
+Parallel search: a results-equality check between one worker and many workers must
+use a `k` smaller than the number of matches so a competitive, truncated top-k is
+actually exercised, and must compare an explicit single worker against an explicit
+multi-worker run rather than relying on the default's resolution. The owning
+package runs under the race detector. End-to-end behavior is validated with the
+worker count set before the index is loaded, so serial and parallel execution are
+each actually taken.
+
+`token_filter`: unit tests cover the stop filter (drop, case folding, position
+preservation, builtin load), the BM25 query dropping stopword terms, the schema
+validation (requires `POSITION_FREE`; rejects a non-word parser and an unknown
+filter name), the grammar round-trip, and the REINDEX guard rejecting
+`POSITION_FREE=FALSE` on a `token_filter` index. A BVT exercises the full surface:
+the reject paths, the persisted parameter and SHOW CREATE round-trip, the BM25
+stopword behavior (a stopword and an all-stopword query return empty, a mixed query
+equals its content terms), the NL/boolean rejection, and the REINDEX guard. The PR
+records the measured index-size reduction and the query-latency effect (including
+with parallel search) so the evidence stays tied to the published commit.
