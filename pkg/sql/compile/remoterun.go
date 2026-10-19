@@ -2365,9 +2365,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		)
 	}
 	if features.StatementDigestText &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion120) {
 		return moerr.NewNotSupportedNoCtx(
-			"STATEMENT_DIGEST_TEXT requires MORPC protocol version 117",
+			"STATEMENT_DIGEST_TEXT requires MORPC protocol version 120",
 		)
 	}
 	if features.StatementDigestText {

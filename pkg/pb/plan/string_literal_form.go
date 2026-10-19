@@ -339,6 +339,7 @@ const (
 	planUint32TypeID                  int32 = 27
 	planAnyTypeID                     int32 = 0
 	internalTableCollationFunctionID  int32 = 600
+	statementDigestTextFunctionID     int32 = 601
 	maxVarcharWidth                   int32 = 65535
 )
 
@@ -935,6 +936,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == statementDigestTextFunctionID {
+					features.StatementDigestText = true
+				}
 				if id == internalTableCollationFunctionID {
 					features.TableCollationFunction = true
 				}

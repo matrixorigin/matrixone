@@ -890,7 +890,6 @@ const (
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
 	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
-	"statement_digest_text":        STATEMENT_DIGEST_TEXT,
 
 	"format_bytes":            FORMAT_BYTES,
 	"format_pico_time":        FORMAT_PICO_TIME,
