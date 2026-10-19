@@ -2044,9 +2044,12 @@ func (builder *QueryBuilder) buildModernChildFkAssert(
 	}
 
 	errExpr := makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails")
+	// the typed assert reports ErrFKNoReferencedRow2 so the client receives
+	// MySQL errno 1452 (ER_NO_REFERENCED_ROW_2) instead of an internal error
+	errTypeExpr := makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)
 	assertConds := make([]*plan.Expr, len(oks))
 	for i, ok := range oks {
-		assertConds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(errExpr)})
+		assertConds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(errExpr), DeepCopyExpr(errTypeExpr)})
 		if err != nil {
 			return 0, 0, err
 		}
@@ -3682,6 +3685,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					assertConds := make([]*plan.Expr, len(oks))
 					fkErrExpr := makePlan2StringConstExprWithType(
 						"Cannot add or update a child row: a foreign key constraint fails")
+					// typed assert -> ErrFKNoReferencedRow2 -> mysql errno 1452
+					fkErrTypeExpr := makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)
 					for i, ok := range oks {
 						eligible := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 							RelPos: selectTag, ColPos: odkuActionFkEligibilityInputPos[i],
@@ -3691,7 +3696,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 							return 0, err
 						}
 						assertConds[i], err = BindFuncExprImplByPlanExpr(
-							builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr)})
+							builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr), DeepCopyExpr(fkErrTypeExpr)})
 						if err != nil {
 							return 0, err
 						}
@@ -4204,6 +4209,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			assertConds := make([]*plan.Expr, len(oks))
 			fkErrExpr := makePlan2StringConstExprWithType(
 				"Cannot add or update a child row: a foreign key constraint fails")
+			// typed assert -> ErrFKNoReferencedRow2 -> mysql errno 1452
+			fkErrTypeExpr := makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)
 			for i, ok := range oks {
 				eligible := &plan.Expr{
 					Typ: newProjList[odkuFkEligibilityInputPos[i]].Typ,
@@ -4216,7 +4223,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, err
 				}
 				assertConds[i], err = BindFuncExprImplByPlanExpr(
-					builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr)})
+					builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr), DeepCopyExpr(fkErrTypeExpr)})
 				if err != nil {
 					return 0, err
 				}
