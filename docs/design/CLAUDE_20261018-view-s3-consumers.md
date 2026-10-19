@@ -3,7 +3,7 @@
 ## 1. 范围与依据
 
 - 任务：[#29438](https://github.com/matrixorigin/matrixone/issues/29438)，父任务 [#29433](https://github.com/matrixorigin/matrixone/issues/29433)。
-- 最终同步基线：`8f600318beffd82185ee8fdd92a8f0b625b8e5e7`；最初核查/反例基线为 `68e642fdc533e96ed8f83ac44659119ad8be97af`。上游同步不改变 S1/S2 契约和本次默认未激活的边界。
+- PR 交付同步基线：`def799e1260dd547cae2e0e54323ea20ec1b7685`，以 merge 纳入；此前本地验收基线为 `8f600318beffd82185ee8fdd92a8f0b625b8e5e7`，最初核查/反例基线为 `68e642fdc533e96ed8f83ac44659119ad8be97af`。上游同步不改变 S1/S2 契约和本次默认未激活的边界；主输出步与 correlation 采用上游共同 binder/复制语义，不拷贝另一套实现。
 - 依据：[系列契约](CLAUDE_20260922-view-metadata-on-demand.md)、[S1 精确批准记录](CLAUDE_20260928-view-metadata-s1-review.md)、[已批准的 S2 v2.1 修订](CLAUDE_20261005-view-s2-scope-revision.md)。S1/S2 分别通过 #29456/#29633 合入。
 - 本文记录上述设计的 S3 接线、边界和验证要求，不是新的上线批准。默认 SQL、PREPARE、cursor 路由不激活新模式；S4、S5/S6、S8/S9 的退出条件没有被本次测试替代。
 
@@ -122,7 +122,7 @@ View 定义、环境、身份、owner/权限和版本继续来自可见目录；
 
 最小矩阵：
 
-- typed UT：预热 Describe 后仍是真实基表扫描；显式列名、嵌套、CTAS default/表达式/null-extension；文本与 typed PREPARE 的全依赖；物理 View 列 0/1/4097 的独立反例；parent/child 身份复制。
+- typed UT：预热 Describe 后仍是真实基表扫描；显式列名、嵌套、CTAS default/表达式/null-extension；文本与 typed PREPARE 的全依赖；物理 View 列 0/1/4097 的独立反例；parent/child 身份复制；上游 correlation 多程序主输出步及 Close 后计划复制的兼容控制。
 - 拒绝和控制：缺少创建环境、未冻结 star、丢失 source、损坏定义、授权失败；默认入口保留 legacy 兼容；授权 context 不带私有 marker；数据库错误/snapshot 原样传播。
 - 生命周期：失败/panic 后下一次规划成功；blocked catalog lookup 与 Close/BUSY 的确定性 barrier；资源归零，父事务/执行代可继续使用。
 - frontend：真正由新 binder 生成的空结果计划，在基表 metadata-only、COPY physical ID、同名重建、中间 View 变化后由既有 cache validator 拒绝。

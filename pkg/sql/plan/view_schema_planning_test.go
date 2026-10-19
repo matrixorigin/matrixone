@@ -87,6 +87,33 @@ func TestViewSchemaPlanningUsesRealSubtreesAfterDescriptionMemo(t *testing.T) {
 	require.False(t, f.generation.Closed())
 }
 
+func TestViewSchemaPlanningPreservesCorrelatedMainOutput(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	f.addDefinition(t, "root_v", `create view root_v (outer_key, inner_key) as
+		select n1.n_nationkey,
+			(select (select n3.n_regionkey from nation n3 where n3.n_nationkey = n1.n_nationkey)
+			 from nation n2 where n2.n_nationkey = n1.n_nationkey)
+		from nation n1`)
+	request := f.request(t)
+	p, err := buildViewSchemaTestPlan(t, request, "select outer_key, inner_key from root_v", false)
+	require.NoError(t, err)
+	request.Close()
+	require.NotNil(t, p.GetQuery().Correlation)
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
+	copied := &Plan{Plan: &planpb.Plan_Query{Query: DeepCopyQuery(p.GetQuery())}}
+	require.NoError(t, copied.GetQuery().ValidateCorrelation())
+	for _, plan := range []*Plan{p, copied} {
+		columns := GetResultColumnsFromPlan(plan)
+		require.Len(t, columns, 2)
+		require.Equal(t, "outer_key", columns[0].Name)
+		require.Equal(t, "inner_key", columns[1].Name)
+		for _, column := range columns {
+			require.EqualValues(t, types.T_int32, column.Typ.Id)
+		}
+	}
+	require.Zero(t, f.generation.Used())
+}
+
 func TestViewSchemaPlanningCTASPreservesBoundaryDefaults(t *testing.T) {
 	for _, tc := range []struct {
 		name, body, defaultSQL, wantDefault string
