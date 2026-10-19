@@ -494,6 +494,12 @@ select id, v, e from expt_jsonl order by id;
 ➤ id[4,32,0]  ¦  v[12,17,0]  ¦  e[12,2,0]  𝄀
 1  ¦  [8.764914, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 6.2606535]  ¦  [448, -1.5]  𝄀
 2  ¦  null  ¦  [0.0009765625, 3]
+select * from nz into outfile '$resources/into_outfile/vecblock_nz.jsonl';
+create table nz_jsonl like nz;
+load data infile {'filepath'='$resources/into_outfile/vecblock_nz.jsonl', 'format'='jsonline', 'jsondata'='object'} into table nz_jsonl;
+select hex(vecblock_binary(e)), hex(vecblock_binary(v)), vecblock_json(e), vecblock_json(v) from nz_jsonl;
+➤ hex(vecblock_binary(e))[-1,16383,0]  ¦  hex(vecblock_binary(v))[-1,16383,0]  ¦  vecblock_json(e)[-1,16383,0]  ¦  vecblock_json(v)[-1,16383,0]  𝄀
+01010000010000000000803F7F80  ¦  01020000010000000000803F3808  ¦  {"g":1,"s":[1],"v":[-0]}  ¦  {"g":1,"s":[1],"v":[-0]}
 create table cb8 (id int, v vecf8(4)) cluster by (v);
 not supported: VECF8 column 'v' cannot be a cluster by key
 create table cb4 (id int, v vecf4(4)) cluster by (id, v);

@@ -438,11 +438,50 @@ func vecBlockJSONText(tp int32, valN bytejson.Node) (string, bool, error) {
 	if g, ok := valN.V.(*bytejson.Group); !ok || !g.Obj {
 		return "", false, nil
 	}
-	bj, err := valN.ByteJson()
-	if err != nil {
+	var text strings.Builder
+	if err := writeJSONLexemes(&text, valN); err != nil {
 		return "", false, err
 	}
-	return bj.String(), true, nil
+	return text.String(), true, nil
+}
+
+// writeJSONLexemes writes a parsed JSON value as JSON text, numbers as their original
+// lexemes (-0 stays -0).
+func writeJSONLexemes(text *strings.Builder, node bytejson.Node) error {
+	switch v := node.V.(type) {
+	case *bytejson.Group:
+		lb, rb := byte('['), byte(']')
+		if v.Obj {
+			lb, rb = '{', '}'
+		}
+		text.WriteByte(lb)
+		for i, child := range v.Values {
+			if i > 0 {
+				text.WriteByte(',')
+			}
+			if v.Obj {
+				key, err := json.Marshal(v.Keys[i])
+				if err != nil {
+					return err
+				}
+				text.Write(key)
+				text.WriteByte(':')
+			}
+			if err := writeJSONLexemes(text, child); err != nil {
+				return err
+			}
+		}
+		text.WriteByte(rb)
+	case json.Number:
+		text.WriteString(v.String())
+	default:
+		b, err := json.Marshal(v)
+		if err != nil {
+			return err
+		}
+		text.Write(b)
+	}
+	return nil
 }
 
 // jsonLineScalarText preserves numeric array boundaries for vector columns.

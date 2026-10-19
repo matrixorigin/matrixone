@@ -66,4 +66,12 @@ func TestConstructVectorMatmulConfig(t *testing.T) {
 	nullTopk := &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
 	_, _, err = call(nullTopk, id, vec, queries)
 	require.ErrorContains(t, err, "must not be NULL")
+
+	nullString := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}}
+	_, _, err = call(topk, id, vec, nullString)
+	require.ErrorContains(t, err, "queries must not be NULL")
+	for _, bad := range []*plan.Expr{nullString, plan2.MakePlan2StringConstExprWithType("")} {
+		_, _, err = call(topk, id, vec, queries, bad)
+		require.ErrorContains(t, err, "options must be a JSON object")
+	}
 }

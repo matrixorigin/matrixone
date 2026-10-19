@@ -253,6 +253,11 @@ create table expt_jsonl like expt;
 load data infile {'filepath'='$resources/into_outfile/vecblock.jsonl', 'format'='jsonline', 'jsondata'='object'} into table expt_jsonl;
 select x.id, vecblock_json(x.v) <=> vecblock_json(c.v), vecblock_json(x.e) = vecblock_json(c.e), vecblock_json(x.v) <=> vecblock_json(j.v), vecblock_json(x.e) = vecblock_json(j.e) from expt x join expt_csv c on x.id = c.id join expt_jsonl j on x.id = j.id order by x.id;
 select id, v, e from expt_jsonl order by id;
+-- a negative-zero element keeps its code through export and reload
+select * from nz into outfile '$resources/into_outfile/vecblock_nz.jsonl';
+create table nz_jsonl like nz;
+load data infile {'filepath'='$resources/into_outfile/vecblock_nz.jsonl', 'format'='jsonline', 'jsondata'='object'} into table nz_jsonl;
+select hex(vecblock_binary(e)), hex(vecblock_binary(v)), vecblock_json(e), vecblock_json(v) from nz_jsonl;
 
 -- cells equal by decoded value can differ in bytes: vecf8/vecf4 are no cluster by or KEY
 -- partition columns

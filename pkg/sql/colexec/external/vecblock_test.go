@@ -154,6 +154,25 @@ func TestJSONLineVecBlockExactText(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, cell, got)
 			}
+
+			// a negative-zero element keeps its code
+			nz := `{"g":1,"s":[1],"v":[-0]}`
+			nzCell, err := types.BlockScaledFromJSON(f, nz)
+			require.NoError(t, err)
+			pz, err := types.BlockScaledFromJSON(f, `{"g":1,"s":[1],"v":[0]}`)
+			require.NoError(t, err)
+			require.NotEqual(t, pz, nzCell)
+			cols1 := []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(oid), Width: 1}}}
+			obj, err = r.transJson2Lines(proc.Ctx, `{"v":`+nz+`}`, attrs, cols1, tree.OBJECT)
+			require.NoError(t, err)
+			arr, err = r.transJsonArray2Lines(proc.Ctx, `[`+nz+`]`, attrs, cols1)
+			require.NoError(t, err)
+			for _, line := range [][]csvparser.Field{obj, arr} {
+				require.Equal(t, nz, line[0].Val)
+				got, err := types.BlockScaledFromJSON(f, line[0].Val)
+				require.NoError(t, err)
+				require.Equal(t, nzCell, got)
+			}
 		})
 	}
 }

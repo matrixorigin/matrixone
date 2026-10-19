@@ -2068,14 +2068,21 @@ func constructAggregateConfigWithError(
 		if err != nil {
 			return nil, nil, err
 		}
-		queries, queriesOid, err := evaluateAggregateConfigValue(proc, args[3])
+		queries, queriesOid, isNull, err := evaluateAggregateConfigNullable(proc, args[3])
 		if err != nil {
 			return nil, nil, err
 		}
+		if isNull {
+			return nil, nil, moerr.NewInvalidInputNoCtx("vector_matmul: queries must not be NULL")
+		}
 		options := ""
 		if len(args) == 5 {
-			if options, err = evaluateAggregateConfigString(proc, args[4]); err != nil {
+			// an omitted options argument selects the defaults; a supplied one is a JSON object
+			if options, _, isNull, err = evaluateAggregateConfigNullable(proc, args[4]); err != nil {
 				return nil, nil, err
+			}
+			if isNull || options == "" {
+				return nil, nil, moerr.NewInvalidInputNoCtx("vector_matmul: options must be a JSON object")
 			}
 		}
 		gpu := gpumode.EffectiveGpuMode(proc.GetResolveVariableFunc())
@@ -2216,26 +2223,26 @@ func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan
 }
 
 func evaluateAggregateConfigString(proc *process.Process, expr *plan.Expr) (string, error) {
-	s, _, err := evaluateAggregateConfigValue(proc, expr)
+	s, _, _, err := evaluateAggregateConfigNullable(proc, expr)
 	return s, err
 }
 
-// evaluateAggregateConfigValue evaluates a string configuration argument and returns its
-// value with the evaluated type; NULL is the empty string.
-func evaluateAggregateConfigValue(proc *process.Process, expr *plan.Expr) (string, types.T, error) {
+// evaluateAggregateConfigNullable evaluates a string configuration argument and returns its
+// value, its evaluated type and whether it is NULL.
+func evaluateAggregateConfigNullable(proc *process.Process, expr *plan.Expr) (string, types.T, bool, error) {
 	vec, free, err := colexec.GetReadonlyResultFromNoColumnExpression(proc, expr)
 	if err != nil {
-		return "", 0, err
+		return "", 0, false, err
 	}
 	defer free()
 	oid := vec.GetType().Oid
 	if vec.Length() == 0 || vec.IsConstNull() || vec.IsNull(0) {
-		return "", oid, nil
+		return "", oid, true, nil
 	}
 	if oid == types.T_json {
-		return types.DecodeJson(vec.GetBytesAt(0)).String(), oid, nil
+		return types.DecodeJson(vec.GetBytesAt(0)).String(), oid, false, nil
 	}
-	return vec.GetStringAt(0), oid, nil
+	return vec.GetStringAt(0), oid, false, nil
 }
 
 // evaluateAggregateConfigInt64 evaluates an int64 configuration argument; NULL is an error.

@@ -49,6 +49,12 @@ select vector_matmul(1, id, a, @qs) from t;
 -- other keys are ignored; the scores are distances, nearest first: -dot, 1 - cos, |x - q|^2
 select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"metric":"inner_product","x":1}') from t;
 select vector_matmul(2, id, a, '[[1,0,0,0]]', 'not json') from t;
+-- a supplied options argument is a JSON object: empty text or a NULL variable is an error
+select vector_matmul(2, id, a, '[[1,0,0,0]]', '') from t;
+set @no_opts = null;
+select vector_matmul(2, id, a, '[[1,0,0,0]]', @no_opts) from t;
+set @no_queries = null;
+select vector_matmul(2, id, a, @no_queries) from t;
 select vector_matmul(2, id, a, '[[1,0,0,0]]', '{"metric":"l2"}') from t;
 create table mt (id int, v vecf32(3));
 insert into mt values (1, '[1,2,2]'), (2, '[0,0,0]'), (3, '[3,0,4]'), (4, '[1,1,1]');
