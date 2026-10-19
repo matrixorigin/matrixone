@@ -214,6 +214,18 @@ func (k *resultColumnKinds) expand(id int) {
 	}
 	if node.NodeType == pb.Node_AGG || node.NodeType == pb.Node_SAMPLE {
 		switch ref.RelPos {
+		case 0:
+			if node.NodeType == pb.Node_SAMPLE {
+				// SAMPLE emits group and sampled vectors before forwarded input
+				// vectors. This is an emitted-vector position, not a child slot.
+				pos := ref.ColPos - int32(len(node.GroupBy)+len(node.AggList))
+				if pos >= 0 {
+					for _, child := range node.Children {
+						k.slot(id, child, pos)
+					}
+				}
+				return
+			}
 		case -1:
 			if ref.ColPos >= 0 && int(ref.ColPos) < len(node.GroupBy) {
 				k.inputExpression(id, node, node.GroupBy[ref.ColPos])

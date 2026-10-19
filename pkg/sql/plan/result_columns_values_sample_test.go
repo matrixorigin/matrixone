@@ -95,3 +95,71 @@ func TestResultColumnValuesStopAtComputedProducer(t *testing.T) {
 	require.True(t, kinds.computed(0, column))
 	require.Len(t, kinds.states, 1, "VALUES metadata must not retain every scalar row expression")
 }
+
+func TestSampleForwardedBooleanResultKinds(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	stored := pb.ResultColumnKind_RESULT_COLUMN_KIND_STORED
+	computed := pb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED
+	input := "(select role_id,with_grant_option b,role_id>0 p from mo_catalog.mo_role_privs union all select role_id,with_grant_option b,role_id>0 p from mo_catalog.mo_role_privs) d"
+	for _, tc := range []struct {
+		projection string
+		kinds      []pb.ResultColumnKind
+	}{
+		{"sample(role_id+1,100 percent),b,p", []pb.ResultColumnKind{computed, stored, computed}},
+		{"sample(role_id+1,100 percent),p,b", []pb.ResultColumnKind{computed, computed, stored}},
+		{"p,b,sample(role_id+1,100 percent)", []pb.ResultColumnKind{computed, stored, computed}},
+		{"b,p,sample(role_id+1,100 percent)", []pb.ResultColumnKind{stored, computed, computed}},
+		{"sample(role_id+1,100 percent),p,b,p,b", []pb.ResultColumnKind{computed, computed, stored, computed, stored}},
+		{"sample(role_id+1,role_id+2,100 percent),b,p", []pb.ResultColumnKind{computed, computed, stored, computed}},
+	} {
+		t.Run(tc.projection, func(t *testing.T) {
+			p, err := runOneStmt(mock, t, "select "+tc.projection+" from "+input)
+			require.NoError(t, err)
+			var forwarded int
+			for _, node := range p.GetQuery().Nodes {
+				if node.NodeType != pb.Node_SAMPLE {
+					continue
+				}
+				offset := int32(len(node.GroupBy) + len(node.AggList))
+				for _, expr := range node.ProjectList {
+					if ref := expr.GetCol(); ref != nil && ref.RelPos == 0 {
+						require.GreaterOrEqual(t, ref.ColPos, offset)
+						forwarded++
+					}
+				}
+			}
+			require.Positive(t, forwarded, "regression must exercise forwarded SAMPLE slots")
+			columns := GetResultColumnsFromPlan(p)
+			require.Len(t, columns, len(tc.kinds))
+			for i, column := range columns {
+				if column.Typ.Id == int32(types.T_bool) {
+					require.Equal(t, tc.kinds[i], column.ResultColumnKind, "column %d", i)
+				}
+			}
+		})
+	}
+}
+
+func TestSampleForwardedReferenceOffsets(t *testing.T) {
+	col := func(pos int32) *pb.Expr {
+		return &pb.Expr{Expr: &pb.Expr_Col{Col: &pb.ColRef{ColPos: pos}}}
+	}
+	query := &pb.Query{Nodes: []*pb.Node{
+		{NodeType: pb.Node_TABLE_SCAN, ProjectList: []*pb.Expr{col(0)}},
+		{NodeType: pb.Node_PROJECT, Children: []int32{0}, ProjectList: []*pb.Expr{col(0), makePlan2BoolConstExprWithType(true)}},
+		{NodeType: pb.Node_SAMPLE, Children: []int32{1},
+			GroupBy: []*pb.Expr{col(0), col(1)}, AggList: []*pb.Expr{col(0), col(1)}},
+	}}
+	for _, tc := range []struct {
+		position int32
+		computed bool
+	}{
+		{-1, false}, {0, false}, {1, false}, {3, false},
+		{4, false}, {5, true}, {6, false},
+	} {
+		kinds := newResultColumnKinds(query)
+		require.Equal(t, tc.computed, kinds.computed(2, col(tc.position)), "forwarded slot %d", tc.position)
+	}
+	query.Nodes[2].Children = nil
+	require.False(t, newResultColumnKinds(query).computed(2, col(5)))
+}

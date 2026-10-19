@@ -48,6 +48,13 @@ Statement and client-prepared mode; the existing PREPARE grammar rejects that fo
 which is asserted separately as a 1064/42000 control. Derived VALUES and every other
 composition must pass actual server preparation, with no fallback.
 
+Six additional forwarded-SAMPLE shapes use a UNION ALL input with stored BOOL
+and predicate siblings, including reordered/repeated outputs and multiple sampled
+columns. They retain the sampled `id+1` BIGINT output and check that the prefixed
+forwarded slots preserve BIT/Boolean versus TINYINT/Number, NULLs and both copies
+of every input row. All six run in the three execution modes (18 more positive
+cases, 272 total), with prepare-time metadata checked in both prepared modes.
+
 Compile and run it with Connector/J 8.4.0 and `tinyInt1isBit=true`:
 
 ```sh

@@ -26,12 +26,21 @@ public final class JoinBooleanMetadataProbe {
 
     private static void metadata(ResultSetMetaData metadata, boolean[] nativeColumns, String phase)
             throws Exception {
+        int[] types = new int[nativeColumns.length];
+        for (int i = 0; i < types.length; i++) {
+            types[i] = nativeColumns[i] ? Types.BIT : Types.TINYINT;
+        }
+        metadata(metadata, types, phase);
+    }
+
+    private static void metadata(ResultSetMetaData metadata, int[] types, String phase)
+            throws Exception {
         check(metadata != null, phase + ": missing metadata");
-        check(metadata.getColumnCount() == nativeColumns.length, phase + ": wrong column count");
-        for (int i = 1; i <= nativeColumns.length; i++) {
-            boolean nativeColumn = nativeColumns[i - 1];
+        check(metadata.getColumnCount() == types.length, phase + ": wrong column count");
+        for (int i = 1; i <= types.length; i++) {
+            boolean nativeColumn = types[i - 1] == Types.BIT;
             Class<?> type = Class.forName(metadata.getColumnClassName(i));
-            check(metadata.getColumnType(i) == (nativeColumn ? Types.BIT : Types.TINYINT),
+            check(metadata.getColumnType(i) == types[i - 1],
                     phase + ": wrong SQL type at column " + i + ": " + metadata.getColumnTypeName(i));
             check(nativeColumn ? type == Boolean.class : Number.class.isAssignableFrom(type),
                     phase + ": wrong Java class at column " + i + ": " + type.getName());
@@ -221,6 +230,68 @@ public final class JoinBooleanMetadataProbe {
         return count;
     }
 
+    private static int sampleForwardedCases(Connection connection, String table, String mode)
+            throws Exception {
+        String input = "(SELECT id,flag b,n>0 p FROM " + table
+                + " UNION ALL SELECT id,flag b,n>0 p FROM " + table + ") d";
+        String[] projections = {
+            "SAMPLE(id+1,100 PERCENT),b,p", "SAMPLE(id+1,100 PERCENT),p,b",
+            "p,b,SAMPLE(id+1,100 PERCENT)", "b,p,SAMPLE(id+1,100 PERCENT)",
+            "SAMPLE(id+1,100 PERCENT),p,b,p,b",
+            "SAMPLE(id+1,id+2,100 PERCENT),b,p"
+        };
+        int[][] types = {
+            {Types.BIGINT,Types.BIT,Types.TINYINT}, {Types.BIGINT,Types.TINYINT,Types.BIT},
+            {Types.TINYINT,Types.BIT,Types.BIGINT}, {Types.BIT,Types.TINYINT,Types.BIGINT},
+            {Types.BIGINT,Types.TINYINT,Types.BIT,Types.TINYINT,Types.BIT},
+            {Types.BIGINT,Types.BIGINT,Types.BIT,Types.TINYINT}
+        };
+        String[][] expected = {
+            {"2:true:1", "3:false:null", "4:null:0"},
+            {"2:1:true", "3:null:false", "4:0:null"},
+            {"1:true:2", "null:false:3", "0:null:4"},
+            {"true:1:2", "false:null:3", "null:0:4"},
+            {"2:1:true:1:true", "3:null:false:null:false", "4:0:null:0:null"},
+            {"2:3:true:1", "3:4:false:null", "4:5:null:0"}
+        };
+        for (int c = 0; c < projections.length; c++) {
+            String sql = "SELECT " + projections[c] + " FROM " + input;
+            try (Statement statement = mode.equals("statement") ? connection.createStatement()
+                    : connection.prepareStatement(sql)) {
+                statement.setQueryTimeout(30);
+                if (statement instanceof PreparedStatement) {
+                    check(!mode.equals("server-prepared") || statement.getClass().getName().equals(
+                            "com.mysql.cj.jdbc.ServerPreparedStatement"), "server prepare fell back");
+                    metadata(((PreparedStatement) statement).getMetaData(), types[c], "prepare");
+                }
+                try (ResultSet result = statement instanceof PreparedStatement
+                        ? ((PreparedStatement) statement).executeQuery() : statement.executeQuery(sql)) {
+                    metadata(result.getMetaData(), types[c], "execute");
+                    Map<String,Integer> actual = new HashMap<>();
+                    Map<String,Integer> wanted = new HashMap<>();
+                    for (String row : expected[c]) wanted.put(row, 2);
+                    while (result.next()) {
+                        StringBuilder row = new StringBuilder();
+                        for (int col = 1; col <= types[c].length; col++) {
+                            Object value = result.getObject(col);
+                            check(value == null || (types[c][col-1] == Types.BIT
+                                    ? value instanceof Boolean : value instanceof Number),
+                                    "wrong value class at column " + col);
+                            if (col > 1) row.append(':');
+                            row.append(value instanceof Number ? ((Number) value).longValue() : value);
+                        }
+                        actual.merge(row.toString(), 1, Integer::sum);
+                    }
+                    check(actual.equals(wanted), "expected " + wanted + ", got " + actual);
+                }
+            } catch (Exception | AssertionError error) {
+                throw new AssertionError(mode + ": " + sql, error);
+            }
+        }
+        System.out.println("PASS " + mode + ": " + projections.length + " forwarded SAMPLE cases");
+        return projections.length;
+    }
+
     public static void main(String[] args) throws Exception {
         Properties properties = new Properties();
         properties.setProperty("user", System.getenv().getOrDefault("DB_USER", "root"));
@@ -247,6 +318,7 @@ public final class JoinBooleanMetadataProbe {
                     try (Connection connection = DriverManager.getConnection(url, properties)) {
                         total += cases(connection, table, mode);
                         total += composedCases(connection, table, mode);
+                        total += sampleForwardedCases(connection, table, mode);
                     }
                 }
                 System.out.println("PASS " + total + " JOIN BOOLEAN metadata/value cases; driver "
