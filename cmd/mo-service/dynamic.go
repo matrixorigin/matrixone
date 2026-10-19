@@ -123,7 +123,7 @@ func startDynamicCluster(
 	if err := startLogServiceCluster(ctx, cfg.LogServiceConfigFiles, stopper, shutdownC); err != nil {
 		return err
 	}
-	if _, err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
+	if err := startTNServiceCluster(ctx, cfg.TNServiceConfigsFiles, stopper, shutdownC); err != nil {
 		return err
 	}
 	// Register the dynamic-CN cleanup before starting the first child.  A

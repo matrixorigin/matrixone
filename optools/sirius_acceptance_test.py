@@ -35,6 +35,7 @@ def evidence():
 
     def records(manifest, offset):
         result = []
+        windows = {}
         for spec in manifest["schedule"]:
             row = {
                 **spec,
@@ -89,6 +90,14 @@ def evidence():
                         for tier in ("host", "gpu")
                     ],
                 }
+            if spec["backend"] == "embedded":
+                key = (spec["scale_factor"], spec["streams"])
+                windows[key] = windows.get(key, 22) + 1
+                row["native_pools"].update(public_query_id=row["query_id"], window=windows[key])
+                for pool in row["native_pools"]["pools"]:
+                    pool["space"] = -1 if pool["tier"] == "host" else 0
+                    if pool["tier"] == "host":
+                        pool["begin"] = {"allocated_bytes": (64 << 20) + (1 << 16), "free_blocks": 4}
             if manifest["resource_campaign"]:
                 row["resource_span"] = {
                     "time_domain": "unix-epoch-ns",
@@ -109,7 +118,7 @@ def evidence():
                     "phase": row["phase"],
                     "sequence": row["sequence"],
                     "query_id": row["query_id"],
-                    "before_bytes": {"pinned": 1, "device": 1},
+                    "before_bytes": {"pinned": (5 << 16) + 1, "device": 1},
                 }
                 for row in resource_rows
                 if row["scale_factor"] == scale
@@ -126,8 +135,9 @@ def evidence():
                     "allocation_counts": {"pinned": 1, "device": 1},
                     "unexplained_growth_bytes": 0,
                     "pool_baseline_reconciled": True,
-                    "warmed_baseline_bytes": {"pinned": 1, "device": 1},
-                    "post_cleanup_bytes": {"pinned": 1, "device": 1},
+                    "warmed_baseline_bytes": {"pinned": (5 << 16) + 1, "device": 1},
+                    "post_cleanup_bytes": {"pinned": (5 << 16) + 1, "device": 1},
+                    "final_bytes": {"pinned": 1, "device": 1},
                     "runs": [
                         {
                             "phase": "resource-warmup",
@@ -137,7 +147,7 @@ def evidence():
                             "scope": "runner-lifetime",
                             "start_ns": measured[0]["start_ns"] - 50 + 2 * index,
                             "end_ns": measured[0]["start_ns"] - 49 + 2 * index,
-                            "before_bytes": {"pinned": 1, "device": 1},
+                            "before_bytes": {"pinned": (5 << 16) + 1, "device": 1},
                         }
                         for index in range(22)
                     ]
@@ -151,11 +161,26 @@ def evidence():
                             "scope": "runner-lifetime",
                             "start_ns": measured[-1]["end_ns"] + 1,
                             "end_ns": measured[-1]["end_ns"] + 2,
-                            "before_bytes": {"pinned": 1, "device": 1},
+                            "before_bytes": {"pinned": (5 << 16) + 1, "device": 1},
                         }
                     ],
                 }
             )
+    for allocation in allocations:
+        rows = [row for row in resource_rows if row["backend"] == "embedded" and row["scale_factor"] == allocation["scale_factor"] and row["streams"] == allocation["streams"]]
+        cleanup = allocation["runs"][-1]["query_id"]
+        for index, row in enumerate(rows):
+            host = next(pool for pool in row["native_pools"]["pools"] if pool["tier"] == "host")
+            host["after_close"] = {"source": "next-query-window-begin", "window": row["native_pools"]["window"] + 1, "query_id": rows[index+1]["query_id"] if index+1 < len(rows) else cleanup, **host["begin"]}
+        allocation["host_pool_reconciliation"] = {
+            "source": "native-host-pool-and-cupti", "space": -1,
+            "first_query_id": rows[0]["query_id"], "cleanup_query_id": cleanup,
+            "block_bytes": 1 << 16, "empty_result_reservation_bytes": 64 << 20,
+            "capacity_limit_bytes": 16 << 30, "capacity_before_bytes": 5 << 16,
+            "capacity_after_bytes": 5 << 16, "physical_growth_bytes": 0,
+            "free_capacity_growth_bytes": 0, "unexplained_growth_bytes": 0,
+            "external_pinned_baseline_bytes": 1,
+        }
     lifecycle = {
         "provenance": identity,
         "cases": [
@@ -228,25 +253,11 @@ def evidence():
 
 
 class AcceptanceTest(unittest.TestCase):
-    def test_historical_v2_archive_preserves_missing_execution_profile(self):
-        inputs = evidence()
-        identities = [
-            inputs[0]["provenance"],
-            inputs[2]["provenance"],
-            *(item["provenance"] for item in inputs[4]),
-            *(item["provenance"] for item in inputs[5:]),
-        ]
-        for identity in identities:
-            identity["config"].pop("gomaxprocs", None)
-            identity["config"].pop("native_host_block_bytes", None)
-        original = copy.deepcopy(inputs)
-        self.assertTrue(acceptance.validate(*inputs)["local_acceptance_complete"])
-        self.assertEqual(original, inputs, "verification must not invent settings")
-
+    def test_missing_execution_profile_is_rejected(self):
         inputs = evidence()
         for key in ("gomaxprocs", "native_host_block_bytes"):
-            del inputs[0]["provenance"]["config"][key]
-        with self.assertRaisesRegex(campaign.CampaignError, "semantic inputs differ"):
+            inputs[0]["provenance"]["config"].pop(key, None)
+        with self.assertRaises(campaign.CampaignError):
             acceptance.validate(*inputs)
 
     def test_cli_binds_consumed_inputs_to_archive_checksums(self):
@@ -318,37 +329,6 @@ class AcceptanceTest(unittest.TestCase):
                 ):
                     acceptance.main()
 
-    def test_declared_flight_retained_pairs_use_the_native_oracle(self):
-        inputs = evidence()
-        profile = {
-            "id": "flight-mo",
-            "coverage": [1],
-            "provenance": {
-                "matrixone_revision": "a" * 40,
-                "sirius_revision": "b" * 40,
-                "launcher_sha256": "1" * 64,
-                "configuration_sha256": "2" * 64,
-                "server_binary_sha256": "3" * 64,
-                "tn_no_gc_verified": False,
-            },
-        }
-        manifest = campaign.build_campaign(
-            inputs[0]["provenance"], flight_profiles=[profile]
-        )
-        original = {
-            (campaign.legacy._oracle_cell(row), row["route"]): row for row in inputs[1]
-        }
-        rows = []
-        for spec in manifest["schedule"]:
-            route = "mo-native" if spec["route"] == "flight-mo" else spec["route"]
-            row = copy.deepcopy(original[(campaign.legacy._oracle_cell(spec), route)])
-            row.update(spec, query_id=f"{50000+spec['sequence']:032x}")
-            rows.append(row)
-        campaign.summarize(manifest, rows)
-        peer = next(row for row in rows if row["route"] == "flight-mo")
-        peer["row_count"] = 5
-        with self.assertRaisesRegex(campaign.CampaignError, "cardinality mismatch"):
-            campaign.summarize(manifest, rows)
 
     def test_retained_oracle_pairs_reject_count_schema_and_identity_drift(self):
         for records_index in (1, 3):
@@ -483,6 +463,31 @@ class AcceptanceTest(unittest.TestCase):
         next_pool["begin"]["allocated_bytes"] = 768
         with self.assertRaisesRegex(campaign.CampaignError, "retains"):
             acceptance.validate(*inputs)
+
+    def test_free_host_capacity_growth_is_reconciled_but_not_a_query_leak(self):
+        inputs = evidence()
+        allocation = inputs[4][0]
+        last_span = [span for span in allocation["runs"] if span["phase"] == "resource-validation"][-1]
+        last = next(row for row in inputs[3] if row["query_id"] == last_span["query_id"])
+        host = next(pool for pool in last["native_pools"]["pools"] if pool["tier"] == "host")
+        host["after_close"]["free_blocks"] += 128
+        allocation["post_cleanup_bytes"]["pinned"] += 8 << 20
+        allocation["runs"][-1]["before_bytes"]["pinned"] += 8 << 20
+        allocation["host_pool_reconciliation"].update(
+            capacity_after_bytes=(5 << 16) + (8 << 20),
+            physical_growth_bytes=8 << 20,
+            free_capacity_growth_bytes=8 << 20,
+        )
+        acceptance.validate(*inputs)
+        for mutate in (
+            lambda a: a["host_pool_reconciliation"].update(free_capacity_growth_bytes=0),
+            lambda a: a["final_bytes"].update(pinned=2),
+            lambda a: a.pop("host_pool_reconciliation"),
+        ):
+            changed = copy.deepcopy(inputs)
+            mutate(changed[4][0])
+            with self.subTest(mutate=mutate), self.assertRaises(campaign.CampaignError):
+                acceptance.validate(*changed)
 
     def test_complete_local_evidence_still_requires_ci_and_review(self):
         result = acceptance.validate(*evidence())

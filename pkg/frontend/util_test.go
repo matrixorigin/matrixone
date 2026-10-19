@@ -67,6 +67,35 @@ func init() {
 	testutil.SetupAutoIncrService("")
 }
 
+func TestCollectScalarSubqueriesCollate(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []string
+	}{
+		{"scalar", "select (select 'first') collate utf8mb4_bin", []string{"(select 'first')"}},
+		{"argument order", "select concat((select 'first') collate utf8mb4_bin, (select 'second') collate utf8mb4_bin)", []string{"(select 'first')", "(select 'second')"}},
+		{"cast wrapper", "select cast((select 'first') as char) collate utf8mb4_bin", []string{"(select 'first')"}},
+		{"outer subquery only", "select (select (select 'inner') collate utf8mb4_bin) collate utf8mb4_bin", []string{"(select ((select 'inner')) collate utf8mb4_bin)"}},
+		{"literal", "select 'literal' collate utf8mb4_bin", []string{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			stmts, err := parsers.Parse(context.Background(), dialect.MYSQL, tc.sql, 1)
+			require.NoError(t, err)
+			require.Len(t, stmts, 1)
+			defer stmts[0].Free()
+			expr := stmts[0].(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			var subqueries []*tree.Subquery
+			collectScalarSubqueries(expr, &subqueries)
+			got := make([]string, len(subqueries))
+			for i, subquery := range subqueries {
+				got[i] = tree.StringWithOpts(subquery, dialect.MYSQL, tree.WithSingleQuoteString())
+			}
+			require.Equal(t, tc.want, got)
+		})
+	}
+}
+
 type accountingMysqlWriter struct {
 	testMysqlWriter
 	bytes         int64
@@ -1428,6 +1457,7 @@ func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendClosedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewNoAvailableBackendNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendCannotConnectNoCtx("test")))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewTxnWriteConflictNoCtx("test")))
 }
 
 func TestNewErrorRollbackWholeTxnCoversEveryCode(t *testing.T) {

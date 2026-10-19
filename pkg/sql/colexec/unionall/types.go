@@ -24,6 +24,9 @@ import (
 var _ vm.Operator = new(UnionAll)
 
 type UnionAll struct {
+	// DirectInputs visits local continuation inputs using currentBranch. It
+	// shares the ordinary branch cursor without starting receiver workers.
+	DirectInputs       bool
 	SequentialBranches int
 	startBranch        func(int) error
 	currentBranch      int

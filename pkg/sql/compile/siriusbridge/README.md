@@ -2,20 +2,17 @@
 
 This package owns the ABI-v1 engine/query/input/result handles from Sirius's
 generated `sirius_c.h`. CN constructs the bridge and adapts it to the compiler's
-backend interface; the bridge and compiler do not import each other.
+execution interface; the bridge and compiler do not import each other.
 
-This is the opt-in bridge milestone of the
-[embedded Sirius migration](../../../../docs/design/sirius-embedded.md), not
-the completed SQL offload. It can build and start an embedded runtime and run
-the native bridge integration tests. The real MO-reader SQL path, TPC-H parity,
-default cutover, and Flight retirement are separate later milestones. Do not
-use a successful build or bridge smoke test as evidence that all 22 queries
-work through embedded Sirius.
+Enabled Sirius uses this bridge with MO readers. The compiler owns each query;
+CN owns the engine. See the [execution design](../../../../docs/design/sirius-embedded.md)
+and [clean cutover](../../../../docs/design/sirius-embedded-cutover.md) for the
+configuration, lifecycle and acceptance contracts. A successful build or bridge
+smoke test alone does not prove all-22 SQL correctness or performance.
 
 ## Input reservation contract
 
-The CN-facing `compile.SiriusInput` exposes `Acquire`; it does not expose the
-already-materialized `Push` convenience operation. Reserve payload bytes before
+The CN-facing `compile.SiriusInput` exposes `Acquire`. Reserve payload bytes before
 allocating or copying the outgoing vectors, and register cleanup immediately:
 
 ```go
@@ -93,7 +90,7 @@ pixi run --frozen -e mo sh -c '
 matching `cgo/libmo.so` and `thirdparties/install`; it is not the first-build
 command. SDK preparation and packaging reject a source path or revision that
 does not match MO's committed Sirius submodule pin. CPU-only builds remain
-unchanged. Selecting `backend="embedded"` in
+unchanged. Enabling Sirius in
 a binary without `MO_SIRIUS=1` returns an explicit configuration error.
 
 The output is `mo-service` with an adjacent `lib/` directory (and MO's normal
@@ -128,11 +125,11 @@ known integration-test example, not a production capacity profile.
 ```toml
 [cn.sirius]
 enabled = true
-backend = "embedded"
-input-mode = "mo"
 native-config-path = "/absolute/path/to/sirius/test/cpp/operator/result.yaml"
 gpu-streams = 2
 max-waiting-queries = 16
+request-timeout = "15m"
+cleanup-timeout = "30s"
 ```
 
 The example YAML selects one GPU (`device_id: 0`), reserves 2 GiB of GPU
@@ -151,11 +148,12 @@ sirius:
         memory_capacity: 4294967296
 ```
 
-Choose capacities appropriate for the host before deployment. The embedded
-route needs no Flight address,
-certificates, resolver, direct-TAE leases, or TN `disable-gc` setting. The
-default remains `backend="flight"` during coexistence; embedded selection is
-explicit, and `input-mode="tae"` is rejected before native preparation.
+Choose capacities appropriate for the host before deployment. Enabled Sirius
+always uses MO readers and the embedded C ABI. The six fields above are the
+complete configuration schema; unknown Sirius keys fail parsing even when
+Sirius is disabled. The old Flight runtime, transport settings and lease
+recovery are removed. An old deployment must drain and recover using its
+previous release before upgrading; see the cutover design for rollout.
 
 After building, a local startup check is:
 

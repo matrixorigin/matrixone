@@ -1483,6 +1483,7 @@ func doSetVar(
 	type evaluatedAssignment struct {
 		assign                  *tree.VarAssignmentExpr
 		value                   interface{}
+		setNamesCollation       string
 		userVarIsBin            bool
 		userVarRuntimeDomain    types.RuntimeStringDomain
 		valueType               plan.Type
@@ -1506,9 +1507,12 @@ func doSetVar(
 	}
 	for _, assign := range sv.Assignments {
 		if assign.SetNames {
-			for _, name := range []string{
+			names := make([]string, 0, 4)
+			names = append(names,
 				"character_set_client", "character_set_connection", "character_set_results",
-			} {
+			)
+			names = append(names, "collation_connection")
+			for _, name := range names {
 				captureSystemReplayability(name)
 			}
 		} else if assign.System {
@@ -1573,12 +1577,62 @@ func doSetVar(
 				}
 			}
 		}
+		// SET NAMES DEFAULT is represented by a synthetic "names" assignment,
+		// so it cannot use the ordinary system-variable DEFAULT resolution above.
+		// The generic expression evaluator intentionally materializes DEFAULT as
+		// a boolean marker; resolve the SET NAMES form to the effective server
+		// default character set before the string system-variable setters see it.
+		if assign.SetNames {
+			if _, isDefault := assign.Value.(*tree.DefaultVal); isDefault {
+				value, evalErr = ses.GetGlobalSysVar("character_set_server")
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+				if value == nil {
+					value = gSysVarsDefs["character_set_server"].Default
+				}
+			}
+		}
 		if err := validateCharsetAssignment(assign, value); err != nil {
 			return evaluatedAssignment{}, err
+		}
+		setNamesCollation := ""
+		if assign.SetNames {
+			_, isDefault := assign.Value.(*tree.DefaultVal)
+			switch {
+			case assign.Reserved != nil:
+				literal, literalOK := assign.Reserved.(*tree.NumVal)
+				if !literalOK {
+					return evaluatedAssignment{}, moerr.NewInvalidInputNoCtx("SET NAMES requires a constant collation")
+				}
+				setNamesCollation = literal.String()
+			case isDefault:
+				setNamesCollation, evalErr = resolveSetNamesDefaultCollation(ses)
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+				// character_set_server and collation_server are stored
+				// independently. Validate their effective pair before the
+				// session setters run so an inconsistent historical/global
+				// configuration cannot publish a partial SET NAMES DEFAULT
+				// state.
+				if evalErr = validateCharsetCollationPair(value, setNamesCollation); evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+			default:
+				setNamesCollation, evalErr = resolveImplicitSetNamesCollation(ses, value)
+				if evalErr != nil {
+					return evaluatedAssignment{}, evalErr
+				}
+			}
+			if evalErr = validateCharsetSystemVariable("collation_connection", setNamesCollation); evalErr != nil {
+				return evaluatedAssignment{}, evalErr
+			}
 		}
 		return evaluatedAssignment{
 			assign:                  assign,
 			value:                   value,
+			setNamesCollation:       setNamesCollation,
 			userVarIsBin:            isBin,
 			userVarRuntimeDomain:    runtimeDomain,
 			valueType:               valueType,
@@ -1648,9 +1702,12 @@ func doSetVar(
 		}
 		replayable := !preparedExpression && sql != "" && execCtx.singleStatementQuery
 		if assign.SetNames {
-			for _, name := range []string{
+			names := make([]string, 0, 4)
+			names = append(names,
 				"character_set_client", "character_set_connection", "character_set_results",
-			} {
+			)
+			names = append(names, "collation_connection")
+			for _, name := range names {
 				mark(name, replayable)
 			}
 			return
@@ -1687,16 +1744,22 @@ func doSetVar(
 
 		//TODO : fix SET NAMES after parser is ready
 		if assign.SetNames {
-			//replaced into three system variable:
-			//character_set_client, character_set_connection, and character_set_results
+			// SET NAMES updates the three character-set variables. An explicit
+			// COLLATE clause additionally updates collation_connection below.
 			replacedBy := []string{
 				"character_set_client", "character_set_connection", "character_set_results",
 			}
 			for _, rb := range replacedBy {
-				err = setVarFunc(assign.System, assign.Global, rb, value, sql)
+				err = setVarFunc(true, false, rb, value, sql)
 				if err != nil {
 					return err
 				}
+			}
+			// SET NAMES always changes the implicit connection collation when
+			// COLLATE is omitted. Explicit COLLATE and DEFAULT resolution were
+			// validated while evaluating the assignment, before any writes.
+			if err = setVarFunc(true, false, "collation_connection", item.setNamesCollation, sql); err != nil {
+				return err
 			}
 		} else if scope, isTxnIsolation := transactionIsolationAssignmentScope(assign); isTxnIsolation {
 			switch scope {
@@ -2253,6 +2316,9 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			}
 		} else {
 			if value, err = ses.GetSessionSysVar(name); err != nil {
+				if name == "collation_database" || name == "character_set_database" {
+					return err
+				}
 				continue
 			}
 		}
@@ -2409,9 +2475,10 @@ func executeAnalyzeDerivedQuery(ses *Session, outerExecCtx *ExecCtx, sql string)
 		policy = outerExecCtx.input.rewritePolicy
 	}
 	derivedInput := &UserInput{
-		sql:                       sql,
-		rewritePolicy:             policy,
-		rewritePolicyMaterialized: true,
+		sql:                        sql,
+		rewritePolicy:              policy,
+		rewritePolicyMaterialized:  true,
+		sameStatementAuthorization: true,
 	}
 	if err := doComQuery(ses, &tempExecCtx, derivedInput); err != nil {
 		return nil, err
@@ -4747,6 +4814,21 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
+	// SessionInfo is reused across statements.  Role changes update the
+	// session's TenantInfo, so refresh the trusted names at the same boundary
+	// as the other statement-scoped fields before planning or execution.
+	if ses != nil {
+		if tenant := ses.GetTenantInfo(); tenant != nil {
+			// Read both names under one lock. Besides avoiding two lock
+			// acquisitions on every statement, this keeps the account/role pair
+			// from being sampled across a concurrent role transition.
+			tenant.mu.Lock()
+			account, role := tenant.getTenantUnsafe(), tenant.getDefaultRoleUnsafe()
+			tenant.mu.Unlock()
+			proc.Base.SessionInfo.Account = account
+			proc.Base.SessionInfo.Role = role
+		}
+	}
 	limit, ok := process.WarningRetentionLimitFromContext(proc.GetTopContext())
 	if !ok {
 		limit, ok = resolveSessionWarningRetentionLimit(ses)
@@ -4912,6 +4994,37 @@ func prepareSQLModeStagedExecution(
 	return first, next, true, nil
 }
 
+// Validate ordinary batches eagerly, as before, but execute their original raw
+// continuations one at a time so each statement captures current authorization.
+func prepareAuthorizationStagedExecution(ctx context.Context, ses FeSession, p *mysql.MySQLParser, sql string) (string, mysql.SQLContinuation, bool, error) {
+	if !mysql.MayHaveMultipleStatements(sql, sessionSQLModeForParser(ses)) {
+		// Preserve the single-statement plan-cache path. Its normal parser owns
+		// syntax validation on a miss; staging must not build a discarded AST.
+		return "", mysql.SQLContinuation{}, false, nil
+	}
+	if mayNeedSQLModeStaging(sql) {
+		first, rest, staged, err := prepareSQLModeStagedExecution(ctx, ses, p, sql)
+		if err != nil || staged {
+			return first, rest, staged, err
+		}
+	}
+	stmts, err := p.ParseWithSQLMode(ctx, sql, parserLowerCaseTableNames(ses), sessionSQLModeForParser(ses))
+	if err != nil {
+		return "", mysql.SQLContinuation{}, false, err
+	}
+	multiple := len(stmts) > 1
+	freeStatements(stmts)
+	if !multiple {
+		return "", mysql.SQLContinuation{}, false, nil
+	}
+	stmt, first, rest, err := p.ParseFirstStatementWithSQLMode(ctx, mysql.SQLContinuation{SQL: sql}, parserLowerCaseTableNames(ses), sessionSQLModeForParser(ses))
+	if err != nil {
+		return "", mysql.SQLContinuation{}, false, err
+	}
+	stmt.Free()
+	return first, rest, true, nil
+}
+
 func nextSQLModeStatementInput(
 	ctx context.Context,
 	ses FeSession,
@@ -5013,6 +5126,11 @@ func authenticateUserCanExecuteStatement(reqCtx context.Context, ses *Session, s
 		return stats, nil
 	}
 	if ses.GetTenantInfo() != nil {
+		if _, ok := stmt.(*tree.AlterDatabase); ok {
+			// A persistent database-default change must recheck both the active role
+			// membership and its current privileges, including prepared execution.
+			ses.InvalidatePrivilegeCache()
+		}
 		ses.SetPrivilege(determinePrivilegeSetOfStatement(stmt))
 		if !canCreateMongoDBTableMapping(stmt, ses.GetTenantInfo()) {
 			// The privilege model has no external-connection USAGE object yet.
@@ -6068,6 +6186,31 @@ func rollbackWholeTxnOnPreExecutionError(ses FeSession, execCtx *ExecCtx, retErr
 }
 
 func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error) {
+	requestCtx := execCtx.reqCtx
+	epoch := authorizationEpochFor(requestCtx, ses)
+	adopt := false
+	ownsEpoch := true
+	if epoch != nil {
+		epoch.mu.Lock()
+		adopt = epoch.exec == execCtx && !epoch.entered && !epoch.ended
+		if input.sameStatementAuthorization && !epoch.ended && epoch.identity == rewriteRuleSessionIdentity(ses) {
+			adopt, ownsEpoch = true, false
+		}
+		if adopt {
+			epoch.entered = true
+		}
+		epoch.mu.Unlock()
+	}
+	if !adopt && requestCtx != nil {
+		execCtx.reqCtx, epoch = beginAuthorizationEpoch(requestCtx, ses, execCtx)
+		epoch.entered = true
+	}
+	defer func() {
+		if epoch != nil && ownsEpoch {
+			epoch.end()
+		}
+		execCtx.reqCtx = requestCtx
+	}()
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
 	defer ses.ClearDDLOwnerRoleID()
@@ -6173,9 +6316,6 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 	}()
 
 	if ses.GetTenantInfo() != nil {
-		proc.Base.SessionInfo.Account = ses.GetTenantInfo().GetTenant()
-		proc.Base.SessionInfo.Role = ses.GetTenantInfo().GetDefaultRole()
-
 		if len(ses.GetTenantInfo().GetVersion()) != 0 {
 			proc.Base.SessionInfo.Version = ses.GetTenantInfo().GetVersion()
 		}
@@ -6194,13 +6334,21 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	execCtx.reqCtx = statistic.ContextWithStatsInfo(execCtx.reqCtx, statsInfo)
 	execCtx.isIssue3482 = input.isIssue3482Sql()
+	var statementBaseCtx context.Context
+	var statementParentCtx context.Context
+	if epoch != nil {
+		// A sibling must descend from the request, not the cancelled previous
+		// statement. Capture this owner before any implicit commit replaces epoch;
+		// single statements do not need the sibling's diagnostic context nodes.
+		statementParentCtx = epoch.parent
+	}
 
 	executionInput := input
 	stagedSQLMode := false
 	stagedRemaining := mysql.SQLContinuation{}
 	var err error
-	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() && mayNeedSQLModeStaging(input.getSql()) {
-		first, remaining, staged, stageErr := prepareSQLModeStagedExecution(
+	if ses.GetCmd() == COM_QUERY && input.getStmt() == nil && !input.isInternal() && strings.Contains(input.getSql(), ";") {
+		first, remaining, staged, stageErr := prepareAuthorizationStagedExecution(
 			execCtx.reqCtx,
 			ses,
 			ses.GetMySQLParser(),
@@ -6214,6 +6362,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 			executionInput = newSQLStatementInput(input, first)
 		}
 	}
+	rawInputs := []*UserInput{executionInput}
 	if err == nil {
 		executionInput, err = rewriteSQLStatementInput(execCtx.reqCtx, ses, executionInput)
 		if !stagedSQLMode {
@@ -6431,10 +6580,60 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// has a current statement identity. Authorization and plan construction
 		// still run after this boundary, matching the DDL implicit-commit
 		// contract while keeping instrumentation failures side-effect free.
-		if execCtx.implicitCommitBefore {
+		// Replacement BEGIN also commits an existing transaction. Keep it separate
+		// from implicitCommitBefore, which additionally commits DDL at statement
+		// completion and must not commit the new transaction opened by BEGIN.
+		_, replacementBegin := stmt.(*tree.BeginTransaction)
+		replacementBegin = replacementBegin && isTopLevelClientStatement(ses, execCtx, currentInput) && !ses.GetIsInternal()
+		if execCtx.implicitCommitBefore || replacementBegin {
+			beforeCommit := ses.getLastCommitTS()
 			if err = ses.GetTxnHandler().commitBeforeStatement(execCtx); err != nil {
+				if replacementBegin && moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
+					// Preserve createUnsafe's existing BEGIN error contract.
+					err = moerr.NewInternalError(execCtx.reqCtx, writeWriteConflictsErrorInfo())
+				}
 				logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
 				return err
+			}
+			if epoch != nil && !ses.getLastCommitTS().Equal(beforeCommit) {
+				// The commit is a real causal frontier transition. Rebuild the
+				// complete policy and wrapper from raw text before authorization;
+				// never combine pre-commit rewriting with post-commit grants.
+				transition := authorizationTransitionContext{Context: execCtx.reqCtx, lifetime: epoch.parent}
+				epoch.end()
+				execCtx.reqCtx, epoch = beginAuthorizationEpoch(transition, ses, execCtx)
+				epoch.entered = true
+				proc.ReplaceTopCtx(execCtx.reqCtx)
+				refreshed := *rawInputs[i]
+				refreshed.rewritePolicy, err = captureRewritePolicy(execCtx.reqCtx, ses)
+				if err != nil {
+					return err
+				}
+				currentInput, err = rewriteSQLStatementInput(execCtx.reqCtx, ses, &refreshed)
+				if err != nil {
+					return err
+				}
+				execCtx.input = currentInput
+				rebuilt, buildErr := GetComputationWrapper(execCtx, ses.GetDatabaseName(), ses.GetUserName(), pu.StorageEngine, proc, ses)
+				if buildErr != nil {
+					return buildErr
+				}
+				if len(rebuilt) != 1 {
+					for _, w := range rebuilt {
+						w.Free()
+					}
+					return moerr.NewInternalError(execCtx.reqCtx, "implicit commit rebuilt unexpected statement count")
+				}
+				cw.Free()
+				cw, cws[i] = rebuilt[0], rebuilt[0]
+				stmt = cw.GetAst()
+				execCtx.stmt = stmt
+				effectiveStmt, effectiveDefaultDatabase, resolveErr = effectiveStatementForTxn(execCtx.reqCtx, ses, stmt)
+				if resolveErr != nil {
+					return resolveErr
+				}
+				execCtx.effectiveTxnStatement, execCtx.effectiveTxnDefaultDatabase = effectiveStmt, effectiveDefaultDatabase
+				installStatementRemap(execCtx, cw)
 			}
 		}
 
@@ -6530,6 +6729,16 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 
 		if stagedSQLMode && hasMoreStatements {
+			if epoch != nil {
+				if statementBaseCtx == nil {
+					statementBaseCtx = statistic.ContextWithStatsInfo(
+						defines.AttachDDLOwnerRoleIDProvider(appendStatementAt(statementParentCtx, beginInstant), ses), statsInfo)
+				}
+				epoch.end()
+				execCtx.reqCtx, epoch = beginAuthorizationEpoch(statementBaseCtx, ses, execCtx)
+				epoch.entered = true
+				proc.ReplaceTopCtx(execCtx.reqCtx)
+			}
 			// SET expressions may execute an internal query, which temporarily
 			// replaces the compiler context's ExecCtx. Restore this outer query
 			// before planning the next staged statement.
@@ -6548,6 +6757,12 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				}
 				return recordParseError(newSQLStatementInput(input, failedSQL), nextErr)
 			}
+			nextInput.rewritePolicy, nextErr = captureRewritePolicy(execCtx.reqCtx, ses)
+			nextInput.rewritePolicyMaterialized = false
+			if nextErr != nil {
+				return recordParseError(nextInput, nextErr)
+			}
+			rawInputs = append(rawInputs, nextInput)
 			nextInput, nextErr = rewriteSQLStatementInput(execCtx.reqCtx, ses, nextInput)
 			if nextErr != nil {
 				return recordParseError(nextInput, nextErr)
@@ -6824,9 +7039,18 @@ func ExecRequest(ses *Session, execCtx *ExecCtx, req *Request) (resp *Response, 
 	defer ses.ExitFPrint(FPExecRequest)
 
 	var span trace.Span
+	requestCtx := execCtx.reqCtx
 	execCtx.reqCtx, span = trace.Start(execCtx.reqCtx, "ExecRequest",
 		trace.WithKind(trace.SpanKindStatement))
 	defer span.End()
+	if execCtx.reqCtx != nil {
+		var epoch *authorizationEpoch
+		execCtx.reqCtx, epoch = beginAuthorizationEpoch(execCtx.reqCtx, ses, execCtx)
+		defer func() {
+			epoch.end()
+			execCtx.reqCtx = requestCtx
+		}()
+	}
 
 	var sql string
 	ses.Debugf(execCtx.reqCtx, "cmd %v", req.GetCmd())

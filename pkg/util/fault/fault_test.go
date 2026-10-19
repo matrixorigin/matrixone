@@ -112,6 +112,49 @@ func TestCount(t *testing.T) {
 	Disable()
 }
 
+// GETCOUNT executes in the caller, while triggers update the target in the
+// fault-map goroutine. Exercise both public paths concurrently.
+func TestCountConcurrentTriggers(t *testing.T) {
+	const domain = DomainTest
+	const iterations = 1000
+	ctx := t.Context()
+	require.True(t, EnableDomain(domain))
+	defer DisableDomain(domain)
+	require.NoError(t, AddFaultPointInDomain(ctx, domain, "target", ":::", "return", 0, "", false))
+	require.NoError(t, AddFaultPointInDomain(ctx, domain, "count", ":::", "getcount", 0, "target", false))
+	done := make(chan struct{})
+	hits := 0
+	go func() {
+		defer close(done)
+		for range iterations {
+			if _, _, ok := TriggerFaultInDomain(domain, "target"); ok {
+				hits++
+			}
+		}
+	}()
+	// Join before disabling the domain, including an early assertion failure.
+	defer func() { <-done }()
+	var previous int64
+	for range iterations {
+		count, _, ok := TriggerFaultInDomain(domain, "count")
+		require.True(t, ok)
+		require.GreaterOrEqual(t, count, previous)
+		require.LessOrEqual(t, count, int64(iterations))
+		previous = count
+	}
+	<-done
+	require.Equal(t, iterations, hits)
+	count, _, ok := TriggerFaultInDomain(domain, "count")
+	require.True(t, ok)
+	require.Equal(t, int64(iterations), count)
+	removed, err := RemoveFaultPointFromDomain(ctx, domain, "target")
+	require.NoError(t, err)
+	require.True(t, removed)
+	count, _, ok = TriggerFaultInDomain(domain, "count")
+	require.True(t, ok)
+	require.Zero(t, count, "a removed target has no retained count")
+}
+
 func wait(t *testing.T) {
 	_, _, ok := TriggerFault("w")
 	require.Equal(t, true, ok)

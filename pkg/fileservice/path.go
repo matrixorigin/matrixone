@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
@@ -44,7 +45,83 @@ func (p Path) ServiceString() string {
 	return strings.Join(append([]string{p.Service}, p.ServiceArguments...), ",")
 }
 
-func ParsePath(s string) (path Path, err error) {
+// EncodeServiceCSV encodes a service record with the standard CSV writer's
+// quoting and trailing LF, avoiding its streaming buffer for simple fields.
+func EncodeServiceCSV(fields []string) (string, error) {
+	size := 1
+	for i, field := range fields {
+		first, _ := utf8.DecodeRuneInString(field)
+		// Bound the preflight scan; large or quoted fields use the standard writer.
+		if len(field) > 4096 || field == `\.` || strings.ContainsAny(field, ",\"\r\n") || unicode.IsSpace(first) {
+			var buf strings.Builder
+			w := csv.NewWriter(&buf)
+			if err := w.Write(fields); err != nil {
+				return "", err
+			}
+			w.Flush()
+			return buf.String(), w.Error()
+		}
+		size += len(field)
+		if i > 0 {
+			size++
+		}
+	}
+	var buf strings.Builder
+	buf.Grow(size)
+	for i, field := range fields {
+		if i > 0 {
+			buf.WriteByte(',')
+		}
+		buf.WriteString(field)
+	}
+	buf.WriteByte('\n')
+	return buf.String(), nil
+}
+
+// EncodeServicePath formats decoded service fields and a file expression using
+// the existing CSV path representation. No fields means a raw file expression.
+func EncodeServicePath(fields []string, file string) (string, error) {
+	if len(fields) == 0 {
+		return file, nil
+	}
+	service, err := EncodeServiceCSV(fields)
+	if err != nil {
+		return "", err
+	}
+	return JoinPath(service, file), nil
+}
+
+// ParsePathFromServiceFields interprets decoded fields without serializing and
+// reparsing them when the CSV round trip would preserve their values.
+// Returned arguments do not alias the caller's field scratch.
+func ParsePathFromServiceFields(fields []string, file string) (Path, error) {
+	fallback := len(fields) == 0 || strings.Contains(file, ServiceNameSeparator) || len(fields) == 1 && fields[0] == ""
+	for _, field := range fields {
+		if strings.ContainsAny(field, "\r\n") {
+			fallback = true
+			break
+		}
+	}
+	if fallback {
+		// Preserve named/local paths, the last-colon grammar, CSV newline
+		// normalization and the single empty record's existing behavior.
+		path, err := EncodeServicePath(fields, file)
+		if err != nil {
+			return Path{}, err
+		}
+		return ParsePath(path)
+	}
+	// Match ParsePath's ownership: the returned arguments do not retain the
+	// caller's scratch. Only this direct branch needs an argument allocation;
+	// the compatibility parser already allocates its own arguments.
+	arguments := make([]string, len(fields)-1)
+	copy(arguments, fields[1:])
+	return validatePath(Path{Service: fields[0], ServiceArguments: arguments, File: file})
+}
+
+// ParseETLService parses the provider without certifying the file expression.
+// LOAD admission uses it before the existing glob expansion; concrete I/O uses ParsePath.
+func ParseETLService(s string) (path Path, err error) {
 	// split
 	i := strings.LastIndex(s, ServiceNameSeparator)
 	if i == -1 {
@@ -59,6 +136,18 @@ func ParsePath(s string) (path Path, err error) {
 		path.File = s[i+1:]
 	}
 
+	return
+}
+
+func ParsePath(s string) (path Path, err error) {
+	path, err = ParseETLService(s)
+	if err != nil {
+		return
+	}
+	return validatePath(path)
+}
+
+func validatePath(path Path) (Path, error) {
 	// validate
 	for _, r := range path.File {
 		// most common patterns first
@@ -75,13 +164,12 @@ func ParsePath(s string) (path Path, err error) {
 		if r > unicode.MaxASCII && unicode.IsPrint(r) {
 			continue
 		}
-		err = moerr.NewInvalidPathNoCtx(path.File)
-		return
+		return path, moerr.NewInvalidPathNoCtx(path.File)
 	}
 
 	path.File = strings.TrimLeft(path.File, "/") // trim leading /
 
-	return
+	return path, nil
 }
 
 func canonicalFilePaths(paths []string) ([]string, error) {
@@ -97,6 +185,13 @@ func canonicalFilePaths(paths []string) ([]string, error) {
 }
 
 func parseService(str string) (service string, arguments []string, err error) {
+	// A nonempty unquoted single record needs no CSV buffering. Keep the
+	// original input for the CSV reader's quoting, blank-line and CRLF rules.
+	record := strings.TrimSuffix(str, "\n")
+	if record != "" && !strings.ContainsAny(record, "\"\r\n") {
+		fields := strings.Split(record, ",")
+		return fields[0], fields[1:], nil
+	}
 	r := csv.NewReader(strings.NewReader(str))
 	records, err := r.ReadAll()
 	if err != nil {

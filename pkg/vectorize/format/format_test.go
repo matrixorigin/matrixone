@@ -446,3 +446,14 @@ func TestForamtDECH(t *testing.T) {
 		})
 	}
 }
+
+func TestSupportedLocaleValidation(t *testing.T) {
+	for locale := range localeToFormatFunction {
+		require.True(t, IsValidLocale(locale), locale)
+		require.True(t, IsValidLocale(strings.ToUpper(locale)), locale)
+		require.True(t, IsValidLocale(strings.ToLower(locale)), locale)
+	}
+	for _, locale := range []string{"", "NULL", "zz_ZZ", "en_US_extra", strings.Repeat("X", 129)} {
+		require.False(t, IsValidLocale(locale), locale)
+	}
+}

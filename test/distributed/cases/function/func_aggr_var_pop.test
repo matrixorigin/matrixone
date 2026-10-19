@@ -302,4 +302,19 @@ select * from test06;
 select variance(a) from test06;
 drop table test06;
 
+# test for year type: statistical aggregates accept year and treat it as numeric (#30181)
+drop table if exists test_year;
+create table test_year(y year);
+insert into test_year values (2020), (2021), (2022);
+select var_pop(y) from test_year;
+select var_samp(y) from test_year;
+select stddev_pop(y) from test_year;
+select stddev_samp(y) from test_year;
+select variance(y) from test_year;
+select var_pop(distinct y) from test_year;
+insert into test_year values (NULL);
+select var_pop(y) from test_year;
+select var_pop(y) from test_year where 1=0;
+drop table test_year;
+
 drop database test;

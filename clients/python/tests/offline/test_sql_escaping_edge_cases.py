@@ -425,15 +425,38 @@ class TestSQLEscapingEdgeCases:
         sql = client._build_batch_insert_sql("my_table", data_list)
 
         # Expected format
-        expected = "INSERT INTO my_table (id, json_col) VALUES ('1', '{\"key\":\"value\"}')"
+        expected = "INSERT INTO my_table (id, json_col) VALUES (1, '{\"key\":\"value\"}')"
 
         # Verify structure
         assert "INSERT INTO my_table (id, json_col) VALUES" in sql
-        assert "'1'" in sql
+        assert sql == expected
         assert 'key' in sql and 'value' in sql
 
         print(f"Generated SQL:\n{sql}")
         print(f"\nExpected pattern:\n{expected}\n")
+
+    def test_batch_preserves_scalar_types_and_text_encoding(self):
+        from decimal import Decimal
+
+        import numpy as np
+
+        row = {
+            'integer': np.int64(7),
+            'floating': np.float32(1.0),
+            'precise': Decimal('12345678901234567890.125'),
+            'flag': True,
+            'numpy_flag': np.bool_(False),
+            'text': '1.0',
+            'quoted': "O'Brien",
+            'json': {'name': "O'Brien"},
+            'vector': [1, 2],
+            'missing': None,
+        }
+        assert BaseMatrixOneClient()._build_batch_insert_sql('t', [row]) == (
+            'INSERT INTO t (integer, floating, precise, flag, numpy_flag, text, quoted, json, vector, missing) '
+            'VALUES (7, 1.0, 12345678901234567890.125, True, False, '
+            "'1.0', 'O''Brien', '{\"name\": \"O''Brien\"}', '[1,2]', NULL)"
+        )
 
     def test_percent_in_insert_then_exec_driver_sql(self):
         """

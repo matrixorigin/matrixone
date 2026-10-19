@@ -43,13 +43,18 @@ type lifecycleDatabaseName struct {
 // admitBroadTableLifecycleRC enters the broad gate before COPY ALTER or
 // TRUNCATE takes table locks. Re-resolve after the applied frontier: the
 // relation read before admission cannot establish its current identity.
-func (c *Compile) admitBroadTableLifecycleRC(database, table string, expectedID uint64) (engine.Database, engine.Relation, error) {
+func (c *Compile) admitBroadTableLifecycleRC(
+	database, table string, expectedID uint64, privatePreparationLockTables ...uint64,
+) (engine.Database, engine.Relation, error) {
 	ctx := c.proc.Ctx
 	accountID, err := defines.GetAccountId(ctx)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err = c.admitLifecycleRC([]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}}, true); err != nil {
+	if err = c.admitLifecycleRC(
+		[]lifecycleDatabaseName{{accountID: accountID, name: database, mode: lock.LockMode_Shared}},
+		true, privatePreparationLockTables...,
+	); err != nil {
 		return nil, nil, err
 	}
 	db, err := c.e.Database(ctx, database, c.proc.GetTxnOperator())
@@ -75,7 +80,9 @@ func (c *Compile) admitBroadTableLifecycleRC(database, table string, expectedID 
 // admitLifecycleRC takes the stable registry identity, the SNAPSHOT key, and
 // complete database-name domain before the caller reads mutable catalog facts.
 // All locks remain owned by the caller's transaction until its terminal path.
-func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnapshotGate bool) error {
+func (c *Compile) admitLifecycleRC(
+	names []lifecycleDatabaseName, exclusiveSnapshotGate bool, allowedRetainedLockTables ...uint64,
+) error {
 	ctx := c.proc.Ctx
 	txnOp := c.proc.GetTxnOperator()
 	if txnOp == nil || !txnOp.Txn().IsPessimistic() || !txnOp.Txn().IsRCIsolation() {
@@ -97,12 +104,14 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 	})
 	// Inspect retained ownership before adding C. Retained data/database/name
 	// locks can form a reverse edge even without a prior registry-key lock.
+	// Only a caller that can prove every lock belongs to private preparation
+	// may wait behind the broad gate.
 	retained, err := txnOp.Snapshot()
 	if err != nil {
 		return err
 	}
-	var waitPolicy []lock.WaitPolicy
-	if len(retained.LockTables) > 0 {
+	waitPolicy := []lock.WaitPolicy{lock.WaitPolicy_Wait}
+	if len(retained.LockTables) > 0 && !allRetainedLockTablesAllowed(retained.LockTables, allowedRetainedLockTables) {
 		waitPolicy = []lock.WaitPolicy{lock.WaitPolicy_FastFail}
 	}
 	systemCtx := context.WithValue(
@@ -183,6 +192,63 @@ func (c *Compile) admitLifecycleRC(names []lifecycleDatabaseName, exclusiveSnaps
 		return moerr.NewTxnNeedRetryWithDefChangedNoCtx()
 	}
 	return c.verifyLifecycleRegistryRow()
+}
+
+func allRetainedLockTablesAllowed(
+	retained []lock.LockTable, allowedRetainedLockTables []uint64,
+) bool {
+	if len(allowedRetainedLockTables) == 0 {
+		return false
+	}
+	allowed := make(map[uint64]struct{}, len(allowedRetainedLockTables))
+	for _, tableID := range allowedRetainedLockTables {
+		allowed[tableID] = struct{}{}
+	}
+	for _, table := range retained {
+		if _, ok := allowed[table.Table]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *Compile) retainedLockTableIDs() (map[uint64]struct{}, error) {
+	snapshot, err := c.proc.GetTxnOperator().Snapshot()
+	if err != nil {
+		return nil, err
+	}
+	ids := make(map[uint64]struct{}, len(snapshot.LockTables))
+	for _, table := range snapshot.LockTables {
+		ids[table.Table] = struct{}{}
+	}
+	return ids, nil
+}
+
+func (c *Compile) privatePreparationLockTables(
+	before map[uint64]struct{},
+) ([]uint64, error) {
+	if before == nil {
+		return nil, moerr.NewInternalError(c.proc.Ctx, "missing ALTER COPY preparation lock baseline")
+	}
+	current, err := c.retainedLockTableIDs()
+	if err != nil {
+		return nil, err
+	}
+	workspace, ok := c.proc.GetTxnOperator().GetWorkspace().(client.TableCreationView)
+	if !ok {
+		return nil, nil
+	}
+	private := make([]uint64, 0, len(current))
+	for tableID := range current {
+		if _, preexisting := before[tableID]; preexisting {
+			continue
+		}
+		if workspace.IsTableCreatedInTxn(tableID) {
+			private = append(private, tableID)
+		}
+	}
+	sort.Slice(private, func(i, j int) bool { return private[i] < private[j] })
+	return private, nil
 }
 
 // lockLifecycleIdentityRC pins the registry's physical relation before any
