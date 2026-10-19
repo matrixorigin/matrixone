@@ -64,3 +64,34 @@ func TestJsonParseExact(t *testing.T) {
 	ok, _ := fc.Run()
 	require.True(t, ok)
 }
+
+// Pin the opt-in parsing boundary against the public explicit CAST executor.
+// Existing CAST callers keep their float semantics; exact parsing must not be
+// implemented as an alias, nor should it silently change those callers.
+func TestJsonParseExactDiffersFromExplicitCast(t *testing.T) {
+	for _, tc := range []struct {
+		input, castText     string
+		exactType, castType bytejson.TpCode
+	}{
+		{"1.000000000000000001", "1", bytejson.TpCodeDecimal, bytejson.TpCodeFloat64},
+		{"9007199254740993.001", "9007199254740994", bytejson.TpCodeDecimal, bytejson.TpCodeFloat64},
+		{"1e3", "1000", bytejson.TpCodeDecimal, bytejson.TpCodeFloat64},
+		// Fitting integers already remain exact under CAST, even above 2^53.
+		{"9007199254740993", "9007199254740993", bytejson.TpCodeInt64, bytejson.TpCodeInt64},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			input := NewFunctionTestInput(types.T_varchar.ToType(), []string{tc.input}, nil)
+			exact := runJsonFunctionWithSelectList(t, proc, []FunctionTestInput{input},
+				types.T_json.ToType(), JsonParseExact, nil)
+			cast := runJsonFunctionWithSelectList(t, proc, []FunctionTestInput{input,
+				NewFunctionTestInput(types.T_json.ToType(), []string{}, nil)},
+				types.T_json.ToType(), NewExplicitCast, nil)
+			exactJSON, castJSON := types.DecodeJson(exact.GetBytesAt(0)), types.DecodeJson(cast.GetBytesAt(0))
+			require.Equal(t, tc.exactType, exactJSON.Type)
+			require.Equal(t, tc.input, exactJSON.String())
+			require.Equal(t, tc.castType, castJSON.Type)
+			require.Equal(t, tc.castText, castJSON.String())
+		})
+	}
+}

@@ -36,6 +36,34 @@ SELECT CAST(JSON_EXTRACT(
 
 Regular parsing retains its previous conversion behavior. Programmatic `json.Number` construction also uses the number parser to correct exponent/decimal classification and reject invalid/nonfinite numeric text. Native FLOAT/DOUBLE values retain floating-point semantics.
 
+### Difference from `CAST(text AS JSON)`
+
+This is an opt-in numeric parsing contract, rather than a function alias. The
+existing explicit CAST dispatches textual input through
+`types.ParseSliceToByteJson`: fractional/exponent text becomes FLOAT64. The exact
+parser retains that text in the existing DECIMAL JSON payload. Changing CAST
+itself would change the representation and results of existing SQL callers.
+
+| VARCHAR input | `CAST(input AS JSON)` | `JSON_PARSE_EXACT(input)` |
+| --- | --- | --- |
+| `1.000000000000000001` | `1` (FLOAT64) | `1.000000000000000001` (DECIMAL) |
+| `9007199254740993.001` | `9007199254740994` (FLOAT64) | `9007199254740993.001` (DECIMAL) |
+| `1e3` | `1000` (FLOAT64) | `1e3` (DECIMAL) |
+| `9007199254740993` | `9007199254740993` (INT64) | `9007199254740993` (INT64) |
+
+The final row is a compatibility control: CAST already preserves fitting integer
+text above 2^53; the precision issue concerns fractional/exponent text and integers
+outside the native integer ranges. Both expressions still return the JSON SQL
+type, propagate SQL NULL and reject malformed JSON text.
+`TestJsonParseExactDiffersFromExplicitCast` executes both vector functions and
+checks their visible JSON text and stored numeric tags against these literals.
+
+Use the exact function at the original text ingestion boundary. It accepts the
+string family, not an already-rounded FLOAT or JSON expression; wrapping a CAST
+result cannot recover lost digits. CAST remains the general SQL type conversion
+operation (including JSON identity conversion and nontext inputs). The exact
+parser introduces neither a new SQL type nor arbitrary-precision SQL arithmetic.
+
 The SQL function ID is appended after the IDs allocated by current main; existing IDs are preserved. The registry and pinned ID test must be updated together.
 
 ### Remote execution and durable admission
