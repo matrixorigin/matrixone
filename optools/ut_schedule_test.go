@@ -998,7 +998,17 @@ func TestHeavyPlanCancellationStopsWritersBeforeMerge(t *testing.T) {
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 trap handle_ut_termination TERM
-trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
+function check_cancellation() {
+ status=$?
+ if [[ "$status" == 143 ]]; then
+  [[ -z "$CURRENT_UT_PID$PLAN_RACE_JOB_PID" ]] || status=94
+  if ut_process_group_alive "$writer_pid" || ut_process_group_alive "$plan_pid"; then status=95; fi
+ fi
+ printf '\nCANCEL_REPORT\n'
+ cat "$UT_REPORT"
+ exit "$status"
+}
+trap check_cancellation EXIT
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
 printf 'engine\n' > "$ENGINE_RACE_REPORT"
 mkfifo "$CASE_DIR/writer-ready" "$CASE_DIR/writer-wait"
@@ -1009,6 +1019,7 @@ start_ut_command heavy 'heavy writer' bash -c '
  printf "heavy\n" >&9
  IFS= read -r _ <&8
 '
+writer_pid=$CURRENT_UT_PID
 function run_plan_race_shards() {
  trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; ut_test_publish_completion; exit 143' TERM
  printf 'plan-start\n' > "$PLAN_RACE_REPORT"
@@ -1016,6 +1027,7 @@ function run_plan_race_shards() {
  IFS= read -r _ <&8
 }
 start_plan_race example/plan
+plan_pid=$PLAN_RACE_JOB_PID
 IFS= read -r -t 10 first <&9 || exit 91
 IFS= read -r -t 10 second <&9 || exit 92
 [[ "$first:$second" == heavy:plan || "$first:$second" == plan:heavy ]] || exit 93

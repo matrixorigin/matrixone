@@ -120,10 +120,10 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
-	return encodeRemoteScopeWithVectorProtocol(s, proc, nil)
+	return encodeRemoteScopeWithProtocol(s, proc, nil)
 }
 
-func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiredVectorProtocol *int64) ([]byte, error) {
+func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProtocol *int64) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
 		return nil, err
@@ -134,7 +134,7 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	if err = validateRemoteBoundStringVariables(p); err != nil {
 		return nil, err
 	}
-	if err = validateVectorPartitionDestinationWithResult(proc, p, requiredVectorProtocol); err != nil {
+	if err = validateVectorPartitionDestinationWithResult(proc, p, requiredProtocol); err != nil {
 		return nil, err
 	}
 	if err = validateGroupingTransportDestinations(proc, p); err != nil {
@@ -149,6 +149,9 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
+	}
+	if requiredProtocol != nil && (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion122)
 	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
@@ -840,6 +843,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			TargetRowIdCol:               t.TargetRowIDCol,
 		}
 	case *lockop.LockOp:
+		if t.RequiresCoordinatorExecution() {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED lock operators must execute on the transaction coordinator")
+		}
 		in.LockOp = &pipeline.LockOp{
 			Targets: t.CopyToPipelineTarget(),
 		}
@@ -1435,8 +1442,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetLockOp()
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
+			if target.GetNoWait() || target.GetSkipLocked() {
+				return nil, moerr.NewNotSupportedNoCtx(
+					"remote NOWAIT and SKIP LOCKED lock operators are not supported")
+			}
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			lockArg.AddLockTargetWithPolicy(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetNoWait(), target.GetSkipLocked())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
@@ -2359,6 +2370,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.DecimalIntegerDivisionSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion121) {
 		return moerr.NewNotSupportedNoCtx("decimal integer division requires MORPC protocol version 121")
+	}
+	if (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion122) {
+		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 122")
 	}
 	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
 		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")

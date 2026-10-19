@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/lockop"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/stage"
@@ -466,6 +467,30 @@ func TestCompileLockMergesMultiScopeTpPlan(t *testing.T) {
 	require.Equal(t, single, got)
 	_, ok = got[0].RootOp.(*lockop.LockOp)
 	require.True(t, ok)
+
+	// A single remote scan is still gathered before a nonblocking LockOp so
+	// lock acquisition and transaction bookkeeping stay on the coordinator.
+	c = newCompile()
+	remote := &Scope{
+		Magic:    Remote,
+		Proc:     c.proc.NewNoContextChildProc(0),
+		NodeInfo: engine.Node{Addr: "cn2:6001", Mcpu: 1},
+		RootOp:   table_scan.NewArgument(),
+	}
+	nonblocking := &plan.Node{LockTargets: []*plan.LockTarget{{
+		TableId:       42,
+		PrimaryColTyp: plan.Type{Id: int32(types.T_int64)},
+		NoWait:        true,
+	}}}
+	got, err = c.compileLock(nonblocking, []*Scope{remote})
+	require.NoError(t, err)
+	require.Len(t, got, 1)
+	_, ok = got[0].RootOp.(*lockop.LockOp)
+	require.True(t, ok)
+	require.Len(t, got[0].PreScopes, 1)
+	require.Same(t, remote, got[0].PreScopes[0])
+	_, isLock := remote.RootOp.(*lockop.LockOp)
+	require.False(t, isLock, "remote workers must not execute a nonblocking LockOp")
 }
 
 // A remote whole-file shard is rebuilt on another CN from CreateSql alone.  For

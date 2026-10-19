@@ -607,11 +607,16 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		// above the representable calendar even when the input is NOT NULL.
 		return false
 	case DATE:
-		// Typed zero DATE/DATETIME values become NULL under NO_ZERO_DATE.
-		if oid == 0 || oid == 2 {
+		// Typed zero dates can become NULL under NO_ZERO_DATE, and string
+		// conversions synthesize NULL for malformed input.
+		if oid == 0 || oid == 2 || oid == 3 || oid == 4 {
 			return false
 		}
 	case CAST:
+		if (oid == 0 || oid == 1) && len(args) == 2 &&
+			types.T(args[0].Typ.Id).IsMySQLString() && types.T(args[1].Typ.Id) == types.T_datetime {
+			return false
+		}
 		// Explicit typed DATE casts share the DATE conversion policy. Legacy
 		// implicit and assignment casts keep their existing nullability.
 		if oid == 1 && len(args) == 2 &&
@@ -640,9 +645,9 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		}
 		return true
 	case TIMESTAMP:
-		if len(args) == 2 {
-			return false
-		}
+		// Calendar parsing and zero-date handling can produce NULL even for
+		// non-NULL operands, in both unary and pair forms.
+		return false
 	case ADDTIME:
 		// These overloads can return NULL for an out-of-range TIME result
 		// even when every operand is NOT NULL. The intervening legacy

@@ -471,7 +471,7 @@ func TestRequiredIVFTopologyBroadcastAndRemoteFragment(t *testing.T) {
 	require.Error(t, requiredIVFTopologyError(tag, topology, roots))
 	roots[1].PreScopes = saved
 	var required int64
-	data, err := encodeRemoteScopeWithVectorProtocol(roots[1], c.proc, &required)
+	data, err := encodeRemoteScopeWithProtocol(roots[1], c.proc, &required)
 	require.NoError(t, err)
 	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, required)
 	decoded, err := decodeScope(data, c.proc, true, nil)
