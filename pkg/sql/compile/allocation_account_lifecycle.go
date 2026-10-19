@@ -21,6 +21,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/message"
@@ -278,6 +279,19 @@ func configureAllocationAccountOwners(
 	}
 	for _, owner := range owners {
 		if err := allocationLifecycleCall(func() error {
+			if op, ok := owner.(*dependent.Operator); ok && op.ScalarSetReaggregation {
+				if len(scalarLeases) != 1 || scalarLeases[0] == nil {
+					return mpool.ErrAllocationAccountInvariant
+				}
+				if op.ScalarSetLease != nil && op.ScalarSetLease != scalarLeases[0] {
+					return mpool.ErrAllocationAccountMismatch
+				}
+				if err := op.SetAllocationAccount(account); err != nil {
+					return err
+				}
+				op.ScalarSetLease = scalarLeases[0]
+				return nil
+			}
 			if join, ok := owner.(*loopjoin.LoopJoin); ok && join.ScalarSetReaggregation {
 				if len(scalarLeases) != 1 || scalarLeases[0] == nil {
 					return mpool.ErrAllocationAccountInvariant

@@ -23,24 +23,42 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dependent"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
-func TestScalarSetDependentQueryAdmissionBeforeSourceWork(t *testing.T) {
-	// The dependent entry point cannot reconstruct a marked fallback without
-	// its attempt lease. No process/engine is installed: reject before opening
-	// either execution owner, including when the marker is in a producer step.
-	for _, kind := range []plan.Node_NodeType{plan.Node_WINDOW, plan.Node_JOIN} {
-		q := &plan.Query{
-			Correlation: &plan.CorrelationSpec{},
-			Nodes:       []*plan.Node{{NodeType: kind, ScalarSetReaggregation: true}},
-		}
-		_, err := (&Compile{}).compileQuery(q)
-		require.ErrorContains(t, err, "bounded scalar set reaggregation cannot execute inside dependent programs")
-	}
+func TestScalarSetDependentOwnerAdmission(t *testing.T) {
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	defer budget.Close()
+	gen, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer gen.Close()
+	registry, err := gen.AllocationAccountRegistry()
+	require.NoError(t, err)
+	account, err := registry.OpenWithController(1<<20, gen)
+	require.NoError(t, err)
+	op := &dependent.Operator{ScalarSetReaggregation: true}
+	_, err = configureAllocationAccountOwners([]executionAllocationAccountOwner{op}, account)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountInvariant)
+	lease, err := gen.AcquireScalarSetExecution()
+	require.NoError(t, err)
+	defer lease.Close()
+	_, err = configureAllocationAccountOwners([]executionAllocationAccountOwner{op}, account, lease)
+	require.NoError(t, err)
+	require.Same(t, lease, op.ScalarSetLease)
+	other, err := gen.AcquireScalarSetExecution()
+	require.NoError(t, err)
+	defer other.Close()
+	_, err = configureAllocationAccountOwners([]executionAllocationAccountOwner{op}, account, other)
+	require.ErrorIs(t, err, mpool.ErrAllocationAccountMismatch)
+	require.Same(t, lease, op.ScalarSetLease)
+	require.NoError(t, op.ClearAllocationAccount(account))
+	require.Nil(t, op.ScalarSetLease)
+	_, _, err = registry.CompleteTerminal(account)
+	require.NoError(t, err)
 }
 
 func TestScalarSetMarkerProtocolAndPlacement(t *testing.T) {

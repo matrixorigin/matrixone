@@ -45,6 +45,7 @@ type scalarCapacityProfile struct {
 	ValueKinds                             int
 	ResourceError                          bool
 	Skew                                   bool
+	MixedDependent                         bool
 }
 type scalarCapacitySample struct {
 	Phase                    string
@@ -98,6 +99,11 @@ func BenchmarkScalarSetFallbackCapacity(b *testing.B) {
 		{Name: "larger-dense", Outer: 512, InnerPerArm: 1024, Concurrency: 1},
 		{Name: "work-boundary-sparse", Outer: 4096, InnerPerArm: 2048, Concurrency: 1, Sparse: true},
 		{Name: "work-over-limit", Outer: 4097, InnerPerArm: 2048, Concurrency: 1, Sparse: true, ResourceError: true},
+		{Name: "mixed-baseline", Outer: 8, InnerPerArm: 8, Concurrency: 1, MixedDependent: true},
+		{Name: "mixed-concurrent", Outer: 64, InnerPerArm: 128, Width: 256, Concurrency: 2, MixedDependent: true},
+		{Name: "mixed-streamed-outer", Outer: 16384, InnerPerArm: 8, Concurrency: 1, Sparse: true, MixedDependent: true},
+		{Name: "mixed-work-boundary", Outer: 4096, InnerPerArm: 2048, Concurrency: 1, Sparse: true, MixedDependent: true},
+		{Name: "mixed-work-over-limit", Outer: 4097, InnerPerArm: 2048, Concurrency: 1, Sparse: true, ResourceError: true, MixedDependent: true},
 	}
 	var results []scalarCapacityResult
 	embed.RunSingleCNBaseClusterTests(b, func(cluster embed.Cluster) {
@@ -170,6 +176,9 @@ func runScalarCapacityProfile(b *testing.B, ctx context.Context, db *sql.DB, int
 	// Hidden integer identity prevents identical signed-zero candidates from
 	// collapsing before range matching. I is twice InnerPerArm across both arms.
 	query := `select o.id,o.pad,cast((select i.v from inner_rows i where i.id>o.id union select i.v from inner_rows i where i.id>o.id) as varchar) from outer_rows o order by o.id`
+	if p.MixedDependent {
+		query = strings.Replace(query, " from outer_rows o", ",(select (select o.id+1)) from outer_rows o", 1)
+	}
 	result := scalarCapacityResult{Profile: p}
 	conns := make([]*sql.Conn, p.Concurrency)
 	for i := range conns {
@@ -397,8 +406,16 @@ func measureScalarCapacity(ctx context.Context, conn *sql.Conn, query string, p 
 		var id int
 		var pad string
 		var value sql.NullString
-		if err = rows.Scan(&id, &pad, &value); err != nil {
+		var dependent int64
+		columns := []any{&id, &pad, &value}
+		if p.MixedDependent {
+			columns = append(columns, &dependent)
+		}
+		if err = rows.Scan(columns...); err != nil {
 			return sample, err
+		}
+		if p.MixedDependent && dependent != int64(id)+1 {
+			return sample, fmt.Errorf("dependent result at id=%d: %d", id, dependent)
 		}
 		expectedID := -p.Outer + sample.Rows
 		if p.Sparse {

@@ -76,12 +76,19 @@ func (c *Compile) compileDependentQuery(q *plan.Query) ([]*Scope, error) {
 	s := newScope(Merge)
 	s.Proc = c.proc.NewNoContextChildProc(0)
 	s.NodeInfo = engine.Node{Addr: c.addr, Mcpu: 1, CNCNT: 1}
-	op := &dependent.Operator{Template: template}
+	op := &dependent.Operator{Template: template, ScalarSetReaggregation: queryUsesScalarSetReaggregation(q)}
 	root := q.Steps[q.MainOutputStep()]
 	op.SetAnalyzeControl(int(root), true)
 	s.setRootOperator(op)
 	c.anal.curNodeIdx = int(root)
-	return c.compileSteps(q, []*Scope{s}, root)
+	scopes, err := c.compileSteps(q, []*Scope{s}, root)
+	if err != nil {
+		return nil, err
+	}
+	if err = validateScalarSetScopePlacement(q, toEngineNode(c.currentCNWorker()), scopes); err != nil {
+		return nil, err
+	}
+	return scopes, nil
 }
 
 // Only source metadata is frozen here. Opening a source neither recompiles a

@@ -124,6 +124,9 @@ func (window *Window) callScalarIdentity(proc *process.Process) (vm.CallResult, 
 		if err != nil {
 			return result, err
 		}
+		if result.Status == vm.ExecYield {
+			return result, nil
+		}
 		if result.Batch == nil {
 			s.done = true
 			return result, nil

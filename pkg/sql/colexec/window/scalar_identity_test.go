@@ -28,8 +28,63 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
+
+type yieldingIdentityInput struct {
+	*colexec.MockOperator
+	yield bool
+}
+
+func (i *yieldingIdentityInput) Call(p *process.Process) (vm.CallResult, error) {
+	if !i.yield {
+		i.yield = true
+		return vm.CallResult{Status: vm.ExecYield}, nil
+	}
+	i.yield = false
+	return i.MockOperator.Call(p)
+}
+
+func TestScalarIdentityDemandYields(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	w, a, registry := newScalarIdentityForTest(t, 1<<20)
+	batches := make([]*batch.Batch, 2)
+	for i := range batches {
+		batches[i] = batch.NewWithSize(1)
+		batches[i].Vecs[0] = testutil.MakeInt64Vector([]int64{int64(i + 10)}, nil, proc.Mp())
+		batches[i].SetRowCount(1)
+	}
+	child := &yieldingIdentityInput{MockOperator: colexec.NewMockOperator().WithBatchs(batches)}
+	w.AppendChild(child)
+	defer child.Free(proc, false, nil)
+	defer w.Free(proc, false, nil)
+	require.NoError(t, w.Prepare(proc))
+	for id := uint64(1); id <= 2; id++ {
+		out, err := w.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, vm.ExecYield, out.Status)
+		require.False(t, w.scalarIdentity.done)
+		require.Equal(t, id-1, w.scalarIdentity.counter)
+		out, err = w.Call(proc)
+		require.NoError(t, err)
+		require.Equal(t, []uint64{id}, vector.MustFixedColWithTypeCheck[uint64](out.Batch.Vecs[1]))
+		require.Equal(t, int64(id+9), vector.GetFixedAtNoTypeCheck[int64](out.Batch.Vecs[0], 0))
+	}
+	out, err := w.Call(proc)
+	require.NoError(t, err)
+	require.Equal(t, vm.ExecYield, out.Status)
+	out, err = w.Call(proc)
+	require.NoError(t, err)
+	require.Nil(t, out.Batch)
+	require.True(t, w.scalarIdentity.done)
+	w.Reset(proc, false, nil)
+	require.NoError(t, w.ClearAllocationAccount(a))
+	_, _, err = registry.CompleteTerminal(a)
+	require.NoError(t, err)
+}
 
 func newScalarIdentityForTest(t *testing.T, limit uint64) (*Window, *mpool.AllocationAccount, *mpool.AllocationAccountRegistry) {
 	t.Helper()

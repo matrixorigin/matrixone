@@ -16,12 +16,14 @@ package dependent
 
 import (
 	"bytes"
+	"errors"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/loopjoin"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"reflect"
@@ -98,8 +100,21 @@ func openKernel(proc *process.Process, factory KernelFactory, children int, acco
 	}
 	k = &nativeKernel{proc: proc, account: account, inputs: make([]*DemandInput, children), budget: budget, charged: size}
 	defer func() {
+		var unpublishedPanic error
+		if recovered := recover(); recovered != nil {
+			err = errors.Join(mpool.ErrAllocationAccountInvariant, moerr.NewInternalErrorNoCtxf("dependent kernel initialization panic: %v", recovered))
+			if k.root == nil {
+				// A factory panic before ownership transfer leaves no returned tree
+				// whose drainage can be proved.
+				unpublishedPanic = err
+			}
+		}
 		if err != nil {
-			err = joinCloseError(err, k.close(err))
+			cleanupErr := joinCloseError(unpublishedPanic, k.close(err))
+			if execution != nil {
+				execution.cleanupErr = joinCloseError(execution.cleanupErr, cleanupErr)
+			}
+			err = joinCloseError(err, cleanupErr)
 			k = nil
 		}
 	}()
@@ -144,7 +159,19 @@ func openKernel(proc *process.Process, factory KernelFactory, children int, acco
 		if binder, ok := op.(interface {
 			BindDependent(colexec.DependentProgramFactory, *vector.AllocationAccountSelection)
 		}); ok {
+			if execution == nil {
+				return k, mpool.ErrAllocationAccountInvariant
+			}
 			binder.BindDependent(execution, execution.allocation)
+		}
+		if join, ok := op.(*loopjoin.LoopJoin); ok && join.ScalarSetReaggregation {
+			if execution == nil || execution.scalarSetLease == nil {
+				return k, mpool.ErrAllocationAccountInvariant
+			}
+			if join.ScalarSetLease != nil && join.ScalarSetLease != execution.scalarSetLease {
+				return k, mpool.ErrAllocationAccountMismatch
+			}
+			join.ScalarSetLease = execution.scalarSetLease
 		}
 	}
 	for i := len(k.operators) - 1; i >= 0; i-- {
@@ -200,18 +227,33 @@ func (k *nativeKernel) close(cause error) error {
 		return nil
 	}
 	var err error
+	// A damaged native object must not re-enter its reuse pool. Other objects
+	// still need all cleanup stages even when one stage panics.
+	resetFailed := false
 	reset := func(_ vm.Operator, op vm.Operator) error {
-		op.Reset(k.proc, cause != nil, cause)
+		if resetErr := nativeCleanupCall(func() error { op.Reset(k.proc, cause != nil, cause); return nil }); resetErr != nil {
+			resetFailed = true
+			err = joinCloseError(err, resetErr)
+		}
 		return nil
 	}
 	free := func(_ vm.Operator, op vm.Operator) error {
-		op.Free(k.proc, cause != nil, cause)
+		canRelease := !resetFailed
+		if freeErr := nativeCleanupCall(func() error { op.Free(k.proc, cause != nil, cause); return nil }); freeErr != nil {
+			canRelease = false
+			err = joinCloseError(err, freeErr)
+		}
 		if owner, ok := op.(interface {
 			ClearAllocationAccount(*mpool.AllocationAccount) error
 		}); ok {
-			err = joinCloseError(err, owner.ClearAllocationAccount(k.account))
+			if clearErr := nativeCleanupCall(func() error { return owner.ClearAllocationAccount(k.account) }); clearErr != nil {
+				canRelease = false
+				err = joinCloseError(err, clearErr)
+			}
 		}
-		op.Release()
+		if canRelease {
+			err = joinCloseError(err, nativeCleanupCall(func() error { op.Release(); return nil }))
+		}
 		return nil
 	}
 	if k.operators == nil {
@@ -235,6 +277,15 @@ func (k *nativeKernel) close(cause error) error {
 	k.root = nil
 	k.inputs = nil
 	return err
+}
+
+func nativeCleanupCall(call func() error) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = errors.Join(mpool.ErrAllocationAccountInvariant, moerr.NewInternalErrorNoCtxf("dependent kernel cleanup panic: %v", recovered))
+		}
+	}()
+	return call()
 }
 
 func (k *nativeKernel) affectedRows() uint64 {

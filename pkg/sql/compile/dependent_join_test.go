@@ -76,11 +76,15 @@ func TestDependentJoinAlgorithm(t *testing.T) {
 		{"mark_nonnull_composite", plan.Node_MARK, nonNullComposite, vm.HashJoin},
 		{"mark_nullable_composite", plan.Node_MARK, []*plan.Expr{eq, bind("=", plan2.GetColExpr(typ, 0, 1), plan2.GetColExpr(typ, 1, 1))}, vm.LoopJoin},
 		{"mark_residual", plan.Node_MARK, []*plan.Expr{eq, bind("<", left, right)}, vm.LoopJoin},
+		{"scalar_equality", plan.Node_LEFT, []*plan.Expr{eq}, vm.LoopJoin},
+		{"scalar_cartesian", plan.Node_LEFT, nil, vm.LoopJoin},
+		{"scalar_dependent", plan.Node_LEFT, []*plan.Expr{bind("<", left, dep)}, vm.LoopJoin},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			c := &Compile{proc: proc}
 			n := &plan.Node{NodeType: plan.Node_JOIN, JoinType: tc.kind, OnList: tc.on}
+			n.ScalarSetReaggregation = tc.name == "scalar_equality" || tc.name == "scalar_cartesian" || tc.name == "scalar_dependent"
 			if tc.name == "inner_shuffle_placement" {
 				n.Stats = &plan.Stats{HashmapStats: &plan.HashMapStats{Shuffle: true}}
 			}
@@ -125,6 +129,17 @@ func TestDependentJoinAlgorithm(t *testing.T) {
 				}
 			} else {
 				require.False(t, root.Build.NeedHashMap)
+				if n.ScalarSetReaggregation {
+					join := root.Join.(*loopjoin.LoopJoin)
+					require.True(t, join.ScalarSetReaggregation)
+					if tc.name == "scalar_dependent" {
+						require.NotNil(t, root.Condition)
+						require.Nil(t, join.NonEqCond)
+					} else {
+						require.Nil(t, root.Condition)
+						require.NotNil(t, join.NonEqCond)
+					}
+				}
 			}
 		})
 	}
