@@ -2439,9 +2439,7 @@ func materializedViewDefinitionSourceReferences(stmt *tree.Select) ([]*tree.Tabl
 			if !supported || isUnion && len(found) != 1 {
 				return nil, false
 			}
-			for _, source := range found {
-				sources = append(sources, source)
-			}
+			sources = append(sources, found...)
 		}
 	}
 	return sources, len(sources) > 0
