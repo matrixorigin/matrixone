@@ -31,6 +31,26 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 		defer cancel()
 		db := openRetestSQLDB(t, c)
 		defer db.Close()
+		// Preserve legacy MySQL numeric-prefix warning expectations for this fixture
+		// by explicitly enabling MYSQL_NUMERIC_COMPATIBILITY.
+		var originalSQLMode string
+		require.NoError(t, db.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&originalSQLMode))
+		defer func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cleanupCancel()
+			_, restoreErr := db.ExecContext(cleanupCtx, "set session sql_mode = '"+strings.ReplaceAll(originalSQLMode, "'", "''")+"'")
+			if restoreErr != nil {
+				t.Errorf("restore session sql_mode: %v", restoreErr)
+			}
+		}()
+		compatibilitySQLMode := originalSQLMode
+		if !strings.Contains(compatibilitySQLMode, "MYSQL_NUMERIC_COMPATIBILITY") {
+			if compatibilitySQLMode != "" {
+				compatibilitySQLMode += ","
+			}
+			compatibilitySQLMode += "MYSQL_NUMERIC_COMPATIBILITY"
+		}
+		execSQLDB(t, ctx, db, "set session sql_mode = '"+strings.ReplaceAll(compatibilitySQLMode, "'", "''")+"'")
 		for _, tc := range []struct {
 			name, expression, want, diagnostic string
 			count                              int
@@ -52,8 +72,6 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 			{"make_set", "make_set('2x','a','b','c')", "b", "INTEGER", 1},
 			{"export_set", "export_set('2x','Y','N',',',3)", "N,Y,N", "INTEGER", 1},
 			{"bit_count", "bit_count('3x')", "2", "INTEGER", 1},
-			{"round", "round(12.345,'2x')", "12.350", "INTEGER", 1},
-			{"truncate", "truncate(12.345,'2x')", "12.340", "INTEGER", 1},
 			{"field", "field('x',0,'x')", "1", "DOUBLE", 2},
 			{"valid", "repeat('x','3 ')", "xxx", "", 0},
 		} {
@@ -68,6 +86,20 @@ func TestBuiltinConversionWarnings(t *testing.T) {
 				}
 			})
 		}
+		t.Run("strict_math_precision", func(t *testing.T) {
+			for _, tc := range []struct{ name, expression string }{
+				{"round", "round(12.345,'2x')"},
+				{"truncate", "truncate(12.345,'2x')"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var got string
+					err := db.QueryRowContext(ctx, "select "+tc.expression).Scan(&got)
+					require.Error(t, err)
+					require.Contains(t, err.Error(), "invalid argument cast to int, bad value 2x")
+					require.Equal(t, [][]string{{"Error", "20203", "invalid argument cast to int, bad value 2x"}}, queryStringRows(t, ctx, db, "show warnings"))
+				})
+			}
+		})
 		t.Run("constant_consumers", func(t *testing.T) {
 			t.Run("malformed", func(t *testing.T) {
 				for _, tc := range []struct{ name, query, want string }{
