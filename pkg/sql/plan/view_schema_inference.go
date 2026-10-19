@@ -66,6 +66,18 @@ type viewSchemaDerivation struct {
 	stack                                               map[[32]byte]bool
 	work, slots, depth, maxDepth, operations, recursion int
 }
+
+// Internal catalog statements keep the caller's cancellation and values, but
+// must not inherit the outer statement's private binding/authorization scope.
+type viewSchemaCatalogContext struct{ context.Context }
+
+func (c viewSchemaCatalogContext) Value(key any) any {
+	if _, ok := key.(viewSchemaContextKey); ok {
+		return nil
+	}
+	return c.Context.Value(key)
+}
+
 type viewSchemaCompiler struct {
 	CompilerContext
 	ctx, previousContext context.Context
@@ -202,6 +214,9 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 		return nil, nil, err
 	}
 	c.state.leases = append(c.state.leases, lease)
+	// Resolve returns catalog-owned identities. The execution subtree and its
+	// dependency copies must share the effective account without mutating them.
+	obj = DeepCopyObjectRef(obj)
 	single := newViewDependencyCaptureContext(c)
 	single.snapshotNames = c.state.capture.snapshotNames
 	if err := single.record(obj, def, snapshot, database, name); err != nil {
@@ -211,17 +226,16 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 		c.state.capture.deps[viewSchemaDependencyKey(dep)] = dep
 		c.state.dependencyLog = append(c.state.dependencyLog, dep)
 		if c.state.planning {
-			ref := prepareSchemaRefWithSnapshot(obj, def, snapshot)
 			account, err := c.state.request.binding.Compiler.GetAccountId()
 			if err != nil {
 				return nil, nil, err
 			}
-			if ref.PubInfo == nil && dep.AccountID != account {
-				// Physical publisher sources need their actual catalog account.
-				// Name-only reusable-plan validators must rebind these references
-				// rather than resolve a same-named subscriber object.
-				ref.PubInfo = &planpb.PubInfo{TenantId: int32(dep.AccountID)}
+			if obj.PubInfo == nil && dep.AccountID != account {
+				// Execution and reusable-plan validation must both resolve the
+				// physical source in its publisher catalog, not the subscriber.
+				obj.PubInfo = &planpb.PubInfo{TenantId: int32(dep.AccountID)}
 			}
+			ref := prepareSchemaRefWithSnapshot(obj, def, snapshot)
 			c.state.planDependencies = appendPrepareSchemas(c.state.planDependencies, ref)
 		}
 	}
@@ -230,7 +244,7 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 	}
 	// Ordinary binding mutates name maps, projections and external-table columns.
 	// It may only mutate this request's copy, never the catalog resolver's graph.
-	return DeepCopyObjectRef(obj), DeepCopyTableDef(def, true), nil
+	return obj, DeepCopyTableDef(def, true), nil
 }
 
 // SELECT/CTAS use the same logical column budget as description inference.

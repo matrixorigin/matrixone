@@ -293,8 +293,24 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 			require.NoError(t, err)
 			defer ctasStatements[0].Free()
 			beforeStamp, beforeRevision := nativeViewSchemaStamp(t, op)
-			ctas, err := compiler.BuildPlanWithViewSchema(ctx, ctasStatements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+			deniedRoot := errors.New("only the user source View is authorized")
+			var authorizedRoots []string
+			authorizeSource := func(_ context.Context, dbName, name string, _ *plan.Snapshot) error {
+				authorizedRoots = append(authorizedRoots, dbName+"."+name)
+				if dbName != database || name != "outer_b" {
+					return deniedRoot
+				}
+				return nil
+			}
+			ctas, err := compiler.BuildPlanWithViewSchema(ctx, ctasStatements[0], false, authorizeSource)
 			require.NoError(t, err)
+			require.Equal(t, []string{database + ".outer_b"}, authorizedRoots)
+			deniedStatements, err := mysql.Parse(ctx, "select * from mo_catalog.mo_tables", 1)
+			require.NoError(t, err)
+			defer deniedStatements[0].Free()
+			deniedPlan, err := compiler.BuildPlanWithViewSchema(ctx, deniedStatements[0], false, authorizeSource)
+			require.Nil(t, deniedPlan)
+			require.ErrorIs(t, err, deniedRoot, "user SQL must not gain the internal catalog-query exemption")
 			ctasColumns := ctas.GetDdl().GetCreateTable().TableDef.Cols
 			require.Equal(t, "id_alias", ctasColumns[0].Name)
 			require.Equal(t, "0", ctasColumns[0].Default.OriginString)
@@ -365,6 +381,8 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			"create table subscribed.collision_source (id int)",
 			"create database schema_other",
 			"create table schema_other.collision_source (id int)",
+			"insert into subscribed.collision_source values (17)",
+			"insert into schema_other.collision_source values (23)",
 		} {
 			_, err := system.ExecContext(ctx, query)
 			require.NoError(t, err, query)
@@ -421,6 +439,8 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		require.NoError(t, err)
 		_, err = subscriber.ExecContext(ctx, "create table schema_other.collision_source (id varchar(30))")
 		require.NoError(t, err)
+		_, err = subscriber.ExecContext(ctx, "insert into schema_other.collision_source values ('subscriber-only')")
+		require.NoError(t, err)
 		for _, query := range []string{
 			"create view schema_other.local_view as select id from schema_other.collision_source",
 			"create view schema_other.local_nested as select id from schema_other.local_view",
@@ -439,6 +459,13 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		tenant := &frontend.TenantInfo{Tenant: "schema_subscriber", User: "root", DefaultRole: frontend.GetAccountAdminRole(),
 			TenantID: account, UserID: frontend.GetAdminUserId(), DefaultRoleID: frontend.GetAccountAdminRoleId()}
 		tenantCtx := defines.AttachAccount(ctx, account, tenant.UserID, tenant.DefaultRoleID)
+		cases := []struct{ view, sourceDatabase string }{
+			{"v_collision", "subscribed"}, {"v_nested", "subscribed"},
+			{"v_saved_collision", "subscribed"}, {"v_other", "schema_other"},
+			{"v_other_nested", "schema_other"},
+			{"v_history_collision", "subscribed"}, {"v_history_nested", "subscribed"},
+			{"v_history_other", "schema_other"},
+		}
 		var historical timestamp.Timestamp
 		var baseline nativeViewSchemaValue
 		withNativeViewSchemaRead(t, tenantCtx, cn, svc, "subscribed", tenant, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
@@ -456,13 +483,7 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			baseline = describeNativeViewSchema(t, request, "subscribed", "published", nil)
 			require.Len(t, baseline.columns, 1)
 			require.Equal(t, baseline, describeNativeViewSchema(t, request, "subscribed", "published", nil))
-			for _, test := range []struct{ view, sourceDatabase string }{
-				{"v_collision", "subscribed"}, {"v_nested", "subscribed"},
-				{"v_saved_collision", "subscribed"}, {"v_other", "schema_other"},
-				{"v_other_nested", "schema_other"},
-				{"v_history_collision", "subscribed"}, {"v_history_nested", "subscribed"},
-				{"v_history_other", "schema_other"},
-			} {
+			for _, test := range cases {
 				t.Run(test.view, func(t *testing.T) {
 					for i := 0; i < 2; i++ {
 						value := describeNativeViewSchema(t, request, "subscribed", test.view, nil)
@@ -560,6 +581,49 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			require.Equal(t, beforeUsed, generation.Used())
 			require.False(t, generation.Closed())
 		})
+		// Execution owns a fresh statement/transaction: Compile/Release may
+		// retire its parent resource generation, unlike read-only description.
+		for _, test := range cases {
+			for _, prepared := range []bool{false, true} {
+				t.Run(fmt.Sprintf("execute/%s/prepared=%t", test.view, prepared), func(t *testing.T) {
+					withNativeViewSchemaRead(t, tenantCtx, cn, svc, "subscribed", tenant, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, proc *process.Process) {
+						query := "select id from subscribed." + test.view
+						if prepared {
+							query = "prepare derived_schema from '" + query + "'"
+						}
+						statements, err := mysql.Parse(tenantCtx, query, 1)
+						require.NoError(t, err)
+						defer statements[0].Free()
+						p, err := compiler.BuildPlanWithViewSchema(tenantCtx, statements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+						require.NoError(t, err)
+						if prepared {
+							p = p.GetDcl().GetPrepare().Plan
+						}
+						require.EqualValues(t, types.T_int32, plan.GetResultColumnsFromPlan(p)[0].Typ.Id)
+						c := compile.NewCompile(cn.GetServiceConfig().CN.ServiceAddress, "subscribed", query, "", "",
+							svc.GetEngine(), proc, statements[0], false, nil, time.Now())
+						defer c.Release()
+						var ids []int32
+						require.NoError(t, c.Compile(tenantCtx, p, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+							if bat != nil && bat.RowCount() > 0 {
+								if bat.Vecs[0].GetType().Oid != types.T_int32 {
+									return fmt.Errorf("publisher int column executed with type %s", bat.Vecs[0].GetType())
+								}
+								ids = append(ids, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])...)
+							}
+							return nil
+						}))
+						_, err = c.Run(0)
+						require.NoError(t, err)
+						want := int32(17)
+						if test.sourceDatabase == "schema_other" {
+							want = 23
+						}
+						require.Equal(t, []int32{want}, ids, "execution must read the publisher")
+					})
+				})
+			}
+		}
 		_, err = publisher.ExecContext(ctx, "alter view published as select id, id as extra from source")
 		require.NoError(t, err)
 		// 新的外层事务必须具有更新快照，历史查询才真实经过 CloneSnapshotOp。

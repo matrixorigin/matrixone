@@ -22,10 +22,13 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
 )
 
@@ -112,6 +115,95 @@ func TestViewSchemaPlanningPreservesCorrelatedMainOutput(t *testing.T) {
 		}
 	}
 	require.Zero(t, f.generation.Used())
+}
+
+func TestViewSchemaPlanningExecutionObjectAccount(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		account uint32
+		pub     *planpb.PubInfo
+	}{
+		{"local", 42, nil},
+		{"publisher", 7, nil},
+		{"system publisher", 0, nil},
+		{"existing publisher", 7, &planpb.PubInfo{TenantId: 7, XXX_unrecognized: []byte{0x10, 0x07}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			catalogObject := f.compiler.objects["nation"]
+			catalogObject.PubInfo = tc.pub
+			before := DeepCopyObjectRef(catalogObject)
+			request := f.request(t)
+			require.NoError(t, request.open())
+			state := newViewSchemaDerivation(request)
+			defer state.close()
+			state.planning = true
+			obj, _, err := state.compiler.record(catalogObject, f.compiler.tables["nation"],
+				&Snapshot{Tenant: &SnapshotTenant{TenantID: tc.account}}, "tpch", "nation")
+			require.NoError(t, err)
+			require.Equal(t, before, catalogObject, "catalog-owned identity must not be mutated")
+			require.NotSame(t, catalogObject, obj)
+			require.Len(t, state.planDependencies, 1)
+			if tc.account == 42 {
+				require.Nil(t, obj.PubInfo)
+			} else {
+				require.NotNil(t, obj.PubInfo, "execution needs the same account as dependency validation")
+				require.EqualValues(t, tc.account, obj.PubInfo.TenantId)
+				require.Equal(t, obj.PubInfo, state.planDependencies[0].PubInfo)
+				require.NotSame(t, obj.PubInfo, state.planDependencies[0].PubInfo)
+				if tc.pub != nil {
+					require.Equal(t, tc.pub.XXX_unrecognized, obj.PubInfo.XXX_unrecognized)
+				}
+			}
+		})
+	}
+}
+
+func TestViewSchemaPlanningInternalSQLContext(t *testing.T) {
+	for _, mode := range []string{"legacy", "describe", "planning"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			proc := f.compiler.GetProcess()
+			type preservedKey struct{}
+			ctx, cancel := context.WithCancelCause(defines.AttachAccountId(t.Context(), 42))
+			defer cancel(nil)
+			ctx = context.WithValue(ctx, preservedKey{}, "preserved")
+			var state *viewSchemaDerivation
+			if mode != "legacy" {
+				state = &viewSchemaDerivation{planning: mode == "planning"}
+				ctx = context.WithValue(ctx, viewSchemaContextKey{}, state)
+			}
+			previous := proc.GetTopContext()
+			proc.ReplaceTopCtx(ctx)
+			defer proc.ReplaceTopCtx(previous)
+			cause := errors.New("catalog read cancelled")
+			calls := 0
+			setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
+				&captureSQLExecutor{exec: func(execCtx context.Context, _ string, opts executor.Options) (executor.Result, error) {
+					calls++
+					require.Nil(t, execCtx.Value(viewSchemaContextKey{}), "internal SQL is not another user root")
+					require.Equal(t, "preserved", execCtx.Value(preservedKey{}))
+					account, err := defines.GetAccountId(execCtx)
+					require.NoError(t, err)
+					require.EqualValues(t, 7, account)
+					require.EqualValues(t, 7, opts.AccountID())
+					cancel(cause)
+					require.ErrorIs(t, context.Cause(execCtx), cause)
+					return executor.Result{}, cause
+				}},
+			)
+			// The interface wrapper deliberately selects the runtime executor,
+			// not MockCompilerContext's private in-memory executor.
+			compiler := struct{ CompilerContext }{f.compiler}
+			_, err := runSqlWithSnapshot(compiler, "select 1", &Snapshot{Tenant: &SnapshotTenant{TenantID: 7}})
+			require.ErrorIs(t, err, cause)
+			require.Equal(t, 1, calls)
+			require.Same(t, ctx, proc.GetTopContext())
+			if state != nil {
+				require.Same(t, state, ctx.Value(viewSchemaContextKey{}), "the outer binder keeps its marker")
+			}
+		})
+	}
 }
 
 func TestViewSchemaPlanningCTASPreservesBoundaryDefaults(t *testing.T) {

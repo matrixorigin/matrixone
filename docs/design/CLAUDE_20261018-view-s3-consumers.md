@@ -51,12 +51,15 @@ S2 nested memo 中的 synthetic View scan 只服务 schema 描述，不能执行
 
 View 定义、环境、身份、owner/权限和版本继续来自可见目录；resolver 先创建无 `Cols`/`Name2ColIndex` 的 View 壳，再进行请求副本的计费和复制。旧列数量、default、类型不进入推导准入。普通表完整 schema 仍须经过既有兼容/协议及资源检查。
 
+实际 catalog account 同时进入请求私有的执行 `ObjectRef.PubInfo` 与依赖副本；跨库 publisher 来源不能只在依赖记录带账户而让扫描按 subscriber 解析。原目录对象不被修改，已有 PubInfo 及未知字节保留。
+
 这是只读隔离，不更新目录列、ViewSql、依赖表或刷新状态。raw catalog 和备份载荷仍保持物理快照语义。
 
 ## 4. 授权、名称域与错误
 
 - 每个用户查询根在数据库/订阅元数据探测及关系解析前授权；嵌套来源的执行权限由计划 `ViewReferences` 保留给现有安全链。
 - 授权函数可以执行内部 catalog SQL，因此只接收 request context，**不能接收私有 derivation/planning marker**；否则内部授权查询会被误当新用户根，递归授权直至资源拒绝。真实订阅/RBAC 测试覆盖此边界。
+- CTAS 等 planner 内部目录 SQL 在 `runSqlWithSnapshot` 边界屏蔽私有 derivation marker，保留账户、事务、快照、取消及其他 context 值；不按系统表名跳过授权。用户显式查询系统表仍是用户根，必须授权。
 - 一次规划从 caller entry 域开始；持久化 publisher SQL 进入真实发布账户/库域，退出恢复，不能把继承的 subscription 当作根身份。
 - 数据库存在性使用与 source resolver 一致的错误返回型 `GetDatabaseId`，包括 publisher 和 historical snapshot。不能通过 bool-only `DatabaseExists` 丢失 RPC 错误或切回 subscriber 的同名库。
 - 明确缺失源、legacy 环境不足、未稳定 star、损坏定义、协议拒绝、取消和可见性变化均返回错误；没有旧列 fallback。
@@ -126,7 +129,7 @@ View 定义、环境、身份、owner/权限和版本继续来自可见目录；
 - 拒绝和控制：缺少创建环境、未冻结 star、丢失 source、损坏定义、授权失败；默认入口保留 legacy 兼容；授权 context 不带私有 marker；数据库错误/snapshot 原样传播。
 - 生命周期：失败/panic 后下一次规划成功；blocked catalog lookup 与 Close/BUSY 的确定性 barrier；资源归零，父事务/执行代可继续使用。
 - frontend：真正由新 binder 生成的空结果计划，在基表 metadata-only、COPY physical ID、同名重建、中间 View 变化后由既有 cache validator 拒绝。
-- native：复用 S2 的两个单 CN fixture；真实 own-DDL/历史/订阅/权限域、无写 CTAS 规划，以及 request 关闭后实际编译执行嵌套 View 的行与类型。
+- native：复用 S2 的两个单 CN fixture；真实 own-DDL/历史/订阅/权限域、严格源 View authorizer 下的无写 CTAS 规划，以及 request 关闭后实际编译执行嵌套/跨库订阅 View 的行与类型。publisher/subscriber 同名源采用不同类型/行值；直接/嵌套/历史、普通与 prepared 计划均实际执行，各自使用独立父语句资源代。
 - 公共协议控制：已有 `TestViewDescriptionPublicSQL` 的独立 reader/writer、SQL/binary prepare 和 empty-result schema 变化；它验证默认路径无回归，**不是宣称默认 binary 服务已激活 S3**。
 - 定向 UT 后执行 owning packages、风险对应 race、增量 gofmt/vet/CI 同版 lint及修改代码覆盖率 ≥75%。未通过的门禁不得标记 PASS。
 
