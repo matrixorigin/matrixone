@@ -1,6 +1,7 @@
 # MatrixOne versus DuckDB: TPC-H comparison
 
-Version: 0.4. Status: implementation approved, 2026-10-19.
+Version: 0.5. Status: implementation approved; benchmark verification removed
+at the user's explicit request, 2026-10-20.
 Approval: the user accepted the comparison plan and requested implementation.
 Revision 0.4 fixes the workstation, resource accounting, and three-part delivery.
 Owners: benchmark runner, MO SQL/storage, and performance analysis.
@@ -120,21 +121,24 @@ Use DuckDB's TPC-H extension as a convenience/reference, not an independent
 data or SQL source for its measured arm: its documented query parameters are
 fixed, and its generated datasets have documented differences [2].
 
-After loading, verify every table's row count, logical types, key uniqueness,
-null counts, date ranges, and relationship integrity. Compute a complete typed
-content comparison against the input using bounded external sorting by primary
-key. Hashes provide provenance and screening; mismatches require row evidence.
-Publish the load validation separately from its timing.
+Benchmark scripts load the files, collect statistics, checkpoint, warm up,
+measure and report. They do not scan loaded data, rehash the complete inputs,
+compare catalogs or relationships, or compare query results. Do not replace the
+removed row-by-row pass with checksums, sampling or another verification pass.
+Correctness testing is separate and runs only when explicitly requested.
 
-## 4. Correctness gate
+## 4. Separate correctness testing
 
-Correctness is assessed before performance and checked throughout measurement.
-Neither engine is automatically the oracle.
+The following rules describe separate correctness tests and explicit diagnostic
+commands. Benchmark preparation, timing, profiling, reporting and publication
+never invoke them or wait for a correctness verdict. Neither engine is
+automatically the oracle. Benchmark completion means the scheduled executions
+completed, and must not be labeled a correctness pass.
 
 - Validate SF1 qualification results against the pinned reference answer set.
 - Exercise a small independent suite for decimal boundaries, NULLs, strings,
   duplicate rows, dates, top-N ties, and each dialect substitution.
-- Compare complete results for both engines at every scale and parameter set.
+- Compare complete results only within the separately requested correctness task.
 - Retain physical result metadata as well as the logical comparison schema.
   A DECIMAL/DOUBLE or CHAR/VARCHAR distinction must be visible in the report.
 
@@ -157,20 +161,21 @@ fixed-point quantum. The contract must preserve at least two decimal places,
 be checked against independent high-precision reference cases, and record
 maximum observed absolute/relative errors. These are proposed engineering limits,
 not a claim that the engines have identical arithmetic semantics. A missing or
-failing rule blocks that cell; tolerances are never fitted to discrepancies.
+failing rule fails that correctness test; tolerances are never fitted to
+discrepancies.
 
 Preserve duplicate multiplicity and required ordering. Compare unordered output
 as a full multiset using external sorting. Ordered peers may vary within equal
 sort keys. A LIMIT boundary tie requires proof of legal membership using an
 untimed unlimited reference for that boundary group; do not add hidden tie-breaker
 columns to one engine or accept a different row count. If the legal boundary
-cannot be established, publish an unresolved correctness result rather than a
-winning performance number.
+cannot be established, report the separate correctness result as unresolved.
+Benchmark scripts do not run unlimited-query correctness replays.
 
 Every scored execution drains all rows, checks terminal errors, and produces a
-bounded typed result capture. The common comparator works outside the query
-clock. A checksum is not a replacement for full row comparison. An engine that
-returns a wrong answer has no valid timing for that cell.
+bounded typed result capture. Captures record execution output without comparing
+it against another engine or reference. The standalone comparator is reserved
+for explicit diagnostic use, outside benchmark scripts.
 
 ## 5. Resource and configuration fairness
 
@@ -228,12 +233,12 @@ and correctness requirements, not identical loader implementation.
 Readiness requires all rows committed, prescribed statistics preparation
 complete, persistent state reusable after an orderly restart, and healthy service
 admission. Use existing observable completion conditions with deadlines rather
-than a fixed sleep. Record pending maintenance and any continuing work. Run the
-same validation after reopening. Preserve a clean qualified database image for
+than a fixed sleep. Record pending maintenance and any continuing work. Reopening
+does not trigger correctness validation. Preserve a checkpointed database image for
 each scale/engine; queries do not run on a freshly inserted mutable-only MO state
 while DuckDB runs from a checkpointed file. Select the image generation before
 query measurements (default: load replicate 1), rather than choosing the image
-that later benchmarks fastest. Record any replacement as a new qualified image.
+that later benchmarks fastest. Record any replacement as a new image.
 
 Measure allocated persistent bytes, WAL/log bytes, peak temporary bytes and
 post-cleanup size. Store datasets, database images, scratch, and reports under
@@ -620,8 +625,8 @@ framework, production plugin interface, or MO execution hooks are proposed.
 The controller owns the schedule, cgroups, process groups, data-image generations,
 deadlines, disk allowance and final report. Workers own connections and cursors.
 
-State flow is preflight -> load/verify -> qualify -> warm/reset -> measure ->
-drain/compare -> stop/join -> publish. Arm failure seals that arm, cancels its
+State flow is preflight -> load/checkpoint -> deadline pilot -> warm/reset ->
+measure/drain -> stop/join -> publish. Arm failure seals that arm, cancels its
 query, closes its resources, and joins its processes before the next arm starts.
 If a driver cannot interrupt, the parent terminates the owned worker/service
 group after the configured grace period (proposed default: 30 seconds). The
@@ -639,7 +644,7 @@ complete expected run count and worst-case deadline budget in the schedule.
 
 Each attempt records engine/build/profile/data/query IDs, block and query order,
 timestamps, cache preparation, actual settings, timings, row counts, result-schema
-and capture hashes, correctness verdict, resource observations, errors, exit status
+and capture hashes, execution status, resource observations, errors, exit status
 and cleanup outcome. Manifests/configuration/SQL and small summaries are versioned;
 generated datasets, databases and raw profiler captures live outside Git with
 checksum-bound publication when results are shared.
@@ -654,7 +659,7 @@ smoke test. Large performance campaigns are explicit jobs, not ordinary UT/BVT.
 ## 10. Delivery and review
 
 1. Approve this methodology and the query/schema/numeric-comparison contract.
-2. Deliver dataset/DDL/query manifests and correctness qualification with the
+2. Deliver dataset/DDL/query manifests and separate correctness tests with the
    minimal two-driver worker and deterministic lifecycle checks.
 3. Deliver measurement isolation, finite schedules, resource collection and
    offline report validation; run the SF1 public smoke campaign.

@@ -85,6 +85,73 @@ func TestBootstrapPreservesPairedWaves(t *testing.T) {
 	}
 }
 
+func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		name := "different results are not verified"
+		if partial {
+			name = "incomplete execution is rejected"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			write := func(path string, value any) FileID {
+				t.Helper()
+				path = filepath.Join(root, path)
+				if err := os.MkdirAll(filepath.Dir(path), 0750); err != nil {
+					t.Fatal(err)
+				}
+				if err := publishJSON(path, value); err != nil {
+					t.Fatal(err)
+				}
+				pin, err := artifact(root, path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return pin
+			}
+			c := Campaign{Version: formatVersion, Root: root, Mode: "sf1-smoke", Datasets: map[string]string{"1": root}, MOSource: root, MOBinary: filepath.Join(root, "mo"), MORevision: "test", MOBuild: "test", CPUs: []int{0, 1, 2, 3, 4, 5, 6, 7}, ControllerCPUs: []int{8}, MemoryBytes: 32 << 30, DiskBytes: 1 << 30, ReserveBytes: 8 << 30, ProfileBytes: 1 << 20, PortBase: 24000, ExclusiveHost: true}
+			config := write("campaign.json", c)
+			p := Preflight{Worker: FileID{SHA256: "worker"}}
+			f := Frozen{Version: formatVersion, Preflight: write("preflight.json", p), Trials: schedule(c)}
+			pair := PairRecord{Version: formatVersion, Trial: f.Trials[0], Status: "pass", Arms: map[string]ArmRecord{}}
+			for index, engine := range []string{"mo", "duckdb"} {
+				prefix := filepath.Join("runs", "baseline", pair.Trial.ID, engine)
+				r := WorkerReceipt{Version: formatVersion, Binary: p.Worker, Controlled: true, WaveNS: int64(time.Second)}
+				for _, q := range pair.Trial.Queries {
+					// Captures deliberately do not exist, and the engines return
+					// different row counts. Reporting reads timing receipts only.
+					r.Queries = append(r.Queries, QueryReceipt{Query: q, Capture: Capture{Rows: int64(index), ElapsedNS: int64(time.Millisecond)}})
+				}
+				if partial && engine == "duckdb" {
+					r.Queries = r.Queries[:len(r.Queries)-1]
+				}
+				pair.Arms[engine] = ArmRecord{Trial: pair.Trial, Engine: engine, Status: "pass", Cleanup: "complete", Request: write(filepath.Join(prefix, "request.json"), runRequest(pair.Trial, true)), Worker: write(filepath.Join(prefix, "receipt.json"), r), After: Usage{CPUUsec: 1000, Raw: map[string]string{"memory.max": "34359738368", "memory.swap.max": "0", "cpuset.cpus.effective": "0-7"}}}
+				arm := pair.Arms[engine]
+				arm.Request.Path = "request.json"
+				arm.Worker.Path = "receipt.json"
+				pair.Arms[engine] = arm
+			}
+			pin := write(filepath.Join("runs", "baseline", pair.Trial.ID, "pair.json"), pair)
+			pin.Path = filepath.Join(pair.Trial.ID, "pair.json")
+			write("runs/baseline/run.json", RunManifest{Version: formatVersion, Frozen: write("frozen.json", f), Pairs: []FileID{pin}})
+			output := filepath.Join(root, "report")
+			err := reportCampaign(filepath.Join(root, config.Path), filepath.Join(root, "runs", "baseline"), output)
+			if partial {
+				if err == nil || !strings.Contains(err.Error(), "partial query stream") {
+					t.Fatal(err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, err := os.ReadFile(filepath.Join(output, "report.md"))
+			if err != nil || !strings.Contains(string(body), "Run status: **complete**") || !strings.Contains(string(body), "does not perform correctness verification") {
+				t.Fatal(string(body), err)
+			}
+		})
+	}
+}
+
 func TestIndependentProgressDeadlines(t *testing.T) {
 	now := time.Unix(100, 0)
 	active := map[int]activeQuery{}

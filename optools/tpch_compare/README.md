@@ -54,19 +54,12 @@ Engine settings include `name` (`mo` or `duckdb`), `database`, `threads` and
 `memory_bytes`. MO credentials come from a named `dsn_env`, never a result file.
 MO loading creates a new `tpch_compare_` database on an explicitly selected owned
 loopback deployment. DuckDB uses a persistent database file. Both native CSV
-load paths explicitly enable parallel reading. Loading verifies
-complete typed input contents, composite-key uniqueness and every input foreign
-relationship. Catalog checks reject changed column domains, nullability, column
-order, or primary-key order before normalizing values. DuckDB normalizes declared
-CHAR(n) and VARCHAR(n) to its native VARCHAR domain. Ordered DBGEN key groups are
-checked and sorted within a bounded
-buffer, allowing streaming validation without duplicating an entire table.
-Database verification reads contiguous leading-key windows, preserving each
-composite-key group. The initial unbounded lower range and final upper-tail
-probe also reject rows outside the input domain. This checks every value while
-avoiding a whole-table external sort during large-scale preparation.
-Both loading and standalone verification check every input file against its
-manifest hash before reading database contents.
+load paths explicitly enable parallel reading. Loading creates the schema,
+imports the files, gathers statistics and checkpoints. Benchmark loading performs
+no correctness scans, input rehashing, catalog comparisons or relationship checks.
+Correctness tests run separately from benchmark scripts. The explicit diagnostic
+`verify` operation is available only when separately requested; benchmark
+campaigns never invoke it.
 
 Every query consumes through EOF, checks cursor errors, closes resources, and
 captures typed rows. The timer includes conversion/capture and Q15's DDL. File
@@ -108,8 +101,8 @@ Keep generated datasets, databases and raw captures outside Git. Large benchmark
 campaigns are explicit operations; ordinary tests use only tiny fixtures.
 
 Campaign mode `warm` runs the primary SF1/SF10/SF100 latency comparison: ten
-balanced paired suites per scale, with the same budgets, warmup, and correctness
-checks as `full`. It prepares one qualified persistent image per engine/scale;
+balanced paired suites per scale, with the same budgets and warmup as `full`.
+It prepares one checkpointed persistent image per engine/scale;
 the three-replicate loading experiment, scaling, cache, and profiling studies
 remain separate parts of `full`.
 
@@ -136,9 +129,11 @@ CPU set are enforced before exec, including child threads. Swap is disabled for
 that application. Controller work uses the other CCD. Source data and database
 cache ownership are controlled without dropping the host's entire cache.
 
-Preparation loads fresh databases, reopens and verifies them, checks independent
-NULL/decimal/date/string fixtures, and qualifies all 22 query outputs. Full mode
-uses three loads per scale/engine and retains the first qualified database.
+Preparation loads fresh databases and collects statistics and checkpoints.
+Benchmark scripts perform no dataset scans, reference checks, cross-engine result
+comparisons or correctness replays. Correctness tests and explicit diagnostic
+commands are separate from every benchmark mode. Full mode uses three loads per
+scale/engine and retains the first database.
 Later load replicas are discarded only after their owned processes have joined;
 all receipts remain. The pilot freezes symmetric query deadlines, throughput
 wave lengths and the balanced schedule before scored runs.

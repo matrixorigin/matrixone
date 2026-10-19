@@ -1192,6 +1192,9 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	runC.temporaryDropRetryActive = c.temporaryDropRetryActive
 	runC.preparedJoinDiagnosticFree = c.preparedJoinDiagnosticFree
 	runC.groupConcatMaxLenFloor = c.groupConcatMaxLenFloor
+	// Executor-owned schema transformations belong to the statement, not to
+	// one physical attempt. A retry must install the same catalog shape.
+	runC.adjustTableExtraFunc = c.adjustTableExtraFunc
 	runC.SetPreparedParamValues(c.preparedParamValues)
 	runC.inheritTemporaryDDLPolicy(c)
 	runC.inheritLoadUniqueIndexPromotion(c)

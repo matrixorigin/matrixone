@@ -135,15 +135,13 @@ func effectiveSettings(ctx context.Context, conn *sql.Conn, engine string) (map[
 }
 
 type LoadReceipt struct {
-	SchemaNS     int64            `json:"schema_ns"`
-	LoadNS       int64            `json:"load_ns"`
-	StatisticsNS int64            `json:"statistics_ns"`
-	CheckpointNS int64            `json:"checkpoint_ns"`
-	Tables       map[string]int64 `json:"table_rows"`
+	SchemaNS     int64 `json:"schema_ns"`
+	LoadNS       int64 `json:"load_ns"`
+	StatisticsNS int64 `json:"statistics_ns"`
+	CheckpointNS int64 `json:"checkpoint_ns"`
 }
 
 func bulkLoad(ctx context.Context, conn *sql.Conn, e Engine, root string, d Dataset) (receipt LoadReceipt, retErr error) {
-	receipt.Tables = map[string]int64{}
 	start := time.Now()
 	for _, t := range d.Tables {
 		if _, err := conn.ExecContext(ctx, t.ddl()); err != nil {
@@ -212,20 +210,7 @@ func bulkLoad(ctx context.Context, conn *sql.Conn, e Engine, root string, d Data
 		return receipt, fmt.Errorf("durable preparation: %w", err)
 	}
 	receipt.CheckpointNS = time.Since(start).Nanoseconds()
-	for _, t := range d.Tables {
-		if err := verifyTableSchema(ctx, conn, e.Name, t); err != nil {
-			return receipt, err
-		}
-		if err := verifyTable(ctx, conn, root, t, d.Inputs[t.Name]); err != nil {
-			return receipt, err
-		}
-		var count int64
-		if err := conn.QueryRowContext(ctx, "SELECT COUNT(*) FROM "+t.Name).Scan(&count); err != nil {
-			return receipt, err
-		}
-		receipt.Tables[t.Name] = count
-	}
-	return receipt, verifyRelationships(ctx, conn)
+	return receipt, nil
 }
 
 // Check catalog domains before content normalization can hide schema drift.
