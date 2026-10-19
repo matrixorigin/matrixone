@@ -107,6 +107,15 @@ func WithChunkedColumnPolicy(policy objectio.ChunkedColumnPolicy) SinkerOption {
 	}
 }
 
+// WithBeforePersist installs a hook that runs after the active object name is
+// known and immediately before Sync can make the object durable. Callers can
+// use it to establish restart-safe ownership before a commit-ambiguous write.
+func WithBeforePersist(hook func(context.Context, string) error) SinkerOption {
+	return func(sinker *Sinker) {
+		sinker.beforePersist = hook
+	}
+}
+
 type FileSinker interface {
 	Sink(context.Context, *batch.Batch) error
 	Sync(context.Context) (*objectio.ObjectStats, error)
@@ -446,6 +455,8 @@ type Sinker struct {
 
 	mp *mpool.MPool
 	fs fileservice.FileService
+
+	beforePersist func(context.Context, string) error
 }
 
 func (sinker *Sinker) String() string {
@@ -482,6 +493,20 @@ func (sinker *Sinker) fillDefaults() {
 
 func (sinker *Sinker) GetResult() ([]objectio.ObjectStats, []*batch.Batch) {
 	return sinker.result.persisted, sinker.result.tail
+}
+
+// GetUnpublishedFiles returns object names whose Sync may have reached
+// storage without producing publishable stats. The snapshot is safe to use
+// while transferring cleanup ownership out of the sinker.
+func (sinker *Sinker) GetUnpublishedFiles() []string {
+	files := make([]string, 0, len(sinker.staged.unpublished))
+	files = append(files, sinker.staged.unpublished...)
+	if sinker.pipe.result != nil {
+		sinker.pipe.result.mu.RLock()
+		files = append(files, sinker.pipe.result.unpublished...)
+		sinker.pipe.result.mu.RUnlock()
+	}
+	return normalizeUnpublishedObjectNames(files)
 }
 
 // DeleteUnpublishedObjects deletes object files that have not crossed their
@@ -791,6 +816,13 @@ func (sinker *Sinker) trySpill(ctx context.Context) error {
 // responsible for cleanup via resetFileSinker(); the executor is eventually
 // closed in Sinker.Close().
 func (sinker *Sinker) syncFileSinker(ctx context.Context, fSinker FileSinker) error {
+	if sinker.beforePersist != nil {
+		if name := activeFileSinkerObjectName(fSinker); name != "" {
+			if err := sinker.beforePersist(ctx, name); err != nil {
+				return err
+			}
+		}
+	}
 	syncStart := time.Now()
 	stats, err := fSinker.Sync(ctx)
 	atomic.AddInt64(&sinker.timing.syncNs, int64(time.Since(syncStart)))
