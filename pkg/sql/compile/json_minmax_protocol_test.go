@@ -58,12 +58,12 @@ func TestJSONMinMaxCapabilityGateCoversAggregateAndWindowPlans(t *testing.T) {
 	}}}
 	require.True(t, hasJSONMinMaxAggregate(qry.Nodes[0]))
 
-	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion80, defines.MORPCVersion81, defines.MORPCVersion82, defines.MORPCVersion83, defines.MORPCVersion84, defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion87, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119} {
+	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion80, defines.MORPCVersion81, defines.MORPCVersion82, defines.MORPCVersion83, defines.MORPCVersion84, defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion87, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
-		if version < defines.MORPCVersion119 {
+		if version < defines.MORPCVersion124 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 			require.Equal(t, c.addr, c.cnList[0].Addr)
 		} else {
@@ -92,16 +92,16 @@ func TestJSONMinMaxRemoteDestinationRejectsLegacyComparator(t *testing.T) {
 		RootOp:   operator,
 	}
 
-	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion80, defines.MORPCVersion81, defines.MORPCVersion82, defines.MORPCVersion83, defines.MORPCVersion84, defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion87, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119} {
+	for _, version := range []int64{defines.MORPCVersion75, defines.MORPCVersion80, defines.MORPCVersion81, defines.MORPCVersion82, defines.MORPCVersion83, defines.MORPCVersion84, defines.MORPCVersion85, defines.MORPCVersion86, defines.MORPCVersion87, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124} {
 		client.version = version
 		minimum := int64(0)
-		data, err := encodeRemoteScopeWithVectorProtocol(scope, c.proc, &minimum)
-		if version < defines.MORPCVersion119 {
-			require.ErrorContains(t, err, "remote destination does not support versioned expression semantics (MORPC version 119)")
+		data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &minimum)
+		if version < defines.MORPCVersion124 {
+			require.ErrorContains(t, err, "remote destination does not support versioned expression semantics (MORPC version 124)")
 			continue
 		}
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion119, minimum, "the execution stream must confirm the typed JSON comparator")
+		require.Equal(t, defines.MORPCVersion124, minimum, "the execution stream must confirm the typed JSON comparator")
 		wire := new(pipeline.Pipeline)
 		require.NoError(t, wire.Unmarshal(data))
 		require.Equal(t, aggexec.AggIdOfMin, wire.InstructionList[0].Agg.Aggs[0].Op)
@@ -114,15 +114,15 @@ func TestJSONMinMaxRemoteDestinationRejectsLegacyComparator(t *testing.T) {
 	scope.NodeInfo.Addr = "stale:6001"
 	_, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err,
-		"remote destination does not support versioned expression semantics (MORPC version 119)")
+		"remote destination does not support versioned expression semantics (MORPC version 124)")
 	scope.NodeInfo.Addr = "remote:6001"
 
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion80)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
 	require.ErrorContains(t,
 		validateRemoteAggregateProtocol(c.proc, operator.Aggs),
-		"typed JSON MIN/MAX requires MORPC protocol version 119")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+		"typed JSON MIN/MAX requires MORPC protocol version 124")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion124)
 	require.NoError(t, validateRemoteAggregateProtocol(c.proc, operator.Aggs))
 }
 
@@ -148,29 +148,29 @@ func TestJSONMinMaxSharedFloorsLocalAndCachedAdmission(t *testing.T) {
 		features, err := plan.RequiredRemoteExpressionFeatures(expr)
 		require.NoError(t, err)
 		require.True(t, features.JSONMinMaxTypedComparison)
-		require.Equal(t, defines.MORPCVersion119, requiredExpressionContractProtocolVersion(features))
+		require.Equal(t, defines.MORPCVersion124, requiredExpressionContractProtocolVersion(features))
 		floor, err := planbuilder.RequiredPersistedExpressionProtocolVersion(expr)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion119, floor)
+		require.Equal(t, defines.MORPCVersion124, floor)
 		queryPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{AggList: []*plan.Expr{expr}}}}}}
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion112)
-		require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, queryPlan), "protocol version 119")
+		require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, queryPlan), "protocol version 124")
 		cached := &Compile{proc: c.proc, pn: queryPlan}
-		require.ErrorContains(t, cached.Compile(context.Background(), queryPlan, nil), "protocol version 119")
+		require.ErrorContains(t, cached.Compile(context.Background(), queryPlan, nil), "protocol version 124")
 		_, err = cached.Run(0)
-		require.ErrorContains(t, err, "protocol version 119")
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+		require.ErrorContains(t, err, "protocol version 124")
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion124)
 		require.NoError(t, validateJSONStringConsumerProtocol(c.proc, queryPlan))
 	}
 }
 
-func TestJSONMinMaxActualPrefixKeepsELT118AndTyped119(t *testing.T) {
+func TestJSONMinMaxActualPrefixKeepsELT123AndTyped124(t *testing.T) {
 	elt := bindJSONStringConsumerExpr(t, "elt")
 	eltFeatures, err := plan.RequiredRemoteExpressionFeatures(elt)
 	require.NoError(t, err)
 	require.True(t, eltFeatures.JSONStringConsumerOverload)
 	require.False(t, eltFeatures.JSONMinMaxTypedComparison)
-	require.Equal(t, defines.MORPCVersion118, requiredExpressionContractProtocolVersion(eltFeatures))
+	require.Equal(t, defines.MORPCVersion123, requiredExpressionContractProtocolVersion(eltFeatures))
 	minNode := &plan.Node{AggList: []*plan.Expr{jsonMinMaxPlanExpr(aggexec.AggIdOfMin)}}
 	eltNode := &plan.Node{ProjectList: []*plan.Expr{elt}}
 	for _, nodes := range [][]*plan.Node{{minNode, eltNode}, {eltNode, minNode}} {
@@ -179,10 +179,10 @@ func TestJSONMinMaxActualPrefixKeepsELT118AndTyped119(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, features.JSONStringConsumerOverload)
 		require.True(t, features.JSONMinMaxTypedComparison)
-		require.Equal(t, defines.MORPCVersion119, requiredExpressionContractProtocolVersion(features))
+		require.Equal(t, defines.MORPCVersion124, requiredExpressionContractProtocolVersion(features))
 		floor, err := planbuilder.RequiredPersistedExpressionProtocolVersion(owner)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion119, floor)
+		require.Equal(t, defines.MORPCVersion124, floor)
 	}
 }
 
@@ -198,12 +198,12 @@ func TestJSONMinMaxShuffleUsesSharedTypedFloor(t *testing.T) {
 		if hadPrevious {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion124)
 		}
 	})
-	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119} {
+	for _, version := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		require.Equal(t, version >= defines.MORPCVersion119, c.canCompileShuffleGroup(node))
+		require.Equal(t, version >= defines.MORPCVersion124, c.canCompileShuffleGroup(node))
 	}
 	// Ordinary string MIN is governed by its existing contracts, not typed JSON.
 	node.AggList[0].GetF().Args[0].Typ.Id = int32(types.T_varchar)

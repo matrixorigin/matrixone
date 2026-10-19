@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand"
@@ -658,6 +659,7 @@ type dynamicCtx struct {
 
 	once      sync.Once
 	closeOnce sync.Once
+	closeErr  error
 	closed    atomic.Bool
 	ctx       context.Context
 	cancel    context.CancelFunc
@@ -728,7 +730,7 @@ func (d *dynamicCtx) LogDynamicCtx() string {
 	return buf.String()
 }
 
-func (d *dynamicCtx) Close() {
+func (d *dynamicCtx) Close() error {
 	d.closeOnce.Do(func() {
 		d.Lock()
 		d.closed.Store(true)
@@ -738,16 +740,17 @@ func (d *dynamicCtx) Close() {
 			cancel()
 		}
 		d.roots.Wait()
-		if d.alphaTaskPool != nil {
-			_ = d.alphaTaskPool.ReleaseTimeout(time.Second * 3)
-		}
-		if d.beta.taskPool != nil {
-			_ = d.beta.taskPool.ReleaseTimeout(time.Second * 3)
-		}
-		if d.gama.taskPool != nil {
-			_ = d.gama.taskPool.ReleaseTimeout(time.Second * 3)
+		// The roots no longer submit, but accepted jobs can still own internal
+		// SQL/logtail resources. A timed-out pool release is not a drain. Leave
+		// the outer CN close deadline to report a blocked owner; do not revoke
+		// its dependencies or silently ignore a failed pool join.
+		for _, pool := range []*ants.Pool{d.alphaTaskPool, d.beta.taskPool, d.gama.taskPool} {
+			if pool != nil {
+				d.closeErr = errors.Join(d.closeErr, pool.ReleaseContext(context.Background()))
+			}
 		}
 	})
+	return d.closeErr
 }
 
 ////////////////// MoTableStats Interface //////////////////

@@ -37,6 +37,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -3999,6 +4000,9 @@ func convUnsignedDirect[T constraints.Unsigned](
 // expr2 is a TIME expression (can include days like '1 1:1:1.000002')
 // Returns TIME if expr1 is TIME, DATETIME if expr1 is DATETIME/TIMESTAMP
 func AddTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if result.GetResultVector().GetType().Oid == types.T_time {
+		return addTimeToTime(ivecs, result, proc, length, selectList)
+	}
 	// Determine result type based on first argument
 	inputType := ivecs[0].GetType()
 	switch inputType.Oid {
@@ -4020,82 +4024,7 @@ func AddTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func addTimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	stringInput := ivecs[0].GetType().Oid != types.T_time
-	var times1 vector.FunctionParameterWrapper[types.Time]
-	var string1 vector.FunctionParameterWrapper[types.Varlena]
-	if stringInput {
-		string1 = vector.GenerateFunctionStrParameter(ivecs[0])
-	} else {
-		times1 = vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
-	}
-	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[types.Time](result)
-
-	// Determine scale from input
-	scale := int32(rs.GetType().Scale)
-	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
-		scale = scale2
-	}
-	rs.TempSetType(types.New(types.T_time, 0, scale))
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		time2Str, null2 := time2Param.GetStrValue(i)
-		if null2 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-		var time1 types.Time
-		var null1 bool
-		if stringInput {
-			var raw []byte
-			raw, null1 = string1.GetStrValue(i)
-			if !null1 {
-				var parseErr error
-				time1, parseErr = types.ParseTime(functionUtil.QuickBytesToStr(raw), scale)
-				if parseErr != nil {
-					null1 = true
-				}
-			}
-		} else {
-			time1, null1 = times1.GetValue(i)
-		}
-
-		if null1 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Parse time2 string
-		time2, err := parseTimeOperand(functionUtil.QuickBytesToStr(time2Str), scale)
-		if err != nil {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Duration functions publish the MySQL TIME endpoint rather than the
-		// wider internal duration range used by interval arithmetic.
-		resultTime, truncated := timeArithmeticResult(time1, time2, false)
-		if truncated {
-			appendTimeIntervalOverflowWarning(proc)
-		}
-
-		if err := rs.Append(resultTime, truncated); err != nil {
-			return err
-		}
-	}
-	return nil
+	return timeResultArithmetic(ivecs, result, proc, length, selectList, false)
 }
 
 func addTimeToDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4417,6 +4346,9 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 // expr2 is a TIME expression (can include days like '1 1:1:1.000002')
 // Returns TIME if expr1 is TIME, DATETIME if expr1 is DATETIME/TIMESTAMP
 func SubTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if result.GetResultVector().GetType().Oid == types.T_time {
+		return subTimeFromTime(ivecs, result, proc, length, selectList)
+	}
 	// Determine result type based on first argument
 	inputType := ivecs[0].GetType()
 	switch inputType.Oid {
@@ -4438,83 +4370,7 @@ func SubTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func subTimeFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	stringInput := ivecs[0].GetType().Oid != types.T_time
-	var times1 vector.FunctionParameterWrapper[types.Time]
-	var string1 vector.FunctionParameterWrapper[types.Varlena]
-	if stringInput {
-		string1 = vector.GenerateFunctionStrParameter(ivecs[0])
-	} else {
-		times1 = vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
-	}
-	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[types.Time](result)
-
-	// Determine scale from input
-	scale := int32(rs.GetType().Scale)
-	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
-		scale = scale2
-	}
-	rs.TempSetType(types.New(types.T_time, 0, scale))
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		time2Str, null2 := time2Param.GetStrValue(i)
-		if null2 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-		var time1 types.Time
-		var null1 bool
-		if stringInput {
-			var raw []byte
-			raw, null1 = string1.GetStrValue(i)
-			if !null1 {
-				var parseErr error
-				time1, parseErr = types.ParseTime(functionUtil.QuickBytesToStr(raw), scale)
-				if parseErr != nil {
-					null1 = true
-				}
-			}
-		} else {
-			time1, null1 = times1.GetValue(i)
-		}
-
-		if null1 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Parse time2 string
-		time2, err := parseTimeOperand(functionUtil.QuickBytesToStr(time2Str), scale)
-		if err != nil {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Duration functions publish the MySQL TIME endpoint rather than the
-		// wider internal duration range used by interval arithmetic.
-		resultTime, truncated := timeArithmeticResult(time1, time2, true)
-		if truncated {
-			appendTimeIntervalOverflowWarning(proc)
-		}
-
-		if err := rs.Append(resultTime, truncated); err != nil {
-			return err
-		}
-	}
-	return nil
+	return timeResultArithmetic(ivecs, result, proc, length, selectList, true)
 }
 
 func subTimeFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -6613,9 +6469,31 @@ func ExportSet(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 	return nil
 }
 
+// Issue #30217: MySQL emits warning 1649 (ER_UNKNOWN_LOCALE) when FORMAT
+// receives an unknown or NULL locale, while still falling back to en_US.
+func appendLocaleUnknownWarning(proc *process.Process, locale string) {
+	if proc == nil {
+		return
+	}
+	sink := proc.GetWarningSink()
+	if counter, ok := sink.(process.WarningDiagnosticCountAppender); ok && process.WarningDiagnosticRetentionLimitForProcess(proc) == 0 {
+		counter.AppendWarningCount(1)
+		return
+	}
+	if appender, ok := sink.(warningDiagnosticAppender); ok {
+		// Bound the echo before formatting; sink-side truncation is too late
+		// to prevent input-sized temporary allocations.
+		if len(locale) > 128 {
+			locale = locale[:util.UTF8PrefixLen(locale, 128)]
+		}
+		appender.AppendWarningDiagnostic(moerr.ER_UNKNOWN_LOCALE,
+			fmt.Sprintf("Unknown locale: '%s'", locale))
+	}
+}
+
 func FormatWith2Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if ivecs[0].GetType().IsNumeric() {
-		return formatWithNumericFirst(ivecs, result, length, false)
+		return formatWithNumericFirst(ivecs, result, nil, length, false)
 	}
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6740,9 +6618,9 @@ func GetFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *p
 	return nil
 }
 
-func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
+func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	if ivecs[0].GetType().IsNumeric() {
-		return formatWithNumericFirst(ivecs, result, length, true)
+		return formatWithNumericFirst(ivecs, result, proc, length, true)
 	}
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
@@ -6763,9 +6641,15 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 			}
 		} else {
 			if null3 {
+				appendLocaleUnknownWarning(proc, "NULL")
 				val, err = format.GetNumberFormat(string(v1), string(v2), "en_US")
 			} else {
-				val, err = format.GetNumberFormat(string(v1), string(v2), string(v3))
+				locale := functionUtil.QuickBytesToStr(v3)
+				if !format.IsValidLocale(locale) {
+					appendLocaleUnknownWarning(proc, locale)
+					locale = "en_US"
+				}
+				val, err = format.GetNumberFormat(string(v1), string(v2), locale)
 			}
 			if err != nil {
 				return err
@@ -6781,6 +6665,7 @@ func FormatWith3Args(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 func formatWithNumericFirst(
 	ivecs []*vector.Vector,
 	result vector.FunctionResultWrapper,
+	proc *process.Process,
 	length int,
 	withLocale bool,
 ) error {
@@ -6807,10 +6692,13 @@ func formatWithNumericFirst(
 		localeValue := "en_US"
 		if withLocale {
 			localeBytes, nullLocale := locale.GetStrValue(i)
-			if nullLocale {
-				localeValue = "en_US"
-			} else {
+			switch {
+			case nullLocale:
+				appendLocaleUnknownWarning(proc, "NULL")
+			case format.IsValidLocale(string(localeBytes)):
 				localeValue = string(localeBytes)
+			default:
+				appendLocaleUnknownWarning(proc, functionUtil.QuickBytesToStr(localeBytes))
 			}
 		}
 

@@ -16,8 +16,19 @@ is claimed by this document. Root owns reviewer and lifecycle decisions.
   remains an approval of that exact r1 content. It is not approval of this r2
   addendum or of the repaired implementation.
 
-This addendum supersedes only the allocation and compatibility boundaries below
-in the [retained r1 specification](20261016-odku-distributed-result-protocol.md).
+## Subsequent candidate allocation overlay (not part of r2 approval)
+
+For the current repair candidate, released main is
+`fed3bf59700158212a9135d0b619c3849034bb65`, whose capability prefix reaches
+MORPC122. The candidate preserves main's MORPC118–122 contracts and allocates
+JSON ELT/opaque visible text at MORPC123, typed JSON MIN/MAX at MORPC124, and the
+complete ODKU/session-LAST_INSERT_ID contract at MORPC125. This supersedes only
+the r2 allocation for the current candidate; it does not claim design approval
+or implementation acceptance. The r2 review record and allocation below remain
+historical and bound to their stated source and target.
+
+The approved r2 addendum below supersedes only the allocation and compatibility
+boundaries in the [retained r1 specification](20261016-odku-distributed-result-protocol.md).
 The existing coordinator ordering, provenance, bounded reduction, transaction
 publication, generation/retry ownership and performance budgets remain the
 implementation's intended design. Their existing evidence keeps its original

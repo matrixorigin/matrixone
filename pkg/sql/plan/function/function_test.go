@@ -1382,6 +1382,7 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_role_id"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("bit_count"))
 	for _, name := range []string{
 		"inet_aton", "inet_ntoa", "inet6_aton", "inet6_ntoa",
 		"is_ipv4", "is_ipv6", "is_ipv4_compat", "is_ipv4_mapped",

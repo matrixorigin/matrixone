@@ -180,6 +180,7 @@ func (s *store) newTAEStorage(
 		TaskServiceGetter: s.GetTaskService,
 		SID:               s.cfg.UUID,
 	}
+	options.WithCatalogGCInterval(s.cfg.GCCfg.CatalogGCInterval.Duration)(opt)
 	return taestorage.NewTAEStorage(
 		ctx,
 		s.cfg.Txn.Storage.dataDir,

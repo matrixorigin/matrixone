@@ -31,6 +31,8 @@ func newLoadGlobTestCtx(t *testing.T) (externalStatsTestCtx, *process.Process, c
 	t.Helper()
 	ctx := context.Background()
 	proc := testutil.NewProcess(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	return externalStatsTestCtx{
 		MockCompilerContext: &MockCompilerContext{ctx: ctx},
 		proc:                proc,

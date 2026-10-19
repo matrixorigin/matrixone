@@ -587,6 +587,7 @@ func applyTextCharsetToPlanType(typ *plan.Type, charset uint32) {
 	switch types.T(typ.Id) {
 	case types.T_char, types.T_varchar, types.T_text:
 		typ.Charset = charset
+		typ.CollationVersion = uint32(types.CollationVersionLegacy)
 		if types.IsUnicodeCollation(uint8(charset)) {
 			typ.CollationVersion = uint32(types.CollationVersionV1)
 		}
@@ -612,6 +613,7 @@ func applyCharsetToPlanType(typ *plan.Type, charset uint32) {
 		return
 	}
 	typ.Charset = uint32(types.CharsetBinary)
+	typ.CollationVersion = uint32(types.CollationVersionLegacy)
 }
 
 func charsetForName(name string) (uint32, bool) {
@@ -750,6 +752,38 @@ func tableDefaultCharset(ctx CompilerContext, options []tree.TableOption) (uint3
 
 func buildDefaultExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ plan.Type, proc *process.Process) (*plan.Default, error) {
 	return buildDefaultExprWithColumns(bindCtx, col, typ, proc, nil)
+}
+
+// MySQL treats an integer zero column default as the zero date for temporal
+// columns. Keep this conversion at the DDL boundary: ordinary numeric casts
+// and expressions have different semantics.
+func zeroTemporalDefaultLiteral(expr tree.Expr, typ plan.Type) (string, bool) {
+	num, ok := expr.(*tree.NumVal)
+	if !ok {
+		return "", false
+	}
+	switch num.ValType {
+	case tree.P_int64:
+		value, _ := num.Int64()
+		if value != 0 {
+			return "", false
+		}
+	case tree.P_uint64:
+		value, _ := num.Uint64()
+		if value != 0 {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	switch types.T(typ.Id) {
+	case types.T_date:
+		return "0000-00-00", true
+	case types.T_datetime, types.T_timestamp:
+		return "0000-00-00 00:00:00", true
+	default:
+		return "", false
+	}
 }
 
 func legacyImplicitTimestampDefaults(ctx CompilerContext) bool {
@@ -938,6 +972,9 @@ func buildDefaultExprWithColumns(
 	if err != nil {
 		return nil, err
 	}
+	if zeroValue, ok := zeroTemporalDefaultLiteral(semanticExpr, typ); ok {
+		planExpr = makePlan2StringConstExprWithType(zeroValue)
+	}
 	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
@@ -996,8 +1033,18 @@ func buildDefaultExprWithColumns(
 		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
-	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&
-		!newExpr.GetLit().Isnull && newExpr.GetLit().GetTimestampval() == int64(types.ZeroTimestamp) {
+	zeroTemporalDefault := false
+	if lit := newExpr.GetLit(); lit != nil && !lit.Isnull {
+		switch types.T(typ.Id) {
+		case types.T_date:
+			zeroTemporalDefault = lit.GetDateval() == int32(types.ZeroDate)
+		case types.T_datetime:
+			zeroTemporalDefault = lit.GetDatetimeval() == int64(types.ZeroDatetime)
+		case types.T_timestamp:
+			zeroTemporalDefault = lit.GetTimestampval() == int64(types.ZeroTimestamp)
+		}
+	}
+	if zeroTemporalDefault {
 		var mode interface{} = proc.GetSessionInfo().SqlMode
 		if resolve := proc.GetResolveVariableFunc(); resolve != nil {
 			mode, err = resolve("sql_mode", true, false)
@@ -1240,7 +1287,7 @@ func checkExprForVolatileFunc(ctx context.Context, expr *plan.Expr) error {
 	switch e := expr.Expr.(type) {
 	case *plan.Expr_F:
 		ov, exists := function.GetFunctionByIdWithoutError(e.F.Func.Obj)
-		if exists && (ov.CannotFold() || ov.IsRealTimeRelated()) {
+		if exists && (ov.IsVolatile() || ov.IsRealTimeRelated()) {
 			return moerr.NewInvalidInputf(ctx,
 				"expression of generated column cannot refer to a non-deterministic function '%s'", e.F.Func.ObjName)
 		}
@@ -2342,6 +2389,16 @@ func (builder *QueryBuilder) applyGeneratedColumnAssignmentCast(expr *plan.Expr,
 		return expr, nil
 	}
 	f := expr.GetF()
+	if alterCopyBinaryAssignment(builder.GetContext(), expr.Typ) {
+		target := expr.Typ
+		// Replace the persisted assignment wrapper, not a user-written
+		// explicit CAST inside the expression. Validate its final value once.
+		if f != nil && f.Func != nil && len(f.Args) > 0 &&
+			(f.Func.ObjName == "cast" || f.Func.ObjName == "cast_assign" || f.Func.ObjName == "cast_strict" || f.Func.ObjName == "cast_ignore") {
+			expr = f.Args[0]
+		}
+		return builder.forceAssignmentCastExpr(expr, target, isIgnore)
+	}
 	if types.T(expr.Typ.Id).IsArrayRelate() && needsSameTypeAssignmentCast(expr.Typ) {
 		// 旧目录中的生成列表达式可能没有赋值 CAST；执行新 DML 时补齐，
 		// 已有的根 CAST 则继续复用，避免重复复制每个向量。

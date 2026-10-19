@@ -226,7 +226,7 @@ func analyzeLoadUniqueIndexPromotionPlan(
 	}
 
 	reachable, ok := reachableLoadPlanNodes(qry)
-	if !ok || len(qry.Steps) != 1 {
+	if !ok {
 		return nil, false
 	}
 	var lockNode, updateNode *plan.Node
@@ -255,9 +255,7 @@ func analyzeLoadUniqueIndexPromotionPlan(
 		}
 	}
 	if lockNode == nil || updateNode == nil || externalScans != 1 ||
-		qry.Steps[0] != updateNodeID ||
-		!planNodeDescendsFrom(qry.Nodes, updateNodeID, lockNodeID) ||
-		!planNodeDescendsFrom(qry.Nodes, lockNodeID, externalNodeID) {
+		!loadUniqueIndexPromotionTopology(qry, updateNodeID, lockNodeID, externalNodeID) {
 		return nil, false
 	}
 
@@ -373,6 +371,111 @@ func analyzeLoadUniqueIndexPromotionPlan(
 	return promoted, true
 }
 
+// Admit only the original single writer or the shared prepared-image LOAD.
+// SourceStep is a step index, not a node ID. The extra executable branch must
+// only validate the base PK; it must never supply the writer's partitions.
+// reachableLoadPlanNodes has already validated all references and cycles.
+func loadUniqueIndexPromotionTopology(qry *plan.Query, writer, lock, external int32) bool {
+	if !planNodeDescendsFrom(qry.Nodes, lock, external) {
+		return false
+	}
+	if len(qry.Steps) == 1 {
+		return qry.Steps[0] == writer && planNodeDescendsFrom(qry.Nodes, writer, lock)
+	}
+	if len(qry.Steps) != 3 {
+		return false
+	}
+	var source, validation int32 = -1, -1
+	writerSteps := 0
+	for step, root := range qry.Steps {
+		switch qry.Nodes[root].NodeType {
+		case plan.Node_SINK:
+			if source >= 0 {
+				return false
+			}
+			source = int32(step)
+		case plan.Node_PROJECT:
+			if validation >= 0 {
+				return false
+			}
+			validation = root
+		case plan.Node_MULTI_UPDATE:
+			if root != writer {
+				return false
+			}
+			writerSteps++
+		default:
+			return false
+		}
+	}
+	if source < 0 || validation < 0 || writerSteps != 1 ||
+		!planNodeDescendsFrom(qry.Nodes, qry.Steps[source], lock) {
+		return false
+	}
+	// The shared image is prepared and locked once, from one external input.
+	for id := qry.Steps[source]; ; {
+		n := qry.Nodes[id]
+		if id == external {
+			if len(n.Children) != 0 {
+				return false
+			}
+			break
+		}
+		switch n.NodeType {
+		case plan.Node_SINK, plan.Node_PROJECT, plan.Node_PRE_INSERT, plan.Node_LOCK_OP:
+		default:
+			return false
+		}
+		if len(n.Children) != 1 {
+			return false
+		}
+		id = n.Children[0]
+	}
+	sharedScan := func(n *plan.Node) bool {
+		return n.NodeType == plan.Node_SINK_SCAN && n.SourceStep[0] == source
+	}
+	update := qry.Nodes[writer]
+	if len(update.Children) != 1 {
+		return false
+	}
+	writeInput := loadPromotionSkipProjects(qry.Nodes, update.Children[0])
+	// Ordinary LOAD checks constraints after the shared image. ASSERT preserves
+	// successful rows and has no alternate source or partitioning of its own.
+	for writeInput.NodeType == plan.Node_ASSERT && len(writeInput.Children) == 1 {
+		writeInput = loadPromotionSkipProjects(qry.Nodes, writeInput.Children[0])
+	}
+	if !sharedScan(writeInput) {
+		return false
+	}
+	check := loadPromotionSkipProjects(qry.Nodes, validation)
+	if check.NodeType != plan.Node_JOIN || check.JoinType != plan.Node_DEDUP ||
+		check.OnDuplicateAction != plan.Node_FAIL || len(check.Children) != 2 {
+		return false
+	}
+	// swapJoinChildren exchanges the physical inputs for RIGHT DEDUP while
+	// retaining IsRightJoin. Resolve the logical roles before checking sources.
+	target, input := check.Children[0], check.Children[1]
+	if check.IsRightJoin {
+		target, input = input, target
+	}
+	if !sharedScan(loadPromotionSkipProjects(qry.Nodes, input)) {
+		return false
+	}
+	scan := loadPromotionSkipProjects(qry.Nodes, target)
+	base := qry.Nodes[lock].TableDef
+	return scan.NodeType == plan.Node_TABLE_SCAN && len(scan.Children) == 0 &&
+		base != nil && scan.TableDef != nil && scan.TableDef.TblId == base.TblId &&
+		objectRefMatchesTable(scan.ObjRef, base)
+}
+
+func loadPromotionSkipProjects(nodes []*plan.Node, id int32) *plan.Node {
+	n := nodes[id]
+	for n.NodeType == plan.Node_PROJECT && len(n.Children) == 1 {
+		n = nodes[n.Children[0]]
+	}
+	return n
+}
+
 func reachableLoadPlanNodes(qry *plan.Query) (map[int32]struct{}, bool) {
 	reachable := make(map[int32]struct{}, len(qry.Nodes))
 	visiting := make(map[int32]struct{}, len(qry.Nodes))
@@ -389,7 +492,24 @@ func reachableLoadPlanNodes(qry *plan.Query) (map[int32]struct{}, bool) {
 		}
 		visiting[nodeID] = struct{}{}
 		defer delete(visiting, nodeID)
-		for _, child := range qry.Nodes[nodeID].Children {
+		n := qry.Nodes[nodeID]
+		if n.NodeType == plan.Node_SINK_SCAN {
+			if len(n.Children) != 0 || len(n.SourceStep) != 1 {
+				return false
+			}
+			step := n.SourceStep[0]
+			if step < 0 || int(step) >= len(qry.Steps) {
+				return false
+			}
+			root := qry.Steps[step]
+			if root < 0 || int(root) >= len(qry.Nodes) || qry.Nodes[root] == nil ||
+				qry.Nodes[root].NodeType != plan.Node_SINK || !visit(root) {
+				return false
+			}
+		} else if len(n.SourceStep) != 0 {
+			return false
+		}
+		for _, child := range n.Children {
 			if !visit(child) {
 				return false
 			}

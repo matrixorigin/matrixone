@@ -240,10 +240,10 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	}
 	// Admission must still see JSON ELT after optimization; selected-subtree
 	// constant evaluation belongs to its lazy expression executor.
-	if requiresJSON, err := plan.RequiresMORPCVersion118JSONStringConsumerOverload(expr); err != nil || requiresJSON {
+	if requiresJSON, err := plan.RequiresMORPCVersion123JSONStringConsumerOverload(expr); err != nil || requiresJSON {
 		return expr
 	}
-	if f.CannotFold() { // function cannot be fold
+	if f.IsVolatile() {
 		return expr
 	}
 	if IsLegacyTimeAssignmentOutsideInternalRange(fn) {
@@ -262,7 +262,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	isVec := false
 	for i := range fn.Args {
 		fn.Args[i] = r.foldExpr(fn.Args[i], proc, spatialChecked)
-		isVec = isVec || fn.Args[i].GetVec() != nil
+		isVec = isVec || fn.Args[i].GetVec() != nil && !IsScalarConstantVector(fn.Args[i])
 	}
 	if r.isPrepared && ContainsSqlModeDependentTemporalCall(expr) {
 		return expr
@@ -270,7 +270,10 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	if f.IsAgg() || f.IsWin() {
 		return expr
 	}
-	if !IsConstant(expr, false) {
+	if !function.IsFoldCandidate(expr, false) {
+		return expr
+	}
+	if isVec && !CanMaterializeConstantVector(expr) {
 		return expr
 	}
 
@@ -317,6 +320,10 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 
 	c := GetConstantValue(vec, false, 0)
 	if c == nil {
+		constant, err := MaterializeDecimal256Constant(proc, expr, vec)
+		if err == nil && constant != nil {
+			expr.Expr = &plan.Expr_Vec{Vec: constant}
+		}
 		return expr
 	}
 	PreserveFoldedLiteralStringDomain(expr, c)
@@ -515,6 +522,101 @@ func PreserveFoldedDecimalLiteralSemantics(expr *plan.Expr, literal *plan.Litera
 		}
 		return nil
 	})
+}
+
+// MaterializeDecimal256Constant supplies the scalar representation absent from
+// Literal. Callers must first establish successful, warning-free evaluation.
+// LiteralVec cannot retain Literal.Src, so inputs needing recovery on a later
+// execution stay executable instead of losing realtime or PREPARE provenance.
+func MaterializeDecimal256Constant(proc *process.Process, expr *plan.Expr, vec *vector.Vector) (*plan.LiteralVec, error) {
+	if !CanMaterializeConstantVector(expr) ||
+		vec == nil || vec.GetType().Oid != types.T_decimal256 || vec.Length() != 1 || vec.IsNull(0) {
+		return nil, nil
+	}
+	// Only explicit casts need the missing scalar representation. Implicit
+	// decimal literals retain their canonical syntax for exact-peer binding.
+	// Parents of an already materialized wide scalar must preserve broadcast
+	// semantics too, without admitting ordinary literal lists.
+	admitted := function.IsExplicitDecimalCast(expr)
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if IsDecimal256ScalarConstant(arg) {
+				admitted = true
+			}
+		}
+	}
+	if !admitted {
+		return nil, nil
+	}
+	constant, err := vector.NewConstFixed(*vec.GetType(),
+		vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0), 1, proc.Mp())
+	if constant != nil {
+		defer constant.Free(proc.Mp())
+	}
+	if err != nil {
+		return nil, err
+	}
+	data, err := constant.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	return &plan.LiteralVec{
+		Len: 1, Data: data, StringSource: uint32(vec.GetStringSourceAt(0)),
+		DecimalLiteralRequiresV82: true,
+	}, nil
+}
+
+// CanMaterializeConstantVector excludes recovery metadata that has no place in
+// LiteralVec. Apply it to parents as well as the first wide scalar conversion.
+func CanMaterializeConstantVector(expr *plan.Expr) bool {
+	if !function.IsStatementConstantInput(expr) {
+		return false
+	}
+	requiresSource := false
+	_ = plan.VisitExprTree(expr, func(input *plan.Expr) error {
+		if input.GetLit().GetSrc() != nil {
+			requiresSource = true
+		}
+		if _, ok := ProvisionalPreparedExactPeerSource(input); ok {
+			requiresSource = true
+		}
+		return nil
+	})
+	return !requiresSource
+}
+
+// IsScalarConstantVector distinguishes a broadcast scalar from a literal list.
+// The payload's physical constness, not just Len, determines this contract.
+func IsScalarConstantVector(expr *plan.Expr) bool {
+	return scalarConstantVector(expr) != nil
+}
+
+// IsDecimal256ScalarConstant admits the non-NULL numeric scalar representation
+// emitted by MaterializeDecimal256Constant into scalar-only binder consumers.
+func IsDecimal256ScalarConstant(expr *plan.Expr) bool {
+	if expr == nil || types.T(expr.Typ.Id) != types.T_decimal256 ||
+		!expr.GetVec().GetDecimalLiteralRequiresV82() {
+		return false
+	}
+	decoded := scalarConstantVector(expr)
+	return decoded != nil && decoded.GetType().Oid == types.T_decimal256 && !decoded.IsNull(0)
+}
+
+func scalarConstantVector(expr *plan.Expr) *vector.Vector {
+	literal := expr.GetVec()
+	if literal == nil || literal.Len != 1 {
+		return nil
+	}
+	// Checked decoding borrows immutable payload bytes (including ReadNoCopy
+	// nulls); this fresh temporary owns no MPool allocations to release.
+	decoded := vector.NewVec(types.T_any.ToType())
+	if err := decoded.UnmarshalBinary(literal.Data); err != nil {
+		return nil
+	}
+	if !decoded.IsConst() || decoded.Length() != 1 {
+		return nil
+	}
+	return decoded
 }
 
 func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *plan.Literal) {

@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils/config"
@@ -361,10 +362,56 @@ func TestBackupData(t *testing.T) {
 
 }
 
+// A committed appendable carrier is not a durable file until its first
+// append is flushed. Checkpointing before that append must leave WAL replay
+// responsible for the later payload, including after a backup checkpoint.
+func TestBackupCheckpointBeforeFirstAppend(t *testing.T) {
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+	opts := config.WithLongScanAndCKPOpts(nil)
+	engine := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+	defer opts.Fs.Close(context.Background())
+	defer engine.Close()
+	schema := catalog.MockSchemaAll(2, 0)
+	schema.Extra.BlockMaxRows = 2
+	schema.Extra.ObjectMaxBlocks = 2
+	engine.BindSchema(schema)
+	txn, err := engine.StartTxn(nil)
+	require.NoError(t, err)
+	db, err := testutil.CreateDatabase2(ctx, txn, "db")
+	require.NoError(t, err)
+	_, err = testutil.CreateRelation2(ctx, txn, db, schema)
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctx))
+	txn, rel := engine.GetRelation()
+	carrier, err := rel.CreateObject(false)
+	require.NoError(t, err)
+	carrierID := *carrier.GetID()
+	require.NoError(t, carrier.Close())
+	require.NoError(t, txn.Commit(ctx))
+	_, err = engine.ForceCheckpointForBackup(ctx, engine.TxnMgr.Now())
+	require.NoError(t, err)
+	data := catalog.MockBatch(schema, 1)
+	defer data.Close()
+	txn, rel = engine.GetRelation()
+	require.NoError(t, rel.Append(ctx, data))
+	require.NoError(t, txn.Commit(ctx))
+	txn, rel = engine.GetRelation()
+	metas := testutil.GetAllAppendableMetas(rel, false)
+	require.Len(t, metas, 1)
+	require.Equal(t, carrierID, *metas[0].ID(), "the append must reuse the pre-checkpoint carrier")
+	require.NoError(t, txn.Commit(ctx))
+	engine.Restart(ctx)
+	txn, rel = engine.GetRelation()
+	testutil.CheckAllColRowsByScan(t, rel, 1, true)
+	require.NoError(t, txn.Commit(ctx))
+}
+
 func TestBackupData2(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
-	ctx := context.Background()
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
 
 	opts := config.WithQuickScanAndCKPOpts(nil)
 	db := testutil.NewTestEngine(ctx, ModuleName, t, opts)
@@ -411,22 +458,28 @@ func TestBackupData2(t *testing.T) {
 		DataDir: dir,
 	}
 	service, err := fileservice.NewFileService(ctx, c, nil)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	defer service.Close(ctx)
 	for _, data := range bats {
-		txn, rel := db.GetRelation()
-		v := testutil.GetSingleSortKeyValue(data, schema, 2)
-		filter := handle.NewEQFilter(v)
-		err := rel.DeleteByFilter(context.Background(), filter)
-		assert.NoError(t, err)
-		assert.NoError(t, txn.Commit(context.Background()))
+		func() {
+			txn, rel := db.GetRelation()
+			defer func() {
+				if txn.GetTxnState(false) == txnif.TxnStateActive {
+					require.NoError(t, txn.Rollback(context.Background()))
+				}
+			}()
+			v := testutil.GetSingleSortKeyValue(data, schema, 2)
+			filter := handle.NewEQFilter(v)
+			require.NoError(t, rel.DeleteByFilter(ctx, filter))
+			require.NoError(t, txn.Commit(ctx))
+		}()
 	}
 	backupTime := time.Now().UTC()
 	currTs := types.BuildTS(backupTime.UnixNano(), 0)
 	location, err := db.ForceCheckpointForBackup(ctx, currTs)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	_, err = db.BGCheckpointRunner.DisableCheckpoint(ctx)
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	compacted := db.BGCheckpointRunner.GetCompacted()
 	checkpoints := db.BGCheckpointRunner.GetAllCheckpointsForBackup(compacted)
 	files := make(map[string]string, 0)
@@ -447,7 +500,7 @@ func TestBackupData2(t *testing.T) {
 	}
 	fileList := make([]*taeFile, 0)
 	err = execBackup(ctx, "", db.Opts.Fs, service, locations, 1, types.TS{}, "full", &fileList, nil, nil)
-	assert.Nil(t, err)
+	require.NoError(t, err)
 	fileMap := make(map[string]struct{})
 	for _, file := range fileList {
 		_, ok := fileMap[file.path]
@@ -1151,7 +1204,7 @@ func TestBackup(t *testing.T) {
 		{
 			name: "t2",
 			args: args{
-				ctx: context.Background(),
+				ctx: fileservice.WithSQLFileAccess(context.Background(), "sys", "moadmin"),
 				bs:  bs,
 				cfg: &Config{
 					Timestamp:  types.TS{},

@@ -73,23 +73,23 @@ if [[ "$1" == tool && "$2" == test2json ]]; then
   trap 'touch "$CASE_DIR/stopped-execute-a"; exit 143' TERM
   printf '%s\n' "$$" > "$CASE_DIR/pid-execute-a"
   printf 'ready\n' >&8
-  while :; do read -r -t 0.01 _ <&9 || true; done
+  while :; do read -r _ <&9 || true; done
  fi
  if [[ "$MODE" == execute-timeout && "$leaf" == a ]]; then
   ps -o pgid= -p $$ | tr -d ' ' > "$CASE_DIR/pgid-execute-timeout-a"
   trap '' TERM
-  while :; do read -r -t 0.01 _ <&9 || true; done
+  while :; do read -r _ <&9 || true; done
  fi
  if [[ "$MODE" == execute-timeout-zero && "$leaf" == a ]]; then
   ps -o pgid= -p $$ | tr -d ' ' > "$CASE_DIR/pgid-execute-timeout-zero-a"
   trap 'printf "{\"Action\":\"pass\",\"Package\":\"%s\"}\\n" "$package"; exit 0' TERM
-  while :; do read -r -t 0.01 _ <&9 || true; done
+  while :; do read -r _ <&9 || true; done
  fi
  if [[ "$MODE" == execute-cancel-resistant && "$leaf" == a ]]; then
   ps -o pgid= -p $$ | tr -d ' ' > "$CASE_DIR/pgid-execute-resistant-a"
   printf 'ready\n' >&8
   trap '' TERM
-  while :; do read -r -t 0.01 _ <&9 || true; done
+  while :; do read -r _ <&9 || true; done
  fi
  if [[ "$MODE" == test-failure && "$leaf" == b ]]; then
   printf '{"Action":"fail","Package":"%s"}\n' "$package"
@@ -118,7 +118,7 @@ if [[ " $* " == *' -c '* ]]; then
     if [[ -e "$CASE_DIR/join-waiting" ]]; then
      if mkdir "$CASE_DIR/term-sent" 2>/dev/null; then kill -TERM "$RUNNER_PID"; fi
     fi
-    read -r -t 0.01 _ <&9 || true
+    read -r -t 1 _ <&9 || true
    done
   else
    read -r _ <&9
@@ -648,15 +648,7 @@ run_embedded_tests "$scope" 2
 			var transform func(string) string
 			mock := embeddedGoMock
 			switch phase {
-			case "active-publication":
-				transform = func(text string) string {
-					const anchor = "            test_pids[index]=$!\n"
-					if strings.Count(text, anchor) != 1 {
-						t.Fatal("missing active pid publication")
-					}
-					return strings.Replace(text, anchor, "        ut_test_execution_spawned\n"+anchor, 1)
-				}
-			case "watchdog-publication", "cleanup":
+			case "active-publication", "watchdog-publication", "cleanup":
 				mock = strings.Replace(mock, `trap 'touch "$CASE_DIR/stopped-execute-a"; exit 143' TERM`, `trap 'fixture_self_pid fixture_pid; printf "MOCK_TERM shell=%s\n" "$fixture_pid" >&16; touch "$CASE_DIR/stopped-execute-a"; printf "MOCK_STOPPED shell=%s\n" "$fixture_pid" >&16; exit 143' TERM`, 1)
 				script = strings.Replace(script, " printf 'EXECUTE_CANCELLED %s\\n' \"$status\"", " cat \"$CASE_DIR/ut-signal-trace.log\"\n printf 'EXECUTE_CANCELLED %s\\n' \"$status\"", 1)
 				script = strings.Replace(script, "function ut_test_execution_spawned() {", `exec 16>"$CASE_DIR/ut-signal-trace.log"
@@ -687,7 +679,10 @@ function ut_test_execution_spawned() {`, 1)
   printf 'OBSERVER_RELEASE shell=%s\n' "$observer_pid" >&16) &`, 1)
 				}
 				transform = func(text string) string {
-					const anchor = "            watchdog_pids[index]=$!\n"
+					anchor := "            watchdog_pids[index]=$!\n"
+					if phase == "active-publication" {
+						anchor = "            test_pids[index]=$!\n"
+					}
 					if strings.Count(text, anchor) != 1 {
 						t.Fatal("missing watchdog pid publication")
 					}
@@ -705,19 +700,23 @@ function ut_test_execution_spawned() {`, 1)
 					text = strings.Replace(text, `            child_pids[index*2]=${test_pids[index]}`, `            child_pids[index*2]=${test_pids[index]}
             fixture_self_pid fixture_pid
             printf 'TEST_PUBLISHED shell=%s test=%s\n' "$fixture_pid" "${test_pids[index]}" >&16`, 1)
-					text = strings.Replace(text, "    function cancel_prebuilt_race_commands(){\n", "    function cancel_prebuilt_race_commands(){\n        fixture_self_pid fixture_pid\n        printf 'CANCEL shell=%s test=%s watchdog=%s\\n' \"$fixture_pid\" \"${test_pids[*]}\" \"${watchdog_pids[*]}\" >&16\n", 1)
+					text = strings.Replace(text, "    function cancel_prebuilt_race_commands(){\n", "    function cancel_prebuilt_race_commands(){\n        fixture_self_pid fixture_pid\n        printf 'CANCEL shell=%s test=%s watchdog=%s\\n' \"$fixture_pid\" \"${test_pids[*]-}\" \"${watchdog_pids[*]-}\" >&16\n", 1)
 					text = strings.Replace(text, `        if ! terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2; then exit 125; fi`, `        local sweep_status=0
         fixture_self_pid fixture_pid
-        printf 'SWEEP_START shell=%s owners=%s\n' "$fixture_pid" "${child_pids[*]}" >&16
+        printf 'SWEEP_START shell=%s owners=%s\n' "$fixture_pid" "${child_pids[*]-}" >&16
         terminate_ut_process_groups 20 ${child_pids[@]+"${child_pids[@]}"} >&2 || sweep_status=$?
         printf 'SWEEP_RESULT shell=%s status=%s\n' "$fixture_pid" "$sweep_status" >&16
         (( sweep_status == 0 )) || exit 125`, 1)
 					text = strings.Replace(text, "        wait 2>/dev/null || true\n", "        fixture_self_pid fixture_pid\n        printf 'DRAINED shell=%s\\n' \"$fixture_pid\" >&16\n        jobs -l >&16\n        wait 2>/dev/null || true\n        printf 'JOINED shell=%s\\n' \"$fixture_pid\" >&16\n", 1)
 					hook := ""
-					if phase == "watchdog-publication" {
+					if phase == "watchdog-publication" || phase == "active-publication" {
 						hook = "        ut_test_execution_spawned \"$!\"\n"
 					}
-					return prefix + strings.Replace(text, anchor, hook+anchor+"            fixture_self_pid fixture_pid\n            printf 'PUBLISHED shell=%s watchdog=%s\\n' \"$fixture_pid\" \"${watchdog_pids[index]}\" >&16\n", 1)
+					published := "watchdog_pids"
+					if phase == "active-publication" {
+						published = "test_pids"
+					}
+					return prefix + strings.Replace(text, anchor, hook+anchor+"            fixture_self_pid fixture_pid\n            printf 'PUBLISHED shell=%s watchdog=%s\\n' \"$fixture_pid\" \"${"+published+"[index]}\" >&16\n", 1)
 				}
 			}
 			out, err := scheduleHarnessWithMockTransform(t, script, mock, transform,
@@ -757,6 +756,129 @@ function ut_test_execution_spawned() {`, 1)
 				}
 			}
 		})
+	}
+}
+
+// Deliver TERM to the helper at PID publication and its normal poll boundary.
+// The trap records the request instead of reentering cleanup from an arbitrary
+// command. The parent then delivers a second TERM; the owner must still drain
+// every admitted process group before acknowledging cancellation.
+func TestEmbeddedPrebuiltPublicationCancellationLatch(t *testing.T) {
+	t.Parallel()
+	for _, owner := range []string{"test_pids", "watchdog_pids", "poll"} {
+		t.Run(owner, func(t *testing.T) {
+			script := embeddedSetup + `
+scope=$'example/b\ngithub.com/matrixorigin/matrixone/pkg/embed\nexample/c'
+cleanup_check() {
+ status=$?
+ [[ -f "$CASE_DIR/stopped-execute-a" ]] || status=90
+ if kill -0 "$(<"$CASE_DIR/pid-execute-a")" 2>/dev/null; then status=91; fi
+ [[ ! -d "$artifact_dir" ]] || status=92
+ [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=93
+ [[ ! -d "$CASE_DIR/executed-b" && ! -d "$CASE_DIR/executed-c" ]] || status=94
+ [[ -f "$CASE_DIR/publication-latched" ]] || status=95
+ printf 'PUBLICATION_LATCHED\n'
+ printf 'PUBLICATION_CANCELLED %s\n' "$status"
+ exit "$status"
+}
+function cancel_during_publication() {
+ local helper_pid
+ read -r _ <&8
+ fixture_self_pid helper_pid
+ kill -TERM "$helper_pid"
+ [[ "$term_pending" == 1 ]] || exit 95
+ : > "$CASE_DIR/publication-latched"
+ kill -TERM $$
+}
+trap cleanup_check EXIT
+start_embedded_prebuild "$scope" 1
+artifact_dir=$CLUSTER_PREBUILD_DIR
+run_embedded_tests "$scope" 2
+`
+			transform := func(text string) string {
+				if owner == "poll" {
+					boundary := strings.Index(text, "function run_prebuilt_race_commands(){")
+					if boundary < 0 {
+						t.Fatal("missing prebuilt execution owner")
+					}
+					const anchor = "        progress=0\n"
+					if strings.Count(text[boundary:], anchor) != 1 {
+						t.Fatal("missing prebuilt polling boundary")
+					}
+					return text[:boundary] + strings.Replace(text[boundary:], anchor, "        cancel_during_publication\n"+anchor, 1)
+				}
+				anchor := "            " + owner + "[index]=$!\n"
+				if strings.Count(text, anchor) != 1 {
+					t.Fatal("missing PID publication: " + owner)
+				}
+				// The hook starts no background job, preserving the unpublished $!.
+				return strings.Replace(text, anchor, "            cancel_during_publication\n"+anchor, 1)
+			}
+			out, err := scheduleHarnessWithMockTransform(t, script, embeddedGoMock, transform,
+				"MODE=execute-cancel", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
+			exit, ok := err.(*exec.ExitError)
+			if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "PUBLICATION_LATCHED") ||
+				!strings.Contains(string(out), "PUBLICATION_CANCELLED 143") {
+				t.Fatalf("publication cancellation %s: %v\n%s", owner, err, out)
+			}
+		})
+	}
+}
+
+func TestEmbeddedPrebuiltCancellationRequestPreparation(t *testing.T) {
+	t.Parallel()
+	out, err := scheduleHarness(t, `source ./run_ut.sh UT
+path="$G_WKSP/$G_TS-owner-complete.CURRENT_UT_PID"
+: > "$path.cancel"
+failed=0
+prepare_ut_helper_completion CURRENT_UT_PID failed || exit 90
+[[ "$failed" == 0 && -f "$path" && ! -e "$path.cancel" ]] || exit 91
+mkdir "$path.cancel"
+status=0
+prepare_ut_helper_completion CURRENT_UT_PID failed || status=$?
+[[ "$status" == 125 && "$failed" == 1 && -d "$path.cancel" ]] || exit 92
+printf 'REQUEST_PREPARED\n'
+`)
+	if err != nil || !strings.Contains(string(out), "REQUEST_PREPARED") {
+		t.Fatalf("cancellation request preparation: %v\n%s", err, out)
+	}
+}
+
+func TestEmbeddedPrebuiltCancellationRequestSurvivesLostTERM(t *testing.T) {
+	t.Parallel()
+	script := embeddedSetup + `
+scope=$'example/b\ngithub.com/matrixorigin/matrixone/pkg/embed\nexample/c'
+eval "$(declare -f terminate_ut_process_group | sed '1s/terminate_ut_process_group/original_terminate_ut_process_group/')"
+function terminate_ut_process_group() {
+ if [[ "$1" == "${CURRENT_UT_PID:-}" && "${2:-TERM}" == TERM && "$UT_TERMINATING" == 1 ]]; then
+  : > "$CASE_DIR/helper-term-suppressed"
+  return 0
+ fi
+ original_terminate_ut_process_group "$@"
+}
+cleanup_check() {
+ status=$?
+ [[ -f "$CASE_DIR/helper-term-suppressed" && -f "$CASE_DIR/stopped-execute-a" ]] || status=90
+ if kill -0 "$(<"$CASE_DIR/pid-execute-a")" 2>/dev/null; then status=91; fi
+ [[ ! -d "$artifact_dir" ]] || status=92
+ [[ -z "$CLUSTER_PREBUILD_JOB_PID$CURRENT_UT_PID" ]] || status=93
+ [[ ! -d "$CASE_DIR/executed-b" && ! -d "$CASE_DIR/executed-c" ]] || status=94
+ completion="$G_WKSP/$G_TS-owner-complete.CURRENT_UT_PID"
+ [[ -f "$completion" && "$(<"$completion")" == 143 && ! -e "$completion.cancel" ]] || status=95
+ printf 'REQUEST_CANCELLED %s\n' "$status"
+ exit "$status"
+}
+trap cleanup_check EXIT
+start_embedded_prebuild "$scope" 1
+artifact_dir=$CLUSTER_PREBUILD_DIR
+(read -r _ <&8; kill -TERM $$) &
+run_embedded_tests "$scope" 2
+`
+	out, err := scheduleHarnessWithMock(t, script, embeddedGoMock,
+		"MODE=execute-cancel", "UT_PREBUILD_EMBEDDED=1", "UT_HARD_TIMEOUT=")
+	exit, ok := err.(*exec.ExitError)
+	if !ok || exit.ExitCode() != 143 || !strings.Contains(string(out), "REQUEST_CANCELLED 143") {
+		t.Fatalf("lost helper TERM must not lose cancellation: %v\n%s", err, out)
 	}
 }
 
@@ -1066,7 +1188,7 @@ func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
 	const isolated = "github.com/matrixorigin/matrixone/pkg/tests/issues/isolated"
 	const dml = "github.com/matrixorigin/matrixone/pkg/tests/dml"
 	const sql = "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration"
-	const batches = "batch:" + dml + ":4:2:2:independent\nconsume\nbatch:" + sql + ":4:2:2:cleanup-only\nconsume\n"
+	const batches = "batch:" + dml + ":4:1:2:independent\nconsume\nbatch:" + sql + ":4:1:2:cleanup-only\nconsume\n"
 	for _, tc := range []struct {
 		name, scope, mode, ordinaryStatus, batchStatus, consumeStatus, want string
 		parallel, goParallel                                                string
@@ -1075,26 +1197,29 @@ func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
 	}{
 		{name: "rollback", scope: "example/a\n" + dml + "\n" + sql, mode: "1", want: "ordinary:example/a " + dml + " " + sql + "\n"},
 		{name: "embed-rollback", scope: embed + "\nexample/a", mode: "1", want: "ordinary:" + embed + " example/a\n"},
-		{name: "only-embed", scope: embed, mode: "4", want: "batch:" + embed + ":4:2:2:independent\nconsume\n"},
-		{name: "only-isolated", scope: isolated, mode: "4", want: "batch:" + isolated + ":4:2:2:independent\nconsume\n"},
+		{name: "only-embed", scope: embed, mode: "4", want: "batch:" + embed + ":4:1:2:independent\nconsume\n"},
+		{name: "only-isolated", scope: isolated, mode: "4", want: "batch:" + isolated + ":4:1:2:independent\nconsume\n"},
 		{name: "isolated-rollback", scope: isolated + "\nexample/a", mode: "1", want: "ordinary:" + isolated + " example/a\n"},
-		{name: "embed-with-existing", scope: embed + "\nexample/a\n" + dml + "\n" + sql, mode: "4", want: "ordinary:example/a\nbatch:" + embed + ":4:2:2:independent\nconsume\n" + batches},
+		{name: "embed-with-existing", scope: embed + "\nexample/a\n" + dml + "\n" + sql, mode: "4", want: "ordinary:example/a\nbatch:" + embed + ":4:1:2:independent\nconsume\n" + batches},
 		{name: "both", scope: "example/a\n" + dml + "\nexample/b\n" + sql, mode: "4", want: "ordinary:example/a example/b\n" + batches},
 		{name: "only-audited", scope: dml + "\n" + sql, mode: "4", want: batches},
-		{name: "only-dml", scope: dml, mode: "4", want: "batch:" + dml + ":4:2:2:independent\nconsume\n"},
-		{name: "only-sql", scope: sql, mode: "4", want: "batch:" + sql + ":4:2:2:cleanup-only\nconsume\n"},
+		{name: "only-dml", scope: dml, mode: "4", want: "batch:" + dml + ":4:1:2:independent\nconsume\n"},
+		{name: "only-sql", scope: sql, mode: "4", want: "batch:" + sql + ":4:1:2:cleanup-only\nconsume\n"},
 		{name: "neither", scope: "example/a", mode: "4", want: "ordinary:example/a\n"},
 		{name: "ordinary-pool", scope: "example/a\nexample/b", mode: "4", parallel: "2", goParallel: "2", want: "ordinary:example/a example/b\n"},
 		{name: "unknown-stays-serial", scope: "github.com/matrixorigin/matrixone/pkg/newcluster\nexample/a", mode: "4", parallel: "2", want: "ordinary:github.com/matrixorigin/matrixone/pkg/newcluster example/a\n"},
 		{name: "high-footprint-rollback-stays-serial", scope: embed + "\nexample/a", mode: "1", parallel: "2", want: "ordinary:" + embed + " example/a\n"},
 		{name: "measured-multicn-pool", scope: "github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn\nexample/a", mode: "4", parallel: "2", goParallel: "2", want: "ordinary:github.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn example/a\n"},
+		{name: "four-workers", scope: dml + "\n" + sql, mode: "4", parallel: "4", want: "batch:" + dml + ":4:4:2:independent\nconsume\nbatch:" + sql + ":4:4:2:cleanup-only\nconsume\n"},
+		{name: "four-workers-failed-drain", scope: dml + "\n" + sql, mode: "4", parallel: "4", batchStatus: "125", want: "batch:" + dml + ":4:4:2:independent\n", status: 125},
+		{name: "four-workers-ordinary", scope: "example/a\nexample/b", mode: "4", parallel: "4", goParallel: "4", want: "ordinary:example/a example/b\n"},
 		{name: "empty", mode: "4"},
-		{name: "ordinary-failure-continues", parallel: "2", goParallel: "2", scope: "example/a\n" + dml + "\n" + sql, mode: "4", ordinaryStatus: "7", want: "ordinary:example/a\n" + batches, status: 7},
+		{name: "ordinary-failure-continues", parallel: "2", goParallel: "2", scope: "example/a\n" + dml + "\n" + sql, mode: "4", ordinaryStatus: "7", want: "ordinary:example/a\n" + strings.ReplaceAll(batches, ":4:1:", ":4:2:"), status: 7},
 		{name: "batch-failure-continues", scope: dml + "\n" + sql, mode: "4", batchStatus: "7", want: batches, status: 1},
 		{name: "ordinary-undrained-stops", parallel: "2", goParallel: "2", scope: "example/a\n" + dml, mode: "4", ordinaryStatus: "125", want: "ordinary:example/a\n", status: 125},
-		{name: "batch-undrained-retains", scope: dml + "\n" + sql, mode: "4", batchStatus: "125", want: "batch:" + dml + ":4:2:2:independent\n", status: 125},
-		{name: "consume-no-source-retains", scope: dml + "\n" + sql, mode: "4", retainOwner: true, want: "batch:" + dml + ":4:2:2:independent\nconsume\n", status: 1},
-		{name: "consume-failure-retains", scope: dml + "\n" + sql, mode: "4", consumeStatus: "1", want: "batch:" + dml + ":4:2:2:independent\nconsume\n", status: 1},
+		{name: "batch-undrained-retains", scope: dml + "\n" + sql, mode: "4", batchStatus: "125", want: "batch:" + dml + ":4:1:2:independent\n", status: 125},
+		{name: "consume-no-source-retains", scope: dml + "\n" + sql, mode: "4", retainOwner: true, want: "batch:" + dml + ":4:1:2:independent\nconsume\n", status: 1},
+		{name: "consume-failure-retains", scope: dml + "\n" + sql, mode: "4", consumeStatus: "1", want: "batch:" + dml + ":4:1:2:independent\nconsume\n", status: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.parallel == "" {
@@ -1113,8 +1238,8 @@ function run_ut_command() {
  if [[ "$1" == run_race_test_batches ]]; then "$@"; return $?; fi
  [[ -z "$PREBUILT_RACE_REPORT" && -z "$PREBUILT_RACE_TEST_BINARY" ]] || return 91
  [[ " $* " == *" -p $EXPECTED_GO_PARALLEL "* ]] || return 100
- if [[ "$EXPECTED_GO_PARALLEL" == 2 ]]; then
-  [[ " $* " == *' MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=2 '* && " $* " == *' GOMAXPROCS=2 '* ]] || return 101
+ if (( EXPECTED_GO_PARALLEL > 1 )); then
+  [[ " $* " == *" MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=$EXPECTED_GO_PARALLEL "* && " $* " == *' GOMAXPROCS=2 '* ]] || return 101
  else
   [[ " $* " != *' MO_TEST_CLUSTER_ADMISSION_POOL_SIZE=2 '* ]] || return 102
  fi

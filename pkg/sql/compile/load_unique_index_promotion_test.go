@@ -456,6 +456,7 @@ func TestAnalyzeLoadUniqueIndexPromotionMatchesPlannerShape(t *testing.T) {
 	qry, err := plan2.NewMockOptimizer(true, newPlanTestProcess(t)).Optimize(stmt)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}
+	require.Len(t, qry.Steps, 3, "exercise the shared image, independent validation, and writer")
 	require.False(t, qry.LoadWriteS3,
 		"the modern LOAD binder does not use the legacy write-path marker")
 	var external, lockNode, updateNode *plan.Node
@@ -508,6 +509,139 @@ func TestAnalyzeLoadUniqueIndexPromotionMatchesPlannerShape(t *testing.T) {
 	targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks)
 	require.True(t, ok, "the classifier must match the planner's real LOAD/LOCK_OP/MULTI_UPDATE topology")
 	require.NotEmpty(t, targets)
+}
+
+func TestAnalyzeLoadUniqueIndexPromotionSharedImage(t *testing.T) {
+	newPlan := func() *plan.Plan {
+		pn := newLoadUniqueIndexPromotionPlan()
+		q := pn.GetQuery()
+		q.Nodes = append(q.Nodes,
+			&plan.Node{NodeType: plan.Node_SINK, Children: []int32{1}},
+			&plan.Node{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}},
+			&plan.Node{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}},
+			&plan.Node{NodeType: plan.Node_TABLE_SCAN, TableDef: q.Nodes[1].TableDef, ObjRef: q.Nodes[1].LockTargets[0].ObjRef},
+			&plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_DEDUP, OnDuplicateAction: plan.Node_FAIL, Children: []int32{6, 5}},
+			&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{7}},
+		)
+		q.Nodes[2].Children = []int32{4}
+		q.Steps = []int32{3, 8, 2} // Source step 0 resolves node 3, not node 0.
+		return pn
+	}
+	assertAdmission := func(t *testing.T, pn *plan.Plan, want bool) {
+		t.Helper()
+		for _, right := range []bool{false, true} {
+			if right {
+				check := pn.GetQuery().Nodes[7]
+				if len(check.Children) == 2 {
+					check.Children[0], check.Children[1] = check.Children[1], check.Children[0]
+				}
+				check.IsRightJoin = !check.IsRightJoin
+			}
+			targets, ok := analyzeLoadUniqueIndexPromotionPlan(pn, testLoadUniqueIndexMaxRowLocks)
+			require.Equal(t, want, ok, "swapped orientation: %t", right)
+			if want {
+				require.Len(t, targets, 1)
+				original := pn.GetQuery().Nodes[1].LockTargets[1]
+				require.Equal(t, original, targets[0].rowTarget)
+				require.NotSame(t, original, targets[0].rowTarget)
+			}
+		}
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*plan.Query)
+	}{
+		{"shared image", func(*plan.Query) {}},
+		{"reordered steps", func(q *plan.Query) {
+			q.Steps = []int32{2, 3, 8}
+			q.Nodes[4].SourceStep[0], q.Nodes[5].SourceStep[0] = 1, 1
+		}},
+		{"validation projection wrappers", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes,
+				&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{6}},
+				&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{5}},
+			)
+			q.Nodes[7].Children = []int32{9, 10}
+		}},
+		{"projection wrappers", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{4}})
+			q.Nodes[2].Children[0] = 9
+		}},
+		{"writer CHECK assertions", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes,
+				&plan.Node{NodeType: plan.Node_ASSERT, Children: []int32{4}},
+				&plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{9}},
+			)
+			q.Nodes[2].Children[0] = 10
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pn := newPlan()
+			tc.mutate(pn.GetQuery())
+			assertAdmission(t, pn, true)
+		})
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*plan.Query)
+	}{
+		{"missing source", func(q *plan.Query) { q.Nodes[4].SourceStep = nil }},
+		{"multiple sources", func(q *plan.Query) { q.Nodes[4].SourceStep = []int32{0, 0} }},
+		{"negative source", func(q *plan.Query) { q.Nodes[4].SourceStep[0] = -1 }},
+		{"out of range source", func(q *plan.Query) { q.Nodes[4].SourceStep[0] = 3 }},
+		{"source is not sink", func(q *plan.Query) { q.Nodes[4].SourceStep[0] = 1 }},
+		{"scan with child", func(q *plan.Query) { q.Nodes[4].Children = []int32{0} }},
+		{"recursive scan", func(q *plan.Query) { q.Nodes[4].NodeType = plan.Node_RECURSIVE_SCAN }},
+		{"source on project", func(q *plan.Query) { q.Nodes[8].SourceStep = []int32{0} }},
+		{"source cycle", func(q *plan.Query) { q.Nodes[3].Children[0] = 4 }},
+		{"child cycle", func(q *plan.Query) { q.Nodes[1].Children[0] = 3 }},
+		{"nil source", func(q *plan.Query) { q.Nodes[3] = nil }},
+		{"invalid source root", func(q *plan.Query) { q.Steps[0] = 99 }},
+		{"nil child", func(q *plan.Query) { q.Nodes[6] = nil }},
+		{"invalid child", func(q *plan.Query) { q.Nodes[7].Children[0] = -1 }},
+		{"extra root", func(q *plan.Query) { q.Steps = append(q.Steps, 0) }},
+		{"duplicate root", func(q *plan.Query) { q.Steps[1] = 2 }},
+		{"second writer", func(q *plan.Query) { q.Nodes[8].NodeType = plan.Node_MULTI_UPDATE }},
+		{"second lock", func(q *plan.Query) { q.Nodes[8].NodeType = plan.Node_LOCK_OP }},
+		{"second external", func(q *plan.Query) { q.Nodes[6] = plan2.DeepCopyNode(q.Nodes[0]) }},
+		{"disconnected lock", func(q *plan.Query) { q.Nodes[3].Children[0] = 0 }},
+		{"foreign validation table", func(q *plan.Query) {
+			q.Nodes[6].TableDef = plan2.DeepCopyTableDef(q.Nodes[6].TableDef, true)
+			q.Nodes[6].TableDef.TblId++
+		}},
+		{"foreign validation identity", func(q *plan.Query) {
+			q.Nodes[6].ObjRef = &plan.ObjectRef{Obj: 99, ObjName: "other"}
+		}},
+		{"orientation flag without swapping", func(q *plan.Query) { q.Nodes[7].IsRightJoin = true }},
+		{"children swapped without orientation flag", func(q *plan.Query) {
+			q.Nodes[7].Children[0], q.Nodes[7].Children[1] = q.Nodes[7].Children[1], q.Nodes[7].Children[0]
+		}},
+		{"non FAIL validation", func(q *plan.Query) { q.Nodes[7].OnDuplicateAction = plan.Node_IGNORE }},
+		{"non DEDUP validation", func(q *plan.Query) { q.Nodes[7].JoinType = plan.Node_INNER }},
+		{"extra validation input", func(q *plan.Query) { q.Nodes[7].Children = append(q.Nodes[7].Children, 0) }},
+		{"validation sourced writer", func(q *plan.Query) { q.Nodes[2].Children[0] = 7 }},
+		{"writer bypasses image", func(q *plan.Query) { q.Nodes[2].Children[0] = 1 }},
+		{"validation bypasses image", func(q *plan.Query) { q.Nodes[7].Children[1] = 1 }},
+		{"different source", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_SINK, Children: []int32{1}})
+			q.Steps[1] = 9
+			q.Nodes[5].SourceStep[0] = 1
+		}},
+		{"effectful source", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_DELETE, Children: []int32{1}})
+			q.Nodes[3].Children[0] = 9
+		}},
+		{"branched writer assertion", func(q *plan.Query) {
+			q.Nodes = append(q.Nodes, &plan.Node{NodeType: plan.Node_ASSERT, Children: []int32{4, 4}})
+			q.Nodes[2].Children[0] = 9
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			pn := newPlan()
+			tc.mutate(pn.GetQuery())
+			assertAdmission(t, pn, false)
+		})
+	}
 }
 
 func TestLoadLogtailReadBarrierCapabilityUnwrapsEntireEngine(t *testing.T) {

@@ -662,6 +662,8 @@ const (
 // one or more pipeline will be generated for one query,
 // and one pipeline has one process instance.
 type Process struct {
+	dependent      *dependentScope
+	dependentOwner bool
 	// BaseProcess is the common part of one process, and it's shared by all its children processes.
 	Base *BaseProcess
 	Reg  Register
@@ -729,10 +731,20 @@ func (proc *Process) GetSession() Session {
 }
 
 func (proc *Process) GetMessageBoard() *message.MessageBoard {
+	if proc.dependent != nil {
+		return proc.dependent.board
+	}
 	return proc.Base.messageBoard
 }
 
 func (proc *Process) SetMessageBoard(mb *message.MessageBoard) {
+	if proc.dependent != nil {
+		if old := proc.dependent.board; old != nil && old != mb {
+			old.CloseAndDrain()
+		}
+		proc.dependent.board = mb
+		return
+	}
 	proc.Base.messageBoard = mb
 }
 
@@ -1246,10 +1258,17 @@ func (proc *Process) SetCacheForAutoCol(name string) {
 }
 
 func (proc *Process) SetCloneTxnOperator(op client.TxnOperator) {
+	if proc.dependent != nil {
+		proc.dependent.cloneTxn = op
+		return
+	}
 	proc.Base.CloneTxnOperator = op
 }
 
 func (proc *Process) GetCloneTxnOperator() client.TxnOperator {
+	if proc.dependent != nil {
+		return proc.dependent.cloneTxn
+	}
 	return proc.Base.CloneTxnOperator
 }
 
@@ -1350,10 +1369,17 @@ func DecodeStringShuffleHashAlgorithm(value uint32) (StringShuffleHashAlgorithm,
 }
 
 func (proc *Process) GetBaseProcessRunningStatus() bool {
+	if proc.dependent != nil {
+		return proc.dependent.runtime
+	}
 	return proc.Base.atRuntime
 }
 
 func (proc *Process) SetBaseProcessRunningStatus(status bool) {
+	if proc.dependent != nil {
+		proc.dependent.runtime = status
+		return
+	}
 	proc.Base.atRuntime = status
 }
 

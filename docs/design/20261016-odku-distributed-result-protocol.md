@@ -1,9 +1,11 @@
 # Distributed ODKU Result Protocol
 
-Current implementation alignment: [r2 addendum](20261016-odku-distributed-result-protocol-r2-addendum.md).
-The current ODKU/session-baseline floor is **MORPC120**, after upstream allocated
-117 to LEAST/GREATEST. The addendum also defines the multi-AUTO_INCREMENT result
-column and the no-key/visible-name compatibility corrections.
+Current implementation alignment: [r2 addendum](20261016-odku-distributed-result-protocol-r2-addendum.md), with the subsequent candidate-allocation overlay recorded there.
+Against released main `fed3bf59700158212a9135d0b619c3849034bb65` (capability prefix
+through MORPC122), the candidate retains main's 118–122 contracts and assigns
+JSON ELT/opaque text to MORPC123, typed JSON MIN/MAX to MORPC124, and the complete
+ODKU/session-baseline contract to MORPC125. The r2 approval remains scoped to its
+earlier reviewed allocation; this overlay does not claim new design approval.
 
 The r1 specification below is retained as historical design text. Its normative
 references to MORPC119 describe the original inspected/reviewed revision, not
@@ -122,7 +124,7 @@ state, not a client publication or a storage commit acknowledgment.
 ### Messages and fields
 
 The wire contract uses existing PipelineMessage / ProcessInfo transport plus
-optional terminal JSON. MORPCVersion119 is the semantic floor; the independent
+optional terminal JSON. MORPCVersion125 is the semantic floor; the independent
 `terminal_resource_version = 4` describes resource accounting, not an ODKU
 protocol version.
 

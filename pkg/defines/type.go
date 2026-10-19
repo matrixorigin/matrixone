@@ -280,6 +280,12 @@ type IsMoLogger struct{}
 
 type IgnoreForeignKey struct{}
 
+// TrustedCheckConstraintNames bridges StatementOption.WithTrustedCheckConstraintNames
+// to Scope.createTable: the statement intentionally keeps CHECK names inherited
+// from an owned source (ALTER ... COPY replica, partition backing table, TRUNCATE
+// recreate), so the schema-wide duplicate-name scan is skipped.
+type TrustedCheckConstraintNames struct{}
+
 type AlterCopyOpt struct{}
 
 // OptimizerHints carries a per-statement optimizer_hints string (same key=value

@@ -25,7 +25,9 @@ import (
 	"os"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/google/uuid"
@@ -1372,6 +1374,8 @@ func TestHAKeeperClientRetryableError(t *testing.T) {
 		{name: "backend cannot connect", err: moerr.NewBackendCannotConnect(ctx), want: true},
 		{name: "no available backend", err: moerr.NewNoAvailableBackend(ctx), want: true},
 		{name: "connection reset", err: moerr.NewConnectionReset(ctx), want: true},
+		{name: "raw connection reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, want: true},
+		{name: "connection reset text is not a transport error", err: errors.New("connection reset by peer"), want: false},
 		{name: "context canceled", err: context.Canceled, want: false},
 		{name: "context deadline", err: context.DeadlineExceeded, want: false},
 		{name: "invalid input", err: moerr.NewInvalidInput(ctx, "invalid"), want: false},
@@ -1437,39 +1441,44 @@ func TestAllocateIDRetriesPrepareClientErrorUntilContextDone(t *testing.T) {
 		err  error
 	}{
 		{name: "normalized eof", err: net.ErrClosed},
+		{name: "raw connection reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}},
 		{name: "backend closed", err: moerr.NewBackendClosed(context.Background())},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			originalNew := newHAKeeperClientFunc
-			originalRetryInterval := hakeeperClientRetryInterval
-			defer func() {
-				newHAKeeperClientFunc = originalNew
-				hakeeperClientRetryInterval = originalRetryInterval
-			}()
+			// Retry cadence and cancellation are logical clock behavior; do not
+			// make the assertion depend on CPU scheduling within 55ms.
+			synctest.Test(t, func(t *testing.T) {
+				originalNew := newHAKeeperClientFunc
+				originalRetryInterval := hakeeperClientRetryInterval
+				defer func() {
+					newHAKeeperClientFunc = originalNew
+					hakeeperClientRetryInterval = originalRetryInterval
+				}()
 
-			attempts := 0
-			newHAKeeperClientFunc = func(
-				context.Context,
-				string,
-				HAKeeperClientConfig,
-			) (*hakeeperClient, error) {
-				attempts++
-				return nil, tt.err
-			}
-			hakeeperClientRetryInterval = 20 * time.Millisecond
+				attempts := 0
+				newHAKeeperClientFunc = func(
+					context.Context,
+					string,
+					HAKeeperClientConfig,
+				) (*hakeeperClient, error) {
+					attempts++
+					return nil, tt.err
+				}
+				hakeeperClientRetryInterval = 20 * time.Millisecond
 
-			c := &managedHAKeeperClient{
-				cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
-			defer cancel()
+				c := &managedHAKeeperClient{
+					cfg: HAKeeperClientConfig{AllocateIDBatch: 2},
+				}
+				ctx, cancel := context.WithTimeout(context.Background(), 55*time.Millisecond)
+				defer cancel()
 
-			_, err := c.AllocateID(ctx)
-			require.ErrorIs(t, err, context.DeadlineExceeded)
-			require.GreaterOrEqual(t, attempts, 2)
-			require.Less(t, attempts, 10)
+				_, err := c.AllocateID(ctx)
+				require.ErrorIs(t, err, context.DeadlineExceeded)
+				require.GreaterOrEqual(t, attempts, 2)
+				require.Less(t, attempts, 10)
+			})
 		})
 	}
 }
@@ -1480,6 +1489,7 @@ func TestAllocateIDRetriesTransportSendError(t *testing.T) {
 		err  error
 	}{
 		{name: "eof", err: io.EOF},
+		{name: "raw connection reset", err: &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}},
 		{name: "backend closed", err: moerr.NewBackendClosed(context.Background())},
 	}
 
