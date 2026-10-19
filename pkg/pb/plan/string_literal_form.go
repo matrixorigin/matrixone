@@ -347,7 +347,7 @@ const (
 // capabilities that can make a pipeline unsafe on an older remote worker.
 // NumericPrefix requires MORPC v30. JSONComparisonParam and
 // MixedJSONBooleanEquality require MORPC v36. FormatNumericArguments requires
-// MORPC v59. StatementDigestText requires MORPC v120. TypedConversionFunctions
+// MORPC v59. StatementDigestText requires MORPC v121. TypedConversionFunctions
 // requires MORPC v64 because BIN/CONV
 // overload identities and their fixed-width execution contracts changed in
 // the same release. ASCIIInt32Result requires MORPC v65 because ASCII keeps
@@ -439,7 +439,7 @@ type RemoteExpressionFeatures struct {
 	// LeastGreatestCollationSemantics requires v117 for appended overload 4.
 	// Released overload 0 retains its historical byte-order contract.
 	LeastGreatestCollationSemantics bool
-	// StatementDigestText requires v120 for the MySQL statement-digest function.
+	// StatementDigestText requires v121 for the MySQL statement-digest function.
 	StatementDigestText bool
 }
 

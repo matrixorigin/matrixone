@@ -6081,7 +6081,7 @@ type SessionInfo struct {
 	// Effective locale captured for locale-sensitive temporal functions.
 	LcTimeNames string `protobuf:"bytes,22,opt,name=lc_time_names,json=lcTimeNames,proto3" json:"lc_time_names,omitempty"`
 	// MySQL statement digest text length captured on the initiating CN; zero is
-	// meaningful when present. These fields belong to MORPC v120.
+	// meaningful when present. These fields belong to MORPC v121.
 	MaxDigestLength      int64    `protobuf:"varint,23,opt,name=max_digest_length,json=maxDigestLength,proto3" json:"max_digest_length,omitempty"`
 	MaxDigestLengthSet   bool     `protobuf:"varint,24,opt,name=max_digest_length_set,json=maxDigestLengthSet,proto3" json:"max_digest_length_set,omitempty"`
 	XXX_NoUnkeyedLiteral struct{} `json:"-"`
