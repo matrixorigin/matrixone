@@ -627,6 +627,11 @@ func (builder *QueryBuilder) applyIndicesForSortUsingIvfflatWithContext(
 			return nodeID, err
 		}
 	}
+	// A sequence or volatile filter cannot run in both PRE scans: leave the query
+	// to the exact sort.
+	if (ivfCtx.pushdownEnabled || vecCtx.hasMembership) && !builder.vectorPreFilterReplaySafe(vecCtx) {
+		return nodeID, nil
+	}
 	// The vector scan truncates its candidate stream before any residual
 	// table-scan predicate can run.  If an indexed distance predicate remains
 	// after range extraction, keeping the rewrite would silently discard

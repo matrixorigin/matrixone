@@ -198,9 +198,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID in
 	// filter drops index candidates, so execution over-fetches the candidate
 	// budget from k (#26869). A PRE search returns only qualifying keys.
 	usePreFilter := builder.hnswUsesPreFilter(vecCtx)
-	if usePreFilter && vecCtx.providerNodeID >= 0 {
+	if usePreFilter && (vecCtx.providerNodeID >= 0 || !builder.vectorPreFilterReplaySafe(vecCtx)) {
 		// A per-row query vector runs the search in APPLY, which receives no membership
-		// runtime filter: leave the query to the exact sort.
+		// runtime filter, and a sequence or volatile filter cannot run in both PRE scans:
+		// leave the query to the exact sort.
 		return nodeID, nil
 	}
 	postFilterOverFetch := len(scanNode.FilterList) > 0 && !usePreFilter

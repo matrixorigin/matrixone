@@ -114,4 +114,26 @@ select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,
 -- mode=include is an alias of mode=iterative
 select count(*) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include') x;
 
+-- A sequence filter in pre and iterative is evaluated once per row: the query runs the
+-- exact sort, which returns the one row that draws 1 and leaves the sequence at the row
+-- count. Each query uses its own sequence; force is the control.
+create sequence s_cagra_pre start with 1;
+select count(*) from (select id from t_cagra where nextval('s_cagra_pre') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=pre') x;
+select currval('s_cagra_pre');
+create sequence s_cagra_iterative start with 1;
+select count(*) from (select id from t_cagra where nextval('s_cagra_iterative') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
+select currval('s_cagra_iterative');
+create sequence s_cagra_force start with 1;
+select count(*) from (select id from t_cagra where nextval('s_cagra_force') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=force') x;
+select currval('s_cagra_force');
+create sequence s_ivfpq_pre start with 1;
+select count(*) from (select id from t_ivfpq where nextval('s_ivfpq_pre') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=pre') x;
+select currval('s_ivfpq_pre');
+create sequence s_ivfpq_iterative start with 1;
+select count(*) from (select id from t_ivfpq where nextval('s_ivfpq_iterative') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
+select currval('s_ivfpq_iterative');
+create sequence s_ivfpq_force start with 1;
+select count(*) from (select id from t_ivfpq where nextval('s_ivfpq_force') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=force') x;
+select currval('s_ivfpq_force');
+
 drop database vector_filtered_search_gpu;

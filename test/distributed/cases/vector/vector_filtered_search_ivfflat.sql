@@ -122,5 +122,20 @@ select group_concat(id order by id) from (select id from t_inc where category = 
 explain select id from t_inc where category = 1 and id > 500 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=post';
 select group_concat(id order by id) from (select id from t_inc where category = 1 order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative') x;
 
+-- A sequence filter in pre and iterative is evaluated once per row: the query runs the
+-- exact sort. Each mode uses its own sequence; force is the control.
+create table t_seq(id bigint primary key, v vecf32(2));
+insert into t_seq values (1, '[1,0]');
+create index i_seq using ivfflat on t_seq(v) lists = 1 op_type 'vector_l2_ops';
+create sequence s_pre start with 1;
+select id from t_seq where nextval('s_pre') = '1' order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=pre';
+select currval('s_pre');
+create sequence s_iterative start with 1;
+select id from t_seq where nextval('s_iterative') = '1' order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=iterative';
+select currval('s_iterative');
+create sequence s_force start with 1;
+select id from t_seq where nextval('s_force') = '1' order by l2_distance(v, '[0,0]') limit 10 by rank with option 'mode=force';
+select currval('s_force');
+
 set probe_limit = @saved_probe_limit;
 drop database vector_filtered_search_ivfflat;

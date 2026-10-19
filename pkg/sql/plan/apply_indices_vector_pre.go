@@ -43,6 +43,17 @@ type vectorPreFilterInput struct {
 	annotateRequiredDomain func(tableFuncNode *plan.Node, requiredDomain bool) error
 }
 
+// vectorPreFilterReplaySafe reports whether the PRE plan may evaluate the scan's
+// filters and the membership join twice: in the membership producer and on the
+// row-fetch side. A sequence or volatile expression is evaluated once.
+func (builder *QueryBuilder) vectorPreFilterReplaySafe(vecCtx *vectorSortContext) bool {
+	root := vecCtx.scanNode.NodeId
+	if vecCtx.hasMembership {
+		root = vecCtx.membershipNodeID
+	}
+	return builder.adaptiveVectorReplaySafe(root)
+}
+
 // membershipJoinBuildable reports whether the membership join of vecCtx is a SEMI join
 // whose left child is the scan, the shape buildVectorPreFilterJoin copies.
 func (builder *QueryBuilder) membershipJoinBuildable(vecCtx *vectorSortContext) bool {

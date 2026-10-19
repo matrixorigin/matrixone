@@ -359,4 +359,46 @@ select id from t_cagra where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,
 select count(*) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=include') x;
 ➤ count(*)[-5,64,0]  𝄀
 10
+create sequence s_cagra_pre start with 1;
+select count(*) from (select id from t_cagra where nextval('s_cagra_pre') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=pre') x;
+➤ count(*)[-5,64,0]  𝄀
+1
+select currval('s_cagra_pre');
+➤ currval(s_cagra_pre)[12,65535,0]  𝄀
+1000
+create sequence s_cagra_iterative start with 1;
+select count(*) from (select id from t_cagra where nextval('s_cagra_iterative') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
+➤ count(*)[-5,64,0]  𝄀
+1
+select currval('s_cagra_iterative');
+➤ currval(s_cagra_iterative)[12,65535,0]  𝄀
+1000
+create sequence s_cagra_force start with 1;
+select count(*) from (select id from t_cagra where nextval('s_cagra_force') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=force') x;
+➤ count(*)[-5,64,0]  𝄀
+1
+select currval('s_cagra_force');
+➤ currval(s_cagra_force)[12,65535,0]  𝄀
+1000
+create sequence s_ivfpq_pre start with 1;
+select count(*) from (select id from t_ivfpq where nextval('s_ivfpq_pre') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=pre') x;
+➤ count(*)[-5,64,0]  𝄀
+1
+select currval('s_ivfpq_pre');
+➤ currval(s_ivfpq_pre)[12,65535,0]  𝄀
+1000
+create sequence s_ivfpq_iterative start with 1;
+select count(*) from (select id from t_ivfpq where nextval('s_ivfpq_iterative') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
+➤ count(*)[-5,64,0]  𝄀
+1
+select currval('s_ivfpq_iterative');
+➤ currval(s_ivfpq_iterative)[12,65535,0]  𝄀
+1000
+create sequence s_ivfpq_force start with 1;
+select count(*) from (select id from t_ivfpq where nextval('s_ivfpq_force') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=force') x;
+➤ count(*)[-5,64,0]  𝄀
+1
+select currval('s_ivfpq_force');
+➤ currval(s_ivfpq_force)[12,65535,0]  𝄀
+1000
 drop database vector_filtered_search_gpu;

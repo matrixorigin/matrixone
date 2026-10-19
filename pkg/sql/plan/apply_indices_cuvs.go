@@ -84,10 +84,11 @@ func (builder *QueryBuilder) applyCuvsIndexSearchScan(nodeID int32, vecCtx *vect
 	// membership producer.
 	usePreFilter := builder.cuvsUsesPreFilter(vecCtx,
 		hasNonDistFnFilter(residualFilters, s.partPos, s.origFuncName, s.vecLitArg))
-	if usePreFilter && (vecCtx.providerNodeID >= 0 || vecCtx.hasMembership && !builder.membershipJoinBuildable(vecCtx)) {
-		// A per-row query vector receives no membership runtime filter, and a
-		// membership join of another shape cannot be copied: leave the query to the
-		// exact sort.
+	if usePreFilter && (vecCtx.providerNodeID >= 0 || vecCtx.hasMembership && !builder.membershipJoinBuildable(vecCtx) ||
+		!builder.vectorPreFilterReplaySafe(vecCtx)) {
+		// A per-row query vector receives no membership runtime filter, a membership
+		// join of another shape cannot be copied, and a sequence or volatile filter
+		// cannot run in both PRE scans: leave the query to the exact sort.
 		return nodeID, nil
 	}
 	// Under PRE every filter is in the search, so nothing over-fetches.
