@@ -24,8 +24,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/go-sql-driver/mysql"
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/embed"
@@ -37,19 +39,31 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
-		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
-		defer cancel()
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer db.Close()
-		conn, err := db.Conn(ctx)
-		require.NoError(t, err)
-		defer conn.Close()
 		const schema = "timestamp_default_dump_contract"
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
-		exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
-		exec("create database " + schema)
-		exec("use " + schema)
+		func() {
+			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			defer cancel()
+			_, err := db.ExecContext(ctx, "create database "+schema)
+			require.NoError(t, err)
+		}()
+		run := func(name string, scenario func(*testing.T, context.Context, *sql.Conn)) {
+			t.Run(name, func(t *testing.T) {
+				withTimestampDefaultScenarioSession(t, db, func(ctx context.Context, conn *sql.Conn) {
+					for _, query := range []string{
+						"use " + schema,
+						"set sql_mode=DEFAULT,time_zone='+00:00',lc_time_names='en_US',timestamp=0,div_precision_increment=4,explicit_defaults_for_timestamp=1",
+					} {
+						_, err := conn.ExecContext(ctx, query)
+						require.NoError(t, err, query)
+					}
+					scenario(t, ctx, conn)
+				})
+			})
+		}
 		for _, tc := range []struct {
 			name, declaration, createZone, dumpZone string
 			want, updated                           any
@@ -72,13 +86,10 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 			{"locale_dayname", "varchar(64) default (dayname('2024-01-01'))", "+00:00", "+08:00", "月曜日", "", false, true, "ja_JP"},
 			{"locale_mixed", "varchar(64) default (date_format(from_unixtime(1704067200),'%M %H'))", "America/New_York", "+08:00", "décembre 19", "", false, true, "fr_FR"},
 		} {
-			t.Run(tc.name, func(t *testing.T) {
+			run(tc.name, func(t *testing.T, ctx context.Context, conn *sql.Conn) {
 				exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
 				t.Cleanup(func() {
-					cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					_, err := conn.ExecContext(cleanupCtx, "drop table if exists "+tc.name+"_source,"+tc.name+"_target")
-					require.NoError(t, err)
+					cleanupSQLIntegration(t, cn, "drop table if exists "+schema+"."+tc.name+"_source,"+schema+"."+tc.name+"_target")
 				})
 				creationLocale := tc.locale
 				if creationLocale == "" {
@@ -165,13 +176,10 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 			{"precision10", 10, 1, "0.3333333333:January"},
 			{"three_precision4", 4, 3, "0.3333:January"},
 		} {
-			t.Run(tc.name, func(t *testing.T) {
+			run(tc.name, func(t *testing.T, ctx context.Context, conn *sql.Conn) {
 				exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
 				t.Cleanup(func() {
-					cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-					defer cancel()
-					_, err := conn.ExecContext(cleanupCtx, "drop table if exists "+tc.name+"_source,"+tc.name+"_target")
-					require.NoError(t, err)
+					cleanupSQLIntegration(t, cn, "drop table if exists "+schema+"."+tc.name+"_source,"+schema+"."+tc.name+"_target")
 				})
 				exec("set time_zone='+00:00'")
 				exec("set lc_time_names='en_US'")
@@ -205,13 +213,10 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 			})
 		}
 
-		t.Run("zero_temporal_cross_mode", func(t *testing.T) {
+		run("zero_temporal_cross_mode", func(t *testing.T, ctx context.Context, conn *sql.Conn) {
 			exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
 			t.Cleanup(func() {
-				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				_, err := conn.ExecContext(cleanupCtx, "drop table if exists zero_mode_source,zero_mode_target,zero_mode_rejected")
-				require.NoError(t, err)
+				cleanupSQLIntegration(t, cn, "drop table if exists "+schema+".zero_mode_source,"+schema+".zero_mode_target,"+schema+".zero_mode_rejected")
 			})
 			exec("set sql_mode=''")
 			const zeroDDL = "(a timestamp default '0000-00-00 00:00:00',b date default '0000-00-00',c datetime default '0000-00-00 00:00:00',d timestamp default 0,e date default 0,f datetime default 0)"
@@ -243,13 +248,10 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "select concat_ws(',',cast(a as char),cast(b as char),cast(c as char),cast(d as char),cast(e as char),cast(f as char)) from zero_mode_target").Scan(&value))
 			require.Equal(t, "0000-00-00 00:00:00,0000-00-00,0000-00-00 00:00:00,0000-00-00 00:00:00,0000-00-00,0000-00-00 00:00:00", value)
 		})
-		t.Run("pre_zero_numeric_timestamp", func(t *testing.T) {
+		run("pre_zero_numeric_timestamp", func(t *testing.T, ctx context.Context, conn *sql.Conn) {
 			exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
 			t.Cleanup(func() {
-				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-				defer cancel()
-				_, err := conn.ExecContext(cleanupCtx, "drop table if exists pre_zero_source,pre_zero_target")
-				require.NoError(t, err)
+				cleanupSQLIntegration(t, cn, "drop table if exists "+schema+".pre_zero_source,"+schema+".pre_zero_target")
 			})
 			exec("set sql_mode=''")
 			exec("set time_zone='+00:00'")
@@ -312,8 +314,51 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 			require.Zero(t, count)
 		})
 
+		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer cancel()
 		var remaining int
-		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=?", schema).Scan(&remaining))
+		require.NoError(t, db.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=?", schema).Scan(&remaining))
 		require.Zero(t, remaining)
 	})
+}
+
+// Each public scenario owns its deadline and connection. A slow or cancelled
+// scenario cannot consume the next scenario's allowance or driver connection.
+func withTimestampDefaultScenarioSession(t *testing.T, db *sql.DB, scenario func(context.Context, *sql.Conn)) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+	defer cancel()
+	conn, err := db.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	scenario(ctx, conn)
+}
+
+func TestTimestampDefaultScenarioSessionDeadlines(t *testing.T) {
+	for _, firstDelay := range []time.Duration{60 * time.Second, 91 * time.Second} {
+		t.Run(firstDelay.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				mock.ExpectExec("first").WillDelayFor(firstDelay).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("second").WillDelayFor(60 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
+				withTimestampDefaultScenarioSession(t, db, func(ctx context.Context, conn *sql.Conn) {
+					_, err := conn.ExecContext(ctx, "first")
+					if firstDelay > 90*time.Second {
+						require.Error(t, err)
+						require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+					} else {
+						require.NoError(t, err)
+					}
+				})
+				withTimestampDefaultScenarioSession(t, db, func(ctx context.Context, conn *sql.Conn) {
+					_, err := conn.ExecContext(ctx, "second")
+					require.NoError(t, err)
+					require.NoError(t, ctx.Err())
+				})
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		})
+	}
 }
