@@ -1087,7 +1087,7 @@ func TestMessageReceiverSendBatchPreservesMetadataAndRejectsOldProtocol(t *testi
 	require.Equal(t, types.StringSourceSQLPrepare, decodedWithSources.Vecs[0].GetStringSourceAt(1))
 }
 
-func TestMessageReceiverSendBatchRequiresV120ForNumericBinaryLiteralProvenance(t *testing.T) {
+func TestMessageReceiverSendBatchRequiresV122ForNumericBinaryLiteralProvenance(t *testing.T) {
 	runtime := rt.ServiceRuntime("")
 	original, hadOriginal := runtime.GetGlobalVariables(rt.MOProtocolVersion)
 	t.Cleanup(func() {
@@ -1117,30 +1117,31 @@ func TestMessageReceiverSendBatchRequiresV120ForNumericBinaryLiteralProvenance(t
 		maxMessageSize:  1 << 20,
 	}
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(101))
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion120",
-		"the sender must reject a pre-v120 downgrade before writing a batch")
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion122",
+		"the sender must reject a pre-v122 downgrade before writing a batch")
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, int64(102))
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion120",
-		"the sender must reject a pre-v120 downgrade before writing a batch")
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion122",
+		"the sender must reject a pre-v122 downgrade before writing a batch")
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion109)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion120",
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion122",
 		"the sender must reject a v109 downgrade before writing a batch")
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion110)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion120",
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion122",
 		"the sender must reject a v110 downgrade before writing a batch")
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion111)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion120",
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion122",
 		"the sender must reject a v111 downgrade before writing a batch")
 	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion112)
-	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion120",
+	require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion122",
 		"the sender must reject a v112 downgrade before writing a batch")
 	for _, version := range []int64{
 		defines.MORPCVersion113, defines.MORPCVersion114,
 		defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117,
 		defines.MORPCVersion118, defines.MORPCVersion119,
+		defines.MORPCVersion120, defines.MORPCVersion121,
 	} {
 		runtime.SetGlobalVariables(rt.MOProtocolVersion, version)
-		require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion120",
+		require.ErrorContains(t, receiver.sendBatch(bat), "MORPCVersion122",
 			"upstream protocol floors do not imply numeric binary-literal provenance")
 	}
 
@@ -1150,7 +1151,7 @@ func TestMessageReceiverSendBatchRequiresV120ForNumericBinaryLiteralProvenance(t
 			sent = message.(*pipeline.Message)
 			return nil
 		})
-	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion120)
+	runtime.SetGlobalVariables(rt.MOProtocolVersion, defines.MORPCVersion122)
 	require.NoError(t, receiver.sendBatch(bat))
 	require.NotNil(t, sent)
 	decoded := batch.NewOffHeapEmpty()
