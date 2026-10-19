@@ -283,3 +283,82 @@ func TestReferenceAndEngineeringRulesRemainSeparate(t *testing.T) {
 		t.Fatal("quantity SUM must remain exact")
 	}
 }
+
+func TestTableVerificationWindows(t *testing.T) {
+	ctx, cancel := context.WithTimeoutCause(context.Background(), 15*time.Second, errors.New("verification windows fixture deadline"))
+	defer cancel()
+	e := Engine{Name: "duckdb", Database: filepath.Join(t.TempDir(), "windows.db"), Threads: 1, MemoryBytes: 256 << 20}
+	db, err := openEngine(ctx, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	conn, err := configureConn(ctx, db, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	table := canonicalTables()[4]
+	if _, err := conn.ExecContext(ctx, table.ddl()); err != nil {
+		t.Fatal(err)
+	}
+	const input = "1|9|1|2.00|nine|\n1|2|2|3.00|two|\n3|8|3|4.00|eight|\n7|4|4|5.00|four|\n"
+	const seed = "INSERT INTO partsupp VALUES (1,9,1,2,'nine'),(1,2,2,3,'two'),(3,8,3,4,'eight'),(7,4,4,5,'four')"
+	root := t.TempDir()
+	for _, tc := range []struct {
+		name, change, want string
+		window             int
+		emptyInput, cancel bool
+	}{
+		{name: "one row target preserves composite group", window: 1},
+		{name: "exact group boundary", window: 2},
+		{name: "multiple groups per range", window: 3},
+		{name: "extra lower key", window: 1, change: "INSERT INTO partsupp VALUES(-1,1,1,1,'extra')", want: "content differs"},
+		{name: "extra key in gap", window: 1, change: "INSERT INTO partsupp VALUES(2,1,1,1,'extra')", want: "content differs"},
+		{name: "extra upper key", window: 1, change: "INSERT INTO partsupp VALUES(9,1,1,1,'extra')", want: "unexpected database row"},
+		{name: "extra composite member", window: 1, change: "INSERT INTO partsupp VALUES(1,5,1,1,'extra')", want: "content differs"},
+		{name: "missing composite member", window: 1, change: "DELETE FROM partsupp WHERE ps_partkey=1 AND ps_suppkey=9", want: "missing input rows"},
+		{name: "missing middle group", window: 1, change: "DELETE FROM partsupp WHERE ps_partkey=3", want: "missing input rows"},
+		{name: "missing final group", window: 1, change: "DELETE FROM partsupp WHERE ps_partkey=7", want: "missing input rows"},
+		{name: "wrong value", window: 1, change: "UPDATE partsupp SET ps_comment='changed' WHERE ps_partkey=3", want: "content differs"},
+		{name: "empty input and table", window: 1, emptyInput: true, change: "DELETE FROM partsupp"},
+		{name: "empty input extra table rows", window: 1, emptyInput: true, want: "unexpected database row"},
+		{name: "empty table nonempty input", window: 1, change: "DELETE FROM partsupp", want: "missing input rows"},
+		{name: "invalid window", window: 0, want: "positive window"},
+		{name: "cancelled", window: 1, cancel: true, want: "context canceled"},
+		{name: "null leading key after schema change", window: 1, change: "CREATE OR REPLACE TABLE partsupp AS SELECT * FROM partsupp UNION ALL SELECT NULL,1,1,1,'null'", want: "unexpected database row"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := conn.ExecContext(ctx, "DELETE FROM partsupp"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := conn.ExecContext(ctx, seed); err != nil {
+				t.Fatal(err)
+			}
+			if tc.change != "" {
+				if _, err := conn.ExecContext(ctx, tc.change); err != nil {
+					t.Fatal(err)
+				}
+			}
+			text := input
+			if tc.emptyInput {
+				text = ""
+			}
+			if err := os.WriteFile(filepath.Join(root, "partsupp.tbl"), []byte(text), 0600); err != nil {
+				t.Fatal(err)
+			}
+			queryCtx, stop := context.WithCancel(ctx)
+			defer stop()
+			if tc.cancel {
+				stop()
+			}
+			err := verifyTableWindows(queryCtx, conn, root, table, FileID{Path: "partsupp.tbl"}, tc.window)
+			if tc.want == "" && err != nil || tc.want != "" && (err == nil || !strings.Contains(err.Error(), tc.want)) {
+				t.Fatalf("want %q, got %v", tc.want, err)
+			}
+		})
+	}
+	if _, err := conn.ExecContext(ctx, "DROP TABLE partsupp"); err != nil {
+		t.Fatal(err)
+	}
+}
