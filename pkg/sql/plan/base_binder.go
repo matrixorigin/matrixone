@@ -5104,6 +5104,31 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 		return args, nil
 	}
 
+	// DIV's precision and unsigned domain belong to the original operands.
+	// Infer only unknown markers here; the function resolver owns physical casts.
+	if name == "div" {
+		original := []types.Type{makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1])}
+		if (original[0].Oid.IsDecimal() || original[1].Oid.IsDecimal()) &&
+			(original[0].Oid.IsDecimal() || original[0].Oid.IsInteger() || original[0].Oid == types.T_any) &&
+			(original[1].Oid.IsDecimal() || original[1].Oid.IsInteger() || original[1].Oid == types.T_any) {
+			for i := range args {
+				if original[i].Oid != types.T_any {
+					continue
+				}
+				hint, ok := function.InferNumericParameterType([]types.Type{original[1-i]}, nil)
+				if !ok {
+					return args, nil
+				}
+				cast, err := appendCastBeforeExpr(b.GetContext(), args[i], makePlan2Type(&hint))
+				if err != nil {
+					return nil, err
+				}
+				args[i] = cast
+			}
+			return args, nil
+		}
+	}
+
 	left, right, _, ok := function.ResolveNumericBinaryTypes(
 		name,
 		makeTypeByPlan2Expr(args[0]),
