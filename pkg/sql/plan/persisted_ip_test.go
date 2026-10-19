@@ -1369,4 +1369,18 @@ func TestPersistedDependentProgramRequiresV119(t *testing.T) {
 	version, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion119, version, "compose independent capabilities by maximum")
+
+	decimal := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64), Width: 7, Scale: 0}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.INTEGER_DIV, function.DecimalIntegerDivUnsignedOverload)},
+	}}}
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: decimal}})
+	version, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion121, version, "main decimal capability remains independent")
+	timestamp, err := BindFuncExprImplByPlanExpr(context.Background(), "timestamp", []*planpb.Expr{{Typ: types.T_datetime.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}})
+	require.NoError(t, err)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: timestamp}})
+	version, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion122, version, "new result contract composes above all main capabilities")
 }

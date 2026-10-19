@@ -58,7 +58,7 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}}
 	// Functional-index v107, migration-regexp v108 and Unicode metadata v109
-	// Main through v121 and the reserved v122 do not implement CRC32 overload 1.
+	// Main through temporal-result v122 does not implement CRC32 overload 1.
 	for _, version := range []int64{defines.MORPCVersion100, defines.MORPCVersion101, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, 122} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
@@ -281,6 +281,8 @@ func TestCRC32JSONProtocolPreservesMergedExpressionFloors(t *testing.T) {
 		{"decimal_statistics", planpb.RemoteExpressionFeatures{DecimalStatisticalResultContracts: true}, defines.MORPCVersion113},
 		{"calendar_intervals", planpb.RemoteExpressionFeatures{CalendarIntervalNormalization: true}, defines.MORPCVersion115},
 		{"least_greatest_collation", planpb.RemoteExpressionFeatures{LeastGreatestCollationSemantics: true}, defines.MORPCVersion117},
+		{"timestamp_results", planpb.RemoteExpressionFeatures{TimestampDatetimeResultContracts: true}, defines.MORPCVersion122},
+		{"dynamic_time_results", planpb.RemoteExpressionFeatures{DynamicTimeResultContracts: true}, defines.MORPCVersion122},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			require.Equal(t, tc.version, remoteExpressionProtocolVersion(tc.features))
@@ -288,4 +290,55 @@ func TestCRC32JSONProtocolPreservesMergedExpressionFloors(t *testing.T) {
 			require.Equal(t, int64(defines.MORPCVersion123), remoteExpressionProtocolVersion(tc.features))
 		})
 	}
+}
+
+func TestCRC32JSONProtocolIncludesMergedTemporalResults(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	temporal, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "timestamp", []*planpb.Expr{{
+		Typ: types.T_datetime.ToTypeWithScale(3).PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+	}})
+	require.NoError(t, err)
+	crc, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "crc32", []*planpb.Expr{{
+		Typ: types.T_json.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}},
+	}})
+	require.NoError(t, err)
+	expressions := []*planpb.Expr{temporal, crc}
+	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: expressions}}, Steps: []int32{0}}
+	features, err := planpb.RequiredRemoteExpressionFeatures(qry)
+	require.NoError(t, err)
+	require.True(t, features.TimestampDatetimeResultContracts)
+	require.True(t, features.CRC32JSONTextBytes)
+	require.Equal(t, defines.MORPCVersion123, remoteExpressionProtocolVersion(features))
+	persisted, err := plan2.RequiredPersistedExpressionProtocolVersion(qry)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion123, persisted)
+	op := projection.NewArgument()
+	defer op.Release()
+	op.ProjectList = expressions
+	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+	wire := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: expressions}}}
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	for _, version := range []int64{defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion122} {
+		client.version = version
+		// Placement runs on a capable coordinator; only the actual destination
+		// and then the receiving CN are downgraded for the negative controls.
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+		_, sendErr := encodeRemoteScope(scope, c.proc)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		receiveErr := validateRemoteExpressionPipelineProtocol(c.proc, wire)
+		if version < defines.MORPCVersion123 {
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+			require.ErrorContains(t, sendErr, "version 123")
+			require.ErrorContains(t, receiveErr, "version 123")
+		} else {
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+			require.NoError(t, sendErr)
+			require.NoError(t, receiveErr)
+		}
+	}
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+	require.Equal(t, client.calls, client.releases)
 }

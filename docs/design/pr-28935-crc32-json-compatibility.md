@@ -51,11 +51,11 @@ IndexSearchScan for every vector/fulltext index with algo_options/algo_exprs,
 v112's signed date results, v113's DECIMAL statistical DOUBLE results,
 v114's Unicode UNIQUE keys, v115's calendar intervals, v116's scalar division warnings,
 and v117's collation-aware LEAST/GREATEST ordering.
-CRC32 uses v123 after integrating main through v121 (DECIMAL DIV).
-The frozen Ready-owner ledger on 2026-10-19 has a maximum of v122 in
-the unmerged functional-key series. Leave that number reserved and do not
-import or claim that series' implementation. CRC32 receivers reject v121 and
-v122; the candidate retains every capability in its actual main ancestry.
+CRC32 uses v123 after integrating main through v122 (unary TIMESTAMP and
+dynamic TIME result contracts). Main, rather than an unmerged capability
+claim, now owns v122. No implementation from the pending functional-key series
+is imported or advertised. CRC32 receivers reject v121 and v122; the candidate
+retains every capability in its actual main ancestry.
 Recheck this allocation at landing and after a relevant base/source change.
 
 Publishing new persisted expressions requires the durable v123 authoring barrier.
@@ -96,11 +96,14 @@ mock version values and same-version CI do not prove them.
 ## Current main integration candidate on 2026-10-19
 
 The bounded maintenance candidate merges frozen upstream
-`873282742714436bff407dfcdbbe879147162bd3`, whose v121 implements
-unsigned DECIMAL DIV. CRC32 therefore moves to v123 throughout its
+`8e63625c4e9baeb1d28c1095c07732f056c04895`, whose v121 implements
+unsigned DECIMAL DIV and whose v122 implements unary TIMESTAMP/dynamic TIME
+result contracts. CRC32 retains v123 throughout its
 execution, placement, send/receive, catalog-read and authoring guards.
 Predecessor tests include v121/v122 rejection and preserve main's independent
-DECIMAL DIV v121 floor.
+DECIMAL DIV v121 and temporal-result v122 floors. The combined temporal/CRC32
+regression binds both real expressions, checks the maximum persisted/remote
+floor and placement, send and receive rejection after a destination downgrade.
 
 The replay proof now follows closed derived tables, UNION branches and scalar
 subqueries, including correlated names and LIMIT expressions. Every FROM leaf
