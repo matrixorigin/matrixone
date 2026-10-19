@@ -315,7 +315,7 @@ func getChangedListFromCheckpoints(
 		if !ckps[i].HasOverlap(from, to) {
 			continue
 		}
-		readers[i].ForEachRow(
+		if err = readers[i].ForEachRow(
 			ctx,
 			func(
 				accout uint32,
@@ -343,7 +343,9 @@ func getChangedListFromCheckpoints(
 				accIds = append(accIds, uint64(dbEntry.GetTenantID()))
 				return nil
 			},
-		)
+		); err != nil {
+			return
+		}
 	}
 	return
 }
