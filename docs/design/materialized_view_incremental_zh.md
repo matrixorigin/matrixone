@@ -28,7 +28,8 @@ FORCE 对超出增量子集的定义选择 COMPLETE；COMPLETE 支持最多 16 �
 
 FAST 要求所有被增量表达式引用的字符串源列都采用原始字节相等语义，包括 DISTINCT
 输入、过滤条件和计算分组中的比较；只检查可见分组列不足以保证状态键正确。历史字节序
-和不透明二进制类型可以使用；`utf8mb4_bin` 具有 PAD SPACE 语义，不能按原始字节处理。
+和不透明二进制变长类型可以使用；CHAR 与 `utf8mb4_bin` 具有 PAD SPACE 语义，
+不能按原始字节处理。
 其他 collation 在 FORCE 下改用 COMPLETE，在 FAST 下于创建时拒绝。
 
 同一基表在 UNION ALL 中出现多次时，每个分支保留独立身份。调度来源去重，但一条

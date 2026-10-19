@@ -2098,6 +2098,12 @@ func TestMaterializedViewIncrementalRejectsCollationAwareGroups(t *testing.T) {
 			}
 		})
 	}
+	charOutputs := []*ColDef{
+		{Name: "k", Typ: Type{Id: int32(types.T_char), Charset: uint32(types.CharsetBinary)}},
+		{Name: "c", Typ: Type{Id: int32(types.T_int64)}},
+	}
+	encoded, _, _ := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), charOutputs)
+	require.Empty(t, encoded, "CHAR has PAD SPACE equality even with a binary charset")
 }
 
 func TestMaterializedViewIncrementalChecksSourceCollation(t *testing.T) {
@@ -2157,6 +2163,9 @@ func TestMaterializedViewIncrementalChecksSourceCollation(t *testing.T) {
 			mv, err := mvdefinition.Decode(mvdefinition.PropertyValue(def, mvdefinition.Property), false)
 			require.NoError(t, err)
 			require.NotEmpty(t, mv.Incremental)
+			nameCol.Typ.Id = int32(types.T_char)
+			_, err = runOneStmt(mock, t, "create materialized view mv_char refresh fast on change as "+tc.sql)
+			require.ErrorContains(t, err, "MV_FAST_UNSUPPORTED_SOURCE_COLLATION")
 		})
 	}
 }

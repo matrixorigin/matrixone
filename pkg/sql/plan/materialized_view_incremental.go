@@ -642,7 +642,10 @@ func materializedViewIncrementalHavingAliases(exprs tree.SelectExprs) map[string
 
 func materializedViewIncrementalGroupTypeSupported(typ Type) bool {
 	switch types.T(typ.Id) {
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char:
+		// CHAR comparisons pad trailing spaces even under a binary charset.
+		return false
+	case types.T_varchar, types.T_text:
 		return typ.Charset == uint32(types.CharsetLegacy) ||
 			typ.Charset == uint32(types.CharsetBinary)
 	default:

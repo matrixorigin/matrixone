@@ -29,7 +29,8 @@ joins. Temporary, external and view sources are rejected.
 FAST requires raw-byte equality for every referenced string source column, not
 only the visible grouping columns. This also covers DISTINCT inputs, filters and
 comparisons inside computed groups. Legacy bytewise and opaque binary identities
-are supported; utf8mb4_bin has PAD SPACE equality and is not raw-byte identity.
+are supported for variable-length values; CHAR and utf8mb4_bin have PAD SPACE
+equality and are not raw-byte identities.
 Other collations fall back to COMPLETE under FORCE or are rejected under FAST.
 All refresh modes reject subqueries, CTEs, session variables/parameters and
 volatile or time-dependent functions before binding. Their inputs are not
