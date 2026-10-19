@@ -447,3 +447,28 @@ login-repair evidence after this rebase. Unchanged worker, transport and storage
 evidence retains only its original demonstrated scope. This maintenance adds no
 Python runtime, production or security scope. Independent Architecture and
 SQL/Planner approval of r22 remains pending; these repairs do not provide it.
+
+
+## r23 protocol allocation addendum (2026-10-19)
+
+Official main `873282742714436bff407dfcdbbe879147162bd3` owns MORPC 121
+for exact unsigned DECIMAL DIV result domains. The governing
+`python-udf-current-stage-r23-2026-10-19` proposal preserves that capability and
+allocates the single Python capability 122 (`latest + 1`). Catalog repair,
+revision publication and reads, Prepare, prepared reuse, evaluator, remote
+sender/receiver and status admission reject predecessor 121 and mixed 122/121
+CNs before Python mutation or execution. Rolling back the active floor from
+122 to 121 disables Python again while retaining ordinary SQL and DIV 121.
+
+Shared expression feature detection preserves both capabilities: DIV alone
+requires 121, while a pipeline containing Python and DIV requires 122. The
+coordinator-only dependent-program execution owner remains mandatory regardless
+of capability. Upstream DIV overloads, precision, prepared inference, CTAS/view
+schema boundaries and the legacy DIV rollback at 120 are unchanged.
+
+Query methods 45/46/47 and their wire fields retain the r22 allocations. Published
+catalog handlers through 4.0.17 and the separate Python 4.0.18 repair (minimum
+source 4.0.17) also retain their allocation. This is a protocol admission and
+integration repair, with no new Python runtime, production or security scope.
+Independent Architecture and SQL/Planner approval of r23 remains pending; this
+allocation repair and its validation do not provide it.
