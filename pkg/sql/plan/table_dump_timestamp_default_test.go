@@ -16,8 +16,10 @@ package plan
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
+	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -466,63 +468,133 @@ func TestTableDumpCheapPrecisionCandidatesBeforeSessions(t *testing.T) {
 	}
 }
 
-func TestTableDumpZeroTimestampAcrossSQLModes(t *testing.T) {
-	proc := newPlanTestProcess(t)
-	proc.GetSessionInfo().TimeZone = time.UTC
-	mode := ""
-	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
-		if name == "sql_mode" {
-			return mode, nil
+func TestTableDumpZeroTemporalDefaultsAcrossSQLModes(t *testing.T) {
+	for _, typ := range []string{"date", "datetime", "timestamp"} {
+		zero := "'0000-00-00 00:00:00'"
+		if typ == "date" {
+			zero = "'0000-00-00'"
 		}
-		return "", nil
-	})
-	compiler := NewMockCompilerContext(false, proc)
-	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
-		switch name {
-		case "sql_mode":
-			return mode, nil
-		case "div_precision_increment":
-			return int64(4), nil
-		case "explicit_defaults_for_timestamp":
-			return true, nil
+		for _, origin := range []string{zero, "0", "(0)"} {
+			t.Run(typ+"/"+origin, func(t *testing.T) {
+				proc := newPlanTestProcess(t)
+				proc.GetSessionInfo().TimeZone = time.UTC
+				mode := ""
+				proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+					if name == "sql_mode" {
+						return mode, nil
+					}
+					return "", nil
+				})
+				compiler := NewMockCompilerContext(false, proc)
+				compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+					switch name {
+					case "sql_mode":
+						return mode, nil
+					case "div_precision_increment":
+						return int64(4), nil
+					case "explicit_defaults_for_timestamp":
+						return true, nil
+					}
+					return "", nil
+				}
+				stmt, err := mysql.ParseOne(t.Context(), "create table t(a "+typ+" default "+origin+")", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				built, err := BuildPlan(compiler, stmt, false)
+				require.NoError(t, err)
+				def := built.GetDdl().GetCreateTable().GetTableDef()
+				before := proto.Clone(def)
+				mode = "STRICT_TRANS_TABLES,NO_ZERO_DATE"
+				proc.GetSessionInfo().SqlMode = mode
+				_, err = BuildPlan(compiler, stmt, false)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
+				warnings := &process.WarningProbe{}
+				proc.WarningSink = warnings
+				for _, supplied := range []*planpb.TableDef{nil, def} {
+					_, err = AnalyzeTableDumpBindings(compiler, def, supplied)
+					require.NoError(t, err)
+				}
+				for _, kind := range []string{"value", "type"} {
+					t.Run(kind, func(t *testing.T) {
+						forged := proto.Clone(def).(*planpb.TableDef)
+						if kind == "value" {
+							switch typ {
+							case "date":
+								forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Dateval{Dateval: 1}
+							case "datetime":
+								forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Datetimeval{Datetimeval: 1}
+							case "timestamp":
+								forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Timestampval{Timestampval: 1}
+							}
+						} else {
+							forged.Cols[0].Default.Expr.Typ.Id = int32(types.T_int64)
+						}
+						_, err := AnalyzeTableDumpBindings(compiler, def, forged)
+						require.ErrorContains(t, err, "cannot verify bound default")
+					})
+				}
+				require.Equal(t, mode, proc.GetSessionInfo().SqlMode)
+				resolved, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+				require.NoError(t, err)
+				require.Equal(t, mode, resolved)
+				require.False(t, warnings.Warned())
+				require.True(t, proto.Equal(before, def))
+				_, err = BuildPlan(compiler, stmt, false)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
+			})
 		}
-		return "", nil
 	}
-	stmt, err := mysql.ParseOne(t.Context(), "create table t(a timestamp default '0000-00-00 00:00:00')", 1)
+}
+
+// Captured by the genuine 129d977 binder before main b233ff1 normalized DEFAULT 0.
+func TestTableDumpPreZeroTemporalDefault(t *testing.T) {
+	data, err := os.ReadFile("testdata/temporal_zero_pre_b233_baseline.json")
 	require.NoError(t, err)
-	defer stmt.Free()
-	built, err := BuildPlan(compiler, stmt, false)
-	require.NoError(t, err)
-	def := built.GetDdl().GetCreateTable().GetTableDef()
-	before := proto.Clone(def)
-	mode = "STRICT_TRANS_TABLES,NO_ZERO_DATE"
-	proc.GetSessionInfo().SqlMode = mode
-	_, err = BuildPlan(compiler, stmt, false)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
-	warnings := &process.WarningProbe{}
-	proc.WarningSink = warnings
-	for _, supplied := range []*planpb.TableDef{nil, def} {
-		_, err = AnalyzeTableDumpBindings(compiler, def, supplied)
-		require.NoError(t, err)
-	}
-	for _, kind := range []string{"value", "type"} {
-		t.Run(kind, func(t *testing.T) {
-			forged := proto.Clone(def).(*planpb.TableDef)
-			if kind == "value" {
-				forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Timestampval{Timestampval: 1}
-			} else {
-				forged.Cols[0].Default.Expr.Typ.Id = int32(types.T_datetime)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 2)
+	for origin, raw := range fixtures {
+		t.Run(origin, func(t *testing.T) {
+			var source planpb.TableDef
+			require.NoError(t, proto.Unmarshal(raw, &source))
+			require.Equal(t, int64(62135596800000000), source.Cols[0].Default.Expr.GetLit().GetTimestampval())
+			proc := newPlanTestProcess(t)
+			proc.GetSessionInfo().TimeZone = time.UTC
+			ctx := NewMockCompilerContext(false, proc)
+			ctx.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+				if name == "explicit_defaults_for_timestamp" {
+					return true, nil
+				}
+				if name == "div_precision_increment" {
+					return int64(4), nil
+				}
+				return "", nil
 			}
-			_, err := AnalyzeTableDumpBindings(compiler, def, forged)
-			require.ErrorContains(t, err, "cannot verify bound default")
+			stmt, err := mysql.ParseOne(t.Context(), "create table t(a timestamp default "+origin+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			current, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			target := current.GetDdl().GetCreateTable().GetTableDef()
+			require.Equal(t, int64(types.ZeroTimestamp), target.Cols[0].Default.Expr.GetLit().GetTimestampval())
+			require.False(t, proto.Equal(target.Cols[0].Default.Expr, source.Cols[0].Default.Expr))
+			before := proto.Clone(target)
+			for _, supplied := range []*planpb.TableDef{nil, target, &source} {
+				sensitive, err := AnalyzeTableDumpBindings(ctx, target, supplied)
+				require.NoError(t, err)
+				require.True(t, sensitive)
+			}
+			for _, kind := range []string{"value", "type"} {
+				forged := proto.Clone(&source).(*planpb.TableDef)
+				if kind == "value" {
+					forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Timestampval{Timestampval: 62135596800000001}
+				} else {
+					forged.Cols[0].Default.Expr.Typ.Scale++
+				}
+				_, err := AnalyzeTableDumpBindings(ctx, target, forged)
+				require.ErrorContains(t, err, "cannot verify bound default")
+			}
+			require.True(t, proto.Equal(before, target))
 		})
 	}
-	require.Equal(t, mode, proc.GetSessionInfo().SqlMode)
-	resolved, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
-	require.NoError(t, err)
-	require.Equal(t, mode, resolved)
-	require.False(t, warnings.Warned())
-	require.True(t, proto.Equal(before, def))
-	_, err = BuildPlan(compiler, stmt, false)
-	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 }

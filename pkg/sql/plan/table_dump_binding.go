@@ -182,6 +182,7 @@ const (
 	tableDumpBindingLegacyDecimalIntegerDiv
 	tableDumpBindingLegacySpecial
 	tableDumpBindingImplicitTimestamp
+	tableDumpBindingLegacyZeroTemporalDefault
 )
 
 type tableDumpDefaultSession struct {
@@ -217,8 +218,12 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 				&tree.AttributeDefault{Expr: ast},
 			},
 		}
+		purpose := defaultExprForPersistedVerification
+		if mode == tableDumpBindingLegacyZeroTemporalDefault {
+			purpose = defaultExprForPersistedLegacyZero
+		}
 		var unfolded *planpb.Expr
-		bound, err := buildDefaultExprWithColumnsObserved(bindCtx, col, item.col.Typ, proc, def.Cols, defaultExprForPersistedVerification, func(source, assigned *planpb.Expr) {
+		bound, err := buildDefaultExprWithColumnsObserved(bindCtx, col, item.col.Typ, proc, def.Cols, purpose, func(source, assigned *planpb.Expr) {
 			// Observe before assignment/folding can fail in the reading zone.
 			// Inspect the resolved source, not the assignment cast's target type:
 			// a plain NULL/zero TIMESTAMP needs no timezone reconstruction.
@@ -502,6 +507,14 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			// Each migration era must reproduce the whole tree; no partial matching
 			// or semantic normalization is permitted for supplied expressions.
 			modes := []tableDumpBindingMode{tableDumpBindingCurrent}
+			// This unwrapped AST is a literal, so it cannot contain any of the
+			// function/division eras below. Reproduce the complete pre-normalization
+			// default without composing independently selected subtrees.
+			if item.kind == "default" {
+				if _, ok := zeroTemporalDefaultLiteral(unwrapParenExpr(ast), item.col.Typ); ok {
+					modes = append(modes, tableDumpBindingLegacyZeroTemporalDefault)
+				}
+			}
 			if visit.hasTimestampAdd {
 				modes = append(modes, tableDumpBindingLegacyTimestampAdd)
 			}

@@ -938,6 +938,8 @@ type defaultExprBindingPurpose uint8
 const (
 	defaultExprForDDL defaultExprBindingPurpose = iota
 	defaultExprForPersistedVerification
+	// Reproduce defaults admitted before integer-zero temporal normalization.
+	defaultExprForPersistedLegacyZero
 )
 
 func buildDefaultExprWithColumnsObserved(
@@ -1001,7 +1003,7 @@ func buildDefaultExprWithColumnsObserved(
 	if err != nil {
 		return nil, err
 	}
-	if zeroValue, ok := zeroTemporalDefaultLiteral(semanticExpr, typ); ok {
+	if zeroValue, ok := zeroTemporalDefaultLiteral(semanticExpr, typ); ok && purpose != defaultExprForPersistedLegacyZero {
 		planExpr = makePlan2StringConstExprWithType(zeroValue)
 	}
 	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {

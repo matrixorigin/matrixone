@@ -16,6 +16,7 @@ package sqlintegration
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -204,7 +205,7 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 			})
 		}
 
-		t.Run("zero_timestamp_cross_mode", func(t *testing.T) {
+		t.Run("zero_temporal_cross_mode", func(t *testing.T) {
 			exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
 			t.Cleanup(func() {
 				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -213,18 +214,21 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 				require.NoError(t, err)
 			})
 			exec("set sql_mode=''")
-			exec("create table zero_mode_source(a timestamp default '0000-00-00 00:00:00')")
-			exec("create table zero_mode_target(a timestamp default '0000-00-00 00:00:00')")
+			const zeroDDL = "(a timestamp default '0000-00-00 00:00:00',b date default '0000-00-00',c datetime default '0000-00-00 00:00:00',d timestamp default 0,e date default 0,f datetime default 0)"
+			exec("create table zero_mode_source" + zeroDDL)
+			exec("create table zero_mode_target" + zeroDDL)
 			seed := t.TempDir()
 			exec("dump table zero_mode_source to '" + seed + "' metadata only")
 			exec("set sql_mode=DEFAULT")
 			var mode string
 			require.NoError(t, conn.QueryRowContext(ctx, "select @@sql_mode").Scan(&mode))
 			require.Contains(t, mode, "NO_ZERO_DATE")
-			_, err := conn.ExecContext(ctx, "create table zero_mode_rejected(a timestamp default '0000-00-00 00:00:00')")
-			var invalidDefault *mysql.MySQLError
-			require.ErrorAs(t, err, &invalidDefault)
-			require.Equal(t, uint16(1067), invalidDefault.Number)
+			for _, declaration := range []string{"timestamp default '0000-00-00 00:00:00'", "date default '0000-00-00'", "datetime default '0000-00-00 00:00:00'", "timestamp default 0", "date default 0", "datetime default 0"} {
+				_, err := conn.ExecContext(ctx, "create table zero_mode_rejected(a "+declaration+")")
+				var invalidDefault *mysql.MySQLError
+				require.ErrorAs(t, err, &invalidDefault)
+				require.Equal(t, uint16(1067), invalidDefault.Number)
+			}
 			exec("dump table zero_mode_source to '" + t.TempDir() + "' metadata only")
 			exec("load table zero_mode_target from '" + seed + "'")
 			exec("dump table zero_mode_target to '" + t.TempDir() + "' metadata only")
@@ -234,11 +238,80 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 			// Ordinary writes retain their own session policy. Use the original
 			// admitting policy to observe the restored default's actual value.
 			exec("set sql_mode=''")
-			exec("insert into zero_mode_target values(default)")
+			exec("insert into zero_mode_target values(default,default,default,default,default,default)")
 			var value string
-			require.NoError(t, conn.QueryRowContext(ctx, "select cast(a as char) from zero_mode_target").Scan(&value))
-			require.Equal(t, "0000-00-00 00:00:00", value)
+			require.NoError(t, conn.QueryRowContext(ctx, "select concat_ws(',',cast(a as char),cast(b as char),cast(c as char),cast(d as char),cast(e as char),cast(f as char)) from zero_mode_target").Scan(&value))
+			require.Equal(t, "0000-00-00 00:00:00,0000-00-00,0000-00-00 00:00:00,0000-00-00 00:00:00,0000-00-00,0000-00-00 00:00:00", value)
 		})
+		t.Run("pre_zero_numeric_timestamp", func(t *testing.T) {
+			exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
+			t.Cleanup(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				_, err := conn.ExecContext(cleanupCtx, "drop table if exists pre_zero_source,pre_zero_target")
+				require.NoError(t, err)
+			})
+			exec("set sql_mode=''")
+			exec("set time_zone='+00:00'")
+			exec("create table pre_zero_source(a timestamp default 0)")
+			exec("create table pre_zero_target(a timestamp default 0)")
+			seedPath := t.TempDir()
+			exec("dump table pre_zero_source to '" + seedPath + "' metadata only")
+			data, err := os.ReadFile(filepath.Join(seedPath, "manifest.json"))
+			require.NoError(t, err)
+			var manifest map[string]json.RawMessage
+			require.NoError(t, json.Unmarshal(data, &manifest))
+			var payload []byte
+			require.NoError(t, json.Unmarshal(manifest["bound_expressions"], &payload))
+			var transport planpb.TableDef
+			require.NoError(t, proto.Unmarshal(payload, &transport))
+			raw, err := os.ReadFile(filepath.Join("..", "..", "sql", "plan", "testdata", "temporal_zero_pre_b233_baseline.json"))
+			require.NoError(t, err)
+			var frozen map[string][]byte
+			require.NoError(t, json.Unmarshal(raw, &frozen))
+			var old planpb.TableDef
+			require.NoError(t, proto.Unmarshal(frozen["0"], &old))
+			require.False(t, proto.Equal(transport.Cols[0].Default.Expr, old.Cols[0].Default.Expr))
+			require.Equal(t, transport.Cols[0].Default.OriginString, old.Cols[0].Default.OriginString)
+			transport.Cols[0].Default = old.Cols[0].Default
+			payload, err = proto.Marshal(&transport)
+			require.NoError(t, err)
+			manifest["bound_expressions"], err = json.Marshal(payload)
+			require.NoError(t, err)
+			manifest["expression_hash"], err = json.Marshal(fmt.Sprintf("%x", sha256.Sum256(payload)))
+			require.NoError(t, err)
+			data, err = json.Marshal(manifest)
+			require.NoError(t, err)
+			require.NoError(t, os.WriteFile(filepath.Join(seedPath, "manifest.json"), data, 0600))
+			exec("set sql_mode=DEFAULT")
+			exec("load table pre_zero_source from '" + seedPath + "'")
+			path := t.TempDir()
+			exec("dump table pre_zero_source to '" + path + "' metadata only")
+			exec("load table pre_zero_target from '" + path + "'")
+			path = t.TempDir()
+			exec("dump table pre_zero_target to '" + path + "' metadata only")
+			data, err = os.ReadFile(filepath.Join(path, "manifest.json"))
+			require.NoError(t, err)
+			require.NoError(t, json.Unmarshal(data, &manifest))
+			require.NoError(t, json.Unmarshal(manifest["bound_expressions"], &payload))
+			var restored planpb.TableDef
+			require.NoError(t, proto.Unmarshal(payload, &restored))
+			require.True(t, proto.Equal(old.Cols[0].Default, restored.Cols[0].Default))
+			// The historical epoch-zero value is below TIMESTAMP's legal lower
+			// bound. The original binder rejects later default assignments in
+			// both modes; DUMP/LOAD must preserve that binding and writer policy.
+			for _, mode := range []string{"DEFAULT", "''"} {
+				exec("set sql_mode=" + mode)
+				_, err = conn.ExecContext(ctx, "insert into pre_zero_target values(default)")
+				var invalidTimestamp *mysql.MySQLError
+				require.ErrorAs(t, err, &invalidTimestamp)
+				require.Equal(t, uint16(1366), invalidTimestamp.Number)
+			}
+			var count int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from pre_zero_target").Scan(&count))
+			require.Zero(t, count)
+		})
+
 		var remaining int
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=?", schema).Scan(&remaining))
 		require.Zero(t, remaining)

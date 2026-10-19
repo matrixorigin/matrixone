@@ -1,7 +1,7 @@
 # Table dump expression binding (PR #29241, issue #28594)
 
-Status: revision 15; persisted-zero-default validation design approved by independent gpt-6-astra/medium review.
-Revision: 15, 2026-10-19. Revision 14 passed independent search-order review; validation is recorded in the PR.
+Status: revision 16; zero-temporal rebase compatibility design approved by independent gpt-6-astra/medium review.
+Revision: 16, 2026-10-20. Revision 15 passed independent persisted-default review; validation is recorded in the PR.
 
 ## Current extension: migration-era binding and format 3
 
@@ -35,9 +35,39 @@ DUMP and LOAD; per-row normalization is unchanged.
 Current frozen-base allocations: main charset118, coordinator subquery119, session
 authorization120, unsigned DECIMAL DIV121 and functions599/600 stay published;
 unary temporal122 stay published; fractional TIMESTAMPADD uses capability123, normalizer601 and end602. The allocation follows official main
-8e63625c4e9baeb1d28c1095c07732f056c04895; rollback coverage cycles122→123→122.
+b233ff1f27372e450106a6a0964952fefe887114; rollback coverage cycles122→123→122.
 No protobuf schema change or provisional-function-ID guessing is introduced.
 Historical revision10 evidence below retains its original input identity.
+
+## Revision 16: zero-temporal normalization rebase
+
+Main b233ff1 normalizes integer-zero DATE/DATETIME/TIMESTAMP defaults before
+assignment casting. Ordinary DDL retains its strict plus NO_ZERO_DATE gate for
+all three types. Persisted verification skips only that final CREATE admission;
+all binding, conversion, folding, protocol and whole-tree equality checks stay
+active without changing reader SQL mode or diagnostics.
+
+A private pre-normalization purpose reproduces the actual old TIMESTAMP DEFAULT
+0 binding (1970-01-01 UTC rather than zero). It suppresses only the new integer
+zero substitution. The candidate applies solely to temporal DEFAULT origins
+whose unwrapped AST is an integer-zero literal, disjoint from the function and
+DIV historical eras; no per-node era composition is introduced. Both eras still
+participate in sensitivity classification after a current match. Older failed
+DATE/DATETIME numeric casts remain failed candidates. The existing cancellation
+and candidate-node bounds apply unchanged (at most one additional descriptor for
+these literal-only defaults; other expressions retain their existing bound).
+
+Frozen definitions for 0 and (0) were captured by genuine incoming 129d977,
+independently of this compatibility branch. That old epoch-zero binding is below
+the TIMESTAMP assignment minimum; the incoming binder rejects subsequent default
+assignments with 1366 in both strict and permissive modes. Restoration preserves
+this policy rather than silently replacing the stored binding with zero.
+UT and the reused public SQL fixture
+cover historical stored bindings and existing strict/permissive future-assignment
+policy, strict cross-mode DUMP/LOAD for all three
+types with numeric/canonical origins, ordinary strict DDL rejection, forged
+value/type rejection and immutable session/catalog state. No manifest, function,
+protocol, runtime cast, per-row path or resource ownership change is added.
 
 ## Revision 15: persisted zero-TIMESTAMP defaults
 
