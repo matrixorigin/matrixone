@@ -17,7 +17,6 @@ package timewin
 import (
 	"bytes"
 	"context"
-	"slices"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -56,7 +55,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	if len(ctr.aggExe) == 0 {
 		ctr.aggExe = make([]colexec.ExprEvalVector, len(timeWin.Aggs))
 		for i, ag := range timeWin.Aggs {
-			ctr.aggExe[i], err = colexec.MakeEvalVector(proc, ag.GetArgExpressions())
+			ctr.aggExe[i], err = colexec.MakeEvalVectorWithAllocation(proc, ag.GetArgExpressions(), ctr.allocation.Vector)
 			if err != nil {
 				return err
 			}
@@ -77,7 +76,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 		ctr.partExe = make([]colexec.ExpressionExecutor, len(timeWin.PartitionBy))
 		ctr.partSet = make([]func(v, w *vector.Vector, sel int64, length int) error, len(timeWin.PartitionBy))
 		for i, expr := range timeWin.PartitionBy {
-			ctr.partExe[i], err = colexec.NewExpressionExecutor(proc, expr)
+			ctr.partExe[i], err = colexec.NewExpressionExecutorWithAllocation(proc, expr, ctr.allocation.Vector)
 			if err != nil {
 				return err
 			}
@@ -88,7 +87,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	}
 
 	if ctr.tsExe == nil {
-		ctr.tsExe, err = colexec.NewExpressionExecutor(proc, timeWin.Ts)
+		ctr.tsExe, err = colexec.NewExpressionExecutorWithAllocation(proc, timeWin.Ts, ctr.allocation.Vector)
 		if err != nil {
 			return err
 		}
@@ -98,7 +97,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 			if err != nil {
 				return err
 			}
-			ctr.startExe, err = colexec.NewExpressionExecutor(proc, s)
+			ctr.startExe, err = colexec.NewExpressionExecutorWithAllocation(proc, s, ctr.allocation.Vector)
 			if err != nil {
 				return err
 			}
@@ -112,7 +111,7 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 					return err
 				}
 			}
-			ctr.endExe, err = colexec.NewExpressionExecutor(proc, e)
+			ctr.endExe, err = colexec.NewExpressionExecutorWithAllocation(proc, e, ctr.allocation.Vector)
 			if err != nil {
 				return err
 			}
@@ -123,13 +122,13 @@ func (timeWin *TimeWin) Prepare(proc *process.Process) (err error) {
 	}
 	if timeWin.hasGapFillBounds() {
 		if ctr.gapFillStartExe == nil {
-			ctr.gapFillStartExe, err = colexec.NewExpressionExecutor(proc, timeWin.GapFillStart)
+			ctr.gapFillStartExe, err = colexec.NewExpressionExecutorWithAllocation(proc, timeWin.GapFillStart, ctr.allocation.Vector)
 			if err != nil {
 				return err
 			}
 		}
 		if ctr.gapFillEndExe == nil {
-			ctr.gapFillEndExe, err = colexec.NewExpressionExecutor(proc, timeWin.GapFillEnd)
+			ctr.gapFillEndExe, err = colexec.NewExpressionExecutorWithAllocation(proc, timeWin.GapFillEnd, ctr.allocation.Vector)
 			if err != nil {
 				return err
 			}
@@ -269,6 +268,9 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 		switch ctr.status {
 		case interval:
 			result, err := vm.Exec(timeWin.GetChildren(0), proc)
+			if result.Status == vm.ExecYield && err == nil {
+				return result, nil
+			}
 			if err != nil {
 				return result, err
 			}
@@ -294,6 +296,9 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			return result, nil
 		case receive:
 			result, err := vm.Exec(timeWin.GetChildren(0), proc)
+			if result.Status == vm.ExecYield && err == nil {
+				return result, nil
+			}
 			if err != nil {
 				return result, err
 			}
@@ -357,8 +362,9 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			if ctr.last {
-				ctr.wStart = append(ctr.wStart, ctr.left)
-				ctr.wEnd = append(ctr.wEnd, ctr.right)
+				if err := ctr.appendWindowBounds(proc, ctr.left, ctr.right); err != nil {
+					return vm.CancelResult, err
+				}
 				ctr.status = flush
 				break
 			}
@@ -380,8 +386,9 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				if ctr.zeroWindow {
 					ctr.last = true
 					if !ctr.withoutFill {
-						ctr.wStart = append(ctr.wStart, types.ZeroDatetime)
-						ctr.wEnd = append(ctr.wEnd, types.ZeroDatetime)
+						if err := ctr.appendWindowBounds(proc, types.ZeroDatetime, types.ZeroDatetime); err != nil {
+							return vm.CancelResult, err
+						}
 					}
 					ctr.status = flush
 					break
@@ -390,8 +397,9 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 					ctr.preRowIdx == ctr.tsVec[ctr.preVecIdx].Length()-1 {
 					ctr.last = true
 					if ctr.lastVal < ctr.nextLeft {
-						ctr.wStart = append(ctr.wStart, ctr.left)
-						ctr.wEnd = append(ctr.wEnd, ctr.right)
+						if err := ctr.appendWindowBounds(proc, ctr.left, ctr.right); err != nil {
+							return vm.CancelResult, err
+						}
 						ctr.status = flush
 						break
 					}
@@ -401,6 +409,9 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 			}
 
 			result, err := vm.Exec(timeWin.GetChildren(0), proc)
+			if result.Status == vm.ExecYield && err == nil {
+				return result, nil
+			}
 			if err != nil {
 				return result, err
 			}
@@ -561,6 +572,9 @@ func makeAggExecutors(timeWin *TimeWin, proc *process.Process, growFirstGroup bo
 		aggs[i], err = aggexec.MakeAgg(
 			proc.Mp(), expression.GetAggID(), expression.IsDistinct(), params...)
 		if err != nil {
+			return nil, err
+		}
+		if err = timeWin.ctr.allocation.BindAggregate(aggs[i]); err != nil {
 			return nil, err
 		}
 		aggexec.ConfigureGroupConcatWarningRetention(
@@ -729,8 +743,9 @@ func (ctr *container) windowBoundaryWindowCount(start, end, delta types.Datetime
 func (ctr *container) nextWindow(t *TimeWin, proc *process.Process) error {
 	emit := !ctr.withoutFill || t.GapFill
 	if emit {
-		ctr.wStart = append(ctr.wStart, ctr.left)
-		ctr.wEnd = append(ctr.wEnd, ctr.right)
+		if err := ctr.appendWindowBounds(proc, ctr.left, ctr.right); err != nil {
+			return err
+		}
 	}
 
 	ctr.left = ctr.nextLeft
@@ -852,8 +867,9 @@ func (ctr *container) fillRows(t *TimeWin, proc *process.Process) error {
 		if ctr.zeroWindow {
 			if len(ctr.partExe) > 0 && !ctr.samePartition(ctr.curVecIdx, ctr.curRowIdx, ctr.partIdx, ctr.partRow) {
 				if !ctr.withoutFill {
-					ctr.wStart = append(ctr.wStart, zeroValue)
-					ctr.wEnd = append(ctr.wEnd, zeroValue)
+					if err := ctr.appendWindowBounds(proc, zeroValue, zeroValue); err != nil {
+						return err
+					}
 				}
 				ctr.breakVecIdx = ctr.curVecIdx
 				ctr.breakRowIdx = ctr.curRowIdx
@@ -876,8 +892,9 @@ func (ctr *container) fillRows(t *TimeWin, proc *process.Process) error {
 			}
 
 			if !ctr.withoutFill {
-				ctr.wStart = append(ctr.wStart, zeroValue)
-				ctr.wEnd = append(ctr.wEnd, zeroValue)
+				if err := ctr.appendWindowBounds(proc, zeroValue, zeroValue); err != nil {
+					return err
+				}
 			}
 			ctr.zeroWindow = false
 			ctr.status = firstWindow
@@ -946,8 +963,9 @@ func (ctr *container) fillRows(t *TimeWin, proc *process.Process) error {
 		if ctr.preVecIdx == ctr.partLastVecIdx && ctr.preRowIdx == ctr.partLastRowIdx &&
 			ctr.partLastVal < ctr.nextLeft {
 			ctr.partitionBreak = true
-			ctr.wStart = append(ctr.wStart, ctr.left)
-			ctr.wEnd = append(ctr.wEnd, ctr.right)
+			if err := ctr.appendWindowBounds(proc, ctr.left, ctr.right); err != nil {
+				return err
+			}
 			ctr.status = flush
 		} else {
 			ctr.status = nextWindow
@@ -980,8 +998,9 @@ func (ctr *container) fillRows(t *TimeWin, proc *process.Process) error {
 				ctr.status = fill
 			}
 		} else if ctr.group > maxTimeWindowRows {
-			ctr.wStart = append(ctr.wStart, ctr.left)
-			ctr.wEnd = append(ctr.wEnd, ctr.right)
+			if err := ctr.appendWindowBounds(proc, ctr.left, ctr.right); err != nil {
+				return err
+			}
 			ctr.status = flush
 		} else {
 			ctr.status = nextWindow
@@ -1053,7 +1072,9 @@ func (ctr *container) closeBoundedGapFillTail(t *TimeWin, proc *process.Process)
 		count = capacity
 	}
 
-	ctr.appendGapFillBounds(t, count, proc)
+	if err := ctr.appendGapFillBounds(t, count, proc); err != nil {
+		return false, err
+	}
 	additional := count - 1 // the current aggregate group already exists
 	if err := ctr.growGapFillGroups(t, additional); err != nil {
 		return false, err
@@ -1086,7 +1107,9 @@ func (ctr *container) advanceBoundedTumblingGap(t *TimeWin, target types.Datetim
 	}
 
 	if steps >= capacity {
-		ctr.appendGapFillBounds(t, capacity, proc)
+		if err := ctr.appendGapFillBounds(t, capacity, proc); err != nil {
+			return false, err
+		}
 		additional := capacity - 1
 		if err := ctr.growGapFillGroups(t, additional); err != nil {
 			return false, err
@@ -1102,7 +1125,9 @@ func (ctr *container) advanceBoundedTumblingGap(t *TimeWin, target types.Datetim
 	// Close every bucket before target and create one aggregate group for the
 	// target bucket. The input row remains at the same cursor and is consumed by
 	// the next fill iteration.
-	ctr.appendGapFillBounds(t, steps, proc)
+	if err := ctr.appendGapFillBounds(t, steps, proc); err != nil {
+		return false, err
+	}
 	if err := ctr.growGapFillGroups(t, steps); err != nil {
 		return false, err
 	}
@@ -1130,18 +1155,46 @@ func (ctr *container) growGapFillGroups(t *TimeWin, count int64) error {
 	return nil
 }
 
-func (ctr *container) appendGapFillBounds(t *TimeWin, count int64, proc *process.Process) {
-	if count <= 0 {
-		return
+func (ctr *container) growWindowBounds(proc *process.Process, count int) error {
+	var err error
+	ctr.wStart, err = colexec.GrowAnalyticSlice(ctr.wStart, count, proc, &ctr.allocation)
+	if err != nil {
+		return err
 	}
-	ctr.wStart = slices.Grow(ctr.wStart, int(count))
-	ctr.wEnd = slices.Grow(ctr.wEnd, int(count))
+	ctr.wEnd, err = colexec.GrowAnalyticSlice(ctr.wEnd, count, proc, &ctr.allocation)
+	return err
+}
+func (ctr *container) appendWindowBounds(proc *process.Process, start, end types.Datetime) error {
+	at := len(ctr.wStart)
+	if err := ctr.growWindowBounds(proc, at+1); err != nil {
+		return err
+	}
+	ctr.wStart[at], ctr.wEnd[at] = start, end
+	return nil
+}
+func (ctr *container) clearWindowBounds() {
+	size := uint64(cap(ctr.wStart)+cap(ctr.wEnd)) * 8
+	ctr.wStart, ctr.wEnd = nil, nil
+	ctr.allocation.ReleaseMetadata(size)
+}
+func (ctr *container) appendGapFillBounds(t *TimeWin, count int64, proc *process.Process) error {
+	if count <= 0 {
+		return nil
+	}
+	at := len(ctr.wStart)
+	if count > int64(maxTimeWindowRows-at) {
+		return moerr.NewInternalError(proc.Ctx, "time window output bounds exceed batch")
+	}
+	if err := ctr.growWindowBounds(proc, at+int(count)); err != nil {
+		return err
+	}
 	left := ctr.left
 	for i := int64(0); i < count; i++ {
-		ctr.wStart = append(ctr.wStart, left)
-		ctr.wEnd = append(ctr.wEnd, ctr.advanceWindowBoundary(left, t.Interval, proc))
+		ctr.wStart[at+int(i)] = left
+		ctr.wEnd[at+int(i)] = ctr.advanceWindowBoundary(left, t.Interval, proc)
 		left = ctr.advanceWindowBoundary(left, t.Sliding, proc)
 	}
+	return nil
 }
 
 const maxTimeWindowRows = 8192
@@ -1171,9 +1224,21 @@ func appendTimestampBoundaryVector(
 	values []types.Datetime,
 	typ plan.Type,
 	proc *process.Process,
+	selections ...*vector.AllocationAccountSelection,
 ) (vec *vector.Vector, err error) {
 	tsType := types.NewWithCharset(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset))
-	vec = vector.NewOffHeapVecWithType(tsType)
+	var selection *vector.AllocationAccountSelection
+	if len(selections) > 0 {
+		selection = selections[0]
+	}
+	if selection == nil {
+		vec = vector.NewOffHeapVecWithType(tsType)
+	} else {
+		vec, err = vector.NewOffHeapVecWithTypeAndAllocation(tsType, selection)
+		if err != nil {
+			return nil, err
+		}
+	}
 	defer func() {
 		if err != nil {
 			vec.Free(proc.Mp())
@@ -1200,9 +1265,21 @@ func appendTimestampIntervalBoundaryVector(
 	end bool,
 	typ plan.Type,
 	proc *process.Process,
+	selections ...*vector.AllocationAccountSelection,
 ) (vec *vector.Vector, err error) {
 	tsType := types.NewWithCharset(types.T_timestamp, typ.Width, typ.Scale, uint8(typ.Charset))
-	vec = vector.NewOffHeapVecWithType(tsType)
+	var selection *vector.AllocationAccountSelection
+	if len(selections) > 0 {
+		selection = selections[0]
+	}
+	if selection == nil {
+		vec = vector.NewOffHeapVecWithType(tsType)
+	} else {
+		vec, err = vector.NewOffHeapVecWithTypeAndAllocation(tsType, selection)
+		if err != nil {
+			return nil, err
+		}
+	}
 	defer func() {
 		if err != nil {
 			vec.Free(proc.Mp())
@@ -1212,27 +1289,20 @@ func appendTimestampIntervalBoundaryVector(
 	// Timestamp windows may receive DATETIME keys from mo_win_truncate.  The
 	// values are already raw timestamp instants in that representation, so
 	// normalize the physical vector before applying interval arithmetic.
-	var values []types.Timestamp
-	switch starts.GetType().Oid {
-	case types.T_timestamp:
-		values = vector.MustFixedColWithTypeCheck[types.Timestamp](starts)
-	case types.T_datetime:
-		datetimeValues := vector.MustFixedColWithTypeCheck[types.Datetime](starts)
-		values = make([]types.Timestamp, len(datetimeValues))
-		for i, value := range datetimeValues {
-			values[i] = types.Timestamp(value)
-		}
-	case types.T_date:
-		dateValues := vector.MustFixedColWithTypeCheck[types.Date](starts)
-		values = make([]types.Timestamp, len(dateValues))
-		for i, value := range dateValues {
-			values[i] = types.Timestamp(value.ToDatetime())
-		}
-	default:
-		return nil, moerr.NewInternalErrorNoCtxf(
-			"timestamp window key has non-temporal type %s", starts.GetType().Oid.String())
+	oid := starts.GetType().Oid
+	if oid != types.T_timestamp && oid != types.T_datetime && oid != types.T_date {
+		return nil, moerr.NewInternalErrorNoCtxf("timestamp window key has non-temporal type %s", oid.String())
 	}
-	for i, value := range values {
+	for i := 0; i < starts.Length(); i++ {
+		var value types.Timestamp
+		switch oid {
+		case types.T_timestamp:
+			value = vector.GetFixedAtNoTypeCheck[types.Timestamp](starts, i)
+		case types.T_datetime:
+			value = types.Timestamp(vector.GetFixedAtNoTypeCheck[types.Datetime](starts, i))
+		case types.T_date:
+			value = types.Timestamp(vector.GetFixedAtNoTypeCheck[types.Date](starts, i).ToDatetime())
+		}
 		if starts.IsNull(uint64(i)) {
 			err = vector.AppendFixed(vec, types.Timestamp(0), true, proc.Mp())
 			if err != nil {
@@ -1316,8 +1386,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 		// pruning removed both boundary columns from the output. A flush closes
 		// that generation of groups, so retaining the unused bounds here would
 		// grow these slices for the lifetime of the query.
-		ctr.wStart = nil
-		ctr.wEnd = nil
+		ctr.clearWindowBounds()
 		for _, ag := range ctr.aggs {
 			aggexec.ReportGroupConcatWarnings(ag, proc.GetWarningSink())
 		}
@@ -1326,7 +1395,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	bat := batch.NewOffHeapWithSize(1)
 	if ap.WStart {
 		if ap.timestampWindow() {
-			ctr.startVec, err = appendTimestampBoundaryVector(ctr.wStart, ap.TsType, proc)
+			ctr.startVec, err = appendTimestampBoundaryVector(ctr.wStart, ap.TsType, proc, ctr.allocation.Vector)
 			if err != nil {
 				return err
 			}
@@ -1338,7 +1407,10 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 				ctr.startVec.CleanOnlyData()
 				ctr.startVec.SetTypeScale(ap.TsType.Scale)
 			} else {
-				ctr.startVec = vector.NewVec(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
+				ctr.startVec, err = ctr.allocation.NewVector(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
+				if err != nil {
+					return err
+				}
 			}
 			err = vector.AppendFixedList(ctr.startVec, ctr.wStart, nil, proc.Mp())
 			if err != nil {
@@ -1357,7 +1429,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 
 	if ap.WEnd {
 		if ap.timestampWindow() {
-			ctr.endVec, err = appendTimestampBoundaryVector(ctr.wEnd, ap.TsType, proc)
+			ctr.endVec, err = appendTimestampBoundaryVector(ctr.wEnd, ap.TsType, proc, ctr.allocation.Vector)
 			if err != nil {
 				return err
 			}
@@ -1369,7 +1441,10 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 				ctr.endVec.CleanOnlyData()
 				ctr.endVec.SetTypeScale(ap.TsType.Scale)
 			} else {
-				ctr.endVec = vector.NewVec(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
+				ctr.endVec, err = ctr.allocation.NewVector(types.T_datetime.ToTypeWithScale(ap.TsType.Scale))
+				if err != nil {
+					return err
+				}
 			}
 			err = vector.AppendFixedList(ctr.endVec, ctr.wEnd, nil, proc.Mp())
 			if err != nil {
@@ -1391,8 +1466,7 @@ func (ctr *container) calRes(ap *TimeWin, proc *process.Process) (err error) {
 	}
 
 	batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
-	ctr.wStart = nil
-	ctr.wEnd = nil
+	ctr.clearWindowBounds()
 	for _, ag := range ctr.aggs {
 		aggexec.ReportGroupConcatWarnings(ag, proc.GetWarningSink())
 	}
@@ -1422,7 +1496,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 	}
 	if ap.timestampWindow() {
 		if ap.WStart {
-			ctr.startVec, err = appendTimestampIntervalBoundaryVector(ctr.tsVec[ctr.i-1], 0, false, ap.TsType, proc)
+			ctr.startVec, err = appendTimestampIntervalBoundaryVector(ctr.tsVec[ctr.i-1], 0, false, ap.TsType, proc, ctr.allocation.Vector)
 			if err != nil {
 				return err
 			}
@@ -1432,7 +1506,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 		}
 
 		if ap.WEnd {
-			ctr.endVec, err = appendTimestampIntervalBoundaryVector(ctr.tsVec[ctr.i-1], ap.Interval, true, ap.TsType, proc)
+			ctr.endVec, err = appendTimestampIntervalBoundaryVector(ctr.tsVec[ctr.i-1], ap.Interval, true, ap.TsType, proc, ctr.allocation.Vector)
 			if err != nil {
 				return err
 			}
@@ -1443,8 +1517,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 
 		ctr.setPartVecsForInterval(i)
 		batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
-		ctr.wStart = nil
-		ctr.wEnd = nil
+		ctr.clearWindowBounds()
 		return nil
 	}
 	bat := batch.NewOffHeapWithSize(1)
@@ -1471,8 +1544,7 @@ func (ctr *container) calResForInterval(ap *TimeWin, proc *process.Process) (err
 	ctr.setPartVecsForInterval(i)
 
 	batch.SetLength(ctr.bat, ctr.bat.Vecs[0].Length())
-	ctr.wStart = nil
-	ctr.wEnd = nil
+	ctr.clearWindowBounds()
 	return nil
 }
 
@@ -1556,11 +1628,19 @@ func (ctr *container) setPartVecsForWindows(slot, length int, proc *process.Proc
 		return moerr.NewInternalErrorNoCtx("time window flushed a result before any partition key was seen")
 	}
 	if len(ctr.partOut) == 0 {
-		ctr.partOut = make([]*vector.Vector, len(ctr.partExe))
+		var err error
+		ctr.partOut, err = colexec.GrowAnalyticSlice(ctr.partOut, len(ctr.partExe), proc, &ctr.allocation)
+		if err != nil {
+			return err
+		}
 	}
 	for p, src := range ctr.partVec[ctr.partIdx] {
 		if ctr.partOut[p] == nil {
-			ctr.partOut[p] = vector.NewVec(*src.GetType())
+			var err error
+			ctr.partOut[p], err = ctr.allocation.NewVector(*src.GetType())
+			if err != nil {
+				return err
+			}
 		} else {
 			ctr.partOut[p].CleanOnlyData()
 		}
@@ -1577,7 +1657,7 @@ func (ctr *container) evalVector(bat *batch.Batch, proc *process.Process) (bool,
 	if err := ctr.evalTsVector(bat, proc); err != nil {
 		return false, err
 	}
-	ok, err := ctr.filterNullTimeRows(bat)
+	ok, err := ctr.filterNullTimeRows(bat, proc)
 	if err != nil || !ok {
 		return ok, err
 	}
@@ -1591,7 +1671,7 @@ func (ctr *container) evalVector(bat *batch.Batch, proc *process.Process) (bool,
 	return true, nil
 }
 
-func (ctr *container) filterNullTimeRows(bat *batch.Batch) (bool, error) {
+func (ctr *container) filterNullTimeRows(bat *batch.Batch, proc *process.Process) (bool, error) {
 	ts := ctr.tsVec[ctr.i]
 	if !ts.HasNull() {
 		return true, nil
@@ -1601,7 +1681,13 @@ func (ctr *container) filterNullTimeRows(bat *batch.Batch) (bool, error) {
 		return false, nil
 	}
 
-	sels := make([]int64, 0, ts.Length()-ts.GetNulls().Count())
+	count := ts.Length() - ts.GetNulls().Count()
+	size := uint64(count) * 8
+	if err := ctr.allocation.ReserveMetadata(proc, size); err != nil {
+		return false, err
+	}
+	defer ctr.allocation.ReleaseMetadata(size)
+	sels := make([]int64, 0, count)
 	for i := 0; i < ts.Length(); i++ {
 		if !ts.IsNull(uint64(i)) {
 			sels = append(sels, int64(i))
@@ -1618,7 +1704,15 @@ func (ctr *container) evalPartVector(bat *batch.Batch, proc *process.Process) er
 	}
 	f := len(ctr.partVec) > ctr.i
 	if !f {
-		ctr.partVec = append(ctr.partVec, make([]*vector.Vector, len(ctr.partExe)))
+		var err error
+		ctr.partVec, err = colexec.GrowAnalyticSlice(ctr.partVec, ctr.i+1, proc, &ctr.allocation)
+		if err != nil {
+			return err
+		}
+		ctr.partVec[ctr.i], err = colexec.GrowAnalyticSlice(ctr.partVec[ctr.i], len(ctr.partExe), proc, &ctr.allocation)
+		if err != nil {
+			return err
+		}
 	}
 	for i := range ctr.partExe {
 		vec, err := ctr.partExe[i].Eval(proc, []*batch.Batch{bat}, nil)
@@ -1671,11 +1765,15 @@ func (ctr *container) evalTsVector(bat *batch.Batch, proc *process.Process) erro
 			return err
 		}
 	} else {
+		ctr.tsVec, err = colexec.GrowAnalyticSlice(ctr.tsVec, ctr.i+1, proc, &ctr.allocation)
+		if err != nil {
+			return err
+		}
 		tv, err := vec.Dup(proc.Mp())
 		if err != nil {
 			return err
 		}
-		ctr.tsVec = append(ctr.tsVec, tv)
+		ctr.tsVec[ctr.i] = tv
 	}
 
 	return nil
@@ -1684,11 +1782,23 @@ func (ctr *container) evalTsVector(bat *batch.Batch, proc *process.Process) erro
 func (ctr *container) evalAggVector(bat *batch.Batch, proc *process.Process) error {
 	f := len(ctr.aggVec) > ctr.i
 	if !f {
-		ctr.aggVec = append(ctr.aggVec, make([][]*vector.Vector, len(ctr.aggExe)))
+		var err error
+		ctr.aggVec, err = colexec.GrowAnalyticSlice(ctr.aggVec, ctr.i+1, proc, &ctr.allocation)
+		if err != nil {
+			return err
+		}
+		ctr.aggVec[ctr.i], err = colexec.GrowAnalyticSlice(ctr.aggVec[ctr.i], len(ctr.aggExe), proc, &ctr.allocation)
+		if err != nil {
+			return err
+		}
 	}
 	for i := range ctr.aggExe {
 		if !f {
-			ctr.aggVec[ctr.i][i] = make([]*vector.Vector, len(ctr.aggExe[i].Executor))
+			var err error
+			ctr.aggVec[ctr.i][i], err = colexec.GrowAnalyticSlice(ctr.aggVec[ctr.i][i], len(ctr.aggExe[i].Executor), proc, &ctr.allocation)
+			if err != nil {
+				return err
+			}
 		}
 		for j := range ctr.aggExe[i].Executor {
 			vec, err := ctr.aggExe[i].Executor[j].Eval(proc, []*batch.Batch{bat}, nil)

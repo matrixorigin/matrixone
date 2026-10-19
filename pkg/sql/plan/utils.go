@@ -81,7 +81,19 @@ func doGetBindings(expr *plan.Expr) map[int32]bool {
 }
 
 func hasCorrCol(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Dependent:
+		for _, args := range [][]*plan.Expr{exprImpl.Dependent.Inputs, exprImpl.Dependent.Lhs} {
+			for _, arg := range args {
+				if hasCorrCol(arg) {
+					return true
+				}
+			}
+		}
+		return false
 	case *plan.Expr_Corr:
 		return true
 
@@ -352,6 +364,18 @@ func replaceColRefs(expr *plan.Expr, tag int32, projects []*plan.Expr) *plan.Exp
 			exprImpl.F.Args[i] = replaceColRefs(arg, tag, projects)
 		}
 
+	case *plan.Expr_List:
+		for i, arg := range exprImpl.List.List {
+			exprImpl.List.List[i] = replaceColRefs(arg, tag, projects)
+		}
+	case *plan.Expr_Dependent:
+		for i, arg := range exprImpl.Dependent.Inputs {
+			exprImpl.Dependent.Inputs[i] = replaceColRefs(arg, tag, projects)
+		}
+		for i, arg := range exprImpl.Dependent.Lhs {
+			exprImpl.Dependent.Lhs[i] = replaceColRefs(arg, tag, projects)
+		}
+		// Comparison columns refer to the reducer's lhs/rhs tuples.
 	case *plan.Expr_Col:
 		colRef := exprImpl.Col
 		if colRef.RelPos == tag {
@@ -1608,6 +1632,12 @@ func replaceColRefWithNull(expr *plan.Expr) *plan.Expr {
 
 func increaseRefCnt(expr *plan.Expr, inc int, colRefCnt map[[2]int32]int) {
 	switch exprImpl := expr.Expr.(type) {
+	case *plan.Expr_Dependent:
+		for _, args := range [][]*plan.Expr{exprImpl.Dependent.Inputs, exprImpl.Dependent.Lhs} {
+			for _, arg := range args {
+				increaseRefCnt(arg, inc, colRefCnt)
+			}
+		}
 	case *plan.Expr_Col:
 		colRefCnt[[2]int32{exprImpl.Col.RelPos, exprImpl.Col.ColPos}] += inc
 
@@ -2058,7 +2088,7 @@ func constantFoldWithPreparedExactSource(
 		}
 		spatialChecked = true
 	}
-	if f.CannotFold() {
+	if f.IsVolatile() {
 		return expr, nil
 	}
 	if rule.IsLegacyTimeAssignmentOutsideInternalRange(fn) {
@@ -2087,7 +2117,7 @@ func constantFoldWithPreparedExactSource(
 			return nil, errFold
 		}
 		fn.Args[i] = foldExpr
-		isVec = isVec || foldExpr.GetVec() != nil
+		isVec = isVec || foldExpr.GetVec() != nil && !rule.IsScalarConstantVector(foldExpr)
 	}
 	if preservePreparedExactSource && rule.ContainsSqlModeDependentTemporalCall(expr) {
 		return expr, nil
@@ -2095,7 +2125,10 @@ func constantFoldWithPreparedExactSource(
 	if f.IsAgg() || f.IsWin() {
 		return expr, nil
 	}
-	if !rule.IsConstant(expr, varAndParamIsConst) {
+	if !function.IsFoldCandidate(expr, varAndParamIsConst) {
+		return expr, nil
+	}
+	if isVec && !rule.CanMaterializeConstantVector(expr) {
 		return expr, nil
 	}
 
@@ -2147,6 +2180,13 @@ func constantFoldWithPreparedExactSource(
 	}
 	c := rule.GetConstantValue(vec, false, 0)
 	if c == nil {
+		constant, err := rule.MaterializeDecimal256Constant(proc, expr, vec)
+		if err != nil {
+			return nil, err
+		}
+		if constant != nil {
+			expr.Expr = &plan.Expr_Vec{Vec: constant}
+		}
 		return expr, nil
 	}
 	rule.PreserveFoldedLiteralStringDomain(expr, c)
@@ -5143,7 +5183,7 @@ func PreparedPlanDirectResultParamPositions(preparePlan *Plan) []int32 {
 	if query == nil || query.StmtType != plan.Query_SELECT || len(query.Steps) == 0 {
 		return nil
 	}
-	rootStep := len(query.Steps) - 1
+	rootStep := int(query.MainOutputStep())
 	if query.HasReturning {
 		if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
 			return nil
@@ -6927,7 +6967,7 @@ func propagatePreparedDirectResultTypes(plan0 *Plan, paramVals []any) bool {
 	if query == nil || query.StmtType != plan.Query_SELECT || len(query.Steps) == 0 {
 		return false
 	}
-	rootID := query.Steps[len(query.Steps)-1]
+	rootID := query.Steps[query.MainOutputStep()]
 	if rootID < 0 || int(rootID) >= len(query.Nodes) || query.Nodes[rootID] == nil {
 		return false
 	}
@@ -7212,9 +7252,14 @@ func refreshPreparedPlanProjectionExprType(
 	resolveColumnType preparedPlanColumnTypeResolver,
 	resolveColumnParam preparedPlanColumnParamResolver,
 	paramRule *ResetParamRefRule,
+	correlationRefresh ...func(*plan.Expr) (bool, error),
 ) (bool, error) {
 	if expr == nil {
 		return false, nil
+	}
+
+	if (expr.GetDependent() != nil || expr.GetSlot() != nil) && len(correlationRefresh) != 0 {
+		return correlationRefresh[0](expr)
 	}
 
 	changed := false
@@ -7248,7 +7293,7 @@ func refreshPreparedPlanProjectionExprType(
 				// rebinding the conversion until the aggregate can choose again
 				// between its numeric and binary input domains.
 				argChanged, err := refreshPreparedPlanProjectionExprType(
-					ctx, arg.GetF().Args[0], resolveColumnType, resolveColumnParam, paramRule)
+					ctx, arg.GetF().Args[0], resolveColumnType, resolveColumnParam, paramRule, correlationRefresh...)
 				if err != nil {
 					return false, err
 				}
@@ -7256,7 +7301,7 @@ func refreshPreparedPlanProjectionExprType(
 				bitwiseAggregateSourceChanged = bitwiseAggregateSourceChanged || argChanged
 				continue
 			}
-			argChanged, err := refreshPreparedPlanProjectionExprType(ctx, arg, resolveColumnType, resolveColumnParam, paramRule)
+			argChanged, err := refreshPreparedPlanProjectionExprType(ctx, arg, resolveColumnType, resolveColumnParam, paramRule, correlationRefresh...)
 			if err != nil {
 				return false, err
 			}
@@ -7397,7 +7442,7 @@ func refreshPreparedPlanProjectionExprType(
 			return false, nil
 		}
 		for _, item := range exprImpl.List.List {
-			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType, resolveColumnParam, paramRule)
+			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType, resolveColumnParam, paramRule, correlationRefresh...)
 			if err != nil {
 				return false, err
 			}
@@ -7409,7 +7454,7 @@ func refreshPreparedPlanProjectionExprType(
 			return false, nil
 		}
 		if exprImpl.W.WindowFunc != nil {
-			windowFuncChanged, err := refreshPreparedPlanProjectionExprType(ctx, exprImpl.W.WindowFunc, resolveColumnType, resolveColumnParam, paramRule)
+			windowFuncChanged, err := refreshPreparedPlanProjectionExprType(ctx, exprImpl.W.WindowFunc, resolveColumnType, resolveColumnParam, paramRule, correlationRefresh...)
 			if err != nil {
 				return false, err
 			}
@@ -7420,7 +7465,7 @@ func refreshPreparedPlanProjectionExprType(
 			}
 		}
 		for _, item := range exprImpl.W.PartitionBy {
-			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType, resolveColumnParam, paramRule)
+			itemChanged, err := refreshPreparedPlanProjectionExprType(ctx, item, resolveColumnType, resolveColumnParam, paramRule, correlationRefresh...)
 			if err != nil {
 				return false, err
 			}
@@ -7430,7 +7475,7 @@ func refreshPreparedPlanProjectionExprType(
 			if order == nil {
 				continue
 			}
-			orderChanged, err := refreshPreparedPlanProjectionExprType(ctx, order.Expr, resolveColumnType, resolveColumnParam, paramRule)
+			orderChanged, err := refreshPreparedPlanProjectionExprType(ctx, order.Expr, resolveColumnType, resolveColumnParam, paramRule, correlationRefresh...)
 			if err != nil {
 				return false, err
 			}
@@ -7441,7 +7486,7 @@ func refreshPreparedPlanProjectionExprType(
 				if bound == nil {
 					continue
 				}
-				boundChanged, err := refreshPreparedPlanProjectionExprType(ctx, bound.Val, resolveColumnType, resolveColumnParam, paramRule)
+				boundChanged, err := refreshPreparedPlanProjectionExprType(ctx, bound.Val, resolveColumnType, resolveColumnParam, paramRule, correlationRefresh...)
 				if err != nil {
 					return false, err
 				}
@@ -8256,6 +8301,14 @@ func refreshPreparedPlanProjectionTypes(
 			}
 		}
 
+		for _, source := range node.SourceStep {
+			if source >= 0 && int(source) < len(query.Steps) {
+				if err := refreshNode(query.Steps[source]); err != nil {
+					return err
+				}
+			}
+		}
+
 		// Nodes keep typed ColRefs in their output projections and local
 		// expressions (for example FILTER predicates and SORT keys). Refresh all
 		// such references after their children, then rebind consumers bottom-up.
@@ -8364,8 +8417,15 @@ func refreshPreparedPlanProjectionTypes(
 			_, exact := paramRule.exactProjectedParam[key]
 			return pos, domain, exact
 		}
+		var refreshValue func(*plan.Expr) (bool, error)
+		refreshValue = func(expr *plan.Expr) (bool, error) {
+			return refreshPreparedPlanProjectionExprType(ctx, expr, resolveColumnType, resolveColumnParam, paramRule,
+				func(e *plan.Expr) (bool, error) {
+					return refreshPreparedCorrelationExpr(ctx, query, e, refreshValue, refreshNode, paramRule)
+				})
+		}
 		refreshExpr := func(expr *plan.Expr) error {
-			changed, err := refreshPreparedPlanProjectionExprType(ctx, expr, resolveColumnType, resolveColumnParam, paramRule)
+			changed, err := refreshValue(expr)
 			specialized = specialized || changed
 			return err
 		}
@@ -8433,7 +8493,12 @@ func refreshPreparedPlanProjectionTypes(
 		return nil
 	}
 
-	for _, step := range query.Steps {
+	for i, step := range query.Steps {
+		// Captures determine each program's slot domains before its output
+		// is refreshed. Calls, rather than the step directory, own that order.
+		if query.Correlation != nil && query.Correlation.StepOwners[i] != 0 {
+			continue
+		}
 		if err := refreshNode(step); err != nil {
 			return false, err
 		}

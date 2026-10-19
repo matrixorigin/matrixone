@@ -32,7 +32,7 @@ import (
 )
 
 func TestWindowOrderSpillsAndKeepsArgumentsAligned(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc := newWindowSpillProcess(t)
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
 	input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())
@@ -70,7 +70,7 @@ func TestWindowOrderSpillsAndKeepsArgumentsAligned(t *testing.T) {
 }
 
 func TestWindowOrderSpillReleasesConsumedMaterializedInput(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc := newWindowSpillProcess(t)
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
 	input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())
@@ -128,7 +128,7 @@ func TestWindowOrderSpillResourceAdmissionCleans(t *testing.T) {
 		{name: "file descriptor", component: process.ExecutionResourceComponentSpillFD},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			proc := newWindowSpillProcess(t)
 			t.Cleanup(func() {
 				proc.Free()
 				require.Zero(t, proc.Mp().CurrNB())
@@ -200,7 +200,7 @@ func TestWindowOrderSpillResourceAdmissionCleans(t *testing.T) {
 }
 
 func TestWindowOrderSpillPreservesAggregateArguments(t *testing.T) {
-	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	proc := newWindowSpillProcess(t)
 	input := batch.NewWithSize(2)
 	input.Vecs[0] = testutil.MakeInt32Vector([]int32{10, 20, 30}, nil, proc.Mp())
 	input.Vecs[1] = testutil.MakeInt32Vector([]int32{3, 1, 2}, nil, proc.Mp())
@@ -236,4 +236,24 @@ func TestWindowOrderSpillPreservesAggregateArguments(t *testing.T) {
 	arg.Free(proc, false, nil)
 	proc.Free()
 	require.Zero(t, proc.Mp().CurrNB())
+}
+
+// Success and deliberate rejection cases own one finite ledger each. Local
+// machine disk pressure must not decide which operator branch the UT reaches.
+func newWindowSpillProcess(t *testing.T) *process.Process {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	limit := uint64(proc.Base.Lim.Size)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
+	require.NoError(t, budget.SetSpillCaps(1<<30, budget.SpillFDCap()))
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		defer generation.Close()
+		snapshot := generation.Snapshot()
+		require.Zero(t, snapshot.Used, "private Window generation: %+v", snapshot)
+		require.Zero(t, snapshot.SpillDiskUsed)
+		require.Zero(t, snapshot.SpillFDUsed)
+	})
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+	return proc
 }

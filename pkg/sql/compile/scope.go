@@ -361,7 +361,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 				zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 				zap.String("error", err.Error()))
 		}
-		err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		err, _ = process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 		if p != nil {
 			p.Cleanup(s.Proc, err != nil, c.isPrepare, err)
 			// The pipeline owns and closes the execution reader. A prepared
@@ -910,7 +910,7 @@ func (s *Scope) RemoteRun(c *Compile) error {
 
 	p := pipeline.New(0, nil, s.RootOp)
 	sender, err := s.remoteRun(c)
-	runErr, _ := normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+	runErr, _ := process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 	// Publish the immediate outcome before waiting for remote cleanup or
 	// canceling this scope. Consumers can participate in that cleanup; late
 	// failures remain in the joined scope result below.
@@ -1046,12 +1046,12 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 			rawErr := err
 			queryCtx := scopeRunQueryContext(s.Proc)
 			var normalized bool
-			err, normalized = normalizeScopeRunError(
+			err, normalized = process.NormalizePipelineRunError(
 				err,
 				s.Proc.Ctx,
 				queryCtx,
 			)
-			if isScopeCancellationError(rawErr) {
+			if process.IsPipelineCancellationError(rawErr) {
 				reportParallelScopeBuildCancellation(s, rawErr, err, normalized, queryCtx)
 			}
 			if err == nil {
@@ -1637,7 +1637,7 @@ func (s *Scope) sendNotifyMessageWithFactory(
 ) {
 	// if context has done, it means the user or other part of the pipeline stops this query.
 	closeWithError := func(err error, reg *process.WaitRegister, sender *messageSenderOnClient) {
-		err, _ = normalizeScopeRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
+		err, _ = process.NormalizePipelineRunError(err, s.Proc.Ctx, scopeRunQueryContext(s.Proc))
 		// Publish durable terminal evidence before waking canceled consumers.
 		sendRemoteNotifyCleanupTerminal(s.Proc, reg, err)
 		err = finalizeRemoteResult(err, sender)

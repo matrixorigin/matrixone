@@ -394,6 +394,9 @@ func (group *Group) Call(
 			if err != nil {
 				return vm.CancelResult, err
 			}
+			if r.Status == vm.ExecYield {
+				return r, nil
+			}
 
 			// all handled, going to eval mode.
 			//

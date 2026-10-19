@@ -177,6 +177,12 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 		}
 
 		if corr, ok := expr.Expr.(*plan.Expr_Corr); ok {
+			if depth > 0 && b.subqueryInAggregateInput {
+				// This lookup comes from the subquery used as an aggregate
+				// argument. Its ancestor reference belongs to that subquery,
+				// not to a direct outer-column aggregate in this query block.
+				return expr, nil
+			}
 			if b.builder.mysqlFullGroupByCompat && b.corrColRefTargetsCurrentQueryInput(corr.Corr) {
 				return expr, nil
 			}

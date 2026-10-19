@@ -2322,8 +2322,12 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Default:           "",
 	},
 	"information_schema_stats_expiry": {
-		Name:              "information_schema_stats_expiry",
-		Scope:             ScopeGlobal,
+		Name: "information_schema_stats_expiry",
+		// MySQL 8.0 declares this variable in both global and session
+		// scopes, and tools like mysqldump issue
+		// `SET SESSION information_schema_stats_expiry=0`.
+		// Rejecting the session-scope assignment breaks mysqldump.
+		Scope:             ScopeBoth,
 		Dynamic:           true,
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("information_schema_stats_expiry", 0, 86400, false),
@@ -4508,14 +4512,6 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("max_dop", 0, math.MaxInt32, false),
 		Default:           int64(0),
-	},
-	"sidecar_url": {
-		Name:              "sidecar_url",
-		Scope:             ScopeBoth,
-		Dynamic:           true,
-		SetVarHintApplies: false,
-		Type:              InitSystemVariableStringType("sidecar_url"),
-		Default:           "",
 	},
 }
 

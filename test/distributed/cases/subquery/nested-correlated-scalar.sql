@@ -1,5 +1,7 @@
 -- @suite
 -- @setup
+drop user if exists nested_correlation_reader_user;
+drop role if exists nested_correlation_reader_role;
 drop database if exists test_nested_correlated_scalar;
 create database test_nested_correlated_scalar;
 use test_nested_correlated_scalar;
@@ -26,11 +28,8 @@ SELECT a.id,
 FROM j_dim a
 ORDER BY a.id;
 
--- approx_count returns 0 for empty input. Until the deep decorrelation can
--- synthesize that missing aggregate row, keep this shape on the NYI path
--- instead of silently turning 0 into NULL. id=3 has no matching y rows while
--- x contains ts=0, so an unsafe rewrite would return NULL instead of 900.
--- @pattern
+-- APPROX_COUNT returns 0 for the missing key, which matches x.ts=0.
+-- The enclosing MAX must therefore return 900 rather than NULL.
 SELECT a.id,
        (SELECT MAX(x.val)
           FROM j_fact x
@@ -41,12 +40,8 @@ SELECT a.id,
 FROM j_dim a
 WHERE a.id = 3;
 
--- Even a NULL-on-empty inner aggregate is unsafe when its complete consuming
--- expression observes that NULL. For id=3, MAX(y.ts) is NULL and COALESCE
--- produces 0 for each of the five x rows, so SQL COUNT returns 5. The current
--- deep rewrite cannot synthesize the missing per-key aggregate row and must
--- keep this shape on the NYI path instead of returning 0.
--- @pattern
+-- MAX is NULL for the missing key. COALESCE produces 0 for each of the
+-- five x rows, so the outer COUNT is 5.
 SELECT a.id,
        (SELECT COUNT(COALESCE(
                    (SELECT MAX(y.ts)
@@ -57,10 +52,7 @@ SELECT a.id,
   FROM j_dim a
  WHERE a.id = 3;
 
--- The same missing-key case is unsafe when COALESCE feeds the enclosing
--- filter. SQL semantics match x.ts=0 and return 900; dropping the x row would
--- incorrectly expose NULL, so this shape also remains NYI.
--- @pattern
+-- COALESCE in the consuming predicate also matches the x.ts=0 row.
 SELECT a.id,
        (SELECT MAX(x.val)
           FROM j_fact x
@@ -72,11 +64,8 @@ SELECT a.id,
   FROM j_dim a
  WHERE a.id = 3;
 
--- A NULL-observing projection inside the deep scalar is unsafe too. For id=3,
--- SQL evaluates COALESCE(MAX(y.ts), 0) to 0 and matches the x.ts=0 row, yielding
--- 900. The grouped rewrite has no y.dim_id=3 row on which to run COALESCE, so
--- it would expose NULL and incorrectly drop that x row. Keep this shape NYI.
--- @pattern
+-- COALESCE inside the aggregate projection runs on the implicit empty-input
+-- aggregate row, giving 0 and selecting the value 900.
 SELECT a.id,
        (SELECT MAX(x.val)
           FROM j_fact x
@@ -87,12 +76,8 @@ SELECT a.id,
   FROM j_dim a
  WHERE a.id = 3;
 
--- LIMIT 1 is redundant for an implicit scalar aggregate when evaluated once
--- per outer row. After decorrelation adds dim_id to GROUP BY, however, leaving
--- the limit on the grouped plan would keep only one correlation key globally.
--- Reject the shape until LIMIT can be rewritten per key. This query spans two
--- matching outer keys and one missing key so a global limit cannot hide.
--- @pattern
+-- LIMIT applies separately to the implicit scalar aggregate for each outer
+-- row; it cannot truncate the set of correlation keys globally.
 SELECT a.id,
        (SELECT MAX(x.val)
           FROM j_fact x
@@ -104,10 +89,7 @@ SELECT a.id,
   FROM j_dim a
  ORDER BY a.id;
 
--- OFFSET 1 removes the sole implicit aggregate row independently for every
--- outer key. A global offset after grouping would instead skip only one key
--- and expose another, so this topology must remain NYI too.
--- @pattern
+-- OFFSET 1 removes that sole aggregate row independently for every key.
 SELECT a.id,
        (SELECT MAX(x.val)
           FROM j_fact x
@@ -118,6 +100,170 @@ SELECT a.id,
                 LIMIT 1 OFFSET 1)) AS latest
   FROM j_dim a
  ORDER BY a.id;
+
+-- Ordinary scalar results, skipped lexical levels, and two simultaneous
+-- ancestors use the same typed invocation contract.
+select d.id,(select (select y.val from j_fact y where y.id=d.id)) as v
+  from j_dim d order by d.id;
+select d.id,(select (select (select d.id))) as v from j_dim d order by d.id;
+select d.id,(select (select d.id+x.ts) from j_fact x where x.id=d.id) as v
+  from j_dim d order by d.id;
+-- The unselected CASE branch must not observe its scalar cardinality error.
+select d.id,(select case when d.id>0 then 7 else
+  (select d.id+y.id from j_fact y) end) as v from j_dim d order by d.id;
+select (select y.val from j_fact y where y.dim_id=d.id)
+  from j_dim d where d.id=1;
+select 7 as after_error;
+
+-- Pagination demands output-only subqueries after selecting the output rows.
+select d.id,(select (select d.id from j_fact y where y.id<=d.id)) as v
+  from j_dim d order by d.id limit 1;
+select d.id,case when d.id=2 then 7 else
+  (select (select d.id from j_fact y)) end as v
+  from j_dim d order by d.id limit 1 offset 1;
+-- A subquery used as a sorting key remains demanded for all input rows.
+select (select (select d.id from j_fact y where y.id<=d.id)) as v
+  from j_dim d order by v limit 1;
+
+-- FOUND_ROWS counts qualifying rows beyond pagination without demanding output tuples.
+select sql_calc_found_rows d.id,(select (select d.id from j_fact y where y.id<=d.id)) as v
+  from j_dim d order by d.id limit 1;
+select found_rows() as n;
+select sql_calc_found_rows d.id,case when d.id=2 then (select (select d.id)) else
+  (select (select d.id from j_fact y)) end as v
+  from j_dim d order by d.id limit 1 offset 1;
+select found_rows() as n;
+select sql_calc_found_rows (select (select d.id from j_fact y)) as v
+  from j_dim d limit 0;
+select found_rows() as n;
+select sql_calc_found_rows distinct (select (select d.id%2)) as v
+  from j_dim d order by v limit 1;
+select found_rows() as n;
+select sql_calc_found_rows count(*) as n,(select (select y.dim_id)) as k
+  from j_fact y group by y.dim_id order by k limit 1;
+select found_rows() as n;
+
+-- Tuple operands in ON bind each nested demand before the row comparison.
+select count(*) as n from j_dim d full join j_fact y
+  on (d.id,(select (select y.id)))=(select d.id,y.id);
+select count(*) as n from j_dim d left join j_fact y
+  on (d.id,(select (select y.id)))=(select d.id,y.id);
+
+-- Row comparison retains FALSE-before-NULL and UNKNOWN semantics.
+select d.id,(d.id,0) not in (select (select d.id+1),NULL) as v
+  from j_dim d order by d.id;
+select d.id,(d.id,NULL)=(select (select d.id),NULL) as v
+  from j_dim d order by d.id;
+
+-- Declaration scope is distinct from the scope of each CTE use.
+select d.id,(with x as (select y.id+d.id k from j_fact y where y.id<=2)
+  select (select min(k) from x,j_dim d where d.id=3)+(select max(k) from x)) as v
+  from j_dim d order by d.id;
+select d.id,(with recursive x(k) as (select (select d.id)
+  union all select k+1 from x where k<3)
+  select (select min(k) from x)+(select max(k) from x)) as v
+  from j_dim d order by d.id;
+
+-- Native table functions, APPLY null-extension, and SAMPLE share the capture.
+select d.id,(select (select count(*) from generate_series(d.id,3) g)) as v
+  from j_dim d order by d.id;
+select d.id,(select 10*count(*)+count(g.result) from j_fact y
+  outer apply generate_series(y.id,0,1) g where y.id=(select d.id)) as v
+  from j_dim d order by d.id;
+select d.id,(select sum(x.k) from
+  (select sample((select d.id),100 percent) k from j_fact y) x) as v
+  from j_dim d order by d.id;
+
+-- View replay and CTAS consume the main output schema, including DECIMAL scale.
+-- EXISTS observes row presence and pagination, without evaluating the unused tuple.
+select d.id,exists(select (select d.id from j_fact y) from j_fact x order by x.id) as e
+from j_dim d order by d.id;
+select d.id,exists(select (select d.id from j_fact y) from j_fact x order by x.id limit 1 offset 5) as e
+from j_dim d order by d.id;
+select d.id,(with q(n) as (select d.id)
+select row_number() over(order by count(*)) from q group by n) as rn
+from j_dim d order by d.id;
+-- Native time-window and fill stages retain the ancestor parameter.
+select d.id,(select sum(s) from (select sum((select d.id)) s
+from (select cast('2026-01-01' as datetime) ts from j_fact y) x
+interval(ts,10,minute)) w) as v from j_dim d order by d.id;
+select d.id,(select sum(s) from (select sum((select d.id)) s
+from (select case when y.id=1 then cast('2026-01-01 00:00:00' as datetime)
+else cast('2026-01-01 00:20:00' as datetime) end ts from j_fact y where y.id in (1,3)) x
+interval(ts,10,minute) gapfill(partition) fill(next)) w) as v from j_dim d order by d.id;
+
+-- Unconsumed aggregate/window/UNION ALL tuples do not create scalar demand.
+select d.id,exists(select sum((select d.id from j_fact y))
+  from j_fact x group by x.dim_id) as e from j_dim d order by d.id;
+select d.id,exists(select sum((select d.id from j_fact y)) over ()
+  from j_fact x) as e from j_dim d order by d.id;
+select d.id,exists(select (select d.id from j_fact y) from j_fact x where x.id<0
+  union all select (select d.id from j_fact y) from j_fact x) as e
+  from j_dim d order by d.id;
+-- Group keys still determine presence and must demand their subqueries.
+select exists(select 1 from j_fact x group by (select d.id from j_fact y))
+  from j_dim d;
+select d.id,(select count(*) from j_fact x group by d.id) as n
+  from j_dim d order by d.id;
+select d.id,(select count(*) from j_fact x group by (select d.id)) as n
+  from j_dim d order by d.id;
+-- Each invocation evaluates its own FILL value: 2*d.id + d.id+10.
+select d.id,(select sum(s) from (select sum((select d.id)) s
+from (select case when y.id=1 then cast('2026-01-01 00:00:00' as datetime)
+else cast('2026-01-01 00:20:00' as datetime) end ts from j_fact y where y.id in (1,3)) x
+interval(ts,10,minute) gapfill(partition) fill(value,(select (select d.id+10)))) w) as v
+from j_dim d order by d.id;
+-- Existing CSV source metadata is reusable; only rows 1 and 2 follow the header.
+create external table nested_external(id int,label varchar(20),v int)
+  infile{'filepath'='$resources/load_data/glob/part_0.csv'}
+  fields terminated by ',' lines terminated by '\n' ignore 1 lines;
+select d.id,(select (select sum(e.v) from nested_external e where e.id<=d.id)) as v
+  from j_dim d order by d.id;
+prepare nested_external_query from 'select d.id,(select (select sum(e.v) from nested_external e where e.id<=d.id and e.id<=?)) as v from j_dim d order by d.id';
+set @external_limit=1;
+execute nested_external_query using @external_limit;
+set @external_limit=2;
+execute nested_external_query using @external_limit;
+deallocate prepare nested_external_query;
+drop table nested_external;
+
+create view nested_view as select d.id,(select (select cast(d.id as decimal(12,2)))) as v from j_dim d;
+select * from nested_view order by id;
+create table nested_ctas as select * from nested_view;
+select * from nested_ctas order by id;
+select column_name,data_type,numeric_precision,numeric_scale
+  from information_schema.columns where table_schema='test_nested_correlated_scalar'
+  and table_name='nested_ctas' and column_name in ('id','v') order by ordinal_position;
+drop table nested_ctas;
+drop view nested_view;
+
+-- Bound dependencies require authorization even on an unselected branch.
+create role nested_correlation_reader_role;
+create user nested_correlation_reader_user identified by '111' default role nested_correlation_reader_role;
+grant connect on account * to nested_correlation_reader_role;
+grant select on table test_nested_correlated_scalar.j_dim to nested_correlation_reader_role;
+-- @session:id=1&user=nested_correlation_reader_user&password=111
+use test_nested_correlated_scalar;
+select count(*) as n from j_dim;
+select d.id,(select case when d.id>0 then 7 else
+  (select max(y.val) from j_fact y where y.dim_id=d.id) end) as v
+  from j_dim d order by d.id;
+-- @session
+grant select on table test_nested_correlated_scalar.j_fact to nested_correlation_reader_role;
+-- @session:id=1&user=nested_correlation_reader_user&password=111
+prepare nested_authorized from 'select d.id,(select (select max(y.val) from j_fact y where y.dim_id=d.id and y.id<=?)) as v from j_dim d order by d.id';
+set @authorized_limit=2;
+execute nested_authorized using @authorized_limit;
+set @authorized_limit=4;
+execute nested_authorized using @authorized_limit;
+-- @session
+revoke select on table test_nested_correlated_scalar.j_fact from nested_correlation_reader_role;
+-- @session:id=1&user=nested_correlation_reader_user&password=111
+execute nested_authorized using @authorized_limit;
+deallocate prepare nested_authorized;
+-- @session
+drop user nested_correlation_reader_user;
+drop role nested_correlation_reader_role;
 
 -- @teardown
 drop database test_nested_correlated_scalar;

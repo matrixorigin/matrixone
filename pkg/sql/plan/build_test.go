@@ -357,6 +357,19 @@ func BenchmarkInsert(b *testing.B) {
 	}
 }
 
+// A syntax failure inside SQL PREPARE text must report ER_PARSE_ERROR
+// (1064/42000) like the same statement executed directly, not the generic
+// 1105 for unclassified errors (#30434).
+func TestBuildPrepareStringSyntaxErrorIsParseError(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt := tree.NewPrepareString("bad_stmt", "SELECT FROM")
+	defer stmt.Free()
+	_, err := buildPrepare(stmt, ctx)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrParseError),
+		"expected 1064/42000 for inner syntax error, got: %v", err)
+}
+
 func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
 	ctx := &sqlModeMockCompilerContext{
 		MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t)),
@@ -6333,6 +6346,69 @@ func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
 	require.True(t, foundCheckFilter)
 }
 
+func TestLoadCheckConstraintPolicy(t *testing.T) {
+	for _, table := range []string{"dept", "dept_composite_uk"} {
+		for _, tc := range []struct {
+			name, sql      string
+			filter, load   bool
+			wantLoadDedups int
+		}{
+			{"inline_ignore", "load data inline format='csv', data='1,Sales,NY' ignore into table %s fields terminated by ','", true, true, 0},
+			{"local_ignore", "load data local infile 'client.csv' ignore into table %s fields terminated by ','", true, true, 0},
+			{"plain", "load data inline format='csv', data='1,Sales,NY' into table %s fields terminated by ','", false, true, 1},
+			{"local_without_ignore", "load data local infile 'client.csv' into table %s fields terminated by ','", false, true, 1},
+			{"insert_ignore", "insert ignore into %s values (1,'Sales','NY')", true, false, 0},
+		} {
+			t.Run(table+"/"+tc.name, func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				addPositiveCheck(t, mock, table, "deptno")
+				stmt, err := mysql.ParseOne(t.Context(), fmt.Sprintf(tc.sql, table), 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				query, err := mock.Optimize(stmt)
+				require.NoError(t, err)
+				checks := 0
+				loadDedups := 0
+				ignoreArbitration := false
+				for id := range reachableODKUPlanNodes(query) {
+					node := query.Nodes[id]
+					multiDedup := node.GetPreInsertUkCtx().GetInsertIgnoreMultiDedup()
+					if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
+						if tc.load {
+							loadDedups++
+							require.Equal(t, plan.Node_FAIL, node.OnDuplicateAction, "ordinary LOAD rejects duplicate primary keys")
+							require.Equal(t, "deptno", node.DedupColName)
+							require.False(t, node.DedupInputKeysUnique, "external input cannot prove primary-key uniqueness")
+						}
+						ignoreArbitration = ignoreArbitration || node.OnDuplicateAction == plan.Node_IGNORE
+					}
+					if multiDedup {
+						require.False(t, tc.load, "CHECK filtering must not enable INSERT IGNORE arbitration for LOAD")
+						ignoreArbitration = true
+					}
+					for _, expr := range node.FilterList {
+						if !exprContainsFuncName(expr, "_check_constraint_assert") {
+							continue
+						}
+						checks++
+						wantType := plan.Node_ASSERT
+						if tc.filter {
+							wantType = plan.Node_FILTER
+						}
+						require.Equal(t, wantType, node.NodeType)
+						require.Equal(t, tc.filter, node.FilterIsBarrier)
+					}
+				}
+				if tc.load {
+					require.Equal(t, tc.wantLoadDedups, loadDedups, "ordinary LOAD checks its primary key; LOAD IGNORE retains the dedup bypass")
+				}
+				require.Equal(t, !tc.load, ignoreArbitration, "only INSERT IGNORE arbitrates duplicate keys")
+				require.Equal(t, 1, checks, "CHECK must run exactly once per candidate")
+			})
+		}
+	}
+}
+
 func TestReplaceSetColRefAsDefault(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	// REPLACE ... SET col = <expr referencing columns> must bind the RHS column
@@ -8667,11 +8743,10 @@ func TestSubQuery(t *testing.T) {
 				OR n3.N_REGIONKEY = 1
 		)
 	)`
-	_, err := runOneStmt(mock, t, sql)
-	assert.Error(t, err)
-	if err != nil {
-		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
-	}
+	p, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation)
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
 }
 
 func TestCorrelatedScalarAggregatePushdown(t *testing.T) {
@@ -10374,13 +10449,13 @@ func TestSubqueryInOuterJoinOn(t *testing.T) {
 	_, err := runOneStmt(mock, t,
 		"SELECT a.n_nationkey FROM nation a LEFT JOIN nation b ON EXISTS ("+
 			"SELECT 1 FROM region z WHERE z.r_regionkey = a.n_regionkey AND z.r_regionkey = b.n_regionkey)")
-	require.ErrorContains(t, err, "referencing both join inputs")
+	require.NoError(t, err)
 
 	_, err = runOneStmt(mock, t,
 		"SELECT outer_n.n_nationkey FROM nation outer_n WHERE EXISTS ("+
 			"SELECT 1 FROM nation a LEFT JOIN nation b ON EXISTS ("+
 			"SELECT 1 FROM region z WHERE z.r_regionkey = outer_n.n_regionkey))")
-	require.ErrorContains(t, err, "deeply correlated subquery")
+	require.NoError(t, err)
 }
 func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 	for _, sql := range []string{

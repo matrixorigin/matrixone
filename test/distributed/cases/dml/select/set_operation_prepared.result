@@ -1,0 +1,116 @@
+drop database if exists set_operation_prepared;
+create database set_operation_prepared;
+use set_operation_prepared;
+create table inputs (side int, k int, payload char(2));
+insert into inputs values (0,1,'a'),(0,1,'a'),(0,2,'b'),(0,null,null),(1,1,'a'),(1,null,null);
+set @left_side=0;
+set @right_side=1;
+prepare numeric_minus from 'select k from (select k from inputs where side=? except select k from inputs where side=?) s order by k';
+execute numeric_minus using @left_side,@right_side;
+➤ k[4,32,0]  𝄀
+2
+set @left_side=2;
+execute numeric_minus using @left_side,@right_side;
+➤ k[4,32,0]
+set @left_side=0;
+execute numeric_minus using @left_side,@right_side;
+➤ k[4,32,0]  𝄀
+2
+deallocate prepare numeric_minus;
+prepare numeric_minus_all from 'select k from (select k from inputs where side=? except all select k from inputs where side=?) s order by k';
+execute numeric_minus_all using @left_side,@right_side;
+➤ k[4,32,0]  𝄀
+1  𝄀
+2
+set @left_side=2;
+execute numeric_minus_all using @left_side,@right_side;
+➤ k[4,32,0]
+set @left_side=0;
+execute numeric_minus_all using @left_side,@right_side;
+➤ k[4,32,0]  𝄀
+1  𝄀
+2
+deallocate prepare numeric_minus_all;
+prepare numeric_intersect from 'select k from (select k from inputs where side=? intersect select k from inputs where side=?) s order by k';
+execute numeric_intersect using @left_side,@right_side;
+➤ k[4,32,0]  𝄀
+null  𝄀
+1
+set @left_side=2;
+execute numeric_intersect using @left_side,@right_side;
+➤ k[4,32,0]
+set @left_side=0;
+execute numeric_intersect using @left_side,@right_side;
+➤ k[4,32,0]  𝄀
+null  𝄀
+1
+deallocate prepare numeric_intersect;
+prepare numeric_intersect_all from 'select k from (select k from inputs where side=? intersect all select k from inputs where side=?) s order by k';
+execute numeric_intersect_all using @left_side,@right_side;
+➤ k[4,32,0]  𝄀
+null  𝄀
+1
+set @left_side=2;
+execute numeric_intersect_all using @left_side,@right_side;
+➤ k[4,32,0]
+set @left_side=0;
+execute numeric_intersect_all using @left_side,@right_side;
+➤ k[4,32,0]  𝄀
+null  𝄀
+1
+deallocate prepare numeric_intersect_all;
+prepare keyed_minus from 'select payload from (select payload from inputs where side=? except select payload from inputs where side=?) s order by payload';
+execute keyed_minus using @left_side,@right_side;
+➤ payload[1,2,0]  𝄀
+b
+set @left_side=2;
+execute keyed_minus using @left_side,@right_side;
+➤ payload[1,2,0]
+set @left_side=0;
+execute keyed_minus using @left_side,@right_side;
+➤ payload[1,2,0]  𝄀
+b
+deallocate prepare keyed_minus;
+prepare keyed_minus_all from 'select payload from (select payload from inputs where side=? except all select payload from inputs where side=?) s order by payload';
+execute keyed_minus_all using @left_side,@right_side;
+➤ payload[1,2,0]  𝄀
+a  𝄀
+b
+set @left_side=2;
+execute keyed_minus_all using @left_side,@right_side;
+➤ payload[1,2,0]
+set @left_side=0;
+execute keyed_minus_all using @left_side,@right_side;
+➤ payload[1,2,0]  𝄀
+a  𝄀
+b
+deallocate prepare keyed_minus_all;
+prepare keyed_intersect from 'select payload from (select payload from inputs where side=? intersect select payload from inputs where side=?) s order by payload';
+execute keyed_intersect using @left_side,@right_side;
+➤ payload[1,2,0]  𝄀
+null  𝄀
+a
+set @left_side=2;
+execute keyed_intersect using @left_side,@right_side;
+➤ payload[1,2,0]
+set @left_side=0;
+execute keyed_intersect using @left_side,@right_side;
+➤ payload[1,2,0]  𝄀
+null  𝄀
+a
+deallocate prepare keyed_intersect;
+prepare keyed_intersect_all from 'select payload from (select payload from inputs where side=? intersect all select payload from inputs where side=?) s order by payload';
+execute keyed_intersect_all using @left_side,@right_side;
+➤ payload[1,2,0]  𝄀
+null  𝄀
+a
+set @left_side=2;
+execute keyed_intersect_all using @left_side,@right_side;
+➤ payload[1,2,0]
+set @left_side=0;
+execute keyed_intersect_all using @left_side,@right_side;
+➤ payload[1,2,0]  𝄀
+null  𝄀
+a
+deallocate prepare keyed_intersect_all;
+drop database set_operation_prepared;

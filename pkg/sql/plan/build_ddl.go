@@ -341,7 +341,7 @@ func inferViewColumns(
 			return nil, err
 		}
 	}
-	projectList := query.Nodes[query.Steps[len(query.Steps)-1]].ProjectList
+	projectList := query.Nodes[query.Steps[query.MainOutputStep()]].ProjectList
 	if len(colNames) > 0 && len(colNames) != len(projectList) {
 		return nil, moerr.NewViewWrongList(ctx.GetContext())
 	}
@@ -1547,7 +1547,7 @@ func genAsSelectCols(
 	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
 		return nil, nil, err
 	}
-	rootNode := query.Nodes[query.Steps[len(query.Steps)-1]]
+	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
 	cols := make([]*plan.ColDef, len(rootNode.ProjectList))
 	for i, expr := range rootNode.ProjectList {
@@ -3462,9 +3462,21 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 		enforced   bool
 	}
 	pendingChecks := make([]pendingCheckDef, 0)
-	tableCharset, err := tableDefaultCharset(ctx, stmt.Options)
+	defaults, err := tableDatabaseDefaults(ctx, createTable.Database, stmt.Options)
 	if err != nil {
 		return err
+	}
+	createTable.DatabaseDefaults = defaults
+	var tableCharset uint32
+	if defaults != nil && defaults.Version != 0 {
+		// Inheritance carries the resolved identity and must not consult an
+		// unrelated (possibly unsupported) server default first.
+		tableCharset = defaults.CollationId
+	} else {
+		tableCharset, err = tableDefaultCharset(ctx, stmt.Options)
+		if err != nil {
+			return err
+		}
 	}
 	createTable.TableDef.DefaultCharset = tableCharset
 	if types.IsUnicodeCollation(uint8(tableCharset)) {
@@ -6068,6 +6080,20 @@ func buildCreateDatabase(stmt *tree.CreateDatabase, ctx CompilerContext) (*Plan,
 		}
 	}
 	createDB.Sql = stmt.Sql
+	if !DatabaseDefaultsSystemDatabase(createDB.Database) && createDB.SubscriptionOption == nil {
+		if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
+			fallback, err := databaseServerCollation(ctx)
+			if err != nil {
+				return nil, err
+			}
+			createDB.Defaults, err = NormalizeDatabaseDefaults(ctx.GetContext(), stmt.CreateOptions, fallback)
+			if err != nil {
+				return nil, err
+			}
+		} else if len(stmt.CreateOptions) > 0 {
+			return nil, RequireDatabaseDefaults(ctx.GetContext(), ctx.GetProcess().GetService())
+		}
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -6782,6 +6808,14 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	// list drives pre-DDL locking. currentTableDef is the planner-owned evolving
 	// schema used by every subsequent existence and semantic check.
 	currentTableDef := DeepCopyTableDef(tableDef, true)
+	if err := applyAlterTableCharsetDefault(ctx, currentTableDef, stmt.Options); err != nil {
+		return nil, err
+	}
+	if currentTableDef.DefaultCharset != tableDef.DefaultCharset || currentTableDef.CollationVersion != tableDef.CollationVersion {
+		// Default/schema replacement and index actions must share the same
+		// evolving definition; otherwise replacement resurrects dropped indexes.
+		alterTable.CopyTableDef = currentTableDef
+	}
 	currentIndexNames := make(map[string]bool, len(currentTableDef.Indexes))
 	for _, indexDef := range currentTableDef.Indexes {
 		currentIndexNames[indexNameKey(indexDef.IndexName)] = true
@@ -6904,8 +6938,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						},
 					},
 				}
-				// for new fk in this alter table, the data in the table must
-				// be checked to confirm that it is compliant with foreign key constraints.
+				// Declarations with checks disabled install metadata without
+				// validating historical rows, just as COPY ALTER does.
+				fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+				if err != nil {
+					return nil, err
+				}
 				if fkData.IsSelfRefer {
 					// fk self refer.
 					// check columns of fk self refer are valid
@@ -6913,17 +6951,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					if err != nil {
 						return nil, err
 					}
-					sqls, err := genSqlsForCheckFKSelfRefer(
-						ctx.GetContext(),
-						databaseName,
-						finalTableName,
-						currentTableDef.Cols,
-						[]*plan.ForeignKeyDef{fkData.Def},
-					)
-					if err != nil {
-						return nil, err
+					if fkChecksEnabled {
+						sqls, err := genSqlsForCheckFKSelfRefer(
+							ctx.GetContext(),
+							databaseName,
+							finalTableName,
+							currentTableDef.Cols,
+							[]*plan.ForeignKeyDef{fkData.Def},
+						)
+						if err != nil {
+							return nil, err
+						}
+						detectSqls = append(detectSqls, sqls...)
 					}
-					detectSqls = append(detectSqls, sqls...)
 					if !slices.ContainsFunc(currentTableDef.RefChildTbls, func(tableID uint64) bool {
 						return tableID == 0 || tableID == currentTableDef.TblId
 					}) {
@@ -6958,18 +6998,20 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 							fkData.ParentTableName,
 						)
 					}
-					sql, err := genSqlForCheckFKConstraints(
-						ctx.GetContext(),
-						fkData.Def,
-						databaseName, finalTableName, tableDef.Cols,
-						fkData.ParentDbName,
-						fkData.ParentTableName,
-						parentTableDef.Cols,
-					)
-					if err != nil {
-						return nil, err
+					if fkChecksEnabled {
+						sql, err := genSqlForCheckFKConstraints(
+							ctx.GetContext(),
+							fkData.Def,
+							databaseName, finalTableName, tableDef.Cols,
+							fkData.ParentDbName,
+							fkData.ParentTableName,
+							parentTableDef.Cols,
+						)
+						if err != nil {
+							return nil, err
+						}
+						detectSqls = append(detectSqls, sql)
 					}
-					detectSqls = append(detectSqls, sql)
 				}
 				updateSqls = append(updateSqls, fkData.UpdateSql)
 			case *tree.UniqueIndex:
@@ -7288,12 +7330,18 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			// lock already validated by resolveAndValidateLock
 			alterTable.Actions[i] = nil
 
-		case *tree.AlterOptionAlterCheck, *tree.TableOptionCharset:
+		case *tree.TableOptionCharset:
+			if opt.Convert {
+				return nil, moerr.NewNotSupported(ctx.GetContext(), "character set conversion requires ALGORITHM=COPY")
+			}
+			continue
+		case *tree.AlterOptionAlterCheck, *tree.TableOptionCollate:
 			continue
 
 		case *tree.AlterTableModifyColumnClause:
-			// defensively check again
-			ok, _ := isInplaceModifyColumn(ctx.GetContext(), opt, tableDef)
+			// Recheck against the same final default used by algorithm admission
+			// and column binding, not the source table's future default.
+			ok, _ := isInplaceModifyColumn(ctx.GetContext(), opt, currentTableDef)
 			if !ok {
 				return nil, moerr.NewInvalidInputf(
 					ctx.GetContext(),
@@ -7303,7 +7351,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if alterTable.CopyTableDef == nil {
-				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+				alterTable.CopyTableDef = currentTableDef
 			}
 
 			// update new column info to copy_table_def
@@ -7320,7 +7368,8 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 		case *tree.AlterTableChangeColumnClause:
 			// A same-name CHANGE with an unchanged storage layout has the same
 			// execution semantics as MODIFY, but historically took the COPY path.
-			ok, _ := isInplaceChangeColumn(ctx.GetContext(), opt, tableDef)
+			// Its defensive check must also use the final inherited domain.
+			ok, _ := isInplaceChangeColumn(ctx.GetContext(), opt, currentTableDef)
 			if !ok {
 				return nil, moerr.NewInvalidInputf(
 					ctx.GetContext(),
@@ -7330,7 +7379,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if alterTable.CopyTableDef == nil {
-				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+				alterTable.CopyTableDef = currentTableDef
 			}
 
 			_, err := updateNewColumnInTableDef(
@@ -7349,7 +7398,7 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			}
 
 			if alterTable.CopyTableDef == nil {
-				alterTable.CopyTableDef = DeepCopyTableDef(tableDef, true)
+				alterTable.CopyTableDef = currentTableDef
 			}
 
 			col := FindColumn(

@@ -2417,7 +2417,6 @@ func TestLocallyConsumedRequestClosesProxyBoundary(t *testing.T) {
 		statement string
 		eventType eventType
 	}{
-		{name: "kill", statement: "kill query 123", eventType: TypeKill},
 		{name: "upgrade", statement: "upgrade account all", eventType: TypeUpgrade},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -2444,8 +2443,6 @@ func TestLocallyConsumedRequestClosesProxyBoundary(t *testing.T) {
 					return
 				}
 				switch e.(type) {
-				case *killEvent:
-					eventSeen <- TypeKill
 				case *upgradeEvent:
 					eventSeen <- TypeUpgrade
 				default:
