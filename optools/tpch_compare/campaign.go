@@ -233,6 +233,17 @@ func preflight(ctx context.Context, path string) (p Preflight, retErr error) {
 			p.Hardware[file] = string(b)
 		}
 	}
+	for _, file := range []string{"/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor", "/sys/devices/system/cpu/cpu0/cpufreq/scaling_driver", "/sys/devices/system/cpu/amd_pstate/status"} {
+		if b, err := os.ReadFile(file); err == nil {
+			p.Hardware[file] = string(b)
+		}
+	}
+	if b, err := commandOutput(ctx, "", nil, "findmnt", "--json", "--target", c.Root); err == nil {
+		p.Hardware["filesystem"] = string(b)
+	}
+	if b, err := commandOutput(ctx, "", nil, "perf", "version"); err == nil {
+		p.Hardware["perf_version"] = string(b)
+	}
 	if err := validateTopology(c.CPUs, c.ControllerCPUs); err != nil {
 		p.Errors = append(p.Errors, err.Error())
 	}

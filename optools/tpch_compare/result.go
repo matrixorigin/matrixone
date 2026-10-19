@@ -125,11 +125,11 @@ func normalize(v any, c Column) (Cell, error) {
 	}
 	switch c.Kind {
 	case "int":
-		i, ok := new(big.Int).SetString(s, 10)
-		if !ok {
+		i, err := strconv.ParseInt(s, 10, 64)
+		if err != nil {
 			return Cell{}, fmt.Errorf("invalid integer %q", s)
 		}
-		s = i.String()
+		s = strconv.FormatInt(i, 10)
 	case "decimal":
 		var err error
 		s, err = decimal(s)
@@ -226,7 +226,8 @@ func equalCell(a, b Cell, c Column, pa, pb PhysicalColumn) (bool, error) {
 }
 
 // drain closes the cursor on every path and optionally streams rows directly to
-// a verifier. Result capture never buffers an entire SQL result in Go memory.
+// a verifier. The callback borrows its row until it returns; retaining consumers
+// must copy it. Result capture never buffers an entire result in Go memory.
 func drain(ctx context.Context, conn *sql.Conn, s string, columns []Column, consume func(Row) error) (physical []PhysicalColumn, count int64, first, last *time.Time, retErr error) {
 	rows, err := conn.QueryContext(ctx, s)
 	if err != nil {
@@ -238,6 +239,8 @@ func drain(ctx context.Context, conn *sql.Conn, s string, columns []Column, cons
 		return nil, 0, nil, nil, err
 	}
 	values := make([]any, len(columns))
+	row := make(Row, len(columns))
+	var firstTime, lastTime time.Time
 	dest := make([]any, len(columns))
 	for i := range values {
 		dest[i] = &values[i]
@@ -245,13 +248,12 @@ func drain(ctx context.Context, conn *sql.Conn, s string, columns []Column, cons
 	for rows.Next() {
 		now := time.Now()
 		if first == nil {
-			v := now
-			first = &v
+			firstTime = now
+			first = &firstTime
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return physical, count, first, last, err
 		}
-		row := make(Row, len(columns))
 		for i, v := range values {
 			row[i], err = normalize(v, columns[i])
 			if err != nil {
@@ -262,17 +264,17 @@ func drain(ctx context.Context, conn *sql.Conn, s string, columns []Column, cons
 			return physical, count, first, last, err
 		}
 		count++
-		now = time.Now()
-		last = &now
+		lastTime = time.Now()
+		last = &lastTime
 	}
 	return physical, count, first, last, rows.Err()
 }
 
 func executeUnit(ctx context.Context, conn *sql.Conn, q Query, path string, limit int64) (cap Capture, retErr error) {
-	return executeUnitClock(ctx, conn, q, path, limit, nil)
+	return executeUnitClock(ctx, conn, q, path, limit, nil, nil)
 }
 
-func executeUnitClock(ctx context.Context, conn *sql.Conn, q Query, path string, limit int64, clock *waveClock) (cap Capture, retErr error) {
+func executeUnitClock(ctx context.Context, conn *sql.Conn, q Query, path string, limit int64, clock *waveClock, native *nativeProfile) (cap Capture, retErr error) {
 	cap.Version = formatVersion
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -294,6 +296,9 @@ func executeUnitClock(ctx context.Context, conn *sql.Conn, q Query, path string,
 	}
 	var first, last *time.Time
 	for i, s := range q.Statements {
+		if err = native.statement(ctx, conn, i); err != nil {
+			break
+		}
 		if i == q.ResultStatement {
 			cap.Columns, cap.Rows, first, last, err = drain(ctx, conn, s, q.Columns, func(row Row) error { return encoder.Encode(row) })
 		} else {
@@ -370,7 +375,18 @@ func cmpCell(a, b Cell, c Column) int {
 	if b.Null {
 		return 1
 	}
-	if c.Kind == "int" || c.Kind == "decimal" || c.Kind == "approximate" {
+	if c.Kind == "int" {
+		x, _ := strconv.ParseInt(a.Value, 10, 64)
+		y, _ := strconv.ParseInt(b.Value, 10, 64)
+		if x < y {
+			return -1
+		}
+		if x > y {
+			return 1
+		}
+		return 0
+	}
+	if c.Kind == "decimal" || c.Kind == "approximate" {
 		x, _ := number(a.Value)
 		y, _ := number(b.Value)
 		return x.Cmp(y)

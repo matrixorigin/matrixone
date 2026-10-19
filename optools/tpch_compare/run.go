@@ -69,7 +69,7 @@ func readArm(root string, record ArmRecord) (WorkerReceipt, string, error) {
 	return r, filepath.Dir(path), err
 }
 
-func comparePair(ctx context.Context,c Campaign, p Preflight, manager *cgroupManager, prepared map[string]PreparedEngine, t Trial, root string, records map[string]ArmRecord) error {
+func comparePair(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager, prepared map[string]PreparedEngine, t Trial, root string, records map[string]ArmRecord) error {
 	a, ra, err := readArm(filepath.Join(root, "mo"), records["mo"])
 	if err != nil {
 		return err
@@ -376,7 +376,7 @@ func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, man
 			pairErr = errors.Join(pairErr, err)
 		}
 		if pairErr == nil {
-			pairErr = comparePair(ctx,c, p, manager, f.Prepared[t.Scale], t, pairRoot, pair.Arms)
+			pairErr = comparePair(ctx, c, p, manager, f.Prepared[t.Scale], t, pairRoot, pair.Arms)
 		}
 		if pairErr != nil {
 			pair.Error = pairErr.Error()
@@ -412,6 +412,11 @@ func campaignRun(ctx context.Context, config, phase, id string) error {
 	if err := campaignPin(c, p); err != nil {
 		return err
 	}
+	lease, err := campaignLease(c.Root)
+	if err != nil {
+		return err
+	}
+	defer lease.Close()
 	manager, err := setupCgroups(c)
 	if err != nil {
 		return err

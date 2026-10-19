@@ -43,6 +43,17 @@ func cli(ctx context.Context, args []string, out, errOut io.Writer) error {
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	f.SetOutput(errOut)
 	switch args[0] {
+	case "profile":
+		config := f.String("config", "", "campaign configuration JSON")
+		id := f.String("id", "profiles", "new profiling identifier")
+		baseline := f.String("baseline", "", "measured baseline run directory")
+		pilot := f.Bool("pilot", false, "short SF1 profiling qualification")
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		bounded, cancel := context.WithTimeoutCause(ctx, 24*time.Hour, errors.New("profiling campaign budget"))
+		defer cancel()
+		return profileCampaign(bounded, *config, *id, *baseline, *pilot)
 	case "preflight":
 		config := f.String("config", "", "campaign configuration JSON")
 		if err := f.Parse(args[1:]); err != nil {

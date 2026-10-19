@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,6 +39,37 @@ func availableDisk(path string) (int64, error) {
 		return 0, err
 	}
 	return int64(s.Bavail) * s.Bsize, nil
+}
+
+func campaignLease(root string) (*os.File, error) {
+	f, err := os.OpenFile(filepath.Join(root, "campaign.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		_ = f.Close()
+		return nil, errors.New("another controller owns this campaign")
+	}
+	return f, nil
+}
+
+func requireFreePorts(c Campaign) error {
+	ports := []int{c.PortBase + 200, c.PortBase + 201, c.PortBase + 202, c.PortBase + 300, c.PortBase + 301, c.PortBase + 302}
+	for _, base := range []int{c.PortBase, c.PortBase + 100} {
+		for i := 0; i < 16; i++ {
+			ports = append(ports, base+i)
+		}
+	}
+	for _, port := range ports {
+		listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			return fmt.Errorf("owned MO port %d is occupied: %w", port, err)
+		}
+		if err := listener.Close(); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func checkPersistentFS(path string) error {
 	var s syscall.Statfs_t

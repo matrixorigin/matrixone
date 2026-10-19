@@ -125,3 +125,46 @@ intervals resample paired blocks/waves, preserving dependencies among calls in a
 concurrent wave. Missing or failed blocks invalidate the cell's score. Suite/wave
 medians, sums of query medians and geometric mean speedups have separate labels.
 Whole-window CPU or memory is never assigned to an arbitrary query.
+
+## Profiling
+
+```sh
+systemd-run --user --scope --unit=tpch-compare-profile-pilot -p Delegate=yes \
+  ./tpch-compare profile --config /nvme/tpch/campaign.json --id pilot --pilot
+systemd-run --user --scope --unit=tpch-compare-profiles -p Delegate=yes \
+  ./tpch-compare profile --config /nvme/tpch/campaign.json --id full \
+  --baseline /nvme/tpch/comparison/runs/baseline
+```
+
+The pilot uses short SF1 Q1/Q6 windows. Full profiling preserves the primary
+warmup protocol, collects three native operator replays per query/scale, and
+uses bounded repeated-query CPU windows at SF10/SF100. Unprofiled/profiled/
+unprofiled controls expose perturbation. Allocation and wait lenses run
+independently for the largest gaps and scan/join/aggregate controls. Selected
+SF10 cases also receive one-core controls. Repeated-query profiles are explicitly
+diagnostic and cannot substitute for the primary mixed-suite timing.
+
+MO's current interface provides JSON physical plans and text EXPLAIN ANALYZE;
+ANALYZE with JSON is explicitly unsupported. Both artifacts are retained.
+DuckDB captures detailed JSON for the actual statement, with distinct files for
+Q15's DDL and SELECT. Raw fields and quality flags remain available alongside
+semantic work families. Families organize investigation; operators are aligned
+using relations, predicates, join/group keys and consumers rather than local IDs.
+
+The common CPU lens combines user-mode perf sampling and a small PMU event group.
+`--user-callchains` avoids requesting prohibited kernel call chains. Allocation
+and wait collection use existing Go pprof endpoints and worker snapshots;
+cgroup memory remains the shared footprint measurement. Native allocator bytes
+are N/A without a validated collector. CPU samples do not count copied bytes,
+and parked Go goroutines do not directly represent C++ OS-thread blocking.
+
+Capture files use bounded temporary storage on tmpfs and are archived after the
+query window. A 1 GiB capture cap and campaign quota prevent unlimited evidence
+growth. Partial/unsupported counters and symbolization remain explicit. Raw
+weights, process IDs, folded stacks, metric definitions and hashes support
+independent analysis. Set `TPCH_COMPARE_FLAMEGRAPH` to a pinned standard
+FlameGraph `flamegraph.pl` to export SVGs. A perf-capable host can explicitly run
+`TPCH_COMPARE_PERF_INTEGRATION=1 go test -run '^TestPerfCollectorIntegration$'`.
+
+`python3 plot_report.py REPORT/queries.csv OUTPUT` exports primary comparison
+figures using Matplotlib; plotting is offline and requires Matplotlib separately.

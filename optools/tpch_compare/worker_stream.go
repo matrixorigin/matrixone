@@ -97,7 +97,7 @@ func queryPermutation(queries []int, stream int, seed uint64) []int {
 	return out
 }
 
-func runQueryStreams(ctx context.Context, db *sql.DB, first *sql.Conn, r WorkerRequest, d Dataset, control *workerControl) (out []QueryReceipt, waveNS int64, retErr error) {
+func runQueryStreams(ctx context.Context, db *sql.DB, first *sql.Conn, r WorkerRequest, d Dataset, control *workerControl, evidence *runtimeEvidence) (out []QueryReceipt, waveNS int64, retErr error) {
 	seen := map[int]bool{}
 	for _, n := range r.Queries {
 		if n < 1 || n > 22 || seen[n] {
@@ -115,7 +115,11 @@ func runQueryStreams(ctx context.Context, db *sql.DB, first *sql.Conn, r WorkerR
 		conns = append(conns, conn)
 	}
 	if r.Warmup {
-		for _, n := range allQueries() {
+		warmQueries := allQueries()
+		if r.WarmupSelected {
+			warmQueries = r.Queries
+		}
+		for _, n := range warmQueries {
 			q := d.Queries[n-1].rendered(fmt.Sprintf("warm_%d_%d", os.Getpid(), n))
 			path := filepath.Join(r.OutputRoot, fmt.Sprintf("warm-q%02d.rows", n))
 			deadline := r.QueryDeadlineNS
@@ -138,6 +142,22 @@ func runQueryStreams(ctx context.Context, db *sql.DB, first *sql.Conn, r WorkerR
 			}
 		}
 	}
+	if err := configureNativeProfile(ctx, first, r); err != nil {
+		return nil, 0, err
+	}
+	finishProfile, err := workerProfileStart(r)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer func() { retErr = errors.Join(retErr, finishProfile()) }()
+	if r.Profile != nil && (r.Profile.Kind == "alloc" || r.Profile.Kind == "wait") {
+		if err := goProfileSnapshot(r.OutputRoot, "before", r.Profile.Kind); err != nil {
+			return nil, 0, err
+		}
+	}
+	if evidence != nil {
+		evidence.before = runtimeSnapshot()
+	}
 	if err := control.barrier("ready"); err != nil {
 		return nil, 0, err
 	}
@@ -159,6 +179,14 @@ func runQueryStreams(ctx context.Context, db *sql.DB, first *sql.Conn, r WorkerR
 			for rep := 0; rep < r.Repetitions; rep++ {
 				for _, n := range queryPermutation(r.Queries, stream, r.Seed) {
 					q := d.Queries[n-1].rendered(fmt.Sprintf("%d_%d_%d_%d", os.Getpid(), stream, rep, n))
+					var native *nativeProfile
+					if r.Profile != nil && r.Profile.Kind == "operator" {
+						native = &nativeProfile{engine: r.Engine.Name, root: r.OutputRoot, prefix: fmt.Sprintf("native-q%02d-s%d-r%d", n, stream, rep), selectIndex: q.ResultStatement, plainSelect: q.Statements[q.ResultStatement]}
+						if r.Engine.Name == "mo" {
+							q.Statements[q.ResultStatement] = "EXPLAIN ANALYZE " + q.Statements[q.ResultStatement]
+							q.Columns = []Column{{Kind: "text"}}
+						}
+					}
 					if r.Unlimited && q.Limit > 0 {
 						q.Statements[q.ResultStatement] = strings.TrimSuffix(q.Statements[q.ResultStatement], fmt.Sprintf(" LIMIT %d", q.Limit))
 						q.Limit = 0
@@ -174,7 +202,7 @@ func runQueryStreams(ctx context.Context, db *sql.DB, first *sql.Conn, r WorkerR
 						cancel(err)
 						return
 					}
-					cap, err := executeUnitClock(qctx, conn, q, filepath.Join(r.OutputRoot, fmt.Sprintf("q%02d-s%02d-%04d.rows", n, stream, rep)), captureDisk, clock)
+					cap, err := executeUnitClock(qctx, conn, q, filepath.Join(r.OutputRoot, fmt.Sprintf("q%02d-s%02d-%04d.rows", n, stream, rep)), captureDisk, clock, native)
 					qcancel()
 					err = errors.Join(err, control.step(false, stream, n, 0))
 					receipt := QueryReceipt{Query: n, Repetition: rep, Stream: stream, Capture: cap}
@@ -209,5 +237,12 @@ func runQueryStreams(ctx context.Context, db *sql.DB, first *sql.Conn, r WorkerR
 	for _, res := range ordered {
 		out = append(out, res.queries...)
 	}
-	return out, waveNS, errors.Join(retErr, control.barrier("done"))
+	if evidence != nil {
+		evidence.after = runtimeSnapshot()
+	}
+	retErr = errors.Join(retErr, control.barrier("done"))
+	if r.Profile != nil && (r.Profile.Kind == "alloc" || r.Profile.Kind == "wait") {
+		retErr = errors.Join(retErr, goProfileSnapshot(r.OutputRoot, "after", r.Profile.Kind))
+	}
+	return out, waveNS, retErr
 }
