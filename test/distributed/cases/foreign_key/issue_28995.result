@@ -24,7 +24,7 @@ and referenced_table_name = 'parent_t';
 ➤ count(*)[-5,64,0]  𝄀
 1
 insert into child_t values (2, 999);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 create table reverse_child_t (
 id int primary key
 );
@@ -33,7 +33,7 @@ add constraint fk_reverse_parent foreign key (parent_id) references parent_t(id)
 add column parent_id int null;
 insert into reverse_child_t values (1, 2);
 insert into reverse_child_t values (2, 999);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 create table preserved_child_t (
 id int primary key,
 existing_parent_id int,
@@ -51,9 +51,9 @@ and referenced_table_name = 'parent_t';
 ➤ count(*)[-5,64,0]  𝄀
 2
 insert into preserved_child_t values (2, 999, 1);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into preserved_child_t values (3, 1, 999);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 create table invalid_child_t (
 id int primary key
 );
@@ -61,7 +61,7 @@ insert into invalid_child_t values (1);
 alter table invalid_child_t
 add column parent_id int not null default 999,
 add constraint fk_invalid_parent foreign key (parent_id) references parent_t(id);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select count(*) from information_schema.columns
 where table_schema = 'issue_28995'
 and table_name = 'invalid_child_t'
@@ -109,7 +109,7 @@ select id, parent_a, parent_b from composite_child_t order by id;
 ➤ id[4,32,0]  ¦  parent_a[4,32,0]  ¦  parent_b[4,32,0]  𝄀
 1  ¦  1  ¦  2
 insert into composite_child_t values (2, 1, 999);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 create table `parent``t` (
 `id``key` int primary key
 );

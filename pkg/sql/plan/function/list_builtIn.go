@@ -11996,10 +11996,11 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 	// function `timestamp`
 	{
-		functionId: TIMESTAMP,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    timestampPairTypeCheck,
+		functionId:       TIMESTAMP,
+		class:            plan.Function_STRICT,
+		layout:           STANDARD_FUNCTION,
+		checkFn:          timestampPairTypeCheck,
+		bindingOverloads: []int{6, 7, 8, 9, 10, 5},
 
 		Overloads: []overload{
 			{
@@ -12058,6 +12059,46 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				retType:    timestampPairReturnType,
 				newOp: func() executeLogicOfOverload {
 					return timestampWithTime
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_date},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampAsDatetime
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_datetime},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampAsDatetime
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_timestamp},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampAsDatetime
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_varchar},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampAsDatetime
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_char},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampAsDatetime
 				},
 			},
 		},

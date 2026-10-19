@@ -5495,26 +5495,31 @@ func initToTimestampCase() []tcTemp {
 	}
 }
 
-func TestToTimeStamp(t *testing.T) {
-	testCases := initToTimestampCase()
-
-	// do the test work.
+// Released stored plans can still request the original TIMESTAMP vector.
+func TestUnaryTimestampLegacyResultVector(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
+	for _, tc := range initToTimestampCase() {
+		var oid int32
+		switch tc.inputs[0].typ.Oid {
 		case types.T_date:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateToTimestamp)
+			oid = 0
 		case types.T_datetime:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DatetimeToTimestamp)
+			oid = 1
+		case types.T_timestamp:
+			oid = 2
 		case types.T_varchar:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateStringToTimestamp)
+			oid = 3
+		case types.T_char:
+			oid = 4
+		default:
+			t.Fatalf("unexpected legacy TIMESTAMP input %s", tc.inputs[0].typ)
 		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+		overload, err := GetFunctionById(proc.Ctx, EncodeOverloadID(TIMESTAMP, oid))
+		require.NoError(t, err)
+		exec, _, _, _ := overload.GetExecuteMethod()
+		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, exec)
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
 	}
 }
 
