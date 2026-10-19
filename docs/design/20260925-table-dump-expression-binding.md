@@ -1,7 +1,7 @@
 # Table dump expression binding (PR #29241, issue #28594)
 
-Status: revision 13; DIV migration reconstruction design approved by independent gpt-6-astra/medium review.
-Revision: 13, 2026-10-19. Revision 12 passed independent locale-witness review; validation is recorded in the PR.
+Status: revision 14; staged candidate-search design approved by independent gpt-6-astra/medium review.
+Revision: 14, 2026-10-19. Revision 13 passed independent DIV migration review; validation is recorded in the PR.
 
 ## Current extension: migration-era binding and format 3
 
@@ -34,10 +34,25 @@ DUMP and LOAD; per-row normalization is unchanged.
 
 Current frozen-base allocations: main charset118, coordinator subquery119, session
 authorization120, unsigned DECIMAL DIV121 and functions599/600 stay published;
-fractional TIMESTAMPADD uses capability122, normalizer601 and end602. The allocation follows official main
-873282742714436bff407dfcdbbe879147162bd3; rollback coverage cycles121→122→121.
+unary temporal122 stay published; fractional TIMESTAMPADD uses capability123, normalizer601 and end602. The allocation follows official main
+8e63625c4e9baeb1d28c1095c07732f056c04895; rollback coverage cycles122→123→122.
 No protobuf schema change or provisional-function-ID guessing is introduced.
 Historical revision10 evidence below retains its original input identity.
+
+## Revision 14: cheap candidates before session reconstruction
+
+Each parsed expression first tries precision/era pairs in the backup session.
+All cheap candidates participate in sensitivity classification even after a
+current-era match. Next it tries all cheap locale-only precision/era witnesses. Only if none
+matches does the verifier enumerate timezone and joint session witnesses. A bounded list of at most 31×5 small descriptors retains dependency
+flags, never speculative expression graphs. All phases use the same cancellation
+checks, whole-tree equality and shared 1,000,000 candidate-node budget. Unmatched
+exhaustive reconstruction can still reach this bound; cheap valid precision
+witnesses no longer compete with wrong-precision session cross-products.
+
+Regressions cover precision 10 with one localized default, three such defaults
+at precision 4, public backup/restore and future values after session changes.
+No format, row-evaluation or ownership change accompanies the search reorder.
 
 ## Revision 13: DECIMAL DIV rebase compatibility
 

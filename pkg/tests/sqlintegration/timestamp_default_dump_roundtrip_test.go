@@ -21,6 +21,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -148,6 +149,56 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 					exec("set timestamp=1704067201.5")
 					exec("update " + tc.name + "_target set id=2")
 					assertValue(tc.updated)
+				}
+			})
+		}
+
+		// The matching precision must be tried before unrelated session tuples.
+		const precisionExpression = "concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1704067200),'%M'))"
+		for _, tc := range []struct {
+			name               string
+			precision, columns int
+			want               string
+		}{
+			{"precision10", 10, 1, "0.3333333333:January"},
+			{"three_precision4", 4, 3, "0.3333:January"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
+				t.Cleanup(func() {
+					cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cancel()
+					_, err := conn.ExecContext(cleanupCtx, "drop table if exists "+tc.name+"_source,"+tc.name+"_target")
+					require.NoError(t, err)
+				})
+				exec("set time_zone='+00:00'")
+				exec("set lc_time_names='en_US'")
+				exec(fmt.Sprintf("set div_precision_increment=%d", tc.precision))
+				cols := []string{"id int primary key"}
+				names := []string{}
+				for i := 0; i < tc.columns; i++ {
+					name := fmt.Sprintf("a%d", i)
+					names = append(names, name)
+					cols = append(cols, name+" varchar(200) default ("+precisionExpression+")")
+				}
+				ddl := "(" + strings.Join(cols, ",") + ")"
+				exec("create table " + tc.name + "_source" + ddl)
+				exec("insert into " + tc.name + "_source(id) values(1)")
+				var flush string
+				require.NoError(t, conn.QueryRowContext(ctx, "select mo_ctl('dn','flush','"+schema+"."+tc.name+"_source')").Scan(&flush))
+				path := t.TempDir()
+				exec("dump table " + tc.name + "_source to '" + path + "' metadata only")
+				exec("set div_precision_increment=0")
+				exec("set lc_time_names='de_DE'")
+				exec("set time_zone='+08:00'")
+				exec("create table " + tc.name + "_target" + ddl)
+				exec("load table " + tc.name + "_target from '" + path + "'")
+				exec("dump table " + tc.name + "_target to '" + t.TempDir() + "' metadata only")
+				exec("insert into " + tc.name + "_target(id) values(2)")
+				for _, name := range names {
+					var got string
+					require.NoError(t, conn.QueryRowContext(ctx, "select "+name+" from "+tc.name+"_target where id=2").Scan(&got))
+					require.Equal(t, tc.want, got)
 				}
 			})
 		}

@@ -536,12 +536,22 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			if supplied != nil {
 				want = sourceItems[i].expr
 			}
+			// Give every cheap precision/era witness priority over a wrong
+			// precision's exhaustive session search. Retain flags, not trees.
+			type sessionCandidate struct {
+				increment      int64
+				mode           tableDumpBindingMode
+				dependency     tableDumpDefaultSession
+				folded, stored bool
+			}
+			var sessions []sessionCandidate
 			for increment := int64(0); increment <= maxIncrement; increment++ {
 				if err := ctx.GetContext().Err(); err != nil {
 					stmt.Free()
 					return false, err
 				}
 				for _, mode := range modes {
+					dependency = tableDumpDefaultSession{}
 					candidate, err := bind(increment, mode, zone, locale)
 					if fatal != nil {
 						stmt.Free()
@@ -558,64 +568,85 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 						sensitive = true
 					}
 					matched = matched || sameTableDumpBoundExpression(want, candidate)
+
 					if item.kind == "default" {
 						_, folded := tableDumpTimestampLiteral(candidate)
 						_, stored := tableDumpTimestampLiteral(want)
 						if folded || stored || dependency.folded || err != nil && (dependency.timeZone || dependency.locale) {
-							// Capture even a same-session match: LOAD may use another
-							// locale or zone. Every witness must match the whole tree.
 							sensitive = true
-							locales := []string{locale}
-							if dependency.locale {
-								for _, other := range function.TemporalLocaleNames() {
-									if other != locale {
-										locales = append(locales, other)
-									}
-								}
-							}
-							// Try cheap locale-only witnesses before the joint search.
-							for _, other := range locales[1:] {
-								if matched || fatal != nil {
-									break
-								}
-								rebound, _ := bind(increment, mode, zone, other)
-								matched = sameTableDumpBoundExpression(want, rebound)
-							}
-							if dependency.timeZone || folded || stored {
-								for _, lc := range locales {
-									if matched || fatal != nil {
-										break
-									}
-									if folded || stored {
-										matched = matchTableDumpTimestampDefault(want, nil, zone, func(tz *time.Location) (*planpb.Expr, error) {
-											return bind(increment, mode, tz, lc)
-										})
-									}
-									if matched || fatal != nil {
-										break
-									}
-									for tz := range tableDumpTimeZones {
-										rebound, _ := bind(increment, mode, tz, lc)
-										if fatal != nil {
-											break
-										}
-										if sameTableDumpBoundExpression(want, rebound) {
-											matched = true
-											break
-										}
-									}
-								}
-							}
+							sessions = append(sessions, sessionCandidate{increment, mode, dependency, folded, stored})
+						}
+					}
+				}
+			}
+			localesFor := func(needsLocale bool) []string {
+				locales := []string{locale}
+				if needsLocale {
+					for _, other := range function.TemporalLocaleNames() {
+						if other != locale {
+							locales = append(locales, other)
+						}
+					}
+				}
+				return locales
+			}
+			// Locale-only witnesses are cheap too: try all precisions before
+			// allowing any wrong precision to consume the timezone budget.
+			for _, search := range sessions {
+				if matched {
+					break
+				}
+				dependency = search.dependency
+				for _, other := range localesFor(search.dependency.locale)[1:] {
+					rebound, _ := bind(search.increment, search.mode, zone, other)
+					if fatal != nil {
+						stmt.Free()
+						return false, fatal
+					}
+					if sameTableDumpBoundExpression(want, rebound) {
+						matched = true
+						break
+					}
+				}
+			}
+			for _, search := range sessions {
+				if matched {
+					break
+				}
+				increment, mode := search.increment, search.mode
+				dependency = search.dependency
+				folded, stored := search.folded, search.stored
+				locales := localesFor(search.dependency.locale)
+				if search.dependency.timeZone || folded || stored {
+					for _, lc := range locales {
+						if matched || fatal != nil {
+							break
+						}
+						if folded || stored {
+							matched = matchTableDumpTimestampDefault(want, nil, zone, func(tz *time.Location) (*planpb.Expr, error) {
+								return bind(increment, mode, tz, lc)
+							})
+						}
+						if matched || fatal != nil {
+							break
+						}
+						for tz := range tableDumpTimeZones {
+							rebound, _ := bind(increment, mode, tz, lc)
 							if fatal != nil {
-								stmt.Free()
-								return false, fatal
+								break
+							}
+							if sameTableDumpBoundExpression(want, rebound) {
+								matched = true
+								break
 							}
 						}
 					}
 				}
-				if matched && sensitive {
-					break
+				if fatal != nil {
+					stmt.Free()
+					return false, fatal
 				}
+
 			}
 			stmt.Free()
 			if matched {

@@ -404,3 +404,62 @@ func TestTableDumpDefaultLocales(t *testing.T) {
 		})
 	}
 }
+
+func TestTableDumpCheapPrecisionCandidatesBeforeSessions(t *testing.T) {
+	const expression = "concat(cast(cast(1 as decimal(10,0))/cast(3 as decimal(10,0)) as char), ':', date_format(from_unixtime(1704067200),'%M'))"
+	for _, tc := range []struct {
+		name      string
+		increment int64
+		columns   int
+	}{{"precision10", 10, 1}, {"three_precision4", 4, 3}} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			proc.GetSessionInfo().TimeZone = time.UTC
+			proc.GetSessionInfo().LCTimeNames = "en_US"
+			compiler := NewMockCompilerContext(false, proc)
+			compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+				switch name {
+				case "div_precision_increment":
+					return tc.increment, nil
+				case "lc_time_names":
+					return "en_US", nil
+				case "explicit_defaults_for_timestamp":
+					return true, nil
+				}
+				return "", nil
+			}
+			sql := "create table t("
+			for i := 0; i < tc.columns; i++ {
+				if i > 0 {
+					sql += ","
+				}
+				sql += fmt.Sprintf("a%d varchar(200) default (%s)", i, expression)
+			}
+			stmt, err := mysql.ParseOne(t.Context(), sql+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false)
+			require.NoError(t, err)
+			def := built.GetDdl().GetCreateTable().GetTableDef()
+			before := proto.Clone(def)
+			for _, readingLocale := range []string{"en_US", "de_DE"} {
+				proc.GetSessionInfo().LCTimeNames = readingLocale
+				proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+					if name == "lc_time_names" {
+						return readingLocale, nil
+					}
+					return "", nil
+				})
+				for _, supplied := range []*planpb.TableDef{nil, def} {
+					capture, err := AnalyzeTableDumpBindings(compiler, def, supplied)
+					require.NoError(t, err)
+					require.True(t, capture)
+				}
+				require.Equal(t, readingLocale, proc.GetSessionInfo().LCTimeNames)
+			}
+			require.True(t, proto.Equal(before, def))
+			require.Same(t, time.UTC, proc.GetSessionInfo().TimeZone)
+			require.Equal(t, "de_DE", proc.GetSessionInfo().LCTimeNames)
+		})
+	}
+}
