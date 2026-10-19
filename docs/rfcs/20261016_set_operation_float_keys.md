@@ -1,10 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 12
+- Revision: 13
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
-- Revision 12 integration baseline: official main `f11dd8c5d700f215922835f314ea18d32471f482`
+- Revision 13 integration baseline: official main `f11dd8c5d700f215922835f314ea18d32471f482`
 - Revision 11 measurement baseline: official main `b111224b0c624773389b390cd3cf1223126b6ee2`
 - Design feedback: https://github.com/matrixorigin/matrixone/pull/30184#pullrequestreview-5541720784
 - Independently accepted revision: 11 at `e7dbe6a2cdd57d0c53221bafe35bae1c1f6b29e8`
@@ -46,12 +46,13 @@ implementation. The acceptance record below preserves their distinct scope and
 limitations. This documentation update records those decisions without changing
 the accepted architecture or qualification protocol.
 
-Revision 12 integrates official parameterized subquery programs and ordinary
-analytic allocation/continuation owners. The bounded local fallback retains its
-accepted contract; queries combining that marker with dependent programs are
-rejected before compilation because those kernels do not bind its work lease or
-CN permit. Independent review records below apply to revision 11 at their stated
-commit; they are not an approval claim for this integration.
+Revision 12 integrated official parameterized subquery programs and ordinary
+analytic allocation/continuation owners. Its query-wide rejection of mixed
+scalar fallback and dependent programs caused the compatibility regression in
+review 5566330907. Revision 13 removes that rejection by binding dynamic native
+operators to the existing statement account and scalar-set lease, including
+nested invocations. Independent review records below apply to revision 11 at
+their stated commit; they are not an approval claim for this integration.
 
 ## Membership contract
 
@@ -822,7 +823,7 @@ pending state at measurement time; the immutable receipt is not rewritten to
 represent the subsequent review decisions.
 
 
-### Revision 12 dependent-program integration and refreshed qualification
+### Historical revision 12 dependent-program integration and qualification
 
 Official main `f11dd8c5d700f215922835f314ea18d32471f482` adds parameterized
 subquery programs at MORPC 119, ordinary analytic allocation and suspendable
@@ -843,7 +844,7 @@ The formerly unsupported missing-identity CTE UNION ALL now executes through the
 upstream dependent owner; its public regression asserts the result row 2.
 
 The refreshed [source-bound receipt](validation/20261019_scalar_set_capacity_rebase.json)
-records the final integrated source, Darwin/arm64 CPU, Go 1.27.1 and the repository
+records the revision-12 source, Darwin/arm64 CPU, Go 1.27.1 and the repository
 CGo wrapper. The public suite and benchmark passed in 22.050 s. All 21 profiles and
 135 samples execute the same separate first invocation, excluded warm-up and
 three measured rounds, with actual overlap for C2 profiles. Maximum first
@@ -864,6 +865,77 @@ closure was checked again after the protocol correction. Plan/pipeline protobuf
 regeneration matches the committed generated sources, including postprocessors.
 The independent acceptance/approval links below remain decisions on revision 11;
 this integration does not rewrite their reviewed revision.
+
+### Revision 13 mixed-program compatibility and ownership
+
+The public regression composes a finite scalar UNION with a separate two-level
+correlated scalar expression. For `t(id,d) = (1,1.25)`, both the single-arm
+control and UNION composition return `(1.25,2)`. Signed-zero members, repeated
+outer occurrences, nested fallback regions and prepared reexecution retain their
+existing results. The former mixed-query rejection is removed; the admission
+limits remain enforced.
+
+The statement allocation attempt remains the sole lifetime owner. Its
+`dependent.Operator` borrows the account and scalar-set lease and passes them
+to each fresh `Execution`. All dynamic native WINDOW and LEFT join factories
+retain their marker. Each marked LoopJoin binds that exact lease before Prepare
+and source demand; existing native allocation hooks receive the same account.
+Nested invocations and recursive generations share the current Execution;
+Reset creates fresh execution state and the next statement attempt obtains a
+fresh counter/permit only after the previous valid zero-live terminal proof.
+
+Pure marked predicates use native bounded condition windows. A marked join is
+always a LEFT LoopJoin, even when an equality predicate could select a hash
+join. An absent condition becomes explicit TRUE so candidate work cannot bypass
+admission. Dependent or guarded predicates use the existing pair continuation;
+one candidate is charged after cancellation checking and before its frame is
+created. Suspension and resumption retain that frame without another charge;
+consuming it and advancing charges the next candidate, including false matches.
+Streaming identity propagates `ExecYield` without marking EOF or advancing the
+counter, so demanded input can resume across multiple batches.
+
+Private kernel initialization owns rollback before publication. Binding or
+Prepare panics become invariant failures, and Reset, Free, account clearing and
+Release are independently protected so one cleanup panic cannot strand later
+owners. Damaged objects do not return to reuse pools. Sticky cleanup uncertainty
+reaches the dependent operator's account clearing and invalidates terminal
+proof, retaining the permit fail-closed. A fully drained initialization failure
+can release normally. Existing generation reservations continue to own dependent
+metadata; native payloads are not charged twice.
+
+The [revision-13 source-bound receipt](validation/20261019_scalar_set_capacity_mixed.json)
+records the unchanged 21 ordinary profiles and five mixed profiles: baseline,
+C2 overlap, 16,384 streamed outer rows, exact 16,777,216 candidate pairs, and
+20833 over-limit termination. All 26 profiles and 165 public samples passed the
+separate first-invocation, excluded warm-up and three measured rounds protocol.
+On Darwin/arm64 CPU with Go 1.27.1 the combined public/benchmark package completed
+in 98.869 s. Maximum first completion was 3,632.785 ms; maximum measured completion
+was 3,613.832 ms, within the existing 10 s/5 s acceptance budgets. Maximum
+participating account peak was 63,507,040 bytes; process-lifetime RSS high-water
+was 584,351,744 bytes. Every internal account summary has valid generations and
+zero live terminal bytes. These are local qualification measurements; they do
+not assert universal latency, arbitrary upstream allocation or process-RSS bounds.
+
+Mixed forced-spill correctness is proved by the actual dynamic lifecycle test:
+both intended AGGs have positive native spill-row and reload-record counters
+before retirement, results survive reload, files/disk/FD reservations drain,
+and the account and permit are reusable across prepared attempts. An initial
+capacity experiment failed a new EXPLAIN annotation oracle because dynamic
+native statistics are not exported by the upstream dependent scope traversal;
+native diagnostics confirmed actual spill/reload. That failed experiment is not
+a passing qualification receipt. Mixed forced-spill latency and bytes remain
+unqualified; all existing ordinary forced-spill capacity oracles are retained.
+No production analyzer instrumentation is introduced by this compatibility fix.
+
+Owning dependent/Window/LoopJoin/compile package suites pass, as do focused
+continuation charge, initialization/cleanup panic, nested sticky-error and
+mixed forced-spill tests. Final vet and incremental lint pass for the five
+changed packages. Full dependent, Window, LoopJoin, compile and colexec package suites also pass
+under `-race`. Delivery review is recorded with the final evidence.
+The receipt binds 86 source/build/test inputs and the exact source patch against
+`ca6cbe14a44935f6e0b7e854803e5e157bc93a9a`. Historical revision-11/12 receipts retain
+their source provenance and approval scope; revision 13 awaits independent
+acceptance.
 
 ## Alternatives
 
@@ -939,13 +1011,14 @@ capability to latest + 1 and updates sender/receiver/Prepare/persistence gates,
 this document and immediate-predecessor rollback tests together. Other open PRs
 using the same candidate do not reserve it.
 
-Dependent-only queries retain their independently released protocol 119. A query
-with both `Query.correlation` and any scalar-set marker is unsupported: the
-dependent entry point would reconstruct marked WINDOW/join operators outside
-the fallback admission and placement owner. Compilation rejects the combination
-before source work. Ordinary depth-one scalar-set queries and independent
-dependent queries retain their existing paths; distributed or mixed-owner
-scalar fallback is not qualified by this RFC.
+Dependent-only queries retain their independently released protocol 119.
+Mixed dependent/scalar-set queries require the set-key floor 120 as well as
+coordinator-local DOP 1 placement. The final scope graph, including detached
+producer scopes, is validated before any execution. The statement attempt
+acquires one scalar-set CN permit and one bounded participating account; all
+main and nested dependent regions borrow them. No dynamic invocation acquires a
+second permit, resets the shared candidate counter, or raises the memory limit.
+Distributed scalar fallback remains outside the qualified scope.
 
 ## Evidence and acceptance record
 

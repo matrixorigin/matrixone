@@ -305,13 +305,15 @@ func (n *nodeTemplate) compileExpressions(ctx context.Context, roots []*plan.Exp
 }
 
 type Execution struct {
-	mainStep     int
-	affectedRows uint64
-	template     *Template
-	proc         *process.Process
-	allocation   *vector.AllocationAccountSelection
-	main         *region
-	account      *mpool.AllocationAccount
+	mainStep       int
+	affectedRows   uint64
+	template       *Template
+	proc           *process.Process
+	allocation     *vector.AllocationAccountSelection
+	main           *region
+	account        *mpool.AllocationAccount
+	scalarSetLease *process.ScalarSetExecutionLease
+	cleanupErr     error
 }
 
 // CountFoundRowsAt designates the main statement's pagination before the
@@ -381,13 +383,17 @@ func (e *Execution) Next(ctx context.Context) (*batch.Batch, error) {
 func (e *Execution) Close() error { return e.close(nil) }
 
 func (e *Execution) close(cause error) error {
-	if e == nil || e.main == nil {
+	if e == nil {
 		return nil
 	}
-	err := e.main.close(cause)
-	e.main = nil
-	e.proc.CloseDependentProcess()
-	return err
+	if e.main != nil {
+		// Closing a frame can retire nested regions and record sticky cleanup
+		// failures even when the frame's Close API cannot return those errors.
+		_ = e.main.close(cause)
+		e.main = nil
+		e.proc.CloseDependentProcess()
+	}
+	return e.cleanupErr
 }
 
 func (e *Execution) Open(parent *process.Process, call *plan.DependentExpr, slots, lhs []*vector.Vector) (colexec.DependentInvocation, error) {
@@ -600,6 +606,9 @@ func (r *region) close(cause error) error {
 	r.cursors = nil
 	r.budget.ReleaseAllocationCapacity(r.charged)
 	r.charged = 0
+	if r.execution != nil {
+		r.execution.cleanupErr = joinCloseError(r.execution.cleanupErr, err)
+	}
 	return err
 }
 

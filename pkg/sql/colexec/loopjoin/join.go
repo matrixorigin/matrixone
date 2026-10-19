@@ -58,7 +58,7 @@ func (loopJoin *LoopJoin) OpType() vm.OpType {
 
 func (loopJoin *LoopJoin) Prepare(proc *process.Process) error {
 	var err error
-	if loopJoin.ScalarSetReaggregation && (loopJoin.ScalarSetLease == nil || loopJoin.NonEqCond == nil) {
+	if loopJoin.ScalarSetReaggregation && (loopJoin.ScalarSetLease == nil || (loopJoin.NonEqCond == nil && loopJoin.PairCondition == nil)) {
 		return mpool.ErrAllocationAccountInvariant
 	}
 	if loopJoin.allocationAccount == nil {

@@ -122,20 +122,45 @@ func TestSetOperationSignedZero(t *testing.T) {
 			require.Equal(t, []string{"4:1:1:1"}, readWindowNullRows(t, rows))
 		})
 		t.Run("correlated-union", func(t *testing.T) {
-			t.Run("dependent-program-boundary", func(t *testing.T) {
+			t.Run("dependent-program-composition", func(t *testing.T) {
 				deep := "(select (select i.id+o.id from zeros i where i.id=1) from zeros j where j.id=1)"
-				// The new dependent route remains executable on its own.
+				// Separate and combined occurrences have the same SQL semantics.
 				var value int
 				require.NoError(t, conn.QueryRowContext(ctx, "select "+deep+" from zeros o where o.id=1").Scan(&value))
 				require.Equal(t, 2, value)
-				// A separate scalar-set occurrence must not lose its admission
-				// marker when the query also selects that execution route.
 				scalar := "(select i.d from zeros i where i.id<=o.id union select i.d from zeros i where i.id<=o.id)"
 				var member string
 				require.NoError(t, conn.QueryRowContext(ctx, "select cast("+scalar+" as varchar) from zeros o where o.id=1").Scan(&member))
 				require.Equal(t, "-0", member)
-				err := conn.QueryRowContext(ctx, "select cast("+scalar+" as varchar),"+deep+" from zeros o where o.id=1").Scan(&member, &value)
-				require.ErrorContains(t, err, "bounded scalar set reaggregation cannot execute inside dependent programs")
+				require.NoError(t, conn.QueryRowContext(ctx, "select cast("+scalar+" as varchar),"+deep+" from zeros o where o.id=1").Scan(&member, &value))
+				require.Equal(t, "-0", member)
+				require.Equal(t, 2, value)
+				_, err := conn.ExecContext(ctx, "create table mixed_finite(id int,d double)")
+				require.NoError(t, err)
+				_, err = conn.ExecContext(ctx, "insert into mixed_finite values(1,1.25)")
+				require.NoError(t, err)
+				// Exact public regression: the finite UNION and the single-arm
+				// control remain composable with an independent dependent program.
+				for _, arms := range []string{"select i.d from mixed_finite i where i.id<=o.id", "select i.d from mixed_finite i where i.id<=o.id union select i.d from mixed_finite i where i.id<=o.id"} {
+					q := "select cast((" + arms + ") as varchar),(select (select i.id+o.id from mixed_finite i where i.id=1) from mixed_finite j where j.id=1) from mixed_finite o where o.id=1"
+					require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&member, &value))
+					require.Equal(t, "1.25", member)
+					require.Equal(t, 2, value)
+				}
+				// Repeated outer values keep distinct identities across the native
+				// streaming window and repeated prepared executions.
+				q := "select cast(" + scalar + " as varchar)," + deep + " from (select 1 id union all select 1) o"
+				stmt, err := conn.PrepareContext(ctx, q)
+				require.NoError(t, err)
+				defer stmt.Close()
+				for range 2 {
+					rows, err := stmt.QueryContext(ctx)
+					require.NoError(t, err)
+					require.Equal(t, []string{"-0:2", "-0:2"}, readWindowNullRows(t, rows))
+				}
+				q = "select (select cast((select i.d from mixed_finite i where i.id<=m.id union select i.d from mixed_finite i where i.id<=m.id) as varchar) from (select o.id id) m) from mixed_finite o"
+				require.NoError(t, conn.QueryRowContext(ctx, q).Scan(&member))
+				require.Equal(t, "1.25", member, "fallback inside a nested dependent region")
 			})
 			for _, q := range []string{
 				"create table ci_inner(oref int,grp int,ie int)",

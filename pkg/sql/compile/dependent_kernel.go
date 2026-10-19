@@ -16,6 +16,7 @@ package compile
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -413,6 +414,7 @@ func (c *Compile) compileDependentKernel(node *plan.Node, children []*plan.Node)
 		factory = func(proc *process.Process, ports []*dependent.DemandInput) (vm.Operator, error) {
 			op := window.NewArgument()
 			op.Aggs, op.WinSpecList, op.SpillThreshold = aggs, specs, n.SpillMem
+			op.ScalarSetReaggregation = n.ScalarSetReaggregation
 			op.SetAnalyzeControl(int(n.NodeId), false)
 			op.AppendChild(ports[0])
 			ports[0].SetIdx(int(n.NodeId))
@@ -431,6 +433,9 @@ func (c *Compile) compileDependentJoin(n *plan.Node, children []*plan.Node) (dep
 	if len(children) != 2 {
 		return nil, moerr.NewInternalErrorNoCtx("dependent join arity")
 	}
+	if n.ScalarSetReaggregation && n.JoinType != plan.Node_LEFT {
+		return nil, mpool.ErrAllocationAccountInvariant
+	}
 	if n.JoinType == plan.Node_DEDUP || n.JoinType == plan.Node_ASOF || n.JoinType == plan.Node_ASOF_LEFT {
 		return c.compileDependentHashJoin(n, children)
 	}
@@ -448,7 +453,7 @@ func (c *Compile) compileDependentJoin(n *plan.Node, children []*plan.Node) (dep
 		needsPairEvaluation = needsPairEvaluation ||
 			plan2.ContainsGuardedJoinDiagnosticWithProof(c.proc, expr, c.preparedJoinDiagnosticFree)
 	}
-	if !needsPairEvaluation {
+	if !needsPairEvaluation && !n.ScalarSetReaggregation {
 		if n.JoinType == plan.Node_MARK {
 			if canUseHashMarkJoinWithInputs(n, children[0], children[1]) {
 				return c.compileDependentHashJoin(n, children)
@@ -458,9 +463,15 @@ func (c *Compile) compileDependentJoin(n *plan.Node, children []*plan.Node) (dep
 		}
 	}
 	cond := colexec.RewriteFilterExprList(n.OnList)
+	// Pure predicates keep the native bounded condition windows. Only predicates
+	// requiring continuation demand need a frame per candidate pair.
+	nativeCondition := n.ScalarSetReaggregation && !needsPairEvaluation
+	if nativeCondition && cond == nil {
+		cond = plan2.MakePlan2BoolConstExprWithType(true)
+	}
 	var program *colexec.DependentExpressionProgram
 	var err error
-	if cond != nil {
+	if cond != nil && !nativeCondition {
 		program, err = colexec.CompileDependentExpressions(c.proc.Ctx, []*plan.Expr{cond})
 		if err != nil {
 			return nil, err
@@ -487,6 +498,10 @@ func (c *Compile) compileDependentJoin(n *plan.Node, children []*plan.Node) (dep
 	return func(proc *process.Process, ports []*dependent.DemandInput) (vm.Operator, error) {
 		join := loopjoin.NewArgument()
 		join.JoinType = n.JoinType
+		join.ScalarSetReaggregation = n.ScalarSetReaggregation
+		if nativeCondition {
+			join.NonEqCond = cond
+		}
 		join.LeftTypes, join.RightTypes, join.ResultCols = inputTypes[0], inputTypes[1], cols
 		join.JoinMapTag = n.NodeId + 1
 		build := hashbuild.NewArgument()
