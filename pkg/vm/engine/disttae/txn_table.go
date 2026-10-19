@@ -1972,6 +1972,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	var err error
 	var checkCstr []byte
 	oldTableName := tbl.tableName
+	oldCreateSQL := tbl.createSql
 	olddefs := tbl.defs
 	oldPart := tbl.partitioned
 	oldPartInfo := tbl.partition
@@ -2000,6 +2001,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.constraint = oldConstraint
 			case api.AlterKind_RenameTable:
 				tbl.tableName = oldTableName
+				tbl.createSql = oldCreateSQL
+				tbl.extraInfo.Checks = oldChecks
 			case api.AlterKind_ReplaceDef:
 				tbl.extraInfo.DefaultCharset = oldDefaultCharset
 				tbl.extraInfo.CollationVersion = oldCollationVersion
@@ -2038,7 +2041,33 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			}
 			appendDef = append(appendDef, c)
 		case api.AlterKind_RenameTable:
-			tbl.tableName = req.GetRenameTable().NewName
+			rename := req.GetRenameTable()
+			structuredChecks := false
+			for _, check := range tbl.extraInfo.Checks {
+				structuredChecks = structuredChecks || check != nil
+			}
+			if !structuredChecks && (tbl.relKind == "" || tbl.relKind == catalog.SystemOrdinaryRel) {
+				createSQL, err := plan2.RenameLegacyCheckConstraintNames(ctx, tbl.createSql, rename.OldName, rename.NewName)
+				if err != nil {
+					return err
+				}
+				if createSQL != tbl.createSql {
+					tbl.createSql = createSQL
+					// createWithID consumes properties, while GetTableDef reads
+					// createSql. Publish the same fallback identity through both.
+					appendDef = append(appendDef, &engine.PropertiesDef{Properties: []engine.Property{{
+						Key: catalog.SystemRelAttr_CreateSQL, Value: createSQL,
+					}}})
+				}
+			}
+			tbl.tableName = rename.NewName
+			// Generated CHECK names (<table>_chk_<n>) follow the table they were
+			// generated for. Without this the renamed table keeps owning the old
+			// table's generated names, and recreating a table under the old name
+			// trips ER_CHECK_CONSTRAINT_DUP_NAME (3822).
+			tbl.extraInfo.Checks = plan2.RenameGeneratedCheckConstraintNames(
+				tbl.extraInfo.Checks, rename.OldName, rename.NewName,
+			)
 		case api.AlterKind_ReplaceDef:
 			hasReplaceDef = true
 			replaceDefReq = req

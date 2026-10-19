@@ -932,6 +932,7 @@ type BindContext struct {
 	// expressions immediately after function binding, before a bind-time fold
 	// can erase the function from the persisted plan.
 	persistedExpressionProtocolRequirement *int64
+	ctasExecutionProtocolRequirement       *int64
 	// expandedSelectLists records the expanded output for each SELECT clause
 	// participating in a view definition, including UNION branches.
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
