@@ -1485,7 +1485,7 @@ alter table foreign01 change col2 col2New varchar(100);
 alter table foreign02 change col2 col2new double after col3;
 insert into foreign01 values(3,'bcguwgheinwqneku678',2,2);
 insert into foreign02 values(6,6,6);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 delete from foreign01 where col2New = 'sfhuwe';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from foreign02 where col2New = 2;

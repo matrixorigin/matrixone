@@ -6082,13 +6082,26 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	selectLockMode := lockpb.LockMode_Exclusive
+	selectLockNoWait := false
+	selectLockSkipLocked := false
 	if effectiveSelectLockInfo != nil {
 		switch effectiveSelectLockInfo.LockType {
 		case tree.SelectLockForUpdate:
 			builder.isForUpdate = true
+		case tree.SelectLockForUpdateNoWait:
+			builder.isForUpdate = true
+			selectLockNoWait = true
 		case tree.SelectLockForShare:
 			builder.isForUpdate = true
 			selectLockMode = lockpb.LockMode_Shared
+		case tree.SelectLockForShareNoWait:
+			builder.isForUpdate = true
+			selectLockMode = lockpb.LockMode_Shared
+			selectLockNoWait = true
+		case tree.SelectLockForShareSkipLocked:
+			builder.isForUpdate = true
+			selectLockMode = lockpb.LockMode_Shared
+			selectLockSkipLocked = true
 		}
 	}
 
@@ -6251,6 +6264,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			astTimeWindow,
 			helpFunc,
 			selectLockMode,
+			selectLockNoWait,
+			selectLockSkipLocked,
 			isRoot,
 		); err != nil {
 			return
@@ -8883,6 +8898,8 @@ func (builder *QueryBuilder) bindSelectClause(
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
 	selectLockMode lockpb.LockMode,
+	selectLockNoWait bool,
+	selectLockSkipLocked bool,
 	isRoot bool,
 ) (
 	nodeID int32,
@@ -8972,6 +8989,8 @@ func (builder *QueryBuilder) bindSelectClause(
 		lockTargets := builder.collectLockTargets(nodeID, ctx)
 		for _, target := range lockTargets {
 			target.Mode = selectLockMode
+			target.NoWait = selectLockNoWait
+			target.SkipLocked = selectLockSkipLocked
 		}
 		if len(lockTargets) > 0 {
 			lockNode = &Node{
@@ -9221,7 +9240,7 @@ func (builder *QueryBuilder) bindGroupBy(
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
 ) (boundTimeWindowGroupBy *plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewParseErrorf(builder.GetContext(), "not support group by in recursive cte: '%v'", tree.String(clause, dialect.MYSQL))
 		return
 	}
@@ -9319,7 +9338,7 @@ func (builder *QueryBuilder) bindHaving(
 	clause *tree.Where,
 	havingBinder *HavingBinder,
 ) (boundHavingList []*plan.Expr, err error) {
-	if ctx.bindingRecurStmt() {
+	if ctx.bindingRecurQueryBlock() {
 		err = moerr.NewParseErrorf(builder.GetContext(), "not support having in recursive cte: '%v'", tree.String(clause, dialect.MYSQL))
 		return
 	}
@@ -12270,6 +12289,8 @@ func (builder *QueryBuilder) bindView(
 		return 0, nil
 	}
 	viewCtx := NewBindContext(builder, nil)
+	// Preserve execution admission while keeping view name resolution isolated.
+	viewCtx.ctasExecutionProtocolRequirement = ctx.ctasExecutionProtocolRequirement
 	viewCtx.cteDatabase = schema
 	// View expansion has its own name-resolution scope, but it must retain the
 	// outer query's row-rewrite policy so base-table access rules still apply
@@ -12295,7 +12316,7 @@ func (builder *QueryBuilder) bindView(
 		}
 	}
 
-	viewData.Stmt, err = builder.historicalViewColumnsSQL(schema, table, viewData.Stmt, snapshot)
+	viewData.Stmt, err = builder.metadataViewColumnsSQL(schema, table, viewData.Stmt, snapshot)
 	if err != nil {
 		return 0, err
 	}
@@ -12474,6 +12495,10 @@ func (builder *QueryBuilder) bindView(
 	if isSubscriptionStatistics {
 		rewriteSubscriptionStatisticsOutput(builder, nodeID, viewCtx, metadataSubscription.Meta.SubName)
 	}
+	nodeID, err = builder.appendDecimalDivViewBoundary(nodeID, viewCtx)
+	if err != nil {
+		return
+	}
 	viewCtx.markViewCTASDefaultBoundary()
 	if len(viewStmt.ColNames) > 0 {
 		if len(viewStmt.ColNames) != len(viewCtx.headings) {
@@ -12503,6 +12528,49 @@ func (builder *QueryBuilder) bindView(
 	ctx.recordViews([]string{viewDependencyKey})
 	ctx.recordViews(viewCtx.views)
 	return
+}
+
+// appendDecimalDivViewBoundary materializes the completed view's narrow DIV
+// schema without changing the 64-bit arithmetic inside its query body. Derived
+// tables and CTEs remain transparent and do not apply this conversion.
+func (builder *QueryBuilder) appendDecimalDivViewBoundary(nodeID int32, ctx *BindContext) (int32, error) {
+	visibleProjects := min(len(ctx.headings), len(ctx.projects), len(ctx.results))
+	provenance := ctx.outputColumnProvenanceForBoundary()
+	var projects []*plan.Expr
+	for i := 0; i < visibleProjects; i++ {
+		target := decimalDivSchemaType(ctx.results[i].Typ, provenance[i])
+		if target.Id == ctx.results[i].Typ.Id {
+			continue
+		}
+		if projects == nil {
+			// Retain hidden output slots (for example, ORDER BY expressions),
+			// and reference the child's tag before publishing a new projection.
+			projects = make([]*plan.Expr, len(ctx.results))
+			for j, result := range ctx.results {
+				projects[j] = GetColExpr(result.Typ, ctx.rootTag(), int32(j))
+			}
+		}
+		var err error
+		projects[i], err = appendCastBeforeExpr(builder.GetContext(), projects[i], target)
+		if err != nil {
+			return 0, err
+		}
+	}
+	if projects == nil {
+		return nodeID, nil
+	}
+	for i := 0; i < visibleProjects; i++ {
+		ctx.setOutputColumnProvenance(int32(i), provenance[i])
+	}
+	ctx.projectTag = builder.genNewBindTag()
+	ctx.resultTag = 0
+	ctx.projects, ctx.results = projects, projects
+	return builder.appendNode(&plan.Node{
+		NodeType:    plan.Node_PROJECT,
+		ProjectList: projects,
+		Children:    []int32{nodeID},
+		BindingTags: []int32{ctx.projectTag},
+	}, ctx), nil
 }
 
 // appendMySQLSpecialTypeBoundary restores transparent ENUM/SET outputs only

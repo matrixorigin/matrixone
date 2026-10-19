@@ -137,3 +137,30 @@ func TestIgnoredLinesClosesPrescanReaders(t *testing.T) {
 		})
 	}
 }
+
+func TestIgnoredLinesJSONLineWhitespace(t *testing.T) {
+	for _, tc := range []struct {
+		name, data, format string
+		ignore             uint64
+		offset             int64
+	}{
+		{"JSONLINE LF", "\n \n{\"a\":2}\n{\"a\":3}\n", tree.JSONLINE, 1, 11},
+		{"JSONLINE CRLF", "\r\n \r\n[2]\r\n[3]", tree.JSONLINE, 1, 10},
+		{"JSONLINE empty EOF", " \n\u00a0", tree.JSONLINE, 1, 4},
+		{"JSONLINE ignore beyond EOF", " \n[2]", tree.JSONLINE, 2, 5},
+		{"CSV whitespace is a record", "\n \nx\n", tree.CSV, 1, 3},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newPrescanTrackingFS(t, tc.data)
+			param := &tree.ExternParam{ExParamConst: tree.ExParamConst{Filepath: "etl:/prescan.csv", Format: tc.format, ScanType: tree.INFILE, Tail: &tree.TailParameter{IgnoredLines: tc.ignore}}, ExParam: tree.ExParam{FileService: fs}}
+			compCtx, _, _ := newLoadGlobTestCtx(t)
+			offset, err := IgnoredLines(param, compCtx)
+			require.NoError(t, err)
+			require.Equal(t, tc.offset, offset)
+			require.Zero(t, param.Tail.IgnoredLines)
+			require.Nil(t, param.Ctx)
+			require.Len(t, fs.readers, 1)
+			require.Equal(t, 1, fs.readers[0].closes)
+		})
+	}
+}
