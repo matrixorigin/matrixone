@@ -798,7 +798,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		for _, col := range dmlCtx.tableDefs[i].Cols {
 			// Generated consumers must reference the normalized NEW producer,
 			// not copy its expression and evaluate side effects a second time.
-			if !sequentialAssignments && col.GeneratedCol != nil {
+			if col.GeneratedCol != nil {
 				needsAutomaticConsumer = true
 			}
 			_, assigned := newColName2Idx[alias+"."+col.Name]

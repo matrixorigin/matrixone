@@ -1798,9 +1798,8 @@ func (builder *QueryBuilder) mysqlSpecialRowPreservingInput(nodeID int32, visiti
 		return false
 	}
 	node := builder.qry.Nodes[nodeID]
-	if node.Limit != nil || node.Offset != nil {
-		return false
-	}
+	// Selection and ordering retain each surviving row's storage identity.
+	// Carry hidden values through this same subtree; never move its selection.
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN, plan.Node_EXTERNAL_SCAN, plan.Node_VALUE_SCAN:
 		return true

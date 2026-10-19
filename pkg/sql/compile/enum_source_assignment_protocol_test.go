@@ -26,6 +26,8 @@ import (
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/v2"
@@ -239,4 +241,34 @@ func TestEnumSourceAssignmentComposesWithVectorStream(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion123, required)
 	require.Equal(t, client.calls, client.releases)
+}
+
+func TestEnumSourceAssignmentCTASAdmission(t *testing.T) {
+	for _, prefix := range []string{"create table", "create temporary table"} {
+		t.Run(prefix, func(t *testing.T) {
+			c, _ := expressionProtocolTestCompile(t)
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+			ctx := plan2.NewMockCompilerContext(false, c.proc)
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, prefix+" db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			p, err := plan2.BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			wire, err := p.Marshal()
+			require.NoError(t, err)
+			decoded := &planpb.Plan{}
+			require.NoError(t, decoded.Unmarshal(wire))
+			require.Nil(t, decoded.GetDdl().Query)
+			require.Equal(t, defines.MORPCVersion123, decoded.GetDdl().GetCreateTable().CtasExecutionProtocolVersion)
+			require.NoError(t, validateTemporalResultProtocol(c.proc, decoded))
+			c.pn = decoded
+			for _, version := range []any{int64(122), nil, "123"} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+				require.ErrorContains(t, c.Compile(t.Context(), decoded, nil), "protocol version 123")
+				_, err = c.Run(0)
+				require.ErrorContains(t, err, "protocol version 123")
+			}
+		})
+	}
 }

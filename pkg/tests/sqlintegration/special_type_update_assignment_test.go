@@ -69,9 +69,13 @@ func TestSpecialTypeUpdateAssignments(t *testing.T) {
 				require.True(t, untouched)
 			})
 		}
-		for _, tc := range []struct{ name, definition, source, want string }{
-			{"derived-enum-zero", "enum('','red')", "'invalid'", "0"},
-			{"derived-set-empty-member", "set('','a')", "1", "1"},
+		for _, tc := range []struct{ name, definition, source, want, boundary string }{
+			{"derived-enum-zero", "enum('','red')", "'invalid'", "0", ""},
+			{"derived-set-empty-member", "set('','a')", "1", "1", ""},
+			{"derived-enum-zero-limit", "enum('','red')", "'invalid'", "0", " limit 1"},
+			{"derived-enum-zero-order-limit", "enum('','red')", "'invalid'", "0", " order by id limit 1"},
+			{"derived-enum-zero-offset", "enum('','red')", "'invalid'", "0", " order by id limit 1 offset 1"},
+			{"derived-set-empty-limit", "set('','a')", "1", "1", " limit 1"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec(t, "drop table if exists dst")
@@ -80,8 +84,13 @@ func TestSpecialTypeUpdateAssignments(t *testing.T) {
 				exec(t, "create table src(id int primary key,v "+tc.definition+")")
 				exec(t, "insert into dst values(1,NULL)")
 				exec(t, "insert ignore into src values(1,"+tc.source+")")
-				exec(t, "update dst d join (select id,v from src) incoming on d.id=incoming.id set d.v=incoming.v")
+				if tc.boundary == " order by id limit 1 offset 1" {
+					exec(t, "insert into src values(0,NULL)")
+				}
 				var got string
+				require.NoError(t, conn.QueryRowContext(ctx, "select cast(cast(v as unsigned) as char) from (select v from src"+tc.boundary+") x").Scan(&got))
+				require.Equal(t, tc.want, got)
+				exec(t, "update dst d join (select id,v from src"+tc.boundary+") incoming on d.id=incoming.id set d.v=incoming.v")
 				require.NoError(t, conn.QueryRowContext(ctx, "select cast(cast(v as unsigned) as char) from dst").Scan(&got))
 				require.Equal(t, tc.want, got)
 			})
@@ -165,16 +174,67 @@ func TestSpecialTypeUpdateAssignments(t *testing.T) {
 			// Different SET definitions convert through labels; the empty display maps to bitmap 0.
 			require.Equal(t, "1:4:2,2:0:0,3:NULL:NULL", got)
 		})
-		t.Run("generated-new-evaluated-once", func(t *testing.T) {
+		for _, sequential := range []bool{false, true} {
+			t.Run(fmt.Sprintf("generated-new-evaluated-once/sequential=%v", sequential), func(t *testing.T) {
+				exec(t, "drop table if exists dst")
+				exec(t, "drop sequence if exists special_update_seq")
+				exec(t, "create sequence special_update_seq start with 1")
+				exec(t, "create table dst(id int primary key,v enum('red','blue'),note int default 0,g int generated always as (cast(v as unsigned)) stored)")
+				exec(t, "insert into dst(id,v) values(1,'red')")
+				prefix := ""
+				if sequential {
+					prefix = "note=note+1,"
+				}
+				exec(t, "update dst set "+prefix+"v=if(nextval('special_update_seq')=1,'red','blue') where id=1")
+				var got string
+				require.NoError(t, conn.QueryRowContext(ctx, "select concat(v,':',g,':',currval('special_update_seq')) from dst").Scan(&got))
+				require.Equal(t, "red:1:1", got)
+			})
+
+		}
+
+		t.Run("limited-copy-retains-selected-storage", func(t *testing.T) {
 			exec(t, "drop table if exists dst")
-			exec(t, "create sequence special_update_seq start with 1")
-			exec(t, "create table dst(id int primary key,v enum('red','blue'),g int generated always as (cast(v as unsigned)) stored)")
-			exec(t, "insert into dst(id,v) values(1,'red')")
-			exec(t, "update dst set v=if(nextval('special_update_seq')=1,'red','blue') where id=1")
+			exec(t, "drop table if exists src")
+			exec(t, "create table src(id int primary key,v enum('','red'))")
+			exec(t, "create table dst(id int primary key,v enum('','red'))")
+			exec(t, "insert into src values(1,''),(3,'red'),(4,NULL)")
+			exec(t, "insert ignore into src values(2,'invalid')")
+			exec(t, "insert into dst values(1,'red'),(2,'red'),(3,''),(4,'red')")
 			var got string
-			require.NoError(t, conn.QueryRowContext(ctx, "select concat(v,':',g,':',currval('special_update_seq')) from dst").Scan(&got))
-			require.Equal(t, "red:1:1", got)
+			check := func(want string) {
+				require.NoError(t, conn.QueryRowContext(ctx, "select group_concat(concat(id,':',coalesce(cast(cast(v as unsigned) as char),'NULL')) order by id) from dst").Scan(&got))
+				require.Equal(t, want, got)
+			}
+			exec(t, "update dst d join (select id,v from src order by id limit 0) s on d.id=s.id set d.v=s.v")
+			check("1:2,2:2,3:1,4:2")
+			exec(t, "update dst d join (select id,v from src order by id limit 2 offset 1) s on d.id=s.id set d.v=s.v")
+			check("1:2,2:0,3:2,4:2")
+			exec(t, "update dst d join (select id,v from src order by id limit 4) s on d.id=s.id set d.v=s.v")
+			check("1:1,2:0,3:2,4:NULL")
 		})
+		for _, tc := range []struct{ name, definition, assignment, want string }{
+			{"earlier-enum", "enum('red','blue')", "v=if(nextval('other_update_seq')=1,'red','blue'),note=note+1", "1:1:1"},
+			{"numeric", "int", "note=note+1,v=nextval('other_update_seq')", "1:1:1"},
+		} {
+			t.Run("generated-sequential-"+tc.name, func(t *testing.T) {
+				exec(t, "drop table if exists dst")
+				exec(t, "drop sequence if exists other_update_seq")
+				exec(t, "create sequence other_update_seq start with 1")
+				exec(t, "create table dst(id int primary key,v "+tc.definition+",note int,g int generated always as(cast(v as unsigned)) stored,index idx_g(g))")
+				exec(t, "insert into dst(id,v,note) values(1,1,0)")
+				exec(t, "update dst set "+tc.assignment+" where id=1")
+				var got string
+				require.NoError(t, conn.QueryRowContext(ctx, "select concat(cast(v as unsigned),':',g,':',currval('other_update_seq')) from dst force index(idx_g) where g=1").Scan(&got))
+				require.Equal(t, tc.want, got)
+				exec(t, "update dst set note=note+1,v=NULL where id=1")
+				var nulls bool
+				require.NoError(t, conn.QueryRowContext(ctx, "select v is null and g is null from dst").Scan(&nulls))
+				require.True(t, nulls)
+				require.NoError(t, conn.QueryRowContext(ctx, "select cast(currval('other_update_seq') as char)").Scan(&got))
+				require.Equal(t, "1", got)
+			})
+		}
 		t.Run("typed-enum-expression-evaluated-once", func(t *testing.T) {
 			exec(t, "create sequence typed_update_seq start with 1")
 			var got int64

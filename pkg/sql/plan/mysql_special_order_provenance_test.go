@@ -56,15 +56,34 @@ func TestTransparentMySQLSpecialValueProof(t *testing.T) {
 	require.Len(t, b.setBitmapByDisplayNode, 2)
 	require.Len(t, b.qry.Nodes[1].ProjectList, 2)
 	require.Len(t, b.qry.Nodes[2].ProjectList, 2)
-	for name, block := range map[string]func(*QueryBuilder){
-		"distinct owner": func(b *QueryBuilder) { b.ctxByNode[1].isDistinct = true },
-		"group owner":    func(b *QueryBuilder) { b.ctxByNode[1].groups = []*planpb.Expr{display} },
+	for name, selectRows := range map[string]func(*QueryBuilder){
 		"project limit":  func(b *QueryBuilder) { b.qry.Nodes[1].Limit = makePlan2Int64ConstExprWithType(2) },
 		"project offset": func(b *QueryBuilder) { b.qry.Nodes[1].Offset = makePlan2Int64ConstExprWithType(1) },
 		"sort limit below result projection": func(b *QueryBuilder) {
 			b.qry.Nodes = append(b.qry.Nodes, &planpb.Node{NodeType: planpb.Node_SORT, Children: []int32{1}, Limit: makePlan2Int64ConstExprWithType(2)})
 			b.qry.Nodes[2].Children = []int32{3}
 		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := newBuilder()
+			selectRows(b)
+			before := DeepCopyQuery(b.qry)
+			_, ok := b.materializeTransparentMySQLSpecialValue(expr)
+			require.True(t, ok)
+			_, ok = b.materializeTransparentMySQLSpecialValue(expr)
+			require.True(t, ok)
+			require.Len(t, b.setBitmapByDisplayNode, 2)
+			for i, node := range b.qry.Nodes {
+				require.Equal(t, before.Nodes[i].Limit, node.Limit)
+				require.Equal(t, before.Nodes[i].Offset, node.Offset)
+				require.Equal(t, before.Nodes[i].Children, node.Children)
+				require.Equal(t, before.Nodes[i].OrderBy, node.OrderBy)
+			}
+		})
+	}
+	for name, block := range map[string]func(*QueryBuilder){
+		"distinct owner": func(b *QueryBuilder) { b.ctxByNode[1].isDistinct = true },
+		"group owner":    func(b *QueryBuilder) { b.ctxByNode[1].groups = []*planpb.Expr{display} },
 		"distinct below result projection": func(b *QueryBuilder) {
 			b.qry.Nodes = append(b.qry.Nodes, &planpb.Node{NodeType: planpb.Node_DISTINCT, Children: []int32{1}})
 			b.qry.Nodes[2].Children = []int32{3}
@@ -336,6 +355,7 @@ func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
 	for _, sql := range []string{
 		"select id, s from (select id, s from set_empty_member_t) d order by s",
 		"with c as (select id, s from set_empty_member_t) select id, s from c order by s",
+		"select s from (select s from set_empty_member_t limit 2) d order by s",
 	} {
 		t.Run(sql, func(t *testing.T) {
 			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, sql)
@@ -347,7 +367,6 @@ func TestMySQLSpecialOrderProvenanceSetWithEmptyMember(t *testing.T) {
 	for _, sql := range []string{
 		"select s, count(*) from set_empty_member_t group by s order by s",
 		"select distinct s from set_empty_member_t order by s",
-		"select s from (select s from set_empty_member_t limit 2) d order by s",
 		"select s from (select distinct s from set_empty_member_t) d order by s",
 		"select s from (select s from set_empty_member_t group by s) d order by s",
 	} {
@@ -581,12 +600,10 @@ func TestStatisticalAggregateNumericDomains(t *testing.T) {
 					require.Equal(t, int32(types.T_float64), fn.Typ.Id)
 					require.Len(t, fn.GetF().Args, 1)
 					require.Equal(t, int32(tc.want), fn.GetF().Args[0].Typ.Id, tc.label)
+					require.Empty(t, fn.GetF().Args[0].Typ.Enumvalues)
 					if tc.label == "materialized enum" {
-						// The existing label-to-ordinal recovery retains the ENUM
-						// definition on its numeric expression.
-						require.NotNil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun))
-					} else {
-						require.Empty(t, fn.GetF().Args[0].Typ.Enumvalues)
+						require.Nil(t, findPlanFunctionExpr(p, moEnumCastValueToIndexFun),
+							"row selection retains numeric identity without label recovery")
 					}
 				})
 			}
@@ -652,7 +669,6 @@ func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
 		for _, source := range []string{
 			"select distinct s from set_empty_member_t",
 			"select distinct s from set_empty_member_t order by s",
-			"select s from set_empty_member_t order by id limit 2",
 			"select s from set_empty_member_t group by s order by s limit 2",
 		} {
 			t.Run(source, func(t *testing.T) {
@@ -669,11 +685,15 @@ func TestCanonicalSetCastThroughResultProjection(t *testing.T) {
 				}
 			})
 		}
-		p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select cast(s as "+target+") from (select s from set_empty_member_t) d")
-		require.NoError(t, err)
-		require.False(t, planHasVarcharToIntegerCast(p))
-		require.True(t, planHasPlainUint64ColRef(p), "transparent casts must carry raw numeric identity")
-		require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun))
+		for _, selection := range []string{"", " order by id limit 2", " order by id limit 1 offset 1"} {
+			p, err := runOneStmt(newMySQLSpecialOrderMock(t), t, "select cast(s as "+target+") from (select s from set_empty_member_t"+selection+") d")
+			require.NoError(t, err)
+			require.False(t, planHasVarcharToIntegerCast(p))
+			require.True(t, planHasExpr(p, func(expr *planpb.Expr) bool {
+				return expr.GetCol() != nil && expr.Typ.Id == int32(types.T_uint64)
+			}), "transparent casts must carry raw uint64 storage, never reparse VARCHAR")
+			require.Nil(t, findPlanFunctionExpr(p, moSetCastValueToIndexFun))
+		}
 	}
 }
 
