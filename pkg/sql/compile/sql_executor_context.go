@@ -708,13 +708,16 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 	//
 	// Replay may carry the original frontend context; other internal SQL can
 	// carry a partial session resolver on its process (e.g. ALTER TABLE).
-	// Prefer the former, then forward only explicit precision and DOP settings.
+	// Prefer the former, then forward explicit precision, DOP and FK-check settings.
+	// ALTER COPY population must inherit the outer statement's FK-check mode;
+	// defaulting it to nil silently re-enables checks during the internal INSERT.
 	if delegate := c.resolveDelegate(); delegate != nil {
 		return delegate.ResolveVariable(varName, isSystemVar, isGlobalVar)
 	}
 	if isSystemVar && !isGlobalVar && c.proc != nil &&
 		(strings.EqualFold(varName, "div_precision_increment") ||
-			strings.EqualFold(varName, "max_dop")) {
+			strings.EqualFold(varName, "max_dop") ||
+			strings.EqualFold(varName, "foreign_key_checks")) {
 		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
 			return resolve(varName, isSystemVar, isGlobalVar)
 		}

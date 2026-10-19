@@ -364,6 +364,10 @@ func inferViewColumns(
 				typ = sourceType
 			}
 		}
+		if idx < len(outputColumnProvenance) {
+			narrowed := decimalDivSchemaType(*typ, outputColumnProvenance[idx])
+			typ = &narrowed
+		}
 		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
 		if idx < len(outputColumnProvenance) {
 			provenance := outputColumnProvenance[idx]
@@ -1521,17 +1525,21 @@ func genAsSelectCols(
 	stmt *tree.Select,
 	isPrepareStmt bool,
 	explicitTargetColumns map[string]struct{},
-) ([]*ColDef, *Query, error) {
+) ([]*ColDef, *Query, int64, error) {
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
+	var executionProtocol int64
+	if !isPrepareStmt {
+		bindCtx.ctasExecutionProtocolRequirement = &executionProtocol
+	}
 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
 	}
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
 	for i := range outputColumnProvenance {
@@ -1542,10 +1550,10 @@ func genAsSelectCols(
 	// subqueries can synthesize NULLs even when their source columns are NOT NULL.
 	query, err := builder.createQuery()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
@@ -1559,6 +1567,7 @@ func genAsSelectCols(
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
+		typ = decimalDivSchemaType(typ, provenance)
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.
@@ -1582,7 +1591,7 @@ func genAsSelectCols(
 						defaultDef, err = buildCTASDefaultFromOrigin(
 							ctx, typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
-							return nil, nil, err
+							return nil, nil, 0, err
 						}
 					}
 				}
@@ -1595,7 +1604,7 @@ func genAsSelectCols(
 		if provenance.CTASDefaultPolicy == CTASDefaultUseTypeDefault {
 			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
@@ -1607,12 +1616,12 @@ func genAsSelectCols(
 		if inheritedAutoIncr && defaultDef.Expr == nil && defaultDef.OriginString == "" {
 			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
 		if err := validateIdentifier(ctx.GetContext(), bindCtx.headings[i]); err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		cols[i] = &plan.ColDef{
 			Name: normalizeCTASColumnName(
@@ -1629,9 +1638,18 @@ func genAsSelectCols(
 	if err := remapCTASSourceDefaultsToOutput(
 		ctx.GetContext(), cols, outputColumnProvenance, explicitTargetColumns,
 	); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	return cols, query, nil
+	if !isPrepareStmt && executionProtocol == 0 {
+		features, featureErr := plan.RequiredRemoteExpressionFeatures(query)
+		if featureErr != nil {
+			return nil, nil, 0, featureErr
+		}
+		if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
+			executionProtocol = defines.MORPCVersion122
+		}
+	}
+	return cols, query, executionProtocol, nil
 }
 
 // remapCTASSourceDefaultsToOutput converts inherited source-table column
@@ -2791,7 +2809,7 @@ func buildCreateTable(
 				explicitTargetColumns[strings.ToLower(colDef.Name.ColName())] = struct{}{}
 			}
 		}
-		if asSelectCols, asSelectQuery, err = genAsSelectCols(
+		if asSelectCols, asSelectQuery, createTable.CtasExecutionProtocolVersion, err = genAsSelectCols(
 			ctx, stmt.AsSource, isPrepareStmt, explicitTargetColumns,
 		); err != nil {
 			return nil, err
@@ -6941,8 +6959,12 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 						},
 					},
 				}
-				// for new fk in this alter table, the data in the table must
-				// be checked to confirm that it is compliant with foreign key constraints.
+				// Declarations with checks disabled install metadata without
+				// validating historical rows, just as COPY ALTER does.
+				fkChecksEnabled, err := IsForeignKeyChecksEnabled(ctx)
+				if err != nil {
+					return nil, err
+				}
 				if fkData.IsSelfRefer {
 					// fk self refer.
 					// check columns of fk self refer are valid
@@ -6950,17 +6972,19 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 					if err != nil {
 						return nil, err
 					}
-					sqls, err := genSqlsForCheckFKSelfRefer(
-						ctx.GetContext(),
-						databaseName,
-						finalTableName,
-						currentTableDef.Cols,
-						[]*plan.ForeignKeyDef{fkData.Def},
-					)
-					if err != nil {
-						return nil, err
+					if fkChecksEnabled {
+						sqls, err := genSqlsForCheckFKSelfRefer(
+							ctx.GetContext(),
+							databaseName,
+							finalTableName,
+							currentTableDef.Cols,
+							[]*plan.ForeignKeyDef{fkData.Def},
+						)
+						if err != nil {
+							return nil, err
+						}
+						detectSqls = append(detectSqls, sqls...)
 					}
-					detectSqls = append(detectSqls, sqls...)
 					if !slices.ContainsFunc(currentTableDef.RefChildTbls, func(tableID uint64) bool {
 						return tableID == 0 || tableID == currentTableDef.TblId
 					}) {
@@ -6995,18 +7019,20 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 							fkData.ParentTableName,
 						)
 					}
-					sql, err := genSqlForCheckFKConstraints(
-						ctx.GetContext(),
-						fkData.Def,
-						databaseName, finalTableName, tableDef.Cols,
-						fkData.ParentDbName,
-						fkData.ParentTableName,
-						parentTableDef.Cols,
-					)
-					if err != nil {
-						return nil, err
+					if fkChecksEnabled {
+						sql, err := genSqlForCheckFKConstraints(
+							ctx.GetContext(),
+							fkData.Def,
+							databaseName, finalTableName, tableDef.Cols,
+							fkData.ParentDbName,
+							fkData.ParentTableName,
+							parentTableDef.Cols,
+						)
+						if err != nil {
+							return nil, err
+						}
+						detectSqls = append(detectSqls, sql)
 					}
-					detectSqls = append(detectSqls, sql)
 				}
 				updateSqls = append(updateSqls, fkData.UpdateSql)
 			case *tree.UniqueIndex:
@@ -8896,4 +8922,32 @@ func findColInTableDefCaseInsensitive(cols []*plan.ColDef, name string) *plan.Co
 		}
 	}
 	return nil
+}
+
+// MySQL materializes integer function results as INT when their display length
+// is below nine. Keep this separate from DIV's 64-bit evaluation domain.
+func decimalDivSchemaType(typ plan.Type, provenance OutputColumnProvenance) plan.Type {
+	if provenance.DecimalDivDisplayLength == 0 {
+		return typ
+	}
+	switch types.T(typ.Id) {
+	case types.T_int64:
+		if provenance.DecimalDivDisplayLength < 9 {
+			typ.Id = int32(types.T_int32)
+			typ.Width = 32
+		} else {
+			typ.Width = 64
+		}
+	case types.T_uint64:
+		if provenance.DecimalDivDisplayLength < 9 {
+			typ.Id = int32(types.T_uint32)
+			typ.Width = 32
+		} else {
+			typ.Width = 64
+		}
+	default:
+		return typ
+	}
+	typ.Scale = -1
+	return typ
 }

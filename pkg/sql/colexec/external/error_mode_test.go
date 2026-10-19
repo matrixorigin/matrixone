@@ -228,12 +228,29 @@ func TestCSVWithoutErrorColumnsStillFails(t *testing.T) {
 // TestCSVErrorModeReportsRecordStartLine: a quoted field spanning lines makes
 // the record's line differ from the record's ordinal.
 func TestCSVErrorModeReportsRecordStartLine(t *testing.T) {
-	param, proc, bat := errorModeParam(t, tree.CSV, "", numTestCols)
-	require.NoError(t, readAllText(t, param, proc, bat, "1,\"al\npha\"\nnotanint,beta\n"))
-	require.Equal(t, 2, bat.RowCount())
-	require.Equal(t, int64(1), vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[colLine], 0))
-	require.Equal(t, int64(3), vector.GetFixedAtWithTypeCheck[int64](bat.Vecs[colLine], 1),
-		"the record after a 2-line record starts on line 3")
+	for _, tc := range []struct {
+		name       string
+		content    string
+		comment    string
+		startingBy string
+		lines      []int64
+	}{
+		{"multiline", "1,\"al\npha\"\nnotanint,beta\n", "", "", []int64{1, 3}},
+		{"comments", "#header\n1,\"al\npha\"\n#comment\nnotanint,beta\n", "#", "", []int64{2, 5}},
+		{"starting by", "junk1\njunk2\nxxx1,\"al\npha\"\njunk3\nxxxnotanint,beta", "", "xxx", []int64{3, 6}},
+		{"comments and starting by", "#header\njunk\nxxx1,\"al\npha\"\n#comment\nxxxnotanint,beta\n", "#", "xxx", []int64{3, 6}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			param, proc, bat := errorModeParam(t, tree.CSV, "", numTestCols)
+			param.Extern.Option = []string{"comment", tc.comment}
+			param.Extern.Tail.Lines = &tree.Lines{StartingBy: tc.startingBy}
+			require.NoError(t, readAllText(t, param, proc, bat, tc.content))
+			requireRows(t, bat, []wantRow{
+				{a: 1, s: "al\npha", line: tc.lines[0]},
+				{line: tc.lines[1], message: "is not int32 type", text: "notanint,beta"},
+			})
+		})
+	}
 }
 
 // TestJSONLineErrorModeTolerates covers the three ways a JSONLINE record
