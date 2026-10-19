@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1334,7 +1335,17 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		}
 		manifest.Relations = append(manifest.Relations, relationDump)
 	}
+	// These context-aware barriers let integration tests hold real SQL requests
+	// at the publication boundaries without replacing storage operations.
+	fault.TriggerFaultWithContext(ctx, "table_dump_before_manifest")
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	if err = writeTableDumpJSON(ctx, dumpFS, tableDumpManifestName, manifest); err != nil {
+		return err
+	}
+	fault.TriggerFaultWithContext(ctx, "table_dump_after_manifest")
+	if err = ctx.Err(); err != nil {
 		return err
 	}
 	if !stmt.MetadataOnly {
