@@ -102,7 +102,7 @@ func TestCRC32JSONDestinationProtocolValidation(t *testing.T) {
 	require.ErrorContains(t, err, "remote destination")
 	client.sendErr = errors.New("probe failed")
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "remote destination")
+	require.ErrorIs(t, err, client.sendErr)
 	ctx, cancel := context.WithCancel(c.proc.Ctx)
 	cancel()
 	c.proc.Ctx = ctx
