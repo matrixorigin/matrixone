@@ -181,11 +181,11 @@ const (
 	tableDumpBindingImplicitTimestamp
 )
 
-type tableDumpDefaultTimeZone struct {
-	mayDepend, folded bool
+type tableDumpDefaultSession struct {
+	timeZone, locale, folded bool
 }
 
-func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, timeZone *tableDumpDefaultTimeZone) (*planpb.Expr, error) {
+func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
 	switch mode {
 	case tableDumpBindingLegacyTimestampAdd:
@@ -217,14 +217,16 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 			// Observe before assignment/folding can fail in the reading zone.
 			// Inspect the resolved source, not the assignment cast's target type:
 			// a plain NULL/zero TIMESTAMP needs no timezone reconstruction.
-			timeZone.mayDepend = timeZone.mayDepend || tableDumpDefaultUsesTimeZone(source)
+			tz, locale := tableDumpDefaultDependencies(source)
+			session.timeZone = session.timeZone || tz
+			session.locale = session.locale || locale
 			unfolded = assigned
 		})
 		if err != nil {
 			return nil, err
 		}
-		if timeZone.mayDepend && !sameTableDumpBoundExpression(unfolded, bound.Expr) {
-			timeZone.folded = true
+		if (session.timeZone || session.locale) && !sameTableDumpBoundExpression(unfolded, bound.Expr) {
+			session.folded = true
 		}
 		return bound.Expr, nil
 	case "on_update":
@@ -343,41 +345,42 @@ func tableDumpTimestampLiteral(expr *planpb.Expr) (int64, bool) {
 // occur anywhere in a default, including beneath a non-temporal result. The
 // lexical conversions below read the session zone without a TIMESTAMP input;
 // UUID's deterministic datetime overload does so at its epoch conversion too.
-func tableDumpDefaultUsesTimeZone(expr *planpb.Expr) bool {
+// Localized name/format consumers read lc_time_names independently of the zone.
+func tableDumpDefaultDependencies(expr *planpb.Expr) (zone, locale bool) {
 	if expr == nil {
-		return false
+		return false, false
 	}
-	if expr.Typ.Id == int32(types.T_timestamp) {
-		return true
+	zone = expr.Typ.Id == int32(types.T_timestamp)
+	merge := func(child *planpb.Expr) {
+		childZone, childLocale := tableDumpDefaultDependencies(child)
+		zone, locale = zone || childZone, locale || childLocale
 	}
 	if fn := expr.GetF(); fn != nil {
 		switch fn.Func.ObjName {
 		case "from_unixtime", "unix_timestamp", "microsecond":
-			return true
+			zone = true
+		case "monthname", "dayname", "date_format":
+			locale = true
 		case "uuid", "uuid_v1", "uuid_v6", "uuid_v7":
 			for _, arg := range fn.Args {
 				if arg.Typ.Id == int32(types.T_datetime) {
-					return true
+					zone = true
 				}
 			}
 		}
 		for _, arg := range fn.Args {
-			if tableDumpDefaultUsesTimeZone(arg) {
-				return true
-			}
+			merge(arg)
 		}
 	}
 	if list := expr.GetList(); list != nil {
 		for _, entry := range list.List {
-			if tableDumpDefaultUsesTimeZone(entry) {
-				return true
-			}
+			merge(entry)
 		}
 	}
 	if literal := expr.GetLit(); literal != nil {
-		return tableDumpDefaultUsesTimeZone(literal.Src)
+		merge(literal.Src)
 	}
-	return false
+	return zone, locale
 }
 
 func matchTableDumpTimestampDefault(want, candidate *planpb.Expr, zone *time.Location, bind func(*time.Location) (*planpb.Expr, error)) bool {
@@ -445,6 +448,17 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 	proc.GetSessionInfo().DefaultWeekFormat = parent.GetSessionInfo().DefaultWeekFormat
 	proc.GetSessionInfo().DefaultWeekFormatSet = parent.GetSessionInfo().DefaultWeekFormatSet
 	proc.GetSessionInfo().LCTimeNames = parent.GetSessionInfo().LCTimeNames
+	locale := function.TemporalLocaleNameForProcess(proc)
+	resolve := proc.GetResolveVariableFunc()
+	proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+		if system && !global && strings.EqualFold(name, "lc_time_names") {
+			return proc.GetSessionInfo().LCTimeNames, nil
+		}
+		if resolve != nil {
+			return resolve(name, system, global)
+		}
+		return nil, nil
+	})
 	zone := proc.GetSessionInfo().TimeZone
 	ctx = tableDumpBindContext{CompilerContext: ctx, ctx: ctx.GetContext(), proc: proc}
 	budget := &tableDumpBindingBudget{}
@@ -492,11 +506,11 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			if tableDumpImplicitTimestamp(item, ast) {
 				modes = append(modes, tableDumpBindingImplicitTimestamp)
 			}
-			// All timezone witnesses share the ordinary cancellation and total
+			// All session witnesses share the ordinary cancellation and total
 			// candidate-node budget. Only complete rebound trees can match.
 			var fatal error
-			var defaultTimeZone tableDumpDefaultTimeZone
-			bind := func(increment int64, mode tableDumpBindingMode, tz *time.Location) (*planpb.Expr, error) {
+			var dependency tableDumpDefaultSession
+			bind := func(increment int64, mode tableDumpBindingMode, tz *time.Location, lc string) (*planpb.Expr, error) {
 				if fatal = ctx.GetContext().Err(); fatal != nil {
 					return nil, fatal
 				}
@@ -506,7 +520,8 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 					return nil, fatal
 				}
 				proc.GetSessionInfo().TimeZone = tz
-				return bindTableDumpExpression(ctx, target, item, ast, increment, mode, &defaultTimeZone)
+				proc.GetSessionInfo().LCTimeNames = lc
+				return bindTableDumpExpression(ctx, target, item, ast, increment, mode, &dependency)
 			}
 			var first *planpb.Expr
 			want := item.expr
@@ -519,7 +534,7 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 					return false, err
 				}
 				for _, mode := range modes {
-					candidate, err := bind(increment, mode, zone)
+					candidate, err := bind(increment, mode, zone, locale)
 					if fatal != nil {
 						stmt.Free()
 						return false, fatal
@@ -538,24 +553,41 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 					if item.kind == "default" {
 						_, folded := tableDumpTimestampLiteral(candidate)
 						_, stored := tableDumpTimestampLiteral(want)
-						if folded || stored || defaultTimeZone.folded || err != nil && defaultTimeZone.mayDepend {
-							// Even a same-zone match needs a binding witness: LOAD
-							// may run in a different zone from CREATE and DUMP.
-							// Capture folded session dependencies for every result type.
+						if folded || stored || dependency.folded || err != nil && (dependency.timeZone || dependency.locale) {
+							// Capture even a same-session match: LOAD may use another
+							// locale or zone. Every witness must match the whole tree.
 							sensitive = true
-							if !matched {
-								if folded || stored {
-									matched = matchTableDumpTimestampDefault(want, candidate, zone, func(tz *time.Location) (*planpb.Expr, error) {
-										return bind(increment, mode, tz)
-									})
+							locales := []string{locale}
+							if dependency.locale {
+								for _, other := range function.TemporalLocaleNames() {
+									if other != locale {
+										locales = append(locales, other)
+									}
 								}
-								if fatal != nil {
-									stmt.Free()
-									return false, fatal
+							}
+							// Try cheap locale-only witnesses before the joint search.
+							for _, other := range locales[1:] {
+								if matched || fatal != nil {
+									break
 								}
-								if !matched {
+								rebound, _ := bind(increment, mode, zone, other)
+								matched = sameTableDumpBoundExpression(want, rebound)
+							}
+							if dependency.timeZone || folded || stored {
+								for _, lc := range locales {
+									if matched || fatal != nil {
+										break
+									}
+									if folded || stored {
+										matched = matchTableDumpTimestampDefault(want, nil, zone, func(tz *time.Location) (*planpb.Expr, error) {
+											return bind(increment, mode, tz, lc)
+										})
+									}
+									if matched || fatal != nil {
+										break
+									}
 									for tz := range tableDumpTimeZones {
-										rebound, _ := bind(increment, mode, tz)
+										rebound, _ := bind(increment, mode, tz, lc)
 										if fatal != nil {
 											break
 										}
@@ -564,11 +596,11 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 											break
 										}
 									}
-									if fatal != nil {
-										stmt.Free()
-										return false, fatal
-									}
 								}
+							}
+							if fatal != nil {
+								stmt.Free()
+								return false, fatal
 							}
 						}
 					}

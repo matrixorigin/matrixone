@@ -308,3 +308,99 @@ func (c *tableDumpCancellingContext) Err() error {
 	}
 	return c.Context.Err()
 }
+
+func TestTableDumpDefaultLocales(t *testing.T) {
+	for _, tc := range []struct {
+		name, declaration, locale, zone string
+		capture                         bool
+	}{
+		{"monthname", "varchar(64) default (monthname('2024-01-01'))", "en_US", "UTC", true},
+		{"date_format", "varchar(64) default (date_format('2024-01-01','%M'))", "en_US", "UTC", true},
+		{"dayname", "varchar(64) default (dayname('2024-01-01'))", "ja_JP", "UTC", true},
+		{"mixed", "varchar(64) default (date_format(from_unixtime(1704067200),'%M %H'))", "fr_FR", "America/New_York", true},
+		{"german", "varchar(64) default (monthname('2024-01-01'))", "de_DE", "UTC", true},
+		{"localized_verbs", "varchar(64) default (date_format('2024-02-05','%M/%b/%W/%a'))", "fr_FR", "UTC", true},
+		{"budget", "varchar(64) default (date_format(from_unixtime(cast(1704067200 as decimal(20,6))+cast(1 as decimal(20,6))/cast(3 as decimal(20,6))),'%M'))", "fr_FR", "America/New_York", true},
+		{"nullable", "int default (if(monthname('2024-01-01')='January',null,1))", "en_US", "UTC", true},
+		{"overflow", "tinyint default (if(monthname('2024-01-01')='January',120,128))", "en_US", "UTC", true},
+		{"literal", "varchar(64) default 'January'", "en_US", "UTC", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			zone, err := time.LoadLocation(tc.zone)
+			require.NoError(t, err)
+			proc.GetSessionInfo().TimeZone = zone
+			locale := tc.locale
+			// The resolver takes precedence over a conflicting session snapshot.
+			proc.GetSessionInfo().LCTimeNames = "ja_JP"
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+				if name == "lc_time_names" {
+					return locale, nil
+				}
+				return "", nil
+			})
+			compiler := NewMockCompilerContext(false, proc)
+			compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+				switch name {
+				case "div_precision_increment":
+					return int64(4), nil
+				case "explicit_defaults_for_timestamp":
+					return true, nil
+				case "lc_time_names":
+					return locale, nil
+				}
+				return "", nil
+			}
+			stmt, err := mysql.ParseOne(t.Context(), "create table t(a "+tc.declaration+")", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(compiler, stmt, false)
+			require.NoError(t, err)
+			def := built.GetDdl().GetCreateTable().TableDef
+			before := proto.Clone(def)
+			for _, readingLocale := range []string{tc.locale, "de_DE"} {
+				locale = readingLocale
+				// The resolver takes precedence over a conflicting session snapshot.
+				proc.GetSessionInfo().LCTimeNames = "ja_JP"
+				proc.GetSessionInfo().TimeZone = time.UTC
+				warnings := &process.WarningProbe{}
+				proc.WarningSink = warnings
+				capture, err := AnalyzeTableDumpBindings(compiler, def, def)
+				require.NoError(t, err)
+				require.Equal(t, tc.capture, capture)
+				require.Equal(t, "ja_JP", proc.GetSessionInfo().LCTimeNames)
+				resolved, err := proc.GetResolveVariableFunc()("lc_time_names", true, false)
+				require.NoError(t, err)
+				require.Equal(t, locale, resolved)
+				require.Same(t, time.UTC, proc.GetSessionInfo().TimeZone)
+				require.False(t, warnings.Warned())
+				require.True(t, proto.Equal(before, def))
+			}
+			if tc.capture {
+				forged := proto.Clone(def).(*planpb.TableDef)
+				require.True(t, tamperTableDumpDefaultValue(forged.Cols[0].Default.Expr))
+				forgedBefore := proto.Clone(forged)
+				if tc.name == "mixed" {
+					ctx, cancel := context.WithCancel(t.Context())
+					defer cancel()
+					bindingCtx := &tableDumpCancellingContext{Context: ctx, cancel: cancel}
+					compiler.SetContext(bindingCtx)
+					_, err := AnalyzeTableDumpBindings(compiler, def, forged)
+					require.ErrorIs(t, err, context.Canceled)
+					require.GreaterOrEqual(t, bindingCtx.calls.Load(), int32(8))
+					compiler.SetContext(t.Context())
+				}
+				_, err := AnalyzeTableDumpBindings(compiler, def, forged)
+				if tc.name == "budget" {
+					require.ErrorContains(t, err, "expression binding exceeds limit")
+				} else {
+					require.ErrorContains(t, err, "cannot verify bound default")
+				}
+				require.True(t, proto.Equal(forgedBefore, forged))
+				require.True(t, proto.Equal(before, def))
+				require.Equal(t, "ja_JP", proc.GetSessionInfo().LCTimeNames)
+				require.Same(t, time.UTC, proc.GetSessionInfo().TimeZone)
+			}
+		})
+	}
+}

@@ -51,18 +51,23 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 			name, declaration, createZone, dumpZone string
 			want, updated                           any
 			legacy, raw                             bool
+			locale                                  string
 		}{
-			{"implicit_6", "timestamp(6)", "+00:00", "+00:00", "2024-01-01 00:00:00.500000", "2024-01-01 00:00:01.500000", true, false},
+			{"implicit_6", "timestamp(6)", "+00:00", "+00:00", "2024-01-01 00:00:00.500000", "2024-01-01 00:00:01.500000", true, false, ""},
 			// The released precision-0 owner rounds half seconds upward.
-			{"implicit_0", "timestamp", "+00:00", "+08:00", "2024-01-01 00:00:01.000000", "2024-01-01 00:00:02.000000", true, false},
-			{"literal_same_zone", "timestamp(6) default '2024-01-01 00:00:00.123456'", "+00:00", "+00:00", "2024-01-01 00:00:00.123456", "", false, false},
-			{"literal_changed_zone", "timestamp(6) default '2024-01-01 00:00:00.123456'", "+00:00", "+08:00", "2024-01-01 00:00:00.123456", "", false, false},
-			{"datetime_expression", "datetime(6) default (from_unixtime(1704067200))", "+00:00", "+08:00", "2024-01-01 00:00:00.000000", "", false, false},
-			{"varchar_expression", "varchar(64) default (from_unixtime(1704067200,'%Y-%m-%d %H:%i:%s'))", "+00:00", "+08:00", "2024-01-01 00:00:00", "", false, true},
-			{"named_timezone", "timestamp default '1971-01-01 00:00:00'", "Africa/Monrovia", "+08:00", "1971-01-01 00:44:30.000000", "", false, false},
-			{"dst_expression", "varchar(64) default (concat(from_unixtime(1704067200,'%H'),':',from_unixtime(1719792000,'%H')))", "America/New_York", "+08:00", "19:20", "", false, true},
-			{"nullable_default", "int default (if(hour(from_unixtime(1704067200))=0,null,1))", "+00:00", "+08:00", nil, "", false, true},
-			{"backup_overflow", "tinyint default (hour(from_unixtime(1704067200))+120)", "+00:00", "+08:00", "120", "", false, true},
+			{"implicit_0", "timestamp", "+00:00", "+08:00", "2024-01-01 00:00:01.000000", "2024-01-01 00:00:02.000000", true, false, ""},
+			{"literal_same_zone", "timestamp(6) default '2024-01-01 00:00:00.123456'", "+00:00", "+00:00", "2024-01-01 00:00:00.123456", "", false, false, ""},
+			{"literal_changed_zone", "timestamp(6) default '2024-01-01 00:00:00.123456'", "+00:00", "+08:00", "2024-01-01 00:00:00.123456", "", false, false, ""},
+			{"datetime_expression", "datetime(6) default (from_unixtime(1704067200))", "+00:00", "+08:00", "2024-01-01 00:00:00.000000", "", false, false, ""},
+			{"varchar_expression", "varchar(64) default (from_unixtime(1704067200,'%Y-%m-%d %H:%i:%s'))", "+00:00", "+08:00", "2024-01-01 00:00:00", "", false, true, ""},
+			{"named_timezone", "timestamp default '1971-01-01 00:00:00'", "Africa/Monrovia", "+08:00", "1971-01-01 00:44:30.000000", "", false, false, ""},
+			{"dst_expression", "varchar(64) default (concat(from_unixtime(1704067200,'%H'),':',from_unixtime(1719792000,'%H')))", "America/New_York", "+08:00", "19:20", "", false, true, ""},
+			{"nullable_default", "int default (if(hour(from_unixtime(1704067200))=0,null,1))", "+00:00", "+08:00", nil, "", false, true, ""},
+			{"backup_overflow", "tinyint default (hour(from_unixtime(1704067200))+120)", "+00:00", "+08:00", "120", "", false, true, ""},
+			{"locale_monthname", "varchar(64) default (monthname('2024-01-01'))", "+00:00", "+08:00", "January", "", false, true, "en_US"},
+			{"locale_date_format", "varchar(64) default (date_format('2024-01-01','%M'))", "+00:00", "+08:00", "janvier", "", false, true, "fr_FR"},
+			{"locale_dayname", "varchar(64) default (dayname('2024-01-01'))", "+00:00", "+08:00", "月曜日", "", false, true, "ja_JP"},
+			{"locale_mixed", "varchar(64) default (date_format(from_unixtime(1704067200),'%M %H'))", "America/New_York", "+08:00", "décembre 19", "", false, true, "fr_FR"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
@@ -72,6 +77,11 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 					_, err := conn.ExecContext(cleanupCtx, "drop table if exists "+tc.name+"_source,"+tc.name+"_target")
 					require.NoError(t, err)
 				})
+				creationLocale := tc.locale
+				if creationLocale == "" {
+					creationLocale = "en_US"
+				}
+				exec("set lc_time_names='" + creationLocale + "'")
 				exec("set time_zone='" + tc.createZone + "'")
 				policy := 1
 				if tc.legacy {
@@ -80,6 +90,9 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 				exec(fmt.Sprintf("set explicit_defaults_for_timestamp=%d", policy))
 				exec("create table " + tc.name + "_source(id int primary key,a " + tc.declaration + ")")
 				exec("dump table " + tc.name + "_source to '" + t.TempDir() + "' metadata only")
+				if tc.locale != "" {
+					exec("set lc_time_names='de_DE'")
+				}
 				exec("set time_zone='" + tc.dumpZone + "'")
 				path := t.TempDir()
 				exec("dump table " + tc.name + "_source to '" + path + "' metadata only")
@@ -95,6 +108,9 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 				var source planpb.TableDef
 				require.NoError(t, proto.Unmarshal(manifest.Bound, &source))
 				exec("set time_zone='+05:45'")
+				if tc.locale != "" {
+					exec("set lc_time_names='ja_JP'")
+				}
 				exec("create table " + tc.name + "_target(id int primary key,a " + tc.declaration + ")")
 				exec("load table " + tc.name + "_target from '" + path + "'")
 				// Read back the installed trees through a second real DUMP before

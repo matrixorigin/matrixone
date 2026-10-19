@@ -1,7 +1,7 @@
 # Table dump expression binding (PR #29241, issue #28594)
 
-Status: revision 11; timezone-witness design approved by independent gpt-6.1-sol/xhigh review.
-Revision: 11, 2026-10-19. Rebase design review: 2026-10-18; validation is recorded in the PR.
+Status: revision 12; locale-witness design approved by independent gpt-6-astra/medium review.
+Revision: 12, 2026-10-19. Revision 11 passed independent timezone-witness review; validation is recorded in the PR.
 
 ## Current extension: migration-era binding and format 3
 
@@ -36,6 +36,33 @@ Current frozen-base allocations: main charset118, coordinator subquery119 and fu
 published; fractional TIMESTAMPADD uses capability120, normalizer601 and end602.
 No protobuf schema change or provisional-function-ID guessing is introduced.
 Historical revision10 evidence below retains its original input identity.
+
+## Revision 12: locale-dependent defaults
+
+The same pre-fold observation now records locale dependencies for MONTHNAME,
+DAYNAME and DATE_FORMAT, including nested expressions, NULL results and bind
+failures caused by a reading-locale assignment overflow. Folded dependencies
+require capture even when CREATE and DUMP use the same locale. Literal controls
+and unchanged executable bindings retain their classification.
+
+Reconstruction obtains the finite supported locale inventory from the temporal
+function owner (currently en_US, fr_FR, de_DE and ja_JP). The private child uses
+that owner's effective reading locale, respecting variable-resolver precedence
+over the session snapshot. Its resolver overrides only session lc_time_names;
+all other lookups forward to the inherited resolver, without changing the parent.
+Cheap locale-only witnesses precede joint locale/timezone reconstruction. Each
+candidate must reproduce the complete expression under one configuration tuple;
+independently matching subtrees or dimensions cannot authorize a payload.
+
+All candidates still share cancellation and the one-million-node table budget.
+The locale axis can multiply the finite timezone inventory by four, but cannot
+increase the shared visit limit; expensive legitimate reconstructions may still
+fail closed. Existing custom-zone/tzdata limitations remain. Formatted
+FROM_UNIXTIME and STR_TO_DATE currently do not read lc_time_names and their
+function semantics are unchanged. No format, protocol or row-evaluation change
+is introduced. Acceptance includes four source locales, combined timezone/locale
+recovery, resolver isolation, NULL/overflow, forged payloads, cancellation/budget,
+and authenticated DUMP/LOAD, exact binding readback and future defaults.
 
 ## Revision 11: folded defaults and timezone witnesses
 
