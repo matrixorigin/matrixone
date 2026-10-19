@@ -336,6 +336,8 @@ func newExpressionExecutorWithAllocation(
 		return &memoExpressionExecutor{state: state}, nil
 	}
 	switch t := planExpr.Expr.(type) {
+	case *plan.Expr_Slot:
+		return newDependentSlotExecutor(proc, t.Slot, typ, selection)
 	case *plan.Expr_Lit:
 		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {

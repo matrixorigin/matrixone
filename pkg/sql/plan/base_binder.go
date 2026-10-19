@@ -3265,6 +3265,20 @@ func (b *baseBinder) bindFuncExpr(astExpr *tree.FuncExpr, depth int32, isRoot bo
 		return nil, moerr.NewNYIf(b.GetContext(), "function expr '%v'", astExpr)
 	}
 	funcName := funcRef.ColName()
+	if strings.EqualFold(funcName, "values") {
+		// VALUES in a nested ODKU subquery still names the incoming row of
+		// that assignment owner. Count query blocks, skipping binderless
+		// namespace contexts just as correlated column lookup does.
+		var levels int32
+		for ctx := b.ctx; ctx != nil; ctx = ctx.parent {
+			if owner, ok := ctx.binder.(*OndupUpdateBinder); ok {
+				return owner.BindExpr(astExpr, levels, isRoot)
+			}
+			if ctx.binder != nil {
+				levels++
+			}
+		}
+	}
 	if strings.EqualFold(funcName, "grouping") {
 		return b.bindGroupingFuncExpr(astExpr)
 	}

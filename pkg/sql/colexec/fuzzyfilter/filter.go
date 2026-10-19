@@ -109,6 +109,9 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 		useRoaring := IfCanUseRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 
 		if useRoaring {
+			if err := fuzzyFilter.reserveFilter(proc, 128); err != nil {
+				return err
+			}
 			ctr.roaringFilter = newRoaringFilter(types.T(fuzzyFilter.PkTyp.Id))
 		} else {
 			//@see https://hur.st/bloomfilter/
@@ -125,6 +128,9 @@ func (fuzzyFilter *FuzzyFilter) Prepare(proc *process.Process) (err error) {
 				probability = 0.0000002
 			} else {
 				probability = 0.0000001
+			}
+			if err := fuzzyFilter.reserveFilter(proc, bloomfilter.InitialMemoryCapacity(rowCount, probability)); err != nil {
+				return err
 			}
 			ctr.bloomFilter = bloomfilter.New(rowCount, probability)
 		}
@@ -209,6 +215,9 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			buildIdx := fuzzyFilter.BuildIdx
 
 			input, err := vm.ChildrenCall(fuzzyFilter.GetChildren(buildIdx), proc, analyzer)
+			if input.Status == vm.ExecYield && err == nil {
+				return input, nil
+			}
 			if err != nil {
 				fuzzyFilter.finalizeBuildFailure(proc)
 				return result, err
@@ -253,6 +262,9 @@ func (fuzzyFilter *FuzzyFilter) Call(proc *process.Process) (vm.CallResult, erro
 			probeIdx := fuzzyFilter.getProbeIdx()
 
 			input, err := vm.ChildrenCall(fuzzyFilter.GetChildren(probeIdx), proc, analyzer)
+			if input.Status == vm.ExecYield && err == nil {
+				return input, nil
+			}
 			if err != nil {
 				fuzzyFilter.finalizeBuildFailure(proc)
 				return result, err
@@ -324,6 +336,11 @@ func (fuzzyFilter *FuzzyFilter) ensureRuntimeFilterTerminal(proc *process.Proces
 // utils functions
 
 func (fuzzyFilter *FuzzyFilter) handleBuild(proc *process.Process, pkCol *vector.Vector) error {
+	retire, err := fuzzyFilter.admitFilterInput(proc, pkCol)
+	if err != nil {
+		return err
+	}
+	defer retire()
 	buildOnSink := fuzzyFilter.ifBuildOnSink()
 
 	if buildOnSink { // build fuzzy on sink scan
@@ -344,6 +361,11 @@ func (fuzzyFilter *FuzzyFilter) handleBuild(proc *process.Process, pkCol *vector
 }
 
 func (fuzzyFilter *FuzzyFilter) handleProbe(proc *process.Process, pkCol *vector.Vector) error {
+	retire, err := fuzzyFilter.admitFilterInput(proc, pkCol)
+	if err != nil {
+		return err
+	}
+	defer retire()
 	buildOnSink := fuzzyFilter.ifBuildOnSink()
 	probeOnSink := !buildOnSink
 
@@ -534,17 +556,34 @@ func (fuzzyFilter *FuzzyFilter) appendPassToRuntimeFilter(
 }
 
 // appendCollisionKey will append collision key into rbat
-func (fuzzyFilter *FuzzyFilter) appendCollisionKey(proc *process.Process, idx int, pkCol *vector.Vector) {
+func (fuzzyFilter *FuzzyFilter) appendCollisionKey(proc *process.Process, idx int, pkCol *vector.Vector) error {
 	ctr := &fuzzyFilter.ctr
-	ctr.rbat.GetVector(0).UnionOne(pkCol, int64(idx), proc.GetMPool())
+	if err := ctr.rbat.GetVector(0).UnionOne(pkCol, int64(idx), proc.GetMPool()); err != nil {
+		return err
+	}
 	ctr.collisionCnt++
+	return nil
 }
 
 // rbat will contain the keys that have hash collisions
 func (fuzzyFilter *FuzzyFilter) generate() error {
 	ctr := &fuzzyFilter.ctr
-	rbat := batch.NewWithSize(1)
-	rbat.SetVector(0, vector.NewVec(plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)))
+	var rbat *batch.Batch
+	if fuzzyFilter.runtimeFilterAllocation != nil {
+		rbat = batch.NewOffHeapWithSize(1)
+	} else {
+		rbat = batch.NewWithSize(1)
+	}
+	typ := plan.MakeTypeByPlan2Type(fuzzyFilter.PkTyp)
+	if fuzzyFilter.runtimeFilterAllocation != nil {
+		vec, err := vector.NewOffHeapVecWithTypeAndAllocation(typ, fuzzyFilter.runtimeFilterAllocation)
+		if err != nil {
+			return err
+		}
+		rbat.SetVector(0, vec)
+	} else {
+		rbat.SetVector(0, vector.NewVec(typ))
+	}
 	ctr.rbat = rbat
 	return nil
 }

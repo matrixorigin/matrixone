@@ -633,6 +633,7 @@ outside:
 				if _, _, rerr := parser.readUntilTerminator(); rerr != nil && rerr != io.EOF {
 					return rerr
 				}
+				parser.recordStartLine = parser.lineNo
 				continue
 			}
 		}
@@ -654,6 +655,7 @@ outside:
 			// At EOF, remaining content can still contain startingBy and a final record.
 			idx := bytes.Index(content, parser.startingBy)
 			if idx == -1 {
+				parser.recordStartLine = parser.lineNo
 				continue
 			}
 			foundStartingByThisLine = true

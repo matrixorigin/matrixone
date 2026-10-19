@@ -876,6 +876,7 @@ func DeepCopyQuery(qry *plan.Query) *plan.Query {
 		DetectSqls:               slices.Clone(qry.DetectSqls),
 		CatalogDependencies:      make([]*plan.ObjectRef, len(qry.CatalogDependencies)),
 		ViewMetadataDependsOnUdf: qry.ViewMetadataDependsOnUdf,
+		Correlation:              DeepCopyCorrelation(qry.Correlation),
 	}
 	for idx, node := range qry.Nodes {
 		newQry.Nodes[idx] = DeepCopyNode(node)
@@ -1324,6 +1325,16 @@ func DeepCopyExpr(expr *Expr) *Expr {
 				Child:   DeepCopyExpr(item.Sub.Child),
 			},
 		}
+
+	case *plan.Expr_Dependent:
+		d := *item.Dependent
+		d.Inputs = DeepCopyExprList(item.Dependent.Inputs)
+		d.Lhs = DeepCopyExprList(item.Dependent.Lhs)
+		d.Comparison = DeepCopyExpr(item.Dependent.Comparison)
+		newExpr.Expr = &plan.Expr_Dependent{Dependent: &d}
+	case *plan.Expr_Slot:
+		slot := *item.Slot
+		newExpr.Expr = &plan.Expr_Slot{Slot: &slot}
 
 	case *plan.Expr_Corr:
 		newExpr.Expr = &plan.Expr_Corr{
