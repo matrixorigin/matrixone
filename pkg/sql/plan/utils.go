@@ -2079,25 +2079,16 @@ func constantFoldWithPreparedExactSource(
 	if err != nil {
 		return nil, err
 	}
-	// Keep spatial provenance visible to persisted-expression admission. Once
-	// the whole subtree is known to be spatial-free, its children need no scan:
-	// folding constants cannot introduce a spatial function. Rechecking every
-	// descendant would make folding a deep expression quadratic.
-	if !spatialChecked {
-		if requiresSpatial, spatialErr := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
+	// One feature walk preserves spatial and JSON admission identities. A
+	// negative result covers every descendant: folding cannot introduce either
+	// contract, and JSON ELT's selected subtree remains owned by its executor.
+	if !spatialChecked || !jsonFeatureChecked {
+		features, featureErr := plan.RequiredRemoteExpressionFeatures(expr)
+		if featureErr != nil || (!spatialChecked && features.SpatialDistanceSemantics) ||
+			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)) {
 			return expr, nil
 		}
-		spatialChecked = true
-	}
-	// Keep the selected-consumer ELT identity visible to remote and persisted
-	// admission. Its executor owns lazy folding of the selected value subtree.
-	if !jsonFeatureChecked {
-		if requiresJSON, jsonErr := plan.RequiresMORPCVersion123JSONStringConsumerOverload(expr); jsonErr != nil || requiresJSON {
-			return expr, nil
-		}
-		// A negative scan covers every descendant; folding cannot introduce a
-		// new JSON string-consumer or opaque-rendering call.
-		jsonFeatureChecked = true
+		spatialChecked, jsonFeatureChecked = true, true
 	}
 	if f.IsVolatile() {
 		return expr, nil

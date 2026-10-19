@@ -229,23 +229,16 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	if !exists {
 		return expr
 	}
-	// Preserve the v90 spatial requirement before evaluating any child. A
-	// successful scan covers this entire subtree, so recursive folding can
-	// reuse it instead of scanning every descendant again.
-	if !spatialChecked {
-		if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
+	// Share the feature walk between spatial and JSON admission. Keep positive
+	// identities executable and propagate the negative proof to descendants;
+	// JSON ELT's selected subtree still belongs to its lazy executor.
+	if !spatialChecked || !jsonFeatureChecked {
+		features, err := plan.RequiredRemoteExpressionFeatures(expr)
+		if err != nil || (!spatialChecked && features.SpatialDistanceSemantics) ||
+			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)) {
 			return expr
 		}
-		spatialChecked = true
-	}
-	// Admission must still see JSON ELT after optimization; selected-subtree
-	// constant evaluation belongs to its lazy expression executor.
-	if !jsonFeatureChecked {
-		if requiresJSON, err := plan.RequiresMORPCVersion123JSONStringConsumerOverload(expr); err != nil || requiresJSON {
-			return expr
-		}
-		// Reuse this negative subtree result while visiting descendants.
-		jsonFeatureChecked = true
+		spatialChecked, jsonFeatureChecked = true, true
 	}
 	if f.IsVolatile() {
 		return expr
