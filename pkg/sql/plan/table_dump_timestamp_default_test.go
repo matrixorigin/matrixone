@@ -23,6 +23,8 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -462,4 +464,65 @@ func TestTableDumpCheapPrecisionCandidatesBeforeSessions(t *testing.T) {
 			require.Equal(t, "de_DE", proc.GetSessionInfo().LCTimeNames)
 		})
 	}
+}
+
+func TestTableDumpZeroTimestampAcrossSQLModes(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	mode := ""
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+		if name == "sql_mode" {
+			return mode, nil
+		}
+		return "", nil
+	})
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "sql_mode":
+			return mode, nil
+		case "div_precision_increment":
+			return int64(4), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	stmt, err := mysql.ParseOne(t.Context(), "create table t(a timestamp default '0000-00-00 00:00:00')", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	def := built.GetDdl().GetCreateTable().GetTableDef()
+	before := proto.Clone(def)
+	mode = "STRICT_TRANS_TABLES,NO_ZERO_DATE"
+	proc.GetSessionInfo().SqlMode = mode
+	_, err = BuildPlan(compiler, stmt, false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
+	warnings := &process.WarningProbe{}
+	proc.WarningSink = warnings
+	for _, supplied := range []*planpb.TableDef{nil, def} {
+		_, err = AnalyzeTableDumpBindings(compiler, def, supplied)
+		require.NoError(t, err)
+	}
+	for _, kind := range []string{"value", "type"} {
+		t.Run(kind, func(t *testing.T) {
+			forged := proto.Clone(def).(*planpb.TableDef)
+			if kind == "value" {
+				forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Timestampval{Timestampval: 1}
+			} else {
+				forged.Cols[0].Default.Expr.Typ.Id = int32(types.T_datetime)
+			}
+			_, err := AnalyzeTableDumpBindings(compiler, def, forged)
+			require.ErrorContains(t, err, "cannot verify bound default")
+		})
+	}
+	require.Equal(t, mode, proc.GetSessionInfo().SqlMode)
+	resolved, err := proc.GetResolveVariableFunc()("sql_mode", true, false)
+	require.NoError(t, err)
+	require.Equal(t, mode, resolved)
+	require.False(t, warnings.Warned())
+	require.True(t, proto.Equal(before, def))
+	_, err = BuildPlan(compiler, stmt, false)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault))
 }

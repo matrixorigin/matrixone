@@ -1,7 +1,7 @@
 # Table dump expression binding (PR #29241, issue #28594)
 
-Status: revision 14; staged candidate-search design approved by independent gpt-6-astra/medium review.
-Revision: 14, 2026-10-19. Revision 13 passed independent DIV migration review; validation is recorded in the PR.
+Status: revision 15; persisted-zero-default validation design approved by independent gpt-6-astra/medium review.
+Revision: 15, 2026-10-19. Revision 14 passed independent search-order review; validation is recorded in the PR.
 
 ## Current extension: migration-era binding and format 3
 
@@ -38,6 +38,18 @@ unary temporal122 stay published; fractional TIMESTAMPADD uses capability123, no
 8e63625c4e9baeb1d28c1095c07732f056c04895; rollback coverage cycles122→123→122.
 No protobuf schema change or provisional-function-ID guessing is introduced.
 Historical revision10 evidence below retains its original input identity.
+
+## Revision 15: persisted zero-TIMESTAMP defaults
+
+Origin verification selects an explicit private binding purpose. It skips only
+CREATE-time strict zero-TIMESTAMP default admission: a persisted origin was
+already admitted by its authoring session. Ordinary DDL retains this check.
+Binding, assignment casts, folding, protocol admission and exact whole-tree
+comparison remain active. The reader's SQL mode, conversion semantics and
+warning sink are preserved; no blanket permissive mode or global state is used.
+Cross-mode tests cover permissive authorship followed by strict DUMP/LOAD,
+strict new-CREATE rejection and forged value/type rejection. Subsequent writes
+retain their separate session policy.
 
 ## Revision 14: cheap candidates before session reconstruction
 

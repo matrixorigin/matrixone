@@ -25,6 +25,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -202,6 +203,42 @@ func TestTimestampDefaultDumpRoundtrip(t *testing.T) {
 				}
 			})
 		}
+
+		t.Run("zero_timestamp_cross_mode", func(t *testing.T) {
+			exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
+			t.Cleanup(func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				defer cancel()
+				_, err := conn.ExecContext(cleanupCtx, "drop table if exists zero_mode_source,zero_mode_target,zero_mode_rejected")
+				require.NoError(t, err)
+			})
+			exec("set sql_mode=''")
+			exec("create table zero_mode_source(a timestamp default '0000-00-00 00:00:00')")
+			exec("create table zero_mode_target(a timestamp default '0000-00-00 00:00:00')")
+			seed := t.TempDir()
+			exec("dump table zero_mode_source to '" + seed + "' metadata only")
+			exec("set sql_mode=DEFAULT")
+			var mode string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@sql_mode").Scan(&mode))
+			require.Contains(t, mode, "NO_ZERO_DATE")
+			_, err := conn.ExecContext(ctx, "create table zero_mode_rejected(a timestamp default '0000-00-00 00:00:00')")
+			var invalidDefault *mysql.MySQLError
+			require.ErrorAs(t, err, &invalidDefault)
+			require.Equal(t, uint16(1067), invalidDefault.Number)
+			exec("dump table zero_mode_source to '" + t.TempDir() + "' metadata only")
+			exec("load table zero_mode_target from '" + seed + "'")
+			exec("dump table zero_mode_target to '" + t.TempDir() + "' metadata only")
+			var after string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@sql_mode").Scan(&after))
+			require.Equal(t, mode, after)
+			// Ordinary writes retain their own session policy. Use the original
+			// admitting policy to observe the restored default's actual value.
+			exec("set sql_mode=''")
+			exec("insert into zero_mode_target values(default)")
+			var value string
+			require.NoError(t, conn.QueryRowContext(ctx, "select cast(a as char) from zero_mode_target").Scan(&value))
+			require.Equal(t, "0000-00-00 00:00:00", value)
+		})
 		var remaining int
 		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase=?", schema).Scan(&remaining))
 		require.Zero(t, remaining)

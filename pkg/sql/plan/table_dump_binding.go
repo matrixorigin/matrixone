@@ -218,7 +218,7 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 			},
 		}
 		var unfolded *planpb.Expr
-		bound, err := buildDefaultExprWithColumnsObserved(bindCtx, col, item.col.Typ, proc, def.Cols, func(source, assigned *planpb.Expr) {
+		bound, err := buildDefaultExprWithColumnsObserved(bindCtx, col, item.col.Typ, proc, def.Cols, defaultExprForPersistedVerification, func(source, assigned *planpb.Expr) {
 			// Observe before assignment/folding can fail in the reading zone.
 			// Inspect the resolved source, not the assignment cast's target type:
 			// a plain NULL/zero TIMESTAMP needs no timezone reconstruction.
