@@ -127,60 +127,60 @@ func TestMarshalRemoteBatchNumericBinaryLiteralProtocolGate(t *testing.T) {
 		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		buf := bytes.NewBufferString("sentinel")
 		_, err := marshalRemoteBatch(proc, bat, buf)
-		require.ErrorContains(t, err, "MORPCVersion124", "unknown runtime protocol state must fail closed")
+		require.ErrorContains(t, err, "MORPCVersion125", "unknown runtime protocol state must fail closed")
 		require.Equal(t, "sentinel", buf.String(), "rejection must precede stable batch writes")
 	}
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(101))
 	buf := bytes.NewBufferString("sentinel")
 	_, err := marshalRemoteBatch(proc, bat, buf)
-	require.ErrorContains(t, err, "MORPCVersion124")
-	require.Equal(t, "sentinel", buf.String(), "pre-v124 rejection must precede stable batch writes")
+	require.ErrorContains(t, err, "MORPCVersion125")
+	require.Equal(t, "sentinel", buf.String(), "pre-v125 rejection must precede stable batch writes")
 
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(102))
 	buf.Reset()
 	_, err = marshalRemoteBatch(proc, bat, buf)
-	require.ErrorContains(t, err, "MORPCVersion124")
+	require.ErrorContains(t, err, "MORPCVersion125")
 	require.Equal(t, "", buf.String(), "v102 rejection must precede stable batch writes")
 
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion109))
 	buf.Reset()
 	_, err = marshalRemoteBatch(proc, bat, buf)
-	require.ErrorContains(t, err, "MORPCVersion124")
+	require.ErrorContains(t, err, "MORPCVersion125")
 	require.Equal(t, "", buf.String(), "v109 rejection must precede stable batch writes")
 
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion110))
 	buf.Reset()
 	_, err = marshalRemoteBatch(proc, bat, buf)
-	require.ErrorContains(t, err, "MORPCVersion124")
+	require.ErrorContains(t, err, "MORPCVersion125")
 	require.Empty(t, buf.String(), "v110 rejection must precede stable batch writes")
 
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion111))
 	buf.Reset()
 	_, err = marshalRemoteBatch(proc, bat, buf)
-	require.ErrorContains(t, err, "MORPCVersion124")
+	require.ErrorContains(t, err, "MORPCVersion125")
 	require.Empty(t, buf.String(), "v111 rejection must precede stable batch writes")
 
 	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion112))
 	buf.Reset()
 	_, err = marshalRemoteBatch(proc, bat, buf)
-	require.ErrorContains(t, err, "MORPCVersion124")
+	require.ErrorContains(t, err, "MORPCVersion125")
 	require.Empty(t, buf.String(), "v112 date support does not imply numeric provenance support")
 	for _, version := range []int64{
 		defines.MORPCVersion113, defines.MORPCVersion114,
 		defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117,
 		defines.MORPCVersion118, defines.MORPCVersion119,
 		defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122,
-		defines.MORPCVersion123,
+		defines.MORPCVersion123, defines.MORPCVersion124,
 	} {
 		runtime.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		buf.Reset()
 		_, err = marshalRemoteBatch(proc, bat, buf)
-		require.ErrorContains(t, err, "MORPCVersion124",
+		require.ErrorContains(t, err, "MORPCVersion125",
 			"upstream protocol floors do not imply numeric binary-literal provenance")
 		require.Empty(t, buf.String(), "numeric provenance rejection must precede batch writes")
 	}
 
-	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion124))
+	runtime.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion125))
 	buf.Reset()
 	encoded, err := marshalRemoteBatch(proc, bat, buf)
 	require.NoError(t, err)
