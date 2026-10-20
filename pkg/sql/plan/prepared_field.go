@@ -218,13 +218,14 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 	switch name {
 	case "case":
 		// Retained/provisional declarations were resolved above. A concrete
-		// binary CASE without such history already owns its bound declaration;
-		// inferring bare markers again would manufacture an inferred origin.
+		// binary CASE without such history owns its logical declaration, not
+		// necessarily its common transport. Inferring bare markers again would
+		// manufacture an inferred origin.
 		// Lowered IFNULL instead merges its operands' declarations, including
 		// restored contextual BLOBs, just like the other common-value consumers.
 		if !r.unresolvedParameters && r.parameterTypes == nil && result.kind == fieldStringBinary &&
 			!expr.GetPreparedNumeric().GetIfnullCommonValue() {
-			return result
+			return r.conditionalStringDeclaration(expr, result)
 		}
 		for i := 1; i < len(fn.Args); i += 2 {
 			values = append(values, fn.Args[i])
@@ -233,6 +234,12 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 			values = append(values, fn.Args[len(fn.Args)-1])
 		}
 	case "if", "iff":
+		if result.kind == fieldStringBinary {
+			declaration := r.conditionalStringDeclaration(expr, result)
+			if declaration.kind == fieldStringText {
+				return declaration
+			}
+		}
 		values = fn.Args[1:]
 	case "coalesce":
 		values = fn.Args
@@ -394,6 +401,19 @@ func (r *preparedFieldStringResolver) expr(expr *Expr) (result preparedFieldStri
 		result = r.common(values)
 	}
 	return result
+}
+
+// Both ordinary binding and history-free prepared producers consume the same
+// logical declaration. Retained history and unresolved parameter inference keep
+// their own owners; a common binary transport is not a competing declaration.
+func (r *preparedFieldStringResolver) conditionalStringDeclaration(expr *Expr, domain preparedFieldStringDomain) preparedFieldStringDomain {
+	if !r.unresolvedParameters && r.parameterTypes == nil && domain.kind == fieldStringBinary {
+		declaration := r.collectStringDeclaration(expr)
+		if declaration.hasStrongerTextDeclaration() {
+			domain.kind = fieldStringText
+		}
+	}
+	return domain
 }
 
 func materializedFieldStringDomain(domain preparedFieldStringDomain) preparedFieldStringDomain {
@@ -662,8 +682,9 @@ func (b *baseBinder) rememberPreparedFieldNullIfDomain(expr *Expr, args []*Expr)
 		// Ordinary consumers need the SQL value owner too, even without a
 		// prepared binding state. Publish only a flat, immutable source proof;
 		// retain frozen P/V identities independently of type dependence.
-		collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
-		collector.collectResult(source.value, make(map[*Expr]struct{}), true)
+		resolver := newPreparedFieldStringResolver(b)
+		resolver.readOnly = true
+		collector := resolver.collectStringDeclaration(source.value)
 		ensurePreparedNumericMetadata(expr).StringDomainSource = collector.witness(source.value, domains)
 	}
 	if cmp := args[0].GetF(); cmp != nil && len(cmp.Args) == 2 {

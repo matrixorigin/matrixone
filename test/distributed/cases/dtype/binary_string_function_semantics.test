@@ -118,6 +118,66 @@ set @conditional_text = true;
 execute conditional_text_stmt using @conditional_text, @conditional_text;
 deallocate prepare conditional_text_stmt;
 
+-- Variables compete as declarations, not weak literals; rebinding observes their current type.
+set @conditional_peer = _binary '';
+select id, hex(reverse(case when id = 1 then txt else @conditional_peer end)),
+       char_length(case when id = 1 then txt else @conditional_peer end)
+from domains where id = 1;
+set @conditional_peer = '';
+select id, hex(reverse(case when id = 1 then txt else @conditional_peer end)),
+       char_length(case when id = 1 then txt else @conditional_peer end)
+from domains where id = 1;
+set @conditional_peer = null;
+-- Allocating TEXT results retain their own declaration; genuine binary LPAD stays binary.
+select id, hex(reverse(case when txt is not null then lpad(txt, 3, 'z') else _binary '' end)),
+       char_length(case when txt is not null then lpad(txt, 3, 'z') else _binary '' end)
+from domains order by id;
+select id, hex(reverse(case when id = 3 then lpad(bin, 3, _binary 'z') else _binary '' end)),
+       char_length(case when id = 3 then lpad(bin, 3, _binary 'z') else _binary '' end)
+from domains where id = 3;
+-- Row-selection boundaries consume the CASE declaration, not its temporary binary transport.
+select id, hex(reverse(x)), char_length(x)
+from (select id, case when txt is not null then txt else _binary '' end x from domains limit 3) d
+order by id;
+select id, hex(reverse(x)), char_length(x)
+from (select id, case when txt is not null then txt else _binary '' end x from domains having x is not null) d
+order by id;
+select id, hex(reverse(x)), char_length(x)
+from (select id, case when txt is not null then lpad(txt, 3, 'z') else _binary '' end x from domains limit 3) d
+order by id;
+-- PREPARE without result-parameter history uses the same declaration across query blocks.
+prepare derived_case_text from
+    'select id, hex(reverse(x)), char_length(x)
+     from (select id, case when ? then txt else _binary '''' end x from domains limit 3) d order by id';
+set @derived_text = true;
+execute derived_case_text using @derived_text;
+set @derived_text = false;
+execute derived_case_text using @derived_text;
+set @derived_text = true;
+execute derived_case_text using @derived_text;
+deallocate prepare derived_case_text;
+prepare derived_lpad_text from
+    'select id, hex(reverse(x)), char_length(x)
+     from (select id, case when ? then lpad(txt, 3, ''z'') else _binary '''' end x
+           from domains having x is not null) d order by id';
+execute derived_lpad_text using @derived_text;
+set @derived_text = false;
+execute derived_lpad_text using @derived_text;
+set @derived_text = true;
+execute derived_lpad_text using @derived_text;
+deallocate prepare derived_lpad_text;
+set @derived_text = null;
+-- An unrelated explicit CAST does not reset retained CASE history on a transport type change.
+prepare pinned_cast_history from 'select field(case when ? then ? else null end, ''A'', ''a''), cast(? as signed)';
+set @pinned_flag = 1, @pinned_value = null, @pinned_number = '1';
+execute pinned_cast_history using @pinned_flag, @pinned_value, @pinned_number;
+set @pinned_value = 'a';
+execute pinned_cast_history using @pinned_flag, @pinned_value, @pinned_number;
+set @pinned_number = 1;
+execute pinned_cast_history using @pinned_flag, @pinned_value, @pinned_number;
+deallocate prepare pinned_cast_history;
+set @pinned_flag = null, @pinned_value = null, @pinned_number = null;
+
 -- A scalar row limit is not a derived-table materialization boundary.
 select char_length((select coalesce(txt, bin) from domains where id = 1 limit 1)),
        hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1)),

@@ -6547,18 +6547,16 @@ func (b *baseBinder) stringSourceHasDeclarationBoundary(expr *Expr, scalarScope 
 		// A bound P/V value owns its frozen row domain; its binary transport
 		// type is not an independent SQL binary declaration. Reuse the result-
 		// operand witness, which excludes predicates and honors explicit casts.
-		collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
-		collector.collectResult(expr, make(map[*Expr]struct{}), true)
-		// A stronger TEXT declaration (for example a VARCHAR column against
-		// a binary literal) must not be demoted by the common binary transport.
-		// Equal-rank binary columns and explicit casts still own their domain.
-		// Ordinary columns and numeric formatters can prove TEXT authority,
-		// but an allocating producer may hide a binary declaration behind TEXT.
-		if collector.textRank != 0 && (!collector.opaqueDeclaration || collector.textRank == 1) &&
-			(collector.staticDomains&possibleStringDomainBinary == 0 || collector.binaryRank > collector.textRank) {
+		resolver := newPreparedFieldStringResolver(b)
+		resolver.readOnly = true
+		collector := resolver.collectStringDeclaration(expr)
+		if collector.hasStrongerTextDeclaration() {
 			return false
 		}
-		return len(collector.args) == 0 || collector.staticDomains&possibleStringDomainBinary != 0
+		// A variable alone keeps its frozen row domain. When declarations
+		// compete, a binary variable has the same rank as a binary column.
+		return len(collector.args) == 0 || collector.staticDomains&possibleStringDomainBinary != 0 ||
+			collector.textRank != 0 && collector.binaryRank != 0
 	}
 	if b.builder == nil || b.builder.qry == nil {
 		return false
@@ -6768,13 +6766,28 @@ type stringDomainWitnessCollector struct {
 	// Rank + 1 leaves zero for an absent declaration. These scalar facts are
 	// binding-local and never enter the persisted source witness.
 	textRank, binaryRank uint32
+	resolver             *preparedFieldStringResolver
+}
+
+func (r *preparedFieldStringResolver) collectStringDeclaration(expr *Expr) stringDomainWitnessCollector {
+	collector := stringDomainWitnessCollector{seen: make(map[string]struct{}), resolver: r}
+	collector.collectResult(expr, make(map[*Expr]struct{}), true)
+	return collector
+}
+
+func (c *stringDomainWitnessCollector) hasStrongerTextDeclaration() bool {
+	return c.textRank != 0 && (!c.opaqueDeclaration || c.textRank == 1) &&
+		(c.binaryRank == 0 || c.binaryRank > c.textRank)
 }
 
 func (c *stringDomainWitnessCollector) addStaticDomain(expr *Expr, domains uint8, declaration bool) {
-	if !declaration {
-		c.staticDomains |= domains
-		return
+	if declaration {
+		domains = c.addDeclarationRank(expr, domains)
 	}
+	c.staticDomains |= domains
+}
+
+func (c *stringDomainWitnessCollector) addDeclarationRank(expr *Expr, domains uint8) uint8 {
 	collation, ok := collationForExpression(expr)
 	if ok && collation.rank == 0 {
 		// Explicit COLLATE owns the declaration even when a folded literal
@@ -6784,9 +6797,10 @@ func (c *stringDomainWitnessCollector) addStaticDomain(expr *Expr, domains uint8
 			domains = possibleStringDomainBinary
 		}
 	}
-	c.staticDomains |= domains
 	if !ok {
-		return
+		// A missing declaration cannot be ranked below a known TEXT peer.
+		c.opaqueDeclaration = c.opaqueDeclaration || domains&possibleStringDomainBinary != 0
+		return domains
 	}
 	rank := collation.rank + 1
 	if domains&possibleStringDomainText != 0 && (c.textRank == 0 || rank < c.textRank) {
@@ -6795,6 +6809,7 @@ func (c *stringDomainWitnessCollector) addStaticDomain(expr *Expr, domains uint8
 	if domains&possibleStringDomainBinary != 0 && (c.binaryRank == 0 || rank < c.binaryRank) {
 		c.binaryRank = rank
 	}
+	return domains
 }
 
 // A flat summary retains marker identities and scalar domains, never the value
@@ -6884,6 +6899,9 @@ func (c *stringDomainWitnessCollector) collectResult(expr *Expr, visited map[*Ex
 	}
 	if expr.GetP() != nil || expr.GetV() != nil {
 		c.addMarker(expr)
+		if declaration && expr.GetV() != nil {
+			c.addDeclarationRank(expr, possibleStringDomainsForType(makeTypeByPlan2Expr(expr)))
+		}
 		return
 	}
 	if lit := expr.GetLit(); lit != nil {
@@ -6948,9 +6966,22 @@ func (c *stringDomainWitnessCollector) collectResult(expr *Expr, visited map[*Ex
 		}
 	}
 	if declaration && !isPreparedStringConditional(expr) {
-		if _, _, ownsResult := preparedStringDomainContract(name, len(fn.Args)); ownsResult {
-			c.opaqueDeclaration = true
-			c.addStaticDomain(expr, possibleStringDomainsForType(makeTypeByPlan2Expr(expr)), declaration)
+		if source, _, ownsResult := preparedStringDomainContract(name, len(fn.Args)); ownsResult {
+			domains := possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+			opaque := true
+			if source >= 0 && c.resolver != nil {
+				// Independent ownership is not synonymous with BINARY. Use the
+				// existing logical declaration resolver, not a transport type or
+				// the selected row's domain, for allocating results such as LPAD.
+				switch fieldStringArgumentDeclaration(c.resolver.expr(expr)).kind {
+				case fieldStringText:
+					domains, opaque = possibleStringDomainText, false
+				case fieldStringBinary:
+					domains, opaque = possibleStringDomainBinary, false
+				}
+			}
+			c.opaqueDeclaration = c.opaqueDeclaration || opaque
+			c.addStaticDomain(expr, domains, declaration)
 			return
 		}
 	}

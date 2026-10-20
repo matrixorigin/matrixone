@@ -273,7 +273,7 @@ func (b *preparedFieldTypeBinding) seedParameters(seed *Plan) {
 		if fn := expr.GetF(); fn != nil {
 			if fn.Func.ObjName == "cast" && len(fn.Args) > 0 {
 				if p := fn.Args[0].GetP(); p != nil {
-					b.params[p.Pos] = preparedFieldParameter{typ: makeTypeByPlan2Expr(expr), inherited: fn.SyntaxExplicitCast}
+					b.params[p.Pos] = preparedFieldParameter{typ: makeTypeByPlan2Expr(expr), inherited: isExplicitPreparedCast(expr)}
 				}
 			}
 			for _, arg := range fn.Args {
@@ -364,7 +364,7 @@ func (b *preparedFieldTypeBinding) resolve(r *preparedFieldStringResolver, expr 
 		resolver.parameterTypes = b.actual
 		domain := resolver.common(values)
 		if !domain.parameter {
-			return r.common(values)
+			return r.conditionalStringDeclaration(expr, r.common(values))
 		}
 		fact.result = fieldDomainType(domain, makeTypeByPlan2Expr(expr))
 		fact.inferredBinary = domain.inferredBinary

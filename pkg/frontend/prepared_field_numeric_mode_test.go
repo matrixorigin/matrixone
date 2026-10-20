@@ -28,6 +28,52 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestPreparedFieldExplicitCastKeepsHistory(t *testing.T) {
+	for _, cast := range []string{"cast(? as signed)", "cast(? as decimal(10,2))", "cast(? as char)", "cast(cast(? as char) as signed)"} {
+		t.Run(cast, func(t *testing.T) {
+			ses, prepared, cw, ec := newPreparedExecuteEnvForSQL(t, 25306,
+				"select field(case when ? then ? else null end,'A','a'),"+cast)
+			prepared.proc = cw.proc
+			t.Cleanup(func() { cw.proc.SetPrepareParams(nil); ses.Close() })
+			execute := func(null, integer bool, want uint64) {
+				cw.discardRuntimeCacheCandidate()
+				prepared.clearBinaryParamState(cw.proc)
+				prepared.params = vector.NewVec(types.T_text.ToType())
+				for i, value := range []string{"1", "a", "1"} {
+					require.NoError(t, vector.AppendBytes(prepared.params, []byte(value), null && i == 1, cw.proc.Mp()))
+				}
+				valueType, operandType := defines.MYSQL_TYPE_VAR_STRING, defines.MYSQL_TYPE_VAR_STRING
+				if null {
+					valueType = defines.MYSQL_TYPE_NULL
+				}
+				if integer {
+					operandType = defines.MYSQL_TYPE_LONGLONG
+				}
+				prepared.ParamTypes = []byte{byte(defines.MYSQL_TYPE_LONGLONG), 0, byte(valueType), 0, byte(operandType), 0}
+				_, p, stmt, _, owned, err := initExecuteStmtParam(ec, ses, cw, nil, prepared.Name)
+				if owned && stmt != nil {
+					defer stmt.Free()
+				}
+				require.NoError(t, err)
+				q := p.GetQuery()
+				expr := q.Nodes[q.Steps[len(q.Steps)-1]].ProjectList[0]
+				result, free, err := colexec.GetReadonlyResultFromExpression(cw.proc, expr, []*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.NoError(t, err)
+				defer free()
+				require.Equal(t, want, vector.GetFixedAtNoTypeCheck[uint64](result, 0))
+			}
+			execute(true, false, 0)
+			execute(false, false, 2)
+			history := prepared.fieldTypes
+			require.NotNil(t, history)
+			revision := history.Revision()
+			execute(false, true, 2)
+			require.Same(t, history, prepared.fieldTypes, "an unrelated explicit CAST pins its parameter contract")
+			require.Equal(t, revision, prepared.fieldTypes.Revision())
+		})
+	}
+}
+
 func TestPreparedFieldNumericModeGeneration(t *testing.T) {
 	for _, tc := range []struct {
 		name, setting, expr string

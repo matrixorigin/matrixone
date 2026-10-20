@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/stretchr/testify/require"
@@ -342,6 +343,40 @@ func TestPreparedFieldStringConsumerWithoutHistory(t *testing.T) {
 				bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
 				require.NoError(t, err)
 				require.Nil(t, bound.FieldTypes, "reading a string declaration must not acquire FIELD history")
+			})
+		}
+	}
+}
+
+func TestPreparedConditionalDeclarationWithoutHistory(t *testing.T) {
+	for _, value := range []string{"n_name", "lpad(n_name,3,'z')"} {
+		for _, boundary := range []string{"limit 1", "having x is not null"} {
+			t.Run(value+"/"+boundary, func(t *testing.T) {
+				proc := newPlanTestProcess(t)
+				params := vector.NewVec(types.T_text.ToType())
+				t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+				require.NoError(t, vector.AppendBytes(params, []byte("1"), false, proc.Mp()))
+				proc.SetPrepareParams(params)
+				ctx := NewMockCompilerContext(false, proc)
+				ctx.SetContext(WithPreparedFieldTypes(context.Background(), nil))
+				stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+					"select reverse(x) from (select case when ? then "+value+" else _binary '' end x from nation "+boundary+") d", 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				bindings := []PreparedSourceBinding{{Position: 0, Type: types.T_int64.ToType()}}
+				values := []any{ParamValue{Value: int64(1), SourceType: bindings[0].Type, HasSourceType: true}}
+				for range 2 {
+					bound, err := BuildPreparedExecutionPlan(ctx, stmt, bindings, values)
+					require.NoError(t, err)
+					require.Nil(t, bound.FieldTypes, "the condition alone does not require result-type history")
+					reverse := findPlanFunctionExpr(bound.Plan, "reverse")
+					require.NotNil(t, reverse)
+					arg := reverse.GetF().Args[0]
+					for source := preparedFieldPrivateCastSource(arg, 0); source != nil; source = preparedFieldPrivateCastSource(arg, 0) {
+						arg = source
+					}
+					require.False(t, isCastOverload(arg, 1), "a text declaration must not consume a binary transport")
+				}
 			})
 		}
 	}

@@ -363,6 +363,10 @@ func TestStringDeclarationConsumers(t *testing.T) {
 		{"CASE retains stronger text source", "select reverse(case when coalesce(n_name,_binary '')='' then null else coalesce(n_name,_binary '') end) from nation", "reverse", 0, false},
 		{"NULLIF forwards conditional text", "select reverse(nullif(if(n_nationkey=1,_binary '',coalesce(n_name,_binary '')),'')) from nation", "reverse", 0, false},
 		{"NULLIF retains allocated owner", "select reverse(nullif(lpad(coalesce(n_name,_binary ''),3,'z'),'')) from nation", "reverse", 0, true},
+		{"CASE retains pure text LPAD", "select reverse(case when n_nationkey=0 then lpad(n_name,3,'z') else _binary '' end) from nation", "reverse", 0, false},
+		{"limited CASE retains text declaration", "select reverse(x) from (select case when n_nationkey=0 then n_name else _binary '' end x from nation limit 1) d", "reverse", 0, false},
+		{"HAVING CASE retains text declaration", "select reverse(x) from (select case when n_nationkey=0 then n_name else _binary '' end x from nation having x is not null) d", "reverse", 0, false},
+		{"limited LPAD CASE retains text declaration", "select reverse(x) from (select case when n_nationkey=0 then lpad(n_name,3,'z') else _binary '' end x from nation limit 1) d", "reverse", 0, false},
 		{"CASE retains allocated binary owner", "select reverse(case when n_nationkey=0 then lpad(coalesce(n_name,cast('' as binary(4))),3,'z') else _binary '' end) from nation", "reverse", 0, true},
 		{"BIT_COUNT direct source", "select bit_count(coalesce(n_name,_binary '')) from nation", "bit_count", 0, true},
 		{"BIT_COUNT merged source", "select bit_count(x) from (select coalesce(n_name,_binary '') x from nation) d", "bit_count", 0, true},
@@ -458,8 +462,10 @@ func TestStringConditionalDeclarationOwnership(t *testing.T) {
 		{"operand order does not change rank", binary, textColumn, false},
 		{"text literal cannot outrank binary literal", textLiteral, binary, true},
 		{"equal rank binary column", textColumn, column, true},
+		{"equal rank binary variable", textColumn, variable, true},
 		{"equal rank explicit cast", textColumn, explicit, true},
 		{"unknown scalar is not a weaker literal", textColumn, fn("coalesce", scalar, binary), true},
+		{"untyped scalar is not a weaker literal", textColumn, fn("coalesce", &Expr{Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{Typ: planpb.SubqueryRef_SCALAR}}}, binary), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// The binary condition contributes no result declaration.

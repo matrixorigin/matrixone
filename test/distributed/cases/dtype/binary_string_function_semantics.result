@@ -189,6 +189,110 @@ execute conditional_text_stmt using @conditional_text, @conditional_text;
 2  ¦  null  ¦  null  𝄀
 3  ¦  61E4BDA0  ¦  2
 deallocate prepare conditional_text_stmt;
+set @conditional_peer = _binary '';
+select id, hex(reverse(case when id = 1 then txt else @conditional_peer end)),
+char_length(case when id = 1 then txt else @conditional_peer end)
+from domains where id = 1;
+➤ id[4,32,0]  ¦  hex(reverse(case when id = 1 then txt else @conditional_peer end))[12,128,0]  ¦  char_length(case when id = 1 then txt else @conditional_peer end)[-5,64,0]  𝄀
+1  ¦  61A0BDE4  ¦  4
+set @conditional_peer = '';
+select id, hex(reverse(case when id = 1 then txt else @conditional_peer end)),
+char_length(case when id = 1 then txt else @conditional_peer end)
+from domains where id = 1;
+➤ id[4,32,0]  ¦  hex(reverse(case when id = 1 then txt else @conditional_peer end))[-1,16383,0]  ¦  char_length(case when id = 1 then txt else @conditional_peer end)[-5,64,0]  𝄀
+1  ¦  61E4BDA0  ¦  2
+set @conditional_peer = null;
+select id, hex(reverse(case when txt is not null then lpad(txt, 3, 'z') else _binary '' end)),
+char_length(case when txt is not null then lpad(txt, 3, 'z') else _binary '' end)
+from domains order by id;
+➤ id[4,32,0]  ¦  hex(reverse(case when txt is not null then lpad(txt, 3, z) else  end))[12,24,0]  ¦  char_length(case when txt is not null then lpad(txt, 3, z) else  end)[-5,64,0]  𝄀
+1  ¦  61E4BDA07A  ¦  3  𝄀
+2  ¦    ¦  0  𝄀
+3  ¦  61E4BDA07A  ¦  3
+select id, hex(reverse(case when id = 3 then lpad(bin, 3, _binary 'z') else _binary '' end)),
+char_length(case when id = 3 then lpad(bin, 3, _binary 'z') else _binary '' end)
+from domains where id = 3;
+➤ id[4,32,0]  ¦  hex(reverse(case when id = 3 then lpad(bin, 3, z) else  end))[12,24,0]  ¦  char_length(case when id = 3 then lpad(bin, 3, z) else  end)[-5,64,0]  𝄀
+3  ¦  A0BDE4  ¦  3
+select id, hex(reverse(x)), char_length(x)
+from (select id, case when txt is not null then txt else _binary '' end x from domains limit 3) d
+order by id;
+➤ id[4,32,0]  ¦  hex(reverse(x))[12,128,0]  ¦  char_length(x)[-5,64,0]  𝄀
+1  ¦  61E4BDA0  ¦  2  𝄀
+2  ¦    ¦  0  𝄀
+3  ¦  61E4BDA0  ¦  2
+select id, hex(reverse(x)), char_length(x)
+from (select id, case when txt is not null then txt else _binary '' end x from domains having x is not null) d
+order by id;
+➤ id[4,32,0]  ¦  hex(reverse(x))[12,128,0]  ¦  char_length(x)[-5,64,0]  𝄀
+1  ¦  61E4BDA0  ¦  2  𝄀
+2  ¦    ¦  0  𝄀
+3  ¦  61E4BDA0  ¦  2
+select id, hex(reverse(x)), char_length(x)
+from (select id, case when txt is not null then lpad(txt, 3, 'z') else _binary '' end x from domains limit 3) d
+order by id;
+➤ id[4,32,0]  ¦  hex(reverse(x))[12,24,0]  ¦  char_length(x)[-5,64,0]  𝄀
+1  ¦  61E4BDA07A  ¦  3  𝄀
+2  ¦    ¦  0  𝄀
+3  ¦  61E4BDA07A  ¦  3
+prepare derived_case_text from
+'select id, hex(reverse(x)), char_length(x)
+from (select id, case when ? then txt else _binary '''' end x from domains limit 3) d order by id';
+set @derived_text = true;
+execute derived_case_text using @derived_text;
+➤ id[4,32,0]  ¦  hex(reverse(d.x))[12,128,0]  ¦  char_length(d.x)[-5,64,0]  𝄀
+1  ¦  61E4BDA0  ¦  2  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  61E4BDA0  ¦  2
+set @derived_text = false;
+execute derived_case_text using @derived_text;
+➤ id[4,32,0]  ¦  hex(reverse(d.x))[12,128,0]  ¦  char_length(d.x)[-5,64,0]  𝄀
+1  ¦    ¦  0  𝄀
+2  ¦    ¦  0  𝄀
+3  ¦    ¦  0
+set @derived_text = true;
+execute derived_case_text using @derived_text;
+➤ id[4,32,0]  ¦  hex(reverse(d.x))[12,128,0]  ¦  char_length(d.x)[-5,64,0]  𝄀
+1  ¦  61E4BDA0  ¦  2  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  61E4BDA0  ¦  2
+deallocate prepare derived_case_text;
+prepare derived_lpad_text from
+'select id, hex(reverse(x)), char_length(x)
+from (select id, case when ? then lpad(txt, 3, ''z'') else _binary '''' end x
+from domains having x is not null) d order by id';
+execute derived_lpad_text using @derived_text;
+➤ id[4,32,0]  ¦  hex(reverse(d.x))[12,24,0]  ¦  char_length(d.x)[-5,64,0]  𝄀
+1  ¦  61E4BDA07A  ¦  3  𝄀
+3  ¦  61E4BDA07A  ¦  3
+set @derived_text = false;
+execute derived_lpad_text using @derived_text;
+➤ id[4,32,0]  ¦  hex(reverse(d.x))[12,24,0]  ¦  char_length(d.x)[-5,64,0]  𝄀
+1  ¦    ¦  0  𝄀
+2  ¦    ¦  0  𝄀
+3  ¦    ¦  0
+set @derived_text = true;
+execute derived_lpad_text using @derived_text;
+➤ id[4,32,0]  ¦  hex(reverse(d.x))[12,24,0]  ¦  char_length(d.x)[-5,64,0]  𝄀
+1  ¦  61E4BDA07A  ¦  3  𝄀
+3  ¦  61E4BDA07A  ¦  3
+deallocate prepare derived_lpad_text;
+set @derived_text = null;
+prepare pinned_cast_history from 'select field(case when ? then ? else null end, ''A'', ''a''), cast(? as signed)';
+set @pinned_flag = 1, @pinned_value = null, @pinned_number = '1';
+execute pinned_cast_history using @pinned_flag, @pinned_value, @pinned_number;
+➤ field(case when ? then ? else null end, A, a)[-5,64,0]  ¦  cast(? as signed)[-5,64,0]  𝄀
+0  ¦  1
+set @pinned_value = 'a';
+execute pinned_cast_history using @pinned_flag, @pinned_value, @pinned_number;
+➤ field(case when ? then ? else null end, A, a)[-5,64,0]  ¦  cast(? as signed)[-5,64,0]  𝄀
+2  ¦  1
+set @pinned_number = 1;
+execute pinned_cast_history using @pinned_flag, @pinned_value, @pinned_number;
+➤ field(case when ? then ? else null end, A, a)[-5,64,0]  ¦  cast(? as signed)[-5,64,0]  𝄀
+2  ¦  1
+deallocate prepare pinned_cast_history;
+set @pinned_flag = null, @pinned_value = null, @pinned_number = null;
 select char_length((select coalesce(txt, bin) from domains where id = 1 limit 1)),
 hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1)),
 hex(reverse((select coalesce(txt, bin) from domains where id = 1 limit 1)));

@@ -402,3 +402,66 @@ insert into t(txt) values (NULL);
 本节仍不宣称 CASE 完整 MySQL parity：选择非空 binary literal 时的 charset/result-domain 规范化、更多 materialized conditional 情况、已有 CONCAT/explicit-CHAR/cross-explicit/unbounded-BINARY 差异仍有限制。不能把这些限制用于重新排除本节已明确修正的所选 VARCHAR+弱 binary literal 场景。未扩展到 partition、stored procedure、UDF 或警告兼容重设计。第6节的混合版本、restart、Proxy/MULTICN、实际并发 DDL physical retry、wire20631 注入和全仓 race 限度不变。
 
 本地证据在 review20 worktree 的 `CLAUDE_*` 和 `CLAUDE_validation_artifacts/`，包括各候选失败、上游 overlay、资源失败/恢复、当前 profile、逐轮报告、独立 oracle 与源码清单；不提交临时工具/数据/TODO。D1/D2/D3 哈希和完整40文件变更图复核不变。作者自审及实施授权不代表独立 reviewer 批准；不 dismiss CHANGES_REQUESTED，不等待或请求 post-push CI。
+
+## 9. review22：变量、独立 TEXT 结果、query-block 声明及显式 CAST（2026-10-21）
+
+### 9.1 反例与共同所有者
+
+起点为 `1ec4f5c5085c637c132c4b9cea9d0487a47736a5`，合并固定 `mo/main=76e152a1dd02b7875829027117a6f6344d1f8d33` 后基点为 `70b1bf3559b2841666175bf0c96d2e8541277e68`。本节不重写 D2/D3/DECISIONS 或前轮历史证据。
+
+独立 MySQL 与保留的旧 G 二进制重现了三个 P2。G→1ec 的 planner/frontend/vector 闭包源码一致；该复用只归属于旧行为，不是当前构建验收。以下均选择 VARCHAR `你a` 或其纯 TEXT LPAD 结果：
+
+| 场景 | 旧结果 | MySQL 与最终结果 |
+|---|---|---|
+| CASE 的 peer 为 binary 用户变量 | 长度2、`61E4BDA0` | 长度4、`61A0BDE4` |
+| CASE 的结果为 `LPAD(txt,3,'z')`、peer 为弱 binary literal | 长度5、`61A0BDE47A` | 长度3、`61E4BDA07A` |
+| CASE 经 LIMIT/HAVING 派生表 | 长度4、`61A0BDE4` | 长度2、`61E4BDA0` |
+
+变量仍保留冻结 row domain，但其声明必须参与 coercibility 竞争，不能等同于弱 literal。LPAD 仍拥有结果声明；使用已有 resolver 和唯一的函数契约映射区分真实 TEXT/BINARY，不把 allocating producer 一概 opaque，也不将其透明化。缺失声明的 scalar 保持保守。真实 binary LPAD、显式 BINARY/COLLATE、同级 binary 列等对照未削弱。
+
+LIMIT/HAVING 仍是边界。普通 CASE/IF 和无结果参数依赖的 prepared CASE 共用逻辑声明证明，不能将公共 binary transport 升格为最终声明。已有 H 和参数推导模式保持原优先级；无 H 分支不得因读取声明而建立 history。没有 SQL 形状例外、新 producer 白名单、持久化字段、跨执行图引用或逐行遍历。
+
+同头独立 review 还指出 P1：
+
+```sql
+prepare s from 'select field(case when ? then ? else null end,''A'',''a''),cast(? as signed)';
+```
+
+依次执行 `(1,NULL,"1")`、`(1,"a","1")`、`(1,"a",1)`，旧结果为 `0/2/1`，MySQL/最终结果为 `0/2/2`。真实 PREPARE 产生的 CAST1 可以没有 `SyntaxExplicitCast`；参数 seeding 现复用既有 `isExplicitPreparedCast`。SIGNED、DECIMAL、CHAR、嵌套 CHAR→SIGNED 均通过实际 PREPARE、`initExecuteStmtParam` 和 Eval 验证，最后一次执行保持 H 指针及 revision。没有新增历史代际或放宽普通参数的 reprepare 契约。
+
+### 9.2 保存的失败与最终源码验收
+
+- 初始 typed/真实 frontend 回归均先失败；公开 SQL 亦独立确认，不使用实现自身生成 oracle。
+- B 轮普通 SQL、五包和静态通过，但追加真实 PREPARE 后，LIMIT 文本 CASE 仍为4/4，HAVING 文本 LPAD CASE 仍为5/5。失败来自无 H 分支直接 `common(values)`、绕过共同声明证明。B 的 profile/build/生成结果全部留存，未当作最终验收。
+- 补齐后，C 的 HAVING UT 暴露 fixture 未安装 process prepare-params（`get prepare params error, index 0 not exists`）。按真实执行环境设置参数并立即登记清理，不改变 SQL、断言或产品逻辑；最终 D 全部通过。LIMIT/HAVING 各含 TEXT 列和 TEXT LPAD，重复绑定且 H 始终为 nil；公开 PREPARE/EXECUTE 另行验证。
+- 新上游改变 native 输入，旧产物预检被正确拒绝，当前 worktree 重新 `make -j2 cgo` 并验证 provenance。低空间时拒绝清理有活动 lint/1131个FD的默认 cache；确认私有缓存无用户/FD后 `go clean -cache`，随后默认缓存也仅在无用户/FD时清理。源码、模块、native、数据、WIP、失败证据均保留。
+
+最终 D 的一份完整 atomic profile（Go1.27.1、Darwin/arm64、支持的 CGo wrapper）：
+
+| 包 | PASS事件（含子测试） | SKIP | 秒 |
+|---|---:|---:|---:|
+| sql/plan | 18253 | 2 | 88.996 |
+| frontend | 6274 | 1 | 17.296 |
+| sql/compile | 3700 | 0 | 13.352 |
+| sql/plan/function | 11439 | 0 | 10.962 |
+| sql/parsers/tree | 149 | 0 | 0.862 |
+
+增量可执行行覆盖 **42/43=97.7%**，全 PR **1037/1111=93.3%**。这是普通 owning-package instrumentation，不是全仓 `-coverpkg`；seeding 行由真实 frontend 回归执行，但不冒称计入 plan 包独立 profile。gofmt/vet 通过；molint exit0 且20条诊断与固定 main 的 owner/源码等价（不是执行了 baseline molint）；匹配 CI 工具链的增量 golangci-lint **0 issues**。支持的 `build-with-prebuilt-native` 及源码清单校验通过。
+
+### 9.3 公共验收与边界
+
+最终服务使用独立新数据与端口。先按原期望执行 dtype **104/104**，随后34行新 SQL 的 MySQL/MO TSV 逐字节一致，才用 mo-tester 生成结果。结果差异仅一个新增 hunk，旧值/metadata/MULTICN 片段不变；生成模式留下的旧 report 不作为生成或正常比较证据。正式验收均为随后独立的正常比较：
+
+| 文件 | 首轮 | 同实例第二轮 |
+|---|---:|---:|
+| dtype（本地单 CN 部分） | 139/139 | 139/139 |
+| prepared_field_history | 492/492 | 492/492 |
+| func_field | 97/97 | — |
+| prepared_variadic_comparison | 104/104 | — |
+| func_datetime_timestampadd | 99/99 | — |
+
+七份正常报告 FAILED/IGNORED/ABNORAML=0，error.txt 均为空。dtype 的 `@metacmp(true)` 不变。另一个独立连接重复执行 prepared LIMIT/HAVING，分别得到2/2、3/3及正确 reverse bytes，与 MySQL 一致。所有自有库已清理、服务退出、端口释放；未停止外部服务。
+
+原数字 DEFAULT 的 `_binary ''` NULL fallback 在最终实际 DML 中仍报20203，非 NULL 文本返回2；MySQL为2/0。该既有边界没有修复，也未改成成功计数。本节不宣称一般 CASE charset/结果 metadata、选择非空 binary literal 时的规范化、全部物化/聚合拓扑均与 MySQL 等价。第6—8节的其他明确限度继续有效，但不能再排除本节已验证的变量、纯 TEXT LPAD、普通及 prepared LIMIT/HAVING 场景。
+
+没有新的 race/benchmark 数字；纯 TEXT 快路径不变，新解析限于绑定期既有声明路径，没有跨执行状态或新同步。历史性能/race保留原源码归属，不改称当前全仓、Linux/XFS、Proxy/MULTICN、restart、混合版本或真实并发DDL physical retry证明。最终证据在 review22 worktree 的 `CLAUDE_*`、`CLAUDE_phase_B/` 和 `CLAUDE_validation_artifacts/`，本地 TODO/工具/数据不提交。自审不是独立 reviewer 批准，不 dismiss CHANGES_REQUESTED，不等待 post-push CI。
