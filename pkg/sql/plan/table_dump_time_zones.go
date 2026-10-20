@@ -26,54 +26,53 @@ import (
 // The finite name inventory is from Go 1.27.1 lib/time/zoneinfo.zip (IANA 2026c),
 // including aliases. Custom ZONEINFO names and unavailable historical rules
 // cannot be recovered from catalog metadata that did not record their identity.
-var tableDumpTimeZoneCache struct {
+var tableDumpFixedTimeZoneCache struct {
 	sync.Once
-	named []*time.Location
-	fixed []*time.Location
+	zones []*time.Location
 }
 
-func initTableDumpTimeZoneCache() {
-	tableDumpTimeZoneCache.Do(func() {
-		// Loading the named IANA zones and allocating every admitted numeric
-		// offset is expensive. AnalyzeTableDumpBindings may enumerate this
-		// inventory once for each candidate expression, so build the immutable
-		// witnesses once per process. time.UTC and time.Local stay dynamic below
-		// because callers may replace time.Local at runtime.
-		tableDumpTimeZoneCache.named = make([]*time.Location, 0, len(strings.Fields(tableDumpTimeZoneNames)))
-		for _, name := range strings.Fields(tableDumpTimeZoneNames) {
-			if name == "UTC" {
-				continue
-			}
-			zone, err := time.LoadLocation(name)
-			if err == nil {
-				tableDumpTimeZoneCache.named = append(tableDumpTimeZoneCache.named, zone)
-			}
-		}
-
-		tableDumpTimeZoneCache.fixed = make([]*time.Location, 0, 14*60+13*60+59)
-		for minute := -(13*60 + 59); minute <= 14*60; minute++ {
-			if minute != 0 {
-				tableDumpTimeZoneCache.fixed = append(tableDumpTimeZoneCache.fixed,
-					time.FixedZone("table dump binding", minute*60))
-			}
-		}
-	})
-}
-
-func tableDumpTimeZones(yield func(*time.Location) bool) {
-	if !yield(time.UTC) || !yield(time.Local) {
-		return
-	}
-	initTableDumpTimeZoneCache()
-	for _, zone := range tableDumpTimeZoneCache.named {
-		if !yield(zone) {
+// newTableDumpTimeZones owns a named-rule snapshot for one verification only.
+// A later verification reloads tzdata just like SET time_zone, including zones
+// that were temporarily unavailable. No matching results or budgets are cached.
+func newTableDumpTimeZones(loadLocation func(string) (*time.Location, error)) func(func(*time.Location) bool) {
+	var named []*time.Location
+	loaded := false
+	return func(yield func(*time.Location) bool) {
+		// Read Local at enumeration time: callers can replace it after construction.
+		if !yield(time.UTC) || !yield(time.Local) {
 			return
 		}
-	}
-	// These are precisely the numeric offsets admitted by SET time_zone.
-	for _, zone := range tableDumpTimeZoneCache.fixed {
-		if !yield(zone) {
-			return
+		if !loaded {
+			for _, name := range strings.Fields(tableDumpTimeZoneNames) {
+				if name == "UTC" {
+					continue
+				}
+				zone, err := loadLocation(name)
+				if err == nil {
+					named = append(named, zone)
+				}
+			}
+			loaded = true
+		}
+		for _, zone := range named {
+			if !yield(zone) {
+				return
+			}
+		}
+		// Numeric offsets have no external rule source and may be reused globally.
+		tableDumpFixedTimeZoneCache.Do(func() {
+			tableDumpFixedTimeZoneCache.zones = make([]*time.Location, 0, 1679)
+			for minute := -(13*60 + 59); minute <= 14*60; minute++ {
+				if minute != 0 {
+					tableDumpFixedTimeZoneCache.zones = append(tableDumpFixedTimeZoneCache.zones,
+						time.FixedZone("table dump binding", minute*60))
+				}
+			}
+		})
+		for _, zone := range tableDumpFixedTimeZoneCache.zones {
+			if !yield(zone) {
+				return
+			}
 		}
 	}
 }

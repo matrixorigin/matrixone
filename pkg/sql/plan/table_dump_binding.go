@@ -291,9 +291,44 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	}
 }
 
+// tableDumpBoundExpressionNeedsNormalization follows exactly the edges that
+// the compatibility normalization below changes. Other expression variants
+// must retain their exact protobuf comparison semantics.
+func tableDumpBoundExpressionNeedsNormalization(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.Typ.Table != "" || (expr.Typ.Id == int32(types.T_time) && expr.Typ.Width != 0 && expr.Typ.Width == expr.Typ.Scale) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if tableDumpBoundExpressionNeedsNormalization(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, entry := range list.List {
+			if tableDumpBoundExpressionNeedsNormalization(entry) {
+				return true
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return tableDumpBoundExpressionNeedsNormalization(lit.Src)
+	}
+	return false
+}
+
 func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	if a == nil || b == nil {
 		return a == b
+	}
+	// Canonical trees need no compatibility rewrite. Avoid copying both
+	// complete trees for each speculative binding in the witness search.
+	if !tableDumpBoundExpressionNeedsNormalization(a) && !tableDumpBoundExpressionNeedsNormalization(b) {
+		return proto.Equal(a, b)
 	}
 	left := proto.Clone(a).(*planpb.Expr)
 	right := proto.Clone(b).(*planpb.Expr)
@@ -479,6 +514,7 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 	zone := proc.GetSessionInfo().TimeZone
 	ctx = tableDumpBindContext{CompilerContext: ctx, ctx: ctx.GetContext(), proc: proc}
 	budget := &tableDumpBindingBudget{}
+	timeZones := newTableDumpTimeZones(time.LoadLocation)
 	var sensitive bool
 	for i, item := range items {
 		if err := ctx.GetContext().Err(); err != nil {
@@ -655,7 +691,7 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 						if matched || fatal != nil {
 							break
 						}
-						for tz := range tableDumpTimeZones {
+						for tz := range timeZones {
 							rebound, _ := bind(increment, mode, tz, lc)
 							if fatal != nil {
 								break
