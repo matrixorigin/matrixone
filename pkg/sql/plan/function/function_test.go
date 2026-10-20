@@ -1382,6 +1382,7 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_timestamp"))
 	assert.True(t, GetFunctionIsVolatileOrRealTimeRelatedByName("current_role_id"))
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("abs"))
+	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("bit_count"))
 	for _, name := range []string{
 		"inet_aton", "inet_ntoa", "inet6_aton", "inet6_ntoa",
 		"is_ipv4", "is_ipv6", "is_ipv4_compat", "is_ipv4_mapped",
@@ -1473,6 +1474,34 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
 		})
 	}
+	for _, source := range []types.T{types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run("datetime cast/"+source.String(), func(t *testing.T) {
+			args := []*plan.Expr{
+				{Typ: plan.Type{Id: int32(source), NotNullable: true}},
+				{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}},
+			}
+			for _, overload := range []int32{0, 1} {
+				require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, overload), args))
+			}
+			for _, overload := range []int32{2, 3} {
+				require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, overload), args))
+			}
+		})
+	}
+	for _, overload := range []int32{3, 4} {
+		require.False(t, DeduceNotNullable(EncodeOverloadID(DATE, overload), []*plan.Expr{notNull}))
+	}
+	// Typed and numeric conversion guarantees are unchanged.
+	for _, source := range []types.T{types.T_datetime, types.T_date, types.T_int64} {
+		args := []*plan.Expr{
+			{Typ: plan.Type{Id: int32(source), NotNullable: true}},
+			{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}},
+		}
+		for _, overload := range []int32{0, 1} {
+			require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, overload), args))
+		}
+	}
+	require.True(t, DeduceNotNullable(EncodeOverloadID(DATE, 1), []*plan.Expr{notNull}))
 }
 
 func TestTypedDateConversionNullability(t *testing.T) {
@@ -1976,5 +2005,31 @@ func TestCalendarNumericResultTypes(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.want.ToType(), resolved.retType)
 		})
+	}
+}
+
+func TestHistoricalTemporalNullabilityBinding(t *testing.T) {
+	source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true}}
+	target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}
+	historical := WithLegacyTemporalNullability(context.Background())
+	for _, tc := range []struct {
+		fid  int32
+		oid  int32
+		args []*plan.Expr
+	}{
+		{DATE, 3, []*plan.Expr{source}}, {DATE, 4, []*plan.Expr{source}},
+		{CAST, 0, []*plan.Expr{source, target}}, {CAST, 1, []*plan.Expr{source, target}},
+	} {
+		id := EncodeOverloadID(tc.fid, tc.oid)
+		require.False(t, DeduceNotNullable(id, tc.args))
+		require.False(t, DeduceNotNullableForBinding(context.Background(), id, tc.args))
+		require.True(t, DeduceNotNullableForBinding(historical, id, tc.args))
+		source.Typ.NotNullable = false
+		require.False(t, DeduceNotNullableForBinding(historical, id, tc.args))
+		source.Typ.NotNullable = true
+	}
+	for _, ctx := range []context.Context{context.Background(), historical} {
+		require.True(t, DeduceNotNullableForBinding(ctx, EncodeOverloadID(CAST, 3), []*plan.Expr{source, target}))
+		require.False(t, DeduceNotNullableForBinding(ctx, EncodeOverloadID(DATE, 0), []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}}))
 	}
 }

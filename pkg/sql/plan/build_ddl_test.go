@@ -1388,11 +1388,28 @@ func TestBuildCreateTableCheckConstraints(t *testing.T) {
 		return p.GetDdl().GetCreateTable().GetTableDef(), nil
 	}
 
+	t.Run("generated check names respect identifier length", func(t *testing.T) {
+		for _, length := range []int{58, 59, 64} {
+			name := strings.Repeat("t", length)
+			def, err := build("create table "+name+"(a int check(a>0))", false)
+			if length == 58 {
+				require.NoError(t, err)
+				require.Equal(t, name+"_chk_1", def.Checks[0].Name)
+			} else {
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTooLongIdent), "%v", err)
+			}
+			// The table name itself is valid; an explicit short CHECK still works.
+			_, err = build("create table "+name+"(a int, constraint ck check(a>0))", false)
+			require.NoError(t, err)
+		}
+	})
+
 	t.Run("table check binds after all columns", func(t *testing.T) {
 		tableDef, err := build("create table t(a int, check (b > a), b int)", false)
 		require.NoError(t, err)
 		require.Len(t, tableDef.Checks, 1)
-		require.Equal(t, "__mo_chk_1", tableDef.Checks[0].Name)
+		// Unnamed CHECKs are named after their owning table, MySQL-style.
+		require.Equal(t, "t_chk_1", tableDef.Checks[0].Name)
 		require.Equal(t, int32(types.T_bool), tableDef.Checks[0].Check.Typ.Id)
 	})
 
@@ -2359,6 +2376,36 @@ func TestStableViewSQLWithExpandedStarsRejectsUnsupportedInputs(t *testing.T) {
 }
 
 func TestBuildCreateViewExplicitColumnList(t *testing.T) {
+	t.Run("dependent query keeps main output metadata", func(t *testing.T) {
+		const selectSQL = `select n.n_nationkey as k,
+			(select (select cast(n.n_nationkey as decimal(12,2)))) as v from nation n`
+		for _, prefix := range []string{"create view v (k,v) as ", "create table dependent_ctas as "} {
+			func() {
+				sql := prefix + selectSQL
+				ctx := &rootSQLCompilerContext{MockCompilerContext: NewMockCompilerContext(false, newPlanTestProcess(t)), rootSQL: sql}
+				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				p, err := BuildPlan(ctx, stmt, false)
+				require.NoError(t, err)
+				var cols []*plan.ColDef
+				if view := p.GetDdl().GetCreateView(); view != nil {
+					cols = view.TableDef.Cols
+				} else {
+					cols = p.GetDdl().GetCreateTable().TableDef.Cols
+				}
+				require.GreaterOrEqual(t, len(cols), 2)
+				require.Equal(t, "k", cols[0].Name)
+				require.Equal(t, int32(types.T_int32), cols[0].Typ.Id)
+				require.Equal(t, "v", cols[1].Name)
+				require.Equal(t, int32(types.T_decimal64), cols[1].Typ.Id)
+				require.Equal(t, int32(12), cols[1].Typ.Width)
+				require.Equal(t, int32(2), cols[1].Typ.Scale)
+				require.True(t, cols[1].Default.NullAbility)
+			}()
+		}
+	})
+
 	t.Run("applies explicit names", func(t *testing.T) {
 		const rootSQL = "create view v (`alias#one`, alias_two) as select 1, 2"
 		ctx := &rootSQLCompilerContext{
@@ -6407,7 +6454,7 @@ func Test_buildTableDefs(t *testing.T) {
 		SubscriptionOption: nil,
 	}
 
-	ctx := &MockCompilerContext{}
+	ctx := NewMockOptimizer(false, newPlanTestProcess(t)).CurrentContext()
 
 	createTable := &plan.CreateTable{
 		Database: "db",
@@ -6959,7 +7006,11 @@ func TestCreateForeignKeyUsesLegacyCatalogBeforeTenantUpgrade(t *testing.T) {
 	var internalQueries []string
 	setPlanTestGlobalVariable(t, proc.GetService(), moruntime.InternalSQLExecutor,
 		executor.NewMemExecutor(func(sql string) (executor.Result, error) {
-			internalQueries = append(internalQueries, sql)
+			if strings.Contains(sql, catalog.MOForeignKeys) {
+				internalQueries = append(internalQueries, sql)
+			} else {
+				require.Contains(t, sql, catalog.MODatabaseDefaults)
+			}
 			return executor.Result{}, nil
 		}),
 	)

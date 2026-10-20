@@ -140,7 +140,10 @@ func (c *gcChecker) Verify(ctx context.Context, mp *mpool.MPool) (returnStr stri
 			returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
 			return
 		}
-		collectObjectsFromCheckpointData(ctx, reader, objects2)
+		if err := collectObjectsFromCheckpointData(ctx, reader, objects2); err != nil {
+			returnStr += fmt.Sprintf("{'verify': '%v'}", err.Error())
+			return
+		}
 	}
 
 	allCount := len(allObjects)

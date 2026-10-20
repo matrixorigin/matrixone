@@ -281,16 +281,41 @@ func (shortGroupSpillWriter) Write(value []byte) (int, error) {
 	return len(value) - 1, nil
 }
 
+func installGroupTestResourceBudget(t testing.TB, proc *process.Process) *process.ExecutionResourceGeneration {
+	t.Helper()
+	require.Positive(t, proc.Base.Lim.Size)
+	limit := uint64(proc.Base.Lim.Size)
+	// These fixtures test account/spill behavior, not host emergency headroom.
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
+	require.NoError(t, budget.SetSpillCaps(1<<30, budget.SpillFDCap()))
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		defer generation.Close()
+		snapshot := generation.Snapshot()
+		require.Zero(t, snapshot.Used, "private Group generation: %+v", snapshot)
+		require.Zero(t, snapshot.SpillDiskUsed)
+		require.Zero(t, snapshot.SpillFDUsed)
+	})
+	require.NoError(t, proc.SetExecutionResourceBudgetForTesting(generation))
+	return generation
+}
+
 func installGroupTestAllocation(
 	t testing.TB,
 	op any,
 	proc *process.Process,
 	limit uint64,
+	selected ...*process.ExecutionResourceGeneration,
 ) groupTestAllocation {
 	t.Helper()
 	proc.Base.Lim.Size = int64(limit)
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
+	var generation *process.ExecutionResourceGeneration
+	if len(selected) != 0 && selected[0] != nil {
+		generation = selected[0]
+	} else {
+		generation = installGroupTestResourceBudget(t, proc)
+	}
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<16)
 	require.NoError(t, err)
 	account, err := registry.OpenWithController(limit, generation)
@@ -1044,9 +1069,9 @@ func TestAccountedMergeGroupVectorDistinctSpillConsumer(t *testing.T) {
 					finalizeGroupTestAllocation(t, partial, partialAllocation)
 				}
 			})
-			partialAllocation = installGroupTestAllocation(t, partial, proc, 64<<20)
+			partialAllocation = installGroupTestAllocation(t, partial, proc, 64<<20, generation)
 			partialBound = true
-			mergeAllocation = installGroupTestAllocation(t, merge, proc, 64<<20)
+			mergeAllocation = installGroupTestAllocation(t, merge, proc, 64<<20, generation)
 			mergeBound = true
 			require.NoError(t, partial.Prepare(proc))
 			require.NoError(t, merge.Prepare(proc))
@@ -1137,8 +1162,7 @@ func TestGroupSelectedBinaryPreflightAllocatesNothingAfterHashCommit(t *testing.
 	input.SetRowCount(2)
 
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
+	generation := installGroupTestResourceBudget(t, proc)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 	require.NoError(t, err)
 	controller := &rejectNextGroupAllocationController{}
@@ -1243,8 +1267,7 @@ func TestGroupKeySourceReservationSurvivesCompletePublication(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			defer proc.Free()
 			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int64)}, nil)
-			generation, err := proc.GetExecutionResourceBudget()
-			require.NoError(t, err)
+			generation := installGroupTestResourceBudget(t, proc)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<14)
 			require.NoError(t, err)
 			controller := &rejectNextGroupAllocationController{}
@@ -1376,8 +1399,7 @@ func TestGroupSamePreviewDuplicateSourcePreflightsBeforeHashCommit(t *testing.T)
 			inputSourceBacking := &inputSources[0]
 
 			g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
-			generation, err := proc.GetExecutionResourceBudget()
-			require.NoError(t, err)
+			generation := installGroupTestResourceBudget(t, proc)
 			registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 			require.NoError(t, err)
 			controller := &rejectNextGroupAllocationController{}
@@ -1471,8 +1493,7 @@ func TestGroupExistingAndNewSourcesStayPreflightedThroughPublication(t *testing.
 		[]types.StringSource{types.StringSourceExpression, types.StringSourceLiteral})
 
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)}, nil)
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
+	generation := installGroupTestResourceBudget(t, proc)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 	require.NoError(t, err)
 	controller := &rejectNextGroupAllocationController{}
@@ -1718,8 +1739,7 @@ func TestSpillReloadRetriesWholeRecordAfterCapacityRejection(t *testing.T) {
 	)
 	g.SpillMem = 512
 	proc.Base.Lim.Size = 128 << 20
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
+	generation := installGroupTestResourceBudget(t, proc)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<16)
 	require.NoError(t, err)
 	controller := &rejectAfterReadAheadController{}
@@ -2514,7 +2534,7 @@ func TestAccountedGroupQueuedSpillDoesNotRetainFDs(t *testing.T) {
 		// opens a bucket. Queue length must not consume the reader's FD budget.
 		proc.Ctx = newCancelOnDoneCheckContext(proc.Ctx, nonEmptyBuckets+4)
 	}))
-	allocation = installGroupTestAllocation(t, g, proc, 64<<20)
+	allocation = installGroupTestAllocation(t, g, proc, 64<<20, generation)
 	require.NoError(t, g.Prepare(proc))
 	result, err := g.Call(proc)
 	require.ErrorIs(t, err, context.Canceled)
@@ -2531,8 +2551,7 @@ func TestGroupSpillBucketReopen(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			defer proc.Free()
-			budget, err := proc.GetExecutionResourceBudget()
-			require.NoError(t, err)
+			budget := installGroupTestResourceBudget(t, proc)
 			fs, err := proc.GetSpillFileService()
 			require.NoError(t, err)
 			ctr := container{mp: proc.Mp(), budget: budget}
@@ -2744,8 +2763,7 @@ func TestAccountedGroupRetriesResidentStringSourcePreflight(t *testing.T) {
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_text)},
 		[]aggexec.AggFuncExecExpression{countStarAgg()})
 	g.SpillMem = 1 << 30
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
+	generation := installGroupTestResourceBudget(t, proc)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 	require.NoError(t, err)
 	controller := &rejectNextGroupAllocationController{}
@@ -2808,8 +2826,7 @@ func TestAccountedGroupRetriesAnyValueSourcePreflight(t *testing.T) {
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_varchar)},
 		[]aggexec.AggFuncExecExpression{anyValue})
 	g.SpillMem = 1 << 30
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
+	generation := installGroupTestResourceBudget(t, proc)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 	require.NoError(t, err)
 	controller := &rejectNextGroupAllocationController{}
@@ -2952,8 +2969,7 @@ func TestAccountedGroupRetriesAggregateAreaPreflightBeforePublishingValues(t *te
 	g := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_int32)},
 		[]aggexec.AggFuncExecExpression{anyValue})
 	g.SpillMem = 1 << 30
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
+	generation := installGroupTestResourceBudget(t, proc)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<16)
 	require.NoError(t, err)
 	controller := &rejectNextGroupAllocationController{}
@@ -3074,6 +3090,7 @@ func TestAccountedMergeGroupMaxSpillDepthFinishesAdmittedLeaves(t *testing.T) {
 func TestAccountedMergeGroupRetriesResidentStringSourcePreflight(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	generation := installGroupTestResourceBudget(t, proc)
 	makePartial := func(source types.StringSource) *batch.Batch {
 		input := batch.NewWithSize(1)
 		input.Vecs[0] = vector.NewVec(types.T_text.ToType())
@@ -3097,8 +3114,6 @@ func TestAccountedMergeGroupRetriesResidentStringSourcePreflight(t *testing.T) {
 
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{countStarAgg()})
 	merge.SpillMem = 1 << 30
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 	require.NoError(t, err)
 	controller := &rejectNextGroupAllocationController{}
@@ -3144,6 +3159,7 @@ func TestAccountedMergeGroupRetriesResidentStringSourcePreflight(t *testing.T) {
 func TestAccountedMergeGroupRetriesMinSourcePreflight(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	generation := installGroupTestResourceBudget(t, proc)
 	makePartial := func(keys, values []string, sources []types.StringSource) *batch.Batch {
 		input := batch.NewWithSize(2)
 		input.Vecs[0] = testutil.MakeVarcharVector(keys, nil, proc.Mp())
@@ -3172,8 +3188,6 @@ func TestAccountedMergeGroupRetriesMinSourcePreflight(t *testing.T) {
 		aggexec.AggIdOfMin, false, []*plan.Expr{colExpr(1, types.T_varchar)}, nil)
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{minValue})
 	merge.SpillMem = 1 << 30
-	generation, err := proc.GetExecutionResourceBudget()
-	require.NoError(t, err)
 	registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
 	require.NoError(t, err)
 	controller := &rejectNextGroupAllocationController{}
@@ -3341,7 +3355,7 @@ func TestAccountedGroupAndMergeGroupAcceptOrderedGroupConcat(t *testing.T) {
 	merge := newMergeGroupOp([]aggexec.AggFuncExecExpression{
 		orderedGroupConcatAgg(false),
 	})
-	allocation := installGroupTestAllocation(t, merge, proc, 64<<20)
+	allocation := installGroupTestAllocation(t, merge, proc, 64<<20, groupAllocation.generation)
 	require.NoError(t, merge.Prepare(proc))
 	merge.Free(proc, false, nil)
 	finalizeGroupTestAllocation(t, merge, allocation)

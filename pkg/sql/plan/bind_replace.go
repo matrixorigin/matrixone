@@ -1445,6 +1445,10 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 	// bindAndOptimizeReplaceQuery) which run after the REPLACE execution to verify
 	// that no child rows reference deleted parent rows.
 
+	lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, dmlCtx.asyncDatalinkColumns[0], lastNodeID, finalProjTag, func(name string) (int32, bool) { pos, ok := colName2Idx[tableDef.Name+"."+name]; return pos, ok }, nil)
+	if err != nil {
+		return 0, err
+	}
 	lastNodeID = builder.appendNode(&plan.Node{
 		NodeType:      plan.Node_MULTI_UPDATE,
 		Children:      []int32{lastNodeID},

@@ -16,6 +16,7 @@ package csvparser
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -37,6 +38,14 @@ var (
 	BufferSizeScale                  = int64(5)
 	ReadBlockSize              int64 = 64 * 1024
 )
+
+// IsSyntaxError reports malformed CSV framing, excluding configuration, storage,
+// cancellation and resource-limit errors. Callers may use it for tolerant framing.
+func IsSyntaxError(err error) bool {
+	return errors.Is(err, errUnterminatedQuotedField) ||
+		errors.Is(err, errDanglingBackslash) ||
+		errors.Is(err, errUnexpectedQuoteField)
+}
 
 type Field struct {
 	Val            string
@@ -69,6 +78,11 @@ type CSVConfig struct {
 	NotNull           bool
 
 	AllowEmptyLine bool
+	// SkipWhitespaceRecords keeps unquoted single-field whitespace records out
+	// of JSONLINE record accounting. CSV callers leave it disabled.
+	SkipWhitespaceRecords bool
+	// Context is borrowed from the reader owner; nil disables cancellation checks.
+	Context context.Context
 	// For non-empty FieldsEnclosedBy (for example quotes), null elements inside quotes are not considered as null except for
 	// `\N` (when escape-by is `\`). That is to say, `\N` is special for null because it always means null.
 	QuotedNullIsText bool
@@ -271,6 +285,20 @@ func (parser *CSVParser) Read(lastRow []Field) (row []Field, err error) {
 	return row, err
 }
 
+// ScanRecord advances to the next record using Read's framing and header rules,
+// without decoding its field values. Pos reports the consumed record boundary.
+// Like Read, it returns io.EOF when no record remains. Its scratch buffers are
+// reused and it does not produce a decoded row.
+func (parser *CSVParser) ScanRecord() error {
+	if parser.shouldParseHeader {
+		if err := parser.readColumns(); err != nil {
+			return err
+		}
+		parser.shouldParseHeader = false
+	}
+	return parser.readRecord()
+}
+
 func (parser *CSVParser) Pos() int64 {
 	return parser.pos
 }
@@ -288,16 +316,7 @@ func validDelim(r rune) bool {
 
 // readRow reads a row from the datafile.
 func (parser *CSVParser) readRow(row []Field) ([]Field, error) {
-	// skip the header first
-	if parser.shouldParseHeader {
-		err := parser.readColumns()
-		if err != nil {
-			return nil, err
-		}
-		parser.shouldParseHeader = false
-	}
-
-	if err := parser.readRecord(); err != nil {
+	if err := parser.ScanRecord(); err != nil {
 		return nil, err
 	}
 
@@ -589,13 +608,17 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 }
 
 func (parser *CSVParser) readRecord() error {
+	if parser.cfg.Context != nil {
+		if err := parser.cfg.Context.Err(); err != nil {
+			return err
+		}
+	}
 	parser.recordStartLine = parser.lineNo
 	parser.recordBuffer = parser.recordBuffer[:0]
 	parser.fieldIndexes = parser.fieldIndexes[:0]
 	parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
 
 	isEmptyLine := true
-	whitespaceLine := true
 	foundStartingByThisLine := false
 	prevToken := csvTokenNewLine
 	fieldIsQuoted := false
@@ -612,10 +635,15 @@ outside:
 		// (the default) disables comments entirely.
 		if len(parser.comment) > 0 && prevToken == csvTokenNewLine &&
 			len(parser.recordBuffer) == 0 && !foundStartingByThisLine {
-			if bs, perr := parser.peekBytes(len(parser.comment)); perr == nil && bytes.Equal(bs, parser.comment) {
+			bs, perr := parser.peekBytes(len(parser.comment))
+			if perr != nil && perr != io.EOF {
+				return perr
+			}
+			if perr == nil && bytes.Equal(bs, parser.comment) {
 				if _, _, rerr := parser.readUntilTerminator(); rerr != nil && rerr != io.EOF {
 					return rerr
 				}
+				parser.recordStartLine = parser.lineNo
 				continue
 			}
 		}
@@ -631,15 +659,13 @@ outside:
 			oldPos := parser.pos
 			oldLineNo := parser.lineNo
 			content, _, err := parser.readUntilTerminator()
-			if err != nil {
-				if len(content) == 0 {
-					return err
-				}
-				// if we reached EOF, we should still check the content contains
-				// startingBy and try to put back and parse it.
+			if err != nil && (err != io.EOF || len(content) == 0) {
+				return err
 			}
+			// At EOF, remaining content can still contain startingBy and a final record.
 			idx := bytes.Index(content, parser.startingBy)
 			if idx == -1 {
+				parser.recordStartLine = parser.lineNo
 				continue
 			}
 			foundStartingByThisLine = true
@@ -681,14 +707,12 @@ outside:
 
 		switch firstToken {
 		case csvTokenComma:
-			whitespaceLine = false
 			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
 			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)
 			fieldIsQuoted = false
 		case csvTokenDelimiter:
 			if prevToken != csvTokenComma && prevToken != csvTokenNewLine {
 				if parser.unescapedQuote {
-					whitespaceLine = false
 					parser.recordBuffer = append(parser.recordBuffer, parser.quote...)
 					continue
 				}
@@ -698,11 +722,19 @@ outside:
 				return err
 			}
 			fieldIsQuoted = true
-			whitespaceLine = false
 		case csvTokenNewLine:
 			foundStartingByThisLine = false
 			// new line = end of field (ignore empty lines)
 			prevToken = firstToken
+			// An explicit LF terminator also accepts CRLF. A lone unquoted CR
+			// before that terminator is an empty record, not field data. Keep
+			// quoted CR and a CR at EOF as data.
+			if err == nil && bytes.Equal(parser.newLine, newlineByte) &&
+				len(parser.fieldIndexes) == 0 && !fieldIsQuoted &&
+				len(parser.recordBuffer) == 1 && parser.recordBuffer[0] == '\r' {
+				parser.recordBuffer = parser.recordBuffer[:0]
+				isEmptyLine = true
+			}
 			if !parser.allowEmptyLine {
 				if isEmptyLine {
 					// The record has not started yet: it begins at the first
@@ -710,17 +742,37 @@ outside:
 					parser.recordStartLine = parser.lineNo
 					continue
 				}
-				// skip lines only contain whitespaces
-				if err == nil && whitespaceLine && len(bytes.TrimSpace(parser.recordBuffer)) == 0 {
-					parser.recordBuffer = parser.recordBuffer[:0]
-					parser.recordStartLine = parser.lineNo
-					continue
-				}
 			}
 			if bytes.Equal(parser.newLine, []byte{'\n'}) {
 				if n := len(parser.recordBuffer); n > 1 && parser.recordBuffer[n-1] == '\r' {
-					parser.recordBuffer = parser.recordBuffer[:n-1]
+					// The trailing CR may only be dropped when it belongs to the
+					// current (not yet bounded) field. If a separator has already
+					// recorded a boundary at or beyond n-1, this byte is content
+					// of an earlier field and dropping it would leave that
+					// boundary pointing past the end of the buffer.
+					lastIdx := 0
+					if m := len(parser.fieldIndexes); m > 0 {
+						lastIdx = parser.fieldIndexes[m-1]
+					}
+					if n-1 >= lastIdx {
+						parser.recordBuffer = parser.recordBuffer[:n-1]
+					}
 				}
+			}
+			if parser.cfg.SkipWhitespaceRecords && len(parser.fieldIndexes) == 0 &&
+				!fieldIsQuoted && len(parser.recordBuffer) > 0 && len(bytes.TrimSpace(parser.recordBuffer)) == 0 {
+				if err == io.EOF {
+					return io.EOF
+				}
+				if parser.cfg.Context != nil {
+					if err := parser.cfg.Context.Err(); err != nil {
+						return err
+					}
+				}
+				parser.recordBuffer = parser.recordBuffer[:0]
+				parser.recordStartLine = parser.lineNo
+				isEmptyLine = true
+				continue
 			}
 			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
 			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)
@@ -860,6 +912,11 @@ func (parser *CSVParser) readUntilTerminator() ([]byte, int64, error) {
 }
 
 func (parser *CSVParser) readBlock() error {
+	if parser.cfg.Context != nil {
+		if err := parser.cfg.Context.Err(); err != nil {
+			return err
+		}
+	}
 	n, err := io.ReadFull(parser.reader, parser.blockBuf)
 
 	switch {

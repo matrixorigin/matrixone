@@ -93,6 +93,242 @@ func (c *sqlModeMockCompilerContext) ResolveVariable(varName string, isSystemVar
 	return c.MockCompilerContext.ResolveVariable(varName, isSystemVar, isGlobalVar)
 }
 
+func TestInsertValuesScalarSubqueries(t *testing.T) {
+	for _, sql := range []string{
+		"insert into dept(deptno,dname,loc) values((select max(n_nationkey) from nation),'lookup','x')",
+		"insert into dept(deptno,dname,loc) values(1,(select n_name from nation where n_nationkey=1),'x')",
+		"insert into dept(deptno,dname,loc) values(1,'nested',(select if(''='',null,(select n_name from nation where n_nationkey=1))))",
+		"insert into dept(deptno,dname,loc) values(1,'case',case when true then null else (select n_name from nation where n_nationkey=1) end)",
+		"insert ignore into dept(deptno,dname,loc) values((select max(n_nationkey) from nation),'ignore','x')",
+		"insert into dept(deptno,dname,loc) values((select max(n_nationkey) from nation),'upsert','x') on duplicate key update loc=values(loc)",
+		"insert into dept(deptno,dname,loc) values(100,'literal','x'),((select max(n_nationkey) from nation),'lookup','x'),(101,'literal','x')",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			logical, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+			require.NoError(t, err)
+			for _, node := range logical.GetQuery().Nodes {
+				for _, exprs := range [][]*plan.Expr{node.ProjectList, node.FilterList, node.OnList, node.GroupBy, node.AggList} {
+					for _, expr := range exprs {
+						require.False(t, hasSubquery(expr), "subquery escaped relational lowering")
+					}
+				}
+				if node.RowsetData != nil {
+					for _, col := range node.RowsetData.Cols {
+						for _, row := range col.Data {
+							require.False(t, hasSubquery(row.Expr))
+						}
+					}
+				}
+			}
+		})
+	}
+	for _, sql := range []string{
+		"prepare insert_lookup from 'insert into dept(deptno,dname,loc) values((select max(n_nationkey) from nation where n_nationkey<=?),?,?)'",
+		"prepare insert_numeric_lookup from 'insert into dept(deptno,dname,loc) values((select round(?+0)),?,?)'",
+	} {
+		_, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+		require.NoError(t, err, sql)
+	}
+}
+
+func TestInsertValuesSQLUdfAdmission(t *testing.T) {
+	for _, expr := range []string{
+		"f_values_lookup()", "f_values_nested_lookup()", "f_increment(f_values_lookup())",
+		"f_values_upper_lookup()", "f_values_wrapped_lookup()", "f_values_mixed_lookup()",
+		"f_values_nested_upper_lookup()",
+	} {
+		for _, rows := range []int{1, maxValuesSubqueryBranches, maxValuesSubqueryBranches + 1} {
+			t.Run(fmt.Sprintf("%s/%d", expr, rows), func(t *testing.T) {
+				ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+				text := "insert into dept(deptno,dname,loc) values " + strings.TrimSuffix(strings.Repeat("("+expr+",'udf','x'),", rows), ",")
+				stmt, err := mysql.ParseOne(ctx.GetContext(), text, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				builder := NewQueryBuilder(plan.Query_INSERT, ctx, false, true)
+				_, _, err = builder.buildValueScan(false, false, false, NewBindContext(builder, nil), ctx.tables["dept"], stmt.(*tree.Insert).Rows.Select.(*tree.ValuesClause), []string{"deptno", "dname", "loc"})
+				require.ErrorContains(t, err, "SQL UDF subqueries in INSERT VALUES are not supported")
+				require.Empty(t, builder.qry.Nodes, "reject expansion before any subquery plan is built")
+				require.Equal(t, valuesSubqueryBinding{}, builder.valuesSubqueryBinding)
+			})
+		}
+	}
+	// Expression-only UDFs do not introduce a relational branch. A UDF inside an
+	// explicit scalar subquery is covered by that VALUES row's existing admission.
+	for _, text := range []string{
+		"insert into dept values " + strings.TrimSuffix(strings.Repeat("(f_values_constant(),'udf','x'),", maxValuesSubqueryBranches+1), ","),
+		"insert into dept values((select f_values_lookup()),'explicit','x')",
+		"insert into dept values((select f_values_upper_lookup()),'explicit','x')",
+		"insert into dept values((select f_values_wrapped_lookup()),'explicit','x')",
+		"replace into dept values(f_values_lookup(),'unchanged','x')",
+	} {
+		ctx := &sqlUdfMockCompilerContext{MockCompilerContext: NewMockCompilerContext(true, newPlanTestProcess(t))}
+		stmt, err := mysql.ParseOne(ctx.GetContext(), text, 1)
+		require.NoError(t, err)
+		_, err = BuildPlan(ctx, stmt, false)
+		stmt.Free()
+		require.NoError(t, err, text)
+	}
+}
+
+func TestInsertValuesSubqueryFreePlan(t *testing.T) {
+	for _, sql := range []string{
+		"insert into dept(deptno,dname,loc) values(1,'literal',null),(2,'second','x')",
+		"insert into dept(deptno,dname,loc) values(1,default,default)",
+		"insert into dept(deptno,dname,loc) values(1+0,concat('a','b'),'x')",
+	} {
+		logical, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+		require.NoError(t, err)
+		rowsets := 0
+		for _, node := range logical.GetQuery().Nodes {
+			if node.RowsetData != nil {
+				rowsets++
+			}
+			require.NotEqual(t, plan.Node_UNION_ALL, node.NodeType)
+			require.NotEqual(t, plan.Node_SORT, node.NodeType)
+		}
+		require.Equal(t, 1, rowsets)
+	}
+}
+
+func TestInsertValuesSubqueryAdmissionAndScope(t *testing.T) {
+	for _, rows := range []int{maxValuesSubqueryBranches, maxValuesSubqueryBranches + 1} {
+		sql := strings.Replace(makeReplaceValuesWithAllSubqueries(rows), "REPLACE", "INSERT", 1)
+		logical, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, sql)
+		if rows > maxValuesSubqueryBranches {
+			require.ErrorContains(t, err, "VALUES supports at most 32 rows containing subqueries")
+		} else {
+			require.NoError(t, err)
+			require.LessOrEqual(t, len(logical.GetQuery().Nodes), 320)
+		}
+	}
+	for _, text := range []string{
+		"insert into dept(deptno,dname,loc) values(1,'literal','x')",
+		"insert into dept(deptno,dname,loc) values((select max(n_nationkey) from nation),'scalar','x')",
+		strings.Replace(makeReplaceValuesWithAllSubqueries(maxValuesSubqueryBranches+1), "REPLACE", "INSERT", 1),
+	} {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		builder := NewQueryBuilder(plan.Query_INSERT, &mock.ctxt, false, true)
+		parent := NewBindContext(builder, nil)
+		previous := valuesSubqueryBinding{rows: &tree.ValuesClause{}, parent: parent, ctx: parent}
+		builder.valuesSubqueryBinding = previous
+		stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), text, 1)
+		require.NoError(t, err)
+		values := stmt.(*tree.Insert).Rows.Select.(*tree.ValuesClause)
+		_, _, err = builder.buildValueScan(false, false, false, parent, mock.ctxt.tables["dept"], values, []string{"deptno", "dname", "loc"})
+		stmt.Free()
+		if strings.Contains(text, "subquery-32") {
+			require.Error(t, err)
+		} else {
+			require.NoError(t, err)
+		}
+		require.Equal(t, previous, builder.valuesSubqueryBinding, "borrowed scope survives neither success nor error")
+	}
+	t.Run("cold context is shared and other binders stay closed", func(t *testing.T) {
+		mock := NewMockOptimizer(true, newPlanTestProcess(t))
+		builder := NewQueryBuilder(plan.Query_INSERT, &mock.ctxt, false, true)
+		parent := NewBindContext(builder, nil)
+		stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), "insert into dept values((select max(n_nationkey) from nation),'x','y')", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		builder.valuesSubqueryBinding = valuesSubqueryBinding{rows: stmt.(*tree.Insert).Rows.Select.(*tree.ValuesClause), parent: parent}
+		closed := NewDefaultBinder(mock.ctxt.GetContext(), builder, nil, Type{}, nil)
+		require.NoError(t, closed.prepareValuesSubqueryContext())
+		require.Nil(t, builder.valuesSubqueryBinding.ctx)
+		first := NewDefaultBinder(mock.ctxt.GetContext(), builder, nil, Type{}, nil)
+		second := NewDefaultBinder(mock.ctxt.GetContext(), builder, nil, Type{}, nil)
+		first.allowSubquery, second.allowSubquery = true, true
+		require.NoError(t, first.prepareValuesSubqueryContext())
+		require.NoError(t, second.prepareValuesSubqueryContext())
+		require.Same(t, first.ctx, second.ctx)
+		require.Same(t, parent, first.ctx.parent)
+		require.Empty(t, builder.qry.Nodes, "admission does not bind a subquery plan")
+	})
+}
+
+// Both layers use identical preconstructed inputs in the baseline and candidate.
+// The direct layer isolates VALUES binding; the public layer includes parsing.
+func BenchmarkInsertValuesPlanning(b *testing.B) {
+	for _, layer := range []string{"values", "parse-plan"} {
+		for _, shape := range []string{"literal", "parameter", "default", "expression", "typed"} {
+			for _, rows := range []int{1, 100, 1000} {
+				b.Run(fmt.Sprintf("%s/%s/%d", layer, shape, rows), func(b *testing.B) {
+					columns := []string{"deptno", "dname", "loc"}
+					tableName := "dept"
+					var text strings.Builder
+					if shape == "typed" {
+						tableName = "values_typed"
+						columns = []string{"id", "amount", "member", "embedding"}
+						text.WriteString("insert into values_typed(id,amount,member,embedding) values ")
+					} else {
+						text.WriteString("insert into dept(deptno,dname,loc) values ")
+					}
+					for row := 0; row < rows; row++ {
+						if row != 0 {
+							text.WriteByte(',')
+						}
+						switch shape {
+						case "literal":
+							fmt.Fprintf(&text, "(%d,'text',null)", row+1)
+						case "parameter":
+							text.WriteString("(?,?,?)")
+						case "default":
+							fmt.Fprintf(&text, "(%d,default,default)", row+1)
+						case "expression":
+							fmt.Fprintf(&text, "(%d+0,concat('a','b'),'x')", row+1)
+						case "typed":
+							fmt.Fprintf(&text, "(%d,3.25,'a','[1,2,3]')", row+1)
+						}
+					}
+					sql := text.String()
+					mock := NewMockOptimizer(true, newPlanTestProcess(b))
+					if shape == "typed" {
+						mock.ctxt.tables[tableName] = &plan.TableDef{
+							Name: tableName, TblId: 917,
+							Cols: []*plan.ColDef{
+								{Name: "id", Typ: plan.Type{Id: int32(types.T_int32), NotNullable: true}, Primary: true},
+								{Name: "amount", Typ: plan.Type{Id: int32(types.T_decimal64), Width: 12, Scale: 2}},
+								{Name: "member", Typ: plan.Type{Id: int32(types.T_enum), Enumvalues: "a,b"}},
+								{Name: "embedding", Typ: plan.Type{Id: int32(types.T_array_float32), Width: 3}},
+								MakeHiddenColDefByName(catalog.Row_ID),
+							},
+							Name2ColIndex: map[string]int32{"id": 0, "amount": 1, "member": 2, "embedding": 3},
+							Pkey:          &plan.PrimaryKeyDef{PkeyColName: "id", Names: []string{"id"}},
+						}
+						mock.ctxt.tables[tableName].Pkey.CompPkeyCol = mock.ctxt.tables[tableName].Cols[0]
+						mock.ctxt.objects[tableName] = &plan.ObjectRef{ObjName: tableName, Obj: 917, DbName: "tpch", SchemaName: "tpch"}
+					}
+					stmt, err := mysql.ParseOne(mock.ctxt.GetContext(), sql, 1)
+					if err != nil {
+						b.Fatal(err)
+					}
+					defer stmt.Free()
+					values := stmt.(*tree.Insert).Rows.Select.(*tree.ValuesClause)
+					publicSQL := sql
+					if shape == "parameter" {
+						publicSQL = "prepare perf_values from '" + sql + "'"
+					}
+					b.ReportAllocs()
+					b.ResetTimer()
+					for i := 0; i < b.N; i++ {
+						if layer == "parse-plan" {
+							if _, err := runOneStmt(mock, b, publicSQL); err != nil {
+								b.Fatal(err)
+							}
+						} else {
+							builder := NewQueryBuilder(plan.Query_INSERT, &mock.ctxt, false, true)
+							builder.isPrepareStatement = shape == "parameter"
+							_, _, err := builder.buildValueScan(false, false, false, NewBindContext(builder, nil), mock.ctxt.tables[tableName], values, columns)
+							if err != nil {
+								b.Fatal(err)
+							}
+						}
+					}
+				})
+			}
+		}
+	}
+}
+
 func BenchmarkInsert(b *testing.B) {
 	typ := types.T_varchar.ToType()
 	typ.Width = 1024
@@ -119,6 +355,19 @@ func BenchmarkInsert(b *testing.B) {
 			break
 		}
 	}
+}
+
+// A syntax failure inside SQL PREPARE text must report ER_PARSE_ERROR
+// (1064/42000) like the same statement executed directly, not the generic
+// 1105 for unclassified errors (#30434).
+func TestBuildPrepareStringSyntaxErrorIsParseError(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	stmt := tree.NewPrepareString("bad_stmt", "SELECT FROM")
+	defer stmt.Free()
+	_, err := buildPrepare(stmt, ctx)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrParseError),
+		"expected 1064/42000 for inner syntax error, got: %v", err)
 }
 
 func TestBuildPrepareStringUsesSessionSQLMode(t *testing.T) {
@@ -3462,6 +3711,10 @@ func TestApplyLockTableFallbackGuardsAndModes(t *testing.T) {
 					markedAboveBoundary,
 					{Mode: lockpb.LockMode_Shared},
 					{Mode: lockpb.LockMode_Exclusive},
+					{Mode: lockpb.LockMode_Exclusive, NoWait: true},
+					{Mode: lockpb.LockMode_Shared, NoWait: true},
+					{Mode: lockpb.LockMode_Shared, SkipLocked: true},
+					{Mode: lockpb.LockMode_Shared, NoWait: true, LockTable: true},
 				},
 			},
 		}},
@@ -3492,6 +3745,13 @@ func TestApplyLockTableFallbackGuardsAndModes(t *testing.T) {
 		"cardinality-known shared targets must upgrade before acquisition")
 	require.False(t, builder.qry.Nodes[3].LockTargets[2].LockTable,
 		"unmarked exclusive targets retain owner-side range escalation")
+	for _, target := range builder.qry.Nodes[3].LockTargets[3:6] {
+		require.False(t, target.LockTable, "cardinality estimates must not widen nonblocking row locks")
+	}
+
+	require.True(t, builder.qry.Nodes[3].LockTargets[6].LockTable,
+		"an explicit coarse target must remain visible to nonblocking admission")
+
 }
 
 func TestApplyLockTableFallbackUsesFullUpdateSourceCardinality(t *testing.T) {
@@ -5747,7 +6007,7 @@ func TestReplaceScalarSubqueryLargeValuesBatchesLiterals(t *testing.T) {
 
 func TestReplaceScalarSubqueryValuesBranchLimit(t *testing.T) {
 	logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
-		makeReplaceValuesWithAllSubqueries(maxReplaceValuesSubqueryBranches))
+		makeReplaceValuesWithAllSubqueries(maxValuesSubqueryBranches))
 	require.NoError(t, err)
 	query := logicPlan.GetQuery()
 	require.LessOrEqual(t, len(query.Nodes), 320)
@@ -5758,12 +6018,12 @@ func TestReplaceScalarSubqueryValuesBranchLimit(t *testing.T) {
 			unionAllCount++
 		}
 	}
-	require.Equal(t, maxReplaceValuesSubqueryBranches-1, unionAllCount)
+	require.Equal(t, maxValuesSubqueryBranches-1, unionAllCount)
 
 	_, err = runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
-		makeReplaceValuesWithAllSubqueries(maxReplaceValuesSubqueryBranches+1))
+		makeReplaceValuesWithAllSubqueries(maxValuesSubqueryBranches+1))
 	require.ErrorContains(t, err,
-		fmt.Sprintf("REPLACE VALUES supports at most %d rows containing subqueries", maxReplaceValuesSubqueryBranches))
+		fmt.Sprintf("VALUES supports at most %d rows containing subqueries", maxValuesSubqueryBranches))
 }
 
 func benchmarkReplaceScalarSubqueryValuesPlan(b *testing.B, sqlText string) {
@@ -5794,13 +6054,13 @@ func BenchmarkReplaceScalarSubqueryLargeValuesPlan(b *testing.B) {
 
 func BenchmarkReplaceScalarSubqueryValuesAtBranchLimit(b *testing.B) {
 	benchmarkReplaceScalarSubqueryValuesPlan(b,
-		makeReplaceValuesWithAllSubqueries(maxReplaceValuesSubqueryBranches))
+		makeReplaceValuesWithAllSubqueries(maxValuesSubqueryBranches))
 }
 
 func BenchmarkReplaceScalarSubqueryValuesOverBranchLimit(b *testing.B) {
 	sqlText := makeReplaceValuesWithAllSubqueries(1000)
 	wantError := fmt.Sprintf(
-		"REPLACE VALUES supports at most %d rows containing subqueries", maxReplaceValuesSubqueryBranches)
+		"VALUES supports at most %d rows containing subqueries", maxValuesSubqueryBranches)
 	proc := newPlanTestProcess(b)
 	b.ReportAllocs()
 	b.ResetTimer()
@@ -6095,6 +6355,69 @@ func TestInsertIgnoreCheckCompositeUniqueBuildsPlan(t *testing.T) {
 		}
 	}
 	require.True(t, foundCheckFilter)
+}
+
+func TestLoadCheckConstraintPolicy(t *testing.T) {
+	for _, table := range []string{"dept", "dept_composite_uk"} {
+		for _, tc := range []struct {
+			name, sql      string
+			filter, load   bool
+			wantLoadDedups int
+		}{
+			{"inline_ignore", "load data inline format='csv', data='1,Sales,NY' ignore into table %s fields terminated by ','", true, true, 0},
+			{"local_ignore", "load data local infile 'client.csv' ignore into table %s fields terminated by ','", true, true, 0},
+			{"plain", "load data inline format='csv', data='1,Sales,NY' into table %s fields terminated by ','", false, true, 1},
+			{"local_without_ignore", "load data local infile 'client.csv' into table %s fields terminated by ','", false, true, 1},
+			{"insert_ignore", "insert ignore into %s values (1,'Sales','NY')", true, false, 0},
+		} {
+			t.Run(table+"/"+tc.name, func(t *testing.T) {
+				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				addPositiveCheck(t, mock, table, "deptno")
+				stmt, err := mysql.ParseOne(t.Context(), fmt.Sprintf(tc.sql, table), 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				query, err := mock.Optimize(stmt)
+				require.NoError(t, err)
+				checks := 0
+				loadDedups := 0
+				ignoreArbitration := false
+				for id := range reachableODKUPlanNodes(query) {
+					node := query.Nodes[id]
+					multiDedup := node.GetPreInsertUkCtx().GetInsertIgnoreMultiDedup()
+					if node.NodeType == plan.Node_JOIN && node.JoinType == plan.Node_DEDUP {
+						if tc.load {
+							loadDedups++
+							require.Equal(t, plan.Node_FAIL, node.OnDuplicateAction, "ordinary LOAD rejects duplicate primary keys")
+							require.Equal(t, "deptno", node.DedupColName)
+							require.False(t, node.DedupInputKeysUnique, "external input cannot prove primary-key uniqueness")
+						}
+						ignoreArbitration = ignoreArbitration || node.OnDuplicateAction == plan.Node_IGNORE
+					}
+					if multiDedup {
+						require.False(t, tc.load, "CHECK filtering must not enable INSERT IGNORE arbitration for LOAD")
+						ignoreArbitration = true
+					}
+					for _, expr := range node.FilterList {
+						if !exprContainsFuncName(expr, "_check_constraint_assert") {
+							continue
+						}
+						checks++
+						wantType := plan.Node_ASSERT
+						if tc.filter {
+							wantType = plan.Node_FILTER
+						}
+						require.Equal(t, wantType, node.NodeType)
+						require.Equal(t, tc.filter, node.FilterIsBarrier)
+					}
+				}
+				if tc.load {
+					require.Equal(t, tc.wantLoadDedups, loadDedups, "ordinary LOAD checks its primary key; LOAD IGNORE retains the dedup bypass")
+				}
+				require.Equal(t, !tc.load, ignoreArbitration, "only INSERT IGNORE arbitrates duplicate keys")
+				require.Equal(t, 1, checks, "CHECK must run exactly once per candidate")
+			})
+		}
+	}
 }
 
 func TestReplaceSetColRefAsDefault(t *testing.T) {
@@ -8285,12 +8608,129 @@ func TestReplaceAndChildInsertUseCanonicalForeignKeyLockOrder(t *testing.T) {
 		"REPLACE must lock the base table first and hidden unique indexes by physical table name")
 }
 
+func TestSelectLockPoliciesReachOnlyTheirQueryBlockTargets(t *testing.T) {
+	tests := []struct {
+		name       string
+		sql        string
+		mode       lockpb.LockMode
+		noWait     bool
+		correlated bool
+		skipLocked bool
+	}{
+		{name: "ordinary share", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE", mode: lockpb.LockMode_Shared},
+		{name: "update nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR UPDATE NOWAIT", mode: lockpb.LockMode_Exclusive, noWait: true},
+		{name: "share nowait", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT", mode: lockpb.LockMode_Shared, noWait: true},
+		{name: "correlated nowait", sql: "SELECT N_NATIONKEY FROM NATION WHERE N_NATIONKEY=1 AND N_NATIONKEY=(SELECT (SELECT NATION.N_NATIONKEY)) FOR SHARE NOWAIT", mode: lockpb.LockMode_Shared, noWait: true, correlated: true},
+		{name: "share skip locked", sql: "SELECT N_NATIONKEY FROM NATION FOR SHARE SKIP LOCKED", mode: lockpb.LockMode_Shared, skipLocked: true},
+		{name: "correlated skip", sql: "SELECT CAST(N_NATIONKEY AS CHAR CHARACTER SET binary) FROM NATION WHERE N_NATIONKEY=(SELECT (SELECT NATION.N_NATIONKEY)) ORDER BY N_NATIONKEY LIMIT 1 OFFSET 1 FOR SHARE SKIP LOCKED", mode: lockpb.LockMode_Shared, skipLocked: true, correlated: true},
+		{
+			name:   "nested clause does not leak to outer target",
+			sql:    "SELECT N_NATIONKEY FROM NATION WHERE N_NATIONKEY IN (SELECT N_NATIONKEY FROM NATION FOR SHARE NOWAIT)",
+			mode:   lockpb.LockMode_Shared,
+			noWait: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, test.sql)
+			require.NoError(t, err)
+			if test.correlated {
+				require.NotNil(t, logicPlan.GetQuery().Correlation, "the regression must reach the dependent compiler")
+			}
+
+			var targets []*plan.LockTarget
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					targets = append(targets, node.LockTargets...)
+				}
+			}
+			require.NotEmpty(t, targets)
+			for _, target := range targets {
+				assert.Equal(t, test.mode, target.Mode)
+				assert.Equal(t, test.noWait, target.GetNoWait())
+				assert.Equal(t, test.skipLocked, target.GetSkipLocked())
+			}
+		})
+	}
+}
+
+func TestShareSkipLockedKeepsLimitAboveLockFilterAfterPlanBuild(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT N_NATIONKEY FROM NATION ORDER BY N_NATIONKEY LIMIT 3 FOR SHARE SKIP LOCKED",
+		"SELECT N.N_NATIONKEY FROM NATION N LEFT JOIN REGION R ON N.N_REGIONKEY = R.R_REGIONKEY ORDER BY N.N_NATIONKEY LIMIT 3 FOR SHARE SKIP LOCKED",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			logicPlan, err := runOneStmt(mock, t, sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+
+			var lockNodes []int32
+			var limitNodes []int32
+			for id, node := range query.Nodes {
+				if node.NodeType == plan.Node_LOCK_OP {
+					lockNodes = append(lockNodes, int32(id))
+				}
+				if node.Limit != nil || node.Offset != nil {
+					limitNodes = append(limitNodes, int32(id))
+				}
+			}
+			require.NotEmpty(t, lockNodes)
+			require.NotEmpty(t, limitNodes)
+
+			contains := func(root int32, want func(*plan.Node) bool) bool {
+				seen := make(map[int32]bool)
+				var visit func(int32) bool
+				visit = func(id int32) bool {
+					if id < 0 || int(id) >= len(query.Nodes) || seen[id] {
+						return false
+					}
+					seen[id] = true
+					node := query.Nodes[id]
+					if want(node) {
+						return true
+					}
+					for _, child := range node.Children {
+						if visit(child) {
+							return true
+						}
+					}
+					return false
+				}
+				return visit(root)
+			}
+
+			for _, lockID := range lockNodes {
+				node := query.Nodes[lockID]
+				require.Len(t, node.Children, 1)
+				require.False(t, contains(node.Children[0], func(descendant *plan.Node) bool {
+					return descendant.Limit != nil || descendant.Offset != nil
+				}), "finite pagination must not be pushed beneath the row-removing lock node")
+			}
+			hasLimitAboveLock := false
+			for _, limitID := range limitNodes {
+				if contains(limitID, func(descendant *plan.Node) bool {
+					return descendant.NodeType == plan.Node_LOCK_OP
+				}) {
+					hasLimitAboveLock = true
+					break
+				}
+			}
+			require.True(t, hasLimitAboveLock,
+				"the final LIMIT must consume rows after ShareSkip removes conflicts")
+		})
+	}
+}
+
 func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	assert.Nil(t, DeepCopyLockTarget(nil))
 	target := &plan.LockTarget{
 		TableId:              42,
 		ObjRef:               &plan.ObjectRef{Obj: 42, ObjName: "parent"},
 		Mode:                 lockpb.LockMode_Shared,
+		NoWait:               true,
+		SkipLocked:           true,
 		PrimaryColRelPos:     11,
 		FilterColRelPos:      12,
 		PartitionColIdxInBat: 13,
@@ -8300,6 +8740,8 @@ func TestDeepCopyPreservesSharedLockMode(t *testing.T) {
 	assertScalarFields := func(t *testing.T, copied *plan.LockTarget) {
 		t.Helper()
 		assert.Equal(t, lockpb.LockMode_Shared, copied.Mode)
+		assert.True(t, copied.NoWait)
+		assert.True(t, copied.SkipLocked)
 		assert.Equal(t, int32(11), copied.PrimaryColRelPos)
 		assert.Equal(t, int32(12), copied.FilterColRelPos)
 		assert.Equal(t, int32(13), copied.PartitionColIdxInBat)
@@ -8431,11 +8873,10 @@ func TestSubQuery(t *testing.T) {
 				OR n3.N_REGIONKEY = 1
 		)
 	)`
-	_, err := runOneStmt(mock, t, sql)
-	assert.Error(t, err)
-	if err != nil {
-		assert.Contains(t, err.Error(), "deep correlated predicate containing inner columns cannot be pulled above mark join")
-	}
+	p, err := runOneStmt(mock, t, sql)
+	require.NoError(t, err)
+	require.NotNil(t, p.GetQuery().Correlation)
+	require.NoError(t, p.GetQuery().ValidateCorrelation())
 }
 
 func TestCorrelatedScalarAggregatePushdown(t *testing.T) {
@@ -10138,13 +10579,13 @@ func TestSubqueryInOuterJoinOn(t *testing.T) {
 	_, err := runOneStmt(mock, t,
 		"SELECT a.n_nationkey FROM nation a LEFT JOIN nation b ON EXISTS ("+
 			"SELECT 1 FROM region z WHERE z.r_regionkey = a.n_regionkey AND z.r_regionkey = b.n_regionkey)")
-	require.ErrorContains(t, err, "referencing both join inputs")
+	require.NoError(t, err)
 
 	_, err = runOneStmt(mock, t,
 		"SELECT outer_n.n_nationkey FROM nation outer_n WHERE EXISTS ("+
 			"SELECT 1 FROM nation a LEFT JOIN nation b ON EXISTS ("+
 			"SELECT 1 FROM region z WHERE z.r_regionkey = outer_n.n_regionkey))")
-	require.ErrorContains(t, err, "deeply correlated subquery")
+	require.NoError(t, err)
 }
 func TestSamePhysicalTargetAliasesShareMergedFinalRows(t *testing.T) {
 	for _, sql := range []string{

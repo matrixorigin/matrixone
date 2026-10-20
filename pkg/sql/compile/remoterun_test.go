@@ -1115,15 +1115,19 @@ func TestRemoteAutoIncrementStatementLastInsertIDProtocolValidation(t *testing.T
 			},
 		}},
 	}}}
-	for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117} {
+	routeData, err := routePipeline.Marshal()
+	require.NoError(t, err)
+	for _, version := range []int64{defines.MORPCVersion88, defines.MORPCVersion101, defines.MORPCVersion102, defines.MORPCVersion103, defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion107, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		_, _, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
-		require.ErrorContains(t, err, "requires MORPC protocol version 118")
+		require.ErrorContains(t, err, "requires MORPC protocol version 125")
 		require.ErrorContains(t,
 			validateRemoteStatementLastInsertIDPipelineProtocol(proc, routePipeline),
-			"requires MORPC protocol version 118")
+			"requires MORPC protocol version 125")
+		_, receiveErr := decodeScope(routeData, proc, true, nil)
+		require.ErrorContains(t, receiveErr, "requires MORPC protocol version 125")
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion118)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
 	_, instruction, err = convertToPipelineInstruction(routePreInsert, proc, ctx, 1)
 	require.NoError(t, err)
 	require.True(t, instruction.PreInsert.PreserveInput)
@@ -5484,4 +5488,55 @@ func TestRemoteStatementSendErrorPreservesCauseWithoutMaskingInvariant(t *testin
 			}
 		})
 	}
+}
+
+func TestDedupDiagnosticExpressionsRemoteRoundTrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	ctx := &scopeContext{id: 1, root: &scopeContext{}, parent: &scopeContext{}}
+	exprs := []*planpb.Expr{{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 3}}}}
+	diagnosticExprs := func(op vm.Operator) []*planpb.Expr {
+		switch arg := op.(type) {
+		case *dedupjoin.DedupJoin:
+			return arg.DedupKeyExprs
+		case *rightdedupjoin.RightDedupJoin:
+			return arg.DedupKeyExprs
+		case *hashbuild.HashBuild:
+			return arg.DedupKeyExprs
+		}
+		t.Fatalf("unexpected operator %T", op)
+		return nil
+	}
+	for _, op := range []vm.Operator{
+		&dedupjoin.DedupJoin{Conditions: [][]*planpb.Expr{nil, nil}, DedupKeyExprs: exprs},
+		&rightdedupjoin.RightDedupJoin{Conditions: [][]*planpb.Expr{nil, nil}, DedupKeyExprs: exprs},
+		&hashbuild.HashBuild{DedupKeyExprs: exprs},
+	} {
+		t.Run(fmt.Sprintf("%T", op), func(t *testing.T) {
+			require.Equal(t, exprs, diagnosticExprs(dupOperator(op, 0, 1)))
+			_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+			require.NoError(t, err)
+			wire, err := instruction.Marshal()
+			require.NoError(t, err)
+			decoded := new(pipeline.Instruction)
+			require.NoError(t, decoded.Unmarshal(wire))
+			restored, err := convertToVmOperator(decoded, ctx, nil)
+			require.NoError(t, err)
+			require.Equal(t, exprs, diagnosticExprs(restored))
+		})
+	}
+	op := &preinsertunique.PreInsertUnique{PreInsertCtx: &planpb.PreInsertUkCtx{KeyDiagnosticExprs: []*planpb.ExprList{{List: exprs}}}}
+	_, instruction, err := convertToPipelineInstruction(op, proc, ctx, 1)
+	require.NoError(t, err)
+	wire, err := instruction.Marshal()
+	require.NoError(t, err)
+	decoded := new(pipeline.Instruction)
+	require.NoError(t, decoded.Unmarshal(wire))
+	restored, err := convertToVmOperator(decoded, ctx, nil)
+	require.NoError(t, err)
+	require.Equal(t, exprs, restored.(*preinsertunique.PreInsertUnique).PreInsertCtx.KeyDiagnosticExprs[0].List)
+	// New diagnostic metadata is optional; older plans continue to decode.
+	legacy := &pipeline.Instruction{Op: int32(vm.DedupJoin), DedupJoin: &pipeline.DedupJoin{}}
+	restored, err = convertToVmOperator(legacy, ctx, nil)
+	require.NoError(t, err)
+	require.Empty(t, restored.(*dedupjoin.DedupJoin).DedupKeyExprs)
 }

@@ -19,6 +19,7 @@ var wholeTxnRollbackCodes = [...]uint16{
 	ErrLockTableNotFound, ErrDeadlockCheckBusy, ErrLockConflict,
 	ErrRemoteLockWaitTimeout, ErrLockWaitTimeout, ErrTxnUnknown,
 	ErrBackendClosed, ErrNoAvailableBackend, ErrBackendCannotConnect,
+	ErrTxnWriteConflict,
 }
 
 // WholeTxnRollbackCodes returns a copy for diagnostics/tests without exposing

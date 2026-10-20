@@ -95,6 +95,12 @@ func TestResolveVariableWithSessionDefaults(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), v)
 
+	for _, name := range []string{"foreign_key_checks", "FOREIGN_KEY_CHECKS"} {
+		v, err = m.ResolveVariableWithSessionDefaults(name, true, false)
+		require.NoError(t, err)
+		require.Equal(t, int64(1), v, "background SQL keeps foreign key checks enabled")
+	}
+
 	// FAIL FAST on an un-enumerated session var: rather than silently defaulting to
 	// nil, a newly-plumbed dependency surfaces loudly, named, so it gets a
 	// deliberate default. (This is design B.)

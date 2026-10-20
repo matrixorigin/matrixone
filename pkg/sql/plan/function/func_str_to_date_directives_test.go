@@ -69,7 +69,7 @@ func TestStrToDateDayAndWeekDirectives(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got := NewGeneralTime()
-			ok := coreStrToDate(context.Background(), got, tc.input, tc.format)
+			ok, _ := coreStrToDate(context.Background(), got, tc.input, tc.format)
 			if ok {
 				ok = types.ValidDate(int32(got.year), got.month, got.day)
 			}

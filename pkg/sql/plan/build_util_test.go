@@ -882,6 +882,73 @@ func TestBuildDefaultExprFitsVarchar(t *testing.T) {
 	require.Equal(t, "abc", defaultValue.Expr.GetLit().GetSval())
 }
 
+func TestBuildZeroTemporalDefaultRespectsSQLMode(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		mode       string
+		wantReject bool
+	}{
+		{name: "empty"},
+		{name: "strict only", mode: "STRICT_TRANS_TABLES"},
+		{name: "no zero date only", mode: "NO_ZERO_DATE"},
+		{name: "strict and no zero date", mode: "STRICT_TRANS_TABLES,NO_ZERO_DATE", wantReject: true},
+		{name: "strict all and no zero date", mode: "STRICT_ALL_TABLES,NO_ZERO_DATE", wantReject: true},
+		{name: "traditional", mode: "TRADITIONAL", wantReject: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+				if name == "sql_mode" {
+					return tc.mode, nil
+				}
+				return "", nil
+			})
+			for _, target := range []struct {
+				name      string
+				typ       types.T
+				canonical string
+			}{
+				{name: "date", typ: types.T_date, canonical: "0000-00-00"},
+				{name: "datetime", typ: types.T_datetime, canonical: "0000-00-00 00:00:00"},
+				{name: "timestamp", typ: types.T_timestamp, canonical: "0000-00-00 00:00:00"},
+			} {
+				t.Run(target.name, func(t *testing.T) {
+					for _, source := range []struct {
+						name string
+						expr tree.Expr
+						text string
+					}{
+						{name: "numeric", expr: tree.NewNumVal(int64(0), "0", false, tree.P_int64), text: "0"},
+						{name: "canonical string", expr: tree.NewNumVal(target.canonical, target.canonical, false, tree.P_char), text: "'" + target.canonical + "'"},
+					} {
+						t.Run(source.name, func(t *testing.T) {
+							col := tree.NewColumnTableDef(tree.NewUnresolvedColName("zero_col"), nil,
+								[]tree.ColumnAttribute{&tree.AttributeDefault{Expr: source.expr}})
+							def, err := buildDefaultExpr(proc.Ctx, col, plan.Type{Id: int32(target.typ)}, proc)
+							if tc.wantReject {
+								require.Error(t, err)
+								require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidDefault), "%v", err)
+								return
+							}
+							require.NoError(t, err)
+							require.Equal(t, source.text, def.OriginString)
+							require.NotNil(t, def.Expr.GetLit())
+							switch target.typ {
+							case types.T_date:
+								require.Equal(t, int32(types.ZeroDate), def.Expr.GetLit().GetDateval())
+							case types.T_datetime:
+								require.Equal(t, int64(types.ZeroDatetime), def.Expr.GetLit().GetDatetimeval())
+							case types.T_timestamp:
+								require.Equal(t, int64(types.ZeroTimestamp), def.Expr.GetLit().GetTimestampval())
+							}
+						})
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestBuildPlanFencesHexDefaultBeforeConstantFold(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	proc := mock.CurrentContext().GetProcess()
@@ -1228,7 +1295,7 @@ func TestBuildGeneratedExprUsesStrictForCharVarchar(t *testing.T) {
 	require.Equal(t, "cast", genInt.Expr.GetF().GetFunc().GetObjName())
 }
 
-func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
+func TestBuildGeneratedExprFunctionsAreDeterministic(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	cases := []struct {
 		name             string
@@ -1239,6 +1306,9 @@ func TestBuildGeneratedExprIPFunctionsAreDeterministic(t *testing.T) {
 		generatedSQLType string
 		generatedType    plan.Type
 	}{
+		{name: "bit_count_text", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "varchar(16)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 16}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
+		{name: "bit_count_numeric", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "int", baseType: plan.Type{Id: int32(types.T_int32)}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
+		{name: "bit_count_binary", expr: "bit_count(v)", baseColumn: "v", baseSQLType: "varbinary(16)", baseType: plan.Type{Id: int32(types.T_varbinary), Width: 16}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
 		{name: "inet_aton", expr: "inet_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "bigint unsigned", generatedType: plan.Type{Id: int32(types.T_uint64)}},
 		{name: "inet_ntoa", expr: "inet_ntoa(ip_number)", baseColumn: "ip_number", baseSQLType: "bigint unsigned", baseType: plan.Type{Id: int32(types.T_uint64)}, generatedSQLType: "varchar(39)", generatedType: plan.Type{Id: int32(types.T_varchar), Width: 39}},
 		{name: "inet6_aton", expr: "inet6_aton(ip_text)", baseColumn: "ip_text", baseSQLType: "varchar(39)", baseType: plan.Type{Id: int32(types.T_varchar), Width: 39}, generatedSQLType: "varbinary(16)", generatedType: plan.Type{Id: int32(types.T_varbinary), Width: 16}},

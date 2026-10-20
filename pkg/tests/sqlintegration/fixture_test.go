@@ -17,26 +17,24 @@ package sqlintegration
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/stretchr/testify/require"
 )
 
 // These tests share the canonical one-CN configuration and run sequentially.
-// Cleanup registered here runs after scenario cleanup, outside the fixture's
-// mutex. A failed scenario cannot leave a dirty cluster for the next test.
+// SharedTestCluster owns failure quarantine after scenario cleanup; this
+// wrapper only records the scenario's SQL execution time.
 func runSQLIntegration(t *testing.T, fn func(embed.Cluster)) {
 	t.Helper()
-	t.Cleanup(func() {
-		if t.Failed() {
-			if err := embed.CloseSingleCNBaseClusterTests(); err != nil {
-				t.Errorf("close failed SQL integration fixture: %v", err)
-			}
-		}
-	})
 	embed.RunSingleCNBaseClusterTests(t, func(c embed.Cluster) {
 		started := time.Now()
 		defer func() {
@@ -66,17 +64,95 @@ func TestMain(m *testing.M) {
 // A fresh context lets cleanup finish even when the scenario timed out.
 func cleanupSQLIntegration(t *testing.T, cn embed.ServiceOperator, statements ...string) {
 	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 	if err != nil {
 		t.Errorf("open SQL integration cleanup connection: %v", err)
 		return
 	}
 	defer db.Close()
+	if err := cleanupSQLIntegrationCatalog(db, statements...); err != nil {
+		t.Errorf("SQL integration cleanup: %v", err)
+	}
+}
+
+// Cleanup remains synchronous before fixture release. Each resource has its
+// own resource-specific allowance, so a failed removal cannot consume the
+// deadlines of the remaining removals or hide their diagnostics.
+func cleanupSQLIntegrationCatalog(db *sql.DB, statements ...string) error {
+	var cleanupErr error
 	for _, statement := range statements {
-		if _, err := db.ExecContext(ctx, statement); err != nil {
-			t.Errorf("SQL integration cleanup %q: %v", statement, err)
+		err := func() error {
+			ctx, cancel := context.WithTimeout(context.Background(), sqlIntegrationCleanupTimeout(statement))
+			defer cancel()
+			_, err := db.ExecContext(ctx, statement)
+			return err
+		}()
+		if err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("%s: %w", statement, err))
 		}
+	}
+	return cleanupErr
+}
+
+func sqlIntegrationCleanupTimeout(statement string) time.Duration {
+	words := strings.Fields(statement)
+	if len(words) >= 2 && strings.EqualFold(words[0], "drop") && strings.EqualFold(words[1], "account") {
+		// DROP ACCOUNT removes the tenant's complete bootstrap catalog, not one
+		// object. Under race instrumentation those serial DDLs can exceed the
+		// ordinary per-object budget. Keep a separate, bounded account budget;
+		// never retry an unknown-result DROP or skip the artifact checks.
+		return 2 * time.Minute
+	}
+	return 30 * time.Second
+}
+
+func TestCleanupSQLIntegrationCatalogAccountDeadline(t *testing.T) {
+	for _, statement := range []string{"drop account if exists tenant", "  DrOp\tAcCoUnT tenant"} {
+		t.Run(statement, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				mock.ExpectExec("(?i)drop\\s+account").WillDelayFor(45 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("drop database").WillDelayFor(20 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
+				require.NoError(t, cleanupSQLIntegrationCatalog(db, statement, "drop database if exists db"))
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		})
+	}
+	t.Run("account timeout does not skip remaining cleanup", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			defer db.Close()
+			mock.ExpectExec("drop account").WillDelayFor(121 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec("drop database").WillDelayFor(20 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
+			err = cleanupSQLIntegrationCatalog(db, "drop account if exists tenant", "drop database if exists db")
+			require.ErrorContains(t, err, "drop account")
+			require.NotContains(t, err.Error(), "drop database")
+			require.NoError(t, mock.ExpectationsWereMet())
+		})
+	})
+}
+
+func TestCleanupSQLIntegrationCatalogIndependentDeadlines(t *testing.T) {
+	for _, firstDelay := range []time.Duration{20 * time.Second, 31 * time.Second} {
+		t.Run(firstDelay.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				db, mock, err := sqlmock.New()
+				require.NoError(t, err)
+				defer db.Close()
+				mock.ExpectExec("drop first").WillDelayFor(firstDelay).WillReturnResult(sqlmock.NewResult(0, 1))
+				mock.ExpectExec("drop second").WillDelayFor(20 * time.Second).WillReturnResult(sqlmock.NewResult(0, 1))
+				err = cleanupSQLIntegrationCatalog(db, "drop first", "drop second")
+				if firstDelay > 30*time.Second {
+					require.ErrorContains(t, err, "drop first")
+					require.NotContains(t, err.Error(), "drop second")
+				} else {
+					require.NoError(t, err)
+				}
+				require.NoError(t, mock.ExpectationsWereMet())
+			})
+		})
 	}
 }

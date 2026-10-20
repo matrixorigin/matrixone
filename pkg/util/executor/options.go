@@ -17,6 +17,7 @@ package executor
 import (
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -92,6 +93,17 @@ func (opts Options) WithDisableIncrStatement() Options {
 // WithDisableIncrStatement disable incr statement
 func (opts StatementOption) WithIgnoreForeignKey() StatementOption {
 	opts.ignoreForeignKey = true
+	return opts
+}
+
+// WithTrustedCheckConstraintNames marks a CREATE that intentionally reuses
+// CHECK constraint names inherited from an owned source: the ALTER ... COPY
+// replica, partition backing tables, and TRUNCATE's internal recreate. Those
+// creates keep the source's logical identity, so Scope.createTable skips the
+// schema-wide duplicate-name scan for them. Never set this for user-visible
+// CREATE TABLE statements.
+func (opts StatementOption) WithTrustedCheckConstraintNames() StatementOption {
+	opts.trustedCheckConstraintNames = true
 	return opts
 }
 
@@ -267,6 +279,19 @@ func (opts StatementOption) HasRoleID() bool {
 	return opts.roleId > 0
 }
 
+// WithSessionIdentity carries the already-authenticated session names into a
+// synchronous child SQL process.  It is intentionally separate from the
+// numeric account/role overrides, which are used for catalog execution scope.
+func (opts StatementOption) WithSessionIdentity(accountName, roleName string) StatementOption {
+	opts.accountName = accountName
+	opts.roleName = roleName
+	return opts
+}
+
+func (opts StatementOption) SessionIdentity() (accountName, roleName string) {
+	return opts.accountName, opts.roleName
+}
+
 func (opts StatementOption) WithUserID(userID uint32) StatementOption {
 	opts.userId = userID
 	return opts
@@ -316,6 +341,12 @@ func (opts StatementOption) OptimizerHints() string {
 
 func (opts StatementOption) IgnoreForeignKey() bool {
 	return opts.ignoreForeignKey
+}
+
+// TrustedCheckConstraintNames reports whether the internal CREATE keeps CHECK
+// names inherited from an owned source, without a 3822 sibling name scan.
+func (opts StatementOption) TrustedCheckConstraintNames() bool {
+	return opts.trustedCheckConstraintNames
 }
 
 func (opts Options) WithDisableWaitPaused() Options {
@@ -480,19 +511,40 @@ func (opts StatementOption) HasParams() bool {
 
 func (opts StatementOption) Params(
 	mp *mpool.MPool,
-) *vector.Vector {
-	vec := vector.NewVec(types.T_varchar.ToType())
+) (*vector.Vector, error) {
 	nulls := opts.paramNulls
-	if len(nulls) != len(opts.params) {
+	if len(nulls) != 0 && len(nulls) != len(opts.params) {
+		return nil, moerr.NewInvalidInputNoCtx("parameter NULL bitmap length mismatch")
+	}
+	if len(nulls) == 0 {
 		nulls = make([]bool, len(opts.params))
 	}
-	vector.AppendStringList(
+	// The complete parameter batch is known here. Reserve its varlen area
+	// once; growing it per 64 KiB chunk otherwise repeatedly copies megabytes.
+	areaSize := 0
+	for i, value := range opts.params {
+		if !nulls[i] && len(value) > types.VarlenaInlineSize {
+			if int64(len(value)) > mpool.MaxAllocationSize()-int64(areaSize) {
+				return nil, moerr.NewInvalidInputNoCtx("parameter values exceed allocator limit")
+			}
+			areaSize += len(value)
+		}
+	}
+	vec := vector.NewVec(types.T_varchar.ToType())
+	if err := vec.PreExtendWithArea(len(opts.params), areaSize, mp); err != nil {
+		vec.Free(mp)
+		return nil, err
+	}
+	if err := vector.AppendStringList(
 		vec,
 		opts.params,
 		nulls,
 		mp,
-	)
-	return vec
+	); err != nil {
+		vec.Free(mp)
+		return nil, err
+	}
+	return vec, nil
 }
 
 func (opts StatementOption) WithParams(
@@ -603,6 +655,15 @@ func (opts StatementOption) WithKeepRelKind(kind string) StatementOption {
 	opts.keepRelKind = kind
 	opts.hasKeepRelKind = true
 	return opts
+}
+
+func (opts StatementOption) WithSkipIndexTaskRegistration() StatementOption {
+	opts.skipIndexTaskRegistration = true
+	return opts
+}
+
+func (opts StatementOption) SkipIndexTaskRegistration() bool {
+	return opts.skipIndexTaskRegistration
 }
 
 func (opts StatementOption) WithIgnorePublish() StatementOption {

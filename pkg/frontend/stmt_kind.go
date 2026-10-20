@@ -17,6 +17,7 @@ package frontend
 import (
 	"context"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -60,7 +61,7 @@ func IsDDL(stmt tree.Statement) bool {
 	switch stmt.(type) {
 	case *tree.CreateTable, *tree.DropTable,
 		*tree.CreateView, *tree.DropView, *tree.AlterView, *tree.AlterTable, *tree.RenameTable,
-		*tree.CreateDatabase, *tree.DropDatabase, *tree.CreateSequence, *tree.DropSequence,
+		*tree.CreateDatabase, *tree.AlterDatabase, *tree.DropDatabase, *tree.CreateSequence, *tree.DropSequence,
 		*tree.CreateIndex, *tree.DropIndex, *tree.TruncateTable,
 		*tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog, *tree.DropIcebergCatalog:
 		return true
@@ -231,7 +232,7 @@ func statementCanBeExecutedInUncommittedTransaction(
 		//	return false, nil
 		//}
 		return true, nil
-	case *tree.CreateDatabase, *tree.DropDatabase:
+	case *tree.CreateDatabase, *tree.AlterDatabase, *tree.DropDatabase:
 		return true, nil
 	case *tree.CreateSequence: //Case1, Case3 above
 		return ses.IsBackgroundSession() || !ses.GetTxnHandler().OptionBitsIsSet(OPTION_BEGIN), nil
@@ -378,6 +379,11 @@ func preparedSQLCanBeExecutedInUncommittedTransaction(
 	}
 	preStmt, err := mysql.ParseOneWithSQLMode(ctx, sql, v.(int64), sessionSQLModeForParser(parserSes))
 	if err != nil {
+		// Transaction admission parses PREPARE text before the normal prepare
+		// path. Preserve its ER_PARSE_ERROR contract at this earlier boundary.
+		if _, positioned := err.(mysql.PositionedErr); positioned {
+			err = moerr.NewParseError(ctx, err.Error())
+		}
 		return false, err
 	}
 	defer preStmt.Free()

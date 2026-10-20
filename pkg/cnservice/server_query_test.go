@@ -322,8 +322,10 @@ func Test_service_handleGoMaxProcs(t *testing.T) {
 
 func Test_service_handleGoMemLimit(t *testing.T) {
 	ctx := context.Background()
-	// set no limit
-	_ = debug.SetMemoryLimit(-1)
+	// A negative value only queries the limit. Establish this test's baseline
+	// explicitly and restore the process limit before the next test.
+	previous := debug.SetMemoryLimit(math.MaxInt64)
+	defer debug.SetMemoryLimit(previous)
 	type fields struct{}
 	type args struct {
 		ctx  context.Context
@@ -349,7 +351,7 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 			want:    &query.Response{GoMemLimitResponse: query.GoMemLimitResponse{MemLimitBytes: math.MaxInt64}},
 		},
 		{
-			name:   "set_no_limit",
+			name:   "query_current_limit",
 			fields: fields{},
 			args: args{
 				ctx:  ctx,
@@ -367,6 +369,7 @@ func Test_service_handleGoMemLimit(t *testing.T) {
 			require.Equal(t, tt.wantErr, err)
 			require.Equalf(t, tt.want, tt.args.resp,
 				"handleGoMemLimit(%v, %v, %v, %v)", tt.args.ctx, tt.args.req, tt.args.resp, nil)
+			require.Equal(t, int64(4<<30), debug.SetMemoryLimit(-1), "a query must preserve the current limit")
 		})
 	}
 }
@@ -1789,4 +1792,66 @@ type fakeIcebergCacheInvalidationHandler struct {
 func (h *fakeIcebergCacheInvalidationHandler) InvalidateIcebergCache(ctx context.Context, req api.CacheInvalidationRequest) (int, error) {
 	h.req = req
 	return h.removed, nil
+}
+
+func TestSessionControlHandlers(t *testing.T) {
+	ctl := gomock.NewController(t)
+	server := mock_moserver.NewMockServer(ctl)
+	server.EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).AnyTimes()
+	sid := "session-control-handlers"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+	s := &service{mo: server, cfg: &Config{UUID: sid}}
+	ctx := context.Background()
+	for _, req := range []*query.Request{nil, {}} {
+		require.Error(t, s.handleKillSession(ctx, req, &query.Response{}, nil))
+		require.Error(t, s.handleDisconnectSession(ctx, req, &query.Response{}, nil))
+	}
+	req := &query.Request{CmdMethod: query.CmdMethod_KillSession, KillSessionRequest: &query.KillSessionRequest{ConnID: 123}}
+	require.Error(t, s.handleKillSession(ctx, req, &query.Response{}, nil))
+	req.KillSessionRequest.Principal = &query.KillSessionPrincipal{Account: "sys", User: "root", Role: "moadmin"}
+	rsp := &query.Response{}
+	require.NoError(t, s.handleKillSession(ctx, req, rsp, nil))
+	require.NotNil(t, rsp.KillSessionResponse)
+	require.False(t, rsp.KillSessionResponse.Found)
+	req.KillSessionRequest.ConnID = 1<<32 + 123
+	require.Error(t, s.handleKillSession(ctx, req, &query.Response{}, nil))
+	rsp = &query.Response{}
+	require.NoError(t, s.handleDisconnectSession(ctx, &query.Request{CmdMethod: query.CmdMethod_DisconnectSession, DisconnectSessionRequest: &query.DisconnectSessionRequest{ConnID: 123}}, rsp, nil))
+	require.NotNil(t, rsp.DisconnectSessionResponse)
+}
+
+// A receiver must reject rollback before looking up or acting on any routine.
+// Leaving mo nil makes an accidentally admitted operation fail this test.
+func TestSessionControlHandlersRejectRollback(t *testing.T) {
+	sid := "session-control-rollback"
+	rt := moruntime.DefaultRuntime()
+	moruntime.SetupServiceBasedRuntime(sid, rt)
+	t.Cleanup(func() { moruntime.CompareAndDeleteServiceBasedRuntime(sid, rt) })
+	s := &service{cfg: &Config{UUID: sid}}
+	ctx := context.Background()
+	kill := &query.Request{CmdMethod: query.CmdMethod_KillSession, KillSessionRequest: &query.KillSessionRequest{ConnID: 123}}
+	disconnect := &query.Request{CmdMethod: query.CmdMethod_DisconnectSession, DisconnectSessionRequest: &query.DisconnectSessionRequest{ConnID: 123}}
+	for _, version := range []int64{defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion119} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+		if version == defines.MORPCVersion120 {
+			s.mo = mock_moserver.NewMockServer(gomock.NewController(t))
+			s.mo.(*mock_moserver.MockServer).EXPECT().GetRoutineManager().Return(&frontend.RoutineManager{}).Times(2)
+			rsp := &query.Response{}
+			kill.KillSessionRequest.Principal = &query.KillSessionPrincipal{Account: "sys", User: "root", Role: "moadmin"}
+			require.NoError(t, s.handleKillSession(ctx, kill, rsp, nil))
+			require.NotNil(t, rsp.KillSessionResponse)
+			require.NoError(t, s.handleDisconnectSession(ctx, disconnect, rsp, nil))
+			require.NotNil(t, rsp.DisconnectSessionResponse)
+			s.mo = nil
+			continue
+		}
+		rsp := &query.Response{}
+		require.ErrorContains(t, s.handleKillSession(ctx, kill, rsp, nil), "unsupported protocol version 120")
+		require.Nil(t, rsp.KillSessionResponse)
+		require.ErrorContains(t, s.handleDisconnectSession(ctx, disconnect, rsp, nil), "unsupported protocol version 120")
+		require.Nil(t, rsp.DisconnectSessionResponse)
+	}
 }

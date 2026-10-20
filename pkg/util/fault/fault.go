@@ -73,11 +73,11 @@ const (
 
 // faultEntry describes how we shall fail
 type faultEntry struct {
-	cmd              int     // command
-	name             string  // name of the fault
-	cnt              int     // count how many times we run into this
-	start, end, skip int     // start, end, skip
-	prob             float64 // probability of failure
+	cmd              int          // command
+	name             string       // name of the fault
+	cnt              atomic.Int64 // map goroutine writes; GETCOUNT callers read
+	start, end, skip int          // start, end, skip
+	prob             float64      // probability of failure
 	action           int
 	iarg             int64  // int arg
 	sarg             string // string arg
@@ -141,8 +141,8 @@ func (fm *faultMap) run() {
 		case TRIGGER:
 			var out *faultEntry
 			if v, ok := fm.faultPoints[e.name]; ok {
-				v.cnt += 1
-				if v.cnt >= v.start && v.cnt <= v.end && (v.cnt-v.start)%v.skip == 0 {
+				count := v.cnt.Add(1)
+				if count >= int64(v.start) && count <= int64(v.end) && (count-int64(v.start))%int64(v.skip) == 0 {
 					if v.prob == 1 || rand.Float64() < v.prob {
 						out = v
 					}
@@ -169,7 +169,7 @@ func (e *faultEntry) do() (int64, string) {
 		time.Sleep(time.Duration(e.iarg) * time.Second)
 	case GETCOUNT:
 		if ee := lookup(e.scope, e.sarg); ee != nil {
-			return int64(ee.cnt), ""
+			return ee.cnt.Load(), ""
 		}
 	case WAIT:
 		waiter := e.registerWaiter()

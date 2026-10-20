@@ -21,7 +21,9 @@ SELECT * FROM t WHERE MATCH(col) AGAINST('keyword' IN BOOLEAN MODE);
   - `VectorIndexCdc[T]` — 向量索引的 CDC 更新
   - `SearchResultIf` — 搜索结果接口
 
-- **支持算法：** IVF-Flat, HNSW
+- **支持算法：** CPU 构建提供 IVF-Flat、HNSW；GPU 构建另外提供 IVF-PQ、CAGRA。
+- **检索模式与参数：** [向量检索模式与 IVF 参数](../cn/vector_search.md)，包括
+  IVFFLAT AUTO 的行数与召回边界、会话 `probe_limit`、查询级 `nprobe` 和 IVFPQ 构建要求。
 
 - **SQL 语法：**
 ```sql

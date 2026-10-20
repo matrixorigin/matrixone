@@ -35,6 +35,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/util/toml"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/stretchr/testify/require"
 )
 
@@ -767,4 +768,226 @@ func BenchmarkReadMetaWithTableID(b *testing.B) {
 			}
 		})
 	}
+}
+
+func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(sourceMP)
+
+	source := containers.BuildBatch(
+		[]string{"base0", "base1", "object_stats", "db_id", "table_id", "create_ts", "delete_ts"},
+		[]types.Type{
+			types.T_int8.ToType(),
+			types.T_int8.ToType(),
+			types.T_char.ToType(),
+			types.T_uint64.ToType(),
+			types.T_uint64.ToType(),
+			types.T_TS.ToType(),
+			types.T_TS.ToType(),
+		},
+		containers.Options{Allocator: sourceMP},
+	)
+	defer source.Close()
+
+	stats := objectio.NewObjectStats()
+	name := objectio.MockObjectName()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+	require.NoError(t, vector.AppendFixed(
+		source.Vecs[0].GetDownstreamVector(), int8(0), false, sourceMP))
+	require.NoError(t, vector.AppendBytes(
+		source.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector(),
+		stats[:], false, sourceMP))
+	require.NoError(t, vector.AppendFixed(
+		source.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector(),
+		uint64(1), false, sourceMP))
+	require.NoError(t, vector.AppendFixed(
+		source.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(),
+		uint64(1), false, sourceMP))
+	now := types.NextGlobalTsForTest()
+	require.NoError(t, vector.AppendFixed(
+		source.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector(), now, false, sourceMP))
+	require.NoError(t, vector.AppendFixed(
+		source.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(), now, false, sourceMP))
+
+	destMP, err := mpool.NewMPool("v12-compatibility-error", 1<<20, mpool.NoFixed)
+	require.NoError(t, err)
+	defer mpool.DeleteMPool(destMP)
+	held, err := destMP.Alloc(1<<20-1, true)
+	require.NoError(t, err)
+	defer destMP.Free(held)
+
+	dest := ckputil.MakeDataScanTableIDBatch()
+	defer dest.Clean(destMP)
+	err = compatibilityForV12(
+		objectio.NewBlockid(objectio.NewSegmentid(), 0, 0),
+		source, nil, dest, destMP,
+	)
+	require.Error(t, err)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
+	require.Zero(t, dest.RowCount())
+
+	successDest := ckputil.MakeDataScanTableIDBatch()
+	defer successDest.Clean(sourceMP)
+	err = compatibilityForV12(
+		objectio.NewBlockid(objectio.NewSegmentid(), 0, 0),
+		source, source, successDest, sourceMP,
+	)
+	require.NoError(t, err)
+	require.Equal(t, 2, successDest.RowCount())
+}
+
+func TestCompatibilityForV12PropagatesEveryAppendError(t *testing.T) {
+	sourceMP := mpool.MustNewZero()
+	defer mpool.DeleteMPool(sourceMP)
+
+	source := containers.BuildBatch(
+		[]string{"base0", "base1", "object_stats", "db_id", "table_id", "create_ts", "delete_ts"},
+		[]types.Type{
+			types.T_int8.ToType(), types.T_int8.ToType(), types.T_char.ToType(),
+			types.T_uint64.ToType(), types.T_uint64.ToType(), types.T_TS.ToType(), types.T_TS.ToType(),
+		}, containers.Options{Allocator: sourceMP},
+	)
+	defer source.Close()
+
+	stats := objectio.NewObjectStats()
+	name := objectio.MockObjectName()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+	require.NoError(t, vector.AppendFixed(source.Vecs[0].GetDownstreamVector(), int8(0), false, sourceMP))
+	require.NoError(t, vector.AppendBytes(source.Vecs[ObjectInfo_ObjectStats_Idx+2].GetDownstreamVector(), stats[:], false, sourceMP))
+	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_DBID_Idx+2].GetDownstreamVector(), uint64(1), false, sourceMP))
+	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_TID_Idx+2].GetDownstreamVector(), uint64(1), false, sourceMP))
+	now := types.NextGlobalTsForTest()
+	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_CreateAt_Idx+2].GetDownstreamVector(), now, false, sourceMP))
+	require.NoError(t, vector.AppendFixed(source.Vecs[ObjectInfo_DeleteAt_Idx+2].GetDownstreamVector(), now, false, sourceMP))
+
+	const capacity = 1 << 20
+	for _, test := range []struct {
+		name      string
+		remaining int
+	}{
+		{name: "headroom-1", remaining: 1},
+		{name: "headroom-2", remaining: 2},
+		{name: "headroom-4", remaining: 4},
+		{name: "headroom-8", remaining: 8},
+		{name: "headroom-16", remaining: 16},
+		{name: "headroom-32", remaining: 32},
+		{name: "headroom-64", remaining: 64},
+		{name: "headroom-128", remaining: 128},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			destMP, err := mpool.NewMPool("v12-compatibility-errors", capacity, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mpool.DeleteMPool(destMP)
+			held, err := destMP.Alloc(capacity-test.remaining, true)
+			require.NoError(t, err)
+			defer destMP.Free(held)
+
+			dest := ckputil.MakeDataScanTableIDBatch()
+			defer dest.Clean(destMP)
+			err = compatibilityForV12(
+				objectio.NewBlockid(objectio.NewSegmentid(), 0, 0),
+				source, source, dest, destMP,
+			)
+			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
+			require.Zero(t, dest.RowCount())
+		})
+	}
+}
+
+func TestCKPObjectReaderForV12ReleasesAllLoadedBlocksOnConversionError(t *testing.T) {
+	ctx := context.Background()
+	fs := testutil.NewSharedFS()
+	for _, test := range []struct {
+		name       string
+		data       bool
+		tombstones bool
+	}{
+		{name: "data", data: true},
+		{name: "tombstone", tombstones: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			location := makeV12DataObjectWithTwoBlocks(t, fs, test.tombstones)
+			const capacity = 2 * mpool.MB
+			mp, err := mpool.NewMPool("v12-reader-cleanup", capacity, mpool.NoFixed)
+			require.NoError(t, err)
+			defer mpool.DeleteMPool(mp)
+			hold, err := mp.Alloc(capacity-1024, true)
+			require.NoError(t, err)
+
+			var dataLocations, tombstoneLocations []objectio.Location
+			if test.data {
+				dataLocations = []objectio.Location{location}
+			} else if test.tombstones {
+				tombstoneLocations = []objectio.Location{location}
+			}
+			reader := newCKPObjectReaderForV12(dataLocations, tombstoneLocations, fs)
+			dest := ckputil.MakeDataScanTableIDBatch()
+			end, err := reader.Read(ctx, dest, mp)
+			require.False(t, end)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrMPoolCapacity), err)
+			dest.Clean(mp)
+			mp.Free(hold)
+			require.Zero(t, mp.CurrNB())
+
+			reader.Reset(ctx)
+			dest = ckputil.MakeDataScanTableIDBatch()
+			end, err = reader.Read(ctx, dest, mp)
+			require.False(t, end)
+			require.NoError(t, err)
+			require.Equal(t, 2, dest.RowCount())
+			dest.Clean(mp)
+			require.Zero(t, mp.CurrNB())
+		})
+	}
+}
+
+func makeV12DataObjectWithTwoBlocks(t *testing.T, fs fileservice.FileService, tombstone bool) objectio.Location {
+	t.Helper()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), 0)
+	writer, err := ioutil.NewBlockWriterNew(fs, name, 0, nil, false)
+	require.NoError(t, err)
+	for block := range 2 {
+		bat := makeV12DataObjectBatch(t, mp, block)
+		dataType := ObjectInfoIDX
+		if tombstone {
+			dataType = TombstoneObjectInfoIDX
+		}
+		_, _, err = writer.WriteSubBatch(
+			containers.ToCNBatch(bat),
+			objectio.ConvertToSchemaType(uint16(dataType)),
+		)
+		require.NoError(t, err)
+		bat.Close()
+	}
+	blocks, extent, err := writer.Sync(context.Background())
+	require.NoError(t, err)
+	require.Len(t, blocks, 2)
+	return objectio.BuildLocation(name, extent, 0, blocks[0].GetID())
+}
+
+func makeV12DataObjectBatch(t *testing.T, mp *mpool.MPool, block int) *containers.Batch {
+	t.Helper()
+	bat := makeRespBatchFromSchema(ObjectInfoSchema, mp)
+	stats := objectio.NewObjectStats()
+	name := objectio.BuildObjectName(objectio.NewSegmentid(), uint16(block))
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, name))
+	require.NoError(t, objectio.SetObjectStatsSize(stats, 1))
+
+	require.NoError(t, vector.AppendFixed(bat.Vecs[0].GetDownstreamVector(), types.Rowid{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1].GetDownstreamVector(), types.TS{}, false, mp))
+	require.NoError(t, vector.AppendBytes(bat.Vecs[2].GetDownstreamVector(), stats[:], false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3].GetDownstreamVector(), uint64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[4].GetDownstreamVector(), uint64(1), false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[5].GetDownstreamVector(), types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[6].GetDownstreamVector(), types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[7].GetDownstreamVector(), types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[8].GetDownstreamVector(), types.TS{}, false, mp))
+	require.NoError(t, vector.AppendFixed(bat.Vecs[9].GetDownstreamVector(), types.TS{}, false, mp))
+	return bat
 }

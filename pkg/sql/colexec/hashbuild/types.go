@@ -478,6 +478,9 @@ func validateSpillFileSize(file *os.File, expected uint64) error {
 }
 
 type HashBuild struct {
+	// DirectInput consumes a same-lane batch-only build through ExecYield
+	// checkpoints. Hash and spill builds keep their existing pipeline contract.
+	DirectInput                   bool
 	ctr                           container
 	NeedHashMap                   bool
 	HashOnPK                      bool
@@ -500,6 +503,7 @@ type HashBuild struct {
 	OnDuplicateAction         plan.Node_OnDuplicateAction
 	DedupColName              string
 	DedupColTypes             []plan.Type
+	DedupKeyExprs             []*plan.Expr
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
 
@@ -790,9 +794,9 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	runtimeSucceed := hashBuild.ctr.state > HandleRuntimeFilter
 	mapSucceed := hashBuild.ctr.state == SendSucceed
 
-	// Call does not publish pipeline terminal signals.  Reset owns dependency
-	// finalization and is intentionally non-blocking: publication only appends
-	// one immutable value to the current-CN MessageBoard.
+	// Call publishes producer failures/retirement before consumers can block
+	// cleanup. Reset is the fallback for paths that never reached Call;
+	// publication is non-blocking and guarded once per execution generation.
 	if !mapSucceed {
 		if pipelineFailed || err != nil {
 			if err == nil {

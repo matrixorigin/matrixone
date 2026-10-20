@@ -1299,7 +1299,7 @@ func handleCloneDatabaseWithSource(
 
 	ctx1 = cloneTargetContext(reqCtx, ses.GetTenantInfo().GetTenantID(), source.toAccountId)
 	if err = bh.Exec(ctx1,
-		fmt.Sprintf("create database %s", quoteIdentifierForSQL(stmt.DstDatabase.String())),
+		appendDatabaseDefaultsSQL(fmt.Sprintf("create database %s", quoteIdentifierForSQL(stmt.DstDatabase.String())), source.defaults),
 	); err != nil {
 		return
 	}

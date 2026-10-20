@@ -441,7 +441,7 @@ class Client(BaseMatrixOneClient):
         account: Optional[str] = None,
         role: Optional[str] = None,
         charset: str = "utf8mb4",
-        connection_timeout: int = 30,
+        connection_timeout: Optional[int] = None,
         auto_commit: bool = True,
         on_connect: Optional[Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]] = None,
     ) -> None:
@@ -463,7 +463,7 @@ class Client(BaseMatrixOneClient):
             account: Optional account name (will be combined with user if user doesn't contain '#' or ':')
             role: Optional role name (will be combined with user if user doesn't contain '#' or ':')
             charset: Character set for the connection (default: utf8mb4)
-            connection_timeout: Connection timeout in seconds (default: 30)
+            connection_timeout: Override constructor connection timeout; None inherits it
             auto_commit: Enable autocommit (default: True)
             on_connect: Connection hook to execute after successful connection.
                        Can be:
@@ -489,6 +489,16 @@ class Client(BaseMatrixOneClient):
             client.connect(host, port, user, password, database,
                           on_connect=my_callback)
         """
+        from ._connection_options import positive_timeout
+
+        positive_timeout(self.query_timeout, 'query_timeout')
+        timeout = self.connection_timeout if connection_timeout is None else connection_timeout
+        positive_timeout(timeout, 'connection_timeout')
+        if ssl_mode not in ('disabled', 'preferred', 'required'):
+            raise ValueError('ssl_mode must be disabled, preferred or required')
+        if self._engine is not None:
+            self.disconnect()
+        self.connection_timeout = timeout
         # Build final login info based on user parameter and optional account/role
         final_user, parsed_info = self._build_login_info(user, account, role)
 
@@ -502,7 +512,8 @@ class Client(BaseMatrixOneClient):
             "password": password,
             "database": database,
             "charset": charset,
-            "connect_timeout": connection_timeout,
+            "connect_timeout": timeout,
+            "ssl_mode": ssl_mode,
             "autocommit": auto_commit,
             "ssl_disabled": ssl_mode == "disabled",
             "ssl_verify_cert": ssl_mode == "required",
@@ -520,6 +531,10 @@ class Client(BaseMatrixOneClient):
         try:
             # Create SQLAlchemy engine with connection pooling
             self._engine = self._create_engine()
+            # Engine construction is lazy; do not report success until an
+            # authenticated connection has completed a real query.
+            with self._engine.connect() as connection:
+                connection.exec_driver_sql("SELECT 1")
             self.logger.log_connection(host, port, final_user, database, success=True)
 
             # Initialize managers after engine is created
@@ -541,20 +556,30 @@ class Client(BaseMatrixOneClient):
                 # Execute the hook once immediately for the initial connection
                 self._execute_connection_hook_immediately(on_connect)
 
-        except Exception as e:
+        except BaseException as e:
+            engine, self._engine = self._engine, None
+            if engine is not None:
+                try:
+                    engine.dispose()
+                except Exception:
+                    pass  # Preserve the primary connection failure.
+            if not isinstance(e, Exception):
+                raise
+            from ._connection_options import redact_error
+
+            error_msg = redact_error(e, password)
             self.logger.log_connection(host, port, final_user, database, success=False)
-            self.logger.log_error(e, context="Connection")
+            self.logger.log_error(ConnectionError(error_msg), context="Connection")
 
             # Provide user-friendly error messages for common issues
-            error_msg = str(e)
             if 'Unknown database' in error_msg or '1049' in error_msg:
                 raise ConnectionError(
                     f"Database '{database}' does not exist. Please create it first:\n"
-                    f"  mysql -h{host} -P{port} -u{user.split('#')[0] if '#' in user else user} -p{password} "
+                    f"  mysql -h{host} -P{port} -u{user.split('#')[0] if '#' in user else user} -p "
                     f"-e \"CREATE DATABASE {database}\""
-                ) from e
+                ) from None
             else:
-                raise ConnectionError(f"Failed to connect to MatrixOne: {e}") from e
+                raise ConnectionError(f"Failed to connect to MatrixOne: {error_msg}") from None
 
     def _setup_connection_hook(
         self, on_connect: Union[ConnectionHook, List[Union[ConnectionAction, str]], Callable]
@@ -722,13 +747,15 @@ class Client(BaseMatrixOneClient):
         """Create SQLAlchemy engine with connection pooling"""
         # Build connection URL using SQLAlchemy's URL.create() for proper escaping
         # of special characters in user/password (e.g., @, #, %, etc.)
-        connect_args = {}
-        if self._connection_params.get("ssl_ca"):
-            connect_args["ssl"] = {"ca": self._connection_params["ssl_ca"]}
-            if self._connection_params.get("ssl_cert"):
-                connect_args["ssl"]["cert"] = self._connection_params["ssl_cert"]
-            if self._connection_params.get("ssl_key"):
-                connect_args["ssl"]["key"] = self._connection_params["ssl_key"]
+        from ._connection_options import tls_options
+
+        connect_args = {
+            'connect_timeout': self._connection_params['connect_timeout'],
+            'read_timeout': self.query_timeout,
+            'write_timeout': self.query_timeout,
+            'charset': self._connection_params['charset'],
+            **tls_options(self._connection_params),
+        }
 
         url = URL.create(
             drivername="mysql+pymysql",
@@ -751,6 +778,12 @@ class Client(BaseMatrixOneClient):
         )
 
         # Replace the dialect with MatrixOne dialect for proper vector type support
+        if self._connection_params.get('ssl_mode') == 'required':
+            from sqlalchemy import event
+            from ._connection_options import connect_required_tls
+
+            event.listen(engine, 'do_connect', connect_required_tls)
+
         original_dbapi = engine.dialect.dbapi
         engine.dialect = MatrixOneDialect()
         engine.dialect.dbapi = original_dbapi
@@ -796,8 +829,8 @@ class Client(BaseMatrixOneClient):
         """
         if self._engine:
             try:
-                self._engine.dispose()
-                self._engine = None
+                engine, self._engine = self._engine, None
+                engine.dispose()
                 self.logger.log_disconnection(success=True)
             except Exception as e:
                 self.logger.log_disconnection(success=False)
@@ -2375,7 +2408,7 @@ class Client(BaseMatrixOneClient):
                         f"  mysql -h{self._connection_params.get('host', 'localhost')} "
                         f"-P{self._connection_params.get('port', 6001)} "
                         f"-u{self._connection_params.get('user', 'root')} "
-                        f"-p{self._connection_params.get('password', '***')} "
+                        f"-p "
                         f"-e \"CREATE DATABASE {db_name}\""
                     ) from e
                 else:
@@ -3389,10 +3422,9 @@ class Session(SQLAlchemySession):
                 final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
-                from sqlalchemy import text
+                from ._session_execution import execute_session_sql
 
-                # Call parent's execute() with text()
-                result = super().execute(text(final_sql), **kwargs)
+                result = execute_session_sql(super().execute, final_sql, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)

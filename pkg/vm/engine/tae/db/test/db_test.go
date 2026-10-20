@@ -1661,6 +1661,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 			require.True(t, meta.GetObjectData().PrepareCompact())
 
 			beforeFlushTxn, beforeFlushRel := tae.GetRelation()
+			beforeFlushTS := beforeFlushTxn.GetStartTS()
 			flushTxn, _ := tae.GetRelation()
 			require.Zero(t, tae.Runtime.TransferTable.Len())
 			flushStart := flushTxn.GetStartTS()
@@ -1673,6 +1674,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 			require.Nil(t, task.GetCreatedObjects())
 			require.NoError(t, flushTxn.Commit(ctx))
 			require.Zero(t, tae.Runtime.TransferTable.Len())
+			testutil.CheckAllColRowsByScan(t, beforeFlushRel, 0, true)
 
 			dedupBat := catalog.MockBatch(schema, 1)
 			beforeFlushIt := beforeFlushRel.MakeObjectIt(false)
@@ -1704,6 +1706,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 				require.True(t, checkpointed.HasDropCommitted())
 				require.Equal(t, createTS, checkpointed.GetCreatedAt())
 				require.NoError(t, txn.Commit(ctx))
+				checkRowsAtSnapshot(t, ctx, tae, beforeFlushTS, 0)
 				return
 			}
 			tae.Restart(ctx)
@@ -1713,6 +1716,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 			require.True(t, replayed.HasDropCommitted())
 			require.Equal(t, createTS, replayed.GetCreatedAt())
 			require.NoError(t, txn.Commit(ctx))
+			checkRowsAtSnapshot(t, ctx, tae, beforeFlushTS, 0)
 		})
 	}
 }
@@ -7631,7 +7635,7 @@ func TestAppendAndGC(t *testing.T) {
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	testutils.WaitExpect(10000, func() bool {
-		return db.DiskCleaner.GetCleaner().GetMinMerged() != nil
+		return db.DiskCleaner.GetCleaner().GetScanWaterMark() != nil
 	})
 
 }
@@ -7766,7 +7770,7 @@ func TestAppendAndGC2(t *testing.T) {
 	}
 }
 
-func waitForMinMergedCheckpoint(
+func waitForScannedCheckpoint(
 	t *testing.T,
 	database *db.DB,
 	target types.TS,
@@ -7776,7 +7780,7 @@ func waitForMinMergedCheckpoint(
 	require.Eventually(
 		t,
 		func() bool {
-			entry := database.DiskCleaner.GetCleaner().GetMinMerged()
+			entry := database.DiskCleaner.GetCleaner().GetScanWaterMark()
 			last.Store(entry)
 			if entry == nil {
 				return false
@@ -7966,7 +7970,7 @@ func TestSnapshotGC(t *testing.T) {
 	cancel()
 	require.NoError(t, err)
 	db.DiskCleaner.GetCleaner().EnableGC()
-	minMerged := waitForMinMergedCheckpoint(t, db, checkpointTarget)
+	minMerged := waitForScannedCheckpoint(t, db, checkpointTarget)
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	require.NoError(t, err)
 	tae.RestartDisableGC(ctx)
@@ -8038,12 +8042,20 @@ func TestSnapshotGC(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, checkPK == db.DiskCleaner.GetCleaner().GetTablePK(checkrel.ID()))
 
-	fault.Enable()
-	defer fault.Disable()
-	fault.AddFaultPoint(ctx, "replay error UT", ":::", "echo", 0, "test error", false)
+	require.NotNil(t, db.BGCheckpointRunner.GetCompacted(), "replay failure requires a compacted checkpoint")
+	require.NoError(t, fault.AddFaultPoint(ctx, "replay error UT", ":::", "echo", 0, "test error", false))
 	defer fault.RemoveFaultPoint(ctx, "replay error UT")
+	hitsPoint := t.Name() + "/replay_error_hits"
+	require.NoError(t, fault.AddFaultPoint(ctx, hitsPoint, ":::", "getcount", 0, "replay error UT", false))
+	defer fault.RemoveFaultPoint(ctx, hitsPoint)
 	tae.Restart(ctx)
-	assert.Nil(t, tae.DiskCleaner.GetCleaner().GetScannedWindow())
+	// A nil window before the asynchronous replay starts is not evidence that
+	// a replay error discarded partially reconstructed state.
+	require.NoError(t, tae.DiskCleaner.FlushQueue(ctx))
+	hits, _, present := fault.TriggerFault(hitsPoint)
+	require.True(t, present)
+	require.Positive(t, hits, "checkpoint replay did not reach the injected error")
+	require.Nil(t, tae.DiskCleaner.GetCleaner().GetScannedWindow())
 }
 
 func TestSnapshotMeta(t *testing.T) {
@@ -8102,10 +8114,11 @@ func TestSnapshotMeta(t *testing.T) {
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().DisableGC()
 	snapshots := make([]int64, 0)
+	// Begin after GC is disabled; older history may already have been collected.
+	// Nanosecond offsets provide distinct ordered metadata values without sleeps.
+	firstSnapshot := time.Now().UTC().UnixNano()
 	for i := 0; i < 10; i++ {
-		time.Sleep(20 * time.Millisecond)
-		snapshot := time.Now().UTC().UnixNano()
-		snapshots = append(snapshots, snapshot)
+		snapshots = append(snapshots, firstSnapshot+int64(i))
 	}
 	for i, snapshot := range snapshots {
 		attrs := []string{"col0", "col1", "ts", "col3", "col4", "col5", "col6", "id"}
@@ -8148,37 +8161,11 @@ func TestSnapshotMeta(t *testing.T) {
 		assert.Nil(t, txn1.Commit(context.Background()))
 	}
 	testutil.WaitAllCheckpointsFinished(t, db)
-	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
+	checkpointTarget := db.TxnMgr.Now()
+	tae.ForceCheckpoint()
 	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	testutils.WaitExpect(3000, func() bool {
-		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
-			return false
-		}
-		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-		if minEnd.IsEmpty() {
-			return false
-		}
-		if initMinMerged == nil {
-			return true
-		}
-		initMinEnd := initMinMerged.GetEnd()
-		return minEnd.GT(&initMinEnd)
-	})
-	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
-	if minMerged == nil {
-		return
-	}
-	minEnd := minMerged.GetEnd()
-	if minEnd.IsEmpty() {
-		return
-	}
-	if initMinMerged != nil {
-		initMinEnd := initMinMerged.GetEnd()
-		if !minEnd.GT(&initMinEnd) {
-			return
-		}
-	}
+	minMerged := waitForScannedCheckpoint(t, db, checkpointTarget)
 
 	assert.NotNil(t, minMerged)
 	snaps, err := db.DiskCleaner.GetCleaner().GetSnapshots()
@@ -8188,20 +8175,7 @@ func TestSnapshotMeta(t *testing.T) {
 	assert.Nil(t, err)
 	tae.RestartDisableGC(ctx)
 	db = tae.DB
-	testutils.WaitExpect(10000, func() bool {
-		if db.DiskCleaner.GetCleaner().GetScanWaterMark() == nil {
-			return false
-		}
-		end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
-		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
-			return false
-		}
-		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-		return end.GE(&minEnd)
-	})
-	end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
-	minEnd = db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-	assert.True(t, end.GE(&minEnd))
+	waitForScannedCheckpoint(t, db, minMerged.GetEnd())
 	snaps, err = db.DiskCleaner.GetCleaner().GetSnapshots()
 	assert.Nil(t, err)
 	assert.Equal(t, len(snapshots), len(snaps.ToTsList()))
@@ -8358,11 +8332,9 @@ func TestPitrMeta(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 	if err != nil {
-		t.Logf("range delete %v, rollbacking", err)
-		_ = txn.Rollback(context.Background())
-		return
+		require.NoError(t, txn.Rollback(ctx))
 	}
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	testutil.WaitAllCheckpointsFinished(t, db)
 	txn, err = db.StartTxn(nil)
@@ -8378,86 +8350,70 @@ func TestPitrMeta(t *testing.T) {
 	assert.NoError(t, err)
 	err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 	if err != nil {
-		t.Logf("range delete %v, rollbacking", err)
-		_ = txn.Rollback(context.Background())
-		return
+		require.NoError(t, txn.Rollback(ctx))
 	}
-	assert.NoError(t, err)
+	require.NoError(t, err)
 	assert.NoError(t, txn.Commit(context.Background()))
 	testutil.WaitAllCheckpointsFinished(t, db)
+	checkpointTarget := db.TxnMgr.Now()
+	tae.ForceCheckpoint()
 	cfg, err := db.BGCheckpointRunner.DisableCheckpoint(ctx)
 	assert.NoError(t, err)
 	db.DiskCleaner.GetCleaner().EnableGC()
-	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	testutils.WaitExpect(3000, func() bool {
-		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
-			return false
-		}
-		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-		if minEnd.IsEmpty() {
-			return false
-		}
-		if initMinMerged == nil {
-			return true
-		}
-		initMinEnd := initMinMerged.GetEnd()
-		return minEnd.GT(&initMinEnd)
-	})
-	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
-	if minMerged == nil {
-		return
-	}
-	minEnd := minMerged.GetEnd()
-	if minEnd.IsEmpty() {
-		return
-	}
-	if initMinMerged != nil {
-		initMinEnd := initMinMerged.GetEnd()
-		if !minEnd.GT(&initMinEnd) {
-			return
-		}
-	}
+	minMerged := waitForScannedCheckpoint(t, db, checkpointTarget)
 
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	assert.NotNil(t, minMerged)
 	pitr, err := db.DiskCleaner.GetCleaner().GetPITRs()
 	assert.Nil(t, err)
-	assert.True(t, len(pitr.ToTsList()) > 0)
+	// A default PITR object already has one empty cluster slot, so a nonempty
+	// flattened list does not prove that persisted metadata was reconstructed.
+	require.Empty(t, pitr.GetSnapshotsByLevel(logtail.PitrLevelAccount, 0))
+	clusterPitr := pitr.GetSnapshotsByLevel(logtail.PitrLevelCluster, 0)
+	require.Len(t, clusterPitr, 1)
+	require.True(t, clusterPitr[0].IsEmpty(), "deleted cluster row must not protect data")
+	dbPitr := pitr.GetSnapshotsByLevel(logtail.PitrLevelDatabase, database2.GetID())
+	require.Len(t, dbPitr, 1)
+	require.False(t, dbPitr[0].IsEmpty())
+	tablePitr := pitr.GetSnapshotsByLevel(logtail.PitrLevelTable, rel3.ID())
+	require.Len(t, tablePitr, 1)
+	require.False(t, tablePitr[0].IsEmpty())
 	tae.Restart(ctx)
 	db = tae.DB
-	testutils.WaitExpect(5000, func() bool {
-		if db.DiskCleaner.GetCleaner().GetScanWaterMark() == nil {
-			return false
-		}
-		end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
-		minEnd := minMerged.GetEnd()
-		return end.GE(&minEnd)
-	})
-	end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
-	minEnd = minMerged.GetEnd()
-	assert.True(t, end.GE(&minEnd))
+	waitForScannedCheckpoint(t, db, minMerged.GetEnd())
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
 	db.BGCheckpointRunner.EnableCheckpoint(cfg)
-	txn, _ = db.StartTxn(nil)
-	database, _ = txn.GetDatabase("db")
+	txn, err = db.StartTxn(nil)
+	require.NoError(t, err)
+	database, err = txn.GetDatabase("db")
+	require.NoError(t, err)
 	rel5, err := testutil.CreateRelation2(ctx, txn, database, pitrSchema)
-	assert.Nil(t, err)
-	assert.Nil(t, txn.Commit(context.Background()))
+	if err != nil {
+		require.NoError(t, txn.Rollback(ctx))
+	}
+	require.NoError(t, err)
+	require.NoError(t, txn.Commit(ctx))
 	appendPitr("db", rel5.ID())
-	testutil.WaitAllCheckpointsFinished(t, db)
+	checkpointTarget = db.TxnMgr.Now()
+	tae.ForceCheckpoint()
+	waitForScannedCheckpoint(t, db, checkpointTarget)
 	pitr, err = db.DiskCleaner.GetCleaner().GetPITRs()
-	assert.Nil(t, err)
-	testutils.WaitExpect(10000, func() bool {
-		if len(pitr.ToTsList()) <= 0 {
-			pitr, err = db.DiskCleaner.GetCleaner().GetPITRs()
-			assert.Nil(t, err)
-		}
-		return len(pitr.ToTsList()) > 0
-	})
-	assert.True(t, len(pitr.ToTsList()) > 0)
+	require.NoError(t, err)
+	// Only mo_catalog.mo_pitr owns retention metadata. The same-name table in
+	// a user database must not resurrect deleted scopes after restart.
+	clusterPitr = pitr.GetSnapshotsByLevel(logtail.PitrLevelCluster, 0)
+	require.Len(t, clusterPitr, 1)
+	require.True(t, clusterPitr[0].IsEmpty())
+	require.Empty(t, pitr.GetSnapshotsByLevel(logtail.PitrLevelAccount, 0))
+	dbPitr = pitr.GetSnapshotsByLevel(logtail.PitrLevelDatabase, database2.GetID())
+	require.Len(t, dbPitr, 1)
+	require.False(t, dbPitr[0].IsEmpty())
+	tablePitr = pitr.GetSnapshotsByLevel(logtail.PitrLevelTable, rel3.ID())
+	require.Len(t, tablePitr, 1)
+	require.False(t, tablePitr[0].IsEmpty())
 }
 
 func TestIscpMeta(t *testing.T) {
@@ -8597,20 +8553,19 @@ func TestIscpMeta(t *testing.T) {
 	testTableID := testRel.ID()
 
 	now := time.Now()
-	now.Add(-time.Duration(1) * time.Hour).UnixNano()
 	// Create test timestamps using types.TS
 	ts1 := types.BuildTS(now.Add(-time.Duration(2)*time.Minute).UnixNano(), 0)       // Earlier watermark
-	ts2 := types.BuildTS(now.Add(-time.Duration(20)*time.Millisecond).UnixNano(), 0) // Later watermark
-	ts3 := types.BuildTS(now.Add(-time.Duration(10)*time.Millisecond).UnixNano(), 0) // Earliest watermark (should be selected)
-	ts4 := types.BuildTS(now.Add(-time.Duration(10)*time.Microsecond).UnixNano(), 0) // Dropped job (should be ignored)
+	ts2 := types.BuildTS(now.Add(-3*time.Minute).UnixNano(), 0)                      // Earlier deleted watermark
+	ts3 := types.BuildTS(now.Add(-time.Duration(10)*time.Millisecond).UnixNano(), 0) // Later active watermark
+	ts4 := types.BuildTS(now.Add(-4*time.Minute).UnixNano(), 0)                      // Earlier dropped job (must be ignored)
 	ts5 := types.BuildTS(now.Add(-time.Duration(1)*time.Second).UnixNano(), 0)       // Other table
 	ts6 := types.BuildTS(now.Add(-time.Duration(50)*time.Nanosecond).UnixNano(), 0)  // Account1 backup
-	ts7 := types.BuildTS(now.Add(-time.Duration(50)*time.Millisecond).UnixNano(), 0) // New backup job
+	ts7 := types.BuildTS(now.Add(-3*time.Minute).UnixNano(), 0)                      // New earliest watermark after restart
 
 	appendIscpRecord(0, testTableID, "backup_job_1", 1001, ts1.ToString(), false) // Earlier watermark
-	appendIscpRecord(0, testTableID, "backup_job_2", 1002, ts2.ToString(), false) // Later watermark
-	appendIscpRecord(0, testTableID, "backup_job_3", 1003, ts3.ToString(), false) // Earliest watermark (should be selected)
-	appendIscpRecord(0, testTableID, "dropped_job", 1004, ts4.ToString(), true)   // Dropped job (should be ignored)
+	appendIscpRecord(0, testTableID, "backup_job_2", 1002, ts2.ToString(), false) // Earlier deleted watermark
+	appendIscpRecord(0, testTableID, "backup_job_3", 1003, ts3.ToString(), false) // Later active watermark
+	appendIscpRecord(0, testTableID, "dropped_job", 1004, ts4.ToString(), true)   // Earlier dropped job (must be ignored)
 
 	// Add records for different tables
 	appendIscpRecord(0, testTableID+1, "other_backup", 2001, ts5.ToString(), false)
@@ -8654,11 +8609,9 @@ func TestIscpMeta(t *testing.T) {
 		// Update the record to mark it as dropped
 		err = rel.RangeDelete(id, offset, offset, handle.DT_Normal)
 		if err != nil {
-			t.Logf("range delete %v, rollbacking", err)
-			_ = txn.Rollback(context.Background())
-			return
+			require.NoError(t, txn.Rollback(ctx))
 		}
-		assert.NoError(t, err)
+		require.NoError(t, err)
 		assert.NoError(t, txn.Commit(context.Background()))
 	}
 
@@ -8666,43 +8619,15 @@ func TestIscpMeta(t *testing.T) {
 	testutil.WaitAllCheckpointsFinished(t, db)
 
 	// Enable GC and test ISCP functionality
+	checkpointTarget := db.TxnMgr.Now()
+	tae.ForceCheckpoint()
 	cfg, err := db.BGCheckpointRunner.DisableCheckpoint(ctx)
 	assert.NoError(t, err)
 	db.DiskCleaner.GetCleaner().EnableGC()
 
-	initMinMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
 
-	// Wait for GC to process
-	testutils.WaitExpect(3000, func() bool {
-		if db.DiskCleaner.GetCleaner().GetMinMerged() == nil {
-			return false
-		}
-		minEnd := db.DiskCleaner.GetCleaner().GetMinMerged().GetEnd()
-		if minEnd.IsEmpty() {
-			return false
-		}
-		if initMinMerged == nil {
-			return true
-		}
-		initMinEnd := initMinMerged.GetEnd()
-		return minEnd.GT(&initMinEnd)
-	})
-
-	minMerged := db.DiskCleaner.GetCleaner().GetMinMerged()
-	if minMerged == nil {
-		return
-	}
-	minEnd := minMerged.GetEnd()
-	if minEnd.IsEmpty() {
-		return
-	}
-	if initMinMerged != nil {
-		initMinEnd := initMinMerged.GetEnd()
-		if !minEnd.GT(&initMinEnd) {
-			return
-		}
-	}
+	minMerged := waitForScannedCheckpoint(t, db, checkpointTarget)
 
 	// Test ISCP functionality
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
@@ -8719,7 +8644,7 @@ func TestIscpMeta(t *testing.T) {
 	assert.True(t, exists)
 	assert.False(t, iscpTS.IsEmpty())
 
-	// The minimum watermark should be from "backup_job_3" (2024-01-15 08:00:00)
+	// Both earlier deleted/dropped records must be excluded from the minimum.
 	expectedMinTS := ts1
 	assert.True(t, iscpTS.EQ(&expectedMinTS),
 		"Expected ISCP timestamp to be the minimum watermark, got %s, expected %s",
@@ -8729,18 +8654,7 @@ func TestIscpMeta(t *testing.T) {
 	tae.Restart(ctx)
 	db = tae.DB
 
-	testutils.WaitExpect(5000, func() bool {
-		if db.DiskCleaner.GetCleaner().GetScanWaterMark() == nil {
-			return false
-		}
-		end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
-		minEnd := minMerged.GetEnd()
-		return end.GE(&minEnd)
-	})
-
-	end := db.DiskCleaner.GetCleaner().GetScanWaterMark().GetEnd()
-	minEnd = minMerged.GetEnd()
-	assert.True(t, end.GE(&minEnd))
+	waitForScannedCheckpoint(t, db, minMerged.GetEnd())
 
 	err = db.DiskCleaner.GetCleaner().DoCheck(ctx)
 	assert.Nil(t, err)
@@ -8759,15 +8673,13 @@ func TestIscpMeta(t *testing.T) {
 	iscpTables, err = db.DiskCleaner.GetCleaner().ISCPTables()
 	assert.Nil(t, err)
 
-	testutils.WaitExpect(10000, func() bool {
-		if len(iscpTables) <= 0 {
-			iscpTables, err = db.DiskCleaner.GetCleaner().ISCPTables()
-			assert.Nil(t, err)
-		}
-		return len(iscpTables) > 0
-	})
-
-	assert.True(t, len(iscpTables) > 0)
+	require.Eventually(t, func() bool {
+		iscpTables, err = db.DiskCleaner.GetCleaner().ISCPTables()
+		require.NoError(t, err)
+		actual, ok := iscpTables[testTableID]
+		return ok && actual.EQ(&ts7)
+	}, testutil.TestCheckpointTimeout, 10*time.Millisecond,
+		"new post-restart job must update the real minimum watermark")
 	t.Logf("ISCP test completed successfully with %d tables tracked", len(iscpTables))
 }
 
@@ -8857,7 +8769,7 @@ func TestMergeGC(t *testing.T) {
 	cancel()
 	db.DiskCleaner.GetCleaner().EnableGC()
 	t.Log(tae.Catalog.SimplePPString(common.PPL1))
-	minMerged := waitForMinMergedCheckpoint(t, db, checkpointTarget)
+	minMerged := waitForScannedCheckpoint(t, db, checkpointTarget)
 	require.NotNil(t, minMerged)
 
 }
@@ -8938,10 +8850,10 @@ func TestCkpLeak(t *testing.T) {
 		}
 		return true
 	}
-	waitForMinMergedCheckpoint(t, db, checkpointTarget)
+	waitForScannedCheckpoint(t, db, checkpointTarget)
 	tae.Restart(ctx)
 	db = tae.DB
-	waitForMinMergedCheckpoint(t, db, checkpointTarget)
+	waitForScannedCheckpoint(t, db, checkpointTarget)
 	require.Eventually(t, func() bool {
 		return checkLeak()
 	}, testutil.TestCheckpointTimeout, 10*time.Millisecond,

@@ -108,7 +108,7 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 		return false
 	}
 	for _, ov := range allSupportedFunctions[fid].Overloads {
-		if ov.CannotFold() || ov.IsRealTimeRelated() {
+		if ov.IsVolatile() || ov.IsRealTimeRelated() {
 			return true
 		}
 	}
@@ -135,6 +135,13 @@ func IsConstant(expr *plan.Expr, varAndParamIsConst bool) bool {
 	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForFolding)
 }
 
+// IsFoldCandidate admits deterministic expressions for speculative evaluation.
+// Unlike IsConstant, this is not permission to relocate or eliminate effects:
+// the folder must isolate diagnostics and publish only a warning-free result.
+func IsFoldCandidate(expr *plan.Expr, varAndParamIsConst bool) bool {
+	return isConstant(expr, varAndParamIsConst, varAndParamIsConst, constantForFoldCandidate)
+}
+
 // IsStatementConstant conservatively admits speculative evaluation and endpoint
 // CONST provenance. Parameters and variables must already be materialized.
 func IsStatementConstant(expr *plan.Expr) bool {
@@ -152,6 +159,7 @@ type constantPurpose uint8
 const (
 	constantForFolding constantPurpose = iota
 	constantForRuntime
+	constantForFoldCandidate
 )
 
 func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose constantPurpose) bool {
@@ -180,11 +188,13 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 			return false
 		}
 		fid, _ := DecodeOverloadID(e.F.Func.GetObj())
-		if fid == CASE && purpose == constantForFolding {
+		if fid == CASE && purpose != constantForRuntime {
 			return false
 		}
 		f, ok := GetFunctionByIdWithoutError(e.F.Func.GetObj())
-		if !ok || f.CannotFold() || (f.IsRealTimeRelated() && !currentExecution) {
+		if !ok || f.IsVolatile() ||
+			(f.HasRowScopedDiagnostics() && purpose != constantForFoldCandidate) ||
+			(f.IsRealTimeRelated() && !currentExecution) {
 			return false
 		}
 		if purpose == constantForRuntime && (allSupportedFunctions[fid].isAggregate() || allSupportedFunctions[fid].isWindow()) {
@@ -273,7 +283,7 @@ func GetFunctionIsZonemappableById(ctx context.Context, overloadID int64) (bool,
 		return false, moerr.NewInvalidInput(ctx, "function overload id not found")
 	}
 	f := allSupportedFunctions[fid]
-	if f.Overloads[oIndex].volatile {
+	if f.Overloads[oIndex].CannotFold() {
 		return false, nil
 	}
 	return f.testFlag(plan.Function_ZONEMAPPABLE), nil
@@ -361,6 +371,9 @@ func getFunctionByName(
 	}
 
 	check := f.checkArgumentTypes(args, stringDomainModes)
+	if r.fid == INTEGER_DIV && LegacyDecimalIntegerDiv(ctx) {
+		check = legacyIntegerDivCheck(args)
+	}
 	if (r.fid == FORMAT || r.fid == MAKEDATE || r.fid == MAKETIME) && LegacySpecialConsumers(ctx) {
 		if legacy, ok := legacySpecialConsumerCheck(r.fid, f.Overloads, args); ok {
 			check = legacy
@@ -406,6 +419,9 @@ func getFunctionByName(
 	if err == nil {
 		r.applyDivPrecisionIncrement(ctx, args)
 		r.applyDecimalModMetadata(args)
+		if !LegacyDecimalIntegerDiv(ctx) {
+			r.applyDecimalIntegerDivMetadata(args)
+		}
 	}
 
 	return r, err
@@ -434,6 +450,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 		r.applyDivPrecisionIncrement(context.Background(), args)
 		r.applyDecimalModMetadata(args)
+		r.applyDecimalIntegerDivMetadata(args)
 		return r, true
 
 	case succeedWithCast:
@@ -444,6 +461,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 		r.applyDivPrecisionIncrement(context.Background(), args)
 		r.applyDecimalModMetadata(args)
+		r.applyDecimalIntegerDivMetadata(args)
 		return r, true
 
 	default:
@@ -475,6 +493,13 @@ func GetFunctionByNameWithOverload(
 	if !f.bindsOverload(int(overloadID)) {
 		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d is legacy execution only", name, overloadID)
 	}
+	if r.fid == INTEGER_DIV && overloadID == DecimalIntegerDivUnsignedOverload {
+		if _, scoped := DecimalIntegerDivReturnType(originalArgs); !scoped {
+			return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "invalid decimal integer division signature %v", originalArgs)
+		}
+		r.targetTypes = decimalIntegerDivOperandTypes(originalArgs)
+		r.needCast = !originalArgs[0].Eq(r.targetTypes[0]) || !originalArgs[1].Eq(r.targetTypes[1])
+	}
 	r.overloadId = overloadID
 	if r.needCast {
 		args = r.targetTypes
@@ -483,6 +508,7 @@ func GetFunctionByNameWithOverload(
 	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
 	r.applyDivPrecisionIncrement(ctx, originalArgs)
 	r.applyDecimalModMetadata(originalArgs)
+	r.applyDecimalIntegerDivMetadata(originalArgs)
 	return r, nil
 }
 
@@ -502,7 +528,7 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 
 	result := vector.NewFunctionResultWrapper(f.retType(inputTypes), mp)
 
-	fold := !f.CannotFold() && !f.IsRealTimeRelated()
+	fold := !f.IsVolatile() && !f.IsRealTimeRelated() && (!f.HasRowScopedDiagnostics() || length > 0)
 	evaluateLength := length
 	if fold {
 		for _, param := range inputs {
@@ -514,29 +540,41 @@ func RunFunctionDirectly(proc *process.Process, overloadID int64, inputs []*vect
 			evaluateLength = 1
 		}
 	}
+	// Value constancy survives diagnostics; only effect-free folding may reduce
+	// the evaluation length. Keep this proof if the probe rejects folding.
+	scalarValue := fold
 
 	if err = result.PreExtendAndReset(evaluateLength); err != nil {
 		result.Free()
 		return nil, err
 	}
 	exec, _, execFree, _ := f.GetExecuteMethod()
-	if err = exec(inputs, result, proc, evaluateLength, nil); err != nil {
-		result.Free()
-		if execFree != nil {
-			// NOTE: execFree is only applicable for serial and serial_full.
-			// if execFree is not nil, then make sure to call it after exec() is done.
-			_ = execFree()
-		}
-		return nil, err
-	}
 	if execFree != nil {
-		// NOTE: execFree is only applicable for serial and serial_full.
-		// if execFree is not nil, then make sure to call it after exec() is done.
-		_ = execFree()
+		defer func() { _ = execFree() }()
+	}
+	evalProc := proc
+	var probe *process.WarningProbe
+	if fold && f.HasRowScopedDiagnostics() {
+		probe = &process.WarningProbe{}
+		evalProc = proc.NewNoContextChildProc(0)
+		evalProc.Ctx = proc.Ctx
+		evalProc.WarningSink = probe
+	}
+	err = exec(inputs, result, evalProc, evaluateLength, nil)
+	if probe != nil && (err != nil || probe.Warned()) {
+		// The probe has no statement-visible effects. Re-evaluate at the
+		// requested cardinality so the caller owns diagnostics and errors.
+		if err = result.PreExtendAndReset(length); err == nil {
+			err = exec(inputs, result, proc, length, nil)
+		}
+	}
+	if err != nil {
+		result.Free()
+		return nil, err
 	}
 
 	vec := result.GetResultVector()
-	if fold {
+	if scalarValue {
 		vec.ToConst()
 		vec.SetLength(length)
 	}
@@ -555,6 +593,16 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // non-NULL. STRICT functions normally preserve an all-non-NULL argument
 // guarantee, except for functions that can synthesize NULL from valid values.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
+	return deduceNotNullable(context.Background(), overloadID, args)
+}
+
+// DeduceNotNullableForBinding shares the current inference owner while allowing
+// complete historical catalog origins to reproduce their published metadata.
+func DeduceNotNullableForBinding(ctx context.Context, overloadID int64, args []*plan.Expr) bool {
+	return deduceNotNullable(ctx, overloadID, args)
+}
+
+func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
 	case EXTRACT:
@@ -574,11 +622,16 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		// above the representable calendar even when the input is NOT NULL.
 		return false
 	case DATE:
-		// Typed zero DATE/DATETIME values become NULL under NO_ZERO_DATE.
-		if oid == 0 || oid == 2 {
+		// Typed zero dates can become NULL under NO_ZERO_DATE, and string
+		// conversions synthesize NULL for malformed input.
+		if oid == 0 || oid == 2 || ((oid == 3 || oid == 4) && !LegacyTemporalNullability(ctx)) {
 			return false
 		}
 	case CAST:
+		if (oid == 0 || oid == 1) && len(args) == 2 &&
+			types.T(args[0].Typ.Id).IsMySQLString() && types.T(args[1].Typ.Id) == types.T_datetime && !LegacyTemporalNullability(ctx) {
+			return false
+		}
 		// Explicit typed DATE casts share the DATE conversion policy. Legacy
 		// implicit and assignment casts keep their existing nullability.
 		if oid == 1 && len(args) == 2 &&
@@ -607,9 +660,9 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		}
 		return true
 	case TIMESTAMP:
-		if len(args) == 2 {
-			return false
-		}
+		// Calendar parsing and zero-date handling can produce NULL even for
+		// non-NULL operands, in both unary and pair forms.
+		return false
 	case ADDTIME:
 		// These overloads can return NULL for an out-of-range TIME result
 		// even when every operand is NOT NULL. The intervening legacy
@@ -683,7 +736,7 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		SHA2, AES_ENCRYPT, AES_DECRYPT, COMPRESS, UNCOMPRESS, EXTRACTVALUE, UPDATEXML,
 		DATE_FORMAT, TIME_FORMAT,
 		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP,
-		TO_INTERVAL, TO_INTERVAL_MICROSECOND, TO_CALENDAR_INTERVAL:
+		TO_INTERVAL, TO_INTERVAL_MICROSECOND, TO_CALENDAR_INTERVAL, TIMESTAMPADD_SECOND_INTERVAL:
 		return false
 	}
 	if ProducesNoNull(overloadID) {
@@ -911,14 +964,29 @@ type overload struct {
 	// TODO: there is not a good place to use that in plan now. the attribute is not effective.
 	cannotParallel bool
 
-	// if true, overload cannot be folded
+	// Volatile overloads can return different values for the same inputs.
 	volatile bool
+	// Deterministic values may still emit diagnostics once per evaluated row.
+	// Folding or changing their evaluation count would lose those effects.
+	rowScopedDiagnostics bool
 	// if realTimeRelated, overload cannot be folded when `Prepare`.
 	realTimeRelated bool
 }
 
-func (ov *overload) CannotFold() bool {
+// IsVolatile reports value instability, independently of diagnostic effects.
+// Use this for deterministic-expression admission, such as generated columns.
+func (ov *overload) IsVolatile() bool {
 	return ov.volatile
+}
+
+// CannotFold conservatively protects effects when no warning-free evaluation
+// proof is available. Speculative folders use IsFoldCandidate and a warning probe.
+func (ov *overload) CannotFold() bool {
+	return ov.volatile || ov.rowScopedDiagnostics
+}
+
+func (ov *overload) HasRowScopedDiagnostics() bool {
+	return ov.rowScopedDiagnostics
 }
 
 func (ov *overload) IsRealTimeRelated() bool {

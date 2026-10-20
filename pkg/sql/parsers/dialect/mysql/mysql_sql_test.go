@@ -61,6 +61,29 @@ func TestDebug(t *testing.T) {
 	}
 }
 
+func TestAlterConstraintDropIntent(t *testing.T) {
+	for _, test := range []struct {
+		clause string
+		typ    tree.AlterTableDropType
+	}{
+		{"drop check ck", tree.AlterTableDropCheck},
+		{"drop constraint ck", tree.AlterTableDropConstraint},
+		{"drop foreign key ck", tree.AlterTableDropForeignKey},
+	} {
+		t.Run(test.clause, func(t *testing.T) {
+			sql := "alter table t " + test.clause
+			stmt, err := ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			alter := stmt.(*tree.AlterTable)
+			drop := alter.Options[0].(*tree.AlterOptionDrop)
+			require.Equal(t, test.typ, drop.Typ)
+			require.Equal(t, tree.Identifier("ck"), drop.Name)
+			require.Equal(t, sql, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
 func TestDiagnosticCountAndLimitSyntax(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -660,6 +683,21 @@ func TestSelectSharedLockParse(t *testing.T) {
 			sql:  "SELECT id FROM t WHERE id = '1' LOCK IN SHARE MODE",
 			want: "select id from t where id = 1 for share",
 		},
+		{
+			name: "for update nowait",
+			sql:  "SELECT id FROM t WHERE id = '1' FOR UPDATE NOWAIT",
+			want: "select id from t where id = 1 for update nowait",
+		},
+		{
+			name: "for share nowait",
+			sql:  "SELECT id FROM t WHERE id = '1' FOR SHARE NOWAIT",
+			want: "select id from t where id = 1 for share nowait",
+		},
+		{
+			name: "for share skip locked",
+			sql:  "SELECT id FROM t WHERE id = '1' FOR SHARE SKIP LOCKED",
+			want: "select id from t where id = 1 for share skip locked",
+		},
 	}
 
 	for _, test := range tests {
@@ -671,8 +709,79 @@ func TestSelectSharedLockParse(t *testing.T) {
 			selectStmt, ok := stmt.(*tree.Select)
 			require.True(t, ok)
 			require.NotNil(t, selectStmt.SelectLockInfo)
-			require.Equal(t, tree.SelectLockForShare, selectStmt.SelectLockInfo.LockType)
+			switch test.name {
+			case "for update nowait":
+				require.Equal(t, tree.SelectLockForUpdateNoWait, selectStmt.SelectLockInfo.LockType)
+			case "for share nowait":
+				require.Equal(t, tree.SelectLockForShareNoWait, selectStmt.SelectLockInfo.LockType)
+			case "for share skip locked":
+				require.Equal(t, tree.SelectLockForShareSkipLocked, selectStmt.SelectLockInfo.LockType)
+			default:
+				require.Equal(t, tree.SelectLockForShare, selectStmt.SelectLockInfo.LockType)
+			}
 			require.Equal(t, test.want, tree.String(stmt, dialect.MYSQL))
+		})
+	}
+}
+
+func TestSelectLockContextualNoWait(t *testing.T) {
+	for _, mode := range []string{"UPDATE", "SHARE"} {
+		for _, word := range []string{"nowait", "nOwAiT", "/*! nowait */", "/*! nowait */ /* tail */"} {
+			sql := "SELECT id FROM t FOR " + mode + " /* option */ " + word
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err, sql)
+			require.Equal(t, "select id from t for "+strings.ToLower(mode)+" nowait", tree.String(stmt, dialect.MYSQL))
+			stmt.Free()
+		}
+		for _, word := range []string{"other", "nowaits", "`nowait`", "'nowait'"} {
+			sql := "SELECT id FROM t FOR " + mode + " " + word
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			if stmt != nil {
+				stmt.Free()
+			}
+			require.Error(t, err, sql)
+		}
+	}
+}
+
+func TestSelectLockContextualSkipLocked(t *testing.T) {
+	for _, word := range []string{"locked", "lOcKeD", "/*! locked */"} {
+		sql := "SELECT id FROM t FOR SHARE SKIP /* option */ " + word
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		require.NoError(t, err, sql)
+		require.Equal(t, tree.SelectLockForShareSkipLocked, stmt.(*tree.Select).SelectLockInfo.LockType)
+		stmt.Free()
+	}
+	for _, word := range []string{"", "other", "lockeds", "`locked`", "'locked'"} {
+		sql := "SELECT id FROM t FOR SHARE SKIP " + word
+		stmt, err := ParseOne(context.Background(), sql, 1)
+		if stmt != nil {
+			stmt.Free()
+		}
+		require.Error(t, err, sql)
+	}
+}
+
+func TestSelectLockModifiersRemainUsableAsIdentifiers(t *testing.T) {
+	stmt, err := ParseOne(context.Background(), "SELECT nowait, locked, t.nowait, t.locked FROM t", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Equal(t, "select nowait, locked, t.nowait, t.locked from t", tree.String(stmt, dialect.MYSQL))
+}
+
+func TestSelectLockRejectsUnsupportedOrConflictingModifiers(t *testing.T) {
+	for _, sql := range []string{
+		"SELECT id FROM t FOR UPDATE SKIP LOCKED",
+		"SELECT id FROM t FOR UPDATE NOWAIT NOWAIT",
+		"SELECT id FROM t FOR SHARE NOWAIT SKIP LOCKED",
+		"SELECT id FROM t FOR SHARE SKIP LOCKED NOWAIT",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			if stmt != nil {
+				stmt.Free()
+			}
+			require.Error(t, err)
 		})
 	}
 }
@@ -1014,6 +1123,10 @@ func TestParseFirstWithSQLMode(t *testing.T) {
 		first   string
 	}{
 		{name: "simple statement", sql: "select 1; select 2", first: "select 1;"},
+		{name: "plain locking boundary", sql: "select id from t for update; select 2", first: "select id from t for update;"},
+		{name: "skip locking boundary", sql: "select id from t for share skip /*! locked */; select 2", first: "select id from t for share skip /*! locked */;"},
+		{name: "contextual locking boundary", sql: "select id from t for share /*! nowait */; select 2", first: "select id from t for share /*! nowait */;"},
+
 		{name: "leading empty statements", sql: ";; select 1; select 2", first: ";; select 1;"},
 		{
 			name:  "nested compound statement",
@@ -5111,7 +5224,7 @@ var (
 			output: "alter table t1 charset = a collate = b",
 		}, {
 			input:  "alter table t1 CONVERT TO CHARACTER SET a COLLATE b",
-			output: "alter table t1 charset = a collate = b",
+			output: "alter table t1 convert to character set a collate = b",
 		}, {
 			input:  "alter table t1 DISABLE KEYS",
 			output: "alter table t1 charset = DISABLE",
@@ -5287,7 +5400,7 @@ var (
 		},
 		{
 			input:  "alter table tbl1 drop constraint fk_name",
-			output: "alter table tbl1 drop foreign key fk_name",
+			output: "alter table tbl1 drop constraint fk_name",
 		},
 		{
 			input:  "explain force execute st using @a",
@@ -6043,9 +6156,34 @@ func TestUnquotedExtendedIdentifiers(t *testing.T) {
 }
 
 func TestCharsetIntroducerParses(t *testing.T) {
-	stmt, err := ParseOne(context.Background(), "SELECT _utf8mb4'test'", 1)
+	for _, sql := range []string{
+		"SELECT _utf8mb4'test'",
+		"SELECT _UTF8MB4'test'",
+		"SELECT _UtF8mB4'test'",
+		"SELECT DATE_FORMAT(CURRENT_DATE(), _UTF8MB4'%Y-%m')",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+		})
+	}
+}
+
+func TestCharsetIntroducerLiteralValue(t *testing.T) {
+	// An unrecognized introducer would silently parse `_UTF8MB4` as a column
+	// reference with 'test' as its alias instead of a string literal.
+	stmt, err := ParseOne(context.Background(), "SELECT _UTF8MB4'test'", 1)
 	require.NoError(t, err)
-	stmt.Free()
+	defer stmt.Free()
+	clause, ok := stmt.(*tree.Select).Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, clause.Exprs, 1)
+	literal, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, tree.P_char, literal.ValType)
+	require.Equal(t, "test", literal.String())
+	require.True(t, clause.Exprs[0].As.Empty())
 }
 
 func TestUnquotedSupplementaryIdentifiersRejected(t *testing.T) {
@@ -7055,6 +7193,26 @@ func TestNonGeometrySRIDSyntaxRoundTrip(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, ast)
 			require.Equal(t, test.output, tree.String(ast, dialect.MYSQL))
+		})
+	}
+}
+
+func TestAlterDatabaseCollationSyntax(t *testing.T) {
+	for _, sql := range []string{
+		"alter database d character set utf8mb4 collate utf8mb4_bin",
+		"alter schema d default collate = utf8mb4_bin default character set = utf8mb4",
+		"alter database collate utf8mb4_bin",
+		"alter database d character set utf8mb4",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(t.Context(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			formatted := tree.String(stmt, dialect.MYSQL)
+			require.Contains(t, formatted, "alter database")
+			reparsed, err := ParseOne(t.Context(), formatted, 1)
+			require.NoError(t, err)
+			reparsed.Free()
 		})
 	}
 }
