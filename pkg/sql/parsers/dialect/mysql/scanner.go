@@ -368,12 +368,14 @@ func (s *Scanner) TakeExecutableCommentEnd() int {
 }
 
 func (s *Scanner) isCharsetIntroducer() bool {
-	if s.peek(1) != 'u' || s.peek(2) != 't' || s.peek(3) != 'f' || s.peek(4) != '8' ||
-		s.peek(5) != 'm' || s.peek(6) != 'b' || s.peek(7) != '4' {
+	// The introducer name is matched case-insensitively, like MySQL.
+	const charsetIntroducer = "_utf8mb4"
+	if s.Pos+len(charsetIntroducer) > len(s.buf) ||
+		!strings.EqualFold(s.buf[s.Pos:s.Pos+len(charsetIntroducer)], charsetIntroducer) {
 		return false
 	}
 
-	pos := s.Pos + len("_utf8mb4")
+	pos := s.Pos + len(charsetIntroducer)
 	for pos < len(s.buf) {
 		switch s.buf[pos] {
 		case ' ', '\n', '\r', '\t':
