@@ -5486,7 +5486,7 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 	if cteRef.snapshot != nil {
 		subCtx.snapshot = cteRef.snapshot
 	}
-	if targets := ctx.numericTableProjectionTypes[strings.ToLower(table)]; len(targets) > 0 {
+	if targets := ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, table)]; len(targets) > 0 {
 		subCtx.numericProjectionTypes = targets
 	}
 	subCtx.recordCteInBinding(table,
@@ -5496,18 +5496,17 @@ func (builder *QueryBuilder) bindNoRecursiveCte(
 			recScanNodeId: -1})
 	cteRef.isRecursive = false
 
-	oldSnapshot := builder.compCtx.GetSnapshot()
-	builder.compCtx.SetSnapshot(subCtx.snapshot)
-	// A CTE body is a nested SELECT and must not inherit the outer FOR UPDATE
-	// state. Otherwise the CTE would emit its own LOCK_OP (e.g. above its
-	// LIMIT) on top of the outer LOCK_OP that collectLockTargets injects
-	// after the outer query's FROM, locking rows that fall outside the final
-	// result set.
-	savedIsForUpdate := builder.isForUpdate
-	builder.isForUpdate = false
-	nodeID, err = builder.bindSelect(s, subCtx, false)
-	builder.isForUpdate = savedIsForUpdate
-	builder.compCtx.SetSnapshot(oldSnapshot)
+	func() {
+		oldSnapshot := builder.compCtx.GetSnapshot()
+		builder.compCtx.SetSnapshot(subCtx.snapshot)
+		defer builder.compCtx.SetSnapshot(oldSnapshot)
+		// A nested CTE must not inherit FOR UPDATE. Restore both binding
+		// domains before leaving this phase, including catalog panics.
+		savedIsForUpdate := builder.isForUpdate
+		builder.isForUpdate = false
+		defer func() { builder.isForUpdate = savedIsForUpdate }()
+		nodeID, err = builder.bindSelect(s, subCtx, false)
+	}()
 	if err != nil {
 		return
 	}
@@ -5667,7 +5666,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		return 0, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
 	}
 	//1. bind initial statement
-	targets := ctx.numericTableProjectionTypes[strings.ToLower(table)]
+	targets := ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, table)]
 	initCtx := NewBindContext(builder, cteRef.declarationCtx)
 	initCtx.cteName = table
 	if len(targets) > 0 {
@@ -5943,38 +5942,36 @@ func (builder *QueryBuilder) bindCte(
 	return
 }
 
+// cteReferences owns declaration order and exact AST-name matching for both
+// normal binding and optional numeric probes. The parser owns case normalization.
+func cteReferences(with *tree.With) (map[string]*CTERef, string) {
+	refs := make(map[string]*CTERef, len(with.CTEs))
+	later := make([]string, 0, len(with.CTEs))
+	for i := len(with.CTEs) - 1; i >= 0; i-- {
+		cte := with.CTEs[i]
+		name := string(cte.Name.Alias)
+		if refs[name] != nil {
+			return nil, name
+		}
+		masked := make(map[string]bool, len(later))
+		for _, name := range later {
+			masked[name] = true
+		}
+		refs[name] = &CTERef{ast: cte, isRecursive: with.IsRecursive, maskedCTEs: masked}
+		later = append(later, name)
+	}
+	return refs, ""
+}
+
 func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) error {
-	// preprocess CTEs
 	if stmt.With != nil {
-		ctx.cteByName = make(map[string]*CTERef)
-		maskedNames := make([]string, len(stmt.With.CTEs))
-
-		for i := range stmt.With.CTEs {
-			idx := len(stmt.With.CTEs) - i - 1
-			cte := stmt.With.CTEs[idx]
-
-			name := string(cte.Name.Alias)
-			if _, ok := ctx.cteByName[name]; ok {
-				return moerr.NewSyntaxErrorf(builder.GetContext(), "WITH query name %q specified more than once", name)
-			}
-
-			var maskedCTEs map[string]bool
-			if len(maskedNames) > 0 {
-				maskedCTEs = make(map[string]bool)
-				for _, mask := range maskedNames {
-					maskedCTEs[mask] = true
-				}
-			}
-
-			maskedNames[i] = name
-
-			cteRef := &CTERef{
-				ast:         cte,
-				isRecursive: stmt.With.IsRecursive,
-				maskedCTEs:  maskedCTEs,
-			}
-			ctx.cteByName[name] = cteRef
-			cteRef.declarationCtx = newCTEDeclarationContext(builder, ctx)
+		refs, duplicate := cteReferences(stmt.With)
+		if duplicate != "" {
+			return moerr.NewSyntaxErrorf(builder.GetContext(), "WITH query name %q specified more than once", duplicate)
+		}
+		ctx.cteByName = refs
+		for _, ref := range refs {
+			ref.declarationCtx = newCTEDeclarationContext(builder, ctx)
 		}
 	}
 	return nil
@@ -5994,7 +5991,9 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	if stmt.RewriteOption != nil {
 		ctx.remapOption = stmt.RewriteOption
 	}
-	registerNumericCteDefinitions(stmt, ctx)
+	if !registerNumericCteDefinitions(stmt, ctx) {
+		return 0, builder.preprocessCte(stmt, ctx)
+	}
 	seedPreparedNumericAggregateTableProjectionTypes(builder, stmt, ctx)
 	seedNumericTableProjectionTypes(builder, stmt, ctx)
 	seedNumericCteProjectionTypes(builder, ctx)
@@ -6748,16 +6747,16 @@ func storeNumericProjectionSourceTargets(
 		}
 		if storeNumericTableProjectionTargetsWithMerge(
 			ctx.numericTableProjectionTypes, ctx.numericTableProjectionAmbiguous,
-			sources[i].alias, sources[i].targets, mergeCompatibleNumericTargets,
+			numericProjectionTableKey(ctx, sources[i].alias), sources[i].targets, mergeCompatibleNumericTargets,
 		) {
-			changed = append(changed, strings.ToLower(sources[i].alias))
+			changed = append(changed, sources[i].alias)
 		}
 		if sources[i].sourceName != "" && sources[i].sourceSchema == "" {
 			if storeNumericTableProjectionTargetsWithMerge(
 				ctx.numericTableProjectionTypes, ctx.numericTableProjectionAmbiguous,
-				sources[i].sourceName, sources[i].targets, mergeCompatibleNumericTargets,
+				numericProjectionTableKey(ctx, sources[i].sourceName), sources[i].targets, mergeCompatibleNumericTargets,
 			) {
-				changed = append(changed, strings.ToLower(sources[i].sourceName))
+				changed = append(changed, sources[i].sourceName)
 			}
 		}
 	}
@@ -7157,6 +7156,10 @@ func mergeNumericProjectionTargets(left, right Type) (Type, bool) {
 	return makePlan2Type(&resolved), true
 }
 
+func numericProjectionTableKey(ctx *BindContext, table string) string {
+	return tree.NewCStr(table, ctx.lower).Compare()
+}
+
 func storeNumericTableProjectionTargets(
 	targetsByTable map[string][]Type,
 	ambiguousByTable map[string][]bool,
@@ -7164,7 +7167,7 @@ func storeNumericTableProjectionTargets(
 	targets []Type,
 ) bool {
 	return storeNumericTableProjectionTargetsWithMerge(
-		targetsByTable, ambiguousByTable, table, targets, false,
+		targetsByTable, ambiguousByTable, strings.ToLower(table), targets, false,
 	)
 }
 
@@ -7175,7 +7178,7 @@ func storeNumericTableProjectionTargetsWithMerge(
 	targets []Type,
 	mergeCompatibleNumericTargets bool,
 ) bool {
-	key := strings.ToLower(table)
+	key := table
 	existing, ok := targetsByTable[key]
 	if !ok {
 		targetsByTable[key] = append([]Type(nil), targets...)
@@ -7385,7 +7388,9 @@ func numericProjectionOutputNames(
 	defer delete(visiting, source)
 	if source.With != nil && ctx != nil {
 		ctx = numericCteBindingContext(ctx, nil)
-		registerNumericCteDefinitions(source, ctx)
+		if !registerNumericCteDefinitions(source, ctx) {
+			return nil
+		}
 	}
 	return numericProjectionStatementOutputNames(builder, source, source.Select, ctx, visiting)
 }
@@ -7476,10 +7481,7 @@ func numericProjectionCteSource(
 ) (*tree.Select, tree.IdentifierList, *BindContext) {
 	var ref *CTERef
 	if ctx != nil {
-		ref = ctx.numericCteByName[strings.ToLower(table)]
-		if bound := ctx.findCTE(table); bound != nil && (ref == nil || bound.ast == ref.ast) {
-			ref = bound
-		}
+		ref = ctx.findCTE(table)
 	}
 	if ref == nil {
 		return nil, existingCols, ctx
@@ -7505,8 +7507,9 @@ func numericCteBindingContext(ctx *BindContext, ref *CTERef) *BindContext {
 	if ctx == nil {
 		return nil
 	}
-	scope, snapshot := ctx, ctx.snapshot
+	scope, snapshot, state := ctx, ctx.snapshot, ctx.cteState
 	if ref != nil {
+		state = CteBindState{cte: ref, cteBindType: CteBindTypeNonRecur}
 		if ref.declarationCtx != nil {
 			scope = ref.declarationCtx
 		}
@@ -7520,12 +7523,17 @@ func numericCteBindingContext(ctx *BindContext, ref *CTERef) *BindContext {
 		lower:            scope.lower,
 		snapshot:         snapshot,
 		numericCteByName: scope.numericCteByName,
+		cteState:         state,
 	}
 }
 
-func registerNumericCteDefinitions(stmt *tree.Select, ctx *BindContext) {
+func registerNumericCteDefinitions(stmt *tree.Select, ctx *BindContext) bool {
 	if stmt.With == nil {
-		return
+		return true
+	}
+	refs, duplicate := cteReferences(stmt.With)
+	if duplicate != "" {
+		return false
 	}
 	definitions := make(map[string]*CTERef, len(ctx.numericCteByName)+len(stmt.With.CTEs))
 	for name, ref := range ctx.numericCteByName {
@@ -7534,10 +7542,13 @@ func registerNumericCteDefinitions(stmt *tree.Select, ctx *BindContext) {
 	// Publish a new immutable lexical frame; inherited definitions keep their
 	// original declaration frame when an inner WITH shadows one of its names.
 	ctx.numericCteByName = definitions
+	ctx.cteByName = refs
 	declaration := numericCteBindingContext(ctx, nil)
-	for _, cte := range stmt.With.CTEs {
-		definitions[strings.ToLower(string(cte.Name.Alias))] = &CTERef{ast: cte, declarationCtx: declaration}
+	for name, ref := range refs {
+		ref.declarationCtx = declaration
+		definitions[name] = ref
 	}
+	return true
 }
 
 func seedNumericCteProjectionTypes(builder *QueryBuilder, ctx *BindContext) {
@@ -7550,8 +7561,9 @@ func seedNumericCteProjectionTypes(builder *QueryBuilder, ctx *BindContext) {
 	}
 	queue := make([]workItem, 0, len(ctx.numericCteByName))
 	pending := make(map[*CTERef]bool, len(ctx.numericCteByName))
-	for name, ref := range ctx.numericCteByName {
-		if len(ctx.numericTableProjectionTypes[name]) > 0 {
+	for name := range ctx.numericCteByName {
+		ref := ctx.findCTE(name)
+		if ref != nil && len(ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, name)]) > 0 {
 			queue = append(queue, workItem{name, ctx})
 			pending[ref] = true
 		}
@@ -7560,9 +7572,9 @@ func seedNumericCteProjectionTypes(builder *QueryBuilder, ctx *BindContext) {
 		item := queue[0]
 		queue = queue[1:]
 		name, scope := item.name, item.scope
-		ref := scope.numericCteByName[name]
+		ref := scope.findCTE(name)
 		pending[ref] = false
-		targets := scope.numericTableProjectionTypes[name]
+		targets := scope.numericTableProjectionTypes[numericProjectionTableKey(scope, name)]
 		if ref == nil || len(targets) == 0 {
 			continue
 		}
@@ -7576,16 +7588,15 @@ func seedNumericCteProjectionTypes(builder *QueryBuilder, ctx *BindContext) {
 		if source == nil {
 			continue
 		}
-		if bound := scope.findCTE(name); bound != nil && bound.ast == ref.ast {
-			ref = bound
-		}
 		subCtx := numericCteBindingContext(scope, ref)
 		subCtx.numericProjectionTypes = targets
 		subCtx.numericTableProjectionTypes = scope.numericTableProjectionTypes
 		subCtx.numericTableProjectionAmbiguous = scope.numericTableProjectionAmbiguous
-		registerNumericCteDefinitions(source, subCtx)
+		if !registerNumericCteDefinitions(source, subCtx) {
+			continue
+		}
 		for _, changed := range seedNumericTableProjectionTypes(builder, source, subCtx) {
-			if next := subCtx.numericCteByName[changed]; next != nil && !pending[next] {
+			if next := subCtx.findCTE(changed); next != nil && !pending[next] {
 				queue = append(queue, workItem{changed, subCtx})
 				pending[next] = true
 			}
@@ -13528,7 +13539,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		if derivedSelect != nil && tbl.As.Alias == "" {
 			return 0, "", moerr.NewDerivedMustHaveAlias(builder.GetContext())
 		}
-		targets := ctx.numericTableProjectionTypes[strings.ToLower(string(tbl.As.Alias))]
+		targets := ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, string(tbl.As.Alias))]
 		if derivedSelect != nil && len(targets) > 0 {
 			subCtx := NewBindContext(builder, ctx)
 			subCtx.numericProjectionTypes = targets

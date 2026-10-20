@@ -427,7 +427,12 @@ func buildViewSchemaAuthorizationPlan(t *testing.T, request *ViewSchemaRequest, 
 	if len(queries) != 0 {
 		query = queries[0]
 	}
-	statements, err := mysql.Parse(t.Context(), query, 1)
+	return buildViewSchemaAuthorizationPlanWithLower(t, request, mode, query, 1)
+}
+
+func buildViewSchemaAuthorizationPlanWithLower(t *testing.T, request *ViewSchemaRequest, mode, query string, lower int64) (*Plan, error) {
+	t.Helper()
+	statements, err := mysql.Parse(t.Context(), query, lower)
 	require.NoError(t, err)
 	defer statements[0].Free()
 	var input tree.Statement = statements[0]
@@ -604,6 +609,12 @@ func TestViewSchemaPlanningCteDeclarationNames(t *testing.T) {
 			{"chain", "with q as (select id from tpch.root_v), r as (select * from q), s as (select * from r) select sum(id) from (with q as (select id from tpch.blocked_v), r as (select * from q) select * from s) d"},
 			{"body with", "with q as (select id from tpch.blocked_v), r as (with q as (select id from tpch.root_v) select * from q) select sum(id) from r"},
 			{"scalar", "with q as (select id from tpch.root_v), r as (select * from q) select (with q as (select id from tpch.blocked_v) select sum(id) from r) + 1"},
+			{"later declaration", "with r as (select * from root_v), root_v as (select id from tpch.blocked_v) select sum(id) from r"},
+			{"later chain", "with r as (select * from root_v), s as (select * from r), root_v as (select id from tpch.blocked_v) select sum(id) from s"},
+			{"later scalar", "with r as (select * from root_v), root_v as (select id from tpch.blocked_v) select (select sum(id) from r) + 1"},
+			{"later qualified control", "with r as (select * from tpch.root_v), root_v as (select id from tpch.blocked_v) select sum(id) from r"},
+			{"ancestor mask", "with r as (with s as (select * from root_v) select * from s), root_v as (select id from tpch.blocked_v) select sum(id) from r"},
+			{"ancestor scalar", "with r as (with s as (select * from root_v) select * from s), root_v as (select id from tpch.blocked_v) select (select sum(id) from r) + 1"},
 		} {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
 				f := newViewSchemaTestFixture(t)
@@ -637,6 +648,87 @@ func TestViewSchemaPlanningCteDeclarationNames(t *testing.T) {
 	}
 }
 
+func TestViewSchemaPlanningDuplicateCteDoesNotProbe(t *testing.T) {
+	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+		for _, query := range []string{
+			"with q as (select id from tpch.blocked_v), q as (select 1) select * from q",
+			"select * from (with q as (select id from tpch.blocked_v), q as (select 1) select * from q) d",
+		} {
+			t.Run(mode+"/"+query, func(t *testing.T) {
+				f := newViewSchemaTestFixture(t)
+				p, err := buildViewSchemaAuthorizationPlan(t, f.request(t), mode, query)
+				require.Nil(t, p)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrSyntaxError), "%v", err)
+				require.Zero(t, f.authorizes.Load())
+				require.Zero(t, f.compiler.lookups.Load())
+			})
+		}
+	}
+}
+
+func TestViewSchemaPlanningCteNameCase(t *testing.T) {
+	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+		for _, tc := range []struct {
+			name, query string
+			lower       int64
+			denied      bool
+		}{
+			{"physical", "with root_v as (select id from tpch.blocked_v) select sum(id) from Root_V", 0, false},
+			{"quoted physical", "with root_v as (select id from tpch.blocked_v) select sum(id) from `Root_V`", 0, false},
+			{"qualified", "with root_v as (select id from tpch.blocked_v) select sum(id) from tpch.Root_V", 0, false},
+			{"scalar", "with root_v as (select id from tpch.blocked_v) select (select sum(id) from Root_V) + 1", 0, false},
+			{"cte", "with root_v as (select id from tpch.Root_V) select sum(id) from root_v", 0, false},
+			{"uppercase declaration", "with Root_V as (select id from tpch.Root_V) select sum(id) from root_v", 0, false},
+			{"folded control", "with root_v as (select id from tpch.blocked_v) select sum(id) from Root_V", 1, true},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				f := newViewSchemaTestFixture(t)
+				f.compiler.lower = tc.lower
+				f.compiler.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+					if name == "lower_case_table_names" {
+						return tc.lower, nil
+					}
+					if name == "sql_mode" {
+						return "", nil
+					}
+					return nil, nil
+				}
+				f.addView(t, "Root_V", "select n_nationkey as id from nation")
+				f.addView(t, "blocked_v", "select n_nationkey as id from nation")
+				failure := errors.New("actual root denied")
+				authorizations := 0
+				f.binding.Authorize = func(_ context.Context, db, name string, _ *Snapshot) error {
+					authorizations++
+					if db != "tpch" || name != "Root_V" {
+						return failure
+					}
+					return nil
+				}
+				f.compiler.resolve = func(_ context.Context, _, name string, _ *Snapshot) error {
+					require.NotEqual(t, "blocked_v", name)
+					return nil
+				}
+				p, err := buildViewSchemaAuthorizationPlanWithLower(t, f.request(t), mode, tc.query, tc.lower)
+				if tc.denied {
+					require.ErrorIs(t, err, failure)
+					require.Nil(t, p)
+					require.Zero(t, f.compiler.lookups.Load())
+					return
+				}
+				require.NoError(t, err)
+				require.Positive(t, authorizations)
+				if mode == "text" || mode == "typed" {
+					p = p.GetDcl().GetPrepare().Plan
+				}
+				require.Len(t, GetResultColumnsFromPlan(p), 1)
+				for _, ref := range p.GetQuery().CatalogDependencies {
+					require.NotEqual(t, "blocked_v", ref.ObjName)
+				}
+			})
+		}
+	}
+}
+
 func TestViewSchemaPlanningNumericCteScope(t *testing.T) {
 	for _, mode := range []string{"inherited", "declaration", "explicit snapshot"} {
 		t.Run(mode, func(t *testing.T) {
@@ -653,6 +745,7 @@ func TestViewSchemaPlanningNumericCteScope(t *testing.T) {
 			defer statements[0].Free()
 			cte := statements[0].(*tree.Select).With.CTEs[0]
 			ctx.numericCteByName = map[string]*CTERef{"q": {ast: cte}}
+			ctx.cteByName = ctx.numericCteByName
 			ctx.numericTableProjectionTypes = map[string][]Type{"q": {{Id: int32(types.T_int64)}}}
 			wantDatabase, wantSnapshot := ctx.defaultDatabase, ctx.snapshot
 			if mode != "inherited" {
@@ -817,6 +910,83 @@ func TestViewSchemaPlanningFailureRestoresOwnership(t *testing.T) {
 			require.Zero(t, f.generation.Used())
 			require.EqualValues(t, 1, f.closes.Load())
 		})
+	}
+}
+
+func TestViewSchemaPlanningFailureRestoresSnapshot(t *testing.T) {
+	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+		for _, panicFailure := range []bool{false, true} {
+			for _, inherited := range []bool{false, true} {
+				t.Run(mode+"/panic="+strconv.FormatBool(panicFailure)+"/inherited="+strconv.FormatBool(inherited), func(t *testing.T) {
+					f := newViewSchemaTestFixture(t)
+					f.addView(t, "root_v", "with q as (select n_name from nation) select n_name from q")
+					f.addView(t, "current_v", "select n_name from nation")
+					historical := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1234}, Tenant: &SnapshotTenant{TenantID: 42}}
+					f.compiler.namedSnapshot = historical
+					if inherited {
+						f.compiler.snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 5678}, Tenant: &SnapshotTenant{TenantID: 42}}
+					}
+					before := f.compiler.snapshot
+					request := f.request(t)
+					failure := errors.New("CTE catalog failed")
+					failures := 0
+					f.compiler.resolve = func(_ context.Context, _, name string, actual *Snapshot) error {
+						if name == "nation" && IsSnapshotValid(f.compiler.GetSnapshot()) && f.compiler.GetSnapshot().TS.Equal(*historical.TS) {
+							failures++
+							require.Equal(t, historical, actual)
+							if panicFailure {
+								panic(failure)
+							}
+							return failure
+						}
+						return nil
+					}
+					build := func() {
+						p, err := buildViewSchemaAuthorizationPlan(t, request, mode, "select * from root_v {snapshot='daily'}")
+						require.Nil(t, p)
+						require.ErrorIs(t, err, failure)
+					}
+					if panicFailure {
+						require.PanicsWithValue(t, failure, func() {
+							_, _ = buildViewSchemaAuthorizationPlan(t, request, mode, "select * from root_v {snapshot='daily'}")
+						})
+					} else {
+						build()
+					}
+					require.Positive(t, failures, "fail only after CTE binding publishes its compiler snapshot")
+					if panicFailure {
+						require.Equal(t, 1, failures)
+					}
+					require.Same(t, before, f.compiler.GetSnapshot(), "panic/error must restore the caller domain")
+					require.Zero(t, f.generation.Used())
+					require.Nil(t, f.compiler.GetContext().Value(viewSchemaContextKey{}))
+					f.compiler.resolve = func(_ context.Context, _, _ string, actual *Snapshot) error {
+						require.Equal(t, before, actual)
+						return nil
+					}
+					authorizations := 0
+					f.binding.Authorize = func(_ context.Context, _, name string, actual *Snapshot) error {
+						authorizations++
+						require.Equal(t, "current_v", name)
+						require.Equal(t, before, actual)
+						return nil
+					}
+					p, err := buildViewSchemaAuthorizationPlan(t, request, mode, "select * from current_v")
+					require.NoError(t, err)
+					require.Positive(t, authorizations)
+					if mode == "text" || mode == "typed" {
+						p = p.GetDcl().GetPrepare().Plan
+					}
+					for _, ref := range p.GetQuery().CatalogDependencies {
+						require.Equal(t, before, ref.Snapshot)
+					}
+					require.Same(t, before, f.compiler.GetSnapshot())
+					request.Close()
+					require.Zero(t, f.generation.Used())
+					require.EqualValues(t, 1, f.closes.Load())
+				})
+			}
+		}
 	}
 }
 

@@ -2015,7 +2015,9 @@ func (b *baseBinder) numericScalarStatementOutputs(
 	if owner.With != nil && b.ctx != nil {
 		probe := *b
 		probe.ctx = numericCteBindingContext(b.ctx, nil)
-		registerNumericCteDefinitions(owner, probe.ctx)
+		if !registerNumericCteDefinitions(owner, probe.ctx) {
+			return nil, nil, false, nil
+		}
 		b = &probe
 	}
 	switch selectStmt := stmt.(type) {

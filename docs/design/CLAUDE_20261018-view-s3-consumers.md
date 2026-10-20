@@ -59,7 +59,9 @@ View 定义、环境、身份、owner/权限和版本继续来自可见目录；
 
 - 每个用户物理查询根在数据库/订阅元数据探测及关系解析前授权，包括 PREPARE 在 buildTable 前执行的 numeric 名称/类型预探测；嵌套来源的执行权限由计划 `ViewReferences` 保留给现有安全链。
 - CTAS 源顶层绑定上下文与 SELECT 一样继承调用者的有效 snapshot；只影响读取源域。目标存在性检查、外键目录形状协商及既有 account-wide PREPARE DDL 失效 marker 保持原来的 current-domain 语义。
-- numeric CTE 定义保留自己的声明名称域，引用展开和传播队列携带该域，而非只按 use-site 的字符串表名追踪。内层同名 WITH 不能改变外层定义的解析目标；CTE body 自带 WITH、星号、多层链和 scalar 类型探测使用同一规则。有效 snapshot 仍按正常 binder 继承 use-site，显式 CTE snapshot 优先，不整份复制可变绑定状态。
+- numeric CTE 定义保留自己的声明名称域，引用展开和传播队列携带该域，而非只按 use-site 的字符串表名追踪。normal binder 与 numeric registration 共用声明顺序/屏蔽构造，所有 numeric CTE 查找、队列选择统一走正常 `findCTE`（包括父声明层的 masked names），不绕过其屏蔽规则读取扁平 numeric index。后声明 CTE 不遮蔽较早定义中应解析到的物理根。
+- 名称比较使用 parser 已选择的 AST 标识和绑定上下文的比较模式；CTE 查找不再无条件 ToLower，numeric 目标存取统一按该比较模式构造 key。lower_case_table_names=0 时，物理 Root_V 不能误匹配 CTE root_v。内层同名 WITH、CTE body 自带 WITH、多层链和 scalar 探测共享上述 owner。有效 snapshot 仍按正常 binder 继承 use-site，显式 CTE snapshot 优先，不整份复制可变绑定状态。
+- CTE 绑定修改 compiler snapshot 与 FOR UPDATE 状态后，局部绑定阶段通过 defer 在 success/error/panic 下恢复；request BuildPlan 另以边界 defer 保存/恢复调用者 snapshot。panic 继续原样传播，但 gate、memo、context、租约和 snapshot 必须在下一条同 request 查询前恢复，不把历史域带进当前查询。
 - binder 与 numeric 来源收集共用伪表分类，在 CTE 查找和目录/授权探测之前识别未限定 `dual`（以及原有空表名 placeholder）。DUAL/无 FROM 是 VALUE_SCAN，不做物理根授权；限定库名的 `db.dual` 仍是物理根，不借清除授权错误来放行。
 - numeric projection/scalar 的物理 metadata 预探测共享当前 BindContext 的名称域和 snapshot，授权与 Resolve 使用同一个 snapshot（包括 tenant/TS）。只有已知当前域才传 nil；缺少绑定上下文或源表/CTE 时间提示尚未解析时跳过可选探测，交由正常绑定决定，不先探测当前目录再补历史权限。
 - CTE 数值目标传播的临时上下文也必须携带有效域：名称库与比较模式来自 CTE declaration scope；snapshot 与正常 `bindNoRecursiveCte` 一致，先继承 use-site，再采用显式 CTE snapshot。不能只复制 numeric maps、让 SUM/AVG 触发第二轮探测时退回 nil/current。

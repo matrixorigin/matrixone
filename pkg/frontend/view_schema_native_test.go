@@ -378,7 +378,9 @@ func testNativeViewSchemaRootScopes(t *testing.T, ctx context.Context, cn embed.
 			{"dual", "select 1 as one from dual", false},
 			{"qualified_dual", "select 1 as one from " + database + ".dual", true},
 			{"cte_declaration", "with q as (select id from " + database + ".target), r as (select * from q) select sum(id) from (with q as (select id from " + database + ".outer_a) select * from r) d", false},
+			{"cte_order", "with r as (select * from target), target as (select id from " + database + ".outer_a) select sum(id) from r", false},
 		} {
+			cte := tc.name == "cte_declaration" || tc.name == "cte_order"
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
 				withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, proc *process.Process) {
 					statements, err := mysql.Parse(ctx, tc.query, 1)
@@ -394,7 +396,7 @@ func testNativeViewSchemaRootScopes(t *testing.T, ctx context.Context, cn embed.
 					authorizations := 0
 					p, err := compiler.BuildPlanWithViewSchema(ctx, input, mode == "direct", func(_ context.Context, db, name string, _ *plan.Snapshot) error {
 						authorizations++
-						if tc.name == "cte_declaration" && db == database && name == "target" {
+						if cte && db == database && name == "target" {
 							return nil
 						}
 						return denied
@@ -406,18 +408,18 @@ func testNativeViewSchemaRootScopes(t *testing.T, ctx context.Context, cn embed.
 						return
 					}
 					require.NoError(t, err)
-					if tc.name == "cte_declaration" {
+					if cte {
 						require.Positive(t, authorizations)
 					} else {
 						require.Zero(t, authorizations)
 					}
 					if mode == "text" || mode == "typed" {
-						if tc.name != "cte_declaration" {
+						if !cte {
 							require.Empty(t, p.GetDcl().GetPrepare().Schemas)
 						}
 						p = p.GetDcl().GetPrepare().Plan
 					}
-					if tc.name == "cte_declaration" {
+					if cte {
 						require.NotEmpty(t, p.GetQuery().CatalogDependencies)
 						for _, ref := range p.GetQuery().CatalogDependencies {
 							require.NotEqual(t, "outer_a", ref.ObjName)
@@ -441,7 +443,7 @@ func testNativeViewSchemaRootScopes(t *testing.T, ctx context.Context, cn embed.
 					_, err = c.Run(0)
 					require.NoError(t, err)
 					want := int64(1)
-					if tc.name == "cte_declaration" {
+					if cte {
 						want = 3
 					}
 					require.Equal(t, []int64{want}, values)

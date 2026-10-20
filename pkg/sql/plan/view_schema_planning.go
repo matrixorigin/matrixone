@@ -65,6 +65,8 @@ func (r *ViewSchemaRequest) BuildPlan(stmt tree.Statement, isPrepare bool) (resu
 	state := newViewSchemaDerivation(r)
 	defer state.close()
 	state.planning = true
+	previousSnapshot := state.compiler.GetSnapshot()
+	defer state.compiler.SetSnapshot(previousSnapshot)
 	// Inherited publication state belongs to a previous root, not to this
 	// statement's namespace. bindView establishes/restores each publisher domain.
 	previousSub := state.compiler.GetQueryingSubscription()
