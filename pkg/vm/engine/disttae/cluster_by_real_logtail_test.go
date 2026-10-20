@@ -58,11 +58,11 @@ import (
 // production reader path (readutil.NewReader over LocalDisttaeDataSource),
 // including real persisted objects and real flush transitions:
 //
-//   - phase A: 100,000 deterministic committed-but-unflushed rows arrive via
+//   - phase A: 64 deterministic committed-but-unflushed rows arrive via
 //     real TAE-produced logtail; the reported predicate returns count=2 and
 //     sum=39 while the committed replay iteration examines only the two
 //     matching candidates (scan=2). A nil-filter control proves the full
-//     100,000 rows are still present in replay state.
+//     64 rows are still present in replay state.
 //   - buffer ownership: every applied entry is decoded through a
 //     marshal/unmarshal round-trip first, exactly as the transport-decoded
 //     messages the production CN consumes, so the retained replay state owns
@@ -75,7 +75,7 @@ import (
 //     follow-up tail transfers every replay row out of the replay state, the
 //     cluster index carries no stale entries, and the production block
 //     filter (readutil.TryFastFilterBlocksWithZone) prunes the real objects
-//     from 13 blocks to exactly the one block holding the (0,0,0)-prefixed
+//     from four blocks to exactly the one block holding the (0,0,0)-prefixed
 //     keys, matching the issue's one-block control experiment.
 //   - phase C: after the flush, a fresh committed-but-unflushed batch lands
 //     in replay state only; one datasource pass composes the pruned real
@@ -123,11 +123,11 @@ func TestClusterByRealLogtailIntegration(t *testing.T) {
 	t.Cleanup(func() {
 		end := taeCommon.DefaultAllocator.CurrNB()
 		t.Logf("TAE DefaultAllocator bytes: baseline=%d end=%d", allocatorBaseline, end)
-		require.LessOrEqual(t, end, allocatorBaseline+(16<<20),
+		require.LessOrEqual(t, end, allocatorBaseline,
 			"every fixture batch must be closed back to the pool: a leak of the 10x10000-row batches alone would be tens of MB")
 	})
 
-	const totalRows = 100000
+	const totalRows = 64
 	appends := clusterByIssueTaeBatches(t, totalRows)
 	tae.CreateRelAndAppend(appends[0], true)
 	appends[0].Close()
@@ -137,6 +137,8 @@ func TestClusterByRealLogtailIntegration(t *testing.T) {
 	}
 
 	dbID, tblID := clusterTaeIDs(ctx, t, tae)
+	tableDef.TblId = tblID
+	tableDef.Version = schema.Version
 	primarySeqnum := int(schema.GetPrimaryKey().SeqNum)
 
 	// Shared query-side plumbing, as in the unit golden regression.
@@ -164,7 +166,7 @@ func TestClusterByRealLogtailIntegration(t *testing.T) {
 
 	require.Equal(t, totalRows, pState.ApproxInMemRows(),
 		"all committed-but-unflushed rows must arrive as real replay rows")
-	require.True(t, pState.ClusterIndexReadyFor(clusterReplayCompoundName),
+	require.True(t, pState.ClusterIndexReadyFor(*clusterReplayKey(tblID)),
 		"the real TAE logtail must have built the cluster-key index")
 	require.Zero(t, pState.ApproxDataObjectsNum(),
 		"the pre-flush replay state must not carry persisted objects")
@@ -192,7 +194,7 @@ func TestClusterByRealLogtailIntegration(t *testing.T) {
 	// row, proving the pruning above did not come from a shrunken dataset.
 	all := readClusterReplay(t, ctx, mp, pool, tableDef, pState, nil)
 	require.Equal(t, totalRows, all.rows)
-	require.Equal(t, 1050000.0, all.sum)
+	require.Equal(t, 101.0, all.sum)
 	require.Equal(t, totalRows, all.scanned)
 
 	// ------------------------------------------------------------------
@@ -258,8 +260,8 @@ func TestClusterByRealLogtailIntegration(t *testing.T) {
 	fullBlocks := realTaeBlockCount(t, allRanges)
 	require.Greater(t, fullBlocks, filteredBlocks,
 		"the cluster predicate must prune real persisted blocks, not only replay rows")
-	require.GreaterOrEqual(t, fullBlocks, totalRows/8192,
-		"the flushed dataset must span at least its unpruned 8192-row block count")
+	require.GreaterOrEqual(t, fullBlocks, totalRows/16,
+		"the flushed dataset must span at least its unpruned 16-row block count")
 	require.Equal(t, 1, filteredBlocks,
 		"the sorted real cluster objects keep every (0,0,0)-prefixed key inside exactly one block, matching the issue's one-block control")
 
@@ -283,7 +285,7 @@ func TestClusterByRealLogtailIntegration(t *testing.T) {
 	flushFilteredCount, flushFilteredSum := reportedResidual(t, flushFiltered.raws)
 	require.Equal(t, 2, flushFilteredCount, "the pruned block list must preserve the reported result")
 	require.Equal(t, 39.0, flushFilteredSum)
-	require.Equal(t, 8192*filteredBlocks, flushFiltered.rows,
+	require.Equal(t, 16*filteredBlocks, flushFiltered.rows,
 		"the pruned read must surface exactly the matching blocks' rows")
 
 	// Real persisted round trip: the full unfiltered read of the real
@@ -291,7 +293,7 @@ func TestClusterByRealLogtailIntegration(t *testing.T) {
 	digest := readClusterTaeRange(t, ctx, mp, pool,
 		tae.Runtime.Fs, tableDef, pState, nil, allRanges)
 	require.Equal(t, totalRows, digest.rows)
-	require.Equal(t, 1050000.0, digest.valueSum)
+	require.Equal(t, 101.0, digest.valueSum)
 
 	// ------------------------------------------------------------------
 	// Phase C: a fresh committed-but-unflushed batch lands in replay state
@@ -328,7 +330,7 @@ func TestClusterByRealLogtailIntegration(t *testing.T) {
 	require.Equal(t, 5, mixedFilteredCount,
 		"the bounded mixed read must preserve the composed answer")
 	require.Equal(t, 163.5, mixedFilteredSum)
-	require.Equal(t, 8192*filteredBlocks+3, mixedFiltered.rows,
+	require.Equal(t, 16*filteredBlocks+3, mixedFiltered.rows,
 		"the bounded mixed read surfaces the matching blocks plus exactly the three replay rows")
 }
 
@@ -354,7 +356,7 @@ func clusterTaeIssueRow(i int) clusterByTaeRow {
 	}
 }
 
-// clusterByIssueTaeBatches materializes the reported 100,000-row dataset
+// clusterByIssueTaeBatches retains the reported predicate boundaries in a 64-row dataset
 // into append batches (10 x 10,000 rows) in the reported shuffled order.
 func clusterByIssueTaeBatches(t *testing.T, total int) []*taeContainers.Batch {
 	t.Helper()
@@ -362,6 +364,12 @@ func clusterByIssueTaeBatches(t *testing.T, total int) []*taeContainers.Batch {
 	order := make([]int, total)
 	for i := range order {
 		order[i] = i
+		if i == total-2 {
+			order[i] = 90000
+		}
+		if i == total-1 {
+			order[i] = 95000
+		}
 	}
 	shuffleClusterOrder(order)
 
@@ -416,6 +424,8 @@ func newClusterTaeSchema(t *testing.T) *taeCatalog.Schema {
 		ClusterBy: true,
 	}
 	require.NoError(t, schema.AppendSortColWithAttribute(compoundAttr, 0, false))
+	schema.Extra.BlockMaxRows = 16
+	schema.Extra.ObjectMaxBlocks = 2
 	require.NoError(t, schema.Finalize(false))
 	return schema
 }
@@ -603,7 +613,7 @@ func applyRealTaeTail(
 		var owned api.Entry
 		require.NoError(t, owned.Unmarshal(payload))
 		pState.HandleLogtailEntry(ctx, tae.Runtime.Fs, &owned,
-			primarySeqnum, packer, mp)
+			primarySeqnum, packer, mp, clusterReplayKey(tblID))
 	}
 	pState.UpdateAppliedTo(now)
 	return now

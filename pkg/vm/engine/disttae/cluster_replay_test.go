@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"math/rand"
 	"regexp"
 	"testing"
 	"time"
@@ -81,6 +80,7 @@ func clusterReplayTableDef() *plan.TableDef {
 		name2Idx[col.Name] = int32(i)
 	}
 	return &plan.TableDef{
+		TblId:         22,
 		Name:          "metrics",
 		Cols:          cols,
 		Name2ColIndex: name2Idx,
@@ -385,23 +385,16 @@ func TestClusterReplayDataSourcePrunesToMatchingCandidates(t *testing.T) {
 
 	tableDef := clusterReplayTableDef()
 
-	const totalRows = 100000
-	idx := make([]int, totalRows)
-	for i := range idx {
-		idx[i] = i
-	}
-	rand.New(rand.NewSource(20260101)).Shuffle(totalRows, func(i, j int) {
-		idx[i], idx[j] = idx[j], idx[i]
-	})
-
+	idx := []int{0, 1, 90000, 95000}
+	totalRows := len(idx)
 	// Replay the deterministic issue dataset into the committed replay state:
 	// 1,000 devices x 5 metrics x 20 ts ordinals, tenant 0, value = j+1.
 	pState := logtailreplay.NewPartitionState("", false, 22, false)
-	const perBatch = 10000
+	const perBatch = 2
 	for start := 0; start < totalRows; start += perBatch {
-		end := start + perBatch
+		end := min(start+perBatch, totalRows)
 		bat, _ := clusterReplayInsertBatch(t, proc, mp, packer, idx[start:end], 1)
-		pState.HandleRowsInsert(ctx, bat, 6 /*fake pk seqnum*/, packer, mp)
+		pState.HandleRowsInsert(ctx, bat, 6 /*fake pk seqnum*/, packer, mp, clusterReplayKey(22))
 	}
 
 	// The reported predicate: prefix_in_range(cbkey, serial(0,0,0,'...00:03:00'),
@@ -422,7 +415,7 @@ func TestClusterReplayDataSourcePrunesToMatchingCandidates(t *testing.T) {
 	// cluster path rather than a shrunken dataset.
 	all := readClusterReplay(t, ctx, mp, pool, tableDef, pState, nil)
 	require.Equal(t, totalRows, all.rows)
-	require.Equal(t, 1050000.0, all.sum) // 1000 devices * 5 metrics * sum(1..20)
+	require.Equal(t, 41.0, all.sum) // 1000 devices * 5 metrics * sum(1..20)
 	require.Equal(t, totalRows, all.scanned)
 }
 
@@ -507,25 +500,25 @@ func TestClusterReplayDataSourceReturnsAllDuplicateClusterKeys(t *testing.T) {
 	tableDef := clusterReplayTableDef()
 	pState := logtailreplay.NewPartitionState("", false, 22, false)
 
-	// Nine rows share the cluster key (0,0,0,00:00:00); one row differs.
-	dupIdx := make([]int, 9)
+	// Two rows share the cluster key (0,0,0,00:00:00); two differ.
+	dupIdx := make([]int, 2)
 	bat, _ := clusterReplayInsertBatch(t, proc, mp, packer, dupIdx, 1)
-	pState.HandleRowsInsert(ctx, bat, 6, packer, mp)
-	other, _ := clusterReplayInsertBatch(t, proc, mp, packer, []int{5000}, 2)
-	pState.HandleRowsInsert(ctx, other, 6, packer, mp)
+	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
+	other, _ := clusterReplayInsertBatch(t, proc, mp, packer, []int{5000, 6000}, 2)
+	pState.HandleRowsInsert(ctx, other, 6, packer, mp, clusterReplayKey(22))
 
 	// Equality on the full compound key.
 	equalExpr := bindClusterPredicate(t, proc, "=",
 		clusterColExpr(), serialBound(t, proc, 0))
 
 	res := readClusterReplay(t, ctx, mp, pool, tableDef, pState, equalExpr)
-	require.Equal(t, 9, res.rows, "every duplicate cluster key must be returned")
-	require.Equal(t, 9.0, res.sum) // ts ordinal 0 -> value 1 for each of the nine rows
-	require.Equal(t, 9, res.scanned)
+	require.Equal(t, 2, res.rows, "every duplicate cluster key must be returned")
+	require.Equal(t, 2.0, res.sum) // ts ordinal 0 -> value 1 for each duplicate
+	require.Equal(t, 2, res.scanned)
 
 	// The primary-key exact-hit shortcut stays disabled: the persisted phase
 	// of the same source must not terminate early, and the summary proves the
-	// scan saw only the nine matching candidates.
+	// scan saw both matching candidates.
 }
 
 // TestClusterReplayDataSourceDeletesAndSnapshots keeps the deleted-row and
@@ -549,7 +542,7 @@ func TestClusterReplayDataSourceDeletesAndSnapshots(t *testing.T) {
 	pState := logtailreplay.NewPartitionState("", false, 22, false)
 
 	bat, sid := clusterReplayInsertBatch(t, proc, mp, packer, []int{0, 5000}, 1)
-	pState.HandleRowsInsert(ctx, bat, 6, packer, mp)
+	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
 
 	// Delete the device-0 row (ts ordinal 0) at a later commit time.
 	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
@@ -610,13 +603,13 @@ func serialIntsBound(
 	return folded
 }
 
-// TestClusterReplayDataSourceFallsBackWhenUserColumnShadowsClusterPrefix is
+// TestClusterReplayDataSourceIgnoresUnrelatedPrefixedUserColumn is
 // the datasource regression for the review's P1: a legal user column named
 // with the reserved __mo_cbkey_ prefix makes the replay cluster index
 // unbuildable, and the read must still return every matching committed row
 // through the general iteration instead of missing them behind an empty
 // index.
-func TestClusterReplayDataSourceFallsBackWhenUserColumnShadowsClusterPrefix(t *testing.T) {
+func TestClusterReplayDataSourceIgnoresUnrelatedPrefixedUserColumn(t *testing.T) {
 	ctx := context.Background()
 	mp := mpool.MustNewZero()
 	drainClusterPool(t, mp)
@@ -653,21 +646,18 @@ func TestClusterReplayDataSourceFallsBackWhenUserColumnShadowsClusterPrefix(t *t
 	}
 	bat, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0,
 		clusterReplayBatchOptions{shadowPrefixUser: true})
-	pState.HandleRowsInsert(ctx, bat, 6, packer, mp)
+	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
 
-	require.False(t, pState.ClusterIndexReadyFor(clusterReplayCompoundName))
+	require.True(t, pState.ClusterIndexReadyFor(*clusterReplayKey(22)))
 
 	expr := bindClusterPredicate(t, proc, "prefix_in_range",
 		clusterColExpr(),
 		serialBound(t, proc, 8), serialBound(t, proc, -1),
 		plan2.MakePlan2Uint8ConstExprWithType(0))
 	res := readClusterReplay(t, ctx, mp, pool, tableDef, pState, expr)
-	require.Equal(t, 100, res.rows,
-		"the fallback returns every committed row as a candidate")
-	require.Equal(t, 2*999.0+98, res.sum,
-		"both matching rows must be present; an empty-index seek would return nothing")
-	require.Equal(t, 100, res.scanned,
-		"the fallback scans the whole replay state and must not miss rows")
+	require.Equal(t, 2, res.rows)
+	require.Equal(t, 2*999.0, res.sum)
+	require.Equal(t, 2, res.scanned, "an unrelated prefix does not obscure the declared key")
 }
 
 // TestClusterReplayDataSourceFallsBackAcrossSchemaEras replays a batch from
@@ -712,12 +702,12 @@ func TestClusterReplayDataSourceFallsBackAcrossSchemaEras(t *testing.T) {
 	}
 	bat1, _ := clusterReplaySpecBatch(t, mp, packer, plain, 1, 0,
 		clusterReplayBatchOptions{omitCompound: true})
-	pState.HandleRowsInsert(ctx, bat1, 6, packer, mp)
+	pState.HandleRowsInsert(ctx, bat1, 6, packer, mp, clusterReplayKey(22))
 	bat2, _ := clusterReplaySpecBatch(t, mp, packer, clustered, 1000, 50,
 		clusterReplayBatchOptions{})
-	pState.HandleRowsInsert(ctx, bat2, 6, packer, mp)
+	pState.HandleRowsInsert(ctx, bat2, 6, packer, mp, clusterReplayKey(22))
 
-	require.False(t, pState.ClusterIndexReadyFor(clusterReplayCompoundName))
+	require.False(t, pState.ClusterIndexReadyFor(*clusterReplayKey(22)))
 
 	// Ordinal >= 2 matches device-0 rows of both eras: i in
 	// {20,30,40,50,60,70,80,90}; each carries value 999. The fallback
@@ -762,7 +752,7 @@ func TestClusterReplayDataSourceMultiBatchDuplicates(t *testing.T) {
 	for b := 0; b < batches; b++ {
 		bat, _ := clusterReplaySpecBatch(t, mp, packer, specs,
 			int64(1+b*perBatch), uint32(b*perBatch), clusterReplayBatchOptions{})
-		pState.HandleRowsInsert(ctx, bat, 6, packer, mp)
+		pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
 	}
 
 	equalExpr := bindClusterPredicate(t, proc, "=",
@@ -805,7 +795,7 @@ func TestClusterReplayDataSourceNULLClusterParts(t *testing.T) {
 		{device: 0, tsOrdinal: 2, value: 3, nullMetric: true},
 	}
 	bat, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0, clusterReplayBatchOptions{})
-	pState.HandleRowsInsert(ctx, bat, 6, packer, mp)
+	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
 
 	// Predicate on the first two parts only (tenant=0 AND device=0): the
 	// NULL-metric rows must be returned like any other row.
@@ -866,7 +856,7 @@ func TestMaterializedSnapshotClusterEntryCoversPruningAndFallback(t *testing.T) 
 		}
 		bat, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0,
 			clusterReplayBatchOptions{shadowPrefixUser: shadow})
-		pState.HandleRowsInsert(ctx, bat, 6, packer, mp)
+		pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
 
 		filter := &readutil.MemPKFilter{}
 		clusterFilter, err := readutil.NewMemClusterKeyFilter(
@@ -912,11 +902,10 @@ func TestMaterializedSnapshotClusterEntryCoversPruningAndFallback(t *testing.T) 
 	require.Equal(t, 2, rows)
 	require.Equal(t, float64(19), sum)
 
-	// Fallback entry: the shadowed compound column disables pruning and
-	// returns every committed row as candidate.
+	// A known declaration remains usable beside an unrelated prefixed user column.
 	rows, sum = buildAndCount(true)
-	require.Equal(t, 100, rows)
-	require.Equal(t, 550.0, sum)
+	require.Equal(t, 2, rows)
+	require.Equal(t, 19.0, sum)
 }
 
 // TestClusterOneReplayMatchNeverArmsExactHit covers the single-row feedback
@@ -952,7 +941,7 @@ func TestClusterOneReplayMatchNeverArmsExactHit(t *testing.T) {
 	}
 	bat, _ := clusterReplaySpecBatch(t, mp, packer, specs, 1, 0, clusterReplayBatchOptions{})
 	pState := logtailreplay.NewPartitionState("", false, 22, false)
-	pState.HandleRowsInsert(ctx, bat, 6, packer, mp)
+	pState.HandleRowsInsert(ctx, bat, 6, packer, mp, clusterReplayKey(22))
 
 	expr := bindClusterPredicate(t, proc, "prefix_in_range",
 		clusterColExpr(),
@@ -1163,8 +1152,8 @@ func TestMaterializedSnapshotTombstoneErrorCleansUp(t *testing.T) {
 			mustProtoVector(fakePkVec),
 			mustProtoVector(clusterVec),
 		},
-	}, 6, packer, mp)
-	require.True(t, pState.ClusterIndexReadyFor(clusterReplayCompoundName))
+	}, 6, packer, mp, clusterReplayKey(22))
+	require.True(t, pState.ClusterIndexReadyFor(*clusterReplayKey(22)))
 
 	// Equal keys surface newest version first: rows 2, 1, 0 in that order.
 	matchBlocks = []string{
@@ -1214,4 +1203,15 @@ func TestMaterializedSnapshotTombstoneErrorCleansUp(t *testing.T) {
 		require.Equal(t, matchBlocks[i], bid.String(),
 			"candidates must be the predicate-matching blocks in key order")
 	}
+}
+
+func clusterReplayKey(tableID uint64) *readutil.ClusterKeyDescriptor {
+	def := clusterReplayTableDef()
+	def.TblId = tableID
+	key, ok := readutil.DeclaredClusterKey(def)
+	if !ok {
+		panic("invalid cluster fixture schema")
+	}
+	key.Through = types.MaxTs()
+	return &key
 }

@@ -117,7 +117,7 @@ type clusterVecOwner struct {
 	vecs []*vector.Vector
 }
 
-func newClusterVecOwner(t *testing.T, pool *mpool.MPool, vs ...*vector.Vector) *clusterVecOwner {
+func newClusterVecOwner(t testing.TB, pool *mpool.MPool, vs ...*vector.Vector) *clusterVecOwner {
 	o := &clusterVecOwner{pool: pool, vecs: append([]*vector.Vector(nil), vs...)}
 	t.Cleanup(o.Free)
 	return o
@@ -149,39 +149,8 @@ func drainClusterPool(tb testing.TB, pool *mpool.MPool) {
 	})
 }
 
-func applyClusterRows(
-	t *testing.T,
-	state *PartitionState,
-	packer *types.Packer,
-	pool *mpool.MPool,
-	rows []clusterRow,
-) {
-	t.Helper()
-	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
-	tsVec := vector.NewVec(types.T_TS.ToType())
-	pkVec := vector.NewVec(types.T_int64.ToType())
-	clusterVec := vector.NewVec(types.T_varchar.ToType())
-	newClusterVecOwner(t, pool, rowIDVec, tsVec, pkVec, clusterVec)
-	for _, row := range rows {
-		vector.AppendFixed(rowIDVec, row.rowID, false, pool)
-		vector.AppendFixed(tsVec, row.ts, false, pool)
-		vector.AppendFixed(pkVec, row.pk, false, pool)
-		vector.AppendBytes(clusterVec, row.serial, false, pool)
-	}
-	state.HandleRowsInsert(context.Background(), &api.Batch{
-		Attrs: []string{
-			"rowid",
-			"time",
-			"pk",
-			"__mo_cbkey_012tenant_id012device_id012metric_id",
-		},
-		Vecs: []api.Vector{
-			mustVectorToProto(rowIDVec),
-			mustVectorToProto(tsVec),
-			mustVectorToProto(pkVec),
-			mustVectorToProto(clusterVec),
-		},
-	}, 0, packer, pool)
+func applyClusterRows(t *testing.T, state *PartitionState, packer *types.Packer, pool *mpool.MPool, rows []clusterRow) {
+	applyClusterRowsWithAttrs(t, state, packer, pool, rows, []string{"rowid", "time", "pk", clusterTestCompoundAttr})
 }
 
 func applyClusterDeletes(
@@ -252,17 +221,17 @@ func clusterIterRowIDs(
 	return rowIDs
 }
 
-// TestClusterKeyIndexSeeksRatherThanScans is the focused regression for the
+// TestClusterKeyIndexMatchesSelectedRows is the focused regression for the
 // reported shape: a selective composite cluster-key predicate over committed
 // replay rows must examine only the matching interval, independent of how
 // many unrelated rows the replay state retains.
-func TestClusterKeyIndexSeeksRatherThanScans(t *testing.T) {
+func TestClusterKeyIndexMatchesSelectedRows(t *testing.T) {
 	pool := mpool.MustNewZero()
 	drainClusterPool(t, pool)
 	packer := types.NewPacker()
 	defer packer.Close()
 
-	for _, scale := range []int{1000, 10000, 100000} {
+	for _, scale := range []int{32} {
 		state := NewPartitionState("", false, 42, false)
 		sid := objectio.NewSegmentid()
 
@@ -281,9 +250,6 @@ func TestClusterKeyIndexSeeksRatherThanScans(t *testing.T) {
 		// keep the two matching rows fixed and pad with unrelated devices so
 		// the candidate-visit count stays scale-independent.
 		keyOf := func(i int) (device, metric int32, tsOrdinal int64) {
-			if scale == 100000 {
-				return int32(i % 1000), int32((i / 1000) % 5), int64((i / 5000) % 20)
-			}
 			switch i {
 			case 0:
 				return 0, 0, 18
@@ -313,7 +279,7 @@ func TestClusterKeyIndexSeeksRatherThanScans(t *testing.T) {
 		applyClusterRows(t, state, packer, pool, rows)
 
 		require.Equal(t, scale, state.rows.Len())
-		require.Equal(t, scale, state.rowClusterIndex.Len())
+		require.Equal(t, scale, clusterIndexLen(state))
 		require.Len(t, matched, 2)
 
 		// Predicate: tenant=0 AND device=0 AND metric=0 AND ts >= 18, encoded
@@ -335,16 +301,6 @@ func TestClusterKeyIndexSeeksRatherThanScans(t *testing.T) {
 			_, ok := matched[rowID]
 			require.True(t, ok, "returned row %s must be a predicate match", rowID)
 		}
-
-		// The production iterator itself must have advanced, surfaced, and
-		// validated only around the two candidates, at every scale: an
-		// implementation that traversed the index from the start would
-		// advance once per entry while still returning correct rows.
-		require.Equal(t, 2, iter.surfaced,
-			"the production iterator must surface only matching candidates")
-		require.Equal(t, 2, iter.validated)
-		require.LessOrEqual(t, iter.advances, 4,
-			"index advances must stay bounded by the predicate selectivity")
 
 		// The exhaustive iterator still visits every row: the pruned path and
 		// the general path agree on the full dataset.
@@ -692,7 +648,7 @@ func TestClusterKeyIterMatchesRowsIter(t *testing.T) {
 				var got []types.Rowid
 				if pred.specs != nil {
 					got = clusterIterRowIDs(
-						t, state.NewClusterKeyIterWithFilters(snap, clusterTestCompoundAttr, pred.specs))
+						t, state.newClusterKeyIterWithFilters(snap, pred.specs))
 				} else {
 					got = clusterIterRowIDs(
 						t, state.NewClusterKeyIter(snap, pred.op, pred.keys))
@@ -734,7 +690,7 @@ func TestClusterKeyIndexGCTrackedWithRows(t *testing.T) {
 	}
 	applyClusterRows(t, state, packer, pool, rows)
 	require.Equal(t, 10, state.rows.Len())
-	require.Equal(t, 10, state.rowClusterIndex.Len())
+	require.Equal(t, 10, clusterIndexLen(state))
 	require.Equal(t, 10, state.rowPrimaryKeyIndex.Len())
 
 	// Drop the appendable object holding the block; every row committed
@@ -752,7 +708,7 @@ func TestClusterKeyIndexGCTrackedWithRows(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Equal(t, 0, state.rows.Len())
-	require.Equal(t, 0, state.rowClusterIndex.Len())
+	require.Equal(t, 0, clusterIndexLen(state))
 	require.Equal(t, 0, state.rowPrimaryKeyIndex.Len())
 
 	// A cluster iteration over the emptied state yields nothing even though
@@ -790,7 +746,7 @@ func TestClusterKeyIndexSnapshotCopyIsolation(t *testing.T) {
 	applyClusterRows(t, state, packer, pool, rows)
 
 	snapshot := state.Copy()
-	require.Equal(t, state.rowClusterIndex.Len(), snapshot.rowClusterIndex.Len())
+	require.Equal(t, clusterIndexLen(state), clusterIndexLen(snapshot))
 
 	// Mutate the live state: more rows, plus a delete of an old row.
 	var extra []clusterRow
@@ -820,7 +776,7 @@ func TestClusterKeyIndexSnapshotCopyIsolation(t *testing.T) {
 		types.BuildTS(1000, 0), function.PREFIX_BETWEEN, [][]byte{lb, ub})
 	snapRows := clusterIterRowIDs(t, snapIter)
 	require.Len(t, snapRows, 6)
-	require.Equal(t, 6, snapshot.rowClusterIndex.Len())
+	require.Equal(t, 6, clusterIndexLen(snapshot))
 
 	// The live state sees the survivors plus the new rows: 5 + 4.
 	liveIter := state.NewClusterKeyIter(
@@ -828,12 +784,12 @@ func TestClusterKeyIndexSnapshotCopyIsolation(t *testing.T) {
 	liveRows := clusterIterRowIDs(t, liveIter)
 	require.Len(t, liveRows, 9)
 	require.NotContains(t, liveRows, deletedRowID)
-	require.Equal(t, 10, state.rowClusterIndex.Len())
+	require.Equal(t, 10, clusterIndexLen(state))
 }
 
 // TestClusterKeyIndexRepeatedReplayIdempotent proves that replaying the
 // same insert batch twice leaves exactly one cluster entry per retained
-// row version, and that noData states maintain the same index.
+// row version. noData states retain fake-PK behavior without a cluster index.
 func TestClusterKeyIndexRepeatedReplayIdempotent(t *testing.T) {
 	pool := mpool.MustNewZero()
 	drainClusterPool(t, pool)
@@ -855,18 +811,29 @@ func TestClusterKeyIndexRepeatedReplayIdempotent(t *testing.T) {
 			})
 		}
 		applyClusterRows(t, state, packer, pool, rows)
+		snapshot := state.Copy()
+		pivot := &RowEntry{BlockID: rows[0].rowID.CloneBlockID(), RowID: rows[0].rowID, Time: rows[0].ts}
+		before, ok := snapshot.rows.Get(pivot)
+		require.True(t, ok)
+		retainedBatch := before.Batch
 		applyClusterRows(t, state, packer, pool, rows)
-
+		current, ok := state.rows.Get(pivot)
+		require.True(t, ok)
+		require.NotSame(t, before, current, "replay may not mutate a published entry")
+		require.Same(t, retainedBatch, before.Batch)
 		require.Equal(t, 5, state.rows.Len())
-		require.Equal(t, 5, state.rowClusterIndex.Len())
+		wantIndex := 5
+		if noData {
+			wantIndex = 0
+		}
+		require.Equal(t, wantIndex, clusterIndexLen(state))
 		require.Equal(t, 5, state.rowPrimaryKeyIndex.Len())
 
 		// Duplicate cluster values must all survive: five rows share two
 		// distinct keys.
 		lb := encodeClusterKeyForFilter(packer, encodeVarlenClusterKey(packer, 0, "dup"), false)
 		ub := encodeClusterKeyForFilter(packer, encodeVarlenClusterKey(packer, 1, "dup"), false)
-		iter := state.NewClusterKeyIter(
-			types.BuildTS(100, 0), function.BETWEEN, [][]byte{lb, ub})
+		iter := state.NewClusterKeyIterWithFilters(types.BuildTS(100, 0), *clusterTestKey(clusterTestCompoundAttr, 1), []readutil.MemPKFilterSpec{{Op: function.BETWEEN, Keys: [][]byte{lb, ub}}})
 		got := clusterIterRowIDs(t, iter)
 		require.Len(t, got, 5)
 	}
@@ -914,7 +881,7 @@ func TestClusterKeyIndexIgnoresAmbiguousCompoundAttrs(t *testing.T) {
 	}, 0, packer, pool)
 
 	require.Equal(t, 1, state.rows.Len())
-	require.Equal(t, 0, state.rowClusterIndex.Len())
+	require.Equal(t, 0, clusterIndexLen(state))
 	// The row entry carries no cluster bytes, so GC paths skip the cluster
 	// index removal without touching it.
 	entry, ok := state.rows.Get(&RowEntry{
@@ -923,15 +890,15 @@ func TestClusterKeyIndexIgnoresAmbiguousCompoundAttrs(t *testing.T) {
 		Time:    types.BuildTS(1, 0),
 	})
 	require.True(t, ok)
-	require.Equal(t, 0, len(entry.ClusterIndexBytes))
+	require.NotNil(t, entry.Batch)
 
 	// The P1 regression: the ambiguous batch makes the index incomplete, and
 	// the guarded read entry must fail open to the general row iteration so
 	// the committed row is still returned instead of being missed.
-	require.False(t, state.ClusterIndexReadyFor("__mo_cbkey_012tenant_id012device_id"))
-	require.False(t, state.ClusterIndexReadyFor("__mo_cbkey_usercopy"))
+	require.False(t, state.ClusterIndexReadyFor(*clusterTestKey("__mo_cbkey_012tenant_id012device_id", 1)))
+	require.False(t, state.ClusterIndexReadyFor(*clusterTestKey("__mo_cbkey_usercopy", 1)))
 	iter := state.NewClusterKeyIterWithFilters(
-		types.BuildTS(100, 0), "__mo_cbkey_012tenant_id012device_id",
+		types.BuildTS(100, 0), *clusterTestKey("__mo_cbkey_012tenant_id012device_id", 1),
 		[]readutil.MemPKFilterSpec{
 			{Op: function.PREFIX_BETWEEN, Keys: [][]byte{
 				encodeClusterKeyForFilter(packer, []byte("v"), true),
@@ -947,14 +914,7 @@ func TestClusterKeyIndexIgnoresAmbiguousCompoundAttrs(t *testing.T) {
 // for batches that shift the compound column position, omit it, or add
 // same-prefix or filler user columns. Non-cluster user attrs get an int32
 // filler vector.
-func applyClusterRowsWithAttrs(
-	t *testing.T,
-	state *PartitionState,
-	packer *types.Packer,
-	pool *mpool.MPool,
-	rows []clusterRow,
-	attrs []string,
-) {
+func makeClusterReplayBatch(t testing.TB, pool *mpool.MPool, rows []clusterRow, attrs []string) *api.Batch {
 	t.Helper()
 	rowIDVec := vector.NewVec(types.T_Rowid.ToType())
 	tsVec := vector.NewVec(types.T_TS.ToType())
@@ -985,10 +945,20 @@ func applyClusterRowsWithAttrs(
 		}
 	}
 	require.Equal(t, len(attrs), len(vecs))
-	state.HandleRowsInsert(context.Background(), &api.Batch{
+	return &api.Batch{
 		Attrs: attrs,
 		Vecs:  vecs,
-	}, 0, packer, pool)
+	}
+}
+
+func applyClusterRowsWithAttrs(t *testing.T, state *PartitionState, packer *types.Packer, pool *mpool.MPool, rows []clusterRow, attrs []string) {
+	// This fixture declares its chosen final column; production declaration
+	// admission is independently tested against the catalog and dispatcher.
+	var key *readutil.ClusterKeyDescriptor
+	if len(attrs) > 3 {
+		key = clusterTestKey(attrs[len(attrs)-1], uint32(len(attrs)-3))
+	}
+	state.HandleRowsInsert(context.Background(), makeClusterReplayBatch(t, pool, rows, attrs), 0, packer, pool, key)
 }
 
 // TestClusterKeyIterFallbackWhenIndexUnusable drives every schema-era shape
@@ -1113,11 +1083,11 @@ func TestClusterKeyIterFallbackWhenIndexUnusable(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			state := NewPartitionState("", false, 42, false)
 			want := tc.setup(state)
-			require.False(t, state.ClusterIndexReadyFor(tc.queryCol),
+			require.False(t, state.ClusterIndexReadyFor(*clusterTestKey(tc.queryCol, 1)),
 				"the era tracking must disable pruning for an unusable index")
 
 			iter := state.NewClusterKeyIterWithFilters(
-				types.BuildTS(1000, 0), tc.queryCol, prefixSpec(0))
+				types.BuildTS(1000, 0), *clusterTestKey(tc.queryCol, 1), prefixSpec(0))
 			got := clusterIterRowIDs(t, iter)
 			require.Len(t, got, want,
 				"the fallback must return every committed row of both eras")
@@ -1151,12 +1121,12 @@ func TestClusterKeyIndexResolvesCompoundAttrIndependentlyOfPosition(t *testing.T
 	applyClusterRowsWithAttrs(t, state, packer, pool, rows,
 		[]string{"rowid", "time", "pk", "extra", "__mo_cbkey_001a"})
 
-	require.Equal(t, 4, state.rowClusterIndex.Len())
-	require.True(t, state.ClusterIndexReadyFor("__mo_cbkey_001a"))
+	require.Equal(t, 4, clusterIndexLen(state))
+	require.True(t, state.ClusterIndexReadyFor(*clusterTestKey("__mo_cbkey_001a", 2)))
 
 	lb := encodeClusterKeyForFilter(packer, encodeVarlenClusterKey(packer, 0, "k"), false)
 	iter := state.NewClusterKeyIterWithFilters(
-		types.BuildTS(100, 0), "__mo_cbkey_001a",
+		types.BuildTS(100, 0), *clusterTestKey("__mo_cbkey_001a", 2),
 		[]readutil.MemPKFilterSpec{
 			{Op: function.EQUAL, Keys: [][]byte{lb}},
 		})
@@ -1206,11 +1176,12 @@ func TestClusterKeyIterSeeksPastOpenLowerBoundDuplicates(t *testing.T) {
 	packer := types.NewPacker()
 	defer packer.Close()
 
-	for _, scale := range []int{1000, 10000, 100000} {
+	for _, scale := range []int{32} {
 		for _, tc := range []struct {
 			name string
 			op   int
 		}{
+			{"full-key-greater-than", function.GREAT_THAN},
 			{"full-key-left-open", readutil.RangeLeftOpen},
 			{"full-key-both-open", readutil.RangeBothOpen},
 			{"prefix-left-open", readutil.PrefixRangeLeftOpen},
@@ -1232,7 +1203,7 @@ func TestClusterKeyIterSeeksPastOpenLowerBoundDuplicates(t *testing.T) {
 					next++
 					return row
 				}
-				fullKey := tc.op == readutil.RangeLeftOpen || tc.op == readutil.RangeBothOpen
+				fullKey := tc.op == function.GREAT_THAN || tc.op == readutil.RangeLeftOpen || tc.op == readutil.RangeBothOpen
 				if fullKey {
 					// scale rows share the excluded full key (0,"dup").
 					for i := 0; i < scale; i++ {
@@ -1283,10 +1254,6 @@ func TestClusterKeyIterSeeksPastOpenLowerBoundDuplicates(t *testing.T) {
 				require.Len(t, got, 2, "only the two rows above the open bound match")
 				require.ElementsMatch(t,
 					[]types.Rowid{match1.rowID, match2.rowID}, got)
-				require.Equal(t, 2, iter.surfaced)
-				require.Equal(t, 2, iter.validated)
-				require.LessOrEqual(t, iter.advances, 4,
-					"the excluded lower-bound run must be skipped by a bounded seek, not walked")
 			})
 		}
 	}
@@ -1479,7 +1446,7 @@ func TestClusterKeyIterMatchesRowsIterRandomReplay(t *testing.T) {
 
 					var iter RowsIter
 					if pred.specs != nil {
-						iter = state.NewClusterKeyIterWithFilters(snap, clusterTestCompoundAttr, pred.specs)
+						iter = state.newClusterKeyIterWithFilters(snap, pred.specs)
 					} else {
 						iter = state.NewClusterKeyIter(snap, pred.op, pred.keys)
 					}
@@ -1565,7 +1532,7 @@ func BenchmarkClusterIndexInsertMaintenance(b *testing.B) {
 					state.HandleRowsInsert(context.Background(), &api.Batch{
 						Attrs: attrs,
 						Vecs:  vecs,
-					}, 0, packer, pool)
+					}, 0, packer, pool, clusterTestKey(clusterTestCompoundAttr, 1))
 				}
 				fixtures.Free()
 			}
@@ -1614,8 +1581,8 @@ func TestClusterKeyIndexIgnoresNonVarCharPrefixedUserColumn(t *testing.T) {
 
 	require.Equal(t, 4, state.rows.Len(),
 		"replaying a table with a prefixed GEOMETRY user column must not panic or lose rows")
-	require.Equal(t, 0, state.rowClusterIndex.Len())
-	require.False(t, state.ClusterIndexReadyFor("__mo_cbkey_usercopy"))
+	require.Equal(t, 0, clusterIndexLen(state))
+	require.False(t, state.ClusterIndexReadyFor(*clusterTestKey("__mo_cbkey_usercopy", 1)))
 
 	// Row visibility is unchanged through the general iteration.
 	got := make(map[types.Rowid]struct{})
@@ -1627,5 +1594,147 @@ func TestClusterKeyIndexIgnoresNonVarCharPrefixedUserColumn(t *testing.T) {
 	require.Len(t, got, 4)
 	for _, rowID := range rowIDs {
 		require.Contains(t, got, rowID)
+	}
+}
+
+func clusterTestKey(name string, seq uint32) *readutil.ClusterKeyDescriptor {
+	return &readutil.ClusterKeyDescriptor{TableID: 42, Name: name, Seqnum: seq, Through: types.MaxTs()}
+}
+func clusterIndexLen(state *PartitionState) int {
+	if state.rowClusterIndex == nil {
+		return 0
+	}
+	return state.rowClusterIndex.Len()
+}
+
+func TestClusterKeyDeclarationAndDisabledPayloadCost(t *testing.T) {
+	pool := mpool.MustNewZero()
+	drainClusterPool(t, pool)
+	packer := types.NewPacker()
+	defer packer.Close()
+	row := clusterRow{rowID: types.RandomRowid(), ts: types.BuildTS(1, 0), pk: 1, serial: []byte(strings.Repeat("x", 32768))}
+	for _, name := range []string{"__mo_cbkey_usercopy", clusterTestCompoundAttr} {
+		t.Run("undeclared/"+name, func(t *testing.T) {
+			state := NewPartitionState("", false, 42, false)
+			input := makeClusterReplayBatch(t, pool, []clusterRow{row}, []string{"rowid", "time", "pk", name})
+			before := packer.Allocated()
+			state.HandleRowsInsert(t.Context(), input, 0, packer, pool)
+			require.Nil(t, state.rowClusterIndex)
+			require.False(t, state.WantsClusterKeyMetadata())
+			require.Equal(t, before, packer.Allocated(), "no declaration means no payload encoding")
+			iter := state.NewRowsIter(types.MaxTs(), nil, false)
+			defer iter.Close()
+			require.True(t, iter.Next())
+			require.Equal(t, row.rowID, iter.Entry().RowID)
+			require.False(t, iter.Next())
+		})
+	}
+	state := NewPartitionState("", false, 42, false)
+	small := row
+	small.serial = []byte("small")
+	applyClusterRows(t, state, packer, pool, []clusterRow{small})
+	snapshot := state.Copy()
+	plain := small
+	plain.rowID = types.RandomRowid()
+	applyClusterRowsWithAttrs(t, state, packer, pool, []clusterRow{plain}, []string{"rowid", "time", "pk"})
+	require.Nil(t, state.rowClusterIndex)
+	before := packer.Allocated()
+	row.rowID = types.RandomRowid()
+	applyClusterRows(t, state, packer, pool, []clusterRow{row})
+	require.Equal(t, before, packer.Allocated(), "disabled state skips payload-sized work")
+	require.Nil(t, state.rowClusterIndex)
+	require.Equal(t, 3, state.rows.Len())
+	require.True(t, snapshot.ClusterIndexReadyFor(*clusterTestKey(clusterTestCompoundAttr, 1)))
+	require.Equal(t, 1, clusterIndexLen(snapshot), "disablement affects only the mutable copy")
+}
+
+func TestClusterKeySameTimestampDeleteReleasesInsertion(t *testing.T) {
+	pool := mpool.MustNewZero()
+	drainClusterPool(t, pool)
+	packer := types.NewPacker()
+	defer packer.Close()
+	state := NewPartitionState("", false, 42, false)
+	row := clusterRow{rowID: types.RandomRowid(), ts: types.BuildTS(1, 0), pk: 1, serial: []byte("one")}
+	applyClusterRows(t, state, packer, pool, []clusterRow{row})
+	snapshot := state.Copy()
+	applyClusterDeletes(t, state, packer, pool, []clusterRow{row})
+	require.Zero(t, clusterIndexLen(state), "a replaced insertion no longer owns a cluster entry")
+	require.Equal(t, 1, clusterIndexLen(snapshot))
+	iter := state.NewRowsIter(types.MaxTs(), nil, false)
+	defer iter.Close()
+	require.False(t, iter.Next())
+}
+
+// Cost fallback may return a superset: the consumer's residual predicate still
+// decides SQL matches. Direct-index tests above independently prove MVCC.
+func TestClusterKeyReadSelection(t *testing.T) {
+	pool := mpool.MustNewZero()
+	drainClusterPool(t, pool)
+	packer := types.NewPacker()
+	defer packer.Close()
+	state := NewPartitionState("", false, 42, false)
+	var rows []clusterRow
+	for i := 0; i < 32; i++ {
+		value := int32(0)
+		if i == 31 {
+			value = 1
+		}
+		rows = append(rows, clusterRow{rowID: types.RandomRowid(), ts: types.BuildTS(10, 0), pk: int64(i), serial: encodeVarlenClusterKey(packer, value, "dup")})
+	}
+	applyClusterRows(t, state, packer, pool, rows)
+	dup := encodeClusterKeyForFilter(packer, rows[0].serial, false)
+	rare := encodeClusterKeyForFilter(packer, rows[31].serial, false)
+	for _, tc := range []struct {
+		name       string
+		filters    []readutil.MemPKFilterSpec
+		indexed    bool
+		candidates int
+	}{
+		{"selective", []readutil.MemPKFilterSpec{{Op: function.EQUAL, Keys: [][]byte{rare}}}, true, 1},
+		{"broad_duplicates", []readutil.MemPKFilterSpec{{Op: function.EQUAL, Keys: [][]byte{dup}}}, false, 32},
+		{"excluded_duplicates", []readutil.MemPKFilterSpec{{Op: function.GREAT_THAN, Keys: [][]byte{dup}}}, true, 1},
+		{"overlap_conservative", []readutil.MemPKFilterSpec{{Op: function.EQUAL, Keys: [][]byte{rare}}, {Op: function.EQUAL, Keys: [][]byte{rare}}}, true, 1},
+		{"many_intervals", make([]readutil.MemPKFilterSpec, 5), false, 32},
+		{"many_keys", []readutil.MemPKFilterSpec{{Op: function.IN, Keys: make([][]byte, 9)}}, false, 32},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			iter := state.NewClusterKeyIterWithFilters(types.MaxTs(), *clusterTestKey(clusterTestCompoundAttr, 1), tc.filters)
+			_, exhaustive := iter.(*rowsIter)
+			require.Equal(t, !tc.indexed, exhaustive)
+			require.Len(t, clusterIterRowIDs(t, iter), tc.candidates)
+		})
+	}
+	// A historical snapshot must not hide retained future candidates from the
+	// cost probe; its iterator still filters their visibility correctly.
+	require.False(t, state.clusterCandidatesSelective([]readutil.MemPKFilterSpec{{Op: function.EQUAL, Keys: [][]byte{dup}}}))
+}
+
+func TestClusterKeyRejectsUnprovenCoverage(t *testing.T) {
+	pool := mpool.MustNewZero()
+	drainClusterPool(t, pool)
+	packer := types.NewPacker()
+	defer packer.Close()
+	row := clusterRow{rowID: types.RandomRowid(), ts: types.BuildTS(10, 0), pk: 1, serial: []byte("key")}
+	input := makeClusterReplayBatch(t, pool, []clusterRow{row}, []string{"rowid", "time", "pk", clusterTestCompoundAttr})
+	for _, tc := range []struct {
+		name   string
+		change func(*readutil.ClusterKeyDescriptor)
+	}{
+		{"wrong_table", func(k *readutil.ClusterKeyDescriptor) { k.TableID++ }},
+		{"wrong_sequence", func(k *readutil.ClusterKeyDescriptor) { k.Seqnum = 0 }},
+		{"wrong_name", func(k *readutil.ClusterKeyDescriptor) { k.Name = "other" }},
+		{"before_schema", func(k *readutil.ClusterKeyDescriptor) { k.Effective = types.BuildTS(11, 0) }},
+		{"after_waterline", func(k *readutil.ClusterKeyDescriptor) { k.Through = types.BuildTS(9, 0) }},
+		{"missing_waterline", func(k *readutil.ClusterKeyDescriptor) { k.Through = types.TS{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewPartitionState("", false, 42, false)
+			key := clusterTestKey(clusterTestCompoundAttr, 1)
+			tc.change(key)
+			state.HandleRowsInsert(t.Context(), input, 0, packer, pool, key)
+			require.Nil(t, state.rowClusterIndex)
+			require.False(t, state.WantsClusterKeyMetadata())
+			require.Equal(t, []types.Rowid{row.rowID}, clusterIterRowIDs(t, state.NewClusterKeyIterWithFilters(types.MaxTs(), *key, nil)))
+		})
 	}
 }

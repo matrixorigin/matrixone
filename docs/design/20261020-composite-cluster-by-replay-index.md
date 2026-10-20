@@ -1,7 +1,7 @@
 # Composite CLUSTER BY pruning in CN replay
 
-- Revision: 2 (supersedes revision 1).
-- Status: design approved; implementation validation and delivery gates remain.
+- Revision: 3 (revision 2 architecture retained; bounded read-selection delta).
+- Status: revision 3 approved; implementation validation and final review pending.
 - Issue: #26996. Implementation: #30617.
 - Owners: disttae replay, catalog and reader owners.
 - Scope: the complete feature, including schema admission and performance costs.
@@ -37,9 +37,11 @@ not reasons to weaken the performance claims or tests.
 
 Disttae, not replay, owns catalog lookup. Capture an immutable descriptor at the
 serialized logtail dispatcher, after catalog application and before enqueueing
-user-table work. It contains account/database/table identity, schema version,
-schema effective timestamp, coverage upper bound, exact declared compound
-column name and sequence number, and supported encoding/type information.
+user-table work. Catalog lookup verifies account/database scope and table ID,
+then copies the globally unique table ID, schema version, schema effective
+timestamp, coverage upper bound, and exact declared compound column name/sequence.
+Hidden/cluster flags and supported VARCHAR encoding are validated at admission;
+they are not duplicated as descriptor fields.
 Replay has no catalog dependency and does not infer declaration from names.
 
 Use the existing name-ordered catalog lookup and verify table ID. Select the
@@ -158,7 +160,12 @@ intervals, indexed reads cost O(I log N + C log R), plus traversal/union work.
 Each candidate still seeks the rows tree for visibility. A broad predicate can
 approach O(N log R), so a candidate-count assertion alone is not a latency proof.
 
-Plain tables pay no new retained bytes or allocation per row version. A one-time
+First-time ordinary inserts pay no added retained bytes or allocation per row
+version. Replaying an existing version while a snapshot is held requires a private
+RowEntry clone: the old implementation rewrites a published entry in place. The
+clone costs one 112-byte Go entry per replaced version on arm64 until the old
+snapshot is released; it is a correctness/COW cost, not an ordinary index field.
+A one-time
 candidate/eligibility check and constant partition state remain. Active cluster
 states retain entry bytes, owned encoded-key capacity and B-tree/COW overhead.
 Schema lookup/descriptor capture is per eligible frame, never per row. GC adds
@@ -168,7 +175,7 @@ These are acceptance budgets, not measured results:
 
 | Measurement | Acceptance before delivery |
 |---|---|
-| Ordinary replay | No added retained bytes/allocations per version; <=5% CPU regression |
+| Ordinary first-time inserts | No added retained bytes/allocations per version; <=5% CPU regression |
 | Shadows/Disabled | No cluster encoding, retained keys or payload-driven packer growth |
 | Active narrow-key replay | <=2x base CPU; wide-key costs reported separately |
 | Cluster memory | Account for entries, owned key capacity, tree and retained-snapshot COW |
@@ -217,3 +224,56 @@ Revision 2: GO-design, gpt-6.1-sol / xhigh, session
 `fa3ac0adde617b2e1b1801127845f97d52bc4743e49337b454cabdf999e7a503`.
 The only post-review edit is this approval/status record. Implementation may
 proceed; final test, cost-budget and overall-review gates still block delivery.
+
+
+## Revision 3: bounded read selection
+
+Base/head smoke measurements falsified unconditional cluster-index selection:
+at 100k rows, exhaustive broad iteration was about 0.79 ms, while the indexed
+broad path took about 30.5 ms and allocated about 22.4 MB per query. A duplicate-
+heavy interval showed the same mechanism. Two-match reads remained selective
+(about 8.7 us versus 1.34 ms exhaustive). These are falsification samples, not
+final performance claims. They exceed the broad-read budget and block delivery.
+
+Before selecting an index iterator, reuse its existing match-spec `Move` stage
+to count at most `max(4, R/64)` matching retained insertion candidates. This
+preflight never performs rows-tree visibility lookups and uses MaxTs so future
+versions cannot make it undercount. Probe intervals sequentially, releasing the
+borrowed iterator on every outcome. An exhausted budget chooses the existing
+exhaustive RowsIter and residual SQL filtering; fewer candidates choose the
+existing indexed iterator. Counting overlapping intervals more than once is a
+safe conservative cost estimate. More intervals than the budget, or more than
+twice that many encoded bounds/keys, select exhaustive iteration immediately.
+
+The factor 64 provides margin against the measured visibility-seek/scan cost
+ratio; the four-candidate floor retains pruning for tiny correctness fixtures.
+This is a cost hint, never a completeness or visibility authority. Fallback may
+return extra candidates, as existing unproven-schema fallback already does;
+residual SQL filtering remains mandatory. No results are emitted by the probe.
+
+Extract the existing multi-interval construction into one helper used by the
+selector and direct correctness differential tests. This preserves full index
+visibility/interval coverage when the cost selector would legitimately choose
+an exhaustive superset. Do not add another predicate parser, cache, counter or
+per-row state. Production uses the same encoding and match-spec construction.
+
+For cluster-only GREAT_THAN, buildClusterSpec uses
+`GreatKind(fullKeySuccessor(keys[0]), true)` for both probe and actual indexed
+reads. Seeking to the successor skips an excluded duplicate lower-bound run
+without scanning it; ordinary PK match construction remains unchanged.
+
+With B = max(4, R/64), probe work is bounded by B candidate advances and bounded
+key/interval seeks (at most B intervals and 2*B keys); it adds no per-candidate
+row lookup. Benchmark all-match, duplicate-heavy, partial broad,
+selective, excluded-lower-bound duplicate runs and mixed/overlapping interval cases, and verify every probe releases
+its iterator. Delivery still requires the original broad-read <=25% regression
+budget and ordinary/maintenance budgets. If it fails, stop and revisit this
+selection policy rather than relaxing those budgets.
+
+Revision 3: GO-design, gpt-6.1-sol / xhigh, same session as revision 2.
+Exact reviewed content SHA-256:
+`339e976b9e8ace0071cda93f284e5573724d83ab292d0043e8d0a1e87251df19`.
+After design approval, status text and implementation clarifications on
+descriptor fields and the already-required COW clone cost were added. Final
+overall review must cover this text. Revision 2 approval continues to cover
+unchanged architecture/lifecycle.

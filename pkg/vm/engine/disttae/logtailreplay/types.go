@@ -40,16 +40,11 @@ type RowEntry struct {
 	Batch             *batch.Batch
 	Offset            int64
 	PrimaryIndexBytes []byte
-	// ClusterIndexBytes holds the encoded hidden composite cluster-by key of
-	// the inserted version, used to maintain the cluster-key index. Delete
-	// versions never carry cluster bytes: the cluster index stores insert
-	// identities only and validates visibility against the rows tree.
-	ClusterIndexBytes []byte
 }
 
 func (r RowEntry) String() string {
 	t, _ := types.Unpack(r.PrimaryIndexBytes)
-	return fmt.Sprintf("RID(%s)-EID(%d)-DEL(%v)-OFF(%d)-TIME(%s)-PK(%s | %v)-CK(%v)",
+	return fmt.Sprintf("RID(%s)-EID(%d)-DEL(%v)-OFF(%d)-TIME(%s)-PK(%s | %v)",
 		r.RowID.String(),
 		r.ID,
 		r.Deleted,
@@ -57,7 +52,6 @@ func (r RowEntry) String() string {
 		r.Time.ToString(),
 		t.SQLStrings(nil),
 		r.PrimaryIndexBytes,
-		r.ClusterIndexBytes,
 	)
 }
 

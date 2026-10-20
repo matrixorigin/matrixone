@@ -222,7 +222,7 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 		iterKind = "cluster-key"
 		iter = ds.pState.NewClusterKeyIterWithFilters(
 			ds.snapshotTS,
-			ds.memPKFilter.ClusterKeyColName(),
+			ds.memPKFilter.ClusterKeyDescriptor(),
 			ds.memPKFilter.ClusterKeySpecs(),
 		)
 	} else {

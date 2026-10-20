@@ -15,12 +15,56 @@
 package readutil
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 )
+
+// ClusterKeyDescriptor binds the optional replay index to one declared schema.
+// Effective and Through describe the interval proved by the logtail dispatcher;
+// query filters use only the schema identity.
+type ClusterKeyDescriptor struct {
+	TableID            uint64
+	Version            uint32
+	Name               string
+	Seqnum             uint32
+	Effective, Through types.TS
+}
+
+func (d ClusterKeyDescriptor) SameSchema(other ClusterKeyDescriptor) bool {
+	return d.TableID == other.TableID && d.Version == other.Version &&
+		d.Name != "" && d.Name == other.Name && d.Seqnum == other.Seqnum
+}
+
+// DeclaredClusterKey returns only the actual hidden compound column. Names and
+// VARCHAR types alone cannot distinguish a legal user column from this column.
+func DeclaredClusterKey(def *plan.TableDef) (key ClusterKeyDescriptor, ok bool) {
+	if def == nil || def.ClusterBy == nil || def.TblId == 0 ||
+		(def.Pkey != nil && def.Pkey.PkeyColName != catalog.FakePrimaryKeyColName) {
+		return
+	}
+	name, valid := compositeClusterByColumnName(def)
+	if !valid {
+		return
+	}
+	for _, col := range def.Cols {
+		if col == nil {
+			return ClusterKeyDescriptor{}, false
+		}
+		if col.Name != name {
+			continue
+		}
+		if ok || !col.Hidden || !col.ClusterBy || types.T(col.Typ.Id) != types.T_varchar {
+			return ClusterKeyDescriptor{}, false
+		}
+		key = ClusterKeyDescriptor{TableID: def.TblId, Version: def.Version, Name: name, Seqnum: col.Seqnum}
+		ok = true
+	}
+	return
+}
 
 // MemClusterKeyFilter is the in-memory replay filter for a table's hidden
 // composite cluster-by column. It shares the encoded-key domain and spec
@@ -31,14 +75,10 @@ type MemClusterKeyFilter struct {
 	op        int
 	packed    [][]byte
 	disjuncts []MemClusterKeyFilter
-	isVec     bool
 	isValid   bool
 	TS        types.TS
 
-	// ColName is the hidden compound column the filter was built from. It is
-	// informational: pruning is decided by the encoded-key domain, which is
-	// stable across clustered-part renames.
-	ColName string
+	Descriptor ClusterKeyDescriptor
 }
 
 func (f *MemClusterKeyFilter) Valid() bool {
@@ -69,10 +109,9 @@ func (f *MemClusterKeyFilter) Specs() []MemPKFilterSpec {
 	return specs
 }
 
-func (f *MemClusterKeyFilter) setFullData(op int, isVec bool, val ...[]byte) {
+func (f *MemClusterKeyFilter) setFullData(op int, val ...[]byte) {
 	f.packed = append(f.packed[:0], val...)
 	f.op = op
-	f.isVec = isVec
 	f.isValid = true
 	f.disjuncts = nil
 }
@@ -93,17 +132,11 @@ func NewMemClusterKeyFilter(
 
 	filter.TS = types.TimestampToTS(ts)
 
-	clusterName, ok := compositeClusterByColumnName(tableDef)
+	descriptor, ok := DeclaredClusterKey(tableDef)
 	if !ok || packerPool == nil {
 		return
 	}
-	// The hidden compound column is a serialized VARCHAR. A missing or
-	// differently-typed column means the table definition cannot describe the
-	// replay index content; fail open.
-	if !clusterKeyColumnIsVarChar(tableDef, clusterName) {
-		return
-	}
-	filter.ColName = clusterName
+	filter.Descriptor = descriptor
 
 	baseFilter, err := ConstructBaseClusterFilter(expr, tableDef, mp)
 	if err != nil {
@@ -118,7 +151,7 @@ func NewMemClusterKeyFilter(
 		disjuncts := make([]MemClusterKeyFilter, 0, len(baseFilter.Disjuncts))
 		for idx := range baseFilter.Disjuncts {
 			disjunct, disjunctErr := newMemClusterKeyFilterFromBase(
-				clusterName, ts, baseFilter.Disjuncts[idx], packerPool,
+				ts, baseFilter.Disjuncts[idx], packerPool,
 			)
 			if disjunctErr != nil {
 				return MemClusterKeyFilter{}, disjunctErr
@@ -130,46 +163,29 @@ func NewMemClusterKeyFilter(
 		}
 		filter.disjuncts = disjuncts
 		filter.isValid = len(filter.disjuncts) > 0
-		filter.isVec = true
 		return
 	}
 
-	return newMemClusterKeyFilterFromBase(clusterName, ts, baseFilter, packerPool)
+	filter, err = newMemClusterKeyFilterFromBase(ts, baseFilter, packerPool)
+	filter.Descriptor = descriptor
+	return
 }
 
 func newMemClusterKeyFilterFromBase(
-	clusterName string,
 	ts timestamp.Timestamp,
 	basePKFilter BasePKFilter,
 	packerPool *fileservice.Pool[*types.Packer],
 ) (filter MemClusterKeyFilter, err error) {
 	filter.TS = types.TimestampToTS(ts)
-	filter.ColName = clusterName
 
 	var packer *types.Packer
 	put := packerPool.Get(&packer)
 	defer put.Put()
 
-	op, packed, isVec, ok := encodeMemSortKeySpecs(basePKFilter, packer)
+	op, packed, _, ok := encodeMemSortKeySpecs(basePKFilter, packer)
 	if !ok {
 		return
 	}
-	filter.setFullData(op, isVec, packed...)
+	filter.setFullData(op, packed...)
 	return filter, nil
-}
-
-func clusterKeyColumnIsVarChar(tableDef *plan.TableDef, name string) bool {
-	if tableDef == nil {
-		return false
-	}
-	if pos, ok := tableDef.Name2ColIndex[name]; ok && pos >= 0 &&
-		int(pos) < len(tableDef.Cols) && tableDef.Cols[pos] != nil {
-		return types.T(tableDef.Cols[pos].Typ.Id) == types.T_varchar
-	}
-	for _, col := range tableDef.Cols {
-		if col != nil && col.Name == name {
-			return types.T(col.Typ.Id) == types.T_varchar
-		}
-	}
-	return false
 }

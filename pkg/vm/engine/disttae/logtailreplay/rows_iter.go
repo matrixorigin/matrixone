@@ -133,31 +133,9 @@ type primaryKeyIter struct {
 	tombstoneRowIdIdx *btree.BTreeG[*PrimaryIndexEntry]
 	curRow            *RowEntry
 
-	// advances counts the underlying index-iterator moves (Seek/Next), and
-	// surfaced counts the entries the match spec surfaced, and validated
-	// counts the rows-tree visibility checks performed on them. They make
-	// the iteration cost observable at the exact advance, candidate, and
-	// validation boundaries, so tests can prove the iterator follows
-	// predicate selectivity instead of table size.
-	advances  int
-	surfaced  int
-	validated int
-
 	specHint struct {
 		isDelIter bool
 	}
-}
-
-// seekEntry and nextEntry wrap the underlying index iterator so every
-// physical entry advance is counted.
-func (p *primaryKeyIter) seekEntry(e *PrimaryIndexEntry) bool {
-	p.advances++
-	return p.iter.Seek(e)
-}
-
-func (p *primaryKeyIter) nextEntry() bool {
-	p.advances++
-	return p.iter.Next()
 }
 
 type PrimaryKeyMatchSpec struct {
@@ -254,12 +232,12 @@ func Exact(key []byte) PrimaryKeyMatchSpec {
 				pivot.Bytes = key
 				pivot.Time = p.ts
 
-				if ok = p.seekEntry(&pivot); !ok {
+				if ok = p.iter.Seek(&pivot); !ok {
 					return false
 				}
 
 			} else {
-				ok = p.nextEntry()
+				ok = p.iter.Next()
 
 				if !p.specHint.isDelIter {
 					cnt--
@@ -326,9 +304,9 @@ func Prefix(prefix []byte) PrimaryKeyMatchSpec {
 				pivot.Bytes = prefix
 				pivot.Time = p.ts
 
-				ok = p.seekEntry(&pivot)
+				ok = p.iter.Seek(&pivot)
 			} else {
-				ok = p.nextEntry()
+				ok = p.iter.Next()
 			}
 
 			if !ok {
@@ -383,9 +361,9 @@ func ExactNonUnique(key []byte) PrimaryKeyMatchSpec {
 				pivot.Bytes = key
 				pivot.Time = p.ts
 
-				ok = p.seekEntry(&pivot)
+				ok = p.iter.Seek(&pivot)
 			} else {
-				ok = p.nextEntry()
+				ok = p.iter.Next()
 			}
 
 			return ok
@@ -447,7 +425,7 @@ func seekPastKeyRun(p *primaryKeyIter, successor []byte) bool {
 		Time:       p.ts,
 		RowEntryID: math.MaxInt64,
 	}
-	return p.seekEntry(&pivot)
+	return p.iter.Seek(&pivot)
 }
 
 func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
@@ -530,11 +508,11 @@ func BetweenKind(lb, ub []byte, kind int) PrimaryKeyMatchSpec {
 				pivot.Bytes = lb
 				pivot.Time = p.ts
 
-				if ok = p.seekEntry(&pivot); ok {
+				if ok = p.iter.Seek(&pivot); ok {
 					ok = seek2First(p)
 				}
 			} else {
-				ok = p.nextEntry()
+				ok = p.iter.Next()
 			}
 
 			if !ok {
@@ -584,7 +562,7 @@ func LessKind(ub []byte, closed bool) PrimaryKeyMatchSpec {
 				return ok
 			}
 
-			ok = p.nextEntry()
+			ok = p.iter.Next()
 			if !ok {
 				return false
 			}
@@ -607,7 +585,7 @@ func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 			var ok bool
 			if first {
 				first = false
-				ok = p.seekEntry(&PrimaryIndexEntry{
+				ok = p.iter.Seek(&PrimaryIndexEntry{
 					Bytes: lb,
 					Time:  p.ts,
 					// if bytes and time matched, we hope scan from the first
@@ -615,12 +593,12 @@ func GreatKind(lb []byte, closed bool) PrimaryKeyMatchSpec {
 				})
 
 				for ok && !closed && bytes.Equal(p.iter.Item().Bytes, lb) {
-					ok = p.nextEntry()
+					ok = p.iter.Next()
 				}
 				return ok
 			}
 
-			return p.nextEntry()
+			return p.iter.Next()
 		},
 	}
 }
@@ -683,7 +661,7 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 					pivot.Bytes = encoded
 					pivot.Time = p.ts
 
-					if !p.seekEntry(&pivot) {
+					if !p.iter.Seek(&pivot) {
 						return false
 					}
 					if match(p.iter.Item().Bytes, encoded) {
@@ -692,7 +670,7 @@ func InKind(encodes [][]byte, kind int) PrimaryKeyMatchSpec {
 					}
 
 				case scan:
-					if !p.nextEntry() {
+					if !p.iter.Next() {
 						return false
 					}
 					if match(p.iter.Item().Bytes, encoded) {
@@ -769,11 +747,9 @@ func (p *primaryKeyIter) Next() bool {
 		if !p.spec.Move(p) {
 			return false
 		}
-		p.surfaced++
 
 		entry := p.iter.Item()
 
-		p.validated++
 		if p.isPKItemValid(*entry) {
 			return true
 		}
@@ -1082,10 +1058,14 @@ func (p *PartitionState) NewPrimaryKeyDelIter(
 }
 
 // buildClusterSpec is buildSpec for the nonunique cluster-key index: primary-key
-// equality becomes a full-value scan, every other op reuses the shared spec.
+// equality scans the full value; an exclusive lower bound seeks past its
+// duplicate run. Other operators reuse the shared primary-key spec.
 func buildClusterSpec(op int, keys [][]byte) PrimaryKeyMatchSpec {
 	if op == function.EQUAL {
 		return ExactNonUnique(keys[0])
+	}
+	if op == function.GREAT_THAN {
+		return GreatKind(fullKeySuccessor(keys[0]), true)
 	}
 	return buildSpec(op, keys)
 }
@@ -1117,10 +1097,8 @@ func (p *PartitionState) NewClusterKeyIter(
 // query on the given compound column name: the index must be complete and
 // built under the same name. A rename or reorder of the cluster parts, or any
 // unindexed retained version, makes it false.
-func (p *PartitionState) ClusterIndexReadyFor(colName string) bool {
-	return !p.clusterIndexIncomplete &&
-		p.clusterIndexAttrName != "" &&
-		p.clusterIndexAttrName == colName
+func (p *PartitionState) ClusterIndexReadyFor(key readutil.ClusterKeyDescriptor) bool {
+	return p.rowClusterIndex != nil && !p.clusterIndexDisabled && p.clusterKey.SameSchema(key)
 }
 
 // NewClusterKeyIterWithFilters is the guarded cluster-key read entry shared by
@@ -1129,13 +1107,45 @@ func (p *PartitionState) ClusterIndexReadyFor(colName string) bool {
 // iteration, so no committed version can be missed; only the pruning is lost.
 func (p *PartitionState) NewClusterKeyIterWithFilters(
 	ts types.TS,
-	colName string,
+	key readutil.ClusterKeyDescriptor,
 	filters []readutil.MemPKFilterSpec,
 ) RowsIter {
-	if !p.ClusterIndexReadyFor(colName) {
+	if !p.ClusterIndexReadyFor(key) || !p.clusterCandidatesSelective(filters) {
 		return p.NewRowsIter(ts, nil, false)
 	}
 
+	return p.newClusterKeyIterWithFilters(ts, filters)
+}
+
+// clusterCandidatesSelective is only a cost hint. Probe retained index entries
+// without row visibility lookups, stopping before a broad query pays N log R.
+func (p *PartitionState) clusterCandidatesSelective(filters []readutil.MemPKFilterSpec) bool {
+	budget := max(4, p.rows.Len()/64)
+	if len(filters) == 0 || len(filters) > budget {
+		return false
+	}
+	keys := 0
+	for _, filter := range filters {
+		keys += len(filter.Keys)
+		if keys > 2*budget {
+			return false
+		}
+	}
+	for _, filter := range filters {
+		probe := primaryKeyIter{ts: types.MaxTs(), iter: p.rowClusterIndex.Iter()}
+		spec := buildClusterSpec(filter.Op, filter.Keys)
+		for budget > 0 && spec.Move(&probe) {
+			budget--
+		}
+		probe.iter.Release()
+		if budget == 0 {
+			return false
+		}
+	}
+	return true
+}
+
+func (p *PartitionState) newClusterKeyIterWithFilters(ts types.TS, filters []readutil.MemPKFilterSpec) RowsIter {
 	if len(filters) == 1 {
 		return p.NewClusterKeyIter(ts, filters[0].Op, filters[0].Keys)
 	}

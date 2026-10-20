@@ -877,7 +877,7 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		case ls.memPKFilter.ClusterKeyValid():
 			ls.pStateRows.insIter = ls.pState.NewClusterKeyIterWithFilters(
 				ls.memPKFilter.ClusterKeyTS(),
-				ls.memPKFilter.ClusterKeyColName(),
+				ls.memPKFilter.ClusterKeyDescriptor(),
 				ls.memPKFilter.ClusterKeySpecs())
 		default:
 			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)

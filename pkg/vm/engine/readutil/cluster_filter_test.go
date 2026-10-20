@@ -83,6 +83,7 @@ func makeCompositeClusterTableDef(charsetOfPart func(name string) int32) *plan.T
 	}
 	compoundCol := cols[len(cols)-1]
 	return &plan.TableDef{
+		TblId:         22,
 		Name:          "metrics",
 		Cols:          cols,
 		Name2ColIndex: name2Idx,
@@ -285,7 +286,7 @@ func TestNewMemClusterKeyFilterShapes(t *testing.T) {
 				tableDef, tc.expr(), ts, proc.Mp(), packerPool)
 			require.NoError(t, err)
 			require.True(t, filter.Valid())
-			require.Equal(t, clusterByCompoundName, filter.ColName)
+			require.Equal(t, clusterByCompoundName, filter.Descriptor.Name)
 			wantTS := types.TimestampToTS(ts)
 			require.True(t, filter.TS.EQ(&wantTS))
 

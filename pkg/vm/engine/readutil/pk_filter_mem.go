@@ -102,14 +102,11 @@ func (f *MemPKFilter) ClusterKeyTS() types.TS {
 	return f.clusterKey.TS
 }
 
-// ClusterKeyColName returns the compound cluster column name the attached
-// cluster-key filter was built for, the descriptor the replay index must
-// match before pruning is sound.
-func (f *MemPKFilter) ClusterKeyColName() string {
+func (f *MemPKFilter) ClusterKeyDescriptor() ClusterKeyDescriptor {
 	if f.clusterKey == nil {
-		return ""
+		return ClusterKeyDescriptor{}
 	}
-	return f.clusterKey.ColName
+	return f.clusterKey.Descriptor
 }
 
 func (f *MemPKFilter) Valid() bool {
