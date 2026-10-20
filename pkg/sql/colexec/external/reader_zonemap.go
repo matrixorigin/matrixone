@@ -51,6 +51,11 @@ func NewZonemapReader(param *ExternalParam, proc *process.Process) *ZonemapReade
 
 func (r *ZonemapReader) Open(param *ExternalParam, proc *process.Process) (fileEmpty bool, err error) {
 	r.param = param
+	// Block metadata (zone maps, null counts) is indexed by physical file
+	// column, but param.Filter.columnMap was resolved against the (possibly
+	// pruned) output schema. Translate it through the physical file indexes
+	// before block pruning (issue #30571 follow-up, filtered projections).
+	translateZonemapFilterColumnMap(param)
 	r.blockReader, err = ioutil.NewFileReader(
 		param.Extern.FileService, param.Fileparam.Filepath)
 	if err != nil {
@@ -59,6 +64,23 @@ func (r *ZonemapReader) Open(param *ExternalParam, proc *process.Process) (fileE
 	r.zoneparam.offset = 0
 	r.zoneparam.bs = nil
 	return false, nil
+}
+
+// translateZonemapFilterColumnMap rewrites a filter columnMap that was
+// resolved against the scan output schema so each referenced column maps to
+// its physical file index. Zone maps and null counts in block metadata are
+// indexed by physical file column, and column projection may prune the
+// output schema without affecting the file layout.
+func translateZonemapFilterColumnMap(param *ExternalParam) {
+	if param.Filter == nil || len(param.Filter.columnMap) == 0 {
+		return
+	}
+	for _, attr := range param.Attrs {
+		key := int(attr.ColIndex)
+		if _, ok := param.Filter.columnMap[key]; ok {
+			param.Filter.columnMap[key] = int(attr.ColFieldIndex)
+		}
+	}
 }
 
 func (r *ZonemapReader) ReadBatch(

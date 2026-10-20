@@ -134,13 +134,30 @@ func Test_openNewFile_nilCtx(t *testing.T) {
 		ep.mrs.AddColumn(col1)
 		// MODUMP-style config: only the exported Ctx field is set.
 		ep.Ctx = context.Background()
+		// Keep export paths hermetic: a completed writer really creates the
+		// file, and the ETL writer refuses to overwrite an existing one, so
+		// stale files from a previous run must not leak into this test.
+		const exp1, exp2 = "test/export_nil_ctx.csv", "test/export_nil_ctx_rotated.csv"
+		os.RemoveAll(exp1)
+		os.RemoveAll(exp2)
+		defer func() { os.RemoveAll(exp1); os.RemoveAll(exp2) }()
 
 		var err error
 		convey.So(func() { err = openNewFile(nil, ep, ep.mrs) }, convey.ShouldNotPanic)
 		convey.So(err, convey.ShouldBeNil)
-		// the exact failing sequence from the issue: rotation passes ep.ctx
+		// Close the async writer pipeline and join its goroutine BEFORE the
+		// second open rewrites ep's writer fields; otherwise the two writers
+		// race on ep.FileService / ep.AsyncReader (review feedback).
+		convey.So(ep.AsyncWriter.Close(), convey.ShouldBeNil)
+		convey.So(ep.AsyncGroup.Wait(), convey.ShouldBeNil)
+		// the exact failing sequence from the issue: rotation passes ep.ctx.
+		// Fresh output path: a completed rotation actually creates the file,
+		// and openNewFile refuses to overwrite an existing one.
+		ep.userConfig.FilePath = "test/export_nil_ctx_rotated.csv"
 		convey.So(func() { err = openNewFile(ep.ctx, ep, ep.mrs) }, convey.ShouldNotPanic)
 		convey.So(err, convey.ShouldBeNil)
+		convey.So(ep.AsyncWriter.Close(), convey.ShouldBeNil)
+		convey.So(ep.AsyncGroup.Wait(), convey.ShouldBeNil)
 	})
 }
 
