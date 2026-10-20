@@ -10773,7 +10773,7 @@ func validateLagLeadOffsetLiteral(ctx context.Context, name string, args []*Expr
 	}
 
 	offsetExpr := args[1]
-	if lagLeadOffsetIsNullLiteral(offsetExpr) || !types.T(offsetExpr.Typ.Id).IsInteger() {
+	if lagLeadArgumentIsNullLiteral(offsetExpr) || !types.T(offsetExpr.Typ.Id).IsInteger() {
 		return moerr.NewWrongArguments(ctx, name)
 	}
 	lit := offsetExpr.GetLit()
@@ -10785,7 +10785,7 @@ func validateLagLeadOffsetLiteral(ctx context.Context, name string, args []*Expr
 	return nil
 }
 
-func lagLeadOffsetIsNullLiteral(expr *Expr) bool {
+func lagLeadArgumentIsNullLiteral(expr *Expr) bool {
 	for expr != nil {
 		if lit := expr.GetLit(); lit != nil {
 			return lit.Isnull
