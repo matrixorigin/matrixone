@@ -361,6 +361,7 @@ message DedupJoin {
   bool emit_action_rows = 27;
   int32 action_final_result_pos = 28;
   repeated ODKUForeignKeyCheck foreign_key_checks = 29 [(gogoproto.nullable) = false];
+  repeated plan.Expr dedup_key_exprs = 30;
 }
 
 message RightDedupJoin {
@@ -381,6 +382,7 @@ message RightDedupJoin {
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
   bool input_keys_unique = 17;
+  repeated plan.Expr dedup_key_exprs = 18;
 }
 
 message Product {
@@ -578,6 +580,7 @@ message HashBuild {
   int32 dedup_delete_marker_col_idx = 17;
   repeated int32 dedup_delete_keep_col_idx_list = 18;
   bool track_null_keys = 19;
+  repeated plan.Expr dedup_key_exprs = 20;
 }
 
 message Indexbuild {

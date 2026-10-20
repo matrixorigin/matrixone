@@ -1,7 +1,215 @@
 # Table dump expression binding (PR #29241, issue #28594)
 
-Status: revision 10 passed independent design review.
-Revision: 10, 2026-09-25.
+Status: revision 17; temporal-nullability rebase compatibility design approved by independent gpt-6-astra/medium review.
+Revision: 17, 2026-10-20. Revision 16 passed independent zero-temporal review; validation is recorded in the PR.
+
+## Current extension: migration-era binding and format 3
+
+The precision-only admission was incomplete for direct fractional TIMESTAMPADD
+SECOND expressions. Historical main3fc00709 binds DECIMAL1.50 to rounded2
+seconds; newly authored SQL uses fractional1.5 seconds, even without division.
+DUMP/LOAD must preserve verified stored bindings for future writes as well as
+copied rows. The frozen direct baseline and public roundtrip controls record
+this boundary; a compatibility-mode seed alone is not historical provenance.
+
+The existing planner enumerates DEFAULT, ON UPDATE, generated and CHECK
+expressions without lexical slash filters. It verifies each complete supplied
+binding through current binding and applicable complete historical eras, and
+separately classifies whether candidates differ. A current match cannot skip
+legacy comparison. Only an AST containing division enumerates precision0..30.
+Existing budgets, cancellation, declaration matching, private replacement and
+single guarded catalog publication remain the owners; no parallel codec,
+validator, execution path or expression cache is added.
+
+Binding-dependent dumps now emit format3 with the existing payload layout.
+New readers accept v1/v2/v3; v2/v3 share validation/restoration. Older v2 readers
+explicitly reject v3 instead of accepting and ignoring non-division bindings.
+An ambiguous v1 restore requests a new dump before object/catalog mutation.
+Whole declaration origins, positions, nullability, storage and types are checked;
+only expression fields are transplanted, preserving destination identity.
+Fresh SQL retains current normalization. Direct TIMESTAMPADD functional indexes
+remain excluded by their eligibility owner; ordinary indexes over generated
+results remain supported. Additional classification cost is confined to DDL,
+DUMP and LOAD; per-row normalization is unchanged.
+
+Current frozen-base allocations: main charset118, coordinator subquery119, session
+authorization120, unsigned DECIMAL DIV121 and functions599/600 stay published;
+unary temporal122 and nonblocking row-lock123 stay published; fractional TIMESTAMPADD uses capability124, normalizer601 and end602. The allocation follows official main
+c7bd2e7c1d9ca53daf80d640b3b307902d54161c; rollback coverage cycles123→124→123.
+No protobuf schema change or provisional-function-ID guessing is introduced.
+Historical revision10 evidence below retains its original input identity.
+
+## Revision 17: temporal nullability and CHECK namespace rebase
+
+Main 8dd623e7 made string DATE and DATETIME expression conversions nullable.
+Origin verification must reproduce the old inference metadata without erasing
+NotNullable during comparison. A private binding-only context selects the old
+DATE overload 3/4 and string-to-DATETIME CAST overload 0/1 inference at their
+shared owner. Ordinary inference, executor conversions and SQL mode retain main
+semantics. This preserves provenance, not old errors on malformed future input.
+
+The finite whole-origin eras include current binding, prior-PR fractional
+binding with old temporal metadata, published pre-fractional binding with current
+metadata, pre-fractional binding with old metadata, and the existing pre-DIV and
+pre-special compositions with old metadata. Zero-literal and implicit-timestamp
+owners remain disjoint. Each successful whole tree must compare exactly; no
+node-wise migration mixing or metadata normalization is allowed. The descriptor
+bound is 31×6; cancellation and the one-million candidate-node budget stay fixed.
+Constant-folding can remove the affected identities, so eligibility does not rely
+solely on the saved tree. Genuine incoming f9271d9780 definitions cover DATE,
+explicit/implicit DATETIME casts and their fractional TIMESTAMPADD composition.
+
+Main now allocates schema-unique CHECK names. Exact-name matching remains a LOAD
+precondition. Public historical tests use identical logical table names across
+three reused schemas so current declaration identities agree legally; frozen
+expression trees are transplanted only under matching origins and verified
+against exact old expressions. Current CHECK names remain unchanged. Goldens
+retain their original bytes; expression-only UT declarations align to their old
+identities. This adaptation does not weaken declaration verification or claim
+that current generated names are the historic names.
+
+## Revision 16: zero-temporal normalization rebase
+
+Main b233ff1 normalizes integer-zero DATE/DATETIME/TIMESTAMP defaults before
+assignment casting. Ordinary DDL retains its strict plus NO_ZERO_DATE gate for
+all three types. Persisted verification skips only that final CREATE admission;
+all binding, conversion, folding, protocol and whole-tree equality checks stay
+active without changing reader SQL mode or diagnostics.
+
+A private pre-normalization purpose reproduces the actual old TIMESTAMP DEFAULT
+0 binding (1970-01-01 UTC rather than zero). It suppresses only the new integer
+zero substitution. The candidate applies solely to temporal DEFAULT origins
+whose unwrapped AST is an integer-zero literal, disjoint from the function and
+DIV historical eras; no per-node era composition is introduced. Both eras still
+participate in sensitivity classification after a current match. Older failed
+DATE/DATETIME numeric casts remain failed candidates. The existing cancellation
+and candidate-node bounds apply unchanged (at most one additional descriptor for
+these literal-only defaults; other expressions retain their existing bound).
+
+Frozen definitions for 0 and (0) were captured by genuine incoming 129d977,
+independently of this compatibility branch. That old epoch-zero binding is below
+the TIMESTAMP assignment minimum; the incoming binder rejects subsequent default
+assignments with 1366 in both strict and permissive modes. Restoration preserves
+this policy rather than silently replacing the stored binding with zero.
+UT and the reused public SQL fixture
+cover historical stored bindings and existing strict/permissive future-assignment
+policy, strict cross-mode DUMP/LOAD for all three
+types with numeric/canonical origins, ordinary strict DDL rejection, forged
+value/type rejection and immutable session/catalog state. No manifest, function,
+protocol, runtime cast, per-row path or resource ownership change is added.
+
+## Revision 15: persisted zero-TIMESTAMP defaults
+
+Origin verification selects an explicit private binding purpose. It skips only
+CREATE-time strict zero-TIMESTAMP default admission: a persisted origin was
+already admitted by its authoring session. Ordinary DDL retains this check.
+Binding, assignment casts, folding, protocol admission and exact whole-tree
+comparison remain active. The reader's SQL mode, conversion semantics and
+warning sink are preserved; no blanket permissive mode or global state is used.
+Cross-mode tests cover permissive authorship followed by strict DUMP/LOAD,
+strict new-CREATE rejection and forged value/type rejection. Subsequent writes
+retain their separate session policy.
+
+## Revision 14: cheap candidates before session reconstruction
+
+Each parsed expression first tries precision/era pairs in the backup session.
+All cheap candidates participate in sensitivity classification even after a
+current-era match. Next it tries all cheap locale-only precision/era witnesses. Only if none
+matches does the verifier enumerate timezone and joint session witnesses. A bounded list of at most 31×6 small descriptors retains dependency
+flags, never speculative expression graphs. All phases use the same cancellation
+checks, whole-tree equality and shared 1,000,000 candidate-node budget. Unmatched
+exhaustive reconstruction can still reach this bound; cheap valid precision
+witnesses no longer compete with wrong-precision session cross-products.
+
+Regressions cover precision 10 with one localized default, three such defaults
+at precision 4, public backup/restore and future values after session changes.
+No format, row-evaluation or ownership change accompanies the search reorder.
+
+## Revision 13: DECIMAL DIV rebase compatibility
+
+Official main v121 changed DECIMAL DIV result width and unsigned overloads.
+The complete-origin verifier must also reproduce the pre-v121 physical casts,
+signed overload zero and unannotated result width. A dump-only context selects
+that historical checker and numeric resolver; ordinary SQL keeps main semantics.
+The finite candidates follow published migration order: current, pre-fractional
+with current DIV, pre-DIV with pre-fractional, and pre-special. Each candidate
+must match the whole expression and uses the existing cancellation/node budget;
+no per-node era mixing or semantic metadata normalization is accepted.
+
+Frozen signed/unsigned generated-column and CHECK definitions were captured by
+the actual binder at 0f9b9cc6c4d7d8afa19a24624f5c3aa019614eb1, before the DIV
+change. Regression coverage verifies both old definitions, current-domain
+controls, forged-expression rejection and public DUMP/LOAD followed by writes.
+The transport remains format 3; no new runtime function or protocol capability
+is added for compatibility reconstruction.
+
+## Revision 12: locale-dependent defaults
+
+The same pre-fold observation now records locale dependencies for MONTHNAME,
+DAYNAME and DATE_FORMAT, including nested expressions, NULL results and bind
+failures caused by a reading-locale assignment overflow. Folded dependencies
+require capture even when CREATE and DUMP use the same locale. Literal controls
+and unchanged executable bindings retain their classification.
+
+Reconstruction obtains the finite supported locale inventory from the temporal
+function owner (currently en_US, fr_FR, de_DE and ja_JP). The private child uses
+that owner's effective reading locale, respecting variable-resolver precedence
+over the session snapshot. Its resolver overrides only session lc_time_names;
+all other lookups forward to the inherited resolver, without changing the parent.
+Cheap locale-only witnesses precede joint locale/timezone reconstruction. Each
+candidate must reproduce the complete expression under one configuration tuple;
+independently matching subtrees or dimensions cannot authorize a payload.
+
+All candidates still share cancellation and the one-million-node table budget.
+The locale axis can multiply the finite timezone inventory by four, but cannot
+increase the shared visit limit; expensive legitimate reconstructions may still
+fail closed. Existing custom-zone/tzdata limitations remain. Formatted
+FROM_UNIXTIME and STR_TO_DATE currently do not read lc_time_names and their
+function semantics are unchanged. No format, protocol or row-evaluation change
+is introduced. Acceptance includes four source locales, combined timezone/locale
+recovery, resolver isolation, NULL/overflow, forged payloads, cancellation/budget,
+and authenticated DUMP/LOAD, exact binding readback and future defaults.
+
+## Revision 11: folded defaults and timezone witnesses
+
+Default verification observes the ordinary DDL owner's resolved expression
+before folding. TIMESTAMP conversions and session-dependent epoch/UUID
+conversions can fold to DATETIME, VARCHAR, numeric or UUID values. Such folded
+bindings require a format-3 witness even when CREATE and DUMP use the same
+timezone; LOAD may use another one. Ordinary integer/string expressions,
+timezone-independent DATETIME literals, and an unchanged executable
+UNIX_TIMESTAMP default retain their existing classification. Literal NULL and
+zero TIMESTAMP controls remain unchanged; a timezone-dependent expression
+folding to either value still requires capture. Dependencies are observed before
+assignment and folding, so a reading-zone overflow cannot suppress reconstruction
+under a valid authoring zone. This is a conservative capture rule,
+not a claim to recover the creation session from a folded value.
+
+On mismatch, verification rebinds the complete origin through the same default
+owner under UTC, the local location, 598 IANA names (including aliases, from
+Go 1.27.1's tzdata 2026c inventory), and the 1,680 numeric minute offsets admitted
+by SET time_zone. Named rules always come from time.LoadLocation, the frontend's
+owner. This supports historical second offsets and a single expression spanning
+different DST offsets; an arbitrary second-offset FixedZone is not a legal
+witness. The existing checked TIMESTAMP delta remains only a minute-offset
+fast path. No substring, output-delta or partial-tree equivalence is accepted.
+
+Candidates are yielded one at a time without goroutines or a global cache.
+Every bind uses the existing private process, cancellation and shared
+one-million-node candidate-visit budget; matching or exhaustion stops the
+search. The finite timezone search can add at most 2,280 witnesses per binding
+era/precision, still constrained by that shared table budget. Invalid or
+unavailable locations are skipped. The parent session, diagnostics and catalog
+trees remain untouched. The change is confined to administrative binding
+validation; no row-evaluation, manifest-layout or protocol version changes.
+
+Catalogs do not record custom ZONEINFO names, old machine-local rules or the
+creation tzdata version. Missing/changed historical rules can therefore still
+fail closed; this revision does not claim universal environment recovery.
+Retaining creation timezone provenance would require a separate catalog
+contract. Cross-zone public roundtrips, exact binding readback, future writes,
+type/value tamper rejection, cancellation and budget controls are the acceptance
+boundary for this correction.
 
 ## Problem and evidence
 
@@ -157,10 +365,10 @@ catalog migration is required.
 ## Cost, safety and operations
 
 There is no change in row evaluation or query-plan hot paths. Both DUMP and
-LOAD perform bounded candidate rebinding only for expressions containing
-exact division. Either operation can bind at most 248
-candidates (31 increments × eight parser modes) per persisted expression, with
-memory bounded by the manifest cap and one candidate expression at a time.
+LOAD verify persisted expressions through the applicable binding eras. Only
+division expressions enumerate all 31 precision increments; parser modes and
+the bounded timezone witnesses above share the same table-wide candidate-node
+budget. Memory is bounded by the manifest cap and one candidate expression at a time.
 Most expressions use the first parser mode, so measure both common and worst
 case. The shared 1 MiB text, 16,384 AST-node and one-million candidate-node
 visit limits above prevent planning cost from being hidden behind the 64 MiB

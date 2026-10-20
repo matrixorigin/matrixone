@@ -15,9 +15,12 @@
 package rightdedupjoin
 
 import (
+	"fmt"
 	"math"
 	"strconv"
 	"testing"
+
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -488,4 +491,73 @@ func makeRightDedupContractKeyVector(
 		}
 	}
 	return vec
+}
+
+func TestRightDedupLogicalDiagnostic(t *testing.T) {
+	for _, unique := range []bool{false, true} {
+		for _, threshold := range []int64{0, 2} {
+			t.Run(fmt.Sprintf("unique=%t/threshold=%d", unique, threshold), func(t *testing.T) {
+				proc, ctrl := newRightDedupTestProcess(t, true)
+				defer ctrl.Finish()
+				var buildBat, probeBat *batch.Batch
+				var buildArg *hashbuild.HashBuild
+				var join *RightDedupJoin
+				defer func() {
+					if join != nil {
+						join.Free(proc, false, nil)
+					}
+					if buildArg != nil {
+						buildArg.Free(proc, false, nil)
+					}
+					if buildBat != nil {
+						buildBat.Clean(proc.Mp())
+					}
+					if probeBat != nil {
+						probeBat.Clean(proc.Mp())
+					}
+					proc.Free()
+					require.Zero(t, proc.Mp().CurrNB())
+				}()
+				typ := types.T_varchar.ToType()
+				buildBat = batch.NewWithSize(1)
+				buildBat.Vecs[0] = vector.NewVec(typ)
+				for _, value := range []string{"Alpha", "Beta"} {
+					key, err := collation.UTF8MB4UnicodeCI.Key(nil, []byte(value))
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendBytes(buildBat.Vecs[0], key, false, proc.Mp()))
+				}
+				buildBat.SetRowCount(2)
+				probeBat = batch.NewWithSize(2)
+				probeBat.Vecs[0] = vector.NewVec(typ)
+				probeBat.Vecs[1] = vector.NewVec(typ)
+				key, err := collation.UTF8MB4UnicodeCI.Key(nil, []byte("alpha"))
+				require.NoError(t, err)
+				require.NoError(t, vector.AppendBytes(probeBat.Vecs[0], key, false, proc.Mp()))
+				require.NoError(t, vector.AppendBytes(probeBat.Vecs[1], []byte("alpha"), false, proc.Mp()))
+				probeBat.SetRowCount(1)
+				tag++
+				join = &RightDedupJoin{LeftTypes: []types.Type{typ, typ}, RightTypes: []types.Type{typ}, Conditions: [][]*plan.Expr{{newExpr(0, typ)}, {newExpr(0, typ)}}, Result: []colexec.ResultPos{colexec.NewResultPos(0, 1)}, OnDuplicateAction: plan.Node_FAIL, DedupColName: "uk_named", DedupColTypes: []plan.Type{typ.PlanType()}, DedupKeyExprs: []*plan.Expr{newExpr(1, typ)}, InputKeysUnique: unique, IsShuffle: threshold > 0, SpillThreshold: threshold, JoinMapTag: tag}
+				buildArg = &hashbuild.HashBuild{NeedHashMap: true, Conditions: join.Conditions[1], IsShuffle: threshold > 0, SpillThreshold: threshold, JoinMapTag: tag, JoinMapRefCnt: 1}
+				if threshold > 0 {
+					buildArg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{Tag: tag + 9000}
+				}
+				join.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{probeBat}))
+				buildArg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{buildBat}))
+				installTestAllocation(t, join, buildArg)
+				require.NoError(t, buildArg.Prepare(proc))
+				require.NoError(t, join.Prepare(proc))
+				_, err = vm.Exec(buildArg, proc)
+				require.NoError(t, err)
+				for {
+					result, err := vm.Exec(join, proc)
+					if err != nil {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrDuplicateEntry))
+						require.Equal(t, "Duplicate entry 'alpha' for key 'uk_named'", err.Error())
+						break
+					}
+					require.NotEqual(t, vm.ExecStop, result.Status, "expected duplicate diagnostic")
+				}
+			})
+		}
+	}
 }

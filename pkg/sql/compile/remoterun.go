@@ -1126,6 +1126,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction:         t.OnDuplicateAction,
 			DedupColName:              t.DedupColName,
 			DedupColTypes:             t.DedupColTypes,
+			DedupKeyExprs:             t.DedupKeyExprs,
 			DelColIdx:                 t.DelColIdx,
 			DedupDeleteMarkerColIdx:   t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList: t.DedupDeleteKeepColIdxList,
@@ -1156,6 +1157,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupBuildKeepLast:              t.DedupBuildKeepLast,
 			DedupColName:                    t.DedupColName,
 			DedupColTypes:                   t.DedupColTypes,
+			DedupKeyExprs:                   t.DedupKeyExprs,
 			DelColIdx:                       t.DelColIdx,
 			DedupDeleteMarkerColIdx:         t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList:       t.DedupDeleteKeepColIdxList,
@@ -1199,6 +1201,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			InputKeysUnique:        t.InputKeysUnique,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
+			DedupKeyExprs:          t.DedupKeyExprs,
 			DelColIdx:              t.DelColIdx,
 			LeftTypes:              convertToPlanTypes(t.LeftTypes),
 			RightTypes:             convertToPlanTypes(t.RightTypes),
@@ -1792,6 +1795,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DedupKeyExprs = t.DedupKeyExprs
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1816,6 +1820,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupBuildKeepLast = t.DedupBuildKeepLast
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DedupKeyExprs = t.DedupKeyExprs
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1854,6 +1859,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.InputKeysUnique = t.InputKeysUnique
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DedupKeyExprs = t.DedupKeyExprs
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
@@ -2352,6 +2358,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
 		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")
+	}
+	if features.TimestampAddSecondIntervals && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion124) {
+		return moerr.NewNotSupportedNoCtx("fractional TIMESTAMPADD SECOND requires MORPC protocol version 124")
 	}
 	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
 		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")
