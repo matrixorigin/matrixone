@@ -738,7 +738,7 @@ func sortAndLimitExactResults(
 		return distances[order[i]] < distances[order[j]]
 	})
 
-	if limit == 0 || int(limit) > len(order) {
+	if limit == 0 || limit > uint(len(order)) {
 		limit = uint(len(order))
 	}
 
@@ -872,12 +872,13 @@ func (idx *IvfflatSearchIndex[T]) Search(
 
 		includeCols := filterRequestedIncludeColumns(rt.RequestedIncludeColumns, tblcfg.IncludeColumns)
 		if rt.IncludeResult != nil {
+			capacity := vectorindex.SearchResultPreallocate(uint64(roundLimit))
 			rt.IncludeResult.ColNames = append(rt.IncludeResult.ColNames[:0], includeCols...)
 			rt.IncludeResult.Data = make(map[string][]any, len(includeCols))
 			rt.IncludeResult.Nulls = make(map[string][]bool, len(includeCols))
 			for _, col := range includeCols {
-				rt.IncludeResult.Data[col] = make([]any, 0, roundLimit)
-				rt.IncludeResult.Nulls[col] = make([]bool, 0, roundLimit)
+				rt.IncludeResult.Data[col] = make([]any, 0, capacity)
+				rt.IncludeResult.Nulls[col] = make([]bool, 0, capacity)
 			}
 		}
 

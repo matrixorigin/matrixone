@@ -268,7 +268,7 @@ func (r *planReader) newSearchProcess() *sqlexec.SqlProcess {
 		p.IvfMembershipFilterObject = r.generation.membership
 	}
 	p.IndexReaderParam = &plan.IndexReaderParam{
-		Limit: ivfUint64Expr(r.req.CandidateBudget), OrderBy: []*plan.OrderBySpec{{Flag: r.spec.Direction}},
+		Limit: ivfTopKLimitExpr(r.req.CandidateBudget), OrderBy: []*plan.OrderBySpec{{Flag: r.spec.Direction}},
 		OrigFuncName: r.spec.DistanceFunction, DistRange: r.req.DistanceRange,
 	}
 	return p

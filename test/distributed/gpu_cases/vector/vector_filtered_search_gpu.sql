@@ -136,4 +136,9 @@ create sequence s_ivfpq_force start with 1;
 select count(*) from (select id from t_ivfpq where nextval('s_ivfpq_force') = '1' order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=force') x;
 select currval('s_ivfpq_force');
 
+-- the largest itopk: ivfpq searches at most the index rows; cagra rejects it above its limit
+select count(*) from (select id from t_ivfpq order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 3 by rank with option 'itopk=18446744073709551615') x;
+select count(*) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 3 by rank with option 'mode=pre', 'itopk=18446744073709551615') x;
+select id from t_cagra order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 3 by rank with option 'itopk=18446744073709551615';
+
 drop database vector_filtered_search_gpu;

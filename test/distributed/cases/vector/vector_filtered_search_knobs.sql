@@ -72,4 +72,14 @@ select id from t_hnsw order by l2_distance(v, '[0,0]') limit 10 by rank with opt
 select id from t_hnsw order by l2_distance(v, '[0,0]') limit 10 by rank with option 'itopk=100', 'max_itopk=50';
 select id from t_ivf order by l2_distance(v, '[0,0]') limit 10 by rank with option 'nprobe=8', 'max_nprobe=4';
 
+-- the largest itopk: an ivfflat INCLUDE search returns its LIMIT rows
+create table t_ivf_inc(id bigint primary key, category int not null, v vecf32(2));
+insert into t_ivf_inc select id, category, v from t_hnsw;
+create index i_ivf_inc using ivfflat on t_ivf_inc(v) lists = 4 op_type 'vector_l2_ops' include(category);
+select id, category from t_ivf_inc order by l2_distance(v, '[0,0]') limit 1 by rank with option 'itopk=18446744073709551615';
+select id, category from t_ivf_inc where category = 1 order by l2_distance(v, '[0,0]') limit 1 by rank with option 'mode=pre', 'itopk=18446744073709551615';
+-- hnsw searches at most the index rows
+select id from t_hnsw order by l2_distance(v, '[0,0]') limit 1 by rank with option 'itopk=18446744073709551615';
+select id from t_hnsw where category = 1 order by l2_distance(v, '[0,0]') limit 1 by rank with option 'mode=pre', 'itopk=18446744073709551615';
+
 drop database vector_filtered_search_knobs;

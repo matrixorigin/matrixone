@@ -401,4 +401,12 @@ select count(*) from (select id from t_ivfpq where nextval('s_ivfpq_force') = '1
 select currval('s_ivfpq_force');
 ➤ currval(s_ivfpq_force)[12,65535,0]  𝄀
 1000
+select count(*) from (select id from t_ivfpq order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 3 by rank with option 'itopk=18446744073709551615') x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select count(*) from (select id from t_ivfpq where category = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 3 by rank with option 'mode=pre', 'itopk=18446744073709551615') x;
+➤ count(*)[-5,64,0]  𝄀
+3
+select id from t_cagra order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 3 by rank with option 'itopk=18446744073709551615';
+invalid input: itopk 18446744073709551615 exceeds the cagra limit 1024
 drop database vector_filtered_search_gpu;

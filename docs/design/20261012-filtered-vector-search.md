@@ -117,7 +117,9 @@ returned; the knobs only size the internal search.
 
 With `itopk` set, the candidate budget of a search is `max(itopk, LIMIT)`, lowered to
 `max_itopk`; without it, the budget is the algorithm's over-fetch of `LIMIT`. `pre` and `post` run
-one search with that budget. Otherwise the caps bound only the widening of `iterative`.
+one search with that budget. Otherwise the caps bound only the widening of `iterative`. A
+budget above the indexed rows searches every row: hnsw and ivfpq bound it by the index rows,
+ivfflat by the rows of the probed lists.
 
 Defaults and precedence (most specific wins):
 
@@ -484,6 +486,7 @@ partitions routes its centroid search on the CPU (`ivfflat/plan_reader.go`).
 | 19 | On a cagra index over more than 1024 rows where fewer than `LIMIT` rows qualify, `iterative` returns the qualifying rows; `itopk` or `max_itopk` above 1024 is an error as an SQL option and lowered to 1024 as a session variable. | `gpu_cases/vector/vector_cagra_itopk_limit.sql` |
 | 20 | On cagra and ivfpq a filter outside the INCLUDE columns in `pre` and `iterative` builds the PRE shape, whose producer scan also applies the INCLUDE filter, and the default mode does not; `iterative` fills the page with qualifying rows (the `force` rows, up to PQ ranking on ivfpq) and an `id IN (subquery)` membership join returns the `force` rows; the GPU mask ANDs a cbitmap, CRoaring or sorted64 membership with the predicates and deletes, also on a shard slice, and rejects other kinds and an index without `host_ids`. | `gpu_cases/vector/vector_filtered_search_gpu.sql`; `cgo/cuvs/test/filter_test.cu` `EvalFilterMembershipTest`, `cagra_test.cu` / `ivf_pq_test.cu` `FilteredSearchAppliesMembership`; `pkg/common/docfilter/cmembership_test.go` `TestNewForCPicksByEstimate`, `TestNewForCAdmissionDenied` |
 | 21 | `pre` and `iterative` with a `nextval` filter return the `force` rows and advance the sequence once per row, on all four indexes. | `cases/vector/vector_filtered_search_hnsw.sql`, `cases/vector/vector_filtered_search_ivfflat.sql`, `gpu_cases/vector/vector_filtered_search_gpu.sql`; `pkg/sql/plan/vector_pre_replay_test.go` `TestVectorPreVolatileFilterRunsOnce` |
+| 22 | `itopk` at the largest unsigned 64-bit value returns `LIMIT` rows on hnsw, ivfflat (INCLUDE columns) and ivfpq, in the default mode and `pre`; on cagra it is an error (above 1024). | `cases/vector/vector_filtered_search_knobs.sql`, `gpu_cases/vector/vector_filtered_search_gpu.sql`; `pkg/vectorindex/ivfflat` `TestIvfSearchIncludeModeOversizedRoundLimit`, `TestSortAndLimitExactResultsOversizedLimit`, `TestScanEntriesOversizedLimitKeepsStorageTopK` |
 
 ## Decision log
 
