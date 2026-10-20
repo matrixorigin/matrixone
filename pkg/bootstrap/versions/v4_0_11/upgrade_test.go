@@ -41,7 +41,7 @@ func TestCDCWatermarkColumnsUpgradeMetadata(t *testing.T) {
 	require.Equal(t, versions.No, m.UpgradeTenant)
 	require.Equal(t, defines.MORPCVersion106, m.RequiredProtocolVersion)
 	require.Len(t, clusterUpgEntries, 4)
-	var names []string
+	names := make([]string, 0, len(clusterUpgEntries))
 	for _, entry := range clusterUpgEntries {
 		require.Equal(t, catalog.MO_CDC_WATERMARK, entry.TableName)
 		require.Equal(t, versions.ADD_COLUMN, entry.UpgType)
