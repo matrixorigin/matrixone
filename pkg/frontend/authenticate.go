@@ -12466,6 +12466,10 @@ func doInterpretCall(
 		return interpreter.GetResult(), nil
 
 	case "starlark":
+		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
+		if err != nil {
+			return nil, err
+		}
 		err = interpreter.ExecuteStarlark(spBody, dbName, bg)
 		if err != nil {
 			return nil, err

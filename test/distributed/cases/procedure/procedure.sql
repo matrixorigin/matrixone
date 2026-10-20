@@ -265,6 +265,37 @@ call recursion_self(1);
 select n from recursion_effects order by n;
 call recursion_self(0);
 select n from recursion_effects order by n;
+-- Starlark CALLs share the per-routine bound, including SQL bridge re-entry.
+-- mo.sql reports a rejected child as a value; the script may handle it.
+create procedure recursion_starlark(in n int) language 'starlark' $$
+mo.setvar("st_entered", n)
+rows, err = mo.sql("call recursion_starlark({})".format(n-1)) if n > 0 else [None, None]
+code = mo.errno()
+state = mo.sqlstate()
+mo.setvar("st_errno", code) if err else None
+mo.setvar("st_state", state) if err else None
+$$;
+set @st_entered = -1, @st_errno = 0, @st_state = '';
+call recursion_starlark(3);
+select @st_entered = 3 as stopped_at_entry, @st_errno = 1456 as recursion_error, @st_state = 'HY000' as recursion_state;
+set max_sp_recursion_depth = 1;
+set @st_entered = -1, @st_errno = 0, @st_state = '';
+call recursion_starlark(3);
+select @st_entered = 2 as one_reentry, @st_errno = 1456 as recursion_error;
+set @st_entered = -1, @st_errno = 0, @st_state = '';
+call recursion_starlark(0);
+select @st_entered = 0 as reusable, @st_errno = 0 as no_error;
+create procedure recursion_starlark_bridge(in n int) 'begin call recursion_starlark_mixed(n); end';
+create procedure recursion_starlark_mixed(in n int) language 'starlark' $$
+mo.setvar("st_entered", n)
+rows, err = mo.sql("call recursion_starlark_bridge({})".format(n-1)) if n > 0 else [None, None]
+code = mo.errno()
+mo.setvar("st_errno", code) if err else None
+$$;
+set max_sp_recursion_depth = 0;
+set @st_entered = -1, @st_errno = 0;
+call recursion_starlark_mixed(3);
+select @st_entered = 3 as mixed_stopped_at_entry, @st_errno = 1456 as recursion_error;
 set max_sp_recursion_depth = @saved_sp_recursion_depth;
 
 drop database if exists procedure_test;

@@ -33,10 +33,11 @@ import (
 // through doInterpretCall, as the production background executor does.
 type procedureRecursionTestSession struct {
 	FeSession
-	database string
-	bodies   map[string]string
-	entered  *[]string
-	bodyErr  error
+	database  string
+	bodies    map[string]string
+	languages map[string]string
+	entered   *[]string
+	bodyErr   error
 }
 
 func (s *procedureRecursionTestSession) GetDatabaseName() string { return s.database }
@@ -55,7 +56,11 @@ func (s *procedureRecursionTestSession) newExecutor() BackgroundExec {
 	for identity, body := range s.bodies {
 		database, routine, _ := strings.Cut(identity, ".")
 		sql, _ := getSqlForSpBody(context.Background(), routine, database)
-		b.sql2result[sql] = newMrsForStoredProcedure([][]interface{}{{"sql", body, "[]", ""}})
+		language := s.languages[identity]
+		if language == "" {
+			language = "sql"
+		}
+		b.sql2result[sql] = newMrsForStoredProcedure([][]interface{}{{language, body, "[]", ""}})
 	}
 	return b
 }
@@ -148,6 +153,49 @@ func TestInterpretCallRecursion(t *testing.T) {
 			_, err = doInterpretCall(ctx, fixture, call, false, 0, new(int64))
 			require.NoError(t, err)
 			require.Len(t, entered, tc.entered+1)
+		})
+	}
+}
+
+func TestInterpretCallStarlarkRecursion(t *testing.T) {
+	// A Starlark frame must count even when its recursive CALL passes through
+	// a SQL routine. The SQL frame also bounds the pre-fix counterexample.
+	const starlarkBody = `_, err = mo.sql("select 1")
+_, err = mo.sql("call b()")
+if err:
+    code = mo.errno()
+    state = mo.sqlstate()
+    mo.setvar("recursion_errno", code)
+    mo.setvar("recursion_state", state)
+`
+	for _, limit := range []int64{0, 1} {
+		t.Run(string(rune('0'+limit)), func(t *testing.T) {
+			ses := starlarkOutputTestSession(t)
+			ctx := context.Background()
+			require.NoError(t, ses.SetSessionSysVar(ctx, "max_sp_recursion_depth", limit))
+			var entered []string
+			fixture := &procedureRecursionTestSession{
+				FeSession: ses, database: "db", entered: &entered,
+				bodies:    map[string]string{"db.a": starlarkBody, "db.b": "begin select 1; call a(); end"},
+				languages: map[string]string{"db.a": "starlark"},
+			}
+			call := &tree.CallStmt{Name: tree.NewProcedureName("a", tree.ObjectNamePrefix{})}
+			_, err := doInterpretCall(ctx, fixture, call, false, 0, new(int64))
+			// mo.sql returns SQL failures as values; it must retain error 1456
+			// without turning a handled failure into a top-level script error.
+			require.NoError(t, err)
+			require.Len(t, entered, int(2*(limit+1)))
+			code, err := ses.GetUserDefinedVar("recursion_errno")
+			require.NoError(t, err)
+			require.Equal(t, int64(1456), code.Value)
+			state, err := ses.GetUserDefinedVar("recursion_state")
+			require.NoError(t, err)
+			require.Equal(t, "HY000", state.Value)
+			// A subsequent top-level invocation must not inherit any frame.
+			fixture.bodies["db.a"] = `_, err = mo.sql("select 1")`
+			_, err = doInterpretCall(ctx, fixture, call, false, 0, new(int64))
+			require.NoError(t, err)
+			require.Len(t, entered, int(2*(limit+1))+1)
 		})
 	}
 }
