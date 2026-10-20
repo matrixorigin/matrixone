@@ -56,8 +56,7 @@ func (f *StopFilter) Filter(in iter.Seq2[tokenizer.Token, error]) iter.Seq2[toke
 				return
 			}
 			slen := tk.TokenBytes[0]
-			word := string(tk.TokenBytes[1 : slen+1])
-			if _, stop := f.set[word]; stop {
+			if _, stop := f.set[string(tk.TokenBytes[1:slen+1])]; stop {
 				continue
 			}
 			if !yield(tk, nil) {
