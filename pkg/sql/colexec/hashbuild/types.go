@@ -503,6 +503,7 @@ type HashBuild struct {
 	OnDuplicateAction         plan.Node_OnDuplicateAction
 	DedupColName              string
 	DedupColTypes             []plan.Type
+	DedupKeyExprs             []*plan.Expr
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
 
