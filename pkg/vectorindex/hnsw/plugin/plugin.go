@@ -63,7 +63,14 @@ func (p *Plugin) Idxcron() idxcronplugin.Hooks   { return p.idxcronHooks }
 func (p *Plugin) Coverage() coverageplugin.Hooks { return p.coverageHooks }
 func (p *Plugin) Search() searchplugin.Hooks     { return p.searchHooks }
 
+// HNSW planning depends on the source watermark and searched generation,
+// neither of which is captured by a prepared plan's schema version.
+func (*Plugin) PreparedPlanDependsOnIndexCoverage(_ []byte) bool {
+	return true
+}
+
 var _ plugin.AlgoPlugin = (*Plugin)(nil)
 var _ plugin.SearchPlugin = (*Plugin)(nil)
+var _ plugin.PreparedPlanCoveragePlugin = (*Plugin)(nil)
 
 func init() { plugin.Register(New()) }

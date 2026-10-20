@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fulltext2"
-	ft2plan "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/plan"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -556,18 +555,9 @@ func (builder *QueryBuilder) jsonProbeTailSQL(scanNode *plan.Node, whereSQL stri
 	return tail + " /* self-completes vs searched generation: caught up => no tail; behind => this tail; newer-than-read or DDL-in-gap => " + fallback + " */"
 }
 
-// PreparedPlanDependsOnIndexCoverage reports whether a prepared plan carries an injected
-// json_extract fulltext2 probe, which must be rebuilt on every EXECUTE. The probe SELF-COMPLETES at
-// execution -- it binds its table_changes tail to the generation it actually searched and to the
-// current snapshot -- so index freshness itself no longer forces a rebuild (a reused plan tails the
-// current generation correctly). What still does is the plan-build-time probe-vs-full-scan decision,
-// made from transaction state NO schema version represents: chiefly the transaction-local-write
-// guard. The probe and its tail see only COMMITTED rows, so a plan built in a clean txn and reused
-// in a txn that has since written uncommitted rows to the source would DROP them (the base scan sees
-// them, the probe does not, and the INNER JOIN discards them). Rebuilding re-runs that guard (and
-// re-checks that the index is built). A user MATCH also builds a fulltext2 index search scan but is
-// search-semantics (freshness-tolerant); the JSONProbeMode scan option distinguishes the injected
-// probe and is required.
+// PreparedPlanDependsOnIndexCoverage reports whether an index search in a prepared
+// plan requires a rebuild on every EXECUTE. The registered plugin decides which
+// search modes depend on coverage state that schema versions do not track.
 func PreparedPlanDependsOnIndexCoverage(p *Plan) bool {
 	if p == nil {
 		return false
@@ -584,13 +574,7 @@ func PreparedPlanDependsOnIndexCoverage(p *Plan) bool {
 		if spec == nil || spec.GetIndex() == nil {
 			continue
 		}
-		if catalog.IsHnswIndexAlgo(spec.GetIndex().GetIndexAlgo()) {
-			return true
-		}
-		if !catalog.IsFullText2IndexAlgo(spec.GetIndex().GetIndexAlgo()) {
-			continue
-		}
-		if opts, err := ft2plan.DecodeScanOptions(spec.GetAlgoOptions()); err == nil && opts.Mode == fulltext2.JSONProbeMode {
+		if indexplugin.PreparedPlanDependsOnIndexCoverage(spec.GetIndex().GetIndexAlgo(), spec.GetAlgoOptions()) {
 			return true
 		}
 	}
