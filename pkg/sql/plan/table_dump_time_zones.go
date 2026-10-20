@@ -16,6 +16,7 @@ package plan
 
 import (
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -25,22 +26,53 @@ import (
 // The finite name inventory is from Go 1.27.1 lib/time/zoneinfo.zip (IANA 2026c),
 // including aliases. Custom ZONEINFO names and unavailable historical rules
 // cannot be recovered from catalog metadata that did not record their identity.
+var tableDumpTimeZoneCache struct {
+	sync.Once
+	named []*time.Location
+	fixed []*time.Location
+}
+
+func initTableDumpTimeZoneCache() {
+	tableDumpTimeZoneCache.Do(func() {
+		// Loading the named IANA zones and allocating every admitted numeric
+		// offset is expensive. AnalyzeTableDumpBindings may enumerate this
+		// inventory once for each candidate expression, so build the immutable
+		// witnesses once per process. time.UTC and time.Local stay dynamic below
+		// because callers may replace time.Local at runtime.
+		tableDumpTimeZoneCache.named = make([]*time.Location, 0, len(strings.Fields(tableDumpTimeZoneNames)))
+		for _, name := range strings.Fields(tableDumpTimeZoneNames) {
+			if name == "UTC" {
+				continue
+			}
+			zone, err := time.LoadLocation(name)
+			if err == nil {
+				tableDumpTimeZoneCache.named = append(tableDumpTimeZoneCache.named, zone)
+			}
+		}
+
+		tableDumpTimeZoneCache.fixed = make([]*time.Location, 0, 14*60+13*60+59)
+		for minute := -(13*60 + 59); minute <= 14*60; minute++ {
+			if minute != 0 {
+				tableDumpTimeZoneCache.fixed = append(tableDumpTimeZoneCache.fixed,
+					time.FixedZone("table dump binding", minute*60))
+			}
+		}
+	})
+}
+
 func tableDumpTimeZones(yield func(*time.Location) bool) {
 	if !yield(time.UTC) || !yield(time.Local) {
 		return
 	}
-	for _, name := range strings.Fields(tableDumpTimeZoneNames) {
-		if name == "UTC" {
-			continue
-		}
-		zone, err := time.LoadLocation(name)
-		if err == nil && !yield(zone) {
+	initTableDumpTimeZoneCache()
+	for _, zone := range tableDumpTimeZoneCache.named {
+		if !yield(zone) {
 			return
 		}
 	}
 	// These are precisely the numeric offsets admitted by SET time_zone.
-	for minute := -(13*60 + 59); minute <= 14*60; minute++ {
-		if minute != 0 && !yield(time.FixedZone("table dump binding", minute*60)) {
+	for _, zone := range tableDumpTimeZoneCache.fixed {
+		if !yield(zone) {
 			return
 		}
 	}
