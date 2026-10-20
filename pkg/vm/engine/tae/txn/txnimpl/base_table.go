@@ -156,25 +156,6 @@ func (r *duplicatedRowIDs) Merge(pool *containers.VectorPool) containers.Vector 
 	return rowIDs
 }
 
-/*
-// Merge chooses an effective row only after all object candidates have been
-// checked against tombstones. Appendable rows are preferred because they are
-// the replacement rows created after a merge source was written.
-func (r *duplicatedRowIDs) Merge(pool *containers.VectorPool) containers.Vector {
-	length := r.appendable.Length()
-	if r.nonAppendable.Length() > length {
-		length = r.nonAppendable.Length()
-	}
-	rowIDs := pool.GetVector(&objectio.RowidType)
-	for i := 0; i < length; i++ {
-		if !r.appendable.IsNull(i) {
-			rowIDs.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](r.appendable.GetDownstreamVector(), i), false)
-			continue
-		}
-		if !r.nonAppendable.IsNull(i) {
-			rowIDs.Append(vector.GetFixedAtNoTypeCheck[types.Rowid](r.nonAppendable.GetDownstreamVector(), i), false)
-*/
-
 func newBaseTable(schema *catalog.Schema, isTombstone bool, txnTable *txnTable) *baseTable {
 	return &baseTable{
 		schema:      schema,
