@@ -88,6 +88,15 @@ PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 # test process and its package resources. The default stays serial on the
 # constrained CI runner; stronger runners can opt into two independent shards.
 PLAN_RACE_PARALLEL=${PLAN_RACE_PARALLEL:-"1"}
+# Only the audited independent plan subtests opt into this process-local
+# parallelism. Keep the cap at three: plan shards still share the heavy-wave
+# budget and the constrained CI runner has a 16 GiB cgroup limit.
+PLAN_TEST_PARALLEL=${PLAN_TEST_PARALLEL:-"3"}
+if ! [[ "${PLAN_TEST_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+    (( PLAN_TEST_PARALLEL > 3 )); then
+    logger "ERR" "PLAN_TEST_PARALLEL must be 1, 2, or 3, got '${PLAN_TEST_PARALLEL}'"
+    exit 2
+fi
 # Six exclusive engine shards reduced the measured phase from 100s to 44s,
 # with 5.2 GiB peak under the eight-CPU/16-GiB runner envelope. Admission still
 # respects UT_PARALLEL and an explicit caller heavy cap. Other stages wait.
@@ -1728,7 +1737,7 @@ function run_plan_race_shards(){
         restore_ut_term_trap "${previous_term_trap}"
         return 2
     fi
-    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes with parallelism ${PLAN_RACE_PARALLEL}"
+    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes with process parallelism ${PLAN_RACE_PARALLEL} and test parallelism ${PLAN_TEST_PARALLEL}"
     for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
         if (( shard_counts[shard] == 0 )); then
             continue
@@ -1760,6 +1769,7 @@ function run_plan_race_shards(){
                     go tool test2json -t -p "${plan_package_import}" \
                     "${plan_test_binary}" -test.short=true -test.v=test2json \
                     -test.paniconexit0=true -test.count=1 \
+                    -test.parallel="${PLAN_TEST_PARALLEL}" \
                     -test.timeout="${UT_TIMEOUT}m" \
                     -test.run="${shard_patterns[shard]}"
             ) > "${shard_reports[shard]}" 2>> "${UT_STDERR}" &
@@ -3260,11 +3270,12 @@ function ut_summary(){
 }
 
 function post_test(){
-    local aoe_test=$(find  pkg/vm/engine/aoe/test/* -type d -maxdepth 0)
-    for dir in ${aoe_test[@]}; do
+    local dir=""
+    while IFS= read -r dir; do
+        [[ -n "${dir}" ]] || continue
         logger "WRN" "Remove $dir"
-        rm -rf $dir
-    done
+        rm -rf -- "${dir}"
+    done < <(find pkg/vm/engine/aoe/test -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null)
 }
 
 if [[ 'SCA' == $TEST_TYPE ]]; then
