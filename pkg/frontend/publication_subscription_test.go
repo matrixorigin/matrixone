@@ -132,6 +132,22 @@ func Test_doCreatePublication(t *testing.T) {
 		return []interface{}{er}
 	}
 
+	mockedPublicationRelations := func(ctrl *gomock.Controller) []interface{} {
+		er := mock_frontend.NewMockExecResult(ctrl)
+		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("t1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return(catalog.SystemOrdinaryRel, nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(0)).Return("t2", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(1)).Return(catalog.SystemOrdinaryRel, nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(3)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(4)).Return(uint64(0), nil).AnyTimes()
+		return []interface{}{er}
+	}
+
 	mockedSubInfoResults := func(ctrl *gomock.Controller) []interface{} {
 		er := mock_frontend.NewMockExecResult(ctrl)
 		er.EXPECT().GetRowCount().Return(uint64(0)).AnyTimes()
@@ -164,6 +180,12 @@ func Test_doCreatePublication(t *testing.T) {
 		// show tables
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedTblResults(ctrl))
+		// publication view scope relations
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedPublicationRelations(ctrl))
+		// publication view scope stability re-read
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedPublicationRelations(ctrl))
 		// insert into mo_pubs
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		// getSubInfosFromPub
@@ -177,7 +199,7 @@ func Test_doCreatePublication(t *testing.T) {
 			return
 		}
 
-		err = createPublication(ctx, bh, stmts[0].(*tree.CreatePublication))
+		err = createPublication(ctx, bh, stmts[0].(*tree.CreatePublication), int64(1))
 		convey.So(err, convey.ShouldBeNil)
 	})
 }
@@ -198,7 +220,7 @@ func TestCreatePublicationRejectsMissingContextAccount(t *testing.T) {
 	require.NoError(t, err)
 	defer freeStatements(stmts)
 
-	err = createPublication(ctx, bh, stmts[0].(*tree.CreatePublication))
+	err = createPublication(ctx, bh, stmts[0].(*tree.CreatePublication), int64(1))
 	require.ErrorContains(t, err, "account 99 does not exist")
 }
 
@@ -228,6 +250,14 @@ func newCreatePublicationIfNotExistsTest(
 	bh.sql2result["show tables from `db1`"] = newMrsForRestoreStringRows(
 		[]string{"Tables_in_db1"},
 		[][]interface{}{{"t1"}},
+	)
+	bh.sql2result[publicationRelationsSQL("db1", sysAccountID)] = newMrsForRestoreStringRows(
+		[]string{"relname", "relkind", "viewdef", "rel_id", "rel_version"},
+		[][]interface{}{{"t1", catalog.SystemOrdinaryRel, "", uint64(0), uint64(0)}},
+	)
+	bh.sql2result[publicationRelationsSQL("db1", 1)] = newMrsForRestoreStringRows(
+		[]string{"relname", "relkind", "viewdef", "rel_id", "rel_version"},
+		[][]interface{}{{"t1", catalog.SystemOrdinaryRel, "", uint64(0), uint64(0)}},
 	)
 
 	columnCheckSQL := "select 1 from mo_catalog.mo_columns where account_id = 0 and att_database = 'mo_catalog' and att_relname = 'mo_pubs' and attname = 'account_name'"
@@ -262,8 +292,8 @@ func newCreatePublicationIfNotExistsTest(
 func TestCreatePublicationIfNotExistsSkipsExistingPublication(t *testing.T) {
 	bh, ctx, stmt := newCreatePublicationIfNotExistsTest(t, true, true)
 
-	require.NoError(t, createPublication(ctx, bh, stmt))
-	require.Len(t, bh.executedSQLs, 5) // account, database, tables, schema and publication reads
+	require.NoError(t, createPublication(ctx, bh, stmt, int64(1)))
+	require.Len(t, bh.executedSQLs, 7) // account, database, tables, relations, stability relations, schema and publication reads
 	for _, sql := range bh.executedSQLs {
 		require.NotContains(t, sql, "insert into mo_catalog.mo_pubs")
 		require.NotContains(t, sql, "mo_catalog.mo_subs")
@@ -301,7 +331,7 @@ func TestCreatePublicationIfNotExistsUsesPublisherAccount(t *testing.T) {
 					bh.sql2err[sql] = insertErr
 				}
 			}
-			err = createPublication(ctx, bh, stmt)
+			err = createPublication(ctx, bh, stmt, int64(1))
 			if existing {
 				require.NoError(t, err)
 				require.Zero(t, inserts)
@@ -324,7 +354,7 @@ func TestCreatePublicationIfNotExistsLegacyCatalog(t *testing.T) {
 		[]string{"account_id", "pub_name", "database_name", "database_id", "table_list", "account_list", "created_time", "update_time", "owner", "creator", "comment"},
 		[][]interface{}{{int64(sysAccountID), "pub1", "db1", uint64(7), "t1", pubsub.AccountAll, "", nil, uint64(0), uint64(0), "original"}},
 	)
-	require.NoError(t, createPublication(ctx, bh, stmt))
+	require.NoError(t, createPublication(ctx, bh, stmt, int64(1)))
 	require.Contains(t, bh.executedSQLs, legacySQL)
 	for _, sql := range bh.executedSQLs {
 		require.NotContains(t, sql, "insert into")
@@ -482,7 +512,7 @@ func Test_showTablesFromDbQuotesDatabaseName(t *testing.T) {
 	}
 }
 
-func TestGenPubTablesStrDeduplicatesExplicitTables(t *testing.T) {
+func TestResolvePubTableNamesDeduplicatesExplicitTables(t *testing.T) {
 	ctx := context.Background()
 	statements, err := mysql.Parse(ctx,
 		"create publication pub database db table t2, t1, t2 account all", 1)
@@ -501,10 +531,23 @@ func TestGenPubTablesStrDeduplicatesExplicitTables(t *testing.T) {
 	bh.init()
 	bh.sql2result[showTablesSQL] = result
 
-	pubTables, err := genPubTablesStr(ctx, bh, "db", statements[0].(*tree.CreatePublication).Table)
+	tableNames, err := resolvePubTableNames(ctx, bh, "db", statements[0].(*tree.CreatePublication).Table)
 	require.NoError(t, err)
-	require.Equal(t, "t1,t2", pubTables)
+	require.Equal(t, []string{"t1", "t2"}, tableNames)
 	require.Equal(t, []string{showTablesSQL}, bh.executedSQLs)
+}
+
+func TestPubTablesAllSelected(t *testing.T) {
+	ctx := context.Background()
+	// TABLE * is not producible by the current grammar; the guard keeps the
+	// legacy whole-database meaning of a sole "*" table entry.
+	all := tree.TableNames{{ObjectName: pubsub.TableAll}}
+	require.True(t, pubTablesAllSelected(all))
+
+	missingTable, err := mysql.Parse(ctx, "create publication pub database db table t1 account all", 1)
+	require.NoError(t, err)
+	defer freeStatements(missingTable)
+	require.False(t, pubTablesAllSelected(missingTable[0].(*tree.CreatePublication).Table))
 }
 
 func Test_doAlterPublication(t *testing.T) {
@@ -562,6 +605,22 @@ func Test_doAlterPublication(t *testing.T) {
 		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("t1", nil).AnyTimes()
 		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(0)).Return("t2", nil).AnyTimes()
+		return []interface{}{er}
+	}
+
+	mockedAlterPublicationRelations := func(ctrl *gomock.Controller) []interface{} {
+		er := mock_frontend.NewMockExecResult(ctrl)
+		er.EXPECT().GetRowCount().Return(uint64(2)).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("t1", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return(catalog.SystemOrdinaryRel, nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(3)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(0)).Return("t2", nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(1)).Return(catalog.SystemOrdinaryRel, nil).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), uint64(1), uint64(2)).Return("", nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(3)).Return(uint64(0), nil).AnyTimes()
+		er.EXPECT().GetUint64(gomock.Any(), uint64(1), uint64(4)).Return(uint64(0), nil).AnyTimes()
 		return []interface{}{er}
 	}
 
@@ -633,6 +692,12 @@ func Test_doAlterPublication(t *testing.T) {
 		// show tables
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedTblResults(ctrl))
+		// publication view scope relations
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedAlterPublicationRelations(ctrl))
+		// publication view scope stability re-read
+		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
+		bh.EXPECT().GetExecResultSet().Return(mockedAlterPublicationRelations(ctrl))
 		// getSubInfosFromPub
 		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
 		bh.EXPECT().GetExecResultSet().Return(mockedSubInfoResults(ctrl))
@@ -902,6 +967,10 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 					[]string{"Tables_in_" + test.tableLookupDB},
 					[][]interface{}{{"t"}},
 				)
+				bh.sql2result[publicationRelationsSQL(test.tableLookupDB, 1)] = newMrsForRestoreStringRows(
+					[]string{"relname", "relkind", "viewdef", "rel_id", "rel_version"},
+					[][]interface{}{{"t", catalog.SystemOrdinaryRel, "", uint64(0), uint64(0)}},
+				)
 			}
 			bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub1'"] =
 				newMrsForRestoreStringRows(
@@ -957,6 +1026,16 @@ func TestDoAlterPublicationDataBranchIdentityCapability(t *testing.T) {
 					}
 				}
 				require.True(t, foundTableLookup)
+				// The view-scope relation read stays in the same source
+				// account context as the table list read.
+				foundRelationLookup := false
+				for i, sql := range bh.executedSQLs {
+					if sql == publicationRelationsSQL(test.tableLookupDB, test.wantTableAccount) {
+						foundRelationLookup = true
+						require.Equal(t, test.wantTableAccount, bh.executionAccountIDs[i])
+					}
+				}
+				require.True(t, foundRelationLookup)
 			}
 		})
 	}
@@ -2799,4 +2878,36 @@ func Test_getSubscriptionMeta_ErrorPropagation(t *testing.T) {
 		require.NoError(t, err)
 		require.Nil(t, sub)
 	})
+}
+
+// TestSplitPublicationPersistedTableList proves the persisted membership
+// split preserves identifier bytes end to end: publication and subscription
+// statements accept quoted identifiers with leading or trailing spaces, the
+// list is their exact comma-joined byte sequence, and the subscriber's
+// InSubMetaTables compares the exact names - so a trimmed split would
+// validate a name the publisher never published (the round-15 review's
+// ' t' becomes 't' and admission fails 'table t not exists') or silently
+// inspect a same-named trimmed counterpart. Only genuinely empty segments
+// are dropped.
+func TestSplitPublicationPersistedTableList(t *testing.T) {
+	require.Equal(t, []string{"base", "v_only"},
+		splitPublicationPersistedTableList("base,v_only"))
+
+	// quoted bytes survive untouched, in any position
+	require.Equal(t, []string{" t", " v"},
+		splitPublicationPersistedTableList(strings.Join([]string{" t", " v"}, pubsub.Sep)))
+	require.Equal(t, []string{" t"},
+		splitPublicationPersistedTableList(" t"))
+	require.Equal(t, []string{"v_only", "  spaced  view"},
+		splitPublicationPersistedTableList("v_only"+","+"  spaced  view"))
+	// the split is the exact inverse of the join that persists the list
+	names := []string{" t", "plain", "  spaced"}
+	require.Equal(t, names,
+		splitPublicationPersistedTableList(strings.Join(names, pubsub.Sep)))
+	// a trailing counterpart of the same name stays distinct
+	require.Equal(t, []string{"t", " t", "t "},
+		splitPublicationPersistedTableList("t"+","+" t"+","+"t "))
+	// genuinely empty segments are dropped without touching any byte
+	require.Equal(t, []string{"base"}, splitPublicationPersistedTableList("base,,"))
+	require.Empty(t, splitPublicationPersistedTableList(""))
 }

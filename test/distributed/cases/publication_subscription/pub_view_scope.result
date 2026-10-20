@@ -1,0 +1,1329 @@
+drop account if exists vw01;
+drop account if exists vw02;
+drop account if exists vw03;
+drop account if exists vw04;
+drop account if exists vw05;
+drop database if exists view_pub_db;
+create database view_pub_db;
+use view_pub_db;
+create table base(id int primary key, v int);
+insert into base values (1,10),(2,20);
+create view v_only as select id,v from base where v >= 10;
+create table t1(a int primary key);
+insert into t1 values (1),(2);
+create table t2(a int primary key);
+insert into t2 values (1),(3);
+create view v_join as select t1.a from t1 join t2 on t1.a = t2.a;
+create view v_nested as select a from v_join where a > 0;
+create view v_const as select 1 as one;
+create view v_account as select account_name from mo_catalog.mo_account;
+drop publication if exists p_all_bad;
+create publication p_all_bad database view_pub_db table v_account account all;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_account': system relation 'mo_catalog.mo_account' is not available to its subscriber accounts
+create view v_alluser as select user_name from mo_catalog.mo_user;
+drop publication if exists p_alluser;
+create publication p_alluser database view_pub_db table v_alluser account all;
+create account vw01 admin_name = 'test_account' identified by '111';
+drop database if exists s_alluser;
+create database s_alluser from sys publication p_alluser;
+select * from s_alluser.v_alluser order by user_name;
+➤ user_name[12,300,0]  𝄀
+dump  𝄀
+root
+drop database s_alluser;
+drop publication if exists p_view;
+create publication p_view database view_pub_db table v_only account vw01;
+internal error: table-level publication for database 'view_pub_db' must include table 'base' required by view 'v_only'
+select pub_name, database_name, table_list from mo_catalog.mo_pubs where account_name = 'sys' and database_name = 'view_pub_db' order by pub_name;
+➤ pub_name[12,64,0]  ¦  database_name[12,5000,0]  ¦  table_list[-1,16383,0]  𝄀
+p_alluser  ¦  view_pub_db  ¦  v_alluser
+create publication p_view database view_pub_db table base,v_only account vw01;
+select pub_name, database_name, table_list from mo_catalog.mo_pubs where account_name = 'sys' and database_name = 'view_pub_db' order by pub_name;
+➤ pub_name[12,64,0]  ¦  database_name[12,5000,0]  ¦  table_list[-1,16383,0]  𝄀
+p_alluser  ¦  view_pub_db  ¦  v_alluser  𝄀
+p_view  ¦  view_pub_db  ¦  base,v_only
+drop database if exists s_view;
+create database s_view from sys publication p_view;
+show create view s_view.v_only;
+➤ View[12,6,0]  ¦  Create View[12,58,0]  ¦  character_set_client[12,7,0]  ¦  collation_connection[12,18,0]  𝄀
+v_only  ¦  create view v_only as select id,v from base where v >= 10;  ¦  utf8mb4  ¦  utf8mb4_general_ci
+select count(*), sum(v) from s_view.v_only;
+➤ count(*)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+2  ¦  30
+select * from s_view.t1;
+SQL parser error: table "t1" does not exist
+drop database s_view;
+drop publication if exists p_db_level;
+create publication p_db_level database view_pub_db account vw01;
+drop database if exists s_db_level;
+create database s_db_level from sys publication p_db_level;
+select count(*), sum(v) from s_db_level.v_only;
+➤ count(*)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+2  ¦  30
+drop database s_db_level;
+drop publication if exists p_nested_bad;
+create publication p_nested_bad database view_pub_db table t1,v_nested account vw01;
+internal error: table-level publication for database 'view_pub_db' must include table 'v_join' required by view 'v_nested'
+drop publication if exists p_join_bad;
+create publication p_join_bad database view_pub_db table t1,v_join account vw01;
+internal error: table-level publication for database 'view_pub_db' must include table 't2' required by view 'v_join'
+create database other_db_27767;
+use other_db_27767;
+create table src(a int);
+use view_pub_db;
+create view v_other as select a from other_db_27767.src;
+drop publication if exists p_other_bad;
+create publication p_other_bad database view_pub_db table v_other account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_other': it depends on relation 'other_db_27767.src' outside the publication database
+drop view v_other;
+drop publication if exists p_account_bad;
+create publication p_account_bad database view_pub_db table v_account account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_account': system relation 'mo_catalog.mo_account' is not available to its subscriber accounts
+drop view v_account;
+create view v_sysuser as select user_name from mo_catalog.mo_user;
+drop publication if exists p_sysuser;
+create publication p_sysuser database view_pub_db table v_sysuser account vw01;
+drop database if exists s_sysuser;
+create database s_sysuser from sys publication p_sysuser;
+select * from s_sysuser.v_sysuser order by user_name;
+➤ user_name[12,300,0]  𝄀
+dump  𝄀
+root
+drop database s_sysuser;
+create snapshot sp_pub_view_scope for account sys;
+create view v_snap as select a from t1 {snapshot = 'sp_pub_view_scope'};
+drop publication if exists p_snap_bad;
+create publication p_snap_bad database view_pub_db table t1,v_snap account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_snap': it depends on relation 'view_pub_db.t1' bound to another account, subscription, or snapshot
+drop view v_snap;
+drop snapshot sp_pub_view_scope;
+drop publication if exists p_full;
+create publication p_full database view_pub_db table t1,t2,v_join,v_nested account vw01;
+drop database if exists s_full;
+create database s_full from sys publication p_full;
+select count(*) as nested_count from s_full.v_nested;
+➤ nested_count[-5,64,0]  𝄀
+1
+select count(*) as join_count from s_full.v_join;
+➤ join_count[-5,64,0]  𝄀
+1
+drop database s_full;
+drop publication if exists p_const;
+create publication p_const database view_pub_db table v_const account vw01;
+drop database if exists s_const;
+create database s_const from sys publication p_const;
+select * from s_const.v_const;
+➤ one[-5,64,0]  𝄀
+1
+drop database s_const;
+create sequence sq_scope as bigint increment by 1 minvalue 1 maxvalue 10000 start with 5 no cycle;
+create view v_seq as select nextval('sq_scope') as n;
+create view v_seq_outer as select n from v_seq;
+drop publication if exists p_seq_bad;
+create publication p_seq_bad database view_pub_db table v_seq account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_seq': it calls sequence function 'nextval', and sequence objects do not resolve through subscriptions
+drop publication if exists p_seq_nested_bad;
+create publication p_seq_nested_bad database view_pub_db table v_seq,v_seq_outer account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_seq': it calls sequence function 'nextval', and sequence objects do not resolve through subscriptions
+select pub_name from mo_catalog.mo_pubs where pub_name in ('p_seq_bad','p_seq_nested_bad') order by pub_name;
+➤ pub_name[12,64,0]
+select nextval('sq_scope') as first_allocation;
+➤ first_allocation[12,65535,0]  𝄀
+5
+drop publication if exists p_const_ctl;
+create publication p_const_ctl database view_pub_db table v_const account vw01;
+drop database if exists s_const_ctl;
+create database s_const_ctl from sys publication p_const_ctl;
+select * from s_const_ctl.v_const;
+➤ one[-5,64,0]  𝄀
+1
+drop database s_const_ctl;
+drop publication p_const_ctl;
+drop view v_seq_outer;
+drop view v_seq;
+drop sequence sq_scope;
+create view v_unusedcte as with unused as (select id from base) select 1 as one;
+drop publication if exists p_unusedcte;
+create publication p_unusedcte database view_pub_db table v_unusedcte account vw01;
+drop database if exists s_unusedcte;
+create database s_unusedcte from sys publication p_unusedcte;
+select * from s_unusedcte.v_unusedcte;
+➤ one[-5,64,0]  𝄀
+1
+drop database s_unusedcte;
+create view v_usedcte as with used as (select id from base) select count(*) as c from used;
+drop publication if exists p_usedcte_bad;
+create publication p_usedcte_bad database view_pub_db table v_usedcte account vw01;
+internal error: table-level publication for database 'view_pub_db' must include table 'base' required by view 'v_usedcte'
+drop publication if exists p_usedcte;
+create publication p_usedcte database view_pub_db table base,v_usedcte account vw01;
+drop database if exists s_usedcte;
+create database s_usedcte from sys publication p_usedcte;
+select * from s_usedcte.v_usedcte;
+➤ c[-5,64,0]  𝄀
+2
+drop database s_usedcte;
+create view v_fwd as with a as (select id from base), base as (select 1 as id) select id from a;
+drop publication if exists p_fwd_bad;
+create publication p_fwd_bad database view_pub_db table v_fwd account vw01;
+internal error: table-level publication for database 'view_pub_db' must include table 'base' required by view 'v_fwd'
+drop publication if exists p_fwd;
+create publication p_fwd database view_pub_db table base,v_fwd account vw01;
+drop database if exists s_fwd;
+create database s_fwd from sys publication p_fwd;
+select * from s_fwd.v_fwd order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+drop database s_fwd;
+create view v_nestedcte as select * from (with unused as (select id from base) select 1 as one) as d;
+drop publication if exists p_nestedcte;
+create publication p_nestedcte database view_pub_db table v_nestedcte account vw01;
+drop database if exists s_nestedcte;
+create database s_nestedcte from sys publication p_nestedcte;
+select * from s_nestedcte.v_nestedcte;
+➤ one[-5,64,0]  𝄀
+1
+drop database s_nestedcte;
+create view v_nestedcte2 as select * from (with used as (select id from base) select * from used) as d;
+drop publication if exists p_nestedcte2_bad;
+create publication p_nestedcte2_bad database view_pub_db table v_nestedcte2 account vw01;
+internal error: table-level publication for database 'view_pub_db' must include table 'base' required by view 'v_nestedcte2'
+drop publication if exists p_nestedcte2;
+create publication p_nestedcte2 database view_pub_db table base,v_nestedcte2 account vw01;
+drop database if exists s_nestedcte2;
+create database s_nestedcte2 from sys publication p_nestedcte2;
+select * from s_nestedcte2.v_nestedcte2 order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+drop database s_nestedcte2;
+create table src(id int);
+insert into src values (4);
+create view v_mask as with src as (select 9 as id) select * from (with a as (select id from src), src as (select 1 as id) select id from a) as d;
+drop publication if exists p_mask_bad;
+create publication p_mask_bad database view_pub_db table v_mask account vw01;
+internal error: table-level publication for database 'view_pub_db' must include table 'src' required by view 'v_mask'
+drop publication if exists p_mask;
+create publication p_mask database view_pub_db table src,v_mask account vw01;
+drop database if exists s_mask;
+create database s_mask from sys publication p_mask;
+select * from s_mask.v_mask;
+➤ id[4,32,0]  𝄀
+4
+drop database s_mask;
+create view v_dualcte as with dual as (select id from base) select 1 as one from dual;
+drop publication if exists p_dualcte;
+create publication p_dualcte database view_pub_db table v_dualcte account vw01;
+drop database if exists s_dualcte;
+create database s_dualcte from sys publication p_dualcte;
+select * from s_dualcte.v_dualcte;
+➤ one[-5,64,0]  𝄀
+1
+drop database s_dualcte;
+create table `dual`(id int);
+insert into `dual` values (3);
+create view v_dualtab as select id from view_pub_db.`dual`;
+drop publication if exists p_dualtab_bad;
+create publication p_dualtab_bad database view_pub_db table v_dualtab account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_dualtab': view references relation 'view_pub_db.dual' with a qualified name, which its subscriber accounts cannot resolve
+drop publication if exists p_dualtab;
+create publication p_dualtab database view_pub_db table `dual`,v_dualtab account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_dualtab': view references relation 'view_pub_db.dual' with a qualified name, which its subscriber accounts cannot resolve
+select pub_name, database_name, table_list from mo_catalog.mo_pubs where account_name = 'sys' and pub_name = 'p_dualtab' order by pub_name;
+➤ pub_name[12,64,0]  ¦  database_name[12,5000,0]  ¦  table_list[-1,16383,0]
+create table dualctl(id int);
+insert into dualctl values (3);
+create view v_dualtab2 as select id from dualctl;
+drop publication if exists p_dualtab2;
+create publication p_dualtab2 database view_pub_db table dualctl,v_dualtab2 account vw01;
+drop database if exists s_dualtab2;
+create database s_dualtab2 from sys publication p_dualtab2;
+select * from s_dualtab2.v_dualtab2;
+➤ id[4,32,0]  𝄀
+3
+drop database s_dualtab2;
+drop publication if exists p_dup;
+create publication p_dup database view_pub_db table v_only,v_only,base account vw01;
+select pub_name, database_name, table_list from mo_catalog.mo_pubs where account_name = 'sys' and database_name = 'view_pub_db' order by pub_name;
+➤ pub_name[12,64,0]  ¦  database_name[12,5000,0]  ¦  table_list[-1,16383,0]  𝄀
+p_alluser  ¦  view_pub_db  ¦  v_alluser  𝄀
+p_const  ¦  view_pub_db  ¦  v_const  𝄀
+p_db_level  ¦  view_pub_db  ¦  *  𝄀
+p_dualcte  ¦  view_pub_db  ¦  v_dualcte  𝄀
+p_dualtab2  ¦  view_pub_db  ¦  dualctl,v_dualtab2  𝄀
+p_dup  ¦  view_pub_db  ¦  base,v_only  𝄀
+p_full  ¦  view_pub_db  ¦  t1,t2,v_join,v_nested  𝄀
+p_fwd  ¦  view_pub_db  ¦  base,v_fwd  𝄀
+p_mask  ¦  view_pub_db  ¦  src,v_mask  𝄀
+p_nestedcte  ¦  view_pub_db  ¦  v_nestedcte  𝄀
+p_nestedcte2  ¦  view_pub_db  ¦  base,v_nestedcte2  𝄀
+p_sysuser  ¦  view_pub_db  ¦  v_sysuser  𝄀
+p_unusedcte  ¦  view_pub_db  ¦  v_unusedcte  𝄀
+p_usedcte  ¦  view_pub_db  ¦  base,v_usedcte  𝄀
+p_view  ¦  view_pub_db  ¦  base,v_only
+drop publication p_dup;
+drop publication if exists p_narrow;
+create publication p_narrow database view_pub_db table t1,t2,v_join,v_nested account vw01;
+drop database if exists s_narrow;
+create database s_narrow from sys publication p_narrow;
+select count(*) as nested_count from s_narrow.v_nested;
+➤ nested_count[-5,64,0]  𝄀
+1
+alter publication p_narrow table t1,v_nested;
+internal error: table-level publication for database 'view_pub_db' must include table 'v_join' required by view 'v_nested'
+select pub_name, database_name, table_list from mo_catalog.mo_pubs where account_name = 'sys' and pub_name = 'p_narrow' order by pub_name;
+➤ pub_name[12,64,0]  ¦  database_name[12,5000,0]  ¦  table_list[-1,16383,0]  𝄀
+p_narrow  ¦  view_pub_db  ¦  t1,t2,v_join,v_nested
+select count(*) as nested_count from s_narrow.v_nested;
+➤ nested_count[-5,64,0]  𝄀
+1
+drop database s_narrow;
+create account vw02 admin_name = 'test_account' identified by '111';
+alter publication p_narrow account vw01,vw02;
+select pub_name, account_list from mo_catalog.mo_pubs where account_name = 'sys' and pub_name = 'p_narrow' order by pub_name;
+➤ pub_name[12,64,0]  ¦  account_list[-1,16383,0]  𝄀
+p_narrow  ¦  vw01,vw02
+drop database if exists s_narrow2;
+create database s_narrow2 from sys publication p_narrow;
+select count(*) as nested_count from s_narrow2.v_nested;
+➤ nested_count[-5,64,0]  𝄀
+1
+drop database s_narrow2;
+create database other_view_db;
+use other_view_db;
+create table base(id int primary key, v int);
+insert into base values (3,30);
+alter publication p_view database other_view_db;
+internal error: table 'v_only' not exists
+select pub_name, database_name, table_list from mo_catalog.mo_pubs where account_name = 'sys' and pub_name = 'p_view' order by pub_name;
+➤ pub_name[12,64,0]  ¦  database_name[12,5000,0]  ¦  table_list[-1,16383,0]  𝄀
+p_view  ¦  view_pub_db  ¦  base,v_only
+create view v_only as select id,v from base where v >= 10;
+alter publication p_view database other_view_db;
+select pub_name, database_name, table_list from mo_catalog.mo_pubs where account_name = 'sys' and pub_name = 'p_view' order by pub_name;
+➤ pub_name[12,64,0]  ¦  database_name[12,5000,0]  ¦  table_list[-1,16383,0]  𝄀
+p_view  ¦  other_view_db  ¦  base,v_only
+drop database if exists s_switch;
+create database s_switch from sys publication p_view;
+select count(*), sum(v) from s_switch.v_only;
+➤ count(*)[-5,64,0]  ¦  sum(v)[-5,64,0]  𝄀
+1  ¦  30
+drop database s_switch;
+drop publication if exists p_all_good;
+create publication p_all_good database view_pub_db table v_sysuser account all;
+create account vw03 admin_name = 'test_account' identified by '111';
+drop database if exists s_all_good;
+create database s_all_good from sys publication p_all_good;
+select * from s_all_good.v_sysuser order by user_name;
+➤ user_name[12,300,0]  𝄀
+dump  𝄀
+root
+drop database s_all_good;
+drop database if exists vw01_pub_db;
+create database vw01_pub_db;
+use vw01_pub_db;
+create view v_stmt as select count(*) as c from system.statement_info where 1 = 0;
+drop publication if exists p_g2g;
+create publication p_g2g database vw01_pub_db table v_stmt account vw03;
+drop database if exists s_g2g;
+create database s_g2g from vw01 publication p_g2g;
+select * from s_g2g.v_stmt;
+➤ c[-5,64,0]  𝄀
+0
+drop database s_g2g;
+use view_pub_db;
+create table rbase(id int primary key);
+create view v_rebind as select id from rbase;
+drop table rbase;
+create table rbase(other int);
+insert into rbase values (42);
+drop publication if exists p_rebind;
+create publication p_rebind database view_pub_db table rbase,v_rebind account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_rebind': its stored definition no longer binds the published relations: invalid input: column id does not exist
+select pub_name, database_name, table_list, account_list from mo_catalog.mo_pubs where account_name = 'sys' and pub_name = 'p_rebind' order by pub_name;
+➤ pub_name[12,64,0]  ¦  database_name[12,5000,0]  ¦  table_list[-1,16383,0]  ¦  account_list[-1,16383,0]
+drop view v_rebind;
+create view v_rebind as select other from rbase;
+create publication p_rebind database view_pub_db table rbase,v_rebind account vw01;
+drop database if exists s_rebind;
+create database s_rebind from sys publication p_rebind;
+select other from s_rebind.v_rebind;
+➤ other[4,32,0]  𝄀
+42
+drop database s_rebind;
+create table rbase2(id int primary key, pad int);
+insert into rbase2 values (1, 7);
+create view v_alive as select id from rbase2;
+drop publication if exists p_alive;
+create publication p_alive database view_pub_db table rbase2,v_alive account vw02;
+alter table rbase2 drop column id;
+alter publication p_alive account add vw03;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_alive': its stored definition no longer binds the published relations: invalid input: column id does not exist
+select pub_name, account_list from mo_catalog.mo_pubs where account_name = 'sys' and pub_name = 'p_alive' order by pub_name;
+➤ pub_name[12,64,0]  ¦  account_list[-1,16383,0]  𝄀
+p_alive  ¦  vw02
+drop database if exists s_alive;
+create database s_alive from sys publication p_alive;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_alive': its stored definition no longer binds the published relations: invalid input: column id does not exist
+alter view v_alive as select pad from rbase2;
+alter publication p_alive account add vw03;
+create database s_alive from sys publication p_alive;
+select pad from s_alive.v_alive;
+➤ pad[4,32,0]  𝄀
+7
+drop database s_alive;
+drop database if exists s_alive3;
+create database s_alive3 from sys publication p_alive;
+select pad from s_alive3.v_alive;
+➤ pad[4,32,0]  𝄀
+7
+drop database s_alive3;
+use view_pub_db;
+create table healthy(id int);
+insert into healthy values (7);
+create table other(id int);
+create view v_late as select id from base;
+drop publication if exists p_late;
+create publication p_late database view_pub_db table healthy,base,v_late account vw01,vw02,vw03;
+drop database if exists s_late;
+create database s_late from sys publication p_late;
+select * from s_late.healthy;
+➤ id[4,32,0]  𝄀
+7
+select * from s_late.v_late order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+drop database if exists s_late2;
+create database s_late2 from sys publication p_late;
+select * from s_late2.healthy;
+➤ id[4,32,0]  𝄀
+7
+select * from s_late2.v_late order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+alter view v_late as select id from other;
+select * from s_late.healthy;
+➤ id[4,32,0]  𝄀
+7
+select * from s_late.v_late order by id;
+SQL parser error: table "other" does not exist
+drop database if exists s_late3;
+create database s_late3 from sys publication p_late;
+internal error: table-level publication for database 'view_pub_db' must include table 'other' required by view 'v_late'
+alter publication p_late account all;
+internal error: table-level publication for database 'view_pub_db' must include table 'other' required by view 'v_late'
+select pub_name, account_list from mo_catalog.mo_pubs where account_name = 'sys' and pub_name = 'p_late' order by pub_name;
+➤ pub_name[12,64,0]  ¦  account_list[-1,16383,0]  𝄀
+p_late  ¦  vw01,vw02,vw03
+alter publication p_late account drop vw01;
+select pub_name, account_list from mo_catalog.mo_pubs where account_name = 'sys' and pub_name = 'p_late' order by pub_name;
+➤ pub_name[12,64,0]  ¦  account_list[-1,16383,0]  𝄀
+p_late  ¦  vw02,vw03
+select * from s_late.healthy;
+internal error: the account vw01 is not allowed to subscribe the publication p_late
+drop database s_late;
+select * from s_late2.healthy;
+➤ id[4,32,0]  𝄀
+7
+drop database s_late2;
+drop database if exists fsrc2_db;
+create database fsrc2_db;
+create table fsrc2_db.base(id int primary key);
+insert into fsrc2_db.base values (5);
+use fsrc2_db;
+create view v_x as select id from base;
+drop publication if exists p_fsrc;
+create publication p_fsrc database fsrc2_db table base,v_x account vw02,vw03;
+create database fsrc2_db;
+create table fsrc2_db.decoy(id int);
+create table fsrc2_db.base(id int, w int);
+create index idx_decoy on fsrc2_db.base(w);
+drop database if exists s_fsrc;
+create database s_fsrc from sys publication p_fsrc;
+select id from s_fsrc.v_x;
+➤ id[4,32,0]  𝄀
+5
+select id from s_fsrc.base;
+➤ id[4,32,0]  𝄀
+5
+select index_name, column_name, non_unique from information_schema.statistics
+where table_schema = 's_fsrc' and table_name = 'base' order by index_name;
+➤ index_name[12,64,0]  ¦  column_name[12,256,0]  ¦  non_unique[-5,64,0]  𝄀
+PRIMARY  ¦  id  ¦  0
+select count(*) as decoy_index_rows from information_schema.statistics
+where table_schema = 's_fsrc' and table_name = 'base' and index_name = 'idx_decoy';
+➤ decoy_index_rows[-5,64,0]  𝄀
+0
+drop database s_fsrc;
+drop publication if exists p_fsrc;
+drop database fsrc2_db;
+drop database fsrc2_db;
+drop database if exists fsrc3_db;
+create database fsrc3_db;
+create table fsrc3_db.secure(id int primary key);
+insert into fsrc3_db.secure values (7);
+drop publication if exists p_hij;
+create publication p_hij database fsrc3_db table secure account vw02,vw01;
+-- @regex("internal error: account [0-9]+ cannot publish database 'fsrc3_db' owned by account [0-9]+: a foreign source may be published by the sys account, or to the owner account alone", true)
+internal error: account 3 cannot publish database 'fsrc3_db' owned by account 2: a foreign source may be published by the sys account, or to the owner account alone
+select pub_name from mo_catalog.mo_pubs where pub_name = 'p_hij' order by pub_name;
+➤ pub_name[12,64,0]
+drop database if exists s_hij;
+create database s_hij from vw03 publication p_hij;
+internal error: there is no publication p_hij
+create publication p_fsrc3 database fsrc3_db table secure account vw02,vw01;
+drop database if exists s_fsrc3;
+create database s_fsrc3 from sys publication p_fsrc3;
+select id from s_fsrc3.secure;
+➤ id[4,32,0]  𝄀
+7
+drop database s_fsrc3;
+drop publication p_fsrc3;
+drop publication if exists p_back;
+create publication p_back database fsrc3_db table secure account vw02;
+drop database if exists s_back;
+create database s_back from vw03 publication p_back;
+select id from s_back.secure;
+➤ id[4,32,0]  𝄀
+7
+drop database s_back;
+drop publication p_back;
+drop database fsrc3_db;
+use view_pub_db;
+create function f27767priv() returns int language sql as 'select 7';
+create view v_udfp as select f27767priv() as n;
+drop publication if exists p_udf_bad;
+create publication p_udf_bad database view_pub_db table v_udfp account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_udfp': it calls user-defined function 'f27767priv', and user-defined functions do not resolve through subscriptions
+select pub_name from mo_catalog.mo_pubs where pub_name = 'p_udf_bad' order by pub_name;
+➤ pub_name[12,64,0]
+drop database if exists s_udf_bad;
+create database s_udf_bad from sys publication p_udf_bad;
+internal error: there is no publication p_udf_bad
+drop database if exists sub_udf_db;
+create database sub_udf_db;
+use sub_udf_db;
+create function f27767priv() returns int language sql as 'select 70';
+select f27767priv();
+➤ f27767priv()[-5,64,0]  𝄀
+70
+create publication p_udf_bad database view_pub_db table v_udfp account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_udfp': it calls user-defined function 'f27767priv', and user-defined functions do not resolve through subscriptions
+select pub_name from mo_catalog.mo_pubs where pub_name = 'p_udf_bad' order by pub_name;
+➤ pub_name[12,64,0]
+create view v_absbi as select abs(-7) as y;
+drop publication if exists p_absbi;
+create publication p_absbi database view_pub_db table v_absbi account vw01;
+drop database if exists s_absbi;
+create database s_absbi from sys publication p_absbi;
+select y from s_absbi.v_absbi;
+➤ y[-5,64,0]  𝄀
+7
+drop database s_absbi;
+drop publication p_absbi;
+drop view v_absbi;
+drop view v_udfp;
+drop function f27767priv();
+drop database sub_udf_db;
+create table t_rename(a int primary key, b int);
+insert into t_rename values (1,2);
+create view v_ren as select a from t_rename;
+alter table t_rename rename column a to c;
+drop publication if exists p_ren_bad;
+create publication p_ren_bad database view_pub_db table t_rename,v_ren account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_ren': its stored definition no longer binds the published relations: invalid input: column a does not exist
+select pub_name from mo_catalog.mo_pubs where pub_name = 'p_ren_bad' order by pub_name;
+➤ pub_name[12,64,0]
+drop database if exists s_ren_bad;
+create database s_ren_bad from sys publication p_ren_bad;
+internal error: there is no publication p_ren_bad
+alter view v_ren as select c from t_rename;
+drop publication if exists p_ren_fix;
+create publication p_ren_fix database view_pub_db table t_rename,v_ren account vw01;
+drop database if exists s_ren;
+create database s_ren from sys publication p_ren_fix;
+select * from s_ren.v_ren;
+➤ c[4,32,0]  𝄀
+1
+select c, b from s_ren.t_rename;
+➤ c[4,32,0]  ¦  b[4,32,0]  𝄀
+1  ¦  2
+drop database s_ren;
+drop publication p_ren_fix;
+drop view v_ren;
+drop table t_rename;
+drop function if exists abs(int,int);
+create function abs(x int, y int) returns int language sql as 'select 70';
+create view v_abs2 as select abs(-7) as y;
+drop publication if exists p_abs2;
+create publication p_abs2 database view_pub_db table v_abs2 account vw01;
+drop database if exists s_abs2;
+create database s_abs2 from sys publication p_abs2;
+select y from s_abs2.v_abs2;
+➤ y[-5,64,0]  𝄀
+7
+drop database s_abs2;
+drop publication p_abs2;
+drop view v_abs2;
+drop function abs(int,int);
+create table ftab(id int primary key);
+insert into ftab values (1);
+create view v_fi as select enable_fault_injection() as r, id as c from ftab where id >= 1;
+create table ftab2(id int primary key);
+insert into ftab2 values (2);
+create view v_fiw as select id as i from ftab2 where enable_fault_injection();
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop publication if exists p_fi_ok;
+create publication p_fi_ok database view_pub_db table ftab,v_fi account vw01;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop publication if exists p_fi_w;
+create publication p_fi_w database view_pub_db table ftab2,v_fiw account vw01;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+create table bkt(a int primary key);
+create view v_zbrk as select a from bkt;
+alter table bkt rename column a to z;
+drop publication if exists p_fi_bad;
+create publication p_fi_bad database view_pub_db table ftab2,ftab,v_fi,v_fiw,bkt,v_zbrk account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_zbrk': its stored definition no longer binds the published relations: invalid input: column a does not exist
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+select pub_name from mo_catalog.mo_pubs where pub_name = 'p_fi_bad' order by pub_name;
+➤ pub_name[12,64,0]
+create table etab(id int primary key);
+insert into etab values (1),(2),(3),(4);
+create view v_eager as select id as i from etab order by id limit 1 + 1;
+drop publication if exists p_eager_lim;
+create publication p_eager_lim database view_pub_db table etab,v_eager account vw01;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop database if exists s_fi_ok;
+create database s_fi_ok from sys publication p_fi_ok;
+drop database s_fi_ok;
+drop database if exists s_eager;
+create database s_eager from sys publication p_eager_lim;
+select i from s_eager.v_eager order by i;
+➤ i[4,32,0]  𝄀
+1  𝄀
+2
+select count(*) from s_eager.v_eager;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop database s_eager;
+drop publication p_fi_ok;
+drop publication p_fi_w;
+drop publication p_eager_lim;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop view v_zbrk;
+drop table bkt;
+drop view v_eager;
+drop table etab;
+drop view v_fiw;
+drop table ftab2;
+drop view v_fi;
+drop table ftab;
+use view_pub_db;
+create table ctab(id int primary key, d decimal(10,2), f double);
+insert into ctab values (1, 1.50, 2.5);
+create view v_ccast as select id as i from ctab where d = cast('1.50' as char);
+create view v_fdc as select id as i from ctab where d = cast(enable_fault_injection() as char) and id >= 1;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+create view v_ffl as select id as i from ctab where f > cast(enable_fault_injection() as double);
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop publication if exists p_cast_ok;
+create publication p_cast_ok database view_pub_db table ctab,v_ccast,v_fdc,v_ffl account vw01;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+create table bktc(a int primary key);
+create view v_zbrkc as select a from bktc;
+alter table bktc rename column a to z;
+drop publication if exists p_cast_bad;
+create publication p_cast_bad database view_pub_db table bktc,ctab,v_ccast,v_fdc,v_ffl,v_zbrkc account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_zbrkc': its stored definition no longer binds the published relations: invalid input: column a does not exist
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+select pub_name from mo_catalog.mo_pubs where pub_name = 'p_cast_bad' order by pub_name;
+➤ pub_name[12,64,0]
+drop database if exists s_cast;
+create database s_cast from sys publication p_cast_ok;
+select i from s_cast.v_ccast order by i;
+➤ i[4,32,0]  𝄀
+1
+drop database s_cast;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop publication p_cast_ok;
+drop view v_zbrkc;
+drop table bktc;
+drop view v_ccast;
+drop view v_fdc;
+drop view v_ffl;
+drop table ctab;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop database if exists tcdb_27767;
+create database tcdb_27767;
+use tcdb_27767;
+create table base_tc(id int primary key);
+insert into base_tc values (1),(2);
+create view v_tc as select * from table_changes('tcdb_27767','base_tc','','1-0') c;
+create view v_gs as select * from generate_series(1, 3) g;
+create publication p_tc_ok database tcdb_27767 table v_gs account vw02;
+create publication p_tc_bad database tcdb_27767 table base_tc,v_tc account vw02;
+internal error: table-level publication for database 'tcdb_27767' cannot publish view 'v_tc': it reads table function 'table_changes', which resolves its source through the executing account and does not operate through subscriptions
+create view v_ms as select * from metadata_scan('tcdb_27767.base_tc','id') m;
+create view v_ts as select * from table_stats('tcdb_27767.base_tc','get') t;
+create publication p_ms_bad database tcdb_27767 table base_tc,v_ms,v_ts account vw02;
+internal error: table-level publication for database 'tcdb_27767' cannot publish view 'v_ms': it reads table function 'metadata_scan', which resolves its source through the executing account and does not operate through subscriptions
+select pub_name from mo_catalog.mo_pubs where pub_name in ('p_tc_ok','p_tc_bad','p_ms_bad') order by pub_name;
+➤ pub_name[12,64,0]  𝄀
+p_tc_ok
+drop database if exists s_tc_ok;
+create database s_tc_ok from vw01 publication p_tc_ok;
+select * from s_tc_ok.v_gs order by 1;
+➤ result[-5,64,0]  𝄀
+1  𝄀
+2  𝄀
+3
+drop database s_tc_ok;
+drop database if exists s_tc_bad;
+create database s_tc_bad from vw01 publication p_tc_bad;
+internal error: there is no publication p_tc_bad
+drop database if exists s_ms_bad;
+create database s_ms_bad from vw01 publication p_ms_bad;
+internal error: there is no publication p_ms_bad
+drop publication p_tc_ok;
+drop view v_tc;
+drop view v_gs;
+drop view v_ms;
+drop view v_ts;
+drop table base_tc;
+drop database tcdb_27767;
+use view_pub_db;
+create table ltab(id int primary key, n varchar(20));
+insert into ltab values (1, 'abcdefgh');
+create view v_lens as select left(n, 1 + 1) as s2 from ltab;
+create view v_lenl as select left('abc', cast(enable_fault_injection() as signed)) as s;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+create table bktl(a int primary key);
+create view v_zbrkl as select a from bktl;
+alter table bktl rename column a to z;
+drop publication if exists p_len_ok;
+create publication p_len_ok database view_pub_db table ltab,v_lens,v_lenl account vw01;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop publication if exists p_len_bad;
+create publication p_len_bad database view_pub_db table bktl,ltab,v_lenl,v_lens,v_zbrkl account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_zbrkl': its stored definition no longer binds the published relations: invalid input: column a does not exist
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+select pub_name from mo_catalog.mo_pubs where pub_name = 'p_len_bad' order by pub_name;
+➤ pub_name[12,64,0]
+drop database if exists s_len;
+create database s_len from sys publication p_len_ok;
+select s2 from s_len.v_lens;
+➤ s2[12,2,0]  𝄀
+ab
+drop database s_len;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop publication p_len_ok;
+drop view v_zbrkl;
+drop table bktl;
+drop view v_lenl;
+drop view v_lens;
+drop table ltab;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop database if exists qdb_27767;
+create database qdb_27767;
+use qdb_27767;
+create table ` t`(id int primary key);
+insert into ` t` values (1),(2);
+create view ` v` as select id from ` t`;
+create publication p_q_ok database qdb_27767 table ` t`,` v` account vw02;
+create publication p_qt_ok database qdb_27767 table ` t` account vw02;
+alter publication p_q_ok account vw02,vw03;
+select pub_name, account_list from mo_catalog.mo_pubs where pub_name in ('p_q_ok','p_qt_ok') order by pub_name;
+➤ pub_name[12,64,0]  ¦  account_list[-1,16383,0]  𝄀
+p_q_ok  ¦  vw02,vw03  𝄀
+p_qt_ok  ¦  vw02
+drop database if exists s_q_ok;
+drop database if exists s_qt_ok;
+create database s_q_ok from vw01 publication p_q_ok;
+select id from s_q_ok.` t` order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+select id from s_q_ok.` v` order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+create database s_qt_ok from vw01 publication p_qt_ok;
+select id from s_qt_ok.` t` order by id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+drop database s_q_ok;
+drop database s_qt_ok;
+drop publication p_q_ok;
+drop publication p_qt_ok;
+drop view ` v`;
+drop table ` t`;
+drop database qdb_27767;
+create table base_cor(id int primary key, v int);
+insert into base_cor values (1,10),(2,20);
+create view v_corc as select o.id, (with x as (select count(*) as c from base_cor i where i.id = o.id) select c + 1 - 1 from x) as n2 from base_cor o;
+create view v_corl as select o.id, (with x as (select count(*) as c from base_cor i where i.id = o.id) select c + cast(enable_fault_injection() as signed) from x) as n from base_cor o;
+select disable_fault_injection();
+➤ disable_fault_injection()[-7,1,0]  𝄀
+1
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+create table bkt_cor(a int primary key);
+create view v_zcor as select a from bkt_cor;
+alter table bkt_cor rename column a to z;
+drop publication if exists p_cor_ok;
+create publication p_cor_ok database view_pub_db table base_cor,v_corc,v_corl account vw01;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop publication if exists p_cor_bad;
+create publication p_cor_bad database view_pub_db table bkt_cor,base_cor,v_corc,v_corl,v_zcor account vw01;
+internal error: table-level publication for database 'view_pub_db' cannot publish view 'v_zcor': its stored definition no longer binds the published relations: invalid input: column a does not exist
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+select pub_name from mo_catalog.mo_pubs where pub_name = 'p_cor_bad' order by pub_name;
+➤ pub_name[12,64,0]
+drop database if exists s_cor;
+create database s_cor from sys publication p_cor_ok;
+select id, n2 from s_cor.v_corc order by id;
+➤ id[4,32,0]  ¦  n2[-5,64,0]  𝄀
+1  ¦  1  𝄀
+2  ¦  1
+drop database s_cor;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop publication p_cor_ok;
+drop view v_zcor;
+drop table bkt_cor;
+drop view v_corl;
+drop view v_corc;
+drop table base_cor;
+select fault_inject('all.','status_fault_point','') like '%Fault injection is disabled%' as disabled;
+➤ disabled[-7,1,0]  𝄀
+1
+drop database if exists sdb_27767;
+create database sdb_27767;
+use sdb_27767;
+create table base_ss(id int primary key);
+insert into base_ss values (1),(2);
+create view v_smax as select mo_table_col_max('sdb_27767','base_ss','id') as m;
+create view v_srows as select mo_table_rows('sdb_27767','base_ss') as r;
+create table ainc(id bigint auto_increment primary key, v int);
+insert into ainc values (1,10),(2,20);
+create view v_ai as select internal_auto_increment('sdb_27767','ainc') as n from ainc;
+drop database if exists sdb_27767;
+drop database if exists s_ss_ok;
+drop database if exists s_ss_bad;
+drop database if exists s_ai_bad;
+create database sdb_27767;
+use sdb_27767;
+create table base_ss(id int primary key);
+insert into base_ss values (5),(7);
+create table ainc(id bigint auto_increment primary key, v int);
+insert into ainc values (90,7),(95,8);
+create publication p_ss_bad database sdb_27767 table base_ss,v_smax,v_srows account vw02;
+internal error: table-level publication for database 'sdb_27767' cannot publish view 'v_smax': it calls function 'mo_table_col_max', which resolves its source relation through the executing account and does not operate through subscriptions
+create publication p_ss_ok database sdb_27767 table base_ss account vw02;
+create publication p_ai_bad database sdb_27767 table ainc,v_ai account vw02;
+internal error: table-level publication for database 'sdb_27767' cannot publish view 'v_ai': it calls function 'internal_auto_increment', which resolves its source relation through the executing account and does not operate through subscriptions
+select pub_name from mo_catalog.mo_pubs where pub_name in ('p_ss_ok','p_ss_bad','p_ai_bad') order by pub_name;
+➤ pub_name[12,64,0]  𝄀
+p_ss_ok
+create database s_ss_ok from vw01 publication p_ss_ok;
+select count(*) from s_ss_ok.base_ss;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop database s_ss_ok;
+create database s_ss_bad from vw01 publication p_ss_bad;
+internal error: there is no publication p_ss_bad
+create database s_ai_bad from vw01 publication p_ai_bad;
+internal error: there is no publication p_ai_bad
+alter publication p_ss_ok account vw02 table base_ss,v_smax;
+internal error: table-level publication for database 'sdb_27767' cannot publish view 'v_smax': it calls function 'mo_table_col_max', which resolves its source relation through the executing account and does not operate through subscriptions
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name in ('p_ss_ok','p_ss_bad') order by pub_name;
+➤ pub_name[12,64,0]  ¦  table_list[-1,16383,0]  𝄀
+p_ss_ok  ¦  base_ss
+create database s_ss_ok from vw01 publication p_ss_ok;
+select count(*) from s_ss_ok.base_ss;
+➤ count(*)[-5,64,0]  𝄀
+2
+select m from s_ss_ok.v_smax;
+SQL parser error: table "v_smax" does not exist
+select count(*) from sdb_27767.base_ss;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop database s_ss_ok;
+select internal_auto_increment('sdb_27767','ainc') as pub_direct;
+➤ pub_direct[-5,64,0]  𝄀
+3
+select internal_auto_increment('sdb_27767','ainc') as sub_own;
+➤ sub_own[-5,64,0]  𝄀
+96
+select count(*) from sdb_27767.ainc;
+➤ count(*)[-5,64,0]  𝄀
+2
+alter publication p_ss_ok account vw02 table base_ss,ainc,v_ai;
+internal error: table-level publication for database 'sdb_27767' cannot publish view 'v_ai': it calls function 'internal_auto_increment', which resolves its source relation through the executing account and does not operate through subscriptions
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name in ('p_ss_ok','p_ai_bad') order by pub_name;
+➤ pub_name[12,64,0]  ¦  table_list[-1,16383,0]  𝄀
+p_ss_ok  ¦  base_ss
+drop database if exists s_ss_ok;
+create database s_ss_ok from vw01 publication p_ss_ok;
+select count(*) from s_ss_ok.base_ss;
+➤ count(*)[-5,64,0]  𝄀
+2
+drop database s_ss_ok;
+drop publication p_ss_ok;
+drop view v_smax;
+drop view v_srows;
+drop view v_ai;
+drop table base_ss;
+drop table ainc;
+drop database sdb_27767;
+drop database sdb_27767;
+drop database if exists mdb_27767;
+create database mdb_27767;
+use mdb_27767;
+create table base_t(id int primary key, v int);
+insert into base_t values (1,1),(2,2);
+create view v_ctl_t as select mo_ctl('cn','table-extra','mdb_27767.base_t') as r;
+drop database if exists mdb_27767;
+drop database if exists s_ctl_ok;
+drop database if exists s_ctl_bad;
+create database mdb_27767;
+create table mdb_27767.base_t(id bigint auto_increment primary key, v int) auto_id_cache = 3200;
+insert into mdb_27767.base_t values (90,7),(95,8);
+select mo_ctl('cn','table-extra','mdb_27767.base_t') as sys_direct;
+➤ sys_direct[12,65535,0]  𝄀
+{
+  "method": "TABLE-EXTRA",
+  "result": "{\"next_col_seqnum\":2,\"block_max_rows\":8192,\"object_max_blocks\":256,\"default_charset\":3,\"auto_id_cache\":3200}"
+}
+
+create publication p_ctl_bad database mdb_27767 table base_t,v_ctl_t account sys;
+internal error: table-level publication for database 'mdb_27767' cannot publish view 'v_ctl_t': it calls function 'mo_ctl', which resolves its source relation through the executing account and does not operate through subscriptions
+create publication p_ctl_ok database mdb_27767 table base_t account sys;
+select pub_name from mo_catalog.mo_pubs where pub_name in ('p_ctl_ok','p_ctl_bad') order by pub_name;
+➤ pub_name[12,64,0]  𝄀
+p_ctl_ok
+create database s_ctl_ok from vw01 publication p_ctl_ok;
+select count(*) from s_ctl_ok.base_t;
+➤ count(*)[-5,64,0]  𝄀
+2
+create database s_ctl_bad from vw01 publication p_ctl_bad;
+internal error: there is no publication p_ctl_bad
+alter publication p_ctl_ok account sys table base_t,v_ctl_t;
+internal error: table-level publication for database 'mdb_27767' cannot publish view 'v_ctl_t': it calls function 'mo_ctl', which resolves its source relation through the executing account and does not operate through subscriptions
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name in ('p_ctl_ok','p_ctl_bad') order by pub_name;
+➤ pub_name[12,64,0]  ¦  table_list[-1,16383,0]  𝄀
+p_ctl_ok  ¦  base_t
+drop database if exists s_ctl_ok;
+create database s_ctl_ok from vw01 publication p_ctl_ok;
+select count(*) from s_ctl_ok.base_t;
+➤ count(*)[-5,64,0]  𝄀
+2
+select r from s_ctl_ok.v_ctl_t;
+SQL parser error: table "v_ctl_t" does not exist
+drop database s_ctl_ok;
+drop publication p_ctl_ok;
+drop view v_ctl_t;
+drop table base_t;
+drop database mdb_27767;
+drop database mdb_27767;
+drop database if exists gdb_27767;
+create database gdb_27767;
+use gdb_27767;
+create table base_t(id int primary key, v int);
+insert into base_t values (1,1),(2,2);
+create view v_srid_a as select id, st_geomfromtext('POINT(1 2)', 4325 + 1) as g from base_t;
+create view v_srid_l as select id, st_geomfromtext('POINT(1 2)', 4326) as g from base_t;
+create view v_srid_s as select id, st_srid(st_geomfromtext('POINT(1 2)', 0), 4325 + 1) as g from base_t;
+select id, st_srid(g) from gdb_27767.v_srid_a order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from gdb_27767.v_srid_l order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from gdb_27767.v_srid_s order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_astext(g) from gdb_27767.v_srid_a order by id;
+➤ id[4,32,0]  ¦  st_astext(g)[12,65535,0]  𝄀
+1  ¦  POINT(1 2)  𝄀
+2  ¦  POINT(1 2)
+create publication p_srid_a database gdb_27767 table base_t,v_srid_a account vw02;
+create publication p_srid_all database gdb_27767 table base_t,v_srid_l,v_srid_s,v_srid_a account vw02;
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name like 'p_srid_%' order by pub_name;
+➤ pub_name[12,64,0]  ¦  table_list[-1,16383,0]  𝄀
+p_srid_a  ¦  base_t,v_srid_a  𝄀
+p_srid_all  ¦  base_t,v_srid_a,v_srid_l,v_srid_s
+drop database if exists s_srid_a;
+drop database if exists s_srid_all;
+create database s_srid_a from vw01 publication p_srid_a;
+select id, st_srid(g) from s_srid_a.v_srid_a order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+create database s_srid_all from vw01 publication p_srid_all;
+select id, st_srid(g) from s_srid_all.v_srid_a order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from s_srid_all.v_srid_l order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from s_srid_all.v_srid_s order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_astext(g) from s_srid_all.v_srid_a order by id;
+➤ id[4,32,0]  ¦  st_astext(g)[12,65535,0]  𝄀
+1  ¦  POINT(1 2)  𝄀
+2  ¦  POINT(1 2)
+alter publication p_srid_a account vw02 table base_t,v_srid_a,v_srid_l;
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name like 'p_srid_%' order by pub_name;
+➤ pub_name[12,64,0]  ¦  table_list[-1,16383,0]  𝄀
+p_srid_a  ¦  base_t,v_srid_a,v_srid_l  𝄀
+p_srid_all  ¦  base_t,v_srid_a,v_srid_l,v_srid_s
+drop database s_srid_a;
+create database s_srid_a from vw01 publication p_srid_a;
+select id, st_srid(g) from s_srid_a.v_srid_a order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from s_srid_a.v_srid_l order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+drop database s_srid_a;
+drop database s_srid_all;
+drop publication p_srid_a;
+drop publication p_srid_all;
+drop view v_srid_a;
+drop view v_srid_l;
+drop view v_srid_s;
+drop table base_t;
+drop database gdb_27767;
+drop database if exists gdb_27767;
+create database gdb_27767;
+use gdb_27767;
+create table base_t(id int primary key, v int);
+insert into base_t values (1,1),(2,2);
+create view v_cast_c as select id, st_geomfromtext('POINT(1 2)', '4325' + 1) as g from base_t;
+create view v_cast_cl as select id, st_geomfromtext('POINT(1 2)', 4326) as g from base_t;
+create view v_cast_cs as select id, st_srid(st_geomfromtext('POINT(1 2)', 0), '4325' + 1) as g from base_t;
+create view v_cast_x as select id, st_geomfromtext('POINT(1 2)', cast('4326' as signed)) as g from base_t;
+invalid input: the SRID argument of a geometry constructor must be a constant integer
+select id, st_srid(g) from gdb_27767.v_cast_c order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from gdb_27767.v_cast_cl order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from gdb_27767.v_cast_cs order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_astext(g) from gdb_27767.v_cast_c order by id;
+➤ id[4,32,0]  ¦  st_astext(g)[12,65535,0]  𝄀
+1  ¦  POINT(1 2)  𝄀
+2  ¦  POINT(1 2)
+create publication p_cast_c database gdb_27767 table base_t,v_cast_c,v_cast_cs account vw02;
+create publication p_cast_cl database gdb_27767 table base_t,v_cast_cl account vw02;
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name like 'p_cast_%' order by pub_name;
+➤ pub_name[12,64,0]  ¦  table_list[-1,16383,0]  𝄀
+p_cast_c  ¦  base_t,v_cast_c,v_cast_cs  𝄀
+p_cast_cl  ¦  base_t,v_cast_cl
+drop database if exists s_cast_c;
+drop database if exists s_cast_cl;
+create database s_cast_c from vw01 publication p_cast_c;
+select id, st_srid(g) from s_cast_c.v_cast_c order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from s_cast_c.v_cast_cs order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_astext(g) from s_cast_c.v_cast_c order by id;
+➤ id[4,32,0]  ¦  st_astext(g)[12,65535,0]  𝄀
+1  ¦  POINT(1 2)  𝄀
+2  ¦  POINT(1 2)
+create database s_cast_cl from vw01 publication p_cast_cl;
+select id, st_srid(g) from s_cast_cl.v_cast_cl order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+alter publication p_cast_c account vw02 table base_t,v_cast_c,v_cast_cs,v_cast_cl;
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name like 'p_cast_%' order by pub_name;
+➤ pub_name[12,64,0]  ¦  table_list[-1,16383,0]  𝄀
+p_cast_c  ¦  base_t,v_cast_c,v_cast_cl,v_cast_cs  𝄀
+p_cast_cl  ¦  base_t,v_cast_cl
+drop database s_cast_c;
+create database s_cast_c from vw01 publication p_cast_c;
+select id, st_srid(g) from s_cast_c.v_cast_c order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from s_cast_c.v_cast_cl order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+drop database s_cast_c;
+drop database s_cast_cl;
+drop publication p_cast_c;
+drop publication p_cast_cl;
+drop view v_cast_c;
+drop view v_cast_cl;
+drop view v_cast_cs;
+drop table base_t;
+drop database gdb_27767;
+drop database if exists gdb_27767;
+create database gdb_27767;
+use gdb_27767;
+create table base_t(id int primary key, v int);
+insert into base_t values (1,1),(2,2);
+create view v_nabs_c as select id, st_geomfromtext('POINT(1 2)', abs(4325) + 1) as g from base_t;
+create view v_nabs_cl as select id, st_geomfromtext('POINT(1 2)', 4326) as g from base_t;
+create view v_nabs_cs as select id, st_srid(st_geomfromtext('POINT(1 2)', 0), abs(4325) + 1) as g from base_t;
+create view v_nabs_x as select id, st_geomfromtext('POINT(1 2)', abs(4326)) as g from base_t;
+invalid input: the SRID argument of a geometry constructor must be a constant integer
+create view v_nabs_r as select id, st_geomfromtext('POINT(1 2)', 1 + rand() * 0) as g from base_t;
+invalid input: the SRID argument of a geometry constructor must be a constant integer
+select id, st_srid(g) from gdb_27767.v_nabs_c order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from gdb_27767.v_nabs_cl order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from gdb_27767.v_nabs_cs order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_astext(g) from gdb_27767.v_nabs_c order by id;
+➤ id[4,32,0]  ¦  st_astext(g)[12,65535,0]  𝄀
+1  ¦  POINT(1 2)  𝄀
+2  ¦  POINT(1 2)
+create publication p_nabs_c database gdb_27767 table base_t,v_nabs_c,v_nabs_cs account vw02;
+create publication p_nabs_cl database gdb_27767 table base_t,v_nabs_cl account vw02;
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name like 'p_nabs%' order by pub_name;
+➤ pub_name[12,64,0]  ¦  table_list[-1,16383,0]  𝄀
+p_nabs_c  ¦  base_t,v_nabs_c,v_nabs_cs  𝄀
+p_nabs_cl  ¦  base_t,v_nabs_cl
+drop database if exists s_nabs_c;
+drop database if exists s_nabs_cl;
+create database s_nabs_c from vw01 publication p_nabs_c;
+select id, st_srid(g) from s_nabs_c.v_nabs_c order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from s_nabs_c.v_nabs_cs order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_astext(g) from s_nabs_c.v_nabs_c order by id;
+➤ id[4,32,0]  ¦  st_astext(g)[12,65535,0]  𝄀
+1  ¦  POINT(1 2)  𝄀
+2  ¦  POINT(1 2)
+create database s_nabs_cl from vw01 publication p_nabs_cl;
+select id, st_srid(g) from s_nabs_cl.v_nabs_cl order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+alter publication p_nabs_c account vw02 table base_t,v_nabs_c,v_nabs_cs,v_nabs_cl;
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name like 'p_nabs%' order by pub_name;
+➤ pub_name[12,64,0]  ¦  table_list[-1,16383,0]  𝄀
+p_nabs_c  ¦  base_t,v_nabs_c,v_nabs_cl,v_nabs_cs  𝄀
+p_nabs_cl  ¦  base_t,v_nabs_cl
+drop database s_nabs_c;
+create database s_nabs_c from vw01 publication p_nabs_c;
+select id, st_srid(g) from s_nabs_c.v_nabs_c order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+select id, st_srid(g) from s_nabs_c.v_nabs_cl order by id;
+➤ id[4,32,0]  ¦  st_srid(g)[4,32,0]  𝄀
+1  ¦  4326  𝄀
+2  ¦  4326
+drop database s_nabs_c;
+drop database s_nabs_cl;
+drop publication p_nabs_c;
+drop publication p_nabs_cl;
+drop view v_nabs_c;
+drop view v_nabs_cl;
+drop view v_nabs_cs;
+drop table base_t;
+drop database gdb_27767;
+drop account if exists vw04;
+drop account if exists vw05;
+create account vw04 admin_name = 'test_account' identified by '111';
+create account vw05 admin_name = 'test_account' identified by '111';
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-1,16383,0]  𝄀
+0
+drop database if exists cdb21b;
+create database cdb21b;
+use cdb21b;
+create table Base(id int primary key, x int);
+insert into Base values (1,10),(2,20);
+create table base(id int primary key, x int);
+insert into base values (9,90);
+create view v_Base as select id, x from Base;
+select id, x from cdb21b.Base order by id;
+➤ id[4,32,0]  ¦  x[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+select id, x from cdb21b.base order by id;
+➤ id[4,32,0]  ¦  x[4,32,0]  𝄀
+9  ¦  90
+select id, x from cdb21b.v_Base order by id;
+➤ id[4,32,0]  ¦  x[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+create publication p_case_ok database cdb21b table Base,v_Base account vw05;
+create publication p_case_wrong database cdb21b table base,v_Base account vw05;
+internal error: table-level publication for database 'cdb21b' must include table 'Base' required by view 'v_Base'
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name like 'p_case%' order by pub_name;
+➤ pub_name[12,64,0]  ¦  table_list[-1,16383,0]  𝄀
+p_case_ok  ¦  Base,v_Base
+set global lower_case_table_names = 0;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-1,16383,0]  𝄀
+0
+drop database if exists s_case_ok;
+create database s_case_ok from vw04 publication p_case_ok;
+select id, x from s_case_ok.v_Base order by id;
+➤ id[4,32,0]  ¦  x[4,32,0]  𝄀
+1  ¦  10  𝄀
+2  ¦  20
+drop database if exists s_case_ok;
+set global lower_case_table_names = 1;
+set global lower_case_table_names = 1;
+select @@lower_case_table_names;
+➤ @@lower_case_table_names[-1,16383,0]  𝄀
+1
+drop publication p_case_ok;
+drop publication p_case_wrong;
+internal error: publication 'p_case_wrong' does not exist
+drop database cdb21b;
+drop database if exists tp_shadow;
+create database tp_shadow;
+use tp_shadow;
+create table base_sh(id int primary key, v int);
+insert into base_sh values (1,10),(2,20);
+create view v_sh as select id from base_sh;
+create temporary table base_sh(other int);
+create publication p_sh_ok database tp_shadow table base_sh,v_sh account vw02;
+drop database if exists s_sh_ok;
+create database s_sh_ok from vw01 publication p_sh_ok;
+select id from s_sh_ok.v_sh;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+drop database s_sh_ok;
+use tp_shadow;
+drop publication p_sh_ok;
+drop temporary table base_sh;
+alter table base_sh rename column id to newid;
+create temporary table base_sh(id int);
+create publication p_sh_bad database tp_shadow table base_sh,v_sh account vw02;
+internal error: table-level publication for database 'tp_shadow' cannot publish view 'v_sh': its stored definition no longer binds the published relations: invalid input: column id does not exist
+drop temporary table base_sh;
+drop view v_sh;
+drop table base_sh;
+drop database tp_shadow;
+select pub_name from mo_catalog.mo_pubs where pub_name = 'p_sh_bad' order by pub_name;
+➤ pub_name[12,64,0]
+drop database if exists s_sh_bad;
+create database s_sh_bad from vw01 publication p_sh_bad;
+internal error: there is no publication p_sh_bad
+drop publication if exists p_g2g;
+drop database if exists vw01_pub_db;
+drop publication p_view;
+drop publication p_db_level;
+drop publication p_full;
+drop publication p_const;
+drop publication p_unusedcte;
+drop publication p_usedcte;
+drop publication p_fwd;
+drop publication p_nestedcte;
+drop publication p_nestedcte2;
+drop publication p_mask;
+drop publication p_dualcte;
+drop publication p_dualtab2;
+drop publication p_narrow;
+drop publication p_sysuser;
+drop publication p_all_good;
+drop publication p_alluser;
+drop publication p_rebind;
+drop publication p_alive;
+drop publication p_late;
+drop view v_late;
+drop view v_rebind;
+drop view v_alive;
+drop view v_alluser;
+drop table healthy;
+drop table other;
+drop table src;
+drop table `dual`;
+drop table dualctl;
+drop table rbase;
+drop table rbase2;
+drop database view_pub_db;
+drop database other_db_27767;
+drop database other_view_db;
+drop account vw01;
+drop account vw02;
+drop account vw03;
+drop account vw04;
+drop account vw05;

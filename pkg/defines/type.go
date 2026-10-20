@@ -296,6 +296,27 @@ type OptimizerHints struct{}
 // Determine if now is a bg sql.
 type BgKey struct{}
 
+// PublicationViewBinding marks a background statement whose only job is
+// binding the persisted metadata of a published view: identifiers keep their
+// source case in parsing, the compile stops after binding (no optimizer rule
+// evaluates expressions and no pipeline is built or run), session temporary
+// tables stay out of name resolution, and user-defined function binding is
+// refused with a distinguishable error.
+type PublicationViewBinding struct{}
+
+// WithPublicationViewBinding marks ctx as a publication-view metadata binding
+// statement.
+func WithPublicationViewBinding(ctx context.Context) context.Context {
+	return context.WithValue(ctx, PublicationViewBinding{}, true)
+}
+
+// IsPublicationViewBinding reports whether ctx carries the publication-view
+// metadata binding marker.
+func IsPublicationViewBinding(ctx context.Context) bool {
+	value, _ := ctx.Value(PublicationViewBinding{}).(bool)
+	return value
+}
+
 // Sp variable scope
 type VarScopeKey struct{}
 

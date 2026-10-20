@@ -115,6 +115,32 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 	return false
 }
 
+// GetFunctionIsDeterministicFoldableById reports, for the resolved overload
+// overloadID, whether the binder's constant-fold recursion would evaluate it
+// for a constant tree: the overload carries neither the volatile
+// (CannotFold) nor the real-time-related flag. Functions registered with the
+// internal-machinery class never qualify, even when no overload flag
+// declares them volatile: evaluating them has effects outside the
+// expression tree, and an expression walk that must not execute side
+// effects can only bend the fold recursion's own two skip predicates,
+// nothing else. The class field is a bit word, and registrations combine the
+// internal flag with others (python_user_defined_function is INTERNAL|STRICT
+// and carries no volatile flag), so the rejection must test the bit through
+// testFlag, never compare the whole word - otherwise the internal UDF
+// machinery qualifies and the caller's guarded fold executes it right into
+// UdfService.Run.
+func GetFunctionIsDeterministicFoldableById(overloadID int64) bool {
+	fid, oIndex := DecodeOverloadID(overloadID)
+	if !validFunctionOverloadID(fid, oIndex) {
+		return false
+	}
+	if allSupportedFunctions[fid].testFlag(plan.Function_INTERNAL) {
+		return false
+	}
+	ov := allSupportedFunctions[fid].Overloads[oIndex]
+	return !ov.CannotFold() && !ov.IsRealTimeRelated()
+}
+
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
 	fid, oIndex := DecodeOverloadID(overloadID)
 	if !validFunctionOverloadID(fid, oIndex) {
