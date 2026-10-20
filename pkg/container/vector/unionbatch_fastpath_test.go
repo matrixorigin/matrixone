@@ -56,13 +56,13 @@ func TestUnionBatchPreservesNativeAreaOnGrowthFailure(t *testing.T) {
 
 			seed := bytes.Repeat([]byte("a"), 40)
 			payload := bytes.Repeat([]byte("b"), 2048)
-			require.NoError(t, dst.PreExtend(2, mp))
 			require.NoError(t, AppendBytes(dst, seed, false, mp))
 			require.NoError(t, AppendBytes(src, payload, false, mp))
 			if tc.reuse {
 				dst.CleanOnlyData()
 			}
 			oldArea, oldLength := dst.area, dst.Length()
+			oldDataCap := cap(dst.data)
 			require.Positive(t, cap(oldArea))
 			require.Greater(t, len(oldArea)+len(src.area), cap(oldArea))
 			reservation, err = mp.Alloc(int(mp.Cap()-mp.CurrNB()-1024), true)
@@ -74,6 +74,9 @@ func TestUnionBatchPreservesNativeAreaOnGrowthFailure(t *testing.T) {
 			}
 			require.ErrorContains(t, err, "mpool out of space")
 			require.GreaterOrEqual(t, cap(dst.data), (oldLength+src.Length())*types.VarlenaSize, "the rejected allocation must be area growth")
+			if !tc.reuse {
+				require.Greater(t, cap(dst.data), oldDataCap, "header growth must succeed before area rejection")
+			}
 			require.Equal(t, oldLength, dst.Length())
 			require.Equal(t, len(oldArea), len(dst.area))
 			require.Equal(t, cap(oldArea), cap(dst.area))
