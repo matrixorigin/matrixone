@@ -742,11 +742,14 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_BIT:
-			value, err := oq.mrs.GetString(oq.ctx, 0, i)
+			value, err := oq.mrs.GetUint64(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			byteLength := (mysqlColumn.Length() + 7) / 8
+			encoded := types.EncodeUint64(&value)[:byteLength]
+			slices.Reverse(encoded)
+			if err = formatOutputString(oq, encoded, symbol[i], closeby, flag[i], buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
