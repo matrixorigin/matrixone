@@ -4804,9 +4804,13 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
-			branchExprs := make([]*Expr, len(nodes))
+			branchExprs := make([]*Expr, 0, len(nodes))
 			for i, id := range nodes {
-				branchExprs[i] = builder.qry.Nodes[id].ProjectList[columnIdx]
+				// 与common type采用相同的pure-NULL来源证明；派生NULL的临时
+				// legacy容器不是一个声明的域，显式typed NULL则仍须参与选择。
+				if !setBranchPureNull[i][columnIdx] {
+					branchExprs = append(branchExprs, builder.qry.Nodes[id].ProjectList[columnIdx])
+				}
 			}
 			if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
 				return 0, err
