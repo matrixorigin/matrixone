@@ -23,9 +23,11 @@ import (
 	"slices"
 	"strings"
 
+	"encoding/base64"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
@@ -423,6 +425,17 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (string, error) {
 	group, ok := node.V.(*bytejson.Group)
 	if !typ.IsArrayRelate() || !ok || group.Obj {
+		//#30635: JSONLINE OUTFILE writes binary columns as base64 JSON strings
+		// (encoding/json's []byte convention); decode them so the loaders
+		// round-trip byte-exact. Strings that are not valid base64 (hand-
+		// written files) keep the legacy plain-text path.
+		if typ == types.T_binary || typ == types.T_varbinary || typ == types.T_blob {
+			if s, sok := node.V.(string); sok {
+				if decoded, derr := base64.StdEncoding.DecodeString(s); derr == nil {
+					return string(decoded), nil
+				}
+			}
+		}
 		return fmt.Sprint(node), nil
 	}
 	var text strings.Builder

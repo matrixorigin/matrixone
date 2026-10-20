@@ -30,6 +30,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// matrixone#30635: JSONLINE OUTFILE emits binary columns as base64 JSON
+// strings; the jsonline loader must decode them so export->load round-trips
+// byte-exact. Non-base64 strings and non-binary columns are untouched.
+func TestJsonLineBinaryBase64Roundtrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	attrs := []plan.ExternAttr{{ColName: "raw", ColIndex: 0, ColFieldIndex: 0}}
+	for _, tc := range []struct {
+		name   string
+		typeId int32
+		line   string
+		want   string
+	}{
+		{name: "varbinary base64", typeId: int32(types.T_varbinary), line: `{"raw":"AP8="}`, want: "\x00\xff"},
+		{name: "blob base64", typeId: int32(types.T_blob), line: `{"raw":"qwA="}`, want: "\xab\x00"},
+		{name: "binary base64", typeId: int32(types.T_binary), line: `{"raw":"AP8="}`, want: "\x00\xff"},
+		{name: "varchar untouched", typeId: int32(types.T_varchar), line: `{"raw":"AP8="}`, want: "AP8="},
+		{name: "text untouched", typeId: int32(types.T_text), line: `{"raw":"AP8="}`, want: "AP8="},
+		{name: "invalid base64 falls through", typeId: int32(types.T_varbinary), line: `{"raw":"not-base64!"}`, want: "not-base64!"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cols := []*plan.ColDef{{Name: "raw", Typ: plan.Type{Id: tc.typeId}}}
+			reader := &CsvReader{}
+			line, err := reader.transJsonObject2Lines(proc.Ctx, tc.line, attrs, cols)
+			require.NoError(t, err)
+			require.Len(t, line, 1)
+			require.False(t, line[0].IsNull)
+			require.Equal(t, tc.want, line[0].Val)
+		})
+	}
+}
+
 func TestJSONLineObjectProjectionUsesPhysicalFieldIndex(t *testing.T) {
 	const jsonLine = `{"a":"one","b":"two","c":"three","d":"four","e":"five","f":"six"}`
 	columns := []string{"a", "b", "c", "d", "e", "f"}
