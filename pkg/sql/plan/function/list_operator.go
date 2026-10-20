@@ -2378,7 +2378,7 @@ var supportedOperators = []FuncNew{
 					return newCheckResultWithCast(0, []types.Type{t1, t2})
 				}
 				// Then check with type casting
-				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
+				has, t1, t2 := integerDivTypeCastRule(inputs[0], inputs[1])
 				if has && integerDivOperatorSupports(t1, t2) {
 					return newCheckResultWithCast(0, []types.Type{t1, t2})
 				}

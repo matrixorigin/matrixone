@@ -4031,7 +4031,7 @@ func bitToStr(
 // skip this check, so an out-of-range integer was scaled into the target
 // and persisted (issue #30367). The source value is included in the error
 // text, matching the string-source diagnostic.
-func checkIntDecimal64Width(v any, scaled types.Decimal64, width, scale int32) error {
+func checkIntDecimal64Width[T constraints.Integer](v T, scaled types.Decimal64, width, scale int32) error {
 	// A zero width marks a synthesized cast without a declared DECIMAL
 	// precision (e.g. binder-internal uint64 -> decimal128 promotion); only
 	// declared column widths (always >= 1) enforce the assignment bound.
@@ -4052,7 +4052,7 @@ func checkIntDecimal64Width(v any, scaled types.Decimal64, width, scale int32) e
 	return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal64(%d,%d).", v, width, scale)
 }
 
-func checkIntDecimal128Width(v any, scaled types.Decimal128, width, scale int32) error {
+func checkIntDecimal128Width[T constraints.Integer](v T, scaled types.Decimal128, width, scale int32) error {
 	// See checkIntDecimal64Width: synthesized zero-width casts carry no
 	// declared precision to enforce.
 	if width <= 0 {
@@ -4077,7 +4077,7 @@ func checkIntDecimal128Width(v any, scaled types.Decimal128, width, scale int32)
 	return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal128(%d,%d).", v, width, scale)
 }
 
-func checkIntDecimal256Width(v any, scaled types.Decimal256, width, scale int32) error {
+func checkIntDecimal256Width[T constraints.Integer](v T, scaled types.Decimal256, width, scale int32) error {
 	// See checkIntDecimal64Width: synthesized zero-width casts carry no
 	// declared precision to enforce.
 	if width <= 0 {

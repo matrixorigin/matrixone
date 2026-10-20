@@ -352,7 +352,7 @@ func resolveNumericBinaryTypes(
 			if operands, unsigned := decimalIntegerDivUnsignedTypes([]types.Type{left, right}); unsigned {
 				return numericTypeResolution{left: operands[0], right: operands[1], result: result}, true
 			}
-			cast, physicalLeft, physicalRight := fixedTypeCastRule2(left, right)
+			cast, physicalLeft, physicalRight := integerDivTypeCastRule(left, right)
 			if cast {
 				left, right = physicalLeft, physicalRight
 			}
@@ -377,7 +377,7 @@ func resolveNumericBinaryTypes(
 		} else if exactLeft, exactRight, exact := integerDivExactTypes(left, right); exact {
 			left, right = exactLeft, exactRight
 		} else {
-			cast, castLeft, castRight = fixedTypeCastRule2(left, right)
+			cast, castLeft, castRight = integerDivTypeCastRule(left, right)
 		}
 	case numericOpDiv:
 		cast, castLeft, castRight = fixedTypeCastRule2(left, right)
