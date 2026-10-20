@@ -191,6 +191,8 @@ func TestBuildUniqueKeyBatchDecimal256(t *testing.T) {
 
 func TestBuildUniqueKeyBatchRejectsInvalidNativeUnicodeCompositeValue(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	defer func() { require.Zero(t, proc.Mp().CurrNB()) }()
 	native := types.New(types.T_varchar, 16, 0)
 	native.Charset = uint8(types.CharsetUTF8MB4UnicodeCI)
 	native.CollationVersion = uint8(collation.RevisionV1)
@@ -199,15 +201,15 @@ func TestBuildUniqueKeyBatchRejectsInvalidNativeUnicodeCompositeValue(t *testing
 	// metadata. This simulates a decoded/corrupted batch and proves the
 	// composite unique-key boundary validates before serializing.
 	text := vector.NewVec(types.T_varchar.ToType())
+	defer text.Free(proc.Mp())
 	require.NoError(t, vector.AppendBytes(text, []byte{0xff, 0xfe}, false, proc.Mp()))
 	text.SetType(native)
 	other := testutil.NewVector(1, types.T_int64.ToType(), proc.Mp(), false, []int64{1})
-	defer text.Free(proc.Mp())
 	defer other.Free(proc.Mp())
 
 	packers := PackerList{}
 	defer packers.Free()
-	_, _, err := BuildUniqueKeyBatch(
+	got, _, err := BuildUniqueKeyBatch(
 		[]*vector.Vector{text, other},
 		[]string{"v", "n"},
 		[]string{"v", "n"},
@@ -215,7 +217,11 @@ func TestBuildUniqueKeyBatchRejectsInvalidNativeUnicodeCompositeValue(t *testing
 		proc,
 		&packers,
 	)
-	require.Error(t, err)
+	if got != nil {
+		defer got.Clean(proc.Mp())
+	}
+	require.ErrorContains(t, err, "invalid UTF-8 in collation key")
+	require.Nil(t, got)
 }
 
 func TestBuildUniqueKeyBatchRejectsUnadmittedCollationTypes(t *testing.T) {
@@ -270,6 +276,45 @@ func TestBuildUniqueKeyBatchRejectsUnadmittedCollationTypes(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+func TestPhysicalIndexHelpersKeepAdmittedUnicodeDomain(t *testing.T) {
+	for _, shape := range []string{"empty", "null", "const_null", "value"} {
+		t.Run(shape, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			defer func() { require.Zero(t, proc.Mp().CurrNB()) }()
+			typ := types.NewWithCharset(types.T_varchar, 16, 0, types.CharsetUTF8MB4UnicodeCI)
+			typ.CollationVersion = types.CollationVersionV1
+			var text *vector.Vector
+			if shape == "const_null" {
+				text = vector.NewConstNull(typ, 1, proc.Mp())
+			} else {
+				text = vector.NewVec(typ)
+			}
+			defer text.Free(proc.Mp())
+			if shape == "null" || shape == "value" {
+				require.NoError(t, vector.AppendBytes(text, []byte("a"), shape == "null", proc.Mp()))
+			}
+			unique := vector.NewVec(types.T_varchar.ToType())
+			defer unique.Free(proc.Mp())
+			_, err := CompactSingleIndexCol(text, unique, proc)
+			require.NoError(t, err)
+			if shape == "value" {
+				require.Equal(t, 1, unique.Length())
+			} else {
+				require.Zero(t, unique.Length())
+			}
+
+			secondary := vector.NewVec(types.T_varchar.ToType())
+			defer secondary.Free(proc.Mp())
+			packers := PackerList{}
+			defer packers.Free()
+			_, err = SerialWithoutCompacted([]*vector.Vector{text}, secondary, proc, &packers, DefaultPackerSize)
+			require.NoError(t, err)
+			require.Equal(t, text.Length(), secondary.Length())
+		})
 	}
 }
 
