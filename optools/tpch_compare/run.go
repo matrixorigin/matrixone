@@ -44,6 +44,18 @@ func runRequest(t Trial, warm bool) WorkerRequest {
 	return WorkerRequest{Version: formatVersion, Operation: "queries", Queries: t.Queries, Repetitions: 1, Clients: t.Clients, Warmup: warm, QueryDeadlineNS: int64(30 * time.Minute)}
 }
 
+// scoredRequest describes the frozen workload for both execution and reporting.
+// runArm fills the deployment, resource limits and artifact paths.
+func scoredRequest(c Campaign, f Frozen, t Trial) WorkerRequest {
+	request := runRequest(t, t.Experiment != "process-warm-os" && t.Experiment != "process-cold-os")
+	request.DeadlinesNS = f.DeadlinesNS[t.Scale]
+	request.Seed = c.Seed
+	if t.Experiment == "concurrency" {
+		request.Repetitions = f.WaveRepetitions[t.Clients]
+	}
+	return request
+}
+
 func artifact(root, path string) (FileID, error) {
 	id, err := identify(path)
 	if err != nil {
@@ -254,12 +266,7 @@ func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, man
 					pairErr = errors.Join(pairErr, err)
 				}
 			}
-			request := runRequest(t, t.Experiment != "process-warm-os" && t.Experiment != "process-cold-os")
-			request.DeadlinesNS = f.DeadlinesNS[t.Scale]
-			request.Seed = c.Seed
-			if t.Experiment == "concurrency" {
-				request.Repetitions = f.WaveRepetitions[t.Clients]
-			}
+			request := scoredRequest(c, f, t)
 			record, err := runArm(ctx, c, p, manager, d, t, filepath.Join(pairRoot, engine), request)
 			pair.Arms[engine] = record
 			pairErr = errors.Join(pairErr, err)

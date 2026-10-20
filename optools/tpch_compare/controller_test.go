@@ -98,10 +98,86 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		mutate       func(*WorkerRequest, *WorkerReceipt)
+		mutateArm    func(*ArmRecord)
 		changeConfig bool
 		wantError    string
 	}{
 		{name: "different results are not verified"},
+		{name: "archived captures need not be present", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.OutputRoot = filepath.Join(request.OutputRoot, "archived")
+		}},
+		{name: "worker receipt version differs", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Version = 0
+		}, wantError: "worker receipt version"},
+		{name: "worker failed after collecting timings", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Error = "worker failed"
+		}, wantError: "failed/incomplete worker"},
+		{name: "worker cleanup failed", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Cleanup = "failed"
+		}, wantError: "failed/incomplete worker"},
+		{name: "worker cleanup missing", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Cleanup = ""
+		}, wantError: "failed/incomplete worker"},
+		{name: "worker engine differs", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Engine = "duckdb"
+		}, wantError: "worker engine"},
+		{name: "request and receipt cannot substitute engine", mutate: func(request *WorkerRequest, r *WorkerReceipt) {
+			request.Engine.Name, r.Engine = "duckdb", "duckdb"
+		}, wantError: "worker request differs"},
+		{name: "worker dataset hash differs", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Dataset.SHA256 = "other dataset"
+		}, wantError: "worker dataset"},
+		{name: "worker dataset size differs", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Dataset.Bytes++
+		}, wantError: "worker dataset"},
+		{name: "worker dataset missing", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Dataset = FileID{}
+		}, wantError: "worker dataset"},
+		{name: "worker variant differs", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Variant = "unlimited_diagnostic"
+		}, wantError: "worker variant"},
+		{name: "unlimited request cannot supply scored timing", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.Unlimited = true
+		}, wantError: "worker request differs"},
+		{name: "consistent unlimited workload cannot supply scored timing", mutate: func(request *WorkerRequest, r *WorkerReceipt) {
+			request.Unlimited, r.Variant = true, "unlimited_diagnostic"
+		}, wantError: "worker request differs"},
+		{name: "worker client count differs", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Clients++
+		}, wantError: "worker client count"},
+		{name: "worker binary size differs", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Binary.Bytes++
+		}, wantError: "worker executable"},
+		{name: "request dataset differs", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.DatasetRoot = filepath.Join(request.DatasetRoot, "other")
+		}, wantError: "worker request differs"},
+		{name: "request database differs", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.Engine.Database = "tpch_compare_other"
+		}, wantError: "worker request differs"},
+		{name: "request threads differ", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.Engine.Threads++
+		}, wantError: "worker request differs"},
+		{name: "request memory differs", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.Engine.MemoryBytes++
+		}, wantError: "worker request differs"},
+		{name: "request cannot remove warmup", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.Warmup = false
+		}, wantError: "worker request differs"},
+		{name: "request cannot change seed", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.Seed++
+		}, wantError: "worker request differs"},
+		{name: "request cannot change query deadlines", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.DeadlinesNS = map[int]int64{1: 1}
+		}, wantError: "worker request differs"},
+		{name: "request cannot enable reference verification", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.Reference = true
+		}, wantError: "worker request differs"},
+		{name: "arm engine differs", mutateArm: func(arm *ArmRecord) {
+			arm.Engine = "duckdb"
+		}, wantError: "paired arm differs"},
+		{name: "arm trial differs", mutateArm: func(arm *ArmRecord) {
+			arm.Trial.ID = "other trial"
+		}, wantError: "paired arm differs"},
 		{name: "incomplete execution is rejected", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
 			r.Queries = r.Queries[:len(r.Queries)-1]
 		}, wantError: "partial query stream"},
@@ -148,25 +224,35 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 			config := write("campaign.json", c)
 			configPath := filepath.Join(root, config.Path)
 			config.Path = configPath
-			p := Preflight{Version: formatVersion, Config: config, Worker: FileID{SHA256: "worker"}}
-			f := Frozen{Version: formatVersion, Preflight: write("preflight.json", p), Trials: schedule(c)}
+			dataset := FileID{SHA256: "dataset", Bytes: 42}
+			p := Preflight{Version: formatVersion, Config: config, Worker: FileID{SHA256: "worker", Bytes: 7}, DatasetIDs: map[string]FileID{"1": dataset}}
+			f := Frozen{Version: formatVersion, Preflight: write("preflight.json", p), Trials: schedule(c), Prepared: map[string]map[string]PreparedEngine{"1": {}}}
+			for _, engine := range []string{"mo", "duckdb"} {
+				f.Prepared["1"][engine] = PreparedEngine{Deployment: deployment{Engine: Engine{Name: engine, Database: "tpch_compare_fixture"}}}
+			}
 			pair := PairRecord{Version: formatVersion, Trial: f.Trials[0], Status: "pass", Arms: map[string]ArmRecord{}}
 			for index, engine := range []string{"mo", "duckdb"} {
 				prefix := filepath.Join("runs", "baseline", pair.Trial.ID, engine)
-				r := WorkerReceipt{Version: formatVersion, Binary: p.Worker, Controlled: true, WaveNS: int64(time.Second)}
+				r := WorkerReceipt{Version: formatVersion, Engine: engine, Dataset: dataset, Binary: p.Worker, Variant: "qualification", Cleanup: "complete", Controlled: true, Clients: pair.Trial.Clients, WaveNS: int64(time.Second)}
 				for _, q := range pair.Trial.Queries {
 					// Captures deliberately do not exist, and the engines return
 					// different row counts. Reporting reads timing receipts only.
 					r.Queries = append(r.Queries, QueryReceipt{Query: q, Capture: Capture{Rows: int64(index), ElapsedNS: int64(time.Millisecond)}})
 				}
 				request := runRequest(pair.Trial, true)
+				request.Engine = f.Prepared["1"][engine].Deployment.Engine
+				request.Engine.Threads, request.Engine.MemoryBytes = pair.Trial.Cores, pair.Trial.MemoryBytes
+				request.DatasetRoot, request.OutputRoot = c.Datasets["1"], filepath.Join(root, prefix, "output")
 				if tc.mutate != nil {
 					tc.mutate(&request, &r)
 				}
-				pair.Arms[engine] = ArmRecord{Trial: pair.Trial, Engine: engine, Status: "pass", Cleanup: "complete", Request: write(filepath.Join(prefix, "request.json"), request), Worker: write(filepath.Join(prefix, "receipt.json"), r), After: Usage{CPUUsec: 1000, Raw: map[string]string{"memory.max": "34359738368", "memory.swap.max": "0", "cpuset.cpus.effective": "0-7"}}}
+				pair.Arms[engine] = ArmRecord{Version: formatVersion, Trial: pair.Trial, Engine: engine, Status: "pass", Cleanup: "complete", Request: write(filepath.Join(prefix, "request.json"), request), Worker: write(filepath.Join(prefix, "receipt.json"), r), After: Usage{CPUUsec: 1000, Raw: map[string]string{"memory.max": "34359738368", "memory.swap.max": "0", "cpuset.cpus.effective": "0-7"}}}
 				arm := pair.Arms[engine]
 				arm.Request.Path = "request.json"
 				arm.Worker.Path = "receipt.json"
+				if tc.mutateArm != nil {
+					tc.mutateArm(&arm)
+				}
 				pair.Arms[engine] = arm
 			}
 			pin := write(filepath.Join("runs", "baseline", pair.Trial.ID, "pair.json"), pair)
@@ -177,7 +263,7 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 				configPath = filepath.Join(root, write("different-campaign.json", c).Path)
 			}
 			output := filepath.Join(root, "report")
-			err := reportCampaign(configPath, filepath.Join(root, "runs", "baseline"), output)
+			err := cli(t.Context(), []string{"report", "--config", configPath, "--run-dir", filepath.Join(root, "runs", "baseline"), "--output", output}, io.Discard, io.Discard)
 			if tc.wantError != "" {
 				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
 					t.Fatal(err)

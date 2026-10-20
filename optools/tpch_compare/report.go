@@ -167,25 +167,40 @@ func reportCampaign(config, root, output string) (retErr error) {
 			if !ok {
 				return errors.New("paired arm missing")
 			}
-			receipt, _, err := readArm(filepath.Join(filepath.Dir(path), engine), record)
+			if record.Version != formatVersion || record.Engine != engine || !reflect.DeepEqual(record.Trial, pair.Trial) {
+				return errors.New("paired arm differs from frozen trial")
+			}
+			armRoot := filepath.Join(filepath.Dir(path), engine)
+			receipt, _, err := readArm(armRoot, record)
 			if err != nil {
 				return err
 			}
-			if !receipt.Controlled || receipt.WaveNS <= 0 {
-				return errors.New("standalone/incomplete worker cannot supply scored timing")
-			}
-			if err := record.Request.verify(filepath.Join(filepath.Dir(path), engine)); err != nil {
+			if err := record.Request.verify(armRoot); err != nil {
 				return err
 			}
-			request, err := readJSON[WorkerRequest](filepath.Join(filepath.Dir(path), engine, record.Request.Path))
+			request, err := readJSON[WorkerRequest](filepath.Join(armRoot, record.Request.Path))
 			if err != nil {
+				return err
+			}
+			prepared, ok := f.Prepared[pair.Trial.Scale][engine]
+			if !ok || prepared.Deployment.Engine.Name != engine {
+				return errors.New("frozen deployment missing or differs from paired engine")
+			}
+			expected := scoredRequest(c, f, pair.Trial)
+			expected.Engine = prepared.Deployment.Engine
+			expected.Engine.Threads, expected.Engine.MemoryBytes = pair.Trial.Cores, pair.Trial.MemoryBytes
+			expected.DatasetRoot = c.Datasets[pair.Trial.Scale]
+			// Capture locations are artifact bookkeeping, not frozen workload.
+			// Reporting archived receipts does not require result captures.
+			expected.OutputRoot = request.OutputRoot
+			if !reflect.DeepEqual(request, expected) {
+				return errors.New("worker request differs from frozen trial")
+			}
+			if err := verifyScoredWorker(pair.Trial, engine, p, receipt); err != nil {
 				return err
 			}
 			if err := verifyTrialQueries(pair.Trial, f, request, receipt); err != nil {
 				return err
-			}
-			if receipt.Binary.SHA256 != frozenWorker(c, f) {
-				return errors.New("worker executable changed")
 			}
 			receipts[engine] = receipt
 			cell.Arms = append(cell.Arms, record)
@@ -413,12 +428,33 @@ func verifyTrialQueries(t Trial, f Frozen, request WorkerRequest, receipt Worker
 	return nil
 }
 
-func frozenWorker(c Campaign, f Frozen) string {
-	p, err := readJSON[Preflight](filepath.Join(c.Root, f.Preflight.Path))
-	if err != nil {
-		return ""
+func verifyScoredWorker(t Trial, engine string, p Preflight, receipt WorkerReceipt) error {
+	if receipt.Version != formatVersion {
+		return errors.New("worker receipt version differs")
 	}
-	return p.Worker.SHA256
+	if receipt.Error != "" || receipt.Cleanup != "complete" {
+		return errors.New("failed/incomplete worker receipt cannot supply scored timing")
+	}
+	if receipt.Engine != engine {
+		return errors.New("worker engine differs from paired arm")
+	}
+	dataset, ok := p.DatasetIDs[t.Scale]
+	if !ok || dataset.SHA256 == "" || dataset.Bytes <= 0 || receipt.Dataset.SHA256 != dataset.SHA256 || receipt.Dataset.Bytes != dataset.Bytes {
+		return errors.New("worker dataset differs from frozen trial")
+	}
+	if receipt.Variant != "qualification" {
+		return errors.New("worker variant cannot supply scored timing")
+	}
+	if receipt.Clients != t.Clients {
+		return errors.New("worker client count differs from frozen trial")
+	}
+	if !receipt.Controlled || receipt.WaveNS <= 0 {
+		return errors.New("standalone/incomplete worker cannot supply scored timing")
+	}
+	if p.Worker.SHA256 == "" || p.Worker.Bytes <= 0 || receipt.Binary.SHA256 != p.Worker.SHA256 || receipt.Binary.Bytes != p.Worker.Bytes {
+		return errors.New("worker executable changed")
+	}
+	return nil
 }
 func fmtNumber(n float64) string {
 	if math.IsNaN(n) || math.IsInf(n, 0) {
