@@ -41,4 +41,23 @@ select id,
 from t_temporal_pred
 order by id;
 
+-- A synthesized Decimal comparison domain must retain the full BIGINT
+-- capacity.  In particular, equal physical Decimal64 targets must still be
+-- widened before casting either operand.
+drop table if exists t_bigint_time_pred;
+create table t_bigint_time_pred (i bigint, tm time(0));
+insert into t_bigint_time_pred values
+  (-1000000000000000000, '00:00:00'),
+  (-999999999999999999, '00:00:00'),
+  (999999999999999999, '00:00:00'),
+  (1000000000000000000, '00:00:00');
+select i,
+       tm,
+       i = tm as bigint_eq_time,
+       tm = i as time_eq_bigint,
+       i < tm as bigint_lt_time,
+       tm < i as time_lt_bigint
+from t_bigint_time_pred
+order by i;
+
 drop database mysql_compat_temporal_predicate_matrix;

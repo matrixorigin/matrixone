@@ -69,6 +69,27 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 		return false, left, right
 	}
 	hasCast, castLeft, castRight := fixedTypeCastRule1(left, right)
+	if castLeft.Oid.IsDecimal() && castRight.Oid.IsDecimal() {
+		// Decimal targets produced by the fixed comparison rules are synthesized
+		// physical domains, not DECIMAL assignment targets.  Re-derive their
+		// precision from the original operands even when the two targets already
+		// have the same OID and scale; otherwise a BIGINT/TIME(0) comparison can
+		// retain DECIMAL64(18,0) and reject valid 19-digit BIGINT values.
+		maxScale := max(castLeft.Scale, castRight.Scale)
+		needsWiden := false
+		for _, input := range []types.Type{left, right} {
+			if input.IsIntOrUint() && integerIntegralWidth(input.Oid)+maxScale > min(castLeft.Width, castRight.Width) {
+				needsWiden = true
+				break
+			}
+		}
+		if needsWiden {
+			targets := []types.Type{castLeft, castRight}
+			if _, ok := alignDecimalComparisonTypes(targets, []types.Type{left, right}); ok {
+				castLeft, castRight = targets[0], targets[1]
+			}
+		}
+	}
 	if !isCollatedTextType(castLeft.Oid) || !isCollatedTextType(castRight.Oid) {
 		return hasCast, castLeft, castRight
 	}
@@ -245,9 +266,6 @@ func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
 			aligned = false
 		}
 	}
-	if aligned {
-		return false, true
-	}
 
 	sources := make([]types.Type, len(inputs))
 	for i, input := range inputs {
@@ -261,6 +279,22 @@ func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
 			}
 		} else {
 			sources[i] = targets[i]
+		}
+	}
+	if aligned {
+		// Preserve the historical per-operand widths for ordinary DECIMAL
+		// comparisons.  The one exception is an integer source whose complete
+		// integral domain does not fit in the already-aligned target; that is the
+		// synthesized BIGINT/TIME case that needs promotion.
+		allIntegerDomainsFit := true
+		for _, input := range inputs {
+			if input.IsIntOrUint() && integerIntegralWidth(input.Oid) > target.Width-target.Scale {
+				allIntegerDomainsFit = false
+				break
+			}
+		}
+		if allIntegerDomainsFit {
+			return false, true
 		}
 	}
 	if !setSafeDecimalWidthAndScaleFromSource(&target, sources) {
