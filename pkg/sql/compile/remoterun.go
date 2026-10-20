@@ -817,6 +817,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			TargetRowIdCol:               t.TargetRowIDCol,
 		}
 	case *lockop.LockOp:
+		if t.RequiresCoordinatorExecution() {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED lock operators must execute on the transaction coordinator")
+		}
 		in.LockOp = &pipeline.LockOp{
 			Targets: t.CopyToPipelineTarget(),
 		}
@@ -1408,8 +1412,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetLockOp()
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
+			if target.GetNoWait() || target.GetSkipLocked() {
+				return nil, moerr.NewNotSupportedNoCtx(
+					"remote NOWAIT and SKIP LOCKED lock operators are not supported")
+			}
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			lockArg.AddLockTargetWithPolicy(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetNoWait(), target.GetSkipLocked())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
