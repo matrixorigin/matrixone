@@ -295,3 +295,110 @@ ok github.com/matrixorigin/matrixone/pkg/sql/plan 5.494s
 - D1/D2/D3 SHA256、正式Go source manifest、精确race选择数、五包profile来源、所有BVT独立report和MySQL/MO控制输出均经最终脚本复核。匹配Go1.27.1的gofmt检查和`git diff --check`通过。
 - 本地完整原始日志/exit/命令/overlay/profile保留在当前worktree的`CLAUDE_D4_*`、`CLAUDE_D4B_*`及`CLAUDE_validation_artifacts/`；不将临时probe、TODO、服务数据或cache提交。本文提供固定版本、复现构造、样本与终端摘录；不声称这些作者证据已被reviewer独立重跑。
 - 本地自审无未关闭的实现/验证阻塞项；独立GitHub设计/实现review仍由reviewer决定。未dismiss CHANGES_REQUESTED，不等待/触发post-push CI。第6节部署、并发DDL和拓扑限度继续适用。
+
+## 8. Review20：CASE/IF 的强 TEXT 声明与公共验证
+
+本节验证的是本次提交的源码，工作区基座为 `5a1cb56e762054dfede52d5d0c1e866bdbcf30c9`，合入的固定 `mo/main` 为 `743e749a1e33d6c845bb73999e8c82d297a2b657`。此前第7节的 race、benchmark 和计数结果保留为历史证据，不能改标为本轮新测量。完整 PR 仍为 **40 文件、15 个非生成 production Go 文件、2027 行生产增删**；本轮生产修改仅在 `base_binder.go`，没有改变 history/retry/cache/migration 的状态格式或生命周期。
+
+### 8.1 契约纠正与实现边界
+
+历史 DEFAULT 测试把 `VARCHAR txt` 与弱 `_binary ''` 配对命名为 “genuine CASE owner”，并期待逐字节反转。这一结论错误；旧 PR 描述将 genuine-CASE 差异一概排除也不成立。本轮纠正该结论，而非把 CASE/IF 一律当透明节点。冻结 D1/D2/D3 的字节和历史状态不改。
+
+独立 MySQL 与当前 MO 的普通 SQL 控制包括：
+
+```sql
+create table t(txt varchar(16), bin varbinary(16));
+insert into t values ('你a', '你a');
+select char_length(if(txt is not null, txt, _binary '')),
+       hex(reverse(case when txt is not null then txt else _binary '' end)),
+       char_length(if(txt is not null, txt, bin)) from t;
+-- 2 | 61E4BDA0 | 4
+```
+
+更强的 VARCHAR 声明不能被较弱 binary literal 的公共传输类型降为 byte 语义；真实 binary column、同等级 binary literal、显式 BINARY CAST（包括 NULL CAST）和 binary COLLATE 仍可拥有声明。显式 TEXT COLLATE 的 rank 0 也不能被保留下来的 binary literal 拼写覆盖。LPAD 等独立结果所有者、关系边界及 FIELD/REGEXP 等声明消费者不能借此被穿透。
+
+实现复用已有 `stringDomainWitnessCollector`：两个 rank 标量与一个 binding-local `opaqueDeclaration`，沿原有遍历收集声明强度和独立结果所有权；不保存 AST/Expr 图、不新增持久化标志或函数白名单、不增加逐行图遍历。普通列及数值格式化可以证明 TEXT，但不把 allocating producer 的物理 TEXT 误当完整声明证明；显式 rank 0 TEXT 保持优先。CAST0 仅继承 rank 不构成新 COLLATE 所有者，实际 metadata 改变才构成边界。缺 Child 的 scalar 仍按未知双域保守处理。
+
+另一处复用 `function.IntegerArgumentTarget`，让数值参数继续由原有数值规范化负责；不能为字符串声明消费提前截断 TIMESTAMPADD SECOND 的小数。没有针对 TIMESTAMPADD 名称另设例外。新增指针身份/全 Expr 不变控制，合并上游的两个 SECOND binary-source 回归和公共 TimestampAdd 文件均通过。
+
+### 8.2 DEFAULT 两类失败必须分开
+
+23 个永久 DEFAULT 控制使用实际 CREATE TABLE、完整 plan copy、wire roundtrip、Expr copy 和 Eval，并检查 original→copy 相等及执行后完整 Expr 不变；覆盖 VARBINARY/BIGINT 目标、CASE/IF/NULLIF、真实 binary/显式 CAST/COLLATE、空值和 NULL。保留 `NULLIF retains allocated owner`，另补 CASE 包含 allocating binary owner 的控制。
+
+数值目标的原始复现：
+
+```sql
+create table t(txt varchar(16), n bigint default
+  (char_length(if(txt is not null, txt, _binary ''))));
+insert into t(txt) values ('你a');
+select n from t;
+insert into t(txt) values (NULL);
+```
+
+| 执行代 | 非 NULL 文本行 | NULL 选择 empty binary fallback |
+|---|---:|---|
+| MySQL 实际 DML | 2 | 成功，n=0 |
+| 固定上游743完整 Go overlay，CREATE TABLE/实际 Eval | 2 | empty string 转 int 失败 |
+| 本轮修正前的 feature/合并基座路径 | 4 | 公共 INSERT 报20203 |
+| 当前 G 实际 DML | 2 | 仍报20203，未称已修复 |
+
+上游 overlay 将所有 PR 不同的 Go 文件恢复到743（上游不存在的文件为 package-only stub），仅追加三项诊断及 batch/vector/colexec imports；不是只恢复 binder、保留其余 PR 代码的伪基线。最终实际执行为 IF_text PASS、IF_NULL/COALESCE_NULL FAIL，错误均为空串转 int；早先路径/缺 imports 的 build failure 单独保留，不作语义证据。
+
+因此，G 修正的是所选 VARCHAR 的字符消费，不扩展为 DEFAULT 目的数值类型对 binary literal 的通用提前强转/警告兼容重设计。永久 UT 和当前实际 DML 都保留原 `_binary ''` 的非 NULL 行为；公共混合 NULL 表的数值 DEFAULT 使用独立核实的 `_binary '0'`，期望为 **2/0/1**。原 empty fallback SQL、MySQL 的 **2/0/0**、MO 失败及当前负向复现完整保留，不把换字面量当作原失败已通过。
+
+### 8.3 最终源码验证与失败分代
+
+环境仍为 Go1.27.1、匹配 GOROOT 的 gofmt、darwin/arm64、经过 provenance 校验的 native 依赖；`GOMAXPROCS=2`、`GOFLAGS=-p=1`、`GOMEMLIMIT=2GiB`。通过支持的 `make -j2 build-with-prebuilt-native BIN_NAME=CLAUDE_mo_review_G` 构建服务，保留默认 native/SIMD，省略 DWARF。测试、构建、公共运行和交付前的 Go SHA256 清单一致。
+
+```sh
+.agents/skills/mo-dev/scripts/mo-cgo-test \
+  ./pkg/sql/plan ./pkg/frontend ./pkg/sql/compile \
+  ./pkg/sql/plan/function ./pkg/sql/parsers/tree \
+  -count=1 -timeout=900s -covermode=atomic \
+  -coverprofile=CLAUDE_owning.cover -json
+```
+
+同一次完整成功运行，没有拼接失败 profile：
+
+| 包 | PASS（含 subtest） | 原有 skip | package 终端秒 |
+|---|---:|---:|---:|
+| plan | 18212 | 2 | 85.477 |
+| frontend | 6266 | 1 | 17.400 |
+| compile | 3680 | 0 | 12.441 |
+| function | 11439 | 0 | 11.656 |
+| tree | 149 | 0 | 0.849 |
+
+相对合并基座，本轮变更可执行行 **35/36=97.2%**；相对固定上游，完整 PR **1011/1086=93.1%**。均超过75%，使用当前 G 的 atomic profile，不用 F 的旧 profile。完整 PR 逐文件分子/分母与第7.1节相比，仅 binder 改为 **274/288**；其余相同。这是普通包 instrumentation，不是统一 `-coverpkg` 的全仓覆盖率。
+
+五包 vet 通过；golangci-lint `--new-from-rev=743e749a1e33d6c845bb73999e8c82d297a2b657` 为0 issues。Molint exit0，仍有22条与固定上游相同 owner/source 的诊断；没有执行独立基线 molint，不称零诊断。
+
+失败代保留并分类：
+
+- 初始三个 DEFAULT 语义红；A–E 的 typed/COLLATE/LPAD 反例；两个 SECOND 集成失败及合并基座对照。没有降低 genuine binary 或 allocating owner 的断言来放行。
+- F focused、五包、静态、构建曾成功，但公共数值 DEFAULT 暴露漏路，故不能作为 G 验收。G focused 覆盖全部23项 DEFAULT、声明与 TimestampAdd 控制。
+- G 首轮五包中 compile 的 `TestUnionNestedTopClearsAllocationOwners` 失败于 `group spill disk budget exceeded (requested=68, used=68, limit=128)`；当时磁盘约15GiB，低于16GiB自动 reserve。暂停父 launcher 未暂停其已运行子测试，这次失败完整保留。
+- 有活动用户/FD 的 cache 清理均被预检拒绝；确认默认 Go cache 用户和打开文件均为0后执行 `go clean -cache`，恢复约53GiB。原资源 case 不改预算/断言重跑通过（0.01s）；之后重新执行上表完整五包，作为唯一当前验收 profile。未删除模块、native、源码、数据库、WIP 或证据，未停止无关进程。
+
+本轮无新的性能或 race 数字：纯 TEXT 快路径仍先于新增判断，没有新增遍历、缓存或跨执行状态；第7节性能/生命周期结论保持其原源码和测量范围，不改称当前源码的完整性能等价或全仓 race 证明。
+
+### 8.4 公共 SQL、结果审阅和范围
+
+独立端口/全新服务数据用于 G，旧 F 数据保留；先以原始期望正常执行 dtype **93/93**。新增 SQL 的 **21 行** MySQL/MO TSV 逐字节一致后才生成候选；审阅仅两处结果变化：新增条件/嵌套/prepared 控制，以及 DEFAULT 表追加两列。旧列的值/metadata 和原 MULTICN 片段保留。
+
+初次生成的 prepared 全 false 输出末列为空，mo-tester 格式产生行尾空格。保存原生成字节后，仅把新 SELECT 的 HEX/CHAR_LENGTH 两列交换顺序，独立重跑并核实21行中恰好三次 EXECUTE 的列置换；再生成、审阅并正常比较。没有手写期望值、关闭 metadata 或豁免 whitespace 检查。最终 `git diff --check` 通过。
+
+正常 `run`、rate100 的独立报告：
+
+| 文件 | 首轮 | 同实例第二轮 |
+|---|---:|---:|
+| dtype（本地单 CN 部分） | 104/104 | 104/104 |
+| prepared_field_history | 492/492 | 492/492 |
+| func_field | 97/97 | — |
+| prepared_variadic_comparison | 104/104 | — |
+| func_datetime_timestampadd | 99/99 | — |
+
+七份报告均 FAILED/IGNORED/ABNORAML=0，error.txt 为空；dtype 保留 `@metacmp(true)`，优先级仍为 SQL > document > global。其他文件沿用原全局设置。测试库清理完成，所拥有服务退出、端口释放；外部 MySQL 与其他任务的 MO 未停止。生成报告不是正常比较的替代品。
+
+本节仍不宣称 CASE 完整 MySQL parity：选择非空 binary literal 时的 charset/result-domain 规范化、更多 materialized conditional 情况、已有 CONCAT/explicit-CHAR/cross-explicit/unbounded-BINARY 差异仍有限制。不能把这些限制用于重新排除本节已明确修正的所选 VARCHAR+弱 binary literal 场景。未扩展到 partition、stored procedure、UDF 或警告兼容重设计。第6节的混合版本、restart、Proxy/MULTICN、实际并发 DDL physical retry、wire20631 注入和全仓 race 限度不变。
+
+本地证据在 review20 worktree 的 `CLAUDE_*` 和 `CLAUDE_validation_artifacts/`，包括各候选失败、上游 overlay、资源失败/恢复、当前 profile、逐轮报告、独立 oracle 与源码清单；不提交临时工具/数据/TODO。D1/D2/D3 哈希和完整40文件变更图复核不变。作者自审及实施授权不代表独立 reviewer 批准；不 dismiss CHANGES_REQUESTED，不等待或请求 post-push CI。

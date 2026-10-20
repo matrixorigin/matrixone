@@ -82,7 +82,7 @@ select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
 from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
 select id, hex(left(coalesce(x, '你a'), 1)), hex(reverse(coalesce(x, '你a')))
 from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
--- Conditional results own their declarations before another value selector.
+-- Equal-rank binary columns own conditional declarations before another selector.
 select id, char_length(coalesce(if(id = 2, bin, txt), '')),
        hex(left(coalesce(if(id = 2, bin, txt), ''), 1)),
        hex(reverse(coalesce(if(id = 2, bin, txt), ''))),
@@ -92,6 +92,32 @@ from domains order by id;
 select id, hex(left(coalesce(ifnull(txt, bin), ''), 1)),
        hex(reverse(coalesce(ifnull(txt, bin), '')))
 from domains order by id;
+-- A weaker binary literal must not demote the selected VARCHAR row.
+-- Explicit COLLATE still wins in either direction.
+select id, char_length(if(txt is not null, txt, _binary '')),
+       hex(left(if(txt is not null, txt, _binary ''), 1)),
+       hex(reverse(case when txt is not null then txt else _binary '' end)),
+       hex(reverse(case when txt is not null then txt else _binary '' collate `binary` end)),
+       hex(reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end))
+from domains order by id;
+select id, char_length(coalesce(if(txt is not null, txt, _binary ''), '')),
+       hex(reverse(nullif(case when txt is not null then txt else _binary '' end, '')))
+from domains order by id;
+select id, char_length(if(id = 2, _binary '', coalesce(txt, _binary ''))),
+       hex(reverse(case when id = 2 then _binary '' else coalesce(txt, _binary '') end))
+from domains order by id;
+prepare conditional_text_stmt from
+    'select id, hex(reverse(case when ? then txt else _binary '''' end)),
+            char_length(if(?, txt, _binary ''''))
+     from domains order by id';
+set @conditional_text = true;
+execute conditional_text_stmt using @conditional_text, @conditional_text;
+set @conditional_text = false;
+execute conditional_text_stmt using @conditional_text, @conditional_text;
+set @conditional_text = true;
+execute conditional_text_stmt using @conditional_text, @conditional_text;
+deallocate prepare conditional_text_stmt;
+
 -- A scalar row limit is not a derived-table materialization boundary.
 select char_length((select coalesce(txt, bin) from domains where id = 1 limit 1)),
        hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1)),
@@ -164,15 +190,19 @@ select id, char_length(nullif(x, '')), hex(left(nullif(x, ''), 1)),
 from (select id, coalesce(txt, bin) x from domains) d order by id;
 
 -- Expression DEFAULT binding preserves NULLIF's first value source without a query builder.
+-- CASE/IF also retain stronger VARCHAR row domains in stored defaults.
 create table nullif_default_domains (
     id int,
     txt varchar(16),
     forwarded varbinary(64) default (reverse(nullif(coalesce(txt, _binary ''), ''))),
     control varbinary(64) default (reverse(coalesce(txt, _binary ''))),
-    declared varbinary(64) default (reverse(cast(nullif(coalesce(txt, _binary ''), '') as binary(4))))
+    declared varbinary(64) default (reverse(cast(nullif(coalesce(txt, _binary ''), '') as binary(4)))),
+    case_forwarded varbinary(64) default (reverse(nullif(case when txt is not null then txt else _binary '' end, ''))),
+    if_length bigint default (char_length(if(txt is not null, txt, _binary '0')))
 );
 insert into nullif_default_domains (id, txt) values (1, '你a'), (2, ''), (3, null);
-select id, hex(forwarded), hex(control), hex(declared) from nullif_default_domains order by id;
+select id, hex(forwarded), hex(control), hex(declared), hex(case_forwarded), if_length
+from nullif_default_domains order by id;
 drop table nullif_default_domains;
 
 -- BIT_COUNT consumes the binary declaration without changing sibling row-domain consumers.

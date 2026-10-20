@@ -142,6 +142,53 @@ from domains order by id;
 1  ¦  E4  ¦  61A0BDE4  𝄀
 2  ¦  E4  ¦  61A0BDE4  𝄀
 3  ¦  E4  ¦  61A0BDE4
+select id, char_length(if(txt is not null, txt, _binary '')),
+hex(left(if(txt is not null, txt, _binary ''), 1)),
+hex(reverse(case when txt is not null then txt else _binary '' end)),
+hex(reverse(case when txt is not null then txt else _binary '' collate `binary` end)),
+hex(reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end))
+from domains order by id;
+➤ id[4,32,0]  ¦  char_length(if(txt is not null, txt, ))[-5,64,0]  ¦  hex(left(if(txt is not null, txt, ), 1))[12,128,0]  ¦  hex(reverse(case when txt is not null then txt else  end))[12,128,0]  ¦  hex(reverse(case when txt is not null then txt else () collate binary end))[12,128,0]  ¦  hex(reverse(case when txt is not null then (txt) collate utf8mb4_bin else  end))[12,128,0]  𝄀
+1  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  ¦  61A0BDE4  ¦  61E4BDA0  𝄀
+2  ¦  0  ¦    ¦    ¦    ¦    𝄀
+3  ¦  2  ¦  E4BDA0  ¦  61E4BDA0  ¦  61A0BDE4  ¦  61E4BDA0
+select id, char_length(coalesce(if(txt is not null, txt, _binary ''), '')),
+hex(reverse(nullif(case when txt is not null then txt else _binary '' end, '')))
+from domains order by id;
+➤ id[4,32,0]  ¦  char_length(coalesce(if(txt is not null, txt, ), ))[-5,64,0]  ¦  hex(reverse(nullif(case when txt is not null then txt else  end, )))[12,128,0]  𝄀
+1  ¦  2  ¦  61E4BDA0  𝄀
+2  ¦  0  ¦  null  𝄀
+3  ¦  2  ¦  61E4BDA0
+select id, char_length(if(id = 2, _binary '', coalesce(txt, _binary ''))),
+hex(reverse(case when id = 2 then _binary '' else coalesce(txt, _binary '') end))
+from domains order by id;
+➤ id[4,32,0]  ¦  char_length(if(id = 2, , coalesce(txt, )))[-5,64,0]  ¦  hex(reverse(case when id = 2 then  else coalesce(txt, ) end))[-1,16383,0]  𝄀
+1  ¦  2  ¦  61E4BDA0  𝄀
+2  ¦  0  ¦    𝄀
+3  ¦  2  ¦  61E4BDA0
+prepare conditional_text_stmt from
+'select id, hex(reverse(case when ? then txt else _binary '''' end)),
+char_length(if(?, txt, _binary ''''))
+from domains order by id';
+set @conditional_text = true;
+execute conditional_text_stmt using @conditional_text, @conditional_text;
+➤ id[4,32,0]  ¦  hex(reverse(case when ? then domains.txt else  end))[12,128,0]  ¦  char_length(if(?, domains.txt, ))[-5,64,0]  𝄀
+1  ¦  61E4BDA0  ¦  2  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  61E4BDA0  ¦  2
+set @conditional_text = false;
+execute conditional_text_stmt using @conditional_text, @conditional_text;
+➤ id[4,32,0]  ¦  hex(reverse(case when ? then domains.txt else  end))[12,128,0]  ¦  char_length(if(?, domains.txt, ))[-5,64,0]  𝄀
+1  ¦    ¦  0  𝄀
+2  ¦    ¦  0  𝄀
+3  ¦    ¦  0
+set @conditional_text = true;
+execute conditional_text_stmt using @conditional_text, @conditional_text;
+➤ id[4,32,0]  ¦  hex(reverse(case when ? then domains.txt else  end))[12,128,0]  ¦  char_length(if(?, domains.txt, ))[-5,64,0]  𝄀
+1  ¦  61E4BDA0  ¦  2  𝄀
+2  ¦  null  ¦  null  𝄀
+3  ¦  61E4BDA0  ¦  2
+deallocate prepare conditional_text_stmt;
 select char_length((select coalesce(txt, bin) from domains where id = 1 limit 1)),
 hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1)),
 hex(reverse((select coalesce(txt, bin) from domains where id = 1 limit 1)));
@@ -257,14 +304,17 @@ id int,
 txt varchar(16),
 forwarded varbinary(64) default (reverse(nullif(coalesce(txt, _binary ''), ''))),
 control varbinary(64) default (reverse(coalesce(txt, _binary ''))),
-declared varbinary(64) default (reverse(cast(nullif(coalesce(txt, _binary ''), '') as binary(4))))
+declared varbinary(64) default (reverse(cast(nullif(coalesce(txt, _binary ''), '') as binary(4)))),
+case_forwarded varbinary(64) default (reverse(nullif(case when txt is not null then txt else _binary '' end, ''))),
+if_length bigint default (char_length(if(txt is not null, txt, _binary '0')))
 );
 insert into nullif_default_domains (id, txt) values (1, '你a'), (2, ''), (3, null);
-select id, hex(forwarded), hex(control), hex(declared) from nullif_default_domains order by id;
-➤ id[4,32,0]  ¦  hex(forwarded)[12,128,0]  ¦  hex(control)[12,128,0]  ¦  hex(declared)[12,128,0]  𝄀
-1  ¦  61E4BDA0  ¦  61E4BDA0  ¦  61A0BDE4  𝄀
-2  ¦  null  ¦    ¦  null  𝄀
-3  ¦  null  ¦    ¦  null
+select id, hex(forwarded), hex(control), hex(declared), hex(case_forwarded), if_length
+from nullif_default_domains order by id;
+➤ id[4,32,0]  ¦  hex(forwarded)[12,128,0]  ¦  hex(control)[12,128,0]  ¦  hex(declared)[12,128,0]  ¦  hex(case_forwarded)[12,128,0]  ¦  if_length[-5,64,0]  𝄀
+1  ¦  61E4BDA0  ¦  61E4BDA0  ¦  61A0BDE4  ¦  61E4BDA0  ¦  2  𝄀
+2  ¦  null  ¦    ¦  null  ¦  null  ¦  0  𝄀
+3  ¦  null  ¦    ¦  null  ¦  null  ¦  1
 drop table nullif_default_domains;
 select id, bit_count(coalesce(txt, bin)) from domains order by id;
 ➤ id[4,32,0]  ¦  bit_count(coalesce(txt, bin))[-5,64,0]  𝄀

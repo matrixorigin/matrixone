@@ -261,6 +261,20 @@ func TestPreparedFieldStringSourceDeclaration(t *testing.T) {
 	require.Same(t, source, consumed[0].GetF().Args[0])
 	require.Equal(t, int32(types.T_blob), consumed[1].Typ.Id)
 	require.Same(t, source, consumed[1].GetF().Args[0])
+	for _, name := range []string{"timestampadd", "left"} {
+		// Both registry contracts own argument 1's numeric normalization.
+		// A transport declaration must not wrap it in a second conversion.
+		args := []*Expr{makePlan2StringConstExprWithType("SECOND"), source, makePlan2StringConstExprWithType("2024-01-01")}
+		if name == "left" {
+			args = args[:2]
+		}
+		snapshot := DeepCopyExpr(source)
+		preserved, err := binder.bindStringSourceDeclaration(name, args)
+		require.NoError(t, err)
+		require.Same(t, source, preserved[1])
+		require.Same(t, source, args[1])
+		require.Equal(t, snapshot, source)
+	}
 }
 
 func TestStringDeclarationBoundaries(t *testing.T) {
@@ -302,14 +316,20 @@ func TestStringDeclarationBoundaries(t *testing.T) {
 }
 
 func TestStringCommonValueDeclarationBoundary(t *testing.T) {
-	for _, value := range []string{
-		"if(n_nationkey=1,_binary 'a',n_name)",
-		"case when n_nationkey=1 then _binary 'a' else n_name end",
-		"ifnull(n_name,_binary '')",
+	for _, tc := range []struct {
+		value string
+		owns  bool
+	}{
+		{"if(n_nationkey=1,_binary 'a',n_name)", false},
+		{"case when n_nationkey=1 then _binary 'a' else n_name end", false},
+		{"ifnull(n_name,_binary '')", false},
+		{"if(n_nationkey=1,cast('a' as binary(1)),n_name)", true},
+		{"case when n_nationkey=1 then cast('a' as binary(1)) else n_name end", true},
+		{"ifnull(n_name,cast('' as binary(1)))", true},
 	} {
-		t.Run(value, func(t *testing.T) {
+		t.Run(tc.value, func(t *testing.T) {
 			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
-				"select reverse(coalesce("+value+",'')) from nation", 1)
+				"select reverse(coalesce("+tc.value+",'')) from nation", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
 			bound, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
@@ -320,7 +340,10 @@ func TestStringCommonValueDeclarationBoundary(t *testing.T) {
 			for source := preparedFieldPrivateCastSource(arg, 0); source != nil; source = preparedFieldPrivateCastSource(arg, 0) {
 				arg = source
 			}
-			require.True(t, isCastOverload(arg, 1), "consume the conditional's declaration before COALESCE selects its payload: %s", arg.String())
+			require.Equal(t, tc.owns, isCastOverload(arg, 1), "only authoritative binary contributors may consume the selected row: %s", arg.String())
+			if !tc.owns {
+				return
+			}
 			require.False(t, arg.GetF().GetSyntaxExplicitCast())
 			require.Equal(t, int32(types.T_varbinary), arg.Typ.Id)
 			require.Equal(t, makeTypeByPlan2Expr(arg.GetF().Args[0]), makeTypeByPlan2Expr(arg),
@@ -337,9 +360,10 @@ func TestStringDeclarationConsumers(t *testing.T) {
 	}{
 		{"NULLIF forwards selected row", "select reverse(nullif(coalesce(n_name,_binary ''),'')) from nation", "reverse", 0, false},
 		{"NULLIF merged source", "select reverse(x) from (select nullif(coalesce(n_name,_binary ''),'') x from nation) d", "reverse", 0, false},
-		{"CASE is not NULLIF", "select reverse(case when coalesce(n_name,_binary '')='' then null else coalesce(n_name,_binary '') end) from nation", "reverse", 0, true},
-		{"NULLIF retains conditional owner", "select reverse(nullif(if(n_nationkey=1,_binary '',coalesce(n_name,_binary '')),'')) from nation", "reverse", 0, true},
+		{"CASE retains stronger text source", "select reverse(case when coalesce(n_name,_binary '')='' then null else coalesce(n_name,_binary '') end) from nation", "reverse", 0, false},
+		{"NULLIF forwards conditional text", "select reverse(nullif(if(n_nationkey=1,_binary '',coalesce(n_name,_binary '')),'')) from nation", "reverse", 0, false},
 		{"NULLIF retains allocated owner", "select reverse(nullif(lpad(coalesce(n_name,_binary ''),3,'z'),'')) from nation", "reverse", 0, true},
+		{"CASE retains allocated binary owner", "select reverse(case when n_nationkey=0 then lpad(coalesce(n_name,cast('' as binary(4))),3,'z') else _binary '' end) from nation", "reverse", 0, true},
 		{"BIT_COUNT direct source", "select bit_count(coalesce(n_name,_binary '')) from nation", "bit_count", 0, true},
 		{"BIT_COUNT merged source", "select bit_count(x) from (select coalesce(n_name,_binary '') x from nation) d", "bit_count", 0, true},
 		{"COALESCE over REVERSE", "select coalesce(reverse(coalesce(n_name,_binary '')),'') from nation", "coalesce", 0, false},
@@ -348,10 +372,10 @@ func TestStringDeclarationConsumers(t *testing.T) {
 		{"COALESCE over REPEAT", "select coalesce(repeat(coalesce(n_name,_binary ''),2),'') from nation", "coalesce", 0, false},
 		{"COALESCE over RPAD", "select coalesce(rpad(coalesce(n_name,_binary ''),3,'z'),'') from nation", "coalesce", 0, false},
 		{"COALESCE over LPAD", "select coalesce(lpad(coalesce(n_name,_binary ''),3,'z'),'') from nation", "coalesce", 0, true},
-		{"IF over COALESCE", "select char_length(if(n_nationkey=1,_binary '',coalesce(n_name,_binary ''))) from nation", "char_length", 0, true},
-		{"CASE over COALESCE", "select char_length(case when n_nationkey=1 then _binary '' else coalesce(n_name,_binary '') end) from nation", "char_length", 0, true},
-		{"CASE over column", "select char_length(case when n_nationkey=1 then _binary '' else n_name end) from nation", "char_length", 0, true},
-		{"merged conditional", "select char_length(x) from (select if(n_nationkey=1,_binary '',coalesce(n_name,_binary '')) x from nation) d", "char_length", 0, true},
+		{"IF over COALESCE", "select char_length(if(n_nationkey=1,_binary '',coalesce(n_name,_binary ''))) from nation", "char_length", 0, false},
+		{"CASE over COALESCE", "select char_length(case when n_nationkey=1 then _binary '' else coalesce(n_name,_binary '') end) from nation", "char_length", 0, false},
+		{"CASE over column", "select char_length(case when n_nationkey=1 then _binary '' else n_name end) from nation", "char_length", 0, false},
+		{"merged conditional", "select char_length(x) from (select if(n_nationkey=1,_binary '',coalesce(n_name,_binary '')) x from nation) d", "char_length", 0, false},
 		{"LOCATE merged source", "select locate('a',x) from (select coalesce(n_name,_binary '') x from nation) d", "locate", 1, true},
 		{"INSTR merged source", "select instr(x,'a') from (select coalesce(n_name,_binary '') x from nation) d", "instr", 0, true},
 		{"LIKE merged source", "select x like '__' from (select coalesce(n_name,_binary '') x from nation) d", "like", 0, true},
@@ -405,6 +429,10 @@ func TestStringConditionalDeclarationOwnership(t *testing.T) {
 	null := &Expr{Typ: typ, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Isnull: true}}}
 	binary := makePlan2VarBinaryConstExprWithType("x")
 	binary.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER
+	textType := types.T_varchar.ToType()
+	textColumn := GetColExpr(makePlan2Type(&textType), 1, 1)
+	textLiteral := makePlan2StringConstExprWithType("你a")
+	scalar := &Expr{Typ: typ, Expr: &planpb.Expr_Sub{Sub: &planpb.SubqueryRef{Typ: planpb.SubqueryRef_SCALAR}}}
 	fn := func(name string, args ...*Expr) *Expr {
 		return &Expr{Typ: typ, Expr: &planpb.Expr_F{F: &planpb.Function{
 			Func: &planpb.ObjectRef{ObjName: name}, Args: args,
@@ -426,6 +454,12 @@ func TestStringConditionalDeclarationOwnership(t *testing.T) {
 		{"genuine binary peer", variable, binary, true},
 		{"genuine binary column", variable, column, true},
 		{"explicit binary NULL", variable, explicit, true},
+		{"text column outranks binary literal", textColumn, binary, false},
+		{"operand order does not change rank", binary, textColumn, false},
+		{"text literal cannot outrank binary literal", textLiteral, binary, true},
+		{"equal rank binary column", textColumn, column, true},
+		{"equal rank explicit cast", textColumn, explicit, true},
+		{"unknown scalar is not a weaker literal", textColumn, fn("coalesce", scalar, binary), true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			// The binary condition contributes no result declaration.

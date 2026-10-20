@@ -6388,6 +6388,12 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		if kind == fieldStringText && b.stringSourceIsPlainText(arg) {
 			continue
 		}
+		if _, numeric := function.IntegerArgumentTarget(name, i); numeric {
+			// Numeric roles already own source conversion. In particular,
+			// SECOND may retain a fractional string until interval normalization;
+			// consuming its binary declaration here would truncate that value.
+			continue
+		}
 		if kind == fieldStringBinary && possibleStringDomainsForExpr(arg) == possibleStringDomainBinary {
 			continue
 		}
@@ -6395,8 +6401,8 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		// LEFT/REVERSE forward their selected row, while e.g. LPAD owns its
 		// result declaration even though it uses character input offsets.
 		declaredResult := isPreparedCommonValueFunction(name) && preparedStringResultOwnsDeclaration(arg)
-		// References alone are not materialization. Conditional results and
-		// actual query-block boundaries, however, consume their declarations.
+		// References alone are not materialization. A conditional's binary
+		// contributors must own its declaration before consuming row domains.
 		materialized := b.stringSourceHasDeclarationBoundary(arg, nil, nil)
 		declaration := materialized || declaredResult || isPadSpaceComparisonFunction(name)
 		switch name {
@@ -6543,6 +6549,15 @@ func (b *baseBinder) stringSourceHasDeclarationBoundary(expr *Expr, scalarScope 
 		// operand witness, which excludes predicates and honors explicit casts.
 		collector := stringDomainWitnessCollector{seen: make(map[string]struct{})}
 		collector.collectResult(expr, make(map[*Expr]struct{}), true)
+		// A stronger TEXT declaration (for example a VARCHAR column against
+		// a binary literal) must not be demoted by the common binary transport.
+		// Equal-rank binary columns and explicit casts still own their domain.
+		// Ordinary columns and numeric formatters can prove TEXT authority,
+		// but an allocating producer may hide a binary declaration behind TEXT.
+		if collector.textRank != 0 && (!collector.opaqueDeclaration || collector.textRank == 1) &&
+			(collector.staticDomains&possibleStringDomainBinary == 0 || collector.binaryRank > collector.textRank) {
+			return false
+		}
 		return len(collector.args) == 0 || collector.staticDomains&possibleStringDomainBinary != 0
 	}
 	if b.builder == nil || b.builder.qry == nil {
@@ -6748,6 +6763,38 @@ type stringDomainWitnessCollector struct {
 	args          []*Expr
 	seen          map[string]struct{}
 	staticDomains uint8
+	// An independent result owner cannot prove its domain from transport alone.
+	opaqueDeclaration bool
+	// Rank + 1 leaves zero for an absent declaration. These scalar facts are
+	// binding-local and never enter the persisted source witness.
+	textRank, binaryRank uint32
+}
+
+func (c *stringDomainWitnessCollector) addStaticDomain(expr *Expr, domains uint8, declaration bool) {
+	if !declaration {
+		c.staticDomains |= domains
+		return
+	}
+	collation, ok := collationForExpression(expr)
+	if ok && collation.rank == 0 {
+		// Explicit COLLATE owns the declaration even when a folded literal
+		// retains its original byte spelling for other (numeric) consumers.
+		domains = possibleStringDomainText
+		if collation.charset == uint32(types.CharsetBinary) {
+			domains = possibleStringDomainBinary
+		}
+	}
+	c.staticDomains |= domains
+	if !ok {
+		return
+	}
+	rank := collation.rank + 1
+	if domains&possibleStringDomainText != 0 && (c.textRank == 0 || rank < c.textRank) {
+		c.textRank = rank
+	}
+	if domains&possibleStringDomainBinary != 0 && (c.binaryRank == 0 || rank < c.binaryRank) {
+		c.binaryRank = rank
+	}
 }
 
 // A flat summary retains marker identities and scalar domains, never the value
@@ -6841,17 +6888,16 @@ func (c *stringDomainWitnessCollector) collectResult(expr *Expr, visited map[*Ex
 	}
 	if lit := expr.GetLit(); lit != nil {
 		if !lit.Isnull {
+			domains := possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
 			switch lit.LiteralForm {
 			case plan.StringLiteralForm_STRING_LITERAL_TEXT:
-				c.staticDomains |= possibleStringDomainText
-
+				domains = possibleStringDomainText
 			case plan.StringLiteralForm_STRING_LITERAL_BINARY_INTRODUCER,
 				plan.StringLiteralForm_STRING_LITERAL_HEX,
 				plan.StringLiteralForm_STRING_LITERAL_BIT:
-				c.staticDomains |= possibleStringDomainBinary
-			default:
-				c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+				domains = possibleStringDomainBinary
 			}
+			c.addStaticDomain(expr, domains, declaration)
 		}
 		c.collectResult(lit.Src, visited, declaration)
 		return
@@ -6860,28 +6906,32 @@ func (c *stringDomainWitnessCollector) collectResult(expr *Expr, visited map[*Ex
 		if sub.Child != nil {
 			c.collectResult(sub.Child, visited, declaration)
 		} else {
-			c.staticDomains |= possibleStringDomainText | possibleStringDomainBinary
+			c.addStaticDomain(expr, possibleStringDomainText|possibleStringDomainBinary, declaration)
 		}
 		return
 	}
 	if col := expr.GetCol(); col != nil {
-		c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+		c.addStaticDomain(expr, possibleStringDomainsForType(makeTypeByPlan2Expr(expr)), declaration)
 		return
 	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil {
-		c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+		c.addStaticDomain(expr, possibleStringDomainsForType(makeTypeByPlan2Expr(expr)), declaration)
 		return
 	}
 	name := strings.ToLower(fn.Func.GetObjName())
 	if name == "cast" {
-		if fn.GetSyntaxExplicitCast() {
-			c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+		// COLLATE uses CAST0, but its explicit rank is still a declaration.
+		// A later transport cast that merely inherits that rank is not.
+		explicitCollation := declaration && expr.Typ.CollationCoercibilitySet && expr.Typ.CollationCoercibility == 0 &&
+			len(fn.Args) > 0 && !expr.Typ.SameCollation(fn.Args[0].Typ)
+		if fn.GetSyntaxExplicitCast() || explicitCollation {
+			c.addStaticDomain(expr, possibleStringDomainsForType(makeTypeByPlan2Expr(expr)), declaration)
 			return
 		}
 		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
 		if overload != 0 || len(fn.Args) == 0 {
-			c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+			c.addStaticDomain(expr, possibleStringDomainsForType(makeTypeByPlan2Expr(expr)), declaration)
 			return
 		}
 		if possibleStringDomainsForType(makeTypeByPlan2Expr(fn.Args[0])) != 0 {
@@ -6899,7 +6949,8 @@ func (c *stringDomainWitnessCollector) collectResult(expr *Expr, visited map[*Ex
 	}
 	if declaration && !isPreparedStringConditional(expr) {
 		if _, _, ownsResult := preparedStringDomainContract(name, len(fn.Args)); ownsResult {
-			c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+			c.opaqueDeclaration = true
+			c.addStaticDomain(expr, possibleStringDomainsForType(makeTypeByPlan2Expr(expr)), declaration)
 			return
 		}
 	}
@@ -6973,7 +7024,7 @@ func (c *stringDomainWitnessCollector) collectResult(expr *Expr, visited map[*Ex
 		}
 		return
 	}
-	c.staticDomains |= possibleStringDomainsForType(makeTypeByPlan2Expr(expr))
+	c.addStaticDomain(expr, possibleStringDomainsForType(makeTypeByPlan2Expr(expr)), declaration)
 }
 
 func preparedExprStringDomainDependsOnRuntime(expr *plan.Expr) bool {

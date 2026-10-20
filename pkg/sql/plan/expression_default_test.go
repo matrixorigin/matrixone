@@ -36,13 +36,29 @@ import (
 func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 	for _, tc := range []struct {
 		name, sourceType, expression, input, wantHex string
-		nullInput, nullResult                        bool
+		nullInput, nullResult, integerResult         bool
+		wantLength                                   int64
 	}{
 		{name: "selected text", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61e4bda0"},
 		{name: "without NULLIF", sourceType: "varchar(16)", expression: "reverse(coalesce(txt,_binary ''))", input: "你a", wantHex: "61e4bda0"},
 		{name: "independent text owner", sourceType: "varchar(16)", expression: "reverse(nullif(txt,''))", input: "你a", wantHex: "61e4bda0"},
 		{name: "independent binary owner", sourceType: "varbinary(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", input: "你a", wantHex: "61a0bde4"},
-		{name: "genuine CASE owner", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE selected text through NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE selected text", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else _binary '' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "IF selected text", sourceType: "varchar(16)", expression: "reverse(if(txt is not null,txt,_binary ''))", input: "你a", wantHex: "61e4bda0"},
+		{name: "IF length with numeric DEFAULT target", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary ''))", input: "你a", integerResult: true, wantLength: 2},
+		{name: "CASE length with numeric DEFAULT target", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then txt else _binary '0' end)", input: "你a", integerResult: true, wantLength: 2},
+		{name: "IF length of empty text", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", integerResult: true},
+		{name: "IF length with numeric compatible fallback", sourceType: "varchar(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", nullInput: true, integerResult: true, wantLength: 1},
+		{name: "IF length of binary column", sourceType: "varbinary(16)", expression: "char_length(if(txt is not null,txt,_binary '0'))", input: "你a", integerResult: true, wantLength: 4},
+		{name: "CASE length with explicit binary peer", sourceType: "varchar(16)", expression: "char_length(case when txt is not null then txt else cast('' as binary(4)) end)", input: "你a", integerResult: true, wantLength: 4},
+		{name: "CASE explicit binary COLLATE", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else _binary '' collate binary end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE explicit text COLLATE", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE explicit binary peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else cast('' as binary(4)) end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE explicit binary NULL", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else cast(null as binary(4)) end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE hex literal peer", sourceType: "varchar(16)", expression: "reverse(case when txt is not null then txt else X'ff' end)", input: "你a", wantHex: "61e4bda0"},
+		{name: "CASE selected binary column", sourceType: "varbinary(16)", expression: "reverse(case when txt is not null then txt else '' end)", input: "你a", wantHex: "61a0bde4"},
+		{name: "CASE NULL input", sourceType: "varchar(16)", expression: "reverse(nullif(case when txt is not null then txt else _binary '' end,''))", nullInput: true, nullResult: true},
 		{name: "nested NULLIF", sourceType: "varchar(16)", expression: "reverse(nullif(nullif(coalesce(txt,_binary ''),''),'x'))", input: "你a", wantHex: "61e4bda0"},
 		{name: "matching value", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", nullResult: true},
 		{name: "NULL input", sourceType: "varchar(16)", expression: "reverse(nullif(coalesce(txt,_binary ''),''))", nullInput: true, nullResult: true},
@@ -50,8 +66,12 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := newPlanTestProcess(t)
 			ctx := NewMockCompilerContext(false, proc)
+			resultType, resultOID := "varbinary(64)", types.T_varbinary
+			if tc.integerResult {
+				resultType, resultOID = "bigint", types.T_int64
+			}
 			stmt, err := mysql.ParseOne(proc.Ctx, "create table t(txt "+tc.sourceType+
-				", result varbinary(64) default ("+tc.expression+"))", 1)
+				", result "+resultType+" default ("+tc.expression+"))", 1)
 			require.NoError(t, err)
 			t.Cleanup(stmt.Free)
 			bound, err := BuildPlan(ctx, stmt, false)
@@ -66,7 +86,7 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 			cols := restored.GetDdl().GetCreateTable().TableDef.Cols
 			expr := DeepCopyExpr(cols[1].Default.Expr)
 			require.Equal(t, original.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr, expr)
-			require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
+			require.Equal(t, int32(resultOID), expr.Typ.Id)
 			require.Equal(t, int32(64), expr.Typ.Width)
 			snapshot := DeepCopyExpr(expr)
 
@@ -82,7 +102,11 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.nullResult, result.IsNull(0))
 			if !tc.nullResult {
-				require.Equal(t, tc.wantHex, hex.EncodeToString(result.GetBytesAt(0)))
+				if tc.integerResult {
+					require.Equal(t, tc.wantLength, vector.MustFixedColNoTypeCheck[int64](result)[0])
+				} else {
+					require.Equal(t, tc.wantHex, hex.EncodeToString(result.GetBytesAt(0)))
+				}
 			}
 			require.Equal(t, snapshot, expr, "executing a DEFAULT must not mutate its bound declaration or source proof")
 		})
