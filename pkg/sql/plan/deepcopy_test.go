@@ -93,11 +93,12 @@ func TestDeepCopyTableDefOwnsName2ColIndex(t *testing.T) {
 
 func TestDeepCopyColDefPreservesOriginTable(t *testing.T) {
 	source := &planpb.ColDef{
-		Name:          "display_name",
-		OriginName:    "source_name",
-		TblName:       "table_alias",
-		OriginTblName: "source_table",
-		DbName:        "source_db",
+		Name:             "display_name",
+		OriginName:       "source_name",
+		TblName:          "table_alias",
+		OriginTblName:    "source_table",
+		DbName:           "source_db",
+		ResultColumnKind: planpb.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
 	}
 
 	cloned := DeepCopyColDef(source)
