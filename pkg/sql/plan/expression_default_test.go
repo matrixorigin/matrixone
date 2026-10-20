@@ -56,8 +56,16 @@ func TestExpressionDefaultNullIfStringSource(t *testing.T) {
 			t.Cleanup(stmt.Free)
 			bound, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
-			cols := bound.GetDdl().GetCreateTable().TableDef.Cols
-			expr := cols[1].Default.Expr
+			original := DeepCopyPlan(bound)
+			require.Equal(t, bound.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr,
+				original.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr)
+			encoded, err := bound.Marshal()
+			require.NoError(t, err)
+			restored := &planpb.Plan{}
+			require.NoError(t, restored.Unmarshal(encoded))
+			cols := restored.GetDdl().GetCreateTable().TableDef.Cols
+			expr := DeepCopyExpr(cols[1].Default.Expr)
+			require.Equal(t, original.GetDdl().GetCreateTable().TableDef.Cols[1].Default.Expr, expr)
 			require.Equal(t, int32(types.T_varbinary), expr.Typ.Id)
 			require.Equal(t, int32(64), expr.Typ.Width)
 			snapshot := DeepCopyExpr(expr)

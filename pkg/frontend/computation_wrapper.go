@@ -2073,6 +2073,7 @@ func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
 // replaced on the next execution of the cached prepared statement.
 type preparedExecutionRetry struct {
 	fieldTypes         *plan2.PreparedFieldTypes
+	fieldSchemas       []*plan2.ObjectRef
 	bindings           []plan2.PreparedSourceBinding
 	paramVals          []any
 	preparedPlan       *plan2.Plan
@@ -3032,6 +3033,24 @@ func buildPlanForCompileRetry(
 	if preparedRetry != nil && preparedRetry.bindings != nil && !forcePrepare {
 		ctx = plan2.WithPreparedUserVariableBindings(ctx, preparedRetry.preparedPlan)
 		ctx = plan2.WithPreparedFieldTypes(ctx, preparedRetry.fieldTypes)
+		if preparedRetry.fieldTypes != nil {
+			previous := compilerContext.GetContext()
+			compilerContext.SetContext(ctx)
+			defer compilerContext.SetContext(previous)
+			// FIELD's result metadata can stay unchanged when its source switches
+			// TEXT/BINARY. Validate the original declaration generation before
+			// binding with retained history; retry is not another history publisher.
+			dependencies := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+				CatalogDependencies: preparedRetry.fieldSchemas,
+			}}}
+			changed, err := checkModify(dependencies, compilerContext.Resolve)
+			if err != nil {
+				return nil, err
+			}
+			if changed {
+				return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			}
+		}
 		bound, err := buildPreparedBoundQuery(ctx, ses, compilerContext, stmt, preparedRetry.bindings, preparedRetry.paramVals)
 		if err != nil {
 			return nil, err

@@ -130,6 +130,88 @@ func TestFieldResolvedSelectorStringDomain(t *testing.T) {
 	}
 }
 
+func TestPlainTextStringSourceProof(t *testing.T) {
+	textType := types.T_varchar.ToType()
+	column := GetColExpr(makePlan2Type(&textType), 10, 0)
+	builder := &QueryBuilder{
+		qry: &planpb.Query{Nodes: []*planpb.Node{{NodeType: planpb.Node_TABLE_SCAN,
+			TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: column.Typ}}}}}},
+		tag2NodeID: map[int32]int32{10: 0},
+	}
+	binder := &baseBinder{sysCtx: context.Background(), builder: builder}
+	require.True(t, binder.stringSourceIsPlainText(column))
+	nested := column
+	for range 32 {
+		var err error
+		nested, err = BindFuncExprImplByPlanExpr(context.Background(), "reverse", []*Expr{nested})
+		require.NoError(t, err)
+	}
+	require.True(t, binder.stringSourceIsPlainText(nested))
+	transport := DeepCopyExpr(nested)
+	binaryTransport := types.T_blob.ToType()
+	transport.GetF().Args[0].Typ = makePlan2Type(&binaryTransport)
+	resolver := newPreparedFieldStringResolver(binder)
+	resolver.readOnly = true
+	require.Equal(t, fieldStringText, resolver.expr(transport).kind)
+	require.True(t, binder.stringSourceIsPlainText(transport), "a forwarder's transport does not own the declaration")
+	require.Zero(t, testing.AllocsPerRun(100, func() {
+		if !binder.stringSourceIsPlainText(nested) {
+			panic("plain TEXT proof changed")
+		}
+	}), "the proof must not replace per-consumer maps with another allocation")
+	literal := makePlan2StringConstExprWithType("text")
+	require.True(t, binder.stringSourceIsPlainText(literal))
+	for _, expr := range []*Expr{nil, makePlan2NullConstExprWithType(),
+		makePlan2StringConstExprWithType("binary", true),
+		{Typ: column.Typ, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+		{Typ: column.Typ, Expr: &planpb.Expr_V{V: &planpb.VarRef{Name: "v"}}},
+	} {
+		require.False(t, binder.stringSourceIsPlainText(expr))
+	}
+	folded := DeepCopyExpr(literal)
+	folded.GetLit().Src = makePlan2StringConstExprWithType("", true)
+	require.False(t, binder.stringSourceIsPlainText(folded))
+	converted, err := appendExplicitCastBeforeExpr(context.Background(), makePlan2StringConstExprWithType("binary", true), makePlan2Type(&textType))
+	require.NoError(t, err)
+	// A proof miss is safe: authoritative casts keep the original resolver.
+	require.False(t, binder.stringSourceIsPlainText(converted))
+	builder.qry.Nodes[0].NodeType = planpb.Node_PROJECT
+	require.False(t, binder.stringSourceIsPlainText(nested), "physical TEXT is not an alias/materialization proof")
+	builder.qry.Nodes[0].NodeType = planpb.Node_TABLE_SCAN
+	binaryType := types.T_varbinary.ToType()
+	builder.qry.Nodes[0].TableDef.Cols[0].Typ = makePlan2Type(&binaryType)
+	require.False(t, binder.stringSourceIsPlainText(nested), "the declaration owner, not its transport, must be TEXT")
+	builder.qry.Nodes[0].TableDef.Cols[0].Typ = column.Typ
+	node := builder.qry.Nodes[0]
+	node.ProjectList = []*Expr{column}
+	require.True(t, binder.stringSourceIsPlainText(nested), "a direct scan self-reference has the same declaration")
+	projected, err := appendSetOperationCastBeforeExpr(context.Background(),
+		makePlan2StringConstExprWithType("binary", true), makePlan2Type(&textType))
+	require.NoError(t, err)
+	node.ProjectList = []*Expr{projected}
+	require.False(t, binder.stringSourceIsPlainText(nested), "an existing scan projection can hide a different declaration")
+	consumed, err := binder.bindStringSourceDeclaration("reverse", []*Expr{column})
+	require.NoError(t, err)
+	require.Equal(t, int32(types.T_blob), consumed[0].Typ.Id)
+	node.ProjectList = []*Expr{GetColExpr(column.Typ, 20, 0)}
+	require.False(t, binder.stringSourceIsPlainText(nested), "an alias is not a direct scan declaration")
+	node.ProjectList = nil
+	builder.qry.Nodes[0] = nil
+	require.False(t, binder.stringSourceIsPlainText(column))
+	builder.qry.Nodes[0] = node
+	node.TableDef.Cols[0] = nil
+	require.False(t, binder.stringSourceIsPlainText(column))
+	node.TableDef.Cols[0] = &planpb.ColDef{Typ: column.Typ}
+	builder.isPrepareStatement = true
+	require.False(t, binder.stringSourceIsPlainText(nested))
+	builder.isPrepareStatement = false
+	binder.sysCtx = withPreparedSourceBindings(context.Background(), nil)
+	require.False(t, binder.stringSourceIsPlainText(nested), "prepared provenance still uses the full resolver")
+	binder.sysCtx = context.Background()
+	binder.builder = nil
+	require.False(t, binder.stringSourceIsPlainText(nested))
+}
+
 func TestPreparedFieldStringSourceDeclaration(t *testing.T) {
 	ctx := context.Background()
 	source, err := BindFuncExprImplByPlanExpr(ctx, "coalesce", []*Expr{

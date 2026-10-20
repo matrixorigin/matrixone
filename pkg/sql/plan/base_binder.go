@@ -6379,6 +6379,9 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		if kind != fieldStringText && kind != fieldStringBinary {
 			continue
 		}
+		if kind == fieldStringText && b.stringSourceIsPlainText(arg) {
+			continue
+		}
 		if kind == fieldStringBinary && possibleStringDomainsForExpr(arg) == possibleStringDomainBinary {
 			continue
 		}
@@ -6455,6 +6458,60 @@ func preparedStringResultOwnsDeclaration(source *Expr) bool {
 func isPreparedStringConditional(expr *Expr) bool {
 	fn := expr.GetF()
 	return fn != nil && (numericFunctionHasSelectiveContext(fn.GetFunc().GetObjName()) || fn.GetFunc().GetObjName() == "iff")
+}
+
+// stringSourceIsPlainText is a narrow allocation-free proof for ordinary SQL.
+// It only follows the existing forwarding contract through the binder's argument
+// tree, never a projection/alias graph. Unknown provenance uses the full resolver.
+func (b *baseBinder) stringSourceIsPlainText(expr *Expr) bool {
+	if b.builder == nil || b.builder.isPrepareStatement || preparedBindingState(b.GetContext()) != nil {
+		return false
+	}
+	for expr != nil {
+		if expr.GetPreparedNumeric().GetStringDomainSource() != nil {
+			return false
+		}
+		if lit := expr.GetLit(); lit != nil {
+			return fieldStringStaticDomain(expr).kind == fieldStringText && !lit.Isnull &&
+				lit.Src == nil && lit.LiteralForm == plan.StringLiteralForm_STRING_LITERAL_TEXT
+		}
+		if col := expr.GetCol(); col != nil {
+			if fieldStringStaticDomain(expr).kind != fieldStringText || b.pendingColumnSource(col) != nil ||
+				b.builder.qry == nil || col.ColPos < 0 {
+				return false
+			}
+			nodeID, ok := b.builder.tag2NodeID[col.RelPos]
+			if !ok || nodeID < 0 || int(nodeID) >= len(b.builder.qry.Nodes) {
+				return false
+			}
+			node := b.builder.qry.Nodes[nodeID]
+			if node == nil || node.NodeType != plan.Node_TABLE_SCAN || node.TableDef == nil || int(col.ColPos) >= len(node.TableDef.Cols) ||
+				fieldStringStaticDomain(&Expr{Typ: node.TableDef.Cols[col.ColPos].GetTyp()}).kind != fieldStringText {
+				return false
+			}
+			if int(col.ColPos) < len(node.ProjectList) {
+				// Even a scan can already have a representation projection. Only
+				// its direct self-reference is a leaf; other owners need resolution.
+				source := node.ProjectList[col.ColPos]
+				ref := source.GetCol()
+				return ref != nil && ref.RelPos == col.RelPos && ref.ColPos == col.ColPos &&
+					source.GetPreparedNumeric().GetStringDomainSource() == nil && fieldStringStaticDomain(source).kind == fieldStringText
+			}
+			return true
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil {
+			return false
+		}
+		// A forwarder inherits its source declaration, not an intermediate
+		// transport type. Binder names are canonical; other spellings may miss.
+		pos, _, owns := preparedStringDomainContract(fn.Func.ObjName, len(fn.Args))
+		if pos < 0 || owns {
+			return false
+		}
+		expr = fn.Args[pos]
+	}
+	return false
 }
 
 // Inspect the binding-time owner, not the ColRef/SubqueryRef representation.
