@@ -72,6 +72,50 @@ func TestDoCheckUpgradeRetainsInterruptedTarget(t *testing.T) {
 	}
 }
 
+func TestDoCheckUpgradeRetainsHistoricalCDCWatermarkTarget(t *testing.T) {
+	for _, stepState := range []int32{versions.StateCreated, versions.StateReady} {
+		t.Run(fmt.Sprint(stepState), func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				// Persisted by the original 4.0.11 binary, independently of the
+				// current handler's entry count. Ready steps can precede the
+				// transaction marking the target itself Ready.
+				target := versions.Version{
+					Version: "4.0.11", VersionOffset: 2, State: versions.StateCreated,
+				}
+				var routeRead bool
+				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+					switch {
+					case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+						return ownRecoveryResult(t, newBootstrapStringResult("mo_catalog")), nil
+					case sql == "select version, version_offset, state from mo_version order by create_at desc limit 1":
+						return recoveryVersionResult(t, target), nil
+					case strings.Contains(sql, "from mo_upgrade"):
+						// Recovery must read the old route rather than queue a
+						// replacement under the current binary's final version.
+						require.Contains(t, sql, "final_version = '4.0.11'")
+						require.Contains(t, sql, "final_version_offset = 2")
+						routeRead = true
+						return ownRecoveryResult(t, buildUpgradeVersionResult(10, stepState,
+							"4.0.10", "4.0.11", 2, 0, versions.Yes, versions.No, 0, 0)), nil
+					default:
+						return executor.Result{}, fmt.Errorf("unexpected SQL (must retain the historical CDC route): %s", sql)
+					}
+				}, &testTxnOperator{})
+				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
+					func(s *service) { s.initUpgrade() })
+				t.Cleanup(s.stopper.Stop)
+				require.True(t, s.canResumeUpgrade(target))
+				require.Equal(t, uint32(2), s.getVersionHandle("4.0.11").Metadata().VersionOffset)
+				require.False(t, s.canResumeUpgrade(versions.Version{Version: "4.0.11", VersionOffset: 4}),
+					"a mismatched identity must still be rejected")
+				require.NoError(t, s.doCheckUpgrade(t.Context()))
+				require.True(t, routeRead)
+				require.False(t, s.upgrade.finalVersionCompleted.Load())
+			})
+		})
+	}
+}
+
 func TestManualTenantUpgradeWaitsForRecoveredRoute(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		s, _ := newRecoveryTestService(t, versions.StateReady)
