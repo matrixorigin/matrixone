@@ -27,6 +27,7 @@ import (
 	"github.com/gogo/protobuf/proto"
 	"github.com/gogo/protobuf/protoc-gen-gogo/descriptor"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/testutil"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func TestIcebergRedactionDisablesGeneratedStringers(t *testing.T) {
@@ -426,8 +427,11 @@ func containsRedactionMarker(got string) bool {
 
 func TestPipelineDescriptorMergedScalarAndLockContracts(t *testing.T) {
 	want := map[string]map[string]int32{
-		"Instruction": {"scalar_set_reaggregation": 65},
-		"LockTarget":  {"no_wait": 13, "skip_locked": 14},
+		"Instruction":    {"scalar_set_reaggregation": 65},
+		"DedupJoin":      {"dedup_key_exprs": 30},
+		"RightDedupJoin": {"dedup_key_exprs": 18},
+		"HashBuild":      {"dedup_key_exprs": 20},
+		"LockTarget":     {"no_wait": 13, "skip_locked": 14},
 	}
 	for _, message := range decodePipelineFileDescriptor(t).GetMessageType() {
 		fields, ok := want[message.GetName()]
@@ -449,5 +453,33 @@ func TestPipelineDescriptorMergedScalarAndLockContracts(t *testing.T) {
 	}
 	if len(want) != 0 {
 		t.Fatalf("missing merged messages: %v", want)
+	}
+}
+
+func TestMergedDiagnosticPipelineExpressionAdmission(t *testing.T) {
+	expr := &planpb.Expr{Typ: planpb.Type{Id: 28}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: 602 << 32}}}}
+	for _, instruction := range []*Instruction{
+		{ScalarSetReaggregation: true, DedupJoin: &DedupJoin{DedupKeyExprs: []*planpb.Expr{expr}}},
+		{ScalarSetReaggregation: true, RightDedupJoin: &RightDedupJoin{DedupKeyExprs: []*planpb.Expr{expr}}},
+		{ScalarSetReaggregation: true, HashBuild: &HashBuild{DedupKeyExprs: []*planpb.Expr{expr}}},
+	} {
+		data, err := instruction.Marshal()
+		if err != nil {
+			t.Fatal(err)
+		}
+		var decoded Instruction
+		if err := decoded.Unmarshal(data); err != nil {
+			t.Fatal(err)
+		}
+		if !proto.Equal(instruction, &decoded) {
+			t.Fatal("diagnostic expressions and scalar marker must coexist on wire")
+		}
+		features, err := planpb.RequiredRemoteExpressionFeatures(&decoded)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !features.SetOperationFloatKeys || !features.ScalarSetReaggregation {
+			t.Fatalf("missing merged expression admission: %+v", features)
+		}
 	}
 }
