@@ -1741,6 +1741,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[catalog.ResolveAlias(part)]].Typ
 				}
 
+				diagnosticExprs, err := builder.makeIndexDedupKeyExprs(tableDef, idxDef, newProjTag, func(name string) (int32, bool) {
+					if pos, ok := newColName2Idx[alias+"."+name]; ok {
+						return pos, true
+					}
+					pos, ok := oldColName2Idx[alias+"."+name]
+					return pos, ok
+				})
+				if err != nil {
+					return 0, err
+				}
+				if len(diagnosticExprs) > 0 {
+					dedupColName = idxDef.IndexName
+				}
+
 				dedupJoinNode := &plan.Node{
 					NodeType:          plan.Node_JOIN,
 					Children:          []int32{idxTableNodeID, lastNodeID},
@@ -1749,6 +1763,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					OnDuplicateAction: onDuplicateAction,
 					DedupColName:      dedupColName,
 					DedupColTypes:     dedupColTypes,
+					DedupKeyExprs:     diagnosticExprs,
 					DedupJoinCtx: &plan.DedupJoinCtx{
 						OldColList: []plan.ColRef{
 							{
@@ -3917,6 +3932,17 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		if len(idxDef.Parts) > 1 {
 			dedupName = "(" + strings.Join(idxDef.Parts, ",") + ")"
 		}
+
+		diagnosticExprs, err := builder.makeIndexDedupKeyExprs(tableDef, idxDef, projectTag, func(name string) (int32, bool) {
+			pos, ok := currentPosByCol[name]
+			return pos, ok
+		})
+		if err != nil {
+			return 0, nil, err
+		}
+		if len(diagnosticExprs) > 0 {
+			dedupName = idxDef.IndexName
+		}
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:          plan.Node_JOIN,
 			Children:          []int32{idxScanID, lastNodeID},
@@ -3925,6 +3951,7 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 			OnDuplicateAction: plan.Node_IGNORE,
 			DedupColName:      dedupName,
 			DedupColTypes:     dedupTypes,
+			DedupKeyExprs:     diagnosticExprs,
 			DedupJoinCtx: &plan.DedupJoinCtx{OldColList: []plan.ColRef{
 				{RelPos: projectTag, ColPos: oldKeyPos},
 				{RelPos: projectTag, ColPos: releaseMarkerPos},
