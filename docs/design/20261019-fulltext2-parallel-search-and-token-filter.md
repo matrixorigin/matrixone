@@ -3,8 +3,8 @@
 - Status: Review required
 - Tracking issue: [#30402](https://github.com/matrixorigin/matrixone/issues/30402)
 - Implementation PR: [#30618](https://github.com/matrixorigin/matrixone/pull/30618)
-- Design revision: 1
-- Last updated: 2026-10-19
+- Design revision: 2
+- Last updated: 2026-10-20
 
 ## Problem and intent
 
@@ -15,8 +15,11 @@ search and build paths:
 
 1. **Parallel segment search.** The multi-segment top-k walk is CPU-bound and was
    serial. A new per-index worker count lets the independent per-segment searches
-   run concurrently, lowering BM25 query latency. It is a performance-only change:
-   the merged top-k is identical at any worker count.
+   run concurrently, lowering BM25 query latency. The same change adds cross-segment
+   pruning — a shared lower bound on the global k-th best plus a per-segment upper
+   bound that lets whole uncompetitive segments be skipped — so segments spare each
+   other work. All of it is performance-only: the merged top-k is identical at any
+   worker count and with pruning on or off.
 
 2. **`token_filter` analyzer (`stop`).** A Lucene-style analyzer chain on the index.
    Step 1 is the `stop` filter: it drops stopwords (the builtin English+Chinese
@@ -31,6 +34,7 @@ and `token_filter` is only present when explicitly requested at CREATE.
 ## Scope and non-goals
 
 In scope: the per-index search worker count and its resolution/activation; the
+cross-segment pruning bounds and their results-identical/certification contract; the
 peak result-memory and error/cancellation contract of the concurrent search; the
 `token_filter` WITH option and the `stop` filter; the symmetry of tokenization
 across the build, CDC, and query paths; and the maintenance (REINDEX, idxcron)
@@ -50,9 +54,11 @@ prefilter, and segment set, the merged top-k — doc ids, scores, and order — 
 identical for any worker count, including one worker. Each per-segment search is
 fully independent (its own dense ord space, WAND cursors, and local heap); a
 worker writes only its own result slot, and the merge runs serially in segment
-order after all workers finish. No scoring input is shared mutably across workers.
-This invariant is what lets the knob be an ungated performance control rather than
-a correctness-affecting one.
+order after all workers finish. The one piece of shared mutable state is a
+results-neutral pruning bound (see "Cross-segment pruning"), never a result or a
+heap; no worker can change another's output, only let it finish sooner. This
+invariant is what lets the knob be an ungated performance control rather than a
+correctness-affecting one.
 
 ### Worker-count semantics (decision)
 
@@ -95,12 +101,64 @@ applies even at one worker, because all per-segment slots are materialized befor
 the merge. The bound is `O(segments × k)` small records, chosen for a simple,
 race-free merge; it is not proportional to matches, postings, or document size.
 
+This bound holds because only the bounded per-segment searches are parallelized: the
+ranked bag-of-words (WAND) walk holds an `O(k)` heap and the pure-conjunction walk is
+bounded by its term count and block size. The one path with per-segment scratch
+proportional to the segment's document count — the dense full-boolean evaluator used
+for general MUST/MUST-NOT/mixed queries — is therefore run **serially**, one segment at
+a time, so its live scratch stays `O(one segment)` rather than `workers × O(N)`. The
+parallel worker count applies only to the bounded paths; the dense path ignores it.
+
 Every spawned worker is bounded by a semaphore and completes — writing its slot or
 its error — before the call returns; no worker outlives the search. A per-segment
 error is recorded per slot and surfaced after all workers drain, so a failing
 segment neither leaks a goroutine nor blocks the others; the merge is skipped on
 error. Query cancellation is the caller's existing context on the surrounding
 pipeline; the bounded worker set drains rather than being abandoned.
+
+### Cross-segment pruning (decision)
+
+The ranked bag-of-words search prunes documents whose score cannot reach the
+current top-k. Independent segments can share this pruning so one segment's
+progress spares another's work. Two bounds cooperate, and both are perf-only: the
+merged top-k is identical whether or not they fire.
+
+- **A shared lower bound on the global k-th best.** The segments share one
+  monotonically rising score below which no document can enter the merged top-k. It
+  is a *certified* lower bound: it is only ever raised to a score for which at least
+  k live, filter-admitted documents are known to score at or above it — a segment's
+  own complete top-k of k such documents. A segment holding fewer than k admitted
+  documents never contributes, because its lowest score is not evidence that k
+  documents exist above it. This certification is the load-bearing invariant: raising
+  the bound from anything less (a smaller segment's partial heap) would push it above
+  the true global k-th best and silently drop competitive documents.
+
+- **A per-segment upper bound.** Each segment has a cheap ceiling on the best score
+  any of its documents could achieve, derived from per-term maximum impacts without
+  scanning documents. A whole segment whose ceiling is **strictly** below the shared
+  lower bound cannot hold a top-k document and is skipped without being searched. The
+  comparison is strict so a document that could *tie* the global k-th best is never
+  skipped — the top-k, ties included, is preserved exactly.
+
+Segments are visited in decreasing ceiling order so the shared lower bound rises as
+early as possible, maximizing how much later segments can skip. Ordering and skipping
+change no result.
+
+The direction of the bounds is essential and asymmetric: a skip is sound because an
+*upper* bound is compared against a *lower* bound, but the shared lower bound may
+**not** be seeded or predicted from ceilings (upper bounds) — a pruning floor must be
+certified by actual computed scores, never estimated, or it risks exceeding the true
+k-th best. For this reason the bound starts at negative infinity and only rises
+through real scores; a query whose segments never individually reach k documents
+prunes nothing and simply runs the unpruned search.
+
+These mechanisms are unconditional and carry no configuration — they are a property
+of the search, not a tunable, and add nothing to the session/global or cluster
+capability surface. They apply only to the ranked bag-of-words shape; phrase,
+boolean, and conjunctive queries are unaffected. The cross-segment skip/ordering
+additionally engages only where an earlier segment's bound can be established before
+a later segment is searched (serial, or a fan-out with more segments than workers);
+in a single parallel wave only the shared lower bound applies.
 
 ### Activation and compatibility (decision)
 
@@ -247,6 +305,15 @@ multi-worker run rather than relying on the default's resolution. The owning
 package runs under the race detector. End-to-end behavior is validated with the
 worker count set before the index is loaded, so serial and parallel execution are
 each actually taken.
+
+Cross-segment pruning: a single-segment index — where neither the shared bound nor
+the segment skip can engage — is the oracle; the same documents split across many
+segments, searched serially and in parallel, must return a top-k identical to that
+oracle for a truncating `k`. The suite must include a segment holding **fewer than
+`k`** documents, because that is the case where an uncertified lower bound would
+inflate above the true k-th best and drop competitive documents — the regression the
+certification invariant forbids — and it must cover the concurrent pruning path under
+the race detector.
 
 `token_filter`: unit tests cover the stop filter (drop, case folding, position
 preservation, builtin load), the BM25 query dropping stopword terms, the schema

@@ -104,7 +104,7 @@ func (Hooks) BuildFullTextIndexDefs(
 	if indexInfo.IndexOption != nil && len(indexInfo.IndexOption.TokenFilters) > 0 &&
 		!planplugin.ClusterSupportsFulltext2Analyzer(ctx) {
 		return nil, nil, moerr.NewNotSupported(ctx.GetContext(),
-			"fulltext2 token_filter requires all CNs to support protocol version 123")
+			"fulltext2 token_filter requires all CNs to support the token_filter analyzer")
 	}
 
 	// Validate INCLUDE columns (stored as actual values in the segment docmap for
