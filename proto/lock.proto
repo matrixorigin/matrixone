@@ -75,6 +75,9 @@ message LockOptions {
   // KeepRows prevents automatic coarsening for this transaction/table. All
   // participating lock owners must support it before callers enable it.
   bool                KeepRows          = 14;
+  // NoWait is valid only on the capability-bearing TryLock/ForwardTryLock
+  // protocol and requests exact row admission with FastFail semantics.
+  bool                NoWait            = 15;
 }
 
 // LockTable describes which CN manages a Table's Locks.
@@ -153,6 +156,10 @@ enum Method {
   // wire semantics and cannot serve as a fallback for new controllers.
   BeginDrain = 23;
   QueryDrain = 24;
+  // TryLock and ForwardTryLock fail closed on owners without the
+  // nonblocking row-lock admission contract.
+  TryLock = 25;
+  ForwardTryLock = 26;
 }
 
 enum Status {
@@ -247,6 +254,10 @@ message LockResponse {
   // BatchUnlock only for tables whose successful physical-owner Lock response
   // advertised this bit.
   bool BatchUnlockSupported = 3;
+  // NoWaitConflict acknowledges only a settled ErrLockConflict from the
+  // capability-bearing TryLock method. Result carries the physical owner's
+  // binding so the coordinator can retain partial grants until transaction end.
+  bool NoWaitConflict = 4;
 }
 
 // GetTxnLockRequest get a waiting txn list on a special lock 

@@ -422,6 +422,12 @@ message ResultColDef {
   repeated ColDef ResultCols = 1;
 }
 
+enum ResultColumnKind {
+  RESULT_COLUMN_KIND_UNKNOWN = 0;
+  RESULT_COLUMN_KIND_STORED = 1;
+  RESULT_COLUMN_KIND_COMPUTED = 2;
+}
+
 message ColDef {
   uint64 col_id = 1;
   // letter case: lower
@@ -454,6 +460,11 @@ message ColDef {
   // Physical table name for result-column origin metadata. tbl_name is the
   // visible table name (and can therefore be an alias).
   string origin_tbl_name = 22;
+  // Whether a result column is produced by evaluating an expression rather
+  // than retaining a stored table column. This is intentionally independent
+  // of origin/key metadata, which can be lost across set operations. UNKNOWN
+  // preserves compatibility with plans produced before this field existed.
+  ResultColumnKind result_column_kind = 23;
 }
 
 message Default {
@@ -1572,6 +1583,10 @@ message LockTarget {
   ObjectRef obj_ref = 15;
   int32 partition_col_idx_in_bat = 16;
   bool has_partition_col = 17;
+  // no_wait is a physical row-lock acquisition policy. It is separate from
+  // the SQL error outcome; SkipLocked targets also use nonblocking acquisition.
+  bool no_wait = 18;
+  bool skip_locked = 19;
 }
 
 message PreInsertUkCtx {

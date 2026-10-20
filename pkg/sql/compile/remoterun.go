@@ -156,7 +156,7 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 		return nil, err
 	}
 	if requiredProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion123)
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion124)
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -820,6 +820,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			TargetRowIdCol:               t.TargetRowIDCol,
 		}
 	case *lockop.LockOp:
+		if t.RequiresCoordinatorExecution() {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED lock operators must execute on the transaction coordinator")
+		}
 		in.LockOp = &pipeline.LockOp{
 			Targets: t.CopyToPipelineTarget(),
 		}
@@ -1411,8 +1415,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetLockOp()
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
+			if target.GetNoWait() || target.GetSkipLocked() {
+				return nil, moerr.NewNotSupportedNoCtx(
+					"remote NOWAIT and SKIP LOCKED lock operators are not supported")
+			}
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			lockArg.AddLockTargetWithPolicy(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetNoWait(), target.GetSkipLocked())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
@@ -2330,8 +2338,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion123) {
-		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 123")
+	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion124) {
+		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 124")
 	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")

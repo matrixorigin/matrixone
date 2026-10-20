@@ -1742,10 +1742,10 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 	}
 }
 
-// RequiresMORPCVersion123JSONStringConsumerOverload detects the distinct JSON-aware
+// RequiresMORPCVersion124JSONStringConsumerOverload detects the distinct JSON-aware
 // ELT identity and the independent opaque producer/rendering contract.
 // CONCAT and CONCAT_WS keep overload 0 but require corrected visible text.
-func RequiresMORPCVersion123JSONStringConsumerOverload(owner any) (bool, error) {
+func RequiresMORPCVersion124JSONStringConsumerOverload(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts, err
 }
