@@ -26,6 +26,8 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	// Resolving a descriptor-only conflict by choosing either side loses one.
 	want := map[string]map[string]int32{
 		"Function":         {"routine_call": 6},
+		"Node":             {"dedup_key_exprs": 95},
+		"PreInsertUkCtx":   {"key_diagnostic_exprs": 19},
 		"Query":            {"correlation": 19, "execution_dependent_access": 22, "select_lock_references": 21, "routine_dependencies": 23},
 		"Type":             {"numeric_attributes": 14},
 		"Expr":             {"candidate_filter": 27},
