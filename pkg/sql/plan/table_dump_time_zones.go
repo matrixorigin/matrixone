@@ -35,27 +35,29 @@ var tableDumpFixedTimeZoneCache struct {
 // A later verification reloads tzdata just like SET time_zone, including zones
 // that were temporarily unavailable. No matching results or budgets are cached.
 func newTableDumpTimeZones(loadLocation func(string) (*time.Location, error)) func(func(*time.Location) bool) {
+	var names []string
 	var named []*time.Location
-	loaded := false
 	return func(yield func(*time.Location) bool) {
 		// Read Local at enumeration time: callers can replace it after construction.
 		if !yield(time.UTC) || !yield(time.Local) {
 			return
 		}
-		if !loaded {
-			for _, name := range strings.Fields(tableDumpTimeZoneNames) {
-				if name == "UTC" {
-					continue
-				}
-				zone, err := loadLocation(name)
-				if err == nil {
-					named = append(named, zone)
-				}
-			}
-			loaded = true
+		if names == nil {
+			names = strings.Fields(tableDumpTimeZoneNames)
 		}
-		for _, zone := range named {
-			if !yield(zone) {
+		for i, name := range names {
+			// Cache only visited entries, including failed loads. An early
+			// witness must not load the rest of the timezone inventory.
+			if i == len(named) {
+				var zone *time.Location
+				if name != "UTC" {
+					if loaded, err := loadLocation(name); err == nil {
+						zone = loaded
+					}
+				}
+				named = append(named, zone)
+			}
+			if zone := named[i]; zone != nil && !yield(zone) {
 				return
 			}
 		}
