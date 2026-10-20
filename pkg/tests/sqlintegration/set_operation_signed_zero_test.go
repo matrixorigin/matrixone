@@ -360,6 +360,74 @@ func TestSetOperationSignedZero(t *testing.T) {
 				require.EqualError(t, err, "Error 1242 (21000): Subquery returns more than 1 row")
 			})
 
+			t.Run("scalar-apply-outer", func(t *testing.T) {
+				for _, q := range []string{
+					"create table scalar_apply_outer(a int,j json)",
+					"insert into scalar_apply_outer values(1,'[1,2]'),(3,'[3]')",
+					"create table scalar_apply_inner(k int,d double)",
+					"insert into scalar_apply_inner values(3,1.25)",
+				} {
+					_, err := conn.ExecContext(ctx, q)
+					require.NoError(t, err, q)
+				}
+				for _, fn := range []struct{ name, call, value string }{
+					{"unnest", "unnest(%s)", "cast(u.value as signed)"},
+					{"json-table", "json_table(%s, '$[*]' columns(v int path '$'))", "u.v"},
+				} {
+					t.Run(fn.name, func(t *testing.T) {
+						source := "scalar_apply_outer o cross apply " + fmt.Sprintf(fn.call, "o.j") + " u"
+						arm := "select i.d from scalar_apply_inner i where i.k>o.a"
+						scalar := "cast((" + arm + " union " + arm + ") as varchar)"
+						want := []string{"1:1.25", "1:1.25", "3:NULL"}
+						rightArm := "select i.d from scalar_apply_inner i where i.k>" + fn.value
+						rightScalar := "cast((" + rightArm + " union " + rightArm + ") as varchar)"
+						for _, tc := range []struct {
+							name, query string
+							want        []string
+						}{
+							{"single-arm-control", "select o.a,cast((" + arm + ") as varchar) from " + source + " order by o.a", want},
+							{"derived-control", "select o.a," + scalar + " from (select o.a from " + source + ") o order by o.a", want},
+							{"direct", "select o.a," + scalar + " from " + source + " order by o.a", want},
+							{"right-output-correlation", "select o.a," + fn.value + "," + rightScalar + " from " + source + " order by o.a," + fn.value, []string{"1:1:1.25", "1:2:1.25", "3:3:NULL"}},
+							{"composed-scalars", "select o.a," + fn.value + "," + scalar + "," + rightScalar + " from " + source + " order by o.a," + fn.value, []string{"1:1:1.25:1.25", "1:2:1.25:1.25", "3:3:NULL:NULL"}},
+							{"forwarded-aliases", "select o.a,o.v," + scalar + " from (select o.a," + fn.value + " v from " + source + ") o order by o.a,o.v", []string{"1:1:1.25", "1:2:1.25", "3:3:NULL"}},
+							{"identical-occurrences", "select o.a," + fn.value + "," + scalar + " from scalar_apply_outer o cross apply " + fmt.Sprintf(fn.call, "'[1,1]'") + " u order by o.a", []string{"1:1:1.25", "1:1:1.25", "3:1:NULL", "3:1:NULL"}},
+							{"empty-cross", "select o.a," + scalar + " from scalar_apply_outer o cross apply " + fmt.Sprintf(fn.call, "'[]'") + " u", nil},
+							{"outer-null-extension", "select o.a," + fn.value + "," + rightScalar + " from scalar_apply_outer o outer apply " + fmt.Sprintf(fn.call, "case when o.a=3 then cast('[]' as json) else o.j end") + " u order by o.a," + fn.value, []string{"1:1:1.25", "1:2:1.25", "3:NULL:NULL"}},
+							{"null-member", "select o.a,cast((select cast(NULL as double) from scalar_apply_inner i where i.k>o.a union select cast(NULL as double) from scalar_apply_inner i where i.k>o.a) as varchar) from " + source + " order by o.a", []string{"1:NULL", "1:NULL", "3:NULL"}},
+						} {
+							t.Run(tc.name, func(t *testing.T) {
+								rows, err := conn.QueryContext(ctx, tc.query)
+								require.NoError(t, err, tc.query)
+								require.Equal(t, tc.want, readWindowNullRows(t, rows))
+							})
+						}
+						t.Run("prepared-reuse", func(t *testing.T) {
+							stmt, err := conn.PrepareContext(ctx, "select o.a,"+fn.value+","+scalar+" from scalar_apply_outer o cross apply "+fmt.Sprintf(fn.call, "?")+" u order by o.a,"+fn.value)
+							require.NoError(t, err)
+							defer stmt.Close()
+							for _, tc := range []struct {
+								doc  string
+								want []string
+							}{
+								{"[1,1]", []string{"1:1:1.25", "1:1:1.25", "3:1:NULL", "3:1:NULL"}},
+								{"[]", nil}, {"[2]", []string{"1:2:1.25", "3:2:NULL"}},
+								{"[1,1]", []string{"1:1:1.25", "1:1:1.25", "3:1:NULL", "3:1:NULL"}},
+							} {
+								rows, err := stmt.QueryContext(ctx, tc.doc)
+								require.NoError(t, err)
+								require.Equal(t, tc.want, readWindowNullRows(t, rows))
+							}
+						})
+						t.Run("cardinality", func(t *testing.T) {
+							var rejected string
+							err := conn.QueryRowContext(ctx, "select cast(("+arm+" union select i.d+1 from scalar_apply_inner i where i.k>o.a) as varchar) from "+source+" where o.a=1").Scan(&rejected)
+							require.EqualError(t, err, "Error 1242 (21000): Subquery returns more than 1 row")
+						})
+					})
+				}
+			})
+
 			t.Run("existential-predicate-templates", func(t *testing.T) {
 				for _, q := range []string{
 					"create table predicate_inner(a int,b int,f double)",
