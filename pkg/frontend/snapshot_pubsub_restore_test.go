@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -145,13 +146,13 @@ func Test_recreatePublicationsAfterDbRestoreTS(t *testing.T) {
 
 	t.Run("cross-account restore leaves the source publications untouched", func(t *testing.T) {
 		bh := fixture()
-		require.NoError(t, recreatePublicationsAfterDbRestoreTS(ctx, "", bh, "test", 0, 5, pubTs))
+		require.NoError(t, recreatePublicationsAfterDbRestoreTS(ctx, "", bh, tree.RESTORELEVELDATABASE, "test", 0, 5, pubTs))
 		require.Empty(t, bh.executedSQLs)
 	})
 
 	t.Run("same-account restore replays the publications with their principals", func(t *testing.T) {
 		bh := fixture()
-		require.NoError(t, recreatePublicationsAfterDbRestoreTS(ctx, "", bh, "test", 0, 0, pubTs))
+		require.NoError(t, recreatePublicationsAfterDbRestoreTS(ctx, "", bh, tree.RESTORELEVELDATABASE, "test", 0, 0, pubTs))
 		var insertSQL string
 		for _, s := range bh.executedSQLs {
 			if insertSQL == "" && strings.HasPrefix(s, "insert into mo_catalog.mo_pubs") {
@@ -165,6 +166,14 @@ func Test_recreatePublicationsAfterDbRestoreTS(t *testing.T) {
 		bh := fixture()
 		readErr := errors.New("mo_pubs read failed")
 		bh.sql2err[getPubInfoWithPitr(pubTs, 0, "test")] = readErr
-		require.ErrorIs(t, recreatePublicationsAfterDbRestoreTS(ctx, "", bh, "test", 0, 0, pubTs), readErr)
+		require.ErrorIs(t, recreatePublicationsAfterDbRestoreTS(ctx, "", bh, tree.RESTORELEVELDATABASE, "test", 0, 0, pubTs), readErr)
 	})
+
+	for _, level := range []tree.RestoreLevel{tree.RESTORELEVELACCOUNT, tree.RESTORELEVELCLUSTER, tree.RESTORELEVELTABLE} {
+		t.Run(level.String()+" does not own database publication replay", func(t *testing.T) {
+			bh := fixture()
+			require.NoError(t, recreatePublicationsAfterDbRestoreTS(ctx, "", bh, level, "test", 0, 0, pubTs))
+			require.Empty(t, bh.executedSQLs)
+		})
+	}
 }

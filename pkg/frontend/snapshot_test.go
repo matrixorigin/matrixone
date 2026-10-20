@@ -1341,8 +1341,8 @@ func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
 			)
 			bh.sql2result[masterSQL] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 			bh.sql2result[publicationSQL] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
-			// all three restore cores replay the publications of the dropped
-			// database; an empty mo_pubs projection keeps that a no-op.
+			// PITR replays publications in its core; snapshot replay belongs to
+			// the top-level DATABASE operation, not these shared workers.
 			bh.sql2result[getPubInfoWithPitr(ts, uint32(sysAccountID), dbName)] =
 				newMrsForRestoreStringRows([]string{"account_id"}, nil)
 			bh.sql2result[test.tablesSQL] = newMrsForRestoreStringRows(
@@ -1353,6 +1353,9 @@ func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
 			}
 
 			require.NoError(t, test.run(bh))
+			if test.name != "pitr" {
+				require.NotContains(t, bh.executedSQLs, getPubInfoWithPitr(ts, uint32(sysAccountID), dbName))
+			}
 			createIndex := -1
 			for i, sql := range bh.executedSQLs {
 				if sql == createSQL {

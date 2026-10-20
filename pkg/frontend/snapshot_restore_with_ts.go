@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	pbplan "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
 
@@ -531,33 +532,29 @@ func restoreDatabaseFromTS(
 		}
 	}
 
-	// The drop above erased the mo_pubs rows targeting this database together
-	// with the database itself.  The PITR path rebuilds them after its database
-	// restore (createPubByPitr); a snapshot restore must not silently diverge
-	// and strand every subscriber on `there is no publication` (#30610).
-	if err = recreatePublicationsAfterDbRestoreTS(
-		ctx, sid, bh, dbName, restoreAccount, toAccountId, snapshotTs); err != nil {
-		return
-	}
 	return
 }
 
-// recreatePublicationsAfterDbRestoreTS replays the snapshot-time publications
-// of a database that a snapshot restore just dropped and recreated, sharing
-// the read-at-{MO_TS}/re-CREATE PUBLICATION semantics of the PITR path.  It
-// replays only when the restore lands in the account that owned the
-// publications: a cross-account restore leaves the source account's database
-// and its publications untouched, and replaying them there would collide with
-// the live rows.
+// recreatePublicationsAfterDbRestoreTS belongs to the top-level RESTORE
+// DATABASE operation, after its tables, foreign keys and views are restored.
+// The database workers are also used by account/cluster restores: replaying
+// there would change account semantics and duplicate the cluster's final
+// publication phase, which must precede subscription/catalog identity replay.
+// Table restores retain their publications; cross-account restores must not
+// recreate publications in the unchanged source account.
 func recreatePublicationsAfterDbRestoreTS(
 	ctx context.Context,
 	sid string,
 	bh BackgroundExec,
+	level tree.RestoreLevel,
 	dbName string,
 	restoreAccount uint32,
 	toAccountId uint32,
 	snapshotTs int64,
 ) (err error) {
+	if level != tree.RESTORELEVELDATABASE {
+		return nil
+	}
 	if restoreAccount != toAccountId {
 		getLogger(sid).Info(fmt.Sprintf(
 			"[%d:%d] skip recreate publications of db: %v, the restore crosses accounts %d -> %d",
