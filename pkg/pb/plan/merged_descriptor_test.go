@@ -26,7 +26,8 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	// Resolving a descriptor-only conflict by choosing either side loses one.
 	want := map[string]map[string]int32{
 		"Query":            {"correlation": 19},
-		"Node":             {"scalar_set_reaggregation": 95},
+		"Node":             {"dedup_key_exprs": 95, "scalar_set_reaggregation": 96},
+		"PreInsertUkCtx":   {"key_diagnostic_exprs": 19},
 		"LockTarget":       {"no_wait": 18, "skip_locked": 19},
 		"Expr":             {"dependent": 24, "slot": 25},
 		"CreateDatabase":   {"defaults": 5},
@@ -76,5 +77,32 @@ func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 			require.Len(t, decoded.GetTableDef().GetCols(), 1)
 			require.Equal(t, kind, decoded.TableDef.Cols[0].ResultColumnKind)
 		})
+	}
+}
+
+// Both sides of the merge append fields: the released diagnostic expression
+// must not be decoded as a scalar marker, and the marker must survive with it.
+func TestMergedDedupAndScalarRoundTrip(t *testing.T) {
+	for _, id := range []int64{601, 602} {
+		for _, nested := range []bool{false, true} {
+			expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: id << 32, ObjName: "ignored_display_name"}}}}
+			node := &Node{ScalarSetReaggregation: true}
+			if nested {
+				node.PreInsertUkCtx = &PreInsertUkCtx{KeyDiagnosticExprs: []*ExprList{{List: []*Expr{expr}}}}
+			} else {
+				node.DedupKeyExprs = []*Expr{expr}
+			}
+			data, err := node.Marshal()
+			require.NoError(t, err)
+			require.Len(t, data, node.ProtoSize())
+			var decoded Node
+			require.NoError(t, decoded.Unmarshal(data))
+			require.True(t, proto.Equal(node, &decoded))
+			features, err := RequiredRemoteExpressionFeatures(&decoded)
+			require.NoError(t, err)
+			require.True(t, features.ScalarSetReaggregation)
+			require.Equal(t, id == 602, features.SetOperationFloatKeys)
+			require.Equal(t, id == 601, features.TimestampAddSecondIntervals)
+		}
 	}
 }

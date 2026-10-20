@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 21
+- Revision: 22
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 22 integration baseline: official main `21966565287edf9f7d7f519af60d269711608945`
 - Revision 21 integration baseline: official main `743e749a1e33d6c845bb73999e8c82d297a2b657`
 - Revision 20 integration baseline: official main `743e749a1e33d6c845bb73999e8c82d297a2b657`
 - Revision 19 integration baseline: official main `3829ee49c7c118f2f3b0ebf7ed3acbd52483d870`
@@ -1181,6 +1182,43 @@ column-liveness changes can alter fallback input width, so they are not presente
 as current-head performance or external-source capacity qualification. No new
 runtime owner, per-row admission step or distributed fallback is introduced.
 
+
+### Revision 22 released diagnostic fields and marker reassignment
+
+Official main `21966565287edf9f7d7f519af60d269711608945` adds logical Unicode
+UNIQUE diagnostic expressions at `Node.dedup_key_exprs=95`. This revision
+preserves that released field and moves the unpublished scalar reaggregation
+marker to `Node.scalar_set_reaggregation=96`. Instruction marker65, function602
+and its MORPC125 admission floor remain unchanged: official latest is still124.
+The previous Node95 scalar payloads and their receipts retain historical scope;
+they are not reinterpreted as diagnostics or used to prove current marker wire
+compatibility. This PR has not released that prior candidate schema.
+
+Merged bindings retain PreInsertUkCtx diagnostic field19, pipeline DedupJoin30,
+RightDedupJoin18 and HashBuild20, together with all existing metadata, locking,
+dependent-expression and scalar marker fields. Repository postprocessors retain
+traversal of the new expression containers. Diagnostic expressions preserve
+reference counts, remapping, deep-copy independence and send/receive transport.
+Fresh descriptor, combined wire, expression-feature and deep-copy tests cover
+these intersections; owning suites and the public Unicode UNIQUE diagnostic case
+exercise the upstream contract alongside the complete signed-zero public suite.
+A fresh candidate marker96 export is decoded by the full official219 protobuf
+package: the unknown marker does not populate released diagnostic field95.
+Version124 still cannot execute function602; current125/124 rollback, placement,
+Prepare and remote-marker rejection tests retain that boundary.
+
+The [revision-22 source-bound receipt](validation/20261020_set_key_node96_rebase.json)
+separates current validation from reused evidence. Ordinary function602 native
+fixtures contain only projection expressions; official function/evaluator/native
+inputs are unchanged from the actual124 predecessor proof, so that narrower proof
+is retained. Old scalar-marker wire evidence is superseded by the fresh96 proof.
+The upstream XFS append correction belongs to hashbuild/spillutil; scalar
+WINDOW/loopjoin/group code does not call that helper. Their existing bounds and
+ownership design remain intact, while fresh spill/hashbuild and diagnostic tests
+cover the merged base. Earlier capacity and race receipts keep their original
+source, workloads and limits; this rebase claims no new-head or XFS spill latency,
+RSS, external-source capacity or mixed-binary cluster qualification.
+
 ## Alternatives
 
 | Choice | Benefits | Costs and reason for the current proposal |
@@ -1210,7 +1248,7 @@ proxy cleanup retain 120. This capability
 uses MORPC **125**. The feature walker recognizes encoded function identity 602 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar composition adds no separate function identity. It adds
-`plan.Node.scalar_set_reaggregation` field 95 and
+`plan.Node.scalar_set_reaggregation` field 96 and
 `pipeline.Instruction.scalar_set_reaggregation` field 65. Marker-only integer
 fallbacks require 125 too. Senders and receivers reject marked remote scopes at
 all versions, before operator decoding, because a remote attempt cannot share

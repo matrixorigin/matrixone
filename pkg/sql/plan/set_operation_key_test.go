@@ -811,3 +811,20 @@ func TestScalarReaggregationPassthroughDemand(t *testing.T) {
 		})
 	}
 }
+
+func TestScalarMarkerAndDedupDiagnosticsDeepCopy(t *testing.T) {
+	typ := types.T_int64.ToType().PlanType()
+	node := &planpb.Node{
+		ScalarSetReaggregation: true,
+		DedupKeyExprs:          []*planpb.Expr{GetColExpr(typ, 10, 1)},
+		PreInsertUkCtx:         &planpb.PreInsertUkCtx{KeyDiagnosticExprs: []*planpb.ExprList{{List: []*planpb.Expr{GetColExpr(typ, 10, 2)}}}},
+	}
+	copied := DeepCopyNode(node)
+	require.True(t, copied.ScalarSetReaggregation)
+	require.Equal(t, node.DedupKeyExprs, copied.DedupKeyExprs)
+	require.Equal(t, node.PreInsertUkCtx, copied.PreInsertUkCtx)
+	copied.DedupKeyExprs[0].GetCol().ColPos = 98
+	copied.PreInsertUkCtx.KeyDiagnosticExprs[0].List[0].GetCol().ColPos = 99
+	require.Equal(t, int32(1), node.DedupKeyExprs[0].GetCol().ColPos)
+	require.Equal(t, int32(2), node.PreInsertUkCtx.KeyDiagnosticExprs[0].List[0].GetCol().ColPos)
+}
