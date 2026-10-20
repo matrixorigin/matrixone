@@ -39,6 +39,9 @@ func TestCopyGCDirInheritsLastCopiedMetadataWatermark(t *testing.T) {
 	present := newBackupObjectStats(t, types.Uuid{2})
 	presentData := []byte("present object")
 	require.NoError(t, writeFile(ctx, src, present.ObjectName().String(), presentData))
+	// Cleanup ownership is stored below gc/unpublished/. Copying the GC root
+	// must skip that directory while preserving ordinary GC metadata handling.
+	require.NoError(t, writeFile(ctx, src, "gc/unpublished/marker.json", []byte("{}")))
 
 	writeGCMetadata(t, ctx, src, types.BuildTS(1, 0), types.BuildTS(10, 0), *missing)
 	lastName := writeGCMetadata(t, ctx, src, types.BuildTS(11, 0), types.BuildTS(20, 0), *present)
@@ -53,6 +56,7 @@ func TestCopyGCDirInheritsLastCopiedMetadataWatermark(t *testing.T) {
 	)
 	require.Contains(t, taeFilePaths(files), "gc/"+inheritedName)
 	require.NotContains(t, taeFilePaths(files), "gc/"+lastName)
+	require.NotContains(t, taeFilePaths(files), "gc/unpublished/marker.json")
 }
 
 func TestCopyGCDirRecordsCopiedObjectSizeInManifests(t *testing.T) {

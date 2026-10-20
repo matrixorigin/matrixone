@@ -18,32 +18,38 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/stretchr/testify/require"
 )
 
 // Reuse the canonical one-CN fixture; each scenario owns two source rows and
 // one ODKU target. Repeat on the same instance after checking database teardown.
 func TestDecimalIntegerDivPublicContracts(t *testing.T) {
 	runSQLIntegration(t, func(c embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
-		defer cancel()
+		setupCtx, cancelSetup := context.WithTimeout(t.Context(), 120*time.Second)
+		defer cancelSetup()
 		cn, err := c.GetCNService(0)
 		require.NoError(t, err)
 		db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 		require.NoError(t, err)
 		defer db.Close()
-		conn, err := db.Conn(ctx)
+		conn, err := db.Conn(setupCtx)
 		require.NoError(t, err)
 		defer conn.Close()
 		const schema = "decimal_div_domain_30158"
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
-		exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
-		exec("drop database if exists " + schema)
+		_, err = conn.ExecContext(setupCtx, "drop database if exists "+schema)
+		require.NoError(t, err)
+		cancelSetup()
 		for round := 0; round < 2; round++ {
 			t.Run(fmt.Sprintf("round_%d", round), func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+				defer cancel()
+				// Fatal SQL errors belong to this round, never the parent test.
+				exec := func(q string) { t.Helper(); _, err := conn.ExecContext(ctx, q); require.NoError(t, err, q) }
 				exec("create database " + schema)
 				exec("use " + schema)
 				exec("create table src(id int primary key,d decimal(10,3),w decimal(18,3),i int,u bigint unsigned)")
@@ -175,10 +181,16 @@ func TestDecimalIntegerDivPublicContracts(t *testing.T) {
 				var kept int64
 				require.NoError(t, conn.QueryRowContext(ctx, "select q from dst where id=2").Scan(&kept))
 				require.Equal(t, int64(99), kept)
-				exec("use mo_catalog")
-				exec("drop database " + schema)
+				// Teardown must not inherit the remaining arithmetic/DDL budget.
+				// Still require deletion and verify it before reusing the fixture.
+				cleanup, cancelCleanup := context.WithTimeout(t.Context(), 30*time.Second)
+				defer cancelCleanup()
+				_, err = conn.ExecContext(cleanup, "use mo_catalog")
+				require.NoError(t, err)
+				_, err = conn.ExecContext(cleanup, "drop database "+schema)
+				require.NoError(t, err)
 				var remaining int
-				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from information_schema.schemata where schema_name=?", schema).Scan(&remaining))
+				require.NoError(t, conn.QueryRowContext(cleanup, "select count(*) from information_schema.schemata where schema_name=?", schema).Scan(&remaining))
 				require.Zero(t, remaining)
 			})
 			if t.Failed() {

@@ -67,6 +67,7 @@ func NewBindContext(builder *QueryBuilder, parent *BindContext) *BindContext {
 
 	if parent != nil {
 		bc.persistedExpressionProtocolRequirement = parent.persistedExpressionProtocolRequirement
+		bc.ctasExecutionProtocolRequirement = parent.ctasExecutionProtocolRequirement
 		bc.existentialBlock = parent.existentialBlock
 		bc.subqueryNestingDepth = parent.subqueryNestingDepth
 		bc.lower = parent.lower

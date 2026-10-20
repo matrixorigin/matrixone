@@ -157,7 +157,9 @@ const (
 	MORPCVersion119    int64 = 119 // coordinator-owned parameterized subquery programs
 	MORPCVersion120    int64 = 120 // current-session KILL authorization and proxy disconnect cleanup
 	MORPCVersion121    int64 = 121 // exact unsigned DECIMAL DIV result domain
-	MORPCLatestVersion       = MORPCVersion121
+	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
+	MORPCVersion123    int64 = 123 // capability-gated nonblocking row-lock admission
+	MORPCLatestVersion       = MORPCVersion123
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
