@@ -529,3 +529,30 @@ harness changes require fresh integration evidence rather than unchanged-base
 reuse. This maintenance adds no production or security scope. Independent
 Architecture and SQL/Planner approval of r25 remains pending; rebase and
 validation do not supply that approval.
+
+
+## r26 fractional-TIMESTAMPADD/Python allocation addendum (2026-10-20)
+
+Official main 743e749a1e33d6c845bb73999e8c82d297a2b657 owns MORPC 124
+for exact fractional TIMESTAMPADD SECOND intervals. The governing
+python-udf-current-stage-r26-2026-10-20 proposal preserves that capability and
+allocates the single Python capability 125 (latest + 1). Catalog repair,
+revision publication and reads, Prepare, prepared reuse, evaluator, remote
+sender/receiver and status admission reject predecessor 124 and mixed 125/124
+CNs before Python mutation or execution. Rolling the active floor from 125
+to 124 disables Python while retaining fractional TIMESTAMPADD at 124,
+nonblocking locks at 123, prior temporal contracts at 122 and DECIMAL DIV at 121.
+
+The combined Python/fractional-temporal pipeline requires 125. Fractional-only
+pipelines require 124, and rollback to 123 rejects them. The existing stream
+handshake carries the maximum required feature floor; no new round trip or
+resource-lifecycle owner is introduced. Coordinator-dependent programs keep
+their independent ownership restriction.
+
+The upstream function identity 601, literal/source normalization, format-3 dump
+reader/writer contract and legacy epoch-specific bindings remain upstream-owned.
+Fresh protocol composition, dump roundtrip and real SQL/prepared tests are
+required after this merge. Catalog 4.0.18 and its minimum source 4.0.17, query
+method/field allocations and Python runtime scope are unchanged. Independent
+Architecture and SQL/Planner approval of r26 remains pending; rebase and
+validation do not supply that approval. No production or security scope is added.

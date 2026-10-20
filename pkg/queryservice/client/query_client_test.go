@@ -129,7 +129,7 @@ func TestSessionControlProtocol(t *testing.T) {
 	}{
 		{query.CmdMethod_KillSession, defines.MORPCVersion120},
 		{query.CmdMethod_DisconnectSession, defines.MORPCVersion120},
-		{query.CmdMethod_GetPythonUdfStatus, defines.MORPCVersion124},
+		{query.CmdMethod_GetPythonUdfStatus, defines.MORPCVersion125},
 	} {
 		require.Equal(t, test.floor, methodVersions[test.method])
 		req := &query.Request{CmdMethod: test.method}
