@@ -124,6 +124,7 @@ func NewMergeScheduler(
 		"Merge",
 		3.0/4.0,
 		rscthrottler.WithSpecializedForMerge(),
+		rscthrottler.WithSharedMemoryAdmission(),
 	)
 
 	sched.stopped.Store(true)

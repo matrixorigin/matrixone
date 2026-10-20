@@ -29,9 +29,11 @@ import (
 	"github.com/gofrs/flock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/testutil/clusteradmission"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 type state int
@@ -78,11 +80,12 @@ type cluster struct {
 	services []*operator
 	startFn  func(*operator) error
 
-	pendingCleanup []*operator
-	portLease      *clusterPortLease
-	portLeaseBase  uint64
-	portLeaseNext  uint64
-	testAdmission  *clusteradmission.Lease
+	pendingCleanup     []*operator
+	portLease          *clusterPortLease
+	portLeaseBase      uint64
+	portLeaseNext      uint64
+	testAdmission      *clusteradmission.Lease
+	testMemoryCleanups map[string]func()
 
 	options struct {
 		dataPath                    string
@@ -90,6 +93,7 @@ type cluster struct {
 		withProxy                   bool
 		preStart                    func(ServiceOperator)
 		testing                     bool
+		testMemoryBudget            *system.MemoryAdmissionBudget
 		testTCPOnly                 bool
 		allowConcurrentTestClusters bool
 		testAdmissionContext        context.Context
@@ -115,6 +119,9 @@ func NewCluster(
 	}
 	for _, opt := range opts {
 		opt(c)
+	}
+	if c.options.testMemoryBudget != nil && !c.options.testing {
+		return nil, moerr.NewInvalidStateNoCtx("test memory budget requires WithTesting")
 	}
 	if err := c.adjust(); err != nil {
 		c.logTestSetup("cluster-construct", time.Since(started), err)
@@ -216,6 +223,24 @@ func (c *cluster) Start() (err error) {
 
 func (c *cluster) doStartLocked(from int) error {
 	services := c.services[from:]
+	// Install explicit fixture owners before starting CN goroutines. These are
+	// finite ledgers, not allocation/admission bypasses; ordinary clusters keep
+	// the real process-wide physical owner.
+	if c.options.testMemoryBudget != nil {
+		if c.testMemoryCleanups == nil {
+			c.testMemoryCleanups = make(map[string]func())
+		}
+		for _, op := range services {
+			if op.serviceType != metadata.ServiceType_CN || c.testMemoryCleanups[op.sid] != nil {
+				continue
+			}
+			cleanup, err := process.SetServiceMemoryAdmissionBudgetForTesting(op.sid, c.options.testMemoryBudget)
+			if err != nil {
+				return err
+			}
+			c.testMemoryCleanups[op.sid] = cleanup
+		}
+	}
 	// Each service owns one slot. Join only after every started CN has returned,
 	// so rollback cannot race startup and diagnostics retain all failures in
 	// configuration order regardless of completion order or concrete error type.
@@ -323,7 +348,7 @@ func (c *cluster) needsCleanupLocked() bool {
 func (c *cluster) CloseComplete() bool {
 	c.Lock()
 	defer c.Unlock()
-	return !c.needsCleanupLocked() && c.testAdmission == nil && c.portLease == nil
+	return !c.needsCleanupLocked() && c.testAdmission == nil && c.portLease == nil && len(c.testMemoryCleanups) == 0
 }
 
 func (c *cluster) closeServicesFromLocked(from int) error {
@@ -831,6 +856,12 @@ func (c *cluster) releasePortLeaseLocked() error {
 }
 
 func (c *cluster) releaseTestAdmissionLocked() error {
+	// Only called after all services have proved cleanup complete, including
+	// failed startup rollback. Retain owners when Close needs to be retried.
+	for sid, cleanup := range c.testMemoryCleanups {
+		cleanup()
+		delete(c.testMemoryCleanups, sid)
+	}
 	if c.testAdmission == nil {
 		return nil
 	}

@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // The production lifecycle hook runs against a real backExec process. Unit
@@ -635,6 +636,36 @@ func TestRuleCacheDoubleCheckLocking(t *testing.T) {
 	// This is tested indirectly through the existing property-based tests
 	// and the concurrent access test above.
 	t.Skip("Double-check locking test requires complex mocking - covered by integration tests")
+}
+
+type controlRuleCacheExecutor struct {
+	*backgroundExecTest
+	contexts []context.Context
+}
+
+func (b *controlRuleCacheExecutor) Exec(ctx context.Context, sql string) error {
+	b.contexts = append(b.contexts, ctx)
+	return b.backgroundExecTest.Exec(ctx, sql)
+}
+
+func TestLoadRuleCacheControlMemoryIsScopedToCatalog(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	bh := &controlRuleCacheExecutor{backgroundExecTest: &backgroundExecTest{}}
+	bh.init()
+	stub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer stub.Reset()
+	ses := newSes(&privilege{}, ctrl)
+	ses.SetTenantInfo(&TenantInfo{Tenant: sysAccountName, User: "test_rule_user", TenantID: sysAccountID, UserID: 42, DefaultRoleID: 10})
+	bh.sql2result[getSqlForInheritedRoleIDsForRuleCache(10)] = newMrsForInheritedRoleIdOfRoleId([][]interface{}{})
+	bh.sql2result[getSqlForRoleRulesOfRoleIDs([]int64{10})] = newMrsForRewriteRules([][]interface{}{})
+	ctx := t.Context()
+	_, err := loadRuleCache(ctx, ses)
+	require.NoError(t, err)
+	require.NotEmpty(t, bh.contexts)
+	for _, catalogCtx := range bh.contexts {
+		require.True(t, process.HasControlMemoryAdmission(catalogCtx))
+	}
+	require.False(t, process.HasControlMemoryAdmission(ctx), "ordinary caller SQL must not inherit the catalog allowance")
 }
 
 func TestLoadRuleCacheIncludesSecondaryRoles(t *testing.T) {

@@ -5583,6 +5583,14 @@ func executeStmtWithTxn(ses FeSession,
 	statsArr *statistic.StatsArray,
 	execCtx *ExecCtx,
 ) (err error) {
+	// Background/derived SQL enters here as well. Top-level client SQL already
+	// holds its admission before the implicit-commit boundary below doComQuery.
+	if execCtx.statementMemoryRelease == nil {
+		if err = execCtx.admitStatementMemory(); err != nil {
+			return err
+		}
+		defer execCtx.releaseStatementMemoryAdmission()
+	}
 	ses.EnterFPrint(FPExecStmtWithTxn)
 	defer ses.ExitFPrint(FPExecStmtWithTxn)
 	// The process survives across statements, including statements handled
@@ -6209,6 +6217,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		}
 		execCtx.reqCtx = requestCtx
 	}()
+	// Admission restores its pre-entry (epoch-scoped) context. Release it before
+	// ending that epoch and restoring the caller's original request context.
+	defer execCtx.releaseStatementMemoryAdmission()
 	ses.EnterFPrint(FPDoComQuery)
 	defer ses.ExitFPrint(FPDoComQuery)
 	defer ses.ClearDDLOwnerRoleID()
@@ -6485,6 +6496,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// statement generation. Reset before authorization/admission, then inject
 		// binary PREPARE metadata captured before doComQuery.
 		execCtx.beginStatementGeneration(currentInput)
+		// Reclassify every statement, including subsequent statements in one
+		// request, so a task heartbeat cannot confer its allowance on user SQL.
+		execCtx.reqCtx = process.WithControlMemoryAdmission(execCtx.reqCtx,
+			taskControlMemoryStatement(execCtx.reqCtx, ses, stmt))
 		// Keep the transaction origin available to compile-time lineage admission.
 		// Implicit-commit DDL commits the old transaction before planning, so the
 		// fresh transaction alone cannot tell whether the client was already in an
@@ -6578,6 +6593,10 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		// has a current statement identity. Authorization and plan construction
 		// still run after this boundary, matching the DDL implicit-commit
 		// contract while keeping instrumentation failures side-effect free.
+		if err = execCtx.admitStatementMemory(); err != nil {
+			logStatementStatus(execCtx.reqCtx, ses, stmt, fail, err)
+			return err
+		}
 		// Replacement BEGIN also commits an existing transaction. Keep it separate
 		// from implicitCommitBefore, which additionally commits DDL at statement
 		// completion and must not commit the new transaction opened by BEGIN.
@@ -6721,6 +6740,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.input = currentInput
 
 		err = executeStmtWithResponse(ses, execCtx)
+		execCtx.releaseStatementMemoryAdmission()
 		ses.ClearDDLOwnerRoleID()
 		if err != nil {
 			return err

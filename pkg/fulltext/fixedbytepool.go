@@ -148,6 +148,16 @@ type FixedBytePool struct {
 	// Observable via Unspills() so tests can assert the top-K scoring passes touch
 	// each spilled partition a bounded number of times instead of thrashing.
 	unspills uint64
+
+	// Set only during fixture setup, never by production constructors.
+	memoryCapacityForTesting *uint64
+}
+
+// SetMemoryCapacityForTesting isolates a pool's structural-allocation test from
+// procfs/cgroupfs sampling costs without replacing the process-wide provider or
+// changing the production live-quota path. Call only before using the pool.
+func (pool *FixedBytePool) SetMemoryCapacityForTesting(total uint64) {
+	pool.memoryCapacityForTesting = &total
 }
 
 // ChargeSideBytes accounts n bytes of non-spillable side-map data (e.g. the retained
@@ -176,7 +186,12 @@ func (pool *FixedBytePool) heapBudget() (used, budget uint64, ok bool) {
 	if pool.dsize == 0 {
 		return 0, 0, false
 	}
-	total := memTotal()
+	var total uint64
+	if pool.memoryCapacityForTesting != nil {
+		total = *pool.memoryCapacityForTesting
+	} else {
+		total = memTotal()
+	}
 	if total == 0 {
 		return 0, 0, false
 	}

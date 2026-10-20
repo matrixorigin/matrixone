@@ -3418,6 +3418,9 @@ func isAuthenticationRequestRejected(err error) bool {
 
 // AuthenticateUser Verify the user's password, and if the login information contains the database name, verify if the database exists
 func (ses *Session) AuthenticateUser(ctx context.Context, userInput string, dbName string, authResponse []byte, salt []byte, checkPassword func(pwd []byte, salt []byte, auth []byte) bool) ([]byte, error) {
+	// Only the catalog work of this login may use the bounded runtime reserve.
+	// The marker is scoped to this call and is not installed on the session.
+	ctx = process.WithControlMemoryAdmission(ctx, true)
 	var (
 		defaultRoleID        int64
 		defaultRole          string

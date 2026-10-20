@@ -523,6 +523,13 @@ func (exec *txnExecutor) Exec(
 		nil,
 		exec.s.taskservice,
 	)
+	// This process is owned by one internal statement, not a reusable frontend
+	// session. In particular, bootstrap/readiness SQL may own a bounded control
+	// lease without a frontend statement lease. Freeing operators/MPool bytes
+	// alone does not close that owner; close it on every return, after the
+	// subsequently registered compile/parameter cleanup has run. Any still-live
+	// allocation tokens keep their physical charges until the actual free.
+	defer proc.CloseExecutionResourceGeneration()
 	initInternalSequenceState(proc, exec.getDatabase(), sequenceState)
 	// Internal DML (including CTAS population) needs the same expression error
 	// policy as frontend DML, before planning can fold any constants.

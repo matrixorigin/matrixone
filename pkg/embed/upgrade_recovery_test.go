@@ -139,7 +139,7 @@ func TestCrossTargetUpgradeRecovery(t *testing.T) {
 				defer cancel()
 			}
 			started := time.Now()
-			c, err := NewCluster(WithTesting(), WithTestAdmissionContext(setupCtx), WithCNCount(cnCount), WithPreStart(func(svc ServiceOperator) {
+			c, err := NewCluster(WithTesting(), withFunctionalTestMemoryAdmission(), WithTestAdmissionContext(setupCtx), WithCNCount(cnCount), WithPreStart(func(svc ServiceOperator) {
 				adjustBasicClusterService(svc)
 				if svc.ServiceType() == metadata.ServiceType_CN {
 					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.AutomaticUpgrade = true })

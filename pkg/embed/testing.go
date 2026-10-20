@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/taskservice"
 	"github.com/matrixorigin/matrixone/pkg/util/metric/stats"
@@ -533,6 +534,7 @@ func startBasicCluster(
 	started := time.Now()
 	c, err := StartTestCluster(
 		WithCNCount(cnCount),
+		withFunctionalTestMemoryAdmission(),
 		WithPreStart(adjustBasicClusterService),
 	)
 	if trace != nil {
@@ -554,6 +556,18 @@ func startBasicCluster(
 		trace("task-services-ready", time.Since(readyStarted), nil)
 	}
 	return c, nil
+}
+
+// Shared feature fixtures assert SQL semantics, not the unrelated compiler and
+// coverage processes' cgroup occupancy. Keep their real admission/allocation
+// paths enabled against a finite shared ledger with deterministic headroom.
+// Dedicated pressure tests use StartTestCluster and their own provider instead.
+func withFunctionalTestMemoryAdmission() Option {
+	return WithTestMemoryAdmissionBudget(system.NewMemoryAdmissionBudgetWithProvider(
+		system.DefaultMemoryDomainReservePolicy(), func() (system.MemoryDomainSnapshot, error) {
+			return system.MemoryDomainSnapshot{Limit: 16 << 30, Used: 1 << 30,
+				Source: system.MemoryDomainSourceCgroupV1, Measured: true, ObservedAt: time.Now()}, nil
+		}))
 }
 
 func adjustBasicClusterService(svc ServiceOperator) {
@@ -688,6 +702,8 @@ func basicClusterSetupTracer(t testReporter, cnCount int) func(string, time.Dura
 // due to the amount of time it takes to start a cluster (10-20s) when there are a very large number
 // of test cases. So for some special cases that don't need to be restarted, a basicCluster can be
 // reused to run the test cases. in summary, the basic cluster will only be started once!
+// The shared functional fixture uses a finite, deterministic memory ledger.
+// Tests of real host/cgroup pressure must use StartTestCluster instead.
 func RunBaseClusterTests(
 	t testReporter,
 	fn func(Cluster),

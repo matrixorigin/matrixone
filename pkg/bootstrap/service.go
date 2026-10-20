@@ -45,6 +45,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/metric/mometric"
 	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 var (
@@ -317,6 +318,9 @@ func waitBootstrapRetry(ctx context.Context, delay time.Duration) error {
 }
 
 func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
+	// This read-only readiness probe must be able to finish under ordinary
+	// admission pressure. Do not mark bootstrap DDL/DML or arbitrary internal SQL.
+	ctx = process.WithControlMemoryAdmission(ctx, true)
 	res, err := s.exec.Exec(ctx, "show databases", executor.Options{}.WithMinCommittedTS(s.now()))
 	if err != nil {
 		return false, err
@@ -339,6 +343,7 @@ func (s *service) checkAlreadyBootstrapped(ctx context.Context) (bool, error) {
 }
 
 func (s *service) checkBootstrapTables(ctx context.Context) (bool, error) {
+	ctx = process.WithControlMemoryAdmission(ctx, true)
 	res, err := s.exec.Exec(ctx, fmt.Sprintf("show tables from %s", bootstrappedCheckerDB), executor.Options{}.WithMinCommittedTS(s.now()))
 	if err != nil {
 		return false, err

@@ -1008,6 +1008,12 @@ func loadRuleCache(ctx context.Context, ses *Session) (_ map[string]string, retE
 	if tenant == nil {
 		return map[string]string{}, nil
 	}
+	// Mandatory policy lookup runs before the client AST's statement admission.
+	// Keep this narrowly scoped catalog work on the bounded control allowance,
+	// or a cold/invalidated policy cache can block KILL before it is classified.
+	// Do not mark the caller's request: its actual SQL still enters normally,
+	// and rule lookup/validation failures must still fail closed.
+	ctx = process.WithControlMemoryAdmission(ctx, true)
 
 	readOption, err := authorizationReadOption(ctx, ses, &BackgroundExecOption{cancelTxnCreateWithRequest: true})
 	if err != nil {

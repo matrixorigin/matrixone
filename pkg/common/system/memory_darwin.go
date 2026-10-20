@@ -51,3 +51,11 @@ func hostMemoryStats() (gosigar.Mem, error) {
 	return memoryStatsFromPages(total, uint64(stats.free_count),
 		uint64(stats.inactive_count), uint64(C.vm_kernel_page_size))
 }
+
+// macOS does not expose a /proc/meminfo-compatible breakdown with the same
+// accounting semantics. The host domain still gets the percentage/floor
+// reserve, while Linux cgroup and procfs deployments provide the detailed
+// non-Go high-water input.
+func hostMemoryAccounting() (kernel, nonGo uint64) {
+	return 0, 0
+}
