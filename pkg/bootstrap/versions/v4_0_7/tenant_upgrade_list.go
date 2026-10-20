@@ -28,19 +28,20 @@ import (
 // only known at runtime (one metadata table per index, per account), which a fixed UpgSql
 // cannot express. It runs from HandleTenantUpgrade, the same escape hatch v4_0_6 uses for
 // upgradeLegacyForeignKeyMetadata.
-var tenantUpgEntries = []versions.UpgradeEntry{
-	upgradeInformationSchemaViews(),
-}
+// Keep the released v4.0.7 offset at zero. New catalog repairs belong to
+// maintenance, not to an already-persisted historical upgrade identity.
+var tenantUpgEntries = []versions.UpgradeEntry{}
 
-// UpgradeInformationSchemaViewsAfterProtocolCheck reuses the guarded VIEWS
-// migration for post-upgrade reconciliation. The caller checks the protocol
-// immediately before calling this function so an ErrNotSupported from the
-// DDL cannot be mistaken for a retryable protocol gate.
+// UpgradeInformationSchemaViewsAfterProtocolCheck replaces VIEWS for the
+// bounded maintenance owner, independently of the historical upgrade list.
+// The caller checks the protocol immediately before calling this function so
+// an ErrNotSupported from the DDL cannot be mistaken for a retryable protocol gate.
 func UpgradeInformationSchemaViewsAfterProtocolCheck(
 	txn executor.TxnExecutor,
 	accountID uint32,
 ) error {
-	return tenantUpgEntries[0].UpgradeAfterProtocolCheck(txn, accountID)
+	entry := upgradeInformationSchemaViews()
+	return entry.UpgradeAfterProtocolCheck(txn, accountID)
 }
 
 // CheckInformationSchemaViewsDefinition recognizes the two catalog names
@@ -82,10 +83,10 @@ func InformationSchemaViewsAuthoringProtocolReady(txn executor.TxnExecutor) bool
 	return valid && floor >= defines.MORPCVersion125
 }
 
-// upgradeInformationSchemaViews is deliberately scheduled in v4.0.7. The
-// v4.0.6 entry only reaches tenants that were still below v4.0.6; a tenant
-// already recorded at v4.0.6 must receive a new upgrade identity before the
-// parser-derived VIEWS definition can be installed.
+// upgradeInformationSchemaViews describes the guarded maintenance repair. The
+// account scan uses the persisted DDL as its work marker, so it also reaches
+// tenants already at v4.0.6, v4.0.7, or the final version without changing any
+// historical handler's offset or delaying its pending provenance migration.
 func upgradeInformationSchemaViews() versions.UpgradeEntry {
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,

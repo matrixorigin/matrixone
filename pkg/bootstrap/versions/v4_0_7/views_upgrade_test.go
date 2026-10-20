@@ -58,7 +58,7 @@ func TestViewsUpgradeRecognizesCatalogNameCase(t *testing.T) {
 				if tc.current {
 					require.Empty(t, executed, "the committed definition is the durable no-op marker")
 				} else {
-					require.Equal(t, []string{tenantUpgEntries[0].PreSql, sysview.InformationSchemaViewsDDL}, executed)
+					require.Equal(t, []string{upgradeInformationSchemaViews().PreSql, sysview.InformationSchemaViewsDDL}, executed)
 				}
 			})
 		}
@@ -88,13 +88,17 @@ func TestViewsDefinitionProbePropagatesCatalogErrors(t *testing.T) {
 	}
 }
 
-func TestViewsUpgradeIsScheduledForCompletedV406Tenants(t *testing.T) {
+func TestViewsRepairPreservesHistoricalV407Identity(t *testing.T) {
 	require.Equal(t, "4.0.7", Handler.Metadata().Version)
 	require.Equal(t, "4.0.6", Handler.Metadata().MinUpgradeVersion)
-	require.Equal(t, int64(defines.MORPCVersion125), Handler.Metadata().RequiredProtocolVersion)
-	require.Len(t, tenantUpgEntries, 1)
+	require.Equal(t, int64(defines.MORPCVersion61), Handler.Metadata().RequiredProtocolVersion)
+	require.Zero(t, Handler.Metadata().VersionOffset)
+	require.Equal(t, versions.Yes, Handler.Metadata().UpgradeCluster)
+	require.Equal(t, versions.Yes, Handler.Metadata().UpgradeTenant)
+	require.Empty(t, tenantUpgEntries)
+	require.Empty(t, clusterUpgEntries)
 
-	entry := tenantUpgEntries[0]
+	entry := upgradeInformationSchemaViews()
 	require.Equal(t, sysview.InformationDBConst, entry.Schema)
 	require.Equal(t, "VIEWS", entry.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
@@ -115,7 +119,7 @@ func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
 				return executor.Result{}, nil
 			})
 
-			entry := tenantUpgEntries[0]
+			entry := upgradeInformationSchemaViews()
 			entry.CheckFunc = func(executor.TxnExecutor, uint32) (bool, error) {
 				return false, nil
 			}

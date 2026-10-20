@@ -44,9 +44,9 @@ type informationSchemaViewsMaintenanceState struct {
 }
 
 // maintainInformationSchemaViews repairs only the system VIEWS definition for
-// final-version tenants that were created while v125 capability discovery was
-// incomplete. It processes one bounded account page per invocation and reuses
-// the guarded v4.0.7 entry for the actual transactional replacement.
+// every account, including tenants already at v4.0.6, v4.0.7, or the final
+// version. It processes one bounded page per invocation after the v125 gate;
+// the standalone repair does not alter any historical handler identity.
 func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 	if !s.upgrade.informationSchemaViewsMaintenanceRunning.CompareAndSwap(false, true) {
 		return nil

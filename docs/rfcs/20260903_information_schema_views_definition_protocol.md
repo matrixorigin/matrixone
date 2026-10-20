@@ -129,9 +129,21 @@ older view definition from a prior upgrade. Treating only one literal
 predecessor as repairable would leave those states permanently stale.
 The catalog probe recognizes both `VIEWS` and the default case-folded `views`
 name. It still compares the full persisted CREATE statement exactly; name
-folding must not turn a stale definition into an installed marker. Both the
-upgrade entry and periodic maintenance use this same probe, so a committed
-repair is a no-op on every later pass, regardless of catalog name casing.
+folding must not turn a stale definition into an installed marker. The
+maintenance repair uses this probe, so a committed repair is a no-op on every
+later pass, regardless of catalog name casing.
+
+Historical upgrade identities are immutable. In particular, v4.0.7 retains
+its released offset zero, protocol-61 requirement, flags, and index provenance
+migration. It has no VIEWS entry: adding one would change its derived offset
+and make startup reject an interrupted upgrade recorded at offset zero.
+The existing periodic maintenance owner schedules VIEWS independently, scanning
+all account IDs without filtering `create_version`; tenants already at v4.0.6,
+v4.0.7, or the final version therefore converge after the local authoring fence
+and common-CN v125 gate are both ready. HAKeeper publishes that protocol floor
+from binary capability through the log-service admission owner, independently
+of historical bootstrap handlers. A pending v4.0.7 upgrade resumes first;
+VIEWS reconciliation runs after the final version is ready.
 
 The reconciliation transaction owns one account page (32 accounts by default)
 and publishes its process-local account cursor only after commit. A replacement
@@ -257,9 +269,13 @@ records the predecessor VIEWS definition when capability discovery is
 incomplete. The post-upgrade bounded reconciliation pass rediscovers that
 durable definition marker, retries only after a positive all-CN v125 check, and
 uses the same guarded transactional entry to publish the parser-derived
-definition once it is safe. Upgrade tests prove both the v4.0.7 handler and
-its VIEWS entry require v125. The predecessor-init test proves that the
-restoration target has no function reference before an older CN is admitted;
+definition once it is safe. Recovery tests use the real `initUpgrade` registry
+to validate an interrupted v4.0.7/offset-zero target with created, tenant-pending,
+and already-committed route steps through the startup checker. Handler tests
+pin its original protocol-61 requirement and zero offset, while standalone
+VIEWS repair tests retain the v125 gate before DROP/CREATE. The predecessor-init
+test proves that the restoration target has no function reference before an
+older CN is admitted;
 the cancellation-after-staging test additionally proves that a cancelled
 transaction preserves the legacy marker and page cursor, and that a later
 generation can retry and publish only after a committed v125 gate.
