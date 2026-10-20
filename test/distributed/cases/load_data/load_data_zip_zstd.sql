@@ -57,4 +57,10 @@ select id, name from ext_zip order by id;
 create external table ext_mix(id int, name varchar(20)) infile{'filepath'='$resources/load_data/zipzstd/mix/m_*'} fields terminated by ',' lines terminated by '\n' ignore 1 lines;
 select count(*), sum(id) from ext_mix;
 
+-- matrixone#30652: truncated zstd input must fail the load instead of
+-- silently committing the decompressed prefix.
+create table t_zst_trunc(id int, name varchar(20));
+load data infile {'filepath'='$resources/load_data/zipzstd/truncated_zst.csv.zst', 'compression'='zstd'} into table t_zst_trunc fields terminated by ',' lines terminated by '\n';
+select count(*) from t_zst_trunc;
+
 drop database load_zz;

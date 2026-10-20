@@ -24,6 +24,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"fmt"
 	"io"
 	"math"
 	"strings"
@@ -185,7 +186,7 @@ func getUnCompressReader(ctx context.Context, compType string, filepath string, 
 		if err != nil {
 			return nil, err
 		}
-		return decompressed(zd, func() error { zd.Close(); return nil }, r), nil
+		return decompressed(zstdTruncationGuard{d: zd}, func() error { zd.Close(); return nil }, r), nil
 	case tree.ZIP:
 		zr, closeDecoder, err := getZipReader(ctx, r)
 		if err != nil {
@@ -213,6 +214,22 @@ func getUnCompressReader(ctx context.Context, compType string, filepath string, 
 	default:
 		return nil, moerr.NewInternalErrorf(ctx, "the compress type '%s' is not support now", compType)
 	}
+}
+
+// zstdTruncationGuard translates a truncated zstd stream's io.ErrUnexpectedEOF
+// into a plain load error. csvparser treats io.ErrUnexpectedEOF from
+// io.ReadFull as a clean final chunk, which is right for a direct file
+// reader; with a decompressor a clean stream ends with io.EOF instead, so
+// ErrUnexpectedEOF means the compressed input was cut short. matrixone#30652:
+// a truncated ZSTD frame used to be committed silently as a prefix.
+type zstdTruncationGuard struct{ d *zstd.Decoder }
+
+func (g zstdTruncationGuard) Read(p []byte) (int, error) {
+	n, err := g.d.Read(p)
+	if err == io.ErrUnexpectedEOF {
+		return n, fmt.Errorf("truncated zstd input in LOAD DATA")
+	}
+	return n, err
 }
 
 func GetUnCompressReader(proc *process.Process, compType string, filepath string, r io.ReadCloser) (io.ReadCloser, error) {

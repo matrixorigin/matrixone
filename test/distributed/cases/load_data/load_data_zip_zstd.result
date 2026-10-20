@@ -68,4 +68,10 @@ create external table ext_mix(id int, name varchar(20)) infile{'filepath'='$reso
 select count(*), sum(id) from ext_mix;
 ➤ count(*)[-5,64,0]  ¦  sum(id)[-5,64,0]  𝄀
 4  ¦  210
+create table t_zst_trunc(id int, name varchar(20));
+load data infile {'filepath'='$resources/load_data/zipzstd/truncated_zst.csv.zst', 'compression'='zstd'} into table t_zst_trunc fields terminated by ',' lines terminated by '\n';
+internal error: truncated zstd input in LOAD DATA
+select count(*) from t_zst_trunc;
+➤ count(*)[-5,64,0]  𝄀
+0
 drop database load_zz;
