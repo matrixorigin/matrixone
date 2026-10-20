@@ -2288,6 +2288,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	keyNames := make([]string, 0, len(tableDef.Indexes)+1)
 	keyTypes := make([]*plan.Type, 0, len(tableDef.Indexes)+1)
 	keyTypeCounts := make([]int32, 0, len(tableDef.Indexes)+1)
+	keyDiagnostics := make([]*plan.ExprList, 0, len(tableDef.Indexes)+1)
 	appendKeyMetadata := func(parts []string) error {
 		if len(parts) == 0 {
 			return moerr.NewInternalError(builder.GetContext(),
@@ -2340,6 +2341,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			return 0, 0, nil, err
 		}
 		keyExprs = append(keyExprs, DeepCopyExpr(inputPK))
+		keyDiagnostics = append(keyDiagnostics, &plan.ExprList{})
 		pkParts := tableDef.Pkey.Names
 		if len(pkParts) == 0 {
 			pkParts = []string{pkName}
@@ -2393,6 +2395,18 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		if err := appendKeyMetadata(idxDef.Parts); err != nil {
 			return 0, 0, nil, err
 		}
+		diagnosticExprs, err := builder.makeIndexDedupKeyExprs(tableDef, idxDef, selectTag, func(name string) (int32, bool) {
+			pos, ok := colName2Idx[tableDef.Name+"."+name]
+			return pos, ok
+		})
+		if err != nil {
+			return 0, 0, nil, err
+		}
+		keyDiagnostics = append(keyDiagnostics, &plan.ExprList{List: diagnosticExprs})
+		if len(diagnosticExprs) > 0 {
+			keyNames[len(keyNames)-1] = idxDef.IndexName
+		}
+
 		joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{inputKey, existingKey})
 		if err != nil {
 			return 0, 0, nil, err
@@ -2436,6 +2450,17 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: markerSelectPos}},
 		})
 	}
+
+	for _, exprs := range keyDiagnostics {
+		for _, expr := range exprs.List {
+			if autoIncrementReorder {
+				if err := builder.remapColRefForExpr(expr, outputRemapping, &RemapInfo{tip: "INSERT IGNORE diagnostic"}); err != nil {
+					return 0, 0, nil, err
+				}
+			}
+			replaceColRefTag(expr, selectTag, projectTag)
+		}
+	}
 	keyColumns := make([]int32, len(keyExprs))
 	conflictColumns := make([]int32, len(conflictExprs))
 	for i, expr := range keyExprs {
@@ -2472,6 +2497,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			KeyNames:               keyNames,
 			KeyTypes:               keyTypes,
 			KeyTypeCounts:          keyTypeCounts,
+			KeyDiagnosticExprs:     keyDiagnostics,
 		},
 	}
 	if autoIncrementReorder {
@@ -3923,6 +3949,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				idxOnDupAction = plan.Node_FAIL
 			}
 
+			diagnosticExprs, err := builder.makeIndexDedupKeyExprs(tableDef, idxDef, selectTag, func(name string) (int32, bool) {
+				pos, ok := colName2Idx[tableDef.Name+"."+name]
+				return pos, ok
+			})
+			if err != nil {
+				return 0, err
+			}
+			if len(diagnosticExprs) > 0 {
+				dedupColName = idxDef.IndexName
+			}
+
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType:          plan.Node_JOIN,
 				Children:          []int32{idxTableNodeID, lastNodeID},
@@ -3931,6 +3968,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				OnDuplicateAction: idxOnDupAction,
 				DedupColName:      dedupColName,
 				DedupColTypes:     dedupColTypes,
+				DedupKeyExprs:     diagnosticExprs,
 			}, bindCtx)
 
 		}
