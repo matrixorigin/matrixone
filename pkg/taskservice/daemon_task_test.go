@@ -174,6 +174,22 @@ type serviceWithDaemonHook struct {
 	queryCalls     atomic.Int64
 }
 
+type blockedDaemonHeartbeatService struct {
+	TaskService
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockedDaemonHeartbeatService) HeartbeatDaemonTask(ctx context.Context, _ task.DaemonTask) error {
+	close(s.entered)
+	select {
+	case <-s.release:
+		return errors.New("injected taskservice connection failure")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (s *serviceWithDaemonHook) HeartbeatDaemonTask(ctx context.Context, tk task.DaemonTask) error {
 	s.mu.RLock()
 	err := s.heartbeatErr
@@ -869,9 +885,42 @@ func TestISCPHeartbeatSuccessRenewsLocalLease(t *testing.T) {
 	require.True(t, r.exists(claim.ID))
 }
 
+func TestISCPHeartbeatRenewalWinsExpiryDecision(t *testing.T) {
+	r, _ := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	// The watchdog observed expiry, but a heartbeat succeeds before it retires
+	// the claim. The retirement path must recheck the renewed lease atomically.
+	require.True(t, r.isISCPHeartbeatExpired(local))
+	local.recordHeartbeatSuccess(claim, time.Now())
+	r.stopDaemonAfterHeartbeatLoss(local, claim, "stale expiry decision", true)
+	select {
+	case <-routine.cancelC:
+		t.Fatal("a stale expiry decision cancelled a renewed ISCP executor")
+	default:
+	}
+	require.False(t, local.claimLost.Load())
+	require.True(t, r.exists(claim.ID))
+}
+
 func TestISCPHeartbeatWatchdogCancelsBlockedRenewal(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 	t.Cleanup(r.stopper.Stop)
+	service := &blockedDaemonHeartbeatService{
+		TaskService: r.service,
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	r.service = service
 	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
 	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
 	claim.LastRun = time.Now().Add(-time.Minute)
@@ -883,12 +932,41 @@ func TestISCPHeartbeatWatchdogCancelsBlockedRenewal(t *testing.T) {
 	local.activeRoutine.Store(&active)
 	r.addDaemonTask(local)
 
-	// This check must work without a heartbeat RPC returning at all.
-	r.checkISCPHeartbeatLease()
+	ctx, cancel := context.WithCancel(context.Background())
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		r.doSendHeartbeat(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		close(service.release)
+		<-heartbeatDone
+	})
+	select {
+	case <-service.entered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat RPC did not enter the blocked state")
+	}
+
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		r.watchISCPHeartbeatLease(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-watchDone
+	})
 	select {
 	case <-routine.cancelC:
-	case <-time.After(time.Second):
+	case <-time.After(3 * time.Second):
 		t.Fatal("expired ISCP executor kept running while heartbeat was blocked")
+	}
+	select {
+	case <-heartbeatDone:
+		t.Fatal("heartbeat returned before the watchdog cancelled the executor")
+	default:
 	}
 	require.False(t, r.exists(claim.ID))
 }
