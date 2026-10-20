@@ -48,7 +48,7 @@ func TestInitSchemaDefersViewsUntilAuthoringFence(t *testing.T) {
 			rt.CompareAndDeleteGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, current)
 		}
 	})
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion123))
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, int64(defines.MORPCVersion124))
 
 	var statements []string
 	ctrl := gomock.NewController(t)
@@ -71,20 +71,22 @@ func TestInitSchemaDefersViewsUntilAuthoringFence(t *testing.T) {
 	require.Contains(t, statements, InformationSchemaTablesDDL)
 	require.NotContains(t, statements, InformationSchemaTablesV118DDL)
 
-	statements = nil
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion118))
-	require.NoError(t, InitSchema(context.Background(), txnExecutor))
-	require.Contains(t, statements, InformationSchemaViewsLegacyDDL)
-	require.Contains(t, statements, InformationSchemaSchemataDDL)
-	require.Contains(t, statements, InformationSchemaColumnsDDL)
-	require.Contains(t, statements, InformationSchemaTablesDDL)
-	require.NotContains(t, statements, InformationSchemaTablesV118DDL,
-		"TABLES is published separately after bootstrap admission")
+	for _, floor := range []int64{defines.MORPCVersion118, defines.MORPCVersion123} {
+		statements = nil
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, floor)
+		require.NoError(t, InitSchema(context.Background(), txnExecutor))
+		require.Contains(t, statements, InformationSchemaViewsLegacyDDL)
+		require.Contains(t, statements, InformationSchemaSchemataDDL)
+		require.Contains(t, statements, InformationSchemaColumnsDDL)
+		require.Contains(t, statements, InformationSchemaTablesDDL)
+		require.NotContains(t, statements, InformationSchemaTablesV118DDL,
+			"TABLES is published separately after bootstrap admission")
+	}
 
 	statements = nil
 	rt.SetGlobalVariables(
 		moruntime.PersistedExpressionProtocolAuthoringFloor,
-		int64(defines.MORPCVersion123))
+		int64(defines.MORPCVersion124))
 	require.NoError(t, InitSchema(context.Background(), txnExecutor))
 	joined = strings.Join(statements, "\n")
 	require.Contains(t, joined, InformationSchemaViewsDDL)

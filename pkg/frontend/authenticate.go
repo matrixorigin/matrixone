@@ -11164,14 +11164,14 @@ func protocolVersionForTenantInitializationWithContext(
 	if !ok {
 		return legacyVersion, nil
 	}
-	if version < defines.MORPCVersion123 {
+	if version < defines.MORPCVersion124 {
 		// Preserve every pre-existing protocol-specific information_schema
 		// contract. Only the new VIEWS function needs the predecessor
 		// fallback; promoting an older known protocol would also install newer
 		// TABLES/COLUMNS and role-closure definitions.
 		return version, nil
 	}
-	// Admission for TABLES v118 and VIEWS v123 is independent. Keep TABLES
+	// Admission for TABLES v118 and VIEWS v124 is independent. Keep TABLES
 	// when both its local authoring fence and the current peers support it.
 	floorValue, hasFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
 	floor, validFloor := floorValue.(int64)
@@ -11192,10 +11192,10 @@ func protocolVersionForTenantInitializationWithContext(
 		return predecessorViewsVersion, nil
 	}
 	// A missing key retains standalone runtimes' existing capability behavior.
-	if hasFloor && (!validFloor || floor < defines.MORPCVersion123) {
+	if hasFloor && (!validFloor || floor < defines.MORPCVersion124) {
 		return fallbackProtocol()
 	}
-	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion123)
+	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion124)
 	if err != nil {
 		// Capability discovery is deliberately best-effort for account
 		// creation. Do not turn a temporary inventory/RPC failure into a

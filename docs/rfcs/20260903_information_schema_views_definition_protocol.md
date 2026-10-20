@@ -43,7 +43,7 @@ decision; implementation approval remains a separate GitHub review state.
 not the original CREATE statement. New views persist a parser-derived definition
 and legacy rows are read through parser-aware metadata functions. The functions
 are new distributed plan functions (IDs 601 and 602), so the catalog contract is fenced by MORPC
-v123.
+v124.
 
 ## Problem and invariant
 
@@ -75,13 +75,13 @@ This bounded, side-effect-free fallback avoids a second SQL regexp lexer and
 does not depend on background recovery.
 
 When either function identity occurs in a persisted view expression, the
-planner writes `required_protocol_version: 123` into `ViewData`, including when
+planner writes `required_protocol_version: 124` into `ViewData`, including when
 the call is nested under another expression. The real view bind/Prepare path
 reapplies that marker. It uses the existing two-floor admission lifecycle:
-HAKeeper publishes the durable read floor during the v123 decoder barrier, while
+HAKeeper publishes the durable read floor during the v124 decoder barrier, while
 the authoring floor remains closed until the all-CN admission and catalog fence
-complete. Therefore an authoring or read floor of 0, v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, v118, v119, v120, v121, or v122 fails
-closed, an all-v123 fenced CN can create the VIEWS definition, and an ordinary view
+complete. Therefore an authoring or read floor of 0, v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, v118, v119, v120, v121, v122, or v123 fails
+closed, an all-v124 fenced CN can create the VIEWS definition, and an ordinary view
 without either function remains unmarked.
 
 NAME_CONST output names use the same AST rule in planning and legacy metadata
@@ -117,7 +117,7 @@ snapshot to the legacy catalog format would be a separate compatibility
 migration and is outside this PR.
 
 The post-upgrade reconciliation uses the exact current
-`InformationSchemaViewsDDL` as its idempotence marker. After the common v123 gate
+`InformationSchemaViewsDDL` as its idempotence marker. After the common v124 gate
 is available, a bounded page may repair any tenant whose
 `information_schema.VIEWS` is missing or whose definition is not exactly that
 current DDL. This includes the v105 predecessor definition and older
@@ -147,16 +147,16 @@ intentionally invokes VIEWS reconciliation before orphan-privilege maintenance
 and returns a visible error when reconciliation fails. Consequently,
 orphan-privilege maintenance is skipped on every failed VIEWS pass, including
 repeated failures; once VIEWS succeeds, that same pass proceeds to orphan
-cleanup. This serial ordering keeps a pass that failed to establish the v123
+cleanup. This serial ordering keeps a pass that failed to establish the v124
 public catalog contract from being reported as fully successful, while the
 bounded VIEWS page remains independently rollback-safe.
 
-MORPC v123 is allocated as `MORPCLatestVersion + 1` from official main v122 at
-`090b14fbb4c288819728f628e009311a11812e1f`. Main v122 owns unary TIMESTAMP and dynamic TIME result contracts; v121 owns exact unsigned DECIMAL DIV result domains; v120 owns current-session KILL authorization and proxy disconnect cleanup; v119 owns parameterized subquery programs; v118 owns transactional
+MORPC v124 is allocated as `MORPCLatestVersion + 1` from official main v123 at
+`c7bd2e7c1d9ca53daf80d640b3b307902d54161c`. Main v123 owns capability-gated nonblocking row-lock admission; main v122 owns unary TIMESTAMP and dynamic TIME result contracts; v121 owns exact unsigned DECIMAL DIV result domains; v120 owns current-session KILL authorization and proxy disconnect cleanup; v119 owns parameterized subquery programs; v118 owns transactional
 database defaults and table charset alteration. Main owns v117 collation-aware
 LEAST/GREATEST overloads, v116 SELECT division diagnostics, v115 calendar interval
 normalization, and the earlier independent metadata/result contracts. This
-rebase advances VIEWS from v122 to v123; historical measurements retain their
+rebase advances VIEWS from v123 to v124; historical measurements retain their
 original version and revision identities.
 Main's hyperbolic functions retain IDs 591–595, FORMAT_BYTES and
 FORMAT_PICO_TIME retain IDs 596 and 597, and TO_CALENDAR_INTERVAL retains 598.
@@ -168,38 +168,38 @@ The capability is specific to these functions and the persisted VIEWS definition
 A sender probes the selected destination CN as well as its local runtime before
 encoding a pipeline containing either function ID; an unknown or unavailable
 destination capability fails closed. The v4.0.6 VIEWS upgrade waits for common
-v123. New tenant initialization installs the new VIEWS DDL only after the local
-coordinator and every CN in the current inventory have positively confirmed v123;
+v124. New tenant initialization installs the new VIEWS DDL only after the local
+coordinator and every CN in the current inventory have positively confirmed v124;
 a mixed, unknown, RPC-failing, or incomplete capability probe records the
 predecessor VIEWS definition while still committing the final-version tenant
-row. A bounded post-upgrade reconciliation pass later rechecks common v123 and
+row. A bounded post-upgrade reconciliation pass later rechecks common v124 and
 reuses the guarded transactional entry to converge missing or stale VIEWS
-definitions to the current contract. Any cluster with a CN below v123, including
-the predecessors v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, v118, v119, v120, v121, and immediate predecessor v122, preserves the predecessor VIEWS
+definitions to the current contract. Any cluster with a CN below v124, including
+the predecessors v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, v118, v119, v120, v121, v122, and immediate predecessor v123, preserves the predecessor VIEWS
 definition while retaining each existing protocol-specific metadata contract,
-including the independent v100 and v109 COLUMNS contracts. A local v123 CN
-that defers VIEWS uses the VIEWS DDL of the immediate v122 predecessor, preserving native Unicode
+including the independent v100 and v109 COLUMNS contracts. A local v124 CN
+that defers VIEWS uses the VIEWS DDL of the immediate v123 predecessor, preserving native Unicode
 collation metadata. A v118 predecessor is selected only when its local
 authoring fence and every current peer support it; older, unknown, or failed
 probes retain the conservative v109 contract. Bootstrap prerequisites still
 defer the v118 TABLES function until the existing post-admission publication
 phase; ordinary tenant initialization retains admitted v118 TABLES/SCHEMATA
-while VIEWS waits for v123. COLUMNS installation still requires a positive common-v100
+while VIEWS waits for v124. COLUMNS installation still requires a positive common-v100
 or common-v109 probe according to its selected definition; unknown local runtime versions retain
 the minimum supported catalog contract. Pipeline preparation, remote marshal, and
 remote unmarshal reject a
-pipeline containing either function ID below v123. The receiver check protects
-stale prepared work as well as normal sender dispatch. Before the v123 HAKeeper
+pipeline containing either function ID below v124. The receiver check protects
+stale prepared work as well as normal sender dispatch. Before the v124 HAKeeper
 protocol-floor activation is durably committed, a cancelled rollout may stop
-the v123 upgrade, keep or restore `InformationSchemaViewsLegacyDDL`
+the v124 upgrade, keep or restore `InformationSchemaViewsLegacyDDL`
 transactionally, wait for catalog and in-flight work to converge, and admit
-v122 only after verifying that no v123 maintenance worker can re-install the
-new definition. After the v123 floor is committed, the floor is monotonic and
-v104/v105/v106/v108/v109/v110/v111/v112/v113/v114/v115/v116/v117/v118/v119/v120/v121/v122 binaries must not be admitted: restoring the view text alone cannot
-undo the decoder barrier. The supported recovery is forward recovery with v123-
+v123 only after verifying that no v124 maintenance worker can re-install the
+new definition. After the v124 floor is committed, the floor is monotonic and
+v104/v105/v106/v108/v109/v110/v111/v112/v113/v114/v115/v116/v117/v118/v119/v120/v121/v122/v123 binaries must not be admitted: restoring the view text alone cannot
+undo the decoder barrier. The supported recovery is forward recovery with v124-
 compatible log/CN services, or a coordinated restoration of cluster state from
 before the activation barrier; an ordinary in-place downgrade is unsupported.
-Merely draining below-v123 requests is not sufficient because the new persisted
+Merely draining below-v124 requests is not sufficient because the new persisted
 view text references the functions. The new JSON fields are additive and old
 binaries keep treating them as unknown.
 
@@ -242,27 +242,27 @@ Focused parser/function tests cover current and legacy definitions, quoted and
 commented inputs, malformed rows, frozen wildcard expansion, the documented
 legacy raw-wildcard boundary, explicit derived-table column lists with inner
 alias preservation, and CHECK OPTION.
-Protocol tests cover rejection at v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, v118, v119, v120, v121, and v122 and acceptance at v123 at
+Protocol tests cover rejection at v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, v118, v119, v120, v121, v122, and v123 and acceptance at v124 at
 prepare, sender, and receiver boundaries, including a mixed-version destination
 probe and the all-CN capability fence.
 Generated ViewData tests cover both function IDs, nested detection, the
-authoring/read floor values 0, v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, v118, v119, v120, v121, and v122, and binding the exact generated
+authoring/read floor values 0, v104, v105, v106, v108, v109, v110, v111, v112, v113, v114, v115, v116, v117, v118, v119, v120, v121, v122, and v123, and binding the exact generated
 metadata at the immediate predecessor and current protocol.
 Real CREATE VIEW controls using FORMAT_BYTES and FORMAT_PICO_TIME succeed with
 the VIEWS authoring floor closed and persist no protocol marker.
 System-view tests prove mixed, unknown, and RPC-failing CN capability probes
-fall back to the predecessor VIEWS DDL, while an all-v123 inventory uses the
+fall back to the predecessor VIEWS DDL, while an all-v124 inventory uses the
 parser-derived DDL. Tenant initialization keeps the final account version but
 records the predecessor VIEWS definition when capability discovery is
 incomplete. The post-upgrade bounded reconciliation pass rediscovers that
-durable definition marker, retries only after a positive all-CN v123 check, and
+durable definition marker, retries only after a positive all-CN v124 check, and
 uses the same guarded transactional entry to publish the parser-derived
 definition once it is safe. Upgrade tests prove both the v4.0.7 handler and
-its VIEWS entry require v123. The predecessor-init test proves that the
+its VIEWS entry require v124. The predecessor-init test proves that the
 restoration target has no function reference before an older CN is admitted;
 the cancellation-after-staging test additionally proves that a cancelled
 transaction preserves the legacy marker and page cursor, and that a later
-generation can retry and publish only after a committed v123 gate.
+generation can retry and publish only after a committed v124 gate.
 
 Maintenance acceptance additionally covers the broader convergence rule: a
 missing VIEWS object and a stale/non-current VIEWS definition are both repair
@@ -593,3 +593,27 @@ predicate roots, 34 CN admission roots and both public SQL roots passed on
 this final combined tree. The unchanged metadata/protocol/feature-detector
 inputs retain the complete suites, static checks and sender measurements
 above; no new performance or topology claim is inferred from the refresh.
+
+### 2026-10-20 nonblocking-lock protocol rebase
+
+Rebased onto official main `c7bd2e7c1d9ca53daf80d640b3b307902d54161c`.
+Main owns nonblocking row-lock capability v123; VIEWS uses v124. All 601
+existing main function IDs remain unchanged, VIEWS retains IDs 601/602, and
+its end marker remains 603. Of the 137 rebased patches, only the protocol
+constant conflict required resolution; the other patches retain their changes.
+Sender, receiver, Prepare, persisted read/authoring, tenant initialization and
+upgrade gates now agree on v124. Immediate-predecessor v123 controls reject
+VIEWS functions, preserve legacy VIEWS alongside native COLUMNS/TABLES, and
+roll back a staged maintenance page without advancing its cursor.
+
+Normal owning-package validation passed 10,625 top-level tests across 11
+packages. One existing frontend root and two existing planner subcases remain
+skipped; none belongs to these protocol controls. The final bootstrap/sysview
+control changes additionally passed their 110 owning-package roots. The real
+SQL replay case passed both rounds on one CN, including long escaped literals,
+column types and cleanup; the real V406 metadata catalog upgrade also passed.
+Incremental vet and lint passed for all 15 PR Go packages, with the last two
+test-only package edits checked again. No sender traversal, payload analysis,
+fixture ownership or synchronization algorithm changed; preceding performance
+and lifecycle evidence is reused for those unchanged contracts. This record
+claims no fresh mixed-binary deployment or throughput measurement.
