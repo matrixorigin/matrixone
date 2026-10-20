@@ -2900,8 +2900,12 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 				// v.area stays mpool-tracked rather than escaping to the Go heap).
 				if baseOff+len(w.area) <= cap(v.area) || mp == nil {
 					v.area = append(v.area, w.area...)
-				} else if v.area, err = mp.Grow2(v.area, w.area, baseOff+len(w.area), v.offHeap); err != nil {
-					return err
+				} else {
+					area, err := mp.Grow2(v.area, w.area, baseOff+len(w.area), v.offHeap)
+					if err != nil {
+						return err
+					}
+					v.area = area
 				}
 			}
 			// one memmove of the header array; inline varlenas carry their bytes here.

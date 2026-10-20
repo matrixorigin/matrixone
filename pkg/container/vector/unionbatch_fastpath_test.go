@@ -15,6 +15,7 @@
 package vector
 
 import (
+	"bytes"
 	"fmt"
 	"testing"
 
@@ -23,6 +24,76 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
 )
+
+func TestUnionBatchPreservesNativeAreaOnGrowthFailure(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		reuse bool
+		retry bool
+	}{
+		{"existing_cleanup", false, false},
+		{"reused_empty_cleanup", true, false},
+		{"existing_retry", false, true},
+		{"reused_empty_retry", true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp, err := mpool.NewMPool("union-batch-growth", mpool.MB, mpool.NoFixed)
+			require.NoError(t, err)
+			dst := NewOffHeapVecWithType(types.T_varchar.ToType())
+			src := NewOffHeapVecWithType(types.T_varchar.ToType())
+			var reservation, orphan []byte
+			t.Cleanup(func() {
+				defer mpool.DeleteMPool(mp)
+				dst.Free(mp)
+				src.Free(mp)
+				mp.Free(reservation)
+				if orphan != nil && mp.CurrNB() == int64(cap(orphan)) {
+					// Recover a proven orphan only after the production cleanup oracle.
+					defer mp.Free(orphan)
+				}
+				require.Zero(t, mp.CurrNB(), "ordinary cleanup must release all native memory")
+			})
+
+			seed := bytes.Repeat([]byte("a"), 40)
+			payload := bytes.Repeat([]byte("b"), 2048)
+			require.NoError(t, dst.PreExtend(2, mp))
+			require.NoError(t, AppendBytes(dst, seed, false, mp))
+			require.NoError(t, AppendBytes(src, payload, false, mp))
+			if tc.reuse {
+				dst.CleanOnlyData()
+			}
+			oldArea, oldLength := dst.area, dst.Length()
+			require.Positive(t, cap(oldArea))
+			require.Greater(t, len(oldArea)+len(src.area), cap(oldArea))
+			reservation, err = mp.Alloc(int(mp.Cap()-mp.CurrNB()-1024), true)
+			require.NoError(t, err)
+
+			err = dst.UnionBatch(src, 0, src.Length(), nil, mp)
+			if dst.area == nil {
+				orphan = oldArea
+			}
+			require.ErrorContains(t, err, "mpool out of space")
+			require.GreaterOrEqual(t, cap(dst.data), (oldLength+src.Length())*types.VarlenaSize, "the rejected allocation must be area growth")
+			require.Equal(t, oldLength, dst.Length())
+			require.Equal(t, len(oldArea), len(dst.area))
+			require.Equal(t, cap(oldArea), cap(dst.area))
+			require.Same(t, &oldArea[:cap(oldArea)][0], &dst.area[:cap(dst.area)][0])
+			if !tc.reuse {
+				require.Equal(t, seed, dst.GetBytesAt(0))
+			}
+			if tc.retry {
+				mp.Free(reservation)
+				reservation = nil
+				require.NoError(t, dst.UnionBatch(src, 0, src.Length(), nil, mp))
+				require.Equal(t, oldLength+1, dst.Length())
+				if !tc.reuse {
+					require.Equal(t, seed, dst.GetBytesAt(0))
+				}
+				require.Equal(t, payload, dst.GetBytesAt(oldLength))
+			}
+		})
+	}
+}
 
 // TestUnionBatchVarlenFastPath exercises the full-append fast path: mixed inline
 // (short) + non-inline (long) values, unioned into a non-empty target so the
