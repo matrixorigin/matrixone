@@ -51,7 +51,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.IntegerParameterCoercion || features.SpecialIntegerConsumers, integerArgumentsVersion,
 			"integer parameter coercion requires a versioned remote destination",
 			"remote destination does not support integer parameter execution (MORPC version %d)"},
-		{features.EnumSourceAssignment, defines.MORPCVersion123,
+		{features.EnumSourceAssignment, defines.MORPCVersion125,
 			"typed ENUM source assignment requires a versioned remote destination",
 			"remote destination does not support typed ENUM source assignment (MORPC version %d)"},
 		{features.TableCollationFunction, defines.MORPCVersion118,

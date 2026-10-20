@@ -156,11 +156,14 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.LeastGreatestCollationSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
 	}
+	if features.TimestampAddSecondIntervals {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion124)
+	}
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
 	}
 	if features.EnumSourceAssignment {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion123)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion125)
 	}
 	if features.TableCollationFunction {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion118)

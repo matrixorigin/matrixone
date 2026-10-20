@@ -23,7 +23,8 @@ select cast('2000-01-01' as datetime(0));
 ➤ cast(2000-01-01 as datetime)[93,64,0]  𝄀
 2000-01-01 00:00:00
 select cast('2022-01-01 25:00:00' as datetime(0));
-invalid input: invalid datetime value 2022-01-01 25:00:00
+➤ cast(2022-01-01 25:00:00 as datetime)[93,19,0]  𝄀
+null
 select cast('2000-01-01' as datetime(0))+1;
 ➤ cast(2000-01-01 as datetime) + 1[3,38,0]  𝄀
 20000101000001
@@ -181,7 +182,7 @@ invalid argument operator =, bad value [DATETIME DOUBLE]
 SELECT * from t_datetime WHERE id IN ('20220101', 20220102);
 ➤ id[93,64,0]
 SELECT * from t_datetime WHERE id IN ('2.0200101e7','2.0200102e7');
-invalid input: invalid datetime value 2.0200101e7
+➤ id[93,26,0]
 SELECT * from t_datetime WHERE id BETWEEN 20191231 AND 20200101;
 ➤ id[93,64,0]
 SELECT * from t_datetime WHERE id BETWEEN 2.0200101e7 and 2.0200102e7;

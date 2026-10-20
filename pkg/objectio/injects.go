@@ -33,7 +33,10 @@ const (
 	// FJ_CommitWaitTargetTenant restricts FJ_CommitWait to one tenant in
 	// multi-tenant lifecycle tests. Without this selector, FJ_CommitWait keeps
 	// its original process-wide behavior.
-	FJ_CommitWaitTargetTenant     = "fj/commit/wait-target-tenant"
+	FJ_CommitWaitTargetTenant = "fj/commit/wait-target-tenant"
+	// FJ_CommitWaitTargetTxn restricts the barrier to one transaction, including
+	// when other transactions from the same tenant finish asynchronously.
+	FJ_CommitWaitTargetTxn        = "fj/commit/wait-target-txn"
 	FJ_TransferSlow               = "fj/transfer/slow"
 	FJ_DataMergeAfterCollectTS    = "fj/merge/data/after-collect-ts"
 	FJ_TransferError              = "fj/transfer/error"
@@ -454,8 +457,11 @@ func PrintFlushEntryInjected() (string, bool) {
 	return sarg, injected
 }
 
-func CommitWaitInjected(tenantID uint32) (string, bool) {
+func CommitWaitInjected(tenantID uint32, txnID string) (string, bool) {
 	if target, _, selected := fault.TriggerFault(FJ_CommitWaitTargetTenant); selected && uint32(target) != tenantID {
+		return "", false
+	}
+	if _, target, selected := fault.TriggerFault(FJ_CommitWaitTargetTxn); selected && target != txnID {
 		return "", false
 	}
 	_, sarg, injected := fault.TriggerFault(FJ_CommitWait)

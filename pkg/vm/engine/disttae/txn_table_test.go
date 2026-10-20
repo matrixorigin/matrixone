@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -35,6 +36,7 @@ import (
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	pbstats "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -42,6 +44,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/cmd_util"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/logtailreplay"
@@ -1113,6 +1116,92 @@ func BenchmarkWorkspaceInsertRowEstimate(b *testing.B) {
 					b.Fatal("unexpected target estimate")
 				}
 			}
+		})
+	}
+}
+
+func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
+	for _, kind := range []string{"replace", "clear", "rename", "table rename", "table then column", "column then table", "stale version"} {
+		t.Run(kind, func(t *testing.T) {
+			workspace := newTransactionWithActivePKTableForTest(t, "pk")
+			op := workspace.op.(*mock_frontend.MockTxnOperator)
+			op.EXPECT().IsSnapOp().Return(false).AnyTimes()
+			workspace.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
+			table := workspace.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
+			workspace.tableOps.addCreatedInTxn(table.tableId, 0)
+			original := &planpb.CheckDef{Name: "tbl_chk_1", OriginSql: "false", Check: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: false}}}}}
+			table.extraInfo = &api.SchemaExtra{Checks: []*planpb.CheckDef{original}, AutoIncrEpoch: 9, DefaultCharset: uint32(types.CharsetUTF8MB4Bin)}
+			table.defs = engine.PlanColsToExeCols([]*planpb.ColDef{{Name: "pk", Typ: planpb.Type{Id: int32(types.T_int64)}}})
+			replacement := &planpb.TableDef{Name: "tbl", Cols: []*planpb.ColDef{{Name: "pk", Typ: planpb.Type{Id: int32(types.T_int64)}}}, DefaultCharset: uint32(types.CharsetUTF8)}
+			if kind != "clear" {
+				replacement.Checks = []*planpb.CheckDef{proto.Clone(original).(*planpb.CheckDef)}
+				replacement.Checks[0].OriginSql = "true"
+				replacement.Checks[0].Check.GetLit().Value = &planpb.Literal_Bval{Bval: true}
+			}
+			req := api.NewGuardedReplaceDefReq(7, 42, table.version, 1, 1, 1, replacement)
+			requests := []*api.AlterTableReq{req}
+			expectedChecks := replacement.Checks
+			var renamedChecks []*planpb.CheckDef
+			if kind == "rename" || kind == "table then column" || kind == "column then table" {
+				renamedChecks = api.CloneExtra(&api.SchemaExtra{Checks: replacement.Checks}).Checks
+				if kind != "rename" {
+					renamedChecks[0].Name = "renamed_chk_1"
+				}
+				renamedChecks[0].OriginSql = "renamed > 0"
+				expectedChecks = renamedChecks
+			}
+			renameTable := api.NewRenameTableReq(7, 42, "tbl", "renamed")
+			if kind == "table rename" || kind == "table then column" {
+				requests = append(requests, renameTable)
+			}
+			if renamedChecks != nil {
+				requests = append(requests, api.NewRenameColumnReqWithChecks(7, 42, "pk", "renamed", 0, renamedChecks))
+			}
+			if kind == "column then table" {
+				requests = append(requests, renameTable)
+			}
+			if kind == "table rename" {
+				expectedChecks = api.CloneExtra(&api.SchemaExtra{Checks: replacement.Checks}).Checks
+				expectedChecks[0].Name = "renamed_chk_1"
+			}
+			if kind == "stale version" {
+				req.GetReplaceDef().ExpectedVersion++
+				err := table.AlterTable(context.Background(), nil, requests)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged))
+				require.Empty(t, workspace.restoreTxnTableFunc)
+				require.True(t, proto.Equal(original, table.extraInfo.Checks[0]))
+				return
+			}
+			// This real failure boundary is after publication and before catalog I/O.
+			_, wantErr := defines.GetAccountId(context.Background())
+			require.EqualError(t, table.AlterTable(context.Background(), nil, requests), wantErr.Error())
+			require.Len(t, workspace.restoreTxnTableFunc, 1)
+			require.Len(t, table.extraInfo.Checks, len(expectedChecks))
+			for i, check := range expectedChecks {
+				require.True(t, proto.Equal(check, table.extraInfo.Checks[i]))
+			}
+			require.Equal(t, uint32(types.CharsetUTF8), table.extraInfo.DefaultCharset)
+			require.Equal(t, uint32(9), table.extraInfo.AutoIncrEpoch)
+			if len(replacement.Checks) > 0 {
+				replacement.Checks[0].Check.GetLit().Value = &planpb.Literal_Bval{Bval: false}
+				require.True(t, table.extraInfo.Checks[0].Check.GetLit().GetBval(), "replacement request cannot mutate published CHECK")
+			}
+			if renamedChecks != nil {
+				renamedChecks[0].Name = "mutated"
+				renamedChecks[0].Check.GetLit().Value = &planpb.Literal_Bval{Bval: false}
+				require.Equal(t, "renamed > 0", table.extraInfo.Checks[0].OriginSql)
+				require.NotEqual(t, "mutated", table.extraInfo.Checks[0].Name)
+				require.True(t, table.extraInfo.Checks[0].Check.GetLit().GetBval(), "rename request cannot mutate published CHECK")
+			}
+			op.EXPECT().EnterRollbackStmt()
+			op.EXPECT().ExitRollbackStmt()
+			require.NoError(t, workspace.RollbackLastStatement(context.Background()))
+			require.Empty(t, workspace.restoreTxnTableFunc)
+			require.Equal(t, uint32(types.CharsetUTF8MB4Bin), table.extraInfo.DefaultCharset)
+			require.Equal(t, uint32(9), table.extraInfo.AutoIncrEpoch)
+			require.Equal(t, "tbl", table.tableName)
+			require.Len(t, table.GetTableDef(context.Background()).Checks, 1)
+			require.True(t, proto.Equal(original, table.GetTableDef(context.Background()).Checks[0]))
 		})
 	}
 }

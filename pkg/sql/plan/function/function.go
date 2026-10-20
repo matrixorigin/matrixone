@@ -371,6 +371,9 @@ func getFunctionByName(
 	}
 
 	check := f.checkArgumentTypes(args, stringDomainModes)
+	if r.fid == INTEGER_DIV && LegacyDecimalIntegerDiv(ctx) {
+		check = legacyIntegerDivCheck(args)
+	}
 	if (r.fid == FORMAT || r.fid == MAKEDATE || r.fid == MAKETIME) && LegacySpecialConsumers(ctx) {
 		if legacy, ok := legacySpecialConsumerCheck(r.fid, f.Overloads, args); ok {
 			check = legacy
@@ -416,7 +419,9 @@ func getFunctionByName(
 	if err == nil {
 		r.applyDivPrecisionIncrement(ctx, args)
 		r.applyDecimalModMetadata(args)
-		r.applyDecimalIntegerDivMetadata(args)
+		if !LegacyDecimalIntegerDiv(ctx) {
+			r.applyDecimalIntegerDivMetadata(args)
+		}
 	}
 
 	return r, err
@@ -588,6 +593,16 @@ func GetAggFunctionNameByID(overloadID int64) string {
 // non-NULL. STRICT functions normally preserve an all-non-NULL argument
 // guarantee, except for functions that can synthesize NULL from valid values.
 func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
+	return deduceNotNullable(context.Background(), overloadID, args)
+}
+
+// DeduceNotNullableForBinding shares the current inference owner while allowing
+// complete historical catalog origins to reproduce their published metadata.
+func DeduceNotNullableForBinding(ctx context.Context, overloadID int64, args []*plan.Expr) bool {
+	return deduceNotNullable(ctx, overloadID, args)
+}
+
+func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr) bool {
 	fid, oid := DecodeOverloadID(overloadID)
 	switch fid {
 	case EXTRACT:
@@ -607,11 +622,16 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		// above the representable calendar even when the input is NOT NULL.
 		return false
 	case DATE:
-		// Typed zero DATE/DATETIME values become NULL under NO_ZERO_DATE.
-		if oid == 0 || oid == 2 {
+		// Typed zero dates can become NULL under NO_ZERO_DATE, and string
+		// conversions synthesize NULL for malformed input.
+		if oid == 0 || oid == 2 || ((oid == 3 || oid == 4) && !LegacyTemporalNullability(ctx)) {
 			return false
 		}
 	case CAST:
+		if (oid == 0 || oid == 1) && len(args) == 2 &&
+			types.T(args[0].Typ.Id).IsMySQLString() && types.T(args[1].Typ.Id) == types.T_datetime && !LegacyTemporalNullability(ctx) {
+			return false
+		}
 		// Explicit typed DATE casts share the DATE conversion policy. Legacy
 		// implicit and assignment casts keep their existing nullability.
 		if oid == 1 && len(args) == 2 &&
@@ -716,7 +736,7 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		SHA2, AES_ENCRYPT, AES_DECRYPT, COMPRESS, UNCOMPRESS, EXTRACTVALUE, UPDATEXML,
 		DATE_FORMAT, TIME_FORMAT,
 		UUID_EXTRACT_VERSION, UUID_EXTRACT_TIMESTAMP,
-		TO_INTERVAL, TO_INTERVAL_MICROSECOND, TO_CALENDAR_INTERVAL:
+		TO_INTERVAL, TO_INTERVAL_MICROSECOND, TO_CALENDAR_INTERVAL, TIMESTAMPADD_SECOND_INTERVAL:
 		return false
 	}
 	if ProducesNoNull(overloadID) {

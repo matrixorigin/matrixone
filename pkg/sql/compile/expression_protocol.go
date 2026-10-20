@@ -80,7 +80,7 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 // A supported deployment needs no extra expression walk on the execution path.
 func validateEnumSourceAssignmentProtocol(proc *process.Process, owner any) error {
 	if proc != nil {
-		if version, ok := remoteMORPCProtocolVersion(proc.GetService()); ok && version >= defines.MORPCVersion123 {
+		if version, ok := remoteMORPCProtocolVersion(proc.GetService()); ok && version >= defines.MORPCVersion125 {
 			return nil
 		}
 	}
@@ -89,7 +89,7 @@ func validateEnumSourceAssignmentProtocol(proc *process.Process, owner any) erro
 		return err
 	}
 	if features.EnumSourceAssignment {
-		return moerr.NewNotSupportedNoCtx("typed ENUM source assignment requires MORPC protocol version 123")
+		return moerr.NewNotSupportedNoCtx("typed ENUM source assignment requires MORPC protocol version 125")
 	}
 	return nil
 }
@@ -145,7 +145,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion113)
 	}
 	if features.EnumSourceAssignment {
-		required = max(required, defines.MORPCVersion123)
+		required = max(required, defines.MORPCVersion125)
 	}
 	if features.TableCollationFunction {
 		required = max(required, defines.MORPCVersion118)
@@ -173,6 +173,9 @@ func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFea
 }
 
 func temporalExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.TimestampAddSecondIntervals {
+		return defines.MORPCVersion124
+	}
 	if features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault {
 		return defines.MORPCVersion98
 	}

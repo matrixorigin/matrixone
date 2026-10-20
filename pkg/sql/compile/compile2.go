@@ -149,6 +149,12 @@ func (c *Compile) Compile(
 		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(compileStart).Seconds())
 	}()
 
+	// Reject unsupported lock policies before query scheduling, source/scope
+	// construction, Sirius offload, or any later MergeRun can publish work.
+	if err = c.validateNonBlockingLockPlan(queryPlan); err != nil {
+		return err
+	}
+
 	// Refresh borrowed CREATE plans before effects without advancing or
 	// rolling back the caller's workspace statement. This also covers
 	// frontend background execution and reused Compile instances.
