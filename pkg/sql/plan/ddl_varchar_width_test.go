@@ -168,7 +168,7 @@ func TestDDLVarcharWidthReplayAdmission(t *testing.T) {
 		{name: "changed width", column: "v varchar(65534)", wantError: true},
 		{name: "changed width above capacity", column: "v varchar(65536)", wantError: true},
 		{name: "new column", column: "extra varchar(65535)", wantError: true},
-		{name: "changed charset", column: "v varchar(65535) collate utf8mb4_bin", wantError: true},
+		{name: "changed legacy charset", column: "v varchar(65535) collate utf32_bin", wantError: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			stmt, err := mysql.ParseOne(t.Context(), "create table copy("+tc.column+")", 1)

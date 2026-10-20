@@ -32,7 +32,7 @@ func nativePADDDLContext(t *testing.T) (*MockCompilerContext, func(string) (*Pla
 	t.Helper()
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
 	ctx.GetAccountIdFunc = func() (uint32, error) { return 42, nil }
-	ctx.SetContext(context.WithValue(t.Context(), collationBindingRevisionKey{}, uint32(1)))
+	ctx.SetContext(t.Context())
 	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
 	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
 		old, exists := rt.GetGlobalVariables(key)

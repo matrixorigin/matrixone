@@ -95,7 +95,7 @@ func TestSubscriptionShowCreateUsesSubscriberDefault(t *testing.T) {
 		t.Run(map[uint32]string{2: "binary subscriber", 3: "general subscriber"}[identity], func(t *testing.T) {
 			optimizer := NewMockOptimizer(false, newPlanTestProcess(t))
 			mock := &optimizer.ctxt
-			def, err := buildTestCreateTableStmt(optimizer, "create table publisher_db.t(v varchar(8)) collate utf8mb4_general_ci")
+			def, err := buildTestLegacyCreateTableStmt(optimizer, "create table publisher_db.t(v varchar(8)) collate utf8mb4_general_ci")
 			require.NoError(t, err)
 			sub := &SubscriptionMeta{SubName: "subscriber_db", DbName: "publisher_db", AccountId: 7}
 			ctx := &subscriptionMetadataTestContext{MockCompilerContext: mock, subscription: sub, querying: sub}

@@ -221,9 +221,9 @@ func TestNativePADPersistedBinderRestoresMode(t *testing.T) {
 	bound, err := binder.BindExpr(ast, 0, false)
 	require.NoError(t, err)
 	require.Equal(t, uint32(1), bound.Typ.CollationVersion)
-	legacy, err := NewDefaultBinder(t.Context(), nil, nil, Type{}, nil).BindExpr(ast, 0, false)
+	legacy, err := NewDefaultBinder(WithCollationBindingRevision(t.Context(), 0), nil, nil, Type{}, nil).BindExpr(ast, 0, false)
 	require.NoError(t, err)
-	require.Zero(t, legacy.Typ.CollationVersion, "公开默认在激活验证完成前保持关闭")
+	require.Zero(t, legacy.Typ.CollationVersion, "历史来源不继承当前显式请求的默认代际")
 	for _, invalid := range []any{uint32(2), "1"} {
 		bad := context.WithValue(t.Context(), collationBindingRevisionKey{}, invalid)
 		_, err := NewDefaultBinder(bad, nil, nil, Type{}, nil).BindExpr(ast, 0, false)
@@ -238,22 +238,50 @@ func TestNativePADBindingGeneration(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
-			for _, revision := range []uint32{0, 1} {
-				ctx := context.WithValue(t.Context(), collationBindingRevisionKey{}, revision)
-				expr, err := NewDefaultBinder(ctx, nil, nil, Type{}, nil).BindExpr(ast, 0, false)
-				require.NoError(t, err)
-				require.Equal(t, revision, expr.Typ.CollationVersion)
-				require.Contains(t, []uint32{2, 3}, expr.Typ.Charset, "兼容别名不变成严格三字节域")
-				require.True(t, expr.Typ.CollationCoercibilitySet)
-				require.Zero(t, expr.Typ.CollationCoercibility)
+			for _, binding := range []struct {
+				name     string
+				ctx      context.Context
+				revision uint32
+			}{
+				{"public", t.Context(), 1},
+				{"historical", WithCollationBindingRevision(t.Context(), 0), 0},
+				{"native_replay", WithCollationBindingRevision(t.Context(), 1), 1},
+			} {
+				t.Run(binding.name, func(t *testing.T) {
+					expr, err := NewDefaultBinder(binding.ctx, nil, nil, Type{}, nil).BindExpr(ast, 0, false)
+					require.NoError(t, err)
+					require.Equal(t, binding.revision, expr.Typ.CollationVersion)
+					require.Contains(t, []uint32{2, 3}, expr.Typ.Charset, "兼容别名不变成严格三字节域")
+					require.True(t, expr.Typ.CollationCoercibilitySet)
+					require.Zero(t, expr.Typ.CollationCoercibility)
+				})
 			}
+		})
+	}
+	for _, control := range []struct {
+		sql      string
+		revision uint32
+	}{
+		{"'a'", 0},
+		{"_binary'a'", 0},
+		{"'a' collate utf8mb4_0900_ai_ci", 0},
+		{"'a' collate utf8mb4_unicode_ci", 1},
+	} {
+		t.Run(control.sql, func(t *testing.T) {
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "select "+control.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			ast := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr
+			expr, err := NewDefaultBinder(t.Context(), nil, nil, Type{}, nil).BindExpr(ast, 0, false)
+			require.NoError(t, err)
+			require.Equal(t, control.revision, expr.Typ.CollationVersion)
 		})
 	}
 }
 
 func TestNativePADBoundExpressionSemantics(t *testing.T) {
 	proc := newPlanTestProcess(t)
-	ctx := context.WithValue(t.Context(), collationBindingRevisionKey{}, uint32(1))
+	ctx := t.Context()
 	for _, tc := range []struct {
 		sql  string
 		want bool

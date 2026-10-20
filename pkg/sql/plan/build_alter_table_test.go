@@ -157,6 +157,7 @@ func TestAlterTableCharsetAdmission(t *testing.T) {
 	} {
 		t.Run(tc.option, func(t *testing.T) {
 			mock := newAutoIncrementAlterOptimizer(t)
+			mock.ctxt.SetContext(WithCollationBindingRevision(mock.ctxt.GetContext(), 0))
 			source := mock.ctxt.tables["auto_incr_t"]
 			before, err := source.Marshal()
 			require.NoError(t, err)
@@ -692,8 +693,8 @@ func TestAlterTableModifyColumnCharsetOverridesTableDefault(t *testing.T) {
 			wantCharset: uint32(types.CharsetUTF8),
 		},
 		{
-			name:        "general ci overrides the binary table charset",
-			clause:      "collate utf8mb4_general_ci",
+			name:        "legacy general ci overrides the binary table charset",
+			clause:      "collate utf8mb4_0900_ai_ci",
 			wantType:    int32(types.T_char),
 			wantCharset: uint32(types.CharsetUTF8),
 		},

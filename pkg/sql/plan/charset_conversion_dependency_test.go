@@ -40,6 +40,7 @@ func TestCharsetConversionRetainsUnaffectedSubtrees(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
+			compiler.SetContext(WithCollationBindingRevision(compiler.GetContext(), 0))
 			compiler.tables["t"] = &planpb.TableDef{Name: "t"}
 			build := func(increment int64, sql string) *planpb.Plan {
 				t.Helper()
