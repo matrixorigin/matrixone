@@ -5569,7 +5569,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 
 	switch typ.Oid {
 	case types.T_int16:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int16](ctx, stmt, result, curval)
+		lastV, incr, minV, maxV, startN, cycle, isCalled, err := makeAlterSequenceParam[int16](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -5580,12 +5580,12 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle, isCalled)
 		if err != nil {
 			return nil, err
 		}
 	case types.T_int32:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int32](ctx, stmt, result, curval)
+		lastV, incr, minV, maxV, startN, cycle, isCalled, err := makeAlterSequenceParam[int32](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -5596,12 +5596,12 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle, isCalled)
 		if err != nil {
 			return nil, err
 		}
 	case types.T_int64:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[int64](ctx, stmt, result, curval)
+		lastV, incr, minV, maxV, startN, cycle, isCalled, err := makeAlterSequenceParam[int64](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -5612,12 +5612,12 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle, isCalled)
 		if err != nil {
 			return nil, err
 		}
 	case types.T_uint16:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint16](ctx, stmt, result, curval)
+		lastV, incr, minV, maxV, startN, cycle, isCalled, err := makeAlterSequenceParam[uint16](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -5625,12 +5625,12 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle, isCalled)
 		if err != nil {
 			return nil, err
 		}
 	case types.T_uint32:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint32](ctx, stmt, result, curval)
+		lastV, incr, minV, maxV, startN, cycle, isCalled, err := makeAlterSequenceParam[uint32](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -5638,12 +5638,12 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle, isCalled)
 		if err != nil {
 			return nil, err
 		}
 	case types.T_uint64:
-		lastV, incr, minV, maxV, startN, cycle, err := makeAlterSequenceParam[uint64](ctx, stmt, result, curval)
+		lastV, incr, minV, maxV, startN, cycle, isCalled, err := makeAlterSequenceParam[uint64](ctx, stmt, result, curval)
 		if err != nil {
 			return nil, err
 		}
@@ -5651,7 +5651,7 @@ func makeSequenceAlterBatch(ctx context.Context, stmt *tree.AlterSequence, table
 		if err != nil {
 			return nil, err
 		}
-		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle)
+		err = makeAlterSequenceVecs(vecs, typ, proc, incr, lastV, minV, maxV, startN, cycle, isCalled)
 		if err != nil {
 			return nil, err
 		}
@@ -5891,7 +5891,7 @@ func makeSequenceVecs[T constraints.Integer](vecs []*vector.Vector, stmt *tree.C
 	return err
 }
 
-func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool) (err error) {
+func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ types.Type, proc *process.Process, incr int64, lastV, minV, maxV, startN T, cycle bool, isCalled bool) (err error) {
 	defer func() {
 		if err != nil {
 			for _, v := range vecs {
@@ -5920,7 +5920,7 @@ func makeAlterSequenceVecs[T constraints.Integer](vecs []*vector.Vector, typ typ
 	if vecs[5], err = vector.NewConstFixed(types.T_bool.ToType(), cycle, 1, proc.Mp()); err != nil {
 		return err
 	}
-	vecs[6], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+	vecs[6], err = vector.NewConstFixed(types.T_bool.ToType(), isCalled, 1, proc.Mp())
 	return err
 }
 
@@ -5972,10 +5972,11 @@ func makeSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.Cr
 	return incrNum, minValue, maxValue, startNum, nil
 }
 
-func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.AlterSequence, result []interface{}, curval string) (T, int64, T, T, T, bool, error) {
+func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tree.AlterSequence, result []interface{}, curval string) (T, int64, T, T, T, bool, bool, error) {
 	var minValue, maxValue, startNum, lastNum T
 	var incrNum int64
 	var cycle bool
+	var isCalled bool
 
 	if incr, ok := result[4].(int64); ok {
 		incrNum = incr
@@ -5985,12 +5986,12 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 	if stmt.IncrementBy != nil {
 		switch stmt.IncrementBy.Num.(type) {
 		case uint64:
-			return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "incr value's data type is int64")
+			return 0, 0, 0, 0, 0, false, false, moerr.NewInvalidInput(ctx, "incr value's data type is int64")
 		}
 		incrNum = getValue[int64](stmt.IncrementBy.Minus, stmt.IncrementBy.Num)
 	}
 	if incrNum == 0 {
-		return 0, 0, 0, 0, 0, false, moerr.NewInvalidInput(ctx, "Incr value for sequence must not be 0")
+		return 0, 0, 0, 0, 0, false, false, moerr.NewInvalidInput(ctx, "Incr value for sequence must not be 0")
 	}
 
 	// if alter minValue of sequence
@@ -6022,12 +6023,22 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 		startNum = getInterfaceValue[T](preStartWith)
 	}
 	if len(curval) != 0 {
+		// This session called NEXTVAL before, so its curval cache proves the
+		// sequence is issued; pre-advance keeps that behavior unchanged.
 		lastNum = preLastSeqNum + T(incrNum)
 		if lastNum < startNum+T(incrNum) {
 			lastNum = startNum + T(incrNum)
 		}
 	} else {
+		// This session never called NEXTVAL for the sequence, so there is no
+		// curval cache to advance from. Preserve the issued state stored in
+		// the sequence row: forcing is_called back to false here would make
+		// the next NEXTVAL return the last already-issued value again, which
+		// breaks sequence-backed default inserts with a duplicate-key error
+		// (#30371).
 		lastNum = preLastSeqNum
+		preIsCalled, _ := result[6].(bool)
+		isCalled = preIsCalled
 	}
 
 	// if alter cycle state of sequence
@@ -6040,7 +6051,7 @@ func makeAlterSequenceParam[T constraints.Integer](ctx context.Context, stmt *tr
 		}
 	}
 
-	return lastNum, incrNum, minValue, maxValue, startNum, cycle, nil
+	return lastNum, incrNum, minValue, maxValue, startNum, cycle, isCalled, nil
 }
 
 // Checkout values.

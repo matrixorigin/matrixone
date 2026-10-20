@@ -1,11 +1,15 @@
 # Distributed ODKU Result Protocol
 
 Current implementation alignment: [r2 addendum](20261016-odku-distributed-result-protocol-r2-addendum.md), with the subsequent candidate-allocation overlay recorded there.
-Against released main `fed3bf59700158212a9135d0b619c3849034bb65` (capability prefix
-through MORPC122), the candidate retains main's 118–122 contracts and assigns
-JSON ELT/opaque text to MORPC123, typed JSON MIN/MAX to MORPC124, and the complete
-ODKU/session-baseline contract to MORPC125. The r2 approval remains scoped to its
-earlier reviewed allocation; this overlay does not claim new design approval.
+Against actual main `743e749a1e33d6c845bb73999e8c82d297a2b657` (capability prefix
+through MORPC124), the isolated candidate retains main's MORPC123 row-lock and
+MORPC124 fractional TIMESTAMPADD SECOND contracts and provisionally assigns JSON
+ELT/opaque text to MORPC125, typed JSON MIN/MAX to MORPC126, and the complete
+ODKU/session-baseline contract to MORPC127. Independent unmerged branches also
+use provisional MORPC125; these assignments do not establish cross-branch
+deployment compatibility and must be revalidated at authoritative main admission.
+The r2 approval remains scoped to its earlier reviewed allocation; this overlay
+does not claim new design approval.
 
 The r1 specification below is retained as historical design text. Its normative
 references to MORPC119 describe the original inspected/reviewed revision, not

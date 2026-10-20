@@ -18,14 +18,17 @@ is claimed by this document. Root owns reviewer and lifecycle decisions.
 
 ## Subsequent candidate allocation overlay (not part of r2 approval)
 
-For the current repair candidate, released main is
-`fed3bf59700158212a9135d0b619c3849034bb65`, whose capability prefix reaches
-MORPC122. The candidate preserves main's MORPC118–122 contracts and allocates
-JSON ELT/opaque visible text at MORPC123, typed JSON MIN/MAX at MORPC124, and the
-complete ODKU/session-LAST_INSERT_ID contract at MORPC125. This supersedes only
-the r2 allocation for the current candidate; it does not claim design approval
-or implementation acceptance. The r2 review record and allocation below remain
-historical and bound to their stated source and target.
+For the current conflict-repair candidate, actual main is
+`743e749a1e33d6c845bb73999e8c82d297a2b657`, whose capability prefix reaches
+MORPC124. The candidate preserves main's MORPC123 row-lock admission and
+MORPC124 fractional TIMESTAMPADD SECOND contracts and provisionally allocates
+JSON ELT/opaque visible text at MORPC125, typed JSON MIN/MAX at MORPC126, and the
+complete ODKU/session-LAST_INSERT_ID contract at MORPC127. Independent unmerged
+branches also use provisional MORPC125; this is not a coordinated allocation or
+cross-branch deployment guarantee. Revalidate it at authoritative main admission.
+This supersedes only the r2 allocation for the current candidate; it does not
+claim design approval or implementation acceptance. The r2 review record and
+allocation below remain historical and bound to their stated source and target.
 
 The approved r2 addendum below supersedes only the allocation and compatibility
 boundaries in the [retained r1 specification](20261016-odku-distributed-result-protocol.md).

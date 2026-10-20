@@ -269,6 +269,8 @@ message LockTarget {
   bool lock_table_at_the_end = 10;
   plan.ObjectRef obj_ref = 11;
   int32 partition_col_idx_in_bat = 12;
+  bool no_wait = 13;
+  bool skip_locked = 14;
 }
 
 message LockOp {

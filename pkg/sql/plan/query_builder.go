@@ -89,7 +89,16 @@ func resolveDivPrecisionIncrement(ctx CompilerContext) int32 {
 func ddlExpressionContext(ctx CompilerContext, base context.Context) context.Context {
 	bound := function.WithDivPrecisionIncrement(base, resolveDivPrecisionIncrement(ctx))
 	if function.LegacySpecialConsumers(ctx.GetContext()) {
-		return function.WithLegacySpecialConsumers(bound)
+		bound = function.WithLegacySpecialConsumers(bound)
+	}
+	if function.LegacyDecimalIntegerDiv(ctx.GetContext()) {
+		bound = function.WithLegacyDecimalIntegerDiv(bound)
+	}
+	if function.LegacyTimestampAddSecond(ctx.GetContext()) {
+		bound = function.WithLegacyTimestampAddSecond(bound)
+	}
+	if function.LegacyTemporalNullability(ctx.GetContext()) {
+		bound = function.WithLegacyTemporalNullability(bound)
 	}
 	return bound
 }
@@ -2428,7 +2437,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
-						ColPos: int32(len(node.ProjectList)),
+						// SAMPLE emits every GroupBy vector, including keys
+						// omitted from its projection. Keep that producer slot.
+						ColPos: int32(i),
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
@@ -6094,13 +6105,26 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 	}
 
 	selectLockMode := lockpb.LockMode_Exclusive
+	selectLockNoWait := false
+	selectLockSkipLocked := false
 	if effectiveSelectLockInfo != nil {
 		switch effectiveSelectLockInfo.LockType {
 		case tree.SelectLockForUpdate:
 			builder.isForUpdate = true
+		case tree.SelectLockForUpdateNoWait:
+			builder.isForUpdate = true
+			selectLockNoWait = true
 		case tree.SelectLockForShare:
 			builder.isForUpdate = true
 			selectLockMode = lockpb.LockMode_Shared
+		case tree.SelectLockForShareNoWait:
+			builder.isForUpdate = true
+			selectLockMode = lockpb.LockMode_Shared
+			selectLockNoWait = true
+		case tree.SelectLockForShareSkipLocked:
+			builder.isForUpdate = true
+			selectLockMode = lockpb.LockMode_Shared
+			selectLockSkipLocked = true
 		}
 	}
 
@@ -6263,6 +6287,8 @@ func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isR
 			astTimeWindow,
 			helpFunc,
 			selectLockMode,
+			selectLockNoWait,
+			selectLockSkipLocked,
 			isRoot,
 		); err != nil {
 			return
@@ -8895,6 +8921,8 @@ func (builder *QueryBuilder) bindSelectClause(
 	astTimeWindow *tree.TimeWindow,
 	helpFunc *helpFunc,
 	selectLockMode lockpb.LockMode,
+	selectLockNoWait bool,
+	selectLockSkipLocked bool,
 	isRoot bool,
 ) (
 	nodeID int32,
@@ -8984,6 +9012,8 @@ func (builder *QueryBuilder) bindSelectClause(
 		lockTargets := builder.collectLockTargets(nodeID, ctx)
 		for _, target := range lockTargets {
 			target.Mode = selectLockMode
+			target.NoWait = selectLockNoWait
+			target.SkipLocked = selectLockSkipLocked
 		}
 		if len(lockTargets) > 0 {
 			lockNode = &Node{

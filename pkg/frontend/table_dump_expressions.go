@@ -209,28 +209,6 @@ func tableDumpHasBoundExpressions(def *plan.TableDef) bool {
 	return false
 }
 
-func tableDumpMayDependOnDivision(def *plan.TableDef) bool {
-	if def == nil {
-		return false
-	}
-	for _, col := range def.Cols {
-		if col == nil {
-			continue
-		}
-		if col.Default != nil && col.Default.Expr != nil && strings.Contains(col.Default.OriginString, "/") ||
-			col.OnUpdate != nil && col.OnUpdate.Expr != nil && strings.Contains(col.OnUpdate.OriginString, "/") ||
-			col.GeneratedCol != nil && col.GeneratedCol.Expr != nil && strings.Contains(col.GeneratedCol.OriginString, "/") {
-			return true
-		}
-	}
-	for _, check := range def.Checks {
-		if check != nil && check.Check != nil && strings.Contains(check.OriginSql, "/") {
-			return true
-		}
-	}
-	return false
-}
-
 // tableDumpRestoredExpressions validates the declaration skeleton before
 // transplanting bound expressions. A table created from the same SQL under a
 // different session value has matching declarations but different bindings.
@@ -275,30 +253,24 @@ func tableDumpRestoredExpressions(target *plan.TableDef, payload []byte, digest 
 			source.Hidden != dest.Hidden || !sameTableDumpValueType(source.Typ, dest.Typ) {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump column does not match target schema")
 		}
-		if (source.Default != nil && strings.Contains(source.Default.OriginString, "/") ||
-			dest.Default != nil && strings.Contains(dest.Default.OriginString, "/")) &&
-			!sameTableDumpDefaultDeclaration(source.Default, dest.Default) {
+		if !sameTableDumpDefaultDeclaration(source.Default, dest.Default) {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump default does not match target schema")
 		}
-		if (source.OnUpdate != nil && strings.Contains(source.OnUpdate.OriginString, "/") ||
-			dest.OnUpdate != nil && strings.Contains(dest.OnUpdate.OriginString, "/")) &&
-			!sameTableDumpOnUpdateDeclaration(source.OnUpdate, dest.OnUpdate) {
+		if !sameTableDumpOnUpdateDeclaration(source.OnUpdate, dest.OnUpdate) {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump on-update expression does not match target schema")
 		}
-		if (source.GeneratedCol != nil && strings.Contains(source.GeneratedCol.OriginString, "/") ||
-			dest.GeneratedCol != nil && strings.Contains(dest.GeneratedCol.OriginString, "/")) &&
-			!sameTableDumpGeneratedDeclaration(source.GeneratedCol, dest.GeneratedCol) {
+		if !sameTableDumpGeneratedDeclaration(source.GeneratedCol, dest.GeneratedCol) {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump generated expression does not match target schema")
 		}
-		if source.Default != nil && strings.Contains(source.Default.OriginString, "/") {
+		if source.Default != nil {
 			changed = changed || !proto.Equal(source.Default, dest.Default)
 			replacement.Cols[i].Default = source.Default
 		}
-		if source.OnUpdate != nil && strings.Contains(source.OnUpdate.OriginString, "/") {
+		if source.OnUpdate != nil {
 			changed = changed || !proto.Equal(source.OnUpdate, dest.OnUpdate)
 			replacement.Cols[i].OnUpdate = source.OnUpdate
 		}
-		if source.GeneratedCol != nil && strings.Contains(source.GeneratedCol.OriginString, "/") {
+		if source.GeneratedCol != nil {
 			changed = changed || !proto.Equal(source.GeneratedCol, dest.GeneratedCol)
 			replacement.Cols[i].GeneratedCol = source.GeneratedCol
 		}
@@ -323,10 +295,8 @@ func tableDumpRestoredExpressions(target *plan.TableDef, payload []byte, digest 
 			source.OriginSql != dest.OriginSql {
 			return nil, false, moerr.NewInvalidInputNoCtx("table dump checks do not match target schema")
 		}
-		if strings.Contains(source.OriginSql, "/") {
-			changed = changed || !proto.Equal(source.Check, dest.Check)
-			replacement.Checks[i].Check = source.Check
-		}
+		changed = changed || !proto.Equal(source.Check, dest.Check)
+		replacement.Checks[i].Check = source.Check
 	}
 	return replacement, changed, nil
 }
