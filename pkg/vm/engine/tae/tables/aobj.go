@@ -50,17 +50,22 @@ func newAObject(
 ) *aobject {
 	obj := &aobject{}
 	obj.baseObject = newBaseObject(obj, meta, rt)
-	if meta.IsForcePNode() || obj.meta.Load().HasDropCommitted() {
+	dropped := meta.HasDropCommitted()
+	if (meta.IsForcePNode() || dropped) && !isUnwrittenAppendable(meta) {
 		pnode := newPersistedNode(obj.baseObject)
 		node := NewNode(pnode)
 		node.Ref()
 		obj.node.Store(node)
-		obj.FreezeAppend()
 	} else {
 		mnode := newMemoryNode(obj.baseObject, isTombstone)
 		node := NewNode(mnode)
 		node.Ref()
 		obj.node.Store(node)
+	}
+	if dropped || meta.IsForcePNode() {
+		// Replayed empty shells still have no file and must stay in memory,
+		// but their committed drop must never allow another append.
+		obj.FreezeAppend()
 	}
 	return obj
 }
