@@ -2571,7 +2571,7 @@ function run_embedded_tests(){
         logger "WRN" "embedded prebuild failed with status ${prebuild_status}; use the authoritative complete-scope go test"
         cleanup_embedded_prebuild || return 1
     fi
-    local ordinary_scope=${package_scope} package package_status=0 main_contract
+    local ordinary_scope=${package_scope} package package_status=0 main_contract package_batches
     local -a batched_packages=()
     if [[ "${UT_EMBEDDED_BATCHES}" == 4 ]]; then
         for package in ${package_scope}; do
@@ -2618,8 +2618,16 @@ function run_embedded_tests(){
         if [[ "${package}" == github.com/matrixorigin/matrixone/pkg/tests/sqlintegration ]]; then
             main_contract=cleanup-only
         fi
+        package_batches=4
+        # Shorter process generations reduce retained race-test memory without
+        # increasing the active cluster budget. Only this package/four-worker
+        # policy has complete inventory, wall, CPU and anonymous-memory evidence.
+        if [[ "${package}" == github.com/matrixorigin/matrixone/pkg/embed &&
+              "${UT_EMBEDDED_PACKAGE_PARALLEL}" == 4 ]]; then
+            package_batches=8
+        fi
         run_ut_command embedded "batched embedded-cluster race-test package ${package}" \
-            run_race_test_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" 4 "${UT_EMBEDDED_PACKAGE_PARALLEL}" 2 "${main_contract}"
+            run_race_test_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" "${package_batches}" "${UT_EMBEDDED_PACKAGE_PARALLEL}" 2 "${main_contract}"
         package_status=$?
         if (( package_status == 125 )); then return 125; fi
         consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY || return $?

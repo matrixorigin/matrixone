@@ -614,7 +614,8 @@ UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),$(if $(and $(f
 # The audited embedded batches use the same two-core child budget. Enable four
 # processes only for measured Linux eight-task runs; preserve smaller rollbacks.
 UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
-# Audited embed/DML/isolated/SQL batching applies only to the non-prebuild path.
+# Audited batching mode applies only to the non-prebuild path. Four-worker
+# pkg/embed uses eight process generations; other audited packages use four.
 UT_EMBEDDED_BATCHES ?= 4
 # A compiler overlapping cluster processes increases the memory peak. The new
 # issues default prepares embedded packages on demand instead. Preserve
