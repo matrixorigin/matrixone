@@ -63,7 +63,7 @@ func TestSearchWANDGlobalFloorMatchesSingleSegment(t *testing.T) {
 
 	list := func(idx *Index, threads, k int, q string) ([]any, []float32) {
 		idx.threadsSearch = threads
-		res, err := idx.SearchBagOfWords([]byte(q), ParserDefault, BM25, k, nil)
+		res, err := idx.SearchBagOfWords([]byte(q), ParserDefault, BM25, k, nil, 0)
 		require.NoError(t, err)
 		for i := 1; i < len(res); i++ {
 			require.LessOrEqual(t, res[i].Score, res[i-1].Score)

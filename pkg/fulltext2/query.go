@@ -415,7 +415,7 @@ func (idx *Index) SearchQuery(pattern []byte, boolean bool, parser string, algo 
 // BOOLEAN mode, a CJK run does NOT become a positional phrase (a query "我家有三个人"
 // scores every doc containing 我家/有/三个/人 in any order), so it works on a
 // POSITION_FREE index. Positions are never touched.
-func (idx *Index) SearchBagOfWords(pattern []byte, parser string, algo ScoreAlgo, k int, filter *prefilter) ([]Result, error) {
+func (idx *Index) SearchBagOfWords(pattern []byte, parser string, algo ScoreAlgo, k int, filter *prefilter, dfCutoff float64) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
 	}
@@ -423,6 +423,7 @@ func (idx *Index) SearchBagOfWords(pattern []byte, parser string, algo ScoreAlgo
 	if err != nil {
 		return nil, err
 	}
+	q.dfCutoff = dfCutoff
 	return idx.SearchBoolean(q, algo, k, filter)
 }
 

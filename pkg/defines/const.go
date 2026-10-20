@@ -160,7 +160,7 @@ const (
 	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
 	MORPCVersion123    int64 = 123 // capability-gated nonblocking row-lock admission
 	MORPCVersion124    int64 = 124 // exact fractional TIMESTAMPADD SECOND intervals
-	MORPCVersion125    int64 = 125 // fulltext2 parallel search threads_search option and token_filter (stop) analyzer
+	MORPCVersion125    int64 = 125 // fulltext2 parallel search threads_search, token_filter (stop) analyzer, and search_df_cutoff
 	MORPCLatestVersion       = MORPCVersion125
 )
 

@@ -352,7 +352,9 @@ func (s *Fulltext2Search) prepare(proc *sqlexec.SqlProcess, query any, rt vector
 }
 
 // runTopK dispatches the bounded top-k search (ranked bag-of-words vs positional query).
-func (s *Fulltext2Search) runTopK(q Fulltext2Query, k int, pf *prefilter) ([]Result, error) {
+// dfCutoff is the per-query high-df term cutoff (fulltext2_search_df_cutoff), applied only
+// on the ranked bag-of-words path.
+func (s *Fulltext2Search) runTopK(q Fulltext2Query, k int, pf *prefilter, dfCutoff float64) ([]Result, error) {
 	var (
 		res []Result
 		err error
@@ -360,7 +362,7 @@ func (s *Fulltext2Search) runTopK(q Fulltext2Query, k int, pf *prefilter) ([]Res
 	if q.JSONProbe {
 		res, err = s.idx.SearchJSONProbe(q.Pattern, q.Algo, k, pf)
 	} else if q.BagOfWords {
-		res, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf)
+		res, err = s.idx.SearchBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, k, pf, dfCutoff)
 	} else {
 		res, err = s.idx.SearchQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, k, pf)
 	}
@@ -406,7 +408,7 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 		if q.JSONProbe {
 			serr = s.idx.StreamJSONProbe(q.Pattern, q.Algo, pf, wantInclude, rt.Emit)
 		} else if q.BagOfWords {
-			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit)
+			serr = s.idx.StreamBagOfWords(q.Pattern, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit, rt.SearchDFCutoff)
 		} else {
 			serr = s.idx.StreamQuery(q.Pattern, q.Boolean, s.cfg.Parser, q.Algo, pf, wantInclude, rt.Emit)
 		}
@@ -416,7 +418,7 @@ func (s *Fulltext2Search) Search(proc *sqlexec.SqlProcess, query any, rt vectori
 		return []any{}, []float64{}, nil
 	}
 
-	results, err := s.runTopK(q, k, pf)
+	results, err := s.runTopK(q, k, pf, rt.SearchDFCutoff)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -458,7 +460,7 @@ func (s *Fulltext2Search) SearchInto(proc *sqlexec.SqlProcess, query any, rt vec
 		return nil
 	}
 
-	results, err := s.runTopK(q, k, pf)
+	results, err := s.runTopK(q, k, pf, rt.SearchDFCutoff)
 	if err != nil {
 		return err
 	}

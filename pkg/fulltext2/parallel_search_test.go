@@ -62,7 +62,7 @@ func TestSearchBooleanParallelMatchesSerial(t *testing.T) {
 
 	runList := func(threads, k int, pattern string) []Result {
 		idx.threadsSearch = threads
-		res, err := idx.SearchBagOfWords([]byte(pattern), ParserDefault, BM25, k, nil)
+		res, err := idx.SearchBagOfWords([]byte(pattern), ParserDefault, BM25, k, nil, 0)
 		require.NoError(t, err)
 		for i := 1; i < len(res); i++ {
 			require.LessOrEqual(t, res[i].Score, res[i-1].Score) // non-increasing

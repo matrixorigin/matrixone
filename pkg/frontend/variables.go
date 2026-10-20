@@ -4189,6 +4189,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("fulltext2_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"fulltext2_search_df_cutoff": {
+		Name:              "fulltext2_search_df_cutoff",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableDoubleType("fulltext2_search_df_cutoff", 0, 1),
+		Default:           float64(0),
+	},
 	"hnsw_max_index_capacity": {
 		Name:              "hnsw_max_index_capacity",
 		Scope:             ScopeBoth,

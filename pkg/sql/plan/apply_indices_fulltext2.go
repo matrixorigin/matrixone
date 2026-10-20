@@ -198,6 +198,12 @@ func (builder *QueryBuilder) buildFulltext2SearchScan(
 	colDefs []*plan.ColDef,
 ) (int32, error) {
 	opts.ThreadsSearch = builder.fulltext2ThreadsSearch()
+	// The high-df cutoff is a BM25 bag-of-words knob only: NL/BOOLEAN/json-probe modes never
+	// consume it (runTopK/stream apply it solely on the BagOfWords branch), so don't even
+	// emit it into their algo_options.
+	if opts.Mode == int64(tree.FULLTEXT_BM25) {
+		opts.SearchDFCutoff = builder.fulltext2SearchDFCutoff()
+	}
 	algoOptions, err := ft2plan.EncodeScanOptions(opts)
 	if err != nil {
 		return -1, err
@@ -366,4 +372,32 @@ func (builder *QueryBuilder) fulltext2ThreadsSearch() int64 {
 		return 0
 	}
 	return n
+}
+
+// fulltext2SearchDFCutoff resolves the fulltext2_search_df_cutoff session variable:
+// the global df/N fraction at or above which a ranked bag-of-words term is dropped from
+// the BM25 search. 0 (the default) disables the cutoff. Unlike threads_search this CHANGES
+// the result set, so it is gated on MORPCVersion125 and emits the neutral 0 below the epoch
+// — a CN that predates the option would otherwise apply no cutoff while its peers did,
+// giving inconsistent top-k across a rolling upgrade. At/above the epoch every CN honors
+// the resolved value, so the result is identical wherever the scan runs.
+func (builder *QueryBuilder) fulltext2SearchDFCutoff() float64 {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return 0
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return 0
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	if !ok || !valid || version < defines.MORPCVersion125 {
+		return 0
+	}
+	v, err := builder.resolveFloat64Variable("fulltext2_search_df_cutoff", 0)
+	if err != nil {
+		return 0
+	}
+	return v
 }

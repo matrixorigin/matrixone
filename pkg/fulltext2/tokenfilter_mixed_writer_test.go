@@ -79,7 +79,7 @@ func TestTokenFilterMixedWriterReader(t *testing.T) {
 	leaked := buildIndex(false)
 
 	score := func(idx *Index, q string) map[any]float32 {
-		res, serr := idx.SearchBagOfWords([]byte(q), ParserGojieba, BM25, 10, nil)
+		res, serr := idx.SearchBagOfWords([]byte(q), ParserGojieba, BM25, 10, nil, 0)
 		require.NoError(t, serr)
 		m := make(map[any]float32, len(res))
 		for _, r := range res {

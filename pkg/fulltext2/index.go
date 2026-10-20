@@ -607,11 +607,43 @@ func (idx *Index) wandPrepass(q BoolQuery, algo ScoreAlgo, gs *globalStats, work
 // the global scale — the merge below is then the exact global top-k even across a
 // base + CDC tail. All clause types (term, prefix, phrase, and the disjunctive WAND
 // path) score on global stats — a phrase clause uses the cross-segment phrase df.
+// highDFKept returns clauses with ranked high-df terms removed: a single-term clause whose
+// global df/N reaches cutoff is dropped. It returns the input UNCHANGED when the cutoff is
+// off (<=0 or >1), when there is at most one clause, when nothing crosses the cutoff, or
+// when every clause would be dropped (the no-drop-all guard — never empty the query). Only
+// atomic terms are considered; phrase/prefix/group clauses are always kept. gs.df memoizes
+// the df lookups, so the later idf pass reuses them. A dropped term matches nearly every
+// doc with idf≈0, so removing it cannot displace a top-k doc that matches any surviving
+// term; a doc matching only dropped terms scored ≈0 and was never competitive.
+func (idx *Index) highDFKept(clauses []clause, gs *globalStats, cutoff float64) []clause {
+	if cutoff <= 0 || cutoff > 1 || gs.n <= 0 || len(clauses) <= 1 {
+		return clauses
+	}
+	thresh := cutoff * float64(gs.n)
+	kept := make([]clause, 0, len(clauses))
+	for _, c := range clauses {
+		if c.kind == clauseTerm && float64(gs.df(c.terms[0])) >= thresh {
+			continue
+		}
+		kept = append(kept, c)
+	}
+	if len(kept) == 0 || len(kept) == len(clauses) {
+		return clauses
+	}
+	return kept
+}
+
 func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter *prefilter) ([]Result, error) {
 	if k <= 0 || idx.globalN == 0 {
 		return nil, nil
 	}
 	gs := idx.newGlobalStats()
+	// Ranked bag-of-words high-df cutoff (fulltext2_search_df_cutoff, carried on the query):
+	// drop pure-disjunction SHOULD terms whose global df reaches the cutoff before the WAND
+	// search. No-op (q.dfCutoff==0) for every non-bag-of-words shape.
+	if clauses, ok := disjunctiveTerms(q); ok {
+		q.should = idx.highDFKept(clauses, gs, q.dfCutoff)
+	}
 	nseg := len(idx.segments)
 	// Each segment is a fully independent top-k search (own dense ord space, own WAND
 	// threshold, own per-segment heap), so the segment loop fans out across

@@ -782,7 +782,7 @@ func (u *reader) start() (err error) {
 		u.errCh = make(chan error, 1)
 		ctx, cancel := context.WithCancel(proc.Ctx)
 		u.cancel = cancel
-		rt := vectorindex.RuntimeConfig{Emit: func(out *vectorindex.SearchOutput) error {
+		rt := vectorindex.RuntimeConfig{SearchDFCutoff: u.opts.SearchDFCutoff, Emit: func(out *vectorindex.SearchOutput) error {
 			select {
 			case u.streamCh <- out:
 				return nil
@@ -811,7 +811,7 @@ func (u *reader) start() (err error) {
 	// With a pushed LIMIT: WAND top-K, filled box-free into the caller-owned u.out via
 	// SearchInto (pk/scores/includes as reusable ColumnBuffers) — no []any keys; Read
 	// pages u.out via u.offset.
-	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit)}
+	rt := vectorindex.RuntimeConfig{Limit: uint(u.limit), SearchDFCutoff: u.opts.SearchDFCutoff}
 	if len(u.includeNames) > 0 {
 		// Request the covered INCLUDE columns; SearchInto fills u.out.Include (box-free,
 		// column-major, whole result set), which Read pages by segPos.
