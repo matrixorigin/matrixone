@@ -144,9 +144,9 @@ select id, s, s + 0 as bitmap, cast(s as unsigned) as cast_bitmap
 from (select id, s from set_boundary_order order by id limit 5) d order by s, id;
 ➤ id[4,32,0]  ¦  s[12,-1,0]  ¦  bitmap[3,38,0]  ¦  cast_bitmap[-5,64,0]  𝄀
 5  ¦  null  ¦  null  ¦  null  𝄀
-1  ¦    ¦  0  ¦  0  𝄀
 2  ¦    ¦  0  ¦  0  𝄀
 3  ¦  z  ¦  1  ¦  1  𝄀
+1  ¦    ¦  2  ¦  2  𝄀
 4  ¦  a  ¦  4  ¦  4
 select id, s from set_boundary_order order by cast(s as char), id;
 ➤ id[4,32,0]  ¦  s[12,-1,0]  𝄀
