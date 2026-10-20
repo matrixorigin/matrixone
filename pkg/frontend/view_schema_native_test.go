@@ -170,6 +170,9 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 		exec("alter view "+database+".target as select id, label from "+database+".source", executor.Options{}.WithDatabase(database))
 		// 在源表变更后通过权威 CREATE VIEW 路径建立差分 oracle。
 		exec("create view "+database+".oracle as select id, label from "+database+".middle", executor.Options{})
+		t.Run("derived metadata consumers", func(t *testing.T) {
+			testNativeViewMetadataConsumers(t, ctx, cn, svc, database, historical)
+		})
 		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
 			exec("create view owned as select id, label from source", executor.Options{}.WithDatabase(database).WithTxn(op).WithKeepTxnAlive())
 			exec("create view rollback_only as select id from source", executor.Options{}.WithDatabase(database).WithTxn(op).WithKeepTxnAlive())
@@ -472,6 +475,7 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			{"v_history_collision", "subscribed", ""}, {"v_history_nested", "subscribed", ""},
 			{"v_history_other", "schema_other", ""},
 		}
+		t.Run("derived subscription metadata", func(t *testing.T) { testNativeSubscribedViewMetadata(t, tenantCtx, cn, svc, tenant) })
 		var historical timestamp.Timestamp
 		var baseline nativeViewSchemaValue
 		withNativeViewSchemaRead(t, tenantCtx, cn, svc, "subscribed", tenant, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
@@ -758,6 +762,11 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		deniedTenant := &frontend.TenantInfo{Tenant: "schema_subscriber", User: "denied", DefaultRole: "public",
 			TenantID: account, UserID: userID, DefaultRoleID: roleID}
 		deniedCtx := defines.AttachAccount(ctx, account, userID, roleID)
+		t.Run("excluded metadata never derives", func(t *testing.T) {
+			testNativeViewMetadataCase(t, deniedCtx, cn, svc, "subscribed", deniedTenant, nativeViewMetadataCase{
+				name: "denied", sql: "select cast(count(*) as char) from information_schema.columns where table_schema='subscribed' and table_name in ('published','missing')", want: [][]string{{"0"}},
+			})
+		})
 		withNativeViewSchemaRead(t, deniedCtx, cn, svc, "subscribed", deniedTenant, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
 			generation, err := proc.GetExecutionResourceBudget()
 			require.NoError(t, err)

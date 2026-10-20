@@ -91,7 +91,7 @@ select * from last_check order by id;
 
 -- Anonymous constraints skip occupied names after a drop.
 create table anonymous_checks(v int,check(v>=0),check(v<=100));
-alter table anonymous_checks drop check __mo_chk_1;
+alter table anonymous_checks drop check anonymous_checks_chk_1;
 alter table anonymous_checks add check(v > -10);
 select constraint_name from information_schema.table_constraints
     where table_schema=database() and table_name='anonymous_checks' and constraint_type='CHECK'

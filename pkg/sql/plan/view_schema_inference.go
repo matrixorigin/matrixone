@@ -379,7 +379,7 @@ func (s *viewSchemaDerivation) describe(database, name string, snapshot *Snapsho
 	s.memoEligible = transparentViewProjection(parsed.selectStmt) && obj.PubInfo == nil && s.compiler.GetQueryingSubscription() == nil
 	inferred, err := inferViewColumns(parsed.ctx, parsed.selectStmt, parsed.columnNames, parsed.database, parsed.name, false)
 	if err != nil {
-		return nil, err
+		return nil, &viewSchemaDefinitionError{err}
 	}
 	s.request.binds++
 	table := &TableDef{Cols: inferred.columns}
@@ -409,6 +409,23 @@ func (s *viewSchemaDerivation) describe(database, name string, snapshot *Snapsho
 	}
 	s.request.remember(key, value)
 	return value, nil
+}
+
+// Retain failure provenance internally: a catalog-looking authorization error
+// is not proof of an invalid definition. The public S2 API returns the original
+// error, while bulk metadata can distinguish binding from authorization/open.
+type viewSchemaDefinitionError struct{ error }
+
+func (e *viewSchemaDefinitionError) Unwrap() error { return e.error }
+
+func unwrapViewSchemaDefinitionError(err error) error {
+	for {
+		definition, ok := err.(*viewSchemaDefinitionError)
+		if !ok {
+			return err
+		}
+		err = definition.error
+	}
 }
 
 // Check the actual recursive binder entries. This covers parentheses, unions,

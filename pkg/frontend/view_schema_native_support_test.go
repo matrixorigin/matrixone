@@ -79,6 +79,44 @@ func ReadNativeViewSchemaCatalogForTest(ctx context.Context, compiler *TxnCompil
 	return bh.Exec(ctx, "select relname from mo_catalog.mo_tables where relname = 'mo_tables'")
 }
 
+// 通过真实 frontend back-exec 执行 SHOW/DESC。普通 SQLExecutor 没有前端
+// subscription resolver，不能用它替代订阅 SHOW 的消费者验证。此只读子语句
+// 复用 fixture 的事务边界，返回数据前关闭自己的结果/session，不关闭父事务。
+func ReadNativeViewMetadataSQLForTest(ctx context.Context, compiler *TxnCompilerContext, sql string) ([][]string, error) {
+	ctx = withViewSchemaCatalogRead(ctx)
+	bh := NewShareTxnBackgroundExec(ctx, compiler.GetSession(), false)
+	defer bh.Close()
+	if err := bh.Exec(ctx, sql); err != nil {
+		return nil, err
+	}
+	results, err := getResultSet(ctx, bh)
+	if err != nil {
+		return nil, err
+	}
+	var rows [][]string
+	for _, result := range results {
+		for row := uint64(0); row < result.GetRowCount(); row++ {
+			values := make([]string, result.GetColumnCount())
+			for col := range values {
+				null, err := result.ColumnIsNull(ctx, row, uint64(col))
+				if err != nil {
+					return nil, err
+				}
+				if null {
+					values[col] = "<NULL>"
+					continue
+				}
+				values[col], err = result.GetString(ctx, row, uint64(col))
+				if err != nil {
+					return nil, err
+				}
+			}
+			rows = append(rows, values)
+		}
+	}
+	return rows, nil
+}
+
 // 测试角色只具有一个明确的 active role，直接复用既有 view privilege 查询。
 // 此 helper 不把它推广为生产 SHOW/查询权限策略。
 func NativeViewSchemaRoleAuthorizerForTest(compiler *TxnCompilerContext) ViewSchemaAuthorizer {

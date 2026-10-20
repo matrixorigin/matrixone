@@ -43,10 +43,11 @@ type container struct {
 	rbat  *batch.Batch
 	inbat *batch.Batch
 
-	batIdx   int
-	tfFinish bool
-	tfNull   bool
-	sels     []int32
+	batIdx              int
+	tfFinish            bool
+	tfNull              bool
+	preserveSourceBatch bool
+	sels                []int32
 }
 
 type Apply struct {
