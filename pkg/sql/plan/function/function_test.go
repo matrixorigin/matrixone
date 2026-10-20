@@ -2018,6 +2018,30 @@ func TestTemporalComparisonWidensSynthesizedDecimalDomain(t *testing.T) {
 			right: types.New(types.T_time, 0, 0),
 			want:  types.New(types.T_decimal128, 20, 0),
 		},
+		{
+			name:  "bit then time",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_time, 0, 0),
+			want:  types.New(types.T_decimal128, 20, 0),
+		},
+		{
+			name:  "bit then fractional time",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_time, 0, 6),
+			want:  types.New(types.T_decimal128, 26, 6),
+		},
+		{
+			name:  "bit then datetime",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_datetime, 0, 0),
+			want:  types.New(types.T_decimal128, 20, 0),
+		},
+		{
+			name:  "bit then fractional timestamp",
+			left:  types.New(types.T_bit, 64, 0),
+			right: types.New(types.T_timestamp, 0, 6),
+			want:  types.New(types.T_decimal128, 26, 6),
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, operands := range [][2]types.Type{{tc.left, tc.right}, {tc.right, tc.left}} {

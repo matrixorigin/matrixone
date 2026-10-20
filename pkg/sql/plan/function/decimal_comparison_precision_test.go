@@ -16,9 +16,13 @@ package function
 
 import (
 	"context"
+	"fmt"
+	"math"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -103,12 +107,14 @@ func TestDecimalComparisonPreservesSufficientIntegerCast(t *testing.T) {
 	}{
 		{"different scales", types.New(types.T_decimal128, 20, 4), types.T_int64.ToType()},
 		{"same scale narrower decimal", types.New(types.T_decimal128, 19, 0), types.T_uint64.ToType()},
+		{"bit sufficient cast", types.New(types.T_decimal128, 20, 4), types.New(types.T_bit, 64, 0)},
+		{"bit same scale narrower decimal", types.New(types.T_decimal128, 19, 0), types.New(types.T_bit, 64, 0)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			integerTarget := types.New(types.T_decimal128, 38, 0)
 			for _, operands := range [][2]types.Type{{tc.decimal, tc.integer}, {tc.integer, tc.decimal}} {
 				want := []types.Type{tc.decimal, integerTarget}
-				if operands[0].IsIntOrUint() {
+				if operands[0].IsIntOrUint() || operands[0].Oid == types.T_bit {
 					want[0], want[1] = want[1], want[0]
 				}
 				for _, op := range []string{"<", "<=", ">", ">="} {
@@ -128,6 +134,45 @@ func TestDecimalComparisonPreservesSufficientIntegerCast(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBitTemporalComparisonCastBoundary(t *testing.T) {
+	bit := types.New(types.T_bit, 64, 0)
+	values := []uint64{0, 999999999999999999, 1000000000000000000, math.MaxUint64, 0}
+	nulls := []bool{false, false, false, false, true}
+	for _, scale := range []int32{0, 6} {
+		for _, op := range []string{"=", "<"} {
+			for _, reverse := range []bool{false, true} {
+				t.Run(fmt.Sprintf("scale=%d/op=%s/reverse=%v", scale, op, reverse), func(t *testing.T) {
+					operands := []types.Type{bit, types.New(types.T_time, 0, scale)}
+					bitIndex := 0
+					if reverse {
+						operands[0], operands[1] = operands[1], operands[0]
+						bitIndex = 1
+					}
+					resolved, err := GetFunctionByName(t.Context(), op, operands)
+					require.NoError(t, err)
+					targets, cast := resolved.ShouldDoImplicitTypeCast()
+					require.True(t, cast)
+					target := targets[bitIndex]
+					require.Equal(t, types.New(types.T_decimal128, 20+scale, scale), target)
+					want := make([]types.Decimal128, len(values))
+					for i, value := range values {
+						want[i], err = types.ParseDecimal128(strconv.FormatUint(value, 10), 20+scale, scale)
+						require.NoError(t, err)
+					}
+					proc := testutil.NewProcess(t)
+					defer proc.Free()
+					fc := NewFunctionTestCase(proc,
+						[]FunctionTestInput{NewFunctionTestInput(bit, values, nulls), NewFunctionTestInput(target, emptyCastTargetValues(target), nil)},
+						NewFunctionTestResult(target, false, want, nulls), NewCast)
+					defer fc.Free()
+					ok, info := fc.Run()
+					require.True(t, ok, info)
+				})
+			}
+		}
 	}
 }
 

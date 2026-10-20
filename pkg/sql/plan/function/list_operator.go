@@ -79,6 +79,7 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 		targets := []types.Type{castLeft, castRight}
 		needsWiden := false
 		for i, input := range []types.Type{left, right} {
+			input = decimalComparisonSource(input)
 			if input.IsIntOrUint() && integerIntegralWidth(input.Oid) > targets[i].Width-targets[i].Scale {
 				needsWiden = true
 				break
@@ -255,6 +256,16 @@ func isJSONBooleanComparison(left, right types.Type) bool {
 		left.Oid == types.T_bool && right.Oid == types.T_json
 }
 
+// decimalComparisonSource exposes BIT's full unsigned numeric domain without
+// changing its public type or the non-decimal coercion rules. BIT is stored as
+// uint64, but intentionally does not satisfy Type.IsIntOrUint.
+func decimalComparisonSource(input types.Type) types.Type {
+	if input.Oid == types.T_bit {
+		return types.T_uint64.ToType()
+	}
+	return input
+}
+
 // alignDecimalComparisonTypes preserves integer capacity when comparisons need
 // one coefficient scale. Use the original exact domains: an intermediate cast
 // may have the physical type's default precision rather than the source's.
@@ -269,6 +280,7 @@ func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
 
 	sources := make([]types.Type, len(inputs))
 	for i, input := range inputs {
+		input = decimalComparisonSource(input)
 		if targets[i].Oid.TypeLen() > target.Oid.TypeLen() {
 			target = targets[i]
 		}
@@ -287,7 +299,7 @@ func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
 		// integral domain does not fit in the already-aligned target; that is the
 		// synthesized BIGINT/TIME case that needs promotion.
 		allIntegerDomainsFit := true
-		for i, input := range inputs {
+		for i, input := range sources {
 			if input.IsIntOrUint() && integerIntegralWidth(input.Oid) > targets[i].Width-targets[i].Scale {
 				allIntegerDomainsFit = false
 				break
