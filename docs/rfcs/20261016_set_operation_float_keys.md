@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 18
+- Revision: 19
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 19 integration baseline: official main `3829ee49c7c118f2f3b0ebf7ed3acbd52483d870`
 - Revision 18 integration baseline: official main `983ab88913462ebba9441d9626cad64e206f0884`
 - Revision 17 integration baseline: official main `7c146f4adbf068dd0c06b377157cfb7d7698b1eb`
 - Revision 16 integration baseline: official main `d82e828b0a4df9ce635fe573c1e90c5cde978bf9`
@@ -1120,6 +1121,18 @@ planner/compile/protobuf suites, metadata consumers and generated bindings are
 validated on the new integration baseline. Historical capacity, race and native
 123 evidence retain their recorded source and workload limits; no APPLY capacity
 qualification or new live mixed-binary execution is claimed.
+
+
+The [revision-19 maintenance receipt](validation/20261020_coverage_rebase.json)
+records a patch-identical replay onto the newer official storage/Iceberg baseline.
+Official MORPC remains 123 and set-key/scalar-marker admission remains 124;
+protobuf and runtime-owner inputs are unchanged. The coverage cancellation
+fixture's exit-90 failure in run 39371079437 remains unclassified: a focused local
+coverage-mode pass does not establish Linux CI equivalence or unrelated flakiness.
+The public signed-zero root is checked against the new storage baseline. This
+maintenance rebase changes no execution or capacity contract; earlier receipts
+retain their original sources, workloads and limits. New CI is left to the
+subsequent run triggered by delivery.
 
 ## Alternatives
 
