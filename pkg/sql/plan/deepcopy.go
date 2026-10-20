@@ -222,8 +222,14 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		KeyNames:                     slices.Clone(ctx.KeyNames),
 		KeyTypes:                     keyTypes,
 		KeyTypeCounts:                slices.Clone(ctx.KeyTypeCounts),
+		KeyDiagnosticExprs:           slices.Clone(ctx.KeyDiagnosticExprs),
 	}
 
+	for i, exprs := range ctx.KeyDiagnosticExprs {
+		if exprs != nil {
+			newCtx.KeyDiagnosticExprs[i] = &plan.ExprList{List: DeepCopyExprList(exprs.List)}
+		}
+	}
 	return newCtx
 }
 
@@ -362,6 +368,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		OnUpdateExprs:              DeepCopyExprList(node.OnUpdateExprs),
 		DedupColName:               node.DedupColName,
 		DedupColTypes:              slices.Clone(node.DedupColTypes),
+		DedupKeyExprs:              DeepCopyExprList(node.DedupKeyExprs),
 		UpdateCtxList:              DeepCopyUpdateCtxList(node.UpdateCtxList),
 		DedupJoinCtx:               DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam:           DeepCopyIndexReaderParam(node.IndexReaderParam),
