@@ -1,7 +1,6 @@
-# PR #28523: String-Math Numeric Coercion
+# String-Math Numeric Coercion
 
 - Issue: [#28487](https://github.com/matrixorigin/matrixone/issues/28487)
-- Pull request: [#28523](https://github.com/matrixorigin/matrixone/pull/28523)
 
 This note records the behavior contract, ownership boundaries, compatibility
 mechanisms, validation evidence, and known limits for the change.
