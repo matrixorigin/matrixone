@@ -336,7 +336,7 @@ func (node *memoryNode) ApplyAppendAtLocked(bat *containers.Batch, offset uint32
 		def := schema.ColDefs[schema.GetColIdx(attr)]
 		destVec := data.Vecs[def.Idx]
 		for row := 0; row < bat.Length(); row++ {
-			destVec.Update(int(offset)+row, bat.Vecs[srcPos].Get(row), bat.Vecs[srcPos].IsNull(row))
+			destVec.CopyFrom(bat.Vecs[srcPos], int(offset)+row, row)
 		}
 	}
 	return nil
