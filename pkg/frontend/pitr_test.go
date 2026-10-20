@@ -250,7 +250,7 @@ func Test_createPubByPitr(t *testing.T) {
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
 		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{
-			{"pub01", "test", uint64(0), "test1", "acc01", "", "", uint64(0), uint64(0), ""},
+			{int64(0), "sys", "pub01", "test", uint64(0), "test1", "acc01", "", "", uint64(0), uint64(0), ""},
 		})
 		bh.sql2result[sql] = mrs
 
@@ -292,13 +292,56 @@ func Test_createPubByPitr(t *testing.T) {
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
 		sql := getPubInfoWithPitr(ts, 0, "test")
 		mrs := newMrsForSqlForGetPubs([][]interface{}{
-			{"pub01", "test", "uint64(0)", "test1", "acc01", "", "", uint64(0), uint64(0), ""},
+			{int64(0), "sys", "pub01", "test", "uint64(0)", "test1", "acc01", "", "", uint64(0), uint64(0), ""},
 		})
 		bh.sql2result[sql] = mrs
 
 		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
 		assert.Error(t, err)
 	})
+}
+
+// Test_getPubInfoWithPitrLayout guarantees the PITR publication query
+// projection stays in sync with extractPubInfosFromExecResult. The restore
+// path used to select a shortened layout that fed the pub name into
+// ParseInt, aborting restores of published databases (#30607).
+func Test_getPubInfoWithPitrLayout(t *testing.T) {
+	pitrSQL := getPubInfoWithPitr(123, 7, "db1")
+	fullSQL := fmt.Sprintf(getPubInfoSql, 7)
+
+	projectionOf := func(sql string) string {
+		lower := strings.ToLower(sql)
+		i := strings.Index(lower, "select ")
+		j := strings.Index(lower, " from mo_catalog.mo_pubs")
+		require.True(t, i >= 0 && j > i)
+		return lower[i+len("select ") : j]
+	}
+	require.Equal(t, projectionOf(fullSQL), projectionOf(pitrSQL))
+	require.Contains(t, pitrSQL, "{MO_TS = 123}")
+	require.Contains(t, pitrSQL, "where account_id = 7")
+	require.Contains(t, pitrSQL, "database_name = 'db1'")
+
+	// The new-layout reader must parse a realistic row into the right fields.
+	bh := &backgroundExecTest{}
+	bh.init()
+	bh.sql2result[pitrSQL] = newMrsForSqlForGetPubs([][]interface{}{
+		{int64(0), "sys", "pub01", "db1", uint64(42), "t1, t2", "acc01", "", "", uint64(1), uint64(2), ""},
+	})
+	require.NoError(t, bh.Exec(context.TODO(), pitrSQL))
+	erArray, err := getResultSet(context.TODO(), bh)
+	require.NoError(t, err)
+	pubInfos, err := extractPubInfosFromExecResult(context.TODO(), erArray)
+	require.NoError(t, err)
+	require.Len(t, pubInfos, 1)
+	require.Equal(t, uint32(0), pubInfos[0].PubAccountId)
+	require.Equal(t, "sys", pubInfos[0].PubAccountName)
+	require.Equal(t, "pub01", pubInfos[0].PubName)
+	require.Equal(t, "db1", pubInfos[0].DbName)
+	require.Equal(t, uint64(42), pubInfos[0].DbId)
+	require.Equal(t, "t1, t2", pubInfos[0].TablesStr)
+	require.Equal(t, "acc01", pubInfos[0].SubAccountsStr)
+	require.Equal(t, uint32(1), pubInfos[0].Owner)
+	require.Equal(t, uint32(2), pubInfos[0].Creator)
 }
 
 func Test_doRestorePitr(t *testing.T) {

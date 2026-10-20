@@ -71,7 +71,11 @@ var (
 
 	getSqlForCheckAccountFmt = `select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s';`
 
-	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
+	// The layout must stay in sync with extractPubInfosFromExecResult: the
+	// parser reads account_id and account_name first. A projection starting
+	// at pub_name fed the pub name into ParseInt and aborted database
+	// restores for published databases (#30607).
+	getPubInfoWithPitrFormat = `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
 
 	// update mo_pitr object id
 	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = %d where account_name = '%s' and pitr_status = 1 and obj_id = %d;`
