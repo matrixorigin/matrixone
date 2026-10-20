@@ -794,9 +794,9 @@ const (
 	// function `mo_is_legacy_temporary_table`
 	MO_IS_LEGACY_TEMPORARY_TABLE = 558
 	// function `mo_view_definition`
-	MO_VIEW_DEFINITION = 601
+	MO_VIEW_DEFINITION = 602
 	// function `mo_view_check_option`
-	MO_VIEW_CHECK_OPTION = 602
+	MO_VIEW_CHECK_OPTION = 603
 
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.

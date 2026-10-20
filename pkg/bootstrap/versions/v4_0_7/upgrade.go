@@ -45,16 +45,16 @@ func init() {
 			UpgradeCluster:    versions.Yes,
 			UpgradeTenant:     versions.Yes,
 			VersionOffset:     uint32(len(tenantUpgEntries) + len(clusterUpgEntries)),
-			// The tenant migration publishes the v124 VIEWS definition as well as widening
+			// The tenant migration publishes the v125 VIEWS definition as well as widening
 			// existing index metadata tables. Gate the whole handler before tenant
 			// enumeration: a final-version tenant created while the local coordinator or
-			// any CN is still below v124 would retain the predecessor VIEWS definition and
+			// any CN is still below v125 would retain the predecessor VIEWS definition and
 			// never be revisited by this upgrade.
 			//
 			// The entry-level guards remain in place for retries and for callers that invoke
 			// an entry directly. The write side still names columns and omits provenance
 			// values until each table has them (sqlexec.HasProvenanceColumns).
-			RequiredProtocolVersion: defines.MORPCVersion124,
+			RequiredProtocolVersion: defines.MORPCVersion125,
 		},
 	}
 }

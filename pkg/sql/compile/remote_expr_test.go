@@ -1292,7 +1292,7 @@ func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries
 		if hadPrevious {
 			rt.SetGlobalVariables(runtime.MOProtocolVersion, previous)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion124)
+			rt.CompareAndDeleteGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion125)
 		}
 	})
 
@@ -1327,8 +1327,8 @@ func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries
 		ProjectList: []*plan.Expr{viewCheckOption},
 	}}}
 
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion124)
-	client.version = defines.MORPCVersion124
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion125)
+	client.version = defines.MORPCVersion125
 	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithFunction))
 	require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithCheckOption))
 
@@ -1343,41 +1343,41 @@ func TestViewDefinitionRemoteProtocolValidationAtPrepareSendAndReceiveBoundaries
 	_, err = encodeScope(prepared)
 	require.NoError(t, err)
 
-	// The coordinator can remain on v124 while a selected worker is rolled
-	// back or replaced by a v123 CN. The sender must probe that destination
+	// The coordinator can remain on v125 while a selected worker is rolled
+	// back or replaced by a v124 CN. The sender must probe that destination
 	// before serializing a pipeline containing either new function ID.
-	for _, destination := range []int64{defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion123, defines.MORPCVersion122, defines.MORPCVersion120} {
+	for _, destination := range []int64{defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion124, defines.MORPCVersion123, defines.MORPCVersion122, defines.MORPCVersion120} {
 		client.version = destination
 		_, err = encodeRemoteScope(prepared, proc)
 		require.ErrorContains(t, err, "remote destination does not support view metadata functions")
 	}
-	client.version = defines.MORPCVersion124
+	client.version = defines.MORPCVersion125
 	_, err = encodeRemoteScope(prepared, proc)
 	require.NoError(t, err)
 
-	// v104 through v123 are predecessors after the main-branch
+	// v104 through v124 are predecessors after the main-branch
 	// rebase; they support the main contracts but not these new function IDs.
-	for _, predecessor := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion123, defines.MORPCVersion122, defines.MORPCVersion120} {
+	for _, predecessor := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion124, defines.MORPCVersion123, defines.MORPCVersion122, defines.MORPCVersion120} {
 		rt.SetGlobalVariables(runtime.MOProtocolVersion, predecessor)
 		require.NoError(t, validateRemoteViewDefinitionPipelineProtocol(proc, &pipeline.Pipeline{}))
 		require.ErrorContains(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithFunction),
-			"requires MORPC protocol version 124")
+			"requires MORPC protocol version 125")
 		require.ErrorContains(t, validateRemoteViewDefinitionPipelineProtocol(proc, pipelineWithCheckOption),
-			"requires MORPC protocol version 124")
+			"requires MORPC protocol version 125")
 		_, err = encodeRemoteScope(prepared, proc)
-		require.ErrorContains(t, err, "requires MORPC protocol version 124")
+		require.ErrorContains(t, err, "requires MORPC protocol version 125")
 		_, err = encodeScope(prepared)
-		require.ErrorContains(t, err, "requires MORPC protocol version 124")
+		require.ErrorContains(t, err, "requires MORPC protocol version 125")
 		_, err = decodeScope(data, proc, true, nil)
-		require.ErrorContains(t, err, "requires MORPC protocol version 124")
+		require.ErrorContains(t, err, "requires MORPC protocol version 125")
 	}
 }
 
-func TestViewDefinitionRemoteProtocolValidationV124FastPathIsAllocationFree(t *testing.T) {
+func TestViewDefinitionRemoteProtocolValidationV125FastPathIsAllocationFree(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	rt := runtime.ServiceRuntime(proc.GetService())
 	defer rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCLatestVersion)
-	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion124)
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion125)
 
 	// A large ordinary pipeline makes an accidental reflective traversal visible.
 	ordinary := &pipeline.Pipeline{InstructionList: make([]*pipeline.Instruction, 1_000)}
