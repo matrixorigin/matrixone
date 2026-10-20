@@ -604,6 +604,13 @@ func serialWithoutCompacted(
 		// return empty bitmap
 		return new(nulls.Nulls), nil
 	}
+	// A NULL key still belongs to a physical domain. Admit all column types
+	// before allocating packers or taking the const-NULL shortcut below.
+	for _, v := range vs {
+		if err := types.ValidatePhysicalCollationType(*v.GetType()); err != nil {
+			return nil, err
+		}
+	}
 
 	rowCount := vs[0].Length()
 	if rowCount > cap(packers.ps) {
@@ -641,6 +648,9 @@ func compactSingleIndexCol(
 	vec *vector.Vector,
 	proc *process.Process,
 ) (*nulls.Nulls, error) {
+	if err := types.ValidatePhysicalCollationType(*v.GetType()); err != nil {
+		return nil, err
+	}
 	var err error
 	if types.IsUnicodeCollation(v.GetType().Charset) && v.GetType().Oid.IsMySQLString() {
 		// A one-part UNIQUE/secondary index has no serial_full expression to

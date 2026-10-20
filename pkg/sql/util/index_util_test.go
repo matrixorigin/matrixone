@@ -16,6 +16,7 @@ package util
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/require"
@@ -218,31 +219,56 @@ func TestBuildUniqueKeyBatchRejectsInvalidNativeUnicodeCompositeValue(t *testing
 }
 
 func TestBuildUniqueKeyBatchRejectsUnadmittedCollationTypes(t *testing.T) {
-	proc := testutil.NewProcess(t)
-	defer proc.Free()
 	for _, charset := range []uint8{types.CharsetUTF8MB4UnicodeCI, types.CharsetUTF8, types.CharsetUTF8MB4Bin} {
-		for _, shape := range []string{"empty", "null", "value"} {
-			func() {
-				text := vector.NewVec(types.T_varchar.ToType())
-				defer text.Free(proc.Mp())
-				other := vector.NewVec(types.T_int64.ToType())
-				defer other.Free(proc.Mp())
-				if shape != "empty" {
-					require.NoError(t, vector.AppendBytes(text, []byte("a"), shape == "null", proc.Mp()))
-					require.NoError(t, vector.AppendFixed(other, int64(1), false, proc.Mp()))
-				}
-				text.GetType().Charset = charset
-				if charset != types.CharsetUTF8MB4UnicodeCI {
-					text.GetType().CollationVersion = types.CollationVersionV1
-				}
-				packers := PackerList{}
-				defer packers.Free()
-				got, _, err := BuildUniqueKeyBatch([]*vector.Vector{text, other},
-					[]string{"v", "n"}, []string{"v", "n"}, "", proc, &packers)
-				require.Error(t, err)
-				require.Nil(t, got)
-				require.Zero(t, packers.PackerCount())
-			}()
+		for _, shape := range []string{"empty", "null", "const_null", "value"} {
+			for _, path := range []string{"unique_single", "unique_composite", "secondary_composite"} {
+				t.Run(fmt.Sprintf("%d/%s/%s", charset, shape, path), func(t *testing.T) {
+					proc := testutil.NewProcess(t)
+					defer proc.Free()
+					defer func() { require.Zero(t, proc.Mp().CurrNB()) }()
+					var text *vector.Vector
+					if shape == "const_null" {
+						text = vector.NewConstNull(types.T_varchar.ToType(), 1, proc.Mp())
+					} else {
+						text = vector.NewVec(types.T_varchar.ToType())
+					}
+					defer text.Free(proc.Mp())
+					other := vector.NewVec(types.T_int64.ToType())
+					defer other.Free(proc.Mp())
+					if shape != "empty" {
+						if shape != "const_null" {
+							require.NoError(t, vector.AppendBytes(text, []byte("a"), shape == "null", proc.Mp()))
+						}
+						require.NoError(t, vector.AppendFixed(other, int64(1), false, proc.Mp()))
+					}
+					text.GetType().Charset = charset
+					if charset != types.CharsetUTF8MB4UnicodeCI {
+						text.GetType().CollationVersion = types.CollationVersionV1
+					}
+					packers := PackerList{}
+					defer packers.Free()
+					if path == "secondary_composite" {
+						output := vector.NewVec(types.T_varchar.ToType())
+						defer output.Free(proc.Mp())
+						_, err := SerialWithoutCompacted([]*vector.Vector{other, text}, output, proc, &packers, DefaultPackerSize)
+						require.Error(t, err)
+						require.Zero(t, output.Length())
+					} else {
+						parts := []string{"v"}
+						if path == "unique_composite" {
+							parts = append(parts, "n")
+						}
+						got, _, err := BuildUniqueKeyBatch([]*vector.Vector{text, other},
+							[]string{"v", "n"}, parts, "", proc, &packers)
+						if got != nil {
+							defer got.Clean(proc.Mp())
+						}
+						require.Error(t, err)
+						require.Nil(t, got)
+					}
+					require.Zero(t, packers.PackerCount())
+				})
+			}
 		}
 	}
 }

@@ -162,6 +162,57 @@ func TestPreInsertUniqueSingleVarcharUsesSizedUkType(t *testing.T) {
 	require.Equal(t, 1, arg.ctr.buf.Vecs[indexColPos].Length())
 }
 
+func TestPreInsertUniqueRejectsNativeKeyAndResets(t *testing.T) {
+	for _, shape := range []string{"value", "const_null"} {
+		t.Run(shape, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			defer func() { require.Zero(t, proc.Mp().CurrNB()) }()
+			input := batch.NewWithSize(2)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(1), false, proc.Mp()))
+			typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8)
+			typ.CollationVersion = types.CollationVersionV1
+			if shape == "const_null" {
+				input.Vecs[1] = vector.NewConstNull(typ, 1, proc.Mp())
+			} else {
+				input.Vecs[1] = vector.NewVec(typ)
+				require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("a"), false, proc.Mp()))
+			}
+			input.SetRowCount(1)
+			arg := &PreInsertUnique{PreInsertCtx: &plan.PreInsertUkCtx{
+				Columns: []int32{1}, PkColumn: 0,
+				UkType: plan.Type{Id: int32(types.T_varchar), Width: 20,
+					Charset: uint32(typ.Charset), CollationVersion: uint32(typ.CollationVersion)},
+			}}
+			defer arg.Free(proc, true, nil)
+			arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+			require.NoError(t, arg.Prepare(proc))
+			result, err := arg.Call(proc)
+			require.ErrorContains(t, err, "physical keys for this collation revision are not enabled")
+			require.NotSame(t, arg.ctr.buf, result.Batch)
+			require.Zero(t, arg.ctr.buf.Vecs[indexColPos].Length())
+			require.Equal(t, typ, *input.Vecs[1].GetType())
+
+			arg.Reset(proc, true, err)
+			input.Vecs[1].Free(proc.Mp())
+			typ.CollationVersion = types.CollationVersionLegacy
+			input.Vecs[1] = vector.NewVec(typ)
+			require.NoError(t, vector.AppendBytes(input.Vecs[1], []byte("a"), false, proc.Mp()))
+			arg.PreInsertCtx.UkType.CollationVersion = 0
+			arg.Children = nil
+			arg.AppendChild(colexec.NewMockOperator().WithBatchs([]*batch.Batch{input}))
+			require.NoError(t, arg.Prepare(proc))
+			result, err = arg.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, 1, result.Batch.RowCount())
+			require.Equal(t, []byte("a"), result.Batch.Vecs[indexColPos].GetBytesAt(0))
+			require.Equal(t, []int64{1}, vector.MustFixedColNoTypeCheck[int64](result.Batch.Vecs[pkColPos]))
+		})
+	}
+}
+
 func TestPreInsertUniqueUpdateKeepsCompactedRowsAligned(t *testing.T) {
 	testCases := []struct {
 		name         string
