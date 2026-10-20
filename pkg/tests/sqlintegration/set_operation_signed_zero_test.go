@@ -47,6 +47,23 @@ func TestSetOperationSignedZero(t *testing.T) {
 			_, err := conn.ExecContext(ctx, q)
 			require.NoError(t, err, q)
 		}
+
+		t.Run("prepared-timestampadd-set-identity", func(t *testing.T) {
+			q := "select cast(x as varchar),date_format(ts,'%Y-%m-%d %H:%i:%s.%f') from (select d x,timestampadd(second,?,cast('2024-01-01' as datetime(6))) ts from zeros where id=1 union select d,timestampadd(second,?,cast('2024-01-01' as datetime(6))) from zeros where id=2) s order by serial(x)"
+			stmt, err := conn.PrepareContext(ctx, q)
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct{ interval, want string }{
+				{"1.5", "2024-01-01 00:00:01.500000"},
+				{"0.125", "2024-01-01 00:00:00.125000"},
+				{"1.5", "2024-01-01 00:00:01.500000"},
+			} {
+				rows, err := stmt.QueryContext(ctx, tc.interval, tc.interval)
+				require.NoError(t, err)
+				require.Equal(t, []string{"-0:" + tc.want, "0:" + tc.want}, readWindowNullRows(t, rows))
+			}
+		})
+
 		for _, col := range []string{"f", "d"} {
 			for _, tc := range []struct {
 				name, set string
