@@ -346,7 +346,7 @@ func (rs *regexpSet) regexpFindSubmatchesAtOrAfterWithMatchType(
 	if size < 1 {
 		contextStart = startByte - 1
 	}
-	wrappedPattern := regexpPositionSearchPattern(pat, pureMatchType)
+	wrappedPattern := regexpPositionSearchPattern(pat, pureMatchType, subjectIsBinary)
 	wrapped, _, err := rs.getRegularMatcherInfoWithBinaryCaseFold(
 		wrappedPattern,
 		subjectIsBinary,

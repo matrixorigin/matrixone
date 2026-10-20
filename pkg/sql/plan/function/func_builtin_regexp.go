@@ -2656,7 +2656,7 @@ func (rs *regexpSet) regexpFindAtOrAfterWithMatchType(
 	if size < 1 {
 		contextStart = startByte - 1
 	}
-	wrappedPattern := regexpPositionSearchPattern(pat, pureMatchType)
+	wrappedPattern := regexpPositionSearchPattern(pat, pureMatchType, subjectIsBinary)
 	wrapped, _, err := rs.getRegularMatcherInfoWithBinaryCaseFold(
 		wrappedPattern,
 		subjectIsBinary,
@@ -3028,11 +3028,23 @@ func regexpMatchTypeWideMultiline(pureMatchType string) bool {
 const regexpWideMultilineCaret = `(?:\A|(?<=[\n\x85\x{2028}\x{2029}])|(?<=\r(?!\n)))`
 const regexpWideMultilineDollar = `(?:\z|(?=\r)|(?<!\r)(?=\n)|(?=[\x85\x{2028}\x{2029}]))`
 
+// Binary-mode variants only emit byte escapes: NEL stays (x85 is one byte),
+// while LS/PS are dropped because binary patterns reject escapes above
+// \x{FF} and neither terminator fits in a single byte (#30210 binary fix).
+const regexpWideMultilineCaretBinary = `(?:\A|(?<=[\n\x85])|(?<=\r(?!\n)))`
+const regexpWideMultilineDollarBinary = `(?:\z|(?=\r)|(?<!\r)(?=\n)|(?=\x85))`
+
 // rewriteRegexpWideMultilineAnchors rewrites unescaped ^ and $ anchors
 // outside character classes and \Q..\E quotes so multiline matching
 // recognizes MySQL's full line-terminator set (issue #30210). It is a
 // syntax-level transform.
-func rewriteRegexpWideMultilineAnchors(pat string) string {
+func rewriteRegexpWideMultilineAnchors(pat string, binary bool) string {
+	caret, dollar := regexpWideMultilineCaret, regexpWideMultilineDollar
+	if binary {
+		// Binary patterns are byte-encoded; LS/PS escapes above \x{FF} are
+		// rejected, so anchors may only use byte-sized terminators.
+		caret, dollar = regexpWideMultilineCaretBinary, regexpWideMultilineDollarBinary
+	}
 	var b strings.Builder
 	b.Grow(len(pat) + 16)
 	quoted := false
@@ -3093,10 +3105,10 @@ func rewriteRegexpWideMultilineAnchors(pat string) string {
 			b.WriteByte(pat[i])
 			i++
 		case '^':
-			b.WriteString(regexpWideMultilineCaret)
+			b.WriteString(caret)
 			i++
 		case '$':
-			b.WriteString(regexpWideMultilineDollar)
+			b.WriteString(dollar)
 			i++
 		default:
 			b.WriteByte(pat[i])
@@ -3106,10 +3118,13 @@ func rewriteRegexpWideMultilineAnchors(pat string) string {
 	return b.String()
 }
 
-func regexpPatternWithPureMatchType(pat, pureMatchType string) string {
+// regexpPatternWithPureMatchType folds match_type into the pattern itself.
+// binary selects the byte-only wide-multiline anchors: RE2 patterns above
+// \x{FF} (LS/PS) are invalid against encoded byte input (issue #30210).
+func regexpPatternWithPureMatchType(pat, pureMatchType string, binary bool) string {
 	engineFlags := strings.ReplaceAll(pureMatchType, "u", "")
 	if regexpMatchTypeWideMultiline(pureMatchType) {
-		pat = rewriteRegexpWideMultilineAnchors(pat)
+		pat = rewriteRegexpWideMultilineAnchors(pat, binary)
 	}
 	if engineFlags == "" {
 		return pat
@@ -3120,20 +3135,21 @@ func regexpPatternWithPureMatchType(pat, pureMatchType string) string {
 // requiresRegexp2PatternWithMatchType routes on the wrapped pattern so
 // that constructs injected by the match_type wrapper (for example the
 // wide-multiline anchor rewrite of issue #30210) also select the regexp2
-// engine.
+// engine. Engine routing is invariant to the binary anchor variant (both
+// forms emit lookarounds), so checking the text variant suffices.
 func requiresRegexp2PatternWithMatchType(pat, pureMatchType string) bool {
-	return requiresRegexp2Pattern(regexpPatternWithPureMatchType(pat, pureMatchType))
+	return requiresRegexp2Pattern(regexpPatternWithPureMatchType(pat, pureMatchType, false))
 }
 
 // regexpPositionSearchPattern wraps a user pattern so matching can start at a
 // later subject position without changing the original anchor context. A
 // trailing \Q is valid RE2 syntax and quotes through end-of-pattern; close that
 // quote before adding wrapper syntax so the generated parenthesis stays syntax.
-func regexpPositionSearchPattern(pat, pureMatchType string) string {
+func regexpPositionSearchPattern(pat, pureMatchType string, binary bool) string {
 	const prefix = "^(?s:.)(?s:.*?)("
 	engineFlags := strings.ReplaceAll(pureMatchType, "u", "")
 	if regexpMatchTypeWideMultiline(pureMatchType) {
-		pat = rewriteRegexpWideMultilineAnchors(pat)
+		pat = rewriteRegexpWideMultilineAnchors(pat, binary)
 	}
 	var wrapped strings.Builder
 	wrapped.Grow(len(prefix) + len(pat) + len(engineFlags) + 5)
@@ -3185,7 +3201,7 @@ func (rs *regexpSet) getRegularMatcherInfoWithMatchType(
 	pat, pureMatchType string,
 	binary bool,
 ) (*regexp.Regexp, bool, error) {
-	rule := regexpPatternWithPureMatchType(pat, pureMatchType)
+	rule := regexpPatternWithPureMatchType(pat, pureMatchType, binary)
 	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
 	return rs.getRegularMatcherInfoWithBinaryCaseFold(rule, binary, binaryCaseFold)
 }

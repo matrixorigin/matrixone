@@ -1313,7 +1313,7 @@ func (rs *regexpSet) getRegexp2MatcherWithMatchType(
 	pat, pureMatchType string,
 	binary bool,
 ) (*regexp2Matcher, error) {
-	rule := regexpPatternWithPureMatchType(pat, pureMatchType)
+	rule := regexpPatternWithPureMatchType(pat, pureMatchType, binary)
 	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
 	key := regexpCacheKey{pattern: rule, binary: binary, binaryCaseFold: binaryCaseFold}
 	if rs.icu == nil {
