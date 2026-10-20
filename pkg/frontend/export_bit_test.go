@@ -114,7 +114,7 @@ func TestSavedQueryResultBitExport(t *testing.T) {
 		defer reader.Close()
 		got, err := io.ReadAll(reader)
 		require.NoError(t, err)
-		var expected []byte
+		expected := make([]byte, 0, 50)
 		for row, small := range []byte{0, 1, 65, 255} {
 			wide := uint64(small)
 			if row == 3 {
