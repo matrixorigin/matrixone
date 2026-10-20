@@ -2029,7 +2029,7 @@ func sortedViewInfos(
 
 		viewCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
-		_, err = plan.BuildPlan(compCtx, stmts[0], false)
+		_, err = buildViewPlanForRestore(compCtx, stmts[0], viewEntry)
 		freeStatements(stmts)
 		if err != nil {
 			getLogger(ses.GetService()).Debug(fmt.Sprintf("try to build view %v failed, try to build it again", viewEntry.tblName))
@@ -2037,7 +2037,7 @@ func sortedViewInfos(
 			if err != nil {
 				return nil, err
 			}
-			_, err = plan.BuildPlan(compCtx, stmts[0], false)
+			_, err = buildViewPlanForRestore(compCtx, stmts[0], viewEntry)
 			freeStatements(stmts)
 			if err != nil {
 				// The dependency sort plans every view BEFORE the restore loop, so the
@@ -2895,6 +2895,34 @@ func parseViewCreateSQLForRestore(ctx context.Context, tblInfo *tableInfo, lower
 	return parsers.ParseWithSQLMode(ctx, dialect.MYSQL, tblInfo.createSql, lowerCaseTableNames, parserSQLMode)
 }
 
+// Dependency sorting is also a SQL rebind boundary. Use the same provenance
+// as final CREATE, restoring the exact compiler context on success and error.
+func buildViewPlanForRestore(compiler plan.CompilerContext, stmt tree.Statement, tblInfo *tableInfo) (*plan.Plan, error) {
+	parent := compiler.GetContext()
+	if err := plan.RequireCatalogCollations(parent, compiler.GetProcess(), &pbplan.TableDef{
+		ViewSql: &pbplan.ViewDef{View: tblInfo.viewDef},
+	}); err != nil {
+		return nil, err
+	}
+	ctx, err := viewCollationContextForRestore(parent, tblInfo)
+	if err != nil {
+		return nil, err
+	}
+	compiler.SetContext(ctx)
+	defer compiler.SetContext(parent)
+	return plan.BuildPlan(compiler, stmt, false)
+}
+
+func viewCollationContextForRestore(ctx context.Context, tblInfo *tableInfo) (context.Context, error) {
+	var data plan.ViewData
+	if tblInfo.viewDef != "" {
+		if err := json.Unmarshal([]byte(tblInfo.viewDef), &data); err != nil {
+			return nil, err
+		}
+	}
+	return plan.WithPersistedViewCollationBinding(ctx, data)
+}
+
 func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblInfo *tableInfo) error {
 	ctx, err := restoreDDLContext(ctx, tblInfo.dbName, tblInfo.tblName)
 	if err != nil {
@@ -2904,6 +2932,10 @@ func executeViewCreateSQLForRestore(ctx context.Context, bh BackgroundExec, tblI
 		return err
 	}
 	parserSQLMode, err := viewParserSQLModeForRestore(tblInfo.viewDef)
+	if err != nil {
+		return err
+	}
+	ctx, err = viewCollationContextForRestore(ctx, tblInfo)
 	if err != nil {
 		return err
 	}
@@ -2925,6 +2957,9 @@ func requirePersistedViewProtocolForRestore(
 	}
 	var data plan.ViewData
 	if err := json.Unmarshal([]byte(tblInfo.viewDef), &data); err != nil {
+		return err
+	}
+	if _, err := plan.WithPersistedViewCollationBinding(ctx, data); err != nil {
 		return err
 	}
 	if data.RequiredProtocolVersion == nil {
@@ -3016,7 +3051,9 @@ func getCreateTableSql(
 	tblName string,
 ) (string, error) {
 
-	newCtx := ctx
+	// Table DDL is used only for dependency inspection; restoration itself
+	// uses typed CLONE. Views separately retain their source ViewData.
+	newCtx := plan.WithRestoreSchemaInspection(ctx)
 
 	sql := fmt.Sprintf("show create table %s.%s",
 		quoteIdentifierForSQL(dbName), quoteIdentifierForSQL(tblName))

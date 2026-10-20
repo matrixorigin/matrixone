@@ -111,7 +111,7 @@ func TestSubscriptionShowCreateUsesSubscriberDefault(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			if identity == 2 {
-				require.Contains(t, sql, "COLLATE=utf8mb4_general_ci")
+				require.Contains(t, sql, "COLLATE=utf8mb4_0900_ai_ci")
 			} else {
 				require.NotContains(t, sql, "COLLATE=")
 			}

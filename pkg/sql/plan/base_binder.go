@@ -162,6 +162,12 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			}
 		}
 		expr, err = b.impl.BindColRef(exprImpl, depth, isRoot)
+		// Persisted computations cannot hide native inputs behind a legacy or
+		// boolean result (including a CAST used as a functional index key).
+		// Check at binding, before folding can discard the referenced domain.
+		if err == nil && b.persistedExpressionBinding && expr != nil && plan.HasNativePADCollation(expr.Typ) {
+			return nil, moerr.NewNotSupported(b.GetContext(), "native PAD collation persistence is disabled")
+		}
 
 	case *tree.SerialExtractExpr:
 		expr, err = b.bindFuncExprImplByAstExpr("serial_extract", []tree.Expr{astExpr}, depth)
@@ -5129,6 +5135,18 @@ func bindFuncExprImplUdf(
 
 	switch udf.Language {
 	case string(tree.SQL):
+		// SQL routines have no collation-generation marker. Keep their stored
+		// body legacy; arguments were bound in the caller before entering here.
+		parent := b.sysCtx
+		b.sysCtx = WithCollationBindingRevision(parent, 0)
+		defer func() { b.sysCtx = parent }()
+		if b.builder != nil && b.builder.compCtx != nil {
+			restore, err := enterPersistedCollationBinding(b.builder.compCtx, 0)
+			if err != nil {
+				return nil, err
+			}
+			defer restore()
+		}
 		parserSQLMode := "PIPES_AS_CONCAT"
 		if udf.SQLMode != nil {
 			parserSQLMode = *udf.SQLMode

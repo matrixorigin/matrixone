@@ -159,6 +159,9 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
 		return nil, err
 	}
+	if err := RequireCatalogCollations(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+		return nil, err
+	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		var newStmt *tree.ShowCreateView
 		if stmt.Name.NumParts == 1 {
@@ -229,6 +232,9 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
 		return nil, err
 	}
+	if err := RequireCatalogCollations(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+		return nil, err
+	}
 	sqlStr := "select \"%s\" as `View`, \"%s\" as `Create View`, 'utf8mb4' as `character_set_client`, 'utf8mb4_general_ci' as `collation_connection`"
 	var viewStr string
 	if tableDef.TableType == catalog.SystemViewRel {
@@ -239,6 +245,12 @@ func buildShowCreateView(stmt *tree.ShowCreateView, ctx CompilerContext) (*Plan,
 	err = json.Unmarshal([]byte(viewStr), &viewData)
 	if err != nil {
 		return nil, err
+	}
+
+	if !isRestoreSchemaInspection(ctx) {
+		if err := requireStandaloneViewCollations(ctx.GetContext(), viewData); err != nil {
+			return nil, err
+		}
 	}
 
 	// FixMe  We need a better escape function

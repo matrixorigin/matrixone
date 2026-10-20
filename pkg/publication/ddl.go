@@ -477,8 +477,9 @@ func ProcessDDLChanges(
 				}
 				// Execute each ALTER statement with database context
 				// Using ExecSQLInDatabase to set default database for statements that need it
+				legacyDDLContext := plan2.WithCollationBindingRevision(downstreamCtx, 0)
 				for _, alterSQL := range ddlInfo.AlterStatements {
-					result, cancel, err := iterationCtx.LocalExecutor.ExecSQLInDatabase(downstreamCtx, nil, iterationCtx.SrcInfo.AccountID, alterSQL, dbName, true, true, time.Minute)
+					result, cancel, err := iterationCtx.LocalExecutor.ExecSQLInDatabase(legacyDDLContext, nil, iterationCtx.SrcInfo.AccountID, alterSQL, dbName, true, true, time.Minute)
 					if cancel != nil {
 						defer cancel()
 					}
@@ -590,6 +591,9 @@ func getCurrentTableCreateSQL(
 		return "", moerr.NewInternalError(ctx, "failed to get table definition")
 	}
 
+	if err := plan2.RequireLegacySQLMetadata(ctx, tableDef); err != nil {
+		return "", err
+	}
 	// Generate create SQL using the same method as CDC
 	newTableDef := *tableDef
 	newTableDef.DbName = dbName
@@ -816,6 +820,10 @@ func createTable(
 		return moerr.NewInternalError(ctx, "create SQL is empty")
 	}
 
+	// This unversioned transport is legacy-only. Do not let the subscriber's
+	// authoring generation reinterpret SQL produced by an older publisher.
+	ctx = plan2.WithCollationBindingRevision(ctx, 0)
+
 	// Create database if not exists
 	createDBSQL := fmt.Sprintf("CREATE DATABASE IF NOT EXISTS `%s`", escapeSQLIdentifierForDDL(dbName))
 	result, cancel, err := executor.ExecSQL(ctx, nil, iterationCtx.SrcInfo.AccountID, createDBSQL, true, false, time.Minute)
@@ -902,6 +910,9 @@ func dropTable(
 	}
 
 	def := rel.GetTableDef(ctx)
+	if err := plan2.RequireLegacySQLMetadata(ctx, def); err != nil {
+		return err
+	}
 
 	for _, index := range def.Indexes {
 		err = db.Delete(ctx, index.IndexTableName)

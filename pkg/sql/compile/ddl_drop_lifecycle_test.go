@@ -62,6 +62,11 @@ func newDropDDLCompile(t *testing.T, ctrl *gomock.Controller, exec *dropDDLExecu
 	proc.Base.TxnClient, proc.Base.TxnOperator = newTestTxnClientAndOpWithPessimistic(ctrl)
 	proc.Base.TxnOperator.(*mock_frontend.MockTxnOperator).EXPECT().SnapshotTS().Return(timestamp.Timestamp{}).AnyTimes()
 	installDropDDLExecutor(t, proc, exec)
+	// These cases isolate DROP lifecycle/order, not mixed-version admission.
+	// State the deployment capability rather than depending on ambient runtime.
+	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolAuthoringFloor} {
+		restoreRuntimeVariableForTest(t, proc.GetService(), key, defines.MORPCLatestVersion)
+	}
 	eng := mock_frontend.NewMockEngine(ctrl)
 	c := NewCompile("test", "db", "", "", "", eng, proc, nil, false, nil, time.Now())
 	c.disableLock, c.ignorePublish = true, true

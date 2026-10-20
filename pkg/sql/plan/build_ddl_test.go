@@ -474,7 +474,7 @@ func TestBuildCreateTableAcceptsMySQL8DefaultCollationCompatibilityAlias(t *test
 	showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
 	require.NoError(t, err)
 	require.NotContains(t, showSQL, "0900")
-	require.Contains(t, showSQL, "COLLATE utf8mb4_bin")
+	require.Contains(t, showSQL, "COLLATE utf32_bin")
 }
 
 func TestBuildCreateTableAcceptsNativeUnicodeCollations(t *testing.T) {
@@ -625,7 +625,21 @@ func TestBuildCreateTableAcceptsUTF32CompatibilityAliases(t *testing.T) {
 
 			showSQL, _, err := ConstructCreateTableSQL(ctx, tableDef, nil, false, nil)
 			require.NoError(t, err)
-			require.NotContains(t, strings.ToLower(showSQL), "utf32")
+			if tc.wantTable == uint32(types.CharsetUTF8MB4Bin) {
+				require.Contains(t, strings.ToLower(showSQL), "collate=utf32_bin")
+			} else {
+				require.NotContains(t, strings.ToLower(showSQL), "utf32")
+			}
+			// The existing alias denotes MO's legacy UTF-8 bin identity, not a
+			// new UTF-32 domain, even under a native authoring binder.
+			ctx.SetContext(WithCollationBindingRevision(t.Context(), 1))
+			replay, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, showSQL, 1)
+			require.NoError(t, err)
+			defer replay.Free()
+			rebuilt, err := BuildPlan(ctx, replay, false)
+			require.NoError(t, err)
+			require.Equal(t, tableDef.Cols[0].Typ, rebuilt.GetDdl().GetCreateTable().TableDef.Cols[0].Typ)
+			require.Zero(t, rebuilt.GetDdl().GetCreateTable().TableDef.CollationVersion)
 		})
 	}
 }

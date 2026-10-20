@@ -281,7 +281,7 @@ func TestDatabaseDefaultsPreserveReplayedTableCollation(t *testing.T) {
 			sql, stmt, err := ConstructCreateTableSQL(&mock.ctxt, def, nil, replay, nil)
 			require.NoError(t, err)
 			defer stmt.Free()
-			require.Contains(t, sql, "COLLATE=utf8mb4_general_ci")
+			require.Contains(t, sql, "COLLATE=utf8mb4_0900_ai_ci")
 			rebound, err := BuildPlan(&mock.ctxt, stmt, false)
 			require.NoError(t, err)
 			require.Equal(t, uint32(types.CharsetUTF8), rebound.GetDdl().GetCreateTable().TableDef.Cols[0].Typ.Charset)

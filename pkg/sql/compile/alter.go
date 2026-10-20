@@ -2620,6 +2620,11 @@ func (s *Scope) RenameTable(c *Compile) (err error) {
 	defer s.ScopeAnalyzer.Stop()
 
 	qry := s.Plan.GetDdl().GetRenameTable()
+	for _, alter := range qry.AlterTables {
+		if err = plan2.RequireAlterTableCollationsForAuthoring(c.proc.Ctx, c.proc, alter); err != nil {
+			return err
+		}
+	}
 	if err = checkRoleRuleRenameAdmissionBatch(c, qry.AlterTables); err != nil {
 		return err
 	}

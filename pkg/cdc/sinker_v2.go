@@ -147,6 +147,29 @@ var CreateMysqlSinker2 = func(
 	)
 }
 
+func constructCDCCreateTableSQL(ctx context.Context, sinkType string, info *DbTableInfo, source *plan.TableDef) (string, error) {
+	if source == nil {
+		return "", nil
+	}
+	if err := plan2.RequireLegacySQLMetadata(ctx, source); err != nil {
+		return "", err
+	}
+	if source.TableType == catalog.SystemClusterRel {
+		return "", moerr.NewInternalErrorNoCtx("cluster table is not supported")
+	}
+	if source.TableType == catalog.SystemExternalRel {
+		return "", moerr.NewInternalErrorNoCtx("external table is not supported")
+	}
+	copy := *source
+	copy.DbName, copy.Name = info.SinkDbName, info.SinkTblName
+	copy.Fkeys, copy.Partition = nil, nil
+	if sinkType == CDCSinkType_MySQL {
+		return plan2.ConstructLegacyCreateTableSQL(&copy, true)
+	}
+	text, _, err := plan2.ConstructCreateTableSQL(nil, &copy, nil, true, nil)
+	return text, err
+}
+
 func createMysqlSinker2(
 	ctx context.Context,
 	sinkUri UriInfo,
@@ -167,6 +190,13 @@ func createMysqlSinker2(
 	var doRecord bool
 	if tableDef != nil {
 		doRecord, _ = objectio.CDCRecordTxnInjected(tableDef.DbName, tableDef.Name)
+	}
+
+	// Validate the complete source and prepare its legacy-only SQL before
+	// acquiring target resources or issuing CREATE DATABASE/other target DDL.
+	createSql, err := constructCDCCreateTableSQL(ctx, sinkUri.SinkTyp, dbTblInfo, tableDef)
+	if err != nil {
+		return nil, err
 	}
 
 	// 2. Create Executor (replaces Sink in old architecture)
@@ -302,32 +332,9 @@ func createMysqlSinker2(
 		}
 	}
 
-	// CREATE TABLE
-	var createSql string
-	if tableDef != nil {
-		newTableDef := *tableDef
-		newTableDef.DbName = dbTblInfo.SinkDbName
-		newTableDef.Name = dbTblInfo.SinkTblName
-		newTableDef.Fkeys = nil
-		newTableDef.Partition = nil
-
-		if newTableDef.TableType == catalog.SystemClusterRel {
-			executor.Close()
-			return nil, moerr.NewInternalErrorNoCtx("cluster table is not supported")
-		}
-		if newTableDef.TableType == catalog.SystemExternalRel {
-			executor.Close()
-			return nil, moerr.NewInternalErrorNoCtx("external table is not supported")
-		}
-
-		createSql, _, err = plan2.ConstructCreateTableSQL(nil, &newTableDef, nil, true, nil)
-		if err != nil {
-			executor.Close()
-			return nil, err
-		}
-		if dbTblInfo.TargetPreIdentity != absentCDCTargetIdentity {
-			createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
-		}
+	// Preserve the identity/receipt owner's decision about target existence.
+	if tableDef != nil && dbTblInfo.TargetPreIdentity != absentCDCTargetIdentity {
+		createSql = strings.Replace(createSql, "CREATE TABLE", "CREATE TABLE IF NOT EXISTS", 1)
 	}
 
 	if !dbTblInfo.targetReady {

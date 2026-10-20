@@ -76,6 +76,20 @@ func RequireCreateTableCollationsForAuthoring(ctx context.Context, proc *process
 	return nil
 }
 
+// RequireCreateIndexCollationsForAuthoring uses the same complete-schema
+// validation as ALTER ADD INDEX, rather than admitting a partial index schema.
+func RequireCreateIndexCollationsForAuthoring(ctx context.Context, proc *process.Process, create *planpb.CreateIndex) error {
+	if create == nil {
+		return nil
+	}
+	return RequireAlterTableCollationsForAuthoring(ctx, proc, &planpb.AlterTable{
+		TableDef: create.TableDef,
+		Actions: []*planpb.AlterTable_Action{{Action: &planpb.AlterTable_Action_AddIndex{
+			AddIndex: &planpb.AlterTableAddIndex{IndexInfo: create.Index},
+		}}},
+	})
+}
+
 // RequireAlterTableCollationsForAuthoring validates replacement schemas and
 // action-only key additions together. CopyTableDef is optional for INPLACE;
 // checking it alone would miss a new key over an existing native column.
@@ -85,6 +99,9 @@ func RequireAlterTableCollationsForAuthoring(ctx context.Context, proc *process.
 		return nil
 	}
 	if err := planpb.RequirePersistedCollations(alter); err != nil {
+		return err
+	}
+	if err := RequirePersistedExpressionProtocolForAuthoring(ctx, proc, alter); err != nil {
 		return err
 	}
 	// COPY must also retire its source, even when the replacement drops the
@@ -165,6 +182,25 @@ func RequireAlterTableCollationsForAuthoring(ctx context.Context, proc *process.
 		}
 	}
 	return nil
+}
+
+// RequireCloneTableCollationsForAuthoring keeps the source read contract and
+// target publication contract independent, including clones with no CREATE
+// subplan used by internal restore owners.
+func RequireCloneTableCollationsForAuthoring(ctx context.Context, proc *process.Process, clone *planpb.CloneTable) error {
+	if clone == nil {
+		return nil
+	}
+	if err := planpb.RequirePersistedCollations(clone); err != nil {
+		return err
+	}
+	if err := RequireCatalogCollations(ctx, proc, clone.SrcTableDef); err != nil {
+		return err
+	}
+	if err := RequireCatalogCollationsForAuthoring(ctx, proc, clone.SrcTableDef); err != nil {
+		return err
+	}
+	return RequireCreateTableCollationsForAuthoring(ctx, proc, clone.GetCreateTable().GetDdl().GetCreateTable())
 }
 
 // RequireCatalogCollations用于完整catalog定义，必须先于恢复/裁剪等重写。

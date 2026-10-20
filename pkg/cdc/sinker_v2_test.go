@@ -1453,17 +1453,12 @@ func TestCreateMysqlSinker2(t *testing.T) {
 	})
 
 	t.Run("ClusterTableNotSupported", func(t *testing.T) {
-		db, mock, err := sqlmock.New()
-		require.NoError(t, err)
-		defer db.Close()
-
+		connections := 0
 		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
-			return db, nil
+			connections++
+			return nil, moerr.NewInternalErrorNoCtx("unexpected target connection")
 		})
 		defer stub.Reset()
-
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
 
 		clusterTableDef := &plan.TableDef{
 			Name:      "cluster_table",
@@ -1507,21 +1502,16 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, sinker)
 		assert.Contains(t, err.Error(), "cluster table is not supported")
-		require.NoError(t, mock.ExpectationsWereMet())
+		require.Zero(t, connections, "unsupported source must be rejected before target effects")
 	})
 
 	t.Run("ExternalTableNotSupported", func(t *testing.T) {
-		db, mock, err := sqlmock.New()
-		require.NoError(t, err)
-		defer db.Close()
-
+		connections := 0
 		stub := gostub.Stub(&OpenDbConn, func(_ context.Context, user, password, ip string, port int, timeout string) (*sql.DB, error) {
-			return db, nil
+			connections++
+			return nil, moerr.NewInternalErrorNoCtx("unexpected target connection")
 		})
 		defer stub.Reset()
-
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
-		mock.ExpectExec("fakeSql").WillReturnResult(sqlmock.NewResult(0, 0))
 
 		externalTableDef := &plan.TableDef{
 			Name:      "external_table",
@@ -1565,7 +1555,7 @@ func TestCreateMysqlSinker2(t *testing.T) {
 		assert.Error(t, err)
 		assert.Nil(t, sinker)
 		assert.Contains(t, err.Error(), "external table is not supported")
-		require.NoError(t, mock.ExpectationsWereMet())
+		require.Zero(t, connections, "unsupported source must be rejected before target effects")
 	})
 
 	t.Run("ConcurrentCreation", func(t *testing.T) {

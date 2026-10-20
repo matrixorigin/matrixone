@@ -23,6 +23,29 @@ import (
 )
 
 type collationBindingRevisionKey struct{}
+type persistedViewCollationReplayKey struct{}
+
+type persistedViewCollationReplay struct {
+	bindingRevision  uint32
+	requiredProtocol int64
+}
+
+// WithPersistedViewCollationBinding carries validated source provenance through
+// one synchronous restore CREATE VIEW. Deployment read/write admission remains
+// the caller's responsibility; a context marker alone grants no authority.
+func WithPersistedViewCollationBinding(ctx context.Context, data ViewData) (context.Context, error) {
+	if err := requireViewCollationMarker(ctx, data); err != nil {
+		return nil, err
+	}
+	replay := persistedViewCollationReplay{bindingRevision: data.CollationBindingRevision}
+	if data.RequiredProtocolVersion != nil {
+		if *data.RequiredProtocolVersion < 0 {
+			return nil, moerr.NewInvalidInput(ctx, "persisted view protocol version must not be negative")
+		}
+		replay.requiredProtocol = *data.RequiredProtocolVersion
+	}
+	return context.WithValue(WithCollationBindingRevision(ctx, data.CollationBindingRevision), persistedViewCollationReplayKey{}, replay), nil
+}
 
 // WithCollationBindingRevision由已校验marker/floor的内部SQL replay owner使用。
 // 不设置session变量，不修改借用的父context；非法revision仍由binder拒绝。

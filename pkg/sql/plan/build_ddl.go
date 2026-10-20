@@ -253,6 +253,12 @@ func inferViewColumns(
 	// catalog marker cannot depend on whether that fold happened to run.
 	var preOptimizeViewRequiredProtocol int64
 	var bindingRevision uint32
+	if forAuthoring && ctx.GetContext() != nil {
+		if replay, ok := ctx.GetContext().Value(persistedViewCollationReplayKey{}).(persistedViewCollationReplay); ok {
+			preOptimizeViewRequiredProtocol = replay.requiredProtocol
+			bindingRevision = replay.bindingRevision
+		}
+	}
 	validate := func(query *Query) error {
 		for _, node := range query.Nodes {
 			if node != nil && node.NodeType == plan.Node_FUNCTION_SCAN && node.TableDef.GetTblFunc().GetName() == "json_table" {
@@ -287,7 +293,7 @@ func inferViewColumns(
 	var expandedSelectLists map[*tree.SelectClause]tree.SelectExprs
 	captureColumnTypes := func(bindCtx *BindContext) {
 		if bindCtx.persistedCollationBindingRevision != nil {
-			bindingRevision = *bindCtx.persistedCollationBindingRevision
+			bindingRevision = max(bindingRevision, *bindCtx.persistedCollationBindingRevision)
 		}
 		if bindCtx.persistedExpressionProtocolRequirement != nil &&
 			*bindCtx.persistedExpressionProtocolRequirement > preOptimizeViewRequiredProtocol {
@@ -5740,6 +5746,9 @@ func buildTruncateTable(stmt *tree.TruncateTable, ctx CompilerContext) (*Plan, e
 	if tableDef == nil {
 		return nil, moerr.NewNoSuchTable(ctx.GetContext(), truncateTable.Database, truncateTable.Table)
 	} else {
+		if err := RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+			return nil, err
+		}
 		if err := validateTableIndexDefinitions(tableDef); err != nil {
 			return nil, err
 		}
@@ -6316,6 +6325,9 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	createIndex.Index = indexInfo
 	createIndex.Table = tableName
 	createIndex.TableDef = tableDef
+	if err := RequireCreateIndexCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), createIndex); err != nil {
+		return nil, err
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Ddl{
@@ -6507,6 +6519,9 @@ func buildDropIndex(stmt *tree.DropIndex, ctx CompilerContext) (*Plan, error) {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot drop index in subscription database")
 	}
 
+	if err := RequireCatalogCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), tableDef); err != nil {
+		return nil, err
+	}
 	// check index
 	requestedIndexName := string(stmt.Name)
 	resolvedIndexName, found := resolveIndexName(tableDef.Indexes, requestedIndexName)
@@ -6747,6 +6762,9 @@ func buildRenameTable(stmt *tree.RenameTable, ctx CompilerContext) (*Plan, error
 				return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 			}
 			alterTablePlan.UpdateFkSqls = updateSqls
+		}
+		if err := RequireAlterTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), alterTablePlan); err != nil {
+			return nil, err
 		}
 		renameTables = append(renameTables, alterTablePlan)
 	}

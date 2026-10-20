@@ -269,6 +269,9 @@ func visitTableDdl(
 		return moerr.NewInternalError(ctx, "failed to get table definition")
 	}
 
+	if err := plan2.RequireLegacySQLMetadata(ctx, tableDef); err != nil {
+		return err
+	}
 	// Get table ID
 	tableID := table.GetTableID(ctx)
 

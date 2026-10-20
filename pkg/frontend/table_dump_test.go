@@ -1065,7 +1065,7 @@ func TestDumpLoadLegacyTinyTextUpgrade(t *testing.T) {
 	require.NoError(t, err)
 	manifest, err := readTableDumpManifest(ctx, dumpFS)
 	require.NoError(t, err)
-	require.Contains(t, manifest.CreateSQL, "COLLATE=utf8mb4_bin")
+	require.Contains(t, manifest.CreateSQL, "COLLATE=utf32_bin")
 
 	// Recreate the target definition from the DDL carried by the manifest. A
 	// fixed binary persists the recovered 255-byte TINYTEXT marker.
@@ -1988,14 +1988,14 @@ func TestTableDumpManifestCreateSQLRebuildsAlteredLegacyText(t *testing.T) {
 	createSQL, err := tableDumpManifestCreateSQL(t.Context(), definition(0, 10, 10), nil)
 	require.NoError(t, err)
 	require.Contains(t, strings.ToUpper(createSQL), "`PAYLOAD` TINYTEXT")
-	require.Contains(t, createSQL, "COLLATE=utf8mb4_bin")
+	require.Contains(t, createSQL, "COLLATE=utf32_bin")
 
 	partiallyMigrated := definition(0, 10, 10)
 	partiallyMigrated.Cols[0].Typ.Charset = uint32(types.CharsetUTF8)
 	createSQL, err = tableDumpManifestCreateSQL(t.Context(), partiallyMigrated, nil)
 	require.NoError(t, err)
-	require.Contains(t, createSQL, "COLLATE utf8mb4_general_ci")
-	require.Contains(t, createSQL, "COLLATE=utf8mb4_bin")
+	require.Contains(t, createSQL, "COLLATE utf8mb4_0900_ai_ci")
+	require.Contains(t, createSQL, "COLLATE=utf32_bin")
 
 	createSQL, err = tableDumpManifestCreateSQL(t.Context(), definition(1, 10, 10), nil)
 	require.NoError(t, err)
