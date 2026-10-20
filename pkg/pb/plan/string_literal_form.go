@@ -433,6 +433,7 @@ type RemoteExpressionFeatures struct {
 	TemporalResultContracts                 bool
 	InvalidTemporalResultContract           bool
 	NormalizedIntervalUnits                 bool
+	TimestampAddSecondIntervals             bool
 	LegacyIntervalUnits                     bool
 	WeekSessionDefault                      bool
 	MediumIntAssignmentBounds               bool
@@ -472,6 +473,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.TemporalResultContracts ||
 		features.InvalidTemporalResultContract ||
 		features.NormalizedIntervalUnits ||
+		features.TimestampAddSecondIntervals ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
 		features.MediumIntAssignmentBounds ||
@@ -1010,6 +1012,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				// imported here because the planner depends on this package.
 				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
 					features.LegacyIntervalUnits = true
+				}
+				if id == 601 { // TIMESTAMPADD_SECOND_INTERVAL
+					features.TimestampAddSecondIntervals = true
 				}
 				if id == 583 { // TO_INTERVAL_MICROSECOND
 					features.NormalizedIntervalUnits = true
@@ -1742,10 +1747,10 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 	}
 }
 
-// RequiresMORPCVersion124JSONStringConsumerOverload detects the distinct JSON-aware
+// RequiresMORPCVersion125JSONStringConsumerOverload detects the distinct JSON-aware
 // ELT identity and the independent opaque producer/rendering contract.
 // CONCAT and CONCAT_WS keep overload 0 but require corrected visible text.
-func RequiresMORPCVersion124JSONStringConsumerOverload(owner any) (bool, error) {
+func RequiresMORPCVersion125JSONStringConsumerOverload(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts, err
 }

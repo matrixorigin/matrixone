@@ -156,7 +156,7 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 		return nil, err
 	}
 	if requiredProtocol != nil && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion124)
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion125)
 	}
 	if err = validateStrictWriteDestination(proc, p); err != nil {
 		return nil, err
@@ -2338,8 +2338,8 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
-	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion124) {
-		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 124")
+	if (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion125) {
+		return moerr.NewNotSupportedNoCtx("JSON ELT expression execution requires MORPC protocol version 125")
 	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
@@ -2376,6 +2376,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
 		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")
+	}
+	if features.TimestampAddSecondIntervals && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion124) {
+		return moerr.NewNotSupportedNoCtx("fractional TIMESTAMPADD SECOND requires MORPC protocol version 124")
 	}
 	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
 		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")

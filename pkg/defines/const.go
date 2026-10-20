@@ -159,8 +159,9 @@ const (
 	MORPCVersion121    int64 = 121 // exact unsigned DECIMAL DIV result domain
 	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
 	MORPCVersion123    int64 = 123 // capability-gated nonblocking row-lock admission
-	MORPCVersion124    int64 = 124 // selected JSON ELT and opaque text expression execution
-	MORPCLatestVersion       = MORPCVersion124
+	MORPCVersion124    int64 = 124 // exact fractional TIMESTAMPADD SECOND intervals
+	MORPCVersion125    int64 = 125 // selected JSON ELT and opaque text expression execution
+	MORPCLatestVersion       = MORPCVersion125
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

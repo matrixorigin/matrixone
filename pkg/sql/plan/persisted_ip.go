@@ -145,7 +145,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion124)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion125)
 	}
 	if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion122)
@@ -158,6 +158,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.LeastGreatestCollationSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+	}
+	if features.TimestampAddSecondIntervals {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion124)
 	}
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)

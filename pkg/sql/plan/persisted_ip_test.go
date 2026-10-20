@@ -130,7 +130,7 @@ func TestPersistedMediumIntRequirementCombinesWithJSONInput(t *testing.T) {
 		require.True(t, features.JSONOpaqueTextContracts)
 		version, err := RequiredPersistedExpressionProtocolVersion(owner)
 		require.NoError(t, err)
-		require.Equal(t, int64(defines.MORPCVersion124), version)
+		require.Equal(t, int64(defines.MORPCVersion125), version)
 	}
 }
 
