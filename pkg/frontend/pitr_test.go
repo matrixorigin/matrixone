@@ -30,6 +30,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -209,11 +210,30 @@ func Test_createPubByPitr(t *testing.T) {
 
 		ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
 		sql := getPubInfoWithPitr(ts, 0, "test")
-		mrs := newMrsForSqlForGetPubs([][]interface{}{})
+		// Use a non-empty publication with distinct role/user IDs.  The replay
+		// path must preserve owner (role) and creator (user) when it builds the
+		// INSERT into mo_pubs; an empty result would not exercise that contract.
+		mrs := newMrsForSqlForGetPubs([][]interface{}{
+			{int64(sysAccountID), sysAccountName, "pub01", pubsub.TableAll, uint64(0), pubsub.TableAll, pubsub.AccountAll, "", "", uint64(17), uint64(29), ""},
+		})
 		bh.sql2result[sql] = mrs
+		bh.sql2result[getAccountIdNamesSql] = newMrsForGetAllAccounts([][]interface{}{
+			{int64(sysAccountID), sysAccountName, "open", uint64(1), nil},
+			{int64(1), "acc01", "open", uint64(1), nil},
+		})
+		bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub01'"] =
+			newMrsForSqlForGetSubs([][]interface{}{})
 
 		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
 		assert.NoError(t, err)
+		var insertSQL string
+		for _, executedSQL := range bh.executedSQLs {
+			if strings.HasPrefix(executedSQL, "insert into mo_catalog.mo_pubs") {
+				insertSQL = executedSQL
+				break
+			}
+		}
+		assert.Contains(t, insertSQL, "now(), 17, 29, '')")
 	})
 
 	convey.Convey("createPubByPitr fail", t, func() {

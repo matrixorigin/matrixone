@@ -2652,7 +2652,10 @@ func createPubByPitr(
 	}()
 
 	for _, pubInfo := range pubInfos {
-		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Owner, pubInfo.Creator)
+		// mo_pubs stores the role in owner and the user in creator.  AttachAccount
+		// takes the user before the role, so keep the historical publication
+		// identities in their respective context slots while replaying the CREATE.
+		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Creator, pubInfo.Owner)
 		if ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1); err != nil {
 			return
 		}
