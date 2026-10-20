@@ -683,6 +683,10 @@ func (obj *baseObject) GetValue(
 ) (v any, isNull bool, err error) {
 	if !obj.meta.Load().IsTombstone && !skipCheckDelete {
 		var bat *containers.Batch
+		// Row is a physical RowID offset. HybridScanByBlock may compact
+		// aborted rows for ordinary scans, but doing that here would shift the
+		// vector and make the physical offset invalid.
+		ctx = WithPreservePhysicalRows(ctx)
 		blkID := objectio.NewBlockidWithObjectID(obj.meta.Load().ID(), blkOffset)
 		err = HybridScanByBlock(
 			ctx, obj.meta.Load().GetTable(), txn, &bat, readSchema.(*catalog.Schema), []int{col}, &blkID, mp)
