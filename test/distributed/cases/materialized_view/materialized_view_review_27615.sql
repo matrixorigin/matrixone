@@ -23,10 +23,13 @@ create snapshot mv_review_27615_s for account;
 drop view dependent;
 drop materialized view self_join;
 restore database mv_review_27615 {snapshot='mv_review_27615_s'};
+-- Restore recreates an ON DEMAND definition; refresh publishes its data.
+refresh materialized view self_join;
 select count(*)=1 and min(id)=1 as restored_materialized_dependency from dependent;
 drop view dependent;
 drop materialized view self_join;
 restore table mv_review_27615.self_join {snapshot='mv_review_27615_s'};
+refresh materialized view self_join;
 select count(*)=1 and min(id)=1 as restored_materialized_table from self_join;
 drop snapshot mv_review_27615_s;
 
