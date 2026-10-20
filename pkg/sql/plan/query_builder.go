@@ -2428,7 +2428,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 				Expr: &plan.Expr_Col{
 					Col: &ColRef{
 						RelPos: -1,
-						ColPos: int32(len(node.ProjectList)),
+						// SAMPLE emits every GroupBy vector, including keys
+						// omitted from its projection. Keep that producer slot.
+						ColPos: int32(i),
 						Name:   builder.nameByColRef[globalRef],
 					},
 				},
