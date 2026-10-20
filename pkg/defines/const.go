@@ -160,7 +160,8 @@ const (
 	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
 	MORPCVersion123    int64 = 123 // capability-gated nonblocking row-lock admission
 	MORPCVersion124    int64 = 124 // exact fractional TIMESTAMPADD SECOND intervals
-	MORPCLatestVersion       = MORPCVersion124
+	MORPCVersion125    int64 = 125 // strict numeric conversion session contract and HEX/BIT row provenance
+	MORPCLatestVersion       = MORPCVersion125
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
