@@ -64,6 +64,7 @@ class Validation:
     malformed: int = 0
     incomplete: int = 0
     implicit_terminals: int = 0
+    incomplete_packages: int = 0
     errors: Optional[List[str]] = None
 
     def __post_init__(self) -> None:
@@ -90,6 +91,7 @@ def validate(report_path: Path, require_complete: bool = False) -> Validation:
     result = Validation()
     active: Dict[Tuple[str, str], ActiveTest] = {}
     completed: set[Tuple[str, str]] = set()
+    active_packages: Dict[str, int] = {}
 
     with report_path.open("rb") as report:
         for line_number, raw_line in enumerate(report, 1):
@@ -114,6 +116,10 @@ def validate(report_path: Path, require_complete: bool = False) -> Validation:
             if not test:
                 if action in {"start", *TERMINAL_ACTIONS}:
                     result.package_events += 1
+                    if action == "start":
+                        active_packages[package] = active_packages.get(package, 0) + 1
+                    elif active_packages.get(package, 0) > 0:
+                        active_packages[package] -= 1
                 continue
 
             key = (package, test)
@@ -166,7 +172,18 @@ def validate(report_path: Path, require_complete: bool = False) -> Validation:
                 completed.add(key)
 
     result.incomplete = len(active)
+    result.incomplete_packages = sum(active_packages.values())
     if require_complete:
+        if result.incomplete_packages:
+            packages = ", ".join(
+                f"{package} ({count})"
+                for package, count in sorted(active_packages.items()) if count
+            )
+            result.errors.append(
+                f"report ended with {result.incomplete_packages} incomplete package lifecycle(s): {packages}"
+            )
+        if result.test_starts + result.implicit_terminals == 0:
+            result.errors.append("report contains no test lifecycle events")
         if result.malformed:
             result.errors.append(
                 f"report contains {result.malformed} malformed JSON line(s)"
@@ -193,6 +210,11 @@ def _print_result(result: Validation) -> None:
             result.incomplete,
         )
     )
+    if result.incomplete_packages and not any("incomplete package lifecycle" in error for error in result.errors):
+        print(
+            f"[ut_report] WARNING report ended with {result.incomplete_packages} incomplete package lifecycle(s)",
+            file=sys.stderr,
+        )
     if result.implicit_terminals:
         print(
             f"[ut_report] WARNING terminal-only test roots={result.implicit_terminals} "

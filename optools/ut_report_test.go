@@ -139,3 +139,48 @@ func TestValidateUTReportAllowsTruncatedFailureDiagnostics(t *testing.T) {
 		t.Fatalf("strict truncation diagnostics missing: %s", output)
 	}
 }
+
+func TestValidateUTReportRequiresTestsOnSuccess(t *testing.T) {
+	for _, tc := range []struct{ name, report string }{
+		{"empty", ""},
+		{"unrelated_json", "{}\n"},
+		{"package_only", `{"Action":"start","Package":"example.test"}` + "\n" + `{"Action":"pass","Package":"example.test"}` + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output, status := runUTReportValidator(t, tc.report, true)
+			if status == 0 || !strings.Contains(output, "no test lifecycle events") {
+				t.Fatalf("empty selection accepted: status=%d %s", status, output)
+			}
+			output, status = runUTReportValidator(t, tc.report, false)
+			if status != 0 {
+				t.Fatalf("empty failure diagnostic rejected: status=%d %s", status, output)
+			}
+		})
+	}
+	report := `{"Action":"pass","Package":"example.test","Test":"TestParent/short"}` + "\n"
+	output, status := runUTReportValidator(t, report, true)
+	if status != 0 {
+		t.Fatalf("terminal-only evidence rejected: status=%d %s", status, output)
+	}
+}
+
+func TestValidateUTReportRequiresPackageCompletion(t *testing.T) {
+	report := strings.Join([]string{
+		`{"Action":"start","Package":"example.test"}`,
+		`{"Action":"run","Package":"example.test","Test":"TestOK"}`,
+		`{"Action":"pass","Package":"example.test","Test":"TestOK"}`,
+	}, "\n") + "\n"
+	output, status := runUTReportValidator(t, report, true)
+	if status == 0 || !strings.Contains(output, "incomplete package lifecycle") {
+		t.Fatalf("truncated package accepted: status=%d %s", status, output)
+	}
+	output, status = runUTReportValidator(t, report, false)
+	if status != 0 || !strings.Contains(output, "incomplete package lifecycle") {
+		t.Fatalf("missing truncated-package diagnostic: status=%d %s", status, output)
+	}
+	report += `{"Action":"pass","Package":"example.test"}` + "\n"
+	output, status = runUTReportValidator(t, report, true)
+	if status != 0 {
+		t.Fatalf("completed package rejected: status=%d %s", status, output)
+	}
+}
