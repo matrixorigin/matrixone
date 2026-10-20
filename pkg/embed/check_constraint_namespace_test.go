@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,11 +30,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/lock"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/stretchr/testify/require"
@@ -262,21 +266,13 @@ func TestCheckConstraintNamespace(t *testing.T) {
 		t.Run("repeatable read preserves check authoring", func(t *testing.T) {
 			exec(t, "set session transaction_isolation='REPEATABLE-READ'")
 			defer exec(t, "set session transaction_isolation='READ-COMMITTED'")
-			// The accepted SI protocol conservatively rejects grants newer than
-			// its fixed snapshot, even after an unrelated catalog commit. Retry
-			// only that error in a new autocommit transaction; never refresh an
-			// active SI snapshot or retry duplicate-name/enforcement failures.
+			// Order completed catalog commits before each fresh SI snapshot.
+			// A fixed snapshot may still reject a genuinely concurrent commit;
+			// retrying a fixed number of times cannot establish this ordering.
 			execFreshSI := func(statement string) error {
 				t.Helper()
-				var err error
-				for range 3 {
-					_, err = conn.ExecContext(ctx, statement)
-					var serverError *mysql.MySQLError
-					if !errors.As(err, &serverError) || serverError.Number != 20619 ||
-						!strings.Contains(serverError.Message, "catalog namespace snapshot is stale") {
-						break
-					}
-				}
+				waitForCheckNamespaceCatalogCleanup(t, ctx, conn)
+				_, err := conn.ExecContext(ctx, statement)
 				return err
 			}
 			execSI := func(statement string) {
@@ -311,6 +307,82 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			count(t, "select count(*) from information_schema.table_constraints where table_schema='"+database+"' and table_name='si_invalid' and constraint_type='CHECK'", 0)
 			execSI("create table si_reused(x int, constraint si_reusable check(x>0))")
 			exec(t, "insert into si_add values(11)")
+		})
+
+		t.Run("repeatable read rejects a catalog commit after its snapshot", func(t *testing.T) {
+			peer, err := cluster.GetCNService(1)
+			require.NoError(t, err)
+			other, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", peer.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			defer other.Close()
+			svc := cn.RawService().(cnservice.Service)
+			barrier := svc.GetEngine().(interface {
+				AcquireLogtailReadBarrier(context.Context) (timestamp.Timestamp, error)
+			})
+			waitForCheckNamespaceCatalogCleanup(t, ctx, conn)
+			frontier, err := barrier.AcquireLogtailReadBarrier(ctx)
+			require.NoError(t, err)
+			if !moruntime.InTesting(cn.ServiceID()) {
+				moruntime.SetupServiceRuntimeTestingContext(cn.ServiceID())
+			}
+			testingContext := moruntime.MustGetTestingContext(cn.ServiceID())
+			var injectedErr error
+			var originalSnapshot, finalSnapshot timestamp.Timestamp
+			var grants []lock.Result
+			var grantsMu sync.Mutex
+			const statement = "create table si_after_snapshot(x int, constraint si_after_snapshot_ck check(x>0))"
+			err = svc.GetSQLExecutor().ExecTxn(defines.AttachAccountId(ctx, 0), func(tx executor.TxnExecutor) error {
+				op := tx.Txn()
+				id := append([]byte(nil), op.Txn().ID...)
+				originalSnapshot = op.Txn().SnapshotTS
+				previousBefore := testingContext.GetBeforeLockFunc()
+				previousResult := testingContext.GetAdjustLockResultFunc()
+				defer testingContext.SetBeforeLockFunc(previousBefore)
+				defer testingContext.SetAdjustLockResultFunc(previousResult)
+				var inject sync.Once
+				testingContext.SetBeforeLockFunc(func(txnID []byte, tableID uint64) {
+					previousBefore(txnID, tableID)
+					if tableID == catalog.MO_TABLES_ID && bytes.Equal(txnID, id) {
+						inject.Do(func() {
+							_, injectedErr = other.ExecContext(ctx, "create table "+database+".si_unrelated(x int)")
+						})
+					}
+				})
+				testingContext.SetAdjustLockResultFunc(func(txnID []byte, tableID uint64, result *lock.Result) {
+					previousResult(txnID, tableID, result)
+					if tableID == catalog.MO_TABLES_ID && bytes.Equal(txnID, id) {
+						grantsMu.Lock()
+						grants = append(grants, *result)
+						grantsMu.Unlock()
+					}
+				})
+				result, execErr := tx.Exec(statement, executor.StatementOption{})
+				result.Close()
+				finalSnapshot = op.Txn().SnapshotTS
+				return execErr
+			}, executor.Options{}.WithDatabase(database).WithMinCommittedTS(frontier).
+				WithTxnIsolation(txnpb.TxnIsolation_SI).WithTxnMode(txnpb.TxnMode_Pessimistic))
+			require.NoError(t, injectedErr)
+			require.Equal(t, originalSnapshot, finalSnapshot, "SI admission must not advance a fixed snapshot")
+			var conflict *moerr.Error
+			require.ErrorAs(t, err, &conflict)
+			require.Equal(t, moerr.ErrTxnWWConflict, conflict.ErrorCode())
+			require.ErrorContains(t, err, "catalog namespace snapshot is stale")
+			grantsMu.Lock()
+			observed := append([]lock.Result(nil), grants...)
+			grantsMu.Unlock()
+			require.Len(t, observed, 1)
+			require.False(t, observed[0].HasConflict)
+			require.False(t, observed[0].HasPrevCommit)
+			count(t, "select count(*) from information_schema.tables where table_schema='"+database+"' and table_name='si_after_snapshot'", 0)
+			count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and constraint_name='si_after_snapshot_ck'", 0)
+			// The rejected transaction left no namespace claim behind. Once the
+			// intervening commit is applied, one fresh SI attempt can succeed.
+			exec(t, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
+			exec(t, "set session transaction_isolation='REPEATABLE-READ'")
+			defer exec(t, "set session transaction_isolation='READ-COMMITTED'")
+			exec(t, statement)
+			expectError(t, "insert into si_after_snapshot values(-1)", 3819)
 		})
 
 		t.Run("copy alter validates only newly introduced names", func(t *testing.T) {
@@ -424,6 +496,9 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 	for _, table := range []string{"concurrent_a", "concurrent_b"} {
 		exec(owner, "drop table if exists "+table)
 	}
+	if isolation == "REPEATABLE-READ" {
+		waitForCheckNamespaceCatalogCleanup(t, ctx, owner)
+	}
 	exec(owner, "begin")
 	defer func() {
 		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
@@ -431,7 +506,9 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 		_, err := owner.ExecContext(cleanupCtx, "rollback")
 		require.NoError(t, err)
 	}()
-	exec(owner, "create table concurrent_a(x int, constraint shared_ck check(x>0))")
+	// These empty tables test namespace admission, so an explicit PK avoids
+	// scheduling unrelated hidden auto-increment cleanup between scenarios.
+	exec(owner, "create table concurrent_a(x int primary key, constraint shared_ck check(x>0))")
 	if isolation == "READ-COMMITTED" {
 		exec(writer, "begin")
 	}
@@ -479,7 +556,7 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 	done := make(chan struct{})
 	var writerErr error
 	go func() {
-		_, writerErr = writer.ExecContext(ctx, "create table concurrent_b(x int, constraint SHARED_CK check(x<10))")
+		_, writerErr = writer.ExecContext(ctx, "create table concurrent_b(x int primary key, constraint SHARED_CK check(x<10))")
 		close(done)
 	}()
 	defer func() {
@@ -531,4 +608,37 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 	case <-ctx.Done():
 		t.Fatal(ctx.Err())
 	}
+}
+
+// waitForCheckNamespaceCatalogCleanup excludes the allocator GC transactions
+// scheduled by earlier fixture DROP/COPY statements from a fresh SI assertion.
+// A completed-commit fence alone does not wait for these future transactions.
+func waitForCheckNamespaceCatalogCleanup(t *testing.T, ctx context.Context, conn *sql.Conn) {
+	t.Helper()
+	syncCommit := func() {
+		t.Helper()
+		_, err := conn.ExecContext(ctx, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
+		require.NoError(t, err)
+	}
+	syncCommit()
+	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var pending int
+		// Allocator rows use physical rel_id. COPY may retain an old logical
+		// ID, which must not make its dropped physical allocator look live.
+		err := conn.QueryRowContext(waitCtx, "select count(*) from mo_catalog.mo_increment_columns i left join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.rel_id is null").Scan(&pending)
+		require.NoError(t, err)
+		if pending == 0 {
+			break
+		}
+		select {
+		case <-waitCtx.Done():
+			t.Fatalf("auto-increment cleanup still has %d orphan rows: %v", pending, waitCtx.Err())
+		case <-tick.C:
+		}
+	}
+	syncCommit()
 }
