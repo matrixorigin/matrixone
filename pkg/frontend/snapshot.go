@@ -3494,7 +3494,7 @@ func getFkDepsFromTableInfos(
 ) (map[string][]string, error) {
 	deps := make(map[string][]string)
 	for _, info := range tableInfos {
-		if info == nil || info.typ == view || isSequence(info) || info.createSql == "" {
+		if info == nil || isViewLike(info) || isSequence(info) || info.createSql == "" {
 			continue
 		}
 		statements, err := parsers.Parse(ctx, dialect.MYSQL, info.createSql, 0)

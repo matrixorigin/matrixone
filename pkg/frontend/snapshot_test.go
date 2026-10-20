@@ -90,6 +90,12 @@ func TestGetFkDepsFromTableInfos(t *testing.T) {
 		},
 		{
 			dbName:    "d",
+			tblName:   "mv",
+			typ:       materializedView,
+			createSql: "create materialized view `d`.`mv` as select id from `d`.`parent`",
+		},
+		{
+			dbName:    "d",
 			tblName:   "seq",
 			relKind:   catalog.SystemSequenceRel,
 			createSql: "create sequence `d`.`seq` as bigint no cycle",
@@ -101,6 +107,7 @@ func TestGetFkDepsFromTableInfos(t *testing.T) {
 	require.Equal(t, []string{genKey("d", "parent")}, deps[genKey("d", "child")])
 	require.Equal(t, []string{genKey("d", "self_ref")}, deps[genKey("d", "self_ref")])
 	require.NotContains(t, deps, genKey("d", "v"))
+	require.NotContains(t, deps, genKey("d", "mv"))
 	require.NotContains(t, deps, genKey("d", "seq"))
 }
 
