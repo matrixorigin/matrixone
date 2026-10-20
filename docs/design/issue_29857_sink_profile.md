@@ -1,7 +1,7 @@
 # Transactional event-ledger sink profile
 
 Status: design-phase PASS for issue #29857; implementation PR #30561.
-@aptend approved the design privately. The PR author records that manual
+@misuxi approved the design privately. The PR author records that manual
 decision here on 2026-10-20 for the reviewed design revision
 `00c4f773ba188c9d8410fd4b64d0f71e502a2c17`. This records the design
 decision separately from implementation approval.
