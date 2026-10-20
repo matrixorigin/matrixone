@@ -501,3 +501,31 @@ upstream owners and protocol 122 gates. Query status wire fields and catalog
 4.0.18 allocations are unchanged. This repair adds no Python runtime, production
 or security scope. Independent Architecture and SQL/Planner approval of r24
 remains pending; rebase and validation do not supply that approval.
+
+
+## r25 nonblocking-lock/Python allocation addendum (2026-10-20)
+
+Official main `c7bd2e7c1d9ca53daf80d640b3b307902d54161c` owns MORPC 123
+for nonblocking row-lock admission. The governing
+`python-udf-current-stage-r25-2026-10-20` proposal preserves that capability and
+allocates the single Python capability 124 (`latest + 1`). Catalog repair,
+revision publication and reads, Prepare, prepared reuse, evaluator, remote
+sender/receiver and status admission reject predecessor 123 and mixed 124/123
+CNs before Python mutation or execution. Rolling back the active floor from
+124 to 123 disables Python while preserving nonblocking locks at 123, temporal
+contracts at 122, and DECIMAL DIV at 121.
+
+The merged plan schema retains upstream LockTarget no_wait/skip_locked fields
+18/19 together with routine identities, query dependencies and CTAS admission.
+Canonical generation and both plan admission postprocessors preserve the union.
+Nonblocking locks and dependent expression programs retain their coordinator
+execution owners; Python capability 124 does not authorize remote lock policy
+execution. The existing stream handshake carries the maximum required feature
+floor, with no new protocol round trip or lifecycle mechanism.
+
+Catalog 4.0.18, its minimum source 4.0.17, query method/field allocations and
+Python runtime scope are unchanged. The upstream SQL/planner and cancellation
+harness changes require fresh integration evidence rather than unchanged-base
+reuse. This maintenance adds no production or security scope. Independent
+Architecture and SQL/Planner approval of r25 remains pending; rebase and
+validation do not supply that approval.
