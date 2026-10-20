@@ -330,7 +330,9 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			var originalSnapshot, finalSnapshot timestamp.Timestamp
 			var grants []lock.Result
 			var grantsMu sync.Mutex
-			const statement = "create table si_after_snapshot(x int, constraint si_after_snapshot_ck check(x>0))"
+			// Namespace admission, not hidden auto-increment maintenance, is
+			// under test. Keep both empty tables free of allocator side effects.
+			const statement = "create table si_after_snapshot(x int primary key, constraint si_after_snapshot_ck check(x>0))"
 			err = svc.GetSQLExecutor().ExecTxn(defines.AttachAccountId(ctx, 0), func(tx executor.TxnExecutor) error {
 				op := tx.Txn()
 				id := append([]byte(nil), op.Txn().ID...)
@@ -344,7 +346,7 @@ func TestCheckConstraintNamespace(t *testing.T) {
 					previousBefore(txnID, tableID)
 					if tableID == catalog.MO_TABLES_ID && bytes.Equal(txnID, id) {
 						inject.Do(func() {
-							_, injectedErr = other.ExecContext(ctx, "create table "+database+".si_unrelated(x int)")
+							_, injectedErr = other.ExecContext(ctx, "create table "+database+".si_unrelated(x int primary key)")
 						})
 					}
 				})
@@ -376,12 +378,27 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			require.False(t, observed[0].HasPrevCommit)
 			count(t, "select count(*) from information_schema.tables where table_schema='"+database+"' and table_name='si_after_snapshot'", 0)
 			count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and constraint_name='si_after_snapshot_ck'", 0)
-			// The rejected transaction left no namespace claim behind. Once the
-			// intervening commit is applied, one fresh SI attempt can succeed.
-			exec(t, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
-			exec(t, "set session transaction_isolation='REPEATABLE-READ'")
-			defer exec(t, "set session transaction_isolation='READ-COMMITTED'")
-			exec(t, statement)
+			// SYNCCOMMIT only propagates CN-reported commit timestamps; it is
+			// not a TN read barrier or a fence for future allocator cleanup. Prove name
+			// reuse with one new, explicitly fenced SI transaction, just as for
+			// the rejected transaction above. Never refresh the old snapshot.
+			waitForCheckNamespaceCatalogCleanup(t, ctx, conn)
+			frontier, err = barrier.AcquireLogtailReadBarrier(ctx)
+			require.NoError(t, err)
+			var reuseSnapshot, reuseFinalSnapshot timestamp.Timestamp
+			err = svc.GetSQLExecutor().ExecTxn(defines.AttachAccountId(ctx, 0), func(tx executor.TxnExecutor) error {
+				reuseSnapshot = tx.Txn().Txn().SnapshotTS
+				result, execErr := tx.Exec(statement, executor.StatementOption{})
+				result.Close()
+				reuseFinalSnapshot = tx.Txn().Txn().SnapshotTS
+				return execErr
+			}, executor.Options{}.WithDatabase(database).WithMinCommittedTS(frontier).
+				WithTxnIsolation(txnpb.TxnIsolation_SI).WithTxnMode(txnpb.TxnMode_Pessimistic).
+				WithWaitCommittedLogApplied())
+			require.NoError(t, err, "reuse must start at the applied TN frontier %s", frontier.DebugString())
+			require.Equal(t, reuseSnapshot, reuseFinalSnapshot, "name reuse must retain its new SI snapshot")
+			require.True(t, frontier.LessEq(reuseSnapshot), "reuse snapshot must include the applied frontier")
+			require.True(t, observed[0].Timestamp.LessEq(reuseSnapshot), "reuse snapshot must include the rejected grant's watermark")
 			expectError(t, "insert into si_after_snapshot values(-1)", 3819)
 		})
 
