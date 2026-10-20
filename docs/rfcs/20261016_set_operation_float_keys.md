@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 22
+- Revision: 23
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 23 integration baseline: official main `ef07d45cf6bc258df8c2ac60b1ea9d2a38045b1a`
 - Revision 22 integration baseline: official main `21966565287edf9f7d7f519af60d269711608945`
 - Revision 21 integration baseline: official main `743e749a1e33d6c845bb73999e8c82d297a2b657`
 - Revision 20 integration baseline: official main `743e749a1e33d6c845bb73999e8c82d297a2b657`
@@ -1218,6 +1219,48 @@ ownership design remain intact, while fresh spill/hashbuild and diagnostic tests
 cover the merged base. Earlier capacity and race receipts keep their original
 source, workloads and limits; this rebase claims no new-head or XFS spill latency,
 RSS, external-source capacity or mixed-binary cluster qualification.
+
+### Revision 23 CI maintenance integration
+
+This revision replays all 36 PR commits, with identical patches, onto official
+main `ef07d45cf6bc258df8c2ac60b1ea9d2a38045b1a`. It preserves the new shared-CTE
+publication owner: an explicit child-local PROJECT narrows the publication
+schema after evaluation, retaining errors from evaluation-only child outputs.
+Only registered shared CTEs use this path; DML and recursive sink layouts retain
+their existing owners. The scalar fallback's synthetic passthrough demand
+pruning remains scoped to its registered columns. Upstream ALTER column
+replacement CHECK/index binding, account-scoped transaction test configuration,
+PITR publication projection and CDC prerequisite fixes are also retained.
+CDC's classification of lock-table binding error 20702 as retryable is preserved,
+including cancellation precedence and the existing admission/retry limits.
+Official latest remains 124, so function602/MORPC125 and marker fields
+Node96/Instruction65 do not advance.
+
+Run [39422414433](https://github.com/matrixorigin/matrixone/actions/runs/39422414433)
+attempt 1 at `a5f4d82b00f23bab1397d916a469444f98a7bbd6` failed
+`TestCheckConstraintNamespace/repeatable_read_preserves_check_authoring`:
+`ALTER si_invalid ADD CONSTRAINT si_reusable CHECK(x>0)` expected CHECK error
+3819 but received 20619, `catalog namespace snapshot is stale`. CI Required
+propagated that UT failure. The exact root passes three separate invocations on
+the original head and three on the complete official `a59438e9` Go-source
+overlay, using CI's race, short, tags and CGO mode on Darwin/arm64. The later
+CDC-only `ef07d45c` change is checked separately with the final integration.
+These are local
+non-reproductions, not Linux/x64 parity or proof of an unrelated flake. The PR
+touches the shared planner/compile dependency closure; closed issue #30621 is
+historical mechanism context, not an open-defect shortcut. No CHECK assertion,
+retry, deadline or product guard is changed, and no issue or old-run rerun is
+part of this delivery. New-head CI remains pending after the maintenance push.
+
+The [revision-23 receipt](validation/20261020_ci_maintenance_rebase.json) records
+the exact failure, source controls, integration map, current owning/public/CHECK
+validation and incremental static checks. Existing ignored native artifacts are
+read-only local test inputs. Upstream's ARM `-march=armv8-a` build-recipe change
+is preserved but is not validated by reusing those artifacts. Previous capacity,
+race, protobuf-generation and native-wire receipts retain their recorded scope;
+unchanged protocol inputs permit reuse of the function602 and marker96 proofs.
+No fresh capacity benchmark, portable ARM build or live mixed-version cluster
+qualification is claimed.
 
 ## Alternatives
 
