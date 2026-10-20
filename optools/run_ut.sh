@@ -3167,10 +3167,14 @@ function run_tests(){
 function ut_summary(){
   local report_path="${BUILD_WKSP}/ut-report"
   local analysis_status=0
+  local report_validation_status=0
   local analysis_tool
   local failed_output=""
   local setup_summary=""
   local setup_status=0
+  local report_validation=""
+  local report_validation_level=INF
+  local -a report_validation_args=()
 
   # Failure files belong to this analysis, not an earlier run in the checkout.
   # Preserve the previous generation beside the run-scoped raw report.
@@ -3209,6 +3213,22 @@ function ut_summary(){
     fi
   fi
 
+  # Validate the raw Go event stream before handing it to the pinned analyzer.
+  # The analyzer intentionally ignores pause/cont, while the validator treats
+  # them as lifecycle transitions and also catches duplicate test roots across
+  # plan shards.  A failed/cancelled run may end with a truncated report, so
+  # completeness is required only when the test command itself succeeded.
+  if (( UT_TEST_STATUS == 0 )); then
+    report_validation_args+=(--require-complete)
+  fi
+  report_validation=$(python3 "${BUILD_WKSP}/optools/validate_ut_report.py" \
+    "${report_validation_args[@]}" "${UT_REPORT}" 2>&1)
+  report_validation_status=$?
+  (( report_validation_status == 0 )) || report_validation_level=ERR
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] && logger "${report_validation_level}" "${line}"
+  done <<< "${report_validation}"
+
   if ! analysis_tool=$(install_go_ut_analysis); then
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
@@ -3217,8 +3237,8 @@ function ut_summary(){
     analysis_status=$?
   fi
 
-  if (( UT_TEST_STATUS != 0 || analysis_status != 0 )); then
-    logger "ERR" "UT diagnostics: go-test=${UT_TEST_STATUS}, analysis=${analysis_status}"
+  if (( UT_TEST_STATUS != 0 || report_validation_status != 0 || analysis_status != 0 )); then
+    logger "ERR" "UT diagnostics: go-test=${UT_TEST_STATUS}, report=${report_validation_status}, analysis=${analysis_status}"
     logger "ERR" "Last 200 Go build events (each truncated to 4096 bytes):"
     grep -E '"Action":"build-(output|fail)"' "${UT_REPORT}" | tail -n 200 | cut -c 1-4096
     logger "ERR" "Last 50 raw report lines (each truncated to 4096 bytes):"
@@ -3230,11 +3250,11 @@ function ut_summary(){
   fi
 
   failed_output=$(find "${report_path}/failed/outputs" -type f -print -quit)
-  if (( UT_TEST_STATUS == 0 && analysis_status == 0 )) &&
+  if (( UT_TEST_STATUS == 0 && report_validation_status == 0 && analysis_status == 0 )) &&
      [[ -z "${failed_output}" ]]; then
     logger "INF" "UNIT TESTING SUCCEEDED !!!"
   else
-    logger "ERR" "UNIT TESTING FAILED: go-test=${UT_TEST_STATUS}, analysis=${analysis_status}"
+    logger "ERR" "UNIT TESTING FAILED: go-test=${UT_TEST_STATUS}, report=${report_validation_status}, analysis=${analysis_status}"
     exit 1;
   fi
 }
