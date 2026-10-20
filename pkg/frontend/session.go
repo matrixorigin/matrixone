@@ -4386,10 +4386,11 @@ func (d *dbMigration) Migrate(ctx context.Context, ses *Session) error {
 }
 
 type prepareStmtMigration struct {
-	name       string
-	sql        string
-	paramTypes []byte
-	commitFn   func(*Session, error) error
+	directTableMigration *query.PreparedDirectTableSelectV1
+	name                 string
+	sql                  string
+	paramTypes           []byte
+	commitFn             func(*Session, error) error
 }
 
 func quotePrepareStmtName(name string) string {
@@ -4424,19 +4425,24 @@ func (p *prepareStmtMigration) Migrate(ctx context.Context, ses *Session) error 
 		return moerr.GetOkExpectedNotSafeToStartTransfer()
 	}
 	tempExecCtx := &ExecCtx{
-		reqCtx:            ctx,
-		inMigration:       true,
-		ses:               ses,
-		executeParamTypes: p.paramTypes,
+		reqCtx:               ctx,
+		inMigration:          true,
+		ses:                  ses,
+		executeParamTypes:    p.paramTypes,
+		directTableMigration: p.directTableMigration,
 	}
 	var migrationEpoch *authorizationEpoch
 	tempExecCtx.reqCtx, migrationEpoch = beginAuthorizationEpoch(ctx, ses, tempExecCtx)
 	defer migrationEpoch.end()
+	defer tempExecCtx.Close()
 	policy, err := captureRewritePolicy(tempExecCtx.reqCtx, ses)
 	if err != nil {
 		return err
 	}
-	defer tempExecCtx.Close()
+	if p.directTableMigration != nil && (!policy.captured || policy.enabled ||
+		len(policy.roleRules) != 0 || len(policy.sessionRules) != 0 || len(policy.sessionRemapDb) != 0) {
+		return directMigrationRefusal()
+	}
 	return doComQuery(ses, tempExecCtx, &UserInput{
 		sql:           p.sql,
 		rewritePolicy: policy,
@@ -4543,6 +4549,17 @@ func migrateTempTables(
 }
 
 func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
+	if ctx == nil {
+		ctx = ses.GetTxnHandler().GetTxnCtx()
+	}
+	if err := preflightDirectTableMigrationV1(ctx, ses, req); err != nil {
+		return err
+	}
+	return migrateSession(ctx, ses, req)
+}
+
+// The routine owns failure disposal and has already completed pure preflight.
+func migrateSession(ctx context.Context, ses *Session, req *query.MigrateConnToRequest) error {
 	ses.EnterFPrint(FPMigrate)
 	defer ses.ExitFPrint(FPMigrate)
 
@@ -4731,7 +4748,10 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 					return moerr.AttachCause(migrationCtx, err)
 				}
 			}
-			if variable.runtimeValuePresent {
+			if hasDirectTableMigration(req.PrepareStmts) && hasMigrationRuntimeSideEffect(variable.name) {
+				// Certified replay must never write CN-global state, even if a
+				// later authorization/prepare/cancellation step fails.
+			} else if variable.runtimeValuePresent {
 				ses.applySessionSysVarSideEffects(variable.name, variable.runtimeValue)
 			} else {
 				ses.applySessionSysVarSideEffects(variable.name, variable.value)
@@ -4760,6 +4780,7 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 			continue
 		}
 		pm := newPrepareStmtMigration(p.Name, p.SQL, p.ParamTypes)
+		pm.directTableMigration = p.DirectTableSelect
 		if err := pm.Migrate(migrationCtx, ses); err != nil {
 			return moerr.AttachCause(migrationCtx, err)
 		}
@@ -4770,6 +4791,15 @@ func Migrate(ctx context.Context, ses *Session, req *query.MigrateConnToRequest)
 	}
 	if maxStmtID > 0 {
 		ses.SetLastStmtID(maxStmtID)
+	}
+	if hasDirectTableMigration(req.PrepareStmts) {
+		_, vars, err := directTypedMode(migrationCtx, req.SystemVariables)
+		if err != nil {
+			return err
+		}
+		if !directRuntimeMatches(ses, vars) {
+			return directMigrationRefusal()
+		}
 	}
 	if cause := context.Cause(migrationCtx); cause != nil {
 		return cause

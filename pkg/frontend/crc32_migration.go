@@ -90,6 +90,11 @@ func checkCRC32PrepareMigration(ctx context.Context, ses *Session, req *query.Mi
 		if err := context.Cause(ctx); err != nil {
 			return err
 		}
+		// A proof is admitted by the separate side-effect-free preflight and
+		// checked again by the actual binder/publication owner.
+		if st != nil && st.DirectTableSelect != nil {
+			continue
+		}
 		if st == nil || !crc32ReplaySQLSafe(ctx, st.SQL, mode, true) {
 			return moerr.GetOkExpectedNotSafeToStartTransfer()
 		}

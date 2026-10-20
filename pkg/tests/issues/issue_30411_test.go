@@ -106,6 +106,24 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 			exec(t, load(writeInput(t, "composite_valid.csv", "1,1\n1,2\n"), "composite"))
 			require.Equal(t, 2, count(t, "composite"))
 		})
+		t.Run("shared prepared image and index rollback", func(t *testing.T) {
+			exec(t, "create table indexed(id int auto_increment primary key, u int unique key, v int, key idx_v(v))")
+			path := writeInput(t, "indexed.csv", "10,100\n20,200\n")
+			exec(t, load(path, "indexed")+" (u,v)")
+			var image string
+			require.NoError(t, conn.QueryRowContext(ctx,
+				"select group_concat(concat(id,':',u,':',v) order by id) from indexed").Scan(&image))
+			require.Equal(t, "1:10:100,2:20:200", image, "auto-increment image is evaluated once for validation and writes")
+			requireDuplicate(t, load(writeInput(t, "indexed_conflict.csv", "3,30,300\n1,40,400\n"), "indexed"))
+			require.Equal(t, 2, count(t, "indexed"))
+			var visible int
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from indexed force index(idx_v) where v>=300").Scan(&visible))
+			require.Zero(t, visible, "rejected LOAD leaves no secondary-index rows")
+			require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from indexed where u in (30,40)").Scan(&visible))
+			require.Zero(t, visible, "rejected LOAD leaves no unique-index rows")
+			exec(t, load(writeInput(t, "indexed_reuse.csv", "3,30,300\n"), "indexed"))
+			require.Equal(t, 3, count(t, "indexed"))
+		})
 		t.Run("foreign key fallback", func(t *testing.T) {
 			exec(t, "create table parent(id int primary key)")
 			exec(t, "insert into parent values(1)")

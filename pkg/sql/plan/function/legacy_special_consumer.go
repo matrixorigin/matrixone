@@ -21,18 +21,32 @@ import (
 )
 
 type legacySpecialConsumerContextKey struct{}
+type legacyTimestampAddSecondContextKey struct{}
+type legacyDecimalIntegerDivContextKey struct{}
 
 // WithLegacySpecialConsumers is only for validating pre-migration catalog
 // expressions against their SQL origin in table DUMP/LOAD. It must never be
 // used for new DDL or ordinary query binding.
 func WithLegacySpecialConsumers(ctx context.Context) context.Context {
-	return context.WithValue(ctx, legacySpecialConsumerContextKey{}, true)
+	return WithLegacyDecimalIntegerDiv(context.WithValue(ctx, legacySpecialConsumerContextKey{}, true))
 }
 
 // LegacySpecialConsumers reports whether dump origin validation is using
 // pre-migration execution signatures. It must not affect normal SQL binding.
 func LegacySpecialConsumers(ctx context.Context) bool {
 	value, _ := ctx.Value(legacySpecialConsumerContextKey{}).(bool)
+	return value
+}
+
+// WithLegacyTimestampAddSecond reconstructs pre-fractional TIMESTAMPADD trees
+// only while verifying persisted SQL origins. Other consumer migrations remain
+// current so definitions authored between migrations can still be verified.
+func WithLegacyTimestampAddSecond(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyTimestampAddSecondContextKey{}, true)
+}
+
+func LegacyTimestampAddSecond(ctx context.Context) bool {
+	value, _ := ctx.Value(legacyTimestampAddSecondContextKey{}).(bool)
 	return value
 }
 
@@ -142,4 +156,70 @@ func legacyMakeTimeCheck(overloads []overload, inputs []types.Type) checkResult 
 		return newCheckResultWithCast(i, targets)
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
+// WithLegacyDecimalIntegerDiv verifies catalog trees from before main's v121
+// migration. Fractional TIMESTAMPADD was also unavailable in that published era.
+func WithLegacyDecimalIntegerDiv(ctx context.Context) context.Context {
+	return WithLegacyTimestampAddSecond(context.WithValue(ctx, legacyDecimalIntegerDivContextKey{}, true))
+}
+
+func LegacyDecimalIntegerDiv(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(legacyDecimalIntegerDivContextKey{}).(bool)
+	return value
+}
+
+// legacyIntegerDivCheck retains the pre-v121 overload and physical cast contract.
+// Normal binding shares this fallback after its unsigned DECIMAL case.
+func legacyIntegerDivCheck(inputs []types.Type) checkResult {
+	if len(inputs) == 2 {
+		if t1, t2, ok := integerDivBitTypes(inputs[0], inputs[1]); ok {
+			if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, []types.Type{t1, t2})
+		}
+		// Keep same-domain operands unchanged where possible.
+		if integerDivOperatorSupports(inputs[0], inputs[1]) {
+			return newCheckResultWithSuccess(0)
+		}
+		if t1, t2, ok := integerDivUnsignedMixedTypes(inputs[0], inputs[1]); ok {
+			if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, []types.Type{t1, t2})
+		}
+		if t1, t2, ok := integerDivExactTypes(inputs[0], inputs[1]); ok {
+			if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
+				return newCheckResultWithSuccess(0)
+			}
+			return newCheckResultWithCast(0, []types.Type{t1, t2})
+		}
+		// Then check with type casting
+		has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
+		if has && integerDivOperatorSupports(t1, t2) {
+			return newCheckResultWithCast(0, []types.Type{t1, t2})
+		}
+	}
+	return newCheckResultWithFailure(failedFunctionParametersWrong)
+}
+
+type legacyTemporalNullabilityContextKey struct{}
+
+// WithLegacyTemporalNullability reconstructs pre-8dd catalog binding metadata.
+// Execution conversions and ordinary query binding retain current semantics.
+func WithLegacyTemporalNullability(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyTemporalNullabilityContextKey{}, true)
+}
+
+// LegacyTemporalNullability reports the private dump-origin binding epoch.
+func LegacyTemporalNullability(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(legacyTemporalNullabilityContextKey{}).(bool)
+	return value
 }

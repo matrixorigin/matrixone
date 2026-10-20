@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
@@ -295,6 +296,9 @@ func (ec *engineColumnInfo) GetType() types.T {
 }
 
 type PrepareStmt struct {
+	// Only migrated handles carry this immutable, bounded replay contract.
+	// Catalog/mode/protocol drift requires explicit client PREPARE.
+	directTableMigration *query.PreparedDirectTableSelectV1
 	// Monotonic high-water mark for GROUP_CONCAT across this prepared lifetime,
 	// including executions whose AP or specialization path discards the compile.
 	groupConcatMaxLenFloor uint64
@@ -1153,9 +1157,11 @@ type SessionLoggerGetter interface {
 }
 
 type ExecCtx struct {
-	reqCtx      context.Context
-	prepareStmt *PrepareStmt
-	runResult   *util.RunResult
+	directTableMigration   *query.PreparedDirectTableSelectV1
+	directPublicationCheck func() error
+	reqCtx                 context.Context
+	prepareStmt            *PrepareStmt
+	runResult              *util.RunResult
 	// rootSQLOverride is the authoritative SQL for a statement planned
 	// recursively inside this request, such as the statement owned by PREPARE.
 	// A nil value falls back to the session SQL.
@@ -1295,6 +1301,8 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.prepareStmt = nil
 	execCtx.runResult = nil
 	execCtx.rootSQLOverride = nil
+	execCtx.directTableMigration = nil
+	execCtx.directPublicationCheck = nil
 	execCtx.stmt = nil
 	execCtx.effectiveTxnDefaultDatabase = ""
 	execCtx.effectiveTxnStatement = nil

@@ -130,8 +130,8 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.DecimalIntegerDivisionSemantics && requiredVersion < defines.MORPCVersion121 {
 		requiredVersion = defines.MORPCVersion121
 	}
-	if features.CRC32JSONTextBytes && requiredVersion < defines.MORPCVersion123 {
-		requiredVersion = defines.MORPCVersion123
+	if features.CRC32JSONTextBytes && requiredVersion < defines.MORPCVersion125 {
+		requiredVersion = defines.MORPCVersion125
 	}
 	if features.DecimalDivisionSemantics && requiredVersion < defines.MORPCVersion97 {
 		requiredVersion = defines.MORPCVersion97
@@ -158,6 +158,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.LeastGreatestCollationSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+	}
+	if features.TimestampAddSecondIntervals {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion124)
 	}
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)

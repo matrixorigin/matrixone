@@ -338,6 +338,73 @@ func TestQueryServiceMigrateToRejectsDependentPreparedOnOldTarget(t *testing.T) 
 	})
 }
 
+func TestQueryServiceDirectMigrationRejectsIncompleteStateBeforeMarker(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		info := &pb.MigrateConnFromResponse{LastInsertIDExported: true,
+			PrepareStmts: []*pb.PrepareStmt{{Name: "p", SQL: "select id from db.t",
+				RequiredProtocolVersion: defines.MORPCVersion126,
+				DirectTableSelect:       &pb.PreparedDirectTableSelectV1{Version: 1}}}}
+		for _, mutate := range []func(){
+			func() {},
+			func() { info.UserDefinedVarsExported = true },
+			func() { info.SystemVariablesExported = true; info.SystemVariablesSnapshotTooLarge = true },
+			func() { info.SystemVariablesSnapshotTooLarge = false; info.UserDefinedVarsSnapshotTooLarge = true },
+			func() {
+				info.UserDefinedVarsSnapshotTooLarge = false
+				info.TempTables = []*pb.MigrateTempTable{{Alias: "tmp"}}
+			},
+		} {
+			mutate()
+			require.Error(t, cc.migrateConnTo(sc, info))
+			require.Empty(t, sc.statements, "no marker/raw replay before admission")
+		}
+	})
+}
+
+func TestQueryServiceDirectMigrationCarriesDisposalAndProof(t *testing.T) {
+	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
+	proof := &pb.PreparedDirectTableSelectV1{Version: 1, DatabaseName: "db", TableName: "t"}
+	called := false
+	handler := func(ctx context.Context, req *pb.Request, resp *pb.Response, _ *morpc.Buffer) error {
+		if req.MigrateConnToRequest == nil {
+			return moerr.NewInternalError(ctx, "bad request")
+		}
+		called = true
+		require.True(t, req.MigrateConnToRequest.CloseTargetOnReplayFailure)
+		require.Empty(t, req.MigrateConnToRequest.SetVarStmts)
+		require.Equal(t, proof, req.MigrateConnToRequest.PrepareStmts[0].DirectTableSelect)
+		resp.MigrateConnToResponse = &pb.MigrateConnToResponse{Success: true}
+		return nil
+	}
+	runTestWithQueryServiceHandler(t, cn, handler, func(cc *clientConn, _ string) {
+		local, remote := net.Pipe()
+		defer remote.Close()
+		sc := &recordingMigrationServerConn{mockServerConn: newMockServerConn(local)}
+		defer sc.Close()
+		cc.migration.setVarStmts = []string{"set @must_not_replay = 1"}
+		info := &pb.MigrateConnFromResponse{LastInsertIDExported: true,
+			UserDefinedVarsExported: true, SystemVariablesExported: true,
+			PrepareStmts: []*pb.PrepareStmt{{Name: "p", SQL: "select id from db.t",
+				RequiredProtocolVersion: defines.MORPCVersion126, DirectTableSelect: proof}}}
+		require.NoError(t, cc.migrateConnTo(sc, info))
+		require.True(t, called)
+		require.Equal(t, []string{"/* cloud_nonuser */ set transferred=1;"}, sc.statements)
+		target := runtime.ServiceRuntime(cn.ServiceID)
+		old, _ := target.GetGlobalVariables(runtime.MOProtocolVersion)
+		defer target.SetGlobalVariables(runtime.MOProtocolVersion, old)
+		target.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion125)
+		called, sc.statements = false, nil
+		require.Error(t, cc.migrateConnTo(sc, info))
+		require.False(t, called)
+		require.Empty(t, sc.statements, "old target sees no marker/raw replay/RPC")
+	})
+}
+
 func TestQueryServiceMigrateToRejectsNonZeroFoundRowsForPreV29Target(t *testing.T) {
 	cn := metadata.CNService{ServiceID: "s1", SQLAddress: "pipe"}
 	runTestWithQueryService(t, cn, func(cc *clientConn, _ string) {

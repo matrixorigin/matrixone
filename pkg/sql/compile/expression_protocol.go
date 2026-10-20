@@ -52,8 +52,8 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	}
 	if features.CRC32JSONTextBytes {
 		version, known := remoteMORPCProtocolVersion(c.proc.GetService())
-		if !known || version < defines.MORPCVersion123 {
-			return moerr.NewNotSupportedNoCtx("CRC32 JSON text-byte semantics require MORPC protocol version 123")
+		if !known || version < defines.MORPCVersion125 {
+			return moerr.NewNotSupportedNoCtx("CRC32 JSON text-byte semantics require MORPC protocol version 125")
 		}
 	}
 	if c.execType != plan2.ExecTypeAP_MULTICN {
@@ -139,7 +139,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion115)
 	}
 	if features.CRC32JSONTextBytes {
-		required = max(required, defines.MORPCVersion123)
+		required = max(required, defines.MORPCVersion125)
 	}
 	return required
 }
@@ -161,6 +161,9 @@ func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFea
 }
 
 func temporalExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.TimestampAddSecondIntervals {
+		return defines.MORPCVersion124
+	}
 	if features.TemporalResultContracts || features.NormalizedIntervalUnits || features.WeekSessionDefault {
 		return defines.MORPCVersion98
 	}
