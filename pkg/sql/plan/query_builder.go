@@ -1875,6 +1875,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		for _, expr := range node.OnList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
+		for _, expr := range node.DedupKeyExprs {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
 
 		if node.DedupJoinCtx != nil {
 			for _, col := range node.DedupJoinCtx.OldColList {
@@ -1953,6 +1956,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			!markJoinSupportsShuffle(node, builder, nil, nil, true) {
 			node.Stats.HashmapStats.Shuffle = false
 			node.Stats.HashmapStats.ShuffleColIdx = -1
+		}
+
+		remapInfo.tip = "DedupKeyExprs"
+		for _, expr := range node.DedupKeyExprs {
+			increaseRefCnt(expr, -1, colRefCnt)
+			if err := builder.remapColRefForExpr(expr, internalMap, &remapInfo); err != nil {
+				return nil, err
+			}
 		}
 
 		remapInfo.tip = "DedupJoinCtx"
@@ -3277,6 +3288,31 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 
 		node.ProjectList = newProjList
+		if _, sharedCTE := builder.cteSinkNodes[nodeID]; sharedCTE && len(newProjList) > 0 {
+			identity := len(newProjList) == len(childNode.ProjectList)
+			for i, expr := range newProjList {
+				identity = identity && expr.GetCol().ColPos == int32(i)
+			}
+			if !identity {
+				// The child can retain evaluation-only columns, such as a
+				// fallible SUM. Project its evaluated output at the remap owner,
+				// where these references are known to use child-local positions.
+				// Only actual shared CTE readers register for the matching
+				// positional remap. Other CTESinkOption sources, such as DML
+				// row images, retain their existing publication layout.
+				projectID := int32(len(builder.qry.Nodes))
+				builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+					NodeId: projectID, NodeType: plan.Node_PROJECT, Children: []int32{node.Children[0]},
+					ProjectList: newProjList, Stats: childNode.Stats,
+				})
+				builder.ctxByNode = append(builder.ctxByNode, nil)
+				node.Children[0] = projectID
+				node.ProjectList = make([]*plan.Expr, len(newProjList))
+				for i, expr := range newProjList {
+					node.ProjectList[i] = GetColExpr(expr.Typ, 0, int32(i))
+				}
+			}
+		}
 
 	case plan.Node_PRE_INSERT_SK:
 		return builder.remapRegularIndexPreInsert(
@@ -3974,6 +4010,11 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			auxRefs[i] = [2]int32{childTag, pos}
 			colRefCnt[auxRefs[i]]++
 		}
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			for _, expr := range exprs.GetList() {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+		}
 		var autoIncrementRef, autoIncrementGeneratedRef [2]int32
 		if node.PreInsertUkCtx.AutoIncrementReorder {
 			autoIncrementRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementColumn}
@@ -4005,6 +4046,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			return nil, err
 		}
 
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			for _, expr := range exprs.GetList() {
+				increaseRefCnt(expr, -1, colRefCnt)
+				if err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo); err != nil {
+					return nil, err
+				}
+			}
+		}
 		for i, ref := range keyRefs {
 			colRefCnt[ref]--
 			pos, ok := childRemapping.globalToLocal[ref]

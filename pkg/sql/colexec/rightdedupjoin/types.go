@@ -97,6 +97,7 @@ type RightDedupJoin struct {
 	DedupColName      string
 	SpillThreshold    int64
 	DedupColTypes     []plan.Type
+	DedupKeyExprs     []*plan.Expr
 	DelColIdx         int32
 	UpdateColIdxList  []int32
 	UpdateColExprList []*plan.Expr
