@@ -13,6 +13,8 @@ public final class AtomicSinkConnector extends SinkConnector {
     static final String JDBC_URL = "mo.jdbc.url";
     static final String JDBC_USER = "mo.jdbc.user";
     static final String JDBC_PASSWORD = "mo.jdbc.password";
+    static final String JDBC_CONNECT_TIMEOUT = "mo.jdbc.connect.timeout.ms";
+    static final String JDBC_SOCKET_TIMEOUT = "mo.jdbc.socket.timeout.ms";
     static final String SCOPE = "mo.scope";
     static final String BATCH_SIZE = "mo.batch.size";
     static final String BOOTSTRAP = "mo.kafka.bootstrap.servers";
@@ -53,6 +55,10 @@ public final class AtomicSinkConnector extends SinkConnector {
                 ConfigDef.Importance.HIGH, "MatrixOne user")
             .define(JDBC_PASSWORD, ConfigDef.Type.PASSWORD, ConfigDef.NO_DEFAULT_VALUE,
                 ConfigDef.Importance.HIGH, "MatrixOne password")
+            .define(JDBC_CONNECT_TIMEOUT, ConfigDef.Type.INT, 5000, ConfigDef.Range.between(1, 60000),
+                ConfigDef.Importance.MEDIUM, "JDBC connection timeout in milliseconds")
+            .define(JDBC_SOCKET_TIMEOUT, ConfigDef.Type.INT, 30000, ConfigDef.Range.between(1, 60000),
+                ConfigDef.Importance.MEDIUM, "JDBC socket read timeout in milliseconds")
             .define(SCOPE, ConfigDef.Type.STRING, ConfigDef.NO_DEFAULT_VALUE,
                 ConfigDef.Importance.HIGH, "Exact-byte business isolation scope")
             .define(BATCH_SIZE, ConfigDef.Type.INT, 64, ConfigDef.Range.between(1, 1000),

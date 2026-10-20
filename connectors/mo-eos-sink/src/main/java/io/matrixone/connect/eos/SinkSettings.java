@@ -7,16 +7,21 @@ final class SinkSettings {
     final String jdbcUrl;
     final String jdbcUser;
     final String jdbcPassword;
+    final int connectTimeoutMs;
+    final int socketTimeoutMs;
     final String scope;
     final byte[] scopeBytes;
     final int batchSize;
     final String bootstrap;
 
     private SinkSettings(String jdbcUrl, String jdbcUser, String jdbcPassword,
+                         int connectTimeoutMs, int socketTimeoutMs,
                          String scope, int batchSize, String bootstrap) {
         this.jdbcUrl = jdbcUrl;
         this.jdbcUser = jdbcUser;
         this.jdbcPassword = jdbcPassword;
+        this.connectTimeoutMs = connectTimeoutMs;
+        this.socketTimeoutMs = socketTimeoutMs;
         this.scope = scope;
         this.scopeBytes = scope.getBytes(StandardCharsets.UTF_8);
         this.batchSize = batchSize;
@@ -34,6 +39,13 @@ final class SinkSettings {
             throw new IllegalArgumentException("mo.kafka.client.bootstrap.servers must not override the preflight broker");
         }
         String url = required(props, AtomicSinkConnector.JDBC_URL);
+        // Connector/J URL parameters override connection Properties. Keep the
+        // deadlines owned by this profile so URL parameters cannot disable them.
+        if (url.matches("(?i).*[?&](connectTimeout|socketTimeout)=.*")) {
+            throw new IllegalArgumentException("configure JDBC deadlines with mo.jdbc.*.timeout.ms, not URL parameters");
+        }
+        int connectTimeout = timeout(props, AtomicSinkConnector.JDBC_CONNECT_TIMEOUT, 5000);
+        int socketTimeout = timeout(props, AtomicSinkConnector.JDBC_SOCKET_TIMEOUT, 30000);
         String user = required(props, AtomicSinkConnector.JDBC_USER);
         String password = props.get(AtomicSinkConnector.JDBC_PASSWORD);
         if (password == null) {
@@ -48,8 +60,16 @@ final class SinkSettings {
         if (batch < 1 || batch > 1000) {
             throw new IllegalArgumentException("mo.batch.size must be 1..1000");
         }
-        return new SinkSettings(url, user, password, scope, batch,
+        return new SinkSettings(url, user, password, connectTimeout, socketTimeout, scope, batch,
             required(props, AtomicSinkConnector.BOOTSTRAP));
+    }
+
+    private static int timeout(Map<String, String> props, String key, int defaultValue) {
+        int value = Integer.parseInt(props.getOrDefault(key, Integer.toString(defaultValue)));
+        if (value < 1 || value > 60000) {
+            throw new IllegalArgumentException(key + " must be 1..60000");
+        }
+        return value;
     }
 
     private static String required(Map<String, String> props, String name) {

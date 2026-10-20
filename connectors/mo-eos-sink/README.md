@@ -17,6 +17,10 @@ Install `target/mo-eos-sink-0.1.0.jar` in its own Connect `plugin.path`
 directory. Initialize the target database with [`sql/schema.sql`](sql/schema.sql)
 and adjust the example scope/topic/partition rows before starting the connector.
 The configuration and NiFi ingress route are documented in the linked guide.
+Database connection and socket read deadlines default to 5 and 30 seconds.
+Use `mo.jdbc.connect.timeout.ms` and `mo.jdbc.socket.timeout.ms` to set finite
+values from 1 to 60000; URL timeout parameters are rejected so they cannot
+disable the task's deadlines.
 
 The opt-in `IntegrationProbe` in `src/test/java` runs against a real Kafka
 broker and MatrixOne instance. It requires an empty profile database already

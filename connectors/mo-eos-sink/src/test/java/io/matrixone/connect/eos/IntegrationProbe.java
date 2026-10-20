@@ -112,8 +112,40 @@ public final class IntegrationProbe {
         check(total() == 10 && count("mo_sink_ledger") == 2 && checkpoint(BATCH_TOPIC) == -1,
             "failed microbatch partially committed");
 
-        SinkStore store = new SinkStore(SinkSettings.from(settings()));
-        store.claim(tp, store.read(tp).topicId()); // A later owner fences the old task's epoch.
+        // Keep a real pending broker delivery on the former task while a new
+        // task claims the same partition through its normal open callback.
+        produce(TOPIC, event("stale-owner", 11, "must not apply"));
+        List<SinkRecord> pending = consume(TOPIC, 4, 1);
+        check(pending.get(0).originalKafkaOffset() == 4, "unexpected broker offset before takeover");
+        long rowsBeforeTakeover = count("mo_sink_ledger");
+        long totalBeforeTakeover = total();
+        long budgetRowsBeforeTakeover = scalar("SELECT used_rows FROM mo_sink_budget");
+        long budgetBytesBeforeTakeover = scalar("SELECT used_bytes FROM mo_sink_budget");
+        long checkpointBeforeTakeover = checkpoint(TOPIC);
+        AtomicSinkTask successor = task(new FakeContext(Set.of(tp)));
+        successor.open(List.of(tp));
+        try {
+            try {
+                task.put(pending);
+                throw new AssertionError("stale owner applied pending delivery after takeover");
+            } catch (ConnectException expected) {
+                check(expected.getMessage().contains("stale owner or checkpoint"),
+                    "wrong stale-write failure: " + expected);
+            }
+            check(!ledgerHas("stale-owner") && count("mo_sink_ledger") == rowsBeforeTakeover
+                && total() == totalBeforeTakeover && checkpoint(TOPIC) == checkpointBeforeTakeover
+                && scalar("SELECT used_rows FROM mo_sink_budget") == budgetRowsBeforeTakeover
+                && scalar("SELECT used_bytes FROM mo_sink_budget") == budgetBytesBeforeTakeover,
+                "stale write changed durable ledger, effect, budget, or checkpoint");
+            successor.put(pending);
+            check(ledgerHas("stale-owner") && count("mo_sink_ledger") == rowsBeforeTakeover + 1
+                && total() == totalBeforeTakeover + 11 && checkpoint(TOPIC) == 4,
+                "new owner failed to apply the pending broker event exactly once");
+            check(successor.preCommit(Map.of(tp, new OffsetAndMetadata(5))).get(tp).offset() == 5,
+                "new owner offered an incorrect broker offset");
+        } finally {
+            successor.stop();
+        }
         try {
             task.preCommit(Map.of(tp, new OffsetAndMetadata(4)));
             throw new AssertionError("old owner committed after epoch changed");
