@@ -3296,6 +3296,31 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		}
 
 		node.ProjectList = newProjList
+		if _, sharedCTE := builder.cteSinkNodes[nodeID]; sharedCTE && len(newProjList) > 0 {
+			identity := len(newProjList) == len(childNode.ProjectList)
+			for i, expr := range newProjList {
+				identity = identity && expr.GetCol().ColPos == int32(i)
+			}
+			if !identity {
+				// The child can retain evaluation-only columns, such as a
+				// fallible SUM. Project its evaluated output at the remap owner,
+				// where these references are known to use child-local positions.
+				// Only actual shared CTE readers register for the matching
+				// positional remap. Other CTESinkOption sources, such as DML
+				// row images, retain their existing publication layout.
+				projectID := int32(len(builder.qry.Nodes))
+				builder.qry.Nodes = append(builder.qry.Nodes, &plan.Node{
+					NodeId: projectID, NodeType: plan.Node_PROJECT, Children: []int32{node.Children[0]},
+					ProjectList: newProjList, Stats: childNode.Stats,
+				})
+				builder.ctxByNode = append(builder.ctxByNode, nil)
+				node.Children[0] = projectID
+				node.ProjectList = make([]*plan.Expr, len(newProjList))
+				for i, expr := range newProjList {
+					node.ProjectList[i] = GetColExpr(expr.Typ, 0, int32(i))
+				}
+			}
+		}
 
 	case plan.Node_PRE_INSERT_SK:
 		return builder.remapRegularIndexPreInsert(

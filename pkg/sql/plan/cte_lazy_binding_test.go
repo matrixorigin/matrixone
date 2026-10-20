@@ -2334,6 +2334,8 @@ func TestCTEMultiReferenceCompactsReaderInputOrdinals(t *testing.T) {
 			`select a.g,a.mx,a.total,b.g,b.mx,b.total from r a join r b on a.g<=>b.g and a.mx=b.mx`, 3, [][]int32{{0, 1, 2}, {0, 1, 2}}},
 		{"aggregate-first", aggregate,
 			`select total,mx from r union all select total,mx from r`, 2, [][]int32{{0, 1}, {0, 1}}},
+		{"discarded-sum", aggregate,
+			`select a.g,a.mx,b.mx from r a join r b on a.g=b.g`, 2, [][]int32{{0, 1}, {0, 1}}},
 		{"asymmetric", `select n_regionkey g,min(n_nationkey) total,count(*) n,max(n_nationkey) mx from nation group by n_regionkey`,
 			`select a.g,a.total,b.g,b.mx from r a join r b on a.g=b.g`, 3, [][]int32{{0, 1}, {0, 2}}},
 		{"single-late-output", `select n_regionkey g,min(n_nationkey) total,count(*) n,max(n_nationkey) mx from nation group by n_regionkey`,
@@ -2367,6 +2369,20 @@ func TestCTEMultiReferenceCompactsReaderInputOrdinals(t *testing.T) {
 				require.Equal(t, planpb.Node_SINK, sink.NodeType)
 				require.Equal(t, materialized.CTESinkOption, sink.ExtraOptions)
 				require.Len(t, sink.ProjectList, tc.producerWidth)
+				child := query.Nodes[sink.Children[0]]
+				require.Len(t, child.ProjectList, tc.producerWidth,
+					"the published batch must implement the compacted SINK schema")
+				for pos, expr := range sink.ProjectList {
+					require.Zero(t, expr.GetCol().RelPos)
+					require.Equal(t, int32(pos), expr.GetCol().ColPos)
+					require.Equal(t, expr.Typ, child.ProjectList[pos].Typ)
+				}
+				if tc.name == "discarded-sum" {
+					require.Equal(t, planpb.Node_PROJECT, child.NodeType)
+					producer := query.Nodes[child.Children[0]]
+					require.Greater(t, len(producer.ProjectList), tc.producerWidth,
+						"the discarded SUM must still be evaluated by the wider producer")
+				}
 				var positions []int32
 				for _, expr := range node.ProjectList {
 					col := expr.GetCol()
