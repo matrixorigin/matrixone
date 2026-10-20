@@ -1474,6 +1474,34 @@ func TestDeduceNotNullableKeepsNullSynthesizingFunctionsNullable(t *testing.T) {
 			require.False(t, DeduceNotNullable(EncodeOverloadID(tt.fid, 0), args))
 		})
 	}
+	for _, source := range []types.T{types.T_char, types.T_varchar, types.T_text, types.T_binary, types.T_varbinary, types.T_blob} {
+		t.Run("datetime cast/"+source.String(), func(t *testing.T) {
+			args := []*plan.Expr{
+				{Typ: plan.Type{Id: int32(source), NotNullable: true}},
+				{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}},
+			}
+			for _, overload := range []int32{0, 1} {
+				require.False(t, DeduceNotNullable(EncodeOverloadID(CAST, overload), args))
+			}
+			for _, overload := range []int32{2, 3} {
+				require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, overload), args))
+			}
+		})
+	}
+	for _, overload := range []int32{3, 4} {
+		require.False(t, DeduceNotNullable(EncodeOverloadID(DATE, overload), []*plan.Expr{notNull}))
+	}
+	// Typed and numeric conversion guarantees are unchanged.
+	for _, source := range []types.T{types.T_datetime, types.T_date, types.T_int64} {
+		args := []*plan.Expr{
+			{Typ: plan.Type{Id: int32(source), NotNullable: true}},
+			{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}},
+		}
+		for _, overload := range []int32{0, 1} {
+			require.True(t, DeduceNotNullable(EncodeOverloadID(CAST, overload), args))
+		}
+	}
+	require.True(t, DeduceNotNullable(EncodeOverloadID(DATE, 1), []*plan.Expr{notNull}))
 }
 
 func TestTypedDateConversionNullability(t *testing.T) {

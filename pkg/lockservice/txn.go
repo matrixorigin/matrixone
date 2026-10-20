@@ -815,7 +815,7 @@ func (txn *activeTxn) coarsenLockRequest(
 	opts pb.LockOptions,
 	maxLockRowCount int,
 ) ([][]byte, pb.LockOptions, bool) {
-	if opts.KeepRows || len(rows) == 0 ||
+	if opts.NoWait || opts.KeepRows || len(rows) == 0 ||
 		maxLockRowCount <= 0 ||
 		opts.Mode != pb.LockMode_Exclusive ||
 		opts.Sharding != pb.Sharding_None {
