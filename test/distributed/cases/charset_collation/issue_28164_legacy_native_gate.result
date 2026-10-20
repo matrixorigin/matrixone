@@ -1,34 +1,169 @@
 DROP DATABASE IF EXISTS issue_28164_collation_gate;
 CREATE DATABASE issue_28164_collation_gate;
 USE issue_28164_collation_gate;
-CREATE TABLE legacy (id INT PRIMARY KEY, name VARCHAR(20) COLLATE utf8mb4_general_ci, token VARCHAR(20) COLLATE utf8mb4_bin) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
-INSERT INTO legacy VALUES (1, 'Alpha', 'Alpha'), (2, 'alpha', 'alpha');
+CREATE TABLE legacy (
+id INT PRIMARY KEY,
+name VARCHAR(20) COLLATE utf8mb4_0900_ai_ci,
+token VARCHAR(20) COLLATE utf32_bin,
+KEY legacy_name (name)
+) COLLATE utf8mb4_0900_ai_ci;
+INSERT INTO legacy VALUES
+(1, 'abc', 'abc'), (2, 'ABC', 'ABC'),
+(3, 'café', 'café'), (4, 'cafe', 'cafe'),
+(5, 'a', 'a'), (6, 'a ', 'a ');
 SELECT * FROM legacy LIMIT 0;
-id	name	token
-SELECT id FROM legacy WHERE name COLLATE utf8mb4_general_ci = 'alpha' ORDER BY id;
-id
-2
-SELECT 1 COLLATE utf8mb4_general_ci AS legacy_numeric;
-legacy_numeric
+➤ id[4,32,0]  ¦  name[12,20,0]  ¦  token[12,20,0]
+SELECT COUNT(*), COUNT(DISTINCT name), COUNT(DISTINCT token) FROM legacy;
+➤ COUNT(*)[-5,64,0]  ¦  COUNT(distinct name)[-5,64,0]  ¦  COUNT(distinct token)[-5,64,0]  𝄀
+6  ¦  6  ¦  6
+SELECT id FROM legacy WHERE name = 'abc' ORDER BY id;
+➤ id[4,32,0]  𝄀
 1
-SELECT NULL COLLATE utf8mb4_general_ci AS legacy_null;
+SELECT id FROM legacy WHERE name COLLATE utf8mb4_general_ci = 'abc' ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT id FROM legacy WHERE name COLLATE utf8mb4_general_ci IN ('cafe', 'a') ORDER BY id;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4  𝄀
+5  𝄀
+6
+SELECT 1 COLLATE utf8mb4_general_ci AS public_numeric;
+➤ public_numeric[12,65535,0]  𝄀
+1
+SELECT NULL COLLATE utf8mb4_general_ci AS public_null;
 COLLATION 'utf8mb4_general_ci' is not valid for CHARACTER SET 'binary'
+CREATE TABLE native_values (
+id INT PRIMARY KEY,
+ci VARCHAR(20) COLLATE utf8mb4_general_ci,
+bin VARCHAR(20) COLLATE utf8mb4_bin
+);
+INSERT INTO native_values SELECT id, name, token FROM legacy;
+SELECT COUNT(*), COUNT(DISTINCT ci), COUNT(DISTINCT bin), COUNT(DISTINCT HEX(ci)) FROM native_values;
+➤ COUNT(*)[-5,64,0]  ¦  COUNT(distinct ci)[-5,64,0]  ¦  COUNT(distinct bin)[-5,64,0]  ¦  COUNT(distinct HEX(ci))[-5,64,0]  𝄀
+6  ¦  3  ¦  5  ¦  6
+SELECT MIN(id) AS first_id, COUNT(*) AS group_size FROM native_values GROUP BY ci ORDER BY first_id;
+➤ first_id[4,32,0]  ¦  group_size[-5,64,0]  𝄀
+1  ¦  2  𝄀
+3  ¦  2  𝄀
+5  ¦  2
+SELECT id, DENSE_RANK() OVER (ORDER BY ci) AS ci_rank,
+COUNT(*) OVER (PARTITION BY bin) AS bin_peers FROM native_values ORDER BY id;
+➤ id[4,32,0]  ¦  ci_rank[-5,64,0]  ¦  bin_peers[-5,64,0]  𝄀
+1  ¦  2  ¦  1  𝄀
+2  ¦  2  ¦  1  𝄀
+3  ¦  3  ¦  1  𝄀
+4  ¦  3  ¦  1  𝄀
+5  ¦  1  ¦  2  𝄀
+6  ¦  1  ¦  2
+SELECT COUNT(*) AS ci_join_count FROM native_values l JOIN native_values r ON l.ci = r.ci;
+➤ ci_join_count[-5,64,0]  𝄀
+12
+SELECT COUNT(*) AS bin_join_count FROM native_values l JOIN native_values r ON l.bin = r.bin;
+➤ bin_join_count[-5,64,0]  𝄀
+8
+SELECT id, HEX(ci), HEX(bin) FROM native_values ORDER BY id;
+➤ id[4,32,0]  ¦  HEX(ci)[12,160,0]  ¦  HEX(bin)[12,160,0]  𝄀
+1  ¦  616263  ¦  616263  𝄀
+2  ¦  414243  ¦  414243  𝄀
+3  ¦  636166C3A9  ¦  636166C3A9  𝄀
+4  ¦  63616665  ¦  63616665  𝄀
+5  ¦  61  ¦  61  𝄀
+6  ¦  6120  ¦  6120
+CREATE TABLE typed_copy LIKE native_values;
+INSERT INTO typed_copy SELECT * FROM native_values;
+SELECT COUNT(*), COUNT(DISTINCT ci), COUNT(DISTINCT bin) FROM typed_copy;
+➤ COUNT(*)[-5,64,0]  ¦  COUNT(distinct ci)[-5,64,0]  ¦  COUNT(distinct bin)[-5,64,0]  𝄀
+6  ¦  3  ¦  5
+CREATE TABLE expression_copy AS SELECT ci FROM native_values;
+SELECT COUNT(*), COUNT(DISTINCT ci) FROM expression_copy;
+➤ COUNT(*)[-5,64,0]  ¦  COUNT(distinct ci)[-5,64,0]  𝄀
+6  ¦  3
+SHOW CREATE TABLE native_values;
+not supported: versioned collations and key formats are disabled until SQL, storage and upgrade gates pass
+CREATE VIEW folded_native_expression AS SELECT 'A' COLLATE utf8mb4_general_ci = 'a' AS same_value;
+SELECT same_value FROM folded_native_expression;
+➤ same_value[-6,8,0]  𝄀
+1
+SELECT CAST(JSON_UNQUOTE(JSON_EXTRACT(viewdef, '$.collation_binding_revision')) AS UNSIGNED) AS binding_revision,
+CAST(JSON_UNQUOTE(JSON_EXTRACT(viewdef, '$.required_protocol_version')) AS SIGNED) AS required_protocol
+FROM mo_catalog.mo_tables WHERE reldatabase = DATABASE() AND relname = 'folded_native_expression';
+➤ binding_revision[-5,64,0]  ¦  required_protocol[-5,64,0]  𝄀
+1  ¦  125
+PREPARE native_filter FROM 'SELECT id FROM legacy WHERE name COLLATE utf8mb4_general_ci = ? ORDER BY id';
+SET @native_needle = 'ABC';
+EXECUTE native_filter USING @native_needle;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SET @native_needle = 'cafe ';
+EXECUTE native_filter USING @native_needle;
+➤ id[4,32,0]  𝄀
+3  𝄀
+4
+SET @native_needle = NULL;
+EXECUTE native_filter USING @native_needle;
+➤ id[4,32,0]
+SET @native_needle = 'a';
+EXECUTE native_filter USING @native_needle;
+➤ id[4,32,0]  𝄀
+5  𝄀
+6
+DEALLOCATE PREPARE native_filter;
+SET @native_needle = NULL;
+CREATE INDEX rejected_native_key ON native_values (ci);
+not supported: native PAD collation index on column ci is disabled
+SELECT COUNT(*) AS rejected_index_count FROM information_schema.statistics
+WHERE table_schema = DATABASE() AND table_name = 'native_values' AND index_name = 'rejected_native_key';
+➤ rejected_index_count[-5,64,0]  𝄀
+0
+CREATE TABLE rejected_computation (v INT DEFAULT (LENGTH('a' COLLATE utf8mb4_general_ci)));
+not supported: native PAD collation persistence is disabled
+SELECT COUNT(*) AS rejected_table_count FROM information_schema.tables
+WHERE table_schema = DATABASE() AND table_name = 'rejected_computation';
+➤ rejected_table_count[-5,64,0]  𝄀
+0
+ALTER TABLE native_values MODIFY ci VARCHAR(20) COLLATE utf8mb4_bin;
+not supported: online native PAD collation conversion is disabled; use explicit copy/reload
+SELECT COUNT(*), COUNT(DISTINCT ci), COUNT(DISTINCT bin) FROM native_values;
+➤ COUNT(*)[-5,64,0]  ¦  COUNT(distinct ci)[-5,64,0]  ¦  COUNT(distinct bin)[-5,64,0]  𝄀
+6  ¦  3  ¦  5
+SELECT id, HEX(ci), HEX(bin) FROM native_values ORDER BY id;
+➤ id[4,32,0]  ¦  HEX(ci)[12,160,0]  ¦  HEX(bin)[12,160,0]  𝄀
+1  ¦  616263  ¦  616263  𝄀
+2  ¦  414243  ¦  414243  𝄀
+3  ¦  636166C3A9  ¦  636166C3A9  𝄀
+4  ¦  63616665  ¦  63616665  𝄀
+5  ¦  61  ¦  61  𝄀
+6  ¦  6120  ¦  6120
 CREATE TABLE native_column (name VARCHAR(20) COLLATE utf8mb4_0900_bin);
 invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
 CREATE TABLE native_default (id INT) COLLATE utf8mb4_0900_bin;
 invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
 CREATE TABLE folded_legacy_expression (v INT DEFAULT (LENGTH('a' COLLATE utf8mb4_0900_ai_ci)));
+INSERT INTO folded_legacy_expression VALUES (DEFAULT);
+SELECT v FROM folded_legacy_expression;
+➤ v[4,32,0]  𝄀
+1
 ALTER TABLE legacy DEFAULT COLLATE utf8mb4_0900_bin;
 invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
 ALTER TABLE legacy CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_bin;
 invalid input: unsupported collation 'utf8mb4_0900_bin'; replace it with 'utf8mb4_bin' when restoring legacy MatrixOne DDL
 SELECT COLUMN_NAME, COLLATION_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=DATABASE() AND TABLE_NAME='legacy' ORDER BY ORDINAL_POSITION;
-COLUMN_NAME	COLLATION_NAME
-id	null
-name	utf8mb4_general_ci
-token	utf8mb4_bin
+➤ COLUMN_NAME[12,256,0]  ¦  COLLATION_NAME[12,18,0]  𝄀
+id  ¦  null  𝄀
+name  ¦  utf8mb4_general_ci  𝄀
+token  ¦  utf8mb4_bin
+SELECT COUNT(*), COUNT(DISTINCT name), COUNT(DISTINCT token) FROM legacy;
+➤ COUNT(*)[-5,64,0]  ¦  COUNT(distinct name)[-5,64,0]  ¦  COUNT(distinct token)[-5,64,0]  𝄀
+6  ¦  6  ¦  6
 SHOW TABLES;
-Tables_in_issue_28164_collation_gate
-folded_legacy_expression
-legacy
+➤ Tables_in_issue_28164_collation_gate[12,5000,0]  𝄀
+expression_copy  𝄀
+folded_legacy_expression  𝄀
+folded_native_expression  𝄀
+legacy  𝄀
+native_values  𝄀
+typed_copy
 DROP DATABASE issue_28164_collation_gate;

@@ -58,10 +58,10 @@ ci VARCHAR(1) CHARACTER SET utf32 COLLATE utf32_general_ci,
 bin VARCHAR(1) CHARACTER SET utf32 COLLATE utf32_bin
 ) DEFAULT CHARSET=utf32;
 SHOW CREATE TABLE t_utf32_alias;
-➤ Table[12,13,0]  ¦  Create Table[12,116,0]  𝄀
+➤ Table[12,13,0]  ¦  Create Table[12,114,0]  𝄀
 t_utf32_alias  ¦  CREATE TABLE `t_utf32_alias` (
   `ci` varchar(1) DEFAULT NULL,
-  `bin` varchar(1) COLLATE utf8mb4_bin DEFAULT NULL
+  `bin` varchar(1) COLLATE utf32_bin DEFAULT NULL
 )
 INSERT INTO t_utf32_alias VALUES ('😀', '😀');
 SELECT HEX(ci), HEX(bin) FROM t_utf32_alias;
@@ -155,13 +155,7 @@ name VARCHAR(100),
 name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_general_ci
 ) CHARACTER SET utf8;
 SHOW CREATE TABLE t_utf8;
-➤ Table[12,6,0]  ¦  Create Table[12,141,0]  𝄀
-t_utf8  ¦  CREATE TABLE `t_utf8` (
-  `id` int NOT NULL,
-  `name` varchar(100) DEFAULT NULL,
-  `name_mb3` varchar(1) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-)
+not supported: versioned collations and key formats are disabled until SQL, storage and upgrade gates pass
 INSERT INTO t_utf8 VALUES (1, '😀', '😀');
 SELECT HEX(name), HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
 ➤ HEX(name)[12,800,0]  ¦  HEX(name_mb3)[12,8,0]  ¦  LENGTH(name_mb3)[-5,64,0]  ¦  CHAR_LENGTH(name_mb3)[-5,64,0]  𝄀
@@ -171,6 +165,7 @@ HEX('😀' COLLATE utf8_bin), HEX(name_mb3 COLLATE utf8mb3_bin) FROM t_utf8;
 ➤ HEX((😀) collate utf8_general_ci)[12,8,0]  ¦  HEX((name) collate utf8mb3_general_ci)[12,800,0]  ¦  HEX((😀) collate utf8_bin)[12,8,0]  ¦  HEX((name_mb3) collate utf8mb3_bin)[12,8,0]  𝄀
 F09F9880  ¦  F09F9880  ¦  F09F9880  ¦  F09F9880
 ALTER TABLE t_utf8 MODIFY name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
+not supported: online native PAD collation conversion is disabled; use explicit copy/reload
 SELECT HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
 ➤ HEX(name_mb3)[12,8,0]  ¦  LENGTH(name_mb3)[-5,64,0]  ¦  CHAR_LENGTH(name_mb3)[-5,64,0]  𝄀
 F09F9880  ¦  4  ¦  1
@@ -179,32 +174,32 @@ WHERE table_schema = 'charset_test' AND table_name = 't_utf8' AND column_name <>
 ORDER BY ordinal_position;
 ➤ column_name[12,256,0]  ¦  character_set_name[12,7,0]  ¦  collation_name[12,18,0]  𝄀
 name  ¦  utf8mb4  ¦  utf8mb4_general_ci  𝄀
-name_mb3  ¦  utf8mb4  ¦  utf8mb4_bin
+name_mb3  ¦  utf8mb4  ¦  utf8mb4_general_ci
 SELECT HEX(CONVERT('😀' USING utf8)), HEX(CONVERT('😀' USING utf8mb3));
 ➤ HEX(CONVERT(😀 using utf8))[12,8,0]  ¦  HEX(CONVERT(😀 using utf8mb3))[12,8,0]  𝄀
 F09F9880  ¦  F09F9880
+ALTER TABLE t_utf8 ADD legacy_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb4_0900_ai_ci;
+UPDATE t_utf8 SET legacy_mb3 = name_mb3;
+ALTER TABLE t_utf8 MODIFY legacy_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf32_bin;
+SELECT HEX(legacy_mb3), LENGTH(legacy_mb3), CHAR_LENGTH(legacy_mb3) FROM t_utf8;
+➤ HEX(legacy_mb3)[12,8,0]  ¦  LENGTH(legacy_mb3)[-5,64,0]  ¦  CHAR_LENGTH(legacy_mb3)[-5,64,0]  𝄀
+F09F9880  ¦  4  ¦  1
+SELECT collation_name FROM information_schema.columns
+WHERE table_schema = 'charset_test' AND table_name = 't_utf8' AND column_name = 'legacy_mb3';
+➤ collation_name[12,18,0]  𝄀
+utf8mb4_bin
 CREATE TABLE t_utf8mb4_bin (
 id INT PRIMARY KEY,
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
 SHOW CREATE TABLE t_utf8mb4_bin;
-➤ Table[12,13,0]  ¦  Create Table[12,150,0]  𝄀
-t_utf8mb4_bin  ¦  CREATE TABLE `t_utf8mb4_bin` (
-  `id` int NOT NULL,
-  `name` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) COLLATE=utf8mb4_bin
+not supported: versioned collations and key formats are disabled until SQL, storage and upgrade gates pass
 CREATE TABLE t_utf8mb4_general_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 SHOW CREATE TABLE t_utf8mb4_general_ci;
-➤ Table[12,20,0]  ¦  Create Table[12,117,0]  𝄀
-t_utf8mb4_general_ci  ¦  CREATE TABLE `t_utf8mb4_general_ci` (
-  `id` int NOT NULL,
-  `name` varchar(100) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-)
+not supported: versioned collations and key formats are disabled until SQL, storage and upgrade gates pass
 CREATE TABLE t_utf8mb4_unicode_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -260,16 +255,7 @@ name_utf8mb4_bin VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
 name_utf8mb4_general VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci
 );
 SHOW CREATE TABLE t_column_charset;
-➤ Table[12,16,0]  ¦  Create Table[12,326,0]  𝄀
-t_column_charset  ¦  CREATE TABLE `t_column_charset` (
-  `id` int NOT NULL,
-  `name_default` varchar(100) DEFAULT NULL,
-  `name_utf8` varchar(100) DEFAULT NULL,
-  `name_utf8mb4` varchar(100) DEFAULT NULL,
-  `name_utf8mb4_bin` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,
-  `name_utf8mb4_general` varchar(100) DEFAULT NULL,
-  PRIMARY KEY (`id`)
-)
+not supported: versioned collations and key formats are disabled until SQL, storage and upgrade gates pass
 DESC t_column_charset;
 ➤ Field[1,0,0]  ¦  Type[1,0,0]  ¦  Null[1,0,0]  ¦  Key[1,0,0]  ¦  Default[1,0,0]  ¦  Extra[1,0,0]  ¦  Comment[1,0,0]  𝄀
 id  ¦  int  ¦  NO  ¦  PRI  ¦  null  ¦    ¦    𝄀
@@ -277,7 +263,7 @@ name_default  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name_utf8  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name_utf8mb4  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
 name_utf8mb4_bin  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦    𝄀
-name_utf8mb4_general  ¦  varchar(100)  ¦  YES  ¦    ¦  null
+name_utf8mb4_general  ¦  varchar(100)  ¦  YES  ¦    ¦  null  ¦    ¦  
 CREATE TABLE t_insert_test (
 id INT PRIMARY KEY,
 data VARCHAR(200)
@@ -340,18 +326,27 @@ INSERT INTO t_compare_ci VALUES (1, 'Apple');
 INSERT INTO t_compare_ci VALUES (2, 'apple');
 INSERT INTO t_compare_ci VALUES (3, 'APPLE');
 INSERT INTO t_compare_ci VALUES (4, 'aPpLe');
-SELECT * FROM t_compare_ci WHERE name = 'apple';
+SELECT * FROM t_compare_ci WHERE name = 'apple' ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
-2  ¦  apple
-SELECT * FROM t_compare_ci WHERE name = 'APPLE';
+1  ¦  Apple  𝄀
+2  ¦  apple  𝄀
+3  ¦  APPLE  𝄀
+4  ¦  aPpLe
+SELECT * FROM t_compare_ci WHERE name = 'APPLE' ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
-3  ¦  APPLE
-SELECT * FROM t_compare_ci WHERE name = 'Apple';
+1  ¦  Apple  𝄀
+2  ¦  apple  𝄀
+3  ¦  APPLE  𝄀
+4  ¦  aPpLe
+SELECT * FROM t_compare_ci WHERE name = 'Apple' ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
-1  ¦  Apple
+1  ¦  Apple  𝄀
+2  ¦  apple  𝄀
+3  ¦  APPLE  𝄀
+4  ¦  aPpLe
 SELECT COUNT(*) FROM t_compare_ci WHERE name = 'apple';
 ➤ COUNT(*)[-5,64,0]  𝄀
-1
+4
 CREATE TABLE t_compare_bin (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -388,26 +383,26 @@ INSERT INTO t_sort_ci VALUES (6, 'APPLE');
 INSERT INTO t_sort_ci VALUES (7, 'banana');
 INSERT INTO t_sort_ci VALUES (8, 'Banana');
 INSERT INTO t_sort_ci VALUES (9, 'BANANA');
-SELECT * FROM t_sort_ci ORDER BY name;
+SELECT * FROM t_sort_ci ORDER BY name, id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
-6  ¦  APPLE  𝄀
-5  ¦  Apple  𝄀
-9  ¦  BANANA  𝄀
-8  ¦  Banana  𝄀
-3  ¦  ZEBRA  𝄀
-2  ¦  Zebra  𝄀
 4  ¦  apple  𝄀
+5  ¦  Apple  𝄀
+6  ¦  APPLE  𝄀
 7  ¦  banana  𝄀
-1  ¦  zebra
-SELECT * FROM t_sort_ci ORDER BY name DESC;
+8  ¦  Banana  𝄀
+9  ¦  BANANA  𝄀
+1  ¦  zebra  𝄀
+2  ¦  Zebra  𝄀
+3  ¦  ZEBRA
+SELECT * FROM t_sort_ci ORDER BY name DESC, id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
 1  ¦  zebra  𝄀
-7  ¦  banana  𝄀
-4  ¦  apple  𝄀
 2  ¦  Zebra  𝄀
 3  ¦  ZEBRA  𝄀
+7  ¦  banana  𝄀
 8  ¦  Banana  𝄀
 9  ¦  BANANA  𝄀
+4  ¦  apple  𝄀
 5  ¦  Apple  𝄀
 6  ¦  APPLE
 CREATE TABLE t_sort_bin (
@@ -450,17 +445,13 @@ name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 INSERT INTO t_distinct_ci VALUES ('Apple'), ('apple'), ('APPLE');
 INSERT INTO t_distinct_ci VALUES ('Banana'), ('banana'), ('BANANA');
-SELECT DISTINCT name FROM t_distinct_ci ORDER BY name;
+SELECT LOWER(name) AS name FROM (SELECT DISTINCT name FROM t_distinct_ci) AS d ORDER BY name;
 ➤ name[12,100,0]  𝄀
-APPLE  𝄀
-Apple  𝄀
-BANANA  𝄀
-Banana  𝄀
 apple  𝄀
 banana
 SELECT COUNT(DISTINCT name) FROM t_distinct_ci;
 ➤ COUNT(distinct name)[-5,64,0]  𝄀
-6
+2
 CREATE TABLE t_distinct_bin (
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
@@ -483,14 +474,10 @@ name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 INSERT INTO t_group_ci VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 INSERT INTO t_group_ci VALUES (4, 'Banana'), (5, 'banana'), (6, 'BANANA');
-SELECT name, COUNT(*) as cnt FROM t_group_ci GROUP BY name ORDER BY name;
-➤ name[12,100,0]  ¦  cnt[-5,64,0]  𝄀
-APPLE  ¦  1  𝄀
-Apple  ¦  1  𝄀
-BANANA  ¦  1  𝄀
-Banana  ¦  1  𝄀
-apple  ¦  1  𝄀
-banana  ¦  1
+SELECT LOWER(name) AS normalized_name, COUNT(*) as cnt FROM t_group_ci GROUP BY name ORDER BY normalized_name;
+➤ normalized_name[12,100,0]  ¦  cnt[-5,64,0]  𝄀
+apple  ¦  3  𝄀
+banana  ¦  3
 CREATE TABLE t_group_bin (
 id INT,
 name VARCHAR(100)
@@ -553,7 +540,10 @@ SELECT t1.id, t1.name, t2.name
 FROM t_join1_ci t1
 JOIN t_join2_ci t2 ON t1.name = t2.name
 ORDER BY t1.id;
-➤ id[4,32,0]  ¦  name[12,100,0]  ¦  name[12,100,0]
+➤ id[4,32,0]  ¦  name[12,100,0]  ¦  name[12,100,0]  𝄀
+1  ¦  Apple  ¦  apple  𝄀
+2  ¦  Banana  ¦  BANANA  𝄀
+3  ¦  Cherry  ¦  cherry
 CREATE TABLE t_join1_bin (
 id INT PRIMARY KEY,
 name VARCHAR(100)
@@ -577,24 +567,25 @@ name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
 INSERT INTO t_union1_ci VALUES ('Apple'), ('Banana');
 INSERT INTO t_union2_ci VALUES ('apple'), ('Cherry');
+SELECT LOWER(name) AS name FROM (
 SELECT name FROM t_union1_ci
 UNION
 SELECT name FROM t_union2_ci
-ORDER BY name;
+) AS u ORDER BY name;
 ➤ name[12,100,0]  𝄀
-Apple  𝄀
-Banana  𝄀
-Cherry  𝄀
-apple
+apple  𝄀
+banana  𝄀
+cherry
+SELECT name FROM (
 SELECT name FROM t_union1_ci
 UNION ALL
 SELECT name FROM t_union2_ci
-ORDER BY name;
+) AS u ORDER BY name, HEX(name);
 ➤ name[12,100,0]  𝄀
 Apple  𝄀
+apple  𝄀
 Banana  𝄀
-Cherry  𝄀
-apple
+Cherry
 CREATE TABLE t_functions (
 id INT PRIMARY KEY,
 data VARCHAR(200)
@@ -630,6 +621,7 @@ CREATE TABLE t_alter (
 id INT PRIMARY KEY,
 name VARCHAR(100)
 );
+INSERT INTO t_alter VALUES (1, 'A'), (2, 'a');
 ALTER TABLE t_alter CHARACTER SET utf8mb4;
 SHOW CREATE TABLE t_alter;
 ➤ Table[12,7,0]  ¦  Create Table[12,104,0]  𝄀
@@ -640,33 +632,32 @@ t_alter  ¦  CREATE TABLE `t_alter` (
 )
 ALTER TABLE t_alter COLLATE utf8mb4_bin;
 SHOW CREATE TABLE t_alter;
-➤ Table[12,7,0]  ¦  Create Table[12,151,0]  𝄀
-t_alter  ¦  CREATE TABLE `t_alter` (
-  `id` int NOT NULL,
-  `name` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) COLLATE=utf8mb4_bin
+not supported: versioned collations and key formats are disabled until SQL, storage and upgrade gates pass
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4;
 SHOW CREATE TABLE t_alter;
-➤ Table[12,7,0]  ¦  Create Table[12,151,0]  𝄀
-t_alter  ¦  CREATE TABLE `t_alter` (
-  `id` int NOT NULL,
-  `name` varchar(100) COLLATE utf8mb4_general_ci DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) COLLATE=utf8mb4_bin
+not supported: versioned collations and key formats are disabled until SQL, storage and upgrade gates pass
 ALTER TABLE t_alter MODIFY COLUMN name VARCHAR(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+not supported: online native PAD collation conversion is disabled; use explicit copy/reload
 SHOW CREATE TABLE t_alter;
-➤ Table[12,7,0]  ¦  Create Table[12,144,0]  𝄀
-t_alter  ¦  CREATE TABLE `t_alter` (
-  `id` int NOT NULL,
-  `name` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,
-  PRIMARY KEY (`id`)
-) COLLATE=utf8mb4_bin
+not supported: versioned collations and key formats are disabled until SQL, storage and upgrade gates pass
+SELECT COUNT(*), COUNT(DISTINCT name) FROM t_alter;
+➤ COUNT(*)[-5,64,0]  ¦  COUNT(distinct name)[-5,64,0]  𝄀
+2  ¦  2
 CREATE TABLE t_index_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100),
 KEY idx_name (name)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
+not supported: native PAD collation index on column name is disabled
+SELECT COUNT(*) AS rejected_index_table FROM information_schema.tables
+WHERE table_schema = 'charset_test' AND table_name = 't_index_ci';
+➤ rejected_index_table[-5,64,0]  𝄀
+0
+CREATE TABLE t_index_ci (
+id INT PRIMARY KEY,
+name VARCHAR(100),
+KEY idx_name (name)
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
 INSERT INTO t_index_ci VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 INSERT INTO t_index_ci VALUES (4, 'Banana'), (5, 'banana');
 SELECT * FROM t_index_ci WHERE name = 'apple' ORDER BY id;
@@ -677,6 +668,16 @@ id INT PRIMARY KEY,
 name VARCHAR(100),
 KEY idx_name (name)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+not supported: native PAD collation index on column name is disabled
+SELECT COUNT(*) AS rejected_index_table FROM information_schema.tables
+WHERE table_schema = 'charset_test' AND table_name = 't_index_bin';
+➤ rejected_index_table[-5,64,0]  𝄀
+0
+CREATE TABLE t_index_bin (
+id INT PRIMARY KEY,
+name VARCHAR(100),
+KEY idx_name (name)
+) CHARACTER SET utf8mb4 COLLATE utf32_bin;
 INSERT INTO t_index_bin VALUES (1, 'Apple'), (2, 'apple'), (3, 'APPLE');
 INSERT INTO t_index_bin VALUES (4, 'Banana'), (5, 'banana');
 SELECT * FROM t_index_bin WHERE name = 'apple' ORDER BY id;
@@ -686,17 +687,40 @@ CREATE TABLE t_unique_ci (
 id INT PRIMARY KEY,
 name VARCHAR(100) UNIQUE
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
-INSERT INTO t_unique_ci VALUES (1, 'Apple');
-SELECT * FROM t_unique_ci;
+not supported: native PAD collation index on column name is disabled
+SELECT COUNT(*) AS rejected_unique_table FROM information_schema.tables
+WHERE table_schema = 'charset_test' AND table_name = 't_unique_ci';
+➤ rejected_unique_table[-5,64,0]  𝄀
+0
+CREATE TABLE t_unique_ci (
+id INT PRIMARY KEY,
+name VARCHAR(100) UNIQUE
+) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci;
+INSERT INTO t_unique_ci VALUES (1, 'Apple'), (2, 'apple');
+INSERT INTO t_unique_ci VALUES (3, 'Apple');
+Duplicate entry 'Apple' for key 'name'
+SELECT * FROM t_unique_ci ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
-1  ¦  Apple
+1  ¦  Apple  𝄀
+2  ¦  apple
 CREATE TABLE t_unique_bin (
 id INT PRIMARY KEY,
 name VARCHAR(100) UNIQUE
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin;
+not supported: native PAD collation index on column name is disabled
+SELECT COUNT(*) AS rejected_unique_table FROM information_schema.tables
+WHERE table_schema = 'charset_test' AND table_name = 't_unique_bin';
+➤ rejected_unique_table[-5,64,0]  𝄀
+0
+CREATE TABLE t_unique_bin (
+id INT PRIMARY KEY,
+name VARCHAR(100) UNIQUE
+) CHARACTER SET utf8mb4 COLLATE utf32_bin;
 INSERT INTO t_unique_bin VALUES (1, 'Apple');
 INSERT INTO t_unique_bin VALUES (2, 'apple');
 INSERT INTO t_unique_bin VALUES (3, 'APPLE');
+INSERT INTO t_unique_bin VALUES (4, 'Apple');
+Duplicate entry 'Apple' for key 'name'
 SELECT * FROM t_unique_bin ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
 1  ¦  Apple  𝄀
@@ -757,14 +781,18 @@ INSERT INTO t_comparison VALUES (1, 'Apple');
 INSERT INTO t_comparison VALUES (2, 'Banana');
 INSERT INTO t_comparison VALUES (3, 'Cherry');
 SELECT * FROM t_comparison WHERE name > 'apple' ORDER BY id;
-➤ id[4,32,0]  ¦  name[12,100,0]
+➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+2  ¦  Banana  𝄀
+3  ¦  Cherry
 SELECT * FROM t_comparison WHERE name >= 'apple' ORDER BY id;
-➤ id[4,32,0]  ¦  name[12,100,0]
-SELECT * FROM t_comparison WHERE name < 'cherry' ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
 1  ¦  Apple  𝄀
 2  ¦  Banana  𝄀
 3  ¦  Cherry
+SELECT * FROM t_comparison WHERE name < 'cherry' ORDER BY id;
+➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+1  ¦  Apple  𝄀
+2  ¦  Banana
 SELECT * FROM t_comparison WHERE name <= 'cherry' ORDER BY id;
 ➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
 1  ¦  Apple  𝄀
@@ -776,7 +804,10 @@ SELECT * FROM t_comparison WHERE name BETWEEN 'Apple' AND 'Cherry' ORDER BY id;
 2  ¦  Banana  𝄀
 3  ¦  Cherry
 SELECT * FROM t_comparison WHERE name IN ('apple', 'BANANA', 'cherry') ORDER BY id;
-➤ id[4,32,0]  ¦  name[12,100,0]
+➤ id[4,32,0]  ¦  name[12,100,0]  𝄀
+1  ¦  Apple  𝄀
+2  ¦  Banana  𝄀
+3  ¦  Cherry
 SELECT MIN(name) as min_name, MAX(name) as max_name FROM t_comparison;
 ➤ min_name[12,100,0]  ¦  max_name[12,100,0]  𝄀
 Apple  ¦  Cherry
@@ -795,7 +826,7 @@ INSERT INTO t_minmax_bin_pad VALUES ('a '), (CONCAT('a', CHAR(0)));
 SELECT HEX(MIN(name)) AS min_name, HEX(MAX(name)) AS max_name
 FROM t_minmax_bin_pad;
 ➤ min_name[12,800,0]  ¦  max_name[12,800,0]  𝄀
-6120  ¦  6100
+6100  ¦  6120
 CREATE TABLE t_minmax_cast_ci (
 name VARCHAR(100)
 ) CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci;
@@ -904,6 +935,7 @@ ALTER TABLE t_binary_default_general_columns
 ADD COLUMN add_col VARCHAR(100) COLLATE utf8mb4_general_ci;
 ALTER TABLE t_binary_default_general_columns
 MODIFY COLUMN modify_col VARCHAR(100) COLLATE utf8mb4_general_ci;
+not supported: online native PAD collation conversion is disabled; use explicit copy/reload
 INSERT INTO t_binary_default_general_columns VALUES
 (1, 'a', 'a', 'a'), (2, 'B', 'B', 'B');
 SELECT MIN(create_col) AS min_create, MAX(create_col) AS max_create,
@@ -911,7 +943,7 @@ MIN(add_col) AS min_add, MAX(add_col) AS max_add,
 MIN(modify_col) AS min_modify, MAX(modify_col) AS max_modify
 FROM t_binary_default_general_columns;
 ➤ min_create[12,100,0]  ¦  max_create[12,100,0]  ¦  min_add[12,100,0]  ¦  max_add[12,100,0]  ¦  min_modify[12,100,0]  ¦  max_modify[12,100,0]  𝄀
-a  ¦  B  ¦  a  ¦  B  ¦  a  ¦  B
+a  ¦  B  ¦  a  ¦  B  ¦  B  ¦  a
 SELECT CAST('test' AS CHAR CHARACTER SET utf8mb4);
 ➤ cast(test as char character set utf8mb4)[12,4,0]  𝄀
 test

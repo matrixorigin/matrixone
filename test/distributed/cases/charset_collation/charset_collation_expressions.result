@@ -1,26 +1,54 @@
 DROP DATABASE IF EXISTS collation_expression_test;
 CREATE DATABASE collation_expression_test;
 USE collation_expression_test;
+SELECT 'A' COLLATE utf8mb4_general_ci = 'a' AS ci_case,
+'café' COLLATE utf8mb4_general_ci = 'cafe' AS ci_accent,
+'a ' COLLATE utf8mb4_general_ci = 'a' AS ci_pad,
+'A' COLLATE utf8mb4_bin = 'a' AS bin_case,
+'a ' COLLATE utf8mb4_bin = 'a' AS bin_pad,
+_binary'a ' = _binary'a' AS binary_pad,
+'A' COLLATE utf8mb4_0900_ai_ci = 'a' AS legacy_alias,
+'A' = 'a' AS implicit_case;
+➤ ci_case[-6,8,0]  ¦  ci_accent[-6,8,0]  ¦  ci_pad[-6,8,0]  ¦  bin_case[-6,8,0]  ¦  bin_pad[-6,8,0]  ¦  binary_pad[-6,8,0]  ¦  legacy_alias[-6,8,0]  ¦  implicit_case[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  0  ¦  1  ¦  0  ¦  0  ¦  0
+SELECT 'Á ' COLLATE utf8_general_ci = 'a' AS utf8_ci,
+'Á ' COLLATE utf8mb3_general_ci = 'a' AS utf8mb3_ci,
+'😀a ' COLLATE utf8_bin = '😀a' AS utf8_bin_pad,
+'😀a ' COLLATE utf8mb3_bin = '😀a' AS utf8mb3_bin_pad;
+➤ utf8_ci[-6,8,0]  ¦  utf8mb3_ci[-6,8,0]  ¦  utf8_bin_pad[-6,8,0]  ¦  utf8mb3_bin_pad[-6,8,0]  𝄀
+1  ¦  1  ¦  1  ¦  1
+SELECT 'Á ' COLLATE utf8mb4_general_ci IN ('a', 'z') AS ci_in,
+'Á ' COLLATE utf8mb4_general_ci BETWEEN 'a' AND 'b' AS ci_between,
+LEAST('a' COLLATE utf8mb4_general_ci, 'B') AS ci_least,
+GREATEST('a' COLLATE utf8mb4_general_ci, 'B') AS ci_greatest;
+➤ ci_in[-6,8,0]  ¦  ci_between[-6,8,0]  ¦  ci_least[12,1,0]  ¦  ci_greatest[12,1,0]  𝄀
+1  ¦  1  ¦  a  ¦  B
+SELECT COALESCE(NULL, 'Á ' COLLATE utf8mb4_general_ci) = 'a' AS ci_coalesce,
+CASE WHEN TRUE THEN 'Á ' COLLATE utf8mb4_general_ci ELSE CAST('bad' AS SIGNED) END = 'a' AS ci_case_branch,
+CAST('A ' COLLATE utf8mb4_general_ci AS CHAR(8)) = 'a' AS implicit_cast,
+CAST('A ' COLLATE utf8mb4_general_ci AS CHAR(8)) COLLATE utf8mb4_general_ci = 'a' AS ci_cast;
+➤ ci_coalesce[-6,8,0]  ¦  ci_case_branch[-6,8,0]  ¦  implicit_cast[-6,8,0]  ¦  ci_cast[-6,8,0]  𝄀
+1  ¦  1  ¦  0  ¦  1
 SELECT 'Á' COLLATE utf8mb4_unicode_ci = 'a',
 'a' = 'Á' COLLATE utf8mb4_unicode_ci,
 'a ' COLLATE utf8mb4_unicode_ci = 'a',
 _binary'a ' = _binary'a';
-➤ (Á) collate utf8mb4_unicode_ci = a[-7,1,0]  ¦  a = (Á) collate utf8mb4_unicode_ci[-7,1,0]  ¦  (a ) collate utf8mb4_unicode_ci = a[-7,1,0]  ¦  a  = a[-7,1,0]  𝄀
+➤ (Á) collate utf8mb4_unicode_ci = a[-6,8,0]  ¦  a = (Á) collate utf8mb4_unicode_ci[-6,8,0]  ¦  (a ) collate utf8mb4_unicode_ci = a[-6,8,0]  ¦  a  = a[-6,8,0]  𝄀
 1  ¦  1  ¦  1  ¦  0
 SELECT 'Á' COLLATE utf8mb4_unicode_ci IN ('a', 'z'),
 'Á' COLLATE utf8mb4_unicode_ci BETWEEN 'a' AND 'b';
-➤ (Á) collate utf8mb4_unicode_ci in (a, z)[-7,1,0]  ¦  (Á) collate utf8mb4_unicode_ci between a and b[-7,1,0]  𝄀
+➤ (Á) collate utf8mb4_unicode_ci in (a, z)[-6,8,0]  ¦  (Á) collate utf8mb4_unicode_ci between a and b[-6,8,0]  𝄀
 1  ¦  1
 SELECT 5 BETWEEN '0' COLLATE utf8mb4_bin AND '9' COLLATE utf8mb4_general_ci,
 5 IN ('5' COLLATE utf8mb4_bin, '7' COLLATE utf8mb4_general_ci),
 5 NOT IN ('5' COLLATE utf8mb4_bin, '7' COLLATE utf8mb4_general_ci);
-➤ 5 between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-7,1,0]  ¦  5 in ((5) collate utf8mb4_bin, (7) collate utf8mb4_general_ci)[-7,1,0]  ¦  5 not in ((5) collate utf8mb4_bin, (7) collate utf8mb4_general_ci)[-7,1,0]  𝄀
+➤ 5 between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-6,8,0]  ¦  5 in ((5) collate utf8mb4_bin, (7) collate utf8mb4_general_ci)[-6,8,0]  ¦  5 not in ((5) collate utf8mb4_bin, (7) collate utf8mb4_general_ci)[-6,8,0]  𝄀
 1  ¦  1  ¦  0
 SELECT '5' COLLATE utf8mb4_bin BETWEEN '0' COLLATE utf8mb4_general_ci AND 9;
-➤ (5) collate utf8mb4_bin between (0) collate utf8mb4_general_ci and 9[-7,1,0]  𝄀
+➤ (5) collate utf8mb4_bin between (0) collate utf8mb4_general_ci and 9[-6,8,0]  𝄀
 1
 SELECT CAST(NULL AS SIGNED) BETWEEN '0' COLLATE utf8mb4_bin AND '9' COLLATE utf8mb4_general_ci;
-➤ cast(null as signed) between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-7,1,0]  𝄀
+➤ cast(null as signed) between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-6,8,0]  𝄀
 null
 SELECT LEAST('a' COLLATE utf8mb4_unicode_ci, 'B'),
 GREATEST('a' COLLATE utf8mb4_unicode_ci, 'B'),
@@ -56,14 +84,14 @@ WHERE reldatabase = 'collation_expression_test' AND relname = 'least_protocol_vi
 117
 DROP VIEW least_protocol_view;
 SELECT COALESCE(NULL, 'Á' COLLATE utf8mb4_unicode_ci) = 'a';
-➤ COALESCE(null, (Á) collate utf8mb4_unicode_ci) = a[-7,1,0]  𝄀
+➤ COALESCE(null, (Á) collate utf8mb4_unicode_ci) = a[-6,8,0]  𝄀
 1
 SELECT 'a' COLLATE utf8mb4_bin = 'a' COLLATE utf8mb4_bin;
-➤ (a) collate utf8mb4_bin = (a) collate utf8mb4_bin[-7,1,0]  𝄀
+➤ (a) collate utf8mb4_bin = (a) collate utf8mb4_bin[-6,8,0]  𝄀
 1
 SELECT CASE WHEN TRUE THEN 'Á' COLLATE utf8mb4_unicode_ci
 ELSE CAST('bad' AS SIGNED) END = 'a';
-➤ case when true then (Á) collate utf8mb4_unicode_ci else cast(bad as signed) end = a[-7,1,0]  𝄀
+➤ case when true then (Á) collate utf8mb4_unicode_ci else cast(bad as signed) end = a[-6,8,0]  𝄀
 1
 SELECT 'a' COLLATE utf8mb4_bin = 'a' COLLATE utf8mb4_general_ci;
 Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation '='
@@ -98,7 +126,7 @@ INSERT INTO source_values VALUES (1, 'Á'), (2, 'a '), (3, 'z');
 SELECT id, id BETWEEN '0' COLLATE utf8mb4_bin AND '9' COLLATE utf8mb4_general_ci,
 id IN ('1' COLLATE utf8mb4_bin, '2' COLLATE utf8mb4_general_ci)
 FROM source_values ORDER BY id;
-➤ id[4,32,0]  ¦  id between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-7,1,0]  ¦  id in ((1) collate utf8mb4_bin, (2) collate utf8mb4_general_ci)[-7,1,0]  𝄀
+➤ id[4,32,0]  ¦  id between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-6,8,0]  ¦  id in ((1) collate utf8mb4_bin, (2) collate utf8mb4_general_ci)[-6,8,0]  𝄀
 1  ¦  1  ¦  1  𝄀
 2  ¦  1  ¦  1  𝄀
 3  ¦  1  ¦  0
@@ -151,23 +179,23 @@ SELECT id, v FROM source_values WHERE v COLLATE utf8mb4_unicode_ci = 'a' ORDER B
 PREPARE expression_stmt FROM 'SELECT ? COLLATE utf8mb4_unicode_ci = ?';
 SET @left = 'Á', @right = 'a';
 EXECUTE expression_stmt USING @left, @right;
-➤ (?) collate utf8mb4_unicode_ci = ?[-7,1,0]  𝄀
+➤ (?) collate utf8mb4_unicode_ci = ?[-6,8,0]  𝄀
 1
 SET @left = NULL;
 EXECUTE expression_stmt USING @left, @right;
-➤ (?) collate utf8mb4_unicode_ci = ?[-7,1,0]  𝄀
+➤ (?) collate utf8mb4_unicode_ci = ?[-6,8,0]  𝄀
 null
 SET @left = 'z';
 EXECUTE expression_stmt USING @left, @right;
-➤ (?) collate utf8mb4_unicode_ci = ?[-7,1,0]  𝄀
+➤ (?) collate utf8mb4_unicode_ci = ?[-6,8,0]  𝄀
 0
 SET @left = 'a ';
 EXECUTE expression_stmt USING @left, @right;
-➤ (?) collate utf8mb4_unicode_ci = ?[-7,1,0]  𝄀
+➤ (?) collate utf8mb4_unicode_ci = ?[-6,8,0]  𝄀
 1
 SET @left = _binary'Á';
 EXECUTE expression_stmt USING @left, @right;
-➤ (?) collate utf8mb4_unicode_ci = ?[-7,1,0]  𝄀
+➤ (?) collate utf8mb4_unicode_ci = ?[-6,8,0]  𝄀
 1
 DEALLOCATE PREPARE expression_stmt;
 PREPARE expression_union FROM 'SELECT v FROM (SELECT ? COLLATE utf8mb4_unicode_ci AS v UNION ALL SELECT ?) u WHERE v=''a'' ORDER BY HEX(v)';
@@ -197,19 +225,19 @@ DEALLOCATE PREPARE expression_values;
 PREPARE numeric_collation FROM 'SELECT CAST(? AS SIGNED) BETWEEN ''0'' COLLATE utf8mb4_bin AND ''9'' COLLATE utf8mb4_general_ci';
 SET @numeric_value = 5;
 EXECUTE numeric_collation USING @numeric_value;
-➤ cast(? as signed) between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-7,1,0]  𝄀
+➤ cast(? as signed) between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-6,8,0]  𝄀
 1
 SET @numeric_value = 10;
 EXECUTE numeric_collation USING @numeric_value;
-➤ cast(? as signed) between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-7,1,0]  𝄀
+➤ cast(? as signed) between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-6,8,0]  𝄀
 0
 SET @numeric_value = NULL;
 EXECUTE numeric_collation USING @numeric_value;
-➤ cast(? as signed) between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-7,1,0]  𝄀
+➤ cast(? as signed) between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-6,8,0]  𝄀
 null
 SET @numeric_value = 5;
 EXECUTE numeric_collation USING @numeric_value;
-➤ cast(? as signed) between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-7,1,0]  𝄀
+➤ cast(? as signed) between (0) collate utf8mb4_bin and (9) collate utf8mb4_general_ci[-6,8,0]  𝄀
 1
 DEALLOCATE PREPARE numeric_collation;
 SET @numeric_value = NULL;
@@ -229,14 +257,14 @@ CREATE TABLE scalar_values (id INT PRIMARY KEY, s VARCHAR(20) COLLATE utf8mb4_un
 INSERT INTO scalar_values VALUES (1, 'Á');
 SELECT s = 'a', (SELECT s FROM scalar_values WHERE id = 1) = 'a',
 'a' = (SELECT s FROM scalar_values WHERE id = 1) FROM scalar_values;
-➤ s = a[-7,1,0]  ¦  (select s from scalar_values where id = 1) = a[-7,1,0]  ¦  a = (select s from scalar_values where id = 1)[-7,1,0]  𝄀
+➤ s = a[-6,8,0]  ¦  (select s from scalar_values where id = 1) = a[-6,8,0]  ¦  a = (select s from scalar_values where id = 1)[-6,8,0]  𝄀
 1  ¦  1  ¦  1
 SELECT (SELECT n.s FROM scalar_values n WHERE n.id = t.id) = 'a' FROM scalar_values t;
-➤ (select n.s from scalar_values as n where n.id = t.id) = a[-7,1,0]  𝄀
+➤ (select n.s from scalar_values as n where n.id = t.id) = a[-6,8,0]  𝄀
 1
 SELECT (SELECT s FROM scalar_values WHERE id = 2) = 'a',
 (SELECT s FROM scalar_values WHERE id = 2) <=> NULL;
-➤ (select s from scalar_values where id = 2) = a[-7,1,0]  ¦  (select s from scalar_values where id = 2) <=> null[-7,1,0]  𝄀
+➤ (select s from scalar_values where id = 2) = a[-6,8,0]  ¦  (select s from scalar_values where id = 2) <=> null[-6,8,0]  𝄀
 null  ¦  1
 SELECT LEAST('a' COLLATE utf8mb4_bin, 'bb') = 'a' COLLATE utf8mb4_general_ci;
 Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation '='
@@ -245,19 +273,19 @@ Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICI
 SELECT LEAST('a' COLLATE utf8mb4_bin, 'b') = 'a' COLLATE utf8mb4_general_ci;
 Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation '='
 SELECT LEAST('Á' COLLATE utf8mb4_unicode_ci, 'zz') = 'a';
-➤ LEAST((Á) collate utf8mb4_unicode_ci, zz) = a[-7,1,0]  𝄀
+➤ LEAST((Á) collate utf8mb4_unicode_ci, zz) = a[-6,8,0]  𝄀
 1
 SELECT CAST(LEAST('a' COLLATE utf8mb4_bin, 'bb') AS CHAR(20)) = 'a' COLLATE utf8mb4_general_ci;
-➤ cast(LEAST((a) collate utf8mb4_bin, bb) as char(20)) = (a) collate utf8mb4_general_ci[-7,1,0]  𝄀
+➤ cast(LEAST((a) collate utf8mb4_bin, bb) as char(20)) = (a) collate utf8mb4_general_ci[-6,8,0]  𝄀
 1
 SELECT NAME_CONST('v', 'Á' COLLATE utf8mb4_unicode_ci) = 'a';
-➤ NAME_CONST(v, (Á) collate utf8mb4_unicode_ci) = a[-7,1,0]  𝄀
+➤ NAME_CONST(v, (Á) collate utf8mb4_unicode_ci) = a[-6,8,0]  𝄀
 1
 SELECT sub.v = 'a' FROM (SELECT NAME_CONST('v', 'Á' COLLATE utf8mb4_unicode_ci)) sub;
-➤ sub.v = a[-7,1,0]  𝄀
+➤ sub.v = a[-6,8,0]  𝄀
 1
 SELECT NAME_CONST('v', 1 COLLATE utf8mb4_unicode_ci) = '1';
-➤ NAME_CONST(v, (1) collate utf8mb4_unicode_ci) = 1[-7,1,0]  𝄀
+➤ NAME_CONST(v, (1) collate utf8mb4_unicode_ci) = 1[-6,8,0]  𝄀
 1
 SELECT NAME_CONST('v', 'a' COLLATE utf8mb4_unicode_ci) = 'a' COLLATE utf8mb4_bin;
 Illegal mix of collations (utf8mb4_unicode_ci,EXPLICIT) and (utf8mb4_bin,EXPLICIT) for operation '='
@@ -302,14 +330,14 @@ IFNULL(CAST('b' AS CHAR(4)), 'b')) = 'a' COLLATE utf8mb4_general_ci;
 Illegal mix of collations (utf8mb4_bin,EXPLICIT) and (utf8mb4_general_ci,EXPLICIT) for operation '='
 SELECT LEAST(COALESCE(CAST('a' AS CHAR(3)) COLLATE utf8mb4_bin, 'a'),
 COALESCE(CAST('bb' AS CHAR(3)), 'bb')) = 'a';
-➤ LEAST(COALESCE((cast(a as char(3))) collate utf8mb4_bin, a), COALESCE(cast(bb as char(3)), bb)) = a[-7,1,0]  𝄀
+➤ LEAST(COALESCE((cast(a as char(3))) collate utf8mb4_bin, a), COALESCE(cast(bb as char(3)), bb)) = a[-6,8,0]  𝄀
 1
 SELECT LEAST(COALESCE(CAST(NULL AS CHAR(3)) COLLATE utf8mb4_unicode_ci, 'Á'), 'zz') = 'a';
-➤ LEAST(COALESCE((cast(null as char(3))) collate utf8mb4_unicode_ci, Á), zz) = a[-7,1,0]  𝄀
+➤ LEAST(COALESCE((cast(null as char(3))) collate utf8mb4_unicode_ci, Á), zz) = a[-6,8,0]  𝄀
 1
 SELECT CAST(LEAST(COALESCE(c COLLATE utf8mb4_bin, 'a'), COALESCE(c, 'bb')) AS CHAR(20))
 = 'a' COLLATE utf8mb4_general_ci FROM pad_values;
-➤ cast(LEAST(COALESCE((c) collate utf8mb4_bin, a), COALESCE(c, bb)) as char(20)) = (a) collate utf8mb4_general_ci[-7,1,0]  𝄀
+➤ cast(LEAST(COALESCE((c) collate utf8mb4_bin, a), COALESCE(c, bb)) as char(20)) = (a) collate utf8mb4_general_ci[-6,8,0]  𝄀
 1
 DROP DATABASE IF EXISTS collation_expression_source;
 CREATE DATABASE collation_expression_source;
@@ -355,7 +383,7 @@ C381
 UPDATE source_values SET v = NULL WHERE id = 1;
 EXECUTE collated_set;
 SELECT @collated_value IS NULL;
-➤ @collated_value is null[-7,1,0]  𝄀
+➤ @collated_value is null[-6,8,0]  𝄀
 1
 UPDATE source_values SET v = 'Z' WHERE id = 1;
 EXECUTE collated_set;
@@ -379,7 +407,7 @@ SELECT BIT_AND(SUBSTRING(b,1,511) COLLATE binary) = (CAST(X'03' AS BINARY) COLLA
 BIT_OR(SUBSTRING(b,1,511) COLLATE binary) = (CAST(X'0F' AS BINARY) COLLATE binary) AS or_equal,
 BIT_XOR(SUBSTRING(b,1,511) COLLATE binary) = (CAST(X'0C' AS BINARY) COLLATE binary) AS xor_equal
 FROM bitwise_collation;
-➤ and_equal[-7,1,0]  ¦  or_equal[-7,1,0]  ¦  xor_equal[-7,1,0]  𝄀
+➤ and_equal[-6,8,0]  ¦  or_equal[-6,8,0]  ¦  xor_equal[-6,8,0]  𝄀
 1  ¦  1  ¦  1
 SELECT BIT_AND(SUBSTRING(b,1,511) COLLATE binary) = (_utf8mb4'a' COLLATE utf8mb4_bin) FROM bitwise_collation;
 Illegal mix of collations (binary,EXPLICIT) and (utf8mb4_bin,EXPLICIT) for operation '='
