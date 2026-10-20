@@ -163,7 +163,7 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 			exec(query, executor.Options{})
 		}
 		t.Run("placeholder source authorization", func(t *testing.T) {
-			testNativeViewSchemaPseudoRoots(t, ctx, cn, svc, database)
+			testNativeViewSchemaRootScopes(t, ctx, cn, svc, database)
 		})
 		var historical timestamp.Timestamp
 		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(_ *frontend.TxnCompilerContext, op client.TxnOperator, _ *process.Process) {
@@ -367,7 +367,7 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 	})
 }
 
-func testNativeViewSchemaPseudoRoots(t *testing.T, ctx context.Context, cn embed.ServiceOperator, svc cnservice.Service, database string) {
+func testNativeViewSchemaRootScopes(t *testing.T, ctx context.Context, cn embed.ServiceOperator, svc cnservice.Service, database string) {
 	t.Helper()
 	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
 		for _, tc := range []struct {
@@ -377,6 +377,7 @@ func testNativeViewSchemaPseudoRoots(t *testing.T, ctx context.Context, cn embed
 			{"no_from", "select 1 as one", false},
 			{"dual", "select 1 as one from dual", false},
 			{"qualified_dual", "select 1 as one from " + database + ".dual", true},
+			{"cte_declaration", "with q as (select id from " + database + ".target), r as (select * from q) select sum(id) from (with q as (select id from " + database + ".outer_a) select * from r) d", false},
 		} {
 			t.Run(mode+"/"+tc.name, func(t *testing.T) {
 				withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, proc *process.Process) {
@@ -391,8 +392,11 @@ func testNativeViewSchemaPseudoRoots(t *testing.T, ctx context.Context, cn embed
 					}
 					denied := errors.New("physical root denied")
 					authorizations := 0
-					p, err := compiler.BuildPlanWithViewSchema(ctx, input, mode == "direct", func(context.Context, string, string, *plan.Snapshot) error {
+					p, err := compiler.BuildPlanWithViewSchema(ctx, input, mode == "direct", func(_ context.Context, db, name string, _ *plan.Snapshot) error {
 						authorizations++
+						if tc.name == "cte_declaration" && db == database && name == "target" {
+							return nil
+						}
 						return denied
 					})
 					if tc.physical {
@@ -402,12 +406,25 @@ func testNativeViewSchemaPseudoRoots(t *testing.T, ctx context.Context, cn embed
 						return
 					}
 					require.NoError(t, err)
-					require.Zero(t, authorizations)
+					if tc.name == "cte_declaration" {
+						require.Positive(t, authorizations)
+					} else {
+						require.Zero(t, authorizations)
+					}
 					if mode == "text" || mode == "typed" {
-						require.Empty(t, p.GetDcl().GetPrepare().Schemas)
+						if tc.name != "cte_declaration" {
+							require.Empty(t, p.GetDcl().GetPrepare().Schemas)
+						}
 						p = p.GetDcl().GetPrepare().Plan
 					}
-					require.Empty(t, p.GetQuery().CatalogDependencies)
+					if tc.name == "cte_declaration" {
+						require.NotEmpty(t, p.GetQuery().CatalogDependencies)
+						for _, ref := range p.GetQuery().CatalogDependencies {
+							require.NotEqual(t, "outer_a", ref.ObjName)
+						}
+					} else {
+						require.Empty(t, p.GetQuery().CatalogDependencies)
+					}
 					c := compile.NewCompile(cn.GetServiceConfig().CN.ServiceAddress, database, tc.query, "", "",
 						svc.GetEngine(), proc, statements[0], false, nil, time.Now())
 					defer c.Release()
@@ -423,7 +440,11 @@ func testNativeViewSchemaPseudoRoots(t *testing.T, ctx context.Context, cn embed
 					}))
 					_, err = c.Run(0)
 					require.NoError(t, err)
-					require.Equal(t, []int64{1}, values)
+					want := int64(1)
+					if tc.name == "cte_declaration" {
+						want = 3
+					}
+					require.Equal(t, []int64{want}, values)
 				})
 			})
 		}
@@ -796,16 +817,16 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 					return roleAuthorize(ctx, database, name, actual)
 				}
 				for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
-					for _, aggregate := range []bool{false, true} {
-						name := mode
-						if aggregate {
-							name += "_cte_sum"
-						}
-						t.Run(name, func(t *testing.T) {
-							query := "select * from subscribed.published"
-							if aggregate {
-								query = "with q as (select id from subscribed.published) select sum(id) from q"
-							}
+					for _, shape := range []struct {
+						name, query     string
+						aggregate, ctas bool
+					}{
+						{"", "select * from subscribed.published", false, false},
+						{"_cte_sum", "with q as (select id from subscribed.published) select sum(id) from q", true, false},
+						{"_ctas", "create table schema_other.historical_target as select * from subscribed.published", false, true},
+					} {
+						t.Run(mode+shape.name, func(t *testing.T) {
+							query := shape.query
 							statements, err := mysql.Parse(tenantCtx, query, 1)
 							require.NoError(t, err)
 							defer statements[0].Free()
@@ -821,8 +842,16 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 								p = p.GetDcl().GetPrepare().Plan
 							}
 							columns := plan.GetResultColumnsFromPlan(p)
+							if shape.ctas {
+								columns = nil
+								for _, col := range p.GetDdl().GetCreateTable().TableDef.Cols {
+									if !col.Hidden {
+										columns = append(columns, col)
+									}
+								}
+							}
 							require.Len(t, columns, 1)
-							if !aggregate {
+							if !shape.aggregate {
 								require.Equal(t, "id", columns[0].Name)
 								require.EqualValues(t, types.T_int32, columns[0].Typ.Id)
 							}

@@ -500,6 +500,9 @@ func TestViewSchemaPlanningAuthorizationSnapshot(t *testing.T) {
 				{"cte sum", "with q as (select id from tpch.root_v) select sum(id) from q", true},
 				{"cte avg", "with q as (select id from tpch.root_v) select avg(id) from q", true},
 				{"cte chain sum", "with q as (select id from root_v), r as (select id from q) select sum(id) from r", true},
+				{"ctas", "create table historical_target as select id from tpch.root_v", false},
+				{"ctas sum", "create table historical_target as with q as (select id from tpch.root_v) select sum(id) from q", true},
+				{"ctas hint", "create table historical_target as select id from tpch.root_v {snapshot='daily'}", false},
 			} {
 				t.Run(mode+"/"+strconv.FormatBool(historicalAllowed)+"/"+shape.name, func(t *testing.T) {
 					f := newViewSchemaTestFixture(t)
@@ -510,7 +513,7 @@ func TestViewSchemaPlanningAuthorizationSnapshot(t *testing.T) {
 					}
 					snapshot := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1234}, Tenant: &SnapshotTenant{TenantID: 42}}
 					f.compiler.snapshot = snapshot
-					if shape.name == "source hint" {
+					if shape.name == "source hint" || shape.name == "ctas hint" {
 						f.compiler.snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 4321}, Tenant: &SnapshotTenant{TenantID: 42}}
 						f.compiler.namedSnapshot = snapshot
 					} else if shape.name == "cte hint" {
@@ -536,7 +539,11 @@ func TestViewSchemaPlanningAuthorizationSnapshot(t *testing.T) {
 						require.Equal(t, snapshot, actual)
 						return nil
 					}
-					f.compiler.resolve = func(_ context.Context, _, _ string, actual *Snapshot) error {
+					f.compiler.resolve = func(_ context.Context, _, name string, actual *Snapshot) error {
+						if name == "historical_target" || name == catalog.MOForeignKeys {
+							require.Nil(t, actual, "CTAS target existence check stays in the current catalog")
+							return nil
+						}
 						require.True(t, historicalAllowed, "denied historical lookup must not reach the catalog")
 						require.Equal(t, snapshot, actual, "authorization and lookup must share the same snapshot tenant/TS")
 						return nil
@@ -554,20 +561,78 @@ func TestViewSchemaPlanningAuthorizationSnapshot(t *testing.T) {
 					require.Positive(t, f.compiler.lookups.Load())
 					if mode == "text" || mode == "typed" {
 						for _, ref := range p.GetDcl().GetPrepare().Schemas {
-							require.Equal(t, snapshot, ref.Snapshot, "PREPARE must not capture current-domain references")
+							if p.GetDcl().GetPrepare().Plan.GetDdl() != nil && ref.ObjName == "" && ref.SchemaName == "" {
+								require.Equal(t, &ObjectRef{}, ref, "preserve the existing account-wide DDL invalidation marker")
+								continue
+							}
+							if ref.ObjName == "historical_target" || ref.SchemaName == catalog.MO_CATALOG && ref.ObjName == catalog.MOForeignKeys {
+								require.Nil(t, ref.Snapshot, "CTAS target/catalog negotiation stays current-domain")
+								continue
+							}
+							require.Equal(t, snapshot, ref.Snapshot, "source PREPARE reference %s.%s", ref.SchemaName, ref.ObjName)
 						}
 						p = p.GetDcl().GetPrepare().Plan
 					}
-					for _, ref := range p.GetQuery().CatalogDependencies {
+					query := p.GetQuery()
+					if p.GetDdl() != nil {
+						query = p.GetDdl().Query
+						if mode == "ordinary" {
+							// Ordinary CTAS executes its follow-up INSERT separately.
+							require.NotEmpty(t, p.GetDdl().GetCreateTable().CreateAsSelectSql)
+							return
+						}
+					}
+					for _, ref := range query.CatalogDependencies {
 						require.Equal(t, snapshot, ref.Snapshot, "historical-only query must not depend on current DDL")
 					}
-					columns := GetResultColumnsFromPlan(p)
+					columns := GetResultColumnsFromPlan(&Plan{Plan: &planpb.Plan_Query{Query: query}})
 					require.Len(t, columns, 1)
 					if !shape.aggregate {
 						require.EqualValues(t, types.T_varchar, columns[0].Typ.Id)
 					}
 				})
 			}
+		}
+	}
+}
+
+func TestViewSchemaPlanningCteDeclarationNames(t *testing.T) {
+	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+		for _, tc := range []struct{ name, query string }{
+			{"outer cte", "with q as (select id from tpch.root_v), r as (select * from q) select sum(id) from (with q as (select id from tpch.blocked_v) select * from r) d"},
+			{"qualified control", "with q as (select id from tpch.root_v), r as (select * from tpch.root_v) select sum(id) from (with q as (select id from tpch.blocked_v) select * from r) d"},
+			{"chain", "with q as (select id from tpch.root_v), r as (select * from q), s as (select * from r) select sum(id) from (with q as (select id from tpch.blocked_v), r as (select * from q) select * from s) d"},
+			{"body with", "with q as (select id from tpch.blocked_v), r as (with q as (select id from tpch.root_v) select * from q) select sum(id) from r"},
+			{"scalar", "with q as (select id from tpch.root_v), r as (select * from q) select (with q as (select id from tpch.blocked_v) select sum(id) from r) + 1"},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				f := newViewSchemaTestFixture(t)
+				f.addView(t, "root_v", "select n_nationkey as id from nation")
+				f.addView(t, "blocked_v", "select n_nationkey as id from nation")
+				authorizations := 0
+				f.binding.Authorize = func(_ context.Context, database, name string, _ *Snapshot) error {
+					authorizations++
+					if database != "tpch" || name != "root_v" {
+						require.Equal(t, "root_v", name)
+						return errors.New("unreferenced root denied: " + database + "." + name)
+					}
+					return nil
+				}
+				f.compiler.resolve = func(_ context.Context, _, name string, _ *Snapshot) error {
+					require.NotEqual(t, "blocked_v", name, "unused inner CTE must not be probed")
+					return nil
+				}
+				p, err := buildViewSchemaAuthorizationPlan(t, f.request(t), mode, tc.query)
+				require.NoError(t, err)
+				require.Positive(t, authorizations)
+				if mode == "text" || mode == "typed" {
+					p = p.GetDcl().GetPrepare().Plan
+				}
+				require.Len(t, GetResultColumnsFromPlan(p), 1)
+				for _, ref := range p.GetQuery().CatalogDependencies {
+					require.NotEqual(t, "blocked_v", ref.ObjName)
+				}
+			})
 		}
 	}
 }
@@ -587,7 +652,7 @@ func TestViewSchemaPlanningNumericCteScope(t *testing.T) {
 			require.NoError(t, err)
 			defer statements[0].Free()
 			cte := statements[0].(*tree.Select).With.CTEs[0]
-			ctx.numericCteByName = map[string]*tree.CTE{"q": cte}
+			ctx.numericCteByName = map[string]*CTERef{"q": {ast: cte}}
 			ctx.numericTableProjectionTypes = map[string][]Type{"q": {{Id: int32(types.T_int64)}}}
 			wantDatabase, wantSnapshot := ctx.defaultDatabase, ctx.snapshot
 			if mode != "inherited" {
