@@ -2061,6 +2061,9 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		case api.AlterKind_ReplaceDef:
 			hasReplaceDef = true
 			replaceDefReq = req
+			// ReplaceDef precedes composed rename actions. Publish its CHECKs
+			// here so later requests retain their final names and expressions.
+			tbl.extraInfo.Checks = api.CloneExtra(&api.SchemaExtra{Checks: req.GetReplaceDef().GetDef().GetChecks()}).Checks
 		case api.AlterKind_RenameColumn:
 			hasReplaceDef = true
 			re := req.GetRenameCol()
@@ -2098,9 +2101,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			return err
 		}
 		// Catalog regeneration uses extraInfo independently of the property
-		// factory in baseDefs. Publish CHECKs and charset/collation through both
-		// owners without retaining aliases to the replacement request.
-		tbl.extraInfo.Checks = api.CloneExtra(&api.SchemaExtra{Checks: replacementExtra.Checks}).Checks
+		// factory in baseDefs. CHECKs already follow the ordered requests above;
+		// publishing the replacement again would discard composed renames.
 		tbl.extraInfo.DefaultCharset = replacementExtra.DefaultCharset
 		tbl.extraInfo.CollationVersion = replacementExtra.CollationVersion
 		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)

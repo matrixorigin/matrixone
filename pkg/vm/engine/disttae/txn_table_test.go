@@ -1121,7 +1121,7 @@ func BenchmarkWorkspaceInsertRowEstimate(b *testing.B) {
 }
 
 func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
-	for _, kind := range []string{"replace", "clear", "rename", "stale version"} {
+	for _, kind := range []string{"replace", "clear", "rename", "table rename", "table then column", "column then table", "stale version"} {
 		t.Run(kind, func(t *testing.T) {
 			workspace := newTransactionWithActivePKTableForTest(t, "pk")
 			op := workspace.op.(*mock_frontend.MockTxnOperator)
@@ -1129,7 +1129,7 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			workspace.deletedBlocks = &deletedBlocks{offsets: make(map[types.Blockid][]int64)}
 			table := workspace.tableOps.existAndActive(genTableKey(1, "tbl", 7, "db"))
 			workspace.tableOps.addCreatedInTxn(table.tableId, 0)
-			original := &planpb.CheckDef{Name: "ck", OriginSql: "false", Check: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: false}}}}}
+			original := &planpb.CheckDef{Name: "tbl_chk_1", OriginSql: "false", Check: &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_bool)}, Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Bval{Bval: false}}}}}
 			table.extraInfo = &api.SchemaExtra{Checks: []*planpb.CheckDef{original}, AutoIncrEpoch: 9, DefaultCharset: uint32(types.CharsetUTF8MB4Bin)}
 			table.defs = engine.PlanColsToExeCols([]*planpb.ColDef{{Name: "pk", Typ: planpb.Type{Id: int32(types.T_int64)}}})
 			replacement := &planpb.TableDef{Name: "tbl", Cols: []*planpb.ColDef{{Name: "pk", Typ: planpb.Type{Id: int32(types.T_int64)}}}, DefaultCharset: uint32(types.CharsetUTF8)}
@@ -1140,8 +1140,29 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			}
 			req := api.NewGuardedReplaceDefReq(7, 42, table.version, 1, 1, 1, replacement)
 			requests := []*api.AlterTableReq{req}
-			if kind == "rename" {
-				requests = append(requests, api.NewRenameColumnReqWithChecks(7, 42, "pk", "renamed", 0, replacement.Checks))
+			expectedChecks := replacement.Checks
+			var renamedChecks []*planpb.CheckDef
+			if kind == "rename" || kind == "table then column" || kind == "column then table" {
+				renamedChecks = api.CloneExtra(&api.SchemaExtra{Checks: replacement.Checks}).Checks
+				if kind != "rename" {
+					renamedChecks[0].Name = "renamed_chk_1"
+				}
+				renamedChecks[0].OriginSql = "renamed > 0"
+				expectedChecks = renamedChecks
+			}
+			renameTable := api.NewRenameTableReq(7, 42, "tbl", "renamed")
+			if kind == "table rename" || kind == "table then column" {
+				requests = append(requests, renameTable)
+			}
+			if renamedChecks != nil {
+				requests = append(requests, api.NewRenameColumnReqWithChecks(7, 42, "pk", "renamed", 0, renamedChecks))
+			}
+			if kind == "column then table" {
+				requests = append(requests, renameTable)
+			}
+			if kind == "table rename" {
+				expectedChecks = api.CloneExtra(&api.SchemaExtra{Checks: replacement.Checks}).Checks
+				expectedChecks[0].Name = "renamed_chk_1"
 			}
 			if kind == "stale version" {
 				req.GetReplaceDef().ExpectedVersion++
@@ -1155,15 +1176,22 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			_, wantErr := defines.GetAccountId(context.Background())
 			require.EqualError(t, table.AlterTable(context.Background(), nil, requests), wantErr.Error())
 			require.Len(t, workspace.restoreTxnTableFunc, 1)
-			require.Len(t, table.extraInfo.Checks, len(replacement.Checks))
-			for i, check := range replacement.Checks {
+			require.Len(t, table.extraInfo.Checks, len(expectedChecks))
+			for i, check := range expectedChecks {
 				require.True(t, proto.Equal(check, table.extraInfo.Checks[i]))
 			}
 			require.Equal(t, uint32(types.CharsetUTF8), table.extraInfo.DefaultCharset)
 			require.Equal(t, uint32(9), table.extraInfo.AutoIncrEpoch)
 			if len(replacement.Checks) > 0 {
 				replacement.Checks[0].Check.GetLit().Value = &planpb.Literal_Bval{Bval: false}
-				require.True(t, table.extraInfo.Checks[0].Check.GetLit().GetBval(), "request cannot mutate published CHECK")
+				require.True(t, table.extraInfo.Checks[0].Check.GetLit().GetBval(), "replacement request cannot mutate published CHECK")
+			}
+			if renamedChecks != nil {
+				renamedChecks[0].Name = "mutated"
+				renamedChecks[0].Check.GetLit().Value = &planpb.Literal_Bval{Bval: false}
+				require.Equal(t, "renamed > 0", table.extraInfo.Checks[0].OriginSql)
+				require.NotEqual(t, "mutated", table.extraInfo.Checks[0].Name)
+				require.True(t, table.extraInfo.Checks[0].Check.GetLit().GetBval(), "rename request cannot mutate published CHECK")
 			}
 			op.EXPECT().EnterRollbackStmt()
 			op.EXPECT().ExitRollbackStmt()
@@ -1171,6 +1199,7 @@ func TestReplaceDefPublishesAndRollsBackChecks(t *testing.T) {
 			require.Empty(t, workspace.restoreTxnTableFunc)
 			require.Equal(t, uint32(types.CharsetUTF8MB4Bin), table.extraInfo.DefaultCharset)
 			require.Equal(t, uint32(9), table.extraInfo.AutoIncrEpoch)
+			require.Equal(t, "tbl", table.tableName)
 			require.Len(t, table.GetTableDef(context.Background()).Checks, 1)
 			require.True(t, proto.Equal(original, table.GetTableDef(context.Background()).Checks[0]))
 		})
