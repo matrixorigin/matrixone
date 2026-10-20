@@ -405,6 +405,23 @@ func testLoadIgnoreForeignKeyAdmission(t *testing.T, ctx context.Context, conn *
 		require.Empty(t, read(t, "select doc_id,doc_id from "+database+".`"+postings+"` where word in ('rejected','discarded')"))
 		require.Equal(t, [][2]int{{1, 1}}, read(t, "select id,id from "+database+".fk_indexed where match(body) against('accepted' in boolean mode)"))
 	})
+	t.Run("Unicode prefix foreign key diagnostics", func(t *testing.T) {
+		table := database + ".fk_unicode"
+		exec(t, "create table "+table+"(id int primary key,k varchar(20) collate utf8mb4_unicode_ci,pid int,unique key uk(k(3)),foreign key(pid) references "+parent+"(id))")
+		// The rejected row must not occupy the case-insensitive prefix key.
+		exec(t, inline("fk_unicode", "1,Alpha,99\n1,alpha,1\n2,Tail,2\n", "", "", true))
+		warn(t, map[uint16]int{1452: 1})
+		require.Equal(t, [][2]int{{1, 1}, {2, 2}}, read(t, "select id,pid from "+table+" order by id"))
+		// A duplicate INSERT checks the Unicode index populated by LOAD and
+		// retains the logical prefix in its diagnostic.
+		_, err := conn.ExecContext(ctx, "insert into "+table+" values(3,'ALPine',1)")
+		var duplicate *mysql.MySQLError
+		require.ErrorAs(t, err, &duplicate)
+		require.Equal(t, uint16(1062), duplicate.Number)
+		require.Equal(t, "23000", string(duplicate.SQLState[:]))
+		require.Equal(t, "Duplicate entry 'ALP' for key 'uk'", duplicate.Message)
+		require.Equal(t, [][2]int{{1, 1}, {2, 2}}, read(t, "select id,pid from "+table+" order by id"))
+	})
 	t.Run("foreign key checks toggles and parent targets", func(t *testing.T) {
 		exec(t, "set foreign_key_checks=0")
 		defer exec(t, "set foreign_key_checks=1")
