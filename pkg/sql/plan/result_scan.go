@@ -134,11 +134,12 @@ func (builder *QueryBuilder) buildResultScan(tbl *tree.TableFunction, ctx *BindC
 		NodeType: plan.Node_EXTERNAL_SCAN,
 		ExternScan: &plan.ExternScan{
 			Type: int32(plan.ExternType_RESULT_SCAN),
-			// The saved-result file stores all meta columns in order, so the
-			// name -> file-column index equals name2ColIndex. A query may
-			// later prune TableDef.Cols; file readers must use ColFieldIndex
-			// to locate data columns in the file (issue #30571).
-			TbColToDataCol: name2ColIndex,
+			// The saved-result file stores all meta columns in order, so
+			// tbColToDataCol records name -> file-column index over the saved
+			// schema. A query may later prune TableDef.Cols; file readers
+			// must use ColFieldIndex to locate data columns in the file
+			// (issue #30571).
+			TbColToDataCol: tbColToDataCol,
 		},
 		Stats:        &plan.Stats{},
 		TableDef:     tableDef,
