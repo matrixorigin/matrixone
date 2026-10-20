@@ -1347,6 +1347,11 @@ message Node {
 
   // Ordered binding contexts used by view authorization.
   repeated ViewStep view_path = 94;
+
+  // DEDUP only: lossless logical index parts from the incoming row. These
+  // survive pruning and are evaluated only when rendering a diagnostic;
+  // on_list continues to use the opaque physical comparison key.
+  repeated Expr dedup_key_exprs = 95;
 }
 
 message SnapshotExtraInfo {
@@ -1629,6 +1634,8 @@ message PreInsertUkCtx {
   repeated string key_names = 16;
   repeated Type key_types = 17;
   repeated int32 key_type_counts = 18;
+  // Parallel to key_columns. Empty lists retain legacy diagnostic rendering.
+  repeated ExprList key_diagnostic_exprs = 19;
 }
 
 message PreInsertCtx {
