@@ -72,19 +72,19 @@ func comparisonTypeCastRule(left, right types.Type) (bool, types.Type, types.Typ
 	if castLeft.Oid.IsDecimal() && castRight.Oid.IsDecimal() {
 		// Decimal targets produced by the fixed comparison rules are synthesized
 		// physical domains, not DECIMAL assignment targets.  Re-derive their
-		// precision from the original operands even when the two targets already
-		// have the same OID and scale; otherwise a BIGINT/TIME(0) comparison can
-		// retain DECIMAL64(18,0) and reject valid 19-digit BIGINT values.
-		maxScale := max(castLeft.Scale, castRight.Scale)
+		// precision when an integer's own target cannot hold its domain, even
+		// when both targets have the same OID and scale (e.g. BIGINT/TIME(0)
+		// synthesized as DECIMAL64(18,0)). A narrower peer must not force a
+		// sufficient integer target to adopt that peer's width or scale.
+		targets := []types.Type{castLeft, castRight}
 		needsWiden := false
-		for _, input := range []types.Type{left, right} {
-			if input.IsIntOrUint() && integerIntegralWidth(input.Oid)+maxScale > min(castLeft.Width, castRight.Width) {
+		for i, input := range []types.Type{left, right} {
+			if input.IsIntOrUint() && integerIntegralWidth(input.Oid) > targets[i].Width-targets[i].Scale {
 				needsWiden = true
 				break
 			}
 		}
 		if needsWiden {
-			targets := []types.Type{castLeft, castRight}
 			if _, ok := alignDecimalComparisonTypes(targets, []types.Type{left, right}); ok {
 				castLeft, castRight = targets[0], targets[1]
 			}
@@ -287,8 +287,8 @@ func alignDecimalComparisonTypes(targets, inputs []types.Type) (bool, bool) {
 		// integral domain does not fit in the already-aligned target; that is the
 		// synthesized BIGINT/TIME case that needs promotion.
 		allIntegerDomainsFit := true
-		for _, input := range inputs {
-			if input.IsIntOrUint() && integerIntegralWidth(input.Oid) > target.Width-target.Scale {
+		for i, input := range inputs {
+			if input.IsIntOrUint() && integerIntegralWidth(input.Oid) > targets[i].Width-targets[i].Scale {
 				allIntegerDomainsFit = false
 				break
 			}

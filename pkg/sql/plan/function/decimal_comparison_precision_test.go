@@ -96,6 +96,41 @@ func TestDecimalComparisonAlignmentControls(t *testing.T) {
 	}
 }
 
+func TestDecimalComparisonPreservesSufficientIntegerCast(t *testing.T) {
+	for _, tc := range []struct {
+		name             string
+		decimal, integer types.Type
+	}{
+		{"different scales", types.New(types.T_decimal128, 20, 4), types.T_int64.ToType()},
+		{"same scale narrower decimal", types.New(types.T_decimal128, 19, 0), types.T_uint64.ToType()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			integerTarget := types.New(types.T_decimal128, 38, 0)
+			for _, operands := range [][2]types.Type{{tc.decimal, tc.integer}, {tc.integer, tc.decimal}} {
+				want := []types.Type{tc.decimal, integerTarget}
+				if operands[0].IsIntOrUint() {
+					want[0], want[1] = want[1], want[0]
+				}
+				for _, op := range []string{"<", "<=", ">", ">="} {
+					resolved, err := GetFunctionByName(t.Context(), op, operands[:])
+					require.NoError(t, err)
+					targets, cast := resolved.ShouldDoImplicitTypeCast()
+					require.True(t, cast)
+					require.Equal(t, want, targets, "an integer's own target already retains its full domain")
+				}
+				if tc.decimal.Scale == 0 {
+					// Equal coefficient scales need no further alignment either.
+					targets := append([]types.Type(nil), want...)
+					changed, ok := alignDecimalComparisonTypes(targets, operands[:])
+					require.True(t, ok)
+					require.False(t, changed)
+					require.Equal(t, want, targets)
+				}
+			}
+		})
+	}
+}
+
 func TestDecimalComparisonNullAndInvalidInputs(t *testing.T) {
 	for _, op := range []string{"=", "<=>"} {
 		for _, args := range [][]types.Type{
