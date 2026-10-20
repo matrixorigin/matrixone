@@ -1603,6 +1603,10 @@ message LockTarget {
   ObjectRef obj_ref = 15;
   int32 partition_col_idx_in_bat = 16;
   bool has_partition_col = 17;
+  // no_wait is a physical row-lock acquisition policy. It is separate from
+  // the SQL error outcome; SkipLocked targets also use nonblocking acquisition.
+  bool no_wait = 18;
+  bool skip_locked = 19;
 }
 
 message PreInsertUkCtx {

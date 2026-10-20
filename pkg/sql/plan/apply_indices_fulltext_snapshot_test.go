@@ -390,6 +390,7 @@ func TestCoveredFulltext2ScoreLimitSortBarriers(t *testing.T) {
 			cases = append(cases,
 				testCase{name: "inner ascending", mutate: func(n nodes) { n.inner.OrderBy[0].Flag = plan.OrderBySpec_ASC }},
 				testCase{name: "inner different key", mutate: func(n nodes) { n.inner.OrderBy[0].Expr.GetCol().ColPos = 0 }},
+				testCase{name: "inner constant ordering", mutate: func(n nodes) { n.inner.OrderBy[0].Expr = makePlan2Int64ConstExprWithType(1) }},
 				testCase{name: "inner secondary key", mutate: func(n nodes) { n.inner.OrderBy = append(n.inner.OrderBy, n.inner.OrderBy[0]) }},
 				testCase{name: "inner filter", mutate: func(n nodes) { n.inner.FilterList = []*plan.Expr{makePlan2BoolConstExprWithType(true)} }},
 				testCase{name: "inner limit", mutate: func(n nodes) { n.inner.Limit = makePlan2Uint64ConstExprWithType(1) }},
