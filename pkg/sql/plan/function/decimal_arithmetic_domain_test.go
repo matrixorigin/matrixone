@@ -59,3 +59,19 @@ func TestArithmeticDecimalCastsRetainIntegerDomain(t *testing.T) {
 		}
 	}
 }
+
+func TestIntegerDivDomainWideningPreservesLegacyOriginSignature(t *testing.T) {
+	inputs := []types.Type{types.T_time.ToTypeWithScale(6), types.T_int64.ToType()}
+	current, err := GetFunctionByName(t.Context(), "div", inputs)
+	require.NoError(t, err)
+	currentTargets, cast := current.ShouldDoImplicitTypeCast()
+	require.True(t, cast)
+	require.Equal(t, types.New(types.T_decimal128, 19, 0), currentTargets[1])
+
+	legacy, err := GetFunctionByName(WithLegacyDecimalIntegerDiv(t.Context()), "div", inputs)
+	require.NoError(t, err)
+	legacyTargets, cast := legacy.ShouldDoImplicitTypeCast()
+	require.True(t, cast)
+	require.Equal(t, types.T_decimal64.ToType(), legacyTargets[1])
+	require.Equal(t, current.GetReturnType(), legacy.GetReturnType())
+}

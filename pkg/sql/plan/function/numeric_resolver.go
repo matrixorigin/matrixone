@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -291,11 +292,17 @@ func ResolveNumericBinaryTypes(
 	right types.Type,
 	outer *types.Type,
 ) (types.Type, types.Type, types.Type, bool) {
+	return ResolveNumericBinaryTypesWithContext(context.Background(), name, left, right, outer)
+}
+
+// ResolveNumericBinaryTypesWithContext preserves the dump-only historical DIV
+// policy when nested numeric consumers resolve operands before function binding.
+func ResolveNumericBinaryTypesWithContext(ctx context.Context, name string, left, right types.Type, outer *types.Type) (types.Type, types.Type, types.Type, bool) {
 	op, ok := numericBinaryOpByName(name)
 	if !ok {
 		return types.Type{}, types.Type{}, types.Type{}, false
 	}
-	resolved, ok := resolveNumericBinaryTypes(op, left, right, outer)
+	resolved, ok := resolveNumericBinaryTypesMode(op, left, right, outer, LegacyDecimalIntegerDiv(ctx))
 	return resolved.left, resolved.right, resolved.result, ok
 }
 
@@ -327,6 +334,10 @@ func resolveNumericBinaryTypes(
 	right types.Type,
 	outer *types.Type,
 ) (numericTypeResolution, bool) {
+	return resolveNumericBinaryTypesMode(op, left, right, outer, false)
+}
+
+func resolveNumericBinaryTypesMode(op numericBinaryOp, left, right types.Type, outer *types.Type, legacyDecimalDiv bool) (numericTypeResolution, bool) {
 	// Resolve the BIT dividend before T_any inference and generic coercion so
 	// its unsigned result domain and declared width are not lost.
 	if op == numericOpIntegerDiv {
@@ -347,7 +358,7 @@ func resolveNumericBinaryTypes(
 		}, true
 	}
 
-	if op == numericOpIntegerDiv {
+	if op == numericOpIntegerDiv && !legacyDecimalDiv {
 		if result, scoped := DecimalIntegerDivReturnType([]types.Type{left, right}); scoped {
 			if operands, unsigned := decimalIntegerDivUnsignedTypes([]types.Type{left, right}); unsigned {
 				return numericTypeResolution{left: operands[0], right: operands[1], result: result}, true
@@ -376,6 +387,9 @@ func resolveNumericBinaryTypes(
 			left, right = mixedLeft, mixedRight
 		} else if exactLeft, exactRight, exact := integerDivExactTypes(left, right); exact {
 			left, right = exactLeft, exactRight
+		} else if legacyDecimalDiv {
+			// Historical catalog verification compares the original cast tree.
+			cast, castLeft, castRight = fixedTypeCastRule2(left, right)
 		} else {
 			cast, castLeft, castRight = integerDivTypeCastRule(left, right)
 		}

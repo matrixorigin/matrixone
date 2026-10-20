@@ -2355,35 +2355,15 @@ var supportedOperators = []FuncNew{
 					}
 					return newCheckResultWithCast(DecimalIntegerDivUnsignedOverload, targets)
 				}
-				if t1, t2, ok := integerDivBitTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				// Keep same-domain operands unchanged where possible.
-				if integerDivOperatorSupports(inputs[0], inputs[1]) {
-					return newCheckResultWithSuccess(0)
-				}
-				if t1, t2, ok := integerDivUnsignedMixedTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				if t1, t2, ok := integerDivExactTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				// Then check with type casting
-				has, t1, t2 := integerDivTypeCastRule(inputs[0], inputs[1])
-				if has && integerDivOperatorSupports(t1, t2) {
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
 			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			result := legacyIntegerDivCheck(inputs)
+			if result.status == succeedWithCast && len(inputs) == 2 && len(result.finalType) == 2 {
+				// Upgrade ordinary execution casts without changing the frozen
+				// historical signature used to verify persisted SQL origins.
+				result.finalType[0], result.finalType[1] = widenArithmeticDecimalIntegerTargets(
+					inputs[0], inputs[1], result.finalType[0], result.finalType[1])
+			}
+			return result
 		},
 
 		Overloads: []overload{
