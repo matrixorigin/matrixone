@@ -39,6 +39,7 @@ func TestCDCWatermarkColumnsUpgradeMetadata(t *testing.T) {
 	require.Equal(t, "4.0.10", m.MinUpgradeVersion)
 	require.Equal(t, versions.Yes, m.UpgradeCluster)
 	require.Equal(t, versions.No, m.UpgradeTenant)
+	require.Equal(t, uint32(2), m.VersionOffset, "preserve the published upgrade identity")
 	require.Equal(t, defines.MORPCVersion106, m.RequiredProtocolVersion)
 	require.Len(t, clusterUpgEntries, 4)
 	names := make([]string, 0, len(clusterUpgEntries))
