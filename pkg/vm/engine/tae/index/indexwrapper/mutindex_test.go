@@ -160,7 +160,9 @@ func TestGetDuplicatedRowsWindow(t *testing.T) {
 			defer rows.Free(mp)
 			require.NoError(t, vector.AppendFixed(rows, types.Rowid{}, true, mp))
 			err := idx.GetDuplicatedRows(context.Background(), keys, index.NewZM(types.T_int32, 0), &types.Blockid{}, rows,
-				func() (int32, int32, error) { return tc.min, tc.max, nil },
+				func() (index.RowSelection, error) {
+					return index.RowSelection{MinRow: uint32(tc.min), MaxRow: uint32(tc.max)}, nil
+				},
 				func(row uint32) error {
 					if tc.aborted[row] {
 						return index.ErrNotFound
