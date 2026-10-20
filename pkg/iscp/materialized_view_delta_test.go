@@ -440,6 +440,22 @@ func TestMaterializedViewDeltaSourceCTEValidation(t *testing.T) {
 	}
 }
 
+func TestMaterializedViewDeltaSourceCTEHistoricalTime(t *testing.T) {
+	value, err := types.ParseTime("12:34:56.123456", 6)
+	require.NoError(t, err)
+	typ := types.T_time.ToTypeWithScale(6)
+	desc := &incrementalDescription{SourceColumns: []string{"event_time"}}
+	cte, err := materializedViewDeltaSourceCTE(t.Context(), desc, []*types.Type{&typ}, []materializedViewSignedRow{{
+		values: map[string]any{"event_time": value}, sign: -1,
+	}})
+	require.NoError(t, err)
+	require.Contains(t, cte, "'12:34:56.123456'")
+	_, err = parsers.ParseOne(t.Context(), dialect.MYSQL, "WITH "+cte+" SELECT * FROM src", 1)
+	require.NoError(t, err)
+	_, err = convertColIntoSql(t.Context(), int64(1), &typ, nil)
+	require.ErrorContains(t, err, "unexpected time value type")
+}
+
 func ptrType(typ types.Type) *types.Type { return &typ }
 
 func TestMaterializedViewDeltaJoinUsesEqualityForNonNullableGroups(t *testing.T) {

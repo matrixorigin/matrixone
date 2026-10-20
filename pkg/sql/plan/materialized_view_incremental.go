@@ -249,18 +249,24 @@ func buildMaterializedViewIncrementalBranchPlan(
 			// maintenance stores exact value multiplicities in the auxiliary state
 			// table and updates this column only on 0<->1 transitions.
 		} else if agg.Kind == "sum_distinct" || agg.Kind == "avg_distinct" {
+			if name == "avg" && materializedViewAvgSumScaleAmbiguous(outputCols[i].Typ) {
+				return "", nil, ""
+			}
 			agg.StateSumColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_distinct_sum_%d", i))
 			agg.StateCountColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_distinct_count_%d", i))
 			stateCols = append(stateCols,
-				materializedViewStateColumn(agg.StateSumColumn, outputCols[i].Typ, true),
+				materializedViewStateColumn(agg.StateSumColumn, materializedViewSumStateType(outputCols[i].Typ, name == "avg"), true),
 				materializedViewStateColumn(agg.StateCountColumn, Type{Id: int32(types.T_int64)}, false))
 			stateExprs = append(stateExprs,
 				"sum(DISTINCT "+agg.InputExpression+")", "count(DISTINCT "+agg.InputExpression+")")
 		} else if name == "avg" {
+			if materializedViewAvgSumScaleAmbiguous(outputCols[i].Typ) {
+				return "", nil, ""
+			}
 			agg.StateSumColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_avg_sum_%d", i))
 			agg.StateCountColumn = materializedViewUniqueStateColumn(outputCols, fmt.Sprintf("__mo_mv_avg_count_%d", i))
 			stateCols = append(stateCols,
-				materializedViewStateColumn(agg.StateSumColumn, outputCols[i].Typ, true),
+				materializedViewStateColumn(agg.StateSumColumn, materializedViewSumStateType(outputCols[i].Typ, true), true),
 				materializedViewStateColumn(agg.StateCountColumn, Type{Id: int32(types.T_int64)}, false))
 			stateExprs = append(stateExprs, "sum("+agg.InputExpression+")", "count("+agg.InputExpression+")")
 		} else if name == "sum" {
@@ -742,6 +748,38 @@ func materializedViewStateColumn(name string, typ Type, nullable bool) *ColDef {
 		Name: name, Hidden: true, Typ: typ,
 		Default: &planpb.Default{NullAbility: nullable}, NotNull: !nullable,
 	}
+}
+
+// AVG exposes a quotient type, whose precision cannot hold its SUM state.
+// Decimal AVG adds four fractional digits to the input while SUM reserves 22
+// aggregate digits. Use the quotient metadata to conservatively reconstruct
+// the SUM domain, including the capped DECIMAL256 scale case.
+func materializedViewSumStateType(output Type, avg bool) Type {
+	if !avg {
+		return output
+	}
+	switch types.T(output.Id) {
+	case types.T_decimal128, types.T_decimal256:
+		precision := output.Width + 18 // SUM +22 versus AVG +4.
+		if precision > 65 {
+			precision = 65
+		}
+		scale := output.Scale
+		if scale < 38 {
+			scale -= min(scale, int32(4))
+		}
+		output.Width, output.Scale = precision, scale
+		if precision > 38 {
+			output.Id = int32(types.T_decimal256)
+		}
+	}
+	return output
+}
+
+// AVG scale 38 may come from input scales 34 through 38. The visible type
+// cannot recover the SUM scale, so use complete refresh for this case.
+func materializedViewAvgSumScaleAmbiguous(output Type) bool {
+	return (types.T(output.Id) == types.T_decimal128 || types.T(output.Id) == types.T_decimal256) && output.Scale == 38
 }
 
 func materializedViewRefreshSQLWithState(stmt *tree.Select, expressions, aliases []string) (string, bool) {

@@ -16,6 +16,29 @@ join mv_review_27615_other.src c on a.id=c.id;
 refresh materialized view self_join;
 select count(*)=1 and min(id)=1 as refresh_bound_to_defining_database from self_join;
 
+-- Partial restore recreates the materialized view before a VIEW using it.
+create view dependent as select id from self_join;
+drop snapshot if exists mv_review_27615_s;
+create snapshot mv_review_27615_s for account;
+drop view dependent;
+drop materialized view self_join;
+restore database mv_review_27615 {snapshot='mv_review_27615_s'};
+select count(*)=1 and min(id)=1 as restored_materialized_dependency from dependent;
+drop view dependent;
+drop materialized view self_join;
+restore table mv_review_27615.self_join {snapshot='mv_review_27615_s'};
+select count(*)=1 and min(id)=1 as restored_materialized_table from self_join;
+drop snapshot mv_review_27615_s;
+
+-- Both AVG state variants must store SUM(5 * 2) and SUM(DISTINCT 8, 9).
+create table decimal_source(id int primary key, g int, v decimal(1,0));
+insert into decimal_source values (1,1,2),(2,1,2),(3,1,2),(4,1,2),(5,1,2),(6,2,8),(7,2,9);
+create materialized view decimal_avg refresh fast on change as
+select g, avg(v) a, avg(distinct v) ad from decimal_source group by g;
+-- @wait_expect(2, 30)
+select sum(a=2)=1 and sum(ad=8.5)=1 as avg_state_has_sum_capacity from decimal_avg;
+drop materialized view decimal_avg;
+
 -- SQL groups and DISTINCT compare floating +0 and -0 as equal. FAST must
 -- refuse byte-serialized floating keys until its state uses SQL equality.
 create table floating_source(id int primary key, g int, k double);

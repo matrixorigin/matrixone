@@ -349,7 +349,15 @@ func convertColIntoSql(
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')
 	case types.T_time:
-		value := data.(string)
+		var value string
+		switch v := data.(type) {
+		case string:
+			value = v
+		case types.Time:
+			value = v.String2(typ.Scale)
+		default:
+			return nil, moerr.NewInternalErrorf(ctx, "unexpected time value type %T", data)
+		}
 		sqlBuff = appendByte(sqlBuff, '\'')
 		sqlBuff = appendString(sqlBuff, value)
 		sqlBuff = appendByte(sqlBuff, '\'')

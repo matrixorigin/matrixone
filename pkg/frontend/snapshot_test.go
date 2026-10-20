@@ -264,6 +264,30 @@ func TestMaterializedViewRestoreClassification(t *testing.T) {
 	require.Equal(t, "drop view if exists `v`", dropRestoreViewIfExistsSQL(ordinary))
 }
 
+func TestPartialRestoreMaterializedViewOrder(t *testing.T) {
+	mv := &tableInfo{dbName: "db", tblName: "mv", typ: materializedView}
+	v := &tableInfo{dbName: "db", tblName: "v", typ: view,
+		createSql: "create view v as select * from mv"}
+	state := &tableInfo{dbName: "db", tblName: "__mo_mv_state_mv", typ: materializedView, mvState: true}
+	views := partialRestoreViews([]*tableInfo{v, state, mv})
+	require.Len(t, views, 2)
+	require.Same(t, mv, views[genKey("db", "mv")])
+	stmt, err := parseViewCreateSQLForRestore(t.Context(), v, 1)
+	require.NoError(t, err)
+	defer freeStatements(stmt)
+	deps := restoreMaterializedViewDependencies(stmt, "db", views)
+	require.Equal(t, []string{genKey("db", "mv")}, deps)
+	g := toposort{next: make(map[string][]string)}
+	g.addVertex(genKey("db", "v"))
+	g.addVertex(genKey("db", "mv"))
+	for _, dep := range deps {
+		g.addEdge(dep, genKey("db", "v"))
+	}
+	order, err := g.sort()
+	require.NoError(t, err)
+	require.Equal(t, []string{genKey("db", "mv"), genKey("db", "v")}, order)
+}
+
 func TestAnnotateMaterializedViewStatesRequiresCatalogOwnership(t *testing.T) {
 	constraint, err := (&engine.ConstraintDef{Cts: []engine.Constraint{
 		&engine.StreamConfigsDef{Configs: []*plan.Property{{

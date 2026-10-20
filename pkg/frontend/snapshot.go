@@ -2041,6 +2041,7 @@ func sortedViewInfos(
 		if err != nil {
 			return nil, err
 		}
+		materializedDeps := restoreMaterializedViewDependencies(stmts, viewEntry.dbName, viewMap)
 
 		viewCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
@@ -2052,6 +2053,7 @@ func sortedViewInfos(
 			if err != nil {
 				return nil, err
 			}
+			materializedDeps = restoreMaterializedViewDependencies(stmts, viewEntry.dbName, viewMap)
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
@@ -2077,6 +2079,9 @@ func sortedViewInfos(
 			}
 			g.addEdge(depView, key)
 		}
+		for _, dep := range materializedDeps {
+			g.addEdge(dep, key)
+		}
 	}
 
 	// toposort
@@ -2086,6 +2091,57 @@ func sortedViewInfos(
 	}
 
 	return sortedViews, nil
+}
+
+// The binder reports VIEW dependencies, but a materialized view is bound as a
+// table. Record direct FROM dependencies that are materialized views in this
+// restore set so a dependent ordinary view is recreated after its source.
+func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB string, viewMap map[string]*tableInfo) []string {
+	if len(stmts) != 1 {
+		return nil
+	}
+	create, ok := stmts[0].(*tree.CreateView)
+	if !ok || create.AsSource == nil {
+		return nil
+	}
+	var deps []string
+	var walkTable func(tree.TableExpr)
+	walkTable = func(expr tree.TableExpr) {
+		switch t := expr.(type) {
+		case *tree.TableName:
+			db := string(t.SchemaName)
+			if db == "" {
+				db = defaultDB
+			}
+			key := genKey(db, string(t.ObjectName))
+			if dep, found := viewMap[key]; found && dep.typ == materializedView {
+				deps = append(deps, key)
+			}
+		case *tree.AliasedTableExpr:
+			walkTable(t.Expr)
+		case *tree.ParenTableExpr:
+			walkTable(t.Expr)
+		case *tree.JoinTableExpr:
+			walkTable(t.Left)
+			walkTable(t.Right)
+		}
+	}
+	var walkSelect func(tree.SelectStatement)
+	walkSelect = func(stmt tree.SelectStatement) {
+		switch s := stmt.(type) {
+		case *tree.SelectClause:
+			if s.From != nil {
+				for _, table := range s.From.Tables {
+					walkTable(table)
+				}
+			}
+		case *tree.UnionClause:
+			walkSelect(s.Left)
+			walkSelect(s.Right)
+		}
+	}
+	walkSelect(create.AsSource.Select)
+	return deps
 }
 
 func recreateTable(

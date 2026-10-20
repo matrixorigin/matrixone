@@ -59,13 +59,24 @@ func validateMaterializedViewQuery(ctx context.Context, stmt *tree.Select) error
 			err = unsupported()
 		case *tree.FuncExpr:
 			name := materializedViewIncrementalFunctionName(node)
-			if materializedViewTimezoneSensitiveFunction(name) || function.GetFunctionIsVolatileOrRealTimeRelatedByName(name) {
+			if materializedViewSessionDependentFunction(name) || materializedViewTimezoneSensitiveFunction(name) || function.GetFunctionIsVolatileOrRealTimeRelatedByName(name) {
 				err = unsupported()
 			}
 		}
 		return err == nil
 	})
 	return err
+}
+
+func materializedViewSessionDependentFunction(name string) bool {
+	switch name {
+	case "database", "schema", "user", "system_user", "session_user", "current_user",
+		"current_account_id", "current_account_name", "current_role", "current_role_id",
+		"current_role_name", "current_user_id", "current_user_name":
+		return true
+	default:
+		return false
+	}
 }
 
 func materializedViewTimezoneSensitiveFunction(name string) bool {

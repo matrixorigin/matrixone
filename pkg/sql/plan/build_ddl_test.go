@@ -1892,6 +1892,10 @@ func TestMaterializedViewAdmissionTracksAllInputs(t *testing.T) {
 		{"select year(ts), count(*) from src group by year(ts)", false},
 		{"select ts + interval 1 day, count(*) from src group by ts + interval 1 day", false},
 		{"select k,now() from src", false},
+		{"select k,current_user_name() from src", false},
+		{"select k from src where current_account_name() = 'tenant'", false},
+		{"select k,current_role() from src", false},
+		{"select k from src where database() = 'db'", false},
 		{"select k from src where k=@limit", false},
 		{"select k from src where k=?", false},
 		{"with d as (select k from dim) select k from src", false},
@@ -2073,6 +2077,31 @@ func TestMaterializedViewIncrementalSpecPreservesGroupNullability(t *testing.T) 
 	decoded, err = json.Marshal(desc)
 	require.NoError(t, err)
 	require.Equal(t, []string{desc.GroupKeyColumn}, materializedViewIncrementalPrimaryKey(base64.StdEncoding.EncodeToString(decoded)))
+}
+
+func TestMaterializedViewAvgSumStateUsesAccumulatorWidth(t *testing.T) {
+	for _, distinct := range []bool{false, true} {
+		function := "avg(amount)"
+		if distinct {
+			function = "avg(distinct amount)"
+		}
+		stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL,
+			"select k, "+function+" as mean from src group by k", 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		outputs := []*ColDef{
+			{Name: "k", Typ: Type{Id: int32(types.T_int64)}},
+			{Name: "mean", Typ: Type{Id: int32(types.T_decimal128), Width: 5, Scale: 4}},
+		}
+		spec, stateCols, _ := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputs)
+		require.NotEmpty(t, spec)
+		require.GreaterOrEqual(t, stateCols[1].Typ.Width, int32(23))
+		require.Equal(t, int32(0), stateCols[1].Typ.Scale)
+		require.Equal(t, int32(types.T_decimal128), stateCols[1].Typ.Id)
+		outputs[1].Typ = Type{Id: int32(types.T_decimal256), Width: 65, Scale: 38}
+		fallback, _, _ := buildMaterializedViewIncrementalPlan(stmt.(*tree.Select), outputs)
+		require.Empty(t, fallback)
+	}
 }
 
 func TestMaterializedViewIncrementalRejectsCollationAwareGroups(t *testing.T) {
