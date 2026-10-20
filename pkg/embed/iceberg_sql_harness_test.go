@@ -244,6 +244,7 @@ func TestIcebergSQLEngineEmbeddedHarness(t *testing.T) {
 			{name: "write DML and maintenance SQL", run: runIcebergSQLEngineEmbeddedWriteDMLAndMaintenanceSQL},
 			{name: "native schema evolution", run: runIcebergSQLEngineEmbeddedSchemaEvolution},
 			{name: "native snapshot-less table", run: runIcebergSQLEngineEmbeddedSnapshotlessTable},
+			{name: "native typed refs", run: runIcebergSQLEngineEmbeddedTypedRefs},
 			// This scenario replaces the fixture's object provider and disables its
 			// residency row, so keep it last while the suite shares catalog state.
 			{name: "credential security and redaction", run: runIcebergSQLEngineEmbeddedCredentialSecurityAndRedaction},

@@ -327,6 +327,15 @@ func NewMockCompilerContext(isDml bool, proc *process.Process) *MockCompilerCont
 		},
 		pks: []int{0},
 	}
+	tpchSchema["returning_bool"] = &Schema{
+		cols: []col{
+			{"id", types.T_int32, false, 0, 0},
+			{"flag", types.T_bool, true, 0, 0},
+			{"n", types.T_int32, true, 0, 0},
+			{catalog.Row_ID, types.T_Rowid, false, 16, 0},
+		},
+		pks: []int{0},
+	}
 	tpchSchema["nation2"] = &Schema{
 		cols: []col{ //not exist in tpch, create for test NaturalJoin And UsingJoin
 			{"n_nationkey", types.T_int32, false, 0, 0},
