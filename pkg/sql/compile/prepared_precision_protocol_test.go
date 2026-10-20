@@ -620,5 +620,59 @@ func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
 			require.NoError(t, err)
 		}
 	}
+
+	// The temporal expression keeps its independent v124 expression/persisted
+	// floor, while strict numeric execution raises placement and send/receive
+	// admission to max(v124, v125) == v125.
+	numericQry, numericScope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
+	t.Cleanup(numericScope.RootOp.Release)
+	combinedProjects := []*planpb.Expr{expr, numericQry.Nodes[0].ProjectList[0]}
+	combinedQuery := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: combinedProjects}}, Steps: []int32{0}}
+	combinedFeatures, err := planpb.RequiredRemoteExpressionFeatures(combinedQuery)
+	require.NoError(t, err)
+	require.True(t, combinedFeatures.TimestampAddSecondIntervals)
+	require.True(t, combinedFeatures.StrictStringNumericCompatibility)
+	require.Equal(t, defines.MORPCVersion124, remoteExpressionProtocolVersion(combinedFeatures),
+		"mode-dependent numeric execution is applied separately from the temporal expression/persisted floor")
+
+	numericScope.Proc = c.proc
+	numericScope.RootOp.(*projection.Projection).ProjectList = combinedProjects
+	combinedPipeline := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: combinedProjects}}}
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	for _, tc := range []struct {
+		workerVersion   int64
+		wantDistributed bool
+	}{
+		{workerVersion: defines.MORPCVersion124},
+		{workerVersion: defines.MORPCVersion125, wantDistributed: true},
+	} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+		client.version = tc.workerVersion
+		c.execType = plan2.ExecTypeAP_MULTICN
+		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+		require.NoError(t, c.constrainRemoteExpressionWorkers(combinedQuery))
+		if tc.wantDistributed {
+			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+		} else {
+			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType,
+				"a v124 worker has the temporal contract but not the strict numeric execution contract")
+		}
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.workerVersion)
+		err = validateRemoteExpressionPipelineProtocol(c.proc, combinedPipeline)
+		if tc.workerVersion < defines.MORPCVersion125 {
+			require.ErrorContains(t, err, "string numeric compatibility requires MORPC protocol version 125")
+		} else {
+			require.NoError(t, err)
+		}
+
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+		_, err = encodeRemoteScope(numericScope, c.proc)
+		if tc.wantDistributed {
+			require.NoError(t, err)
+		} else {
+			require.ErrorContains(t, err, "MORPC version 125")
+		}
+	}
 	require.Equal(t, client.calls, client.releases)
 }
