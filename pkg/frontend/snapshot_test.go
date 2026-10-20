@@ -886,6 +886,7 @@ func TestRestoreExternalTableSnapshotAndFromTS(t *testing.T) {
 			newMrsForRestoreStringRows([]string{"datname", "dat_createsql", "dat_type"}, [][]interface{}{{dbName, "create database db1", ""}})
 		bh.sql2result[fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(dbName), quoteSQLStringLiteral(dbName))] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 		bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = 'db1'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
+		bh.sql2result[getPubInfoWithPitr(snapshotTs, uint32(sysAccountID), dbName)] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
 		bh.sql2result[buildTableInfoListSQL(dbName, "", snapshotTs, uint32(sysAccountID))] =
 			newMrsForRestoreStringRows([]string{"relname", "table_type", "relkind", "viewdef"}, [][]interface{}{
 				{"base_t", "BASE TABLE", "r"},
@@ -1340,6 +1341,10 @@ func TestMarkedDatabaseRestorePreservesIdentityAtCapability(t *testing.T) {
 			)
 			bh.sql2result[masterSQL] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
 			bh.sql2result[publicationSQL] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
+			// all three restore cores replay the publications of the dropped
+			// database; an empty mo_pubs projection keeps that a no-op.
+			bh.sql2result[getPubInfoWithPitr(ts, uint32(sysAccountID), dbName)] =
+				newMrsForRestoreStringRows([]string{"account_id"}, nil)
 			bh.sql2result[test.tablesSQL] = newMrsForRestoreStringRows(
 				[]string{"relname", "table_type", "relkind", "viewdef"}, nil,
 			)

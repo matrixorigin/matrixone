@@ -1671,6 +1671,19 @@ func restoreToDatabaseOrTable(
 			return
 		}
 	}
+
+	// The drop above erased the mo_pubs rows targeting this database together
+	// with the database itself.  The PITR path rebuilds them after its database
+	// restore (createPubByPitr); a snapshot restore must not silently diverge
+	// and strand every subscriber on `there is no publication` (#30610).  A
+	// table-level restore never dropped the database, so its publications are
+	// still in place and must not be replayed on top of them.
+	if !restoreToTbl {
+		if err = recreatePublicationsAfterDbRestoreTS(
+			ctx, sid, bh, dbName, restoreAccount, toAccountId, snapshotTs); err != nil {
+			return
+		}
+	}
 	return
 }
 

@@ -18,7 +18,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
@@ -116,4 +118,53 @@ func TestRestorePublicationsRejectsMissingTarget(t *testing.T) {
 	failure := errors.New("account lookup failed")
 	bh.sql2err[getAccountIdNamesSql] = failure
 	require.ErrorIs(t, createPubs(t.Context(), "", bh, "s", 42, []*pubsub.PubInfo{pub}), failure)
+}
+
+// Test_recreatePublicationsAfterDbRestoreTS pins #30610: a snapshot-time
+// database restore drops the database and its mo_pubs rows; the restore must
+// replay the publications so subscribers keep working, and must stay silent
+// when the restore crosses accounts (the source account keeps its rows).
+func Test_recreatePublicationsAfterDbRestoreTS(t *testing.T) {
+	pubTs := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+
+	fixture := func() *backgroundExecTest {
+		bh := &backgroundExecTest{}
+		bh.init()
+		bh.sql2result[getPubInfoWithPitr(pubTs, 0, "test")] = newMrsForSqlForGetPubs([][]interface{}{
+			{int64(sysAccountID), sysAccountName, "pub01", pubsub.TableAll, uint64(0), pubsub.TableAll, pubsub.AccountAll, "", "", uint64(17), uint64(29), ""},
+		})
+		bh.sql2result[getAccountIdNamesSql] = newMrsForGetAllAccounts([][]interface{}{
+			{int64(sysAccountID), sysAccountName, "open", uint64(1), nil},
+			{int64(1), "acc01", "open", uint64(1), nil},
+		})
+		bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub01'"] =
+			newMrsForSqlForGetSubs([][]interface{}{})
+		return bh
+	}
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+
+	t.Run("cross-account restore leaves the source publications untouched", func(t *testing.T) {
+		bh := fixture()
+		require.NoError(t, recreatePublicationsAfterDbRestoreTS(ctx, "", bh, "test", 0, 5, pubTs))
+		require.Empty(t, bh.executedSQLs)
+	})
+
+	t.Run("same-account restore replays the publications with their principals", func(t *testing.T) {
+		bh := fixture()
+		require.NoError(t, recreatePublicationsAfterDbRestoreTS(ctx, "", bh, "test", 0, 0, pubTs))
+		var insertSQL string
+		for _, s := range bh.executedSQLs {
+			if insertSQL == "" && strings.HasPrefix(s, "insert into mo_catalog.mo_pubs") {
+				insertSQL = s
+			}
+		}
+		require.Contains(t, insertSQL, "17, 29")
+	})
+
+	t.Run("publication read failure aborts the restore", func(t *testing.T) {
+		bh := fixture()
+		readErr := errors.New("mo_pubs read failed")
+		bh.sql2err[getPubInfoWithPitr(pubTs, 0, "test")] = readErr
+		require.ErrorIs(t, recreatePublicationsAfterDbRestoreTS(ctx, "", bh, "test", 0, 0, pubTs), readErr)
+	})
 }

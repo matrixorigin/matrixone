@@ -530,7 +530,48 @@ func restoreDatabaseFromTS(
 			return
 		}
 	}
+
+	// The drop above erased the mo_pubs rows targeting this database together
+	// with the database itself.  The PITR path rebuilds them after its database
+	// restore (createPubByPitr); a snapshot restore must not silently diverge
+	// and strand every subscriber on `there is no publication` (#30610).
+	if err = recreatePublicationsAfterDbRestoreTS(
+		ctx, sid, bh, dbName, restoreAccount, toAccountId, snapshotTs); err != nil {
+		return
+	}
 	return
+}
+
+// recreatePublicationsAfterDbRestoreTS replays the snapshot-time publications
+// of a database that a snapshot restore just dropped and recreated, sharing
+// the read-at-{MO_TS}/re-CREATE PUBLICATION semantics of the PITR path.  It
+// replays only when the restore lands in the account that owned the
+// publications: a cross-account restore leaves the source account's database
+// and its publications untouched, and replaying them there would collide with
+// the live rows.
+func recreatePublicationsAfterDbRestoreTS(
+	ctx context.Context,
+	sid string,
+	bh BackgroundExec,
+	dbName string,
+	restoreAccount uint32,
+	toAccountId uint32,
+	snapshotTs int64,
+) (err error) {
+	if restoreAccount != toAccountId {
+		getLogger(sid).Info(fmt.Sprintf(
+			"[%d:%d] skip recreate publications of db: %v, the restore crosses accounts %d -> %d",
+			restoreAccount, snapshotTs, dbName, restoreAccount, toAccountId))
+		return nil
+	}
+	getLogger(sid).Info(fmt.Sprintf("[%d:%d] start to recreate publications of db: %v",
+		restoreAccount, snapshotTs, dbName))
+	return createPubByPitr(
+		ctx, sid, bh,
+		fmt.Sprintf("snapshot restore %s, ts %d", dbName, snapshotTs),
+		dbName,
+		restoreAccount,
+		snapshotTs)
 }
 
 func getCreateDatabaseSqlFromTS(ctx context.Context,
