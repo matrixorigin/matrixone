@@ -284,6 +284,7 @@ func (ctr *container) removeInMemoryBatch(proc *process.Process, index int) erro
 		}
 		cols[i].Free(proc.GetMPool())
 	}
+	bat.Clean(proc.GetMPool())
 	ctr.batchList[index] = nil
 	ctr.orderCols[index] = nil
 	ctr.indexList[index] = -1

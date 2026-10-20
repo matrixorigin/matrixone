@@ -787,7 +787,8 @@ func TestInMemoryHeapAdvance(t *testing.T) {
 	left.Vecs[0] = testutil.NewVector(2, types.T_int8.ToType(), proc.Mp(), false, []int8{5, 7})
 	left.SetRowCount(2)
 	mid := batch.NewWithSize(1)
-	mid.Vecs[0] = testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{1})
+	mid.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	require.NoError(t, vector.AppendFixed(mid.Vecs[0], int8(1), false, proc.Mp()))
 	mid.SetRowCount(1)
 	right := batch.NewWithSize(1)
 	right.Vecs[0] = testutil.NewVector(1, types.T_int8.ToType(), proc.Mp(), false, []int8{3})
@@ -806,7 +807,9 @@ func TestInMemoryHeapAdvance(t *testing.T) {
 	require.NotNil(t, ctr.inMemoryHeap)
 	require.Equal(t, 1, ctr.inMemoryHeap.items[0])
 
+	require.Positive(t, proc.Mp().CurrNB())
 	require.NoError(t, ctr.advanceInMemoryBatchByChunk(proc, 1, 1))
+	require.Zero(t, proc.Mp().CurrNB(), "the exhausted native batch must be released while other runs remain")
 	require.Equal(t, 2, ctr.inMemoryHeap.Len())
 	require.Equal(t, 2, ctr.inMemoryHeap.items[0])
 }
@@ -1536,4 +1539,81 @@ func resetChildren(arg *MergeOrder, bats []*batch.Batch) {
 	op := colexec.NewMockOperator().WithBatchs(bats)
 	arg.Children = nil
 	arg.AppendChild(op)
+}
+
+func TestOrderReleasesConsumedNativeBatches(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		runs     [][]int8
+		computed bool
+		want     []int8
+	}{
+		{"single_batch_transfer", [][]int8{{1, 3}}, false, []int8{1, 3}},
+		{"column_key", [][]int8{{1, 3}, {2, 4}}, false, []int8{1, 2, 3, 4}},
+		{"computed_key", [][]int8{{3, 1}, {4, 2}}, true, []int8{4, 3, 2, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithMPool(t, "", mpool.MustNewZero())
+			arg := &MergeOrder{OrderBySpecs: []*plan.OrderBySpec{{Expr: newExpression(0, types.T_int8)}}, SpillThreshold: 1 << 30}
+			t.Cleanup(func() {
+				arg.Free(proc, false, nil)
+				for _, child := range arg.Children {
+					child.Free(proc, false, nil)
+				}
+				proc.Free()
+			})
+			inputs := make([]*batch.Batch, 0, len(tc.runs))
+			for _, values := range tc.runs {
+				inputs = append(inputs, newNativeOrderBatch(t, proc, values))
+			}
+			inputBytes := proc.Mp().CurrNB()
+			require.Positive(t, inputBytes, "the regression must allocate native memory")
+			resetChildren(arg, inputs)
+			require.NoError(t, arg.Prepare(proc))
+			if tc.computed {
+				for _, executor := range arg.ctr.executors {
+					executor.Free()
+				}
+				arg.ctr.executors = []colexec.ExpressionExecutor{&negatingInt8Executor{}}
+			}
+			var got []int8
+			for {
+				result, err := vm.Exec(arg, proc)
+				require.NoError(t, err)
+				if result.Batch != nil {
+					if len(tc.runs) == 1 {
+						require.Equal(t, inputBytes+int64(result.Batch.Allocated()), proc.Mp().CurrNB(), "single-batch ownership stays live while returned")
+					}
+					keys := vector.MustFixedColWithTypeCheck[int8](result.Batch.Vecs[0])
+					for i, key := range keys {
+						require.Equal(t, fmt.Sprintf("payload-%032d", key), result.Batch.Vecs[1].GetStringAt(i), "output must own its variable-length payload after input release")
+					}
+					got = append(got, keys...)
+				}
+				if result.Batch == nil || result.Status == vm.ExecStop {
+					break
+				}
+			}
+			require.Equal(t, tc.want, got)
+			require.Equal(t, inputBytes+int64(arg.ctr.buf.Allocated()), proc.Mp().CurrNB(), "consumed internal copies must be released before Reset/Free")
+			arg.Reset(proc, false, nil)
+			arg.Free(proc, false, nil)
+			arg.Children[0].Free(proc, false, nil)
+			require.Zero(t, proc.Mp().CurrNB(), "Reset/Free must neither leak nor double-free")
+		})
+	}
+}
+
+func newNativeOrderBatch(t *testing.T, proc *process.Process, values []int8) *batch.Batch {
+	t.Helper()
+	bat := batch.NewOffHeapWithSize(2)
+	t.Cleanup(func() { bat.Clean(proc.Mp()) })
+	bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int8.ToType())
+	bat.Vecs[1] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	for _, value := range values {
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], value, false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte(fmt.Sprintf("payload-%032d", value)), false, proc.Mp()))
+	}
+	bat.SetRowCount(len(values))
+	return bat
 }
