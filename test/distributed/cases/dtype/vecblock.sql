@@ -258,6 +258,10 @@ select * from nz into outfile '$resources/into_outfile/vecblock_nz.jsonl';
 create table nz_jsonl like nz;
 load data infile {'filepath'='$resources/into_outfile/vecblock_nz.jsonl', 'format'='jsonline', 'jsondata'='object'} into table nz_jsonl;
 select hex(vecblock_binary(e)), hex(vecblock_binary(v)), vecblock_json(e), vecblock_json(v) from nz_jsonl;
+select * from nz into outfile '$resources/into_outfile/vecblock_nz.csv';
+create table nz_csv like nz;
+load data infile '$resources/into_outfile/vecblock_nz.csv' into table nz_csv fields terminated by ',' enclosed by '"' ignore 1 lines;
+select hex(vecblock_binary(e)), hex(vecblock_binary(v)) from nz_csv;
 
 -- cells equal by decoded value can differ in bytes: vecf8/vecf4 are no cluster by or KEY
 -- partition columns

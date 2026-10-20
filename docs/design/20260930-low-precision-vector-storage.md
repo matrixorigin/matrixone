@@ -157,7 +157,7 @@ product of the block-scaled values, and the caller multiplies it by `g_d × g_q`
   finite is rejected. Only blocks whose largest element code could overflow are scanned.
   Every accepted cell therefore renders as finite text and parses back.
 - **One zero.** The encoder stores an element that quantizes to zero of either sign as
-  code 0. A cell given as bytes or exact text keeps a negative-zero code. Equality, hashing (`GROUP BY`, `DISTINCT`, joins) and ordering peers compare the
+  code 0. A cell given as bytes or exact text (a cast, an insert, or a CSV/JSONL `LOAD`) keeps a negative-zero code. Equality, hashing (`GROUP BY`, `DISTINCT`, joins) and ordering peers compare the
   decoded values, not the bytes (see Column operations), so cells that encode equal values
   with other scales are equal.
 
@@ -388,7 +388,7 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `hex`, `to_base64` | not supported, as for the other narrow vector types (`vecf32` only) |
 | primary key, partition key, secondary/unique index, vector index | rejected at DDL |
 | `LOAD` | CSV text `"[…]"`, JSONL arrays; Parquet `LIST<FLOAT/DOUBLE>` and `STRING`/`JSON` columns, quantized per row. The exact text (CSV text, a JSONL object value, a Parquet `STRING`/`JSON` value) loads without quantization. A Parquet `BYTE_ARRAY`/`FIXED_LEN_BYTE_ARRAY` column without a logical type is binary, read as a `BLOB` casts: a value of cell length is the stored cell, a value of `4N` bytes is float32 elements |
-| `INTO OUTFILE`, external-table writes | the exact text, in CSV as a quoted field and in JSONL as an object value, so an export reloads to the same cells |
+| `INTO OUTFILE`, external-table writes | the exact text, in CSV as a quoted field and in JSONL as an object value, so an export reloads to the same cell bytes, a negative-zero element included |
 | binary input | a `BLOB` of little-endian float32 elements, as for `vecf32` (`CAST(UNHEX('0000803F…') AS BLOB)` or a BLOB parameter), quantized per row; a length that is not a multiple of 4 or another dimension is rejected |
 | exact binary | `vecblock_binary(v)` returns the stored cell as a `BLOB` (§Cell format); a `BLOB` of a cell casts, inserts or binds back to the same bytes without quantization, and a `BLOB` of cell length that is not a valid cell of the target is an error |
 | exact text | `vecblock_json(v)` returns the cell as stored, `{"g": g, "s": [scales], "v": [values]}`, the parts in the cell's order: `g` the global scale (1 for `vecf8`), `s` one scale per block of 32 (`vecf8`) / 16 (`vecf4`) values, the last block shorter, `v` the element values; casting that text (or inserting it, or `LOAD`ing it) builds the same cell bytes without quantization. Element `i` is `v[i] · s[i / blockSize] · g`; `g` is required, `s` must hold `ceil(len(v) / blockSize)` scale code values (E8M0 / UE4M3), `v` element code values (E4M3 / E2M1), `-0` the negative-zero code; anything else is an error, never rounded |
@@ -663,6 +663,11 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   round-trips; ±MaxFloat32 is rejected in MXFP8 and accepted in NVFP4; crafted cells
   (MXFP8 scale 2^120 with element 256; NVFP4 global × block scale overflowing) are
   rejected, with a finite neighbour accepted.
+- **Export and reload** (`externalwrite/vecblock_test.go`, `external/vecblock_test.go`,
+  BVT `dtype/vecblock.sql`): CSV and JSONL writes carry the exact text; a JSONL object
+  value (object and array line formats) and CSV text load back to the same cell bytes; a
+  cell with a negative-zero element writes `-0` and reloads through CSV and JSONL to its
+  negative-zero code, not the `+0` cell, in `vecf8` and `vecf4`.
 - **Memory admission** (`aggexec/vector_matmul_test.go`, CPU build, shape-only fake engine
   through the real preflight/fill path under an allocation account): with room, the native
   host bytes and tile buffers are charged, counted in `Size` and released by `Free` (account
@@ -674,7 +679,10 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   of range or fractional are rejected. Function resolution and binder tests accept the
   plain types and reject `vecf64`.
 - **Unit, metrics** (`aggexec/vector_matmul_test.go`): the options parse (`metric` values,
-  ignored keys, non-object text and unknown metrics rejected); the reported distances of
+  ignored keys, non-object text and unknown metrics rejected); at compile
+  (`compile/vector_matmul_config_test.go`, BVT `vector/vector_matmul.sql`) a supplied
+  options argument of empty text or `NULL` (a literal or a user variable) and a `NULL`
+  queries argument are rejected, while an omitted options argument selects the defaults; the reported distances of
   each metric over `vecf32`, `vecf8` and `vecint8` against a float64 reference computed
   directly (`−dot`, `1 − cos` with 1 for a zero vector, `Σ(x − q)²`), nearest first, a row
   equal to a query at distance 0. The GPU-against-CPU tests run every metric: block-scaled

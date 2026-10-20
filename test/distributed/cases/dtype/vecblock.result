@@ -500,6 +500,12 @@ load data infile {'filepath'='$resources/into_outfile/vecblock_nz.jsonl', 'forma
 select hex(vecblock_binary(e)), hex(vecblock_binary(v)), vecblock_json(e), vecblock_json(v) from nz_jsonl;
 ➤ hex(vecblock_binary(e))[-1,16383,0]  ¦  hex(vecblock_binary(v))[-1,16383,0]  ¦  vecblock_json(e)[-1,16383,0]  ¦  vecblock_json(v)[-1,16383,0]  𝄀
 01010000010000000000803F7F80  ¦  01020000010000000000803F3808  ¦  {"g":1,"s":[1],"v":[-0]}  ¦  {"g":1,"s":[1],"v":[-0]}
+select * from nz into outfile '$resources/into_outfile/vecblock_nz.csv';
+create table nz_csv like nz;
+load data infile '$resources/into_outfile/vecblock_nz.csv' into table nz_csv fields terminated by ',' enclosed by '"' ignore 1 lines;
+select hex(vecblock_binary(e)), hex(vecblock_binary(v)) from nz_csv;
+➤ hex(vecblock_binary(e))[-1,16383,0]  ¦  hex(vecblock_binary(v))[-1,16383,0]  𝄀
+01010000010000000000803F7F80  ¦  01020000010000000000803F3808
 create table cb8 (id int, v vecf8(4)) cluster by (v);
 not supported: VECF8 column 'v' cannot be a cluster by key
 create table cb4 (id int, v vecf4(4)) cluster by (id, v);
