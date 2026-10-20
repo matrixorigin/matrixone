@@ -3,13 +3,13 @@
 Issue: #28037
 
 Base-sync note (2026-10-20): upstream main at
-`c27f3f26ca6ba8e38486322e382a20093028fb38` owns MORPC v113-v122,
+`7c146f4adbf068dd0c06b377157cfb7d7698b1eb` owns MORPC v113-v123,
 including collation-aware LEAST/GREATEST at v117, database defaults/table
 charset alteration at v118, dependent programs at v119, session KILL at v120,
-unsigned DECIMAL DIV at v121, and temporal result contracts at v122.
-The seven-argument JSON_VALUE contract uses v123, with v122 as its immediate
+unsigned DECIMAL DIV at v121, temporal result contracts at v122, and
+capability-gated nonblocking row-lock admission at v123.
+The seven-argument JSON_VALUE contract uses v124, with v123 as its immediate
 predecessor. Binder, sender/receiver and persisted admission use that floor;
-independent main capability floors remain unchanged.
 This maintenance merge does not close the benchmark,
 mixed-version, durable recovery, QA or independent approval obligations below.
 
@@ -83,9 +83,9 @@ Approval must identify
 this revision's immutable commit and an independent approver. Author replies,
 thread resolution and approvals of earlier revisions do not approve this one.
 
-The current source is a MORPC v123 validation candidate for
+The current source is a MORPC v124 validation candidate for
 JSON_VALUE function ID 462, overload 2, based on
-`c27f3f26ca6ba8e38486322e382a20093028fb38` (v122). It preserves main's
+`7c146f4adbf068dd0c06b377157cfb7d7698b1eb` (v123). It preserves main's
 functional-index metadata and generated-key maintenance capability at v107 and
 isolated user-variable NULL regexp migration history at v108, plus native Unicode
 collation identities in persisted information_schema.COLUMNS metadata at v109;
@@ -102,9 +102,10 @@ and collation-aware LEAST/GREATEST at v117. Main additionally owns transactional
 database defaults/table charset alteration at v118, coordinator-owned dependent
 programs at v119, current-session KILL authorization/cleanup at v120, unsigned
 DECIMAL DIV result semantics at v121, and unary TIMESTAMP/dynamic TIME result
-contracts at v122. These independent capabilities and their gates remain
-intact. Main's actual v122 capability must still reject this candidate's
-seven-argument JSON_VALUE contract; the cumulative latest version is v123.
+contracts at v122, plus capability-gated nonblocking row-lock admission at
+v123. These independent capabilities and their gates remain intact. Main's
+actual v123 capability must still reject this candidate's seven-argument
+JSON_VALUE contract; the cumulative latest version is v124.
 Algorithm-expression-only owners participate in the
 same expression feature walk; an ordinary projection is not required.
 It is not the final landing
@@ -126,12 +127,12 @@ binaries. The source gates, immediate-predecessor
 tests, final design and earlier-capability preservation tests move together
 after cumulative integration. No independent design approval is carried forward.
 
-The planner requires the deployment-wide MOProtocolVersion to be at least 123
+The planner requires the deployment-wide MOProtocolVersion to be at least 124
 for RETURNING, ON EMPTY or ON ERROR. Bare two-argument calls keep the legacy
 plan and its NULL-document short circuit. In the new clause-bearing contract,
 a non-NULL invalid path is a hard error even when the document is SQL NULL.
 
-Both current sender and receiver validate overload 2 against v123 before remote
+Both current sender and receiver validate overload 2 against v124 before remote
 execution. Those checks do not retrofit an old receiver. The accepted deployment
 scope is a shutdown upgrade: stop all old processes, replace the binaries with
 the final cumulative build, then start and admit the deployment before authoring
@@ -150,7 +151,7 @@ The SQL grammar rejects JSON_VALUE in ON UPDATE; internal owner-walk coverage
 does not imply SQL support for that combination. Prepared execution is tested separately; a session prepared statement is not
 assumed to be a durable catalog object.
 
-Do not admit pre-v123 CNs after committing a v123 durable floor. The existing
+Do not admit pre-v124 CNs after committing a v124 durable floor. The existing
 floor advances monotonically; deleting views/generated expressions or indexes
 does not by itself lower it. In-place rollback below that floor is unsupported
 unless a separately supported, validated floor-lowering procedure exists.
@@ -258,12 +259,13 @@ at immutable source `88c5d3e65be9a887a5094ae584d371d35d4e95d2`; they are not
 new-head PASS evidence. In particular, admitted-extraction benchmarks exclude
 generic vector ingestion/unmarshal and cannot answer their regression cost.
 
-The exact local candidate passed bounded serial CGo focused tests for the MySQL
-parser, plan protobuf, SQL planner, function lookup and compile packages. These
-cover the merged grammar, v122 rejection/v123 admission, persisted owners and
-independent main capability composition. Parser regeneration is deterministic,
-and the feature diff passes `git diff --check`. This is not full integration,
-distributed BVT, exact-head CI, deployment QA, or shutdown-upgrade evidence.
+The pre-merge v123 candidate passed bounded serial CGo focused tests for the
+MySQL parser, plan protobuf, SQL planner, function lookup and compile packages.
+Those receipts cover that revision's merged grammar and v122 rejection/v123
+admission only; they are historical evidence, not validation of this v124
+main-relative conflict repair. This bounded maintenance candidate does not
+claim full integration, distributed BVT, exact-head CI, deployment QA, or
+shutdown-upgrade evidence.
 Predecessor-data shutdown upgrade, durable floor restart/restore and independent
 design approval remain required and are not claimed complete. A focused
 base/head ingestion/unmarshal and legacy two-argument JSON_VALUE comparison must

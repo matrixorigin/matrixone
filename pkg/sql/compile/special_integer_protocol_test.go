@@ -152,8 +152,8 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	op.ProjectList = append(op.ProjectList, jsonValue)
 	qry.Nodes[0].ProjectList = op.ProjectList
 	p.InstructionList[0].ProjectList = op.ProjectList
-	// JSON_VALUE overload 2 requires v123 in both remote and persisted gates;
-	// the immediately preceding landed protocol still lacks that contract.
+	// JSON_VALUE overload 2 requires v124; main's v123 row-lock capability is
+	// independent and does not admit this contract.
 	client.version = defines.MORPCVersion122
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
 	c.execType = plan2.ExecTypeAP_MULTICN
@@ -161,13 +161,25 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 123")
+	require.ErrorContains(t, err, "version 124")
 	data, err = p.Marshal()
 	require.NoError(t, err)
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 123")
+	require.ErrorContains(t, err, "version 124")
 	client.version = defines.MORPCVersion123
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 124")
+	data, err = p.Marshal()
+	require.NoError(t, err)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.ErrorContains(t, err, "version 124")
+	client.version = defines.MORPCVersion124
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion124)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))

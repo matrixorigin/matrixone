@@ -358,6 +358,9 @@ const (
 	ErrRemoteLockWaitTimeout uint16 = 20709
 	// ErrLockWaitTimeout a lock waiter exceeded its configured wait budget
 	ErrLockWaitTimeout uint16 = 20710
+	// ErrLockNowait is a settled NOWAIT row-lock conflict. Unlike ErrLockConflict,
+	// this is a statement error and does not by itself abort the transaction.
+	ErrLockNowait uint16 = 20711
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -687,6 +690,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
 	ErrRemoteLockWaitTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock wait timeout"},
 	ErrLockWaitTimeout:         {ER_LOCK_WAIT_TIMEOUT, []string{MySQLDefaultSqlState}, "Lock wait timeout exceeded; try restarting transaction"},
+	ErrLockNowait:              {ER_LOCK_NOWAIT, []string{"HY000"}, "Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set."},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},

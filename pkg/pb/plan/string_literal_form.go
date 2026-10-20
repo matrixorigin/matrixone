@@ -203,10 +203,10 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
-// RequiresMORPCVersion123JSONValueContract reports whether an owner contains
+// RequiresMORPCVersion124JSONValueContract reports whether an owner contains
 // the planner-only seven-argument JSON_VALUE overload. The overload carries
 // target and response semantics that older receivers cannot dispatch.
-func RequiresMORPCVersion123JSONValueContract(owner any) (bool, error) {
+func RequiresMORPCVersion124JSONValueContract(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONValueContract, err
 }
@@ -370,8 +370,8 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
-// JSONValueContract provisionally requires MORPC v118; the independently gated
-// main capabilities retain their existing MORPC v111-v117 allocations.
+// JSONValueContract provisionally requires MORPC v124; the independently gated
+// main capabilities retain their existing MORPC v111-v123 allocations.
 // DecimalLiteralSemantics requires MORPC v89 because plain DECIMAL256
 // literals are normalized and kept exact by the new planner, while older
 // binders can round or reject the same persisted SQL at the Decimal128

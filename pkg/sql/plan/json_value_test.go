@@ -130,9 +130,11 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 	require.Len(t, legacy.GetF().Args, 2)
 
 	_, err = bind(defines.MORPCVersion117, `select json_value('1', '$' returning unsigned)`)
-	require.ErrorContains(t, err, "MORPC protocol version 123")
+	require.ErrorContains(t, err, "MORPC protocol version 124")
+	_, err = bind(defines.MORPCVersion123, `select json_value('1', '$' returning unsigned)`)
+	require.ErrorContains(t, err, "MORPC protocol version 124")
 
-	contract, err := bind(defines.MORPCVersion123, `select json_value('1', '$' returning unsigned)`)
+	contract, err := bind(defines.MORPCVersion124, `select json_value('1', '$' returning unsigned)`)
 	require.NoError(t, err)
 	require.Len(t, contract.GetF().Args, 7)
 
@@ -147,8 +149,11 @@ func TestJSONValueProtocolGatePreservesLegacyPlans(t *testing.T) {
 			defer stmt.Free()
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 			_, err = BuildPlan(compilerContext, stmt, false)
-			require.ErrorContains(t, err, "protocol version 123")
+			require.ErrorContains(t, err, "protocol version 124")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+			_, err = BuildPlan(compilerContext, stmt, false)
+			require.ErrorContains(t, err, "protocol version 124")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion124)
 			_, err = BuildPlan(compilerContext, stmt, false)
 			require.NoError(t, err)
 		})

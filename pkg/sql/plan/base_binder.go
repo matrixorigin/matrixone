@@ -3557,15 +3557,15 @@ func requireJSONValueContractProtocol(ctx context.Context, proc *process.Process
 	if rt == nil {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 123",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 124",
 		)
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion123 {
+	if !ok || !valid || version < defines.MORPCVersion124 {
 		return moerr.NewNotSupported(
 			ctx,
-			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 123",
+			"JSON_VALUE RETURNING and response clauses require all CNs to support MORPC protocol version 124",
 		)
 	}
 	return nil
