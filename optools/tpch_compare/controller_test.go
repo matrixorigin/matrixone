@@ -85,13 +85,49 @@ func TestBootstrapPreservesPairedWaves(t *testing.T) {
 	}
 }
 
+func campaignFixture(root string) Campaign {
+	return Campaign{
+		Version: formatVersion, Root: root, Mode: "sf1-smoke", Datasets: map[string]string{"1": root},
+		MOSource: root, MOBinary: filepath.Join(root, "mo"), MORevision: "test", MOBuild: "test",
+		CPUs: []int{0, 1, 2, 3, 4, 5, 6, 7}, ControllerCPUs: []int{8}, MemoryBytes: 32 << 30,
+		DiskBytes: 1 << 30, ReserveBytes: 8 << 30, ProfileBytes: 1 << 20, PortBase: 24000, ExclusiveHost: true,
+	}
+}
+
 func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
-	for _, partial := range []bool{false, true} {
-		name := "different results are not verified"
-		if partial {
-			name = "incomplete execution is rejected"
-		}
-		t.Run(name, func(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		mutate       func(*WorkerRequest, *WorkerReceipt)
+		changeConfig bool
+		wantError    string
+	}{
+		{name: "different results are not verified"},
+		{name: "incomplete execution is rejected", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Queries = r.Queries[:len(r.Queries)-1]
+		}, wantError: "partial query stream"},
+		{name: "duplicate query cannot replace missing query", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Queries[len(r.Queries)-1].Query = r.Queries[0].Query
+		}, wantError: "query identities"},
+		{name: "unexpected stream", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Queries[0].Stream = 1
+		}, wantError: "query identities"},
+		{name: "unexpected repetition", mutate: func(_ *WorkerRequest, r *WorkerReceipt) {
+			r.Queries[0].Repetition = 1
+		}, wantError: "query identities"},
+		{name: "request cannot change frozen repetitions", mutate: func(request *WorkerRequest, r *WorkerReceipt) {
+			request.Repetitions = 2
+			for _, q := range append([]QueryReceipt(nil), r.Queries...) {
+				q.Repetition = 1
+				r.Queries = append(r.Queries, q)
+			}
+		}, wantError: "worker request differs"},
+		{name: "request cannot change frozen queries", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
+			request.Queries = append([]int(nil), request.Queries...)
+			request.Queries[0], request.Queries[1] = request.Queries[1], request.Queries[0]
+		}, wantError: "worker request differs"},
+		{name: "report cannot change source attribution", changeConfig: true, wantError: "configuration differs from preflight"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			write := func(path string, value any) FileID {
 				t.Helper()
@@ -108,9 +144,11 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 				}
 				return pin
 			}
-			c := Campaign{Version: formatVersion, Root: root, Mode: "sf1-smoke", Datasets: map[string]string{"1": root}, MOSource: root, MOBinary: filepath.Join(root, "mo"), MORevision: "test", MOBuild: "test", CPUs: []int{0, 1, 2, 3, 4, 5, 6, 7}, ControllerCPUs: []int{8}, MemoryBytes: 32 << 30, DiskBytes: 1 << 30, ReserveBytes: 8 << 30, ProfileBytes: 1 << 20, PortBase: 24000, ExclusiveHost: true}
+			c := campaignFixture(root)
 			config := write("campaign.json", c)
-			p := Preflight{Worker: FileID{SHA256: "worker"}}
+			configPath := filepath.Join(root, config.Path)
+			config.Path = configPath
+			p := Preflight{Version: formatVersion, Config: config, Worker: FileID{SHA256: "worker"}}
 			f := Frozen{Version: formatVersion, Preflight: write("preflight.json", p), Trials: schedule(c)}
 			pair := PairRecord{Version: formatVersion, Trial: f.Trials[0], Status: "pass", Arms: map[string]ArmRecord{}}
 			for index, engine := range []string{"mo", "duckdb"} {
@@ -121,10 +159,11 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 					// different row counts. Reporting reads timing receipts only.
 					r.Queries = append(r.Queries, QueryReceipt{Query: q, Capture: Capture{Rows: int64(index), ElapsedNS: int64(time.Millisecond)}})
 				}
-				if partial && engine == "duckdb" {
-					r.Queries = r.Queries[:len(r.Queries)-1]
+				request := runRequest(pair.Trial, true)
+				if tc.mutate != nil {
+					tc.mutate(&request, &r)
 				}
-				pair.Arms[engine] = ArmRecord{Trial: pair.Trial, Engine: engine, Status: "pass", Cleanup: "complete", Request: write(filepath.Join(prefix, "request.json"), runRequest(pair.Trial, true)), Worker: write(filepath.Join(prefix, "receipt.json"), r), After: Usage{CPUUsec: 1000, Raw: map[string]string{"memory.max": "34359738368", "memory.swap.max": "0", "cpuset.cpus.effective": "0-7"}}}
+				pair.Arms[engine] = ArmRecord{Trial: pair.Trial, Engine: engine, Status: "pass", Cleanup: "complete", Request: write(filepath.Join(prefix, "request.json"), request), Worker: write(filepath.Join(prefix, "receipt.json"), r), After: Usage{CPUUsec: 1000, Raw: map[string]string{"memory.max": "34359738368", "memory.swap.max": "0", "cpuset.cpus.effective": "0-7"}}}
 				arm := pair.Arms[engine]
 				arm.Request.Path = "request.json"
 				arm.Worker.Path = "receipt.json"
@@ -133,11 +172,18 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 			pin := write(filepath.Join("runs", "baseline", pair.Trial.ID, "pair.json"), pair)
 			pin.Path = filepath.Join(pair.Trial.ID, "pair.json")
 			write("runs/baseline/run.json", RunManifest{Version: formatVersion, Frozen: write("frozen.json", f), Pairs: []FileID{pin}})
+			if tc.changeConfig {
+				c.MORevision = "NEVER-MEASURED-REVISION"
+				configPath = filepath.Join(root, write("different-campaign.json", c).Path)
+			}
 			output := filepath.Join(root, "report")
-			err := reportCampaign(filepath.Join(root, config.Path), filepath.Join(root, "runs", "baseline"), output)
-			if partial {
-				if err == nil || !strings.Contains(err.Error(), "partial query stream") {
+			err := reportCampaign(configPath, filepath.Join(root, "runs", "baseline"), output)
+			if tc.wantError != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantError) {
 					t.Fatal(err)
+				}
+				if _, err := os.Stat(output); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("invalid evidence created report output", err)
 				}
 				return
 			}
@@ -149,6 +195,144 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 				t.Fatal(string(body), err)
 			}
 		})
+	}
+}
+
+func TestCampaignPinRejectsDifferentConfig(t *testing.T) {
+	root := t.TempDir()
+	c := campaignFixture(root)
+	if err := c.validate(); err != nil {
+		t.Fatal(err)
+	}
+	config := filepath.Join(root, "campaign.json")
+	if err := publishJSON(config, c); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(c.MOBinary, []byte("native engine"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	identifyFile := func(path string) FileID {
+		t.Helper()
+		id, err := identify(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return id
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := Preflight{Version: formatVersion, Config: identifyFile(config), MO: identifyFile(c.MOBinary), Worker: identifyFile(exe)}
+	if err := campaignPin(c, p); err != nil {
+		t.Fatal("unchanged campaign rejected", err)
+	}
+	for _, tc := range []struct {
+		name   string
+		mutate func(*Campaign)
+	}{
+		{"executable", func(c *Campaign) { c.MOBinary = filepath.Join(root, "unqualified-mo") }},
+		{"CPU set", func(c *Campaign) { c.CPUs = []int{16, 17, 18, 19, 20, 21, 22, 23} }},
+		{"source attribution", func(c *Campaign) { c.MORevision = "unmeasured-revision" }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			changed := c
+			tc.mutate(&changed)
+			if err := changed.validate(); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "different-campaign.json")
+			if err := publishJSON(path, changed); err != nil {
+				t.Fatal(err)
+			}
+			actual, err := readJSON[Campaign](path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := campaignPin(actual, p); err == nil || !strings.Contains(err.Error(), "configuration differs from preflight") {
+				t.Fatal("unqualified configuration accepted", err)
+			}
+		})
+	}
+	if err := os.WriteFile(config, []byte("{}"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := campaignPin(c, p); err == nil {
+		t.Fatal("changed frozen configuration accepted", err)
+	}
+}
+
+func TestFrozenConcurrentQueryIdentities(t *testing.T) {
+	trial := Trial{Experiment: "concurrency", Clients: 2, Queries: []int{1, 2}}
+	for _, name := range []string{"complete", "duplicate identity", "negative stream", "unexpected query", "unexpected repetition", "changed clients", "changed repetitions", "missing frozen wave"} {
+		t.Run(name, func(t *testing.T) {
+			frozen := Frozen{WaveRepetitions: map[int]int{2: 2}}
+			request := runRequest(trial, false)
+			request.Repetitions = 2
+			var receipt WorkerReceipt
+			for stream := range 2 {
+				for repetition := range 2 {
+					for _, query := range trial.Queries {
+						receipt.Queries = append(receipt.Queries, QueryReceipt{Query: query, Stream: stream, Repetition: repetition})
+					}
+				}
+			}
+			switch name {
+			case "duplicate identity":
+				receipt.Queries[1] = receipt.Queries[0]
+			case "negative stream":
+				receipt.Queries[0].Stream = -1
+			case "unexpected query":
+				receipt.Queries[0].Query = 3
+			case "unexpected repetition":
+				receipt.Queries[0].Repetition = 2
+			case "changed clients":
+				request.Clients = 1
+				receipt.Queries = receipt.Queries[:4]
+			case "changed repetitions":
+				request.Repetitions = 1
+				receipt.Queries = receipt.Queries[:4]
+			case "missing frozen wave":
+				frozen.WaveRepetitions = nil
+			}
+			if err := verifyTrialQueries(trial, frozen, request, receipt); (err != nil) != (name != "complete") {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestControllerProgressDeadline(t *testing.T) {
+	now := time.Unix(100, 0)
+	for _, tc := range []struct {
+		name   string
+		active map[int]activeQuery
+		want   time.Duration
+	}{
+		{"idle", nil, 10 * time.Minute},
+		{"long query", map[int]activeQuery{0: {1, now.Add(20*time.Minute + 30*time.Second)}}, 20*time.Minute + 30*time.Second},
+		{"short query", map[int]activeQuery{0: {1, now.Add(90 * time.Second)}}, 90 * time.Second},
+		{"earliest concurrent deadline", map[int]activeQuery{0: {1, now.Add(20 * time.Minute)}, 1: {2, now.Add(12 * time.Minute)}}, 12 * time.Minute},
+		{"expired query", map[int]activeQuery{0: {1, now.Add(-time.Second)}}, -time.Second},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nextProgressDeadline(tc.active, now); !got.Equal(now.Add(tc.want)) {
+				t.Fatal(got, "want", now.Add(tc.want))
+			}
+		})
+	}
+	active := map[int]activeQuery{}
+	if err := advanceProgress(active, "start 0 1 1200000000000", now); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextProgressDeadline(active, now.Add(11*time.Minute)); !got.Equal(now.Add(20*time.Minute + 30*time.Second)) {
+		t.Fatal("long-running query lost its frozen deadline", got)
+	}
+	if err := advanceProgress(active, "end 0 1 0", now.Add(11*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if got := nextProgressDeadline(active, now.Add(11*time.Minute)); !got.Equal(now.Add(21 * time.Minute)) {
+		t.Fatal("idle deadline was not restored", got)
 	}
 }
 

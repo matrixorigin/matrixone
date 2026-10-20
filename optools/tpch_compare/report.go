@@ -113,6 +113,16 @@ func reportCampaign(config, root, output string) (retErr error) {
 	if err != nil {
 		return err
 	}
+	if err := f.Preflight.verify(c.Root); err != nil {
+		return err
+	}
+	p, err := readJSON[Preflight](filepath.Join(c.Root, f.Preflight.Path))
+	if err != nil {
+		return err
+	}
+	if err := verifyCampaignConfig(c, p); err != nil {
+		return err
+	}
 	if !reflect.DeepEqual(f.Trials, schedule(c)) {
 		return errors.New("frozen schedule differs from the declared campaign")
 	}
@@ -171,9 +181,8 @@ func reportCampaign(config, root, output string) (retErr error) {
 			if err != nil {
 				return err
 			}
-			expected := len(pair.Trial.Queries) * pair.Trial.Clients * request.Repetitions
-			if len(receipt.Queries) != expected {
-				return errors.New("partial query stream cannot supply a suite score")
+			if err := verifyTrialQueries(pair.Trial, f, request, receipt); err != nil {
+				return err
 			}
 			if receipt.Binary.SHA256 != frozenWorker(c, f) {
 				return errors.New("worker executable changed")
@@ -207,10 +216,6 @@ func reportCampaign(config, root, output string) (retErr error) {
 	}
 	defer func() { retErr = errors.Join(retErr, mdFile.Close()) }()
 	md := bufio.NewWriter(mdFile)
-	p, err := readJSON[Preflight](filepath.Join(c.Root, f.Preflight.Path))
-	if err != nil {
-		return err
-	}
 	table, err := os.OpenFile(filepath.Join(output, "queries.csv"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
@@ -376,6 +381,36 @@ func writeLoads(w *bufio.Writer, c Campaign, f Frozen) error {
 		}
 	}
 	return w.Flush()
+}
+
+func verifyTrialQueries(t Trial, f Frozen, request WorkerRequest, receipt WorkerReceipt) error {
+	repetitions := 1
+	if t.Experiment == "concurrency" {
+		repetitions = f.WaveRepetitions[t.Clients]
+	}
+	if t.Clients < 1 || t.Clients > 8 || len(t.Queries) < 1 || len(t.Queries) > 22 ||
+		repetitions < 1 || repetitions > 2000 || repetitions > 4000/t.Clients/len(t.Queries) {
+		return errors.New("invalid frozen query workload")
+	}
+	if request.Version != formatVersion || request.Operation != "queries" ||
+		request.Clients != t.Clients || request.Repetitions != repetitions ||
+		!slices.Equal(request.Queries, t.Queries) {
+		return errors.New("worker request differs from frozen trial")
+	}
+	if len(receipt.Queries) != len(t.Queries)*t.Clients*repetitions {
+		return errors.New("partial query stream cannot supply a suite score")
+	}
+	type identity struct{ query, stream, repetition int }
+	seen := make(map[identity]bool, len(receipt.Queries))
+	for _, q := range receipt.Queries {
+		id := identity{q.Query, q.Stream, q.Repetition}
+		if !slices.Contains(t.Queries, q.Query) || q.Stream < 0 || q.Stream >= t.Clients ||
+			q.Repetition < 0 || q.Repetition >= repetitions || seen[id] {
+			return errors.New("query identities do not cover frozen trial")
+		}
+		seen[id] = true
+	}
+	return nil
 }
 
 func frozenWorker(c Campaign, f Frozen) string {

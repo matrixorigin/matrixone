@@ -106,15 +106,11 @@ func (g *controllerGate) wait(ctx context.Context, event string) error {
 				}
 				return nil
 			}
-			if err := advanceProgress(active, strings.TrimSpace(m.line), time.Now()); err != nil {
+			now := time.Now()
+			if err := advanceProgress(active, strings.TrimSpace(m.line), now); err != nil {
 				return err
 			}
-			next := time.Now().Add(10 * time.Minute)
-			for _, q := range active {
-				if q.deadline.Before(next) {
-					next = q.deadline
-				}
-			}
+			next := nextProgressDeadline(active, now)
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
@@ -129,6 +125,19 @@ func (g *controllerGate) wait(ctx context.Context, event string) error {
 type activeQuery struct {
 	number   int
 	deadline time.Time
+}
+
+func nextProgressDeadline(active map[int]activeQuery, now time.Time) time.Time {
+	if len(active) == 0 {
+		return now.Add(10 * time.Minute)
+	}
+	var next time.Time
+	for _, q := range active {
+		if next.IsZero() || q.deadline.Before(next) {
+			next = q.deadline
+		}
+	}
+	return next
 }
 
 func advanceProgress(active map[int]activeQuery, line string, now time.Time) error {
