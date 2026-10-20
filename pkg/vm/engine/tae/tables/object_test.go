@@ -16,6 +16,7 @@ package tables
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -87,6 +88,82 @@ func TestValidatePersistedCommitTSVectors(t *testing.T) {
 			require.Zero(t, mp.CurrNB())
 		})
 	}
+}
+
+func TestUnwrittenAppendableNodeLifecycle(t *testing.T) {
+	for _, tombstone := range []bool{false, true} {
+		for _, tc := range []struct {
+			name       string
+			checkpoint bool
+			dropped    bool
+			size       uint32
+			persisted  bool
+		}{
+			{name: "active"},
+			{name: "dropped", dropped: true},
+			{name: "checkpoint", checkpoint: true},
+			{name: "legacy placeholder", checkpoint: true, size: 1000, persisted: true},
+		} {
+			t.Run(fmt.Sprintf("tombstone=%t/%s", tombstone, tc.name), func(t *testing.T) {
+				c := catalog.MockCatalog(nil)
+				t.Cleanup(func() { require.NoError(t, c.Close()) })
+				db, err := c.CreateDBEntry("db", "", "", nil)
+				require.NoError(t, err)
+				table, err := db.CreateTableEntry(catalog.MockSchema(2, 0), nil, nil)
+				require.NoError(t, err)
+				oid := objectio.NewObjectid()
+				stats := objectio.NewObjectStatsWithObjectID(&oid, true, false, false)
+				require.NoError(t, objectio.SetObjectStatsSize(stats, tc.size))
+				meta := catalog.MockObjectEntry(table, stats, tombstone, nil, types.BuildTS(1, 0))
+				if tc.checkpoint {
+					meta = catalog.MockCreatedObjectEntry2List(table, c, tombstone, types.BuildTS(1, 0))
+					meta.ObjectStats = *stats
+					require.True(t, meta.IsForcePNode())
+				}
+				if tc.dropped {
+					meta.DeletedAt = types.BuildTS(2, 0)
+					meta.DeleteNode = txnbase.NewTxnMVCCNodeWithTS(meta.DeletedAt)
+					meta.ObjectState = catalog.ObjectState_Delete_ApplyCommit
+				}
+				obj := newAObject(meta, nil, tombstone)
+				t.Cleanup(func() { obj.node.Load().Unref() })
+				require.Equal(t, tc.persisted, obj.node.Load().IsPersisted())
+				require.Equal(t, tc.dropped || tc.checkpoint, obj.IsAppendFrozen())
+				before := obj.node.Load()
+				require.NoError(t, obj.TryUpgrade())
+				require.Same(t, before, obj.node.Load())
+			})
+		}
+	}
+}
+
+func TestAppendableUpgradeAfterSnapshotPublication(t *testing.T) {
+	c := catalog.MockCatalog(nil)
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	db, err := c.CreateDBEntry("db", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(catalog.MockSchema(2, 0), nil, nil)
+	require.NoError(t, err)
+	oid := objectio.NewObjectid()
+	stats := objectio.NewObjectStatsWithObjectID(&oid, true, false, false)
+	meta := catalog.MockObjectEntry(table, stats, false, nil, types.BuildTS(1, 0))
+	obj := newAObject(meta, nil, false)
+	t.Cleanup(func() { obj.node.Load().Unref() })
+	old := obj.PinNode()
+	defer old.Unref()
+	require.NoError(t, obj.TryUpgrade())
+	require.Same(t, old, obj.node.Load())
+	// A physical snapshot changes the representation; pinned old readers
+	// retain their memory node until they release it.
+	published := meta.Clone()
+	require.NoError(t, objectio.SetObjectStatsExtent(&published.ObjectStats, objectio.NewExtent(0, 1, 2, 3)))
+	require.NoError(t, objectio.SetObjectStatsRowCnt(&published.ObjectStats, 1))
+	require.NoError(t, objectio.SetObjectStatsBlkCnt(&published.ObjectStats, 1))
+	obj.UpdateMeta(published)
+	require.NoError(t, obj.TryUpgrade())
+	require.True(t, obj.node.Load().IsPersisted())
+	require.False(t, old.IsPersisted())
+	require.Equal(t, int64(1), old.RefCount())
 }
 
 func TestGetActiveRow(t *testing.T) {
