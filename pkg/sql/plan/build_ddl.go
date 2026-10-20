@@ -341,7 +341,7 @@ func inferViewColumns(
 		viewRequiredProtocol = preOptimizeViewRequiredProtocol
 	}
 	if bindingRevision == 1 {
-		viewRequiredProtocol = max(viewRequiredProtocol, defines.MORPCVersion124)
+		viewRequiredProtocol = max(viewRequiredProtocol, defines.MORPCVersion125)
 	}
 	if viewRequiredProtocol > 0 {
 		if forAuthoring {
@@ -1562,7 +1562,7 @@ func genAsSelectCols(
 		return nil, nil, 0, err
 	}
 	if create.CollationBindingRevision == 1 {
-		create.RequiredProtocolVersion = max(create.RequiredProtocolVersion, defines.MORPCVersion124)
+		create.RequiredProtocolVersion = max(create.RequiredProtocolVersion, defines.MORPCVersion125)
 	}
 	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
 	for i := range outputColumnProvenance {

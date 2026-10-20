@@ -156,6 +156,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.LeastGreatestCollationSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
 	}
+	if features.TimestampAddSecondIntervals {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion124)
+	}
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
 	}
@@ -163,7 +166,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion118)
 	}
 	if features.NativePADCollation {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion124)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion125)
 	}
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
@@ -185,13 +188,13 @@ func (b *baseBinder) observeExpressionProtocol(expr *planpb.Expr) error {
 			*requirement = defines.MORPCVersion122
 		}
 	}
-	if requirement := b.ctx.ctasNativeCollationProtocolRequirement; requirement != nil && *requirement < defines.MORPCVersion124 {
+	if requirement := b.ctx.ctasNativeCollationProtocolRequirement; requirement != nil && *requirement < defines.MORPCVersion125 {
 		features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 		if err != nil {
 			return err
 		}
 		if features.NativePADCollation {
-			*requirement = defines.MORPCVersion124
+			*requirement = defines.MORPCVersion125
 		}
 	}
 	if b.ctx.persistedExpressionProtocolRequirement == nil {

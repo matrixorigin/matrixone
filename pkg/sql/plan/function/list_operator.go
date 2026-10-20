@@ -2299,35 +2299,8 @@ var supportedOperators = []FuncNew{
 					}
 					return newCheckResultWithCast(DecimalIntegerDivUnsignedOverload, targets)
 				}
-				if t1, t2, ok := integerDivBitTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				// Keep same-domain operands unchanged where possible.
-				if integerDivOperatorSupports(inputs[0], inputs[1]) {
-					return newCheckResultWithSuccess(0)
-				}
-				if t1, t2, ok := integerDivUnsignedMixedTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				if t1, t2, ok := integerDivExactTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				// Then check with type casting
-				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
-				if has && integerDivOperatorSupports(t1, t2) {
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
 			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			return legacyIntegerDivCheck(inputs)
 		},
 
 		Overloads: []overload{

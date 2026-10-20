@@ -1248,8 +1248,8 @@ func (receiver *messageReceiverOnServer) sendBatch(
 			return err
 		}
 		if plan.HasNativePADCollation(typ) {
-			if version < defines.MORPCVersion124 {
-				return moerr.NewNotSupportedNoCtx("native PAD collation requires MORPC protocol version 124 for remote results")
+			if version < defines.MORPCVersion125 {
+				return moerr.NewNotSupportedNoCtx("native PAD collation requires MORPC protocol version 125 for remote results")
 			}
 			if err := vec.ValidateCollationValues(); err != nil {
 				return err

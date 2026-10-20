@@ -162,14 +162,14 @@ func TestNativePADStandaloneRestoreInspectionIsNotAuthority(t *testing.T) {
 	}
 	_, err = build("create table other (s varchar(8) collate utf8mb4_general_ci)")
 	require.Error(t, err, "inspection must not grant native authoring")
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion124)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion125)
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion120)
 	for _, sql := range []string{"show create table n", "show create view v"} {
 		_, err = build(sql)
 		require.Error(t, err, "inspection must not bypass complete-source read admission")
 		require.Same(t, inspection, ctx.GetContext())
 	}
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion124)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion125)
 	ctx.SetContext(parent)
 	_, err = build("show create view v")
 	require.ErrorContains(t, err, "standalone SQL", "private inspection must not leak to the caller")

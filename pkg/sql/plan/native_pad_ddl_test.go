@@ -43,7 +43,7 @@ func nativePADDDLContext(t *testing.T) (*MockCompilerContext, func(string) (*Pla
 				rt.CompareAndDeleteGlobalVariables(key, value)
 			}
 		})
-		rt.SetGlobalVariables(key, defines.MORPCVersion124)
+		rt.SetGlobalVariables(key, defines.MORPCVersion125)
 	}
 	return ctx, func(sql string) (*Plan, error) {
 		stmt, err := parsers.ParseOne(ctx.GetContext(), dialect.MYSQL, sql, 1)
@@ -89,9 +89,9 @@ func TestNativePADColumnAndTableAuthoring(t *testing.T) {
 		})
 	}
 	rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion124)
 	p, err := build("create table n (s varchar(8) collate utf8mb4_bin)")
-	require.ErrorContains(t, err, "protocol version 124")
+	require.ErrorContains(t, err, "protocol version 125")
 	require.Nil(t, p)
 }
 
@@ -103,7 +103,7 @@ func TestNativePADCTASRetainsPreFoldProtocolAndBinding(t *testing.T) {
 			require.NoError(t, err)
 			create := p.GetDdl().GetCreateTable()
 			require.Equal(t, uint32(1), create.CollationBindingRevision)
-			require.Equal(t, defines.MORPCVersion124, create.RequiredProtocolVersion)
+			require.Equal(t, defines.MORPCVersion125, create.RequiredProtocolVersion)
 			wire, err := p.Marshal()
 			require.NoError(t, err)
 			var decoded Plan
@@ -112,11 +112,11 @@ func TestNativePADCTASRetainsPreFoldProtocolAndBinding(t *testing.T) {
 			require.True(t, proto.Equal(create, DeepCopyCreateTable(create)))
 			rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
-			require.ErrorContains(t, RequireCreateTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), create), "protocol version 124")
+			require.ErrorContains(t, RequireCreateTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), create), "protocol version 125")
 			p, err = build(sql)
-			require.ErrorContains(t, err, "protocol version 124")
+			require.ErrorContains(t, err, "protocol version 125")
 			require.Nil(t, p)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion124)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion125)
 		})
 	}
 }
@@ -228,7 +228,7 @@ func TestNativePADAlterPreservesDomains(t *testing.T) {
 				rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
 				_, err = build(tc.sql)
-				require.ErrorContains(t, err, "protocol version 124")
+				require.ErrorContains(t, err, "protocol version 125")
 			}
 			require.True(t, proto.Equal(before, source), "ALTER不得修改共享来源schema")
 			require.Same(t, parent, ctx.GetContext())

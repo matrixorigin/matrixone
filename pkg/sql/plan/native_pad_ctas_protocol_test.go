@@ -55,15 +55,15 @@ func TestNativePADCTASSourceDependencyDoesNotChangeBinding(t *testing.T) {
 					defer stmt.Free()
 					return BuildPlan(ctx, stmt, prepared)
 				}
-				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion123)
-				p, err := buildTarget()
-				require.ErrorContains(t, err, "protocol version 124")
-				require.Nil(t, p)
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion124)
+				p, err := buildTarget()
+				require.ErrorContains(t, err, "protocol version 125")
+				require.Nil(t, p)
+				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion125)
 				p, err = buildTarget()
 				require.NoError(t, err)
 				create := p.GetDdl().GetCreateTable()
-				require.Equal(t, defines.MORPCVersion124, create.RequiredProtocolVersion)
+				require.Equal(t, defines.MORPCVersion125, create.RequiredProtocolVersion)
 				require.Zero(t, create.CollationBindingRevision, "来源native类型不是外层显式COLLATE代际")
 				require.Same(t, parent, ctx.GetContext())
 			})
@@ -79,6 +79,11 @@ func TestNativePADCTASKeepsExecutionAndAuthoringIndependent(t *testing.T) {
 	}{
 		{"timestamp_only", "timestamp('2024-02-29 12:34:56') as d", defines.MORPCVersion122, false},
 		{"legacy_cast", "cast('2024-02-29' as datetime) as d", 0, false},
+		// Field 19 retains the upstream TIMESTAMP/TIME result-contract scope;
+		// fractional SECOND execution must not become a native authoring floor.
+		{"fractional_second", "timestampadd(second, 0.5, cast('2024-02-29 12:34:56' as datetime)) as d", 0, false},
+		{"fractional_second_timestamp", "timestampadd(second, 0.5, timestamp('2024-02-29 12:34:56')) as d", defines.MORPCVersion122, false},
+		{"fractional_second_native", "timestampadd(second, 0.5, cast('2024-02-29 12:34:56' as datetime)) as d, 'A' collate utf8mb4_general_ci='a' as b", 0, true},
 		{"native_only", "'A' collate utf8mb4_general_ci='a' as b", 0, true},
 		{"mixed", "timestamp('2024-02-29 12:34:56') as d, 'A' collate utf8mb4_general_ci='a' as b", defines.MORPCVersion122, true},
 	} {
@@ -92,13 +97,13 @@ func TestNativePADCTASKeepsExecutionAndAuthoringIndependent(t *testing.T) {
 					defer stmt.Free()
 					return BuildPlan(ctx, stmt, prepared)
 				}
-				// 执行端已支持124；临时执行TIMESTAMP不应要求作者floor122。
+				// 执行端已支持125；临时执行时间函数不应提高native作者floor。
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion121)
 				p, err := build()
 				if tc.native {
-					require.ErrorContains(t, err, "protocol version 124")
+					require.ErrorContains(t, err, "protocol version 125")
 					require.Nil(t, p)
-					rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion124)
+					rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion125)
 					p, err = build()
 				}
 				require.NoError(t, err)
@@ -112,7 +117,7 @@ func TestNativePADCTASKeepsExecutionAndAuthoringIndependent(t *testing.T) {
 				wantNative := int64(0)
 				wantRevision := uint32(0)
 				if tc.native {
-					wantNative, wantRevision = defines.MORPCVersion124, 1
+					wantNative, wantRevision = defines.MORPCVersion125, 1
 				}
 				require.Equal(t, wantNative, create.RequiredProtocolVersion)
 				require.Equal(t, wantRevision, create.CollationBindingRevision)

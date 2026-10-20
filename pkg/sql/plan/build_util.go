@@ -966,6 +966,32 @@ func buildDefaultExprWithColumns(
 	proc *process.Process,
 	columns []*ColDef,
 ) (*plan.Default, error) {
+	return buildDefaultExprWithColumnsObserved(bindCtx, col, typ, proc, columns, defaultExprForDDL, nil)
+}
+
+// Dump verification needs resolved session dependencies before folding removes
+// them. Ordinary DDL uses the same owner without retaining an extra tree.
+// Persisted origins already passed their authoring session's zero-date admission.
+// Verification still binds, folds and compares the complete expression under the
+// reader's conversion semantics; it does not re-admit a newly authored default.
+type defaultExprBindingPurpose uint8
+
+const (
+	defaultExprForDDL defaultExprBindingPurpose = iota
+	defaultExprForPersistedVerification
+	// Reproduce defaults admitted before integer-zero temporal normalization.
+	defaultExprForPersistedLegacyZero
+)
+
+func buildDefaultExprWithColumnsObserved(
+	bindCtx context.Context,
+	col *tree.ColumnTableDef,
+	typ plan.Type,
+	proc *process.Process,
+	columns []*ColDef,
+	purpose defaultExprBindingPurpose,
+	observe func(source, assigned *plan.Expr),
+) (*plan.Default, error) {
 	nullAbility := true
 	var expr tree.Expr = nil
 	for _, attr := range col.Attributes {
@@ -1018,7 +1044,7 @@ func buildDefaultExprWithColumns(
 	if err != nil {
 		return nil, err
 	}
-	if zeroValue, ok := zeroTemporalDefaultLiteral(semanticExpr, typ); ok {
+	if zeroValue, ok := zeroTemporalDefaultLiteral(semanticExpr, typ); ok && purpose != defaultExprForPersistedLegacyZero {
 		planExpr = makePlan2StringConstExprWithType(zeroValue)
 	}
 	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {
@@ -1039,6 +1065,9 @@ func buildDefaultExprWithColumns(
 		}
 	}
 
+	if observe != nil {
+		observe(planExpr, nil)
+	}
 	defaultExpr, err := makePlan2AssignmentCastExpr(bindCtx, planExpr, typ)
 	if err != nil {
 		return nil, err
@@ -1047,6 +1076,9 @@ func buildDefaultExprWithColumns(
 	// admission must happen while the resolved HEX overload is still present.
 	if err = requireHexMySQLNumericProtocol(proc, defaultExpr); err != nil {
 		return nil, err
+	}
+	if observe != nil {
+		observe(planExpr, defaultExpr)
 	}
 
 	// try to calculate default value, return err if fails
@@ -1090,7 +1122,7 @@ func buildDefaultExprWithColumns(
 			zeroTemporalDefault = lit.GetTimestampval() == int64(types.ZeroTimestamp)
 		}
 	}
-	if zeroTemporalDefault {
+	if purpose == defaultExprForDDL && zeroTemporalDefault {
 		var mode interface{} = proc.GetSessionInfo().SqlMode
 		if resolve := proc.GetResolveVariableFunc(); resolve != nil {
 			mode, err = resolve("sql_mode", true, false)

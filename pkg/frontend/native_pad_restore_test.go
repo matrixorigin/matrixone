@@ -13,6 +13,7 @@ package frontend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"testing"
 
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -59,7 +60,7 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 				rt.CompareAndDeleteGlobalVariables(key, value)
 			}
 		})
-		rt.SetGlobalVariables(key, defines.MORPCVersion124)
+		rt.SetGlobalVariables(key, defines.MORPCVersion125)
 	}
 	const sql = "create view v as select 'A' collate utf8mb4_general_ci = 'a' as b"
 	for _, source := range []struct {
@@ -70,7 +71,8 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 		{0, 0, false},
 		{0, 0, true},
 		{0, defines.MORPCVersion124, true},
-		{1, defines.MORPCVersion124, true},
+		{0, defines.MORPCVersion125, true},
+		{1, defines.MORPCVersion125, true},
 	} {
 		revision := source.revision
 		data := plan.ViewData{Stmt: sql, CollationBindingRevision: revision}
@@ -123,8 +125,8 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion120)
 			_, err = buildViewPlanForRestore(compiler, parsed, &tableInfo{viewDef: string(encoded)})
 			parsed.Free()
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion124)
-			require.ErrorContains(t, err, "protocol version 124", "source read admission is independent of target authoring")
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion125)
+			require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", source.floor), "source read admission is independent of target authoring")
 			require.Same(t, parent, compiler.GetContext())
 		}
 		for _, statement := range []string{"create view v as select true as b", "create view v as select missing_column"} {
@@ -143,7 +145,7 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 			require.Equal(t, revision, restored.CollationBindingRevision, "a folded SQL skeleton cannot erase source provenance")
 			if source.floor != 0 {
 				require.NotNil(t, restored.RequiredProtocolVersion)
-				require.Equal(t, defines.MORPCVersion124, *restored.RequiredProtocolVersion)
+				require.Equal(t, source.floor, *restored.RequiredProtocolVersion)
 			}
 		}
 	}
@@ -153,6 +155,7 @@ func TestNativePADViewRestoreRejectsInvalidProvenanceBeforeSQL(t *testing.T) {
 	for _, view := range []string{
 		`{"collation_binding_revision":1}`,
 		`{"collation_binding_revision":1,"required_protocol_version":120}`,
+		`{"collation_binding_revision":1,"required_protocol_version":124}`,
 		`{"collation_binding_revision":2}`,
 	} {
 		called := false

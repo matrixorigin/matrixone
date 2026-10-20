@@ -1054,7 +1054,7 @@ func TestNativePADViewRefreshRechecksAuthoringFloor(t *testing.T) {
 						rt.CompareAndDeleteGlobalVariables(key, current)
 					}
 				})
-				rt.SetGlobalVariables(key, defines.MORPCVersion124)
+				rt.SetGlobalVariables(key, defines.MORPCVersion125)
 			}
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion119)
 			ownership := executor.NewMemResult([]types.Type{types.T_uint32.ToType(), types.T_uint32.ToType(), types.T_timestamp.ToType()}, proc.Mp())
@@ -1076,7 +1076,7 @@ func TestNativePADViewRefreshRechecksAuthoringFloor(t *testing.T) {
 			storage.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil)
 			database.EXPECT().Relation(gomock.Any(), "v", gomock.Any()).Return(relation, nil)
 			relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(13))
-			current := &planpb.TableDef{Name: "v", Version: 23, LogicalId: 17, ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci = 'a' as b","DefaultDatabase":"db","collation_binding_revision":1,"required_protocol_version":124}`}}
+			current := &planpb.TableDef{Name: "v", Version: 23, LogicalId: 17, ViewSql: &planpb.ViewDef{View: `{"Stmt":"create view v as select 'A' collate utf8mb4_general_ci = 'a' as b","DefaultDatabase":"db","collation_binding_revision":1,"required_protocol_version":125}`}}
 			relation.EXPECT().CopyTableDef(gomock.Any()).Return(current)
 			// 不注册AlterTable：读门允许重绑定，但写门不允许发布replacement。
 			target := viewRefreshTarget{accountID: 7, databaseID: 11, relationID: 13, logicalID: 17, databaseName: "db", relationName: "v", generation: 19}
@@ -1089,7 +1089,7 @@ func TestNativePADViewRefreshRechecksAuthoringFloor(t *testing.T) {
 			} else {
 				err = (&Compile{proc: proc, e: storage, pn: &planpb.Plan{}}).refreshOneView(target, viewRelationMutation{})
 			}
-			require.ErrorContains(t, err, "protocol version 124")
+			require.ErrorContains(t, err, "protocol version 125")
 			require.Same(t, parent, proc.GetTopContext())
 		})
 	}
