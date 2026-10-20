@@ -413,6 +413,15 @@ func prePrepareObjectHasDrop(group catalog.ObjectListGroup) string {
 	}
 }
 
+// A drop entry represents the old physical object.  If the drop belongs to
+// the reader transaction itself, that old object is no longer a competing
+// source for incremental dedup; the transaction may be publishing its
+// replacement object in the same commit.  Scanning the D-entry would make the
+// transaction conflict with its own rewrite.
+func skipOwnDroppedObject(obj *catalog.ObjectEntry, txn txnif.TxnReader) bool {
+	return obj.IsDEntry() && obj.DeleteNode.IsSameTxn(txn)
+}
+
 func observePrePrepareObjectScan(
 	tableID uint64,
 	isTombstone bool,
@@ -780,6 +789,9 @@ func (tbl *baseTable) incrementalGetRowsByPK(ctx context.Context, pks containers
 			return nil
 		}
 		objData := obj.GetObjectData()
+		if skipOwnDroppedObject(obj, tbl.txnTable.store.txn) {
+			return nil
+		}
 		objectStepStart := time.Now()
 		err := objData.GetDuplicatedRows(
 			ctx,
