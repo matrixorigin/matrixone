@@ -521,6 +521,9 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		return "", moerr.NewInternalError(proc.Ctx, "Failed to get sequence meta data.")
 	}
 	values := _values[0]
+	prevCalled, _ := values[6].(bool)
+	//#30650: stored flag = prev || !third-arg; see setVal for the full rule.
+	storedCalled := prevCalled || !iscalled
 
 	switch values[0].(type) {
 	case int16:
@@ -533,7 +536,7 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if setnum < int64(minv) || setnum > int64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, int16(setnum), iscalled, rel, db, tblname)
+		return setVal(proc, int16(setnum), iscalled, storedCalled, rel, db, tblname)
 	case int32:
 		minv, maxv := values[1].(int32), values[2].(int32)
 		setnum, err := strconv.ParseInt(setnum, 10, 64)
@@ -543,7 +546,7 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if setnum < int64(minv) || setnum > int64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, int32(setnum), iscalled, rel, db, tblname)
+		return setVal(proc, int32(setnum), iscalled, storedCalled, rel, db, tblname)
 	case int64:
 		minv, maxv := values[1].(int64), values[2].(int64)
 		setnum, err := strconv.ParseInt(setnum, 10, 64)
@@ -553,7 +556,7 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if setnum < minv || setnum > maxv {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, setnum, iscalled, rel, db, tblname)
+		return setVal(proc, setnum, iscalled, storedCalled, rel, db, tblname)
 	case uint16:
 		minv, maxv := values[1].(uint16), values[2].(uint16)
 		setnum, err := strconv.ParseUint(setnum, 10, 64)
@@ -563,7 +566,7 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if setnum < uint64(minv) || setnum > uint64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, uint16(setnum), iscalled, rel, db, tblname)
+		return setVal(proc, uint16(setnum), iscalled, storedCalled, rel, db, tblname)
 	case uint32:
 		minv, maxv := values[1].(uint32), values[2].(uint32)
 		setnum, err := strconv.ParseUint(setnum, 10, 64)
@@ -573,7 +576,7 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if setnum < uint64(minv) || setnum > uint64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, uint32(setnum), iscalled, rel, db, tblname)
+		return setVal(proc, uint32(setnum), iscalled, storedCalled, rel, db, tblname)
 	case uint64:
 		minv, maxv := values[1].(uint64), values[2].(uint64)
 		setnum, err := strconv.ParseUint(setnum, 10, 64)
@@ -583,18 +586,19 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if setnum < minv || setnum > maxv {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
-		return setVal(proc, setnum, iscalled, rel, db, tblname)
+		return setVal(proc, setnum, iscalled, storedCalled, rel, db, tblname)
 	}
 	return "", moerr.NewInternalError(proc.Ctx, "Wrong types of sequence number or failed to read the sequence table")
 }
 
-func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bool, rel engine.Relation, db, tbl string) (string, error) {
-	//#30650: persist is_called together with last_seq_num; NEXTVAL only
-	// advances when is_called is set. SETVAL(n, true) means the next NEXTVAL
-	// returns n (start-value semantics), SETVAL(n, false) means n+increment,
-	// so the stored flag is the inverse of the user argument regardless of
-	// the previous is_called state.
-	_, err := sequenceSQL(proc, db, fmt.Sprintf("update %s set last_seq_num = %d, is_called = %t", sequenceTableName(db, tbl), setv, !setisCalled))
+func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled, storedCalled bool, rel engine.Relation, db, tbl string) (string, error) {
+	//#30650: persist is_called together with last_seq_num; NEXTVAL advances
+	// only when the stored flag is set. The documented rule stores !setisCalled
+	// (SETVAL(n, true) returns n on the next NEXTVAL, SETVAL(n, false) returns
+	// n+increment), and a sequence that was ever called must keep its flag so
+	// that SETVAL(n, true) after a call still reports called=true (#28243), so
+	// the caller passes storedCalled = prevCalled || !setisCalled.
+	_, err := sequenceSQL(proc, db, fmt.Sprintf("update %s set last_seq_num = %d, is_called = %t", sequenceTableName(db, tbl), setv, storedCalled))
 	if err != nil {
 		return "", err
 	}
