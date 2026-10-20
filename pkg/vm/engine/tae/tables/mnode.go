@@ -408,12 +408,6 @@ func (node *memoryNode) checkConflictLocked(
 	}
 }
 
-func (node *memoryNode) allRowsCommittedBefore(ts types.TS) bool {
-	node.object.RLock()
-	defer node.object.RUnlock()
-	return node.object.appendMVCC.AllAppendsCommittedBeforeLocked(ts)
-}
-
 func (node *memoryNode) Scan(
 	ctx context.Context,
 	bat **containers.Batch,

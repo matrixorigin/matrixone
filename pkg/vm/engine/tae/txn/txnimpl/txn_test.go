@@ -1784,6 +1784,7 @@ func TestReplayAppendNodeCreateTS(t *testing.T) {
 	node.TxnMVCCNode.End = types.TS{}
 	assert.Equal(t, prepareTS, replayAppendNodeCreateTS(node))
 }
+
 // dedupRangeObjectData observes the real incremental object traversal without I/O.
 type dedupRangeObjectData struct {
 	containsObjectData

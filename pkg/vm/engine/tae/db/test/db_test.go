@@ -12126,7 +12126,6 @@ func testConcurrentUpdateByPreviousRowIDWithFlushMerge(
 	var workersWG sync.WaitGroup
 	workersWG.Add(workerCount)
 	for worker := 0; worker < workerCount; worker++ {
-		worker := worker
 		go func() {
 			defer workersWG.Done()
 			key := worker % keyCount
