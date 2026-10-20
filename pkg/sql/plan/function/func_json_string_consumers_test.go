@@ -218,14 +218,18 @@ func TestJSONStringConsumersRejectMalformedStoredJSON(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			defer proc.Free()
+			nativeBefore, heapBefore := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
 			caseUnderTest := NewFunctionTestCase(
 				proc, tc.inputs,
 				NewFunctionTestResult(types.T_text.ToType(), true, nil, nil),
 				tc.fn,
 			)
+			defer caseUnderTest.Free()
 			caseUnderTest.parameters[tc.jsonAt].GetBytesAt(0)[0] = 0xff
-			ok, info := caseUnderTest.Run()
+			ok, info := caseUnderTest.RunAndFree()
 			require.True(t, ok, info)
+			require.Equal(t, nativeBefore, proc.Mp().CurrNB())
+			require.Equal(t, heapBefore, proc.Mp().OnHeapCurrNB())
 		})
 	}
 }
@@ -296,6 +300,11 @@ func TestJSONStringConsumerCastsOnlyNonJSONOperands(t *testing.T) {
 func TestJSONStringConsumersUseVisibleJSON(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	nativeBefore, heapBefore := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+	defer func() {
+		require.Equal(t, nativeBefore, proc.Mp().CurrNB())
+		require.Equal(t, heapBefore, proc.Mp().OnHeapCurrNB())
+	}()
 
 	jsonValues := []string{
 		mustJsonBinaryString(t, `{"a":1}`),
@@ -326,7 +335,7 @@ func TestJSONStringConsumersUseVisibleJSON(t *testing.T) {
 			}, []bool{false, false, false, false, false, true}),
 		builtInConcat,
 	)
-	ok, info := concat.Run()
+	ok, info := concat.RunAndFree()
 	require.True(t, ok, info)
 
 	textControl := NewFunctionTestCase(
@@ -338,7 +347,7 @@ func TestJSONStringConsumersUseVisibleJSON(t *testing.T) {
 		NewFunctionTestResult(types.T_varchar.ToType(), false, []string{`{"a":1}x`}, nil),
 		builtInConcat,
 	)
-	ok, info = textControl.Run()
+	ok, info = textControl.RunAndFree()
 	require.True(t, ok, info)
 
 	binaryValue := string([]byte{'a', 0, 0xff})
@@ -351,13 +360,18 @@ func TestJSONStringConsumersUseVisibleJSON(t *testing.T) {
 		NewFunctionTestResult(types.T_blob.ToType(), false, []string{binaryValue + "!"}, nil),
 		builtInConcat,
 	)
-	ok, info = binaryControl.Run()
+	ok, info = binaryControl.RunAndFree()
 	require.True(t, ok, info)
 }
 
 func TestConcatWsJSONStringOperands(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	nativeBefore, heapBefore := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+	defer func() {
+		require.Equal(t, nativeBefore, proc.Mp().CurrNB())
+		require.Equal(t, heapBefore, proc.Mp().OnHeapCurrNB())
+	}()
 
 	separator := []string{
 		mustJsonBinaryString(t, `"|"`),
@@ -395,13 +409,18 @@ func TestConcatWsJSONStringOperands(t *testing.T) {
 			}, []bool{false, false, false, false, true}),
 		ConcatWs,
 	)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 }
 
 func TestEltJSONStringOperandsAndSelection(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	nativeBefore, heapBefore := proc.Mp().CurrNB(), proc.Mp().OnHeapCurrNB()
+	defer func() {
+		require.Equal(t, nativeBefore, proc.Mp().CurrNB())
+		require.Equal(t, heapBefore, proc.Mp().OnHeapCurrNB())
+	}()
 
 	jsonValues := []string{
 		mustJsonBinaryString(t, `{"a":1}`),
@@ -436,7 +455,7 @@ func TestEltJSONStringOperandsAndSelection(t *testing.T) {
 			[]bool{false, false, true, false, true, true}),
 		Elt,
 	)
-	ok, info := tc.Run()
+	ok, info := tc.RunAndFree()
 	require.True(t, ok, info)
 
 	// The JSON vector is deliberately malformed. Every row selects the text
@@ -456,12 +475,13 @@ func TestEltJSONStringOperandsAndSelection(t *testing.T) {
 			[]string{"chosen", "", "chosen"}, []bool{false, true, false}),
 		Elt,
 	)
+	defer unselected.Free()
 	// The vector admission path has already accepted these values. Mutating the
 	// stored type byte after admission gives the executor an invalid, unselected
 	// payload without teaching the test framework to admit malformed JSON.
 	for i := 0; i < 3; i++ {
 		unselected.parameters[1].GetBytesAt(i)[0] = 0xff
 	}
-	ok, info = unselected.Run()
+	ok, info = unselected.RunAndFree()
 	require.True(t, ok, info)
 }
