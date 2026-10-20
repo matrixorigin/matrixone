@@ -2708,6 +2708,14 @@ func buildCreateTable(
 		}
 		tableDef.IsTemporary = stmt.Temporary
 
+		// MySQL regenerates CHECK constraint names for CREATE TABLE LIKE; copied
+		// names would collide in (CONSTRAINT_SCHEMA, CONSTRAINT_NAME) and let
+		// metadata joins attribute the source table's expression to the target.
+		//
+		if !preserveCheckNamesForRestore(ctx, cloneStmt) {
+			renameCheckConstraintsForClone(tableDef)
+		}
+
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
@@ -2755,7 +2763,11 @@ func buildCreateTable(
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
 				return nil, err
 			}
-			preserveChecksForCreateLike(p, tableDef)
+			// The skeleton contains the final names: ordinary LIKE/CLONE has
+			// regenerated names, while restore retains the source identities.
+			// Reattaching the pre-rewrite tableDef here would undo that choice
+			// for data-branch clones and recreate schema-wide name collisions.
+			preserveChecksForCreateLike(p, likeSkeletonDef)
 			return p, nil
 		}
 
@@ -4150,7 +4162,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				)
 			}
 		}
-		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, columnPos); err != nil {
+		checkName := check.name
+		if checkName == "" {
+			// Unnamed CHECKs are named <table>_chk_<n>, unique to the owning
+			// table.  Prefixing with the table name keeps names unique within
+			// the schema, so information_schema metadata joins cannot associate
+			// one table's expression with another table.
+			checkName = nextUnnamedCheckConstraintName(createTable.TableDef)
+		}
+		if err := appendCheckDef(ctx, createTable.TableDef, checkName, check.expr, columnPos); err != nil {
 			return err
 		}
 	}
@@ -4506,6 +4526,53 @@ func ctasNeedsExplicitSourceProjection(cols, sourceCols []*ColDef) bool {
 	return false
 }
 
+// nextUnnamedCheckConstraintName names an unnamed CHECK the way MySQL does:
+// <table>_chk_<ordinal> counting this table's CHECK definitions from one.
+func nextUnnamedCheckConstraintName(tableDef *TableDef) string {
+	return fmt.Sprintf("%s_chk_%d", tableDef.Name, len(tableDef.Checks)+1)
+}
+
+// Ordinary data-branch clones also run through ExecRestore, which sets both
+// statement and process restore markers. The outer operation's clone level is
+// authoritative: only a genuine restore should keep captured CHECK identities.
+// Retain the marker fallback for callers without an outer clone context.
+func preserveCheckNamesForRestore(ctx CompilerContext, cloneStmt *tree.CloneTable) bool {
+	marked := cloneStmt != nil && cloneStmt.IsRestore
+	if proc := ctx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil {
+		marked = marked || proc.GetSessionInfo().IsRestore
+	}
+	return IsCheckConstraintRestoreReplay(ctx.GetContext(), marked)
+}
+
+// IsCheckConstraintRestoreReplay shares the restore identity decision with
+// execution. Ordinary data-branch clones also carry restore session markers;
+// the outer clone level distinguishes a new owner from historical replay.
+func IsCheckConstraintRestoreReplay(ctx context.Context, marked bool) bool {
+	switch ctx.Value(tree.CloneLevelCtxKey{}) {
+	case tree.NormalCloneLevelTable, tree.NormalCloneLevelDatabase,
+		tree.NormalCloneLevelAccount, tree.NormalCloneLevelCluster:
+		return false
+	case tree.RestoreCloneLevelTable, tree.RestoreCloneLevelDatabase,
+		tree.RestoreCloneLevelAccount, tree.RestoreCloneLevelCluster:
+		return true
+	}
+	return marked
+}
+
+// renameCheckConstraintsForClone regenerates CHECK names for a table created
+// from an existing table definition (CREATE TABLE LIKE): every CHECK from the
+// source receives a fresh <target>_chk_<ordinal> name in definition order, so
+// names stay unique per schema even when the source named its CHECKs
+// explicitly.
+func renameCheckConstraintsForClone(tableDef *plan.TableDef) {
+	for i, check := range tableDef.Checks {
+		if check == nil {
+			continue
+		}
+		check.Name = fmt.Sprintf("%s_chk_%d", tableDef.Name, i+1)
+	}
+}
+
 func appendCheckDef(
 	ctx CompilerContext,
 	tableDef *TableDef,
@@ -4592,6 +4659,9 @@ func appendCheckDef(
 	}
 	if name == "" {
 		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
+	if err := validateIdentifier(ctx.GetContext(), name); err != nil {
+		return err
 	}
 	for _, check := range tableDef.Checks {
 		if check.Name == name {

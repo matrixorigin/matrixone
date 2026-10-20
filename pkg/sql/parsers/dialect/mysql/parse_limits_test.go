@@ -27,7 +27,7 @@ import (
 )
 
 func TestParseLimitsExactBoundariesAndOrdinaryParity(t *testing.T) {
-	for _, sql := range []string{"select 1", "create view v as select a from t", "select 'a\\nb' /* comment */ as x"} {
+	for _, sql := range []string{"select 1", "create view v as select a from t", "select 'a\\nb' /* comment */ as x", "select id from t for update nowait", "select id from t for share nowait", "select id from t for share skip locked"} {
 		t.Run(sql, func(t *testing.T) {
 			lexer := NewLexer(dialect.MYSQL, sql, 1)
 			control := &parseControl{ctx: t.Context(), limits: ParseLimits{Input: len(sql), Tokens: 10000, Work: 10000}}
@@ -237,6 +237,42 @@ func TestParseLimitsCancelDuringScannerAndRecoverForNextParse(t *testing.T) {
 		require.NoError(t, err)
 		for _, stmt := range statements {
 			stmt.Free()
+		}
+	}
+}
+
+// Seven lexical tokens plus EOF must still count when NOWAIT shares the mode's
+// parser token; lexical folding cannot bypass the public token budget.
+func TestSelectLockModifierTokenBudget(t *testing.T) {
+	for _, mode := range []string{"update", "share"} {
+		sql := "select id from t for " + mode + " nowait"
+		for _, budget := range []int{7, 8} {
+			limits := ParseLimits{Input: len(sql), Tokens: budget, Work: 10000}
+			stmts, err := ParseWithSQLMode(WithParseLimits(t.Context(), limits), sql, 1, "")
+			for _, stmt := range stmts {
+				stmt.Free()
+			}
+			if budget == 7 {
+				require.ErrorIs(t, err, ErrParseLimit)
+			} else {
+				require.NoError(t, err)
+			}
+		}
+	}
+}
+
+func TestSelectSkipLockedTokenBudget(t *testing.T) {
+	sql := "select id from t for share skip locked"
+	for _, budget := range []int{8, 9} {
+		limits := ParseLimits{Input: len(sql), Tokens: budget, Work: 10000}
+		stmts, err := ParseWithSQLMode(WithParseLimits(t.Context(), limits), sql, 1, "")
+		for _, stmt := range stmts {
+			stmt.Free()
+		}
+		if budget == 8 {
+			require.ErrorIs(t, err, ErrParseLimit)
+		} else {
+			require.NoError(t, err)
 		}
 	}
 }

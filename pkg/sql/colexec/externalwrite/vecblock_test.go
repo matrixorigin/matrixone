@@ -60,5 +60,22 @@ func TestExternalWriteVecBlock(t *testing.T) {
 		require.Equal(t, want, buf.String())
 		require.True(t, json.Valid(buf.Bytes()))
 		vec.Free(mp)
+
+		// a negative-zero element is written as -0 and builds back into the same bytes
+		const nz = `{"g":1,"s":[1],"v":[-0]}`
+		nzCell, err := types.BlockScaledFromJSON(f, nz)
+		require.NoError(t, err)
+		vec = vector.NewVec(types.New(oid, 1, 0))
+		require.NoError(t, vector.AppendBytes(vec, nzCell, false, mp))
+		val, _, err = w.csvValue(vec, 0)
+		require.NoError(t, err)
+		require.Equal(t, nz, string(val))
+		buf.Reset()
+		require.NoError(t, w.appendJSONValue(&buf, vec, 0))
+		require.Equal(t, nz, buf.String())
+		cell, err = types.BlockScaledFromJSON(f, buf.String())
+		require.NoError(t, err)
+		require.Equal(t, nzCell, cell)
+		vec.Free(mp)
 	}
 }

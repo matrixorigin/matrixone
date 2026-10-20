@@ -115,14 +115,18 @@ func TestAlterCheckOrderedNamesAndLegacyRecovery(t *testing.T) {
 	}{
 		{"drop check __mo_chk_1", []string{"__mo_chk_2"}},
 		{"drop constraint __mo_chk_1", []string{"__mo_chk_2"}},
-		{"drop check __mo_chk_1, add check(v>0)", []string{"__mo_chk_2", "__mo_chk_3"}},
+		{"drop check __mo_chk_1, add check(v>0)", []string{"__mo_chk_2", "check_t_chk_2"}},
 		{"drop check __mo_chk_1, drop check __mo_chk_2", nil},
 		{"drop check __mo_chk_1, add constraint __mo_chk_1 check(v>0)", []string{"__mo_chk_2", "__mo_chk_1"}},
 		{"add constraint transient_ck check(v>0), drop constraint transient_ck", []string{"__mo_chk_1", "__mo_chk_2"}},
 	} {
 		for _, legacy := range []bool{false, true} {
 			t.Run(test.clause+map[bool]string{false: "/structured", true: "/legacy"}[legacy], func(t *testing.T) {
-				mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int, check(v>=0), check(v<100))")
+				// Use the names emitted by the legacy planner explicitly.  The
+				// current CREATE path names an unnamed CHECK as check_t_chk_N;
+				// this test is specifically exercising recovery of the historical
+				// __mo_chk_N identities when the structured CHECK metadata is absent.
+				mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int, constraint __mo_chk_1 check(v>=0), constraint __mo_chk_2 check(v<100))")
 				if legacy {
 					mock.ctxt.tables["check_t"].Checks = nil
 				}
@@ -139,6 +143,32 @@ func TestAlterCheckOrderedNamesAndLegacyRecovery(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestAlterCheckGeneratedNames(t *testing.T) {
+	for _, tc := range []struct {
+		name, ddl, clause string
+		want              []string
+	}{
+		{"empty table", "create table check_t(v int)", "add check(v>0)", []string{"check_t_chk_1"}},
+		{"drop skips occupied name", "create table check_t(v int,check(v>=0),check(v<100))", "drop check check_t_chk_1, add check(v>0)", []string{"check_t_chk_2", "check_t_chk_3"}},
+		{"explicit names count", "create table check_t(v int,constraint positive check(v>0))", "add check(v<100)", []string{"positive", "check_t_chk_2"}},
+		{"multiple ordered adds", "create table check_t(v int)", "add check(v>0), add check(v<100)", []string{"check_t_chk_1", "check_t_chk_2"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, tc.ddl)
+			source := mock.ctxt.tables["check_t"]
+			before := proto.Clone(source).(*planpb.TableDef)
+			p, err := runOneStmt(mock, t, "alter table check_t "+tc.clause)
+			require.NoError(t, err)
+			checks := p.GetDdl().GetAlterTable().CopyTableDef.Checks
+			require.Len(t, checks, len(tc.want))
+			for i, name := range tc.want {
+				require.Equal(t, name, checks[i].Name)
+			}
+			require.Equal(t, before, source)
+		})
 	}
 }
 
