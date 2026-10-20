@@ -553,7 +553,13 @@ func TestViewSchemaPlanningAuthorizationSnapshot(t *testing.T) {
 					require.Positive(t, authorizations)
 					require.Positive(t, f.compiler.lookups.Load())
 					if mode == "text" || mode == "typed" {
+						for _, ref := range p.GetDcl().GetPrepare().Schemas {
+							require.Equal(t, snapshot, ref.Snapshot, "PREPARE must not capture current-domain references")
+						}
 						p = p.GetDcl().GetPrepare().Plan
+					}
+					for _, ref := range p.GetQuery().CatalogDependencies {
+						require.Equal(t, snapshot, ref.Snapshot, "historical-only query must not depend on current DDL")
 					}
 					columns := GetResultColumnsFromPlan(p)
 					require.Len(t, columns, 1)
@@ -614,6 +620,52 @@ func TestViewSchemaPlanningNumericProbeUnknownSnapshot(t *testing.T) {
 	resolveNumericProjectionSourceOutputs(builder, &tree.Select{}, nil, sources, make(map[*tree.Select]bool))
 	require.False(t, sources[0].outputKnown)
 	require.Zero(t, f.compiler.lookups.Load(), "no binding context means no known snapshot domain")
+}
+
+func TestViewSchemaPlanningPseudoTableAuthorization(t *testing.T) {
+	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+		for _, tc := range []struct {
+			name, query string
+			physical    bool
+		}{
+			{"no from", "select 1 as one", false},
+			{"dual", "select 1 as one from dual", false},
+			{"upper dual", "select 1 as one from DUAL", false},
+			{"quoted dual", "select 1 as one from `dual`", false},
+			{"aliased dual", "select 1 as one from dual d", false},
+			{"cte named dual", "with dual as (select id from tpch.root_v) select 1 as one from dual", false},
+			{"qualified dual", "select 1 as one from tpch.dual", true},
+			{"quoted qualified dual", "select 1 as one from tpch.`dual`", true},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				f := newViewSchemaTestFixture(t)
+				f.addView(t, "root_v", "select n_nationkey as id from nation")
+				failure := errors.New("physical roots denied")
+				f.authErr = failure
+				p, err := buildViewSchemaAuthorizationPlan(t, f.request(t), mode, tc.query)
+				require.Zero(t, f.compiler.lookups.Load())
+				if tc.physical {
+					require.ErrorIs(t, err, failure)
+					require.Nil(t, p)
+					require.EqualValues(t, 1, f.authorizes.Load())
+					return
+				}
+				require.NoError(t, err)
+				require.Zero(t, f.authorizes.Load(), "a placeholder must not be authorized as a physical root")
+				if mode == "text" || mode == "typed" {
+					require.Empty(t, p.GetDcl().GetPrepare().Schemas)
+					p = p.GetDcl().GetPrepare().Plan
+				}
+				require.Empty(t, p.GetQuery().CatalogDependencies)
+				for _, node := range p.GetQuery().Nodes {
+					require.NotEqual(t, planpb.Node_TABLE_SCAN, node.NodeType)
+				}
+				columns := GetResultColumnsFromPlan(p)
+				require.Len(t, columns, 1)
+				require.Equal(t, "one", columns[0].Name)
+			})
+		}
+	}
 }
 
 func TestViewSchemaPlanningDeniedRootDoesNotWaitForCatalog(t *testing.T) {

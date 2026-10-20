@@ -7305,6 +7305,9 @@ func collectNumericProjectionSources(
 		return []numericProjectionSourceInfo{{source: expr, alias: alias, aliasCols: aliasCols}}
 	case *tree.TableName:
 		sourceName := string(expr.ObjectName)
+		if isPlaceholderTableName(string(expr.SchemaName), sourceName) {
+			return nil
+		}
 		if alias == "" {
 			alias = sourceName
 		}
@@ -12900,6 +12903,12 @@ func transparentDerivedCorrelationTargetsNearestAncestor(ctx *BindContext, corr 
 	return false
 }
 
+// isPlaceholderTableName classifies value-only sources before either catalog
+// probing or CTE lookup. Qualified DUAL remains a physical table name.
+func isPlaceholderTableName(schema, table string) bool {
+	return len(table) == 0 || len(schema) == 0 && table == "dual"
+}
+
 func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, tableInput *tableFunctionInput) (nodeID int32, sqlDatabase string, err error) {
 	leaveBinding, bindErr := enterViewSchemaBinding(builder.GetContext())
 	if bindErr != nil {
@@ -12940,7 +12949,7 @@ func (builder *QueryBuilder) buildTable(stmt tree.TableExpr, ctx *BindContext, t
 		schema := string(tbl.SchemaName)
 		table := string(tbl.ObjectName)
 		originTableName := table
-		if len(table) == 0 || len(schema) == 0 && table == "dual" { //special table name
+		if isPlaceholderTableName(schema, table) { //special table name
 			//special dual cases.
 			//CORNER CASE 1:
 			//  create table `dual`(a int);

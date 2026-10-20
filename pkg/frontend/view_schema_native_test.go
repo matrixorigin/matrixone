@@ -162,6 +162,9 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 		} {
 			exec(query, executor.Options{})
 		}
+		t.Run("placeholder source authorization", func(t *testing.T) {
+			testNativeViewSchemaPseudoRoots(t, ctx, cn, svc, database)
+		})
 		var historical timestamp.Timestamp
 		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(_ *frontend.TxnCompilerContext, op client.TxnOperator, _ *process.Process) {
 			historical = op.SnapshotTS()
@@ -362,6 +365,69 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 			require.Equal(t, []string{"first"}, gotLabels)
 		})
 	})
+}
+
+func testNativeViewSchemaPseudoRoots(t *testing.T, ctx context.Context, cn embed.ServiceOperator, svc cnservice.Service, database string) {
+	t.Helper()
+	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+		for _, tc := range []struct {
+			name, query string
+			physical    bool
+		}{
+			{"no_from", "select 1 as one", false},
+			{"dual", "select 1 as one from dual", false},
+			{"qualified_dual", "select 1 as one from " + database + ".dual", true},
+		} {
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, proc *process.Process) {
+					statements, err := mysql.Parse(ctx, tc.query, 1)
+					require.NoError(t, err)
+					defer statements[0].Free()
+					var input tree.Statement = statements[0]
+					if mode == "text" {
+						input = &tree.PrepareString{Name: "literal_plan", Sql: tc.query}
+					} else if mode == "typed" {
+						input = &tree.PrepareStmt{Name: "literal_plan", Stmt: statements[0]}
+					}
+					denied := errors.New("physical root denied")
+					authorizations := 0
+					p, err := compiler.BuildPlanWithViewSchema(ctx, input, mode == "direct", func(context.Context, string, string, *plan.Snapshot) error {
+						authorizations++
+						return denied
+					})
+					if tc.physical {
+						require.ErrorIs(t, err, denied)
+						require.Nil(t, p)
+						require.Equal(t, 1, authorizations)
+						return
+					}
+					require.NoError(t, err)
+					require.Zero(t, authorizations)
+					if mode == "text" || mode == "typed" {
+						require.Empty(t, p.GetDcl().GetPrepare().Schemas)
+						p = p.GetDcl().GetPrepare().Plan
+					}
+					require.Empty(t, p.GetQuery().CatalogDependencies)
+					c := compile.NewCompile(cn.GetServiceConfig().CN.ServiceAddress, database, tc.query, "", "",
+						svc.GetEngine(), proc, statements[0], false, nil, time.Now())
+					defer c.Release()
+					var values []int64
+					require.NoError(t, c.Compile(ctx, p, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+						if bat != nil && bat.RowCount() > 0 {
+							if bat.Vecs[0].GetType().Oid != types.T_int64 {
+								return fmt.Errorf("constant source returned type %s", bat.Vecs[0].GetType())
+							}
+							values = append(values, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])...)
+						}
+						return nil
+					}))
+					_, err = c.Run(0)
+					require.NoError(t, err)
+					require.Equal(t, []int64{1}, values)
+				})
+			})
+		}
+	}
 }
 
 func openNativeViewSchemaSQL(t *testing.T, ctx context.Context, cn embed.ServiceOperator, credentials, database string) *sql.DB {
