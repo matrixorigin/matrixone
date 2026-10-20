@@ -317,6 +317,12 @@ func TestMaterializedCTEStepGuards(t *testing.T) {
 			}, Steps: []int32{0}},
 		},
 		{
+			name: "recursive CTE",
+			query: &plan.Query{Nodes: []*plan.Node{
+				{NodeType: plan.Node_SINK, RecursiveCte: true, ExtraOptions: materialized.CTESinkOption},
+			}, Steps: []int32{0}},
+		},
+		{
 			name:  "invalid step",
 			query: &plan.Query{},
 			step:  1,

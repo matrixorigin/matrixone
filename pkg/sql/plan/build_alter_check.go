@@ -26,7 +26,7 @@ import (
 
 // Resolve generic drops without conflating CHECK with FOREIGN KEY. Keep an
 // ordered name view so later clauses can see constraints added/dropped earlier.
-func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, options tree.AlterTableOptions) (tree.AlterTableOptions, error) {
+func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, options tree.AlterTableOptions, bindings alterColumnBindings) (tree.AlterTableOptions, error) {
 	needsChecks := false
 	for _, option := range options {
 		switch opt := option.(type) {
@@ -77,48 +77,36 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 	inlinePrimary := make(map[tree.AlterTableOption]string)
 	droppedUnique := make(map[tree.AlterTableOption][]string)
 	if copyNames {
-		// COPY builds inline column constraints immediately and table-level
-		// indexes after column changes. Retain inline producers separately so
-		// ordered DROP resolution sees them only after their column clause.
-		columnOrigins := make(map[string]string, len(current.Cols))
-		usedOrigins := make(map[string]bool, len(current.Cols))
-		for _, col := range current.Cols {
-			columnOrigins[col.Name] = col.Name
-			usedOrigins[col.Name] = true
+		// Plugin dependencies share the same index-reference identity as Parts.
+		// Reuse their rename owner, including legacy INCLUDE parameter recovery;
+		// catalog SQL returned by these planning hooks is not executed here.
+		for oldName, origin := range bindings.sourceOrigins {
+			if _, err := handleAlterRenameColumnWithPluginHooks(current, oldName, origin); err != nil {
+				return nil, err
+			}
 		}
-		// A new column is a new identity even when it reuses a renamed or
-		// dropped column's SQL name. Reserve source and allocated identities
-		// for this whole planning pass. These private names never leave the view.
-		nextOrigin := 0
-		newColumnOrigin := func() string {
-			for {
-				origin := fmt.Sprintf("__mo_alter_col_%d", nextOrigin)
-				nextOrigin++
-				if !usedOrigins[origin] {
-					usedOrigins[origin] = true
-					return origin
+		for _, index := range current.Indexes {
+			for i, part := range index.Parts {
+				if origin, ok := bindings.sourceOrigins[catalog.ResolveAlias(part)]; ok {
+					if catalog.IsAlias(part) {
+						origin = catalog.CreateAlias(origin)
+					}
+					index.Parts[i] = origin
 				}
 			}
 		}
-		for _, option := range options {
+		// COPY builds inline column constraints immediately and table-level
+		// indexes after column changes. Retain inline producers separately so
+		// ordered DROP resolution sees them only after their column clause.
+		for ordinal, option := range options {
 			var column *tree.ColumnTableDef
 			switch opt := option.(type) {
 			case *tree.AlterAddCol:
 				column = opt.Column
-				columnOrigins[column.Name.ColName()] = newColumnOrigin()
 			case *tree.AlterTableModifyColumnClause:
 				column = opt.NewColumn
-			case *tree.AlterTableRenameColumnClause:
-				if opt.NewColumnName.ColName() != opt.OldColumnName.ColName() {
-					columnOrigins[opt.NewColumnName.ColName()] = columnOrigins[opt.OldColumnName.ColName()]
-					delete(columnOrigins, opt.OldColumnName.ColName())
-				}
 			case *tree.AlterTableChangeColumnClause:
 				column = opt.NewColumn
-				if opt.NewColumn.Name.ColName() != opt.OldColumnName.ColName() {
-					columnOrigins[opt.NewColumn.Name.ColName()] = columnOrigins[opt.OldColumnName.ColName()]
-					delete(columnOrigins, opt.OldColumnName.ColName())
-				}
 			case *tree.AlterOptionDrop:
 				name := string(opt.Name)
 				if opt.Typ == tree.AlterTableDropIndex || opt.Typ == tree.AlterTableDropKey {
@@ -136,7 +124,7 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 					}
 				}
 				if opt.Typ == tree.AlterTableDropColumn {
-					if original := columnOrigins[name]; original != "" {
+					if original := bindings.clauses[ordinal].origin; original != "" && !bindings.clauses[ordinal].preserveIndexes {
 						before := slices.Clone(current.Indexes)
 						if err := handleDropColumnWithIndex(ctx.GetContext(), original, current); err != nil {
 							return nil, err
@@ -149,13 +137,12 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 							}
 						}
 					}
-					delete(columnOrigins, name)
 				}
 			}
 			if column == nil {
 				continue
 			}
-			origin := columnOrigins[column.Name.ColName()]
+			origin := bindings.clauses[ordinal].origin
 			for _, attr := range column.Attributes {
 				switch attr.(type) {
 				case *tree.AttributePrimaryKey, *tree.AttributeKey:
