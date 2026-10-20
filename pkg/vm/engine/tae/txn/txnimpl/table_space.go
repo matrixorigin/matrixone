@@ -391,10 +391,6 @@ func (space *tableSpace) prepareApplyObjectStats(stats objectio.ObjectStats) (er
 	return
 }
 
-func (space *tableSpace) prepareApplyNode(node *anode) (err error) {
-	return space.prepareApplyANode(node, 0)
-}
-
 // CloseAppends un-reference the appendable blocks
 func (space *tableSpace) CloseAppends() {
 	for _, ctx := range space.appends {
