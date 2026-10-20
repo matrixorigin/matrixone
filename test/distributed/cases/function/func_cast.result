@@ -719,9 +719,13 @@ null  ¦  null  ¦  null
 CREATE TABLE t (col_datetime datetime, col_date date, col_char char);
 insert into t values ('2013-03-15 18:35:20', '2013-03-15','L'),('2003-01-10 00:00:23', '2003-01-10', NULL);
 SELECT CAST(col_char AS DATETIME) FROM t;
-invalid input: invalid datetime value L
+➤ cast(col_char as datetime)[93,19,0]  𝄀
+null  𝄀
+null
 SELECT col_char <> col_datetime FROM t;
-invalid input: invalid datetime value L
+➤ col_char != col_datetime[-7,1,0]  𝄀
+null  𝄀
+null
 SELECT CAST(col_char AS DATE) FROM t;
 ➤ cast(col_char as date)[91,64,0]  𝄀
 null  𝄀
@@ -737,7 +741,8 @@ INSERT INTO `BB` VALUES ('X');
 INSERT INTO `CC` VALUES (1,'2027-03-17 00:10:00'), (2,'2004-11-14 12:46:43');
 SELECT COUNT(table1.pk) FROM `CC` table1 JOIN `BB` table3 JOIN `CC` table2
 WHERE (table3.col_char_key < table2.col_datetime_key);
-invalid input: invalid datetime value X
+➤ COUNT(table1.pk)[-5,64,0]  𝄀
+0
 DROP TABLE `BB`;
 DROP TABLE `CC`;
 create table t1(f1 date, f2 timestamp, f3 datetime);

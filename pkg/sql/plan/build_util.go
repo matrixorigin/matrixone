@@ -76,6 +76,11 @@ func applyLockTableFallback(builder *QueryBuilder) {
 			continue
 		}
 		for _, target := range node.LockTargets {
+			// Nonblocking reads require exact row targets. Physical admission owns
+			// their resource limits; estimates must not select coarse locks.
+			if target.NoWait || target.SkipLocked {
+				continue
+			}
 			_, fullUpdateTarget := builder.fullTableUpdateLockTargets[target]
 			estimatedRows := node.Stats.Outcnt
 			if fullUpdateTarget && fullUpdateRows > estimatedRows {
