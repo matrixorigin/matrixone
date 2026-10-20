@@ -68,12 +68,19 @@ func ClusterHasIndexProvenance(ctx CompilerContext) bool {
 // token_filter strips stopwords at every WRITE path (CREATE build, CDC tail, idxcron
 // rebuild), so the index's invariant is that NO segment holds a stopword posting. An
 // older CN that ran the async CDC tail build or a scheduled rebuild would NOT strip,
-// leaking stopword postings into some segments — breaking that invariant (inconsistent
-// results for a stopword query, lost size reduction). Gating CREATE on the cluster-wide
-// version ensures every CN that could build or maintain the index strips identically.
-// (The READ side needs no gate: a stripped index has no stopword postings, so a stopword
-// query term matches nothing and contributes 0 to BM25 whether or not the reader strips —
-// query-side stripping is a score-neutral optimization.)
+// leaking stopword postings into its segments. That is not merely a lost size reduction:
+// the recorded per-document length counts every indexed token, so a non-stripping writer
+// records a LARGER length for its documents, which feeds the BM25 length-normalization
+// factor and the index-wide average length. It therefore perturbs the score of EVERY
+// query served from the affected generation, not only a stopword query. Gating CREATE on
+// the cluster-wide version ensures every CN that could build or maintain the index strips
+// identically. The capability is a hard gate with no fallback: it must hold for the whole
+// lifetime of a token_filter index (see the design doc's rollout/rollback section), and a
+// node below it must not write or maintain one.
+// (The READ side needs no gate: WAND/boolean scoring consults only the query's own terms,
+// so a leaked stopword posting is unreachable unless the stopword is in the query — and a
+// supporting reader strips it from the query. Query-side stripping is a score-neutral
+// optimization; the write side is where the invariant must be enforced.)
 // Unavailable answers false — the safe default is to reject the new option.
 func ClusterSupportsFulltext2Analyzer(ctx CompilerContext) bool {
 	if ctx == nil {
