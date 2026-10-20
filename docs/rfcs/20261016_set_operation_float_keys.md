@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 16
+- Revision: 17
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 17 integration baseline: official main `7c146f4adbf068dd0c06b377157cfb7d7698b1eb`
 - Revision 16 integration baseline: official main `d82e828b0a4df9ce635fe573c1e90c5cde978bf9`
 - Revision 15 integration baseline: official main `873282742714436bff407dfcdbbe879147162bd3`
 - Revision 14 integration baseline: official main `57fb9530859d92791100098d312ea8cacc671910`
@@ -59,6 +60,11 @@ nested invocations. Independent review 5567698353 subsequently accepted revision
 new official protocol allocation and retains that reviewed architecture. Revision 15
 preserves the released DECIMAL DIV capability while advancing set-key admission
 to 122; it retains the same execution and ownership design.
+Revision 16 retained temporal 122 and advanced set keys to 123. Revision 17
+preserves upstream nonblocking row-lock admission at 123 and advances only
+set-key/scalar-marker admission to 124. The FUNCTION_SCAN outer-output correction
+from `24c7a0246731271b7dee6e567dbadab4e6fadfb7` remains included; function outputs
+and aliases stop at their own schema, without exposing argument children.
 
 ## Membership contract
 
@@ -1082,6 +1088,17 @@ Earlier invalid test fixtures remain recorded as failures, without changing
 production behavior to accommodate them. Generated merged bindings reproduce
 byte-for-byte with the established protoc/gogofast and owner postprocessors.
 
+The [revision-17 source-bound receipt](validation/20261020_set_key_protocol124_rebase.json)
+records the official-123 integration, merged row-lock/scalar descriptors,
+immediate-predecessor 123 rejection and actual official-123 native/response replay.
+The full signed-zero suite retains the direct FUNCTION_SCAN regression. Historical
+capacity and race evidence remains limited to its original unchanged workloads;
+this rebase asserts no fresh capacity or function-source measurements. Run
+39294206106's two UT deadline failures did not reproduce in three CI-mode runs
+on either original head or official main. Complete unrelated-flake attribution is
+not established, so no timeout workaround or old-run rerun is claimed. New CI on
+the delivered rebase remains pending.
+
 ## Alternatives
 
 | Choice | Benefits | Costs and reason for the current proposal |
@@ -1105,47 +1122,47 @@ activation gates. Retain the terminal 20833 behavior, participating-account limi
 and coordinator-only scope when deploying; broader distributed execution and
 universal latency or process-RSS guarantees remain unqualified.
 
-Official main at this revision ends at MORPC 122 for unary TIMESTAMP and dynamic TIME
-result contracts. Unsigned DECIMAL DIV retains 121, and current-session KILL and
+Official main at this revision ends at MORPC 123 for nonblocking row-lock
+admission. Unary TIMESTAMP and dynamic TIME retain 122. Unsigned DECIMAL DIV retains 121, and current-session KILL and
 proxy cleanup retain 120. This capability
-uses MORPC **123**. The feature walker recognizes encoded function identity 601 without
+uses MORPC **124**. The feature walker recognizes encoded function identity 601 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar composition adds no separate function identity. It adds
 `plan.Node.scalar_set_reaggregation` field 95 and
 `pipeline.Instruction.scalar_set_reaggregation` field 65. Marker-only integer
-fallbacks require 123 too. Senders and receivers reject marked remote scopes at
+fallbacks require 124 too. Senders and receivers reject marked remote scopes at
 all versions, before operator decoding, because a remote attempt cannot share
 the coordinator's work/account lease. Local scope validation rejects remote
 nodes, DOP above one, and marker placement outside WINDOW/LEFT JOIN. Official main
 retains SELECT division diagnostics at 116, conditional on execution/session
-policy. Set keys require 123 regardless of that policy; a combined expression
-requires 123. Division diagnostics remain outside persisted-expression admission. Official main
+policy. Set keys require 124 regardless of that policy; a combined expression
+requires 124. Division diagnostics remain outside persisted-expression admission. Official main
 adds collation-aware LEAST/GREATEST at 117; that independent feature remains
-admitted at 117, and a combined expression with a set key requires 123.
+admitted at 117, and a combined expression with a set key requires 124.
 The released table-collation function retains identity 600 and floor 118;
 table-only expressions remain admitted at 118, while a combined expression
-with a set key requires 123.
+with a set key requires 124.
 
 Unsigned DECIMAL DIV alone retains its released floor 121. Combining DIV with a
-set key or local scalar marker requires 123; a marker still prohibits remote
+set key or local scalar marker requires 124; a marker still prohibits remote
 execution at every version. Historical DIV overload zero keeps its prior
 compatibility contract.
 
-Placement requires workers advertising 123 or newer; missing or old capabilities
+Placement requires workers advertising 124 or newer; missing or old capabilities
 fall back to one CN on the capable coordinator. Sending rechecks actual pipeline
 destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
-missing or below 123. Operator expression construction checks the same floor
+missing or below 124. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 123. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
+also require 124. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and
-then release the 123 requirement. A prepare-time ANY type is not capability proof.
-A new binary configured at immediate predecessor floor 122 rejects these
+then release the 124 requirement. A prepare-time ANY type is not capability proof.
+A new binary configured at immediate predecessor floor 123 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
-under a floor below 123. Lowering a new binary's floor does not rewrite existing
+under a floor below 124. Lowering a new binary's floor does not rewrite existing
 catalog expressions or teach an old binary identity 601.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected
@@ -1164,7 +1181,7 @@ this document and immediate-predecessor rollback tests together. Other open PRs
 using the same candidate do not reserve it.
 
 Dependent-only queries retain their independently released protocol 119.
-Mixed dependent/scalar-set queries require the set-key floor 123 as well as
+Mixed dependent/scalar-set queries require the set-key floor 124 as well as
 coordinator-local DOP 1 placement. The final scope graph, including detached
 producer scopes, is validated before any execution. The statement attempt
 acquires one scalar-set CN permit and one bounded participating account; all

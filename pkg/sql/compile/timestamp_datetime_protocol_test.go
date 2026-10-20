@@ -200,8 +200,8 @@ func TestCTASPopulationScalarAdmission(t *testing.T) {
 		{"rollback", int64(121), 122, "version 122"},
 		{"missing", nil, 122, "version 122"},
 		{"invalid_capability", "122", 122, "version 122"},
-		{"set-key rollback", int64(122), 123, "version 123"},
-		{"set-key supported", int64(123), 123, ""},
+		{"set-key rollback", int64(123), 124, "version 124"},
+		{"set-key supported", int64(124), 124, ""},
 		{"invalid_requirement", int64(122), -1, "requires rebinding"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -218,11 +218,11 @@ func TestCTASPopulationScalarAdmission(t *testing.T) {
 				require.NoError(t, err)
 			} else {
 				require.ErrorContains(t, err, tc.failure)
-				if tc.required == defines.MORPCVersion123 {
-					require.ErrorContains(t, c.Compile(c.proc.Ctx, p, nil), "version 123")
+				if tc.required == defines.MORPCVersion124 {
+					require.ErrorContains(t, c.Compile(c.proc.Ctx, p, nil), "version 124")
 					c.pn = p
 					_, runErr := c.Run(0)
-					require.ErrorContains(t, runErr, "version 123", "cached CTAS rejects before DDL work")
+					require.ErrorContains(t, runErr, "version 124", "cached CTAS rejects before DDL work")
 				}
 			}
 		})

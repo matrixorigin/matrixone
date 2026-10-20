@@ -27,6 +27,7 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 	want := map[string]map[string]int32{
 		"Query":            {"correlation": 19},
 		"Node":             {"scalar_set_reaggregation": 95},
+		"LockTarget":       {"no_wait": 18, "skip_locked": 19},
 		"Expr":             {"dependent": 24, "slot": 25},
 		"CreateDatabase":   {"defaults": 5},
 		"AlterDatabase":    {"defaults": 3},

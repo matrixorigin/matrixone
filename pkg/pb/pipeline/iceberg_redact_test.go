@@ -423,3 +423,31 @@ func assertRedactedString(t *testing.T, got string, forbidden ...string) {
 func containsRedactionMarker(got string) bool {
 	return testutil.HasIcebergRedactionMarker(got)
 }
+
+func TestPipelineDescriptorMergedScalarAndLockContracts(t *testing.T) {
+	want := map[string]map[string]int32{
+		"Instruction": {"scalar_set_reaggregation": 65},
+		"LockTarget":  {"no_wait": 13, "skip_locked": 14},
+	}
+	for _, message := range decodePipelineFileDescriptor(t).GetMessageType() {
+		fields, ok := want[message.GetName()]
+		if !ok {
+			continue
+		}
+		for _, field := range message.GetField() {
+			if number, exists := fields[field.GetName()]; exists {
+				if field.GetNumber() != number {
+					t.Fatalf("%s.%s = %d, want %d", message.GetName(), field.GetName(), field.GetNumber(), number)
+				}
+				delete(fields, field.GetName())
+			}
+		}
+		if len(fields) != 0 {
+			t.Fatalf("missing %s fields: %v", message.GetName(), fields)
+		}
+		delete(want, message.GetName())
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing merged messages: %v", want)
+	}
+}
