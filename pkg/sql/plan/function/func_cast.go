@@ -4026,6 +4026,87 @@ func bitToStr(
 	return nil
 }
 
+// DECIMAL(p,s) is bounded by -10^width < value < 10^width, the same rule
+// ParseDecimal64/128/256 apply to string sources. Integer sources used to
+// skip this check, so an out-of-range integer was scaled into the target
+// and persisted (issue #30367). The source value is included in the error
+// text, matching the string-source diagnostic.
+func checkIntDecimal64Width(v any, scaled types.Decimal64, width, scale int32) error {
+	// A zero width marks a synthesized cast without a declared DECIMAL
+	// precision (e.g. binder-internal uint64 -> decimal128 promotion); only
+	// declared column widths (always >= 1) enforce the assignment bound.
+	if width <= 0 {
+		return nil
+	}
+	if width > 18 {
+		width = 18
+	}
+	z := types.Decimal64(types.Pow10[width])
+	if scaled.Sign() {
+		if z.Minus().Less(scaled) {
+			return nil
+		}
+	} else if scaled.Less(z) {
+		return nil
+	}
+	return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal64(%d,%d).", v, width, scale)
+}
+
+func checkIntDecimal128Width(v any, scaled types.Decimal128, width, scale int32) error {
+	// See checkIntDecimal64Width: synthesized zero-width casts carry no
+	// declared precision to enforce.
+	if width <= 0 {
+		return nil
+	}
+	if width > 38 {
+		width = 38
+	}
+	var z types.Decimal128
+	if width <= 19 {
+		z = types.Decimal128{B0_63: types.Pow10[width]}
+	} else {
+		z, _ = types.Decimal128{B0_63: types.Pow10[19]}.Mul128(types.Decimal128{B0_63: types.Pow10[width-19]})
+	}
+	if scaled.Sign() {
+		if z.Minus().Less(scaled) {
+			return nil
+		}
+	} else if scaled.Less(z) {
+		return nil
+	}
+	return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal128(%d,%d).", v, width, scale)
+}
+
+func checkIntDecimal256Width(v any, scaled types.Decimal256, width, scale int32) error {
+	// See checkIntDecimal64Width: synthesized zero-width casts carry no
+	// declared precision to enforce.
+	if width <= 0 {
+		return nil
+	}
+	if width > 76 {
+		width = 76
+	}
+	z := types.Decimal256{B0_63: 1}
+	left := width
+	// 10^76 fits into 256 bits, so these multiplications cannot overflow for
+	// width values the DECIMAL type admits.
+	for left > 19 {
+		z, _ = z.Mul256(types.Decimal256{B0_63: types.Pow10[19]})
+		left -= 19
+	}
+	if left > 0 {
+		z, _ = z.Mul256(types.Decimal256{B0_63: types.Pow10[left]})
+	}
+	if scaled.Sign() {
+		if z.Minus().Less(scaled) {
+			return nil
+		}
+	} else if scaled.Less(z) {
+		return nil
+	}
+	return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal256(%d,%d).", v, width, scale)
+}
+
 func signedToDecimal64[T1 constraints.Signed](
 	from vector.FunctionParameterWrapper[T1],
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
@@ -4040,7 +4121,13 @@ func signedToDecimal64[T1 constraints.Signed](
 				return err
 			}
 		} else {
-			result, _ := types.Decimal64(uint64(v)).Scale(totype.Scale)
+			result, err := types.Decimal64(uint64(v)).Scale(totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err := checkIntDecimal64Width(v, result, totype.Width, totype.Scale); err != nil {
+				return err
+			}
 			if err := to.Append(result, false); err != nil {
 				return err
 			}
@@ -4067,7 +4154,13 @@ func signedToDecimal128[T1 constraints.Signed](
 			if v < 0 {
 				result.B64_127 = ^result.B64_127
 			}
-			result, _ = result.Scale(totype.Scale)
+			result, err := result.Scale(totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err := checkIntDecimal128Width(v, result, totype.Width, totype.Scale); err != nil {
+				return err
+			}
 			if err := to.Append(result, false); err != nil {
 				return err
 			}
@@ -4090,8 +4183,19 @@ func unsignedToDecimal64[T1 constraints.Unsigned](
 				return err
 			}
 		} else {
+			// A uint64 magnitude beyond math.MaxInt64 wraps negative inside
+			// Decimal64; treat it as out of range instead (#30367).
+			if uint64(v) > uint64(math.MaxInt64) {
+				return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal64(%d,%d).", v, totype.Width, totype.Scale)
+			}
 			result := types.Decimal64(uint64(v))
-			result, _ = result.Scale(totype.Scale)
+			result, err := result.Scale(totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err := checkIntDecimal64Width(v, result, totype.Width, totype.Scale); err != nil {
+				return err
+			}
 			if err := to.Append(result, false); err != nil {
 				return err
 			}
@@ -4115,7 +4219,13 @@ func unsignedToDecimal128[T1 constraints.Unsigned](
 			}
 		} else {
 			result := types.Decimal128{B0_63: uint64(v), B64_127: 0}
-			result, _ = result.Scale(totype.Scale)
+			result, err := result.Scale(totype.Scale)
+			if err != nil {
+				return err
+			}
+			if err := checkIntDecimal128Width(v, result, totype.Width, totype.Scale); err != nil {
+				return err
+			}
 			if err := to.Append(result, false); err != nil {
 				return err
 			}
@@ -4146,6 +4256,9 @@ func signedToDecimal256[T1 constraints.Signed](
 			if err != nil {
 				return err
 			}
+			if err := checkIntDecimal256Width(v, result, totype.Width, totype.Scale); err != nil {
+				return err
+			}
 			if err := to.Append(result, false); err != nil {
 				return err
 			}
@@ -4170,6 +4283,9 @@ func unsignedToDecimal256[T1 constraints.Unsigned](
 		} else {
 			result, err := types.Decimal256{B0_63: uint64(v)}.Scale(totype.Scale)
 			if err != nil {
+				return err
+			}
+			if err := checkIntDecimal256Width(v, result, totype.Width, totype.Scale); err != nil {
 				return err
 			}
 			if err := to.Append(result, false); err != nil {

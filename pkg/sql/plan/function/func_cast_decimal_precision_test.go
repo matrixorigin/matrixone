@@ -15,6 +15,7 @@
 package function
 
 import (
+	"math"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -420,4 +421,108 @@ func TestDecimalWideningConstBatch(t *testing.T) {
 		})
 		require.Zero(t, proc.Mp().CurrNB())
 	}
+}
+
+// Issue #30367: integer assignments into DECIMAL(p,s) must obey the declared
+// precision (|value| < 10^(p-s) after scaling, i.e. the raw coefficient must
+// stay within +/-10^width), exactly like the string/decimal sources. Used to
+// accept `2` into DECIMAL(2,2) by scaling into the carrier without a width
+// check.
+func TestIntToDecimalWidthContract(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	for _, tc := range []struct {
+		name           string
+		source, target types.Type
+		values, want   any
+		nulls          []bool
+		wantErr        string
+	}{
+		{name: "issue30367_int32_to_decimal64_2_2",
+			source:  types.New(types.T_int32, 0, 0),
+			target:  types.New(types.T_decimal64, 2, 2),
+			values:  []int32{2},
+			wantErr: "Decimal64(2,2)"},
+		{name: "issue30367_int32_boundary_accept",
+			source: types.New(types.T_int32, 0, 0),
+			target: types.New(types.T_decimal64, 3, 2),
+			values: []int32{9, 0, -9},
+			want:   []types.Decimal64{900, 0, types.Decimal64(900).Minus()}},
+		{name: "issue30367_int32_to_decimal64_3_2_reject",
+			source:  types.New(types.T_int32, 0, 0),
+			target:  types.New(types.T_decimal64, 3, 2),
+			values:  []int32{10},
+			wantErr: "Decimal64(3,2)"},
+		{name: "issue30367_negative_boundary_reject",
+			source:  types.New(types.T_int16, 0, 0),
+			target:  types.New(types.T_decimal64, 4, 2),
+			values:  []int16{-100},
+			wantErr: "Decimal64(4,2)"},
+		{name: "issue30367_negative_boundary_accept",
+			source: types.New(types.T_int16, 0, 0),
+			target: types.New(types.T_decimal64, 4, 2),
+			values: []int16{-99, 99},
+			want:   []types.Decimal64{types.Decimal64(9900).Minus(), 9900}},
+		{name: "issue30367_uint64_overflow_decimal64",
+			source:  types.New(types.T_uint64, 0, 0),
+			target:  types.New(types.T_decimal64, 18, 0),
+			values:  []uint64{math.MaxUint64},
+			wantErr: "Decimal64(18,0)"},
+		{name: "issue30367_int64_max_decimal64_reject",
+			source:  types.New(types.T_int64, 0, 0),
+			target:  types.New(types.T_decimal64, 18, 0),
+			values:  []int64{math.MaxInt64},
+			wantErr: "Decimal64(18,0)"},
+		{name: "issue30367_int64_max_decimal64_accept_19",
+			source: types.New(types.T_int64, 0, 0),
+			target: types.New(types.T_decimal128, 19, 0),
+			values: []int64{math.MaxInt64},
+			want:   []types.Decimal128{{B0_63: uint64(9223372036854775807)}}},
+		{name: "issue30367_uint64_max_decimal128_accept",
+			source: types.New(types.T_uint64, 0, 0),
+			target: types.New(types.T_decimal128, 20, 0),
+			values: []uint64{math.MaxUint64},
+			want:   []types.Decimal128{{B0_63: math.MaxUint64}}},
+		{name: "issue30367_uint64_max_decimal128_19_reject",
+			source:  types.New(types.T_uint64, 0, 0),
+			target:  types.New(types.T_decimal128, 19, 0),
+			values:  []uint64{math.MaxUint64},
+			wantErr: "Decimal128(19,0)"},
+		{name: "issue30367_int64_to_decimal256_narrow_reject",
+			source:  types.New(types.T_int64, 0, 0),
+			target:  types.New(types.T_decimal256, 10, 2),
+			values:  []int64{12345678901},
+			wantErr: "Decimal256(10,2)"},
+		{name: "issue30367_int8_to_decimal64_reject",
+			source:  types.New(types.T_int8, 0, 0),
+			target:  types.New(types.T_decimal64, 4, 2),
+			values:  []int8{100},
+			wantErr: "Decimal64(4,2)"},
+		{name: "issue30367_scale_overflow_reject",
+			source:  types.New(types.T_int64, 0, 0),
+			target:  types.New(types.T_decimal64, 18, 18),
+			values:  []int64{1 << 62},
+			wantErr: "scale overflow"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			sourceType := tc.source
+			input := NewFunctionTestInput(sourceType, tc.values, tc.nulls)
+			fc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{input, NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil)},
+				NewFunctionTestResult(tc.target, tc.wantErr != "", tc.want, tc.nulls),
+				NewCast)
+			defer fc.Free()
+			if tc.wantErr != "" {
+				_, err := fc.DebugRun()
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "error %v", err)
+				require.ErrorContains(t, err, tc.wantErr)
+			} else {
+				ok, info := fc.Run()
+				require.True(t, ok, info)
+				require.True(t, *fc.parameters[0].GetType() == sourceType, "source metadata changed")
+				require.True(t, tc.target == *fc.GetResultVectorDirectly().GetType(), "target metadata changed")
+			}
+		})
+	}
+	require.Zero(t, proc.Mp().CurrNB())
 }
