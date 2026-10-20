@@ -30,8 +30,8 @@ import (
 )
 
 // The child already projects [1,10,7]. Evaluate the actual compiler output
-// before dispatch: checking the logical SINK or reader ordinals alone misses
-// a compiler that publishes the wider child's batch unchanged.
+// before dispatch. The planner represents the narrowed publication schema as
+// an explicit PROJECT; SINK metadata alone must never execute another projection.
 func TestSharedCTESinkPublishesProjectedValues(t *testing.T) {
 	for _, tc := range []struct {
 		name            string
@@ -50,7 +50,7 @@ func TestSharedCTESinkPublishesProjectedValues(t *testing.T) {
 		{"single-reader-streaming", []int32{0, 2}, []int64{1, 7}, 1, true, plan.Query_SELECT},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			c, q := sharedCTESinkProjectionFixture(t, tc.positions)
+			c, q := sharedCTESinkProjectionFixture(t, tc.positions, tc.extraProjection)
 			q.StmtType = tc.statementType
 			for i := range tc.readers {
 				require.NoError(t, c.compileSinkScan(q, int32(3+i)))
@@ -89,7 +89,7 @@ func TestSharedCTESinkPublishesProjectedValues(t *testing.T) {
 	}
 }
 
-func sharedCTESinkProjectionFixture(t *testing.T, positions []int32) (*Compile, *plan.Query) {
+func sharedCTESinkProjectionFixture(t *testing.T, positions []int32, project bool) (*Compile, *plan.Query) {
 	t.Helper()
 	c := NewMockCompile(t)
 	c.nodeRegs = make(map[[2]int32]*process.WaitRegister)
@@ -107,6 +107,16 @@ func sharedCTESinkProjectionFixture(t *testing.T, positions []int32) (*Compile, 
 		{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}},
 		{NodeType: plan.Node_SINK_SCAN, SourceStep: []int32{0}},
 	}, Steps: []int32{2}}
+	if project {
+		q.Nodes = append(q.Nodes, &plan.Node{
+			NodeType: plan.Node_PROJECT, Children: []int32{1}, ProjectList: sinkProject,
+		})
+		q.Nodes[2].Children[0] = int32(len(q.Nodes) - 1)
+		q.Nodes[2].ProjectList = make([]*plan.Expr, len(sinkProject))
+		for i, expr := range sinkProject {
+			q.Nodes[2].ProjectList[i] = plan2.GetColExpr(expr.Typ, 0, int32(i))
+		}
+	}
 	c.anal = &AnalyzeModule{qry: q}
 	c.pn = &plan.Plan{Plan: &plan.Plan_Query{Query: q}}
 	t.Cleanup(func() {
@@ -118,7 +128,7 @@ func sharedCTESinkProjectionFixture(t *testing.T, positions []int32) (*Compile, 
 }
 
 func TestSharedCTESinkProjectionPreservesChildError(t *testing.T) {
-	c, q := sharedCTESinkProjectionFixture(t, []int32{0, 2})
+	c, q := sharedCTESinkProjectionFixture(t, []int32{0, 2}, true)
 	// A deterministic error in the discarded middle output must still be
 	// evaluated before the SINK narrows its schema.
 	expr, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "cast", []*plan.Expr{
@@ -142,7 +152,7 @@ func TestSharedCTESinkProjectionPreservesChildError(t *testing.T) {
 }
 
 func TestSharedCTESinkProjectionOrphanReleasesScopes(t *testing.T) {
-	c, q := sharedCTESinkProjectionFixture(t, []int32{0, 2})
+	c, q := sharedCTESinkProjectionFixture(t, []int32{0, 2}, true)
 	// compileSinkNode owns the new projection and the child even on rejection.
 	// The reuse checker detects missing/double releases at test process exit.
 	scopes, err := c.compilePlanScope(0, q.Steps[0], q.Nodes)
@@ -151,9 +161,9 @@ func TestSharedCTESinkProjectionOrphanReleasesScopes(t *testing.T) {
 }
 
 func TestSharedCTESinkProjectionExcludesLegacySinks(t *testing.T) {
-	for _, kind := range []string{"ordinary", "recursive-sink", "recursive-cte"} {
+	for _, kind := range []string{"ordinary", "recursive-sink", "recursive-cte", "shared-metadata"} {
 		t.Run(kind, func(t *testing.T) {
-			c, q := sharedCTESinkProjectionFixture(t, []int32{0, 2})
+			c, q := sharedCTESinkProjectionFixture(t, []int32{0, 2}, false)
 			sink := q.Nodes[q.Steps[0]]
 			switch kind {
 			case "ordinary":
@@ -162,6 +172,10 @@ func TestSharedCTESinkProjectionExcludesLegacySinks(t *testing.T) {
 				sink.RecursiveSink = true
 			case "recursive-cte":
 				sink.RecursiveCte = true
+			case "shared-metadata":
+				// DML maintenance can append tagged SINK metadata after remap.
+				// It must not be evaluated against the already-produced batch.
+				sink.ProjectList[1].GetCol().ColPos = 3
 			}
 			require.NoError(t, c.compileSinkScan(q, 3))
 			scopes, err := c.compilePlanScope(0, q.Steps[0], q.Nodes)
