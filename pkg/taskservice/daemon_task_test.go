@@ -810,6 +810,116 @@ func TestStableCDCHeartbeatFailureRecoveryAndSupersession(t *testing.T) {
 	}
 }
 
+func TestISCPHeartbeatExpiryCancelsOldExecutor(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, claim)
+
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	hook.setHeartbeatErr(errors.New("injected taskservice connection failure"))
+	r.doSendHeartbeat(context.Background())
+	select {
+	case <-routine.cancelC:
+	case <-time.After(time.Second):
+		t.Fatal("expired ISCP executor kept running after heartbeat failure")
+	}
+	require.True(t, local.claimLost.Load())
+	require.False(t, r.exists(claim.ID))
+}
+
+func TestISCPHeartbeatSuccessRenewsLocalLease(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = time.Now().Add(-time.Second)
+	mustAddTestDaemonTask(t, store, 1, claim)
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	r.doSendHeartbeat(context.Background())
+	require.True(t, local.lastConfirmedHeartbeat().After(claim.LastHeartbeat))
+	hook.setHeartbeatErr(errors.New("injected transient connection failure"))
+	r.doSendHeartbeat(context.Background())
+	r.checkISCPHeartbeatLease()
+	select {
+	case <-routine.cancelC:
+		t.Fatal("a recent successful heartbeat did not preserve the ISCP lease")
+	default:
+	}
+	require.True(t, r.exists(claim.ID))
+}
+
+func TestISCPHeartbeatWatchdogCancelsBlockedRenewal(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, claim)
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	// This check must work without a heartbeat RPC returning at all.
+	r.checkISCPHeartbeatLease()
+	select {
+	case <-routine.cancelC:
+	case <-time.After(time.Second):
+		t.Fatal("expired ISCP executor kept running while heartbeat was blocked")
+	}
+	require.False(t, r.exists(claim.ID))
+}
+
+func TestISCPHeartbeatRejectsSupersededClaim(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = time.Now()
+	mustAddTestDaemonTask(t, store, 1, claim)
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	replacement := claim
+	replacement.TaskRunner = "other-cn"
+	replacement.LastRun = nextDaemonClaimTime(claim.LastRun, time.Now())
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{replacement})
+	r.doSendHeartbeat(context.Background())
+	select {
+	case <-routine.cancelC:
+	case <-time.After(time.Second):
+		t.Fatal("superseded ISCP executor kept running after rejected heartbeat")
+	}
+	require.False(t, r.exists(claim.ID))
+}
+
 func TestStartDaemonTaskSerializesLocalAdmission(t *testing.T) {
 	r, store := newDaemonHandleTestRunner(t)
 	hook := &serviceWithDaemonHook{TaskService: r.service}
