@@ -304,6 +304,12 @@ func TestNativePADProtocolPlacementSourceDestinationReceiver(t *testing.T) {
 		{Op: int32(vm.Projection), ProjectList: []*planpb.Expr{expr}},
 		{Op: int32(vm.Group), Agg: &pipeline.Group{Types: []planpb.Type{native}}},
 		{Op: int32(vm.HashJoin), HashJoin: &pipeline.HashJoin{LeftTypes: []planpb.Type{native}}},
+		{Op: int32(vm.HashBuild), HashBuild: &pipeline.HashBuild{DedupKeyExprs: []*planpb.Expr{expr}}},
+		{Op: int32(vm.DedupJoin), DedupJoin: &pipeline.DedupJoin{DedupKeyExprs: []*planpb.Expr{expr}}},
+		{Op: int32(vm.RightDedupJoin), RightDedupJoin: &pipeline.RightDedupJoin{DedupKeyExprs: []*planpb.Expr{expr}}},
+		{Op: int32(vm.PreInsertUnique), PreInsertUnique: &pipeline.PreInsertUnique{
+			PreInsertUkCtx: &planpb.PreInsertUkCtx{KeyDiagnosticExprs: []*planpb.ExprList{{List: []*planpb.Expr{expr}}}},
+		}},
 	} {
 		for _, nested := range []bool{false, true} {
 			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{instruction}}

@@ -1883,6 +1883,9 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		for _, expr := range node.OnList {
 			increaseRefCnt(expr, 1, colRefCnt)
 		}
+		for _, expr := range node.DedupKeyExprs {
+			increaseRefCnt(expr, 1, colRefCnt)
+		}
 
 		if node.DedupJoinCtx != nil {
 			for _, col := range node.DedupJoinCtx.OldColList {
@@ -1961,6 +1964,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			!markJoinSupportsShuffle(node, builder, nil, nil, true) {
 			node.Stats.HashmapStats.Shuffle = false
 			node.Stats.HashmapStats.ShuffleColIdx = -1
+		}
+
+		remapInfo.tip = "DedupKeyExprs"
+		for _, expr := range node.DedupKeyExprs {
+			increaseRefCnt(expr, -1, colRefCnt)
+			if err := builder.remapColRefForExpr(expr, internalMap, &remapInfo); err != nil {
+				return nil, err
+			}
 		}
 
 		remapInfo.tip = "DedupJoinCtx"
@@ -3982,6 +3993,11 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			auxRefs[i] = [2]int32{childTag, pos}
 			colRefCnt[auxRefs[i]]++
 		}
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			for _, expr := range exprs.GetList() {
+				increaseRefCnt(expr, 1, colRefCnt)
+			}
+		}
 		var autoIncrementRef, autoIncrementGeneratedRef [2]int32
 		if node.PreInsertUkCtx.AutoIncrementReorder {
 			autoIncrementRef = [2]int32{childTag, node.PreInsertUkCtx.AutoIncrementColumn}
@@ -4013,6 +4029,14 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			return nil, err
 		}
 
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			for _, expr := range exprs.GetList() {
+				increaseRefCnt(expr, -1, colRefCnt)
+				if err := builder.remapColRefForExpr(expr, childRemapping.globalToLocal, &remapInfo); err != nil {
+					return nil, err
+				}
+			}
+		}
 		for i, ref := range keyRefs {
 			colRefCnt[ref]--
 			pos, ok := childRemapping.globalToLocal[ref]
