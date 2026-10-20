@@ -4412,7 +4412,13 @@ func (b *baseBinder) bindFuncExprImplByAstExpr(name string, astArgs []tree.Expr,
 				b.suppressDefaultValueBindType = true
 				b.inetNtoaNumericLiteralContext = true
 			}
-			if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext &&
+			if name == "timestampadd" && idx == 1 && timestampAddSecondUnit(args[:idx]) && !function.LegacyTimestampAddSecond(b.GetContext()) {
+				// SECOND consumes the source decimal value before integer coercion.
+				b.suppressDefaultValueBindType = true
+				b.numericParamType = nil
+				b.numericSubqueryTarget = nil
+				expr, err = b.bindTimestampAddSecondSourceAst(arg, depth)
+			} else if target, integerContext := function.IntegerArgumentTarget(name, idx); integerContext &&
 				!(function.LegacySpecialConsumers(b.GetContext()) && (name == "format" || name == "makedate" || name == "maketime")) {
 				b.numericParamType = nil
 				b.numericSubqueryTarget = nil
@@ -5106,7 +5112,7 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 
 	// DIV's precision and unsigned domain belong to the original operands.
 	// Infer only unknown markers here; the function resolver owns physical casts.
-	if name == "div" {
+	if name == "div" && !function.LegacyDecimalIntegerDiv(b.GetContext()) {
 		original := []types.Type{makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1])}
 		if (original[0].Oid.IsDecimal() || original[1].Oid.IsDecimal()) &&
 			(original[0].Oid.IsDecimal() || original[0].Oid.IsInteger() || original[0].Oid == types.T_any) &&
@@ -5129,8 +5135,8 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 		}
 	}
 
-	left, right, _, ok := function.ResolveNumericBinaryTypes(
-		name,
+	left, right, _, ok := function.ResolveNumericBinaryTypesWithContext(
+		b.GetContext(), name,
 		makeTypeByPlan2Expr(args[0]),
 		makeTypeByPlan2Expr(args[1]),
 		nil,
@@ -7230,6 +7236,12 @@ func bindFuncExprImplByPlanExpr(
 			return nil, moerr.NewInvalidInput(ctx, "Only constant XPATH queries are supported")
 		}
 	}
+	if name == "timestampadd" {
+		args, err = bindTimestampAddSecond(ctx, args)
+		if err != nil {
+			return nil, err
+		}
+	}
 	// DUMP/LOAD verifies old SQL origins against their historical physical
 	// signature. AST-level suppression alone is insufficient: this second
 	// binding pass would insert new private INT64 casts into the old tree.
@@ -7847,7 +7859,7 @@ func bindFuncExprImplByPlanExpr(
 				returnType := fGet.GetReturnType()
 				rightList.List = inExprList
 				exprType := makePlan2Type(&returnType)
-				exprType.NotNullable = function.DeduceNotNullable(funcID, args)
+				exprType.NotNullable = function.DeduceNotNullableForBinding(ctx, funcID, args)
 				newExpr = &Expr{
 					Typ: exprType,
 					Expr: &plan.Expr_F{
@@ -8744,7 +8756,7 @@ func bindFuncExprImplByPlanExpr(
 		// it through a different (or empty) domain.
 		Typ.Enumvalues = args[2].Typ.Enumvalues
 	}
-	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
+	Typ.NotNullable = function.DeduceNotNullableForBinding(ctx, funcID, args)
 	if err := setExpressionCollation(ctx, name, args, &Typ); err != nil {
 		return nil, err
 	}
@@ -11702,7 +11714,7 @@ func appendCastBeforeExprWithOverload(
 		},
 	}
 	args := []*Expr{expr, targetArg}
-	typ.NotNullable = function.DeduceNotNullable(fGet.GetEncodedOverloadID(), args)
+	typ.NotNullable = function.DeduceNotNullableForBinding(ctx, fGet.GetEncodedOverloadID(), args)
 	targetArg.Typ.NotNullable = typ.NotNullable
 	return &Expr{
 		Expr: &plan.Expr_F{
