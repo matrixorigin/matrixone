@@ -520,7 +520,7 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	var dependsOnUdf bool
 	if isUserViewMetadata(dbName, tableDef) {
 		var columns []*ColDef
-		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, accountId)
+		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, obj, accountId)
 		if err != nil {
 			return nil, err
 		}
@@ -589,7 +589,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 		if obj.PubInfo != nil {
 			accountID = uint32(obj.PubInfo.TenantId)
 		}
-		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, accountID)
+		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, obj, accountID)
 		if err != nil {
 			return nil, err
 		}
@@ -776,7 +776,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	var viewDependencies []*ObjectRef
 	var viewMetadataDependsOnUdf bool
 	if isUserViewMetadata(dbName, tableDef) {
-		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
+		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, obj, accountId, dbName, tblName)
 		if err != nil {
 			return nil, err
 		}

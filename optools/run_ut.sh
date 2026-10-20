@@ -231,6 +231,11 @@ function current_ut_command_is_prebuilt_helper(){
 # Completion belongs to the existing helper owner, independently of report shards.
 function prepare_ut_helper_completion(){
     local path="${G_WKSP}/${G_TS}-owner-complete.$1"
+    remove_ut_report_file "${path}.cancel"
+    if [[ -e "${path}.cancel" ]]; then
+        printf -v "$2" '%s' 1
+        return 125
+    fi
     if ! : > "${path}"; then
         printf -v "$2" '%s' 1
         return 125
@@ -288,6 +293,12 @@ function join_ut_owner(){
             if [[ ! -f "${completion_path}" ]] ||
                 [[ "$(<"${completion_path}")" != "${join_status}" ]]; then
                 join_status=125
+            fi
+            # The helper has joined and acknowledged descendant drainage.
+            # Only now can its parent's cancellation request be retired.
+            if (( join_status != 125 )); then
+                remove_ut_report_file "${completion_path}.cancel"
+                [[ ! -e "${completion_path}.cancel" ]] || join_status=125
             fi
         fi
         if (( join_status == 125 )); then printf -v "${failed_flag_name}" '%s' 1; fi
@@ -1205,11 +1216,20 @@ function handle_ut_termination(){
         exit 143
     fi
     UT_TERMINATING=1
+    local pid
+    local termination_status=${1:-143} child_status=0
+    if [[ -n "${CURRENT_UT_PID}" ]] && current_ut_command_is_prebuilt_helper; then
+        # TERM is a wakeup, not the only record of cancellation. The helper
+        # polls this request at PID-safe points even if a shell trap is delayed
+        # or consumed during a publication/probe boundary. Completion remains
+        # the separate authoritative acknowledgement of descendant drainage.
+        if ! : > "${G_WKSP}/${G_TS}-owner-complete.CURRENT_UT_PID.cancel"; then
+            termination_status=125
+        fi
+    fi
     checkpoint_ut_event "cancel" "${CURRENT_UT_STAGE}" "${CURRENT_UT_LABEL}" "143" \
         "current_pid=${CURRENT_UT_PID} light_pid=${LIGHT_RACE_JOB_PID} engine_pid=${ENGINE_RACE_JOB_PID} plan_pid=${PLAN_RACE_JOB_PID} prebuild_pid=${CLUSTER_PREBUILD_JOB_PID}"
 
-    local pid
-    local termination_status=${1:-143} child_status=0
     # Notify every group before waiting, so the concurrent plan/helper cleanup
     # gets the same grace window as the foreground writer.
     for pid in "${CURRENT_UT_PID}" "${LIGHT_RACE_JOB_PID}" "${ENGINE_RACE_JOB_PID}" "${PLAN_RACE_JOB_PID}" "${CLUSTER_PREBUILD_JOB_PID}"; do
@@ -2064,7 +2084,7 @@ function run_prebuilt_race_commands(){
     local stage=$1 report=$2 parallel=$3 hard_timeout_seconds=$4
     local exclusive_high_footprint=${5:-0}
     local index candidate scheduled=0 active=0 high_footprint_active=0 progress status=0 child_status now remaining deadline
-    local previous_term_trap execution_term_trap term_pending=0
+    local previous_term_trap term_pending=0
     local -a child_pids=() test_pids=() watchdog_pids=() started=()
     local -a reports=() expired=()
     if ! [[ "${exclusive_high_footprint}" =~ ^[01]$ ]]; then
@@ -2092,14 +2112,24 @@ function run_prebuilt_race_commands(){
         publish_ut_helper_completion 143 || exit 125
         exit 143
     }
-    trap cancel_prebuilt_race_commands TERM
-    execution_term_trap=$(trap -p TERM)
+    function prebuilt_race_cancel_requested(){
+        (( term_pending != 0 )) ||
+            [[ -n "${UT_HELPER_COMPLETION:-}" && -e "${UT_HELPER_COMPLETION:-}.cancel" ]]
+    }
+    # Keep one sticky TERM latch for the entire admission/drain lifetime.
+    # Swapping traps around each $! publication creates a signal handoff
+    # window. The trap only records intent; the owner cancels at safe points
+    # after recording every newly admitted PID, never from inside a probe or
+    # while a PID is still unpublished. Do not reset this latch between spawns.
+    trap 'term_pending=1' TERM
     rm -f "${report}" "${report}".*
 
     while (( scheduled < ${#race_packages[@]} || active > 0 )); do
+        if prebuilt_race_cancel_requested; then cancel_prebuilt_race_commands; fi
         # The same admission owner enforces exclusion in both directions:
         # high-footprint work starts alone and keeps the wave until drained.
         while (( scheduled < ${#race_packages[@]} && active < parallel )); do
+            if prebuilt_race_cancel_requested; then cancel_prebuilt_race_commands; fi
             candidate=-1
             for (( index=0; index<${#race_packages[@]}; index++ )); do
                 [[ "${started[index]:-0}" == 0 ]] || continue
@@ -2153,8 +2183,6 @@ function run_prebuilt_race_commands(){
             fi
             checkpoint_ut_event start "${stage}" "${race_packages[index]}" "" \
                 "package_index=${index} prebuilt=true parallel=${parallel}"
-            term_pending=0
-            trap 'term_pending=1' TERM
             set -m
             (
                 cd "${race_dirs[index]}" || exit 2
@@ -2168,11 +2196,8 @@ function run_prebuilt_race_commands(){
             child_pids[index*2]=${test_pids[index]}
             exec 7>&-
             set +m
-            restore_ut_term_trap "${execution_term_trap}"
-            if (( term_pending != 0 )); then cancel_prebuilt_race_commands; fi
+            if prebuilt_race_cancel_requested; then cancel_prebuilt_race_commands; fi
 
-            term_pending=0
-            trap 'term_pending=1' TERM
             set -m
             (
                 sleep "$((remaining + hard_timeout_seconds - 10#${UT_TIMEOUT} * 60))"
@@ -2188,14 +2213,14 @@ function run_prebuilt_race_commands(){
             watchdog_pids[index]=$!
             child_pids[index*2+1]=${watchdog_pids[index]}
             set +m
-            restore_ut_term_trap "${execution_term_trap}"
-            if (( term_pending != 0 )); then cancel_prebuilt_race_commands; fi
+            if prebuilt_race_cancel_requested; then cancel_prebuilt_race_commands; fi
             active=$((active + 1))
             if (( exclusive_high_footprint == 1 )) && prebuilt_race_package_is_high_footprint "${race_packages[index]}"; then
                 high_footprint_active=$((high_footprint_active + 1))
             fi
         done
         progress=0
+        if prebuilt_race_cancel_requested; then cancel_prebuilt_race_commands; fi
         for (( index=0; index<${#race_packages[@]}; index++ )); do
             [[ "${test_pids[index]:-0}" != 0 ]] || continue
             if [[ -e "${expired[index]}.drain" ]]; then
@@ -2210,6 +2235,7 @@ function run_prebuilt_race_commands(){
             fi
             child_status=0
             wait "${test_pids[index]}" || child_status=$?
+            if prebuilt_race_cancel_requested; then cancel_prebuilt_race_commands; fi
             if ! wait_for_ut_process_group "${test_pids[index]}" 20 >&2; then
                 stop_prebuilt_race_commands
                 restore_ut_term_trap "${previous_term_trap}"
@@ -2251,6 +2277,7 @@ function run_prebuilt_race_commands(){
         done
         if (( active > 0 && progress == 0 )); then sleep 0.1; fi
     done
+    if prebuilt_race_cancel_requested; then cancel_prebuilt_race_commands; fi
     restore_ut_term_trap "${previous_term_trap}"
     return "${status}"
 }

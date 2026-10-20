@@ -7603,11 +7603,19 @@ select_lock_opt:
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForUpdate,
         }
+        if strings.EqualFold($2, "update nowait") {
+            $$.LockType = tree.SelectLockForUpdateNoWait
+        }
     }
 |   FOR SHARE
     {
         $$ = &tree.SelectLockInfo{
             LockType:tree.SelectLockForShare,
+        }
+        if strings.EqualFold($2, "share nowait") {
+            $$.LockType = tree.SelectLockForShareNoWait
+        } else if strings.EqualFold($2, "share skip locked") {
+            $$.LockType = tree.SelectLockForShareSkipLocked
         }
     }
 |   LOCK IN SHARE MODE

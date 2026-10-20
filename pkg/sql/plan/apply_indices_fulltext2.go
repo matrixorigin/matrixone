@@ -342,7 +342,7 @@ func (builder *QueryBuilder) findFulltext2IndexTables(scanNode *plan.Node, idxde
 // value caps the worker count. Parallel search yields an identical top-k at any
 // value, so a mixed-version cluster is correctness-safe either way.
 //
-// The gate on MORPCVersion123 therefore does not disable parallelism; it only
+// The gate on MORPCVersion125 therefore does not disable parallelism; it only
 // withholds an EXPLICIT operator value until every CN understands the option,
 // emitting the neutral default so no CN is handed a value its peers would not
 // honor. Below the epoch a CN that predates the option ignores it and runs its
@@ -358,7 +358,7 @@ func (builder *QueryBuilder) fulltext2ThreadsSearch() int64 {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion123 {
+	if !ok || !valid || version < defines.MORPCVersion125 {
 		return 0
 	}
 	n, err := builder.resolveInt64Variable("fulltext2_threads_search", 0)

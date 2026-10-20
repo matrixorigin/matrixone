@@ -95,7 +95,9 @@ func (c *asyncLockAdmissionCompletion) finalize() {
 var methodVersions = map[pb.Method]int64{
 	pb.Method_Lock:                         defines.MORPCVersion1,
 	pb.Method_LockWriterFair:               defines.MORPCVersion99,
+	pb.Method_TryLock:                      defines.MORPCVersion123,
 	pb.Method_ForwardLock:                  defines.MORPCVersion1,
+	pb.Method_ForwardTryLock:               defines.MORPCVersion123,
 	pb.Method_Unlock:                       defines.MORPCVersion1,
 	pb.Method_BatchUnlock:                  defines.MORPCVersion31,
 	pb.Method_GetTxnLock:                   defines.MORPCVersion1,
@@ -157,6 +159,19 @@ func supportsLockProtocolV99(serviceID string) bool {
 	}
 	version, ok := value.(int64)
 	return ok && version >= defines.MORPCVersion99
+}
+
+func supportsNonblockingLockProtocol(serviceID string) bool {
+	rt := moruntime.ServiceRuntime(serviceID)
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	version, ok := value.(int64)
+	return ok && version >= defines.MORPCVersion123
 }
 
 func (s *service) initRemote() {
@@ -352,8 +367,12 @@ func (s *service) initRemoteHandler() {
 		s.handleRemoteLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_LockWriterFair,
 		s.handleRemoteWriterFairLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_TryLock,
+		s.handleRemoteTryLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_ForwardLock,
 		s.handleForwardLock)
+	s.remote.server.RegisterMethodHandler(pb.Method_ForwardTryLock,
+		s.handleForwardTryLock)
 	s.remote.server.RegisterMethodHandler(pb.Method_Unlock,
 		s.handleRemoteUnlock)
 	s.remote.server.RegisterMethodHandler(pb.Method_BatchUnlock,
@@ -405,6 +424,74 @@ func (s *service) handleRemoteWriterFairLock(
 		return
 	}
 	s.handleRemoteLock(ctx, cancel, req, resp, cs)
+}
+
+// handleRemoteTryLock is a capability-bearing physical-owner admission. Older
+// owners reject the method before creating transaction or binding state; a
+// caller must never downgrade it to the blocking Lock method.
+func (s *service) handleRemoteTryLock(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession,
+) {
+	if !supportsNonblockingLockProtocol(s.cfg.ServiceID) ||
+		!validNoWaitLockOptions(req.Lock.Options) {
+		_ = writeResponseWithDeadline(
+			s.logger,
+			cancel,
+			resp,
+			moerr.NewNotSupportedNoCtx("nonblocking row lock admission is unavailable"),
+			cs,
+			defaultRPCWriteTimeout,
+			remoteLockResponseLogFields(req),
+		)
+		return
+	}
+	s.handleRemoteLock(ctx, cancel, req, resp, cs)
+}
+
+func validNoWaitLockOptions(options pb.LockOptions) bool {
+	return options.NoWait && options.Policy == pb.WaitPolicy_FastFail &&
+		options.Granularity == pb.Granularity_Row &&
+		(options.Mode == pb.LockMode_Shared || options.Mode == pb.LockMode_Exclusive)
+}
+
+// Snapshot only scalar admission facts: the async callback outlives the pooled
+// request and must not retain its mutable protobuf storage.
+type noWaitLockContract struct {
+	method       pb.Method
+	validOptions bool
+}
+
+func snapshotNoWaitLockContract(req *pb.Request) noWaitLockContract {
+	return noWaitLockContract{method: req.Method, validOptions: validNoWaitLockOptions(req.Lock.Options)}
+}
+
+func (c noWaitLockContract) valid() bool {
+	return c.validOptions && (c.method == pb.Method_TryLock || c.method == pb.Method_ForwardTryLock)
+}
+
+func (s *service) setNoWaitConflictResponse(
+	contract noWaitLockContract,
+	resp *pb.Response,
+	result pb.Result,
+	expectedBind pb.LockTable,
+) error {
+	if !contract.valid() ||
+		!supportsNonblockingLockProtocol(s.cfg.ServiceID) ||
+		!supportsLockProtocolV28(s.cfg.ServiceID) ||
+		!supportsLockProtocolV31(s.cfg.ServiceID) ||
+		resp.NewBind != nil || !result.LockedOn.Valid ||
+		result.LockedOn.Changed(expectedBind) {
+		return ErrLockTableBindChanged
+	}
+	resp.Lock.Result = result
+	resp.Lock.NoWaitConflict = true
+	resp.Lock.TxnWaitingListOnLockTableSupported = true
+	resp.Lock.BatchUnlockSupported = true
+	return nil
 }
 
 func (s *service) handleRemoteLock(
@@ -520,6 +607,7 @@ func (s *service) handleRemoteLock(
 	defer txn.Unlock()
 	originalRows := req.Lock.Rows
 	originalOptions := req.Lock.Options
+	noWaitContract := snapshotNoWaitLockContract(req)
 	rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
 		bind.Group,
 		bind.Table,
@@ -545,20 +633,31 @@ func (s *service) handleRemoteLock(
 			// can observe the outer admission as complete and recycle active txns.
 			defer completion.callbackDone()
 			defer finishLockOp()
+			noWaitConflict := noWaitContract.method == pb.Method_TryLock && err == ErrLockConflict
 			if terminalErr := txn.terminalLockErrorLocked(txnID); terminalErr != nil {
 				result = pb.Result{}
 				err = terminalErr
-			} else if err == nil {
+			} else if err == nil || noWaitConflict {
 				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
 					result = pb.Result{}
 					err = e
 				}
 			}
+			if noWaitConflict && err == ErrLockConflict {
+				if e := s.setNoWaitConflictResponse(noWaitContract, resp, result, bind); e != nil {
+					result = pb.Result{}
+					err = e
+				} else {
+					err = nil
+				}
+			}
 			resp.Lock.Result = result
 			resp.Lock.TxnWaitingListOnLockTableSupported =
-				err == nil && supportsLockProtocolV28(s.cfg.ServiceID)
+				resp.Lock.TxnWaitingListOnLockTableSupported ||
+					err == nil && supportsLockProtocolV28(s.cfg.ServiceID)
 			resp.Lock.BatchUnlockSupported =
-				err == nil && supportsLockProtocolV31(s.cfg.ServiceID)
+				resp.Lock.BatchUnlockSupported ||
+					err == nil && supportsLockProtocolV31(s.cfg.ServiceID)
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		})
 	handlerOwnsAdmission = !completion.transferToCallbackIfPending()
@@ -687,6 +786,7 @@ func (s *service) handleForwardLock(
 	defer txn.Unlock()
 	originalRows := req.Lock.Rows
 	originalOptions := req.Lock.Options
+	noWaitContract := snapshotNoWaitLockContract(req)
 	rows, opts, replaceTxnLocks := txn.coarsenLockRequest(
 		bind.Group,
 		bind.Table,
@@ -711,19 +811,53 @@ func (s *service) handleForwardLock(
 			// Keep the inner generation lifetime within the outer service admission.
 			defer completion.callbackDone()
 			defer finishLockOp()
+			noWaitConflict := noWaitContract.method == pb.Method_ForwardTryLock && err == ErrLockConflict
 			if terminalErr := txn.terminalLockErrorLocked(txnID); terminalErr != nil {
 				result = pb.Result{}
 				err = terminalErr
-			} else if err == nil {
+			} else if err == nil || noWaitConflict {
 				if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
 					result = pb.Result{}
 					err = e
+				}
+			}
+			if noWaitConflict && err == ErrLockConflict {
+				if e := s.setNoWaitConflictResponse(noWaitContract, resp, result, bind); e != nil {
+					result = pb.Result{}
+					err = e
+				} else {
+					err = nil
 				}
 			}
 			resp.Lock.Result = result
 			_ = writeResponseWithDeadline(s.logger, cancel, resp, err, cs, defaultRPCWriteTimeout, logFields)
 		})
 	handlerOwnsAdmission = !completion.transferToCallbackIfPending()
+}
+
+// handleForwardTryLock capability-gates no-wait acquisition through the
+// transaction's lock service as well as at the eventual physical owner.
+func (s *service) handleForwardTryLock(
+	ctx context.Context,
+	cancel context.CancelFunc,
+	req *pb.Request,
+	resp *pb.Response,
+	cs morpc.ClientSession,
+) {
+	if !supportsNonblockingLockProtocol(s.cfg.ServiceID) ||
+		!validNoWaitLockOptions(req.Lock.Options) {
+		_ = writeResponseWithDeadline(
+			s.logger,
+			cancel,
+			resp,
+			moerr.NewNotSupportedNoCtx("nonblocking forwarded row lock admission is unavailable"),
+			cs,
+			defaultRPCWriteTimeout,
+			remoteLockResponseLogFields(req),
+		)
+		return
+	}
+	s.handleForwardLock(ctx, cancel, req, resp, cs)
 }
 
 func remoteLockResponseLogFields(req *pb.Request) func() []zap.Field {

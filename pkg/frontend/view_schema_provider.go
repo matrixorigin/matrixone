@@ -61,6 +61,14 @@ func (tcc *TxnCompilerContext) NewViewSchemaRequest(ctx context.Context, authori
 	return plan.NewViewSchemaRequest(ctx, &viewSchemaProvider{parent: tcc, authorize: authorize})
 }
 
+// NewViewMetadataRequest explicitly opts a statement owner into the derived
+// introspection consumers. The owner supplies the surface's visibility policy,
+// propagates Context to planning and origin-CN execution, and closes the request
+// only after all consumers have released their results. Default SQL is unchanged.
+func (tcc *TxnCompilerContext) NewViewMetadataRequest(ctx context.Context, authorize ViewSchemaAuthorizer) *plan.ViewMetadataRequest {
+	return plan.NewViewMetadataRequest(ctx, &viewSchemaProvider{parent: tcc, authorize: authorize})
+}
+
 type catalogStampReader interface {
 	CatalogReadStamp() (client.CatalogReadStamp, error)
 }
