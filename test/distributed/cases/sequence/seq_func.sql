@@ -9,3 +9,12 @@ select lastval();
 select setval('s1', 50);
 select lastval();
 select nextval('s1');
+
+-- matrixone#30650: SETVAL(..., false) must store is_called so the next NEXTVAL advances by the increment, even on a never-called sequence.
+drop sequence if exists s3;
+create sequence s3 increment by 3 start with 10;
+select setval('s3', 20, false);
+select nextval('s3');
+select setval('s3', 50, true);
+select nextval('s3');
+drop sequence if exists s3;

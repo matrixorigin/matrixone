@@ -589,7 +589,12 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 }
 
 func setVal[T constraints.Integer](proc *process.Process, setv T, setisCalled bool, rel engine.Relation, db, tbl string) (string, error) {
-	_, err := sequenceSQL(proc, db, fmt.Sprintf("update %s set last_seq_num = %d", sequenceTableName(db, tbl), setv))
+	//#30650: persist is_called together with last_seq_num; NEXTVAL only
+	// advances when is_called is set. SETVAL(n, true) means the next NEXTVAL
+	// returns n (start-value semantics), SETVAL(n, false) means n+increment,
+	// so the stored flag is the inverse of the user argument regardless of
+	// the previous is_called state.
+	_, err := sequenceSQL(proc, db, fmt.Sprintf("update %s set last_seq_num = %d, is_called = %t", sequenceTableName(db, tbl), setv, !setisCalled))
 	if err != nil {
 		return "", err
 	}
