@@ -258,6 +258,10 @@ func TestTableDumpExactBaseTimestampAddBindings(t *testing.T) {
 			built, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
 			target := built.GetDdl().GetCreateTable().GetTableDef()
+			require.Len(t, target.Checks, len(source.Checks))
+			for i := range target.Checks {
+				target.Checks[i].Name = source.Checks[i].Name
+			}
 			features, err := planpb.RequiredRemoteExpressionFeatures(target)
 			require.NoError(t, err)
 			require.True(t, features.TimestampAddSecondIntervals)
@@ -400,6 +404,10 @@ func TestTableDumpExactPreDecimalDivBindings(t *testing.T) {
 			built, err := BuildPlan(compiler, stmt, false)
 			require.NoError(t, err)
 			target := built.GetDdl().GetCreateTable().GetTableDef()
+			require.Len(t, target.Checks, len(source.Checks))
+			for i := range target.Checks {
+				target.Checks[i].Name = source.Checks[i].Name
+			}
 			oldNodes := tableDumpIntegerDivNodes(source.Cols[2].GeneratedCol.Expr)
 			newNodes := tableDumpIntegerDivNodes(target.Cols[2].GeneratedCol.Expr)
 			require.Len(t, oldNodes, 1)
@@ -497,13 +505,49 @@ func TestTableDumpDecimalDivEraComposition(t *testing.T) {
 	}{
 		{"current", compiler.GetContext()},
 		{"before_fractional", function.WithLegacyTimestampAddSecond(compiler.GetContext())},
-		{"before_div", function.WithLegacyDecimalIntegerDiv(compiler.GetContext())},
+		{"before_div", function.WithLegacyTemporalNullability(function.WithLegacyDecimalIntegerDiv(compiler.GetContext()))},
 	} {
 		t.Run(era.name, func(t *testing.T) {
 			ctx := tableDumpBindContext{CompilerContext: compiler, ctx: era.ctx, increment: 4}
 			built, err := BuildPlan(ctx, stmt, false)
 			require.NoError(t, err)
 			source := built.GetDdl().GetCreateTable().GetTableDef()
+			// Independent typed contracts: published post-8dd main retains
+			// integer SECOND without function 601, but its string DATETIME
+			// conversion is nullable. Pre-DIV carries the old metadata.
+			casts, normalizers := 0, 0
+			var inspect func(*planpb.Expr)
+			inspect = func(e *planpb.Expr) {
+				if f := e.GetF(); f != nil {
+					fid, oid := function.DecodeOverloadID(f.Func.Obj)
+					if fid == function.TIMESTAMPADD_SECOND_INTERVAL {
+						normalizers++
+					}
+					if fid == function.TIMESTAMPADD {
+						if era.name == "current" {
+							require.Equal(t, "MICROSECOND", f.Args[0].GetLit().GetSval())
+						} else {
+							require.Equal(t, "second", f.Args[0].GetLit().GetSval())
+							require.Equal(t, int32(types.T_int64), f.Args[1].Typ.Id)
+						}
+					}
+					if fid == function.CAST && (oid == 0 || oid == 1) && len(f.Args) == 2 && types.T(f.Args[0].Typ.Id).IsMySQLString() && types.T(f.Args[1].Typ.Id) == types.T_datetime {
+						casts++
+						require.Equal(t, era.name == "before_div", e.Typ.NotNullable)
+						require.Equal(t, e.Typ.NotNullable, f.Args[1].Typ.NotNullable)
+					}
+					for _, arg := range f.Args {
+						inspect(arg)
+					}
+				}
+			}
+			inspect(source.Cols[2].GeneratedCol.Expr)
+			require.Positive(t, casts)
+			if era.name == "current" {
+				require.Equal(t, 1, normalizers)
+			} else {
+				require.Zero(t, normalizers)
+			}
 			if target == nil {
 				target = source
 			}
@@ -514,4 +558,106 @@ func TestTableDumpDecimalDivEraComposition(t *testing.T) {
 			require.True(t, proto.Equal(before, source))
 		})
 	}
+}
+
+// Genuine incoming f9271d9780 bindings, before main 8dd623e7 changed nullability.
+func TestTableDumpPreTemporalNullabilityBindings(t *testing.T) {
+	data, err := os.ReadFile("testdata/temporal_nullability_pre8dd_baseline.json")
+	require.NoError(t, err)
+	var fixtures map[string][]byte
+	require.NoError(t, json.Unmarshal(data, &fixtures))
+	require.Len(t, fixtures, 8)
+	exprs := map[string]string{"date": "date(a)", "datetime": "cast(a as datetime)", "implicit": "date_format(a,'%Y-%m-%d')", "fractional": "timestampadd(second,1.5,cast(a as datetime))", "date_constant": "date('2024-01-01')", "datetime_constant": "cast('2024-01-01' as datetime)", "implicit_constant": "date_format('2024-01-01','%Y-%m-%d')", "fractional_constant": "timestampadd(second,1.5,cast('2024-01-01' as datetime))"}
+	for name, raw := range fixtures {
+		t.Run(name, func(t *testing.T) {
+			var source planpb.TableDef
+			require.NoError(t, proto.Unmarshal(raw, &source))
+			typ := "datetime"
+			if name == "date" || name == "date_constant" {
+				typ = "date"
+			}
+			if name == "implicit" || name == "implicit_constant" {
+				typ = "varchar(64)"
+			}
+			ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(a varchar(32) not null,g "+typ+" generated always as ("+exprs[name]+") stored,check("+exprs[name]+" is not null))", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			built, err := BuildPlan(ctx, stmt, false)
+			require.NoError(t, err)
+			target := built.GetDdl().GetCreateTable().GetTableDef()
+			require.Len(t, target.Checks, len(source.Checks))
+			for i := range target.Checks {
+				target.Checks[i].Name = source.Checks[i].Name
+			}
+			before := proto.Clone(target)
+			_, err = AnalyzeTableDumpBindings(ctx, target, target)
+			require.NoError(t, err)
+			_, err = AnalyzeTableDumpBindings(ctx, target, &source)
+			require.NoError(t, err)
+			if len(name) > 9 && name[len(name)-9:] == "_constant" {
+				require.False(t, proto.Equal(source.Cols[1].GeneratedCol.Expr, target.Cols[1].GeneratedCol.Expr))
+				// Nullability is still exact provenance. A forged source-literal
+				// bit is impossible under both whole binding eras.
+				forged := proto.Clone(&source).(*planpb.TableDef)
+				var corrupt func(*planpb.Expr) bool
+				corrupt = func(expr *planpb.Expr) bool {
+					if lit := expr.GetLit(); lit != nil && expr.Typ.NotNullable && types.T(expr.Typ.Id).IsMySQLString() {
+						expr.Typ.NotNullable = false
+						return true
+					}
+					if f := expr.GetF(); f != nil {
+						for _, a := range f.Args {
+							if corrupt(a) {
+								return true
+							}
+						}
+					}
+					return false
+				}
+				require.True(t, corrupt(forged.Cols[1].GeneratedCol.Expr))
+				_, err = AnalyzeTableDumpBindings(ctx, target, forged)
+				require.ErrorContains(t, err, "cannot verify bound generated")
+			}
+			require.True(t, proto.Equal(before, target))
+		})
+	}
+}
+
+func TestTableDumpRejectsMixedTemporalNullability(t *testing.T) {
+	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, "create table t(g varchar(64) generated always as (concat(cast('2024-01-01' as datetime),cast('2024-02-01' as datetime))) stored)", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(ctx, stmt, false)
+	require.NoError(t, err)
+	target := built.GetDdl().GetCreateTable().GetTableDef()
+	forged := proto.Clone(target).(*planpb.TableDef)
+	var casts []*planpb.Expr
+	var collect func(*planpb.Expr)
+	collect = func(e *planpb.Expr) {
+		if f := e.GetF(); f != nil {
+			fid, oid := function.DecodeOverloadID(f.Func.Obj)
+			if fid == function.CAST && (oid == 0 || oid == 1) && len(f.Args) == 2 && types.T(f.Args[0].Typ.Id).IsMySQLString() && types.T(f.Args[1].Typ.Id) == types.T_datetime {
+				casts = append(casts, e)
+			}
+			for _, a := range f.Args {
+				collect(a)
+			}
+		}
+	}
+	collect(forged.Cols[0].GeneratedCol.Expr)
+	require.Len(t, casts, 2)
+	for _, e := range casts {
+		require.False(t, e.Typ.NotNullable)
+		require.False(t, e.GetF().Args[1].Typ.NotNullable)
+	}
+	// One complete old cast and one complete current cast cannot come from a
+	// single binding epoch, even though each subtree is independently valid.
+	casts[0].Typ.NotNullable = true
+	casts[0].GetF().Args[1].Typ.NotNullable = true
+	before := proto.Clone(forged)
+	_, err = AnalyzeTableDumpBindings(ctx, target, forged)
+	require.ErrorContains(t, err, "cannot verify bound generated")
+	require.True(t, proto.Equal(before, forged))
 }

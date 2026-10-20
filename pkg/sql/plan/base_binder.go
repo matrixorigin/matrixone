@@ -7515,7 +7515,7 @@ func bindFuncExprImplByPlanExpr(
 				returnType := fGet.GetReturnType()
 				rightList.List = inExprList
 				exprType := makePlan2Type(&returnType)
-				exprType.NotNullable = function.DeduceNotNullable(funcID, args)
+				exprType.NotNullable = function.DeduceNotNullableForBinding(ctx, funcID, args)
 				newExpr = &Expr{
 					Typ: exprType,
 					Expr: &plan.Expr_F{
@@ -8412,7 +8412,7 @@ func bindFuncExprImplByPlanExpr(
 		// it through a different (or empty) domain.
 		Typ.Enumvalues = args[2].Typ.Enumvalues
 	}
-	Typ.NotNullable = function.DeduceNotNullable(funcID, args)
+	Typ.NotNullable = function.DeduceNotNullableForBinding(ctx, funcID, args)
 	if err := setExpressionCollation(ctx, name, args, &Typ); err != nil {
 		return nil, err
 	}
@@ -11359,7 +11359,7 @@ func appendCastBeforeExprWithOverload(
 		},
 	}
 	args := []*Expr{expr, targetArg}
-	typ.NotNullable = function.DeduceNotNullable(fGet.GetEncodedOverloadID(), args)
+	typ.NotNullable = function.DeduceNotNullableForBinding(ctx, fGet.GetEncodedOverloadID(), args)
 	targetArg.Typ.NotNullable = typ.NotNullable
 	return &Expr{
 		Expr: &plan.Expr_F{

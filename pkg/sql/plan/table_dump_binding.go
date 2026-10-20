@@ -185,13 +185,20 @@ const (
 	tableDumpBindingLegacyZeroTemporalDefault
 )
 
+// A flag selects one coherent pre-migration binding, never per-node metadata.
+const tableDumpBindingPreTemporalNullability tableDumpBindingMode = 1 << 7
+
 type tableDumpDefaultSession struct {
 	timeZone, locale, folded bool
 }
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	switch mode {
+	baseMode := mode &^ tableDumpBindingPreTemporalNullability
+	if mode&tableDumpBindingPreTemporalNullability != 0 {
+		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
+	}
+	switch baseMode {
 	case tableDumpBindingLegacyTimestampAdd:
 		bindCtx = function.WithLegacyTimestampAddSecond(bindCtx)
 	case tableDumpBindingLegacyDecimalIntegerDiv:
@@ -203,7 +210,7 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	if proc == nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "table dump expression binding requires a process")
 	}
-	if mode == tableDumpBindingImplicitTimestamp {
+	if baseMode == tableDumpBindingImplicitTimestamp {
 		// Old implicit defaults and ON UPDATE clauses saved CURRENT_TIMESTAMP()
 		// as their origin, but used the column precision and this distinct DDL
 		// owner. Reproduce that whole tree, including its assignment cast.
@@ -219,7 +226,7 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 			},
 		}
 		purpose := defaultExprForPersistedVerification
-		if mode == tableDumpBindingLegacyZeroTemporalDefault {
+		if baseMode == tableDumpBindingLegacyZeroTemporalDefault {
 			purpose = defaultExprForPersistedLegacyZero
 		}
 		var unfolded *planpb.Expr
@@ -507,25 +514,30 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 			// Each migration era must reproduce the whole tree; no partial matching
 			// or semantic normalization is permitted for supplied expressions.
 			modes := []tableDumpBindingMode{tableDumpBindingCurrent}
-			// This unwrapped AST is a literal, so it cannot contain any of the
-			// function/division eras below. Reproduce the complete pre-normalization
-			// default without composing independently selected subtrees.
+			zeroTemporal := false
 			if item.kind == "default" {
-				if _, ok := zeroTemporalDefaultLiteral(unwrapParenExpr(ast), item.col.Typ); ok {
-					modes = append(modes, tableDumpBindingLegacyZeroTemporalDefault)
-				}
+				_, zeroTemporal = zeroTemporalDefaultLiteral(unwrapParenExpr(ast), item.col.Typ)
 			}
-			if visit.hasTimestampAdd {
-				modes = append(modes, tableDumpBindingLegacyTimestampAdd)
-			}
-			if visit.hasIntegerDivision {
-				modes = append(modes, tableDumpBindingLegacyDecimalIntegerDiv)
-			}
-			if visit.hasSpecial {
-				modes = append(modes, tableDumpBindingLegacySpecial)
-			}
-			if tableDumpImplicitTimestamp(item, ast) {
+			if item.kind == "default" && zeroTemporal {
+				// Integer-zero origins are literals, disjoint from function eras.
+				modes = append(modes, tableDumpBindingLegacyZeroTemporalDefault)
+			} else if tableDumpImplicitTimestamp(item, ast) {
 				modes = append(modes, tableDumpBindingImplicitTimestamp)
+			} else {
+				// The prior PR can contain fractional intervals with pre-8dd
+				// nullability. Published main after 8dd also needs the independent
+				// pre-fractional/current-nullability era. Compare complete trees.
+				modes = append(modes, tableDumpBindingCurrent|tableDumpBindingPreTemporalNullability)
+				if visit.hasTimestampAdd {
+					modes = append(modes, tableDumpBindingLegacyTimestampAdd,
+						tableDumpBindingLegacyTimestampAdd|tableDumpBindingPreTemporalNullability)
+				}
+				if visit.hasIntegerDivision {
+					modes = append(modes, tableDumpBindingLegacyDecimalIntegerDiv|tableDumpBindingPreTemporalNullability)
+				}
+				if visit.hasSpecial {
+					modes = append(modes, tableDumpBindingLegacySpecial|tableDumpBindingPreTemporalNullability)
+				}
 			}
 			// All session witnesses share the ordinary cancellation and total
 			// candidate-node budget. Only complete rebound trees can match.

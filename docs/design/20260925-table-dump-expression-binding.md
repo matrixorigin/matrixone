@@ -1,7 +1,7 @@
 # Table dump expression binding (PR #29241, issue #28594)
 
-Status: revision 16; zero-temporal rebase compatibility design approved by independent gpt-6-astra/medium review.
-Revision: 16, 2026-10-20. Revision 15 passed independent persisted-default review; validation is recorded in the PR.
+Status: revision 17; temporal-nullability rebase compatibility design approved by independent gpt-6-astra/medium review.
+Revision: 17, 2026-10-20. Revision 16 passed independent zero-temporal review; validation is recorded in the PR.
 
 ## Current extension: migration-era binding and format 3
 
@@ -34,10 +34,39 @@ DUMP and LOAD; per-row normalization is unchanged.
 
 Current frozen-base allocations: main charset118, coordinator subquery119, session
 authorization120, unsigned DECIMAL DIV121 and functions599/600 stay published;
-unary temporal122 stay published; fractional TIMESTAMPADD uses capability123, normalizer601 and end602. The allocation follows official main
-b233ff1f27372e450106a6a0964952fefe887114; rollback coverage cycles122→123→122.
+unary temporal122 and nonblocking row-lock123 stay published; fractional TIMESTAMPADD uses capability124, normalizer601 and end602. The allocation follows official main
+c7bd2e7c1d9ca53daf80d640b3b307902d54161c; rollback coverage cycles123→124→123.
 No protobuf schema change or provisional-function-ID guessing is introduced.
 Historical revision10 evidence below retains its original input identity.
+
+## Revision 17: temporal nullability and CHECK namespace rebase
+
+Main 8dd623e7 made string DATE and DATETIME expression conversions nullable.
+Origin verification must reproduce the old inference metadata without erasing
+NotNullable during comparison. A private binding-only context selects the old
+DATE overload 3/4 and string-to-DATETIME CAST overload 0/1 inference at their
+shared owner. Ordinary inference, executor conversions and SQL mode retain main
+semantics. This preserves provenance, not old errors on malformed future input.
+
+The finite whole-origin eras include current binding, prior-PR fractional
+binding with old temporal metadata, published pre-fractional binding with current
+metadata, pre-fractional binding with old metadata, and the existing pre-DIV and
+pre-special compositions with old metadata. Zero-literal and implicit-timestamp
+owners remain disjoint. Each successful whole tree must compare exactly; no
+node-wise migration mixing or metadata normalization is allowed. The descriptor
+bound is 31×6; cancellation and the one-million candidate-node budget stay fixed.
+Constant-folding can remove the affected identities, so eligibility does not rely
+solely on the saved tree. Genuine incoming f9271d9780 definitions cover DATE,
+explicit/implicit DATETIME casts and their fractional TIMESTAMPADD composition.
+
+Main now allocates schema-unique CHECK names. Exact-name matching remains a LOAD
+precondition. Public historical tests use identical logical table names across
+three reused schemas so current declaration identities agree legally; frozen
+expression trees are transplanted only under matching origins and verified
+against exact old expressions. Current CHECK names remain unchanged. Goldens
+retain their original bytes; expression-only UT declarations align to their old
+identities. This adaptation does not weaken declaration verification or claim
+that current generated names are the historic names.
 
 ## Revision 16: zero-temporal normalization rebase
 
@@ -86,7 +115,7 @@ retain their separate session policy.
 Each parsed expression first tries precision/era pairs in the backup session.
 All cheap candidates participate in sensitivity classification even after a
 current-era match. Next it tries all cheap locale-only precision/era witnesses. Only if none
-matches does the verifier enumerate timezone and joint session witnesses. A bounded list of at most 31×5 small descriptors retains dependency
+matches does the verifier enumerate timezone and joint session witnesses. A bounded list of at most 31×6 small descriptors retains dependency
 flags, never speculative expression graphs. All phases use the same cancellation
 checks, whole-tree equality and shared 1,000,000 candidate-node budget. Unmatched
 exhaustive reconstruction can still reach this bound; cheap valid precision

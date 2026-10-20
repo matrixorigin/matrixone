@@ -206,3 +206,20 @@ func legacyIntegerDivCheck(inputs []types.Type) checkResult {
 	}
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
+
+type legacyTemporalNullabilityContextKey struct{}
+
+// WithLegacyTemporalNullability reconstructs pre-8dd catalog binding metadata.
+// Execution conversions and ordinary query binding retain current semantics.
+func WithLegacyTemporalNullability(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyTemporalNullabilityContextKey{}, true)
+}
+
+// LegacyTemporalNullability reports the private dump-origin binding epoch.
+func LegacyTemporalNullability(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	value, _ := ctx.Value(legacyTemporalNullabilityContextKey{}).(bool)
+	return value
+}
