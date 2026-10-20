@@ -212,13 +212,20 @@ func (obj *aobject) GetDuplicatedRows(
 		// checks. PrePrepare assigns/publishes predecessor PrepareTS values in
 		// the same serialized worker before this read; later active appends are
 		// still handled by the newest-owner conflict check under the lock.
-		selection, snapshot := obj.appendMVCC.GetRowSelectionAfterWithSnapshot(from, to)
+		// GetRowSelectionAfter keeps the historical (from, to] contract.
+		// The public dedup window is [from, to], as it was when this path
+		// used GetMaxRowByTS, so move the lower endpoint back one timestamp.
+		lower := from
+		if !lower.IsEmpty() {
+			lower = lower.Prev()
+		}
+		selection, snapshot := obj.appendMVCC.GetRowSelectionAfterWithSnapshot(lower, to)
 		fn := func() (index.RowSelection, error) {
 			// PrepareCommit also takes the object lock. If it published a new
 			// snapshot between the lock-free traversal above and this callback,
 			// rebuild from the now-stable snapshot while holding the lock.
 			if !obj.appendMVCC.IsPrepareSnapshotCurrent(snapshot) {
-				return obj.appendMVCC.GetRowSelectionAfter(from, to), nil
+				return obj.appendMVCC.GetRowSelectionAfter(lower, to), nil
 			}
 			return selection, nil
 		}
