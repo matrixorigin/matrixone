@@ -17,6 +17,17 @@ package v2
 import "github.com/prometheus/client_golang/prometheus"
 
 var (
+	// MemoryStatementRejectedCounter counts terminal statement admission
+	// rejections by the last blocking decision or context termination. Fixed
+	// labels avoid query/session cardinality and remain visible at zero.
+	MemoryStatementRejectedCounter = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Namespace: "mo",
+			Subsystem: "system",
+			Name:      "memory_statement_rejected_total",
+			Help:      "Total terminal statement admission rejections by blocking reason or context termination.",
+		}, []string{"reason"})
+
 	// MemoryThrottlerAdmissionCounter records every memory admission decision.
 	// The reason label is deliberately bounded so a pressure profile can use the
 	// counter as a stable, machine-readable source of denied requests.
@@ -71,6 +82,12 @@ var (
 )
 
 func initResourceThrottlerMetricLabels() {
+	for _, reason := range []string{
+		"domain-unmeasured", "no-headroom", "queue-order", "pressure-concurrency",
+		"context-canceled", "deadline-exceeded",
+	} {
+		MemoryStatementRejectedCounter.WithLabelValues(reason)
+	}
 	// Seed the bounded label sets so a profile can distinguish a real zero from
 	// an endpoint that never exposed the memory-throttler metric families.
 	for _, labels := range [][2]string{

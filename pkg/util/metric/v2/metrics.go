@@ -92,6 +92,7 @@ func initArrowLoadMetrics() {
 }
 
 func initResourceThrottlerMetrics() {
+	registry.MustRegister(MemoryStatementRejectedCounter)
 	registry.MustRegister(MemoryThrottlerAdmissionCounter)
 	registry.MustRegister(MemoryThrottlerAdmissionBytesCounter)
 	registry.MustRegister(MemoryThrottlerReservationReleasedBytesCounter)

@@ -22,6 +22,8 @@ import (
 	"testing/synctest"
 	"time"
 
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -65,6 +67,107 @@ func TestHealthyStatementEntryDoesNotThrottleConcurrency(t *testing.T) {
 		lease.Close()
 	}
 	require.Zero(t, b.Snapshot().StatementActive)
+}
+
+func TestStatementPressureUsesWorkingSetWithoutRelaxingHardGate(t *testing.T) {
+	for _, source := range []MemoryDomainSource{MemoryDomainSourceCgroupV1, MemoryDomainSourceCgroupV2} {
+		for _, scenario := range []string{"clean-cache", "dirty-cache", "raw-runtime-floor", "soft-limit", "pending-claims"} {
+			t.Run(string(source)+"/"+scenario, func(t *testing.T) {
+				b, s := ciCgroupBudget(source)
+				b.statementPolicy = MemoryStatementAdmissionPolicy{PressureConcurrency: 1, MaxQueued: 2}
+				_, active, err := b.EnterStatement(t.Context(), false)
+				require.NoError(t, err)
+				defer active.Close()
+				switch scenario {
+				case "dirty-cache":
+					s.Reclaimable = 0
+					s.Used = s.Limit - b.policy.Reserve(*s) - (128 << 20)
+				case "raw-runtime-floor":
+					s.Used = s.Limit - b.policy.RuntimeBytes
+				case "soft-limit":
+					s.SoftLimit = s.Used + b.policy.RuntimeBytes
+				case "pending-claims":
+					_, ok := b.TryReserve(b.Snapshot().Available)
+					require.True(t, ok)
+					defer func() { b.Release(b.Reserved()) }()
+				}
+				_, next, err := b.EnterStatement(t.Context(), false)
+				if scenario == "clean-cache" {
+					require.NoError(t, err, "clean charged cache must not impose the pressure concurrency cap")
+					next.Close()
+					view := b.Snapshot()
+					require.Positive(t, view.Available)
+					require.Less(t, view.Available, view.Reserve, "the old pressure decision would throttle here")
+					_, ok := b.TryReserve(view.Available + 1)
+					require.False(t, ok, "relaxed statement scheduling cannot spend clean-cache credit past the raw gate")
+					return
+				}
+				require.ErrorIs(t, err, ErrMemoryStatementTimeout)
+				require.Nil(t, next)
+				var detail *MemoryStatementAdmissionError
+				require.ErrorAs(t, err, &detail)
+				if scenario == "dirty-cache" {
+					require.True(t, detail.UnderPressure)
+					require.Equal(t, "pressure-concurrency", detail.OrdinaryReason)
+					require.Equal(t, uint64(128<<20), detail.WorkingSetAvailable)
+					require.Positive(t, detail.Snapshot.Available)
+				} else {
+					require.False(t, detail.UnderPressure, "healthy working-set headroom does not override hard rejection")
+					require.Equal(t, "no-headroom", detail.OrdinaryReason)
+					require.Zero(t, detail.RawAvailable)
+					_, ok := b.TryReserve(1)
+					require.False(t, ok)
+				}
+			})
+		}
+	}
+}
+
+func TestStatementPressureIncidentShapeRetainsRawAllocationBoundary(t *testing.T) {
+	const gib = uint64(1 << 30)
+	s := MemoryDomainSnapshot{Used: 793 * gib / 10, Limit: 84 * gib,
+		Reclaimable: 30 * gib, NonGo: 23 * gib / 10,
+		Source: MemoryDomainSourceCgroupV1, Measured: true}
+	b := NewMemoryAdmissionBudgetWithProvider(DefaultMemoryDomainReservePolicy(), func() (MemoryDomainSnapshot, error) { return s, nil })
+	b.statementPolicy = MemoryStatementAdmissionPolicy{PressureConcurrency: 28}
+	for range 32 {
+		_, lease, err := b.EnterStatement(t.Context(), false)
+		require.NoError(t, err, "incident's clean-cache shape must not trip the 28-statement cap")
+		defer lease.Close()
+	}
+	view := b.Snapshot()
+	require.Equal(t, uint64(32), view.StatementActive)
+	require.Less(t, view.Available, view.Reserve)
+	require.Zero(t, view.Reserved, "scheduling cannot precharge unallocated bytes")
+	_, ok := b.TryReserve(view.Available)
+	require.True(t, ok)
+	_, ok = b.TryReserve(1)
+	require.False(t, ok, "pending claims still exhaust raw headroom despite 30 GiB of cache credit")
+	b.Release(view.Available)
+}
+
+func TestStatementPressureViewRetainsCalibratedReserveAndPendingClaims(t *testing.T) {
+	s := MemoryDomainSnapshot{Used: 1, Limit: 100, NonGo: 20,
+		Source: MemoryDomainSourceCgroupV2, Measured: true}
+	b := NewMemoryAdmissionBudgetWithProvider(MemoryDomainReservePolicy{
+		MinimumBytes: 10, RuntimeBytes: 5, ObservedNonGoMultiplier: 2,
+	}, func() (MemoryDomainSnapshot, error) { return s, nil })
+	_, ok := b.TryReserve(3)
+	require.True(t, ok)
+	s.Used, s.NonGo, s.Reclaimable = 70, 8, 20
+	b.mu.Lock()
+	hardAvailable := b.availableLocked(s)
+	pressureAvailable := b.availableForPressureLocked(s)
+	b.mu.Unlock()
+	require.Equal(t, uint64(2), hardAvailable)
+	require.Equal(t, uint64(2), pressureAvailable, "100 - (70-20) - 45 calibrated reserve - 3 pending")
+	require.Equal(t, uint64(3), b.Reserved(), "a scheduling read must not spend or release claims")
+	b.Release(3)
+	b.mu.Lock()
+	b.availableLocked(s)
+	pressureAvailable = b.availableForPressureLocked(s)
+	b.mu.Unlock()
+	require.Equal(t, uint64(5), pressureAvailable)
 }
 
 func TestHealthyStatementEntryDoesNotAllocateRejectionDiagnostics(t *testing.T) {
@@ -120,12 +223,15 @@ func TestStatementQueueCancellationAndTimeoutRemoveWaiters(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		b, _ := statementTestBudget(0)
 		ctx, cancel := context.WithCancel(t.Context())
+		canceled := metric.MemoryStatementRejectedCounter.WithLabelValues("context-canceled")
+		before := testutil.ToFloat64(canceled)
 		done := make(chan error, 1)
 		go func() { _, _, err := b.EnterStatement(ctx, false); done <- err }()
 		synctest.Wait()
 		require.Equal(t, uint64(1), b.Snapshot().StatementQueued)
 		cancel()
 		require.ErrorIs(t, <-done, context.Canceled)
+		require.Equal(t, before+1, testutil.ToFloat64(canceled))
 		require.Zero(t, b.Snapshot().StatementQueued)
 		_, _, err := b.EnterStatement(t.Context(), false)
 		require.ErrorIs(t, err, ErrMemoryStatementTimeout)
@@ -151,6 +257,37 @@ func TestStatementQueueObservesExternalRecovery(t *testing.T) {
 		require.NotNil(t, lease)
 		lease.Close()
 		require.Zero(t, b.Snapshot().StatementQueued)
+	})
+}
+
+func TestStatementQueueObservesWorkingSetRecoveryWithoutRawChargeChange(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b, sample := statementTestBudget(128 << 20)
+		_, active, err := b.EnterStatement(t.Context(), false)
+		require.NoError(t, err)
+		defer active.Close()
+		done := make(chan *MemoryStatementLease, 1)
+		go func() {
+			_, lease, err := b.EnterStatement(t.Context(), false)
+			require.NoError(t, err)
+			done <- lease
+		}()
+		synctest.Wait()
+		before := b.Snapshot()
+		require.Equal(t, uint64(1), before.StatementQueued)
+		s := *sample.Load()
+		s.Reclaimable = 1 << 30
+		sample.Store(&s)
+		lease := <-done // The periodic check sees clean-cache recovery; no Close/Release wakeup.
+		require.NotNil(t, lease)
+		defer lease.Close()
+		after := b.Snapshot()
+		require.Equal(t, before.Domain.Used, after.Domain.Used)
+		require.Equal(t, s.Limit-s.Used-b.policy.RuntimeBytes, after.Available, "the raw admission gate remains binding")
+		require.Less(t, after.Available, after.Reserve, "raw headroom alone would still trigger the old pressure cap")
+		require.Equal(t, uint64(2), after.StatementActive)
+		require.Zero(t, after.StatementQueued)
+		require.Zero(t, after.StatementRejected)
 	})
 }
 
@@ -236,14 +373,83 @@ func TestStatementRejectionPreservesDecisionWithoutResampling(t *testing.T) {
 		require.Equal(t, "no-headroom", detail.OrdinaryReason)
 		require.Equal(t, control, detail.Control)
 		require.Zero(t, detail.ControlAvailable)
+		require.Zero(t, detail.RawAvailable)
+		require.Zero(t, detail.WorkingSetAvailable)
+		require.True(t, detail.UnderPressure)
 		s.Used = 0 // Later recovery must not change the failure's observation.
 		require.Contains(t, err.Error(), "available=0")
 		require.Contains(t, err.Error(), "soft_limit=")
+		require.Contains(t, err.Error(), "reclaimable=0 raw_available=0 ws_available=0 pressure=true")
 		require.NotZero(t, detail.Snapshot.Domain.Used)
 		require.Equal(t, 1, reads, "formatting and unwrapping must not read the domain")
 		require.Zero(t, b.controlActive)
 		require.Zero(t, b.controlReserved)
 	}
+}
+
+func TestStatementRejectionsCountTerminalDecisionsOnly(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b, _ := statementTestBudget(0)
+		counter := metric.MemoryStatementRejectedCounter.WithLabelValues("no-headroom")
+		before := testutil.ToFloat64(counter)
+		done := make(chan error, 1)
+		go func() { _, _, err := b.EnterStatement(t.Context(), false); done <- err }()
+		synctest.Wait()
+		time.Sleep(3 * memoryDomainRefreshInterval)
+		synctest.Wait()
+		require.Equal(t, before, testutil.ToFloat64(counter), "polling is not a terminal rejection")
+		require.ErrorIs(t, <-done, ErrMemoryStatementTimeout)
+		require.Equal(t, before+1, testutil.ToFloat64(counter))
+		require.Equal(t, uint64(1), b.Snapshot().StatementRejected)
+		require.Zero(t, b.Snapshot().StatementQueued)
+	})
+}
+
+func TestStatementRejectionMetricsDistinguishBlockingReasons(t *testing.T) {
+	for _, reason := range []string{"domain-unmeasured", "no-headroom", "pressure-concurrency", "queue-order"} {
+		t.Run(reason, func(t *testing.T) {
+			b, _ := statementTestBudget(1 << 20)
+			b.statementPolicy.WaitTimeout = 0
+			switch reason {
+			case "domain-unmeasured":
+				b.domainProvider = func() (MemoryDomainSnapshot, error) { return MemoryDomainSnapshot{}, errors.New("unreadable") }
+			case "no-headroom":
+				b, _ = statementTestBudget(0)
+				b.statementPolicy.WaitTimeout = 0
+			case "pressure-concurrency":
+				_, lease, err := b.EnterStatement(t.Context(), false)
+				require.NoError(t, err)
+				defer lease.Close()
+			case "queue-order":
+				b.statementQueue.PushBack(&memoryStatementWaiter{wake: make(chan struct{}, 1)})
+				b.statementPolicy.MaxQueued = 1
+			}
+			counter := metric.MemoryStatementRejectedCounter.WithLabelValues(reason)
+			before := testutil.ToFloat64(counter)
+			_, _, err := b.EnterStatement(t.Context(), false)
+			var detail *MemoryStatementAdmissionError
+			require.ErrorAs(t, err, &detail)
+			require.Equal(t, reason, detail.OrdinaryReason)
+			require.Equal(t, before+1, testutil.ToFloat64(counter))
+			require.Equal(t, uint64(1), b.statementRejected,
+				"even an unmeasured domain must count the terminal rejection")
+		})
+	}
+}
+
+func TestStatementRejectionMetricsCountContextDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		b, _ := statementTestBudget(0)
+		counter := metric.MemoryStatementRejectedCounter.WithLabelValues("deadline-exceeded")
+		before := testutil.ToFloat64(counter)
+		ctx, cancel := context.WithTimeout(t.Context(), memoryDomainRefreshInterval)
+		defer cancel()
+		_, _, err := b.EnterStatement(ctx, false)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+		require.Equal(t, before+1, testutil.ToFloat64(counter))
+		require.Equal(t, uint64(1), b.Snapshot().StatementRejected)
+		require.Zero(t, b.Snapshot().StatementQueued)
+	})
 }
 
 func TestStatementRejectionDistinguishesControlSlotExhaustion(t *testing.T) {

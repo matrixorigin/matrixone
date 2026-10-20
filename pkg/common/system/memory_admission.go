@@ -267,6 +267,24 @@ func (b *MemoryAdmissionBudget) availableWithReserveLocked(snapshot MemoryDomain
 	return available
 }
 
+// availableForPressureLocked measures working-set headroom for scheduling, not
+// permission to allocate. Comparing the raw-charge gate to the full non-Go
+// reserve would throttle healthy work merely because clean cache is charged.
+// Call availableLocked first to calibrate the shared reserve. Actual byte
+// reservations must still pass both physical gates in availableLocked.
+func (b *MemoryAdmissionBudget) availableForPressureLocked(snapshot MemoryDomainSnapshot) uint64 {
+	if !snapshot.Measured || snapshot.AdmissionLimit() == 0 {
+		return 0
+	}
+	used := snapshot.Used
+	if snapshot.Source == MemoryDomainSourceHost || snapshot.IsCgroup() {
+		used -= min(used, snapshot.Reclaimable)
+	}
+	reserveSample := snapshot
+	reserveSample.NonGo = b.nonGoHighWater
+	return b.headroomLocked(snapshot, used, b.policy.Reserve(reserveSample))
+}
+
 // headroomLocked deducts the same cumulative pending claims from one physical
 // view. Both the working-set and raw-charge checks run under the ledger mutex.
 func (b *MemoryAdmissionBudget) headroomLocked(snapshot MemoryDomainSnapshot, used, reserve uint64) uint64 {

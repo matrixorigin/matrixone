@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 )
 
 var (
@@ -35,6 +36,9 @@ type MemoryStatementAdmissionError struct {
 	Cause               error
 	Snapshot            MemoryAdmissionBudgetSnapshot
 	NonGoHighWater      uint64
+	RawAvailable        uint64
+	WorkingSetAvailable uint64
+	UnderPressure       bool
 	PressureConcurrency uint64
 	Control             bool
 	ControlAvailable    uint64
@@ -44,9 +48,10 @@ type MemoryStatementAdmissionError struct {
 
 func (e *MemoryStatementAdmissionError) Error() string {
 	s := e.Snapshot
-	return fmt.Sprintf("%v: source=%s measured=%t used=%d limit=%d soft_limit=%d capacity=%d non_go=%d non_go_high_water=%d reserve=%d reserved=%d available=%d active=%d concurrency=%d queued=%d ordinary_reason=%s control=%t control_active=%d control_reserved=%d control_available=%d control_reason=%s observed_at=%s",
+	return fmt.Sprintf("%v: source=%s measured=%t used=%d limit=%d soft_limit=%d capacity=%d non_go=%d non_go_high_water=%d reserve=%d reserved=%d available=%d reclaimable=%d raw_available=%d ws_available=%d pressure=%t active=%d concurrency=%d queued=%d ordinary_reason=%s control=%t control_active=%d control_reserved=%d control_available=%d control_reason=%s observed_at=%s",
 		e.Cause, s.Domain.Source, s.Measured, s.Domain.Used, s.Domain.Limit, s.Domain.SoftLimit, s.Domain.CapacityLimit(),
-		s.Domain.NonGo, e.NonGoHighWater, s.Reserve, s.Reserved, s.Available, s.StatementActive, e.PressureConcurrency,
+		s.Domain.NonGo, e.NonGoHighWater, s.Reserve, s.Reserved, s.Available,
+		s.Domain.Reclaimable, e.RawAvailable, e.WorkingSetAvailable, e.UnderPressure, s.StatementActive, e.PressureConcurrency,
 		s.StatementQueued, e.OrdinaryReason, e.Control, s.ControlActive, s.ControlReserved, e.ControlAvailable, e.ControlReason,
 		s.Domain.ObservedAt.Format(time.RFC3339Nano))
 }
@@ -58,9 +63,16 @@ func (e MemoryStatementAdmissionError) withCause(cause error) error {
 	return &e
 }
 
-func (b *MemoryAdmissionBudget) statementRejectionLocked(snapshot MemoryDomainSnapshot, available, concurrency uint64, atHead, control bool) MemoryStatementAdmissionError {
+func (b *MemoryAdmissionBudget) statementRejectionLocked(snapshot MemoryDomainSnapshot, available, pressureAvailable, concurrency uint64, atHead, control bool) MemoryStatementAdmissionError {
 	d := MemoryStatementAdmissionError{Snapshot: b.snapshotLocked(snapshot, available), NonGoHighWater: b.nonGoHighWater,
+		WorkingSetAvailable: pressureAvailable,
 		PressureConcurrency: concurrency, Control: control, OrdinaryReason: "pressure-concurrency", ControlReason: "not-requested"}
+	d.UnderPressure = pressureAvailable < d.Snapshot.Reserve
+	if snapshot.Measured && snapshot.AdmissionLimit() > 0 {
+		// This is the cache-blind gate's headroom, with its runtime floor and
+		// every outstanding claim deducted, not raw limit-minus-usage.
+		d.RawAvailable = b.headroomLocked(snapshot, snapshot.Used, min(d.Snapshot.Reserve, b.policy.RuntimeBytes))
+	}
 	switch {
 	case !snapshot.Measured || snapshot.AdmissionLimit() == 0:
 		d.OrdinaryReason = "domain-unmeasured"
@@ -87,9 +99,18 @@ func (b *MemoryAdmissionBudget) statementRejectionLocked(snapshot MemoryDomainSn
 	return d
 }
 
+// Count terminal rejections once, not every poll or wakeup while waiting. The
+// bounded reason labels retain the failed decision even when timeout or queue
+// overflow is the client-visible error. Context termination is explicit.
+func (b *MemoryAdmissionBudget) rejectStatementLocked(reason string) {
+	b.statementRejected++
+	metric.MemoryStatementRejectedCounter.WithLabelValues(reason).Inc()
+}
+
 // MemoryStatementAdmissionPolicy bounds waiting, not the bytes a statement may
 // allocate. Healthy work is unrestricted. At less than one calibrated reserve
-// of available memory, PressureConcurrency bounds new in-flight statements.
+// of working-set headroom, PressureConcurrency bounds new in-flight statements.
+// Raw charged headroom remains an independent requirement for entry/allocation.
 // Zero concurrency derives the limit from the current Go scheduler capacity.
 type MemoryStatementAdmissionPolicy struct {
 	PressureConcurrency uint64
@@ -165,24 +186,29 @@ func (b *MemoryAdmissionBudget) EnterStatement(ctx context.Context, control bool
 		b.mu.Lock()
 		if err := ctx.Err(); err != nil {
 			b.removeStatementWaiterLocked(element)
-			b.statementRejected++
+			reason := "context-canceled"
+			if err == context.DeadlineExceeded {
+				reason = "deadline-exceeded"
+			}
+			b.rejectStatementLocked(reason)
 			b.mu.Unlock()
 			return ctx, nil, err
 		}
 		if element != nil && !time.Now().Before(expires) {
 			b.removeStatementWaiterLocked(element)
-			b.statementRejected++
+			b.rejectStatementLocked(rejection.OrdinaryReason)
 			b.mu.Unlock()
 			return ctx, nil, rejection.withCause(ErrMemoryStatementTimeout)
 		}
 		available := b.availableLocked(snapshot)
+		pressureAvailable := b.availableForPressureLocked(snapshot)
 		concurrency := b.statementPolicy.PressureConcurrency
 		if concurrency == 0 {
 			concurrency = uint64(max(1, GoMaxProcs()))
 		}
 		reserveSample := snapshot
 		reserveSample.NonGo = b.nonGoHighWater
-		underPressure := available < b.policy.Reserve(reserveSample)
+		underPressure := pressureAvailable < b.policy.Reserve(reserveSample)
 		atHead := b.statementQueue.Len() == 0 || element != nil && b.statementQueue.Front() == element
 		if snapshot.Measured && available > 0 && atHead && (!underPressure || b.statementActive < concurrency) {
 			b.removeStatementWaiterLocked(element)
@@ -205,15 +231,15 @@ func (b *MemoryAdmissionBudget) EnterStatement(ctx context.Context, control bool
 				allowance.releaseSlotLocked()
 			}
 		}
-		rejection = b.statementRejectionLocked(snapshot, available, concurrency, atHead, control)
+		rejection = b.statementRejectionLocked(snapshot, available, pressureAvailable, concurrency, atHead, control)
 		if element == nil {
 			if uint64(b.statementQueue.Len()) >= b.statementPolicy.MaxQueued {
-				b.statementRejected++
+				b.rejectStatementLocked(rejection.OrdinaryReason)
 				b.mu.Unlock()
 				return ctx, nil, rejection.withCause(ErrMemoryStatementQueueFull)
 			}
 			if b.statementPolicy.WaitTimeout <= 0 {
-				b.statementRejected++
+				b.rejectStatementLocked(rejection.OrdinaryReason)
 				b.mu.Unlock()
 				return ctx, nil, rejection.withCause(ErrMemoryStatementTimeout)
 			}
@@ -232,7 +258,7 @@ func (b *MemoryAdmissionBudget) EnterStatement(ctx context.Context, control bool
 		case <-timer.C:
 			b.mu.Lock()
 			b.removeStatementWaiterLocked(element)
-			b.statementRejected++
+			b.rejectStatementLocked(rejection.OrdinaryReason)
 			b.mu.Unlock()
 			return ctx, nil, rejection.withCause(ErrMemoryStatementTimeout)
 		}
