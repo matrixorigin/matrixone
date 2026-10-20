@@ -434,9 +434,9 @@ func TestRegexpMatchTypeParser(t *testing.T) {
 		input string
 		want  string
 	}{
-		{input: "u", want: ""},
-		{input: "mu", want: "m"},
-		{input: "nu", want: "s"},
+		{input: "u", want: "u"},
+		{input: "mu", want: "mu"},
+		{input: "nu", want: "su"},
 		{input: "ic", want: ""},
 		{input: "ci", want: "i"},
 	} {
