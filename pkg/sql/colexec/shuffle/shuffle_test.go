@@ -1726,6 +1726,25 @@ func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
 		require.Equal(t, bucketOf(sels, 0), bucketOf(sels, 2), "equal uuid values must share a bucket")
 	})
 
+	t.Run("uuid with null", func(t *testing.T) {
+		var u1, u2 types.Uuid
+		binary.LittleEndian.PutUint64(u1[0:8], 1)
+		binary.LittleEndian.PutUint64(u1[8:16], 7)
+		binary.LittleEndian.PutUint64(u2[0:8], 2)
+		binary.LittleEndian.PutUint64(u2[8:16], 8)
+		vec := vector.NewVec(types.T_uuid.ToType())
+		require.NoError(t, vector.AppendFixed(vec, u1, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(vec, u1, true, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(vec, u2, false, proc.Mp()))
+		defer vec.Free(proc.Mp())
+
+		ap := newArg()
+		sels := getShuffledSelsByHashWithNull(ap, batchOf(vec))
+		require.Equal(t, 0, bucketOf(sels, 1), "null uuid keys route to bucket 0")
+		require.NotEqual(t, -1, bucketOf(sels, 0))
+		require.NotEqual(t, -1, bucketOf(sels, 2))
+	})
+
 	t.Run("uuid const", func(t *testing.T) {
 		var u types.Uuid
 		binary.LittleEndian.PutUint64(u[0:8], 3)
