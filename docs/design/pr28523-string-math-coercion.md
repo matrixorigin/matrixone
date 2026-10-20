@@ -15,8 +15,10 @@ covers conversion mode and warnings, binary-literal provenance, control versus
 value roles, plan specialization/reuse, and remote execution compatibility.
 
 The change does not make MySQL and MatrixOne native behavior identical, widen
-general string-to-`INT64` conversion, change explicit `CAST` semantics, add a
-new overload identity, or promise that older peers implement newer semantics.
+general string-to-`INT64` conversion, transfer a string-math source role across
+an explicit SQL `CAST`, add a new overload identity, or promise that older peers
+implement newer semantics. String-to-floating `CAST` still follows the selected
+strict/default or `MYSQL_NUMERIC_COMPATIBILITY` policy.
 
 ## Frozen semantic invariants
 
@@ -172,13 +174,14 @@ prepare role/source classification
   metadata. Stable storage/materialization drops execution-only provenance.
 - Existing warning-aware casts own conversion warnings. No new goroutine,
   background resource, external I/O, or retry loop is introduced.
-- Native SQL DOUBLE precision `2.5` retains the private ties-to-even conversion
-  to `2`; native DECIMAL precision `2.5` remains `3`. Binary or unproven DOUBLE
-  precision retains ordinary INT64 conversion to `3`. The source distinction
-  comes from original binding provenance, with binary protocol taking
-  precedence; it is not inferred from a numeric payload or binding type. Value
-  DECIMAL domains remain separate from precision controls, and explicit SQL
-  casts retain their own boundary. Failed specialization cannot replace the
+- The `CEIL`/`FLOOR` precision argument retains its source-aware conversion:
+  native SQL DOUBLE `2.5` uses the private ties-to-even conversion to `2`, while
+  native DECIMAL `2.5` remains `3`; binary or unproven DOUBLE precision uses
+  ordinary `INT64` conversion to `3`. The source distinction comes from
+  original binding provenance, with binary protocol taking precedence; it is
+  not inferred from a numeric payload or binding type. Value DECIMAL domains
+  remain separate from precision controls, and explicit SQL casts retain their
+  own boundary. Failed specialization cannot replace the
   cached valid plan.
 - String-to-number conversion is not monotonic under string ordering. String
   paths therefore do not advertise function-wide zonemap pruning; correctness
