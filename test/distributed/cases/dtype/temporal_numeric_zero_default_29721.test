@@ -1,0 +1,30 @@
+-- Numeric zero temporal defaults follow the session's zero-date policy.
+set @saved_sql_mode = @@sql_mode;
+drop table if exists temporal_numeric_zero_default_29721;
+set sql_mode = '';
+create table temporal_numeric_zero_default_29721 (
+    id int primary key,
+    d date default 0,
+    dt datetime default 0,
+    ts timestamp default 0
+);
+insert into temporal_numeric_zero_default_29721 (id) values (1);
+select d, dt, ts from temporal_numeric_zero_default_29721 where id = 1;
+show create table temporal_numeric_zero_default_29721;
+drop table temporal_numeric_zero_default_29721;
+
+create table temporal_numeric_zero_default_29721 (
+    id int primary key,
+    dt datetime default 0 on update current_timestamp,
+    ts timestamp default 0 on update current_timestamp
+);
+insert into temporal_numeric_zero_default_29721 (id) values (1);
+select dt, ts from temporal_numeric_zero_default_29721 where id = 1;
+drop table temporal_numeric_zero_default_29721;
+
+set sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE';
+create table temporal_numeric_zero_default_29721 (dt datetime default 0);
+create table temporal_numeric_zero_default_29721 (ts timestamp default 0);
+create table temporal_numeric_zero_default_29721 (d date default 0);
+set sql_mode = @saved_sql_mode;
+drop table if exists temporal_numeric_zero_default_29721;

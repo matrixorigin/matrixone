@@ -416,6 +416,7 @@ func getFunctionByName(
 	if err == nil {
 		r.applyDivPrecisionIncrement(ctx, args)
 		r.applyDecimalModMetadata(args)
+		r.applyDecimalIntegerDivMetadata(args)
 	}
 
 	return r, err
@@ -444,6 +445,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 		r.applyDivPrecisionIncrement(context.Background(), args)
 		r.applyDecimalModMetadata(args)
+		r.applyDecimalIntegerDivMetadata(args)
 		return r, true
 
 	case succeedWithCast:
@@ -454,6 +456,7 @@ func GetFunctionByNameWithoutError(name string, args []types.Type) (r FuncGetRes
 		r.cannotRunInParallel = f.Overloads[r.overloadId].cannotParallel
 		r.applyDivPrecisionIncrement(context.Background(), args)
 		r.applyDecimalModMetadata(args)
+		r.applyDecimalIntegerDivMetadata(args)
 		return r, true
 
 	default:
@@ -485,6 +488,13 @@ func GetFunctionByNameWithOverload(
 	if !f.bindsOverload(int(overloadID)) {
 		return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "function overload %s.%d is legacy execution only", name, overloadID)
 	}
+	if r.fid == INTEGER_DIV && overloadID == DecimalIntegerDivUnsignedOverload {
+		if _, scoped := DecimalIntegerDivReturnType(originalArgs); !scoped {
+			return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "invalid decimal integer division signature %v", originalArgs)
+		}
+		r.targetTypes = decimalIntegerDivOperandTypes(originalArgs)
+		r.needCast = !originalArgs[0].Eq(r.targetTypes[0]) || !originalArgs[1].Eq(r.targetTypes[1])
+	}
 	r.overloadId = overloadID
 	if r.needCast {
 		args = r.targetTypes
@@ -493,6 +503,7 @@ func GetFunctionByNameWithOverload(
 	r.cannotRunInParallel = f.Overloads[overloadID].cannotParallel
 	r.applyDivPrecisionIncrement(ctx, originalArgs)
 	r.applyDecimalModMetadata(originalArgs)
+	r.applyDecimalIntegerDivMetadata(originalArgs)
 	return r, nil
 }
 
@@ -596,11 +607,16 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		// above the representable calendar even when the input is NOT NULL.
 		return false
 	case DATE:
-		// Typed zero DATE/DATETIME values become NULL under NO_ZERO_DATE.
-		if oid == 0 || oid == 2 {
+		// Typed zero dates can become NULL under NO_ZERO_DATE, and string
+		// conversions synthesize NULL for malformed input.
+		if oid == 0 || oid == 2 || oid == 3 || oid == 4 {
 			return false
 		}
 	case CAST:
+		if (oid == 0 || oid == 1) && len(args) == 2 &&
+			types.T(args[0].Typ.Id).IsMySQLString() && types.T(args[1].Typ.Id) == types.T_datetime {
+			return false
+		}
 		// Explicit typed DATE casts share the DATE conversion policy. Legacy
 		// implicit and assignment casts keep their existing nullability.
 		if oid == 1 && len(args) == 2 &&
@@ -629,9 +645,9 @@ func DeduceNotNullable(overloadID int64, args []*plan.Expr) bool {
 		}
 		return true
 	case TIMESTAMP:
-		if len(args) == 2 {
-			return false
-		}
+		// Calendar parsing and zero-date handling can produce NULL even for
+		// non-NULL operands, in both unary and pair forms.
+		return false
 	case ADDTIME:
 		// These overloads can return NULL for an out-of-range TIME result
 		// even when every operand is NOT NULL. The intervening legacy
