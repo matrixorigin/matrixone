@@ -2024,3 +2024,29 @@ func TestCalendarNumericResultTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestHistoricalTemporalNullabilityBinding(t *testing.T) {
+	source := &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), NotNullable: true}}
+	target := &plan.Expr{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}
+	historical := WithLegacyTemporalNullability(context.Background())
+	for _, tc := range []struct {
+		fid  int32
+		oid  int32
+		args []*plan.Expr
+	}{
+		{DATE, 3, []*plan.Expr{source}}, {DATE, 4, []*plan.Expr{source}},
+		{CAST, 0, []*plan.Expr{source, target}}, {CAST, 1, []*plan.Expr{source, target}},
+	} {
+		id := EncodeOverloadID(tc.fid, tc.oid)
+		require.False(t, DeduceNotNullable(id, tc.args))
+		require.False(t, DeduceNotNullableForBinding(context.Background(), id, tc.args))
+		require.True(t, DeduceNotNullableForBinding(historical, id, tc.args))
+		source.Typ.NotNullable = false
+		require.False(t, DeduceNotNullableForBinding(historical, id, tc.args))
+		source.Typ.NotNullable = true
+	}
+	for _, ctx := range []context.Context{context.Background(), historical} {
+		require.True(t, DeduceNotNullableForBinding(ctx, EncodeOverloadID(CAST, 3), []*plan.Expr{source, target}))
+		require.False(t, DeduceNotNullableForBinding(ctx, EncodeOverloadID(DATE, 0), []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_datetime), NotNullable: true}}}))
+	}
+}

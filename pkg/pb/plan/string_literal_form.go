@@ -203,10 +203,10 @@ func RequiresMORPCVersion83BoundedConditionalStringDomains(owner any) (bool, err
 	return features.BoundedConditionalStringDomains, err
 }
 
-// RequiresMORPCVersion124JSONValueContract reports whether an owner contains
+// RequiresMORPCVersion125JSONValueContract reports whether an owner contains
 // the planner-only seven-argument JSON_VALUE overload. The overload carries
 // target and response semantics that older receivers cannot dispatch.
-func RequiresMORPCVersion124JSONValueContract(owner any) (bool, error) {
+func RequiresMORPCVersion125JSONValueContract(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.JSONValueContract, err
 }
@@ -370,8 +370,9 @@ const (
 // vectors to signed INT/ BIGINT or BIGINT UNSIGNED.
 // BoundedConditionalStringDomains requires MORPC v83 because the bounded
 // BINARY/VARBINARY COALESCE overload identities are new to the registry.
-// JSONValueContract provisionally requires MORPC v124; the independently gated
-// main capabilities retain their existing MORPC v111-v123 allocations.
+// JSONValueContract provisionally requires MORPC v125 on this isolated branch;
+// revalidate its allocation at the authoritative main merge. The independently
+// gated main capabilities retain their existing MORPC v111-v124 allocations.
 // DecimalLiteralSemantics requires MORPC v89 because plain DECIMAL256
 // literals are normalized and kept exact by the new planner, while older
 // binders can round or reject the same persisted SQL at the Decimal128
@@ -444,6 +445,7 @@ type RemoteExpressionFeatures struct {
 	TemporalResultContracts                 bool
 	InvalidTemporalResultContract           bool
 	NormalizedIntervalUnits                 bool
+	TimestampAddSecondIntervals             bool
 	LegacyIntervalUnits                     bool
 	WeekSessionDefault                      bool
 	MediumIntAssignmentBounds               bool
@@ -484,6 +486,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.TemporalResultContracts ||
 		features.InvalidTemporalResultContract ||
 		features.NormalizedIntervalUnits ||
+		features.TimestampAddSecondIntervals ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
 		features.MediumIntAssignmentBounds ||
@@ -1020,6 +1023,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				// imported here because the planner depends on this package.
 				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
 					features.LegacyIntervalUnits = true
+				}
+				if id == 601 { // TIMESTAMPADD_SECOND_INTERVAL
+					features.TimestampAddSecondIntervals = true
 				}
 				if id == 583 { // TO_INTERVAL_MICROSECOND
 					features.NormalizedIntervalUnits = true

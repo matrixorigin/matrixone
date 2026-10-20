@@ -120,8 +120,8 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.BoundedConditionalStringDomains && requiredVersion < defines.MORPCVersion83 {
 		requiredVersion = defines.MORPCVersion83
 	}
-	if features.JSONValueContract && requiredVersion < defines.MORPCVersion124 {
-		requiredVersion = defines.MORPCVersion124
+	if features.JSONValueContract && requiredVersion < defines.MORPCVersion125 {
+		requiredVersion = defines.MORPCVersion125
 	}
 	if (features.ExpressionResultMetadataContracts || features.TOBase64ResultContracts || features.IPFunctionResultContracts) &&
 		requiredVersion < defines.MORPCVersion86 {
@@ -158,6 +158,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.LeastGreatestCollationSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+	}
+	if features.TimestampAddSecondIntervals {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion124)
 	}
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
