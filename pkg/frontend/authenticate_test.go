@@ -13779,50 +13779,34 @@ func newMrsForGetAllAccounts(rows [][]interface{}) *MysqlResultSet {
 func newMrsForSqlForGetPubs(rows [][]interface{}) *MysqlResultSet {
 	mrs := &MysqlResultSet{}
 
-	col1 := &MysqlColumn{}
-	col1.SetName("pub_name")
-	col1.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col2 := &MysqlColumn{}
-	col2.SetName("database_name")
-	col2.SetColumnType(defines.MYSQL_TYPE_VARCHAR)
-	col3 := &MysqlColumn{}
-	col3.SetName("database_id")
-	col3.SetColumnType(defines.MYSQL_TYPE_LONGLONG)
-	col4 := &MysqlColumn{}
-	col4.SetName("table_list")
-	col4.SetColumnType(defines.MYSQL_TYPE_TEXT)
-	col5 := &MysqlColumn{}
-	col5.SetName("account_list")
-	col5.SetColumnType(defines.MYSQL_TYPE_TEXT)
-	col6 := &MysqlColumn{}
-	col6.SetName("created_time")
-	col6.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
-	col7 := &MysqlColumn{}
-	col7.SetName("update_time")
-	col7.SetColumnType(defines.MYSQL_TYPE_TIMESTAMP)
-	col8 := &MysqlColumn{}
-	col8.SetName("owner")
-	col8.SetColumnType(defines.MYSQL_TYPE_LONG)
-	col9 := &MysqlColumn{}
-	col9.SetName("creator")
-	col9.SetColumnType(defines.MYSQL_TYPE_LONG)
-	col10 := &MysqlColumn{}
-	col10.SetName("account_list")
-	col10.SetColumnType(defines.MYSQL_TYPE_TEXT)
-
-	mrs.AddColumn(col1)
-	mrs.AddColumn(col2)
-	mrs.AddColumn(col3)
-	mrs.AddColumn(col4)
-	mrs.AddColumn(col5)
-	mrs.AddColumn(col6)
-	mrs.AddColumn(col7)
-	mrs.AddColumn(col8)
-	mrs.AddColumn(col9)
-	mrs.AddColumn(col10)
+	colNames := []struct {
+		name string
+		typ  defines.MysqlType
+	}{
+		{"account_id", defines.MYSQL_TYPE_LONGLONG},
+		{"account_name", defines.MYSQL_TYPE_VARCHAR},
+		{"pub_name", defines.MYSQL_TYPE_VARCHAR},
+		{"database_name", defines.MYSQL_TYPE_VARCHAR},
+		{"database_id", defines.MYSQL_TYPE_LONGLONG},
+		{"table_list", defines.MYSQL_TYPE_TEXT},
+		{"account_list", defines.MYSQL_TYPE_TEXT},
+		{"created_time", defines.MYSQL_TYPE_TIMESTAMP},
+		{"update_time", defines.MYSQL_TYPE_TIMESTAMP},
+		{"owner", defines.MYSQL_TYPE_LONG},
+		{"creator", defines.MYSQL_TYPE_LONG},
+		{"comment", defines.MYSQL_TYPE_TEXT},
+	}
+	for _, meta := range colNames {
+		col := &MysqlColumn{}
+		col.SetName(meta.name)
+		col.SetColumnType(meta.typ)
+		mrs.AddColumn(col)
+	}
 
 	for _, row := range rows {
-		mrs.AddRow(row)
+		r := make([]interface{}, 0, len(colNames))
+		r = append(r, row...)
+		mrs.AddRow(r)
 	}
 
 	return mrs
