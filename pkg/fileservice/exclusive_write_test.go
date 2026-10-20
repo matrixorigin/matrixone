@@ -218,16 +218,32 @@ func TestCheckExclusiveWriteAWSEndpoints(t *testing.T) {
 	}{
 		{endpoint: "", allowed: true}, // AWS SDK default endpoint.
 		{endpoint: "s3.us-east-1.amazonaws.com", allowed: true},
+		{endpoint: "https://s3.amazonaws.com", allowed: true},
+		{endpoint: "https://bucket.s3-us-west-2.amazonaws.com", allowed: true},
+		{endpoint: "https://bucket.with.dots.s3.dualstack.eu-west-1.amazonaws.com", allowed: true},
+		{endpoint: "https://s3-fips.us-gov-west-1.amazonaws.com", allowed: true},
+		{endpoint: "https://s3-fips.dualstack.us-east-1.amazonaws.com", allowed: true},
 		{endpoint: "https://bucket.s3.cn-north-1.amazonaws.com.cn", allowed: true},
 		{endpoint: "https://s3.example.com", allowed: false},
 		{endpoint: "http://localhost:9000", allowed: false},
 		{endpoint: "https://s3.amazonaws.com.example.com", allowed: false},
+		{endpoint: "https://gateway.execute-api.us-east-1.amazonaws.com", allowed: false},
+		{endpoint: "https://ec2-192-0-2-1.compute-1.amazonaws.com", allowed: false},
+		{endpoint: "https://gateway.execute-api.cn-north-1.amazonaws.com.cn", allowed: false},
+		{endpoint: "https://bucket.s3-website.us-east-1.amazonaws.com", allowed: false},
+		{endpoint: "https://s3.us-east-1.compute.amazonaws.com", allowed: false},
+		{endpoint: "https://nots3.us-east-1.amazonaws.com", allowed: false},
+		{endpoint: "https://s3-control.us-east-1.amazonaws.com", allowed: false},
 	} {
-		err := CheckExclusiveWrite(&S3FS{rawStorage: &AwsSDKv2{endpoint: tc.endpoint}})
+		fs := &S3FS{rawStorage: &AwsSDKv2{endpoint: tc.endpoint}}
+		err := CheckExclusiveWrite(fs)
 		if tc.allowed {
 			require.NoError(t, err, tc.endpoint)
 		} else {
 			require.Error(t, err, tc.endpoint)
+			// No client is installed: rejected endpoints must fail before any PUT.
+			require.True(t, moerr.IsMoErrCode(WriteExclusive(context.Background(), fs,
+				publicationVector("manifest.json", "A")), moerr.ErrNotSupported), tc.endpoint)
 		}
 	}
 }

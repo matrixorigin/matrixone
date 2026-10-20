@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -54,9 +55,14 @@ func CheckExclusiveWrite(fs FileService) error {
 	return moerr.NewNotSupportedNoCtxf("exclusive publication for %T", fs)
 }
 
-// awsS3ConditionalPutEndpoint limits the AWS SDK path to Amazon-owned
-// endpoints. The SDK also accepts arbitrary S3-compatible endpoints, whose
-// handling of If-None-Match is not guaranteed by the S3 API contract.
+// Match S3 API endpoints, optionally prefixed by a virtual-hosted bucket.
+// Other AWS services (including EC2 and API Gateway) do not inherit S3's
+// conditional-PUT guarantee merely by sharing the amazonaws.com suffix.
+// Unknown endpoint forms fail closed.
+var awsS3APIHost = regexp.MustCompile(`(^|\.)s3(?:\.amazonaws\.com|(?:[.-]|-fips\.)(?:dualstack\.)?[a-z]{2}(?:-gov)?-[a-z]+-[0-9]+\.amazonaws\.com(?:\.cn)?)$`)
+
+// awsS3ConditionalPutEndpoint limits the AWS SDK path to S3 service endpoints.
+// See https://docs.aws.amazon.com/general/latest/gr/s3.html.
 func awsS3ConditionalPutEndpoint(endpoint string) bool {
 	if endpoint == "" {
 		return true // AWS SDK's default S3 endpoint.
@@ -69,8 +75,7 @@ func awsS3ConditionalPutEndpoint(endpoint string) bool {
 		return false
 	}
 	host := strings.ToLower(u.Hostname())
-	return strings.HasSuffix(host, ".amazonaws.com") ||
-		strings.HasSuffix(host, ".amazonaws.com.cn")
+	return awsS3APIHost.MatchString(host)
 }
 
 // WriteExclusive creates a bounded, known-size file without replacing a prior
