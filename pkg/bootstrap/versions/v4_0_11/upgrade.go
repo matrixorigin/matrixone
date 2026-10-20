@@ -24,12 +24,15 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 )
 
+// Keep the offset persisted when 4.0.11 was the final handler. The prerequisite
+// rechecks repair missing anchors for its existing DDL; counting them would
+// prevent resuming an interrupted offset-2 route.
 var Handler = &versionHandle{metadata: versions.Version{
 	Version:                 "4.0.11",
 	MinUpgradeVersion:       "4.0.10",
 	UpgradeCluster:          versions.Yes,
 	UpgradeTenant:           versions.No,
-	VersionOffset:           uint32(len(clusterUpgEntries)),
+	VersionOffset:           2,
 	RequiredProtocolVersion: defines.MORPCVersion106,
 }}
 
