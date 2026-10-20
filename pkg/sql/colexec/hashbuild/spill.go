@@ -28,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -186,7 +187,7 @@ func (ctr *container) writeOpenSpillPayload(
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
-	written, err := file.Write(payload)
+	written, err := spillio.WritePreextended(file, payload)
 	if err != nil {
 		return err
 	}

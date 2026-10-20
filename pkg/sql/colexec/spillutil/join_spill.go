@@ -668,7 +668,7 @@ func writeBucketPayload(proc *process.Process, payload []byte, rows int64, w *Bu
 	if err := checkSpillCanceled(proc); err != nil {
 		return err
 	}
-	written, err := fd.Write(payload)
+	written, err := spillio.WritePreextended(fd, payload)
 	if err != nil {
 		return err
 	}
