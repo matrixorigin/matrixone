@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 17
+- Revision: 18
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 18 integration baseline: official main `983ab88913462ebba9441d9626cad64e206f0884`
 - Revision 17 integration baseline: official main `7c146f4adbf068dd0c06b377157cfb7d7698b1eb`
 - Revision 16 integration baseline: official main `d82e828b0a4df9ce635fe573c1e90c5cde978bf9`
 - Revision 15 integration baseline: official main `873282742714436bff407dfcdbbe879147162bd3`
@@ -65,6 +66,17 @@ preserves upstream nonblocking row-lock admission at 123 and advances only
 set-key/scalar-marker admission to 124. The FUNCTION_SCAN outer-output correction
 from `24c7a0246731271b7dee6e567dbadab4e6fadfb7` remains included; function outputs
 and aliases stop at their own schema, without exposing argument children.
+
+Revision 18 repairs scalar UNION fallback after CROSS APPLY/OUTER APPLY of
+UNNEST or JSON_TABLE. The scalar-set collector exposes left and function-result
+columns, preserving OUTER APPLY right-side null extension without traversing
+function argument children. It numbers occurrences after APPLY expansion, so
+identical expanded rows remain separate scalar invocations. Admission requires
+two children and a right FUNCTION_SCAN; the older correlated-aggregate collector
+and unsupported source shapes retain their existing rejection. This is an
+outer-output compatibility correction, with no change to the accepted execution,
+resource or wire contracts. The integration preserves upstream result-column
+provenance field 23 and keeps set-key/scalar-marker version 124 above official 123.
 
 ## Membership contract
 
@@ -1098,6 +1110,16 @@ this rebase asserts no fresh capacity or function-source measurements. Run
 on either original head or official main. Complete unrelated-flake attribution is
 not established, so no timeout workaround or old-run rerun is claimed. New CI on
 the delivered rebase remains pending.
+
+
+The [revision-18 source-bound receipt](validation/20261020_scalar_apply_outer_rebase.json)
+records the APPLY counterexample and controls, public UNNEST/JSON_TABLE coverage,
+right-output and composed scalar correlation, aliases, identical occurrences,
+empty input, null extension, real NULL, cardinality and prepared reuse. Owning
+planner/compile/protobuf suites, metadata consumers and generated bindings are
+validated on the new integration baseline. Historical capacity, race and native
+123 evidence retain their recorded source and workload limits; no APPLY capacity
+qualification or new live mixed-binary execution is claimed.
 
 ## Alternatives
 
