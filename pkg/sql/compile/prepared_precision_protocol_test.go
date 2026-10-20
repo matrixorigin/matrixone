@@ -51,7 +51,7 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 
 	// Keep the upstream prepared-precision v95 floor independently covered by
 	// the common destination validator. The real CEIL expression below also
-	// requires v123 because its numeric precision semantics changed there.
+	// requires v124 because its numeric precision semantics changed there.
 	precisionOnlyFeatures := planpb.RemoteExpressionFeatures{PreparedPrecisionScalar: true}
 	require.Equal(t, defines.MORPCVersion95, remoteExpressionProtocolVersion(precisionOnlyFeatures))
 
@@ -105,44 +105,45 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	place(defines.MORPCVersion95)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 123",
-		"the real CEIL precision contract has an independent v123 floor")
+	require.ErrorContains(t, err, "version 124",
+		"the real CEIL precision contract has an independent v124 floor")
 	place(int64(101))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 123")
+	require.ErrorContains(t, err, "version 124")
 	place(int64(102))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 123")
+	require.ErrorContains(t, err, "version 124")
 	place(defines.MORPCVersion109)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 123")
+	require.ErrorContains(t, err, "version 124")
 	place(defines.MORPCVersion110)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 123")
+	require.ErrorContains(t, err, "version 124")
 	place(defines.MORPCVersion111)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 123")
+	require.ErrorContains(t, err, "version 124")
 	place(defines.MORPCVersion112)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 123")
+	require.ErrorContains(t, err, "version 124")
 	for _, version := range []int64{
 		defines.MORPCVersion113, defines.MORPCVersion114,
 		defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117,
 		defines.MORPCVersion118, defines.MORPCVersion119,
 		defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122,
+		defines.MORPCVersion123,
 	} {
 		place(version)
 		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 		_, err = encodeRemoteScope(scope, c.proc)
-		require.ErrorContains(t, err, "version 123")
+		require.ErrorContains(t, err, "version 124")
 	}
-	place(defines.MORPCVersion123)
+	place(defines.MORPCVersion124)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
@@ -166,13 +167,14 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 		defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117,
 		defines.MORPCVersion118, defines.MORPCVersion119,
 		defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122,
+		defines.MORPCVersion123,
 	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 123")
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 124")
 		_, err = decodeScope(data, c.proc, true, nil)
-		require.ErrorContains(t, err, "version 123")
+		require.ErrorContains(t, err, "version 124")
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion124)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)

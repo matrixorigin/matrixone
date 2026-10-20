@@ -404,17 +404,17 @@ const (
 // understand the prefix-cast
 // representation but default to permissive conversion when the new SessionInfo
 // marker is absent.
-// NumericBinaryLiteralProvenance requires MORPC v123 in every mode when a
+// NumericBinaryLiteralProvenance requires MORPC v124 in every mode when a
 // CASE/IF/COALESCE result can carry a selected non-NULL HEX/BIT marker. The
 // marker can affect a downstream numeric cast even when every non-NULL branch
-// is marked (or the other branch is NULL), and pre-v123 flow-control executors
+// is marked (or the other branch is NULL), and pre-v124 flow-control executors
 // do not propagate it. This is independent of string-prefix conversion mode.
-// HistoricalStringMathCompatibility requires MORPC v123 in every mode: old
+// HistoricalStringMathCompatibility requires MORPC v124 in every mode: old
 // CEIL/FLOOR
 // VARCHAR overloads used ParseFloat, not the current mode-aware parser.
-// Ordinary/comparison/set-operation FLOAT -> INT64 casts require MORPC v123's
+// Ordinary/comparison/set-operation FLOAT -> INT64 casts require MORPC v124's
 // exact bounds in every mode, independently of string-prefix conversion.
-// ScalarMathPrecisionCompatibility requires MORPC v123 to preserve row-level
+// ScalarMathPrecisionCompatibility requires MORPC v124 to preserve row-level
 // warnings while presenting a constant precision argument to CEIL/FLOOR kernels.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool
@@ -977,7 +977,7 @@ func classifyNumericBinaryLiteralValueUncached(
 
 // isFlowControlNumericBinaryLiteralSource identifies a CASE/IF/COALESCE result
 // that can carry a selected non-NULL HEX/BIT marker. Uniformly marked values
-// still need the v123 contract: older flow-control executors dropped the scalar
+// still need the v124 contract: older flow-control executors dropped the scalar
 // marker, so a downstream numeric cast could produce a different result.
 // NULL-only alternatives do not create a marker, but a marked value alongside
 // NULL still does.

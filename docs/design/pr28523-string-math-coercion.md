@@ -81,7 +81,7 @@ string overloads use the same effective-mode decision.
   the transport owner and remains trailer v3, independently numbered from
   MORPC; stable vector/batch bytes and the ordinary runtime-domain sidecar
   remain unchanged.
-- Provenance-sensitive flow-control output is fenced at MORPC v123 in every SQL
+- Provenance-sensitive flow-control output is fenced at MORPC v124 in every SQL
   mode when it can select a non-NULL HEX/BIT value. This includes mixed rows,
   uniformly marked results, and marked-plus-NULL results: older flow-control
   executors can drop the marker even when no mixed-row bitmap is needed.
@@ -103,11 +103,11 @@ collation-aware LEAST/GREATEST, transactional database defaults/table charset,
 and coordinator-owned parameterized subquery programs retain their independent
 v117, v118, and v119 floors. This change's strict/default string-numeric
 contract, changed numeric bounds/precision, and flow-control provenance use
-MORPC v123; explicit MySQL/native casts that retain existing semantics keep
+MORPC v124; explicit MySQL/native casts that retain existing semantics keep
 their existing gates. The separate upstream Unicode-collation metadata
 contract uses v109. For expressions whose features and mode require the new
 numeric contract, placement falls back to local execution when a worker is
-below v123 or has unknown capability; sender preflight rejects a destination
+below v124 or has unknown capability; sender preflight rejects a destination
 downgrade; and receivers reject the changed feature when its protocol or
 session marker is legacy. Unchanged expressions retain their existing
 compatibility gates.
@@ -220,7 +220,7 @@ function-wide zonemap optimization is included.
 | Roles and boundaries | Value/control argument tests; precision remains `INT64`; nested ownership; explicit CAST stops provenance; unknown/non-owning function controls |
 | HEX/BIT row provenance | CASE/IF/COALESCE tests for mixed, uniform, marked-plus-NULL, text, ordinary BINARY, explicit casts, and nested/implicit casts; selected-row/vector/batch lifecycle tests |
 | Wire lifecycle | Batch v1/v2/v3 round trips, malformed/truncated rejection, legacy sender, stale/reused vector reset, and remote trailer tests |
-| Mixed-version admission | For features/modes requiring the new numeric contract: v109-v122 local fallback plus destination/receiver rejection, and v123 placement/send/receive acceptance; explicit MySQL/native paths that preserve prior semantics retain their own floors. Independent upstream v101 JSON/YearBit, v109 Unicode collation, v112 date results, v117 LEAST/GREATEST, v118 database defaults/table charset, v119 dependent-program controls, v120 current-session KILL authorization/proxy cleanup, v121 exact unsigned DECIMAL DIV, and v122 temporal result contracts; legacy-session rejection |
+| Mixed-version admission | For features/modes requiring the new numeric contract: v109-v123 local fallback plus destination/receiver rejection, and v124 placement/send/receive acceptance; explicit MySQL/native paths that preserve prior semantics retain their own floors. Independent upstream v101 JSON/YearBit, v109 Unicode collation, v112 date results, v117 LEAST/GREATEST, v118 database defaults/table charset, v119 dependent-program controls, v120 current-session KILL authorization/proxy cleanup, v121 exact unsigned DECIMAL DIV, v122 temporal result contracts, and v123 capability-gated nonblocking row-lock admission; legacy-session rejection |
 | SessionInfo wire allocation | Unknown varints at fields 23/26 are not interpreted as numeric mode/marker; field 22 remains `lc_time_names`; fields 24/25 round trip the explicit mode and sender marker; forwarding preserves a zero legacy marker |
 | Prepared-plan reuse | Type changes, error-to-success, NULL-to-success, and restoration of the cached base plan |
 | Numeric correctness and pruning | Integer/DECIMAL/FLOAT source controls; zonemap endpoint traps must not prune matching rows |
