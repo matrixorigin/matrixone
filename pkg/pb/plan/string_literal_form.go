@@ -431,6 +431,7 @@ type RemoteExpressionFeatures struct {
 	TemporalResultContracts                 bool
 	InvalidTemporalResultContract           bool
 	NormalizedIntervalUnits                 bool
+	TimestampAddSecondIntervals             bool
 	LegacyIntervalUnits                     bool
 	WeekSessionDefault                      bool
 	MediumIntAssignmentBounds               bool
@@ -470,6 +471,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.TemporalResultContracts ||
 		features.InvalidTemporalResultContract ||
 		features.NormalizedIntervalUnits ||
+		features.TimestampAddSecondIntervals ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
 		features.MediumIntAssignmentBounds ||
@@ -1006,6 +1008,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				// imported here because the planner depends on this package.
 				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
 					features.LegacyIntervalUnits = true
+				}
+				if id == 601 { // TIMESTAMPADD_SECOND_INTERVAL
+					features.TimestampAddSecondIntervals = true
 				}
 				if id == 583 { // TO_INTERVAL_MICROSECOND
 					features.NormalizedIntervalUnits = true
