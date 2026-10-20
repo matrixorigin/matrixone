@@ -3531,6 +3531,27 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 				add([2]int32{node.BindingTags[1], int32(i)}, expr.Typ)
 			}
 			return true
+		case plan.Node_APPLY:
+			if outerTag >= 0 || len(node.Children) != 2 ||
+				(node.ApplyType != plan.Node_CROSSAPPLY && node.ApplyType != plan.Node_OUTERAPPLY) {
+				return false
+			}
+			rightID := node.Children[1]
+			if rightID < 0 || int(rightID) >= len(builder.qry.Nodes) ||
+				builder.qry.Nodes[rightID].NodeType != plan.Node_FUNCTION_SCAN || !visit(node.Children[0]) {
+				return false
+			}
+			// APPLY forwards both inputs, but the function's argument children
+			// are not outputs. OUTERAPPLY can synthesize a NULL right row.
+			rightStart := len(outputs)
+			if !visit(rightID) {
+				return false
+			}
+			for i := rightStart; i < len(outputs); i++ {
+				outputs[i].typ = outputTypeAfterNullExtension(node, 1, outputs[i].typ)
+			}
+			return true
+
 		case plan.Node_JOIN:
 			if len(node.Children) != 2 || !visit(node.Children[0]) {
 				return false

@@ -451,17 +451,20 @@ func TestScalarSetReaggregationAdmission(t *testing.T) {
 
 func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
 	for _, tc := range []struct{ name, source, key string }{
-		{"table", "NATION", "N_NATIONKEY"},
-		{"function", "generate_series(1,3)", "result"},
-		{"function-alias", "(select result k from generate_series(1,3) g)", "k"},
+		{"table", "NATION o", "N_NATIONKEY"},
+		{"function", "generate_series(1,3) o", "result"},
+		{"function-alias", "(select result k from generate_series(1,3) g) o", "k"},
+		{"apply-unnest", "NATION o cross apply unnest(o.N_NAME) u", "N_NATIONKEY"},
+		{"apply-json-table", "NATION o, json_table(o.N_NAME, '$[*]' columns(v int path '$')) u", "N_NATIONKEY"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			arm := "select cast(i.N_NATIONKEY as double) from NATION i where i.N_NATIONKEY>o." + tc.key
-			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select o."+tc.key+",("+arm+" union "+arm+") from "+tc.source+" o")
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "select o."+tc.key+",("+arm+" union "+arm+") from "+tc.source)
 			require.NoError(t, err)
 			single, memberGroups, outerGroups := false, false, false
 			marked := 0
-			identities := 0
+			identities, applySources := 0, 0
+			identityInput := int32(-1)
 			seen := make(map[int32]bool)
 			var visit func(int32)
 			visit = func(id int32) {
@@ -470,6 +473,9 @@ func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
 				}
 				seen[id] = true
 				node := p.GetQuery().Nodes[id]
+				if node.NodeType == planpb.Node_APPLY {
+					applySources++
+				}
 				if node.ScalarSetReaggregation {
 					marked++
 				}
@@ -480,6 +486,7 @@ func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
 							require.Empty(t, window.PartitionBy)
 							require.Empty(t, window.OrderBy)
 							identities++
+							identityInput = node.Children[0]
 						}
 					}
 				}
@@ -504,6 +511,19 @@ func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
 			require.True(t, outerGroups, "final scalar aggregation must partition by outer identity")
 			require.Equal(t, 1, identities, "outer identity must survive optimization as a global WINDOW")
 			require.Equal(t, 2, marked, "identity and candidate join retain bounded local fallback markers")
+			if strings.HasPrefix(tc.name, "apply-") {
+				require.Equal(t, 1, applySources, "the APPLY producer must not be duplicated")
+				belowIdentity := []int32{identityInput}
+				foundApply := false
+				for len(belowIdentity) > 0 {
+					id := belowIdentity[len(belowIdentity)-1]
+					belowIdentity = belowIdentity[:len(belowIdentity)-1]
+					node := p.GetQuery().Nodes[id]
+					foundApply = foundApply || node.NodeType == planpb.Node_APPLY
+					belowIdentity = append(belowIdentity, node.Children...)
+				}
+				require.True(t, foundApply, "occurrence identity is assigned after APPLY expands rows")
+			}
 			floor, err := RequiredPersistedExpressionProtocolVersion(p.GetQuery())
 			require.NoError(t, err)
 			require.Equal(t, defines.MORPCVersion124, floor)
@@ -701,4 +721,38 @@ func TestScalarFunctionOuterOutputBoundary(t *testing.T) {
 	_, ok = builder.collectScalarOuterOutputs(1, -1, 0, ctx)
 	require.False(t, ok, "missing function output schema must fail closed")
 	require.Empty(t, builder.scalarProjectionAliases(1, GetColExpr(floating, 20, 1)))
+}
+
+func TestScalarApplyOuterOutputBoundary(t *testing.T) {
+	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
+	typ := types.T_int64.ToType().PlanType()
+	typ.NotNullable = true
+	builder.qry.Nodes = []*planpb.Node{
+		{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: typ}}}},
+		{NodeType: planpb.Node_FUNCTION_SCAN, BindingTags: []int32{20}, Children: []int32{2}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: typ}}}},
+		{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{99}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: typ}}}},
+		{NodeType: planpb.Node_APPLY, ApplyType: planpb.Node_CROSSAPPLY, Children: []int32{0, 1}},
+	}
+	ctx := &BindContext{}
+	for _, mode := range []planpb.Node_ApplyType{planpb.Node_CROSSAPPLY, planpb.Node_OUTERAPPLY} {
+		builder.qry.Nodes[3].ApplyType = mode
+		outputs, ok := builder.collectScalarOuterOutputs(3, -1, 0, ctx)
+		require.True(t, ok)
+		rightType := typ
+		rightType.NotNullable = mode == planpb.Node_CROSSAPPLY
+		require.Equal(t, []scalarOuterOutput{{ref: [2]int32{10, 0}, typ: typ}, {ref: [2]int32{20, 0}, typ: rightType}}, outputs)
+	}
+	_, ok := builder.collectScalarOuterOutputs(3, 10, 1, ctx)
+	require.False(t, ok, "the older scalar aggregate admission must not expand")
+	builder.qry.Nodes[3].ApplyType = planpb.Node_ApplyType(99)
+	_, ok = builder.collectScalarOuterOutputs(3, -1, 0, ctx)
+	require.False(t, ok)
+	builder.qry.Nodes[3].ApplyType = planpb.Node_CROSSAPPLY
+	builder.qry.Nodes[3].Children = []int32{0}
+	_, ok = builder.collectScalarOuterOutputs(3, -1, 0, ctx)
+	require.False(t, ok)
+	builder.qry.Nodes[3].Children = []int32{0, 1}
+	builder.qry.Nodes[1].NodeType = planpb.Node_INDEX_SEARCH_SCAN
+	_, ok = builder.collectScalarOuterOutputs(3, -1, 0, ctx)
+	require.False(t, ok, "unqualified right-side shapes stay rejected")
 }
