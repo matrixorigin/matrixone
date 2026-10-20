@@ -730,27 +730,38 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 					return roleAuthorize(ctx, database, name, actual)
 				}
 				for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
-					t.Run(mode, func(t *testing.T) {
-						const query = "select * from subscribed.published"
-						statements, err := mysql.Parse(tenantCtx, query, 1)
-						require.NoError(t, err)
-						defer statements[0].Free()
-						var input tree.Statement = statements[0]
-						if mode == "text" {
-							input = &tree.PrepareString{Name: "historical_schema", Sql: query}
-						} else if mode == "typed" {
-							input = &tree.PrepareStmt{Name: "historical_schema", Stmt: statements[0]}
+					for _, aggregate := range []bool{false, true} {
+						name := mode
+						if aggregate {
+							name += "_cte_sum"
 						}
-						p, err := compiler.BuildPlanWithViewSchema(tenantCtx, input, mode == "direct", authorize)
-						require.NoError(t, err)
-						if mode == "text" || mode == "typed" {
-							p = p.GetDcl().GetPrepare().Plan
-						}
-						columns := plan.GetResultColumnsFromPlan(p)
-						require.Len(t, columns, 1, "historical View has one column; current View has two")
-						require.Equal(t, "id", columns[0].Name)
-						require.EqualValues(t, types.T_int32, columns[0].Typ.Id)
-					})
+						t.Run(name, func(t *testing.T) {
+							query := "select * from subscribed.published"
+							if aggregate {
+								query = "with q as (select id from subscribed.published) select sum(id) from q"
+							}
+							statements, err := mysql.Parse(tenantCtx, query, 1)
+							require.NoError(t, err)
+							defer statements[0].Free()
+							var input tree.Statement = statements[0]
+							if mode == "text" {
+								input = &tree.PrepareString{Name: "historical_schema", Sql: query}
+							} else if mode == "typed" {
+								input = &tree.PrepareStmt{Name: "historical_schema", Stmt: statements[0]}
+							}
+							p, err := compiler.BuildPlanWithViewSchema(tenantCtx, input, mode == "direct", authorize)
+							require.NoError(t, err)
+							if mode == "text" || mode == "typed" {
+								p = p.GetDcl().GetPrepare().Plan
+							}
+							columns := plan.GetResultColumnsFromPlan(p)
+							require.Len(t, columns, 1)
+							if !aggregate {
+								require.Equal(t, "id", columns[0].Name)
+								require.EqualValues(t, types.T_int32, columns[0].Typ.Id)
+							}
+						})
+					}
 				}
 			})
 		})

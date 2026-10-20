@@ -7534,7 +7534,21 @@ func seedNumericCteProjectionTypes(builder *QueryBuilder, ctx *BindContext) {
 		if source == nil {
 			continue
 		}
+		// Match bindNoRecursiveCte: names belong to the declaration scope,
+		// while its explicit snapshot overrides the current use-site snapshot.
+		scope, snapshot := ctx, ctx.snapshot
+		if ref := ctx.findCTE(name); ref != nil {
+			if ref.declarationCtx != nil {
+				scope = ref.declarationCtx
+			}
+			if ref.snapshot != nil {
+				snapshot = ref.snapshot
+			}
+		}
 		subCtx := &BindContext{
+			defaultDatabase:                 scope.defaultDatabase,
+			lower:                           scope.lower,
+			snapshot:                        snapshot,
 			numericProjectionTypes:          targets,
 			numericTableProjectionTypes:     ctx.numericTableProjectionTypes,
 			numericTableProjectionAmbiguous: ctx.numericTableProjectionAmbiguous,

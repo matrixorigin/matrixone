@@ -489,15 +489,25 @@ func TestViewSchemaPlanningAuthorizesRootsBeforeLookup(t *testing.T) {
 func TestViewSchemaPlanningAuthorizationSnapshot(t *testing.T) {
 	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
 		for _, historicalAllowed := range []bool{true, false} {
-			for _, shape := range []struct{ name, query string }{
-				{"view", "select id from tpch.root_v"},
-				{"cte", "with q as (select id from tpch.root_v) select id from q"},
-				{"source hint", "select id from tpch.root_v {snapshot='daily'}"},
-				{"cte hint", "with q as (select id from tpch.root_v) select id from q {snapshot='daily'}"},
+			for _, shape := range []struct {
+				name, query string
+				aggregate   bool
+			}{
+				{"view", "select id from tpch.root_v", false},
+				{"cte", "with q as (select id from tpch.root_v) select id from q", false},
+				{"source hint", "select id from tpch.root_v {snapshot='daily'}", false},
+				{"cte hint", "with q as (select id from tpch.root_v) select id from q {snapshot='daily'}", false},
+				{"cte sum", "with q as (select id from tpch.root_v) select sum(id) from q", true},
+				{"cte avg", "with q as (select id from tpch.root_v) select avg(id) from q", true},
+				{"cte chain sum", "with q as (select id from root_v), r as (select id from q) select sum(id) from r", true},
 			} {
 				t.Run(mode+"/"+strconv.FormatBool(historicalAllowed)+"/"+shape.name, func(t *testing.T) {
 					f := newViewSchemaTestFixture(t)
-					f.addView(t, "root_v", "select n_name as id from nation")
+					if shape.aggregate {
+						f.addView(t, "root_v", "select n_nationkey as id from nation")
+					} else {
+						f.addView(t, "root_v", "select n_name as id from nation")
+					}
 					snapshot := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1234}, Tenant: &SnapshotTenant{TenantID: 42}}
 					f.compiler.snapshot = snapshot
 					if shape.name == "source hint" {
@@ -545,10 +555,55 @@ func TestViewSchemaPlanningAuthorizationSnapshot(t *testing.T) {
 					if mode == "text" || mode == "typed" {
 						p = p.GetDcl().GetPrepare().Plan
 					}
-					require.EqualValues(t, types.T_varchar, GetResultColumnsFromPlan(p)[0].Typ.Id)
+					columns := GetResultColumnsFromPlan(p)
+					require.Len(t, columns, 1)
+					if !shape.aggregate {
+						require.EqualValues(t, types.T_varchar, columns[0].Typ.Id)
+					}
 				})
 			}
 		}
+	}
+}
+
+func TestViewSchemaPlanningNumericCteScope(t *testing.T) {
+	for _, mode := range []string{"inherited", "declaration", "explicit snapshot"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newViewSchemaTestFixture(t)
+			statementDB := "statement_db"
+			f.compiler.defaultDatabase = &statementDB
+			builder := NewQueryBuilder(planpb.Query_SELECT, f.compiler, true, true)
+			ctx := NewBindContext(builder, nil)
+			ctx.defaultDatabase = "view_db"
+			ctx.lower = 1
+			ctx.snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1234}, Tenant: &SnapshotTenant{TenantID: 42}}
+			statements, err := mysql.Parse(t.Context(), "with q as (select n_nationkey from nation) select sum(n_nationkey) from q", 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+			cte := statements[0].(*tree.Select).With.CTEs[0]
+			ctx.numericCteByName = map[string]*tree.CTE{"q": cte}
+			ctx.numericTableProjectionTypes = map[string][]Type{"q": {{Id: int32(types.T_int64)}}}
+			wantDatabase, wantSnapshot := ctx.defaultDatabase, ctx.snapshot
+			if mode != "inherited" {
+				declaration := NewBindContext(builder, nil)
+				declaration.defaultDatabase = "declaration_db"
+				declaration.lower = 0
+				ref := &CTERef{ast: cte, declarationCtx: declaration}
+				ctx.cteByName = map[string]*CTERef{"q": ref}
+				wantDatabase = declaration.defaultDatabase
+				if mode == "explicit snapshot" {
+					ref.snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 5678}, Tenant: &SnapshotTenant{TenantID: 17}}
+					wantSnapshot = ref.snapshot
+				}
+			}
+			f.compiler.resolve = func(_ context.Context, database, _ string, snapshot *Snapshot) error {
+				require.Equal(t, wantDatabase, database)
+				require.Equal(t, wantSnapshot, snapshot)
+				return nil
+			}
+			seedNumericCteProjectionTypes(builder, ctx)
+			require.Positive(t, f.compiler.lookups.Load(), "exercise the temporary numeric propagation context")
+		})
 	}
 }
 
