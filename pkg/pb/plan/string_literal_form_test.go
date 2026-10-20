@@ -1293,12 +1293,13 @@ func TestSetOperationFloatKeyFeatureRoundTrip(t *testing.T) {
 		overload int64
 		want     bool
 	}{
-		{601, 0, true}, {601, 1, true},
+		{602, 0, true}, {602, 1, true},
+		{601, 0, false}, // upstream TIMESTAMPADD_SECOND_INTERVAL
 		{600, 0, false}, // upstream INTERNAL_TABLE_COLLATION
 		{599, 0, false}, // upstream CHECK_ASYNC_DATALINK_SOURCE
 		{598, 0, false},
 	} {
-		expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: tc.id<<32 | tc.overload}}}}
+		expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: tc.id<<32 | tc.overload, ObjName: "set_operation_float_key"}}}}
 		owner := &Node{PhysicalEqualityKeyList: []*Expr{expr}}
 		data, err := owner.Marshal()
 		require.NoError(t, err)
@@ -1307,6 +1308,7 @@ func TestSetOperationFloatKeyFeatureRoundTrip(t *testing.T) {
 		features, err := RequiredRemoteExpressionFeatures(&decoded)
 		require.NoError(t, err)
 		require.Equal(t, tc.want, features.SetOperationFloatKeys)
+		require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
 		if tc.want {
 			require.True(t, features.Any())
 		}
