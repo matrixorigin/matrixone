@@ -109,6 +109,41 @@ func Test_openNewFile(t *testing.T) {
 	})
 }
 
+// Issue #30552: the MODUMP query_result path only sets ep.Ctx, and the
+// max_file_size rotation path re-enters openNewFile with ep.ctx. A nil
+// context must not reach errgroup.WithContext as its parent.
+func Test_openNewFile_nilCtx(t *testing.T) {
+	convey.Convey("openNewFile with nil ctx falls back instead of panicking", t, func() {
+		ep := &ExportConfig{proc: sysFileAccessTestProcess(),
+			userConfig: &tree.ExportParam{
+				Lines: &tree.Lines{
+					TerminatedBy: &tree.Terminated{},
+				},
+				Fields: &tree.Fields{
+					Terminated: &tree.Terminated{},
+					EnclosedBy: &tree.EnclosedBy{},
+					EscapedBy:  &tree.EscapedBy{},
+				},
+				Header:   false,
+				FilePath: "test/export_nil_ctx.csv",
+			},
+			mrs: &MysqlResultSet{},
+		}
+		col1 := new(MysqlColumn)
+		col1.SetName(colName1)
+		ep.mrs.AddColumn(col1)
+		// MODUMP-style config: only the exported Ctx field is set.
+		ep.Ctx = context.Background()
+
+		var err error
+		convey.So(func() { err = openNewFile(nil, ep, ep.mrs) }, convey.ShouldNotPanic)
+		convey.So(err, convey.ShouldBeNil)
+		// the exact failing sequence from the issue: rotation passes ep.ctx
+		convey.So(func() { err = openNewFile(ep.ctx, ep, ep.mrs) }, convey.ShouldNotPanic)
+		convey.So(err, convey.ShouldBeNil)
+	})
+}
+
 func Test_formatOutputString(t *testing.T) {
 	convey.Convey("openNewFile failed", t, func() {
 		ep := &ExportConfig{proc: sysFileAccessTestProcess(),

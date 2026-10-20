@@ -178,10 +178,16 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 	meta := r.zoneparam.bs[r.zoneparam.offset].GetMeta()
 	colCnt := meta.BlockHeader().ColumnCount()
 	for i := 0; i < len(param.Attrs); i++ {
-		idxs[i] = uint16(param.Attrs[i].ColIndex)
-		if idxs[i] >= colCnt {
-			idxs[i] = 0
+		// Column positions inside the file live in ColFieldIndex: the query
+		// may prune or projection-reorder the scan schema, remapping ColIndex
+		// to the position in the output schema. Using ColIndex here reads
+		// the wrong file column (issue #30571).
+		fieldIdx := param.Attrs[i].ColFieldIndex
+		if fieldIdx < 0 || fieldIdx >= int32(colCnt) {
+			idxs[i] = 0 // column absent from the file; an all-null column is produced below
+			continue
 		}
+		idxs[i] = uint16(fieldIdx)
 	}
 
 	var err error
@@ -194,8 +200,9 @@ func (r *ZonemapReader) getBatchFromZonemapFile(ctx context.Context, proc *proce
 
 	var sels []int64
 	for i := 0; i < len(param.Attrs); i++ {
-		if uint16(param.Attrs[i].ColIndex) >= colCnt {
-			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[i].Typ, false), rows, nil)
+		attr := &param.Attrs[i]
+		if attr.ColFieldIndex < 0 || attr.ColFieldIndex >= int32(colCnt) {
+			vecTmp, err = proc.AllocVectorOfRows(makeType(&param.Cols[attr.ColIndex].Typ, false), rows, nil)
 			if err != nil {
 				return err
 			}
