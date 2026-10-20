@@ -393,7 +393,8 @@ func TestCheckConstraintNamespace(t *testing.T) {
 				var serverError *mysql.MySQLError
 				require.ErrorAs(t, initialErr, &serverError)
 				require.EqualValues(t, 20619, serverError.Number)
-				require.Equal(t, "w-w conflict: tableID: 2, catalog namespace snapshot is stale", serverError.Message)
+				require.Contains(t, serverError.Message, "w-w conflict: tableID: 2, catalog namespace snapshot is stale (snapshot=")
+				require.Contains(t, serverError.Message, "grant="+grant.Timestamp.DebugString())
 				require.GreaterOrEqual(t, attempts, 2)
 				require.NotEmpty(t, replacement)
 				require.NotEqual(t, original, replacement, "recovery must create a new autocommit transaction")
@@ -465,6 +466,8 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			require.ErrorAs(t, err, &conflict)
 			require.Equal(t, moerr.ErrTxnWWConflict, conflict.ErrorCode())
 			require.ErrorContains(t, err, "catalog namespace snapshot is stale")
+			require.ErrorContains(t, err, "snapshot="+originalSnapshot.DebugString())
+			require.ErrorContains(t, err, "grant=")
 			grantsMu.Lock()
 			observed := append([]lock.Result(nil), grants...)
 			grantsMu.Unlock()
@@ -768,7 +771,9 @@ func execCheckNamespaceSI(parent context.Context, exec func(context.Context, str
 			return attempts, stopped(err)
 		}
 		var serverError *mysql.MySQLError
-		if !errors.As(err, &serverError) || serverError.Number != 20619 || serverError.Message != "w-w conflict: tableID: 2, catalog namespace snapshot is stale" {
+		const namespaceAbort = "w-w conflict: tableID: 2, catalog namespace snapshot is stale"
+		if !errors.As(err, &serverError) || serverError.Number != 20619 ||
+			(serverError.Message != namespaceAbort && !strings.HasPrefix(serverError.Message, namespaceAbort+" (snapshot=")) {
 			return attempts, err
 		}
 		lastConflict = err
@@ -780,7 +785,7 @@ func TestCheckNamespaceSIRecoveryControl(t *testing.T) {
 	const syncSQL = "select mo_ctl('cn', 'SYNCCOMMIT', '')"
 	conflict := &mysql.MySQLError{Number: 20619, Message: "w-w conflict: tableID: 2, catalog namespace snapshot is stale"}
 	t.Run("only exact namespace abort is recoverable", func(t *testing.T) {
-		for _, terminal := range []error{nil, errors.New("connection failure"), &mysql.MySQLError{Number: 3822, Message: "duplicate name"}, &mysql.MySQLError{Number: 3819, Message: "check violation"}, &mysql.MySQLError{Number: 20619, Message: "other write conflict"}, &mysql.MySQLError{Number: 20619, Message: "w-w conflict: tableID: 3, catalog namespace snapshot is stale"}} {
+		for _, terminal := range []error{nil, errors.New("connection failure"), &mysql.MySQLError{Number: 3822, Message: "duplicate name"}, &mysql.MySQLError{Number: 3819, Message: "check violation"}, &mysql.MySQLError{Number: 20619, Message: "other write conflict"}, &mysql.MySQLError{Number: 20619, Message: "w-w conflict: tableID: 3, catalog namespace snapshot is stale"}, &mysql.MySQLError{Number: 20619, Message: "w-w conflict: tableID: 3, catalog namespace snapshot is stale (snapshot=1-0, grant=2-0)"}, &mysql.MySQLError{Number: 20619, Message: conflict.Message + " extra"}, &mysql.MySQLError{Number: 20619, Message: conflict.Message + " (other=1)"}} {
 			calls := 0
 			attempts, err := execCheckNamespaceSI(t.Context(), func(_ context.Context, q string) error {
 				calls++
@@ -795,25 +800,33 @@ func TestCheckNamespaceSIRecoveryControl(t *testing.T) {
 			require.Equal(t, terminal, err)
 		}
 	})
-	t.Run("recover then preserve terminal result", func(t *testing.T) {
-		var calls []string
-		ddl := 0
-		terminal := &mysql.MySQLError{Number: 3822}
-		attempts, err := execCheckNamespaceSI(t.Context(), func(_ context.Context, q string) error {
-			calls = append(calls, q)
-			if q == syncSQL {
-				return nil
-			}
-			ddl++
-			if ddl == 1 {
-				return fmt.Errorf("wrapped: %w", conflict)
-			}
-			return terminal
-		}, statement)
-		require.Equal(t, 2, attempts)
-		require.Same(t, terminal, err)
-		require.Equal(t, []string{syncSQL, statement, syncSQL, statement}, calls)
-	})
+	for _, recoverable := range []struct {
+		name string
+		err  error
+	}{
+		{"legacy", conflict},
+		{"diagnostic", &mysql.MySQLError{Number: 20619, Message: conflict.Message + " (snapshot=1-0, grant=2-0, lock-service=\"cn\", binding-version=1, group=0, has-conflict=false, has-prev-commit=false)"}},
+	} {
+		t.Run("recover then preserve terminal result/"+recoverable.name, func(t *testing.T) {
+			var calls []string
+			ddl := 0
+			terminal := &mysql.MySQLError{Number: 3822}
+			attempts, err := execCheckNamespaceSI(t.Context(), func(_ context.Context, q string) error {
+				calls = append(calls, q)
+				if q == syncSQL {
+					return nil
+				}
+				ddl++
+				if ddl == 1 {
+					return fmt.Errorf("wrapped: %w", recoverable.err)
+				}
+				return terminal
+			}, statement)
+			require.Equal(t, 2, attempts)
+			require.Same(t, terminal, err)
+			require.Equal(t, []string{syncSQL, statement, syncSQL, statement}, calls)
+		})
+	}
 	t.Run("synchronization failure stops before DDL", func(t *testing.T) {
 		failure := errors.New("sync failed")
 		calls := 0
