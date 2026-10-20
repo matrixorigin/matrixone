@@ -181,14 +181,14 @@ select id, locate('a', coalesce(txt, bin)), instr(coalesce(txt, bin), 'a'),
 coalesce(txt, bin) like '__', coalesce(txt, bin) like '____',
 char_length(coalesce(txt, bin)), hex(left(coalesce(txt, bin), 1))
 from domains order by id;
-➤ id[4,32,0]  ¦  locate(a, coalesce(txt, bin))[-5,64,0]  ¦  instr(coalesce(txt, bin), a)[-5,64,0]  ¦  coalesce(txt, bin) like __[-7,1,0]  ¦  coalesce(txt, bin) like ____[-7,1,0]  ¦  char_length(coalesce(txt, bin))[-5,64,0]  ¦  hex(left(coalesce(txt, bin), 1))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  locate(a, coalesce(txt, bin))[-5,64,0]  ¦  instr(coalesce(txt, bin), a)[-5,64,0]  ¦  coalesce(txt, bin) like __[-6,8,0]  ¦  coalesce(txt, bin) like ____[-6,8,0]  ¦  char_length(coalesce(txt, bin))[-5,64,0]  ¦  hex(left(coalesce(txt, bin), 1))[-1,16383,0]  𝄀
 1  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0  𝄀
 2  ¦  4  ¦  4  ¦  0  ¦  1  ¦  4  ¦  E4  𝄀
 3  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0
 select id, locate('a', x), instr(x, 'a'), x like '__', x like '____',
 char_length(x), hex(left(x, 1))
 from (select id, coalesce(txt, bin) x from domains) d order by id;
-➤ id[4,32,0]  ¦  locate(a, x)[-5,64,0]  ¦  instr(x, a)[-5,64,0]  ¦  x like __[-7,1,0]  ¦  x like ____[-7,1,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  𝄀
+➤ id[4,32,0]  ¦  locate(a, x)[-5,64,0]  ¦  instr(x, a)[-5,64,0]  ¦  x like __[-6,8,0]  ¦  x like ____[-6,8,0]  ¦  char_length(x)[-5,64,0]  ¦  hex(left(x, 1))[-1,16383,0]  𝄀
 1  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0  𝄀
 2  ¦  4  ¦  4  ¦  0  ¦  1  ¦  4  ¦  E4  𝄀
 3  ¦  4  ¦  4  ¦  0  ¦  1  ¦  2  ¦  E4BDA0
