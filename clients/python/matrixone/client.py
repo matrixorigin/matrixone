@@ -535,7 +535,6 @@ class Client(BaseMatrixOneClient):
             # authenticated connection has completed a real query.
             with self._engine.connect() as connection:
                 connection.exec_driver_sql("SELECT 1")
-            self.logger.log_connection(host, port, final_user, database, success=True)
 
             # Initialize managers after engine is created
             self._initialize_managers()
@@ -555,6 +554,12 @@ class Client(BaseMatrixOneClient):
                 self._setup_connection_hook(on_connect)
                 # Execute the hook once immediately for the initial connection
                 self._execute_connection_hook_immediately(on_connect)
+
+            # Report success only after the full initialization above passed:
+            # a failure in the managers or the hook itself is a failed
+            # connect contract (#30060) and must leave no success record
+            # behind — the probe alone is not initialization success.
+            self.logger.log_connection(host, port, final_user, database, success=True)
 
         except BaseException as e:
             engine, self._engine = self._engine, None
@@ -2399,8 +2404,12 @@ class Client(BaseMatrixOneClient):
             try:
                 engine_context = self.get_sqlalchemy_engine().begin()
             except Exception as e:
-                # Handle database connection errors with user-friendly messages
-                error_msg = str(e)
+                # Handle database connection errors with user-friendly messages.
+                # Driver text may echo the configured password and must never
+                # reach the raised diagnostic or the log (#30062).
+                from ._connection_options import redact_error
+
+                error_msg = redact_error(e, self._connection_params.get('password') or '')
                 if 'Unknown database' in error_msg or '1049' in error_msg:
                     db_name = self._connection_params.get('database', 'unknown')
                     raise ConnectionError(
@@ -2410,9 +2419,9 @@ class Client(BaseMatrixOneClient):
                         f"-u{self._connection_params.get('user', 'root')} "
                         f"-p "
                         f"-e \"CREATE DATABASE {db_name}\""
-                    ) from e
+                    ) from None
                 else:
-                    raise ConnectionError(f"Failed to connect to database: {error_msg}") from e
+                    raise ConnectionError(f"Failed to connect to database: {error_msg}") from None
 
             with engine_context as conn:
                 # Create table without indexes first
@@ -2433,16 +2442,20 @@ class Client(BaseMatrixOneClient):
                     _exec_sql(create_table_sql)
                     self.logger.info(f"✓ Created table '{table_name}'")
                 except Exception as e:
-                    # Log the error before processing
+                    # Redact before logging and wrapping: driver text may echo
+                    # the configured password (#30062).
+                    from ._connection_options import redact_error
+
+                    error_msg = redact_error(e, self._connection_params.get('password') or '')
+
+                    # Log the sanitized message; the raw exception must not
+                    # reach the handler or the traceback chain.
                     try:
-                        self.logger.log_error(e, context=f"Creating table '{table_name}'")
+                        self.logger.log_error(QueryError(error_msg), context=f"Creating table '{table_name}'")
                     except Exception as log_err:
                         import sys
 
                         print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
-
-                    # Extract user-friendly error message
-                    error_msg = str(e)
 
                     # Handle common errors with helpful messages
                     if 'already exists' in error_msg.lower() or '1050' in error_msg:

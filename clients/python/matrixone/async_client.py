@@ -695,8 +695,6 @@ class AsyncClient(BaseMatrixOneClient):
             # Initialize metadata manager after successful connection
             self._metadata = AsyncMetadataManager(self)
 
-            self.logger.log_connection(host, port, final_user, database or "default", success=True)
-
             # Setup connection hook (default to ENABLE_ALL if not provided)
             # Allow empty list [] to explicitly disable hooks
             if on_connect is None:
@@ -706,6 +704,12 @@ class AsyncClient(BaseMatrixOneClient):
                 self._setup_connection_hook(on_connect)
                 # Execute the hook once immediately for the initial connection
                 await self._execute_connection_hook_immediately(on_connect)
+
+            # Report success only after the full initialization above passed:
+            # a failure in the managers or the hook itself is a failed connect
+            # contract (#30060) and must leave no success record behind — the
+            # probe alone is not initialization success.
+            self.logger.log_connection(host, port, final_user, database or "default", success=True)
 
         except BaseException as e:
             engine, self._engine = self._engine, None

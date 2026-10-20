@@ -188,3 +188,186 @@ def test_failed_disconnect_does_not_leave_connected_state():
     with pytest.raises(RuntimeError, match='dispose failure'):
         client.disconnect()
     assert not client.connected()
+
+
+# ─── #30060 follow-up: successful probe is not initialization success ──────
+
+
+def test_failed_manager_init_reports_no_success(monkeypatch):
+    """#30060: the probe passing is not initialization success.
+
+    _initialize_managers runs after the probe; when it fails the connect
+    contract leaves no success record even though an authenticated query
+    already succeeded.
+    """
+    client = Client(logger=Mock())
+    engine = MagicMock()
+    monkeypatch.setattr(client, '_create_engine', lambda: engine)
+    monkeypatch.setattr(client, '_detect_backend_version', lambda: None)
+
+    def fail():
+        raise RuntimeError('manager init failed')
+
+    monkeypatch.setattr(client, '_initialize_managers', fail)
+    with pytest.raises(ConnectionError, match='manager init failed'):
+        client.connect(database='test', on_connect=[])
+    assert not client.connected()
+    engine.dispose.assert_called_once()
+    assert not any(
+        call.kwargs.get('success') is True
+        for call in client.logger.log_connection.call_args_list
+    )
+    assert any(
+        call.kwargs.get('success') is False
+        for call in client.logger.log_connection.call_args_list
+    )
+
+
+def test_failed_hook_reports_no_success(monkeypatch):
+    """#30060: the connection hook is part of initialization; its failure
+    must not leave a success record in front of the failure."""
+    client = Client(logger=Mock())
+    engine = MagicMock()
+    monkeypatch.setattr(client, '_create_engine', lambda: engine)
+    monkeypatch.setattr(client, '_detect_backend_version', lambda: None)
+    monkeypatch.setattr(client, '_initialize_managers', lambda: None)
+    monkeypatch.setattr(
+        client,
+        '_execute_connection_hook_immediately',
+        Mock(side_effect=RuntimeError('hook failed')),
+    )
+    with pytest.raises(ConnectionError, match='hook failed'):
+        client.connect(database='test', on_connect=[object()])
+    assert not client.connected()
+    engine.dispose.assert_called_once()
+    assert not any(
+        call.kwargs.get('success') is True
+        for call in client.logger.log_connection.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_async_failed_hook_reports_no_success(monkeypatch):
+    """#30060 async mirror: the hook runs after the probe and managers;
+    its failure must leave no successful-connection record."""
+    client = AsyncClient(logger=Mock())
+    engine = MagicMock()
+    engine.dispose = AsyncMock()
+
+    async def begin_ctx():
+        return MagicMock()
+
+    class Context:
+        async def __aenter__(self):
+            conn = MagicMock()
+            conn.execute = AsyncMock()
+            return conn
+
+        async def __aexit__(self, *args):
+            return False
+
+    engine.begin.return_value = Context()
+    monkeypatch.setattr(client, '_create_async_engine', lambda: engine)
+
+    from matrixone.connection_hooks import ConnectionAction
+
+    async def failing_hook(*args, **kwargs):
+        raise RuntimeError('async hook failed')
+
+    monkeypatch.setattr(client, '_execute_connection_hook_immediately', failing_hook)
+    with pytest.raises(ConnectionError, match='async hook failed'):
+        await client.connect(database='test', on_connect=[ConnectionAction.ENABLE_ALL])
+    assert not client.connected()
+    engine.dispose.assert_awaited_once()
+    assert not any(
+        call.kwargs.get('success') is True
+        for call in client.logger.log_connection.call_args_list
+    )
+    assert any(
+        call.kwargs.get('success') is False
+        for call in client.logger.log_connection.call_args_list
+    )
+
+
+# ─── #30062 follow-up: create_table diagnostics must not carry the password ──
+
+
+def _probe_model():
+    from sqlalchemy import Column, Integer
+    from sqlalchemy.orm import declarative_base
+
+    base = declarative_base()
+
+    class ProbeTable(base):
+        __tablename__ = 'probe_table'
+        id = Column(Integer, primary_key=True)
+
+    return ProbeTable
+
+
+def test_create_table_connection_diagnostics_redact_password(monkeypatch):
+    """#30062: the create_table connection hint wraps driver text; any
+    password echo must be redacted before the message is raised."""
+    client = Client(logger=Mock())
+    secret = 'synthetic-password-marker'
+    client._engine = MagicMock()
+    client._connection_params = {
+        'host': '127.0.0.1',
+        'port': 6001,
+        'user': 'root',
+        'password': secret,
+        'database': 'probe',
+    }
+
+    class ExplodingEngine:
+        def begin(self):
+            raise RuntimeError('Access denied for root; echoed password: ' + secret)
+
+    monkeypatch.setattr(client, 'get_sqlalchemy_engine', lambda: ExplodingEngine())
+    with pytest.raises(ConnectionError) as result:
+        client.create_table(_probe_model())
+    assert secret not in str(result.value)
+    assert '***' in str(result.value)
+    assert 'Failed to connect to database' in str(result.value)
+    assert result.value.__suppress_context__
+
+
+def test_create_table_execution_diagnostics_redact_password(monkeypatch):
+    """#30062: SQL-phase failures log and re-raise through QueryError;
+    the echoed password must reach neither the log nor the raised text."""
+    client = Client(logger=Mock())
+    secret = 'synthetic-password-marker'
+    client._engine = MagicMock()
+    client._connection_params = {
+        'host': '127.0.0.1',
+        'port': 6001,
+        'user': 'root',
+        'password': secret,
+        'database': 'probe',
+    }
+
+    from matrixone.exceptions import QueryError
+
+    probe_conn = MagicMock()
+
+    def explode(sql):
+        raise RuntimeError('writer closed; echoed password: ' + secret)
+
+    probe_conn.exec_driver_sql = explode
+
+    class Context:
+        def __enter__(self):
+            return probe_conn
+
+        def __exit__(self, *args):
+            return False
+
+    engine = MagicMock()
+    engine.begin.return_value = Context()
+    monkeypatch.setattr(client, 'get_sqlalchemy_engine', lambda: engine)
+    with pytest.raises(QueryError) as result:
+        client.create_table(_probe_model())
+    assert secret not in str(result.value)
+    assert '***' in str(result.value)
+    logged = client.logger.log_error.call_args.args[0]
+    assert secret not in str(logged)
