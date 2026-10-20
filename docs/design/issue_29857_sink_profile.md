@@ -1,8 +1,10 @@
 # Transactional event-ledger sink profile
 
-Status: design review requested for issue #29857; implementation PR #30561.
-Design approval for this exact revision is pending. Implementation review
-remains blocked until that approval is recorded separately.
+Status: design-phase PASS for issue #29857; implementation PR #30561.
+@aptend approved the design privately. The PR author records that manual
+decision here on 2026-10-20 for the reviewed design revision
+`00c4f773ba188c9d8410fd4b64d0f71e502a2c17`. This records the design
+decision separately from implementation approval.
 
 The first implementation will be a runnable Kafka Connect sink and a NiFi
 ingress route through Kafka to that sink. A direct NiFi-to-MatrixOne processor
