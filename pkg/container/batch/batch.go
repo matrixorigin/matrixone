@@ -357,7 +357,7 @@ func (bat *Batch) appendPrepareParamKindMetadataTo(w io.Writer, includeStringSou
 	}
 	if bat.HasNumericBinaryLiteralMetadata() && !includeStringSources {
 		return moerr.NewNotSupportedNoCtx(
-			"numeric binary-literal provenance requires MORPC protocol version 117")
+			"numeric binary-literal provenance requires string-source metadata in the batch metadata trailer")
 	}
 	version := prepareParamKindBatchVersionV1
 	if includeStringSources && bat.HasStringSourceMetadata() {
