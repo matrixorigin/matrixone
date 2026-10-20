@@ -936,6 +936,9 @@ type BindContext struct {
 	persistedExpressionProtocolRequirement *int64
 	// 记录绑定期真正使用的COLLATE代际，独立于可被fold消去的结果类型。
 	persistedCollationBindingRevision *uint32
+	ctasExecutionProtocolRequirement  *int64
+	// CTAS仅持久化native来源义务；其他临时函数能力由execution捕获器负责。
+	ctasNativeCollationProtocolRequirement *int64
 	// expandedSelectLists records the expanded output for each SELECT clause
 	// participating in a view definition, including UNION branches.
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs

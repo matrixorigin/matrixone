@@ -249,7 +249,7 @@ func resolveAlterConstraintOptions(ctx CompilerContext, source *TableDef, option
 				copy := *def
 				if copy.ConstraintSymbol == "" {
 					for ordinal := len(checks) + 1; ; ordinal++ {
-						name := fmt.Sprintf("__mo_chk_%d", ordinal)
+						name := fmt.Sprintf("%s_chk_%d", source.Name, ordinal)
 						if !checks[name] {
 							copy.ConstraintSymbol = name
 							break

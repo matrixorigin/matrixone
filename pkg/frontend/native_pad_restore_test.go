@@ -59,7 +59,7 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 				rt.CompareAndDeleteGlobalVariables(key, value)
 			}
 		})
-		rt.SetGlobalVariables(key, defines.MORPCVersion121)
+		rt.SetGlobalVariables(key, defines.MORPCVersion124)
 	}
 	const sql = "create view v as select 'A' collate utf8mb4_general_ci = 'a' as b"
 	for _, source := range []struct {
@@ -69,8 +69,8 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 	}{
 		{0, 0, false},
 		{0, 0, true},
-		{0, defines.MORPCVersion121, true},
-		{1, defines.MORPCVersion121, true},
+		{0, defines.MORPCVersion124, true},
+		{1, defines.MORPCVersion124, true},
 	} {
 		revision := source.revision
 		data := plan.ViewData{Stmt: sql, CollationBindingRevision: revision}
@@ -123,8 +123,8 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion120)
 			_, err = buildViewPlanForRestore(compiler, parsed, &tableInfo{viewDef: string(encoded)})
 			parsed.Free()
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion121)
-			require.ErrorContains(t, err, "protocol version 121", "source read admission is independent of target authoring")
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, defines.MORPCVersion124)
+			require.ErrorContains(t, err, "protocol version 124", "source read admission is independent of target authoring")
 			require.Same(t, parent, compiler.GetContext())
 		}
 		for _, statement := range []string{"create view v as select true as b", "create view v as select missing_column"} {
@@ -143,7 +143,7 @@ func TestNativePADViewRestoreBindingGeneration(t *testing.T) {
 			require.Equal(t, revision, restored.CollationBindingRevision, "a folded SQL skeleton cannot erase source provenance")
 			if source.floor != 0 {
 				require.NotNil(t, restored.RequiredProtocolVersion)
-				require.Equal(t, defines.MORPCVersion121, *restored.RequiredProtocolVersion)
+				require.Equal(t, defines.MORPCVersion124, *restored.RequiredProtocolVersion)
 			}
 		}
 	}

@@ -76,7 +76,7 @@ RESEARCH    20    DALLAS
 SALES    30    CHICAGO
 OPERATIONS    40    BOSTON
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
@@ -150,7 +150,7 @@ dname    varchar(15)    YES        null        部门名称
 deptId    int unsigned    NO    PRI    null        
 loc    varchar(50)    YES        null        部门所在位置
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
@@ -234,7 +234,7 @@ RESEARCH    20    DALLAS
 SALES    30    CHICAGO
 OPERATIONS    40    BOSTON
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno
@@ -326,7 +326,7 @@ deptid    dname    loc
 30    SALES    CHICAGO
 40    OPERATIONS    BOSTON
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,100);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 INSERT INTO emp VALUES (7990,'MILLER','CLERK',7782,'1982-01-23',1300,NULL,10);
 select * from emp;
 empno    ename    job    mgr    hiredate    sal    comm    deptno

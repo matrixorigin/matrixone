@@ -44,8 +44,8 @@ func requireViewCollationMarker(ctx context.Context, data ViewData) error {
 	if err := persistedCollationBindingRevision(ctx, data.CollationBindingRevision); err != nil {
 		return err
 	}
-	if data.CollationBindingRevision == 1 && (data.RequiredProtocolVersion == nil || *data.RequiredProtocolVersion < defines.MORPCVersion121) {
-		return moerr.NewInvalidInput(ctx, "collation binding revision 1 requires persisted protocol version 121")
+	if data.CollationBindingRevision == 1 && (data.RequiredProtocolVersion == nil || *data.RequiredProtocolVersion < defines.MORPCVersion124) {
+		return moerr.NewInvalidInput(ctx, "collation binding revision 1 requires persisted protocol version 124")
 	}
 	return nil
 }

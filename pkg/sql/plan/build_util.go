@@ -76,6 +76,11 @@ func applyLockTableFallback(builder *QueryBuilder) {
 			continue
 		}
 		for _, target := range node.LockTargets {
+			// Nonblocking reads require exact row targets. Physical admission owns
+			// their resource limits; estimates must not select coarse locks.
+			if target.NoWait || target.SkipLocked {
+				continue
+			}
 			_, fullUpdateTarget := builder.fullTableUpdateLockTargets[target]
 			estimatedRows := node.Stats.Outcnt
 			if fullUpdateTarget && fullUpdateRows > estimatedRows {
@@ -795,6 +800,38 @@ func buildDefaultExpr(bindCtx context.Context, col *tree.ColumnTableDef, typ pla
 	return buildDefaultExprWithColumns(bindCtx, col, typ, proc, nil)
 }
 
+// MySQL treats an integer zero column default as the zero date for temporal
+// columns. Keep this conversion at the DDL boundary: ordinary numeric casts
+// and expressions have different semantics.
+func zeroTemporalDefaultLiteral(expr tree.Expr, typ plan.Type) (string, bool) {
+	num, ok := expr.(*tree.NumVal)
+	if !ok {
+		return "", false
+	}
+	switch num.ValType {
+	case tree.P_int64:
+		value, _ := num.Int64()
+		if value != 0 {
+			return "", false
+		}
+	case tree.P_uint64:
+		value, _ := num.Uint64()
+		if value != 0 {
+			return "", false
+		}
+	default:
+		return "", false
+	}
+	switch types.T(typ.Id) {
+	case types.T_date:
+		return "0000-00-00", true
+	case types.T_datetime, types.T_timestamp:
+		return "0000-00-00 00:00:00", true
+	default:
+		return "", false
+	}
+}
+
 func legacyImplicitTimestampDefaults(ctx CompilerContext) bool {
 	if ctx == nil {
 		return false
@@ -981,6 +1018,9 @@ func buildDefaultExprWithColumns(
 	if err != nil {
 		return nil, err
 	}
+	if zeroValue, ok := zeroTemporalDefaultLiteral(semanticExpr, typ); ok {
+		planExpr = makePlan2StringConstExprWithType(zeroValue)
+	}
 	if err = preservePersistedFormatCompatibility(bindCtx, planExpr); err != nil {
 		return nil, err
 	}
@@ -1039,8 +1079,18 @@ func buildDefaultExprWithColumns(
 		}
 		return nil, mapDDLAssignmentCastError(bindCtx, typ, colNameOrigin, err)
 	}
-	if typ.Id == int32(types.T_timestamp) && newExpr.GetLit() != nil &&
-		!newExpr.GetLit().Isnull && newExpr.GetLit().GetTimestampval() == int64(types.ZeroTimestamp) {
+	zeroTemporalDefault := false
+	if lit := newExpr.GetLit(); lit != nil && !lit.Isnull {
+		switch types.T(typ.Id) {
+		case types.T_date:
+			zeroTemporalDefault = lit.GetDateval() == int32(types.ZeroDate)
+		case types.T_datetime:
+			zeroTemporalDefault = lit.GetDatetimeval() == int64(types.ZeroDatetime)
+		case types.T_timestamp:
+			zeroTemporalDefault = lit.GetTimestampval() == int64(types.ZeroTimestamp)
+		}
+	}
+	if zeroTemporalDefault {
 		var mode interface{} = proc.GetSessionInfo().SqlMode
 		if resolve := proc.GetResolveVariableFunc(); resolve != nil {
 			mode, err = resolve("sql_mode", true, false)
