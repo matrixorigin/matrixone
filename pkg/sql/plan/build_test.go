@@ -7415,6 +7415,12 @@ func TestLowPrecisionFloatLiteralNarrowing(t *testing.T) {
 		{"SELECT id FROM vecblock_t WHERE k <= 65504", true},
 		{"SELECT id FROM vecblock_t WHERE k >= -65504", true},
 		{"SELECT id FROM vecblock_t WHERE f <= 3.38e38", true},
+		// bf16's printed maximum narrows: CAST accepts it by its float32 value
+		{"SELECT id FROM vecblock_t WHERE f = 3.3895314e38", true},
+		{"SELECT id FROM vecblock_t WHERE f = -3.3895314e38", true},
+		{"SELECT id FROM vecblock_t WHERE f <=> 3.3895314e+38", true},
+		{"SELECT id FROM vecblock_t WHERE f = '3.3895314e+38'", true},
+		{"SELECT id FROM vecblock_t WHERE f = 3.3895316e38", false},
 	} {
 		args := firstFilter(tc.sql).GetF().Args
 		require.Equal(t, tc.narrow, args[0].GetCol() != nil, tc.sql)

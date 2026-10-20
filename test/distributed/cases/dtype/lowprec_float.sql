@@ -341,6 +341,26 @@ SELECT CAST(3.39e38 AS bf16);
 -- a bf16 is checked by its float32 value: its printed maximum loads back
 SELECT CAST(CAST('3.3895314e+38' AS bf16) AS char), CAST(CAST('-3.3895314e+38' AS bf16) AS char);
 SELECT CAST('3.3895316e+38' AS bf16);
+-- the printed maximum also matches the stored value in a comparison, as a literal and as a
+-- prepared parameter
+CREATE TABLE bmax (id int, f bf16);
+INSERT INTO bmax VALUES (1, 3.3895314e38), (2, -3.3895314e38), (3, 1);
+SELECT id FROM bmax WHERE f = 3.3895314e38;
+SELECT id FROM bmax WHERE f = -3.3895314e38;
+SELECT id FROM bmax WHERE f <=> 3.3895314e38;
+SELECT id FROM bmax WHERE f = '3.3895314e+38';
+SELECT id FROM bmax WHERE f IN (3.3895314e38, -3.3895314e38) ORDER BY id;
+SELECT count(*) FROM bmax WHERE f = 3.3895316e38;
+PREPARE bm FROM 'SELECT id FROM bmax WHERE f = ?';
+SET @bm = 3.3895314e38;
+EXECUTE bm USING @bm;
+SET @bm = -3.3895314e38;
+EXECUTE bm USING @bm;
+SET @bm = '3.3895314e+38';
+EXECUTE bm USING @bm;
+SET @bm = '-3.3895314e+38';
+EXECUTE bm USING @bm;
+DEALLOCATE PREPARE bm;
 INSERT INTO fh VALUES (3, 65505, 0);
 SELECT count(*) FROM fh;
 -- the same bound for vecf16 and vecbf16 elements, from text and from a wider vector

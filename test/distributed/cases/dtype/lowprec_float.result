@@ -638,6 +638,45 @@ SELECT CAST(CAST('3.3895314e+38' AS bf16) AS char), CAST(CAST('-3.3895314e+38' A
 3.3895314E+38  ¦  -3.3895314E+38
 SELECT CAST('3.3895316e+38' AS bf16);
 Data truncation: data out of range: data type BF16, value 3.3895316e+38
+CREATE TABLE bmax (id int, f bf16);
+INSERT INTO bmax VALUES (1, 3.3895314e38), (2, -3.3895314e38), (3, 1);
+SELECT id FROM bmax WHERE f = 3.3895314e38;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM bmax WHERE f = -3.3895314e38;
+➤ id[4,32,0]  𝄀
+2
+SELECT id FROM bmax WHERE f <=> 3.3895314e38;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM bmax WHERE f = '3.3895314e+38';
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM bmax WHERE f IN (3.3895314e38, -3.3895314e38) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1  𝄀
+2
+SELECT count(*) FROM bmax WHERE f = 3.3895316e38;
+➤ count(*)[-5,64,0]  𝄀
+0
+PREPARE bm FROM 'SELECT id FROM bmax WHERE f = ?';
+SET @bm = 3.3895314e38;
+EXECUTE bm USING @bm;
+➤ id[4,32,0]  𝄀
+1
+SET @bm = -3.3895314e38;
+EXECUTE bm USING @bm;
+➤ id[4,32,0]  𝄀
+2
+SET @bm = '3.3895314e+38';
+EXECUTE bm USING @bm;
+➤ id[4,32,0]  𝄀
+1
+SET @bm = '-3.3895314e+38';
+EXECUTE bm USING @bm;
+➤ id[4,32,0]  𝄀
+2
+DEALLOCATE PREPARE bm;
 INSERT INTO fh VALUES (3, 65505, 0);
 Data truncation: data out of range: data type FLOAT16, value 65505
 SELECT count(*) FROM fh;

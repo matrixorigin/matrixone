@@ -7837,8 +7837,8 @@ func bindFuncExprImplByPlanExpr(
 						}
 						// the literal rounded as the CAST that narrows it rounds it; a value that
 						// CAST rejects keeps the wide comparison
-						v, ok := lowPrecisionLiteralFloat32(otherExpr)
-						return ok && types.RejectNonFiniteNarrowFloat(v, colOid) == nil
+						v, ok := lowPrecisionLiteral(otherExpr)
+						return ok && v.fits(colOid)
 					}
 
 					// For integers, check if constant value is within column type range

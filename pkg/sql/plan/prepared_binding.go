@@ -1017,7 +1017,7 @@ func narrowPreparedLowPrecisionOperand(ctx context.Context, state *preparedSourc
 		return nil, false, nil
 	}
 	value, ok := preparedLowPrecisionValue(ctx, source)
-	if !ok || types.RejectNonFiniteNarrowFloat(value, peerOid) != nil {
+	if !ok || !value.fits(peerOid) {
 		return nil, false, nil
 	}
 	converted, err := makePlan2CastExpr(ctx, source, peer)
@@ -1026,102 +1026,125 @@ func narrowPreparedLowPrecisionOperand(ctx context.Context, state *preparedSourc
 
 var preparedDecimalNumeral = regexp.MustCompile(`^\s*[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?\s*$`)
 
-// lowPrecisionTextFloat32 is decimal numeral text rounded to float32 as CAST to
-// bf16/float16/float8/float4 rounds it: to odd, from the text's exact value.
-func lowPrecisionTextFloat32(text string) (float32, bool) {
-	if !preparedDecimalNumeral.MatchString(text) {
-		return 0, false
-	}
-	f, _, err := types.Float32RoundToOddString(text)
-	return f, err == nil
+// lowPrecisionSource is a value narrowed to bf16/float16/float8/float4 as CAST narrows
+// it: f rounded to float32 (to odd from a wider value), d the value as float64.
+type lowPrecisionSource struct {
+	f float32
+	d float64
 }
 
-// lowPrecisionLiteralFloat32 is a numeric or decimal-numeral text literal rounded to
-// float32 as CAST to bf16/float16/float8/float4 rounds it: to odd, from the exact value of
-// a decimal or text literal.
-func lowPrecisionLiteralFloat32(expr *Expr) (float32, bool) {
+// fits reports whether CAST to oid accepts the value (types.RejectNarrowFloatInput).
+func (v lowPrecisionSource) fits(oid types.T) bool {
+	return types.RejectNarrowFloatInput(v.f, oid, v.d, nil) == nil
+}
+
+func lowPrecisionFloat64(v float64) lowPrecisionSource {
+	return lowPrecisionSource{f: types.Float32RoundToOdd(v), d: v}
+}
+
+func lowPrecisionInt(v int64) lowPrecisionSource {
+	return lowPrecisionSource{f: types.Float32RoundToOddInt(v), d: float64(v)}
+}
+
+func lowPrecisionUint(v uint64) lowPrecisionSource {
+	return lowPrecisionSource{f: types.Float32RoundToOddUint(v), d: float64(v)}
+}
+
+// lowPrecisionText is decimal numeral text rounded as CAST to bf16/float16/float8/float4
+// rounds it: to odd, from the text's exact value.
+func lowPrecisionText(text string) (lowPrecisionSource, bool) {
+	if !preparedDecimalNumeral.MatchString(text) {
+		return lowPrecisionSource{}, false
+	}
+	f, d, err := types.Float32RoundToOddString(text)
+	return lowPrecisionSource{f: f, d: d}, err == nil
+}
+
+// lowPrecisionLiteral is a numeric or decimal-numeral text literal as CAST to
+// bf16/float16/float8/float4 narrows it.
+func lowPrecisionLiteral(expr *Expr) (lowPrecisionSource, bool) {
 	// a decimal literal binds as CAST('<digits>' AS DECIMAL(w, s))
 	if fn := expr.GetF(); fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 {
 		lit := fn.Args[0].GetLit()
 		sval, isStr := lit.GetValue().(*plan.Literal_Sval)
 		if lit == nil || lit.Isnull || !isStr {
-			return 0, false
+			return lowPrecisionSource{}, false
 		}
 		switch t := expr.Typ; types.T(t.Id) {
 		case types.T_decimal64, types.T_decimal128:
 			d, err := types.ParseDecimal128(sval.Sval, t.Width, t.Scale)
 			if err != nil {
-				return 0, false
+				return lowPrecisionSource{}, false
 			}
-			return lowPrecisionTextFloat32(d.Format(t.Scale))
+			return lowPrecisionText(d.Format(t.Scale))
 		}
-		return 0, false
+		return lowPrecisionSource{}, false
 	}
 	lit := expr.GetLit()
 	if lit == nil || lit.Isnull {
-		return 0, false
+		return lowPrecisionSource{}, false
 	}
 	switch v := lit.Value.(type) {
 	case *plan.Literal_Dval:
-		return types.Float32RoundToOdd(v.Dval), true
+		return lowPrecisionFloat64(v.Dval), true
 	case *plan.Literal_Fval:
-		return v.Fval, true
+		return lowPrecisionSource{f: v.Fval, d: float64(v.Fval)}, true
 	case *plan.Literal_I8Val:
-		return types.Float32RoundToOddInt(int64(v.I8Val)), true
+		return lowPrecisionInt(int64(v.I8Val)), true
 	case *plan.Literal_I16Val:
-		return types.Float32RoundToOddInt(int64(v.I16Val)), true
+		return lowPrecisionInt(int64(v.I16Val)), true
 	case *plan.Literal_I32Val:
-		return types.Float32RoundToOddInt(int64(v.I32Val)), true
+		return lowPrecisionInt(int64(v.I32Val)), true
 	case *plan.Literal_I64Val:
-		return types.Float32RoundToOddInt(v.I64Val), true
+		return lowPrecisionInt(v.I64Val), true
 	case *plan.Literal_U8Val:
-		return types.Float32RoundToOddUint(uint64(v.U8Val)), true
+		return lowPrecisionUint(uint64(v.U8Val)), true
 	case *plan.Literal_U16Val:
-		return types.Float32RoundToOddUint(uint64(v.U16Val)), true
+		return lowPrecisionUint(uint64(v.U16Val)), true
 	case *plan.Literal_U32Val:
-		return types.Float32RoundToOddUint(uint64(v.U32Val)), true
+		return lowPrecisionUint(uint64(v.U32Val)), true
 	case *plan.Literal_U64Val:
-		return types.Float32RoundToOddUint(v.U64Val), true
+		return lowPrecisionUint(v.U64Val), true
 	case *plan.Literal_Decimal64Val:
-		return lowPrecisionTextFloat32(types.Decimal64(v.Decimal64Val.A).Format(expr.Typ.Scale))
+		return lowPrecisionText(types.Decimal64(v.Decimal64Val.A).Format(expr.Typ.Scale))
 	case *plan.Literal_Decimal128Val:
 		d := types.Decimal128{B0_63: uint64(v.Decimal128Val.A), B64_127: uint64(v.Decimal128Val.B)}
-		return lowPrecisionTextFloat32(d.Format(expr.Typ.Scale))
+		return lowPrecisionText(d.Format(expr.Typ.Scale))
 	case *plan.Literal_Sval:
-		return lowPrecisionTextFloat32(v.Sval)
+		return lowPrecisionText(v.Sval)
 	}
-	return 0, false
+	return lowPrecisionSource{}, false
 }
 
 // preparedLowPrecisionValue is this execution's value of a marker -- a float, a signed or
-// unsigned integer, or text holding a decimal numeral -- rounded to float32 as CAST to
-// bf16/float16/float8/float4 rounds it.
-func preparedLowPrecisionValue(ctx context.Context, expr *Expr) (float32, bool) {
+// unsigned integer, or text holding a decimal numeral -- as CAST to
+// bf16/float16/float8/float4 narrows it.
+func preparedLowPrecisionValue(ctx context.Context, expr *Expr) (lowPrecisionSource, bool) {
 	raw, present := preparedConfigurationValue(ctx, expr)
 	if !present {
-		return 0, false
+		return lowPrecisionSource{}, false
 	}
 	switch value := raw.(type) {
 	case float64:
-		return types.Float32RoundToOdd(value), true
+		return lowPrecisionFloat64(value), true
 	case float32:
-		return value, true
+		return lowPrecisionSource{f: value, d: float64(value)}, true
 	case int64:
-		return types.Float32RoundToOddInt(value), true
+		return lowPrecisionInt(value), true
 	case int32:
-		return types.Float32RoundToOddInt(int64(value)), true
+		return lowPrecisionInt(int64(value)), true
 	case int:
-		return types.Float32RoundToOddInt(int64(value)), true
+		return lowPrecisionInt(int64(value)), true
 	case uint64:
-		return types.Float32RoundToOddUint(value), true
+		return lowPrecisionUint(value), true
 	case uint32:
-		return types.Float32RoundToOddUint(uint64(value)), true
+		return lowPrecisionUint(uint64(value)), true
 	case string:
-		return lowPrecisionTextFloat32(value)
+		return lowPrecisionText(value)
 	case []byte:
-		return lowPrecisionTextFloat32(string(value))
+		return lowPrecisionText(string(value))
 	default:
-		return 0, false
+		return lowPrecisionSource{}, false
 	}
 }
 
