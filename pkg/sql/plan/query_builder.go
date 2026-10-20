@@ -2172,6 +2172,36 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 			aliasDemand[alias.ref] = colRefCnt[alias.ref] > 0
 		}
 
+		var aliasesByGroup map[int32][][2]int32
+		if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
+			aliasesByGroup = make(map[int32][][2]int32, len(aliases))
+			for _, alias := range aliases {
+				aliasesByGroup[alias.groupPos] = append(aliasesByGroup[alias.groupPos], alias.ref)
+			}
+		}
+		// Generated scalar reaggregations carry visible outer outputs beside an
+		// explicit occurrence hash key. A discarded passthrough must not demand
+		// its scan input (notably invalid, unused external CSV fields). Preserve
+		// slot numbers for membership/cardinality consumers with a typed NULL.
+		// Without explicit keys every group is a key and must remain evaluated.
+		if len(node.GroupByHashKey) > 0 {
+			for pos, aliases := range aliasesByGroup {
+				if slices.Contains(node.GroupByHashKey, pos) || colRefCnt[[2]int32{groupTag, pos}] > 0 {
+					continue
+				}
+				needed := false
+				for _, ref := range aliases {
+					needed = needed || aliasDemand[ref]
+				}
+				if !needed {
+					expr := makePlan2NullConstExprWithType()
+					expr.Typ = node.GroupBy[pos].Typ
+					expr.Typ.NotNullable = false
+					node.GroupBy[pos] = expr
+				}
+			}
+		}
+
 		neededAggCount := int32(0)
 		firstNeededAgg := int32(-1)
 		for i, expr := range node.AggList {
@@ -2257,13 +2287,6 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 
 		remapInfo.tip = "GroupBy"
 		childProjList := builder.qry.Nodes[node.Children[0]].ProjectList
-		var aliasesByGroup map[int32][][2]int32
-		if aliases := builder.scalarReaggAliases[nodeID]; len(aliases) > 0 {
-			aliasesByGroup = make(map[int32][][2]int32, len(aliases))
-			for _, alias := range aliases {
-				aliasesByGroup[alias.groupPos] = append(aliasesByGroup[alias.groupPos], alias.ref)
-			}
-		}
 		for idx, expr := range node.GroupBy {
 			increaseRefCnt(expr, -1, colRefCnt)
 			remapInfo.srcExprIdx = idx

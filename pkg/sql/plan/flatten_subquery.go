@@ -3426,7 +3426,7 @@ func (builder *QueryBuilder) scalarProjectionAliases(childID int32, expr *plan.E
 				return aliases
 			}
 			childID = child.Children[0]
-		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_FUNCTION_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_SCAN:
 			if len(child.BindingTags) == 1 && child.TableDef != nil &&
 				col.RelPos == child.BindingTags[0] && col.ColPos >= 0 &&
 				int(col.ColPos) < len(child.TableDef.Cols) {
@@ -3467,7 +3467,7 @@ func (builder *QueryBuilder) collectScalarOuterOutputs(nodeID, outerTag, baseCol
 		}
 		node := builder.qry.Nodes[id]
 		switch node.NodeType {
-		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_FUNCTION_SCAN:
+		case plan.Node_TABLE_SCAN, plan.Node_MATERIAL_SCAN, plan.Node_FUNCTION_SCAN, plan.Node_EXTERNAL_SCAN:
 			if len(node.BindingTags) != 1 || node.TableDef == nil {
 				return false
 			}

@@ -386,3 +386,74 @@ func TestFilteredSetOperationProjection(t *testing.T) {
 		require.Equal(t, 1, one)
 	})
 }
+
+// Reuse the signed-zero fixture: external rows need the same occurrence identity
+// and scalar cardinality checks as stored rows, without forcing unused CSV fields.
+func testScalarExternalOuter(t *testing.T, ctx context.Context, conn *sql.Conn, dsn string) {
+	_, err := conn.ExecContext(ctx, "create table ext_inner(k int,d double)")
+	require.NoError(t, err)
+	_, err = conn.ExecContext(ctx, "insert into ext_inner values(3,1.25)")
+	require.NoError(t, err)
+	for _, tc := range []struct{ name, schema, data string }{
+		{"ext_plain", "a int", "1\n1\n3\n"},
+		{"ext_tail", "a int,b int", "1,notanint\n1,notanint\n3,notanint\n"},
+		{"ext_head", "b int,a int", "notanint,1\nnotanint,1\nnotanint,3\n"},
+		{"ext_nullable", "a int", "\\N\n1\n"},
+		{"ext_empty", "a int", ""},
+	} {
+		path := filepath.Join(t.TempDir(), tc.name+".csv")
+		require.NoError(t, os.WriteFile(path, []byte(tc.data), 0600))
+		_, err := conn.ExecContext(ctx, fmt.Sprintf("create external table %s(%s) infile{'filepath'='%s'} fields terminated by ',' lines terminated by '\\n'", tc.name, tc.schema, strings.ReplaceAll(path, "'", "''")))
+		require.NoError(t, err)
+	}
+	scalar := "(select d from ext_inner where k>o.a union select d from ext_inner where k>o.a)"
+	want := []string{"1:1.25", "1:1.25", "3:NULL"}
+	for _, tc := range []struct {
+		name, query string
+		want        []string
+	}{
+		{"direct", "select o.a,cast(" + scalar + " as varchar) from ext_plain o order by o.a", want},
+		{"single-arm-control", "select o.a,cast((select d from ext_inner where k>o.a) as varchar) from ext_plain o order by o.a", want},
+		{"derived-control", "select o.a,cast(" + scalar + " as varchar) from (select a from ext_plain) o order by o.a", want},
+		{"unused-invalid-tail", "select o.a,cast(" + scalar + " as varchar) from ext_tail o order by o.a", want},
+		{"unused-invalid-head", "select o.a,cast(" + scalar + " as varchar) from ext_head o order by o.a", want},
+		{"nullable", "select o.a,cast(" + scalar + " as varchar) from ext_nullable o order by o.a is null desc", []string{"NULL:NULL", "1:1.25"}},
+		{"empty", "select o.a,cast(" + scalar + " as varchar) from ext_empty o", nil},
+		{"aliases-composed", "select o.a,cast(" + scalar + " as varchar),cast(" + scalar + "+1 as varchar) from (select a,b from ext_tail) o order by o.a", []string{"1:1.25:2.25", "1:1.25:2.25", "3:NULL:NULL"}},
+		{"predicate-only-demand", "select cast(" + scalar + " as varchar) from ext_tail o where o.a<3 order by o.a", []string{"1.25", "1.25"}},
+		{"order-only-demand", "select cast(" + scalar + " as varchar) from ext_tail o order by o.a", []string{"1.25", "1.25", "NULL"}},
+		// Tolerant error records null every user field, including correlation a.
+		{"error-record-control", "select a,__mo_error_text from ext_tail order by __mo_error_text", []string{"NULL:1,notanint", "NULL:1,notanint", "NULL:3,notanint"}},
+		{"error-record-single-arm", "select o.__mo_error_text,cast((select d from ext_inner where k>o.a) as varchar) from ext_tail o order by o.__mo_error_text", []string{"1,notanint:NULL", "1,notanint:NULL", "3,notanint:NULL"}},
+		{"error-record-text", "select o.__mo_error_text,cast(" + scalar + " as varchar) from ext_tail o order by o.__mo_error_text", []string{"1,notanint:NULL", "1,notanint:NULL", "3,notanint:NULL"}},
+		{"error-record-message", "select o.__mo_error_message is not null and length(o.__mo_error_message)>0,cast(" + scalar + " as varchar) from ext_tail o order by o.a", []string{"1:NULL", "1:NULL", "1:NULL"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, err := conn.QueryContext(ctx, tc.query)
+			require.NoError(t, err, tc.query)
+			require.Equal(t, tc.want, readWindowNullRows(t, rows), tc.query)
+		})
+	}
+	// Expected failures use separate connections, after successful cases, so an
+	// internal-error response cannot affect the following query's protocol state.
+	for _, tc := range []struct{ name, query, code string }{
+		{"needed-invalid-output", "select o.b," + scalar + " from ext_tail o", "notanint"},
+		{"needed-invalid-correlation", "select (select d from ext_inner where k>o.b union select d from ext_inner where k>o.b) from ext_tail o", "notanint"},
+		{"needed-invalid-order", "select " + scalar + " from ext_tail o order by o.b", "notanint"},
+		{"multiple-members", "select (select d from ext_inner where k>o.a union select d+1 from ext_inner where k>o.a) from ext_plain o", "1242"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			check, err := sql.Open("mysql", dsn)
+			require.NoError(t, err)
+			defer check.Close()
+			rows, queryErr := check.QueryContext(ctx, tc.query)
+			if queryErr == nil {
+				defer rows.Close()
+				for rows.Next() {
+				}
+				queryErr = rows.Err()
+			}
+			require.ErrorContains(t, queryErr, tc.code, tc.query)
+		})
+	}
+}
