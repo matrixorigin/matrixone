@@ -2435,7 +2435,17 @@ func TestISCPExecutor3(t *testing.T) {
 		appendTarget.ToString(),
 	)
 	dirtyTablesFault.Remove()
-	waitForWatermark("hnsw_idx_0", appendTarget)
+	for i := 0; i < 4; i++ {
+		// Watermarks belong to individual jobs: one completed consumer does
+		// not establish visibility for any of its sibling indexes.
+		waitForWatermark(fmt.Sprintf("hnsw_idx_%d", i), appendTarget)
+	}
+	// The source target predates the index commits. Apply the consumers'
+	// actual committed frontier before starting equality-check snapshots.
+	_, err = disttaeEngine.GetTxnClient().WaitLogTailAppliedAt(
+		ctxWithTimeout, disttaeEngine.GetTxnClient().GetLatestCommitTS(),
+	)
+	require.NoError(t, err)
 	for i := 0; i < 4; i++ {
 		CheckTableData(
 			t,

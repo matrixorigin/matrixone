@@ -1,7 +1,7 @@
 # Materialized views: implemented contract (D2)
 
 Status: implementation contract for this PR. The persisted definition is format
-1 and requires the dedicated protocol 124 capability. This document describes
+1 and requires the dedicated protocol 125 capability. This document describes
 the implemented aggregate and UNION ALL variants; it does not specify a future
 operator-graph format.
 
@@ -133,7 +133,7 @@ individually so unrelated log replay can continue.
 
 ## Upgrade and rollback
 
-All creation, including ON DEMAND, requires protocol 124. Admission is a rollout
+All creation, including ON DEMAND, requires protocol 125. Admission is a rollout
 check; safety also relies on representations understood by predecessor readers.
 On disk, the job uses the existing IndexSync discriminator with an empty index
 selector and an additive MVReference. A predecessor's writer registry rejects

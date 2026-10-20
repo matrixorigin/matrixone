@@ -1741,12 +1741,12 @@ func TestTableDumpRestoredExpressionsDeclarationMatrix(t *testing.T) {
 		}}
 	}
 	source := &plan.TableDef{Cols: []*plan.ColDef{
-		{Name: "default_col", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{OriginString: "a / b", Expr: boundInt(10)}},
+		{Name: "default_col", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{OriginString: "a + b", Expr: boundInt(10)}},
 		// Old catalog metadata can carry an on-update expression even when current
 		// SQL syntax would not accept this declaration.
-		{Name: "update_col", Typ: plan.Type{Id: int32(types.T_int64)}, OnUpdate: &plan.OnUpdate{OriginString: "a / b", Expr: boundInt(11)}},
-		{Name: "generated_col", Typ: plan.Type{Id: int32(types.T_int64)}, GeneratedCol: &plan.GeneratedCol{OriginString: "a / b", IsStored: true, Expr: boundInt(12)}},
-	}, Checks: []*plan.CheckDef{{Name: "check_div", OriginSql: "a / b > 1", Check: boundBool(true)}}}
+		{Name: "update_col", Typ: plan.Type{Id: int32(types.T_int64)}, OnUpdate: &plan.OnUpdate{OriginString: "a + b", Expr: boundInt(11)}},
+		{Name: "generated_col", Typ: plan.Type{Id: int32(types.T_int64)}, GeneratedCol: &plan.GeneratedCol{OriginString: "a + b", IsStored: true, Expr: boundInt(12)}},
+	}, Checks: []*plan.CheckDef{{Name: "check_div", OriginSql: "a + b > 1", Check: boundBool(true)}}}
 	target := proto.Clone(source).(*plan.TableDef)
 	target.TblId = 123
 	target.Cols[0].Default.Expr = boundInt(1)
@@ -1756,7 +1756,6 @@ func TestTableDumpRestoredExpressionsDeclarationMatrix(t *testing.T) {
 	before := proto.Clone(target)
 	payload, digest, err := tableDumpBoundExpressions(source)
 	require.NoError(t, err)
-	require.True(t, tableDumpMayDependOnDivision(source))
 	restored, changed, err := tableDumpRestoredExpressions(target, payload, digest)
 	require.NoError(t, err)
 	require.True(t, changed)
@@ -1774,11 +1773,11 @@ func TestTableDumpRestoredExpressionsDeclarationMatrix(t *testing.T) {
 		want   string
 		change func(*plan.TableDef)
 	}{
-		{"default origin", "table dump default does not match target schema", func(def *plan.TableDef) { def.Cols[0].Default.OriginString = "a / (b + 1)" }},
-		{"on-update origin", "table dump on-update expression does not match target schema", func(def *plan.TableDef) { def.Cols[1].OnUpdate.OriginString = "a / (b + 1)" }},
+		{"default origin", "table dump default does not match target schema", func(def *plan.TableDef) { def.Cols[0].Default.OriginString = "a + (b + 1)" }},
+		{"on-update origin", "table dump on-update expression does not match target schema", func(def *plan.TableDef) { def.Cols[1].OnUpdate.OriginString = "a + (b + 1)" }},
 		{"generated storage", "table dump generated expression does not match target schema", func(def *plan.TableDef) { def.Cols[2].GeneratedCol.IsStored = false }},
-		{"generated origin", "table dump generated expression does not match target schema", func(def *plan.TableDef) { def.Cols[2].GeneratedCol.OriginString = "a / (b + 1)" }},
-		{"check origin", "table dump checks do not match target schema", func(def *plan.TableDef) { def.Checks[0].OriginSql = "a / b > 2" }},
+		{"generated origin", "table dump generated expression does not match target schema", func(def *plan.TableDef) { def.Cols[2].GeneratedCol.OriginString = "a + (b + 1)" }},
+		{"check origin", "table dump checks do not match target schema", func(def *plan.TableDef) { def.Checks[0].OriginSql = "a + b > 2" }},
 		{"check name", "table dump checks do not match target schema", func(def *plan.TableDef) { def.Checks[0].Name = "other" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -2208,4 +2207,25 @@ func TestTableDumpRequiresServerFileAuthority(t *testing.T) {
 		})
 	}
 	require.ErrorContains(t, validateOutputDirPath(t.Context(), ses, dir), "only the sys account moadmin role")
+}
+
+func TestReadTableDumpManifestBindingFormats(t *testing.T) {
+	ctx := t.Context()
+	fs, err := fileservice.NewLocalETLFS("binding-formats", t.TempDir())
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	payload, digest, err := tableDumpBoundExpressions(&plan.TableDef{Cols: []*plan.ColDef{{Name: "v", Typ: plan.Type{Id: int32(types.T_int64)}, Default: &plan.Default{OriginString: "1", Expr: &plan.Expr{Typ: plan.Type{Id: int32(types.T_int64)}, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 1}}}}}}}})
+	require.NoError(t, err)
+	for _, version := range []int{tableDumpLegacyBoundFormatVersion, tableDumpBoundFormatVersion, tableDumpBoundFormatVersion + 1} {
+		require.NoError(t, writeTableDumpJSON(ctx, fs, tableDumpManifestName, &tableDumpManifest{Version: version, BoundExpressions: payload, ExpressionHash: digest}))
+		got, err := readTableDumpManifest(ctx, fs)
+		if version == tableDumpBoundFormatVersion+1 {
+			require.ErrorContains(t, err, "unsupported table dump format version")
+		} else {
+			require.NoError(t, err)
+			require.Equal(t, version, got.Version)
+			require.Equal(t, payload, got.BoundExpressions)
+		}
+		require.NoError(t, fs.Delete(ctx, tableDumpManifestName))
+	}
 }
