@@ -702,25 +702,29 @@ func TestVolatileBoundaryUnionKeepsIndependentArms(t *testing.T) {
 	}
 }
 
-func TestScalarFunctionOuterOutputBoundary(t *testing.T) {
-	builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
-	integer, floating := types.T_int64.ToType().PlanType(), types.T_float64.ToType().PlanType()
-	builder.qry.Nodes = []*planpb.Node{
-		{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: integer}}}},
-		{NodeType: planpb.Node_FUNCTION_SCAN, BindingTags: []int32{20}, Children: []int32{0}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: integer}, {Typ: floating}}}},
-		{NodeType: planpb.Node_PROJECT, BindingTags: []int32{30}, Children: []int32{1}, ProjectList: []*planpb.Expr{GetColExpr(floating, 20, 1)}},
+func TestScalarScanOuterOutputBoundary(t *testing.T) {
+	for _, scanType := range []planpb.Node_NodeType{planpb.Node_FUNCTION_SCAN, planpb.Node_EXTERNAL_SCAN} {
+		t.Run(scanType.String(), func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
+			integer, floating := types.T_int64.ToType().PlanType(), types.T_float64.ToType().PlanType()
+			builder.qry.Nodes = []*planpb.Node{
+				{NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: integer}}}},
+				{NodeType: scanType, BindingTags: []int32{20}, Children: []int32{0}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Typ: integer}, {Typ: floating}}}},
+				{NodeType: planpb.Node_PROJECT, BindingTags: []int32{30}, Children: []int32{1}, ProjectList: []*planpb.Expr{GetColExpr(floating, 20, 1)}},
+			}
+			ctx := &BindContext{}
+			outputs, ok := builder.collectScalarOuterOutputs(1, -1, 0, ctx)
+			require.True(t, ok)
+			require.Equal(t, []scalarOuterOutput{{ref: [2]int32{20, 0}, typ: integer}, {ref: [2]int32{20, 1}, typ: floating}}, outputs)
+			outputs, ok = builder.collectScalarOuterOutputs(2, -1, 0, ctx)
+			require.True(t, ok)
+			require.Equal(t, []scalarOuterOutput{{ref: [2]int32{30, 0}, typ: floating, aliases: [][2]int32{{20, 1}}}}, outputs)
+			builder.qry.Nodes[1].TableDef = nil
+			_, ok = builder.collectScalarOuterOutputs(1, -1, 0, ctx)
+			require.False(t, ok, "missing output schema must fail closed")
+			require.Empty(t, builder.scalarProjectionAliases(1, GetColExpr(floating, 20, 1)))
+		})
 	}
-	ctx := &BindContext{}
-	outputs, ok := builder.collectScalarOuterOutputs(1, -1, 0, ctx)
-	require.True(t, ok)
-	require.Equal(t, []scalarOuterOutput{{ref: [2]int32{20, 0}, typ: integer}, {ref: [2]int32{20, 1}, typ: floating}}, outputs)
-	outputs, ok = builder.collectScalarOuterOutputs(2, -1, 0, ctx)
-	require.True(t, ok)
-	require.Equal(t, []scalarOuterOutput{{ref: [2]int32{30, 0}, typ: floating, aliases: [][2]int32{{20, 1}}}}, outputs)
-	builder.qry.Nodes[1].TableDef = nil
-	_, ok = builder.collectScalarOuterOutputs(1, -1, 0, ctx)
-	require.False(t, ok, "missing function output schema must fail closed")
-	require.Empty(t, builder.scalarProjectionAliases(1, GetColExpr(floating, 20, 1)))
 }
 
 func TestScalarApplyOuterOutputBoundary(t *testing.T) {
@@ -755,4 +759,55 @@ func TestScalarApplyOuterOutputBoundary(t *testing.T) {
 	builder.qry.Nodes[1].NodeType = planpb.Node_INDEX_SEARCH_SCAN
 	_, ok = builder.collectScalarOuterOutputs(3, -1, 0, ctx)
 	require.False(t, ok, "unqualified right-side shapes stay rejected")
+}
+
+// The remapper must use final consumer demand, rather than the SELECT list, to
+// retain synthetic passthroughs. Empty hash-key metadata means all groups hash.
+func TestScalarReaggregationPassthroughDemand(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		keys     []int32
+		demand   [][2]int32
+		wantNull bool
+	}{
+		{"unused", []int32{0}, nil, true},
+		{"logical-alias", []int32{0}, [][2]int32{{10, 1}}, false},
+		{"forwarding-alias", []int32{0}, [][2]int32{{30, 0}}, false},
+		{"having", []int32{0}, nil, false},
+		{"group-output", []int32{0}, [][2]int32{{20, 1}}, false},
+		{"hash-key", []int32{0, 1}, nil, false},
+		{"implicit-all-keys", nil, nil, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder := NewQueryBuilder(planpb.Query_SELECT, NewMockCompilerContext(true, newPlanTestProcess(t)), false, false)
+			typ := types.T_int64.ToType().PlanType()
+			builder.qry.Nodes = []*planpb.Node{
+				{NodeId: 0, NodeType: planpb.Node_TABLE_SCAN, BindingTags: []int32{10}, TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "identity", Typ: typ}, {Name: "payload", Typ: typ}}}},
+				{NodeId: 1, NodeType: planpb.Node_AGG, Children: []int32{0}, BindingTags: []int32{20, 21}, GroupBy: []*planpb.Expr{GetColExpr(typ, 10, 0), GetColExpr(typ, 10, 1)}, GroupByHashKey: tc.keys},
+			}
+			builder.scalarReaggAliases = map[int32][]scalarReaggAlias{1: {{ref: [2]int32{10, 1}, groupPos: 1}, {ref: [2]int32{30, 0}, groupPos: 1}}}
+			if tc.name == "having" {
+				filter, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*planpb.Expr{GetColExpr(typ, 20, 1)})
+				require.NoError(t, err)
+				builder.qry.Nodes[1].FilterList = []*planpb.Expr{filter}
+			}
+			refs := map[[2]int32]int{}
+			for _, ref := range tc.demand {
+				refs[ref]++
+			}
+			_, err := builder.remapAllColRefs(1, 0, refs, map[[2]int32]bool{}, map[[2]int32]int{})
+			require.NoError(t, err)
+			agg := builder.qry.Nodes[1]
+			require.Len(t, agg.GroupBy, 2, "passthrough pruning must preserve ordinals")
+			require.NotNil(t, agg.GroupBy[0].GetCol(), "identity hash key stays evaluated")
+			if tc.wantNull {
+				require.True(t, agg.GroupBy[1].GetLit().GetIsnull())
+				require.Equal(t, typ.Id, agg.GroupBy[1].Typ.Id)
+				require.Len(t, builder.qry.Nodes[0].TableDef.Cols, 1)
+			} else {
+				require.NotNil(t, agg.GroupBy[1].GetCol())
+				require.Len(t, builder.qry.Nodes[0].TableDef.Cols, 2)
+			}
+		})
+	}
 }

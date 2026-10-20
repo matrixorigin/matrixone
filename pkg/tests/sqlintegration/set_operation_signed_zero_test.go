@@ -139,6 +139,9 @@ func TestSetOperationSignedZero(t *testing.T) {
 			require.Equal(t, []string{"4:1:1:1"}, readWindowNullRows(t, rows))
 		})
 		t.Run("correlated-union", func(t *testing.T) {
+			t.Run("scalar-external-outer", func(t *testing.T) {
+				testScalarExternalOuter(t, ctx, conn, fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/set_signed_zero", cn.GetServiceConfig().CN.Frontend.Port))
+			})
 			t.Run("dependent-program-composition", func(t *testing.T) {
 				deep := "(select (select i.id+o.id from zeros i where i.id=1) from zeros j where j.id=1)"
 				// Separate and combined occurrences have the same SQL semantics.

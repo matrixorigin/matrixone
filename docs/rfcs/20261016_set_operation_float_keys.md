@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 20
+- Revision: 21
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 21 integration baseline: official main `743e749a1e33d6c845bb73999e8c82d297a2b657`
 - Revision 20 integration baseline: official main `743e749a1e33d6c845bb73999e8c82d297a2b657`
 - Revision 19 integration baseline: official main `3829ee49c7c118f2f3b0ebf7ed3acbd52483d870`
 - Revision 18 integration baseline: official main `983ab88913462ebba9441d9626cad64e206f0884`
@@ -1147,6 +1148,38 @@ The public signed-zero root is checked against the new storage baseline. This
 maintenance rebase changes no execution or capacity contract; earlier receipts
 retain their original sources, workloads and limits. New CI is left to the
 subsequent run triggered by delivery.
+
+
+### Revision 21 external outer streams and passthrough demand
+
+Review 5582986949 demonstrated that a direct external CSV outer scan was
+incorrectly rejected with 20102, while single-arm and projected-source controls
+worked. EXTERNAL_SCAN now owns its schema at the same output boundary as a table
+or function scan. A global occurrence number is assigned after the external
+producer, so identical records retain independent scalar results and empty/NULL
+and multiple-member semantics still use the existing SINGLE owner.
+
+Collecting an outer schema is not permission to evaluate every CSV column.
+Synthetic reaggregation passthrough slots are pruned using final consumer demand
+before their child is remapped. Every explicit hash key, direct group reference,
+and demanded logical alias is retained. Only unused non-key slots recorded in
+scalarReaggAliases become typed NULL placeholders, preserving group ordinals.
+An empty explicit hash-key list still means all groups are keys and disables
+this pruning. Ordinary aggregates retain their original grouping semantics.
+Explicit external diagnostic columns continue to request whole-record conversion;
+unused invalid fields do not become conversion obligations. Needed invalid
+projection, correlation and ordering fields still produce conversion errors.
+
+The [revision-21 receipt](validation/20261020_scalar_external_outer.json) records
+baseline/admission-only counterexamples and final typed/public/consumer evidence.
+The bounded local runtime owners, candidate-pair/memory/CN limits and function602
+at MORPC125 are unchanged. Official main was checked at
+`0fb05134c76148fe7fd42a6bd54d37038df9510e` (latest124); its unrelated XFS join-spill
+allocation change is not a dependency of this correction and no rebase is made.
+Historical capacity and race receipts retain their measured source and workload;
+column-liveness changes can alter fallback input width, so they are not presented
+as current-head performance or external-source capacity qualification. No new
+runtime owner, per-row admission step or distributed fallback is introduced.
 
 ## Alternatives
 
