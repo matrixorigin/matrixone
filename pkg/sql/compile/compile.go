@@ -2363,6 +2363,13 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		}
 
 		c.setAnalyzeCurrent(ss, int(curNodeIdx))
+		// A shared producer can retain evaluation-only columns (for example,
+		// a fallible aggregate). Publish the SINK schema that its readers use,
+		// rather than the wider child's schema, without discarding that work.
+		if c.isMaterializedCTEStep(c.anal.qry, step) && len(node.ProjectList) > 0 &&
+			!isIdentityProjectionOfChild(node.ProjectList, nodes[node.Children[0]].ProjectList) {
+			ss = c.compileProjection(node, ss)
+		}
 		return c.compileSinkNode(node, ss, step)
 	case plan.Node_APPLY:
 		left, err = c.compilePlanScope(step, node.Children[0], nodes)
