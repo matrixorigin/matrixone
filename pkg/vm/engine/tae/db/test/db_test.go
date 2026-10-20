@@ -11376,7 +11376,7 @@ func TestFreezeConflictingUpdatesAfterMergeReturnWW(t *testing.T) {
 // logical commit timestamp belongs to an append node in an older appendable
 // object. GetByFilter must return the replacement row and reject a second
 // append with the same primary key.
-func TestGetByFilterAfterMergeKeepsTheNewAppend(t *testing.T) {
+func TestGetByFilterAfterMergeKeepsTheNewAppendBeforeMergeCommit(t *testing.T) {
 	defer testutils.AfterTest(t)()
 	testutils.EnsureNoLeak(t)
 	ctx := context.Background()

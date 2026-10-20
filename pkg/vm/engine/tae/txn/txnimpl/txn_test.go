@@ -80,6 +80,12 @@ func (data *containsObjectData) Contains(
 	return data.contains(keys)
 }
 
+func (data *containsObjectData) WaitAppendCommittingBefore(
+	types.TS, txnif.TxnReader, containers.Vector, index.ZM,
+) bool {
+	return false
+}
+
 func (data *dedupErrorObjectData) GetDuplicatedRows(
 	context.Context,
 	txnif.TxnReader,

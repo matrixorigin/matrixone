@@ -601,10 +601,12 @@ func TestAppendableDuplicatedRowsTimestampWindow(t *testing.T) {
 				start, end uint32
 				ts         int64
 			}{{0, 1, 10}, {1, 3, 20}, {3, 4, 30}} {
-				an, _ := mvcc.AddAppendNodeLocked(nil, appendRange.start, appendRange.end)
-				an.Start = types.BuildTS(appendRange.ts, 0)
-				an.Prepare = an.Start
-				an.End = an.Start
+				txn := updates.MockTxnWithStartTS(types.BuildTS(appendRange.ts-1, 0))
+				txn.PrepareTS = types.BuildTS(appendRange.ts, 0)
+				txn.CommitTS = txn.PrepareTS
+				an, _ := mvcc.AddAppendNodeLocked(txn, appendRange.start, appendRange.end)
+				require.NoError(t, an.PrepareCommit())
+				require.NoError(t, an.ApplyCommit(txn.ID))
 			}
 			keys := containers.MakeVector(types.T_int8.ToType(), common.DefaultAllocator)
 			defer keys.Close()

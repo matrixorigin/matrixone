@@ -1321,9 +1321,16 @@ func (tbl *txnTable) waitTombstoneRowsCommittedBefore(
 		if obj.CreatedAt.GT(&ts) || !obj.VisibleByTS(ts) {
 			continue
 		}
+		if !obj.IsAppendable() {
+			continue
+		}
 		objData := obj.GetObjectData()
 		if objData == nil {
-			panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
+			// Persisted/catalog-only entries do not have an in-memory append
+			// handle to wait on. Their committed state is covered by the
+			// catalog wait above; only memory objects can contribute a pending
+			// append for these RowIDs.
+			continue
 		}
 		if objData.WaitAppendCommittingBefore(ts, tbl.store.txn, rowIDs, rowIDsZM) {
 			waited = true

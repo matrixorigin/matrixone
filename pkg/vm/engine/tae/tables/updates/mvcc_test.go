@@ -18,6 +18,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -67,11 +68,10 @@ func TestMutationControllerAppend(t *testing.T) {
 	ts := types.NextGlobalTsForTest()
 	ts = ts.Next()
 	ts = ts.Next()
-	row, visible, holes, err := mc.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(ts.Prev()))
+	selection, visible, err := mc.GetVisibleRowLocked(context.TODO(), MockTxnWithStartTS(ts.Prev()))
 	require.NoError(t, err)
 	require.False(t, visible)
-	require.Zero(t, row)
-	require.True(t, holes.IsEmpty())
+	require.Zero(t, selection)
 	queries := make([]types.TS, 0, nodeCnt+1)
 	queries = append(queries, ts.Prev())
 
