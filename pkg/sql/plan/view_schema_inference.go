@@ -79,6 +79,16 @@ func (c viewSchemaCatalogContext) Value(key any) any {
 	return c.Context.Value(key)
 }
 
+// ViewSchemaCatalogContext isolates trusted compiler catalog SQL from a user
+// statement's private binding scope. It preserves cancellation, account and
+// snapshot values. It must not be used to bypass authorization for user SQL.
+func ViewSchemaCatalogContext(ctx context.Context) context.Context {
+	if ctx.Value(viewSchemaContextKey{}) == nil {
+		return ctx
+	}
+	return viewSchemaCatalogContext{ctx}
+}
+
 // Optional metadata inference may discard lookup errors. A denied user root
 // must remain denied for this derivation, even if inference attempts it again.
 // Successful checks are not cached; each user catalog action is authorized.

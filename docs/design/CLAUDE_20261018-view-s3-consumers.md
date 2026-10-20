@@ -3,7 +3,7 @@
 ## 1. 范围与依据
 
 - 任务：[#29438](https://github.com/matrixorigin/matrixone/issues/29438)，父任务 [#29433](https://github.com/matrixorigin/matrixone/issues/29433)。
-- PR 交付同步基线：`873282742714436bff407dfcdbbe879147162bd3`，以 merge 纳入；此前 PR 基线为 `57fb9530859d92791100098d312ea8cacc671910`、`def799e1260dd547cae2e0e54323ea20ec1b7685`，本地验收基线为 `8f600318beffd82185ee8fdd92a8f0b625b8e5e7`，最初核查/反例基线为 `68e642fdc533e96ed8f83ac44659119ad8be97af`。上游同步不改变 S1/S2 契约和本次默认未激活的边界；主输出步与 correlation 采用上游共同 binder/复制语义，不拷贝另一套实现。
+- PR 交付同步基线：`d0e7f9a552f90b28dd37c87a30c4c6dc83ae7423`，以 merge 纳入；此前 PR 基线为 `873282742714436bff407dfcdbbe879147162bd3`、`57fb9530859d92791100098d312ea8cacc671910`、`def799e1260dd547cae2e0e54323ea20ec1b7685`，本地验收基线为 `8f600318beffd82185ee8fdd92a8f0b625b8e5e7`，最初核查/反例基线为 `68e642fdc533e96ed8f83ac44659119ad8be97af`。上游同步不改变 S1/S2 契约和本次默认未激活的边界；主输出步与 correlation 采用上游共同 binder/复制语义，不拷贝另一套实现。
 - 依据：[系列契约](CLAUDE_20260922-view-metadata-on-demand.md)、[S1 精确批准记录](CLAUDE_20260928-view-metadata-s1-review.md)、[已批准的 S2 v2.1 修订](CLAUDE_20261005-view-s2-scope-revision.md)。S1/S2 分别通过 #29456/#29633 合入。
 - 本文记录上述设计的 S3 接线、边界和验证要求，不是新的上线批准。默认 SQL、PREPARE、cursor 路由不激活新模式；S4、S5/S6、S8/S9 的退出条件没有被本次测试替代。
 
@@ -58,9 +58,10 @@ View 定义、环境、身份、owner/权限和版本继续来自可见目录；
 ## 4. 授权、名称域与错误
 
 - 每个用户查询根在数据库/订阅元数据探测及关系解析前授权，包括 PREPARE 在 buildTable 前执行的 numeric 名称/类型预探测；嵌套来源的执行权限由计划 `ViewReferences` 保留给现有安全链。
+- numeric projection/scalar 的物理 metadata 预探测共享当前 BindContext 的名称域和 snapshot，授权与 Resolve 使用同一个 snapshot（包括 tenant/TS）。只有已知当前域才传 nil；缺少绑定上下文或源表/CTE 时间提示尚未解析时跳过可选探测，交由正常绑定决定，不先探测当前目录再补历史权限。
 - 可选 metadata 推导会忽略普通查找错误，不能因此吞掉授权拒绝。每次 derivation 仅保留首次根授权错误，在后续用户探测/buildTable/最终 BuildPlan 传播；不缓存成功授予、不跨语句保留失败，同一 request 后续新规划可重新授权。受信 CTAS 内部目录解析不是用户根，不能在所有 Resolve 上盲目加根授权。
 - 授权函数可以执行内部 catalog SQL，因此只接收 request context，**不能接收私有 derivation/planning marker**；否则内部授权查询会被误当新用户根，递归授权直至资源拒绝。真实订阅/RBAC 测试覆盖此边界。
-- CTAS 等 planner 内部目录 SQL 在 `runSqlWithSnapshot` 边界屏蔽私有 derivation marker，保留账户、事务、快照、取消及其他 context 值；不按系统表名跳过授权。用户显式查询系统表仍是用户根，必须授权。
+- CTAS 等 planner 内部目录 SQL 与 frontend 订阅 metadata SQL（包括克隆历史事务）共用 `ViewSchemaCatalogContext` 屏蔽私有 derivation marker，保留账户、事务、快照、取消及其他 context 值；不按系统表名跳过授权。用户显式查询系统表仍是用户根，必须授权。
 - 一次规划从 caller entry 域开始；持久化 publisher SQL 进入真实发布账户/库域，退出恢复，不能把继承的 subscription 当作根身份。
 - 数据库存在性使用与 source resolver 一致的错误返回型 `GetDatabaseId`，包括 publisher 和 historical snapshot。不能通过 bool-only `DatabaseExists` 丢失 RPC 错误或切回 subscriber 的同名库。
 - 明确缺失源、legacy 环境不足、未稳定 star、损坏定义、协议拒绝、取消和可见性变化均返回错误；没有旧列 fallback。

@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -710,6 +711,45 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			require.False(t, generation.Closed())
 		})
 
+		t.Run("prepared_caller_snapshot", func(t *testing.T) {
+			withNativeViewSchemaRead(t, tenantCtx, cn, svc, "subscribed", tenant, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
+				snapshot := &plan.Snapshot{TS: &historical, Tenant: &pb.SnapshotTenant{TenantID: account}}
+				previous := compiler.GetSnapshot()
+				compiler.SetSnapshot(snapshot)
+				defer compiler.SetSnapshot(previous)
+				roleAuthorize := frontend.NativeViewSchemaRoleAuthorizerForTest(compiler)
+				authorize := func(ctx context.Context, database, name string, actual *plan.Snapshot) error {
+					if actual == nil || actual.TS == nil || !actual.TS.Equal(historical) {
+						return fmt.Errorf("only the established historical snapshot is authorized: %s.%s actual=%+v expected=%s", database, name, actual, historical.DebugString())
+					}
+					require.Equal(t, snapshot, actual)
+					return roleAuthorize(ctx, database, name, actual)
+				}
+				for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+					t.Run(mode, func(t *testing.T) {
+						const query = "select * from subscribed.published"
+						statements, err := mysql.Parse(tenantCtx, query, 1)
+						require.NoError(t, err)
+						defer statements[0].Free()
+						var input tree.Statement = statements[0]
+						if mode == "text" {
+							input = &tree.PrepareString{Name: "historical_schema", Sql: query}
+						} else if mode == "typed" {
+							input = &tree.PrepareStmt{Name: "historical_schema", Stmt: statements[0]}
+						}
+						p, err := compiler.BuildPlanWithViewSchema(tenantCtx, input, mode == "direct", authorize)
+						require.NoError(t, err)
+						if mode == "text" || mode == "typed" {
+							p = p.GetDcl().GetPrepare().Plan
+						}
+						columns := plan.GetResultColumnsFromPlan(p)
+						require.Len(t, columns, 1, "historical View has one column; current View has two")
+						require.Equal(t, "id", columns[0].Name)
+						require.EqualValues(t, types.T_int32, columns[0].Typ.Id)
+					})
+				}
+			})
+		})
 		_, err = subscriber.ExecContext(ctx, "create user denied identified by 'test123'")
 		require.NoError(t, err)
 		var userID, roleID uint32

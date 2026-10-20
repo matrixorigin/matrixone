@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -420,9 +421,12 @@ func (c *viewSchemaAuthorizationCompiler) GetSubscriptionMeta(database string, s
 	return c.viewSchemaTestCompiler.GetSubscriptionMeta(database, snapshot)
 }
 
-func buildViewSchemaAuthorizationPlan(t *testing.T, request *ViewSchemaRequest, mode string) (*Plan, error) {
+func buildViewSchemaAuthorizationPlan(t *testing.T, request *ViewSchemaRequest, mode string, queries ...string) (*Plan, error) {
 	t.Helper()
-	const query = "select id from tpch.root_v"
+	query := "select id from tpch.root_v"
+	if len(queries) != 0 {
+		query = queries[0]
+	}
 	statements, err := mysql.Parse(t.Context(), query, 1)
 	require.NoError(t, err)
 	defer statements[0].Free()
@@ -480,6 +484,81 @@ func TestViewSchemaPlanningAuthorizesRootsBeforeLookup(t *testing.T) {
 			require.NotEmpty(t, p.GetQuery().ViewReferences)
 		})
 	}
+}
+
+func TestViewSchemaPlanningAuthorizationSnapshot(t *testing.T) {
+	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+		for _, historicalAllowed := range []bool{true, false} {
+			for _, shape := range []struct{ name, query string }{
+				{"view", "select id from tpch.root_v"},
+				{"cte", "with q as (select id from tpch.root_v) select id from q"},
+				{"source hint", "select id from tpch.root_v {snapshot='daily'}"},
+				{"cte hint", "with q as (select id from tpch.root_v) select id from q {snapshot='daily'}"},
+			} {
+				t.Run(mode+"/"+strconv.FormatBool(historicalAllowed)+"/"+shape.name, func(t *testing.T) {
+					f := newViewSchemaTestFixture(t)
+					f.addView(t, "root_v", "select n_name as id from nation")
+					snapshot := &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 1234}, Tenant: &SnapshotTenant{TenantID: 42}}
+					f.compiler.snapshot = snapshot
+					if shape.name == "source hint" {
+						f.compiler.snapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 4321}, Tenant: &SnapshotTenant{TenantID: 42}}
+						f.compiler.namedSnapshot = snapshot
+					} else if shape.name == "cte hint" {
+						// The CTE's declaration snapshot has precedence in the
+						// existing binder; optional inference must defer to it.
+						f.compiler.namedSnapshot = &Snapshot{TS: &timestamp.Timestamp{PhysicalTime: 4321}, Tenant: &SnapshotTenant{TenantID: 42}}
+					}
+					failure := errors.New("snapshot domain denied")
+					authorizations := 0
+					f.binding.Authorize = func(_ context.Context, database, name string, actual *Snapshot) error {
+						authorizations++
+						require.Equal(t, "tpch", database)
+						require.Equal(t, "root_v", name)
+						if !historicalAllowed {
+							if actual == nil {
+								return nil
+							}
+							return failure
+						}
+						if actual == nil {
+							return failure
+						}
+						require.Equal(t, snapshot, actual)
+						return nil
+					}
+					f.compiler.resolve = func(_ context.Context, _, _ string, actual *Snapshot) error {
+						require.True(t, historicalAllowed, "denied historical lookup must not reach the catalog")
+						require.Equal(t, snapshot, actual, "authorization and lookup must share the same snapshot tenant/TS")
+						return nil
+					}
+					p, err := buildViewSchemaAuthorizationPlan(t, f.request(t), mode, shape.query)
+					if !historicalAllowed {
+						require.ErrorIs(t, err, failure)
+						require.Nil(t, p)
+						require.Zero(t, f.compiler.lookups.Load())
+						return
+					}
+					require.NoError(t, err)
+					require.NotNil(t, p)
+					require.Positive(t, authorizations)
+					require.Positive(t, f.compiler.lookups.Load())
+					if mode == "text" || mode == "typed" {
+						p = p.GetDcl().GetPrepare().Plan
+					}
+					require.EqualValues(t, types.T_varchar, GetResultColumnsFromPlan(p)[0].Typ.Id)
+				})
+			}
+		}
+	}
+}
+
+func TestViewSchemaPlanningNumericProbeUnknownSnapshot(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	builder := NewQueryBuilder(planpb.Query_SELECT, f.compiler, true, true)
+	sources := []numericProjectionSourceInfo{{sourceName: "nation", sourceSchema: "tpch"}}
+	resolveNumericProjectionSourceOutputs(builder, &tree.Select{}, nil, sources, make(map[*tree.Select]bool))
+	require.False(t, sources[0].outputKnown)
+	require.Zero(t, f.compiler.lookups.Load(), "no binding context means no known snapshot domain")
 }
 
 func TestViewSchemaPlanningDeniedRootDoesNotWaitForCatalog(t *testing.T) {

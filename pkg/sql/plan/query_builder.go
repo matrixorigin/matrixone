@@ -7205,6 +7205,7 @@ type numericProjectionSourceInfo struct {
 	source                        *tree.Select
 	sourceName                    string
 	sourceSchema                  string
+	deferMetadata                 bool
 	alias                         string
 	aliasCols                     tree.IdentifierList
 	outputNames                   []string
@@ -7214,22 +7215,25 @@ type numericProjectionSourceInfo struct {
 	mergeCompatibleNumericTargets bool
 }
 
-func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjectionSourceInfo) []*plan.ColDef {
-	if builder == nil {
+func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjectionSourceInfo, ctx *BindContext) []*plan.ColDef {
+	if builder == nil || ctx == nil || source.deferMetadata {
 		return nil
 	}
 	schema := source.sourceSchema
+	if schema == "" {
+		schema = ctx.defaultDatabase
+	}
 	if schema == "" {
 		schema = builder.compCtx.DefaultDatabase()
 	}
 	if state, _ := builder.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning && state.depth == 0 {
 		// This optional name/type probe can run before buildTable, including
 		// for a plain prepared SELECT. It is still a user-root catalog read.
-		if err := state.authorizeRoot(schema, source.sourceName, nil); err != nil {
+		if err := state.authorizeRoot(schema, source.sourceName, ctx.snapshot); err != nil {
 			return nil
 		}
 	}
-	_, tableDef, err := builder.compCtx.Resolve(schema, source.sourceName, nil)
+	_, tableDef, err := builder.compCtx.Resolve(schema, source.sourceName, ctx.snapshot)
 	if err != nil || tableDef == nil {
 		return nil
 	}
@@ -7252,8 +7256,8 @@ func numericPhysicalTableVisibleCols(builder *QueryBuilder, source numericProjec
 	return cols
 }
 
-func numericPhysicalTableOutputNames(builder *QueryBuilder, source numericProjectionSourceInfo) []string {
-	cols := numericPhysicalTableVisibleCols(builder, source)
+func numericPhysicalTableOutputNames(builder *QueryBuilder, source numericProjectionSourceInfo, ctx *BindContext) []string {
+	cols := numericPhysicalTableVisibleCols(builder, source, ctx)
 	if cols == nil {
 		return nil
 	}
@@ -7289,6 +7293,7 @@ func collectNumericProjectionSources(
 		}
 		return []numericProjectionSourceInfo{{
 			sourceName: sourceName, sourceSchema: string(expr.SchemaName), alias: alias, aliasCols: aliasCols,
+			deferMetadata: expr.AtTsExpr != nil,
 		}}
 	default:
 		return nil
@@ -7303,6 +7308,11 @@ func resolveNumericProjectionSourceOutputs(
 	visiting map[*tree.Select]bool,
 ) {
 	for i := range sources {
+		// A table/CTE time hint has not been resolved at this optional stage.
+		// Let normal binding choose its effective scope instead of guessing.
+		if sources[i].deferMetadata {
+			continue
+		}
 		if sources[i].source == nil && sources[i].sourceSchema == "" {
 			sources[i].source, sources[i].aliasCols = numericProjectionCteSource(
 				owner, ctx, sources[i].sourceName, sources[i].aliasCols,
@@ -7310,13 +7320,7 @@ func resolveNumericProjectionSourceOutputs(
 		}
 		if sources[i].source == nil {
 			if sources[i].sourceName != "" {
-				source := sources[i]
-				if source.sourceSchema == "" && ctx != nil {
-					// Metadata probes must use the same View/CTE namespace as
-					// binding, not the statement owner's default database.
-					source.sourceSchema = ctx.defaultDatabase
-				}
-				sources[i].outputNames = numericPhysicalTableOutputNames(builder, source)
+				sources[i].outputNames = numericPhysicalTableOutputNames(builder, sources[i], ctx)
 				sources[i].outputKnown = sources[i].outputNames != nil
 			}
 			continue

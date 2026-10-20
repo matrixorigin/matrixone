@@ -5722,12 +5722,7 @@ func runSqlWithSnapshot(
 		exec = v.(executor.SQLExecutor)
 	}
 
-	topContext := proc.GetTopContext()
-	if state, _ := topContext.Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil {
-		// Trusted planner catalog SQL is not another user root. Mask only the
-		// private derivation state, preserving cancellation and catalog context.
-		topContext = viewSchemaCatalogContext{topContext}
-	}
+	topContext := ViewSchemaCatalogContext(proc.GetTopContext())
 	accountId, err := defines.GetAccountId(topContext)
 	if err != nil {
 		return executor.Result{}, err

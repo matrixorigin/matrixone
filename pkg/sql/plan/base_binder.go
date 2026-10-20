@@ -1937,6 +1937,9 @@ func (b *baseBinder) numericScalarSources(
 	sources := make([]numericScalarSource, len(infos))
 	ctes = numericScalarVisibleCtes(owner, ctes)
 	for i := range infos {
+		if infos[i].deferMetadata {
+			continue
+		}
 		sources[i].alias = strings.ToLower(infos[i].alias)
 		sources[i].name = strings.ToLower(infos[i].sourceName)
 		if infos[i].source == nil && infos[i].sourceSchema == "" {
@@ -1960,7 +1963,7 @@ func (b *baseBinder) numericScalarSources(
 			sources[i].types = scans
 			sources[i].known = true
 		} else if infos[i].sourceName != "" && b.builder != nil {
-			cols := numericPhysicalTableVisibleCols(b.builder, infos[i])
+			cols := numericPhysicalTableVisibleCols(b.builder, infos[i], b.ctx)
 			if cols == nil {
 				continue
 			}
