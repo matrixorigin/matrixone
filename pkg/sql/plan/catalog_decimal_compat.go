@@ -27,16 +27,17 @@ import (
 // MigrateLegacyCatalogTableDef normalizes execution-owned catalog expressions
 // before binding consumers. Catalog storage and its shared nested objects are
 // immutable; individual migrations must detach anything they change.
-func MigrateLegacyCatalogTableDef(proc *process.Process, tableDef *plan.TableDef) error {
+// ctx belongs to this compilation; proc.Ctx belongs to a pipeline and may have
+// been canceled by the preceding statement before the process is reused.
+func MigrateLegacyCatalogTableDef(ctx context.Context, proc *process.Process, tableDef *plan.TableDef) error {
 	if err := MigrateLegacyHexTableDef(proc, tableDef); err != nil {
 		return err
 	}
 	if tableDef == nil {
 		return nil
 	}
-	ctx := context.Background()
-	if proc != nil && proc.Ctx != nil {
-		ctx = proc.Ctx
+	if ctx == nil {
+		ctx = context.Background()
 	}
 	checksOwned, colsOwned := false, false
 	for i, check := range tableDef.Checks {

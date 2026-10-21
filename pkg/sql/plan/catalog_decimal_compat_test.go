@@ -106,7 +106,7 @@ func TestPersistedDecimalCoercionsSurviveCatalogUpgrade(t *testing.T) {
 			require.Error(t, err)
 			owned := CloneTableDefForPlan(stored, true)
 			proc := newPlanTestProcess(t)
-			require.NoError(t, MigrateLegacyCatalogTableDef(proc, owned))
+			require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, owned))
 			for _, value := range []uint64{999999999999999999, 1000000000000000000, math.MaxInt64} {
 				got, err = executeLegacyDecimalPredicate(t, owned, value)
 				require.NoError(t, err, "value=%d", value)
@@ -119,7 +119,7 @@ func TestPersistedDecimalCoercionsSurviveCatalogUpgrade(t *testing.T) {
 			}
 			first, err := owned.Marshal()
 			require.NoError(t, err)
-			require.NoError(t, MigrateLegacyCatalogTableDef(proc, owned))
+			require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, owned))
 			second, err := owned.Marshal()
 			require.NoError(t, err)
 			require.Equal(t, first, second, "normalization must be idempotent")
@@ -134,7 +134,7 @@ func TestPersistedDecimalNormalizationPreservesDeclaredAssignment(t *testing.T) 
 	stored := new(pb.TableDef)
 	require.NoError(t, stored.Unmarshal(legacyDecimalCatalogFixtures(t)["declared_assignment"]))
 	owned := CloneTableDefForPlan(stored, true)
-	require.NoError(t, MigrateLegacyCatalogTableDef(newPlanTestProcess(t), owned))
+	require.NoError(t, MigrateLegacyCatalogTableDef(t.Context(), newPlanTestProcess(t), owned))
 	require.Same(t, stored.Cols[2], owned.Cols[2], "a declared assignment is not an operator coercion")
 	result, err := executeLegacyDecimalExpression(t, owned, legacyDecimalPredicate(owned), 999999999999999999)
 	require.NoError(t, err)
@@ -148,7 +148,7 @@ func TestPersistedDecimalNormalizationMatchesFreshBinding(t *testing.T) {
 	require.NoError(t, stored.Unmarshal(legacyDecimalCatalogFixtures(t)["signed_compare"]))
 	proc := newPlanTestProcess(t)
 	owned := CloneTableDefForPlan(stored, true)
-	require.NoError(t, MigrateLegacyCatalogTableDef(proc, owned))
+	require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, owned))
 	stmt, err := parsers.ParseOne(proc.Ctx, dialect.MYSQL, "create table legacy_cmp(i bigint, tm time(0), constraint ck check(i > tm))", 1)
 	require.NoError(t, err)
 	t.Cleanup(stmt.Free)
@@ -157,7 +157,7 @@ func TestPersistedDecimalNormalizationMatchesFreshBinding(t *testing.T) {
 	def := fresh.GetDdl().GetCreateTable().GetTableDef()
 	require.Equal(t, legacyDecimalPredicate(def), legacyDecimalPredicate(owned))
 	before := def.Checks[0]
-	require.NoError(t, MigrateLegacyCatalogTableDef(proc, def))
+	require.NoError(t, MigrateLegacyCatalogTableDef(proc.GetTopContext(), proc, def))
 	require.Same(t, before, def.Checks[0], "fresh plans must be a no-op")
 	for _, value := range []int64{math.MinInt64, -1000000000000000000, -1, 0, 1, 999999999999999999, 1000000000000000000, math.MaxInt64} {
 		oldResult, err := executeLegacyDecimalPredicate(t, owned, uint64(value))
@@ -184,7 +184,7 @@ func TestPersistedDecimalNormalizationOwnsOnlyChangedWrappers(t *testing.T) {
 		t.Run(fmt.Sprintf("reader_%d", i), func(t *testing.T) {
 			t.Parallel()
 			owned := CloneTableDefForPlan(stored, true)
-			require.NoError(t, MigrateLegacyCatalogTableDef(newPlanTestProcess(t), owned))
+			require.NoError(t, MigrateLegacyCatalogTableDef(t.Context(), newPlanTestProcess(t), owned))
 			require.NotSame(t, stored.Checks[0], owned.Checks[0])
 			require.NotSame(t, stored.Cols[0], owned.Cols[0])
 			require.Same(t, stored.Cols[1], owned.Cols[1])
@@ -216,10 +216,12 @@ func TestPersistedDecimalNormalizationCancellation(t *testing.T) {
 	_, changed, err := normalizeCatalogDecimalExpr(ctx, stored.Checks[0].Check)
 	require.ErrorIs(t, err, context.Canceled)
 	require.False(t, changed)
+	err = MigrateLegacyCatalogTableDef(ctx, newPlanTestProcess(t), CloneTableDefForPlan(stored, true))
+	require.ErrorIs(t, err, context.Canceled, "current request cancellation must still propagate")
 	after, err := stored.Marshal()
 	require.NoError(t, err)
 	require.Equal(t, before, after)
-	require.NoError(t, MigrateLegacyCatalogTableDef(nil, nil))
+	require.NoError(t, MigrateLegacyCatalogTableDef(nil, nil, nil))
 }
 
 func TestPersistedDecimalNormalizationPreservesExplicitCasts(t *testing.T) {
@@ -229,7 +231,7 @@ func TestPersistedDecimalNormalizationPreservesExplicitCasts(t *testing.T) {
 			stored := new(pb.TableDef)
 			require.NoError(t, stored.Unmarshal(fixtures[name]))
 			owned := CloneTableDefForPlan(stored, true)
-			require.NoError(t, MigrateLegacyCatalogTableDef(newPlanTestProcess(t), owned))
+			require.NoError(t, MigrateLegacyCatalogTableDef(t.Context(), newPlanTestProcess(t), owned))
 			got, err := executeLegacyDecimalPredicate(t, owned, 999999999999999999)
 			require.NoError(t, err)
 			require.True(t, got)

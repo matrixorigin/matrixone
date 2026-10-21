@@ -610,14 +610,18 @@ func TestResolveByIdNormalizesPersistedDecimalCoercions(t *testing.T) {
 			require.NoError(t, err)
 			ctrl := gomock.NewController(t)
 			proc := testutil.NewProcess(t)
+			requestCtx := proc.GetTopContext()
+			pipelineCtx, cancel := context.WithCancel(requestCtx)
+			cancel()
+			proc.Ctx = pipelineCtx // A completed pipeline must not cancel the next compilation.
 			txnOp := mock_frontend.NewMockTxnOperator(ctrl)
 			storage := mock_frontend.NewMockEngine(ctrl)
 			relation := mock_frontend.NewMockRelation(ctrl)
 			storage.EXPECT().GetRelationById(gomock.Any(), txnOp, uint64(42)).Return("db", "legacy_cmp", relation, nil).Times(2)
 			relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef).Times(2)
 			ses, _ := newObservedProtocolSession()
-			ses.txnHandler = InitTxnHandler("", storage, proc.Ctx, txnOp)
-			tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: proc.Ctx, ses: ses, proc: proc}}
+			ses.txnHandler = InitTxnHandler("", storage, requestCtx, txnOp)
+			tcc := &TxnCompilerContext{execCtx: &ExecCtx{reqCtx: requestCtx, ses: ses, proc: proc}}
 			for range 2 {
 				_, resolved, err := tcc.ResolveById(42, nil)
 				require.NoError(t, err)

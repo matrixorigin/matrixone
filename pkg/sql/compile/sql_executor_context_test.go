@@ -488,6 +488,10 @@ func TestInternalResolverNormalizesPersistedDecimalCoercions(t *testing.T) {
 	require.NoError(t, err)
 	ctrl := gomock.NewController(t)
 	proc := testutil.NewProcess(t)
+	requestCtx := proc.GetTopContext()
+	pipelineCtx, cancel := context.WithCancel(requestCtx)
+	cancel()
+	proc.Ctx = pipelineCtx
 	relation := mock_frontend.NewMockRelation(ctrl)
 	relation.EXPECT().GetTableDef(gomock.Any()).Return(catalogDef).Times(2)
 	relation.EXPECT().GetTableID(gomock.Any()).Return(uint64(42)).Times(2)
@@ -495,7 +499,7 @@ func TestInternalResolverNormalizesPersistedDecimalCoercions(t *testing.T) {
 	database.EXPECT().Relation(gomock.Any(), "legacy_cmp", nil).Return(relation, nil).Times(2)
 	eng := mock_frontend.NewMockEngine(ctrl)
 	eng.EXPECT().Database(gomock.Any(), "db", gomock.Any()).Return(database, nil).Times(2)
-	c := &compilerContext{ctx: proc.Ctx, defaultDB: "db", engine: eng, proc: proc}
+	c := &compilerContext{ctx: requestCtx, defaultDB: "db", engine: eng, proc: proc}
 	for range 2 {
 		_, resolved, err := c.Resolve("db", "legacy_cmp", nil)
 		require.NoError(t, err)
