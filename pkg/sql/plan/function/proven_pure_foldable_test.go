@@ -132,6 +132,149 @@ func TestGetFunctionIsProvenPureFoldableByIdAdmitsOnlyPositivelyProvenRegistrati
 		"an unresolvable overload id never qualifies")
 }
 
+// TestGetFunctionIsProvenPureFoldableByIdCompletesTheOrdinarySQLClassification
+// pins the round-14 follow-up review's fixing change: the curated set is
+// a completed audit of the writable SQL builtins whose clean overloads are
+// deterministic in-process value transformations of their own argument
+// vectors, so an ordinary constant expression folds in the guarded
+// publication probe exactly as ordinary binding folds it. Each category
+// representative must resolve, never carry the internal-machinery bit, and
+// admit every overload it registers - the additions came from a registry
+// scan restricted to all-clean overloads, and this test keeps future flag
+// drift from silently shrinking any audited category.
+func TestGetFunctionIsProvenPureFoldableByIdCompletesTheOrdinarySQLClassification(t *testing.T) {
+	categories := map[string][]string{
+		"comparison logic and truth-value predicates": {
+			"=", "<=>", "<>", "and", "not", "isnot", "isnotnull",
+			"istrue", "isnotfalse", "between", "not_in", "ilike",
+		},
+		"bitwise operators":                      {"&", "|", "^", "<<", ">>"},
+		"numeric and formatting transforms":      {"tanh", "atanh", "format_bytes", "format_pico_time"},
+		"text and pattern transforms":            {"binary", "char", "regexp_replace", "to_base64", "compress", "split_part", "empty"},
+		"date and time value transforms":         {"year", "month", "day", "date_add", "date_format", "extract", "makedate", "timediff", "interval"},
+		"JSON value-tree transforms":             {"json_extract", "json_extract_string", "json_unquote", "json_merge_patch", "json_array", "member of"},
+		"UUID and network-address transforms":    {"is_uuid", "uuid_to_bin", "inet6_aton", "is_ipv6"},
+		"geometry value functions":               {"st_geomfromtext", "st_astext", "st_x", "st_distance", "mbrcontains", "st_buffer"},
+		"bitmap hyperloglog vector geo-cell ops": {"bitmap_count", "hll_cardinality", "l2_norm", "inner_product", "s2_cellid_center", "h3_h3index_parent"},
+		"constant branch selection":              {"name_const", "iff", "coalesce"},
+	}
+	seen := map[string]struct{}{}
+	for category, names := range categories {
+		for _, name := range names {
+			if _, dup := seen[name]; dup {
+				t.Fatalf("category witness %q listed twice", name)
+			}
+			seen[name] = struct{}{}
+			fid, exists := getFunctionIdByNameWithoutErr(name)
+			require.True(t, exists, "%s (%s) is a registered builtin", name, category)
+			fn := allSupportedFunctions[fid]
+			require.False(t, fn.testFlag(plan.Function_INTERNAL),
+				"curated pure builtin %q (%s) carries the internal-machinery bit", name, category)
+			require.NotEmpty(t, fn.Overloads,
+				"curated pure builtin %q (%s) registers at least one overload", name, category)
+			for ovIndex := range fn.Overloads {
+				require.True(t,
+					GetFunctionIsProvenPureFoldableById(encodeOverloadID(int32(fn.functionId), int32(ovIndex))),
+					"%s (%s): every overload of this completed classification must stay admissible for the guarded fold (overload %d)",
+					name, category, ovIndex)
+			}
+		}
+	}
+}
+
+// TestGetFunctionIsProvenPureFoldableByIdKeepsTheResidualExclusions pins both
+// halves of the audit's deliberate residue. The clean-flagged witnesses below
+// carry no internal bit, no volatile flag and no real-time-related overload,
+// yet stay outside the curated set exactly like llm_chat: their value depends
+// on server, session or wall-clock state rather than the operands alone, they
+// draw randomness, they interpret programs or call services, or they read the
+// fulltext match context - so the guarded publication fold must keep rejecting
+// them through membership alone. The flag-carried witnesses below demonstrate
+// the excluded flags still back the adverse half of the scan (registrations
+// that the round-14 additions would otherwise have had to skip because some
+// or all of their overloads carry them), and the aggregates and window
+// functions stay outside the value classification altogether.
+func TestGetFunctionIsProvenPureFoldableByIdKeepsTheResidualExclusions(t *testing.T) {
+	// Deliberately unlisted although every overload is flag-clean and the
+	// class is not internal: membership is their only exclusion.
+	cleanFlaggedExclusions := map[string]string{
+		"from_unixtime":              "result depends on the session time zone rather than the operands",
+		"convert_tz":                 "result depends on the session time zone rather than the operands",
+		"random_bytes":               "randomness source",
+		"validate_password_strength": "reads the account and password policy state",
+		"current_role":               "server and session identity state",
+		"current_account_name":       "server and session identity state",
+		"current_user_name":          "server and session identity state",
+		"charset":                    "environment and session configuration",
+		"collation":                  "environment and session configuration",
+		"icu_version":                "build and library state",
+		"roles_graphml":              "session role graph state",
+		"llm_chat":                   "service-calling LLM machinery, the round-14 witness",
+		"llm_embedding":              "service-calling LLM machinery, the round-14 witness",
+		"starlark":                   "program interpreter",
+		"try_starlark":               "program interpreter, the round-14 witness",
+		"jq":                         "program interpreter of jq query text",
+		"try_jq":                     "program interpreter of jq query text",
+		"fulltext_match":             "reads the fulltext match and index context",
+		"fulltext_match_score":       "reads the fulltext match and index context",
+		"values":                     "reads the pending row context of INSERT ... ON DUPLICATE KEY UPDATE",
+		"isempty":                    "reads the argument vector's cardinality, not the operand values",
+		"assert":                     "plan-inserted constraint diagnostics, not a value transform",
+		"hash_value":                 "plan-internal partitioning helper",
+		"serial":                     "plan-internal grouped-value transport",
+		"to_interval":                "plan-internal interval machinery",
+		"__mo_json_ordering_param":   "plan-internal JSON comparison parameter",
+	}
+	for name, why := range cleanFlaggedExclusions {
+		fid, exists := getFunctionIdByNameWithoutErr(name)
+		if !exists {
+			t.Logf("candidate exclusion %q is not registered in this build, skipping", name)
+			continue
+		}
+		fn := allSupportedFunctions[fid]
+		require.False(t, fn.testFlag(plan.Function_INTERNAL),
+			"clean-flagged exclusion witness %q must not owe its rejection to the internal bit", name)
+		for ovIndex := range fn.Overloads {
+			require.False(t, fn.Overloads[ovIndex].CannotFold(),
+				"clean-flagged exclusion witness %q carries no volatile or diagnostics flag on overload %d; only curated membership keeps it out",
+				name, ovIndex)
+			require.False(t, fn.Overloads[ovIndex].IsRealTimeRelated(),
+				"clean-flagged exclusion witness %q carries no real-time-related flag on overload %d; only curated membership keeps it out",
+				name, ovIndex)
+			require.False(t,
+				GetFunctionIsProvenPureFoldableById(encodeOverloadID(int32(fid), int32(ovIndex))),
+				"%s stays outside the curated set: %s", name, why)
+		}
+	}
+
+	// Registrations whose rejection is shared with the flags: some or all of
+	// their overloads carry a real-time-related, volatile or row-diagnostics
+	// flag (now, uuid, rand, sleep, current_user, unix_timestamp, format,
+	// week), the internal-machinery bit (python_user_defined_function,
+	// enable_fault_injection, mo_view_definition), or the SQL aggregate and
+	// window contracts that are not value transforms at all. None of them may
+	// admit any overload.
+	flagAndContractExclusions := []string{
+		"now", "uuid", "rand", "sleep", "unix_timestamp", "current_user", "format", "week",
+		"python_user_defined_function", "enable_fault_injection", "disable_fault_injection",
+		"mo_view_definition", "session_variable", "system_variable",
+		"count", "max", "sum", "avg", "group_concat", "rank", "lag", "ntile",
+	}
+	for _, name := range flagAndContractExclusions {
+		fid, exists := getFunctionIdByNameWithoutErr(name)
+		if !exists {
+			t.Logf("candidate exclusion %q is not registered in this build, skipping", name)
+			continue
+		}
+		fn := allSupportedFunctions[fid]
+		for ovIndex := range fn.Overloads {
+			require.False(t,
+				GetFunctionIsProvenPureFoldableById(encodeOverloadID(int32(fid), int32(ovIndex))),
+				"%s must never admit an overload to the guarded publication fold", name)
+		}
+	}
+}
+
 // TestGetFunctionIsProvenPureFoldableByIdRejectsTheReviewWitnesses pins the
 // mo-bot-local review's counterexample class: registrations that carry none
 // of the excluded flags - no internal class bit, no volatile overload, no

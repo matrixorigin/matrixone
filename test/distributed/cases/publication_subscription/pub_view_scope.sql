@@ -1489,6 +1489,95 @@ drop table base_t;
 drop database gdb_27767;
 -- @session
 
+-- the guarded fold's nested-function admission through the curated pure
+-- set now completes the audited classification of ordinary SQL constant
+-- expressions: a comparison operator inside IFF, a date-part extraction
+-- (YEAR) and the JSON readers (JSON_EXTRACT, JSON_EXTRACT_STRING) are
+-- pure in-process value transformations of constant operands, so an
+-- ordinary compile folds each of them into the same literal 4326. Before
+-- this round the probe's guarded walk rejected these valid stored
+-- definitions with the constant-integer verdict - blocking publication
+-- creation, widening ALTERs and new subscriptions - so the completed
+-- classification lets every publication-level answer equal the literal
+-- twin's
+-- @session:id=1&user=vw01:test_account&password=111
+drop database if exists gdb_27767;
+create database gdb_27767;
+use gdb_27767;
+create table base_t(id int primary key, v int);
+insert into base_t values (1,1),(2,2);
+create view v_pure_if as select id, st_geomfromtext('POINT(1 2)', cast(iff(1 = 1, 4326, 0) as signed) + 0) as g from base_t;
+create view v_pure_yr as select id, st_geomfromtext('POINT(1 2)', year('4326-05-17') + 0) as g from base_t;
+create view v_pure_je as select id, st_geomfromtext('POINT(1 2)', cast(json_extract('{"srid": 4326}', '$.srid') as signed) + 0) as g from base_t;
+create view v_pure_js as select id, st_geomfromtext('POINT(1 2)', json_extract_string('{"srid": "4326"}', '$.srid') + 0) as g from base_t;
+create view v_pure_cl as select id, st_geomfromtext('POINT(1 2)', 4326) as g from base_t;
+-- @session
+
+-- the owner's ordinary compile folds each new pure-class SRID into the
+-- literal twin's own value: every control answers the same result
+-- @session:id=1&user=vw01:test_account&password=111
+select id, st_srid(g) from gdb_27767.v_pure_if order by id;
+select id, st_srid(g) from gdb_27767.v_pure_yr order by id;
+select id, st_srid(g) from gdb_27767.v_pure_je order by id;
+select id, st_srid(g) from gdb_27767.v_pure_js order by id;
+select id, st_srid(g) from gdb_27767.v_pure_cl order by id;
+select id, st_astext(g) from gdb_27767.v_pure_js order by id;
+-- @session
+
+-- the new pure classes publish like the literal twin
+-- @session:id=1&user=vw01:test_account&password=111
+create publication p_pure_new database gdb_27767 table base_t,v_pure_if,v_pure_yr,v_pure_je,v_pure_js account vw02;
+create publication p_pure_cl database gdb_27767 table base_t,v_pure_cl account vw02;
+-- @session
+
+-- residue: both publications exist with their complete members
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name like 'p_pure%' order by pub_name;
+
+-- the subscriber answers the same SRID and WKT through every new pure
+-- class and the literal twin alike
+-- @session:id=2&user=vw02:test_account&password=111
+drop database if exists s_pure_new;
+drop database if exists s_pure_cl;
+create database s_pure_new from vw01 publication p_pure_new;
+select id, st_srid(g) from s_pure_new.v_pure_if order by id;
+select id, st_srid(g) from s_pure_new.v_pure_yr order by id;
+select id, st_srid(g) from s_pure_new.v_pure_je order by id;
+select id, st_srid(g) from s_pure_new.v_pure_js order by id;
+create database s_pure_cl from vw01 publication p_pure_cl;
+select id, st_srid(g) from s_pure_cl.v_pure_cl order by id;
+-- @session
+
+-- the widening ALTER admits the literal twin to the new-class
+-- publication, and the re-subscription answers every member
+-- @session:id=1&user=vw01:test_account&password=111
+alter publication p_pure_new account vw02 table base_t,v_pure_if,v_pure_yr,v_pure_je,v_pure_js,v_pure_cl;
+-- @session
+select pub_name, table_list from mo_catalog.mo_pubs where pub_name like 'p_pure%' order by pub_name;
+
+-- @session:id=2&user=vw02:test_account&password=111
+drop database s_pure_new;
+create database s_pure_new from vw01 publication p_pure_new;
+select id, st_srid(g) from s_pure_new.v_pure_if order by id;
+select id, st_srid(g) from s_pure_new.v_pure_yr order by id;
+select id, st_srid(g) from s_pure_new.v_pure_je order by id;
+select id, st_srid(g) from s_pure_new.v_pure_js order by id;
+select id, st_srid(g) from s_pure_new.v_pure_cl order by id;
+drop database s_pure_new;
+drop database s_pure_cl;
+-- @session
+
+-- @session:id=1&user=vw01:test_account&password=111
+drop publication p_pure_new;
+drop publication p_pure_cl;
+drop view v_pure_if;
+drop view v_pure_yr;
+drop view v_pure_je;
+drop view v_pure_js;
+drop view v_pure_cl;
+drop table base_t;
+drop database gdb_27767;
+-- @session
+
 drop account if exists vw04;
 drop account if exists vw05;
 create account vw04 admin_name = 'test_account' identified by '111';

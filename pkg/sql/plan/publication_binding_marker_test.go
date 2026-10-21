@@ -799,6 +799,44 @@ func TestPublicationViewBindingMarkerPreservesConstantExpressionSRIDs(t *testing
 		bindsWithSRID4326(t, markedCtx, nestedAbsSetterSQL)
 	})
 
+	// The mo-bot-local round-14 follow-up review exported counterexamples for
+	// the guarded fold's remaining ordinary-SQL gaps: a comparison operator
+	// inside IFF, a date-part extraction (YEAR), and the JSON readers
+	// (JSON_EXTRACT, JSON_EXTRACT_STRING) are pure in-process value
+	// transformations of constant operands, so an ordinary bind folds each
+	// constant expression into the same literal 4326 and the stored view is
+	// valid, creatable and subscribable, while the marked probe rejected the
+	// same definitions with the constant-integer verdict - the nested
+	// registrations were missing from the curated proven-pure classification.
+	// The completed classification admits them, and these
+	// ordinary-versus-marked agreements regress if its membership shrinks
+	// below the audited categories or a future registration silently starts
+	// carrying an excluded flag.
+	const iffComparisonSQL = "select st_geomfromtext('POINT(1 2)', cast(iff(1 = 1, 4326, 0) as signed) + 0) as g limit 0"
+	const yearSQL = "select st_geomfromtext('POINT(1 2)', year('4326-05-17') + 0) as g limit 0"
+	const jsonExtractSQL = `select st_geomfromtext('POINT(1 2)', cast(json_extract('{"srid": 4326}', '$.srid') as signed) + 0) as g limit 0`
+	const jsonExtractStringSQL = `select st_geomfromtext('POINT(1 2)', json_extract_string('{"srid": "4326"}', '$.srid') + 0) as g limit 0`
+
+	t.Run("publication binding preserves the IFF-comparison SRID through the marker", func(t *testing.T) {
+		bindsWithSRID4326(t, context.Background(), iffComparisonSQL)
+		bindsWithSRID4326(t, markedCtx, iffComparisonSQL)
+	})
+
+	t.Run("publication binding preserves the YEAR date-part SRID through the marker", func(t *testing.T) {
+		bindsWithSRID4326(t, context.Background(), yearSQL)
+		bindsWithSRID4326(t, markedCtx, yearSQL)
+	})
+
+	t.Run("publication binding preserves the JSON-extract SRID through the marker", func(t *testing.T) {
+		bindsWithSRID4326(t, context.Background(), jsonExtractSQL)
+		bindsWithSRID4326(t, markedCtx, jsonExtractSQL)
+	})
+
+	t.Run("publication binding preserves the JSON-extract-string SRID through the marker", func(t *testing.T) {
+		bindsWithSRID4326(t, context.Background(), jsonExtractStringSQL)
+		bindsWithSRID4326(t, markedCtx, jsonExtractStringSQL)
+	})
+
 	t.Run("both bindings keep the explicit CAST root verdict", func(t *testing.T) {
 		// An explicit CAST binds through the dedicated CastExpr path and
 		// ordinary binding never folds it (the ground-truth live verdict for
