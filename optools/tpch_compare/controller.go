@@ -184,8 +184,26 @@ type deployment struct {
 	DebugPort int    `json:"debug_port,omitempty"`
 }
 
-func prepareDeployment(c Campaign, scale, engine string, rep int) (deployment, error) {
+func loadDeployment(c Campaign, scale, engine string, rep int) deployment {
 	root := filepath.Join(c.Root, "engines", "sf"+scale, engine, fmt.Sprintf("load-%d", rep))
+	e := Engine{Name: engine, Threads: 8, MemoryBytes: c.MemoryBytes}
+	d := deployment{Engine: e, Root: root}
+	if engine == "duckdb" {
+		d.Engine.Database = filepath.Join(root, "duckdb.db")
+		return d
+	}
+	h := sha256.Sum256([]byte(root))
+	d.Engine.Database = "tpch_compare_" + hex.EncodeToString(h[:8])
+	d.Engine.DSNEnv = "TPCH_COMPARE_OWNED_MO_DSN"
+	d.SQLPort = c.PortBase + 300
+	d.DebugPort = c.PortBase + 301
+	d.Launch = filepath.Join(root, "launch.toml")
+	return d
+}
+
+func prepareDeployment(c Campaign, scale, engine string, rep int) (deployment, error) {
+	d := loadDeployment(c, scale, engine, rep)
+	root := d.Root
 	if err := os.MkdirAll(filepath.Dir(root), 0750); err != nil {
 		return deployment{}, err
 	}
@@ -195,17 +213,9 @@ func prepareDeployment(c Campaign, scale, engine string, rep int) (deployment, e
 	if err := publishJSON(filepath.Join(root, "owner.json"), map[string]any{"purpose": "tpch-compare deployment", "engine": engine, "scale": scale}); err != nil {
 		return deployment{}, err
 	}
-	e := Engine{Name: engine, Threads: 8, MemoryBytes: c.MemoryBytes}
-	d := deployment{Engine: e, Root: root}
 	if engine == "duckdb" {
-		d.Engine.Database = filepath.Join(root, "duckdb.db")
 		return d, nil
 	}
-	h := sha256.Sum256([]byte(root))
-	d.Engine.Database = "tpch_compare_" + hex.EncodeToString(h[:8])
-	d.Engine.DSNEnv = "TPCH_COMPARE_OWNED_MO_DSN"
-	d.SQLPort = c.PortBase + 300
-	d.DebugPort = c.PortBase + 301
 	data := filepath.Join(root, "data")
 	for _, name := range []string{"cn", "tn", "log"} {
 		input, err := os.ReadFile(filepath.Join(c.MOSource, "etc", "launch", name+".toml"))
@@ -233,7 +243,6 @@ func prepareDeployment(c Campaign, scale, engine string, rep int) (deployment, e
 			return d, err
 		}
 	}
-	d.Launch = filepath.Join(root, "launch.toml")
 	text := fmt.Sprintf("logservices = [%q]\ntnservices = [%q]\ncnservices = [%q]\n", filepath.Join(root, "log.toml"), filepath.Join(root, "tn.toml"), filepath.Join(root, "cn.toml"))
 	return d, os.WriteFile(d.Launch, []byte(text), 0600)
 }

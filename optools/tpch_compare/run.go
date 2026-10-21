@@ -40,6 +40,22 @@ type Frozen struct {
 	WorstCaseNS     int64                                `json:"worst_case_ns"`
 }
 
+func (c Campaign) loadReplicates() int {
+	if c.Mode == "full" {
+		return 3
+	}
+	return 1
+}
+
+func loadTrial(c Campaign, scale, engine string, rep int) Trial {
+	return Trial{ID: fmt.Sprintf("load-sf%s-%s-%d", scale, engine, rep), Experiment: "load", Scale: scale, Cores: 8, MemoryBytes: c.MemoryBytes, Clients: 1, Block: rep - 1}
+}
+
+func loadRequest(c Campaign, scale string, d deployment) WorkerRequest {
+	return WorkerRequest{Version: formatVersion, Operation: "load", Engine: d.Engine,
+		DatasetRoot: c.Datasets[scale], QueryDeadlineNS: int64(30 * time.Minute)}
+}
+
 func runRequest(t Trial, warm bool) WorkerRequest {
 	return WorkerRequest{Version: formatVersion, Operation: "queries", Queries: t.Queries, Repetitions: 1, Clients: t.Clients, Warmup: warm, QueryDeadlineNS: int64(30 * time.Minute)}
 }
@@ -87,10 +103,6 @@ func prepareCampaign(ctx context.Context, c Campaign, p Preflight, manager *cgro
 	if err != nil {
 		return f, err
 	}
-	loadReps := 3
-	if c.Mode != "full" {
-		loadReps = 1
-	}
 	scales := []string{"1"}
 	if c.Mode != "sf1-smoke" {
 		scales = []string{"1", "10", "100"}
@@ -100,14 +112,14 @@ func prepareCampaign(ctx context.Context, c Campaign, p Preflight, manager *cgro
 		f.DeadlinesNS[sf] = map[int]int64{}
 		for _, engine := range []string{"mo", "duckdb"} {
 			var kept PreparedEngine
-			for rep := 1; rep <= loadReps; rep++ {
+			for rep := 1; rep <= c.loadReplicates(); rep++ {
 				d, err := prepareDeployment(c, sf, engine, rep)
 				if err != nil {
 					return f, err
 				}
-				t := Trial{ID: fmt.Sprintf("load-sf%s-%s-%d", sf, engine, rep), Experiment: "load", Scale: sf, Cores: 8, MemoryBytes: c.MemoryBytes, Clients: 1, Block: rep - 1}
+				t := loadTrial(c, sf, engine, rep)
 				root := filepath.Join(c.Root, "preparation", t.ID)
-				request := WorkerRequest{Operation: "load", QueryDeadlineNS: int64(30 * time.Minute)}
+				request := loadRequest(c, sf, d)
 				record, err := runArm(ctx, c, p, manager, d, t, root, request)
 				if err != nil {
 					return f, fmt.Errorf("%s: %w", t.ID, err)

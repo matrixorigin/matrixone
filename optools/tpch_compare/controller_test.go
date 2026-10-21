@@ -99,8 +99,12 @@ func campaignFixture(root string) Campaign {
 func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 	type reportCase struct {
 		name         string
+		mode         string
 		mutate       func(*WorkerRequest, *WorkerReceipt)
 		mutateArm    func(*ArmRecord)
+		mutateLoad   func(*WorkerRequest, *WorkerReceipt, *ArmRecord)
+		mutateFrozen func(*Frozen)
+		breakLoad    string
 		armEngine    string
 		cpus         []int
 		changeConfig bool
@@ -214,6 +218,116 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 		{name: "report cannot change source attribution", changeConfig: true, wantError: "configuration differs from preflight"},
 	}...)
 	for _, engine := range []string{"mo", "duckdb"} {
+		for _, load := range []struct {
+			name, wantError string
+			mutate          func(*WorkerRequest, *WorkerReceipt, *ArmRecord)
+		}{
+			{"worker error", "failed/incomplete worker", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Error = "load failed" }},
+			{"worker cleanup failed", "failed/incomplete worker", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Cleanup = "failed" }},
+			{"worker cleanup missing", "failed/incomplete worker", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Cleanup = "" }},
+			{"worker version", "worker receipt version", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Version = 0 }},
+			{"worker engine", "worker engine", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Engine = "other" }},
+			{"worker dataset hash", "worker dataset", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Dataset.SHA256 = "other" }},
+			{"worker dataset size", "worker dataset", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Dataset.Bytes++ }},
+			{"worker binary hash", "worker executable", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Binary.SHA256 = "other" }},
+			{"worker binary size", "worker executable", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Binary.Bytes++ }},
+			{"missing timing", "load timing", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Load = nil }},
+			{"negative timing", "load timing", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Load.StatisticsNS = -1 }},
+			{"unfinished phase", "load timing", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Load.CheckpointNS = 0 }},
+			{"query receipt substitution", "load worker", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Queries = []QueryReceipt{{Query: 1}} }},
+			{"worker variant", "load worker", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Variant = "unlimited_diagnostic" }},
+			{"worker clients", "load worker", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Clients = 2 }},
+			{"worker query gate", "load worker", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.Controlled = true }},
+			{"worker query window", "load worker", func(_ *WorkerRequest, r *WorkerReceipt, _ *ArmRecord) { r.WaveNS = 1 }},
+			{"arm version", "load arm differs", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.Version = 0 }},
+			{"arm status", "arm failed", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.Status = "failed" }},
+			{"arm engine", "load arm differs", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.Engine = "other" }},
+			{"arm scale", "load arm differs", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.Trial.Scale = "10" }},
+			{"arm replicate", "load arm differs", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.Trial.Block++ }},
+			{"arm error", "arm failed", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.Error = "controller failed" }},
+			{"arm cleanup", "arm failed", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.Cleanup = "failed" }},
+			{"request operation", "load request differs", func(r *WorkerRequest, _ *WorkerReceipt, _ *ArmRecord) { r.Operation = "verify" }},
+			{"request version", "load request differs", func(r *WorkerRequest, _ *WorkerReceipt, _ *ArmRecord) { r.Version = 0 }},
+			{"request dataset", "load request differs", func(r *WorkerRequest, _ *WorkerReceipt, _ *ArmRecord) { r.DatasetRoot += "-other" }},
+			{"request engine", "load request differs", func(r *WorkerRequest, _ *WorkerReceipt, _ *ArmRecord) { r.Engine.Name = "other" }},
+			{"request database", "load request differs", func(r *WorkerRequest, _ *WorkerReceipt, _ *ArmRecord) { r.Engine.Database += "-other" }},
+			{"request memory", "load request differs", func(r *WorkerRequest, _ *WorkerReceipt, _ *ArmRecord) { r.Engine.MemoryBytes++ }},
+			{"request threads", "load request differs", func(r *WorkerRequest, _ *WorkerReceipt, _ *ArmRecord) { r.Engine.Threads++ }},
+			{"request query selection", "load request differs", func(r *WorkerRequest, _ *WorkerReceipt, _ *ArmRecord) { r.Queries = []int{1} }},
+			{"request correctness scan", "load request differs", func(r *WorkerRequest, _ *WorkerReceipt, _ *ArmRecord) { r.Reference = true }},
+			{"request deadline", "load request differs", func(r *WorkerRequest, _ *WorkerReceipt, _ *ArmRecord) { r.QueryDeadlineNS++ }},
+			{"negative disk footprint", "load disk footprint", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.DiskBytes = -1 }},
+			{"excess disk footprint", "load disk footprint", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.DiskBytes = 2 << 30 }},
+			{"CPU membership", "CPU cap receipt", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) {
+				a.Trailing.Raw["cpuset.cpus.effective"] = "8-15"
+			}},
+			{"memory limit", "resource cap receipt", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.Trailing.Raw["memory.max"] = "max" }},
+			{"swap limit", "resource cap receipt", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.Trailing.Raw["memory.swap.max"] = "4096" }},
+			{"OOM kill", "OOM kill", func(_ *WorkerRequest, _ *WorkerReceipt, a *ArmRecord) { a.Trailing.OOMKills = 1 }},
+			{"archived load paths", "", func(r *WorkerRequest, receipt *WorkerReceipt, _ *ArmRecord) {
+				r.OutputRoot += "-archived"
+				receipt.Dataset.Path = "archived/dataset.json"
+				receipt.Binary.Path = "archived/worker"
+			}},
+		} {
+			cases = append(cases, reportCase{name: "load " + engine + " " + load.name, armEngine: engine, mutateLoad: load.mutate, wantError: load.wantError})
+		}
+	}
+	for _, broken := range []string{"missing arm", "changed arm", "missing request", "changed request", "missing worker", "changed worker"} {
+		want := "artifact changed"
+		if strings.HasPrefix(broken, "missing") {
+			want = "no such file"
+		}
+		cases = append(cases, reportCase{name: "load " + broken, breakLoad: broken, wantError: want})
+	}
+	for _, prepared := range []struct {
+		name, wantError string
+		mutate          func(*Frozen)
+	}{
+		{"missing scale", "load preparation", func(f *Frozen) { delete(f.Prepared, "1") }},
+		{"unsupported frozen version", "unsupported frozen", func(f *Frozen) { f.Version = 0 }},
+		{"missing engine", "load preparation", func(f *Frozen) { delete(f.Prepared["1"], "duckdb") }},
+		{"missing replica", "load replicate", func(f *Frozen) { p := f.Prepared["1"]["duckdb"]; p.Loads = nil; f.Prepared["1"]["duckdb"] = p }},
+		{"extra replica", "load replicate", func(f *Frozen) {
+			p := f.Prepared["1"]["duckdb"]
+			p.Loads = append(p.Loads, p.Loads[0])
+			f.Prepared["1"]["duckdb"] = p
+		}},
+		{"cross-engine substitution", "load arm differs", func(f *Frozen) {
+			p := f.Prepared["1"]["duckdb"]
+			p.Loads = f.Prepared["1"]["mo"].Loads
+			f.Prepared["1"]["duckdb"] = p
+		}},
+		{"kept deployment differs", "load deployment", func(f *Frozen) {
+			p := f.Prepared["1"]["duckdb"]
+			p.Deployment.Engine.Database += "-other"
+			f.Prepared["1"]["duckdb"] = p
+		}},
+	} {
+		cases = append(cases, reportCase{name: "load " + prepared.name, mutateFrozen: prepared.mutate, wantError: prepared.wantError})
+	}
+	cases = append(cases, reportCase{name: "load full campaign archives", mode: "full"}, reportCase{name: "load warm campaign archives", mode: "warm"})
+	for _, preparation := range []struct {
+		name, wantError string
+		mutate          func(*Frozen)
+	}{
+		{"missing last replica", "load replicate", func(f *Frozen) {
+			p := f.Prepared["100"]["duckdb"]
+			p.Loads = p.Loads[:2]
+			f.Prepared["100"]["duckdb"] = p
+		}},
+		{"duplicate replica", "load arm differs", func(f *Frozen) {
+			p := f.Prepared["100"]["duckdb"]
+			p.Loads[2] = p.Loads[0]
+		}},
+		{"swapped replicas", "load arm differs", func(f *Frozen) {
+			p := f.Prepared["100"]["duckdb"]
+			p.Loads[0], p.Loads[2] = p.Loads[2], p.Loads[0]
+		}},
+	} {
+		cases = append(cases, reportCase{name: "load full " + preparation.name, mode: "full", mutateFrozen: preparation.mutate, wantError: preparation.wantError})
+	}
+	for _, engine := range []string{"mo", "duckdb"} {
 		for _, boundary := range []string{"before", "after", "after cleanup"} {
 			for _, resource := range []struct {
 				name, key, value, wantError string
@@ -273,17 +387,63 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 				return pin
 			}
 			c := campaignFixture(root)
+			if tc.mode != "" {
+				c.Mode = tc.mode
+				c.Datasets = map[string]string{"1": root, "10": filepath.Join(root, "sf10"), "100": filepath.Join(root, "sf100")}
+			}
 			if tc.cpus != nil {
 				c.CPUs = tc.cpus
 			}
 			config := write("campaign.json", c)
 			configPath := filepath.Join(root, config.Path)
 			config.Path = configPath
-			dataset := FileID{SHA256: "dataset", Bytes: 42}
-			p := Preflight{Version: formatVersion, Config: config, Worker: FileID{SHA256: "worker", Bytes: 7}, DatasetIDs: map[string]FileID{"1": dataset}}
-			f := Frozen{Version: formatVersion, Preflight: write("preflight.json", p), Trials: schedule(c), Prepared: map[string]map[string]PreparedEngine{"1": {}}}
-			for _, engine := range []string{"mo", "duckdb"} {
-				f.Prepared["1"][engine] = PreparedEngine{Deployment: deployment{Engine: Engine{Name: engine, Database: "tpch_compare_fixture"}}}
+			p := Preflight{Version: formatVersion, Config: config, Worker: FileID{SHA256: "worker", Bytes: 7}, DatasetIDs: map[string]FileID{}}
+			for sf := range c.Datasets {
+				p.DatasetIDs[sf] = FileID{SHA256: "dataset-" + sf, Bytes: 42}
+			}
+			dataset := p.DatasetIDs["1"]
+			f := Frozen{Version: formatVersion, Preflight: write("preflight.json", p), Trials: schedule(c), Prepared: map[string]map[string]PreparedEngine{}}
+			for sf := range c.Datasets {
+				f.Prepared[sf] = map[string]PreparedEngine{}
+				for index, engine := range []string{"mo", "duckdb"} {
+					prepared := PreparedEngine{Deployment: loadDeployment(c, sf, engine, 1)}
+					for rep := 1; rep <= c.loadReplicates(); rep++ {
+						deployment := loadDeployment(c, sf, engine, rep)
+						trial := Trial{ID: fmt.Sprintf("load-sf%s-%s-%d", sf, engine, rep), Experiment: "load", Scale: sf, Cores: 8, MemoryBytes: c.MemoryBytes, Clients: 1, Block: rep - 1}
+						prefix := filepath.Join("preparation", trial.ID)
+						request := WorkerRequest{Version: formatVersion, Operation: "load", Engine: deployment.Engine, DatasetRoot: c.Datasets[sf], OutputRoot: filepath.Join(root, prefix, "output"), QueryDeadlineNS: int64(30 * time.Minute)}
+						receipt := WorkerReceipt{Version: formatVersion, Engine: engine, Dataset: p.DatasetIDs[sf], Binary: p.Worker, Variant: "qualification", Cleanup: "complete", Clients: 1,
+							Load: &LoadReceipt{SchemaNS: int64(time.Millisecond), LoadNS: int64((2 + index) * int(time.Millisecond)), StatisticsNS: int64(time.Millisecond), CheckpointNS: int64(time.Millisecond)}}
+						arm := ArmRecord{Version: formatVersion, Trial: trial, Engine: engine, Status: "pass", Cleanup: "complete", DiskBytes: int64(1024 + index)}
+						arm.Trailing.Raw = map[string]string{"memory.max": strconv.FormatInt(c.MemoryBytes, 10), "memory.swap.max": "0", "cpuset.cpus.effective": cpuSet(c.CPUs)}
+						if tc.mutateLoad != nil && tc.armEngine == engine {
+							tc.mutateLoad(&request, &receipt, &arm)
+						}
+						arm.Request = write(filepath.Join(prefix, "request.json"), request)
+						arm.Request.Path = "request.json"
+						arm.Worker = write(filepath.Join(prefix, "output", "receipt.json"), receipt)
+						arm.Worker.Path = filepath.Join("output", "receipt.json")
+						pin := write(filepath.Join(prefix, "arm.json"), arm)
+						prepared.Loads = append(prepared.Loads, pin)
+						if tc.breakLoad != "" && engine == "duckdb" && sf == "1" && rep == 1 {
+							path := filepath.Join(root, pin.Path)
+							if strings.HasSuffix(tc.breakLoad, "request") {
+								path = filepath.Join(root, prefix, arm.Request.Path)
+							} else if strings.HasSuffix(tc.breakLoad, "worker") {
+								path = filepath.Join(root, prefix, arm.Worker.Path)
+							}
+							if err := os.Remove(path); err != nil {
+								t.Fatal(err)
+							}
+							if strings.HasPrefix(tc.breakLoad, "changed") {
+								if err := os.WriteFile(path, []byte("{}"), 0600); err != nil {
+									t.Fatal(err)
+								}
+							}
+						}
+					}
+					f.Prepared[sf][engine] = prepared
+				}
 			}
 			pair := PairRecord{Version: formatVersion, Trial: f.Trials[0], Status: "pass", Arms: map[string]ArmRecord{}}
 			for index, engine := range []string{"mo", "duckdb"} {
@@ -315,6 +475,9 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 			}
 			pin := write(filepath.Join("runs", "baseline", pair.Trial.ID, "pair.json"), pair)
 			pin.Path = filepath.Join(pair.Trial.ID, "pair.json")
+			if tc.mutateFrozen != nil {
+				tc.mutateFrozen(&f)
+			}
 			write("runs/baseline/run.json", RunManifest{Version: formatVersion, Frozen: write("frozen.json", f), Pairs: []FileID{pin}})
 			if tc.changeConfig {
 				c.MORevision = "NEVER-MEASURED-REVISION"
@@ -335,8 +498,22 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 				t.Fatal(err)
 			}
 			body, err := os.ReadFile(filepath.Join(output, "report.md"))
-			if err != nil || !strings.Contains(string(body), "Run status: **complete**") || !strings.Contains(string(body), "does not perform correctness verification") {
+			status := "complete"
+			if tc.mode != "" {
+				// Mode controls exercise the full preparation matrix while
+				// retaining only one measured pair; scores must stay incomplete.
+				status = "incomplete"
+			}
+			if err != nil || !strings.Contains(string(body), "Run status: **"+status+"**") || !strings.Contains(string(body), "does not perform correctness verification") {
 				t.Fatal(string(body), err)
+			}
+			for _, row := range []string{"| 1 | mo | 1 | 0.001000 | 0.002000 | 0.001000 | 0.001000 | 1024 |", "| 1 | duckdb | 1 | 0.001000 | 0.003000 | 0.001000 | 0.001000 | 1025 |"} {
+				if !strings.Contains(string(body), row) {
+					t.Fatal("admitted load timing missing from report", row)
+				}
+			}
+			if tc.mode == "full" && !strings.Contains(string(body), "| 100 | duckdb | 3 |") {
+				t.Fatal("discarded replica timing is missing from the archived full-campaign report")
 			}
 		})
 	}

@@ -159,3 +159,7 @@ intervals resample paired blocks/waves, preserving dependencies among calls in a
 concurrent wave. Missing or failed blocks invalidate the cell's score. Suite/wave
 medians, sums of query medians and geometric mean speedups have separate labels.
 Whole-window CPU or memory is never assigned to an arbitrary query.
+All required load replicas' arm, request and worker receipts must also pass
+identity, execution-status and resource checks before any report output is
+created. Keep those receipts when archiving database images, executables or query
+captures; reporting does not reopen the archived data.
