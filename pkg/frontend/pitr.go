@@ -1967,6 +1967,7 @@ func restoreViewsWithPitr(
 		if err != nil {
 			return err
 		}
+		materializedDeps := restoreMaterializedViewDependencies(stmts, viewEntry.dbName, viewMap)
 
 		compCtx.SetDatabase(viewEntry.dbName)
 		// build create sql to find dependent views
@@ -1977,6 +1978,7 @@ func restoreViewsWithPitr(
 			if err != nil {
 				return err
 			}
+			materializedDeps = restoreMaterializedViewDependencies(stmts, viewEntry.dbName, viewMap)
 			_, err = plan.BuildPlan(compCtx, stmts[0], false)
 			freeStatements(stmts)
 			if err != nil {
@@ -2001,6 +2003,9 @@ func restoreViewsWithPitr(
 				return err
 			}
 			g.addEdge(depView, key)
+		}
+		for _, dep := range materializedDeps {
+			g.addEdge(dep, key)
 		}
 	}
 

@@ -2124,14 +2124,58 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 			walkTable(t.Expr)
 		case *tree.Subquery:
 			walkSelect(t.Select)
+		case *tree.Select:
+			walkSelect(t)
 		case *tree.JoinTableExpr:
 			walkTable(t.Left)
 			walkTable(t.Right)
 		}
 	}
+	var walkExpr func(tree.Expr)
+	walkExpr = func(expr tree.Expr) {
+		switch e := expr.(type) {
+		case *tree.Subquery:
+			walkSelect(e.Select)
+		case *tree.ParenExpr:
+			walkExpr(e.Expr)
+		case *tree.BinaryExpr:
+			walkExpr(e.Left)
+			walkExpr(e.Right)
+		case *tree.FuncExpr:
+			for _, arg := range e.Exprs {
+				walkExpr(arg)
+			}
+			for _, item := range e.OrderBy {
+				walkExpr(item.Expr)
+			}
+		case *tree.ExprList:
+			for _, item := range e.Exprs {
+				walkExpr(item)
+			}
+		}
+	}
 	walkSelect = func(stmt tree.SelectStatement) {
 		switch s := stmt.(type) {
 		case *tree.SelectClause:
+			for _, expr := range s.Exprs {
+				walkExpr(expr.Expr)
+			}
+			if s.Where != nil {
+				walkExpr(s.Where.Expr)
+			}
+			if s.Having != nil {
+				walkExpr(s.Having.Expr)
+			}
+			if s.GroupBy != nil {
+				for _, exprs := range s.GroupBy.GroupByExprsList {
+					for _, expr := range exprs {
+						walkExpr(expr)
+					}
+				}
+				for _, expr := range s.GroupBy.GroupingSet {
+					walkExpr(expr)
+				}
+			}
 			if s.From != nil {
 				for _, table := range s.From.Tables {
 					walkTable(table)

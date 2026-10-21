@@ -290,6 +290,21 @@ func TestPartialRestoreMaterializedViewOrder(t *testing.T) {
 	defer freeStatements(derivedStmt)
 	derivedDeps := restoreMaterializedViewDependencies(derivedStmt, "db", views)
 	require.Equal(t, []string{genKey("db", "mv")}, derivedDeps)
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{name: "cte", sql: "create view cte as with c as (select id from mv) select * from c"},
+		{name: "scalar", sql: "create view scalar as select (select max(id) from mv) as id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			info := &tableInfo{dbName: "db", tblName: tc.name, typ: view, createSql: tc.sql}
+			parsed, err := parseViewCreateSQLForRestore(t.Context(), info, 1)
+			require.NoError(t, err)
+			defer freeStatements(parsed)
+			require.Equal(t, []string{genKey("db", "mv")}, restoreMaterializedViewDependencies(parsed, "db", views))
+		})
+	}
 	g := toposort{next: make(map[string][]string)}
 	g.addVertex(genKey("db", "v"))
 	g.addVertex(genKey("db", "mv"))
