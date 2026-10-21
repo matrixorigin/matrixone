@@ -30,6 +30,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
 
@@ -166,6 +167,88 @@ func IsVectorIndexAlgo(algo string) bool {
 		return false
 	}
 	return p.Catalog().IsVectorIndex()
+}
+
+// SupportsMembership reports whether algo's search applies a membership key set
+// inside the index search (searchplugin.MembershipHooks). An unregistered algo,
+// one without a SearchPlugin, or one without the hook reports false.
+func SupportsMembership(algo string) bool {
+	p, ok := Get(algo)
+	if !ok {
+		return false
+	}
+	sp, ok := p.(SearchPlugin)
+	if !ok {
+		return false
+	}
+	h, ok := sp.Search().(searchplugin.MembershipHooks)
+	return ok && h.SupportsMembership()
+}
+
+// SupportsIndexFilter reports whether algo's search evaluates filters on INCLUDE
+// columns and the primary key inside the index search (searchplugin.IndexFilterHooks).
+// An unregistered algo, one without a SearchPlugin, or one without the hook reports false.
+func SupportsIndexFilter(algo string) bool {
+	p, ok := Get(algo)
+	if !ok {
+		return false
+	}
+	sp, ok := p.(SearchPlugin)
+	if !ok {
+		return false
+	}
+	h, ok := sp.Search().(searchplugin.IndexFilterHooks)
+	return ok && h.SupportsIndexFilter()
+}
+
+// SupportsProbeKnobs reports whether algo's search probes inverted lists
+// (searchplugin.ProbeKnobsHooks), so nprobe and max_nprobe apply to it. An
+// unregistered algo, one without a SearchPlugin, or one without the hook reports false.
+func SupportsProbeKnobs(algo string) bool {
+	p, ok := Get(algo)
+	if !ok {
+		return false
+	}
+	sp, ok := p.(SearchPlugin)
+	if !ok {
+		return false
+	}
+	h, ok := sp.Search().(searchplugin.ProbeKnobsHooks)
+	return ok && h.SupportsProbeKnobs()
+}
+
+// MaxInternalTopKLimit returns the largest internal top-k algo's search accepts
+// (searchplugin.InternalTopKLimitHooks), 0 for no limit. An unregistered algo, one
+// without a SearchPlugin, or one without the hook reports 0.
+func MaxInternalTopKLimit(algo string) uint64 {
+	p, ok := Get(algo)
+	if !ok {
+		return 0
+	}
+	sp, ok := p.(SearchPlugin)
+	if !ok {
+		return 0
+	}
+	h, ok := sp.Search().(searchplugin.InternalTopKLimitHooks)
+	if !ok {
+		return 0
+	}
+	return h.MaxInternalTopKLimit()
+}
+
+// CheckInternalTopK rejects an itopk or max_itopk above MaxInternalTopKLimit(algo).
+func CheckInternalTopK(ctx context.Context, algo string, itopk, maxITopK uint64) error {
+	limit := MaxInternalTopKLimit(algo)
+	if limit == 0 {
+		return nil
+	}
+	if itopk > limit {
+		return moerr.NewInvalidInputf(ctx, "itopk %d exceeds the %s limit %d", itopk, algo, limit)
+	}
+	if maxITopK > limit {
+		return moerr.NewInvalidInputf(ctx, "max_itopk %d exceeds the %s limit %d", maxITopK, algo, limit)
+	}
+	return nil
 }
 
 // IsFullTextIndexAlgo reports whether algo is the fulltext index
