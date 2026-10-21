@@ -2105,6 +2105,7 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 		return nil
 	}
 	var deps []string
+	var walkSelect func(tree.SelectStatement)
 	var walkTable func(tree.TableExpr)
 	walkTable = func(expr tree.TableExpr) {
 		switch t := expr.(type) {
@@ -2128,7 +2129,6 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 			walkTable(t.Right)
 		}
 	}
-	var walkSelect func(tree.SelectStatement)
 	walkSelect = func(stmt tree.SelectStatement) {
 		switch s := stmt.(type) {
 		case *tree.SelectClause:
