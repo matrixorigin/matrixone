@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 27
+- Revision: 28
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 28 integration baseline: official main `fdcb37a5212a4bbc82fd958e6f54f195081bb56b`
 - Revision 27 integration baseline: official main `32591dcf3757a0ae4c2dec52cfd8d98761bd3454`
 - Revision 26 integration baseline: official main `7038c8520e5fc1ba456914b3c389ccedb69e22f7`
 - Revision 25 integration baseline: official main `a648b13e53cf0a07ff19211203a69e37b2d1dd93`
@@ -1373,6 +1374,28 @@ complete failure logs and BVT terminal diagnostics, the rebase and current
 validation. Historical revision26 protocol-native and earlier capacity/race/marker
 receipts remain immutable and are reused only for unchanged semantic owners.
 No old-run rerun, new capacity result or live mixed-version qualification is claimed.
+
+### Revision 28 application-role regression integration
+
+Official main `fdcb37a5212a4bbc82fd958e6f54f195081bb56b` adds least-privilege
+application-role documentation and its real-client regression. It changes no
+production, protocol, module, native or build implementation. The mechanical
+rebase preserves all 41 PR patches, function605/MORPC127 and the exact revision27
+VIEWS fixture correction. Historical receipts remain immutable.
+
+The failed shared-build job119233193860 in run39603323077 attempt1 compiles the
+Java sources and reports 24 tests with zero failures, then fails in Maven shade
+3.6.0 while resolving the commons-compress1.26.2 and commons-io2.16.1 artifact
+descriptors. The log establishes dependency-resolution failure, without exposing
+a specific transport or cache cause. No product workaround or transient recovery
+is inferred. Because official main advanced, this delivery rebases first and
+leaves the new build to push-triggered CI; it does not rerun the old workflow.
+
+The [revision-28 receipt](validation/20261021_application_role_integration.json)
+records the upstream delta, fresh exact application-role regression, bounded
+static checks and unchanged semantic-owner evidence reused from revision27.
+No new signed-zero, Top, capacity, native or live mixed-version execution is
+claimed by this documentation/test-only integration.
 
 ## Alternatives
 
