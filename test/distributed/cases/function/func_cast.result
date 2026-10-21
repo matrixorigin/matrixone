@@ -395,35 +395,50 @@ select cast('  -0x123  ' as signed);
 ➤ cast(  -0x123   as signed)[-5,64,0]  𝄀
 -291
 select cast('+-1' as signed);
-invalid argument cast to int, bad value +-1
+➤ cast(+-1 as signed)[-5,64,0]  𝄀
+0
 select cast('++1' as signed);
-invalid argument cast to int, bad value ++1
+➤ cast(++1 as signed)[-5,64,0]  𝄀
+0
 select cast('--1' as signed);
-invalid argument cast to int, bad value --1
+➤ cast(--1 as signed)[-5,64,0]  𝄀
+0
 select cast('- 1' as signed);
-invalid argument cast to int, bad value - 1
+➤ cast(- 1 as signed)[-5,64,0]  𝄀
+0
 select cast('+ 1' as signed);
-invalid argument cast to int, bad value + 1
+➤ cast(+ 1 as signed)[-5,64,0]  𝄀
+0
 select cast('+' as signed);
-invalid argument cast to int, bad value +
+➤ cast(+ as signed)[-5,64,0]  𝄀
+0
 select cast('-' as signed);
-invalid argument cast to int, bad value -
+➤ cast(- as signed)[-5,64,0]  𝄀
+0
 select cast('0b' as signed);
-invalid argument cast to int, bad value 0b
+➤ cast(0b as signed)[-5,64,0]  𝄀
+0
 select cast('0b102' as signed);
-invalid argument cast to int, bad value 0b102
+➤ cast(0b102 as signed)[-5,64,0]  𝄀
+0
 select cast('0o' as signed);
-invalid argument cast to int, bad value 0o
+➤ cast(0o as signed)[-5,64,0]  𝄀
+0
 select cast('0o18' as signed);
-invalid argument cast to int, bad value 0o18
+➤ cast(0o18 as signed)[-5,64,0]  𝄀
+0
 select cast('0x' as signed);
-invalid argument cast to int, bad value 0x
+➤ cast(0x as signed)[-5,64,0]  𝄀
+0
 select cast('0x12g' as signed);
-invalid argument cast to int, bad value 0x12g
+➤ cast(0x12g as signed)[-5,64,0]  𝄀
+0
 select cast('x123' as signed);
-invalid argument cast to int, bad value x123
+➤ cast(x123 as signed)[-5,64,0]  𝄀
+0
 select cast('abc' as signed);
-invalid argument cast to int, bad value abc
+➤ cast(abc as signed)[-5,64,0]  𝄀
+0
 select cast('1a' as signed);
 ➤ cast(1a as signed)[-5,64,0]  𝄀
 1
@@ -552,7 +567,8 @@ select cast('-10a' as signed integer);
 ➤ cast(-10a as integer)[-5,64,0]  𝄀
 -10
 select cast('a10' as unsigned integer);
-invalid argument cast to uint64, bad value a10
+➤ cast(a10 as integer unsigned)[-5,64,0]  𝄀
+0
 select 10+'a';
 invalid argument cast to int, bad value a
 select 10.0+cast('a' as decimal(38,0));
@@ -573,12 +589,14 @@ select cast('-1' as unsigned);
 ➤ cast(-1 as unsigned)[-5,64,0]  𝄀
 18446744073709551615
 select cast('abc' as signed);
-invalid argument cast to int, bad value abc
+➤ cast(abc as signed)[-5,64,0]  𝄀
+0
 select cast('1a' as signed);
 ➤ cast(1a as signed)[-5,64,0]  𝄀
 1
 select cast('' as signed);
-invalid argument cast to int, bad value 
+➤ cast( as signed)[-5,64,0]  𝄀
+0
 select cast("2001-1-1" as date) = "2001-01-01";
 ➤ cast(2001-1-1 as date) = 2001-01-01[-7,1,0]  𝄀
 1
