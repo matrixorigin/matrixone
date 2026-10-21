@@ -668,7 +668,7 @@ func writeBucketPayload(proc *process.Process, payload []byte, rows int64, w *Bu
 	if err := checkSpillCanceled(proc); err != nil {
 		return err
 	}
-	written, err := fd.Write(payload)
+	written, err := spillio.WritePreextended(fd, payload)
 	if err != nil {
 		return err
 	}
@@ -1498,6 +1498,7 @@ type SpillEngineConfig struct {
 	DedupBuildKeepLast        bool
 	DedupColName              string
 	DedupColTypes             []plan.Type
+	DedupKeyExprs             []*plan.Expr
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
@@ -2001,6 +2002,7 @@ func (e *SpillEngine) RebuildHashmap(proc *process.Process, analyzer process.Ana
 	builder.DedupBuildKeepLast = e.cfg.DedupBuildKeepLast
 	builder.DedupColName = e.cfg.DedupColName
 	builder.DedupColTypes = e.cfg.DedupColTypes
+	builder.DedupKeyExprs = e.cfg.DedupKeyExprs
 	if err := builder.Prepare(e.cfg.BuildKeyExprs, e.cfg.DelColIdx, e.cfg.DedupDeleteMarkerColIdx, e.cfg.DedupDeleteKeepColIdxList, proc); err != nil {
 		builder.Free(proc)
 		return nil, BucketSkip, err
