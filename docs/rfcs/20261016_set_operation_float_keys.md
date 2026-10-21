@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 29
+- Revision: 30
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 30 integration baseline: official main `d4bda99eee3dd0964e8e1ec1f66d5e3e0fb19e14`
 - Revision 29 integration baseline: official main `a4de4ed1381780d02fa7f440ce7c4f9e01269674`
 - Revision 28 integration baseline: official main `fdcb37a5212a4bbc82fd958e6f54f195081bb56b`
 - Revision 27 integration baseline: official main `32591dcf3757a0ae4c2dec52cfd8d98761bd3454`
@@ -1434,6 +1435,35 @@ transport evidence, without identifying which proxy/upstream component closed
 the connection. As main advanced while that workflow was still active, this
 revision rebases and pushes first rather than rerunning the old workflow. It
 does not duplicate the issue comment or change reviewer requests/PR metadata.
+
+### Revision 30 JSONLine binary and MongoDB harness integration
+
+The publication CAS observed official main advance to
+`d4bda99eee3dd0964e8e1ec1f66d5e3e0fb19e14` before any push. This revision
+rebases the 43 existing patches again without rewriting historical receipts.
+The new production boundary is JSONLine binary export/load: OUTFILE emits an
+explicit single-key `$binary` base64 object for BINARY/VARBINARY/BLOB, and LOAD
+decodes only that wrapper. Bare strings keep their original bytes; NULL is
+determined from the original JSON node, so a wrapped payload decoding to the
+bytes of `\N` remains a value. Projection, strict-error handling and original
+non-binary values retain their separate contracts.
+
+The MongoDB delta changes tests and the local E2E runner's oracles, not connector
+production code. Exact source/materialized/join/aggregate rows replace weaker
+counts; rejected writes and duplicate-target ingestion must preserve state.
+The blocked-GetMore cancellation test now observes entry before canceling and
+requires the worker to return. CPU/mock and race evidence is recorded separately
+from real MongoDB E2E, which this integration does not claim to execute.
+
+The [revision-30 receipt](validation/20261021_jsonline_mongodb_integration.json)
+records refreshed external/export/MongoDB checks and a public OUTFILE-to-LOAD
+round trip with binary zero/non-UTF8 bytes, empty value, sentinel bytes, SQL NULL,
+bare-string passthrough and invalid-wrapper rejection. Prior revision29 procedure,
+deduplication, ISCP, CPU tail-count and public evidence is reused only where the
+new JSONLine/harness delta leaves its semantic owner unchanged. The crossed
+external pruning/LOAD paths are refreshed instead of reusing stale reader proof.
+Function605/MORPC127, Node96/Instruction65 and scalar capacity owners are unchanged;
+no fresh native, GPU, capacity or live mixed-version qualification is claimed.
 
 ## Alternatives
 
