@@ -2662,8 +2662,10 @@ func createPubByPitr(
 
 		getLogger(sid).Info(fmt.Sprintf("[%s] create pub: create pub sql: %s", pitrName, pubInfo.GetCreateSql()))
 		var lowerCaseTableNames int64
-		if lowerCaseTableNames, err = publicationBackgroundLowerCaseTableNames(ctx, bh); err != nil {
-			return
+		if publicationCreateValidatesTableScope(ast[0].(*tree.CreatePublication)) {
+			if lowerCaseTableNames, err = publicationBackgroundLowerCaseTableNames(ctx, bh); err != nil {
+				return
+			}
 		}
 		if err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication), lowerCaseTableNames); err != nil {
 			return

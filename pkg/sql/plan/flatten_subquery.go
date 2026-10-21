@@ -2067,7 +2067,7 @@ func (result *aggregateSpineEmptyResult) nullEquivalent(count int) bool {
 // empty. Unknown deterministic filters may retain or remove a singleton;
 // upper aggregates must make those possibilities converge before admission.
 func (builder *QueryBuilder) aggregateSpineOriginalEmpty(subID int32, ctx *BindContext) *aggregateSpineEmptyResult {
-	if defines.IsPublicationViewBinding(builder.GetContext()) {
+	if builder.compCtx != nil && defines.IsPublicationViewBinding(builder.GetContext()) {
 		// The empty-input proof evaluates substituted constant expressions of
 		// the stored definition through ConstantFold (foldAggregateSpineLiteral
 		// and substituteAggregateSpineEmptyExpr are this file's only fold
@@ -2083,6 +2083,11 @@ func (builder *QueryBuilder) aggregateSpineOriginalEmpty(subID int32, ctx *BindC
 		// restoration machinery declines to restore, so binding remains a
 		// pure metadata verdict while the subscriber's ordinary compile
 		// answers the same aggregate shape with the full analysis as usual.
+		// The marker is only ever carried by a compilation context: a
+		// builder assembled for a pure structural walk of qry.Nodes (the
+		// direct construction the 29412 proof uses) has no compCtx and so no
+		// marker to consult, and the gate must leave that minimal proof's
+		// pre-marker behavior - the plain analysis below - unchanged.
 		return nil
 	}
 	var path []*plan.Node

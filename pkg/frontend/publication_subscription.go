@@ -238,6 +238,22 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 	return createPublication(ctx, bh, cp, lowerCaseTableNames)
 }
 
+// publicationCreateValidatesTableScope reports whether createPublication runs
+// validatePublicationTableScope for this CREATE: only a non-account-level
+// publication that names an explicit table list certifies its views' relation
+// dependencies under the caller-provided lower_case_table_names mode.
+// Account-level publications (DATABASE *) reject tables outright and TABLE *
+// selects every relation of the database by construction, so neither reaches
+// scope validation and neither consumes a mode. Replay callers (PITR and
+// snapshot restore) resolve the replay executor's mode only when this
+// predicate holds, so replaying a publication that certifies nothing cannot
+// be refused by a replay executor unable to name a mode it would never use.
+func publicationCreateValidatesTableScope(cp *tree.CreatePublication) bool {
+	return len(cp.Table) > 0 &&
+		string(cp.Database) != pubsub.TableAll &&
+		!pubTablesAllSelected(cp.Table)
+}
+
 // createPublication creates a publication, bh should be in a transaction
 func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePublication, sessionLowerCaseTableNames int64) (err error) {
 	var (

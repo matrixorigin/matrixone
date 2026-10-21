@@ -224,6 +224,57 @@ func TestCreatePublicationRejectsMissingContextAccount(t *testing.T) {
 	require.ErrorContains(t, err, "account 99 does not exist")
 }
 
+// TestPublicationCreateValidatesTableScope pins which CREATE PUBLICATION
+// shapes createPublication certifies under the caller-provided
+// lower_case_table_names mode: only an explicit table list of a named
+// database. Replay paths (PITR and snapshot restore) rely on this predicate
+// to resolve the replay executor's mode exactly then, so an account-level
+// publication or a TABLE * whole-database list - both certifying nothing -
+// must keep replaying when the executor cannot name a mode (issue #27767
+// CI: a PITR account-level replay began failing with the mode-unavailable
+// error).
+func TestPublicationCreateValidatesTableScope(t *testing.T) {
+	parseCreate := func(sql string) *tree.CreatePublication {
+		stmts, err := mysql.Parse(context.Background(), sql, 1)
+		require.NoError(t, err)
+		t.Cleanup(func() { freeStatements(stmts) })
+		cp, ok := stmts[0].(*tree.CreatePublication)
+		require.True(t, ok)
+		return cp
+	}
+
+	require.False(t, publicationCreateValidatesTableScope(
+		parseCreate("create publication pub1 database * account all")),
+		"account-level publications certify no table scope")
+
+	require.False(t, publicationCreateValidatesTableScope(
+		parseCreate("create publication pub1 database db1 account acc1")),
+		"a publication without a table list publishes the whole database")
+
+	require.False(t, publicationCreateValidatesTableScope(
+		parseCreate("create publication pub1 database db1 table `*` account acc1")),
+		"TABLE * is the whole-database scope by construction")
+
+	require.True(t, publicationCreateValidatesTableScope(
+		parseCreate("create publication pub1 database db1 table t1 account acc1")),
+		"an explicit table list is certified")
+
+	require.True(t, publicationCreateValidatesTableScope(
+		parseCreate("create publication pub1 database db1 table t1,t2 account acc1")),
+		"an explicit multi-table list is certified")
+
+	// Account level publications cannot carry a table list at all: the
+	// statement is refused by createPublication before any scope validation,
+	// so the replay must not resolve a mode for it either. Construct it
+	// directly because the persisted CREATE SQL never spells this shape.
+	accountLevelWithTables := &tree.CreatePublication{
+		Database: "*",
+		Table:    tree.TableNames{{ObjectName: "t1"}},
+	}
+	require.False(t, publicationCreateValidatesTableScope(accountLevelWithTables),
+		"an account-level statement with tables is refused before validation")
+}
+
 func newCreatePublicationIfNotExistsTest(
 	t *testing.T,
 	ifNotExists bool,

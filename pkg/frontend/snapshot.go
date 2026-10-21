@@ -4254,8 +4254,10 @@ func createPubs(
 		// resolves it inside the target tenant and persists the current database
 		// ID, so the historical PubInfo.DbId must not be replayed.
 		var lowerCaseTableNames int64
-		if lowerCaseTableNames, err = publicationBackgroundLowerCaseTableNames(ctx, bh); err != nil {
-			return
+		if publicationCreateValidatesTableScope(ast[0].(*tree.CreatePublication)) {
+			if lowerCaseTableNames, err = publicationBackgroundLowerCaseTableNames(ctx, bh); err != nil {
+				return
+			}
 		}
 		err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication), lowerCaseTableNames)
 		freeStatements(ast)

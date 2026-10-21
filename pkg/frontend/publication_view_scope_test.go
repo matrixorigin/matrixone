@@ -3418,3 +3418,24 @@ func TestValidatePublicationTableScopeInPlaceRenameStability(t *testing.T) {
 			"cannot publish relation 't_rename': its definition changed during validation, retry the statement")
 	})
 }
+
+// TestPublicationBackgroundLowerCaseTableNamesResolution pins the executor
+// contract of publicationBackgroundLowerCaseTableNames: the background
+// executor an account-certifying replay actually runs on names the mode of
+// its own back session (the registered default for a session without an
+// upstream), while an executor that cannot name one is refused explicitly.
+// Both properties are what makes resolving that mode only for
+// table-list publications safe for the other replay shapes.
+func TestPublicationBackgroundLowerCaseTableNamesResolution(t *testing.T) {
+	mode, err := publicationBackgroundLowerCaseTableNames(
+		context.Background(), &backExec{backSes: &backSession{}})
+	require.NoError(t, err)
+	require.Equal(t, int64(1), mode,
+		"a back session without an upstream names the registered default mode")
+
+	_, err = publicationBackgroundLowerCaseTableNames(
+		context.Background(), &backgroundExecTest{})
+	require.Error(t, err)
+	require.ErrorContains(t, err,
+		"session variable lower_case_table_names is unavailable")
+}
