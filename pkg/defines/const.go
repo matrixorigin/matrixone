@@ -161,7 +161,8 @@ const (
 	MORPCVersion123    int64 = 123 // capability-gated nonblocking row-lock admission
 	MORPCVersion124    int64 = 124 // exact fractional TIMESTAMPADD SECOND intervals
 	MORPCVersion125    int64 = 125 // LOAD IGNORE foreign-key row rejection diagnostics
-	MORPCLatestVersion       = MORPCVersion125
+	MORPCVersion126    int64 = 126 // parser-derived information_schema.VIEWS definitions
+	MORPCLatestVersion       = MORPCVersion126
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by
