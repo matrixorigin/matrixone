@@ -452,6 +452,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				DedupBuildKeepLast:        dedupJoin.DedupBuildKeepLast,
 				DedupColName:              dedupJoin.DedupColName,
 				DedupColTypes:             dedupJoin.DedupColTypes,
+				DedupKeyExprs:             dedupJoin.DedupKeyExprs,
 				DelColIdx:                 dedupJoin.DelColIdx,
 				DedupDeleteMarkerColIdx:   dedupJoin.DedupDeleteMarkerColIdx,
 				DedupDeleteKeepColIdxList: dedupJoin.DedupDeleteKeepColIdxList,
@@ -1922,7 +1923,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 	var duplicateWarnings process.WarningAccumulator
 	duplicateWarnings.SetWarningRetentionForProcess(proc)
 	defer duplicateWarnings.Reset()
-	recordDuplicateWarning := func(row int) {
+	recordDuplicateWarning := func(row int, group uint64) {
 		if !warningsEnabled {
 			return
 		}
@@ -1934,8 +1935,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 			duplicateWarnings.AddCount()
 			return
 		}
-		rowStr, err := colexec.FormatDedupEntry(
-			ctr.vecs[0], row, ap.DedupColName, ap.DedupColTypes)
+		rowStr, err := ctr.formatDuplicateEntry(ap, proc, row, group)
 		if err != nil {
 			// A rendering failure must not turn INSERT/UPDATE IGNORE back into a
 			// statement error.  The duplicate row is still filtered exactly as
@@ -1986,8 +1986,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 				if !isPessimistic {
 					continue
 				}
-				rowStr, err := colexec.FormatDedupEntry(
-					ctr.vecs[0], i+k, ap.DedupColName, ap.DedupColTypes)
+				rowStr, err := ctr.formatDuplicateEntry(ap, proc, i+k, vals[k])
 				if err != nil {
 					return err
 				}
@@ -2003,12 +2002,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					for _, sel := range sels {
 						ctr.matched.Add(uint64(sel))
 					}
-					recordDuplicateWarning(i + k)
+					recordDuplicateWarning(i+k, vals[k])
 				} else {
 					// Compact unique maps omit GroupSels; in that representation
 					// group g still maps directly to build row g-1.
 					ctr.matched.Add(vals[k] - 1)
-					recordDuplicateWarning(i + k)
+					recordDuplicateWarning(i+k, vals[k])
 				}
 
 			case plan.Node_UPDATE:
@@ -2148,4 +2147,46 @@ func (dedupJoin *DedupJoin) resetRBat() error {
 		}
 	}
 	return nil
+}
+
+func (ctr *container) formatDuplicateEntry(ap *DedupJoin, proc *process.Process, probeRow int, group uint64) (string, error) {
+	if len(ap.DedupKeyExprs) == 0 {
+		return colexec.FormatDedupEntry(ctr.vecs[0], probeRow, ap.DedupColName, ap.DedupColTypes)
+	}
+	render := func(row int) (string, error) {
+		return colexec.FormatDedupKeyFromRow(proc, ap.DedupKeyExprs,
+			ctr.batches[row/colexec.DefaultBatchSize], row%colexec.DefaultBatchSize)
+	}
+	if sels := ctr.mp.GetSels(group); len(sels) > 0 {
+		return render(int(sels[0]))
+	}
+	if ctr.mp.GetGroupCount() == uint64(ctr.batchRowCount) {
+		return render(int(group - 1))
+	}
+	// Compact maps omit row selections. NULL keys do not get a bucket, so a
+	// bucket id is not a row index when NULLs precede a conflicting candidate.
+	// Locate its retained physical key only on this terminal diagnostic path;
+	// ordinary successful builds keep their existing memory footprint.
+	for _, bat := range ctr.batches {
+		entry, found, err := findDuplicateEntry(ap, proc, bat, ctr.vecs[0].GetBytesAt(probeRow))
+		if err != nil || found {
+			return entry, err
+		}
+	}
+	return "", moerr.NewInternalError(proc.Ctx, "missing duplicate diagnostic row")
+}
+
+func findDuplicateEntry(ap *DedupJoin, proc *process.Process, bat *batch.Batch, key []byte) (string, bool, error) {
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, ap.Conditions[1][0], []*batch.Batch{bat})
+	if err != nil {
+		return "", false, err
+	}
+	defer free()
+	for row := 0; row < bat.RowCount(); row++ {
+		if !vec.IsNull(uint64(row)) && bytes.Equal(vec.GetBytesAt(row), key) {
+			entry, err := colexec.FormatDedupKeyFromRow(proc, ap.DedupKeyExprs, bat, row)
+			return entry, true, err
+		}
+	}
+	return "", false, nil
 }
