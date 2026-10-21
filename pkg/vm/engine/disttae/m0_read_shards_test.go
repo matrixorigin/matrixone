@@ -22,6 +22,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/stretchr/testify/require"
 )
@@ -92,13 +93,43 @@ func TestM0ReadShardsKeepOrderedAndUnsupportedSplits(t *testing.T) {
 	}
 }
 
-func TestM0ReadShardsKeepsObjectListSplit(t *testing.T) {
-	var stats objectio.ObjectStats
-	require.NoError(t, objectio.SetObjectStatsBlkCnt(&stats, 4))
-	data := &readutil.ObjListRelData{NeedFirstEmpty: true}
-	data.AppendObj(&stats)
-	want := data.Split(2)
-	got := activeM0ReadShards(context.Background(), m0TestAppendTableDef(), data, 2, false)
+func m0TestObjectRanges(t *testing.T, memory bool, blocks uint32) *readutil.ObjListRelData {
+	t.Helper()
+	data := &readutil.ObjListRelData{NeedFirstEmpty: memory, PState: new(int)}
+	if memory {
+		data.TotalBlocks = 1
+	}
+	for i := byte(1); i <= 4; i++ {
+		id := objectio.ObjectId{i}
+		stats := objectio.NewObjectStatsWithObjectID(&id, false, true, false)
+		require.NoError(t, objectio.SetObjectStatsBlkCnt(stats, blocks))
+		require.NoError(t, objectio.SetObjectStatsRowCnt(stats, blocks*objectio.BlockMaxRows))
+		data.AppendObj(stats)
+	}
+	require.NoError(t, data.AttachTombstones(readutil.NewEmptyTombstoneData()))
+	return data
+}
+
+func TestM0ReadShardsExpandsObjectListWithoutChangingBindings(t *testing.T) {
+	data := m0TestObjectRanges(t, true, 8)
+	blockList := data.GetBlockInfoSlice()
+	expanded := data.DataSlice(0, blockList.Len())
+	want := activeM0ReadShards(context.Background(), m0TestAppendTableDef(), expanded, 8, false)
+	got := activeM0ReadShards(context.Background(), m0TestAppendTableDef(), data, 8, false)
+	for i := range want {
+		require.Equal(t, want[i].GetBlockInfoSlice(), got[i].GetBlockInfoSlice())
+		require.Same(t, data.PState, got[i].(*readutil.BlockListRelData).GetPState())
+		require.Same(t, data.GetTombstones(), got[i].GetTombstones())
+	}
+}
+
+func TestM0ReadShardsKeepsObjectRangeShuffle(t *testing.T) {
+	data := m0TestObjectRanges(t, false, 16)
+	data.Rsp = &engine.RangesShuffleParam{CNCNT: 1, Node: &plan.Node{Stats: &plan.Stats{
+		HashmapStats: &plan.HashMapStats{Shuffle: true, ShuffleType: plan.ShuffleType_Range},
+	}}}
+	want := data.Split(4)
+	got := activeM0ReadShards(context.Background(), m0TestAppendTableDef(), data, 4, false)
 	for i := range want {
 		require.Equal(t, want[i].GetBlockInfoSlice(), got[i].GetBlockInfoSlice())
 	}

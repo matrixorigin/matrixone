@@ -45,9 +45,22 @@ func init() {
 func splitM0ReadShards(
 	_ context.Context, table *plan.TableDef, data engine.RelData, count int, ordered bool,
 ) []engine.RelData {
-	blocks, materialized := data.(*readutil.BlockListRelData)
 	_, appendDomain := m0AppendBaseFromPlan(table)
-	if ordered || !appendDomain || !materialized || count <= 1 || data.DataCnt() <= count {
+	if ordered || !appendDomain || count <= 1 || data.DataCnt() <= count {
+		return data.Split(count)
+	}
+	blocks, materialized := data.(*readutil.BlockListRelData)
+	if objects, ok := data.(*readutil.ObjListRelData); ok {
+		// Range shuffle owns reader assignment; preserve that partitioning.
+		if rsp := objects.Rsp; rsp != nil && rsp.Node.GetStats().GetHashmapStats().GetShuffle() &&
+			rsp.Node.GetStats().GetHashmapStats().GetShuffleType() == plan.ShuffleType_Range {
+			return data.Split(count)
+		}
+		// This expands existing block descriptors, not object payloads.
+		list := objects.GetBlockInfoSlice()
+		blocks, materialized = objects.DataSlice(0, list.Len()).(*readutil.BlockListRelData)
+	}
+	if !materialized || blocks.DataCnt() <= count {
 		return data.Split(count)
 	}
 	shards := make([]engine.RelData, count)
