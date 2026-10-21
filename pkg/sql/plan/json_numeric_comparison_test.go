@@ -260,7 +260,7 @@ func TestJSONNumericComparisonRetainsTypedResidual(t *testing.T) {
 		require.False(t, IsEquiJoin2([]*planpb.Expr{eq}))
 		required, err := RequiredPersistedExpressionProtocolVersion(eq)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion127, required)
+		require.Equal(t, defines.MORPCVersion128, required)
 		// A separate legal key remains available; the mixed equality is retained.
 		key, err := BindFuncExprImplByPlanExpr(context.Background(), "=", []*planpb.Expr{col(types.T_int64.ToType(), 0, 1), col(types.T_int64.ToType(), 1, 1)})
 		require.NoError(t, err)

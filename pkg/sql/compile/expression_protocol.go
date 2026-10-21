@@ -146,7 +146,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion126)
 	}
 	if features.JSONNumericComparisons {
-		required = max(required, defines.MORPCVersion127)
+		required = max(required, defines.MORPCVersion128)
 	}
 	return required
 }

@@ -103,7 +103,7 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	requiredVersion := int64(0)
 	if features.JSONNumericComparisons {
-		requiredVersion = defines.MORPCVersion127
+		requiredVersion = defines.MORPCVersion128
 	}
 	if features.IPFunctionSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion72)

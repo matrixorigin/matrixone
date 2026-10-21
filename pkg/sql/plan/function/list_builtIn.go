@@ -1557,7 +1557,7 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 			},
 			{
-				// v127: numeric parameters retain their comparison category and domain.
+				// v128: numeric parameters retain their comparison category and domain.
 				overloadId: 1,
 				args:       []types.T{types.T_text},
 				retType:    func(parameters []types.Type) types.Type { return types.T_json.ToType() },
@@ -1587,7 +1587,7 @@ var supportedStringBuiltIns = []FuncNew{
 				},
 			},
 			{
-				// v127: numeric parameters retain their comparison category and domain.
+				// v128: numeric parameters retain their comparison category and domain.
 				overloadId: 1,
 				args:       []types.T{types.T_text},
 				retType:    func(parameters []types.Type) types.Type { return types.T_json.ToType() },

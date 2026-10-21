@@ -111,7 +111,7 @@ func TestCompileMixedAsofPhysicalPlan(t *testing.T) {
 func TestMixedAsofPlacementAndRoundTrip(t *testing.T) {
 	n, left, right := mixedAsofTestPlan(t, false)
 	c, client := expressionProtocolTestCompile(t)
-	client.version = defines.MORPCVersion127
+	client.version = defines.MORPCVersion128
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(&plan.Query{Nodes: []*plan.Node{n}, Steps: []int32{0}}))

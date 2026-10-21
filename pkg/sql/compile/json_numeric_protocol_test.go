@@ -42,7 +42,7 @@ func TestJSONNumericComparisonProtocol(t *testing.T) {
 			features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 			require.NoError(t, err)
 			require.True(t, features.JSONNumericComparisons)
-			require.Equal(t, defines.MORPCVersion127, remoteExpressionProtocolVersion(features))
+			require.Equal(t, defines.MORPCVersion128, remoteExpressionProtocolVersion(features))
 			if name == "=" {
 				view := &planpb.Expr{Typ: types.T_text.ToType().PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
 					Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.MO_VIEW_DEFINITION, 0)},
@@ -54,12 +54,12 @@ func TestJSONNumericComparisonProtocol(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, combined.ViewMetadataFunctions)
 				require.True(t, combined.JSONNumericComparisons)
-				require.Equal(t, defines.MORPCVersion127, remoteExpressionProtocolVersion(combined))
+				require.Equal(t, defines.MORPCVersion128, remoteExpressionProtocolVersion(combined))
 				required, err := plan2.RequiredPersistedExpressionProtocolVersion([]*planpb.Expr{view, expr})
 				require.NoError(t, err)
-				require.Equal(t, defines.MORPCVersion127, required)
+				require.Equal(t, defines.MORPCVersion128, required)
 			}
-			require.ErrorContains(t, validateRemoteExpressionFeatures(nil, features), "version 127")
+			require.ErrorContains(t, validateRemoteExpressionFeatures(nil, features), "version 128")
 			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
 			qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 			op := projection.NewArgument()
@@ -67,15 +67,15 @@ func TestJSONNumericComparisonProtocol(t *testing.T) {
 			op.ProjectList = []*planpb.Expr{expr}
 			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
 			client.version = defines.MORPCVersion126
 			c.execType = plan2.ExecTypeAP_MULTICN
 			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 			_, err = encodeRemoteScope(scope, c.proc)
-			require.ErrorContains(t, err, "version 127")
-			client.version = defines.MORPCVersion127
+			require.ErrorContains(t, err, "version 128")
+			client.version = defines.MORPCVersion128
 			c.execType = plan2.ExecTypeAP_MULTICN
 			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -85,13 +85,13 @@ func TestJSONNumericComparisonProtocol(t *testing.T) {
 			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 			data, err := p.Marshal()
 			require.NoError(t, err)
-			for _, version := range []int64{defines.MORPCVersion126, defines.MORPCVersion127} {
+			for _, version := range []int64{defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 				err := validateRemoteExpressionPipelineProtocol(c.proc, p)
 				_, decodeErr := decodeScope(data, c.proc, true, nil)
-				if version < defines.MORPCVersion127 {
-					require.ErrorContains(t, err, "version 127")
-					require.ErrorContains(t, decodeErr, "version 127")
+				if version < defines.MORPCVersion128 {
+					require.ErrorContains(t, err, "version 128")
+					require.ErrorContains(t, decodeErr, "version 128")
 				} else {
 					require.NoError(t, err)
 					require.NoError(t, decodeErr)

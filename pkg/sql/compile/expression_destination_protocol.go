@@ -42,7 +42,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.LoadFKIgnoreCheck, defines.MORPCVersion125,
 			"LOAD IGNORE foreign-key filtering requires a versioned remote destination",
 			"remote destination does not support LOAD IGNORE foreign-key filtering (MORPC version %d)"},
-		{features.JSONNumericComparisons, defines.MORPCVersion127,
+		{features.JSONNumericComparisons, defines.MORPCVersion128,
 			"mixed JSON/numeric comparisons require a versioned remote destination",
 			"remote destination does not support mixed JSON/numeric comparisons (MORPC version %d)"},
 		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
