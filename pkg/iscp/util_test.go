@@ -338,6 +338,9 @@ func TestExtractRowNativeRepr(t *testing.T) {
 		{"decimal128", mk(types.New(types.T_decimal128, 16, 0), func(v *vector.Vector) {
 			vector.AppendFixed(v, types.Decimal128{B0_63: 1000, B64_127: 7}, false, proc.Mp())
 		}), types.Decimal128{B0_63: 1000, B64_127: 7}, true},
+		{"decimal256", mk(types.New(types.T_decimal256, 32, 0), func(v *vector.Vector) {
+			vector.AppendFixed(v, types.Decimal256{B0_63: 1000, B64_127: 7, B128_191: 11, B192_255: 13}, false, proc.Mp())
+		}), types.Decimal256{B0_63: 1000, B64_127: 7, B128_191: 11, B192_255: 13}, true},
 		{"uuid", mk(types.New(types.T_uuid, 16, 0), func(v *vector.Vector) {
 			vector.AppendFixed(v, types.Uuid([16]byte{0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8}), false, proc.Mp())
 		}), types.Uuid([16]byte{0, 1, 0, 2, 0, 3, 0, 4, 0, 5, 0, 6, 0, 7, 0, 8}), true},
