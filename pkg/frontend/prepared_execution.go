@@ -20,6 +20,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -125,6 +126,13 @@ func preparedExecutionBindingKey(bindings []plan2.PreparedSourceBinding, values 
 	return key.String()
 }
 
+func preparedFieldBindingKey(key string, state *plan2.PreparedFieldTypes) string {
+	if state == nil {
+		return key
+	}
+	return key + "field:" + strconv.FormatUint(state.Revision(), 10)
+}
+
 func (prepareStmt *PrepareStmt) rememberBitCountSourceTypes(values []any) {
 	if len(prepareStmt.bitCountOverloadParamPositions) == 0 {
 		prepareStmt.bitCountNumericParamTypes = nil
@@ -175,10 +183,28 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 		return nil
 	}
 	var preparedPlan *plan2.Plan
+	var fieldTypes *plan2.PreparedFieldTypes
+	var fieldSchemas []*plan2.ObjectRef
+	if cwft.preparedStmt != nil {
+		fieldTypes = cwft.preparedStmt.fieldTypes
+		if fieldTypes != nil {
+			// Keep immutable declaration facts, not another retained plan graph
+			// or a later EXECUTE's mutable handle, as the retry generation proof.
+			schemas := cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().GetSchemas()
+			fieldSchemas = make([]*plan2.ObjectRef, len(schemas))
+			for i, schema := range schemas {
+				if schema != nil {
+					fieldSchemas[i] = proto.Clone(schema).(*plan2.ObjectRef)
+				}
+			}
+		}
+	}
 	if cwft.preparedStmt != nil && strings.IndexByte(cwft.preparedStmt.Sql, '@') >= 0 {
 		preparedPlan = cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().Plan
 	}
 	return &preparedExecutionRetry{
+		fieldTypes:         fieldTypes,
+		fieldSchemas:       fieldSchemas,
 		paramVals:          append([]any(nil), cwft.paramVals...),
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),
 		preparedPlan:       preparedPlan,

@@ -61,6 +61,14 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			_, err := conn.ExecContext(ctx, statement)
 			require.NoError(t, err, statement)
 		}
+		execFreshSI := func(t *testing.T, statement string) error {
+			t.Helper()
+			_, err := execCheckNamespaceSI(ctx, func(attempt context.Context, sql string) error {
+				_, err := conn.ExecContext(attempt, sql)
+				return err
+			}, statement)
+			return err
+		}
 		expectError := func(t *testing.T, statement string, code uint16) {
 			t.Helper()
 			_, err := conn.ExecContext(ctx, statement)
@@ -80,9 +88,9 @@ func TestCheckConstraintNamespace(t *testing.T) {
 		defer func() {
 			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), time.Minute)
 			defer cleanupCancel()
-			_, err := conn.ExecContext(cleanupCtx, "drop snapshot if exists check_namespace_legacy")
+			_, err := db.ExecContext(cleanupCtx, "drop snapshot if exists check_namespace_legacy")
 			require.NoError(t, err)
-			_, err = conn.ExecContext(cleanupCtx, "drop database if exists "+database)
+			_, err = db.ExecContext(cleanupCtx, "drop database if exists "+database)
 			require.NoError(t, err)
 		}()
 
@@ -266,22 +274,16 @@ func TestCheckConstraintNamespace(t *testing.T) {
 		t.Run("repeatable read preserves check authoring", func(t *testing.T) {
 			exec(t, "set session transaction_isolation='REPEATABLE-READ'")
 			defer exec(t, "set session transaction_isolation='READ-COMMITTED'")
-			// Order completed catalog commits before each fresh SI snapshot.
-			// A fixed snapshot may still reject a genuinely concurrent commit;
-			// retrying a fixed number of times cannot establish this ordering.
-			execFreshSI := func(statement string) error {
-				t.Helper()
-				waitForCheckNamespaceCatalogCleanup(t, ctx, conn)
-				_, err := conn.ExecContext(ctx, statement)
-				return err
-			}
+			// Drain known fixture cleanup once. Later unrelated commits remain
+			// legal; only a new autocommit transaction can recover their SI abort.
+			waitForCheckNamespaceCatalogCleanup(t, ctx, conn)
 			execSI := func(statement string) {
 				t.Helper()
-				require.NoError(t, execFreshSI(statement), statement)
+				require.NoError(t, execFreshSI(t, statement), statement)
 			}
 			expectSIError := func(statement string, code uint16) {
 				t.Helper()
-				err := execFreshSI(statement)
+				err := execFreshSI(t, statement)
 				var serverError *mysql.MySQLError
 				require.True(t, errors.As(err, &serverError), "%s: %v", statement, err)
 				require.Equal(t, code, serverError.Number, "%s: %v", statement, err)
@@ -302,7 +304,102 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			// and release the claim for an unrelated destination.
 			exec(t, "create table si_invalid(x int)")
 			exec(t, "insert into si_invalid values(-1)")
-			expectSIError("alter table si_invalid add constraint si_reusable check(x>0)", 3819)
+			t.Run("fresh autocommit recovers a real namespace abort", func(t *testing.T) {
+				peer, err := cluster.GetCNService(1)
+				require.NoError(t, err)
+				other, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", peer.GetServiceConfig().CN.Frontend.Port))
+				require.NoError(t, err)
+				defer other.Close()
+				recoveryCtx, cancelRecovery := context.WithTimeout(ctx, 30*time.Second)
+				defer cancelRecovery()
+				var connectionID uint32
+				require.NoError(t, conn.QueryRowContext(recoveryCtx, "select connection_id()").Scan(&connectionID))
+				provider := cn.RawService().(interface {
+					SessionMgr() *queryservice.SessionManager
+				})
+				const statement = "alter table si_invalid add constraint si_reusable check(x>0)"
+				matches := func(id []byte) bool {
+					for _, session := range provider.SessionMgr().GetAllSessions() {
+						if identity, ok := session.(interface {
+							GetConnectionID() uint32
+							GetTxnId() uuid.UUID
+							GetSqlOfStmt() string
+						}); ok && identity.GetConnectionID() == connectionID && identity.GetSqlOfStmt() == statement {
+							txnID := identity.GetTxnId()
+							return bytes.Equal(txnID[:], id)
+						}
+					}
+					return false
+				}
+				if !moruntime.InTesting(cn.ServiceID()) {
+					moruntime.SetupServiceRuntimeTestingContext(cn.ServiceID())
+				}
+				tc := moruntime.MustGetTestingContext(cn.ServiceID())
+				before, result := tc.GetBeforeLockFunc(), tc.GetAdjustLockResultFunc()
+				defer tc.SetBeforeLockFunc(before)
+				defer tc.SetAdjustLockResultFunc(result)
+				var once sync.Once
+				var mu sync.Mutex
+				var firstTxn, nextTxn []byte
+				var firstError, peerError error
+				var firstGrant lock.Result
+				observed := false
+				tc.SetBeforeLockFunc(func(id []byte, tableID uint64) {
+					before(id, tableID)
+					if tableID == catalog.MO_TABLES_ID && matches(id) {
+						once.Do(func() {
+							_, err := other.ExecContext(recoveryCtx, "create table "+database+".si_intervening(x int primary key)")
+							mu.Lock()
+							firstTxn = append([]byte(nil), id...)
+							peerError = err
+							mu.Unlock()
+						})
+					}
+				})
+				tc.SetAdjustLockResultFunc(func(id []byte, tableID uint64, grant *lock.Result) {
+					result(id, tableID, grant)
+					if tableID == catalog.MO_TABLES_ID && matches(id) {
+						mu.Lock()
+						if bytes.Equal(id, firstTxn) {
+							if !observed {
+								firstGrant = *grant
+								observed = true
+							}
+						} else {
+							nextTxn = append(nextTxn[:0], id...)
+						}
+						mu.Unlock()
+					}
+				})
+				attempts, terminal := execCheckNamespaceSI(recoveryCtx, func(attempt context.Context, sql string) error {
+					_, err := conn.ExecContext(attempt, sql)
+					if sql == statement {
+						mu.Lock()
+						if firstError == nil {
+							firstError = err
+						}
+						mu.Unlock()
+					}
+					return err
+				}, statement)
+				mu.Lock()
+				injectedErr, initialErr, original, replacement, grant, seen := peerError, firstError, append([]byte(nil), firstTxn...), append([]byte(nil), nextTxn...), firstGrant, observed
+				mu.Unlock()
+				require.NoError(t, injectedErr)
+				require.NotEmpty(t, original, "inject into the target statement, not a background transaction")
+				require.True(t, seen)
+				require.False(t, grant.HasConflict)
+				require.False(t, grant.HasPrevCommit)
+				var serverError *mysql.MySQLError
+				require.ErrorAs(t, initialErr, &serverError)
+				require.EqualValues(t, 20619, serverError.Number)
+				require.Equal(t, "w-w conflict: tableID: 2, catalog namespace snapshot is stale", serverError.Message)
+				require.GreaterOrEqual(t, attempts, 2)
+				require.NotEmpty(t, replacement)
+				require.NotEqual(t, original, replacement, "recovery must create a new autocommit transaction")
+				require.ErrorAs(t, terminal, &serverError)
+				require.EqualValues(t, 3819, serverError.Number)
+			})
 			count(t, "select count(*) from si_invalid where x=-1", 1)
 			count(t, "select count(*) from information_schema.table_constraints where table_schema='"+database+"' and table_name='si_invalid' and constraint_type='CHECK'", 0)
 			execSI("create table si_reused(x int, constraint si_reusable check(x>0))")
@@ -378,27 +475,12 @@ func TestCheckConstraintNamespace(t *testing.T) {
 			require.False(t, observed[0].HasPrevCommit)
 			count(t, "select count(*) from information_schema.tables where table_schema='"+database+"' and table_name='si_after_snapshot'", 0)
 			count(t, "select count(*) from information_schema.check_constraints where constraint_schema='"+database+"' and constraint_name='si_after_snapshot_ck'", 0)
-			// SYNCCOMMIT only propagates CN-reported commit timestamps; it is
-			// not a TN read barrier or a fence for future allocator cleanup. Prove name
-			// reuse with one new, explicitly fenced SI transaction, just as for
-			// the rejected transaction above. Never refresh the old snapshot.
-			waitForCheckNamespaceCatalogCleanup(t, ctx, conn)
-			frontier, err = barrier.AcquireLogtailReadBarrier(ctx)
-			require.NoError(t, err)
-			var reuseSnapshot, reuseFinalSnapshot timestamp.Timestamp
-			err = svc.GetSQLExecutor().ExecTxn(defines.AttachAccountId(ctx, 0), func(tx executor.TxnExecutor) error {
-				reuseSnapshot = tx.Txn().Txn().SnapshotTS
-				result, execErr := tx.Exec(statement, executor.StatementOption{})
-				result.Close()
-				reuseFinalSnapshot = tx.Txn().Txn().SnapshotTS
-				return execErr
-			}, executor.Options{}.WithDatabase(database).WithMinCommittedTS(frontier).
-				WithTxnIsolation(txnpb.TxnIsolation_SI).WithTxnMode(txnpb.TxnMode_Pessimistic).
-				WithWaitCommittedLogApplied())
-			require.NoError(t, err, "reuse must start at the applied TN frontier %s", frontier.DebugString())
-			require.Equal(t, reuseSnapshot, reuseFinalSnapshot, "name reuse must retain its new SI snapshot")
-			require.True(t, frontier.LessEq(reuseSnapshot), "reuse snapshot must include the applied frontier")
-			require.True(t, observed[0].Timestamp.LessEq(reuseSnapshot), "reuse snapshot must include the rejected grant's watermark")
+			// The rejected transaction left no namespace claim behind. Once the
+			// intervening commit is applied, recover in fresh autocommit
+			// transactions; further unrelated commits can still abort admission.
+			exec(t, "set session transaction_isolation='REPEATABLE-READ'")
+			defer exec(t, "set session transaction_isolation='READ-COMMITTED'")
+			require.NoError(t, execFreshSI(t, statement))
 			expectError(t, "insert into si_after_snapshot values(-1)", 3819)
 		})
 
@@ -627,9 +709,9 @@ func checkConcurrentConstraintClaim(t *testing.T, parent context.Context, owner 
 	}
 }
 
-// waitForCheckNamespaceCatalogCleanup excludes the allocator GC transactions
-// scheduled by earlier fixture DROP/COPY statements from a fresh SI assertion.
-// A completed-commit fence alone does not wait for these future transactions.
+// waitForCheckNamespaceCatalogCleanup drains visible orphan allocator rows
+// from earlier fixture DROP/COPY statements. Neither this observation nor
+// SYNCCOMMIT excludes later/in-flight commits from a fresh SI execution.
 func waitForCheckNamespaceCatalogCleanup(t *testing.T, ctx context.Context, conn *sql.Conn) {
 	t.Helper()
 	syncCommit := func() {
@@ -658,4 +740,154 @@ func waitForCheckNamespaceCatalogCleanup(t *testing.T, ctx context.Context, conn
 		}
 	}
 	syncCommit()
+}
+
+// execCheckNamespaceSI is only for positive RR autocommit DDL assertions: no
+// explicit transaction may be active. Each Exec return ends that transaction;
+// recovery starts another, never refreshes its fixed snapshot. The namespace
+// protocol permits this exact conservative abort even without lock contention.
+func execCheckNamespaceSI(parent context.Context, exec func(context.Context, string) error, statement string) (int, error) {
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	attempts := 0
+	var lastConflict error
+	stopped := func(cause error) error {
+		return fmt.Errorf("CHECK namespace recovery exhausted after %d attempts: %w", attempts, errors.Join(ctx.Err(), cause, lastConflict))
+	}
+	for {
+		if ctx.Err() != nil {
+			return attempts, stopped(nil)
+		}
+		if err := exec(ctx, "select mo_ctl('cn', 'SYNCCOMMIT', '')"); err != nil {
+			return attempts, fmt.Errorf("CHECK namespace synchronization after %d attempts: %w", attempts, errors.Join(err, lastConflict))
+		}
+		if ctx.Err() != nil {
+			return attempts, stopped(nil)
+		}
+		attempts++
+		err := exec(ctx, statement)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return attempts, stopped(err)
+		}
+		var serverError *mysql.MySQLError
+		if !errors.As(err, &serverError) || serverError.Number != 20619 || serverError.Message != "w-w conflict: tableID: 2, catalog namespace snapshot is stale" {
+			return attempts, err
+		}
+		lastConflict = err
+	}
+}
+
+func TestCheckNamespaceSIRecoveryControl(t *testing.T) {
+	const statement = "create table t(x int)"
+	const syncSQL = "select mo_ctl('cn', 'SYNCCOMMIT', '')"
+	conflict := &mysql.MySQLError{Number: 20619, Message: "w-w conflict: tableID: 2, catalog namespace snapshot is stale"}
+	t.Run("only exact namespace abort is recoverable", func(t *testing.T) {
+		for _, terminal := range []error{nil, errors.New("connection failure"), &mysql.MySQLError{Number: 3822, Message: "duplicate name"}, &mysql.MySQLError{Number: 3819, Message: "check violation"}, &mysql.MySQLError{Number: 20619, Message: "other write conflict"}, &mysql.MySQLError{Number: 20619, Message: "w-w conflict: tableID: 3, catalog namespace snapshot is stale"}} {
+			calls := 0
+			attempts, err := execCheckNamespaceSI(t.Context(), func(_ context.Context, q string) error {
+				calls++
+				if q == syncSQL {
+					return nil
+				}
+				require.Equal(t, statement, q)
+				return terminal
+			}, statement)
+			require.Equal(t, 1, attempts)
+			require.Equal(t, 2, calls)
+			require.Equal(t, terminal, err)
+		}
+	})
+	t.Run("recover then preserve terminal result", func(t *testing.T) {
+		var calls []string
+		ddl := 0
+		terminal := &mysql.MySQLError{Number: 3822}
+		attempts, err := execCheckNamespaceSI(t.Context(), func(_ context.Context, q string) error {
+			calls = append(calls, q)
+			if q == syncSQL {
+				return nil
+			}
+			ddl++
+			if ddl == 1 {
+				return fmt.Errorf("wrapped: %w", conflict)
+			}
+			return terminal
+		}, statement)
+		require.Equal(t, 2, attempts)
+		require.Same(t, terminal, err)
+		require.Equal(t, []string{syncSQL, statement, syncSQL, statement}, calls)
+	})
+	t.Run("synchronization failure stops before DDL", func(t *testing.T) {
+		failure := errors.New("sync failed")
+		calls := 0
+		attempts, err := execCheckNamespaceSI(t.Context(), func(_ context.Context, q string) error { calls++; require.Equal(t, syncSQL, q); return failure }, statement)
+		require.Zero(t, attempts)
+		require.Equal(t, 1, calls)
+		require.ErrorIs(t, err, failure)
+	})
+	t.Run("cancellation after sync stops before DDL", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		calls := 0
+		attempts, err := execCheckNamespaceSI(ctx, func(_ context.Context, q string) error { calls++; require.Equal(t, syncSQL, q); cancel(); return nil }, statement)
+		require.Zero(t, attempts)
+		require.Equal(t, 1, calls)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+	t.Run("cancellation after abort stops recovery", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		calls := 0
+		attempts, err := execCheckNamespaceSI(ctx, func(_ context.Context, q string) error {
+			calls++
+			if q == syncSQL {
+				return nil
+			}
+			cancel()
+			return conflict
+		}, statement)
+		require.Equal(t, 1, attempts)
+		require.Equal(t, 2, calls)
+		require.ErrorIs(t, err, context.Canceled)
+		var me *mysql.MySQLError
+		require.ErrorAs(t, err, &me)
+		require.Same(t, conflict, me)
+	})
+	for _, cancelDuring := range []string{syncSQL, statement} {
+		t.Run("cancellation during recovery "+cancelDuring, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			ddl := 0
+			calls := 0
+			attempts, err := execCheckNamespaceSI(ctx, func(attempt context.Context, q string) error {
+				calls++
+				if ddl == 1 && q == cancelDuring {
+					cancel()
+					return attempt.Err()
+				}
+				if q == statement {
+					ddl++
+					return conflict
+				}
+				return nil
+			}, statement)
+			wantAttempts, wantCalls := 1, 3
+			if cancelDuring == statement {
+				wantAttempts, wantCalls = 2, 4
+			}
+			require.Equal(t, wantAttempts, attempts)
+			require.Equal(t, wantCalls, calls)
+			require.ErrorContains(t, err, fmt.Sprintf("after %d attempts", wantAttempts))
+			require.ErrorIs(t, err, context.Canceled)
+			var me *mysql.MySQLError
+			require.ErrorAs(t, err, &me)
+			require.Same(t, conflict, me)
+		})
+	}
+	t.Run("expired budget issues no SQL", func(t *testing.T) {
+		ctx, cancel := context.WithDeadline(t.Context(), time.Now().Add(-time.Second))
+		defer cancel()
+		attempts, err := execCheckNamespaceSI(ctx, func(context.Context, string) error { t.Fatal("SQL after deadline"); return nil }, statement)
+		require.Zero(t, attempts)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
 }

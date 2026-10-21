@@ -125,7 +125,7 @@ func runIcebergSQLEngineEmbeddedTypedRefs(t *testing.T, c Cluster, db *embeddedS
 			return reader, icebergmetadata.ObjectReaderContext{}, err
 		},
 	}
-	installEmbeddedIcebergPlanner(t, c, evolutionSQLPlanner{planner: planner, objectRef: fixture.objectRef})
+	installEmbeddedIcebergPlanner(t, c, &evolutionSQLPlanner{planner: planner, objectRef: fixture.objectRef})
 	cn0, err := c.GetCNService(0)
 	require.NoError(t, err)
 	appendFactory := sqliceberg.NewAppendRuntimeCoordinatorFactoryFromInternalSQLExecutor(
@@ -133,7 +133,7 @@ func runIcebergSQLEngineEmbeddedTypedRefs(t *testing.T, c Cluster, db *embeddedS
 			CatalogFactory: factory, Config: cfg, ObjectIOProvider: provider, ScopeForLocation: scope,
 			SnapshotID: func(time.Time, *api.TableMetadata) int64 { return 303 },
 		})
-	installEmbeddedIcebergWriteCoordinator(t, c, appendFactory)
+	installEmbeddedIcebergWriteCoordinator(t, c, &appendFactory)
 	main := createEmbeddedIcebergTableWithRefModes(t, db, fixture, "ref_main", "typed_refs", "main", model.ReadModeAppendOnly, model.WriteModeAppendOnly)
 	branch := createEmbeddedIcebergTableWithRefModes(t, db, fixture, "ref_branch", "typed_refs", "branch:main", model.ReadModeAppendOnly, model.WriteModeAppendOnly)
 	pin := createEmbeddedIcebergTableWithRefModes(t, db, fixture, "ref_pin", "typed_refs", "snapshot:101", model.ReadModeAppendOnly, model.WriteModeAppendOnly)
