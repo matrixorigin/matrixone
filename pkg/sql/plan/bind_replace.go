@@ -1155,19 +1155,13 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 		oldParentColFinalPos[tableDef.Pkey.PkeyColName] = replaceOldPkPos
 		var partitionCols []plan.ColRef
 		if partitionedFulltext {
-			keyName := getPartitionColName(tableDef.Partition.PartitionDefs[0].Def)
-			oldPos, ok := oldColName2Idx[tableDef.Name+"."+keyName]
-			if !ok {
-				return 0, moerr.NewInternalError(builder.GetContext(), "cannot locate old partition key for FULLTEXT REPLACE")
+			partitionExprCols := make(map[string]struct{})
+			for _, partitionDef := range tableDef.Partition.PartitionDefs {
+				if partitionDef != nil {
+					collectPartitionExprColumnNames(partitionDef.Def, tableDef, partitionExprCols)
+				}
 			}
-			keyPos := tableDef.Name2ColIndex[keyName]
-			oldKey := &plan.Expr{Typ: tableDef.Cols[keyPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: oldPos[0], ColPos: oldPos[1]}}}
-			newKey := DeepCopyExpr(finalProjList[keyPos])
 			isNew, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "isnull", []*plan.Expr{DeepCopyExpr(finalProjList[deleteCols[0].ColPos])})
-			if routeErr != nil {
-				return 0, routeErr
-			}
-			deleteKey, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{isNew, DeepCopyExpr(newKey), DeepCopyExpr(oldKey)})
 			if routeErr != nil {
 				return 0, routeErr
 			}
@@ -1175,12 +1169,45 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindReplace(
 			if routeErr != nil {
 				return 0, routeErr
 			}
-			insertKey, routeErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{isDeleteOnly, oldKey, newKey})
-			if routeErr != nil {
-				return 0, routeErr
+			deleteRoute := make([]*plan.Expr, 0, len(partitionExprCols))
+			insertRoute := make([]*plan.Expr, 0, len(partitionExprCols))
+			for _, col := range tableDef.Cols {
+				if _, ok := partitionExprCols[col.Name]; !ok {
+					continue
+				}
+				oldPos, ok := oldColName2Idx[tableDef.Name+"."+col.Name]
+				if !ok {
+					return 0, moerr.NewInternalError(builder.GetContext(), "cannot locate old partition dependency for FULLTEXT REPLACE")
+				}
+				keyPos := tableDef.Name2ColIndex[col.Name]
+				oldKey := &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: oldPos[0], ColPos: oldPos[1]}}}
+				newKey := DeepCopyExpr(finalProjList[keyPos])
+				deleteKey, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{DeepCopyExpr(isNew), DeepCopyExpr(newKey), DeepCopyExpr(oldKey)})
+				if bindErr != nil {
+					return 0, bindErr
+				}
+				insertKey, bindErr := BindFuncExprImplByPlanExpr(builder.GetContext(), "if", []*plan.Expr{DeepCopyExpr(isDeleteOnly), DeepCopyExpr(oldKey), newKey})
+				if bindErr != nil {
+					return 0, bindErr
+				}
+				deleteRoute = append(deleteRoute, deleteKey)
+				insertRoute = append(insertRoute, insertKey)
 			}
-			partitionCols = []plan.ColRef{{RelPos: finalProjTag, ColPos: int32(len(finalProjList))}, {RelPos: finalProjTag, ColPos: int32(len(finalProjList) + 1)}}
-			finalProjList = append(finalProjList, deleteKey, insertKey)
+			deleteRouteStart := int32(len(finalProjList))
+			insertRouteStart := deleteRouteStart + int32(len(deleteRoute))
+			partitionCols = make([]plan.ColRef, 0, len(deleteRoute)+len(insertRoute))
+			for i := range deleteRoute {
+				partitionCols = append(partitionCols,
+					plan.ColRef{RelPos: finalProjTag, ColPos: deleteRouteStart + int32(i)},
+				)
+			}
+			for i := range insertRoute {
+				partitionCols = append(partitionCols,
+					plan.ColRef{RelPos: finalProjTag, ColPos: insertRouteStart + int32(i)},
+				)
+			}
+			finalProjList = append(finalProjList, deleteRoute...)
+			finalProjList = append(finalProjList, insertRoute...)
 		}
 		updateCtxList = append(updateCtxList, &plan.UpdateCtx{
 			ObjRef:                objRef,

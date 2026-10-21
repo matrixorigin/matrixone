@@ -69,6 +69,42 @@ select id from ft_nuk where match(body) against('delta') order by id;
 select id from ft_nuk where match(body) against('beta') order by id;
 drop table ft_nuk;
 
+-- Compound partition routing must use old and new values for every expression
+-- dependency when REPLACE removes and inserts the parent and FULLTEXT postings.
+create table ft_compound_replace(id int primary key, bucket int, salt int, body text, fulltext fti_compound_replace(body))
+partition by range(bucket + salt)(partition c0 values less than (10), partition c1 values less than maxvalue);
+insert into ft_compound_replace values (1, 1, 20, 'compound old alpha'), (2, 1, 1, 'compound old beta');
+select id from ft_compound_replace where match(body) against('alpha') order by id;
+select id from ft_compound_replace where match(body) against('beta') order by id;
+replace into ft_compound_replace values (2, 2, 1, 'compound new gamma');
+select id from ft_compound_replace where match(body) against('beta') order by id;
+select id from ft_compound_replace where match(body) against('gamma') order by id;
+replace into ft_compound_replace values (1, 1, 0, 'compound moved delta');
+select id from ft_compound_replace where match(body) against('alpha') order by id;
+select id from ft_compound_replace where match(body) against('delta') order by id;
+select id from ft_compound_replace where match(body) against('gamma') order by id;
+replace into ft_compound_replace values (3, 2, 1, 'compound insert epsilon');
+select id from ft_compound_replace where match(body) against('epsilon') order by id;
+
+-- RANGE predicates reject NULL compound dependencies; REPLACE must not publish a parent row.
+replace into ft_compound_replace values (4, null, 1, 'compound nullable route');
+select count(*) from ft_compound_replace where id = 4;
+drop table ft_compound_replace;
+
+-- PK and secondary-UNIQUE conflicts can fan out to two old parent rows. The
+-- discarded conflict row must route by its own compound key and remove postings.
+create table ft_compound_delete_only(id int primary key, bucket int, salt int, code int, body text, unique key uk_compound_delete_only(bucket, salt, code), fulltext fti_compound_delete_only(body))
+partition by range(bucket + salt)(partition d0 values less than (10), partition d1 values less than maxvalue);
+insert into ft_compound_delete_only values (10, 1, 1, 7, 'fanout old alpha'), (20, 10, 1, 9, 'fanout old beta');
+select id from ft_compound_delete_only where match(body) against('alpha') order by id;
+select id from ft_compound_delete_only where match(body) against('beta') order by id;
+replace into ft_compound_delete_only values (10, 10, 1, 9, 'fanout new gamma');
+select id from ft_compound_delete_only where match(body) against('alpha') order by id;
+select id from ft_compound_delete_only where match(body) against('beta') order by id;
+select id from ft_compound_delete_only where match(body) against('gamma') order by id;
+select id, bucket, salt, code from ft_compound_delete_only order by id;
+drop table ft_compound_delete_only;
+
 create table ft_join_src(id int);
 insert into ft_join_src values (3), (3), (999);
 delete d from ft_part d join ft_join_src s on d.id = s.id;
