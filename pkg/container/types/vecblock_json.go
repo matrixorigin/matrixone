@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"math"
+	"math/big"
 	"strconv"
 	"strings"
 
@@ -164,16 +165,47 @@ func BlockScaledFromJSON(f BlockScaledFormat, s string) ([]byte, error) {
 	return cell, nil
 }
 
-// parseBlockScaledNumber reads a JSON number (not a string) as a finite float32.
+// parseBlockScaledNumber reads a JSON number (not a string) as a finite float32 that the
+// number denotes without rounding: its exact value, or the shortest float32 or float64 text
+// of that value.
 func parseBlockScaledNumber(n json.RawMessage) (float32, error) {
 	if len(n) == 0 || !(n[0] == '-' || (n[0] >= '0' && n[0] <= '9')) {
 		return 0, moerr.NewInvalidInputNoCtxf("%s is not a number", string(n))
 	}
-	v, err := strconv.ParseFloat(string(n), 32)
+	text := string(n)
+	v, err := strconv.ParseFloat(text, 32)
 	if err != nil || math.IsInf(v, 0) || math.IsNaN(v) {
-		return 0, moerr.NewInvalidInputNoCtxf("%s is not a finite float32", string(n))
+		return 0, moerr.NewInvalidInputNoCtxf("%s is not a finite float32", text)
+	}
+	if !denotesFloat32(text, float32(v)) {
+		return 0, moerr.NewInvalidInputNoCtxf("%s is not a float32 value", text)
 	}
 	return float32(v), nil
+}
+
+// denotesFloat32 reports whether the decimal number text is v's value, or v's shortest
+// float32 or float64 text, up to notation.
+func denotesFloat32(text string, v float32) bool {
+	short32 := strconv.FormatFloat(float64(v), 'g', -1, 32)
+	short64 := strconv.FormatFloat(float64(v), 'g', -1, 64)
+	if text == short32 || text == short64 {
+		return true
+	}
+	if v == 0 {
+		// a zero mantissa; any exponent
+		mantissa, _, _ := strings.Cut(strings.ToLower(text), "e")
+		return strings.Trim(mantissa, "-+0.") == ""
+	}
+	r, ok := new(big.Rat).SetString(text)
+	if !ok {
+		return false
+	}
+	for _, s := range []string{short32, short64} {
+		if w, ok := new(big.Rat).SetString(s); ok && r.Cmp(w) == 0 {
+			return true
+		}
+	}
+	return r.Cmp(new(big.Rat).SetFloat64(float64(v))) == 0
 }
 
 // Code lookups by value bits: the finite E4M3, E2M1 and E8M0 codes; +0 is code 0.

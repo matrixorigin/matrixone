@@ -205,6 +205,15 @@ DEALLOCATE PREPARE pq;
 DEALLOCATE PREPARE nb;
 DEALLOCATE PREPARE eb;
 DEALLOCATE PREPARE lb;
+-- only a column narrows a parameter, as for a literal
+SELECT CAST(1.1 AS FLOAT4) = 1.1;
+PREPARE xq FROM 'SELECT CAST(1.1 AS FLOAT4) = ?';
+SET @v = 1.1;
+EXECUTE xq USING @v;
+DEALLOCATE PREPARE xq;
+-- a numeral beyond DECIMAL(38) narrows by its exact value
+SELECT id FROM pp WHERE b = 0.30000000000000000000000000000000000000001;
+SELECT id FROM pp WHERE b = CAST(0.30000000000000000000000000000000000000001 AS BF16);
 
 -- NOT IN, !=, <=> and BETWEEN round literals to the column type as = and IN do
 CREATE TABLE cmp (a bf16, q float4, h float16);

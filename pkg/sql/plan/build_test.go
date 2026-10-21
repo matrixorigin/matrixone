@@ -7421,6 +7421,9 @@ func TestLowPrecisionFloatLiteralNarrowing(t *testing.T) {
 		{"SELECT id FROM vecblock_t WHERE f <=> 3.3895314e+38", true},
 		{"SELECT id FROM vecblock_t WHERE f = '3.3895314e+38'", true},
 		{"SELECT id FROM vecblock_t WHERE f = 3.3895316e38", false},
+		// a numeral beyond DECIMAL128 binds as DECIMAL256
+		{"SELECT id FROM vecblock_t WHERE f = 0.30000000000000000000000000000000000000001", true},
+		{"SELECT id FROM vecblock_t WHERE h <= 6.0000000000000000000000000000000000000001", false},
 	} {
 		args := firstFilter(tc.sql).GetF().Args
 		require.Equal(t, tc.narrow, args[0].GetCol() != nil, tc.sql)
@@ -7492,13 +7495,44 @@ func TestInsertValuesBlobVector(t *testing.T) {
 }
 
 // TestUpdateChangedRowsBlockScaledVector checks that counting changed rows plans an UPDATE
-// of vecf8/vecf4 columns, which have no equality operator.
+// of vecf8/vecf4 columns, comparing the cells with <=> without casting them to vecf32.
 func TestUpdateChangedRowsBlockScaledVector(t *testing.T) {
 	for _, count := range []bool{true, false} {
 		mock := NewMockOptimizer(true, newPlanTestProcess(t))
 		mock.CurrentContext().GetProcess().Base.SessionInfo.CountUpdateChangedRows = count
-		_, err := runOneStmt(mock, t, "UPDATE vecblock_t SET a = '[4,3,2,1]', b = '[1,2,3,4]' WHERE id = 2")
+		logicPlan, err := runOneStmt(mock, t, "UPDATE vecblock_t SET a = '[4,3,2,1]', b = '[1,2,3,4]' WHERE id = 2")
 		require.NoError(t, err, "count changed rows %v", count)
+		blockScaledNullSafeEqual, widened := 0, 0
+		for _, node := range logicPlan.GetQuery().GetNodes() {
+			for _, list := range [][]*plan.Expr{node.ProjectList, node.FilterList, node.OnList} {
+				for _, e := range list {
+					require.NoError(t, plan.VisitExprTree(e, func(cur *plan.Expr) error {
+						fn := cur.GetF()
+						if fn == nil || len(fn.Args) == 0 {
+							return nil
+						}
+						argType := types.T(fn.Args[0].Typ.Id)
+						switch fn.Func.GetObjName() {
+						case "<=>":
+							if argType.IsBlockScaledArray() {
+								blockScaledNullSafeEqual++
+							}
+						case "cast":
+							if argType.IsBlockScaledArray() && types.T(cur.Typ.Id) == types.T_array_float32 {
+								widened++
+							}
+						}
+						return nil
+					}))
+				}
+			}
+		}
+		require.Zero(t, widened, "count changed rows %v", count)
+		if count {
+			require.Equal(t, 2, blockScaledNullSafeEqual)
+		} else {
+			require.Zero(t, blockScaledNullSafeEqual)
+		}
 	}
 }
 

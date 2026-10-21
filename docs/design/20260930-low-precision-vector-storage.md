@@ -391,7 +391,7 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `INTO OUTFILE`, external-table writes | the exact text, in CSV as a quoted field and in JSONL as an object value, so an export reloads to the same cell bytes, a negative-zero element included |
 | binary input | a `BLOB` of little-endian float32 elements, as for `vecf32` (`CAST(UNHEX('0000803F…') AS BLOB)` or a BLOB parameter), quantized per row; a length that is not a multiple of 4 or another dimension is rejected |
 | exact binary | `vecblock_binary(v)` returns the stored cell as a `BLOB` (§Cell format); a `BLOB` of a cell casts, inserts or binds back to the same bytes without quantization, and a `BLOB` of cell length that is not a valid cell of the target is an error |
-| exact text | `vecblock_json(v)` returns the cell as stored, `{"g": g, "s": [scales], "v": [values]}`, the parts in the cell's order: `g` the global scale (1 for `vecf8`), `s` one scale per block of 32 (`vecf8`) / 16 (`vecf4`) values, the last block shorter, `v` the element values; casting that text (or inserting it, or `LOAD`ing it) builds the same cell bytes without quantization. Element `i` is `v[i] · s[i / blockSize] · g`; `g` is required, `s` must hold `ceil(len(v) / blockSize)` scale code values (E8M0 / UE4M3), `v` element code values (E4M3 / E2M1), `-0` the negative-zero code; anything else is an error, never rounded |
+| exact text | `vecblock_json(v)` returns the cell as stored, `{"g": g, "s": [scales], "v": [values]}`, the parts in the cell's order: `g` the global scale (1 for `vecf8`), `s` one scale per block of 32 (`vecf8`) / 16 (`vecf4`) values, the last block shorter, `v` the element values; casting that text (or inserting it, or `LOAD`ing it) builds the same cell bytes without quantization. Element `i` is `v[i] · s[i / blockSize] · g`; `g` is required, `s` must hold `ceil(len(v) / blockSize)` scale code values (E8M0 / UE4M3), `v` element code values (E4M3 / E2M1), `-0` the negative-zero code. Each number must denote its float32 value without rounding: the exact value, or the shortest float32 or float64 text of that value, in any notation (`1`, `1.0`, `1e0`; `5.877472e-39` for the scale 2^-127); anything else (`1.00000001`, which float32 parsing rounds to `1`) is an error, never rounded |
 
 The promotion is implemented in these operations only: function resolution dequantizes a
 `vecf8`/`vecf4` argument to `vecf32` for the functions listed above, and every other
@@ -668,6 +668,14 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   value (object and array line formats) and CSV text load back to the same cell bytes; a
   cell with a negative-zero element writes `-0` and reloads through CSV and JSONL to its
   negative-zero code, not the `+0` cell, in `vecf8` and `vecf4`.
+- **Exact-text admission** (`types/vecblock_json_test.go`, BVT `dtype/vecblock.sql`): a
+  number that float32 parsing rounds to a code value (`1.00000001`, `6.0000001`,
+  `448.00001`, a scale `0.50000001`, a global `1.00000001`) is rejected; `1.0`, `1e0`,
+  `-0.0`, the scale 2^-127 as `5.877472e-39` and as its float64 text, and a global as its
+  float64 or exact text are accepted and write back as the shortest float32 text.
+- **UPDATE change detection** (`plan/build_test.go`): with changed-row counting on, an
+  `UPDATE` of a `vecf8` and a `vecf4` column plans one `<=>` per column over the cells,
+  with no cast to `vecf32`.
 - **Memory admission** (`aggexec/vector_matmul_test.go`, CPU build, shape-only fake engine
   through the real preflight/fill path under an allocation account): with room, the native
   host bytes and tile buffers are charged, counted in `Size` and released by `Free` (account

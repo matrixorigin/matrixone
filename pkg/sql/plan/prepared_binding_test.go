@@ -1893,6 +1893,10 @@ func TestPreparedLowPrecisionFloatMarkerNarrowing(t *testing.T) {
 		{"bf16 printed max binary text", "f = ?", []param{{"3.3895314e+38", types.T_varchar.ToType()}}, true, 1},
 		{"bf16 printed min binary text", "f = ?", []param{{"-3.3895314e+38", types.T_varchar.ToType()}}, true, 1},
 		{"bf16 next float32 above max binary double", "f = ?", []param{{"3.3895316e+38", types.T_float64.ToType()}}, true, 0},
+		// as for a literal, only a column narrows the marker
+		{"bf16 expression sql decimal", "cast(id as bf16) = ?", []param{sqlDecimal}, false, 0},
+		{"float4 expression binary double", "cast(id as float4) = ?", []param{{"1.1", types.T_float64.ToType()}}, true, 0},
+		{"bf16 expression in sql decimal", "cast(id as bf16) in (?, 9)", []param{sqlDecimal}, false, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))

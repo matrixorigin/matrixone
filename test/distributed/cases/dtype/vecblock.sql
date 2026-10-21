@@ -187,6 +187,13 @@ select cast('{"g":1,"s":[3],"v":[1]}' as vecf8(1));
 select cast('{"g":1,"s":[1],"v":[2.5]}' as vecf4(1));
 select cast('{"s":[1],"v":[1]}' as vecf8(1));
 select cast('{"g":1,"s":[1],"v":[1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]}' as vecf4(17));
+-- a number that float32 parsing rounds to a code value is rejected; other notations of a value are not
+select cast('{"g":1,"s":[1],"v":[1.00000001]}' as vecf4(1));
+select cast('{"g":1,"s":[1],"v":[6.0000001]}' as vecf4(1));
+select cast('{"g":1,"s":[0.50000001],"v":[1]}' as vecf8(1));
+select cast('{"g":1.00000001,"s":[1],"v":[1]}' as vecf8(1));
+select vecblock_json(cast('{"g":1.0,"s":[1e0],"v":[6.000,-0.0]}' as vecf4(2)));
+select vecblock_json(cast('{"g":1,"s":[5.877471754111438e-39],"v":[1]}' as vecf8(1)));
 
 -- cells with equal values and different bytes are peers in ORDER BY and windows
 create table peer (id int, v vecf8(1));

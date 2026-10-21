@@ -60,12 +60,15 @@ GPU kernels agree on the encoding.
   value was, and the column is compared without a cast, as for `float` and `vecbf16`: a
   row inserted as `-0.1` (stored as `-0.100097656` in `bf16`) matches `WHERE a = -0.1`. A
   prepared parameter (binary protocol or `EXECUTE ... USING @v` with a numeric or
-  decimal-numeral value) is rounded the same way when the executed value is inside the
-  type's finite range, including inside an `IN` list; such a plan depends on the value
-  and is not cached by parameter type. Two literals that round to the same value are the
+  decimal-numeral value) compared with such a column is rounded the same way when the
+  executed value is inside the type's finite range, including inside an `IN` list; such a
+  plan depends on the value and is not cached by parameter type. A decimal literal of any
+  width (a numeral beyond `DECIMAL(38)` binds as `DECIMAL(65)`) narrows by its exact value. Two literals that round to the same value are the
   same constant for filter simplification (`a = 1.1 AND a = 1` on a `float4` column). A literal
-  or parameter outside the finite range, and any other expression, keeps the comparison
-  in `float32`/`float64`. Inside or outside is decided by the rule `CAST` applies to the
+  or parameter outside the finite range, and a literal or parameter compared with an
+  expression rather than a column (`CAST(1.1 AS float4) = 1.1` and
+  `CAST(1.1 AS float4) = ?` both compare in `float64`), keeps the comparison in
+  `float32`/`float64`. Inside or outside is decided by the rule `CAST` applies to the
   source (the value rounded to odd from the exact decimal or text value; a `bf16` source by
   its float32 value), so a value is narrowed exactly when `CAST` accepts it:
   `f <= 6.0000001` on a `float4` column, or `g <= 448.000001` on a `float8` column,

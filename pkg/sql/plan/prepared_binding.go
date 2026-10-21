@@ -692,7 +692,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 				lowPrecisionList = types.T(args[0].Typ.Id).IsLowPrecisionFloat()
 				var items []*Expr
 				for j, item := range list.List {
-					converted, narrowed, err := narrowPreparedLowPrecisionOperand(ctx, state, item, args[0].Typ)
+					converted, narrowed, err := narrowPreparedLowPrecisionOperand(ctx, state, item, args[0])
 					if err != nil {
 						return nil, err
 					}
@@ -752,7 +752,7 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 			}
 		}
 		if len(args) == 2 && isPreparedNumericComparisonContext(name) && args[1-i] != nil {
-			converted, narrowed, castErr := narrowPreparedLowPrecisionOperand(ctx, state, source, args[1-i].Typ)
+			converted, narrowed, castErr := narrowPreparedLowPrecisionOperand(ctx, state, source, args[1-i])
 			if castErr != nil {
 				return nil, castErr
 			}
@@ -1004,14 +1004,18 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 }
 
 // narrowPreparedLowPrecisionOperand casts a marker compared with a
-// bf16/float16/float8/float4 operand to that operand's type, as a literal is,
+// bf16/float16/float8/float4 column to that column's type, as a literal is,
 // when this execution's value is inside the type's finite range. Reading the
-// value keeps the plan out of the type-only cache. Other values keep the wider
-// comparison.
+// value keeps the plan out of the type-only cache. Other values, and other
+// peers, keep the wider comparison.
 func narrowPreparedLowPrecisionOperand(ctx context.Context, state *preparedSourceBindingState,
-	source *Expr, peer plan.Type) (*Expr, bool, error) {
+	source *Expr, peerExpr *Expr) (*Expr, bool, error) {
+	if source == nil || source.GetP() == nil || peerExpr.GetCol() == nil {
+		return nil, false, nil
+	}
+	peer := peerExpr.Typ
 	peerOid := types.T(peer.Id)
-	if source == nil || source.GetP() == nil || !peerOid.IsLowPrecisionFloat() {
+	if !peerOid.IsLowPrecisionFloat() {
 		return nil, false, nil
 	}
 	binding, ok := state.bindingForPosition(source.GetP().Pos)
@@ -1075,6 +1079,12 @@ func lowPrecisionLiteral(expr *Expr) (lowPrecisionSource, bool) {
 		switch t := expr.Typ; types.T(t.Id) {
 		case types.T_decimal64, types.T_decimal128:
 			d, err := types.ParseDecimal128(sval.Sval, t.Width, t.Scale)
+			if err != nil {
+				return lowPrecisionSource{}, false
+			}
+			return lowPrecisionText(d.Format(t.Scale))
+		case types.T_decimal256:
+			d, err := types.ParseDecimal256(sval.Sval, t.Width, t.Scale)
 			if err != nil {
 				return lowPrecisionSource{}, false
 			}
