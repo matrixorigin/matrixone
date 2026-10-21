@@ -26,8 +26,8 @@ import (
 )
 
 // hasAVX512 gates the top kernel tier. TESTING-ONLY override: set
-// MO_METRIC_NO_AVX512=1 to force AVX512-capable CPUs down to the AVX2 (and
-// then scalar) path, so the lower tiers get real coverage on this hardware.
+// MO_METRIC_NO_AVX512=1 to force AVX512-capable CPUs down to the scalar float
+// kernels or the AVX2 (then scalar) narrow kernels, covering the lower tiers.
 // Package-level var initializers run before every init() selector, so the
 // override is seen by all kernel-selection init() funcs in this package.
 var (
@@ -62,22 +62,9 @@ func L2DistanceSqFloat32(a, b []float32) (float32, error) {
 	i := 0
 
 	if hasAVX512 && n >= 64 {
-		acc0, acc1, acc2, acc3 := archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}
-		for i <= n-64 {
-			as, bs := a[i:i+64:i+64], b[i:i+64:i+64]
-			d0 := archsimd.LoadFloat32x16(as[0:16]).Sub(archsimd.LoadFloat32x16(bs[0:16]))
-			d1 := archsimd.LoadFloat32x16(as[16:32]).Sub(archsimd.LoadFloat32x16(bs[16:32]))
-			d2 := archsimd.LoadFloat32x16(as[32:48]).Sub(archsimd.LoadFloat32x16(bs[32:48]))
-			d3 := archsimd.LoadFloat32x16(as[48:64]).Sub(archsimd.LoadFloat32x16(bs[48:64]))
-
-			acc0 = d0.MulAdd(d0, acc0)
-			acc1 = d1.MulAdd(d1, acc1)
-			acc2 = d2.MulAdd(d2, acc2)
-			acc3 = d3.MulAdd(d3, acc3)
-			i += 64
-		}
-		sum += sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
-		archsimd.ClearAVXUpperBits()
+		prefix, end := l2DistanceSqFloat32AVX512(a, b)
+		sum += prefix
+		i = end
 	}
 
 	for i <= n-8 {
@@ -113,17 +100,9 @@ func InnerProductFloat32(a, b []float32) (float32, error) {
 	i := 0
 
 	if hasAVX512 && n >= 64 {
-		acc0, acc1, acc2, acc3 := archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}
-		for i <= n-64 {
-			as, bs := a[i:i+64:i+64], b[i:i+64:i+64]
-			acc0 = archsimd.LoadFloat32x16(as[0:16]).MulAdd(archsimd.LoadFloat32x16(bs[0:16]), acc0)
-			acc1 = archsimd.LoadFloat32x16(as[16:32]).MulAdd(archsimd.LoadFloat32x16(bs[16:32]), acc1)
-			acc2 = archsimd.LoadFloat32x16(as[32:48]).MulAdd(archsimd.LoadFloat32x16(bs[32:48]), acc2)
-			acc3 = archsimd.LoadFloat32x16(as[48:64]).MulAdd(archsimd.LoadFloat32x16(bs[48:64]), acc3)
-			i += 64
-		}
-		total += sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
-		archsimd.ClearAVXUpperBits()
+		prefix, end := innerProductFloat32AVX512(a, b)
+		total += prefix
+		i = end
 	}
 
 	for i <= n-8 {
@@ -169,21 +148,9 @@ func L2DistanceSqFloat64(a, b []float64) (float64, error) {
 	var sum float64
 	i := 0
 	if hasAVX512 && n >= 32 {
-		acc0, acc1, acc2, acc3 := archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}
-		for i <= n-32 {
-			as, bs := a[i:i+32:i+32], b[i:i+32:i+32]
-			d0 := archsimd.LoadFloat64x8(as[0:8]).Sub(archsimd.LoadFloat64x8(bs[0:8]))
-			d1 := archsimd.LoadFloat64x8(as[8:16]).Sub(archsimd.LoadFloat64x8(bs[8:16]))
-			d2 := archsimd.LoadFloat64x8(as[16:24]).Sub(archsimd.LoadFloat64x8(bs[16:24]))
-			d3 := archsimd.LoadFloat64x8(as[24:32]).Sub(archsimd.LoadFloat64x8(bs[24:32]))
-			acc0 = d0.MulAdd(d0, acc0)
-			acc1 = d1.MulAdd(d1, acc1)
-			acc2 = d2.MulAdd(d2, acc2)
-			acc3 = d3.MulAdd(d3, acc3)
-			i += 32
-		}
-		sum += sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
-		archsimd.ClearAVXUpperBits()
+		prefix, end := l2DistanceSqFloat64AVX512(a, b)
+		sum += prefix
+		i = end
 	}
 
 	for i <= n-8 {
@@ -217,17 +184,9 @@ func InnerProductFloat64(a, b []float64) (float64, error) {
 	var total float64
 	i := 0
 	if hasAVX512 && n >= 32 {
-		acc0, acc1, acc2, acc3 := archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}
-		for i <= n-32 {
-			as, bs := a[i:i+32:i+32], b[i:i+32:i+32]
-			acc0 = archsimd.LoadFloat64x8(as[0:8]).MulAdd(archsimd.LoadFloat64x8(bs[0:8]), acc0)
-			acc1 = archsimd.LoadFloat64x8(as[8:16]).MulAdd(archsimd.LoadFloat64x8(bs[8:16]), acc1)
-			acc2 = archsimd.LoadFloat64x8(as[16:24]).MulAdd(archsimd.LoadFloat64x8(bs[16:24]), acc2)
-			acc3 = archsimd.LoadFloat64x8(as[24:32]).MulAdd(archsimd.LoadFloat64x8(bs[24:32]), acc3)
-			i += 32
-		}
-		total += sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
-		archsimd.ClearAVXUpperBits()
+		prefix, end := innerProductFloat64AVX512(a, b)
+		total += prefix
+		i = end
 	}
 
 	for i <= n-8 {
@@ -283,17 +242,9 @@ func L1DistanceFloat32(a, b []float32) (float32, error) {
 	var sum float32
 	i := 0
 	if hasAVX512 && n >= 64 {
-		acc0, acc1, acc2, acc3 := archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}
-		for i <= n-64 {
-			as, bs := a[i:i+64:i+64], b[i:i+64:i+64]
-			acc0 = acc0.Add(archsimd.LoadFloat32x16(as[0:16]).Sub(archsimd.LoadFloat32x16(bs[0:16])).Max(archsimd.LoadFloat32x16(bs[0:16]).Sub(archsimd.LoadFloat32x16(as[0:16]))))
-			acc1 = acc1.Add(archsimd.LoadFloat32x16(as[16:32]).Sub(archsimd.LoadFloat32x16(bs[16:32])).Max(archsimd.LoadFloat32x16(bs[16:32]).Sub(archsimd.LoadFloat32x16(as[16:32]))))
-			acc2 = acc2.Add(archsimd.LoadFloat32x16(as[32:48]).Sub(archsimd.LoadFloat32x16(bs[32:48])).Max(archsimd.LoadFloat32x16(bs[32:48]).Sub(archsimd.LoadFloat32x16(as[32:48]))))
-			acc3 = acc3.Add(archsimd.LoadFloat32x16(as[48:64]).Sub(archsimd.LoadFloat32x16(bs[48:64])).Max(archsimd.LoadFloat32x16(bs[48:64]).Sub(archsimd.LoadFloat32x16(as[48:64]))))
-			i += 64
-		}
-		sum += sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
-		archsimd.ClearAVXUpperBits()
+		prefix, end := l1DistanceFloat32AVX512(a, b)
+		sum += prefix
+		i = end
 	}
 
 	abs := func(x float32) float32 {
@@ -322,17 +273,9 @@ func L1DistanceFloat64(a, b []float64) (float64, error) {
 	var sum float64
 	i := 0
 	if hasAVX512 && n >= 32 {
-		acc0, acc1, acc2, acc3 := archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}
-		for i <= n-32 {
-			as, bs := a[i:i+32:i+32], b[i:i+32:i+32]
-			acc0 = acc0.Add(archsimd.LoadFloat64x8(as[0:8]).Sub(archsimd.LoadFloat64x8(bs[0:8])).Max(archsimd.LoadFloat64x8(bs[0:8]).Sub(archsimd.LoadFloat64x8(as[0:8]))))
-			acc1 = acc1.Add(archsimd.LoadFloat64x8(as[8:16]).Sub(archsimd.LoadFloat64x8(bs[8:16])).Max(archsimd.LoadFloat64x8(bs[8:16]).Sub(archsimd.LoadFloat64x8(as[8:16]))))
-			acc2 = acc2.Add(archsimd.LoadFloat64x8(as[16:24]).Sub(archsimd.LoadFloat64x8(bs[16:24])).Max(archsimd.LoadFloat64x8(bs[16:24]).Sub(archsimd.LoadFloat64x8(as[16:24]))))
-			acc3 = acc3.Add(archsimd.LoadFloat64x8(as[24:32]).Sub(archsimd.LoadFloat64x8(bs[24:32])).Max(archsimd.LoadFloat64x8(bs[24:32]).Sub(archsimd.LoadFloat64x8(as[24:32]))))
-			i += 32
-		}
-		sum += sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
-		archsimd.ClearAVXUpperBits()
+		prefix, end := l1DistanceFloat64AVX512(a, b)
+		sum += prefix
+		i = end
 	}
 
 	abs := func(x float64) float64 {
@@ -373,16 +316,7 @@ func CosineDistanceF32(a, b []float32) (float32, error) {
 	var dot, normA, normB float32
 	i := 0
 	if n >= 16 && hasAVX512 {
-		accD, accA, accB := archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}
-		for i <= n-16 {
-			va, vb := archsimd.LoadFloat32x16(a[i:i+16]), archsimd.LoadFloat32x16(b[i:i+16])
-			accD = va.MulAdd(vb, accD)
-			accA = va.MulAdd(va, accA)
-			accB = vb.MulAdd(vb, accB)
-			i += 16
-		}
-		dot, normA, normB = sumF32x16(accD), sumF32x16(accA), sumF32x16(accB)
-		archsimd.ClearAVXUpperBits()
+		dot, normA, normB, i = cosineAccumFloat32AVX512(a, b)
 	}
 
 	for i <= n-4 {
@@ -425,16 +359,7 @@ func CosineDistanceF64(a, b []float64) (float64, error) {
 	var dot, normA, normB float64
 	i := 0
 	if n >= 8 && hasAVX512 {
-		accD, accA, accB := archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}
-		for i <= n-8 {
-			va, vb := archsimd.LoadFloat64x8(a[i:i+8]), archsimd.LoadFloat64x8(b[i:i+8])
-			accD = va.MulAdd(vb, accD)
-			accA = va.MulAdd(va, accA)
-			accB = vb.MulAdd(vb, accB)
-			i += 8
-		}
-		dot, normA, normB = sumF64x8(accD), sumF64x8(accA), sumF64x8(accB)
-		archsimd.ClearAVXUpperBits()
+		dot, normA, normB, i = cosineAccumFloat64AVX512(a, b)
 	}
 
 	for i <= n-4 {
@@ -492,16 +417,7 @@ func CosineSimilarityF32(a, b []float32) (float32, error) {
 	var dot, normA, normB float32
 	i := 0
 	if n >= 16 && hasAVX512 {
-		accD, accA, accB := archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}
-		for i <= n-16 {
-			va, vb := archsimd.LoadFloat32x16(a[i:i+16]), archsimd.LoadFloat32x16(b[i:i+16])
-			accD = va.MulAdd(vb, accD)
-			accA = va.MulAdd(va, accA)
-			accB = vb.MulAdd(vb, accB)
-			i += 16
-		}
-		dot, normA, normB = sumF32x16(accD), sumF32x16(accA), sumF32x16(accB)
-		archsimd.ClearAVXUpperBits()
+		dot, normA, normB, i = cosineAccumFloat32AVX512(a, b)
 	}
 
 	for i <= n-4 {
@@ -555,16 +471,7 @@ func CosineSimilarityF64(a, b []float64) (float64, error) {
 	var dot, normA, normB float64
 	i := 0
 	if n >= 8 && hasAVX512 {
-		accD, accA, accB := archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}
-		for i <= n-8 {
-			va, vb := archsimd.LoadFloat64x8(a[i:i+8]), archsimd.LoadFloat64x8(b[i:i+8])
-			accD = va.MulAdd(vb, accD)
-			accA = va.MulAdd(va, accA)
-			accB = vb.MulAdd(vb, accB)
-			i += 8
-		}
-		dot, normA, normB = sumF64x8(accD), sumF64x8(accA), sumF64x8(accB)
-		archsimd.ClearAVXUpperBits()
+		dot, normA, normB, i = cosineAccumFloat64AVX512(a, b)
 	}
 
 	for i <= n-4 {
@@ -627,17 +534,9 @@ func SphericalDistanceFloat32(a, b []float32) (float32, error) {
 	var total float32
 	i := 0
 	if hasAVX512 && n >= 64 {
-		acc0, acc1, acc2, acc3 := archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}, archsimd.Float32x16{}
-		for i <= n-64 {
-			as, bs := a[i:i+64:i+64], b[i:i+64:i+64]
-			acc0 = archsimd.LoadFloat32x16(as[0:16]).MulAdd(archsimd.LoadFloat32x16(bs[0:16]), acc0)
-			acc1 = archsimd.LoadFloat32x16(as[16:32]).MulAdd(archsimd.LoadFloat32x16(bs[16:32]), acc1)
-			acc2 = archsimd.LoadFloat32x16(as[32:48]).MulAdd(archsimd.LoadFloat32x16(bs[32:48]), acc2)
-			acc3 = archsimd.LoadFloat32x16(as[48:64]).MulAdd(archsimd.LoadFloat32x16(bs[48:64]), acc3)
-			i += 64
-		}
-		total += sumF32x16(acc0.Add(acc1).Add(acc2.Add(acc3)))
-		archsimd.ClearAVXUpperBits()
+		prefix, end := innerProductFloat32AVX512(a, b)
+		total += prefix
+		i = end
 	}
 
 	for i <= n-8 {
@@ -671,17 +570,9 @@ func SphericalDistanceFloat64(a, b []float64) (float64, error) {
 	var total float64
 	i := 0
 	if hasAVX512 && n >= 32 {
-		acc0, acc1, acc2, acc3 := archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}, archsimd.Float64x8{}
-		for i <= n-32 {
-			as, bs := a[i:i+32:i+32], b[i:i+32:i+32]
-			acc0 = archsimd.LoadFloat64x8(as[0:8]).MulAdd(archsimd.LoadFloat64x8(bs[0:8]), acc0)
-			acc1 = archsimd.LoadFloat64x8(as[8:16]).MulAdd(archsimd.LoadFloat64x8(bs[8:16]), acc1)
-			acc2 = archsimd.LoadFloat64x8(as[16:24]).MulAdd(archsimd.LoadFloat64x8(bs[16:24]), acc2)
-			acc3 = archsimd.LoadFloat64x8(as[24:32]).MulAdd(archsimd.LoadFloat64x8(bs[24:32]), acc3)
-			i += 32
-		}
-		total += sumF64x8(acc0.Add(acc1).Add(acc2.Add(acc3)))
-		archsimd.ClearAVXUpperBits()
+		prefix, end := innerProductFloat64AVX512(a, b)
+		total += prefix
+		i = end
 	}
 
 	for i <= n-8 {

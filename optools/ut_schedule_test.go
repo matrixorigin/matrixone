@@ -94,7 +94,7 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "ut_link_gate.sh", "active_ut_cases.awk", "active_ut_incremental.py", "summarize_ut_slow_cases.py"} {
+	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "ut_link_gate.sh", "active_ut_cases.awk", "active_ut_incremental.py", "summarize_ut_slow_cases.py", "validate_ut_report.py"} {
 		data, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -1667,6 +1667,9 @@ fi
 					"FORCE_LIGHT_LAUNCH_FAILURE="+caseData.forceLaunchFailure,
 					"PREBUILD_VALUE="+caseData.prebuild,
 					"EXPECT_PREBUILD_ACTIVE="+caseData.expectPrebuildActive,
+					// Keep the optional prebuild path deterministic even when the
+					// host's /tmp free-space guard is close to its production threshold.
+					"UT_PREBUILD_MIN_FREE_KB=1",
 					"EMBEDDED_STATUS="+caseData.embeddedStatus)
 			}
 			out, err := runCase(tc)

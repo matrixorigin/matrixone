@@ -761,6 +761,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		if err != nil {
 			return err
 		}
+		setMysqlColumnTypeMetadata(mcol, typs[i])
 		mrs.AddColumn(mcol)
 	}
 	mrs.Data = make([][]interface{}, 1)

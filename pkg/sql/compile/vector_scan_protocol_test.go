@@ -42,7 +42,7 @@ import (
 )
 
 func TestRemotePipelineProtocolCheckOnExecutionStream(t *testing.T) {
-	for _, minimum := range []int64{defines.MORPCVersion96, defines.MORPCVersion122} {
+	for _, minimum := range []int64{defines.MORPCVersion96, defines.MORPCVersion122, defines.MORPCVersion125} {
 		for _, tc := range []struct {
 			name    string
 			reply   *pipeline.Message

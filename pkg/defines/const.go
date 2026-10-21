@@ -160,8 +160,9 @@ const (
 	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
 	MORPCVersion123    int64 = 123 // capability-gated nonblocking row-lock admission
 	MORPCVersion124    int64 = 124 // exact fractional TIMESTAMPADD SECOND intervals
-	MORPCVersion125    int64 = 125 // bf16/float16/float8/float4/vecf8/vecf4 types and VECTOR_MATMUL/VECBLOCK functions
-	MORPCLatestVersion       = MORPCVersion125
+	MORPCVersion125    int64 = 125 // LOAD IGNORE foreign-key row rejection diagnostics
+	MORPCVersion126    int64 = 126 // bf16/float16/float8/float4/vecf8/vecf4 types and VECTOR_MATMUL/VECBLOCK functions
+	MORPCLatestVersion       = MORPCVersion126
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

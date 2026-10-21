@@ -867,13 +867,13 @@ const (
 	UPDATEXML               = 582
 	TO_INTERVAL_MICROSECOND = 583
 	// VECTOR_MATMUL is the batch dot-product top-k aggregate over vecf8/vecf4 columns.
-	VECTOR_MATMUL = 602
+	VECTOR_MATMUL = 603
 
 	// VECBLOCK_JSON returns the exact text of a vecf8/vecf4 value: its blocks as stored.
-	VECBLOCK_JSON = 603
+	VECBLOCK_JSON = 604
 
 	// VECBLOCK_BINARY returns the stored cell of a vecf8/vecf4 value as a BLOB.
-	VECBLOCK_BINARY = 604
+	VECBLOCK_BINARY = 605
 
 	UUID_SHORT = 587
 
@@ -892,7 +892,10 @@ const (
 
 	TIMESTAMPADD_SECOND_INTERVAL = 601
 
-	FUNCTION_END_NUMBER = 605
+	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
+	LOAD_FK_IGNORE_CHECK = 602
+
+	FUNCTION_END_NUMBER = 606
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1090,6 +1093,7 @@ var functionIdRegister = map[string]int32{
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"_check_constraint_assert":       CHECK_CONSTRAINT_ASSERT,
+	"_load_fk_ignore_check":          LOAD_FK_IGNORE_CHECK,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,

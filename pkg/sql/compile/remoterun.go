@@ -152,6 +152,9 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if requiredProtocol != nil && (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion122)
 	}
+	if requiredProtocol != nil && features.LoadFKIgnoreCheck {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion125)
+	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
 	}
@@ -2333,6 +2336,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.LowPrecisionFloatContracts && (!hasProtocolVersion || protocolVersion < plan2.LowPrecisionFloatProtocolVersion) {
 		return moerr.NewNotSupportedNoCtxf("bf16/float16/float8/float4/vecf8/vecf4 values and functions require MORPC protocol version %d", plan2.LowPrecisionFloatProtocolVersion)
+	}
+	if features.LoadFKIgnoreCheck && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion125) {
+		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")
 	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
