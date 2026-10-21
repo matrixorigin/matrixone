@@ -225,6 +225,12 @@ SELECT s4 COLLATE utf8_unicode_ci FROM charset_values;
 COLLATION 'utf8_unicode_ci' is not valid for CHARACTER SET 'utf8mb4'
 SELECT _utf8mb4'a' COLLATE utf8_unicode_ci;
 COLLATION 'utf8_unicode_ci' is not valid for CHARACTER SET 'utf8mb4'
+SELECT _utf8mb4'test', _UTF8MB4'test', _UtF8mB4'test';
+➤ test[12,4,0]  ¦  test[12,4,0]  ¦  test[12,4,0]  𝄀
+test  ¦  test  ¦  test
+SELECT DATE_FORMAT('2024-01-15', _UTF8MB4'%Y-%m');
+➤ DATE_FORMAT('2024-01-15', '%Y-%m')[12,7,0]  𝄀
+2024-01
 CREATE TABLE scalar_values (id INT PRIMARY KEY, s VARCHAR(20) COLLATE utf8mb4_unicode_ci);
 INSERT INTO scalar_values VALUES (1, 'Á');
 SELECT s = 'a', (SELECT s FROM scalar_values WHERE id = 1) = 'a',

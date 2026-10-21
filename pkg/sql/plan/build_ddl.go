@@ -364,6 +364,10 @@ func inferViewColumns(
 				typ = sourceType
 			}
 		}
+		if idx < len(outputColumnProvenance) {
+			narrowed := decimalDivSchemaType(*typ, outputColumnProvenance[idx])
+			typ = &narrowed
+		}
 		defaultDef := &plan.Default{NullAbility: !expr.Typ.NotNullable}
 		if idx < len(outputColumnProvenance) {
 			provenance := outputColumnProvenance[idx]
@@ -1521,17 +1525,24 @@ func genAsSelectCols(
 	stmt *tree.Select,
 	isPrepareStmt bool,
 	explicitTargetColumns map[string]struct{},
-) ([]*ColDef, *Query, error) {
+) ([]*ColDef, *Query, int64, error) {
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+	var executionProtocol int64
+	if !isPrepareStmt {
+		bindCtx.ctasExecutionProtocolRequirement = &executionProtocol
+	}
 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
 	}
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
 	for i := range outputColumnProvenance {
@@ -1542,10 +1553,10 @@ func genAsSelectCols(
 	// subqueries can synthesize NULLs even when their source columns are NOT NULL.
 	query, err := builder.createQuery()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
@@ -1559,6 +1570,7 @@ func genAsSelectCols(
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
+		typ = decimalDivSchemaType(typ, provenance)
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.
@@ -1582,7 +1594,7 @@ func genAsSelectCols(
 						defaultDef, err = buildCTASDefaultFromOrigin(
 							ctx, typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
-							return nil, nil, err
+							return nil, nil, 0, err
 						}
 					}
 				}
@@ -1595,7 +1607,7 @@ func genAsSelectCols(
 		if provenance.CTASDefaultPolicy == CTASDefaultUseTypeDefault {
 			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
@@ -1607,12 +1619,12 @@ func genAsSelectCols(
 		if inheritedAutoIncr && defaultDef.Expr == nil && defaultDef.OriginString == "" {
 			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
 		if err := validateIdentifier(ctx.GetContext(), bindCtx.headings[i]); err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		cols[i] = &plan.ColDef{
 			Name: normalizeCTASColumnName(
@@ -1629,9 +1641,18 @@ func genAsSelectCols(
 	if err := remapCTASSourceDefaultsToOutput(
 		ctx.GetContext(), cols, outputColumnProvenance, explicitTargetColumns,
 	); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	return cols, query, nil
+	if !isPrepareStmt && executionProtocol == 0 {
+		features, featureErr := plan.RequiredRemoteExpressionFeatures(query)
+		if featureErr != nil {
+			return nil, nil, 0, featureErr
+		}
+		if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
+			executionProtocol = defines.MORPCVersion122
+		}
+	}
+	return cols, query, executionProtocol, nil
 }
 
 // remapCTASSourceDefaultsToOutput converts inherited source-table column
@@ -2690,6 +2711,14 @@ func buildCreateTable(
 		}
 		tableDef.IsTemporary = stmt.Temporary
 
+		// MySQL regenerates CHECK constraint names for CREATE TABLE LIKE; copied
+		// names would collide in (CONSTRAINT_SCHEMA, CONSTRAINT_NAME) and let
+		// metadata joins attribute the source table's expression to the target.
+		//
+		if !preserveCheckNamesForRestore(ctx, cloneStmt) {
+			renameCheckConstraintsForClone(tableDef)
+		}
+
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
@@ -2737,7 +2766,11 @@ func buildCreateTable(
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
 				return nil, err
 			}
-			preserveChecksForCreateLike(p, tableDef)
+			// The skeleton contains the final names: ordinary LIKE/CLONE has
+			// regenerated names, while restore retains the source identities.
+			// Reattaching the pre-rewrite tableDef here would undo that choice
+			// for data-branch clones and recreate schema-wide name collisions.
+			preserveChecksForCreateLike(p, likeSkeletonDef)
 			return p, nil
 		}
 
@@ -2791,7 +2824,7 @@ func buildCreateTable(
 				explicitTargetColumns[strings.ToLower(colDef.Name.ColName())] = struct{}{}
 			}
 		}
-		if asSelectCols, asSelectQuery, err = genAsSelectCols(
+		if asSelectCols, asSelectQuery, createTable.CtasExecutionProtocolVersion, err = genAsSelectCols(
 			ctx, stmt.AsSource, isPrepareStmt, explicitTargetColumns,
 		); err != nil {
 			return nil, err
@@ -4125,7 +4158,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				)
 			}
 		}
-		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, columnPos); err != nil {
+		checkName := check.name
+		if checkName == "" {
+			// Unnamed CHECKs are named <table>_chk_<n>, unique to the owning
+			// table.  Prefixing with the table name keeps names unique within
+			// the schema, so information_schema metadata joins cannot associate
+			// one table's expression with another table.
+			checkName = nextUnnamedCheckConstraintName(createTable.TableDef)
+		}
+		if err := appendCheckDef(ctx, createTable.TableDef, checkName, check.expr, columnPos); err != nil {
 			return err
 		}
 	}
@@ -4477,6 +4518,53 @@ func ctasNeedsExplicitSourceProjection(cols, sourceCols []*ColDef) bool {
 	return false
 }
 
+// nextUnnamedCheckConstraintName names an unnamed CHECK the way MySQL does:
+// <table>_chk_<ordinal> counting this table's CHECK definitions from one.
+func nextUnnamedCheckConstraintName(tableDef *TableDef) string {
+	return fmt.Sprintf("%s_chk_%d", tableDef.Name, len(tableDef.Checks)+1)
+}
+
+// Ordinary data-branch clones also run through ExecRestore, which sets both
+// statement and process restore markers. The outer operation's clone level is
+// authoritative: only a genuine restore should keep captured CHECK identities.
+// Retain the marker fallback for callers without an outer clone context.
+func preserveCheckNamesForRestore(ctx CompilerContext, cloneStmt *tree.CloneTable) bool {
+	marked := cloneStmt != nil && cloneStmt.IsRestore
+	if proc := ctx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil {
+		marked = marked || proc.GetSessionInfo().IsRestore
+	}
+	return IsCheckConstraintRestoreReplay(ctx.GetContext(), marked)
+}
+
+// IsCheckConstraintRestoreReplay shares the restore identity decision with
+// execution. Ordinary data-branch clones also carry restore session markers;
+// the outer clone level distinguishes a new owner from historical replay.
+func IsCheckConstraintRestoreReplay(ctx context.Context, marked bool) bool {
+	switch ctx.Value(tree.CloneLevelCtxKey{}) {
+	case tree.NormalCloneLevelTable, tree.NormalCloneLevelDatabase,
+		tree.NormalCloneLevelAccount, tree.NormalCloneLevelCluster:
+		return false
+	case tree.RestoreCloneLevelTable, tree.RestoreCloneLevelDatabase,
+		tree.RestoreCloneLevelAccount, tree.RestoreCloneLevelCluster:
+		return true
+	}
+	return marked
+}
+
+// renameCheckConstraintsForClone regenerates CHECK names for a table created
+// from an existing table definition (CREATE TABLE LIKE): every CHECK from the
+// source receives a fresh <target>_chk_<ordinal> name in definition order, so
+// names stay unique per schema even when the source named its CHECKs
+// explicitly.
+func renameCheckConstraintsForClone(tableDef *plan.TableDef) {
+	for i, check := range tableDef.Checks {
+		if check == nil {
+			continue
+		}
+		check.Name = fmt.Sprintf("%s_chk_%d", tableDef.Name, i+1)
+	}
+}
+
 func appendCheckDef(
 	ctx CompilerContext,
 	tableDef *TableDef,
@@ -4563,6 +4651,9 @@ func appendCheckDef(
 	}
 	if name == "" {
 		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
+	if err := validateIdentifier(ctx.GetContext(), name); err != nil {
+		return err
 	}
 	for _, check := range tableDef.Checks {
 		if check.Name == name {
@@ -8904,4 +8995,32 @@ func findColInTableDefCaseInsensitive(cols []*plan.ColDef, name string) *plan.Co
 		}
 	}
 	return nil
+}
+
+// MySQL materializes integer function results as INT when their display length
+// is below nine. Keep this separate from DIV's 64-bit evaluation domain.
+func decimalDivSchemaType(typ plan.Type, provenance OutputColumnProvenance) plan.Type {
+	if provenance.DecimalDivDisplayLength == 0 {
+		return typ
+	}
+	switch types.T(typ.Id) {
+	case types.T_int64:
+		if provenance.DecimalDivDisplayLength < 9 {
+			typ.Id = int32(types.T_int32)
+			typ.Width = 32
+		} else {
+			typ.Width = 64
+		}
+	case types.T_uint64:
+		if provenance.DecimalDivDisplayLength < 9 {
+			typ.Id = int32(types.T_uint32)
+			typ.Width = 32
+		} else {
+			typ.Width = 64
+		}
+	default:
+		return typ
+	}
+	typ.Scale = -1
+	return typ
 }

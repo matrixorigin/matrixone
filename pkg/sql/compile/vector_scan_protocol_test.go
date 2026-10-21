@@ -40,45 +40,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestVectorScanProtocolCheckOnExecutionStream(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		reply   *pipeline.Message
-		wantErr bool
-	}{
-		{name: "current receiver", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
-			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion96}},
-		{name: "replacement version 95 receiver", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
-			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion95}, wantErr: true},
-		{name: "unrecognized method", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_UnknownMethod,
-			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion96}, wantErr: true},
-		{name: "wrong stream", reply: &pipeline.Message{Id: 1, Cmd: pipeline.Method_PipelineProtocolCheck,
-			Sid: pipeline.Status_Last, ProtocolVersion: defines.MORPCVersion96}, wantErr: true},
-		{name: "closed stream", wantErr: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			stream := &fakeStreamSender{}
-			receiveCh := make(chan morpc.Message, 1)
-			if tc.reply != nil {
-				receiveCh <- tc.reply
-			} else {
-				close(receiveCh)
-			}
-			sender := &messageSenderOnClient{
-				ctx: context.Background(), streamSender: stream, receiveCh: receiveCh,
-			}
-			err := sender.confirmProtocolOnStream(defines.MORPCVersion96)
-			if tc.wantErr {
-				require.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-			require.Equal(t, 1, stream.sentCnt)
-			request := stream.sent[0].(*pipeline.Message)
-			require.Equal(t, pipeline.Method_PipelineProtocolCheck, request.GetCmd())
-			require.Equal(t, defines.MORPCVersion96, request.GetProtocolVersion())
-			require.Equal(t, stream.ID(), request.GetID())
-		})
+func TestRemotePipelineProtocolCheckOnExecutionStream(t *testing.T) {
+	for _, minimum := range []int64{defines.MORPCVersion96, defines.MORPCVersion122, defines.MORPCVersion125} {
+		for _, tc := range []struct {
+			name    string
+			reply   *pipeline.Message
+			wantErr bool
+		}{
+			{name: "current receiver", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
+				Sid: pipeline.Status_Last, ProtocolVersion: minimum}},
+			{name: "replacement older receiver", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
+				Sid: pipeline.Status_Last, ProtocolVersion: minimum - 1}, wantErr: true},
+			{name: "unrecognized method", reply: &pipeline.Message{Id: 0, Cmd: pipeline.Method_UnknownMethod,
+				Sid: pipeline.Status_Last, ProtocolVersion: minimum}, wantErr: true},
+			{name: "wrong stream", reply: &pipeline.Message{Id: 1, Cmd: pipeline.Method_PipelineProtocolCheck,
+				Sid: pipeline.Status_Last, ProtocolVersion: minimum}, wantErr: true},
+			{name: "closed stream", wantErr: true},
+		} {
+			t.Run(fmt.Sprintf("v%d/%s", minimum, tc.name), func(t *testing.T) {
+				stream := &fakeStreamSender{}
+				receiveCh := make(chan morpc.Message, 1)
+				if tc.reply != nil {
+					receiveCh <- tc.reply
+				} else {
+					close(receiveCh)
+				}
+				sender := &messageSenderOnClient{
+					ctx: context.Background(), streamSender: stream, receiveCh: receiveCh,
+				}
+				err := sender.confirmProtocolOnStream(minimum)
+				if tc.wantErr {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+				require.Equal(t, 1, stream.sentCnt)
+				request := stream.sent[0].(*pipeline.Message)
+				require.Equal(t, pipeline.Method_PipelineProtocolCheck, request.GetCmd())
+				require.Equal(t, minimum, request.GetProtocolVersion())
+				require.Equal(t, stream.ID(), request.GetID())
+			})
+		}
 	}
 }
 
@@ -177,20 +179,20 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	remote := scopes[0]
 	require.Equal(t, "a", remote.NodeInfo.Id)
 	require.Zero(t, remote.NodeInfo.CNIDX)
-	var requiredVectorProtocol int64
-	data, err := encodeRemoteScopeWithVectorProtocol(remote, c.proc, &requiredVectorProtocol)
+	var requiredProtocol int64
+	data, err := encodeRemoteScopeWithProtocol(remote, c.proc, &requiredProtocol)
 	require.NoError(t, err)
-	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "the encoded remote index search scan needs a bound handshake")
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredProtocol, "the encoded remote index search scan needs a bound handshake")
 	c.proc.Base.TxnOperator = fakeTxnOperator{}
 	c.proc.Base.SessionInfo.TimeZone = time.UTC
 	c.proc.Ctx = defines.AttachAccountId(context.Background(), 0)
 	remote.Proc.Base.TxnOperator = fakeTxnOperator{}
 	remote.Proc.Base.SessionInfo.TimeZone = time.UTC
 	remote.Proc.Ctx = defines.AttachAccountId(context.Background(), 0)
-	requiredVectorProtocol = 0
-	_, _, _, _, err = prepareRemoteRunSendingDataWithVectorProtocol("", remote, c.proc, nil, uuid.Nil, &requiredVectorProtocol)
+	requiredProtocol = 0
+	_, _, _, _, err = prepareRemoteRunSendingDataWithProtocol("", remote, c.proc, nil, uuid.Nil, &requiredProtocol)
 	require.NoError(t, err)
-	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "remoteRun must receive the post-folded pipeline's protocol requirement")
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredProtocol, "remoteRun must receive the post-folded pipeline's protocol requirement")
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
 	t.Cleanup(decoded.release)
@@ -228,13 +230,13 @@ func TestVectorScanPartitionTransportAndRollback(t *testing.T) {
 	require.False(t, local.IsRemote)
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.IndexSearchScanProtocolVersion)
 	remote.NodeInfo.CNIDX = 1
-	nonzero, err := encodeRemoteScopeWithVectorProtocol(remote, c.proc, &requiredVectorProtocol)
+	nonzero, err := encodeRemoteScopeWithProtocol(remote, c.proc, &requiredProtocol)
 	require.NoError(t, err)
-	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "a nonzero partition needs the handshake too")
-	requiredVectorProtocol = 0
-	_, _, _, _, err = prepareRemoteRunSendingDataWithVectorProtocol("", remote, c.proc, nil, uuid.Nil, &requiredVectorProtocol)
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredProtocol, "a nonzero partition needs the handshake too")
+	requiredProtocol = 0
+	_, _, _, _, err = prepareRemoteRunSendingDataWithProtocol("", remote, c.proc, nil, uuid.Nil, &requiredProtocol)
 	require.NoError(t, err)
-	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol)
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredProtocol)
 	decodedNonzero, err := decodeScope(nonzero, c.proc, true, nil)
 	require.NoError(t, err)
 	t.Cleanup(decodedNonzero.release)
@@ -253,9 +255,9 @@ func TestVectorScanPartitionProtocolNestedScopes(t *testing.T) {
 		Children: []*pipeline.Pipeline{nil, {Children: []*pipeline.Pipeline{leaf}}},
 	}
 	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, minimumRemoteVectorProtocol(root))
-	var requiredVectorProtocol int64
-	require.NoError(t, validateVectorPartitionDestinationWithResult(c.proc, root, &requiredVectorProtocol))
-	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredVectorProtocol, "a nested index search scan needs the execution-stream handshake")
+	var requiredProtocol int64
+	require.NoError(t, validateVectorPartitionDestinationWithResult(c.proc, root, &requiredProtocol))
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, requiredProtocol, "a nested index search scan needs the execution-stream handshake")
 	require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, root))
 	ctx, cancel := context.WithCancel(c.proc.Ctx)
 	cancel()
@@ -269,8 +271,8 @@ func TestVectorScanPartitionProtocolNestedScopes(t *testing.T) {
 	require.Error(t, validateRemoteVectorPartitionProtocol(nil, root), "an unpartitioned remote index search scan needs the version too")
 	leaf.Node.CnCnt = 2
 	leaf.DataSource.Node.NodeType = plan.Node_TABLE_SCAN
-	require.NoError(t, validateVectorPartitionDestinationWithResult(nil, root, &requiredVectorProtocol))
-	require.Zero(t, requiredVectorProtocol, "ordinary nested scans do not need the handshake")
+	require.NoError(t, validateVectorPartitionDestinationWithResult(nil, root, &requiredProtocol))
+	require.Zero(t, requiredProtocol, "ordinary nested scans do not need the handshake")
 	require.NoError(t, validateRemoteVectorPartitionProtocol(nil, nil))
 }
 

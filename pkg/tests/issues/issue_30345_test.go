@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -100,13 +101,16 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 				warnings                    int
 				want                        [][3]int
 			}{
-				{"single", "unique(k), constraint chk_pos check(v>0)", "v*2", 1, [][3]int{{2, 5, 10}, {3, 8, 16}, {4, 999, 999}}},
-				{"multiple", "unique(k), constraint chk_pos check(v>0), constraint chk_upper check(v<7)", "v*2", 2, [][3]int{{2, 5, 10}, {4, 999, 999}}},
-				{"generated_composite", "g int generated always as (v*2) stored, unique(k,tag), constraint chk_gen check(g>0)", "g", 1, [][3]int{{2, 5, 10}, {3, 8, 16}, {4, 999, 999}}},
+				{"single", "unique(k), constraint %[1]s_chk_pos check(v>0)", "v*2", 1, [][3]int{{2, 5, 10}, {3, 8, 16}, {4, 999, 999}}},
+				{"multiple", "unique(k), constraint %[1]s_chk_pos check(v>0), constraint %[1]s_chk_upper check(v<7)", "v*2", 2, [][3]int{{2, 5, 10}, {4, 999, 999}}},
+				{"generated_composite", "g int generated always as (v*2) stored, unique(k,tag), constraint %[1]s_chk_gen check(g>0)", "g", 1, [][3]int{{2, 5, 10}, {3, 8, 16}, {4, 999, 999}}},
 			} {
 				t.Run(fmt.Sprintf("local_%t/%s", local, tc.name), func(t *testing.T) {
-					table := fmt.Sprintf("%s.t_%t_%d", database, local, index)
-					exec(t, "create table "+table+"(id int primary key,k varchar(20),tag int,v int,"+tc.definition+")")
+					// CHECK names are schema-scoped, and earlier case tables remain
+					// alive. Qualify fixture identities without weakening LOAD checks.
+					name := fmt.Sprintf("t_%t_%d", local, index)
+					table := database + "." + name
+					exec(t, "create table "+table+"(id int primary key,k varchar(20),tag int,v int,"+fmt.Sprintf(tc.definition, name)+")")
 					prefix := "load data "
 					if local {
 						prefix += "local "
@@ -152,14 +156,8 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 			requireWarningCodes(t, ctx, conn, map[uint16]int{1062: 1})
 			require.Equal(t, [][3]int{{2, 5, 10}, {3, 8, 16}}, read(t, database+".dup", "v*2"))
 		})
-		t.Run("load ignore keeps foreign key rejection", func(t *testing.T) {
-			validCSV := filepath.Join(filepath.Dir(csv), "valid_checks.csv")
-			require.NoError(t, os.WriteFile(validCSV, []byte("2,k_input,1,6\n3,k_tail,1,8\n"), 0o600))
-			exec(t, "create table "+database+".parent(id int primary key)")
-			exec(t, "create table "+database+".child(id int primary key,k varchar(20),tag int,v int,check(v>0),foreign key(tag) references "+database+".parent(id))")
-			_, err := conn.ExecContext(ctx, "load data infile '"+validCSV+"' ignore into table "+database+".child fields terminated by ','")
-			require.ErrorContains(t, err, "foreign key constraint fails")
-			require.Empty(t, read(t, database+".child", "v*2"))
+		t.Run("load ignore foreign key admission", func(t *testing.T) {
+			testLoadIgnoreForeignKeyAdmission(t, ctx, conn, peer, writer, reader, database)
 		})
 		exec(t, "set experimental_fulltext_index=1")
 		files := make(map[string]string)
@@ -253,5 +251,221 @@ func TestIssue30345LoadIgnoreCheckConstraints(t *testing.T) {
 				})
 			}
 		}
+	})
+}
+
+// Reuse the CHECK test's authenticated cluster and its commit frontier protocol.
+func testLoadIgnoreForeignKeyAdmission(t *testing.T, ctx context.Context, conn *sql.Conn, peer *sql.DB, writer, reader client.TxnTimestampAware, database string) {
+	exec := func(t *testing.T, query string) {
+		t.Helper()
+		_, err := conn.ExecContext(ctx, query)
+		require.NoError(t, err, query)
+	}
+	syncPeer := func(t *testing.T) {
+		t.Helper()
+		frontier := writer.GetLatestCommitTS()
+		require.False(t, frontier.IsEmpty())
+		waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+		defer stop()
+		snapshot, err := reader.WaitLogTailAppliedAt(waitCtx, frontier)
+		require.NoError(t, err)
+		require.True(t, frontier.Less(snapshot))
+	}
+	type queryer interface {
+		QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	}
+	read := func(t *testing.T, query string) [][2]int {
+		t.Helper()
+		fetch := func(source queryer) [][2]int {
+			t.Helper()
+			rows, err := source.QueryContext(ctx, query)
+			require.NoError(t, err)
+			defer rows.Close()
+			var got [][2]int
+			for rows.Next() {
+				var row [2]int
+				require.NoError(t, rows.Scan(&row[0], &row[1]))
+				got = append(got, row)
+			}
+			require.NoError(t, rows.Err())
+			return got
+		}
+		local := fetch(conn)
+		syncPeer(t)
+		remote := fetch(peer)
+		require.Equal(t, local, remote, "writer and peer must see the same committed image")
+		return remote
+	}
+	inline := func(table, data, columns, suffix string, ignore bool) string {
+		data = strings.ReplaceAll(strings.ReplaceAll(data, "\\", "\\\\"), "'", "''")
+		policy := ""
+		if ignore {
+			policy = "ignore "
+		}
+		return "load data inline format='csv', data='" + data + "' " + policy + "into table " + database + "." + table + " fields terminated by ',' " + columns + " " + suffix
+	}
+	warn := func(t *testing.T, codes map[uint16]int) { t.Helper(); requireWarningCodes(t, ctx, conn, codes) }
+	parent := database + ".fk_parent"
+	exec(t, "create table "+parent+"(id int primary key)")
+	exec(t, "insert into "+parent+" values(1),(2)")
+	for _, mode := range []string{"inline", "server", "local"} {
+		t.Run(mode, func(t *testing.T) {
+			name := "fk_" + mode
+			table := database + "." + name
+			exec(t, "create table "+table+"(id int primary key,pid int,v int,check(v>0),foreign key(pid) references "+parent+"(id))")
+			const data = "1,1,5\n2,99,5\n3,2,8\n"
+			file := filepath.Join(t.TempDir(), "fk.csv")
+			require.NoError(t, os.WriteFile(file, []byte(data), 0o600))
+			mysql.RegisterLocalFile(file)
+			defer mysql.DeregisterLocalFile(file)
+			load := func(ignore bool) string {
+				if mode == "inline" {
+					return inline(name, data, "", "", ignore)
+				}
+				prefix := "load data "
+				if mode == "local" {
+					prefix += "local "
+				}
+				prefix += "infile '" + file + "' "
+				if ignore {
+					prefix += "ignore "
+				}
+				return prefix + "into table " + table + " fields terminated by ','"
+			}
+			exec(t, load(true))
+			warn(t, map[uint16]int{1452: 1})
+			require.Equal(t, [][2]int{{1, 1}, {3, 2}}, read(t, "select id,pid from "+table+" order by id"))
+			exec(t, "truncate table "+table)
+			_, err := conn.ExecContext(ctx, load(false))
+			var fkError *mysql.MySQLError
+			require.ErrorAs(t, err, &fkError)
+			require.Equal(t, uint16(1452), fkError.Number)
+			require.Empty(t, read(t, "select id,pid from "+table))
+			if mode == "inline" {
+				_, err = conn.ExecContext(ctx, inline(name, "1,1,-1\n3,2,8\n", "", "", false))
+				var checkError *mysql.MySQLError
+				require.ErrorAs(t, err, &checkError)
+				require.Equal(t, uint16(3819), checkError.Number)
+				require.Empty(t, read(t, "select id,pid from "+table))
+			}
+			// E4: valid parent keys do not let CHECK-invalid rows bypass admission.
+			exec(t, inline(name, "1,1,-1\n3,2,8\n", "", "", true))
+			warn(t, map[uint16]int{3819: 1})
+			require.Equal(t, [][2]int{{3, 2}}, read(t, "select id,pid from "+table+" order by id"))
+			exec(t, "truncate table "+table)
+			exec(t, inline(name, "1,1,-1\n2,99,5\n3,2,8\n4,\\N,9\n", "", "", true))
+			warn(t, map[uint16]int{3819: 1, 1452: 1})
+			require.Equal(t, [][2]int{{3, 2}, {4, -999}}, read(t, "select id,coalesce(pid,-999) from "+table+" order by id"))
+		})
+	}
+	t.Run("composite and multiple foreign keys", func(t *testing.T) {
+		exec(t, "create table "+database+".fk_pair_parent(a int,b int,primary key(a,b))")
+		exec(t, "insert into "+database+".fk_pair_parent values(1,1),(2,2)")
+		exec(t, "create table "+database+".fk_pair(id int primary key,a int,b int,pid int,foreign key(a,b) references "+database+".fk_pair_parent(a,b),foreign key(pid) references "+parent+"(id))")
+		// Both FKs fail on id=2, yet it produces only one warning. Partial NULL
+		// bypasses only its own composite FK; id=4 must still fail the scalar FK.
+		exec(t, inline("fk_pair", "1,1,1,1\n2,99,99,99\n3,\\N,99,1\n4,\\N,99,99\n5,2,2,2\n", "", "", true))
+		warn(t, map[uint16]int{1452: 2})
+		require.Equal(t, [][2]int{{1, 1}, {3, 1}, {5, 2}}, read(t, "select id,pid from "+database+".fk_pair order by id"))
+		exec(t, inline("fk_pair", "6,99,99,99\n7,88,88,88\n", "", "", true))
+		warn(t, map[uint16]int{1452: 2})
+		require.Equal(t, [][2]int{{1, 1}, {3, 1}, {5, 2}}, read(t, "select id,pid from "+database+".fk_pair order by id"))
+		exec(t, inline("fk_pair", "", "", "", true))
+		warn(t, map[uint16]int{})
+	})
+	t.Run("final generated and assigned foreign keys", func(t *testing.T) {
+		exec(t, "create table "+database+".fk_generated(id int primary key,v int,g int generated always as (v+1) stored,foreign key(g) references "+parent+"(id))")
+		exec(t, inline("fk_generated", "1,0\n2,98\n3,1\n", "(id,v)", "", true))
+		warn(t, map[uint16]int{1452: 1})
+		require.Equal(t, [][2]int{{1, 1}, {3, 2}}, read(t, "select id,g from "+database+".fk_generated order by id"))
+		exec(t, "create table "+database+".fk_assigned(id int primary key,pid int,foreign key(pid) references "+parent+"(id))")
+		exec(t, inline("fk_assigned", "1,1\n2,2\n3,99\n4,88\n", "(id,@raw)", "set pid=nullif(@raw,99)", true))
+		warn(t, map[uint16]int{1452: 1})
+		require.Equal(t, [][2]int{{1, 1}, {2, 2}, {3, -999}}, read(t, "select id,coalesce(pid,-999) from "+database+".fk_assigned order by id"))
+	})
+	t.Run("nonunique parent does not multiply rows", func(t *testing.T) {
+		exec(t, "create table "+database+".fk_prefix_parent(a int,b int,primary key(a,b))")
+		exec(t, "insert into "+database+".fk_prefix_parent values(1,1),(1,2)")
+		exec(t, "create table "+database+".fk_prefix(id int primary key,pid int,foreign key(pid) references "+database+".fk_prefix_parent(a))")
+		exec(t, inline("fk_prefix", "1,1\n2,99\n", "", "", true))
+		warn(t, map[uint16]int{1452: 1})
+		require.Equal(t, [][2]int{{1, 1}}, read(t, "select id,pid from "+database+".fk_prefix"))
+	})
+	t.Run("fulltext and composite unique keys", func(t *testing.T) {
+		exec(t, "set experimental_fulltext_index=1")
+		exec(t, "create table "+database+".fk_indexed(id int primary key,k varchar(20),tag int,pid int,body text,unique(k,tag),fulltext fi(body),foreign key(pid) references "+parent+"(id))")
+		exec(t, inline("fk_indexed", "1,reused,1,99,rejected\n1,reused,1,1,accepted\n2,tail,1,2,surviving\n3,recover,1,99,discarded\n", "", "", true))
+		warn(t, map[uint16]int{1452: 2})
+		require.Equal(t, [][2]int{{1, 1}, {2, 2}}, read(t, "select id,pid from "+database+".fk_indexed order by id"))
+		exec(t, "insert into "+database+".fk_indexed values(3,'recover',1,2,'recovered')")
+		require.Equal(t, [][2]int{{1, 1}, {2, 2}, {3, 2}}, read(t, "select id,pid from "+database+".fk_indexed order by id"))
+		var postings string
+		require.NoError(t, conn.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name='fi' and table_id=(select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='fk_indexed') limit 1", database).Scan(&postings))
+		require.Equal(t, [][2]int{{1, 1}, {2, 2}, {3, 3}}, read(t, "select distinct doc_id,doc_id from "+database+".`"+postings+"` order by doc_id"))
+		require.Empty(t, read(t, "select doc_id,doc_id from "+database+".`"+postings+"` where word in ('rejected','discarded')"))
+		require.Equal(t, [][2]int{{1, 1}}, read(t, "select id,id from "+database+".fk_indexed where match(body) against('accepted' in boolean mode)"))
+	})
+	t.Run("Unicode prefix foreign key diagnostics", func(t *testing.T) {
+		table := database + ".fk_unicode"
+		exec(t, "create table "+table+"(id int primary key,k varchar(20) collate utf8mb4_unicode_ci,pid int,unique key uk(k(3)),foreign key(pid) references "+parent+"(id))")
+		// The rejected row must not occupy the case-insensitive prefix key.
+		exec(t, inline("fk_unicode", "1,Alpha,99\n1,alpha,1\n2,Tail,2\n", "", "", true))
+		warn(t, map[uint16]int{1452: 1})
+		require.Equal(t, [][2]int{{1, 1}, {2, 2}}, read(t, "select id,pid from "+table+" order by id"))
+		// A duplicate INSERT checks the Unicode index populated by LOAD and
+		// retains the logical prefix in its diagnostic.
+		_, err := conn.ExecContext(ctx, "insert into "+table+" values(3,'ALPine',1)")
+		var duplicate *mysql.MySQLError
+		require.ErrorAs(t, err, &duplicate)
+		require.Equal(t, uint16(1062), duplicate.Number)
+		require.Equal(t, "23000", string(duplicate.SQLState[:]))
+		require.Equal(t, "Duplicate entry 'ALP' for key 'uk'", duplicate.Message)
+		require.Equal(t, [][2]int{{1, 1}, {2, 2}}, read(t, "select id,pid from "+table+" order by id"))
+	})
+	t.Run("foreign key checks toggles and parent targets", func(t *testing.T) {
+		exec(t, "set foreign_key_checks=0")
+		defer exec(t, "set foreign_key_checks=1")
+		exec(t, inline("fk_inline", "10,99,5\n13,99,-1\n", "", "", true))
+		warn(t, map[uint16]int{3819: 1})
+		exec(t, "set foreign_key_checks=1")
+		exec(t, inline("fk_inline", "11,99,5\n12,1,5\n", "", "", true))
+		warn(t, map[uint16]int{1452: 1})
+		require.Equal(t, [][2]int{{3, 2}, {4, -999}, {10, 99}, {12, 1}}, read(t, "select id,coalesce(pid,-999) from "+database+".fk_inline order by id"))
+		exec(t, inline("fk_parent", "3\n", "", "", true))
+		warn(t, map[uint16]int{})
+		require.Equal(t, [][2]int{{1, 1}, {2, 2}, {3, 3}}, read(t, "select id,id from "+parent+" order by id"))
+	})
+	t.Run("prepared load observes foreign key checks", func(t *testing.T) {
+		exec(t, "create table "+database+".fk_prepared(id int primary key,pid int,foreign key(pid) references "+parent+"(id))")
+		exec(t, "set foreign_key_checks=0")
+		defer exec(t, "set foreign_key_checks=1")
+		query := inline("fk_prepared", "1,99\n2,1\n", "", "", true)
+		exec(t, "prepare load_fk_probe from '"+strings.ReplaceAll(strings.ReplaceAll(query, "\\", "\\\\"), "'", "''")+"'")
+		defer exec(t, "deallocate prepare load_fk_probe")
+		exec(t, "execute load_fk_probe")
+		warn(t, map[uint16]int{})
+		require.Equal(t, [][2]int{{1, 99}, {2, 1}}, read(t, "select id,pid from "+database+".fk_prepared order by id"))
+		exec(t, "truncate table "+database+".fk_prepared")
+		exec(t, "set foreign_key_checks=1")
+		exec(t, "execute load_fk_probe")
+		warn(t, map[uint16]int{1452: 1})
+		require.Equal(t, [][2]int{{2, 1}}, read(t, "select id,pid from "+database+".fk_prepared order by id"))
+	})
+
+	t.Run("self reference fallback keeps CHECK admission", func(t *testing.T) {
+		exec(t, "create table "+database+".fk_self(id int primary key,pid int,v int,check(v>0),foreign key(pid) references "+database+".fk_self(id))")
+		exec(t, inline("fk_self", "1,\\N,5\n", "(id,pid,v)", "", true))
+		warn(t, map[uint16]int{})
+		exec(t, inline("fk_self", "2,1,-1\n3,1,5\n", "(id,pid,v)", "", true))
+		warn(t, map[uint16]int{3819: 1})
+		require.Equal(t, [][2]int{{1, -999}, {3, 1}}, read(t, "select id,coalesce(pid,-999) from "+database+".fk_self order by id"))
+		_, err := conn.ExecContext(ctx, inline("fk_self", "4,99,5\n", "(id,pid,v)", "", true))
+		require.ErrorContains(t, err, "foreign key constraint fails")
+		require.Equal(t, [][2]int{{1, -999}, {3, 1}}, read(t, "select id,coalesce(pid,-999) from "+database+".fk_self order by id"))
+		exec(t, "set foreign_key_checks=0")
+		defer exec(t, "set foreign_key_checks=1")
+		exec(t, inline("fk_self", "5,99,5\n", "(id,pid,v)", "", true))
+		warn(t, map[uint16]int{})
+		require.Equal(t, [][2]int{{1, -999}, {3, 1}, {5, 99}}, read(t, "select id,coalesce(pid,-999) from "+database+".fk_self order by id"))
 	})
 }

@@ -60,6 +60,10 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 	if ref == nil {
 		return nil
 	}
+	var publisher *plan.PubInfo
+	if ref.PubInfo != nil {
+		publisher = proto.Clone(ref.PubInfo).(*plan.PubInfo)
+	}
 	return &plan.ObjectRef{
 		Server:           ref.Server,
 		Db:               ref.Db,
@@ -70,7 +74,7 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 		SchemaName:       ref.SchemaName,
 		ObjName:          ref.ObjName,
 		SubscriptionName: ref.SubscriptionName,
-		PubInfo:          ref.PubInfo,
+		PubInfo:          publisher,
 		NotLockMeta:      ref.NotLockMeta,
 		Snapshot:         DeepCopySnapshot(ref.Snapshot),
 	}
@@ -218,8 +222,14 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		KeyNames:                     slices.Clone(ctx.KeyNames),
 		KeyTypes:                     keyTypes,
 		KeyTypeCounts:                slices.Clone(ctx.KeyTypeCounts),
+		KeyDiagnosticExprs:           slices.Clone(ctx.KeyDiagnosticExprs),
 	}
 
+	for i, exprs := range ctx.KeyDiagnosticExprs {
+		if exprs != nil {
+			newCtx.KeyDiagnosticExprs[i] = &plan.ExprList{List: DeepCopyExprList(exprs.List)}
+		}
+	}
 	return newCtx
 }
 
@@ -250,6 +260,8 @@ func DeepCopyLockTarget(target *plan.LockTarget) *plan.LockTarget {
 		LockTableAtTheEnd:    target.LockTableAtTheEnd,
 		PartitionColIdxInBat: target.PartitionColIdxInBat,
 		HasPartitionCol:      target.HasPartitionCol,
+		NoWait:               target.NoWait,
+		SkipLocked:           target.SkipLocked,
 	}
 }
 
@@ -356,6 +368,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		OnUpdateExprs:              DeepCopyExprList(node.OnUpdateExprs),
 		DedupColName:               node.DedupColName,
 		DedupColTypes:              slices.Clone(node.DedupColTypes),
+		DedupKeyExprs:              DeepCopyExprList(node.DedupKeyExprs),
 		UpdateCtxList:              DeepCopyUpdateCtxList(node.UpdateCtxList),
 		DedupJoinCtx:               DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam:           DeepCopyIndexReaderParam(node.IndexReaderParam),
@@ -553,24 +566,25 @@ func DeepCopyColDef(col *plan.ColDef) *plan.ColDef {
 		return nil
 	}
 	return &plan.ColDef{
-		ColId:         col.ColId,
-		Name:          col.Name,
-		OriginName:    col.OriginName,
-		Alg:           col.Alg,
-		Typ:           *DeepCopyType(&col.Typ),
-		Default:       DeepCopyDefault(col.Default),
-		Primary:       col.Primary,
-		Unique:        col.Unique,
-		Pkidx:         col.Pkidx,
-		Comment:       col.Comment,
-		OnUpdate:      DeepCopyOnUpdate(col.OnUpdate),
-		GeneratedCol:  DeepCopyGeneratedCol(col.GeneratedCol),
-		ClusterBy:     col.ClusterBy,
-		Hidden:        col.Hidden,
-		Seqnum:        col.Seqnum,
-		TblName:       col.TblName,
-		OriginTblName: col.OriginTblName,
-		DbName:        col.DbName,
+		ColId:            col.ColId,
+		Name:             col.Name,
+		OriginName:       col.OriginName,
+		Alg:              col.Alg,
+		Typ:              *DeepCopyType(&col.Typ),
+		Default:          DeepCopyDefault(col.Default),
+		Primary:          col.Primary,
+		Unique:           col.Unique,
+		Pkidx:            col.Pkidx,
+		Comment:          col.Comment,
+		OnUpdate:         DeepCopyOnUpdate(col.OnUpdate),
+		GeneratedCol:     DeepCopyGeneratedCol(col.GeneratedCol),
+		ClusterBy:        col.ClusterBy,
+		Hidden:           col.Hidden,
+		Seqnum:           col.Seqnum,
+		TblName:          col.TblName,
+		OriginTblName:    col.OriginTblName,
+		DbName:           col.DbName,
+		ResultColumnKind: col.ResultColumnKind,
 	}
 }
 

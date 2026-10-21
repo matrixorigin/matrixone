@@ -43,29 +43,53 @@ func openViewDescriptionDB(t *testing.T, port int64, user string) *sql.DB {
 	return db
 }
 
+func cleanupViewDescriptionSQL(t *testing.T, db *sql.DB, query string) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	_, err := db.ExecContext(ctx, query)
+	if err != nil {
+		t.Errorf("view description cleanup %q: %v", query, err)
+	}
+}
+
 func TestViewDescriptionPublicSQL(t *testing.T) {
 	embed.RunSingleCNBaseClusterTests(t, func(cluster embed.Cluster) {
-		ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-		defer cancel()
+		setupCtx, setupCancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer setupCancel()
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
 		db := openViewDescriptionDB(t, cn.GetServiceConfig().CN.Frontend.Port, "dump:111")
 		var viewName, viewDDL, charset, collation string
-		require.NoError(t, db.QueryRowContext(ctx, "show create view information_schema.columns").Scan(
+		require.NoError(t, db.QueryRowContext(setupCtx, "show create view information_schema.columns").Scan(
 			&viewName, &viewDDL, &charset, &collation))
 		require.Equal(t, "columns", viewName)
 		require.Contains(t, strings.ToLower(viewDDL), "__mo_visible_subscription_views")
 		require.Equal(t, "utf8mb4", charset)
 		require.Equal(t, "utf8mb4_general_ci", collation)
-		exec := func(q string) { t.Helper(); _, err := db.ExecContext(ctx, q); require.NoError(t, err, q) }
-		exec("create database view_description_test")
-		defer exec("drop database view_description_test")
-		t.Run("SHOW target replacement", func(t *testing.T) {
+		_, err = db.ExecContext(setupCtx, "create database view_description_test")
+		require.NoError(t, err)
+		defer cleanupViewDescriptionSQL(t, db, "drop database view_description_test")
+		setupCancel()
+		// Each phase owns its budget. A successful subtest (including its
+		// cleanup) must not consume the next phase's execution context.
+		if !t.Run("SHOW target replacement", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			defer cancel()
 			testShowColumnsTargetReplacement(t, ctx, db)
-		})
-		t.Run("current schema consumers", func(t *testing.T) {
+		}) {
+			return
+		}
+		if !t.Run("current schema consumers", func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+			defer cancel()
 			testViewMetadataConsumers(t, ctx, db)
-		})
+		}) {
+			return
+		}
+		ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+		defer cancel()
+		exec := func(q string) { t.Helper(); _, err := db.ExecContext(ctx, q); require.NoError(t, err, q) }
 		exec("create table view_description_test.src (x varchar(5), qty int not null default 7)")
 		exec("create view view_description_test.v as select x as label, qty from view_description_test.src")
 		describe := func(query string) [][]sql.NullString {
@@ -196,7 +220,7 @@ func TestViewDescriptionPublicSQL(t *testing.T) {
 		require.NoError(t, prepared.QueryRowContext(ctx).Scan(&width))
 		require.Equal(t, 60, width)
 		exec("create snapshot view_description_history for account")
-		defer exec("drop snapshot view_description_history")
+		defer cleanupViewDescriptionSQL(t, db, "drop snapshot view_description_history")
 		exec("drop table view_description_test.src")
 		require.NoError(t, db.QueryRowContext(ctx,
 			"select character_maximum_length from information_schema.columns {snapshot = 'view_description_history'} "+

@@ -11996,10 +11996,11 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 
 	// function `timestamp`
 	{
-		functionId: TIMESTAMP,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    timestampPairTypeCheck,
+		functionId:       TIMESTAMP,
+		class:            plan.Function_STRICT,
+		layout:           STANDARD_FUNCTION,
+		checkFn:          timestampPairTypeCheck,
+		bindingOverloads: []int{6, 7, 8, 9, 10, 5},
 
 		Overloads: []overload{
 			{
@@ -12058,6 +12059,46 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				retType:    timestampPairReturnType,
 				newOp: func() executeLogicOfOverload {
 					return timestampWithTime
+				},
+			},
+			{
+				overloadId: 6,
+				args:       []types.T{types.T_date},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampAsDatetime
+				},
+			},
+			{
+				overloadId: 7,
+				args:       []types.T{types.T_datetime},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampAsDatetime
+				},
+			},
+			{
+				overloadId: 8,
+				args:       []types.T{types.T_timestamp},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampAsDatetime
+				},
+			},
+			{
+				overloadId: 9,
+				args:       []types.T{types.T_varchar},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampAsDatetime
+				},
+			},
+			{
+				overloadId: 10,
+				args:       []types.T{types.T_char},
+				retType:    timestampPairReturnType,
+				newOp: func() executeLogicOfOverload {
+					return timestampAsDatetime
 				},
 			},
 		},
@@ -13877,6 +13918,22 @@ var supportedControlBuiltIns = []FuncNew{
 var supportedOthersBuiltIns = []FuncNew{
 	{functionId: TO_CALENDAR_INTERVAL, class: plan.Function_STRICT,
 		layout: STANDARD_FUNCTION, checkFn: fixedTypeMatch, Overloads: calendarIntervalOverloads()},
+	{
+		functionId: TIMESTAMPADD_SECOND_INTERVAL,
+		class:      plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{
+			{overloadId: 0, args: []types.T{types.T_varchar}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 1, args: []types.T{types.T_char}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 2, args: []types.T{types.T_text}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 3, args: []types.T{types.T_float32}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 4, args: []types.T{types.T_float64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 5, args: []types.T{types.T_decimal64}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 6, args: []types.T{types.T_decimal128}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+			{overloadId: 7, args: []types.T{types.T_decimal256}, retType: func([]types.Type) types.Type { return types.T_int64.ToType() }, newOp: func() executeLogicOfOverload { return TimestampAddSecondInterval }},
+		},
+	},
 	{
 		functionId: TO_INTERVAL_MICROSECOND,
 		class:      plan.Function_STRICT,
@@ -16617,6 +16674,22 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 		},
+	},
+
+	{
+		functionId: LOAD_FK_IGNORE_CHECK,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0,
+			args:       []types.T{types.T_bool},
+			volatile:   true,
+			retType: func([]types.Type) types.Type {
+				return types.T_bool.ToType()
+			},
+			newOp: func() executeLogicOfOverload { return loadFKIgnoreCheck },
+		}},
 	},
 
 	// function `_check_constraint_assert`

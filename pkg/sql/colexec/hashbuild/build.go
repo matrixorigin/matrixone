@@ -104,6 +104,7 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	hashBuild.ctr.hashmapBuilder.OnDuplicateAction = hashBuild.OnDuplicateAction
 	hashBuild.ctr.hashmapBuilder.DedupColName = hashBuild.DedupColName
 	hashBuild.ctr.hashmapBuilder.DedupColTypes = hashBuild.DedupColTypes
+	hashBuild.ctr.hashmapBuilder.DedupKeyExprs = hashBuild.DedupKeyExprs
 	hashBuild.ctr.hashmapBuilder.TrackNullKeys = hashBuild.TrackNullKeys
 	hashBuild.ctr.hashmapBuilder.joinDiagnostic = hashBuild.JoinDiagnostic
 	if hashBuild.JoinDiagnostic != nil {
