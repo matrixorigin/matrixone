@@ -18,23 +18,16 @@
 #include "bloom.h"
 #include "cbitmap.h"
 #include "croaring.h"
+#include "membership.h"
 #include "usearch.h"
 
 typedef char const *mo_error_t;
 
 /* usearch */
 
-/* Membership-filter kinds for usearchex_filtered_search_with_membership. These
- * MUST match the Tag* constants in pkg/common/docfilter (the kind is the tag
- * byte of the docfilter.MembershipFilter being passed). */
-#define USEARCHEX_FILTER_BLOOM    0  /* filter is a bloomfilter_t* (approximate) */
-#define USEARCHEX_FILTER_CROARING 2  /* filter is a roaring64 bitmap (exact)     */
-#define USEARCHEX_FILTER_CBITMAP  3  /* filter is a dense cbitmap (exact)        */
-#define USEARCHEX_FILTER_SORTED64 4  /* filter is [count][sorted uint64s] (exact) */
-
 /* Filtered search against a doc_id membership filter. `filter` is the C handle
  * of a docfilter.MembershipFilter and `filter_kind` selects how each candidate
- * key is tested (see USEARCHEX_FILTER_* above). A NULL filter passes all keys. */
+ * key is tested (MO_MEMBERSHIP_* in membership.h). A NULL filter passes all keys. */
 size_t usearchex_filtered_search_with_membership(
     usearch_index_t index,
     void const* query_vector, usearch_scalar_kind_t query_kind, size_t count,

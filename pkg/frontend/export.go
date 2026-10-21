@@ -43,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1387,8 +1388,10 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 	case types.T_char, types.T_varchar, types.T_text:
 		return string(vec.GetBytesAt(i)), nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
-		// Encode binary data as base64
-		return base64.StdEncoding.EncodeToString(vec.GetBytesAt(i)), nil
+		// #30635: wrap base64 in {"$binary":...} so the jsonline loader can
+		// distinguish MO-encoded binary payloads from plain-text JSON
+		// strings; bare strings keep their byte-exact passthrough on load.
+		return map[string]any{external.JsonBinaryKey: base64.StdEncoding.EncodeToString(vec.GetBytesAt(i))}, nil
 	case types.T_datalink:
 		return string(vec.GetBytesAt(i)), nil
 	case types.T_geometry, types.T_geometry32:

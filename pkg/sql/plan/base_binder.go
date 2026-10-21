@@ -1941,19 +1941,26 @@ func (b *baseBinder) numericScalarSources(
 	sources := make([]numericScalarSource, len(infos))
 	ctes = numericScalarVisibleCtes(owner, ctes)
 	for i := range infos {
+		if infos[i].deferMetadata {
+			continue
+		}
 		sources[i].alias = strings.ToLower(infos[i].alias)
 		sources[i].name = strings.ToLower(infos[i].sourceName)
+		sourceCtx := b.ctx
 		if infos[i].source == nil && infos[i].sourceSchema == "" {
-			if cte := ctes[strings.ToLower(infos[i].sourceName)]; cte != nil {
-				infos[i].source, infos[i].aliasCols = numericScalarCteSource(cte, infos[i].aliasCols)
-			} else {
-				infos[i].source, infos[i].aliasCols = numericProjectionCteSource(
-					owner, b.ctx, infos[i].sourceName, infos[i].aliasCols,
-				)
+			infos[i].source, infos[i].aliasCols, sourceCtx = numericProjectionCteSource(
+				b.ctx, infos[i].sourceName, infos[i].aliasCols,
+			)
+			if infos[i].source == nil && b.ctx == nil {
+				if cte := ctes[strings.ToLower(infos[i].sourceName)]; cte != nil {
+					infos[i].source, infos[i].aliasCols = numericScalarCteSource(cte, infos[i].aliasCols)
+				}
 			}
 		}
 		if infos[i].source != nil {
-			cols, scans, ok, err := b.numericScalarSelectOutputs(infos[i].source, depth, visiting, ctes)
+			probe := *b
+			probe.ctx = sourceCtx
+			cols, scans, ok, err := probe.numericScalarSelectOutputs(infos[i].source, depth, visiting, ctes)
 			if err != nil {
 				return nil, false
 			}
@@ -1964,7 +1971,7 @@ func (b *baseBinder) numericScalarSources(
 			sources[i].types = scans
 			sources[i].known = true
 		} else if infos[i].sourceName != "" && b.builder != nil {
-			cols := numericPhysicalTableVisibleCols(b.builder, infos[i])
+			cols := numericPhysicalTableVisibleCols(b.builder, infos[i], b.ctx)
 			if cols == nil {
 				continue
 			}
@@ -2009,6 +2016,14 @@ func (b *baseBinder) numericScalarStatementOutputs(
 	visiting map[*tree.Select]bool,
 	ctes map[string]*tree.CTE,
 ) ([]string, []numericAstTypeScan, bool, error) {
+	if owner.With != nil && b.ctx != nil {
+		probe := *b
+		probe.ctx = numericCteBindingContext(b.ctx, nil)
+		if !registerNumericCteDefinitions(owner, probe.ctx) {
+			return nil, nil, false, nil
+		}
+		b = &probe
+	}
 	switch selectStmt := stmt.(type) {
 	case *tree.SelectClause:
 		sources, sourcesKnown := b.numericScalarSources(owner, selectStmt, depth, visiting, ctes)

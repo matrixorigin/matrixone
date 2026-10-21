@@ -6,6 +6,12 @@ state. `connected()` reports successful initialization, not a live health probe;
 use a query for live health. Reconnect disposes the old engine. Failed disposal
 also clears the client's connected state, while preserving its error.
 
+Success is logged after initialization returns, not merely after the probe.
+Unhandled initialization failures clear and dispose the engine without a success
+record. Ordinary `on_connect` callback exceptions retain the existing best-effort
+policy: the hook logs a warning and the authenticated connection remains usable.
+They do not acquire a new fail-fast guarantee from the success-log ordering.
+
 `ssl_mode='required'` uses a certificate/hostname-verifying SSLContext. `ssl_ca`
 selects a CA file; without it, system roots are used. Peers without TLS are refused
 before authentication on older and current PyMySQL. `disabled` explicitly disables

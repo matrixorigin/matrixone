@@ -26180,6 +26180,7 @@ yydefault:
 			var ColNames = yyDollar[6].identifierListUnion()
 			var AsSource = yyDollar[8].selectUnion()
 			var IfNotExists = yyDollar[4].ifNotExistsUnion()
+			var CheckOption = yyDollar[9].str
 			if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
 				yylex.Error(intoErr)
 				goto ret1
@@ -26189,7 +26190,7 @@ yydefault:
 				Name,
 				ColNames,
 				AsSource,
-				IfNotExists,
+				IfNotExists, CheckOption,
 			)
 		}
 		yyVAL.union = yyLOCAL
@@ -26203,6 +26204,7 @@ yydefault:
 			var ColNames = yyDollar[6].identifierListUnion()
 			var AsSource = yyDollar[8].selectUnion()
 			var IfNotExists = yyDollar[4].ifNotExistsUnion()
+			var CheckOption = yyDollar[9].str
 			if intoErr := tree.ValidateSelectIntoNotAllowed(AsSource); intoErr != "" {
 				yylex.Error(intoErr)
 				goto ret1
@@ -26212,7 +26214,7 @@ yydefault:
 				Name,
 				ColNames,
 				AsSource,
-				IfNotExists,
+				IfNotExists, CheckOption,
 			)
 		}
 		yyVAL.union = yyLOCAL
@@ -26290,13 +26292,16 @@ yydefault:
 		yyDollar = yyS[yypt-0 : yypt+1]
 //line mysql_sql.y:9116
 		{
-			yyVAL.str = ""
+			yyVAL.str = "NONE"
 		}
 	case 1331:
 		yyDollar = yyS[yypt-4 : yypt+1]
 //line mysql_sql.y:9120
 		{
-			yyVAL.str = "WITH " + yyDollar[2].str + " CHECK OPTION"
+			yyVAL.str = yyDollar[2].str
+			if yyVAL.str == "" {
+				yyVAL.str = "CASCADED"
+			}
 		}
 	case 1337:
 		yyDollar = yyS[yypt-0 : yypt+1]

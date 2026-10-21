@@ -76,6 +76,8 @@ func TestEquiVectorTopKPublicPlan(t *testing.T) {
 				where l2_distance(a.v,'[0,0]')<=0.5 order by l2_distance(a.v,'[0,0]') limit 2`},
 			{"pre", `select a.id,b.label from equi_chunks a join equi_documents b on a.document_id=b.document_id
 				order by l2_distance(a.v,'[0,0]') limit 2 by rank with option 'mode=pre'`},
+			{"iterative", `select a.id,b.label from equi_chunks a join equi_documents b on a.document_id=b.document_id
+				order by l2_distance(a.v,'[0,0]') limit 2 by rank with option 'mode=iterative'`},
 			{"indexed_right", `select a.id,b.label from equi_documents b join equi_chunks a on b.document_id=a.document_id
 				order by l2_distance(a.v,'[0,0]') limit 2`},
 			{"distance_alias", `select a.id,b.label,l2_distance(a.v,'[0,0]') as distance
@@ -221,9 +223,9 @@ func TestEquiVectorTopKEligibilityRejectsWithoutMutation(t *testing.T) {
 		{"null_vector", func(tc vectorJoinPlanCase) {
 			tc.builder.qry.Nodes[tc.projNode.Children[0]].OrderBy[0].Expr.GetF().Args[1].Expr = &plan.Expr_Lit{Lit: &plan.Literal{Isnull: true}}
 		}},
-		{"hnsw", func(tc vectorJoinPlanCase) {
+		{"index_without_membership", func(tc vectorJoinPlanCase) {
 			for _, def := range tc.builder.qry.Nodes[tc.mainScanNodeID].TableDef.Indexes {
-				def.IndexAlgo = "hnsw"
+				def.IndexAlgo = "cagra"
 			}
 		}},
 		{"other_limit", func(tc vectorJoinPlanCase) {
