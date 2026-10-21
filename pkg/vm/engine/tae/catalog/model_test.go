@@ -483,6 +483,38 @@ func TestCoverage_DefsToSchema_RoundTrip(t *testing.T) {
 	assert.True(t, schema2.FromPublication)
 }
 
+func TestDefsToSchemaRestoresCatalogVersion(t *testing.T) {
+	schema := NewEmptySchema("versioned_relation")
+	require.NoError(t, schema.AppendPKCol("id", types.T_int32.ToType(), 0))
+	require.NoError(t, schema.Finalize(false))
+	defs, err := SchemaToDefs(schema)
+	require.NoError(t, err)
+	defs = append(defs, &engine.VersionDef{Version: 7})
+
+	rebuilt, err := DefsToSchema("versioned_relation", defs)
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), rebuilt.Version)
+
+	rebuilt, err = DefsToSchema("versioned_relation", append(
+		defs,
+		&engine.VersionDef{Version: 7},
+	))
+	require.NoError(t, err)
+	require.Equal(t, uint32(7), rebuilt.Version)
+
+	_, err = DefsToSchema("versioned_relation", append(
+		defs,
+		&engine.VersionDef{Version: 8},
+	))
+	require.ErrorContains(t, err, "conflicting schema versions")
+
+	_, err = DefsToSchema("versioned_relation", append(
+		defs,
+		(*engine.VersionDef)(nil),
+	))
+	require.ErrorContains(t, err, "nil schema version definition")
+}
+
 func TestCoverage_SystemSchemas_Init(t *testing.T) {
 	// Verify system schemas were initialized correctly
 	assert.NotNil(t, SystemDBSchema)

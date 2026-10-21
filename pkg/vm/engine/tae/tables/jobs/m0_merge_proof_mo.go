@@ -18,6 +18,7 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -35,12 +36,16 @@ func proveM0MergeObject(
 	location objectio.Location,
 	fs fileservice.FileService,
 ) (bool, objectio.M0ObjectProof, error) {
-	layout, err := catalog.M0AppendLayoutFromSchema(schema)
-	if err != nil {
+	if !catalog.M0SchemaHasAppendDomainShape(schema) {
 		return false, objectio.M0ObjectProof{}, nil
 	}
-	if err = objectio.ValidateM0AppendLayout(layout); err != nil {
-		return false, objectio.M0ObjectProof{}, nil
+	layout, err := catalog.M0DerivedAppendLayout(schema)
+	if err != nil {
+		return true, objectio.M0ObjectProof{}, fmt.Errorf(
+			"M0: prove merge object %s: %w",
+			location.Name().String(),
+			err,
+		)
 	}
 	reader, err := objectio.NewObjectReaderWithStr(location.Name().String(), fs)
 	if err != nil {

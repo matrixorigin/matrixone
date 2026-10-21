@@ -132,6 +132,22 @@ func TestM0DerivedAppendVersionUsesCompleteLayout(t *testing.T) {
 	require.ErrorIs(t, err, ErrM0Layout)
 }
 
+func TestM0DerivedAppendLayoutUsesObjectProofVersion(t *testing.T) {
+	_, schema := m0CustomerLayout(t)
+	require.NoError(t, schema.ApplyAlterTable(api.NewAddColumnReq(
+		0, 0, "y", plan.Type{Id: int32(types.T_int32)}, -1,
+	)))
+	// Relation creation can restore complete inherited columns while leaving
+	// the local catalog version at zero. The derived layout, not that marker,
+	// is the merge-read qualification.
+	schema.Version = 0
+	layout, err := M0DerivedAppendLayout(schema)
+	require.NoError(t, err)
+	require.Equal(t, uint32(2), layout.Version)
+	require.Equal(t, uint32(9), layout.NextColSeqnum)
+	require.Equal(t, uint16(6), layout.PKSeqnum)
+}
+
 func TestM0CloneRejectsActualCatalogRenumbering(t *testing.T) {
 	cn, tn := m0CustomerLayout(t)
 	// A CREATE reconstruction puts visible x before the regenerated hidden PK.

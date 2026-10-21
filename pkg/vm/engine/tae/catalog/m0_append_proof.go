@@ -88,19 +88,63 @@ func M0AppendLayoutFromSchema(s *Schema) (objectio.M0AppendLayout, error) {
 // append-only schema. It is for the CN/TN writers that materialize the full
 // current batch after an in-memory or catalog version marker has gone stale.
 func M0DerivedAppendVersion(s *Schema) (uint32, error) {
-	layout, err := M0AppendLayoutFromSchema(s)
+	layout, err := M0DerivedAppendLayout(s)
 	if err != nil {
 		return 0, err
 	}
+	return layout.Version, nil
+}
+
+// M0DerivedAppendLayout reconstructs the append-domain layout from complete
+// column identities. The local catalog Version is intentionally not used:
+// relation creation can restore all columns without restoring the inherited
+// append version, while background merge must still qualify read-only objects.
+func M0DerivedAppendLayout(s *Schema) (objectio.M0AppendLayout, error) {
+	layout, err := M0AppendLayoutFromSchema(s)
+	if err != nil {
+		return objectio.M0AppendLayout{}, err
+	}
 	base := uint32(layout.PKSeqnum) + 1
 	if layout.NextColSeqnum <= base {
-		return 0, fmt.Errorf("%w: schema has no append version", ErrM0Layout)
+		return objectio.M0AppendLayout{}, fmt.Errorf("%w: schema has no append version", ErrM0Layout)
 	}
 	layout.Version = layout.NextColSeqnum - base
 	if err = objectio.ValidateM0AppendLayout(layout); err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrM0Layout, err)
+		return objectio.M0AppendLayout{}, fmt.Errorf("%w: %v", ErrM0Layout, err)
 	}
-	return layout.Version, nil
+	return layout, nil
+}
+
+// M0SchemaHasAppendDomainShape identifies a schema that is structurally in
+// the restricted append domain. It deliberately does not validate identity or
+// semantics: callers use it only to distinguish a failed M0 proof, which must
+// stay observable, from an ordinary schema that is outside this domain.
+func M0SchemaHasAppendDomainShape(s *Schema) bool {
+	if s == nil || s.Extra == nil || len(s.ColDefs) < 3 || !s.HasPK() ||
+		s.HasFakePK() || len(s.SortKey.Defs) != 1 {
+		return false
+	}
+	pk := s.GetPrimaryKey()
+	if pk == nil || !pk.Hidden || !pk.Primary || !pk.IsCompositeColumn() ||
+		!pk.SortKey || pk.ClusterBy {
+		return false
+	}
+	base := uint32(pk.SeqNum) + 1
+	if s.Extra.NextColSeqnum <= base {
+		return false
+	}
+	for i, col := range s.ColDefs {
+		if col == nil || col.Idx != i {
+			return false
+		}
+		if col.IsPhyAddr() {
+			return i == len(s.ColDefs)-1
+		}
+		if col.SeqNum != uint16(i) {
+			return false
+		}
+	}
+	return false
 }
 
 func M0AppendLayoutFromPlan(table *plan.TableDef, nextColSeqnum uint32) (objectio.M0AppendLayout, error) {
