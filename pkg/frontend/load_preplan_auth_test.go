@@ -21,6 +21,7 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 )
@@ -184,12 +185,28 @@ func TestAuthenticateLoadBeforePlanPropagatesPrivilegeErrors(t *testing.T) {
 			require.ErrorIs(t, err, wantErr)
 		})
 
-	withLoadPrivilegeFixture(t, stmt, dbName, tableName, false,
-		func(ses *Session, _ *backgroundExecTest) {
-			_, err := buildPlanWithPrepareMode(
-				context.Background(), ses, plan2.NewEmptyCompilerContext(), stmt, false)
-			require.ErrorContains(t, err, "do not have privilege")
+	for _, tc := range []struct {
+		name         string
+		stmt         tree.Statement
+		forcePrepare bool
+	}{
+		{name: "direct", stmt: stmt},
+		{name: "prepared rebuild", stmt: stmt, forcePrepare: true},
+		{name: "prepare wrapper", stmt: &tree.PrepareStmt{Stmt: stmt}},
+		{name: "explain wrapper", stmt: tree.NewExplainStmt(stmt, "text")},
+		{name: "explain analyze wrapper", stmt: tree.NewExplainAnalyze(stmt, "text")},
+		{name: "explain physical wrapper", stmt: tree.NewExplainPhyPlan(stmt, "text")},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withLoadPrivilegeFixture(t, stmt, dbName, tableName, false,
+				func(ses *Session, _ *backgroundExecTest) {
+					_, err := buildPlanWithPrepareMode(
+						defines.AttachAccountId(context.Background(), ses.GetTenantInfo().GetTenantID()),
+						ses, plan2.NewEmptyCompilerContext(nil), tc.stmt, tc.forcePrepare)
+					require.ErrorContains(t, err, "do not have privilege")
+				})
 		})
+	}
 }
 
 func withLoadPrivilegeFixture(

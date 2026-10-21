@@ -4268,6 +4268,21 @@ func buildPlanWithPrepareMode(
 	forcePrepare bool,
 ) (*plan2.Plan, error) {
 	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
+		// LOAD planning may inspect an external source before producing a plan.
+		// Authorize its target table at this common planning boundary so direct
+		// compilation, prepared-plan rebuilds, compile retries, and executable
+		// wrappers share the same admission check.
+		if loadStmt := loadStatementForPrePlanAuth(stmt); loadStmt != nil {
+			if session, ok := ses.(*Session); ok {
+				authStats, authErr := authenticateLoadBeforePlan(
+					reqCtx, session, loadStmt, ctx.DefaultDatabase())
+				if authErr != nil {
+					return nil, authErr
+				}
+				statistic.StatsInfoFromContext(ctx.GetContext()).PermissionAuth.Add(&authStats)
+			}
+		}
+
 		var ret *plan2.Plan
 		var err error
 
@@ -4361,22 +4376,6 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 	}
 	planContext = plan2.AttachJSONMergeWarningContext(planContext, warningSink, warningOrigin)
 	stats := statistic.StatsInfoFromContext(planContext)
-
-	// LOAD planning may inspect an external source before producing a plan.
-	// Authorize its target table at this common planning boundary so direct
-	// compilation, prepared-plan rebuilds, compile retries, and executable
-	// wrappers share the same admission check.
-	if loadStmt := loadStatementForPrePlanAuth(stmt); loadStmt != nil {
-		if session, ok := ses.(*Session); ok {
-			authStats, authErr := authenticateLoadBeforePlan(
-				reqCtx, session, loadStmt, ctx.DefaultDatabase())
-			if authErr != nil {
-				return nil, authErr
-			}
-			stats.PermissionAuth.Add(&authStats)
-		}
-	}
-
 	stats.PlanStart()
 
 	crs := new(perfcounter.CounterSet)
