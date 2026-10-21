@@ -257,6 +257,9 @@ func (r *taskRunner) completeDaemonTask(ctx context.Context, dt *daemonTask, cla
 			}
 		}
 	}
+	// A recovery callback may still be running after this executor exits.
+	// Fence its final Running publication before removing the registration.
+	dt.claimLost.Store(true)
 	r.removeDaemonTaskIf(claim.ID, dt)
 }
 
@@ -287,10 +290,19 @@ func newResumeTask(r *taskRunner, t *daemonTask) *resumeTask {
 }
 
 func (t *resumeTask) Handle(ctx context.Context) error {
+	if !t.task.recoveryLifecycle.TryLock() {
+		return nil // Another recovery owns this local routine.
+	}
+	defer t.task.recoveryLifecycle.Unlock()
 	if !t.task.claimLifecycle.TryLock() {
 		return nil // The durable request remains retry-owned.
 	}
-	defer t.task.claimLifecycle.Unlock()
+	claimLocked := true
+	defer func() {
+		if claimLocked {
+			t.task.claimLifecycle.Unlock()
+		}
+	}()
 	if t.task.claimLost.Load() {
 		return nil
 	}
@@ -362,12 +374,21 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 		return nil
 	}
 	t.task.publishClaim(tk)
+	// Recovery may block in I/O. Its generation is now published, so let lease
+	// expiry retire and cancel it without waiting for Resume to return.
+	t.task.claimLifecycle.Unlock()
+	claimLocked = false
 	// ResumeRequested is the durable retry owner. Keep it published until the
 	// active executor has admitted recovery, so a concurrent executor failure or
 	// a synchronous resume error cannot strand daemon Running with no live
 	// execution. A failed attempt is picked up by the next reconciliation pass.
 	if err = (*ar).Resume(); err != nil {
 		return err
+	}
+	t.task.claimLifecycle.Lock()
+	claimLocked = true
+	if t.task.claimLost.Load() || !sameDaemonClaim(t.task.taskSnapshot(), tk) {
+		return nil // Recovery completed after this local generation was retired.
 	}
 
 	tk.TaskStatus = task.TaskStatus_Running
@@ -418,10 +439,19 @@ func newRestartTask(r *taskRunner, t *daemonTask) *restartTask {
 }
 
 func (t *restartTask) Handle(ctx context.Context) error {
+	if !t.task.recoveryLifecycle.TryLock() {
+		return nil // Another recovery owns this local routine.
+	}
+	defer t.task.recoveryLifecycle.Unlock()
 	if !t.task.claimLifecycle.TryLock() {
 		return nil // The durable request remains retry-owned.
 	}
-	defer t.task.claimLifecycle.Unlock()
+	claimLocked := true
+	defer func() {
+		if claimLocked {
+			t.task.claimLifecycle.Unlock()
+		}
+	}()
 	if t.task.claimLost.Load() {
 		return nil
 	}
@@ -511,6 +541,8 @@ func (t *restartTask) Handle(ctx context.Context) error {
 		return nil
 	}
 	t.task.publishClaim(tk)
+	t.task.claimLifecycle.Unlock()
+	claimLocked = false
 
 	eventCDCRestartActiveRoutineCalling.DebugLazy(func() []zap.Field {
 		return cdcRestartEventFields(tk)
@@ -524,6 +556,11 @@ func (t *restartTask) Handle(ctx context.Context) error {
 			}, logutil.ErrorFingerprintFields("error", err)...)...)
 		})
 		return cdcRestartHandleError("CDC restart failed")
+	}
+	t.task.claimLifecycle.Lock()
+	claimLocked = true
+	if t.task.claimLost.Load() || !sameDaemonClaim(t.task.taskSnapshot(), tk) {
+		return nil // Recovery completed after this local generation was retired.
 	}
 
 	// A successful Restart means the replacement generation is locally Running
@@ -872,9 +909,12 @@ type DaemonTaskClaimUpdater interface {
 }
 
 type daemonTask struct {
+	// Serializes Resume/Restart callbacks while claimLifecycle is released for
+	// lease expiry. A second recovery must not advance the same local generation.
+	recoveryLifecycle sync.Mutex
 	// Serializes local claim admission with ownership-loss publication, including
-	// the gap between the durable CAS and publishClaim. Heartbeats never wait
-	// behind startup or its downstream I/O: a busy lifecycle is checked next tick.
+	// the gap between the durable CAS and publishClaim. Recovery releases it
+	// while calling the active routine so lease expiry can retire blocked work.
 	claimLifecycle sync.Mutex
 	taskMu         sync.RWMutex
 	task           task.DaemonTask
@@ -900,10 +940,15 @@ func (t *daemonTask) taskSnapshot() task.DaemonTask {
 // from the same snapshot.
 func (t *daemonTask) publishClaim(claim task.DaemonTask) {
 	t.taskMu.Lock()
+	sameGeneration := sameDaemonClaim(t.task, claim)
+	confirmed := t.lastSuccessfulHeartbeat
 	t.task = claim
 	// The durable claim's heartbeat was stamped before its storage update.
 	// Retain that start time so a slow claim RPC cannot extend the local lease.
 	t.lastSuccessfulHeartbeat = claim.LastHeartbeat
+	if sameGeneration && confirmed.After(t.lastSuccessfulHeartbeat) {
+		t.lastSuccessfulHeartbeat = confirmed
+	}
 	t.taskMu.Unlock()
 	t.claimLost.Store(false)
 
