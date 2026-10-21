@@ -1,15 +1,15 @@
-# FULLTEXT2 parallel segment search and token_filter analyzer
+# FULLTEXT2 parallel segment search, token_filter analyzer and high-df term cutoff
 
 - Status: Review required
 - Tracking issue: [#30402](https://github.com/matrixorigin/matrixone/issues/30402)
 - Implementation PR: [#30618](https://github.com/matrixorigin/matrixone/pull/30618)
-- Design revision: 2
-- Last updated: 2026-10-20
+- Design revision: 3
+- Last updated: 2026-10-21
 
 ## Problem and intent
 
 A FULLTEXT2 index answers a query by searching every live segment (a tag=0 base
-plus tag=1 CDC-tail deltas) and merging their top-k. Two independent, opt-in
+plus tag=1 CDC-tail deltas) and merging their top-k. Three independent, opt-in
 improvements share this PR because they ship in one binary and touch the same
 search and build paths:
 
@@ -26,10 +26,19 @@ search and build paths:
    list) so the index never stores their postings. It shrinks the index and removes
    the highest-frequency posting lists from query work.
 
-Neither change alters the segment on-disk format, the posting layout, the
+3. **High-df term cutoff (`search_df_cutoff`).** A session/global setting that, for
+   a ranked bag-of-words (`IN BM25 MODE`) query only, drops query terms present in
+   at least a given fraction of the live corpus before searching. Such terms have
+   near-zero idf, so they contribute almost nothing to ranking while dominating the
+   posting work.
+   Unlike the first two, this one **changes results** and is off by default; its
+   contract is below.
+
+None of the changes alters the segment on-disk format, the posting layout, the
 transaction protocol, or CDC/cron ownership of the asynchronously maintained
-index. Both are off by default in behavior: parallelism yields identical results,
-and `token_filter` is only present when explicitly requested at CREATE.
+index. All are off by default in behavior: parallelism yields identical results,
+`token_filter` is only present when explicitly requested at CREATE, and the cutoff
+is disabled unless set.
 
 ## Scope and non-goals
 
@@ -37,8 +46,9 @@ In scope: the per-index search worker count and its resolution/activation; the
 cross-segment pruning bounds and their results-identical/certification contract; the
 peak result-memory and error/cancellation contract of the concurrent search; the
 `token_filter` WITH option and the `stop` filter; the symmetry of tokenization
-across the build, CDC, and query paths; and the maintenance (REINDEX, idxcron)
-behavior of a `token_filter` index.
+across the build, CDC, and query paths; the maintenance (REINDEX, idxcron)
+behavior of a `token_filter` index; and the query-time high-df term cutoff, its
+accepted result change, and its configuration lifetime.
 
 Out of scope: any posting/segment format or wire change; a positional (phrase)
 analyzer; non-`stop` filters (`synonym` and others are reserved names only);
@@ -237,6 +247,64 @@ re-enabling the phrase modes against an index that cannot answer them — the ve
 state the bag-of-words invariant forbids, reached by bypassing the CREATE guard. To
 make such an index positional, drop and recreate it without `token_filter`.
 
+## High-df term cutoff contract
+
+### Semantics and scope (decision)
+
+The cutoff is a fraction `c` of the live corpus size `N`. A value of `0` (the
+default) disables it; a value outside `(0, 1]` is rejected when set. When enabled,
+a query term is dropped before the search if its corpus-global live document
+frequency is at least `c × N`. Document frequency is the same live, cross-segment
+count the BM25 idf already uses, so the decision is identical on every node and
+for every segment layout of the same corpus.
+
+It applies **only** to ranked bag-of-words retrieval (`IN BM25 MODE`, a
+disjunction of single terms), on both the bounded top-k path and the unbounded
+streaming path. It never touches natural-language or boolean-mode queries: an
+explicit required (`+term`) or excluded term, a phrase, a prefix, or a group is
+always honored, so a user who writes an operator always gets exactly that
+operator's semantics.
+
+### Accepted result change (decision)
+
+This is a deliberate precision/recall trade, not a results-neutral optimization:
+
+- A document matched **only** by dropped terms is no longer returned. For a top-k
+  query this is inconsequential, since such a document scored near zero and was
+  not competitive; for an unbounded query the match count shrinks.
+- Remaining documents lose the dropped terms' contribution to their score. Because
+  a term present in a fraction `c` of documents has idf near zero, the change is
+  small and the relative ranking of documents that match a surviving term is
+  essentially preserved, but scores are not bit-identical to the uncut query.
+- At `c = 1`, only terms present in every live document are dropped; those have
+  idf exactly zero, so the top-k is identical to the uncut query.
+
+### Never-empty invariant
+
+The cutoff must never turn a query that matches documents into one that matches
+none merely by dropping terms. The original terms are kept unchanged when the
+query has at most one term, when every term would be dropped, or when no
+surviving term occurs in any live document. In each case the query runs as if the
+cutoff were off.
+
+### Configuration lifetime (decision)
+
+The value is read per query plan from the session (or global default), unlike the
+worker count, which is bound to a loaded index. Changing it changes the result
+set, so a change of value invalidates the session's cached and prepared plans; an
+unchanged re-set keeps them warm. A query therefore always runs with the value in
+effect when it executes, never one captured by an earlier plan.
+
+### Compatibility (decision)
+
+Because the cutoff changes results, every node that executes a scan for the same
+query must apply the same value. The planner honors a non-zero value only once the
+cluster-wide capability epoch is met; below it, the planner emits the disabled
+value, so a mixed deployment returns the uncut result everywhere rather than a
+cut result on some nodes and an uncut one on others. Nothing is persisted: the
+setting never changes the index, so it can be turned off, or the feature reverted,
+at any time without migration.
+
 ## Source fan-out and resource bounds
 
 Parallel search adds, per query, at most `min(workers, segments)` concurrent
@@ -267,13 +335,22 @@ working gojieba deployment always has the file).
 - **`token_filter` on the trigram/ngram or json parsers:** those tokenize
   differently at query time (overlapping trigrams / atomic values), so a
   stopword-stripped build would not match; restricted to the word parser.
+- **Dropping high-df terms at build time (a frequency-based stop list) instead of
+  at query time:** shrinks the index, but makes the cut permanent, ties it to the
+  corpus at build time, and requires a rebuild to change; the query-time cutoff
+  is reversible per session and needs no persisted state.
+- **A fixed absolute df threshold instead of a corpus fraction:** would cut
+  nothing on a small corpus and nearly everything on a large one; a fraction
+  scales with the index.
 - **Making the worker count a strict per-execution guarantee:** would require
   bypassing or re-tuning the shared read-only cache per query, coupling a
   performance knob to cache lifetime for no correctness benefit.
 
 ## Rollout and rollback
 
-Both features are additive and opt-in. Parallelism defaults to the deployment's
+All three features are additive and opt-in. The high-df cutoff persists nothing
+and defaults to off, so enabling, disabling or reverting it never requires a
+migration. Parallelism defaults to the deployment's
 effective parallelism and yields identical results, so it needs no data migration
 and is safe in a mixed deployment; its explicit operator value is withheld until
 the cluster-wide capability epoch is met, and because the result is identical at any
@@ -314,6 +391,17 @@ oracle for a truncating `k`. The suite must include a segment holding **fewer th
 inflate above the true k-th best and drop competitive documents — the regression the
 certification invariant forbids — and it must cover the concurrent pruning path under
 the race detector.
+
+High-df cutoff: an index with a term present in every document, a mid-frequency
+term, and a graded rare term is searched across multiple segments so the cutoff
+reads the global document frequency. Tests must show: at `c = 1` the top-k keys
+and scores equal the uncut query; a mid-frequency term is dropped at a cutoff at or
+below its frequency and kept above it; the disabled values leave every query
+unchanged; a boolean-mode query is never cut; and the never-empty invariant holds
+for a single term, for all terms crossing the cutoff, and for a survivor that
+occurs in no document. A BVT checks the user-visible match-count and score change
+through SQL. A frontend test proves a change of value invalidates cached and
+prepared plans while an unchanged re-set keeps them.
 
 `token_filter`: unit tests cover the stop filter (drop, case folding, position
 preservation, builtin load), the BM25 query dropping stopword terms, the schema
