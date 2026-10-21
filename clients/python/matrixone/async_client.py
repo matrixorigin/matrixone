@@ -1576,7 +1576,7 @@ class AsyncClient(BaseMatrixOneClient):
 
     def _escape_identifier(self, identifier: str) -> str:
         """Escapes an identifier to prevent SQL injection."""
-        return f"`{identifier}`"
+        return f"`{identifier.replace('`', '``')}`"
 
     def _escape_string(self, value: str) -> str:
         """Escapes a string value for SQL queries."""
