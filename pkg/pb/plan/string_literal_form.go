@@ -399,6 +399,7 @@ const (
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
 type RemoteExpressionFeatures struct {
 	LoadFKIgnoreCheck             bool // v125: LOAD IGNORE FK admission and diagnostics
+	JSONNumericComparisons        bool
 	DependentPrograms             bool
 	CalendarIntervalNormalization bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
@@ -451,7 +452,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -948,6 +949,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == loadFKIgnoreCheckFunctionID {
 					features.LoadFKIgnoreCheck = true
 				}
+				features.JSONNumericComparisons = features.JSONNumericComparisons ||
+					isMixedJSONNumericComparison(fn) || ((id == 546 || id == internalJSONComparisonFunctionID) && overload == 1)
+
 				if id == internalTableCollationFunctionID {
 					features.TableCollationFunction = true
 				}
@@ -1766,4 +1770,21 @@ func TemporalResultContractFeatures(expr *Expr) (timestampDatetime, dynamicTime 
 	return id == 250 && overload >= 6 && overload <= 10,
 		(id == 41 || id == 378) && expr.Typ.Id == planTimeTypeID &&
 			len(fn.Args) == 2 && fn.Args[0] != nil && fn.Args[0].Typ.Id != planTimeTypeID
+}
+
+// Stable storage and registry identities avoid a dependency cycle with the
+// function package. INT128/UINT128 and BIT/YEAR/ENUM are not this domain.
+func isMixedJSONNumericComparison(fn *Function) bool {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+		return false
+	}
+	id := int32(fn.Func.Obj >> 32)
+	if !(id >= 0 && id <= 5 || id == nullSafeEqualFunctionID) {
+		return false
+	}
+	left, right := fn.Args[0].Typ.Id, fn.Args[1].Typ.Id
+	if left == planJSONTypeID {
+		left, right = right, left
+	}
+	return right == planJSONTypeID && ((left >= 20 && left <= 23) || (left >= 25 && left <= 28) || (left >= 30 && left <= 34))
 }

@@ -2052,6 +2052,9 @@ func extractEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
 		return nil, nil, false
 	}
+	if isJSONNumericComparisonArgs(fn.Args) {
+		return nil, nil, false
+	}
 	if fn.Args[0].GetCol() != nil && fn.Args[1].GetLit() != nil {
 		return fn.Args[0], fn.Args[1], true
 	}
@@ -2064,6 +2067,9 @@ func extractEqualConst(expr *plan.Expr) (*plan.Expr, *plan.Expr, bool) {
 func extractNotEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan.Expr, bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) != 2 {
+		return nil, nil, false
+	}
+	if isJSONNumericComparisonArgs(fn.Args) {
 		return nil, nil, false
 	}
 	if fn.Func.ObjName != "!=" && fn.Func.ObjName != "<>" {
@@ -2081,6 +2087,9 @@ func extractNotEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan
 func extractEqualConstForDomain(expr *plan.Expr) (*domainFilterOperand, *plan.Expr, bool) {
 	fn := expr.GetF()
 	if fn == nil || len(fn.Args) != 2 || fn.Func.ObjName != "=" {
+		return nil, nil, false
+	}
+	if isJSONNumericComparisonArgs(fn.Args) {
 		return nil, nil, false
 	}
 	if operand, ok := extractDomainFilterOperand(fn.Args[0]); ok && fn.Args[1].GetLit() != nil {
@@ -2235,6 +2244,9 @@ func classifyDomainConjunct(expr *plan.Expr) (*plan.Expr, domainKind, []*plan.Ex
 
 func classifyDomainEquality(fn *plan.Function, kind domainKind) (*plan.Expr, domainKind, []*plan.Expr) {
 	if len(fn.Args) != 2 {
+		return nil, domainOther, nil
+	}
+	if isJSONNumericComparisonArgs(fn.Args) {
 		return nil, domainOther, nil
 	}
 	var colExpr, constExpr *plan.Expr

@@ -980,7 +980,7 @@ func checkStrictJoinPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
 	//onPred must be equality, children must be column name
 	switch onPredImpl := onPred.Expr.(type) {
 	case *plan.Expr_F:
-		if onPredImpl.F.Func.ObjName != "=" {
+		if onPredImpl.F.Func.ObjName != "=" || isJSONNumericComparisonArgs(onPredImpl.F.Args) {
 			return false, nil, nil
 		}
 		args := onPredImpl.F.Args

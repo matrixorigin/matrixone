@@ -1541,7 +1541,9 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: INTERNAL_JSON_ORDERING_PARAM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedTypeMatchOnly(overloads, inputs, 1)
+		},
 
 		Overloads: []overload{
 			{
@@ -1554,6 +1556,13 @@ var supportedStringBuiltIns = []FuncNew{
 					return normalizeJsonOrderingParam
 				},
 			},
+			{
+				// v127: numeric parameters retain their comparison category and domain.
+				overloadId: 1,
+				args:       []types.T{types.T_text},
+				retType:    func(parameters []types.Type) types.Type { return types.T_json.ToType() },
+				newOp:      func() executeLogicOfOverload { return normalizeJsonOrderingParam },
+			},
 		},
 	},
 
@@ -1562,7 +1571,9 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: INTERNAL_JSON_COMPARISON_PARAM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedTypeMatchOnly(overloads, inputs, 1)
+		},
 
 		Overloads: []overload{
 			{
@@ -1574,6 +1585,13 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return normalizeJsonComparisonParam
 				},
+			},
+			{
+				// v127: numeric parameters retain their comparison category and domain.
+				overloadId: 1,
+				args:       []types.T{types.T_text},
+				retType:    func(parameters []types.Type) types.Type { return types.T_json.ToType() },
+				newOp:      func() executeLogicOfOverload { return normalizeJsonComparisonParam },
 			},
 		},
 	},

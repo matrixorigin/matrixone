@@ -2946,7 +2946,7 @@ func (builder *QueryBuilder) pushdownScalarAggregateKeys(subID int32, preds []*p
 				return
 			}
 		}
-		if len(f.Args) != 2 || (f.Func.ObjName != "=" && !IsEqualFunc(f.Func.GetObj())) {
+		if len(f.Args) != 2 || (f.Func.ObjName != "=" && !IsEqualFunc(f.Func.GetObj())) || isJSONNumericComparisonArgs(f.Args) {
 			return
 		}
 

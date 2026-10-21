@@ -802,4 +802,123 @@ deallocate prepare json_decimal_compare_stmt;
 select json_extract('1e100', '$') = true as large_exponent, json_extract('1e-300', '$') = true as small_exponent, json_extract('0e-2147483647', '$') = true as exponent_zero;
 large_exponent    small_exponent    exponent_zero
 1    1    0
+create table json_numeric_compare (id int primary key, doc json);
+insert into json_numeric_compare values (1, '{"a":1}'), (2, '{"a":1.5}'), (3, '{"a":{"b":"c"}}'), (4, '{"a":"str"}'), (5, '{"a":"1"}'), (6, '{"a":true}'), (7, '{"a":[1]}'), (8, '{"a":null}'), (9, '{}'), (10, null), (11, '{"a":-1.5}');
+select id from json_numeric_compare where json_extract(doc, '$.a') = 1 order by id;
+id
+1
+select id from json_numeric_compare where 1 = json_extract(doc, '$.a') order by id;
+id
+1
+select id, json_extract(doc, '$.a') = 1 as eq, json_extract(doc, '$.a') != 1 as ne, json_extract(doc, '$.a') <=> 1 as nseq, json_extract(doc, '$.a') < 1 as lt, json_extract(doc, '$.a') <= 1 as le, json_extract(doc, '$.a') > 1 as gt, json_extract(doc, '$.a') >= 1 as ge from json_numeric_compare order by id;
+id    eq    ne    nseq    lt    le    gt    ge
+1    1    0    1    0    1    0    1
+2    0    1    0    0    0    1    1
+3    0    1    0    0    0    1    1
+4    0    1    0    0    0    1    1
+5    0    1    0    0    0    1    1
+6    0    1    0    0    0    1    1
+7    0    1    0    0    0    1    1
+8    null    null    0    null    null    null    null
+9    null    null    0    null    null    null    null
+10    null    null    0    null    null    null    null
+11    0    1    0    1    1    0    0
+create table json_numeric_peers (id int primary key, n int, key n_idx (n));
+insert into json_numeric_peers values (1, 1), (2, 2);
+select d.id as doc_id, p.id as peer_id from json_numeric_compare d join json_numeric_peers p on json_extract(d.doc, '$.a') = p.n order by d.id, p.id;
+doc_id    peer_id
+1    1
+select d.id as doc_id, p.id as peer_id from json_numeric_compare d left join json_numeric_peers p on json_extract(d.doc, '$.a') = p.n order by d.id, p.id;
+doc_id    peer_id
+1    1
+2    null
+3    null
+4    null
+5    null
+6    null
+7    null
+8    null
+9    null
+10    null
+11    null
+select p.id as peer_id, d.id as doc_id from json_numeric_peers p left join json_numeric_compare d on p.n = json_extract(d.doc, '$.a') order by p.id, d.id;
+peer_id    doc_id
+1    1
+2    null
+select d.id as doc_id, p.id as peer_id from json_numeric_compare d join json_numeric_peers p on d.id = p.id and json_extract(d.doc, '$.a') = p.n order by d.id, p.id;
+doc_id    peer_id
+1    1
+select id from json_numeric_peers where n = cast('1.5' as json) order by id;
+id
+select id from json_numeric_compare where json_extract(doc, '$.a') = cast(id * 0 + 1 as signed) order by id;
+id
+1
+select count(distinct json_extract(doc, '$.a') = 1) as distinct_comparisons from json_numeric_compare;
+distinct_comparisons
+2
+prepare json_mixed_compare_stmt from 'select id, json_extract(doc, ''$.a'') = ? as eq, json_extract(doc, ''$.a'') > ? as gt, ? < json_extract(doc, ''$.a'') as reverse_gt from json_numeric_compare order by id';
+set @json_mixed_peer = cast(1 as signed);
+execute json_mixed_compare_stmt using @json_mixed_peer, @json_mixed_peer, @json_mixed_peer;
+id    eq    gt    reverse_gt
+1    1    0    0
+2    0    1    1
+3    0    1    1
+4    0    1    1
+5    0    1    1
+6    0    1    1
+7    0    1    1
+8    null    null    null
+9    null    null    null
+10    null    null    null
+11    0    0    0
+set @json_mixed_peer = cast(1.5 as double);
+execute json_mixed_compare_stmt using @json_mixed_peer, @json_mixed_peer, @json_mixed_peer;
+id    eq    gt    reverse_gt
+1    0    0    0
+2    1    0    0
+3    0    1    1
+4    0    1    1
+5    0    1    1
+6    0    1    1
+7    0    1    1
+8    null    null    null
+9    null    null    null
+10    null    null    null
+11    0    0    0
+set @json_mixed_peer = null;
+execute json_mixed_compare_stmt using @json_mixed_peer, @json_mixed_peer, @json_mixed_peer;
+id    eq    gt    reverse_gt
+1    null    null    null
+2    null    null    null
+3    null    null    null
+4    null    null    null
+5    null    null    null
+6    null    null    null
+7    null    null    null
+8    null    null    null
+9    null    null    null
+10    null    null    null
+11    null    null    null
+set @json_mixed_peer = cast(1 as signed);
+execute json_mixed_compare_stmt using @json_mixed_peer, @json_mixed_peer, @json_mixed_peer;
+id    eq    gt    reverse_gt
+1    1    0    0
+2    0    1    1
+3    0    1    1
+4    0    1    1
+5    0    1    1
+6    0    1    1
+7    0    1    1
+8    null    null    null
+9    null    null    null
+10    null    null    null
+11    0    0    0
+deallocate prepare json_mixed_compare_stmt;
+select json_extract('9007199254740993', '$') = cast(9007199254740992 as decimal(20,0)) as exact_decimal_equal;
+exact_decimal_equal
+0
+select case when json_extract('{"age":35}', '$.age') between 30 and 39 then 'MID' else 'OTHER' end as integer_between_control;
+integer_between_control
+MID
+drop table json_numeric_peers, json_numeric_compare;
 drop database test;
