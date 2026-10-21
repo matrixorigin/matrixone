@@ -55,6 +55,7 @@ func TestTableDumpTimestampDefaults(t *testing.T) {
 		{name: "zero", sql: "create table t(a timestamp default '0000-00-00 00:00:00')", changeTZ: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			proc := newPlanTestProcess(t)
 			proc.GetSessionInfo().TimeZone = time.UTC
 			if tc.createTZ != 0 {
@@ -177,6 +178,7 @@ func TestTableDumpDefaultTimeZones(t *testing.T) {
 		{"budget_control", "varchar(64) default (from_unixtime(cast(1704067200 as decimal(20,6))+cast(1 as decimal(20,6))/cast(3 as decimal(20,6)),'%Y'))", "UTC", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			proc := newPlanTestProcess(t)
 			location, err := time.LoadLocation(tc.creationZone)
 			require.NoError(t, err)
@@ -330,6 +332,7 @@ func TestTableDumpDefaultLocales(t *testing.T) {
 		{"literal", "varchar(64) default 'January'", "en_US", "UTC", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			proc := newPlanTestProcess(t)
 			zone, err := time.LoadLocation(tc.zone)
 			require.NoError(t, err)
@@ -476,6 +479,7 @@ func TestTableDumpZeroTemporalDefaultsAcrossSQLModes(t *testing.T) {
 		}
 		for _, origin := range []string{zero, "0", "(0)"} {
 			t.Run(typ+"/"+origin, func(t *testing.T) {
+				t.Parallel()
 				proc := newPlanTestProcess(t)
 				proc.GetSessionInfo().TimeZone = time.UTC
 				mode := ""
@@ -555,6 +559,7 @@ func TestTableDumpPreZeroTemporalDefault(t *testing.T) {
 	require.Len(t, fixtures, 2)
 	for origin, raw := range fixtures {
 		t.Run(origin, func(t *testing.T) {
+			t.Parallel()
 			var source planpb.TableDef
 			require.NoError(t, proto.Unmarshal(raw, &source))
 			require.Equal(t, int64(62135596800000000), source.Cols[0].Default.Expr.GetLit().GetTimestampval())
