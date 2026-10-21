@@ -129,6 +129,35 @@ func TestIncompleteCalendarFunctionWarnings(t *testing.T) {
 	appendIncompleteCalendarWarning(testutil.NewProcess(t), "2024-00-00")
 }
 
+func TestIncompleteCalendarTotalsConversionPolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		fn   executeLogicOfOverload
+		want int64
+	}{
+		{"to_days", stringToDays, 739310},
+		{"to_seconds", stringToSeconds, 63876384000},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
+			inputs := []string{"2024-02-30", "2024-02-29", "bad", "2024-02-29 24:00:00", "2024-00-00", "", "ignored NULL", "2024-00-00", "0000-00-00", "2024-13-00"}
+			c := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), inputs, []bool{false, false, false, false, false, false, true, false, false, false}),
+			}, NewFunctionTestResult(types.T_int64.ToType(), false,
+				[]int64{0, tc.want, 0, 0, 0, 0, 0, 0, 0, 0},
+				[]bool{true, false, true, true, true, true, true, true, true, true}), tc.fn).
+				WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, true, true, true, false, true, true}})
+			ok, info := c.RunAndFree()
+			require.True(t, ok, info)
+			// Only the selected incomplete calendar adds a diagnostic. Malformed,
+			// empty, zero, NULL and masked inputs keep expression-cast behavior.
+			require.Equal(t, []numericWarning{{code: moerr.ER_TRUNCATED_WRONG_VALUE, msg: "Incorrect datetime value: '2024-00-00'"}}, session.warnings)
+		})
+	}
+}
+
 func TestIncompleteDateDiffOperandDiagnostics(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	session := &numericWarningSession{}

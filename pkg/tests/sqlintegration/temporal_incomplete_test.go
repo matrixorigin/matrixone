@@ -127,20 +127,33 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 					warn = 0
 				}
 				q := func(operand string) string { return "select " + strings.ReplaceAll(tc.expression, "$date", operand) }
+				calendarTotal := tc.name == "to_days" || tc.name == "to_seconds"
+				if calendarTotal {
+					check(t, q("'2024-02-30'"), []sql.NullString{{}})
+					warnings(t, 0)
+					exec("insert into " + schema + ".dates values(4,'2024-02-30'),(5,'2024-02-29')")
+					defer exec("delete from " + schema + ".dates where id>=4")
+					check(t, q("v")+" from "+schema+".dates order by id", []sql.NullString{{}, value(tc.complete), {}, {}, value(tc.complete)})
+					warnings(t, 1)
+				}
 				check(t, q("'2024-00-00'"), []sql.NullString{partial})
 				warnings(t, warn)
-				check(t, q("v")+" from "+schema+".dates order by id", []sql.NullString{partial, value(tc.complete), {}})
+				check(t, q("v")+" from "+schema+".dates where id<=3 order by id", []sql.NullString{partial, value(tc.complete), {}})
 				warnings(t, warn)
 				func() {
 					stmt, err := conn.PrepareContext(ctx, q("?"))
 					require.NoError(t, err)
 					defer stmt.Close()
-					for _, input := range []any{"2024-00-00", "2024-02-29", nil, "2024-00-00"} {
+					inputs := []any{"2024-00-00", "2024-02-29", nil, "2024-00-00"}
+					if calendarTotal {
+						inputs = append(inputs, "2024-02-30", "2024-02-29", "2024-00-00", "2024-02-30")
+					}
+					for _, input := range inputs {
 						var got sql.NullString
 						require.NoError(t, stmt.QueryRowContext(ctx, input).Scan(&got))
 						want := partial
 						n := warn
-						if input == nil {
+						if input == nil || input == "2024-02-30" {
 							want = sql.NullString{}
 							n = 0
 						} else if input == "2024-02-29" {
@@ -153,11 +166,15 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 				}()
 				exec("prepare incomplete_date from '" + strings.ReplaceAll(q("?"), "'", "''") + "'")
 				defer exec("deallocate prepare incomplete_date")
-				for _, input := range []string{"'2024-00-00'", "'2024-02-29'", "NULL", "'2024-00-00'"} {
+				inputs := []string{"'2024-00-00'", "'2024-02-29'", "NULL", "'2024-00-00'"}
+				if calendarTotal {
+					inputs = append(inputs, "'2024-02-30'", "'2024-02-29'", "'2024-00-00'", "'2024-02-30'")
+				}
+				for _, input := range inputs {
 					exec("set @incomplete_date=" + input)
 					want := partial
 					n := warn
-					if input == "NULL" {
+					if input == "NULL" || input == "'2024-02-30'" {
 						want = sql.NullString{}
 						n = 0
 					} else if input == "'2024-02-29'" {

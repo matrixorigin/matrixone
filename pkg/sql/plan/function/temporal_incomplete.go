@@ -240,6 +240,13 @@ func stringCalendarTotal(ivecs []*vector.Vector, result vector.FunctionResultWra
 		}
 		dt, err := types.ParseDatetime(parseText, 6)
 		if err != nil {
+			// Preserve normal expression-cast NULLs for malformed strings.
+			if isTemporalLexicalConversionError(err) {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
 			return err
 		}
 		if dt == types.ZeroDatetime {
