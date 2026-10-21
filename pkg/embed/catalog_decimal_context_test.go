@@ -22,7 +22,9 @@ import (
 )
 
 func TestCatalogDecimalMigrationUsesCurrentStatementContext(t *testing.T) {
-	RunBaseClusterTests(t, func(c Cluster) {
+	// Share the canonical SQL fixture; starting a separate two-CN fixture
+	// prevents later single-CN catalog regressions from obtaining admission.
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		db := openIcebergTestDB(t, c)
 		defer db.Close()
 		ctx, cancel := context.WithTimeout(t.Context(), time.Minute)
