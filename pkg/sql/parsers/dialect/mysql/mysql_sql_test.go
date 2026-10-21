@@ -5278,10 +5278,10 @@ var (
 			output: "create view t2 as select * from t1",
 		}, {
 			input:  "create VIEW t2 as select * from t1 WITH CASCADED CHECK OPTION",
-			output: "create view t2 as select * from t1",
+			output: "create view t2 as select * from t1 with CASCADED check option",
 		}, {
 			input:  "create VIEW t2 as select * from t1 WITH LOCAL CHECK OPTION",
-			output: "create view t2 as select * from t1",
+			output: "create view t2 as select * from t1 with LOCAL check option",
 		}, {
 			input:  "insert into t1 values(_binary 0x123)",
 			output: "insert into t1 values (0x123)",
@@ -6190,6 +6190,20 @@ func TestCharsetIntroducerLiteralValue(t *testing.T) {
 	require.Equal(t, tree.P_char, literal.ValType)
 	require.Equal(t, "test", literal.String())
 	require.True(t, clause.Exprs[0].As.Empty())
+}
+
+func TestCharsetIntroducerHexLiteralValue(t *testing.T) {
+	for _, mode := range []string{"", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+		stmt, err := ParseOneWithSQLMode(context.Background(), "SELECT _utf8mb4 X'c3a95ce7958c'", 1, mode)
+		require.NoError(t, err)
+		func() {
+			defer stmt.Free()
+			literal := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.NumVal)
+			require.Equal(t, tree.P_char, literal.ValType)
+			require.Equal(t, `é\界`, literal.String())
+		}()
+	}
+
 }
 
 func TestUnquotedSupplementaryIdentifiersRejected(t *testing.T) {
