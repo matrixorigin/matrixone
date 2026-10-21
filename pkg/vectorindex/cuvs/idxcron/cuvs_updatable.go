@@ -53,10 +53,9 @@ type CuvsUpdatableSpec struct {
 	// applied as a min-size floor when indexAlgoParams[ThresholdParam]
 	// is 0/missing. CAGRA: 128 (cuvs.DefaultCagraBuildParams().
 	// IntermediateGraphDegree). IVF-PQ: 1024 (cuvs.DefaultIvfPqBuildParams().
-	// NLists). The min-size check is the load-bearing gate — even if
-	// the user didn't specify a build param, the rebuild needs at
-	// least the cuvs default count of tail records to attempt a rebuild.
-	// Small source-table builds retain their rows as a searchable CDC tail.
+	// NLists). This is the fallback rebuild cadence threshold when the
+	// user does not specify the build parameter. Small source-table
+	// builds retain their rows as a searchable CDC tail.
 	MinSizeDefault int64
 }
 
@@ -74,10 +73,9 @@ var runSelectChunkSql = sqlexec.RunSql
 //   - (false, reason, nil) when delta < threshold (rebuild deferred)
 //   - (_, _, err)          on SQL / decode failures
 //
-// When tag=1 is empty (no CDC events since last rebuild) the count is
-// zero and the gate skips. Likewise when the threshold is missing or
-// non-positive in indexAlgoParams — the rebuild is deferred until the
-// user supplies a sensible threshold.
+// When tag=1 is empty (no CDC events since last rebuild), the count is
+// zero and the gate skips when a positive threshold or MinSizeDefault
+// is configured.
 
 // MaxOverflowSize caps unreclaimed CDC tail records. Once the
 // per-cron-tick count reaches this, the gate fires regardless of the
