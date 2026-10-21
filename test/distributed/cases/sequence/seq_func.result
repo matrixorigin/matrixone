@@ -38,6 +38,7 @@ setval(s3, 50, true)
 select nextval('s3');
 nextval(s3)
 53
+drop sequence if exists s3;
 drop sequence if exists s4;
 create sequence s4 increment by 3 start with 10;
 select setval('s4', 60, true);
