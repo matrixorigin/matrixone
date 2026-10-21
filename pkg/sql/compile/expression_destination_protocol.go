@@ -39,6 +39,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
+		{features.LoadFKIgnoreCheck, defines.MORPCVersion125,
+			"LOAD IGNORE foreign-key filtering requires a versioned remote destination",
+			"remote destination does not support LOAD IGNORE foreign-key filtering (MORPC version %d)"},
 		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
 			"SELECT division diagnostics require a versioned remote destination",
 			"remote destination does not support SELECT division diagnostics (MORPC version %d)"},
