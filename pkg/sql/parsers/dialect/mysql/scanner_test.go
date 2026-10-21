@@ -156,6 +156,28 @@ func TestCharsetIntroducer(t *testing.T) {
 			}
 		})
 	}
+	for _, tc := range []struct {
+		input, value string
+		token        int
+	}{
+		{"_utf8mb4 X'615c62'", `a\b`, STRING},
+		{"_UTF8MB4 \t x'c3a95ce7958c'", `é\界`, STRING},
+		{"_utf8mb4 X'00275c'", "\x00'\\", STRING},
+		{"_utf8mb4 X''", "", STRING},
+		{"_utf8mb4 X'6'", "", LEX_ERROR},
+		{"_utf8mb4 X'zz'", "", LEX_ERROR},
+		{"_utf8mb4 X'61", "", LEX_ERROR},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			scanner := NewScanner(dialect.MYSQL, tc.input)
+			defer PutScanner(scanner)
+			token, value := scanner.Scan()
+			if token != tc.token || (token == STRING && value != tc.value) {
+				t.Fatalf("Scan charset hex literal = (%s, %q), want (%s, %q)",
+					tokenName(token), value, tokenName(tc.token), tc.value)
+			}
+		})
+	}
 }
 
 func TestUnquotedSupplementaryIdentifierRejected(t *testing.T) {
