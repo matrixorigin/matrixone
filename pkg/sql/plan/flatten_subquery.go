@@ -4766,8 +4766,12 @@ func collectCorrelatedPaginationPartitionKeys(expr *plan.Expr, keys *[]*plan.Exp
 		return true
 	}
 
+	// The inner key must define the same equality domain as the correlation.
+	// Mixed JSON/numeric comparisons do not: distinct JSON numbers can both
+	// match one FLOAT32 peer after rounding, but form separate raw JSON groups.
 	if fn != nil && fn.Func != nil &&
-		(fn.Func.ObjName == "=" || fn.Func.ObjName == "<=>") && len(fn.Args) == 2 {
+		(fn.Func.ObjName == "=" || fn.Func.ObjName == "<=>") && len(fn.Args) == 2 &&
+		!isJSONNumericComparisonArgs(fn.Args) {
 		leftCorr := hasCorrCol(fn.Args[0])
 		rightCorr := hasCorrCol(fn.Args[1])
 		if leftCorr != rightCorr {

@@ -21,9 +21,10 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	mysqlDriver "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/require"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 )
 
@@ -370,5 +371,52 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			ctx, "execute issue_27529_decimal using @issue_27529_decimal").Scan(&decimalEqual))
 		require.False(t, decimalEqual,
 			"prepared DECIMAL comparison must distinguish adjacent exact values above 2^53")
+
+		t.Run("mixed numeric correlated partitions", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create table "+dbName+".outer_float(f float)")
+			execSQLRequire(t, ctx, db, "create table "+dbName+".inner_json(id int primary key, j json)")
+			execSQLRequire(t, ctx, db, "insert into "+dbName+".outer_float values (16777216)")
+			execSQLRequire(t, ctx, db, "insert into "+dbName+".inner_json values (1, '16777216'), (2, '16777217')")
+			outer, inner := dbName+".outer_float o", dbName+".inner_json i"
+			for _, pred := range []string{"i.j = o.f", "o.f = i.j", "i.j <=> o.f", "o.f <=> i.j"} {
+				t.Run(pred, func(t *testing.T) {
+					// The FLOAT32 peer matches both distinct JSON numbers. Ranking
+					// their raw JSON partitions separately would silently yield NULL.
+					query := "select (select i.id from " + inner + " where " + pred +
+						" order by i.id limit 1 offset 1) from " + outer
+					err := db.QueryRowContext(ctx, query).Scan(new(sql.NullInt64))
+					var sqlErr *mysqlDriver.MySQLError
+					require.ErrorAs(t, err, &sqlErr)
+					require.Equal(t, uint16(moerr.ErrNYI), sqlErr.Number)
+					require.Contains(t, sqlErr.Message, "correlated LIMIT with non-equality predicates")
+				})
+			}
+			for _, tc := range []struct {
+				name, query string
+				want        sql.NullInt64
+			}{
+				{"noncorrelated", "select i.id from " + inner + " join " + outer + " on i.j = o.f order by i.id limit 1 offset 1", sql.NullInt64{Int64: 2, Valid: true}},
+				{"explicit cast", "select (select i.id from " + inner + " where cast(i.j as float) = o.f order by i.id limit 1 offset 1) from " + outer, sql.NullInt64{Int64: 2, Valid: true}},
+				{"zero limit", "select (select i.id from " + inner + " where i.j = o.f limit 0) from " + outer, sql.NullInt64{}},
+				{"exists", "select exists(select 1 from " + inner + " where i.j = o.f limit 1) from " + outer, sql.NullInt64{Int64: 1, Valid: true}},
+				{"not exists", "select not exists(select 1 from " + inner + " where i.j = o.f limit 1) from " + outer, sql.NullInt64{Valid: true}},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var got sql.NullInt64
+					require.NoError(t, db.QueryRowContext(ctx, tc.query).Scan(&got))
+					require.Equal(t, tc.want, got)
+				})
+			}
+			for _, pred := range []string{"i.j = o.f", "o.f = i.j", "cast(i.j as float) = o.f"} {
+				t.Run("aggregate "+pred, func(t *testing.T) {
+					query := "select (select count(*) from " + inner + " where " + pred +
+						"), (select sum(i.id) from " + inner + " where " + pred + ") from " + outer
+					var count, sum int64
+					require.NoError(t, db.QueryRowContext(ctx, query).Scan(&count, &sum))
+					require.Equal(t, int64(2), count)
+					require.Equal(t, int64(3), sum)
+				})
+			}
+		})
 	})
 }
