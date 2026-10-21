@@ -41225,7 +41225,7 @@ func (m *Type) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *MsgHeader) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -48408,7 +48408,7 @@ func (m *IndexDef) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *ForeignKeyDef) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -50702,7 +50702,7 @@ func (m *TableDef) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *TableDef_DefType) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)

@@ -3297,6 +3297,8 @@ func TestMultiSourceISCPGatedByProtocolVersion(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion124)
 	require.False(t, supportsMultiSourceISCP(service), "fractional TIMESTAMPADD protocol is not the MV capability")
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion125)
+	require.False(t, supportsMultiSourceISCP(service), "LOAD IGNORE FK protocol is not the MV capability")
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion126)
 	require.True(t, supportsMultiSourceISCP(service))
 
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion29)
@@ -3330,6 +3332,8 @@ func TestMaterializedViewCapabilityAndReadValidationGuards(t *testing.T) {
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion124)
 	require.Error(t, requireMaterializedViewCapability(c))
 	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion125)
+	require.Error(t, requireMaterializedViewCapability(c))
+	rt.SetGlobalVariables(runtime.MOProtocolVersion, defines.MORPCVersion126)
 	require.NoError(t, requireMaterializedViewCapability(c))
 }
 

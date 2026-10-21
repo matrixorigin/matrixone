@@ -2121,6 +2121,8 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 			walkTable(t.Expr)
 		case *tree.ParenTableExpr:
 			walkTable(t.Expr)
+		case *tree.Subquery:
+			walkSelect(t.Select)
 		case *tree.JoinTableExpr:
 			walkTable(t.Left)
 			walkTable(t.Right)
@@ -2790,6 +2792,14 @@ func snapshotPhysicalTime(snapshot *plan.Snapshot) int64 {
 
 func isSequence(tblInfo *tableInfo) bool {
 	return tblInfo != nil && tblInfo.relKind == catalog.SystemSequenceRel
+}
+
+func classifyMaterializedViewInfos(tableInfos []*tableInfo) {
+	for _, tblInfo := range tableInfos {
+		if tblInfo != nil && tblInfo.relKind == catalog.SystemViewRel && isMaterializedViewDefinition(tblInfo.viewDef) {
+			tblInfo.typ = materializedView
+		}
+	}
 }
 
 func isViewLike(tblInfo *tableInfo) bool {

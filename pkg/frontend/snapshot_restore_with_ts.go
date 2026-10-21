@@ -228,6 +228,8 @@ func showFullTablesFromTS(ctx context.Context,
 			viewDef: cols[3],
 		}
 	}
+	classifyMaterializedViewInfos(ans)
+
 	if err := annotateMaterializedViewStates(ans, dbName, ts, from,
 		func(query string, indices ...uint64) ([][]string, error) {
 			return getStringColsListFromTS(newCtx, bh, query, from, to, indices...)

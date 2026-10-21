@@ -1791,6 +1791,8 @@ func showFullTablesWitsTs(
 			viewDef: cols[3],
 		}
 	}
+	classifyMaterializedViewInfos(ans)
+
 	if err := annotateMaterializedViewStates(ans, dbName, ts, accountId,
 		func(query string, indices ...uint64) ([][]string, error) {
 			return getStringColsList(ctx, bh, query, indices...)
