@@ -17,7 +17,9 @@ package function
 import (
 	"context"
 	"slices"
+	"strconv"
 
+	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
@@ -49,4 +51,43 @@ func legacyFloatStringCheck(ctx context.Context, check checkResult, inputs []typ
 		}
 	}
 	return check
+}
+
+// The formatting era is independent of the implicit width era: repaired live
+// casts use current widths while already-folded catalog constants retain bytes.
+type legacyFloatStringFormatKey struct{}
+
+// WithLegacyFloatStringFormatting is solely for catalog-origin folding proof.
+// It must never be installed on an executing or authoring process.
+func WithLegacyFloatStringFormatting(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyFloatStringFormatKey{}, true)
+}
+
+func LegacyFloatStringFormatting(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	legacy, _ := ctx.Value(legacyFloatStringFormatKey{}).(bool)
+	return legacy
+}
+
+func legacyFloatToBytes(v float64, bitSize int) []byte {
+	format := byte('f')
+	if v >= 1e15 || v > 0 && v < 1e-13 || v < 0 && v > -1e-13 || v <= -1e15 {
+		format = 'E'
+	}
+	return strconv.AppendFloat(nil, v, format, -1, bitSize)
+}
+
+func marshalJSONForFloatStringProof(ctx context.Context, bj bytejson.ByteJson) ([]byte, error) {
+	if LegacyFloatStringFormatting(ctx) {
+		return bj.MarshalJSONWithLegacyFloat()
+	}
+	return bj.MarshalJSON()
+}
+func unquoteJSONForFloatStringProof(ctx context.Context, bj bytejson.ByteJson) (string, error) {
+	if LegacyFloatStringFormatting(ctx) {
+		return bj.UnquoteWithLegacyFloat()
+	}
+	return bj.Unquote()
 }

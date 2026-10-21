@@ -69,4 +69,11 @@ select id,g,n,z,e from float_membership order by id;
 update float_membership set a=1.5,c='1.5' where id=1;
 select id,g,n,z,e from float_membership where id=1;
 
+-- Proof-only historical folding must not leak into newly authored defaults.
+create table float_folded (id int primary key,a double,g varchar(100) default (concat(a,cast('1e20' as double))),j varchar(100) default (json_unquote(json_array(cast('1e20' as double)))));
+insert into float_folded (id,a) values (1,-1.2345678901234567e-15);
+select g = '-0.00000000000000123456789012345681e20' as current_default,j = '[1e20]' as current_json from float_folded;
+update float_folded set a=1.2345678901234567e-15,g=default;
+select g = '0.00000000000000123456789012345681e20' as current_default,j = '[1e20]' as current_json from float_folded;
+
 drop database group_concat_float_28660;

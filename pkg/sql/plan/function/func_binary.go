@@ -1298,7 +1298,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			}
 			continue
 		}
-		sp, err = concatStringValue(ivecs[0].GetType().Oid, sp)
+		sp, err = concatStringValue(proc.Ctx, ivecs[0].GetType().Oid, sp)
 		if err != nil {
 			return err
 		}
@@ -1310,7 +1310,7 @@ func ConcatWs(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc 
 			if null {
 				continue
 			}
-			v, err = concatStringValue(ivecs[j].GetType().Oid, v)
+			v, err = concatStringValue(proc.Ctx, ivecs[j].GetType().Oid, v)
 			if err != nil {
 				return err
 			}
