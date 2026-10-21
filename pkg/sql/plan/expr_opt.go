@@ -2699,6 +2699,22 @@ func (builder *QueryBuilder) bindCompositeKeyPredicate(name string, args ...*pla
 	return expr, err == nil && expr != nil
 }
 
+// Composite-key rewrites require a shared key domain. Mixed JSON/numeric
+// predicates must stay as SQL residuals, including both bounds of a range.
+func compositeKeyPredicateHasMixedJSONNumericArgs(fn *plan.Function) bool {
+	if fn == nil || fn.Func == nil {
+		return false
+	}
+	switch fn.Func.ObjName {
+	case "=", "<", "<=", ">", ">=":
+		return isJSONNumericComparisonArgs(fn.Args)
+	case "between", "in_range":
+		return len(fn.Args) >= 3 && (isJSONNumericComparisonArgs(fn.Args[:2]) ||
+			isJSONNumericComparisonArgs([]*plan.Expr{fn.Args[0], fn.Args[2]}))
+	}
+	return false
+}
+
 func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDef, tableTag int32, filters ...*plan.Expr) []*plan.Expr {
 	sortkeyIdx := tableDef.Name2ColIndex[tableDef.Pkey.PkeyColName]
 	col2filter := make(map[int32]int)
@@ -2725,7 +2741,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			continue
 		}
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil {
+		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONNumericArgs(fn) {
 			continue
 		}
 
@@ -2835,7 +2851,8 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 				}
 
 				mergedFn := subExpr.GetF()
-				if !hasNonNilFunctionArgs(mergedFn, 2) || mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
+				if !hasNonNilFunctionArgs(mergedFn, 2) || compositeKeyPredicateHasMixedJSONNumericArgs(mergedFn) ||
+					mergedFn.Args[0].GetCol() == nil || !isRuntimeConstExpr(mergedFn.Args[1]) {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
@@ -2854,6 +2871,30 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 						continue
 					}
 				default:
+					newOrArgs = append(newOrArgs, subExpr)
+					continue
+				}
+
+				// IN reads every element with the column's physical type. Do not
+				// relabel a heterogeneous list as homogeneous when merging OR.
+				compatible := true
+				for _, value := range candidateValues {
+					if value == nil {
+						compatible = false
+						break
+					}
+					leftType, valueType := mergedFn.Args[0].Typ, value.Typ
+					// String arms can carry serialized byte constants with a
+					// different declared width or varchar/varbinary identity.
+					// Keep that existing byte-valued IN representation valid.
+					sameStorage := leftType.Id == valueType.Id && leftType.Scale == valueType.Scale ||
+						types.T(leftType.Id).IsMySQLString() && types.T(valueType.Id).IsMySQLString()
+					if !sameStorage {
+						compatible = false
+						break
+					}
+				}
+				if !compatible {
 					newOrArgs = append(newOrArgs, subExpr)
 					continue
 				}
@@ -2993,7 +3034,7 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			continue
 		}
 		fn := expr.GetF()
-		if fn == nil || fn.Func == nil {
+		if fn == nil || fn.Func == nil || compositeKeyPredicateHasMixedJSONNumericArgs(fn) {
 			continue
 		}
 		col, isLower := classifyRangeBound(fn)
@@ -3090,11 +3131,14 @@ func (builder *QueryBuilder) doMergeFiltersOnCompositeKey(tableDef *plan.TableDe
 			break
 		}
 
-		filterIdx = append(filterIdx, idx)
 		fn := filters[idx].GetF()
 		if fn == nil || fn.Func == nil {
 			return filters
 		}
+		if compositeKeyPredicateHasMixedJSONNumericArgs(fn) {
+			break
+		}
+		filterIdx = append(filterIdx, idx)
 		funcName := fn.Func.ObjName
 		if funcName == "in" || funcName == "between" ||
 			funcName == "<" || funcName == "<=" || funcName == ">" || funcName == ">=" ||
