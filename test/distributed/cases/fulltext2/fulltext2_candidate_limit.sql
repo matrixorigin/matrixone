@@ -27,6 +27,13 @@ create fulltext2 index ft_exact_idx on ft_exact(body) with parser gojieba;
 -- explicit so this semantic result is independent of score ties.
 -- @sortkey:0
 select id from ft_exact where match(body) against('+needle' in boolean mode) and match(body) against('+alpha' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+-- The same multi-MATCH shapes with Bloom membership pushdown must not hang.
+set fulltext_bloom_filter_pushdown = 1;
+-- @sortkey:0
+select id from ft_exact where match(body) against('+needle' in boolean mode) and match(body) against('+alpha' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+-- @sortkey:0
+select id from ft_exact where match(body) against('+needle' in boolean mode) and match(body) against('+alpha' in boolean mode) and match(body) against('+beta' in boolean mode) and category = 'keep' order by id;
+set fulltext_bloom_filter_pushdown = 0;
 
 -- Ranking witness: the controlled TF/document-length fixture makes the two
 -- excluded rows score strictly above the qualifying rows.  The projected

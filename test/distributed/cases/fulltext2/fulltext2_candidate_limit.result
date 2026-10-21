@@ -19,6 +19,16 @@ select id from ft_exact where match(body) against('+needle' in boolean mode) and
 ➤ id[-5,64,0]  𝄀
 4  𝄀
 5
+set fulltext_bloom_filter_pushdown = 1;
+select id from ft_exact where match(body) against('+needle' in boolean mode) and match(body) against('+alpha' in boolean mode) and category = 'keep' order by id limit 2 offset 1;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+select id from ft_exact where match(body) against('+needle' in boolean mode) and match(body) against('+alpha' in boolean mode) and match(body) against('+beta' in boolean mode) and category = 'keep' order by id;
+➤ id[-5,64,0]  𝄀
+4  𝄀
+5
+set fulltext_bloom_filter_pushdown = 0;
 select id, category, match(body) against('+needle' in boolean mode) as score from ft_exact where match(body) against('+needle' in boolean mode) order by score desc, id;
 ➤ id[-5,64,0]  ¦  category[12,20,0]  ¦  score[7,5,0]  𝄀
 1  ¦  drop  ¦  0.010860845  𝄀

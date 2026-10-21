@@ -910,19 +910,18 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// BloomFilter runtime filter: secondScan(build) -> all ft_func(probe)
 		innerJoinNode := builder.qry.Nodes[innerJoinNodeID]
 
-		// Collect all unique ft_func node IDs for BF probe
+		// Collect the unique ft_func node IDs on the probe spine of innerJoin. A probe
+		// on a build side of the ft join chain waits for a filter that innerJoin's
+		// build has not produced yet, so those ft_func nodes run unfiltered.
+		probeSpine := builder.probeSpineNodeIDs(last_node_id)
 		allFtNodeIDs := make([]int32, 0, len(ret_filter_node_ids)+len(ret_proj_node_ids))
 		seen := make(map[int32]bool)
-		for _, id := range ret_filter_node_ids {
-			if !seen[id] {
-				seen[id] = true
-				allFtNodeIDs = append(allFtNodeIDs, id)
-			}
-		}
-		for _, id := range ret_proj_node_ids {
-			if !seen[id] {
-				seen[id] = true
-				allFtNodeIDs = append(allFtNodeIDs, id)
+		for _, ids := range [][]int32{ret_filter_node_ids, ret_proj_node_ids} {
+			for _, id := range ids {
+				if !seen[id] && probeSpine[id] {
+					seen[id] = true
+					allFtNodeIDs = append(allFtNodeIDs, id)
+				}
 			}
 		}
 
@@ -1609,6 +1608,20 @@ func (builder *QueryBuilder) fulltext2BaseJoinSearchScanUnder(nodeID int32) (spe
 		return nil, 0, false
 	}
 	return search.IndexSearchScan, scoreTag, true
+}
+
+// probeSpineNodeIDs returns the nodes reached from nodeID through the probe
+// child of each JOIN and the sole child of every other node.
+func (builder *QueryBuilder) probeSpineNodeIDs(nodeID int32) map[int32]bool {
+	spine := make(map[int32]bool)
+	for {
+		spine[nodeID] = true
+		n := builder.qry.Nodes[nodeID]
+		if len(n.Children) == 0 || (n.NodeType != plan.Node_JOIN && len(n.Children) != 1) {
+			return spine
+		}
+		nodeID = n.Children[0]
+	}
 }
 
 func tableOwnsIndexTable(tableDef *plan.TableDef, indexTableName string) bool {
