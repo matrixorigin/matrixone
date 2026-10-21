@@ -20,6 +20,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +66,7 @@ func TestM0CloneMergeProofUsesDerivedVersion(t *testing.T) {
 		m0Exec(t, ctx, db, "alter table "+parentT+" add column "+credit0+" decimal(10,2)")
 		parentID, parentVersion := m0TableGeneration(t, ctx, db, parent, "customer")
 		require.Equal(t, uint32(2), parentVersion)
+		require.Equal(t, parentVersion, m0TNCatalogSchemaVersion(t, ctx, db, parentT))
 		m0Exec(t, ctx, db, "update "+parentT+" set "+
 			tier0+"=case when c_ytd_payment > 9000 then 'Gold' "+
 			"when c_ytd_payment > 5000 then 'Silver' else 'Bronze' end,"+
@@ -75,14 +78,16 @@ func TestM0CloneMergeProofUsesDerivedVersion(t *testing.T) {
 		m0Exec(t, ctx, db, "drop snapshot "+snapshot)
 		childID, cloneVersion := m0TableGeneration(t, ctx, db, child, "customer")
 		require.Equal(t, uint32(2), cloneVersion)
+		require.Equal(t, cloneVersion, m0TNCatalogSchemaVersion(t, ctx, db, childT))
 
 		m0Exec(t, ctx, db, "alter table "+childT+" add column "+tier1+" varchar(8)")
 		m0Exec(t, ctx, db, "alter table "+childT+" add column "+credit1+" decimal(10,2)")
 		childIDAfterAlter, childVersion := m0TableGeneration(t, ctx, db, child, "customer")
 		require.Equal(t, childID, childIDAfterAlter)
 		require.Equal(t, uint32(4), childVersion)
+		require.Equal(t, childVersion, m0TNCatalogSchemaVersion(t, ctx, db, childT))
 		t.Logf(
-			"TN catalog schema identity parent=%d:v%d child=%d:v%d->v%d",
+			"CN catalog schema identity parent=%d:v%d child=%d:v%d->v%d",
 			parentID, parentVersion, childID, cloneVersion, childVersion,
 		)
 		t.Logf("parent column identity: %s", m0StoredColumnIdentity(
@@ -193,6 +198,23 @@ func TestM0CloneMergeProofUsesDerivedVersion(t *testing.T) {
 		require.Equal(t, withoutExtra(m0Columns(t, ctx, db, "select * from "+childT+" limit 0")),
 			m0Columns(t, ctx, db, "select * from "+parentT+" limit 0"))
 	})
+}
+
+func m0TNCatalogSchemaVersion(t *testing.T, ctx context.Context, db *sql.DB, table string) uint32 {
+	t.Helper()
+	var dump string
+	require.NoError(t, db.QueryRowContext(ctx, "select mo_ctl('dn','inspect',?)",
+		"catalog -t "+table+" -vv").Scan(&dump))
+	t.Logf("TN catalog raw %s: %s", table, dump)
+	matches := regexp.MustCompile(`schema\.v(\d+)\.s\d+\.c\d+`).FindAllStringSubmatch(dump, -1)
+	require.NotEmpty(t, matches, "TN schema version unavailable: %s", table)
+	var latest uint32
+	for _, match := range matches {
+		version, err := strconv.ParseUint(match[1], 10, 32)
+		require.NoError(t, err)
+		latest = max(latest, uint32(version))
+	}
+	return latest
 }
 
 func m0StoredColumnIdentity(
