@@ -18,6 +18,7 @@ package plan
 // fast path (#27941).
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -460,6 +461,64 @@ func TestFulltext2ScoreLimitParityWithIncludeFilters(t *testing.T) {
 					require.Contains(t, FormatExprs(node.FilterList, FormatOption{}), "base_id")
 				}
 			}
+		})
+	}
+}
+
+func TestFulltext2ScoreLimitParityWithMembershipPrefilter(t *testing.T) {
+	scanLimit := func(t *testing.T, pattern string, pushdown int8, orderBy, limit string) *plan.Expr {
+		optimizer := newIssue24822FullText2Optimizer(t)
+		optimizer.ctx.fulltextBloomFilterPushdown = pushdown
+		pkType := plan.Type{Id: int32(types.T_int64)}
+		ftDef := optimizer.ctx.tables["ft"]
+		ftDef.Cols[ftDef.Name2ColIndex["id"]].Typ = pkType
+		for _, idx := range ftDef.Indexes {
+			optimizer.ctx.tables[idx.IndexTableName].Cols[1].Typ = pkType
+		}
+		statement := `SELECT ft.id, ft.title, MATCH(title, body) AGAINST("` + pattern + `" IN BOOLEAN MODE) AS sc
+			FROM ft WHERE MATCH(title, body) AGAINST("` + pattern + `" IN BOOLEAN MODE)
+			AND title <> "excluded"`
+		if orderBy != "" {
+			statement += " ORDER BY " + orderBy
+		}
+		statement += " " + limit
+		if strings.Contains(limit, "?") {
+			statement = "prepare p from '" + statement + "'"
+		}
+		p, err := runOneStmt(optimizer, t, statement)
+		require.NoError(t, err)
+		query := p.GetQuery()
+		if prepare := p.GetDcl().GetPrepare(); prepare != nil {
+			query = prepare.Plan.GetQuery()
+		}
+		scans := collectFullTextFunctionScans(&QueryBuilder{qry: query}, query.Steps[0])
+		require.Len(t, scans, 1)
+		return fulltextScanLimit(scans[0])
+	}
+	for _, tc := range []struct {
+		name      string
+		pattern   string
+		pushdown  int8
+		limit     string
+		wantLimit uint64
+	}{
+		{name: "exact membership", pattern: "+hello", pushdown: 1, limit: "LIMIT 2 OFFSET 1", wantLimit: 3},
+		{name: "membership off", pattern: "+hello", limit: "LIMIT 2"},
+		{name: "should term", pattern: "hello", pushdown: 1, limit: "LIMIT 2"},
+		{name: "prepared limit", pattern: "+hello", pushdown: 1, limit: "LIMIT ?"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			implicit := scanLimit(t, tc.pattern, tc.pushdown, "", tc.limit)
+			explicit := scanLimit(t, tc.pattern, tc.pushdown, "sc DESC", tc.limit)
+			if tc.wantLimit == 0 {
+				require.Nil(t, implicit)
+				require.Nil(t, explicit)
+				return
+			}
+			require.NotNil(t, implicit)
+			require.NotNil(t, explicit)
+			assert.Equal(t, tc.wantLimit, implicit.GetLit().GetU64Val())
+			assert.Equal(t, tc.wantLimit, explicit.GetLit().GetU64Val())
 		})
 	}
 }

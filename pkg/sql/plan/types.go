@@ -473,9 +473,9 @@ type QueryBuilder struct {
 	// carries the final physical decision after shuffle planning.
 	distinctKeyShuffleCols map[*plan.Node]int32
 
-	// fulltext search node ids whose search enforces every base-scan filter of its
-	// base-table join, so an outer score sort may bound the search like the implicit LIMIT.
-	fulltextSearchEnforcesBaseFilters map[int32]struct{}
+	// base-table joins built by the fulltext rewrite whose driving search an outer score
+	// sort may bound like the implicit LIMIT, keyed by join node id.
+	fulltextBoundableJoins map[int32]fulltextBoundableJoin
 
 	// ftJoinServed records the MATCHes rewritten while applyIndices walked a JOIN's children,
 	// paired with the fulltext node producing each score. applyIndices recurses children

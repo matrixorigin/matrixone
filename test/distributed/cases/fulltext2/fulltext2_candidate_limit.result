@@ -29,6 +29,39 @@ select id from ft_exact where match(body) against('+needle' in boolean mode) and
 4  𝄀
 5
 set fulltext_bloom_filter_pushdown = 0;
+set fulltext_bloom_filter_pushdown = 1;
+explain select id, category, match(body) against('+needle' in boolean mode) as sc from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by sc desc limit 2 offset 1;
+-- @regex("Candidate Limit: 3", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2, Offset: 1  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_exact.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                    Filter Cond: (ft_exact.category = 'keep')  𝄀
+                    Runtime Filter Probe: ft_exact.id  𝄀
+              ->  Join  𝄀
+                    Join Type: INNER  𝄀
+                    Join Cond: (mo_fulltext_alias_0.__mo_ft_doc_id = ft_exact.id)  𝄀
+                    Runtime Filter Build: #[10,0]  𝄀
+                    ->  Fulltext Index Scan on ft_exact_idx  𝄀
+                          Runtime Filter Probe: #[8,0]  𝄀
+                          Fulltext Index: ft_exact_idx, Candidate Limit: 3  𝄀
+                    ->  Table Scan on fulltext2_candidate_limit.ft_exact  𝄀
+                          Filter Cond: (ft_exact.category = 'keep')
+select id, category, match(body) against('+needle' in boolean mode) as sc from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by sc desc limit 2 offset 1;
+➤ id[-5,64,0]  ¦  category[12,20,0]  ¦  sc[7,5,0]  𝄀
+4  ¦  keep  ¦  0.0068283533  𝄀
+5  ¦  keep  ¦  0.0060232636
+set fulltext_bloom_filter_pushdown = 0;
+select id, category, match(body) against('+needle' in boolean mode) as sc from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by sc desc limit 2 offset 1;
+➤ id[-5,64,0]  ¦  category[12,20,0]  ¦  sc[7,5,0]  𝄀
+4  ¦  keep  ¦  0.0068283533  𝄀
+5  ¦  keep  ¦  0.0060232636
 select id, category, match(body) against('+needle' in boolean mode) as score from ft_exact where match(body) against('+needle' in boolean mode) order by score desc, id;
 ➤ id[-5,64,0]  ¦  category[12,20,0]  ¦  score[7,5,0]  𝄀
 1  ¦  drop  ¦  0.010860845  𝄀

@@ -35,6 +35,15 @@ select id from ft_exact where match(body) against('+needle' in boolean mode) and
 select id from ft_exact where match(body) against('+needle' in boolean mode) and match(body) against('+alpha' in boolean mode) and match(body) against('+beta' in boolean mode) and category = 'keep' order by id;
 set fulltext_bloom_filter_pushdown = 0;
 
+-- With exact membership, an explicit score order bounds the search exactly like the
+-- implicit relevance order, and returns the same page as the unbounded plan.
+set fulltext_bloom_filter_pushdown = 1;
+-- @regex("Candidate Limit: 3",true)
+explain select id, category, match(body) against('+needle' in boolean mode) as sc from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by sc desc limit 2 offset 1;
+select id, category, match(body) against('+needle' in boolean mode) as sc from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by sc desc limit 2 offset 1;
+set fulltext_bloom_filter_pushdown = 0;
+select id, category, match(body) against('+needle' in boolean mode) as sc from ft_exact where match(body) against('+needle' in boolean mode) and category = 'keep' order by sc desc limit 2 offset 1;
+
 -- Ranking witness: the controlled TF/document-length fixture makes the two
 -- excluded rows score strictly above the qualifying rows.  The projected
 -- scores and score order are an independent assertion from page correctness.

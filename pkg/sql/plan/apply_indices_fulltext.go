@@ -613,8 +613,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	limitExpr := builder.buildFullTextCandidateLimit(
 		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter,
 		paginationLimit, paginationOffset)
-	searchEnforcesBaseFilters := len(scanNode.FilterList) == 0 &&
-		builder.fullTextCandidateLimitAdmissible(scanNode, wrappedMatchFilters, ft_filters)
+	limitRuleOK, limitLiteralOnly := builder.fullTextCandidateLimitRule(
+		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter)
+	drivingSearchID := int32(-1)
 
 	// The search evaluates the peeled predicates on index-time values, so the base scans
 	// re-check every filter on current values.
@@ -761,11 +762,8 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		if limitExpr != nil {
 			curr_ftnode.IndexSearchScan.CandidateLimit = DeepCopyExpr(limitExpr)
 		}
-		if searchEnforcesBaseFilters {
-			if builder.fulltextSearchEnforcesBaseFilters == nil {
-				builder.fulltextSearchEnforcesBaseFilters = make(map[int32]struct{})
-			}
-			builder.fulltextSearchEnforcesBaseFilters[curr_ftnode_id] = struct{}{}
+		if i == 0 {
+			drivingSearchID = curr_ftnode_id
 		}
 
 		// change doc_id type to the primary type here
@@ -1069,6 +1067,16 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		}, ctx)
 	}
 
+	if limitRuleOK && drivingSearchID >= 0 {
+		if builder.fulltextBoundableJoins == nil {
+			builder.fulltextBoundableJoins = make(map[int32]fulltextBoundableJoin)
+		}
+		builder.fulltextBoundableJoins[joinnodeID] = fulltextBoundableJoin{
+			search:      drivingSearchID,
+			literalOnly: limitLiteralOnly,
+		}
+	}
+
 	// Clear Limit/Offset from scanNode when pushdown is enabled
 	// (they should be applied after SORT)
 	// Note: caller (applyIndicesForProjectionUsingFullTextIndex) may still need
@@ -1150,27 +1158,52 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 	paginationLimit *plan.Expr,
 	paginationOffset *plan.Expr,
 ) *plan.Expr {
-	if !builder.fullTextCandidateLimitAdmissible(scanNode, wrappedMatchFilters, fullTextFilters) {
+	ok, literalOnly := builder.fullTextCandidateLimitRule(
+		scanNode, wrappedMatchFilters, fullTextFilters, indexDefs, prefilterPushdown, exactPrefilter)
+	if !ok {
 		return nil
 	}
+	if literalOnly {
+		if _, literal := getLiteralUint64(paginationLimit); !literal {
+			return nil
+		}
+	}
+	limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
+	return limit
+}
+
+// fullTextCandidateLimitRule reports whether the fulltext search may be bounded by the
+// result LIMIT+OFFSET and whether that LIMIT must be a literal. The residual-filter case is
+// admitted at plan time, so prepared or dynamic LIMIT values remain unbounded there; the
+// no-residual case accepts any LIMIT expression.
+func (builder *QueryBuilder) fullTextCandidateLimitRule(
+	scanNode *plan.Node,
+	wrappedMatchFilters []*plan.Expr,
+	fullTextFilters []*plan.Expr,
+	indexDefs []*plan.IndexDef,
+	prefilterPushdown bool,
+	exactPrefilter bool,
+) (ok, literalOnly bool) {
+	if !builder.fullTextCandidateLimitAdmissible(scanNode, wrappedMatchFilters, fullTextFilters) {
+		return false, false
+	}
 	if len(scanNode.FilterList) == 0 {
-		limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
-		return limit
+		return true, false
 	}
 	if !shouldPushFulltextCandidateLimit(
 		len(fullTextFilters), len(scanNode.FilterList), prefilterPushdown, exactPrefilter,
 	) || len(indexDefs) != 1 ||
 		!fulltext2ConjunctiveCandidateLimitEligible(fullTextFilters[0], indexDefs[0]) {
-		return nil
+		return false, false
 	}
-	// The residual-filter path is admitted at plan time, so prepared or dynamic
-	// LIMIT values remain unbounded. The no-residual path above preserves main's
-	// existing dynamic-LIMIT behavior.
-	if _, literal := getLiteralUint64(paginationLimit); !literal {
-		return nil
-	}
-	limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
-	return limit
+	return true, true
+}
+
+// fulltextBoundableJoin is a base-table join built by the fulltext rewrite whose driving
+// search the result LIMIT may bound under the rewrite's candidate-limit rule.
+type fulltextBoundableJoin struct {
+	search      int32
+	literalOnly bool
 }
 
 // tryApplyCoveredFulltext2 implements the covered fast path (Phase 6): a fully-covered
@@ -1520,15 +1553,11 @@ func (builder *QueryBuilder) pushCoveredFulltext2ScoreLimitFromSort(sortNode *pl
 	spec.CandidateLimit = bound
 }
 
-// pushJoinFulltext2ScoreLimitFromSort is the JOIN analogue of
-// pushCoveredFulltext2ScoreLimitFromSort: an explicit `ORDER BY score DESC LIMIT k` over a
-// fulltext2 MATCH that is NOT covered (it selects base-table columns, so the plan joins the
-// search's (doc_id, score) back to the base table on the primary key). The join is 1:1 on the
-// primary key, so the sort's top-k is the scan's WAND top-k: set the scan's CandidateLimit = k.
-//
-// The shape must be exactly the fulltext rewrite's own base join: a single INNER join of the
-// filterless base TABLE_SCAN with the search on base.pk = search.doc_id. A user join, residual
-// filter, aggregate, second match or secondary ORDER BY key declines.
+// pushJoinFulltext2ScoreLimitFromSort bounds the fulltext2 search under an explicit
+// `ORDER BY score DESC LIMIT k` that sits above the fulltext rewrite's base-table join, by
+// the same rule the rewrite applies to the implicit relevance order. Only plain PROJECT and
+// SORT nodes may separate the sort from that join; a user join, filter, aggregate, second
+// match or secondary ORDER BY key declines.
 func (builder *QueryBuilder) pushJoinFulltext2ScoreLimitFromSort(sortNode *plan.Node) {
 	if sortNode == nil || sortNode.Limit == nil || sortNode.RankOption != nil ||
 		len(sortNode.Children) != 1 || len(sortNode.OrderBy) != 1 || len(sortNode.FilterList) != 0 {
@@ -1550,93 +1579,39 @@ func (builder *QueryBuilder) pushJoinFulltext2ScoreLimitFromSort(sortNode *plan.
 		int(keyCol.ColPos) >= len(project.ProjectList) {
 		return
 	}
-	spec, scoreTag, ok := builder.fulltext2BaseJoinSearchScanUnder(project.Children[0])
-	if !ok || spec.CandidateLimit != nil {
+	id := project.Children[0]
+	for {
+		n := builder.qry.Nodes[id]
+		if n.NodeType != plan.Node_PROJECT && n.NodeType != plan.Node_SORT {
+			break
+		}
+		if len(n.Children) != 1 || n.Limit != nil || n.Offset != nil ||
+			len(n.FilterList) != 0 || n.RankOption != nil {
+			return
+		}
+		id = n.Children[0]
+	}
+	join, ok := builder.fulltextBoundableJoins[id]
+	if !ok {
+		return
+	}
+	if join.literalOnly {
+		if _, literal := getLiteralUint64(sortNode.Limit); !literal {
+			return
+		}
+	}
+	search := builder.qry.Nodes[join.search]
+	spec := search.IndexSearchScan
+	if spec == nil || !catalog.IsFullText2IndexAlgo(spec.GetIndex().GetIndexAlgo()) ||
+		spec.CandidateLimit != nil || len(search.BindingTags) != 1 ||
+		search.Limit != nil || search.Offset != nil || len(search.FilterList) != 0 {
 		return
 	}
 	projectScore := project.ProjectList[keyCol.ColPos].GetCol()
-	if projectScore == nil || projectScore.RelPos != scoreTag || projectScore.ColPos != 1 {
+	if projectScore == nil || projectScore.RelPos != search.BindingTags[0] || projectScore.ColPos != 1 {
 		return
 	}
 	spec.CandidateLimit = bound
-}
-
-// fulltext2BaseJoinSearchScanUnder returns the fulltext2 IndexSearchScan under nodeID when the
-// subtree is exactly PROJECT/SORT nodes over one INNER JOIN of the base TABLE_SCAN and that
-// search, joined on base.pk = search.doc_id.
-func (builder *QueryBuilder) fulltext2BaseJoinSearchScanUnder(nodeID int32) (spec *plan.IndexSearchScan, scoreTag int32, ok bool) {
-	var join, base, search *plan.Node
-	safe := true
-	var walk func(id int32)
-	walk = func(id int32) {
-		if !safe {
-			return
-		}
-		n := builder.qry.Nodes[id]
-		switch n.NodeType {
-		case plan.Node_INDEX_SEARCH_SCAN:
-			if search != nil || n.IndexSearchScan == nil ||
-				!catalog.IsFullText2IndexAlgo(n.IndexSearchScan.GetIndex().GetIndexAlgo()) ||
-				len(n.BindingTags) != 1 || n.Limit != nil || n.Offset != nil ||
-				n.RankOption != nil || len(n.FilterList) != 0 {
-				safe = false
-				return
-			}
-			search = n
-			return
-		case plan.Node_TABLE_SCAN:
-			if base != nil || n.Limit != nil || n.Offset != nil ||
-				len(n.BindingTags) != 1 || n.TableDef == nil || n.TableDef.Pkey == nil {
-				safe = false
-				return
-			}
-			base = n
-			return
-		case plan.Node_JOIN:
-			if join != nil || n.JoinType != plan.Node_INNER || len(n.FilterList) != 0 || len(n.OnList) != 1 {
-				safe = false
-				return
-			}
-			join = n
-		case plan.Node_PROJECT, plan.Node_SORT:
-			if n.Limit != nil || n.Offset != nil || len(n.FilterList) != 0 || n.RankOption != nil {
-				safe = false
-				return
-			}
-		default:
-			safe = false
-			return
-		}
-		for _, c := range n.Children {
-			walk(c)
-		}
-	}
-	walk(nodeID)
-	if !safe || join == nil || base == nil || search == nil {
-		return nil, 0, false
-	}
-	if _, enforced := builder.fulltextSearchEnforcesBaseFilters[search.NodeId]; len(base.FilterList) != 0 && !enforced {
-		return nil, 0, false
-	}
-	scoreTag = search.BindingTags[0]
-	pkPos, found := base.TableDef.Name2ColIndex[base.TableDef.Pkey.PkeyColName]
-	if !found || !tableOwnsIndexTable(base.TableDef, search.IndexSearchScan.GetIndex().GetIndexTableName()) {
-		return nil, 0, false
-	}
-	eq := join.OnList[0].GetF()
-	if eq == nil || eq.Func.GetObjName() != "=" || len(eq.Args) != 2 {
-		return nil, 0, false
-	}
-	l, r := eq.Args[0].GetCol(), eq.Args[1].GetCol()
-	if l == nil || r == nil {
-		return nil, 0, false
-	}
-	isBasePk := func(c *plan.ColRef) bool { return c.RelPos == base.BindingTags[0] && c.ColPos == pkPos }
-	isDocID := func(c *plan.ColRef) bool { return c.RelPos == scoreTag && c.ColPos == 0 }
-	if !(isBasePk(l) && isDocID(r)) && !(isDocID(l) && isBasePk(r)) {
-		return nil, 0, false
-	}
-	return search.IndexSearchScan, scoreTag, true
 }
 
 // probeSpineNodeIDs returns the nodes reached from nodeID through the probe
@@ -1651,18 +1626,6 @@ func (builder *QueryBuilder) probeSpineNodeIDs(nodeID int32) map[int32]bool {
 		}
 		nodeID = n.Children[0]
 	}
-}
-
-func tableOwnsIndexTable(tableDef *plan.TableDef, indexTableName string) bool {
-	if indexTableName == "" {
-		return false
-	}
-	for _, idx := range tableDef.Indexes {
-		if idx.IndexTableName == indexTableName {
-			return true
-		}
-	}
-	return false
 }
 
 func fulltext2ScoreDescending(key *plan.OrderBySpec) bool {
