@@ -141,6 +141,107 @@ func TestPartitionRouteOrdinalAcceptsFixedIntegerRoutes(t *testing.T) {
 	require.False(t, ok)
 }
 
+func TestWritePartitionIndexTargetMapsNoMatchOrdinalOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		routes     []int32
+		textRoutes []string
+		routeNulls []bool
+		wantErr    string
+	}{
+		{
+			name:    "no-match-after-valid-row",
+			routes:  []int32{0, -1},
+			wantErr: "invalid input: Table has no partition for value from column_list",
+		},
+		{
+			name:    "other-negative",
+			routes:  []int32{-2},
+			wantErr: "invalid input: invalid partition fulltext route ordinal -2",
+		},
+		{
+			name:    "out-of-range",
+			routes:  []int32{2},
+			wantErr: "invalid input: invalid partition fulltext route ordinal 2",
+		},
+		{
+			name:       "malformed-type",
+			textRoutes: []string{"0"},
+			wantErr:    "invalid input: invalid partition fulltext route ordinal 0",
+		},
+		{
+			name:       "null-route-vector",
+			routes:     []int32{0},
+			routeNulls: []bool{true},
+			wantErr:    "invalid input: partition fulltext route is NULL",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			rowCount := len(tc.routes)
+			if tc.textRoutes != nil {
+				rowCount = len(tc.textRoutes)
+			}
+			data := make([]int64, rowCount)
+			for i := range data {
+				data[i] = int64(i + 10)
+			}
+			input := batch.NewWithSize(2)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = testutil.NewInt64Vector(rowCount, types.T_int64.ToType(), proc.Mp(), false, nil, data)
+			if tc.textRoutes != nil {
+				input.Vecs[1] = testutil.NewStringVector(rowCount, types.T_varchar.ToType(), proc.Mp(), false, nil, tc.textRoutes)
+			} else {
+				input.Vecs[1] = testutil.NewInt32Vector(rowCount, types.T_int32.ToType(), proc.Mp(), false, tc.routeNulls, tc.routes)
+			}
+			input.SetRowCount(rowCount)
+
+			mp := proc.Mp()
+			baseline := mp.CurrNB()
+			heapBytes, heapObjects := mp.OnHeapOutstanding()
+			ctrl := gomock.NewController(t)
+			eng := mock_frontend.NewMockEngine(ctrl)
+			physicalTargetResolutions := 0
+			eng.EXPECT().GetRelationById(gomock.Any(), gomock.Any(), gomock.Any()).DoAndReturn(
+				func(_ context.Context, _ any, _ uint64) (string, string, engine.Relation, error) {
+					physicalTargetResolutions++
+					return "", "", nil, fmt.Errorf("unexpected physical partition target resolution")
+				},
+			).AnyTimes()
+
+			target := &partitionUpdateTarget{
+				contexts: []*MultiUpdateCtx{{
+					PartitionIndexCtx: &plan.PartitionIndexCtx{PartitionCol: plan.ColRef{ColPos: 1}},
+				}},
+				meta: partition.PartitionMetadata{Partitions: []partition.Partition{{PartitionID: 1}, {PartitionID: 2}}},
+			}
+			op := &PartitionMultiUpdate{raw: &MultiUpdate{Engine: eng}}
+			err := op.writePartitionIndexTarget(proc, target, input)
+
+			require.EqualError(t, err, tc.wantErr)
+			require.Zero(t, physicalTargetResolutions, "a rejected route must not resolve or write a physical partition target")
+			require.Equal(t, data, vector.MustFixedColWithTypeCheck[int64](input.Vecs[0]), "routing must not mutate input values")
+			require.Equal(t, rowCount, input.RowCount())
+			if tc.textRoutes == nil {
+				require.Equal(t, tc.routes, vector.MustFixedColWithTypeCheck[int32](input.Vecs[1]), "routing must not mutate route values")
+				for i := range rowCount {
+					wantNull := i < len(tc.routeNulls) && tc.routeNulls[i]
+					require.Equal(t, wantNull, input.Vecs[1].GetNulls().Contains(uint64(i)))
+				}
+			} else {
+				require.Equal(t, types.T_varchar, input.Vecs[1].GetType().Oid)
+				require.Equal(t, rowCount, input.Vecs[1].Length())
+			}
+			bytes, objects := mp.OnHeapOutstanding()
+			require.Equal(t, baseline, mp.CurrNB(), "temporary partial route groups must be released")
+			require.Equal(t, heapBytes, bytes)
+			require.Equal(t, heapObjects, objects)
+		})
+	}
+}
+
 func TestClonePartitionContextsConsumeODKUMetadataOnce(t *testing.T) {
 	weightCol, physicalCol := 7, 8
 	contexts := []*MultiUpdateCtx{{
@@ -704,6 +805,89 @@ func TestPartitionUpdatePrunesAbsoluteColumnAfterRowID(t *testing.T) {
 				result.Iter(func(p partition.Partition, b *batch.Batch) bool { counts[p.PartitionID] = b.RowCount(); return true })
 				require.Equal(t, map[uint64]int{1: 2, 2: 1}, counts)
 			})
+		})
+	}
+}
+
+func TestPartitionUpdatePrunesCompoundExpressionFromMappedColumns(t *testing.T) {
+	for _, rowIDFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint("rowIDFirst=", rowIDFirst), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			intType := plan.Type{Id: int32(types.T_int32)}
+			col := func(pos int32) *plan.Expr {
+				return &plan.Expr{Typ: intType, Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: pos}}}
+			}
+			sum, err := sqlplan.BindFuncExprImplByPlanExpr(proc.Ctx, "+", []*plan.Expr{col(0), col(1)})
+			require.NoError(t, err)
+			limit := &plan.Expr{Typ: intType, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I32Val{I32Val: 10}}}}
+			below, err := sqlplan.BindFuncExprImplByPlanExpr(proc.Ctx, "<", []*plan.Expr{sqlplan.DeepCopyExpr(sum), limit})
+			require.NoError(t, err)
+			atOrAbove, err := sqlplan.BindFuncExprImplByPlanExpr(proc.Ctx, ">=", []*plan.Expr{sum, sqlplan.DeepCopyExpr(limit)})
+			require.NoError(t, err)
+			withRowID := func(expr *plan.Expr) *plan.Expr {
+				expr = sqlplan.DeepCopyExpr(expr)
+				var shift func(*plan.Expr)
+				shift = func(e *plan.Expr) {
+					switch x := e.Expr.(type) {
+					case *plan.Expr_Col:
+						x.Col.ColPos++
+					case *plan.Expr_F:
+						for _, arg := range x.F.Args {
+							shift(arg)
+						}
+					}
+				}
+				shift(expr)
+				return expr
+			}
+			meta := partition.PartitionMetadata{Partitions: []partition.Partition{
+				{PartitionID: 1, Expr: below, ExprWithRowID: withRowID(below)},
+				{PartitionID: 2, Expr: atOrAbove, ExprWithRowID: withRowID(atOrAbove)},
+			}}
+
+			routeStart := 2
+			vecCount := 4
+			if rowIDFirst {
+				routeStart = 3
+				vecCount++
+			}
+			input := batch.NewWithSize(vecCount)
+			defer input.Clean(proc.Mp())
+			for i := range input.Vecs {
+				if rowIDFirst && i == 0 {
+					input.Vecs[i] = vector.NewVec(types.T_Rowid.ToType())
+				} else {
+					input.Vecs[i] = vector.NewVec(types.T_int32.ToType())
+				}
+			}
+			for _, values := range [][]int32{{99, 99, 1, 20}, {99, 99, 1, 0}, {99, 99, 4, 6}} {
+				if rowIDFirst {
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], types.Rowid{}, false, proc.Mp()))
+				}
+				for i := 0; i < vecCount; i++ {
+					if rowIDFirst && i == 0 {
+						continue
+					}
+					valuePos := i
+					if rowIDFirst {
+						valuePos--
+					}
+					require.NoError(t, vector.AppendFixed(input.Vecs[i], values[valuePos], false, proc.Mp()))
+				}
+			}
+			input.SetRowCount(3)
+
+			result, err := prunePartitionUpdateByColumns(proc, input, meta, []int{routeStart, routeStart + 1})
+			require.NoError(t, err)
+			defer result.Close()
+			counts := map[uint64]int{}
+			result.Iter(func(p partition.Partition, b *batch.Batch) bool {
+				counts[p.PartitionID] = b.RowCount()
+				return true
+			})
+			require.Equal(t, map[uint64]int{1: 1, 2: 2}, counts)
 		})
 	}
 }

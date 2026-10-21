@@ -495,19 +495,22 @@ func TestPartitionedFulltextConflictDMLKeepsOldAndNewPartitionKeys(t *testing.T)
 
 // TestReplaceMergedScanCapturesPartitionDependency pins the merged-main-scan
 // REPLACE path: when the parent is partitioned and carries classic FULLTEXT,
-// the old partition-key column must be present in OldColCaptureList. Without
-// that capture the old-key placeholder stays a NULL literal, so REPLACE cannot
-// route the old FULLTEXT delete to the physical partition the old row lived in
-// (same-partition and cross-partition alike).
+// every old partition-expression dependency must be present in
+// OldColCaptureList and in both route phases.
 //
 // docs_ft has only a real PK + FULLTEXT (no unique secondary), so REPLACE takes
-// useMergedMainScan. Partition key is payload (not the PK).
+// useMergedMainScan. The compound partition expression uses id and payload.
 func TestReplaceMergedScanCapturesPartitionDependency(t *testing.T) {
 	mock := NewMockOptimizer(true, newPlanTestProcess(t))
 	base := mock.ctxt.tables["docs_ft"]
 	base.FeatureFlag |= features.Partitioned
-	cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">=", []*Expr{
+	partitionKey, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), "+", []*Expr{
+		{Typ: base.Cols[0].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "id", ColPos: 0}}},
 		{Typ: base.Cols[2].Typ, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "payload", ColPos: 2}}},
+	})
+	require.NoError(t, err)
+	cond, err := BindFuncExprImplByPlanExpr(mock.ctxt.GetContext(), ">=", []*Expr{
+		partitionKey,
 		makePlan2Int32ConstExprWithType(0),
 	})
 	require.NoError(t, err)
@@ -515,18 +518,17 @@ func TestReplaceMergedScanCapturesPartitionDependency(t *testing.T) {
 		{Def: cond}, {Def: makePlan2BoolConstExprWithType(false)},
 	}}
 
-	// Same plan serves same-partition (old payload stays put) and cross-partition
-	// (old payload moves) REPLACE: both need the captured old partition key.
+	// Same plan serves same-partition and cross-partition compound-key REPLACE.
 	for _, tc := range []struct {
 		name string
 		sql  string
 	}{
 		{
-			name: "same_partition_payload_stays",
+			name: "compound_same_partition",
 			sql:  "replace into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'incoming', 1, '[1,2,3]')",
 		},
 		{
-			name: "cross_partition_payload_moves",
+			name: "compound_cross_partition",
 			sql:  "replace into constraint_test.docs_ft(id, body, payload, embedding) values (1, 'incoming', -5, '[1,2,3]')",
 		},
 	} {
@@ -546,24 +548,28 @@ func TestReplaceMergedScanCapturesPartitionDependency(t *testing.T) {
 			}
 
 			// ProbeSource.Name is filled by column remapping to the qualified
-			// main-table column. The old partition key (payload) must appear.
+			// main-table column. Both compound-key dependencies must appear.
 			var sawPayload bool
+			var sawID bool
 			var sawRowID bool
 			var sawPK bool
 			for _, name := range capturedNames {
 				switch {
 				case strings.HasSuffix(name, ".payload"):
 					sawPayload = true
+				case strings.HasSuffix(name, ".id"):
+					sawID = true
+					sawPK = true
 				case strings.HasSuffix(name, "."+catalog.Row_ID):
 					sawRowID = true
-				case strings.HasSuffix(name, ".id"):
-					sawPK = true
 				}
 			}
 			require.True(t, sawPK, "capture list must keep the old PK, got %v", capturedNames)
 			require.True(t, sawRowID, "capture list must keep the old Row_ID, got %v", capturedNames)
 			require.True(t, sawPayload,
-				"merged REPLACE scan must capture the old partition key (payload); capture names=%v", capturedNames)
+				"merged REPLACE scan must capture the old payload dependency; capture names=%v", capturedNames)
+			require.True(t, sawID,
+				"merged REPLACE scan must capture the old id dependency; capture names=%v", capturedNames)
 
 			// The parent UpdateCtx.PartitionCols carry deleteKey = if(..., oldKey)
 			// and insertKey = if(..., oldKey). The oldKey branches reference the
@@ -582,8 +588,8 @@ func TestReplaceMergedScanCapturesPartitionDependency(t *testing.T) {
 				}
 			}
 			require.NotNil(t, parent, "REPLACE must emit the parent MULTI_UPDATE")
-			require.Len(t, parent.PartitionCols, 2,
-				"conflict DML must delete from the old partition and insert into the new partition")
+			require.Len(t, parent.PartitionCols, 4,
+				"compound conflict DML must carry each old dependency for delete and each new dependency for insert")
 
 			// Walk every PROJECT expression that feeds the shared sink; the
 			// deleteKey/insertKey trees live there and must reference a captured

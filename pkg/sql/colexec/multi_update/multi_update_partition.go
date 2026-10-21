@@ -17,6 +17,7 @@ package multi_update
 import (
 	"bytes"
 	"math"
+	"sort"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -436,6 +437,9 @@ func (op *PartitionMultiUpdate) writePartitionIndexTarget(
 			return moerr.NewInvalidInput(proc.Ctx, "partition fulltext route is NULL")
 		}
 		ordinal, ok := partitionRouteOrdinal(routeVec, row)
+		if ok && ordinal == -1 {
+			return moerr.NewInvalidInput(proc.Ctx, "Table has no partition for value from column_list")
+		}
 		if !ok || ordinal < 0 || ordinal >= len(groups) {
 			return moerr.NewInvalidInputf(proc.Ctx, "invalid partition fulltext route ordinal %d", ordinal)
 		}
@@ -584,15 +588,19 @@ func (op *PartitionMultiUpdate) writePartitionKeyUpdate(
 	input *batch.Batch,
 ) error {
 	mainCtx := target.contexts[0]
+	if len(mainCtx.PartitionCols)%2 != 0 {
+		return moerr.NewInternalError(proc.Ctx, "partition update route columns must contain delete and insert groups")
+	}
+	routeWidth := len(mainCtx.PartitionCols) / 2
 	deleteContexts := clonePartitionPhaseContexts(target.contexts, true)
 	if err := op.writePartitionPhase(
-		proc, target, deleteContexts, mainCtx.PartitionCols[0], input,
+		proc, target, deleteContexts, mainCtx.PartitionCols[:routeWidth], input,
 	); err != nil {
 		return err
 	}
 	insertContexts := clonePartitionPhaseContexts(target.contexts, false)
 	return op.writePartitionPhase(
-		proc, target, insertContexts, mainCtx.PartitionCols[1], input,
+		proc, target, insertContexts, mainCtx.PartitionCols[routeWidth:], input,
 	)
 }
 
@@ -648,14 +656,123 @@ func prunePartitionUpdate(proc *process.Process, input *batch.Batch, meta partit
 	return partitionprune.Prune(proc, input, meta, partitionCol)
 }
 
+func prunePartitionUpdateByColumns(
+	proc *process.Process,
+	input *batch.Batch,
+	meta partition.PartitionMetadata,
+	partitionCols []int,
+) (partitionservice.PruneResult, error) {
+	rowIDFirst := len(input.Vecs) > 0 && input.Vecs[0] != nil && input.Vecs[0].GetType().Oid == types.T_Rowid
+	sourcePositions := partitionExprColumnPositions(meta, rowIDFirst)
+	if len(sourcePositions) != len(partitionCols) {
+		return partitionservice.PruneResult{}, moerr.NewInternalError(proc.Ctx, "partition expression dependencies do not match route columns")
+	}
+	columnMap := make(map[int32]int32, len(sourcePositions))
+	for i, sourcePos := range sourcePositions {
+		columnMap[sourcePos] = int32(partitionCols[i])
+	}
+
+	remappedMeta := meta
+	remappedMeta.Partitions = append([]partition.Partition(nil), meta.Partitions...)
+	for i := range remappedMeta.Partitions {
+		var expr *plan.Expr
+		if rowIDFirst {
+			expr = remappedMeta.Partitions[i].ExprWithRowID
+		} else {
+			expr = remappedMeta.Partitions[i].Expr
+		}
+		if expr == nil {
+			return partitionservice.PruneResult{}, moerr.NewInternalError(proc.Ctx, "partition expression is missing for routed update")
+		}
+		expr = proto.Clone(expr).(*plan.Expr)
+		if !remapPartitionExprColumns(expr, columnMap) {
+			return partitionservice.PruneResult{}, moerr.NewInternalError(proc.Ctx, "partition expression references an unmapped route column")
+		}
+		if rowIDFirst {
+			remappedMeta.Partitions[i].ExprWithRowID = expr
+		} else {
+			remappedMeta.Partitions[i].Expr = expr
+		}
+	}
+	return partitionprune.Prune(proc, input, remappedMeta, -1)
+}
+
+func partitionExprColumnPositions(meta partition.PartitionMetadata, rowIDFirst bool) []int32 {
+	positions := make(map[int32]struct{})
+	var collect func(*plan.Expr)
+	collect = func(expr *plan.Expr) {
+		if expr == nil {
+			return
+		}
+		switch e := expr.Expr.(type) {
+		case *plan.Expr_Col:
+			positions[e.Col.ColPos] = struct{}{}
+		case *plan.Expr_F:
+			for _, arg := range e.F.Args {
+				collect(arg)
+			}
+		case *plan.Expr_List:
+			for _, item := range e.List.List {
+				collect(item)
+			}
+		}
+	}
+	for _, p := range meta.Partitions {
+		if rowIDFirst {
+			collect(p.ExprWithRowID)
+		} else {
+			collect(p.Expr)
+		}
+	}
+	result := make([]int32, 0, len(positions))
+	for pos := range positions {
+		result = append(result, pos)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result
+}
+
+func remapPartitionExprColumns(expr *plan.Expr, columnMap map[int32]int32) bool {
+	if expr == nil {
+		return true
+	}
+	switch e := expr.Expr.(type) {
+	case *plan.Expr_Col:
+		pos, ok := columnMap[e.Col.ColPos]
+		if !ok {
+			return false
+		}
+		e.Col.ColPos = pos
+	case *plan.Expr_F:
+		for _, arg := range e.F.Args {
+			if !remapPartitionExprColumns(arg, columnMap) {
+				return false
+			}
+		}
+	case *plan.Expr_List:
+		for _, item := range e.List.List {
+			if !remapPartitionExprColumns(item, columnMap) {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (op *PartitionMultiUpdate) writePartitionPhase(
 	proc *process.Process,
 	target *partitionUpdateTarget,
 	contexts []*MultiUpdateCtx,
-	partitionCol int,
+	partitionCols []int,
 	input *batch.Batch,
 ) error {
-	res, err := prunePartitionUpdate(proc, input, target.meta, int32(partitionCol))
+	var res partitionservice.PruneResult
+	var err error
+	if len(partitionCols) == 1 {
+		res, err = prunePartitionUpdate(proc, input, target.meta, int32(partitionCols[0]))
+	} else {
+		res, err = prunePartitionUpdateByColumns(proc, input, target.meta, partitionCols)
+	}
 	if err != nil {
 		return err
 	}
