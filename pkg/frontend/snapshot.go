@@ -2141,6 +2141,44 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 		case *tree.BinaryExpr:
 			walkExpr(e.Left)
 			walkExpr(e.Right)
+		case *tree.UnaryExpr:
+			walkExpr(e.Expr)
+		case *tree.ComparisonExpr:
+			walkExpr(e.Left)
+			walkExpr(e.Right)
+			walkExpr(e.Escape)
+		case *tree.AndExpr:
+			walkExpr(e.Left)
+			walkExpr(e.Right)
+		case *tree.XorExpr:
+			walkExpr(e.Left)
+			walkExpr(e.Right)
+		case *tree.OrExpr:
+			walkExpr(e.Left)
+			walkExpr(e.Right)
+		case *tree.NotExpr:
+			walkExpr(e.Expr)
+		case *tree.IsNullExpr:
+			walkExpr(e.Expr)
+		case *tree.IsNotNullExpr:
+			walkExpr(e.Expr)
+		case *tree.CastExpr:
+			walkExpr(e.Expr)
+		case *tree.BitCastExpr:
+			walkExpr(e.Expr)
+		case *tree.Tuple:
+			for _, item := range e.Exprs {
+				walkExpr(item)
+			}
+		case *tree.CaseExpr:
+			walkExpr(e.Expr)
+			for _, when := range e.Whens {
+				walkExpr(when.Cond)
+				walkExpr(when.Val)
+			}
+			walkExpr(e.Else)
+		case *tree.IntervalExpr:
+			walkExpr(e.Expr)
 		case *tree.FuncExpr:
 			for _, arg := range e.Exprs {
 				walkExpr(arg)
@@ -2190,6 +2228,9 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 				}
 			}
 			walkSelect(s.Select)
+			for _, item := range s.OrderBy {
+				walkExpr(item.Expr)
+			}
 		case *tree.ParenSelect:
 			walkSelect(s.Select)
 		case *tree.UnionClause:
