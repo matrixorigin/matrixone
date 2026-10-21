@@ -2,6 +2,10 @@ package io.matrixone.connect.eos;
 
 import com.mysql.cj.conf.ConnectionUrl;
 import com.mysql.cj.conf.HostInfo;
+import java.nio.ByteBuffer;
+import java.nio.CharBuffer;
+import java.nio.charset.CharacterCodingException;
+import java.nio.charset.CodingErrorAction;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import java.util.Properties;
@@ -19,14 +23,14 @@ final class SinkSettings {
 
     private SinkSettings(String jdbcUrl, String jdbcUser, String jdbcPassword,
                          int connectTimeoutMs, int socketTimeoutMs,
-                         String scope, int batchSize, String bootstrap) {
+                         String scope, byte[] scopeBytes, int batchSize, String bootstrap) {
         this.jdbcUrl = jdbcUrl;
         this.jdbcUser = jdbcUser;
         this.jdbcPassword = jdbcPassword;
         this.connectTimeoutMs = connectTimeoutMs;
         this.socketTimeoutMs = socketTimeoutMs;
         this.scope = scope;
-        this.scopeBytes = scope.getBytes(StandardCharsets.UTF_8);
+        this.scopeBytes = scopeBytes;
         this.batchSize = batchSize;
         this.bootstrap = bootstrap;
     }
@@ -55,18 +59,32 @@ final class SinkSettings {
             throw new IllegalArgumentException("missing " + AtomicSinkConnector.JDBC_PASSWORD);
         }
         String scope = required(props, AtomicSinkConnector.SCOPE);
-        int scopeLength = scope.getBytes(StandardCharsets.UTF_8).length;
-        if (scopeLength > 128) {
+        byte[] scopeBytes = encodeScope(scope);
+        if (scopeBytes.length > 128) {
             throw new IllegalArgumentException("mo.scope exceeds 128 UTF-8 bytes");
         }
         int batch = Integer.parseInt(props.getOrDefault(AtomicSinkConnector.BATCH_SIZE, "64"));
         if (batch < 1 || batch > 1000) {
             throw new IllegalArgumentException("mo.batch.size must be 1..1000");
         }
-        SinkSettings settings = new SinkSettings(url, user, password, connectTimeout, socketTimeout, scope, batch,
+        SinkSettings settings = new SinkSettings(url, user, password, connectTimeout, socketTimeout, scope, scopeBytes, batch,
             required(props, AtomicSinkConnector.BOOTSTRAP));
         settings.requireEffectiveJdbcDeadlines();
         return settings;
+    }
+
+    private static byte[] encodeScope(String scope) {
+        try {
+            ByteBuffer encoded = StandardCharsets.UTF_8.newEncoder()
+                .onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT)
+                .encode(CharBuffer.wrap(scope));
+            byte[] bytes = new byte[encoded.remaining()];
+            encoded.get(bytes);
+            return bytes;
+        } catch (CharacterCodingException error) {
+            throw new IllegalArgumentException("mo.scope contains malformed Unicode", error);
+        }
     }
 
     Properties jdbcProperties() {
