@@ -10778,7 +10778,11 @@ func InitGeneralTenant(ctx context.Context, bh BackgroundExec, ses *Session, ca 
 		if rtnErr != nil {
 			return rtnErr
 		}
-		rtnErr = createTablesInInformationSchemaOfGeneralTenant(newTenantCtx, bh, ses.GetService())
+		protocolVersion, protocolErr := protocolVersionForTenantInitializationWithContext(ctx, ses.GetService(), ses.GetProc())
+		if protocolErr != nil {
+			return protocolErr
+		}
+		rtnErr = createTablesInInformationSchemaOfGeneralTenantWithProtocol(newTenantCtx, bh, protocolVersion)
 		if rtnErr != nil {
 			return rtnErr
 		}
@@ -11154,7 +11158,24 @@ func createTablesInSystemOfGeneralTenant(ctx context.Context, bh BackgroundExec,
 }
 
 // createTablesInInformationSchemaOfGeneralTenant creates the database information_schema and the views or tables.
-func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh BackgroundExec, service string) error {
+func createTablesInInformationSchemaOfGeneralTenant(
+	ctx context.Context,
+	bh BackgroundExec,
+	service string,
+	proc *process.Process,
+) error {
+	protocolVersion, err := protocolVersionForTenantInitializationWithContext(ctx, service, proc)
+	if err != nil {
+		return err
+	}
+	return createTablesInInformationSchemaOfGeneralTenantWithProtocol(ctx, bh, protocolVersion)
+}
+
+func createTablesInInformationSchemaOfGeneralTenantWithProtocol(
+	ctx context.Context,
+	bh BackgroundExec,
+	protocolVersion int64,
+) error {
 	start := time.Now()
 	defer func() {
 		v2.CreateTablesInInfoSchemaDurationHistogram.Observe(time.Since(start).Seconds())
@@ -11164,21 +11185,18 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 	// with new tenant
 	// TODO: when we have the auto_increment column, we need new strategy.
 
-	var err error
-	protocol := protocolVersionForTenantInitialization(service)
-	if protocol >= defines.MORPCVersion100 {
-		// A new CN can already speak a newer protocol while an older CN still
-		// serves the cluster. Do not persist a View using a function that peer
-		// cannot plan.
+	// COLUMNS keeps its independent protocol contract even when VIEWS falls back.
+	if protocolVersion >= defines.MORPCVersion100 {
 		requiredProtocol := defines.MORPCVersion100
-		if protocol >= defines.MORPCVersion109 {
+		if protocolVersion >= defines.MORPCVersion109 {
 			requiredProtocol = defines.MORPCVersion109
 		}
 		if err := requireCommonViewColumnsProtocol(ctx, bh, requiredProtocol); err != nil {
 			return err
 		}
 	}
-	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocol)
+	informationSchemaTables := sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion)
+	var err error
 	sqls := make([]string, 0, len(informationSchemaTables)+len(sysview.InitMysqlSysTables)+4)
 
 	sqls = append(sqls, "use information_schema;")
@@ -11194,6 +11212,82 @@ func createTablesInInformationSchemaOfGeneralTenant(ctx context.Context, bh Back
 		}
 	}
 	return err
+}
+
+func protocolVersionForTenantInitialization(service string, proc *process.Process) (int64, error) {
+	return protocolVersionForTenantInitializationWithContext(context.Background(), service, proc)
+}
+
+func protocolVersionForTenantInitializationWithContext(
+	ctx context.Context,
+	service string,
+	proc *process.Process,
+) (int64, error) {
+	// Account creation must remain available while the cluster is rolling out
+	// the parser-derived VIEWS functions. The v109 fallback preserves the
+	// native COLUMNS contract; an admitted v118 predecessor also retains TABLES.
+	// Bootstrap maintenance revisits the final-version account row once the
+	// VIEWS capability becomes available.
+	legacyVersion := defines.MORPCMinVersion
+	predecessorViewsVersion := defines.MORPCVersion109
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return legacyVersion, nil
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return legacyVersion, nil
+	}
+	version, ok := value.(int64)
+	if !ok {
+		return legacyVersion, nil
+	}
+	if version < defines.MORPCVersion126 {
+		// Preserve every pre-existing protocol-specific information_schema
+		// contract. Only the new VIEWS function needs the predecessor
+		// fallback; promoting an older known protocol would also install newer
+		// TABLES/COLUMNS and role-closure definitions.
+		return version, nil
+	}
+	// Admission for TABLES v118 and VIEWS v126 is independent. Keep TABLES
+	// when both its local authoring fence and the current peers support it.
+	floorValue, hasFloor := rt.GetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor)
+	floor, validFloor := floorValue.(int64)
+	fallbackProtocol := func() (int64, error) {
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		if hasFloor && (!validFloor || floor < defines.MORPCVersion118) {
+			return predecessorViewsVersion, nil
+		}
+		supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion118)
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		if err == nil && supported {
+			return defines.MORPCVersion118, nil
+		}
+		return predecessorViewsVersion, nil
+	}
+	// A missing key retains standalone runtimes' existing capability behavior.
+	if hasFloor && (!validFloor || floor < defines.MORPCVersion126) {
+		return fallbackProtocol()
+	}
+	supported, err := compile.AllCNsSupportProtocolWithContext(ctx, proc, defines.MORPCVersion126)
+	if err != nil {
+		// Capability discovery is deliberately best-effort for account
+		// creation. Do not turn a temporary inventory/RPC failure into a
+		// failed CREATE ACCOUNT, but preserve cancellation of the owning
+		// process so shutdown and request cancellation still propagate.
+		if ctx.Err() != nil {
+			return 0, ctx.Err()
+		}
+		return fallbackProtocol()
+	}
+	if !supported {
+		return fallbackProtocol()
+	}
+	return version, nil
 }
 
 func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec, requiredProtocol int64) error {
@@ -11215,22 +11309,6 @@ func requireCommonViewColumnsProtocol(ctx context.Context, bh BackgroundExec, re
 		return err
 	}
 	return versions.CheckProtocolVersionResponse(encoded, requiredProtocol)
-}
-
-func protocolVersionForTenantInitialization(service string) int64 {
-	rt := moruntime.ServiceRuntime(service)
-	if rt == nil {
-		return defines.MORPCMinVersion
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	if !ok {
-		return defines.MORPCMinVersion
-	}
-	version, ok := value.(int64)
-	if !ok {
-		return defines.MORPCMinVersion
-	}
-	return version
 }
 
 // createSubscription insert records into mo_subs of To-All-Publications
@@ -12532,6 +12610,10 @@ func doInterpretCall(
 		}
 		defer freeStatements(stmt)
 
+		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
+		if err != nil {
+			return nil, err
+		}
 		err = interpreter.ExecuteSp(stmt[0], dbName, bg)
 		if err != nil {
 			return nil, err
@@ -12540,6 +12622,10 @@ func doInterpretCall(
 		return interpreter.GetResult(), nil
 
 	case "starlark":
+		interpreter.ctx, err = enterSQLProcedure(ctx, ses, dbName, string(call.Name.Name.ObjectName))
+		if err != nil {
+			return nil, err
+		}
 		err = interpreter.ExecuteStarlark(spBody, dbName, bg)
 		if err != nil {
 			return nil, err

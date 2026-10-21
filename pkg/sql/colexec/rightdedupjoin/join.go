@@ -368,7 +368,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 			switch ap.OnDuplicateAction {
 			case plan.Node_FAIL:
 				reportDup := false
-				if isPessimistic {
+				// Report snapshot-visible versioned-key conflicts while the
+				// logical input is available, including optimistic execution.
+				if isPessimistic || len(ap.DedupKeyExprs) > 0 {
 					reportDup = v <= ctr.groupCount
 				} else {
 					if v <= ctr.buildGroupCount {
