@@ -197,7 +197,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 		query.StmtType = plan.Query_INSERT
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)
+		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, false)
 		if err != nil {
 			return nil, err
 		}

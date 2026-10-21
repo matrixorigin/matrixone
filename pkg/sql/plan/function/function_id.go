@@ -885,7 +885,10 @@ const (
 
 	TIMESTAMPADD_SECOND_INTERVAL = 601
 
-	FUNCTION_END_NUMBER = 602
+	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
+	LOAD_FK_IGNORE_CHECK = 602
+
+	FUNCTION_END_NUMBER = 603
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1083,6 +1086,7 @@ var functionIdRegister = map[string]int32{
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"_check_constraint_assert":       CHECK_CONSTRAINT_ASSERT,
+	"_load_fk_ignore_check":          LOAD_FK_IGNORE_CHECK,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,
