@@ -188,8 +188,8 @@ func TestCollectBackupTableIDFilesCleansOnlyUnpublishedIndexes(t *testing.T) {
 			ctx := t.Context()
 			base := newBackupMemoryFS(t, "unpublished-history")
 			defer base.Close(context.Background())
-			var locations objectio.LocationSlice
-			var names []string
+			locations := make(objectio.LocationSlice, 0, 3*objectio.LocationLen)
+			names := make([]string, 0, 2)
 			for range 2 {
 				objectID := objectio.NewObjectid()
 				name := objectio.BuildObjectNameWithObjectID(&objectID)
