@@ -80,6 +80,11 @@ func m0PlanColumnSupportsAppend(col *plan.ColDef) bool {
 }
 
 var (
+	activeM0ReadShards = func(
+		_ context.Context, _ *plan.TableDef, data engine.RelData, count int, _ bool,
+	) []engine.RelData {
+		return data.Split(count)
+	}
 	activeM0CNAddColumn = func(
 		*txnTable,
 		context.Context,

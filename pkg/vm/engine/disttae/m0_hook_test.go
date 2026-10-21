@@ -24,8 +24,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestM0AppendBaseValidatesCompletePlanDomain(t *testing.T) {
-	table := &plan.TableDef{
+func m0TestAppendTableDef() *plan.TableDef {
+	return &plan.TableDef{
 		Version: 1,
 		Cols: []*plan.ColDef{
 			{Name: "a", Seqnum: 0},
@@ -41,6 +41,10 @@ func TestM0AppendBaseValidatesCompletePlanDomain(t *testing.T) {
 			},
 		},
 	}
+}
+
+func TestM0AppendBaseValidatesCompletePlanDomain(t *testing.T) {
+	table := m0TestAppendTableDef()
 	previous := activeM0Enabled
 	activeM0Enabled = true
 	t.Cleanup(func() { activeM0Enabled = previous })

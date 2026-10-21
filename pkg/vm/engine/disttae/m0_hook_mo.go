@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/readutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"go.uber.org/zap"
 )
@@ -38,6 +39,29 @@ func init() {
 	activeM0Enabled = true
 	activeM0CNAddColumn = buildM0CNAddColumn
 	activeM0ReadObject = proveM0ReadObject
+	activeM0ReadShards = splitM0ReadShards
+}
+
+func splitM0ReadShards(
+	_ context.Context, table *plan.TableDef, data engine.RelData, count int, ordered bool,
+) []engine.RelData {
+	blocks, materialized := data.(*readutil.BlockListRelData)
+	_, appendDomain := m0AppendBaseFromPlan(table)
+	if ordered || !appendDomain || !materialized || count <= 1 || data.DataCnt() <= count {
+		return data.Split(count)
+	}
+	shards := make([]engine.RelData, count)
+	for i := range shards {
+		shards[i] = blocks.BuildEmptyRelData((blocks.DataCnt() + count - 1) / count)
+		_ = shards[i].AttachTombstones(blocks.GetTombstones())
+	}
+	// Contiguous history can place all surviving rows in only the last readers.
+	// Striping preserves every block and keeps a leading memory block in reader 0.
+	for i := 0; i < blocks.DataCnt(); i++ {
+		block := blocks.GetBlockInfo(i)
+		shards[i%count].AppendBlockInfo(&block)
+	}
+	return shards
 }
 
 func proveM0ReadObject(

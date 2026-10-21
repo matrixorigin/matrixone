@@ -2857,7 +2857,7 @@ func (tbl *txnTable) BuildReaders(
 	}
 
 	def := tbl.GetTableDef(ctx)
-	shards := relData.Split(newNum)
+	shards := activeM0ReadShards(ctx, def, relData, newNum, orderBy)
 
 	preparedHint, mainFilter, owned, err := prepareMembershipFilter(
 		filterHint,
