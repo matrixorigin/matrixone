@@ -44,13 +44,12 @@ import (
 // from. A DELETE of that inherited row in the same range is the
 // insert-then-delete shape filterBatch Case 2.2 cancels as "no net change", which
 // loses the tombstone the copied entry needs to be shadowed.
-// iscp.collectChangesCtxForJobs opts exactly that window into
-// engine.WithCollectChangesKeepTrailingDeletes.
+// iscp.collectChangesCtxForJobs opts index consumers into
+// engine.WithCollectChangesKeepTrailingDeletes, including this range.
 //
-// The steady-state controls are the bound the append-only cuVS sinks rely on:
-// once a range is durable, an insert-then-delete pair cancels again, so ordinary
-// churn emits no extra durable delete, while a delete whose row committed before
-// the range is delivered either way.
+// The steady-state controls show what each mode delivers for a later range:
+// the default cancels insert-then-delete churn; the index mode keeps its last
+// delete. A delete whose row committed before the range is delivered either way.
 func TestCollectChangesSeedRangeDeliversInheritedDelete(t *testing.T) {
 	catalog.SetupDefines("")
 
@@ -193,11 +192,14 @@ func TestCollectChangesSeedRangeDeliversInheritedDelete(t *testing.T) {
 		require.Equal(t, 1, deletes, "a delete-only range is delivered with the option off and on")
 	}
 
-	// Steady-state churn stays bounded: the pair cancels again once the seed range
-	// is durable, so no extra durable delete reaches an append-only sink.
+	// The default mode cancels steady-state insert-then-delete churn.
 	inserts, deletes = readRange(tsAfterInheritedDelete, tsAfterChurn, false)
 	require.Zero(t, inserts)
 	require.Zero(t, deletes, "steady-state insert-then-delete churn must keep cancelling out")
+
+	inserts, deletes = readRange(tsAfterInheritedDelete, tsAfterChurn, true)
+	require.Zero(t, inserts)
+	require.Equal(t, 1, deletes, "the index mode keeps the last delete in later ranges too")
 
 	inserts, deletes = readRange(tsAfterReappend, tsAfterLaterDelete, false)
 	require.Zero(t, inserts)

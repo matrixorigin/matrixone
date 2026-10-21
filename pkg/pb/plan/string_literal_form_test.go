@@ -21,6 +21,41 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
+	for _, tc := range []struct {
+		id   int64
+		want bool
+	}{{590, false}, {591, false}, {592, false}, {593, false}, {594, false}, {595, false}, {596, false}, {597, false}, {598, false}, {599, false}, {600, false}, {601, false}, {602, false}, {603, true}, {604, true}, {605, false}} {
+		t.Run(fmt.Sprintf("function_%d", tc.id), func(t *testing.T) {
+			// Identity, not the spelling or the surrounding expression shape,
+			// controls the floor. A subquery child exercises nested detection.
+			expr := &Expr{Expr: &Expr_Sub{Sub: &SubqueryRef{Child: &Expr{Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: tc.id << 32, ObjName: "mo_view_definition"},
+			}}}}}}
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, features.ViewMetadataFunctions)
+			require.Equal(t, tc.id == 598, features.CalendarIntervalNormalization)
+			require.Equal(t, tc.id == 600, features.TableCollationFunction)
+			require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
+			require.Equal(t, tc.id == 602, features.LoadFKIgnoreCheck)
+			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602, features.Any())
+		})
+	}
+	for name, expr := range map[string]*Expr{
+		"dependent_program": {Expr: &Expr_Dependent{Dependent: &DependentExpr{ProgramId: 1}}},
+		"correlation_slot":  {Expr: &Expr_Slot{Slot: &CorrelationSlot{ProgramId: 1}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			features, err := RequiredRemoteExpressionFeatures(expr)
+			require.NoError(t, err)
+			require.True(t, features.DependentPrograms)
+			require.True(t, features.Any(), "the independent v119 capability must survive the VIEWS gate")
+			require.False(t, features.ViewMetadataFunctions)
+		})
+	}
+}
+
 func TestValidateStringLiteralFormsAfterWireDecode(t *testing.T) {
 	original := &Expr{Expr: &Expr_Lit{Lit: &Literal{
 		Value:       &Literal_Sval{Sval: "x"},
