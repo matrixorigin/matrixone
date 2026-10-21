@@ -1469,9 +1469,9 @@ func (backSes *backSession) GetSessionSysVar(name string) (interface{}, error) {
 			return backSes.parentBackSession.GetSessionSysVar(name)
 		}
 		return int64(process.WarningDiagnosticDefaultRetentionLimit), nil
-	case "experimental_hnsw_index":
-		// Procedure DDL runs through a frontend back session and must see
-		// the caller's feature gate rather than the executor default.
+	case "experimental_hnsw_index", "mo_pk_check_by_cn":
+		// Procedure statements run through frontend back sessions and must
+		// see the owning connection's current planning settings.
 		if backSes.upstream != nil {
 			return backSes.upstream.GetSessionSysVar(name)
 		}

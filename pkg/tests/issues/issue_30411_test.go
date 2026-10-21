@@ -136,6 +136,72 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 				require.Zero(t, count(t, "switch_load"), "prepared INSERT keeps validation and rollback across SETs")
 			}
 		})
+		t.Run("procedure session policy and rollback", func(t *testing.T) {
+			defer func() { _, _ = conn.ExecContext(ctx, "set session mo_pk_check_by_cn=off") }()
+			exec(t, "create table procedure_load(id bigint primary key,name varchar(20))")
+			// Reuse fixed procedure definitions across SETs. Only the owning
+			// connection's current policy may determine LOAD validation.
+			procedure := func(name, data, declarations string) []string {
+				query := fmt.Sprintf("load data inline format='csv', data='%s' into table procedure_load fields terminated by ','", data)
+				exec(t, "create procedure "+name+"() 'begin "+declarations+strings.ReplaceAll(query, "'", "''")+"; end'")
+				exec(t, "create procedure outer_"+name+"() 'begin call "+name+"(); end'")
+				return []string{query, "call " + name + "()", "call outer_" + name + "()"}
+			}
+			duplicate := procedure("load_input_duplicates", "1,a\n1,b\n", "")
+			modes := []string{"direct", "call", "nested call"}
+			for round, on := range []bool{true, false, true} {
+				exec(t, fmt.Sprintf("set session mo_pk_check_by_cn=%t", on))
+				for i, query := range duplicate {
+					t.Run(fmt.Sprintf("round=%d/on=%t/%s", round, on, modes[i]), func(t *testing.T) {
+						exec(t, "truncate table procedure_load")
+						if on {
+							requireDuplicate(t, query)
+							require.Zero(t, count(t, "procedure_load"), "failed LOAD must not commit duplicate rows")
+						} else {
+							exec(t, query)
+							require.Equal(t, 2, count(t, "procedure_load"), "OFF with TN OFF bypasses CN validation at every call depth")
+						}
+					})
+				}
+			}
+			conflicts := procedure("load_target_conflict", "2,new\n1,conflict\n", "")
+			valid := procedure("load_valid", "2,new\n3,new\n", "")
+			for i, query := range conflicts {
+				t.Run("target conflict and recovery/"+modes[i], func(t *testing.T) {
+					exec(t, "truncate table procedure_load")
+					exec(t, "insert into procedure_load values(1,'old')")
+					requireDuplicate(t, query)
+					require.Equal(t, 1, count(t, "procedure_load"), "target conflict must roll back all incoming rows")
+					var payload string
+					require.NoError(t, conn.QueryRowContext(ctx, "select name from procedure_load where id=1").Scan(&payload))
+					require.Equal(t, "old", payload)
+					exec(t, valid[i])
+					require.Equal(t, 3, count(t, "procedure_load"), "same call depth remains usable after rejection")
+				})
+			}
+			for i, declaration := range []string{
+				"declare mo_pk_check_by_cn int; ",
+				"declare mo_pk_check_by_cn int default 0; ",
+				"declare mo_pk_check_by_cn int default 1; ",
+			} {
+				queries := procedure(fmt.Sprintf("load_local_collision_%d", i), "1,a\n1,b\n", declaration)
+				for _, on := range []bool{true, false} {
+					exec(t, fmt.Sprintf("set session mo_pk_check_by_cn=%t", on))
+					for depth, query := range queries[1:] {
+						t.Run(fmt.Sprintf("local collision=%d/on=%t/%s", i, on, modes[depth+1]), func(t *testing.T) {
+							exec(t, "truncate table procedure_load")
+							if on {
+								requireDuplicate(t, query)
+								require.Zero(t, count(t, "procedure_load"))
+							} else {
+								exec(t, query)
+								require.Equal(t, 2, count(t, "procedure_load"))
+							}
+						})
+					}
+				}
+			}
+		})
 		// The existing correctness suite exercises the explicitly enabled policy.
 		exec(t, "set session mo_pk_check_by_cn=on")
 		exec(t, "create table t(id bigint primary key, name varchar(256))")
