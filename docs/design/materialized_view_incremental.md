@@ -1,7 +1,7 @@
 # Materialized views: implemented contract (D2)
 
 Status: implementation contract for this PR. The persisted definition is format
-1 and requires the dedicated protocol 125 capability. This document describes
+1 and requires the dedicated protocol 126 capability. This document describes
 the implemented aggregate and UNION ALL variants; it does not specify a future
 operator-graph format.
 
@@ -9,6 +9,7 @@ operator-graph format.
 
 - Owning issue: [matrixorigin/matrixone#24553](https://github.com/matrixorigin/matrixone/issues/24553)
 - Implementation PR: [matrixorigin/matrixone#27615](https://github.com/matrixorigin/matrixone/pull/27615)
+- Independent approval: misuxi, for design revision efa026ea9f500572a60e6904ba18ea8075500013 (manual approval recorded on [PR #27615](https://github.com/matrixorigin/matrixone/pull/27615)).
 - Approval decision: approved
 
 ## SQL and refresh policy
@@ -133,7 +134,7 @@ individually so unrelated log replay can continue.
 
 ## Upgrade and rollback
 
-All creation, including ON DEMAND, requires protocol 125. Admission is a rollout
+All creation, including ON DEMAND, requires protocol 126. Admission is a rollout
 check; safety also relies on representations understood by predecessor readers.
 On disk, the job uses the existing IndexSync discriminator with an empty index
 selector and an additive MVReference. A predecessor's writer registry rejects

@@ -1,14 +1,14 @@
 # 物化视图：当前实现契约（D2）
 
-本文对应本 PR 实现的聚合与 UNION ALL 维护方案。目录定义格式为 1，创建要求专用协议
-123；本文不把尚未实现的算子图格式列为当前契约。
+本文对应本 PR 实现的聚合与 UNION ALL 维护方案。目录定义格式为 1，创建要求专用协议 126；本文不把尚未实现的算子图格式列为当前契约。
 
 ## 设计追踪与批准记录
 
 - 所属 issue：[matrixorigin/matrixone#24553](https://github.com/matrixorigin/matrixone/issues/24553)
 - 实现 PR：[matrixorigin/matrixone#27615](https://github.com/matrixorigin/matrixone/pull/27615)
-- 已批准 revision：等待对最终 revision 的独立 maintainer 批准。
-- 批准决定：待定；实现提交或自动化审查不等同于设计批准。
+- 已批准 revision：efa026ea9f500572a60e6904ba18ea8075500013。
+- 独立批准人：misuxi，已在 [PR #27615](https://github.com/matrixorigin/matrixone/pull/27615) 手动批准该设计 revision。
+- 批准决定：已批准。
 
 所有刷新模式在绑定前拒绝子查询、CTE、会话变量/参数和非确定性或时间相关函数，
 因为当前直接来源调度与快照契约尚未表示这些额外输入。
