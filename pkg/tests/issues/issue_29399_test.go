@@ -50,11 +50,15 @@ func TestIssue29399TableRestoreRetainsDatabaseOwnership(t *testing.T) {
 		execSQLRequire(t, ctx, sys, "create account "+account+" admin_name 'admin' identified by '111'")
 		admin := open(account + "#admin#accountadmin")
 		defer func() {
-			cleanup, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			execSQLRequire(t, cleanup, admin, "drop snapshot if exists issue_29399_owner_scope_s")
-			execSQLRequire(t, cleanup, admin, "drop pitr if exists issue_29399_owner_scope_p")
-			execSQLRequire(t, cleanup, sys, "drop account if exists "+account)
+			for _, statement := range []string{"drop snapshot if exists issue_29399_owner_scope_s", "drop pitr if exists issue_29399_owner_scope_p"} {
+				cleanup, stop := context.WithTimeout(context.Background(), issueCleanupOperationTimeout)
+				_, err := admin.ExecContext(cleanup, statement)
+				stop()
+				if err != nil {
+					t.Errorf("cleanup %s: %v", statement, err)
+				}
+			}
+			require.NoError(t, cleanupIssueAccounts(sys, account))
 		}()
 		for _, stmt := range []string{
 			"create role builder", "create user db_creator identified by '111' default role builder",
