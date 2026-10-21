@@ -23,7 +23,9 @@ import (
 )
 
 func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
-	RunBaseClusterTests(t, func(c Cluster) {
+	// Reuse the same fixture as the surrounding SQL regressions. A second,
+	// two-CN shared fixture cannot be admitted while that cluster is active.
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		admin := openIcebergTestDB(t, c)
 		defer admin.Close()
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
