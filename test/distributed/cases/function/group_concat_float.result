@@ -93,4 +93,13 @@ select g as generated_text, e as explicit_text, r as right_text, rep as repeat_t
 generated_text    explicit_text    right_text    repeat_text    coalesce_text    if_text    case_text    ifnull_text    default_text
 0.0000000000000012345678901234568    0.000000000000001234567890123456    8901234568    0.00000000000000123456789012345680.0000000000000012345678901234568    0.0000000000000012345678901234568    fallback        0.0000000000000012345678901234568    [0.0000000000000012345678901234568]
 NULL    NULL    NULL    NULL        fallback        fallback    []
+create table float_composed (id int primary key, a double, b int, s set('a','b'), g varchar(200) generated always as (concat(a,format(b,2))) stored, f varchar(200) generated always as (concat(a,find_in_set('b',s))) stored, n varchar(200) generated always as (concat(a,format(concat(a),2))) stored);
+insert into float_composed (id,a,b,s) values (1,-1.2345678901234567e-15,1,'a,b');
+select g = '-0.00000000000000123456789012345681.00' as format_sibling, f = '-0.00000000000000123456789012345682' as set_sibling, n = concat(cast(a as char),format(concat(a),2)) as nested_format from float_composed;
+format_sibling    set_sibling    nested_format
+1    1    1
+update float_composed set a = 1.2345678901234567e-15;
+select g = '0.00000000000000123456789012345681.00' as format_sibling, f = '0.00000000000000123456789012345682' as set_sibling, n = concat(cast(a as char),format(concat(a),2)) as nested_format from float_composed;
+format_sibling    set_sibling    nested_format
+1    1    1
 drop database group_concat_float_28660;

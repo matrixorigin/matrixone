@@ -87,7 +87,7 @@ func TestLegacyFloatStringRefinements(t *testing.T) {
 			stmt, ast, _, err := parseTableDumpExpression(t.Context(), col.GeneratedCol.OriginString, "")
 			require.NoError(t, err)
 			defer stmt.Free()
-			fresh, err := bindTableDumpExpression(compiler, source, tableDumpExpression{kind: "generated", name: "g", col: col}, ast, 0, false)
+			fresh, err := bindFloatTableDumpExpression(compiler, source, tableDumpExpression{kind: "generated", name: "g", col: col}, ast, 0, false)
 			require.NoError(t, err)
 			require.True(t, sameTableDumpBoundExpression(fresh, execution.Cols[gpos].GeneratedCol.Expr), "migrated metadata must match ordinary binding")
 			require.True(t, proto.Equal(snapshot, source))

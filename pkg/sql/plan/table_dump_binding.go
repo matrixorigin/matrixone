@@ -318,8 +318,7 @@ func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, ite
 	if len(legacyFloat) > 0 && legacyFloat[0] {
 		mode |= tableDumpBindingLegacyFloat
 	}
-	return bindTableDumpExpression(ctx, def, item, ast, increment, mode, nil)
-
+	return bindTableDumpExpression(ctx, def, item, ast, increment, mode, &tableDumpDefaultSession{})
 }
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {

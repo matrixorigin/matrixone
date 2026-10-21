@@ -55,4 +55,11 @@ select g as generated_text, e as explicit_text, r as right_text, rep as repeat_t
 update float_generated set a = cast('1.2345678901234567e-15' as double), d = default where id = 1;
 select g as generated_text, e as explicit_text, r as right_text, rep as repeat_text, c as coalesce_text, ci as if_text, cs as case_text, cn as ifnull_text, concat('[',d,']') as default_text from float_generated order by id;
 
+-- Persisted FORMAT and internal SET bindings compose with widened float text.
+create table float_composed (id int primary key, a double, b int, s set('a','b'), g varchar(200) generated always as (concat(a,format(b,2))) stored, f varchar(200) generated always as (concat(a,find_in_set('b',s))) stored, n varchar(200) generated always as (concat(a,format(concat(a),2))) stored);
+insert into float_composed (id,a,b,s) values (1,-1.2345678901234567e-15,1,'a,b');
+select g = '-0.00000000000000123456789012345681.00' as format_sibling, f = '-0.00000000000000123456789012345682' as set_sibling, n = concat(cast(a as char),format(concat(a),2)) as nested_format from float_composed;
+update float_composed set a = 1.2345678901234567e-15;
+select g = '0.00000000000000123456789012345681.00' as format_sibling, f = '0.00000000000000123456789012345682' as set_sibling, n = concat(cast(a as char),format(concat(a),2)) as nested_format from float_composed;
+
 drop database group_concat_float_28660;
