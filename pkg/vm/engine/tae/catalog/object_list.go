@@ -126,8 +126,7 @@ type mutableObjectListTrees struct {
 
 func newObjectEntryTreeWithLess(less func(a, b *ObjectEntry) bool) *btree.BTreeG[*ObjectEntry] {
 	opts := btree.Options{
-		Degree:  64,
-		NoLocks: true,
+		Degree: 64,
 	}
 	return btree.NewBTreeGOptions(less, opts)
 }
