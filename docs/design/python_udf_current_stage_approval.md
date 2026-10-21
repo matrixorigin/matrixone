@@ -5,7 +5,7 @@
 | Record | `python-udf-current-stage-r1-2026-09-24-approval` |
 | Issue | [MatrixOne #28132](https://github.com/matrixorigin/matrixone/issues/28132) |
 | Implementation PR | [MatrixOne #29152](https://github.com/matrixorigin/matrixone/pull/29152) |
-| Current-stage proposal | [`python-udf-current-stage-r18-2026-10-17`](python_udf_current_stage.md); historical r1 approval retained below |
+| Current-stage proposal | [`python-udf-current-stage-r27-2026-10-21`](python_udf_current_stage.md); historical r1 approval retained below |
 | Scope | Explicitly enabled test/development adapter; no production rollout or production-readiness claim |
 
 This record separates the immutable current-stage design artifact, the feature
@@ -556,3 +556,29 @@ required after this merge. Catalog 4.0.18 and its minimum source 4.0.17, query
 method/field allocations and Python runtime scope are unchanged. Independent
 Architecture and SQL/Planner approval of r26 remains pending; rebase and
 validation do not supply that approval. No production or security scope is added.
+
+
+## r27 LOAD FK/Python allocation addendum (2026-10-21)
+
+Official main 63a964a82fbaae4759cfabb45655e0185bc0979c owns MORPC 125
+for LOAD IGNORE foreign-key row rejection diagnostics and builtin identity 602.
+The governing python-udf-current-stage-r27-2026-10-21 proposal preserves this
+capability and allocates Python 126 (latest + 1). Catalog repair, revision
+publication and reads, Prepare, prepared reuse, evaluator, remote sender/receiver
+and status admission reject predecessor 125 and mixed 126/125 CNs before Python
+mutation or execution. Rollback from126 to125 disables Python while retaining
+LOAD FK125, fractional TIMESTAMPADD124, nonblocking locks123 and temporal122.
+
+Combined LOAD FK/Python pipelines require126; LOAD-only requires125 and rejects
+124; fractional-only remains124. The existing execution stream carries the
+maximum required feature floor, with no new RPC or lifecycle owner. Upstream
+FK filtering barriers, diagnostic-expression traversal and function identity602
+remain unchanged. The prepared FIELD history integration also resets retained
+comparison history when a captured routine declaration changes and revalidates
+bounded immutable routine facts before compile retry applies old history.
+
+Catalog4.0.18, minimum source4.0.17, query method/field allocations, immutable
+historical approval artifacts and Python runtime scope remain unchanged.
+Independent Architecture and SQL/Planner approval of r27 remains pending;
+maintenance validation does not supply that approval. No production or security
+scope is added.
