@@ -52,3 +52,34 @@ drop snapshot restore_db_pub_snapshot;
 drop account restore_db_subscriber;
 drop publication restore_db_pub;
 drop database restore_db_source;
+
+-- Replay must quote each identifier, not the comma-separated table list.
+create account restore_named_subscriber admin_name 'admin' identified by '111';
+create database `review-db`;
+create table `review-db`.`review-items`(id int primary key);
+create table `review-db`.`other-items`(id int primary key);
+insert into `review-db`.`review-items` values(1);
+insert into `review-db`.`other-items` values(1);
+create publication `review-pub` database `review-db` table `review-items`,`other-items` account restore_named_subscriber comment 'owner''s copy';
+-- @session:id=2&user=restore_named_subscriber:admin&password=111
+create database restored_named_sub from sys publication `review-pub`;
+select id from restored_named_sub.`review-items`;
+-- @session
+create snapshot restore_named_snapshot for database `review-db`;
+insert into `review-db`.`review-items` values(2);
+insert into `review-db`.`other-items` values(2);
+restore database `review-db`{snapshot='restore_named_snapshot'};
+select database_name,table_list,account_list,comment from mo_catalog.mo_pubs where pub_name='review-pub';
+-- @session:id=2&user=restore_named_subscriber:admin&password=111
+select id from restored_named_sub.`review-items`;
+select id from restored_named_sub.`other-items`;
+-- @session
+restore database `review-db`{snapshot='restore_named_snapshot'};
+select count(*) from mo_catalog.mo_pubs where pub_name='review-pub';
+-- @session:id=2&user=restore_named_subscriber:admin&password=111
+select id from restored_named_sub.`review-items`;
+-- @session
+drop snapshot restore_named_snapshot;
+drop account restore_named_subscriber;
+drop publication `review-pub`;
+drop database `review-db`;
