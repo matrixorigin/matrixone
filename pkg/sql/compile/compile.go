@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -427,6 +428,182 @@ func (c *Compile) isRetryErr(err error) bool {
 		c.proc.GetTxnOperator().Txn().IsRCIsolation()
 }
 
+type scopeRunResult struct {
+	err      error
+	ctx      context.Context
+	queryCtx context.Context
+}
+
+func newScopeRunResult(err error, scope *Scope) scopeRunResult {
+	if scope == nil {
+		return scopeRunResult{err: err}
+	}
+	return newScopeRunResultForProcess(err, scope.Proc)
+}
+
+func newScopeRunResultForProcess(err error, proc *process.Process) scopeRunResult {
+	result := scopeRunResult{err: err}
+	if proc == nil {
+		return result
+	}
+	result.ctx = proc.Ctx
+	result.queryCtx = scopeRunQueryContext(proc)
+	return result
+}
+
+func scopeRunQueryContext(proc *process.Process) context.Context {
+	if proc == nil || proc.Base == nil {
+		return nil
+	}
+	queryCtx, _ := process.GetQueryCtxFromProc(proc)
+	if queryCtx != nil {
+		return queryCtx
+	}
+	return proc.GetTopContext()
+}
+
+func isScopeCancellationError(err error) bool {
+	if err == nil {
+		return false
+	}
+	// errors.Join must not turn a substantive execution failure into
+	// cancellation fallout merely because one of its siblings is a context
+	// error. Every leaf has to be cancellation-shaped before it is safe to
+	// suppress or replace the result.
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isScopeCancellationError(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isScopeCancellationError(child)
+		}
+	}
+	return errors.Is(err, context.Canceled) ||
+		errors.Is(err, context.DeadlineExceeded) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
+
+// isScopeCancellationFrom reports whether every leaf in err can be attributed
+// to the same canceled context. A joined error is attributable only as a whole;
+// one matching cancellation leaf must not hide an independent deadline leaf.
+func isScopeCancellationFrom(err error, contextErr error) bool {
+	if err == nil || contextErr == nil {
+		return false
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !isScopeCancellationFrom(child, contextErr) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		if child := wrapped.Unwrap(); child != nil {
+			return isScopeCancellationFrom(child, contextErr)
+		}
+	}
+	return errors.Is(err, contextErr) ||
+		moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted)
+}
+
+// normalizeScopeRunError distinguishes a substantive execution failure from
+// cancellation fallout.  A child pipeline canceled by a successfully finished
+// consumer is secondary and may be ignored, while a real error carried as the
+// pipeline cancel cause must survive.  Query-level cancellation remains owned
+// by the query context and is reported by Compile.Run.
+func normalizeScopeRunError(
+	err error,
+	pipelineCtx context.Context,
+	queryCtx context.Context,
+) (error, bool) {
+	if err == nil || !isScopeCancellationError(err) ||
+		pipelineCtx == nil || pipelineCtx.Err() == nil {
+		return err, false
+	}
+	// Query cancellation owns the terminal classification. In particular,
+	// context.WithTimeoutCause reports DeadlineExceeded through Err while Cause
+	// carries diagnostic detail. Replacing the former with the latter would make
+	// callers misclassify a timeout as an ordinary execution failure; they can
+	// attach the cause after observing DeadlineExceeded.
+	if queryCtx != nil {
+		if queryErr := queryCtx.Err(); queryErr != nil {
+			if errors.Is(queryErr, context.DeadlineExceeded) {
+				return queryErr, true
+			}
+			if !isScopeCancellationFrom(err, queryErr) {
+				return err, false
+			}
+			if cause := context.Cause(queryCtx); cause != nil {
+				return cause, true
+			}
+			return queryErr, true
+		}
+	}
+
+	// A context-shaped error is secondary only when every leaf was derived from
+	// this pipeline's cancellation. Preserve an independent operator timeout
+	// that merely raced a different pipeline cancellation, including when the
+	// two errors were joined.
+	if !isScopeCancellationFrom(err, pipelineCtx.Err()) {
+		return err, false
+	}
+
+	if cause := context.Cause(pipelineCtx); cause != nil {
+		err = cause
+	}
+	if isScopeCancellationError(err) && queryCtx != nil && queryCtx.Err() == nil {
+		return nil, true
+	}
+	return err, true
+}
+
+func (r scopeRunResult) resolveCancelCause() (scopeRunResult, bool) {
+	var normalized bool
+	r.err, normalized = normalizeScopeRunError(r.err, r.ctx, r.queryCtx)
+	return r, normalized
+}
+
+// preferPrimaryScopeResult keeps cleanup fallout from masking the execution
+// error that caused another scope to stop consuming its pipeline input. A
+// cancellation result is first resolved through that scope's CancelCauseFunc:
+// internally canceled siblings therefore report the triggering execution
+// error, while an externally canceled query keeps its external cause.
+func preferPrimaryScopeResult(current, candidate scopeRunResult) scopeRunResult {
+	current, _ = current.resolveCancelCause()
+	candidate, candidateNormalized := candidate.resolveCancelCause()
+
+	if current.err == nil {
+		return candidate
+	}
+	if candidate.err == nil ||
+		!errors.Is(current.err, process.ErrPipelineEndSignalDeliveryFailed) ||
+		errors.Is(candidate.err, process.ErrPipelineEndSignalDeliveryFailed) {
+		return current
+	}
+	// An unresolved pure cancellation does not prove that the cleanup fallback
+	// was secondary. A mixed error tree is substantive, however, and must not be
+	// rejected merely because one leaf is context.Canceled.
+	if !candidateNormalized &&
+		isScopeCancellationFrom(candidate.err, context.Canceled) {
+		return current
+	}
+	return candidate
+}
+
 func (c *Compile) canRetry(err error) bool {
 	if c.disableRetry {
 		return false
@@ -528,7 +705,7 @@ func (c *Compile) runOnce() (err error) {
 			return err
 		}
 	} else {
-		errC := make(chan error, len(c.scopes))
+		errC := make(chan scopeRunResult, len(c.scopes))
 		for i := range c.scopes {
 			scope := c.scopes[i]
 			errSubmit := ants.Submit(func() {
@@ -538,23 +715,24 @@ func (c *Compile) runOnce() (err error) {
 						c.proc.Error(c.proc.Ctx, "panic in run",
 							zap.String("sql", commonutil.Abbreviate(c.sql, 500)),
 							zap.String("error", err.Error()))
-						errC <- err
+						errC <- newScopeRunResult(err, scope)
 					}
 				}()
-				errC <- c.run(scope)
+				errC <- newScopeRunResult(c.run(scope), scope)
 			})
 			if errSubmit != nil {
-				errC <- errSubmit
+				errC <- newScopeRunResult(errSubmit, scope)
 			}
 		}
 
-		var errToThrowOut error
+		var resultToThrowOut scopeRunResult
 		for i := 0; i < cap(errC); i++ {
-			e := <-errC
+			result := <-errC
+			result, _ = result.resolveCancelCause()
+			e := result.err
 
 			// cancel this query if the first error occurs.
-			if e != nil && errToThrowOut == nil {
-				errToThrowOut = e
+			if e != nil && resultToThrowOut.err == nil {
 
 				// cancel all scope tree.
 				for j := range c.scopes {
@@ -563,17 +741,19 @@ func (c *Compile) runOnce() (err error) {
 					}
 				}
 			}
+			resultToThrowOut = preferPrimaryScopeResult(resultToThrowOut, result)
 
 			// if any error already return is retryable, we should throw this one
 			// to make sure query will retry.
 			if e != nil && c.isRetryErr(e) {
-				errToThrowOut = e
+				resultToThrowOut = result
 			}
 		}
 		close(errC)
 
-		if errToThrowOut != nil {
-			return errToThrowOut
+		resultToThrowOut, _ = resultToThrowOut.resolveCancelCause()
+		if resultToThrowOut.err != nil {
+			return resultToThrowOut.err
 		}
 	}
 
@@ -963,17 +1143,13 @@ func (c *Compile) compileSinkScan(qry *plan.Query, nodeId int32) error {
 
 	if n.NodeType == plan.Node_SINK_SCAN || n.NodeType == plan.Node_RECURSIVE_SCAN || n.NodeType == plan.Node_RECURSIVE_CTE {
 		for _, s := range n.SourceStep {
-			var wr *process.WaitRegister
+			var edge *process.PipelineEdge
 			if c.anal.qry.LoadTag {
-				wr = &process.WaitRegister{
-					Ch2: make(chan process.PipelineSignal, c.ncpu),
-				}
+				edge = process.NewPipelineEdge(int(c.ncpu), 0)
 			} else {
-				wr = &process.WaitRegister{
-					Ch2: make(chan process.PipelineSignal, 1),
-				}
+				edge = process.NewPipelineEdge(1, 0)
 			}
-			c.appendStepRegs(s, nodeId, wr)
+			c.appendStepRegs(s, nodeId, edge)
 		}
 	}
 	return nil
@@ -3519,8 +3695,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 			bs := newScope(Remote)
 			bs.NodeInfo = engine.Node{Addr: tmp[0].NodeInfo.Addr, Mcpu: 1}
 			bs.Proc = c.proc.NewNoContextChildProc(0)
-			w := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 10)}
-			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
+			edge := process.NewPipelineEdge(10, 0)
+			bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge)
 
 			mergeOp := merge.NewArgument()
 			c.hasMergeOp = true
@@ -3542,8 +3718,8 @@ func (c *Compile) compileBuildSideForBroadcastJoin(node *plan.Node, rs, buildSco
 		bs := newScope(Remote)
 		bs.NodeInfo = engine.Node{Addr: rs[i].NodeInfo.Addr, Mcpu: 1}
 		bs.Proc = c.proc.NewNoContextChildProc(0)
-		w := &process.WaitRegister{Ch2: make(chan process.PipelineSignal, 10)}
-		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, w)
+		edge := process.NewPipelineEdge(10, 0)
+		bs.Proc.Reg.MergeReceivers = append(bs.Proc.Reg.MergeReceivers, edge)
 
 		mergeOp := merge.NewArgument()
 		c.hasMergeOp = true
@@ -4090,7 +4266,7 @@ func (c *Compile) compileShuffleGroup(node *plan.Node, inputSS []*Scope, nodes [
 		scopes := c.newScopeListWithNode(dop, len(inputSS), cn.Addr)
 		for _, s := range scopes {
 			for _, rr := range s.Proc.Reg.MergeReceivers {
-				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+				rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 			}
 		}
 		shuffleGroups = append(shuffleGroups, scopes...)
@@ -4244,7 +4420,9 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 		dataScope := c.newMergeScope(ss)
 		if c.anal.qry.LoadTag {
 			// reset the channel buffer of sink for load
-			dataScope.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, dataScope.NodeInfo.Mcpu)
+			dataScope.Proc.Reg.MergeReceivers[0].ResetForReuse(
+				dataScope.NodeInfo.Mcpu,
+				dataScope.Proc.Reg.MergeReceivers[0].NilBatchCnt)
 		}
 		parallelSize := c.getParallelSizeForExternalScan(node, c.ncpu)
 		scopes := make([]*Scope, 0, parallelSize)
@@ -4258,7 +4436,7 @@ func (c *Compile) compileInsert(nodes []*plan.Node, node *plan.Node, ss []*Scope
 			scopes[i].Proc = c.proc.NewNoContextChildProc(1)
 			if c.anal.qry.LoadTag {
 				for _, rr := range scopes[i].Proc.Reg.MergeReceivers {
-					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+					rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 				}
 			}
 		}
@@ -4679,12 +4857,11 @@ func (c *Compile) newMergeScope(ss []*Scope) *Scope {
 
 	j := 0
 	for i := range ss {
+		nilBatchCnt := 1
 		if isSameCN(rs.NodeInfo.Addr, ss[i].NodeInfo.Addr) {
-			rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = ss[i].NodeInfo.Mcpu
-		} else {
-			rs.Proc.Reg.MergeReceivers[j].NilBatchCnt = 1
+			nilBatchCnt = ss[i].NodeInfo.Mcpu
 		}
-		rs.Proc.Reg.MergeReceivers[j].Ch2 = make(chan process.PipelineSignal, ss[i].NodeInfo.Mcpu)
+		rs.Proc.Reg.MergeReceivers[j].ResetForReuse(ss[i].NodeInfo.Mcpu, nilBatchCnt)
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[j])
@@ -4711,7 +4888,11 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	rs.NodeInfo.Mcpu = 1 // merge scope is single parallel by default
 	rs.PreScopes = ss
 	rs.Proc = c.proc.NewNoContextChildProc(1)
-	rs.Proc.Reg.MergeReceivers[0].Ch2 = make(chan process.PipelineSignal, len(ss))
+	nilBatchCnt := 0
+	for i := range ss {
+		nilBatchCnt += ss[i].NodeInfo.Mcpu
+	}
+	rs.Proc.Reg.MergeReceivers[0].ResetForReuse(len(ss), nilBatchCnt)
 
 	// waring: `Merge` operator` is not used as an input/output analyze,
 	// and `Merge` operator cannot play the role of IsFirst/IsLast
@@ -4720,8 +4901,6 @@ func (c *Compile) newMergeScopeByCN(ss []*Scope, nodeinfo engine.Node) *Scope {
 	mergeOp.SetAnalyzeControl(c.anal.curNodeIdx, false)
 	rs.setRootOperator(mergeOp)
 	for i := range ss {
-		rs.Proc.Reg.MergeReceivers[0].NilBatchCnt += ss[i].NodeInfo.Mcpu
-
 		// waring: `connector` operator is not used as an input/output analyze,
 		// and `connector` operator cannot play the role of IsFirst/IsLast
 		connArg := connector.NewArgument().WithReg(rs.Proc.Reg.MergeReceivers[0])
@@ -4789,7 +4968,7 @@ func (c *Compile) mergeShuffleScopesIfNeeded(ss []*Scope, force bool) []*Scope {
 	rs := c.mergeScopesByCN(ss)
 	for i := range rs {
 		for _, rr := range rs[i].Proc.Reg.MergeReceivers {
-			rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+			rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 		}
 	}
 	return rs
@@ -4923,10 +5102,10 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 
 				probes[i].PreScopes = []*Scope{builds[i]}
 				for _, rr := range probes[i].Proc.Reg.MergeReceivers {
-					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+					rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 				}
 				for _, rr := range builds[i].Proc.Reg.MergeReceivers {
-					rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+					rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 				}
 			}
 			shuffleProbes = append(shuffleProbes, probes...)
@@ -4939,7 +5118,7 @@ func (c *Compile) newShuffleJoinScopeList(probeScopes, buildScopes []*Scope, nod
 			buildscope.NodeInfo = shuffleProbes[i].NodeInfo
 			buildscope.Proc = c.proc.NewNoContextChildProc(lenRight)
 			for _, rr := range buildscope.Proc.Reg.MergeReceivers {
-				rr.Ch2 = make(chan process.PipelineSignal, shuffleChannelBufferSize)
+				rr.ResetForReuse(shuffleChannelBufferSize, rr.NilBatchCnt)
 			}
 			shuffleBuilds = append(shuffleBuilds, buildscope)
 			prescopes := shuffleProbes[i].PreScopes

@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path"
@@ -1290,6 +1291,36 @@ func TestSuppressRemoteRunCancelError(t *testing.T) {
 		require.NoError(t, suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx)))
 	})
 
+	t.Run("suppress raw context cancellation after proc cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		require.NoError(t, suppressRemoteRunCancelError(ctx, fmt.Errorf("open remote stream: %w", context.Canceled)))
+	})
+
+	t.Run("suppress joined cancellation fallout after proc cancel", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := errors.Join(context.Canceled, moerr.NewQueryInterrupted(ctx))
+		require.NoError(t, suppressRemoteRunCancelError(ctx, err))
+	})
+
+	t.Run("keep independent deadline joined with cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		err := suppressRemoteRunCancelError(
+			ctx, errors.Join(context.DeadlineExceeded, context.Canceled))
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("keep substantive error joined with cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		primaryErr := moerr.NewInternalErrorNoCtx("remote execution failed")
+		err := suppressRemoteRunCancelError(
+			ctx, errors.Join(primaryErr, context.Canceled))
+		require.ErrorIs(t, err, primaryErr)
+	})
+
 	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
@@ -1708,4 +1739,101 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 		require.Equal(t, 1, reader.orderByCalls)
 		require.Equal(t, orderBy, reader.orderBy)
 	}
+}
+
+func TestScopeResetClearsPipelineEdgeTerminalState(t *testing.T) {
+	testCompile := NewMockCompile(t)
+
+	child := &Scope{
+		Magic: Normal,
+		Proc:  testCompile.proc.NewNoContextChildProc(1),
+	}
+	s := &Scope{
+		Magic:     Merge,
+		Proc:      testCompile.proc.NewNoContextChildProc(2),
+		PreScopes: []*Scope{child},
+	}
+
+	var regs []*process.WaitRegister
+	regs = append(regs, s.Proc.Reg.MergeReceivers...)
+	regs = append(regs, child.Proc.Reg.MergeReceivers...)
+	for _, reg := range regs {
+		require.True(t, reg.SendEnd())
+		select {
+		case <-reg.Done():
+		default:
+			t.Fatal("edge should be done after SendEnd")
+		}
+	}
+
+	require.NoError(t, s.Reset(testCompile))
+
+	for _, reg := range regs {
+		select {
+		case <-reg.Done():
+			t.Fatal("Reset must clear edge terminal state for reuse")
+		default:
+		}
+		select {
+		case <-reg.Ch2:
+			t.Fatal("Reset must drain stale buffered signals")
+		default:
+		}
+		require.True(t, reg.SendEnd(), "edge must accept End again after Reset")
+	}
+}
+
+func TestCollectMergeRunResultsPreservesExecutionErrorAndDrains(t *testing.T) {
+	producerErr := moerr.NewInternalErrorNoCtx("producer memory allocation failed")
+	remoteErr := moerr.NewInternalErrorNoCtx("remote execution failed")
+	for _, test := range []struct {
+		name     string
+		producer error
+		remote   error
+		want     error
+	}{
+		{name: "producer error replaces cleanup fallout", producer: producerErr, want: producerErr},
+		{name: "remote error replaces cleanup fallout", remote: remoteErr, want: remoteErr},
+		{name: "first producer error survives later remote error", producer: producerErr, remote: remoteErr, want: producerErr},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			defer proc.Cancel(nil)
+			preScopes := make(chan scopeRunResult, 2)
+			preScopes <- scopeRunResult{}
+			preScopes <- scopeRunResult{err: test.producer}
+			remote := make(chan notifyMessageResult, 1)
+			remote <- notifyMessageResult{err: test.remote}
+
+			err := collectMergeRunResults(proc,
+				scopeRunResult{err: process.ErrPipelineEndSignalDeliveryFailed},
+				preScopes, remote)
+			require.Same(t, test.want, err)
+			require.Empty(t, preScopes)
+			require.Empty(t, remote)
+		})
+	}
+}
+
+func TestMergeScopeCancellationPreservesCause(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	defer proc.Cancel(nil)
+	siblingCtx, cancelSibling := context.WithCancelCause(proc.Ctx)
+	defer cancelSibling(nil)
+	scope := &Scope{Proc: proc}
+
+	// Successful completion must not cancel siblings still producing data.
+	require.NoError(t, scope.cancelMergeSiblingsOnError(nil))
+	require.NoError(t, siblingCtx.Err())
+
+	failure := moerr.NewInternalErrorNoCtx("producer failed before merge wait")
+	require.Same(t, failure, scope.cancelMergeSiblingsOnError(failure))
+	select {
+	case <-siblingCtx.Done():
+	default:
+		t.Fatal("failure must cancel siblings before MergeRun joins them")
+	}
+	require.Same(t, failure, context.Cause(siblingCtx))
 }
