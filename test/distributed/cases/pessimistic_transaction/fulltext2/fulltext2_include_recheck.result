@@ -1,0 +1,48 @@
+set experimental_fulltext2_index = 1;
+drop database if exists fulltext2_include_recheck;
+create database fulltext2_include_recheck;
+use fulltext2_include_recheck;
+create table t (id bigint primary key, body text, category int, tag varchar(10));
+insert into t values (1, 'needle a', 1, 'x'), (2, 'needle b', 1, 'y'), (3, 'needle c', 2, 'x'), (4, 'needle d', 1, 'x');
+create fulltext2 index ftx on t(body) include(category) with parser gojieba;
+set fulltext_bloom_filter_pushdown = 0;
+begin;
+update t set category = 2 where id = 4;
+select id, category, tag from t where match(body) against('needle') and category = 1;
+➤ id[-5,64,0]  ¦  category[4,32,0]  ¦  tag[12,10,0]  𝄀
+1  ¦  1  ¦  x  𝄀
+2  ¦  1  ¦  y
+select id, category, tag from t where match(body) against('needle') and category = 1 limit 10;
+➤ id[-5,64,0]  ¦  category[4,32,0]  ¦  tag[12,10,0]  𝄀
+2  ¦  1  ¦  y  𝄀
+1  ¦  1  ¦  x
+rollback;
+set fulltext_bloom_filter_pushdown = 1;
+begin;
+update t set category = 2 where id = 4;
+select id, category, tag from t where match(body) against('needle') and category = 1 and tag = 'x';
+➤ id[-5,64,0]  ¦  category[4,32,0]  ¦  tag[12,10,0]  𝄀
+1  ¦  1  ¦  x
+rollback;
+set fulltext_bloom_filter_pushdown = 0;
+select id, category, tag from t where match(body) against('needle') and category = 1;
+➤ id[-5,64,0]  ¦  category[4,32,0]  ¦  tag[12,10,0]  𝄀
+1  ¦  1  ¦  x  𝄀
+2  ¦  1  ¦  y  𝄀
+4  ¦  1  ¦  x
+explain select id, category, tag from t where match(body) against('needle') and category = 1;
+-- @regex("Filter Cond: \(t.category = 1\)", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (t.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_include_recheck.t  𝄀
+                    Filter Cond: (t.category = 1)  𝄀
+                    Runtime Filter Probe: t.id  𝄀
+              ->  Fulltext Index Scan on ftx  𝄀
+                    Fulltext Index: ftx
+drop database fulltext2_include_recheck;

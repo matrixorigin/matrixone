@@ -563,8 +563,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	// LIMIT to the filtered set). Reusing buildFilterPredicateJSON keeps this correctness-safe:
 	// it peels only NUMERIC + pk predicates exactly and leaves varchar/others residual (so a
 	// collation-sensitive string filter stays on the existing scan path — no wrong results).
-	// Removing the peeled predicates lets the pre-filter second-scan below be skipped when no
-	// residual filter remains.
+	// The pushdown and candidate-limit decisions below see only the residual filters, so the
+	// pre-filter second-scan is skipped when no residual filter remains.
+	allFilters := append([]*plan.Expr(nil), scanNode.FilterList...)
 	var ft2PredsJSON string
 	if len(indexDefs) > 0 && catalog.IsFullText2IndexAlgo(indexDefs[0].IndexAlgo) {
 		if incCols := indexDefIncludedColumnsBestEffort(indexDefs[0]); len(incCols) > 0 {
@@ -612,6 +613,10 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	limitExpr := builder.buildFullTextCandidateLimit(
 		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter,
 		paginationLimit, paginationOffset)
+
+	// The search evaluates the peeled predicates on index-time values, so the base scans
+	// re-check every filter on current values.
+	scanNode.FilterList = allFilters
 
 	// buildFullTextIndexScan
 	var last_node_id int32

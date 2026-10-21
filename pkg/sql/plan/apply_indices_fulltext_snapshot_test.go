@@ -368,6 +368,51 @@ func TestJoinFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 	}
 }
 
+func TestFulltext2PeeledIncludeFiltersStayOnBaseScans(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		residual   string
+		pagination string
+		pushdown   int8
+		baseScans  int
+	}{
+		{name: "include only", pagination: "LIMIT 2", baseScans: 1},
+		{name: "include and residual", residual: " AND title <> 'excluded'", baseScans: 1},
+		{name: "include and residual with membership", residual: " AND title <> 'excluded'", pushdown: 1, baseScans: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := newIssue24822FullText2Optimizer(t)
+			for _, idx := range optimizer.ctx.tables["ft"].Indexes {
+				idx.IncludedColumns = []string{"base_id"}
+			}
+			optimizer.ctx.fulltextBloomFilterPushdown = tc.pushdown
+			statement := `SELECT ft.id, ft.title FROM ft
+				WHERE MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE)
+				AND base_id IS NULL` + tc.residual + " " + tc.pagination
+			p, err := runOneStmt(optimizer, t, statement)
+			require.NoError(t, err)
+			query := p.GetQuery()
+			planned := &QueryBuilder{qry: query}
+			scans := collectFullTextFunctionScans(planned, query.Steps[0])
+			require.Len(t, scans, 1)
+			opts, err := ft2plan.DecodeScanOptions(scans[0].IndexSearchScan.AlgoOptions)
+			require.NoError(t, err)
+			require.Contains(t, opts.IncludePreds, `"op":"is_null"`)
+
+			baseScans := 0
+			for _, node := range query.Nodes {
+				if node.NodeType != plan.Node_TABLE_SCAN || node.TableDef.GetName() != "ft" {
+					continue
+				}
+				baseScans++
+				require.Contains(t, FormatExprs(node.FilterList, FormatOption{}), "base_id",
+					"base scan %d must re-check the peeled include predicate", node.NodeId)
+			}
+			require.Equal(t, tc.baseScans, baseScans)
+		})
+	}
+}
+
 // The new direct SEARCH shape is covered by the bound-SQL tests above. Keep
 // the legacy implicit-sort shape and its pagination/key barriers valid too.
 func TestPushCoveredFulltext2ScoreLimitLegacySort(t *testing.T) {
