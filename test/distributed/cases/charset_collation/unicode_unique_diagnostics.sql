@@ -24,4 +24,11 @@ update ignore u_composite set s='alpha',n=7 where id=3;
 show warnings;
 select id,s,n from u_composite order by id;
 
+-- Versioned tables may also contain fixed-width unique keys. NULLs before
+-- the conflict must not make diagnostic lookup reinterpret integers as bytes.
+create table u_mixed(id int primary key, s varchar(30) collate utf8mb4_unicode_ci, k int, unique key uk_s(s), unique key uk_k(k));
+insert into u_mixed values(1,'Alpha',7);
+insert into u_mixed values(6,'Beta',NULL),(7,'Gamma',7);
+select id,s,k from u_mixed order by id;
+
 drop database unicode_unique_diagnostics;
