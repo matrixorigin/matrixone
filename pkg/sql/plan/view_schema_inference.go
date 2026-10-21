@@ -23,8 +23,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -48,12 +50,15 @@ func viewSchemaSubscriptionContext(ctx context.Context, obj *ObjectRef, previous
 
 type viewSchemaContextKey struct{}
 type viewSchemaDerivation struct {
+	rootAuthorizationErr                                error
 	requiredProtocol                                    int64
 	memoFrames                                          []*viewSchemaMemoFrame
 	inputBytes                                          int
 	lower                                               int64
 	leases                                              []*process.ExecutionTransientMemoryReservation
 	memoEligible                                        bool
+	planning                                            bool
+	planDependencies                                    []*ObjectRef
 	dependencyLog                                       []ViewDependency
 	memoScans                                           map[*QueryBuilder]map[int32]bool
 	request                                             *ViewSchemaRequest
@@ -62,6 +67,40 @@ type viewSchemaDerivation struct {
 	stack                                               map[[32]byte]bool
 	work, slots, depth, maxDepth, operations, recursion int
 }
+
+// Internal catalog statements keep the caller's cancellation and values, but
+// must not inherit the outer statement's private binding/authorization scope.
+type viewSchemaCatalogContext struct{ context.Context }
+
+func (c viewSchemaCatalogContext) Value(key any) any {
+	if _, ok := key.(viewSchemaContextKey); ok {
+		return nil
+	}
+	return c.Context.Value(key)
+}
+
+// ViewSchemaCatalogContext isolates trusted compiler catalog SQL from a user
+// statement's private binding scope. It preserves cancellation, account and
+// snapshot values. It must not be used to bypass authorization for user SQL.
+func ViewSchemaCatalogContext(ctx context.Context) context.Context {
+	if ctx.Value(viewSchemaContextKey{}) == nil {
+		return ctx
+	}
+	return viewSchemaCatalogContext{ctx}
+}
+
+// Optional metadata inference may discard lookup errors. A denied user root
+// must remain denied for this derivation, even if inference attempts it again.
+// Successful checks are not cached; each user catalog action is authorized.
+func (s *viewSchemaDerivation) authorizeRoot(database, name string, snapshot *Snapshot) error {
+	if s.rootAuthorizationErr == nil {
+		// Authorization can execute catalog SQL; do not expose our private
+		// planning marker to that independent trusted query.
+		s.rootAuthorizationErr = s.request.binding.Authorize(s.request.workCtx, database, name, snapshot)
+	}
+	return s.rootAuthorizationErr
+}
+
 type viewSchemaCompiler struct {
 	CompilerContext
 	ctx, previousContext context.Context
@@ -78,15 +117,39 @@ func newViewSchemaDerivation(request *ViewSchemaRequest) *viewSchemaDerivation {
 	state.capture = newViewDependencyCaptureContext(compiler.CompilerContext)
 	return state
 }
+func (c *viewSchemaCompiler) getInternalSQLExecutor(proc *process.Process) (executor.SQLExecutor, bool) {
+	if provider, ok := c.CompilerContext.(interface {
+		getInternalSQLExecutor(*process.Process) (executor.SQLExecutor, bool)
+	}); ok {
+		return provider.getInternalSQLExecutor(proc)
+	}
+	return nil, false
+}
+
 func (c *viewSchemaCompiler) GetLowerCaseTableNames() int64 { return c.state.lower }
 func (c *viewSchemaCompiler) GetContext() context.Context   { return c.ctx }
 func (c *viewSchemaCompiler) SetContext(ctx context.Context) {
 	c.ctx = ctx
 	c.CompilerContext.SetContext(ctx)
 }
+
+// Database existence must use the same publisher/snapshot domain as source
+// resolution. The bool-only legacy probe can both lose storage errors and
+// switch back to the subscriber before binding a qualified nested View.
+func (c *viewSchemaCompiler) CheckViewDatabase(name string, snapshot *Snapshot) (bool, error) {
+	_, err := c.CompilerContext.GetDatabaseId(name, snapshot)
+	if moerr.IsMoErrCode(err, moerr.ErrBadDB) || moerr.IsMoErrCode(err, moerr.OkExpectedEOB) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
 func (c *viewSchemaCompiler) Resolve(database, name string, snapshot *Snapshot) (*ObjectRef, *TableDef, error) {
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
+	}
+	if c.state.planning && c.state.depth == 0 {
+		return c.resolveRoot(database, name, snapshot)
 	}
 	obj, def, err := c.CompilerContext.Resolve(database, name, snapshot)
 	if err != nil {
@@ -102,7 +165,11 @@ func (c *viewSchemaCompiler) resolveRoot(database, name string, snapshot *Snapsh
 		ResolveViewSchemaRoot(string, string, *Snapshot) (*ObjectRef, *TableDef, error)
 	})
 	if !ok {
-		return c.Resolve(database, name, snapshot)
+		obj, def, err := c.CompilerContext.Resolve(database, name, snapshot)
+		if err != nil {
+			return nil, nil, err
+		}
+		return c.record(obj, def, snapshot, database, name)
 	}
 	if err := c.state.request.check(); err != nil {
 		return nil, nil, err
@@ -139,6 +206,13 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 	if len(c.state.capture.deps) >= viewSchemaWorkLimit {
 		return nil, nil, ErrViewSchemaLimit
 	}
+	// A View's physical column snapshot is compatibility data, not an input
+	// to inference or its admission. Do not inspect/copy stale columns or let
+	// their count reject an otherwise small, valid semantic definition.
+	if def.TableType == catalog.SystemViewRel {
+		def = CloneTableDefForPlan(def, false)
+		def.Name2ColIndex = nil
+	}
 	if len(def.Cols) > MaxViewMetadataColumns {
 		return nil, nil, ErrViewSchemaLimit
 	}
@@ -163,6 +237,9 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 		return nil, nil, err
 	}
 	c.state.leases = append(c.state.leases, lease)
+	// Resolve returns catalog-owned identities. The execution subtree and its
+	// dependency copies must share the effective account without mutating them.
+	obj = DeepCopyObjectRef(obj)
 	single := newViewDependencyCaptureContext(c)
 	single.snapshotNames = c.state.capture.snapshotNames
 	if err := single.record(obj, def, snapshot, database, name); err != nil {
@@ -171,14 +248,43 @@ func (c *viewSchemaCompiler) record(obj *ObjectRef, def *TableDef, snapshot *Sna
 	for _, dep := range single.deps {
 		c.state.capture.deps[viewSchemaDependencyKey(dep)] = dep
 		c.state.dependencyLog = append(c.state.dependencyLog, dep)
+		if c.state.planning {
+			account, err := c.state.request.binding.Compiler.GetAccountId()
+			if err != nil {
+				return nil, nil, err
+			}
+			if obj.PubInfo == nil && dep.AccountID != account && def.TableType != catalog.SystemViewRel {
+				// Physical scans need their execution account. For Views, PubInfo
+				// identifies a resolved subscription entry, not merely ownership;
+				// ordinary publisher Views inherit the active binding domain.
+				obj.PubInfo = &planpb.PubInfo{TenantId: int32(dep.AccountID)}
+			}
+			ref := prepareSchemaRefWithSnapshot(obj, def, snapshot)
+			if ref.PubInfo == nil && dep.AccountID != account {
+				// Dependency validation still needs every View's actual account,
+				// without changing how bindView classifies its executable input.
+				ref.PubInfo = &planpb.PubInfo{TenantId: int32(dep.AccountID)}
+			}
+			c.state.planDependencies = appendPrepareSchemas(c.state.planDependencies, ref)
+		}
 	}
 	if def.TableType != catalog.SystemViewRel && (def.TableType != "" && def.TableType != catalog.SystemOrdinaryRel || def.IsTemporary) {
 		c.state.memoEligible = false
 	}
 	// Ordinary binding mutates name maps, projections and external-table columns.
 	// It may only mutate this request's copy, never the catalog resolver's graph.
-	return DeepCopyObjectRef(obj), DeepCopyTableDef(def, true), nil
+	return obj, DeepCopyTableDef(def, true), nil
 }
+
+// SELECT/CTAS use the same logical column budget as description inference.
+// inferViewColumns may wrap this compiler in its own capture context; that
+// wrapper charges directly, so each bound select list is still charged once.
+func (c *viewSchemaCompiler) enterNestedView() error { return c.state.request.check() }
+func (c *viewSchemaCompiler) leaveNestedView()       {}
+func (c *viewSchemaCompiler) chargeViewColumns(count int) error {
+	return c.state.charge(0, count)
+}
+
 func (c *viewSchemaCompiler) ResolveSnapshotWithSnapshotName(name string) (*Snapshot, error) {
 	snapshot, err := c.CompilerContext.ResolveSnapshotWithSnapshotName(name)
 	if err == nil && snapshot != nil {
