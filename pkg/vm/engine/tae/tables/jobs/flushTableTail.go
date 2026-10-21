@@ -702,7 +702,7 @@ func (task *flushTableTailTask) mergeAObjs(ctx context.Context, isTombstone bool
 	writer, err := ioutil.NewBlockWriterWithArena(
 		task.rt.Fs,
 		name,
-		schema.Version,
+		activeM0WriteSchemaVersion(schema, seqnums, schema.Version),
 		seqnums,
 		isTombstone,
 		arena,
@@ -860,7 +860,7 @@ func (task *flushTableTailTask) flushAObjsForSnapshot(ctx context.Context, isTom
 
 		aobjectTask := NewFlushObjTask(
 			tasks.WaitableCtx,
-			dataVer.Version,
+			activeM0WriteSchemaVersion(task.schema, dataVer.Seqnums, dataVer.Version),
 			dataVer.Seqnums,
 			task.rt.Fs,
 			obj,

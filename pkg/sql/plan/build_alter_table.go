@@ -1447,9 +1447,26 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err := applyAlterTableCharsetDefault(ctx, &effectiveTableDef, stmt.Options); err != nil {
 		return nil, err
 	}
-	algorithm, err := ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, &effectiveTableDef)
+	var algorithm plan.AlterTable_AlgorithmType
+	m0Selected, err := m0SelectAddColumn(ctx, stmt.Options, &effectiveTableDef)
 	if err != nil {
 		return nil, err
+	}
+	if !m0Selected && activeM0PlanHooks.selectAdd != nil && effectiveTableDef.Version > 0 {
+		if _, err := m0PlanBase(&effectiveTableDef); err == nil {
+			return nil, moerr.NewInvalidInputf(
+				ctx.GetContext(),
+				"M0 append-domain table only supports metadata-only ADD COLUMN",
+			)
+		}
+	}
+	if m0Selected {
+		algorithm = plan.AlterTable_INPLACE
+	} else {
+		algorithm, err = ResolveAlterTableAlgorithm(ctx.GetContext(), stmt.Options, &effectiveTableDef)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	if err := resolveAndValidateLock(ctx.GetContext(), stmt.Options, algorithm); err != nil {

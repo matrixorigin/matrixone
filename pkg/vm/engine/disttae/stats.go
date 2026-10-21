@@ -2254,9 +2254,11 @@ func collectTableStats(
 	// Phase 2: Sampled stats from ObjectMeta (requires IO)
 	var sampledRowCount float64
 	var sampledObjectCount int64
+	m0Base, m0AppendDomain := m0AppendBaseFromPlan(req.tableDef)
 
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		objName := obj.ObjectShortName()
+		provenM0 := false
 
 		// ===== Phase 1: Get exact values from ObjectStats (no IO) =====
 		objRows := obj.Rows()
@@ -2284,6 +2286,14 @@ func collectTableStats(
 			}
 		}
 
+		if m0AppendDomain {
+			var proofErr error
+			provenM0, _, proofErr = activeM0ReadObject(objCtx, req.tableDef, obj, fs)
+			if proofErr != nil {
+				return proofErr
+			}
+		}
+
 		// Sampled object: read ObjectMeta (requires IO)
 		location := obj.Location()
 		objMeta, err := objectio.FastLoadObjectMeta(objCtx, &location, false, fs)
@@ -2305,6 +2315,13 @@ func collectTableStats(
 			info.MaxObjectRowCount = objectRowCount
 			info.MinObjectRowCount = objectRowCount
 			for idx, col := range req.tableDef.Cols[:lenCols] {
+				if provenM0 && uint32(col.Seqnum) >= m0Base &&
+					uint32(col.Seqnum) > uint32(meta.BlockHeader().MaxSeqnum()) {
+					info.NullCnts[idx] = int64(objectRowCount)
+					info.ColumnZMs[idx] = objectio.EmptyZm[:]
+					info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
+					continue
+				}
 				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] = int64(columnMeta.NullCnt())
 				info.ColumnZMs[idx] = columnMeta.ZoneMap().Clone()
@@ -2346,6 +2363,11 @@ func collectTableStats(
 			}
 
 			for idx, col := range req.tableDef.Cols[:lenCols] {
+				if provenM0 && uint32(col.Seqnum) >= m0Base &&
+					uint32(col.Seqnum) > uint32(meta.BlockHeader().MaxSeqnum()) {
+					info.NullCnts[idx] += int64(objectRowCount)
+					continue
+				}
 				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
 				info.NullCnts[idx] += int64(columnMeta.NullCnt())
 				// CRITICAL FIX: Always accumulate ColumnSize, even if ZoneMap is not initialized

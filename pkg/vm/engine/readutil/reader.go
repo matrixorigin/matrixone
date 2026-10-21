@@ -298,6 +298,8 @@ type reader struct {
 	cacheVectors containers.Vectors
 
 	explainVectorTopStats *objectio.IndexReaderTopStats
+	m0Proof               objectio.M0ObjectProof
+	m0ProofSet            bool
 }
 
 type mergeReader struct {
@@ -1001,6 +1003,24 @@ func (r *reader) read(
 	if r.explainVectorTopStats != nil {
 		r.explainVectorTopStats.BlocksRead++
 	}
+	provenM0 := false
+	if activeM0ReadLocationProofEnabled {
+		var err error
+		objectName := blkInfo.MetaLocation().Name().String()
+		if proof, ok := objectio.M0ProvenObject(ctx); ok && proof.ObjectName == objectName {
+			provenM0, r.m0Proof, r.m0ProofSet = true, proof, true
+		} else if r.m0ProofSet && r.m0Proof.ObjectName == objectName {
+			provenM0 = true
+		} else {
+			provenM0, r.m0Proof, err = activeM0ReadLocationProof(
+				ctx, r.tableDef, blkInfo.MetaLocation(), r.fs,
+			)
+			if err != nil {
+				return false, false, err
+			}
+			r.m0ProofSet = provenM0
+		}
+	}
 	//read block
 	filter := r.withFilterMixin.filterState.filter
 
@@ -1009,6 +1029,9 @@ func (r *reader) read(
 		// try to store the blkReadStats CounterSet into ctx, so that
 		// it can record the mem cache hit stats when call MemCache.Read() later soon.
 		statsCtx, numRead, numHit = prepareGatherStats(ctx)
+	}
+	if provenM0 {
+		statsCtx = objectio.WithM0ProvenObject(statsCtx, r.m0Proof)
 	}
 
 	policy := fileservice.GetFileServicePolicy(ctx)
