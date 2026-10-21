@@ -136,9 +136,34 @@ func tableDumpExpressions(def *planpb.TableDef) []tableDumpExpression {
 }
 
 func tableDumpParserModes() []string {
+	return tableDumpParserModesForFlags(0b111)
+}
+
+// A parser mode only needs to be considered when the origin contains syntax
+// whose meaning that mode changes. Omitting an irrelevant mode is equivalent
+// to the default parse, while retaining every relevant combination preserves
+// the complete migration witness set.
+func tableDumpParserModesForOrigin(origin string) []string {
+	var relevant int
+	if strings.ContainsRune(origin, '\\') {
+		relevant |= 1 << 0 // NO_BACKSLASH_ESCAPES
+	}
+	if strings.ContainsRune(origin, '"') {
+		relevant |= 1 << 1 // ANSI_QUOTES
+	}
+	if strings.Contains(origin, "||") {
+		relevant |= 1 << 2 // PIPES_AS_CONCAT
+	}
+	return tableDumpParserModesForFlags(relevant)
+}
+
+func tableDumpParserModesForFlags(relevant int) []string {
 	flags := []string{"NO_BACKSLASH_ESCAPES", "ANSI_QUOTES", "PIPES_AS_CONCAT"}
-	modes := make([]string, 0, 8)
+	modes := make([]string, 0, 1<<len(flags))
 	for mask := 0; mask < 8; mask++ {
+		if mask&^relevant != 0 {
+			continue
+		}
 		var parts []string
 		for i, flag := range flags {
 			if mask&(1<<i) != 0 {
@@ -536,7 +561,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 		}
 		var matched bool
 		var parsed bool
-		for _, mode := range tableDumpParserModes() {
+		for _, mode := range tableDumpParserModesForOrigin(item.origin) {
 			stmt, ast, visit, err := parseTableDumpExpression(ctx.GetContext(), item.origin, mode)
 			if err != nil {
 				continue
