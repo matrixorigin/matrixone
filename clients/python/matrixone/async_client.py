@@ -705,10 +705,9 @@ class AsyncClient(BaseMatrixOneClient):
                 # Execute the hook once immediately for the initial connection
                 await self._execute_connection_hook_immediately(on_connect)
 
-            # Report success only after the full initialization above passed:
-            # a failure in the managers or the hook itself is a failed connect
-            # contract (#30060) and must leave no success record behind — the
-            # probe alone is not initialization success.
+            # Report success only after initialization returns. Unhandled
+            # initialization failures are fatal, but ordinary callback errors
+            # retain ConnectionHook's existing logged, best-effort policy.
             self.logger.log_connection(host, port, final_user, database or "default", success=True)
 
         except BaseException as e:

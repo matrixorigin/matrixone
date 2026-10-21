@@ -223,9 +223,9 @@ def test_failed_manager_init_reports_no_success(monkeypatch):
     )
 
 
-def test_failed_hook_reports_no_success(monkeypatch):
-    """#30060: the connection hook is part of initialization; its failure
-    must not leave a success record in front of the failure."""
+def test_unhandled_hook_wrapper_failure_reports_no_success(monkeypatch):
+    """An unhandled initialization failure is fatal. This fault injection
+    is not a claim that ordinary public callback errors propagate."""
     client = Client(logger=Mock())
     engine = MagicMock()
     monkeypatch.setattr(client, '_create_engine', lambda: engine)
@@ -247,9 +247,9 @@ def test_failed_hook_reports_no_success(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_async_failed_hook_reports_no_success(monkeypatch):
-    """#30060 async mirror: the hook runs after the probe and managers;
-    its failure must leave no successful-connection record."""
+async def test_async_unhandled_hook_wrapper_failure_reports_no_success(monkeypatch):
+    """Unhandled wrapper failures are fatal; real callback best-effort
+    behavior is exercised separately without replacing the hook owner."""
     client = AsyncClient(logger=Mock())
     engine = MagicMock()
     engine.dispose = AsyncMock()

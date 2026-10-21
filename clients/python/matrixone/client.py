@@ -555,10 +555,9 @@ class Client(BaseMatrixOneClient):
                 # Execute the hook once immediately for the initial connection
                 self._execute_connection_hook_immediately(on_connect)
 
-            # Report success only after the full initialization above passed:
-            # a failure in the managers or the hook itself is a failed
-            # connect contract (#30060) and must leave no success record
-            # behind — the probe alone is not initialization success.
+            # Report success only after initialization returns. Unhandled
+            # initialization failures are fatal, but ordinary callback errors
+            # retain ConnectionHook's existing logged, best-effort policy.
             self.logger.log_connection(host, port, final_user, database, success=True)
 
         except BaseException as e:
@@ -2397,33 +2396,43 @@ class Client(BaseMatrixOneClient):
             table_name = model_class.__tablename__
             table = model_class.__table__
 
+            from contextlib import contextmanager
+
             from sqlalchemy.schema import CreateIndex, CreateTable
 
+            from ._connection_options import redact_error
             from .sqlalchemy_ext import FulltextIndex, VectorIndex
 
-            try:
-                engine_context = self.get_sqlalchemy_engine().begin()
-            except Exception as e:
-                # Handle database connection errors with user-friendly messages.
-                # Driver text may echo the configured password and must never
-                # reach the raised diagnostic or the log (#30062).
-                from ._connection_options import redact_error
+            password = self._connection_params.get('password') or ''
 
-                error_msg = redact_error(e, self._connection_params.get('password') or '')
-                if 'Unknown database' in error_msg or '1049' in error_msg:
-                    db_name = self._connection_params.get('database', 'unknown')
-                    raise ConnectionError(
-                        f"Database '{db_name}' does not exist. Please create it first:\n"
-                        f"  mysql -h{self._connection_params.get('host', 'localhost')} "
-                        f"-P{self._connection_params.get('port', 6001)} "
-                        f"-u{self._connection_params.get('user', 'root')} "
-                        f"-p "
-                        f"-e \"CREATE DATABASE {db_name}\""
-                    ) from None
-                else:
+            @contextmanager
+            def table_connection():
+                entered = False
+                try:
+                    # SQLAlchemy begin() is lazy. Guard acquisition, execution
+                    # and commit/rollback, while retaining its cleanup owner.
+                    with self.get_sqlalchemy_engine().begin() as connection:
+                        entered = True
+                        yield connection
+                except Exception as e:
+                    error_msg = redact_error(e, password)
+                    if entered:
+                        if isinstance(e, QueryError):
+                            raise QueryError(error_msg) from None
+                        raise QueryError(f"Failed to create table '{table_name}': {error_msg}") from None
+                    if 'Unknown database' in error_msg or '1049' in error_msg:
+                        db_name = self._connection_params.get('database', 'unknown')
+                        raise ConnectionError(
+                            f"Database '{db_name}' does not exist. Please create it first:\n"
+                            f"  mysql -h{self._connection_params.get('host', 'localhost')} "
+                            f"-P{self._connection_params.get('port', 6001)} "
+                            f"-u{self._connection_params.get('user', 'root')} "
+                            f"-p "
+                            f"-e \"CREATE DATABASE {db_name}\""
+                        ) from None
                     raise ConnectionError(f"Failed to connect to database: {error_msg}") from None
 
-            with engine_context as conn:
+            with table_connection() as conn:
                 # Create table without indexes first
                 # Build CREATE TABLE statement without indexes
                 create_table_sql = str(CreateTable(table).compile(dialect=conn.dialect))
@@ -2444,9 +2453,7 @@ class Client(BaseMatrixOneClient):
                 except Exception as e:
                     # Redact before logging and wrapping: driver text may echo
                     # the configured password (#30062).
-                    from ._connection_options import redact_error
-
-                    error_msg = redact_error(e, self._connection_params.get('password') or '')
+                    error_msg = redact_error(e, password)
 
                     # Log the sanitized message; the raw exception must not
                     # reach the handler or the traceback chain.
@@ -2455,7 +2462,7 @@ class Client(BaseMatrixOneClient):
                     except Exception as log_err:
                         import sys
 
-                        print(f"Warning: Error logging failed: {log_err}", file=sys.stderr)
+                        print(f"Warning: Error logging failed: {redact_error(log_err, password)}", file=sys.stderr)
 
                     # Handle common errors with helpful messages
                     if 'already exists' in error_msg.lower() or '1050' in error_msg:
@@ -2487,7 +2494,7 @@ class Client(BaseMatrixOneClient):
                             _exec_sql(fulltext_sql)
                             self.logger.info(f"✓ Created fulltext index '{index.name}'")
                         except Exception as e:
-                            self.logger.warning(f"Failed to create fulltext index {index.name}: {e}")
+                            self.logger.warning(f"Failed to create fulltext index {index.name}: {redact_error(e, password)}")
                     elif isinstance(index, VectorIndex):
                         # Create vector index using custom method
                         try:
@@ -2495,7 +2502,7 @@ class Client(BaseMatrixOneClient):
                             _exec_sql(vector_sql)
                             self.logger.info(f"✓ Created vector index '{index.name}'")
                         except Exception as e:
-                            self.logger.warning(f"Failed to create vector index {index.name}: {e}")
+                            self.logger.warning(f"Failed to create vector index {index.name}: {redact_error(e, password)}")
                     else:
                         # Create regular index using manual SQL to avoid dialect issues
                         try:
@@ -2505,7 +2512,7 @@ class Client(BaseMatrixOneClient):
                             _exec_sql(index_sql)
                             self.logger.info(f"✓ Created index '{index.name}'")
                         except Exception as e:
-                            self.logger.warning(f"Failed to create index {index.name}: {e}")
+                            self.logger.warning(f"Failed to create index {index.name}: {redact_error(e, password)}")
 
             return self
 
