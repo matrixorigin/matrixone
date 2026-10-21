@@ -144,6 +144,23 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 				}
 			})
 		}
+		for _, name := range []string{"date_add", "date_sub"} {
+			t.Run("prepared_null_interval/"+name, func(t *testing.T) {
+				stmt, err := conn.PrepareContext(ctx, "select "+name+"(?,interval ? day)")
+				require.NoError(t, err)
+				defer stmt.Close()
+				for _, interval := range []any{nil, int64(1), nil} {
+					var got sql.NullString
+					require.NoError(t, stmt.QueryRowContext(ctx, "2024-00-00", interval).Scan(&got))
+					require.False(t, got.Valid)
+					count := 0
+					if interval != nil {
+						count = 1
+					}
+					warnings(t, count)
+				}
+			})
+		}
 		// CTAS must admit NULL synthesized from a non-NULL string value.
 		exec("create table " + schema + ".required_dates(id int primary key,v varchar(16) not null)")
 		exec("insert into " + schema + ".required_dates values(1,'2024-00-00'),(2,'2024-02-29')")
@@ -167,7 +184,7 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 		// CTAS initially stores full expression results even when the declared
 		// width is too small. A later ordinary write must preserve them too.
 		exec("create table " + schema + ".week_dates(id int primary key,v varchar(16) not null)")
-		exec("insert into " + schema + ".week_dates values(1,'0000-01-00'),(2,'2024-00-30')")
+		exec("insert into " + schema + ".week_dates values(1,'0000-01-00'),(2,'2024-00-30'),(3,'2020-00-00')")
 		for _, tc := range []struct {
 			name, format, sourceID, want, width string
 		}{
@@ -175,6 +192,7 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 			{"week_year_monday", "%x", "1", "4294967295", "10"},
 			{"week_sunday", "%U", "2", "613566756", "9"},
 			{"week_year_week_sunday", "%V", "2", "613566756", "9"},
+			{"iso_week_boundary", "%v", "3", "613566753", "9"},
 		} {
 			t.Run("format_width_ctas/"+tc.name, func(t *testing.T) {
 				tableName := "formatted_" + tc.name
@@ -184,7 +202,11 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 				_, err := conn.ExecContext(ctx, "create table "+table+" as "+query)
 				require.NoError(t, err)
 				check(t, "select n from "+table, []sql.NullString{value(tc.want)})
-				_, err = conn.ExecContext(ctx, "insert into "+table+" values('"+tc.want+"')")
+				insert := "insert into " + table + " values('" + tc.want + "')"
+				if tc.name == "iso_week_boundary" {
+					insert = "insert into " + table + " " + query
+				}
+				_, err = conn.ExecContext(ctx, insert)
 				require.NoError(t, err)
 				check(t, "select n from "+table+" order by n", []sql.NullString{value(tc.want), value(tc.want)})
 				check(t, "select character_maximum_length from information_schema.columns where table_schema='"+schema+"' and table_name='"+tableName+"' and column_name='n'", []sql.NullString{value(tc.width)})

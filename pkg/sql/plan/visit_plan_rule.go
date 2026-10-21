@@ -3177,7 +3177,9 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 							param.SourceType.Oid == types.T_float64)
 				}
 			}
-			if functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i]) {
+			if (functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i])) ||
+				((functionName == "date_add" || functionName == "date_sub") && i == 0 &&
+					rawPreparedCalendarMarker(originalArgs[i])) {
 				var known bool
 				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
 				if err != nil {

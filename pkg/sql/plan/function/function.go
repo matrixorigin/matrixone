@@ -581,6 +581,9 @@ func getFunctionByName(
 	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
 		check = fixedTypeMatch(f.Overloads[:4], args)
 	}
+	if legacy, ok := legacyIncompleteTemporalCheck(ctx, r.fid, f.Overloads, args); ok {
+		check = legacy
+	}
 	if r.fid == INTEGER_DIV && LegacyDecimalIntegerDiv(ctx) {
 		check = legacyIntegerDivCheck(args)
 	}

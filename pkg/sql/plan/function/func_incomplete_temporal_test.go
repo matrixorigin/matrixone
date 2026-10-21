@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
@@ -237,6 +238,33 @@ func TestIncompleteDateFormatKeepsConversionPolicy(t *testing.T) {
 			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{tc.want}, []bool{tc.null}), DateFormat)
 			ok, info := c.RunAndFree()
 			require.True(t, ok, info)
+		})
+	}
+}
+
+func TestIncompleteTemporalLegacyBinding(t *testing.T) {
+	require.False(t, LegacyIncompleteTemporalStrings(nil))
+	text := types.T_varchar.ToType()
+	for _, tc := range []struct {
+		name     string
+		inputs   []types.Type
+		released int32
+	}{
+		{"date_format", []types.Type{text, text}, 2},
+		{"datediff", []types.Type{text, text}, 1},
+		{"to_days", []types.Type{text}, 1},
+		{"to_seconds", []types.Type{text}, 1},
+		{"dayofweek", []types.Type{text}, 3},
+		{"week", []types.Type{text, types.T_int64.ToType()}, 4},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			current, err := GetFunctionByName(context.Background(), tc.name, tc.inputs)
+			require.NoError(t, err)
+			require.GreaterOrEqual(t, current.overloadId, tc.released)
+			legacy, err := GetFunctionByName(WithLegacyIncompleteTemporalStrings(context.Background()), tc.name, tc.inputs)
+			require.NoError(t, err)
+			require.Less(t, legacy.overloadId, tc.released)
+			require.True(t, legacy.needCast, "released registry must retain its typed input conversion")
 		})
 	}
 }
