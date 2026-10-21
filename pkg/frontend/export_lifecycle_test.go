@@ -1,7 +1,17 @@
 // Copyright 2026 Matrix Origin
+//
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
-// You may obtain a copy at http://www.apache.org/licenses/LICENSE-2.0
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
 package frontend
 
 import (
@@ -14,8 +24,11 @@ import (
 	"sync/atomic"
 	"testing"
 	"testing/synctest"
+	"time"
 
 	"github.com/golang/mock/gomock"
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
@@ -24,9 +37,14 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/util/trace/impl/motrace"
 	"github.com/panjf2000/ants/v2"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
@@ -146,11 +164,18 @@ func TestExportFinalizerClosedChannel(t *testing.T) {
 type exportLifecycleFS struct {
 	fileservice.FileService
 	write  func(context.Context, fileservice.IOVector) error
+	read   func(context.Context, *fileservice.IOVector) error
 	closed atomic.Bool
 }
 
 func (f *exportLifecycleFS) Write(ctx context.Context, v fileservice.IOVector) error {
 	return f.write(ctx, v)
+}
+func (f *exportLifecycleFS) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if f.read != nil {
+		return f.read(ctx, v)
+	}
+	return f.FileService.Read(ctx, v)
 }
 func (f *exportLifecycleFS) Close(context.Context) { f.closed.Store(true) }
 
@@ -446,4 +471,111 @@ func TestExportCleanupKeepsWholeTransactionRollback(t *testing.T) {
 	require.ErrorIs(t, rollbackTxnFunc(ses, err, ec), fatal)
 	require.True(t, ec.txnOpt.byRollback)
 	require.Nil(t, ses.GetTxnHandler().GetTxn(), "fatal export error must discard the entire explicit transaction")
+}
+
+// Exercise the stored-result entry point, including sinks waiting on a
+// context-aware backend operation before they begin consuming the pipe.
+func TestStoredResultDumpCancellationOwnership(t *testing.T) {
+	for _, phase := range []string{"header-error", "source-error", "parent-cancel"} {
+		t.Run(phase, func(t *testing.T) {
+			ioutil.RunPipelineTest(func() {
+				ctrl := gomock.NewController(t)
+				ses := newTestSession(t, ctrl)
+				defer ses.Close()
+				ses.proc.Base.SessionInfo.Account = sysAccountName
+				ses.proc.Base.SessionInfo.Role = moAdminRoleName
+				key := &struct{}{}
+				ctx := context.WithValue(context.Background(), key, "stored-result")
+				require.NoError(t, ses.SetSessionSysVar(ctx, "save_query_result", int8(1)))
+				ses.GetTxnCompileCtx().execCtx = &ExecCtx{reqCtx: ctx, proc: ses.proc}
+				id := uuid.New()
+				ses.SetStmtId(id)
+				ses.tStmt = &motrace.StatementInfo{StatementID: id}
+				ses.rs = &plan.ResultColDef{ResultCols: []*plan.ColDef{{Name: "value", Typ: plan.Type{Id: int32(types.T_int8)}}}}
+				statements, err := parsers.Parse(ctx, dialect.MYSQL, "select value from t", 1)
+				require.NoError(t, err)
+				ses.ast, ses.p = statements[0], &plan.Plan{}
+				require.True(t, canSaveQueryResult(ctx, ses))
+				data := newBatch([]types.Type{types.T_int8.ToType()}, 1, ses.proc)
+				defer data.Clean(ses.proc.Mp())
+				require.NoError(t, saveBatch(ctx, ses, data))
+				require.NoError(t, saveMeta(ctx, ses))
+
+				cfg := newDiffCSVUserConfig()
+				cfg.QueryId = id.String()
+				cfg.FilePath = "SHARED:/stored-dump-" + phase + ".csv"
+				cfg.Header = phase != "source-error"
+				if phase == "header-error" {
+					cfg.MaxFileSize = 1
+				}
+				pu := getPu(ses.GetService())
+				original, originalProc := pu.FileService, ses.proc
+				defer func() { pu.FileService = original }()
+				injected := moerr.NewInternalErrorNoCtx("injected stored-result read failure")
+
+				func() {
+					parent, cancel := context.WithCancel(ctx)
+					defer cancel()
+					entered, exited := make(chan struct{}), make(chan struct{})
+					sinkContext := make(chan context.Context, 1)
+					fs := &exportLifecycleFS{FileService: original, write: func(ctx context.Context, _ fileservice.IOVector) error {
+						sinkContext <- ctx
+						close(entered)
+						defer close(exited)
+						<-ctx.Done()
+						return ctx.Err()
+					}}
+					if phase == "source-error" {
+						sourcePath := catalog.BuildQueryResultPath(sysAccountName, id.String(), 1)
+						fs.read = func(ctx context.Context, vector *fileservice.IOVector) error {
+							if vector.FilePath == sourcePath {
+								<-entered
+								return injected
+							}
+							return original.Read(ctx, vector)
+						}
+					}
+					pu.FileService = fs
+					done := make(chan error, 1)
+					go func() { done <- doDumpQueryResult(parent, ses, cfg) }()
+					<-entered
+					if phase == "parent-cancel" {
+						cancel()
+					}
+					var dumpErr error
+					select {
+					case dumpErr = <-done:
+					case <-time.After(5 * time.Second):
+						// A regressing test must still cancel and join its cooperative sink.
+						cancel()
+						dumpErr = <-done
+						t.Error("stored-result cleanup waited for independent parent cancellation")
+					}
+					switch phase {
+					case "header-error":
+						require.ErrorContains(t, dumpErr, "header line size")
+						require.NoError(t, parent.Err())
+					case "source-error":
+						require.Same(t, injected, dumpErr)
+						require.NoError(t, parent.Err())
+					case "parent-cancel":
+						require.ErrorIs(t, dumpErr, context.Canceled)
+					}
+					select {
+					case <-exited:
+					default:
+						t.Fatal("dump returned before its sink exited")
+					}
+					child := <-sinkContext
+					require.Equal(t, "stored-result", child.Value(key))
+					require.ErrorIs(t, child.Err(), context.Canceled)
+					require.False(t, fs.closed.Load(), "dump must not close a borrowed shared service")
+					require.Same(t, originalProc, ses.proc)
+					cols, err := openResultMeta(ctx, ses, id.String())
+					require.NoError(t, err, "saved metadata and shared service must remain usable")
+					require.Equal(t, "value", cols.ResultCols[0].Name)
+				}()
+			})
+		})
+	}
 }
