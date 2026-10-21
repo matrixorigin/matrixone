@@ -398,6 +398,7 @@ func DropColumn(
 	alterPlan *plan.AlterTable,
 	colName string,
 	alterCtx *AlterTableContext,
+	preserveIndexes bool,
 ) (bool, error) {
 
 	tableDef := alterPlan.CopyTableDef
@@ -407,8 +408,13 @@ func DropColumn(
 		return false, moerr.NewErrCantDropFieldOrKey(ctx.GetContext(), colName)
 	}
 
-	// We only support dropping column with single-value none Primary Key index covered now.
-	if err := handleDropColumnWithIndex(ctx.GetContext(), colName, tableDef); err != nil {
+	// A replacement keeps index bindings, but never the dropped column's source
+	// mapping. Genuine removals retain the existing index cleanup authority.
+	if preserveIndexes {
+		if err := validateFunctionalTable(ctx.GetContext(), tableDef); err != nil {
+			return column.Primary, err
+		}
+	} else if err := handleDropColumnWithIndex(ctx.GetContext(), colName, tableDef); err != nil {
 		return column.Primary, err
 	}
 	if err := handleDropColumnWithPrimaryKey(ctx.GetContext(), colName, tableDef); err != nil {
