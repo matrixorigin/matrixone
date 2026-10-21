@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 30
+- Revision: 31
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 31 integration baseline: official main `67c91c5bdf6c669f63331778634215f7aa3e8f58`
 - Revision 30 integration baseline: official main `d4bda99eee3dd0964e8e1ec1f66d5e3e0fb19e14`
 - Revision 29 integration baseline: official main `a4de4ed1381780d02fa7f440ce7c4f9e01269674`
 - Revision 28 integration baseline: official main `fdcb37a5212a4bbc82fd958e6f54f195081bb56b`
@@ -1464,6 +1465,39 @@ new JSONLine/harness delta leaves its semantic owner unchanged. The crossed
 external pruning/LOAD paths are refreshed instead of reusing stale reader proof.
 Function605/MORPC127, Node96/Instruction65 and scalar capacity owners are unchanged;
 no fresh native, GPU, capacity or live mixed-version qualification is claimed.
+
+### Revision 31 Kafka projection and Arrow LOAD admission integration
+
+The publication CAS stopped before any push when official main advanced through
+Kafka JSONLine projection to `67c91c5bdf6c669f63331778634215f7aa3e8f58`.
+All 44 existing patches replay without conflicts or changed patches. Kafka JSON
+objects are validated against the declared data width, independently of projected
+fields; metadata-only projections retain synthetic columns in both strict modes.
+Short objects fail before the pending-record state is published. Non-Kafka JSON
+width checks and the revision-30 binary-wrapper contract remain separate.
+
+Arrow LOAD now checks the target INSERT privilege before planning can read an
+external source. Direct, prepared and explained LOAD share that pre-plan check;
+post-plan authorization remains in force. Scoped statement binding restores the
+session and compiler databases independently. This crosses the PR's prepared
+specialization and external projection paths, so those paths are refreshed.
+
+The [revision-31 receipt](validation/20261021_kafka_arrow_admission_integration.json)
+records the complete external owner suite, twelve frontend authorization/binding
+roots and five-package format/vet/lint checks. Public SQL tests use an in-process Kafka test broker over real sockets, repeat the binary OUTFILE/LOAD and pruning/whitespace probes, and run
+prepared LOAD database binding both initially and again in the same instance.
+A real local MinIO test proves denied direct/prepared LOAD performs zero source
+requests and zero target writes; granting INSERT then permits source reads and
+two total target rows (the seed plus one loaded row). Its certificate directory is isolated under the task temporary
+directory. No skipped root is accepted as this proof.
+
+Revision-29 procedure/dedup/ISCP and revision-30 exporter/MongoDB evidence remains
+immutable and reusable only for unchanged owners. The earlier interrupted Kafka
+external command had no verified terminal result and supplies no pass evidence;
+this revision
+runs that complete suite to a terminal result. Function605/MORPC127 and the
+scalar capacity owners are unchanged. No new capacity, native-wire, GPU, live
+MongoDB or mixed-version-cluster qualification is claimed.
 
 ## Alternatives
 
