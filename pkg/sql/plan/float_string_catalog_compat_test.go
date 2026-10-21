@@ -52,7 +52,7 @@ func legacyFloatTable(t *testing.T, name string) *planpb.TableDef {
 	return def
 }
 
-func floatCatalogCompiler(t *testing.T) *MockCompilerContext {
+func floatCatalogCompiler(t testing.TB) *MockCompilerContext {
 	t.Helper()
 	compiler := NewMockCompilerContext(false, newPlanTestProcess(t))
 	compiler.tables["t"] = &planpb.TableDef{Name: "t"}

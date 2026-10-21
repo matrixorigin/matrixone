@@ -39,7 +39,7 @@ func MigrateLegacyFloatStringTableDef(ctx CompilerContext, def *planpb.TableDef)
 		return err
 	}
 	budget := &tableDumpBindingBudget{}
-	for _, item := range persistedTableExpressions(def, false) {
+	for item := range persistedTableExpressions(def) {
 		if err := ctx.GetContext().Err(); err != nil {
 			return err
 		}
@@ -355,6 +355,27 @@ func rebindFloatStringFunction(ctx context.Context, original *planpb.Expr, args 
 	return bound, nil
 }
 
+// A one-element safe IN list lowers to equality, so its list-owned cast may
+// survive in an '=' descendant of an expanded IN. Recover that binding owner
+// only when it exactly reconstructs the historical node; keep the same owner
+// for the current binding rather than widening comparison metadata by hand.
+func rebindFloatStringInComparison(ctx context.Context, original *planpb.Expr, args []*planpb.Expr) (*planpb.Expr, error) {
+	if len(args) != 2 {
+		return nil, errLegacyFloatStringRebind
+	}
+	var name string
+	switch original.GetF().Func.ObjName {
+	case "=":
+		name = "in"
+	case "!=":
+		name = "not_in"
+	default:
+		return nil, errLegacyFloatStringRebind
+	}
+	list := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_tuple)}, Expr: &planpb.Expr_List{List: &planpb.ExprList{List: args[1:]}}}
+	return bindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{args[0], list}, true, nil, nil, true)
+}
+
 // chargeFloatStringRebind bounds subtree copies and binder passes, including
 // nested functions whose reconstruction costs O(nodes * depth).
 func chargeFloatStringRebind(expr *planpb.Expr, budget *tableDumpBindingBudget) error {
@@ -419,6 +440,22 @@ func affectedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget *tab
 	return false, nil
 }
 
+// Peel only a single implicit VARCHAR conversion owned by the current binder
+// operation. User casts and value-producing functions remain boundaries.
+func peelFloatStringArgument(arg *planpb.Expr) (*planpb.Expr, bool) {
+	cast := arg.GetF()
+	if cast == nil || cast.Func == nil || cast.SyntaxExplicitCast || len(cast.Args) != 2 ||
+		cast.Args[0] == nil || cast.Args[1] == nil || cast.Args[1].GetT() == nil ||
+		arg.Typ.Id != int32(types.T_varchar) || !proto.Equal(&arg.Typ, &cast.Args[1].Typ) {
+		return arg, false
+	}
+	id, overload := function.DecodeOverloadID(cast.Func.Obj)
+	if id != function.CAST || overload != 0 {
+		return arg, false
+	}
+	return cast.Args[0], isLegacyFloatStringCast(arg)
+}
+
 // Reconcile affected functions through the binder, including sibling implicit
 // casts and argument-sensitive metadata. Exact historical reconstruction proves
 // ownership of peeled casts; the encoded overload and final SQL-bound tree must
@@ -464,27 +501,49 @@ func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget
 	args := DeepCopyExprList(fn.Args)
 	changed := false
 	for i, arg := range args {
-		cast := arg.GetF()
-		if cast == nil || cast.Func == nil || cast.SyntaxExplicitCast || len(cast.Args) != 2 ||
-			cast.Args[0] == nil || cast.Args[1] == nil || cast.Args[1].GetT() == nil ||
-			arg.Typ.Id != int32(types.T_varchar) || !proto.Equal(&arg.Typ, &cast.Args[1].Typ) {
-			continue
-		}
-		castID, overload := function.DecodeOverloadID(cast.Func.Obj)
-		if castID == function.CAST && overload == 0 {
-			// A direct numeric branch can own the only legacy conversion.
-			changed = changed || isLegacyFloatStringCast(arg)
-			args[i] = cast.Args[0]
+		var legacy bool
+		args[i], legacy = peelFloatStringArgument(arg)
+		changed = changed || legacy
+	}
+	// IN owns the conversions of its immediate RHS elements. Leaving those
+	// wrappers behind changes its safe-list partition after the left side widens.
+	// Exact historical reconstruction below proves each peeled cast's owner.
+	if (id == function.IN || id == function.NOT_IN) && len(args) == 2 {
+		if list := args[1].GetList(); list != nil {
+			budget.visits += len(list.List)
+			if budget.visits > tableDumpMaxCandidateVisits {
+				return false, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
+			}
+			for i, entry := range list.List {
+				if err := ctx.Err(); err != nil {
+					return false, err
+				}
+				var legacy bool
+				list.List[i], legacy = peelFloatStringArgument(entry)
+				changed = changed || legacy
+			}
 		}
 	}
+
 	if id == function.FORMAT {
 		if err := chargeFloatStringRebind(expr, budget); err != nil {
 			return false, err
 		}
 	}
 	old, err := rebindFloatStringFunction(function.WithLegacyFloatStringBounds(ctx), expr, DeepCopyExprList(args))
+	inComparison := false
 	if err != nil || !sameTableDumpBoundExpression(expr, old) {
-		return false, errLegacyFloatStringRebind
+		if len(args) != 2 || (fn.Func.ObjName != "=" && fn.Func.ObjName != "!=") {
+			return false, errLegacyFloatStringRebind
+		}
+		if err := chargeFloatStringRebind(expr, budget); err != nil {
+			return false, err
+		}
+		old, err = rebindFloatStringInComparison(function.WithLegacyFloatStringBounds(ctx), expr, DeepCopyExprList(args))
+		if err != nil || !sameTableDumpBoundExpression(expr, old) {
+			return false, errLegacyFloatStringRebind
+		}
+		inComparison = true
 	}
 	for _, arg := range args {
 		child, err := widenVerifiedFloatStringExpr(ctx, arg, budget)
@@ -508,7 +567,12 @@ func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget
 			}
 		}
 	}
-	current, err := rebindFloatStringFunction(ctx, expr, args)
+	var current *planpb.Expr
+	if inComparison {
+		current, err = rebindFloatStringInComparison(ctx, expr, args)
+	} else {
+		current, err = rebindFloatStringFunction(ctx, expr, args)
+	}
 	if err != nil || current.GetF() == nil || current.GetF().Func == nil || current.GetF().Func.Obj != fn.Func.Obj {
 		return false, errLegacyFloatStringRebind
 	}
