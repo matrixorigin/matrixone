@@ -1,0 +1,37 @@
+drop database if exists unicode_unique_diagnostics;
+create database unicode_unique_diagnostics;
+use unicode_unique_diagnostics;
+create table u_single(id int primary key, s varchar(30) collate utf8mb4_unicode_ci, unique key uk_named(s));
+insert into u_single values(1,'Alpha');
+insert into u_single values(2,'alpha');
+Duplicate entry 'alpha' for key 'uk_named'
+insert ignore into u_single values(2,'alpha');
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1062  ¦  Duplicate entry 'alpha' for key 'uk_named'
+insert into u_single values(1,'Other');
+Duplicate entry '1' for key 'id'
+select count(*) from u_single;
+➤ count(*)[-5,64,0]  𝄀
+1
+create table u_prefix(id int primary key, s varchar(30) collate utf8mb4_unicode_ci, unique key uk_prefix(s(3)));
+insert into u_prefix values(1,'Alpha');
+insert into u_prefix values(2,'alphaZ');
+Duplicate entry 'alp' for key 'uk_prefix'
+insert ignore into u_prefix values(2,'alphaZ');
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1062  ¦  Duplicate entry 'alp' for key 'uk_prefix'
+create table u_composite(id int primary key, s varchar(30) collate utf8mb4_unicode_ci, n int, unique key uk_composite(s,n));
+insert into u_composite values(1,'Alpha',7),(3,'Beta',8);
+insert into u_composite values(2,'alpha',7);
+Duplicate entry '(alpha,7)' for key 'uk_composite'
+update ignore u_composite set s='alpha',n=7 where id=3;
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1062  ¦  Duplicate entry '(alpha,7)' for key 'uk_composite'
+select id,s,n from u_composite order by id;
+➤ id[4,0,0]  ¦  s[12,30,0]  ¦  n[4,0,0]  𝄀
+1  ¦  Alpha  ¦  7  𝄀
+3  ¦  Beta  ¦  8
+drop database unicode_unique_diagnostics;
