@@ -268,7 +268,11 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 		// ambiguous literal terminator or enclosure cannot be protected by
 		// prefixing it; enclose the value instead, so addEscapeToString can
 		// double the enclosure byte without creating a translated escape.
-		flag = (isAmbiguousCSVEscape(field) && bytes.IndexByte(tmp, field) >= 0) ||
+		// A separator beginning with ESCAPED BY also collides with bytes
+		// introduced by encoding (e.g. CR becomes backslash-r), not just with
+		// literal separator bytes in tmp. Frame the value before escaping it.
+		flag = field == oq.escapeChar() || line == oq.escapeChar() ||
+			(isAmbiguousCSVEscape(field) && bytes.IndexByte(tmp, field) >= 0) ||
 			(isAmbiguousCSVEscape(line) && bytes.IndexByte(tmp, line) >= 0) ||
 			(isAmbiguousCSVEscape(enclosed) && bytes.IndexByte(tmp, enclosed) >= 0)
 	}
@@ -277,6 +281,18 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 		quote = enclosed
 	}
 	return formatOutputStringRaw(oq, addEscapeToString(oq, tmp, quote), symbol, enclosed, flag, buffer)
+}
+
+// NULL bypasses value escaping, but still needs enclosure when the escape
+// prefix would otherwise become a separator. Keep this check off the ordinary
+// non-NULL raw writer path.
+func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, buffer *bytes.Buffer) error {
+	flag := false
+	if enclosed != 0 && oq.escapeChar() != 0 {
+		field, line, _, _ := oq.csvBoundaryBytes()
+		flag = field == oq.escapeChar() || line == oq.escapeChar()
+	}
+	return formatOutputStringRaw(oq, []byte{'\\', 'N'}, symbol, enclosed, flag, buffer)
 }
 
 // formatOutputStringRaw is also used for the genuine NULL marker. All non-NULL
@@ -521,7 +537,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	for i := 0; i < rowCount; i++ {
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
-				formatOutputStringRaw(ep, []byte("\\N"), symbol[j], closeby, false, buffer)
+				formatOutputNull(ep, symbol[j], closeby, buffer)
 				continue
 			}
 			switch vec.GetType().Oid { //get col
@@ -785,9 +801,9 @@ func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
 	if ec.escapeChar() == 0 {
 		return nil
 	}
-	if noQuote && (isAmbiguousCSVEscape(field) || isAmbiguousCSVEscape(line)) {
+	if noQuote && (isAmbiguousCSVEscape(field) || isAmbiguousCSVEscape(line) || field == ec.escapeChar() || line == ec.escapeChar()) {
 		return moerr.NewInvalidInput(ctx,
-			"CSV terminators starting with an ambiguous escape character (0, b, n, r, t, Z, N) require a nonempty ENCLOSED BY")
+			"CSV terminators starting with ESCAPED BY or an ambiguous escape character (0, b, n, r, t, Z, N) require a nonempty ENCLOSED BY")
 	}
 	return nil
 }
@@ -870,7 +886,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			return err
 		} else if isNil {
 			//NULL is output as \N
-			if err = formatOutputStringRaw(oq, []byte{'\\', 'N'}, symbol[i], closeby, false, buffer); err != nil {
+			if err = formatOutputNull(oq, symbol[i], closeby, buffer); err != nil {
 				return err
 			}
 			continue

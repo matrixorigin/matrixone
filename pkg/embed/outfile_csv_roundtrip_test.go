@@ -60,6 +60,9 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 		exec("insert into " + db + ".wide_bits_src values (1,1314212940),(2,23630),(3,null),(4,1630560867),(5,1633837667),(6,1634624099),(7,1634886243),(8,1635017315),(9,1633313379)")
 		exec("create table " + db + ".decimal_src(id int primary key,n decimal(9,2))")
 		exec("insert into " + db + ".decimal_src values (1,12.34),(2,-5.67),(3,null)")
+		exec("create table " + db + ".bits24_src(id int primary key,b bit(24))")
+		// 0x610D62 contains a CR which the encoder rewrites to backslash-r.
+		exec("insert into " + db + ".bits24_src values (1,6360418),(2,6382178),(3,null)")
 		for _, tc := range []struct {
 			name, source, column, field, line, quote, extra string
 		}{
@@ -93,6 +96,12 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			{"bit32-enclosed-Z", "wide_bits_src", "b", ",", "\n", "Z", ""},
 			{"enclosure-inside-field-terminator", "bits_src", "b", "::0", "\n", "0", ""},
 			{"enclosure-inside-line-terminator", "bits_src", "b", ",", "||0", "0", ""},
+			{"escape-field", "bits24_src", "b", `\`, "\n", `"`, ""},
+			{"escape-line", "bits24_src", "b", ",", `\`, `"`, ""},
+			{"escape-r-field", "bits24_src", "b", `\r`, "\n", `"`, ""},
+			{"escape-r-line", "bits24_src", "b", ",", `\r`, `"`, ""},
+			{"escape-field-force", "bits24_src", "b", `\`, "\n", `"`, " FORCE_QUOTE (b)"},
+			{"escape-line-force", "bits24_src", "b", ",", `\`, `"`, " FORCE_QUOTE (b)"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec := func(query string) {
@@ -182,6 +191,9 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			" FIELDS TERMINATED BY 'n' ENCLOSED BY ''",
 			" FIELDS TERMINATED BY 'N:' ENCLOSED BY ''",
 			" FIELDS ENCLOSED BY '' LINES TERMINATED BY 'N:'",
+			" FIELDS TERMINATED BY " + sqlquote.String(`\`) + " ENCLOSED BY ''",
+			" FIELDS TERMINATED BY " + sqlquote.String(`\r`) + " ENCLOSED BY ''",
+			" FIELDS ENCLOSED BY '' LINES TERMINATED BY " + sqlquote.String(`\`),
 		} {
 			t.Run("unrepresentable-bare-format"+options, func(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "rejected.csv")

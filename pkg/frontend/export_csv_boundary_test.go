@@ -40,13 +40,14 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 		enclosed    byte
 		blockSize   int64
 	}
-	formats := make([]csvFormat, 0, 13)
+	formats := make([]csvFormat, 0, 17)
 	for _, enclosed := range []byte{0, '"', '0', 'b', 'n', 'r', 't', 'Z', 'N'} {
 		formats = append(formats, csvFormat{",", "\n", enclosed, 17})
 	}
 	// Escaping the bare BIT byte N for either separator must not create
 	// LOAD's NULL marker. Include multi-byte terminators and both exporters.
-	for _, separator := range []string{"N", "N:"} {
+	// Backslash separators must also protect generated CR escapes and NULL.
+	for _, separator := range []string{"N", "N:", `\`, `\r`} {
 		// Use LOAD's production read size for the new terminator cases;
 		// retain the existing tiny-block enclosure controls above.
 		formats = append(formats, csvFormat{separator, "\n", '"', csvparser.ReadBlockSize},
@@ -144,7 +145,7 @@ func TestCSVValueEscapingDoesNotMutateOrAllocatePlainValues(t *testing.T) {
 }
 
 func TestCSVFramingRejectsAmbiguousBareSeparators(t *testing.T) {
-	for _, separator := range []string{"0", "b", "n", "r", "t", "Z", "N", "N:"} {
+	for _, separator := range []string{"0", "b", "n", "r", "t", "Z", "N", "N:", `\`, `\r`} {
 		for _, line := range []bool{false, true} {
 			t.Run(fmt.Sprintf("separator=%s/line=%t", separator, line), func(t *testing.T) {
 				fieldTerm, lineTerm := separator, "\n"
