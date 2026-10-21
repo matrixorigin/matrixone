@@ -520,5 +520,88 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 				require.Equal(t, int64(1), count)
 			})
 		})
+
+		t.Run("mixed_numeric_lock_keys", func(t *testing.T) {
+			table := dbName + ".lock_keys"
+			execSQLRequire(t, ctx, db, "create table "+table+" (id bigint primary key, v int)")
+			execSQLRequire(t, ctx, db, "insert into "+table+" values (9,0),(67849,0)")
+			type scenario struct {
+				name, query string
+				args        []any
+				read        bool
+				affected    int64
+				blockedKey  int64
+			}
+			cases := make([]scenario, 0, 11)
+			for _, operation := range []struct {
+				name, statement string
+				read            bool
+			}{
+				{"update", "update %s set v=1 where %s", false},
+				{"delete", "delete from %s where %s", false},
+				{"select_for_update", "select id from %s where %s for update", true},
+			} {
+				for _, predicate := range []string{"cast('1' as json)=id", "id=cast('1' as json)"} {
+					cases = append(cases, scenario{
+						name: operation.name + "/" + predicate, query: fmt.Sprintf(operation.statement, table, predicate), read: operation.read,
+					})
+				}
+			}
+			cases = append(cases,
+				scenario{name: "prepared_json_left", query: "update " + table + " set v=1 where cast(? as json)=id", args: []any{"1"}},
+				scenario{name: "prepared_json_right", query: "update " + table + " set v=1 where id=cast(? as json)", args: []any{"1"}},
+				scenario{name: "numeric_absent_key", query: "update " + table + " set v=1 where id=1", blockedKey: 1},
+				scenario{name: "explicit_numeric_cast", query: "update " + table + " set v=1 where id=cast(cast('1' as json) as signed)", blockedKey: 1},
+				scenario{name: "matching_json_locks_actual_row", query: "update " + table + " set v=1 where id=cast('9' as json)", affected: 1, blockedKey: 9},
+			)
+			for _, tc := range cases {
+				t.Run(tc.name, func(t *testing.T) {
+					owner, err := db.BeginTx(ctx, nil)
+					require.NoError(t, err)
+					defer owner.Rollback()
+					if tc.read {
+						var id int64
+						require.ErrorIs(t, owner.QueryRowContext(ctx, tc.query).Scan(&id), sql.ErrNoRows)
+					} else {
+						result, err := owner.ExecContext(ctx, tc.query, tc.args...)
+						require.NoError(t, err)
+						changed, err := result.RowsAffected()
+						require.NoError(t, err)
+						require.Equal(t, tc.affected, changed)
+					}
+					contender, err := db.BeginTx(ctx, nil)
+					require.NoError(t, err)
+					defer contender.Rollback()
+					var id int64
+					require.NoError(t, contender.QueryRowContext(ctx, "select id from "+table+
+						" where id=67849 for update nowait").Scan(&id), "an unrelated row must remain lockable")
+					require.Equal(t, int64(67849), id)
+					if tc.blockedKey != 0 {
+						err = contender.QueryRowContext(ctx, fmt.Sprintf("select id from %s where id=%d for update nowait", table, tc.blockedKey)).Scan(&id)
+						var sqlErr *mysqlDriver.MySQLError
+						require.ErrorAs(t, err, &sqlErr)
+						require.Equal(t, uint16(3572), sqlErr.Number, "real rows and valid absent numeric keys must stay locked")
+					}
+					require.NoError(t, contender.Rollback())
+					require.NoError(t, owner.Rollback())
+					if tc.blockedKey != 0 {
+						probe, err := db.BeginTx(ctx, nil)
+						require.NoError(t, err)
+						defer probe.Rollback()
+						err = probe.QueryRowContext(ctx, fmt.Sprintf("select id from %s where id=%d for update nowait", table, tc.blockedKey)).Scan(&id)
+						if tc.blockedKey == 1 {
+							require.ErrorIs(t, err, sql.ErrNoRows)
+						} else {
+							require.NoError(t, err, "rollback must release the actual row lock")
+						}
+						require.NoError(t, probe.Rollback())
+					}
+				})
+			}
+			var count, total int
+			require.NoError(t, db.QueryRowContext(ctx, "select count(*),sum(v) from "+table).Scan(&count, &total))
+			require.Equal(t, 2, count)
+			require.Zero(t, total, "every scenario must roll back its writes")
+		})
 	})
 }

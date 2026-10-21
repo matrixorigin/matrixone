@@ -17,11 +17,77 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
+
+func TestJSONNumericPredicatesDoNotDefinePhysicalLockKeys(t *testing.T) {
+	for _, operation := range []string{
+		"update nation set n_name='x' where %s",
+		"delete from nation where %s",
+		"select n_nationkey from nation where %s for update",
+	} {
+		for _, tc := range []struct {
+			name, predicate string
+			prepared        bool
+			wantKey         bool
+		}{
+			{"json_left", "cast('1' as json)=n_nationkey", false, false},
+			{"json_right", "n_nationkey=cast('1' as json)", false, false},
+			{"json_single_in", "n_nationkey in (cast('1' as json))", false, false},
+			{"json_multiple_in", "n_nationkey in (cast('1' as json),cast('2' as json))", false, false},
+			{"prepared_json_left", "cast(? as json)=n_nationkey", true, false},
+			{"prepared_json_right", "n_nationkey=cast(? as json)", true, false},
+			{"numeric", "n_nationkey=1", false, true},
+			{"numeric_in", "n_nationkey in (1,2)", false, true},
+			{"explicit_numeric_cast", "n_nationkey=cast(cast('1' as json) as int)", false, true},
+			{"independent_numeric_key", "n_nationkey=1 and n_nationkey=cast('1' as json)", false, true},
+		} {
+			t.Run(fmt.Sprintf("%s/%s", operation, tc.name), func(t *testing.T) {
+				statement := fmt.Sprintf(operation, tc.predicate)
+				if tc.prepared {
+					statement = fmt.Sprintf("prepare json_lock from %q", statement)
+				}
+				proc := newPlanTestProcess(t)
+				logic, err := runOneStmt(NewMockOptimizer(true, proc), t, statement)
+				require.NoError(t, err)
+				if tc.prepared {
+					logic = logic.GetDcl().GetPrepare().Plan
+				}
+				query := logic.GetQuery()
+				require.NotNil(t, query)
+				var targets int
+				for _, node := range query.Nodes {
+					for _, target := range node.LockTargets {
+						if target.TableId != query.Nodes[0].TableDef.TblId {
+							continue
+						}
+						targets++
+						require.False(t, target.LockTableAtTheEnd, "an unsafe key must not become a whole-table lock")
+						if tc.wantKey {
+							require.NotNil(t, target.LockRows)
+							if payload := target.LockRows.GetVec(); payload != nil {
+								decoded := vector.NewVec(types.T_any.ToType())
+								defer decoded.Free(proc.Mp())
+								require.NoError(t, decoded.UnmarshalBinary(payload.Data))
+								require.Equal(t, target.PrimaryColTyp.Id, int32(decoded.GetType().Oid))
+								require.Equal(t, []int32{1, 2}, vector.MustFixedColNoTypeCheck[int32](decoded))
+							} else {
+								require.Equal(t, target.PrimaryColTyp.Id, target.LockRows.Typ.Id)
+							}
+						} else {
+							require.Nil(t, target.LockRows, "mixed comparison values are not physical primary keys")
+						}
+					}
+				}
+				require.NotZero(t, targets, "the public statement must reach row locking")
+			})
+		}
+	}
+}
 
 func TestJSONNumericCorrelationsDoNotDefinePartitions(t *testing.T) {
 	ctx := context.Background()
