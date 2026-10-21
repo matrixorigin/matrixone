@@ -34,4 +34,11 @@ select id,s,n from u_composite order by id;
 ➤ id[4,0,0]  ¦  s[12,30,0]  ¦  n[4,0,0]  𝄀
 1  ¦  Alpha  ¦  7  𝄀
 3  ¦  Beta  ¦  8
+create table u_mixed(id int primary key, s varchar(30) collate utf8mb4_unicode_ci, k int, unique key uk_s(s), unique key uk_k(k));
+insert into u_mixed values(1,'Alpha',7);
+insert into u_mixed values(6,'Beta',NULL),(7,'Gamma',7);
+Duplicate entry '7' for key 'uk_k'
+select id,s,k from u_mixed order by id;
+➤ id[4,0,0]  ¦  s[12,30,0]  ¦  k[4,0,0]  𝄀
+1  ¦  Alpha  ¦  7
 drop database unicode_unique_diagnostics;
