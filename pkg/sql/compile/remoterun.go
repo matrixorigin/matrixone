@@ -106,6 +106,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
+	if err = validateRemoteViewDefinitionPipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
 	if err = validateOctStringProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
@@ -2460,6 +2463,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 			"geodetic spatial-distance semantics require MORPC protocol version 90",
 		)
 	}
+	if features.ViewMetadataFunctions && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion126) {
+		return moerr.NewNotSupportedNoCtx("view metadata remote execution requires MORPC protocol version 126")
+	}
 	return nil
 }
 
@@ -2946,6 +2952,33 @@ func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.
 		if err := validateRemoteArrowLoadPipelineProtocol(proc, child); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateRemoteViewDefinitionPipelineProtocol protects the function IDs that
+// occur in the persisted VIEWS definition for standalone scope encoding.
+// Remote send and receive reuse the shared expression feature analysis.
+func validateRemoteViewDefinitionPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	// A current peer cannot reject this function. Avoid a reflective traversal
+	// of every ordinary remote pipeline once the negotiated capability is known.
+	if proc != nil && supportsRemoteViewDefinitionFunction(proc.GetService()) {
+		return nil
+	}
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return err
+	}
+	if !features.ViewMetadataFunctions {
+		return nil
+	}
+	if proc == nil || !supportsRemoteViewDefinitionFunction(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"view metadata remote execution requires MORPC protocol version 126",
+		)
 	}
 	return nil
 }
