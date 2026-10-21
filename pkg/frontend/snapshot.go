@@ -971,6 +971,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 
 	// collect views and tables during table restoration
 	viewMap := make(map[string]*tableInfo)
+	databaseRecreated := false
 
 	switch stmt.Level {
 	case tree.RESTORELEVELACCOUNT:
@@ -992,7 +993,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	case tree.RESTORELEVELDATABASE:
 		ctx = context.WithValue(ctx, tree.CloneLevelCtxKey{}, tree.RestoreCloneLevelDatabase)
 
-		if err = restoreToDatabase(ctx,
+		if databaseRecreated, err = restoreToDatabase(ctx,
 			ses.GetService(),
 			bh,
 			snapshotName,
@@ -1052,9 +1053,13 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 		}
 	}
 
-	if err = recreatePublicationsAfterDbRestoreTS(
-		ctx, ses.GetService(), bh, stmt.Level, dbName, restoreAccount, toAccountId, snapshot.ts); err != nil {
-		return stats, err
+	// A successful worker may deliberately skip a database (e.g. external
+	// foreign keys). Its live publications were not removed and must not replay.
+	if databaseRecreated {
+		if err = recreatePublicationsAfterDbRestoreTS(
+			ctx, ses.GetService(), bh, stmt.Level, dbName, restoreAccount, toAccountId, snapshot.ts); err != nil {
+			return stats, err
+		}
 	}
 
 	if stmt.Level == tree.RESTORELEVELACCOUNT {
@@ -1393,7 +1398,7 @@ func restoreToAccount(
 
 	// restore dbs
 	for _, dbName := range restoreDBNames {
-		if err = restoreToDatabase(ctx,
+		if _, err = restoreToDatabase(ctx,
 			sid,
 			bh,
 			snapshotName,
@@ -1459,7 +1464,7 @@ func restoreToDatabase(
 	isRestoreCluster bool,
 	subDbToRestore map[string]*subDbRestoreRecord,
 	source *partialRestoreSource,
-) (err error) {
+) (databaseRecreated bool, err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore db: %v, restore timestamp: %d", snapshotName, dbName, snapshotTs))
 	return restoreToDatabaseOrTable(ctx,
 		sid,
@@ -1491,7 +1496,7 @@ func restoreToTable(
 	source *partialRestoreSource,
 ) (err error) {
 	getLogger(sid).Debug(fmt.Sprintf("[%s] start to restore table: %v, restore timestamp: %d", snapshotName, tblName, snapshotTs))
-	return restoreToDatabaseOrTable(ctx,
+	_, err = restoreToDatabaseOrTable(ctx,
 		sid,
 		bh,
 		snapshotName,
@@ -1504,6 +1509,7 @@ func restoreToTable(
 		restoreAccount,
 		false,
 		nil, source)
+	return err
 }
 
 func restoreToDatabaseOrTable(
@@ -1521,7 +1527,7 @@ func restoreToDatabaseOrTable(
 	isRestoreCluster bool,
 	subDbToRestore map[string]*subDbRestoreRecord,
 	source *partialRestoreSource,
-) (err error) {
+) (databaseRecreated bool, err error) {
 	if needSkipDb(dbName) {
 		getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v", snapshotName, dbName))
 		return
@@ -1550,7 +1556,7 @@ func restoreToDatabaseOrTable(
 		return
 	}
 	if isSubDb && restoreToTbl {
-		return moerr.NewInternalError(ctx, "can't restore to table for sub db")
+		return false, moerr.NewInternalError(ctx, "can't restore to table for sub db")
 	}
 
 	if isRestoreCluster && isSubDb {
@@ -1573,7 +1579,7 @@ func restoreToDatabaseOrTable(
 		var isMasterDb bool
 		isMasterDb, err = checkDatabaseIsMaster(toCtx, sid, bh, snapshotName, dbName)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if isMasterDb {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore master db: %v, which has been referenced by foreign keys", snapshotName, dbName))
@@ -1597,7 +1603,7 @@ func restoreToDatabaseOrTable(
 		var isPubExist bool
 		isPubExist, err = checkPubExistOrNot(toCtx, sid, bh, snapshotName, dbName, snapshotTs)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if !isPubExist {
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore db: %v, no publication", snapshotName, dbName))
@@ -1609,7 +1615,7 @@ func restoreToDatabaseOrTable(
 		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
-
+		databaseRecreated = !restoreToTbl
 		return
 	} else {
 		createDbSql = appendDatabaseDefaultsSQL(createDatabaseIfNotExistsSQL(dbName), definition.defaults)
@@ -1618,6 +1624,7 @@ func restoreToDatabaseOrTable(
 		if err = execRestoreCreateDatabase(toCtx, bh, dbName, createDbSql); err != nil {
 			return
 		}
+		databaseRecreated = !restoreToTbl
 	}
 
 	tempSnap := &plan.Snapshot{
@@ -1638,9 +1645,9 @@ func restoreToDatabaseOrTable(
 	// if restore to table, expect only one table here
 	if restoreToTbl {
 		if len(tableInfos) == 0 {
-			return moerr.NewInternalErrorf(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
+			return false, moerr.NewInternalErrorf(ctx, "table %s not exists at snapshot %s", tblName, snapshotName)
 		} else if len(tableInfos) != 1 {
-			return moerr.NewInternalErrorf(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
+			return false, moerr.NewInternalErrorf(ctx, "find %v tableInfos by name %s at snapshot %s, expect only 1", len(tableInfos), tblName, snapshotName)
 		}
 	}
 
@@ -1655,7 +1662,7 @@ func restoreToDatabaseOrTable(
 		// external table data is stored outside MO and cannot be restored by clone.
 		if shouldSkipRestoreTableInBulk(tblInfo) {
 			if restoreToTbl {
-				return newExternalTableRestoreError(ctx, tblInfo, "snapshot")
+				return false, newExternalTableRestoreError(ctx, tblInfo, "snapshot")
 			}
 			getLogger(sid).Debug(fmt.Sprintf("[%s] skip restore external table: %v.%v", snapshotName, tblInfo.dbName, tblInfo.tblName))
 			continue

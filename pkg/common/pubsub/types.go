@@ -16,6 +16,8 @@ package pubsub
 
 import (
 	"strings"
+
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 )
 
 const (
@@ -85,7 +87,7 @@ func (pubInfo *PubInfo) GetCreateSql() string {
 	}
 	sql += " ACCOUNT " + pubInfo.SubAccountsStr
 	if len(pubInfo.Comment) > 0 {
-		sql += " COMMENT '" + pubInfo.Comment + "'"
+		sql += " COMMENT " + sqlquote.String(pubInfo.Comment)
 	}
 	return sql
 }

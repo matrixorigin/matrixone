@@ -177,3 +177,53 @@ func Test_recreatePublicationsAfterDbRestoreTS(t *testing.T) {
 		})
 	}
 }
+
+func TestSnapshotDatabaseWorkerReportsRecreation(t *testing.T) {
+	ctx := defines.AttachAccountId(t.Context(), uint32(sysAccountID))
+	const db, ts = "worker_result", int64(100)
+	masterSQL := fmt.Sprintf(checkDatabaseIsMasterFormat, quoteSQLStringLiteral(db), quoteSQLStringLiteral(db))
+	failure := errors.New("database recreation failed")
+	for _, tc := range []struct {
+		name, failSQL string
+		externalFK    bool
+		wantRecreated bool
+	}{
+		{name: "recreated", wantRecreated: true},
+		{name: "external_fk_skipped", externalFK: true},
+		{name: "master_check_failed", failSQL: masterSQL},
+		{name: "drop_failed", failSQL: dropDatabaseIfExistsSQL(db)},
+		{name: "create_failed", failSQL: createDatabaseIfNotExistsSQL(db)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			bh.sql2result[fmt.Sprintf("select datname, dat_createsql, dat_type from mo_catalog.mo_database {MO_TS = %d} where datname = '%s' and account_id = 0", ts, db)] =
+				newMrsForRestoreStringRows([]string{"datname", "dat_createsql", "dat_type"}, [][]interface{}{{db, "create database " + db, ""}})
+			bh.sql2result[masterSQL] = newMrsForRestoreStringRows([]string{"db_name"}, nil)
+			if tc.externalFK {
+				bh.sql2result[masterSQL] = newMrsForRestoreStringRows([]string{"db_name"}, [][]interface{}{{"external"}})
+			}
+			bh.sql2result[fmt.Sprintf(getPubInfoSql, uint32(sysAccountID))+" and database_name = '"+db+"'"] = newMrsForRestoreStringRows([]string{"account_id"}, nil)
+			if tc.failSQL != "" {
+				bh.sql2err[tc.failSQL] = failure
+			}
+			recreated, err := restoreToDatabase(ctx, "", bh, "s", db, 0, map[string]*tableInfo{}, map[string]*tableInfo{}, ts, 0, false, nil, newPartialRestoreSource(nil))
+			if tc.failSQL == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorIs(t, err, failure)
+			}
+			require.Equal(t, tc.wantRecreated, recreated)
+			if tc.externalFK {
+				require.NotContains(t, bh.executedSQLs, dropDatabaseIfExistsSQL(db))
+				require.NotContains(t, bh.executedSQLs, createDatabaseIfNotExistsSQL(db))
+			}
+		})
+	}
+	bh := &backgroundExecTest{}
+	bh.init()
+	recreated, err := restoreToDatabase(ctx, "", bh, "s", moCatalog, 0, nil, nil, ts, 0, false, nil, nil)
+	require.NoError(t, err)
+	require.False(t, recreated)
+	require.Empty(t, bh.executedSQLs)
+}
