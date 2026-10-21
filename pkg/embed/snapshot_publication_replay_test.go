@@ -196,3 +196,100 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 		}
 	})
 }
+
+func TestSnapshotEmptyPublicationTablesRestore(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		admin := openIcebergTestDB(t, c)
+		defer admin.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+		defer cancel()
+		exec := func(query string) {
+			t.Helper()
+			_, err := admin.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		exec("create account empty_tables_sub admin_name 'admin' identified by '111'")
+		defer func() { _, err := admin.Exec("drop account empty_tables_sub"); require.NoError(t, err) }()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		sub, err := sql.Open("mysql", fmt.Sprintf("empty_tables_sub#admin:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+		require.NoError(t, err)
+		defer sub.Close()
+		for _, accounts := range []string{"all", "named", "empty"} {
+			t.Run(accounts, func(t *testing.T) {
+				exec := func(query string) {
+					t.Helper()
+					_, err := admin.ExecContext(ctx, query)
+					require.NoError(t, err, query)
+				}
+				db := sqlquote.Ident("empty-tables-" + accounts)
+				const pub, snap = "`empty-tables-pub`", "empty_tables_snapshot"
+				exec("create database " + db)
+				defer func() {
+					_, err := sub.Exec("drop database if exists empty_tables_subscription")
+					require.NoError(t, err)
+					for _, query := range []string{"drop snapshot if exists " + snap, "drop publication if exists " + pub, "drop database " + db} {
+						_, err := admin.Exec(query)
+						require.NoError(t, err, query)
+					}
+				}()
+				exec("create table " + db + ".`private-t`(id int primary key)")
+				exec("insert into " + db + ".`private-t` values(1)")
+				exec("create table " + db + ".`published-t`(id int primary key)")
+				grant := "empty_tables_sub"
+				if accounts == "all" {
+					grant = "all"
+				}
+				exec("create publication " + pub + " database " + db + " table `published-t` account " + grant + " comment 'owner''s zero tables'")
+				_, err := sub.ExecContext(ctx, "create database empty_tables_subscription from sys publication "+pub)
+				require.NoError(t, err)
+				exec("drop table " + db + ".`published-t`")
+				if accounts == "empty" {
+					exec("alter publication " + pub + " account drop empty_tables_sub")
+				}
+				assertSelection := func() {
+					t.Helper()
+					var all bool
+					var tables, grants, comment string
+					require.NoError(t, admin.QueryRowContext(ctx, "select all_table,table_list,account_list,comment from mo_catalog.mo_pubs where pub_name='empty-tables-pub'").Scan(&all, &tables, &grants, &comment))
+					require.False(t, all)
+					require.Empty(t, tables)
+					wantGrant := grant
+					if accounts == "empty" {
+						wantGrant = ""
+					}
+					require.Equal(t, wantGrant, grants)
+					require.Equal(t, "owner's zero tables", comment)
+				}
+				assertSelection()
+				exec("create snapshot " + snap + " for database " + db)
+				exec("insert into " + db + ".`private-t` values(2)")
+				for range 2 {
+					exec("restore database " + db + "{snapshot='" + snap + "'}")
+					var rows int
+					require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from "+db+".`private-t`").Scan(&rows))
+					require.Equal(t, 1, rows)
+					assertSelection()
+					var pubTables string
+					require.NoError(t, admin.QueryRowContext(ctx, "select pub_tables from mo_catalog.mo_subs where pub_name='empty-tables-pub' and sub_account_name='empty_tables_sub'").Scan(&pubTables))
+					require.Empty(t, pubTables, "existing subscription must also retain zero tables")
+					_, err := sub.ExecContext(ctx, "select * from empty_tables_subscription.`private-t`")
+					if accounts == "empty" {
+						require.ErrorContains(t, err, "not allowed")
+					} else {
+						require.ErrorContains(t, err, "private-t", "restoring a zero-table selection must not publish a private table")
+					}
+					// Even reusing a formerly published name must not turn the
+					// explicit empty selection into ALL or revive a dropped name.
+					exec("create table " + db + ".`published-t`(id int primary key)")
+					_, err = sub.ExecContext(ctx, "select * from empty_tables_subscription.`published-t`")
+					if accounts == "empty" {
+						require.ErrorContains(t, err, "not allowed")
+					} else {
+						require.ErrorContains(t, err, "published-t")
+					}
+				}
+			})
+		}
+	})
+}

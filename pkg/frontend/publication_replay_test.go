@@ -13,6 +13,7 @@ package frontend
 
 import (
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
@@ -21,7 +22,7 @@ import (
 )
 
 func TestPublicationStatementForReplayPreservesAuthorization(t *testing.T) {
-	for _, tables := range []string{pubsub.TableAll, "review-items,other-items"} {
+	for _, tables := range []string{pubsub.TableAll, "", "review-items,other-items"} {
 		for _, accounts := range []string{"", pubsub.AccountAll, "review-sub,other-sub"} {
 			t.Run(tables+"/accounts="+accounts, func(t *testing.T) {
 				pub := &pubsub.PubInfo{PubName: "review-pub", DbName: "review-db", TablesStr: tables,
@@ -34,7 +35,7 @@ func TestPublicationStatementForReplayPreservesAuthorization(t *testing.T) {
 				require.Equal(t, pub.DbName, string(stmt.Database))
 				require.Equal(t, pub.Comment, stmt.Comment)
 				require.False(t, stmt.IfNotExists)
-				if tables == pubsub.TableAll {
+				if tables == pubsub.TableAll || tables == "" {
 					require.Empty(t, stmt.Table)
 				} else {
 					require.Len(t, stmt.Table, 2)
@@ -67,6 +68,25 @@ func TestCreatePublicationFromRestoreInfoPropagatesError(t *testing.T) {
 			ctx := defines.AttachAccountId(t.Context(), sysAccountID)
 			require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub), failure)
 			require.Equal(t, []string{getAccountIdNamesSql}, bh.executedSQLs, "replay must abort before any catalog write")
+		})
+	}
+}
+
+func TestCreatePublicationReplayRetainsTableSelection(t *testing.T) {
+	for _, tables := range []string{pubsub.TableAll, "", "t1"} {
+		t.Run("tables="+tables, func(t *testing.T) {
+			bh, ctx, _ := newCreatePublicationIfNotExistsTest(t, false, false)
+			pub := &pubsub.PubInfo{PubName: "pub1", DbName: "db1", TablesStr: tables, SubAccountsStr: pubsub.AccountAll}
+			want, err := getSqlForInsertIntoMoPubs(ctx, sysAccountID, sysAccountName, "pub1", "db1", 7,
+				tables == pubsub.TableAll, tables, pubsub.AccountAll, "", true)
+			require.NoError(t, err)
+			insertion := errors.New("publication insertion reached")
+			bh.sql2err[want] = insertion
+			require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub), insertion)
+			require.Equal(t, want, bh.executedSQLs[len(bh.executedSQLs)-1])
+			for _, sql := range bh.executedSQLs {
+				require.False(t, strings.Contains(sql, "mo_subs"), "failed insertion must not change subscriptions")
+			}
 		})
 	}
 }

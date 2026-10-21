@@ -235,6 +235,13 @@ func doCreatePublication(ctx context.Context, ses *Session, cp *tree.CreatePubli
 
 // createPublication creates a publication, bh should be in a transaction
 func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePublication) (err error) {
+	return createPublicationWithTableSelection(ctx, bh, cp, len(cp.Table) == 0)
+}
+
+// Public CREATE retains the omitted-TABLE-means-ALL contract. Restore also
+// admits an explicit empty selection left by DROP TABLE, without widening it
+// to ALL or bypassing the usual database/account checks and subscriber updates.
+func createPublicationWithTableSelection(ctx context.Context, bh BackgroundExec, cp *tree.CreatePublication, allTables bool) (err error) {
 	var (
 		sql             string
 		dbId            uint64
@@ -318,7 +325,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 	}
 
 	tablesStr := pubsub.TableAll
-	if len(cp.Table) > 0 {
+	if !allTables {
 		if isAccountLevel {
 			// Account level publication cannot specify tables
 			err = moerr.NewInternalErrorf(ctx, "account level publication (DATABASE *) cannot specify tables")
@@ -329,7 +336,7 @@ func createPublication(ctx context.Context, bh BackgroundExec, cp *tree.CreatePu
 		}
 	}
 
-	sql, err = getSqlForInsertIntoMoPubs(ctx, accountId, accountName, pubName, dbName, dbId, len(cp.Table) == 0, tablesStr, accountNamesStr, comment, true)
+	sql, err = getSqlForInsertIntoMoPubs(ctx, accountId, accountName, pubName, dbName, dbId, allTables, tablesStr, accountNamesStr, comment, true)
 	if err != nil {
 		return
 	}

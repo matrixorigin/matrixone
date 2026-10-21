@@ -107,3 +107,23 @@ drop snapshot restore_empty_snapshot;
 drop account restore_empty_subscriber;
 drop publication restore_empty_pub;
 drop database restore_empty_db;
+
+-- Dropping the final selected table leaves zero tables, not TABLE ALL.
+create database restore_zero_tables_db;
+create table restore_zero_tables_db.private_t(id int primary key);
+insert into restore_zero_tables_db.private_t values(1);
+create table restore_zero_tables_db.published_t(id int primary key);
+create publication restore_zero_tables_pub database restore_zero_tables_db table published_t account all;
+drop table restore_zero_tables_db.published_t;
+create snapshot restore_zero_tables_snapshot for database restore_zero_tables_db;
+insert into restore_zero_tables_db.private_t values(2);
+restore database restore_zero_tables_db{snapshot='restore_zero_tables_snapshot'};
+select count(*) from restore_zero_tables_db.private_t;
+select count(*) from mo_catalog.mo_pubs where pub_name='restore_zero_tables_pub' and all_table=false and table_list='' and account_list='all';
+restore database restore_zero_tables_db{snapshot='restore_zero_tables_snapshot'};
+select count(*) from mo_catalog.mo_pubs where pub_name='restore_zero_tables_pub' and all_table=false and table_list='';
+create table restore_zero_tables_db.published_t(id int primary key);
+select count(*) from mo_catalog.mo_pubs where pub_name='restore_zero_tables_pub' and all_table=false and table_list='';
+drop snapshot restore_zero_tables_snapshot;
+drop publication restore_zero_tables_pub;
+drop database restore_zero_tables_db;
