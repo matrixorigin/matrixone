@@ -1860,9 +1860,16 @@ func recordText(line []csvparser.Field, param *ExternalParam) string {
 
 func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
 	mp := proc.GetMPool()
+	// Kafka JSONL object conversion already checks the declared key count.
+	// Its field slice contains only projected data positions, so its length
+	// cannot be used as the record width. Synthetic attrs are filled by
+	// getColData even when no data column is projected.
+	kafkaJSON := param.KafkaScan != nil && param.Extern != nil && param.Extern.Format == tree.JSONLINE
 	if checkLineStrict(param) {
-		if err := checkLineValidRestrictive(param, proc, line, rowIdx); err != nil {
-			return err
+		if !kafkaJSON {
+			if err := checkLineValidRestrictive(param, proc, line, rowIdx); err != nil {
+				return err
+			}
 		}
 		for _, attr := range param.Attrs {
 			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
@@ -1872,7 +1879,7 @@ func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser
 		return nil
 	}
 
-	if int32(len(line)) >= param.ColumnListLen {
+	if kafkaJSON || int32(len(line)) >= param.ColumnListLen {
 		for _, attr := range param.Attrs {
 			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
 				return err
