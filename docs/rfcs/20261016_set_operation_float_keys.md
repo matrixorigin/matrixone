@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 28
+- Revision: 29
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 29 integration baseline: official main `a4de4ed1381780d02fa7f440ce7c4f9e01269674`
 - Revision 28 integration baseline: official main `fdcb37a5212a4bbc82fd958e6f54f195081bb56b`
 - Revision 27 integration baseline: official main `32591dcf3757a0ae4c2dec52cfd8d98761bd3454`
 - Revision 26 integration baseline: official main `7038c8520e5fc1ba456914b3c389ccedb69e22f7`
@@ -1396,6 +1397,43 @@ records the upstream delta, fresh exact application-role regression, bounded
 static checks and unchanged semantic-owner evidence reused from revision27.
 No new signed-zero, Top, capacity, native or live mixed-version execution is
 claimed by this documentation/test-only integration.
+
+### Revision 29 procedure, index-maintenance and duplicate-diagnostic integration
+
+Official main `a4de4ed1381780d02fa7f440ce7c4f9e01269674` adds per-routine
+stored-procedure recursion limits, preserves trailing deletes for every index
+synchronization range, counts retained DELETE records toward the cuVS rebuild
+cadence/cap, and completes Unicode UNIQUE diagnostics. The rebase preserves all
+42 existing PR patches. Function605/MORPC127 and the released predecessor126
+identities remain unchanged; the new procedure error20482 does not collide with
+this PR's terminal capacity error20833.
+
+The integration checks the independent equality domains explicitly: UNIQUE
+conflicts use their existing hashmap identity and logical diagnostic rendering,
+including fixed-width signed zero and NULL-leading rows; set operations continue
+using their separate physical keys. Diagnostic iterators and temporary expression
+results retain scoped cleanup, while scalar attempt accounts/permits and hidden
+key width are unchanged. Procedure invocation frames are immutable context-local
+CALL ancestry; inherited session limits do not introduce statement-global scalar
+identity or capacity owners. ISCP's index mode retains trailing tombstones in all
+ranges, with DELETE-only tail records included in the existing CPU rebuild gate;
+non-index seeded consumers keep their durable-watermark window.
+
+The [revision-29 receipt](validation/20261021_procedure_index_unique_integration.json)
+records fresh owning/race checks, real engine collection, public Unicode UNIQUE
+and signed-zero regressions, and normal comparison of the full procedure BVT
+file twice on one instance. Historical protocol/native, Top and capacity evidence
+is retained only for its unchanged semantic owners. CPU tail-count tests do not
+qualify live GPU index reclamation; no new capacity or mixed-version cluster
+result is claimed.
+
+Run39606308050 attempt1's size-label job119244157111 failed before receiving PR
+metadata because its GitHub API TLS connection disconnected. Complete diagnostic
+evidence is already recorded in issue27127 comment6317361242. This is direct
+transport evidence, without identifying which proxy/upstream component closed
+the connection. As main advanced while that workflow was still active, this
+revision rebases and pushes first rather than rerunning the old workflow. It
+does not duplicate the issue comment or change reviewer requests/PR metadata.
 
 ## Alternatives
 
