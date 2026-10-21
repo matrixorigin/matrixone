@@ -55,8 +55,8 @@ type CuvsUpdatableSpec struct {
 	// IntermediateGraphDegree). IVF-PQ: 1024 (cuvs.DefaultIvfPqBuildParams().
 	// NLists). The min-size check is the load-bearing gate — even if
 	// the user didn't specify a build param, the rebuild needs at
-	// least the cuvs default count of records to produce a usable
-	// index.
+	// least the cuvs default count of tail records to attempt a rebuild.
+	// Small source-table builds retain their rows as a searchable CDC tail.
 	MinSizeDefault int64
 }
 
@@ -79,16 +79,16 @@ var runSelectChunkSql = sqlexec.RunSql
 // non-positive in indexAlgoParams — the rebuild is deferred until the
 // user supplies a sensible threshold.
 
-// MaxOverflowSize is the brute-force overflow ceiling. Once the
-// per-cron-tick count exceeds this, the gate fires regardless of the
+// MaxOverflowSize caps unreclaimed CDC tail records. Once the
+// per-cron-tick count reaches this, the gate fires regardless of the
 // per-algo minimum threshold (lists / intermediate_graph_degree).
 //
 // Sizing rationale: GPU brute-force (cuvs.GpuBruteForce, fp32, D≈768
 // on A100/L40S) stays comfortably under 5ms per query at 200K
 // vectors, then grows roughly linearly with overflow size. 200K
 // keeps brute-force latency well inside typical search SLAs while
-// still letting the GPU absorb a meaningful amount of CDC traffic
-// between rebuilds. Safe across all reasonable GPU targets including
+// also bounding retained DELETE history between rebuilds. Safe across
+// all reasonable GPU targets including
 // older cards (T4/V100) and higher embedding dimensions.
 //
 // Note: the cadence gate (createdAt+interval check above) is the
@@ -159,23 +159,23 @@ func CuvsUpdatable(
 		threshold = spec.MinSizeDefault
 	}
 
-	// Count brute-force-overflow growth straight from the CDC tail chunk
-	// headers (n_inserts + n_upserts) — no per-record decode, so no
+	// Count all retained CDC records straight from the tail chunk
+	// headers. DELETEs also occupy durable tail space and replay state,
+	// even when they add no brute-force vectors. No per-record decode, so no
 	// record-shape (dim / includeBytesPerRow) needs deriving here.
 	count, err := countTag1Records(in.Sqlproc, in.TableDef.DbName, storageTbl)
 	if err != nil {
 		return false, "", err
 	}
 
-	// Safety cap: when brute-force overflow exceeds MaxOverflowSize,
-	// GPU brute-force search starts to noticeably degrade query
-	// latency — fire rebuild now (cadence already passed above).
+	// Safety cap: when the retained tail reaches MaxOverflowSize,
+	// fire rebuild now (cadence already passed above).
 	// This overrides the per-algo minimum threshold, but NOT the
 	// cadence: operators set the interval intentionally and the
 	// cap is just a tighter override on top of the min threshold.
 	if count >= MaxOverflowSize {
 		return true, fmt.Sprintf(
-			"brute-force overflow %d >= MaxOverflowSize %d", count, MaxOverflowSize), nil
+			"CDC tail records %d >= MaxOverflowSize %d", count, MaxOverflowSize), nil
 	}
 
 	if count < threshold {
@@ -208,9 +208,8 @@ func readInt64Param(algoParams, key string) (int64, error) {
 
 // countTag1Records runs the chunk-fetch SQL, unframes each row's
 // chunk data, and sums the per-op counts carried in the chunk frame
-// header. It returns n_inserts + n_upserts — the brute-force-overflow
-// growth that the rebuild would fold into a fresh main index (deletes
-// don't grow the overflow; see the body comment).
+// header. Every retained record contributes to tail storage and replay
+// cost until the next rebuild, including a DELETE for an absent key.
 func countTag1Records(
 	sqlproc *sqlexec.SqlProcess,
 	dbName, storageTbl string,
@@ -225,7 +224,7 @@ func countTag1Records(
 	}
 	defer res.Close()
 
-	var totalInserts, totalDeletes, totalUpserts int64
+	var totalRecords int64
 	for _, bat := range res.Batches {
 		if bat.RowCount() == 0 {
 			continue
@@ -241,21 +240,8 @@ func countTag1Records(
 				return 0, moerr.NewInternalErrorNoCtxf(
 					"countTag1Records: unframe chunk: %v", err)
 			}
-			totalInserts += int64(nIns)
-			totalDeletes += int64(nDel)
-			totalUpserts += int64(nUps)
+			totalRecords += int64(nIns) + int64(nDel) + int64(nUps)
 		}
 	}
-	// Brute-force-overflow growth = inserts + upserts. DELETEs apply to
-	// the main cuvs index (via the filter / deleted set) and don't
-	// affect the brute-force overflow size, so they're irrelevant to
-	// the rebuild-trigger decision — the gate fires when overflow has
-	// grown enough to be worth folding into a fresh main index.
-	// UPSERTs count toward growth because empirically most MO UPSERTs
-	// are first-time inserts; the rare replay-from-corruption case
-	// over-triggers at worst (wasted rebuild, not a correctness bug).
-	// The n_upserts / n_deletes breakdown is preserved in the chunk
-	// header for logging and audits.
-	_ = totalDeletes
-	return totalInserts + totalUpserts, nil
+	return totalRecords, nil
 }
