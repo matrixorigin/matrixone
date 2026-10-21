@@ -66,6 +66,212 @@ from domains order by id;
 select id, hex(left(coalesce(txt, bin), 1)), hex(reverse(coalesce(txt, bin))),
        char_length(concat(coalesce(txt, bin), 'x'))
 from domains order by id;
+-- Declaration-based FIELD comparison must not overwrite the selected row domain.
+select id, field(left(coalesce(txt, bin), 1), '你', X'e4'),
+       hex(left(coalesce(txt, bin), 1)) from domains order by id;
+-- Case folding consumes declaration collation, unlike direct character slicing.
+select id, hex(upper(coalesce(txt, bin))) from domains order by id;
+-- Mergeable projections retain selected row domains, including through COALESCE.
+select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+select id, char_length(coalesce(x, '')), hex(left(coalesce(x, ''), 1)),
+       hex(reverse(coalesce(x, '')))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+-- Materialized declarations are consumed before any further value selection.
+select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
+from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
+select id, hex(left(coalesce(x, '你a'), 1)), hex(reverse(coalesce(x, '你a')))
+from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
+-- Equal-rank binary columns own conditional declarations before another selector.
+select id, char_length(coalesce(if(id = 2, bin, txt), '')),
+       hex(left(coalesce(if(id = 2, bin, txt), ''), 1)),
+       hex(reverse(coalesce(if(id = 2, bin, txt), ''))),
+       hex(left(coalesce(case when id = 2 then bin else txt end, ''), 1)),
+       hex(reverse(coalesce(case when id = 2 then bin else txt end, '')))
+from domains order by id;
+select id, hex(left(coalesce(ifnull(txt, bin), ''), 1)),
+       hex(reverse(coalesce(ifnull(txt, bin), '')))
+from domains order by id;
+-- A weaker binary literal must not demote the selected VARCHAR row.
+-- Explicit COLLATE still wins in either direction.
+select id, char_length(if(txt is not null, txt, _binary '')),
+       hex(left(if(txt is not null, txt, _binary ''), 1)),
+       hex(reverse(case when txt is not null then txt else _binary '' end)),
+       hex(reverse(case when txt is not null then txt else _binary '' collate `binary` end)),
+       hex(reverse(case when txt is not null then txt collate utf8mb4_bin else _binary '' end))
+from domains order by id;
+select id, char_length(coalesce(if(txt is not null, txt, _binary ''), '')),
+       hex(reverse(nullif(case when txt is not null then txt else _binary '' end, '')))
+from domains order by id;
+select id, char_length(if(id = 2, _binary '', coalesce(txt, _binary ''))),
+       hex(reverse(case when id = 2 then _binary '' else coalesce(txt, _binary '') end))
+from domains order by id;
+prepare conditional_text_stmt from
+    'select id, hex(reverse(case when ? then txt else _binary '''' end)),
+            char_length(if(?, txt, _binary ''''))
+     from domains order by id';
+set @conditional_text = true;
+execute conditional_text_stmt using @conditional_text, @conditional_text;
+set @conditional_text = false;
+execute conditional_text_stmt using @conditional_text, @conditional_text;
+set @conditional_text = true;
+execute conditional_text_stmt using @conditional_text, @conditional_text;
+deallocate prepare conditional_text_stmt;
+
+-- Variables compete as declarations, not weak literals; rebinding observes their current type.
+set @conditional_peer = _binary '';
+select id, hex(reverse(case when id = 1 then txt else @conditional_peer end)),
+       char_length(case when id = 1 then txt else @conditional_peer end)
+from domains where id = 1;
+set @conditional_peer = '';
+select id, hex(reverse(case when id = 1 then txt else @conditional_peer end)),
+       char_length(case when id = 1 then txt else @conditional_peer end)
+from domains where id = 1;
+set @conditional_peer = null;
+-- Allocating TEXT results retain their own declaration; genuine binary LPAD stays binary.
+select id, hex(reverse(case when txt is not null then lpad(txt, 3, 'z') else _binary '' end)),
+       char_length(case when txt is not null then lpad(txt, 3, 'z') else _binary '' end)
+from domains order by id;
+select id, hex(reverse(case when id = 3 then lpad(bin, 3, _binary 'z') else _binary '' end)),
+       char_length(case when id = 3 then lpad(bin, 3, _binary 'z') else _binary '' end)
+from domains where id = 3;
+-- Row-selection boundaries consume the CASE declaration, not its temporary binary transport.
+select id, hex(reverse(x)), char_length(x)
+from (select id, case when txt is not null then txt else _binary '' end x from domains limit 3) d
+order by id;
+select id, hex(reverse(x)), char_length(x)
+from (select id, case when txt is not null then txt else _binary '' end x from domains having x is not null) d
+order by id;
+select id, hex(reverse(x)), char_length(x)
+from (select id, case when txt is not null then lpad(txt, 3, 'z') else _binary '' end x from domains limit 3) d
+order by id;
+-- PREPARE without result-parameter history uses the same declaration across query blocks.
+prepare derived_case_text from
+    'select id, hex(reverse(x)), char_length(x)
+     from (select id, case when ? then txt else _binary '''' end x from domains limit 3) d order by id';
+set @derived_text = true;
+execute derived_case_text using @derived_text;
+set @derived_text = false;
+execute derived_case_text using @derived_text;
+set @derived_text = true;
+execute derived_case_text using @derived_text;
+deallocate prepare derived_case_text;
+prepare derived_lpad_text from
+    'select id, hex(reverse(x)), char_length(x)
+     from (select id, case when ? then lpad(txt, 3, ''z'') else _binary '''' end x
+           from domains having x is not null) d order by id';
+execute derived_lpad_text using @derived_text;
+set @derived_text = false;
+execute derived_lpad_text using @derived_text;
+set @derived_text = true;
+execute derived_lpad_text using @derived_text;
+deallocate prepare derived_lpad_text;
+set @derived_text = null;
+-- An unrelated explicit CAST does not reset retained CASE history on a transport type change.
+prepare pinned_cast_history from 'select field(case when ? then ? else null end, ''A'', ''a''), cast(? as signed)';
+set @pinned_flag = 1, @pinned_value = null, @pinned_number = '1';
+execute pinned_cast_history using @pinned_flag, @pinned_value, @pinned_number;
+set @pinned_value = 'a';
+execute pinned_cast_history using @pinned_flag, @pinned_value, @pinned_number;
+set @pinned_number = 1;
+execute pinned_cast_history using @pinned_flag, @pinned_value, @pinned_number;
+deallocate prepare pinned_cast_history;
+set @pinned_flag = null, @pinned_value = null, @pinned_number = null;
+
+-- A scalar row limit is not a derived-table materialization boundary.
+select char_length((select coalesce(txt, bin) from domains where id = 1 limit 1)),
+       hex(left((select coalesce(txt, bin) from domains where id = 1 limit 1), 1)),
+       hex(reverse((select coalesce(txt, bin) from domains where id = 1 limit 1)));
+-- Intrinsic reconciliation remains a declaration boundary inside scalar queries.
+select char_length((select distinct coalesce(txt, bin) from domains limit 1)),
+       hex(left((select distinct coalesce(txt, bin) from domains limit 1), 1)),
+       char_length((select coalesce(txt, bin) x from domains where id = 1 union all select _binary '' order by x desc limit 1)),
+       hex(left((select coalesce(txt, bin) x from domains where id = 1 union all select _binary '' order by x desc limit 1), 1)),
+       char_length((select first_value(coalesce(txt, bin)) over () from domains limit 1)),
+       hex(left((select first_value(coalesce(txt, bin)) over () from domains limit 1), 1));
+-- COALESCE must retain the row domain returned by value transformations.
+select id, char_length(coalesce(reverse(coalesce(txt, bin)), '')),
+       hex(reverse(coalesce(reverse(coalesce(txt, bin)), ''))),
+       char_length(coalesce(left(coalesce(txt, bin), 1), '')),
+       hex(reverse(coalesce(left(coalesce(txt, bin), 1), ''))),
+       char_length(coalesce(repeat(coalesce(txt, bin), 2), '')),
+       char_length(coalesce(rpad(coalesce(txt, bin), 3, 'z'), ''))
+from domains order by id;
+-- This is IF/CASE over COALESCE, not the opposite nesting above.
+select id, char_length(if(id = 2, bin, coalesce(txt, bin))),
+       hex(left(if(id = 2, bin, coalesce(txt, bin)), 1)),
+       hex(reverse(if(id = 2, bin, coalesce(txt, bin)))),
+       char_length(case when id = 2 then bin else coalesce(txt, bin) end),
+       hex(left(case when id = 2 then bin else coalesce(txt, bin) end, 1)),
+       hex(reverse(case when id = 2 then bin else coalesce(txt, bin) end))
+from domains order by id;
+-- Comparison/search consumes declarations; slicing still uses the selected row.
+select id, locate('a', coalesce(txt, bin)), instr(coalesce(txt, bin), 'a'),
+       coalesce(txt, bin) like '__', coalesce(txt, bin) like '____',
+       char_length(coalesce(txt, bin)), hex(left(coalesce(txt, bin), 1))
+from domains order by id;
+select id, locate('a', x), instr(x, 'a'), x like '__', x like '____',
+       char_length(x), hex(left(x, 1))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+-- HAVING remains a declaration boundary even if its filter is constant.
+select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
+from (select id, coalesce(txt, bin) x from domains having id > 0) d order by id;
+select id, char_length(x), hex(left(x, 1)), hex(reverse(x))
+from (select id, coalesce(txt, bin) x from domains having true) d order by id;
+-- Scalar row selection is transparent, but genuine grouping is not.
+select char_length((select coalesce(txt, bin) from domains group by coalesce(txt, bin))),
+       hex(left((select coalesce(txt, bin) from domains group by coalesce(txt, bin)), 1)),
+       hex(reverse((select coalesce(txt, bin) from domains group by coalesce(txt, bin))));
+select char_length((select coalesce(txt, bin) x from domains where id = 1 having x is not null)),
+       hex(left((select coalesce(txt, bin) x from domains where id = 1 having x is not null), 1));
+-- A unique-key equality can eliminate scalar grouping, unlike one physical row.
+create table singleton_domains (id int primary key, txt varchar(16), bin varbinary(16));
+insert into singleton_domains values (1, '你a', null);
+select char_length((select coalesce(txt, bin) from singleton_domains group by coalesce(txt, bin))),
+       hex(left((select coalesce(txt, bin) from singleton_domains group by coalesce(txt, bin)), 1));
+select char_length((select coalesce(txt, bin) from singleton_domains where id = 1 group by coalesce(txt, bin))),
+       hex(left((select coalesce(txt, bin) from singleton_domains where id = 1 group by coalesce(txt, bin)), 1));
+drop table singleton_domains;
+-- Consuming a conditional declaration preserves its bounded binary family.
+create table declared_conditional_slice as
+select id, left(if(d.x is not null, d.x, _binary 'x'), 1) sliced
+from (select id, if(id = 2, bin, txt) x from domains) d;
+select id, hex(sliced), char_length(sliced) from declared_conditional_slice order by id;
+select data_type, character_maximum_length from information_schema.columns
+where table_schema = database() and table_name = 'declared_conditional_slice' and column_name = 'sliced';
+drop table declared_conditional_slice;
+-- NULLIF forwards its first value domain; its comparison is not a CASE result declaration.
+select id, char_length(nullif(coalesce(txt, bin), '')),
+       hex(left(nullif(coalesce(txt, bin), ''), 1)),
+       hex(reverse(nullif(coalesce(txt, bin), '')))
+from domains order by id;
+select id, char_length(nullif(x, '')), hex(left(nullif(x, ''), 1)),
+       hex(reverse(nullif(x, '')))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+
+-- Expression DEFAULT binding preserves NULLIF's first value source without a query builder.
+-- CASE/IF also retain stronger VARCHAR row domains in stored defaults.
+create table nullif_default_domains (
+    id int,
+    txt varchar(16),
+    forwarded varbinary(64) default (reverse(nullif(coalesce(txt, _binary ''), ''))),
+    control varbinary(64) default (reverse(coalesce(txt, _binary ''))),
+    declared varbinary(64) default (reverse(cast(nullif(coalesce(txt, _binary ''), '') as binary(4)))),
+    case_forwarded varbinary(64) default (reverse(nullif(case when txt is not null then txt else _binary '' end, ''))),
+    if_length bigint default (char_length(if(txt is not null, txt, _binary '0')))
+);
+insert into nullif_default_domains (id, txt) values (1, '你a'), (2, ''), (3, null);
+select id, hex(forwarded), hex(control), hex(declared), hex(case_forwarded), if_length
+from nullif_default_domains order by id;
+drop table nullif_default_domains;
+
+-- BIT_COUNT consumes the binary declaration without changing sibling row-domain consumers.
+select id, bit_count(coalesce(txt, bin)) from domains order by id;
+select id, bit_count(x), char_length(x), hex(left(x, 1))
+from (select id, coalesce(txt, bin) x from domains) d order by id;
+select id, bit_count(x)
+from (select id, coalesce(txt, bin) x from domains limit 3) d order by id;
+
 select id, hex(left(invalid_bytes, 1)), hex(reverse(invalid_bytes)),
        char_length(invalid_bytes), invalid_bytes like '____'
 from domains order by id;
@@ -195,13 +401,12 @@ select hex(binary_left), hex(binary_lower), hex(text_replace),
        char_length(binary_left), char_length(binary_lower), char_length(text_replace)
 from binary_function_ctas;
 
--- Exact binary SUBSTRING overloads must retain a selected text row's domain.
+-- IF owns its binary declaration before LEFT and both SUBSTRING overloads consume bytes.
 select hex(substring(left(if(false, X'ff', '你好'), 2), 2, 1)) as selected_text,
        hex(substring(left(if(false, X'ff', '你好'), 2), 2)) as selected_text_tail,
        hex(substring(left(if(true, X'e4bda0e5a5bd', '你好'), 2), 2, 1)) as selected_binary;
 
--- A derived projection has the same common binary-shaped type, but its text
--- branch must remain visible to the outer slicing metadata contract.
+-- A mergeable projection preserves IF's binary result declaration at the outer consumer.
 with mixed_domain as (
     select if(false, X'ff', '你好') as value
 )

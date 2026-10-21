@@ -88,6 +88,15 @@ PLAN_RACE_SHARDS=${PLAN_RACE_SHARDS:-"8"}
 # test process and its package resources. The default stays serial on the
 # constrained CI runner; stronger runners can opt into two independent shards.
 PLAN_RACE_PARALLEL=${PLAN_RACE_PARALLEL:-"1"}
+# Only the audited independent plan subtests opt into this process-local
+# parallelism. Keep the cap at three: plan shards still share the heavy-wave
+# budget and the constrained CI runner has a 16 GiB cgroup limit.
+PLAN_TEST_PARALLEL=${PLAN_TEST_PARALLEL:-"3"}
+if ! [[ "${PLAN_TEST_PARALLEL}" =~ ^[1-9][0-9]*$ ]] ||
+    (( PLAN_TEST_PARALLEL > 3 )); then
+    logger "ERR" "PLAN_TEST_PARALLEL must be 1, 2, or 3, got '${PLAN_TEST_PARALLEL}'"
+    exit 2
+fi
 # Six exclusive engine shards reduced the measured phase from 100s to 44s,
 # with 5.2 GiB peak under the eight-CPU/16-GiB runner envelope. Admission still
 # respects UT_PARALLEL and an explicit caller heavy cap. Other stages wait.
@@ -1728,7 +1737,7 @@ function run_plan_race_shards(){
         restore_ut_term_trap "${previous_term_trap}"
         return 2
     fi
-    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes with parallelism ${PLAN_RACE_PARALLEL}"
+    logger "INF" "Run ${test_count} tests in ${plan_package} across ${PLAN_RACE_SHARDS} fresh race-detector processes with process parallelism ${PLAN_RACE_PARALLEL} and test parallelism ${PLAN_TEST_PARALLEL}"
     for (( shard = 0; shard < PLAN_RACE_SHARDS; shard++ )); do
         if (( shard_counts[shard] == 0 )); then
             continue
@@ -1760,6 +1769,7 @@ function run_plan_race_shards(){
                     go tool test2json -t -p "${plan_package_import}" \
                     "${plan_test_binary}" -test.short=true -test.v=test2json \
                     -test.paniconexit0=true -test.count=1 \
+                    -test.parallel="${PLAN_TEST_PARALLEL}" \
                     -test.timeout="${UT_TIMEOUT}m" \
                     -test.run="${shard_patterns[shard]}"
             ) > "${shard_reports[shard]}" 2>> "${UT_STDERR}" &
@@ -2561,7 +2571,7 @@ function run_embedded_tests(){
         logger "WRN" "embedded prebuild failed with status ${prebuild_status}; use the authoritative complete-scope go test"
         cleanup_embedded_prebuild || return 1
     fi
-    local ordinary_scope=${package_scope} package package_status=0 main_contract
+    local ordinary_scope=${package_scope} package package_status=0 main_contract package_batches
     local -a batched_packages=()
     if [[ "${UT_EMBEDDED_BATCHES}" == 4 ]]; then
         for package in ${package_scope}; do
@@ -2608,8 +2618,16 @@ function run_embedded_tests(){
         if [[ "${package}" == github.com/matrixorigin/matrixone/pkg/tests/sqlintegration ]]; then
             main_contract=cleanup-only
         fi
+        package_batches=4
+        # Shorter process generations reduce retained race-test memory without
+        # increasing the active cluster budget. Only this package/four-worker
+        # policy has complete inventory, wall, CPU and anonymous-memory evidence.
+        if [[ "${package}" == github.com/matrixorigin/matrixone/pkg/embed &&
+              "${UT_EMBEDDED_PACKAGE_PARALLEL}" == 4 ]]; then
+            package_batches=8
+        fi
         run_ut_command embedded "batched embedded-cluster race-test package ${package}" \
-            run_race_test_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" 4 "${UT_EMBEDDED_PACKAGE_PARALLEL}" 2 "${main_contract}"
+            run_race_test_batches "${package}" "${PREBUILT_RACE_TEST_BINARY}" "${package_batches}" "${UT_EMBEDDED_PACKAGE_PARALLEL}" 2 "${main_contract}"
         package_status=$?
         if (( package_status == 125 )); then return 125; fi
         consume_race_report PREBUILT_RACE_REPORT PREBUILT_RACE_TEST_BINARY || return $?
@@ -3167,10 +3185,14 @@ function run_tests(){
 function ut_summary(){
   local report_path="${BUILD_WKSP}/ut-report"
   local analysis_status=0
+  local report_validation_status=0
   local analysis_tool
   local failed_output=""
   local setup_summary=""
   local setup_status=0
+  local report_validation=""
+  local report_validation_level=INF
+  local -a report_validation_args=()
 
   # Failure files belong to this analysis, not an earlier run in the checkout.
   # Preserve the previous generation beside the run-scoped raw report.
@@ -3209,6 +3231,22 @@ function ut_summary(){
     fi
   fi
 
+  # Validate the raw Go event stream before handing it to the pinned analyzer.
+  # The analyzer intentionally ignores pause/cont, while the validator treats
+  # them as lifecycle transitions and also catches duplicate test roots across
+  # plan shards.  A failed/cancelled run may end with a truncated report, so
+  # completeness is required only when the test command itself succeeded.
+  if (( UT_TEST_STATUS == 0 )); then
+    report_validation_args+=(--require-complete)
+  fi
+  report_validation=$(python3 "${BUILD_WKSP}/optools/validate_ut_report.py" \
+    "${report_validation_args[@]}" "${UT_REPORT}" 2>&1)
+  report_validation_status=$?
+  (( report_validation_status == 0 )) || report_validation_level=ERR
+  while IFS= read -r line; do
+    [[ -n "${line}" ]] && logger "${report_validation_level}" "${line}"
+  done <<< "${report_validation}"
+
   if ! analysis_tool=$(install_go_ut_analysis); then
     analysis_status=1
     logger "ERR" "failed to install go-ut-analysis"
@@ -3217,8 +3255,8 @@ function ut_summary(){
     analysis_status=$?
   fi
 
-  if (( UT_TEST_STATUS != 0 || analysis_status != 0 )); then
-    logger "ERR" "UT diagnostics: go-test=${UT_TEST_STATUS}, analysis=${analysis_status}"
+  if (( UT_TEST_STATUS != 0 || report_validation_status != 0 || analysis_status != 0 )); then
+    logger "ERR" "UT diagnostics: go-test=${UT_TEST_STATUS}, report=${report_validation_status}, analysis=${analysis_status}"
     logger "ERR" "Last 200 Go build events (each truncated to 4096 bytes):"
     grep -E '"Action":"build-(output|fail)"' "${UT_REPORT}" | tail -n 200 | cut -c 1-4096
     logger "ERR" "Last 50 raw report lines (each truncated to 4096 bytes):"
@@ -3230,21 +3268,22 @@ function ut_summary(){
   fi
 
   failed_output=$(find "${report_path}/failed/outputs" -type f -print -quit)
-  if (( UT_TEST_STATUS == 0 && analysis_status == 0 )) &&
+  if (( UT_TEST_STATUS == 0 && report_validation_status == 0 && analysis_status == 0 )) &&
      [[ -z "${failed_output}" ]]; then
     logger "INF" "UNIT TESTING SUCCEEDED !!!"
   else
-    logger "ERR" "UNIT TESTING FAILED: go-test=${UT_TEST_STATUS}, analysis=${analysis_status}"
+    logger "ERR" "UNIT TESTING FAILED: go-test=${UT_TEST_STATUS}, report=${report_validation_status}, analysis=${analysis_status}"
     exit 1;
   fi
 }
 
 function post_test(){
-    local aoe_test=$(find  pkg/vm/engine/aoe/test/* -type d -maxdepth 0)
-    for dir in ${aoe_test[@]}; do
+    local dir=""
+    while IFS= read -r dir; do
+        [[ -n "${dir}" ]] || continue
         logger "WRN" "Remove $dir"
-        rm -rf $dir
-    done
+        rm -rf -- "${dir}"
+    done < <(find pkg/vm/engine/aoe/test -mindepth 1 -maxdepth 1 -type d -print 2>/dev/null)
 }
 
 if [[ 'SCA' == $TEST_TYPE ]]; then
