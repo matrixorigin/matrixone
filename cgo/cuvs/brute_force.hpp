@@ -407,8 +407,8 @@ public:
     search_result_t search_with_filter(const T* queries_data, uint64_t num_queries,
                                        uint32_t query_dimension, uint32_t limit,
                                        const brute_force_search_params_t& sp,
-                                       const std::string& preds_json) {
-        uint64_t job_id = this->search_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+                                       const std::string& preds_json, const mo_membership_t& mem = {}) {
+        uint64_t job_id = this->search_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json, mem);
         return this->search_wait(job_id);
     }
 
@@ -418,7 +418,7 @@ public:
     uint64_t search_with_filter_async(const T* queries_data, uint64_t num_queries,
                                       uint32_t query_dimension, uint32_t limit,
                                       const brute_force_search_params_t& sp,
-                                      const std::string& preds_json) {
+                                      const std::string& preds_json, const mo_membership_t& mem = {}) {
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
@@ -433,7 +433,7 @@ public:
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
         auto queries_copy = std::make_shared<std::vector<T>>(queries_data, queries_data + num_queries * this->dimension);
-        auto mask = this->build_filter_single_mask(preds_json);
+        auto mask = this->build_filter_single_mask(preds_json, mem);
         auto task = [this, num_queries, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_internal(handle, queries_copy->data(), num_queries, limit, sp, /*preds_json=*/"", mask.get());
         };
@@ -613,8 +613,8 @@ public:
     search_result_t search_quantize_with_filter(const B* queries_data, uint64_t num_queries,
                                              uint32_t query_dimension, uint32_t limit,
                                              const brute_force_search_params_t& sp,
-                                             const std::string& preds_json) {
-        uint64_t job_id = this->search_quantize_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json);
+                                             const std::string& preds_json, const mo_membership_t& mem = {}) {
+        uint64_t job_id = this->search_quantize_with_filter_async(queries_data, num_queries, query_dimension, limit, sp, preds_json, mem);
         return this->search_wait(job_id);
     }
 
@@ -627,7 +627,7 @@ public:
     uint64_t search_quantize_with_filter_async(const B* queries_data, uint64_t num_queries,
                                             uint32_t query_dimension, uint32_t limit,
                                             const brute_force_search_params_t& sp,
-                                            const std::string& preds_json) {
+                                            const std::string& preds_json, const mo_membership_t& mem = {}) {
         if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
         if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
         if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
@@ -640,8 +640,51 @@ public:
         if (!this->is_loaded_ || !index_) throw std::runtime_error("search_async: index not loaded");
         if (!this->worker) throw std::runtime_error("Worker not initialized");
 
+        return submit_quantize_with_mask(queries_data, num_queries, query_dimension, limit, sp,
+                                         this->build_filter_single_mask(preds_json, mem));
+    }
+
+    // Builds the filter mask of a search once (see gpu_index_base_t::prepare_bitset),
+    // for search_quantize_with_bitset calls to reuse. Brute force has one mask.
+    std::unique_ptr<prepared_bitset_t> prepare_bitset(const std::string& preds_json, const mo_membership_t& mem = {}) {
+        return gpu_index_base_t<B, T, brute_force_build_params_t, int64_t>::prepare_bitset(preds_json, mem, false);
+    }
+
+    // search_quantize_with_filter on the mask of a prepare_bitset of this index.
+    search_result_t search_quantize_with_bitset(const B* queries_data, uint64_t num_queries,
+                                                uint32_t query_dimension, uint32_t limit,
+                                                const brute_force_search_params_t& sp, const prepared_bitset_t* bitset) {
+        uint64_t job_id = this->search_quantize_with_bitset_async(queries_data, num_queries, query_dimension, limit, sp, bitset);
+        return this->search_wait(job_id);
+    }
+
+    // search_quantize_with_filter_async on the mask of a prepare_bitset of this index.
+    uint64_t search_quantize_with_bitset_async(const B* queries_data, uint64_t num_queries,
+                                               uint32_t query_dimension, uint32_t limit,
+                                               const brute_force_search_params_t& sp, const prepared_bitset_t* bitset) {
+        if (!queries_data) throw std::invalid_argument("search_async: queries_data is null");
+        if (num_queries == 0) throw std::invalid_argument("search_async: num_queries is 0");
+        if (this->dimension == 0) throw std::runtime_error("search_async: index dimension is 0");
+        if (query_dimension != this->dimension) {
+            throw std::invalid_argument(
+                "search_quantize_with_bitset_async: query_dimension (" + std::to_string(query_dimension) +
+                ") does not match index dimension (" + std::to_string(this->dimension) + ")");
+        }
+        if (!this->is_loaded_ || !index_) throw std::runtime_error("search_async: index not loaded");
+        if (!this->worker) throw std::runtime_error("Worker not initialized");
+
+        return submit_quantize_with_mask(queries_data, num_queries, query_dimension, limit, sp,
+                                         this->bitset_masks(bitset, false)[0]);
+    }
+
+    // Submits the filtered search of queries_data with mask. Copies the queries
+    // into a shared_ptr so they outlive the Go caller; the worker holds the mask
+    // until it finishes.
+    uint64_t submit_quantize_with_mask(const B* queries_data, uint64_t num_queries,
+                                       uint32_t query_dimension, uint32_t limit,
+                                       const brute_force_search_params_t& sp,
+                                       std::shared_ptr<host_mask_bundle_t> mask) {
         auto queries_copy = std::make_shared<std::vector<B>>(queries_data, queries_data + num_queries * query_dimension);
-        auto mask = this->build_filter_single_mask(preds_json);
         auto task = [this, num_queries, query_dimension, limit, sp, queries_copy, mask](raft_handle_wrapper_t& handle) -> std::any {
             return this->search_quantize_internal(handle, queries_copy->data(), num_queries, query_dimension, limit, sp, /*preds_json=*/"", mask.get());
         };

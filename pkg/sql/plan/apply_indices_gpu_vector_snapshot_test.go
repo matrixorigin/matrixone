@@ -99,7 +99,7 @@ func gpuVectorSnapshotFixture(
 		},
 		limit:       &plan.Expr{Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_U64Val{U64Val: 10}}}},
 		resultLimit: makePlan2Uint64ConstExprWithType(10),
-		rankOption:  &plan.RankOption{Mode: "pre"},
+		rankOption:  &plan.RankOption{Mode: "post"},
 	}
 	return builder, scanNodeID, vecCtx
 }
