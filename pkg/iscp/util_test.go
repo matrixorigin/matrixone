@@ -290,6 +290,7 @@ func TestConvertNativeDecimalAndUUIDIntoSQL(t *testing.T) {
 	}{
 		{name: "decimal64", data: types.Decimal64(12345), typ: types.New(types.T_decimal64, 12, 2), want: "'123.45'"},
 		{name: "decimal128", data: types.Decimal128{B0_63: 12345}, typ: types.New(types.T_decimal128, 24, 2), want: "'123.45'"},
+		{name: "decimal256", data: types.Decimal256{B0_63: 12345}, typ: types.New(types.T_decimal256, 65, 2), want: "'123.45'"},
 		{name: "uuid", data: uuid, typ: types.New(types.T_uuid, 16, 0), want: "'00010002-0003-0004-0005-000600070008'"},
 	}
 	for _, test := range tests {

@@ -2137,6 +2137,15 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 					walkTable(table)
 				}
 			}
+		case *tree.Select:
+			if s.With != nil {
+				for _, cte := range s.With.CTEs {
+					if nested, ok := cte.Stmt.(*tree.Select); ok {
+						walkSelect(nested)
+					}
+				}
+			}
+			walkSelect(s.Select)
 		case *tree.ParenSelect:
 			walkSelect(s.Select)
 		case *tree.UnionClause:
