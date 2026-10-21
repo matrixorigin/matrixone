@@ -271,7 +271,9 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 		// A separator beginning with ESCAPED BY also collides with bytes
 		// introduced by encoding (e.g. CR becomes backslash-r), not just with
 		// literal separator bytes in tmp. Frame the value before escaping it.
-		flag = field == oq.escapeChar() || line == oq.escapeChar() ||
+		// When enclosure and escape coincide, any generated escape (even a
+		// leading CR's backslash-r) would otherwise open an unquoted field.
+		flag = enclosed == oq.escapeChar() || field == oq.escapeChar() || line == oq.escapeChar() ||
 			(isAmbiguousCSVEscape(field) && bytes.IndexByte(tmp, field) >= 0) ||
 			(isAmbiguousCSVEscape(line) && bytes.IndexByte(tmp, line) >= 0) ||
 			(isAmbiguousCSVEscape(enclosed) && bytes.IndexByte(tmp, enclosed) >= 0)
@@ -284,13 +286,13 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 }
 
 // NULL bypasses value escaping, but still needs enclosure when the escape
-// prefix would otherwise become a separator. Keep this check off the ordinary
-// non-NULL raw writer path.
+// prefix would otherwise become a separator or opening enclosure. Keep this
+// check off the ordinary non-NULL raw writer path.
 func formatOutputNull(oq *ExportConfig, symbol []byte, enclosed byte, buffer *bytes.Buffer) error {
 	flag := false
 	if enclosed != 0 && oq.escapeChar() != 0 {
 		field, line, _, _ := oq.csvBoundaryBytes()
-		flag = field == oq.escapeChar() || line == oq.escapeChar()
+		flag = enclosed == oq.escapeChar() || field == oq.escapeChar() || line == oq.escapeChar()
 	}
 	return formatOutputStringRaw(oq, []byte{'\\', 'N'}, symbol, enclosed, flag, buffer)
 }
@@ -813,6 +815,8 @@ func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
 // enclosed != 0: the value is written enclosed, so the terminators inside it
 // are already protected by the enclosure bytes; the escape character and the
 // enclosure byte itself are doubled, which the reader collapses back.
+// When both bytes coincide, a literal escape needs four copies: LOAD collapses
+// doubled enclosures before processing escape sequences.
 //
 // enclosed == 0: the value is written bare, so every byte that would
 // otherwise terminate the field or the record (see csvBoundaryBytes) is
@@ -841,7 +845,13 @@ func addEscapeToString(ep *ExportConfig, s []byte, enclosed byte) []byte {
 	extra := 0
 	for _, b := range s {
 		if needsEscape(b) {
-			extra++
+			if enclosed != 0 && enclosed == escape && b == escape {
+				// LOAD first collapses doubled enclosures, then unescapes.
+				// Four bytes retain one literal escape through both stages.
+				extra += 3
+			} else {
+				extra++
+			}
 		}
 	}
 	if extra == 0 {
@@ -850,7 +860,9 @@ func addEscapeToString(ep *ExportConfig, s []byte, enclosed byte) []byte {
 	result := make([]byte, 0, len(s)+extra)
 	for _, b := range s {
 		if needsEscape(b) {
-			if enclosed != 0 && b == enclosed && b != escape {
+			if enclosed != 0 && enclosed == escape && b == escape {
+				result = append(result, escape, escape, escape)
+			} else if enclosed != 0 && b == enclosed && b != escape {
 				result = append(result, b) // preserve doubled enclosure convention
 			} else {
 				result = append(result, escape)

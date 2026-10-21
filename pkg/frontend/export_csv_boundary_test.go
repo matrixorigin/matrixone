@@ -40,8 +40,8 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 		enclosed    byte
 		blockSize   int64
 	}
-	formats := make([]csvFormat, 0, 17)
-	for _, enclosed := range []byte{0, '"', '0', 'b', 'n', 'r', 't', 'Z', 'N'} {
+	formats := make([]csvFormat, 0, 18)
+	for _, enclosed := range []byte{0, '"', '0', 'b', 'n', 'r', 't', 'Z', 'N', '\\'} {
 		formats = append(formats, csvFormat{",", "\n", enclosed, 17})
 	}
 	// Escaping the bare BIT byte N for either separator must not create
@@ -136,12 +136,17 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 func TestCSVValueEscapingDoesNotMutateOrAllocatePlainValues(t *testing.T) {
 	ep := newOutfileExportConfig(tree.NewFields(",", false, 0, '\\'), nil, "\n")
 	plain := []byte("ordinary value")
-	require.Zero(t, testing.AllocsPerRun(100, func() {
-		_ = addEscapeToString(ep, plain, 0)
-	}))
+	for _, enclosed := range []byte{0, '"', '\\'} {
+		require.Zero(t, testing.AllocsPerRun(100, func() {
+			_ = addEscapeToString(ep, plain, enclosed)
+		}))
+	}
 	input := []byte("a,b\n\\N")
 	require.Equal(t, []byte("a\\,b\\\n\\\\N"), addEscapeToString(ep, input, 0))
 	require.Equal(t, []byte("a,b\n\\N"), input)
+	literalNull := []byte(`\N`)
+	require.Equal(t, []byte(`\\\\N`), addEscapeToString(ep, literalNull, '\\'))
+	require.Equal(t, []byte(`\N`), literalNull, "escaping must not mutate the source")
 }
 
 func TestCSVFramingRejectsAmbiguousBareSeparators(t *testing.T) {

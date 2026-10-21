@@ -62,7 +62,7 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 		exec("insert into " + db + ".decimal_src values (1,12.34),(2,-5.67),(3,null)")
 		exec("create table " + db + ".bits24_src(id int primary key,b bit(24))")
 		// 0x610D62 contains a CR which the encoder rewrites to backslash-r.
-		exec("insert into " + db + ".bits24_src values (1,6360418),(2,6382178),(3,null)")
+		exec("insert into " + db + ".bits24_src values (1,6360418),(2,6382178),(3,null),(4,876898)")
 		for _, tc := range []struct {
 			name, source, column, field, line, quote, extra string
 		}{
@@ -102,6 +102,10 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			{"escape-r-line", "bits24_src", "b", ",", `\r`, `"`, ""},
 			{"escape-field-force", "bits24_src", "b", `\`, "\n", `"`, " FORCE_QUOTE (b)"},
 			{"escape-line-force", "bits24_src", "b", ",", `\`, `"`, " FORCE_QUOTE (b)"},
+			{"escape-enclosure", "bits24_src", "b", ",", "\n", `\`, ""},
+			{"escape-enclosure-force", "bits24_src", "b", ",", "\n", `\`, " FORCE_QUOTE (b)"},
+			{"escape-enclosure-all-bytes", "bits_src", "b", ",", "\n", `\`, ""},
+			{"escape-enclosure-strings", "strings_src", "s", ",", "\n", `\`, ""},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec := func(query string) {
