@@ -41,10 +41,8 @@ func TestStringMathMixedCaseHexTextProvenance(t *testing.T) {
 		require.NoError(t, err)
 		defer conn.Close()
 
-		read := func(t *testing.T, rows *sql.Rows, err error) [][]string {
+		read := func(t *testing.T, rows *sql.Rows) [][]string {
 			t.Helper()
-			require.NoError(t, err)
-			defer rows.Close()
 			var got [][]string
 			for rows.Next() {
 				var id, value sql.NullString
@@ -59,7 +57,6 @@ func TestStringMathMixedCaseHexTextProvenance(t *testing.T) {
 				}
 				got = append(got, values)
 			}
-			require.NoError(t, rows.Err())
 			return got
 		}
 		want := [][]string{{"1", "49"}, {"2", "1"}, {"3", "NULL"}}
@@ -69,7 +66,9 @@ func TestStringMathMixedCaseHexTextProvenance(t *testing.T) {
 				"ABS(CASE WHEN id=1 THEN X'31' WHEN id=2 THEN '1' ELSE NULL END) " +
 				"FROM (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3) AS source ORDER BY id"
 			rows, err := conn.QueryContext(ctx, query)
-			require.Equal(t, want, read(t, rows, err))
+			require.NoError(t, err)
+			defer rows.Close()
+			require.Equal(t, want, read(t, rows))
 			require.NoError(t, rows.Err())
 		})
 
@@ -81,7 +80,9 @@ func TestStringMathMixedCaseHexTextProvenance(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Close()
 			rows, err := stmt.QueryContext(ctx, "1")
-			require.Equal(t, want, read(t, rows, err))
+			require.NoError(t, err)
+			defer rows.Close()
+			require.Equal(t, want, read(t, rows))
 			require.NoError(t, rows.Err())
 		})
 	})
