@@ -266,7 +266,10 @@ execute enum_stored;
 -- Strict user conversion still rejects invalid input. A subsequent update
 -- and deletion of the zero PK prove replay continues past the committed 0.
 select cast(0 as enum('','2','1'));
+set @ivf_enum_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
 insert into vector_ivfflat_async_enum values ('invalid', 'warm', '[4,0]', '');
+set session sql_mode = @ivf_enum_saved_sql_mode;
 delete from vector_ivfflat_async_enum where id+0 = 0;
 update vector_ivfflat_async_enum set stored = '1' where id = 'cold';
 -- @wait_expect(2, 60)

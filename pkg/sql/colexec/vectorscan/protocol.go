@@ -24,7 +24,7 @@ const IndexSearchScanProtocolVersion = defines.MORPCVersion111
 
 // SearchKnobsProtocolVersion is the first MORPC protocol version that carries the
 // IndexSearchScan search knobs internal_topk, max_internal_topk and max_nprobe.
-const SearchKnobsProtocolVersion = defines.MORPCVersion126
+const SearchKnobsProtocolVersion = defines.MORPCVersion127
 
 // RequiredProtocolVersion returns the MORPC protocol version a CN needs to run spec.
 func RequiredProtocolVersion(spec *plan.IndexSearchScan) int64 {
