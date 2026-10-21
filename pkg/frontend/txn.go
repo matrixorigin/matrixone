@@ -796,6 +796,11 @@ func (th *TxnHandler) createTxnOpUnsafe(execCtx *ExecCtx) error {
 		accountID = execCtx.ses.GetTenantInfo().TenantID
 		userName = execCtx.ses.GetTenantInfo().User
 	}
+	// Tests must not change CN defaults while background task connections are live.
+	// Lifecycle requirements below still take precedence over this scoped mode.
+	if mode, ok := moruntime.GetTxnModeTestConfig(execCtx.ses.GetService(), accountID); ok {
+		opts = append(opts, txnclient.WithTxnMode(mode))
+	}
 	sessionInfo := execCtx.ses.GetDebugString()
 	opts = append(opts,
 		txnclient.WithTxnCreateBy(
