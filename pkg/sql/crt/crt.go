@@ -25,7 +25,6 @@ import (
 	"compress/zlib"
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"math"
 	"strings"
@@ -246,7 +245,7 @@ type zstdTruncationGuard struct{ d *zstd.Decoder }
 func (g zstdTruncationGuard) Read(p []byte) (int, error) {
 	n, err := g.d.Read(p)
 	if err == io.ErrUnexpectedEOF {
-		return n, fmt.Errorf("truncated zstd input in LOAD DATA")
+		return n, moerr.NewInternalErrorNoCtx("truncated zstd input in LOAD DATA")
 	}
 	return n, err
 }
