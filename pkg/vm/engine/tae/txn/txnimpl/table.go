@@ -1254,10 +1254,23 @@ func (tbl *txnTable) addObjsWithMetaLoc(
 func (tbl *txnTable) GetByFilter(
 	ctx context.Context, filter *handle.Filter,
 ) (id *common.ID, offset uint32, err error) {
+	lookupPath := "object-scan"
+	defer func() {
+		if err == nil && id != nil {
+			logutil.Info("GetByFilter result",
+				zap.String("table", tbl.dataTable.schema.Name),
+				zap.String("txn", tbl.store.txn.String()),
+				zap.String("path", lookupPath),
+				zap.String("id", id.String()),
+				zap.Uint32("offset", offset),
+			)
+		}
+	}()
 	if filter.Op != handle.FilterEq {
 		panic("logic error")
 	}
 	if tbl.dataTable.tableSpace != nil {
+		lookupPath = "appendable-pk-index"
 		id, offset, err = tbl.dataTable.tableSpace.GetByFilter(filter)
 		if err == nil {
 			return

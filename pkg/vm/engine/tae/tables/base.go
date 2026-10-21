@@ -693,6 +693,18 @@ func (obj *baseObject) GetValue(
 		if err != nil {
 			return
 		}
+		batchLen := -1
+		if bat != nil {
+			batchLen = bat.Length()
+		}
+		logutil.Info("GetValue point read",
+			zap.String("object", obj.meta.Load().ID().String()),
+			zap.Uint16("block-offset", blkOffset),
+			zap.Int("row", row),
+			zap.Int("batch-length", batchLen),
+			zap.Bool("preserve-physical-rows", preservePhysicalRows(ctx)),
+			zap.Bool("append-abort-compact", obj.meta.Load().IsAppendable() && !preservePhysicalRows(ctx)),
+		)
 		defer bat.Close()
 		err = txn.GetStore().FillInWorkspaceDeletes(
 			obj.meta.Load().AsCommonID(), &bat.Deletes, uint64(0))
@@ -715,6 +727,17 @@ func (obj *baseObject) GetValue(
 	if err != nil {
 		return
 	}
+	batchLen := -1
+	if bat != nil {
+		batchLen = bat.Length()
+	}
+	logutil.Info("GetValue scan read",
+		zap.String("object", obj.meta.Load().ID().String()),
+		zap.Uint16("block-offset", blkOffset),
+		zap.Int("row", row),
+		zap.Int("batch-length", batchLen),
+		zap.Bool("preserve-physical-rows", preservePhysicalRows(ctx)),
+	)
 	isNull = bat.Vecs[0].IsNull(row)
 	if !isNull {
 		v = bat.Vecs[0].Get(row)
