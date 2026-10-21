@@ -72,3 +72,11 @@ func (r *receiver) pushNextIndex(index uint32) {
 	r.elements[r.tail] = index
 	r.tail = (r.tail + 1) & r.andBase
 }
+
+// discardLastIndex rolls back the producer's latest unnotified entry. A full
+// ring also has head == tail, so the caller's matched-send contract owns the
+// existence check. Earlier notifications and the current batch are untouched.
+func (r *receiver) discardLastIndex() uint32 {
+	r.tail = (r.tail - 1) & r.andBase
+	return r.elements[r.tail]
+}

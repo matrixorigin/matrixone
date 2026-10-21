@@ -445,7 +445,7 @@ func (receiver *messageReceiverOnServer) sendError(
 	message.SetID(receiver.messageId)
 	message.SetSid(pipeline.Status_MessageEnd)
 	if errInfo != nil {
-		message.SetMoError(receiver.messageCtx, errInfo)
+		message.SetMoError(receiver.messageCtx, process.UnwrapPipelineFailure(errInfo))
 	}
 	return receiver.clientSession.Write(receiver.messageCtx, message)
 }

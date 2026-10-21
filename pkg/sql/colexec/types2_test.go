@@ -252,7 +252,8 @@ func TestRecordBuiltPipeline(t *testing.T) {
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.Base.GetContextBase().BuildQueryCtx(ctx)
+	qctx := proc.Base.GetContextBase().BuildQueryCtx(ctx)
+	proc.BuildPipelineContext(qctx)
 	_ = cancel // cancel is not used but needed for context
 
 	srv.RecordBuiltPipeline(session, streamID, proc)
@@ -266,7 +267,7 @@ func TestRecordBuiltPipeline(t *testing.T) {
 	require.True(t, exists, "Pipeline should be registered")
 	require.False(t, record.alreadyDone, "Record should not be marked as done")
 	require.False(t, record.isDispatch, "Record should not be marked as dispatch")
-	require.NotNil(t, record.queryCancel, "QueryCancel should be set")
+	require.NotNil(t, record.cancel, "QueryCancel should be set")
 
 	// Test 2: Registration when alreadyDone=true (should return early)
 	streamID2 := uint64(7)
@@ -279,7 +280,8 @@ func TestRecordBuiltPipeline(t *testing.T) {
 	proc2 := &process.Process{}
 	proc2.Base = &process.BaseProcess{}
 	ctx2, cancel2 := context.WithCancel(context.Background())
-	proc2.Base.GetContextBase().BuildQueryCtx(ctx2)
+	qctx2 := proc2.Base.GetContextBase().BuildQueryCtx(ctx2)
+	proc2.BuildPipelineContext(qctx2)
 	_ = cancel2 // cancel2 is not used but needed for context
 
 	srv.RecordBuiltPipeline(session, streamID2, proc2)
@@ -292,7 +294,8 @@ func TestRecordBuiltPipeline(t *testing.T) {
 
 	require.True(t, exists2, "Record should still exist")
 	require.True(t, record2.alreadyDone, "Record should still be marked as done")
-	require.NotNil(t, proc2.GetQueryContextError(), "Process should be canceled when a tombstone already exists")
+	require.NoError(t, proc2.GetQueryContextError())
+	require.Equal(t, process.ErrPipelineStopped, context.Cause(proc2.Ctx))
 }
 
 // TestCancelPipelineSending tests CancelPipelineSending function
@@ -307,7 +310,8 @@ func TestCancelPipelineSending(t *testing.T) {
 	proc := &process.Process{}
 	proc.Base = &process.BaseProcess{}
 	ctx, cancel := context.WithCancel(context.Background())
-	proc.Base.GetContextBase().BuildQueryCtx(ctx)
+	qctx := proc.Base.GetContextBase().BuildQueryCtx(ctx)
+	proc.BuildPipelineContext(qctx)
 
 	srv.RecordBuiltPipeline(session, streamID, proc)
 
@@ -315,8 +319,8 @@ func TestCancelPipelineSending(t *testing.T) {
 	srv.CancelPipelineSending(session, streamID)
 
 	// Verify context is canceled
-	err := proc.GetQueryContextError()
-	require.NotNil(t, err, "Query context should be canceled")
+	require.NoError(t, proc.GetQueryContextError(), "Stop retires only its execution root")
+	require.Equal(t, process.ErrPipelineStopped, context.Cause(proc.Ctx))
 	_ = cancel // cancel is not used but needed for context
 
 	// Test 2: Cancel when record exists and isDispatch=true (should not cancel)
@@ -349,7 +353,7 @@ func TestCancelPipelineSending(t *testing.T) {
 	require.True(t, exists3, "Cancel before registration should leave a tombstone")
 	require.True(t, record3.alreadyDone, "Tombstone should mark the pipeline already done")
 	require.Nil(t, record3.receiver, "Tombstone should not carry a dispatch receiver")
-	require.Nil(t, record3.queryCancel, "Tombstone should not carry a cancel func yet")
+	require.Nil(t, record3.cancel, "Tombstone should not carry a cancel func yet")
 }
 
 // TestRemoveRelatedPipeline tests RemoveRelatedPipeline function
@@ -486,4 +490,45 @@ func TestCleanupPipelinesForSession_CancelsRegisteredPipelines(t *testing.T) {
 	require.False(t, exists, "Session cleanup should remove registered pipeline records")
 	require.Equal(t, 0, waiterCount, "Session cleanup should remove the waiter registration")
 	require.NotNil(t, proc.GetQueryContextError(), "Session cleanup should cancel registered non-dispatch pipelines")
+}
+
+func TestRegisteredPipelineDisconnectCancelsQuery(t *testing.T) {
+	for _, stopFirst := range []bool{false, true} {
+		name := "normal registration"
+		if stopFirst {
+			name = "stop before registration"
+		}
+		t.Run(name, func(t *testing.T) {
+			srv := NewServer(nil)
+			sessionCtx, disconnect := context.WithCancel(context.Background())
+			defer disconnect()
+			session := &mockClientSession{remoteAddr: "disconnect-owner", ctx: sessionCtx}
+			proc := &process.Process{Base: &process.BaseProcess{}}
+			query := proc.Base.GetContextBase().BuildQueryCtx(context.Background())
+			_, cancelQuery := process.GetQueryCtxFromProc(proc)
+			defer cancelQuery()
+			proc.BuildPipelineContext(query)
+			defer proc.Cancel(nil)
+			if stopFirst {
+				srv.CancelPipelineSending(session, 71)
+			}
+			srv.RecordBuiltPipeline(session, 71, proc)
+			require.NoError(t, query.Err(), "successful Stop only retires the root")
+			if stopFirst {
+				require.Equal(t, process.ErrPipelineStopped, context.Cause(proc.Ctx))
+			}
+			disconnect()
+			select {
+			case <-query.Done():
+			case <-time.After(time.Second):
+				t.Fatal("registered query outlived session disconnect")
+			}
+			srv.receivedRunningPipeline.Lock()
+			_, exists := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[generateRecordKey(session, 71)]
+			waiters := len(srv.receivedRunningPipeline.sessionCleanupWaiters)
+			srv.receivedRunningPipeline.Unlock()
+			require.False(t, exists)
+			require.Zero(t, waiters)
+		})
+	}
 }

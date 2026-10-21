@@ -27,12 +27,9 @@ import (
 
 func TestCleanupInOrderReturnsWhenMergeEndSignalIsMissing(t *testing.T) {
 	oldCleanupWaitTimeout := process.PipelineCleanupWaitTimeout
-	oldSignalSendTimeout := process.PipelineSignalSendTimeout
 	process.PipelineCleanupWaitTimeout = time.Second
-	process.PipelineSignalSendTimeout = time.Second
 	t.Cleanup(func() {
 		process.PipelineCleanupWaitTimeout = oldCleanupWaitTimeout
-		process.PipelineSignalSendTimeout = oldSignalSendTimeout
 	})
 
 	proc := process.NewTopProcess(context.Background(), mpool.MustNewZeroNoFixed(), nil, nil, nil, nil, nil, nil, nil, nil, nil)

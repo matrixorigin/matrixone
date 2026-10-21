@@ -16,17 +16,15 @@ package compile
 
 import (
 	"context"
-	"reflect"
-	"testing"
-	"time"
-
 	"github.com/golang/mock/gomock"
 	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
+	"github.com/matrixorigin/matrixone/pkg/common/morpc/mock_morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -80,6 +78,10 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
+	"reflect"
+	"testing"
+	"testing/synctest"
+	"time"
 )
 
 func makeRemoteBatchMessage(t *testing.T, bat *batch.Batch) morpc.Message {
@@ -87,6 +89,7 @@ func makeRemoteBatchMessage(t *testing.T, bat *batch.Batch) morpc.Message {
 	data, err := bat.MarshalBinary()
 	require.NoError(t, err)
 	return &pipeline.Message{
+		Cmd:  pipeline.Method_BatchMessage,
 		Sid:  pipeline.Status_Last,
 		Data: data,
 	}
@@ -919,9 +922,7 @@ func TestReceiveMessageFromCnServerIfConnector_ReturnsOnBlockedReceiverCancel(t 
 		Proc:   proc,
 		RootOp: connector.NewArgument(),
 	}
-	s.RootOp.(*connector.Connector).Reg = &process.WaitRegister{
-		Ch2: make(chan process.PipelineSignal, 1),
-	}
+	s.RootOp.(*connector.Connector).Reg = process.NewPipelineEdge(1, 0)
 	s.RootOp.(*connector.Connector).Reg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, proc.Mp())
 
 	sender := &messageSenderOnClient{
@@ -952,8 +953,8 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	forwardCh := make(chan process.PipelineSignal, 1)
-	forwardCh <- process.NewPipelineSignalToDirectly(nil, nil, nil)
+	forwardReg := process.NewPipelineEdge(1, 0)
+	forwardReg.Ch2 <- process.NewPipelineSignalToDirectly(nil, nil, nil)
 
 	sender := &messageSenderOnClient{
 		ctx:       ctx,
@@ -964,7 +965,7 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() {
-		done <- receiveMsgAndForward(sender, forwardCh)
+		done <- receiveMsgAndForward(sender, forwardReg)
 	}()
 
 	cancel()
@@ -974,7 +975,7 @@ func TestReceiveMsgAndForward_ReturnsOnBlockedReceiverCancel(t *testing.T) {
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
 	case <-time.After(time.Second):
-		<-forwardCh
+		<-forwardReg.Ch2
 		require.Fail(t, "receiveMsgAndForward did not unblock after cancellation")
 	}
 }
@@ -1296,4 +1297,389 @@ func TestGroupShuffleBucketsByCNIfNeeded_Gating(t *testing.T) {
 	// single CN -> returned unchanged even if a cross-CN dispatch is present.
 	c.cnList = engine.Nodes{engine.Node{Addr: "cn1:6001", Mcpu: 2}}
 	require.Equal(t, 4, len(c.groupShuffleBucketsByCNIfNeeded(ss)))
+}
+
+func TestRemoteNotifyCleanupUsesTypedErrorForSharedReceiver(t *testing.T) {
+	reg := process.NewPipelineEdge(3, 3)
+	testErr := moerr.NewInternalErrorNoCtx("remote notify failed")
+
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, testErr))
+
+	receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+	bat, err := receiver.GetNextBatch(nil)
+	require.Nil(t, bat)
+	require.ErrorIs(t, err, testErr)
+
+	require.Equal(t, 2, len(reg.Ch2))
+	for len(reg.Ch2) > 0 {
+		signal := <-reg.Ch2
+		require.Equal(t, process.EventError, signal.EventType)
+		require.ErrorIs(t, signal.TerminalErr(), testErr)
+	}
+}
+
+func TestRemoteNotifyCleanupUsesTypedEndForSingleSender(t *testing.T) {
+	reg := process.NewPipelineEdge(1, 2)
+
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
+
+	signal := <-reg.Ch2
+	require.Equal(t, process.EventEnd, signal.EventType)
+	select {
+	case <-reg.Done():
+		require.Fail(t, "single remote End should not close a shared receiver edge")
+	default:
+	}
+}
+
+func TestRemoteNotifyCleanupEndDoesNotWaitForChannelCapacity(t *testing.T) {
+
+	reg := process.NewPipelineEdge(1, 0)
+	reg.Ch2 <- process.NewPipelineSignalToDirectly(batch.EmptyBatch, nil, nil)
+
+	start := time.Now()
+	require.True(t, sendRemoteNotifyCleanupTerminal(nil, reg, nil))
+	elapsed := time.Since(start)
+
+	require.Less(t, elapsed, 300*time.Millisecond)
+	select {
+	case <-reg.Done():
+	default:
+		t.Fatal("durable End should mark the remote notify edge terminal")
+	}
+	require.NoError(t, reg.Err())
+
+	receiver := process.InitPipelineSignalReceiver(context.Background(), []*process.WaitRegister{reg})
+	got, err := receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Same(t, batch.EmptyBatch, got)
+	got, err = receiver.GetNextBatch(nil)
+	require.NoError(t, err)
+	require.Nil(t, got)
+}
+
+func TestReceiveMsgAndForward_ReturnsOnReceiverTerminal(t *testing.T) {
+	forwardReg := process.NewPipelineEdge(1, 0)
+	require.True(t, publishTerminalForTest(forwardReg, process.NewErrorSignal(moerr.NewInternalErrorNoCtx("receiver terminal"))))
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMsgAndForward(sender, forwardReg)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.Fail(t, "receiveMsgAndForward did not unblock after receiver terminal")
+	}
+}
+
+func TestReceiveMessageFromCnServerIfConnector_ReturnsOnReceiverTerminal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+
+	reg := process.NewPipelineEdge(1, 0)
+	require.True(t, publishTerminalForTest(reg, process.NewErrorSignal(moerr.NewInternalErrorNoCtx("receiver terminal"))))
+	s := &Scope{
+		Proc:   proc,
+		RootOp: connector.NewArgument().WithReg(reg),
+	}
+
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        proc.Mp(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	done := make(chan error, 1)
+	go func() {
+		done <- receiveMessageFromCnServerIfConnector(s, sender)
+	}()
+
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(time.Second):
+		require.Fail(t, "receiveMessageFromCnServerIfConnector did not unblock after receiver terminal")
+	}
+}
+
+func TestReceiveMsgAndForward_NilReceiverReturnsError(t *testing.T) {
+	sender := &messageSenderOnClient{
+		ctx:       context.Background(),
+		mp:        mpool.MustNewZero(),
+		receiveCh: make(chan morpc.Message, 1),
+	}
+	sender.receiveCh <- makeRemoteBatchMessage(t, batch.NewWithSize(0))
+
+	err := receiveMsgAndForward(sender, nil)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "remote batch forward target is nil")
+}
+
+func publishTerminalForTest(edge *process.PipelineEdge, signal process.PipelineSignal) bool {
+	_, ok := edge.PublishTerminal(signal)
+	return ok
+}
+
+func TestRemoteTerminalSettlement(t *testing.T) {
+	retry := moerr.NewTxnNeedRetry(context.Background())
+	for _, tc := range []struct {
+		name     string
+		terminal *pipeline.Message
+		failure  bool
+		retry    bool
+	}{
+		{name: "legacy end", terminal: &pipeline.Message{Sid: pipeline.Status_MessageEnd}},
+		{name: "malformed analysis", terminal: &pipeline.Message{Sid: pipeline.Status_MessageEnd, Analyse: []byte("{")}, failure: true},
+		{name: "malformed error", terminal: &pipeline.Message{Sid: pipeline.Status_MessageEnd, Err: []byte("invalid")}, failure: true},
+		{name: "unexpected command", terminal: &pipeline.Message{Cmd: pipeline.Method_StopSending}, failure: true},
+		{name: "explicit retry beats malformed analysis", terminal: &pipeline.Message{Sid: pipeline.Status_MessageEnd, Err: pipeline.EncodedMessageError(context.Background(), retry), Analyse: []byte("{")}, failure: true, retry: true},
+		{name: "terminal-less EOF", failure: true},
+	} {
+		for _, stop := range []bool{false, true} {
+			name := tc.name + "/receive"
+			if stop {
+				name = tc.name + "/stop"
+			}
+			t.Run(name, func(t *testing.T) {
+				ch := make(chan morpc.Message, 1)
+				if tc.terminal != nil {
+					ch <- tc.terminal
+				} else {
+					close(ch)
+				}
+				sender := &messageSenderOnClient{ctx: context.Background(), receiveCh: ch}
+				var err error
+				if stop {
+					err = sender.waitingTheStopResponse(context.Background())
+				} else {
+					_, _, err = sender.receiveBatch()
+				}
+				if tc.failure {
+					require.Error(t, err)
+				} else {
+					require.NoError(t, err)
+				}
+				if tc.retry {
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry))
+				}
+			})
+		}
+	}
+}
+
+func TestStopSettlementRetainsReadyFailureAndQueryBound(t *testing.T) {
+	primary := moerr.NewDuplicateEntryNoCtx("1", "primary")
+	t.Run("ready error behind discarded data after cancellation", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		ch := make(chan morpc.Message, 2)
+		ch <- &pipeline.Message{Cmd: pipeline.Method_BatchMessage, Sid: pipeline.Status_Last, Data: []byte("not decoded during stop")}
+		ch <- &pipeline.Message{Sid: pipeline.Status_MessageEnd, Err: pipeline.EncodedMessageError(context.Background(), primary)}
+		sender := &messageSenderOnClient{receiveCh: ch}
+		require.EqualError(t, sender.waitingTheStopResponse(ctx), primary.Error())
+	})
+	for _, terminalAfterSend := range []bool{false, true} {
+		name := "send failure"
+		if terminalAfterSend {
+			name = "ready error wins over Stop send failure"
+		}
+		t.Run(name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stream := mock_morpc.NewMockStream(ctrl)
+			ch := make(chan morpc.Message, 1)
+			transport := moerr.NewInternalErrorNoCtx("stop send failed")
+			stream.EXPECT().ID().Return(uint64(1))
+			stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(func(context.Context, morpc.Message) error {
+				if terminalAfterSend {
+					ch <- &pipeline.Message{Sid: pipeline.Status_MessageEnd, Err: pipeline.EncodedMessageError(context.Background(), primary)}
+				}
+				return transport
+			})
+			sender := &messageSenderOnClient{streamSender: stream, receiveCh: ch}
+			expected := transport
+			if terminalAfterSend {
+				expected = primary
+			}
+			require.EqualError(t, sender.waitingTheStopResponse(context.Background()), expected.Error())
+		})
+	}
+	t.Run("query deadline bounds missing completion", func(t *testing.T) {
+		synctest.Test(t, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			stream := mock_morpc.NewMockStream(ctrl)
+			stream.EXPECT().ID().Return(uint64(1))
+			stream.EXPECT().Send(gomock.Any(), gomock.Any()).Return(nil)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			defer cancel()
+			sender := &messageSenderOnClient{streamSender: stream, receiveCh: make(chan morpc.Message)}
+			require.ErrorIs(t, sender.waitingTheStopResponse(ctx), context.DeadlineExceeded)
+		})
+	})
+}
+
+func TestNestedSettlementKeepsRetryPolicy(t *testing.T) {
+	for _, isolation := range []txn.TxnIsolation{txn.TxnIsolation_RC, txn.TxnIsolation_SI} {
+		for _, retry := range []error{moerr.NewTxnNeedRetry(context.Background()), moerr.NewTxnNeedRetryWithDefChanged(context.Background())} {
+			for _, retryFirst := range []bool{false, true} {
+				ctrl := gomock.NewController(t)
+				proc := testutil.NewProcess(t)
+				op := mock_frontend.NewMockTxnOperator(ctrl)
+				op.EXPECT().Txn().Return(txn.TxnMeta{Isolation: isolation}).AnyTimes()
+				proc.Base.TxnOperator = op
+				c := &Compile{proc: proc}
+				first := moerr.NewDuplicateEntryNoCtx("1", "primary")
+				a, b := error(first), retry
+				if retryFirst {
+					a, b = b, a
+				}
+				results := make(chan error, 1)
+				results <- b
+				got := c.collectMergeRunResults(proc, a, results, nil)
+				if isolation == txn.TxnIsolation_RC {
+					require.Same(t, retry, got)
+				} else {
+					require.Same(t, a, got)
+				}
+				if got == retry {
+					require.Equal(t, isolation == txn.TxnIsolation_RC, c.canRetry(got))
+				}
+				c.disableRetry = true
+				require.False(t, c.canRetry(got))
+				proc.Free()
+			}
+		}
+	}
+}
+
+func TestDeclaredTerminalFailureSurvivesSuccessfulStop(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	ctx := proc.Base.GetContextBase().BuildQueryCtx(context.Background())
+	proc.BuildPipelineContext(ctx)
+	defer proc.Cancel(nil)
+	declared := moerr.NewQueryInterrupted(context.Background())
+	signal := process.NewErrorSignal(declared)
+	proc.Cancel(process.ErrPipelineStopped)
+	_, err := signal.Action()
+	got := normalizeScopeRunError(err, proc.Ctx, ctx)
+	require.ErrorIs(t, got, declared)
+	require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(got), moerr.ErrQueryInterrupted))
+}
+
+// Version-independent legacy-wire adaptation of the final 4.2-dev #27757
+// classification regression. It intentionally does not use newer teardown ACKs.
+func TestIssue27757RemoteRunCancellationClassificationLegacyWire(t *testing.T) {
+	previous := runtime.ServiceRuntime("")
+	runtime.SetupServiceBasedRuntime("", runtime.DefaultRuntime())
+	t.Cleanup(func() { runtime.SetupServiceBasedRuntime("", previous) })
+	catalog.SetupDefines("")
+	substantive := moerr.NewInternalErrorNoCtx("remote execution failed")
+	for _, tc := range []struct {
+		name               string
+		queryCancel        bool
+		cause, errorWanted error
+		late               error
+		analysis           string
+	}{
+		{name: "internal early stop"},
+		{name: "late execution error", late: substantive, errorWanted: substantive},
+		{name: "late interruption is execution failure", late: moerr.NewQueryInterrupted(context.Background()), errorWanted: moerr.NewQueryInterrupted(context.Background())},
+		{name: "late retry", late: moerr.NewTxnNeedRetry(context.Background()), errorWanted: moerr.NewTxnNeedRetry(context.Background())},
+		{name: "late definition-change retry", late: moerr.NewTxnNeedRetryWithDefChanged(context.Background()), errorWanted: moerr.NewTxnNeedRetryWithDefChanged(context.Background())},
+		{name: "execution error beats malformed analysis", late: substantive, analysis: "{", errorWanted: substantive},
+		{name: "malformed completion", analysis: "{"},
+		{name: "query cancellation", queryCancel: true, errorWanted: context.Canceled},
+		{name: "substantive pipeline error", cause: substantive, errorWanted: substantive},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			qctx := proc.Base.GetContextBase().BuildQueryCtx(proc.GetTopContext())
+			_, cancelQuery := process.GetQueryCtxFromProc(proc)
+			defer cancelQuery()
+			proc.BuildPipelineContext(qctx)
+			defer proc.Cancel(nil)
+			cli, op := newTestTxnClientAndOp(ctrl)
+			proc.Base.TxnClient = cli
+			proc.Base.TxnOperator = op
+			reg := process.NewPipelineEdge(1, 1)
+			responses := make(chan morpc.Message, 2)
+			stream := mock_morpc.NewMockStream(ctrl)
+			stream.EXPECT().Receive().Return(responses, nil)
+			stream.EXPECT().ID().Return(uint64(27757)).AnyTimes()
+			stream.EXPECT().Send(gomock.Any(), gomock.Any()).DoAndReturn(func(_ context.Context, r morpc.Message) error {
+				m := r.(*pipeline.Message)
+				switch m.GetCmd() {
+				case pipeline.Method_PipelineMessage:
+					if tc.queryCancel {
+						cancelQuery()
+					} else {
+						cause := tc.cause
+						if cause == nil {
+							cause = process.ErrPipelineStopped
+						}
+						proc.Cancel(cause)
+					}
+				case pipeline.Method_StopSending:
+					select {
+					case <-reg.Done():
+					default:
+						t.Error("local output was not retired before remote settlement")
+					}
+					terminal := &pipeline.Message{Id: 27757, Cmd: pipeline.Method_PipelineMessage, Sid: pipeline.Status_MessageEnd, Analyse: []byte(tc.analysis)}
+					terminal.SetMoError(context.Background(), tc.late)
+					responses <- terminal
+				}
+				return nil
+			}).AnyTimes()
+			poisoned := false
+			stream.EXPECT().Close(gomock.Any()).DoAndReturn(func(p bool) error { poisoned = p; return nil })
+			rt := runtime.ServiceRuntime("")
+			old, _ := rt.GetGlobalVariables(runtime.PipelineClient)
+			t.Cleanup(func() {
+				rt.SetGlobalVariables(runtime.PipelineClient, old)
+			})
+			rt.SetGlobalVariables(runtime.PipelineClient, &testPipelineClient{genStream: func(string) morpc.Stream { return stream }})
+			c := NewCompile("local-cn:6002", "test", "select id from ivf_entries order by distance limit 10", "", "", newStubEngine(), proc, nil, false, nil, time.Now())
+			c.anal = &AnalyzeModule{qry: &planpb.Query{}}
+			root := connector.NewArgument().WithReg(reg)
+			defer root.Release()
+			s := &Scope{Magic: Remote, Proc: proc, RootOp: root, ScopeAnalyzer: &ScopeAnalyzer{}, NodeInfo: engine.Node{Addr: "remote-cn:6002", Mcpu: 1}}
+			got := s.RemoteRun(c)
+			var terminalErr error
+			select {
+			case signal := <-reg.Ch2:
+				_, terminalErr = signal.Action()
+			case <-time.After(time.Second):
+				t.Fatal("missing terminal")
+			}
+			if tc.analysis != "" && tc.late == nil {
+				require.Error(t, got)
+			} else if tc.errorWanted == nil {
+				require.NoError(t, got)
+			} else {
+				require.EqualError(t, got, tc.errorWanted.Error())
+			}
+			if tc.late != nil || tc.analysis != "" || tc.errorWanted == nil {
+				require.NoError(t, terminalErr)
+			} else {
+				require.ErrorIs(t, terminalErr, tc.errorWanted)
+			}
+			require.True(t, poisoned)
+
+			require.Empty(t, reg.Ch2)
+		})
+	}
 }

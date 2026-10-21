@@ -149,6 +149,7 @@ func (c *Compile) Compile(
 
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
+	defer func() { err = process.UnwrapPipelineFailure(err) }()
 	var txnOperator = c.proc.GetTxnOperator()
 
 	// init context for pipeline.

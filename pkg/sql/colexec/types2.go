@@ -15,6 +15,7 @@
 package colexec
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -32,6 +33,7 @@ func (srv *Server) RecordDispatchPipeline(
 
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
+	srv.ensureSessionCleanupLocked(session)
 
 	// check if sender has sent a stop running message.
 	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok && v.alreadyDone {
@@ -63,7 +65,7 @@ func (srv *Server) RecordDispatchPipeline(
 	value := runningPipelineInfo{
 		alreadyDone: false,
 		isDispatch:  true,
-		queryCancel: nil,
+		cancel:      nil,
 		receiver:    dispatchReceiver,
 	}
 
@@ -78,24 +80,31 @@ func (srv *Server) RecordBuiltPipeline(
 
 	key := generateRecordKey(session, streamID)
 
-	_, cancel := process.GetQueryCtxFromProc(proc)
+	_, cancelQuery := process.GetQueryCtxFromProc(proc)
+	cancelRoot := proc.Cancel
 
 	srv.receivedRunningPipeline.Lock()
 	defer srv.receivedRunningPipeline.Unlock()
 
-	// check if sender has sent a stop running message.
-	if v, ok := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]; ok && v.alreadyDone {
-		cancel()
-		return
-	}
-
+	// Register the live owner even when Stop arrived first: disconnect must
+	// still cancel the query after its execution root has retired successfully.
+	previous := srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key]
 	value := runningPipelineInfo{
-		alreadyDone: false,
-		isDispatch:  false,
-		queryCancel: cancel,
-		receiver:    nil,
+		alreadyDone: previous.alreadyDone,
+		cancel: func(cause error) {
+			if cause == process.ErrPipelineStopped {
+				cancelRoot(cause)
+			} else {
+				cancelQuery()
+			}
+		},
 	}
 	srv.receivedRunningPipeline.fromRpcClientToRelatedPipeline[key] = value
+	srv.ensureSessionCleanupLocked(session)
+	if previous.alreadyDone {
+		value.cancelPipeline(process.ErrPipelineStopped)
+	}
+
 }
 
 func (srv *Server) CancelPipelineSending(
@@ -120,7 +129,7 @@ func (srv *Server) CancelPipelineSending(
 			// Only cancel non-dispatch pipelines (query execution pipelines)
 			logutil.Debug("CancelPipelineSending canceling non-dispatch pipeline",
 				zap.Uint64("streamID", streamID))
-			v.cancelPipeline()
+			v.cancelPipeline(process.ErrPipelineStopped)
 		}
 		return
 	}
@@ -171,6 +180,6 @@ func (srv *Server) cleanupPipelinesForSession(session morpc.ClientSession) {
 	srv.receivedRunningPipeline.Unlock()
 
 	for i := range infos {
-		infos[i].cancelPipeline()
+		infos[i].cancelPipeline(context.Canceled)
 	}
 }

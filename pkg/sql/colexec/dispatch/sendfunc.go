@@ -62,7 +62,12 @@ func sendToAllLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (
 		return queryDone, err
 	}
 	for i, reg := range ap.LocalRegs {
-		reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, i)
+		if !reg.SendData(proc.Ctx, ap.ctr.sp, i) {
+			for pending := i; pending < len(ap.LocalRegs); pending++ {
+				ap.ctr.sp.DiscardUnsent(pending)
+			}
+			return true, nil
+		}
 	}
 	return false, nil
 }
@@ -119,7 +124,9 @@ func sendBatToIndex(ap *Dispatch, proc *process.Process, bat *batch.Batch, shuff
 			if err != nil || queryDone {
 				return err
 			}
-			onlyOneRegToDealThis(i, ap)
+			if !onlyOneRegToDealThis(i, ap, proc) {
+				return context.Canceled
+			}
 			break
 		}
 	}
@@ -169,7 +176,9 @@ func sendBatToLocalMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 			if err != nil || queryDone {
 				return err
 			}
-			onlyOneRegToDealThis(i, ap)
+			if !onlyOneRegToDealThis(i, ap, proc) {
+				return context.Canceled
+			}
 			break
 		}
 	}
@@ -214,7 +223,9 @@ func sendBatToMultiMatchedReg(ap *Dispatch, proc *process.Process, bat *batch.Ba
 			if err != nil || queryDone {
 				return err
 			}
-			onlyOneRegToDealThis(i, ap)
+			if !onlyOneRegToDealThis(i, ap, proc) {
+				return context.Canceled
+			}
 			break
 		}
 	}
@@ -255,8 +266,12 @@ func sendToAllFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (bool,
 	return sendToAllLocalFunc(bat, ap, proc)
 }
 
-func onlyOneRegToDealThis(sendto int, ap *Dispatch) {
-	ap.LocalRegs[sendto].Ch2 <- process.NewPipelineSignalToGetFromSpool(ap.ctr.sp, sendto)
+func onlyOneRegToDealThis(sendto int, ap *Dispatch, proc *process.Process) bool {
+	if ap.LocalRegs[sendto].SendData(proc.Ctx, ap.ctr.sp, sendto) {
+		return true
+	}
+	ap.ctr.sp.DiscardUnsent(sendto)
+	return false
 }
 
 // common sender: send to any LocalReceiver
@@ -269,7 +284,9 @@ func sendToAnyLocalFunc(bat *batch.Batch, ap *Dispatch, proc *process.Process) (
 	if err != nil || queryDone {
 		return true, err
 	}
-	onlyOneRegToDealThis(sendto, ap)
+	if !onlyOneRegToDealThis(sendto, ap, proc) {
+		return true, nil
+	}
 
 	ap.ctr.sendCnt++
 

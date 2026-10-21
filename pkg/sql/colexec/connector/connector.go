@@ -65,6 +65,9 @@ func (connector *Connector) Call(proc *process.Process) (vm.CallResult, error) {
 	if queryDone || err != nil {
 		return result, err
 	}
-	connector.Reg.Ch2 <- process.NewPipelineSignalToGetFromSpool(connector.ctr.sp, 0)
+	if !connector.Reg.SendData(proc.Ctx, connector.ctr.sp, 0) {
+		connector.ctr.sp.DiscardUnsent(0)
+		result.Status = vm.ExecStop
+	}
 	return result, nil
 }

@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"testing"
@@ -543,6 +544,156 @@ func TestDebugLogFor19288(t *testing.T) {
 	}
 }
 
+func TestPreferPrimaryError(t *testing.T) {
+	c := &Compile{}
+	first := moerr.NewDuplicateEntryNoCtx("1", "primary")
+	for _, tc := range []struct{ current, candidate, want error }{
+		{nil, first, first}, {first, nil, first},
+		{process.ErrPipelineEndSignalDeliveryFailed, first, first},
+		{first, process.ErrPipelineEndSignalDeliveryFailed, first},
+		{first, context.Canceled, first},
+		{context.Canceled, first, context.Canceled},
+	} {
+		require.Same(t, tc.want, c.preferPrimaryError(tc.current, tc.candidate))
+	}
+}
+
+type scopeRunCancelErrorOperator struct {
+	*colexec.MockOperator
+	cancelCause error
+	runErr      error
+}
+
+func (op *scopeRunCancelErrorOperator) Call(proc *process.Process) (vm.CallResult, error) {
+	proc.Cancel(op.cancelCause)
+	return vm.NewCallResult(), op.runErr
+}
+
+func TestScopeRunPreservesPrimaryErrorAcrossCancellation(t *testing.T) {
+	primaryErr := moerr.NewInternalErrorNoCtx("hash build memory budget exceeded")
+	tests := []struct {
+		name        string
+		cancelCause error
+		runErr      error
+		want        error
+	}{
+		{
+			name:        "substantive execution error survives normal sibling cancellation",
+			cancelCause: nil,
+			runErr:      primaryErr,
+			want:        primaryErr,
+		},
+		{
+			name:        "joined execution error survives normal sibling cancellation",
+			cancelCause: nil,
+			runErr:      errors.Join(primaryErr, context.Canceled),
+			want:        primaryErr,
+		},
+		{
+			name:        "cancellation resolves to substantive pipeline cause",
+			cancelCause: primaryErr,
+			runErr:      context.Canceled,
+			want:        primaryErr,
+		},
+		{
+			name:        "declared cancellation survives own cleanup",
+			cancelCause: nil,
+			runErr:      context.Canceled,
+			want:        context.Canceled,
+		},
+		{
+			name:        "independent operator deadline survives normal cancellation",
+			cancelCause: nil,
+			runErr:      context.DeadlineExceeded,
+			want:        context.DeadlineExceeded,
+		},
+		{
+			name:        "joined independent deadline survives normal cancellation",
+			cancelCause: nil,
+			runErr:      errors.Join(context.DeadlineExceeded, context.Canceled),
+			want:        context.DeadlineExceeded,
+		},
+		{
+			name:        "declared joined cancellation remains failure",
+			cancelCause: nil,
+			runErr: errors.Join(
+				context.Canceled,
+				moerr.NewQueryInterrupted(context.Background())),
+			want: context.Canceled,
+		},
+		{
+			name:        "joined cancellation fallout resolves to substantive cause",
+			cancelCause: primaryErr,
+			runErr: errors.Join(
+				context.Canceled,
+				moerr.NewQueryInterrupted(context.Background())),
+			want: primaryErr,
+		},
+		{
+			name:        "joined independent deadline survives substantive cancellation cause",
+			cancelCause: primaryErr,
+			runErr:      errors.Join(context.DeadlineExceeded, context.Canceled),
+			want:        context.DeadlineExceeded,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			op := &scopeRunCancelErrorOperator{
+				MockOperator: colexec.NewMockOperator(),
+				cancelCause:  test.cancelCause,
+				runErr:       test.runErr,
+			}
+			scope := &Scope{RootOp: op, Proc: proc}
+			compile := &Compile{proc: proc}
+
+			got := scope.Run(compile)
+			if test.want == nil {
+				require.NoError(t, got)
+			} else {
+				require.ErrorIs(t, got, test.want)
+			}
+		})
+	}
+}
+
+func TestScopeRunPreservesQueryDeadlineClassification(t *testing.T) {
+	tests := []struct {
+		name   string
+		runErr error
+	}{
+		{name: "deadline", runErr: context.DeadlineExceeded},
+		{name: "canceled child", runErr: context.Canceled},
+		{name: "query interrupted", runErr: moerr.NewQueryInterrupted(context.Background())},
+		{name: "joined deadline and cancellation", runErr: errors.Join(context.DeadlineExceeded, context.Canceled)},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			deadlineCtx, cancelDeadline := context.WithTimeoutCause(
+				context.Background(), 0, moerr.CauseInternalExecutorExec)
+			defer cancelDeadline()
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(deadlineCtx)
+			proc.BuildPipelineContext(queryCtx)
+
+			op := &scopeRunCancelErrorOperator{
+				MockOperator: colexec.NewMockOperator(),
+				runErr:       test.runErr,
+			}
+			got := (&Scope{RootOp: op, Proc: proc}).Run(&Compile{proc: proc})
+			require.ErrorIs(t, got, context.DeadlineExceeded)
+			require.NotErrorIs(t, got, moerr.CauseInternalExecutorExec)
+
+			attached := moerr.AttachCause(deadlineCtx, got)
+			require.ErrorIs(t, attached, context.DeadlineExceeded)
+			require.ErrorIs(t, attached, moerr.CauseInternalExecutorExec)
+		})
+	}
+}
+
 func TestLockMeta_doLock(t *testing.T) {
 	lm := &LockMeta{
 		database_table_id: 11230,
@@ -669,4 +820,45 @@ func hasOperatorType(op vm.Operator, opType vm.OpType) bool {
 		}
 	}
 	return false
+}
+
+// Regression: execution returns an interruption-shaped failure
+// while its owning pipeline/query are active. Cleanup runs AFTER that return.
+type declaredFailureOperator struct {
+	*colexec.MockOperator
+	failure error
+	calls   int
+}
+
+func (op *declaredFailureOperator) Call(proc *process.Process) (vm.CallResult, error) {
+	op.calls++
+	result := vm.NewCallResult()
+	if op.calls == 1 {
+		result.Batch = batch.EmptyBatch
+		return result, nil
+	}
+	if proc.Ctx.Err() != nil {
+		panic("fixture canceled before injected execution failure")
+	}
+	return result, op.failure
+}
+func TestDeclaredFailureSurvivesOwnCleanup(t *testing.T) {
+	for _, failure := range []error{context.Canceled, moerr.NewQueryInterrupted(context.Background())} {
+		t.Run(failure.Error(), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			queryCtx := proc.Base.GetContextBase().BuildQueryCtx(context.Background())
+			_, queryCancel := process.GetQueryCtxFromProc(proc)
+			defer queryCancel()
+			proc.BuildPipelineContext(queryCtx)
+			defer proc.Cancel(nil)
+			op := &declaredFailureOperator{MockOperator: colexec.NewMockOperator(), failure: failure}
+			s := &Scope{Magic: Normal, Proc: proc, RootOp: op}
+			c := &Compile{proc: proc, pn: &plan.Plan{}, execType: plan2.ExecTypeAP_ONECN, scopes: []*Scope{s}}
+			got := c.runOnce()
+			require.Equal(t, 2, op.calls)
+			require.NoError(t, queryCtx.Err(), "user query is still live")
+			require.ErrorIs(t, got, failure, "execution failure was converted into successful statement settlement")
+		})
+	}
 }

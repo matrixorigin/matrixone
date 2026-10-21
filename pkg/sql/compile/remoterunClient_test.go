@@ -90,7 +90,7 @@ func Test_newMessageSenderOnClient(t *testing.T) {
 	client.safeToClose = false
 	client.alreadyClose = false
 
-	client.waitingTheStopResponse()
+	client.waitingTheStopResponse(context.Background())
 }
 
 func TestRemoteRun(t *testing.T) {

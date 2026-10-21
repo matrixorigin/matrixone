@@ -78,13 +78,13 @@ type rpcClientItem struct {
 
 type runningPipelineInfo struct {
 	alreadyDone bool
-	queryCancel context.CancelFunc
+	cancel      context.CancelCauseFunc
 
 	isDispatch bool
 	receiver   *process.WrapCs
 }
 
-func (info *runningPipelineInfo) cancelPipeline() {
+func (info *runningPipelineInfo) cancelPipeline(cause error) {
 	// If this was a pipeline responsible for distributing data, we cannot end this
 	// because we are just one of the receivers.
 	if info.isDispatch {
@@ -93,8 +93,8 @@ func (info *runningPipelineInfo) cancelPipeline() {
 		info.receiver.Unlock()
 
 	} else {
-		if info.queryCancel != nil {
-			info.queryCancel()
+		if info.cancel != nil {
+			info.cancel(cause)
 		}
 	}
 }

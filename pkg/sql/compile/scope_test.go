@@ -18,22 +18,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
-	"path"
-	"path/filepath"
-	"testing"
-	"time"
-
 	"github.com/golang/mock/gomock"
-	"github.com/parquet-go/parquet-go"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/buffer"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/morpc"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
@@ -50,6 +46,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/shuffle"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -58,7 +55,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/parquet-go/parquet-go"
 	"github.com/stretchr/testify/require"
+	"os"
+	"path"
+	"path/filepath"
+	"testing"
+	"time"
 )
 
 func checkSrcOpsWithDst(srcRoot vm.Operator, dstRoot vm.Operator) bool {
@@ -271,7 +274,7 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.Nil(t, bat)
 		require.False(t, over)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(err), moerr.ErrQueryInterrupted))
 	})
 
 	t.Run("upstream deadline returns query interrupted", func(t *testing.T) {
@@ -288,7 +291,7 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.Nil(t, bat)
 		require.False(t, over)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(err), moerr.ErrQueryInterrupted))
 	})
 
 	t.Run("internal deadline returns rpc timeout", func(t *testing.T) {
@@ -317,7 +320,7 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		sender.ctxCancel = cancel
 		defer cancel()
 
-		sender.receiveCh <- &pipeline.Message{Sid: pipeline.Status_WaitingNext, Data: []byte("partial")}
+		sender.receiveCh <- &pipeline.Message{Cmd: pipeline.Method_BatchMessage, Sid: pipeline.Status_WaitingNext, Data: []byte("partial")}
 		go func() {
 			time.Sleep(10 * time.Millisecond)
 			cancel()
@@ -327,7 +330,7 @@ func TestMessageSenderOnClientReceiveBatchContextDone(t *testing.T) {
 		require.Nil(t, bat)
 		require.False(t, over)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(err), moerr.ErrQueryInterrupted))
 	})
 }
 
@@ -1276,33 +1279,122 @@ func TestNotifyMessageClean(t *testing.T) {
 		err:    nil,
 	}
 
-	n1.clean(proc)
+	n1.clean(&Compile{proc: proc}, proc)
 	require.Equal(t, 1, ff.number)
 
-	n2.clean(proc)
-	require.Equal(t, 2, ff.number)
+	n2.clean(&Compile{proc: proc}, proc)
+	require.Equal(t, 1, ff.number, "sender ownership closes the stream exactly once")
 }
 
 func TestSuppressRemoteRunCancelError(t *testing.T) {
 	t.Run("suppress query interrupted after proc cancel", func(t *testing.T) {
-		ctx, cancel := context.WithCancel(context.Background())
-		cancel()
-		require.NoError(t, suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx)))
+		queryCtx := context.Background()
+		ctx, cancel := context.WithCancelCause(queryCtx)
+		cancel(process.ErrPipelineStopped)
+		require.NoError(t, normalizeScopeRunError(moerr.NewQueryInterrupted(ctx), ctx, queryCtx))
+	})
+
+	t.Run("suppress raw context cancellation after proc cancel", func(t *testing.T) {
+		queryCtx := context.Background()
+		ctx, cancel := context.WithCancelCause(queryCtx)
+		cancel(process.ErrPipelineStopped)
+		require.NoError(t, normalizeScopeRunError(fmt.Errorf("open remote stream: %w", context.Canceled), ctx, queryCtx))
+	})
+
+	t.Run("suppress joined cancellation fallout after proc cancel", func(t *testing.T) {
+		queryCtx := context.Background()
+		ctx, cancel := context.WithCancelCause(queryCtx)
+		cancel(process.ErrPipelineStopped)
+		err := errors.Join(context.Canceled, moerr.NewQueryInterrupted(ctx))
+		require.NoError(t, normalizeScopeRunError(err, ctx, queryCtx))
+	})
+
+	t.Run("keep independent deadline joined with cancellation", func(t *testing.T) {
+		queryCtx := context.Background()
+		ctx, cancel := context.WithCancelCause(queryCtx)
+		cancel(nil)
+		err := normalizeScopeRunError(errors.Join(context.DeadlineExceeded, context.Canceled), ctx, queryCtx)
+		require.ErrorIs(t, err, context.DeadlineExceeded)
+	})
+
+	t.Run("keep substantive error joined with cancellation", func(t *testing.T) {
+		queryCtx := context.Background()
+		ctx, cancel := context.WithCancelCause(queryCtx)
+		cancel(nil)
+		primaryErr := moerr.NewInternalErrorNoCtx("remote execution failed")
+		err := normalizeScopeRunError(errors.Join(primaryErr, context.Canceled), ctx, queryCtx)
+		require.ErrorIs(t, err, primaryErr)
 	})
 
 	t.Run("keep rpc timeout after proc cancel", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
-		err := suppressRemoteRunCancelError(ctx, moerr.NewRPCTimeout(ctx))
+		err := normalizeScopeRunError(moerr.NewRPCTimeout(ctx), ctx, nil)
 		require.Error(t, err)
 		require.True(t, moerr.IsMoErrCode(err, moerr.ErrRPCTimeout))
 	})
 
 	t.Run("keep query interrupted while proc still active", func(t *testing.T) {
 		ctx := context.Background()
-		err := suppressRemoteRunCancelError(ctx, moerr.NewQueryInterrupted(ctx))
+		err := normalizeScopeRunError(moerr.NewQueryInterrupted(ctx), ctx, nil)
 		require.Error(t, err)
-		require.True(t, moerr.IsMoErrCode(err, moerr.ErrQueryInterrupted))
+		require.True(t, moerr.IsMoErrCode(process.UnwrapPipelineFailure(err), moerr.ErrQueryInterrupted))
+	})
+
+	t.Run("keep raw context cancellation while proc still active", func(t *testing.T) {
+		ctx := context.Background()
+		err := normalizeScopeRunError(context.Canceled, ctx, nil)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("keep query cancellation after pipeline cancel", func(t *testing.T) {
+		queryCtx, cancelQuery := context.WithCancel(context.Background())
+		pipelineCtx, cancelPipeline := context.WithCancel(queryCtx)
+		cancelQuery()
+		cancelPipeline()
+		err := normalizeScopeRunError(context.Canceled, pipelineCtx, queryCtx)
+		require.ErrorIs(t, err, context.Canceled)
+	})
+
+	t.Run("keep substantive pipeline cancellation cause", func(t *testing.T) {
+		queryCtx := context.Background()
+		pipelineCtx, cancelPipeline := context.WithCancelCause(queryCtx)
+		substantiveErr := moerr.NewInternalErrorNoCtx("remote execution failed")
+		cancelPipeline(substantiveErr)
+		err := normalizeScopeRunError(context.Canceled, pipelineCtx, queryCtx)
+		require.ErrorIs(t, err, substantiveErr)
+	})
+
+	t.Run("keep deadline classification instead of timeout cause", func(t *testing.T) {
+		diagnostic := moerr.NewInternalErrorNoCtx("request timeout diagnostic")
+		requestCtx, cancelRequest := context.WithDeadlineCause(
+			context.Background(),
+			time.Now().Add(-time.Second),
+			diagnostic,
+		)
+		defer cancelRequest()
+		queryCtx, cancelQuery := context.WithCancel(requestCtx)
+		defer cancelQuery()
+		pipelineCtx, cancelPipeline := context.WithCancelCause(queryCtx)
+		defer cancelPipeline(nil)
+
+		<-pipelineCtx.Done()
+		require.ErrorIs(t, queryCtx.Err(), context.DeadlineExceeded)
+		require.Equal(t, diagnostic, context.Cause(queryCtx))
+		err := normalizeScopeRunError(moerr.NewQueryInterrupted(pipelineCtx), pipelineCtx, queryCtx)
+		require.Equal(t, context.DeadlineExceeded, err)
+	})
+
+	t.Run("keep substantive error joined with cancellation", func(t *testing.T) {
+		queryCtx := context.Background()
+		pipelineCtx, cancelPipeline := context.WithCancel(queryCtx)
+		cancelPipeline()
+		substantiveErr := moerr.NewInternalErrorNoCtx("operator failed")
+		joined := errors.Join(context.Canceled, substantiveErr)
+
+		err := normalizeScopeRunError(joined, pipelineCtx, queryCtx)
+		require.ErrorIs(t, err, context.Canceled)
+		require.ErrorIs(t, err, substantiveErr)
 	})
 }
 
@@ -1708,4 +1800,360 @@ func TestBuildScanParallelRunSetsOrderByOnParallelReaders(t *testing.T) {
 		require.Equal(t, 1, reader.orderByCalls)
 		require.Equal(t, orderBy, reader.orderBy)
 	}
+}
+
+func TestScopeResetClearsPipelineEdgeTerminalState(t *testing.T) {
+	testCompile := NewMockCompile(t)
+
+	child := &Scope{
+		Magic: Normal,
+		Proc:  testCompile.proc.NewNoContextChildProc(1),
+	}
+	s := &Scope{
+		Magic:     Merge,
+		Proc:      testCompile.proc.NewNoContextChildProc(2),
+		PreScopes: []*Scope{child},
+	}
+
+	regs := make([]*process.WaitRegister, 0, len(s.Proc.Reg.MergeReceivers)+len(child.Proc.Reg.MergeReceivers))
+	regs = append(regs, s.Proc.Reg.MergeReceivers...)
+	regs = append(regs, child.Proc.Reg.MergeReceivers...)
+	for _, reg := range regs {
+		require.True(t, publishTerminalForTest(reg, process.NewEndSignal()))
+		select {
+		case <-reg.Done():
+		default:
+			t.Fatal("edge should be done after SendEnd")
+		}
+	}
+
+	require.NoError(t, s.Reset(testCompile))
+
+	for _, reg := range regs {
+		select {
+		case <-reg.Done():
+			t.Fatal("Reset must clear edge terminal state for reuse")
+		default:
+		}
+		select {
+		case <-reg.Ch2:
+			t.Fatal("Reset must drain stale buffered signals")
+		default:
+		}
+		require.True(t, publishTerminalForTest(reg, process.NewEndSignal()), "edge must accept End again after Reset")
+	}
+}
+
+func TestCollectMergeRunResultsPreservesExecutionErrorAndDrains(t *testing.T) {
+	producerErr := moerr.NewInternalErrorNoCtx("producer memory allocation failed")
+	remoteErr := moerr.NewInternalErrorNoCtx("remote execution failed")
+	for _, test := range []struct {
+		name     string
+		producer error
+		remote   error
+		want     error
+	}{
+		{name: "producer error replaces cleanup fallout", producer: producerErr, want: producerErr},
+		{name: "remote error replaces cleanup fallout", remote: remoteErr, want: remoteErr},
+		{name: "first producer error survives later remote error", producer: producerErr, remote: remoteErr, want: producerErr},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.BuildPipelineContext(context.Background())
+			defer proc.Cancel(nil)
+			preScopes := make(chan error, 2)
+			preScopes <- nil
+			preScopes <- test.producer
+			remote := make(chan notifyMessageResult, 1)
+			remote <- notifyMessageResult{err: test.remote}
+
+			err := (&Compile{proc: proc}).collectMergeRunResults(proc,
+				process.ErrPipelineEndSignalDeliveryFailed,
+				preScopes, remote)
+			require.Same(t, test.want, err)
+			require.Empty(t, preScopes)
+			require.Empty(t, remote)
+		})
+	}
+}
+
+func TestMergeScopeCancellationPreservesCause(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	defer proc.Cancel(nil)
+	siblingCtx, cancelSibling := context.WithCancelCause(proc.Ctx)
+	defer cancelSibling(nil)
+	scope := &Scope{Proc: proc}
+
+	// Successful completion must not cancel siblings still producing data.
+	require.NoError(t, scope.cancelMergeSiblingsOnError(nil))
+	require.NoError(t, siblingCtx.Err())
+
+	failure := moerr.NewInternalErrorNoCtx("producer failed before merge wait")
+	require.Same(t, failure, scope.cancelMergeSiblingsOnError(failure))
+	select {
+	case <-siblingCtx.Done():
+	default:
+		t.Fatal("failure must cancel siblings before MergeRun joins them")
+	}
+	require.Same(t, failure, context.Cause(siblingCtx))
+}
+
+type canceledBuildReadersRelation struct{ engine.Relation }
+
+func (*canceledBuildReadersRelation) BuildReaders(ctx context.Context, _ any, _ *plan.Expr, _ engine.RelData, _ int, _ int, _ bool, _ engine.TombstoneApplyPolicy, _ engine.FilterHint) ([]engine.Reader, error) {
+	return nil, ctx.Err()
+}
+
+func TestParallelConstructionStopPublishesEnd(t *testing.T) {
+	c := NewMockCompile(t)
+	proc := c.proc
+	defer proc.Free()
+	query := proc.Base.GetContextBase().BuildQueryCtx(context.Background())
+	proc.BuildPipelineContext(query)
+	defer proc.Cancel(nil)
+	edge := process.NewPipelineEdge(1, 1)
+	root := connector.NewArgument().WithReg(edge)
+	defer root.Release()
+	root.AppendChild(&table_scan.TableScan{})
+	s := &Scope{Proc: proc, RootOp: root, NodeInfo: engine.Node{Mcpu: 2}, DataSource: &Source{Rel: &canceledBuildReadersRelation{}, FilterList: []*plan.Expr{plan2.MakeFalseExpr()}}}
+	proc.Cancel(process.ErrPipelineStopped)
+	require.NoError(t, s.ParallelRun(c))
+	require.NoError(t, query.Err())
+	signal := <-edge.Ch2
+	require.Equal(t, process.EventEnd, signal.EventType)
+	require.NoError(t, edge.Err())
+}
+
+type terminalConnectorSource struct {
+	*value_scan.ValueScan
+	data  *batch.Batch
+	calls int
+	third chan struct{}
+}
+
+func (s *terminalConnectorSource) Call(*process.Process) (vm.CallResult, error) {
+	s.calls++
+	if s.calls == 3 {
+		close(s.third)
+	}
+	r := vm.NewCallResult()
+	r.Batch = s.data
+	return r, nil
+}
+func TestConnectorStopsPullingAfterReceiverTerminal(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	proc.BuildPipelineContext(context.Background())
+	defer proc.Free()
+	defer proc.Cancel(nil)
+	src := batch.NewWithSize(1)
+	defer src.Clean(proc.Mp())
+	src.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(42), false, proc.Mp()))
+	src.SetRowCount(1)
+	edge := process.NewPipelineEdge(1, 1)
+	publishTerminalForTest(edge, process.NewErrorSignal(context.Canceled))
+	source := &terminalConnectorSource{ValueScan: &value_scan.ValueScan{}, data: src, third: make(chan struct{})}
+	source.OpAnalyzer = process.NewAnalyzer(0, false, false, "comparison-source")
+	op := connector.NewArgument().WithReg(edge)
+	defer op.Release()
+	op.AppendChild(source)
+	require.NoError(t, op.Prepare(proc))
+	defer op.Reset(proc, true, context.Canceled)
+	type result struct {
+		calls   int
+		stopped bool
+		err     error
+	}
+	finished := make(chan result, 1)
+	go func() {
+		for i := 0; i < 3; i++ {
+			r, err := op.Call(proc)
+			if err != nil || r.Status == vm.ExecStop {
+				finished <- result{source.calls, r.Status == vm.ExecStop, err}
+				return
+			}
+		}
+		finished <- result{source.calls, false, nil}
+	}()
+	select {
+	case got := <-finished:
+		require.NoError(t, got.err)
+		require.True(t, got.stopped)
+		require.Equal(t, 1, got.calls)
+	case <-source.third:
+		require.NoError(t, proc.Ctx.Err(), "receiver termination must be independent of query cancellation")
+		proc.Cancel(context.Canceled)
+		select {
+		case <-finished:
+		case <-time.After(time.Second):
+			t.Fatal("third connector call did not join after cancellation")
+		}
+		t.Error("Connector failed to stop after receiver terminal; third data batch exhausted both spool slots and required query cancellation")
+	case <-time.After(time.Second):
+		proc.Cancel(context.Canceled)
+		t.Fatal("Connector did not stop")
+	}
+}
+
+type cancelJoinOperator struct {
+	*colexec.MockOperator
+	entered      chan struct{}
+	peers        []<-chan struct{}
+	failure      error
+	cleanupPanic bool
+	stop         bool
+}
+
+func (op *cancelJoinOperator) Call(proc *process.Process) (vm.CallResult, error) {
+	close(op.entered)
+	for _, peer := range op.peers {
+		select {
+		case <-peer:
+		case <-proc.Ctx.Done():
+			return vm.NewCallResult(), proc.Ctx.Err()
+		}
+	}
+	if op.failure != nil {
+		return vm.NewCallResult(), op.failure
+	}
+	if op.stop {
+		return vm.NewCallResult(), nil
+	}
+	<-proc.Ctx.Done()
+	return vm.NewCallResult(), proc.Ctx.Err()
+}
+
+// Exercise MergeRun itself, not just its error-collection helper: two live
+// producer scopes and their consumer must join when either end fails. The
+// failing operator waits for both peers to enter Call, so cancellation has to
+// release already-running work before MergeRun's deferred WaitGroup.Wait.
+func TestMergeRunCancelsBeforeJoiningFailedGraph(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		failing                   int
+		panicCleanup, cleanupOnly bool
+	}{
+		{name: "consumer fails", failing: 0},
+		{name: "producer fails", failing: 1},
+		{name: "consumer cleanup panic preserves execution error", failing: 0, panicCleanup: true},
+		{name: "producer cleanup panic preserves execution error", failing: 1, panicCleanup: true},
+		{name: "producer cleanup-only panic", failing: 1, panicCleanup: true, cleanupOnly: true},
+	} {
+		failing := tc.failing
+		name := tc.name
+		t.Run(name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.BuildPipelineContext(context.Background())
+			defer proc.Cancel(nil)
+			primary := moerr.NewInternalErrorNoCtx("injected pipeline failure")
+			var operators [3]*cancelJoinOperator
+			for i := range operators {
+				operators[i] = &cancelJoinOperator{MockOperator: colexec.NewMockOperator(), entered: make(chan struct{})}
+			}
+			operators[failing].cleanupPanic = tc.panicCleanup
+			operators[failing].stop = tc.cleanupOnly
+			if !tc.cleanupOnly {
+				operators[failing].failure = primary
+			}
+			for i := range operators {
+				if i != failing {
+					operators[failing].peers = append(operators[failing].peers, operators[i].entered)
+				}
+			}
+			parent := &Scope{Magic: Merge, Proc: proc, RootOp: operators[0]}
+			for i := 1; i < len(operators); i++ {
+				child := testutil.NewProcess(t)
+				defer child.Free()
+				child.BuildPipelineContext(proc.Ctx)
+				defer child.Cancel(nil)
+				parent.PreScopes = append(parent.PreScopes, &Scope{Magic: Normal, Proc: child, RootOp: operators[i]})
+			}
+			c := &Compile{proc: proc, hasMergeOp: true}
+			finished := make(chan error, 1)
+			go func() { finished <- parent.MergeRun(c) }()
+			select {
+			case err := <-finished:
+				if tc.cleanupOnly {
+					require.ErrorContains(t, err, "injected Reset failure")
+				} else {
+					require.ErrorIs(t, err, primary)
+				}
+			case <-time.After(2 * time.Second):
+				proc.Cancel(context.Canceled)
+				select {
+				case <-finished:
+				case <-time.After(time.Second):
+					t.Fatal("MergeRun did not join after test cleanup")
+				}
+				t.Fatal("MergeRun required external cancellation to join failed graph")
+			}
+			if tc.cleanupOnly {
+				require.ErrorContains(t, context.Cause(proc.Ctx), "injected Reset failure")
+			} else {
+				require.ErrorIs(t, context.Cause(proc.Ctx), primary)
+			}
+			for _, scope := range parent.PreScopes {
+				if !tc.cleanupOnly {
+					require.ErrorIs(t, context.Cause(scope.Proc.Ctx), primary)
+				}
+			}
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+func (op *cancelJoinOperator) Reset(proc *process.Process, failed bool, err error) {
+	if op.cleanupPanic {
+		panic("injected Reset failure")
+	}
+	op.MockOperator.Reset(proc, failed, err)
+}
+
+func TestFailedStartCleanupPanicKeepsPrimary(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	proc.BuildPipelineContext(context.Background())
+	defer proc.Cancel(nil)
+	primary := moerr.NewInternalErrorNoCtx("submission failed")
+	root := &cancelJoinOperator{MockOperator: colexec.NewMockOperator(), cleanupPanic: true}
+	scope := &Scope{Proc: proc, RootOp: root}
+	cleanPipelineWitchStartFail(scope, primary, true)
+	require.ErrorIs(t, context.Cause(proc.Ctx), primary)
+}
+
+func TestScopeReleaseDiscardsLateQueuedBatches(t *testing.T) {
+	mp := mpool.MustNewZeroNoFixed()
+	defer mpool.DeleteMPool(mp)
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	src := batch.NewWithSize(1)
+	defer src.Clean(proc.Mp())
+	src.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+	require.NoError(t, vector.AppendFixed(src.Vecs[0], int64(7), false, proc.Mp()))
+	src.SetRowCount(1)
+	sp := pSpool.InitMyPipelineSpool(mp, 2)
+	defer sp.Abort(nil)
+	s := newScope(Normal)
+	child := newScope(Normal)
+	child.Proc = proc
+	s.PreScopes = []*Scope{child}
+	proc.Reg.MergeReceivers = []*process.WaitRegister{process.NewPipelineEdge(2, 1), process.NewPipelineEdge(2, 1)}
+	// One direct remote batch and two local broadcast notifications survive
+	// receiver cleanup. Scope release occurs only after execution has joined.
+	direct, err := src.Dup(mp)
+	require.NoError(t, err)
+	require.True(t, proc.Reg.MergeReceivers[0].SendDataDirect(context.Background(), direct, mp))
+	done, err := sp.SendBatch(context.Background(), pSpool.SendToAllLocal, src, nil)
+	require.NoError(t, err)
+	require.False(t, done)
+	for i, edge := range proc.Reg.MergeReceivers {
+		require.True(t, edge.SendData(context.Background(), sp, i))
+		require.True(t, publishTerminalForTest(edge, process.NewEndSignal()))
+	}
+	sp.ForceCleanupAfterTerminalSignal()
+	require.Positive(t, mp.CurrNB())
+	s.release()
+	require.Zero(t, mp.CurrNB(), "ordinary query release must also discard late data")
 }

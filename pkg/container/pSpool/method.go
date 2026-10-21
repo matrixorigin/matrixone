@@ -26,12 +26,12 @@ func InitMyPipelineSpool(mp *mpool.MPool, receiverCnt uint32) *PipelineSpool {
 	bl := getBufferLength(receiverCnt)
 
 	ps2 := &PipelineSpool{
-		shardPool:    make([]pipelineSpoolMessage, bl),
-		shardRefs:    nil,
-		doRefCheck:   make([]bool, bl),
-		rs:           newReceivers(receiverCnt, bl),
-		cache:        initCachedBatch(mp, bl),
-		csDoneSignal: make(chan struct{}, receiverCnt),
+		shardPool:  make([]pipelineSpoolMessage, bl),
+		shardRefs:  nil,
+		doRefCheck: make([]bool, bl),
+		rs:         newReceivers(receiverCnt, bl),
+		cache:      initCachedBatch(mp, bl),
+		abortDone:  make(chan struct{}),
 	}
 
 	// if there is only one receiver, we have no need to do reference check because it's always

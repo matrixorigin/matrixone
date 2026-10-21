@@ -251,7 +251,7 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		connectorOperator.GetIdx(), connectorOperator.IsFirst, connectorOperator.IsLast, "connector")
 
 	mp := s.Proc.Mp()
-	nextChannel := s.RootOp.(*connector.Connector).Reg.Ch2
+	nextReg := s.RootOp.(*connector.Connector).Reg
 	for {
 		bat, end, err = sender.receiveBatch()
 		if err != nil || end || bat == nil {
@@ -259,7 +259,8 @@ func receiveMessageFromCnServerIfConnector(s *Scope, sender *messageSenderOnClie
 		}
 		connectorAnalyze.Network(bat)
 
-		if err = forwardRemoteBatchWithContext(sender, nextChannel, bat, mp); err != nil {
+		var receiverDone bool
+		if receiverDone, err = forwardRemoteBatchWithContext(sender, nextReg, bat, mp); err != nil || receiverDone {
 			return err
 		}
 	}
@@ -487,26 +488,11 @@ func (sender *messageSenderOnClient) receiveBatch() (bat *batch.Batch, over bool
 			return nil, true, nil
 		}
 
+		terminal, terminalErr := sender.decodeTerminal(val)
+		if terminal {
+			return nil, terminalErr == nil, terminalErr
+		}
 		m = val.(*pipeline.Message)
-		if info, get := m.TryToGetMoErr(); get {
-			sender.safeToClose = true
-			return nil, false, info
-		}
-		if m.IsEndMessage() {
-			sender.safeToClose = true
-
-			anaData := m.GetAnalyse()
-			if len(anaData) > 0 {
-				var p models.PhyPlan
-				err = json.Unmarshal(anaData, &p)
-				if err != nil {
-					return nil, false, err
-				}
-
-				sender.dealRemoteAnalysis(p)
-			}
-			return nil, true, nil
-		}
 
 		if dataBuffer == nil {
 			dataBuffer = m.Data
@@ -544,62 +530,92 @@ func (sender *messageSenderOnClient) contextDoneError() error {
 
 func forwardRemoteBatchWithContext(
 	sender *messageSenderOnClient,
-	nextChannel chan process.PipelineSignal,
+	nextReg *process.WaitRegister,
 	bat *batch.Batch,
 	mp *mpool.MPool,
-) error {
-	signal := process.NewPipelineSignalToDirectly(bat, nil, mp)
-	if sender == nil || sender.ctx == nil {
-		nextChannel <- signal
-		return nil
+) (receiverDone bool, err error) {
+	if nextReg == nil || nextReg.Ch2 == nil {
+		bat.Clean(mp)
+		return true, moerr.NewInternalErrorNoCtx("remote batch forward target is nil")
 	}
 
-	select {
-	case nextChannel <- signal:
-		return nil
-	case <-sender.ctx.Done():
+	ctx := context.TODO()
+	if sender == nil || sender.ctx == nil {
+		if nextReg.SendDataDirect(ctx, bat, mp) {
+			return false, nil
+		}
 		bat.Clean(mp)
-		return sender.contextDoneError()
+		return true, nil
 	}
+
+	if nextReg.SendDataDirect(sender.ctx, bat, mp) {
+		return false, nil
+	}
+	bat.Clean(mp)
+	if err := sender.contextDoneError(); err != nil {
+		return true, err
+	}
+	return true, nil
 }
 
 // no matter how we stop the remote-run, we should get the final remote cost here.
-func (sender *messageSenderOnClient) waitingTheStopResponse() {
+func (sender *messageSenderOnClient) waitingTheStopResponse(queryCtx context.Context) error {
 	if sender.alreadyClose || sender.safeToClose {
-		return
+		return nil
 	}
-
-	// cannot use sender.ctx here, because ctx maybe done.
-	maxWaitingTime, cancel := context.WithTimeoutCause(context.TODO(), 30*time.Second, moerr.CauseWaitingTheStopResponse)
+	if queryCtx == nil {
+		queryCtx = context.Background()
+	}
+	ctx, cancel := context.WithTimeoutCause(queryCtx, 30*time.Second, moerr.CauseWaitingTheStopResponse)
 	defer cancel()
-
-	// send a stop sending message to message-receiver.
-	if err := sender.streamSender.Send(
-		maxWaitingTime,
-		generateStopSendingMessage(sender.streamSender.ID())); err != nil {
-		return
+	// A terminal already on the wire wins over optional Stop transport failure.
+	ready := func() (bool, error) {
+		for remaining := len(sender.receiveCh) + 1; remaining > 0; remaining-- {
+			select {
+			case val, ok := <-sender.receiveCh:
+				if !ok || val == nil {
+					sender.alreadyClose = true
+					return true, moerr.NewStreamClosed(ctx)
+				}
+				if terminal, err := sender.decodeTerminal(val); terminal {
+					return true, err
+				}
+			default:
+				return false, nil
+			}
+		}
+		return false, nil
 	}
-
-	// wait an EndMessage response.
+	if terminal, err := ready(); terminal {
+		return err
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if err := sender.streamSender.Send(ctx, generateStopSendingMessage(sender.streamSender.ID())); err != nil {
+		if terminal, terminalErr := ready(); terminal {
+			return terminalErr
+		}
+		return process.MarkPipelineFailure(err)
+	}
 	for {
 		select {
 		case val, ok := <-sender.receiveCh:
 			if !ok || val == nil {
-				sender.safeToClose = true
 				sender.alreadyClose = true
-				return
+				return moerr.NewStreamClosed(ctx)
 			}
-
-			message := val.(*pipeline.Message)
-
-			if message.IsEndMessage() || len(message.GetErr()) > 0 {
-				sender.safeToClose = true
-				// in fact, we should deal the cost analysis information here.
-				return
+			if terminal, err := sender.decodeTerminal(val); terminal {
+				return err
 			}
-
-		case <-maxWaitingTime.Done():
-			return
+		case <-ctx.Done():
+			if terminal, err := ready(); terminal {
+				return err
+			}
+			return ctx.Err()
+		}
+		if ctx.Err() != nil {
+			return ctx.Err()
 		}
 	}
 }
@@ -619,18 +635,48 @@ func (sender *messageSenderOnClient) dealRemoteAnalysis(p models.PhyPlan) {
 	sender.anal.AppendRemotePhyPlan(p)
 }
 
-func (sender *messageSenderOnClient) close() {
-	// Ensure Gauge is decremented exactly once when this sender is torn down, including when
-	// alreadyClose is true (stream already closed by remote); otherwise we'd leak the gauge.
+func (sender *messageSenderOnClient) close(queryCtx context.Context) error {
 	defer sender.gaugeDecOnce.Do(func() { v2.PipelineMessageSenderGauge.Dec() })
-
-	sender.waitingTheStopResponse()
-
+	err := sender.waitingTheStopResponse(queryCtx)
 	if sender.ctxCancel != nil {
 		sender.ctxCancel()
 	}
-	if sender.alreadyClose {
-		return
+	if !sender.alreadyClose {
+		_ = sender.streamSender.Close(true)
+		sender.alreadyClose = true
 	}
-	_ = sender.streamSender.Close(true)
+	return err
+}
+
+// decodeTerminal is the sole decoder for normal receive and Stop settlement.
+// Explicit execution/retry errors take precedence over auxiliary analysis.
+func (sender *messageSenderOnClient) decodeTerminal(value morpc.Message) (bool, error) {
+	message, ok := value.(*pipeline.Message)
+	if !ok || message == nil {
+		return true, moerr.NewInternalErrorNoCtx("invalid remote pipeline message")
+	}
+	if info, hasError := message.TryToGetMoErr(); hasError {
+		sender.safeToClose = true
+		return true, process.MarkPipelineFailure(info)
+	}
+	if message.IsEndMessage() {
+		sender.safeToClose = true
+		switch message.GetCmd() {
+		case pipeline.Method_UnknownMethod, pipeline.Method_PipelineMessage, pipeline.Method_BatchMessage, pipeline.Method_PrepareDoneNotifyMessage:
+		default:
+			return true, moerr.NewInternalErrorNoCtx("invalid remote terminal command")
+		}
+		if data := message.GetAnalyse(); len(data) > 0 {
+			var physical models.PhyPlan
+			if err := json.Unmarshal(data, &physical); err != nil {
+				return true, err
+			}
+			sender.dealRemoteAnalysis(physical)
+		}
+		return true, nil
+	}
+	if !message.IsBatchMessage() {
+		return true, moerr.NewInternalErrorNoCtx("unexpected remote pipeline command")
+	}
+	return false, nil
 }
