@@ -745,13 +745,13 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	exportParam.DefaultBufSize = getPu(exportParam.service).SV.ExportDataDefaultFlushSize
 	exportParam.FileService = getPu(exportParam.service).FileService
 	exportParam.Ctx = ctx
-	exportParam.ctx = ctx
+	exportParam.ctx, exportParam.cancel = context.WithCancel(ctx)
 	defer func() { err = exportParam.finish(err) }()
 
 	initExportFileParam(exportParam, mrs)
 
 	//open output file
-	if err = openNewFile(ctx, exportParam, mrs); err != nil {
+	if err = openNewFile(exportParam.ctx, exportParam, mrs); err != nil {
 		return err
 	}
 
