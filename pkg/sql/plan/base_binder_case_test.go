@@ -1784,6 +1784,22 @@ func TestBoundFlowControlAfterImplicitStringCastFoldRetainsHexBitNumericRows(t *
 		"explicit BINARY and ordinary text stay text-numeric; the selected HEX literal remains numeric")
 }
 
+func TestStringMathBinderPreservesMixedCaseNumericLiteralDomain(t *testing.T) {
+	ctx := context.Background()
+	numericHex := makePlan2StringConstExprWithType("1", true)
+	numericHex.GetLit().LiteralForm = planpb.StringLiteralForm_STRING_LITERAL_HEX
+	caseExpr, err := BindFuncExprImplByPlanExpr(ctx, "case", []*planpb.Expr{
+		makePlan2BoolConstExprWithType(true), numericHex, makePlan2StringConstExprWithType("1"),
+	})
+	require.NoError(t, err)
+
+	args, err := (&baseBinder{sysCtx: ctx}).bindStringSourceDeclaration("abs", []*planpb.Expr{caseExpr})
+	require.NoError(t, err)
+	require.Len(t, args, 1)
+	require.Same(t, caseExpr, args[0],
+		"ABS owns string-to-number conversion and must not erase a mixed CASE's selected HEX marker")
+}
+
 func TestBuildPreparedCaseConditionParameter(t *testing.T) {
 	ctx := context.Background()
 	stmt, err := parsers.ParseOne(ctx, dialect.MYSQL,

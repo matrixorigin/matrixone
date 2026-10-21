@@ -317,14 +317,44 @@ func newPreparedExecuteEnvForSQLWithCompilerContext(
 	sql string,
 	compilerContext plan2.CompilerContext,
 ) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
+	return newPreparedExecuteEnvForSQLWithCompilerContextAndSQLMode(
+		t, stmtID, sql, compilerContext, "")
+}
+
+func newPreparedExecuteEnvForSQLWithSQLMode(
+	t testing.TB,
+	stmtID uint32,
+	sql string,
+	sqlMode string,
+) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
+	return newPreparedExecuteEnvForSQLWithCompilerContextAndSQLMode(
+		t, stmtID, sql, nil, sqlMode)
+}
+
+func newPreparedExecuteEnvForSQLWithCompilerContextAndSQLMode(
+	t testing.TB,
+	stmtID uint32,
+	sql string,
+	compilerContext plan2.CompilerContext,
+	sqlMode string,
+) (*Session, *PrepareStmt, *TxnComputationWrapper, *ExecCtx) {
 	ctx := statistic.ContextWithStatsInfo(context.Background(), statistic.NewStatsInfo())
 	ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 
 	ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
+	if sqlMode != "" {
+		require.NoError(t, ses.SetSessionSysVar(ctx, "sql_mode", sqlMode))
+	}
 	proc := ses.GetProc()
 	require.NotNil(t, proc)
+	if sqlMode != "" {
+		refreshStatementScopedSessionInfo(ses, proc)
+	}
 	proc.Base.SessionInfo.StorageEngine = &disttae.Engine{}
+	if compilerContext == nil {
+		compilerContext = plan2.NewEmptyCompilerContext(proc)
+	}
 
 	stmtName := getPrepareStmtName(stmtID)
 	prepareString := tree.NewPrepareString(tree.Identifier(stmtName), sql)

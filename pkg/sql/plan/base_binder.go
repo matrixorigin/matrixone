@@ -6630,6 +6630,12 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 			// consuming its binary declaration here would truncate that value.
 			continue
 		}
+		if preparedStringMathFunctionValueArg(name, i, len(args)) {
+			// String-to-number functions own value conversion. An implicit
+			// declaration cast around a mixed HEX/TEXT selector would erase the
+			// selected row's numeric-literal marker before that conversion.
+			continue
+		}
 		if kind == fieldStringBinary && possibleStringDomainsForExpr(arg) == possibleStringDomainBinary {
 			continue
 		}
