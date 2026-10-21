@@ -174,6 +174,22 @@ type serviceWithDaemonHook struct {
 	queryCalls     atomic.Int64
 }
 
+type blockedDaemonHeartbeatService struct {
+	TaskService
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (s *blockedDaemonHeartbeatService) HeartbeatDaemonTask(ctx context.Context, _ task.DaemonTask) error {
+	close(s.entered)
+	select {
+	case <-s.release:
+		return errors.New("injected taskservice connection failure")
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
 func (s *serviceWithDaemonHook) HeartbeatDaemonTask(ctx context.Context, tk task.DaemonTask) error {
 	s.mu.RLock()
 	err := s.heartbeatErr
@@ -808,6 +824,364 @@ func TestStableCDCHeartbeatFailureRecoveryAndSupersession(t *testing.T) {
 			require.Zero(t, routine.destructive.Load())
 		})
 	}
+}
+
+func TestISCPHeartbeatExpiryCancelsOldExecutor(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, claim)
+
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	hook.setHeartbeatErr(errors.New("injected taskservice connection failure"))
+	r.doSendHeartbeat(context.Background())
+	select {
+	case <-routine.cancelC:
+	case <-time.After(time.Second):
+		t.Fatal("expired ISCP executor kept running after heartbeat failure")
+	}
+	require.True(t, local.claimLost.Load())
+	require.False(t, r.exists(claim.ID))
+}
+
+func TestISCPHeartbeatSuccessRenewsLocalLease(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	hook := &serviceWithDaemonHook{TaskService: r.service}
+	r.service = hook
+
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = time.Now().Add(-time.Second)
+	mustAddTestDaemonTask(t, store, 1, claim)
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	r.doSendHeartbeat(context.Background())
+	require.True(t, local.lastConfirmedHeartbeat().After(claim.LastHeartbeat))
+	hook.setHeartbeatErr(errors.New("injected transient connection failure"))
+	r.doSendHeartbeat(context.Background())
+	r.checkISCPHeartbeatLease()
+	select {
+	case <-routine.cancelC:
+		t.Fatal("a recent successful heartbeat did not preserve the ISCP lease")
+	default:
+	}
+	require.True(t, r.exists(claim.ID))
+}
+
+func TestISCPHeartbeatRenewalWinsExpiryDecision(t *testing.T) {
+	r, _ := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	// The watchdog observed expiry, but a heartbeat succeeds before it retires
+	// the claim. The retirement path must recheck the renewed lease atomically.
+	require.True(t, r.isISCPHeartbeatExpired(local))
+	local.recordHeartbeatSuccess(claim, time.Now())
+	r.stopDaemonAfterHeartbeatLoss(local, claim, "stale expiry decision", true)
+	select {
+	case <-routine.cancelC:
+		t.Fatal("a stale expiry decision cancelled a renewed ISCP executor")
+	default:
+	}
+	require.False(t, local.claimLost.Load())
+	require.True(t, r.exists(claim.ID))
+}
+
+func TestISCPHeartbeatWatchdogCancelsBlockedRenewal(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	service := &blockedDaemonHeartbeatService{
+		TaskService: r.service,
+		entered:     make(chan struct{}),
+		release:     make(chan struct{}),
+	}
+	r.service = service
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+	mustAddTestDaemonTask(t, store, 1, claim)
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		r.doSendHeartbeat(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		close(service.release)
+		<-heartbeatDone
+	})
+	select {
+	case <-service.entered:
+	case <-time.After(time.Second):
+		t.Fatal("heartbeat RPC did not enter the blocked state")
+	}
+
+	watchDone := make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		r.watchISCPHeartbeatLease(ctx)
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-watchDone
+	})
+	select {
+	case <-routine.cancelC:
+	case <-time.After(3 * time.Second):
+		t.Fatal("expired ISCP executor kept running while heartbeat was blocked")
+	}
+	select {
+	case <-heartbeatDone:
+		t.Fatal("heartbeat returned before the watchdog cancelled the executor")
+	default:
+	}
+	require.False(t, r.exists(claim.ID))
+}
+
+func TestISCPHeartbeatRejectsSupersededClaim(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	claim := newDaemonTaskForTest(1, task.TaskStatus_Running, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = time.Now()
+	mustAddTestDaemonTask(t, store, 1, claim)
+	routine := newMockActiveRoutine()
+	active := ActiveRoutine(routine)
+	local := &daemonTask{task: claim}
+	local.activeRoutine.Store(&active)
+	r.addDaemonTask(local)
+
+	replacement := claim
+	replacement.TaskRunner = "other-cn"
+	replacement.LastRun = nextDaemonClaimTime(claim.LastRun, time.Now())
+	mustUpdateTestDaemonTask(t, store, 1, []task.DaemonTask{replacement})
+	r.doSendHeartbeat(context.Background())
+	select {
+	case <-routine.cancelC:
+	case <-time.After(time.Second):
+		t.Fatal("superseded ISCP executor kept running after rejected heartbeat")
+	}
+	require.False(t, r.exists(claim.ID))
+}
+
+func TestISCPLifecycleKeepsConfirmedRenewal(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status task.TaskStatus
+		run    func(*taskRunner, *daemonTask) error
+	}{
+		{"resume", task.TaskStatus_ResumeRequested, func(r *taskRunner, dt *daemonTask) error {
+			return newResumeTask(r, dt).Handle(context.Background())
+		}},
+		{"restart", task.TaskStatus_RestartRequested, func(r *taskRunner, dt *daemonTask) error {
+			return newRestartTask(r, dt).Handle(context.Background())
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, store := newDaemonHandleTestRunner(t)
+			claim := newDaemonTaskForTest(1, tc.status, r.runnerID)
+			claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+			claim.LastRun = time.Now().Add(-time.Minute)
+			claim.LastHeartbeat = claim.LastRun
+			mustAddTestDaemonTask(t, store, 1, claim)
+
+			local := &daemonTask{task: claim}
+			var renewed time.Time
+			routine := &mockFuncActiveRoutine{}
+			recover := func() error {
+				r.doSendHeartbeat(context.Background())
+				renewed = local.lastConfirmedHeartbeat()
+				return nil
+			}
+			routine.resume, routine.restart = recover, recover
+			active := ActiveRoutine(routine)
+			local.activeRoutine.Store(&active)
+			require.True(t, r.addDaemonTask(local))
+
+			require.NoError(t, tc.run(r, local))
+			require.True(t, renewed.After(local.taskSnapshot().LastHeartbeat),
+				"the real TaskService heartbeat must advance the local lease")
+			require.Equal(t, renewed, local.lastConfirmedHeartbeat(),
+				"publishing Running must preserve this generation's confirmed renewal")
+			require.Equal(t, task.TaskStatus_Running, local.taskSnapshot().TaskStatus)
+		})
+	}
+}
+
+func TestISCPExpiryCancelsBlockedLifecycleRecovery(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		status task.TaskStatus
+		run    func(*taskRunner, *daemonTask) error
+	}{
+		{"resume", task.TaskStatus_ResumeRequested, func(r *taskRunner, dt *daemonTask) error {
+			return newResumeTask(r, dt).Handle(context.Background())
+		}},
+		{"restart", task.TaskStatus_RestartRequested, func(r *taskRunner, dt *daemonTask) error {
+			return newRestartTask(r, dt).Handle(context.Background())
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, store := newDaemonHandleTestRunner(t)
+			t.Cleanup(r.stopper.Stop)
+			claim := newDaemonTaskForTest(1, tc.status, r.runnerID)
+			claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+			claim.LastRun = time.Now().Add(-time.Minute)
+			claim.LastHeartbeat = claim.LastRun
+			mustAddTestDaemonTask(t, store, 1, claim)
+
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			cancelled := make(chan struct{})
+			var releaseOnce sync.Once
+			t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+			recover := func() error {
+				close(entered)
+				<-release
+				return nil
+			}
+			routine := &mockFuncActiveRoutine{
+				resume:  recover,
+				restart: recover,
+				cancel: func() error {
+					close(cancelled)
+					return nil
+				},
+			}
+			local := &daemonTask{task: claim}
+			active := ActiveRoutine(routine)
+			local.activeRoutine.Store(&active)
+			require.True(t, r.addDaemonTask(local))
+			done := make(chan error, 1)
+			finished := make(chan struct{})
+			go func() {
+				defer close(finished)
+				done <- tc.run(r, local)
+			}()
+			t.Cleanup(func() {
+				releaseOnce.Do(func() { close(release) })
+				select {
+				case <-finished:
+				case <-time.After(5 * time.Second):
+					t.Error("lifecycle recovery did not finish during cleanup")
+				}
+			})
+			select {
+			case <-entered:
+			case <-time.After(5 * time.Second):
+				t.Fatal("lifecycle recovery did not enter its blocked phase")
+			}
+			// Recovery has published its generation. Expire only its local lease,
+			// then use the real watchdog decision while its callback remains blocked.
+			local.taskMu.Lock()
+			local.lastSuccessfulHeartbeat = time.Now().Add(-r.options.heartbeatTimeout - time.Second)
+			local.taskMu.Unlock()
+			r.checkISCPHeartbeatLease()
+			select {
+			case <-cancelled:
+			case <-time.After(5 * time.Second):
+				t.Fatal("expired ISCP claim was not cancelled during blocked recovery")
+			}
+			require.True(t, local.claimLost.Load())
+			require.False(t, r.exists(claim.ID))
+			releaseOnce.Do(func() { close(release) })
+			select {
+			case err := <-done:
+				require.NoError(t, err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("lifecycle recovery did not return after release")
+			}
+			require.Equal(t, tc.status, mustGetTestDaemonTask(t, store, 1)[0].TaskStatus,
+				"a retired recovery must not republish Running")
+		})
+	}
+}
+
+func TestISCPCompletionFencesBlockedRecovery(t *testing.T) {
+	r, store := newDaemonHandleTestRunner(t)
+	t.Cleanup(r.stopper.Stop)
+	claim := newDaemonTaskForTest(1, task.TaskStatus_ResumeRequested, r.runnerID)
+	claim.Metadata.Executor = task.TaskCode_ISCPExecutor
+	claim.LastRun = time.Now().Add(-time.Minute)
+	claim.LastHeartbeat = claim.LastRun
+	mustAddTestDaemonTask(t, store, 1, claim)
+
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	routine := &mockFuncActiveRoutine{resume: func() error {
+		close(entered)
+		<-release
+		return nil
+	}}
+	local := &daemonTask{task: claim}
+	active := ActiveRoutine(routine)
+	local.activeRoutine.Store(&active)
+	require.True(t, r.addDaemonTask(local))
+	done := make(chan error, 1)
+	finished := make(chan struct{})
+	go func() {
+		defer close(finished)
+		done <- newResumeTask(r, local).Handle(context.Background())
+	}()
+	var releaseOnce sync.Once
+	t.Cleanup(func() {
+		releaseOnce.Do(func() { close(release) })
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			t.Error("resume did not finish during cleanup")
+		}
+	})
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("resume did not enter its blocked phase")
+	}
+	r.completeDaemonTask(context.Background(), local, local.taskSnapshot(), false, nil)
+	require.True(t, local.claimLost.Load())
+	require.False(t, r.exists(claim.ID))
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("resume did not return after release")
+	}
+	require.Equal(t, task.TaskStatus_ResumeRequested, mustGetTestDaemonTask(t, store, 1)[0].TaskStatus)
 }
 
 func TestStartDaemonTaskSerializesLocalAdmission(t *testing.T) {
