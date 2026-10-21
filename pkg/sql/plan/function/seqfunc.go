@@ -536,6 +536,9 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if setnum < int64(minv) || setnum > int64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
+		if setnum < math.MinInt16 || setnum > math.MaxInt16 {
+			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
+		}
 		return setVal(proc, int16(setnum), iscalled, storedCalled, rel, db, tblname)
 	case int32:
 		minv, maxv := values[1].(int32), values[2].(int32)
@@ -544,6 +547,9 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 			return "", err
 		}
 		if setnum < int64(minv) || setnum > int64(maxv) {
+			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
+		}
+		if setnum < math.MinInt32 || setnum > math.MaxInt32 {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
 		return setVal(proc, int32(setnum), iscalled, storedCalled, rel, db, tblname)
@@ -566,6 +572,9 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if setnum < uint64(minv) || setnum > uint64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
+		if setnum > math.MaxUint16 {
+			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
+		}
 		return setVal(proc, uint16(setnum), iscalled, storedCalled, rel, db, tblname)
 	case uint32:
 		minv, maxv := values[1].(uint32), values[2].(uint32)
@@ -574,6 +583,9 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 			return "", err
 		}
 		if setnum < uint64(minv) || setnum > uint64(maxv) {
+			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
+		}
+		if setnum > math.MaxUint32 {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
 		return setVal(proc, uint32(setnum), iscalled, storedCalled, rel, db, tblname)
