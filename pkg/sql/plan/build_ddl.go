@@ -1533,6 +1533,9 @@ func genAsSelectCols(
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
 	var executionProtocol int64
 	if !isPrepareStmt {
 		bindCtx.ctasExecutionProtocolRequirement = &executionProtocol

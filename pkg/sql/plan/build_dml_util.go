@@ -5727,7 +5727,7 @@ func runSqlWithSnapshot(
 		exec = v.(executor.SQLExecutor)
 	}
 
-	topContext := proc.GetTopContext()
+	topContext := ViewSchemaCatalogContext(proc.GetTopContext())
 	accountId, err := defines.GetAccountId(topContext)
 	if err != nil {
 		return executor.Result{}, err

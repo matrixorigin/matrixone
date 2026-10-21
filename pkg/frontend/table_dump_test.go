@@ -1142,6 +1142,8 @@ func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctrl := gomock.NewController(t)
 			ses := newTestSession(t, ctrl)
+			ses.proc.Base.SessionInfo.Account = sysAccountName
+			ses.proc.Base.SessionInfo.Role = moAdminRoleName
 			defer ses.Close()
 			ses.SetDatabaseName("tpch")
 			eng := mock_frontend.NewMockEngine(ctrl)
@@ -1154,7 +1156,7 @@ func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
 			err := handleDumpTable(context.Background(), ses, &tree.DumpTable{
 				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil), Path: t.TempDir(),
 			})
-			require.Error(t, err)
+			require.ErrorContains(t, err, "DUMP TABLE and LOAD TABLE with")
 		})
 	}
 }
