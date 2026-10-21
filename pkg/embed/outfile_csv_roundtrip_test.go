@@ -74,6 +74,10 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			{"bit32-unenclosed", "wide_bits_src", "b", ",", "\n", "", ""},
 			{"decimal-dot-terminator", "decimal_src", "n", ".", "\n", "", ""},
 			{"bit-translated-terminator", "bits_src", "b", "n", "\n", `"`, ""},
+			{"bit-N-field-terminator", "bits_src", "b", "N:", "\n", `"`, ""},
+			{"bit-N-line-terminator", "bits_src", "b", ",", "N:", `"`, ""},
+			{"bit-N-field-force-quote", "bits_src", "b", "N:", "\n", `"`, " FORCE_QUOTE (b)"},
+			{"bit-N-line-force-quote", "bits_src", "b", ",", "N:", `"`, " FORCE_QUOTE (b)"},
 			{"bit-enclosed-0", "bits_src", "b", ",", "\n", "0", ""},
 			{"bit-enclosed-b", "bits_src", "b", ",", "\n", "b", ""},
 			{"bit-enclosed-n", "bits_src", "b", ",", "\n", "n", ""},
@@ -109,6 +113,11 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 					require.Contains(t, string(data), "a\\,b")
 					require.Contains(t, string(data), "a\\\nb")
 				}
+				if strings.HasPrefix(tc.name, "bit-N-") {
+					// The non-NULL BIT byte 78 must be framed as "N", not
+					// emitted as the raw \N sentinel used by the genuine NULL.
+					require.Contains(t, string(data), `"N"`)
+				}
 				exec("LOAD DATA INFILE " + sqlquote.String(path) + " INTO TABLE " + dst + fields + " OPTIONALLY ENCLOSED BY " + quote + lines)
 				read := func(table string) []string {
 					t.Helper()
@@ -128,13 +137,19 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 				require.Equal(t, read(db+"."+tc.source), read(dst))
 			})
 		}
-		t.Run("unrepresentable-bare-format", func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "rejected.csv")
-			_, err := admin.ExecContext(ctx, "select id,s from "+db+".strings_src INTO OUTFILE "+sqlquote.String(path)+
-				" FIELDS TERMINATED BY 'n' ENCLOSED BY '' HEADER 'false'")
-			require.ErrorContains(t, err, "require a nonempty ENCLOSED BY")
-			_, err = os.Stat(path)
-			require.ErrorIs(t, err, os.ErrNotExist)
-		})
+		for _, options := range []string{
+			" FIELDS TERMINATED BY 'n' ENCLOSED BY ''",
+			" FIELDS TERMINATED BY 'N:' ENCLOSED BY ''",
+			" FIELDS ENCLOSED BY '' LINES TERMINATED BY 'N:'",
+		} {
+			t.Run("unrepresentable-bare-format"+options, func(t *testing.T) {
+				path := filepath.Join(t.TempDir(), "rejected.csv")
+				_, err := admin.ExecContext(ctx, "select id,s from "+db+".strings_src INTO OUTFILE "+sqlquote.String(path)+
+					options+" HEADER 'false'")
+				require.ErrorContains(t, err, "require a nonempty ENCLOSED BY")
+				_, err = os.Stat(path)
+				require.ErrorIs(t, err, os.ErrNotExist)
+			})
+		}
 	})
 }

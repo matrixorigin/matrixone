@@ -264,13 +264,13 @@ func getExportFilePath(filename string, fileCnt uint) string {
 var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, buffer *bytes.Buffer) error {
 	if !flag && enclosed != 0 && oq.escapeChar() != 0 {
 		field, line, _, _ := oq.csvBoundaryBytes()
-		// LOAD translates \n, \0, etc. An ambiguous literal terminator or
-		// enclosure cannot be protected by prefixing it; enclose the value
-		// instead, so addEscapeToString can double the enclosure byte. A lone
-		// enclosure 'N' also needs this protection: \\N is LOAD's NULL marker.
-		flag = (isTranslatedCSVEscape(field) && bytes.IndexByte(tmp, field) >= 0) ||
-			(isTranslatedCSVEscape(line) && bytes.IndexByte(tmp, line) >= 0) ||
-			((isTranslatedCSVEscape(enclosed) || enclosed == 'N') && bytes.IndexByte(tmp, enclosed) >= 0)
+		// LOAD translates \n, \0, etc., and recognizes \N as NULL. An
+		// ambiguous literal terminator or enclosure cannot be protected by
+		// prefixing it; enclose the value instead, so addEscapeToString can
+		// double the enclosure byte without creating a translated escape.
+		flag = (isAmbiguousCSVEscape(field) && bytes.IndexByte(tmp, field) >= 0) ||
+			(isAmbiguousCSVEscape(line) && bytes.IndexByte(tmp, line) >= 0) ||
+			(isAmbiguousCSVEscape(enclosed) && bytes.IndexByte(tmp, enclosed) >= 0)
 	}
 	quote := byte(0)
 	if flag {
@@ -753,9 +753,11 @@ func (ec *ExportConfig) csvBoundaryBytes() (field, line, quote byte, defaultLine
 	}
 }
 
-func isTranslatedCSVEscape(b byte) bool {
+// isAmbiguousCSVEscape includes translated bytes and N, which would turn a
+// non-NULL value consisting of a single N into LOAD's escaped NULL marker.
+func isAmbiguousCSVEscape(b byte) bool {
 	switch b {
-	case '0', 'b', 'n', 'r', 't', 'Z':
+	case '0', 'b', 'n', 'r', 't', 'Z', 'N':
 		return true
 	default:
 		return false
@@ -768,9 +770,9 @@ func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
 	}
 	field, line, _, _ := ec.csvBoundaryBytes()
 	noQuote := ec.userConfig.Fields == nil || ec.userConfig.Fields.EnclosedBy == nil || ec.userConfig.Fields.EnclosedBy.Value == 0
-	if noQuote && (isTranslatedCSVEscape(field) || isTranslatedCSVEscape(line)) {
+	if noQuote && (isAmbiguousCSVEscape(field) || isAmbiguousCSVEscape(line)) {
 		return moerr.NewInvalidInput(ctx,
-			"CSV terminators starting with a translated escape character (0, b, n, r, t, Z) require a nonempty ENCLOSED BY")
+			"CSV terminators starting with an ambiguous escape character (0, b, n, r, t, Z, N) require a nonempty ENCLOSED BY")
 	}
 	return nil
 }

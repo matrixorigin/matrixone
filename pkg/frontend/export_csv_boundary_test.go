@@ -35,16 +35,34 @@ import (
 func TestOutfileBITCSVAllBytes(t *testing.T) {
 	// Translated escape letters are valid enclosure characters, too. Both
 	// integer IDs (notably 101 with enclosure '0') and BIT bytes must survive.
+	type csvFormat struct {
+		field, line string
+		enclosed    byte
+		blockSize   int64
+	}
+	formats := make([]csvFormat, 0, 13)
 	for _, enclosed := range []byte{0, '"', '0', 'b', 'n', 'r', 't', 'Z', 'N'} {
+		formats = append(formats, csvFormat{",", "\n", enclosed, 17})
+	}
+	// Escaping the bare BIT byte N for either separator must not create
+	// LOAD's NULL marker. Include multi-byte terminators and both exporters.
+	for _, separator := range []string{"N", "N:"} {
+		// Use LOAD's production read size for the new terminator cases;
+		// retain the existing tiny-block enclosure controls above.
+		formats = append(formats, csvFormat{separator, "\n", '"', csvparser.ReadBlockSize},
+			csvFormat{",", separator, '"', csvparser.ReadBlockSize})
+	}
+	for _, format := range formats {
+		enclosed := format.enclosed
 		for _, force := range []bool{false, true} {
 			for _, resultSet := range []bool{false, true} {
-				t.Run(fmt.Sprintf("enclosed=%d/force=%t/resultset=%t", enclosed, force, resultSet), func(t *testing.T) {
+				t.Run(fmt.Sprintf("field=%q/line=%q/enclosed=%d/force=%t/resultset=%t", format.field, format.line, enclosed, force, resultSet), func(t *testing.T) {
 					ep := &ExportConfig{
 						userConfig: &tree.ExportParam{
-							Fields: tree.NewFields(",", false, enclosed, '\\'),
-							Lines:  tree.NewLines("", "\n"),
+							Fields: tree.NewFields(format.field, false, enclosed, '\\'),
+							Lines:  tree.NewLines("", format.line),
 						},
-						Symbol:     [][]byte{[]byte(","), []byte("\n")},
+						Symbol:     [][]byte{[]byte(format.field), []byte(format.line)},
 						ColumnFlag: []bool{false, force},
 					}
 					var data []byte
@@ -91,10 +109,10 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 						quote = string(enclosed)
 					}
 					parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
-						FieldsTerminatedBy: ",", FieldsEnclosedBy: quote,
-						FieldsEscapedBy: "\\", LinesTerminatedBy: "\n",
+						FieldsTerminatedBy: format.field, FieldsEnclosedBy: quote,
+						FieldsEscapedBy: "\\", LinesTerminatedBy: format.line,
 						Null: []string{`\N`}, UnescapedQuote: true,
-					}, bytes.NewReader(data), 17, false)
+					}, bytes.NewReader(data), format.blockSize, false)
 					require.NoError(t, err)
 					for n := 0; n <= 256; n++ {
 						row, err := parser.Read(nil)
@@ -126,23 +144,31 @@ func TestCSVValueEscapingDoesNotMutateOrAllocatePlainValues(t *testing.T) {
 }
 
 func TestCSVFramingRejectsAmbiguousBareSeparators(t *testing.T) {
-	for _, separator := range []string{"0", "b", "n", "r", "t", "Z"} {
-		t.Run(separator, func(t *testing.T) {
-			ep := newOutfileExportConfig(tree.NewFields(separator, false, 0, '\\'), nil, "\n")
-			require.ErrorContains(t, ep.validateCSVFraming(context.Background()), "require a nonempty ENCLOSED BY")
-			ep.userConfig.Fields.EnclosedBy.Value = '"'
-			require.NoError(t, ep.validateCSVFraming(context.Background()))
-			var buf bytes.Buffer
-			require.NoError(t, formatOutputString(ep, []byte(separator), []byte("\n"), '"', false, &buf))
-			parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
-				FieldsTerminatedBy: separator, FieldsEnclosedBy: `"`,
-				FieldsEscapedBy: "\\", LinesTerminatedBy: "\n",
-			}, bytes.NewReader(buf.Bytes()), 17, false)
-			require.NoError(t, err)
-			row, err := parser.Read(nil)
-			require.NoError(t, err)
-			require.Len(t, row, 1)
-			require.Equal(t, separator, row[0].Val)
-		})
+	for _, separator := range []string{"0", "b", "n", "r", "t", "Z", "N", "N:"} {
+		for _, line := range []bool{false, true} {
+			t.Run(fmt.Sprintf("separator=%s/line=%t", separator, line), func(t *testing.T) {
+				fieldTerm, lineTerm := separator, "\n"
+				if line {
+					fieldTerm, lineTerm = ",", separator
+				}
+				ep := newOutfileExportConfig(tree.NewFields(fieldTerm, false, 0, '\\'), nil, lineTerm)
+				require.ErrorContains(t, ep.validateCSVFraming(context.Background()), "require a nonempty ENCLOSED BY")
+				ep.userConfig.Fields.EnclosedBy.Value = '"'
+				require.NoError(t, ep.validateCSVFraming(context.Background()))
+				var buf bytes.Buffer
+				require.NoError(t, formatOutputString(ep, []byte(separator), []byte(lineTerm), '"', false, &buf))
+				parser, err := csvparser.NewCSVParser(&csvparser.CSVConfig{
+					FieldsTerminatedBy: fieldTerm, FieldsEnclosedBy: `"`,
+					FieldsEscapedBy: "\\", LinesTerminatedBy: lineTerm,
+					Null: []string{`\N`},
+				}, bytes.NewReader(buf.Bytes()), 17, false)
+				require.NoError(t, err)
+				row, err := parser.Read(nil)
+				require.NoError(t, err)
+				require.Len(t, row, 1)
+				require.False(t, row[0].IsNull)
+				require.Equal(t, separator, row[0].Val)
+			})
+		}
 	}
 }
