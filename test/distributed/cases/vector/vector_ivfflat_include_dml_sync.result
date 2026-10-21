@@ -197,7 +197,7 @@ cold  ¦  1  ¦  hot  ¦  3  𝄀
 hot  ¦  2  ¦  cold  ¦  2  𝄀
 warm  ¦  3  ¦  warm  ¦  1
 select id, status from vector_ivfflat_sync_enum where status = 'hot'
-order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=include';
+order by l2_distance(embedding, '[0,0]') limit 3 by rank with option 'mode=iterative';
 ➤ id[12,65535,0]  ¦  status[12,65535,0]  𝄀
 cold  ¦  hot
 select id, status from vector_ivfflat_sync_enum where status = 'hot'
