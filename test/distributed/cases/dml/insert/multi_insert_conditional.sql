@@ -255,7 +255,8 @@ select id, s from esrc;
 select count(*) from e1;
 select count(*) from e2;
 
--- INSERT ALL has no first-match rule, so every WHEN applies; the cast no longer errors (#30417: 0 + a truncated warning), so the statement now fails on a duplicate primary key from either branch (the reported entry is engine-order dependent, matched by regex)
+-- INSERT ALL has no first-match rule, so every WHEN applies; the cast no longer errors (#30417: 0 + a truncated warning), so the statement now fails on a duplicate primary key. With e2 cleared first, only the e1 insert can collide (key 1), so the reported entry is the same under any branch order.
+delete from e2;
 insert all
   when id = 1 then into e1 (id) values (id)
   when cast(s as signed) = 1 then into e2 (id) values (id)
