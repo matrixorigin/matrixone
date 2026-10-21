@@ -61,18 +61,20 @@ where table_schema = 'information_schema_views_metadata' and table_name = 'stabl
 select * from stable_star_v order by a, b;
 
 -- Replay the public exported definition for an explicit-column UNION view.
+-- Both retained arms have resolved column names; neither receives an
+-- optimizer-only DISTINCT in the parser-derived definition.
 create view explicit_union_v (public_a, public_b) as
 (select a, b from t union select a, b from t);
 select table_name
 from information_schema.views
 where table_schema = 'information_schema_views_metadata' and table_name = 'explicit_union_v'
   and view_definition =
-       'select `__mo_view_definition`.`public_a` as `public_a`, `__mo_view_definition`.`public_b` as `public_b` from ((select distinct `t`.`a`, `t`.`b` from `t` union select `a`, `b` from `t`)) as `__mo_view_definition`(`public_a`, `public_b`)';
+       'select `__mo_view_definition`.`public_a` as `public_a`, `__mo_view_definition`.`public_b` as `public_b` from ((select `t`.`a`, `t`.`b` from `t` union select `t`.`a`, `t`.`b` from `t`)) as `__mo_view_definition`(`public_a`, `public_b`)';
 create view explicit_union_replay_v as
 select `__mo_view_definition`.`public_a` as `public_a`,
        `__mo_view_definition`.`public_b` as `public_b`
-from ((select distinct `t`.`a`, `t`.`b` from `t`
-       union select `a`, `b` from `t`)) as `__mo_view_definition`(`public_a`, `public_b`);
+from ((select `t`.`a`, `t`.`b` from `t`
+       union select `t`.`a`, `t`.`b` from `t`)) as `__mo_view_definition`(`public_a`, `public_b`);
 select table_name, column_name, ordinal_position
 from information_schema.columns
 where table_schema = 'information_schema_views_metadata'
