@@ -4298,7 +4298,7 @@ func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.
 
 func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {
 	f := expr.GetF()
-	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 || isJSONNumericComparisonArgs(f.Args) {
 		return nil, false
 	}
 	if c := f.Args[0].GetCorr(); c != nil && c.Depth == 1 && f.Args[1].GetCol() != nil {
@@ -4312,7 +4312,7 @@ func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {
 
 func correlatedWindowIdentityKey(expr *plan.Expr) (*plan.Expr, bool) {
 	f := expr.GetF()
-	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 || isJSONNumericComparisonArgs(f.Args) {
 		return nil, false
 	}
 	if f.Args[0].GetCorr() != nil && f.Args[0].GetCorr().Depth == 1 && f.Args[1].GetCol() != nil {
@@ -4367,6 +4367,21 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		}
 
 	case plan.Node_WINDOW:
+		// A mixed equality cannot define an inner partition for an outer
+		// correlation value. Skipping key extraction would still move its
+		// predicate above a global window, so reject before that pull-up.
+		for _, pred := range preds {
+			if err := plan.VisitExprTree(pred, func(expr *plan.Expr) error {
+				f := expr.GetF()
+				if f != nil && f.Func != nil && (f.Func.ObjName == "=" || f.Func.ObjName == "<=>") &&
+					isJSONNumericComparisonArgs(f.Args) && exprHasColRef(expr) {
+					return moerr.NewNYI(builder.GetContext(), "correlated window with mixed JSON/numeric predicates")
+				}
+				return nil
+			}); err != nil {
+				return 0, nil, err
+			}
+		}
 		// A window is evaluated independently for every correlated input
 		// row. The partition operator, as well as the window specification,
 		// must receive the identity key so the physical input is grouped.

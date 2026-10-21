@@ -57,9 +57,16 @@ func TestJSONNumericCorrelationsDoNotDefinePartitions(t *testing.T) {
 						if reversed {
 							args[0], args[1] = args[1], args[0]
 						}
-						keys, ok := correlatedPaginationPartitionKeys([]*planpb.Expr{bind(op, args...)})
+						predicate := bind(op, args...)
+						keys, ok := correlatedPaginationPartitionKeys([]*planpb.Expr{predicate})
 						require.False(t, ok)
 						require.Nil(t, keys)
+						key, ok := correlatedWindowIdentityKey(predicate)
+						require.False(t, ok)
+						require.Nil(t, key)
+						outer, ok := correlatedIdentityOuterKey(predicate)
+						require.False(t, ok)
+						require.Nil(t, outer)
 					})
 				}
 			}
@@ -71,6 +78,12 @@ func TestJSONNumericCorrelationsDoNotDefinePartitions(t *testing.T) {
 		require.True(t, ok)
 		require.Len(t, keys, 1)
 		require.Equal(t, typ, types.T(keys[0].Typ.Id))
+		key, ok := correlatedWindowIdentityKey(bind("=", col(typ), corr(typ)))
+		require.True(t, ok)
+		require.NotNil(t, key)
+		outer, ok := correlatedIdentityOuterKey(bind("=", col(typ), corr(typ)))
+		require.True(t, ok)
+		require.NotNil(t, outer)
 	}
 	cast, err := appendCastBeforeExpr(ctx, col(types.T_json), types.T_float32.ToType().PlanType())
 	require.NoError(t, err)
@@ -88,6 +101,71 @@ func TestJSONNumericCorrelationsDoNotDefinePartitions(t *testing.T) {
 	keys, ok = correlatedPaginationPartitionKeys([]*planpb.Expr{bind("and", valid, mixed)})
 	require.False(t, ok)
 	require.Nil(t, keys, "a safe conjunct must not hide an unsafe partition proof")
+}
+
+func TestJSONNumericEqualityDoesNotFixOnePhysicalValue(t *testing.T) {
+	ctx := context.Background()
+	for _, typ := range []types.T{types.T_int64, types.T_float32, types.T_decimal128} {
+		for _, jsonColumn := range []bool{true, false} {
+			for _, reversed := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/jsonColumn=%t/reversed=%t", typ, jsonColumn, reversed), func(t *testing.T) {
+					columnType, peerType := typ, types.T_json
+					if jsonColumn {
+						columnType, peerType = peerType, columnType
+					}
+					column := GetColExpr(columnType.ToType().PlanType(), 10, 0)
+					peer, err := appendCastBeforeExpr(ctx, MakePlan2Int64ConstExprWithType(1), peerType.ToType().PlanType())
+					require.NoError(t, err)
+					args := []*planpb.Expr{column, peer}
+					if reversed {
+						args[0], args[1] = args[1], args[0]
+					}
+					equality, err := BindFuncExprImplByPlanExpr(ctx, "=", args)
+					require.NoError(t, err)
+					require.False(t, filterListHasSingleValueEqualityOnCol([]*planpb.Expr{equality}, 10, 0))
+
+					// A column-to-column dependency must not reintroduce the proof.
+					other := GetColExpr(peerType.ToType().PlanType(), 20, 0)
+					equality, err = BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{column, other})
+					require.NoError(t, err)
+					relation := newFullGroupByRelation()
+					relation.columns[fullGroupByColumn{10, 0}] = column.Typ
+					relation.columns[fullGroupByColumn{20, 0}] = other.Typ
+					_, _, ok := relation.equality(equality)
+					require.False(t, ok)
+				})
+			}
+		}
+	}
+	for _, typ := range []types.T{types.T_int64, types.T_json} {
+		column := GetColExpr(typ.ToType().PlanType(), 10, 0)
+		peer, err := appendCastBeforeExpr(ctx, MakePlan2Int64ConstExprWithType(1), typ.ToType().PlanType())
+		require.NoError(t, err)
+		equality, err := BindFuncExprImplByPlanExpr(ctx, "=", []*planpb.Expr{column, peer})
+		require.NoError(t, err)
+		require.True(t, filterListHasSingleValueEqualityOnCol([]*planpb.Expr{equality}, 10, 0))
+	}
+	// Prepared transport normalizes to JSON, but its runtime numeric metadata
+	// can select a different comparison domain on each execution.
+	for _, name := range []string{function.JsonComparisonParamFunctionName, function.JsonOrderingParamFunctionName} {
+		adapter, err := BindFuncExprImplByPlanExpr(ctx, name, []*planpb.Expr{
+			{Typ: types.T_text.ToType().PlanType(), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+		})
+		require.NoError(t, err)
+		require.False(t, isMySQLFullGroupBySingleValueExpr(adapter))
+	}
+	for _, reversed := range []bool{false, true} {
+		args := []*planpb.Expr{
+			GetColExpr(types.T_json.ToType().PlanType(), 10, 0),
+			{Typ: types.T_any.ToType().PlanType(), Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}},
+		}
+		if reversed {
+			args[0], args[1] = args[1], args[0]
+		}
+		equality, err := BindFuncExprImplByPlanExpr(ctx, "=", args)
+		require.NoError(t, err)
+		require.False(t, filterListHasSingleValueEqualityOnCol([]*planpb.Expr{equality}, 10, 0))
+	}
 }
 
 func TestJSONNumericComparisonRetainsTypedResidual(t *testing.T) {

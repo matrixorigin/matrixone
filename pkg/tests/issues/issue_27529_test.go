@@ -417,6 +417,108 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 					require.Equal(t, int64(3), sum)
 				})
 			}
+			for _, pred := range []string{"i.j = o.f", "o.f = i.j", "i.j <=> o.f", "o.f <=> i.j", "i.id > 0 and i.j = o.f"} {
+				t.Run("window "+pred, func(t *testing.T) {
+					query := "select exists(select row_number() over(order by i.id) as rn from " + inner +
+						" where " + pred + " having rn=2) from " + outer
+					var got bool
+					err := db.QueryRowContext(ctx, query).Scan(&got)
+					if err == nil {
+						t.Logf("unrejected correlated window returned %t", got)
+					}
+					var sqlErr *mysqlDriver.MySQLError
+					require.ErrorAs(t, err, &sqlErr)
+					require.Equal(t, uint16(moerr.ErrNYI), sqlErr.Number)
+					require.Contains(t, sqlErr.Message, "correlated window with mixed JSON/numeric predicates")
+				})
+			}
+			for _, query := range []string{
+				"select exists(select row_number() over(order by i.id) as rn from " + inner + " where cast(i.j as float)=o.f having rn=2) from " + outer,
+				"select exists(select row_number() over(order by i.id) as rn from " + inner + " join " + outer + " on i.j=o.f having rn=2)",
+				"select exists(select row_number() over(order by i.id) as rn from " + inner + " where cast('16777216' as json)=o.f having rn=2) from " + outer,
+			} {
+				t.Run("safe window "+query, func(t *testing.T) {
+					var got bool
+					require.NoError(t, db.QueryRowContext(ctx, query).Scan(&got))
+					require.True(t, got)
+				})
+			}
+			t.Run("single value group by proof", func(t *testing.T) {
+				conn, err := db.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				var oldMode string
+				require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&oldMode))
+				defer func() {
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					defer cleanupCancel()
+					_, restoreErr := conn.ExecContext(cleanupCtx, "set session sql_mode = ?", oldMode)
+					require.NoError(t, restoreErr)
+				}()
+				_, err = conn.ExecContext(ctx, "set session sql_mode='ONLY_FULL_GROUP_BY'")
+				require.NoError(t, err)
+				for _, pred := range []string{"j=cast(16777216 as float)", "cast(16777216 as float)=j", "cast(j as float)=cast(16777216 as float)"} {
+					t.Run(pred, func(t *testing.T) {
+						var value string
+						var count int64
+						err := conn.QueryRowContext(ctx, "select j,count(*) from "+dbName+".inner_json where "+pred).Scan(&value, &count)
+						if err == nil {
+							t.Logf("ambiguous projection returned (%s, %d)", value, count)
+						}
+						var sqlErr *mysqlDriver.MySQLError
+						require.ErrorAs(t, err, &sqlErr)
+						require.Equal(t, moerr.ER_SYNTAX_ERROR, sqlErr.Number)
+					})
+				}
+				for _, pred := range []string{"j=?", "?=j"} {
+					t.Run("prepared "+pred, func(t *testing.T) {
+						query := "select j,count(*) from " + dbName + ".inner_json where " + pred
+						_, prepareErr := conn.ExecContext(ctx, `prepare json_group_value from "`+query+`"`)
+						var sqlErr *mysqlDriver.MySQLError
+						if prepareErr != nil {
+							require.ErrorAs(t, prepareErr, &sqlErr)
+							require.Equal(t, moerr.ER_SYNTAX_ERROR, sqlErr.Number)
+							return
+						}
+						defer func() {
+							cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+							defer cleanupCancel()
+							_, cleanupErr := conn.ExecContext(cleanupCtx, "deallocate prepare json_group_value")
+							require.NoError(t, cleanupErr)
+						}()
+						_, err := conn.ExecContext(ctx, "set @json_group_peer=cast(16777216 as float)")
+						require.NoError(t, err)
+						var value string
+						var count int64
+						err = conn.QueryRowContext(ctx, "execute json_group_value using @json_group_peer").Scan(&value, &count)
+						if err == nil {
+							t.Logf("prepared ambiguous projection returned (%s, %d)", value, count)
+						}
+						require.ErrorAs(t, err, &sqlErr)
+						require.Equal(t, moerr.ER_SYNTAX_ERROR, sqlErr.Number)
+					})
+				}
+				var value float64
+				var count int64
+				require.NoError(t, conn.QueryRowContext(ctx, "select cast(j as float),count(*) from "+dbName+
+					".inner_json where j=cast(16777216 as float) group by cast(j as float)").Scan(&value, &count))
+				require.Equal(t, float64(16777216), value)
+				require.Equal(t, int64(2), count)
+				require.NoError(t, conn.QueryRowContext(ctx, "select id,count(*) from "+dbName+".inner_json where id=1").Scan(&value, &count))
+				require.Equal(t, float64(1), value)
+				require.Equal(t, int64(1), count)
+				var jsonValue string
+				require.NoError(t, conn.QueryRowContext(ctx, "select j,count(*) from "+dbName+
+					".inner_json where j=cast('16777216' as json)").Scan(&jsonValue, &count))
+				require.Equal(t, "16777216", jsonValue)
+				require.Equal(t, int64(1), count)
+				stmt, err := conn.PrepareContext(ctx, "select j,count(*) from "+dbName+".inner_json where j=cast(? as json)")
+				require.NoError(t, err)
+				defer stmt.Close()
+				require.NoError(t, stmt.QueryRowContext(ctx, "16777216").Scan(&jsonValue, &count))
+				require.Equal(t, "16777216", jsonValue)
+				require.Equal(t, int64(1), count)
+			})
 		})
 	})
 }
