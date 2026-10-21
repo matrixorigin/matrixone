@@ -916,6 +916,43 @@ func TestJSONExportCancellationCleansBlockedWorkerBatch(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConstructJSONLineRejectsInvalidUTF8AndReleasesBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("value")
+	mrs.AddColumn(column)
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(), mrs: mrs}
+	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+	bytesChan := make(chan *BatchByte, 2)
+
+	badBatch := batch.NewOffHeapWithSize(1)
+	badVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(badVec, []byte("valid"), false, mp))
+	require.NoError(t, vector.AppendBytes(badVec, []byte("x\xffy"), false, mp))
+	badBatch.Vecs[0] = badVec
+	badBatch.SetRowCount(2)
+	require.Positive(t, mp.CurrNB())
+	constructJSONLine(context.Background(), ses, badBatch, 0, bytesChan, ep)
+	failed := <-bytesChan
+	require.Error(t, failed.err)
+	require.True(t, moerr.IsMoErrCode(failed.err, moerr.ErrNotSupported), "%v", failed.err)
+	require.Contains(t, failed.err.Error(), "invalid UTF-8")
+	require.Zero(t, len(failed.writeByte), "do not publish a partial batch containing a valid prefix")
+	require.Zero(t, mp.CurrNB(), "conversion failure must release the worker batch")
+
+	goodBatch := batch.NewOffHeapWithSize(1)
+	goodVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(goodVec, []byte("next"), false, mp))
+	goodBatch.Vecs[0] = goodVec
+	goodBatch.SetRowCount(1)
+	constructJSONLine(context.Background(), ses, goodBatch, 1, bytesChan, ep)
+	succeeded := <-bytesChan
+	require.NoError(t, succeeded.err)
+	require.Equal(t, []byte("{\"value\":\"next\"}\n"), succeeded.writeByte)
+	require.Zero(t, mp.CurrNB(), "successful batch must release its worker allocation")
+}
+
 func Test_getExportFormat(t *testing.T) {
 	convey.Convey("getExportFormat returns correct format", t, func() {
 		// Test default format (empty string returns "csv")
@@ -1070,6 +1107,41 @@ func Test_vectorValueToJSON(t *testing.T) {
 			convey.So(val, convey.ShouldEqual, "2023-12-25")
 		})
 	})
+}
+
+func TestVectorValueToJSONRejectsInvalidUTF8Text(t *testing.T) {
+	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			for _, value := range []string{"", "plain", "世界", "�", `\N`} {
+				mp := mpool.MustNewZero()
+				vec := vector.NewVec(typ.ToType())
+				require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+				got, err := vectorValueToJSON(vec, 0, nil, nil)
+				require.NoError(t, err)
+				require.Equal(t, value, got)
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vec
+				bat.Clean(mp)
+				require.Zero(t, mp.CurrNB())
+			}
+
+			for _, value := range []string{"\xff", "a\xffb", "\xc3"} {
+				mp := mpool.MustNewZero()
+				vec := vector.NewVec(typ.ToType())
+				require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+				_, err := vectorValueToJSON(vec, 0, nil, nil)
+				require.Error(t, err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+				require.Contains(t, err.Error(), "JSONLINE")
+				require.Contains(t, err.Error(), "invalid UTF-8")
+				require.NotContains(t, err.Error(), value)
+				bat := batch.NewWithSize(1)
+				bat.Vecs[0] = vec
+				bat.Clean(mp)
+				require.Zero(t, mp.CurrNB())
+			}
+		})
+	}
 }
 
 func TestEscapeJSONControl(t *testing.T) {
