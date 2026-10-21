@@ -31,22 +31,23 @@ func TestPythonFunctionRevisionUpgradeContract(t *testing.T) {
 	if metadata.UpgradeCluster != versions.Yes || metadata.UpgradeTenant != versions.Yes {
 		t.Fatalf("4.0.7 must run both cluster and tenant upgrades: %+v", metadata)
 	}
-	if metadata.VersionOffset != uint32(len(tenantUpgEntries)) {
-		t.Fatalf("version offset %d does not match tenant entries %d", metadata.VersionOffset, len(tenantUpgEntries))
+	if metadata.VersionOffset != 0 || len(tenantUpgEntries) != 0 {
+		t.Fatalf("historical 4.0.7 identity changed: offset=%d entries=%d", metadata.VersionOffset, len(tenantUpgEntries))
 	}
 	if metadata.RequiredProtocolVersion != defines.MORPCVersion61 {
 		t.Fatalf("unexpected 4.0.7 protocol gate: %v", metadata.RequiredProtocolVersion)
 	}
 
-	if len(tenantUpgEntries) != 9 {
-		t.Fatalf("expected six UDF identity columns, index replacement, and one revision table, got %d entries", len(tenantUpgEntries))
+	entries := PythonRevisionUpgradeEntries()
+	if len(entries) != 9 {
+		t.Fatalf("expected six UDF identity columns, index replacement, and one revision table, got %d entries", len(entries))
 	}
 	for _, name := range []string{
 		"active_revision", "namespace_version", "canonical_input_descriptor",
 		"return_descriptor", "signature_key_schema_version", "signature_fingerprint",
 	} {
 		var found bool
-		for _, entry := range tenantUpgEntries {
+		for _, entry := range entries {
 			if entry.TableName == "mo_user_defined_function" && strings.Contains(strings.ToLower(entry.UpgSql), "add column "+name) {
 				found = true
 				if entry.UpgType != versions.ADD_COLUMN || entry.Schema != catalog.MO_CATALOG {
@@ -61,8 +62,8 @@ func TestPythonFunctionRevisionUpgradeContract(t *testing.T) {
 	}
 
 	var addIndex, dropIndex, revision *versions.UpgradeEntry
-	for i := range tenantUpgEntries {
-		entry := &tenantUpgEntries[i]
+	for i := range entries {
+		entry := &entries[i]
 		lower := strings.ToLower(entry.UpgSql)
 		switch {
 		case strings.Contains(lower, "name_db_arg_types_descriptor"):
