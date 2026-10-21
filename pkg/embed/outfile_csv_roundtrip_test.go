@@ -91,6 +91,8 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			{"bit32-enclosed-r", "wide_bits_src", "b", ",", "\n", "r", ""},
 			{"bit32-enclosed-t", "wide_bits_src", "b", ",", "\n", "t", ""},
 			{"bit32-enclosed-Z", "wide_bits_src", "b", ",", "\n", "Z", ""},
+			{"enclosure-inside-field-terminator", "bits_src", "b", "::0", "\n", "0", ""},
+			{"enclosure-inside-line-terminator", "bits_src", "b", ",", "||0", "0", ""},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec := func(query string) {
@@ -136,6 +138,45 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 				}
 				require.Equal(t, read(db+"."+tc.source), read(dst))
 			})
+		}
+		for _, tc := range []struct {
+			name, field, line, quote string
+			value                    int
+		}{
+			{"field-zero", "0:", "\n", "0", 48},
+			{"line-zero", ",", "0:", "0", 48},
+			{"line-n", ",", "n:", "n", 110},
+			{"line-N", ",", "N:", "N", 78},
+		} {
+			for _, force := range []bool{false, true} {
+				t.Run(fmt.Sprintf("enclosure-prefix/%s/force=%t", tc.name, force), func(t *testing.T) {
+					path := filepath.Join(t.TempDir(), "rejected.csv")
+					options := " FIELDS TERMINATED BY " + sqlquote.String(tc.field) + " ENCLOSED BY " + sqlquote.String(tc.quote) +
+						" LINES TERMINATED BY " + sqlquote.String(tc.line)
+					extra := ""
+					if force {
+						extra = " FORCE_QUOTE (b)"
+					}
+					_, err := admin.ExecContext(ctx, fmt.Sprintf("select 101 as id,b from %s.bits_src where id=%d INTO OUTFILE %s%s HEADER 'false'%s",
+						db, tc.value, sqlquote.String(path), options, extra))
+					if err == nil {
+						// Diagnose an incorrectly accepted format using the actual
+						// emitted bytes and LOAD, not an extracted encoder probe.
+						data, readErr := os.ReadFile(path)
+						require.NoError(t, readErr)
+						_, createErr := admin.ExecContext(ctx, "create table "+db+".rejected_restore like "+db+".bits_src")
+						require.NoError(t, createErr)
+						defer func() {
+							_, dropErr := admin.Exec("drop table " + db + ".rejected_restore")
+							require.NoError(t, dropErr)
+						}()
+						_, loadErr := admin.ExecContext(ctx, "LOAD DATA INFILE "+sqlquote.String(path)+" INTO TABLE "+db+".rejected_restore"+options)
+						t.Logf("accepted OUTFILE bytes=%x; LOAD error=%v", data, loadErr)
+					}
+					require.ErrorContains(t, err, "ENCLOSED BY must not be the first byte")
+					require.NoFileExists(t, path)
+				})
+			}
 		}
 		for _, options := range []string{
 			" FIELDS TERMINATED BY 'n' ENCLOSED BY ''",

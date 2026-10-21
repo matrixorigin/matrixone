@@ -765,11 +765,26 @@ func isAmbiguousCSVEscape(b byte) bool {
 }
 
 func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
-	if ec.getExportFormat() != "csv" || ec.escapeChar() == 0 {
+	if ec.getExportFormat() != "csv" {
 		return nil
 	}
-	field, line, _, _ := ec.csvBoundaryBytes()
+	field, line, quote, _ := ec.csvBoundaryBytes()
+	// Framing uses the physical prefix, including CR in CRLF, rather than
+	// only the normalized newline used when escaping bare field contents.
+	if l := ec.userConfig.Lines; l != nil && l.TerminatedBy != nil && l.TerminatedBy.Value != "" {
+		line = l.TerminatedBy.Value[0]
+	}
 	noQuote := ec.userConfig.Fields == nil || ec.userConfig.Fields.EnclosedBy == nil || ec.userConfig.Fields.EnclosedBy.Value == 0
+	if !noQuote && (quote == field || quote == line) {
+		// LOAD sees a closing enclosure followed by this prefix as a doubled
+		// enclosure. Reject before opening a file, even with prefix escapes
+		// disabled: enclosure doubling is independent of ESCAPED BY.
+		return moerr.NewInvalidInput(ctx,
+			"CSV ENCLOSED BY must not be the first byte of a field or line terminator")
+	}
+	if ec.escapeChar() == 0 {
+		return nil
+	}
 	if noQuote && (isAmbiguousCSVEscape(field) || isAmbiguousCSVEscape(line)) {
 		return moerr.NewInvalidInput(ctx,
 			"CSV terminators starting with an ambiguous escape character (0, b, n, r, t, Z, N) require a nonempty ENCLOSED BY")

@@ -172,3 +172,35 @@ func TestCSVFramingRejectsAmbiguousBareSeparators(t *testing.T) {
 		}
 	}
 }
+
+func TestCSVFramingRejectsEnclosureSeparatorPrefix(t *testing.T) {
+	for _, enclosed := range []byte{'0', 'b', 'n', 'r', 't', 'Z', 'N', '"', '|', '\\'} {
+		for _, line := range []bool{false, true} {
+			for _, escape := range []byte{'\\', 0} {
+				t.Run(fmt.Sprintf("enclosed=%d/line=%t/escape=%d", enclosed, line, escape), func(t *testing.T) {
+					fieldTerm, lineTerm := string(enclosed)+":", "\n"
+					if line {
+						fieldTerm, lineTerm = ",", string(enclosed)+":"
+					}
+					ep := newOutfileExportConfig(tree.NewFields(fieldTerm, false, enclosed, escape), nil, lineTerm)
+					ep.userConfig.FilePath = t.TempDir() + "/rejected.csv"
+					const message = "ENCLOSED BY must not be the first byte"
+					require.ErrorContains(t, ep.validateCSVFraming(t.Context()), message)
+					require.ErrorContains(t, openNewFile(t.Context(), ep, nil), message)
+					require.NoFileExists(t, ep.userConfig.FilePath)
+					require.Nil(t, ep.AsyncReader)
+					require.Nil(t, ep.AsyncWriter)
+					require.Nil(t, ep.AsyncGroup)
+					// These options do not frame CSV fields in other formats.
+					for _, format := range []string{"jsonline", "parquet"} {
+						ep.userConfig.ExportFormat = format
+						require.NoError(t, ep.validateCSVFraming(t.Context()))
+					}
+				})
+			}
+		}
+	}
+	// Check the physical CRLF prefix, not only the reader's normalized LF.
+	ep := newOutfileExportConfig(tree.NewFields(",", false, '\r', '\\'), nil, "\r\n")
+	require.ErrorContains(t, ep.validateCSVFraming(t.Context()), "ENCLOSED BY must not be the first byte")
+}
