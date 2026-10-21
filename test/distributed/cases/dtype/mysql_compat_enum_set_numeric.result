@@ -206,9 +206,9 @@ select id, e+0 as ordinal, s+0 as bitmap from special_single_empty order by id;
 5  ¦  0  ¦  1  𝄀
 6  ¦  0  ¦  1
 insert into special_single_empty values (7, 1, 1, 7), (8, 2, 1, 8);
-internal error: convert to MySQL enum failed: number 2 overflow enum boundary [1, 1]
+Data truncated for ENUM value: '2'
 update special_single_empty set s=2 where id=3;
-internal error: convert to MySQL set failed: value 2 overflow set boundary 1
+Data truncated for SET value: '2'
 select id, e+0 as ordinal, s+0 as bitmap from special_single_empty order by id;
 ➤ id[4,32,0]  ¦  ordinal[-5,64,0]  ¦  bitmap[-5,64,0]  𝄀
 1  ¦  1  ¦  0  𝄀

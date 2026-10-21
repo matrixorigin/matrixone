@@ -1440,19 +1440,24 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 // of the ENUM definition, using the same comma split and case folding as
 // types.ParseEnum.
 func isEnumMember(enumValues, name string) bool {
-	// The ENUM OID distinguishes a single empty member from absent metadata.
-	if len(enumValues) == 0 {
-		return name == ""
-	}
+	// A raw padded legacy label wins before the trailing-space spelling.
 	for {
-		i := strings.IndexByte(enumValues, ',')
-		if i < 0 {
-			return strings.EqualFold(enumValues, name)
+		remaining := enumValues
+		for {
+			item, rest, more := strings.Cut(remaining, ",")
+			if strings.EqualFold(item, name) {
+				return true
+			}
+			if !more {
+				break
+			}
+			remaining = rest
 		}
-		if strings.EqualFold(enumValues[:i], name) {
-			return true
+		trimmed := strings.TrimRight(name, " ")
+		if trimmed == name {
+			return false
 		}
-		enumValues = enumValues[i+1:]
+		name = trimmed
 	}
 }
 
@@ -1460,9 +1465,9 @@ func isEnumMember(enumValues, name string) bool {
 // strings.TrimSpace (unicode.IsSpace) would remove it, and is already valid
 // input for the SET definition, as native INSERT parses it. Trimming such a
 // value could select a different member (' a' or '\u00a0a' vs 'a'); padded
-// non-member input keeps being trimmed. Padded input can only be member names
-// (a numeric bitmap never has whitespace), so the non-throwing name match of
-// the SET parser decides. Unpadded values return early without parsing.
+// non-member input keeps the CSV trimming policy. This guard only protects
+// member names; numeric fallback follows that existing CSV policy, including
+// whitespace normalization. Unpadded values return early without parsing.
 func isPaddedSetInput(setValues, val string) bool {
 	if len(val) == 0 {
 		return false
