@@ -277,15 +277,25 @@ This is a deliberate precision/recall trade, not a results-neutral optimization:
   small and the relative ranking of documents that match a surviving term is
   essentially preserved, but scores are not bit-identical to the uncut query.
 - At `c = 1`, only terms present in every live document are dropped; those have
-  idf exactly zero, so the top-k is identical to the uncut query.
+  idf exactly zero. When the surviving terms match at least `k` documents, the
+  top-k is identical to the uncut query; otherwise the uncut query fills the
+  remainder with zero-score documents matched only by the dropped terms, which
+  the cut query omits.
 
 ### Never-empty invariant
 
-The cutoff must never turn a query that matches documents into one that matches
-none merely by dropping terms. The original terms are kept unchanged when the
-query has at most one term, when every term would be dropped, or when no
-surviving term occurs in any live document. In each case the query runs as if the
-cutoff were off.
+Over the whole live corpus, the cutoff must never turn a query that matches
+documents into one that matches none merely by dropping terms. The original terms
+are kept unchanged when the query has at most one term, when every term would be
+dropped, or when no surviving term occurs in any live document. In each case the
+query runs as if the cutoff were off.
+
+The decision is made on corpus-global document frequency, before any other
+predicate of the query is applied. With additional predicates (an INCLUDE-column
+prefilter, a membership filter, or a residual base-table filter), the surviving
+terms may match no document that also satisfies those predicates, so a filtered
+query can return fewer rows, including none, than the uncut query. That is part
+of the accepted result change above, not a violation of this invariant.
 
 ### Configuration lifetime (decision)
 
@@ -394,8 +404,9 @@ the race detector.
 
 High-df cutoff: an index with a term present in every document, a mid-frequency
 term, and a graded rare term is searched across multiple segments so the cutoff
-reads the global document frequency. Tests must show: at `c = 1` the top-k keys
-and scores equal the uncut query; a mid-frequency term is dropped at a cutoff at or
+reads the global document frequency. Tests must show: at `c = 1`, with surviving
+terms that match at least `k` documents, the top-k keys and scores equal the uncut
+query; a mid-frequency term is dropped at a cutoff at or
 below its frequency and kept above it; the disabled values leave every query
 unchanged; a boolean-mode query is never cut; and the never-empty invariant holds
 for a single term, for all terms crossing the cutoff, and for a survivor that

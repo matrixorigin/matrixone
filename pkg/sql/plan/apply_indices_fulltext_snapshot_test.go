@@ -557,6 +557,47 @@ func TestPushCoveredFulltext2ScoreLimitLegacySort(t *testing.T) {
 	}
 }
 
+// The score sort bounds a recorded join's search only while that join itself still
+// carries no limit, offset, filter or non-INNER type.
+func TestJoinFulltext2ScoreLimitRechecksRecordedJoin(t *testing.T) {
+	for _, mode := range []string{"clean", "join limit", "join offset", "join filter", "left join", "literal only prepared"} {
+		t.Run(mode, func(t *testing.T) {
+			score := plan.Type{Id: int32(types.T_float32)}
+			search := &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN, BindingTags: []int32{7},
+				IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()}}}
+			base := &plan.Node{NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{6}}
+			join := &plan.Node{NodeType: plan.Node_JOIN, JoinType: plan.Node_INNER, Children: []int32{1, 0}}
+			project := &plan.Node{NodeType: plan.Node_PROJECT, Children: []int32{2}, BindingTags: []int32{8},
+				ProjectList: []*plan.Expr{GetColExpr(score, 7, 1)}}
+			outer := &plan.Node{NodeType: plan.Node_SORT, Children: []int32{3}, Limit: makePlan2Uint64ConstExprWithType(2),
+				OrderBy: []*plan.OrderBySpec{{Expr: GetColExpr(score, 8, 0), Flag: plan.OrderBySpec_DESC}}}
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{search, base, join, project, outer}}}
+			recorded := fulltextBoundableJoin{search: 0}
+			switch mode {
+			case "join limit":
+				join.Limit = makePlan2Uint64ConstExprWithType(1)
+			case "join offset":
+				join.Offset = makePlan2Uint64ConstExprWithType(1)
+			case "join filter":
+				join.FilterList = []*plan.Expr{makePlan2BoolConstExprWithType(true)}
+			case "left join":
+				join.JoinType = plan.Node_LEFT
+			case "literal only prepared":
+				recorded.literalOnly = true
+				outer.Limit = &plan.Expr{Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}
+			}
+			builder.fulltextBoundableJoins = map[int32]fulltextBoundableJoin{2: recorded}
+			builder.pushJoinFulltext2ScoreLimitFromSort(outer)
+			if mode == "clean" {
+				require.NotNil(t, search.IndexSearchScan.CandidateLimit)
+				require.Equal(t, uint64(2), search.IndexSearchScan.CandidateLimit.GetLit().GetU64Val())
+			} else {
+				require.Nil(t, search.IndexSearchScan.CandidateLimit)
+			}
+		})
+	}
+}
+
 // The SQL tests prove reachability; these typed controls exercise each barrier
 // around the optional inner sort without constructing a service or corpus.
 func TestCoveredFulltext2ScoreLimitSortBarriers(t *testing.T) {

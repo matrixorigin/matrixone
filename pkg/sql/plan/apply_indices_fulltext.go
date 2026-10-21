@@ -610,11 +610,9 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 
 	// A lifted wrapped-MATCH predicate counts here exactly like a filter left on the scan. It
 	// runs above the join, so limiting the stream below it can under-fill the final result.
-	limitExpr := builder.buildFullTextCandidateLimit(
-		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter,
-		paginationLimit, paginationOffset)
 	limitRuleOK, limitLiteralOnly := builder.fullTextCandidateLimitRule(
 		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter)
+	limitExpr := candidateLimitForRule(limitRuleOK, limitLiteralOnly, paginationLimit, paginationOffset)
 	drivingSearchID := int32(-1)
 
 	// The search evaluates the peeled predicates on index-time values, so the base scans
@@ -1124,54 +1122,6 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, served, nil
 }
 
-// fullTextCandidateLimitAdmissible reports whether the query shape admits bounding the
-// fulltext search by the result LIMIT at all, before any residual filter is considered.
-func (builder *QueryBuilder) fullTextCandidateLimitAdmissible(
-	scanNode *plan.Node,
-	wrappedMatchFilters []*plan.Expr,
-	fullTextFilters []*plan.Expr,
-) bool {
-	if builder.sqlCalcFoundRows || scanNode == nil ||
-		len(wrappedMatchFilters) != 0 || len(fullTextFilters) != 1 {
-		return false
-	}
-	// A json probe must NEVER take a pushed LIMIT. It is a PREFILTER the
-	// optimizer injected, returning a superset that the retained predicate then
-	// narrows, so truncating it to k candidates yields fewer than k final rows
-	// and silently loses qualifying ones. Its own predicate always leaves a
-	// residual filter, and its mode is not FULLTEXT_BOOLEAN, so both paths below
-	// already decline — but only incidentally, and this rule's correctness is
-	// too important to rest on that.
-	if isJSONProbeMatch(fullTextFilters[0]) {
-		return false
-	}
-	return true
-}
-
-func (builder *QueryBuilder) buildFullTextCandidateLimit(
-	scanNode *plan.Node,
-	wrappedMatchFilters []*plan.Expr,
-	fullTextFilters []*plan.Expr,
-	indexDefs []*plan.IndexDef,
-	prefilterPushdown bool,
-	exactPrefilter bool,
-	paginationLimit *plan.Expr,
-	paginationOffset *plan.Expr,
-) *plan.Expr {
-	ok, literalOnly := builder.fullTextCandidateLimitRule(
-		scanNode, wrappedMatchFilters, fullTextFilters, indexDefs, prefilterPushdown, exactPrefilter)
-	if !ok {
-		return nil
-	}
-	if literalOnly {
-		if _, literal := getLiteralUint64(paginationLimit); !literal {
-			return nil
-		}
-	}
-	limit, _ := buildCandidateLimit(paginationLimit, paginationOffset)
-	return limit
-}
-
 // fullTextCandidateLimitRule reports whether the fulltext search may be bounded by the
 // result LIMIT+OFFSET and whether that LIMIT must be a literal. The residual-filter case is
 // admitted at plan time, so prepared or dynamic LIMIT values remain unbounded there; the
@@ -1184,7 +1134,18 @@ func (builder *QueryBuilder) fullTextCandidateLimitRule(
 	prefilterPushdown bool,
 	exactPrefilter bool,
 ) (ok, literalOnly bool) {
-	if !builder.fullTextCandidateLimitAdmissible(scanNode, wrappedMatchFilters, fullTextFilters) {
+	if builder.sqlCalcFoundRows || scanNode == nil ||
+		len(wrappedMatchFilters) != 0 || len(fullTextFilters) != 1 {
+		return false, false
+	}
+	// A json probe must NEVER take a pushed LIMIT. It is a PREFILTER the
+	// optimizer injected, returning a superset that the retained predicate then
+	// narrows, so truncating it to k candidates yields fewer than k final rows
+	// and silently loses qualifying ones. Its own predicate always leaves a
+	// residual filter, and its mode is not FULLTEXT_BOOLEAN, so both paths below
+	// already decline — but only incidentally, and this rule's correctness is
+	// too important to rest on that.
+	if isJSONProbeMatch(fullTextFilters[0]) {
 		return false, false
 	}
 	if len(scanNode.FilterList) == 0 {
@@ -1197,6 +1158,21 @@ func (builder *QueryBuilder) fullTextCandidateLimitRule(
 		return false, false
 	}
 	return true, true
+}
+
+// candidateLimitForRule returns the LIMIT+OFFSET bound for a fulltext search admitted by
+// fullTextCandidateLimitRule, or nil when the rule or the LIMIT expression declines.
+func candidateLimitForRule(ok, literalOnly bool, limit, offset *plan.Expr) *plan.Expr {
+	if !ok {
+		return nil
+	}
+	if literalOnly {
+		if _, literal := getLiteralUint64(limit); !literal {
+			return nil
+		}
+	}
+	bound, _ := buildCandidateLimit(limit, offset)
+	return bound
 }
 
 // fulltextBoundableJoin is a base-table join built by the fulltext rewrite whose driving
@@ -1566,10 +1542,6 @@ func (builder *QueryBuilder) pushJoinFulltext2ScoreLimitFromSort(sortNode *plan.
 	if !fulltext2ScoreDescending(sortNode.OrderBy[0]) {
 		return
 	}
-	bound, ok := buildCandidateLimit(sortNode.Limit, sortNode.Offset)
-	if !ok {
-		return
-	}
 	keyCol := sortNode.OrderBy[0].Expr.GetCol()
 	project := builder.qry.Nodes[sortNode.Children[0]]
 	if project.NodeType != plan.Node_PROJECT || len(project.Children) != 1 ||
@@ -1595,10 +1567,14 @@ func (builder *QueryBuilder) pushJoinFulltext2ScoreLimitFromSort(sortNode *plan.
 	if !ok {
 		return
 	}
-	if join.literalOnly {
-		if _, literal := getLiteralUint64(sortNode.Limit); !literal {
-			return
-		}
+	joinNode := builder.qry.Nodes[id]
+	if joinNode.NodeType != plan.Node_JOIN || joinNode.JoinType != plan.Node_INNER ||
+		joinNode.Limit != nil || joinNode.Offset != nil || len(joinNode.FilterList) != 0 {
+		return
+	}
+	bound := candidateLimitForRule(true, join.literalOnly, sortNode.Limit, sortNode.Offset)
+	if bound == nil {
+		return
 	}
 	search := builder.qry.Nodes[join.search]
 	spec := search.IndexSearchScan

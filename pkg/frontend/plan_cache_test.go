@@ -538,6 +538,9 @@ func TestTemporalSessionChangesInvalidatePreparedAndCachedPlans(t *testing.T) {
 		{"sql_mode", "", "STRICT_TRANS_TABLES"},
 		{"fulltext2_search_df_cutoff", float64(0), float64(0.7)},
 		{"fulltext2_search_df_cutoff", float64(0.7), float64(0)},
+		{"fulltext2_threads_search", int64(0), int64(4)},
+		{"fulltext_bloom_filter_pushdown", int8(0), int8(1)},
+		{"fulltext_bloom_filter_pushdown", int8(1), int8(0)},
 	} {
 		t.Run(fmt.Sprintf("%s/%v", tc.name, tc.b), func(t *testing.T) {
 			ses := NewSession(ctx, "", &testMysqlWriter{}, nil)
