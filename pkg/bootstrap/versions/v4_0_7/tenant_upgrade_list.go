@@ -31,7 +31,10 @@ import (
 // only known at runtime (one metadata table per index, per account), which a fixed UpgSql
 // cannot express. It runs from HandleTenantUpgrade, the same escape hatch v4_0_6 uses for
 // upgradeLegacyForeignKeyMetadata.
-var tenantUpgEntries = []versions.UpgradeEntry{
+// Keep the released v4.0.7 upgrade identity unchanged. The later repair owns Python migrations.
+var tenantUpgEntries = []versions.UpgradeEntry{}
+
+var pythonRevisionUpgEntries = []versions.UpgradeEntry{
 	addPythonRevisionHeadColumn("active_revision", "bigint unsigned not null default 0"),
 	addPythonRevisionHeadColumn("namespace_version", "bigint unsigned not null default 0"),
 	addPythonSignatureColumn("canonical_input_descriptor", fmt.Sprintf("varchar(%d) not null default ''", types.MaxStringSize), "arg_types"),
@@ -78,7 +81,7 @@ var tenantUpgEntries = []versions.UpgradeEntry{
 // migrations so a later repair version can replay them for clusters that
 // already recorded 4.0.7 or 4.0.8 without executing the original handler.
 func PythonRevisionUpgradeEntries() []versions.UpgradeEntry {
-	return append([]versions.UpgradeEntry(nil), tenantUpgEntries...)
+	return append([]versions.UpgradeEntry(nil), pythonRevisionUpgEntries...)
 }
 
 // addPythonSignatureIndex makes the shared function namespace distinguish the

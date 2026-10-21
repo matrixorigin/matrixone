@@ -582,3 +582,31 @@ historical approval artifacts and Python runtime scope remain unchanged.
 Independent Architecture and SQL/Planner approval of r27 remains pending;
 maintenance validation does not supply that approval. No production or security
 scope is added.
+
+
+## r28 VIEWS/Python allocation and historical upgrade identity addendum (2026-10-21)
+
+Official main 7038c8520e5fc1ba456914b3c389ccedb69e22f7 owns MORPC126
+for parser-derived information_schema.VIEWS metadata and builtin IDs603/604.
+The governing python-udf-current-stage-r28-2026-10-21 proposal preserves this
+capability and assigns Python127 (official latest + 1). Catalog repair,
+revision publication and reads, Prepare, prepared reuse, evaluator, remote
+sender/receiver and status admission reject predecessor126 and mixed127/126
+CNs before Python mutation or execution. Rollback127 to126 disables Python
+while retaining VIEWS126, LOAD FK125, fractional TIMESTAMPADD124 and prior
+contracts. Combined VIEWS/Python pipelines negotiate127; VIEWS-only negotiates126
+and rejects125 through the existing stream, sender and receiver gates.
+
+The historical4.0.7 handler keeps its released zero entry offset and protocol61.
+Its Python schema entries are a separate helper list replayed only by the
+protocol127-gated4.0.18 repair; the upstream VIEWS maintenance keeps its own126
+fence. The old-worker regression uses the actual retained4.0.7 handler rather
+than a synthetic replacement. Catalog4.0.18 and minimum source4.0.17, query
+method/field allocations and Python runtime scope remain unchanged.
+
+The prior r27 text described the intended historical-handler preservation but
+its implementation still attached the Python list to4.0.7; this addendum and
+its offset/worker/upgrade tests correct that discrepancy. Historical approval
+records above remain immutable. Independent Architecture and SQL/Planner
+approval of r28 remains pending; maintenance validation does not supply it.
+No production or security scope is added.
