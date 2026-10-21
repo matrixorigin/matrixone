@@ -457,7 +457,7 @@ func TestPipelineDescriptorMergedScalarAndLockContracts(t *testing.T) {
 }
 
 func TestMergedDiagnosticPipelineExpressionAdmission(t *testing.T) {
-	expr := &planpb.Expr{Typ: planpb.Type{Id: 28}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: 602 << 32}}}}
+	expr := &planpb.Expr{Typ: planpb.Type{Id: 28}, Expr: &planpb.Expr_F{F: &planpb.Function{Func: &planpb.ObjectRef{Obj: 603 << 32}}}}
 	for _, instruction := range []*Instruction{
 		{ScalarSetReaggregation: true, DedupJoin: &DedupJoin{DedupKeyExprs: []*planpb.Expr{expr}}},
 		{ScalarSetReaggregation: true, RightDedupJoin: &RightDedupJoin{DedupKeyExprs: []*planpb.Expr{expr}}},

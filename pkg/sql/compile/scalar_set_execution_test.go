@@ -74,15 +74,15 @@ func TestScalarSetMarkerProtocolAndPlacement(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.ScalarSetReaggregation)
 	require.False(t, features.SetOperationFloatKeys)
-	require.Equal(t, defines.MORPCVersion125, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion126, remoteExpressionProtocolVersion(features))
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ScalarSetReaggregation: true}}}
 	data, err = p.Marshal()
 	require.NoError(t, err)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion124, defines.MORPCVersion125} {
+	for _, version := range []int64{defines.MORPCVersion125, defines.MORPCVersion126} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		if version < defines.MORPCVersion125 {
-			require.ErrorContains(t, validateRemoteExpressionFeatures(c.proc, features), "version 125")
+		if version < defines.MORPCVersion126 {
+			require.ErrorContains(t, validateRemoteExpressionFeatures(c.proc, features), "version 126")
 		} else {
 			require.NoError(t, validateRemoteExpressionFeatures(c.proc, features))
 		}

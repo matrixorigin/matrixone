@@ -399,7 +399,7 @@ const (
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
 // IncompleteTemporalStrings requires MORPC v130 for raw-calendar string
 // overloads and incomplete-input rejection diagnostics.
-// SetOperationFloatKeys requires MORPC v131 for append-only function ID 602.
+// SetOperationFloatKeys requires MORPC v131 for append-only function ID 603.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool
 	JSONOpaqueTextContracts       bool
@@ -969,7 +969,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
 					features.LeastGreatestCollationSemantics = true
 				}
-				if id == 602 { // SET_OPERATION_FLOAT_KEY; append-only execution identity
+				if id == 603 { // SET_OPERATION_FLOAT_KEY; append-only execution identity
 					features.SetOperationFloatKeys = true
 				}
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
