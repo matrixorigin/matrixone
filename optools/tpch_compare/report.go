@@ -202,6 +202,9 @@ func reportCampaign(config, root, output string) (retErr error) {
 			if err := verifyTrialQueries(pair.Trial, f, request, receipt); err != nil {
 				return err
 			}
+			if err := verifyScoredResources(c, record); err != nil {
+				return fmt.Errorf("%s %s: %w", pair.Trial.ID, engine, err)
+			}
 			receipts[engine] = receipt
 			cell.Arms = append(cell.Arms, record)
 		}
@@ -343,16 +346,6 @@ func writeWindows(output string, cells map[string]*reportCell) (retErr error) {
 	slices.Sort(keys)
 	for _, key := range keys {
 		for _, a := range cells[key].Arms {
-			if a.After.CPUUsec < a.Before.CPUUsec || a.After.ReadBytes < a.Before.ReadBytes || a.After.WriteBytes < a.Before.WriteBytes {
-				return errors.New("resource counter moved backwards")
-			}
-			if strings.TrimSpace(a.After.Raw["memory.max"]) != strconv.FormatInt(a.Trial.MemoryBytes, 10) || strings.TrimSpace(a.After.Raw["memory.swap.max"]) != "0" {
-				return errors.New("resource cap receipt is missing or differs")
-			}
-			cpus, err := parseCPUSet(a.After.Raw["cpuset.cpus.effective"])
-			if err != nil || len(cpus) != a.Trial.Cores {
-				return errors.New("CPU cap receipt is missing or differs")
-			}
 			peak := "N/A"
 			if a.After.PeakQuality == "window" {
 				peak = strconv.FormatUint(a.After.PeakBytes, 10)
@@ -364,6 +357,39 @@ func writeWindows(output string, cells map[string]*reportCell) (retErr error) {
 	}
 	w.Flush()
 	return w.Error()
+}
+
+// Admit all resource evidence before collecting scores or creating report files.
+// Cgroups can be reused, so OOM counters may start above zero but cannot change.
+func verifyScoredResources(c Campaign, a ArmRecord) error {
+	if a.Trial.Cores < 1 || a.Trial.Cores > len(c.CPUs) {
+		return errors.New("CPU cap receipt differs from campaign")
+	}
+	expected := slices.Clone(c.CPUs[:a.Trial.Cores])
+	slices.Sort(expected)
+	previous := a.Before
+	for _, snapshot := range []struct {
+		name  string
+		usage Usage
+	}{{"before", a.Before}, {"after", a.After}, {"after cleanup", a.Trailing}} {
+		u := snapshot.usage
+		if strings.TrimSpace(u.Raw["memory.max"]) != strconv.FormatInt(a.Trial.MemoryBytes, 10) || strings.TrimSpace(u.Raw["memory.swap.max"]) != "0" {
+			return fmt.Errorf("%s resource cap receipt is missing or differs", snapshot.name)
+		}
+		cpus, err := parseCPUSet(u.Raw["cpuset.cpus.effective"])
+		slices.Sort(cpus)
+		if err != nil || !slices.Equal(cpus, expected) {
+			return fmt.Errorf("%s CPU cap receipt is missing or differs", snapshot.name)
+		}
+		if u.CPUUsec < previous.CPUUsec || u.ReadBytes < previous.ReadBytes || u.WriteBytes < previous.WriteBytes || u.OOMKills < previous.OOMKills {
+			return fmt.Errorf("%s resource counter moved backwards", snapshot.name)
+		}
+		if u.OOMKills != a.Before.OOMKills {
+			return fmt.Errorf("%s application cgroup reported an OOM kill", snapshot.name)
+		}
+		previous = u
+	}
+	return nil
 }
 
 func writeLoads(w *bufio.Writer, c Campaign, f Frozen) error {

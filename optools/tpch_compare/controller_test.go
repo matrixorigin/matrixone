@@ -17,12 +17,14 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -95,14 +97,22 @@ func campaignFixture(root string) Campaign {
 }
 
 func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
-	for _, tc := range []struct {
+	type reportCase struct {
 		name         string
 		mutate       func(*WorkerRequest, *WorkerReceipt)
 		mutateArm    func(*ArmRecord)
+		armEngine    string
+		cpus         []int
 		changeConfig bool
 		wantError    string
-	}{
+	}
+	cases := make([]reportCase, 0, 85)
+	cases = append(cases, []reportCase{
 		{name: "different results are not verified"},
+		{name: "CPU membership ignores campaign order", cpus: []int{30, 16, 28, 18, 26, 20, 24, 22}},
+		{name: "equivalent CPU ranges are accepted", mutateArm: func(arm *ArmRecord) {
+			arm.After.Raw["cpuset.cpus.effective"] = "0-3,4-7\n"
+		}},
 		{name: "archived captures need not be present", mutate: func(request *WorkerRequest, _ *WorkerReceipt) {
 			request.OutputRoot = filepath.Join(request.OutputRoot, "archived")
 		}},
@@ -202,7 +212,49 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 			request.Queries[0], request.Queries[1] = request.Queries[1], request.Queries[0]
 		}, wantError: "worker request differs"},
 		{name: "report cannot change source attribution", changeConfig: true, wantError: "configuration differs from preflight"},
-	} {
+	}...)
+	for _, engine := range []string{"mo", "duckdb"} {
+		for _, boundary := range []string{"before", "after", "after cleanup"} {
+			for _, resource := range []struct {
+				name, key, value, wantError string
+			}{
+				{"different CPU membership", "cpuset.cpus.effective", "8-15", "CPU cap receipt"},
+				{"duplicate CPU cannot replace missing CPU", "cpuset.cpus.effective", "0-6,6", "CPU cap receipt"},
+				{"missing CPU set", "cpuset.cpus.effective", "", "CPU cap receipt"},
+				{"unlimited memory", "memory.max", "max", "resource cap receipt"},
+				{"different memory limit", "memory.max", "8589934592", "resource cap receipt"},
+				{"enabled swap", "memory.swap.max", "4096", "resource cap receipt"},
+			} {
+				cases = append(cases, reportCase{
+					name: fmt.Sprintf("%s %s %s", engine, boundary, resource.name), armEngine: engine, wantError: resource.wantError,
+					mutateArm: func(arm *ArmRecord) {
+						usage := &arm.Before
+						if boundary == "after" {
+							usage = &arm.After
+						} else if boundary == "after cleanup" {
+							usage = &arm.Trailing
+						}
+						usage.Raw[resource.key] = resource.value
+					},
+				})
+			}
+		}
+		for _, counter := range []struct {
+			name, wantError string
+			mutate          func(*ArmRecord)
+		}{
+			{"OOM during measurement", "OOM kill", func(a *ArmRecord) { a.After.OOMKills++; a.Trailing.OOMKills++ }},
+			{"OOM during cleanup", "OOM kill", func(a *ArmRecord) { a.Trailing.OOMKills++ }},
+			{"OOM counter moved backwards", "counter moved backwards", func(a *ArmRecord) { a.After.OOMKills-- }},
+			{"CPU counter moved backwards", "counter moved backwards", func(a *ArmRecord) { a.After.CPUUsec = a.Before.CPUUsec - 1 }},
+			{"cleanup counter moved backwards", "counter moved backwards", func(a *ArmRecord) { a.Trailing.CPUUsec = a.After.CPUUsec - 1 }},
+			{"read counter moved backwards", "counter moved backwards", func(a *ArmRecord) { a.After.ReadBytes = a.Before.ReadBytes - 1 }},
+			{"write counter moved backwards", "counter moved backwards", func(a *ArmRecord) { a.After.WriteBytes = a.Before.WriteBytes - 1 }},
+		} {
+			cases = append(cases, reportCase{name: engine + " " + counter.name, armEngine: engine, mutateArm: counter.mutate, wantError: counter.wantError})
+		}
+	}
+	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			root := t.TempDir()
 			write := func(path string, value any) FileID {
@@ -221,6 +273,9 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 				return pin
 			}
 			c := campaignFixture(root)
+			if tc.cpus != nil {
+				c.CPUs = tc.cpus
+			}
 			config := write("campaign.json", c)
 			configPath := filepath.Join(root, config.Path)
 			config.Path = configPath
@@ -246,11 +301,14 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 				if tc.mutate != nil {
 					tc.mutate(&request, &r)
 				}
-				pair.Arms[engine] = ArmRecord{Version: formatVersion, Trial: pair.Trial, Engine: engine, Status: "pass", Cleanup: "complete", Request: write(filepath.Join(prefix, "request.json"), request), Worker: write(filepath.Join(prefix, "receipt.json"), r), After: Usage{CPUUsec: 1000, Raw: map[string]string{"memory.max": "34359738368", "memory.swap.max": "0", "cpuset.cpus.effective": "0-7"}}}
+				usage := func(cpu uint64) Usage {
+					return Usage{CPUUsec: cpu, ReadBytes: cpu, WriteBytes: cpu, OOMKills: 2, Raw: map[string]string{"memory.max": strconv.FormatInt(pair.Trial.MemoryBytes, 10), "memory.swap.max": "0", "cpuset.cpus.effective": cpuSet(c.CPUs[:pair.Trial.Cores])}}
+				}
+				pair.Arms[engine] = ArmRecord{Version: formatVersion, Trial: pair.Trial, Engine: engine, Status: "pass", Cleanup: "complete", Request: write(filepath.Join(prefix, "request.json"), request), Worker: write(filepath.Join(prefix, "receipt.json"), r), Before: usage(500), After: usage(1000), Trailing: usage(1100)}
 				arm := pair.Arms[engine]
 				arm.Request.Path = "request.json"
 				arm.Worker.Path = "receipt.json"
-				if tc.mutateArm != nil {
+				if tc.mutateArm != nil && (tc.armEngine == "" || tc.armEngine == engine) {
 					tc.mutateArm(&arm)
 				}
 				pair.Arms[engine] = arm
@@ -279,6 +337,34 @@ func TestReportUsesExecutionStatusWithoutReadingResults(t *testing.T) {
 			body, err := os.ReadFile(filepath.Join(output, "report.md"))
 			if err != nil || !strings.Contains(string(body), "Run status: **complete**") || !strings.Contains(string(body), "does not perform correctness verification") {
 				t.Fatal(string(body), err)
+			}
+		})
+	}
+}
+
+func TestScoredResourcesUseTrialSubsetAndMemory(t *testing.T) {
+	c := campaignFixture(t.TempDir())
+	c.CPUs = []int{7, 5, 3, 1, 6, 4, 2, 0}
+	for _, tc := range []struct {
+		name, cpus, memory, wantError string
+	}{
+		{"trial budget", "1,3,5,7", "8589934592", ""},
+		{"different four CPUs", "0-3", "8589934592", "CPU cap receipt"},
+		{"campaign memory instead of trial", "1,3,5,7", "34359738368", "resource cap receipt"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			u := Usage{Raw: map[string]string{"cpuset.cpus.effective": tc.cpus, "memory.max": tc.memory, "memory.swap.max": "0"}}
+			a := ArmRecord{Trial: Trial{Cores: 4, MemoryBytes: 8 << 30}, Before: u, After: u, Trailing: u}
+			err := verifyScoredResources(c, a)
+			if tc.wantError == "" {
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else if err == nil || !strings.Contains(err.Error(), tc.wantError) {
+				t.Fatal(err)
+			}
+			if !reflect.DeepEqual(c.CPUs, []int{7, 5, 3, 1, 6, 4, 2, 0}) {
+				t.Fatal("resource admission changed the campaign CPU order", c.CPUs)
 			}
 		})
 	}
