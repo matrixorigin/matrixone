@@ -306,10 +306,19 @@ func (d *diskObjectStorage) Write(ctx context.Context, key string, r io.Reader, 
 		}
 	}
 
-	if err := os.Rename(tempFile.Name(), path); err != nil {
-		return err
+	if exclusiveWrite(ctx) {
+		if err := os.Link(tempPath, path); err != nil {
+			if os.IsExist(err) {
+				return moerr.NewFileAlreadyExistsNoCtx(key)
+			}
+			return err
+		}
+	} else {
+		if err := os.Rename(tempPath, path); err != nil {
+			return err
+		}
+		tempRenamed = true
 	}
-	tempRenamed = true
 
 	return nil
 }
