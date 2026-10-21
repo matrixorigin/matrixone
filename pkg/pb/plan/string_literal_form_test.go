@@ -1293,7 +1293,8 @@ func TestSetOperationFloatKeyFeatureRoundTrip(t *testing.T) {
 		overload int64
 		want     bool
 	}{
-		{602, 0, true}, {602, 1, true},
+		{603, 0, true}, {603, 1, true},
+		{602, 0, false}, // released LOAD_FK_IGNORE_CHECK
 		{601, 0, false}, // upstream TIMESTAMPADD_SECOND_INTERVAL
 		{600, 0, false}, // upstream INTERNAL_TABLE_COLLATION
 		{599, 0, false}, // upstream CHECK_ASYNC_DATALINK_SOURCE
@@ -1309,6 +1310,7 @@ func TestSetOperationFloatKeyFeatureRoundTrip(t *testing.T) {
 		require.NoError(t, err)
 		require.Equal(t, tc.want, features.SetOperationFloatKeys)
 		require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
+		require.Equal(t, tc.id == 602, features.LoadFKIgnoreCheck)
 		if tc.want {
 			require.True(t, features.Any())
 		}

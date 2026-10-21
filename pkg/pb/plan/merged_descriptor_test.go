@@ -83,7 +83,7 @@ func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
 // Both sides of the merge append fields: the released diagnostic expression
 // must not be decoded as a scalar marker, and the marker must survive with it.
 func TestMergedDedupAndScalarRoundTrip(t *testing.T) {
-	for _, id := range []int64{601, 602} {
+	for _, id := range []int64{601, 602, 603} {
 		for _, nested := range []bool{false, true} {
 			expr := &Expr{Typ: Type{Id: 28}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: id << 32, ObjName: "ignored_display_name"}}}}
 			node := &Node{ScalarSetReaggregation: true}
@@ -101,8 +101,9 @@ func TestMergedDedupAndScalarRoundTrip(t *testing.T) {
 			features, err := RequiredRemoteExpressionFeatures(&decoded)
 			require.NoError(t, err)
 			require.True(t, features.ScalarSetReaggregation)
-			require.Equal(t, id == 602, features.SetOperationFloatKeys)
+			require.Equal(t, id == 603, features.SetOperationFloatKeys)
 			require.Equal(t, id == 601, features.TimestampAddSecondIntervals)
+			require.Equal(t, id == 602, features.LoadFKIgnoreCheck)
 		}
 	}
 }

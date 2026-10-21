@@ -5061,12 +5061,12 @@ func TestSetOperationFloatKeyExecutorProtocol(t *testing.T) {
 	})
 	for _, typ := range []types.T{types.T_float32, types.T_float64} {
 		expr := bindTestFunction(t, proc, "set_operation_float_key", &plan.Expr{Typ: typ.ToType().PlanType(), Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}}})
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 		retained, err := CompileDependentExpressions(proc.Ctx, []*plan.Expr{expr})
 		require.NoError(t, err)
 		budget, err := proc.GetExecutionResourceBudget()
 		require.NoError(t, err)
-		for _, floor := range []any{defines.MORPCVersion124, "unknown", defines.MORPCVersion125} {
+		for _, floor := range []any{defines.MORPCVersion125, "unknown", defines.MORPCVersion126} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, floor)
 			for _, build := range []func() (ExpressionExecutor, error){
 				func() (ExpressionExecutor, error) { return NewExpressionExecutor(proc, expr) },
@@ -5074,11 +5074,11 @@ func TestSetOperationFloatKeyExecutorProtocol(t *testing.T) {
 			} {
 				before, charged := proc.Mp().CurrNB(), budget.Used()
 				executor, err := build()
-				if floor == defines.MORPCVersion125 {
+				if floor == defines.MORPCVersion126 {
 					require.NoError(t, err)
 					executor.Free()
 				} else {
-					require.ErrorContains(t, err, "version 125")
+					require.ErrorContains(t, err, "version 126")
 					require.Nil(t, executor)
 				}
 				require.Equal(t, before, proc.Mp().CurrNB())

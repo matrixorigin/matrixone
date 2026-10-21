@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 23
+- Revision: 24
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 24 integration baseline: official main `63a964a82fbaae4759cfabb45655e0185bc0979c`
 - Revision 23 integration baseline: official main `ef07d45cf6bc258df8c2ac60b1ea9d2a38045b1a`
 - Revision 22 integration baseline: official main `21966565287edf9f7d7f519af60d269711608945`
 - Revision 21 integration baseline: official main `743e749a1e33d6c845bb73999e8c82d297a2b657`
@@ -109,7 +110,7 @@ FLOAT and DOUBLE set operations compare their physical membership keys while
 returning the original visible values. Positive and negative zero remain distinct;
 NULL, NaN normalization, ALL multiplicities, and the shared GROUP BY/DISTINCT
 contracts retain their existing owners. UNION ALL needs no membership key.
-The internal `set_operation_float_key` registry identity is 602, with overloads
+The internal `set_operation_float_key` registry identity is 603, with overloads
 0 (FLOAT) and 1 (DOUBLE). No user-visible column is added.
 
 There are three planning routes; their admission proofs must remain separate:
@@ -1262,6 +1263,39 @@ unchanged protocol inputs permit reuse of the function602 and marker96 proofs.
 No fresh capacity benchmark, portable ARM build or live mixed-version cluster
 qualification is claimed.
 
+### Revision 24 released LOAD capability and prepared binding integration
+
+Official main `63a964a82fbaae4759cfabb45655e0185bc0979c` allocates the next
+function602/MORPC125 capability to LOAD IGNORE foreign-key admission. This
+revision preserves that released meaning and advances only this PR's set key
+to function603 and its shared scalar-marker capability to MORPC126. Literal-ID
+feature recognition distinguishes602 LOAD from603 FLOAT/DOUBLE set keys without
+using display names. Registry sentinel604 and all relevant planner, persisted,
+placement, actual destination, send, receive, native construction/Prepare and
+retained CTAS requirements follow these independent owners. Node96 and
+Instruction65 are unchanged; no protobuf allocation or generated schema changes.
+
+The integration also preserves upstream FIELD binary domains and prepared
+CASE/FIELD type history, query-block HAVING ownership, compiler plan-builder
+cleanup, VARBINARY-family/UUID shuffle keys, compressed-input truncation rejection,
+case-insensitive charset introducers and raw BIT dump output. Fresh owning and
+public tests cover their intersections with set-key specialization, shared
+resource lifecycles and external outer streams. Native implementation inputs
+are unchanged; the upstream CGo link-order recipe correction is preserved, while
+existing native libraries remain read-only test inputs rather than evidence of
+a fresh native rebuild.
+
+The [revision-24 receipt](validation/20261021_set_key_protocol126_rebase.json)
+records fresh603 wire and actual official125 native/response controls, current
+validation and semantic evidence reuse. Official125 implements LOAD602 and
+TIMESTAMPADD601 but not set-key603. Its real protocol response must make the
+candidate choose a capable coordinator and refuse an incompatible actual remote
+destination. Historical602/125 native fixtures and capacity/race receipts keep
+their original source and workload scope; they do not prove603 compatibility or
+new-head performance. The unchanged Node96 unknown-field proof remains reusable.
+No live mixed-version cluster, fresh capacity benchmark or Linux performance
+qualification is claimed. The accepted bounded local architecture is unchanged.
+
 ## Alternatives
 
 | Choice | Benefits | Costs and reason for the current proposal |
@@ -1285,52 +1319,61 @@ activation gates. Retain the terminal 20833 behavior, participating-account limi
 and coordinator-only scope when deploying; broader distributed execution and
 universal latency or process-RSS guarantees remain unqualified.
 
-Official main at this revision ends at MORPC 124 for exact fractional TIMESTAMPADD SECOND
-intervals. Unary TIMESTAMP and dynamic TIME retain 122. Unsigned DECIMAL DIV retains 121, and current-session KILL and
-proxy cleanup retain 120. This capability
-uses MORPC **125**. The feature walker recognizes encoded function identity 602 without
+Official main at this revision allocates function602 and MORPC125 to LOAD IGNORE
+foreign-key rejection diagnostics. TIMESTAMPADD SECOND retains function601 and
+floor124. This PR's single unpublished set-key/scalar-marker capability uses
+function603, sentinel604 and MORPC **126**. The feature walker recognizes encoded function identity 603 without
 depending on its display name. It sees hidden physical equality lists, grouping
 keys and serialized SetOp.KeyExprs as well as ordinary expressions. The scalar composition adds no separate function identity. It adds
 `plan.Node.scalar_set_reaggregation` field 96 and
 `pipeline.Instruction.scalar_set_reaggregation` field 65. Marker-only integer
-fallbacks require 125 too. Senders and receivers reject marked remote scopes at
+fallbacks require 126 too. Senders and receivers reject marked remote scopes at
 all versions, before operator decoding, because a remote attempt cannot share
 the coordinator's work/account lease. Local scope validation rejects remote
 nodes, DOP above one, and marker placement outside WINDOW/LEFT JOIN. Official main
 retains SELECT division diagnostics at 116, conditional on execution/session
-policy. Set keys require 125 regardless of that policy; a combined expression
-requires 125. Division diagnostics remain outside persisted-expression admission. Official main
+policy. Set keys require 126 regardless of that policy; a combined expression
+requires 126. Division diagnostics remain outside persisted-expression admission. Official main
 adds collation-aware LEAST/GREATEST at 117; that independent feature remains
-admitted at 117, and a combined expression with a set key requires 125.
+admitted at 117, and a combined expression with a set key requires 126.
 The released table-collation function retains identity 600 and floor 118;
 table-only expressions remain admitted at 118, while a combined expression
-with a set key requires 125.
+with a set key requires 126.
+
+LOAD IGNORE alone retains its released function602 and floor125. It is recognized
+independently of set keys: LOAD plus a set key or scalar marker requires126.
+The released LOAD binding/native, placement/send/destination/receive and retained
+plan rollback checks remain in force; temporal CTAS checks keep their125 fast
+path only after the retained requirement has been checked. Set-key/marker
+admission has its independent126 owner. Earlier unpublished set-key602 payloads
+are historical artifacts, not aliases to the released LOAD function or the new
+set-key603 identity; this revision neither remaps nor replays them.
 
 TIMESTAMPADD SECOND normalization alone retains function 601 and floor 124.
-A combination with set keys or scalar markers requires 125; the actual-stream
+A combination with set keys or scalar markers requires 126; the actual-stream
 handshake carries the maximum of these independently detected requirements.
 
 Unsigned DECIMAL DIV alone retains its released floor 121. Combining DIV with a
-set key or local scalar marker requires 125; a marker still prohibits remote
+set key or local scalar marker requires 126; a marker still prohibits remote
 execution at every version. Historical DIV overload zero keeps its prior
 compatibility contract.
 
-Placement requires workers advertising 125 or newer; missing or old capabilities
+Placement requires workers advertising 126 or newer; missing or old capabilities
 fall back to one CN on the capable coordinator. Sending rechecks actual pipeline
 destinations, including changes after placement. The receiver rejects a pipeline
 containing these expressions before operator decoding when its local floor is
-missing or below 125. Operator expression construction checks the same floor
+missing or below 126. Operator expression construction checks the same floor
 before allocating an executor. Persisted-expression read and authoring admission
-also require 125. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
+also require 126. Membership feature checks add no per-row work; the marked scalar stages have the explicit resource owners and predicate admission described above.
 
 Prepared specialization regenerates membership keys from the resolved output
 domain before capability detection: integer -> float -> integer must acquire and
-then release the 125 requirement. A prepare-time ANY type is not capability proof.
-A new binary configured at immediate predecessor floor 124 rejects these
+then release the 126 requirement. A prepare-time ANY type is not capability proof.
+A new binary configured at immediate predecessor floor 125 rejects these
 expressions before execution. An actual old binary lacks the new guard: new
 senders must exclude it, and durable authoring must not publish an expression
-under a floor below 125. Lowering a new binary's floor does not rewrite existing
-catalog expressions or teach an old binary identity 602.
+under a floor below 126. Lowering a new binary's floor does not rewrite existing
+catalog expressions or teach an old binary identity 603.
 
 Before downgrading/restoring a backup onto old binaries, inventory affected
 persisted expressions and remove or rewrite them to an old-supported definition;
@@ -1348,7 +1391,7 @@ this document and immediate-predecessor rollback tests together. Other open PRs
 using the same candidate do not reserve it.
 
 Dependent-only queries retain their independently released protocol 119.
-Mixed dependent/scalar-set queries require the set-key floor 125 as well as
+Mixed dependent/scalar-set queries require the set-key floor 126 as well as
 coordinator-local DOP 1 placement. The final scope graph, including detached
 producer scopes, is validated before any execution. The statement attempt
 acquires one scalar-set CN permit and one bounded participating account; all
