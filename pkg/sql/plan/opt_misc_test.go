@@ -640,3 +640,69 @@ func TestBuildWindowFilterOnNonProjectedColumns(t *testing.T) {
 		require.NoError(t, err, sql)
 	}
 }
+
+// Both physical UNIQUE consumers retain logical expressions for diagnostics.
+// Those expressions must follow a source projection when it is inlined, and
+// must keep a join alive when they are its only output consumer.
+func TestUniqueDiagnosticsSurviveOptimizerRewrites(t *testing.T) {
+	for _, preInsert := range []bool{false, true} {
+		name := "dedup join"
+		if preInsert {
+			name = "preinsert unique"
+		}
+		t.Run(name, func(t *testing.T) {
+			col := func(tag int32) *plan.Expr {
+				return &plan.Expr{Typ: plan.Type{Id: int32(types.T_varchar), Width: 3}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: tag, ColPos: 1}}}
+			}
+			consumer := &plan.Node{NodeId: 3, NodeType: plan.Node_JOIN, Children: []int32{2, 4}}
+			setDiagnostic := func(expr *plan.Expr) {
+				if preInsert {
+					consumer.PreInsertUkCtx = &plan.PreInsertUkCtx{KeyDiagnosticExprs: []*plan.ExprList{nil, {List: []*plan.Expr{expr}}}}
+				} else {
+					consumer.DedupKeyExprs = []*plan.Expr{expr}
+				}
+			}
+			getDiagnostic := func() *plan.Expr {
+				if preInsert {
+					return consumer.PreInsertUkCtx.KeyDiagnosticExprs[1].List[0]
+				}
+				return consumer.DedupKeyExprs[0]
+			}
+			if preInsert {
+				consumer.NodeType = plan.Node_PRE_INSERT_UK
+				consumer.Children = []int32{2}
+			}
+			setDiagnostic(col(11))
+			builder := &QueryBuilder{qry: &plan.Query{Nodes: []*plan.Node{
+				{NodeId: 0, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{7}},
+				{NodeId: 1, NodeType: plan.Node_PROJECT, BindingTags: []int32{11}, Children: []int32{0}, ProjectList: []*plan.Expr{col(7), col(7)}},
+				{NodeId: 2, NodeType: plan.Node_FILTER, Children: []int32{1}},
+				consumer,
+				{NodeId: 4, NodeType: plan.Node_TABLE_SCAN, BindingTags: []int32{8}},
+			}}}
+			refs := make(map[[2]int32]int)
+			builder.countColRefs(3, refs)
+			require.Equal(t, 1, refs[[2]int32{11, 1}], "diagnostics are live column consumers")
+			root, _ := builder.removeSimpleProjections(3, plan.Node_UNKNOWN, false, refs)
+			require.Equal(t, int32(3), root)
+			require.Equal(t, []int32{0}, builder.qry.Nodes[2].Children, "the source projection was inlined")
+			require.Equal(t, int32(7), getDiagnostic().GetCol().RelPos)
+			require.Equal(t, int32(1), getDiagnostic().GetCol().ColPos)
+			require.Equal(t, int32(3), getDiagnostic().Typ.Width)
+
+			// Only the diagnostic consumes the right side of this PK LEFT JOIN.
+			builder.qry.Nodes[2] = &plan.Node{NodeId: 2, NodeType: plan.Node_JOIN, JoinType: plan.Node_LEFT, Children: []int32{0, 4}, Stats: &plan.Stats{HashmapStats: &plan.HashMapStats{HashOnPK: true}}}
+			setDiagnostic(col(8))
+			tags := make(map[int32]int)
+			builder.removeEffectlessLeftJoins(3, tags)
+			require.Equal(t, int32(2), consumer.Children[0], "diagnostic-only output keeps the join")
+			for _, count := range tags {
+				require.Zero(t, count, "tag accounting must balance after traversal")
+			}
+			consumer.DedupKeyExprs = nil
+			consumer.PreInsertUkCtx = nil
+			builder.removeEffectlessLeftJoins(3, make(map[int32]int))
+			require.Equal(t, int32(0), consumer.Children[0], "without the consumer the PK LEFT JOIN is removable")
+		})
+	}
+}

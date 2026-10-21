@@ -25,7 +25,18 @@ import (
 // already published as the final upgrade by older clusters, so changing its
 // handler would leave those clusters permanently without the CDC target
 // identity catalog state.
+//
+// Clusters first deployed at catalog 4.0.6 (shipped as v4.2.5) never execute
+// the v4_0_6 handler: their upgrade chain starts at 4.0.6 -> 4.0.7 and runs
+// the v4_0_7 list. The entries that add source_table_id and owner_generation
+// were merged into the already-consumed v4_0_6 handler after the v4.2.5 cut,
+// so those clusters reach this list without the AFTER anchors and the
+// pending_source_table_id ALTER fails with "Unknown column
+// 'owner_generation'". Recheck both prerequisites here; the per-entry
+// CheckFunc makes each addition a no-op wherever the v4_0_6 handler did run.
 var clusterUpgEntries = []versions.UpgradeEntry{
+	cdcWatermarkColumn("source_table_id", "bigint unsigned not null default 0 after watermark"),
+	cdcWatermarkColumn("owner_generation", "bigint unsigned not null default 0 after source_table_id"),
 	cdcWatermarkColumn("pending_source_table_id", "bigint unsigned null after owner_generation"),
 	cdcWatermarkColumn("target_identity", "varchar(256) null after pending_source_table_id"),
 }
