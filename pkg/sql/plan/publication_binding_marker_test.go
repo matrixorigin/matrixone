@@ -969,6 +969,32 @@ func TestPublicationViewBindingMarkerPreservesConstantExpressionSRIDs(t *testing
 			require.Zero(t, udfService.runs,
 				"the guarded probe executed nothing of the internal UDF machinery")
 		})
+
+		// The mo-bot-local review's executable counterexample, rebuilt on the
+		// registry's deterministic in-process LLM: llm_chat is registered
+		// STRICT without the internal-machinery class bit and without a
+		// volatile or real-time-related overload, so a negative-only
+		// admission passes it and the guarded probe fold would execute the
+		// LLM machinery during this metadata-only validation - the echo
+		// model answers the prompt with "4326", and only evaluating that
+		// node can turn this tree into the constant-integer SRID that the
+		// geometry decode accepts. Reaching the rejection verdict therefore
+		// proves the wrapper executed nothing: the tree stays un-folded and
+		// the decode reports its own constant-integer error.
+		const llmWitnessSQL = "select st_geomfromtext('POINT(1 2)', cast(llm_chat('', '', 'echo', '', '" +
+			`[{"role":"user","content":"4326"}]') as signed) + 0) as g limit 0`
+
+		t.Run("the ordinary bind still evaluates the LLM witness while folding", func(t *testing.T) {
+			// Ordinary planning keeps its own semantics: its post-bind fold
+			// switch executes every unflagged builtin of a constant tree, so
+			// the witness still decodes its SRID 4326 outside the probe.
+			bindsWithSRID4326(t, context.Background(), llmWitnessSQL)
+		})
+
+		t.Run("the marked probe neither executes the LLM builtin nor admits the definition", func(t *testing.T) {
+			rejectsWith(t, markedCtx, llmWitnessSQL,
+				"the SRID argument of a geometry constructor must be a constant integer")
+		})
 	})
 }
 

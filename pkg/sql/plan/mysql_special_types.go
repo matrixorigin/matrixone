@@ -179,20 +179,23 @@ func isGeometrySRIDConstFunction(name string) bool {
 // is built from literals, the same operator set the binder's own
 // constant-fold switch covers (plus the conversion nodes the resolver adds
 // inside those operators, down to their target-type metadata), and nested
-// functions the fold recursion itself would evaluate for a constant tree.
-// Only such a tree may be folded here: every node is the pure number or
-// typing machinery of those operators, or a resolved builtin overload the
-// fold recursion would not skip, so the fold below cannot execute anything
-// else of a stored definition - the internal-machinery registration bit
+// functions the function registry positively proves side-effect-free. Only
+// such a tree may be folded here: every node is the pure number or typing
+// machinery of those operators, or a curated pure-value builtin whose
+// evaluation has no effect outside the expression tree, so the fold below
+// cannot execute anything else of a stored definition, and the curated
+// set's reserved entry conditions - the internal-machinery registration bit
 // (plain or combined with other class flags, the python UDF builtin among
-// them) excludes exactly the machinery whose fold would leave the
-// expression tree. Anything else - a parameter, a column, a
-// volatile or real-time-related builtin, internal machinery, or a function
-// unresolved in the builtin registry (a caller-named user-defined function
-// binds through the separate UDF path and its own marker veto instead) -
-// keeps the argument untouched and the decode
-// reports its own constant-integer error, exactly like an ordinary build of
-// a non-constant definition.
+// them) and the volatile and real-time-related overload flags - exclude
+// exactly the machinery and non-determinism the walk must not run.
+// Anything else - a parameter, a column, an unproven builtin (llm_chat is
+// registered STRICT without any excluded flag and still performs an HTTP
+// request through its executor), a volatile or real-time-related builtin,
+// internal machinery, or a function unresolved in the builtin registry (a
+// caller-named user-defined function binds through the separate UDF path
+// and its own marker veto instead) - keeps the argument untouched and the
+// decode reports its own constant-integer error, exactly like an ordinary
+// build of a non-constant definition.
 func isGeometrySRIDConstFoldSafe(expr *plan.Expr) bool {
 	if expr == nil {
 		return false
@@ -225,15 +228,20 @@ func isGeometrySRIDConstFoldSafe(expr *plan.Expr) bool {
 			}
 			return true
 		default:
-			// A nested function is admissible only through the predicates
-			// the binder's fold recursion applies to every resolved
-			// overload - not volatile, not real-time-related - with the
-			// internal-machinery class vetoed, so a pure deterministic
-			// builtin inside the arithmetic (ABS of a literal) folds
-			// exactly as ordinary binding folds it, while rand, sleep, the
-			// relation resolvers and the fault-injection machinery keep the
-			// argument unfolded and nothing of it executes here.
-			if !function.GetFunctionIsDeterministicFoldableById(node.F.GetFunc().GetObj()) {
+			// A nested function is admissible only through the function
+			// registry's positively proven pure set - never through the
+			// absence of a flag: llm_chat is registered STRICT without the
+			// internal bit and without a volatile or real-time-related
+			// overload, so a negative-only test admits it and the guarded
+			// fold executes its HTTP request. The curated set keeps a pure
+			// deterministic builtin inside the arithmetic (ABS of a
+			// literal) folding exactly as ordinary binding folds it, while
+			// rand and sleep stay out through the volatile and real-time
+			// flags, the relation resolvers, the fault-injection machinery
+			// and the LLM, starlark and UDF executors stay out through the
+			// internal bit or pure-set membership, and nothing of any of
+			// them executes here.
+			if !function.GetFunctionIsProvenPureFoldableById(node.F.GetFunc().GetObj()) {
 				return false
 			}
 			for _, arg := range node.F.GetArgs() {
@@ -289,12 +297,14 @@ func isGeometrySRIDFoldableRoot(expr *Expr) bool {
 // ConstantFold over the same already-bound argument, and only after
 // isGeometrySRIDConstFoldSafe proved the tree is literals, that switch's
 // own operator slice, the conversion metadata the resolver added inside it,
-// and nested deterministic builtins the fold recursion would evaluate
-// itself, and only when isGeometrySRIDFoldableRoot kept the argument on the
+// and nested builtins the registry positively proves side-effect-free (see
+// GetFunctionIsProvenPureFoldableById), and only when
+// isGeometrySRIDFoldableRoot kept the argument on the
 // ordinary admission rule's side of the explicit CAST and non-operator root
 // boundaries - so the probe's admission and rejection verdicts keep
-// matching the ordinary build, nothing beyond that constant machinery can
-// execute during validation, and prepared SRID markers keep their own
+// matching the ordinary build for proven pure trees, nothing beyond that
+// constant machinery and the curated pure
+// set can execute during validation, and prepared SRID markers keep their own
 // admission path.
 func foldGeometrySRIDConstArg(proc *process.Process, name string, args []*Expr) {
 	if proc == nil || len(args) < 2 || !isGeometrySRIDConstFunction(name) {

@@ -115,23 +115,78 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 	return false
 }
 
-// GetFunctionIsDeterministicFoldableById reports, for the resolved overload
-// overloadID, whether the binder's constant-fold recursion would evaluate it
-// for a constant tree: the overload carries neither the volatile
-// (CannotFold) nor the real-time-related flag. Functions registered with the
-// internal-machinery class never qualify, even when no overload flag
-// declares them volatile: evaluating them has effects outside the
-// expression tree, and an expression walk that must not execute side
-// effects can only bend the fold recursion's own two skip predicates,
-// nothing else. The class field is a bit word, and registrations combine the
-// internal flag with others (python_user_defined_function is INTERNAL|STRICT
-// and carries no volatile flag), so the rejection must test the bit through
-// testFlag, never compare the whole word - otherwise the internal UDF
-// machinery qualifies and the caller's guarded fold executes it right into
-// UdfService.Run.
-func GetFunctionIsDeterministicFoldableById(overloadID int64) bool {
+// provenPureValueFunctions lists every SQL builtin registration that is
+// positively proven to evaluate as a pure value transformation: an
+// in-process computation over its own argument vectors with no effects
+// outside the expression tree - no external service, no process-global or
+// session state, no catalog access, no randomness. The guarded fold of a
+// metadata-only publication-binding probe admits a nested function call
+// only through this list, never through the absence of other flags:
+// llm_chat is registered STRICT without the internal-machinery class bit
+// and without a volatile or real-time-related overload, and a review
+// counterexample showed those negative predicates alone admitting it and
+// its executor issuing the HTTP request during publication and
+// subscription validation. Add a name only after auditing every overload
+// the registration carries; proven_pure_foldable_test.go pins each listed
+// name to a non-internal class and unflagged overloads, and every
+// registration outside this set keeps its rejection whatever its flags
+// declare.
+var provenPureValueFunctions = map[string]struct{}{
+	// Pure numeric and arithmetic value transforms.
+	"abs": {}, "acos": {}, "asin": {}, "atan": {}, "atan2": {}, "bit_count": {},
+	"ceil": {}, "ceiling": {}, "cos": {}, "cot": {}, "degrees": {}, "exp": {},
+	"floor": {}, "ln": {}, "log": {}, "log2": {}, "log10": {}, "mod": {},
+	"pi": {}, "pow": {}, "power": {}, "radians": {}, "round": {}, "sign": {},
+	"sin": {}, "sqrt": {}, "tan": {}, "truncate": {},
+	// Pure textual value transforms of constant operands.
+	"ascii": {}, "bin": {}, "bit_length": {}, "char_length": {}, "character_length": {},
+	"concat": {}, "concat_ws": {}, "conv": {}, "crc32": {}, "elt": {}, "export_set": {},
+	"field": {}, "find_in_set": {}, "hex": {}, "left": {}, "length": {}, "locate": {},
+	"lower": {}, "lpad": {}, "ltrim": {}, "make_set": {}, "md5": {}, "mid": {},
+	"oct": {}, "octet_length": {}, "ord": {}, "position": {}, "quote": {},
+	"repeat": {}, "replace": {}, "reverse": {}, "right": {}, "rpad": {}, "rtrim": {},
+	"sha1": {}, "sha2": {}, "soundex": {}, "space": {}, "strcmp": {}, "substr": {},
+	"substring": {}, "substring_index": {}, "trim": {}, "unhex": {}, "upper": {},
+	// Pure constant branch selection and reduction.
+	"case": {}, "coalesce": {}, "greatest": {}, "iff": {}, "ifnull": {}, "least": {},
+}
+
+// provenPureValueFunctionIds is the resolved id view of
+// provenPureValueFunctions. Every listed name must resolve at package
+// init: a silent drop would silently weaken the guarded fold's gate.
+var provenPureValueFunctionIds map[int32]struct{}
+
+func init() {
+	provenPureValueFunctionIds = make(map[int32]struct{}, len(provenPureValueFunctions))
+	for name := range provenPureValueFunctions {
+		fid, ok := functionIdRegister[name]
+		if !ok {
+			panic(fmt.Sprintf("proven pure builtin %q is not a registered function", name))
+		}
+		provenPureValueFunctionIds[fid] = struct{}{}
+	}
+}
+
+// GetFunctionIsProvenPureFoldableById reports, for the resolved overload
+// overloadID, whether the guarded fold of a metadata-only binding probe
+// may evaluate it for a constant tree: the overload's function belongs to
+// the curated provenPureValueFunctions set, the internal-machinery class
+// bit never qualifies (plain or combined with other class flags -
+// python_user_defined_function is INTERNAL|STRICT and carries no volatile
+// flag, so the rejection must test the bit through testFlag, never compare
+// the whole word, or the caller's guarded fold would execute it right into
+// UdfService.Run), and the resolved overload carries neither the volatile
+// (CannotFold) nor the real-time-related flag. Membership is the purity
+// proof: absence of the excluded flags establishes nothing - llm_chat
+// carries none of them and its executor still performs an HTTP request -
+// so a registration outside the curated set is rejected and the probe
+// keeps that node un-evaluated.
+func GetFunctionIsProvenPureFoldableById(overloadID int64) bool {
 	fid, oIndex := DecodeOverloadID(overloadID)
 	if !validFunctionOverloadID(fid, oIndex) {
+		return false
+	}
+	if _, proven := provenPureValueFunctionIds[fid]; !proven {
 		return false
 	}
 	if allSupportedFunctions[fid].testFlag(plan.Function_INTERNAL) {
