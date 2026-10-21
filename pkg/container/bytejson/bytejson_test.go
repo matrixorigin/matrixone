@@ -1237,3 +1237,29 @@ func TestDoubleTextMySQL(t *testing.T) {
 		})
 	}
 }
+
+func TestLegacyFloatCatalogRendering(t *testing.T) {
+	bj, err := ParseFromString(`{"k": [1e20, 2.0, -0.0, 1e-7], "s": "1e20"}`)
+	require.NoError(t, err)
+	before, err := bj.Marshal()
+	require.NoError(t, err)
+	legacy, err := bj.MarshalJSONWithLegacyFloat()
+	require.NoError(t, err)
+	require.Equal(t, `{"k": [100000000000000000000, 2, -0, 1e-07], "s": "1e20"}`, string(legacy))
+	unquoted, err := bj.UnquoteWithLegacyFloat()
+	require.NoError(t, err)
+	require.Equal(t, string(legacy), unquoted)
+	current, err := bj.MarshalJSON()
+	require.NoError(t, err)
+	require.Equal(t, `{"k": [1e20, 2.0, -0.0, 0.0000001], "s": "1e20"}`, string(current))
+	after, err := bj.Marshal()
+	require.NoError(t, err)
+	require.Equal(t, before, after)
+	str, err := ParseFromString(`"\"quoted\""`)
+	require.NoError(t, err)
+	plain, err := str.Unquote()
+	require.NoError(t, err)
+	old, err := str.UnquoteWithLegacyFloat()
+	require.NoError(t, err)
+	require.Equal(t, plain, old)
+}

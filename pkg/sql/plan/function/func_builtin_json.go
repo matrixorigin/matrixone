@@ -2421,13 +2421,13 @@ func (op *opBuiltInJsonObject) jsonObject(params []*vector.Vector, result vector
 						key = fmt.Sprint(v)
 					}
 				case bytejson.TpCodeDate, bytejson.TpCodeTime, bytejson.TpCodeDatetime, bytejson.TpCodeBlob, bytejson.TpCodeOpaque, bytejson.TpCodeBit:
-					if bj, err := v.MarshalJSON(); err == nil && len(bj) >= 2 && bj[0] == '"' {
+					if bj, err := marshalJSONForFloatStringProof(proc.Ctx, v); err == nil && len(bj) >= 2 && bj[0] == '"' {
 						key = string(bj[1 : len(bj)-1])
 					} else {
 						key = fmt.Sprint(v)
 					}
 				default:
-					if bj, err := v.MarshalJSON(); err == nil {
+					if bj, err := marshalJSONForFloatStringProof(proc.Ctx, v); err == nil {
 						key = string(bj)
 					} else {
 						key = fmt.Sprint(v)
@@ -2844,7 +2844,7 @@ func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_pretty", "invalid JSON document")
 		}
-		out, err := jsonPrettyPrint(bj, 0)
+		out, err := jsonPrettyPrint(proc.Ctx, bj, 0)
 		if err != nil {
 			return err
 		}
@@ -2853,27 +2853,27 @@ func JsonPretty(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 	return nil
 }
 
-func jsonPrettyPrint(bj bytejson.ByteJson, depth int) ([]byte, error) {
+func jsonPrettyPrint(ctx context.Context, bj bytejson.ByteJson, depth int) ([]byte, error) {
 	var buf bytes.Buffer
-	err := jsonPrettyPrintTo(&buf, bj, depth)
+	err := jsonPrettyPrintTo(ctx, &buf, bj, depth)
 	if err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
 }
 
-func jsonPrettyPrintTo(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+func jsonPrettyPrintTo(ctx context.Context, w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	switch bj.Type {
 	case bytejson.TpCodeObject:
-		return prettyPrintObject(w, bj, depth)
+		return prettyPrintObject(ctx, w, bj, depth)
 	case bytejson.TpCodeArray:
-		return prettyPrintArray(w, bj, depth)
+		return prettyPrintArray(ctx, w, bj, depth)
 	default:
-		return prettyPrintScalar(w, bj)
+		return prettyPrintScalar(ctx, w, bj)
 	}
 }
 
-func prettyPrintObject(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+func prettyPrintObject(ctx context.Context, w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	cnt := bj.GetElemCnt()
 	if cnt == 0 {
 		w.WriteString("{}")
@@ -2889,7 +2889,7 @@ func prettyPrintObject(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 		w.Write(keyJSON)
 		w.WriteString(": ")
 		val := bj.GetObjectVal(i)
-		if err := jsonPrettyPrintTo(w, val, depth+1); err != nil {
+		if err := jsonPrettyPrintTo(ctx, w, val, depth+1); err != nil {
 			return err
 		}
 		if i < cnt-1 {
@@ -2902,7 +2902,7 @@ func prettyPrintObject(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	return nil
 }
 
-func prettyPrintArray(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
+func prettyPrintArray(ctx context.Context, w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	cnt := bj.GetElemCnt()
 	if cnt == 0 {
 		w.WriteString("[]")
@@ -2913,7 +2913,7 @@ func prettyPrintArray(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	for i := 0; i < cnt; i++ {
 		w.WriteString(indent)
 		elem := bj.GetArrayElem(i)
-		if err := jsonPrettyPrintTo(w, elem, depth+1); err != nil {
+		if err := jsonPrettyPrintTo(ctx, w, elem, depth+1); err != nil {
 			return err
 		}
 		if i < cnt-1 {
@@ -2926,9 +2926,9 @@ func prettyPrintArray(w *bytes.Buffer, bj bytejson.ByteJson, depth int) error {
 	return nil
 }
 
-func prettyPrintScalar(w *bytes.Buffer, bj bytejson.ByteJson) error {
+func prettyPrintScalar(ctx context.Context, w *bytes.Buffer, bj bytejson.ByteJson) error {
 	// Use MarshalJSON to get properly formatted/escaped scalar value.
-	text, err := bj.MarshalJSON()
+	text, err := marshalJSONForFloatStringProof(ctx, bj)
 	if err != nil {
 		return err
 	}
@@ -3519,7 +3519,7 @@ func JsonValue(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 			continue
 		}
 		// Unquote → extract text value (strip JSON string quotes).
-		s, err := val.Unquote()
+		s, err := unquoteJSONForFloatStringProof(proc.Ctx, val)
 		if err != nil {
 			return err
 		}
