@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/csv"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -38,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/geo"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/util/csvparser"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
@@ -2078,4 +2080,222 @@ func TestExportFileAdmissionRechecksRole(t *testing.T) {
 	require.ErrorContains(t, writeParquetToFile(ep, []byte("owned")), "only the sys account moadmin role")
 	_, err = os.Stat(dir)
 	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func newOutfileExportConfig(fields, lines *tree.Fields, lineTerm string) *ExportConfig {
+	return &ExportConfig{
+		userConfig: &tree.ExportParam{
+			Fields: fields,
+			Lines:  tree.NewLines("", lineTerm),
+		},
+	}
+}
+
+func TestAddEscapeToStringUnenclosedValue(t *testing.T) {
+	defaultFields := func(enclosed byte) *tree.Fields {
+		return tree.NewFields(tree.DefaultFieldsTerminated, false, enclosed, tree.DefaultFieldsEscapedBy[0])
+	}
+	cases := []struct {
+		name   string
+		ep     *ExportConfig
+		enc    byte
+		input  string
+		expect string
+	}{
+		{
+			// default config, no enclosure: issue 30702 - embedded terminators
+			// must be escaped so the exported file reloads.
+			name:   "unenclosed comma",
+			ep:     newOutfileExportConfig(defaultFields(0), nil, "\n"),
+			enc:    0,
+			input:  "a,b",
+			expect: `a\,b`,
+		},
+		{
+			name:   "unenclosed newline",
+			ep:     newOutfileExportConfig(defaultFields(0), nil, "\n"),
+			enc:    0,
+			input:  "a\nb",
+			expect: "a\\\nb",
+		},
+		{
+			name:   "unenclosed carriage return",
+			ep:     newOutfileExportConfig(defaultFields(0), nil, "\n"),
+			enc:    0,
+			input:  "a\rb",
+			expect: `a\rb`,
+		},
+		{
+			name:   "unenclosed backslash",
+			ep:     newOutfileExportConfig(defaultFields(0), nil, "\n"),
+			enc:    0,
+			input:  `a\b`,
+			expect: `a\\b`,
+		},
+		{
+			name:   "unenclosed CRLF content",
+			ep:     newOutfileExportConfig(defaultFields(0), nil, "\n"),
+			enc:    0,
+			input:  "x\r\ny",
+			expect: "x\\r\\\ny",
+		},
+		{
+			name:   "trailing carriage return survives record-end CR strip",
+			ep:     newOutfileExportConfig(defaultFields(0), nil, "\n"),
+			enc:    0,
+			input:  "crlf\r",
+			expect: `crlf\r`,
+		},
+		{
+			name:   "backslash before comma",
+			ep:     newOutfileExportConfig(defaultFields(0), nil, "\n"),
+			enc:    0,
+			input:  `\,`,
+			expect: "\\\\\\,",
+		},
+		{
+			name:   "enclosed keeps doubling, terminators untouched",
+			ep:     newOutfileExportConfig(defaultFields('"'), nil, "\n"),
+			enc:    '"',
+			input:  `he said "hi",a\,b`,
+			expect: `he said ""hi"",a\\,b`,
+		},
+		{
+			name: "custom field terminator",
+			ep: newOutfileExportConfig(
+				tree.NewFields("\t", false, 0, tree.DefaultFieldsEscapedBy[0]), nil, "\n"),
+			enc:    0,
+			input:  "a\tb\nc\rd",
+			expect: "a\\\tb\\\nc\\rd",
+		},
+		{
+			name: "custom line terminator escapes only its first byte",
+			ep: newOutfileExportConfig(
+				tree.NewFields(",", false, 0, tree.DefaultFieldsEscapedBy[0]), nil, "||"),
+			enc:    0,
+			input:  "a|b\nc\rd",
+			expect: `a\|b` + "\nc\rd",
+		},
+		{
+			name: "CRLF line terminator escapes both bytes",
+			ep: newOutfileExportConfig(
+				tree.NewFields(",", false, 0, tree.DefaultFieldsEscapedBy[0]), nil, "\r\n"),
+			enc:    0,
+			input:  "a\rb\nc,d",
+			expect: "a\\rb\\\nc\\,d",
+		},
+		{
+			name: "disabled escape writes verbatim",
+			ep: newOutfileExportConfig(
+				tree.NewFields(",", false, 0, 0), nil, "\n"),
+			enc:    0,
+			input:  "a,b\n\rc\\d",
+			expect: "a,b\n\rc\\d",
+		},
+		{
+			name:   "field terminator equal to escape byte is not double-prefixed",
+			ep:     newOutfileExportConfig(tree.NewFields(`\`, false, 0, tree.DefaultFieldsEscapedBy[0]), nil, "\n"),
+			enc:    0,
+			input:  `a\b,c`,
+			expect: `a\\b,c`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := addEscapeToString(tc.ep, []byte(tc.input), tc.enc)
+			require.Equal(t, tc.expect, string(got))
+		})
+	}
+}
+
+// TestOutfileUnenclosedCSVRoundTripsThroughLoadParser proves issue 30702's
+// fix at the writer+reader level: rows whose string values embed the field
+// terminator, LF, CR and a lone backslash, exported with ENCLOSED BY ”,
+// reload through the very parser LOAD DATA uses and compare byte-equal.
+func TestOutfileUnenclosedCSVRoundTripsThroughLoadParser(t *testing.T) {
+	values := []string{
+		"plain",
+		"a,b",
+		"a\nb",
+		"a\rb",
+		"both\r\nend",
+		"line\nwith,vary,format\rand\ttabs",
+		"line\r", // trailing CR would be eaten by the reader's CR strip unescaped
+		"back\\slash",
+		`he said "hi"`,
+		`\N NOT a null`, // escaped: must NOT reload as NULL (reader avoids \N collapse)
+	}
+	ids := make([]int32, len(values))
+	idsNulls := make([]bool, len(values))
+	mp := mpool.MustNewZero()
+
+	idVec := vector.NewVec(types.T_int32.ToType())
+	require.NoError(t, vector.AppendFixedList(idVec, ids, idsNulls, mp))
+
+	strVec := vector.NewVec(types.T_varchar.ToType())
+	nulls := make([]bool, len(values))
+	require.NoError(t, vector.AppendStringList(strVec, values, nulls, mp))
+	// append a genuine NULL value row for the \N sentinel
+	require.NoError(t, vector.AppendStringList(strVec, []string{""}, []bool{true}, mp))
+	require.NoError(t, vector.AppendFixedList(idVec, []int32{99}, []bool{false}, mp))
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = idVec
+	bat.Vecs[1] = strVec
+	bat.SetRowCount(len(values) + 1)
+	defer func() {
+		bat.Clean(mp) // constructByte also owns cleanup after it receives the batch
+		require.Zero(t, mp.CurrNB())
+	}()
+
+	ep := &ExportConfig{
+		userConfig: &tree.ExportParam{
+			// ENCLOSED BY '' - no enclosure byte can protect the terminators.
+			Fields: tree.NewFields(tree.DefaultFieldsTerminated, false, 0, tree.DefaultFieldsEscapedBy[0]),
+			Lines:  tree.NewLines("", "\n"),
+		},
+		Symbol:     [][]byte{[]byte(","), []byte("\n")},
+		ColumnFlag: []bool{false, false},
+	}
+	bytesChan := make(chan *BatchByte, 1)
+	constructByte(context.Background(), &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, bytesChan, ep)
+	result := <-bytesChan
+	require.NoError(t, result.err)
+
+	parserCfg := &csvparser.CSVConfig{
+		// the configuration LOAD DATA INFILE uses by default
+		FieldsTerminatedBy: ",",
+		FieldsEnclosedBy:   "",
+		FieldsEscapedBy:    "\\",
+		LinesTerminatedBy:  "\n",
+		Null:               []string{`\N`},
+		UnescapedQuote:     true,
+	}
+	parser, err := csvparser.NewCSVParser(parserCfg, bytes.NewReader(result.writeByte), csvparser.ReadBlockSize, false)
+	require.NoError(t, err)
+
+	got := make([]csvparser.Field, 0, len(values))
+	fields := parser.LastRow
+	for {
+		fields, err = parser.Read(fields)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		require.NoError(t, err)
+		require.Len(t, fields, 2)
+		// copy the value: csvparser.Field.Val is an UnsafeString view of the
+		// parser's reused recordBuffer - later records overwrite those bytes,
+		// so materialize a fresh byte slice before keeping the field.
+		got = append(got, csvparser.Field{
+			Val:    string(append([]byte(nil), fields[1].Val...)),
+			IsNull: fields[1].IsNull,
+		})
+		fields = nil
+	}
+	require.Len(t, got, len(values)+1)
+	for i, v := range values {
+		require.False(t, got[i].IsNull, "row %d (%q) must not reload as NULL, has string %q", i, v, got[i].Val)
+		require.Equal(t, v, got[i].Val, "row %d must round-trip byte-equal", i)
+	}
+	require.True(t, got[len(values)].IsNull, "the NULL row must reload as NULL")
 }

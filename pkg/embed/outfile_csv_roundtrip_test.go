@@ -1,0 +1,126 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+// http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package embed
+
+import (
+	"context"
+	"database/sql"
+	"encoding/hex"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
+	"github.com/stretchr/testify/require"
+)
+
+func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		admin := openIcebergTestDB(t, c)
+		defer admin.Close()
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+		exec := func(query string) {
+			t.Helper()
+			_, err := admin.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		const db = "outfile_csv_30702"
+		exec("create database " + db)
+		defer func() { _, err := admin.Exec("drop database " + db); require.NoError(t, err) }()
+		exec("create table " + db + ".strings_src(id int primary key,s varchar(128))")
+		values := []string{"plain", "", "a,b", "a\nb", "a\rb", "a\r\nb", "tail\r", `\N`, "NULL", `back\slash`, `"first`, "a::b||c", "你好"}
+		for i, value := range values {
+			exec(fmt.Sprintf("insert into %s.strings_src values (%d,cast(x'%s' as char))", db, i, hex.EncodeToString([]byte(value))))
+		}
+		exec("insert into " + db + ".strings_src values (99,null)")
+		exec("create table " + db + ".bits_src(id int primary key,b bit(8))")
+		var tuples []string
+		for i := 0; i < 256; i++ {
+			tuples = append(tuples, fmt.Sprintf("(%d,%d)", i, i))
+		}
+		exec("insert into " + db + ".bits_src values " + strings.Join(tuples, ",") + ",(999,null)")
+		exec("create table " + db + ".wide_bits_src(id int primary key,b bit(32))")
+		exec("insert into " + db + ".wide_bits_src values (1,1314212940),(2,23630),(3,null)")
+		exec("create table " + db + ".decimal_src(id int primary key,n decimal(9,2))")
+		exec("insert into " + db + ".decimal_src values (1,12.34),(2,-5.67),(3,null)")
+		for _, tc := range []struct {
+			name, source, column, field, line, quote, extra string
+		}{
+			{"string-unenclosed", "strings_src", "s", ",", "\n", "", ""},
+			{"string-enclosed", "strings_src", "s", ",", "\n", `"`, ""},
+			{"string-custom", "strings_src", "s", "::", "||", "", ""},
+			{"string-crlf", "strings_src", "s", ",", "\r\n", "", ""},
+			{"bit-default", "bits_src", "b", ",", "\n", `"`, ""},
+			{"bit-unenclosed", "bits_src", "b", ",", "\n", "", ""},
+			{"bit-force-quote", "bits_src", "b", ",", "\n", `"`, " FORCE_QUOTE (b)"},
+			{"bit32-default", "wide_bits_src", "b", ",", "\n", `"`, ""},
+			{"bit32-unenclosed", "wide_bits_src", "b", ",", "\n", "", ""},
+			{"decimal-dot-terminator", "decimal_src", "n", ".", "\n", "", ""},
+			{"bit-translated-terminator", "bits_src", "b", "n", "\n", `"`, ""},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				exec := func(query string) {
+					t.Helper()
+					_, err := admin.ExecContext(ctx, query)
+					require.NoError(t, err, query)
+				}
+				path := filepath.Join(t.TempDir(), "rows.csv")
+				dst := db + ".restored"
+				exec("create table " + dst + " like " + db + "." + tc.source)
+				defer func() { _, err := admin.Exec("drop table " + dst); require.NoError(t, err) }()
+				fields := " FIELDS TERMINATED BY " + sqlquote.String(tc.field)
+				quote := sqlquote.String(tc.quote)
+				lines := " LINES TERMINATED BY " + sqlquote.String(tc.line)
+				exec("select id," + tc.column + " from " + db + "." + tc.source + " order by id INTO OUTFILE " + sqlquote.String(path) + fields + " ENCLOSED BY " + quote + lines + " HEADER 'false'" + tc.extra)
+				data, err := os.ReadFile(path)
+				require.NoError(t, err)
+				require.NotEmpty(t, data)
+				if tc.name == "string-unenclosed" {
+					require.Contains(t, string(data), "a\\,b")
+					require.Contains(t, string(data), "a\\\nb")
+				}
+				exec("LOAD DATA INFILE " + sqlquote.String(path) + " INTO TABLE " + dst + fields + " OPTIONALLY ENCLOSED BY " + quote + lines)
+				read := func(table string) []string {
+					t.Helper()
+					rows, err := admin.QueryContext(ctx, "select id,hex("+tc.column+") from "+table+" order by id")
+					require.NoError(t, err)
+					defer rows.Close()
+					var result []string
+					for rows.Next() {
+						var id int
+						var value sql.NullString
+						require.NoError(t, rows.Scan(&id, &value))
+						result = append(result, fmt.Sprintf("%d:%t:%s", id, value.Valid, value.String))
+					}
+					require.NoError(t, rows.Err())
+					return result
+				}
+				require.Equal(t, read(db+"."+tc.source), read(dst))
+			})
+		}
+		t.Run("unrepresentable-bare-format", func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "rejected.csv")
+			_, err := admin.ExecContext(ctx, "select id,s from "+db+".strings_src INTO OUTFILE "+sqlquote.String(path)+
+				" FIELDS TERMINATED BY 'n' ENCLOSED BY '' HEADER 'false'")
+			require.ErrorContains(t, err, "require a nonempty ENCLOSED BY")
+			_, err = os.Stat(path)
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	})
+}

@@ -145,6 +145,9 @@ func initExportFileParam(ep *ExportConfig, mrs *MysqlResultSet) {
 }
 
 var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSet) error {
+	if err := ep.validateCSVFraming(ctx); err != nil {
+		return err
+	}
 	var err error
 	var filePath string
 	ep.CurFileSize = 0
@@ -259,6 +262,23 @@ func getExportFilePath(filename string, fileCnt uint) string {
 }
 
 var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, buffer *bytes.Buffer) error {
+	if !flag && enclosed != 0 && oq.escapeChar() != 0 {
+		field, line, _, _ := oq.csvBoundaryBytes()
+		// LOAD translates \n, \0, etc. An ambiguous literal terminator
+		// cannot be protected by prefixing it; use the configured enclosure.
+		flag = (isTranslatedCSVEscape(field) && bytes.IndexByte(tmp, field) >= 0) ||
+			(isTranslatedCSVEscape(line) && bytes.IndexByte(tmp, line) >= 0)
+	}
+	quote := byte(0)
+	if flag {
+		quote = enclosed
+	}
+	return formatOutputStringRaw(oq, addEscapeToString(oq, tmp, quote), symbol, enclosed, flag, buffer)
+}
+
+// formatOutputStringRaw is also used for the genuine NULL marker. All non-NULL
+// values go through formatOutputString, independently of their SQL type.
+func formatOutputStringRaw(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, buffer *bytes.Buffer) error {
 	var err error
 	if flag && enclosed != 0 {
 		if _, err = buffer.Write([]byte{enclosed}); err != nil {
@@ -498,13 +518,13 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	for i := 0; i < rowCount; i++ {
 		for j, vec := range bat.Vecs {
 			if vec.GetNulls().Contains(uint64(i)) {
-				formatOutputString(ep, []byte("\\N"), symbol[j], closeby, flag[j], buffer)
+				formatOutputStringRaw(ep, []byte("\\N"), symbol[j], closeby, false, buffer)
 				continue
 			}
 			switch vec.GetType().Oid { //get col
 			case types.T_json:
 				val := types.DecodeJson(vec.GetBytesAt(i))
-				value := addEscapeToString([]byte(val.String()), closeby)
+				value := []byte(val.String())
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_bool:
 				val := vector.GetFixedAtNoTypeCheck[bool](vec, i)
@@ -559,7 +579,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 					formatOutputString(ep, []byte(strconv.FormatFloat(float64(val), 'f', int(vec.GetType().Scale), 64)), symbol[j], closeby, flag[j], buffer)
 				}
 			case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_binary, types.T_varbinary, types.T_datalink:
-				value := addEscapeToString(vec.GetBytesAt(i), closeby)
+				value := vec.GetBytesAt(i)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_geometry, types.T_geometry32:
 				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
@@ -568,33 +588,33 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 					bat.Clean(mp)
 					return
 				}
-				value := addEscapeToString([]byte(text), closeby)
+				value := []byte(text)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float32:
 				arrStr := types.BytesToArrayToString[float32](vec.GetBytesAt(i))
-				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				value := util2.UnsafeStringToBytes(arrStr)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float64:
 				arrStr := types.BytesToArrayToString[float64](vec.GetBytesAt(i))
-				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				value := util2.UnsafeStringToBytes(arrStr)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_bf16:
 				arrStr := types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))
-				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				value := util2.UnsafeStringToBytes(arrStr)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_float16:
 				arrStr := types.BytesToArrayToString[types.Float16](vec.GetBytesAt(i))
-				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				value := util2.UnsafeStringToBytes(arrStr)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_int8:
 				arrStr := types.BytesToArrayToString[int8](vec.GetBytesAt(i))
-				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				value := util2.UnsafeStringToBytes(arrStr)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_uint8:
 				// []uint8 aliases []byte; BytesToArrayToString[uint8] renders the values
 				// as an array string ("[1, 2, 3]"), not the raw bytes as a string.
 				arrStr := types.BytesToArrayToString[uint8](vec.GetBytesAt(i))
-				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				value := util2.UnsafeStringToBytes(arrStr)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_date:
 				val := vector.GetFixedAtNoTypeCheck[types.Date](vec, i)
@@ -689,12 +709,124 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 
 }
 
-func addEscapeToString(s []byte, escape byte) []byte {
-	s = bytes.ReplaceAll(s, []byte("\\"[:1]), []byte("\\\\"[:2]))
-	if escape != 0 && escape != "\\"[0] {
-		s = bytes.ReplaceAll(s, []byte{escape}, []byte{escape, escape})
+// escapeChar defaults to backslash; a configured zero disables prefix escaping.
+// Doubling an enclosure is independent of prefix escaping.
+func (ec *ExportConfig) escapeChar() byte {
+	if ec == nil || ec.userConfig == nil {
+		return '\\'
 	}
-	return s
+	if f := ec.userConfig.Fields; f != nil && f.EscapedBy != nil {
+		return f.EscapedBy.Value
+	}
+	return '\\'
+}
+
+// csvBoundaryBytes returns the first bytes of the configured separators and
+// enclosure. The enclosure must also be protected in bare values (e.g. BIT),
+// since a leading enclosure would otherwise be read as framing. For unenclosed
+// output also protect LOAD's default double quote: its current reader falls
+// back to that quote even for ENCLOSED BY ”. Prefixing it is valid with both
+// an unenclosed MySQL reader and MatrixOne's default reader.
+func (ec *ExportConfig) csvBoundaryBytes() (field, line, quote byte, defaultLine bool) {
+	fieldTerm := ","
+	lineTerm := "\n"
+	quote = '"'
+	if ec != nil && ec.userConfig != nil {
+		if f := ec.userConfig.Fields; f != nil && f.Terminated != nil && f.Terminated.Value != "" {
+			fieldTerm = f.Terminated.Value
+		}
+		if f := ec.userConfig.Fields; f != nil && f.EnclosedBy != nil && f.EnclosedBy.Value != 0 {
+			quote = f.EnclosedBy.Value
+		}
+		if l := ec.userConfig.Lines; l != nil && l.TerminatedBy != nil && l.TerminatedBy.Value != "" {
+			lineTerm = l.TerminatedBy.Value
+		}
+	}
+	switch lineTerm {
+	case "\n", "\r\n", "":
+		return fieldTerm[0], '\n', quote, true
+	default:
+		return fieldTerm[0], lineTerm[0], quote, false
+	}
+}
+
+func isTranslatedCSVEscape(b byte) bool {
+	switch b {
+	case '0', 'b', 'n', 'r', 't', 'Z':
+		return true
+	default:
+		return false
+	}
+}
+
+func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
+	if ec.getExportFormat() != "csv" || ec.escapeChar() == 0 {
+		return nil
+	}
+	field, line, _, _ := ec.csvBoundaryBytes()
+	noQuote := ec.userConfig.Fields == nil || ec.userConfig.Fields.EnclosedBy == nil || ec.userConfig.Fields.EnclosedBy.Value == 0
+	if noQuote && (isTranslatedCSVEscape(field) || isTranslatedCSVEscape(line)) {
+		return moerr.NewInvalidInput(ctx,
+			"CSV terminators starting with a translated escape character (0, b, n, r, t, Z) require a nonempty ENCLOSED BY")
+	}
+	return nil
+}
+
+// addEscapeToString makes a value survive the CSV writer + reader round-trip.
+//
+// enclosed != 0: the value is written enclosed, so the terminators inside it
+// are already protected by the enclosure bytes; the escape character and the
+// enclosure byte itself are doubled, which the reader collapses back.
+//
+// enclosed == 0: the value is written bare, so every byte that would
+// otherwise terminate the field or the record (see csvBoundaryBytes) is
+// prefixed with the escape character - the MySQL FIELDS ESCAPED BY
+// convention, which LOAD DATA already unescapes. A zero escape byte disables
+// prefix escaping (enclosure doubling is still possible).
+func addEscapeToString(ep *ExportConfig, s []byte, enclosed byte) []byte {
+	escape := ep.escapeChar()
+	if escape == 0 && enclosed == 0 {
+		return s
+	}
+	if escape != 0 && enclosed == 0 && bytes.Equal(s, []byte("NULL")) {
+		// LOAD's default enclosure mode treats bare NULL as SQL NULL. Escape
+		// its first N (not a translated escape) to retain literal text/BIT bytes.
+		result := make([]byte, len(s)+1)
+		result[0] = escape
+		copy(result[1:], s)
+		return result
+	}
+	field, line, quote, defaultLine := ep.csvBoundaryBytes()
+	needsEscape := func(b byte) bool {
+		return (escape != 0 && b == escape) || (enclosed != 0 && b == enclosed) ||
+			(escape != 0 && defaultLine && b == '\r') ||
+			(enclosed == 0 && (b == field || b == line || (quote != 0 && b == quote)))
+	}
+	extra := 0
+	for _, b := range s {
+		if needsEscape(b) {
+			extra++
+		}
+	}
+	if extra == 0 {
+		return s // do not allocate/copy ordinary values
+	}
+	result := make([]byte, 0, len(s)+extra)
+	for _, b := range s {
+		if needsEscape(b) {
+			if enclosed != 0 && b == enclosed && b != escape {
+				result = append(result, b) // preserve doubled enclosure convention
+			} else {
+				result = append(result, escape)
+				if b == '\r' && defaultLine {
+					// The reader strips trailing raw CR before unescaping.
+					b = 'r'
+				}
+			}
+		}
+		result = append(result, b)
+	}
+	return result
 }
 
 func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
@@ -718,7 +850,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			return err
 		} else if isNil {
 			//NULL is output as \N
-			if err = formatOutputString(oq, []byte{'\\', 'N'}, symbol[i], closeby, false, buffer); err != nil {
+			if err = formatOutputStringRaw(oq, []byte{'\\', 'N'}, symbol[i], closeby, false, buffer); err != nil {
 				return err
 			}
 			continue
@@ -815,9 +947,7 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 			if err != nil {
 				return err
 			}
-			if _, ok := value.([]byte); ok {
-				value = addEscapeToString(value.([]byte), closeby)
-			} else if arr, ok := value.([]float32); ok {
+			if arr, ok := value.([]float32); ok {
 				// this is for T_array_float32 type
 				value = []byte(types.ArrayToString[float32](arr))
 			} else if arr, ok := value.([]float64); ok {
