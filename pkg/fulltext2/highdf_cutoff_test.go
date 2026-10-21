@@ -98,6 +98,16 @@ func TestHighDFCutoff(t *testing.T) {
 	allHighK, _ := list(idx, 1.0, 8, "common common2")
 	require.NotEmpty(t, allHighK, "guard keeps the query, so it still matches")
 
+	// --- A kept term absent from the index (df 0) cannot match, so dropping the high-df
+	// terms would empty the query: the guard keeps the original clauses.
+	withAbsent := []clause{
+		{kind: clauseTerm, terms: []string{"common"}, weight: 1},
+		{kind: clauseTerm, terms: []string{"zzqx"}, weight: 1},
+	}
+	require.Equal(t, withAbsent, idx.highDFKept(withAbsent, gsGuard, 1.0), "only a df-0 term survives: guard keeps the clauses")
+	absentK, _ := list(idx, 1.0, 8, "common zzqx")
+	require.Len(t, absentK, 8, "the high-df term still matches when the survivor cannot")
+
 	// --- Single-term clause sets are never pruned (would empty the query).
 	single := []clause{{kind: clauseTerm, terms: []string{"common"}, weight: 1}}
 	require.Equal(t, single, idx.highDFKept(single, gsGuard, 1.0), "single term is never dropped")

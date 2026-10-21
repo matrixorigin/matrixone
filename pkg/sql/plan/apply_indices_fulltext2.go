@@ -341,6 +341,22 @@ func (builder *QueryBuilder) findFulltext2IndexTables(scanNode *plan.Node, idxde
 	return storeTbl, metaTbl, storeTbl != "" && metaTbl != ""
 }
 
+// clusterSupportsFulltext2SearchOptions reports whether the cluster protocol
+// version is at least MORPCVersion126.
+func (builder *QueryBuilder) clusterSupportsFulltext2SearchOptions() bool {
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	if rt == nil {
+		return false
+	}
+	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	version, valid := value.(int64)
+	return ok && valid && version >= defines.MORPCVersion126
+}
+
 // fulltext2ThreadsSearch resolves the fulltext2_threads_search session variable
 // that sizes the multi-segment parallel top-k search. 0 (the default) is the
 // NEUTRAL value, which the search site (vectorindex.GetConcurrency) resolves to
@@ -354,17 +370,7 @@ func (builder *QueryBuilder) findFulltext2IndexTables(scanNode *plan.Node, idxde
 // honor. Below the epoch a CN that predates the option ignores it and runs its
 // own search; at/above it, every CN honors the resolved value.
 func (builder *QueryBuilder) fulltext2ThreadsSearch() int64 {
-	proc := builder.compCtx.GetProcess()
-	if proc == nil {
-		return 0
-	}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	if rt == nil {
-		return 0
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion126 {
+	if !builder.clusterSupportsFulltext2SearchOptions() {
 		return 0
 	}
 	n, err := builder.resolveInt64Variable("fulltext2_threads_search", 0)
@@ -382,17 +388,7 @@ func (builder *QueryBuilder) fulltext2ThreadsSearch() int64 {
 // giving inconsistent top-k across a rolling upgrade. At/above the epoch every CN honors
 // the resolved value, so the result is identical wherever the scan runs.
 func (builder *QueryBuilder) fulltext2SearchDFCutoff() float64 {
-	proc := builder.compCtx.GetProcess()
-	if proc == nil {
-		return 0
-	}
-	rt := moruntime.ServiceRuntime(proc.GetService())
-	if rt == nil {
-		return 0
-	}
-	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	version, valid := value.(int64)
-	if !ok || !valid || version < defines.MORPCVersion126 {
+	if !builder.clusterSupportsFulltext2SearchOptions() {
 		return 0
 	}
 	v, err := builder.resolveFloat64Variable("fulltext2_search_df_cutoff", 0)

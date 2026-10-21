@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -100,4 +101,24 @@ func TestSearchBooleanParallelMatchesSerial(t *testing.T) {
 	require.Len(t, serialAll, 60, "every doc contains alpha")
 	require.Equal(t, serialAll, set(runList(8, 100, "alpha beta gamma")), "8-worker parallel search must equal the serial result")
 	require.Equal(t, serialAll, set(runList(0, 100, "alpha beta gamma")), "default-parallel search must equal the serial result")
+}
+
+func TestFanOutReRaisesWorkerPanicOnCaller(t *testing.T) {
+	order := []int{0, 1, 2, 3, 4, 5, 6, 7}
+	var ran [8]atomic.Bool
+	require.PanicsWithValue(t, "segment 3", func() {
+		fanOut(order, 3, func(si int) {
+			ran[si].Store(true)
+			if si == 3 {
+				panic("segment 3")
+			}
+		})
+	})
+	for si := range ran {
+		require.True(t, ran[si].Load(), "segment %d must still run", si)
+	}
+
+	var sum atomic.Int64
+	fanOut(order, 2, func(si int) { sum.Add(int64(si)) })
+	require.Equal(t, int64(28), sum.Load())
 }

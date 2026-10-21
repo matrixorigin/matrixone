@@ -552,6 +552,33 @@ func (gs *globalStats) avgdl(seg *Segment) float64 {
 // crossover; below it serial wins.
 const ceilPrepassMinSegPerWorker = 8
 
+// fanOut runs fn(si) for every si in order on at most workers goroutines and
+// re-raises the first worker panic on the calling goroutine after all workers end.
+func fanOut(order []int, workers int, fn func(si int)) {
+	sem := make(chan struct{}, workers)
+	var wg sync.WaitGroup
+	var once sync.Once
+	var panicked any
+	for _, si := range order {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(si int) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			defer func() {
+				if r := recover(); r != nil {
+					once.Do(func() { panicked = r })
+				}
+			}()
+			fn(si)
+		}(si)
+	}
+	wg.Wait()
+	if panicked != nil {
+		panic(panicked)
+	}
+}
+
 func (idx *Index) wandPrepass(q BoolQuery, algo ScoreAlgo, gs *globalStats, workers int) (order []int, ceil []float32) {
 	nseg := len(idx.segments)
 	order = make([]int, nseg)
@@ -583,18 +610,7 @@ func (idx *Index) wandPrepass(q BoolQuery, algo ScoreAlgo, gs *globalStats, work
 			computeCeil(si)
 		}
 	} else {
-		sem := make(chan struct{}, workers)
-		var wg sync.WaitGroup
-		for si := range idx.segments {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(si int) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				computeCeil(si)
-			}(si)
-		}
-		wg.Wait()
+		fanOut(order, workers, computeCeil)
 	}
 	sort.SliceStable(order, func(a, b int) bool { return ceil[order[a]] > ceil[order[b]] })
 	return order, ceil
@@ -610,7 +626,7 @@ func (idx *Index) wandPrepass(q BoolQuery, algo ScoreAlgo, gs *globalStats, work
 // highDFKept returns clauses with ranked high-df terms removed: a single-term clause whose
 // global df/N reaches cutoff is dropped. It returns the input UNCHANGED when the cutoff is
 // off (<=0 or >1), when there is at most one clause, when nothing crosses the cutoff, or
-// when every clause would be dropped (the no-drop-all guard — never empty the query). Only
+// when no kept clause can match (every kept term has df 0 — never empty the query). Only
 // atomic terms are considered; phrase/prefix/group clauses are always kept. gs.df memoizes
 // the df lookups, so the later idf pass reuses them. A dropped term matches nearly every
 // doc with idf≈0, so removing it cannot displace a top-k doc that matches any surviving
@@ -621,13 +637,23 @@ func (idx *Index) highDFKept(clauses []clause, gs *globalStats, cutoff float64) 
 	}
 	thresh := cutoff * float64(gs.n)
 	kept := make([]clause, 0, len(clauses))
+	matchable := 0
 	for _, c := range clauses {
-		if c.kind == clauseTerm && float64(gs.df(c.terms[0])) >= thresh {
+		if c.kind != clauseTerm {
+			kept = append(kept, c)
+			matchable++
+			continue
+		}
+		df := gs.df(c.terms[0])
+		if float64(df) >= thresh {
 			continue
 		}
 		kept = append(kept, c)
+		if df > 0 {
+			matchable++
+		}
 	}
-	if len(kept) == 0 || len(kept) == len(clauses) {
+	if matchable == 0 || len(kept) == len(clauses) {
 		return clauses
 	}
 	return kept
@@ -696,18 +722,7 @@ func (idx *Index) SearchBoolean(q BoolQuery, algo ScoreAlgo, k int, filter *pref
 			searchSeg(si)
 		}
 	} else {
-		sem := make(chan struct{}, workers)
-		var wg sync.WaitGroup
-		for _, si := range order {
-			wg.Add(1)
-			sem <- struct{}{}
-			go func(si int) {
-				defer wg.Done()
-				defer func() { <-sem }()
-				searchSeg(si)
-			}(si)
-		}
-		wg.Wait()
+		fanOut(order, workers, searchSeg)
 	}
 	for _, e := range errs {
 		if e != nil {

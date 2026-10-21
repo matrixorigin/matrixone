@@ -67,25 +67,26 @@ func (f *StopFilter) Filter(in iter.Seq2[tokenizer.Token, error]) iter.Seq2[toke
 }
 
 var (
-	builtinStopOnce sync.Once
-	builtinStopSet  map[string]struct{}
-	builtinStopErr  error
+	builtinStopMu  sync.Mutex
+	builtinStopSet map[string]struct{}
 )
 
-// BuiltinStopwords returns the builtin stopword set loaded once from the jieba
-// dict directory's stop_words.utf8 (resolved the same way the tokenizer locates
-// its dictionaries). The result is cached; callers must not mutate it.
+// BuiltinStopwords returns the builtin stopword set loaded from the jieba dict
+// directory's stop_words.utf8 (resolved the same way the tokenizer locates its
+// dictionaries). Only a successful load is cached; callers must not mutate it.
 func BuiltinStopwords() (map[string]struct{}, error) {
-	builtinStopOnce.Do(func() {
-		path := filepath.Join(tokenizer.JiebaDictDir(), StopwordFile)
-		data, err := os.ReadFile(path)
-		if err != nil {
-			builtinStopErr = moerr.NewInternalErrorNoCtxf("fulltext stopword file %s: %v", path, err)
-			return
-		}
-		builtinStopSet = ParseStopwords(data)
-	})
-	return builtinStopSet, builtinStopErr
+	builtinStopMu.Lock()
+	defer builtinStopMu.Unlock()
+	if builtinStopSet != nil {
+		return builtinStopSet, nil
+	}
+	path := filepath.Join(tokenizer.JiebaDictDir(), StopwordFile)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, moerr.NewInternalErrorNoCtxf("fulltext stopword file %s: %v", path, err)
+	}
+	builtinStopSet = ParseStopwords(data)
+	return builtinStopSet, nil
 }
 
 // ParseStopwords builds a stopword set from word-per-line bytes, splitting on
