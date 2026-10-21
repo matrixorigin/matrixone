@@ -44,6 +44,17 @@ type FmtCtx struct {
 	sawDateTimeFormat             bool
 	stringLiteralPositions        *[]StringLiteralPosition
 	parameterCount                *int
+	caseExpressions               *[]*CaseExpr
+}
+
+// CaseExpressions enumerates syntax producers before binding can duplicate or
+// prune them. The ordinal is independent of values and physical binding tags.
+func CaseExpressions(node NodeFormatter) []*CaseExpr {
+	var cases []*CaseExpr
+	ctx := NewFmtCtx(dialect.MYSQL)
+	ctx.caseExpressions = &cases
+	node.Format(ctx)
+	return cases
 }
 
 // ParameterCount returns the parser's original parameter slot count. Use the
