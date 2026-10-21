@@ -1,15 +1,15 @@
-# FULLTEXT2 parallel segment search, token_filter analyzer and high-df term cutoff
+# FULLTEXT2 parallel segment search, parallel build, token_filter analyzer and high-df term cutoff
 
 - Status: Review required
 - Tracking issue: [#30402](https://github.com/matrixorigin/matrixone/issues/30402)
 - Implementation PR: [#30618](https://github.com/matrixorigin/matrixone/pull/30618)
-- Design revision: 3
+- Design revision: 4
 - Last updated: 2026-10-21
 
 ## Problem and intent
 
 A FULLTEXT2 index answers a query by searching every live segment (a tag=0 base
-plus tag=1 CDC-tail deltas) and merging their top-k. Three independent, opt-in
+plus tag=1 CDC-tail deltas) and merging their top-k. Four independent, opt-in
 improvements share this PR because they ship in one binary and touch the same
 search and build paths:
 
@@ -34,9 +34,16 @@ search and build paths:
    Unlike the first two, this one **changes results** and is off by default; its
    contract is below.
 
+4. **Parallel build (`threads_build`).** The CREATE / REINDEX build tokenized every
+   row, finished every sealed segment and wrote it on one thread. Tokenization now
+   runs on several workers and sealed segments are finished in the background while
+   the next segment fills; the produced segments are byte-identical to a serial
+   build.
+
 None of the changes alters the segment on-disk format, the posting layout, the
 transaction protocol, or CDC/cron ownership of the asynchronously maintained
-index. All are off by default in behavior: parallelism yields identical results,
+index. All are off by default in behavior: parallel search and parallel build yield
+identical results,
 `token_filter` is only present when explicitly requested at CREATE, and the cutoff
 is disabled unless set.
 
@@ -47,13 +54,15 @@ cross-segment pruning bounds and their results-identical/certification contract;
 peak result-memory and error/cancellation contract of the concurrent search; the
 `token_filter` WITH option and the `stop` filter; the symmetry of tokenization
 across the build, CDC, and query paths; the maintenance (REINDEX, idxcron)
-behavior of a `token_filter` index; and the query-time high-df term cutoff, its
-accepted result change, and its configuration lifetime.
+behavior of a `token_filter` index; the query-time high-df term cutoff, its
+accepted result change, and its configuration lifetime; and the parallel build's
+identical-output, ordering, memory, transaction-ownership and failure contract.
 
 Out of scope: any posting/segment format or wire change; a positional (phrase)
 analyzer; non-`stop` filters (`synonym` and others are reserved names only);
-parallelizing the build or the per-segment phrase walk; and changing the vector
-index's own search-thread knob.
+parallel writes of segments (they stay serialized in the build's transaction);
+parallelizing the CDC tail or the idxcron merge; the per-segment phrase walk; and
+changing the vector index's own search-thread knob.
 
 ## Parallel segment search contract
 
@@ -184,6 +193,63 @@ neutral default so no node is handed a value its peers would interpret different
 parallelism — it is not a request for serial execution. (Earlier code comments
 describing the pre-epoch value as "serial" were inaccurate and are corrected to
 this contract.)
+
+## Parallel build contract
+
+### Identical-output invariant
+
+For every corpus, parser, `token_filter`, capacity setting and worker count, the
+parallel build produces the same segments as the serial build: the same segment
+boundaries, the same segment ids, and byte-identical serialized segments. Rows are
+tokenized concurrently but fed to the segment builder in source order, segments are
+sealed under the same capacity rule, and each sealed segment is finished from exactly
+the rows it would have held serially. Only the time at which work happens changes.
+
+### Stages and ownership (decision)
+
+The build has three stages:
+
+1. **Tokenization** of each row's text runs on a pool of workers. Reading the source
+   row (including datalink content) happens on the operator thread, which hands the
+   workers owned copies; workers touch no vector, process or transaction state.
+   Parsers that produce terms without a tokenizer (json tuple terms, json_value) run
+   inline on the operator thread.
+2. **Segment finishing** (building the posting structures, serializing, staging the
+   bytes in a local file) runs in the background once a segment seals, while the
+   operator continues filling the next segment.
+3. **Writing** a finished segment into the index tables runs on the operator thread
+   only, in segment order, inside the build's transaction, and as soon as the oldest
+   finished segment is ready — overlapping with the tokenization of later rows.
+
+All SQL issued by the build, including the one-time removal of prior base segments,
+stays on the operator thread. The transaction is never used from two threads.
+
+### Memory bound (decision)
+
+Besides the open segment being filled, at most a small fixed number of sealed
+segments are being finished at once (one, or two with four or more workers); the
+operator waits for a finisher before sealing beyond that. Each in-flight segment is
+bounded by the same per-segment capacities as the serial build, so peak build memory
+grows by at most that many segments. Finished segments wait for their write as local
+files, not in memory. Queued rows awaiting tokenization are bounded by a row count and
+a byte budget proportional to the worker count.
+
+### Failure and cancellation
+
+The first error from a worker, a finisher or a write fails the build. A panic in a
+worker or a finisher is re-raised on the operator thread, so it surfaces as a query
+error rather than a process crash. On failure or cancellation the operator waits for
+running finishers to stop and removes every staged file that was not written; no
+background work outlives the statement.
+
+### Activation and compatibility (decision)
+
+The worker count is the `fulltext2_threads_build` session/global setting (0, the
+default, resolves to the effective parallelism; 1 keeps the serial build), carried in
+the build configuration to the operator that runs the build. Because the produced
+segments are identical at any value, no capability epoch is needed: a node that
+predates the setting ignores it and builds serially, with the same result. Background
+builds that have no session (scheduled rebuilds) use the default.
 
 ## token_filter analyzer contract
 
@@ -384,6 +450,15 @@ protocol migration is introduced, and a plain revert with no such index present 
 safe.
 
 ## Validation contract
+
+Parallel build: a corpus mixing tokenized rows, parser-produced terms, empty rows,
+INCLUDE values and both integer and varchar primary keys is built serially and through
+the pipeline with one to eight workers and both finisher limits, under capacities that
+seal many segments; every segment's id and serialized bytes must match the serial
+build. Error, panic, write-failure and abort paths must leave no staged file. The
+concurrent paths run under the race detector. End to end, the same table built with
+one worker and with eight workers must answer queries identically, including with
+`token_filter = 'stop'`.
 
 Parallel search: a results-equality check between one worker and many workers must
 use a `k` smaller than the number of matches so a competitive, truncated top-k is

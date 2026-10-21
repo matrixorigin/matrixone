@@ -4189,6 +4189,14 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableIntType("fulltext2_threads_search", 0, 1024, false),
 		Default:           int64(0),
 	},
+	"fulltext2_threads_build": {
+		Name:              "fulltext2_threads_build",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("fulltext2_threads_build", 0, 1024, false),
+		Default:           int64(0),
+	},
 	"fulltext2_search_df_cutoff": {
 		Name:              "fulltext2_search_df_cutoff",
 		Scope:             ScopeBoth,

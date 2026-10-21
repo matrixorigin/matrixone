@@ -192,11 +192,25 @@ func buildFromSource(ctx compileplugin.CompileContext, storeDef, metaDef *plan.I
 	if err != nil {
 		return err
 	}
-	sql, err := genFulltext2BuildFromSourceSQL(origTable, storeDef, metaDef, db, capacity, postingCap)
+	sql, err := genFulltext2BuildFromSourceSQL(origTable, storeDef, metaDef, db, capacity, postingCap, resolveFulltext2ThreadsBuild(ctx))
 	if err != nil {
 		return err
 	}
 	return ctx.RunSql(sql)
+}
+
+// resolveFulltext2ThreadsBuild reads the fulltext2_threads_build session variable. It only
+// sizes the build's parallelism, so a context that cannot resolve it builds with the default.
+func resolveFulltext2ThreadsBuild(ctx compileplugin.CompileContext) int64 {
+	v, err := ctx.ResolveVariable("fulltext2_threads_build", true, false)
+	if err != nil {
+		return 0
+	}
+	n, ok := v.(int64)
+	if !ok || n < 0 {
+		return 0
+	}
+	return n
 }
 
 // resolveFulltext2Capacity reads max_index_capacity from the index's algo_params,
@@ -258,7 +272,7 @@ func resolveFulltext2PositionFree(algoParams string) (bool, error) {
 }
 
 // genFulltext2BuildFromSourceSQL emits the CROSS APPLY fulltext2_create build SQL.
-func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef *plan.IndexDef, db string, capacity, postingCap int64) (string, error) {
+func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef *plan.IndexDef, db string, capacity, postingCap, threadsBuild int64) (string, error) {
 	const srcAlias = "src"
 	positionFree, err := resolveFulltext2PositionFree(storeDef.IndexAlgoParams)
 	if err != nil {
@@ -275,6 +289,7 @@ func genFulltext2BuildFromSourceSQL(origTable *plan.TableDef, storeDef, metaDef 
 		TokenFilters:    tokenFiltersFromParams(storeDef.IndexAlgoParams),
 		Capacity:        capacity,
 		PostingCapacity: postingCap,
+		ThreadsBuild:    threadsBuild,
 		PositionFree:    positionFree,
 		JSONNoKeys:      jsonNoKeys,
 		FromSource:      true,
