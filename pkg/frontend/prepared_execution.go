@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -189,6 +190,8 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 	var preparedPlan *plan2.Plan
 	var fieldTypes *plan2.PreparedFieldTypes
 	var fieldSchemas []*plan2.ObjectRef
+	var fieldRoutines []*plan.RoutinePlanDependency
+	var fieldRoutineErr error
 	if cwft.preparedStmt != nil {
 		fieldTypes = cwft.preparedStmt.fieldTypes
 		if fieldTypes != nil {
@@ -201,6 +204,18 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 					fieldSchemas[i] = proto.Clone(schema).(*plan2.ObjectRef)
 				}
 			}
+			// Include nested background-query dependencies under the existing
+			// count/byte/depth bounds. Retry must retain facts, not the mutable plan.
+			var routines []*plan.RoutinePlanDependency
+			routines, fieldRoutineErr = routinePlanDependencies(cwft.preparedStmt.PreparePlan.GetDcl().GetPrepare().Plan)
+			if fieldRoutineErr == nil {
+				fieldRoutines = make([]*plan.RoutinePlanDependency, len(routines))
+				for i, dependency := range routines {
+					if dependency != nil {
+						fieldRoutines[i] = proto.Clone(dependency).(*plan.RoutinePlanDependency)
+					}
+				}
+			}
 		}
 	}
 	if cwft.preparedStmt != nil && strings.IndexByte(cwft.preparedStmt.Sql, '@') >= 0 {
@@ -209,6 +224,8 @@ func (cwft *TxnComputationWrapper) preparedExecutionRetry() *preparedExecutionRe
 	return &preparedExecutionRetry{
 		fieldTypes:         fieldTypes,
 		fieldSchemas:       fieldSchemas,
+		fieldRoutines:      fieldRoutines,
+		fieldRoutineErr:    fieldRoutineErr,
 		paramVals:          append([]any(nil), cwft.paramVals...),
 		bindings:           append([]plan2.PreparedSourceBinding(nil), cwft.paramBindings...),
 		preparedPlan:       preparedPlan,
