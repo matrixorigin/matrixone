@@ -2137,6 +2137,8 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 					walkTable(table)
 				}
 			}
+		case *tree.ParenSelect:
+			walkSelect(s.Select)
 		case *tree.UnionClause:
 			walkSelect(s.Left)
 			walkSelect(s.Right)
