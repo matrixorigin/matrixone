@@ -343,15 +343,13 @@ func (ctr *container) build(ap *Top, bat *batch.Batch, proc *process.Process, an
 		if err != nil {
 			return err
 		}
-		aNewOrderColumn := true
-		for j := range bat.Vecs {
-			if bat.Vecs[j] == vec {
-				aNewOrderColumn = false
-				ctr.poses = append(ctr.poses, int32(j))
-				break
-			}
-		}
-		if aNewOrderColumn {
+		// A column expression may return a cached typed-NULL vector, so its
+		// logical slot must come from the plan rather than pointer identity.
+		if col := ap.Fs[i].Expr.GetCol(); col != nil {
+			pos := int(col.ColPos)
+			ctr.poses = append(ctr.poses, col.ColPos)
+			bat.Vecs[pos] = vec
+		} else {
 			ctr.poses = append(ctr.poses, int32(len(bat.Vecs)))
 			bat.Vecs = append(bat.Vecs, vec)
 		}
