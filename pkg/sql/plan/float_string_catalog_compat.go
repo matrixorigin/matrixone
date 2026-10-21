@@ -319,9 +319,30 @@ var errLegacyFloatStringRebind = moerr.NewInternalError(moerr.NoReportContext(),
 
 func rebindFloatStringFunction(ctx context.Context, original *planpb.Expr, args []*planpb.Expr) (*planpb.Expr, error) {
 	fn := original.GetF()
-	bound, err := BindFuncExprImplByPlanExpr(ctx, fn.Func.ObjName, args)
+	// SQL-origin proof authorizes persisted internal argument layouts, while
+	// public SQL keeps using its checked argument-count contract.
+	if id, _ := function.DecodeOverloadID(fn.Func.Obj); id == function.FORMAT {
+		ctx = function.WithLegacySpecialConsumers(ctx)
+		// Catalog FORMAT authors VARCHAR(max) arguments even for existing
+		// strings. Recreate that declaration before overload resolution;
+		// ordinary typed binding narrows casts and loses this owner contract.
+		varchar := planpb.Type{Id: int32(types.T_varchar), Width: types.MaxVarcharLen}
+		for i, arg := range args {
+			var err error
+			args[i], err = appendCastBeforeExpr(ctx, arg, varchar)
+			if err != nil {
+				return nil, err
+			}
+		}
+	}
+	bound, err := bindFuncExprImplByPlanExpr(ctx, fn.Func.ObjName, args, true, nil, nil, true)
 	if err != nil {
 		return nil, err
+	}
+	if id, _ := function.DecodeOverloadID(fn.Func.Obj); id == function.FORMAT {
+		if err := preservePersistedFormatCompatibility(ctx, bound); err != nil {
+			return nil, err
+		}
 	}
 	// IFNULL's AST lowering owns this contract in addition to ordinary CASE
 	// overload binding. Historical SQL-origin proof made this marker trusted.
@@ -364,13 +385,47 @@ func chargeFloatStringRebind(expr *planpb.Expr, budget *tableDumpBindingBudget) 
 	return nil
 }
 
+// Only implicit float conversions authorize a reconstruction. An unaffected
+// sibling keeps its persisted overload, casts and internal argument layout.
+// Every scan shares the candidate budget, including repeated ancestor scans.
+func affectedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget *tableDumpBindingBudget) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	if expr == nil || expr.GetLit() != nil {
+		return false, nil
+	}
+	budget.visits++
+	if budget.visits > tableDumpMaxCandidateVisits {
+		return false, moerr.NewInvalidInputNoCtx("catalog expression binding exceeds limit")
+	}
+	if fn := expr.GetF(); fn != nil {
+		if isLegacyFloatStringCast(expr) && !fn.SyntaxExplicitCast {
+			return true, nil
+		}
+		for _, arg := range fn.Args {
+			if affected, err := affectedFloatStringExpr(ctx, arg, budget); affected || err != nil {
+				return affected, err
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, arg := range list.List {
+			if affected, err := affectedFloatStringExpr(ctx, arg, budget); affected || err != nil {
+				return affected, err
+			}
+		}
+	}
+	return false, nil
+}
+
 // Reconcile affected functions through the binder, including sibling implicit
 // casts and argument-sensitive metadata. Exact historical reconstruction proves
 // ownership of peeled casts; the encoded overload and final SQL-bound tree must
 // still match. Declared casts remain boundaries around repaired children.
 func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget *tableDumpBindingBudget) (bool, error) {
-	if expr == nil || expr.GetLit() != nil {
-		return false, nil
+	if affected, err := affectedFloatStringExpr(ctx, expr, budget); !affected || err != nil {
+		return false, err
 	}
 	fn := expr.GetF()
 	if fn == nil {
@@ -422,6 +477,11 @@ func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget
 			args[i] = cast.Args[0]
 		}
 	}
+	if id == function.FORMAT {
+		if err := chargeFloatStringRebind(expr, budget); err != nil {
+			return false, err
+		}
+	}
 	old, err := rebindFloatStringFunction(function.WithLegacyFloatStringBounds(ctx), expr, DeepCopyExprList(args))
 	if err != nil || !sameTableDumpBoundExpression(expr, old) {
 		return false, errLegacyFloatStringRebind
@@ -439,6 +499,13 @@ func widenVerifiedFloatStringExpr(ctx context.Context, expr *planpb.Expr, budget
 	for _, arg := range args {
 		if err := chargeFloatStringRebind(arg, budget); err != nil {
 			return false, err
+		}
+	}
+	if id == function.FORMAT {
+		for _, arg := range args {
+			if err := chargeFloatStringRebind(arg, budget); err != nil {
+				return false, err
+			}
 		}
 	}
 	current, err := rebindFloatStringFunction(ctx, expr, args)

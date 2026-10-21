@@ -91,7 +91,7 @@ func TestLegacyFloatStringConditionals(t *testing.T) {
 				stmt, ast, _, err := parseTableDumpExpression(t.Context(), col.Default.OriginString, "")
 				require.NoError(t, err)
 				defer stmt.Free()
-				col.Default.Expr, err = bindTableDumpExpression(compiler, source,
+				col.Default.Expr, err = bindFloatTableDumpExpression(compiler, source,
 					tableDumpExpression{kind: "default", name: col.Name, col: col}, ast, 0, false, true)
 				require.NoError(t, err)
 			}
@@ -145,7 +145,7 @@ func TestLegacyFloatStringConditionals(t *testing.T) {
 			stmt, ast, _, err := parseTableDumpExpression(t.Context(), origin, "")
 			require.NoError(t, err)
 			defer stmt.Free()
-			fresh, err := bindTableDumpExpression(compiler, source, tableDumpExpression{kind: kind, name: "g", col: col}, ast, 0, false)
+			fresh, err := bindFloatTableDumpExpression(compiler, source, tableDumpExpression{kind: kind, name: "g", col: col}, ast, 0, false)
 			require.NoError(t, err)
 			if tc.name == "direct_coalesce" || tc.name == "explicit_source" {
 				// These controls have no implicit width-32 float cast. Migration
@@ -200,14 +200,14 @@ func TestLegacyFloatStringBindingProfiles(t *testing.T) {
 			stmt, ast, _, err := parseTableDumpExpression(t.Context(), col.GeneratedCol.OriginString, "")
 			require.NoError(t, err)
 			defer stmt.Free()
-			old, err := bindTableDumpExpression(compiler, source, item, ast, increment, false, true)
+			old, err := bindFloatTableDumpExpression(compiler, source, item, ast, increment, false, true)
 			require.NoError(t, err)
 			col.GeneratedCol.Expr = old
 			require.True(t, hasLegacyFloatStringCast(old))
 			snapshot := proto.Clone(source)
-			fresh, err := bindTableDumpExpression(compiler, source, item, ast, increment, false)
+			fresh, err := bindFloatTableDumpExpression(compiler, source, item, ast, increment, false)
 			require.NoError(t, err)
-			defaultProfile, err := bindTableDumpExpression(compiler, source, item, ast, 4, false)
+			defaultProfile, err := bindFloatTableDumpExpression(compiler, source, item, ast, 4, false)
 			require.NoError(t, err)
 			require.False(t, sameTableDumpBoundExpression(fresh, defaultProfile), "profile must differ from the ordinary default")
 			execution := CloneTableDefForPlan(source, true)

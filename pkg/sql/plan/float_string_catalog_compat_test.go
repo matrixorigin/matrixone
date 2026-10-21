@@ -205,7 +205,7 @@ func TestLegacyFloatStringCatalogCollationProvenance(t *testing.T) {
 			require.NoError(t, err)
 			defer stmt.Free()
 			item := tableDumpExpression{kind: "generated", name: col.Name, col: col}
-			bound, err := bindTableDumpExpression(compiler, source, item, ast, 0, false, true)
+			bound, err := bindFloatTableDumpExpression(compiler, source, item, ast, 0, false, true)
 			require.NoError(t, err)
 			col.GeneratedCol.Expr = bound
 			concat := bound.GetF().Args[0]
@@ -248,7 +248,7 @@ func TestLegacyFloatStringCatalogNativeProvenance(t *testing.T) {
 	require.NoError(t, err)
 	defer parsed.Free()
 	item := tableDumpExpression{kind: "generated", name: col.Name, col: col}
-	bound, err := bindTableDumpExpression(compiler, source, item, ast, 0, false, true)
+	bound, err := bindFloatTableDumpExpression(compiler, source, item, ast, 0, false, true)
 	require.NoError(t, err)
 	col.GeneratedCol.Expr = bound
 	require.NotEmpty(t, tableDumpExpressions(source))
@@ -284,7 +284,7 @@ func TestLegacyFloatStringCatalogCanceled(t *testing.T) {
 	require.True(t, proto.Equal(source, execution), "canceled resolution must not publish a repair")
 }
 
-const floatDivisionDDL = "create table t(a decimal(10,2), b decimal(10,2), g varchar(100) generated always as (concat(cast(a/b as double))) stored, check (length(concat(cast(a/b as double))) < 100))"
+const floatDivisionDDL = "create table t(a decimal(10,2), b decimal(10,2), g varchar(100) generated always as (concat(cast(a/b as double))) stored, constraint __mo_chk_1 check (length(concat(cast(a/b as double))) < 100))"
 
 func TestTableDumpLegacyFloatStringBindings(t *testing.T) {
 	compiler := floatCatalogCompiler(t)
@@ -309,7 +309,7 @@ func TestTableDumpLegacyFloatStringBindings(t *testing.T) {
 	legacyStmt, legacyAST, _, err := parseTableDumpExpression(t.Context(), col.GeneratedCol.OriginString, "")
 	require.NoError(t, err)
 	defer legacyStmt.Free()
-	col.GeneratedCol.Expr, err = bindTableDumpExpression(compiler, marked,
+	col.GeneratedCol.Expr, err = bindFloatTableDumpExpression(compiler, marked,
 		tableDumpExpression{kind: "generated", name: col.Name, col: col}, legacyAST, 0, false, true)
 	require.NoError(t, err)
 	markedBefore := proto.Clone(marked)
