@@ -1,7 +1,10 @@
 package io.matrixone.connect.eos;
 
+import com.mysql.cj.conf.ConnectionUrl;
+import com.mysql.cj.conf.HostInfo;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
+import java.util.Properties;
 
 final class SinkSettings {
     final String jdbcUrl;
@@ -60,8 +63,48 @@ final class SinkSettings {
         if (batch < 1 || batch > 1000) {
             throw new IllegalArgumentException("mo.batch.size must be 1..1000");
         }
-        return new SinkSettings(url, user, password, connectTimeout, socketTimeout, scope, batch,
+        SinkSettings settings = new SinkSettings(url, user, password, connectTimeout, socketTimeout, scope, batch,
             required(props, AtomicSinkConnector.BOOTSTRAP));
+        settings.requireEffectiveJdbcDeadlines();
+        return settings;
+    }
+
+    Properties jdbcProperties() {
+        Properties properties = new Properties();
+        properties.setProperty("user", jdbcUser);
+        properties.setProperty("password", jdbcPassword);
+        properties.setProperty("connectTimeout", Integer.toString(connectTimeoutMs));
+        properties.setProperty("socketTimeout", Integer.toString(socketTimeoutMs));
+        return properties;
+    }
+
+    private void requireEffectiveJdbcDeadlines() {
+        // Connector/J lets address=(...)(socketTimeout=0) override connection
+        // Properties. Inspect every host with the same Properties used to connect.
+        ConnectionUrl parsed;
+        try {
+            parsed = ConnectionUrl.getConnectionUrlInstance(jdbcUrl, jdbcProperties());
+        } catch (RuntimeException error) {
+            throw new IllegalArgumentException("invalid mo.jdbc.url", error);
+        }
+        if (parsed.getHostsList().isEmpty()) {
+            throw new IllegalArgumentException("mo.jdbc.url has no JDBC host");
+        }
+        for (HostInfo host : parsed.getHostsList()) {
+            Map<String, String> effective = host.getHostProperties();
+            if (!Integer.toString(connectTimeoutMs).equals(effective.get("connectTimeout"))
+                || !Integer.toString(socketTimeoutMs).equals(effective.get("socketTimeout"))) {
+                throw new IllegalArgumentException("JDBC URL must not override mo.jdbc.*.timeout.ms");
+            }
+            for (Map.Entry<String, String> property : effective.entrySet()) {
+                if ((property.getKey().equalsIgnoreCase("connectTimeout")
+                    && !Integer.toString(connectTimeoutMs).equals(property.getValue()))
+                    || (property.getKey().equalsIgnoreCase("socketTimeout")
+                    && !Integer.toString(socketTimeoutMs).equals(property.getValue()))) {
+                    throw new IllegalArgumentException("JDBC URL must not override mo.jdbc.*.timeout.ms");
+                }
+            }
+        }
     }
 
     private static int timeout(Map<String, String> props, String key, int defaultValue) {

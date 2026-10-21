@@ -137,12 +137,21 @@ public final class IntegrationProbe {
                 && scalar("SELECT used_rows FROM mo_sink_budget") == budgetRowsBeforeTakeover
                 && scalar("SELECT used_bytes FROM mo_sink_budget") == budgetBytesBeforeTakeover,
                 "stale write changed durable ledger, effect, budget, or checkpoint");
+            System.out.printf("STALE_OWNER_REJECTED kafka_offset=%d ledger_rows=%d total=%d "
+                    + "budget_rows=%d budget_bytes=%d checkpoint=%d%n",
+                pending.get(0).originalKafkaOffset(), rowsBeforeTakeover, totalBeforeTakeover,
+                budgetRowsBeforeTakeover, budgetBytesBeforeTakeover, checkpointBeforeTakeover);
             successor.put(pending);
             check(ledgerHas("stale-owner") && count("mo_sink_ledger") == rowsBeforeTakeover + 1
                 && total() == totalBeforeTakeover + 11 && checkpoint(TOPIC) == 4,
                 "new owner failed to apply the pending broker event exactly once");
-            check(successor.preCommit(Map.of(tp, new OffsetAndMetadata(5))).get(tp).offset() == 5,
+            long offeredOffset = successor.preCommit(Map.of(tp, new OffsetAndMetadata(5))).get(tp).offset();
+            check(offeredOffset == 5,
                 "new owner offered an incorrect broker offset");
+            System.out.printf("STALE_OWNER_TAKEOVER kafka_offset=%d ledger_rows=%d total=%d "
+                    + "checkpoint=%d offered_broker_offset=%d%n",
+                pending.get(0).originalKafkaOffset(), count("mo_sink_ledger"), total(), checkpoint(TOPIC),
+                offeredOffset);
         } finally {
             successor.stop();
         }
@@ -152,6 +161,7 @@ public final class IntegrationProbe {
         } catch (ConnectException expected) {
             check(expected.getMessage().contains("owner/checkpoint changed"), "wrong fencing error");
         }
+        System.out.println("PASS stale-owner replay and preCommit fencing");
         task.stop();
         retentionAndHoleProbe();
     }

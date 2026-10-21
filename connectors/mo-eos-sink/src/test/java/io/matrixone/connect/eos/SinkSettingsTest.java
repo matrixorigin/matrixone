@@ -32,6 +32,27 @@ final class SinkSettingsTest {
         props.remove(AtomicSinkConnector.JDBC_SOCKET_TIMEOUT);
         props.put(AtomicSinkConnector.JDBC_URL, "jdbc:mysql://127.0.0.1/profile?socketTimeout=0");
         assertThrows(IllegalArgumentException.class, () -> SinkSettings.from(props));
+
+        props.put(AtomicSinkConnector.JDBC_URL,
+            "jdbc:mysql://address=(host=127.0.0.1)(port=6001)(socketTimeout=0)/profile");
+        assertThrows(IllegalArgumentException.class, () -> SinkSettings.from(props));
+        props.put(AtomicSinkConnector.JDBC_URL,
+            "jdbc:mysql://address=(host=127.0.0.1)(port=6001)(connectTimeout=0)/profile");
+        assertThrows(IllegalArgumentException.class, () -> SinkSettings.from(props));
+        props.put(AtomicSinkConnector.JDBC_URL,
+            "jdbc:mysql://address=(host=127.0.0.1)(port=6001)(SOCKETTIMEOUT=0)/profile");
+        assertThrows(IllegalArgumentException.class, () -> SinkSettings.from(props));
+        props.put(AtomicSinkConnector.JDBC_URL,
+            "jdbc:mysql:loadbalance://address=(host=127.0.0.1)(port=6001),"
+                + "address=(host=127.0.0.2)(port=6001)(socketTimeout=0)/profile");
+        assertThrows(IllegalArgumentException.class, () -> SinkSettings.from(props));
+        props.put(AtomicSinkConnector.JDBC_URL,
+            "jdbc:mysql://address=(host=127.0.0.1)(port=6001)/profile");
+        assertEquals(30000, SinkSettings.from(props).socketTimeoutMs);
+        props.put(AtomicSinkConnector.JDBC_URL,
+            "jdbc:mysql:loadbalance://address=(host=127.0.0.1)(port=6001),"
+                + "address=(host=127.0.0.2)(port=6001)/profile");
+        assertEquals(30000, SinkSettings.from(props).socketTimeoutMs);
     }
 
     @Test

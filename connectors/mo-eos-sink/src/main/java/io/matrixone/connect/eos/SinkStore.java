@@ -8,7 +8,6 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Arrays;
 import java.util.List;
-import java.util.Properties;
 import org.apache.kafka.common.Uuid;
 import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.connect.errors.ConnectException;
@@ -27,12 +26,7 @@ final class SinkStore {
     }
 
     private Connection connect() throws SQLException {
-        Properties properties = new Properties();
-        properties.setProperty("user", settings.jdbcUser);
-        properties.setProperty("password", settings.jdbcPassword);
-        properties.setProperty("connectTimeout", Integer.toString(settings.connectTimeoutMs));
-        properties.setProperty("socketTimeout", Integer.toString(settings.socketTimeoutMs));
-        return DriverManager.getConnection(settings.jdbcUrl, properties);
+        return DriverManager.getConnection(settings.jdbcUrl, settings.jdbcProperties());
     }
 
     Checkpoint claim(TopicPartition tp, String topicId) {
