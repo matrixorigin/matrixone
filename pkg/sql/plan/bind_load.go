@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (int32, error) {
@@ -256,7 +257,7 @@ func (builder *QueryBuilder) bindExternalScan(
 
 	externalScanNode := &plan.Node{
 		NodeType: plan.Node_EXTERNAL_SCAN,
-		Stats:    makeLoadExternalStats(stmt.Param, tableDef, offset, ctx.GetContext()),
+		Stats:    makeLoadExternalStats(stmt.Param, tableDef, offset, process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())),
 		ObjRef:   objRef,
 		TableDef: tableDef,
 		ExternScan: &plan.ExternScan{
