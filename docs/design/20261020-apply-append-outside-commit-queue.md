@@ -1,6 +1,7 @@
 # Apply ordinary appends outside the TN commit queue
 
-**Status:** Proposed; implementation review is pending.
+**Status:** Approved.
+**Approved by:** `misuxi` (manual approval)
 
 **Related issue:** [matrixone#30623](https://github.com/matrixorigin/matrixone/issues/30623)
 **Implementation PR:** [matrixone#30629](https://github.com/matrixorigin/matrixone/pull/30629)
