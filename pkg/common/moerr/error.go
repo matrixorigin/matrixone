@@ -432,8 +432,6 @@ const (
 	// Group 14: TaskService
 	ErrExecutorRunning uint16 = 22201
 
-	// Group 15: Vector Search
-	ErrVectorNeedRetryWithPreMode uint16 = 22301
 	// Group 16: CCPR
 	ErrCCPRReadOnly uint16 = 22401
 
@@ -754,7 +752,6 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrExecutorRunning: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "TaskService: executor %s is already running"},
 
 	// Group 15: Vector Search
-	ErrVectorNeedRetryWithPreMode: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector search need retry with pre mode"},
 
 	// Group 16: CCPR
 	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
