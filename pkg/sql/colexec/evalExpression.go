@@ -315,8 +315,8 @@ func validateSetOperationFloatKeyProtocol(proc *process.Process, overloadID int6
 		return nil
 	}
 	version, known := moruntime.ServiceRuntime(proc.GetService()).GetGlobalVariables(moruntime.MOProtocolVersion)
-	if floor, ok := version.(int64); !known || !ok || floor < defines.MORPCVersion127 {
-		return moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 127")
+	if floor, ok := version.(int64); !known || !ok || floor < defines.MORPCVersion128 {
+		return moerr.NewNotSupportedNoCtx("set-operation float keys require MORPC protocol version 128")
 	}
 	return nil
 }
