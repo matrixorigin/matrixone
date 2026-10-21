@@ -209,6 +209,71 @@ func TestAuthenticateLoadBeforePlanPropagatesPrivilegeErrors(t *testing.T) {
 	}
 }
 
+func TestBindSessionDatabaseForStatementPreservesBindings(t *testing.T) {
+	for _, tc := range []struct {
+		name, sessionDB, compilerDB, defaultDB string
+	}{
+		{"shared binding", "active_db", "active_db", "prepared_db"},
+		{"prepared binding", "active_db", "prepared_db", "prepared_db"},
+		{"independent binding", "active_db", "compiler_db", "prepared_db"},
+		{"empty default", "active_db", "compiler_db", ""},
+		{"current default", "active_db", "compiler_db", "active_db"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newSes(nil, nil)
+			ses.SetDatabaseName(tc.sessionDB)
+			compiler := ses.GetTxnCompileCtx()
+			compiler.SetDatabase(tc.compilerDB)
+			restore := bindSessionDatabaseForStatement(ses, tc.defaultDB)
+			if tc.defaultDB != "" && tc.defaultDB != tc.sessionDB {
+				require.Equal(t, tc.defaultDB, ses.GetDatabaseName())
+				require.Equal(t, tc.defaultDB, compiler.GetDatabase())
+			}
+			restore()
+			require.Equal(t, tc.sessionDB, ses.GetDatabaseName())
+			require.Equal(t, tc.compilerDB, compiler.GetDatabase())
+		})
+	}
+}
+
+func TestAuthenticateLoadBeforePlanPreservesDatabaseBindings(t *testing.T) {
+	const dbName, tableName = "prepared_db", "binding_target"
+	stmt := &tree.Load{Table: tree.NewTableName(tableName, tree.ObjectNamePrefix{}, nil)}
+	wantErr := errors.New("authorization lookup failed")
+	for _, tc := range []struct {
+		name  string
+		allow bool
+		err   error
+	}{
+		{name: "allowed", allow: true},
+		{name: "denied"},
+		{name: "lookup error", allow: true, err: wantErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			withLoadPrivilegeFixture(t, stmt, dbName, tableName, tc.allow,
+				func(ses *Session, bh *backgroundExecTest) {
+					ses.SetDatabaseName("active_db")
+					compiler := ses.GetTxnCompileCtx()
+					compiler.SetDatabase(dbName)
+					if tc.err != nil {
+						bh.sql2err["begin;"] = tc.err
+					}
+					_, err := authenticateLoadBeforePlan(context.Background(), ses, stmt, dbName)
+					switch {
+					case tc.err != nil:
+						require.ErrorIs(t, err, tc.err)
+					case tc.allow:
+						require.NoError(t, err)
+					default:
+						require.ErrorContains(t, err, "do not have privilege")
+					}
+					require.Equal(t, "active_db", ses.GetDatabaseName())
+					require.Equal(t, dbName, compiler.GetDatabase())
+				})
+		})
+	}
+}
+
 func withLoadPrivilegeFixture(
 	t *testing.T,
 	stmt tree.Statement,

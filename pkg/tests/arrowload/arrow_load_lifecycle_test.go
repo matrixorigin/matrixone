@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
 
@@ -109,4 +110,69 @@ func TestArrowLoadPermissionDeniedDoesNotReadOrWrite(t *testing.T) {
 	require.True(t, objectRequest.Load(), "authorized Arrow LOAD must access the MinIO object")
 	require.Equal(t, int64(2), queryCount(t, ownerDB,
 		"select count(*) from `"+databaseName+"`.`"+tableName+"`"))
+}
+
+// Reuse the public-path cluster with a local file so this regression never
+// depends on MinIO being installed. The catalog-backed root user exercises
+// authorization and has the moadmin role required for server-local SQL files.
+func testArrowLoadPreparedDatabaseBinding(t *testing.T, c embed.Cluster, ownerDB *sql.DB) {
+	const (
+		preparedDB = "arrow_prepared_binding_a"
+		activeDB   = "arrow_prepared_binding_b"
+		tableName  = "binding_target"
+	)
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		for _, name := range []string{preparedDB, activeDB} {
+			if _, err := ownerDB.ExecContext(ctx, "drop database if exists "+name); err != nil {
+				t.Errorf("drop database %s: %v", name, err)
+			}
+		}
+	})
+	for _, name := range []string{preparedDB, activeDB} {
+		mustExec(t, ownerDB, "create database "+name)
+		mustExec(t, ownerDB, "create table "+name+"."+tableName+" (id bigint not null, name varchar(50))")
+	}
+
+	cn, err := c.GetCNService(0)
+	require.NoError(t, err)
+	userDB, err := sql.Open("mysql", fmt.Sprintf("root:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, userDB.Close()) })
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	conn, err := userDB.Conn(ctx)
+	require.NoError(t, err)
+	defer conn.Close()
+	exec := func(stmt string) {
+		_, err := conn.ExecContext(ctx, stmt)
+		require.NoError(t, err, stmt)
+	}
+	path := fixtureIDName(t, t.TempDir(), "prepared.arrow", containerFile,
+		[][]idNameRow{{{id: 1, name: "prepared"}}})
+	loadSQL := fmt.Sprintf("load data infile {'filepath'='%s','format'='arrow'} into table %s", path, tableName)
+	exec("use " + preparedDB)
+	exec("set sql_mode=''")
+	exec("prepare arrow_binding_stmt from '" + strings.ReplaceAll(loadSQL, "'", "''") + "'")
+	defer conn.ExecContext(ctx, "deallocate prepare arrow_binding_stmt")
+	exec("use " + activeDB)
+
+	for i, mode := range []string{"", "NO_UNSIGNED_SUBTRACTION"} {
+		// The first execution is the reuse control; changing sql_mode forces
+		// the second execution to rebuild with the PREPARE-time database.
+		if mode != "" {
+			exec("set sql_mode='" + mode + "'")
+		}
+		exec("execute arrow_binding_stmt")
+		preparedRows := queryCount(t, ownerDB, "select count(*) from "+preparedDB+"."+tableName)
+		activeRows := queryCount(t, ownerDB, "select count(*) from "+activeDB+"."+tableName)
+		t.Logf("execution %d: prepared database rows=%d, active database rows=%d", i+1, preparedRows, activeRows)
+		require.Equal(t, int64(i+1), preparedRows)
+		require.Equal(t, int64(i+1), queryCount(t, ownerDB, "select count(*) from "+preparedDB+"."+tableName+" where id=1 and name='prepared'"))
+		require.Zero(t, activeRows)
+		var database string
+		require.NoError(t, conn.QueryRowContext(ctx, "select database()").Scan(&database))
+		require.Equal(t, activeDB, database)
+	}
 }

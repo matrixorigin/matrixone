@@ -5264,8 +5264,15 @@ func bindSessionDatabaseForStatement(ses *Session, defaultDatabase string) func(
 		return func() {}
 	}
 	currentDatabase := ses.GetDatabaseName()
+	compilerCtx := ses.GetTxnCompileCtx()
+	currentCompilerDatabase := compilerCtx.GetDatabase()
 	ses.SetDatabaseName(defaultDatabase)
-	return func() { ses.SetDatabaseName(currentDatabase) }
+	return func() {
+		ses.SetDatabaseName(currentDatabase)
+		// Replanning can bind the compiler to a prepared statement's database
+		// independently of the active session database.
+		compilerCtx.SetDatabase(currentCompilerDatabase)
+	}
 }
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement
