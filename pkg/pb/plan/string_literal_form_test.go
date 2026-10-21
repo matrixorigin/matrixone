@@ -133,6 +133,21 @@ func TestValidateStringLiteralFormsRequireIsBinForHexAndBit(t *testing.T) {
 	}
 }
 
+func TestValidateStringLiteralFormPreservesTextBinaryMarkerAfterWireDecode(t *testing.T) {
+	expr := &Expr{Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
+		Value:       &Literal_Sval{Sval: "1"},
+		IsBin:       true,
+		LiteralForm: StringLiteralForm_STRING_LITERAL_TEXT,
+	}}}
+	encoded, err := expr.Marshal()
+	require.NoError(t, err)
+	decoded := &Expr{}
+	require.NoError(t, decoded.Unmarshal(encoded))
+	require.NoError(t, decoded.ValidateStringLiteralForms())
+	require.True(t, decoded.GetLit().IsBin)
+	require.Equal(t, StringLiteralForm_STRING_LITERAL_TEXT, decoded.GetLit().LiteralForm)
+}
+
 func TestValidateStringLiteralFormsInNestedOwner(t *testing.T) {
 	owner := struct{ Expressions []*Expr }{Expressions: []*Expr{{
 		Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{

@@ -51,7 +51,7 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 
 	// Keep the upstream prepared-precision v95 floor independently covered by
 	// the common destination validator. The real CEIL expression below also
-	// requires v125 because its numeric precision semantics changed there.
+	// requires v126 because its numeric precision semantics changed there.
 	precisionOnlyFeatures := planpb.RemoteExpressionFeatures{PreparedPrecisionScalar: true}
 	require.Equal(t, defines.MORPCVersion95, remoteExpressionProtocolVersion(precisionOnlyFeatures))
 
@@ -105,45 +105,45 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 	place(defines.MORPCVersion95)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 125",
-		"the real CEIL precision contract has an independent v125 floor")
+	require.ErrorContains(t, err, "version 126",
+		"the real CEIL precision contract has an independent v126 floor")
 	place(int64(101))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 125")
+	require.ErrorContains(t, err, "version 126")
 	place(int64(102))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 125")
+	require.ErrorContains(t, err, "version 126")
 	place(defines.MORPCVersion109)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 125")
+	require.ErrorContains(t, err, "version 126")
 	place(defines.MORPCVersion110)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 125")
+	require.ErrorContains(t, err, "version 126")
 	place(defines.MORPCVersion111)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 125")
+	require.ErrorContains(t, err, "version 126")
 	place(defines.MORPCVersion112)
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 125")
+	require.ErrorContains(t, err, "version 126")
 	for _, version := range []int64{
 		defines.MORPCVersion113, defines.MORPCVersion114,
 		defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117,
 		defines.MORPCVersion118, defines.MORPCVersion119,
 		defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122,
-		defines.MORPCVersion123, defines.MORPCVersion124,
+		defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125,
 	} {
 		place(version)
 		require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 		_, err = encodeRemoteScope(scope, c.proc)
-		require.ErrorContains(t, err, "version 125")
+		require.ErrorContains(t, err, "version 126")
 	}
-	place(defines.MORPCVersion125)
+	place(defines.MORPCVersion126)
 	require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
@@ -167,14 +167,14 @@ func TestPreparedPrecisionProtocolPlacementAndSend(t *testing.T) {
 		defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117,
 		defines.MORPCVersion118, defines.MORPCVersion119,
 		defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122,
-		defines.MORPCVersion123, defines.MORPCVersion124,
+		defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125,
 	} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 125")
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, p), "version 126")
 		_, err = decodeScope(data, c.proc, true, nil)
-		require.ErrorContains(t, err, "version 125")
+		require.ErrorContains(t, err, "version 126")
 	}
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 	decoded, err := decodeScope(data, c.proc, true, nil)
 	require.NoError(t, err)
@@ -623,7 +623,7 @@ func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
 
 	// The temporal expression keeps its independent v124 expression/persisted
 	// floor, while strict numeric execution raises placement and send/receive
-	// admission to max(v124, v125) == v125.
+	// admission to max(v124, v126) == v126.
 	numericQry, numericScope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
 	t.Cleanup(numericScope.RootOp.Release)
 	combinedProjects := []*planpb.Expr{expr, numericQry.Nodes[0].ProjectList[0]}
@@ -644,9 +644,10 @@ func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
 		wantDistributed bool
 	}{
 		{workerVersion: defines.MORPCVersion124},
-		{workerVersion: defines.MORPCVersion125, wantDistributed: true},
+		{workerVersion: defines.MORPCVersion125},
+		{workerVersion: defines.MORPCVersion126, wantDistributed: true},
 	} {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 		client.version = tc.workerVersion
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
@@ -660,18 +661,18 @@ func TestTimestampAddSecondProtocolAdmission(t *testing.T) {
 
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.workerVersion)
 		err = validateRemoteExpressionPipelineProtocol(c.proc, combinedPipeline)
-		if tc.workerVersion < defines.MORPCVersion125 {
-			require.ErrorContains(t, err, "string numeric compatibility requires MORPC protocol version 125")
+		if tc.workerVersion < defines.MORPCVersion126 {
+			require.ErrorContains(t, err, "string numeric compatibility requires MORPC protocol version 126")
 		} else {
 			require.NoError(t, err)
 		}
 
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 		_, err = encodeRemoteScope(numericScope, c.proc)
 		if tc.wantDistributed {
 			require.NoError(t, err)
 		} else {
-			require.ErrorContains(t, err, "MORPC version 125")
+			require.ErrorContains(t, err, "MORPC version 126")
 		}
 	}
 	require.Equal(t, client.calls, client.releases)

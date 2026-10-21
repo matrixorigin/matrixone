@@ -149,7 +149,7 @@ func TestDecimalIntegerDivisionProtocol(t *testing.T) {
 		require.ErrorContains(t, err, "coordinator execution owner")
 	})
 	// DECIMAL DIV keeps its independent v121 floor, while a query that also
-	// uses the PR numeric contract must satisfy the newer v125 floor.
+	// uses the PR numeric contract must satisfy the newer v126 floor.
 	numericQry, numericScope := strictStringNumericCompatibilityPipeline(t, types.T_varchar, 0)
 	t.Cleanup(numericScope.RootOp.Release)
 	combinedProjects := []*planpb.Expr{expr, numericQry.Nodes[0].ProjectList[0]}
@@ -161,19 +161,20 @@ func TestDecimalIntegerDivisionProtocol(t *testing.T) {
 	require.True(t, combinedFeatures.DecimalIntegerDivisionSemantics)
 	require.True(t, combinedFeatures.StrictStringNumericCompatibility)
 
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 	for _, tc := range []struct {
 		version        int64
 		placementError string
 		receiverError  string
 	}{
 		{defines.MORPCVersion120, "version 121", "version 121"},
-		{defines.MORPCVersion121, "version 125", "version 125"},
-		{defines.MORPCVersion122, "version 125", "version 125"},
-		{defines.MORPCVersion123, "version 125", "version 125"},
-		{defines.MORPCVersion124, "version 125", "version 125"},
+		{defines.MORPCVersion121, "version 126", "version 126"},
+		{defines.MORPCVersion122, "version 126", "version 126"},
+		{defines.MORPCVersion123, "version 126", "version 126"},
+		{defines.MORPCVersion124, "version 126", "version 126"},
+		{defines.MORPCVersion125, "version 126", "version 126"},
 	} {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 		client.version = tc.version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
@@ -185,8 +186,8 @@ func TestDecimalIntegerDivisionProtocol(t *testing.T) {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, tc.version)
 		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, combinedPipeline), tc.receiverError)
 	}
-	client.version = defines.MORPCVersion125
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+	client.version = defines.MORPCVersion126
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
