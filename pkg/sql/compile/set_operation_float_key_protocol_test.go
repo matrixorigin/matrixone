@@ -46,10 +46,10 @@ func TestSetOperationFloatKeyDependentCompilationProtocol(t *testing.T) {
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
 	_, err = c.compileQuery(q)
-	require.ErrorContains(t, err, "version 126")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
+	require.ErrorContains(t, err, "version 127")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
 	_, err = c.compileQuery(q)
-	// At126 compilation reaches the independent target-admission owner; no
+	// At127 compilation reaches the independent target-admission owner; no
 	// engine/source work is needed to prove that the expression fence passed.
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrCCPRReadOnly), "%v", err)
 }
@@ -61,7 +61,7 @@ func TestSetOperationFloatKeyProtocolPlacementSendReceive(t *testing.T) {
 	features, err := planpb.RequiredRemoteExpressionFeatures(expr)
 	require.NoError(t, err)
 	require.True(t, features.SetOperationFloatKeys)
-	require.Equal(t, defines.MORPCVersion126, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion127, remoteExpressionProtocolVersion(features))
 	qry := &planpb.Query{Nodes: []*planpb.Node{{PhysicalEqualityKeyList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 	op := projection.NewArgument()
 	defer op.Release()
@@ -76,32 +76,32 @@ func TestSetOperationFloatKeyProtocolPlacementSendReceive(t *testing.T) {
 	}
 	place(defines.MORPCVersion125, plan2.ExecTypeAP_ONECN)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 126")
+	require.ErrorContains(t, err, "version 127")
 	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
-	place(defines.MORPCVersion126, plan2.ExecTypeAP_MULTICN)
+	place(defines.MORPCVersion127, plan2.ExecTypeAP_MULTICN)
 	var streamRequirement int64
 	_, err = encodeRemoteScopeWithProtocol(scope, c.proc, &streamRequirement)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion126, streamRequirement)
+	require.Equal(t, defines.MORPCVersion127, streamRequirement)
 	client.version = defines.MORPCVersion125
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 126", "send checks changed actual destination")
+	require.ErrorContains(t, err, "version 127", "send checks changed actual destination")
 	client.customResponse = true
 	client.response = &query.Response{}
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 126")
+	require.ErrorContains(t, err, "version 127")
 	require.Equal(t, client.calls, client.releases)
 	p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: []*planpb.Expr{expr}}}}
 	data, err := p.Marshal()
 	require.NoError(t, err)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	for _, version := range []int64{defines.MORPCVersion125, defines.MORPCVersion126} {
+	for _, version := range []int64{defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127} {
 		rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 		validationErr := validateRemoteExpressionPipelineProtocol(c.proc, p)
 		_, decodeErr := decodeScope(data, c.proc, true, nil)
-		if version < defines.MORPCVersion126 {
-			require.ErrorContains(t, validationErr, "version 126")
-			require.ErrorContains(t, decodeErr, "version 126")
+		if version < defines.MORPCVersion127 {
+			require.ErrorContains(t, validationErr, "version 127")
+			require.ErrorContains(t, decodeErr, "version 127")
 		} else {
 			require.NoError(t, validationErr)
 			require.NoError(t, decodeErr)
@@ -151,9 +151,9 @@ func TestCompiledSetOperationFloatKeyProtocol(t *testing.T) {
 			scope.NodeInfo.Addr = "remote:6001"
 			client.version = defines.MORPCVersion125
 			_, err = encodeRemoteScope(scope, c.proc)
-			require.ErrorContains(t, err, "version 126")
+			require.ErrorContains(t, err, "version 127")
 			require.Positive(t, client.calls, "actual stage must probe its destination")
-			client.version = defines.MORPCVersion126
+			client.version = defines.MORPCVersion127
 			data, err := encodeRemoteScope(scope, c.proc)
 			require.NoError(t, err)
 			var wire pipeline.Pipeline
@@ -165,7 +165,7 @@ func TestCompiledSetOperationFloatKeyProtocol(t *testing.T) {
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
 			_, err = decodeScope(data, c.proc, true, nil)
-			require.ErrorContains(t, err, "version 126")
+			require.ErrorContains(t, err, "version 127")
 		})
 	}
 }
@@ -205,7 +205,7 @@ func TestSetOperationFloatKeyAndDivisionProtocol(t *testing.T) {
 				c.proc.GetSessionInfo().SqlMode = mode
 				want := remoteExpressionProtocolVersion(features)
 				if tc.hasKey {
-					require.Equal(t, defines.MORPCVersion126, want)
+					require.Equal(t, defines.MORPCVersion127, want)
 				} else {
 					require.Less(t, want, defines.MORPCVersion116, "division diagnostics are not a persisted expression contract")
 					if mode != "" {
@@ -220,11 +220,11 @@ func TestSetOperationFloatKeyAndDivisionProtocol(t *testing.T) {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, floor)
 				err = validateRemoteExpressionPipelineProtocol(c.proc, p)
 				if tc.hasKey {
-					require.ErrorContains(t, err, "version 126")
+					require.ErrorContains(t, err, "version 127")
 				} else {
 					require.NoError(t, err)
 				}
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
 				require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 			}
 		})
@@ -258,17 +258,17 @@ func TestSetOperationFloatKeyAndCollationProtocol(t *testing.T) {
 			require.Equal(t, tc.hasKey, features.SetOperationFloatKeys)
 			want := defines.MORPCVersion117
 			if tc.hasKey {
-				want = defines.MORPCVersion126
+				want = defines.MORPCVersion127
 			}
 			require.Equal(t, want, remoteExpressionProtocolVersion(features))
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion117)
 			err = validateRemoteExpressionPipelineProtocol(c.proc, p)
 			if tc.hasKey {
-				require.ErrorContains(t, err, "version 126")
+				require.ErrorContains(t, err, "version 127")
 			} else {
 				require.NoError(t, err)
 			}
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, p))
 		})
 	}
@@ -302,7 +302,7 @@ func TestSetOperationFloatKeyAndTableCollationProtocol(t *testing.T) {
 			require.Equal(t, tc.hasKey, features.SetOperationFloatKeys)
 			want := defines.MORPCVersion118
 			if tc.hasKey {
-				want = defines.MORPCVersion126
+				want = defines.MORPCVersion127
 			}
 			require.Equal(t, want, remoteExpressionProtocolVersion(features))
 			persisted, err := plan2.RequiredPersistedExpressionProtocolVersion(p)
@@ -310,7 +310,7 @@ func TestSetOperationFloatKeyAndTableCollationProtocol(t *testing.T) {
 			require.Equal(t, want, persisted)
 			data, err := p.Marshal()
 			require.NoError(t, err)
-			for _, floor := range []int64{defines.MORPCVersion125, defines.MORPCVersion126} {
+			for _, floor := range []int64{defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, floor)
 				client.version = floor
 				sendErr := validateRemoteExpressionDestination(c.proc, &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}, features)
@@ -319,8 +319,8 @@ func TestSetOperationFloatKeyAndTableCollationProtocol(t *testing.T) {
 					decoded.release()
 				}
 				if floor < want {
-					require.ErrorContains(t, sendErr, "version 126")
-					require.ErrorContains(t, decodeErr, "version 126")
+					require.ErrorContains(t, sendErr, "version 127")
+					require.ErrorContains(t, decodeErr, "version 127")
 					require.Nil(t, decoded)
 				} else {
 					require.NoError(t, sendErr)
@@ -339,14 +339,14 @@ func TestSetOperationFloatKeyCapabilityComposition(t *testing.T) {
 		floor                         int64
 	}{
 		{"DIV-only", false, false, false, false, defines.MORPCVersion121},
-		{"DIV-and-key", true, false, false, false, defines.MORPCVersion126},
-		{"DIV-and-local-marker", false, true, false, false, defines.MORPCVersion126},
+		{"DIV-and-key", true, false, false, false, defines.MORPCVersion127},
+		{"DIV-and-local-marker", false, true, false, false, defines.MORPCVersion127},
 		{"timestampadd-only", false, false, false, true, defines.MORPCVersion124},
-		{"timestampadd-and-key", true, false, false, true, defines.MORPCVersion126},
-		{"timestampadd-and-local-marker", false, true, false, true, defines.MORPCVersion126},
+		{"timestampadd-and-key", true, false, false, true, defines.MORPCVersion127},
+		{"timestampadd-and-local-marker", false, true, false, true, defines.MORPCVersion127},
 		{"timestamp-only", false, false, true, false, defines.MORPCVersion122},
-		{"timestamp-and-key", true, false, true, false, defines.MORPCVersion126},
-		{"timestamp-and-local-marker", false, true, true, false, defines.MORPCVersion126},
+		{"timestamp-and-key", true, false, true, false, defines.MORPCVersion127},
+		{"timestamp-and-local-marker", false, true, true, false, defines.MORPCVersion127},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
@@ -402,11 +402,11 @@ func TestSetOperationFloatKeyCapabilityComposition(t *testing.T) {
 				require.NoError(t, validateScalarSetScopePlacement(owner, coordinator, []*Scope{{NodeInfo: coordinator}}))
 				require.Error(t, validateScalarSetScopePlacement(owner, coordinator, []*Scope{scope}))
 			}
-			for _, floor := range []int64{defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126} {
+			for _, floor := range []int64{defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127} {
 				client.version = floor
 				// Receive rollback from the previous round must not downgrade
 				// the current sender before independently probing its worker.
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
 				local := floor < tc.floor || tc.marked
 				if !tc.marked {
 					c.execType = plan2.ExecTypeAP_MULTICN
@@ -420,7 +420,7 @@ func TestSetOperationFloatKeyCapabilityComposition(t *testing.T) {
 				}
 				// A current sender must check the actual destination independently
 				// of its own floor and any earlier placement decision.
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
 				if tc.marked {
 					require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "coordinator-local")
 				} else {
@@ -464,9 +464,9 @@ func TestLoadIgnoreAndSetKeyCapabilityComposition(t *testing.T) {
 		floor       int64
 	}{
 		{"load-only", false, false, defines.MORPCVersion125},
-		{"load-and-key", true, false, defines.MORPCVersion126},
-		{"load-and-marker", false, true, defines.MORPCVersion126},
-		{"load-key-and-marker", true, true, defines.MORPCVersion126},
+		{"load-and-key", true, false, defines.MORPCVersion127},
+		{"load-and-marker", false, true, defines.MORPCVersion127},
+		{"load-key-and-marker", true, true, defines.MORPCVersion127},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			c, client := expressionProtocolTestCompile(t)
@@ -493,8 +493,8 @@ func TestLoadIgnoreAndSetKeyCapabilityComposition(t *testing.T) {
 			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
 			owner := &planpb.Query{Nodes: []*planpb.Node{{NodeType: planpb.Node_PROJECT, ProjectList: exprs, ScalarSetReaggregation: tc.marked}}, Steps: []int32{0}}
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			for _, floor := range []int64{0, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126} {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
+			for _, floor := range []int64{0, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
 				client.version = floor
 				client.customResponse = floor == 0
 				client.response = &query.Response{}
@@ -519,7 +519,95 @@ func TestLoadIgnoreAndSetKeyCapabilityComposition(t *testing.T) {
 					}
 				}
 				if floor == 0 {
-					rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
+					rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
+				} else {
+					rt.SetGlobalVariables(moruntime.MOProtocolVersion, floor)
+				}
+				localErr := validateRemoteExpressionFeatures(c.proc, features)
+				if floor < tc.floor {
+					require.Error(t, localErr)
+				} else {
+					require.NoError(t, localErr)
+				}
+				decoded, receiveErr := decodeScope(wire, c.proc, true, nil)
+				if decoded != nil {
+					decoded.release()
+				}
+				if floor < tc.floor || tc.marked {
+					require.Error(t, receiveErr)
+				} else {
+					require.NoError(t, receiveErr)
+				}
+			}
+			require.Equal(t, client.calls, client.releases)
+		})
+	}
+}
+
+func TestViewMetadataAndSetKeyCapabilityComposition(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		key, marked bool
+		floor       int64
+	}{
+		{"view-only", false, false, defines.MORPCVersion126},
+		{"view-and-key", true, false, defines.MORPCVersion127},
+		{"view-and-marker", false, true, defines.MORPCVersion127},
+		{"view-key-and-marker", true, true, defines.MORPCVersion127},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c, client := expressionProtocolTestCompile(t)
+			load, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "mo_view_definition", []*planpb.Expr{plan2.GetColExpr(types.T_varchar.ToType().PlanType(), 0, 0)})
+			require.NoError(t, err)
+			exprs := []*planpb.Expr{load}
+			if tc.key {
+				key, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "set_operation_float_key", []*planpb.Expr{plan2.GetColExpr(types.T_float64.ToType().PlanType(), 0, 1)})
+				require.NoError(t, err)
+				exprs = append(exprs, key)
+			}
+			p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: exprs, ScalarSetReaggregation: tc.marked}}}
+			features, err := planpb.RequiredRemoteExpressionFeatures(p)
+			require.NoError(t, err)
+			require.True(t, features.ViewMetadataFunctions)
+			require.False(t, features.LoadFKIgnoreCheck)
+			require.Equal(t, tc.key, features.SetOperationFloatKeys)
+			require.Equal(t, tc.marked, features.ScalarSetReaggregation)
+			require.Equal(t, tc.floor, remoteExpressionProtocolVersion(features))
+			wire, err := p.Marshal()
+			require.NoError(t, err)
+			op := projection.NewArgument()
+			defer op.Release()
+			op.ProjectList = exprs
+			scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
+			owner := &planpb.Query{Nodes: []*planpb.Node{{NodeType: planpb.Node_PROJECT, ProjectList: exprs, ScalarSetReaggregation: tc.marked}}, Steps: []int32{0}}
+			rt := moruntime.ServiceRuntime(c.proc.GetService())
+			for _, floor := range []int64{0, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127} {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
+				client.version = floor
+				client.customResponse = floor == 0
+				client.response = &query.Response{}
+				if tc.marked {
+					require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "coordinator-local")
+				} else {
+					c.execType, c.cnList = plan2.ExecTypeAP_MULTICN, engine.Nodes{scope.NodeInfo}
+					require.NoError(t, c.constrainRemoteExpressionWorkers(owner))
+					if floor < tc.floor {
+						require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+					} else {
+						require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
+					}
+					var required int64
+					data, sendErr := encodeRemoteScopeWithProtocol(scope, c.proc, &required)
+					if floor < tc.floor {
+						require.Error(t, sendErr)
+						require.Empty(t, data)
+					} else {
+						require.NoError(t, sendErr)
+						require.Equal(t, tc.floor, required)
+					}
+				}
+				if floor == 0 {
+					rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
 				} else {
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, floor)
 				}

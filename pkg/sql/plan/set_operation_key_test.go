@@ -526,7 +526,7 @@ func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
 			}
 			floor, err := RequiredPersistedExpressionProtocolVersion(p.GetQuery())
 			require.NoError(t, err)
-			require.Equal(t, defines.MORPCVersion126, floor)
+			require.Equal(t, defines.MORPCVersion127, floor)
 		})
 	}
 }
@@ -580,7 +580,7 @@ func TestSetOperationFloatKeyPersistedAdmission(t *testing.T) {
 	owner := &planpb.Query{Nodes: []*planpb.Node{{PhysicalEqualityKeyList: []*planpb.Expr{expr}}}}
 	floor, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion126, floor)
+	require.Equal(t, defines.MORPCVersion127, floor)
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
 		original, present := rt.GetGlobalVariables(key)
@@ -592,15 +592,15 @@ func TestSetOperationFloatKeyPersistedAdmission(t *testing.T) {
 			}
 		})
 	}
-	for _, version := range []int64{defines.MORPCVersion125, defines.MORPCVersion126} {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
+	for _, version := range []int64{defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127} {
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, version)
 		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, version)
 		readErr := RequirePersistedExpressionProtocol(proc.Ctx, proc, owner)
 		writeErr := RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner)
-		if version < defines.MORPCVersion126 {
-			require.ErrorContains(t, readErr, "126")
-			require.ErrorContains(t, writeErr, "126")
+		if version < defines.MORPCVersion127 {
+			require.ErrorContains(t, readErr, "127")
+			require.ErrorContains(t, writeErr, "127")
 		} else {
 			require.NoError(t, readErr)
 			require.NoError(t, writeErr)
