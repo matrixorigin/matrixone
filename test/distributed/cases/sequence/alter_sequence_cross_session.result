@@ -1,0 +1,47 @@
+drop database if exists issue30371;
+create database issue30371;
+use issue30371;
+create sequence seq_cs_01 as bigint increment by 1 start with 1;
+create table t_cs_01(id bigint primary key default nextval('seq_cs_01'), v int);
+insert into t_cs_01(v) values (10);
+select id,v from t_cs_01;
+id    v
+1    10
+select * from seq_cs_01;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+1    1    9223372036854775807    1    1    0    1
+use issue30371;
+alter sequence seq_cs_01 increment by 2;
+select * from seq_cs_01;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+1    1    9223372036854775807    1    2    0    1
+insert into t_cs_01(v) values (20);
+select id,v from t_cs_01;
+id    v
+1    10
+3    20
+select * from seq_cs_01;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+3    1    9223372036854775807    1    2    0    1
+create sequence seq_cs_02 as bigint;
+use issue30371;
+alter sequence seq_cs_02 increment by 5;
+select * from seq_cs_02;
+last_seq_num    min_value    max_value    start_value    increment_value    cycle    is_called
+1    1    9223372036854775807    1    5    0    0
+select nextval('seq_cs_02');
+nextval(seq_cs_02)
+1
+select nextval('seq_cs_02');
+nextval(seq_cs_02)
+6
+create sequence seq_cs_03 as bigint;
+create table t_cs_03(id bigint primary key default nextval('seq_cs_03'), v int);
+insert into t_cs_03(v) values (10);
+alter sequence seq_cs_03 increment by 2;
+insert into t_cs_03(v) values (20);
+select id,v from t_cs_03;
+id    v
+1    10
+3    20
+drop database issue30371;

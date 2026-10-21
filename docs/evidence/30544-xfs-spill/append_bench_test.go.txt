@@ -1,0 +1,26 @@
+package spillio
+
+import (
+ "io"
+ "os"
+ "path/filepath"
+ "testing"
+)
+
+func BenchmarkAppendXFS(b *testing.B) {
+ for _,preextend:=range []bool{false,true} {
+ name:="raw";if preextend {name="preextend"}
+ b.Run(name,func(b *testing.B){
+  path:=filepath.Join(b.TempDir(),"bucket")
+  payload:=make([]byte,64<<10)
+  b.SetBytes(int64(len(payload)))
+  b.ResetTimer()
+  for i:=0;i<b.N;i++ {
+   f,err:=os.OpenFile(path,os.O_CREATE|os.O_RDWR,0600);if err!=nil {b.Fatal(err)}
+   if _,err=f.Seek(0,io.SeekEnd);err!=nil {f.Close();b.Fatal(err)}
+   if preextend {_,err=WritePreextended(f,payload)} else {_,err=f.Write(payload)}
+   closeErr:=f.Close();if err!=nil {b.Fatal(err)};if closeErr!=nil {b.Fatal(closeErr)}
+  }
+ })
+ }
+}

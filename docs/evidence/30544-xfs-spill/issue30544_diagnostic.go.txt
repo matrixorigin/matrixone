@@ -1,0 +1,46 @@
+//go:build issue30544diag
+
+// Diagnostic shim only. Place as an untracked file in pkg/vm/process of the
+// isolated exact-revision checkout. It changes no production budget algorithm.
+package process
+
+import "fmt"
+
+// Issue30544BudgetSnapshots discovers private CN ledgers in a dedicated test
+// process. Select the test CN service; do not use against unrelated workloads.
+func Issue30544BudgetSnapshots() map[string]ExecutionResourceBudgetSnapshot {
+	out := make(map[string]ExecutionResourceBudgetSnapshot)
+	executionResourceCNBudgets.Range(func(key, value any) bool {
+		service, ok := key.(string)
+		b, valid := value.(*ExecutionResourceBudget)
+		if ok && valid && b != nil {
+			out[service] = b.Snapshot()
+		}
+		return true
+	})
+	return out
+}
+
+// Issue30544RefreshModeledDisk calls the exact automatic refresh implementation
+// with a synthetic statfs sample. The model begins with an idle free-space
+// baseline and subtracts factor times the actual SQL-owned logical spill bytes.
+// factor1 represents allocated=logical; factor2 represents2x allocation.
+// No reservation, cap, error, or query state is forged by this helper.
+func Issue30544RefreshModeledDisk(service string, idleAvailable, factor uint64) (ExecutionResourceBudgetSnapshot, error) {
+	value, ok := executionResourceCNBudgets.Load(service)
+	if !ok {
+		return ExecutionResourceBudgetSnapshot{}, fmt.Errorf("unknown CN budget %q", service)
+	}
+	b, ok := value.(*ExecutionResourceBudget)
+	if !ok || b == nil || factor == 0 || idleAvailable == 0 {
+		return ExecutionResourceBudgetSnapshot{}, fmt.Errorf("invalid diagnostic budget/model")
+	}
+	err := b.refreshAutomaticSpillDiskCap(func() uint64 {
+		logical := b.SpillDiskUsed()
+		if logical > (idleAvailable-1)/factor {
+			return 1
+		}
+		return idleAvailable - factor*logical
+	})
+	return b.Snapshot(), err
+}
