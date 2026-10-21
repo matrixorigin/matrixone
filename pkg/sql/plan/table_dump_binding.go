@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"iter"
 	"math"
 	"strings"
 	"time"
@@ -125,31 +126,38 @@ type tableDumpExpression struct {
 }
 
 func tableDumpExpressions(def *planpb.TableDef) []tableDumpExpression {
-	return persistedTableExpressions(def, false)
-}
-
-func persistedTableExpressions(def *planpb.TableDef, _ bool) []tableDumpExpression {
 	var result []tableDumpExpression
-	for _, col := range def.Cols {
-		if col == nil {
-			continue
-		}
-		if col.Default != nil && col.Default.Expr != nil {
-			result = append(result, tableDumpExpression{"default", col.Name, col.Default.OriginString, col, nil, col.Default.Expr})
-		}
-		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-			result = append(result, tableDumpExpression{"on_update", col.Name, col.OnUpdate.OriginString, col, nil, col.OnUpdate.Expr})
-		}
-		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
-			result = append(result, tableDumpExpression{"generated", col.Name, col.GeneratedCol.OriginString, col, nil, col.GeneratedCol.Expr})
-		}
-	}
-	for _, check := range def.Checks {
-		if check != nil && check.Check != nil {
-			result = append(result, tableDumpExpression{"check", check.Name, check.OriginSql, nil, check, check.Check})
-		}
+	for item := range persistedTableExpressions(def) {
+		result = append(result, item)
 	}
 	return result
+}
+
+// Resolution usually has no legacy expression. Yield owners lazily so that
+// migration can filter/cancel without allocating a slice for every default.
+// DUMP collects the same ordered traversal when it needs indexed declarations.
+func persistedTableExpressions(def *planpb.TableDef) iter.Seq[tableDumpExpression] {
+	return func(yield func(tableDumpExpression) bool) {
+		for _, col := range def.Cols {
+			if col == nil {
+				continue
+			}
+			if col.Default != nil && col.Default.Expr != nil && !yield(tableDumpExpression{"default", col.Name, col.Default.OriginString, col, nil, col.Default.Expr}) {
+				return
+			}
+			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && !yield(tableDumpExpression{"on_update", col.Name, col.OnUpdate.OriginString, col, nil, col.OnUpdate.Expr}) {
+				return
+			}
+			if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil && !yield(tableDumpExpression{"generated", col.Name, col.GeneratedCol.OriginString, col, nil, col.GeneratedCol.Expr}) {
+				return
+			}
+		}
+		for _, check := range def.Checks {
+			if check != nil && check.Check != nil && !yield(tableDumpExpression{"check", check.Name, check.OriginSql, nil, check, check.Check}) {
+				return
+			}
+		}
+	}
 }
 
 func tableDumpParserModes() []string {

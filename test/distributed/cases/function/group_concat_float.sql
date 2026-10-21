@@ -62,4 +62,11 @@ select g = '-0.00000000000000123456789012345681.00' as format_sibling, f = '-0.0
 update float_composed set a = 1.2345678901234567e-15;
 select g = '0.00000000000000123456789012345681.00' as format_sibling, f = '0.00000000000000123456789012345682' as set_sibling, n = concat(cast(a as char),format(concat(a),2)) as nested_format from float_composed;
 
+-- IN owns list conversions, including comparisons expanded around NULL.
+create table float_membership (id int primary key, a double, c varchar(100), g bool generated always as (concat(a) in ('1','2',c)) stored, n bool generated always as (concat(a) not in ('1','2',c)) stored, z bool generated always as (concat(a) in ('1',null,c)) stored, e bool generated always as (concat(a) in ('1','2',cast(c as char(32)))) stored);
+insert into float_membership (id,a,c) values (1,-1.2345678901234567e-15,'-0.0000000000000012345678901234568'),(2,1.5,'other'),(3,null,'-0.0000000000000012345678901234568');
+select id,g,n,z,e from float_membership order by id;
+update float_membership set a=1.5,c='1.5' where id=1;
+select id,g,n,z,e from float_membership where id=1;
+
 drop database group_concat_float_28660;
