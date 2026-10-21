@@ -30,6 +30,137 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// matrixone#30635: JSONLINE OUTFILE exports binary columns wrapped as
+// {"$binary":"<base64>"} objects; the jsonline loader decodes only that
+// explicit wrapper so export->load round-trips byte-exact. Bare JSON strings
+// pass through byte-exact (historical plain-text files), even when they are
+// valid base64 such as "test". Non-binary columns are untouched.
+func TestJsonLineBinaryBase64Roundtrip(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	attrs := []plan.ExternAttr{{ColName: "raw", ColIndex: 0, ColFieldIndex: 0}}
+	for _, tc := range []struct {
+		name     string
+		jsonData string
+		typeId   int32
+		line     string
+		want     string
+	}{
+		// Wrapped MO-exported payloads decode to the original bytes.
+		{name: "varbinary wrapped object", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":{"$binary":"AP8="}}`, want: "\x00\xff"},
+		{name: "varbinary wrapped array", jsonData: tree.ARRAY, typeId: int32(types.T_varbinary), line: `[{"$binary":"AP8="}]`, want: "\x00\xff"},
+		{name: "blob wrapped object", jsonData: tree.OBJECT, typeId: int32(types.T_blob), line: `{"raw":{"$binary":"qwA="}}`, want: "\xab\x00"},
+		{name: "blob wrapped array", jsonData: tree.ARRAY, typeId: int32(types.T_blob), line: `[{"$binary":"qwA="}]`, want: "\xab\x00"},
+		{name: "binary wrapped object", jsonData: tree.OBJECT, typeId: int32(types.T_binary), line: `{"raw":{"$binary":"AP8="}}`, want: "\x00\xff"},
+		{name: "binary wrapped array", jsonData: tree.ARRAY, typeId: int32(types.T_binary), line: `[{"$binary":"AP8="}]`, want: "\x00\xff"},
+		// Bare strings pass through byte-exact, even valid base64.
+		{name: "plain text object", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":"test"}`, want: "test"},
+		{name: "plain text array", jsonData: tree.ARRAY, typeId: int32(types.T_varbinary), line: `["test"]`, want: "test"},
+		{name: "bare base64 passthrough object", jsonData: tree.OBJECT, typeId: int32(types.T_binary), line: `{"raw":"AP8="}`, want: "AP8="},
+		{name: "bare base64 passthrough array", jsonData: tree.ARRAY, typeId: int32(types.T_blob), line: `["AP8="]`, want: "AP8="},
+		{name: "not base64 falls through", jsonData: tree.OBJECT, typeId: int32(types.T_varbinary), line: `{"raw":"not-base64!"}`, want: "not-base64!"},
+		// Non-binary columns never decode.
+		{name: "varchar untouched", jsonData: tree.OBJECT, typeId: int32(types.T_varchar), line: `{"raw":"AP8="}`, want: "AP8="},
+		{name: "text untouched", jsonData: tree.OBJECT, typeId: int32(types.T_text), line: `{"raw":"AP8="}`, want: "AP8="},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cols := []*plan.ColDef{{Name: "raw", Typ: plan.Type{Id: tc.typeId}}}
+			reader := &CsvReader{}
+			line, err := reader.transJson2Lines(proc.Ctx, tc.line, attrs, cols, tc.jsonData)
+			require.NoError(t, err)
+			require.Len(t, line, 1)
+			require.False(t, line[0].IsNull)
+			require.Equal(t, tc.want, line[0].Val)
+		})
+	}
+}
+
+// matrixone#30635: NULL is decided only from the undecoded JSON input. A
+// wrapped base64 payload whose decoded bytes equal the \N sentinel (X'5C4E',
+// base64 "XE4=") materializes as a value, never NULL; only a raw sentinel
+// string (or JSON null) is NULL. Both jsondata shapes are covered through
+// getOneRowData materialization.
+func TestJsonLineBinaryNullMetadataSeparated(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		jsonData string
+		line     string
+		wantNull bool
+		want     []byte
+	}{
+		{name: "object wrapped sentinel bytes", jsonData: tree.OBJECT, line: `{"raw":{"$binary":"XE4="}}`, wantNull: false, want: []byte{0x5c, 0x4e}},
+		{name: "array wrapped sentinel bytes", jsonData: tree.ARRAY, line: `[{"$binary":"XE4="}]`, wantNull: false, want: []byte{0x5c, 0x4e}},
+		{name: "object raw sentinel", jsonData: tree.OBJECT, line: `{"raw":"\\N"}`, wantNull: true},
+		{name: "array raw sentinel", jsonData: tree.ARRAY, line: `["\\N"]`, wantNull: true},
+		{name: "object json null", jsonData: tree.OBJECT, line: `{"raw":null}`, wantNull: true},
+		{name: "array json null", jsonData: tree.ARRAY, line: `[null]`, wantNull: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+
+			attrs := []plan.ExternAttr{{ColName: "raw", ColIndex: 0, ColFieldIndex: 0}}
+			cols := []*plan.ColDef{{Name: "raw", Typ: plan.Type{Id: int32(types.T_varbinary)}}}
+			reader := &CsvReader{}
+			line, err := reader.transJson2Lines(proc.Ctx, tc.line, attrs, cols, tc.jsonData)
+			require.NoError(t, err)
+			require.Len(t, line, 1)
+			require.Equal(t, tc.wantNull, line[0].IsNull)
+
+			bat := batch.NewWithSize(1)
+			bat.Vecs[0] = vector.NewVec(types.T_varbinary.ToType())
+			defer bat.Clean(proc.Mp())
+
+			param := &ExternalParam{
+				ExParamConst: ExParamConst{
+					ParallelLoad:  true,
+					ColumnListLen: 1,
+					StrictSqlMode: true,
+					Attrs:         attrs,
+					Cols:          cols,
+					Extern: &tree.ExternParam{
+						ExParamConst: tree.ExParamConst{Format: tree.JSONLINE},
+						ExParam:      tree.ExParam{ExternType: int32(plan.ExternType_LOAD), JsonData: tc.jsonData},
+					},
+				},
+				ExParam: ExParam{Fileparam: &ExFileparam{}},
+			}
+
+			require.NoError(t, getOneRowData(proc, bat, line, 0, param))
+			require.Equal(t, tc.wantNull, bat.Vecs[0].GetNulls().Contains(0))
+			if !tc.wantNull {
+				require.Equal(t, tc.want, bat.Vecs[0].GetBytesAt(0))
+			}
+		})
+	}
+}
+
+// matrixone#30635: an explicit "$binary" wrapper with an invalid base64
+// payload is rejected instead of being silently reinterpreted.
+func TestJsonLineBinaryWrapperRejectsInvalidBase64(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+
+	attrs := []plan.ExternAttr{{ColName: "raw", ColIndex: 0, ColFieldIndex: 0}}
+	cols := []*plan.ColDef{{Name: "raw", Typ: plan.Type{Id: int32(types.T_varbinary)}}}
+	for _, tc := range []struct {
+		name     string
+		jsonData string
+		line     string
+	}{
+		{name: "object", jsonData: tree.OBJECT, line: `{"raw":{"$binary":"***"}}`},
+		{name: "array", jsonData: tree.ARRAY, line: `[{"$binary":"***"}]`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := &CsvReader{}
+			_, err := reader.transJson2Lines(proc.Ctx, tc.line, attrs, cols, tc.jsonData)
+			require.Error(t, err)
+			require.Contains(t, err.Error(), JsonBinaryKey)
+		})
+	}
+}
+
 func TestJSONLineObjectProjectionUsesPhysicalFieldIndex(t *testing.T) {
 	const jsonLine = `{"a":"one","b":"two","c":"three","d":"four","e":"five","f":"six"}`
 	columns := []string{"a", "b", "c", "d", "e", "f"}

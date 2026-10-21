@@ -56,7 +56,7 @@ LDFLAGS := -O3 -std=c++17 -Xcompiler "-Wall -Wextra -fPIC -fopenmp"
 # objects on the next make. Overbuilds vs. true compiler-tracked deps (.d
 # files), but doesn't need a prior compile to populate dep info and never
 # misses a header — touch a .hpp and the next `make` rebuilds.
-HEADERS := $(wildcard *.h *.hpp)
+HEADERS := $(wildcard *.h *.hpp) ../membership.h ../cbitmap.h ../croaring.h ../sorted64.h
 
 # Source files
 C_SRCS := brute_force_c.cpp ivf_flat_c.cpp ivf_pq_c.cpp cagra_c.cpp kmeans_c.cpp adhoc_c.cpp distance_c.cpp blockscaled_matmul_c.cpp
@@ -65,6 +65,13 @@ TEST_SRCS := test/main_test.cu test/brute_force_test.cu test/ivf_flat_test.cu te
 
 # Object files
 OBJS := $(C_SRCS:.cpp=.o) $(CPP_SRCS:.cpp=.o)
+# The membership probes filter.hpp calls (cgo/cbitmap.c, cgo/croaring.c,
+# cgo/sorted64.c, with the vendored CRoaring). libmo.so links the cgo/ objects;
+# libmocuvs.so leaves them undefined; the binaries here that link $(OBJS) or
+# include filter.hpp link these copies.
+MO_C_OBJS := obj/mo_c/cbitmap.o obj/mo_c/croaring.o obj/mo_c/sorted64.o
+MO_C_LIBS := ../../thirdparties/install/lib/libroaring.a
+MO_C_CFLAGS := -std=c11 -O3 -fPIC -I../../thirdparties/install/include
 TEST_OBJS := $(patsubst test/%.cu,obj/test/%.o,$(TEST_SRCS))
 
 .PHONY: all clean debug asan release test
@@ -84,6 +91,7 @@ release: all
 
 debug: override NVCC_FLAGS := $(filter-out -O%,$(NVCC_FLAGS)) -O0 -g -lineinfo
 debug: override LDFLAGS := $(filter-out -O%,$(LDFLAGS)) -O0 -g
+debug: override MO_C_CFLAGS := $(filter-out -O%,$(MO_C_CFLAGS)) -O0 -g
 debug: all
 
 # AddressSanitizer build of the host (CPU) side of every cuvs .cpp/.hpp.
@@ -104,6 +112,7 @@ debug: all
 #     ./cuvs.test -test.run TestIndexInfoComprehensive -test.count=50 -test.v
 asan: NVCC_FLAGS := $(filter-out -O3,$(NVCC_FLAGS)) -O1 -g -lineinfo -Xcompiler "-fsanitize=address -fno-omit-frame-pointer"
 asan: LDFLAGS    := $(filter-out -O3,$(LDFLAGS)) -g -Xcompiler "-fsanitize=address"
+asan: MO_C_CFLAGS := $(filter-out -O3,$(MO_C_CFLAGS)) -O1 -g -fsanitize=address -fno-omit-frame-pointer
 asan: all
 
 libmocuvs.so: $(OBJS)
@@ -117,6 +126,13 @@ obj/test/%.o: test/%.cu $(HEADERS)
 	@mkdir -p $(@D)
 	@echo "NVCC $<"
 	$(NVCC) $(NVCC_FLAGS) -c $< -o $@
+
+obj/mo_c/%.o: ../%.c ../%.h ../bitmap.h
+	@mkdir -p $(dir $@)
+	$(CC) $(MO_C_CFLAGS) -c $< -o $@
+
+test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans uint8_quant_bug wiki1m_uint8_bug: $(MO_C_OBJS)
+test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans uint8_quant_bug wiki1m_uint8_bug: LIBS += $(MO_C_LIBS)
 
 test_cuvs_worker: $(TEST_OBJS) $(OBJS)
 	@echo "Linking $@"

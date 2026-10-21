@@ -434,3 +434,65 @@ func TestRemoteIndexSearchScanFromOlderVersionIsRefused(t *testing.T) {
 	require.NoError(t, validateRemoteVectorPartitionProtocol(proc, source([]byte(`{}`))))
 	require.NoError(t, validateRemoteVectorPartitionProtocol(proc, applied([]byte(`{}`))))
 }
+
+// TestSearchKnobScopeRefusesPriorEpochDestination: a frozen remote fragment
+// carrying search knobs is refused when its destination reports the epoch
+// below vectorscan.SearchKnobsProtocolVersion, which main allocated to another
+// feature; the same destination still takes a fragment without knobs.
+func TestSearchKnobScopeRefusesPriorEpochDestination(t *testing.T) {
+	prior := vectorscan.SearchKnobsProtocolVersion - 1
+	require.Greater(t, prior, vectorscan.IndexSearchScanProtocolVersion)
+
+	c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "b", Addr: "b:6001"}, {Id: "a", Addr: "a:6001"}})
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, vectorscan.SearchKnobsProtocolVersion)
+	client.version = vectorscan.SearchKnobsProtocolVersion
+	node := vectorPlacementNode()
+	node.IndexSearchScan.InternalTopk = 1000
+	node.IndexSearchScan.MaxInternalTopk = 2000
+	node.IndexSearchScan.MaxNprobe = 4
+	scopes, err := c.compileIndexSearchScan(node)
+	require.NoError(t, err)
+	t.Cleanup(func() { ReleaseScopes(scopes) })
+	remote := scopes[0]
+	require.Equal(t, "a", remote.NodeInfo.Id)
+
+	var required int64
+	data, err := encodeRemoteScopeWithProtocol(remote, c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, vectorscan.SearchKnobsProtocolVersion, required)
+
+	// The frozen destination is replaced by a build at the prior epoch.
+	client.version = prior
+	_, err = encodeRemoteScope(remote, c.proc)
+	require.ErrorContains(t, err, "remote destination")
+	require.ErrorContains(t, err, fmt.Sprintf("%d", vectorscan.SearchKnobsProtocolVersion))
+
+	// The bound execution-stream handshake refuses the prior epoch too.
+	stream := &fakeStreamSender{}
+	receiveCh := make(chan morpc.Message, 1)
+	receiveCh <- &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
+		Sid: pipeline.Status_Last, ProtocolVersion: prior}
+	sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: receiveCh}
+	require.Error(t, sender.confirmProtocolOnStream(required))
+
+	// A receiver at the prior epoch refuses the knob scope it decodes.
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, prior)
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.ErrorContains(t, err, fmt.Sprintf("version %d", vectorscan.SearchKnobsProtocolVersion))
+
+	// Control: a fragment without knobs runs on the prior-epoch destination.
+	plain, err := c.compileIndexSearchScan(vectorPlacementNode())
+	require.NoError(t, err)
+	t.Cleanup(func() { ReleaseScopes(plain) })
+	required = 0
+	plainData, err := encodeRemoteScopeWithProtocol(plain[0], c.proc, &required)
+	require.NoError(t, err)
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, required)
+	decoded, err := decodeScope(plainData, c.proc, true, nil)
+	require.NoError(t, err)
+	t.Cleanup(decoded.release)
+	receiveCh <- &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck,
+		Sid: pipeline.Status_Last, ProtocolVersion: prior}
+	require.NoError(t, sender.confirmProtocolOnStream(required))
+}

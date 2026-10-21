@@ -92,15 +92,6 @@ type vectorSortContext struct {
 	hasMembership    bool
 }
 
-// resolveVectorNprobe chooses the query's base probe count without consulting
-// the session when an override is present. AUTO may still widen this base.
-func (builder *QueryBuilder) resolveVectorNprobe(option *plan.RankOption, fallback int64) (int64, error) {
-	if option != nil && option.Nprobe != 0 {
-		return option.Nprobe, nil
-	}
-	return builder.resolveInt64Variable("probe_limit", fallback)
-}
-
 func (builder *QueryBuilder) resolveScanNodeWithIndex(node *plan.Node, depth int32) *plan.Node {
 	if node.NodeType == plan.Node_PROJECT && len(node.Children) == 1 {
 		return builder.resolveScanNodeWithIndex(builder.qry.Nodes[node.Children[0]], depth)
@@ -330,7 +321,7 @@ func (builder *QueryBuilder) buildVectorSortContextThroughMembershipJoin(
 	if scanNode == nil || scanNode.TableDef == nil || orderExpr == nil || joinNode.Children[0] != scanNode.NodeId || len(joinNode.OnList) == 0 {
 		return nil
 	}
-	if !hasIvfFlatIndex(scanNode.TableDef) {
+	if !hasMembershipVectorIndex(scanNode.TableDef) {
 		return nil
 	}
 	distFnExpr := orderExpr.GetF()
@@ -447,12 +438,14 @@ func (builder *QueryBuilder) tryJoinThroughVectorSide(
 	return scanNode, vecArgExpr
 }
 
-func hasIvfFlatIndex(tableDef *plan.TableDef) bool {
+// hasMembershipVectorIndex reports whether tableDef has an index whose algorithm has the
+// membership capability (indexplugin.SupportsMembership).
+func hasMembershipVectorIndex(tableDef *plan.TableDef) bool {
 	if tableDef == nil {
 		return false
 	}
 	for _, idx := range tableDef.Indexes {
-		if idx != nil && idx.IndexAlgo == catalog.MoIndexIvfFlatAlgo.ToString() {
+		if idx != nil && indexplugin.SupportsMembership(idx.IndexAlgo) {
 			return true
 		}
 	}
@@ -1301,48 +1294,50 @@ func (builder *QueryBuilder) peelAndRewriteDistFnFilters(
 
 	currIdx := 0
 	for _, filter := range filters {
-		var (
-			vecLit string
-			fdist  *plan.Function
-		)
-
-		f := filter.GetF()
-		if f == nil || len(f.Args) != 2 {
-			goto KEEP
+		if !isDistFnRangeFilter(filter, partPos, origFuncName, vecLitArg) {
+			filters[currIdx] = filter
+			currIdx++
+			continue
 		}
-		switch f.Func.ObjName {
-		case "<", "<=", ">", ">=":
-		default:
-			goto KEEP
-		}
-
-		fdist = f.Args[0].GetF()
-		if fdist == nil || len(fdist.Args) != 2 {
-			goto KEEP
-		}
-		if fdist.Func.ObjName != origFuncName {
-			goto KEEP
-		}
-		if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != partPos {
-			goto KEEP
-		}
-		vecLit = fdist.Args[1].GetLit().GetVecVal()
-		if vecLit == "" || vecLit != vecLitArg.GetLit().GetVecVal() {
-			goto KEEP
-		}
-
-		{
-			rewritten := DeepCopyExpr(filter)
-			rewritten.GetF().Args[0] = makeScoreCol()
-			peeled = append(peeled, rewritten)
-		}
-		continue
-
-	KEEP:
-		filters[currIdx] = filter
-		currIdx++
+		rewritten := DeepCopyExpr(filter)
+		rewritten.GetF().Args[0] = makeScoreCol()
+		peeled = append(peeled, rewritten)
 	}
 	return filters[:currIdx], peeled
+}
+
+// isDistFnRangeFilter reports whether filter is `origFuncName(col[partPos], vecLitArg)
+// OP K` with OP one of `<`, `<=`, `>`, `>=`, the shape peelAndRewriteDistFnFilters
+// moves onto the index search.
+func isDistFnRangeFilter(filter *plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr) bool {
+	f := filter.GetF()
+	if f == nil || len(f.Args) != 2 {
+		return false
+	}
+	switch f.Func.ObjName {
+	case "<", "<=", ">", ">=":
+	default:
+		return false
+	}
+	fdist := f.Args[0].GetF()
+	if fdist == nil || len(fdist.Args) != 2 || fdist.Func.ObjName != origFuncName {
+		return false
+	}
+	if partCol := fdist.Args[0].GetCol(); partCol == nil || partCol.ColPos != partPos {
+		return false
+	}
+	vecLit := fdist.Args[1].GetLit().GetVecVal()
+	return vecLit != "" && vecLit == vecLitArg.GetLit().GetVecVal()
+}
+
+// hasNonDistFnFilter reports whether filters has a filter isDistFnRangeFilter rejects.
+func hasNonDistFnFilter(filters []*plan.Expr, partPos int32, origFuncName string, vecLitArg *plan.Expr) bool {
+	for _, filter := range filters {
+		if !isDistFnRangeFilter(filter, partPos, origFuncName, vecLitArg) {
+			return true
+		}
+	}
+	return false
 }
 
 // replaceDistFnExprsWithScoreCol walks each expression in exprs and substitutes every distance call
