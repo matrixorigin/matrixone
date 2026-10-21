@@ -80,6 +80,64 @@ func TestLoadRejectsDuplicatePrimaryKeys(t *testing.T) {
 		load := func(path, table string) string {
 			return fmt.Sprintf("load data infile '%s' into table %s fields terminated by ','", path, table)
 		}
+
+		t.Run("session policy and cached statements", func(t *testing.T) {
+			var enabled int
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.mo_pk_check_by_cn").Scan(&enabled))
+			require.Zero(t, enabled)
+			other, err := db.Conn(ctx)
+			require.NoError(t, err)
+			defer other.Close()
+			exec(t, "create table switch_load(id bigint primary key,name varchar(20))")
+			exec(t, "create table switch_other(id bigint primary key,name varchar(20))")
+			query := load(writeInput(t, "switch.csv", "1,a\n1,b\n"), "switch_load")
+			exec(t, query)
+			require.Equal(t, 2, count(t, "switch_load"), "OFF bypasses CN checking with TN checking also OFF")
+			exec(t, "delete from switch_load")
+			exec(t, "set session mo_pk_check_by_cn=on")
+			requireDuplicate(t, query)
+			require.Zero(t, count(t, "switch_load"))
+			requireDuplicate(t, "insert into switch_load values(1,'a'),(1,'b')")
+			require.NoError(t, other.QueryRowContext(ctx, "select @@session.mo_pk_check_by_cn").Scan(&enabled))
+			require.Zero(t, enabled, "another live connection must not inherit ON")
+			_, err = other.ExecContext(ctx, load(filepath.Join(inputDir, "switch.csv"), database+".switch_other"))
+			require.NoError(t, err)
+			require.Equal(t, 2, count(t, "switch_other"))
+			_, err = conn.ExecContext(ctx, "set global mo_pk_check_by_cn=on")
+			require.Error(t, err, "this is a session-only setting")
+			_, err = conn.ExecContext(ctx, "set session mo_pk_check_by_cn=2")
+			require.Error(t, err)
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@session.mo_pk_check_by_cn").Scan(&enabled))
+			require.Equal(t, 1, enabled, "invalid SET preserves the value")
+			exec(t, "set session mo_pk_check_by_cn=off")
+			requireDuplicate(t, "insert into switch_load values(1,'a'),(1,'b')")
+			// PREPARE LOAD is not admitted by the existing SQL grammar. Use
+			// repeated LOAD text and a prepared INSERT across the same SETs.
+			prepared, err := conn.PrepareContext(ctx, "insert into switch_load values(?,?),(?,?)")
+			require.NoError(t, err)
+			defer prepared.Close()
+			for _, on := range []bool{false, true, false} {
+				exec(t, fmt.Sprintf("set session mo_pk_check_by_cn=%t", on))
+				_, err = conn.ExecContext(ctx, query)
+				if on {
+					var duplicate *mysql.MySQLError
+					require.ErrorAs(t, err, &duplicate)
+					require.Equal(t, uint16(1062), duplicate.Number)
+					require.Zero(t, count(t, "switch_load"))
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, 2, count(t, "switch_load"))
+					exec(t, "delete from switch_load")
+				}
+				_, err = prepared.ExecContext(ctx, 5, "a", 5, "b")
+				var duplicate *mysql.MySQLError
+				require.ErrorAs(t, err, &duplicate)
+				require.Equal(t, uint16(1062), duplicate.Number)
+				require.Zero(t, count(t, "switch_load"), "prepared INSERT keeps validation and rollback across SETs")
+			}
+		})
+		// The existing correctness suite exercises the explicitly enabled policy.
+		exec(t, "set session mo_pk_check_by_cn=on")
 		exec(t, "create table t(id bigint primary key, name varchar(256))")
 		t.Run("input duplicate and rollback", func(t *testing.T) {
 			path := writeInput(t, "duplicate.csv", "1,a\n1,b\n")
