@@ -65,30 +65,88 @@ func (c *BoundTableOperator) iterObject(from, to types.TS, isTombstone bool) err
 		}
 		return c.visitor.VisitObj(obj)
 	}
+	return visitLogtailObjects(snapshot, from, to, visit)
+}
 
+func visitLogtailObjects(
+	snapshot catalog.ObjectListSnapshot, from, to types.TS,
+	visit func(*catalog.ObjectEntry) error,
+) error {
 	for group := catalog.ObjectListGroupAppendableCreate; group <= catalog.ObjectListGroupNonAppendableDrop; group++ {
-		groupIt := snapshot.Group(group)
-		if group == catalog.ObjectListGroupAppendableCreate ||
-			group == catalog.ObjectListGroupAppendableCreateWithDrop {
-			if catalog.SeekObjectListGroupBefore(&groupIt, group, from) {
-				if err := visit(groupIt.Item()); err != nil {
-					groupIt.Release()
+		appendableCreate := group == catalog.ObjectListGroupAppendableCreate ||
+			group == catalog.ObjectListGroupAppendableCreateWithDrop
+		var bookmarkStart *catalog.ObjectEntry
+		var bookmarkValid bool
+		if appendableCreate {
+			// An append on an older object can commit after a newer object is
+			// created. Only a finalized max-commit prefix may be omitted.
+			bookmarkStart, bookmarkValid = snapshot.CommitBookmarkStart(group, from)
+		}
+		bookmarkBeforeFrom := false
+		if bookmarkStart != nil {
+			commitTS := bookmarkStart.ObjectListCommitTS()
+			bookmarkBeforeFrom = commitTS.LT(&from)
+		}
+		var last *catalog.ObjectEntry
+		for {
+			groupIt := snapshot.Group(group)
+			var ok bool
+			switch {
+			case last != nil:
+				// The pinned group tree is immutable. Resume after the last
+				// fetched key, even if its visitor waited for a transaction.
+				ok = groupIt.Seek(last)
+				if ok {
+					ok = groupIt.Next()
+				}
+			case appendableCreate && !bookmarkValid:
+				ok = groupIt.First()
+			case appendableCreate && bookmarkBeforeFrom:
+				ok = groupIt.Seek(bookmarkStart)
+			default:
+				// A finalized append-max below from says nothing about
+				// catalog creation in [from,to]. Never seek past from.
+				ok = catalog.SeekObjectListGroup(&groupIt, group, from)
+			}
+
+			// The visitor can wait for append transactions whose completion
+			// updates ObjectList. Release the B-tree read lock before visiting.
+			var batch [64]*catalog.ObjectEntry
+			count := 0
+			for ok && count < len(batch) {
+				obj := groupIt.Item()
+				commitTS := obj.ObjectListCommitTS()
+				if commitTS.GT(&to) {
+					break
+				}
+				batch[count] = obj
+				count++
+				last = obj
+				ok = groupIt.Next()
+			}
+			finished := !ok || count < len(batch)
+			groupIt.Release()
+			for _, obj := range batch[:count] {
+				commitTS := obj.ObjectListCommitTS()
+				if appendableCreate && commitTS.LT(&from) {
+					if data := obj.GetObjectData(); data != nil {
+						if maxCommitter, ok := data.(interface{ GetAppendMaxCommitTS() (types.TS, bool) }); ok {
+							if maxCommit, finalized := maxCommitter.GetAppendMaxCommitTS(); finalized && maxCommit.LT(&from) {
+								continue
+							}
+						}
+					}
+				}
+				// Catalog creations in [from, to] are visited even when their
+				// append max is below from or no rows were appended.
+				if err := visit(obj); err != nil {
 					return err
 				}
 			}
-		}
-		for ok := catalog.SeekObjectListGroup(&groupIt, group, from); ok; ok = groupIt.Next() {
-			obj := groupIt.Item()
-			commitTS := obj.ObjectListCommitTS()
-			if commitTS.GT(&to) {
+			if finished {
 				break
 			}
-			if err := visit(obj); err != nil {
-				groupIt.Release()
-				return err
-			}
 		}
-		groupIt.Release()
 	}
 	return nil
 }

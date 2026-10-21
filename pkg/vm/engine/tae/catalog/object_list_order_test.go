@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -119,6 +120,122 @@ func TestObjectListCopiesOnlyModifiedGroups(t *testing.T) {
 	for group := ObjectListGroupAppendableCreateWithDrop; group <= ObjectListGroupNonAppendableDrop; group++ {
 		require.Same(t, before.group(group), after.group(group))
 	}
+}
+
+func TestObjectListWaitDoesNotHoldTreeReadLock(t *testing.T) {
+	list := NewObjectList(false)
+	owner := newNamespaceWaitTxn(t)
+	owner.state.Store(int32(txnif.TxnStatePreparing))
+	entry := makeObjectListOrderTestEntry(1, ObjectListGroupAppendableCreate, 1)
+	entry.CreatedAt = txnif.UncommitTS
+	entry.CreateNode = txnbase.NewTxnMVCCNodeWithTxn(owner)
+	entry.ObjectState = ObjectState_Create_PrepareCommit
+	list.Set(entry)
+
+	waitDone := make(chan struct{})
+	go func() {
+		list.WaitUntilCommitted(types.BuildTS(4, 0))
+		close(waitDone)
+	}()
+	select {
+	case <-owner.waited:
+	case <-time.After(3 * time.Second):
+		t.Fatal("object list did not wait for preparing object")
+	}
+
+	writeDone := make(chan struct{})
+	go func() {
+		list.Set(makeObjectListOrderTestEntry(2, ObjectListGroupAppendableCreate, 2))
+		close(writeDone)
+	}()
+	select {
+	case <-writeDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("object list writer blocked behind a transaction wait")
+	}
+	owner.finish(false)
+	select {
+	case <-waitDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("object list wait did not finish")
+	}
+}
+
+func TestVisibleObjectIteratorRefillsWithoutHoldingTreeLock(t *testing.T) {
+	list := NewObjectList(false)
+	for i := 0; i < 130; i++ {
+		list.Set(makeObjectListOrderTestEntry(byte(i+1), ObjectListGroupAppendableCreate, int64(i+1)))
+	}
+	it := list.MakeVisibleCommittedObjectIt(txnbase.MockTxnReaderWithNow())
+	defer it.Release()
+	for want := 130; want > 0; want-- {
+		require.True(t, it.Next())
+		require.Equal(t, byte(want), it.Item().ID()[0])
+		if want == 130 {
+			// Publishing a new snapshot must not wait for the visible
+			// iterator, and it must not change the iterator's pinned view.
+			list.Set(makeObjectListOrderTestEntry(131, ObjectListGroupAppendableCreate, 131))
+		}
+	}
+	require.False(t, it.Next())
+}
+
+func TestObjectListSnapshotVisitAllUnlocked(t *testing.T) {
+	list := NewObjectList(false)
+	for i := 0; i < 130; i++ {
+		list.Set(makeObjectListOrderTestEntry(byte(i+1), ObjectListGroupAppendableCreate, int64(i+1)))
+	}
+	snapshot := ObjectListSnapshot{trees: list.loadTrees()}
+	var markers []byte
+	snapshot.VisitAllUnlocked(func(entry *ObjectEntry) bool {
+		markers = append(markers, entry.ID()[0])
+		if len(markers) == 1 {
+			// A publication must not wait for the callback or enter this
+			// pinned snapshot, including after it refills its batch.
+			list.Set(makeObjectListOrderTestEntry(131, ObjectListGroupAppendableCreate, 131))
+		}
+		return true
+	})
+	require.Len(t, markers, 130)
+	for i, marker := range markers {
+		require.Equal(t, byte(130-i), marker)
+	}
+}
+
+func TestTableRecurLoopAllowsObjectRemoval(t *testing.T) {
+	c := MockCatalog(nil)
+	defer c.Close()
+	db, err := c.CreateDBEntry("recur_gc", "", "", nil)
+	require.NoError(t, err)
+	table, err := db.CreateTableEntry(MockSchema(2, 0), nil, nil)
+	require.NoError(t, err)
+	for _, tombstone := range []bool{false, true} {
+		id := objectio.NewObjectid()
+		stats := objectio.NewObjectStatsWithObjectID(&id, true, false, false)
+		_, err = table.CreateCommittedObject(types.BuildTS(1, 0),
+			&objectio.CreateObjOpt{Stats: stats, IsTombstone: tombstone}, nil)
+		require.NoError(t, err)
+	}
+	var removed int
+	p := &LoopProcessor{
+		ObjectFn: func(obj *ObjectEntry) error {
+			removed++
+			return table.RemoveEntry(obj)
+		},
+		TombstoneFn: func(obj *ObjectEntry) error {
+			removed++
+			return table.RemoveEntry(obj)
+		},
+	}
+	done := make(chan error, 1)
+	go func() { done <- table.RecurLoop(p) }()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("catalog recursion held a tree lock during object removal")
+	}
+	require.Equal(t, 2, removed)
 }
 
 func TestObjectListGroupSnapshotsConcurrentMutation(t *testing.T) {
