@@ -332,7 +332,14 @@ func (db *DB) ForceCheckpointForBackup(
 		return
 	}
 	maxEnd := maxEntry.GetEnd()
-	start := maxEnd.Next()
+	// A global checkpoint ends at the first timestamp not summarized by it;
+	// an incremental checkpoint includes its end. Keep the same successor
+	// convention as runnerStore.GetCheckpointed, including when an automatic
+	// GCKP replaces the forced ICKP before we select the backup boundary.
+	start := maxEnd
+	if !maxEntry.IsGlobal() {
+		start = maxEnd.Next()
+	}
 	end := db.TxnMgr.Now()
 	if err = db.BGFlusher.ForceFlush(ctx, end); err != nil {
 		return
