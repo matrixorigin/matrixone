@@ -70,6 +70,7 @@ func TestStringMathMixedCaseHexTextProvenance(t *testing.T) {
 				"FROM (SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3) AS source ORDER BY id"
 			rows, err := conn.QueryContext(ctx, query)
 			require.Equal(t, want, read(t, rows, err))
+			require.NoError(t, rows.Err())
 		})
 
 		t.Run("prepared_text_value", func(t *testing.T) {
@@ -81,6 +82,7 @@ func TestStringMathMixedCaseHexTextProvenance(t *testing.T) {
 			defer stmt.Close()
 			rows, err := stmt.QueryContext(ctx, "1")
 			require.Equal(t, want, read(t, rows, err))
+			require.NoError(t, rows.Err())
 		})
 	})
 }
