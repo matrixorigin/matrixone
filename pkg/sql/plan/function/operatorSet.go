@@ -204,6 +204,40 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	return types.New(types.T_varbinary, width, 0), true
 }
 
+// MixedTextBinaryCommonType returns a binary common type only when a set
+// column contains both character and binary strings. Other combinations keep
+// their existing common-type rules.
+func MixedTextBinaryCommonType(source []types.Type) (types.Type, bool) {
+	hasText, hasBinary := false, false
+	needsBlob := false
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_char, types.T_varchar:
+			hasText = true
+			// Character widths count code points. Their UTF-8 byte capacity
+			// may exceed the largest representable VARBINARY width.
+			needsBlob = needsBlob || typ.Width > types.MaxVarBinaryLen/utf8.UTFMax
+		case types.T_binary, types.T_varbinary:
+			hasBinary = true
+		case types.T_any:
+			// An untyped NULL contributes no width.
+		default:
+			return types.Type{}, false
+		}
+		needsBlob = needsBlob || typ.Oid != types.T_any && typ.Width <= 0
+	}
+	if !hasText || !hasBinary {
+		return types.Type{}, false
+	}
+	if needsBlob {
+		// CAST AS BINARY without a length carries width zero even when it
+		// produces bytes. An unknown or oversized byte bound needs BLOB so
+		// the branch cast cannot silently truncate its input.
+		return types.T_blob.ToType(), true
+	}
+	return binaryStringCommonType(source)
+}
+
 func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
 	if !target.Oid.IsDecimal() {
 		return false

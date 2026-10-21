@@ -4748,8 +4748,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		if len(tmpArgsType) > 0 {
 			var targetType plan.Type
 			var targetArgType types.Type
+			mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(tmpArgsType)
 			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
 				targetArgType = pureCharType
+			} else if mixedTextBinary {
+				targetArgType = mixedTextBinaryType
 			} else {
 				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 				if err != nil {
@@ -4841,7 +4844,8 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						targetArgType.Width = typ.Width
 					}
 				}
-			} else if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
+			} else if !mixedTextBinary &&
+				(targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary) {
 				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
@@ -10992,11 +10996,14 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 		commonInputs = append(commonInputs, typ)
 	}
 
+	mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(commonInputs)
 	var commonType types.Type
 	switch {
 	case len(commonInputs) > 0:
 		if pureCharType, ok := setOperationPureCharCommonType(commonInputs); ok {
 			commonType = pureCharType
+		} else if mixedTextBinary {
+			commonType = mixedTextBinaryType
 		} else {
 			resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
 			if err != nil {
@@ -11033,6 +11040,13 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	commonPlanType := makePlan2Type(&commonType)
 	if err := setExpressionCollation(builder.GetContext(), "values", exprs, &commonPlanType); err != nil {
 		return plan.Type{}, err
+	}
+	if mixedTextBinary && commonType.Oid == types.T_varbinary &&
+		commonPlanType.Charset != uint32(types.CharsetBinary) {
+		// An explicit text collation can win over a binary VALUES operand.
+		// VARCHAR keeps the safe byte bound while its Unicode value check
+		// rejects malformed bytes. BLOB already performs that validation.
+		commonPlanType.Id = int32(types.T_varchar)
 	}
 	commonType = makeTypeByPlan2Type(commonPlanType)
 	// Physical types do not carry CHAR-derived comparison provenance. Retain
