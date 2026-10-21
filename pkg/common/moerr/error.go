@@ -85,6 +85,7 @@ const (
 	ErrPreparedParamOutOfRange     uint16 = 20207
 	ErrTruncatedWrongValue         uint16 = 20208
 	ErrGroupConcatCut              uint16 = 20209
+	ErrEnumSetValueTruncated       uint16 = 20210
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -483,6 +484,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
 	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
 	ErrGroupConcatCut:              {ER_CUT_VALUE_GROUP_CONCAT, []string{"HY000"}, "%s"},
+	ErrEnumSetValueTruncated:       {WARN_DATA_TRUNCATED, []string{"01000"}, "%s"},
 
 	// Group 3: invalid input
 	ErrBadConfig:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -1159,6 +1161,12 @@ func NewPreparedParamOutOfRange(ctx context.Context, typ string, statement strin
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDataTruncated, typ, msg)
+}
+
+// NewEnumSetValueTruncated is a real strict-assignment failure, even though
+// MySQL uses the same diagnostic number for non-strict truncation warnings.
+func NewEnumSetValueTruncated(ctx context.Context, message string) *Error {
+	return newError(ctx, ErrEnumSetValueTruncated, message)
 }
 
 func NewGroupConcatCut(ctx context.Context, message string) *Error {

@@ -115,3 +115,44 @@ DEALLOCATE PREPARE p_union;
 PREPARE p_having FROM 'SELECT 1 AS kept FROM (SELECT ? AS x) d GROUP BY x HAVING FIELD(x, ABS(CAST(9007199254740992 AS DECIMAL(20,0))))=0';
 EXECUTE p_having USING @exact;
 DEALLOCATE PREPARE p_having;
+
+-- FIELD resolves string parameters at each consumer without changing the source.
+PREPARE p_field_strings FROM 'SELECT FIELD(?, ''A'', ''a'') AS text_peer,
+    FIELD(?, _binary ''A'', _binary ''a'') AS binary_peer,
+    FIELD(CAST(? AS BINARY), ''A'', ''a'') AS explicit_binary,
+    FIELD(CAST(? AS CHAR), ''A'', ''a'') AS explicit_text,
+    FIELD(COALESCE(?, NULL), ''A'', ''a'') AS null_peer,
+    FIELD(IF(TRUE, ?, NULL), ''A'', ''a'') AS fixed_if,
+    FIELD(NULLIF(?, ''x''), ''A'', ''a'') AS return_domain,
+    FIELD(NULLIF(''a'', ?), ''A'', ''a'') AS comparison_domain';
+SET @field_string = _binary 'a';
+EXECUTE p_field_strings USING @field_string, @field_string, @field_string, @field_string,
+    @field_string, @field_string, @field_string, @field_string;
+SET @field_string = 'a';
+EXECUTE p_field_strings USING @field_string, @field_string, @field_string, @field_string,
+    @field_string, @field_string, @field_string, @field_string;
+SET @field_string = NULL;
+EXECUTE p_field_strings USING @field_string, @field_string, @field_string, @field_string,
+    @field_string, @field_string, @field_string, @field_string;
+SET @field_string = _binary 'a';
+EXECUTE p_field_strings USING @field_string, @field_string, @field_string, @field_string,
+    @field_string, @field_string, @field_string, @field_string;
+DEALLOCATE PREPARE p_field_strings;
+
+-- Logical outputs retain their resolved return domain across relation boundaries.
+PREPARE p_field_outputs FROM 'SELECT
+    FIELD((SELECT ? LIMIT 1), ''A'', ''a'') AS scalar_marker,
+    FIELD((SELECT CASE WHEN TRUE THEN ? ELSE NULL END LIMIT 1), ''A'', ''a'') AS scalar_case,
+    FIELD(x, ''A'', ''a'') AS derived_return
+    FROM (SELECT NULLIF(?, ''x'') AS x LIMIT 1) d';
+EXECUTE p_field_outputs USING @field_string, @field_string, @field_string;
+SET @field_string = 'a';
+EXECUTE p_field_outputs USING @field_string, @field_string, @field_string;
+DEALLOCATE PREPARE p_field_outputs;
+PREPARE p_field_binary_union FROM 'SELECT FIELD(x, ''A'', ''a'') AS binary_union
+    FROM (SELECT ? AS x UNION ALL SELECT _binary ''a'') d';
+EXECUTE p_field_binary_union USING @field_string;
+SET @field_string = _binary 'a';
+EXECUTE p_field_binary_union USING @field_string;
+DEALLOCATE PREPARE p_field_binary_union;
+SET @field_string = NULL;

@@ -388,7 +388,7 @@ func TestRefineStringSliceRequiresBinaryRuntimeDomain(t *testing.T) {
 	})
 }
 
-func TestCTASRepeatedDerivedStringDomainReferenceStaysConservative(t *testing.T) {
+func TestCTASRepeatedDerivedStringDomainConsumesDeclaration(t *testing.T) {
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, `
 		create table repeated_derived_string_domain as
 		select left(if(d.value is not null, d.value, _binary 'x'), 1) as sliced
@@ -409,10 +409,10 @@ func TestCTASRepeatedDerivedStringDomainReferenceStaysConservative(t *testing.T)
 	}
 	require.Len(t, visible, 1)
 	require.Equal(t, int32(types.T_varbinary), visible[0].Typ.Id)
-	// The derived value is binary-shaped but can produce text at runtime. The
-	// repeated reference in IF's condition and value branch must retain that
-	// lineage; narrowing it to VARBINARY(1) would truncate a multibyte text row.
-	require.Greater(t, visible[0].Typ.Width, int32(1))
+	// IF consumes the derived conditional declaration before LEFT. Its output
+	// is one byte even for a selected multibyte text value, as in MySQL CTAS.
+	// Preserve VARBINARY rather than upgrading this bounded result to BLOB.
+	require.Equal(t, int32(1), visible[0].Typ.Width)
 }
 
 func TestCastStringDomainMatchesResultType(t *testing.T) {

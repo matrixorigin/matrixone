@@ -116,6 +116,47 @@ func TestDoCheckUpgradeRetainsHistoricalCDCWatermarkTarget(t *testing.T) {
 	}
 }
 
+// Retained handler identities must match rows written by released binaries.
+// Use the production registration, not a synthetic offset-zero replacement.
+func TestDoCheckUpgradeRetainsInterruptedV407(t *testing.T) {
+	for _, state := range []int32{versions.StateCreated, versions.StateUpgradingTenant, versions.StateReady} {
+		t.Run(fmt.Sprint(state), func(t *testing.T) {
+			runtime.RunTest("", func(runtime.Runtime) {
+				target := versions.Version{Version: "4.0.7", VersionOffset: 0, State: versions.StateCreated}
+				var routeReads int
+				exec := executor.NewMemExecutor2(func(sql string) (executor.Result, error) {
+					switch {
+					case strings.HasPrefix(sql, "SELECT reldatabase, relname, account_id FROM mo_catalog.mo_tables"):
+						return newBootstrapStringResult("mo_catalog"), nil
+					case sql == "select version, version_offset, state from mo_version order by create_at desc limit 1":
+						return recoveryVersionResult(t, target), nil
+					case strings.Contains(sql, "from mo_upgrade"):
+						routeReads++
+						total, ready := int32(0), int32(0)
+						if state == versions.StateUpgradingTenant {
+							total, ready = 2, 1
+						} else if state == versions.StateReady {
+							total, ready = 2, 2
+						}
+						return ownRecoveryResult(t, buildUpgradeVersionResult(10, state, "4.0.6", "4.0.7", 0, 0, versions.Yes, versions.Yes, total, ready)), nil
+					default:
+						return executor.Result{}, fmt.Errorf("must retain the interrupted v4.0.7 route: %s", sql)
+					}
+				}, &testTxnOperator{})
+				s := newServiceForTest("", &memLocker{}, clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
+					func(s *service) { s.initUpgrade() })
+				t.Cleanup(s.stopper.Stop)
+				// Assert before invoking the checker so a regression fails the test
+				// instead of terminating the process through its Fatal branch.
+				require.True(t, s.canResumeUpgrade(target), "released v4.0.7 offset zero must remain resumable")
+				require.NoError(t, s.doCheckUpgrade(t.Context()))
+				require.Equal(t, 1, routeReads, "startup must validate the retained route")
+				require.False(t, s.upgrade.finalVersionCompleted.Load())
+			})
+		})
+	}
+}
+
 func TestManualTenantUpgradeWaitsForRecoveredRoute(t *testing.T) {
 	runtime.RunTest("", func(runtime.Runtime) {
 		s, _ := newRecoveryTestService(t, versions.StateReady)
