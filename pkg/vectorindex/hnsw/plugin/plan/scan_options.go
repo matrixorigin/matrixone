@@ -27,6 +27,8 @@ import (
 // algo_options.
 type ScanOptions struct {
 	ThreadsSearch int64 `json:"threads_search,omitempty"`
+	// Iterative is set for mode=iterative: a membership search widens in rounds.
+	Iterative bool `json:"iterative,omitempty"`
 }
 
 // EncodeScanOptions returns the algo_options bytes of opts.

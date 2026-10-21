@@ -23,6 +23,10 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void *mo_croaring_create(void);
 void mo_croaring_free(void *r);
 
@@ -62,5 +66,9 @@ uint64_t mo_croaring_cardinality(void *r);
 // Run-length-optimize eligible containers (helps clustered/consecutive id sets).
 // Returns true if the representation changed.
 bool mo_croaring_run_optimize(void *r);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif  // MO_CROARING_H

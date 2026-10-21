@@ -18,6 +18,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"github.com/bytedance/sonic"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -309,6 +310,18 @@ type RuntimeConfig struct {
 	OrigFuncName      string
 	BackgroundQueries []*plan.Query
 
+	// Membership, when non-nil, restricts an HNSW, CAGRA or IVF-PQ search to the
+	// primary keys it holds; MembershipCount is the number of keys. With Iterative (mode=iterative)
+	// an HNSW membership search, or a CAGRA / IVF-PQ search, widens in rounds: ResultLimit is the
+	// number of rows the query returns, MaxLimit caps Limit (0 = the algorithm's
+	// default) and MaxProbe caps Probe (0 = every list).
+	Membership      docfilter.MembershipFilter
+	MembershipCount uint64
+	Iterative       bool
+	ResultLimit     uint
+	MaxLimit        uint
+	MaxProbe        uint
+
 	// FilterJSON is a JSON predicate array forwarded verbatim to CGo
 	// (gpu_<idx>_search_with_filter). Empty → unfiltered search path.
 	// Go never parses this payload; it's produced by the SQL layer and
@@ -345,7 +358,7 @@ type RuntimeConfig struct {
 	//
 	// RuntimeConfig is passed to Search by value. Pointer fields such as
 	// IncludeResult and SearchCursor can be mutated by Search and observed by
-	// the caller. Value fields such as SearchRoundLimit and BucketExpandStep are
+	// the caller. Value fields such as SearchRoundLimit are
 	// copied into Search and do not propagate caller-visible mutations back out.
 	RequestedIncludeColumns []string
 	PushdownFilterSQL       string
@@ -356,7 +369,6 @@ type RuntimeConfig struct {
 	IncludeResult    *IvfIncludeResult
 	TargetRows       uint
 	SearchRoundLimit uint
-	BucketExpandStep uint
 	SearchCursor     *IvfSearchCursor
 	// IvfPrepareRouteOnly seals centroid routing without opening entry readers.
 	IvfPrepareRouteOnly bool

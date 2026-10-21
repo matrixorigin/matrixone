@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/config"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	txnpb "github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -5891,6 +5892,36 @@ func TestMediumIntCatalogAuthoringProtocolFence(t *testing.T) {
 	require.ErrorContains(t, err, "protocol version 110")
 	_, err = runOneStmt(mock, t, "ALTER TABLE nation MODIFY COLUMN n_nationkey MEDIUMINT UNSIGNED")
 	require.ErrorContains(t, err, "protocol version 110")
+}
+
+// An inline vector index without options takes the params, or the refusal, of the
+// plugin's ParamsFromTree with an empty option list, as CREATE INDEX does.
+func TestInlineVectorIndexWithoutOptionsUsesParamsFromTree(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, algo := range []string{"ivfflat", "hnsw", "cagra", "ivfpq"} {
+		t.Run(algo, func(t *testing.T) {
+			p, ok := indexplugin.Get(algo)
+			require.True(t, ok)
+			want, wantErr := p.Catalog().ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+			sql := "create table inline_" + algo + " (id bigint primary key, v vecf32(8), index i using " + algo + "(v))"
+			logicPlan, err := runOneStmt(mock, t, sql)
+			if wantErr != nil {
+				require.ErrorContains(t, err, wantErr.Error())
+				return
+			}
+			require.NoError(t, err)
+			var params string
+			for _, idx := range logicPlan.GetDdl().GetCreateTable().GetTableDef().GetIndexes() {
+				if idx.IndexAlgo == algo {
+					params = idx.IndexAlgoParams
+				}
+			}
+			got, err := catalog.IndexParamsStringToMap(params)
+			require.NoError(t, err)
+			delete(got, catalog.IndexParamSessionVars)
+			require.Equal(t, want, got)
+		})
+	}
 }
 
 func TestBuildCompositeIndexMarksEncodedKeyBinary(t *testing.T) {
