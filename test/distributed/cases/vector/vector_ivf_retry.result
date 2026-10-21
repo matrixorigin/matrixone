@@ -214,7 +214,7 @@ order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=auto';
 199  𝄀
 200
 select cast(id as unsigned) from t_bit_pk_retry where selected = 1
-order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=include';
+order by l2_distance(vec, '[0,0]') limit 10 by rank with option 'mode=iterative';
 ➤ cast(id as unsigned)[-5,64,0]  𝄀
 196  𝄀
 197  𝄀

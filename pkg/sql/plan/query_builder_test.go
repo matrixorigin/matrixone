@@ -6969,7 +6969,7 @@ func TestParseRankOption(t *testing.T) {
 		rankOption, err := parseRankOption(options, ctx)
 		require.Error(t, err)
 		require.Nil(t, rankOption)
-		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', 'auto', or 'include'")
+		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', 'auto' or 'iterative'")
 		require.Contains(t, err.Error(), "invalid")
 	})
 
@@ -6983,14 +6983,13 @@ func TestParseRankOption(t *testing.T) {
 		require.Equal(t, "force", rankOption.Mode)
 	})
 
-	t.Run("valid mode include", func(t *testing.T) {
-		options := map[string]string{
-			"mode": "include",
+	t.Run("mode include is an alias of iterative", func(t *testing.T) {
+		for _, mode := range []string{"include", " INCLUDE "} {
+			rankOption, err := parseRankOption(map[string]string{"mode": mode}, ctx)
+			require.NoError(t, err)
+			require.NotNil(t, rankOption)
+			require.Equal(t, "iterative", rankOption.Mode)
 		}
-		rankOption, err := parseRankOption(options, ctx)
-		require.NoError(t, err)
-		require.NotNil(t, rankOption)
-		require.Equal(t, "include", rankOption.Mode)
 	})
 
 	t.Run("valid mode auto", func(t *testing.T) {
@@ -7078,6 +7077,34 @@ func TestParseRankOption(t *testing.T) {
 		// The actual value depends on map iteration order, but should be either "pre" or "post"
 		require.Contains(t, []string{"pre", "post"}, rankOption.Mode)
 	})
+}
+
+func TestParseRankOptionSearchKnobs(t *testing.T) {
+	ctx := context.Background()
+	opt, err := parseRankOption(map[string]string{"ITOPK": " 200 ", "max_itopk": "5000", "nprobe": "8", "Max_Nprobe": "64"}, ctx)
+	require.NoError(t, err)
+	require.Equal(t, &plan.RankOption{Itopk: 200, MaxItopk: 5000, Nprobe: 8, MaxNprobe: 64}, opt)
+
+	opt, err = parseRankOption(map[string]string{"mode": "post", "itopk": "10"}, ctx)
+	require.NoError(t, err)
+	require.Equal(t, &plan.RankOption{Mode: "post", Itopk: 10}, opt)
+
+	_, err = parseRankOption(map[string]string{"unknown": "1"}, ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+
+	for name, options := range map[string]map[string]string{
+		"zero":             {"itopk": "0"},
+		"negative":         {"max_itopk": "-1"},
+		"not a number":     {"nprobe": "abc"},
+		"fraction":         {"max_nprobe": "1.5"},
+		"itopk above cap":  {"itopk": "10", "max_itopk": "5"},
+		"nprobe above cap": {"nprobe": "10", "max_nprobe": "5"},
+	} {
+		_, err := parseRankOption(options, ctx)
+		require.Error(t, err, name)
+	}
+	_, err = parseRankOption(map[string]string{"itopk": "5", "max_itopk": "5"}, ctx)
+	require.NoError(t, err)
 }
 
 // TestBaseBinder_bindComparisonExpr tests bindComparisonExpr with various comparison operators

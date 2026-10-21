@@ -44,13 +44,11 @@ type Hooks interface {
 
 	// ParamsFromTree extracts and validates the WITH(...) options from a
 	// CREATE INDEX statement, returning the canonical params map that gets
-	// JSON-encoded into mo_indexes. Replaces one switch arm of
-	// catalog.indexParamsToMap.
+	// JSON-encoded into mo_indexes. An index declared without options
+	// (CREATE INDEX or inline in CREATE TABLE) passes an empty IndexOption,
+	// so required options are refused on both paths. Replaces one switch arm
+	// of catalog.indexParamsToMap.
 	ParamsFromTree(idx *tree.Index) (map[string]string, error)
-
-	// DefaultOptions is the map produced when no WITH(...) clause is given.
-	// May be nil if the algorithm requires explicit options.
-	DefaultOptions() map[string]string
 
 	// SupportedOpTypes maps the SQL-visible op_type strings (e.g.
 	// "vector_l2_ops") to the internal metric identifier. Used by

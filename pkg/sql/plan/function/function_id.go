@@ -793,6 +793,10 @@ const (
 	APPROX_PERCENTILE = 557
 	// function `mo_is_legacy_temporary_table`
 	MO_IS_LEGACY_TEMPORARY_TABLE = 558
+	// function `mo_view_definition`
+	MO_VIEW_DEFINITION = 603
+	// function `mo_view_check_option`
+	MO_VIEW_CHECK_OPTION = 604
 
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
@@ -888,7 +892,7 @@ const (
 	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
 	LOAD_FK_IGNORE_CHECK = 602
 
-	FUNCTION_END_NUMBER = 603
+	FUNCTION_END_NUMBER = 605
 )
 
 // functionIdRegister is what function we have registered already.
@@ -997,6 +1001,8 @@ var functionIdRegister = map[string]int32{
 	"median":                       MEDIAN,
 	"approx_percentile":            APPROX_PERCENTILE,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"mo_view_definition":           MO_VIEW_DEFINITION,
+	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,
 	"max_by":                       MAX_BY,
 	"max_by_non_null":              MAX_BY_NON_NULL,
 	"percentile_cont":              PERCENTILE_CONT,
