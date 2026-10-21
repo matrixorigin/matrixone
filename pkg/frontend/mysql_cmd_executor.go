@@ -3762,6 +3762,10 @@ func handleSwitchRole(ses FeSession, execCtx *ExecCtx, sr *tree.SetRole) error {
 	return doSwitchRole(execCtx.reqCtx, ses.(*Session), sr)
 }
 
+func handleSetDefaultRole(ses FeSession, execCtx *ExecCtx, sdr *tree.SetDefaultRole) error {
+	return doSetDefaultRole(execCtx.reqCtx, ses.(*Session), sdr)
+}
+
 func doKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
 	killConnection := !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection
 	return killSession(execCtx.reqCtx, ses, k.ConnectionId, killConnection, k.StmtOption.StatementId)
