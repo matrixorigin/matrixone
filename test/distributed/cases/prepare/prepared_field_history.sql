@@ -45,6 +45,8 @@ EXECUTE p_field_history USING @field_condition, @field_value;
 DEALLOCATE PREPARE p_field_history;
 
 -- Numeric history uses the comparison consumer's conversion domain.
+SET @field_history_numeric_compat_saved_sql_mode = @@sql_mode;
+SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@field_history_numeric_compat_saved_sql_mode, ''), 'MYSQL_NUMERIC_COMPATIBILITY');
 PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''0'', ''1'', ''2'', ''-1'') AS f';
 SET @field_value = 1;
 EXECUTE p_field_history USING @field_condition, @field_value;
@@ -296,6 +298,8 @@ EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, 
 SET @field_value = _binary 'a';
 EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
 DEALLOCATE PREPARE p_field_history;
+SET SESSION sql_mode = @field_history_numeric_compat_saved_sql_mode;
+SET @field_history_numeric_compat_saved_sql_mode = NULL;
 
 -- Window outputs consume bare marker declarations; string functions consume
 -- the BLOB declaration of a parameter-dependent composite NULL.
