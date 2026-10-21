@@ -1507,18 +1507,18 @@ func initExecuteStmtParamWithResolverInSession(
 	fieldTypes := prepareStmt.fieldTypes
 	temporalTypes := prepareStmt.temporalTypes
 	// Session DDL and temporary-table revisions conservatively invalidate plans,
-	// not SQL type history. Reset only for changed captured dependencies or
+	// not SQL type history. Reset for changed captured table/routine dependencies or
 	// type-affecting mode/protocol changes. Rebinding may discover a different
 	// dependency (e.g. a temporary table shadow), checked before publication.
 	boolModeMismatch := prepareStmt.sqlModeFlagsSet && prepareStmt.BoolSumAvg != currentBoolSumAvg
 	numericModeMismatch := boolModeMismatch ||
 		prepareStmt.sqlModeFlagsSet && prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction ||
 		prepareStmt.divPrecisionIncrementSet && prepareStmt.divPrecisionIncrement != currentDivPrecisionIncrement
-	resetTemporalTypes := schemaChanged || prepareStmt.NativeMode != currentNativeMode || protocolMismatch || prepareStmt.temporalTypesResetPending
+	resetTemporalTypes := schemaChanged || routineChanged || prepareStmt.NativeMode != currentNativeMode || protocolMismatch || prepareStmt.temporalTypesResetPending
 	if resetTemporalTypes {
 		temporalTypes = nil
 	}
-	resetFieldTypes := schemaChanged || prepareStmt.NativeMode != currentNativeMode || protocolMismatch || prepareStmt.fieldTypesResetPending
+	resetFieldTypes := schemaChanged || routineChanged || prepareStmt.NativeMode != currentNativeMode || protocolMismatch || prepareStmt.fieldTypesResetPending
 	if resetFieldTypes {
 		fieldTypes = nil
 	}
@@ -2104,6 +2104,8 @@ type preparedExecutionRetry struct {
 	temporalTypes      *plan2.PreparedTemporalTypes
 	fieldTypes         *plan2.PreparedFieldTypes
 	fieldSchemas       []*plan2.ObjectRef
+	fieldRoutines      []*plan.RoutinePlanDependency
+	fieldRoutineErr    error
 	bindings           []plan2.PreparedSourceBinding
 	paramVals          []any
 	preparedPlan       *plan2.Plan
@@ -3079,6 +3081,9 @@ func buildPlanForCompileRetry(
 		ctx = plan2.WithPreparedFieldTypes(ctx, preparedRetry.fieldTypes)
 		ctx = plan2.WithPreparedTemporalTypes(ctx, preparedRetry.temporalTypes)
 		if preparedRetry.fieldTypes != nil || preparedRetry.temporalTypes != nil {
+			if preparedRetry.fieldRoutineErr != nil {
+				return nil, preparedRetry.fieldRoutineErr
+			}
 			previous := compilerContext.GetContext()
 			compilerContext.SetContext(ctx)
 			defer compilerContext.SetContext(previous)
@@ -3087,12 +3092,22 @@ func buildPlanForCompileRetry(
 			// binding with retained history; retry is not another history publisher.
 			dependencies := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
 				CatalogDependencies: preparedRetry.fieldSchemas,
+				RoutineDependencies: preparedRetry.fieldRoutines,
 			}}}
 			resolve := compilerContext.Resolve
 			if tcc, ok := compilerContext.(*TxnCompilerContext); ok {
 				resolve = tcc.resolveForCatalogValidation
 			}
 			changed, err := checkModify(dependencies, resolve)
+			if err != nil {
+				return nil, err
+			}
+			if changed {
+				return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			}
+			// Routine return declarations also belong to this generation, even
+			// when the plan has no table dependency or retains the same UINT64 result.
+			changed, err = validateRoutinePlanDependencies(ctx, ses, dependencies)
 			if err != nil {
 				return nil, err
 			}
