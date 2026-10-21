@@ -725,29 +725,80 @@ func (ls *LocalDisttaeDataSource) filterInMemUnCommittedInserts(
 		// Note: this implementation depends on that the offsets from rowids is a 0-based consecutive seq.
 		// Refer to genBlock and genRowid method.
 
-		// apply pk filter on workspace entries
-		if enableFilter {
-			skipMask = objectio.GetReusableBitmap()
-			put := ls.table.db.getEng().packerPool.Get(&packer)
-			ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
-			put.Put()
+		// Skip whole batches whose encoded-PK envelope provably misses this
+		// filter before the per-row encode+probe pass. Without this, every
+		// point read re-encoded every workspace batch's primary keys, so
+		// single-row UPDATE statements slowed down linearly with the number
+		// of rows already modified by the transaction (issue 26796).
+		if enableFilter && entry.pkRange.inited &&
+			!ls.memPKFilter.MayMatchKeyRange(entry.pkRange.min, entry.pkRange.max) {
+			ls.wsCursor++
+			continue
 		}
 
-		// apply bf filter on workspace entries
-		if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
-			if !skipMask.IsValid() {
-				skipMask = objectio.GetReusableBitmap()
-			}
-			bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
-			ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
-				if !exist {
-					skipMask.Add(uint64(row))
+		// Exact single-key probes answer through the per-batch key index: the
+		// definitive hit/miss avoids re-encoding the whole batch's primary
+		// keys, which kept growing single-row UPDATE statement cost with the
+		// transaction's size (issue 26796). The answer stays equivalent to
+		// the FilterVector path only while both provisos hold:
+		//
+		//   - no independent membership filter is attached to this scan: a
+		//     membership filter binds its own column (e.g. __mo_index_pri_col)
+		//     and its set can be exact, so a primary-key hit alone never
+		//     proves the row may surface;
+		//   - the filter's bound column matches the column the index was
+		//     built on, so index and filter encode the same key domain.
+		//
+		// Both fail closed to the FilterVector plus membership path below.
+		if exactKey, isExact := ls.memPKFilter.ExactPointKey(); isExact &&
+			entry.pkRange.inited &&
+			!ls.memPKFilter.HasMemberFilter() &&
+			entry.pkCheckPos == int(pkSeqNums) {
+			index, built := ls.table.getTxn().ensureInsertKeyOffsetsLocked(&writes[ls.wsCursor])
+			if built {
+				readutil.RecordIndexProbeForTest()
+				rowOffs := index.offsets[string(exactKey)]
+				if len(rowOffs) == 0 {
+					ls.wsCursor++
+					continue
 				}
-			})
+				offsets = make([]int64, 0, len(rowOffs))
+				for _, off := range rowOffs {
+					offsets = append(offsets, int64(off))
+				}
+				// shared tail below consumes offsets and applies tombstones
+			} else {
+				offsets = nil
+			}
+		} else {
+			offsets = nil
 		}
 
-		offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
-		skipMask.Release()
+		if offsets == nil {
+			// apply pk filter on workspace entries
+			if enableFilter {
+				skipMask = objectio.GetReusableBitmap()
+				put := ls.table.db.getEng().packerPool.Get(&packer)
+				ls.memPKFilter.FilterVector(entry.bat.Vecs[pkSeqNums], packer, &skipMask)
+				put.Put()
+			}
+
+			// apply bf filter on workspace entries
+			if ls.memPKFilter.HasBF && ls.memPKFilter.BFSeqNum != -1 {
+				if !skipMask.IsValid() {
+					skipMask = objectio.GetReusableBitmap()
+				}
+				bfColVec := entry.bat.Vecs[ls.memPKFilter.BFSeqNum+1] // +1 for rowid
+				ls.memPKFilter.FilterHint.BF.TestVector(bfColVec, func(exist bool, isnull bool, row int) {
+					if !exist {
+						skipMask.Add(uint64(row))
+					}
+				})
+			}
+
+			offsets = readutil.RowIdsToOffset(retainedRowIds, skipMask)
+			skipMask.Release()
+		}
 
 		if len(offsets) == 0 {
 			ls.wsCursor++

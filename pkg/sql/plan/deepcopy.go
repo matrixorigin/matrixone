@@ -60,6 +60,10 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 	if ref == nil {
 		return nil
 	}
+	var publisher *plan.PubInfo
+	if ref.PubInfo != nil {
+		publisher = proto.Clone(ref.PubInfo).(*plan.PubInfo)
+	}
 	return &plan.ObjectRef{
 		Server:           ref.Server,
 		Db:               ref.Db,
@@ -70,7 +74,7 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 		SchemaName:       ref.SchemaName,
 		ObjName:          ref.ObjName,
 		SubscriptionName: ref.SubscriptionName,
-		PubInfo:          ref.PubInfo,
+		PubInfo:          publisher,
 		NotLockMeta:      ref.NotLockMeta,
 		Snapshot:         DeepCopySnapshot(ref.Snapshot),
 	}
