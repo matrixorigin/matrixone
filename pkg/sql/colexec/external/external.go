@@ -1414,6 +1414,14 @@ func checkLineStrict(param *ExternalParam) bool {
 
 const JsonNull = "\\N"
 
+// JsonBinaryKey is the single-key object wrapper JSONLINE OUTFILE uses to
+// export BINARY/VARBINARY/BLOB values: {"$binary":"<base64>"}. The wrapper
+// lets the jsonline loader distinguish MO-encoded binary payloads from plain-
+// text JSON strings: wrapped values are base64-decoded, bare strings pass
+// through byte-exact so historical plain-text files keep loading as-is
+// (matrixone#30635).
+const JsonBinaryKey = "$binary"
+
 var loadZeroBytes = []byte("0")
 
 func getNullFlag(nullMap map[string][]string, attr, field string) bool {
