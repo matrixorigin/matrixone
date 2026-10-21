@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
@@ -218,10 +219,19 @@ func TestTableDumpDefaultTimeZones(t *testing.T) {
 			if tc.name == "budget_control" {
 				forged := proto.Clone(def).(*planpb.TableDef)
 				require.True(t, tamperTableDumpDefaultValue(forged.Cols[0].Default.Expr))
+				forgedBefore := proto.Clone(forged)
+				zone := proc.GetSessionInfo().TimeZone
+				warnings := &process.WarningProbe{}
+				proc.WarningSink = warnings
+				candidateVisitLimit := tableDumpSessionSearchTestVisitLimit(t, def.Cols[0].Default.OriginString, function.TemporalLocaleNameForProcess(proc))
 				started := time.Now()
-				_, err := AnalyzeTableDumpBindings(compiler, def, forged)
+				_, err := analyzeTableDumpBindingsWithCandidateVisitLimit(compiler, def, forged, candidateVisitLimit)
 				require.ErrorContains(t, err, "expression binding exceeds limit")
-				t.Logf("unmatched division/timezone search stopped at shared budget after %s", time.Since(started))
+				t.Logf("unmatched division/timezone search stopped at %d AST visits after %s", candidateVisitLimit, time.Since(started))
+				require.True(t, proto.Equal(before, def))
+				require.True(t, proto.Equal(forgedBefore, forged))
+				require.Same(t, zone, proc.GetSessionInfo().TimeZone)
+				require.False(t, warnings.Warned())
 				return
 			}
 			if tc.capture {
@@ -241,6 +251,20 @@ func TestTableDumpDefaultTimeZones(t *testing.T) {
 						require.True(t, proto.Equal(before, def))
 					})
 				}
+			}
+			if tc.name == "ordinary_arithmetic" {
+				stmt, _, visit, err := parseTableDumpExpression(t.Context(), def.Cols[0].Default.OriginString, tableDumpParserModes()[0])
+				require.NoError(t, err)
+				defer stmt.Free()
+				require.Greater(t, visit.nodes, 0)
+				// Ordinary arithmetic has current and pre-temporal-nullability
+				// candidates. The exact shared visit budget admits both; one less
+				// visit rejects the second candidate.
+				exactLimit := 2 * visit.nodes
+				_, err = analyzeTableDumpBindingsWithCandidateVisitLimit(compiler, def, def, exactLimit)
+				require.NoError(t, err)
+				_, err = analyzeTableDumpBindingsWithCandidateVisitLimit(compiler, def, def, exactLimit-1)
+				require.ErrorContains(t, err, "expression binding exceeds limit")
 			}
 			if tc.name == "dst_expression" {
 				// Cancel while an unmatched origin is being rebound, rather than
@@ -397,19 +421,54 @@ func TestTableDumpDefaultLocales(t *testing.T) {
 					require.GreaterOrEqual(t, bindingCtx.calls.Load(), int32(8))
 					compiler.SetContext(t.Context())
 				}
-				_, err := AnalyzeTableDumpBindings(compiler, def, forged)
+				warnings := &process.WarningProbe{}
+				proc.WarningSink = warnings
 				if tc.name == "budget" {
+					candidateVisitLimit := tableDumpSessionSearchTestVisitLimit(t, def.Cols[0].Default.OriginString, function.TemporalLocaleNameForProcess(proc))
+					_, err := analyzeTableDumpBindingsWithCandidateVisitLimit(compiler, def, forged, candidateVisitLimit)
 					require.ErrorContains(t, err, "expression binding exceeds limit")
 				} else {
+					_, err := AnalyzeTableDumpBindings(compiler, def, forged)
 					require.ErrorContains(t, err, "cannot verify bound default")
 				}
 				require.True(t, proto.Equal(forgedBefore, forged))
 				require.True(t, proto.Equal(before, def))
 				require.Equal(t, "ja_JP", proc.GetSessionInfo().LCTimeNames)
 				require.Same(t, time.UTC, proc.GetSessionInfo().TimeZone)
+				require.False(t, warnings.Warned())
 			}
 		})
 	}
+}
+
+const tableDumpSessionSearchTestTimezoneBindings = 8
+
+func tableDumpSessionSearchTestVisitLimit(t *testing.T, origin, baseLocale string) int {
+	t.Helper()
+	stmt, _, visit, err := parseTableDumpExpression(t.Context(), origin, tableDumpParserModes()[0])
+	require.NoError(t, err)
+	defer stmt.Free()
+	require.Greater(t, visit.nodes, 0)
+	require.True(t, visit.hasDivision)
+	require.False(t, visit.hasIntegerDivision)
+	require.False(t, visit.hasSpecial)
+	require.False(t, visit.hasTimestampAdd)
+	locales := function.TemporalLocaleNames()
+	require.NotEmpty(t, locales)
+	// These expressions have 31 precision values and two binding eras. Budget
+	// one bind for every precision/era and alternate locale pair, then leave
+	// eight timezone witnesses before the shared limit rejects the next bind.
+	const precisionEraBindings = 31 * 2
+	alternateLocaleBindings := len(locales)
+	for _, locale := range locales {
+		if locale == baseLocale {
+			alternateLocaleBindings--
+			break
+		}
+	}
+	maxLocaleBindings := precisionEraBindings * alternateLocaleBindings
+	preTimezoneBindings := precisionEraBindings + maxLocaleBindings
+	return visit.nodes * (preTimezoneBindings + tableDumpSessionSearchTestTimezoneBindings)
 }
 
 func TestTableDumpCheapPrecisionCandidatesBeforeSessions(t *testing.T) {
