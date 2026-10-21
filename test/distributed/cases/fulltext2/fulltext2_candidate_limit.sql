@@ -329,8 +329,14 @@ select id, payload from ft_join where match(body) against('needle') and payload 
 explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc limit 2 offset 1;
 -- @regex("Candidate Limit",false)
 explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') and payload <> 'zz' order by sc desc limit 2 offset 1;
--- @regex("Candidate Limit",false)
+-- A score DESC first key bounds the search; later keys only order the candidates.
+-- @regex("Candidate Limit: 2",true)
 explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc, id limit 2;
+select id, payload from ft_join where match(body) against('needle') order by match(body) against('needle') desc, id limit 3;
+select id, payload from ft_join where match(body) against('needle') and payload <> 'zz' order by match(body) against('needle') desc, id limit 3;
+-- A non-score first key declines.
+-- @regex("Candidate Limit",false)
+explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by id, sc desc limit 2;
 -- @regex("Candidate Limit",false)
 explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by id desc limit 2;
 -- @regex("Candidate Limit",false)

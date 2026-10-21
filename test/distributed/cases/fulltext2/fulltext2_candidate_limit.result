@@ -644,11 +644,36 @@ Project  𝄀
                     ->  Table Scan on fulltext2_candidate_limit.ft_join  𝄀
                           Filter Cond: (ft_join.payload <> 'zz')
 explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by sc desc, id limit 2;
--- @regex("Candidate Limit", false)
+-- @regex("Candidate Limit: 2", true)
 ➤ TP QUERY PLAN[12,-1,0]  𝄀
 Project  𝄀
   ->  Sort  𝄀
         Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC, ft_join.id INTERNAL  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_join.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_join  𝄀
+                    Runtime Filter Probe: ft_join.id  𝄀
+              ->  Fulltext Index Scan on ft_join_idx  𝄀
+                    Fulltext Index: ft_join_idx, Candidate Limit: 2
+select id, payload from ft_join where match(body) against('needle') order by match(body) against('needle') desc, id limit 3;
+➤ id[-5,64,0]  ¦  payload[12,10,0]  𝄀
+5  ¦  p5  𝄀
+4  ¦  p4  𝄀
+3  ¦  p3
+select id, payload from ft_join where match(body) against('needle') and payload <> 'zz' order by match(body) against('needle') desc, id limit 3;
+➤ id[-5,64,0]  ¦  payload[12,10,0]  𝄀
+5  ¦  p5  𝄀
+4  ¦  p4  𝄀
+3  ¦  p3
+explain select id, payload, match(body) against('needle') as sc from ft_join where match(body) against('needle') order by id, sc desc limit 2;
+-- @regex("Candidate Limit", false)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: ft_join.id INTERNAL, mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
         Limit: 2  𝄀
         ->  Join  𝄀
               Join Type: INNER  𝄀
