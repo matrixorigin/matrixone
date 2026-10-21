@@ -17,7 +17,6 @@ package rightdedupjoin
 import (
 	"bytes"
 
-	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/hashmap"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
@@ -357,18 +356,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 
 			if ap.InputKeysUnique {
 				if v != 0 {
-					var rowStr string
-					if len(ap.DedupColTypes) == 1 && ap.DedupColName == catalog.IndexTableIndexColName && ctr.vecs[0].GetType().Oid == types.T_varchar {
-						t, _, schema, decodeErr := types.DecodeTuple(ctr.vecs[0].GetBytesAt(i + k))
-						if decodeErr == nil && len(schema) > 1 {
-							rowStr = t.ErrString(make([]int32, len(schema)))
-						}
-					}
-					if len(rowStr) == 0 {
-						rowStr, err = colexec.FormatDedupKey(ctr.vecs[0], i+k, ap.DedupColTypes)
-						if err != nil {
-							return err
-						}
+					rowStr, err := ctr.formatDuplicateEntry(ap, proc, bat, i+k)
+					if err != nil {
+						return err
 					}
 					return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 				}
@@ -393,28 +383,9 @@ func (ctr *container) probe(bat *batch.Batch, ap *RightDedupJoin, proc *process.
 				}
 
 				if reportDup {
-					var rowStr string
-					if len(ap.DedupColTypes) == 1 {
-						if ap.DedupColName == catalog.IndexTableIndexColName {
-							if ctr.vecs[0].GetType().Oid == types.T_varchar {
-								t, _, schema, err := types.DecodeTuple(ctr.vecs[0].GetBytesAt(i + k))
-								if err == nil && len(schema) > 1 {
-									rowStr = t.ErrString(make([]int32, len(schema)))
-								}
-							}
-						}
-
-						if len(rowStr) == 0 {
-							rowStr, err = colexec.FormatDedupKey(ctr.vecs[0], i+k, ap.DedupColTypes)
-							if err != nil {
-								return err
-							}
-						}
-					} else {
-						rowStr, err = colexec.FormatDedupKey(ctr.vecs[0], i+k, ap.DedupColTypes)
-						if err != nil {
-							return err
-						}
+					rowStr, err := ctr.formatDuplicateEntry(ap, proc, bat, i+k)
+					if err != nil {
+						return err
 					}
 					return moerr.NewDuplicateEntry(proc.Ctx, rowStr, ap.DedupColName)
 				}
@@ -468,4 +439,11 @@ func (ctr *container) evalJoinCondition(bat *batch.Batch, proc *process.Process)
 		ctr.evecs[i].vec = vec
 	}
 	return nil
+}
+
+func (ctr *container) formatDuplicateEntry(ap *RightDedupJoin, proc *process.Process, bat *batch.Batch, row int) (string, error) {
+	if len(ap.DedupKeyExprs) > 0 {
+		return colexec.FormatDedupKeyFromRow(proc, ap.DedupKeyExprs, bat, row)
+	}
+	return colexec.FormatDedupEntry(ctr.vecs[0], row, ap.DedupColName, ap.DedupColTypes)
 }

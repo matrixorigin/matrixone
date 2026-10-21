@@ -411,6 +411,7 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 			return
 		}
 		keyVec := inputBat.Vecs[keyPos]
+		inputRow := row
 		row = vectorRowIndex(keyVec, row)
 		if row < 0 || row >= keyVec.Length() {
 			// A legacy selection/vector mismatch is diagnostic-only. Do not let
@@ -436,7 +437,11 @@ func (preInsertUnique *PreInsertUnique) callInsertIgnoreMultiDedup(
 		var rowStr string
 		var err error
 		if ok {
-			rowStr, err = colexec.FormatDedupKey(keyVec, row, keyTypes)
+			if keyIdx < len(ctx.KeyDiagnosticExprs) && len(ctx.KeyDiagnosticExprs[keyIdx].GetList()) > 0 {
+				rowStr, err = colexec.FormatDedupKeyFromRow(proc, ctx.KeyDiagnosticExprs[keyIdx].List, inputBat, inputRow)
+			} else {
+				rowStr, err = colexec.FormatDedupKey(keyVec, row, keyTypes)
+			}
 		} else {
 			// Plans produced before the metadata fields were added can still be
 			// executed from a cached/remote plan. Preserve IGNORE semantics and

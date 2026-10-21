@@ -1198,6 +1198,11 @@ func TestEmbeddedAuditedBatchScopeAndFailure(t *testing.T) {
 		{name: "rollback", scope: "example/a\n" + dml + "\n" + sql, mode: "1", want: "ordinary:example/a " + dml + " " + sql + "\n"},
 		{name: "embed-rollback", scope: embed + "\nexample/a", mode: "1", want: "ordinary:" + embed + " example/a\n"},
 		{name: "only-embed", scope: embed, mode: "4", want: "batch:" + embed + ":4:1:2:independent\nconsume\n"},
+		{name: "embed-four-workers", scope: embed, mode: "4", parallel: "4", want: "batch:" + embed + ":8:4:2:independent\nconsume\n"},
+		{name: "embed-two-workers", scope: embed, mode: "4", parallel: "2", want: "batch:" + embed + ":4:2:2:independent\nconsume\n"},
+		{name: "embed-three-workers", scope: embed, mode: "4", parallel: "3", want: "batch:" + embed + ":4:3:2:independent\nconsume\n"},
+		{name: "embed-four-workers-mixed", scope: embed + "\n" + dml + "\n" + sql, mode: "4", parallel: "4", want: "batch:" + embed + ":8:4:2:independent\nconsume\n" + strings.ReplaceAll(batches, ":4:1:", ":4:4:")},
+		{name: "embed-four-workers-undrained", scope: embed + "\n" + dml, mode: "4", parallel: "4", batchStatus: "125", want: "batch:" + embed + ":8:4:2:independent\n", status: 125},
 		{name: "only-isolated", scope: isolated, mode: "4", want: "batch:" + isolated + ":4:1:2:independent\nconsume\n"},
 		{name: "isolated-rollback", scope: isolated + "\nexample/a", mode: "1", want: "ordinary:" + isolated + " example/a\n"},
 		{name: "embed-with-existing", scope: embed + "\nexample/a\n" + dml + "\n" + sql, mode: "4", want: "ordinary:example/a\nbatch:" + embed + ":4:1:2:independent\nconsume\n" + batches},
@@ -1256,7 +1261,7 @@ function run_race_test_batches() {
  [[ ! -e "$2" && ! -e "$PREBUILT_RACE_REPORT" ]] || return 94
  printf 'batch:%s:%s:%s:%s:%s\n' "$1" "$3" "$4" "$5" "$6" >> "$CASE_DIR/calls"
  touch "$2" "$PREBUILT_RACE_REPORT"
- case "$1" in */dml) return "${BATCH_STATUS:-0}" ;; esac
+ case "$1" in */dml|*/embed) return "${BATCH_STATUS:-0}" ;; esac
 }
 function consume_race_report() {
  printf 'consume\n' >> "$CASE_DIR/calls"
