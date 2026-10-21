@@ -6100,6 +6100,11 @@ func TestDelete4(t *testing.T) {
 					}()
 					err := blk.HybridScan(ctx, &view, uint16(j), []int{0}, common.DefaultAllocator)
 					require.NoError(t, err)
+					// A block with no rows visible to this transaction is a valid
+					// HybridScan result and does not allocate a batch.
+					if view == nil {
+						return
+					}
 					view.Compact()
 					if view.Length() != 0 {
 						t.Logf("block-%d, data=%s", j, logtail.ToStringTemplate(view.Vecs[0], -1))
