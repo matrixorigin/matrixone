@@ -99,13 +99,20 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 				Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(tc.id, 0), ObjName: tc.name},
 				Args: []*planpb.Expr{plan2.MakePlan2StringConstExprWithType("{}", false)},
 			}}}
-			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical", "normalized_interval", "division_warning", "collation", "timestamp", "timestampadd_second"} {
+			for _, mode := range []string{"standalone", "mixed", "calendar", "statistical", "normalized_interval", "division_warning", "collation", "timestamp", "timestampadd_second", "load_fk_ignore"} {
 				t.Run(mode, func(t *testing.T) {
 					op.ProjectList = []*planpb.Expr{expr}
 					c.proc.SetStmtProfile(&process.StmtProfile{})
 					c.proc.GetStmtProfile().SetStatementRuntimeProfile("Select", "DQL", false)
 					c.proc.GetSessionInfo().SqlMode = ""
 					c.proc.SetResolveVariableFunc(nil)
+					if mode == "load_fk_ignore" {
+						loadCheck, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "_load_fk_ignore_check", []*planpb.Expr{{
+							Typ: types.T_bool.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+						}})
+						require.NoError(t, err)
+						op.ProjectList = append(op.ProjectList, loadCheck)
+					}
 					if mode == "timestamp" {
 						temporal, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "timestamp", []*planpb.Expr{{
 							Typ:  types.T_datetime.ToTypeWithScale(3).PlanType(),
@@ -183,20 +190,23 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 					require.Equal(t, mode == "normalized_interval", features.CalendarIntervalNormalization)
 					require.Equal(t, mode == "mixed" || mode == "division_warning", features.ScalarDivision)
 					require.Equal(t, mode == "collation", features.LeastGreatestCollationSemantics)
-					require.Equal(t, defines.MORPCVersion125, executionRemoteExpressionProtocolVersion(c.proc, features))
-					require.Equal(t, defines.MORPCVersion125, remoteExpressionProtocolVersion(features))
+					require.Equal(t, mode == "load_fk_ignore", features.LoadFKIgnoreCheck)
+					require.Equal(t, defines.MORPCVersion126, executionRemoteExpressionProtocolVersion(c.proc, features))
+					require.Equal(t, defines.MORPCVersion126, remoteExpressionProtocolVersion(features))
 					persistedVersion, err := plan2.RequiredPersistedExpressionProtocolVersion(op.ProjectList)
 					require.NoError(t, err)
-					require.Equal(t, defines.MORPCVersion125, persistedVersion)
+					require.Equal(t, defines.MORPCVersion126, persistedVersion)
 					// No capability observation survives a send, including after
 					// success followed by rollback of the very same endpoint.
-					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion125, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion124, defines.MORPCVersion123, defines.MORPCVersion122, defines.MORPCVersion120, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
+					for _, version := range []int64{defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion126, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion123, defines.MORPCVersion122, defines.MORPCVersion120, defines.MORPCVersion116, defines.MORPCVersion115, defines.MORPCVersion114, defines.MORPCVersion113, defines.MORPCVersion112, 0} {
 						client.version = version
 						calls, releases := client.calls, client.releases
 						data, err := encodeRemoteScope(scope, c.proc)
-						if version == defines.MORPCVersion125 {
+						if version == defines.MORPCVersion126 {
 							require.NoError(t, err)
 							require.NotEmpty(t, data)
+						} else if version < defines.MORPCVersion125 && mode == "load_fk_ignore" {
+							require.ErrorContains(t, err, "remote destination does not support LOAD IGNORE foreign-key filtering")
 						} else if (version < defines.MORPCVersion122 && mode == "timestamp") || (version < defines.MORPCVersion124 && mode == "timestampadd_second") {
 							require.ErrorContains(t, err, "remote destination does not support temporal result contracts")
 						} else if version < defines.MORPCVersion117 && mode == "collation" {
@@ -212,7 +222,7 @@ func TestViewMetadataSenderSharesExpressionProbe(t *testing.T) {
 						} else if version < defines.MORPCVersion113 && mode == "statistical" {
 							require.ErrorContains(t, err, "remote destination does not support decimal statistical DOUBLE results")
 						} else {
-							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 125)")
+							require.ErrorContains(t, err, "remote destination does not support view metadata functions (MORPC version 126)")
 						}
 						require.Equal(t, 1, client.calls-calls)
 						require.Equal(t, 1, client.releases-releases)

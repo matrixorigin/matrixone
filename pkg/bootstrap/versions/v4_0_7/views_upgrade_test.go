@@ -103,11 +103,11 @@ func TestViewsRepairPreservesHistoricalV407Identity(t *testing.T) {
 	require.Equal(t, "VIEWS", entry.TableName)
 	require.Equal(t, versions.MODIFY_VIEW, entry.UpgType)
 	require.Equal(t, sysview.InformationSchemaViewsDDL, entry.UpgSql)
-	require.Equal(t, int64(defines.MORPCVersion125), entry.RequiredProtocolVersion)
+	require.Equal(t, int64(defines.MORPCVersion126), entry.RequiredProtocolVersion)
 }
 
 func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
-	for _, peer := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion124, defines.MORPCVersion123, defines.MORPCVersion122, defines.MORPCVersion120, defines.MORPCVersion125} {
+	for _, peer := range []int64{defines.MORPCVersion104, defines.MORPCVersion105, defines.MORPCVersion106, defines.MORPCVersion108, defines.MORPCVersion109, defines.MORPCVersion110, defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion121, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion123, defines.MORPCVersion122, defines.MORPCVersion120, defines.MORPCVersion126} {
 		t.Run(fmt.Sprintf("peer-%d", peer), func(t *testing.T) {
 			var executed []string
 			txn := newVersionTxnExecutor(t, func(sql string) (executor.Result, error) {
@@ -124,8 +124,8 @@ func TestViewsUpgradeBlocksBeforeDropOnOldCN(t *testing.T) {
 				return false, nil
 			}
 			err := entry.Upgrade(txn, 0)
-			if peer < defines.MORPCVersion125 {
-				require.ErrorContains(t, err, "requires all CNs to support protocol version 125")
+			if peer < defines.MORPCVersion126 {
+				require.ErrorContains(t, err, "requires all CNs to support protocol version 126")
 				require.Empty(t, executed)
 			} else {
 				require.NoError(t, err)
@@ -169,6 +169,6 @@ func TestViewsUpgradeAuthoringProtocolGate(t *testing.T) {
 	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion122))
 	require.False(t, InformationSchemaViewsAuthoringProtocolReady(txn))
 
-	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion125))
+	rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion126))
 	require.True(t, InformationSchemaViewsAuthoringProtocolReady(txn))
 }

@@ -102,7 +102,7 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.DecimalLiteralSemantics, defines.MORPCVersion89,
 			"exact DECIMAL256 literal semantics require a versioned remote destination",
 			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version %d)"},
-		{features.ViewMetadataFunctions, defines.MORPCVersion125,
+		{features.ViewMetadataFunctions, defines.MORPCVersion126,
 			"view metadata remote execution requires a versioned remote destination",
 			"remote destination does not support view metadata functions (MORPC version %d)"},
 	}

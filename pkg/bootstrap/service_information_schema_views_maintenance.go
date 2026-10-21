@@ -45,7 +45,7 @@ type informationSchemaViewsMaintenanceState struct {
 
 // maintainInformationSchemaViews repairs only the system VIEWS definition for
 // every account, including tenants already at v4.0.6, v4.0.7, or the final
-// version. It processes one bounded page per invocation after the v125 gate;
+// version. It processes one bounded page per invocation after the v126 gate;
 // the standalone repair does not alter any historical handler identity.
 func (s *service) maintainInformationSchemaViews(ctx context.Context) error {
 	if !s.upgrade.informationSchemaViewsMaintenanceRunning.CompareAndSwap(false, true) {
@@ -153,7 +153,7 @@ func informationSchemaViewsProtocolReady(txn executor.TxnExecutor) (bool, error)
 	if !v4_0_7.InformationSchemaViewsAuthoringProtocolReady(txn) {
 		return false, nil
 	}
-	err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion125)
+	err := versions.CheckCommonProtocolVersion(txn, defines.MORPCVersion126)
 	if moerr.IsMoErrCode(err, moerr.ErrNotSupported) {
 		return false, nil
 	}

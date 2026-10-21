@@ -87,8 +87,8 @@ func upgradeInformationSchemaMetadataVisibilityView(viewName, viewDDL string) ve
 		requiredProtocol = defines.MORPCVersion46
 	} else if viewName == "VIEWS" {
 		// The definition functions are encoded into remotely executed plans. Do not
-		// install this catalog contract until every CN can resolve function IDs 602 and 603.
-		requiredProtocol = defines.MORPCVersion125
+		// install this catalog contract until every CN can resolve function IDs 603 and 604.
+		requiredProtocol = defines.MORPCVersion126
 	}
 	return versions.UpgradeEntry{
 		Schema:                  sysview.InformationDBConst,

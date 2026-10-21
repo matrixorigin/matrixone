@@ -761,7 +761,7 @@ func TestInitInformationSchemaSysTablesForProtocol_UsesProtocolAwareViews(t *tes
 		require.Contains(t, catalog, sysview.InformationSchemaViewsLegacyDDL)
 		require.NotContains(t, joined, "mo_view_definition(")
 	}
-	current := sysview.InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion125)
+	current := sysview.InitInformationSchemaSysTablesForProtocol(defines.MORPCVersion126)
 	require.Contains(t, current, sysview.InformationSchemaViewsDDL)
 	require.NotContains(t, current, sysview.InformationSchemaViewsLegacyDDL)
 }
@@ -825,7 +825,7 @@ func TestCreateTablesInformationSchemaPreservesKnownProtocolFallback(t *testing.
 			err := createTablesInInformationSchemaOfGeneralTenant(
 				context.Background(), bh, test.service, nil)
 			require.NoError(t, err)
-			// Protocols below v125 also use the predecessor VIEWS definition; the
+			// Protocols below v126 also use the predecessor VIEWS definition; the
 			// historical role-visibility
 			// wrapper, so compare the VIEWS-specific contract rather than the
 			// whole SQL string.
@@ -908,14 +908,14 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	oldAuthoringFloor, hadAuthoringFloor := rt.GetGlobalVariables(
 		moruntime.PersistedExpressionProtocolAuthoringFloor)
 	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
-		{ServiceID: "cn-v125", QueryAddress: "cn-v125-query", PipelineServiceAddress: "cn-v125-pipeline"},
+		{ServiceID: "cn-v126", QueryAddress: "cn-v126-query", PipelineServiceAddress: "cn-v126-pipeline"},
 		{ServiceID: "cn-v109", QueryAddress: "cn-v109-query", PipelineServiceAddress: "cn-v109-pipeline"},
 	}}
 	t.Cleanup(func() {
 		if hadProtocol {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 		}
 		if hadAuthoringFloor {
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, oldAuthoringFloor)
@@ -932,7 +932,7 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	queryClient := newMockQueryClient()
 	proc.Base.QueryClient = queryClient
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 
 	setProtocolResponse := func(address string, version int64) {
 		queryClient.cnResponses[address] = &querypb.Response{
@@ -952,26 +952,26 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 		{
 			name: "mixed versions use legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v125-query": defines.MORPCVersion125,
+				"cn-v126-query": defines.MORPCVersion126,
 				"cn-v109-query": defines.MORPCVersion109,
 			},
 			authoringFloor: defines.MORPCVersion109,
 			wantLegacy:     true,
 		},
 		{
-			name: "all CNs at v125 use current DDL",
+			name: "all CNs at v126 use current DDL",
 			responses: map[string]int64{
-				"cn-v125-query": defines.MORPCVersion125,
-				"cn-v109-query": defines.MORPCVersion125,
+				"cn-v126-query": defines.MORPCVersion126,
+				"cn-v109-query": defines.MORPCVersion126,
 			},
-			authoringFloor:     defines.MORPCVersion125,
+			authoringFloor:     defines.MORPCVersion126,
 			wantLatest:         true,
 			wantTableCollation: true,
 		},
 		{
 			name: "v118 admission retains TABLES while VIEWS waits",
 			responses: map[string]int64{
-				"cn-v125-query": defines.MORPCVersion118,
+				"cn-v126-query": defines.MORPCVersion118,
 				"cn-v109-query": defines.MORPCVersion118,
 			},
 			authoringFloor:     defines.MORPCVersion118,
@@ -979,39 +979,39 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 			wantTableCollation: true,
 		},
 		{
-			name: "v118 peer rollback retains TABLES after v125 admission",
+			name: "v118 peer rollback retains TABLES after v126 admission",
 			responses: map[string]int64{
-				"cn-v125-query": defines.MORPCVersion125,
+				"cn-v126-query": defines.MORPCVersion126,
 				"cn-v109-query": defines.MORPCVersion118,
 			},
-			authoringFloor:     defines.MORPCVersion125,
+			authoringFloor:     defines.MORPCVersion126,
 			wantLegacy:         true,
 			wantTableCollation: true,
 		},
 		{
 			name: "unknown CN capability uses legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v125-query": defines.MORPCVersion125,
+				"cn-v126-query": defines.MORPCVersion126,
 			},
-			authoringFloor: defines.MORPCVersion125,
+			authoringFloor: defines.MORPCVersion126,
 			wantLegacy:     true,
 		},
 		{
 			name: "RPC failure uses legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v125-query": defines.MORPCVersion125,
+				"cn-v126-query": defines.MORPCVersion126,
 			},
 			sendErrors: map[string]error{
-				"cn-v125-query": context.Canceled,
+				"cn-v126-query": context.Canceled,
 			},
-			authoringFloor: defines.MORPCVersion125,
+			authoringFloor: defines.MORPCVersion126,
 			wantLegacy:     true,
 		},
 		{
 			name: "local authoring admission pending uses legacy VIEWS",
 			responses: map[string]int64{
-				"cn-v125-query": defines.MORPCVersion125,
-				"cn-v109-query": defines.MORPCVersion125,
+				"cn-v126-query": defines.MORPCVersion126,
+				"cn-v109-query": defines.MORPCVersion126,
 			},
 			authoringFloor: defines.MORPCVersion106,
 			wantLegacy:     true,
@@ -1031,7 +1031,7 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 			defer ctrl.Finish()
 			var executed []string
 			bh := mock_frontend.NewMockBackgroundExec(ctrl)
-			bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:125,cn-b:125"}`}})}).AnyTimes()
+			bh.EXPECT().GetExecResultSet().Return([]interface{}{newMrsForCheckTenant([][]interface{}{{`{"result":"cn-a:126,cn-b:126"}`}})}).AnyTimes()
 			bh.EXPECT().ClearExecResultSet().AnyTimes()
 			bh.EXPECT().Exec(gomock.Any(), gomock.Any()).DoAndReturn(
 				func(_ context.Context, sql string) error {
@@ -1039,7 +1039,7 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 					return nil
 				}).AnyTimes()
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 			rt.SetGlobalVariables(
 				moruntime.PersistedExpressionProtocolAuthoringFloor,
 				int64(test.authoringFloor))
@@ -1062,21 +1062,21 @@ func TestCreateTablesInformationSchemaUsesCommonProtocolGate(t *testing.T) {
 	}
 }
 
-func TestCreateTenantInformationSchemaWaitsForAllProtocol125Peers(t *testing.T) {
+func TestCreateTenantInformationSchemaWaitsForAllProtocol126Peers(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	service := proc.GetService()
 	rt := moruntime.ServiceRuntime(service)
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
 	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
-		{ServiceID: "cn-v125-a", QueryAddress: "cn-v125-a-query", PipelineServiceAddress: "cn-v125-a-pipeline"},
-		{ServiceID: "cn-v125-b", QueryAddress: "cn-v125-b-query", PipelineServiceAddress: "cn-v125-b-pipeline"},
+		{ServiceID: "cn-v126-a", QueryAddress: "cn-v126-a-query", PipelineServiceAddress: "cn-v126-a-pipeline"},
+		{ServiceID: "cn-v126-b", QueryAddress: "cn-v126-b-query", PipelineServiceAddress: "cn-v126-b-pipeline"},
 	}}
 	t.Cleanup(func() {
 		if hadProtocol {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 		}
 		if hadCluster {
 			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
@@ -1086,14 +1086,14 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol125Peers(t *testing.T) 
 	})
 	queryClient := newMockQueryClient()
 	proc.Base.QueryClient = queryClient
-	queryClient.cnResponses["cn-v125-a-query"] = &querypb.Response{
+	queryClient.cnResponses["cn-v126-a-query"] = &querypb.Response{
 		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion73},
 	}
-	queryClient.cnResponses["cn-v125-b-query"] = &querypb.Response{
+	queryClient.cnResponses["cn-v126-b-query"] = &querypb.Response{
 		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion73},
 	}
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 
 	for _, tc := range []struct {
 		name, response string
@@ -1101,27 +1101,28 @@ func TestCreateTenantInformationSchemaWaitsForAllProtocol125Peers(t *testing.T) 
 		wantError      bool
 		wantLegacy     bool
 	}{
-		{name: "one peer cannot decode native COLUMNS", response: `{"result":"cn-a:125,cn-b:108"}`, peerVersion: defines.MORPCVersion108, wantError: true},
-		{name: "v109 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:109"}`, peerVersion: defines.MORPCVersion109, wantLegacy: true},
-		{name: "v110 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:110"}`, peerVersion: defines.MORPCVersion110, wantLegacy: true},
-		{name: "v112 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:112"}`, peerVersion: defines.MORPCVersion112, wantLegacy: true},
-		{name: "v113 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:113"}`, peerVersion: defines.MORPCVersion113, wantLegacy: true},
-		{name: "v114 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:114"}`, peerVersion: defines.MORPCVersion114, wantLegacy: true},
-		{name: "v115 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:115"}`, peerVersion: defines.MORPCVersion115, wantLegacy: true},
-		{name: "v116 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:116"}`, peerVersion: defines.MORPCVersion116, wantLegacy: true},
-		{name: "v117 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:117"}`, peerVersion: defines.MORPCVersion117, wantLegacy: true},
-		{name: "v118 peer preserves TABLES and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:118"}`, peerVersion: defines.MORPCVersion118, wantLegacy: true},
-		{name: "v119 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:119"}`, peerVersion: defines.MORPCVersion119, wantLegacy: true},
-		{name: "v120 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:120"}`, peerVersion: defines.MORPCVersion120, wantLegacy: true},
-		{name: "v121 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:121"}`, peerVersion: defines.MORPCVersion121, wantLegacy: true},
-		{name: "v122 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:122"}`, peerVersion: defines.MORPCVersion122, wantLegacy: true},
-		{name: "v123 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:123"}`, peerVersion: defines.MORPCVersion123, wantLegacy: true},
-		{name: "v124 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:125,cn-b:124"}`, peerVersion: defines.MORPCVersion124, wantLegacy: true},
-		{name: "all peers support native view", response: `{"result":"cn-a:125,cn-b:125"}`, peerVersion: defines.MORPCVersion125},
+		{name: "one peer cannot decode native COLUMNS", response: `{"result":"cn-a:126,cn-b:108"}`, peerVersion: defines.MORPCVersion108, wantError: true},
+		{name: "v109 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:109"}`, peerVersion: defines.MORPCVersion109, wantLegacy: true},
+		{name: "v110 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:110"}`, peerVersion: defines.MORPCVersion110, wantLegacy: true},
+		{name: "v112 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:112"}`, peerVersion: defines.MORPCVersion112, wantLegacy: true},
+		{name: "v113 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:113"}`, peerVersion: defines.MORPCVersion113, wantLegacy: true},
+		{name: "v114 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:114"}`, peerVersion: defines.MORPCVersion114, wantLegacy: true},
+		{name: "v115 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:115"}`, peerVersion: defines.MORPCVersion115, wantLegacy: true},
+		{name: "v116 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:116"}`, peerVersion: defines.MORPCVersion116, wantLegacy: true},
+		{name: "v117 peer preserves COLUMNS and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:117"}`, peerVersion: defines.MORPCVersion117, wantLegacy: true},
+		{name: "v118 peer preserves TABLES and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:118"}`, peerVersion: defines.MORPCVersion118, wantLegacy: true},
+		{name: "v119 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:119"}`, peerVersion: defines.MORPCVersion119, wantLegacy: true},
+		{name: "v120 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:120"}`, peerVersion: defines.MORPCVersion120, wantLegacy: true},
+		{name: "v121 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:121"}`, peerVersion: defines.MORPCVersion121, wantLegacy: true},
+		{name: "v122 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:122"}`, peerVersion: defines.MORPCVersion122, wantLegacy: true},
+		{name: "v123 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:123"}`, peerVersion: defines.MORPCVersion123, wantLegacy: true},
+		{name: "v124 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:124"}`, peerVersion: defines.MORPCVersion124, wantLegacy: true},
+		{name: "v125 peer retains TABLES and legacy VIEWS", response: `{"result":"cn-a:126,cn-b:125"}`, peerVersion: defines.MORPCVersion125, wantLegacy: true},
+		{name: "all peers support native view", response: `{"result":"cn-a:126,cn-b:126"}`, peerVersion: defines.MORPCVersion126},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			queryClient.cnResponses["cn-v125-a-query"].GetProtocolVersion.Version = defines.MORPCVersion125
-			queryClient.cnResponses["cn-v125-b-query"].GetProtocolVersion.Version = tc.peerVersion
+			queryClient.cnResponses["cn-v126-a-query"].GetProtocolVersion.Version = defines.MORPCVersion126
+			queryClient.cnResponses["cn-v126-b-query"].GetProtocolVersion.Version = tc.peerVersion
 			ctrl := gomock.NewController(t)
 			bh := mock_frontend.NewMockBackgroundExec(ctrl)
 			var executed []string
@@ -1161,13 +1162,13 @@ func TestCreateTablesInformationSchemaUsesCallerContext(t *testing.T) {
 	oldProtocol, hadProtocol := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	oldCluster, hadCluster := rt.GetGlobalVariables(moruntime.ClusterService)
 	cluster := &tenantInitializationProtocolCluster{cns: []metadata.CNService{
-		{ServiceID: "cn-v125", QueryAddress: "cn-v125-query", PipelineServiceAddress: "cn-v125-pipeline"},
+		{ServiceID: "cn-v126", QueryAddress: "cn-v126-query", PipelineServiceAddress: "cn-v126-pipeline"},
 	}}
 	t.Cleanup(func() {
 		if hadProtocol {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, oldProtocol)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 		}
 		if hadCluster {
 			rt.SetGlobalVariables(moruntime.ClusterService, oldCluster)
@@ -1177,12 +1178,12 @@ func TestCreateTablesInformationSchemaUsesCallerContext(t *testing.T) {
 	})
 
 	queryClient := newMockQueryClient()
-	queryClient.cnResponses["cn-v125-query"] = &querypb.Response{
-		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion125},
+	queryClient.cnResponses["cn-v126-query"] = &querypb.Response{
+		GetProtocolVersion: &querypb.GetProtocolVersionResponse{Version: defines.MORPCVersion126},
 	}
 	proc.Base.QueryClient = queryClient
 	rt.SetGlobalVariables(moruntime.ClusterService, cluster)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
 
 	ctrl := gomock.NewController(t)
 	defer ctrl.Finish()
