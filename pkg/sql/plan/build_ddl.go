@@ -1772,7 +1772,7 @@ func genAsSelectCols(
 			executionProtocol = max(executionProtocol, defines.MORPCVersion122)
 		}
 		if features.SetOperationFloatKeys || features.ScalarSetReaggregation {
-			executionProtocol = max(executionProtocol, defines.MORPCVersion126)
+			executionProtocol = max(executionProtocol, defines.MORPCVersion127)
 		}
 	}
 	return cols, query, executionProtocol, nil
