@@ -693,6 +693,10 @@ func (obj *baseObject) GetValue(
 		if err != nil {
 			return
 		}
+		if bat == nil {
+			err = moerr.NewNotFoundNoCtx()
+			return
+		}
 		batchLen := -1
 		if bat != nil {
 			batchLen = bat.Length()
@@ -725,6 +729,10 @@ func (obj *baseObject) GetValue(
 	err = obj.Scan(
 		ctx, &bat, txn, readSchema, blkOffset, []int{col}, mp)
 	if err != nil {
+		return
+	}
+	if bat == nil {
+		err = moerr.NewNotFoundNoCtx()
 		return
 	}
 	batchLen := -1

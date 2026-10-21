@@ -161,6 +161,11 @@ func (tbl *txnTable) NeedRollback() bool {
 // ApplyAppend applies all the anodes into appendable blocks
 // and un-reference the appendable blocks which had been referenced when PrepareApply.
 func (space *tableSpace) ApplyAppend() (err error) {
+	// Freeze may have reserved several destinations before payload application.
+	// If one ApplyAppendAt fails, the remaining appenders still own object
+	// references; release them on every exit so a failed transaction cannot
+	// keep an object permanently non-compactable.
+	defer space.CloseAppends()
 	for space.applied < len(space.appends) {
 		ctx := space.appends[space.applied]
 		bat, _ := ctx.node.Window(ctx.start, ctx.start+ctx.count)
