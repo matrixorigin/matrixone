@@ -120,6 +120,9 @@ func TestUnquotedExtendedIdentifier(t *testing.T) {
 		{name: "charset prefix with digit suffix", input: "_utf8mb41", value: "_utf8mb41"},
 		{name: "charset prefix with BMP suffix", input: "_utf8mb4数量", value: "_utf8mb4数量"},
 		{name: "charset prefix with raw latin1 suffix", input: "_utf8mb4\xe9A", value: "_utf8mb4\xe9A"},
+		{name: "uppercase charset name as identifier", input: "_UTF8MB4", value: "_UTF8MB4"},
+		{name: "uppercase charset prefix with ASCII suffix", input: "_UTF8MB4table", value: "_UTF8MB4table"},
+		{name: "mixed case charset prefix with digit suffix", input: "_Utf8Mb41", value: "_Utf8Mb41"},
 	}
 
 	for _, test := range tests {
@@ -136,7 +139,13 @@ func TestUnquotedExtendedIdentifier(t *testing.T) {
 }
 
 func TestCharsetIntroducer(t *testing.T) {
-	for _, input := range []string{"_utf8mb4'test'", "_utf8mb4 \t'test'"} {
+	for _, input := range []string{
+		"_utf8mb4'test'",
+		"_utf8mb4 \t'test'",
+		"_UTF8MB4'test'",
+		"_UtF8mB4'test'",
+		"_UTF8MB4 \t'test'",
+	} {
 		t.Run(input, func(t *testing.T) {
 			scanner := NewScanner(dialect.MYSQL, input)
 			defer PutScanner(scanner)
