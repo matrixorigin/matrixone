@@ -19,7 +19,7 @@ is claimed by this document. Root owns reviewer and lifecycle decisions.
 ## Subsequent candidate allocation overlay (not part of r2 approval)
 
 For the current conflict-repair candidate, actual main is
-`743e749a1e33d6c845bb73999e8c82d297a2b657`, whose capability prefix reaches
+`774d0eda08c622e8717bed8caa8cd8c2ae3ffc2a`, whose capability prefix reaches
 MORPC124. The candidate preserves main's MORPC123 row-lock admission and
 MORPC124 fractional TIMESTAMPADD SECOND contracts and provisionally allocates
 JSON ELT/opaque visible text at MORPC125, typed JSON MIN/MAX at MORPC126, and the
@@ -30,6 +30,31 @@ This supersedes only the r2 allocation for the current candidate; it does not
 claim design approval or implementation acceptance. The r2 review record and
 allocation below remain historical and bound to their stated source and target.
 
+The maintenance merge is bound to source
+`1a553e219b0e4a284b0084c050925bdb678276bd` and the frozen main above.
+Main's `pipeline.DedupJoin.dedup_key_exprs` retains tag30; the candidate's
+unmerged ODKU suffix follows it:
+
+| Pipeline DedupJoin field | Current tag |
+| --- | --- |
+| `odku_target_auto_increment_col` | 31 |
+| `odku_generated_col` | 32 |
+| `odku_ordinal_col` | 33 |
+| `odku_result_tracking` | 34 |
+| `odku_generated_auto_increment_col` | 35 |
+
+Main's `plan.Node.dedup_key_exprs` tag95 and
+`plan.PreInsertUkCtx.key_diagnostic_exprs` tag19 also remain intact. The current
+source/cached/destination/receiver/actual-stream ODKU floor is127; JSON125 and
+typed MIN/MAX126 do not imply ODKU support. This is append safety relative to
+actual main, not wire compatibility with earlier unmerged127 executables using
+ODKU tags30..34. Do not mix those pre-resolution binaries based on the shared
+numeric floor. Such interoperability is not certified by this merge or the
+historical approvals. The approved ownership, coordinator ordering, reduction,
+result policy, retry/quiescence and resource-budget choices are unchanged;
+measured performance, real mixed binaries and deployment acceptance remain
+separate gates.
+
 The approved r2 addendum below supersedes only the allocation and compatibility
 boundaries in the [retained r1 specification](20261016-odku-distributed-result-protocol.md).
 The existing coordinator ordering, provenance, bounded reduction, transaction
@@ -37,7 +62,7 @@ publication, generation/retry ownership and performance budgets remain the
 implementation's intended design. Their existing evidence keeps its original
 revision binding; it is not automatically upgraded to r2 acceptance.
 
-## Current cumulative allocation
+## Approved historical r2 cumulative allocation
 
 | Capability | Current floor | Allocation owner |
 | --- | --- | --- |

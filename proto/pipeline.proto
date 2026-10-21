@@ -365,11 +365,12 @@ message DedupJoin {
   bool emit_action_rows = 27;
   int32 action_final_result_pos = 28;
   repeated ODKUForeignKeyCheck foreign_key_checks = 29 [(gogoproto.nullable) = false];
-  int32 odku_target_auto_increment_col = 30;
-  int32 odku_generated_col = 31;
-  int32 odku_ordinal_col = 32;
-  bool odku_result_tracking = 33;
-  int32 odku_generated_auto_increment_col = 34;
+  repeated plan.Expr dedup_key_exprs = 30;
+  int32 odku_target_auto_increment_col = 31;
+  int32 odku_generated_col = 32;
+  int32 odku_ordinal_col = 33;
+  bool odku_result_tracking = 34;
+  int32 odku_generated_auto_increment_col = 35;
 }
 
 message RightDedupJoin {
@@ -390,6 +391,7 @@ message RightDedupJoin {
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
   bool input_keys_unique = 17;
+  repeated plan.Expr dedup_key_exprs = 18;
 }
 
 message Product {
@@ -587,6 +589,7 @@ message HashBuild {
   int32 dedup_delete_marker_col_idx = 17;
   repeated int32 dedup_delete_keep_col_idx_list = 18;
   bool track_null_keys = 19;
+  repeated plan.Expr dedup_key_exprs = 20;
 }
 
 message Indexbuild {

@@ -1,7 +1,7 @@
 # Distributed ODKU Result Protocol
 
 Current implementation alignment: [r2 addendum](20261016-odku-distributed-result-protocol-r2-addendum.md), with the subsequent candidate-allocation overlay recorded there.
-Against actual main `743e749a1e33d6c845bb73999e8c82d297a2b657` (capability prefix
+Against frozen main `774d0eda08c622e8717bed8caa8cd8c2ae3ffc2a` (capability prefix
 through MORPC124), the isolated candidate retains main's MORPC123 row-lock and
 MORPC124 fractional TIMESTAMPADD SECOND contracts and provisionally assigns JSON
 ELT/opaque text to MORPC125, typed JSON MIN/MAX to MORPC126, and the complete
@@ -16,7 +16,11 @@ references to MORPC119 describe the original inspected/reviewed revision, not
 the current allocation. Use the r2 addendum for the changed boundaries. The
 original reviewed content remains addressable by its immutable blob and head
 below. The v1 approval record is unchanged and applies only to that reviewed r1
-content; **r2 independent review is pending**, with no new approval asserted.
+content. The [v2 approval record](20261016-odku-distributed-result-protocol-review-v2.md)
+approves its stated historical r2 revision; neither approval automatically covers
+the subsequent numeric allocation overlay. Pending/DRAFT statements in the
+retained specification below describe that original publication, not the latest
+approval status.
 
 ## Retained r1 specification
 
@@ -128,7 +132,7 @@ state, not a client publication or a storage commit acknowledgment.
 ### Messages and fields
 
 The wire contract uses existing PipelineMessage / ProcessInfo transport plus
-optional terminal JSON. MORPCVersion125 is the semantic floor; the independent
+optional terminal JSON. MORPCVersion119 is the historical semantic floor; the independent
 `terminal_resource_version = 4` describes resource accounting, not an ODKU
 protocol version.
 

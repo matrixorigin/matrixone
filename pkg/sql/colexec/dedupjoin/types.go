@@ -339,6 +339,7 @@ type DedupJoin struct {
 	DedupColName              string
 	SpillThreshold            int64
 	DedupColTypes             []plan.Type
+	DedupKeyExprs             []*plan.Expr
 	DelColIdx                 int32
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
