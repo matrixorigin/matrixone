@@ -121,6 +121,16 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 		require.True(t, castTrue)
 		require.False(t, castFalse)
 
+		// Numeric comparisons preserve the JSON string category in direct SQL
+		// and prepared execution; explicit CAST remains the conversion boundary.
+		var numericStringEqual, reversedNumericStringEqual bool
+		require.NoError(t, db.QueryRowContext(ctx, `select
+			json_extract(json_array('7'), '$[0]') = cast(7 as signed),
+			cast(7 as signed) = json_extract(json_array('7'), '$[0]')`).Scan(
+			&numericStringEqual, &reversedNumericStringEqual))
+		require.False(t, numericStringEqual)
+		require.False(t, reversedNumericStringEqual)
+
 		assertIDs := func(query string, expected ...int) {
 			t.Helper()
 			rows, queryErr := db.QueryContext(ctx, query)
@@ -205,7 +215,9 @@ func TestIssue27529JSONStringsDoNotCompareAsBooleans(t *testing.T) {
 			{name: "IN preserves adjacent int64 precision", query: `select json_extract(json_array(9007199254740992), '$[0]') in (?)`, arg: int64(9007199254740993), expected: false},
 			{name: "NOT IN preserves adjacent int64 precision", query: `select json_extract(json_array(9007199254740992), '$[0]') not in (?)`, arg: int64(9007199254740993), expected: true},
 			{name: "equality preserves max int64", query: `select json_extract(json_array(9223372036854775807), '$[0]') = ?`, arg: int64(9223372036854775807), expected: true},
-			{name: "integer parameter keeps numeric JSON string coercion", query: `select json_extract(json_array('7'), '$[0]') = ?`, arg: int64(7), expected: true},
+			{name: "integer parameter preserves JSON string category", query: `select json_extract(json_array('7'), '$[0]') = ?`, arg: int64(7), expected: false},
+			{name: "reversed integer parameter preserves JSON string category", query: `select ? = json_extract(json_array('7'), '$[0]')`, arg: int64(7), expected: false},
+			{name: "explicit cast converts numeric JSON string", query: `select cast(json_extract(json_array('7'), '$[0]') as signed) = ?`, arg: int64(7), expected: true},
 			{name: "float parameter preserves typed literal parity", query: `select json_extract(json_array(1.25), '$[0]') = ?`, arg: float64(1.25), expected: true},
 			{name: "null-safe equality JSON right boolean", query: `select ? <=> json_extract(json_object('v', true), '$.v')`, arg: true, expected: true},
 			{name: "null-safe equality boolean coerces to string parameter", query: `select json_extract(json_object('v', true), '$.v') <=> ?`, arg: "true", expected: true},
