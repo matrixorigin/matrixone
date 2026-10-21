@@ -300,6 +300,15 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 		resultSize = max(resultSize, int(attr.ColFieldIndex)+1)
 		realCnt++
 	}
+	kafkaJSON := r.param != nil && r.param.KafkaScan != nil
+	if kafkaJSON {
+		// The JSON object carries the declared data columns even when the scan
+		// projects only an early field or synthetic message metadata.
+		if r.param.ColumnListLen < 0 || r.param.ColumnListLen > int32(plan.TableColumnCountLimit) {
+			return nil, moerr.NewInternalErrorf(ctx,
+				"invalid Kafka data column count %d", r.param.ColumnListLen)
+		}
+	}
 	res := make([]csvparser.Field, resultSize)
 	if r.prevStr != "" {
 		str = r.prevStr + str
@@ -319,7 +328,14 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 	if !ok || !g.Obj {
 		return nil, moerr.NewInvalidInput(ctx, "not a object")
 	}
-	if len(g.Keys) < realCnt {
+	requiredKeys := realCnt
+	if kafkaJSON {
+		requiredKeys = max(requiredKeys, int(r.param.ColumnListLen))
+	}
+	if len(g.Keys) < requiredKeys {
+		if kafkaJSON {
+			return nil, moerr.NewInvalidInput(ctx, "kafka json object has fewer fields than input columns")
+		}
 		return nil, moerr.NewInternalError(ctx, ColumnCntLargerErrorInfo)
 	}
 	for idx, attr := range attrs {
