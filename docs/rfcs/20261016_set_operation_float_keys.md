@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 24
+- Revision: 25
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 25 integration baseline: official main `a648b13e53cf0a07ff19211203a69e37b2d1dd93`
 - Revision 24 integration baseline: official main `63a964a82fbaae4759cfabb45655e0185bc0979c`
 - Revision 23 integration baseline: official main `ef07d45cf6bc258df8c2ac60b1ea9d2a38045b1a`
 - Revision 22 integration baseline: official main `21966565287edf9f7d7f519af60d269711608945`
@@ -1295,6 +1296,26 @@ their original source and workload scope; they do not prove603 compatibility or
 new-head performance. The unchanged Node96 unknown-field proof remains reusable.
 No live mixed-version cluster, fresh capacity benchmark or Linux performance
 qualification is claimed. The accepted bounded local architecture is unchanged.
+
+### Revision 25 derived-view planning integration
+
+Official main `a648b13e53cf0a07ff19211203a69e37b2d1dd93` adds opt-in
+SELECT/CTAS/PREPARE planning through the read-only View contract. Ordinary SQL
+entry points keep their existing routing. The mechanical rebase preserves its
+CTE declaration scope and case-sensitive projection keys, snapshot propagation
+and restoration, publisher metadata ownership, and real executable source trees.
+It also preserves this PR's common-type set keys, shared-CTE column demand,
+scalar occurrence boundaries and retained CTAS requirement126. Function603 and
+MORPC126 remain the next available allocations after released LOAD602/125.
+
+The [revision-25 integration receipt](validation/20261021_derived_view_integration.json)
+records final source fingerprints and focused planner, compiler, frontend and
+public SQL validation. The revision-24 receipt is immutable: its actual official
+native/response execution baseline remains63a, whose protocol implementation is
+unchanged in a648. It is reused for that compatibility contract, not relabeled
+as an a648 execution. Earlier unaffected functional and capacity evidence retains
+its explicitly recorded scope. This integration adds no architecture or resource
+budget changes and claims no new capacity or live mixed-version qualification.
 
 ## Alternatives
 
