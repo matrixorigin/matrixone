@@ -286,6 +286,12 @@ select id from (select id, match(body) against('needle' in natural language mode
 -- @regex("Candidate Limit: 3",true)
 -- @regex("(?s)Sort Key:.*Sort Key:",false)
 explain select id, match(body) against('needle' in natural language mode) as sc from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by sc desc limit 2 offset 1;
+-- A non-covered explicit score order bounds the search exactly like the implicit
+-- relevance order when every base filter is an INCLUDE predicate the search enforces.
+-- @regex("Candidate Limit: 2",true)
+explain select id, payload from ft_include where match(body) against('needle' in natural language mode) and category = 1 limit 2;
+-- @regex("Candidate Limit: 2",true)
+explain select id, payload, match(body) against('needle' in natural language mode) as sc from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by sc desc limit 2;
 -- A residual payload predicate and an alternate order must still see all hits.
 -- @sortkey:0
 select id from ft_include where match(body) against('needle' in natural language mode) and category = 1 and payload <> 'b' order by match(body) against('needle' in natural language mode) desc limit 2;

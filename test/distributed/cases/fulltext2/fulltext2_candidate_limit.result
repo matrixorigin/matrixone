@@ -475,6 +475,7 @@ Project  𝄀
               Join Cond: (ft_include.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
               Runtime Filter Build: #[-1,0]  𝄀
               ->  Table Scan on fulltext2_candidate_limit.ft_include  𝄀
+                    Filter Cond: (ft_include.category = 1)  𝄀
                     Runtime Filter Probe: ft_include.id  𝄀
               ->  Fulltext Index Scan on ft_include_idx  𝄀
                     Fulltext Index: ft_include_idx, Candidate Limit: 3
@@ -505,6 +506,38 @@ Project  𝄀
         Limit: 2, Offset: 1  𝄀
         ->  Fulltext Index Scan on ft_include_idx  𝄀
               Fulltext Index: ft_include_idx, Candidate Limit: 3
+explain select id, payload from ft_include where match(body) against('needle' in natural language mode) and category = 1 limit 2;
+-- @regex("Candidate Limit: 2", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_include.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_include  𝄀
+                    Filter Cond: (ft_include.category = 1)  𝄀
+                    Runtime Filter Probe: ft_include.id  𝄀
+              ->  Fulltext Index Scan on ft_include_idx  𝄀
+                    Fulltext Index: ft_include_idx, Candidate Limit: 2
+explain select id, payload, match(body) against('needle' in natural language mode) as sc from ft_include where match(body) against('needle' in natural language mode) and category = 1 order by sc desc limit 2;
+-- @regex("Candidate Limit: 2", true)
+➤ TP QUERY PLAN[12,-1,0]  𝄀
+Project  𝄀
+  ->  Sort  𝄀
+        Sort Key: mo_fulltext_alias_0.__mo_ft_score DESC  𝄀
+        Limit: 2  𝄀
+        ->  Join  𝄀
+              Join Type: INNER  𝄀
+              Join Cond: (ft_include.id = mo_fulltext_alias_0.__mo_ft_doc_id)  𝄀
+              Runtime Filter Build: #[-1,0]  𝄀
+              ->  Table Scan on fulltext2_candidate_limit.ft_include  𝄀
+                    Filter Cond: (ft_include.category = 1)  𝄀
+                    Runtime Filter Probe: ft_include.id  𝄀
+              ->  Fulltext Index Scan on ft_include_idx  𝄀
+                    Fulltext Index: ft_include_idx, Candidate Limit: 2
 select id from ft_include where match(body) against('needle' in natural language mode) and category = 1 and payload <> 'b' order by match(body) against('needle' in natural language mode) desc limit 2;
 ➤ id[-5,64,0]  𝄀
 4  𝄀

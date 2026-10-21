@@ -271,6 +271,7 @@ func (builder *QueryBuilder) prepareSpecialIndexGuards(rootID int32) {
 
 func (builder *QueryBuilder) resetSpecialIndexGuards() {
 	clear(builder.projectAnchoredSorts)
+	clear(builder.fulltextSearchEnforcesBaseFilters)
 	if builder.protectedScans != nil {
 		for k := range builder.protectedScans {
 			delete(builder.protectedScans, k)

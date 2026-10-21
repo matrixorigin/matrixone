@@ -323,6 +323,7 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 func TestJoinFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
+		prefix     string
 		orderBy    string
 		pagination string
 		from       string
@@ -338,6 +339,7 @@ func TestJoinFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 		{name: "no limit", orderBy: "sc DESC"},
 		{name: "residual filter", residual: " AND title <> 'excluded'", orderBy: "sc DESC", pagination: "LIMIT 2"},
 		{name: "user join", from: "ft JOIN t ON ft.id = t.id", orderBy: "sc DESC", pagination: "LIMIT 2"},
+		{name: "found rows", prefix: "SQL_CALC_FOUND_ROWS ", orderBy: "sc DESC", pagination: "LIMIT 2"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			optimizer := newIssue24822FullText2Optimizer(t)
@@ -345,7 +347,7 @@ func TestJoinFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 			if from == "" {
 				from = "ft"
 			}
-			statement := `SELECT ft.id, ft.title, MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) AS sc
+			statement := `SELECT ` + tc.prefix + `ft.id, ft.title, MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) AS sc
 				FROM ` + from + ` WHERE MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE)` + tc.residual
 			if tc.orderBy != "" {
 				statement += " ORDER BY " + tc.orderBy
@@ -409,6 +411,55 @@ func TestFulltext2PeeledIncludeFiltersStayOnBaseScans(t *testing.T) {
 					"base scan %d must re-check the peeled include predicate", node.NodeId)
 			}
 			require.Equal(t, tc.baseScans, baseScans)
+		})
+	}
+}
+
+func TestFulltext2ScoreLimitParityWithIncludeFilters(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		prefix    string
+		orderBy   string
+		residual  string
+		wantLimit uint64
+	}{
+		{name: "implicit order", wantLimit: 2},
+		{name: "explicit score order", orderBy: "sc DESC", wantLimit: 2},
+		{name: "explicit match score", orderBy: "MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) DESC", wantLimit: 2},
+		{name: "implicit order with residual", residual: " AND title <> 'excluded'"},
+		{name: "explicit score order with residual", orderBy: "sc DESC", residual: " AND title <> 'excluded'"},
+		{name: "explicit score order found rows", prefix: "SQL_CALC_FOUND_ROWS ", orderBy: "sc DESC"},
+		{name: "explicit score order with tiebreak", orderBy: "sc DESC, id"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := newIssue24822FullText2Optimizer(t)
+			for _, idx := range optimizer.ctx.tables["ft"].Indexes {
+				idx.IncludedColumns = []string{"base_id"}
+			}
+			statement := `SELECT ` + tc.prefix + `ft.id, ft.title, MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) AS sc
+				FROM ft WHERE MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE)
+				AND base_id IS NULL` + tc.residual
+			if tc.orderBy != "" {
+				statement += " ORDER BY " + tc.orderBy
+			}
+			statement += " LIMIT 2"
+			p, err := runOneStmt(optimizer, t, statement)
+			require.NoError(t, err)
+			query := p.GetQuery()
+			planned := &QueryBuilder{qry: query}
+			scans := collectFullTextFunctionScans(planned, query.Steps[0])
+			require.Len(t, scans, 1)
+			if tc.wantLimit != 0 {
+				require.NotNil(t, fulltextScanLimit(scans[0]))
+				assert.Equal(t, tc.wantLimit, fulltextScanLimit(scans[0]).GetLit().GetU64Val())
+			} else {
+				require.Nil(t, fulltextScanLimit(scans[0]))
+			}
+			for _, node := range query.Nodes {
+				if node.NodeType == plan.Node_TABLE_SCAN && node.TableDef.GetName() == "ft" {
+					require.Contains(t, FormatExprs(node.FilterList, FormatOption{}), "base_id")
+				}
+			}
 		})
 	}
 }

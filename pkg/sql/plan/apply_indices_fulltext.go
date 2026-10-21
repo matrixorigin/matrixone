@@ -613,6 +613,8 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	limitExpr := builder.buildFullTextCandidateLimit(
 		scanNode, wrappedMatchFilters, ft_filters, indexDefs, pushdownEnabled, exactPrefilter,
 		paginationLimit, paginationOffset)
+	searchEnforcesBaseFilters := len(scanNode.FilterList) == 0 &&
+		builder.fullTextCandidateLimitAdmissible(scanNode, wrappedMatchFilters, ft_filters)
 
 	// The search evaluates the peeled predicates on index-time values, so the base scans
 	// re-check every filter on current values.
@@ -758,6 +760,12 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 		// pushdown limit
 		if limitExpr != nil {
 			curr_ftnode.IndexSearchScan.CandidateLimit = DeepCopyExpr(limitExpr)
+		}
+		if searchEnforcesBaseFilters {
+			if builder.fulltextSearchEnforcesBaseFilters == nil {
+				builder.fulltextSearchEnforcesBaseFilters = make(map[int32]struct{})
+			}
+			builder.fulltextSearchEnforcesBaseFilters[curr_ftnode_id] = struct{}{}
 		}
 
 		// change doc_id type to the primary type here
@@ -1108,6 +1116,30 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	return joinnodeID, ret_filter_node_ids, ret_proj_node_ids, served, nil
 }
 
+// fullTextCandidateLimitAdmissible reports whether the query shape admits bounding the
+// fulltext search by the result LIMIT at all, before any residual filter is considered.
+func (builder *QueryBuilder) fullTextCandidateLimitAdmissible(
+	scanNode *plan.Node,
+	wrappedMatchFilters []*plan.Expr,
+	fullTextFilters []*plan.Expr,
+) bool {
+	if builder.sqlCalcFoundRows || scanNode == nil ||
+		len(wrappedMatchFilters) != 0 || len(fullTextFilters) != 1 {
+		return false
+	}
+	// A json probe must NEVER take a pushed LIMIT. It is a PREFILTER the
+	// optimizer injected, returning a superset that the retained predicate then
+	// narrows, so truncating it to k candidates yields fewer than k final rows
+	// and silently loses qualifying ones. Its own predicate always leaves a
+	// residual filter, and its mode is not FULLTEXT_BOOLEAN, so both paths below
+	// already decline — but only incidentally, and this rule's correctness is
+	// too important to rest on that.
+	if isJSONProbeMatch(fullTextFilters[0]) {
+		return false
+	}
+	return true
+}
+
 func (builder *QueryBuilder) buildFullTextCandidateLimit(
 	scanNode *plan.Node,
 	wrappedMatchFilters []*plan.Expr,
@@ -1118,18 +1150,7 @@ func (builder *QueryBuilder) buildFullTextCandidateLimit(
 	paginationLimit *plan.Expr,
 	paginationOffset *plan.Expr,
 ) *plan.Expr {
-	if builder.sqlCalcFoundRows || scanNode == nil ||
-		len(wrappedMatchFilters) != 0 || len(fullTextFilters) != 1 {
-		return nil
-	}
-	// A json probe must NEVER take a pushed LIMIT. It is a PREFILTER the
-	// optimizer injected, returning a superset that the retained predicate then
-	// narrows, so truncating it to k candidates yields fewer than k final rows
-	// and silently loses qualifying ones. Its own predicate always leaves a
-	// residual filter, and its mode is not FULLTEXT_BOOLEAN, so both paths below
-	// already decline — but only incidentally, and this rule's correctness is
-	// too important to rest on that.
-	if isJSONProbeMatch(fullTextFilters[0]) {
+	if !builder.fullTextCandidateLimitAdmissible(scanNode, wrappedMatchFilters, fullTextFilters) {
 		return nil
 	}
 	if len(scanNode.FilterList) == 0 {
@@ -1564,7 +1585,7 @@ func (builder *QueryBuilder) fulltext2BaseJoinSearchScanUnder(nodeID int32) (spe
 			search = n
 			return
 		case plan.Node_TABLE_SCAN:
-			if base != nil || len(n.FilterList) != 0 || n.Limit != nil || n.Offset != nil ||
+			if base != nil || n.Limit != nil || n.Offset != nil ||
 				len(n.BindingTags) != 1 || n.TableDef == nil || n.TableDef.Pkey == nil {
 				safe = false
 				return
@@ -1592,6 +1613,9 @@ func (builder *QueryBuilder) fulltext2BaseJoinSearchScanUnder(nodeID int32) (spe
 	}
 	walk(nodeID)
 	if !safe || join == nil || base == nil || search == nil {
+		return nil, 0, false
+	}
+	if _, enforced := builder.fulltextSearchEnforcesBaseFilters[search.NodeId]; len(base.FilterList) != 0 && !enforced {
 		return nil, 0, false
 	}
 	scoreTag = search.BindingTags[0]
