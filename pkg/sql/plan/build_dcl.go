@@ -27,6 +27,17 @@ import (
 )
 
 func getPreparePlan(ctx CompilerContext, stmt tree.Statement) (*Plan, *Query, error) {
+	if state, _ := ctx.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning {
+		switch source := stmt.(type) {
+		case *tree.Select, *tree.ParenSelect:
+		case *tree.CreateTable:
+			if !source.IsAsSelect || source.AsSource == nil {
+				return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "view schema planning requires SELECT or CTAS")
+			}
+		default:
+			return nil, nil, moerr.NewNotSupported(ctx.GetContext(), "view schema planning requires SELECT or CTAS")
+		}
+	}
 	if s, ok := stmt.(*tree.Insert); ok {
 		if _, ok := s.Rows.Select.(*tree.ValuesClause); ok {
 			p, err := BuildPlan(ctx, stmt, true)
@@ -556,6 +567,16 @@ func collectPrepareDdlSchemas(ctx CompilerContext, stmt tree.Statement, prepareP
 }
 
 func collectPrepareViewSchemas(ctx CompilerContext) ([]*plan.ObjectRef, error) {
+	if state, _ := ctx.GetContext().Value(viewSchemaContextKey{}).(*viewSchemaDerivation); state != nil && state.planning {
+		// The scoped resolver already captured the full identity/snapshot chain.
+		// Resolving recorded View names again in the caller's namespace can
+		// mistake a publisher source for a same-named subscriber object.
+		schemas := make([]*plan.ObjectRef, len(state.planDependencies))
+		for i, ref := range state.planDependencies {
+			schemas[i] = DeepCopyObjectRef(ref)
+		}
+		return schemas, nil
+	}
 	var schemas []*plan.ObjectRef
 	for _, viewKey := range ctx.GetViews() {
 		snapshot := ctx.GetSnapshot()
