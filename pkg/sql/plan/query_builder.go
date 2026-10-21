@@ -9045,6 +9045,7 @@ func (builder *QueryBuilder) bindSelectClause(
 	}
 
 	// build FROM clause
+	ctx.hasHaving = clause.Having != nil
 	ctx.fullGroupByInputReady = false
 	ctx.fullGroupByProof = nil
 	if nodeID, err = builder.buildFrom(clause.From.Tables, ctx, isRoot); err != nil {

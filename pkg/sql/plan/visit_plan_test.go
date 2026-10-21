@@ -16,6 +16,7 @@ package plan
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -187,4 +188,47 @@ func TestVisitMissingNodeExprsVisitsAllSupplementalFieldsOnce(t *testing.T) {
 	require.Equal(t, int32(3), physicalKey.GetP().Pos)
 
 	require.ErrorContains(t, visitMissingNodeExprs(query, []int32{-1}, []VisitPlanRule{rule}), "invalid query node id")
+}
+
+type failDiagnosticExprRule struct {
+	replaceParamWithSevenRule
+	err error
+}
+
+func (r failDiagnosticExprRule) ApplyExpr(*planpb.Expr) (*planpb.Expr, error) {
+	return nil, r.err
+}
+
+func TestVisitPlanExploresUniqueDiagnostics(t *testing.T) {
+	for _, preInsert := range []bool{false, true} {
+		name := "dedup join"
+		if preInsert {
+			name = "preinsert unique"
+		}
+		t.Run(name, func(t *testing.T) {
+			newNode := func() *planpb.Node {
+				param := &planpb.Expr{Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}}}
+				node := &planpb.Node{NodeId: 0}
+				if preInsert {
+					node.PreInsertUkCtx = &planpb.PreInsertUkCtx{KeyDiagnosticExprs: []*planpb.ExprList{nil, {List: []*planpb.Expr{param}}}}
+				} else {
+					node.DedupKeyExprs = []*planpb.Expr{param}
+				}
+				return node
+			}
+			visit := func(node *planpb.Node, rule VisitPlanRule) error {
+				query := &planpb.Query{Nodes: []*planpb.Node{node}, Steps: []int32{0}}
+				return NewVisitPlan(&planpb.Plan{Plan: &planpb.Plan_Query{Query: query}}, []VisitPlanRule{rule}).Visit(context.Background())
+			}
+			node := newNode()
+			require.NoError(t, visit(node, replaceParamWithSevenRule{}))
+			diagnostic := node.DedupKeyExprs
+			if preInsert {
+				diagnostic = node.PreInsertUkCtx.KeyDiagnosticExprs[1].List
+			}
+			require.Equal(t, uint64(7), diagnostic[0].GetLit().GetU64Val())
+			failure := errors.New("diagnostic expression rule failed")
+			require.ErrorIs(t, visit(newNode(), failDiagnosticExprRule{err: failure}), failure)
+		})
+	}
 }
