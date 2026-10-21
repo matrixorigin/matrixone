@@ -1014,7 +1014,7 @@ type BindContext struct {
 	numericProjectionTypes          []Type
 	numericTableProjectionTypes     map[string][]Type
 	numericTableProjectionAmbiguous map[string][]bool
-	numericCteByName                map[string]*tree.CTE
+	numericCteByName                map[string]*CTERef
 
 	timeAsts []tree.Expr
 
