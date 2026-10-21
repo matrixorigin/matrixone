@@ -168,6 +168,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
+	if features.ViewMetadataFunctions {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
+	}
 	return requiredVersion, nil
 }
 

@@ -64,9 +64,28 @@ func (builder *QueryBuilder) bindExternalScan(
 	dmlCtx *DMLContext,
 	assignmentIgnore bool) (int32, map[string]*plan.Expr, error) {
 	externalScanTag := builder.genNewBindTag()
-	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
+	err := dmlCtx.resolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, foreignKeyResolveDeferred, false)
 	if err != nil {
 		return -1, nil, err
+	}
+
+	builder.qry.HasForeignKeyAction = len(dmlCtx.tableDefs[0].Fkeys) > 0
+
+	// Self references still need legacy LOAD's post-execution DetectSqls.
+	// Decide before file/column binding mutates the LOAD AST used by fallback.
+	for _, fk := range dmlCtx.tableDefs[0].Fkeys {
+		if fk == nil {
+			return -1, nil, moerr.NewInternalError(builder.GetContext(), "malformed foreign-key metadata")
+		}
+		if fk.ForeignTbl == 0 {
+			enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+			if err != nil {
+				return -1, nil, err
+			}
+			if enabled {
+				return -1, nil, moerr.NewUnsupportedDML(builder.GetContext(), foreignKeyUnsupportedDMLCause)
+			}
+		}
 	}
 
 	ctx := builder.compCtx

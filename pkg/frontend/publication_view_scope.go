@@ -609,8 +609,16 @@ func buildPublicationProvisionedSystemRelations(service string) map[string]struc
 		collect(sql)
 	}
 	// information_schema and mysql: the views installed for each account.
-	for _, sql := range sysview.InitInformationSchemaSysTablesForProtocol(
-		protocolVersionForTenantInitialization(service)) {
+	// The account initializer probes peer CN capability through the creating
+	// session's process; this offline discovery has no session, so a nil proc
+	// makes the capability probe report unsupported and selects the same
+	// conservative predecessor generation CREATE ACCOUNT would fall back to.
+	// A failure keeps the minimum generation instead of broadening scope.
+	protocolVersion, err := protocolVersionForTenantInitialization(service, nil)
+	if err != nil {
+		protocolVersion = defines.MORPCMinVersion
+	}
+	for _, sql := range sysview.InitInformationSchemaSysTablesForProtocol(protocolVersion) {
 		collect(sql)
 	}
 	for _, sql := range sysview.InitMysqlSysTables {
