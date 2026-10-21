@@ -62,6 +62,8 @@ type AwsSDKv2 struct {
 	disableMultiDelete   atomic.Bool
 }
 
+const awsMultipartAbortTimeout = 30 * time.Second
+
 var _ objectStorageCopier = new(AwsSDKv2)
 
 func (a *AwsSDKv2) CopyObject(
@@ -374,43 +376,44 @@ func (a *AwsSDKv2) Write(
 	defer wrapSizeMismatchErr(&err)
 
 	if sizeHint == nil {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		content, readErr := io.ReadAll(io.LimitReader(r, 64*(1<<20)))
+		if readErr != nil {
+			return readErr
+		}
+		if len(content) == 0 {
+			size := int64(0)
+			return a.Write(ctx, key, bytes.NewReader(nil), &size, expire)
+		}
+
 		// multipart
-		output, err := DoWithRetryContext(ctx, "create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
+		output, createErr := DoWithRetryContext(ctx, "create multipart upload", func() (*s3.CreateMultipartUploadOutput, error) {
 			return a.client.CreateMultipartUpload(ctx, &s3.CreateMultipartUploadInput{
 				Bucket:  ptrTo(a.bucket),
 				Key:     ptrTo(key),
 				Expires: expire,
 			})
 		}, maxRetryAttemps, IsRetryableError)
-		if err != nil {
-			return err
+		if createErr != nil {
+			return createErr
 		}
 
 		defer func() {
 			// abort
 			if err != nil {
-				_, abortErr := a.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
-					Bucket:   ptrTo(a.bucket),
-					Key:      ptrTo(key),
-					UploadId: output.UploadId,
-				})
-				err = errors.Join(err, abortErr)
+				if abortErr := a.abortMultipartUpload(ctx, key, output.UploadId, awsMultipartAbortTimeout); abortErr != nil {
+					err = errors.Join(err, abortErr)
+				}
 			}
 		}()
 
 		// upload
 		num := int32(1)
 		completed := new(types.CompletedMultipartUpload)
-		for {
-			reader := io.LimitReader(r, 64*(1<<20))
-			content, err := io.ReadAll(reader)
-			if err != nil {
-				return err
-			}
-			if len(content) == 0 {
-				break
-			}
-			uploadOutput, err := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
+		for len(content) > 0 {
+			uploadOutput, uploadErr := DoWithRetryContext(ctx, "upload part", func() (*s3.UploadPartOutput, error) {
 				recordS3PutRequest(ctx, a.perfCounterSets...)
 				return a.client.UploadPart(ctx, &s3.UploadPartInput{
 					Bucket:     ptrTo(a.bucket),
@@ -420,8 +423,8 @@ func (a *AwsSDKv2) Write(
 					Body:       bytes.NewReader(content),
 				})
 			}, maxRetryAttemps, IsRetryableError)
-			if err != nil {
-				return err
+			if uploadErr != nil {
+				return uploadErr
 			}
 			recordS3AcceptedBytes(ctx, int64(len(content)), a.perfCounterSets...)
 			completed.Parts = append(completed.Parts, types.CompletedPart{
@@ -429,10 +432,10 @@ func (a *AwsSDKv2) Write(
 				PartNumber: ptrTo(num),
 			})
 			num++
-		}
-		if num == 1 {
-			// no content
-			return nil
+			content, err = io.ReadAll(io.LimitReader(r, 64*(1<<20)))
+			if err != nil {
+				return err
+			}
 		}
 
 		// complete
@@ -503,6 +506,19 @@ func (a *AwsSDKv2) Write(
 	}
 
 	return
+}
+
+// abortMultipartUpload keeps cleanup alive after caller cancellation while
+// bounding the time a failed write can spend waiting for S3 to respond.
+func (a *AwsSDKv2) abortMultipartUpload(ctx context.Context, key string, uploadID *string, timeout time.Duration) error {
+	abortCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+	defer cancel()
+	_, err := a.client.AbortMultipartUpload(abortCtx, &s3.AbortMultipartUploadInput{
+		Bucket:   ptrTo(a.bucket),
+		Key:      ptrTo(key),
+		UploadId: uploadID,
+	})
+	return err
 }
 
 func (a *AwsSDKv2) SupportsParallelMultipart() bool {
@@ -602,12 +618,9 @@ func (a *AwsSDKv2) WriteMultipartParallel(
 
 	defer func() {
 		if err != nil {
-			_, abortErr := a.client.AbortMultipartUpload(context.WithoutCancel(parentCtx), &s3.AbortMultipartUploadInput{
-				Bucket:   ptrTo(a.bucket),
-				Key:      ptrTo(key),
-				UploadId: output.UploadId,
-			})
-			err = errors.Join(err, abortErr)
+			if abortErr := a.abortMultipartUpload(parentCtx, key, output.UploadId, awsMultipartAbortTimeout); abortErr != nil {
+				err = errors.Join(err, abortErr)
+			}
 		}
 	}()
 

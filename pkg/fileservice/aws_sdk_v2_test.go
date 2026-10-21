@@ -21,7 +21,9 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -188,6 +190,119 @@ func TestAwsSDKv2WriteUnknownSizeMultipartCompletes(t *testing.T) {
 	require.True(t, completed)
 }
 
+func TestAwsSDKv2WriteUnknownSizeEmptyCreatesObject(t *testing.T) {
+	var activeUploads, putCount int
+	var putBytes int
+	objects := make(map[string]int)
+	var mu sync.Mutex
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploads"):
+			mu.Lock()
+			activeUploads++
+			mu.Unlock()
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CreateMultipartUploadResult><UploadId>empty-upload</UploadId></CreateMultipartUploadResult>`)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.RawQuery, "uploadId=empty-upload"):
+			mu.Lock()
+			activeUploads--
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPut && !strings.Contains(r.URL.RawQuery, "uploadId="):
+			if r.URL.Path == "/bucket/fail-empty" {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			data, err := io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			mu.Lock()
+			putCount++
+			putBytes += len(data)
+			objects[r.URL.Path] = len(data)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+		case r.Method == http.MethodHead:
+			mu.Lock()
+			size, exists := objects[r.URL.Path]
+			mu.Unlock()
+			if !exists {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.Header().Set("Content-Length", strconv.Itoa(size))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	sdk := newTestAWSClient(t, server)
+	require.NoError(t, sdk.Write(context.Background(), "empty", bytes.NewReader(nil), nil, nil))
+	exists, err := sdk.Exists(context.Background(), "empty")
+	require.NoError(t, err)
+	require.True(t, exists, "success must mean the zero-byte object exists")
+	fs := &S3FS{name: "s3", storage: sdk, rawStorage: sdk, ioMerger: NewIOMerger(), asyncUpdate: true, parallelMode: ParallelOff}
+	vector := IOVector{FilePath: "from-fs", Entries: []IOEntry{{Offset: 0, Size: -1, ReaderForWrite: bytes.NewReader(nil)}}}
+	require.NoError(t, fs.Write(context.Background(), vector))
+	entry, err := fs.StatFile(context.Background(), "from-fs")
+	require.NoError(t, err)
+	require.Zero(t, entry.Size)
+	require.True(t, moerr.IsMoErrCode(fs.Write(context.Background(), vector), moerr.ErrFileAlreadyExists))
+	require.Error(t, sdk.Write(context.Background(), "fail-empty", bytes.NewReader(nil), nil, nil))
+	exists, err = sdk.Exists(context.Background(), "fail-empty")
+	require.NoError(t, err)
+	require.False(t, exists)
+	require.ErrorIs(t, sdk.Write(context.Background(), "reader-failure", errReader{}, nil, nil), io.ErrShortWrite)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 2, putCount)
+	require.Zero(t, putBytes)
+	require.Zero(t, activeUploads, "empty writes must not leak multipart uploads")
+}
+
+func TestAwsSDKv2WriteUnknownSizePartFailureAborts(t *testing.T) {
+	var mu sync.Mutex
+	var created, aborted, completed int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploads"):
+			created++
+			w.Header().Set("Content-Type", "application/xml")
+			_, _ = io.WriteString(w, `<CreateMultipartUploadResult><UploadId>failed-upload</UploadId></CreateMultipartUploadResult>`)
+		case r.Method == http.MethodPut && strings.Contains(r.URL.RawQuery, "partNumber="):
+			w.WriteHeader(http.StatusForbidden)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.RawQuery, "uploadId=failed-upload"):
+			aborted++
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPost && strings.Contains(r.URL.RawQuery, "uploadId=failed-upload"):
+			completed++
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	sdk := newTestAWSClient(t, server)
+	err := sdk.Write(context.Background(), "failed", strings.NewReader("non-empty"), nil, nil)
+	require.Error(t, err)
+	mu.Lock()
+	defer mu.Unlock()
+	require.Equal(t, 1, created)
+	require.Equal(t, 1, aborted)
+	require.Zero(t, completed)
+}
+
+func TestAwsSDKv2WriteUnknownSizeCanceledBeforeRead(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	require.ErrorIs(t, (&AwsSDKv2{}).Write(ctx, "canceled", errReader{}, nil, nil), context.Canceled)
+}
+
 func TestAwsSDKv2ConstructorCredentialsAndRetryer(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -240,4 +355,83 @@ func TestAwsSDKv2ConstructorCredentialsAndRetryer(t *testing.T) {
 	_ = retryer.IsErrorRetryable(errors.New("not retryable"))
 	require.Greater(t, retryer.MaxAttempts(), 0)
 	_, _ = retryer.RetryDelay(1, errors.New("delay"))
+}
+
+// Exercise the chunk boundary once, including errors after an upload ID exists.
+func TestAwsSDKv2WriteUnknownSizeChunkBoundary(t *testing.T) {
+	const chunk = 64 << 20
+	data := bytes.Repeat([]byte("x"), chunk+1)
+	primary := moerr.NewInternalErrorNoCtx("late source failure")
+	for _, mode := range []string{"success", "late-read", "complete-denied"} {
+		t.Run(mode, func(t *testing.T) {
+			var mu sync.Mutex
+			var lengths []int
+			var completed, aborted int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/xml")
+				switch {
+				case r.Method == http.MethodPost && r.URL.Query().Has("uploads"):
+					_, _ = io.WriteString(w, `<CreateMultipartUploadResult><UploadId>boundary</UploadId></CreateMultipartUploadResult>`)
+				case r.Method == http.MethodPut && r.URL.Query().Has("partNumber"):
+					n, err := io.Copy(io.Discard, r.Body)
+					if err != nil {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					mu.Lock()
+					lengths = append(lengths, int(n))
+					index := len(lengths)
+					mu.Unlock()
+					if r.URL.Query().Get("partNumber") != strconv.Itoa(index) {
+						w.WriteHeader(http.StatusBadRequest)
+						return
+					}
+					w.Header().Set("ETag", `"part"`)
+				case r.Method == http.MethodDelete:
+					mu.Lock()
+					aborted++
+					mu.Unlock()
+					w.WriteHeader(http.StatusNoContent)
+				case r.Method == http.MethodPost && r.URL.Query().Has("uploadId"):
+					_, _ = io.Copy(io.Discard, r.Body)
+					if mode == "complete-denied" {
+						w.WriteHeader(http.StatusForbidden)
+						_, _ = io.WriteString(w, `<Error><Code>AccessDenied</Code></Error>`)
+						return
+					}
+					mu.Lock()
+					completed++
+					mu.Unlock()
+					_, _ = io.WriteString(w, `<CompleteMultipartUploadResult><ETag>"done"</ETag></CompleteMultipartUploadResult>`)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer server.Close()
+			var reader io.Reader = bytes.NewReader(data)
+			if mode == "late-read" {
+				reader = &failAfterBytesReader{r: reader, failAfter: chunk, errAfter: primary}
+			}
+			err := newTestAWSClient(t, server).Write(context.Background(), "key", reader, nil, nil)
+			mu.Lock()
+			defer mu.Unlock()
+			if mode == "success" {
+				require.NoError(t, err)
+				require.Equal(t, 1, completed)
+				require.Zero(t, aborted)
+			} else {
+				require.Error(t, err)
+				require.Zero(t, completed)
+				require.Equal(t, 1, aborted)
+				if mode == "late-read" {
+					require.Same(t, primary, err)
+				}
+			}
+			expected := []int{chunk, 1}
+			if mode == "late-read" {
+				expected = []int{chunk}
+			}
+			require.Equal(t, expected, lengths)
+		})
+	}
 }
