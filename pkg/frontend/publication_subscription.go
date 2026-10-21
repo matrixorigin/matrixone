@@ -2696,7 +2696,14 @@ func showTablesFromDb(ctx context.Context, bh BackgroundExec, dbName string) (ta
 	sql := "show tables from " + sqlquote.Ident(dbName)
 
 	bh.ClearExecResultSet()
-	if err = bh.Exec(ctx, sql); err != nil {
+	// A foreign-source publication stamps this read to the database owner's
+	// account while a SHOW TABLES plan additionally applies the DDL session's
+	// role metadata-visibility filter, which never contains that foreign
+	// owner's objects - the read would come back empty and every explicit
+	// table list would fail with "table not exists". Publication admission
+	// already authorized the statement, so the read is trusted internal
+	// discovery, like the other catalog-inspection paths.
+	if err = bh.Exec(defines.AttachInternalExecutor(ctx), sql); err != nil {
 		return
 	}
 

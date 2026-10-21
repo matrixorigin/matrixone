@@ -563,6 +563,41 @@ func Test_showTablesFromDbQuotesDatabaseName(t *testing.T) {
 	}
 }
 
+// showTablesFromDb runs on the DDL statement's background executor. A
+// foreign-source publication stamps that executor to the source database
+// owner's account, while the SHOW TABLES plan's metadata-visibility fragment
+// evaluates against the DDL session's roles, which never include the foreign
+// owner's objects; without the internal-executor marker the read comes back
+// empty and every explicit table list fails with "table not exists".
+type internalExecutorContext struct{}
+
+func (internalExecutorContext) Matches(v any) bool {
+	ctx, ok := v.(context.Context)
+	return ok && defines.IsInternalExecutor(ctx)
+}
+
+func (internalExecutorContext) String() string {
+	return "context marked as trusted internal executor"
+}
+
+func Test_showTablesFromDbExecutesAsInternalDiscovery(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	bh := mock_frontend.NewMockBackgroundExec(ctrl)
+	bh.EXPECT().ClearExecResultSet()
+	bh.EXPECT().Exec(internalExecutorContext{}, "show tables from `db`").Return(nil)
+
+	er := mock_frontend.NewMockExecResult(ctrl)
+	er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
+	er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(0)).Return("resume_data", nil).AnyTimes()
+	bh.EXPECT().GetExecResultSet().Return([]interface{}{er})
+
+	tables, err := showTablesFromDb(context.Background(), bh, "db")
+	require.NoError(t, err)
+	require.True(t, tables["resume_data"])
+}
+
 func TestResolvePubTableNamesDeduplicatesExplicitTables(t *testing.T) {
 	ctx := context.Background()
 	statements, err := mysql.Parse(ctx,

@@ -180,6 +180,17 @@ func IsInternalExecutor(ctx context.Context) bool {
 	return false
 }
 
+// AttachInternalExecutor marks statements derived from ctx as trusted internal
+// discovery. Metadata-visibility filters that scope catalog rows to the
+// caller session's active roles exempt such reads: their admission was already
+// authorized at the statement level, and the inspecting session's account or
+// roles may deliberately differ from the account that owns the rows, as when
+// a DDL path resolves the owner account before reading a catalog it must not
+// see through its own session roles.
+func AttachInternalExecutor(ctx context.Context) context.Context {
+	return context.WithValue(ctx, InternalExecutorKey{}, true)
+}
+
 // AttachLockWriterFair marks lock requests derived from ctx as writer-fair.
 // A writer-fair Shared row request waits behind an already queued Exclusive
 // request instead of extending the current Shared-holder generation.
