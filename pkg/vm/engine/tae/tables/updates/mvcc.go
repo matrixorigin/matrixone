@@ -108,8 +108,7 @@ func appendPrepareEntryLess(a, b appendPrepareEntry) bool {
 
 func newAppendPrepareTree() *btree.BTreeG[appendPrepareEntry] {
 	return btree.NewBTreeGOptions(appendPrepareEntryLess, btree.Options{
-		Degree:  64,
-		NoLocks: true,
+		Degree: 64,
 	})
 }
 
