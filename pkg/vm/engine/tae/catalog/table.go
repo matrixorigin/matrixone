@@ -732,41 +732,45 @@ func (entry *TableEntry) RecurLoop(processor Processor) (err error) {
 	}()
 
 	// As before, RecurLoop only returns the lastest version of a object entry
-	objIt := entry.MakeDataObjectIt()
-	defer objIt.Release()
-	for ok := objIt.Last(); ok; ok = objIt.Prev() {
-		objectEntry := objIt.Item()
+	entry.MakeDataObjectSnapshot().VisitAllUnlocked(func(objectEntry *ObjectEntry) bool {
 		// exclude C entries having drop intent(category-b)
 		if objectEntry.IsCEntry() && objectEntry.HasDCounterpart() {
-			continue
+			return true
 		}
 		if err = processor.OnObject(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				continue
+				err = nil
+				return true
 			}
-			return err
+			return false
 		}
 		if err = processor.OnPostObject(objectEntry); err != nil {
-			return err
+			return false
 		}
+		return true
+	})
+	if err != nil {
+		return err
 	}
 
-	tombstoneIt := entry.MakeTombstoneObjectIt()
-	defer tombstoneIt.Release()
-	for ok := tombstoneIt.Last(); ok; ok = tombstoneIt.Prev() {
-		objectEntry := tombstoneIt.Item()
+	entry.MakeTombstoneObjectSnapshot().VisitAllUnlocked(func(objectEntry *ObjectEntry) bool {
 		if objectEntry.IsCEntry() && objectEntry.HasDCounterpart() {
-			continue
+			return true
 		}
 		if err = processor.OnTombstone(objectEntry); err != nil {
 			if moerr.IsMoErrCode(err, moerr.OkStopCurrRecur) {
-				continue
+				err = nil
+				return true
 			}
-			return err
+			return false
 		}
 		if err = processor.OnPostObject(objectEntry); err != nil {
-			return err
+			return false
 		}
+		return true
+	})
+	if err != nil {
+		return err
 	}
 	return
 }

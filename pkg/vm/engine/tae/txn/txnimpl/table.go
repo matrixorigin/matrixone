@@ -1327,15 +1327,12 @@ func (tbl *txnTable) waitTombstoneRowsCommittedBefore(
 	// Resolve catalog-level creation/deletion first. The per-object wait below
 	// handles row AppendNodes inside already visible appendable objects.
 	tbl.entry.WaitTombstoneObjectCommitted(ts)
-	it := tbl.entry.MakeTombstoneObjectIt()
-	defer it.Release()
-	for ok := it.Last(); ok; ok = it.Prev() {
-		obj := it.Item()
+	tbl.entry.MakeTombstoneObjectSnapshot().VisitAllUnlocked(func(obj *catalog.ObjectEntry) bool {
 		if obj.CreatedAt.GT(&ts) || !obj.VisibleByTS(ts) {
-			continue
+			return true
 		}
 		if !obj.IsAppendable() {
-			continue
+			return true
 		}
 		objData := obj.GetObjectData()
 		if objData == nil {
@@ -1343,12 +1340,13 @@ func (tbl *txnTable) waitTombstoneRowsCommittedBefore(
 			// handle to wait on. Their committed state is covered by the
 			// catalog wait above; only memory objects can contribute a pending
 			// append for these RowIDs.
-			continue
+			return true
 		}
 		if objData.WaitAppendCommittingBefore(ts, tbl.store.txn, rowIDs, rowIDsZM) {
 			waited = true
 		}
-	}
+		return true
+	})
 	return
 }
 

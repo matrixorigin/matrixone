@@ -157,44 +157,42 @@ func TombstoneRangeScanByObject(
 	vpool *containers.VectorPool,
 ) (bat *containers.Batch, err error) {
 	tableEntry.WaitTombstoneObjectCommitted(end)
-	it := tableEntry.MakeTombstoneObjectIt()
-	defer it.Release()
+	snapshot := tableEntry.MakeTombstoneObjectSnapshot()
 	// CreatedAt orders catalog publication, not the commit timestamps of rows
 	// appended later. Concurrent flushes can populate multiple appendable
 	// tombstone objects and commit them out of creation order, so an older
 	// object can still contain deletes in [start, end]. Do not stop the scan
 	// solely because an object's catalog lifetime precedes start.
-	for ok := it.Last(); ok; ok = it.Prev() {
-		tombstone := it.Item()
+	snapshot.VisitAllUnlocked(func(tombstone *catalog.ObjectEntry) bool {
 		if tombstone.IsAppendable() && tombstone.IsCEntry() &&
 			tombstone.HasDCounterpart() && tombstone.GetNextVersion().HasDropCommitted() {
 			// The D counterpart owns the same persisted appendable data. A
 			// non-appendable C entry is different: it is the immutable
 			// CN-created source of a tombstone merge and remains the unique
 			// range-scan owner after its drop commits.
-			continue
+			return true
 		}
 
 		if tombstone.IsAppendable() {
 			if tombstone.CreatedAt.GT(&end) {
 				// committing create object is excluded here
-				continue
+				return true
 			}
 			if tombstone.DeletedAt.Equal(&txnif.UncommitTS) {
 				// Its C counterpart remains visible until the drop commits.
-				continue
+				return true
 			}
 			if tombstone.HasDropCommitted() {
 				deleteAt := tombstone.GetDeleteAt()
 				if tombstone.CreatedAt.GT(&end) || deleteAt.LT(&start) {
-					continue
+					return true
 				}
 			}
 		} else {
 			// Check only CN-created immutable source versions. Tombstone-merge
 			// outputs copy these rows and are deliberately excluded below.
 			if tombstone.HasDropIntent() {
-				continue
+				return true
 			}
 			// A CN-side publication rewrite retains CN provenance on its output.
 			// Once the explicitly marked D counterpart commits within the scan
@@ -205,28 +203,32 @@ func TombstoneRangeScanByObject(
 				deleteAt := drop.GetDeleteAt()
 				if drop.HasDropCommitted() && !deleteAt.GT(&end) &&
 					drop.ObjectStats.GetCNDeleted() {
-					continue
+					return true
 				}
 			}
 			if !tombstone.ObjectStats.GetCNCreated() {
-				continue
+				return true
 			}
 			if tombstone.CreatedAt.GT(&end) || tombstone.CreatedAt.LT(&start) {
-				continue
+				return true
 			}
 		}
 
 		if tombstone.HasCommittedPersistedData() {
 			zm := tombstone.SortKeyZoneMap()
 			if !zm.RowidPrefixEq(objectID[:]) {
-				continue
+				return true
 			}
 			// TODO: Bloomfilter
 		}
 		err = tombstone.GetObjectData().CollectObjectTombstoneInRange(ctx, start, end, &objectID, &bat, mp, vpool)
 		if err != nil {
-			return nil, err
+			return false
 		}
+		return true
+	})
+	if err != nil {
+		return nil, err
 	}
 	return
 }

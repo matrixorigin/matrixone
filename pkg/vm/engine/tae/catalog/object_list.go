@@ -953,7 +953,7 @@ func (l *ObjectList) UpdateCreateTS(id *objectio.ObjectId, ts types.TS) (*Object
 // returns, all creating objects that can be visible to ts have committed.
 func (l *ObjectList) WaitUntilCommitted(ts types.TS) {
 	it := l.loadTree().Iter()
-	defer it.Release()
+	var waiting []txnif.TxnReader
 	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
 		for ok := SeekObjectListGroup(&it, group, txnif.UncommitTS); ok; ok = it.Next() {
 			obj := it.Item()
@@ -964,12 +964,19 @@ func (l *ObjectList) WaitUntilCommitted(ts types.TS) {
 				continue
 			}
 			if needWait, txn := obj.CreateNode.NeedWaitCommitting(ts); needWait {
-				txn.GetTxnState(true)
+				waiting = append(waiting, txn)
 			}
 			if needWait, txn := obj.DeleteNode.NeedWaitCommitting(ts); needWait {
-				txn.GetTxnState(true)
+				waiting = append(waiting, txn)
 			}
 		}
+	}
+	// BTreeG.Copy needs the tree's write lock. A committing transaction may
+	// need to publish its ObjectEntry through Copy, so release the iterator's
+	// read lock before waiting for any transaction to finish.
+	it.Release()
+	for _, txn := range waiting {
+		txn.GetTxnState(true)
 	}
 }
 
@@ -979,6 +986,45 @@ func (l *ObjectList) WaitUntilCommitted(ts types.TS) {
 // multi-group scan cannot mix catalog generations.
 type ObjectListSnapshot struct {
 	trees *objectListTrees
+}
+
+// VisitAllUnlocked visits the pinned all-object tree in reverse order without
+// holding its iterator's read lock while calling fn. The callback may wait for
+// a transaction whose finalization needs to publish another tree version.
+// Returning false stops the scan.
+func (snapshot ObjectListSnapshot) VisitAllUnlocked(fn func(*ObjectEntry) bool) {
+	var last *ObjectEntry
+	for {
+		it := snapshot.trees.all.Iter()
+		var ok bool
+		if last == nil {
+			ok = it.Last()
+		} else {
+			ok = it.Seek(last)
+			if ok {
+				ok = it.Prev()
+			}
+		}
+		var batch [64]*ObjectEntry
+		count := 0
+		for ok && count < len(batch) {
+			obj := it.Item()
+			batch[count] = obj
+			count++
+			last = obj
+			ok = it.Prev()
+		}
+		finished := !ok
+		it.Release()
+		for _, obj := range batch[:count] {
+			if !fn(obj) {
+				return
+			}
+		}
+		if finished {
+			return
+		}
+	}
 }
 
 func (snapshot ObjectListSnapshot) Group(group ObjectListGroup) btree.IterG[*ObjectEntry] {
@@ -1057,12 +1103,17 @@ var _iterPool = sync.Pool{New: func() any {
 }}
 
 type VisibleCommittedObjectIt struct {
-	iter        btree.IterG[*ObjectEntry]
+	tree        *btree.BTreeG[*ObjectEntry]
+	pending     []*ObjectEntry
+	pendingOff  int
+	lastFetched *ObjectEntry
+	exhausted   bool
 	curr        *ObjectEntry
 	txn         txnif.TxnReader
 	isMockTxn   bool
-	firstCalled bool
 }
+
+const visibleObjectBatchSize = 64
 
 // MakeVisibleCommittedObjectIt returns an iterator that iterates over committed objects visible to the given txn
 // two cases:
@@ -1071,25 +1122,52 @@ type VisibleCommittedObjectIt struct {
 
 func (l *ObjectList) MakeVisibleCommittedObjectIt(txn txnif.TxnReader) *VisibleCommittedObjectIt {
 	it := _iterPool.Get().(*VisibleCommittedObjectIt)
-	it.iter = l.loadTrees().visible.Iter()
+	it.tree = l.loadTrees().visible
 	it.txn = txn
 	it.isMockTxn = len(txn.GetCtx()) == 0
 	return it
 }
 
-func (it *VisibleCommittedObjectIt) Next() bool {
+func (it *VisibleCommittedObjectIt) refill() {
+	it.pending = it.pending[:0]
+	it.pendingOff = 0
+	iter := it.tree.Iter()
 	var ok bool
+	if it.lastFetched == nil {
+		ok = iter.Last()
+	} else {
+		// The tree is an immutable published snapshot, so the prior key is
+		// still present. Resume immediately before the last fetched entry.
+		ok = iter.Seek(it.lastFetched)
+		if ok {
+			ok = iter.Prev()
+		}
+	}
+	for ok && len(it.pending) < visibleObjectBatchSize {
+		entry := iter.Item()
+		it.pending = append(it.pending, entry)
+		it.lastFetched = entry
+		ok = iter.Prev()
+	}
+	it.exhausted = !ok
+	iter.Release()
+}
+
+func (it *VisibleCommittedObjectIt) Next() bool {
 	for {
-		if !it.firstCalled {
-			ok = it.iter.Last()
-			it.firstCalled = true
-		} else {
-			ok = it.iter.Prev()
+		if it.pendingOff == len(it.pending) {
+			if it.exhausted {
+				return false
+			}
+			it.refill()
+			if len(it.pending) == 0 {
+				return false
+			}
 		}
-		if !ok {
-			return false
-		}
-		entry := it.iter.Item()
+		entry := it.pending[it.pendingOff]
+		it.pending[it.pendingOff] = nil
+		it.pendingOff++
+		// No tree lock is held while IsVisible waits for a committing txn.
 		if it.isMockTxn {
 			if !entry.IsCreating() && !entry.HasDCounterpart() {
 				it.curr = entry
@@ -1113,10 +1191,14 @@ func (it *VisibleCommittedObjectIt) Release() {
 		logutil.Errorf("attempt to put iter %p into pool twice", it)
 		return
 	}
-	it.iter.Release()
+	it.tree = nil
+	clear(it.pending)
+	it.pending = it.pending[:0]
+	it.pendingOff = 0
+	it.lastFetched = nil
+	it.exhausted = false
 	it.curr = nil
 	it.txn = nil
-	it.firstCalled = false
 	it.isMockTxn = false
 	_iterPool.Put(it)
 }
