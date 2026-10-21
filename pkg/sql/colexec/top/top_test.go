@@ -418,6 +418,61 @@ func TestTopKeepsTypedNullColumnLayoutForResidentVarlena(t *testing.T) {
 	}
 }
 
+func TestTopKeepsTypedNullColumnLayoutAcrossResidentSpillMigration(t *testing.T) {
+	tc := newTestCase(
+		t,
+		mpool.MustNewZero(),
+		[]types.Type{types.T_varchar.ToType()},
+		2,
+		[]*plan.OrderBySpec{{Expr: newTypedVarcharExpression(0), Flag: plan.OrderBySpec_DESC}},
+	)
+	// One varchar row fits, while admitting the typed-NULL second row forces
+	// the bounded resident heap to migrate to spill.
+	tc.arg.ctr.residentByteLimit = 32
+	batches := []*batch.Batch{
+		newTopVarcharBatch(t, tc.proc, false),
+		newTopVarcharBatch(t, tc.proc, true),
+		batch.EmptyBatch,
+	}
+	inputVecs := []*vector.Vector{batches[0].Vecs[0], batches[1].Vecs[0]}
+	child := resetChildren(tc.arg, batches)
+	t.Cleanup(func() {
+		child.Free(tc.proc, false, nil)
+		tc.arg.Free(tc.proc, false, nil)
+		tc.proc.Free()
+		require.Zero(t, tc.proc.Mp().CurrNB())
+	})
+
+	require.NoError(t, tc.arg.Prepare(tc.proc))
+	require.False(t, tc.arg.ctr.spilling)
+	var values []string
+	var nulls []bool
+	for {
+		result, err := vm.Exec(tc.arg, tc.proc)
+		require.NoError(t, err)
+		if result.Batch == nil || result.Status == vm.ExecStop {
+			break
+		}
+		require.Len(t, result.Batch.Vecs, 1)
+		require.Equal(t, types.T_varchar, result.Batch.Vecs[0].GetType().Oid)
+		for row := 0; row < result.Batch.RowCount(); row++ {
+			isNull := result.Batch.Vecs[0].GetNulls().Contains(uint64(row))
+			nulls = append(nulls, isNull)
+			if !isNull {
+				values = append(values, string(result.Batch.Vecs[0].GetBytesAt(row)))
+			}
+		}
+	}
+	require.True(t, tc.arg.ctr.spilling)
+	require.Positive(t, tc.arg.ctr.spillOffset)
+	require.Equal(t, []string{"b"}, values)
+	require.Equal(t, []bool{false, true}, nulls)
+	for i := range inputVecs {
+		require.Same(t, inputVecs[i], batches[i].Vecs[0])
+		require.Equal(t, types.T_varchar, inputVecs[i].GetType().Oid)
+	}
+}
+
 func TestTopKeepsColumnAndComputedKeySlotsAcrossTypedNullBatches(t *testing.T) {
 	tc := newTestCase(
 		t,
