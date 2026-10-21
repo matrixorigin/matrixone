@@ -78,6 +78,9 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
+	if features.LoadFKIgnoreCheck {
+		required = max(required, defines.MORPCVersion125)
+	}
 	if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
 		required = max(required, defines.MORPCVersion122)
 	}
@@ -264,9 +267,9 @@ func remoteWorkerProtocolVersion(ctx context.Context, proc *process.Process, wor
 	return resp.GetProtocolVersion.Version, true, nil
 }
 
-// Cached compilations can survive a cluster capability rollback. Reject only
-// the changed result contracts here, before Prepare or statement effects; the
-// existing placement/receiver owners retain all other expression policies.
+// Cached compilations can survive a cluster capability rollback. Reject changed
+// result contracts and LOAD FK admission here, before Prepare or statement
+// effects; placement/receiver owners retain the other expression policies.
 func validateTemporalResultProtocol(proc *process.Process, owner any) error {
 	var required int64
 	if queryPlan, ok := owner.(*plan.Plan); ok {
@@ -290,17 +293,20 @@ func validateTemporalResultProtocol(proc *process.Process, owner any) error {
 	if required > 0 && (!known || version < required) {
 		return moerr.NewNotSupportedf(context.Background(), "CTAS population requires MORPC protocol version %d", required)
 	}
-	if known && version >= defines.MORPCVersion122 {
+	if known && version >= defines.MORPCVersion125 {
 		return nil
 	}
 	features, err := plan.RequiredRemoteExpressionFeatures(owner)
 	if err != nil {
 		return err
 	}
+	if features.LoadFKIgnoreCheck && (!known || version < defines.MORPCVersion125) {
+		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")
+	}
 	if features.InvalidTemporalResultContract {
 		return moerr.NewNotSupportedNoCtx("temporal result vector contract mismatch requires rebinding")
 	}
-	if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
+	if (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) && (!known || version < defines.MORPCVersion122) {
 		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 122")
 	}
 	return nil
