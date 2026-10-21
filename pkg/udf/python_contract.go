@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	SharedRoutineRevisionProtocolVersion = defines.MORPCVersion126
+	SharedRoutineRevisionProtocolVersion = defines.MORPCVersion127
 	pythonInlineArtifactDigestDomain     = "matrixone-python-inline-artifact"
 	pythonEnvironmentDigestDomain        = "matrixone-python-environment"
 )
