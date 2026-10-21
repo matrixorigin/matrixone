@@ -77,12 +77,8 @@ type completedCloseService struct {
 func (s *completedCloseService) CloseComplete() bool { return s.complete }
 
 func TestClusterAdmissionAtStart(t *testing.T) {
-	// Isolate process-scoped admission from the package's long-lived base fixture.
-	if os.Getenv("MO_EMBED_ADMISSION_HELPER") != "1" {
-		cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run=^TestClusterAdmissionAtStart$")
-		cmd.Env = append(os.Environ(), "MO_EMBED_ADMISSION_HELPER=1", "TMPDIR="+t.TempDir())
-		out, err := cmd.CombinedOutput()
-		require.NoError(t, err, "%s", out)
+	// Isolate process-scoped admission from other test processes.
+	if runInIsolatedClusterAdmissionProcess(t, "^TestClusterAdmissionAtStart$") {
 		return
 	}
 	newFixture := func(t *testing.T) (*cluster, *int) {
@@ -170,6 +166,18 @@ func TestClusterAdmissionAtStart(t *testing.T) {
 			})
 		}
 	}
+}
+
+func runInIsolatedClusterAdmissionProcess(t *testing.T, runPattern string) bool {
+	t.Helper()
+	if os.Getenv("MO_EMBED_ADMISSION_HELPER") == "1" {
+		return false
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run="+runPattern)
+	cmd.Env = append(os.Environ(), "MO_EMBED_ADMISSION_HELPER=1", "TMPDIR="+t.TempDir())
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "%s", out)
+	return true
 }
 
 func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
@@ -931,6 +939,11 @@ func TestClusterRejectsNegativeCNCounts(t *testing.T) {
 }
 
 func TestClusterAdmissionCoversFullLifecycle(t *testing.T) {
+	// The child process initializes the global admission manager with a private
+	// TMPDIR, so unrelated test processes cannot hold this synthetic lifecycle.
+	if runInIsolatedClusterAdmissionProcess(t, "^TestClusterAdmissionCoversFullLifecycle$") {
+		return
+	}
 	for _, poolSize := range []string{"1", "2"} {
 		t.Run("pool="+poolSize, func(t *testing.T) {
 			t.Setenv(clusteradmission.ProcessPoolSizeEnv, poolSize)
@@ -950,8 +963,6 @@ func testClusterAdmissionLifecycle(t *testing.T) {
 		portLeaseNext: portLease.base,
 	}
 	c.options.testing = true
-	// This synthetic cluster has no services. Allow it to exercise admission
-	// lifecycle while the package's shared base cluster may be alive.
 	c.options.allowConcurrentTestClusters = true
 	t.Cleanup(func() {
 		require.NoError(t, c.Close())

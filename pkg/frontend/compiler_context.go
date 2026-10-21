@@ -1520,7 +1520,9 @@ func (tcc *TxnCompilerContext) GetSubscriptionMeta(dbName string, snapshot *plan
 		v2.GetSubMetaDurationHistogram.Observe(time.Since(start).Seconds())
 	}()
 
-	tempCtx := tcc.execCtx.reqCtx
+	// Subscription metadata SQL is a trusted catalog read, including when
+	// executed in a cloned historical transaction, not another user root.
+	tempCtx := plan2.ViewSchemaCatalogContext(tcc.execCtx.reqCtx)
 	txn := tcc.GetTxnHandler().GetTxn()
 	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
 		txn = txn.CloneSnapshotOp(*snapshot.TS)
@@ -1552,7 +1554,7 @@ func (tcc *TxnCompilerContext) GetSubscriptionMetadata(
 	snapshot *plan2.Snapshot,
 	maxCandidates int,
 ) ([]*plan2.SubscriptionMetadata, error) {
-	tempCtx := tcc.execCtx.reqCtx
+	tempCtx := plan2.ViewSchemaCatalogContext(tcc.execCtx.reqCtx)
 	txn := tcc.GetTxnHandler().GetTxn()
 	var bh BackgroundExec
 	if plan2.IsSnapshotValid(snapshot) && snapshot.TS.Less(txn.Txn().SnapshotTS) {
