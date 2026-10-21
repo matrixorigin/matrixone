@@ -2,7 +2,7 @@
 
 **Status:** Proposed; implementation review is pending.
 
-**Related issue:** [matrixone#30623](https://github.com/matrixorigin/matrixone/issues/30623)  
+**Related issue:** [matrixone#30623](https://github.com/matrixorigin/matrixone/issues/30623)
 **Implementation PR:** [matrixone#30629](https://github.com/matrixorigin/matrixone/pull/30629)
 
 ## Why this design is required
@@ -173,4 +173,3 @@ The implementation is acceptable only when all of the following are evidenced:
 The review gate for this document is explicit: owners must approve this revision (or
 an updated revision) before the implementation is considered design-approved. Open
 questions and any invariant change must be recorded here and linked from the PR.
-
