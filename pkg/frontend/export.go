@@ -301,34 +301,34 @@ func exportCleanupError(primary, cleanup error) error {
 	return primary
 }
 
-func (ep *ExportConfig) closeFile(cause error) error {
+func (ec *ExportConfig) closeFile(cause error) error {
 	var err error
-	if ep.AsyncWriter != nil {
+	if ec.AsyncWriter != nil {
 		if cause != nil {
-			err = ep.AsyncWriter.CloseWithError(cause)
-			if ep.AsyncReader != nil {
-				err = exportCleanupError(err, ep.AsyncReader.CloseWithError(cause))
+			err = ec.AsyncWriter.CloseWithError(cause)
+			if ec.AsyncReader != nil {
+				err = exportCleanupError(err, ec.AsyncReader.CloseWithError(cause))
 			}
 		} else {
-			err = ep.AsyncWriter.Close()
+			err = ec.AsyncWriter.Close()
 		}
 	}
-	if ep.AsyncGroup != nil {
-		err = exportCleanupError(err, ep.AsyncGroup.Wait())
+	if ec.AsyncGroup != nil {
+		err = exportCleanupError(err, ec.AsyncGroup.Wait())
 	}
-	if ep.AsyncReader != nil {
-		err = exportCleanupError(err, ep.AsyncReader.Close())
+	if ec.AsyncReader != nil {
+		err = exportCleanupError(err, ec.AsyncReader.Close())
 	}
-	if ep.stopFileCancel != nil && !ep.stopFileCancel() {
-		<-ep.fileCancelDone
+	if ec.stopFileCancel != nil && !ec.stopFileCancel() {
+		<-ec.fileCancelDone
 	}
-	if ep.ownsFileService && ep.FileService != nil {
-		ep.FileService.Close(context.Background())
+	if ec.ownsFileService && ec.FileService != nil {
+		ec.FileService.Close(context.Background())
 	}
-	ep.AsyncReader, ep.AsyncWriter, ep.AsyncGroup = nil, nil, nil
-	ep.stopFileCancel, ep.fileCancelDone = nil, nil
-	ep.FileService = nil
-	ep.ownsFileService = false
+	ec.AsyncReader, ec.AsyncWriter, ec.AsyncGroup = nil, nil, nil
+	ec.stopFileCancel, ec.fileCancelDone = nil, nil
+	ec.FileService = nil
+	ec.ownsFileService = false
 	return err
 }
 
