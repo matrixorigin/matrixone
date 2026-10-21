@@ -1,9 +1,10 @@
 - Status: in progress
 - Start Date: 2026-10-16
-- Revision: 26
+- Revision: 27
 - Implementation PR: https://github.com/matrixorigin/matrixone/pull/30184
 - Issue: https://github.com/matrixorigin/matrixone/issues/30155
 - Original implementation baseline: `fae17ae98d93f2b3e5e251dbc5649d643513af03`
+- Revision 27 integration baseline: official main `32591dcf3757a0ae4c2dec52cfd8d98761bd3454`
 - Revision 26 integration baseline: official main `7038c8520e5fc1ba456914b3c389ccedb69e22f7`
 - Revision 25 integration baseline: official main `a648b13e53cf0a07ff19211203a69e37b2d1dd93`
 - Revision 24 integration baseline: official main `63a964a82fbaae4759cfabb45655e0185bc0979c`
@@ -1343,6 +1344,35 @@ set-key fixtures are historical only, never aliases for released VIEWS603/604.
 Previous capacity, race and marker unknown-field receipts retain their recorded
 source and workload limits; no new capacity benchmark, live mixed-version cluster
 or portable native rebuild qualification is claimed.
+
+### Revision 27 Top layout and VIEWS fixture integration
+
+Official main `32591dcf3757a0ae4c2dec52cfd8d98761bd3454` fixes Top ordering-slot
+layout when a column expression returns an executor-owned typed-NULL vector.
+The logical column position now comes from the plan rather than pointer identity;
+computed sort keys retain their separate appended slots. The integration preserves
+this official change across resident, spill, reset and partial-error paths alongside
+this PR's hidden physical keys, visible output width and scalar occurrence owners.
+Function605/MORPC127 and released VIEWS603/604/126 remain unchanged.
+
+The failed PROXY BVT in run39590665469 attempt1 is a deterministic metadata
+fixture mismatch, not a claimed unrelated flake. Its sole final failure compares
+the explicit-column UNION view's frozen parser-derived definition with a string
+that depended on the old early identical-arm collapse. That rewrite injected a
+redundant DISTINCT into the left AST and left the right arm unbound. Retaining
+both arms correctly binds both column lists without adding that DISTINCT. The
+fixture and its executable replay now assert that canonical form; the exact
+string predicate, public output columns and row comparisons remain in force.
+The existing planner metadata/replay case gains a precise independent assertion.
+No production rewrite is restored merely to reproduce the old metadata spelling.
+
+Coverage job119214095258 reports incomplete producer prerequisites and computes
+no coverage verdict; CI Required job119214178371 propagates the PROXY failure.
+The [revision-27 receipt](validation/20261021_top_view_bvt_integration.json) records
+complete failure logs and BVT terminal diagnostics, the rebase and current
+validation. Historical revision26 protocol-native and earlier capacity/race/marker
+receipts remain immutable and are reused only for unchanged semantic owners.
+No old-run rerun, new capacity result or live mixed-version qualification is claimed.
 
 ## Alternatives
 
