@@ -62,7 +62,7 @@ func ClusterHasIndexProvenance(ctx CompilerContext) bool {
 }
 
 // ClusterSupportsFulltext2Analyzer reports whether every live service understands the
-// fulltext2 token_filter analyzer (MORPCVersion125), and is the gate for CREATING a
+// fulltext2 token_filter analyzer (MORPCVersion126), and is the gate for CREATING a
 // token_filter index.
 //
 // token_filter strips stopwords at every WRITE path (CREATE build, CDC tail, idxcron
@@ -99,5 +99,5 @@ func ClusterSupportsFulltext2Analyzer(ctx CompilerContext) bool {
 		return false
 	}
 	version, ok := value.(int64)
-	return ok && version >= defines.MORPCVersion125
+	return ok && version >= defines.MORPCVersion126
 }
