@@ -320,6 +320,54 @@ func TestCoveredFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
 	}
 }
 
+func TestJoinFulltext2ScoreLimitOnBoundSQL(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		orderBy    string
+		pagination string
+		from       string
+		residual   string
+		wantLimit  uint64
+	}{
+		{name: "score alias", orderBy: "sc DESC", pagination: "LIMIT 2", wantLimit: 2},
+		{name: "score alias offset", orderBy: "sc DESC", pagination: "LIMIT 2 OFFSET 1", wantLimit: 3},
+		{name: "explicit match score", orderBy: "MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) DESC", pagination: "LIMIT 2", wantLimit: 2},
+		{name: "ascending score", orderBy: "sc ASC", pagination: "LIMIT 2"},
+		{name: "different sort", orderBy: "id DESC", pagination: "LIMIT 2"},
+		{name: "score with second key", orderBy: "sc DESC, id", pagination: "LIMIT 2"},
+		{name: "no limit", orderBy: "sc DESC"},
+		{name: "residual filter", residual: " AND title <> 'excluded'", orderBy: "sc DESC", pagination: "LIMIT 2"},
+		{name: "user join", from: "ft JOIN t ON ft.id = t.id", orderBy: "sc DESC", pagination: "LIMIT 2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			optimizer := newIssue24822FullText2Optimizer(t)
+			from := tc.from
+			if from == "" {
+				from = "ft"
+			}
+			statement := `SELECT ft.id, ft.title, MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE) AS sc
+				FROM ` + from + ` WHERE MATCH(title, body) AGAINST('hello' IN BOOLEAN MODE)` + tc.residual
+			if tc.orderBy != "" {
+				statement += " ORDER BY " + tc.orderBy
+			}
+			statement += " " + tc.pagination
+			p, err := runOneStmt(optimizer, t, statement)
+			require.NoError(t, err)
+			query := p.GetQuery()
+			planned := &QueryBuilder{qry: query}
+			scans := collectFullTextFunctionScans(planned, query.Steps[0])
+			require.Len(t, scans, 1)
+			require.True(t, isFulltext2SearchScan(scans[0]))
+			if tc.wantLimit != 0 {
+				require.NotNil(t, fulltextScanLimit(scans[0]))
+				assert.Equal(t, tc.wantLimit, fulltextScanLimit(scans[0]).GetLit().GetU64Val())
+			} else {
+				require.Nil(t, fulltextScanLimit(scans[0]))
+			}
+		})
+	}
+}
+
 // The new direct SEARCH shape is covered by the bound-SQL tests above. Keep
 // the legacy implicit-sort shape and its pagination/key barriers valid too.
 func TestPushCoveredFulltext2ScoreLimitLegacySort(t *testing.T) {
