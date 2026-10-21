@@ -473,6 +473,10 @@ func matchTableDumpTimestampDefault(want, candidate *planpb.Expr, zone *time.Loc
 // whether a binding varies across supported migration eras or division precision.
 // A nil supplied definition classifies a v1 target without trusting a payload.
 func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.TableDef) (bool, error) {
+	return analyzeTableDumpBindingsWithCandidateVisitLimit(ctx, target, supplied, tableDumpMaxCandidateVisits)
+}
+
+func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target, supplied *planpb.TableDef, candidateVisitLimit int) (bool, error) {
 	if ctx == nil || target == nil {
 		return false, moerr.NewInvalidInputNoCtx("table dump binding context is unavailable")
 	}
@@ -584,7 +588,7 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 					return nil, fatal
 				}
 				budget.visits += visit.nodes
-				if budget.visits > tableDumpMaxCandidateVisits {
+				if budget.visits > candidateVisitLimit {
 					fatal = moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
 					return nil, fatal
 				}
