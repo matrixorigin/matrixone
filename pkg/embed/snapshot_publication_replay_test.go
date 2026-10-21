@@ -43,6 +43,7 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 			name, comment, database, publication, table string
 			externalFK                                  bool
 			explicitTables                              bool
+			emptyAccounts                               bool
 		}{
 			{name: "quoted_comment", comment: "owner's copy"},
 			{name: "backslash_comment", comment: `owner's C:\new\table\`},
@@ -51,6 +52,8 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 			{name: "quoted_database", database: "review-db"},
 			{name: "quoted_table", table: "review-items", explicitTables: true},
 			{name: "quoted_identifiers", database: "review-db", publication: "review-pub", table: "review-items", explicitTables: true},
+			{name: "empty_accounts", comment: "owner's empty authorization", emptyAccounts: true},
+			{name: "empty_quoted_tables", database: "review-empty-db", publication: "review-empty-pub", table: "review-items", explicitTables: true, emptyAccounts: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				dbName, pubName, tableName := tc.database, tc.publication, tc.table
@@ -72,8 +75,10 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 				}
 				exec("create database " + db)
 				defer func() {
-					_, err := subscriber.Exec("drop database if exists subscribed")
-					require.NoError(t, err)
+					for _, name := range []string{"subscribed", "denied_sub", "granted_sub"} {
+						_, err := subscriber.Exec("drop database if exists " + name)
+						require.NoError(t, err)
+					}
 					for _, query := range []string{"drop snapshot if exists " + snapshot, "drop publication if exists " + publication,
 						"drop database if exists " + external, "drop database if exists " + db} {
 						_, err := admin.ExecContext(context.Background(), query)
@@ -83,6 +88,9 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 				exec("create table " + db + "." + table + "(id int primary key)")
 				exec("insert into " + db + "." + table + " values(1)")
 				publishOptions := " account all"
+				if tc.emptyAccounts {
+					publishOptions = " account pub_replay_sub"
+				}
 				if tc.explicitTables {
 					exec("create table " + db + ".`other-items`(id int primary key)")
 					exec("insert into " + db + ".`other-items` values(1)")
@@ -91,6 +99,12 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 				exec("create publication " + publication + " database " + db + publishOptions + " comment " + sqlquote.String(tc.comment))
 				_, err := subscriber.ExecContext(ctx, "create database subscribed from sys publication "+publication)
 				require.NoError(t, err)
+				if tc.emptyAccounts {
+					exec("alter publication " + publication + " account drop pub_replay_sub")
+					var accounts string
+					require.NoError(t, admin.QueryRowContext(ctx, "select account_list from mo_catalog.mo_pubs where pub_name="+sqlquote.String(pubName)).Scan(&accounts))
+					require.Empty(t, accounts, "supported ACCOUNT DROP must produce a zero-authorization snapshot")
+				}
 				if tc.externalFK {
 					exec("create database " + external)
 					exec("create table " + external + ".child_t(id int primary key,parent_id int,foreign key(parent_id) references " + db + ".parent_t(id))")
@@ -100,6 +114,14 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 				exec("insert into " + db + "." + table + " values(2)")
 				if tc.explicitTables {
 					exec("insert into " + db + ".`other-items` values(2)")
+				}
+				if tc.emptyAccounts {
+					// The live publication is authorized again; restore must
+					// recover the snapshot's empty set, not preserve this grant.
+					exec("alter publication " + publication + " account add pub_replay_sub")
+					var liveRows int
+					require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from subscribed."+table).Scan(&liveRows))
+					require.Equal(t, 2, liveRows)
 				}
 				wantComment := tc.comment
 				if tc.externalFK {
@@ -118,15 +140,21 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 						require.Equal(t, 1, rows)
 					}
 					var subscribedRows int
-					require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from subscribed."+table).Scan(&subscribedRows))
-					if tc.externalFK {
-						require.Equal(t, 2, subscribedRows)
+					if tc.emptyAccounts {
+						require.ErrorContains(t, subscriber.QueryRowContext(ctx, "select count(*) from subscribed."+table).Scan(&subscribedRows), "not allowed", "existing subscriber must lose authorization")
+						_, err := subscriber.ExecContext(ctx, "create database denied_sub from sys publication "+publication)
+						require.ErrorContains(t, err, "not allowed", "an empty authorization set must not allow a new subscription")
 					} else {
-						require.Equal(t, 1, subscribedRows)
-					}
-					if tc.explicitTables {
-						require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from subscribed.`other-items`").Scan(&subscribedRows))
-						require.Equal(t, 1, subscribedRows)
+						require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from subscribed."+table).Scan(&subscribedRows))
+						if tc.externalFK {
+							require.Equal(t, 2, subscribedRows)
+						} else {
+							require.Equal(t, 1, subscribedRows)
+						}
+						if tc.explicitTables {
+							require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from subscribed.`other-items`").Scan(&subscribedRows))
+							require.Equal(t, 1, subscribedRows)
+						}
 					}
 					var restoredDB, restoredTables, restoredAccounts, comment string
 					result, err := admin.QueryContext(ctx, "select database_name,table_list,account_list,comment from mo_catalog.mo_pubs where pub_name="+sqlquote.String(pubName))
@@ -137,15 +165,32 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 					require.Equal(t, dbName, restoredDB)
 					if tc.explicitTables {
 						require.ElementsMatch(t, []string{tableName, "other-items"}, strings.Split(restoredTables, ","))
-						require.Equal(t, "pub_replay_sub", restoredAccounts)
 					} else {
 						require.Equal(t, "*", restoredTables)
+					}
+					if tc.emptyAccounts {
+						require.Empty(t, restoredAccounts)
+					} else if tc.explicitTables {
+						require.Equal(t, "pub_replay_sub", restoredAccounts)
+					} else {
 						require.Equal(t, "all", restoredAccounts)
 					}
 					require.Equal(t, wantComment, comment)
 					require.False(t, result.Next(), "exactly one publication must survive repeated restore")
 					require.NoError(t, result.Err())
 					require.NoError(t, result.Close())
+				}
+				if tc.emptyAccounts {
+					exec("alter publication " + publication + " account add pub_replay_sub")
+					var rows int
+					require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from subscribed."+table).Scan(&rows))
+					require.Equal(t, 1, rows)
+					_, err := subscriber.ExecContext(ctx, "drop database subscribed")
+					require.NoError(t, err)
+					_, err = subscriber.ExecContext(ctx, "create database granted_sub from sys publication "+publication)
+					require.NoError(t, err)
+					require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from granted_sub."+table).Scan(&rows))
+					require.Equal(t, 1, rows)
 				}
 			})
 		}

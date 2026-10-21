@@ -83,3 +83,27 @@ drop snapshot restore_named_snapshot;
 drop account restore_named_subscriber;
 drop publication `review-pub`;
 drop database `review-db`;
+
+-- Removing the final account is a valid empty authorization set, not ALL.
+create account restore_empty_subscriber admin_name 'admin' identified by '111';
+create database restore_empty_db;
+create table restore_empty_db.t(id int primary key);
+insert into restore_empty_db.t values(1);
+create publication restore_empty_pub database restore_empty_db account restore_empty_subscriber comment 'owner''s empty grant';
+alter publication restore_empty_pub account drop restore_empty_subscriber;
+create snapshot restore_empty_snapshot for database restore_empty_db;
+insert into restore_empty_db.t values(2);
+restore database restore_empty_db{snapshot='restore_empty_snapshot'};
+select count(*) from restore_empty_db.t;
+select count(*) from mo_catalog.mo_pubs where pub_name='restore_empty_pub' and account_list='' and comment='owner''s empty grant';
+restore database restore_empty_db{snapshot='restore_empty_snapshot'};
+select count(*) from mo_catalog.mo_pubs where pub_name='restore_empty_pub' and account_list='';
+alter publication restore_empty_pub account add restore_empty_subscriber;
+-- @session:id=3&user=restore_empty_subscriber:admin&password=111
+create database restored_empty_sub from sys publication restore_empty_pub;
+select id from restored_empty_sub.t;
+-- @session
+drop snapshot restore_empty_snapshot;
+drop account restore_empty_subscriber;
+drop publication restore_empty_pub;
+drop database restore_empty_db;

@@ -4256,18 +4256,12 @@ func createPubs(
 			return err
 		}
 		toCtx := defines.AttachAccount(ctx, identity.accountID, identity.userID, identity.roleID)
-		getLogger(sid).Debug(fmt.Sprintf("[%s] create pub: create pub sql: %s", snapshotName, pubInfo.GetCreateSql()))
-		var ast []tree.Statement
-		ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1)
-		if err != nil {
-			return
-		}
+		getLogger(sid).Debug(fmt.Sprintf("[%s] recreate publication %s for database %s", snapshotName, pubInfo.PubName, pubInfo.DbName))
 
 		// The CREATE statement carries the stable database name. createPublication
 		// resolves it inside the target tenant and persists the current database
 		// ID, so the historical PubInfo.DbId must not be replayed.
-		err = createPublication(toCtx, bh, ast[0].(*tree.CreatePublication))
-		freeStatements(ast)
+		err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo)
 		if err != nil {
 			return
 		}
