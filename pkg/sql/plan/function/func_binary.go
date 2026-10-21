@@ -4693,6 +4693,14 @@ func DateFormat(ivecs []*vector.Vector, result vector.FunctionResultWrapper, pro
 				} else {
 					d, err = types.ParseDatetime(text, 6)
 					if err != nil {
+						// Keep the normal string-to-datetime expression cast policy:
+						// malformed values are NULL without statement diagnostics.
+						if isTemporalLexicalConversionError(err) {
+							if err = rs.AppendBytes(nil, true); err != nil {
+								return err
+							}
+							continue
+						}
 						return err
 					}
 					if d == types.ZeroDatetime {

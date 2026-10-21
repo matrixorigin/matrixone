@@ -397,7 +397,7 @@ const (
 // TIMESTAMP identities; released unary identities retain TIMESTAMP vectors.
 // DynamicTimeResultContracts uses the same epoch for prepared TIME results
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
-// IncompleteTemporalStrings requires MORPC v126 for raw-calendar string
+// IncompleteTemporalStrings requires MORPC v127 for raw-calendar string
 // overloads and incomplete-input rejection diagnostics.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool
@@ -1062,7 +1062,7 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					}
 					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
 				}
-				// New string identities cannot execute on pre-v126 workers.
+				// New string identities cannot execute on pre-v127 workers.
 				// Released LAST_DAY and DATE_ADD/SUB string identities also
 				// need the new incomplete-calendar warning contract.
 				if (id == 251 && overload == 2) || // DATE_FORMAT

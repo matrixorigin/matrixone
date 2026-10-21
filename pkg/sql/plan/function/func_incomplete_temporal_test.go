@@ -205,17 +205,37 @@ func TestIncompleteLastDayZeroDayDoesNotWarn(t *testing.T) {
 }
 
 func TestIncompleteDateFormatKeepsConversionPolicy(t *testing.T) {
-	for _, text := range []string{"0000-01-01", "2024-02-30", "2024-13-00", "2024-00-32", "bad", "2024-00-00 24:00:00"} {
+	for _, text := range []string{"123456", "19981321000000", "19981033000000", "0000-02-28", "0000-01-01", "2024-02-30", "2024-13-00", "2024-00-32", "bad", "2024-00-00 24:00:00"} {
 		t.Run(text, func(t *testing.T) {
 			proc := testutil.NewProcess(t)
+			session := &numericWarningSession{}
+			proc.Session = session
 			c := NewFunctionTestCase(proc, []FunctionTestInput{
 				NewFunctionTestInput(types.T_varchar.ToType(), []string{text}, nil),
 				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y-%m-%d"}, nil),
-			}, NewFunctionTestResult(types.T_varchar.ToType(), true, []string{""}, nil), DateFormat)
+			}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{""}, []bool{true}), DateFormat)
 			ok, info := c.RunAndFree()
 			require.True(t, ok, info)
+			require.Empty(t, session.warnings)
 		})
 	}
+	proc := testutil.NewProcess(t)
+	session := &numericWarningSession{}
+	proc.Session = session
+	for _, dynamic := range []bool{false, true} {
+		format := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"%Y-%m-%d"}, nil)
+		if dynamic {
+			format = NewFunctionTestInput(types.T_varchar.ToType(), []string{"%Y-%m-%d", "%Y-%m-%d", "%Y-%m-%d", "%Y-%m-%d", "%Y-%m-%d"}, nil)
+		}
+		c := NewFunctionTestCase(proc, []FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"2026-02-30", "2024-02-29", "2024-00-00", "", "invalid skipped row"}, []bool{false, false, false, true, false}), format,
+		}, NewFunctionTestResult(types.T_varchar.ToType(), false, []string{"", "2024-02-29", "2024-00-00", "", ""}, []bool{true, false, false, true, true}), DateFormat).
+			WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{true, true, true, true, false}})
+		ok, info := c.RunAndFree()
+		require.True(t, ok, info)
+		require.Empty(t, session.warnings)
+	}
+
 	for _, tc := range []struct {
 		mode, text, want string
 		null             bool

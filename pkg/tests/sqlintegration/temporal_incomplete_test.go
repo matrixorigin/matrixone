@@ -79,6 +79,31 @@ func TestIncompleteTemporalStrings(t *testing.T) {
 			require.Equal(t, want, got, q)
 		}
 		value := func(s string) sql.NullString { return sql.NullString{String: s, Valid: true} }
+		t.Run("date_format_invalid_conversion", func(t *testing.T) {
+			inputs := []string{"123456", "19981321000000", "19981033000000", "0000-01-01", "0000-02-28", "2026-02-30"}
+			stmt, err := conn.PrepareContext(ctx, "select date_format(?,'%Y-%m-%d')")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, input := range inputs {
+				check(t, "select date_format('"+input+"','%Y-%m-%d')", []sql.NullString{{}})
+				warnings(t, 0)
+				for _, next := range []string{input, "2024-02-29", "2024-00-00"} {
+					var got sql.NullString
+					require.NoError(t, stmt.QueryRowContext(ctx, next).Scan(&got))
+					want := sql.NullString{}
+					if next != input {
+						want = value(next)
+					}
+					require.Equal(t, want, got)
+					warnings(t, 0)
+				}
+			}
+			exec("insert into " + schema + ".dates values(4,'2026-02-30'),(5,'2024-02-29')")
+			defer exec("delete from " + schema + ".dates where id>=4")
+			check(t, "select date_format(v,'%Y-%m-%d') from "+schema+".dates order by id", []sql.NullString{value("2024-00-00"), value("2024-02-29"), {}, {}, value("2024-02-29")})
+			warnings(t, 0)
+		})
+
 		for _, tc := range []struct {
 			name, expression, complete string
 			format                     bool
