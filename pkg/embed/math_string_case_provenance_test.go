@@ -72,6 +72,85 @@ func TestStringMathMixedCaseHexTextProvenance(t *testing.T) {
 			require.NoError(t, rows.Err())
 		})
 
+		t.Run("table_materialization", func(t *testing.T) {
+			database := fmt.Sprintf("pr30669_case_provenance_%d", time.Now().UnixNano())
+			_, err := conn.ExecContext(ctx, "CREATE DATABASE "+database)
+			require.NoError(t, err)
+			defer func() {
+				_, dropErr := conn.ExecContext(ctx, "DROP DATABASE IF EXISTS "+database)
+				require.NoError(t, dropErr)
+			}()
+			_, err = conn.ExecContext(ctx, "USE "+database)
+			require.NoError(t, err)
+
+			exec := func(t *testing.T, statement string) {
+				t.Helper()
+				_, err := conn.ExecContext(ctx, statement)
+				require.NoError(t, err, statement)
+			}
+			read := func(t *testing.T, query string) [][]string {
+				t.Helper()
+				rows, err := conn.QueryContext(ctx, query)
+				require.NoError(t, err, query)
+				defer func() { require.NoError(t, rows.Close()) }()
+				var got [][]string
+				for rows.Next() {
+					var id, hex, absolute sql.NullString
+					require.NoError(t, rows.Scan(&id, &hex, &absolute))
+					values := []sql.NullString{id, hex, absolute}
+					row := make([]string, len(values))
+					for i, value := range values {
+						row[i] = "NULL"
+						if value.Valid {
+							row[i] = value.String
+						}
+					}
+					got = append(got, row)
+				}
+				require.NoError(t, rows.Err())
+				return got
+			}
+			want := [][]string{{"1", "31", "1"}, {"2", "31", "1"}, {"3", "NULL", "NULL"}}
+			caseExpression := "CASE WHEN id=1 THEN X'31' WHEN id=2 THEN '1' ELSE NULL END"
+			source := "(SELECT 1 AS id UNION ALL SELECT 2 UNION ALL SELECT 3) AS s"
+
+			exec(t, "BEGIN")
+			exec(t, "CREATE TABLE ctas_mixed AS SELECT id, "+caseExpression+" AS v FROM "+source)
+			require.Equal(t, want, read(t, "SELECT id, HEX(v), ABS(v) FROM ctas_mixed ORDER BY id"))
+			exec(t, "COMMIT")
+			require.Equal(t, want, read(t, "SELECT id, HEX(v), ABS(v) FROM ctas_mixed ORDER BY id"))
+
+			exec(t, "CREATE TABLE default_binary (id INT, v VARCHAR(255) DEFAULT X'31')")
+			exec(t, "BEGIN")
+			exec(t, "INSERT INTO default_binary(id) VALUES(1)")
+			defaultWant := [][]string{{"1", "31", "1"}}
+			require.Equal(t, defaultWant, read(t, "SELECT id, HEX(v), ABS(v) FROM default_binary ORDER BY id"))
+			exec(t, "COMMIT")
+			require.Equal(t, defaultWant, read(t, "SELECT id, HEX(v), ABS(v) FROM default_binary ORDER BY id"))
+
+			exec(t, "CREATE TABLE inserted (id INT, v VARCHAR(255))")
+			exec(t, "BEGIN")
+			exec(t, "INSERT INTO inserted SELECT id, "+caseExpression+" FROM "+source)
+			require.Equal(t, want, read(t, "SELECT id, HEX(v), ABS(v) FROM inserted ORDER BY id"))
+			exec(t, "COMMIT")
+			require.Equal(t, want, read(t, "SELECT id, HEX(v), ABS(v) FROM inserted ORDER BY id"))
+
+			exec(t, "BEGIN")
+			exec(t, "UPDATE inserted SET v="+caseExpression+" WHERE id IN (1,2,3)")
+			require.Equal(t, want, read(t, "SELECT id, HEX(v), ABS(v) FROM inserted ORDER BY id"))
+			exec(t, "COMMIT")
+			require.Equal(t, want, read(t, "SELECT id, HEX(v), ABS(v) FROM inserted ORDER BY id"))
+
+			exec(t, "BEGIN")
+			exec(t, "INSERT INTO inserted VALUES(4, X'31')")
+			exec(t, "ROLLBACK")
+			exec(t, "BEGIN")
+			exec(t, "INSERT INTO inserted VALUES(4, '1')")
+			require.Equal(t, [][]string{{"4", "31", "1"}}, read(t, "SELECT id, HEX(v), ABS(v) FROM inserted WHERE id=4"))
+			exec(t, "COMMIT")
+			require.Equal(t, [][]string{{"4", "31", "1"}}, read(t, "SELECT id, HEX(v), ABS(v) FROM inserted WHERE id=4"))
+		})
+
 		t.Run("prepared_text_value", func(t *testing.T) {
 			query := "SELECT id, " +
 				"ABS(CASE WHEN id=1 THEN X'31' WHEN id=2 THEN ? ELSE NULL END) " +
