@@ -461,10 +461,10 @@ test('workflow provenance selects both helpers from the actual checkout config',
   }
 });
 
-test('entrypoint runs the complete race-UT suite on one runner', () => {
+test('entrypoint enables the complete race-UT shard contract', () => {
   const caller = entrypointJobs()['matrixone-ci'];
   assert.match(caller, /^    uses: matrixorigin\/CI\/\.github\/workflows\/ci\.yaml@main$/m);
-  assert.match(caller, /^    with:\n      ut_parallel: 8\n      ut_sharded: false$/m);
+  assert.match(caller, /^    with:\n      ut_parallel: 8\n      ut_sharded: true$/m);
 });
 
 test('SDK impact is retained across mixed changes, control files and both rename paths', () => {
