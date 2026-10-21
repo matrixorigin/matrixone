@@ -391,6 +391,10 @@ func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	return proto.Equal(left, right)
 }
 
+func sameTableDumpBoundType(a, b planpb.Type) bool {
+	return sameTableDumpBoundExpression(&planpb.Expr{Typ: a}, &planpb.Expr{Typ: b})
+}
+
 func tableDumpImplicitTimestamp(item tableDumpExpression, ast tree.Expr) bool {
 	if item.col == nil || item.col.Typ.Id != int32(types.T_timestamp) ||
 		(item.kind != "default" && item.kind != "on_update") {
@@ -662,7 +666,13 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					if item.kind == "default" {
 						_, folded := tableDumpTimestampLiteral(candidate)
 						_, stored := tableDumpTimestampLiteral(want)
-						if folded || stored || dependency.folded || err != nil && (dependency.timeZone || dependency.locale) {
+						// A successful binding with a different result type cannot
+						// match under another timezone or locale: those witnesses only
+						// change folded values. Keep failed binds, since another session
+						// may make the expression bindable there.
+						typeCanMatch := err != nil || candidate == nil || want == nil ||
+							sameTableDumpBoundType(candidate.Typ, want.Typ)
+						if typeCanMatch && (folded || stored || dependency.folded || err != nil && (dependency.timeZone || dependency.locale)) {
 							sensitive = true
 							sessions = append(sessions, sessionCandidate{increment, mode, dependency, folded, stored})
 						}
