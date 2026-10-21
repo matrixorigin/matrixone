@@ -54,6 +54,13 @@ func (hashBuild *HashBuild) Prepare(proc *process.Process) (err error) {
 	if hashBuild.DirectInput && (!hashBuild.NeedBatches || hashBuild.IsShuffle || hashBuild.RuntimeFilterSpec != nil) {
 		return moerr.NewInternalError(proc.Ctx, "invalid direct hash build")
 	}
+	if hashBuild.ctr.spillBundle != nil {
+		hashBuild.ctr.spillBundle.release()
+		if hashBuild.ctr.spillBundle.cleanupPending() {
+			return moerr.NewInternalError(proc.Ctx, "previous hash build spill cleanup is pending")
+		}
+		hashBuild.ctr.spillBundle = nil
+	}
 	// A HashBuild can be reused after Reset.  The terminal gate belongs to the
 	// new execution generation; the old MessageBoard is reset by the pipeline
 	// before this generation's consumers are started.
@@ -275,8 +282,9 @@ func (hashBuild *HashBuild) sendJoinMap(proc *process.Process) error {
 				BudgetRef: ctr.hashmapBuilder.budget,
 			}
 			if err := jm.SetSpillBuildPayload(payload); err != nil {
-				_ = payload.Close()
-				return moerr.NewInternalError(proc.Ctx, err.Error())
+				return jm.CloseOrRetainSpillPayload(
+					&payload, moerr.NewInternalError(proc.Ctx, err.Error()),
+				)
 			}
 			ctr.spillBundle = nil
 		}
@@ -363,7 +371,9 @@ func (hashBuild *HashBuild) build(
 		}
 		if !bundleTransferred && ctr.spillBundle != nil {
 			ctr.spillBundle.release()
-			ctr.spillBundle = nil
+			if !ctr.spillBundle.cleanupPending() {
+				ctr.spillBundle = nil
+			}
 		}
 		ctr.freeSpillExprExecs()
 		ctr.spillConditions = nil

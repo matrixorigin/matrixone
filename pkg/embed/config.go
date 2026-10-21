@@ -487,13 +487,17 @@ func (c *ServiceConfig) getCNServiceConfig() cnservice.Config {
 
 // memberlist requires all gossip seed addresses to be provided as IP:PORT
 func (c *ServiceConfig) resolveGossipSeedAddresses() error {
+	return c.resolveGossipSeedAddressesWithLookup(net.LookupIP)
+}
+
+func (c *ServiceConfig) resolveGossipSeedAddressesWithLookup(lookupIP func(string) ([]net.IP, error)) error {
 	result := make([]string, 0)
 	for _, addr := range c.LogService.GossipSeedAddresses {
 		host, port, err := net.SplitHostPort(addr)
 		if err != nil {
 			return err
 		}
-		ips, err := net.LookupIP(host)
+		ips, err := lookupIP(host)
 		if err != nil {
 			// the configured member may be failed currently, keep the host name anyway since
 			// memberlist would try to resolve it again

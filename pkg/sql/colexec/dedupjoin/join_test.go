@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"io"
 	"os"
 	"sync"
@@ -152,9 +153,13 @@ func newDedupSpillFile(t *testing.T, fd *os.File, rows int64) *message.SpillFile
 	require.NoError(t, err)
 	name := fd.Name()
 	require.NoError(t, fd.Close())
+	metadata, reserveErr := spillcleanup.Reserve()
+	if reserveErr != nil {
+		panic(reserveErr)
+	}
 	file := message.NewReopenableSpillFile(
 		func(context.Context) (*os.File, error) { return os.Open(name) },
-		func() error { return os.Remove(name) }, rows, uint64(info.Size()), nil,
+		func() error { return os.Remove(name) }, rows, uint64(info.Size()), nil, metadata,
 	)
 	t.Cleanup(func() { require.NoError(t, file.Close()) })
 	return file

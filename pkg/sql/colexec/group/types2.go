@@ -17,6 +17,7 @@ package group
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/hashtable"
@@ -37,6 +39,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/spillio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/util/list"
 	"github.com/matrixorigin/matrixone/pkg/util/trace"
@@ -111,16 +114,17 @@ type Group struct {
 }
 
 type spillBucket struct {
-	lv        int                            // spill level
-	name      string                         // spill bucket name
-	cnt       int64                          // number of rows in this spill bucket
-	file      *os.File                       // spill file
-	writer    io.Writer                      // file writer; tests may inject a failing writer
-	fileFS    fileservice.MutableFileService // owns the named file until free
-	fdToken   *process.ExecutionSpillFDReservation
-	diskToken *process.ExecutionSpillDiskReservation
-	path      [spillMaxPass]uint8
-	pathLen   int
+	lv           int                            // spill level
+	name         string                         // spill bucket name
+	cnt          int64                          // number of rows in this spill bucket
+	file         *os.File                       // spill file
+	writer       io.Writer                      // file writer; tests may inject a failing writer
+	fileFS       fileservice.MutableFileService // owns the named file until free
+	fdToken      *process.ExecutionSpillFDReservation
+	diskToken    *process.ExecutionSpillDiskReservation
+	cleanupToken *spillcleanup.Reservation
+	path         [spillMaxPass]uint8
+	pathLen      int
 }
 
 type reusableSpillBuffer interface {
@@ -234,8 +238,11 @@ func (bkt *spillBucket) free() error {
 	}
 	if bkt.fileFS != nil {
 		// Cancellation must not prevent deletion of a bucket owned by the query.
-		if removeErr := bkt.fileFS.RemoveFile(context.Background(), bkt.name); err == nil {
-			err = removeErr
+		removeErr := spillio.RemoveFileWithRetry(bkt.fileFS, bkt.name)
+		if removeErr != nil {
+			// Keep the file name, service, and disk reservation so a later
+			// cleanup can retry and accounting still reflects the physical file.
+			return errors.Join(err, removeErr)
 		}
 		bkt.fileFS = nil
 	}
@@ -243,6 +250,8 @@ func (bkt *spillBucket) free() error {
 		bkt.diskToken.Release()
 		bkt.diskToken = nil
 	}
+	bkt.cleanupToken.Release()
+	bkt.cleanupToken = nil
 	return err
 }
 
@@ -345,6 +354,7 @@ type container struct {
 	spillAggList            []aggexec.GroupAggFuncExec
 	spillBkts               list.Deque[*spillBucket]
 	currentSpillBkt         []*spillBucket
+	spillCleanupPending     []*spillBucket
 
 	// reusable buffers for spill to avoid per-call allocations
 	spillFlagFlat   []uint8           // scratch 0/1 flags for one batch's rows during spill
@@ -685,20 +695,55 @@ func (ctr *container) freeSpillReloadStaging() {
 	}
 }
 
+// freeSpillBucket ends a bucket's active ownership, including local buckets
+// that are never published in spillBkts. Failed removals retain only detached
+// file metadata and the disk reservation. Repeated error-path cleanup of the
+// original bucket cannot create a second retry owner.
+func (ctr *container) freeSpillBucket(bkt *spillBucket) error {
+	err := bkt.free()
+	if err != nil {
+		logutil.Errorf("group spill file cleanup failed: %v", err)
+	}
+	if bkt != nil && bkt.fileFS != nil {
+		pending := &spillBucket{name: bkt.name, fileFS: bkt.fileFS, diskToken: bkt.diskToken, cleanupToken: bkt.cleanupToken}
+		bkt.fileFS = nil
+		bkt.diskToken = nil
+		bkt.cleanupToken = nil
+		if ctr == nil {
+			pending.cleanupToken.Enqueue(pending.free)
+		} else {
+			ctr.spillCleanupPending = append(ctr.spillCleanupPending, pending)
+		}
+	}
+	return err
+}
+
 func (ctr *container) freeSpillBkts() {
+	pending := ctr.spillCleanupPending
+	ctr.spillCleanupPending = nil
+	for _, bkt := range pending {
+		_ = ctr.freeSpillBucket(bkt)
+	}
 	// free all spill buckets.
 	if ctr.spillBkts != nil {
 		ctr.spillBkts.Iter(0, func(bkt *spillBucket) bool {
-			bkt.free()
+			_ = ctr.freeSpillBucket(bkt)
 			return true
 		})
 		ctr.spillBkts.Clear()
 	}
 
 	for _, bkt := range ctr.currentSpillBkt {
-		bkt.free()
+		_ = ctr.freeSpillBucket(bkt)
 	}
 	ctr.currentSpillBkt = nil
+}
+
+func (ctr *container) deferSpillCleanup() {
+	for _, bucket := range ctr.spillCleanupPending {
+		bucket.cleanupToken.Enqueue(bucket.free)
+	}
+	ctr.spillCleanupPending = nil
 }
 
 func (ctr *container) freeGroupByBatches() {
@@ -756,7 +801,11 @@ func (ctr *container) free() {
 	if ctr.distinctSpill != nil {
 		ctr.distinctSpill.close()
 		ctr.distinctSpill = nil
+		ctr.freeSpillBkts()
 	}
+	// Prepared operators can remain cached indefinitely after Reset. Cleanup
+	// progress must not depend on their next execution or eventual Release.
+	ctr.deferSpillCleanup()
 	ctr.distinctFinalized = false
 	ctr.distinctGroupReset = false
 	ctr.distinctDrainKeysForUT = 0
@@ -1012,6 +1061,7 @@ func NewArgument() *Group {
 
 func (group *Group) Release() {
 	if group != nil {
+		group.ctr.deferSpillCleanup()
 		reuse.Free(group, nil)
 	}
 }
@@ -1133,6 +1183,7 @@ func NewArgumentMergeGroup() *MergeGroup {
 
 func (mergeGroup *MergeGroup) Release() {
 	if mergeGroup != nil {
+		mergeGroup.ctr.deferSpillCleanup()
 		reuse.Free(mergeGroup, nil)
 	}
 }

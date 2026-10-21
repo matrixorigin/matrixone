@@ -17,6 +17,7 @@ package spillutil
 import (
 	"bytes"
 	"context"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
 	"os"
 	"testing"
 
@@ -76,6 +77,10 @@ func newTestSpillFileWithSize(fd *os.File, rows int64, size uint64, release func
 	if err := fd.Close(); err != nil {
 		panic(err)
 	}
+	metadata, reserveErr := spillcleanup.Reserve()
+	if reserveErr != nil {
+		panic(reserveErr)
+	}
 	return message.NewReopenableSpillFile(
 		func(ctx context.Context) (*os.File, error) {
 			if err := ctx.Err(); err != nil {
@@ -83,7 +88,7 @@ func newTestSpillFileWithSize(fd *os.File, rows int64, size uint64, release func
 			}
 			return os.Open(name)
 		},
-		func() error { return os.Remove(name) }, rows, size, release,
+		func() error { return os.Remove(name) }, rows, size, release, metadata,
 	)
 }
 

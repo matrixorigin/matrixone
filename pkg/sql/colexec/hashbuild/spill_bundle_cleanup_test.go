@@ -1,0 +1,369 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package hashbuild
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/spillcleanup"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/message"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"github.com/stretchr/testify/require"
+)
+
+type terminalBundleRemoveFS struct {
+	fileservice.MutableFileService
+	blocked atomic.Bool
+}
+
+func (fs *terminalBundleRemoveFS) RemoveFile(ctx context.Context, name string) error {
+	if fs.blocked.Load() {
+		return errors.New("injected terminal bundle remove failure")
+	}
+	return fs.MutableFileService.RemoveFile(ctx, name)
+}
+
+func TestHashBuildTeardownRetriesWhileOperatorRetained(t *testing.T) {
+	for _, boundary := range []string{"reset", "free"} {
+		for _, removeError := range []bool{false, true} {
+			name := boundary + "/control"
+			if removeError {
+				name = boundary + "/remove-error"
+			}
+			t.Run(name, func(t *testing.T) {
+				proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+				t.Cleanup(proc.Free)
+				proc.SetMessageBoard(message.NewMessageBoard())
+				ctx, cancel := context.WithCancel(context.Background())
+				proc.BuildPipelineContext(ctx)
+				t.Cleanup(cancel)
+				budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+				t.Cleanup(budget.Close)
+				generation, err := budget.OpenGeneration(1)
+				require.NoError(t, err)
+				t.Cleanup(generation.Close)
+				baseFS, err := proc.GetSpillFileService()
+				require.NoError(t, err)
+				path := "cached_hashbuild_" + uuid.NewString()
+				cleanupToken, err := spillcleanup.Reserve()
+				require.NoError(t, err)
+				t.Cleanup(cleanupToken.Release)
+				fd, err := baseFS.CreateFile(context.Background(), path)
+				require.NoError(t, err)
+				t.Cleanup(func() { _ = fd.Close() })
+				disk, err := generation.ReserveSpillDisk(1)
+				require.NoError(t, err)
+				t.Cleanup(func() { disk.Release() })
+				fdToken, err := generation.ReserveSpillFD(1)
+				require.NoError(t, err)
+				t.Cleanup(func() { fdToken.Release() })
+				fault := &terminalBundleRemoveFS{MutableFileService: baseFS}
+				fault.blocked.Store(removeError)
+				bundle := &spillFileBundle{entries: map[int]*spillFileEntry{
+					0: {fs: fault, name: path, created: true, cleanupToken: cleanupToken, diskToken: disk, file: fd, fdToken: fdToken},
+				}}
+				op := &HashBuild{ctr: container{spillBundle: bundle}, JoinMapTag: 91904}
+				t.Cleanup(func() {
+					fault.blocked.Store(false)
+					op.Free(proc, false, nil)
+					bundle.release()
+				})
+				cancel()
+				if boundary == "reset" {
+					op.Reset(proc, true, context.Canceled)
+				} else {
+					op.Free(proc, true, context.Canceled)
+				}
+				generation.Close()
+				_, statErr := fd.Stat()
+				require.Error(t, statErr)
+				require.Zero(t, generation.SpillFDUsed())
+				if removeError {
+					require.EqualValues(t, 1, generation.SpillDiskUsed())
+					physical, err := baseFS.OpenFile(context.Background(), path)
+					require.NoError(t, err)
+					require.NoError(t, physical.Close())
+				}
+				// Recovery must make progress while the prepared operator stays
+				// cached, without another Prepare, Free or Release call.
+				fault.blocked.Store(false)
+				require.Eventually(t, func() bool { return generation.SpillDiskUsed() == 0 }, 3*time.Second, 10*time.Millisecond)
+				require.False(t, bundle.cleanupPending())
+				require.Nil(t, op.ctr.spillBundle)
+				physical, err := baseFS.OpenFile(context.Background(), path)
+				if physical != nil {
+					_ = physical.Close()
+				}
+				require.Error(t, err)
+				op.Reset(proc, false, nil)
+				op.Free(proc, false, nil)
+				require.Zero(t, generation.SpillDiskUsed())
+				require.Zero(t, generation.SpillFDUsed())
+			})
+		}
+	}
+}
+
+func TestHashBuildReleaseRetriesAfterFilesystemRecovery(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer budget.Close()
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	name := "terminal_hashbuild_" + uuid.NewString()
+	cleanupToken, err := spillcleanup.Reserve()
+	require.NoError(t, err)
+	t.Cleanup(cleanupToken.Release)
+	fd, err := baseFS.CreateFile(context.Background(), name)
+	require.NoError(t, err)
+	require.NoError(t, fd.Close())
+	token, err := generation.ReserveSpillDisk(1)
+	require.NoError(t, err)
+	fault := &terminalBundleRemoveFS{MutableFileService: baseFS}
+	fault.blocked.Store(true)
+	op := NewArgument()
+	op.ctr.spillBundle = &spillFileBundle{entries: map[int]*spillFileEntry{
+		0: {fs: fault, name: name, created: true, cleanupToken: cleanupToken, diskToken: token},
+	}}
+	op.ctr.spillBundle.release() // Error cleanup before Reset/Free; Release is a fallback.
+	require.True(t, op.ctr.spillBundle.cleanupPending())
+	op.Release()
+	generation.Close() // reservations must remain releasable after query teardown
+	require.Positive(t, generation.SpillDiskUsed())
+	fault.blocked.Store(false)
+	require.Eventually(t, func() bool { return generation.SpillDiskUsed() == 0 }, 3*time.Second, 10*time.Millisecond)
+	_, err = baseFS.OpenFile(context.Background(), name)
+	require.Error(t, err)
+}
+
+func TestSpillWriterCacheCleanupAfterRemoveFailure(t *testing.T) {
+	for _, detached := range []bool{false, true} {
+		name := "bundle-retry"
+		if detached {
+			name = "detached-retry"
+		}
+		t.Run(name, func(t *testing.T) {
+			h := newSpillTestHarness(t, 1<<30)
+			t.Cleanup(func() { h.close(t) })
+			require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte{1}, 1, nil))
+			bundle := h.op.ctr.spillBundle
+			entry := bundle.entries[0]
+			require.NotNil(t, entry.cacheToken)
+			require.EqualValues(t, 4<<20, h.generation.Used())
+			fault := &terminalBundleRemoveFS{MutableFileService: entry.fs}
+			entry.fs = fault
+			t.Cleanup(func() {
+				fault.blocked.Store(false)
+				bundle.release()
+				require.Eventually(t, func() bool { return h.generation.Used() == 0 }, 3*time.Second, 10*time.Millisecond)
+			})
+			fault.blocked.Store(true)
+			bundle.release()
+			require.True(t, bundle.cleanupPending())
+			require.Zero(t, h.generation.SpillFDUsed())
+			require.EqualValues(t, 1, h.generation.SpillDiskUsed())
+			require.EqualValues(t, 4<<20, h.generation.Used(), "failed removal retains the admitted page-cache charge")
+			fault.blocked.Store(false)
+			if detached {
+				bundle.deferCleanup()
+			} else {
+				bundle.release()
+			}
+			require.Eventually(t, func() bool { return h.generation.Used() == 0 }, 3*time.Second, 10*time.Millisecond)
+			require.False(t, bundle.cleanupPending())
+			require.Zero(t, h.generation.SpillDiskUsed())
+			file, err := fault.OpenFile(context.Background(), entry.name)
+			if file != nil {
+				_ = file.Close()
+			}
+			require.Error(t, err)
+			bundle.release()
+			require.Zero(t, h.generation.Used(), "repeated release must not double-release cache memory")
+		})
+	}
+}
+
+type blockedBundleRemoveFS struct {
+	fileservice.MutableFileService
+	blocked       bool
+	failRemaining int
+	removeCalls   int
+}
+
+func (fs *blockedBundleRemoveFS) RemoveFile(ctx context.Context, name string) error {
+	fs.removeCalls++
+	if fs.blocked || fs.failRemaining > 0 {
+		if fs.failRemaining > 0 {
+			fs.failRemaining--
+		}
+		return errors.New("injected bundle remove failure")
+	}
+	return fs.MutableFileService.RemoveFile(ctx, name)
+}
+
+func TestHashBuildHandedOffFileRetriesTransientRemoval(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer budget.Close()
+	defer generation.Close()
+	baseFS, err := proc.GetSpillFileService()
+	require.NoError(t, err)
+	name := "hashbuild_handoff_cleanup_" + uuid.NewString()
+	cleanupToken, err := spillcleanup.Reserve()
+	require.NoError(t, err)
+	t.Cleanup(cleanupToken.Release)
+	fd, err := baseFS.CreateFile(context.Background(), name)
+	require.NoError(t, err)
+	_, err = fd.Write([]byte{1})
+	require.NoError(t, err)
+	require.NoError(t, fd.Close())
+	defer func() { _ = baseFS.RemoveFile(context.Background(), name) }()
+	token, err := generation.ReserveSpillDisk(1)
+	require.NoError(t, err)
+	fault := &blockedBundleRemoveFS{MutableFileService: baseFS, failRemaining: 2}
+	bundle := &spillFileBundle{entries: map[int]*spillFileEntry{
+		0: {fs: fault, name: name, created: true, cleanupToken: cleanupToken, rows: 1, bytes: 1, diskToken: token},
+	}}
+	defer bundle.release()
+	files, err := bundle.accountedFiles(context.Background(), generation)
+	require.NoError(t, err)
+	require.NotNil(t, files[0])
+	require.NoError(t, files[0].Close())
+	require.Equal(t, 3, fault.removeCalls)
+	require.Zero(t, generation.SpillDiskUsed())
+	_, err = baseFS.OpenFile(context.Background(), name)
+	require.Error(t, err)
+}
+
+func TestSpillBundleReleaseRetainsFailedRemoval(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		blocked     bool
+		directInput bool
+	}{
+		{name: "control"},
+		{name: "remove-error", blocked: true},
+		{name: "direct-input/control", directInput: true},
+		{name: "direct-input/remove-error", blocked: true, directInput: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+			generation, err := budget.OpenGeneration(1)
+			require.NoError(t, err)
+			defer budget.Close()
+			defer generation.Close()
+			baseFS, err := proc.GetSpillFileService()
+			require.NoError(t, err)
+			name := "hashbuild_bundle_cleanup_" + uuid.NewString()
+			cleanupToken, err := spillcleanup.Reserve()
+			require.NoError(t, err)
+			t.Cleanup(cleanupToken.Release)
+			fd, err := baseFS.CreateFile(context.Background(), name)
+			require.NoError(t, err)
+			defer fd.Close()
+			_, err = fd.Write([]byte{1})
+			require.NoError(t, err)
+			defer func() { _ = baseFS.RemoveFile(context.Background(), name) }()
+			token, err := generation.ReserveSpillDisk(1)
+			require.NoError(t, err)
+			defer token.Release()
+			fdToken, err := generation.ReserveSpillFD(1)
+			require.NoError(t, err)
+			defer fdToken.Release()
+			fault := &blockedBundleRemoveFS{MutableFileService: baseFS, blocked: tc.blocked}
+			bundle := &spillFileBundle{entries: map[int]*spillFileEntry{
+				0: {fs: fault, name: name, created: true, cleanupToken: cleanupToken, file: fd, diskToken: token, fdToken: fdToken},
+				1: nil,
+			}}
+			defer func() { fault.blocked = false; bundle.release() }()
+			op := &HashBuild{ctr: container{spillBundle: bundle}, DirectInput: tc.directInput, NeedBatches: true}
+			bundle.release() // Preserve the pre-Reset Prepare retry contract.
+			_, statErr := fd.Stat()
+			require.Error(t, statErr, "terminal cleanup closes the descriptor even if removal fails")
+			require.Zero(t, generation.SpillFDUsed())
+			_, handoffErr := bundle.accountedFiles(context.Background(), generation)
+			require.ErrorIs(t, handoffErr, process.ErrExecutionSpillReservationInactive)
+			if tc.blocked {
+				physical, openErr := baseFS.OpenFile(context.Background(), name)
+				require.NoError(t, openErr)
+				require.NoError(t, physical.Close())
+				require.Positive(t, generation.SpillDiskUsed(), "disk ownership must remain while the file exists")
+				require.Same(t, bundle, op.ctr.spillBundle)
+				require.ErrorContains(t, op.Prepare(proc), "previous hash build spill cleanup is pending")
+				require.Same(t, bundle, op.ctr.spillBundle)
+				fault.blocked = false
+				require.ErrorIs(t, op.Prepare(proc), mpool.ErrAllocationAccountInvalid)
+			} else {
+				require.ErrorIs(t, op.Prepare(proc), mpool.ErrAllocationAccountInvalid)
+			}
+			require.Nil(t, op.ctr.spillBundle)
+			require.Zero(t, generation.SpillDiskUsed())
+			_, err = baseFS.OpenFile(context.Background(), name)
+			require.Error(t, err)
+		})
+	}
+}
+
+func TestHashBuildPrepareInvalidDirectInputPreservesPriorGeneration(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		configure func(*HashBuild)
+	}{
+		{name: "without-batches", configure: func(arg *HashBuild) { arg.NeedBatches = false }},
+		{name: "shuffle", configure: func(arg *HashBuild) { arg.IsShuffle = true }},
+		{name: "runtime-filter", configure: func(arg *HashBuild) { arg.RuntimeFilterSpec = &plan.RuntimeFilterSpec{} }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+			defer proc.Free()
+			// A nil entry needs no physical cleanup, but still detects whether
+			// validation incorrectly releases the previous generation's bundle.
+			bundle := &spillFileBundle{entries: map[int]*spillFileEntry{0: nil}}
+			arg := &HashBuild{DirectInput: true, NeedBatches: true}
+			tc.configure(arg)
+			arg.ctr.spillBundle = bundle
+			atomic.StoreUint32(&arg.ctr.terminalPublished, 1)
+			arg.ctr.runtimeFilterDone = true
+			require.ErrorContains(t, arg.Prepare(proc), "invalid direct hash build")
+			require.Same(t, bundle, arg.ctr.spillBundle)
+			require.False(t, bundle.released)
+			require.Len(t, bundle.entries, 1)
+			require.Equal(t, uint32(1), atomic.LoadUint32(&arg.ctr.terminalPublished))
+			require.True(t, arg.ctr.runtimeFilterDone)
+
+			arg.NeedBatches, arg.IsShuffle, arg.RuntimeFilterSpec = true, false, nil
+			require.ErrorIs(t, arg.Prepare(proc), mpool.ErrAllocationAccountInvalid)
+			require.True(t, bundle.released)
+			require.Nil(t, arg.ctr.spillBundle)
+		})
+	}
+}

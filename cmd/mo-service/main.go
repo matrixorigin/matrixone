@@ -897,7 +897,11 @@ func clearSpillFiles(ctx context.Context, fs fileservice.FileService) error {
 		if listErr != nil {
 			return listErr
 		}
-		_ = spillFS.Delete(ctx, entry.Name)
+		// A previous process may have exited with failed cleanup owners. Do not
+		// reset in-memory admission and accept new files while those names remain.
+		if err := spillFS.Delete(ctx, entry.Name); err != nil {
+			return err
+		}
 	}
 	return nil
 }

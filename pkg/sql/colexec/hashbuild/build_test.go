@@ -3020,6 +3020,12 @@ func TestShuffleHashBuildAccountedSpillLifecycle(t *testing.T) {
 	require.Equal(t, int64(colexec.DefaultBatchSize), jm.GetRowCount())
 	payload, err := jm.TakeSpillBuildPayload()
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, payload.Close()) })
+	diskBeforeReset := generation.SpillDiskUsed()
+	require.Positive(t, diskBeforeReset)
+	tc.arg.Reset(tc.proc, false, nil)
+	require.Equal(t, diskBeforeReset, generation.SpillDiskUsed(),
+		"successful handoff stays consumer-owned after producer Reset")
 	require.NoError(t, payload.Close())
 	require.Zero(t, account.Snapshot().Used)
 	require.Zero(t, generation.Used())
