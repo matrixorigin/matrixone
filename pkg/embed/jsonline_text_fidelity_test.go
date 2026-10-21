@@ -109,6 +109,7 @@ func TestJSONLineOutfileLoadPreservesTextAndRejectsInvalidUTF8(t *testing.T) {
 		exec("create table " + database + ".array_dst (s varchar(32))")
 		exec(fmt.Sprintf("load data infile {'filepath'='%s','format'='jsonline','jsondata'='array'} into table %s.array_dst", arrayPath, database))
 		arrayRows := query("select s is null, coalesce(hex(s), '#NULL') from " + database + ".array_dst order by s is null desc, hex(s)")
+		defer arrayRows.Close()
 		var gotArray [][2]string
 		for arrayRows.Next() {
 			var isNull bool

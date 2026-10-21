@@ -928,9 +928,10 @@ func TestConstructJSONLineRejectsInvalidUTF8AndReleasesBatch(t *testing.T) {
 
 	badBatch := batch.NewOffHeapWithSize(1)
 	badVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	badBatch.Vecs[0] = badVec
+	defer badBatch.Clean(mp)
 	require.NoError(t, vector.AppendBytes(badVec, []byte("valid"), false, mp))
 	require.NoError(t, vector.AppendBytes(badVec, []byte("x\xffy"), false, mp))
-	badBatch.Vecs[0] = badVec
 	badBatch.SetRowCount(2)
 	require.Positive(t, mp.CurrNB())
 	constructJSONLine(context.Background(), ses, badBatch, 0, bytesChan, ep)
@@ -943,8 +944,9 @@ func TestConstructJSONLineRejectsInvalidUTF8AndReleasesBatch(t *testing.T) {
 
 	goodBatch := batch.NewOffHeapWithSize(1)
 	goodVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
-	require.NoError(t, vector.AppendBytes(goodVec, []byte("next"), false, mp))
 	goodBatch.Vecs[0] = goodVec
+	defer goodBatch.Clean(mp)
+	require.NoError(t, vector.AppendBytes(goodVec, []byte("next"), false, mp))
 	goodBatch.SetRowCount(1)
 	constructJSONLine(context.Background(), ses, goodBatch, 1, bytesChan, ep)
 	succeeded := <-bytesChan
@@ -1113,32 +1115,36 @@ func TestVectorValueToJSONRejectsInvalidUTF8Text(t *testing.T) {
 	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text} {
 		t.Run(typ.String(), func(t *testing.T) {
 			for _, value := range []string{"", "plain", "世界", "�", `\N`} {
-				mp := mpool.MustNewZero()
-				vec := vector.NewVec(typ.ToType())
-				require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
-				got, err := vectorValueToJSON(vec, 0, nil, nil)
-				require.NoError(t, err)
-				require.Equal(t, value, got)
-				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vec
-				bat.Clean(mp)
-				require.Zero(t, mp.CurrNB())
+				func() {
+					mp := mpool.MustNewZero()
+					vec := vector.NewVec(typ.ToType())
+					defer func() {
+						vec.Free(mp)
+						require.Zero(t, mp.CurrNB())
+					}()
+					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+					got, err := vectorValueToJSON(vec, 0, nil, nil)
+					require.NoError(t, err)
+					require.Equal(t, value, got)
+				}()
 			}
 
 			for _, value := range []string{"\xff", "a\xffb", "\xc3"} {
-				mp := mpool.MustNewZero()
-				vec := vector.NewVec(typ.ToType())
-				require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
-				_, err := vectorValueToJSON(vec, 0, nil, nil)
-				require.Error(t, err)
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
-				require.Contains(t, err.Error(), "JSONLINE")
-				require.Contains(t, err.Error(), "invalid UTF-8")
-				require.NotContains(t, err.Error(), value)
-				bat := batch.NewWithSize(1)
-				bat.Vecs[0] = vec
-				bat.Clean(mp)
-				require.Zero(t, mp.CurrNB())
+				func() {
+					mp := mpool.MustNewZero()
+					vec := vector.NewVec(typ.ToType())
+					defer func() {
+						vec.Free(mp)
+						require.Zero(t, mp.CurrNB())
+					}()
+					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+					_, err := vectorValueToJSON(vec, 0, nil, nil)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+					require.Contains(t, err.Error(), "JSONLINE")
+					require.Contains(t, err.Error(), "invalid UTF-8")
+					require.NotContains(t, err.Error(), value)
+				}()
 			}
 		})
 	}
