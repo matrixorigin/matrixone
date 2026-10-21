@@ -18,7 +18,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/stretchr/testify/require"
@@ -326,5 +329,51 @@ func TestBuildPipelineCloseIsTerminal(t *testing.T) {
 	require.Equal(t, 1, n)
 	require.Error(t, p.Add(BuildDoc{PK: int64(2), Content: []byte("gamma")}))
 	require.Equal(t, 1, writes)
+	requireEmptyDir(t, dir)
+}
+
+func TestBuildPipelineWorkerAndChunkBounds(t *testing.T) {
+	p := newTestPipeline(t, 1024, 2, int32(types.T_int64), 0, 0, t.TempDir(), func(*SpilledSegment) error { return nil })
+	require.LessOrEqual(t, p.cfg.Threads, runtime.GOMAXPROCS(0))
+	require.LessOrEqual(t, p.maxBytes, buildChunkMaxBytes)
+	require.LessOrEqual(t, p.maxRows, buildChunkMaxRows)
+	small := newTestPipeline(t, 1, 1, int32(types.T_int64), 0, 0, t.TempDir(), func(*SpilledSegment) error { return nil })
+	require.Equal(t, buildChunkBytesPerThread, small.maxBytes)
+	require.Equal(t, buildChunkRowsPerThread, small.maxRows)
+}
+
+func TestBuildPipelineWritePanicWaitsForTokenizers(t *testing.T) {
+	dir := t.TempDir()
+	var running atomic.Int32
+	p := NewBuildPipeline(BuildPipelineConfig{
+		Threads:      2,
+		MaxFinishing: 1 << 20,
+		Capacity:     1,
+		NewBuilder:   func() *Builder { return NewBuilder("uid", int32(types.T_int64)) },
+		SegmentID:    func(i int) string { return SubIndexId("uid", i) },
+		Tokenize: func(content []byte) ([]WordPos, error) {
+			running.Add(1)
+			defer running.Add(-1)
+			time.Sleep(time.Millisecond)
+			return pipelineTokenize(content)
+		},
+		SpillDir: dir,
+		Write:    func(*SpilledSegment) error { panic("write panic") },
+	})
+	rows := p.maxRows
+	for i := 0; i < rows; i++ {
+		require.NoError(t, p.Add(BuildDoc{PK: int64(i + 1), Content: []byte("alpha beta")}))
+	}
+	require.NotEmpty(t, p.jobs)
+	for _, j := range p.jobs {
+		<-j.done
+	}
+	require.PanicsWithValue(t, "write panic", func() {
+		for i := 0; i < rows; i++ {
+			_ = p.Add(BuildDoc{PK: int64(rows + i + 1), Content: []byte("gamma delta")})
+		}
+	})
+	require.Zero(t, running.Load(), "no tokenizer may outlive the panicking call")
+	p.Abort()
 	requireEmptyDir(t, dir)
 }

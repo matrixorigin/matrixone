@@ -181,12 +181,13 @@ func (s *Segment) Spill(dir string) (*SpilledSegment, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Unlinked at once: reads go through fp, and a crash leaves no file behind.
+	os.Remove(fp.Name())
 	if _, err = fp.Write(buf); err == nil {
 		err = fp.Sync()
 	}
 	if err != nil {
 		fp.Close()
-		os.Remove(fp.Name())
 		return nil, err
 	}
 	return &SpilledSegment{
@@ -220,18 +221,13 @@ func (p *SpilledSegment) Write(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts 
 	})
 }
 
-// Discard closes and removes the spill file. It is idempotent.
+// Discard closes the spill file, releasing its storage. It is idempotent.
 func (p *SpilledSegment) Discard() {
 	if p == nil || p.fp == nil {
 		return
 	}
 	p.fp.Close()
-	os.Remove(p.fp.Name())
 	p.fp = nil
-}
-
-func (s *Segment) metadataInsertSQL(sqlproc *sqlexec.SqlProcess, cfg TableConfig, ts int64, checksum string, filesize, buildTS int64) string {
-	return metadataInsertSQL(sqlproc, cfg, s.Id, ts, checksum, filesize, s.Recency, s.N, buildTS)
 }
 
 func metadataInsertSQL(sqlproc *sqlexec.SqlProcess, cfg TableConfig, id string, ts int64, checksum string,
@@ -637,13 +633,6 @@ func LocalSpillDir(ctx context.Context, rootFS fileservice.FileService) string {
 		return ""
 	}
 	return dir
-}
-
-// createLocalSpillFile creates a NAMED temp file (prefix) under the LOCAL fileservice's
-// __fulltext2 dir — its handle is read by the segment owner. Falls back
-// to the OS temp dir when no LOCAL fileservice is attached (localSpillDir=="").
-func createLocalSpillFile(sqlproc *sqlexec.SqlProcess, prefix string) (*os.File, error) {
-	return os.CreateTemp(localSpillDir(sqlproc), prefix)
 }
 
 // createLocalTempFile returns a temp file for the segment's mmap. It prefers the

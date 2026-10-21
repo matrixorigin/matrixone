@@ -15,6 +15,7 @@
 package fulltext2
 
 import (
+	"runtime"
 	"sync"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -23,6 +24,8 @@ import (
 const (
 	buildChunkBytesPerThread = 2 << 20
 	buildChunkRowsPerThread  = 64
+	buildChunkMaxBytes       = 16 << 20
+	buildChunkMaxRows        = 512
 )
 
 // BuildDoc is one source row queued for a pipelined build. Content is the text to tokenize;
@@ -75,6 +78,8 @@ type BuildPipeline struct {
 	cur        *Builder
 	chunk      []BuildDoc
 	chunkBytes int
+	maxBytes   int
+	maxRows    int
 	sealed     int
 	written    int
 	jobs       []*buildSegJob
@@ -87,10 +92,18 @@ func NewBuildPipeline(cfg BuildPipelineConfig) *BuildPipeline {
 	if cfg.Threads < 1 {
 		cfg.Threads = 1
 	}
+	if n := runtime.GOMAXPROCS(0); cfg.Threads > n {
+		cfg.Threads = n
+	}
 	if cfg.MaxFinishing < 1 {
 		cfg.MaxFinishing = 1
 	}
-	return &BuildPipeline{cfg: cfg, cur: cfg.NewBuilder()}
+	return &BuildPipeline{
+		cfg:      cfg,
+		cur:      cfg.NewBuilder(),
+		maxBytes: min(cfg.Threads*buildChunkBytesPerThread, buildChunkMaxBytes),
+		maxRows:  min(cfg.Threads*buildChunkRowsPerThread, buildChunkMaxRows),
+	}
 }
 
 // Add queues one source row.
@@ -100,8 +113,7 @@ func (p *BuildPipeline) Add(doc BuildDoc) error {
 	}
 	p.chunk = append(p.chunk, doc)
 	p.chunkBytes += len(doc.Content)
-	if p.chunkBytes >= p.cfg.Threads*buildChunkBytesPerThread ||
-		len(p.chunk) >= p.cfg.Threads*buildChunkRowsPerThread {
+	if p.chunkBytes >= p.maxBytes || len(p.chunk) >= p.maxRows {
 		return p.processChunk()
 	}
 	return nil
@@ -156,10 +168,8 @@ func (p *BuildPipeline) processChunk() error {
 		next     int
 		panicVal any
 	)
-	workers := p.cfg.Threads
-	if workers > len(docs) {
-		workers = len(docs)
-	}
+	workers := min(p.cfg.Threads, len(docs))
+	defer wg.Wait()
 	for w := 0; w < workers; w++ {
 		wg.Add(1)
 		go func() {
@@ -253,6 +263,7 @@ func (p *BuildPipeline) seal() error {
 			}
 		}()
 		seg, err := b.Finish()
+		b = nil
 		if err != nil {
 			job.err = err
 			return

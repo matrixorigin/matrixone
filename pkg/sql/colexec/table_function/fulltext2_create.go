@@ -247,6 +247,8 @@ func fulltext2BuildMaxFinishing(threads int) int {
 }
 
 func (u *fulltext2CreateState) newBuildPipeline(proc *process.Process) *fulltext2.BuildPipeline {
+	// Segment ids continue from the segments already written by this state, like the serial path.
+	base := u.segIdx
 	return fulltext2.NewBuildPipeline(fulltext2.BuildPipelineConfig{
 		Threads:      u.threads,
 		MaxFinishing: fulltext2BuildMaxFinishing(u.threads),
@@ -255,7 +257,7 @@ func (u *fulltext2CreateState) newBuildPipeline(proc *process.Process) *fulltext
 		NewBuilder: func() *fulltext2.Builder {
 			return fulltext2.NewBuilder(u.uid, u.pkType, u.bopts...)
 		},
-		SegmentID: func(i int) string { return fulltext2.SubIndexId(u.uid, i) },
+		SegmentID: func(i int) string { return fulltext2.SubIndexId(u.uid, base+i) },
 		Tokenize:  u.tokenizeContent,
 		SpillDir:  fulltext2.LocalSpillDir(proc.Ctx, proc.Base.FileService),
 		Write: func(spilled *fulltext2.SpilledSegment) error {

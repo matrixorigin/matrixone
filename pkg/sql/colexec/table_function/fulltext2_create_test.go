@@ -552,7 +552,7 @@ func TestFulltext2CreateSealAndEnd(t *testing.T) {
 				require.NotContains(t, sql, "load_file")
 				files, err := filepath.Glob(filepath.Join(dir, "ft2build*"))
 				require.NoError(t, err)
-				require.Len(t, files, 1, "owned spill exists through synchronous execution")
+				require.Empty(t, files, "the spill is unlinked while its handle serves the insert")
 				if opts.HasParams() {
 					vec, err := opts.Params(mp)
 					require.NoError(t, err)
@@ -736,4 +736,29 @@ func TestFulltext2CreateThreadsBuildResolution(t *testing.T) {
 	require.Equal(t, 1, fulltext2BuildMaxFinishing(1))
 	require.Equal(t, 1, fulltext2BuildMaxFinishing(3))
 	require.Equal(t, 2, fulltext2BuildMaxFinishing(8))
+}
+
+func TestFulltext2CreatePipelinedRerunContinuesSegmentIds(t *testing.T) {
+	h := newFT2PipelineHarness(t, nil)
+	st := &fulltext2CreateState{}
+	tf, vecs := ft2CreateArgVecs(t, h.mp, ft2CreateCfg(t, fulltext2.ParserNgram, false), 1, "x")
+	t.Cleanup(func() {
+		for _, v := range vecs {
+			v.Free(h.mp)
+		}
+	})
+	require.NoError(t, h.feed(st, 4, 6))
+	require.NoError(t, st.end(tf, h.proc))
+	require.Equal(t, 3, st.segIdx)
+	st.reset(tf, h.proc)
+
+	require.NoError(t, h.feed(st, 4, 6))
+	require.NoError(t, st.end(tf, h.proc))
+	require.Equal(t, 6, st.segIdx)
+	require.Len(t, h.metaSQLs, 6)
+	for i, sql := range h.metaSQLs {
+		require.Contains(t, sql, "'"+fulltext2.SubIndexId(st.uid, i)+"'")
+	}
+	st.free(tf, h.proc, false, nil)
+	require.Empty(t, h.spillFiles())
 }
