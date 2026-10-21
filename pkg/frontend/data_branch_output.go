@@ -833,7 +833,6 @@ func writeCSV(
 		streamChan = make(chan executor.Result, runtime.NumCPU())
 
 		writerWg  sync.WaitGroup
-		workerWg  sync.WaitGroup
 		writerErr = make(chan error, 1)
 		closeByte sync.Once
 
@@ -853,10 +852,27 @@ func writeCSV(
 		mrs.AddColumn(&MysqlColumn{})
 	}
 
-	ep.init()
 	ep.ctx = ctx
+	ep.init()
+	ctx = ep.ctx
 	ep.mrs = mrs
 	ep.ByteChan = make(chan *BatchByte, runtime.NumCPU())
+	defer func() {
+		if err != nil {
+			cancelCtx()
+		}
+		ep.workers.Wait()
+		closeByte.Do(func() {
+			if ep.ByteChan != nil {
+				close(ep.ByteChan)
+			}
+		})
+		writerWg.Wait()
+		err = ep.finish(err)
+		if err != nil && cleanup != nil {
+			cleanup()
+		}
+	}()
 
 	ep.DefaultBufSize = getPu(ses.GetService()).SV.ExportDataDefaultFlushSize
 	initExportFileParam(ep, mrs)
@@ -893,68 +909,38 @@ func writeCSV(
 	}
 
 	writerWg.Add(1)
-	if err = tblStuff.worker.Submit(func() {
+	// Coordination must not occupy the bounded conversion pool.
+	go func() {
 		defer writerWg.Done()
-		for bb := range ep.ByteChan {
-			if bb.err != nil {
+		report := func(err error) {
+			if err != nil {
 				select {
-				case writerErr <- bb.err:
+				case writerErr <- err:
 				default:
 				}
-				return
+				cancelCtx()
 			}
-			ep.BatchMap[bb.index] = bb.writeByte
-			for {
-				value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
+		}
+		for {
+			select {
+			case <-ctx.Done():
+				report(ctx.Err())
+				return
+			case bb, ok := <-ep.ByteChan:
 				if !ok {
-					break
-				}
-				if err2 := writeToCSVFile(ep, value); err2 != nil {
-					select {
-					case writerErr <- err2:
-					default:
-					}
+					report(exportAllDataFromBatches(ep))
 					return
 				}
-				ep.WriteIndex.Add(1)
-				ep.BatchMap[ep.WriteIndex.Load()] = nil
-			}
-		}
-		if ep.WriteIndex.Load() != ep.Index.Load() {
-			if err2 := exportAllDataFromBatches(ep); err2 != nil {
-				select {
-				case writerErr <- err2:
-				default:
+				if err := acceptExportBatch(ep, bb); err != nil {
+					report(err)
+					return
 				}
 			}
-		}
-	}); err != nil {
-		writerWg.Done()
-		return err
-	}
-
-	defer func() {
-		if err != nil && cleanup != nil {
-			cleanup()
-		}
-	}()
-
-	defer func() {
-		closeByte.Do(func() {
-			close(ep.ByteChan)
-		})
-		writerWg.Wait()
-		closeErr := Close(ep)
-		ep.Close()
-		if err == nil {
-			err = closeErr
-		} else {
-			err = errors.Join(err, closeErr)
 		}
 	}()
 
 	wg.Add(1)
-	if err = tblStuff.worker.Submit(func() {
+	go func() {
 		defer func() {
 			wg.Done()
 			close(streamChan)
@@ -966,15 +952,15 @@ func writeCSV(
 			default:
 			}
 		}
-	}); err != nil {
-		wg.Done()
-		return err
-	}
+	}()
 
 	streamOpen, errOpen := true, true
+	inputDone := inputCtx.Done()
 	for streamOpen || errOpen {
 		select {
-		case <-inputCtx.Done():
+		case <-inputDone:
+			// Observe cancellation once while the producer finishes releasing results.
+			inputDone = nil
 			err = errors.Join(err, inputCtx.Err())
 			stop = true
 		case e := <-writerErr:
@@ -1001,14 +987,22 @@ func writeCSV(
 				continue
 			}
 			for _, bat := range sqlRet.Batches {
-				copied, _ := bat.Dup(ses.proc.Mp())
+				copied, copyErr := bat.Dup(ses.proc.Mp())
+				if copyErr != nil {
+					err = exportCleanupError(err, copyErr)
+					stop = true
+					cancelCtx()
+					break
+				}
 				idx := ep.Index.Add(1)
-				workerWg.Add(1)
+				ep.workers.Add(1)
 				if submitErr := tblStuff.worker.Submit(func() {
-					defer workerWg.Done()
+					defer ep.workers.Done()
 					constructByte(ctx, ses, copied, idx, ep.ByteChan, ep)
 				}); submitErr != nil {
-					workerWg.Done()
+					ep.workers.Done()
+					copied.Clean(ses.proc.Mp())
+					ep.Index.Add(-1)
 					err = errors.Join(err, submitErr)
 					stop = true
 					cancelCtx()
@@ -1020,7 +1014,8 @@ func writeCSV(
 	}
 
 	wg.Wait()
-	workerWg.Wait()
+	ep.workers.Wait()
+	err = exportCleanupError(err, inputCtx.Err())
 	closeByte.Do(func() {
 		close(ep.ByteChan)
 	})
@@ -1032,6 +1027,7 @@ func writeCSV(
 	default:
 	}
 
+	err = ep.finish(err)
 	if err != nil {
 		return err
 	}
@@ -1039,7 +1035,7 @@ func writeCSV(
 	mrs = ses.GetMysqlResultSet()
 	mrs.AddRow([]any{sqlRetPath, sqlRetHint})
 
-	return trySaveQueryResult(ctx, ses, mrs)
+	return trySaveQueryResult(inputCtx, ses, mrs)
 }
 
 func newDiffCSVUserConfig() *tree.ExportParam {
