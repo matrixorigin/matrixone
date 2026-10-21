@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
 // `mysql` database system tables
@@ -153,6 +154,15 @@ var (
 		)`
 )
 
+// MetadataVisibilityCTE returns the canonical local-object visibility policy for
+// executable metadata queries, matching the persisted views during upgrades.
+func MetadataVisibilityCTE(protocolVersion int64) string {
+	if protocolVersion < defines.MORPCVersion41 {
+		return informationSchemaMetadataVisibilityCompatibilityCTE()
+	}
+	return informationSchemaMetadataVisibilityCTE()
+}
+
 // informationSchemaMetadataVisibilityCTE limits user-object metadata to the
 // objects visible to the session's active role and its full inherited-role
 // closure. The closure is produced locally by mo_current_roles(), avoiding
@@ -280,7 +290,7 @@ func informationSchemaSubscriptionColumnAuthorizationPredicate() string {
 }
 
 func informationSchemaCurrentColumnsDDL() string {
-	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsNativeUnicodeDDL())
+	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsWithMediumIntDDL())
 }
 
 // AdaptLegacyInformationSchemaColumnsDDL changes only the column authority of
@@ -295,6 +305,12 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	if definition == InformationSchemaColumnsV100DDL() {
 		return definition, true
 	}
+	// V109 already has the derived View-column branches and native Unicode
+	// selectors. Keep this historical template byte-stable apart from the
+	// lowercase view-name normalization above.
+	if definition == InformationSchemaColumnsV109DDL() {
+		return definition, true
+	}
 	for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
 		if definition == legacy {
 			return informationSchemaDerivedColumnsDDL(legacy), true
@@ -303,15 +319,41 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 	return "", false
 }
 
+// ViewMetadataColumnsDDL adapts only known system templates for an explicitly
+// owned derived-metadata statement. Pass subscriber-visible names, not a bare
+// publisher ID, to the common request so authorization and root resolution use
+// the caller's namespace. The persisted templates and projections do not change.
+func ViewMetadataColumnsDDL(definition string) (string, bool) {
+	definition = canonicalColumnsViewName(definition)
+	known := definition == InformationSchemaColumnsDDL ||
+		definition == InformationSchemaColumnsV100DDL() || definition == InformationSchemaColumnsV109DDL()
+	if !known {
+		for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
+			derived := informationSchemaDerivedColumnsDDL(legacy)
+			if definition == legacy || definition == derived {
+				definition, known = derived, true
+				break
+			}
+		}
+	}
+	if !known {
+		return "", false
+	}
+	return strings.NewReplacer(
+		"mo_view_columns(mt.rel_id)", "mo_view_columns(mt.reldatabase, mt.relname, mt.rel_id)",
+		"mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)", "mo_subscription_view_columns(mt.reldatabase, mt.relname, mt.rel_id)",
+	).Replace(definition), true
+}
+
 func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
 	return canonicalColumnsViewName(definition) == InformationSchemaColumnsDDL
 }
 
 // IsInformationSchemaColumnsMigrationDDL reports whether a persisted COLUMNS
 // definition has the on-demand View-column migration needed by historical
-// snapshot binding. The protocol-100 definition intentionally keeps the
-// historical selector projection, while the protocol-109 definition adds the
-// native Unicode selectors; both definitions are safe migration gates.
+// snapshot binding. The protocol-100 definition and current definition are
+// migration gates; the historical protocol-109 definition is an input to the
+// adapter, not a migration gate.
 func IsInformationSchemaColumnsMigrationDDL(definition string) bool {
 	definition = canonicalColumnsViewName(definition)
 	return definition == InformationSchemaColumnsV100DDL() ||
@@ -375,9 +417,17 @@ func InformationSchemaColumnsV100DDL() string {
 	return informationSchemaDerivedColumnsDDL(InformationSchemaColumnsV58DDL())
 }
 
+// InformationSchemaColumnsV109DDL is the exact pre-MEDIUMINT COLUMNS view
+// template. It includes native Unicode selectors and the derived View-column
+// branches, but keeps the historical DATA_TYPE mapping.
+func InformationSchemaColumnsV109DDL() string {
+	return informationSchemaDerivedColumnsDDL(informationSchemaColumnsNativeUnicodeDDL())
+}
+
 // informationSchemaColumnsNativeUnicodeDDL extends the V58 selector
 // projection with the native UCA 4.0.0 identities introduced after the
-// historical protocol-100 view.
+// historical protocol-100 view. This function remains the frozen protocol-109
+// projection; newer DATA_TYPE mappings are layered on separately.
 func informationSchemaColumnsNativeUnicodeDDL() string {
 	return strings.NewReplacer(
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8' WHEN 1 then 'utf8mb4' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4' else NULL end) AS CHARACTER_SET_NAME,",
@@ -385,6 +435,13 @@ func informationSchemaColumnsNativeUnicodeDDL() string {
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' else NULL end) AS COLLATION_NAME,",
 		"(case internal_column_character_set(mc.atttyp) WHEN 0 then 'utf8_general_ci' WHEN 1 then 'utf8mb4_bin' WHEN 2 then 'binary' WHEN 3 then 'utf8mb4_general_ci' WHEN 4 then 'utf8_unicode_ci' WHEN 5 then 'utf8mb4_unicode_ci' else NULL end) AS COLLATION_NAME,",
 	).Replace(InformationSchemaColumnsV58DDL())
+}
+
+func informationSchemaColumnsWithMediumIntDDL() string {
+	return strings.NewReplacer(
+		"upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' ",
+		"upper(mo_show_visible_bin(mc.atttyp,2)) = 'BOOL' then 'TINYINT' when upper(mo_show_visible_bin(mc.atttyp,3)) like 'MEDIUMINT%' then 'MEDIUMINT' ",
+	).Replace(informationSchemaColumnsNativeUnicodeDDL())
 }
 
 func informationSchemaSubscriptionViewAuthorizationPredicate() string {
@@ -577,7 +634,7 @@ var (
 		"IS_GRANTABLE varchar(3) NOT NULL DEFAULT ''" +
 		")"
 
-	InformationSchemaSchemataDDL = "CREATE VIEW information_schema.SCHEMATA AS " +
+	InformationSchemaSchemataLegacyDDL = "CREATE VIEW information_schema.SCHEMATA AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +
 		"'def' AS CATALOG_NAME," +
 		"datname AS SCHEMA_NAME," +
@@ -586,6 +643,16 @@ var (
 		"cast(NULL as char(0)) AS SQL_PATH," +
 		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
 		"FROM __mo_visible_databases"
+
+	InformationSchemaSchemataDDL = "CREATE VIEW information_schema.SCHEMATA AS " +
+		informationSchemaMetadataVisibilityCTE() + "SELECT " +
+		"'def' AS CATALOG_NAME, db.datname AS SCHEMA_NAME," +
+		"case when dd.version is null then " + databaseServerMetadataSQL(true) + " else " + databaseDefaultsMetadataSQL(true) + " end AS DEFAULT_CHARACTER_SET_NAME," +
+		"case when dd.version is null then " + databaseServerMetadataSQL(false) + " else " + databaseDefaultsMetadataSQL(false) + " end AS DEFAULT_COLLATION_NAME," +
+		"cast(NULL as char(0)) AS SQL_PATH," +
+		"cast('NO' as varchar(3)) AS DEFAULT_ENCRYPTION " +
+		"FROM __mo_visible_databases db LEFT JOIN mo_catalog.mo_database_defaults dd " +
+		"ON dd.account_id = db.account_id AND dd.database_id = db.dat_id"
 
 	InformationSchemaCharacterSetsDDL = "CREATE TABLE information_schema.CHARACTER_SETS (" +
 		"CHARACTER_SET_NAME varchar(64)," +
@@ -651,7 +718,10 @@ var (
 		"WHERE tbl.account_id = current_account_id() and tbl.relname not like '%s' and %s and tbl.relname != '%s' and tbl.relkind != '%s'",
 		catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate("tbl"), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel)
 
-	InformationSchemaTablesDDL = informationSchemaSubscriptionTablesDDL()
+	InformationSchemaTablesDDL     = informationSchemaSubscriptionTablesDDL()
+	InformationSchemaTablesV118DDL = strings.ReplaceAll(InformationSchemaTablesDDL,
+		"'"+DefaultCollationForCharset("utf8mb4")+"' AS TABLE_COLLATION,",
+		"internal_table_collation(tbl.extra_info) AS TABLE_COLLATION,")
 
 	InformationSchemaPartitionsDDL = "CREATE VIEW information_schema.`PARTITIONS` AS " +
 		informationSchemaMetadataVisibilityCTE() + "SELECT " +
@@ -1088,4 +1158,54 @@ func informationSchemaCharacterSetsDataSQL() string {
 		fmt.Sprintf("('utf8mb4','%s','UTF-8 Unicode',%d)", DefaultCollationForCharset("utf8mb4"), characterSetMaxBytes("utf8mb4")),
 	}
 	return "INSERT INTO information_schema.CHARACTER_SETS VALUES " + strings.Join(values, ",")
+}
+
+// SubscriptionMetadataVisibilitySQL mirrors the canonical
+// information_schema table visibility rules using only subscriber-local
+// objects. Subscription tables are virtual in the subscriber catalog, so the
+// supported grant surface is database/global scope; exact table grants cannot
+// be resolved there. Subscriber role IDs are never evaluated in the publisher
+// account.
+// subscriptionNames is a comma-separated list of already escaped SQL literals.
+func SubscriptionMetadataVisibilitySQL(subscriptionNames string, protocolVersion int64) string {
+	activeRolesSQL := "SELECT role_id FROM mo_current_roles() role_closure"
+	if protocolVersion < defines.MORPCVersion41 {
+		// Match the persisted information_schema compatibility view during a
+		// rolling deployment. The full local table-function closure is available
+		// only after every CN supports protocol v41.
+		activeRolesSQL = "SELECT current_role_id() UNION " +
+			"SELECT rg.granted_id FROM mo_catalog.mo_role_grant rg " +
+			"WHERE rg.grantee_id = current_role_id()"
+	}
+	return fmt.Sprintf(`WITH __subscription_active_roles(role_id) AS (
+    %s
+), __subscription_databases AS (
+    SELECT dat_id, datname, owner
+    FROM mo_catalog.mo_database
+    WHERE account_id = current_account_id() AND datname IN (%s)
+), __subscription_broad_visibility AS (
+    SELECT db.dat_id, db.datname
+    FROM __subscription_databases db
+    WHERE db.owner IN (SELECT role_id FROM __subscription_active_roles)
+       OR EXISTS (
+            SELECT 1
+            FROM mo_catalog.mo_role_privs rp
+            JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
+            WHERE rp.obj_type IN ('table','view') AND (
+                (rp.privilege_level = '*.*' AND rp.obj_id = 0)
+                OR (rp.privilege_level IN ('d.*','*') AND rp.obj_id = db.dat_id)
+            )
+       )
+       OR EXISTS (
+            SELECT 1
+            FROM mo_catalog.mo_role_privs rp
+            JOIN __subscription_active_roles ar ON rp.role_id = ar.role_id
+            WHERE rp.obj_type = 'database'
+              AND rp.privilege_name IN ('show tables','database all','database ownership')
+              AND ((rp.privilege_level IN ('*','*.*') AND rp.obj_id = 0)
+                   OR (rp.privilege_level = 'd' AND rp.obj_id = db.dat_id))
+       )
+)
+SELECT datname, 1 AS all_tables, 0 AS table_id
+FROM __subscription_broad_visibility`, activeRolesSQL, subscriptionNames)
 }

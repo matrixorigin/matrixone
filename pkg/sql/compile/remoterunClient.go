@@ -83,14 +83,14 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	var scopeEncodeData, processEncodeData []byte
 	var withoutOutput, folded bool
 	remoteFragmentCounts, remoteExecutionID := remoteExecutionTopology(c, s)
-	var requiredVectorProtocol int64
-	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithVectorProtocol(
+	var requiredProtocol int64
+	scopeEncodeData, withoutOutput, processEncodeData, folded, err = prepareRemoteRunSendingDataWithProtocol(
 		c.sql,
 		s,
 		c.proc,
 		remoteFragmentCounts,
 		remoteExecutionID,
-		&requiredVectorProtocol,
+		&requiredProtocol,
 	)
 	if err != nil {
 		return nil, err
@@ -122,8 +122,8 @@ func (s *Scope) remoteRun(c *Compile) (sender *messageSenderOnClient, err error)
 	// before an old RPC callback is delivered; a closed captured sink then drops
 	// that stale callback instead of publishing it into the new attempt.
 	sender.warningSink = s.Proc.GetWarningSink()
-	if requiredVectorProtocol > 0 {
-		if err = sender.confirmProtocolOnStream(requiredVectorProtocol); err != nil {
+	if requiredProtocol > 0 {
+		if err = sender.confirmProtocolOnStream(requiredProtocol); err != nil {
 			return sender, err
 		}
 	}
@@ -250,16 +250,16 @@ func prepareRemoteRunSendingData(
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
-	return prepareRemoteRunSendingDataWithVectorProtocol(sqlStr, s, proc, remoteFragmentCounts, remoteExecutionID, nil)
+	return prepareRemoteRunSendingDataWithProtocol(sqlStr, s, proc, remoteFragmentCounts, remoteExecutionID, nil)
 }
 
-func prepareRemoteRunSendingDataWithVectorProtocol(
+func prepareRemoteRunSendingDataWithProtocol(
 	sqlStr string,
 	s *Scope,
 	proc *process.Process,
 	remoteFragmentCounts map[string]uint32,
 	remoteExecutionID uuid.UUID,
-	requiredVectorProtocol *int64,
+	requiredProtocol *int64,
 ) (scopeData []byte, withoutOutput bool, processData []byte, folded bool, err error) {
 	// The output dispatch executes on the initiating CN and is stripped from
 	// the encoded scope below. Validate its consumers before losing that edge.
@@ -288,7 +288,7 @@ func prepareRemoteRunSendingDataWithVectorProtocol(
 	}
 
 	// Encode the ScopeList which need to be sent.
-	if scopeData, err = encodeRemoteScopeWithVectorProtocol(encodedScope, proc, requiredVectorProtocol); err != nil {
+	if scopeData, err = encodeRemoteScopeWithProtocol(encodedScope, proc, requiredProtocol); err != nil {
 		return nil, false, nil, false, err
 	}
 
@@ -612,7 +612,7 @@ func (sender *messageSenderOnClient) requestStreamProtocols(message *pipeline.Me
 }
 
 // The capability query uses a different RPC connection. Confirm on the stream
-// that will carry the pipeline so a replacement old CN cannot run partition zero.
+// that will carry the pipeline so a replacement old CN cannot execute a newer contract.
 func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) error {
 	ctx, cancel := context.WithTimeout(sender.ctx, 5*time.Second)
 	defer cancel()
@@ -641,7 +641,7 @@ func (sender *messageSenderOnClient) confirmProtocolOnStream(minimum int64) erro
 			response.GetCmd() != pipeline.Method_PipelineProtocolCheck ||
 			response.GetSid() != pipeline.Status_Last ||
 			response.GetProtocolVersion() < minimum {
-			return moerr.NewNotSupportedNoCtx("remote pipeline stream does not support vector partition zero")
+			return moerr.NewNotSupportedNoCtxf("remote pipeline stream requires MORPC protocol version %d", minimum)
 		}
 		return nil
 	}
@@ -913,7 +913,7 @@ func (sender *messageSenderOnClient) waitingTheStopResponse(parentCtx context.Co
 		// The handshake owns an independent live context. A cancellation-shaped
 		// Send result therefore describes a closed transport, not successful
 		// pipeline cancellation, and must not be suppressible by RemoteRun.
-		if isScopeCancellationError(err) {
+		if process.IsPipelineCancellationError(err) {
 			return moerr.NewStreamClosedNoCtx()
 		}
 		return err

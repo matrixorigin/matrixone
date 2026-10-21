@@ -122,6 +122,9 @@ func (partition *Partition) Call(proc *process.Process) (vm.CallResult, error) {
 			if err != nil {
 				return result, err
 			}
+			if result.Status == vm.ExecYield {
+				return result, nil
+			}
 			if result.Batch == nil {
 				ctr.indexList = make([]int64, len(ctr.batchList))
 				ctr.status = eval

@@ -98,6 +98,27 @@ func applyRuleToWindowSpec(rule VisitPlanRule, window *plan.WindowSpec) error {
 	return nil
 }
 
+func applyDependentOperands(e *plan.Expr, apply func(*plan.Expr) (*plan.Expr, error)) (*plan.Expr, error) {
+	d := e.GetDependent()
+	for _, operands := range [][]*plan.Expr{d.Inputs, d.Lhs} {
+		for i, operand := range operands {
+			next, err := apply(operand)
+			if err != nil {
+				return nil, err
+			}
+			operands[i] = next
+		}
+	}
+	if d.Comparison != nil {
+		var err error
+		d.Comparison, err = apply(d.Comparison)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return e, nil
+}
+
 func NewGetParamRule() *GetParamRule {
 	return &GetParamRule{
 		params:   make(map[int]int),
@@ -194,6 +215,8 @@ func (rule *GetParamRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 
 func (rule *GetParamRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
@@ -301,6 +324,8 @@ func (rule *ResetParamOrderRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			exprImpl.F.Args[i], _ = rule.ApplyExpr(exprImpl.F.Args[i])
@@ -390,6 +415,8 @@ func (rule *decrementParamOrdinalRule) ApplyExpr(e *plan.Expr) (*plan.Expr, erro
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		for i := range exprImpl.F.Args {
 			var err error
@@ -2398,6 +2425,8 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		fallbackSource = nil
 		rewritten, err = rule.integerArgumentRuntimeSource(e)
 		rule.specialized = true
+	} else if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "timestampadd_second_interval" && len(fn.Args) == 1 {
+		rewritten, err = rule.rebindTimestampAddSecondInterval(e)
 	} else if hasSourceDependentIntegerArguments(e) {
 		fallbackSource = nil
 		rewritten, err = rule.rebindSourceDependentIntegerArguments(e)
@@ -2527,6 +2556,8 @@ func (rule *ResetParamRefRule) applyExprPreservingRoot(e *plan.Expr) (*plan.Expr
 		}
 	}
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_P:
 		return e, nil
 	case *plan.Expr_F:
@@ -2875,11 +2906,13 @@ func (rule *ResetParamRefRule) resolvePreparedRegexpStringDomainCheckModes(name 
 func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 	var err error
 	switch exprImpl := e.Expr.(type) {
+	case *plan.Expr_Dependent:
+		return applyDependentOperands(e, rule.ApplyExpr)
 	case *plan.Expr_F:
 		var originalTemporalExpr *Expr
 		if exprImpl.F.Func != nil {
 			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
-			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time":
+			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd":
 				originalTemporalExpr = DeepCopyExpr(e)
 			}
 		}
@@ -3135,7 +3168,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			var rewrittenArg *plan.Expr
 			numericTemporalArg := false
 			switch functionName {
-			case "to_interval_microsecond", "time", "from_unixtime", "sec_to_time":
+			case "to_interval_microsecond", "to_calendar_interval", "timestampadd_second_interval", "time", "from_unixtime", "sec_to_time":
 				numericTemporalArg = i == 0
 			case "date_add", "date_sub":
 				numericTemporalArg = i == 1 && len(originalArgs) == 3 &&
@@ -3152,7 +3185,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 							param.SourceType.Oid == types.T_float64)
 				}
 			}
-			if nestedPreparedBitwiseSource != nil {
+			if functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i]) {
+				var known bool
+				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
+				if err != nil {
+					return nil, err
+				}
+				if !known {
+					rewrittenArg, err = rule.ApplyExpr(unwrapPreparedImplicitCast(arg, true))
+					if err != nil {
+						return nil, err
+					}
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
+			} else if nestedPreparedBitwiseSource != nil {
 				var applyErr error
 				rewrittenArg, applyErr = rule.ApplyExpr(DeepCopyExpr(nestedPreparedBitwiseSource))
 				if applyErr != nil {
@@ -3890,6 +3938,26 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		}
 		return rewritten, nil
 	case *plan.Expr_List:
+		// A raw window interval keeps its original string unit until operator
+		// Prepare. Specialize its source domain without normalizing its value:
+		// cached plan restoration must continue to interpret the next value in
+		// the original unit (e.g. seconds, not already-scaled microseconds).
+		if e.Typ.Id == int32(types.T_interval) && exprImpl.List != nil && len(exprImpl.List.List) == 2 &&
+			exprImpl.List.List[1].GetLit() != nil && types.T(exprImpl.List.List[1].Typ.Id).IsMySQLString() {
+			if param := exprImpl.List.List[0].GetP(); param != nil {
+				pos := int(param.Pos)
+				if source, handled, sourceErr := rule.preparedRuntimeSourceExpr(pos, true); sourceErr != nil {
+					return nil, sourceErr
+				} else if handled {
+					exprImpl.List.List[0] = source
+					return e, nil
+				}
+				if pos >= 0 && pos < len(rule.params) && rule.params[pos] != nil {
+					exprImpl.List.List[0] = DeepCopyExpr(rule.params[pos])
+					return e, nil
+				}
+			}
+		}
 		dependent := false
 		for i, arg := range exprImpl.List.List {
 			exprImpl.List.List[i], err = rule.ApplyExpr(arg)

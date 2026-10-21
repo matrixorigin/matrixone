@@ -20,7 +20,9 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"io"
 	"math"
 	"os"
 	"path/filepath"
@@ -3861,6 +3863,21 @@ func initDateStringToDateTestCase() []tcTemp {
 				[]types.Date{t.ToDate()},
 				[]bool{false}),
 		},
+		{
+			info: "invalid rows do not abort later dates",
+			inputs: []FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(),
+				[]string{"2026-02-30", "2026-13-01", "not a date", "", " ", "ignored", "2024-02-29"},
+				[]bool{false, false, false, false, false, true, false})},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{0, 0, 0, 0, 0, 0, types.DateFromCalendar(2024, 2, 29)},
+				[]bool{true, true, true, true, true, true, false}),
+		},
+		{
+			info: "invalid constant",
+			inputs: []FunctionTestInput{NewFunctionTestConstInput(types.T_char.ToType(),
+				[]string{"not a date"}, nil)},
+			expect: NewFunctionTestResult(types.T_date.ToType(), false, []types.Date{0}, []bool{true}),
+		},
 	}
 }
 
@@ -3870,10 +3887,24 @@ func TestDateStringToDate(t *testing.T) {
 	// do the test work.
 	proc := testutil.NewProcess(t)
 	for _, tc := range testCases {
-		fcTC := NewFunctionTestCase(proc,
-			tc.inputs, tc.expect, DateStringToDate)
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+		t.Run(tc.info, func(t *testing.T) {
+			fcTC := NewFunctionTestCase(proc, tc.inputs, tc.expect, DateStringToDate)
+			s, info := fcTC.RunAndFree()
+			require.True(t, s, info)
+		})
+	}
+	for _, sqlMode := range []string{"", "NO_ZERO_DATE"} {
+		t.Run("zero and masked rows/"+sqlMode, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			proc.SetResolveVariableFunc(func(string, bool, bool) (interface{}, error) { return sqlMode, nil })
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"bad", "0000-00-00", "2024-02-29"}, nil),
+			}, NewFunctionTestResult(types.T_date.ToType(), false,
+				[]types.Date{0, types.ZeroDate, types.DateFromCalendar(2024, 2, 29)}, []bool{true, sqlMode != "", false}),
+				DateStringToDate).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, true}})
+			ok, info := fc.RunAndFree()
+			require.True(t, ok, info)
+		})
 	}
 }
 
@@ -4386,8 +4417,8 @@ func TestJsonUnquotePreservesPayloadBoundaryQuotes(t *testing.T) {
 
 func TestLoadFile(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc(t)
-	ctx := context.Background()
+	proc := newSQLFileAccessTestProc(t)
+	ctx := proc.Ctx
 	filePath1 := filepath.Join(dir, "test1")
 	filePath2 := filepath.Join(dir, "test2")
 	writeFile := func(filePath string, data []byte) {
@@ -4440,8 +4471,307 @@ func TestLoadFile(t *testing.T) {
 	}
 }
 
+func TestReadFromParsedPathOwnedService(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owned.txt")
+	require.NoError(t, os.WriteFile(path, []byte("owned content"), 0o600))
+	proc := newSQLFileAccessTestProc(t)
+	parsed, err := fileservice.ParsePath(path)
+	require.NoError(t, err)
+	r, err := readFromParsedPath(proc.Ctx, path, parsed, proc.GetFileService(), 0, -1)
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = r.Close() })
+	data, err := io.ReadAll(r)
+	require.NoError(t, err)
+	require.Equal(t, "owned content", string(data))
+	require.NoError(t, r.Close())
+	require.NoError(t, r.Close())
+}
+
+type borrowedSQLReadService struct {
+	*fileservice.MemoryFS
+	readErr, closeErr error
+	closes            int
+	readerCloses      int
+}
+
+func (f *borrowedSQLReadService) Close(context.Context) { f.closes++ }
+
+func (f *borrowedSQLReadService) Read(ctx context.Context, v *fileservice.IOVector) error {
+	if err := f.MemoryFS.Read(ctx, v); err != nil {
+		return err
+	}
+	for _, entry := range v.Entries {
+		if entry.ReadCloserForRead != nil && *entry.ReadCloserForRead != nil {
+			*entry.ReadCloserForRead = &borrowedSQLReadCloser{ReadCloser: *entry.ReadCloserForRead, service: f}
+		}
+	}
+	return nil
+}
+
+type borrowedSQLReadCloser struct {
+	io.ReadCloser
+	service *borrowedSQLReadService
+}
+
+func (r *borrowedSQLReadCloser) Read(p []byte) (int, error) {
+	if r.service.readErr != nil {
+		return 0, r.service.readErr
+	}
+	return r.ReadCloser.Read(p)
+}
+
+func (r *borrowedSQLReadCloser) Close() error {
+	r.service.readerCloses++
+	return errors.Join(r.ReadCloser.Close(), r.service.closeErr)
+}
+
+func TestLoadFileBorrowedServiceLifetime(t *testing.T) {
+	readErr, closeErr := errors.New("read failed"), errors.New("reader close failed")
+	for _, tc := range []struct {
+		name                   string
+		readErr, closeErr, err error
+	}{
+		{name: "success"},
+		{name: "close error", closeErr: closeErr, err: closeErr},
+		{name: "read error", readErr: readErr, err: readErr},
+		{name: "read error takes precedence", readErr: readErr, closeErr: closeErr, err: readErr},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			memory, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+			require.NoError(t, err)
+			t.Cleanup(func() { memory.Close(t.Context()) })
+			service := &borrowedSQLReadService{MemoryFS: memory, readErr: tc.readErr, closeErr: tc.closeErr}
+			proc := testutil.NewProcess(t, testutil.WithFileService(service))
+			proc.Base.SessionInfo.Account = "sys"
+			proc.Base.SessionInfo.Role = "moadmin"
+			require.NoError(t, memory.Write(proc.Ctx, fileservice.IOVector{FilePath: "owned.txt", Entries: []fileservice.IOEntry{{Data: []byte("owned"), Size: 5}}}))
+			data, err := readLoadFileContents("shared:owned.txt", proc)
+			require.ErrorIs(t, err, tc.err)
+			if tc.err == nil {
+				require.Equal(t, "owned", string(data))
+			} else {
+				require.Nil(t, data)
+			}
+			require.Equal(t, 1, service.readerCloses)
+			require.Zero(t, service.closes, "load_file must close its reader, not the borrowed service")
+			service.readErr, service.closeErr = nil, nil
+			data, err = readLoadFileContents("shared:owned.txt", proc)
+			require.NoError(t, err)
+			require.Equal(t, "owned", string(data))
+			require.Zero(t, service.closes)
+		})
+	}
+}
+
+func TestReadLoadFileContentsHonorsContext(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "owned.txt")
+	require.NoError(t, os.WriteFile(path, []byte("owned"), 0o600))
+	proc := newSQLFileAccessTestProc(t)
+	ctx, cancel := context.WithCancel(proc.Ctx)
+	cancel()
+	proc.Ctx = ctx
+
+	r, err := readLoadFileContents(path, proc)
+	require.Nil(t, r)
+	require.ErrorIs(t, err, context.Canceled)
+}
+
+func TestDatalinkFileFunctionsSkipSelectedRows(t *testing.T) {
+	proc := newSQLFileAccessTestProc(t)
+	dir := t.TempDir()
+	input := filepath.Join(dir, "input.txt")
+	output := filepath.Join(dir, "output.txt")
+	require.NoError(t, os.WriteFile(input, []byte("selected content"), 0o600))
+
+	// The masked row is intentionally an invalid local target.  Selection must
+	// suppress both stage resolution and authorization for that row while the
+	// live row still follows the normal read path.
+	loadTextCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{NewFunctionTestInput(types.T_varchar.ToType(), []string{
+			filepath.Join(dir, "masked.txt"),
+			"file://" + input,
+		}, nil)},
+		NewFunctionTestResult(types.T_text.ToType(), false,
+			[]string{"", "selected content"}, []bool{true, false}),
+		LoadText,
+	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	s, info := loadTextCase.RunAndFree()
+	require.True(t, s, info)
+
+	// The same mask must prevent a write side effect. The second row is a
+	// valid owned target and proves that the function still writes selected-in
+	// rows and reports their byte count after Close succeeds.
+	writeCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{
+				filepath.Join(dir, "masked-output.txt"),
+				"file://" + output,
+			}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"masked", "written"}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false,
+			[]int64{0, int64(len("written"))}, []bool{true, false}),
+		WriteFileDatalink,
+	).WithSelectList(&FunctionSelectList{AnyNull: true, SelectList: []bool{false, true}})
+	s, info = writeCase.RunAndFree()
+	require.True(t, s, info)
+	data, err := os.ReadFile(output)
+	require.NoError(t, err)
+	require.Equal(t, "written", string(data))
+	_, err = os.Stat(filepath.Join(dir, "masked-output.txt"))
+	require.ErrorIs(t, err, os.ErrNotExist)
+}
+
+func TestWriteFileDatalinkSkipsNullAndZeroRows(t *testing.T) {
+	proc := newSQLFileAccessTestProc(t)
+	dir := t.TempDir()
+
+	t.Run("NULL content does not admit or create the target", func(t *testing.T) {
+		output := filepath.Join(dir, "null-content.txt")
+		tc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{output}, nil),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"ignored"}, []bool{true}),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{0}, []bool{true}),
+			WriteFileDatalink,
+		)
+		s, info := tc.RunAndFree()
+		require.True(t, s, info)
+		_, err := os.Stat(output)
+		require.ErrorIs(t, err, os.ErrNotExist)
+	})
+
+	t.Run("zero rows do not touch a target", func(t *testing.T) {
+		tc := NewFunctionTestCase(
+			proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{}, []bool{}),
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{}, []bool{}),
+			},
+			NewFunctionTestResult(types.T_int64.ToType(), false, []int64{}, []bool{}),
+			WriteFileDatalink,
+		)
+		s, info := tc.RunAndFree()
+		require.True(t, s, info)
+	})
+}
+
+func TestWriteFileDatalinkCancellationDoesNotReportSuccess(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	memory, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	service := &blockingSQLFileService{MemoryFS: memory, started: make(chan struct{})}
+	proc := testutil.NewProcess(t, testutil.WithFileService(service))
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
+	proc.ReplaceTopCtx(ctx)
+	proc.BuildPipelineContext(ctx)
+
+	tc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"file://shared:80/cancelled.txt"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"must not persist"}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
+		WriteFileDatalink,
+	)
+	defer tc.Free()
+	require.NoError(t, tc.result.PreExtendAndReset(tc.fnLength))
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- WriteFileDatalink(tc.parameters, tc.result, proc, tc.fnLength, nil)
+	}()
+	select {
+	case <-service.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SQL file writer did not reach the in-flight service write")
+	}
+	cancel()
+	select {
+	case err = <-errCh:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SQL file writer did not terminate after cancellation")
+	}
+	require.Error(t, err)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Equal(t, int32(1), service.writes.Load())
+	require.Zero(t, vector.GetFixedAtWithTypeCheck[int64](tc.result.GetResultVector(), 0),
+		"cancellation must not report a successful byte count")
+	_, err = memory.StatFile(context.Background(), "80/cancelled.txt")
+	require.Error(t, err, "cancellation must not leave a persisted file")
+}
+
+type blockingSQLFileService struct {
+	*fileservice.MemoryFS
+	started chan struct{}
+	writes  atomic.Int32
+}
+
+func (f *blockingSQLFileService) Write(ctx context.Context, vector fileservice.IOVector) error {
+	f.writes.Add(1)
+	close(f.started)
+	<-ctx.Done()
+	return ctx.Err()
+}
+
+type completionFailingSQLFileService struct {
+	*fileservice.MemoryFS
+	err    error
+	writes atomic.Int32
+}
+
+func (f *completionFailingSQLFileService) Write(ctx context.Context, vector fileservice.IOVector) error {
+	f.writes.Add(1)
+	for _, entry := range vector.Entries {
+		if entry.ReaderForWrite == nil {
+			continue
+		}
+		if _, err := io.Copy(io.Discard, entry.ReaderForWrite); err != nil {
+			return err
+		}
+	}
+	return f.err
+}
+
+func TestWriteFileDatalinkCompletionFailureIsNotReportedAsSuccess(t *testing.T) {
+	completionErr := errors.New("completion failed")
+	memory, err := fileservice.NewMemoryFS("shared", fileservice.DisabledCacheConfig, nil)
+	require.NoError(t, err)
+	service := &completionFailingSQLFileService{MemoryFS: memory, err: completionErr}
+	proc := testutil.NewProcess(t, testutil.WithFileService(service))
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
+
+	fc := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			// The numeric port keeps this a valid file URL while ParseDatalink's
+			// host+path representation still selects the named "shared" service.
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"file://shared:80/completion.txt"}, nil),
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"must not persist"}, nil),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, nil, nil),
+		WriteFileDatalink,
+	)
+	defer fc.Free()
+	require.NoError(t, fc.result.PreExtendAndReset(fc.fnLength))
+	err = WriteFileDatalink(fc.parameters, fc.result, proc, fc.fnLength, nil)
+	require.ErrorIs(t, err, completionErr)
+	require.Equal(t, int32(1), service.writes.Load(), "the SQL path must reach the configured service")
+	require.Zero(t, vector.GetFixedAtWithTypeCheck[int64](fc.result.GetResultVector(), 0),
+		"a completion failure must not report the content length")
+	_, err = memory.StatFile(context.Background(), "80/completion.txt")
+	require.Error(t, err, "save_file must not report success or leave output after completion failure")
+}
+
 func TestLoadFileRejectsEmptyPath(t *testing.T) {
-	proc := testutil.NewProc(t)
+	proc := newSQLFileAccessTestProc(t)
 	_, err := readLoadFileContents("", proc)
 	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFileNotFound), "got %v", err)
 }
@@ -4488,8 +4818,8 @@ func requireLoadFileResult(t *testing.T, result *vector.Vector, values []string,
 
 func TestLoadFileCardinalityAndSelection(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc(t)
-	ctx := context.Background()
+	proc := newSQLFileAccessTestProc(t)
+	ctx := proc.Ctx
 	valuePath := filepath.Join(dir, "value")
 	largeValuePath := filepath.Join(dir, "large-value")
 	emptyPath := filepath.Join(dir, "empty")
@@ -4576,7 +4906,7 @@ func TestLoadFileCardinalityAndSelection(t *testing.T) {
 
 func TestLoadFileDatalink(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc(t)
+	proc := newSQLFileAccessTestProc(t)
 	filePath := filepath.Join(dir, "test")
 
 	err := os.WriteFile(filePath, []byte("12345678"), 0o600)
@@ -4607,7 +4937,7 @@ func TestLoadFileDatalink(t *testing.T) {
 
 func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc(t)
+	proc := newSQLFileAccessTestProc(t)
 	emptyPath := filepath.Join(dir, "empty")
 	valuePath := filepath.Join(dir, "value")
 	largeValuePath := filepath.Join(dir, "large-value")
@@ -4694,7 +5024,7 @@ func TestLoadFileDatalinkCardinalityAndSelection(t *testing.T) {
 
 func TestLoadFileDatalinkErrors(t *testing.T) {
 	dir := t.TempDir()
-	proc := testutil.NewProc(t)
+	proc := newSQLFileAccessTestProc(t)
 	filePath := filepath.Join(dir, "test")
 
 	err := os.WriteFile(filePath, []byte("1234"), 0o600)
@@ -5194,26 +5524,31 @@ func initToTimestampCase() []tcTemp {
 	}
 }
 
-func TestToTimeStamp(t *testing.T) {
-	testCases := initToTimestampCase()
-
-	// do the test work.
+// Released stored plans can still request the original TIMESTAMP vector.
+func TestUnaryTimestampLegacyResultVector(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	for _, tc := range testCases {
-		var fcTC FunctionTestCase
-		switch tc.typ {
+	for _, tc := range initToTimestampCase() {
+		var oid int32
+		switch tc.inputs[0].typ.Oid {
 		case types.T_date:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateToTimestamp)
+			oid = 0
 		case types.T_datetime:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DatetimeToTimestamp)
+			oid = 1
+		case types.T_timestamp:
+			oid = 2
 		case types.T_varchar:
-			fcTC = NewFunctionTestCase(proc,
-				tc.inputs, tc.expect, DateStringToTimestamp)
+			oid = 3
+		case types.T_char:
+			oid = 4
+		default:
+			t.Fatalf("unexpected legacy TIMESTAMP input %s", tc.inputs[0].typ)
 		}
-		s, info := fcTC.RunAndFree()
-		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
+		overload, err := GetFunctionById(proc.Ctx, EncodeOverloadID(TIMESTAMP, oid))
+		require.NoError(t, err)
+		exec, _, _, _ := overload.GetExecuteMethod()
+		fc := NewFunctionTestCase(proc, tc.inputs, tc.expect, exec)
+		ok, info := fc.RunAndFree()
+		require.True(t, ok, info)
 	}
 }
 
@@ -6447,6 +6782,29 @@ func TestUnhex(t *testing.T) {
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+// Issue #30230: MySQL reports warning 1411 (ER_WRONG_VALUE_FOR_TYPE) when
+// UNHEX receives malformed hexadecimal input, while still returning NULL.
+func TestUnhexWarningForInvalidHex(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	warnings := &numericWarningSession{}
+	proc.WarningSink = warnings
+
+	caseData := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"zz", "4d"}, []bool{false, false}),
+		},
+		NewFunctionTestResult(types.T_blob.ToType(), false,
+			[]string{"", "M"}, []bool{true, false}),
+		Unhex,
+	)
+	succeed, info := caseData.RunAndFree()
+	require.True(t, succeed, info)
+	require.Len(t, warnings.warnings, 1)
+	require.Equal(t, uint16(moerr.ER_WRONG_VALUE_FOR_TYPE), warnings.warnings[0].code)
+	require.Equal(t, "Incorrect string value: 'zz' for function unhex", warnings.warnings[0].msg)
 }
 
 // ToBase64
@@ -8898,6 +9256,36 @@ func TestMicrosecond(t *testing.T) {
 		s, info := fcTC.RunAndFree()
 		require.True(t, s, fmt.Sprintf("case is '%s', err info is '%s'", tc.info, info))
 	}
+}
+
+// Issue #30239: MySQL reports the nonnegative fractional part (0-999999)
+// even for negative TIME values; Time.MicroSec keeps the raw int64 sign
+// and must not leak it into the MICROSECOND result.
+func TestMicrosecondNegativeTime(t *testing.T) {
+	proc := testutil.NewProcess(t)
+
+	// -00:00:01.123456 stored as raw microseconds
+	timeCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_time.ToType(), []types.Time{types.Time(-1123456)}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{123456}, []bool{false}),
+		TimeToMicrosecond,
+	)
+	succeed, info := timeCase.RunAndFree()
+	require.True(t, succeed, info)
+
+	stringCase := NewFunctionTestCase(
+		proc,
+		[]FunctionTestInput{
+			NewFunctionTestInput(types.T_varchar.ToType(), []string{"-00:00:01.123456"}, []bool{false}),
+		},
+		NewFunctionTestResult(types.T_int64.ToType(), false, []int64{123456}, []bool{false}),
+		StringToMicrosecond,
+	)
+	succeed, info = stringCase.RunAndFree()
+	require.True(t, succeed, info)
 }
 
 // TestStringToMicrosecond tests StringToMicrosecond function with string inputs
@@ -13593,4 +13981,22 @@ func TestAppendGeometryStandardWKBErrorAtomicity(t *testing.T) {
 			require.Equal(t, original, backing, "including spare capacity")
 		})
 	}
+}
+
+func TestCheckAsyncDatalinkSourceEligibility(t *testing.T) {
+	proc := newSQLFileAccessTestProc(t)
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_datalink.ToType(), []string{"file:///owned/not-opened", "://invalid", ""}, []bool{false, false, true}),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{false, false, true}, nil),
+	}, NewFunctionTestResult(types.T_bool.ToType(), false, []bool{true, true, true}, nil), CheckAsyncDatalinkSource)
+	defer fc.Free()
+	ok, info := fc.Run()
+	require.True(t, ok, info)
+	denied := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestInput(types.T_datalink.ToType(), []string{"file:///owned/not-opened"}, nil),
+		NewFunctionTestInput(types.T_bool.ToType(), []bool{true}, nil),
+	}, NewFunctionTestResult(types.T_bool.ToType(), false, nil, nil), CheckAsyncDatalinkSource)
+	defer denied.Free()
+	require.NoError(t, denied.result.PreExtendAndReset(denied.fnLength))
+	require.ErrorContains(t, denied.fn(denied.parameters, denied.result, proc, denied.fnLength, nil), "asynchronous indexes require remote Datalink sources")
 }

@@ -797,6 +797,7 @@ func TestSession_Migrate(t *testing.T) {
 			TenantID: GetSysTenantId(),
 		}
 		session.ruleCache = map[string]string{}
+		seedRewriteRuleCacheProofForTest(session)
 		session.txnCompileCtx.execCtx = &ExecCtx{reqCtx: ctx, proc: testutil.NewProc(t), ses: session}
 		proto.ses = session
 		session.setRoutineManager(rm)

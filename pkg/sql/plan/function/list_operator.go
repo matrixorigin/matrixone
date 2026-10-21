@@ -2303,35 +2303,14 @@ var supportedOperators = []FuncNew{
 		layout:     BINARY_ARITHMETIC_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
-				if t1, t2, ok := integerDivBitTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
+				if targets, ok := decimalIntegerDivUnsignedTypes(inputs); ok {
+					if inputs[0].Eq(targets[0]) && inputs[1].Eq(targets[1]) {
+						return newCheckResultWithSuccess(DecimalIntegerDivUnsignedOverload)
 					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				// Keep same-domain operands unchanged where possible.
-				if integerDivOperatorSupports(inputs[0], inputs[1]) {
-					return newCheckResultWithSuccess(0)
-				}
-				if t1, t2, ok := integerDivUnsignedMixedTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				if t1, t2, ok := integerDivExactTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				// Then check with type casting
-				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
-				if has && integerDivOperatorSupports(t1, t2) {
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
+					return newCheckResultWithCast(DecimalIntegerDivUnsignedOverload, targets)
 				}
 			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			return legacyIntegerDivCheck(inputs)
 		},
 
 		Overloads: []overload{
@@ -2346,6 +2325,11 @@ var supportedOperators = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return integerDivFn
 				},
+			},
+			{
+				overloadId: DecimalIntegerDivUnsignedOverload,
+				retType:    func([]types.Type) types.Type { return types.T_uint64.ToType() },
+				newOp:      func() executeLogicOfOverload { return decimalIntegerDivUnsignedFn },
 			},
 		},
 	},
@@ -3896,7 +3880,7 @@ var supportedOperators = []FuncNew{
 
 func isStrictAssignmentCastTarget(target types.T) bool {
 	switch target {
-	case types.T_char, types.T_varchar, types.T_blob, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
+	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text, types.T_date, types.T_time, types.T_datetime, types.T_timestamp, types.T_year,
 		types.T_int32, types.T_uint32:
 		return true
 	default:

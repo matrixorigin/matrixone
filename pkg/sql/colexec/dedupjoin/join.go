@@ -149,6 +149,10 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 	if len(dedupJoin.UpdateColIdxList) != len(dedupJoin.UpdateColExprList) {
 		return moerr.NewInternalError(proc.Ctx, "dedup join update column/expression count mismatch")
 	}
+	if dedupJoin.UpdateExpressions != nil && !dedupJoin.EmitActionRows {
+		return moerr.NewInternalError(proc.Ctx, "suspending ODKU requires an action cursor")
+	}
+	dedupJoin.ctr.updateExpressions = dedupJoin.UpdateExpressions
 	for _, pos := range dedupJoin.UpdateColIdxList {
 		if pos < 0 || int(pos) >= len(dedupJoin.LeftTypes) {
 			return moerr.NewInternalError(proc.Ctx, "dedup join update column out of range")
@@ -234,7 +238,7 @@ func (dedupJoin *DedupJoin) Prepare(proc *process.Process) (err error) {
 	dedupJoin.ctr.autoSpill = dedupJoin.SpillThreshold == 0
 	dedupJoin.ctr.spillThreshold = colexec.ResolveSpillThreshold(dedupJoin.SpillThreshold)
 	newEvalVectors := len(dedupJoin.ctr.vecs) == 0
-	newUpdateExecs := len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0
+	newUpdateExecs := dedupJoin.UpdateExpressions == nil && len(dedupJoin.ctr.exprExecs) == 0 && len(dedupJoin.UpdateColExprList) > 0
 	var evalExecs, updateExecs []colexec.ExpressionExecutor
 	if newEvalVectors {
 		evalExecs, err = hashbuild.NewExpressionExecutors(
@@ -315,6 +319,9 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
+				if result.Status == vm.ExecYield {
+					return result, nil
+				}
 				bat = result.Batch
 				if bat == nil {
 					ctr.state = Finalize
@@ -338,6 +345,9 @@ func (dedupJoin *DedupJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				err := ctr.finalize(dedupJoin, proc)
 				if err != nil {
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
+				}
+				if ctr.updateSuspended {
+					return vm.CallResult{Status: vm.ExecYield}, nil
 				}
 				if ctr.state == End {
 					continue
@@ -442,6 +452,7 @@ func (dedupJoin *DedupJoin) build(analyzer process.Analyzer, proc *process.Proce
 				DedupBuildKeepLast:        dedupJoin.DedupBuildKeepLast,
 				DedupColName:              dedupJoin.DedupColName,
 				DedupColTypes:             dedupJoin.DedupColTypes,
+				DedupKeyExprs:             dedupJoin.DedupKeyExprs,
 				DelColIdx:                 dedupJoin.DelColIdx,
 				DedupDeleteMarkerColIdx:   dedupJoin.DedupDeleteMarkerColIdx,
 				DedupDeleteKeepColIdxList: dedupJoin.DedupDeleteKeepColIdxList,
@@ -601,8 +612,10 @@ func (ctr *container) finalizeODKUActionRows(
 		ctr.finalizeDone = true
 		return nil
 	}
-	if err := ap.resetRBat(); err != nil {
-		return err
+	if !ctr.updateSuspended {
+		if err := ap.resetRBat(); err != nil {
+			return err
+		}
 	}
 
 	zeroSels := ctr.mp.GetSels(0)
@@ -700,6 +713,9 @@ func (ctr *container) finalizeODKUActionRows(
 				if err != nil {
 					return err
 				}
+				if ctr.updateSuspended {
+					return nil
+				}
 				ctr.finalizeCurrentVecs = snapshotVectors(
 					ctr.finalizeCurrentVecs, ctr.joinBat1, ap.UpdateColIdxList)
 				ctr.finalizeLogicalAffect += odkuAffectedRows(changed, ap.CountFoundRows)
@@ -723,6 +739,9 @@ func (ctr *container) finalizeODKUActionRows(
 		})
 		if err != nil {
 			return err
+		}
+		if ctr.updateSuspended {
+			return nil
 		}
 		if ctr.finalizeActionIdx == len(sels) {
 			ctr.finalizeActionActive = false
@@ -1257,12 +1276,29 @@ func (ctr *container) applyUpdateExpressions(
 		ctr.actionImageBeforeVecs = snapshotVectors(ctr.actionImageBeforeVecs, ctr.joinBat1, updateCols)
 		actionImageBefore = ctr.actionImageBeforeVecs
 	}
-	for i, exprExec := range ctr.exprExecs {
-		vec, err := exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
+	if ctr.updateExpressions != nil {
+		values, err := ctr.updateExpressions(proc, ctr.joinBat1, ctr.joinBat2)
 		if err != nil {
 			return false, err
 		}
-		ctr.joinBat1.Vecs[updateCols[i]] = vec
+		ctr.updateSuspended = values == nil
+		if ctr.updateSuspended {
+			return false, nil
+		}
+		if len(values) != len(updateCols) {
+			return false, moerr.NewInternalError(proc.Ctx, "ODKU assignment result count mismatch")
+		}
+		for i, vec := range values {
+			ctr.joinBat1.Vecs[updateCols[i]] = vec
+		}
+	} else {
+		for i, exprExec := range ctr.exprExecs {
+			vec, err := exprExec.Eval(proc, []*batch.Batch{ctr.joinBat1, ctr.joinBat2}, nil)
+			if err != nil {
+				return false, err
+			}
+			ctr.joinBat1.Vecs[updateCols[i]] = vec
+		}
 	}
 	// A column expression may return a vector owned by joinBat2 (VALUES(...)),
 	// and a function executor may reuse its result on the next Eval. Materialize
@@ -1734,8 +1770,10 @@ func (ctr *container) probeODKUActionRows(
 	proc *process.Process,
 	result *vm.CallResult,
 ) error {
-	if err := ap.resetRBat(); err != nil {
-		return err
+	if !ctr.updateSuspended {
+		if err := ap.resetRBat(); err != nil {
+			return err
+		}
 	}
 	if ctr.probeBat == nil {
 		if err := ctr.evalJoinCondition(bat, proc); err != nil {
@@ -1803,6 +1841,9 @@ func (ctr *container) probeODKUActionRows(
 					if err != nil {
 						return err
 					}
+					if ctr.updateSuspended {
+						return nil
+					}
 					ctr.probeCurrentVecs = snapshotVectors(
 						ctr.probeCurrentVecs, ctr.joinBat1, ap.UpdateColIdxList)
 					ctr.probeLogicalAffected += odkuAffectedRows(changed, ap.CountFoundRows)
@@ -1829,6 +1870,10 @@ func (ctr *container) probeODKUActionRows(
 			})
 			if err != nil {
 				return err
+			}
+			if ctr.updateSuspended {
+				*result = vm.CallResult{Status: vm.ExecYield}
+				return nil
 			}
 			if ctr.probeActionIdx == ctr.actionCount(group) {
 				ctr.matched.Add(group - 1)
@@ -1878,7 +1923,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 	var duplicateWarnings process.WarningAccumulator
 	duplicateWarnings.SetWarningRetentionForProcess(proc)
 	defer duplicateWarnings.Reset()
-	recordDuplicateWarning := func(row int) {
+	recordDuplicateWarning := func(row int, group uint64) {
 		if !warningsEnabled {
 			return
 		}
@@ -1890,8 +1935,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 			duplicateWarnings.AddCount()
 			return
 		}
-		rowStr, err := colexec.FormatDedupEntry(
-			ctr.vecs[0], row, ap.DedupColName, ap.DedupColTypes)
+		rowStr, err := ctr.formatDuplicateEntry(ap, proc, row, group)
 		if err != nil {
 			// A rendering failure must not turn INSERT/UPDATE IGNORE back into a
 			// statement error.  The duplicate row is still filtered exactly as
@@ -1942,8 +1986,7 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 				if !isPessimistic {
 					continue
 				}
-				rowStr, err := colexec.FormatDedupEntry(
-					ctr.vecs[0], i+k, ap.DedupColName, ap.DedupColTypes)
+				rowStr, err := ctr.formatDuplicateEntry(ap, proc, i+k, vals[k])
 				if err != nil {
 					return err
 				}
@@ -1959,12 +2002,12 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					for _, sel := range sels {
 						ctr.matched.Add(uint64(sel))
 					}
-					recordDuplicateWarning(i + k)
+					recordDuplicateWarning(i+k, vals[k])
 				} else {
 					// Compact unique maps omit GroupSels; in that representation
 					// group g still maps directly to build row g-1.
 					ctr.matched.Add(vals[k] - 1)
-					recordDuplicateWarning(i + k)
+					recordDuplicateWarning(i+k, vals[k])
 				}
 
 			case plan.Node_UPDATE:
@@ -2104,4 +2147,46 @@ func (dedupJoin *DedupJoin) resetRBat() error {
 		}
 	}
 	return nil
+}
+
+func (ctr *container) formatDuplicateEntry(ap *DedupJoin, proc *process.Process, probeRow int, group uint64) (string, error) {
+	if len(ap.DedupKeyExprs) == 0 {
+		return colexec.FormatDedupEntry(ctr.vecs[0], probeRow, ap.DedupColName, ap.DedupColTypes)
+	}
+	render := func(row int) (string, error) {
+		return colexec.FormatDedupKeyFromRow(proc, ap.DedupKeyExprs,
+			ctr.batches[row/colexec.DefaultBatchSize], row%colexec.DefaultBatchSize)
+	}
+	if sels := ctr.mp.GetSels(group); len(sels) > 0 {
+		return render(int(sels[0]))
+	}
+	if ctr.mp.GetGroupCount() == uint64(ctr.batchRowCount) {
+		return render(int(group - 1))
+	}
+	// Compact maps omit row selections. NULL keys do not get a bucket, so a
+	// bucket id is not a row index when NULLs precede a conflicting candidate.
+	// Locate its retained physical key only on this terminal diagnostic path;
+	// ordinary successful builds keep their existing memory footprint.
+	for _, bat := range ctr.batches {
+		entry, found, err := findDuplicateEntry(ap, proc, bat, ctr.vecs[0].GetBytesAt(probeRow))
+		if err != nil || found {
+			return entry, err
+		}
+	}
+	return "", moerr.NewInternalError(proc.Ctx, "missing duplicate diagnostic row")
+}
+
+func findDuplicateEntry(ap *DedupJoin, proc *process.Process, bat *batch.Batch, key []byte) (string, bool, error) {
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, ap.Conditions[1][0], []*batch.Batch{bat})
+	if err != nil {
+		return "", false, err
+	}
+	defer free()
+	for row := 0; row < bat.RowCount(); row++ {
+		if !vec.IsNull(uint64(row)) && bytes.Equal(vec.GetBytesAt(row), key) {
+			entry, err := colexec.FormatDedupKeyFromRow(proc, ap.DedupKeyExprs, bat, row)
+			return entry, true, err
+		}
+	}
+	return "", false, nil
 }

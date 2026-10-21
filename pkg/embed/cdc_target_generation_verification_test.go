@@ -75,7 +75,7 @@ func runCDCGenerationContract(t *testing.T, cnCount int, fn func(Cluster)) {
 		require.NoError(t, state.CloseIfActive())
 	})
 	state.Run(t, func() (Cluster, error) {
-		return startBasicCluster(cnCount, basicClusterSetupTracer(t, cnCount), adjustCDCGenerationContractService)
+		return startBasicCluster(cnCount, basicClusterSetupTracer(t, cnCount))
 	}, func(cluster Cluster) {
 		for i := 0; i < cnCount; i++ {
 			cn, err := cluster.GetCNService(i)
@@ -84,16 +84,6 @@ func runCDCGenerationContract(t *testing.T, cnCount int, fn func(Cluster)) {
 		}
 		fn(cluster)
 	})
-}
-
-// The test covers task transitions, not the production polling cadence.
-// Configure before CN construction; leave heartbeat and capacity unchanged.
-func adjustCDCGenerationContractService(service ServiceOperator) {
-	if service.ServiceType() == metadata.ServiceType_CN {
-		service.Adjust(func(config *ServiceConfig) {
-			config.CN.TaskRunner.FetchInterval.Duration = time.Second
-		})
-	}
 }
 
 func TestCDCGenerationContractFetchConfiguration(t *testing.T) {
@@ -110,7 +100,7 @@ func TestCDCGenerationContractFetchConfiguration(t *testing.T) {
 			if kind == metadata.ServiceType_CN {
 				expected.FetchInterval.Duration = time.Second
 			}
-			adjustCDCGenerationContractService(service)
+			adjustTestingClusterTiming(service)
 			require.Equal(t, expected, service.GetServiceConfig().CN.TaskRunner)
 		})
 	}
@@ -204,11 +194,22 @@ func testCDCTenantCatalogGuardBlocksOtherCNDrop(t *testing.T, cluster Cluster) {
 	defer root.Close()
 	require.NoError(t, execSQL(ctx, root, "CREATE ACCOUNT cdc_guard_probe ADMIN_NAME 'admin' IDENTIFIED BY '111'"))
 	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// Account removal performs many catalog operations. Give it its own
+		// budget matching setup, including headroom for race-runner WAL stalls.
+		// Keep failures visible and verify removal before reusing the fixture.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cleanupCancel()
-		if _, cleanupErr := root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_guard_probe"); cleanupErr != nil {
+		started := time.Now()
+		_, cleanupErr := root.ExecContext(cleanupCtx, "DROP ACCOUNT IF EXISTS cdc_guard_probe")
+		t.Logf("CDC catalog guard account cleanup: elapsed=%s error=%v", time.Since(started), cleanupErr)
+		if cleanupErr != nil {
 			t.Errorf("drop CDC catalog guard account: %v", cleanupErr)
+			return
 		}
+		var remaining int
+		require.NoError(t, root.QueryRowContext(cleanupCtx,
+			"SELECT COUNT(*) FROM mo_catalog.mo_account WHERE account_name = 'cdc_guard_probe'").Scan(&remaining))
+		require.Zero(t, remaining, "CDC catalog guard account must be removed before fixture reuse")
 	}()
 	connect := func(port int) *sql.DB {
 		db, openErr := sql.Open("mysql", fmt.Sprintf("cdc_guard_probe#admin:111@tcp(127.0.0.1:%d)/", port))

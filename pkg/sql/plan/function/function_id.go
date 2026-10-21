@@ -879,14 +879,24 @@ const (
 	FORMAT_BYTES     = 596
 	FORMAT_PICO_TIME = 597
 
-	FUNCTION_END_NUMBER = 598
+	TO_CALENDAR_INTERVAL        = 598
+	CHECK_ASYNC_DATALINK_SOURCE = 599
+	INTERNAL_TABLE_COLLATION    = 600
+
+	TIMESTAMPADD_SECOND_INTERVAL = 601
+
+	FUNCTION_END_NUMBER = 602
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
+	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
+
 	"format_bytes":            FORMAT_BYTES,
 	"format_pico_time":        FORMAT_PICO_TIME,
 	"to_interval_microsecond": TO_INTERVAL_MICROSECOND,
+	"to_calendar_interval":    TO_CALENDAR_INTERVAL,
 	"extractvalue":            EXTRACTVALUE,
 	"updatexml":               UPDATEXML,
 	// operators
@@ -1331,6 +1341,7 @@ var functionIdRegister = map[string]int32{
 	"internal_numeric_scale":         INTERNAL_NUMERIC_SCALE,
 	"internal_datetime_scale":        INTERNAL_DATETIME_SCALE,
 	"internal_column_character_set":  INTERNAL_COLUMN_CHARACTER_SET,
+	"internal_table_collation":       INTERNAL_TABLE_COLLATION,
 	"internal_auto_increment":        INTERNAL_AUTO_INCREMENT,
 	"nextval":                        NEXTVAL,
 	"setval":                         SETVAL,

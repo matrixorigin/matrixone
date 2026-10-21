@@ -113,12 +113,16 @@ func TestIssue29492MultiCNCancellationCleanup(t *testing.T) {
 	if fault.Enable() {
 		defer fault.Disable()
 	}
+	// Readiness and spill setup must not spend either protocol mode's budget.
+	cancel()
 	for _, binary := range []bool{false, true} {
 		name := "text"
 		if binary {
 			name = "binary"
 		}
-		t.Run(name, func(t *testing.T) {
+		if !t.Run(name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+			defer cancel()
 			const barrier = "issue29492_running"
 			const waiters = "issue29492_waiters"
 			require.NoError(t, fault.AddFaultPoint(ctx, barrier, ":::", "wait", 0, "", false))
@@ -194,10 +198,14 @@ func TestIssue29492MultiCNCancellationCleanup(t *testing.T) {
 			var reusedID uint64
 			require.NoError(t, runner.QueryRowContext(ctx, "select connection_id()").Scan(&reusedID))
 			require.Equal(t, connectionID, reusedID)
-		})
+		}) {
+			return // Do not reuse a connection whose cancellation/recovery failed.
+		}
 	}
+	verifyCtx, cancelVerify := context.WithTimeout(t.Context(), 3*time.Minute)
+	defer cancelVerify()
 	for _, db := range dbs {
-		require.NoError(t, db.QueryRowContext(ctx, percentile).Scan(&cont, &disc))
+		require.NoError(t, db.QueryRowContext(verifyCtx, percentile).Scan(&cont, &disc))
 		require.Equal(t, 12288.5, cont)
 		require.Equal(t, int64(12288), disc)
 	}

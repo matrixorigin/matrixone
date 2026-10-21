@@ -149,7 +149,18 @@ const (
 	MORPCVersion111    int64 = 111 // IndexSearchScan for every vector and fulltext index, algo_options/algo_exprs
 	MORPCVersion112    int64 = 112 // signed INT WEEK/DAYOFYEAR result vectors
 	MORPCVersion113    int64 = 113 // DOUBLE results for DECIMAL variance/stddev aggregates
-	MORPCLatestVersion       = MORPCVersion113
+	MORPCVersion114    int64 = 114 // native Unicode UNIQUE key format and duplicate-admission semantics
+	MORPCVersion115    int64 = 115 // type-sensitive calendar DAY and truncating SECOND intervals
+	MORPCVersion116    int64 = 116 // SELECT scalar division warning diagnostics
+	MORPCVersion117    int64 = 117 // versioned collation-aware LEAST/GREATEST ordering
+	MORPCVersion118    int64 = 118 // transactional database defaults and table charset alteration
+	MORPCVersion119    int64 = 119 // coordinator-owned parameterized subquery programs
+	MORPCVersion120    int64 = 120 // current-session KILL authorization and proxy disconnect cleanup
+	MORPCVersion121    int64 = 121 // exact unsigned DECIMAL DIV result domain
+	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
+	MORPCVersion123    int64 = 123 // capability-gated nonblocking row-lock admission
+	MORPCVersion124    int64 = 124 // exact fractional TIMESTAMPADD SECOND intervals
+	MORPCLatestVersion       = MORPCVersion124
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

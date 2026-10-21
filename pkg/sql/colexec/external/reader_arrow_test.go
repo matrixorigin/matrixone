@@ -306,6 +306,8 @@ func TestExternalArrowLoadFromLocalMinIOAndRejectsObjectChange(t *testing.T) {
 	require.NoError(t, err)
 	proc = newArrowLoadTestProc(t)
 	param := externalArrowParam(fs, identityPath, int64(len(payload)), tree.ARROW_CONTAINER_FILE)
+	// This direct reader path must bind the policy normally installed by Prepare.
+	param.Extern.Ctx = process.SQLFileAccessContext(proc.Ctx, proc)
 	param.Fileparam.FileIndex = 1
 	param.Fileparam.Filepath = identityPath
 	reader, err := NewArrowReader(param, proc, account)
@@ -919,6 +921,8 @@ func externalArrowParam(fs fileservice.FileService, path string, size int64, con
 func newArrowLoadTestProc(t *testing.T) *process.Process {
 	t.Helper()
 	proc := testutil.NewProc(t)
+	proc.Base.SessionInfo.Account = "sys"
+	proc.Base.SessionInfo.Role = "moadmin"
 	frontend := &config.FrontendParameters{}
 	frontend.SetDefaultValues()
 	proc.Ctx = context.WithValue(proc.Ctx, config.ParameterUnitKey,

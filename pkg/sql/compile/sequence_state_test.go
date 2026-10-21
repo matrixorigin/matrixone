@@ -16,6 +16,7 @@ package compile
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -129,4 +130,79 @@ func TestSequenceStatementRetryRestoresAfterQueuedWorkerQuiesces(t *testing.T) {
 	followup, err := proc.AcquireSequence(context.Background())
 	require.NoError(t, err)
 	followup()
+}
+
+func TestInternalSequenceStateInitialization(t *testing.T) {
+	for _, withEmptyParent := range []bool{false, true} {
+		t.Run(fmt.Sprintf("empty-parent=%t", withEmptyParent), func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			var state *internalSequenceState
+			if withEmptyParent {
+				state = &internalSequenceState{}
+			}
+			initInternalSequenceState(proc, "executor_database", state)
+			info := proc.GetSessionInfo()
+			require.Equal(t, "executor_database", info.Database)
+			require.NotNil(t, info.SeqCurValues)
+			require.NotNil(t, info.SeqAddValues)
+			require.Equal(t, []string{""}, info.SeqLastValue)
+			info.SeqAddValues[1] = "first"
+			info.SeqLastValue[0] = "first"
+		})
+	}
+}
+
+func TestInternalSequenceStateIsolatesNestedAttempts(t *testing.T) {
+	parent := testutil.NewProcess(t)
+	defer parent.Free()
+	parent.InitSeq()
+	info := parent.GetSessionInfo()
+	info.SeqCurValues[7] = "prior-current"
+	info.SeqAddValues[8] = "pending"
+	info.SeqDeleteKeys = []uint64{9}
+	info.SeqLastValue[0] = "prior-last"
+	ctx, handoff := attachInternalSequenceState(context.Background(), parent)
+	childCtx, consumed := consumeInternalSequenceState(ctx)
+	require.Same(t, handoff, consumed)
+	_, nested := consumeInternalSequenceState(childCtx)
+	require.Nil(t, nested, "metadata SQL must not inherit the population handoff")
+
+	child := testutil.NewProcess(t)
+	defer child.Free()
+	initInternalSequenceState(child, "child_database", consumed)
+	childInfo := child.GetSessionInfo()
+	require.Equal(t, info.SeqCurValues, childInfo.SeqCurValues)
+	require.Equal(t, info.SeqAddValues, childInfo.SeqAddValues)
+	require.Equal(t, info.SeqDeleteKeys, childInfo.SeqDeleteKeys)
+	require.Equal(t, info.SeqLastValue, childInfo.SeqLastValue)
+	baseline := captureSequenceStatementState(child)
+	childInfo.SeqCurValues[7] = "abandoned-current"
+	childInfo.SeqAddValues[8] = "abandoned-pending"
+	childInfo.SeqDeleteKeys[0] = 10
+	childInfo.SeqLastValue[0] = "abandoned-last"
+	require.Equal(t, "prior-current", info.SeqCurValues[7])
+	require.Equal(t, "pending", info.SeqAddValues[8])
+	require.Equal(t, []uint64{9}, info.SeqDeleteKeys)
+	require.Equal(t, []string{"prior-last"}, info.SeqLastValue)
+	require.Nil(t, handoff.output, "unpublished child attempt must leave no output")
+
+	// The existing compiler retry boundary restores the child's own baseline.
+	c := &Compile{proc: child, sequenceState: baseline}
+	c.restoreSequenceStatementState()
+	require.Equal(t, "pending", childInfo.SeqAddValues[8])
+	require.Equal(t, []uint64{9}, childInfo.SeqDeleteKeys)
+	childInfo.SeqAddValues[11] = "successful"
+	childInfo.SeqLastValue[0] = "successful"
+	success := captureSequenceStatementState(child)
+	handoff.output = &success
+	handoff.output.apply(parent)
+	childInfo.SeqAddValues[11] = "later-child-mutation"
+	childInfo.SeqDeleteKeys[0] = 12
+	childInfo.SeqLastValue[0] = "later-child-mutation"
+	require.Equal(t, map[uint64]string{8: "pending", 11: "successful"}, info.SeqAddValues)
+	require.Equal(t, []uint64{9}, info.SeqDeleteKeys)
+	require.Equal(t, []string{"successful"}, info.SeqLastValue)
+	info.SeqAddValues[11] = "later-parent-mutation"
+	require.Equal(t, "successful", handoff.output.addValues[11])
 }

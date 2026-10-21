@@ -876,3 +876,99 @@ func TestMongoScanBatchAndStatementLimits(t *testing.T) {
 		require.Zero(t, proc.Mp().CurrNB())
 	})
 }
+
+func TestMongoScanAccountedSourceLifecycle(t *testing.T) {
+	for _, mode := range []string{"eof", "early_close", "vector_budget", "pending_budget"} {
+		t.Run(mode, func(t *testing.T) {
+			proc := testutil.NewProcessWithOwnedMPool(t, t.Name(), mpool.MustNewZero())
+			defer proc.Free()
+			proc.Ctx = defines.AttachAccountId(proc.Ctx, 7)
+			budget, err := proc.GetExecutionResourceBudget()
+			require.NoError(t, err)
+			registry, err := mpool.NewAllocationAccountRegistry(1, 32)
+			require.NoError(t, err)
+			limit := uint64(1 << 20)
+			if mode == "vector_budget" {
+				limit = 1
+			}
+			account, err := registry.OpenWithController(limit, budget)
+			require.NoError(t, err)
+			defer func() {
+				account.Seal()
+				_, err := registry.Finalize(account)
+				require.NoError(t, err)
+			}()
+			selection, err := vector.NewAllocationAccountSelection(account, mpool.AllocationOwnerDependent, 1, 2, 3, 4)
+			require.NoError(t, err)
+			doc, err := bson.Marshal(bson.D{{Key: "value", Value: int64(11)}})
+			require.NoError(t, err)
+			cursor := &testCursor{docs: [][]byte{doc, doc}}
+			deps, _ := testScanDependencies(cursor)
+			defer func() { require.NoError(t, deps.Pool.Close(t.Context())) }()
+			deps.Config.BatchRows, deps.Config.MaxBatchBytes = 10, int64(len(doc)+1)
+			scan := NewArgument().WithScan(testScanPlan())
+			defer scan.Release()
+			defer scan.Free(proc, false, nil)
+			scan.Dependencies, scan.OutputAllocation = deps, selection
+			require.NoError(t, scan.Prepare(proc))
+			if mode == "pending_budget" {
+				// Exhaust the shared ledger before the look-ahead copy. The
+				// pending buffer must stay unpublished on admission failure.
+				reservation, reserveErr := budget.ReserveTransientMemory(budget.Cap())
+				require.NoError(t, reserveErr)
+				defer reservation.Release()
+				require.Error(t, scan.retainPendingRaw(proc, doc))
+				require.Empty(t, scan.ctr.pendingRaw)
+				reservation.Release()
+			} else {
+				result, callErr := scan.Call(proc)
+				if mode == "vector_budget" {
+					require.Error(t, callErr)
+				} else {
+					require.NoError(t, callErr)
+					require.Equal(t, int64(11), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
+					require.Positive(t, account.Snapshot().Used)
+					require.Equal(t, uint64(len(doc)), scan.ctr.pendingCharge)
+					if mode == "eof" {
+						result, callErr = scan.Call(proc)
+						require.NoError(t, callErr)
+						require.Equal(t, 1, result.Batch.RowCount())
+						require.Empty(t, scan.ctr.pendingRaw)
+					}
+				}
+			}
+			scan.Reset(proc, false, nil)
+			require.Equal(t, 1, cursor.closed)
+			require.Zero(t, account.Snapshot().Used)
+			require.Zero(t, budget.Used())
+			require.Zero(t, proc.Mp().CurrNB())
+		})
+	}
+}
+
+type failedCloseCursor struct {
+	testCursor
+	failure error
+}
+
+func (c *failedCloseCursor) Close(ctx context.Context) error {
+	_ = c.testCursor.Close(ctx)
+	return c.failure
+}
+func TestMongoSourceRetainsTerminalCloseFailure(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	failure := errors.New("cursor close failed")
+	cursor := &failedCloseCursor{failure: failure}
+	scan := NewArgument()
+	defer scan.Release()
+	scan.ctr.cursor = cursor
+	// Normal EOF cleanup can precede the dependent source terminal callback.
+	scan.closeResources(proc.Ctx)
+	require.ErrorIs(t, scan.CloseReader(), failure)
+	require.ErrorIs(t, scan.CloseReader(), failure)
+	require.Equal(t, 1, cursor.closed)
+	scan.Reset(proc, true, failure)
+	require.NoError(t, scan.CloseReader())
+	require.Equal(t, 1, cursor.closed)
+	scan.Free(proc, false, nil)
+}

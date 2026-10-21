@@ -265,6 +265,8 @@ message LockTarget {
   bool lock_table_at_the_end = 10;
   plan.ObjectRef obj_ref = 11;
   int32 partition_col_idx_in_bat = 12;
+  bool no_wait = 13;
+  bool skip_locked = 14;
 }
 
 message LockOp {
@@ -359,6 +361,7 @@ message DedupJoin {
   bool emit_action_rows = 27;
   int32 action_final_result_pos = 28;
   repeated ODKUForeignKeyCheck foreign_key_checks = 29 [(gogoproto.nullable) = false];
+  repeated plan.Expr dedup_key_exprs = 30;
 }
 
 message RightDedupJoin {
@@ -379,6 +382,7 @@ message RightDedupJoin {
   repeated plan.Expr update_col_expr_list = 15;
   int32 del_col_idx = 16;
   bool input_keys_unique = 17;
+  repeated plan.Expr dedup_key_exprs = 18;
 }
 
 message Product {
@@ -576,6 +580,7 @@ message HashBuild {
   int32 dedup_delete_marker_col_idx = 17;
   repeated int32 dedup_delete_keep_col_idx_list = 18;
   bool track_null_keys = 19;
+  repeated plan.Expr dedup_key_exprs = 20;
 }
 
 message Indexbuild {
@@ -767,6 +772,9 @@ message ProcessInfo {
   // matching Shuffle wire opcode makes pre-v33 receivers reject the pipeline;
   // the pair prevents a rollout change from silently splitting key ownership.
   uint32 string_shuffle_hash_algorithm = 16;
+  // Positive outer SELECT classification for expression warning policy.
+  // Legacy senders omit this field and remain unclassified.
+  bool statement_runtime_select = 17;
 }
 
 message SessionInfo {

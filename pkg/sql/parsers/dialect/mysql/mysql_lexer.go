@@ -35,6 +35,32 @@ type MySQLParser struct {
 	// parser  yyParserImpl
 }
 
+// MayHaveMultipleStatements is a conservative lexical preflight, not a syntax
+// validator or statement splitter. Strings, identifiers and comments follow the
+// same scanner and SQL mode as parsing. Compound statements and lexical errors
+// can return true; only the parser can decide their actual statement boundaries.
+func MayHaveMultipleStatements(sql, sqlMode string) bool {
+	scanner := NewScannerWithSQLMode(dialect.MYSQL, sql, ParseSQLModeFlags(sqlMode))
+	defer PutScanner(scanner)
+	seenToken, delimiter := false, false
+	for {
+		token, _ := scanner.Scan()
+		switch token {
+		case 0, EofChar():
+			return false
+		case LEX_ERROR:
+			return true
+		case int(';'):
+			delimiter = seenToken
+		default:
+			if delimiter {
+				return true
+			}
+			seenToken = true
+		}
+	}
+}
+
 func integralToUint64(v any) uint64 {
 	switch value := v.(type) {
 	case int64:
@@ -406,6 +432,12 @@ func (l *Lexer) Lex(lval *yySymType) int {
 		*l.scanner = snapshot
 	}
 
+	if l.lastToken == FOR && (typ == UPDATE || typ == SHARE) {
+		str = l.scanLockModePhrase(str)
+		lval.pos = l.scanner.Pos
+		l.scanner.LastToken = str
+	}
+
 	switch typ {
 	case INTEGRAL:
 		l.recordSyntaxToken(typ)
@@ -440,6 +472,33 @@ func (l *Lexer) Lex(lval *yySymType) int {
 	lval.str = str
 	l.recordSyntaxToken(typ)
 	return typ
+}
+
+// scanLockModePhrase keeps modifiers contextual without new global keywords or
+// parser states. Failed speculation leaves the scanner in its original state;
+// shared parse-control accounting still charges the lookahead work.
+func (l *Lexer) scanLockModePhrase(mode string) string {
+	lookahead := *l.scanner
+	token, word := lookahead.Scan()
+	consumed := 1
+	switch {
+	case token == ID && strings.EqualFold(word, "nowait"):
+		mode += " nowait"
+	case token == CONFLICT_SKIP && strings.EqualFold(mode, "share"):
+		token, word = lookahead.Scan()
+		if token != ID || !strings.EqualFold(word, "locked") {
+			return mode
+		}
+		mode += " skip locked"
+		consumed++
+	default:
+		return mode
+	}
+	for range consumed {
+		lookahead.parseControl.token()
+	}
+	*l.scanner = lookahead
+	return mode
 }
 
 func (l *Lexer) alterAccountConfigPhraseAhead() bool {

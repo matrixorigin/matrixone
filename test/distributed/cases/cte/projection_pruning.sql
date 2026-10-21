@@ -2,7 +2,35 @@ drop database if exists cte_projection_pruning;
 create database cte_projection_pruning;
 use cte_projection_pruning;
 create table small(g int,h int,v int);
-insert into small values (1,null,10);
+insert into small values (1,7,10);
+
+-- #30141 follow-up to #30145: the producer retains SUM for evaluation,
+-- but SINK must publish only g and MAX(h), not the wider child batch.
+select max(h) from small;
+with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g)
+select a.c0,a.c2,b.c2 from r a join r b on a.c0=b.c0;
+
+-- Retaining SUM is a semantic control; it may choose an inline plan.
+with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g)
+select a.c0,a.c1,a.c2,b.c2 from r a join r b on a.c0=b.c0;
+
+prepare cte_narrow from 'with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g) select a.c0,a.c2,b.c2 from r a join r b on a.c0=b.c0';
+execute cte_narrow;
+execute cte_narrow;
+deallocate prepare cte_narrow;
+
+create table narrow_rows(g int,ah int,bh int);
+insert into narrow_rows values (-1,999,999);
+insert into narrow_rows
+with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g)
+select a.c0,a.c2,b.c2 from r a join r b on a.c0=b.c0;
+select * from narrow_rows order by g;
+drop table narrow_rows;
+
+-- An all-NULL projected MAX preserves NULL, not the retained SUM value.
+update small set h=null;
+with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g)
+select a.c0,a.c2,b.c2 from r a join r b on a.c0=b.c0;
 
 -- #30141: shared readers must use the producer's compacted column positions.
 with r as (select g,v total,h n,v mx from small where v>0)
@@ -19,6 +47,10 @@ from r a join r b on a.g<=>b.g and a.mx=b.mx;
 
 -- Distinct totals, counts, minima and maxima expose in-range wrong-column reads.
 insert into small values (1,5,4),(2,8,7),(2,9,20),(null,3,6),(null,4,null);
+-- Different reader demands with SUM preceding both requested aggregates.
+with r as (select g,sum(v) total,max(h) mh,max(v) mv from small group by g)
+select a.g,a.mh,b.mv from r a join r b on a.g<=>b.g and a.mh=b.mh order by a.g;
+
 with r as (select g,sum(v) total,count(*) n,max(v) mx,min(v) mn from small group by g)
 select a.g,a.total,a.mx,a.mn,b.mx
 from r a join r b on a.g<=>b.g and a.mx=b.mx order by a.g;
@@ -82,6 +114,11 @@ with r as (select g,sum(v) total,count(*) n,max(v) mx,grouping(g) gm from small 
 select g,gm,sum(total) total,max(mx) mx
 from (select * from r union all select * from r) u group by g,gm order by gm,g;
 
+-- Hidden SUM must also be removed at publication for grouping extensions.
+with r as (select g,sum(v) total,max(h) mh,grouping(g) gm from small group by g with rollup)
+select a.g,a.gm,a.mh,b.mh
+from r a join r b on a.g<=>b.g and a.gm=b.gm order by a.gm,a.g;
+
 -- Preparing and executing twice must not apply the positional map twice.
 prepare cte_stmt from 'with r as (select g,sum(v) total,count(*) n,max(v) mx from small group by g) select a.g,a.mx,a.total,b.g,b.mx,b.total from r a join r b on a.g<=>b.g and a.mx=b.mx order by a.g';
 execute cte_stmt;
@@ -99,6 +136,9 @@ select * from output_rows order by g;
 
 -- Empty producer and all-NULL scalar aggregates preserve cardinality.
 delete from small;
+with r as (select g c0,sum(v) c1,max(h) c2,count(*) c3 from small group by g)
+select a.c0,a.c2,b.c2 from r a join r b on a.c0=b.c0;
+
 with r as (select g,v total,h n,v mx from small where v>0)
 select a.g,a.mx,a.total,b.g,b.mx,b.total
 from r a join r b on a.g<=>b.g and a.mx=b.mx;

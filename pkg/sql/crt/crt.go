@@ -24,6 +24,7 @@ import (
 	"compress/gzip"
 	"compress/zlib"
 	"context"
+	"errors"
 	"io"
 	"math"
 	"strings"
@@ -67,6 +68,7 @@ func GetIOReadCloser(proc *process.Process, param *tree.ExternParam, data string
 		return io.NopCloser(proc.GetLoadLocalReader()), nil
 	}
 
+	param.Ctx = process.SQLFileAccessContext(proc.Ctx, proc)
 	fs, readPath, err := plan2.GetForETLWithType(param, data)
 	if err != nil {
 		return nil, err
@@ -134,6 +136,24 @@ type decompressReader struct {
 	io.Reader
 	closeDecoder func() error
 	src          io.Closer
+}
+
+// Read resurfaces truncated compressed streams.  Every decoder in
+// getUnCompressReader reports a stream that ends before its framing is
+// complete with io.ErrUnexpectedEOF, while a structurally valid stream ends
+// with a plain io.EOF.  CSVParser.readBlock interprets io.ErrUnexpectedEOF as
+// a plain file's legal short final block and returns the bytes read so far
+// as a complete input, so a load of a truncated ZSTD/GZIP/LZ4 file silently
+// committed only the decompressed prefix and reported success (#30652).
+// Translating the sentinel here keeps that short-block interpretation for
+// plain files only; decompressed streams must end cleanly on io.EOF.
+func (d *decompressReader) Read(p []byte) (int, error) {
+	n, err := d.Reader.Read(p)
+	if errors.Is(err, io.ErrUnexpectedEOF) {
+		return n, moerr.NewInvalidInputNoCtx(
+			"the compressed stream is truncated or corrupted (unexpected end of stream)")
+	}
+	return n, err
 }
 
 func (d *decompressReader) Close() error {

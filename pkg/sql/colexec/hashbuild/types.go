@@ -162,16 +162,18 @@ type spillFileBundle struct {
 }
 
 type spillFileEntry struct {
-	file       *os.File
-	fdToken    *process.ExecutionSpillFDReservation
-	diskToken  *process.ExecutionSpillDiskReservation
-	fs         fileservice.MutableFileService
-	name       string
-	created    bool
-	rows       int64
-	bytes      uint64
-	bucket     int
-	writeCache spillio.SequentialWriteCache
+	file           *os.File
+	fdToken        *process.ExecutionSpillFDReservation
+	cacheToken     *process.ExecutionTransientMemoryReservation
+	diskToken      *process.ExecutionSpillDiskReservation
+	fs             fileservice.MutableFileService
+	name           string
+	created        bool
+	cacheAttempted bool
+	rows           int64
+	bytes          uint64
+	bucket         int
+	writeCache     spillio.SequentialWriteCache
 }
 
 func (b *spillFileBundle) release() {
@@ -203,6 +205,7 @@ func (b *spillFileBundle) release() {
 		if entry.diskToken != nil {
 			entry.diskToken.Release()
 		}
+		entry.cacheToken.Release()
 	}
 }
 
@@ -256,7 +259,30 @@ func (b *spillFileBundle) openFile(
 	entry.file = file
 	entry.fdToken = token
 	entry.created = true
+	if !entry.cacheAttempted {
+		entry.cacheAttempted = true
+		// Optional page cache must not crowd tiny recovery envelopes. Admit
+		// its full capacity before the first write; refusal keeps the old
+		// small window and cannot prevent draining a build to spill.
+		const cacheBytes = uint64(4 << 20)
+		if budget.Cap()/128 >= cacheBytes {
+			entry.cacheToken, _ = budget.ReserveTransientMemory(cacheBytes)
+			if entry.cacheToken != nil {
+				entry.writeCache = spillio.NewSequentialWriteCache(int64(cacheBytes))
+			}
+		}
+	}
 	return file, nil
+}
+
+func closeSpillEntry(entry *spillFileEntry) error {
+	file := entry.file
+	token := entry.fdToken
+	entry.file = nil
+	entry.fdToken = nil
+	err := file.Close()
+	token.Release()
+	return err
 }
 
 func (b *spillFileBundle) closeFile(bucket int) error {
@@ -347,6 +373,35 @@ func (b *spillFileBundle) accountedFiles(
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	files := make([]*message.SpillFile, spillNumBuckets)
+	if b.released {
+		return nil, process.ErrExecutionSpillReservationInactive
+	}
+	// Submit all larger-window tails before waiting on any one bucket. Small
+	// files may not have crossed their batch threshold; serial Finish calls
+	// would otherwise turn the larger window into a synchronous I/O burst.
+	// Queued reader payloads never retain writer descriptors.
+	for _, entry := range b.entries {
+		if entry == nil || entry.cacheToken == nil {
+			continue
+		}
+		if entry.file != nil || entry.fdToken != nil {
+			return nil, process.ErrExecutionResourceInvalid
+		}
+		token, err := budget.ReserveSpillFD(1)
+		if err != nil {
+			return nil, err
+		}
+		file, err := entry.fs.OpenFile(ctx, entry.name)
+		if err != nil {
+			token.Release()
+			return nil, err
+		}
+		entry.file, entry.fdToken = file, token
+		entry.writeCache.SubmitTail(file)
+		if err := closeSpillEntry(entry); err != nil {
+			return nil, err
+		}
+	}
 	for bucket, entry := range b.entries {
 		if entry == nil || entry.fs == nil || entry.name == "" ||
 			entry.file != nil || entry.fdToken != nil || !entry.created ||
@@ -368,6 +423,10 @@ func (b *spillFileBundle) accountedFiles(
 			return nil, err
 		}
 		entry.writeCache.Finish(file)
+		// Return optional writer memory before the recovery reader is admitted.
+		// Queued buckets retain neither FDs nor write-cache memory grants.
+		entry.cacheToken.Release()
+		entry.cacheToken = nil
 		if err := file.Close(); err != nil {
 			fdToken.Release()
 			return nil, err
@@ -419,6 +478,9 @@ func validateSpillFileSize(file *os.File, expected uint64) error {
 }
 
 type HashBuild struct {
+	// DirectInput consumes a same-lane batch-only build through ExecYield
+	// checkpoints. Hash and spill builds keep their existing pipeline contract.
+	DirectInput                   bool
 	ctr                           container
 	NeedHashMap                   bool
 	HashOnPK                      bool
@@ -441,6 +503,7 @@ type HashBuild struct {
 	OnDuplicateAction         plan.Node_OnDuplicateAction
 	DedupColName              string
 	DedupColTypes             []plan.Type
+	DedupKeyExprs             []*plan.Expr
 	DedupDeleteMarkerColIdx   int32
 	DedupDeleteKeepColIdxList []int32
 
@@ -731,9 +794,9 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	runtimeSucceed := hashBuild.ctr.state > HandleRuntimeFilter
 	mapSucceed := hashBuild.ctr.state == SendSucceed
 
-	// Call does not publish pipeline terminal signals.  Reset owns dependency
-	// finalization and is intentionally non-blocking: publication only appends
-	// one immutable value to the current-CN MessageBoard.
+	// Call publishes producer failures/retirement before consumers can block
+	// cleanup. Reset is the fallback for paths that never reached Call;
+	// publication is non-blocking and guarded once per execution generation.
 	if !mapSucceed {
 		if pipelineFailed || err != nil {
 			if err == nil {

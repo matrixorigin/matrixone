@@ -23,6 +23,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
@@ -1142,7 +1143,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	}
 
 	for i, tableDef := range dmlCtx.tableDefs {
-		if len(dmlCtx.updateCol2Expr[i]) == 0 || len(tableDef.Checks) == 0 {
+		asyncColumns := asyncDatalinkUpdateColumns(dmlCtx, i, newColName2Idx)
+		if len(dmlCtx.updateCol2Expr[i]) == 0 || (len(tableDef.Checks) == 0 && len(asyncColumns) == 0) {
 			continue
 		}
 		alias := dmlCtx.aliases[i]
@@ -1199,6 +1201,18 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			stmt.Ignore,
 			targetEligible,
 		)
+		if err != nil {
+			return 0, err
+		}
+
+		lastNodeID, err = appendAsyncDatalinkAdmission(builder, bindCtx, tableDef, asyncColumns, lastNodeID, selectNodeTag, func(name string) (int32, bool) {
+			key := alias + "." + name
+			if pos, ok := newColName2Idx[key]; ok {
+				return pos, true
+			}
+			pos, ok := oldColName2Idx[key]
+			return pos, ok
+		}, targetEligible)
 		if err != nil {
 			return 0, err
 		}
@@ -1545,7 +1559,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						}
 					}
 
-					oldUkExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", oldArgs)
+					var oldUkExpr *plan.Expr
+					if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+						oldUkExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, oldArgs)
+					} else {
+						oldUkExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", oldArgs)
+					}
+					if err != nil {
+						return 0, err
+					}
 					newProjNode.ProjectList = append(newProjNode.ProjectList, oldUkExpr)
 
 					newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
@@ -1567,7 +1589,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						}
 					}
 
-					newUkExpr, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", newArgs)
+					var newUkExpr *plan.Expr
+					if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+						newUkExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, newArgs)
+					} else {
+						newUkExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", newArgs)
+					}
+					if err != nil {
+						return 0, err
+					}
 					if isMultiTargetUpdate {
 						newUkExpr, err = guardTargetDedupExpr(i, newUkExpr)
 						if err != nil {
@@ -1589,6 +1619,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						if err != nil {
 							return 0, err
 						}
+						if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+							oldPartExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{oldPartExpr})
+							if err != nil {
+								return 0, err
+							}
+						}
 						newProjNode.ProjectList = append(newProjNode.ProjectList, oldPartExpr)
 
 						newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
@@ -1600,6 +1636,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						if err != nil {
 							return 0, err
 						}
+						if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+							newPartExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{newPartExpr})
+							if err != nil {
+								return 0, err
+							}
+						}
 						if isMultiTargetUpdate {
 							newPartExpr, err = guardTargetDedupExpr(i, newPartExpr)
 							if err != nil {
@@ -1610,9 +1652,35 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						}
 						newProjNode.ProjectList = append(newProjNode.ProjectList, newPartExpr)
 					} else {
-						oldColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = oldColName2Idx[alias+"."+partName]
-						newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = newColName2Idx[alias+"."+partName]
-						if isMultiTargetUpdate {
+						oldPartPos := oldColName2Idx[alias+"."+partName]
+						newPartPos := newColName2Idx[alias+"."+partName]
+						if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+							oldPartExpr := &plan.Expr{Typ: selectNode.ProjectList[oldPartPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: oldPartPos, Name: partName}}}
+							oldPartExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{oldPartExpr})
+							if err != nil {
+								return 0, err
+							}
+							oldColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
+							newProjNode.ProjectList = append(newProjNode.ProjectList, oldPartExpr)
+							newPartExpr := &plan.Expr{Typ: selectNode.ProjectList[newPartPos].Typ, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectNodeTag, ColPos: newPartPos, Name: partName}}}
+							newPartExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{newPartExpr})
+							if err != nil {
+								return 0, err
+							}
+							newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
+							if isMultiTargetUpdate {
+								newPartExpr, err = guardTargetDedupExpr(i, newPartExpr)
+								if err != nil {
+									return 0, err
+								}
+								dedupKeyPos[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = int32(len(newProjNode.ProjectList))
+							}
+							newProjNode.ProjectList = append(newProjNode.ProjectList, newPartExpr)
+						} else {
+							oldColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = oldPartPos
+							newColName2Idx[idxTableDef.Name+"."+catalog.IndexTableIndexColName] = newPartPos
+						}
+						if !(idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique) && isMultiTargetUpdate {
 							key := idxTableDef.Name + "." + catalog.IndexTableIndexColName
 							colPos := newColName2Idx[key]
 							newPartExpr := &plan.Expr{
@@ -1673,6 +1741,20 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					dedupColTypes[j] = tableDef.Cols[tableDef.Name2ColIndex[catalog.ResolveAlias(part)]].Typ
 				}
 
+				diagnosticExprs, err := builder.makeIndexDedupKeyExprs(tableDef, idxDef, newProjTag, func(name string) (int32, bool) {
+					if pos, ok := newColName2Idx[alias+"."+name]; ok {
+						return pos, true
+					}
+					pos, ok := oldColName2Idx[alias+"."+name]
+					return pos, ok
+				})
+				if err != nil {
+					return 0, err
+				}
+				if len(diagnosticExprs) > 0 {
+					dedupColName = idxDef.IndexName
+				}
+
 				dedupJoinNode := &plan.Node{
 					NodeType:          plan.Node_JOIN,
 					Children:          []int32{idxTableNodeID, lastNodeID},
@@ -1681,6 +1763,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					OnDuplicateAction: onDuplicateAction,
 					DedupColName:      dedupColName,
 					DedupColTypes:     dedupColTypes,
+					DedupKeyExprs:     diagnosticExprs,
 					DedupJoinCtx: &plan.DedupJoinCtx{
 						OldColList: []plan.ColRef{
 							{
@@ -1958,8 +2041,15 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					}
 				}
 
-				leftExpr = args[0]
-				if indexTableStoresSerializedKey(idxDef) {
+				if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+					leftExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, args)
+					if err != nil {
+						return 0, err
+					}
+				} else {
+					leftExpr = args[0]
+				}
+				if idxDef.KeyFormat != collation.KeyFormatV1 && indexTableStoresSerializedKey(idxDef) {
 					funcName := "serial"
 					if !idxDef.Unique {
 						funcName = "serial_full"
@@ -2329,6 +2419,12 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 					if err != nil {
 						return 0, err
 					}
+					if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+						newIdxExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, []*plan.Expr{newIdxExpr})
+						if err != nil {
+							return 0, err
+						}
+					}
 				} else {
 					args := make([]*plan.Expr, len(idxDef.Parts))
 
@@ -2354,11 +2450,21 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 						}
 					}
 
-					funcName := "serial"
-					if !idxDef.Unique {
-						funcName = "serial_full"
+					if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+						newIdxExpr, err = bindIndexKeyExpr(builder.GetContext(), idxDef, args)
+						if err != nil {
+							return 0, err
+						}
+					} else {
+						funcName := "serial"
+						if !idxDef.Unique {
+							funcName = "serial_full"
+						}
+						newIdxExpr, err = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
+						if err != nil {
+							return 0, err
+						}
 					}
-					newIdxExpr, _ = BindFuncExprImplByPlanExpr(builder.GetContext(), funcName, args)
 				}
 
 				newIdx = len(finalProjList)
@@ -3662,7 +3768,16 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		}
 		oldKey := oldParts[0]
 		newKey := newParts[0]
-		if len(idxDef.Parts) > 1 {
+		if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+			oldKey, err = bindIndexKeyExpr(builder.GetContext(), idxDef, oldParts)
+			if err != nil {
+				return 0, nil, err
+			}
+			newKey, err = bindIndexKeyExpr(builder.GetContext(), idxDef, newParts)
+			if err != nil {
+				return 0, nil, err
+			}
+		} else if len(idxDef.Parts) > 1 {
 			oldKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", oldParts)
 			if err != nil {
 				return 0, nil, err
@@ -3727,7 +3842,16 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		}
 		releaseOldKey := releaseOldParts[0]
 		releaseCurrentKey := releaseCurrentParts[0]
-		if len(idxDef.Parts) > 1 {
+		if idxDef.KeyFormat == collation.KeyFormatV1 && idxDef.Unique {
+			releaseOldKey, err = bindIndexKeyExpr(builder.GetContext(), idxDef, releaseOldParts)
+			if err != nil {
+				return 0, nil, err
+			}
+			releaseCurrentKey, err = bindIndexKeyExpr(builder.GetContext(), idxDef, releaseCurrentParts)
+			if err != nil {
+				return 0, nil, err
+			}
+		} else if len(idxDef.Parts) > 1 {
 			releaseOldKey, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "serial", releaseOldParts)
 			if err != nil {
 				return 0, nil, err
@@ -3808,6 +3932,17 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 		if len(idxDef.Parts) > 1 {
 			dedupName = "(" + strings.Join(idxDef.Parts, ",") + ")"
 		}
+
+		diagnosticExprs, err := builder.makeIndexDedupKeyExprs(tableDef, idxDef, projectTag, func(name string) (int32, bool) {
+			pos, ok := currentPosByCol[name]
+			return pos, ok
+		})
+		if err != nil {
+			return 0, nil, err
+		}
+		if len(diagnosticExprs) > 0 {
+			dedupName = idxDef.IndexName
+		}
 		lastNodeID = builder.appendNode(&plan.Node{
 			NodeType:          plan.Node_JOIN,
 			Children:          []int32{idxScanID, lastNodeID},
@@ -3816,6 +3951,7 @@ func (builder *QueryBuilder) appendMergedPhysicalTargetUniqueChecks(
 			OnDuplicateAction: plan.Node_IGNORE,
 			DedupColName:      dedupName,
 			DedupColTypes:     dedupTypes,
+			DedupKeyExprs:     diagnosticExprs,
 			DedupJoinCtx: &plan.DedupJoinCtx{OldColList: []plan.ColRef{
 				{RelPos: projectTag, ColPos: oldKeyPos},
 				{RelPos: projectTag, ColPos: releaseMarkerPos},

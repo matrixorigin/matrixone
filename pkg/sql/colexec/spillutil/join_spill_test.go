@@ -354,7 +354,9 @@ func TestRebuildHashmapBasic(t *testing.T) {
 	engine := newExactTestSpillEngine(t, SpillEngineConfig{
 		BuildKeyExprs:           makeTestKeyExpr(),
 		NeedsBuildForEmptyProbe: true,
+		AdaptiveMemory:          true,
 	})
+	defer engine.Cleanup(proc)
 	initTestSpillFiles(engine, []*os.File{
 		writeBuildFile(proc, t.Name(), build),
 	}, int64(len(values)))
@@ -363,9 +365,11 @@ func TestRebuildHashmapBasic(t *testing.T) {
 		process.NewAnalyzer(0, false, false, "test"),
 	)
 	require.NoError(t, err)
-	require.Equal(t, BucketReady, result)
-	require.Equal(t, int64(100), jm.GetRowCount())
-	jm.Free()
+	func() {
+		defer jm.Free()
+		require.Equal(t, BucketReady, result)
+		require.Equal(t, int64(100), jm.GetRowCount())
+	}()
 	_, result, err = engine.RebuildHashmap(
 		proc,
 		process.NewAnalyzer(0, false, false, "test"),
@@ -377,16 +381,17 @@ func TestRebuildHashmapBasic(t *testing.T) {
 
 func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
 	builder := &hashbuild.HashmapBuilder{}
+	var groupingSeen bool
 	builder.Batches.MemSize = 120_000
 
 	spill, adaptive, err := shouldReSpillBeforeRetain(
-		builder, nil, math.MaxInt64, nil,
+		builder, nil, math.MaxInt64, nil, &groupingSeen,
 	)
 	require.NoError(t, err)
 	require.False(t, spill)
 	require.False(t, adaptive)
 
-	spill, adaptive, err = shouldReSpillBeforeRetain(builder, nil, 100_001, nil)
+	spill, adaptive, err = shouldReSpillBeforeRetain(builder, nil, 100_001, nil, &groupingSeen)
 	require.NoError(t, err)
 	require.True(t, spill)
 	require.False(t, adaptive)
@@ -403,7 +408,7 @@ func TestReSpillDecisionKeepsStaticBoundAndAddsAdaptiveBound(t *testing.T) {
 	require.NoError(t, err)
 
 	spill, adaptive, err = shouldReSpillBeforeRetain(
-		builder, nil, math.MaxInt64, first,
+		builder, nil, math.MaxInt64, first, &groupingSeen,
 	)
 	require.NoError(t, err)
 	require.True(t, spill)
@@ -691,4 +696,30 @@ func TestCleanupDoubleSafe(t *testing.T) {
 	engine.Cleanup(proc)
 	engine.Cleanup(proc)
 	require.Nil(t, engine.buckets)
+}
+
+func TestBucketWriterRejectedAppendPreservesFile(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget := process.MustNewExecutionResourceBudget(1<<20, 1<<20)
+	require.NoError(t, budget.SetSpillCaps(16, 4))
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	defer generation.Close()
+	w := BucketWriter{Name: "rejected-append", Budget: generation}
+	defer w.Close()
+	require.NoError(t, writeBucketPayload(proc, []byte("original"), 1, &w, nil))
+	require.ErrorIs(t, writeBucketPayload(proc, []byte("too-large"), 1, &w, nil), process.ErrExecutionResourceAdmission)
+	require.Equal(t, uint64(8), w.Bytes)
+	require.Equal(t, int64(1), w.Rows)
+	f, err := w.fileFS.OpenFile(proc.Ctx, w.Name)
+	require.NoError(t, err)
+	defer f.Close()
+	got, err := io.ReadAll(f)
+	require.NoError(t, err)
+	require.Equal(t, "original", string(got))
+	require.NoError(t, f.Close())
+	w.Close()
+	require.Zero(t, generation.SpillDiskUsed())
+	require.Zero(t, generation.SpillFDUsed())
 }

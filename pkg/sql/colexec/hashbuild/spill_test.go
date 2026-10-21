@@ -74,6 +74,236 @@ func newSpillTestHarness(t *testing.T, limit uint64) *spillTestHarness {
 	}
 }
 
+func TestSpillWriterAccountedCacheHandoff(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		limit    uint64
+		pressure bool
+	}{
+		{"admitted", 1 << 30, false},
+		{"tiny-envelope", 8 << 20, false},
+		{"memory-pressure", 1 << 30, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newSpillTestHarness(t, tc.limit)
+			t.Cleanup(func() { h.close(t) })
+			if tc.pressure {
+				require.NoError(t, h.budget.UpdateAggregateCap(1))
+			}
+			payload := []byte("complete-record")
+			for range 2 {
+				require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, payload, 1, nil))
+			}
+			entry := h.op.ctr.spillBundle.entries[0]
+			require.Nil(t, entry.file)
+			require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, payload, 1, nil))
+			require.Nil(t, entry.file)
+			require.Zero(t, h.generation.SpillFDUsed())
+			if tc.limit >= 1<<30 && !tc.pressure {
+				require.NotNil(t, entry.cacheToken)
+				require.Equal(t, uint64(4<<20), h.generation.Used())
+			} else {
+				require.Nil(t, entry.cacheToken)
+				require.Zero(t, h.generation.Used())
+			}
+			files, err := h.op.ctr.spillBundle.accountedFiles(h.proc.Ctx, h.generation)
+			require.NoError(t, err)
+			t.Cleanup(func() {
+				for _, f := range files {
+					require.NoError(t, f.Close())
+				}
+			})
+			require.Zero(t, h.generation.SpillFDUsed())
+			require.Zero(t, h.generation.Used(), "writer grants must not crowd reader recovery")
+			require.True(t, files[0].NeedsOpen())
+			// Cleanup of the old owner cannot release the reader's disk.
+			h.op.ctr.spillBundle.release()
+			token, err := h.generation.ReserveSpillFD(1)
+			require.NoError(t, err)
+			t.Cleanup(func() { token.Release() })
+			fd, err := files[0].Open(h.proc.Ctx)
+			require.NoError(t, err)
+			actual, err := io.ReadAll(fd)
+			require.NoError(t, err)
+			require.Equal(t, strings.Repeat(string(payload), 3), string(actual))
+			require.NoError(t, files[0].Close())
+			require.NoError(t, files[0].Close())
+			token.Release()
+			require.Zero(t, h.generation.Used())
+			require.Zero(t, h.generation.SpillDiskUsed())
+		})
+	}
+}
+
+func TestSpillWriterPressureFallbackAndCleanup(t *testing.T) {
+	h := newSpillTestHarness(t, 1<<30)
+	t.Cleanup(func() { h.close(t) })
+	require.NoError(t, h.budget.SetSpillCaps(1<<20, 2))
+	// OpenGeneration snapshots its caps, so publish a generation under the
+	// finite FD cap before starting the writer.
+	g, err := h.budget.OpenGenerationWithSpillCaps(2, 1<<30, 1<<20, 2)
+	require.NoError(t, err)
+	h.op.ctr.hashmapBuilder.setBudget(g)
+	require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("a"), 1, nil))
+	require.Nil(t, h.op.ctr.spillBundle.entries[0].file)
+	// Each physical write releases its FD before another bucket is opened.
+	require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 1, []byte("b"), 1, nil))
+	require.Zero(t, g.SpillFDUsed())
+	ctx, cancel := context.WithCancelCause(h.proc.Ctx)
+	h.proc.Ctx = ctx
+	t.Cleanup(func() { cancel(context.Canceled) })
+	cancel(context.Canceled)
+	err = h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("stale"), 1, nil)
+	require.ErrorIs(t, err, context.Canceled)
+	h.op.ctr.spillBundle.release()
+	h.op.ctr.spillBundle.release()
+	require.Zero(t, g.Used())
+	require.Zero(t, g.SpillFDUsed())
+	require.Zero(t, g.SpillDiskUsed())
+	_, err = h.op.ctr.spillBundle.accountedFiles(context.Background(), g)
+	require.ErrorIs(t, err, process.ErrExecutionSpillReservationInactive)
+	_, err = h.op.ctr.spillBundle.openFile(context.Background(), g, 0, h.op.ctr.spillFS, "after-release")
+	require.ErrorIs(t, err, process.ErrExecutionSpillReservationInactive)
+}
+
+func TestSpillWriterHandoffUnderFDPressure(t *testing.T) {
+	h := newSpillTestHarness(t, 1<<30)
+	t.Cleanup(func() { h.close(t) })
+	require.NoError(t, h.budget.SetSpillCaps(1<<20, 2))
+	g, err := h.budget.OpenGenerationWithSpillCaps(2, 1<<30, 1<<20, 2)
+	require.NoError(t, err)
+	h.op.ctr.hashmapBuilder.setBudget(g)
+	for bucket := range 3 {
+		require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, bucket, []byte{byte(bucket)}, 1, nil))
+	}
+	bundle := h.op.ctr.spillBundle
+	for bucket := range 3 {
+		require.NotNil(t, bundle.entries[bucket].cacheToken)
+		require.Nil(t, bundle.entries[bucket].file)
+	}
+	reader, err := g.ReserveSpillFD(1)
+	require.NoError(t, err)
+	t.Cleanup(func() { reader.Release() })
+	require.Equal(t, uint64(1), g.SpillFDUsed())
+
+	files, err := bundle.accountedFiles(h.proc.Ctx, g)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		for _, file := range files {
+			require.NoError(t, file.Close())
+		}
+	})
+	require.Equal(t, uint64(1), g.SpillFDUsed(), "only the active reader keeps its FD")
+	require.Zero(t, g.Used(), "handoff returns all writer cache grants")
+	bundle.release() // The old owner must not remove transferred spill data.
+	for bucket := range 3 {
+		func() {
+			token, err := g.ReserveSpillFD(1)
+			require.NoError(t, err)
+			defer token.Release()
+			file, err := files[bucket].Open(h.proc.Ctx)
+			require.NoError(t, err)
+			defer func() { require.NoError(t, files[bucket].Close()) }()
+			actual, err := io.ReadAll(file)
+			require.NoError(t, err)
+			require.Equal(t, []byte{byte(bucket)}, actual)
+		}()
+	}
+	require.Zero(t, g.SpillDiskUsed())
+	reader.Release()
+	require.Zero(t, g.SpillFDUsed())
+}
+
+func TestSpillWriterCrossOwnerFDPressure(t *testing.T) {
+	for _, sharedGeneration := range []bool{true, false} {
+		t.Run(fmt.Sprintf("shared-generation=%t", sharedGeneration), func(t *testing.T) {
+			first := newSpillTestHarness(t, 1<<30)
+			t.Cleanup(func() { first.close(t) })
+			second := newSpillTestHarness(t, 1<<30)
+			t.Cleanup(func() { second.close(t) })
+			require.NoError(t, first.budget.SetSpillCaps(1<<20, 2))
+			g := first.generation
+			if !sharedGeneration {
+				var err error
+				g, err = first.budget.OpenGenerationWithSpillCaps(2, 1<<30, 1<<20, 2)
+				require.NoError(t, err)
+			}
+			second.op.ctr.hashmapBuilder.setBudget(g)
+			require.NoError(t, first.op.ctr.writeSpillPayload(first.proc, first.files, 0, []byte("a"), 1, nil))
+			reader, err := first.generation.ReserveSpillFD(1)
+			require.NoError(t, err)
+			t.Cleanup(func() { reader.Release() })
+			readerFile, err := os.CreateTemp(t.TempDir(), "active-reader")
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, readerFile.Close()) })
+			require.NoError(t, second.op.ctr.writeSpillPayload(second.proc, second.files, 0, []byte("b"), 1, nil))
+			require.NoError(t, first.op.ctr.writeSpillPayload(first.proc, first.files, 0, []byte("a"), 1, nil))
+			require.Equal(t, uint64(1), first.budget.SpillFDUsed(), "only the active reader retains an FD")
+			for i, h := range []*spillTestHarness{first, second} {
+				func() {
+					generation := h.op.ctr.hashmapBuilder.budget
+					files, err := h.op.ctr.spillBundle.accountedFiles(h.proc.Ctx, generation)
+					require.NoError(t, err)
+					defer func() { require.NoError(t, files[0].Close()) }()
+					token, err := generation.ReserveSpillFD(1)
+					require.NoError(t, err)
+					defer token.Release()
+					file, err := files[0].Open(h.proc.Ctx)
+					require.NoError(t, err)
+					defer func() { require.NoError(t, files[0].Close()) }()
+					actual, err := io.ReadAll(file)
+					require.NoError(t, err)
+					require.Equal(t, []byte([]string{"aa", "b"}[i]), actual)
+				}()
+			}
+			require.Zero(t, first.generation.Used())
+			require.Zero(t, g.Used())
+			require.Zero(t, first.budget.SpillDiskUsed())
+			require.Equal(t, uint64(1), first.budget.SpillFDUsed())
+		})
+	}
+}
+
+func TestSpillWriterFailedAdmissionReturnsResources(t *testing.T) {
+	for _, phase := range []string{"open", "disk", "handoff", "handoff-open"} {
+		t.Run(phase, func(t *testing.T) {
+			h := newSpillTestHarness(t, 1<<30)
+			t.Cleanup(func() { h.close(t) })
+			fs, err := h.op.ctr.getSpillFS(h.proc)
+			require.NoError(t, err)
+			switch phase {
+			case "open":
+				b := &spillFileBundle{entries: map[int]*spillFileEntry{
+					0: {bucket: 0, fs: fs, name: h.op.ctr.spillUUID, created: true},
+				}}
+				h.op.ctr.spillBundle = b
+				_, err = b.openFile(h.proc.Ctx, h.generation, 0, fs, h.op.ctr.spillUUID)
+				require.Error(t, err)
+			case "disk":
+				require.NoError(t, h.budget.SetSpillCaps(1, 2))
+				err = h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("too-large"), 1, nil)
+				require.ErrorIs(t, err, process.ErrExecutionResourceAdmission)
+			case "handoff":
+				require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("ok"), 1, nil))
+				h.op.ctr.spillBundle.entries[0].bytes++
+				_, err = h.op.ctr.spillBundle.accountedFiles(h.proc.Ctx, h.generation)
+				require.ErrorContains(t, err, "corrupted spill file size")
+			case "handoff-open":
+				require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("ok"), 1, nil))
+				entry := h.op.ctr.spillBundle.entries[0]
+				require.Nil(t, entry.file)
+				require.NoError(t, fs.RemoveFile(h.proc.Ctx, entry.name))
+				_, err = h.op.ctr.spillBundle.accountedFiles(h.proc.Ctx, h.generation)
+				require.ErrorIs(t, err, os.ErrNotExist)
+			}
+			require.Zero(t, h.generation.SpillFDUsed())
+			h.op.ctr.spillBundle.release()
+			require.Zero(t, h.generation.Used())
+			require.Zero(t, h.generation.SpillDiskUsed())
+		})
+	}
+}
+
 func TestDirectSpillKeepsAdmittedRecoveryUntilBuildEnds(t *testing.T) {
 	for _, cancelAtEnd := range []bool{false, true} {
 		t.Run(fmt.Sprintf("cancel=%t", cancelAtEnd), func(t *testing.T) {
@@ -289,6 +519,14 @@ func TestEstimatedResidentBuildBytesUsesRowCountUpperBound(t *testing.T) {
 	var nilBuilder *HashmapBuilder
 	_, err = nilBuilder.EstimatedHashMapBytes(1)
 	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+	var grouping bool
+	got, err = builder.EstimatedResidentBuildBytesForInput(math.MaxUint64, 1, nil, &grouping)
+	require.NoError(t, err)
+	require.Equal(t, uint64(math.MaxUint64), got)
+	_, err = builder.EstimatedResidentBuildBytesForInput(0, -1, nil, &grouping)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
+	_, err = builder.EstimatedResidentBuildBytesForInput(0, 1, nil, nil)
+	require.ErrorIs(t, err, process.ErrExecutionResourceInvalid)
 }
 
 func BenchmarkAutoSpillRetainedProjection(b *testing.B) {
@@ -388,6 +626,18 @@ func TestAutoSpillProjectsIncomingGroupingKeys(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, tc.want, spill)
 			require.Equal(t, tc.want, op.ctr.autoSpillHasGrouping)
+			// Recovery uses the same pending-input invariant, independently of
+			// ingress state and without rescanning previously copied batches.
+			var recoveryGrouping bool
+			projected, err := op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
+				uint64(inputBytes), 513, input, &recoveryGrouping)
+			require.NoError(t, err)
+			wantMapBytes := intBytes
+			if tc.want {
+				wantMapBytes = strBytes
+			}
+			require.Equal(t, uint64(inputBytes)+wantMapBytes, projected)
+			require.Equal(t, tc.want, recoveryGrouping)
 			if tc.borrowed {
 				require.True(t, input.Vecs[0].GetGrouping().HasBorrowedValidity(), "projection must not mutate upstream-owned metadata")
 			}
@@ -395,11 +645,25 @@ func TestAutoSpillProjectsIncomingGroupingKeys(t *testing.T) {
 			// A sentinel first appearing in a later input changes the projected
 			// map kind before that input is copied into the retained relation.
 			input.Vecs[0].GetGrouping().Add(0)
+			projected, err = op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
+				uint64(inputBytes), 513, input, &recoveryGrouping)
+			require.NoError(t, err)
+			require.Equal(t, uint64(inputBytes)+strBytes, projected)
 			spill, err = op.shouldSpillBeforeRetain(inputBytes, input)
 			require.NoError(t, err)
 			require.True(t, spill)
 			// Reusing the upstream buffer cannot erase the retained fact.
 			input.Vecs[0].GetGrouping().Clear()
+			projected, err = op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
+				uint64(inputBytes), 513, nil, &recoveryGrouping)
+			require.NoError(t, err)
+			require.Equal(t, uint64(inputBytes)+strBytes, projected)
+			// A new bucket starts a new observation lifetime.
+			recoveryGrouping = false
+			projected, err = op.ctr.hashmapBuilder.EstimatedResidentBuildBytesForInput(
+				uint64(inputBytes), 513, input, &recoveryGrouping)
+			require.NoError(t, err)
+			require.Equal(t, uint64(inputBytes)+intBytes, projected)
 			spill, err = op.shouldSpillBeforeRetain(inputBytes, input)
 			require.NoError(t, err)
 			require.True(t, spill)
@@ -570,4 +834,40 @@ func TestWriteSpillPayloadCancellationStopsBeforeIO(t *testing.T) {
 	info, statErr := file.Stat()
 	require.NoError(t, statErr)
 	require.Zero(t, info.Size())
+}
+
+func TestSpillAppendAdmissionAndTruncateFailure(t *testing.T) {
+	h := newSpillTestHarness(t, 1<<20)
+	t.Cleanup(func() { h.close(t) })
+	require.NoError(t, h.budget.SetSpillCaps(16, 4))
+	require.NoError(t, h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("original"), 1, nil))
+	entry := h.op.ctr.spillBundle.entries[0]
+	fs, err := h.op.ctr.getSpillFS(h.proc)
+	require.NoError(t, err)
+	f, err := fs.OpenFile(h.proc.Ctx, entry.name)
+	require.NoError(t, err)
+	defer f.Close()
+	// Rejected growth cannot extend the existing record.
+	err = h.op.ctr.writeSpillPayload(h.proc, h.files, 0, []byte("too-large"), 1, nil)
+	require.ErrorIs(t, err, process.ErrExecutionResourceAdmission)
+	got, err := io.ReadAll(f)
+	require.NoError(t, err)
+	require.Equal(t, "original", string(got))
+	require.Equal(t, uint64(8), h.generation.SpillDiskUsed())
+	// A truncate error after admission retains its charge until bundle cleanup.
+	ro, err := os.Open(f.Name())
+	require.NoError(t, err)
+	defer ro.Close()
+	_, err = ro.Seek(0, io.SeekEnd)
+	require.NoError(t, err)
+	err = h.op.ctr.writeOpenSpillPayload(h.proc, ro, 0, []byte("tail"), 1, nil)
+	require.Error(t, err)
+	require.Equal(t, uint64(12), h.generation.SpillDiskUsed())
+	require.Equal(t, uint64(8), entry.bytes)
+	require.Equal(t, int64(1), entry.rows)
+	require.NoError(t, ro.Close())
+	require.NoError(t, f.Close())
+	h.op.ctr.spillBundle.release()
+	require.Zero(t, h.generation.SpillDiskUsed())
+	require.Zero(t, h.generation.SpillFDUsed())
 }

@@ -49,19 +49,21 @@ import (
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/sync/errgroup"
 )
 
 const (
-	tableDumpFormatVersion      = 1
-	tableDumpBoundFormatVersion = 2
-	tableDumpManifestName       = "manifest.json"
-	tableDumpReadyName          = "READY"
-	tableDumpMaxManifest        = 64 << 20
-	tableDumpMaxRelations       = 4_096
-	tableDumpMaxObjects         = 250_000
-	tableDumpMaxBlocks          = 1_000_000
-	tableDumpMaxAutoIncr        = tableDumpMaxRelations * 16
+	tableDumpFormatVersion            = 1
+	tableDumpLegacyBoundFormatVersion = 2
+	tableDumpBoundFormatVersion       = 3
+	tableDumpManifestName             = "manifest.json"
+	tableDumpReadyName                = "READY"
+	tableDumpMaxManifest              = 64 << 20
+	tableDumpMaxRelations             = 4_096
+	tableDumpMaxObjects               = 250_000
+	tableDumpMaxBlocks                = 1_000_000
+	tableDumpMaxAutoIncr              = tableDumpMaxRelations * 16
 
 	// Keep LOAD object installation separate from real catalog table locks.
 	// The high synthetic table ID follows the existing user-level-lock
@@ -131,11 +133,19 @@ func openTableDumpFS(
 	if decoded, ok, err := tryDecodeStagePath(ses, dumpPath); err != nil {
 		return nil, nil, err
 	} else if ok {
-		etlFS, root, err := fileservice.GetForETL(ctx, nil, decoded)
+		if err := process.AuthorizeSQLFileAccess(ses.proc, decoded); err != nil {
+			return nil, nil, err
+		}
+		etlFS, root, err := fileservice.GetForETL(process.SQLFileAccessContext(ctx, ses.proc), nil, decoded)
 		if err != nil {
 			return nil, nil, err
 		}
 		return fileservice.SubPath(etlFS, root), func() { etlFS.Close(ctx) }, nil
+	}
+	// This branch always opens a local directory. Filename spelling must not
+	// reclassify its provider through the generic ETL service-path parser.
+	if err := process.AuthorizeSQLFileAccessPath(ses.proc, fileservice.Path{File: dumpPath}); err != nil {
+		return nil, nil, err
 	}
 	fs, err := openLocalTableDump(dumpPath)
 	if err != nil {
@@ -845,10 +855,10 @@ func readTableDumpManifest(ctx context.Context, fs fileservice.FileService) (*ta
 	if err != nil {
 		return nil, moerr.NewInvalidInputNoCtxf("invalid table dump manifest: %v", err)
 	}
-	if manifest.Version != tableDumpFormatVersion && manifest.Version != tableDumpBoundFormatVersion {
+	if manifest.Version != tableDumpFormatVersion && manifest.Version != tableDumpLegacyBoundFormatVersion && manifest.Version != tableDumpBoundFormatVersion {
 		return nil, moerr.NewInvalidInputNoCtxf("unsupported table dump format version %d", manifest.Version)
 	}
-	if manifest.Version == tableDumpBoundFormatVersion &&
+	if (manifest.Version == tableDumpLegacyBoundFormatVersion || manifest.Version == tableDumpBoundFormatVersion) &&
 		(len(manifest.BoundExpressions) == 0 || manifest.ExpressionHash == "") {
 		return nil, moerr.NewInvalidInputNoCtx("table dump is missing bound expression metadata")
 	}
@@ -1264,7 +1274,7 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		CreateSQL: manifestCreateSQL, SchemaHash: refs[0].SchemaHash, MetadataOnly: stmt.MetadataOnly,
 		Relations: make([]tableDumpRelation, 0, len(refs)),
 	}
-	if tableDumpMayDependOnDivision(def) {
+	if tableDumpHasBoundExpressions(def) {
 		var sensitive bool
 		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), def, def)
 		if err != nil {
@@ -1693,7 +1703,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 	}
 	var restoredDef *plan.TableDef
 	var restoreExpressions bool
-	if manifest.Version == tableDumpBoundFormatVersion {
+	if manifest.Version == tableDumpLegacyBoundFormatVersion || manifest.Version == tableDumpBoundFormatVersion {
 		restoredDef, restoreExpressions, err = tableDumpRestoredExpressions(
 			targetDef, manifest.BoundExpressions, manifest.ExpressionHash)
 		if err != nil {
@@ -1702,7 +1712,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		if _, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, restoredDef); err != nil {
 			return err
 		}
-	} else if tableDumpMayDependOnDivision(targetDef) {
+	} else if tableDumpHasBoundExpressions(targetDef) {
 		var sensitive bool
 		sensitive, err = sqlplan.AnalyzeTableDumpBindings(ses.GetTxnCompileCtx(), targetDef, nil)
 		if err != nil {
@@ -1710,7 +1720,7 @@ func handleLoadTable(ctx context.Context, ses *Session, stmt *tree.LoadTable) (e
 		}
 		if sensitive {
 			return moerr.NewInvalidInputNoCtx(
-				"legacy table dump cannot verify persisted division bindings; create a new dump")
+				"legacy table dump cannot verify persisted expression bindings; create a new dump")
 		}
 	}
 	if len(targetRefs) != len(manifest.Relations) {

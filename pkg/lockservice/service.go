@@ -117,6 +117,13 @@ type service struct {
 		beforeRemoteLockBindCheck func()
 		serverOpts                []ServerOption
 	}
+	// remoteRouteOwners is a local inventory hint, protected by bindChangeMu.
+	// nil means no snapshot has been read. It only governs route publication
+	// and idle eviction; it must never authorize releasing transaction locks.
+	remoteRouteOwners *remoteRouteOwnerSnapshot
+	// Cold publication can observe membership ahead of the keeper. Coalesce
+	// those publications into one scan so a fast join/leave is not missed.
+	idleRouteScanRequested atomic.Bool
 }
 
 type txnClosureAdmission struct {
@@ -445,6 +452,10 @@ func (s *service) Lock(
 		return pb.Result{}, err
 	}
 	options = s.applyLockWaitTimeoutCeiling(options)
+	if options.NoWait && (!validNoWaitLockOptions(options) || len(rows) == 0) {
+		return pb.Result{}, moerr.NewNotSupportedNoCtx(
+			"nonblocking row lock admission requires exact row keys and FastFail policy")
+	}
 	if lockWaitDeadlineExpired(options, time.Now()) {
 		return pb.Result{}, ErrLockTimeout
 	}
@@ -605,16 +616,44 @@ func (s *service) Lock(
 			result = r
 			err = e
 		})
+	noWaitConflict := options.NoWait && err == ErrLockConflict
 	if terminalErr := txn.terminalLockErrorLocked(txnID); terminalErr != nil {
-		result = pb.Result{}
+		result = cleanupOnlyNoWaitResult(result, bind, options.NoWait)
 		err = terminalErr
-	} else if err == nil {
+	} else if err == nil || noWaitConflict {
 		if e := s.checkBindChangedBeforeLockSuccess(txn, txnID, bind); e != nil {
-			result = pb.Result{}
+			result = cleanupOnlyNoWaitResult(result, bind, options.NoWait)
 			err = e
 		}
 	}
 	return result, err
+}
+
+// cleanupOnlyNoWaitResult preserves the route needed to release locks acquired
+// by a nonblocking request when a terminal fence makes the lock outcome fatal.
+// The route does not acknowledge a successful grant: all lock and retry result
+// fields are deliberately discarded, and the original fatal error is kept.
+func cleanupOnlyNoWaitResult(
+	result pb.Result,
+	selectedBind pb.LockTable,
+	noWait bool,
+) pb.Result {
+	if !noWait || !selectedBind.Valid {
+		return pb.Result{}
+	}
+
+	cleanupBind := selectedBind
+	returned := result.LockedOn
+	if returned.Valid && returned.ServiceID != "" &&
+		returned.Group == selectedBind.Group &&
+		returned.Table == selectedBind.Table &&
+		returned.OriginTable == selectedBind.OriginTable &&
+		returned.Sharding == selectedBind.Sharding {
+		// A remote table may have completed against a newer physical binding than
+		// the one selected before the RPC. Prefer that validated cleanup route.
+		cleanupBind = returned
+	}
+	return pb.Result{LockedOn: cleanupBind}
 }
 
 // applyLockWaitTimeoutCeiling bounds missing or oversized wait budgets and
@@ -2251,6 +2290,7 @@ func (s *service) publishLockTableBindFromAllocator(
 	allocator allocatorState,
 	requestAllocator allocatorState,
 ) (lockTable, error) {
+	confirmed, ownerErr := s.prepareRemoteRoutePublication(ctx, bind)
 	if !s.beginLockTablePublication() {
 		return nil, ErrLockTableBindChanged
 	}
@@ -2276,6 +2316,13 @@ func (s *service) publishLockTableBindFromAllocator(
 	s.bindChangeMu.Lock()
 	defer s.bindChangeMu.Unlock()
 
+	if ownerErr != nil {
+		return nil, ownerErr
+	}
+	if !s.canPublishRemoteRouteLocked(bind, confirmed) {
+		return nil, ErrLockTableBindChanged
+	}
+	defer s.remoteRoutePublished(confirmed)
 	current := s.tableGroups.get(group, tableID)
 	if current != nil {
 		if current.getBind().Changed(bind) {
@@ -2287,6 +2334,12 @@ func (s *service) publishLockTableBindFromAllocator(
 }
 
 func (s *service) handleBindChanged(newBind pb.LockTable) {
+	ctx, cancel := context.WithTimeout(context.Background(), defaultRPCTimeout)
+	defer cancel()
+	confirmed, err := s.prepareRemoteRoutePublication(ctx, newBind)
+	if err != nil {
+		return
+	}
 	if !s.beginLockTablePublication() {
 		return
 	}
@@ -2295,6 +2348,10 @@ func (s *service) handleBindChanged(newBind pb.LockTable) {
 	s.bindChangeMu.Lock()
 	defer s.bindChangeMu.Unlock()
 
+	if !s.canPublishRemoteRouteLocked(newBind, confirmed) {
+		return
+	}
+	defer s.remoteRoutePublished(confirmed)
 	current := s.tableGroups.get(newBind.Group, newBind.Table)
 	if current != nil && !current.getBind().Changed(newBind) {
 		return
@@ -2306,12 +2363,19 @@ func (s *service) handleBindChanged(newBind pb.LockTable) {
 }
 
 func (s *service) handleBindChangedFromAllocator(
+	ctx context.Context,
 	source string,
 	oldBind pb.LockTable,
 	newBind pb.LockTable,
 	allocator allocatorState,
 	requestAllocator allocatorState,
 ) error {
+	var retired lockTable
+	defer func() {
+		if retired != nil {
+			retired.close(closeReasonBindChanged)
+		}
+	}()
 	if !s.beginLockTablePublication() {
 		return ErrLockTableBindChanged
 	}
@@ -2320,6 +2384,9 @@ func (s *service) handleBindChangedFromAllocator(
 	s.allocatorVersionMu.Lock()
 	defer s.allocatorVersionMu.Unlock()
 
+	if err := ctx.Err(); err != nil {
+		return lockWaitContextError(ctx, err)
+	}
 	if _, accepted := s.observeAllocatorStateLocked(
 		source,
 		allocator,
@@ -2332,15 +2399,28 @@ func (s *service) handleBindChangedFromAllocator(
 	s.bindChangeMu.Lock()
 	defer s.bindChangeMu.Unlock()
 
+	if !oldBind.Changed(newBind) {
+		return ErrLockTableBindChanged
+	}
+
+	// Accepted TN evidence that the old generation changed completes its
+	// cleanup independently of replacement-owner discovery. Unlock interprets
+	// a non-nil result as a reason to retry the old owner, so an unpublishable
+	// replacement must not turn this authoritative change back into a retry.
+	publish := s.canPublishRemoteRouteLocked(newBind, nil)
 	current := s.tableGroups.get(newBind.Group, newBind.Table)
 	if current != nil {
 		currentBind := current.getBind()
-		if !currentBind.Changed(newBind) {
-			return nil
+		if !currentBind.Changed(newBind) || currentBind.Changed(oldBind) {
+			// A concurrent publisher owns this route. Retire only the exact
+			// old generation; never fence or overwrite the replacement.
+			publish = false
 		}
-		if currentBind.Changed(oldBind) {
-			return ErrLockTableBindChanged
-		}
+	}
+	if !publish {
+		s.fenceByExactBind(oldBind)
+		retired = s.tableGroups.detachExactBind(oldBind)
+		return nil
 	}
 
 	new := s.createLockTableByBind(newBind)

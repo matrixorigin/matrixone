@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"slices"
@@ -87,6 +88,12 @@ func (lockOp *LockOp) OpType() vm.OpType {
 }
 
 func (lockOp *LockOp) Prepare(proc *process.Process) error {
+	for _, target := range lockOp.targets {
+		if (target.noWait || target.skipLocked) && !proc.GetTxnOperator().Txn().IsPessimistic() {
+			return moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
+		}
+	}
 	if lockOp.OpAnalyzer == nil {
 		lockOp.OpAnalyzer = process.NewAnalyzer(lockOp.GetIdx(), lockOp.IsFirst, lockOp.IsLast, "lock_op")
 	} else {
@@ -136,7 +143,19 @@ func (lockOp *LockOp) Prepare(proc *process.Process) error {
 func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 	txnOp := proc.GetTxnOperator()
 	if !txnOp.Txn().IsPessimistic() {
+		for _, target := range lockOp.targets {
+			if target.noWait || target.skipLocked {
+				return vm.CallResult{}, moerr.NewNotSupportedNoCtx(
+					"NOWAIT and SKIP LOCKED require a pessimistic transaction")
+			}
+		}
 		return vm.Exec(lockOp.GetChildren(0), proc)
+	}
+	if lockOp.hasSkipLockedTargets() {
+		if err := lockOp.validateSkipLockedTargets(); err != nil {
+			return vm.CallResult{}, err
+		}
+		return callSkipLocked(proc, lockOp)
 	}
 
 	// for the case like `select for update`, need to lock whole batches before send it to next operator
@@ -144,35 +163,166 @@ func (lockOp *LockOp) Call(proc *process.Process) (vm.CallResult, error) {
 	return callNonBlocking(proc, lockOp)
 }
 
+func (lockOp *LockOp) hasSkipLockedTargets() bool {
+	for i := range lockOp.targets {
+		if lockOp.targets[i].skipLocked {
+			return true
+		}
+	}
+	return false
+}
+
+func (lockOp *LockOp) validateSkipLockedTargets() error {
+	for _, target := range lockOp.targets {
+		if !target.skipLocked || target.noWait || target.mode != lock.LockMode_Shared {
+			return moerr.NewNotSupportedNoCtx(
+				"SKIP LOCKED requires every target to be a Shared target with the same policy")
+		}
+	}
+	return nil
+}
+
+// callSkipLocked filters the candidate stream one tuple at a time. A batch
+// conflict cannot identify which tuple was unavailable, so each candidate is
+// copied into a one-row batch before using the normal exact-row lock path. The
+// source batch remains owned by its child and output is an owned copy containing
+// only admitted rows.
+func callSkipLocked(
+	proc *process.Process,
+	lockOp *LockOp) (vm.CallResult, error) {
+	// CallResult batches are borrowed by downstream operators. A new Call means
+	// the previous result has been consumed, so this operator can reclaim its
+	// copy before reading another child batch.
+	lockOp.cleanSkipLockedOutput(proc)
+	analyzer := lockOp.OpAnalyzer
+	for {
+		result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return result, err
+		}
+		if lockOp.ctr.retryError != nil {
+			// Row refreshes may be discovered while filtering a batch. Surface the
+			// retry before publishing any accepted prefix, including when a
+			// downstream LIMIT would otherwise stop before the next EOF call.
+			result.Batch = nil
+			return result, lockOp.ctr.retryError
+		}
+		if result.Batch == nil {
+			// Unlike ordinary LockOp EOF, SKIP LOCKED has no synthetic lockRows
+			// or absent-key/table grant to perform here.
+			return result, lockOp.ctr.retryError
+		}
+
+		input := result.Batch
+		if input.IsEmpty() {
+			if input.Last() || result.Status == vm.ExecStop {
+				return result, nil
+			}
+			// Empty batches are not EOF. Continue until an admitted row or the
+			// child reports its actual end.
+			continue
+		}
+
+		accepted := make([]int64, 0, input.RowCount())
+		for rowIdx := 0; rowIdx < input.RowCount(); rowIdx++ {
+			if err := proc.Ctx.Err(); err != nil {
+				return result, err
+			}
+			window, err := input.Window(rowIdx, rowIdx+1)
+			if err != nil {
+				return result, err
+			}
+			candidate, err := window.Dup(proc.Mp())
+			window.Clean(nil)
+			if err != nil {
+				return result, err
+			}
+			err = performLock(candidate, proc, lockOp, analyzer, -1)
+			candidate.Clean(proc.Mp())
+			if err == lockservice.ErrLockConflict {
+				if lockOp.ctr.retryError != nil {
+					// A completed target can have advanced the snapshot or detected a
+					// definition fence before a later target conflicts. That candidate
+					// must trigger a retry, not be silently converted into a skip.
+					result.Batch = nil
+					return result, lockOp.ctr.retryError
+				}
+				// Only the physical owner's settled direct-conflict outcome is
+				// skippable. Joined conflict/cleanup/transport errors remain fatal.
+				continue
+			}
+			if err != nil {
+				return result, err
+			}
+			if lockOp.ctr.retryError != nil {
+				// accepted contains only an unpublished row-index prefix. Return the
+				// retry now instead of creating a batch that a LIMIT could expose.
+				result.Batch = nil
+				return result, lockOp.ctr.retryError
+			}
+			accepted = append(accepted, int64(rowIdx))
+		}
+
+		output, err := input.Dup(proc.Mp())
+		if err != nil {
+			return result, err
+		}
+		output.Shrink(accepted, false)
+		result.Batch = output
+		if len(accepted) == 0 && !input.Last() && result.Status != vm.ExecStop {
+			output.Clean(proc.Mp())
+			// An all-skipped batch must not look like EOF to LIMIT or any other
+			// downstream operator. Pull another candidate batch instead.
+			continue
+		}
+		lockOp.ctr.skipLockedOutput = output
+		return result, nil
+	}
+}
+
+func (lockOp *LockOp) cleanSkipLockedOutput(proc *process.Process) {
+	if lockOp.ctr.skipLockedOutput != nil {
+		lockOp.ctr.skipLockedOutput.Clean(proc.Mp())
+		lockOp.ctr.skipLockedOutput = nil
+	}
+}
+
 func callNonBlocking(
 	proc *process.Process,
 	lockOp *LockOp) (vm.CallResult, error) {
 	analyzer := lockOp.OpAnalyzer
 
-	result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
-	if err != nil {
-		return result, err
-	}
+	for {
+		result, err := vm.ChildrenCall(lockOp.GetChildren(0), proc, analyzer)
+		if err != nil {
+			return result, err
+		}
 
-	if result.Batch == nil {
-		if lockOp.ctr.retryError == nil {
-			err := lockTalbeIfLockCountIsZero(proc, lockOp)
-			if err != nil {
+		if result.Status == vm.ExecYield {
+			return result, nil
+		}
+		if result.Batch == nil {
+			if lockOp.ctr.retryError == nil {
+				if err := lockTalbeIfLockCountIsZero(proc, lockOp); err != nil {
+					return result, err
+				}
+			}
+			return result, lockOp.ctr.retryError
+		}
+		if !result.Batch.IsEmpty() {
+			lockOp.ctr.lockCount += int64(result.Batch.RowCount())
+			if err := performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
 				return result, err
 			}
 		}
-		return result, lockOp.ctr.retryError
-	}
-	if result.Batch.IsEmpty() {
-		return result, err
-	}
 
-	lockOp.ctr.lockCount += int64(result.Batch.RowCount())
-	if err = performLock(result.Batch, proc, lockOp, analyzer, -1); err != nil {
-		return result, err
+		if lockOp.ctr.retryError == nil {
+			return result, nil
+		}
+		// Finish acquiring the remaining locks before retrying, but do not
+		// forward batches from the outdated snapshot. An early-stopping parent
+		// such as LIMIT may otherwise never call us again to observe the error.
 	}
-
-	return result, nil
 }
 
 func mergeableLockTargets(left, right lockTarget) bool {
@@ -275,6 +425,7 @@ func performLock(
 		// a full range lock can require lockservice to merge ranges that are
 		// already held by multiple foreign-key validation transactions.
 		if targetIdx == -1 && target.mode != lock.LockMode_Shared &&
+			!target.noWait && !target.skipLocked &&
 			target.filter == nil && !target.lockTable && target.lockRows == nil {
 			for next := idx + 1; next < len(lockOp.targets); next++ {
 				candidate := lockOp.targets[next]
@@ -301,7 +452,16 @@ func performLock(
 		}
 		target = lockOp.targets[primaryIdx]
 		if proc.GetTxnOperator().LockSkipped(target.tableID, target.mode) {
+			if target.noWait || target.skipLocked {
+				return moerr.NewNotSupportedNoCtx(
+					"NOWAIT and SKIP LOCKED cannot bypass physical lock admission")
+			}
 			continue
+		}
+		if (target.noWait || target.skipLocked) &&
+			(target.lockTable || len(group) > 1) {
+			return moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED require exact row lock targets")
 		}
 		lockOp.logger.Debug("lock",
 			zap.Uint64("table", target.tableID),
@@ -359,6 +519,8 @@ func performLock(
 				WithMaxBytesPerLock(int(proc.GetLockService().GetConfig().MaxLockRowCount)).
 				WithFilterRows(target.filter, filterCols).
 				WithLockTable(lockTable, target.changeDef).
+				WithNoWait(target.noWait).
+				WithSkipLocked(target.skipLocked).
 				WithHasNewVersionInRangeFunc(hasNewVersionInRangeFunc),
 			0,
 		)
@@ -377,8 +539,12 @@ func performLock(
 			continue
 		}
 
-		if defChanged && !lockOp.ctr.defChanged {
+		if defChanged {
 			lockOp.ctr.defChanged = true
+			// Persist a definition retry before inspecting another target. A later
+			// direct SKIP LOCKED conflict must not discard this plan-generation
+			// fence, including when every remaining candidate is skipped.
+			lockOp.ctr.retryError = retryWithDefChangedError
 		}
 
 		// refreshTS is last commit ts + 1, because we need see the committed data.
@@ -400,6 +566,12 @@ func performLock(
 		// the locks to avoid another conflict when retrying
 		if !needRetry && !refreshTS.IsEmpty() {
 			needRetry = true
+		}
+		if !defChanged && !refreshTS.IsEmpty() && lockOp.ctr.retryError == nil {
+			// Keep the refresh outcome in operator state while continuing to
+			// acquire successful targets. A subsequent direct SKIP LOCKED conflict
+			// can then surface this retry instead of losing it on early return.
+			lockOp.ctr.retryError = retryError
 		}
 	}
 	// when a transaction needs to operate on many data, there may be multiple conflicts on the
@@ -698,6 +870,10 @@ func doLock(
 	lockService := proc.GetLockService()
 
 	if !txnOp.Txn().IsPessimistic() {
+		if opts.noWait || opts.skipLocked {
+			return false, false, timestamp.Timestamp{}, moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
+		}
 		return false, false, timestamp.Timestamp{}, nil
 	}
 
@@ -743,7 +919,12 @@ func doLock(
 		fetchFunc = GetFetchRowsFunc(pkType)
 	}
 	fetchLimit := opts.maxCountPerLock
-	if (opts.mode == lock.LockMode_Shared || exactMutation) && !opts.lockTable && vec != nil {
+	fastFail := opts.noWait || opts.skipLocked
+	if fastFail && opts.lockTable {
+		return false, false, timestamp.Timestamp{}, moerr.NewNotSupportedNoCtx(
+			"NOWAIT and SKIP LOCKED require exact row lock targets")
+	}
+	if (opts.mode == lock.LockMode_Shared || exactMutation || fastFail) && !opts.lockTable && vec != nil {
 		// A runtime cardinality surprise must not widen a Shared target or an
 		// exact internal mutation. The latter fails on the fixed-bookkeeping
 		// ceiling instead of upgrading to a table lock.
@@ -760,6 +941,10 @@ func doLock(
 		opts.filterCols)
 	if !has {
 		return false, false, timestamp.Timestamp{}, nil
+	}
+	if fastFail && g != lock.Granularity_Row {
+		return false, false, timestamp.Timestamp{}, moerr.NewNotSupportedNoCtx(
+			"NOWAIT and SKIP LOCKED require exact row lock targets")
 	}
 
 	if g == lock.Granularity_Row && len(rows) > 1 {
@@ -780,6 +965,10 @@ func doLock(
 	}
 	if opts.waitPolicy != nil {
 		options.Policy = *opts.waitPolicy
+	}
+	if fastFail {
+		options.NoWait = true
+		options.Policy = lock.WaitPolicy_FastFail
 	}
 	if err = setPlanSnapshotForLock(ctx, tableID, txn.IsRCIsolation(), proc, &options); err != nil {
 		return false, false, timestamp.Timestamp{}, err
@@ -821,6 +1010,24 @@ func doLock(
 	if opts.sharding == lock.Sharding_ByRow {
 		table = lockservice.ShardingByRow(rows[0])
 	}
+	if fastFail {
+		// If this lock service already knows the physical table binding, register
+		// it before issuing a nonblocking request. A first request can allocate
+		// its binding inside Lock; in that case Result.LockedOn below supplies the
+		// same cleanup route on success, conflict, or an indeterminate RPC error.
+		bind, bindErr := lockService.GetLockTableBind(opts.group, table)
+		if bindErr != nil {
+			return false, false, timestamp.Timestamp{}, bindErr
+		}
+		if bind.Valid {
+			if bind.Table != table || bind.Group != opts.group {
+				return false, false, timestamp.Timestamp{}, moerr.NewLockTableBindChangedNoCtx()
+			}
+			if addErr := txnOp.AddLockTable(bind); addErr != nil {
+				return false, false, timestamp.Timestamp{}, addErr
+			}
+		}
+	}
 
 	result, err := lockWithRetry(
 		ctx,
@@ -836,6 +1043,20 @@ func doLock(
 		pkType,
 	)
 	if err != nil {
+		if fastFail {
+			if result.LockedOn.Valid {
+				if result.LockedOn.Table != table || result.LockedOn.Group != opts.group {
+					err = errors.Join(err, moerr.NewLockTableBindChangedNoCtx())
+				} else if addErr := txnOp.AddLockTable(result.LockedOn); addErr != nil {
+					err = errors.Join(err, addErr)
+				}
+			} else if err == lockservice.ErrLockConflict {
+				err = errors.Join(err, moerr.NewLockTableBindChangedNoCtx())
+			}
+			if opts.noWait && err == lockservice.ErrLockConflict {
+				return false, false, timestamp.Timestamp{}, moerr.NewLockNowaitNoCtx()
+			}
+		}
 		return false, false, timestamp.Timestamp{}, err
 	}
 
@@ -1219,6 +1440,20 @@ func lockWithRetry(
 	opts LockOptions,
 	pkType types.Type,
 ) (lock.Result, error) {
+	if opts.noWait || opts.skipLocked {
+		return LockWithMayUpgrade(
+			ctx,
+			lockService,
+			tableID,
+			rows,
+			txnID,
+			options,
+			fetchFunc,
+			vec,
+			opts,
+			pkType,
+		)
+	}
 	var result lock.Result
 	var err error
 	retryState := lockRetryState{}
@@ -1269,6 +1504,9 @@ func LockWithMayUpgrade(
 	}
 	result, err := lockService.Lock(ctx, tableID, rows, txnID, options)
 	if !moerr.IsMoErrCode(err, moerr.ErrLockNeedUpgrade) {
+		return result, err
+	}
+	if opts.noWait || opts.skipLocked || options.NoWait {
 		return result, err
 	}
 	if (opts.admissionOnly || exactMutationRows(ctx)) && !opts.lockTable {
@@ -1521,6 +1759,18 @@ func DefaultLockOptions(parker *types.Packer) LockOptions {
 	}
 }
 
+// WithNoWait enables exact-row FastFail admission for one lock target.
+func (opts LockOptions) WithNoWait(noWait bool) LockOptions {
+	opts.noWait = noWait
+	return opts
+}
+
+// WithSkipLocked enables candidate-level conflict filtering for one target.
+func (opts LockOptions) WithSkipLocked(skipLocked bool) LockOptions {
+	opts.skipLocked = skipLocked
+	return opts
+}
+
 // WithLockSharding set lock sharding
 func (opts LockOptions) WithLockSharding(sharding lock.Sharding) LockOptions {
 	opts.sharding = sharding
@@ -1607,9 +1857,22 @@ func (lockOp *LockOp) CopyToPipelineTarget() []*pipeline.LockTarget {
 			LockTableAtTheEnd:    target.lockTableAtTheEnd,
 			ObjRef:               plan.DeepCopyObjectRef(target.objRef),
 			PartitionColIdxInBat: target.partitionColumnIndexInBatch,
+			NoWait:               target.noWait,
+			SkipLocked:           target.skipLocked,
 		}
 	}
 	return targets
+}
+
+// RequiresCoordinatorExecution reports whether the lock policy must remain on
+// the transaction-owning CN instead of being serialized to a remote worker.
+func (lockOp *LockOp) RequiresCoordinatorExecution() bool {
+	for i := range lockOp.targets {
+		if lockOp.targets[i].noWait || lockOp.targets[i].skipLocked {
+			return true
+		}
+	}
+	return false
 }
 
 // CopyTargetsFrom creates a deep copy of targets from another LockOp.
@@ -1633,6 +1896,8 @@ func (lockOp *LockOp) CopyTargetsFrom(src *LockOp) {
 			lockTable:                    t.lockTable,
 			changeDef:                    t.changeDef,
 			mode:                         t.mode,
+			noWait:                       t.noWait,
+			skipLocked:                   t.skipLocked,
 			lockRows:                     plan.DeepCopyExpr(t.lockRows),
 			lockTableAtTheEnd:            t.lockTableAtTheEnd,
 		}
@@ -1672,6 +1937,25 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 	refreshTimestampIndexInBatch int32,
 	lockRows *plan.Expr,
 	lockTableAtTheEnd bool) *LockOp {
+	return lockOp.AddLockTargetWithPolicy(
+		tableID, objRef, mode, primaryColumnIndexInBatch, primaryColumnType,
+		partitionColIndexInBatch, refreshTimestampIndexInBatch, lockRows,
+		lockTableAtTheEnd, false, false)
+}
+
+// AddLockTargetWithPolicy adds a target with explicit nonblocking read semantics.
+func (lockOp *LockOp) AddLockTargetWithPolicy(
+	tableID uint64,
+	objRef *plan.ObjectRef,
+	mode lock.LockMode,
+	primaryColumnIndexInBatch int32,
+	primaryColumnType types.Type,
+	partitionColIndexInBatch int32,
+	refreshTimestampIndexInBatch int32,
+	lockRows *plan.Expr,
+	lockTableAtTheEnd bool,
+	noWait bool,
+	skipLocked bool) *LockOp {
 	lockOp.targets = append(lockOp.targets, lockTarget{
 		tableID:                      tableID,
 		objRef:                       objRef,
@@ -1679,6 +1963,8 @@ func (lockOp *LockOp) AddLockTargetWithMode(
 		primaryColumnType:            primaryColumnType,
 		refreshTimestampIndexInBatch: refreshTimestampIndexInBatch,
 		mode:                         mode,
+		noWait:                       noWait,
+		skipLocked:                   skipLocked,
 		lockRows:                     lockRows,
 		lockTableAtTheEnd:            lockTableAtTheEnd,
 		partitionColumnIndexInBatch:  partitionColIndexInBatch,
@@ -1819,6 +2105,7 @@ func (lockOp *LockOp) AddLockTargetWithPartitionAndMode(
 }
 
 func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err error) {
+	lockOp.cleanSkipLockedOutput(proc)
 	lockOp.resetParker()
 	lockOp.ctr.retryError = nil
 	lockOp.ctr.defChanged = false
@@ -1827,6 +2114,7 @@ func (lockOp *LockOp) Reset(proc *process.Process, pipelineFailed bool, err erro
 
 // Free free mem
 func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error) {
+	lockOp.cleanSkipLockedOutput(proc)
 	lockOp.cleanParker()
 	lockOp.ctr.relations = nil
 }

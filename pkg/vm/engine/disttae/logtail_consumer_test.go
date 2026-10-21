@@ -1179,6 +1179,44 @@ func TestToSubscribeTableReturnsInjectedFailure(t *testing.T) {
 
 	_, err = (&PushClient{}).toSubscribeTable(ctx, 0, 42, "t", 10, "db")
 	require.ErrorContains(t, err, "injected subscribe table err")
+	accessTime := int64(1)
+	_, err = (&PushClient{}).toSubscribeTableWithAccessTime(ctx, 0, 42, "t", 10, "db", &accessTime)
+	require.ErrorContains(t, err, "injected subscribe table err")
+	require.EqualValues(t, 1, accessTime, "failure precedes even idle bookkeeping")
+}
+
+func TestCatalogProofSubscriptionAccessTime(t *testing.T) {
+	ctx := t.Context()
+	e := &Engine{partitions: make(map[[2]uint64]*logtailreplay.Partition)}
+	e.pClient.eng = e
+	e.pClient.subscribed = subscribedTable{eng: e, m: map[uint64]*subEntry{
+		42: {dbID: 10, state: Subscribed},
+		44: {dbID: 10, state: Subscribed},
+	}}
+	e.pClient.subscriber = &logTailSubscriber{}
+	e.pClient.subscribed.setTablePendingUpdate(10, 42, timestamp.Timestamp{PhysicalTime: 100})
+	var accessTime int64
+	for _, id := range []uint64{42, 44} {
+		pending := false
+		ps, err := e.pClient.toSubscribeTableWithAccessTime(ctx, 0, id, "t", 10, "db", &accessTime, &pending)
+		require.NoError(t, err)
+		require.NotNil(t, ps)
+		require.Equal(t, id == 42, pending, "sharing idle time cannot share pending state")
+		require.NotZero(t, accessTime)
+		require.Equal(t, accessTime, e.pClient.subscribed.m[id].lastTs.Load())
+	}
+	require.Equal(t, e.pClient.subscribed.m[42].lastTs.Load(), e.pClient.subscribed.m[44].lastTs.Load(),
+		"consecutive warm tables use the same idle sample")
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	_, err := e.pClient.toSubscribeTableWithAccessTime(canceled, 0, 43, "cold", 10, "db", &accessTime)
+	require.ErrorIs(t, err, context.Canceled)
+	require.Zero(t, accessTime, "a cold/waiting access invalidates the earlier idle sample")
+	e.pClient.subscribed.m[44].lastTs.Store(0)
+	_, err = e.pClient.toSubscribeTableWithAccessTime(ctx, 0, 44, "t", 10, "db", &accessTime)
+	require.NoError(t, err)
+	require.NotZero(t, accessTime)
+	require.Equal(t, accessTime, e.pClient.subscribed.m[44].lastTs.Load())
 }
 
 func TestWaitCanServeTableSnapshotRefreshesAfterPendingApply(t *testing.T) {

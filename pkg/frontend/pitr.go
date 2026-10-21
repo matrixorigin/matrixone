@@ -71,7 +71,11 @@ var (
 
 	getSqlForCheckAccountFmt = `select account_id from mo_catalog.mo_account {MO_TS = %d} where account_name = '%s';`
 
-	getPubInfoWithPitrFormat = `select pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
+	// The layout must stay in sync with extractPubInfosFromExecResult: the
+	// parser reads account_id and account_name first. A projection starting
+	// at pub_name fed the pub name into ParseInt and aborted database
+	// restores for published databases (#30607).
+	getPubInfoWithPitrFormat = `select account_id, account_name, pub_name, database_name, database_id, table_list, account_list, created_time, update_time, owner, creator, comment from mo_catalog.mo_pubs {MO_TS = %d} where account_id = %d and database_name = '%s';`
 
 	// update mo_pitr object id
 	updateMoPitrAccountObjectIdFmt = `update mo_catalog.mo_pitr set pitr_status = 0, pitr_status_changed_time = %d where account_name = '%s' and pitr_status = 1 and obj_id = %d;`
@@ -1551,7 +1555,7 @@ func restoreToDatabaseOrTableWithPitr(
 
 		return
 	} else {
-		createDbSql = createDatabaseIfNotExistsSQL(dbName)
+		createDbSql = appendDatabaseDefaultsSQL(createDatabaseIfNotExistsSQL(dbName), definition.defaults)
 		// create db
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create db: %v, create db sql: %s", pitrName, dbName, createDbSql))
 		if err = execRestoreCreateDatabase(ctx, bh, dbName, createDbSql); err != nil {
@@ -1675,6 +1679,10 @@ func reCreateTableWithPitr(
 
 	var isMasterTable bool
 	isMasterTable, err = checkTableIsMaster(ctx, sid, bh, pitrName, tblInfo.dbName, tblInfo.tblName)
+	if err != nil {
+		// A failed FK/master-table lookup must not allow destructive restore DDL.
+		return err
+	}
 	if isMasterTable {
 		// skip restore the table which is master table
 		getLogger(sid).Info(fmt.Sprintf("[%s] skip restore master table: %v.%v", pitrName, tblInfo.dbName, tblInfo.tblName))
@@ -2600,7 +2608,12 @@ func getCreateDatabaseSqlInPitr(ctx context.Context,
 	if len(colsList) == 0 || len(colsList[0]) == 0 {
 		return logicalRestoreDatabaseDefinition{}, moerr.NewBadDB(ctx, dbName)
 	}
-	return newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
+	definition, err := newLogicalRestoreDatabaseDefinition(ctx, dbName, colsList[0])
+	if err != nil {
+		return logicalRestoreDatabaseDefinition{}, err
+	}
+	definition.defaults, err = readDatabaseDefaultsForRestore(ctx, bh, dbName, accountId, ts)
+	return definition, err
 }
 
 // createPubByPitr create pub after the database is created by pitr
@@ -2639,7 +2652,10 @@ func createPubByPitr(
 	}()
 
 	for _, pubInfo := range pubInfos {
-		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Owner, pubInfo.Creator)
+		// mo_pubs stores the role in owner and the user in creator.  AttachAccount
+		// takes the user before the role, so keep the historical publication
+		// identities in their respective context slots while replaying the CREATE.
+		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Creator, pubInfo.Owner)
 		if ast, err = mysql.Parse(toCtx, pubInfo.GetCreateSql(), 1); err != nil {
 			return
 		}

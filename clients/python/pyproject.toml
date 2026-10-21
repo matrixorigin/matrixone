@@ -33,7 +33,7 @@ requires-python = ">=3.8"
 dependencies = [
     "PyMySQL>=1.0.0",
     "aiomysql>=0.2.0",
-    "SQLAlchemy>=1.4.0,<3.0.0",
+    "SQLAlchemy[asyncio]>=1.4.0,<3.0.0",
     "typing-extensions>=4.0.0",
     "python-dateutil>=2.8.0",
     "numpy>=1.20.0",
@@ -44,6 +44,7 @@ dependencies = [
 dev = [
     "pytest>=6.0",
     "pytest-asyncio>=0.18.0",
+    "aiosqlite>=0.20",
     "pytest-cov>=3.0",
     "Faker>=10.0.0",
     "pyarrow>=10.0.0",
@@ -66,6 +67,7 @@ docs = [
 test = [
     "pytest>=6.0",
     "pytest-asyncio>=0.18.0",
+    "aiosqlite>=0.20",
     "pytest-cov>=3.0",
     "Faker>=10.0.0",
     "pyarrow>=10.0.0",
@@ -250,6 +252,7 @@ envlist =
     py312-sqlalchemy20
 
 [testenv]
+extras = test
 deps =
     sqlalchemy14: SQLAlchemy>=1.4.0,<2.0.0
     sqlalchemy20: SQLAlchemy>=2.0.0,<3.0.0

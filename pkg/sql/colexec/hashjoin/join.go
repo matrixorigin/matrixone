@@ -268,6 +268,9 @@ func (hashJoin *HashJoin) Call(proc *process.Process) (vm.CallResult, error) {
 				if err != nil {
 					return result, hashbuild.TerminalBudgetError(proc.Ctx, err)
 				}
+				if input.Status == vm.ExecYield {
+					return input, nil
+				}
 				bat := input.Batch
 
 				if bat == nil {
@@ -713,13 +716,6 @@ func (ctr *container) probe(hashJoin *HashJoin, proc *process.Process, result *v
 	if batchMembership {
 		for _, column := range hashJoin.ResultCols {
 			if column.Rel != 0 {
-				batchMembership = false
-				break
-			}
-			source := ctr.leftBat.Vecs[column.Pos]
-			// Union's constant path broadcasts uniform grouping only. Retain
-			// scalar copying for constants with logical-row grouping metadata.
-			if source.IsConst() && source.HasGrouping() {
 				batchMembership = false
 				break
 			}

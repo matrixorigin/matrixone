@@ -6308,12 +6308,14 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			notNullable: true,
 		},
 		{
+			// String-to-DATETIME expressions may synthesize NULL; precision
+			// must still grow to the common type regardless of row order.
 			name:        "datetime scale grows",
 			rows:        "row(cast('2024-01-02 12:34:56.123' as datetime(3))), row(cast('2024-01-02 12:34:56.123456' as datetime(6)))",
 			oid:         types.T_datetime,
 			width:       6,
 			scale:       6,
-			notNullable: true,
+			notNullable: false,
 		},
 		{
 			name:        "datetime scale is order independent",
@@ -6321,7 +6323,7 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			oid:         types.T_datetime,
 			width:       6,
 			scale:       6,
-			notNullable: true,
+			notNullable: false,
 		},
 		{
 			name:        "char width grows",
@@ -6526,7 +6528,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, false, false, true)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(boundHavingList))
 	require.Len(t, bindCtx.windows, 1)
@@ -6580,7 +6582,7 @@ func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
 	require.NoError(t, err)
 
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, false, false, true)
 	require.NoError(t, err)
 	require.Len(t, boundHavingList, 1)
 	require.IsType(t, &plan.Expr_Sub{}, boundHavingList[0].Expr)
@@ -6598,7 +6600,7 @@ func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, false, false, true)
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -6666,7 +6668,7 @@ func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
 	orderList := stmts[0].(*tree.Select).OrderBy
 
 	// bind select clause
-	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, false, false, true)
 	// bind projection
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 	resultLen, notCacheable, _ := builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)
@@ -8559,7 +8561,7 @@ func TestGroupingSetDistinctKeepsBranchDedup(t *testing.T) {
 	}
 }
 
-func TestGroupingSetDistinctMaterializesVolatileProjectionOnce(t *testing.T) {
+func TestGroupingSetMaterializesVolatileProjectionOnce(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	tests := []struct {
 		name         string
@@ -8571,35 +8573,37 @@ func TestGroupingSetDistinctMaterializesVolatileProjectionOnce(t *testing.T) {
 		{name: "grouping sets", groupBy: "grouping sets ((a, b), (a), ())", wantNextvals: 3},
 	}
 
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			p, err := runOneStmt(mock, t,
-				"select distinct nextval('grouping_distinct_seq') "+
-					"from select_test.bind_select group by "+test.groupBy)
-			require.NoError(t, err)
+	for _, distinct := range []string{"", "distinct "} {
+		for _, test := range tests {
+			t.Run(distinct+test.name, func(t *testing.T) {
+				p, err := runOneStmt(mock, t,
+					"select "+distinct+"nextval('grouping_distinct_seq') "+
+						"from select_test.bind_select group by "+test.groupBy)
+				require.NoError(t, err)
 
-			nextvals := 0
-			var countNextvals func(*plan.Expr)
-			countNextvals = func(expr *plan.Expr) {
-				if expr == nil {
-					return
-				}
-				if fn := expr.GetF(); fn != nil {
-					if fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "nextval") {
-						nextvals++
+				nextvals := 0
+				var countNextvals func(*plan.Expr)
+				countNextvals = func(expr *plan.Expr) {
+					if expr == nil {
+						return
 					}
-					for _, arg := range fn.Args {
-						countNextvals(arg)
+					if fn := expr.GetF(); fn != nil {
+						if fn.Func != nil && strings.EqualFold(fn.Func.ObjName, "nextval") {
+							nextvals++
+						}
+						for _, arg := range fn.Args {
+							countNextvals(arg)
+						}
 					}
 				}
-			}
-			for _, node := range p.GetQuery().Nodes {
-				for _, project := range node.ProjectList {
-					countNextvals(project)
+				for _, node := range p.GetQuery().Nodes {
+					for _, project := range node.ProjectList {
+						countNextvals(project)
+					}
 				}
-			}
-			require.Equal(t, test.wantNextvals, nextvals)
-		})
+				require.Equal(t, test.wantNextvals, nextvals)
+			})
+		}
 	}
 }
 
@@ -8950,7 +8954,7 @@ func TestIffVectorCommonType(t *testing.T) {
 	}
 }
 
-func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
+func TestNormalizeGroupingSetProjectsTypedNull(t *testing.T) {
 	builder, bindCtx := genBuilderAndCtx(t)
 	for _, typ := range []types.T{
 		types.T_int64,
@@ -8973,10 +8977,11 @@ func TestNormalizeGroupingSetDistinctProjectsTypedNull(t *testing.T) {
 				bindCtx.projectTag,
 				0,
 			)
-			normalized, err := normalizeGroupingSetDistinctProjects(
+			normalized, err := normalizeGroupingSetProjects(
 				builder.GetContext(),
 				[]*plan.Expr{project},
 				[]*plan.Expr{project},
+				false,
 			)
 			require.NoError(t, err)
 			require.Len(t, normalized, 1)
@@ -9036,4 +9041,31 @@ func TestBoundViewReferencesSurviveNodeCompaction(t *testing.T) {
 		require.NotSame(t, want, path[1].Snapshot)
 	}
 
+}
+
+func TestGroupingSetOutputNullability(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	useLegacyGroupingSetPlan(t, mock)
+	for _, col := range mock.ctxt.tables["bind_select"].Cols[:2] {
+		col.Typ.NotNullable = true
+	}
+	p, err := runOneStmt(mock, t, "select a,b,count(*),grouping(a,b) from select_test.bind_select group by grouping sets ((a,b),(a))")
+	require.NoError(t, err)
+	root := p.GetQuery().Nodes[p.GetQuery().Steps[0]]
+	require.Len(t, root.ProjectList, 4)
+	require.True(t, root.ProjectList[0].Typ.NotNullable, "always-active NOT NULL key")
+	require.Nil(t, root.ProjectList[0].GetF(), "no normalization needed for always-active key")
+	require.False(t, root.ProjectList[1].Typ.NotNullable, "omitted NOT NULL key becomes SQL NULL")
+	require.Equal(t, "if", root.ProjectList[1].GetF().Func.ObjName)
+	require.True(t, root.ProjectList[2].Typ.NotNullable, "COUNT metadata is preserved")
+	require.Nil(t, root.ProjectList[2].GetF(), "COUNT needs no result copy")
+	require.Nil(t, root.ProjectList[3].GetF(), "explicit GROUPING value is already ordinary SQL")
+
+	ordinary, err := runOneStmt(mock, t, "select a,b,count(*) from select_test.bind_select group by a,b")
+	require.NoError(t, err)
+	for _, node := range ordinary.GetQuery().Nodes {
+		for _, expr := range node.ProjectList {
+			require.NotContains(t, expr.String(), "grouping", "ordinary GROUP BY gains no normalization")
+		}
+	}
 }

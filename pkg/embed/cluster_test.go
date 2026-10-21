@@ -123,6 +123,17 @@ func TestClusterAdmissionAtStart(t *testing.T) {
 			WithTestAdmissionContext(t.Context())(c)
 			require.NoError(t, c.Start())
 			require.Equal(t, 1, *starts)
+			ports := c.portLease
+			require.NoError(t, c.Stop())
+			require.Same(t, ports, c.portLease)
+			require.Nil(t, c.testAdmission)
+			WithTestAdmissionContext(ctx)(c)
+			require.ErrorIs(t, c.Start(), context.Canceled)
+			require.Equal(t, 1, *starts, "cancelled restart must not start services")
+			require.Same(t, ports, c.portLease)
+			WithTestAdmissionContext(t.Context())(c)
+			require.NoError(t, c.Start())
+			require.Equal(t, 2, *starts)
 			require.NoError(t, c.Close())
 			require.Nil(t, c.testAdmission)
 			require.Nil(t, c.portLease)
@@ -196,7 +207,8 @@ func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	require.NoError(t, err)
 	c.portLease = ports
 	t.Cleanup(func() { require.NoError(t, ports.lock.Close()) })
-	lease, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	lease, err := admissionOwner.Acquire(t.Context(), clusteradmission.Exclusive)
 	require.NoError(t, err)
 	c.testAdmission = lease
 	t.Cleanup(func() { require.NoError(t, lease.Release()) })
@@ -210,7 +222,7 @@ func TestClusterCloseCompletedErrorReleasesOwnership(t *testing.T) {
 	require.Nil(t, c.testAdmission)
 	require.Nil(t, c.portLease)
 	require.True(t, c.CloseComplete())
-	next, err := clusteradmission.Acquire(t.Context(), clusteradmission.Exclusive)
+	next, err := admissionOwner.Acquire(t.Context(), clusteradmission.Exclusive)
 	require.NoError(t, err, "completed close must not poison the next cluster")
 	t.Cleanup(func() { require.NoError(t, next.Release()) })
 	require.NoError(t, c.Close())
@@ -318,18 +330,6 @@ func TestOperatorOwnsConstructedServiceBeforeStart(t *testing.T) {
 	require.True(t, commonruntime.CompareAndDeleteServiceBasedRuntime(op.sid, replacement))
 	op.reset.rt = rt // missing registration also retires successfully
 	require.NoError(t, op.Close())
-	require.False(t, op.needsCleanup())
-}
-
-func TestOperatorRejectsUnverifiedSiriusBenchmarkBeforeStartup(t *testing.T) {
-	op := new(operator)
-	op.serviceType = metadata.ServiceType_CN
-	op.cfg.ServiceType = metadata.ServiceType_CN.String()
-	op.cfg.CN.Sirius.Enabled = true
-	op.cfg.CN.Sirius.BenchmarkNoGC = true
-	op.cfg.TN_please_use_getTNServiceConfig = &tnservice.Config{}
-	op.cfg.TN_please_use_getTNServiceConfig.GCCfg.DisableGC = true
-	require.ErrorContains(t, op.Start(), "launcher-verified")
 	require.False(t, op.needsCleanup())
 }
 
@@ -784,6 +784,91 @@ func TestClusterPortLeasesAreExclusive(t *testing.T) {
 	require.NoError(t, firstCluster.releasePortLeaseLocked())
 }
 
+func TestClusterStopRetainsPortLease(t *testing.T) {
+	t.Setenv("TMPDIR", t.TempDir())
+	ports, err := acquireClusterPortLease()
+	require.NoError(t, err)
+	c := &cluster{portLease: ports, portLeaseBase: ports.base, portLeaseNext: ports.base,
+		services: []*operator{{serviceType: metadata.ServiceType_CN}}}
+	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	service := &closeTrackingService{}
+	c.startFn = func(op *operator) error {
+		op.state = started
+		op.reset.svc = service
+		return nil
+	}
+	port, err := c.nextBasePort()
+	require.NoError(t, err)
+	for generation := 0; generation < 2; generation++ {
+		require.NoError(t, c.Start())
+		require.NoError(t, c.Stop())
+		require.NoError(t, c.Stop(), "stopping twice must retain the same lease")
+		require.False(t, c.CloseComplete(), "stopped clusters still own ports")
+		contender, locked, err := tryAcquireClusterPortLease(ports.base)
+		if contender != nil {
+			t.Cleanup(func() { require.NoError(t, contender.lock.Close()) })
+		}
+		require.NoError(t, err)
+		require.False(t, locked, "another cluster must not take a stopped cluster's range")
+		require.Same(t, ports, c.portLease)
+		require.Equal(t, uint64(port), c.portLease.next.Load())
+	}
+	require.Equal(t, int32(2), service.closeCount.Load())
+	require.NoError(t, c.Close())
+	require.NoError(t, c.Stop(), "Stop after final Close must not reacquire ports")
+	require.True(t, c.CloseComplete())
+	contender, locked, err := tryAcquireClusterPortLease(ports.base)
+	if contender != nil {
+		t.Cleanup(func() { require.NoError(t, contender.lock.Close()) })
+	}
+	require.NoError(t, err)
+	require.True(t, locked, "final Close must release the range")
+}
+
+func TestClusterStopCleanupOwnership(t *testing.T) {
+	for _, complete := range []bool{false, true} {
+		t.Run(fmt.Sprintf("complete=%t", complete), func(t *testing.T) {
+			failure := errors.New("service withdrawal failed")
+			service := &completedCloseService{closeTrackingService: closeTrackingService{closeErr: failure}, complete: complete}
+			op := &operator{state: started}
+			op.reset.svc = service
+			dependency := &closeTrackingService{}
+			dep := &operator{state: started}
+			dep.reset.svc = dependency
+			ports, err := acquireClusterPortLease()
+			require.NoError(t, err)
+			c := &cluster{state: started, services: []*operator{dep, op}, portLease: ports,
+				portLeaseBase: ports.base, portLeaseNext: ports.base}
+			t.Cleanup(func() {
+				service.complete = true
+				service.closeErr = nil
+				require.NoError(t, c.Close())
+			})
+			manager := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+			admission, err := manager.Acquire(t.Context(), clusteradmission.Exclusive)
+			require.NoError(t, err)
+			c.testAdmission = admission
+			require.ErrorIs(t, c.Stop(), failure)
+			require.Same(t, ports, c.portLease)
+			if !complete {
+				require.Zero(t, dependency.closeCount.Load())
+				require.Same(t, admission, c.testAdmission)
+				require.ErrorContains(t, c.Start(), "cleanup is incomplete")
+				service.complete = true
+				require.ErrorIs(t, c.Stop(), failure)
+			}
+			require.Nil(t, c.testAdmission)
+			require.Equal(t, int32(1), dependency.closeCount.Load())
+			require.Same(t, ports, c.portLease)
+			next, err := manager.Acquire(t.Context(), clusteradmission.Exclusive)
+			require.NoError(t, err, "completed Stop must release admission")
+			t.Cleanup(func() { require.NoError(t, next.Release()) })
+			require.NoError(t, c.Close())
+			require.True(t, c.CloseComplete())
+		})
+	}
+}
+
 func TestNewClusterRejectsPortRangeExhaustion(t *testing.T) {
 	capacity, err := portBaseCapacity()
 	require.NoError(t, err)
@@ -948,6 +1033,12 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 						want = 100 * time.Millisecond
 					}
 					require.Equal(t, want, cfg.CN.LockService.KeepBindDuration.Duration)
+					wantFetch := time.Duration(0)
+					if testingMode {
+						wantFetch = time.Second
+					}
+					require.Equal(t, wantFetch, cfg.CN.TaskRunner.FetchInterval.Duration)
+					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.TaskRunner.FetchInterval.Duration = 17 * time.Second })
 					svc.Adjust(func(cfg *ServiceConfig) { cfg.CN.LockService.KeepBindDuration.Duration = 350 * time.Millisecond })
 				}
 				if svc.ServiceType() == metadata.ServiceType_LOG {
@@ -992,6 +1083,7 @@ func TestTestingServiceDefaultsPreserveOverrides(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, 8192, cn.GetServiceConfig().CN.Txn.Trace.BufferSize)
 				require.Equal(t, 350*time.Millisecond, cn.GetServiceConfig().CN.LockService.KeepBindDuration.Duration)
+				require.Equal(t, 17*time.Second, cn.GetServiceConfig().CN.TaskRunner.FetchInterval.Duration)
 			}
 		})
 	}
@@ -1334,11 +1426,10 @@ func TestClusterCloseStopsAtServiceError(t *testing.T) {
 		state:    started,
 		services: []*operator{firstOp, secondOp},
 	}
-	admission, err := clusteradmission.Acquire(
-		context.Background(),
-		clusteradmission.AllowConcurrent,
-	)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	admission, err := admissionOwner.Acquire(t.Context(), clusteradmission.AllowConcurrent)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, admission.Release()) })
 	c.testAdmission = admission
 
 	err = c.Close()
@@ -1412,11 +1503,10 @@ func TestClusterClosePreservesDependenciesAfterTNDrainFailure(t *testing.T) {
 		state:    started,
 		services: []*operator{logOp, tnOp},
 	}
-	admission, err := clusteradmission.Acquire(
-		context.Background(),
-		clusteradmission.AllowConcurrent,
-	)
+	admissionOwner := clusteradmission.NewManager(filepath.Join(t.TempDir(), "cluster.lock"), time.Millisecond)
+	admission, err := admissionOwner.Acquire(t.Context(), clusteradmission.AllowConcurrent)
 	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, admission.Release()) })
 	c.testAdmission = admission
 
 	require.ErrorIs(t, c.Close(), rpc.ErrTxnDrainTimeout)
@@ -1631,7 +1721,7 @@ load-to-mo = true
 		require.Len(t, entries, 1, "retired trace must not create output")
 	}
 	check(true)
-	require.NoError(t, c.Close())
+	require.NoError(t, c.Stop())
 	require.NoError(t, c.Start())
 	check(false)
 }

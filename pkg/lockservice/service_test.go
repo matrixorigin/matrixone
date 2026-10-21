@@ -1774,69 +1774,108 @@ func TestUnlockIgnoresCanceledCallerContextForTransactionCleanup(t *testing.T) {
 }
 
 func TestIssue4007(t *testing.T) {
-	runLockServiceTestsWithLevel(
-		t,
-		zapcore.DebugLevel,
-		[]string{"s1", "s2"},
-		time.Second*1,
-		func(alloc *lockTableAllocator, s []*service) {
-			l1 := s[0]
-			l2 := s[1]
+	for _, keeperFirst := range []bool{false, true} {
+		name := "retry_before_keeper"
+		if keeperFirst {
+			name = "keeper_before_lock"
+		}
+		t.Run(name, func(t *testing.T) {
+			started := make(chan struct{})
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(release) })
+			var seen atomic.Bool
+			runLockServiceTestsWithLevel(
+				t,
+				zapcore.DebugLevel,
+				[]string{"s1", "s2"},
+				time.Second*1,
+				func(_ *lockTableAllocator, s []*service) {
+					l1 := s[0]
+					l2 := s[1]
+					require.NoError(t, l1.remote.keeper.Close())
+					require.NoError(t, l2.remote.keeper.Close())
 
-			ctx, cancel := context.WithTimeout(
-				context.Background(),
-				time.Second*10)
-			defer cancel()
-			option := pb.LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
-			}
+					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+					defer cancel()
+					option := pb.LockOptions{
+						Granularity: pb.Granularity_Row,
+						Mode:        pb.LockMode_Exclusive,
+						Policy:      pb.WaitPolicy_Wait,
+					}
 
-			_, err := l1.Lock(
-				ctx,
-				0,
-				[][]byte{{1}},
-				[]byte("txn1"),
-				option)
-			require.NoError(t, err)
-			require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
+					_, err := l1.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
+					require.NoError(t, err)
+					require.NoError(t, l1.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
 
-			b := l1.tableGroups.get(0, 0).getBind()
-			r := &remoteLockTable{bind: b}
-			l1.tableGroups.Lock()
-			l1.tableGroups.holders[0].tables[0] = r
-			l1.tableGroups.Unlock()
+					b := l1.tableGroups.get(0, 0).getBind()
+					r := &remoteLockTable{bind: b}
+					l1.tableGroups.removeWithFilter(func(_ uint64, table lockTable) bool {
+						return table.getBind().Equal(b)
+					}, closeReasonBindChanged)
+					l1.tableGroups.set(0, 0, r)
 
-			_, err = l2.Lock(
-				ctx,
-				1,
-				[][]byte{{1}},
-				[]byte("txn2"),
-				option)
-			require.NoError(t, err)
+					_, err = l2.Lock(ctx, 1, [][]byte{{1}}, []byte("txn2"), option)
+					require.NoError(t, err)
 
-			// should lock failed
-			_, err = l2.Lock(
-				ctx,
-				0,
-				[][]byte{{1}},
-				[]byte("txn2"),
-				option)
-			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
+					if keeperFirst {
+						done := make(chan error, 1)
+						go func() {
+							defer close(done)
+							_, err := l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+							done <- err
+						}()
+						defer func() {
+							releaseOnce.Do(func() { close(release) })
+							cancel()
+							for range done {
+							}
+						}()
+						select {
+						case <-started:
+						case <-ctx.Done():
+							t.Fatal(ctx.Err())
+						}
+						l2.remote.keeper.(*lockTableKeeper).doKeepRemoteLock(ctx, nil, nil)
+						releaseOnce.Do(func() { close(release) })
+						err = <-done
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), err)
+					} else {
+						_, err = l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), err)
+					}
 
-			// retry lock should be succ
-			_, err = l2.Lock(
-				ctx,
-				0,
-				[][]byte{{1}},
-				[]byte("txn2"),
-				option)
-			require.NoError(t, err)
-
-		},
-		nil,
-	)
+					// A rejected RPC can be retried until an authoritative keeper rejection
+					// fences this transaction's exact bind. A fenced txn must release its
+					// intents before a fresh txn can acquire that same allocator bind.
+					_, err = l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option)
+					if keeperFirst {
+						require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged), err)
+						require.NoError(t, l2.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+						_, err = l2.Lock(ctx, 0, [][]byte{{1}}, []byte("txn3"), option)
+						require.NoError(t, err)
+						require.NoError(t, l2.Unlock(ctx, []byte("txn3"), timestamp.Timestamp{}))
+					} else {
+						require.NoError(t, err)
+						require.NoError(t, l2.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
+					}
+				},
+				nil,
+				func(s *service) {
+					if !keeperFirst {
+						return
+					}
+					s.option.serverOpts = append(s.option.serverOpts, WithServerMessageFilter(func(req *pb.Request) bool {
+						if req.Method == pb.Method_Lock && req.LockTable.Table == 0 && string(req.Lock.TxnID) == "txn2" && seen.CompareAndSwap(false, true) {
+							close(started)
+							<-release
+						}
+						return true
+					}))
+				},
+			)
+		})
+	}
 }
 
 func TestIssue3654(t *testing.T) {
@@ -5244,6 +5283,45 @@ func TestRowLockFastFailConflictActiveTxnCleanup(t *testing.T) {
 					require.NoError(t, s.Unlock(ctx, conflictTxn, timestamp.Timestamp{}))
 					require.Nil(t, s.activeTxnHolder.getActiveTxn(conflictTxn, false, ""))
 				})
+		})
+	}
+}
+
+func TestRowLockNoWaitConflictKeepsPartialGrantAndTxnUsable(t *testing.T) {
+	for name, runner := range runners {
+		t.Run(name, func(t *testing.T) {
+			runner(t, 0, func(ctx context.Context, s *service, lt *localLockTable) {
+				holderTxn := newTestTxnID(41)
+				probeTxn := newTestTxnID(42)
+				ordinary := newTestRowExclusiveOptions()
+				noWait := ordinary
+				noWait.Policy = pb.WaitPolicy_FastFail
+				noWait.NoWait = true
+
+				_, err := s.Lock(ctx, 0, newTestRows(2), holderTxn, ordinary)
+				require.NoError(t, err)
+				defer func() {
+					assert.NoError(t, s.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+				}()
+
+				result, err := s.Lock(ctx, 0, newTestRows(1, 2), probeTxn, noWait)
+				require.ErrorIs(t, err, ErrLockConflict)
+				require.True(t, result.LockedOn.Valid,
+					"the settled partial outcome must retain its physical binding")
+				checkLock(t, lt, []byte{1}, [][]byte{probeTxn}, nil, nil)
+				checkLock(t, lt, []byte{2}, [][]byte{holderTxn}, nil, nil)
+
+				// A direct lock conflict must not poison the explicit transaction or
+				// leave the FastFail policy on the service/session state.
+				_, err = s.Lock(ctx, 0, newTestRows(3), probeTxn, ordinary)
+				require.NoError(t, err)
+				checkLock(t, lt, []byte{3}, [][]byte{probeTxn}, nil, nil)
+
+				require.NoError(t, s.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+				checkLock(t, lt, []byte{1}, nil, nil, nil)
+				checkLock(t, lt, []byte{2}, [][]byte{holderTxn}, nil, nil)
+				checkLock(t, lt, []byte{3}, nil, nil, nil)
+			})
 		})
 	}
 }

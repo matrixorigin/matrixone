@@ -18,6 +18,8 @@ import (
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/collation"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -163,7 +165,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueLockKeyMater
 	require.True(t, forced)
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1, false,
 	)
 	require.NoError(t, err)
 }
@@ -195,7 +197,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SingleUniqueMissingCol(t *t
 	delete(colName2Idx, tableDef.Name+".dname")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1, false,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = dname")
@@ -236,7 +238,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1, false,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
@@ -275,7 +277,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_CompositeUniqueMissingPartI
 	delete(colName2Idx, tableDef.Name+".job")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1, false,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = job")
@@ -308,7 +310,7 @@ func TestAppendDedupAndMultiUpdateNodesForBindInsert_SecondaryIndexMissingPart(t
 	delete(colName2Idx, tableDef.Name+".loc")
 
 	_, err = builder.appendDedupAndMultiUpdateNodesForBindInsert(
-		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1,
+		bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, nil, -1, false,
 	)
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "can not find colName = loc")
@@ -628,4 +630,34 @@ func TestBindReplaceSkipsCompositeUniqueIndexForAnyStaticNull(t *testing.T) {
 			require.Equal(t, tt.wantLeftJoin, leftJoinFound)
 		})
 	}
+}
+
+func TestUnicodeIndexDiagnosticExpressions(t *testing.T) {
+	mock := NewMockOptimizer(true, newPlanTestProcess(t))
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
+	typ := types.T_varchar.ToType().PlanType()
+	typ.Charset = uint32(collation.UTF8MB4UnicodeCIIdentity)
+	typ.CollationVersion = uint32(collation.RevisionV1)
+	table := &planpb.TableDef{Cols: []*planpb.ColDef{{Name: "s", Typ: typ}}, Name2ColIndex: map[string]int32{"s": 0}}
+	index := &planpb.IndexDef{IndexName: "uk_named", Parts: []string{"s"}, KeyFormat: collation.KeyFormatV1, IndexAlgoParams: `{"prefix_lengths":"s:3"}`}
+	parts, err := builder.makeIndexDedupKeyExprs(table, index, 7, func(name string) (int32, bool) { return 4, name == "s" })
+	require.NoError(t, err)
+	require.Len(t, parts, 1)
+	// Prefix diagnostics use the logical substring expression; applying the
+	// opaque physical encoding remains an independent planner operation.
+	physical, err := bindIndexKeyExpr(builder.GetContext(), index, DeepCopyExprList(parts))
+	require.NoError(t, err)
+	require.Equal(t, "physical_collation_key", physical.GetF().Func.ObjName)
+	require.NotEqual(t, "physical_collation_key", parts[0].GetF().Func.ObjName)
+	copied := DeepCopyNode(&planpb.Node{DedupKeyExprs: parts, PreInsertUkCtx: &planpb.PreInsertUkCtx{KeyDiagnosticExprs: []*planpb.ExprList{{List: parts}}}})
+	require.Equal(t, parts, copied.DedupKeyExprs)
+	require.NotSame(t, parts[0], copied.DedupKeyExprs[0])
+	require.NotSame(t, parts[0], copied.PreInsertUkCtx.KeyDiagnosticExprs[0].List[0])
+	index.KeyFormat = 0
+	legacy, err := builder.makeIndexDedupKeyExprs(table, index, 7, func(string) (int32, bool) {
+		t.Fatal("legacy index must not retain diagnostic expressions")
+		return 0, false
+	})
+	require.NoError(t, err)
+	require.Empty(t, legacy)
 }

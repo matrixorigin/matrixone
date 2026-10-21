@@ -561,3 +561,43 @@ insert into t2 values(1, "2013-04-30"),(2, "1994-10-04"),(3, "2018-06-04"),(4, "
 SELECT t1.a, t2.a FROM t1 JOIN t2 ON (date(t1.b) = date(t2.b));
 drop table t1;
 drop table t2;
+
+-- Invalid temporal expressions return row NULL even with NOT NULL sources.
+set @date_conversion_saved_mode = @@sql_mode;
+set session sql_mode = '';
+drop table if exists date_conversion_inputs;
+create table date_conversion_inputs (id int primary key, v varchar(64) not null);
+insert into date_conversion_inputs values (1, '2026-02-30'), (2, 'not a date'), (3, '2024-02-29 12:34:56.123456');
+select date('2026-02-30') as invalid_date, date('2026-13-01') as invalid_month, date('') as empty_date, date(NULL) as null_date;
+select cast('2026-02-30' as datetime) as invalid_datetime, cast('not a date' as datetime) as junk_datetime;
+select id, date(v) as d, cast(v as datetime(6)) as dt, date_format(v, '%Y-%m-%d') as formatted from date_conversion_inputs order by id;
+select id from date_conversion_inputs where date(v) = '2024-02-29' order by id;
+select id from date_conversion_inputs where date(v) is null order by id;
+select id from date_conversion_inputs where cast(v as datetime) is null order by id;
+select count(date(v)) as dates, count(cast(v as datetime)) as datetimes from date_conversion_inputs;
+select id, coalesce(date(v), date('2000-01-01')) as d, coalesce(cast(v as datetime(6)), cast('2000-01-01' as datetime(6))) as dt from date_conversion_inputs order by id;
+select id, case when id = 3 then date(v) else date('2000-01-01') end as d from date_conversion_inputs order by id;
+select id from date_conversion_inputs where cast(v as datetime(6)) = cast('2024-02-29 12:34:56.123456' as datetime(6)) order by id;
+select dt from (select cast(v as datetime(6)) as dt from date_conversion_inputs union all select cast('2024-02-29 12:34:56.123456' as datetime(6))) u order by dt;
+select dt from (select cast(v as datetime(6)) as dt from date_conversion_inputs union select cast('2024-02-29 12:34:56.123456' as datetime(6))) u order by dt;
+prepare date_conversion_stmt from 'select date(?) as d, cast(? as datetime(6)) as dt';
+set @date_conversion_value = 'not a date';
+execute date_conversion_stmt using @date_conversion_value, @date_conversion_value;
+set @date_conversion_value = '2024-02-29 12:34:56.123456';
+execute date_conversion_stmt using @date_conversion_value, @date_conversion_value;
+set @date_conversion_value = NULL;
+execute date_conversion_stmt using @date_conversion_value, @date_conversion_value;
+-- Mode changes must not restore statement-fatal parsing, including reused plans.
+set session sql_mode = 'STRICT_TRANS_TABLES,NO_ZERO_DATE,NO_ZERO_IN_DATE';
+select date('2026-02-30') as invalid_date, cast('not a date' as datetime) as invalid_datetime;
+select count(date(v)) as dates, count(cast(v as datetime)) as datetimes from date_conversion_inputs;
+set @date_conversion_value = '2026-02-30';
+execute date_conversion_stmt using @date_conversion_value, @date_conversion_value;
+deallocate prepare date_conversion_stmt;
+-- Raw assignment still rejects the invalid value and persists no row.
+create table date_conversion_target (d datetime);
+insert into date_conversion_target select v from date_conversion_inputs where id = 1;
+select count(*) as persisted_rows from date_conversion_target;
+drop table date_conversion_target;
+drop table date_conversion_inputs;
+set session sql_mode = @date_conversion_saved_mode;

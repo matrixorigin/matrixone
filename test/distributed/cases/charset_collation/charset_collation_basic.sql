@@ -79,6 +79,7 @@ WHERE c.table_schema = 'charset_test'
 ORDER BY c.ordinal_position;
 DROP TABLE charset_metadata_repro;
 
+-- Historical utf8 requests retain their admitted utf8mb4 compatibility mapping.
 -- Create database with explicit charset
 DROP DATABASE IF EXISTS charset_test_utf8;
 CREATE DATABASE charset_test_utf8 CHARACTER SET utf8;
@@ -120,6 +121,9 @@ SHOW CREATE TABLE t_utf8;
 -- utf8/utf8mb3 兼容声明仍接收四字节字符，不启用三字节限制。
 INSERT INTO t_utf8 VALUES (1, '😀', '😀');
 SELECT HEX(name), HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
+-- 历史 COLLATE 别名按有效 utf8mb4 域校验，保留四字节文本。
+SELECT HEX('😀' COLLATE utf8_general_ci), HEX(name COLLATE utf8mb3_general_ci),
+       HEX('😀' COLLATE utf8_bin), HEX(name_mb3 COLLATE utf8mb3_bin) FROM t_utf8;
 ALTER TABLE t_utf8 MODIFY name_mb3 VARCHAR(1) CHARACTER SET utf8mb3 COLLATE utf8mb3_bin;
 SELECT HEX(name_mb3), LENGTH(name_mb3), CHAR_LENGTH(name_mb3) FROM t_utf8;
 SELECT column_name, character_set_name, collation_name FROM information_schema.columns

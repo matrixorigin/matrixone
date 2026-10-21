@@ -94,6 +94,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err = validateRemoteCorrelation(p); err != nil {
+		return nil, err
+	}
 	if err = validateRemoteBoundStringVariables(p); err != nil {
 		return nil, err
 	}
@@ -116,18 +119,21 @@ func encodeScope(s *Scope) ([]byte, error) {
 }
 
 func encodeRemoteScope(s *Scope, proc *process.Process) ([]byte, error) {
-	return encodeRemoteScopeWithVectorProtocol(s, proc, nil)
+	return encodeRemoteScopeWithProtocol(s, proc, nil)
 }
 
-func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requiredVectorProtocol *int64) ([]byte, error) {
+func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProtocol *int64) ([]byte, error) {
 	p, err := fillPipeline(s)
 	if err != nil {
+		return nil, err
+	}
+	if err = validateRemoteCorrelation(p); err != nil {
 		return nil, err
 	}
 	if err = validateRemoteBoundStringVariables(p); err != nil {
 		return nil, err
 	}
-	if err = validateVectorPartitionDestinationWithResult(proc, p, requiredVectorProtocol); err != nil {
+	if err = validateVectorPartitionDestinationWithResult(proc, p, requiredProtocol); err != nil {
 		return nil, err
 	}
 	if err = validateGroupingTransportDestinations(proc, p); err != nil {
@@ -142,6 +148,9 @@ func encodeRemoteScopeWithVectorProtocol(s *Scope, proc *process.Process, requir
 	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
+	}
+	if requiredProtocol != nil && (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion122)
 	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
@@ -252,6 +261,9 @@ func decodeScope(data []byte, proc *process.Process, isRemote bool, eng engine.E
 		return nil, err
 	}
 	if isRemote {
+		if err = validateRemoteCorrelation(p); err != nil {
+			return nil, err
+		}
 		if err = validateRemoteBoundStringVariables(p); err != nil {
 			return nil, err
 		}
@@ -705,6 +717,9 @@ func (s *Scope) restoreBinarySetChildren(op vm.Operator) error {
 // convert vm.Instruction to pipeline.Instruction
 // todo: bad design, need to be refactored. and please refer to how sample operator do.
 func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *scopeContext, ctxId int32) (int32, *pipeline.Instruction, error) {
+	if op.OpType() == vm.Dependent {
+		return -1, nil, moerr.NewNotSupportedNoCtx("dependent programs require the coordinator execution owner")
+	}
 	opBase := op.GetOperatorBase()
 	in := &pipeline.Instruction{
 		Op:      int32(op.OpType()),
@@ -802,6 +817,10 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			TargetRowIdCol:               t.TargetRowIDCol,
 		}
 	case *lockop.LockOp:
+		if t.RequiresCoordinatorExecution() {
+			return ctxId, nil, moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED lock operators must execute on the transaction coordinator")
+		}
 		in.LockOp = &pipeline.LockOp{
 			Targets: t.CopyToPipelineTarget(),
 		}
@@ -1107,6 +1126,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction:         t.OnDuplicateAction,
 			DedupColName:              t.DedupColName,
 			DedupColTypes:             t.DedupColTypes,
+			DedupKeyExprs:             t.DedupKeyExprs,
 			DelColIdx:                 t.DelColIdx,
 			DedupDeleteMarkerColIdx:   t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList: t.DedupDeleteKeepColIdxList,
@@ -1137,6 +1157,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupBuildKeepLast:              t.DedupBuildKeepLast,
 			DedupColName:                    t.DedupColName,
 			DedupColTypes:                   t.DedupColTypes,
+			DedupKeyExprs:                   t.DedupKeyExprs,
 			DelColIdx:                       t.DelColIdx,
 			DedupDeleteMarkerColIdx:         t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList:       t.DedupDeleteKeepColIdxList,
@@ -1180,6 +1201,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			InputKeysUnique:        t.InputKeysUnique,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
+			DedupKeyExprs:          t.DedupKeyExprs,
 			DelColIdx:              t.DelColIdx,
 			LeftTypes:              convertToPlanTypes(t.LeftTypes),
 			RightTypes:             convertToPlanTypes(t.RightTypes),
@@ -1393,8 +1415,12 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		t := opr.GetLockOp()
 		lockArg := lockop.NewArgumentByEngine(eng)
 		for _, target := range t.Targets {
+			if target.GetNoWait() || target.GetSkipLocked() {
+				return nil, moerr.NewNotSupportedNoCtx(
+					"remote NOWAIT and SKIP LOCKED lock operators are not supported")
+			}
 			typ := plan2.MakeTypeByPlan2Type(target.PrimaryColTyp)
-			lockArg.AddLockTargetWithMode(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd())
+			lockArg.AddLockTargetWithPolicy(target.GetTableId(), target.GetObjRef(), target.GetMode(), target.GetPrimaryColIdxInBat(), typ, target.PartitionColIdxInBat, target.GetRefreshTsIdxInBat(), target.GetLockRows(), target.GetLockTableAtTheEnd(), target.GetNoWait(), target.GetSkipLocked())
 		}
 		for _, target := range t.Targets {
 			if target.LockTable {
@@ -1769,6 +1795,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DedupKeyExprs = t.DedupKeyExprs
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1793,6 +1820,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupBuildKeepLast = t.DedupBuildKeepLast
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DedupKeyExprs = t.DedupKeyExprs
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1831,6 +1859,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.InputKeysUnique = t.InputKeysUnique
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DedupKeyExprs = t.DedupKeyExprs
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
@@ -2294,14 +2323,32 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
+	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
+		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
+	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
 	}
+	if features.TableCollationFunction && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
+		return moerr.NewNotSupportedNoCtx("internal table collation requires MORPC protocol version 118")
+	}
+	if features.LeastGreatestCollationSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion117) {
+		return moerr.NewNotSupportedNoCtx("collation-aware LEAST/GREATEST requires MORPC protocol version 117")
+	}
+	if features.CalendarIntervalNormalization && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion115) {
+		return moerr.NewNotSupportedNoCtx("calendar interval normalization requires MORPC protocol version 115")
+	}
 	if features.DecimalStatisticalResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion113) {
 		return moerr.NewNotSupportedNoCtx("decimal statistical DOUBLE results require MORPC protocol version 113")
+	}
+	if features.DecimalIntegerDivisionSemantics && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion121) {
+		return moerr.NewNotSupportedNoCtx("decimal integer division requires MORPC protocol version 121")
+	}
+	if (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion122) {
+		return moerr.NewNotSupportedNoCtx("temporal result contracts require MORPC protocol version 122")
 	}
 	if features.DateNumericResultContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion112) {
 		return moerr.NewNotSupportedNoCtx("signed date result contracts require MORPC protocol version 112")
@@ -2311,6 +2358,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.SpecialIntegerConsumers && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion98) {
 		return moerr.NewNotSupportedNoCtx("special integer consumers require MORPC protocol version 98")
+	}
+	if features.TimestampAddSecondIntervals && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion124) {
+		return moerr.NewNotSupportedNoCtx("fractional TIMESTAMPADD SECOND requires MORPC protocol version 124")
 	}
 	if features.PreparedPrecisionScalar && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion95) {
 		return moerr.NewNotSupportedNoCtx("prepared scalar precision requires MORPC protocol version 95")

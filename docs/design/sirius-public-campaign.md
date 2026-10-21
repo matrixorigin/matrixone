@@ -22,12 +22,10 @@ Both `serve` and `freeze` require `--gomaxprocs` in Go's runtime range
 records `config.gomaxprocs` and `config.native_host_block_bytes`. `run` validates
 the frozen profile before starting services and launches native and embedded
 routes with the same frozen budget, independently of its ambient environment.
-Historical captures retain their actual settings and controller identity;
-new runs require refrozen provenance. Read-only verification preserves the
-historical v2 configuration shape when both profile fields are absent; it neither
-adds defaults nor modifies archived provenance. If either field is present, both
-must be valid. New campaign construction and executor admission require both
-fields, and evidence with different profile shapes cannot be combined.
+Historical captures retain their actual settings and controller identity and use
+their recorded tool revision for inspection. Current verification, campaign
+construction and executor admission require both explicit profile fields. No
+missing historical profile is defaulted or accepted by the current tool.
 Runner/result schema version 2 is unchanged.
 
 The current-host qualification profile is 16 Go CPUs and 64 KiB host blocks.
@@ -171,11 +169,10 @@ misattributed telemetry, incomplete schedule, missing required evidence or
 unbounded retained state. No benchmark SQL rewrite, float coercion, unchecked
 narrowing or skipped required query can satisfy the contract.
 
-Version 1 of `optools/sirius_parity.py` requires five routes including embedded
-TAE, materializes rows in runner JSON and retains complete results. The selected
-version 2 requires native MO and embedded MO only, uses bounded transient spools,
-and retains safe summaries. Leave version-1 historical records/tests readable;
-an explicitly versioned v2 input selects the new contract. Extending the legacy
+The current campaign requires native MO and embedded MO only, uses bounded
+transient spools, and retains safe summaries. The old five-route CLI and
+optional Flight profiles are removed by E. Historical captures remain immutable
+and are inspected using their recorded tool revision. Extending the removed
 TAE route would violate the approved MO-reader scope. Keeping rows in memory
 would violate result-size bounds. Splitting runner and acceptance PRs was offered
 and rejected by the user. D stays draft while implementation or required local
@@ -184,9 +181,8 @@ evidence is incomplete; final acceptance also requires CI and reviewer approval.
 ## Routes, data and schedule
 
 Required routes are `mo-native` (ordinary public SQL) and `embedded-mo` (the same
-SQL with the existing explicit GPU hint). Optional Flight profiles declare their
-equivalent supported query coverage at preflight. Unsupported/unavailable
-comparisons are N/A. A later execution failure cannot become an unsupported
+SQL with the existing explicit GPU hint). These are the complete current route
+inventory. A later execution failure cannot become an unsupported
 query, and partial coverage is never reported as a full-suite total. Version 2
 has no embedded-TAE route or gate. Legacy v1 artifacts retain their old meaning.
 
@@ -195,10 +191,9 @@ DDL/table schema, row counts and a dataset digest. Use decimal TPC-H quantities
 and the existing canonical Q1-Q22 SQL; do not replace these with the planner's
 legacy integer-quantity DDL. Record SQL hashes, exact MO/Sirius/SDK revisions,
 compiler/Pixi/CUDA/driver versions, hardware, resource limits and session settings.
-Sidecar provenance is required only for declared Flight profiles. Dataset writes
-are prohibited during the campaign; ordinary MO snapshot/GC ownership remains.
-Flight-TAE comparisons, when supplied, retain their separate launcher-verified
-TN no-GC contract and are explicitly labeled historical-reader comparisons.
+Dataset writes are prohibited during the campaign; ordinary MO snapshot/GC
+ownership remains. Historical Flight captures retain their original provenance
+and are inspected only with their recorded tool revision.
 
 For each scale, run Q1-Q22 with streams 1 and 4 as correctness controls, then
 streams 2 with one excluded warm-up and five measured suites, followed by ten
@@ -291,14 +286,15 @@ Q9 results and raw repetitions. Enforce the existing 10% numeric regression
 policy with fresh matched baselines: Native A for historical scalar regressions
 (especially checked-add64), Native B for aggregates, identical shared case IDs,
 operands, toolchain/hardware and timing boundaries. Missing required baseline
-evidence means incomplete acceptance. Preserve the Flight+MO ratio limit 1.0
-where equivalent coverage exists. No performance waiver is implied.
+evidence means incomplete acceptance. Historical equivalent Flight comparisons
+retain their recorded ratio limit 1.0. No performance waiver is implied.
 
 Reconcile warmed process/pool and sanitizer baselines, including the existing
 41,386,248-byte cuDF pinned-pool report and generic CUB diagnostic. Unresolved
 value, lifecycle/resource, sanitizer or performance gates keep D draft. Default
-cutover and Flight retirement remain E/F under a separate recovery-readiness
-design; a nil/unready lease manager is never proof of no old consumers.
+cutover and Flight removal use the approved [clean E design](sirius-embedded-cutover.md).
+The previous release drains and recovers old consumers before the upgrade; no
+new compatibility or recovery mechanism is retained. F is excluded.
 
 Design review: PASS for the approved contract and ownership model. Remaining
 execution gates are the merged native prerequisite and terminal release acceptance
@@ -325,7 +321,8 @@ The Go public runner consumes MO_SIRIUS_CAMPAIGN_RUN and private configuration,
 streams typed NDJSON rows to 0600 relative spools beneath a 0700 scratch root,
 and returns only bounded metadata/count/bytes/digest. Rows are bounded to 1 MiB;
 comparison uses 32 MiB working memory and 4 GiB total comparison scratch.
-V1 dispatch, routes, artifacts and tests retain their meaning.
+The current runner accepts V2 campaigns. E removed V1 dispatch, routes and
+tests; historical V1 artifacts retain their original evidence identities.
 
 The controller owns persistent separate LOG/TN/CN roles. The worker and services
 are siblings. Both the worker and controller enter exclusive subreaping; the
@@ -415,7 +412,7 @@ The first SF1 capture contained 2.55 million memory events and a 717 MiB SQLite
 export; the separate trace bounds allow the required tenfold scale. Go's direct
 `exit_group` skips native atexit finalizers and leaves Nsight's CUDA trace
 incomplete. Allocation profiling runs the unchanged packaged service under the
-bounded GDB exit wrapper in `optools/sirius_profile_exit.gdb`. It validates the
+bounded GDB exit wrapper in `optools/sirius_profile_exit.py`. It validates the
 linux/amd64 runtime exit instruction sequence, preserves nonzero exits, and
 invokes libc exit after successful Go shutdown so native finalizers flush CUDA.
 This is profiling-only; the 744 timing executions remain uninstrumented. The
@@ -423,15 +420,15 @@ wrapper participates in the frozen collector hash. Nsight discards environment
 snapshots. The physical scope covers CN startup through process destruction.
 Reject CUDA/CUPTI completeness warnings for that PID or global scope;
 unrelated traced child processes cannot invalidate PID-scoped measurements.
-The result/comparison scratch quota remains 4 GiB. Unprovisioned Flight profiles
-are declared N/A before execution.
+The result/comparison scratch quota remains 4 GiB. Current campaigns accept
+only native MO and embedded MO-reader execution.
 
 The 64 MiB native input windows apply to each binding; aggregate input credit
 across several bindings can exceed 64 MiB. Bindings are limited to sixteen.
 Shared CTE execution revealed that the native importer inlines reference
 relations while MO input queues are destructive. The compiler now gives each
 inlined occurrence an independent reader on the same statement snapshot,
-without changing canonical SQL or Flight's shared-step behavior. Expansion has
+without changing canonical SQL. Expansion has
 node, depth and reader bounds and preserves the caller's plan. Sirius #30 also
 preserves retained VARCHAR identity casts and rejects reused/unreachable MO
 inputs before native work starts. The release pin remains merged code; unmerged
@@ -620,3 +617,32 @@ The archive SHA-256 is fixed above; its internal `checksums.json` has SHA-256
 The unchanged CLI verifies every listed artifact and returns
 `local_acceptance_complete: true`. CI and reviewer approval remain separate final
 acceptance and merge gates; an archived local result does not infer them.
+
+
+### E resource-accounting correction
+
+Fresh main and E SF10 controls both exposed 8 MiB of physical pinned growth.
+CUDA allocation stacks identify `fixed_size_host_memory_resource::expand_pool`,
+not a retained query payload. The host pool adds 128 free 64 KiB blocks and
+retains that free capacity until engine destruction. Idle charged bytes are
+unchanged, and all native host capacity is freed during shutdown.
+
+Reconcile that capacity from two independent measurements. The pinned ABI
+creates an empty 64 MiB result reservation before `StandaloneQueryScope` logs
+QueryBegin, then initializes the engine and activates input producers. At this
+boundary, physical host-pool capacity equals free blocks times block size plus
+charged bytes minus the empty result reservation. QueryBegin of the cleanup
+probe supplies the actual successor observation after the measured query closes.
+
+The current validator requires matching native space/window/query identities,
+unchanged live charged bytes, monotonic free capacity within the existing 16 GiB
+host budget, an exact match between physical pinned growth and extra free native
+capacity, unchanged external pinned/device baselines, and release of all native
+host capacity at process shutdown. Unexplained growth must still be zero. Missing
+proof, one extra leaked byte, increased live usage or an exceeded budget fails;
+old captures use their recorded tool version rather than a compatibility path.
+
+GDB now invokes native exit after leaving the breakpoint callback. It observes
+the target inferior's actual exit event, including after a calling thread exits,
+and propagates nonzero or unknown outcomes. A requested Go exit code alone is
+not proof of successful native teardown.

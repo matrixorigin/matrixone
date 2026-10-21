@@ -138,6 +138,10 @@ func IsNullIntegerArgumentCast(expr *plan.Expr) bool {
 }
 
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
+	return r.foldExpr(expr, proc, false)
+}
+
+func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialChecked bool) *plan.Expr {
 	if expr == nil {
 		return expr
 	}
@@ -157,7 +161,7 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 			exprList := elist.List
 			cannotFold := false
 			for i := range exprList {
-				exprList[i] = r.constantFold(exprList[i], proc)
+				exprList[i] = r.foldExpr(exprList[i], proc, spatialChecked)
 				if exprList[i].GetLit() == nil {
 					cannotFold = true
 				}
@@ -225,15 +229,16 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if !exists {
 		return expr
 	}
-	// The persisted-expression admission pass runs after optimization. Keep
-	// spatial-distance functions visible until that pass has observed the v86
-	// requirement; folding them to a literal would erase the only durable
-	// capability marker and let an older reader rebind the original SQL under
-	// incompatible planar semantics.
-	if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
-		return expr
+	// Preserve the v90 spatial requirement before evaluating any child. A
+	// successful scan covers this entire subtree, so recursive folding can
+	// reuse it instead of scanning every descendant again.
+	if !spatialChecked {
+		if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
+			return expr
+		}
+		spatialChecked = true
 	}
-	if f.CannotFold() { // function cannot be fold
+	if f.IsVolatile() {
 		return expr
 	}
 	if IsLegacyTimeAssignmentOutsideInternalRange(fn) {
@@ -251,8 +256,8 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	}
 	isVec := false
 	for i := range fn.Args {
-		fn.Args[i] = r.constantFold(fn.Args[i], proc)
-		isVec = isVec || fn.Args[i].GetVec() != nil
+		fn.Args[i] = r.foldExpr(fn.Args[i], proc, spatialChecked)
+		isVec = isVec || fn.Args[i].GetVec() != nil && !IsScalarConstantVector(fn.Args[i])
 	}
 	if r.isPrepared && ContainsSqlModeDependentTemporalCall(expr) {
 		return expr
@@ -260,13 +265,16 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 	if f.IsAgg() || f.IsWin() {
 		return expr
 	}
-	if !IsConstant(expr, false) {
+	if !function.IsFoldCandidate(expr, false) {
+		return expr
+	}
+	if isVec && !CanMaterializeConstantVector(expr) {
 		return expr
 	}
 
-	// Skip constant folding for division/modulo by zero.
-	// This allows runtime to check sql_mode and statement type for proper error handling.
-	if IsDivisionByZeroConstant(fn) {
+	// Preserve diagnostic-bearing division subtrees through their parents;
+	// a later execution may use a different sql_mode or statement policy.
+	if ContainsSqlModeDependentDivision(expr) {
 		return expr
 	}
 
@@ -307,6 +315,10 @@ func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *pla
 
 	c := GetConstantValue(vec, false, 0)
 	if c == nil {
+		constant, err := MaterializeDecimal256Constant(proc, expr, vec)
+		if err == nil && constant != nil {
+			expr.Expr = &plan.Expr_Vec{Vec: constant}
+		}
 		return expr
 	}
 	PreserveFoldedLiteralStringDomain(expr, c)
@@ -505,6 +517,101 @@ func PreserveFoldedDecimalLiteralSemantics(expr *plan.Expr, literal *plan.Litera
 		}
 		return nil
 	})
+}
+
+// MaterializeDecimal256Constant supplies the scalar representation absent from
+// Literal. Callers must first establish successful, warning-free evaluation.
+// LiteralVec cannot retain Literal.Src, so inputs needing recovery on a later
+// execution stay executable instead of losing realtime or PREPARE provenance.
+func MaterializeDecimal256Constant(proc *process.Process, expr *plan.Expr, vec *vector.Vector) (*plan.LiteralVec, error) {
+	if !CanMaterializeConstantVector(expr) ||
+		vec == nil || vec.GetType().Oid != types.T_decimal256 || vec.Length() != 1 || vec.IsNull(0) {
+		return nil, nil
+	}
+	// Only explicit casts need the missing scalar representation. Implicit
+	// decimal literals retain their canonical syntax for exact-peer binding.
+	// Parents of an already materialized wide scalar must preserve broadcast
+	// semantics too, without admitting ordinary literal lists.
+	admitted := function.IsExplicitDecimalCast(expr)
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if IsDecimal256ScalarConstant(arg) {
+				admitted = true
+			}
+		}
+	}
+	if !admitted {
+		return nil, nil
+	}
+	constant, err := vector.NewConstFixed(*vec.GetType(),
+		vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, 0), 1, proc.Mp())
+	if constant != nil {
+		defer constant.Free(proc.Mp())
+	}
+	if err != nil {
+		return nil, err
+	}
+	data, err := constant.MarshalBinary()
+	if err != nil {
+		return nil, err
+	}
+	return &plan.LiteralVec{
+		Len: 1, Data: data, StringSource: uint32(vec.GetStringSourceAt(0)),
+		DecimalLiteralRequiresV82: true,
+	}, nil
+}
+
+// CanMaterializeConstantVector excludes recovery metadata that has no place in
+// LiteralVec. Apply it to parents as well as the first wide scalar conversion.
+func CanMaterializeConstantVector(expr *plan.Expr) bool {
+	if !function.IsStatementConstantInput(expr) {
+		return false
+	}
+	requiresSource := false
+	_ = plan.VisitExprTree(expr, func(input *plan.Expr) error {
+		if input.GetLit().GetSrc() != nil {
+			requiresSource = true
+		}
+		if _, ok := ProvisionalPreparedExactPeerSource(input); ok {
+			requiresSource = true
+		}
+		return nil
+	})
+	return !requiresSource
+}
+
+// IsScalarConstantVector distinguishes a broadcast scalar from a literal list.
+// The payload's physical constness, not just Len, determines this contract.
+func IsScalarConstantVector(expr *plan.Expr) bool {
+	return scalarConstantVector(expr) != nil
+}
+
+// IsDecimal256ScalarConstant admits the non-NULL numeric scalar representation
+// emitted by MaterializeDecimal256Constant into scalar-only binder consumers.
+func IsDecimal256ScalarConstant(expr *plan.Expr) bool {
+	if expr == nil || types.T(expr.Typ.Id) != types.T_decimal256 ||
+		!expr.GetVec().GetDecimalLiteralRequiresV82() {
+		return false
+	}
+	decoded := scalarConstantVector(expr)
+	return decoded != nil && decoded.GetType().Oid == types.T_decimal256 && !decoded.IsNull(0)
+}
+
+func scalarConstantVector(expr *plan.Expr) *vector.Vector {
+	literal := expr.GetVec()
+	if literal == nil || literal.Len != 1 {
+		return nil
+	}
+	// Checked decoding borrows immutable payload bytes (including ReadNoCopy
+	// nulls); this fresh temporary owns no MPool allocations to release.
+	decoded := vector.NewVec(types.T_any.ToType())
+	if err := decoded.UnmarshalBinary(literal.Data); err != nil {
+		return nil
+	}
+	if !decoded.IsConst() || decoded.Length() != 1 {
+		return nil
+	}
+	return decoded
 }
 
 func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *plan.Literal) {
@@ -1065,6 +1172,51 @@ func IsLegacyTimeAssignmentOutsideInternalRange(fn *plan.Function) bool {
 
 func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
 	return function.IsConstant(e, varAndParamIsConst)
+}
+
+// ContainsSqlModeDependentDivision preserves the path to divisions whose
+// denominator is not a proven nonzero numeric literal. Folding a parent under
+// an empty sql_mode could otherwise erase warnings for a later EXECUTE.
+// Children are folded first, so ordinary arithmetic with a nonzero constant
+// denominator retains its constant-folding fast path.
+func ContainsSqlModeDependentDivision(expr *plan.Expr) bool {
+	if list := expr.GetList(); list != nil {
+		for _, item := range list.List {
+			if ContainsSqlModeDependentDivision(item) {
+				return true
+			}
+		}
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil {
+		return false
+	}
+	id, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	if (id == function.DIV || id == function.INTEGER_DIV || id == function.MOD) && len(fn.Args) >= 2 {
+		divisor := fn.Args[1].GetLit()
+		if divisor == nil || divisor.GetIsnull() {
+			return true
+		}
+		switch divisor.Value.(type) {
+		case *plan.Literal_I8Val, *plan.Literal_I16Val, *plan.Literal_I32Val, *plan.Literal_I64Val,
+			*plan.Literal_U8Val, *plan.Literal_U16Val, *plan.Literal_U32Val, *plan.Literal_U64Val,
+			*plan.Literal_Fval, *plan.Literal_Dval, *plan.Literal_Decimal64Val, *plan.Literal_Decimal128Val:
+			if isZeroLiteral(divisor) {
+				return true
+			}
+		default:
+			// Packed/cast decimal256 and other representations are evaluated
+			// at execution rather than assuming their denominator is nonzero.
+			return true
+		}
+	}
+	for _, arg := range fn.Args {
+		if ContainsSqlModeDependentDivision(arg) {
+			return true
+		}
+	}
+	return false
 }
 
 // IsDivisionByZeroConstant checks if the expression is a division/modulo operation

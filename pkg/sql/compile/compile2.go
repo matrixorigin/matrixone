@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/window"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	util2 "github.com/matrixorigin/matrixone/pkg/util"
@@ -148,16 +149,28 @@ func (c *Compile) Compile(
 		v2.TxnStatementCompileDurationHistogram.Observe(time.Since(compileStart).Seconds())
 	}()
 
+	// Reject unsupported lock policies before query scheduling, source/scope
+	// construction, Sirius offload, or any later MergeRun can publish work.
+	if err = c.validateNonBlockingLockPlan(queryPlan); err != nil {
+		return err
+	}
+
 	// Refresh borrowed CREATE plans before effects without advancing or
 	// rolling back the caller's workspace statement. This also covers
 	// frontend background execution and reused Compile instances.
 	if c.proc != nil && c.proc.IncrStatementDisabled() {
+		if err = validateTemporalResultProtocol(c.proc, queryPlan); err != nil {
+			return err
+		}
 		queryPlan, err = c.prepareCreateNamePlan(queryPlan)
 		if err != nil {
 			return err
 		}
 	}
 	if err = plan.RequireLegacyCollations(queryPlan); err != nil {
+		return err
+	}
+	if err = validateTemporalResultProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
 	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
@@ -413,6 +426,9 @@ func expressionsContainUnresolvedFullText(expressions []*plan.Expr) bool {
 // Run executes the pipeline and returns the result.
 func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	defer func() { err = process.UnwrapPipelineFailure(err) }()
+	if err = validateTemporalResultProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
 	if c.pn.GetDdl().GetDropTable() != nil {
 		// Retry generations share this statement owner. Other statements do
 		// not need a temporary DROP retirement journal.
@@ -525,10 +541,14 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	}()
 
 	// running and retry.
+	c.lastInsertIDBaseline = c.proc.GetLastInsertID()
 	var retryTimes = 0
 	queryResult = &util2.RunResult{}
 	v2.TxnStatementTotalCounter.Inc()
 	if c.siriusRead != nil {
+		if err = window.ValidateIntervalFrameBounds(c.proc, c.pn); err != nil {
+			return nil, err
+		}
 		err = c.runSiriusRead(execTopContext)
 		warningsSucceeded = err == nil
 		return queryResult, err
@@ -1108,10 +1128,10 @@ func (c *Compile) prepareRetryTransition(remoteWait *time.Duration) error {
 	}
 	// A retry is a new statement execution generation. Do not let a generated
 	// value from the rolled-back attempt win the new attempt's result, and
-	// restore the session-visible LAST_INSERT_ID baseline until the retry
+	// restore the LAST_INSERT_ID this statement started with until the retry
 	// generates a replacement value.
 	c.proc.SetStatementLastInsertID(0)
-	c.proc.SetLastInsertID(c.proc.GetSessionInfo().LastInsertID)
+	c.proc.SetLastInsertID(c.lastInsertIDBaseline)
 
 	// clear PostDmlSqlList
 	c.proc.GetPostDmlSqlList().Clear()
@@ -1178,6 +1198,9 @@ func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
 	runC.temporaryDropRetryActive = c.temporaryDropRetryActive
 	runC.preparedJoinDiagnosticFree = c.preparedJoinDiagnosticFree
 	runC.groupConcatMaxLenFloor = c.groupConcatMaxLenFloor
+	// Executor-owned schema transformations belong to the statement, not to
+	// one physical attempt. A retry must install the same catalog shape.
+	runC.adjustTableExtraFunc = c.adjustTableExtraFunc
 	runC.SetPreparedParamValues(c.preparedParamValues)
 	runC.inheritTemporaryDDLPolicy(c)
 	runC.inheritLoadUniqueIndexPromotion(c)

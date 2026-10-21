@@ -99,6 +99,166 @@ select cast('7e0' as signed), cast('7e+2' as signed), cast('1.5e0' as signed), c
 select cast('.5e0' as signed), cast('-.5e0' as signed), cast('+.5e+2' as signed);
 ➤ cast(.5e0 as signed)[-5,64,0]  ¦  cast(-.5e0 as signed)[-5,64,0]  ¦  cast(+.5e+2 as signed)[-5,64,0]  𝄀
 0  ¦  0  ¦  0
+set @cast_range_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = '';
+select cast(999.995 as decimal(5,2)) as d;
+➤ d[3,5,2]  𝄀
+999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 1
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(999.994 as decimal(5,2)) as d;
+➤ d[3,5,2]  𝄀
+999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+select cast('9223372036854775808' as signed) as s, cast('-9223372036854775809' as signed) as n,
+cast('-1' as unsigned) as u, cast('18446744073709551616' as unsigned) as o;
+➤ s[-5,64,0]  ¦  n[-5,64,0]  ¦  u[-5,64,0]  ¦  o[-5,64,0]  𝄀
+-9223372036854775808  ¦  -9223372036854775808  ¦  18446744073709551615  ¦  18446744073709551615
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '-9223372036854775809'  𝄀
+Warning  ¦  1105  ¦  Cast to unsigned converted negative integer to its positive complement  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '18446744073709551616'
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+4
+select cast('-9223372036854775809' as unsigned) as u;
+➤ u[-5,64,0]  𝄀
+9223372036854775807
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1292  ¦  Truncated incorrect INTEGER value: '-9223372036854775809'
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast('9223372036854775807' as signed) as s, cast('18446744073709551615' as unsigned) as u;
+➤ s[-5,64,0]  ¦  u[-5,64,0]  𝄀
+9223372036854775807  ¦  18446744073709551615
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+set session sql_mode = 'STRICT_TRANS_TABLES';
+select cast(999.995 as decimal(5,2)) as d, cast('9223372036854775808' as signed) as s, cast('-1' as unsigned) as u;
+➤ d[3,5,2]  ¦  s[-5,64,0]  ¦  u[-5,64,0]  𝄀
+999.99  ¦  -9223372036854775808  ¦  18446744073709551615
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 1  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement  𝄀
+Warning  ¦  1105  ¦  Cast to unsigned converted negative integer to its positive complement
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+3
+set @cast_range_saved_max_error_count = @@session.max_error_count;
+set session max_error_count = 1;
+select cast('9223372036854775808' as signed) as s, cast('-1' as unsigned) as u;
+➤ s[-5,64,0]  ¦  u[-5,64,0]  𝄀
+-9223372036854775808  ¦  18446744073709551615
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+2
+set session max_error_count = @cast_range_saved_max_error_count;
+drop table if exists cast_range_warning_rows;
+create table cast_range_warning_rows(id int primary key, s varchar(32), d decimal(6,3));
+insert into cast_range_warning_rows values
+(1, '9223372036854775808', 999.995), (2, '9223372036854775807', 999.994), (3, null, null);
+select cast(s as signed) as s from cast_range_warning_rows order by id;
+➤ s[-5,64,0]  𝄀
+-9223372036854775808  𝄀
+9223372036854775807  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(d as decimal(5,2)) as d from cast_range_warning_rows where id = 1;
+➤ d[3,5,2]  𝄀
+999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 1
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+select cast(d as decimal(5,2)) as d from cast_range_warning_rows where id > 1 order by id;
+➤ d[3,5,2]  𝄀
+999.99  𝄀
+null
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+drop table cast_range_warning_rows;
+prepare cast_range_signed from 'select cast(? as signed) as s';
+set @cast_range_value = '9223372036854775808';
+execute cast_range_signed using @cast_range_value;
+➤ s[-5,64,0]  𝄀
+-9223372036854775808
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+set @cast_range_value = '9223372036854775807';
+execute cast_range_signed using @cast_range_value;
+➤ s[-5,64,0]  𝄀
+9223372036854775807
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+set @cast_range_value = '9223372036854775808';
+execute cast_range_signed using @cast_range_value;
+➤ s[-5,64,0]  𝄀
+-9223372036854775808
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1105  ¦  Cast to signed converted positive out-of-range integer to its negative complement
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+deallocate prepare cast_range_signed;
+prepare cast_range_decimal from 'select cast(? as decimal(5,2)) as d';
+set @cast_range_value = '999.995';
+execute cast_range_decimal using @cast_range_value;
+➤ d[3,5,2]  𝄀
+999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]  𝄀
+Warning  ¦  1264  ¦  Out of range value for column 'decimal' at row 1
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+1
+set @cast_range_value = '999.994';
+execute cast_range_decimal using @cast_range_value;
+➤ d[3,5,2]  𝄀
+999.99
+show warnings;
+➤ Level[12,0,0]  ¦  Code[5,0,0]  ¦  Message[12,0,0]
+select @@warning_count;
+➤ @@warning_count[-1,16383,0]  𝄀
+0
+deallocate prepare cast_range_decimal;
+set session sql_mode = @cast_range_saved_sql_mode;
 select cast('+123' as signed);
 ➤ cast(+123 as signed)[-5,64,0]  𝄀
 123
@@ -550,18 +710,22 @@ SELECT CAST(1/3 AS FLOAT) as float_col,CAST(1/3 AS DOUBLE) as double_col, CAST(1
 SELECT CAST(DATE'2000-01-01' AS FLOAT), CAST(DATE'2000-01-01' AS DOUBLE);
 invalid argument operator cast, bad value [DATE FLOAT]
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59' AS DOUBLE);
-invalid argument operator cast, bad value [TIMESTAMP FLOAT]
+invalid argument operator cast, bad value [DATETIME FLOAT]
 SELECT CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS FLOAT), CAST(TIMESTAMP'2000-01-01 23:59:59.123456' AS DOUBLE);
-invalid argument operator cast, bad value [TIMESTAMP FLOAT]
+invalid argument operator cast, bad value [DATETIME FLOAT]
 SELECT CAST(NULL AS REAL), CAST(NULL AS FLOAT), CAST(NULL AS DOUBLE);
 ➤ cast(null as real)[8,54,0]  ¦  cast(null as float)[7,24,0]  ¦  cast(null as double)[8,54,0]  𝄀
 null  ¦  null  ¦  null
 CREATE TABLE t (col_datetime datetime, col_date date, col_char char);
 insert into t values ('2013-03-15 18:35:20', '2013-03-15','L'),('2003-01-10 00:00:23', '2003-01-10', NULL);
 SELECT CAST(col_char AS DATETIME) FROM t;
-invalid input: invalid datetime value L
+➤ cast(col_char as datetime)[93,19,0]  𝄀
+null  𝄀
+null
 SELECT col_char <> col_datetime FROM t;
-invalid input: invalid datetime value L
+➤ col_char != col_datetime[-7,1,0]  𝄀
+null  𝄀
+null
 SELECT CAST(col_char AS DATE) FROM t;
 ➤ cast(col_char as date)[91,64,0]  𝄀
 null  𝄀
@@ -577,7 +741,8 @@ INSERT INTO `BB` VALUES ('X');
 INSERT INTO `CC` VALUES (1,'2027-03-17 00:10:00'), (2,'2004-11-14 12:46:43');
 SELECT COUNT(table1.pk) FROM `CC` table1 JOIN `BB` table3 JOIN `CC` table2
 WHERE (table3.col_char_key < table2.col_datetime_key);
-invalid input: invalid datetime value X
+➤ COUNT(table1.pk)[-5,64,0]  𝄀
+0
 DROP TABLE `BB`;
 DROP TABLE `CC`;
 create table t1(f1 date, f2 timestamp, f3 datetime);

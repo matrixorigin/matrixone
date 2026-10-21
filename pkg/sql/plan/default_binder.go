@@ -114,6 +114,9 @@ func (b *DefaultBinder) BindSubquery(astExpr *tree.Subquery, isRoot bool) (*plan
 	if !b.allowSubquery {
 		return nil, moerr.NewNYI(b.GetContext(), "subquery in JOIN condition")
 	}
+	if err := b.prepareValuesSubqueryContext(); err != nil {
+		return nil, err
+	}
 	return b.baseBindSubquery(astExpr, isRoot)
 }
 

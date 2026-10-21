@@ -103,6 +103,22 @@ func TestLockProtocolCapabilitiesFollowProtocolVersion(t *testing.T) {
 			require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
 		}
 
+		// Protocols through v122 predate nonblocking lock admission.
+		for _, version := range []int64{defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			require.False(t, supportsNonblockingLockProtocol(""))
+			for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
+				err := checkMethodVersion(context.Background(), "", &pb.Request{Method: method})
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported),
+					"old protocol peers must reject nonblocking lock admission before dispatch")
+			}
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+		require.True(t, supportsNonblockingLockProtocol(""))
+		for _, method := range []pb.Method{pb.Method_TryLock, pb.Method_ForwardTryLock} {
+			require.NoError(t, checkMethodVersion(context.Background(), "", &pb.Request{Method: method}))
+		}
+
 		s := &service{
 			serviceID: "",
 			cfg: Config{
@@ -2674,14 +2690,16 @@ func TestInactiveRemoteRouteCacheDoesNotDriveHeartbeat(t *testing.T) {
 			// remove s1
 			clusterservice.GetMOCluster(s1.GetConfig().ServiceID).RemoveCN("s1")
 			clusterservice.GetMOCluster(s2.GetConfig().ServiceID).RemoveCN("s1")
-			keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			futures, binds := keeper.doKeepRemoteLock(context.Background(), nil, nil)
+			require.Empty(t, futures)
+			require.Empty(t, binds)
 
-			// An inactive route may remain cached. It is validated lazily on the
-			// next use and must not keep an owner-side lease alive by itself.
+			// An idle route never keeps an owner-side lease alive. Once its CN
+			// leaves inventory, the background keeper also discards that route
+			// before the next transaction can record the departed generation.
 			v, err := s2.getLockTable(context.Background(), 0, table)
 			require.NoError(t, err)
-			require.NotNil(t, v)
-			require.Equal(t, s1.serviceID, v.getBind().ServiceID)
+			require.Nil(t, v)
 		},
 	)
 }
@@ -3121,6 +3139,195 @@ func TestRemoteLockWaitTimeout_ReturnsLockTimeout(t *testing.T) {
 			// generous upper bound to absorb scheduling jitter.
 			require.Less(t, elapsed, 5*time.Second,
 				"should not wait beyond LockWaitTimeout + check interval")
+		},
+	)
+}
+
+func TestNoWaitFatalBindFenceRetainsReadOnlyCleanupRoute(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, services []*service) {
+			origin, owner := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			ownerRuntime := moruntime.ServiceRuntime(owner.cfg.ServiceID)
+			require.NotNil(t, ownerRuntime)
+			oldVersion, ok := ownerRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+			require.True(t, ok)
+			ownerRuntime.SetGlobalVariables(
+				moruntime.MOProtocolVersion,
+				defines.MORPCVersion123,
+			)
+			defer ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+
+			const tableID = uint64(2510701)
+			ownerBind := alloc.Get(
+				owner.serviceID,
+				0,
+				tableID,
+				tableID,
+				pb.Sharding_None,
+			)
+			require.True(t, ownerBind.Valid)
+			require.Equal(t, owner.serviceID, ownerBind.ServiceID)
+
+			holderTxn := []byte("fatal-nowait-owner")
+			probeTxn := []byte("fatal-nowait-readonly-probe")
+			_, err := owner.Lock(
+				ctx,
+				tableID,
+				newTestRows(2),
+				holderTxn,
+				newTestRowExclusiveOptions(),
+			)
+			require.NoError(t, err)
+			defer func() {
+				require.NoError(t, owner.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			}()
+
+			before, err := origin.GetLockTableBind(0, tableID)
+			require.NoError(t, err)
+			require.False(t, before.Valid, "the first request must start with an unknown origin route")
+
+			var downgraded atomic.Bool
+			owner.option.beforeRemoteLockBindCheck = func() {
+				if downgraded.CompareAndSwap(false, true) {
+					// Method admission accepted the nonblocking protocol. Downgrade after
+					// admission but before row 1 is granted and row 2 conflicts.
+					ownerRuntime.SetGlobalVariables(
+						moruntime.MOProtocolVersion,
+						defines.MORPCVersion123-1,
+					)
+				}
+			}
+			defer func() { owner.option.beforeRemoteLockBindCheck = nil }()
+
+			noWait := newTestRowExclusiveOptions()
+			noWait.NoWait = true
+			noWait.Policy = pb.WaitPolicy_FastFail
+			result, err := origin.Lock(
+				ctx,
+				tableID,
+				newTestRows(1, 2),
+				probeTxn,
+				noWait,
+			)
+			require.True(t, downgraded.Load(), "request must pass method admission before version change")
+			require.ErrorIs(t, err, ErrLockTableBindChanged,
+				"late capability loss must remain fatal, never become a direct conflict")
+			require.True(t, result.LockedOn.Valid,
+				"fatal result must retain the selected route for cleanup")
+			require.Equal(t, ownerBind, result.LockedOn)
+			require.Equal(t, pb.Result{LockedOn: ownerBind}, result)
+
+			require.NotNil(t, origin.activeTxnHolder.getActiveTxn(probeTxn, false, ""),
+				"origin cleanup witness must remain until Unlock")
+			require.NotNil(t, owner.activeTxnHolder.getActiveTxn(probeTxn, false, ""),
+				"owner prefix must remain tracked until Unlock")
+			prefix, found, err := owner.GetLockHolder(
+				ctx,
+				tableID,
+				newTestRows(1)[0],
+				newTestRowExclusiveOptions(),
+			)
+			require.NoError(t, err)
+			require.True(t, found)
+			require.Equal(t, probeTxn, prefix.TxnID)
+
+			// The caller uses LockedOn only to register an unlock route. Unlock
+			// removes the partial owner prefix and retires both active transactions.
+			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+			require.NoError(t, origin.Unlock(ctx, probeTxn, timestamp.Timestamp{}))
+			_, found, err = owner.GetLockHolder(
+				ctx,
+				tableID,
+				newTestRows(1)[0],
+				newTestRowExclusiveOptions(),
+			)
+			require.NoError(t, err)
+			require.False(t, found, "the cleanup route must release the acquired prefix")
+			require.Nil(t, origin.activeTxnHolder.getActiveTxn(probeTxn, false, ""))
+			require.Nil(t, owner.activeTxnHolder.getActiveTxn(probeTxn, false, ""))
+			origin.mu.RLock()
+			_, refRetained := origin.mu.remoteBindRefs[makeRemoteBindKey(ownerBind)]
+			origin.mu.RUnlock()
+			require.False(t, refRetained, "successful Unlock must retire the binding reference")
+		},
+	)
+}
+
+func TestAsyncRemoteLockCompletionUsesPooledRequestSnapshot(t *testing.T) {
+	runLockServiceTests(
+		t,
+		[]string{"s1", "s2"},
+		func(alloc *lockTableAllocator, services []*service) {
+			origin, owner := services[0], services[1]
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			holderTxn := []byte("request-snapshot-holder")
+			ordinaryTxn := []byte("request-snapshot-ordinary")
+			nowaitHolderTxn := []byte("request-snapshot-nowait-holder")
+			noWaitTxn := []byte("request-snapshot-nowait")
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cleanupCancel()
+				_ = origin.unlockWithContext(cleanupCtx, ordinaryTxn, timestamp.Timestamp{})
+				_ = origin.unlockWithContext(cleanupCtx, noWaitTxn, timestamp.Timestamp{})
+				_ = owner.unlockWithContext(cleanupCtx, holderTxn, timestamp.Timestamp{})
+				_ = owner.unlockWithContext(cleanupCtx, nowaitHolderTxn, timestamp.Timestamp{})
+			}()
+
+			const tableID = uint64(2510702)
+			ownerBind := alloc.Get(owner.serviceID, 0, tableID, tableID, pb.Sharding_None)
+			require.True(t, ownerBind.Valid)
+			require.Equal(t, owner.serviceID, ownerBind.ServiceID)
+
+			ownerRuntime := moruntime.ServiceRuntime(owner.cfg.ServiceID)
+			require.NotNil(t, ownerRuntime)
+			oldVersion, ok := ownerRuntime.GetGlobalVariables(moruntime.MOProtocolVersion)
+			require.True(t, ok)
+			ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
+			defer ownerRuntime.SetGlobalVariables(moruntime.MOProtocolVersion, oldVersion)
+
+			row := []byte{1}
+			seedTxn := []byte("request-snapshot-seed")
+			mustAddTestLock(t, ctx, owner, tableID, seedTxn, [][]byte{{0}}, pb.Granularity_Row)
+			require.NoError(t, owner.Unlock(ctx, seedTxn, timestamp.Timestamp{}))
+
+			_, err := owner.Lock(ctx, tableID, [][]byte{row}, holderTxn, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			ordinaryDone := make(chan error, 1)
+			go func() {
+				_, lockErr := origin.Lock(ctx, tableID, [][]byte{row}, ordinaryTxn, newTestRowExclusiveOptions())
+				ordinaryDone <- lockErr
+			}()
+			require.NoError(t, WaitWaiters(owner, 0, tableID, row, 1))
+			// The ordinary lock completes only after the server's async handler
+			// has returned and its RPC request has gone back to the object pool.
+			require.NoError(t, owner.Unlock(ctx, holderTxn, timestamp.Timestamp{}))
+			select {
+			case err = <-ordinaryDone:
+				require.NoError(t, err)
+			case <-ctx.Done():
+				t.Fatalf("ordinary remote lock did not finish after holder release: %v", ctx.Err())
+			}
+			require.NoError(t, origin.Unlock(ctx, ordinaryTxn, timestamp.Timestamp{}))
+
+			// A conflicting TryLock uses the same pooled RPC boundary and must
+			// retain its physical cleanup route after the callback is dispatched.
+			_, err = owner.Lock(ctx, tableID, [][]byte{row}, nowaitHolderTxn, newTestRowExclusiveOptions())
+			require.NoError(t, err)
+			noWait := newTestRowExclusiveOptions()
+			noWait.NoWait = true
+			noWait.Policy = pb.WaitPolicy_FastFail
+			result, err := origin.Lock(ctx, tableID, [][]byte{row}, noWaitTxn, noWait)
+			require.ErrorIs(t, err, ErrLockConflict)
+			require.True(t, result.LockedOn.Valid,
+				"a settled remote no-wait conflict must preserve its cleanup route")
+			require.NoError(t, origin.Unlock(ctx, noWaitTxn, timestamp.Timestamp{}))
+			require.NoError(t, owner.Unlock(ctx, nowaitHolderTxn, timestamp.Timestamp{}))
 		},
 	)
 }

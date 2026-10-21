@@ -26,6 +26,7 @@ import (
 	statsinfo "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -108,6 +109,124 @@ func TestGroupingSetInputSharingProtocolGate(t *testing.T) {
 	rolledBack := reachableGroupingSetShape(build(defines.MORPCVersion49))
 	require.Equal(t, 3, rolledBack.tableScans)
 	require.Zero(t, rolledBack.expandProjects)
+}
+
+func TestRollupEmptyInputGuard(t *testing.T) {
+	for _, test := range []struct {
+		name, sql string
+		guard     bool
+	}{
+		{"with rollup", "select l_returnflag,sum(l_quantity) from lineitem group by l_returnflag with rollup", true},
+		{"functional", "select l_returnflag,count(l_quantity) from lineitem group by rollup(l_returnflag)", true},
+		{"window", "select l_returnflag,sum(l_quantity),row_number() over(order by sum(l_quantity)) from lineitem group by l_returnflag with rollup", true},
+		{"explicit sets", "select l_returnflag,sum(l_quantity) from lineitem group by grouping sets ((l_returnflag),())", false},
+		{"cube", "select l_returnflag,sum(l_quantity) from lineitem group by cube(l_returnflag)", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, _, branches := bindEmptyRollupBranches(t, test.sql)
+			require.Len(t, branches, 2)
+			for i, branch := range branches {
+				require.Len(t, branch.agg.Children, 1)
+				if i > 0 {
+					require.True(t, sameGroupingSetAggregateShape(branches[0].agg, branch.agg))
+				}
+				filters := 0
+				for _, node := range builder.qry.Nodes {
+					if node.NodeType == planpb.Node_FILTER && len(node.Children) == 1 && node.Children[0] == branch.aggID {
+						require.Len(t, node.FilterList, 1)
+						require.True(t, groupingSetPositiveCountFilter(node.FilterList[0], branch.agg))
+						filters++
+					}
+				}
+				if test.guard {
+					require.Equal(t, 1, filters)
+				} else {
+					require.Zero(t, filters)
+				}
+			}
+		})
+	}
+}
+
+func bindEmptyRollupBranches(t *testing.T, sql string) (*QueryBuilder, int32, []groupingSetBranch) {
+	t.Helper()
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	setGroupingSetTestProtocol(t, ctx, defines.MORPCVersion49)
+	stmt, err := mysql.ParseOne(context.Background(), sql, 1)
+	require.NoError(t, err)
+	t.Cleanup(stmt.Free)
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, true)
+	root, err := builder.bindSelect(stmt.(*tree.Select), NewBindContext(builder, nil), true)
+	require.NoError(t, err)
+	require.Len(t, builder.groupingSetCandidates, 1)
+	candidate := builder.groupingSetCandidates[0]
+	branches := make([]groupingSetBranch, len(candidate.nodes))
+	for i, node := range candidate.nodes {
+		aggID, ok := builder.findGroupingSetAggregate(node, candidate.contexts[i])
+		require.True(t, ok)
+		branches[i] = groupingSetBranch{rootID: node, aggID: aggID, agg: builder.qry.Nodes[aggID], ctx: candidate.contexts[i]}
+	}
+	return builder, root, branches
+}
+
+func TestDirectGroupingSetCountFilter(t *testing.T) {
+	const sql = "select l_returnflag,sum(l_quantity) from lineitem group by l_returnflag with rollup"
+	for _, test := range []struct {
+		name   string
+		change func(*planpb.Node, []groupingSetBranch)
+		want   bool
+	}{
+		{"common count guard", func(*planpb.Node, []groupingSetBranch) {}, true},
+		{"different threshold", func(filter *planpb.Node, _ []groupingSetBranch) {
+			filter.FilterList[0].GetF().Args[1] = MakePlan2Int64ConstExprWithType(1)
+		}, false},
+		{"additional having", func(filter *planpb.Node, _ []groupingSetBranch) {
+			filter.FilterList = append(filter.FilterList, MakePlan2BoolConstExprWithType(false))
+		}, false},
+		{"limit", func(filter *planpb.Node, _ []groupingSetBranch) {
+			filter.Limit = MakePlan2Int64ConstExprWithType(1)
+		}, false},
+		{"nullable count", func(filter *planpb.Node, branches []groupingSetBranch) {
+			pos := filter.FilterList[0].GetF().Args[0].GetCol().ColPos
+			branches[1].agg.AggList[pos].GetF().Func.ObjName = "count"
+		}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			builder, _, branches := bindEmptyRollupBranches(t, sql)
+			nodes := builder.groupingSetCandidates[0].nodes
+			filter := builder.qry.Nodes[builder.qry.Nodes[branches[1].rootID].Children[0]]
+			test.change(filter, branches)
+			output, ok := builder.directGroupingSetOutput(nodes, branches)
+			require.Equal(t, test.want, ok)
+			if ok {
+				require.NotNil(t, output.filter)
+			}
+		})
+	}
+}
+
+func TestDirectGroupingSetSplitCountFilter(t *testing.T) {
+	builder, _, branches := bindEmptyRollupBranches(t,
+		`select l_returnflag,l_linestatus,l_shipmode,l_orderkey,sum(l_quantity)
+		from lineitem group by rollup(l_returnflag,l_linestatus,l_shipmode,l_orderkey)`)
+	output, ok := builder.directGroupingSetOutput(builder.groupingSetCandidates[0].nodes, branches)
+	require.True(t, ok)
+	branches[0].agg.Stats = &planpb.Stats{Outcnt: 6_000_000}
+	branches[0].agg.GroupBy[3].Ndv = 1_500_000
+	require.True(t, builder.shareDirectGroupingSetSplit(branches, output, &planpb.Stats{Outcnt: 6_000_000}, 200))
+	union := builder.qry.Nodes[output.unionRootID]
+	require.Equal(t, branches[0].rootID, union.Children[0])
+	coarse := builder.qry.Nodes[union.Children[1]]
+	filter := builder.qry.Nodes[coarse.Children[0]]
+	require.Equal(t, planpb.Node_FILTER, filter.NodeType)
+	require.Len(t, filter.FilterList, 1)
+	countCol := filter.FilterList[0].GetF().Args[0].GetCol()
+	shared := builder.qry.Nodes[filter.Children[0]]
+	require.Equal(t, shared.BindingTags[0], countCol.RelPos)
+	countOutput := shared.ProjectList[countCol.ColPos].GetCol()
+	agg := builder.qry.Nodes[shared.Children[0]]
+	require.Equal(t, agg.BindingTags[1], countOutput.RelPos)
+	require.Equal(t, "starcount", agg.AggList[countOutput.ColPos].GetF().Func.ObjName)
 }
 
 func TestGroupingSetInputSharingKeepsDecimalSumOnRawInput(t *testing.T) {
@@ -302,10 +421,9 @@ func TestGroupingSetInputSharingRejectsInheritedGroupingSentinel(t *testing.T) {
 		group by rollup(d.l_returnflag)`
 
 	shape := reachableGroupingSetShape(buildSharedGroupingSetPlan(t, sql))
-	// Dynamic grouping distinguishes its own sentinel from SQL NULL. The outer
-	// ROLLUP therefore cannot accept the inner sentinel, and sharing the inner
-	// ROLLUP cannot change the sentinel's legacy representation before the outer
-	// active grouping branch consumes it.
+	// Query outputs normalize inner sentinels. Nested sharing nevertheless
+	// retains its conservative admission policy until its cost and error-order
+	// contract is proved independently of output normalization.
 	require.Zero(t, shape.expandProjects)
 	require.Zero(t, shape.sinkScans)
 }

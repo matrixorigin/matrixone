@@ -749,7 +749,7 @@ func (mgr *TxnManager) onApply(items ...any) {
 				panic(err)
 			}
 
-			if _, injected := objectio.CommitWaitInjected(op.Txn.GetTenantID()); injected {
+			if _, injected := objectio.CommitWaitInjected(op.Txn.GetTenantID(), op.Txn.GetID()); injected {
 				duration := time.Millisecond * time.Duration(rand.Intn(10))
 				time.Sleep(duration)
 			}
@@ -812,6 +812,11 @@ func (mgr *TxnManager) ResetHeartbeat() {
 		"TxnManager-HB",
 		time.Millisecond*2,
 		func(ctx context.Context) {
+			// Replay/readonly modes must not fill the commit pipeline with
+			// local heartbeats that cannot advance the committed frontier.
+			if mgr.GetTxnSkipFlags().Skip(TxnFlag_Heartbeat) {
+				return
+			}
 			op := mgr.newHeartbeatOpTxn(ctx)
 			op.Txn.(*Txn).Add(1)
 			if err := mgr.OnOpTxn(op); err != nil {

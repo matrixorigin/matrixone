@@ -78,6 +78,7 @@ const (
 	AlterSequence
 	Replace
 	TableClone
+	AlterDatabase
 )
 
 func (m magicType) String() string {
@@ -90,6 +91,8 @@ func (m magicType) String() string {
 		return "Remote"
 	case CreateDatabase:
 		return "CreateDatabase"
+	case AlterDatabase:
+		return "AlterDatabase"
 	case CreateTable:
 		return "CreateTable"
 	case CreateView:
@@ -286,7 +289,9 @@ type scopeContext struct {
 
 // Compile contains all the information needed for compilation.
 type Compile struct {
-	scopes []*Scope
+	// Unprepared source metadata owners, never scheduled or run.
+	dependentSourceScopes []*Scope
+	scopes                []*Scope
 	// Shared broadcast HashBuild producers are attached after downstream placement.
 	pendingProductBuilds []*pendingProductBuild
 	// Non-owning producer regions: true marks an independent auxiliary job;
@@ -457,9 +462,13 @@ type Compile struct {
 	disableDropAutoIncrement bool
 	skipDataBranchReclaim    bool
 	keepAutoIncrement        uint64
-	ignorePublish            bool
-	ignoreCheckExperimental  bool
-	disableLock              bool
+	// lastInsertIDBaseline is the session-visible LAST_INSERT_ID when this
+	// statement started; a retry restores it.
+	lastInsertIDBaseline      uint64
+	ignorePublish             bool
+	ignoreCheckExperimental   bool
+	skipIndexTaskRegistration bool
+	disableLock               bool
 
 	icebergScanPlanner icebergapi.ScanPlanner
 	icebergScanPlans   map[int32]*icebergapi.IcebergScanPlan

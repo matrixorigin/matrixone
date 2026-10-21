@@ -33,6 +33,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
+	"github.com/matrixorigin/matrixone/pkg/util/sysview"
 )
 
 const MO_CATALOG_DB_NAME = "mo_catalog"
@@ -77,6 +78,34 @@ func buildShowCreateDatabase(stmt *tree.ShowCreateDatabase,
 		// get data from schema
 		//sql := fmt.Sprintf("SELECT md.datname as `Database` FROM %s.mo_database md WHERE md.datname = '%s'", MO_CATALOG_DB_NAME, stmt.Name)
 		sql := fmt.Sprintf("SELECT md.datname as `Database`,dat_createsql as `Create Database` FROM %s.mo_database %s md WHERE md.datname = '%s' and account_id=%d", MO_CATALOG_DB_NAME, snapshotSpec, stmt.Name, accountId)
+		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
+	}
+
+	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) && !DatabaseDefaultsSystemDatabase(name) {
+		accountID, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		if snapshot != nil && snapshot.Tenant != nil {
+			accountID = snapshot.Tenant.TenantID
+		}
+		defaults, err := GetDatabaseDefaults(ctx, name, snapshot)
+		if err != nil {
+			return nil, err
+		}
+		if defaults == nil || defaults.Version == 0 {
+			fallback, err := databaseServerCollation(ctx)
+			if err != nil {
+				return nil, err
+			}
+			defaults, err = NormalizeDatabaseDefaults(ctx.GetContext(), nil, fallback)
+			if err != nil {
+				return nil, err
+			}
+		}
+		createSQL := "CREATE DATABASE " + sqlquote.Ident(name) + " CHARACTER SET " + defaults.CharacterSet + " COLLATE " + defaults.Collation
+		sql := fmt.Sprintf("SELECT md.datname AS `Database`, %s AS `Create Database` FROM mo_catalog.mo_database %s md WHERE md.account_id = %d AND md.datname = %s",
+			sqlquote.String(createSQL), snapshotSpec, accountID, sqlquote.String(name))
 		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATEDATABASE)
 	}
 
@@ -363,6 +392,19 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 	sql = fmt.Sprintf("SELECT relname as `Tables_in_%s` %s FROM %s.mo_tables %s WHERE reldatabase = '%s' and relname != '%s' and relname not like '%s' and %s and relname != '%s' and relkind != '%s' and (%s)",
 		subName, tableType, MO_CATALOG_DB_NAME, snapshotSpec, dbName, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.NonTemporaryTableSQLPredicate(""), catalog.MO_ACCOUNT_LOCK, catalog.SystemPartitionRel, accountClause)
 
+	// Historical rows cannot be matched against current object grants. A
+	// subscription is admitted by subscriber-local broad authorization and keeps
+	// the publication allowlist below instead of using publisher role/object IDs.
+	// Trusted internal discovery also runs during bootstrap, before the role and
+	// privilege catalogs exist. It already bypasses frontend authorization.
+	// Below protocol 41 the frontend keeps the existing database-level gate.
+	// Do not narrow its full inherited-role authorization with legacy role SQL.
+	if stmt.AtTsExpr == nil && sub == nil && !defines.IsInternalExecutor(ctx.GetContext()) &&
+		requireCurrentRolesProtocol(ctx.GetContext(), ctx.GetProcess()) == nil {
+		sql = sysview.MetadataVisibilityCTE(defines.MORPCVersion41) + sql
+		sql += fmt.Sprintf(" and (EXISTS (SELECT 1 FROM __mo_visible_tables visible WHERE visible.account_id = mo_tables.account_id AND visible.rel_id = mo_tables.rel_id) or (account_id = 0 and (%s)))", mustShowTable+clusterTable)
+	}
+
 	// Do not show views in sub-db
 	if sub != nil {
 		sql += fmt.Sprintf(" and relkind != '%s'", catalog.SystemViewRel)
@@ -478,7 +520,7 @@ func buildShowColumnNumber(stmt *tree.ShowColumnNumber, ctx CompilerContext) (*P
 	var dependsOnUdf bool
 	if isUserViewMetadata(dbName, tableDef) {
 		var columns []*ColDef
-		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, accountId)
+		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, obj, accountId)
 		if err != nil {
 			return nil, err
 		}
@@ -547,7 +589,7 @@ func buildShowTableValues(stmt *tree.ShowTableValues, ctx CompilerContext) (*Pla
 		if obj.PubInfo != nil {
 			accountID = uint32(obj.PubInfo.TenantId)
 		}
-		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, accountID)
+		columns, dependencies, dependsOnUdf, err = describeViewForMetadata(ctx, tableDef, obj, accountID)
 		if err != nil {
 			return nil, err
 		}
@@ -706,6 +748,9 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 		"WHEN 4 then 'utf8_unicode_ci' " +
 		"WHEN 5 then 'utf8mb4_unicode_ci' " +
 		"else NULL end"
+	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
+		showColumnsCollation = sysview.ShowColumnCollationSQL("col.atttyp")
+	}
 
 	var sql string
 	if accountId == catalog.System_Account {
@@ -731,7 +776,7 @@ func buildShowColumns(stmt *tree.ShowColumns, ctx CompilerContext) (*Plan, error
 	var viewDependencies []*ObjectRef
 	var viewMetadataDependsOnUdf bool
 	if isUserViewMetadata(dbName, tableDef) {
-		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, accountId, dbName, tblName)
+		columns, dependencies, dependsOnUdf, err := viewDescriptionRelation(ctx, tableDef, obj, accountId, dbName, tblName)
 		if err != nil {
 			return nil, err
 		}
@@ -824,6 +869,9 @@ func buildShowTableStatus(stmt *tree.ShowTableStatus, ctx CompilerContext) (*Pla
 				and relname != '%s'
 				and (%s)`
 	sql = fmt.Sprintf(sql, autoIncrExpr, MO_CATALOG_DB_NAME, dbName, catalog.SystemPartitionRel, catalog.MOAutoIncrTable, catalog.IndexTableNamePrefix+"%", catalog.MO_ACCOUNT_LOCK, accountClause)
+	if DatabaseDefaultsEnabled(ctx.GetProcess().GetService()) {
+		sql = strings.Replace(sql, "'utf8mb4_bin' as 'Collation'", "internal_table_collation(extra_info) as 'Collation'", 1)
+	}
 
 	// Do not show views in sub-db
 	if sub != nil {

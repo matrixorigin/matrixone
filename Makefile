@@ -606,20 +606,29 @@ UT_PREBUILD_MIN_FREE_KB ?= 6291456
 UT_EMBEDDED_HARD_TIMEOUT_SECONDS ?= 0
 # Split issues roots under one shared package deadline.
 # Shorter process lifetimes bound catalog and race-detector retention. The
-# eight-batch pool shares four Go execution cores across two complete clusters.
-# One/four issues batches retain the serial rollback.
+# eight-batch pool gives each process two Go execution cores. Linux runners
+# requesting at least eight tasks use four complete clusters; smaller budgets
+# and unmeasured platforms retain two. One/four batches retain serial rollback.
 UT_ISSUES_BATCHES ?= 8
-UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),2,1)
-UT_EMBEDDED_PACKAGE_PARALLEL ?= 1
-# Audited embed/DML/isolated/SQL batching applies only to the non-prebuild path.
+UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
+# The audited embedded batches use the same two-core child budget. Enable four
+# processes only for measured Linux eight-task runs; preserve smaller rollbacks.
+UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
+# Audited batching mode applies only to the non-prebuild path. Four-worker
+# pkg/embed uses eight process generations; other audited packages use four.
 UT_EMBEDDED_BATCHES ?= 4
-# A compiler overlapping two clusters increases the memory peak. The new
+# A compiler overlapping cluster processes increases the memory peak. The new
 # issues default prepares embedded packages on demand instead. Preserve
-# the prebuild policy for rollback modes and explicit embedded pool users.
-UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2:1,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL):$(UT_EMBEDDED_PACKAGE_PARALLEL)),0,1)
+# the prebuild policy for rollback modes; overlapping compilation remains an
+# explicit opt-in for the bounded issues pool.
+UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),0,1)
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
+# The table-dump plan cases marked independent may run three at a time inside
+# each fresh plan race process. Keep 1 or 2 as explicit rollbacks for
+# constrained or diagnostic runs.
+PLAN_TEST_PARALLEL ?= 3
 # Keep light/issues overlap opt-in: the measured treatment was slower than the
 # serial baseline and left insufficient cgroup memory headroom. Re-enable only
 # when a new schedule has same-runner timing and memory evidence.
@@ -629,7 +638,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
 export UT_EMBEDDED_BATCHES
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL UT_OVERLAP_PLAN PLAN_TEST_PARALLEL UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays
@@ -1532,24 +1541,37 @@ install-static-check-tools:
 .PHONY: static-check static-check-analysis static-check-golangci
 GOLANGCI_LINT_CONCURRENCY ?=
 GOLANGCI_LINT_CONCURRENCY_FLAG := $(if $(strip $(GOLANGCI_LINT_CONCURRENCY)),--concurrency $(strip $(GOLANGCI_LINT_CONCURRENCY)))
-STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` ./...
-STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml ./...
+STATIC_CHECK_PACKAGES ?= ./...
+STATIC_CHECK_MOLINT = $(CGO_OPTS) go vet $(GO_MODULE_MODE) -vettool=`which molint` $(STATIC_CHECK_PACKAGES)
+STATIC_CHECK_GOLANGCI = $(CGO_OPTS) golangci-lint run -v $(GOLANGCI_LINT_CONCURRENCY_FLAG) -c .golangci.yml $(STATIC_CHECK_PACKAGES)
+static-check: override STATIC_CHECK_PACKAGES = ./...
 static-check: config err-check
 	$(STATIC_CHECK_MOLINT)
 	$(CGO_OPTS) license-eye -c .licenserc.yml header check
 	$(CGO_OPTS) license-eye -c .licenserc.yml dep check
 	$(STATIC_CHECK_GOLANGCI)
 
-# Keep the complete local/release entry point above. PR CI owns license scope
-# selection, but still analyzes the full package graph through content-addressed
-# Go and golangci-lint caches.
-static-check-analysis: config err-check
+# PR CI selects complete affected packages using the verified Go test/import
+# graph. Local use (including hosts without Node) retains the full checks.
+# Both analyzers consume the same package list and their failures stay fatal.
+static-check-analysis: err-check
+	@set -e; packages='./...'; \
+	if [ "$${GITHUB_ACTIONS:-}" = true ] && command -v node >/dev/null 2>&1; then \
+		packages=$$($(CGO_OPTS) node .github/ci/static-analysis.cjs); \
+	else \
+		$(MAKE) --no-print-directory config; \
+	fi; \
+	$(MAKE) --no-print-directory static-check-selected STATIC_CHECK_PACKAGES="$$packages"
+
+.PHONY: static-check-selected
+static-check-selected:
 	$(STATIC_CHECK_MOLINT)
 	$(STATIC_CHECK_GOLANGCI)
 
 # Trusted cache producers only need to populate golangci-lint's analysis
 # cache. This is not a reduced validation gate; PR and local SCA continue to
 # use static-check-analysis or static-check above.
+static-check-golangci: override STATIC_CHECK_PACKAGES = ./...
 static-check-golangci:
 	$(STATIC_CHECK_GOLANGCI)
 

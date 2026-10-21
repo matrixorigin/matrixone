@@ -25,6 +25,7 @@ import (
 	"math"
 	nethttp "net/http"
 	"net/url"
+	"os"
 	gotrace "runtime/trace"
 	"slices"
 	"strings"
@@ -96,40 +97,17 @@ func NewAwsSDKv2(
 		return nil, err
 	}
 
+	operationCtx := ctx
 	ctx, cancel := context.WithTimeoutCause(ctx, time.Minute, moerr.CauseNewAwsSDKv2)
 	defer cancel()
 
-	// options for loading configs
-	loadConfigOptions := []func(*config.LoadOptions) error{
-		config.WithLogger(logutil.GetS3Logger()),
-		// Keep the pre-v1.99 S3 behavior for existing object-storage
-		// deployments. Newer AWS SDKs default to calculating and validating
-		// checksums whenever an operation supports them, which changes the
-		// wire contract for S3-compatible services. Required checksums remain
-		// enabled while optional checksums stay disabled until each backend has
-		// an explicit compatibility test.
-		config.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
-		config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
-		config.WithClientLogMode(
-			aws.LogSigning |
-				aws.LogRetries |
-				aws.LogRequest |
-				aws.LogResponse |
-				aws.LogDeprecatedUsage |
-				aws.LogRequestEventMessage |
-				aws.LogResponseEventMessage,
-		),
-		config.WithHTTPClient(newHTTPClient(args)),
+	credentialCtx := ctx
+	if args.callerCredentialsOnly {
+		// SQL providers live for the operation, including credential refresh,
+		// rather than this constructor's temporary timeout context.
+		credentialCtx = operationCtx
 	}
-
-	// shared config profile
-	if args.SharedConfigProfile != "" {
-		loadConfigOptions = append(loadConfigOptions,
-			config.WithSharedConfigProfile(args.SharedConfigProfile),
-		)
-	}
-
-	credentialProvider, err := args.credentialsProviderForAwsSDKv2(ctx)
+	credentialProvider, err := args.credentialsProviderForAwsSDKv2(credentialCtx)
 	if err != nil {
 		return nil, moerr.AttachCause(ctx, err)
 	}
@@ -147,20 +125,52 @@ func NewAwsSDKv2(
 		)
 	}
 
-	// load configs
-	if credentialProvider != nil {
-		loadConfigOptions = append(loadConfigOptions,
-			config.WithCredentialsProvider(
-				credentialProvider,
-			),
-		)
-	}
-
-	// http client
 	httpClient := newHTTPClient(args)
-	loadConfigOptions = append(loadConfigOptions, config.WithHTTPClient(httpClient))
 
-	config, err := config.LoadDefaultConfig(ctx, loadConfigOptions...)
+	var awsConfig aws.Config
+	if args.callerCredentialsOnly {
+		awsConfig = explicitAWSConfig(args, credentialProvider, httpClient)
+	} else {
+		// options for loading configs
+		loadConfigOptions := []func(*config.LoadOptions) error{
+			config.WithLogger(logutil.GetS3Logger()),
+			// Keep the pre-v1.99 S3 behavior for existing object-storage
+			// deployments. Newer AWS SDKs default to calculating and validating
+			// checksums whenever an operation supports them, which changes the
+			// wire contract for S3-compatible services. Required checksums remain
+			// enabled while optional checksums stay disabled until each backend has
+			// an explicit compatibility test.
+			config.WithRequestChecksumCalculation(aws.RequestChecksumCalculationWhenRequired),
+			config.WithResponseChecksumValidation(aws.ResponseChecksumValidationWhenRequired),
+			config.WithClientLogMode(
+				aws.LogSigning |
+					aws.LogRetries |
+					aws.LogRequest |
+					aws.LogResponse |
+					aws.LogDeprecatedUsage |
+					aws.LogRequestEventMessage |
+					aws.LogResponseEventMessage,
+			),
+			config.WithHTTPClient(httpClient),
+		}
+
+		// shared config profile
+		if args.SharedConfigProfile != "" {
+			loadConfigOptions = append(loadConfigOptions,
+				config.WithSharedConfigProfile(args.SharedConfigProfile),
+			)
+		}
+
+		if credentialProvider != nil {
+			loadConfigOptions = append(loadConfigOptions,
+				config.WithCredentialsProvider(
+					credentialProvider,
+				),
+			)
+		}
+
+		awsConfig, err = config.LoadDefaultConfig(ctx, loadConfigOptions...)
+	}
 	if err != nil {
 		return nil, moerr.AttachCause(ctx, err)
 	}
@@ -208,7 +218,7 @@ func NewAwsSDKv2(
 
 	// new s3 client
 	client := s3.NewFromConfig(
-		config,
+		awsConfig,
 		s3Options...,
 	)
 
@@ -1167,82 +1177,86 @@ func (a *AwsSDKv2) mapError(err error, path string) error {
 	return err
 }
 
-func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(
-	ctx context.Context,
-) (
-	ret aws.CredentialsProvider,
-	err error,
-) {
-
-	// cache
-	defer func() {
-		if ret != nil {
-			ret = aws.NewCredentialsCache(ret)
+// explicitAWSConfig never consults process environment or shared configuration.
+// S3 and STS share this mode so role refresh cannot rediscover another principal.
+func explicitAWSConfig(o ObjectStorageArguments, provider aws.CredentialsProvider, client *nethttp.Client) aws.Config {
+	region := o.Region
+	if region == "" {
+		// SQL dynamic providers must not discover credentials from the server
+		// environment, but the region is non-secret configuration. Preserve the
+		// AWS SDK's environment-region fallback for existing S3-compatible URLs.
+		region = os.Getenv("AWS_REGION")
+		if region == "" {
+			region = os.Getenv("AWS_DEFAULT_REGION")
 		}
-	}()
+	}
+	return aws.Config{
+		Region: region, Credentials: provider, HTTPClient: client,
+		Logger: logutil.GetS3Logger(), Retryer: func() aws.Retryer { return newAWSRetryer() },
+		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
+		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
+	}
+}
 
-	defer func() {
-		// handle assume role
-		if o.RoleARN == "" {
-			return
+func (o ObjectStorageArguments) credentialsProviderForAwsSDKv2(ctx context.Context) (aws.CredentialsProvider, error) {
+	var upstream aws.CredentialsProvider
+	if o.KeyID != "" && o.KeySecret != "" {
+		upstream = credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken)
+	} else if !o.shouldLoadDefaultCredentials() {
+		return nil, moerr.NewInvalidInputNoCtx("no valid credentials")
+	}
+	if o.RoleARN != "" {
+		var cfg aws.Config
+		var err error
+		if o.callerCredentialsOnly {
+			cfg = explicitAWSConfig(o, upstream, newHTTPClient(o))
+		} else {
+			var opts []func(*config.LoadOptions) error
+			if upstream != nil {
+				opts = append(opts, config.WithCredentialsProvider(upstream))
+			}
+			if o.SharedConfigProfile != "" {
+				opts = append(opts, config.WithSharedConfigProfile(o.SharedConfigProfile))
+			}
+			cfg, err = config.LoadDefaultConfig(ctx, opts...)
+			if err != nil {
+				return nil, err
+			}
 		}
-
-		logutil.Info("setting assume role provider")
-		// load default options
-		awsConfig, err := config.LoadDefaultConfig(ctx)
-		if err != nil {
-			panic(err)
+		if o.Region != "" {
+			cfg.Region = o.Region
+		} else {
+			cfg.Region = "ap-northeast-1"
 		}
-		if ret != nil {
-			logutil.Info("using upstream credential provider for assume role",
-				zap.Any("type", fmt.Sprintf("%T", ret)),
-			)
-			awsConfig.Credentials = ret
-		}
-
-		stsSvc := sts.NewFromConfig(awsConfig, func(options *sts.Options) {
-			if o.Region == "" {
-				options.Region = "ap-northeast-1"
-			} else {
-				options.Region = o.Region
+		roleProvider := stscreds.NewAssumeRoleProvider(sts.NewFromConfig(cfg), o.RoleARN, func(opts *stscreds.AssumeRoleOptions) {
+			if o.ExternalID != "" {
+				opts.ExternalID = &o.ExternalID
+			}
+			if o.RoleSessionName != "" {
+				opts.RoleSessionName = o.RoleSessionName
 			}
 		})
-		provider := stscreds.NewAssumeRoleProvider(
-			stsSvc,
-			o.RoleARN,
-			func(opts *stscreds.AssumeRoleOptions) {
-				if o.ExternalID != "" {
-					opts.ExternalID = &o.ExternalID
-				}
-			},
-		)
-		_, err = provider.Retrieve(ctx)
-		if err != nil {
-			// not good
-			logutil.Info("bad assume role provider",
-				zap.Any("err", err),
-			)
-			return
+		var provider aws.CredentialsProvider = roleProvider
+		if o.callerCredentialsOnly {
+			// CredentialsCache suppresses request cancellation for shared users.
+			// A SQL dynamic service belongs to one operation: keep that lifetime
+			// and bound each initial/refresh request, without a background worker.
+			provider = aws.CredentialsProviderFunc(func(context.Context) (aws.Credentials, error) {
+				refreshCtx, cancel := context.WithTimeout(ctx, time.Minute)
+				defer cancel()
+				return roleProvider.Retrieve(refreshCtx)
+			})
 		}
-
-		// set to assume role provider
-		ret = provider
-	}()
-
-	// static credential
-	if o.KeyID != "" && o.KeySecret != "" {
-		// static
-		logutil.Info("static credential")
-		return credentials.NewStaticCredentialsProvider(o.KeyID, o.KeySecret, o.SessionToken), nil
+		upstream = aws.NewCredentialsCache(provider)
+		if _, err = upstream.Retrieve(ctx); err != nil {
+			return nil, err
+		}
+		return upstream, nil
 	}
-
-	if !o.shouldLoadDefaultCredentials() {
-		return nil, moerr.NewInvalidInputNoCtx(
-			"no valid credentials",
-		)
+	if upstream != nil {
+		upstream = aws.NewCredentialsCache(upstream)
 	}
-
-	return
+	return upstream, nil
 }
 
 type awsRetryer struct {
