@@ -284,6 +284,12 @@ func TestPartialRestoreMaterializedViewOrder(t *testing.T) {
 	defer freeStatements(stmt)
 	deps := restoreMaterializedViewDependencies(stmt, "db", views)
 	require.Equal(t, []string{genKey("db", "mv")}, deps)
+	derived := &tableInfo{dbName: "db", tblName: "derived", typ: view, createSql: "create view derived as select * from (select id from mv) d"}
+	derivedStmt, err := parseViewCreateSQLForRestore(t.Context(), derived, 1)
+	require.NoError(t, err)
+	defer freeStatements(derivedStmt)
+	derivedDeps := restoreMaterializedViewDependencies(derivedStmt, "db", views)
+	require.Equal(t, []string{genKey("db", "mv")}, derivedDeps)
 	g := toposort{next: make(map[string][]string)}
 	g.addVertex(genKey("db", "v"))
 	g.addVertex(genKey("db", "mv"))
