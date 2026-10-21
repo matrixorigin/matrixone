@@ -53,6 +53,29 @@ func TestBuildBlockReadersCombinedPartitions(t *testing.T) {
 	}
 }
 
+func TestBuildBlockReadersUsesReadShardHook(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	e := &Engine{fs: proc.GetFileService()}
+	data := partitionTestRanges(1)
+	def := &plan.TableDef{Name: "read_shard_hook", Pkey: &plan.PrimaryKeyDef{PkeyColName: "pk"}}
+	previous := activeM0ReadShards
+	t.Cleanup(func() { activeM0ReadShards = previous })
+	calls := 0
+	activeM0ReadShards = func(ctx context.Context, table *plan.TableDef, ranges engine.RelData, count int, ordered bool) []engine.RelData {
+		calls++
+		require.Same(t, def, table)
+		require.Same(t, data, ranges)
+		require.Equal(t, 1, count)
+		require.False(t, ordered)
+		return ranges.Split(count)
+	}
+	readers, err := e.BuildBlockReaders(context.Background(), proc, timestamp.Timestamp{}, nil, def, data, 1)
+	t.Cleanup(func() { closeReaders(readers) })
+	require.NoError(t, err)
+	require.Len(t, readers, 1)
+	require.Equal(t, 1, calls, "persisted-block reader must use the shared allocation policy")
+}
+
 type remoteMembershipFilterAdmission struct {
 	acquired atomic.Int64
 	released atomic.Int64
