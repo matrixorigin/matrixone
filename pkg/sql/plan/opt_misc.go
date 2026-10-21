@@ -33,6 +33,12 @@ func (builder *QueryBuilder) countColRefs(nodeID int32, colRefCnt map[[2]int32]i
 
 	increaseRefCntForExprList(node.ProjectList, 1, colRefCnt)
 	increaseRefCntForExprList(node.OnList, 1, colRefCnt)
+	increaseRefCntForExprList(node.DedupKeyExprs, 1, colRefCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseRefCntForExprList(exprs.GetList(), 1, colRefCnt)
+		}
+	}
 	increaseRefCntForExprList(node.FilterList, 1, colRefCnt)
 	increaseRefCntForExprList(node.GroupBy, 1, colRefCnt)
 	increaseRefCntForExprList(node.PhysicalEqualityKeyList, 1, colRefCnt)
@@ -338,6 +344,12 @@ func exprCanRemoveProject(expr *Expr) bool {
 func replaceColumnsForNode(node *plan.Node, projMap map[[2]int32]*plan.Expr) {
 	replaceColumnsForExprList(node.ProjectList, projMap)
 	replaceColumnsForExprList(node.OnList, projMap)
+	replaceColumnsForExprList(node.DedupKeyExprs, projMap)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			replaceColumnsForExprList(exprs.GetList(), projMap)
+		}
+	}
 	replaceColumnsForExprList(node.FilterList, projMap)
 	replaceColumnsForExprList(node.GroupBy, projMap)
 	replaceColumnsForExprList(node.PhysicalEqualityKeyList, projMap)
@@ -711,6 +723,12 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 	increaseTagCntForExprList(node.ProjectList, 1, tagCnt)
 	increaseTagCntForExprList(node.OnList, 1, tagCnt)
+	increaseTagCntForExprList(node.DedupKeyExprs, 1, tagCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseTagCntForExprList(exprs.GetList(), 1, tagCnt)
+		}
+	}
 	increaseTagCntForExprList(node.FilterList, 1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, 1, tagCnt)
 	increaseTagCntForExprList(node.AggList, 1, tagCnt)
@@ -773,6 +791,12 @@ func (builder *QueryBuilder) removeEffectlessLeftJoins(nodeID int32, tagCnt map[
 
 END:
 	increaseTagCntForExprList(node.ProjectList, -1, tagCnt)
+	increaseTagCntForExprList(node.DedupKeyExprs, -1, tagCnt)
+	if node.PreInsertUkCtx != nil {
+		for _, exprs := range node.PreInsertUkCtx.KeyDiagnosticExprs {
+			increaseTagCntForExprList(exprs.GetList(), -1, tagCnt)
+		}
+	}
 	increaseTagCntForExprList(node.FilterList, -1, tagCnt)
 	increaseTagCntForExprList(node.GroupBy, -1, tagCnt)
 	increaseTagCntForExprList(node.AggList, -1, tagCnt)
