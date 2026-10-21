@@ -114,6 +114,9 @@ func MigrateLegacyCatalogTableDef(ctx context.Context, proc *process.Process, ta
 // Only the operator that synthesized a coercion may remove it. In particular,
 // a top-level column assignment and an explicit CAST keep their target domains.
 func catalogDecimalOperator(name string, arity int) bool {
+	if name == "between" {
+		return arity == 3
+	}
 	if arity != 2 {
 		return false
 	}

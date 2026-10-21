@@ -53,5 +53,17 @@ func TestCatalogDecimalMigrationUsesCurrentStatementContext(t *testing.T) {
 			require.NoError(t, conn.QueryRowContext(ctx, "select i from "+table).Scan(&value))
 			require.Equal(t, int64(1000000000000000000), value)
 		}
+		for _, value := range []string{"999999999999999999", "1000000000000000000", "-1000000000000000000", "9223372036854775807", "-9223372036854775808"} {
+			for _, reverse := range []bool{false, true} {
+				left, right := "cast("+value+" as signed)", "1.0"
+				if reverse {
+					left, right = right, left
+				}
+				query := "select " + left + " * " + right
+				var got string
+				require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&got), query)
+				require.Equal(t, value+".0", got, query)
+			}
+		}
 	})
 }

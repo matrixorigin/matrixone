@@ -21,7 +21,7 @@ import (
 
 func TestArithmeticDecimalCastsRetainIntegerDomain(t *testing.T) {
 	for _, integer := range []types.Type{types.T_int32.ToType(), types.T_int64.ToType(), types.T_uint64.ToType(), types.New(types.T_bit, 64, 0)} {
-		for _, temporal := range []types.T{types.T_time, types.T_datetime, types.T_timestamp} {
+		for _, temporal := range []types.T{types.T_time, types.T_datetime, types.T_timestamp, types.T_decimal64} {
 			for _, scale := range []int32{0, 6} {
 				for _, op := range []string{"+", "-", "*", "%", "/", "div"} {
 					for _, reverse := range []bool{false, true} {

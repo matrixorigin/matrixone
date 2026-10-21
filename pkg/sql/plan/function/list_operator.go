@@ -2194,12 +2194,14 @@ var supportedOperators = []FuncNew{
 					// D128×D128, downgrade to D64×D64. The d64Mul kernel produces
 					// D128 output so overflow is impossible, and it's ~4× faster
 					// than d128Mul (1 vs 4 hardware MUL instructions).
-					// Exclude UINT64/BIT (their full domain does not fit in D64).
+					// Exclude BIGINT/UINT64/BIT: their full declared decimal
+					// domains need 19/20 digits, not D64's 18-digit target.
 					if t1.Oid == types.T_decimal128 && t2.Oid == types.T_decimal128 {
 						i0, i1 := inputs[0].Oid, inputs[1].Oid
 						hasD64 := i0 == types.T_decimal64 || i1 == types.T_decimal64
 						noD128 := i0 != types.T_decimal128 && i1 != types.T_decimal128
-						if hasD64 && noD128 && !wideUnsigned {
+						if hasD64 && noD128 && !wideUnsigned &&
+							i0 != types.T_int64 && i1 != types.T_int64 {
 							t1 = types.T_decimal64.ToType()
 							t2 = types.T_decimal64.ToType()
 							SetTargetScaleFromSource(&inputs[0], &t1)

@@ -51,3 +51,23 @@ scale conversion already overflowed physically for larger inputs.
 
 This is an old-writer/new-reader component regression, not a claim of a live
 server rolling-upgrade or binary-restart test.
+
+`legacy_decimal_between_63a964a82f.json` is generated at that same exact base
+with the same parser/planner/protobuf procedure. It adds genuine three-argument
+BETWEEN (the earlier NOT BETWEEN fixture lowers to binary comparisons):
+
+```sql
+-- generated_between
+create table legacy_cmp(i bigint, tm time(0), g bool generated always as
+  (i between cast('00:00:00' as time(0)) and cast('00:00:01' as time(0))) stored);
+-- explicit_between
+create table legacy_cmp(i bigint, tm time(0), g bool generated always as
+  (cast(i as decimal(18,0)) between cast('00:00:00' as time(0))
+   and cast('00:00:01' as time(0))) stored);
+```
+
+The generator verifies the persisted function is `between` with three arguments.
+On the base, the implicit fixture executes both `10^18-1` and `10^18` as false.
+The new reader regression retains those exact serialized bytes, verifies the
+unmigrated failure, compares the migrated predicate with fresh binding across
+the signed domain and both interval endpoints, and preserves the explicit CAST.
