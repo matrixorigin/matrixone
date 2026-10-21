@@ -56,7 +56,8 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 		}
 		exec("insert into " + db + ".bits_src values " + strings.Join(tuples, ",") + ",(999,null)")
 		exec("create table " + db + ".wide_bits_src(id int primary key,b bit(32))")
-		exec("insert into " + db + ".wide_bits_src values (1,1314212940),(2,23630),(3,null)")
+		// Include multi-byte values a0bc, abbc, anbc, arbc, atbc and aZbc.
+		exec("insert into " + db + ".wide_bits_src values (1,1314212940),(2,23630),(3,null),(4,1630560867),(5,1633837667),(6,1634624099),(7,1634886243),(8,1635017315),(9,1633313379)")
 		exec("create table " + db + ".decimal_src(id int primary key,n decimal(9,2))")
 		exec("insert into " + db + ".decimal_src values (1,12.34),(2,-5.67),(3,null)")
 		for _, tc := range []struct {
@@ -73,6 +74,19 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			{"bit32-unenclosed", "wide_bits_src", "b", ",", "\n", "", ""},
 			{"decimal-dot-terminator", "decimal_src", "n", ".", "\n", "", ""},
 			{"bit-translated-terminator", "bits_src", "b", "n", "\n", `"`, ""},
+			{"bit-enclosed-0", "bits_src", "b", ",", "\n", "0", ""},
+			{"bit-enclosed-b", "bits_src", "b", ",", "\n", "b", ""},
+			{"bit-enclosed-n", "bits_src", "b", ",", "\n", "n", ""},
+			{"bit-enclosed-r", "bits_src", "b", ",", "\n", "r", ""},
+			{"bit-enclosed-t", "bits_src", "b", ",", "\n", "t", ""},
+			{"bit-enclosed-Z", "bits_src", "b", ",", "\n", "Z", ""},
+			{"bit-enclosed-N", "bits_src", "b", ",", "\n", "N", ""},
+			{"bit32-enclosed-0", "wide_bits_src", "b", ",", "\n", "0", ""},
+			{"bit32-enclosed-b", "wide_bits_src", "b", ",", "\n", "b", ""},
+			{"bit32-enclosed-n", "wide_bits_src", "b", ",", "\n", "n", ""},
+			{"bit32-enclosed-r", "wide_bits_src", "b", ",", "\n", "r", ""},
+			{"bit32-enclosed-t", "wide_bits_src", "b", ",", "\n", "t", ""},
+			{"bit32-enclosed-Z", "wide_bits_src", "b", ",", "\n", "Z", ""},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec := func(query string) {

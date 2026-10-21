@@ -264,10 +264,13 @@ func getExportFilePath(filename string, fileCnt uint) string {
 var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byte, flag bool, buffer *bytes.Buffer) error {
 	if !flag && enclosed != 0 && oq.escapeChar() != 0 {
 		field, line, _, _ := oq.csvBoundaryBytes()
-		// LOAD translates \n, \0, etc. An ambiguous literal terminator
-		// cannot be protected by prefixing it; use the configured enclosure.
+		// LOAD translates \n, \0, etc. An ambiguous literal terminator or
+		// enclosure cannot be protected by prefixing it; enclose the value
+		// instead, so addEscapeToString can double the enclosure byte. A lone
+		// enclosure 'N' also needs this protection: \\N is LOAD's NULL marker.
 		flag = (isTranslatedCSVEscape(field) && bytes.IndexByte(tmp, field) >= 0) ||
-			(isTranslatedCSVEscape(line) && bytes.IndexByte(tmp, line) >= 0)
+			(isTranslatedCSVEscape(line) && bytes.IndexByte(tmp, line) >= 0) ||
+			((isTranslatedCSVEscape(enclosed) || enclosed == 'N') && bytes.IndexByte(tmp, enclosed) >= 0)
 	}
 	quote := byte(0)
 	if flag {

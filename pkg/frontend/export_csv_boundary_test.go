@@ -33,7 +33,9 @@ import (
 )
 
 func TestOutfileBITCSVAllBytes(t *testing.T) {
-	for _, enclosed := range []byte{0, '"'} {
+	// Translated escape letters are valid enclosure characters, too. Both
+	// integer IDs (notably 101 with enclosure '0') and BIT bytes must survive.
+	for _, enclosed := range []byte{0, '"', '0', 'b', 'n', 'r', 't', 'Z', 'N'} {
 		for _, force := range []bool{false, true} {
 			for _, resultSet := range []bool{false, true} {
 				t.Run(fmt.Sprintf("enclosed=%d/force=%t/resultset=%t", enclosed, force, resultSet), func(t *testing.T) {
