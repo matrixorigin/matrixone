@@ -61,7 +61,7 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	rs := vector.MustFunctionResult[bool](result)
 
 	// optimize rule for some special case.
-	if parameters[1].IsConst() {
+	if parameters[1].IsConst() && !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow() {
 		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, func(i []byte) []byte {
 			return i
 		})
@@ -70,9 +70,8 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 		}
 	}
 
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return op.regMap.regularMatchForLikeOp(v2, v1)
-	}, selectList)
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length,
+		op.regMap.likeMatchFn(parameters[1].IsConst(), DefaultEscapeChar, true, false), selectList)
 }
 
 func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -85,7 +84,7 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 	rs := vector.MustFunctionResult[bool](result)
 
 	// optimize rule for some special case.
-	if parameters[1].IsConst() {
+	if parameters[1].IsConst() && !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow() {
 		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, func(i []byte) []byte {
 			return bytes.ToLower(i)
 		})
@@ -94,9 +93,8 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 		}
 	}
 
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length, func(v1, v2 []byte) (bool, error) {
-		return op.regMap.regularMatchForLikeOp(bytes.ToLower(v2), bytes.ToLower(v1))
-	}, selectList)
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length,
+		op.regMap.likeMatchFn(parameters[1].IsConst(), DefaultEscapeChar, true, true), selectList)
 }
 
 func (op *opBuiltInRegexp) likeFnWithEscape(
@@ -135,9 +133,8 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 			escape, _ = utf8.DecodeRune(escapeBytes)
 		}
 	}
-	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length, func(value, pattern []byte) (bool, error) {
-		return op.regMap.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)
-	}, selectList)
+	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length,
+		op.regMap.likeMatchFn(parameters[1].IsConst(), escape, escapeEnabled, caseInsensitive), selectList)
 }
 
 func likeNoBackslashEscapes(proc *process.Process) bool {
@@ -349,6 +346,51 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 			}
 			return true, nil
 		}
+	}
+	return optimizeAnchoredLikeSegments(p1, rs, pat, length, specialFnForV)
+}
+
+func optimizeAnchoredLikeSegments(p1 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], pat []byte, length int, specialFnForV func([]byte) []byte) (bool, error) {
+	n := len(pat)
+	// Extend the existing percent-segment optimization to anchored patterns.
+	// Keep escapes, Unicode literals and '_' on the regexp path. Limiting each
+	// literal bounds candidate verification work during substring searches.
+	const maxLikeLiteralSegment = 64
+	if n > 1 && (pat[0] != '%' || pat[n-1] != '%') && bytes.Contains(pat, []byte{'%'}) {
+		for _, b := range pat {
+			if b >= utf8.RuneSelf || b == '_' || b == DefaultEscapeChar {
+				return false, nil
+			}
+		}
+		segments := bytes.Split(pat, []byte{'%'})
+		for _, segment := range segments {
+			if len(segment) > maxLikeLiteralSegment {
+				return false, nil
+			}
+		}
+		prefix, suffix := segments[0], segments[len(segments)-1]
+		for row := uint64(0); row < uint64(length); row++ {
+			value, isNull := p1.GetStrValue(row)
+			value = specialFnForV(value)
+			matched := false
+			if !isNull && len(value) >= len(prefix)+len(suffix) &&
+				bytes.HasPrefix(value, prefix) && bytes.HasSuffix(value, suffix) {
+				remaining := value[len(prefix) : len(value)-len(suffix)]
+				matched = true
+				for _, segment := range segments[1 : len(segments)-1] {
+					at := bytes.Index(remaining, segment)
+					if at < 0 {
+						matched = false
+						break
+					}
+					remaining = remaining[at+len(segment):]
+				}
+			}
+			if err := rs.Append(matched, isNull); err != nil {
+				return true, err
+			}
+		}
+		return true, nil
 	}
 	return false, nil
 }
@@ -704,6 +746,42 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 	escapeEnabled bool,
 	caseInsensitive bool,
 ) (match bool, err error) {
+	reg, err := rs.prepareLikeRegexp(pat, escape, escapeEnabled, caseInsensitive)
+	if err != nil {
+		return false, nil
+	}
+	if caseInsensitive {
+		str = []byte(strings.ToLower(util.UnsafeBytesToString(str)))
+	}
+	return reg.Match(str), nil
+}
+
+// A constant pattern is prepared lazily, once per vector evaluation. The
+// vector wrapper remains responsible for NULLs and selection, so unevaluated
+// rows never prepare a pattern. No state survives into the next batch.
+func (rs *regexpSet) likeMatchFn(constantPattern bool, escape rune, escapeEnabled, caseInsensitive bool) func([]byte, []byte) (bool, error) {
+	var reg *regexp.Regexp
+	ready := false
+	return func(value, pattern []byte) (bool, error) {
+		if !constantPattern {
+			return rs.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)
+		}
+		if !ready {
+			reg, _ = rs.prepareLikeRegexp(pattern, escape, escapeEnabled, caseInsensitive)
+			ready = true
+		}
+		// Preserve the generic LIKE path's false result on regexp compile failure.
+		if reg == nil {
+			return false, nil
+		}
+		if caseInsensitive {
+			value = bytes.ToLower(value)
+		}
+		return reg.Match(value), nil
+	}
+}
+
+func (rs *regexpSet) prepareLikeRegexp(pat []byte, escape rune, escapeEnabled, caseInsensitive bool) (*regexp.Regexp, error) {
 	replace := func(s string) string {
 		isRegexMeta := func(r rune) bool {
 			switch r {
@@ -754,15 +832,7 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 		return fmt.Sprintf("^(?s:%s)$", replace(util.UnsafeBytesToString(expr)))
 	}
 
-	realPat := convert(pat)
-	reg, err := rs.getRegularMatcher(realPat)
-	if err != nil {
-		return false, nil
-	}
-	if caseInsensitive {
-		str = []byte(strings.ToLower(util.UnsafeBytesToString(str)))
-	}
-	return reg.Match(str), nil
+	return rs.getRegularMatcher(convert(pat))
 }
 
 // if str[pos:] matched pat.
