@@ -10,6 +10,9 @@ drop table if exists json_table_5;
 drop table if exists json_table_5a;
 drop table if exists json_view_1;
 drop table if exists json_table_6;
+drop table if exists json_minmax_issue28869;
+drop table if exists json_minmax_issue28869_ctas;
+drop view if exists json_minmax_issue28869_view;
 
 --Overwrite json string key value as character, number, Chinese, special character, '', constant, date format string, true/false
 create table json_table_1(j1 json);
@@ -113,9 +116,22 @@ delete from json_table_61;
 select * from json_table_61;
 
 -- agg function
+-- MIN/MAX JSON uses SQL typed JSON ordering, including containers and JSON null.
 select count(j1) from json_table_1 ;
 select max(j1) from json_table_1 ;
 select min(j1) from json_table_1 ;
+
+-- Issue #28869: scalar, JSON null, SQL NULL, window, grouped, view, and CTAS.
+create table json_minmax_issue28869(id int, grp int, j json);
+insert into json_minmax_issue28869 values (1, 1, 'null'), (2, 1, 'false'), (3, 1, 'true'), (4, 1, '1'), (5, 1, '"a"'), (6, 1, null), (7, 2, '[1]'), (8, 2, '[1, 2]'), (9, 2, '{"a": 1}'), (10, 2, null), (11, 3, null);
+select json_type(min(j)) = 'NULL' as scalar_min_json_null, json_type(max(j)) = 'BOOLEAN' as scalar_max_boolean, min(j) = cast('null' as json) as scalar_min_value, max(j) = cast('true' as json) as scalar_max_value from json_minmax_issue28869 where grp = 1;
+select grp, json_type(min(j)) as group_min_type, json_type(max(j)) as group_max_type, min(j) = cast('{"a": 1}' as json) as group_min_value, max(j) = cast('[1, 2]' as json) as group_max_value from json_minmax_issue28869 where grp = 2 group by grp;
+select min(j) is null as all_sql_null_min, max(j) is null as all_sql_null_max from json_minmax_issue28869 where grp = 3;
+select id, json_type(min(j) over (order by id rows unbounded preceding)) as window_min_type, json_type(max(j) over (order by id rows unbounded preceding)) as window_max_type, min(j) over (order by id rows unbounded preceding) = cast('null' as json) as window_min_json_null, max(j) over (order by id rows unbounded preceding) = cast('true' as json) as window_max_true from json_minmax_issue28869 where grp = 1 order by id;
+create view json_minmax_issue28869_view as select grp, min(j) as mn, max(j) as mx from json_minmax_issue28869 group by grp;
+select grp, json_type(mn) as view_min_type, json_type(mx) as view_max_type, mn is null as view_min_sql_null, mx is null as view_max_sql_null from json_minmax_issue28869_view order by grp;
+create table json_minmax_issue28869_ctas as select min(j) as mn, max(j) as mx from json_minmax_issue28869 where grp = 1;
+select json_type(mn) = 'NULL' as ctas_min_json_null, json_type(mx) = 'BOOLEAN' as ctas_max_boolean, mn = cast('null' as json) as ctas_min_value, mx = cast('true' as json) as ctas_max_value from json_minmax_issue28869_ctas;
 
 --group by order by
 create table json_table_3b(d1 int,j1 json);
