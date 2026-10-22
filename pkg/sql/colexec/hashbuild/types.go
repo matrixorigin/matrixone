@@ -989,10 +989,6 @@ func (hb *HashmapBuilder) DrainCopiedBatches(
 	return nil
 }
 
-func (hashBuild *HashBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) setSpillThreshold(threshold int64) {
 	ctr.autoSpill = threshold == 0
 	ctr.spillThreshold = colexec.ResolveSpillThreshold(threshold)

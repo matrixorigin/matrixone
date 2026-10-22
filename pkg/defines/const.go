@@ -163,8 +163,9 @@ const (
 	MORPCVersion125    int64 = 125 // LOAD IGNORE foreign-key row rejection diagnostics
 	MORPCVersion126    int64 = 126 // parser-derived information_schema.VIEWS definitions
 	MORPCVersion127    int64 = 127 // IndexSearchScan internal_topk / max_internal_topk search knobs
-	MORPCVersion128    int64 = 128 // fulltext2 parallel search threads_search, token_filter (stop) analyzer, and search_df_cutoff
-	MORPCLatestVersion       = MORPCVersion128
+	MORPCVersion128    int64 = 128 // category-preserving mixed JSON/numeric comparisons
+	MORPCVersion129    int64 = 129 // fulltext2 parallel search threads_search, token_filter (stop) analyzer, and search_df_cutoff
+	MORPCLatestVersion       = MORPCVersion129
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

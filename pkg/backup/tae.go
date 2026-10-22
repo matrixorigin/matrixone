@@ -15,6 +15,7 @@
 package backup
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
@@ -42,6 +43,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function/ctl"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -355,6 +357,9 @@ func execBackup(
 		mergeStart = ckpStr[4]
 		end = types.StringToTS(mergeEnd)
 		start = types.StringToTS(mergeStart)
+		if end.Physical() <= 0 {
+			return moerr.NewInternalError(ctx, "backup checkpoint end must have a positive physical timestamp")
+		}
 		version, err = strconv.ParseUint(ckpStr[1], 10, 32)
 		if err != nil {
 			return err
@@ -439,19 +444,30 @@ func execBackup(
 		protectionMgr.start(protectedTS)
 	}
 
+	// Pin the metadata and copy the exact predecessor's history before the
+	// potentially long data copy. These root-level index objects are not part
+	// of LoadCheckpointEntriesFromKey or the ckp directory itself.
+	checkpointMetaFiles, minTs, err := CopyCheckpointDir(ctx, srcFs, dstFs, "ckp", start)
+	if err != nil {
+		return err
+	}
+	previousTableIDLocation, historyFiles, err := copyBackupTableIDHistory(
+		ctx, sid, srcFs, dstFs, start,
+	)
+	if err != nil {
+		return err
+	}
+
 	// copy data
 	taeFileList, err := parallelCopyData(ctx, srcFs, dstFs, files, parallelNum, gcFileMap)
 	if err != nil {
 		return err
 	}
 
-	// copy checkpoint and gc meta
-	sizeList, minTs, err := CopyCheckpointDir(ctx, srcFs, dstFs, "ckp", start)
-	if err != nil {
-		return err
-	}
-	taeFileList = append(taeFileList, sizeList...)
-	sizeList, err = CopyGCDir(ctx, srcFs, dstFs, "gc", start, minTs)
+	taeFileList = append(taeFileList, checkpointMetaFiles...)
+	taeFileList = append(taeFileList, historyFiles...)
+	// copy gc meta
+	sizeList, err := CopyGCDir(ctx, srcFs, dstFs, "gc", start, minTs)
 	if err != nil {
 		return err
 	}
@@ -469,6 +485,9 @@ func execBackup(
 		)
 		cnLocation, tnLocation, checkpointFiles, err = logtail.ReWriteCheckpointAndBlockFromKey(ctx, sid, srcFs, dstFs,
 			cnLocation, lastData, uint32(version), start)
+		if err != nil {
+			return err
+		}
 		for _, name := range checkpointFiles {
 			dentry, err := dstFs.StatFile(ctx, name)
 			if err != nil {
@@ -481,10 +500,27 @@ func execBackup(
 				ts:       start,
 			})
 		}
+		var requiredPreviousEnd types.TS
+		if previousTableIDLocation.Len() > 0 {
+			requiredPreviousEnd = start.Prev()
+		}
+		// Preserve the source's retained history, rather than silently applying
+		// the backup client's default retention. This makes minTS zero without
+		// extending the predecessor's actual coverage marker into the past.
+		tableIDLocation, _, _, _, err := logtail.SyncTableIDBatchWithHistory(
+			ctx, start, end, time.Duration(end.Physical()), 0,
+			cnLocation, uint32(version), previousTableIDLocation,
+			requiredPreviousEnd, common.CheckpointAllocator, dstFs,
+		)
 		if err != nil {
 			return err
 		}
-		file, err := checkpoint.MergeCkpMeta(ctx, sid, dstFs, cnLocation, tnLocation, start, end)
+		newHistoryFiles, err := collectBackupTableIDFiles(ctx, dstFs, tableIDLocation, start)
+		if err != nil {
+			return err
+		}
+		taeFileList = append(taeFileList, newHistoryFiles...)
+		file, err := checkpoint.MergeCkpMeta(ctx, sid, dstFs, cnLocation, tnLocation, start, end, tableIDLocation)
 		if err != nil {
 			return err
 		}
@@ -514,6 +550,150 @@ func execBackup(
 		*filesList = append(*filesList, taeFileList...)
 	}
 	return err
+}
+
+// copyBackupTableIDHistory selects only the durable boundary immediately before
+// the special checkpoint. An older, non-adjacent index must never bridge a gap.
+// A legacy boundary with no index remains a partial history after restore.
+func copyBackupTableIDHistory(
+	ctx context.Context,
+	sid string,
+	srcFs, dstFs fileservice.FileService,
+	start types.TS,
+) (objectio.LocationSlice, []*taeFile, error) {
+	metaFiles, err := ckputil.ListCKPMetaFiles(ctx, dstFs)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(metaFiles) == 0 {
+		return nil, nil, nil
+	}
+	slices.SortFunc(metaFiles, func(a, b ioutil.TSRangeFile) int {
+		return a.GetEnd().Compare(b.GetEnd())
+	})
+	entries, err := checkpoint.ReadEntriesFromMeta(
+		ctx, sid, ioutil.GetCheckpointDir(), metaFiles[len(metaFiles)-1].GetName(),
+		0, nil, common.CheckpointAllocator, dstFs,
+	)
+	if err != nil {
+		return nil, nil, err
+	}
+	var predecessor *checkpoint.CheckpointEntry
+	previousEnd := start.Prev()
+	for _, entry := range entries {
+		end := entry.GetEnd()
+		if entry.IsGlobal() && end.EQ(&start) {
+			location := entry.GetTableIDLocation()
+			if location.Len() > 0 {
+				predecessor = entry
+				break
+			}
+			if predecessor == nil {
+				predecessor = entry
+			}
+		}
+		// An archived backup tail is inclusive just like an ICKP. This also
+		// permits backing up an archive again without discarding its history.
+		if (entry.IsIncremental() || entry.IsBackup()) && end.EQ(&previousEnd) {
+			predecessor = entry
+		}
+		if entry.IsGlobal() && end.EQ(&previousEnd) && predecessor == nil {
+			// Older backup producers advanced the synthetic global end once
+			// more. Preserve their legacy empty-index/partial-history behavior,
+			// but never carry a non-empty index across that omitted timestamp.
+			location := entry.GetTableIDLocation()
+			if location.Len() == 0 {
+				predecessor = entry
+			}
+		}
+	}
+	if predecessor == nil {
+		return nil, nil, moerr.NewInternalErrorf(
+			ctx, "backup checkpoint %s has no exact predecessor", start.ToString(),
+		)
+	}
+	locations := predecessor.GetTableIDLocation()
+	files := make([]*taeFile, 0, locations.Len())
+	seen := make(map[string]struct{}, locations.Len())
+	for i := 0; i < locations.Len(); i++ {
+		name := locations.Get(i).Name().String()
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		// An incremental backup may already contain this immutable name. Check
+		// its content against the source; an archive/global-index entry alone
+		// does not prove the merge can read the correct object in this dstFs.
+		expected, err := checksumFile(ctx, srcFs, name)
+		if err != nil {
+			return nil, nil, err
+		}
+		var checksum []byte
+		entry, statErr := dstFs.StatFile(ctx, name)
+		if statErr == nil {
+			checksum, err = checksumFile(ctx, dstFs, name)
+		} else if moerr.IsMoErrCode(statErr, moerr.ErrFileNotFound) {
+			checksum, err = CopyFileWithRetry(ctx, srcFs, dstFs, name, "")
+			if err == nil {
+				entry, err = dstFs.StatFile(ctx, name)
+			}
+		} else {
+			err = statErr
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if !bytes.Equal(expected, checksum) {
+			return nil, nil, moerr.NewInternalErrorf(ctx, "backup table-ID object checksum mismatch: %s", name)
+		}
+		files = append(files, &taeFile{
+			path: name, size: entry.Size, checksum: checksum,
+			needCopy: true, ts: start,
+		})
+	}
+	return locations, files, nil
+}
+
+// collectBackupTableIDFiles owns only freshly generated, unpublished index
+// objects. Failure here precedes any metadata publication, so exact cleanup is
+// safe. After success the caller owns publication; a failed metadata WriteEnd
+// may already be durable and must not cause referenced objects to be deleted.
+func collectBackupTableIDFiles(
+	ctx context.Context,
+	fs fileservice.FileService,
+	locations objectio.LocationSlice,
+	ts types.TS,
+) (files []*taeFile, err error) {
+	names := make([]string, 0, locations.Len())
+	seen := make(map[string]struct{}, locations.Len())
+	for i := 0; i < locations.Len(); i++ {
+		name := locations.Get(i).Name().String()
+		if _, ok := seen[name]; !ok {
+			seen[name] = struct{}{}
+			names = append(names, name)
+		}
+	}
+	defer func() {
+		if err != nil {
+			_, cleanupErr := ioutil.DeleteUnpublishedObjects(ctx, fs, names...)
+			err = errors.Join(err, cleanupErr)
+		}
+	}()
+	for _, name := range names {
+		var entry *fileservice.DirEntry
+		if entry, err = fs.StatFile(ctx, name); err != nil {
+			return nil, err
+		}
+		var checksum []byte
+		if checksum, err = checksumFile(ctx, fs, name); err != nil {
+			return nil, err
+		}
+		files = append(files, &taeFile{
+			path: name, size: entry.Size, checksum: checksum,
+			needCopy: true, ts: ts,
+		})
+	}
+	return files, nil
 }
 
 func selectBackupObjects(

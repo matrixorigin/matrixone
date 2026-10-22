@@ -557,10 +557,9 @@ func TestCandidateLimitRefusesJSONProbe(t *testing.T) {
 		"a probe must not be truncated, whatever the rest of the shape allows")
 }
 
-// A prepared plan carrying an injected json coverage probe must be flagged so it rebuilds every
-// EXECUTE: its covered/partial decision reflects the async index's freshness at build time, which
-// no schema version tracks, so a reused plan would drop rows committed after it was cached. A user
-// MATCH builds the same fulltext2 index search scan but is freshness-tolerant, so only JSONProbeMode counts.
+// Prepared index searches defer their rebuild policy to the registered plugin.
+// An injected JSON probe must recheck transaction-local writes; a user MATCH
+// remains reusable. HNSW must recheck source coverage at every EXECUTE.
 func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 	mkPlan := func(nodes ...*plan.Node) *Plan {
 		return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: nodes}}}
@@ -587,6 +586,25 @@ func TestPreparedPlanDependsOnIndexCoverage(t *testing.T) {
 		"an injected json coverage probe must force a rebuild")
 	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{NodeType: plan.Node_TABLE_SCAN}, ftNode(fulltext2.JSONProbeMode))),
 		"the probe must be found among other nodes")
+	require.True(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexHnswAlgo.ToString()},
+		},
+	})), "an HNSW search must be rebuilt when coverage can change")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()},
+		},
+	})), "an algorithm without the coverage policy remains reusable")
+	require.False(t, PreparedPlanDependsOnIndexCoverage(mkPlan(&plan.Node{
+		NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{
+			Index:       &plan.IndexDef{IndexAlgo: catalog.MoIndexFullText2Algo.ToString()},
+			AlgoOptions: []byte("invalid"),
+		},
+	})), "invalid fulltext2 options cannot identify an injected JSON probe")
 }
 
 // recordJSONProbeTail marks a scan self-completing and records (keyed by node id) both the json

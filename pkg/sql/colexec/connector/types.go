@@ -17,7 +17,6 @@ package connector
 import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/pSpool"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -199,8 +198,4 @@ func (connector *Connector) CleanupDeferredSpool() {
 }
 
 func (connector *Connector) Free(proc *process.Process, pipelineFailed bool, err error) {
-}
-
-func (connector *Connector) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }

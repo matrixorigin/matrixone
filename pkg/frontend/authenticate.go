@@ -10965,6 +10965,85 @@ func createTablesInMoCatalogOfGeneralTenant(ctx context.Context, bh BackgroundEx
 	return newTenant, newTenantCtx, err
 }
 
+// isSysOnlyCatalogRelationSQL classifies the createSqls statements whose
+// relation stays with the system account: the general-tenant account
+// initialization skips them, so a relation whose only row is the system
+// account's can never resolve inside a general account. The publication
+// system-relation availability rules rely on the same classification.
+func isSysOnlyCatalogRelationSQL(sql string) bool {
+	// only the SYS tenant has the table mo_account/mo_subs
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_pubs") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_depend") ||
+		strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_refresh") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_snapshot") {
+		return true
+	}
+	if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("insert into mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_ISCP_LOG)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_CCPR_LOG)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_TABLES)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_DBS)) {
+		return true
+	}
+	// The MoCatalogMoIndexUpdateDDL statement opens with uppercase CREATE
+	// TABLE: the case-sensitive precondition must keep the original casing,
+	// or the statement stops classifying as sys-only and general-tenant
+	// account initialization executes a catalog DDL upstream leaves with the
+	// system account.
+	if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {
+		return true
+	}
+	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
+		return true
+	}
+
+	if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_FEATURE_LIMIT)) {
+		return true
+	}
+
+	if strings.Contains(sql, fmt.Sprintf("mo_catalog.%s", catalog.MO_FEATURE_REGISTRY)) {
+		return true
+	}
+
+	return false
+}
+
 func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccount, newTenantCtx context.Context, newTenant *TenantInfo, pu *config.ParameterUnit) error {
 	start := time.Now()
 	defer func() {
@@ -10975,82 +11054,13 @@ func createTablesInMoCatalogOfGeneralTenant2(bh BackgroundExec, ca *createAccoun
 	newTenantCtx, span := trace.Debug(newTenantCtx, "createTablesInMoCatalogOfGeneralTenant2")
 	defer span.End()
 
-	isSysOnlyDb := func(sql string) bool {
-		// only the SYS tenant has the table mo_account/mo_subs
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_account") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_pubs") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_subs") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_depend") ||
-			strings.HasPrefix(sql, "create cluster table mo_catalog.mo_view_refresh") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_task") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_watermark") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_cdc_snapshot") {
-			return true
-		}
-		if strings.HasPrefix(sql, "create table mo_catalog.mo_data_key") {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_TABLE_STATS)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("insert into mo_catalog.%s", catalog.MO_MERGE_SETTINGS)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_ACCOUNT_LOCK)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_ISCP_LOG)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_CCPR_LOG)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_TABLES)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE %s.%s", catalog.MO_CATALOG, catalog.MO_CCPR_DBS)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("CREATE TABLE mo_catalog.%s", catalog.MO_INDEX_UPDATE)) {
-			return true
-		}
-		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_BRANCH_METADATA)) {
-			return true
-		}
-
-		if strings.HasPrefix(sql, fmt.Sprintf("create table mo_catalog.%s", catalog.MO_FEATURE_LIMIT)) {
-			return true
-		}
-
-		if strings.Contains(sql, fmt.Sprintf("mo_catalog.%s", catalog.MO_FEATURE_REGISTRY)) {
-			return true
-		}
-
-		return false
-	}
-
 	start1 := time.Now()
 
 	// Only these binary-owned catalog declarations use internal DDL admission;
 	// do not pass the marker to the tenant's subsequent data or user statements.
 	internalDDL := context.WithValue(newTenantCtx, defines.InternalExecutorKey{}, true)
 	for _, sql := range createSqls {
-		if isSysOnlyDb(sql) {
+		if isSysOnlyCatalogRelationSQL(sql) {
 			continue
 		}
 		if err = bh.Exec(internalDDL, sql); err != nil {

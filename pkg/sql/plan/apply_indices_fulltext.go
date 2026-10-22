@@ -455,6 +455,101 @@ func (builder *QueryBuilder) applyIndicesForWindowUsingFullTextIndex(nodeID int3
 	return nodeID, nil
 }
 
+// buildFullTextMatchSearchScan is the shared search construction boundary. Callers
+// provide only their own pruning predicates; nil filters and empty includePreds
+// construct the complete score stream required by Boolean composition.
+func (builder *QueryBuilder) buildFullTextMatchSearchScan(ctx *BindContext, scanNode *plan.Node,
+	idxdef *plan.IndexDef, fn *plan.Function, wrappedMatchFilters []*plan.Expr, includePreds string) (int32, int64, error) {
+	idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(
+		scanNode.ObjRef, idxdef.IndexTableName, scanNode.ScanSnapshot)
+	if err != nil {
+		return -1, 0, err
+	}
+	if idxObjRef == nil || idxTableDef == nil {
+		return -1, 0, moerr.NewInternalErrorf(
+			builder.GetContext(), "resolved fulltext index table %q without catalog metadata", idxdef.IndexTableName)
+	}
+
+	idxtblname := sqlquote.QualifiedIdent(idxObjRef.SchemaName, idxObjRef.ObjName)
+	srctblname := sqlquote.QualifiedIdent(scanNode.ObjRef.SchemaName, scanNode.ObjRef.ObjName)
+
+	params := idxdef.IndexAlgoParams
+
+	modeLit := fn.Args[1].GetLit()
+	if modeLit == nil {
+		return -1, 0, moerr.NewInvalidInput(builder.GetContext(), "fulltext search mode must be a constant")
+	}
+	mode := modeLit.GetI64Val()
+
+	// Dispatch the per-match search scan by the resolved index's algo: fulltext2 or
+	// classic fulltext. Both emit the same
+	// (doc_id, score) shape and take the search pattern as an EXPRESSION (fn.Args[0]),
+	// so a prepared-statement '?' pattern flows through either path unchanged. This
+	// 2-member dispatch stays inline (not an index-plugin hook) because building the
+	// node needs QueryBuilder internals a plugin sub-package must not import.
+	var curr_ftnode_id int32
+	if catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
+		cfg, cfgErr := builder.buildFulltext2SearchCfg(scanNode, idxdef, mode)
+		if cfgErr != nil {
+			return -1, 0, cfgErr
+		}
+		opts := ft2plan.ScanOptions{Config: cfg, Mode: mode}
+		// Push this stream's score bounds into the engine: fulltext2 scores documents
+		// itself, so it can drop out-of-range ones before they cross into the join. Taken
+		// from the predicates the lift moved above the join -- they stay there too, so the
+		// pushed (deliberately widened) range can only ever remove work, not rows.
+		if rng := builder.fulltext2ScoreRangeFromFilters(wrappedMatchFilters, fn); rng != nil {
+			rb, rerr := json.Marshal(rng)
+			if rerr != nil {
+				return -1, 0, rerr
+			}
+			opts.ScoreRange = string(rb)
+		}
+		// Attach the peeled INCLUDE/pk predicate JSON to the DRIVING scan (i==0). With
+		// multiple MATCHes the JOIN #1 doc_id intersection propagates the filter, so one
+		// filtered stream constrains the whole result — the predicate need only ride the
+		// driving stream.
+		opts.IncludePreds = includePreds
+		// The zero-relevance guard for a threshold only known at EXECUTE.
+		guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
+		if gerr != nil {
+			return -1, 0, gerr
+		}
+		// pattern (fn.Args[0]) may be a bound '?' parameter.
+		curr_ftnode_id, err = builder.buildFulltext2SearchScan(
+			ctx, scanNode, idxdef, opts, fn.Args[0], guard, ft2SearchBaseColDefs())
+		if err != nil {
+			return -1, 0, err
+		}
+	} else {
+		// A literal pattern is pre-compiled to the index-scan SQL now; a runtime
+		// pattern expression (prepared '?') leaves sql empty and compiles at exec.
+		sql := ""
+		if patternLit := fn.Args[0].GetLit(); patternLit != nil {
+			fullTextSQL, sqlErr := builder.getFullTextIndexScanSql(params, idxtblname, patternLit.GetSval(), mode)
+			if sqlErr != nil {
+				return -1, 0, sqlErr
+			}
+			sql = fullTextSQL
+		}
+
+		// The zero-relevance guard for a threshold only known at EXECUTE. See
+		// fulltextRuntimeScoreGuard.
+		guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
+		if gerr != nil {
+			return -1, 0, gerr
+		}
+		// pattern (fn.Args[0]) may be a bound '?' parameter.
+		curr_ftnode_id, err = builder.buildFullTextSearchScan(ctx, scanNode, idxdef, idxObjRef,
+			ftplan.ScanOptions{SourceTable: srctblname, IndexTable: idxtblname, Mode: mode},
+			fn.Args[0], guard, sql)
+		if err != nil {
+			return -1, 0, err
+		}
+	}
+	return curr_ftnode_id, mode, nil
+}
+
 func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *plan.Node, scanNode *plan.Node,
 	paginationLimit, paginationOffset *plan.Expr,
 	filterids []int32, filter_indexDefs []*plan.IndexDef,
@@ -626,95 +721,15 @@ func (builder *QueryBuilder) applyJoinFullTextIndices(nodeID int32, projNode *pl
 	for i := 0; i < len(ft_filters); i++ {
 		ftidxscan := ft_filters[i]
 		idxdef := indexDefs[i]
-		idxObjRef, idxTableDef, err := builder.compCtx.ResolveIndexTableByRef(
-			scanNode.ObjRef, idxdef.IndexTableName, scanNode.ScanSnapshot)
+		fn := ftidxscan.GetF()
+		aliasName := fmt.Sprintf("mo_fulltext_alias_%d", i)
+		includePreds := ""
+		if i == 0 {
+			includePreds = ft2PredsJSON
+		}
+		curr_ftnode_id, mode, err := builder.buildFullTextMatchSearchScan(ctx, scanNode, idxdef, fn, wrappedMatchFilters, includePreds)
 		if err != nil {
 			return -1, nil, nil, nil, err
-		}
-		if idxObjRef == nil || idxTableDef == nil {
-			return -1, nil, nil, nil, moerr.NewInternalErrorf(
-				builder.GetContext(), "resolved fulltext index table %q without catalog metadata", idxdef.IndexTableName)
-		}
-
-		idxtblname := sqlquote.QualifiedIdent(idxObjRef.SchemaName, idxObjRef.ObjName)
-		srctblname := sqlquote.QualifiedIdent(scanNode.ObjRef.SchemaName, scanNode.ObjRef.ObjName)
-		fn := ftidxscan.GetF()
-		params := idxdef.IndexAlgoParams
-		aliasName := fmt.Sprintf("mo_fulltext_alias_%d", i)
-
-		modeLit := fn.Args[1].GetLit()
-		if modeLit == nil {
-			return -1, nil, nil, nil, moerr.NewInvalidInput(builder.GetContext(), "fulltext search mode must be a constant")
-		}
-		mode := modeLit.GetI64Val()
-
-		// Dispatch the per-match search scan by the resolved index's algo: fulltext2 or
-		// classic fulltext. Both emit the same
-		// (doc_id, score) shape and take the search pattern as an EXPRESSION (fn.Args[0]),
-		// so a prepared-statement '?' pattern flows through either path unchanged. This
-		// 2-member dispatch stays inline (not an index-plugin hook) because building the
-		// node needs QueryBuilder internals a plugin sub-package must not import.
-		var curr_ftnode_id int32
-		if catalog.IsFullText2IndexAlgo(idxdef.IndexAlgo) {
-			cfg, cfgErr := builder.buildFulltext2SearchCfg(scanNode, idxdef, mode)
-			if cfgErr != nil {
-				return -1, nil, nil, nil, cfgErr
-			}
-			opts := ft2plan.ScanOptions{Config: cfg, Mode: mode}
-			// Push this stream's score bounds into the engine: fulltext2 scores documents
-			// itself, so it can drop out-of-range ones before they cross into the join. Taken
-			// from the predicates the lift moved above the join -- they stay there too, so the
-			// pushed (deliberately widened) range can only ever remove work, not rows.
-			if rng := builder.fulltext2ScoreRangeFromFilters(wrappedMatchFilters, fn); rng != nil {
-				rb, rerr := json.Marshal(rng)
-				if rerr != nil {
-					return -1, nil, nil, nil, rerr
-				}
-				opts.ScoreRange = string(rb)
-			}
-			// Attach the peeled INCLUDE/pk predicate JSON to the DRIVING scan (i==0). With
-			// multiple MATCHes the JOIN #1 doc_id intersection propagates the filter, so one
-			// filtered stream constrains the whole result — the predicate need only ride the
-			// driving stream.
-			if i == 0 {
-				opts.IncludePreds = ft2PredsJSON
-			}
-			// The zero-relevance guard for a threshold only known at EXECUTE.
-			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
-			if gerr != nil {
-				return -1, nil, nil, nil, gerr
-			}
-			// pattern (fn.Args[0]) may be a bound '?' parameter.
-			curr_ftnode_id, err = builder.buildFulltext2SearchScan(
-				ctx, scanNode, idxdef, opts, fn.Args[0], guard, ft2SearchBaseColDefs())
-			if err != nil {
-				return -1, nil, nil, nil, err
-			}
-		} else {
-			// A literal pattern is pre-compiled to the index-scan SQL now; a runtime
-			// pattern expression (prepared '?') leaves sql empty and compiles at exec.
-			sql := ""
-			if patternLit := fn.Args[0].GetLit(); patternLit != nil {
-				fullTextSQL, sqlErr := builder.getFullTextIndexScanSql(params, idxtblname, patternLit.GetSval(), mode)
-				if sqlErr != nil {
-					return -1, nil, nil, nil, sqlErr
-				}
-				sql = fullTextSQL
-			}
-
-			// The zero-relevance guard for a threshold only known at EXECUTE. See
-			// fulltextRuntimeScoreGuard.
-			guard, gerr := builder.fulltextRuntimeScoreGuard(wrappedMatchFilters, fn)
-			if gerr != nil {
-				return -1, nil, nil, nil, gerr
-			}
-			// pattern (fn.Args[0]) may be a bound '?' parameter.
-			curr_ftnode_id, err = builder.buildFullTextSearchScan(ctx, scanNode, idxdef, idxObjRef,
-				ftplan.ScanOptions{SourceTable: srctblname, IndexTable: idxtblname, Mode: mode},
-				fn.Args[0], guard, sql)
-			if err != nil {
-				return -1, nil, nil, nil, err
-			}
 		}
 		// this scan answers ft_filters[i]; wrapped MATCHes equal to it now resolve to its score
 		served[i].nodeID = curr_ftnode_id
@@ -1733,6 +1748,9 @@ func (builder *QueryBuilder) resolveProjectMatchesOverJoin(projNode *plan.Node, 
 // by a bare MATCH, and dropping its PROJECT boundary can expose it under a WINDOW or outer
 // JOIN where the scan-local rewrite cannot run.
 func (builder *QueryBuilder) scanHasMatchedFullTextFilter(node *plan.Node) bool {
+	if scanHasFullTextBooleanComposition(node) {
+		return true
+	}
 	filterids, _ := builder.getFullTextMatchFiltersFromScanNode(node)
 	if len(filterids) > 0 {
 		return true
@@ -1982,9 +2000,12 @@ func (builder *QueryBuilder) equalsFullTextMatchFunc(fn1 *plan.Function, fn2 *pl
 
 // fulltextServedMatch pairs a MATCH the rewrite actually built an index scan for with the
 // node that produces its score column. nodeID is -1 until that node exists.
+// replacementExpr publishes a scan-owned normalized slot for Boolean composition;
+// nil retains the legacy raw-score lookup through nodeID.
 type fulltextServedMatch struct {
-	fn     *plan.Function
-	nodeID int32
+	fn              *plan.Function
+	nodeID          int32
+	replacementExpr *plan.Expr
 }
 
 // isServedFullTextMatch reports whether one of served is the SAME MATCH as fn.
@@ -2050,6 +2071,9 @@ func (builder *QueryBuilder) servedFullTextScoreSameTable(fn *plan.Function, ser
 		if s.fn == nil || len(s.fn.Args) < 2 || !builder.equalsFullTextMatchFuncSameTable(fn, s.fn) {
 			continue
 		}
+		if s.replacementExpr != nil {
+			return DeepCopyExpr(s.replacementExpr)
+		}
 		if expr := builder.fullTextScoreColRef(s.nodeID); expr != nil {
 			return expr
 		}
@@ -2085,6 +2109,9 @@ func (builder *QueryBuilder) servedFullTextScore(fn *plan.Function, served []ful
 	for _, s := range served {
 		if s.fn == nil || len(s.fn.Args) < 2 || !builder.equalsFullTextMatchFunc(fn, s.fn) {
 			continue
+		}
+		if s.replacementExpr != nil {
+			return DeepCopyExpr(s.replacementExpr)
 		}
 		if expr := builder.fullTextScoreColRef(s.nodeID); expr != nil {
 			return expr
