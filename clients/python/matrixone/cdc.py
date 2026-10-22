@@ -139,14 +139,18 @@ def _parse_watermark_timestamp(value: Optional[str]) -> Optional[datetime.dateti
     if not value:
         return None
     value = value.strip()
-    dt: Optional[datetime.datetime] = None
-    numeric_part = value.split("-", 1)[0]
-    if numeric_part.isdigit():
+    hlc_match = re.fullmatch(r"(?P<physical>\d+)(?:-\d+)?", value)
+    if hlc_match:
         try:
-            nanos = int(numeric_part)
-            dt = datetime.datetime.fromtimestamp(nanos / 1_000_000_000, tz=datetime.timezone.utc)
-        except (ValueError, OverflowError):
-            dt = None
+            nanos = int(hlc_match.group("physical"))
+            seconds, remaining_nanos = divmod(nanos, 1_000_000_000)
+            return datetime.datetime.fromtimestamp(seconds, tz=datetime.timezone.utc) + datetime.timedelta(
+                microseconds=remaining_nanos // 1_000
+            )
+        except (OSError, ValueError, OverflowError):
+            return None
+
+    dt: Optional[datetime.datetime] = None
     for candidate in (value, value.replace(" ", "T")):
         try:
             dt = datetime.datetime.fromisoformat(candidate)

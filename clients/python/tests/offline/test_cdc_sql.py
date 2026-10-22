@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 from unittest.mock import AsyncMock, Mock
 
@@ -328,6 +329,34 @@ class TestCDCManagerSQLGeneration:
 
         assert len(marks) == 1
         assert marks[0].table == "orders"
+
+    def test_list_late_table_watermarks_parses_hlc_timestamp(self) -> None:
+        task = CDCTaskInfo(
+            task_id="task-id-1",
+            task_name="cdc_task",
+            source_uri=None,
+            sink_uri=None,
+            sink_type=None,
+            table_mapping=None,
+            state="running",
+            checkpoint=None,
+            err_msg=None,
+            created_time=None,
+        )
+        timestamp = datetime.datetime(2025, 1, 2, 3, 4, 5, 123456, tzinfo=datetime.timezone.utc)
+        nanos = int(timestamp.timestamp()) * 1_000_000_000 + timestamp.microsecond * 1_000
+        watermark = CDCWatermarkInfo(
+            task_id="task-id-1",
+            task_name="cdc_task",
+            database="test_db",
+            table="orders",
+            watermark=f"{nanos}-7",
+            err_msg=None,
+        )
+        self.manager.list = Mock(return_value=[task])  # type: ignore[method-assign]
+        self.manager.list_watermarks = Mock(return_value=[watermark])  # type: ignore[method-assign]
+
+        assert self.manager.list_late_table_watermarks() == [watermark]
 
 
 @pytest.mark.asyncio
