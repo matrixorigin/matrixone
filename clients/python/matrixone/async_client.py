@@ -151,9 +151,9 @@ class AsyncSnapshotManager:
         sql = """
             SELECT sname, ts, level, account_name, database_name, table_name
             FROM mo_catalog.mo_snapshots
-            WHERE sname = :name
+            WHERE sname = ?
         """
-        result = await self.client.execute(sql, {"name": name})
+        result = await self.client.execute(sql, (name,))
 
         if not result.rows:
             raise SnapshotError(f"Snapshot '{name}' not found")

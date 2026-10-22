@@ -585,11 +585,68 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
         self.mock_client.execute.assert_any_await("CREATE SNAPSHOT persisted_snap FOR DATABASE persisted_db")
         self.assertEqual(self.mock_client.execute.await_count, 2)
         lookup_call = self.mock_client.execute.await_args_list[1]
-        self.assertIn("WHERE sname = :name", lookup_call.args[0])
-        self.assertEqual(lookup_call.args[1], {"name": "persisted_snap"})
+        self.assertIn("WHERE sname = ?", lookup_call.args[0])
+        self.assertEqual(lookup_call.args[1], ("persisted_snap",))
         self.assertEqual(snapshot.created_at, created_at)
         self.assertIsNone(snapshot.description)
         self.assertEqual(snapshot.database, "persisted_db")
+
+    async def test_create_uses_real_async_client_parameter_binding(self):
+        """Snapshot lookup parameters should cross the real async execution boundary."""
+        timestamp_ns = int(datetime(2025, 1, 2, 3, 4, 5).timestamp() * 1000000000)
+        columns = ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name']
+        rows = [('review_snap', timestamp_ns, 'database', 'sys', 'review_db', None)]
+
+        class MockResult:
+            def __init__(self, returns_rows=False):
+                self.returns_rows = returns_rows
+                self.rowcount = 0
+
+            def fetchall(self):
+                return rows
+
+            def keys(self):
+                return columns
+
+        class MockConnection:
+            def __init__(self):
+                self.statements = []
+
+            async def exec_driver_sql(self, sql):
+                self.statements.append(sql)
+                return MockResult(returns_rows=sql.lstrip().startswith("SELECT"))
+
+        class MockBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            async def __aenter__(self):
+                return self.connection
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def begin(self):
+                return MockBeginContext(self.connection)
+
+        client = AsyncClient()
+        connection = MockConnection()
+        client._engine = MockEngine(connection)
+
+        snapshot = await client.snapshots.create(
+            "review_snap", SnapshotLevel.DATABASE, database="review_db"
+        )
+
+        self.assertEqual(len(connection.statements), 2)
+        self.assertEqual(connection.statements[0], "CREATE SNAPSHOT review_snap FOR DATABASE review_db")
+        self.assertIn("WHERE sname = 'review_snap'", connection.statements[1])
+        self.assertNotIn(":name", connection.statements[1])
+        self.assertEqual(snapshot.name, "review_snap")
+        self.assertEqual(snapshot.database, "review_db")
 
     async def test_get_snapshot(self):
         """Test getting snapshot"""
