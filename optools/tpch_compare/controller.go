@@ -343,7 +343,11 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 	defer func() {
 		record.Trailing, err = group.snapshot(false)
 		retErr = errors.Join(retErr, err)
-		if cleanupErr := group.quiescent(server, worker); cleanupErr == nil {
+		cleanupErr := group.quiescent(server, worker)
+		if record.Profile != nil && record.Profile.Cleanup != "complete" {
+			cleanupErr = errors.Join(cleanupErr, errors.New("profiling collector cleanup is incomplete"))
+		}
+		if cleanupErr == nil {
 			record.Cleanup = "complete"
 		} else {
 			record.Cleanup = "failed"
@@ -510,6 +514,11 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 		}
 		if profiler != nil {
 			_ = profiler.stop()
+			if profiler.record.Cleanup != "complete" {
+				record.Profile = &profiler.record
+				profiler = nil
+				return record, errors.New("profiling collector cleanup is incomplete")
+			}
 			profiler.afterSnapshots()
 			record.Profile = &profiler.record
 			profiler = nil

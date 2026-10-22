@@ -21,6 +21,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"time"
 )
@@ -71,6 +72,34 @@ func profileCampaign(ctx context.Context, config, id, baseline string, pilot boo
 	if !identifier.MatchString(id) {
 		return errors.New("profile ID must be a lower-case identifier")
 	}
+	if f.Version != formatVersion {
+		return errors.New("unsupported frozen format")
+	}
+	if err := f.Preflight.verify(c.Root); err != nil {
+		return err
+	}
+	preflight, err := readJSON[Preflight](filepath.Join(c.Root, f.Preflight.Path))
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(preflight, p) {
+		return errors.New("profiling preflight differs from frozen campaign")
+	}
+	deep := map[string]map[int]bool{}
+	if !pilot {
+		deep, err = deepProfileSelection(c, f, baseline)
+		if err != nil {
+			return err
+		}
+	}
+	manager, err := setupCgroups(c)
+	if err != nil {
+		return err
+	}
+	return executeProfileSchedule(ctx, c, p, f, manager, id, pilot, deep, runArm)
+}
+
+func executeProfileSchedule(ctx context.Context, c Campaign, p Preflight, f Frozen, manager *cgroupManager, id string, pilot bool, deep map[string]map[int]bool, arm armRunner) (retErr error) {
 	root := filepath.Join(c.Root, "profiles", id)
 	if err := os.MkdirAll(filepath.Dir(root), 0750); err != nil {
 		return err
@@ -78,11 +107,8 @@ func profileCampaign(ctx context.Context, config, id, baseline string, pilot boo
 	if err := os.Mkdir(root, 0750); err != nil {
 		return err
 	}
-	manager, err := setupCgroups(c)
-	if err != nil {
-		return err
-	}
 	manifest := ProfileManifest{Version: formatVersion, Pilot: pilot}
+	var err error
 	manifest.Frozen, err = artifact(c.Root, filepath.Join(c.Root, "frozen.json"))
 	if err != nil {
 		return err
@@ -107,13 +133,6 @@ func profileCampaign(ctx context.Context, config, id, baseline string, pilot boo
 		})
 		retErr = errors.Join(retErr, walkErr, publishJSON(filepath.Join(root, "profiles.json"), manifest))
 	}()
-	deep := map[string]map[int]bool{}
-	if !pilot {
-		deep, err = deepProfileSelection(c, f, baseline)
-		if err != nil {
-			return err
-		}
-	}
 	runAt := func(sf string, q int, engine, kind string, rep, cores int) error {
 		if err := ctx.Err(); err != nil {
 			return context.Cause(ctx)
@@ -125,17 +144,10 @@ func profileCampaign(ctx context.Context, config, id, baseline string, pilot boo
 		if used >= c.ProfileBytes {
 			return errors.New("profile campaign quota exhausted")
 		}
-		prepared := f.Prepared[sf][engine]
-		armPath := filepath.Join(c.Root, prepared.Pilot.Path)
-		qual, err := readJSON[ArmRecord](armPath)
+		prepared, timeNS, err := profilePilotTiming(c, p, f, sf, engine, q)
 		if err != nil {
 			return err
 		}
-		receipt, _, err := readArm(filepath.Dir(armPath), qual)
-		if err != nil {
-			return err
-		}
-		timeNS := receipt.Queries[q-1].Capture.ElapsedNS
 		if cores == 1 {
 			timeNS *= 8
 		}
@@ -151,7 +163,8 @@ func profileCampaign(ctx context.Context, config, id, baseline string, pilot boo
 		}
 		t := Trial{ID: fmt.Sprintf("%s-sf%s-q%02d-%s-c%d-%d", kind, sf, q, engine, cores, rep), Experiment: "profile", Scale: sf, Cores: cores, MemoryBytes: c.MemoryBytes, Clients: 1, Queries: []int{q}}
 		request := runRequest(t, true)
-		request.WarmupSelected = pilot
+		// Discard a target warm run before collectors start, including controls.
+		request.WarmupSelected = true
 		request.Repetitions = reps
 		if kind != "operator" {
 			request.MaxWindowNS = int64(60 * time.Second)
@@ -161,10 +174,17 @@ func profileCampaign(ctx context.Context, config, id, baseline string, pilot boo
 			request.Profile = &ProfileSpec{Kind: kind}
 		}
 		path := filepath.Join(root, t.ID)
-		record, runErr := runArm(ctx, c, p, manager, prepared.Deployment, t, path, request)
+		record, runErr := arm(ctx, c, p, manager, prepared.Deployment, t, path, request)
+		unsafeCleanup := record.Cleanup != "complete"
+		if unsafeCleanup {
+			runErr = errors.Join(runErr, fmt.Errorf("cleanup %q did not establish application quiescence", record.Cleanup))
+		}
 		attempt := ProfileAttempt{Scale: sf, Query: q, Engine: engine, Kind: kind, Cores: cores, Status: "complete"}
 		attempt.Arm, err = artifact(root, filepath.Join(path, "arm.json"))
 		if err != nil {
+			err = errors.Join(runErr, err)
+			attempt.Status, attempt.Error = "failed", err.Error()
+			manifest.Attempts = append(manifest.Attempts, attempt)
 			return err
 		}
 		if runErr != nil {
@@ -190,6 +210,9 @@ func profileCampaign(ctx context.Context, config, id, baseline string, pilot boo
 		}
 		manifest.Attempts = append(manifest.Attempts, attempt)
 		_, _ = fmt.Fprintf(os.Stderr, "%s: %s\n", t.ID, attempt.Status)
+		if unsafeCleanup || ctx.Err() != nil {
+			return errors.Join(runErr, context.Cause(ctx))
+		}
 		return nil
 	}
 	run := func(sf string, q int, engine, kind string, rep int) error { return runAt(sf, q, engine, kind, rep, 8) }
@@ -250,44 +273,30 @@ func deepProfileSelection(c Campaign, f Frozen, root string) (map[string]map[int
 	if root == "" {
 		return nil, errors.New("full profiling requires the measured baseline run directory")
 	}
-	run, err := readJSON[RunManifest](filepath.Join(root, "run.json"))
+	evidence, err := readCampaignEvidence(c, root)
 	if err != nil {
 		return nil, err
 	}
-	if err := run.Frozen.verify(c.Root); err != nil {
-		return nil, err
+	if !reflect.DeepEqual(evidence.frozen, f) {
+		return nil, errors.New("profiling baseline differs from frozen campaign")
 	}
-	values := map[string]map[int][]pairedTimes{}
-	for _, pin := range run.Pairs {
-		if err := pin.verify(root); err != nil {
-			return nil, err
-		}
-		path := filepath.Join(root, pin.Path)
-		pair, err := readJSON[PairRecord](path)
-		if err != nil {
-			return nil, err
-		}
-		if pair.Trial.Experiment != "warm" || pair.Status != "pass" {
+	return selectDeepProfiles(evidence.cells)
+}
+
+func selectDeepProfiles(cells map[string]*reportCell) (map[string]map[int]bool, error) {
+	values := map[string]map[int][][]pairedTimes{}
+	for _, cell := range cells {
+		if cell.Trial.Experiment != "warm" {
 			continue
 		}
-		sf := pair.Trial.Scale
+		sf := cell.Trial.Scale
 		if sf != "10" && sf != "100" {
 			continue
 		}
-		if values[sf] == nil {
-			values[sf] = map[int][]pairedTimes{}
+		if values[sf] != nil || len(cell.Failures) != 0 || cell.Expected != 10 || len(cell.Suites) != 10 {
+			return nil, errors.New("baseline warm cell is incomplete or ambiguous")
 		}
-		a, _, err := readArm(filepath.Join(filepath.Dir(path), "mo"), pair.Arms["mo"])
-		if err != nil {
-			return nil, err
-		}
-		b, _, err := readArm(filepath.Join(filepath.Dir(path), "duckdb"), pair.Arms["duckdb"])
-		if err != nil {
-			return nil, err
-		}
-		for i, q := range a.Queries {
-			values[sf][q.Query] = append(values[sf][q.Query], pairedTimes{float64(q.Capture.ElapsedNS), float64(b.Queries[i].Capture.ElapsedNS)})
-		}
+		values[sf] = cell.Queries
 	}
 	out := map[string]map[int]bool{}
 	for _, sf := range []string{"10", "100"} {
@@ -305,8 +314,12 @@ func deepProfileSelection(c Campaign, f Frozen, root string) (map[string]map[int
 				return nil, errors.New("baseline warm cell is incomplete")
 			}
 			mo, duck := make([]float64, len(v)), make([]float64, len(v))
-			for i, p := range v {
-				mo[i], duck[i] = p.MO, p.DuckDB
+			for i, block := range v {
+				if len(block) != 1 || block[0].MO <= 0 || block[0].DuckDB <= 0 ||
+					math.IsNaN(block[0].MO) || math.IsNaN(block[0].DuckDB) || math.IsInf(block[0].MO, 0) || math.IsInf(block[0].DuckDB, 0) {
+					return nil, errors.New("invalid baseline paired query timing")
+				}
+				mo[i], duck[i] = block[0].MO, block[0].DuckDB
 			}
 			gaps = append(gaps, gap{q, median(duck) / median(mo)})
 		}
@@ -326,6 +339,57 @@ func deepProfileSelection(c Campaign, f Frozen, root string) (map[string]map[int
 			out[sf][g.q] = true
 		}
 	}
-	_ = f
 	return out, nil
+}
+
+func profilePilotTiming(c Campaign, p Preflight, f Frozen, scale, engine string, query int) (PreparedEngine, int64, error) {
+	prepared, ok := f.Prepared[scale][engine]
+	if !ok || !reflect.DeepEqual(prepared.Deployment, loadDeployment(c, scale, engine, 1)) {
+		return PreparedEngine{}, 0, errors.New("profiling deployment differs from frozen campaign")
+	}
+	if err := prepared.Pilot.verify(c.Root); err != nil {
+		return PreparedEngine{}, 0, err
+	}
+	path := filepath.Join(c.Root, prepared.Pilot.Path)
+	record, err := readJSON[ArmRecord](path)
+	if err != nil {
+		return PreparedEngine{}, 0, err
+	}
+	trial := pilotTrial(c, scale, engine)
+	if record.Version != formatVersion || record.Engine != engine || !reflect.DeepEqual(record.Trial, trial) {
+		return PreparedEngine{}, 0, errors.New("profiling pilot differs from frozen campaign")
+	}
+	root := filepath.Dir(path)
+	receipt, _, err := readArm(root, record)
+	if err != nil {
+		return PreparedEngine{}, 0, err
+	}
+	if err := record.Request.verify(root); err != nil {
+		return PreparedEngine{}, 0, err
+	}
+	request, err := readJSON[WorkerRequest](filepath.Join(root, record.Request.Path))
+	if err != nil {
+		return PreparedEngine{}, 0, err
+	}
+	expected := runRequest(trial, true)
+	expected.Engine = prepared.Deployment.Engine
+	expected.DatasetRoot, expected.OutputRoot = c.Datasets[scale], request.OutputRoot
+	if !reflect.DeepEqual(request, expected) {
+		return PreparedEngine{}, 0, errors.New("profiling pilot request differs from frozen campaign")
+	}
+	if err := verifyScoredWorker(trial, engine, p, receipt); err != nil {
+		return PreparedEngine{}, 0, err
+	}
+	if err := verifyTrialQueries(trial, f, request, receipt); err != nil {
+		return PreparedEngine{}, 0, err
+	}
+	if err := verifyScoredResources(c, record); err != nil {
+		return PreparedEngine{}, 0, err
+	}
+	for _, q := range receipt.Queries {
+		if q.Query == query && q.Error == "" && q.Capture.ElapsedNS > 0 {
+			return prepared, q.Capture.ElapsedNS, nil
+		}
+	}
+	return PreparedEngine{}, 0, errors.New("profiling pilot query timing missing or invalid")
 }

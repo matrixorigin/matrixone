@@ -20,6 +20,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -88,26 +89,86 @@ func TestActualDuckDBOperatorProfile(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
-	root := t.TempDir()
-	output := filepath.Join(root, "output")
-	if err := os.Mkdir(output, 0750); err != nil {
-		t.Fatal(err)
+	for _, q := range []Query{
+		{Number: 1, Columns: []Column{{Kind: "int"}}, Statements: []string{"SELECT SUM(i) FROM (VALUES (1),(2)) t(i)"}},
+		{Number: 15, Columns: []Column{{Kind: "int"}}, ResultStatement: 1,
+			Statements: []string{"CREATE VIEW profile_q15 AS SELECT 1 AS n", "SELECT n FROM profile_q15", "DROP VIEW profile_q15"},
+			Cleanup:    "DROP VIEW IF EXISTS profile_q15"},
+	} {
+		t.Run("Q"+strconv.Itoa(q.Number), func(t *testing.T) {
+			root := t.TempDir()
+			output := filepath.Join(root, "output")
+			if err := os.Mkdir(output, 0750); err != nil {
+				t.Fatal(err)
+			}
+			r := WorkerRequest{Engine: e, Profile: &ProfileSpec{Kind: "operator"}, OutputRoot: output}
+			defer func() {
+				for _, statement := range []string{"PRAGMA disable_profiling", "SET profiling_output = ''"} {
+					if _, err := conn.ExecContext(ctx, statement); err != nil {
+						t.Error(err)
+					}
+				}
+			}()
+			if err := configureNativeProfile(ctx, conn, r); err != nil {
+				t.Fatal(err)
+			}
+			native := &nativeProfile{engine: "duckdb", root: output, prefix: "native-q" + strconv.Itoa(q.Number)}
+			cap, err := executeUnitClock(ctx, conn, q, filepath.Join(output, "q.rows"), captureDisk, nil, native)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cap.Rows != 1 {
+				t.Fatal(cap)
+			}
+			for i, statement := range q.Statements {
+				path := filepath.Join(output, native.prefix+"-statement-"+strconv.Itoa(i)+".json")
+				value, err := readJSON[map[string]any](path)
+				if err != nil || value["query_name"] != statement {
+					t.Fatalf("statement %d lost its own native profile: %v %v", i, err, value["query_name"])
+				}
+			}
+			if err := normalizeNativeCapture(root, "duckdb"); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
-	r := WorkerRequest{Engine: e, Profile: &ProfileSpec{Kind: "operator"}, OutputRoot: output}
-	if err := configureNativeProfile(ctx, conn, r); err != nil {
-		t.Fatal(err)
-	}
-	q := Query{Number: 1, Columns: []Column{{Kind: "int"}}, Statements: []string{"SELECT SUM(i) FROM (VALUES (1),(2)) t(i)"}}
-	native := &nativeProfile{engine: "duckdb", root: output, prefix: "native-q01-s0-r0"}
-	cap, err := executeUnitClock(ctx, conn, q, filepath.Join(output, "q.rows"), captureDisk, nil, native)
+}
+
+func TestProfileWarmupExcludedFromCapturedWork(t *testing.T) {
+	ctx := t.Context()
+	e := Engine{Name: "duckdb", Database: filepath.Join(t.TempDir(), "warm.db"), Threads: 1, MemoryBytes: 256 << 20}
+	db, err := openEngine(ctx, e)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cap.Rows != 1 {
-		t.Fatal(cap)
-	}
-	if err := normalizeNativeCapture(root, "duckdb"); err != nil {
+	t.Cleanup(func() { _ = db.Close() })
+	conn, err := configureConn(ctx, db, e)
+	if err != nil {
 		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	if _, err := conn.ExecContext(ctx, "CREATE SEQUENCE warm_runs"); err != nil {
+		t.Fatal(err)
+	}
+	q := Query{Number: 1, Columns: []Column{{Kind: "int"}}, Statements: []string{"SELECT nextval('warm_runs')"}}
+	r := WorkerRequest{Engine: e, Queries: []int{1}, Clients: 1, Repetitions: 2, Warmup: true, WarmupSelected: true,
+		Profile: &ProfileSpec{Kind: "cpu"}, QueryDeadlineNS: int64(5 * time.Second), OutputRoot: t.TempDir()}
+	queries, wave, err := runQueryStreams(ctx, db, conn, r, Dataset{Queries: []Query{q}}, nil, &runtimeEvidence{})
+	if err != nil || len(queries) != 2 || wave <= 0 {
+		t.Fatalf("measured repetitions missing: %v %+v", err, queries)
+	}
+	for i, q := range queries {
+		raw, err := os.ReadFile(filepath.Join(r.OutputRoot, q.Capture.File.Path))
+		var row Row
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := json.Unmarshal(raw, &row); err != nil || len(row) != 1 || row[0].Value != strconv.Itoa(i+2) {
+			t.Fatalf("cold run entered measured captures: %s %v", raw, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(r.OutputRoot, "warm-q01.rows")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("discarded warm capture retained", err)
 	}
 }
 
@@ -143,7 +204,7 @@ func TestPerfCollectorIntegration(t *testing.T) {
 	}
 	record := profile.stop()
 	stopped = true
-	if record.Status != "complete" {
+	if record.Status != "complete" || record.Cleanup != "complete" {
 		t.Fatal(record)
 	}
 	if err := analyzePerf(ctx, root); err != nil {

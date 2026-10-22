@@ -29,6 +29,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 )
 
@@ -83,86 +84,145 @@ type StackEvidence struct {
 	Stacks        map[string]uint64 `json:"folded_stacks"`
 	Hot           map[string]uint64 `json:"exclusive_leaf_weight_ns"`
 	Quality       string            `json:"quality"`
+	RawSymbols    map[string]string `json:"raw_symbols,omitempty"`
+	CallGraph     string            `json:"callgraph_coverage,omitempty"`
+	Limitations   []string          `json:"limitations,omitempty"`
 }
 
+var foldedFrameEscaper = strings.NewReplacer("%", "%25", ";", "%3B", "\n", "%0A", "\r", "%0D")
+
 func parsePerfScript(r io.Reader) (out StackEvidence, retErr error) {
+	return parsePerfScriptContext(context.Background(), r, 256<<20)
+}
+
+func parsePerfScriptContext(ctx context.Context, r io.Reader, limit int64) (out StackEvidence, retErr error) {
 	out = StackEvidence{Stacks: map[string]uint64{}, Hot: map[string]uint64{}, Quality: "partial"}
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64<<10), 1<<20)
 	var frames []string
 	var weight uint64
-	var pid string
-	var retained int64
-	flush := func() {
+	var pid, headerLeaf string
+	var retained, pending int64
+	flush := func() error {
 		if weight == 0 {
-			return
+			return nil
+		}
+		if weight > ^uint64(0)-out.WeightNS {
+			return errors.New("CPU sample weights overflow")
 		}
 		out.Samples++
 		out.WeightNS += weight
-		if len(frames) > 0 {
-			leaf := frames[0]
-			out.Hot["pid="+pid+" "+leaf] += weight
-			if !strings.Contains(leaf, "unknown") && !strings.Contains(leaf, "[unknown]") {
-				out.KnownWeightNS += weight
+		if len(frames) == 0 {
+			if headerLeaf == "" {
+				headerLeaf = "[unknown]"
 			}
-			slices.Reverse(frames)
-			key := "pid=" + pid + ";" + strings.Join(frames, ";")
-			if _, ok := out.Stacks[key]; !ok {
-				retained += int64(len(key)) + 128
-			}
-			out.Stacks[key] += weight
+			frames = []string{headerLeaf}
 		}
+		leaf := frames[0]
+		hotKey := "pid=" + pid + " " + leaf
+		if _, ok := out.Hot[hotKey]; !ok {
+			retained += int64(len(hotKey)) + 128
+		}
+		out.Hot[hotKey] += weight
+		if leaf != "unknown" && !strings.Contains(leaf, "[unknown]") {
+			out.KnownWeightNS += weight
+		}
+		slices.Reverse(frames)
+		for i, raw := range frames {
+			label := foldedFrameEscaper.Replace(raw)
+			if label != raw {
+				if out.RawSymbols == nil {
+					out.RawSymbols = map[string]string{}
+				}
+				if _, ok := out.RawSymbols[label]; !ok {
+					retained += int64(len(label)+len(raw)) + 128
+					out.RawSymbols[label] = raw
+				}
+			}
+			frames[i] = label
+			if retained > limit {
+				return errors.New("stack analysis exceeds retention bound")
+			}
+		}
+		key := "pid=" + pid + ";" + strings.Join(frames, ";")
+		if _, ok := out.Stacks[key]; !ok {
+			retained += int64(len(key)) + 128
+		}
+		out.Stacks[key] += weight
 		weight = 0
 		frames = nil
+		headerLeaf = ""
+		pending = 0
+		if retained > limit {
+			return errors.New("stack analysis exceeds retention bound")
+		}
+		return nil
 	}
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return out, context.Cause(ctx)
+		}
 		line := scanner.Text()
 		fields := strings.Fields(line)
 		if len(fields) == 0 {
-			flush()
+			if err := flush(); err != nil {
+				return out, err
+			}
 			continue
 		}
-		isSample := false
-		for _, field := range fields {
-			if strings.Contains(field, "cpu-clock") {
-				isSample = true
+		event := -1
+		for i, field := range fields {
+			if strings.HasPrefix(field, "cpu-clock") {
+				event = i
+				break
 			}
 		}
-		if isSample {
-			flush()
+		if event >= 0 {
+			if err := flush(); err != nil {
+				return out, err
+			}
 			pid = strings.Split(fields[0], "/")[0]
-			for i, field := range fields {
-				if strings.HasSuffix(field, ":") && strings.Contains(field, ".") && i+1 < len(fields) {
-					n, err := strconv.ParseUint(fields[i+1], 10, 64)
-					if err == nil {
-						weight = n
-						break
-					}
-				}
+			if _, err := strconv.ParseUint(pid, 10, 64); err != nil {
+				return out, errors.New("invalid perf process identity")
+			}
+			if event < 1 {
+				return out, errors.New("CPU sample period missing")
+			}
+			var err error
+			weight, err = strconv.ParseUint(fields[event-1], 10, 64)
+			if err != nil || weight == 0 {
+				return out, errors.New("invalid CPU sample period")
+			}
+			// With -G, perf prints IP/symbol on the sample header instead of
+			// following callchain lines. Full conversion may also supply both.
+			tail := line[strings.Index(line, fields[event])+len(fields[event]):]
+			headerLeaf = perfFrame(tail)
+			pending = int64(len(headerLeaf))
+			if retained+pending > limit {
+				return out, errors.New("stack analysis exceeds retention bound")
 			}
 			continue
 		}
 		if weight > 0 && len(fields) >= 2 {
-			if _, err := strconv.ParseUint(strings.TrimPrefix(fields[0], "0x"), 16, 64); err == nil {
-				symbol := strings.TrimSpace(strings.TrimSpace(line)[len(fields[0]):])
-				if at := strings.LastIndex(symbol, " ("); at >= 0 {
-					symbol = symbol[:at]
-				}
-				if at := strings.Index(symbol, "+0x"); at >= 0 {
-					symbol = symbol[:at]
-				}
-				frames = append(frames, strings.TrimSpace(symbol))
+			if symbol := perfFrame(line); symbol != "" {
+				frames = append(frames, symbol)
+				pending += int64(len(symbol)) + 64
 				if len(frames) > 512 {
 					return out, errors.New("stack depth exceeds bound")
 				}
 			}
 		}
-		if retained > 256<<20 {
-			return out, errors.New("stack analysis exceeds 256 MiB retention bound")
+		if retained+pending > limit {
+			return out, errors.New("stack analysis exceeds retention bound")
 		}
 	}
-	flush()
 	if err := scanner.Err(); err != nil {
+		return out, err
+	}
+	if err := ctx.Err(); err != nil {
+		return out, context.Cause(ctx)
+	}
+	if err := flush(); err != nil {
 		return out, err
 	}
 	if out.WeightNS == 0 {
@@ -175,7 +235,30 @@ func parsePerfScript(r io.Reader) (out StackEvidence, retErr error) {
 	return out, nil
 }
 
+func perfFrame(line string) string {
+	line = strings.TrimSpace(line)
+	end := strings.IndexAny(line, " \t")
+	if end < 0 {
+		return ""
+	}
+	ip, symbol := line[:end], line[end+1:]
+	if _, err := strconv.ParseUint(strings.TrimPrefix(ip, "0x"), 16, 64); err != nil {
+		return ""
+	}
+	symbol = strings.TrimSpace(symbol)
+	if at := strings.LastIndex(symbol, " ("); at >= 0 {
+		symbol = symbol[:at]
+	}
+	if at := strings.Index(symbol, "+0x"); at >= 0 {
+		symbol = symbol[:at]
+	}
+	return strings.Clone(strings.TrimSpace(symbol))
+}
+
 func commandToFile(ctx context.Context, output string, limit int64, args ...string) (retErr error) {
+	if len(args) == 0 {
+		return errors.New("empty profile command")
+	}
 	f, err := os.OpenFile(output, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
@@ -184,11 +267,34 @@ func commandToFile(ctx context.Context, output string, limit int64, args ...stri
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Stdout = &limitedWriter{Writer: f, Remaining: limit}
 	cmd.Stderr = os.Stderr
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true, Pdeathsig: syscall.SIGKILL}
+	cmd.Cancel = func() error {
+		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		if errors.Is(err, syscall.ESRCH) {
+			return os.ErrProcessDone
+		}
+		return err
+	}
 	cmd.WaitDelay = 5 * time.Second
-	return cmd.Run()
+	if err := cmd.Run(); err != nil {
+		if cmd.Process != nil {
+			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		}
+		return errors.Join(err, context.Cause(ctx))
+	}
+	return nil
 }
 
 func analyzePerf(ctx context.Context, root string) error {
+	return analyzePerfWithCommand(ctx, root, commandToFile)
+}
+
+type profileCommand func(context.Context, string, int64, ...string) error
+
+func analyzePerfWithCommand(ctx context.Context, root string, command profileCommand) error {
+	if err := ctx.Err(); err != nil {
+		return context.Cause(ctx)
+	}
 	var resultErr error
 	if f, err := os.Open(filepath.Join(root, "perf.stat")); err == nil {
 		values, parseErr := parsePerfStat(f)
@@ -199,27 +305,47 @@ func analyzePerf(ctx context.Context, root string) error {
 		}
 	}
 	if _, err := os.Stat(filepath.Join(root, "perf.record")); err == nil {
-		bounded, cancel := context.WithTimeoutCause(ctx, time.Minute, errors.New("perf script conversion deadline"))
+		bounded, cancel := context.WithTimeoutCause(ctx, time.Minute, errors.New("perf postprocessing deadline"))
 		defer cancel()
 		path := filepath.Join(root, "perf-script.txt")
-		if err := commandToFile(bounded, path, 1<<30, "perf", "script", "-i", filepath.Join(root, "perf.record"), "-F", "pid,tid,time,period,event,ip,sym,dso"); err != nil {
-			return errors.Join(resultErr, err)
+		fullCtx, fullCancel := context.WithTimeoutCause(bounded, 30*time.Second, errors.New("full callgraph conversion deadline"))
+		args := []string{"perf", "script", "-i", filepath.Join(root, "perf.record"), "-F", "pid,tid,time,period,event,ip,sym,dso"}
+		fullErr := command(fullCtx, path, 1<<30, args...)
+		fullCancel()
+		if fullErr != nil {
+			resultErr = errors.Join(resultErr, fmt.Errorf("full callgraph conversion incomplete: %w", fullErr))
+			if bounded.Err() != nil {
+				return errors.Join(resultErr, context.Cause(bounded))
+			}
+			path = filepath.Join(root, "perf-script-leaf.txt")
+			leafCtx, leafCancel := context.WithTimeoutCause(bounded, 15*time.Second, errors.New("leaf conversion deadline"))
+			err := command(leafCtx, path, 1<<30, append(args, "-G")...)
+			leafCancel()
+			if err != nil {
+				return errors.Join(resultErr, err)
+			}
 		}
 		f, err := os.Open(path)
 		if err != nil {
-			return err
+			return errors.Join(resultErr, err)
 		}
-		evidence, err := parsePerfScript(f)
+		evidence, err := parsePerfScriptContext(bounded, f, 256<<20)
 		err = errors.Join(err, f.Close())
 		if err != nil {
 			return errors.Join(resultErr, err)
 		}
+		evidence.CallGraph = "retained"
+		if fullErr != nil {
+			evidence.CallGraph = "unavailable; leaf-only recovery"
+			evidence.Quality = "partial_callgraph"
+			evidence.Limitations = []string{fullErr.Error()}
+		}
 		if err := publishJSON(filepath.Join(root, "stacks.json"), evidence); err != nil {
-			return err
+			return errors.Join(resultErr, err)
 		}
 		folded, err := os.OpenFile(filepath.Join(root, "stacks.folded"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 		if err != nil {
-			return err
+			return errors.Join(resultErr, err)
 		}
 		writer := bufio.NewWriter(folded)
 		keys := make([]string, 0, len(evidence.Stacks))
@@ -228,17 +354,26 @@ func analyzePerf(ctx context.Context, root string) error {
 		}
 		slices.Sort(keys)
 		for _, key := range keys {
+			if bounded.Err() != nil {
+				return errors.Join(resultErr, context.Cause(bounded), folded.Close())
+			}
 			if _, err := fmt.Fprintf(writer, "%s %d\n", key, evidence.Stacks[key]); err != nil {
-				_ = folded.Close()
-				return err
+				return errors.Join(resultErr, err, folded.Close())
 			}
 		}
 		err = errors.Join(writer.Flush(), folded.Close())
 		if err != nil {
-			return err
+			return errors.Join(resultErr, err)
 		}
 		if script := os.Getenv("TPCH_COMPARE_FLAMEGRAPH"); script != "" {
-			if err := commandToFile(bounded, filepath.Join(root, "cpu.svg"), 8<<20, "perl", script, "--countname", "CPU nanoseconds", "--title", "Whole application CPU samples", filepath.Join(root, "stacks.folded")); err != nil {
+			renderCtx, renderCancel := context.WithTimeoutCause(bounded, 5*time.Second, errors.New("flame graph rendering deadline"))
+			title := "Whole application CPU samples"
+			if fullErr != nil {
+				title += " (leaf only)"
+			}
+			err := command(renderCtx, filepath.Join(root, "cpu.svg"), 8<<20, "perl", script, "--countname", "CPU nanoseconds", "--title", title, filepath.Join(root, "stacks.folded"))
+			renderCancel()
+			if err != nil {
 				resultErr = errors.Join(resultErr, err)
 			}
 		}

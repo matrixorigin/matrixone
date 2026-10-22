@@ -125,11 +125,11 @@ func normalize(v any, c Column) (Cell, error) {
 	}
 	switch c.Kind {
 	case "int":
-		i, err := strconv.ParseInt(s, 10, 64)
-		if err != nil {
+		i, ok := new(big.Int).SetString(s, 10)
+		if !ok {
 			return Cell{}, fmt.Errorf("invalid integer %q", s)
 		}
-		s = strconv.FormatInt(i, 10)
+		s = i.String()
 	case "decimal":
 		var err error
 		s, err = decimal(s)
@@ -226,8 +226,7 @@ func equalCell(a, b Cell, c Column, pa, pb PhysicalColumn) (bool, error) {
 }
 
 // drain closes the cursor on every path and optionally streams rows directly to
-// a verifier. The callback borrows its row until it returns; retaining consumers
-// must copy it. Result capture never buffers an entire result in Go memory.
+// a verifier. Result capture never buffers an entire SQL result in Go memory.
 func drain(ctx context.Context, conn interface {
 	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
 }, s string, columns []Column, consume func(Row) error) (physical []PhysicalColumn, count int64, first, last *time.Time, retErr error) {
@@ -241,8 +240,6 @@ func drain(ctx context.Context, conn interface {
 		return nil, 0, nil, nil, err
 	}
 	values := make([]any, len(columns))
-	row := make(Row, len(columns))
-	var firstTime, lastTime time.Time
 	dest := make([]any, len(columns))
 	for i := range values {
 		dest[i] = &values[i]
@@ -250,12 +247,13 @@ func drain(ctx context.Context, conn interface {
 	for rows.Next() {
 		now := time.Now()
 		if first == nil {
-			firstTime = now
-			first = &firstTime
+			v := now
+			first = &v
 		}
 		if err := rows.Scan(dest...); err != nil {
 			return physical, count, first, last, err
 		}
+		row := make(Row, len(columns))
 		for i, v := range values {
 			row[i], err = normalize(v, columns[i])
 			if err != nil {
@@ -266,8 +264,8 @@ func drain(ctx context.Context, conn interface {
 			return physical, count, first, last, err
 		}
 		count++
-		lastTime = time.Now()
-		last = &lastTime
+		now = time.Now()
+		last = &now
 	}
 	return physical, count, first, last, rows.Err()
 }
@@ -377,18 +375,7 @@ func cmpCell(a, b Cell, c Column) int {
 	if b.Null {
 		return 1
 	}
-	if c.Kind == "int" {
-		x, _ := strconv.ParseInt(a.Value, 10, 64)
-		y, _ := strconv.ParseInt(b.Value, 10, 64)
-		if x < y {
-			return -1
-		}
-		if x > y {
-			return 1
-		}
-		return 0
-	}
-	if c.Kind == "decimal" || c.Kind == "approximate" {
+	if c.Kind == "int" || c.Kind == "decimal" || c.Kind == "approximate" {
 		x, _ := number(a.Value)
 		y, _ := number(b.Value)
 		return x.Cmp(y)

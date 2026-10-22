@@ -216,9 +216,14 @@ func runWorker(ctx context.Context, r WorkerRequest, control *workerControl) (ou
 		if r.Repetitions < 1 || len(r.Queries) < 1 || len(r.Queries) > 22 {
 			return out, errors.New("nonempty bounded query selection required")
 		}
-		evidence := &runtimeEvidence{}
+		var evidence *runtimeEvidence
+		if r.Profile != nil || r.MaxWindowNS > 0 {
+			evidence = &runtimeEvidence{}
+		}
 		out.Queries, out.WaveNS, err = runQueryStreams(ctx, db, conn, r, d, control, evidence)
-		out.RuntimeBefore, out.RuntimeAfter = evidence.before, evidence.after
+		if evidence != nil {
+			out.RuntimeBefore, out.RuntimeAfter = evidence.before, evidence.after
+		}
 		return out, err
 	default:
 		return out, fmt.Errorf("unsupported worker operation %q", r.Operation)

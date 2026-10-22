@@ -31,14 +31,17 @@ import (
 )
 
 type ProfileRecord struct {
-	Kind      string         `json:"kind"`
-	Status    string         `json:"status"`
-	Scope     string         `json:"scope"`
-	Artifacts []FileID       `json:"artifacts,omitempty"`
-	Errors    []string       `json:"errors,omitempty"`
-	PIDs      []int          `json:"pids,omitempty"`
-	Events    []string       `json:"events,omitempty"`
-	Roles     map[int]string `json:"process_roles,omitempty"`
+	Kind       string         `json:"kind"`
+	Status     string         `json:"status"`
+	Scope      string         `json:"scope"`
+	Artifacts  []FileID       `json:"artifacts,omitempty"`
+	Errors     []string       `json:"errors,omitempty"`
+	PIDs       []int          `json:"pids,omitempty"`
+	Collectors []int          `json:"collector_pids,omitempty"`
+	Events     []string       `json:"events,omitempty"`
+	Roles      map[int]string `json:"process_roles,omitempty"`
+	Cleanup    string         `json:"cleanup"`
+	Retained   string         `json:"retained_temporary_directory,omitempty"`
 }
 
 type perfCapture struct {
@@ -121,9 +124,18 @@ func (c *perfCapture) stop() error {
 		}
 	}
 	if ctx.Err() != nil {
-		_ = c.process.stop(nil, 0)
+		waitErr = errors.Join(waitErr, c.process.stop(nil, 0))
 	}
 	return errors.Join(err, waitErr)
+}
+
+func (c *perfCapture) joined() bool {
+	select {
+	case <-c.process.done:
+		return true
+	default:
+		return false
+	}
 }
 
 type parentProfile struct {
@@ -170,6 +182,7 @@ func startParentProfile(ctx context.Context, spec ProfileSpec, root string, pids
 				fail(err)
 			} else {
 				p.captures = append(p.captures, capture)
+				p.record.Collectors = append(p.record.Collectors, capture.process.cmd.Process.Pid)
 				p.record.Events = append(p.record.Events, events)
 			}
 		}
@@ -179,6 +192,7 @@ func startParentProfile(ctx context.Context, spec ProfileSpec, root string, pids
 				fail(err)
 			} else {
 				p.captures = append(p.captures, capture)
+				p.record.Collectors = append(p.record.Collectors, capture.process.cmd.Process.Pid)
 			}
 		}
 	}
@@ -251,7 +265,6 @@ func downloadProfile(ctx context.Context, url, path string) (retErr error) {
 func (p *parentProfile) stop() (record ProfileRecord) {
 	p.cancel()
 	<-p.done
-	defer os.RemoveAll(p.tmp)
 	select {
 	case err := <-p.limitHit:
 		p.record.Status = "partial"
@@ -262,6 +275,11 @@ func (p *parentProfile) stop() (record ProfileRecord) {
 		if err := capture.stop(); err != nil {
 			p.record.Status = "partial"
 			p.record.Errors = append(p.record.Errors, err.Error())
+		}
+		if !capture.joined() {
+			// A surviving writer still owns its temporary file. Preserve its
+			// location and block arm reuse instead of archiving mutable bytes.
+			continue
 		}
 		name := "perf." + filepath.Base(capture.path)
 		dest := filepath.Join(p.root, name)
@@ -279,7 +297,26 @@ func (p *parentProfile) stop() (record ProfileRecord) {
 			p.record.Artifacts = append(p.record.Artifacts, id)
 		}
 	}
+	p.finishCleanup()
 	return p.record
+}
+
+func (p *parentProfile) finishCleanup() {
+	for _, capture := range p.captures {
+		if !capture.joined() {
+			p.record.Cleanup = "failed"
+			p.record.Status = "partial"
+			p.record.Retained = p.tmp
+			return
+		}
+	}
+	p.record.Cleanup = "complete"
+	if err := os.RemoveAll(p.tmp); err != nil {
+		p.record.Cleanup = "failed"
+		p.record.Status = "partial"
+		p.record.Retained = p.tmp
+		p.record.Errors = append(p.record.Errors, err.Error())
+	}
 }
 
 func (p *parentProfile) afterSnapshots() {
