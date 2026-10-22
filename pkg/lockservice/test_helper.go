@@ -40,6 +40,22 @@ func RunLockServicesForTest(
 	adjustConfig func(*Config),
 	opts ...Option,
 ) {
+	runLockServicesForTest(level, serviceIDs, lockTableBindTimeout,
+		func(allocator LockTableAllocator, services []LockService, _ func(...AllocatorOption) (LockTableAllocator, error)) {
+			fn(allocator, services)
+		}, adjustConfig, opts...)
+}
+
+// runLockServicesForTest keeps replacement allocators under the same teardown
+// owner as the original. Restart is called only by the scenario goroutine.
+func runLockServicesForTest(
+	level zapcore.Level,
+	serviceIDs []string,
+	lockTableBindTimeout time.Duration,
+	fn func(LockTableAllocator, []LockService, func(...AllocatorOption) (LockTableAllocator, error)),
+	adjustConfig func(*Config),
+	opts ...Option,
+) {
 	defaultLazyCheckDuration.Store(time.Millisecond * 50)
 	testSocketDir, err := createTestSocketDir()
 	if err != nil {
@@ -96,22 +112,28 @@ func RunLockServicesForTest(
 
 	// Service keepers start during construction and may immediately contact the
 	// allocator. Publish its listener first so initial RPCs cannot race startup.
-	allocator := NewLockTableAllocator(
-		"",
-		testSockets,
-		lockTableBindTimeout,
-		morpc.Config{},
-		func(owner LockTableAllocator) { cleanup.allocatorCloser = owner.Close },
-		func(lta *lockTableAllocator) {
+	constructAllocator := func(extra ...AllocatorOption) LockTableAllocator {
+		allocatorOpts := make([]AllocatorOption, 0, 1+len(extra))
+		allocatorOpts = append(allocatorOpts, func(lta *lockTableAllocator) {
 			lta.options.removeDisconnectDuration = removeDisconnectDuration
-		},
-	)
+		})
+		allocatorOpts = append(allocatorOpts, extra...)
+		return NewLockTableAllocator("", testSockets, lockTableBindTimeout, morpc.Config{},
+			func(owner LockTableAllocator) { cleanup.allocatorCloser = owner.Close }, allocatorOpts...)
+	}
+	allocator := constructAllocator()
+	restart := func(extra ...AllocatorOption) (LockTableAllocator, error) {
+		if err := cleanup.allocatorCloser(); err != nil {
+			return nil, err
+		}
+		return constructAllocator(extra...), nil
+	}
 	for _, cfg := range configs {
 		lockService := NewLockService(cfg, opts...)
 		services = append(services, lockService)
 		cleanup.serviceClosers = append(cleanup.serviceClosers, lockService.Close)
 	}
-	fn(allocator.(*lockTableAllocator), services)
+	fn(allocator, services, restart)
 }
 
 type testTopologyCleanup struct {

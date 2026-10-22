@@ -126,33 +126,44 @@ func TestTopologyCleanupSupportsPartialConstruction(t *testing.T) {
 }
 
 func TestRunLockServicesForTestCleansUpAfterCallbackPanic(t *testing.T) {
-	panicValue := errors.New("injected callback panic")
-	var lockService *service
-	var socketDir string
-	var recovered any
-	func() {
-		defer func() {
-			recovered = recover()
-		}()
-		runLockServiceTests(
-			t,
-			[]string{"s1"},
-			func(_ *lockTableAllocator, services []*service) {
-				lockService = services[0]
-				socketPath := strings.TrimPrefix(lockService.GetConfig().ListenAddress, "unix://")
-				socketDir = filepath.Dir(socketPath)
-				panic(panicValue)
-			},
-		)
-	}()
-
-	require.Same(t, panicValue, recovered)
-	lockService.lifecycle.RLock()
-	closing := lockService.lifecycle.closing
-	lockService.lifecycle.RUnlock()
-	require.True(t, closing)
-	_, err := os.Stat(socketDir)
-	require.ErrorIs(t, err, os.ErrNotExist)
+	for _, phase := range []string{"original", "restarted", "replacement-construction"} {
+		t.Run(phase, func(t *testing.T) {
+			panicValue := errors.New("injected callback panic")
+			var lockService *service
+			var socketDir string
+			var recovered any
+			func() {
+				defer func() { recovered = recover() }()
+				runLockServiceRestartTests(t, zapcore.ErrorLevel, []string{"s1"}, time.Hour,
+					func(allocator *lockTableAllocator, services []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
+						lockService = services[0]
+						socketDir = filepath.Dir(strings.TrimPrefix(lockService.GetConfig().ListenAddress, "unix://"))
+						if phase != "original" {
+							oldID := allocator.allocatorID
+							next, err := restart(func(next *lockTableAllocator) {
+								if phase == "replacement-construction" {
+									panic(panicValue)
+								}
+							})
+							require.NoError(t, err)
+							require.NotEqual(t, oldID, next.allocatorID)
+							require.Equal(t, 123*time.Millisecond, next.options.removeDisconnectDuration)
+							conn, err := net.DialTimeout("unix", strings.TrimPrefix(next.address, "unix://"), time.Second)
+							require.NoError(t, err)
+							require.NoError(t, conn.Close())
+						}
+						panic(panicValue)
+					}, func(cfg *Config) { cfg.removeDisconnectDuration = 123 * time.Millisecond })
+			}()
+			require.Same(t, panicValue, recovered)
+			lockService.lifecycle.RLock()
+			closing := lockService.lifecycle.closing
+			lockService.lifecycle.RUnlock()
+			require.True(t, closing)
+			_, err := os.Stat(socketDir)
+			require.ErrorIs(t, err, os.ErrNotExist)
+		})
+	}
 }
 
 func TestRunLockServicesForTestStartsAllocatorBeforeServices(t *testing.T) {
