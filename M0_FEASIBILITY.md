@@ -4,6 +4,10 @@
 `mo_m0` prototype.** It is not yet a production feature and does not select M0
 in ordinary builds.
 
+This document records the original feasibility reasoning. For the later CF9
+version-carrier repair, normal Linux qualification, candidate-only SF100 screen,
+shared default-build changes and remaining Draft/CI gates, see [M0_STATUS.md](M0_STATUS.md).
+
 ## Route decision
 
 | Route | Result | Limit |
@@ -75,18 +79,23 @@ than a stale batch or block marker.
   `globalcheckpoint`; the recovery fixture separately covers WAL and
   checkpoint-plus-later-WAL.
 - No crash/torn-write, multi-CN or mixed-version reader/writer proof exists.
-- No Linux qualification or SF100 performance result exists yet.
+- The original feasibility stage had no Linux/SF100 result. Later CF9 small-data
+  qualification and a candidate-only first/warm screen are recorded separately
+  in M0_STATUS.md; they are not production qualification or a new matched pair.
 - A mixed binary deployment has not been exercised. The default reader
   fail-closed behavior is only a package-level proof.
-- No performance result is claimed. The prototype uses the proving slow path in
+- No isolated proof/filter performance benefit is claimed. The prototype uses
+  the proving slow path in
   the append domain and disables broad count rewrites while M0 is compiled.
 
-## Next qualification work
+## Remaining Production Qualification
 
-1. Build a final local commit on Ubuntu and run the formal customer-schema
-   success, default COPY control, TN-registered failure and restart qualification.
-2. Run one complete SF100 B/M0 first-run plus warm pair with path and operation
-   graph evidence before deciding whether to optimize the proving read path.
+1. Review the complete Draft diff, run its new BVT on the exact publication head,
+   and arrange opt-in experimental-tag CI. The existing CF9 Linux qualification
+   is retained, not a reason to repeat unchanged tests.
+2. Close UPDATE/background-debt attribution and any later performance acceptance
+   with an explicitly comparable workload; the historical screen alone is not
+   an end-to-end or statistically established claim.
 3. Qualify multi-CN and mixed-version routing so old writers cannot publish into
    the M0 domain and old readers fail closed before consuming new objects.
 4. Add crash/torn-write/power-loss coverage.
