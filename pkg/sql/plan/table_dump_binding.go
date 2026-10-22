@@ -721,6 +721,24 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 				}
 			}
+			// Try every precision and binding era with the historical Japanese
+			// spelling before any timezone enumeration can consume the budget.
+			if !matched && item.kind == "default" && visit.hasDateFormat {
+				for increment := int64(0); increment <= maxIncrement && !matched; increment++ {
+					for _, mode := range modes {
+						dependency = tableDumpDefaultSession{}
+						candidate, err := bind(increment, mode|tableDumpBindingLegacyJapaneseMonthAbbrev, zone, "ja_JP")
+						if fatal != nil {
+							stmt.Free()
+							return false, fatal
+						}
+						if err == nil && sameTableDumpBoundExpression(want, candidate) {
+							matched, sensitive = true, true
+							break
+						}
+					}
+				}
+			}
 			for _, search := range sessions {
 				if matched {
 					break
