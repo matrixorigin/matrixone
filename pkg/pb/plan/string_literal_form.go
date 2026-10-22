@@ -41,13 +41,6 @@ func (m *Expr) ValidateStringLiteralForms() error {
 	})
 }
 
-func (m *Expr) validateOwnStringLiteralForm() error {
-	if m == nil || m.GetLit() == nil {
-		return nil
-	}
-	return m.validateStringLiteralForm(m.GetLit())
-}
-
 func (m *Expr) validateStringLiteralForm(lit *Literal) error {
 	if lit.LiteralForm < StringLiteralForm_STRING_LITERAL_NONE ||
 		lit.LiteralForm > StringLiteralForm_STRING_LITERAL_BIT {
