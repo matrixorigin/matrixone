@@ -16,7 +16,10 @@ package txnimpl
 
 import (
 	"context"
+	"sync"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -421,31 +424,6 @@ func skipOwnDroppedObject(obj *catalog.ObjectEntry, txn txnif.TxnReader) bool {
 	return obj.IsDEntry() && obj.DeleteNode.IsSameTxn(txn)
 }
 
-func observePrePrepareObjectScan(
-	tableID uint64,
-	isTombstone bool,
-	obj *catalog.ObjectEntry,
-	metricPhase string,
-	result string,
-) {
-	if tableID == 0 {
-		return
-	}
-	typ := "data"
-	if isTombstone {
-		typ = "tombstone"
-	}
-	group := obj.ObjectListGroup()
-	v2.TxnTNPrePrepareObjectScanCounter.WithLabelValues(
-		metricPhase,
-		typ,
-		prePrepareObjectKind(obj),
-		prePrepareObjectHasDrop(group),
-		incrementalObjectGroupName(group),
-		result,
-	).Inc()
-}
-
 func observeIncrementalObjectScanStats(metricPhase string, isTombstone bool, stats incrementalObjectScanStats) {
 	observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_list_scan", stats.scan)
 	observePrePrepareDedupStepDuration(metricPhase, isTombstone, "object_entry_filter", stats.filter)
@@ -465,6 +443,15 @@ func observeIncrementalObjectScanStats(metricPhase string, isTombstone bool, sta
 	}
 }
 
+type objectStepMetricKey struct {
+	phase string
+	typ   string
+	group string
+	step  string
+}
+
+var objectStepObservers sync.Map // objectStepMetricKey -> prometheus.Observer
+
 func observeIncrementalObjectGroupScanStats(
 	metricPhase string,
 	isTombstone bool,
@@ -477,7 +464,13 @@ func observeIncrementalObjectGroupScanStats(
 	}
 	groupName := incrementalObjectGroupName(group)
 	observeObjectStep := func(step string, duration time.Duration) {
-		v2.TxnTNPrePrepareObjectStepDurationHistogram.WithLabelValues(metricPhase, typ, groupName, step).Observe(duration.Seconds())
+		key := objectStepMetricKey{metricPhase, typ, groupName, step}
+		observer, ok := objectStepObservers.Load(key)
+		if !ok {
+			observer, _ = objectStepObservers.LoadOrStore(key,
+				v2.TxnTNPrePrepareObjectStepDurationHistogram.WithLabelValues(metricPhase, typ, groupName, step))
+		}
+		observer.(prometheus.Observer).Observe(duration.Seconds())
 	}
 	observeObjectStep("object_list_scan", stats.scan)
 	observeObjectStep("object_list_iterator", maxDuration(0, stats.scan-stats.filter-stats.maxCommit-stats.operation))
@@ -505,6 +498,24 @@ func foreachIncrementalObjectWithStats(
 	metricPhase string,
 	fn func(*catalog.ObjectEntry) error,
 ) (stats incrementalObjectScanStats, err error) {
+	// One scan can visit many objects with the same bounded labels. Resolve
+	// Prometheus children once per label combination, outside the per-object
+	// fast path; the extra phase label must not turn metric lookup into a
+	// significant part of dedup CPU time.
+	type objectMetricKey struct {
+		group  catalog.ObjectListGroup
+		result string
+	}
+	objectCounters := make(map[objectMetricKey]prometheus.Counter)
+	scanCounters := make(map[objectMetricKey]prometheus.Counter)
+	metricType := "data"
+	if isTombstone {
+		metricType = "tombstone"
+	}
+	aobjectCandidate := v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "candidate")
+	aobjectUnavailable := v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "max_commit_unavailable")
+	aobjectScanned := v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "scanned")
+	aobjectSkipped := v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "max_commit_skipped")
 	groupStats := make(map[catalog.ObjectListGroup]*incrementalObjectScanStats)
 	var activeStats *incrementalObjectScanStats
 	getGroupStats := func(group catalog.ObjectListGroup) *incrementalObjectScanStats {
@@ -524,16 +535,28 @@ func foreachIncrementalObjectWithStats(
 		dst.operation += src.operation
 	}
 	observeObject := func(obj *catalog.ObjectEntry, result string) {
-		observePrePrepareObjectScan(tableID, isTombstone, obj, metricPhase, result)
-		kind := "data"
-		if obj.IsTombstone {
-			kind = "tombstone"
+		group := obj.ObjectListGroup()
+		key := objectMetricKey{group: group, result: result}
+		if tableID != 0 {
+			counter := scanCounters[key]
+			if counter == nil {
+				counter = v2.TxnTNPrePrepareObjectScanCounter.WithLabelValues(
+					metricPhase, metricType, prePrepareObjectKind(obj), prePrepareObjectHasDrop(group),
+					incrementalObjectGroupName(group), result)
+				scanCounters[key] = counter
+			}
+			counter.Inc()
 		}
-		v2.TxnTNPrePrepareObjectCounter.WithLabelValues(
-			metricPhase, kind, incrementalObjectGroupName(obj.ObjectListGroup()), result).Inc()
+		counter := objectCounters[key]
+		if counter == nil {
+			counter = v2.TxnTNPrePrepareObjectCounter.WithLabelValues(
+				metricPhase, metricType, incrementalObjectGroupName(group), result)
+			objectCounters[key] = counter
+		}
+		counter.Inc()
 		if result == "object_list_visited" && obj.ObjectListGroup() == catalog.ObjectListGroupAppendableCreate {
 			v2.TxnTNPrePrepareObjectBookmarkCounter.WithLabelValues(
-				metricPhase, kind, incrementalObjectGroupName(obj.ObjectListGroup()), "range_visited").Inc()
+				metricPhase, metricType, incrementalObjectGroupName(group), "range_visited").Inc()
 		}
 	}
 	shouldSkipAObject := func(obj *catalog.ObjectEntry) bool {
@@ -541,7 +564,7 @@ func foreachIncrementalObjectWithStats(
 			return false
 		}
 		observeObject(obj, "aobject_candidate")
-		v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "candidate").Inc()
+		aobjectCandidate.Inc()
 		objData := obj.GetObjectData()
 		maxCommitter, ok := objData.(interface {
 			GetAppendMaxCommitTS() (types.TS, bool)
@@ -549,8 +572,8 @@ func foreachIncrementalObjectWithStats(
 		if !ok {
 			// An appendable catalog entry should normally be backed by an
 			// aobject. Keep the conservative behavior if it is not.
-			v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "max_commit_unavailable").Inc()
-			v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "scanned").Inc()
+			aobjectUnavailable.Inc()
+			aobjectScanned.Inc()
 			observeObject(obj, "aobject_max_commit_unavailable")
 			observeObject(obj, "aobject_scanned")
 			return false
@@ -561,18 +584,18 @@ func foreachIncrementalObjectWithStats(
 		if !finalized {
 			// Unsealed append history has no safe upper bound. It must not be
 			// skipped, even when the currently visible rows look old.
-			v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "max_commit_unavailable").Inc()
-			v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "scanned").Inc()
+			aobjectUnavailable.Inc()
+			aobjectScanned.Inc()
 			observeObject(obj, "aobject_max_commit_unavailable")
 			observeObject(obj, "aobject_scanned")
 			return false
 		}
 		if maxCommit.LT(&from) {
-			v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "max_commit_skipped").Inc()
+			aobjectSkipped.Inc()
 			observeObject(obj, "aobject_max_commit_skipped")
 			return true
 		}
-		v2.TxnAObjectDedupCounter.WithLabelValues(metricPhase, "scanned").Inc()
+		aobjectScanned.Inc()
 		observeObject(obj, "aobject_scanned")
 		return false
 	}
