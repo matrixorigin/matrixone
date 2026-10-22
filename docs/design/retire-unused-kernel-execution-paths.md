@@ -1,6 +1,6 @@
 # Retire unused kernel execution paths
 
-Version 5, 2026-10-22. Owner: #29249.
+Version 6, 2026-10-22. Owner: #29249.
 Implementation: `cleanup/29249-runtime-20261022`.
 Base: `d7f95aa754bfe39126752729d307298710947c17`.
 
@@ -88,6 +88,12 @@ these storage closures, preserving active recovery and I/O compatibility:
   persisted columns. Audit whole-value comparisons, unsafe/serialization use
   and consumers before field removal; memory accounting must keep deriving
   actual struct size rather than a stale literal.
+- Remove the classifier-only `TNUsageMemo.C` catalog back-pointer and unused
+  constructor argument, including both initialization writes and the sole
+  caller's `nil`. Preserve both cache allocations, authoritative `db.Catalog`,
+  catalog-held memo access, controller/rollback order and reserved role wiring.
+  The pointer has no reader or serialization/layout contract after classifier
+  retirement; memory accounting continues to use actual `unsafe.Sizeof`.
 - In `HandleStorageUsage`, remove the disabled call/comment, constant-zero
   `specialSize`, and account traversal that only adds zero. Preserve response
   contents, account ordering semantics, cache update, locking and timing metrics.
