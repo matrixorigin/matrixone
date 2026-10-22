@@ -787,23 +787,24 @@ func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
 		return nil
 	}
 	field, line, quote, _ := ec.csvBoundaryBytes()
-	// Framing uses the physical prefix, including CR in CRLF, rather than
-	// only the normalized newline used when escaping bare field contents.
+	// LOAD recognizes both the physical CRLF prefix and normalized LF as
+	// record boundaries. Neither can safely be used as an enclosure.
+	physicalLine := line
 	if l := ec.userConfig.Lines; l != nil && l.TerminatedBy != nil && l.TerminatedBy.Value != "" {
-		line = l.TerminatedBy.Value[0]
+		physicalLine = l.TerminatedBy.Value[0]
 	}
 	noQuote := ec.userConfig.Fields == nil || ec.userConfig.Fields.EnclosedBy == nil || ec.userConfig.Fields.EnclosedBy.Value == 0
-	if !noQuote && (quote == field || quote == line) {
-		// LOAD sees a closing enclosure followed by this prefix as a doubled
-		// enclosure. Reject before opening a file, even with prefix escapes
-		// disabled: enclosure doubling is independent of ESCAPED BY.
+	if !noQuote && (quote == field || quote == line || quote == physicalLine) {
+		// LOAD may treat framing as a record boundary or a doubled enclosure.
+		// Reject before opening a file, even with prefix escapes disabled:
+		// enclosure doubling is independent of ESCAPED BY.
 		return moerr.NewInvalidInput(ctx,
 			"CSV ENCLOSED BY must not be the first byte of a field or line terminator")
 	}
 	if ec.escapeChar() == 0 {
 		return nil
 	}
-	if noQuote && (isAmbiguousCSVEscape(field) || isAmbiguousCSVEscape(line) || field == ec.escapeChar() || line == ec.escapeChar()) {
+	if noQuote && (isAmbiguousCSVEscape(field) || isAmbiguousCSVEscape(line) || field == ec.escapeChar() || line == ec.escapeChar() || physicalLine == ec.escapeChar()) {
 		return moerr.NewInvalidInput(ctx,
 			"CSV terminators starting with ESCAPED BY or an ambiguous escape character (0, b, n, r, t, Z, N) require a nonempty ENCLOSED BY")
 	}
@@ -849,6 +850,10 @@ func addEscapeToString(ep *ExportConfig, s []byte, enclosed byte) []byte {
 				// LOAD first collapses doubled enclosures, then unescapes.
 				// Four bytes retain one literal escape through both stages.
 				extra += 3
+			} else if enclosed != 0 && enclosed == escape && defaultLine && b == '\r' {
+				// A generated escape also crosses enclosure parsing. Double its
+				// prefix so a following 'r' separator cannot close the field.
+				extra += 2
 			} else {
 				extra++
 			}
@@ -867,6 +872,9 @@ func addEscapeToString(ep *ExportConfig, s []byte, enclosed byte) []byte {
 			} else {
 				result = append(result, escape)
 				if b == '\r' && defaultLine {
+					if enclosed != 0 && enclosed == escape {
+						result = append(result, escape)
+					}
 					// The reader strips trailing raw CR before unescaping.
 					b = 'r'
 				}

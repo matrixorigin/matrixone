@@ -39,10 +39,11 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 		field, line string
 		enclosed    byte
 		blockSize   int64
+		wide        bool
 	}
-	formats := make([]csvFormat, 0, 18)
+	formats := make([]csvFormat, 0, 22)
 	for _, enclosed := range []byte{0, '"', '0', 'b', 'n', 'r', 't', 'Z', 'N', '\\'} {
-		formats = append(formats, csvFormat{",", "\n", enclosed, 17})
+		formats = append(formats, csvFormat{",", "\n", enclosed, 17, false})
 	}
 	// Escaping the bare BIT byte N for either separator must not create
 	// LOAD's NULL marker. Include multi-byte terminators and both exporters.
@@ -50,14 +51,29 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 	for _, separator := range []string{"N", "N:", `\`, `\r`} {
 		// Use LOAD's production read size for the new terminator cases;
 		// retain the existing tiny-block enclosure controls above.
-		formats = append(formats, csvFormat{separator, "\n", '"', csvparser.ReadBlockSize},
-			csvFormat{",", separator, '"', csvparser.ReadBlockSize})
+		formats = append(formats, csvFormat{separator, "\n", '"', csvparser.ReadBlockSize, false},
+			csvFormat{",", separator, '"', csvparser.ReadBlockSize, false})
+	}
+	// Generated CR escapes must survive enclosure parsing even when their
+	// translated letter is also the next field separator.
+	for _, separator := range []string{"r", "r:"} {
+		formats = append(formats, csvFormat{separator, "\n", '\\', csvparser.ReadBlockSize, false},
+			csvFormat{separator, "\n", '\\', csvparser.ReadBlockSize, true})
 	}
 	for _, format := range formats {
 		enclosed := format.enclosed
+		width := int32(8)
+		values := make([]uint64, 256)
+		for n := range values {
+			values[n] = uint64(n)
+		}
+		if format.wide {
+			width = 24
+			values = append(values, 0x0d6162, 0x610d62, 0x0d3a62, 0x610d3a, 0x5c4e)
+		}
 		for _, force := range []bool{false, true} {
 			for _, resultSet := range []bool{false, true} {
-				t.Run(fmt.Sprintf("field=%q/line=%q/enclosed=%d/force=%t/resultset=%t", format.field, format.line, enclosed, force, resultSet), func(t *testing.T) {
+				t.Run(fmt.Sprintf("field=%q/line=%q/enclosed=%d/width=%d/force=%t/resultset=%t", format.field, format.line, enclosed, width, force, resultSet), func(t *testing.T) {
 					ep := &ExportConfig{
 						userConfig: &tree.ExportParam{
 							Fields: tree.NewFields(format.field, false, enclosed, '\\'),
@@ -72,7 +88,7 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 						id, bit := &MysqlColumn{}, &MysqlColumn{}
 						id.SetColumnType(defines.MYSQL_TYPE_LONG)
 						bit.SetColumnType(defines.MYSQL_TYPE_BIT)
-						bit.SetLength(8)
+						bit.SetLength(uint32(width))
 						ep.mrs.AddColumn(id)
 						ep.mrs.AddColumn(bit)
 						stubs := gostub.Stub(&writeDataToCSVFile, func(_ *ExportConfig, b []byte) error {
@@ -80,10 +96,10 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 							return nil
 						})
 						defer stubs.Reset()
-						for n := 0; n <= 256; n++ {
-							var value any = uint64(n)
-							if n == 256 {
-								value = nil
+						for n := 0; n <= len(values); n++ {
+							var value any
+							if n < len(values) {
+								value = values[n]
 							}
 							ep.mrs.Data = [][]any{{int32(n), value}}
 							require.NoError(t, exportDataFromResultSetToCSVFile(ep))
@@ -92,13 +108,17 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 						mp := mpool.MustNewZero()
 						bat := batch.NewWithSize(2)
 						bat.Vecs[0] = vector.NewVec(types.T_int32.ToType())
-						bat.Vecs[1] = vector.NewVec(types.New(types.T_bit, 8, 0))
+						bat.Vecs[1] = vector.NewVec(types.New(types.T_bit, width, 0))
 						defer func() { bat.Clean(mp); require.Zero(t, mp.CurrNB()) }()
-						for n := 0; n <= 256; n++ {
+						for n := 0; n <= len(values); n++ {
+							var value uint64
+							if n < len(values) {
+								value = values[n]
+							}
 							require.NoError(t, vector.AppendFixed(bat.Vecs[0], int32(n), false, mp))
-							require.NoError(t, vector.AppendFixed(bat.Vecs[1], uint64(n), n == 256, mp))
+							require.NoError(t, vector.AppendFixed(bat.Vecs[1], value, n == len(values), mp))
 						}
-						bat.SetRowCount(257)
+						bat.SetRowCount(len(values) + 1)
 						ch := make(chan *BatchByte, 1)
 						constructByte(context.Background(), &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, ch, ep)
 						result := <-ch
@@ -115,14 +135,18 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 						Null: []string{`\N`}, UnescapedQuote: true,
 					}, bytes.NewReader(data), format.blockSize, false)
 					require.NoError(t, err)
-					for n := 0; n <= 256; n++ {
+					for n := 0; n <= len(values); n++ {
 						row, err := parser.Read(nil)
 						require.NoError(t, err, "byte %d", n)
 						require.Len(t, row, 2, "byte %d", n)
 						require.Equal(t, fmt.Sprint(n), row[0].Val)
-						require.Equal(t, n == 256, row[1].IsNull, "byte %d", n)
-						if n != 256 {
-							require.Equal(t, []byte{byte(n)}, []byte(row[1].Val), "byte %d", n)
+						require.Equal(t, n == len(values), row[1].IsNull, "byte %d", n)
+						if n < len(values) {
+							expected := []byte{byte(values[n])}
+							if format.wide {
+								expected = []byte{byte(values[n] >> 16), byte(values[n] >> 8), byte(values[n])}
+							}
+							require.Equal(t, expected, []byte(row[1].Val), "value %x", values[n])
 						}
 					}
 					_, err = parser.Read(nil)
@@ -147,6 +171,9 @@ func TestCSVValueEscapingDoesNotMutateOrAllocatePlainValues(t *testing.T) {
 	literalNull := []byte(`\N`)
 	require.Equal(t, []byte(`\\\\N`), addEscapeToString(ep, literalNull, '\\'))
 	require.Equal(t, []byte(`\N`), literalNull, "escaping must not mutate the source")
+	generated := []byte("\r:x")
+	require.Equal(t, []byte(`\\r:x`), addEscapeToString(ep, generated, '\\'))
+	require.Equal(t, []byte("\r:x"), generated)
 }
 
 func TestCSVFramingRejectsAmbiguousBareSeparators(t *testing.T) {
@@ -177,6 +204,9 @@ func TestCSVFramingRejectsAmbiguousBareSeparators(t *testing.T) {
 			})
 		}
 	}
+	// Keep the physical-prefix guard as well as normalized newline checks.
+	ep := newOutfileExportConfig(tree.NewFields(",", false, 0, '\r'), nil, "\r\n")
+	require.ErrorContains(t, ep.validateCSVFraming(t.Context()), "require a nonempty ENCLOSED BY")
 }
 
 func TestCSVFramingRejectsEnclosureSeparatorPrefix(t *testing.T) {
@@ -206,7 +236,17 @@ func TestCSVFramingRejectsEnclosureSeparatorPrefix(t *testing.T) {
 			}
 		}
 	}
-	// Check the physical CRLF prefix, not only the reader's normalized LF.
-	ep := newOutfileExportConfig(tree.NewFields(",", false, '\r', '\\'), nil, "\r\n")
-	require.ErrorContains(t, ep.validateCSVFraming(t.Context()), "ENCLOSED BY must not be the first byte")
+	// Both the physical CRLF prefix and LOAD's normalized LF are boundaries.
+	for _, quote := range []byte{'\r', '\n'} {
+		for _, escape := range []byte{'\\', 0} {
+			ep := newOutfileExportConfig(tree.NewFields(`\`, false, quote, escape), nil, "\r\n")
+			ep.userConfig.FilePath = t.TempDir() + "/rejected.csv"
+			require.ErrorContains(t, ep.validateCSVFraming(t.Context()), "ENCLOSED BY must not be the first byte")
+			require.ErrorContains(t, openNewFile(t.Context(), ep, nil), "ENCLOSED BY must not be the first byte")
+			require.NoFileExists(t, ep.userConfig.FilePath)
+			require.Nil(t, ep.AsyncReader)
+			require.Nil(t, ep.AsyncWriter)
+			require.Nil(t, ep.AsyncGroup)
+		}
+	}
 }

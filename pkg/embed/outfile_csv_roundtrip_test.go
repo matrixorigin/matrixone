@@ -61,8 +61,9 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 		exec("create table " + db + ".decimal_src(id int primary key,n decimal(9,2))")
 		exec("insert into " + db + ".decimal_src values (1,12.34),(2,-5.67),(3,null)")
 		exec("create table " + db + ".bits24_src(id int primary key,b bit(24))")
-		// 0x610D62 contains a CR which the encoder rewrites to backslash-r.
-		exec("insert into " + db + ".bits24_src values (1,6360418),(2,6382178),(3,null),(4,876898)")
+		// Leading/middle CR, including CR followed by ':' to collide with
+		// the complete multi-byte 'r:' separator after escape translation.
+		exec("insert into " + db + ".bits24_src values (1,6360418),(2,6382178),(3,null),(4,876898),(5,866914),(6,6360378)")
 		for _, tc := range []struct {
 			name, source, column, field, line, quote, extra string
 		}{
@@ -106,6 +107,10 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			{"escape-enclosure-force", "bits24_src", "b", ",", "\n", `\`, " FORCE_QUOTE (b)"},
 			{"escape-enclosure-all-bytes", "bits_src", "b", ",", "\n", `\`, ""},
 			{"escape-enclosure-strings", "strings_src", "s", ",", "\n", `\`, ""},
+			{"escape-enclosure-r-field", "bits24_src", "b", "r", "\n", `\`, ""},
+			{"escape-enclosure-r-field-force", "bits24_src", "b", "r", "\n", `\`, " FORCE_QUOTE (b)"},
+			{"escape-enclosure-r-colon-field", "bits24_src", "b", "r:", "\n", `\`, ""},
+			{"escape-enclosure-r-colon-field-force", "bits24_src", "b", "r:", "\n", `\`, " FORCE_QUOTE (b)"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec := func(query string) {
@@ -160,6 +165,7 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			{"line-zero", ",", "0:", "0", 48},
 			{"line-n", ",", "n:", "n", 110},
 			{"line-N", ",", "N:", "N", 78},
+			{"normalized-crlf", `\`, "\r\n", "\n", 65},
 		} {
 			for _, force := range []bool{false, true} {
 				t.Run(fmt.Sprintf("enclosure-prefix/%s/force=%t", tc.name, force), func(t *testing.T) {
