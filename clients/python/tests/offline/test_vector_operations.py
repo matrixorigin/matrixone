@@ -17,6 +17,8 @@ Offline tests for vector operations (create, search, order by, limit).
 Uses mocks to simulate database interactions without requiring a real connection.
 """
 
+import sqlite3
+
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 from sqlalchemy import create_engine, text, func
@@ -42,6 +44,29 @@ from matrixone.sql_builder import (
     build_update_query,
     build_delete_query,
 )
+
+
+@pytest.mark.parametrize('substitute', [False, True])
+@pytest.mark.parametrize('limit,expected', [(None, [(2,), (3,)]), (0, []), (1, [(2,)]), (5, [(2,), (3,)])])
+def test_select_convenience_limit_execution(substitute, limit, expected):
+    # Exercise the public builder's actual SQL and both parameter modes.
+    connection = sqlite3.connect(':memory:')
+    try:
+        connection.execute('CREATE TABLE select_limit_fixture (id INTEGER)')
+        connection.executemany('INSERT INTO select_limit_fixture VALUES (?)', [(1,), (2,), (3,)])
+        query = build_select_query(
+            table_name='select_limit_fixture',
+            select_columns=['id'],
+            where_conditions=['id >= ?'],
+            where_params=[2],
+            order_by=['id'],
+            limit=limit,
+            use_parameter_substitution=substitute,
+        )
+        sql, params = (query, []) if substitute else query
+        assert connection.execute(sql, params).fetchall() == expected
+    finally:
+        connection.close()
 
 
 class TestVectorOperationsOffline:
