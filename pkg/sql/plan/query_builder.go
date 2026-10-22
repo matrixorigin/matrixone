@@ -731,8 +731,9 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 }
 
 // Fixed-width binary branches must share one padded representation before a
-// set operation compares or materializes their rows. Promoting them to BLOB
-// preserves the original lengths and makes equal BINARY values distinct.
+// set operation compares or materializes their rows. A nonpositive width
+// denotes an unspecified bound, so it must remain unbounded rather than
+// inheriting a fixed width from another branch.
 func setOperationPureBinaryCommonType(source []types.Type) (types.Type, bool) {
 	if len(source) == 0 || source[0].Oid != types.T_binary {
 		return types.Type{}, false
@@ -741,6 +742,11 @@ func setOperationPureBinaryCommonType(source []types.Type) (types.Type, bool) {
 	for _, typ := range source[1:] {
 		if typ.Oid != types.T_binary {
 			return types.Type{}, false
+		}
+	}
+	for _, typ := range source {
+		if typ.Width <= 0 {
+			return types.T_blob.ToType(), true
 		}
 		if typ.Width > result.Width {
 			result.Width = typ.Width

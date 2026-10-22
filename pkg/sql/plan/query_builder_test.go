@@ -5097,6 +5097,40 @@ func TestSetOperationMixedWidthBinaryUsesCommonPaddedType(t *testing.T) {
 	}
 }
 
+func TestSetOperationUnspecifiedBinaryWidthRemainsUnbounded(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		sql  string
+		kind plan.Node_NodeType
+	}{
+		{"unbounded first union all", "select cast('hello-long' as binary) v union all select cast('x' as binary(1))", plan.Node_UNION_ALL},
+		{"unbounded last union all", "select cast('x' as binary(1)) v union all select cast('hello-long' as binary)", plan.Node_UNION_ALL},
+		{"unbounded first distinct", "select cast('hello-long' as binary) v union select cast('x' as binary(1))", plan.Node_UNION},
+		{"unbounded last distinct", "select cast('x' as binary(1)) v union select cast('hello-long' as binary)", plan.Node_UNION},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			query := logicPlan.GetQuery()
+			var setNode *plan.Node
+			for _, node := range query.Nodes {
+				if node.NodeType == tc.kind {
+					setNode = node
+					break
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Len(t, setNode.ProjectList, 1)
+			require.Equal(t, int32(types.T_blob), setNode.ProjectList[0].Typ.Id)
+			for _, childID := range setNode.Children {
+				child := query.Nodes[childID]
+				require.Len(t, child.ProjectList, 1)
+				require.Equal(t, int32(types.T_blob), child.ProjectList[0].Typ.Id)
+			}
+		})
+	}
+}
+
 func TestSetOperationTextAndDatetimeKeepsFullTemporalWidth(t *testing.T) {
 	for _, tc := range []struct {
 		name string

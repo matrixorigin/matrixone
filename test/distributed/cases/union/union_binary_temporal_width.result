@@ -36,6 +36,28 @@ SELECT COUNT(*) AS rows_saved
 FROM (SELECT CAST('a' AS CHAR(1)) AS d UNION SELECT CAST('a' AS CHAR(4))) AS u;
 rows_saved
 1
+SELECT HEX(d) AS bytes, LENGTH(d) AS width
+FROM (SELECT CAST('hello-long' AS BINARY) AS d UNION ALL SELECT CAST('x' AS BINARY(1))) AS u
+ORDER BY bytes;
+bytes    width
+68656C6C6F2D6C6F6E67    10
+78    1
+SELECT HEX(d) AS bytes, LENGTH(d) AS width
+FROM (SELECT CAST('x' AS BINARY(1)) AS d UNION ALL SELECT CAST('hello-long' AS BINARY)) AS u
+ORDER BY bytes;
+bytes    width
+68656C6C6F2D6C6F6E67    10
+78    1
+SELECT COUNT(*) AS distinct_rows
+FROM (SELECT CAST('hello-long' AS BINARY) AS d UNION SELECT CAST('h' AS BINARY(1))) AS u;
+distinct_rows
+2
+CREATE TABLE binary_unbounded_saved AS
+SELECT d FROM (SELECT CAST('hello-long' AS BINARY) AS d UNION ALL SELECT CAST('x' AS BINARY(1))) AS u;
+SELECT HEX(d) AS bytes, LENGTH(d) AS width FROM binary_unbounded_saved ORDER BY bytes;
+bytes    width
+68656C6C6F2D6C6F6E67    10
+78    1
 SELECT d, LENGTH(d) AS width
 FROM (SELECT '2026-01-01' AS d UNION ALL SELECT CAST('2026-02-02 10:20:30' AS DATETIME)) AS u
 ORDER BY d;
