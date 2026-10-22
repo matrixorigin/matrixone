@@ -66,6 +66,57 @@ func collectVisibleObjectMarkers(list *ObjectList) []byte {
 	return markers
 }
 
+func TestObjectListGroupScanReleasesTreeLockBeforeCallback(t *testing.T) {
+	group := ObjectListGroupAppendableCreate
+	for _, mode := range []string{"all", "from-entry", "from-ts"} {
+		t.Run(mode, func(t *testing.T) {
+			list := NewObjectList(false)
+			var start *ObjectEntry
+			for i := 1; i <= 70; i++ {
+				entry := makeObjectListOrderTestEntry(byte(i), group, int64(i))
+				list.Set(entry)
+				if i == 10 {
+					start = entry
+				}
+			}
+			snapshot := ObjectListSnapshot{trees: list.loadTrees()}
+			var markers []byte
+			visit := func(entry *ObjectEntry) bool {
+				if len(markers) == 0 {
+					done := make(chan struct{})
+					go func() {
+						list.Set(makeObjectListOrderTestEntry(100, group, 100))
+						close(done)
+					}()
+					select {
+					case <-done:
+					case <-time.After(5 * time.Second):
+						t.Fatal("object-list writer blocked by scan callback")
+					}
+				}
+				markers = append(markers, entry.ID()[0])
+				return true
+			}
+			switch mode {
+			case "all":
+				snapshot.ScanGroup(group, visit)
+			case "from-entry":
+				snapshot.ScanGroupFrom(group, start, visit)
+			case "from-ts":
+				snapshot.AscendGroup(group, types.BuildTS(10, 0), visit)
+			}
+			first := byte(1)
+			if mode != "all" {
+				first = 10
+			}
+			require.Len(t, markers, 71-int(first))
+			for i, marker := range markers {
+				require.Equal(t, first+byte(i), marker)
+			}
+		})
+	}
+}
+
 func TestObjectListOrder(t *testing.T) {
 	list := NewObjectList(false)
 	entries := []*ObjectEntry{
