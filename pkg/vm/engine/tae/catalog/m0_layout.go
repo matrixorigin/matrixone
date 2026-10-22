@@ -26,7 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
-var ErrM0Layout = moerr.NewInternalErrorNoCtx("M0: unsupported column layout")
+var ErrM0Layout error = moerr.NewInternalErrorNoCtx("M0: unsupported column layout")
 
 type m0DetailError struct {
 	cause  error

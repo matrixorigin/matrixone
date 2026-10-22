@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var ErrM0SchemaIdentityUnavailable = moerr.NewInternalErrorNoCtx("M0: object writer schema identity unavailable")
+var ErrM0SchemaIdentityUnavailable error = moerr.NewInternalErrorNoCtx("M0: object writer schema identity unavailable")
 
 // M0ObjectSchemaVersion reads the existing version independently of a writer
 // table ID. A proof based on restricted append transitions need not resolve a

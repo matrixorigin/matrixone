@@ -31,6 +31,8 @@ import (
 )
 
 func TestM0ObjectSchemaIdentity(t *testing.T) {
+	require.IsType(t, (*error)(nil), &ErrM0SchemaIdentityUnavailable)
+	require.IsType(t, (*error)(nil), &ErrM0AppendLayout)
 	h := BuildHeader()
 	h.SetSchemaVersion(7)
 	meta := buildObjectDataMetaV1(1)

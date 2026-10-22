@@ -62,6 +62,7 @@ func m0PlanFromSchema(s *Schema) *plan.TableDef {
 }
 
 func TestM0LayoutRejectsPermutationAndStaleMaps(t *testing.T) {
+	require.IsType(t, (*error)(nil), &ErrM0Layout)
 	for _, test := range []struct {
 		name string
 		edit func(*plan.TableDef, *Schema)

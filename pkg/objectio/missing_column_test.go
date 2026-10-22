@@ -28,6 +28,7 @@ import (
 )
 
 func TestMissingNormalColumnRequiresProof(t *testing.T) {
+	require.IsType(t, (*error)(nil), &ErrMissingColumnWithoutProof)
 	ctx := context.Background()
 	fs, err := fileservice.NewMemoryFS(
 		defines.SharedFileServiceName, fileservice.DisabledCacheConfig, nil,

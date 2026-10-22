@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var ErrM0AppendLayout = moerr.NewInternalErrorNoCtx("M0: unsupported append layout")
+var ErrM0AppendLayout error = moerr.NewInternalErrorNoCtx("M0: unsupported append layout")
 
 type M0AppendColumn struct {
 	Seqnum        uint16

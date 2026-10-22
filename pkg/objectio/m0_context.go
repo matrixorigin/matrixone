@@ -21,7 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-var ErrMissingColumnWithoutProof = moerr.NewInternalErrorNoCtx("objectio: missing normal column without proof")
+var ErrMissingColumnWithoutProof error = moerr.NewInternalErrorNoCtx("objectio: missing normal column without proof")
 
 // Preserve the sentinel identity while adding the rejected object's details.
 type m0DetailError struct {
