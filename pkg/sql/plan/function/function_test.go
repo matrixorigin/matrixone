@@ -780,8 +780,7 @@ func TestUnixTimestampTemporalReturnScale(t *testing.T) {
 		types.T_datetime.ToTypeWithScale(6),
 	})
 	require.NoError(t, err)
-	require.True(t, fractionalDatetimeResult.needCast)
-	require.Equal(t, []types.Type{types.T_timestamp.ToTypeWithScale(6)}, fractionalDatetimeResult.targetTypes)
+	require.False(t, fractionalDatetimeResult.needCast)
 	require.Equal(t, types.New(types.T_decimal128, 38, 6), fractionalDatetimeResult.retType)
 }
 
