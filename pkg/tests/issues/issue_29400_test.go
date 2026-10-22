@@ -452,6 +452,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				var oldID uint64
 				require.NoError(t, db0.QueryRowContext(ctx,
 					"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='v'", solo).Scan(&oldID))
+				// CN1 must consume the table identity and row committed on CN0.
+				execSQLRequire(t, ctx, db1, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 				conn, err := db1.Conn(ctx)
 				require.NoError(t, err)
 				defer conn.Close()
@@ -511,6 +513,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				case <-truncateCtx.Done():
 					t.Fatal("TRUNCATE never entered the lifecycle wait")
 				}
+				// The preceding transaction committed on CN1 before G admission.
+				execSQLRequire(t, ctx, db0, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 				var markerRows int
 				require.NoError(t, db0.QueryRowContext(ctx,
 					"select count(*) from "+witness+".marker where i=?", index+1).Scan(&markerRows))
@@ -549,6 +553,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					require.NoError(t, holder.Rollback())
 					_, err = db1.ExecContext(ctx, "truncate table "+solo+".v")
 					require.NoError(t, err, "cancelled/timed-out waiter must not prevent subsequent progress")
+					// Publish CN1's cleanup before the next scenario starts on CN0.
+					execSQLRequire(t, ctx, db0, "select mo_ctl('cn', 'SYNCCOMMIT', '')")
 				} else {
 					require.NotEqual(t, oldID, newID)
 					require.Zero(t, rows)

@@ -60,6 +60,10 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	if c.execType != plan2.ExecTypeAP_MULTICN {
 		return nil
 	}
+	features.ParquetVariantRead, err = parquetQueryRequiresVariantReader(qry)
+	if err != nil {
+		return err
+	}
 	required := executionRemoteExpressionProtocolVersion(c.proc, features)
 	if required == 0 {
 		return nil
@@ -83,8 +87,38 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 	return required
 }
 
+// validateExactJSONProtocol admits fresh and cached local execution. Supported
+// deployments avoid both expression traversal and external metadata parsing.
+func validateExactJSONProtocol(proc *process.Process, owner *plan.Plan) error {
+	if proc != nil {
+		if version, known := remoteMORPCProtocolVersion(proc.GetService()); known && version >= defines.MORPCVersion129 {
+			return nil
+		}
+	}
+	features, err := plan.RequiredRemoteExpressionFeatures(owner)
+	if err != nil {
+		return err
+	}
+	if features.ExactJSONParsing || features.ExactJSONDecimalCast {
+		return moerr.NewNotSupportedNoCtx("exact JSON execution requires MORPC protocol version 129")
+	}
+	if owner != nil {
+		required, err := parquetQueryRequiresVariantReader(owner.GetQuery())
+		if err != nil {
+			return err
+		}
+		if required {
+			return moerr.NewNotSupportedNoCtx("Parquet VARIANT reads require MORPC protocol version 129")
+		}
+	}
+	return nil
+}
+
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
+	if features.ExactJSONParsing || features.ExactJSONDecimalCast || features.ParquetVariantRead {
+		required = max(required, defines.MORPCVersion129)
+	}
 	if features.LoadFKIgnoreCheck {
 		required = max(required, defines.MORPCVersion125)
 	}
@@ -226,7 +260,8 @@ func remoteWorkersSupportProtocolWithContext(
 			return false, nil
 		}
 	}
-	return true, nil
+	version, known = remoteMORPCProtocolVersion(proc.GetService())
+	return known && version >= minimum, nil
 }
 
 // Optional placement may safely fall back locally when remote support cannot

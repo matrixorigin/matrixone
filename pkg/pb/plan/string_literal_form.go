@@ -298,6 +298,7 @@ const (
 	internalJSONComparisonFunctionID int32 = 577
 	planBooleanTypeID                int32 = 10
 	planJSONTypeID                   int32 = 62
+	exactJSONParseFunctionID         int32 = 605
 	planInt32TypeID                  int32 = 22
 	// These stable function IDs are mirrored from pkg/sql/plan/function to
 	// avoid a dependency cycle. The generic CAST operator is not an assignment
@@ -388,6 +389,8 @@ const (
 // the shared INT32 storage type as a full-width INT rather than a 24-bit value.
 // DateNumericResultContracts requires MORPC v112 for signed INT WEEK and
 // DAYOFYEAR vectors; historical narrow serialized results remain supported.
+// ExactJSONParsing and ExactJSONDecimalCast require v129: older registries lack
+// the parser, and older JSON-to-DECIMAL64/128 casts round through DOUBLE.
 // DecimalStatisticalResultContracts requires MORPC v113 for DOUBLE output
 // from native DECIMAL64/128 variance and standard deviation.
 // TableCollationFunction requires MORPC v118 for INTERNAL_TABLE_COLLATION's
@@ -398,6 +401,10 @@ const (
 // DynamicTimeResultContracts uses the same epoch for prepared TIME results
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
 type RemoteExpressionFeatures struct {
+	ExactJSONParsing     bool
+	ExactJSONDecimalCast bool
+	// The compiler adds this input contract from query/pipeline scan metadata.
+	ParquetVariantRead            bool
 	LoadFKIgnoreCheck             bool // v125: LOAD IGNORE FK admission and diagnostics
 	JSONNumericComparisons        bool
 	DependentPrograms             bool
@@ -452,7 +459,8 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.ExactJSONParsing || features.ExactJSONDecimalCast || features.ParquetVariantRead ||
+		features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -957,6 +965,15 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if (id == 104 || id == 122) && overload == 4 { // GREATEST/LEAST collation-aware ordering
 					features.LeastGreatestCollationSemantics = true
+				}
+				features.ExactJSONParsing = features.ExactJSONParsing || id == exactJSONParseFunctionID
+				// All these executors share jsonToOthers. Stored JSON requires the
+				// semantic floor even when no exact parser occurs in this owner.
+				if (id == 21 || id == mediumIntStrictCastFunctionID ||
+					id == mediumIntAssignmentCastFunctionID || id == mediumIntIgnoreCastFunctionID) &&
+					(current.Typ.Id == 32 || current.Typ.Id == 33) && len(fn.Args) > 0 &&
+					fn.Args[0] != nil && fn.Args[0].Typ.Id == planJSONTypeID {
+					features.ExactJSONDecimalCast = true
 				}
 				if id == 598 { // TO_CALENDAR_INTERVAL; append-only execution identity
 					features.CalendarIntervalNormalization = true

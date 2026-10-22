@@ -3101,7 +3101,7 @@ func jsonToOthers(proc *process.Process, ctx context.Context,
 	case types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
 		types.T_float32, types.T_float64, types.T_decimal64, types.T_decimal128:
-		return jsonToNumeric(ctx, source, result, length, toType)
+		return jsonToNumeric(ctx, source, result, length, toType, selectList)
 	}
 	return moerr.NewInternalError(ctx, fmt.Sprintf("unsupported cast from json to %s", toType))
 }
@@ -3277,8 +3277,14 @@ func JsonAggToDouble(
 
 // jsonToNumeric implements JSON -> all numeric types in one loop; append per row via type switch.
 func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[types.Varlena],
-	result vector.FunctionResultWrapper, length int, toType types.Type) error {
+	result vector.FunctionResultWrapper, length int, toType types.Type, selectList *FunctionSelectList) error {
 	for i := uint64(0); i < uint64(length); i++ {
+		if selectList != nil && !selectList.ShouldEvalAllRow() && selectList.Contains(i) {
+			if err := jsonAppendNull(result, toType); err != nil {
+				return err
+			}
+			continue
+		}
 		v, null := source.GetStrValue(i)
 		if null {
 			if err := jsonAppendNull(result, toType); err != nil {
@@ -3287,6 +3293,29 @@ func jsonToNumeric(ctx context.Context, source vector.FunctionParameterWrapper[t
 			continue
 		}
 		bj := types.DecodeJson(v)
+		// Exact JSON integers/DECIMAL must not cross the DOUBLE domain on the
+		// way to a fixed decimal. Preserve FLOAT/legacy scalar conversion rules.
+		if (toType.Oid == types.T_decimal64 || toType.Oid == types.T_decimal128) && (bj.Type == bytejson.TpCodeDecimal || bj.Type == bytejson.TpCodeInt64 || bj.Type == bytejson.TpCodeUint64) {
+			text := bj.String()
+			if toType.Oid == types.T_decimal64 {
+				d, err := types.ParseDecimal64(text, toType.Width, toType.Scale)
+				if err != nil {
+					return err
+				}
+				if err = vector.MustFunctionResult[types.Decimal64](result).Append(d, false); err != nil {
+					return err
+				}
+			} else {
+				d, err := types.ParseDecimal128(text, toType.Width, toType.Scale)
+				if err != nil {
+					return err
+				}
+				if err = vector.MustFunctionResult[types.Decimal128](result).Append(d, false); err != nil {
+					return err
+				}
+			}
+			continue
+		}
 		switch toType.Oid {
 		case types.T_int8, types.T_int16, types.T_int32, types.T_int64:
 			value, isNull, ok := jsonToInt64Scalar(bj)

@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -45,6 +46,9 @@ func (tableScan *TableScan) OpType() vm.OpType {
 }
 
 func (tableScan *TableScan) Prepare(proc *process.Process) (err error) {
+	if tableScan.ctr.jsonProjection, err = objectio.DecodeJSONPathProjection(tableScan.JSONProjection); err != nil {
+		return err
+	}
 	if tableScan.OpAnalyzer == nil {
 		tableScan.OpAnalyzer = process.NewAnalyzer(tableScan.GetIdx(), tableScan.IsFirst, tableScan.IsLast, "table_scan")
 	} else {

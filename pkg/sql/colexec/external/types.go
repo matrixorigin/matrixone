@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/parquet-go/parquet-go"
+	"github.com/parquet-go/parquet-go/format"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
@@ -540,6 +541,7 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 }
 
 type ParquetHandler struct {
+	annotations map[*parquet.Column]*format.LogicalType
 	// LOAD owns a subsequent assignment projection; foreign reads retain their
 	// existing target-scale conversion policy.
 	timeAssignment bool

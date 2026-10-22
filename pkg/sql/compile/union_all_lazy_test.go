@@ -465,6 +465,15 @@ func TestUnionNestedTopClearsAllocationOwners(t *testing.T) {
 	c.isPrepare = false
 	c.pn = logicPlan
 	c.MessageBoard = message.NewMessageBoard()
+	// This checks owner release, independently of the shared CN spill ledger
+	// selected by other compiler tests. Retain the fixture's finite memory cap.
+	limit := uint64(c.proc.Base.Lim.Size)
+	budget := process.MustNewExecutionResourceBudget(limit, limit)
+	t.Cleanup(budget.Close)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(generation.Close)
+	require.NoError(t, c.proc.SetExecutionResourceBudgetForTesting(generation))
 	t.Cleanup(func() {
 		c.FreeOperator()
 		_ = c.finishAllocationAccountAttempt()

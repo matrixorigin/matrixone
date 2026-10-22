@@ -273,15 +273,15 @@ drop table export_zero_source;
 drop table export_zero_char;
 drop table export_zero_varchar;
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_xml.txt' format 'xml';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline or parquet at line 1 column 107 near " 'xml';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline, parquet or parquet_variant at line 1 column 107 near " 'xml';";
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_json.txt' format 'json';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline or parquet at line 1 column 109 near " 'json';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline, parquet or parquet_variant at line 1 column 109 near " 'json';";
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_txt.txt' format 'txt';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline or parquet at line 1 column 107 near " 'txt';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline, parquet or parquet_variant at line 1 column 107 near " 'txt';";
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_empty.txt' format '';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline or parquet at line 1 column 106 near " '';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline, parquet or parquet_variant at line 1 column 106 near " '';";
 select * from export_format_test into outfile 'stage://export_test_stage/test_invalid_num.txt' format '123';
-SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline or parquet at line 1 column 107 near " '123';";
+SQL parser error: You have an error in your SQL syntax; check the manual that corresponds to your MatrixOne server version for the right syntax to use. invalid format, must be csv, jsonline, parquet or parquet_variant at line 1 column 107 near " '123';";
 select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch1.csv' format 'jsonline';
 internal error: format 'jsonline' does not match file suffix '.csv'
 select * from export_format_test into outfile 'stage://export_test_stage/test_mismatch2.csv' format 'parquet';
@@ -305,6 +305,31 @@ select * from export_format_test into outfile 'stage://export_test_stage/test_ve
 select * from export_format_test where id = 1 into outfile 'stage://export_test_stage/test_single_row.csv' format 'csv';
 select name from export_format_test into outfile 'stage://export_test_stage/test_single_col.csv' format 'csv';
 select nullable_int, nullable_str, nullable_decimal from export_null_test where id = 2 into outfile 'stage://export_test_stage/test_all_null_row.csv' format 'csv';
+create table export_variant_source(id int primary key, doc json);
+insert into export_variant_source values
+(1, json_parse_exact('{"cost":9007199254740993.001,"active":true,"events":[1,null,{"a":"v"}]}')),
+(2, json_parse_exact('{"cost":0.125,"active":false,"events":[]}')),
+(3, 'null'), (4, NULL);
+select * from export_variant_source into outfile 'stage://export_test_stage/variant_roundtrip.parquet' format 'parquet_variant';
+create table export_variant_verify(id int primary key, doc json);
+load data infile {'filepath'='stage://export_test_stage/variant_roundtrip.parquet', 'format'='parquet'} into table export_variant_verify;
+select a.id, b.id = a.id as present, a.doc <=> b.doc as same_document,
+cast(json_extract(b.doc, '$.cost') as decimal(38,3)) as exact_cost,
+b.doc is null as sql_null
+from export_variant_source a left join export_variant_verify b on a.id = b.id order by a.id;
+➤ id[4,32,0]  ¦  present[-7,1,0]  ¦  same_document[-7,1,0]  ¦  exact_cost[3,38,3]  ¦  sql_null[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  9007199254740993.001  ¦  0  𝄀
+2  ¦  1  ¦  1  ¦  0.125  ¦  0  𝄀
+3  ¦  1  ¦  1  ¦  null  ¦  0  𝄀
+4  ¦  1  ¦  1  ¦  null  ¦  1
+select * from export_variant_source where id < 0 into outfile 'stage://export_test_stage/variant_empty.parquet' format 'parquet_variant';
+truncate table export_variant_verify;
+load data infile {'filepath'='stage://export_test_stage/variant_empty.parquet', 'format'='parquet'} into table export_variant_verify;
+select count(*) from export_variant_verify;
+➤ count(*)[-5,64,0]  𝄀
+0
+drop table export_variant_verify;
+drop table export_variant_source;
 drop table if exists export_format_test;
 drop table if exists export_types_test;
 drop table if exists export_null_test;

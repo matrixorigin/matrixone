@@ -39,6 +39,15 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
+		{features.ExactJSONParsing, defines.MORPCVersion129,
+			"exact JSON parsing requires a versioned remote destination",
+			"remote destination does not support exact JSON parsing (MORPC version %d)"},
+		{features.ExactJSONDecimalCast, defines.MORPCVersion129,
+			"exact JSON decimal casts require a versioned remote destination",
+			"remote destination does not support exact JSON decimal casts (MORPC version %d)"},
+		{features.ParquetVariantRead, defines.MORPCVersion129,
+			"Parquet VARIANT reads require a versioned remote destination",
+			"remote destination does not support Parquet VARIANT reads (MORPC version %d)"},
 		{features.LoadFKIgnoreCheck, defines.MORPCVersion125,
 			"LOAD IGNORE foreign-key filtering requires a versioned remote destination",
 			"remote destination does not support LOAD IGNORE foreign-key filtering (MORPC version %d)"},
@@ -151,6 +160,17 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		}
 		if !known || observed < gate.version {
 			return moerr.NewNotSupportedNoCtxf(gate.unsupported, gate.version)
+		}
+	}
+	// Preserve the independent gates' diagnostic order above, then also close
+	// the last/only gate's probe window: its successful response is not enough
+	// when the coordinator rollout floor changed during that probe.
+	if probed {
+		current, currentKnown := remoteMORPCProtocolVersion(proc.GetService())
+		for _, gate := range gates {
+			if gate.enabled && (!currentKnown || current < gate.version) {
+				return moerr.NewNotSupportedNoCtxf(gate.unsupported, gate.version)
+			}
 		}
 	}
 	return nil

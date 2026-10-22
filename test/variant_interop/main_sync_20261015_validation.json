@@ -1,0 +1,135 @@
+{
+  "recorded_utc": "2026-10-15T02:33:53.390286+00:00",
+  "main": "17a6200f59e764729e5544908fffd5480ae88279",
+  "previous_remote_head": "f4e75e3e6d89b5b62889550a6b7e5fdc2658e932",
+  "validated_code_tree": "1f8f6c07c55d3f77a4e7641182d2c09bf23b2d3e",
+  "local_validated_commit": "99dbd4ee5fadb893e2ec9b42c840739476b7334a",
+  "publication_note": "The delivery adds only this record to the validated code tree; no final commit identity is self-referenced.",
+  "resolution": [
+    "Preserve main MORPC113 decimal statistical result ABI and independently require MORPC114 for exact JSON parsing, JSON-to-DECIMAL64/128 and Parquet file readers.",
+    "Preserve both feature detectors, including combined decimal variance of stored JSON with required maximum114.",
+    "Regenerate merged pipeline descriptor using protoc3.21.1 and gogo1.3.2; retain Aggregate.result_type6 and TableScan.json_projection3."
+  ],
+  "source_sha256": {
+    "docs/design/20261013-automatic-json-subcolumns.md": "37f7a47c8fd3ab99eed6968fab846fb24db307255ddd5575768dddfbc2b2b722",
+    "docs/design/20261013-exact-json-parquet-variant.md": "a0ed60f1b10e105de1857cc2c3833e06e460a7661a30b26482cffb0c17114ac0",
+    "pkg/defines/const.go": "13b843b467131f83b578d61a71fe2f81ae4436673fd1be14b55e4095d4daab8a",
+    "pkg/pb/pipeline/pipeline.pb.go": "b916e3e8683f9ec829b353821aa6ac99faaa08f86ea029db9f45ba36dab2c600",
+    "pkg/pb/plan/string_literal_form.go": "8279d9749034334d24b103c16fd4b60f32f8c4d2695b1a956e113bbde5ddd25f",
+    "pkg/sql/compile/exact_json_protocol_test.go": "a95d205f923dea6111a86a8df05a2d8bd8c0515ba22e318486a535213f844475",
+    "pkg/sql/compile/expression_destination_protocol.go": "0d6d5a49b332b35e4b8275c47bf87233de5c25acf40f047b7491f110924b20ad",
+    "pkg/sql/compile/expression_protocol.go": "d10c3031ebaa779d3e66f7ce3a054a5803a3abeaada9fa8fa730419b2d0132e5",
+    "pkg/sql/compile/parquet_variant_protocol_test.go": "0b009ad9496a9eec9ecbc016d6ed61d6ba9fe2d11cf37d9581c81cc88d6f0a50",
+    "pkg/sql/compile/remoterun.go": "0bc475788fc9776829af412a433bb2427bf86038fe99eb308d146590192349cb",
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.go": "8c391752282ee5637316335b58ada42b81d4f4a8d7f42bfc47002b7ec807db44",
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.y": "06ffe423935dac033e69e5df09f949cbb1dd771231f47c2c88d4d33464fe0fdd",
+    "pkg/sql/plan/exact_json_protocol_test.go": "508fd0d1ce7d4bb6da9a68d7e8937cbbe62440d63649d65874c3c69d1ec89062",
+    "pkg/sql/plan/function/list_builtIn.go": "c3d26969a0adfee7be92a34f0621bf9012599d85d6030576ce5d2852e04fa9bc",
+    "pkg/sql/plan/persisted_ip.go": "f48537e2a289935aeaa19acbcadaafa2021e85bcd9eea67cfee98f599733f27c",
+    "pkg/sql/plan/query_builder.go": "f95ab3f6d2dd99df1f62e0c8a548fb10f5e8c5b7027731eab6c79437367ba454",
+    "pkg/tests/sqlintegration/multicn/exact_json_protocol_test.go": "866d0a2aa5c064bdad060f3e6516656b56c80a9af84f210ccb24fdc7594a32c2",
+    "proto/pipeline.proto": "4485cad0a1b405adf3cbad1bc13b59b805b7759805a8288513ce37b7eb79c8a5",
+    "test/variant_interop/README.md": "e54986b429dcdf719974882a5b4cc47ad8fe039fe56551d1612c600deb915473"
+  },
+  "go_version": "go version go1.27.1 linux/amd64",
+  "mode": {
+    "platform": "linux/amd64",
+    "native": "Repository CGo wrapper, CPU; native CGo/thirdparty sources unchanged. Main Makefile changes affect UT scheduling only.",
+    "test_flags": "-p=1 -count=1 -ldflags='-s -w'",
+    "static": "go vet and pinned golangci-lint v2.14.0 over defines,pb/plan,pb/pipeline,mysql,function,plan,compile,multicn; not a whole-repository scan.",
+    "license": "12 hand-merged Go inputs valid; generated bindings/parser excluded from header selection."
+  },
+  "evidence": {
+    "ci2-boundary-before": {
+      "sha256": "bb20375ff709a47c2b0af8c374368997b7f83f5f6d731618e58134adedffe1fd",
+      "local_path": "/workspace/variant-interop/ci2-boundary-before.log",
+      "result": "EXPECTED_FAIL",
+      "terminal_packages": []
+    },
+    "ci2-focused": {
+      "sha256": "083da7d0ca5d1d2ccfb8668e72a58f8fd4bab38f13219cfee5be31fc3eefec62",
+      "local_path": "/workspace/variant-interop/ci2-focused.log",
+      "result": "PASS",
+      "terminal_packages": [
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/pb/plan\t0.020s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/sql/plan\t0.072s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/sql/compile\t0.109s"
+      ]
+    },
+    "merge3-packages": {
+      "sha256": "456ecaf59b7da708d85b2c2286c9672a2f78aab3447bf574343968fc588a4672",
+      "local_path": "/workspace/variant-interop/merge3-packages.log",
+      "result": "PASS",
+      "terminal_packages": [
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/defines\t0.005s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/pb/plan\t0.031s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/pb/pipeline\t0.054s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/sql/plan\t19.299s",
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/sql/compile\t9.254s"
+      ]
+    },
+    "merge3-multicn": {
+      "sha256": "cedfa7aedb00027dc4c00a8692c36f54b63cd487dbf1d827df9c294b7a2d2ae2",
+      "local_path": "/workspace/variant-interop/merge3-multicn.log",
+      "result": "PASS",
+      "terminal_packages": [
+        "ok  \tgithub.com/matrixorigin/matrixone/pkg/tests/sqlintegration/multicn\t5.876s"
+      ]
+    },
+    "merge3-vet": {
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "local_path": "/workspace/variant-interop/merge3-vet.log",
+      "result": "PASS",
+      "terminal_packages": []
+    },
+    "merge3-lint": {
+      "sha256": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+      "local_path": "/workspace/variant-interop/merge3-lint.log",
+      "result": "PASS",
+      "terminal_packages": []
+    },
+    "merge3-license": {
+      "sha256": "87bf34b812327f498b5f03470a6091de5138090a8c82139c3bd0603e5409eee5",
+      "local_path": "/workspace/variant-interop/merge3-license.log",
+      "result": "PASS",
+      "terminal_packages": []
+    }
+  },
+  "generated": {
+    "pipeline_sha256": "b916e3e8683f9ec829b353821aa6ac99faaa08f86ea029db9f45ba36dab2c600",
+    "mysql_parser_sha256": "8c391752282ee5637316335b58ada42b81d4f4a8d7f42bfc47002b7ec807db44",
+    "protobuf_regeneration": "Byte-identical after deterministic import grouping with the unchanged main import set.",
+    "parser_regeneration": "Identical apart from output-path banner."
+  },
+  "scope": {
+    "full_packages": [
+      "pkg/defines",
+      "pkg/pb/plan",
+      "pkg/pb/pipeline",
+      "pkg/sql/plan",
+      "pkg/sql/compile"
+    ],
+    "multicn": "Actual current-binary SQL and RPC at two CNs, advertised113 rejected from exact-query execution and114 restored to distributed execution; exact values and worker addresses asserted.",
+    "counterexample": "Partially merged local source before admission fix returned113 where the independently pinned oracle required114; this was an uncommitted pre-fix state, not a clean-main or actual old-CN run.",
+    "reused": "Prior f4e75e3e full CI success remains bound to that head. ObjectIO and standalone VARIANT codec sources are unchanged; prior ownership/race/fuzz/independent-engine results remain source-bound historical evidence."
+  },
+  "excluded_attempts": [
+    {
+      "log": "merge3-packages-tmp-cancelled.log",
+      "reason": "Cancelled to relocate compiler temporary files from constrained tmpfs to workspace; not a complete package pass."
+    },
+    {
+      "log": "merge3-multicn-empty-selection.log",
+      "reason": "Incorrect test selector selected zero tests; excluded. The exact test name was then run and its named PASS asserted."
+    },
+    {
+      "reason": "Initial MySQL generator invocation used the wrong working directory; successful rerun in dialect/mysql is the generator evidence."
+    }
+  ],
+  "whitespace": "PR diff against verified main passes. Three result-file trailing spaces imported unchanged from main also reproduce in main-only diff; golden snapshots retained.",
+  "release_gates": [
+    "Actual rolling mixed binaries from an older compatible admission state remains uncertified.",
+    "No fresh race run, write-cost budget or production restore/rewrite certification is claimed.",
+    "Remote CI must evaluate the new delivery."
+  ]
+}

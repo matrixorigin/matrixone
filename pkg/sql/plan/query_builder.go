@@ -4458,6 +4458,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			}
 		}
 	}
+	proveJSONPathProjection(builder.qry)
 	applyLockTableFallback(builder)
 
 	for i := range builder.qry.Steps {

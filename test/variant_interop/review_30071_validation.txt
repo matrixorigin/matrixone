@@ -1,0 +1,76 @@
+PR #30071 review regression evidence
+Parent remote head: acae75849c354209482b50ac0fd32d3754d22ddf
+Execution: local native MatrixOne Go build, reused verified native libraries; Go 1.27.1.
+No CI verdict or reviewer approval for the forthcoming head is implied.
+Console indentation/ANSI are normalized below; SHA256 values identify the original full logs.
+
+Reproduction:
+go test -p 1 ./pkg/objectio ./pkg/objectio/ioutil ./pkg/sql/plan ./pkg/sql/colexec/table_scan -count=1
+go test -race -p 1 ./pkg/objectio -run '^TestJSONSubcolumns(PoisonOnRelease|ReleaseOnError|ControlCharacterKeys|TenThousandRows)$' -count=1
+go test -p 1 ./pkg/objectio -run '^$' -fuzz '^FuzzJSONSubcolumnProjection$' -fuzztime=20s -parallel=1
+python3 test/variant_interop/review_json_subcolumns.py --port 16001
+Use normal project CGO include/link/runtime paths. The first fuzz attempt omitted them, failed compilation, and was not counted.
+
+Pre-fix native regression failures (first test version, exact parent source):
+--- FAIL: TestJSONSubcolumnsPoisonOnRelease (0.00s)
+                                expected: false
+                                actual  : true
+                Messages:       row 0 root SQL NULL
+                                invalid input: invalid json path '$."\x00"'
+                                invalid input: invalid json path '$."\x01"'
+--- FAIL: TestJSONSubcolumnProjectionAdmission (0.01s)
+    --- FAIL: TestJSONSubcolumnProjectionAdmission/columns_65 (0.00s)
+    --- FAIL: TestJSONSubcolumnProjectionAdmission/columns_4096 (0.01s)
+    --- FAIL: TestJSONSubcolumnProjectionAdmission/bytes_65537 (0.00s)
+    --- FAIL: TestJSONSubcolumnProjectionAdmission/encoded_escape_expansion (0.00s)
+Original baseline log SHA256: 926c96ef0efc803bc857af61ba1e338b4d5eb56eeb2ce076e7d99439bfbf6d7b
+
+Full package regression
+Log SHA256: 5d063ca27748ab52a7166c696799e113f0e0afab7a38ba31a29c35371dbcb02c
+ok      github.com/matrixorigin/matrixone/pkg/objectio  5.648s
+ok      github.com/matrixorigin/matrixone/pkg/objectio/ioutil   0.549s
+ok      github.com/matrixorigin/matrixone/pkg/sql/plan  13.568s
+ok      github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan    0.061s
+
+Expanded ownership/key/error cases
+Log SHA256: 8d334be2cbeea268e74889defbe22fd2062d498dfa0bccf6628732c25d44701e
+ok      github.com/matrixorigin/matrixone/pkg/objectio  0.094s
+
+Real source-build SQL regression
+Log SHA256: 3b24f65dd6876326f6a7b4150fe62d38adf484e01f2a6bae9823a51a87349829
+{"result": "PASS", "sql_checks": 153, "key_cases": 73, "wide_columns": [63, 64, 65], "contract_bytes": [65535, 65536, 65537, 80038], "flush_tables": 3}
+
+Existing 9677-row restart verification
+Log SHA256: e595c594d2df8c98a743594c97c7f91f0242643436ceb6f09be4f4c0a4194280
+{"mode": "restart verification", "rows": 9677, "checks": "full documents, path projections, exact DECIMAL, SQL/JSON null", "result": "PASS"}
+
+Race regression
+Log SHA256: 29bb487055315b1d642e1d9d8897aa0ffab532d5d491276dc94af736d9264084
+ok      github.com/matrixorigin/matrixone/pkg/objectio  4.612s
+
+Fuzz with complete native flags
+Log SHA256: 41aed9d444d587efe3bfbf032853d77a9eff50dca512d67b50fab2f5da07ee68
+fuzz: elapsed: 0s, gathering baseline coverage: 0/123 completed
+fuzz: elapsed: 3s, gathering baseline coverage: 98/123 completed
+fuzz: elapsed: 4s, gathering baseline coverage: 123/123 completed, now fuzzing with 1 workers
+fuzz: elapsed: 6s, execs: 3321 (1075/sec), new interesting: 8 (total: 131)
+fuzz: elapsed: 9s, execs: 6470 (1050/sec), new interesting: 16 (total: 139)
+fuzz: elapsed: 12s, execs: 9966 (1165/sec), new interesting: 26 (total: 149)
+fuzz: elapsed: 15s, execs: 13965 (1333/sec), new interesting: 30 (total: 153)
+fuzz: elapsed: 18s, execs: 17148 (1061/sec), new interesting: 32 (total: 155)
+fuzz: elapsed: 20s, execs: 23649 (3085/sec), new interesting: 33 (total: 156)
+PASS
+ok      github.com/matrixorigin/matrixone/pkg/objectio  20.183s
+
+CI-pinned golangci-lint v2.14.0
+Log SHA256: e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47
+0 issues.
+
+Changed-source license-eye v0.4.0
+Log SHA256: 57bed9769aafb412b5a8dd952afd91b1b3ce9ce59eeaff62abc4813a33b2f461
+INFO Loading configuration from file: .licenserc.yml
+INFO Totally checked 4 files, valid: 4, invalid: 0, ignored: 0, fixed: 0
+
+Production source SHA256:
+a490fe528487ffb1b4695f712d3ef47a3a436d6c5738a9a537dd08eb2861b0b0  pkg/objectio/json_subcolumns.go
+48b8e3afc9a2d422d509e970f16e4995a5ba3015db76cced37d0aa0ef5d429b1  pkg/sql/plan/json_subcolumns.go

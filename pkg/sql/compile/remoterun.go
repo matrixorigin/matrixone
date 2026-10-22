@@ -150,6 +150,10 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err != nil {
 		return nil, err
 	}
+	features.ParquetVariantRead, err = parquetPipelineRequiresVariantReader(p)
+	if err != nil {
+		return nil, err
+	}
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
 	}
@@ -1122,6 +1126,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 	case *table_scan.TableScan:
 		in.TableScan = &pipeline.TableScan{}
 		in.TableScan.Types = t.Types
+		in.TableScan.JsonProjection = t.JSONProjection
 		in.TableScan.FilterExprs = t.FilterExprs
 		in.ProjectList = t.ProjectList
 	case *value_scan.ValueScan:
@@ -1798,6 +1803,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 	case vm.TableScan:
 		ts := table_scan.NewArgument().WithTypes(opr.TableScan.Types)
 		ts.FilterExprs = opr.TableScan.FilterExprs
+		ts.JSONProjection = opr.TableScan.JsonProjection
 		ts.ProjectList = opr.ProjectList
 		op = ts
 	case vm.ValueScan:
@@ -2333,6 +2339,10 @@ func validateRemoteExpressionPipelineProtocol(
 	if err != nil {
 		return err
 	}
+	features.ParquetVariantRead, err = parquetPipelineRequiresVariantReader(p)
+	if err != nil {
+		return err
+	}
 	return validateRemoteExpressionFeatures(proc, features)
 }
 
@@ -2358,6 +2368,15 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	protocolVersion, hasProtocolVersion := int64(0), false
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
+	}
+	if features.ExactJSONParsing && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
+		return moerr.NewNotSupportedNoCtx("exact JSON parsing requires MORPC protocol version 129")
+	}
+	if features.ExactJSONDecimalCast && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
+		return moerr.NewNotSupportedNoCtx("exact JSON decimal casts require MORPC protocol version 129")
+	}
+	if features.ParquetVariantRead && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
+		return moerr.NewNotSupportedNoCtx("Parquet VARIANT reads require MORPC protocol version 129")
 	}
 	if features.LoadFKIgnoreCheck && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion125) {
 		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")

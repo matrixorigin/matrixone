@@ -36,6 +36,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	icebergapi "github.com/matrixorigin/matrixone/pkg/iceberg/api"
 	"github.com/matrixorigin/matrixone/pkg/incrservice"
+	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -623,6 +624,7 @@ func dupOperatorWithContext(sourceOp vm.Operator, index int, maxParallel int, du
 	case vm.TableScan:
 		t := sourceOp.(*table_scan.TableScan)
 		op := table_scan.NewArgument().WithTypes(t.Types)
+		op.JSONProjection = t.JSONProjection
 		op.ProjectList = t.ProjectList
 		op.FilterExprs = t.FilterExprs
 		op.RuntimeFilterExprs = t.RuntimeFilterExprs
@@ -2841,7 +2843,11 @@ func constructTableScan(node *plan.Node) *table_scan.TableScan {
 	for j, col := range node.TableDef.Cols {
 		types[j] = col.Typ
 	}
-	return table_scan.NewArgument().WithTypes(types)
+	arg := table_scan.NewArgument().WithTypes(types)
+	if strings.HasPrefix(node.ExtraOptions, objectio.JSONProjectionPrefix) {
+		arg.JSONProjection = node.ExtraOptions
+	}
+	return arg
 }
 
 func constructValueScan(proc *process.Process, node *plan.Node, allocations ...*vector.AllocationAccountSelection) (*value_scan.ValueScan, error) {
