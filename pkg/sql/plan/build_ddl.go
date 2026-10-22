@@ -232,6 +232,7 @@ func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error
 // viewColumnInference is the common output of View authoring and description.
 // It owns its columns; definition publication is deliberately a separate step.
 type viewColumnInference struct {
+	headings            []string
 	columns             []*plan.ColDef
 	provenance          []OutputColumnProvenance
 	dependencies        []ViewDependency
@@ -389,6 +390,7 @@ func inferViewColumns(
 		}
 	}
 	return &viewColumnInference{
+		headings:            query.Headings,
 		columns:             cols,
 		provenance:          outputColumnProvenance,
 		dependencies:        dependencyCapture.dependencies(),
