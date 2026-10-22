@@ -575,7 +575,7 @@ func (l *remoteLockTable) unlockWithContext(
 			if moerr.IsMoErrCode(err, moerr.ErrLockTableNotFound) {
 				// A missing table can race allocator reassignment. Resolve that one
 				// ambiguity, but do not loop if the allocator still reports this bind.
-				if handledErr := l.handleErrorWithContext(ctx, err, false); handledErr == nil {
+				if handledErr := l.refreshBindWithContext(ctx, err, false, true); handledErr == nil {
 					return nil
 				} else {
 					return handledErr
@@ -594,7 +594,7 @@ func (l *remoteLockTable) unlockWithContext(
 		// handleError returns nil meaning bind changed, then all locks
 		// will be released. If handleError returns any error, it means
 		// that the current bind is valid, retry unlock.
-		if err := l.handleErrorWithContext(ctx, err, false); err == nil {
+		if err := l.refreshBindWithContext(ctx, err, false, true); err == nil {
 			return nil
 		}
 		if err := waitRemoteRetryBackoffWithContext(ctx, backoff); err != nil {
@@ -775,7 +775,7 @@ func (l *remoteLockTable) doUnlock(
 	resp, err := l.client.Send(ctx, req)
 	if err == nil {
 		defer releaseResponse(resp)
-		return l.maybeHandleBindChanged(ctx, resp)
+		return l.handleReturnedBind(ctx, resp, true)
 	}
 	return moerr.AttachCause(ctx, err)
 }
@@ -914,6 +914,15 @@ func (l *remoteLockTable) handleErrorWithContext(
 	err error,
 	mustHandleLockBindChangedErr bool,
 ) error {
+	return l.refreshBindWithContext(ctx, err, mustHandleLockBindChangedErr, false)
+}
+
+func (l *remoteLockTable) refreshBindWithContext(
+	ctx context.Context,
+	err error,
+	mustHandleLockBindChangedErr bool,
+	lookupOnly bool,
+) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -934,15 +943,10 @@ func (l *remoteLockTable) handleErrorWithContext(
 	if l.allocatorStateProvider != nil {
 		requestAllocator = l.allocatorStateProvider()
 	}
-	new, allocator, err := getLockTableBindWithContext(
-		ctx,
-		l.client,
-		l.bind.Group,
-		l.bind.Table,
-		l.bind.OriginTable,
-		l.serviceID,
-		l.bind.Sharding,
-	)
+	new, allocator, err := requestLockTableBind(ctx, l.client, pb.GetBindRequest{
+		Group: l.bind.Group, Table: l.bind.Table, OriginTable: l.bind.OriginTable,
+		ServiceID: l.serviceID, Sharding: l.bind.Sharding, LookupOnly: lookupOnly,
+	})
 	if err != nil {
 		logGetRemoteBindFailed(l.logger, l.bind.Table, err)
 		if ctxErr := ctx.Err(); ctxErr != nil {
@@ -988,6 +992,14 @@ func (l *remoteLockTable) maybeHandleBindChanged(
 	ctx context.Context,
 	resp *pb.Response,
 ) error {
+	return l.handleReturnedBind(ctx, resp, false)
+}
+
+func (l *remoteLockTable) handleReturnedBind(
+	ctx context.Context,
+	resp *pb.Response,
+	lookupOnly bool,
+) error {
 	if resp.NewBind == nil {
 		return nil
 	}
@@ -999,15 +1011,10 @@ func (l *remoteLockTable) maybeHandleBindChanged(
 		// service may have observed a newer allocator while the RPC was in
 		// flight, so only publish a bind refreshed from the current allocator.
 		requestAllocator := l.allocatorStateProvider()
-		refreshedBind, allocator, err := getLockTableBindWithContext(
-			ctx,
-			l.client,
-			l.bind.Group,
-			l.bind.Table,
-			l.bind.OriginTable,
-			l.serviceID,
-			l.bind.Sharding,
-		)
+		refreshedBind, allocator, err := requestLockTableBind(ctx, l.client, pb.GetBindRequest{
+			Group: l.bind.Group, Table: l.bind.Table, OriginTable: l.bind.OriginTable,
+			ServiceID: l.serviceID, Sharding: l.bind.Sharding, LookupOnly: lookupOnly,
+		})
 		if err != nil {
 			logGetRemoteBindFailed(l.logger, l.bind.Table, err)
 			if ctxErr := ctx.Err(); ctxErr != nil {
