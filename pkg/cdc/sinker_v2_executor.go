@@ -874,24 +874,3 @@ func (e *Executor) logFailedSQL(err error, sqlBuf []byte) {
 		)
 	}
 }
-
-// GetMaxAllowedPacket queries the database for max_allowed_packet setting
-func (e *Executor) GetMaxAllowedPacket() (uint64, error) {
-	var maxPacket uint64
-	err := e.conn.QueryRow("SELECT @@max_allowed_packet").Scan(&maxPacket)
-	if err != nil {
-		return 0, err
-	}
-	return maxPacket, nil
-}
-
-// ExecSimpleSQL executes a simple SQL statement outside of transaction
-// Used for initialization (CREATE DATABASE, USE db, etc.)
-func (e *Executor) ExecSimpleSQL(ctx context.Context, sql string) error {
-	if e.tx != nil {
-		return moerr.NewInternalError(ctx, "cannot execute simple SQL while transaction is active")
-	}
-
-	_, err := e.conn.ExecContext(ctx, sql)
-	return err
-}
