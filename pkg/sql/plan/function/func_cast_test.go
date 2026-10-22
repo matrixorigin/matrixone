@@ -5610,6 +5610,29 @@ func TestCastLowPrecFloatSourcesAsFloat(t *testing.T) {
 	}
 }
 
+// TestCastEmptyToVectorErrors checks that an empty string or an empty BLOB is not a vector
+// of any element type: the cast errors, as the empty literal does, rather than storing NULL;
+// NULL stays NULL.
+func TestCastEmptyToVectorErrors(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := func(typ types.T, null bool) *vector.Vector {
+		v := vector.NewVec(typ.ToType())
+		require.NoError(t, vector.AppendBytes(v, nil, null, proc.Mp()))
+		return v
+	}
+	for _, oid := range []types.T{types.T_array_float32, types.T_array_float64, types.T_array_bf16,
+		types.T_array_float16, types.T_array_int8, types.T_array_uint8, types.T_array_float8, types.T_array_float4} {
+		to := types.New(oid, 2, 0)
+		for _, from := range []types.T{types.T_varchar, types.T_text, types.T_blob} {
+			_, err := runVecBlockCast(t, proc, source(from, false), to)
+			require.Error(t, err, "%s -> %s", from, oid)
+		}
+		out, err := runVecBlockCast(t, proc, source(types.T_varchar, true), to)
+		require.NoError(t, err, oid.String())
+		require.True(t, out.IsNull(0), oid.String())
+	}
+}
+
 func TestCastLowPrecFloatMatrix(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bf16 := types.T_bf16.ToType()

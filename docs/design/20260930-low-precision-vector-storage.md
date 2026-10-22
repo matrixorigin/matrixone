@@ -390,6 +390,7 @@ only when it is stored into a `vecf8`/`vecf4` column (assignment cast).
 | `LOAD` | CSV text `"[…]"`, JSONL arrays; Parquet `LIST<FLOAT/DOUBLE>` and `STRING`/`JSON` columns, quantized per row. The exact text (CSV text, a JSONL object value, a Parquet `STRING`/`JSON` value) loads without quantization. A Parquet `BYTE_ARRAY`/`FIXED_LEN_BYTE_ARRAY` column without a logical type is binary, read as a `BLOB` casts: a value of cell length is the stored cell, a value of `4N` bytes is float32 elements |
 | `INTO OUTFILE`, external-table writes | the exact text, in CSV as a quoted field and in JSONL as an object value, so an export reloads to the same cell bytes, a negative-zero element included |
 | binary input | a `BLOB` of little-endian float32 elements, as for `vecf32` (`CAST(UNHEX('0000803F…') AS BLOB)` or a BLOB parameter), quantized per row; a length that is not a multiple of 4 or another dimension is rejected |
+| empty input | an empty string or an empty `BLOB` is not a vector: a cast, an insert (literal, `INSERT … SELECT`, prepared parameter) or an update with it is an error, for every vector type (`vecf32` and the narrow types included), as an empty string is for an `INT` column; NULL stays NULL. `LOAD` reads an empty field as NULL, as for `INT` |
 | exact binary | `vecblock_binary(v)` returns the stored cell as a `BLOB` (§Cell format); a `BLOB` of a cell casts, inserts or binds back to the same bytes without quantization, and a `BLOB` of cell length that is not a valid cell of the target is an error |
 | exact text | `vecblock_json(v)` returns the cell as stored, `{"g": g, "s": [scales], "v": [values]}`, the parts in the cell's order: `g` the global scale (1 for `vecf8`), `s` one scale per block of 32 (`vecf8`) / 16 (`vecf4`) values, the last block shorter, `v` the element values; casting that text (or inserting it, or `LOAD`ing it) builds the same cell bytes without quantization. Element `i` is `v[i] · s[i / blockSize] · g`; `g` is required, `s` must hold `ceil(len(v) / blockSize)` scale code values (E8M0 / UE4M3), `v` element code values (E4M3 / E2M1), `-0` the negative-zero code. Each number must denote its float32 value without rounding: the exact value, or the shortest float32 or float64 text of that value, in any notation (`1`, `1.0`, `1e0`; `5.877472e-39` for the scale 2^-127); anything else (`1.00000001`, which float32 parsing rounds to `1`) is an error, never rounded |
 
@@ -673,6 +674,11 @@ within the fp32 GEMM's tolerance, rows closer than it in either order.
   `448.00001`, a scale `0.50000001`, a global `1.00000001`) is rejected; `1.0`, `1e0`,
   `-0.0`, the scale 2^-127 as `5.877472e-39` and as its float64 text, and a global as its
   float64 or exact text are accepted and write back as the shortest float32 text.
+- **Empty input** (`function/func_cast_test.go` `TestCastEmptyToVectorErrors`, every vector
+  type from `VARCHAR`, `TEXT` and `BLOB`; BVT `vector/vector_empty_input.sql`): an empty
+  string or `BLOB` errors through a literal, `INSERT … SELECT`, a prepared parameter and a
+  cast, where `INSERT … SELECT ''` and a prepared `''` stored NULL before; `LOAD` of an empty
+  field stores NULL.
 - **UPDATE change detection** (`plan/build_test.go`): with changed-row counting on, an
   `UPDATE` of a `vecf8` and a `vecf4` column plans one `<=>` per column over the cells,
   with no cast to `vecf32`.

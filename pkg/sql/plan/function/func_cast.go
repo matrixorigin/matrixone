@@ -9871,11 +9871,12 @@ func strToArray[T types.ArrayElement](
 	var l = uint64(length)
 	for i = 0; i < l; i++ {
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
+			// an empty string is not a vector: it fails to parse, as the literal does
 			arr, err := types.StringToArray[T](convertByteSliceToString(v))
 			if err != nil {
 				return err
@@ -9908,12 +9909,15 @@ func blobToArray[T types.ArrayElement](
 	for i = 0; i < l; i++ {
 
 		v, null := from.GetStrValue(i)
-		if null || len(v) == 0 {
+		if null {
 			if err := to.AppendBytes(nil, true); err != nil {
 				return err
 			}
 		} else {
 			size := toType.GetArrayElementSize()
+			if len(v) == 0 {
+				return moerr.NewInvalidInputNoCtx("vector payload is empty")
+			}
 			if len(v)%size != 0 {
 				return moerr.NewInvalidInputNoCtx("vector payload is not aligned to its element size")
 			}

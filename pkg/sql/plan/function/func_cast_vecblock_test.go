@@ -57,13 +57,14 @@ func TestCastToVecBlock(t *testing.T) {
 		f, _ := oid.BlockScaledFormat()
 		to := types.New(oid, 4, 0)
 		t.Run(oid.String(), func(t *testing.T) {
-			// text -> vecf8/vecf4, with NULL and empty string -> NULL
+			// text -> vecf8/vecf4, NULL -> NULL; an empty string is not a vector
 			out, err := runVecBlockCast(t, proc,
-				vecBlockStrVector(t, proc, []string{"[1, -3, 0, 6]", "", "x"}, []bool{false, false, true}), to)
+				vecBlockStrVector(t, proc, []string{"[1, -3, 0, 6]", "x"}, []bool{false, true}), to)
 			require.NoError(t, err)
 			require.Equal(t, "[1, -3, 0, 6]", out.RowToString(0))
 			require.Equal(t, "null", out.RowToString(1))
-			require.Equal(t, "null", out.RowToString(2))
+			_, err = runVecBlockCast(t, proc, vecBlockStrVector(t, proc, []string{""}, []bool{false}), to)
+			require.ErrorContains(t, err, "malformed vector input")
 
 			// vecf32 -> vecf8/vecf4
 			out, err = runVecBlockCast(t, proc, vecBlockF32Vector(t, proc, 4, [][]float32{{1, -3, 0, 6}}), to)
@@ -130,12 +131,13 @@ func TestCastBlobToVecBlock(t *testing.T) {
 	values := []float32{1, -3, 0.1, 6}
 	for _, oid := range []types.T{types.T_array_float8, types.T_array_float4} {
 		to := types.New(oid, 4, 0)
-		out, err := runVecBlockCast(t, proc, blob(types.ArrayToBytes(values), nil), to)
+		out, err := runVecBlockCast(t, proc, blob(types.ArrayToBytes(values)), to)
 		require.NoError(t, err, oid.String())
 		want, err := runVecBlockCast(t, proc, vecBlockF32Vector(t, proc, 4, [][]float32{values}), to)
 		require.NoError(t, err)
 		require.Equal(t, want.GetBytesAt(0), out.GetBytesAt(0), oid.String())
-		require.True(t, out.IsNull(1), "an empty BLOB is NULL")
+		_, err = runVecBlockCast(t, proc, blob(nil), to)
+		require.Error(t, err, "%s: an empty BLOB is not a vector", oid.String())
 
 		for name, src := range map[string]*vector.Vector{
 			"misaligned": blob([]byte{0, 0, 128}),

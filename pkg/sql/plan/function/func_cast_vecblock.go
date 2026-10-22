@@ -62,7 +62,7 @@ func castToBlockScaled(proc *process.Process, from *vector.Vector, toType types.
 	var cell []byte
 	for i := uint64(0); i < uint64(length); i++ {
 		v, null := src.GetStrValue(i)
-		if null || (len(v) == 0 && fromOid.IsMySQLString()) || castRowSkipped(selectList, i) {
+		if null || castRowSkipped(selectList, i) {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
