@@ -151,7 +151,7 @@ func (m *MockCompilerContext) ResolveVariable(varName string, isSystemVar, isGlo
 		"cagra_threads_build", "cagra_threads_search", "ivfpq_threads_build", "ivfpq_threads_search",
 		"hnsw_threads_build", "hnsw_threads_search", "ivf_threads_build", "ivf_threads_search":
 		return int64(1), nil
-	case "sort_spill_mem", "cagra_batch_window", "ivfpq_batch_window", "gpu_multi_simulation":
+	case "sort_spill_mem", "cagra_batch_window", "ivfpq_batch_window", "gpu_multi_simulation", "mo_pk_check_by_cn":
 		return int64(0), nil
 	case windowPartitionAlgorithmVariable:
 		return "SORT", nil

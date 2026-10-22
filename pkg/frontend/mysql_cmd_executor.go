@@ -4811,10 +4811,19 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 }
 
 func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
+	// The publication binding probe names the exact catalog object the
+	// validation snapshot certified through the executed statement this
+	// parse produces, so its identifiers keep source case and binding can
+	// not silently route to the name's lowercase twin when both spellings
+	// exist. Every other statement parses at the session's case mode.
+	lowerCaseTableNames := parserLowerCaseTableNames(execCtx.ses)
+	if defines.IsPublicationViewBinding(execCtx.reqCtx) {
+		lowerCaseTableNames = 0
+	}
 	return p.ParseWithSQLMode(
 		execCtx.reqCtx,
 		execCtx.input.getSql(),
-		parserLowerCaseTableNames(execCtx.ses),
+		lowerCaseTableNames,
 		sessionSQLModeForParser(execCtx.ses),
 	)
 }

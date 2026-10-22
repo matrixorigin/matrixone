@@ -146,13 +146,6 @@ func (op *PartitionDelete) Call(
 	return input, nil
 }
 
-func (op *PartitionDelete) ExecProjection(
-	proc *process.Process,
-	input *batch.Batch,
-) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (op *PartitionDelete) Free(
 	proc *process.Process,
 	pipelineFailed bool,

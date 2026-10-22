@@ -245,7 +245,19 @@ func TestTableDumpDefaultTimeZones(t *testing.T) {
 							require.True(t, tamperTableDumpDefaultValue(expr))
 						}
 						zone := proc.GetSessionInfo().TimeZone
-						_, err := AnalyzeTableDumpBindings(compiler, def, forged)
+						var err error
+						if mutation == "type" && tc.name == "dst_expression" {
+							stmt, _, visit, parseErr := parseTableDumpExpression(t.Context(), def.Cols[0].Default.OriginString, tableDumpParserModes()[0])
+							require.NoError(t, parseErr)
+							defer stmt.Free()
+							require.False(t, visit.hasDivision)
+							// Current and pre-temporal-nullability binds exactly exhaust
+							// the cheap phase. A timezone bind would exceed this limit.
+							limit := 2 * visit.nodes
+							_, err = analyzeTableDumpBindingsWithCandidateVisitLimit(compiler, def, forged, limit)
+						} else {
+							_, err = AnalyzeTableDumpBindings(compiler, def, forged)
+						}
 						require.ErrorContains(t, err, "cannot verify bound default")
 						require.Same(t, zone, proc.GetSessionInfo().TimeZone)
 						require.True(t, proto.Equal(before, def))

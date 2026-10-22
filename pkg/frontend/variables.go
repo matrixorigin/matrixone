@@ -1692,6 +1692,16 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("mo_rollback_txn_on_error"),
 		Default:           int8(0),
 	},
+	// CN primary-key validation for ordinary LOAD only. INSERT keeps its
+	// existing checks; TN validation is controlled independently below.
+	"mo_pk_check_by_cn": {
+		Name:              "mo_pk_check_by_cn",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_pk_check_by_cn"),
+		Default:           int8(0),
+	},
 	//whether TN does primary key uniqueness check against transaction's workspace or not.
 	"mo_pk_check_by_dn": {
 		Name:              "mo_pk_check_by_dn",

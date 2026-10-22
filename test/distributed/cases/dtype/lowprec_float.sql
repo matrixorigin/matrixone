@@ -414,4 +414,14 @@ ALTER TABLE addnn ADD COLUMN b2 bf16 NOT NULL, ADD COLUMN q2 float4 NOT NULL;
 SELECT * FROM addnn ORDER BY id;
 DROP TABLE addnn;
 
+-- JSON compared with a number keeps its category, as for float: a JSON string is not the number
+CREATE TABLE jn (id INT, d JSON, f FLOAT, b bf16, h float16, e float8, q float4);
+INSERT INTO jn VALUES (1, '1.5', 1.5, 1.5, 1.5, 1.5, 1.5), (2, '"1.5"', 1.5, 1.5, 1.5, 1.5, 1.5), (3, '0.3', 0.3, 0.3, 0.3, 0.3, 0.5), (4, '-2', -2, -2, -2, -2, -2);
+SELECT id, d = f, d = b, d = h, d = e, d = q, b = d, d <=> q, d < b, d >= e FROM jn ORDER BY id;
+SELECT id FROM jn WHERE d = CAST(1.5 AS bf16) ORDER BY id;
+SELECT id FROM jn WHERE d = CAST(1.5 AS FLOAT) ORDER BY id;
+-- a JSON number outside the type's finite range is an error, as CAST rejects it
+SELECT id FROM jn WHERE CAST('7' AS JSON) = q;
+DROP TABLE jn;
+
 DROP DATABASE lowprec_float;

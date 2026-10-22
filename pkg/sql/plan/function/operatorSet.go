@@ -204,6 +204,53 @@ func binaryStringCommonType(source []types.Type) (types.Type, bool) {
 	return types.New(types.T_varbinary, width, 0), true
 }
 
+// MixedTextBinaryCommonType returns a binary common type only when a set
+// column contains both character and binary strings. Other combinations keep
+// their existing common-type rules.
+func MixedTextBinaryCommonType(source []types.Type) (types.Type, bool) {
+	hasText, hasBinary := false, false
+	needsBlob, unknownWidth := false, false
+	var byteWidth int64
+	for _, typ := range source {
+		switch typ.Oid {
+		case types.T_char, types.T_varchar:
+			hasText = true
+			// Character widths count code points; TEXT widths count bytes.
+			if typ.Width > 0 {
+				byteWidth = max(byteWidth, int64(typ.Width)*utf8.UTFMax)
+			}
+		case types.T_text:
+			hasText, needsBlob = true, true
+			byteWidth = max(byteWidth, int64(typ.Width))
+		case types.T_binary, types.T_varbinary, types.T_blob:
+			hasBinary = true
+			needsBlob = needsBlob || typ.Oid == types.T_blob
+			byteWidth = max(byteWidth, int64(typ.Width))
+		case types.T_any:
+			// An untyped NULL contributes no width.
+		default:
+			return types.Type{}, false
+		}
+		unknownWidth = unknownWidth || typ.Oid != types.T_any && typ.Width <= 0
+	}
+	if !hasText || !hasBinary {
+		return types.Type{}, false
+	}
+	if unknownWidth || byteWidth > types.MaxVarBinaryLen || needsBlob {
+		// A zero width is unknown, not empty. Keep the materialized BLOB/TEXT
+		// capacity large enough for the largest possible input byte value.
+		capacity := int32(types.MaxStringSize)
+		switch {
+		case unknownWidth || byteWidth > types.MaxMediumTextLen:
+			capacity = types.MaxLongTextLen
+		case byteWidth > types.MaxStringSize:
+			capacity = types.MaxMediumTextLen
+		}
+		return types.New(types.T_blob, capacity, 0), true
+	}
+	return binaryStringCommonType(source)
+}
+
 func needDecimalMetadataCast(source []types.Type, target types.Type) bool {
 	if !target.Oid.IsDecimal() {
 		return false

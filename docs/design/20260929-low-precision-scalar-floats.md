@@ -75,6 +75,12 @@ GPU kernels agree on the encoding.
   compares wide although float32 rounds those literals to the maximum, and the `bf16`
   printed maximum `±3.3895314e+38` narrows and matches the row it was inserted as. For `<`/`>` this follows the column's grid: a literal that
   rounds down compares as its rounded value.
+- **Comparison with JSON.** A JSON value compared with one of these types takes the
+  mixed JSON/numeric comparison `float` takes: a JSON number is rounded to the type, as
+  `CAST` rounds it, and compared with the stored value; a JSON number outside the type's
+  finite range is an error, as `CAST` rejects it; a JSON string, object or array keeps
+  its category and never equals a number (`'"1.5"'` is not `1.5`). Tests:
+  `function/json_numeric_comparison_test.go`, BVT `dtype/lowprec_float.sql`.
 - **One zero.** A zero of either sign is stored as `+0` (code 0 in every format) by
   casts, writes, `LOAD` and user variables, so equal values have equal bits for hashing
   (`GROUP BY`, `DISTINCT`, joins) and equality. Peer groups (window `PARTITION BY`,

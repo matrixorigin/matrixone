@@ -755,4 +755,21 @@ SELECT * FROM addnn ORDER BY id;
 1  ¦  10  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  𝄀
 2  ¦  20  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0  ¦  0.0
 DROP TABLE addnn;
+CREATE TABLE jn (id INT, d JSON, f FLOAT, b bf16, h float16, e float8, q float4);
+INSERT INTO jn VALUES (1, '1.5', 1.5, 1.5, 1.5, 1.5, 1.5), (2, '"1.5"', 1.5, 1.5, 1.5, 1.5, 1.5), (3, '0.3', 0.3, 0.3, 0.3, 0.3, 0.5), (4, '-2', -2, -2, -2, -2, -2);
+SELECT id, d = f, d = b, d = h, d = e, d = q, b = d, d <=> q, d < b, d >= e FROM jn ORDER BY id;
+➤ id[4,32,0]  ¦  d = f[-7,1,0]  ¦  d = b[-7,1,0]  ¦  d = h[-7,1,0]  ¦  d = e[-7,1,0]  ¦  d = q[-7,1,0]  ¦  b = d[-7,1,0]  ¦  d <=> q[-7,1,0]  ¦  d < b[-7,1,0]  ¦  d >= e[-7,1,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  0  ¦  1  𝄀
+2  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  1  𝄀
+3  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  0  ¦  1  𝄀
+4  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  0  ¦  1
+SELECT id FROM jn WHERE d = CAST(1.5 AS bf16) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM jn WHERE d = CAST(1.5 AS FLOAT) ORDER BY id;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM jn WHERE CAST('7' AS JSON) = q;
+invalid argument operator cast, bad value [JSON -> FLOAT4]
+DROP TABLE jn;
 DROP DATABASE lowprec_float;
