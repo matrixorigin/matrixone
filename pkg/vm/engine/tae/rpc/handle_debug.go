@@ -19,17 +19,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/clusterservice"
-	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
-	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
-	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/google/shlex"
-	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -38,6 +34,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	querypb "github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
@@ -46,6 +44,7 @@ import (
 	catalog2 "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/gc/v3"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
 	"go.uber.org/zap"
 )
@@ -159,14 +158,7 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		memo.LeaveProcessing()
 	}()
 
-	//specialSize := memo.GatherSpecialTableSize()
-	specialSize := uint64(0)
 	usages := memo.GatherAllAccSize()
-	for accId := range usages {
-		if accId != uint64(catalog.System_Account) {
-			usages[accId][0] += specialSize
-		}
-	}
 
 	newIds := make([]uint64, 0)
 	for _, id := range req.AccIds {
@@ -191,30 +183,18 @@ func (h *Handle) HandleStorageUsage(ctx context.Context, meta txn.TxnMeta,
 		resp.SnapshotSizes = append(resp.SnapshotSizes, size[1])
 	}
 
-	//var notReadyNewAcc []uint64
-
 	// new accounts
 	traverseCatalogForNewAccounts(h.db.Catalog, memo, newIds)
 	for idx := range newIds {
 		if size, snapshotSize, exist := memo.GatherNewAccountSize(uint64(newIds[idx])); exist {
-			size += specialSize
 			resp.AccIds = append(resp.AccIds, int64(newIds[idx]))
 			resp.Sizes = append(resp.Sizes, size)
 			resp.SnapshotSizes = append(resp.SnapshotSizes, snapshotSize)
 			memo.AddReqTrace(uint64(newIds[idx]), size, start, "new, ready")
 		}
-		//else {
-		//	notReadyNewAcc = append(notReadyNewAcc, newIds[idx])
-		//}
 	}
 
 	memo.ClearNewAccCache()
-
-	//for idx := range notReadyNewAcc {
-	//	resp.AccIds = append(resp.AccIds, int64(notReadyNewAcc[idx]))
-	//	resp.Sizes = append(resp.Sizes, specialSize)
-	//	memo.AddReqTrace(uint64(newIds[idx]), specialSize, start, "new, not ready, only special")
-	//}
 
 	abstract := memo.GatherObjectAbstractForAllAccount()
 	for _, acc := range resp.AccIds {
