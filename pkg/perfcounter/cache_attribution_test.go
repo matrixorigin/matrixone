@@ -46,3 +46,28 @@ func TestCacheAttributionReportingAndReset(t *testing.T) {
 	counters.Reset()
 	visit(reflect.ValueOf(&counters).Elem(), func(c *atomic.Int64) { require.Zero(t, c.Load()) })
 }
+
+func TestCacheAttributionConcurrentReporting(t *testing.T) {
+	var counters CounterSet
+	stop, ready, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(done)
+		counters.FileService.ColumnConstruction.LZ4.Calls.Add(1)
+		close(ready)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				counters.FileService.ColumnConstruction.LZ4.Calls.Add(1)
+			}
+		}
+	}()
+	t.Cleanup(func() { close(stop); <-done })
+	<-ready
+	for i := 0; i < 20; i++ {
+		output := httptest.NewRecorder()
+		counters.ServeHTTP(output, httptest.NewRequest("GET", "/", nil))
+		require.Contains(t, output.Body.String(), "LZ4")
+	}
+}

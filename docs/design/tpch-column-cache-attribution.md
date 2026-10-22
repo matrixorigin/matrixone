@@ -10,7 +10,7 @@ This document records the corresponding PR from the user-approved three-PR plan 
 
 Counters explain existing behavior without changing admission, eviction, decoding, buffer ownership, or page-discard policy.
 
-Reader threshold blocks; FileService policy skips, eligible entries, admitted entries and pressure rejections; column construction calls, successful decoded bytes and errors, split by fixed codec classes. Existing CounterSet reporting/reset owns the counters. Updates are aggregated per block, IOVector or column construction, never per row. No labels, histories, timers or workers.
+Reader threshold blocks; FileService policy skips, eligible entries, admitted entries and pressure rejections; column construction calls, successful decoded bytes and errors, split by fixed codec classes. Existing CounterSet reporting/reset owns the counters. Report live leaves using atomic Load, including sparse zero filtering; never copy live counter containers through reflection. Updates are aggregated per block, IOVector or column construction, never per row. No labels, histories, timers or workers.
 
 ## Alternatives and boundaries
 
