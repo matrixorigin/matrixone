@@ -2741,6 +2741,20 @@ func physicalTemporaryTableName(proc *process.Process, dbName, alias string) str
 	return defines.GenTempTableName(proc.Base.SessionInfo.SessionId, dbName, alias)
 }
 
+// temporaryIndexTableName keeps independently-created temporary indexes in
+// the same generated namespace as their root table. Session temporary DDL
+// roots include a generation component; reusing the root prefix lets missing
+// relation retirement discover those index aliases without a table definition.
+func temporaryIndexTableName(proc *process.Process, dbName, rootAlias, rootPhysical, alias string) string {
+	if rootPhysical != "" && strings.HasSuffix(rootPhysical, rootAlias) {
+		prefix := strings.TrimSuffix(rootPhysical, rootAlias)
+		if strings.HasPrefix(prefix, defines.TempTableNamePrefix) {
+			return prefix + alias
+		}
+	}
+	return physicalTemporaryTableName(proc, dbName, alias)
+}
+
 func (c *Compile) maybeInsertIcebergTableMapping(dbSource engine.Database, rel engine.Relation, qry *plan.CreateTable) error {
 	createSQL := icebergCreateSQLFromPlanTableDef(qry.GetTableDef())
 	env, found, err := sqliceberg.ParseCreateSQLEnvelope(c.proc.Ctx, createSQL)
@@ -3246,7 +3260,10 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		if session == nil {
 			return moerr.NewInternalError(c.proc.Ctx, "session not found for temporary table")
 		}
-		if realName, ok := session.GetTempTable(qry.Database, qry.Table); ok {
+		rootAlias := qry.Table
+		rootPhysical := ""
+		if realName, ok := session.GetTempTable(qry.Database, rootAlias); ok {
+			rootPhysical = realName
 			qry.Table = realName
 			qry.TableDef.Name = realName
 		}
@@ -3254,7 +3271,7 @@ func (s *Scope) CreateIndex(c *Compile) error {
 		for _, def := range qry.Index.IndexTables {
 			orig := def.Name
 			if !defines.IsTempTableName(orig) {
-				def.Name = defines.GenTempTableName(c.proc.Base.SessionInfo.SessionId, qry.Database, orig)
+				def.Name = temporaryIndexTableName(c.proc, qry.Database, rootAlias, rootPhysical, orig)
 			}
 			def.TableType = catalog.SystemTemporaryTable
 			def.IsTemporary = true

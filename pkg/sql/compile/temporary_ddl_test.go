@@ -588,4 +588,41 @@ func TestTemporaryDDLGenerationPreservesIndexIdentity(t *testing.T) {
 	first := s.TemporaryTableName("db", "t")
 	s.generation = uuid.NewString()
 	require.NotEqual(t, first, s.TemporaryTableName("db", "t"))
+	root := s.TemporaryTableName("db", "root")
+	proc := testutil.NewProcess(t)
+	index := temporaryIndexTableName(proc, "db", "root", root, "idx")
+	require.Equal(t, strings.TrimSuffix(root, "root")+"idx", index)
+}
+
+func TestCreateIndexTemporaryNameUsesRootGeneration(t *testing.T) {
+	base := &trackingTempTableSession{tables: make(map[string]string)}
+	stage := &temporaryDDLSession{Session: base, sessionID: uuid.New(), generation: "root-generation", aliases: make(map[string]string)}
+	root := stage.TemporaryTableName("db", "root")
+	stage.AddTempTable("db", "root", root)
+
+	q := &plan.CreateIndex{
+		Database: "db",
+		Table:    "root",
+		TableDef: &plan.TableDef{Name: "root", IsTemporary: true},
+		Index: &plan.CreateTable{
+			TableDef:    &plan.TableDef{},
+			IndexTables: []*plan.TableDef{{Name: "idx"}},
+		},
+	}
+	pn := &plan.Plan{Plan: &plan.Plan_Ddl{Ddl: &plan.DataDefinition{
+		Definition: &plan.DataDefinition_CreateIndex{CreateIndex: q},
+	}}}
+	proc := testutil.NewProcess(t)
+	proc.Session = stage
+	eng := newStubEngine()
+	c := NewCompile("cn", "db", "", "", "", eng, proc, nil, false, nil, time.Now())
+	defer c.Release()
+	c.pn = pn
+	stop := gostub.Stub(&lockMoDatabase, func(*Compile, string, lock.LockMode) error {
+		return assert.AnError
+	})
+	defer stop.Reset()
+
+	require.ErrorIs(t, (&Scope{Plan: pn}).CreateIndex(c), assert.AnError)
+	require.Equal(t, strings.TrimSuffix(root, "root")+"idx", q.Index.IndexTables[0].Name)
 }
