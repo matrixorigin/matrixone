@@ -11,9 +11,15 @@ local-only status below.
 Base: `68e642fdc533e96ed8f83ac44659119ad8be97af`.
 Kernel candidate: `cf9f5ff0f6cfbc11066e24c5bf209234f154cee9` (CF9).
 Publication branch: `codex/m0-restricted-experimental-draft`.
-The publication delta after CF9 contains documentation and a SQL BVT fixture;
-it does not include the separate block-materialization diagnostic or a
-fully-deleted-block skip. No kernel behavior is changed by that publication delta.
+The original publication commit `971e405e53` adds documentation and a SQL BVT
+fixture only. After Draft creation, the repository bot automatically merged
+`main` at `8f9c50468ea06cd52554f2a5ef94cfb137d930f6` as `7e22a398f254`.
+That integration tree exactly matches a local merge-tree computation; no manual
+conflict resolution or force-push was used. The current PR head therefore also
+contains upstream kernel/native changes. CF9's qualification is evidence for
+the frozen candidate, not a PASS for this integrated head. Current-head CI and
+experimental-tag validation remain pending. Neither the separate
+block-materialization diagnostic nor a fully-deleted-block skip is included.
 
 ## Scope
 
@@ -212,7 +218,9 @@ gate; this Draft does not silently enable the experimental build in production C
 ## Open Gates
 
 - New BVT exact-head execution and explicit experimental-tag CI/review remain
-  pending. The publication head adds no kernel changes beyond CF9.
+  pending, including validation of the bot-integrated main/kernel/native tree.
+  Our publication commits change documentation and fixtures only; historical
+  CF9 binaries and receipts are not relabelled as integrated-head products.
 - No new complete matched B/CF9 first/warm pair, repeated/stability matrix or
   all-branch SF100 full-content acceptance. Do not wait for another optimization
   or a rerun merely to publish this restricted Draft.
