@@ -32,9 +32,23 @@ endif
 ifneq ($(MO_GPU_PREFIX),$(realpath $(PIXI_PROJECT_ROOT)/.pixi/envs/$(PIXI_ENVIRONMENT_NAME)))
 $(error CONDA_PREFIX does not match the activated Pixi environment)
 endif
-MO_GPU_CUDA_ROOT := $(MO_GPU_PREFIX)/targets/x86_64-linux
-MO_GPU_CC := $(MO_GPU_PREFIX)/bin/x86_64-conda-linux-gnu-cc
-MO_GPU_CXX := $(MO_GPU_PREFIX)/bin/x86_64-conda-linux-gnu-c++
+MO_GPU_HOST_OS := $(shell uname -s)
+MO_GPU_HOST_ARCH := $(shell uname -m)
+ifneq ($(MO_GPU_HOST_OS),Linux)
+$(error GPU builds require Linux amd64 or arm64)
+endif
+ifeq ($(MO_GPU_HOST_ARCH),x86_64)
+MO_GPU_TARGET_ARCH := x86_64
+MO_GPU_CUDA_TARGET := x86_64
+else ifneq ($(filter aarch64 arm64,$(MO_GPU_HOST_ARCH)),)
+MO_GPU_TARGET_ARCH := aarch64
+MO_GPU_CUDA_TARGET := sbsa
+else
+$(error GPU builds require Linux amd64 or arm64)
+endif
+MO_GPU_CUDA_ROOT := $(MO_GPU_PREFIX)/targets/$(MO_GPU_CUDA_TARGET)-linux
+MO_GPU_CC := $(MO_GPU_PREFIX)/bin/$(MO_GPU_TARGET_ARCH)-conda-linux-gnu-cc
+MO_GPU_CXX := $(MO_GPU_PREFIX)/bin/$(MO_GPU_TARGET_ARCH)-conda-linux-gnu-c++
 MO_GPU_NVCC := $(MO_GPU_PREFIX)/bin/nvcc
 MO_GPU_CUDA_INCLUDE_DIRS := $(MO_GPU_CUDA_ROOT)/include
 MO_GPU_CUDA_LIBRARY_DIRS := $(MO_GPU_CUDA_ROOT)/lib

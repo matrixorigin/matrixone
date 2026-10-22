@@ -13,7 +13,8 @@ pixi run --frozen make -C ../.. MO_CL_CUDA=1 -j8
 ```
 
 For a combined MO/Sirius build, use Sirius's frozen `mo` Pixi environment for
-both components. Do not build MO under its standalone profile and Sirius under
+both components on Linux amd64 or arm64. The standalone profile above is amd64.
+Do not build MO under its standalone profile and Sirius under
 another prefix. The embedding bridge PR will verify that the native MO
 artifacts and Sirius SDK use the same activated prefix before packaging.
 
