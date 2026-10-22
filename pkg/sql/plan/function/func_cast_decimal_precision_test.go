@@ -431,6 +431,10 @@ func TestDecimalWideningConstBatch(t *testing.T) {
 func TestIntToDecimalWidthContract(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	defer proc.Free()
+	wide128, err := types.ParseDecimal128("9", 38, 37)
+	require.NoError(t, err)
+	wide256, err := types.ParseDecimal256("9", 76, 75)
+	require.NoError(t, err)
 	for _, tc := range []struct {
 		name           string
 		source, target types.Type
@@ -498,6 +502,38 @@ func TestIntToDecimalWidthContract(t *testing.T) {
 			target:  types.New(types.T_decimal256, 10, 2),
 			values:  []int64{12345678901},
 			wantErr: "Decimal256(10,2)"},
+		{name: "wide_decimal128_signed_accept",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal128, 38, 37),
+			values: []int64{9, -9, 0, 0}, nulls: []bool{false, false, false, true},
+			want: []types.Decimal128{wide128, wide128.Minus(), {}, {}}},
+		{name: "wide_decimal128_signed_positive_reject",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal128, 38, 37),
+			values: []int64{9, 10}, wantErr: "Decimal128(38,37)"},
+		{name: "wide_decimal128_signed_negative_reject",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal128, 38, 37),
+			values: []int64{-9, -10}, wantErr: "Decimal128(38,37)"},
+		{name: "wide_decimal128_unsigned_accept",
+			source: types.T_uint64.ToType(), target: types.New(types.T_decimal128, 38, 37),
+			values: []uint64{9, 0}, nulls: []bool{false, true}, want: []types.Decimal128{wide128, {}}},
+		{name: "wide_decimal128_unsigned_reject",
+			source: types.T_uint64.ToType(), target: types.New(types.T_decimal128, 38, 37),
+			values: []uint64{9, 10}, wantErr: "Decimal128(38,37)"},
+		{name: "wide_decimal256_signed_accept",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal256, 76, 75),
+			values: []int64{9, -9, 0, 0}, nulls: []bool{false, false, false, true},
+			want: []types.Decimal256{wide256, wide256.Minus(), {}, {}}},
+		{name: "wide_decimal256_signed_positive_reject",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal256, 76, 75),
+			values: []int64{9, 10}, wantErr: "Decimal256(76,75)"},
+		{name: "wide_decimal256_signed_negative_reject",
+			source: types.T_int64.ToType(), target: types.New(types.T_decimal256, 76, 75),
+			values: []int64{-9, -10}, wantErr: "Decimal256(76,75)"},
+		{name: "wide_decimal256_unsigned_accept",
+			source: types.T_uint64.ToType(), target: types.New(types.T_decimal256, 76, 75),
+			values: []uint64{9, 0}, nulls: []bool{false, true}, want: []types.Decimal256{wide256, {}}},
+		{name: "wide_decimal256_unsigned_reject",
+			source: types.T_uint64.ToType(), target: types.New(types.T_decimal256, 76, 75),
+			values: []uint64{9, 10}, wantErr: "Decimal256(76,75)"},
 		{name: "issue30367_int8_to_decimal64_reject",
 			source:  types.New(types.T_int8, 0, 0),
 			target:  types.New(types.T_decimal64, 4, 2),

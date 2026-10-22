@@ -4052,11 +4052,11 @@ func checkIntDecimal64Width[T constraints.Integer](v T, scaled types.Decimal64, 
 	return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal64(%d,%d).", v, width, scale)
 }
 
-func checkIntDecimal128Width[T constraints.Integer](v T, scaled types.Decimal128, width, scale int32) error {
-	// See checkIntDecimal64Width: synthesized zero-width casts carry no
-	// declared precision to enforce.
+// Compute wide precision bounds once per vector, rather than rebuilding the
+// same power of ten with wide multiplications for every non-NULL row.
+func intDecimal128WidthLimit(width int32) types.Decimal128 {
 	if width <= 0 {
-		return nil
+		return types.Decimal128{}
 	}
 	if width > 38 {
 		width = 38
@@ -4067,6 +4067,15 @@ func checkIntDecimal128Width[T constraints.Integer](v T, scaled types.Decimal128
 	} else {
 		z, _ = types.Decimal128{B0_63: types.Pow10[19]}.Mul128(types.Decimal128{B0_63: types.Pow10[width-19]})
 	}
+	return z
+}
+
+func checkIntDecimal128Width[T constraints.Integer](v T, scaled, z types.Decimal128, width, scale int32) error {
+	// See checkIntDecimal64Width: synthesized zero-width casts carry no
+	// declared precision to enforce.
+	if width <= 0 {
+		return nil
+	}
 	if scaled.Sign() {
 		if z.Minus().Less(scaled) {
 			return nil
@@ -4074,14 +4083,12 @@ func checkIntDecimal128Width[T constraints.Integer](v T, scaled types.Decimal128
 	} else if scaled.Less(z) {
 		return nil
 	}
-	return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal128(%d,%d).", v, width, scale)
+	return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal128(%d,%d).", v, min(width, 38), scale)
 }
 
-func checkIntDecimal256Width[T constraints.Integer](v T, scaled types.Decimal256, width, scale int32) error {
-	// See checkIntDecimal64Width: synthesized zero-width casts carry no
-	// declared precision to enforce.
+func intDecimal256WidthLimit(width int32) types.Decimal256 {
 	if width <= 0 {
-		return nil
+		return types.Decimal256{}
 	}
 	if width > 76 {
 		width = 76
@@ -4097,6 +4104,15 @@ func checkIntDecimal256Width[T constraints.Integer](v T, scaled types.Decimal256
 	if left > 0 {
 		z, _ = z.Mul256(types.Decimal256{B0_63: types.Pow10[left]})
 	}
+	return z
+}
+
+func checkIntDecimal256Width[T constraints.Integer](v T, scaled, z types.Decimal256, width, scale int32) error {
+	// See checkIntDecimal64Width: synthesized zero-width casts carry no
+	// declared precision to enforce.
+	if width <= 0 {
+		return nil
+	}
 	if scaled.Sign() {
 		if z.Minus().Less(scaled) {
 			return nil
@@ -4104,7 +4120,7 @@ func checkIntDecimal256Width[T constraints.Integer](v T, scaled types.Decimal256
 	} else if scaled.Less(z) {
 		return nil
 	}
-	return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal256(%d,%d).", v, width, scale)
+	return moerr.NewInvalidInputNoCtxf("%v beyond the range, can't be converted to Decimal256(%d,%d).", v, min(width, 76), scale)
 }
 
 func signedToDecimal64[T1 constraints.Signed](
@@ -4143,6 +4159,7 @@ func signedToDecimal128[T1 constraints.Signed](
 	l := uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
+	limit := intDecimal128WidthLimit(totype.Width)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4158,7 +4175,7 @@ func signedToDecimal128[T1 constraints.Signed](
 			if err != nil {
 				return err
 			}
-			if err := checkIntDecimal128Width(v, result, totype.Width, totype.Scale); err != nil {
+			if err := checkIntDecimal128Width(v, result, limit, totype.Width, totype.Scale); err != nil {
 				return err
 			}
 			if err := to.Append(result, false); err != nil {
@@ -4211,6 +4228,7 @@ func unsignedToDecimal128[T1 constraints.Unsigned](
 	l := uint64(length)
 	var dft types.Decimal128
 	totype := to.GetType()
+	limit := intDecimal128WidthLimit(totype.Width)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4223,7 +4241,7 @@ func unsignedToDecimal128[T1 constraints.Unsigned](
 			if err != nil {
 				return err
 			}
-			if err := checkIntDecimal128Width(v, result, totype.Width, totype.Scale); err != nil {
+			if err := checkIntDecimal128Width(v, result, limit, totype.Width, totype.Scale); err != nil {
 				return err
 			}
 			if err := to.Append(result, false); err != nil {
@@ -4241,6 +4259,7 @@ func signedToDecimal256[T1 constraints.Signed](
 	l := uint64(length)
 	var dft types.Decimal256
 	totype := to.GetType()
+	limit := intDecimal256WidthLimit(totype.Width)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4256,7 +4275,7 @@ func signedToDecimal256[T1 constraints.Signed](
 			if err != nil {
 				return err
 			}
-			if err := checkIntDecimal256Width(v, result, totype.Width, totype.Scale); err != nil {
+			if err := checkIntDecimal256Width(v, result, limit, totype.Width, totype.Scale); err != nil {
 				return err
 			}
 			if err := to.Append(result, false); err != nil {
@@ -4274,6 +4293,7 @@ func unsignedToDecimal256[T1 constraints.Unsigned](
 	l := uint64(length)
 	var dft types.Decimal256
 	totype := to.GetType()
+	limit := intDecimal256WidthLimit(totype.Width)
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -4285,7 +4305,7 @@ func unsignedToDecimal256[T1 constraints.Unsigned](
 			if err != nil {
 				return err
 			}
-			if err := checkIntDecimal256Width(v, result, totype.Width, totype.Scale); err != nil {
+			if err := checkIntDecimal256Width(v, result, limit, totype.Width, totype.Scale); err != nil {
 				return err
 			}
 			if err := to.Append(result, false); err != nil {

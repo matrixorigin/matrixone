@@ -29,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
@@ -357,6 +358,71 @@ func TestPersistedDecimalNormalizationOwnsOnlyChangedWrappers(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, before, after)
 		})
+	}
+}
+
+func unchangedDecimalCatalog(withNullDefaults bool) *pb.TableDef {
+	stored := &pb.TableDef{Cols: make([]*pb.ColDef, 100)}
+	for i := range stored.Cols {
+		col := &pb.ColDef{Name: fmt.Sprintf("c%d", i), Typ: pb.Type{Id: int32(types.T_int64)}}
+		if withNullDefaults {
+			col.Default = &pb.Default{Expr: &pb.Expr{Typ: col.Typ, Expr: &pb.Expr_Lit{Lit: &pb.Literal{Isnull: true}}}}
+		}
+		stored.Cols[i] = col
+	}
+	return stored
+}
+
+func TestPersistedDecimalNormalizationUnchangedAllocations(t *testing.T) {
+	for _, withDefaults := range []bool{false, true} {
+		t.Run(fmt.Sprintf("null_defaults_%v", withDefaults), func(t *testing.T) {
+			stored := unchangedDecimalCatalog(withDefaults)
+			proc := newPlanTestProcess(t)
+			var resolved *pb.TableDef
+			var err error
+			baseline := testing.AllocsPerRun(10, func() {
+				resolved = CloneTableDefForPlan(stored, true)
+				err = MigrateLegacyHexTableDef(proc, resolved)
+			})
+			require.NoError(t, err)
+			actual := testing.AllocsPerRun(10, func() {
+				resolved = CloneTableDefForPlan(stored, true)
+				err = MigrateLegacyCatalogTableDef(t.Context(), proc, resolved)
+			})
+			require.NoError(t, err)
+			require.Equal(t, baseline, actual, "unchanged columns must not allocate additional copies")
+			for i := range stored.Cols {
+				require.Same(t, stored.Cols[i], resolved.Cols[i])
+			}
+		})
+	}
+}
+
+func BenchmarkCatalogDecimalNormalization(b *testing.B) {
+	for _, withDefaults := range []bool{false, true} {
+		for _, migrate := range []bool{false, true} {
+			b.Run(fmt.Sprintf("null_defaults_%v/catalog_%v", withDefaults, migrate), func(b *testing.B) {
+				stored := unchangedDecimalCatalog(withDefaults)
+				proc := testutil.NewProcess(b)
+				b.Cleanup(proc.Free)
+				ctx := b.Context()
+				var resolved *pb.TableDef
+				b.ReportAllocs()
+				for b.Loop() {
+					resolved = CloneTableDefForPlan(stored, true)
+					var err error
+					if migrate {
+						err = MigrateLegacyCatalogTableDef(ctx, proc, resolved)
+					} else {
+						err = MigrateLegacyHexTableDef(proc, resolved)
+					}
+					if err != nil {
+						b.Fatal(err)
+					}
+				}
+				require.NotNil(b, resolved)
+			})
+		}
 	}
 }
 

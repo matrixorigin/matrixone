@@ -62,51 +62,44 @@ func MigrateLegacyCatalogTableDef(ctx context.Context, proc *process.Process, ta
 		if col == nil {
 			continue
 		}
+		defaultExpr, defaultChanged, err := normalizeCatalogDecimalExpr(ctx, col.GetDefault().GetExpr())
+		if err != nil {
+			return err
+		}
+		onUpdateExpr, onUpdateChanged, err := normalizeCatalogDecimalExpr(ctx, col.GetOnUpdate().GetExpr())
+		if err != nil {
+			return err
+		}
+		generatedExpr, generatedChanged, err := normalizeCatalogDecimalExpr(ctx, col.GetGeneratedCol().GetExpr())
+		if err != nil {
+			return err
+		}
+		if !defaultChanged && !onUpdateChanged && !generatedChanged {
+			continue
+		}
+		// Taking this copy's address makes it escape. Allocate it only after
+		// finding a rewrite, so ordinary schemas pay no per-column allocation.
 		owned := *col
-		changed := false
-		if col.Default != nil {
-			expr, rewritten, err := normalizeCatalogDecimalExpr(ctx, col.Default.Expr)
-			if err != nil {
-				return err
-			}
-			if rewritten {
-				def := *col.Default
-				def.Expr = expr
-				owned.Default = &def
-				changed = true
-			}
+		if defaultChanged {
+			def := *col.Default
+			def.Expr = defaultExpr
+			owned.Default = &def
 		}
-		if col.OnUpdate != nil {
-			expr, rewritten, err := normalizeCatalogDecimalExpr(ctx, col.OnUpdate.Expr)
-			if err != nil {
-				return err
-			}
-			if rewritten {
-				update := *col.OnUpdate
-				update.Expr = expr
-				owned.OnUpdate = &update
-				changed = true
-			}
+		if onUpdateChanged {
+			update := *col.OnUpdate
+			update.Expr = onUpdateExpr
+			owned.OnUpdate = &update
 		}
-		if col.GeneratedCol != nil {
-			expr, rewritten, err := normalizeCatalogDecimalExpr(ctx, col.GeneratedCol.Expr)
-			if err != nil {
-				return err
-			}
-			if rewritten {
-				generated := *col.GeneratedCol
-				generated.Expr = expr
-				owned.GeneratedCol = &generated
-				changed = true
-			}
+		if generatedChanged {
+			generated := *col.GeneratedCol
+			generated.Expr = generatedExpr
+			owned.GeneratedCol = &generated
 		}
-		if changed {
-			if !colsOwned {
-				tableDef.Cols = slices.Clone(tableDef.Cols)
-				colsOwned = true
-			}
-			tableDef.Cols[i] = &owned
+		if !colsOwned {
+			tableDef.Cols = slices.Clone(tableDef.Cols)
+			colsOwned = true
 		}
+		tableDef.Cols[i] = &owned
 	}
 	return nil
 }
