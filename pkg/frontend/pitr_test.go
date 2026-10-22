@@ -362,11 +362,18 @@ func Test_createPubByPitrTableScopeModeResolution(t *testing.T) {
 	bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{
 		{int64(0), "sys", "pub01", "test", uint64(0), "test1", "acc01", "", "", uint64(17), uint64(29), ""},
 	})
+	// Replay first reconciles the historical selection with bulk-restore
+	// exclusions, then resolves the mode needed by the retained table scope.
+	historicalTablesSQL := buildTableInfoListSQL("test", "", ts, sysAccountID)
+	bh.sql2result[historicalTablesSQL] = newMrsForRestoreStringRows(
+		[]string{"name", "type", "kind", "view"}, [][]interface{}{{"test1", "BASE TABLE", "r", ""}})
 
 	err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
 	require.Error(t, err)
 	require.ErrorContains(t, err,
 		"session variable lower_case_table_names is unavailable")
+	require.Equal(t, []string{sql, historicalTablesSQL}, bh.executedSQLs,
+		"missing replay mode must fail before publication or subscriber writes")
 }
 
 // Test_getPubInfoWithPitrLayout guarantees the PITR publication query

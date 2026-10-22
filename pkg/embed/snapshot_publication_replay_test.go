@@ -29,6 +29,9 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 	RunSingleCNBaseClusterTests(t, func(c Cluster) {
 		admin := openIcebergTestDB(t, c)
 		defer admin.Close()
+		// View definitions below use the selected database for unqualified
+		// dependencies; keep USE and CREATE/ALTER on the same session.
+		admin.SetMaxOpenConns(1)
 		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 		defer cancel()
 		_, err := admin.ExecContext(ctx, "create account pub_replay_sub admin_name 'admin' identified by '111'")
@@ -191,33 +194,35 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 							require.Equal(t, 1, subscribedRows)
 						}
 					}
-					var restoredDB, restoredTables, restoredAccounts, comment string
-					result, err := admin.QueryContext(ctx, "select database_name,table_list,account_list,comment from mo_catalog.mo_pubs where pub_name="+sqlquote.String(pubName))
-					require.NoError(t, err)
-					t.Cleanup(func() { require.NoError(t, result.Close()) })
-					require.True(t, result.Next())
-					require.NoError(t, result.Scan(&restoredDB, &restoredTables, &restoredAccounts, &comment))
-					require.Equal(t, dbName, restoredDB)
-					if tc.explicitTables {
-						wantTables := []string{tableName, "other-items"}
-						if tc.viewScope {
-							wantTables = append(wantTables, "scope_v")
+					func() {
+						var restoredDB, restoredTables, restoredAccounts, comment string
+						result, err := admin.QueryContext(ctx, "select database_name,table_list,account_list,comment from mo_catalog.mo_pubs where pub_name="+sqlquote.String(pubName))
+						require.NoError(t, err)
+						defer func() { require.NoError(t, result.Close()) }()
+						require.True(t, result.Next())
+						require.NoError(t, result.Scan(&restoredDB, &restoredTables, &restoredAccounts, &comment))
+						require.Equal(t, dbName, restoredDB)
+						if tc.explicitTables {
+							wantTables := []string{tableName, "other-items"}
+							if tc.viewScope {
+								wantTables = append(wantTables, "scope_v")
+							}
+							require.ElementsMatch(t, wantTables, strings.Split(restoredTables, ","))
+						} else {
+							require.Equal(t, "*", restoredTables)
 						}
-						require.ElementsMatch(t, wantTables, strings.Split(restoredTables, ","))
-					} else {
-						require.Equal(t, "*", restoredTables)
-					}
-					if tc.emptyAccounts {
-						require.Empty(t, restoredAccounts)
-					} else if tc.explicitTables {
-						require.Equal(t, "pub_replay_sub", restoredAccounts)
-					} else {
-						require.Equal(t, "all", restoredAccounts)
-					}
-					require.Equal(t, wantComment, comment)
-					require.False(t, result.Next(), "exactly one publication must survive repeated restore")
-					require.NoError(t, result.Err())
-					require.NoError(t, result.Close())
+						if tc.emptyAccounts {
+							require.Empty(t, restoredAccounts)
+						} else if tc.explicitTables {
+							require.Equal(t, "pub_replay_sub", restoredAccounts)
+						} else {
+							require.Equal(t, "all", restoredAccounts)
+						}
+						require.Equal(t, wantComment, comment)
+						require.False(t, result.Next(), "exactly one publication must survive repeated restore")
+						require.NoError(t, result.Err())
+						require.NoError(t, result.Close())
+					}()
 				}
 				if tc.emptyAccounts {
 					exec("alter publication " + publication + " account add pub_replay_sub")

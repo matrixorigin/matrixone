@@ -153,7 +153,7 @@ func TestPublicationReplayRequiresCaseModeForRetainedSelection(t *testing.T) {
 		t.Run(tables, func(t *testing.T) {
 			bh := &backgroundExecTest{}
 			bh.init()
-			pub := &pubsub.PubInfo{PubAccountId: 7, DbName: "db1", TablesStr: tables, SubAccountsStr: pubsub.AccountAll}
+			pub := &pubsub.PubInfo{PubAccountId: 7, PubName: "pub1", DbName: "db1", TablesStr: tables, SubAccountsStr: pubsub.AccountAll}
 			query := buildTableInfoListSQL("db1", "", 42, 7)
 			bh.sql2result[query] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{
 				{"t1", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
