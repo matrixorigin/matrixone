@@ -549,7 +549,12 @@ func multiFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, p
 	case types.T_decimal128:
 		return decimalBatchArith[types.Decimal128, types.Decimal128](parameters, result, proc, length, d128Mul, selectList)
 	case types.T_decimal256:
-		return decimal256BatchArith(parameters, result, proc, length, d256Mul, selectList)
+		leftRange := decimal256OperandRange(*parameters[0].GetType())
+		rightRange := decimal256OperandRange(*parameters[1].GetType())
+		return decimal256BatchArith(parameters, result, proc, length,
+			func(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
+				return d256MulWithRangeProof(v1, v2, rs, scale1, scale2, rsnull, leftRange, rightRange)
+			}, selectList)
 
 	case types.T_array_float32:
 		return opBinaryBytesBytesToBytesWithErrorCheck(parameters, result, proc, length, multiFnArray[float32], selectList)
