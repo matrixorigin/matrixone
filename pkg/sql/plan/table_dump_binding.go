@@ -16,12 +16,15 @@ package plan
 
 import (
 	"context"
+	"errors"
+	"iter"
 	"math"
 	"strings"
 	"time"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
@@ -113,26 +116,37 @@ type tableDumpExpression struct {
 
 func tableDumpExpressions(def *planpb.TableDef) []tableDumpExpression {
 	var result []tableDumpExpression
-	for _, col := range def.Cols {
-		if col == nil {
-			continue
-		}
-		if col.Default != nil && col.Default.Expr != nil {
-			result = append(result, tableDumpExpression{"default", col.Name, col.Default.OriginString, col, nil, col.Default.Expr})
-		}
-		if col.OnUpdate != nil && col.OnUpdate.Expr != nil {
-			result = append(result, tableDumpExpression{"on_update", col.Name, col.OnUpdate.OriginString, col, nil, col.OnUpdate.Expr})
-		}
-		if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil {
-			result = append(result, tableDumpExpression{"generated", col.Name, col.GeneratedCol.OriginString, col, nil, col.GeneratedCol.Expr})
-		}
-	}
-	for _, check := range def.Checks {
-		if check != nil && check.Check != nil {
-			result = append(result, tableDumpExpression{"check", check.Name, check.OriginSql, nil, check, check.Check})
-		}
+	for item := range persistedTableExpressions(def) {
+		result = append(result, item)
 	}
 	return result
+}
+
+// Resolution usually has no legacy expression. Yield owners lazily so that
+// migration can filter/cancel without allocating a slice for every default.
+// DUMP collects the same ordered traversal when it needs indexed declarations.
+func persistedTableExpressions(def *planpb.TableDef) iter.Seq[tableDumpExpression] {
+	return func(yield func(tableDumpExpression) bool) {
+		for _, col := range def.Cols {
+			if col == nil {
+				continue
+			}
+			if col.Default != nil && col.Default.Expr != nil && !yield(tableDumpExpression{"default", col.Name, col.Default.OriginString, col, nil, col.Default.Expr}) {
+				return
+			}
+			if col.OnUpdate != nil && col.OnUpdate.Expr != nil && !yield(tableDumpExpression{"on_update", col.Name, col.OnUpdate.OriginString, col, nil, col.OnUpdate.Expr}) {
+				return
+			}
+			if col.GeneratedCol != nil && col.GeneratedCol.Expr != nil && !yield(tableDumpExpression{"generated", col.Name, col.GeneratedCol.OriginString, col, nil, col.GeneratedCol.Expr}) {
+				return
+			}
+		}
+		for _, check := range def.Checks {
+			if check != nil && check.Check != nil && !yield(tableDumpExpression{"check", check.Name, check.OriginSql, nil, check, check.Check}) {
+				return
+			}
+		}
+	}
 }
 
 func tableDumpParserModes() []string {
@@ -213,13 +227,39 @@ const (
 // A flag selects one coherent pre-migration binding, never per-node metadata.
 const tableDumpBindingPreTemporalNullability tableDumpBindingMode = 1 << 7
 
+const tableDumpBindingLegacyFloat tableDumpBindingMode = 1 << 6
+const tableDumpBindingLegacyFloatFormatting tableDumpBindingMode = 1 << 5
+const tableDumpBindingFrozenFloatDefaults tableDumpBindingMode = 1 << 4
+
 type tableDumpDefaultSession struct {
 	timeZone, locale, folded bool
+	unfolded                 *planpb.Expr
+	budget                   *tableDumpBindingBudget
+	captureUnfolded          bool
+	floatFormatting          bool
+}
+
+// Float compatibility uses the same complete-era binder as DUMP/LOAD.
+func bindFloatTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, legacy bool, legacyFloat ...bool) (*planpb.Expr, error) {
+	mode := tableDumpBindingCurrent
+	if legacy {
+		mode = tableDumpBindingLegacySpecial
+	}
+	if len(legacyFloat) > 0 && legacyFloat[0] {
+		mode |= tableDumpBindingLegacyFloat
+	}
+	return bindTableDumpExpression(ctx, def, item, ast, increment, mode, &tableDumpDefaultSession{})
 }
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ tableDumpBindingPreTemporalNullability
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingLegacyFloat | tableDumpBindingLegacyFloatFormatting | tableDumpBindingFrozenFloatDefaults)
+	if mode&tableDumpBindingLegacyFloatFormatting != 0 {
+		bindCtx = function.WithLegacyFloatStringFormatting(bindCtx)
+	}
+	if mode&tableDumpBindingLegacyFloat != 0 {
+		bindCtx = function.WithLegacyFloatStringBounds(bindCtx)
+	}
 	if mode&tableDumpBindingPreTemporalNullability != 0 {
 		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
 	}
@@ -243,6 +283,65 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	}
 	switch item.kind {
 	case "default":
+		if mode&tableDumpBindingFrozenFloatDefaults != 0 {
+			if session.budget == nil {
+				return nil, moerr.NewInternalError(bindCtx, "missing frozen default proof budget")
+			}
+			currentSession := &tableDumpDefaultSession{budget: session.budget, captureUnfolded: true}
+			_, err := bindTableDumpExpression(ctx, def, item, ast, increment, mode&^tableDumpBindingFrozenFloatDefaults, currentSession)
+			if err != nil {
+				return nil, err
+			}
+			oldSession := &tableDumpDefaultSession{budget: session.budget, captureUnfolded: true}
+			old, err := bindTableDumpExpression(ctx, def, item, ast, increment, (mode&^tableDumpBindingFrozenFloatDefaults)|tableDumpBindingLegacyFloat, oldSession)
+			if err != nil {
+				return nil, err
+			}
+			proofProc := floatStringProofProcess(bindCtx, proc)
+			currentSource := currentSession.unfolded
+			var assignment *planpb.Expr
+			if oldSession.unfolded != nil && isSameColumnType(oldSession.unfolded.Typ, item.col.Typ) {
+				// Widening can newly require a declared assignment boundary.
+				// Align only its value child with the old root, then retain
+				// the complete current wrapper and its strict width policy.
+				if fn := currentSource.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "cast_strict" && !fn.SyntaxExplicitCast && len(fn.Args) == 2 && fn.Args[1] != nil && fn.Args[1].GetT() != nil &&
+					isSameColumnType(currentSource.Typ, item.col.Typ) && proto.Equal(&fn.Args[1].Typ, &currentSource.Typ) && !isSameColumnType(fn.Args[0].Typ, item.col.Typ) &&
+					(oldSession.unfolded.GetF() == nil || oldSession.unfolded.GetF().Func.Obj != fn.Func.Obj) {
+					if err = chargeFloatStringRebind(currentSource, session.budget); err != nil {
+						return nil, err
+					}
+					witness, bindErr := makePlan2AssignmentCastExpr(bindCtx, DeepCopyExpr(fn.Args[0]), item.col.Typ)
+					if bindErr != nil || !sameTableDumpBoundExpression(witness, currentSource) {
+						return nil, errLegacyFloatStringRebind
+					}
+					assignment = currentSource
+					currentSource = fn.Args[0]
+				}
+			}
+			frozen, _, err := freezeVerifiedFloatDefault(bindCtx, old, oldSession.unfolded, currentSource, proofProc, session.budget)
+			if err != nil {
+				return nil, err
+			}
+			if assignment != nil {
+				if err = chargeFloatStringRebind(assignment, session.budget); err != nil {
+					return nil, err
+				}
+				frozen, err = makePlan2AssignmentCastExpr(bindCtx, frozen, item.col.Typ)
+				if err != nil {
+					return nil, err
+				}
+			}
+			if err = chargeFloatStringRebind(frozen, session.budget); err != nil {
+				return nil, err
+			}
+			frozen, err = ConstantFold(batch.EmptyForConstFoldBatch, frozen, proofProc, false, true)
+			if !session.captureUnfolded {
+				currentSession.unfolded = nil
+				currentSession.captureUnfolded = false
+			}
+			*session = *currentSession
+			return frozen, err
+		}
 		col := &tree.ColumnTableDef{
 			Name: tree.NewUnresolvedColName(item.name),
 			Attributes: []tree.ColumnAttribute{
@@ -255,7 +354,7 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 			purpose = defaultExprForPersistedLegacyZero
 		}
 		var unfolded *planpb.Expr
-		bound, err := buildDefaultExprWithColumnsObserved(bindCtx, col, item.col.Typ, proc, def.Cols, purpose, func(source, assigned *planpb.Expr) {
+		bound, err := buildDefaultExprWithColumnsObserved(bindCtx, col, item.col.Typ, floatStringProofProcess(bindCtx, proc), def.Cols, purpose, func(source, assigned *planpb.Expr) {
 			// Observe before assignment/folding can fail in the reading zone.
 			// Inspect the resolved source, not the assignment cast's target type:
 			// a plain NULL/zero TIMESTAMP needs no timezone reconstruction.
@@ -263,12 +362,16 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 			session.timeZone = session.timeZone || tz
 			session.locale = session.locale || locale
 			unfolded = assigned
+			session.floatFormatting = session.floatFormatting || hasFloatDefaultFormatting(source) || hasFloatDefaultFormatting(assigned)
 		})
 		if err != nil {
 			return nil, err
 		}
 		if (session.timeZone || session.locale) && !sameTableDumpBoundExpression(unfolded, bound.Expr) {
 			session.folded = true
+		}
+		if session.captureUnfolded {
+			session.unfolded = unfolded
 		}
 		return bound.Expr, nil
 	case "on_update":
@@ -617,19 +720,42 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					return nil, fatal
 				}
 				budget.visits += visit.nodes
+				if mode&tableDumpBindingFrozenFloatDefaults != 0 {
+					budget.visits += visit.nodes
+				}
+				dependency.budget = budget
 				if budget.visits > candidateVisitLimit {
 					fatal = moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
 					return nil, fatal
 				}
 				proc.GetSessionInfo().TimeZone = tz
 				proc.GetSessionInfo().LCTimeNames = lc
-				return bindTableDumpExpression(ctx, target, item, ast, increment, mode, &dependency)
+				result, err := bindTableDumpExpression(ctx, target, item, ast, increment, mode, &dependency)
+				if fatal = ctx.GetContext().Err(); fatal != nil {
+					return nil, fatal
+				}
+				if budget.visits > candidateVisitLimit {
+					fatal = moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
+					return nil, fatal
+				}
+				var proofLimit *floatStringProofBudgetError
+				if errors.As(err, &proofLimit) {
+					fatal = err
+				}
+				return result, err
 			}
 			var first *planpb.Expr
 			want := item.expr
 			if supplied != nil {
 				want = sourceItems[i].expr
 			}
+			eras := append([]tableDumpBindingMode(nil), modes...)
+			if hasLegacyFloatStringCast(want) {
+				for _, era := range eras {
+					modes = append(modes, era|tableDumpBindingLegacyFloat)
+				}
+			}
+			floatCandidatesAdded := false
 			// Give every cheap precision/era witness priority over a wrong
 			// precision's exhaustive session search. Retain flags, not trees.
 			type sessionCandidate struct {
@@ -644,9 +770,22 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					stmt.Free()
 					return false, err
 				}
-				for _, mode := range modes {
+				for modeIndex := 0; modeIndex < len(modes); modeIndex++ {
+					mode := modes[modeIndex]
 					dependency = tableDumpDefaultSession{}
 					candidate, err := bind(increment, mode, zone, locale)
+					if item.kind == "default" && dependency.floatFormatting && !floatCandidatesAdded {
+						// Inspect resolved pre-fold types, since a fully folded
+						// stored literal no longer carries its conversion. Do
+						// not multiply unrelated arithmetic/temporal witnesses.
+						for _, era := range eras {
+							modes = append(modes, era|tableDumpBindingLegacyFloatFormatting,
+								era|tableDumpBindingLegacyFloatFormatting|tableDumpBindingLegacyFloat,
+								era|tableDumpBindingFrozenFloatDefaults,
+								era|tableDumpBindingFrozenFloatDefaults|tableDumpBindingLegacyFloatFormatting)
+						}
+						floatCandidatesAdded = true
+					}
 					if fatal != nil {
 						stmt.Free()
 						return false, fatal
@@ -662,6 +801,9 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						sensitive = true
 					}
 					matched = matched || sameTableDumpBoundExpression(want, candidate)
+					if !matched && mode&tableDumpBindingLegacyFloat != 0 {
+						matched = sameHistoricalFloatBoundExpression(want, candidate)
+					}
 
 					if item.kind == "default" {
 						_, folded := tableDumpTimestampLiteral(candidate)
@@ -674,7 +816,8 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 							sameTableDumpBoundType(candidate.Typ, want.Typ)
 						if typeCanMatch && (folded || stored || dependency.folded || err != nil && (dependency.timeZone || dependency.locale)) {
 							sensitive = true
-							sessions = append(sessions, sessionCandidate{increment, mode, dependency, folded, stored})
+							flags := tableDumpDefaultSession{timeZone: dependency.timeZone, locale: dependency.locale, folded: dependency.folded}
+							sessions = append(sessions, sessionCandidate{increment, mode, flags, folded, stored})
 						}
 					}
 				}
@@ -703,7 +846,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 						stmt.Free()
 						return false, fatal
 					}
-					if sameTableDumpBoundExpression(want, rebound) {
+					if sameTableDumpBoundExpression(want, rebound) || search.mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, rebound) {
 						matched = true
 						break
 					}
@@ -735,7 +878,7 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 							if fatal != nil {
 								break
 							}
-							if sameTableDumpBoundExpression(want, rebound) {
+							if sameTableDumpBoundExpression(want, rebound) || search.mode&tableDumpBindingLegacyFloat != 0 && sameHistoricalFloatBoundExpression(want, rebound) {
 								matched = true
 								break
 							}
