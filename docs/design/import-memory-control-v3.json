@@ -1,5 +1,5 @@
 {
-  "version": 8,
+  "version": 9,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
@@ -17,7 +17,8 @@
     "CSV currently limits raw input field bytes; MultiUpdate projections and vector capacities can amplify the next allocation.",
     "HashBuild spills only shuffle, copies before testing the threshold; scatter buffers are row bounded and max-depth skew reload is unbounded.",
     "Deterministic compiler fixtures: after full reclaim permits 64 MiB, old solver grants 4 bytes; max-row floor with identical envelopes shrinks 64 to 32 MiB despite no memory benefit. This is a throughput defect, not yet an explanation of the interrupted native table 29.",
-    "Final candidate581d746 failed faithful table21 am_case_comprehensive_dataset after20 successes: old insert.Insert returned exhausted on three tries (ask720360..765440, Available about21GB), while RSS peak3.804GiB and cgroup OOM events0. Independent isolated original-schema/original-CSV reproduction also fails. Compiler already reserved old Insert output I/W but the consumer never used them."
+    "Final candidate581d746 failed faithful table21 am_case_comprehensive_dataset after20 successes: old insert.Insert returned exhausted on three tries (ask720360..765440, Available about21GB), while RSS peak3.804GiB and cgroup OOM events0. Independent isolated original-schema/original-CSV reproduction also fails. Compiler already reserved old Insert output I/W but the consumer never used them.",
+    "Frozen v8 f082 binary: fresh independent two-process CN remote controlled broadcast INSERT JOIN fails with1105 broadcast spill generation is unavailable. An old-source overlay adding actual Free immediately after the existing first.Reset deterministically reproduces the same named failure (reset-free-repro.json, exit1 after successful compilation). Pipeline cleanup retires an early nonfinalizer while another expected actual is still collecting; successful registration was reset to false, so Free incorrectly aborts the shared generation."
   ],
   "goals": [
     "The tested amway import semantics, indexes, row counts and SQL success remain intact under fixed 22 GiB and no inter-round idle/GC/restart.",
@@ -157,6 +158,23 @@
         "Convert all old Inserts to MultiUpdate: changes planner and MergeBlock protocol beyond the missing consumer boundary.",
         "Only retry D or increase physical thresholds: can self-wait or restore unbounded allocation.",
         "Always write every small input directly: discards normal buffered reuse and async IO even when retained-data memory is available."
+      ]
+    },
+    {
+      "id": "D22",
+      "choice": "Separate a sealed topology handle from execution-participant ownership. Track one local participant state none/expected/registered/finalizer/retired, and route Reset/Free through one idempotent retirement transition.",
+      "classification": "Focused correction within the already approved CN-local broadcast owner model; record and narrowly review its concrete lifecycle deviation before implementation. No new wire format, resource bound, scheduler or fallback.",
+      "rationale": "A Boolean registered flag cannot distinguish an unexecuted compiler template, an actual that failed before registration, and an actual that successfully handed its probe files to the group. Real Pipeline.Cleanup Reset-to-Free ordering must be safe while other actuals remain active.",
+      "constraints": [
+        "Sealing the expected topology alone acquires no execution owner. Freeing or resetting an unexecuted template must not abort any actual or a later epoch.",
+        "Every actual must acquire the expected state before execution or initialization can fail, including duplicated actuals and the Mcpu=1 original. Prepare arms idempotently before any lease/expression initialization; concrete compiler construction/early-failure hooks must be reviewed.",
+        "Register success transfers probe files into the existing group and advances state to registered. Normal nonfinalizer retirement does not abort or close those transferred files.",
+        "Claiming finalizer advances state; exhausted normal work closes via the existing sole work owner. Early termination/error/cancel aborts collection and then closes work, never concurrently closing a reader-owned FD.",
+        "Retirement is once per actual generation; repeated Reset/Free cannot decrement or abort again. A subsequent Prepare/new generation explicitly rearms; a stale handle cannot abort the new epoch.",
+        "Normal in-memory participant completion calls FinishParticipant once. Keep the nonowning generation handle for the existing spill-aware bitmap guard; do not accidentally resume the old bitmap protocol after local retirement.",
+        "No controller bypass, threshold inflation, spill disablement or weaker multi-CN oracle.",
+        "Normal non-spilled/empty-build completion calls FinishParticipant exactly once, not Abort. Pipeline.Cleanup cancels contexts on normal exit too; proc.Ctx.Err alone is not a success/failure oracle.",
+        "Inspect the actual compiler hooks and test the real consumer sequence. Arm expected actual ownership before scheduler/reader/Prepare failures; never infer ownership merely from a sealed template topology."
       ]
     }
   ],
@@ -384,6 +402,27 @@
       "metadata": "Take bounded object stats from Sync without expanding them in the D pool. Check metadata vector growth before PreExtend/Expand in output mpool. Preserve original BlockInfo/ObjectStats two-column representation, including different vector lengths. Anonymous length-bounded stream frames live on disk during Build; Eval returns one original-format frame per Call. MergeBlock and transaction protocol remain unchanged.",
       "terminal": "Error/cancel/Reset/Free join IO and close writer before returning actual D; clean output vectors before output lease release; close anonymous spool exactly once. Partial initialization schedules cleanup immediately. Reset starts an independent generation with no stale output frame.",
       "flush_limiter": "Legacy limiter waits only while active slot owners exist. Their release closes notify, and context cancellation independently terminates. Remove the 200ms timer and20ms ticker; a CPU concurrency-limit increase is observed at the next guaranteed active-owner release."
+    },
+    "broadcast_participant_revision9": {
+      "states": {
+        "none": "Topology/template handle only; no execution ownership and no abort on cleanup.",
+        "expected": "Actual execution claim obtained before any execution/Prepare failure; terminal before successful registration aborts the expected generation.",
+        "registered": "Probe files transferred into group; successful nonfinalizer terminal retires local ownership only.",
+        "finalizer": "Owns claimed work; normal exhaustion closes work, early terminal aborts then closes via existing owner.",
+        "retired": "Terminal once; Reset-to-Free and duplicate cleanup perform no new group transition."
+      },
+      "compiler_hooks": {
+        "pkg/sql/colexec/hashjoin/join.go:Prepare": "Arm before lease/expression initialization.",
+        "pkg/sql/compile/scope.go:newParallelScope": "Seal template only. Arm Mcpu1 original as actual; for Mcpu>1 arm actual roots after construction and PreScopes publication, never the unused template.",
+        "pkg/sql/compile/scope.go:Run": "Arm actual root before buildReaders/vm.Prepare, covering scan-parallel Mcpu1 and ordinary/remote Normal execution. Arm failure uses existing pipeline cleanup.",
+        "pkg/sql/compile/scope.go:cleanPipelineWitchStartFail": "Arm instantiated Normal actual before failed cleanup when scheduler submit fails before Prepare.",
+        "pkg/sql/compile/scope.go:ParallelRun defer": "Only a real construction error with no resulting parallel scope explicitly aborts the sealed scope as a failed scope; successful template cleanup carries no participant claim."
+      },
+      "epoch": "Ownership is bound to the actual generation. Stale template/retired handles never affect a later epoch; rearm only at next actual execution/Prepare.",
+      "owner": "Existing group owns transferred files; existing work owner closes active readers/files. No new cross-CN FD transfer or registry.",
+      "compatibility": "No protobuf, persistent format, SQL or memory-envelope change. Legacy non-spill execution keeps its existing protocol.",
+      "normal_completion": "Expected/registered cleanup is classified with pipelineFailed/explicit err plus operator execution-complete state. Normal non-spilled or empty-build completion calls FinishParticipant once; it must not abort. Premature expected termination, error or spilled incomplete collection aborts the owning generation.",
+      "cancellation_signal": "Do not infer failure from proc.Ctx.Err(): Pipeline.Cleanup cancels context even on normal cleanup. Use the cleanup outcome and actual completion state; cancellation without Reset is an early Free terminal."
     }
   },
   "ownership_and_wait_graphs": [
@@ -430,11 +469,14 @@
       "Real old Insert.Prepare/Call with high Available and forced D denial succeeds through admitted W with original MergeBlock metadata representation",
       "Old Insert multiple Sync/spool frames preserve two-block/one-object unequal vector lengths, exact affected rows and terminal pool/lease/FD balance",
       "Old Insert errors, cancellation and Reset/reuse retire actual buffers before grants and output slot",
-      "Unsupported partition/memory-engine/derived-PreInsert whole-query legacy is selected before any local or remote ticket"
+      "Unsupported partition/memory-engine/derived-PreInsert whole-query legacy is selected before any local or remote ticket",
+      "Real pipeline Cleanup Reset-to-Free of early nonfinalizer preserves late registration and independent join multiset oracle for all existing modes/empty-first variants.",
+      "Unexecuted sealed template Reset/Free cannot abort actuals or next epoch; actual pre-register Prepare/start failure aborts and retires collected files.",
+      "Repeated Reset/Free is idempotent; normal bitmap participant completion counts once; finalizer cancellation/error/free preserves reader/file sole owner; next generation rearms without stale abort."
     ],
     "negative_controls": "Each repaired contract must have a discriminating old-code or disabled-mechanism oracle; do not accept compile errors as negative proof.",
     "race": "Focused adaptive race per changed concurrency test plus affected owning packages once.",
-    "public_consumer": "SQL checks with forced-small budgets/spill, main and index counts plus join multiset oracles; native fixed 39-table amway imports.; isolated exact table21 original DDL/CSV/LOCAL INFILE must change from the captured pre-fix exhausted error to27422 correct rows, before restarting all39 tables for five uninterrupted rounds.",
+    "public_consumer": "SQL checks with forced-small budgets/spill, main and index counts plus join multiset oracles; native fixed 39-table amway imports.; isolated exact table21 original DDL/CSV/LOCAL INFILE must change from the captured pre-fix exhausted error to27422 correct rows, before restarting all39 tables for five uninterrupted rounds.; Revision9 must rerun the exact captured independent two-process CN remote broadcast spill SQL, require both process identities/capabilities, actual remote rows and spill, observed positive I/W in both processes, correct independent result and terminal owner/FD cleanup.",
     "real_import": "Same CSV/DDL/SQL/order, 22 GiB no swap, no deliberate gap/GC/restart between at least five rounds; process remains alive after trial.",
     "performance": "Record full/table wall time, RSS+cgroup peaks, allocated capacity, spill bytes/objects, native reclaim count and wait samples. Compare stock successful 303.1-second round and V2 mean 331.1 seconds; do not declare zero regression from shared-host variation."
   },
@@ -469,17 +511,35 @@
       "agent": "root",
       "scope": "Remote whole-query ordering and independent control-stream terminal owner; narrow revision4 of worker proposal",
       "decision": "PASS design; implementation/transport failure tests remain mandatory"
+    },
+    {
+      "agent": "final_parameter_review",
+      "revision": 9,
+      "scope": "D22 participant ownership/Reset-to-Free/actual Arm before fail/template/epoch/FD and corresponding tests",
+      "decision": "PASS, exact draft5a13c9c2ff38d193e81a88d3e4cf3d133321b9b8fe2c201e5a7dc28b06ea3389"
     }
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 8,
-    "condition": "Implementation must satisfy recorded protocol and consumer tests; no implementation claim based solely on design.",
-    "narrow_revision": "Worker proposes complete per-CN stage manifests and ordered all-CN prelock admission with statement control-stream ownership; root reviewed concrete two-origin/late-probe wait graphs and existing transport termination, accepts protocol with acknowledged END or forced exclusive backend close on failure.",
-    "key_contract_review": "2026-10-22 23:18 +08:00: join worker proposed shared recursive key contract and pre-evaluation whole-query legacy eligibility; root approved subject to complete intermediate old+new/result/packer capacity, overflow and NULL/const coverage, and fixed/serial/unknown compatibility UT. Root independently identified source scope and execution-backend wait graph; separate transport and source gate passed independent review.",
-    "physical_identity_review": "2026-10-22 23:44 +08:00: Galileo demonstrated supported launch-multi-cn aliases a shared processMemoryCoordinator and creates self-wait. Root independently identified the two-query different-CN-alias P/Q inversion; approved process UUID ordering plus duplicate-process legacy gate and pre-reserve epoch verification, with explicit cancellation/ordering/restart tests.",
-    "ignore_source_review": "CSV worker traced the public SQL failure through early source and final projection; root approved action-by-index-layout DAG UT plus unchanged ignored-word/old-word/new-word public oracles before native import.",
-    "largest_unit_review": "2026-10-23 00:05 +08:00: Galileo reproduced stale-unit and max-row plateau failures deterministically; root approved bounded descending full-envelope candidates. Independent final_parameter_review approved with mandatory ownerless full-reclaim-and-typed-capacity-error terminal, including last-owner exit; exact I/W delta and full-layout dedup required.",
-    "old_insert_review": "2026-10-23 00:25 +08:00: Socrates traced old Insert through CNS3Writer/Sinker/MergeBlock and proposed the existing I/D/W ownership pattern plus bounded anonymous metadata framing. Root approved preserving original output semantics, high-headroom D-denial progress and all terminal owners; Galileo independently verified compiler role/count/envelope and required cumulative Sync metadata bounds. Derived PreInsert and partition wrappers explicitly retain legacy to avoid claiming absent contracts."
-  }
+    "revision": 9,
+    "decision": "PASS",
+    "scope": "D22 and broadcast_participant_revision9, exact actual/template compiler hooks and mapped terminal/negative/real-2CN validation",
+    "condition": "Design approval only; implementation and real consumer evidence remain mandatory before delivery.",
+    "reviewer": "final_parameter_review",
+    "approved_at": "2026-10-23T01:08:52.524792+08:00",
+    "reviewed_draft_sha256": "5a13c9c2ff38d193e81a88d3e4cf3d133321b9b8fe2c201e5a7dc28b06ea3389"
+  },
+  "approval_history": [
+    {
+      "kind": "internal-independent-design-review",
+      "revision": 8,
+      "condition": "Implementation must satisfy recorded protocol and consumer tests; no implementation claim based solely on design.",
+      "narrow_revision": "Worker proposes complete per-CN stage manifests and ordered all-CN prelock admission with statement control-stream ownership; root reviewed concrete two-origin/late-probe wait graphs and existing transport termination, accepts protocol with acknowledged END or forced exclusive backend close on failure.",
+      "key_contract_review": "2026-10-22 23:18 +08:00: join worker proposed shared recursive key contract and pre-evaluation whole-query legacy eligibility; root approved subject to complete intermediate old+new/result/packer capacity, overflow and NULL/const coverage, and fixed/serial/unknown compatibility UT. Root independently identified source scope and execution-backend wait graph; separate transport and source gate passed independent review.",
+      "physical_identity_review": "2026-10-22 23:44 +08:00: Galileo demonstrated supported launch-multi-cn aliases a shared processMemoryCoordinator and creates self-wait. Root independently identified the two-query different-CN-alias P/Q inversion; approved process UUID ordering plus duplicate-process legacy gate and pre-reserve epoch verification, with explicit cancellation/ordering/restart tests.",
+      "ignore_source_review": "CSV worker traced the public SQL failure through early source and final projection; root approved action-by-index-layout DAG UT plus unchanged ignored-word/old-word/new-word public oracles before native import.",
+      "largest_unit_review": "2026-10-23 00:05 +08:00: Galileo reproduced stale-unit and max-row plateau failures deterministically; root approved bounded descending full-envelope candidates. Independent final_parameter_review approved with mandatory ownerless full-reclaim-and-typed-capacity-error terminal, including last-owner exit; exact I/W delta and full-layout dedup required.",
+      "old_insert_review": "2026-10-23 00:25 +08:00: Socrates traced old Insert through CNS3Writer/Sinker/MergeBlock and proposed the existing I/D/W ownership pattern plus bounded anonymous metadata framing. Root approved preserving original output semantics, high-headroom D-denial progress and all terminal owners; Galileo independently verified compiler role/count/envelope and required cumulative Sync metadata bounds. Derived PreInsert and partition wrappers explicitly retain legacy to avoid claiming absent contracts."
+    }
+  ]
 }
