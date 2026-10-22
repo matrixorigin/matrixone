@@ -40,8 +40,8 @@ create index ix_apply using ivfflat on tc(v) lists=1 op_type 'vector_l2_ops' inc
 -- @regex("Vector Index Scan", true)
 explain select tc.id from tc, query_vector q
 where q.name = 'ref' and tc.category = concat('x', '')
-order by l2_distance(tc.v, q.v) limit 2 by rank with option 'mode=include';
-prepare s_apply from 'select tc.id from tc, query_vector q where q.name = ''ref'' and tc.category = concat(?, '''') order by l2_distance(tc.v, q.v) limit 2 by rank with option ''mode=include''';
+order by l2_distance(tc.v, q.v) limit 2 by rank with option 'mode=iterative';
+prepare s_apply from 'select tc.id from tc, query_vector q where q.name = ''ref'' and tc.category = concat(?, '''') order by l2_distance(tc.v, q.v) limit 2 by rank with option ''mode=iterative''';
 set @category = 'x';
 execute s_apply using @category;
 set @category = 'y';

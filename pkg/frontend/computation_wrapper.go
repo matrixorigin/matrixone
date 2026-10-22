@@ -24,6 +24,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/google/uuid"
 	"github.com/mohae/deepcopy"
 
@@ -851,6 +852,88 @@ func CheckTableDefChange(catalogCache *cache.CatalogCache, tblKey *cache.TableCh
 	return catalogCache.HasNewerVersion(tblKey)
 }
 
+// Compare dependency identities, versions and snapshots, not session-wide DDL
+// counters. Reoptimization can reorder dependencies; neither order nor pointer
+// identity changes the SQL type contract. This runs only when a plan is rebuilt.
+func preparedFieldDependenciesChanged(previous, current []*plan.ObjectRef) bool {
+	if len(previous) != len(current) {
+		return true
+	}
+	matched := make([]bool, len(current))
+	for _, before := range previous {
+		found := false
+		for i, after := range current {
+			if !matched[i] && proto.Equal(before, after) {
+				matched[i] = true
+				found = true
+				break
+			}
+		}
+		if !found {
+			return true
+		}
+	}
+	return false
+}
+
+// Only inference CAST0 is transparent. CAST1 owns an execution declaration even
+// when it has no syntax flag, and may itself contain a typed transport CAST0(P).
+func preparedFieldNumericContractSource(source *plan.Expr) *plan.Expr {
+	for source.GetF() != nil && source.GetF().GetFunc().GetObjName() == "cast" &&
+		!source.GetF().SyntaxExplicitCast && len(source.GetF().Args) > 0 && source.GetF().Args[0].GetP() == nil {
+		_, overload := function.DecodeOverloadID(source.GetF().GetFunc().GetObj())
+		if overload != 0 {
+			break
+		}
+		source = source.GetF().Args[0]
+	}
+	return source
+}
+
+// Compare contracts in a fresh binding with actual parameter domains, not the
+// seed's provisional signed markers or casts imposed by historical FIELD facts.
+// This runs only after a numeric setting changes; no graph escapes the call.
+func preparedFieldNumericModeAffectsTypes(p *plan.Plan, previous, current context.Context, boolSumAvg bool) bool {
+	if p == nil {
+		return false
+	}
+	affected := false
+	_ = plan.VisitExpressionsInOwner(p, func(root *plan.Expr) error {
+		return plan.VisitExprTree(root, func(expr *plan.Expr) error {
+			fn := expr.GetF()
+			if affected || fn == nil || fn.Func == nil {
+				return nil
+			}
+			switch fn.Func.ObjName {
+			case "-", "/":
+				args := make([]types.Type, len(fn.Args))
+				for i, source := range fn.Args {
+					source = preparedFieldNumericContractSource(source)
+					args[i] = types.New(types.T(source.Typ.Id), source.Typ.Width, source.Typ.Scale)
+				}
+				before, beforeErr := function.GetFunctionByName(previous, fn.Func.ObjName, args)
+				after, afterErr := function.GetFunctionByName(current, fn.Func.ObjName, args)
+				if beforeErr != nil || afterErr != nil {
+					affected = true
+					break
+				}
+				beforeCasts, beforeCast := before.ShouldDoImplicitTypeCast()
+				afterCasts, afterCast := after.ShouldDoImplicitTypeCast()
+				affected = !before.GetReturnType().Eq(after.GetReturnType()) ||
+					before.GetEncodedOverloadID() != after.GetEncodedOverloadID() ||
+					beforeCast != afterCast || !slices.Equal(beforeCasts, afterCasts)
+			case "sum", "avg":
+				if boolSumAvg && len(fn.Args) == 1 {
+					source := preparedFieldNumericContractSource(fn.Args[0])
+					affected = source.Typ.Id == int32(types.T_bool)
+				}
+			}
+			return nil
+		})
+	})
+	return affected
+}
+
 func preparePlanNeedsRebuild(schemaChanged, modeMismatch, protocolMismatch bool) bool {
 	return schemaChanged || modeMismatch || protocolMismatch
 }
@@ -1416,6 +1499,24 @@ func initExecuteStmtParamWithResolverInSession(
 		needRebuild = statsChanged
 	}
 	cwft.planGenerationReused = !needRebuild
+	fieldTypes := prepareStmt.fieldTypes
+	// Session DDL and temporary-table revisions conservatively invalidate plans,
+	// not SQL type history. Reset only for changed captured dependencies or
+	// type-affecting mode/protocol changes. Rebinding may discover a different
+	// dependency (e.g. a temporary table shadow), checked before publication.
+	boolModeMismatch := prepareStmt.sqlModeFlagsSet && prepareStmt.BoolSumAvg != currentBoolSumAvg
+	numericModeMismatch := boolModeMismatch ||
+		prepareStmt.sqlModeFlagsSet && prepareStmt.NoUnsignedSubtraction != currentNoUnsignedSubtraction ||
+		prepareStmt.divPrecisionIncrementSet && prepareStmt.divPrecisionIncrement != currentDivPrecisionIncrement
+	resetFieldTypes := schemaChanged || prepareStmt.NativeMode != currentNativeMode || protocolMismatch || prepareStmt.fieldTypesResetPending
+	if resetFieldTypes {
+		fieldTypes = nil
+	}
+	var previousNumericContext context.Context
+	if numericModeMismatch && fieldTypes != nil {
+		previousNumericContext = function.WithNoUnsignedSubtraction(reqCtx, prepareStmt.NoUnsignedSubtraction)
+		previousNumericContext = function.WithDivPrecisionIncrement(previousNumericContext, int32(prepareStmt.divPrecisionIncrement))
+	}
 	var pendingGroupConcatColDefData [][]byte
 	pendingGroupConcatColDefDataSet := false
 	rebuildCommitted := false
@@ -1428,6 +1529,9 @@ func initExecuteStmtParamWithResolverInSession(
 			// pair the new plan with the previous wire metadata.
 			prepareStmt.needsRebuild = true
 			prepareStmt.compileNeedsRebuild = true
+			if resetFieldTypes {
+				prepareStmt.fieldTypesResetPending = true
+			}
 		}
 	}()
 
@@ -1442,6 +1546,10 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		prepareTs := currentTxnSnapshotTSForProcess(cwft.proc)
 		newPreparePlan := newPlan.GetDcl().GetPrepare()
+		if preparedFieldDependenciesChanged(preparePlan.GetSchemas(), newPreparePlan.GetSchemas()) {
+			resetFieldTypes = true
+			fieldTypes = nil
+		}
 		var txnHaveDDL bool
 		switch prepareStmt.PrepareStmt.(type) {
 		case *tree.ExplainStmt, *tree.ExplainAnalyze, *tree.ExplainPhyPlan:
@@ -1492,11 +1600,6 @@ func initExecuteStmtParamWithResolverInSession(
 		}
 		prepareStmt.NativeMode = currentNativeMode
 		prepareStmt.OnlyFullGroupBy = currentOnlyFullGroupBy
-		prepareStmt.BoolSumAvg = currentBoolSumAvg
-		prepareStmt.NoUnsignedSubtraction = currentNoUnsignedSubtraction
-		prepareStmt.divPrecisionIncrement = currentDivPrecisionIncrement
-		prepareStmt.sqlModeFlagsSet = true
-		prepareStmt.divPrecisionIncrementSet = true
 		prepareStmt.Ts = prepareTs
 		prepareStmt.tempTableVersion = currentTempTableVersion
 		prepareStmt.ddlVersion = currentDDLVersion
@@ -1746,12 +1849,14 @@ func initExecuteStmtParamWithResolverInSession(
 		if err != nil {
 			return nil, nil, nil, originSQL, false, err
 		}
-		key := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
+		bindingKey := preparedExecutionBindingKey(cwft.paramBindings, cwft.paramVals)
+		key := preparedFieldBindingKey(bindingKey, fieldTypes)
 		var proof func(*plan.Expr) bool
 		if binaryExecute {
 			proof = func(expr *plan.Expr) bool { return preparedBinaryIntegerCastDiagnosticFree(prepareStmt, expr, true) }
 		}
-		if key == prepareStmt.runtimeSpecializationKey && prepareStmt.runtimePlan != nil {
+		if key == prepareStmt.runtimeSpecializationKey && prepareStmt.runtimePlan != nil &&
+			!fieldTypes.NeedsReprepare(cwft.paramBindings, cwft.paramVals) {
 			safe, probeErr := plan2.ProbePreparedDiagnosticCandidatesWithProof(cwft.proc, prepareStmt.runtimeDiagnosticCandidates, proof)
 			if probeErr != nil {
 				return nil, nil, nil, originSQL, false, probeErr
@@ -1778,13 +1883,33 @@ func initExecuteStmtParamWithResolverInSession(
 				if strings.IndexByte(originSQL, '@') >= 0 {
 					planningCtx = plan2.WithPreparedUserVariableBindings(reqCtx, preparePlan.Plan)
 				}
-				bound, buildErr = buildPreparedBoundQuery(planningCtx, executionSes, planningContext, prepareStmt.PrepareStmt, cwft.paramBindings, cwft.paramVals)
+				build := func(history *plan2.PreparedFieldTypes) (*plan2.PreparedExecutionPlan, error) {
+					ctx := plan2.WithPreparedFieldTypes(planningCtx, history, preparePlan.Plan)
+					return buildPreparedBoundQuery(ctx, executionSes, planningContext, prepareStmt.PrepareStmt, cwft.paramBindings, cwft.paramVals)
+				}
+				if previousNumericContext != nil && fieldTypes != nil {
+					// A history-free candidate cannot impose stale numeric casts.
+					// Reuse it if contracts change; otherwise bind with old facts.
+					candidate, candidateErr := build(nil)
+					if candidateErr != nil {
+						return candidateErr
+					}
+					changed := preparedFieldNumericModeAffectsTypes(candidate.Plan, previousNumericContext, reqCtx, boolModeMismatch)
+					if changed {
+						resetFieldTypes = true
+						bound = candidate
+						return nil
+					}
+				}
+				bound, buildErr = build(fieldTypes)
 				return buildErr
 			})
 			if err != nil {
 				return nil, nil, nil, originSQL, false, err
 			}
 			executionPlan = bound.Plan
+			fieldTypes = bound.FieldTypes
+			key = preparedFieldBindingKey(bindingKey, fieldTypes)
 			runtimePlanApplied = true
 			cwft.preparedJoinDiagnosticFree = bound.DiagnosticFree
 			cacheable := bound.DiagnosticFree && !bound.ValueDependent && !prepareStmt.hasPaginationParams && !prepareStmt.hasPercentileParams
@@ -1877,6 +2002,20 @@ func initExecuteStmtParamWithResolverInSession(
 	}
 	if sourceBindingQuery {
 		prepareStmt.compileNeedsRebuild = false
+		// Publish only after binding, diagnostics, metadata, and AST cloning
+		// succeed. A rejected execution leaves the previous snapshot intact.
+		prepareStmt.fieldTypes = fieldTypes
+		prepareStmt.fieldTypesResetPending = false
+	}
+	if needRebuild {
+		// These describe the last successfully bound numeric environment, not
+		// merely the rebuilt seed plan. An early parameter/binding rejection
+		// must leave the old modes available for contract comparison on retry.
+		prepareStmt.BoolSumAvg = currentBoolSumAvg
+		prepareStmt.NoUnsignedSubtraction = currentNoUnsignedSubtraction
+		prepareStmt.divPrecisionIncrement = currentDivPrecisionIncrement
+		prepareStmt.sqlModeFlagsSet = true
+		prepareStmt.divPrecisionIncrementSet = true
 	}
 	rebuildPublished = true
 	return retComp, executionPlan, executionStmt, originSQL, owned, nil
@@ -1933,6 +2072,8 @@ func (cwft *TxnComputationWrapper) releaseRuntimeCacheRetiredCompiles() {
 // slice must not alias TxnComputationWrapper.paramVals because that field is
 // replaced on the next execution of the cached prepared statement.
 type preparedExecutionRetry struct {
+	fieldTypes         *plan2.PreparedFieldTypes
+	fieldSchemas       []*plan2.ObjectRef
 	bindings           []plan2.PreparedSourceBinding
 	paramVals          []any
 	preparedPlan       *plan2.Plan
@@ -2883,6 +3024,9 @@ func buildPlanForCompileRetry(
 	if planningContext == nil {
 		planningContext = ctx
 	}
+	if ctx.Value(defines.HnswSnapshotFallbackKey{}) == true {
+		planningContext = context.WithValue(planningContext, defines.HnswSnapshotFallbackKey{}, true)
+	}
 	compilerContext.SetContext(plan2.WithJSONMergeWarningOrigin(planningContext, plan2.JSONMergeWarningInternalReprepare))
 	defer compilerContext.SetContext(originalContext)
 	if ses != nil {
@@ -2891,6 +3035,25 @@ func buildPlanForCompileRetry(
 	}
 	if preparedRetry != nil && preparedRetry.bindings != nil && !forcePrepare {
 		ctx = plan2.WithPreparedUserVariableBindings(ctx, preparedRetry.preparedPlan)
+		ctx = plan2.WithPreparedFieldTypes(ctx, preparedRetry.fieldTypes)
+		if preparedRetry.fieldTypes != nil {
+			previous := compilerContext.GetContext()
+			compilerContext.SetContext(ctx)
+			defer compilerContext.SetContext(previous)
+			// FIELD's result metadata can stay unchanged when its source switches
+			// TEXT/BINARY. Validate the original declaration generation before
+			// binding with retained history; retry is not another history publisher.
+			dependencies := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{
+				CatalogDependencies: preparedRetry.fieldSchemas,
+			}}}
+			changed, err := checkModify(dependencies, compilerContext.Resolve)
+			if err != nil {
+				return nil, err
+			}
+			if changed {
+				return nil, moerr.NewTxnNeedRetryWithDefChanged(ctx)
+			}
+		}
 		bound, err := buildPreparedBoundQuery(ctx, ses, compilerContext, stmt, preparedRetry.bindings, preparedRetry.paramVals)
 		if err != nil {
 			return nil, err

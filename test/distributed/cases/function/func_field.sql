@@ -142,3 +142,54 @@ select t2.f, t1.f, field(t2.f, t1.f) from t1 right join t2 on t1.i = t2.i;
 
 select t1.i, t2.f, field(t1.i, t2.f) from t1 left join t2 on t1.i = t2.i;
 
+drop table t1;
+drop table t2;
+
+-- FIELD uses the subject expression's resolved domain, including selector types.
+select field(_binary 'a', _binary 'A', _binary 'a'),
+       field(_binary X'FF', _binary X'FE', _binary X'FF'),
+       field(cast('a' as binary), 'A', 'a'),
+       field('a', _binary 'A', _binary 'a');
+select field(_binary X'00', _binary X'', _binary X'00'),
+       field(_binary 'a', _binary 'a ', _binary 'a'),
+       field(_binary '', _binary '', null),
+       field(null, _binary 'a'),
+       field(_binary 'a', null, _binary 'a', _binary 'a');
+select field(if(false, _binary 'x', 'a'), 'A', 'a'),
+       field(coalesce('a', _binary 'x'), 'A', 'a'),
+       field(case when true then 'a' else _binary 'x' end, 'A', 'a'),
+       field(nullif('a', _binary 'x'), 'A', 'a');
+
+drop table if exists field_binary_values;
+create table field_binary_values(id int primary key, b blob, vb varbinary(8), fb binary(1), txt varchar(8));
+insert into field_binary_values values
+    (1, X'61', X'61', X'61', 'a'),
+    (2, X'FF', X'FF', X'FF', null),
+    (3, null, null, null, 'a');
+select id, field(b, X'41', X'FE', X'61', X'FF'),
+       field(vb, X'41', X'FE', X'61', X'FF'),
+       field(fb, X'41', X'FE', X'61', X'FF'),
+       field(coalesce(txt,b), 'A', 'a', X'FF')
+from field_binary_values order by id;
+select id, case when id = 1 then field(b, 'A', 'a') else 7 end
+from field_binary_values order by id;
+drop table field_binary_values;
+
+set @field_binary_value = _binary 'a';
+select field(@field_binary_value, 'A', 'a');
+set @field_binary_value = null;
+
+
+-- Window value and default both determine FIELD comparison; offset does not.
+select field(lag(NULL, 1, 'a') over (), 'A', 'a'),
+       field(lead(NULL, 1, 'a') over (), 'A', 'a');
+select field(lag(NULL, 1, _binary 'a') over (), 'A', 'a'),
+       field(lead(NULL, 1, _binary 'a') over (), 'A', 'a');
+select field(lag('x', 1, 'a') over (), 'A', 'a'),
+       field(lead('x', 1, 'a') over (), 'A', 'a');
+select field(lag('x', 1, _binary 'a') over (), 'A', 'a'),
+       field(lead('x', 1, _binary 'a') over (), 'A', 'a');
+select field(lag(_binary 'x', 1, 'a') over (), 'A', 'a'),
+       field(lead(_binary 'x', 1, 'a') over (), 'A', 'a');
+select field(lag(_binary 'x', 1, _binary 'a') over (), 'A', 'a'),
+       field(lead(_binary 'x', 1, _binary 'a') over (), 'A', 'a');

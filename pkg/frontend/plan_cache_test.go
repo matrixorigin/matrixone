@@ -525,7 +525,7 @@ func TestSessionSQLModePresenceChangeClearsPlanCache(t *testing.T) {
 	require.Equal(t, 1, stmt.freed)
 }
 
-func TestTemporalSessionChangesInvalidatePreparedAndCachedPlans(t *testing.T) {
+func TestSessionPlanDependenciesInvalidatePreparedAndCachedPlans(t *testing.T) {
 	ctx := defines.AttachAccountId(context.Background(), catalog.System_Account)
 	setPu("", config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil))
 	for _, tc := range []struct {
@@ -533,6 +533,7 @@ func TestTemporalSessionChangesInvalidatePreparedAndCachedPlans(t *testing.T) {
 		a, b interface{}
 	}{
 		{"lc_time_names", "en_US", "fr_FR"},
+		{"mo_pk_check_by_cn", int8(0), int8(1)},
 		{"explicit_defaults_for_timestamp", int64(1), int64(0)},
 		{"sql_mode", "STRICT_TRANS_TABLES", "STRICT_TRANS_TABLES,TIME_TRUNCATE_FRACTIONAL"},
 		{"sql_mode", "", "STRICT_TRANS_TABLES"},
@@ -654,8 +655,8 @@ func TestSessionProtocolVersionChangeInvalidatesPlanCache(t *testing.T) {
 		{name: "numeric prefix rollback", from: defines.MORPCVersion30, to: defines.MORPCVersion25},
 		{name: "main row-lock upgrade", from: defines.MORPCVersion122, to: defines.MORPCVersion123},
 		{name: "main row-lock rollback", from: defines.MORPCVersion123, to: defines.MORPCVersion122},
-		{name: "JSON_VALUE upgrade", from: defines.MORPCVersion124, to: defines.MORPCVersion125},
-		{name: "JSON_VALUE rollback", from: defines.MORPCVersion125, to: defines.MORPCVersion124},
+		{name: "JSON_VALUE upgrade", from: defines.MORPCVersion128, to: defines.MORPCVersion129},
+		{name: "JSON_VALUE rollback", from: defines.MORPCVersion129, to: defines.MORPCVersion128},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)

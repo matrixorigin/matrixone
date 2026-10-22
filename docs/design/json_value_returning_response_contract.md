@@ -2,12 +2,15 @@
 
 Issue: #28037
 
-Base-sync note (2026-10-20): target main at
-`743e749a1e33d6c845bb73999e8c82d297a2b657` owns MORPC v123 row-lock admission
-and v124 fractional TIMESTAMPADD SECOND intervals. This isolated branch assigns
-the seven-argument JSON_VALUE contract provisional v125, with v124 as its
-immediate predecessor. An independent unmerged branch also provisionally uses
-v125; this is not a maintainer-approved allocation, does not establish
+Base-sync note (2026-10-22): target main at
+`6cbe375b49696021d72778baa292a66287f080bd` owns MORPC v125 LOAD IGNORE
+foreign-key diagnostics, v126 parser-derived VIEWS definitions, v127
+IndexSearchScan search knobs and v128 mixed JSON/numeric comparisons, in
+addition to the earlier capabilities below. This isolated branch assigns
+the seven-argument JSON_VALUE contract provisional v129, with actual main v128
+as its immediate predecessor. Unpublished candidates #29057 and #28938 also
+use v129, while #28935 proposes v129/v130. This is not a maintainer-approved
+allocation, does not establish
 cross-branch mixed-deployment support, and must be revalidated at the
 authoritative main merge. Binder, sender/receiver and persisted admission use
 that provisional floor. This maintenance merge does not close the benchmark,
@@ -86,7 +89,7 @@ thread resolution and approvals of earlier revisions do not approve this one.
 The pre-conflict revision-9 source was a MORPC v124 candidate for JSON_VALUE
 function ID 462, overload 2, based on
 `7c146f4adbf068dd0c06b377157cfb7d7698b1eb` (v123). This isolated conflict
-repair advances the JSON_VALUE gate to provisional v125 against the target main
+repair advances the JSON_VALUE gate to provisional v129 against the target main
 identified above; revalidate that allocation at the authoritative main merge.
 It preserves main's
 functional-index metadata and generated-key maintenance capability at v107 and
@@ -106,10 +109,12 @@ database defaults/table charset alteration at v118, coordinator-owned dependent
 programs at v119, current-session KILL authorization/cleanup at v120, unsigned
 DECIMAL DIV result semantics at v121, and unary TIMESTAMP/dynamic TIME result
 contracts at v122, plus capability-gated nonblocking row-lock admission at
-v123 and fractional TIMESTAMPADD SECOND intervals at v124. These independent
-capabilities and their gates remain intact. Main's v123 and v124 capabilities
+v123 and fractional TIMESTAMPADD SECOND intervals at v124, LOAD IGNORE
+foreign-key diagnostics at v125, parser-derived VIEWS definitions at v126,
+IndexSearchScan search knobs at v127 and mixed JSON/numeric comparisons at v128.
+These independent capabilities and their gates remain intact. Main through v128
 must still reject this candidate's seven-argument JSON_VALUE contract; the
-cumulative latest version on this isolated candidate is provisional v125.
+cumulative latest version on this isolated candidate is provisional v129.
 Algorithm-expression-only owners participate in the
 same expression feature walk; an ordinary projection is not required.
 It is not the final landing
@@ -131,12 +136,12 @@ binaries. The source gates, immediate-predecessor
 tests, final design and earlier-capability preservation tests move together
 after cumulative integration. No independent design approval is carried forward.
 
-The planner requires the deployment-wide MOProtocolVersion to be at least 125
+The planner requires the deployment-wide MOProtocolVersion to be at least 129
 for RETURNING, ON EMPTY or ON ERROR. Bare two-argument calls keep the legacy
 plan and its NULL-document short circuit. In the new clause-bearing contract,
 a non-NULL invalid path is a hard error even when the document is SQL NULL.
 
-Both current sender and receiver validate overload 2 against v125 before remote
+Both current sender and receiver validate overload 2 against v129 before remote
 execution. Those checks do not retrofit an old receiver. The accepted deployment
 scope is a shutdown upgrade: stop all old processes, replace the binaries with
 the final cumulative build, then start and admit the deployment before authoring
@@ -155,7 +160,7 @@ The SQL grammar rejects JSON_VALUE in ON UPDATE; internal owner-walk coverage
 does not imply SQL support for that combination. Prepared execution is tested separately; a session prepared statement is not
 assumed to be a durable catalog object.
 
-Do not admit pre-v125 CNs after committing a v125 durable floor. The existing
+Do not admit pre-v129 CNs after committing a v129 durable floor. The existing
 floor advances monotonically; deleting views/generated expressions or indexes
 does not by itself lower it. In-place rollback below that floor is unsupported
 unless a separately supported, validated floor-lowering procedure exists.
@@ -266,7 +271,7 @@ generic vector ingestion/unmarshal and cannot answer their regression cost.
 The pre-merge v123 candidate passed bounded serial CGo focused tests for the
 MySQL parser, plan protobuf, SQL planner, function lookup and compile packages.
 Those receipts cover that revision's merged grammar and v122 rejection/v123
-admission only; they are historical evidence, not validation of this v125
+admission only; they are historical evidence, not validation of this v129
 main-relative conflict repair. This bounded maintenance candidate does not
 claim full integration, distributed BVT, exact-head CI, deployment QA, or
 shutdown-upgrade evidence.

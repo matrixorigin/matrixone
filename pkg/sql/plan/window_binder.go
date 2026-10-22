@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -1354,6 +1355,18 @@ func makeWindowFrameConstValue(
 	if err != nil {
 		return nil, err
 	}
+	if defines.IsPublicationViewBinding(bindCtx) {
+		// Publication scope validation (#27767) binds a stored definition's
+		// window frame bound without evaluating it: the eager executor here
+		// executes every function of the bound expression at bind time. The
+		// bound expression itself proves the frame clause binds against the
+		// validating schema, the marker keeps the optimizer's rewrite
+		// pipeline from running at all, and the subscriber's own compile
+		// evaluates frame bounds as usual. Literal bounds - the only form a
+		// well-formed view's frame uses - are unaffected: they bind to
+		// literals and never needed the executor.
+		return e, nil
+	}
 
 	executor, err := colexec.NewExpressionExecutor(proc, e)
 	if err != nil {
@@ -1482,6 +1495,16 @@ func resetWindowIntervalExpr(bindCtx context.Context, proc *process.Process, e *
 	numberExpr, err := appendCastBeforeExpr(bindCtx, e1, *typ)
 	if err != nil {
 		return nil, err
+	}
+
+	if defines.IsPublicationViewBinding(bindCtx) {
+		// Validation binds a stored definition's interval frame bound without
+		// evaluating it (#27767): this executor executes every function of
+		// the bound value at bind time, while the probe needs only the fact
+		// that the interval binds. Normalization itself is pure literal
+		// rewriting done above; the subscriber's own compile evaluates and
+		// normalizes as usual.
+		return e, nil
 	}
 
 	executor, err := colexec.NewExpressionExecutor(proc, numberExpr)

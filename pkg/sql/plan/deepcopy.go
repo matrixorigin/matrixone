@@ -60,6 +60,10 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 	if ref == nil {
 		return nil
 	}
+	var publisher *plan.PubInfo
+	if ref.PubInfo != nil {
+		publisher = proto.Clone(ref.PubInfo).(*plan.PubInfo)
+	}
 	return &plan.ObjectRef{
 		Server:           ref.Server,
 		Db:               ref.Db,
@@ -70,7 +74,7 @@ func DeepCopyObjectRef(ref *plan.ObjectRef) *plan.ObjectRef {
 		SchemaName:       ref.SchemaName,
 		ObjName:          ref.ObjName,
 		SubscriptionName: ref.SubscriptionName,
-		PubInfo:          ref.PubInfo,
+		PubInfo:          publisher,
 		NotLockMeta:      ref.NotLockMeta,
 		Snapshot:         DeepCopySnapshot(ref.Snapshot),
 	}
@@ -218,8 +222,14 @@ func DeepCopyPreInsertUkCtx(ctx *plan.PreInsertUkCtx) *plan.PreInsertUkCtx {
 		KeyNames:                     slices.Clone(ctx.KeyNames),
 		KeyTypes:                     keyTypes,
 		KeyTypeCounts:                slices.Clone(ctx.KeyTypeCounts),
+		KeyDiagnosticExprs:           slices.Clone(ctx.KeyDiagnosticExprs),
 	}
 
+	for i, exprs := range ctx.KeyDiagnosticExprs {
+		if exprs != nil {
+			newCtx.KeyDiagnosticExprs[i] = &plan.ExprList{List: DeepCopyExprList(exprs.List)}
+		}
+	}
 	return newCtx
 }
 
@@ -298,8 +308,11 @@ func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
 		return nil
 	}
 	return &plan.RankOption{
-		Mode:   opt.Mode,
-		Nprobe: opt.Nprobe,
+		Mode:      opt.Mode,
+		Itopk:     opt.Itopk,
+		MaxItopk:  opt.MaxItopk,
+		Nprobe:    opt.Nprobe,
+		MaxNprobe: opt.MaxNprobe,
 	}
 }
 
@@ -358,6 +371,7 @@ func DeepCopyNode(node *plan.Node) *plan.Node {
 		OnUpdateExprs:              DeepCopyExprList(node.OnUpdateExprs),
 		DedupColName:               node.DedupColName,
 		DedupColTypes:              slices.Clone(node.DedupColTypes),
+		DedupKeyExprs:              DeepCopyExprList(node.DedupKeyExprs),
 		UpdateCtxList:              DeepCopyUpdateCtxList(node.UpdateCtxList),
 		DedupJoinCtx:               DeepCopyDedupJoinCtx(node.DedupJoinCtx),
 		IndexReaderParam:           DeepCopyIndexReaderParam(node.IndexReaderParam),
@@ -527,6 +541,9 @@ func DeepCopyIndexSearchScan(old *plan.IndexSearchScan) *plan.IndexSearchScan {
 		AlgoOptions:         slices.Clone(old.AlgoOptions),
 		AlgoExprs:           DeepCopyExprList(old.AlgoExprs),
 		AlgoExprNames:       slices.Clone(old.AlgoExprNames),
+		InternalTopk:        old.InternalTopk,
+		MaxInternalTopk:     old.MaxInternalTopk,
+		MaxNprobe:           old.MaxNprobe,
 	}
 }
 

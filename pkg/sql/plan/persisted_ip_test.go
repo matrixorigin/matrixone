@@ -1256,11 +1256,11 @@ func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
 	require.True(t, features.LeastGreatestCollationSemantics)
 	required, err := RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion125, required)
+	require.Equal(t, defines.MORPCVersion129, required)
 	owner.Nodes[0].ProjectList = []*planpb.Expr{collated, calendar, mediumInt, jsonInput, jsonValue}
 	required, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion125, required, "feature order must not lower the cumulative floor")
+	require.Equal(t, defines.MORPCVersion129, required, "feature order must not lower the cumulative floor")
 	owner.Nodes[0].ProjectList = []*planpb.Expr{collated, calendar, mediumInt, jsonInput}
 	required, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
@@ -1269,6 +1269,21 @@ func TestJSONValuePersistedFloorComposesWithLandedJSONContracts(t *testing.T) {
 	required, err = RequiredPersistedExpressionProtocolVersion(owner)
 	require.NoError(t, err)
 	require.Equal(t, defines.MORPCVersion112, required, "signed WEEK keeps its landed floor without JSON_VALUE")
+
+	// Main's mixed JSON/numeric contract must survive without JSON_VALUE,
+	// and combining either expression order must keep the higher floor.
+	numeric := mustBindPersistedFollowupExpr(t, context.Background(), "=", []*planpb.Expr{
+		{Typ: types.T_json.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		{Typ: types.T_int64.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+	})
+	for _, expressions := range [][]*planpb.Expr{{jsonValue, numeric}, {numeric, jsonValue}} {
+		required, err = RequiredPersistedExpressionProtocolVersion(expressions)
+		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion129, required)
+	}
+	required, err = RequiredPersistedExpressionProtocolVersion(numeric)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion128, required)
 }
 
 func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
@@ -1359,35 +1374,35 @@ func TestJSONValuePersistedProtocolAdmissionAcrossOwners(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			required, err := RequiredPersistedExpressionProtocolVersion(tc.owner)
 			require.NoError(t, err)
-			require.Equal(t, int64(defines.MORPCVersion125), required)
+			require.Equal(t, int64(defines.MORPCVersion129), required)
 
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion122))
 			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 125")
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 129")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion123))
 			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 125")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion124)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion124))
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 129")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion128))
 			require.ErrorContains(t,
-				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 125")
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
-			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion125))
+				RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner), "protocol version 129")
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion129))
 			require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, tc.owner))
 		})
 	}
 
 	for _, tc := range owners {
 		owner := tc.owner
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion125))
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion124))
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolFloor, int64(defines.MORPCVersion129))
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion128))
 		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, owner))
 		require.ErrorContains(t,
-			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 125")
-		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion125))
+			RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner), "protocol version 129")
+		rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, int64(defines.MORPCVersion129))
 		require.NoError(t, RequirePersistedExpressionProtocolForAuthoring(proc.Ctx, proc, owner))
 	}
 
@@ -1452,9 +1467,9 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 		{"pre-main-feature baseline", defines.MORPCVersion117, defines.MORPCVersion117, false},
 		{"pre-row-lock predecessor", defines.MORPCVersion122, defines.MORPCVersion122, false},
 		{"main row-lock capability only", defines.MORPCVersion123, defines.MORPCVersion123, false},
-		{"JSON_VALUE predecessor", defines.MORPCVersion124, defines.MORPCVersion124, false},
-		{"read only admission", defines.MORPCVersion125, defines.MORPCVersion124, false},
-		{"authoring admitted", defines.MORPCVersion125, defines.MORPCVersion125, true},
+		{"JSON_VALUE predecessor", defines.MORPCVersion128, defines.MORPCVersion128, false},
+		{"read only admission", defines.MORPCVersion129, defines.MORPCVersion128, false},
+		{"authoring admitted", defines.MORPCVersion129, defines.MORPCVersion129, true},
 	} {
 		t.Run(state.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, state.protocol)
@@ -1467,14 +1482,14 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 					defer stmt.Free()
 					built, err := BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: sql}, stmt, false)
 					if !state.allowed {
-						require.ErrorContains(t, err, "protocol version 125")
+						require.ErrorContains(t, err, "protocol version 129")
 						return
 					}
 					require.NoError(t, err)
 					if table := built.GetDdl().GetCreateTable(); table != nil && table.GetTableDef().GetName() == "jv_index" {
 						required, err := RequiredPersistedExpressionProtocolVersion(table.GetTableDef())
 						require.NoError(t, err)
-						require.Equal(t, int64(defines.MORPCVersion125), required)
+						require.Equal(t, int64(defines.MORPCVersion129), required)
 						require.Len(t, table.GetIndexTables(), 1)
 						// The SQL builder's physical index stores materialized
 						// keys, not the generated expression owned by its table.
@@ -1486,7 +1501,7 @@ func TestJSONValuePersistedSQLAdmission(t *testing.T) {
 						var data ViewData
 						require.NoError(t, json.Unmarshal([]byte(view.GetTableDef().GetViewSql().GetView()), &data))
 						require.NotNil(t, data.RequiredProtocolVersion)
-						require.Equal(t, int64(defines.MORPCVersion125), *data.RequiredProtocolVersion)
+						require.Equal(t, int64(defines.MORPCVersion129), *data.RequiredProtocolVersion)
 					}
 				})
 			}

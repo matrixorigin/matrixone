@@ -80,6 +80,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/top"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/unionall"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/value_scan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -104,6 +105,9 @@ func encodeScope(s *Scope) ([]byte, error) {
 		return nil, err
 	}
 	if err = validateRemoteBinaryStringPipelineProtocol(s.Proc, p); err != nil {
+		return nil, err
+	}
+	if err = validateRemoteViewDefinitionPipelineProtocol(s.Proc, p); err != nil {
 		return nil, err
 	}
 	if err = validateOctStringProtocol(s.Proc, p); err != nil {
@@ -151,6 +155,9 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	}
 	if requiredProtocol != nil && (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion122)
+	}
+	if requiredProtocol != nil && features.LoadFKIgnoreCheck {
+		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion125)
 	}
 	if err = validateRemoteExpressionDestination(proc, p, features); err != nil {
 		return nil, err
@@ -399,9 +406,9 @@ func fillPipeline(s *Scope) (*pipeline.Pipeline, error) {
 	return p, nil
 }
 
-func sourceNodeForRemoteRun(source *Source) *plan.Node {
+func sourceNodeForRemoteRun(source *Source, proc *process.Process) (*plan.Node, error) {
 	if source == nil || source.node == nil {
-		return nil
+		return nil, nil
 	}
 	// pipeline.Source does not have wire fields for the execution-time filter
 	// lists. Carry them in a per-message node copy so the reusable plan node is
@@ -410,7 +417,28 @@ func sourceNodeForRemoteRun(source *Source) *plan.Node {
 	if source.BlockFilterList != nil {
 		node.BlockFilterList = source.BlockFilterList
 	}
-	return &node
+	// A remote CN has no session: carry the session search knobs in the copy.
+	if node.IndexSearchScan != nil {
+		spec, err := remoteIndexSearchScan(node.IndexSearchScan, proc)
+		if err != nil {
+			return nil, err
+		}
+		node.IndexSearchScan = spec
+	}
+	return &node, nil
+}
+
+// remoteIndexSearchScan returns a copy of spec whose unset search knobs are filled from
+// the session variables of proc, for a CN that runs spec without the session.
+func remoteIndexSearchScan(spec *plan.IndexSearchScan, proc *process.Process) (*plan.IndexSearchScan, error) {
+	if spec == nil || proc == nil {
+		return spec, nil
+	}
+	stamped := plan2.DeepCopyIndexSearchScan(spec)
+	if err := vectorscan.StampSessionKnobs(stamped, proc.GetResolveVariableFunc()); err != nil {
+		return nil, err
+	}
+	return stamped, nil
 }
 
 // generatePipeline generate a base pipeline.Pipeline structure without instructions
@@ -467,6 +495,10 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 	}
 	// DataSource
 	if s.DataSource != nil { // if select 1, DataSource is nil
+		sourceNode, err := sourceNodeForRemoteRun(s.DataSource, s.Proc)
+		if err != nil {
+			return nil, -1, err
+		}
 		p.DataSource = &pipeline.Source{
 			SchemaName:             s.DataSource.SchemaName,
 			TableName:              s.DataSource.RelationName,
@@ -475,7 +507,7 @@ func generatePipeline(s *Scope, ctx *scopeContext, ctxId int32) (*pipeline.Pipel
 			PushdownAddr:           s.DataSource.PushdownAddr,
 			Expr:                   s.DataSource.FilterExpr,
 			TableDef:               s.DataSource.TableDef,
-			Node:                   sourceNodeForRemoteRun(s.DataSource),
+			Node:                   sourceNode,
 			Timestamp:              &s.DataSource.Timestamp,
 			RuntimeFilterProbeList: s.DataSource.RuntimeFilterSpecs,
 			IsConst:                s.DataSource.isConst,
@@ -1126,6 +1158,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			OnDuplicateAction:         t.OnDuplicateAction,
 			DedupColName:              t.DedupColName,
 			DedupColTypes:             t.DedupColTypes,
+			DedupKeyExprs:             t.DedupKeyExprs,
 			DelColIdx:                 t.DelColIdx,
 			DedupDeleteMarkerColIdx:   t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList: t.DedupDeleteKeepColIdxList,
@@ -1156,6 +1189,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			DedupBuildKeepLast:              t.DedupBuildKeepLast,
 			DedupColName:                    t.DedupColName,
 			DedupColTypes:                   t.DedupColTypes,
+			DedupKeyExprs:                   t.DedupKeyExprs,
 			DelColIdx:                       t.DelColIdx,
 			DedupDeleteMarkerColIdx:         t.DedupDeleteMarkerColIdx,
 			DedupDeleteKeepColIdxList:       t.DedupDeleteKeepColIdxList,
@@ -1199,6 +1233,7 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 			InputKeysUnique:        t.InputKeysUnique,
 			DedupColName:           t.DedupColName,
 			DedupColTypes:          t.DedupColTypes,
+			DedupKeyExprs:          t.DedupKeyExprs,
 			DelColIdx:              t.DelColIdx,
 			LeftTypes:              convertToPlanTypes(t.LeftTypes),
 			RightTypes:             convertToPlanTypes(t.RightTypes),
@@ -1208,12 +1243,16 @@ func convertToPipelineInstruction(op vm.Operator, proc *process.Process, ctx *sc
 		in.SpillMem = t.SpillThreshold
 	case *apply.Apply:
 		relList, colList := getRelColList(t.Result)
+		applySpec, err := remoteIndexSearchScan(t.IndexSearchScan, proc)
+		if err != nil {
+			return ctxId, nil, err
+		}
 		in.Apply = &pipeline.Apply{
 			ApplyType:       int32(t.ApplyType),
 			RelList:         relList,
 			ColList:         colList,
 			Types:           convertToPlanTypes(t.Typs),
-			IndexSearchScan: t.IndexSearchScan,
+			IndexSearchScan: applySpec,
 			VectorAttrs:     t.VectorAttrs,
 			TxnOffset:       int64(t.TxnOffset),
 		}
@@ -1792,6 +1831,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.OnDuplicateAction = t.OnDuplicateAction
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DedupKeyExprs = t.DedupKeyExprs
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1816,6 +1856,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.DedupBuildKeepLast = t.DedupBuildKeepLast
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DedupKeyExprs = t.DedupKeyExprs
 		arg.DelColIdx = t.DelColIdx
 		arg.DedupDeleteMarkerColIdx = t.DedupDeleteMarkerColIdx
 		arg.DedupDeleteKeepColIdxList = t.DedupDeleteKeepColIdxList
@@ -1854,6 +1895,7 @@ func convertToVmOperator(opr *pipeline.Instruction, ctx *scopeContext, eng engin
 		arg.InputKeysUnique = t.InputKeysUnique
 		arg.DedupColName = t.DedupColName
 		arg.DedupColTypes = t.DedupColTypes
+		arg.DedupKeyExprs = t.DedupKeyExprs
 		arg.DelColIdx = t.DelColIdx
 		arg.UpdateColIdxList = t.UpdateColIdxList
 		arg.UpdateColExprList = t.UpdateColExprList
@@ -2317,8 +2359,14 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	if proc != nil {
 		protocolVersion, hasProtocolVersion = remoteMORPCProtocolVersion(proc.GetService())
 	}
+	if features.LoadFKIgnoreCheck && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion125) {
+		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")
+	}
 	if features.ScalarDivision && proc.DivisionByZeroWarningsEnabled() && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion116) {
 		return moerr.NewNotSupportedNoCtx("SELECT division diagnostics require MORPC protocol version 116")
+	}
+	if features.JSONNumericComparisons && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion128) {
+		return moerr.NewNotSupportedNoCtx("mixed JSON/numeric comparisons require MORPC protocol version 128")
 	}
 	if features.JSONScalarLiteralContracts && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion104) {
 		return moerr.NewNotSupportedNoCtx("typed JSON scalar literals require MORPC protocol version 104")
@@ -2430,9 +2478,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		)
 	}
 	if features.JSONValueContract &&
-		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion125) {
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
 		return moerr.NewNotSupportedNoCtx(
-			"seven-argument JSON_VALUE plans require MORPC protocol version 125",
+			"seven-argument JSON_VALUE plans require MORPC protocol version 129",
 		)
 	}
 	if (features.JSONInputContracts || features.YearBitCast) &&
@@ -2453,6 +2501,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 		return moerr.NewNotSupportedNoCtx(
 			"geodetic spatial-distance semantics require MORPC protocol version 90",
 		)
+	}
+	if features.ViewMetadataFunctions && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion126) {
+		return moerr.NewNotSupportedNoCtx("view metadata remote execution requires MORPC protocol version 126")
 	}
 	return nil
 }
@@ -2940,6 +2991,33 @@ func validateRemoteArrowLoadPipelineProtocol(proc *process.Process, p *pipeline.
 		if err := validateRemoteArrowLoadPipelineProtocol(proc, child); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateRemoteViewDefinitionPipelineProtocol protects the function IDs that
+// occur in the persisted VIEWS definition for standalone scope encoding.
+// Remote send and receive reuse the shared expression feature analysis.
+func validateRemoteViewDefinitionPipelineProtocol(
+	proc *process.Process,
+	p *pipeline.Pipeline,
+) error {
+	// A current peer cannot reject this function. Avoid a reflective traversal
+	// of every ordinary remote pipeline once the negotiated capability is known.
+	if proc != nil && supportsRemoteViewDefinitionFunction(proc.GetService()) {
+		return nil
+	}
+	features, err := plan.RequiredRemoteExpressionFeatures(p)
+	if err != nil {
+		return err
+	}
+	if !features.ViewMetadataFunctions {
+		return nil
+	}
+	if proc == nil || !supportsRemoteViewDefinitionFunction(proc.GetService()) {
+		return moerr.NewNotSupportedNoCtx(
+			"view metadata remote execution requires MORPC protocol version 126",
+		)
 	}
 	return nil
 }

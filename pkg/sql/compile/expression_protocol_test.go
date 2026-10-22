@@ -57,11 +57,20 @@ func TestJSONValueProtocolFloorComposesWithLandedContracts(t *testing.T) {
 		DecimalStatisticalResultContracts: true,
 		CalendarIntervalNormalization:     true,
 		LeastGreatestCollationSemantics:   true,
+		LoadFKIgnoreCheck:                 true,
+		ViewMetadataFunctions:             true,
+		JSONNumericComparisons:            true,
 	}
-	require.Equal(t, defines.MORPCVersion125, requiredExpressionContractProtocolVersion(features))
-	require.Equal(t, defines.MORPCVersion125, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion129, requiredExpressionContractProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion129, remoteExpressionProtocolVersion(features))
 	features.JSONValueContract = false
 	require.Equal(t, defines.MORPCVersion104, requiredExpressionContractProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion128, remoteExpressionProtocolVersion(features))
+	features.JSONNumericComparisons = false
+	require.Equal(t, defines.MORPCVersion126, remoteExpressionProtocolVersion(features))
+	features.ViewMetadataFunctions = false
+	require.Equal(t, defines.MORPCVersion125, remoteExpressionProtocolVersion(features))
+	features.LoadFKIgnoreCheck = false
 	require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
 	features.LeastGreatestCollationSemantics = false
 	require.Equal(t, defines.MORPCVersion115, remoteExpressionProtocolVersion(features))
@@ -74,18 +83,18 @@ func TestJSONValueDestinationRequiresItsOwnProtocolFloor(t *testing.T) {
 			features := planpb.RemoteExpressionFeatures{JSONValueContract: true, MediumIntAssignmentBounds: mixed, DateNumericResultContracts: mixed, LeastGreatestCollationSemantics: mixed}
 			p := &pipeline.Pipeline{Node: &pipeline.NodeInfo{Id: "old-worker", Addr: "remote:6001"}}
 			client.version = defines.MORPCVersion122
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 125")
+			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 129")
 			require.Equal(t, 1, client.calls)
 			require.Equal(t, client.calls, client.releases)
 			client.version = defines.MORPCVersion123
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 125")
+			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 129")
 			require.Equal(t, 2, client.calls)
 			require.Equal(t, client.calls, client.releases)
-			client.version = defines.MORPCVersion124
-			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 125")
+			client.version = defines.MORPCVersion128
+			require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, p, features), "version 129")
 			require.Equal(t, 3, client.calls)
 			require.Equal(t, client.calls, client.releases)
-			client.version = defines.MORPCVersion125
+			client.version = defines.MORPCVersion129
 			require.NoError(t, validateRemoteExpressionDestination(c.proc, p, features))
 			require.Equal(t, 4, client.calls)
 			require.Equal(t, client.calls, client.releases)
@@ -118,14 +127,14 @@ func TestJSONValueAndDateNumericProtocolPlacement(t *testing.T) {
 				require.NoError(t, err)
 				require.True(t, features.DateNumericResultContracts)
 				require.Equal(t, combined, features.JSONValueContract)
-				for _, version := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125} {
+				for _, version := range []int64{defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129} {
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 					client.version = version
 					c.execType = plan2.ExecTypeAP_MULTICN
 					c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 					require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 					want := plan2.ExecTypeAP_MULTICN
-					if combined && version < defines.MORPCVersion125 {
+					if combined && version < defines.MORPCVersion129 {
 						want = plan2.ExecTypeAP_ONECN
 					}
 					require.Equal(t, want, c.execType)
@@ -163,7 +172,7 @@ func TestJSONValueAndLeastGreatestProtocolComposition(t *testing.T) {
 				floor := defines.MORPCVersion117
 				if combined {
 					op.ProjectList = append(op.ProjectList, jsonValue)
-					floor = defines.MORPCVersion125
+					floor = defines.MORPCVersion129
 				}
 				qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: op.ProjectList}}, Steps: []int32{0}}
 				p := &pipeline.Pipeline{InstructionList: []*pipeline.Instruction{{ProjectList: op.ProjectList}}}
@@ -174,7 +183,7 @@ func TestJSONValueAndLeastGreatestProtocolComposition(t *testing.T) {
 				require.True(t, features.LeastGreatestCollationSemantics)
 				require.Equal(t, combined, features.JSONValueContract)
 				require.Equal(t, floor, remoteExpressionProtocolVersion(features))
-				for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion117} {
+				for _, version := range []int64{defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion117} {
 					// Reuse the same plan/scope after capability changes: placement
 					// and final send must not retain the prior successful admission.
 					rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
@@ -186,8 +195,8 @@ func TestJSONValueAndLeastGreatestProtocolComposition(t *testing.T) {
 					decoded, receiveErr := decodeScope(data, c.proc, true, nil)
 					if version < floor {
 						require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-						require.ErrorContains(t, sendErr, "version 125")
-						require.ErrorContains(t, receiveErr, "version 125")
+						require.ErrorContains(t, sendErr, "version 129")
+						require.ErrorContains(t, receiveErr, "version 129")
 					} else {
 						require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 						require.NoError(t, sendErr)
@@ -260,10 +269,10 @@ func TestJSONValueIndexSearchAlgoExprsProtocolComposition(t *testing.T) {
 				features, err = planpb.RequiredRemoteExpressionFeatures(owner)
 				require.NoError(t, err)
 				require.True(t, features.JSONValueContract)
-				require.Equal(t, defines.MORPCVersion125, remoteExpressionProtocolVersion(features))
+				require.Equal(t, defines.MORPCVersion129, remoteExpressionProtocolVersion(features))
 				require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, owner))
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 125")
-				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 125")
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 129")
+				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 129")
 			}
 			qry := &planpb.Query{Nodes: []*planpb.Node{node}, Steps: []int32{0}}
 			c.execType = plan2.ExecTypeAP_MULTICN
@@ -278,12 +287,12 @@ func TestJSONValueIndexSearchAlgoExprsProtocolComposition(t *testing.T) {
 			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 			for _, owner := range []*pipeline.Pipeline{p, decoded} {
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 125")
-				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 125")
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 129")
+				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 129")
 			}
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion124)
-			client.version = defines.MORPCVersion124
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
+			client.version = defines.MORPCVersion128
 			c.execType = plan2.ExecTypeAP_MULTICN
 			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -291,12 +300,12 @@ func TestJSONValueIndexSearchAlgoExprsProtocolComposition(t *testing.T) {
 			for _, owner := range []*pipeline.Pipeline{p, decoded} {
 				require.NoError(t, validateRemoteVectorPartitionProtocol(c.proc, owner))
 				require.NoError(t, validateVectorPartitionDestination(c.proc, owner))
-				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 125")
-				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 125")
+				require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, owner), "version 129")
+				require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, owner, features), "version 129")
 			}
 
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
-			client.version = defines.MORPCVersion125
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+			client.version = defines.MORPCVersion129
 			c.execType = plan2.ExecTypeAP_MULTICN
 			c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 			require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -414,6 +423,41 @@ func TestExpressionProtocolResolvesLegacyAddressOnlyScopes(t *testing.T) {
 	require.Equal(t, client.calls, client.releases)
 }
 
+func TestAllCNsSupportProtocolProbesEveryCN(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	client.version = defines.MORPCVersion86
+
+	supported, err := AllCNsSupportProtocol(c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, 1, client.calls)
+
+	client.version = defines.MORPCVersion85
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.False(t, supported)
+
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion85)
+	supported, err = AllCNsSupportProtocol(c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.False(t, supported)
+}
+
+func TestAllCNsSupportProtocolWithContextIgnoresCanceledProcessContext(t *testing.T) {
+	c, client := expressionProtocolTestCompile(t)
+	client.version = defines.MORPCVersion86
+	procCtx, cancel := context.WithCancel(c.proc.Ctx)
+	c.proc.Ctx = procCtx
+	cancel()
+
+	supported, err := AllCNsSupportProtocolWithContext(
+		context.Background(), c.proc, defines.MORPCVersion86)
+	require.NoError(t, err)
+	require.True(t, supported)
+	require.Equal(t, 1, client.calls)
+}
+
 func TestExpressionProtocolFailedResponsesAreReleased(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -506,6 +550,37 @@ func TestRemoteExpressionPlacementRechecksGenerationAndWorkers(t *testing.T) {
 	place(plan2.ExecTypeAP_MULTICN, 2)
 	client.versions["second:9000"] = defines.MORPCVersion71
 	place(plan2.ExecTypeAP_ONECN, 2)
+	// View metadata joins the same placement floor and live worker checks.
+	for _, id := range []int32{function.MO_VIEW_DEFINITION, function.MO_VIEW_CHECK_OPTION} {
+		qry.Nodes[0].ProjectList = []*planpb.Expr{{Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(id, 0)},
+		}}}}
+		client.versions["worker:9000"] = defines.MORPCVersion126
+		client.versions["second:9000"] = defines.MORPCVersion109
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion113
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion114
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion115
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion116
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion117
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion118
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion119
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion121
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion122
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion120
+		place(plan2.ExecTypeAP_ONECN, 2)
+		client.versions["second:9000"] = defines.MORPCVersion126
+		place(plan2.ExecTypeAP_MULTICN, 2)
+	}
 	qry.Nodes[0].ProjectList = []*planpb.Expr{plan2.MakePlan2Int64ConstExprWithType(1)}
 	place(plan2.ExecTypeAP_MULTICN, 0)
 }

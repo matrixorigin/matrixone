@@ -52,6 +52,21 @@ func TestJSONValueClausesParseAndFormat(t *testing.T) {
 	_, err = ParseOne(context.Background(), combinedSQL, 1)
 	require.NoError(t, err)
 	require.Contains(t, combinedSQL, "null on empty error on error")
+
+	t.Run("view metadata preserves both formatters", func(t *testing.T) {
+		stmt, err := ParseOne(context.Background(),
+			`select json_value(name_const('doc', '{"a":"x\\\\y"}'), '$.a' returning char) as extracted, name_const('label', 'x\\y')`, 1)
+		require.NoError(t, err)
+		defer stmt.Free()
+		formatted := tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithViewDefinition())
+		require.Contains(t, formatted, "json_value(")
+		require.Contains(t, formatted, "returning char")
+		require.NotContains(t, formatted, "name_const(")
+		reparsed, err := ParseOne(context.Background(), formatted, 1)
+		require.NoError(t, err, formatted)
+		defer reparsed.Free()
+		require.Equal(t, formatted, tree.StringWithOpts(reparsed, dialect.MYSQL, tree.WithViewDefinition()))
+	})
 }
 
 func TestJSONValueReturningTypesParse(t *testing.T) {

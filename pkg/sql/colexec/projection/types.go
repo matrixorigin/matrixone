@@ -121,7 +121,3 @@ func (projection *Projection) freeExpandOwned(proc *process.Process) {
 	}
 	projection.ctr.expandOwned = projection.ctr.expandOwned[:0]
 }
-
-func (projection *Projection) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
