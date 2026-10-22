@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
@@ -150,9 +151,17 @@ func (builder *QueryBuilder) IsEquiJoin(node *plan.Node) bool {
 	return false
 }
 
+// Mixed JSON/numeric equality is a typed comparison, not a shared key domain.
+// Retain it as a residual predicate; key extraction and equality propagation
+// must not replace either operand with the other physical representation.
+func isJSONNumericComparisonArgs(args []*plan.Expr) bool {
+	return len(args) == 2 && args[0] != nil && args[1] != nil &&
+		function.IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id))
+}
+
 func isEquiCond(expr *plan.Expr, leftTags, rightTags map[int32]bool) bool {
 	if e, ok := expr.Expr.(*plan.Expr_F); ok {
-		if !IsEqualFunc(e.F.Func.GetObj()) {
+		if !IsEqualFunc(e.F.Func.GetObj()) || isJSONNumericComparisonArgs(e.F.Args) {
 			return false
 		}
 
@@ -187,7 +196,7 @@ func IsEquiJoinCondition(expr *plan.Expr) bool {
 		return false
 	}
 	e, ok := expr.Expr.(*plan.Expr_F)
-	if !ok || e.F == nil || e.F.Func == nil || len(e.F.Args) != 2 || !IsEqualFunc(e.F.Func.GetObj()) {
+	if !ok || e.F == nil || e.F.Func == nil || len(e.F.Args) != 2 || !IsEqualFunc(e.F.Func.GetObj()) || isJSONNumericComparisonArgs(e.F.Args) {
 		return false
 	}
 	lpos, rpos := HasColExpr(e.F.Args[0], -1), HasColExpr(e.F.Args[1], -1)
