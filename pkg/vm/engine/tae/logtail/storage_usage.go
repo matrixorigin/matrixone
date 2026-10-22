@@ -359,15 +359,12 @@ type TNUsageMemo struct {
 		vers    []uint32
 		delayed map[uint64]UsageData
 	}
-
-	C *catalog.Catalog
 }
 
-func NewTNUsageMemo(c *catalog.Catalog) *TNUsageMemo {
+func NewTNUsageMemo() *TNUsageMemo {
 	memo := new(TNUsageMemo)
 	memo.cache = NewStorageUsageCache()
 	memo.newAccCache = NewStorageUsageCache()
-	memo.C = c
 	return memo
 }
 
