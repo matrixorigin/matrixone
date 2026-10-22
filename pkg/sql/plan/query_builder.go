@@ -14367,12 +14367,28 @@ func tableFunctionHasStableIntrinsicValues(node *plan.Node) bool {
 	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN || node.TableDef == nil || node.TableDef.TblFunc == nil {
 		return false
 	}
+	args := node.TblFuncExprList
 	switch node.TableDef.TblFunc.Name {
-	case "generate_series", "unnest":
-		return len(node.TblFuncExprList) >= 1 && len(node.TblFuncExprList) <= 3
-	default:
-		return false
+	case "generate_series":
+		return len(args) >= 1 && len(args) <= 3
+	case "unnest":
+		return len(args) >= 1 && len(args) <= 3 && args[0] != nil &&
+			(types.T(args[0].Typ.Id) == types.T_json || types.T(args[0].Typ.Id) == types.T_varchar)
+	case "json_table":
+		if len(args) != 1 || args[0] == nil {
+			return false
+		}
+		// JSON/text is parsed locally. DATALINK opens an external reader;
+		// unresolved domains must not inherit the local-input proof.
+		switch types.T(args[0].Typ.Id) {
+		case types.T_json, types.T_char, types.T_varchar, types.T_text:
+			return true
+		case types.T_any:
+			// The executor handles NULL before dispatching on the source type.
+			return isNullLiteralExpr(args[0])
+		}
 	}
+	return false
 }
 
 func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext, input *tableFunctionInput) (int32, error) {

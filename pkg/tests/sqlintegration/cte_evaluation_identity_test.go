@@ -50,6 +50,7 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 			{"uuid", "with r as(select uuid()x) select count(*) from r a join r b on a.x=b.x", 1},
 			{"volatile charset argument", "with r as(select convert(uuid() using utf8mb4)x) select count(*) from r a join r b on a.x=b.x", 1},
 			{"volatile unnest argument", `with r as(select value from unnest(concat('["',uuid(),'"]'))u) select count(*) from r a join r b on a.value=b.value`, 1},
+			{"volatile JSON_TABLE argument", `with r as(select x from json_table(concat('["',uuid(),'"]'),'$[*]' columns(x varchar(36) path '$'))j) select count(*) from r a join r b on a.x=b.x`, 1},
 			{"union", "with r as(select 1 k,rand()x union all select 2,rand()) select count(*) from r a join r b on a.k=b.k and a.x=b.x", 2},
 			{"table bag and null", "with r as(select k,uuid()x from t) select count(*) from r a join r b on a.k<=>b.k and a.x=b.x", 4},
 			{"special types", "with r as(select e,s,uuid()x from special) select count(*) from r a join r b on a.e=b.e and a.s=b.s and a.x=b.x", 2},
@@ -100,6 +101,7 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 			{"stable recursive sibling programs", "select k,(with recursive r(n) as(select (select t.k) union all select n+1 from r where n<3) select (select min(n) from r)+(select max(n) from r)) v from t order by k"},
 			{"stable CHAR recursive siblings", "select k,(with recursive r(n,s) as(select (select t.k),cast('a' as char(8)) union all select n+1,concat(s,'') from r where n<3) select (select min(n) from r)+(select max(n) from r)) v from t order by k"},
 			{"stable series siblings", "select k,(with r as(select result k from generate_series(1,3)g) select (select min(k) from r where k>=t.k)+(select max(k) from r)) v from t order by k"},
+			{"stable JSON_TABLE siblings", `select k,(with r as(select x from json_table('[1,2,3]','$[*]' columns(x int path '$'))j) select (select min(x) from r where x>=t.k)+(select max(x) from r)) v from t order by k`},
 			{"stable constant rows control", "select k,(with r as(select 1 k union all select 2 union all select 3) select (select min(k) from r where k>=t.k)+(select max(k) from r)) v from t order by k"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
@@ -124,6 +126,11 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 				{"AES", "hex(aes_decrypt(aes_encrypt('ab','k'),'k'))", "6162"},
 				{"database", "database()", "cte_evaluation_identity"},
 				{"user", "cast(user()=user() as int)", "1"},
+				{"found rows", "cast(found_rows()=found_rows() as int)", "1"},
+				{"row count", "cast(row_count()=row_count() as int)", "1"},
+				{"last insert ID", "cast(last_insert_id()=last_insert_id() as int)", "1"},
+				{"last query ID", "cast(last_query_id()=last_query_id() as int)", "1"},
+				{"indexed query ID", "cast(last_query_id(-1)=last_query_id(-1) as int)", "1"},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					query := "with r as(select " + tc.expr + " x) select t.k,(select max(x) from r group by t.k) from t order by t.k"
@@ -131,6 +138,74 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 					require.NoError(t, err)
 					require.Equal(t, []string{"NULL:" + tc.want, "1:" + tc.want, "2:" + tc.want, "2:" + tc.want}, readWindowNullRows(t, rows))
 				})
+			}
+		})
+		t.Run("stable JSON_TABLE captures", func(t *testing.T) {
+			for _, tc := range []struct{ name, source, want string }{
+				{"text", "'[1,2,3]'", "3"},
+				{"JSON", "cast('[1,2,3]' as json)", "3"},
+				{"NULL", "null", "NULL"},
+				{"empty", "'[]'", "NULL"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					query := "with r as(select x from json_table(" + tc.source + ",'$[*]' columns(x int path '$'))j) select t.k,(select max(x) from r group by t.k) from t order by t.k"
+					rows, err := db.QueryContext(ctx, query)
+					require.NoError(t, err)
+					require.Equal(t, []string{"NULL:" + tc.want, "1:" + tc.want, "2:" + tc.want, "2:" + tc.want}, readWindowNullRows(t, rows))
+				})
+			}
+		})
+		t.Run("JSON_TABLE diagnostics", func(t *testing.T) {
+			for _, query := range []string{
+				`with r as(select x from json_table('[1.234]','$[*]' columns(x decimal(4,1) path '$'))j) select t.k,(select max(x) from r group by t.k) from(select 1 k union all select 2)t order by t.k`,
+				`select t.k,(select max(x) from json_table('[1.234]','$[*]' columns(x decimal(4,1) path '$'))j group by t.k) from(select 1 k union all select 2)t order by t.k`,
+			} {
+				rows, err := db.QueryContext(ctx, query)
+				require.NoError(t, err)
+				require.Equal(t, []string{"1:1.2", "2:1.2"}, readWindowNullRows(t, rows))
+				var warnings int
+				require.NoError(t, db.QueryRowContext(ctx, "show count(*) warnings").Scan(&warnings))
+				require.Equal(t, 2, warnings, "CTE capture retains per-invocation diagnostics")
+			}
+		})
+		t.Run("prepared JSON_TABLE input", func(t *testing.T) {
+			stmt, err := db.PrepareContext(ctx, "with r as(select x from json_table(?,'$[*]' columns(x int path '$'))j) select t.k,(select max(x) from r group by t.k) from t order by t.k")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct{ input, want string }{{"[1,2,3]", "3"}, {"invalid", ""}, {"[]", "NULL"}, {"[4]", "4"}} {
+				rows, err := stmt.QueryContext(ctx, tc.input)
+				if tc.want == "" {
+					require.Error(t, err)
+					continue
+				}
+				require.NoError(t, err)
+				require.Equal(t, []string{"NULL:" + tc.want, "1:" + tc.want, "2:" + tc.want, "2:" + tc.want}, readWindowNullRows(t, rows))
+			}
+		})
+		t.Run("prepared session readers", func(t *testing.T) {
+			execSQLRequire(t, ctx, db, "create table session_identity(id bigint auto_increment primary key)")
+			stmt, err := db.PrepareContext(ctx, "with r as(select found_rows()f,row_count()a,last_insert_id()i) select t.k,(select max(f) from r group by t.k),(select max(a) from r group by t.k),(select max(i) from r group by t.k) from t order by t.k")
+			require.NoError(t, err)
+			defer stmt.Close()
+			// Seed after preparation. SELECT and INSERT exercise the real session
+			// publication paths instead of setting mock process fields.
+			rows, err := db.QueryContext(ctx, "select k from t limit 2")
+			require.NoError(t, err)
+			require.Len(t, readWindowNullRows(t, rows), 2)
+			for _, tc := range []struct{ seed, suffix string }{
+				{"insert into session_identity values(null)", ":2:1:1"},
+				{"insert into session_identity values(null),(null)", ":4:2:2"},
+				{"select missing_column", ":4:-1:2"},
+			} {
+				if tc.seed == "select missing_column" {
+					_, err := db.ExecContext(ctx, tc.seed)
+					require.Error(t, err)
+				} else {
+					execSQLRequire(t, ctx, db, tc.seed)
+				}
+				rows, err := stmt.QueryContext(ctx)
+				require.NoError(t, err)
+				require.Equal(t, []string{"NULL" + tc.suffix, "1" + tc.suffix, "2" + tc.suffix, "2" + tc.suffix}, readWindowNullRows(t, rows))
 			}
 		})
 		t.Run("scalar diagnostics", func(t *testing.T) {
@@ -143,6 +218,9 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 		})
 		t.Run("unsupported lifetime captures", func(t *testing.T) {
 			for _, q := range []string{
+				`with r as(select x from json_table(cast('file:///missing' as datalink),'$[*]' columns(x int path '$'))j) select (select max(x) from r group by t.k) from t`,
+				`with r as(select x from json_table(load_file('file:///missing'),'$[*]' columns(x int path '$'))j) select (select max(x) from r group by t.k) from t`,
+				`with r as(select x from json_table(concat('["',uuid(),'"]'),'$[*]' columns(x varchar(36) path '$'))j) select (select max(x) from r group by t.k) from t`,
 				"with r as(select uuid()x) select (select max(x) from r group by t.k) from t",
 				"with r as(select result k from generate_series(cast(rand()*10 as bigint),10)g) select (select max(k) from r group by t.k) from t",
 				"with r as(select convert(uuid() using utf8mb4)x) select (select max(x) from r group by t.k) from t",

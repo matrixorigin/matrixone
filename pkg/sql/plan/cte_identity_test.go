@@ -19,6 +19,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/stretchr/testify/require"
@@ -105,6 +107,10 @@ func TestCTEIdentityInvocationOwnership(t *testing.T) {
 		{"stable CHAR recursive siblings", `select (with recursive r(n,s) as(select (select t2.a),cast('a' as char(8)) union all select n+1,concat(s,'') from r where n<3) select (select min(n) from r)+(select max(n) from r)) from bvt_test2.t2`, ""},
 		{"stable VARCHAR recursive siblings", `select (with recursive r(n,s) as(select (select t2.a),cast('a' as varchar(8)) union all select n+1,concat(s,'') from r where n<3) select (select min(n) from r)+(select max(n) from r)) from bvt_test2.t2`, ""},
 		{"stable series siblings", `select (with r as(select result k from generate_series(1,3)g) select (select min(k) from r where k>=t2.a)+(select max(k) from r)) from bvt_test2.t2`, ""},
+		{"stable JSON_TABLE siblings", `select (with r as(select x from json_table('[1,2,3]','$[*]' columns(x int path '$'))j) select (select min(x) from r where x>=t2.a)+(select max(x) from r)) from bvt_test2.t2`, ""},
+		{"external JSON_TABLE capture", `with r as(select x from json_table(cast('file:///missing' as datalink),'$[*]' columns(x int path '$'))j) select (select max(x) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
+		{"volatile JSON_TABLE argument", `with r as(select x from json_table(concat('["',uuid(),'"]'),'$[*]' columns(x varchar(36) path '$'))j) select (select max(x) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
+		{"volatile history index", `with r as(select last_query_id(cast(rand()*2 as bigint))x) select (select max(x) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
 		{"volatile series argument", `with r as(select result k from generate_series(cast(rand()*10 as bigint),10)g) select (select max(k) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
 		{"volatile unnest argument", `with r as(select cast(value as varchar(36))x from unnest(concat('["',uuid(),'"]'))u) select (select max(x) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
 		{"volatile charset argument", `with r as(select convert(uuid() using utf8mb4)x) select (select max(x) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
@@ -135,6 +141,13 @@ func TestCTEEvaluationClassification(t *testing.T) {
 		{"series input", "select g.result from nation n join generate_series(n.n_nationkey,n.n_nationkey+1)g on true", false, false},
 		{"unnest", "select value from unnest('[1,2]')u", false, false},
 		{"unnest input", `select u.value from nation n join unnest(concat('["',n.n_name,'"]'))u on true`, false, false},
+		{"JSON_TABLE text", `select x from json_table('[1,2]','$[*]' columns(x int path '$'))j`, false, false},
+		{"JSON_TABLE typed JSON", `select x from json_table(cast('[1,2]' as json),'$[*]' columns(x int path '$'))j`, false, false},
+		{"JSON_TABLE input", `select j.x from nation n join json_table(concat('[',n.n_nationkey,']'),'$[*]' columns(x int path '$'))j on true`, false, false},
+		{"JSON_TABLE NULL", `select x from json_table(null,'$[*]' columns(x int path '$'))j`, false, false},
+		{"JSON_TABLE external input", `select x from json_table(cast('file:///missing' as datalink),'$[*]' columns(x int path '$'))j`, true, true},
+		{"JSON_TABLE file expression", `select x from json_table(load_file('file:///missing'),'$[*]' columns(x int path '$'))j`, true, true},
+		{"JSON_TABLE volatile projection", `select x,uuid() from json_table('[1,2]','$[*]' columns(x int path '$'))j`, true, true},
 		{"CHAR recursion", "with recursive r(n,s)as(select 1,cast('a' as char(8)) union all select n+1,concat(s,'') from r where n<3) select * from r", true, false},
 		{"VARCHAR recursion", "with recursive r(n,s)as(select 1,cast('a' as varchar(8)) union all select n+1,concat(s,'') from r where n<3) select * from r", true, false},
 		{"unstable cast input", "with recursive r(n,s)as(select 1,cast('a' as char(64)) union all select n+1,concat(s,uuid()) from r where n<3) select * from r", true, true},
@@ -154,9 +167,29 @@ func TestCTEEvaluationClassification(t *testing.T) {
 			require.Equal(t, tc.unstable, evaluation.valueUnstable)
 		})
 	}
-	for _, name := range []string{"json_table", "processlist", "generate_random_int64", "unknown_scan"} {
+	for _, name := range []string{"processlist", "generate_random_int64", "unknown_scan"} {
 		node := &planpb.Node{NodeType: planpb.Node_FUNCTION_SCAN, TableDef: &planpb.TableDef{TblFunc: &planpb.TableFunction{Name: name}}, TblFuncExprList: []*planpb.Expr{{}}}
 		require.False(t, tableFunctionHasStableIntrinsicValues(node), name)
+	}
+	for _, tc := range []struct {
+		name   string
+		typ    types.T
+		stable bool
+	}{
+		{"json_table", types.T_json, true}, {"json_table", types.T_char, true},
+		{"json_table", types.T_varchar, true}, {"json_table", types.T_text, true},
+		{"json_table", types.T_datalink, false}, {"json_table", types.T_any, false},
+		{"unnest", types.T_json, true}, {"unnest", types.T_varchar, true},
+		{"unnest", types.T_datalink, false}, {"unnest", types.T_any, false},
+	} {
+		node := &planpb.Node{NodeType: planpb.Node_FUNCTION_SCAN, TableDef: &planpb.TableDef{TblFunc: &planpb.TableFunction{Name: tc.name}}, TblFuncExprList: []*planpb.Expr{{Typ: planpb.Type{Id: int32(tc.typ)}}}}
+		require.Equal(t, tc.stable, tableFunctionHasStableIntrinsicValues(node), "%s %s", tc.name, tc.typ)
+		node.TblFuncExprList[0] = nil
+		require.False(t, tableFunctionHasStableIntrinsicValues(node))
+	}
+	for _, args := range [][]*planpb.Expr{nil, {{}, {}}} {
+		node := &planpb.Node{NodeType: planpb.Node_FUNCTION_SCAN, TableDef: &planpb.TableDef{TblFunc: &planpb.TableFunction{Name: "json_table"}}, TblFuncExprList: args}
+		require.False(t, tableFunctionHasStableIntrinsicValues(node))
 	}
 	require.False(t, tableFunctionHasStableIntrinsicValues(nil))
 	for _, argc := range []int{0, 4} {

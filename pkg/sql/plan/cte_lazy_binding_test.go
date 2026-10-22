@@ -1213,6 +1213,16 @@ func TestCTEMultiReferenceReuseGuards(t *testing.T) {
 				select a.n_nationkey from c a join c b on a.n_nationkey = b.n_nationkey`,
 		},
 		{
+			name: "stable session reader remains no-fold",
+			sql: `with c as(select n_regionkey,max(row_count())x from nation group by n_regionkey)
+				select a.x from c a join c b on a.n_regionkey=b.n_regionkey`,
+		},
+		{
+			name: "stable JSON_TABLE keeps optional scan guard",
+			sql: `with c as(select x from json_table('[1,2,3]','$[*]' columns(x int path '$'))j)
+				select a.x from c a join c b on a.x=b.x`,
+		},
+		{
 			name:          "volatile producer",
 			wantSinkScans: 2,
 			sql: `with c as (

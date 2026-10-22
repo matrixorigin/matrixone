@@ -1429,7 +1429,8 @@ func TestGetFunctionValueUnstableByID(t *testing.T) {
 		INTERNAL_NUMERIC_PRECISION: true, INTERNAL_NUMERIC_SCALE: true,
 		MO_SHOW_VISIBLE_BIN: true, MO_SHOW_VISIBLE_BIN_ENUM: true, MO_SHOW_COL_UNIQUE: true,
 		MO_LOG_DATE: true, MO_WIN_TRUNCATE: true, MO_WIN_DIVISOR: true, MO_EXPLAIN_PHY: true,
-		DATABASE: true, USER: true, CHECK_CONSTRAINT_ASSERT: true, LOAD_FK_IGNORE_CHECK: true,
+		DATABASE: true, USER: true, FOUND_ROWS: true, ROW_COUNT: true, LAST_INSERT_ID: true, LAST_QUERY_ID: true,
+		CHECK_CONSTRAINT_ASSERT: true, LOAD_FK_IGNORE_CHECK: true,
 	}
 	annotated := 0
 	for _, fn := range allSupportedFunctions {
