@@ -51,6 +51,8 @@ type CNS3Writer struct {
 	isTombstone         bool
 	blockInfoBat        *batch.Batch
 	memorySizeThreshold int
+	birthMetadataErr    error
+	birthWriteTypes     []types.Type
 }
 
 func (w *CNS3Writer) String() string {
@@ -234,6 +236,13 @@ func newCNS3DataWriter(
 	writer := new(CNS3Writer)
 
 	sequms, attrTypes, attrs, sortKeyIdx, isPrimaryKey := GetSequmsAttrsSortKeyIdxFromTableDef(tableDef)
+	if tableDef.AppendMissingState != nil {
+		writer.birthMetadataErr = plan.ValidateAppendMissingWriteTable(tableDef)
+		if writer.birthMetadataErr == nil {
+			writer.birthMetadataErr = objectio.ValidateM0WritePrefix(tableDef.AppendMissingState, tableDef.Version, tableDef.Version, sequms)
+		}
+		writer.birthWriteTypes = attrTypes
+	}
 
 	factor := ioutil.NewFSinkerImplFactory(
 		sequms, sortKeyIdx, isPrimaryKey, false,
@@ -290,7 +299,28 @@ func chunkedColumnPolicyForService(serviceID string) objectio.ChunkedColumnPolic
 	}
 }
 
+func (w *CNS3Writer) validateBirthWrite(bat *batch.Batch) error {
+	if w.birthMetadataErr != nil {
+		return w.birthMetadataErr
+	}
+	if w.birthWriteTypes == nil {
+		return nil
+	}
+	if bat == nil || len(bat.Vecs) != len(w.birthWriteTypes) {
+		return objectio.ErrMissingColumnWithoutProof
+	}
+	for i, typ := range w.birthWriteTypes {
+		if bat.Vecs[i] == nil || bat.Vecs[i].Length() != bat.RowCount() || bat.Vecs[i].GetType().Oid != typ.Oid || bat.Vecs[i].GetType().Scale != typ.Scale {
+			return objectio.ErrMissingColumnWithoutProof
+		}
+	}
+	return nil
+}
+
 func (w *CNS3Writer) Write(ctx context.Context, bat *batch.Batch) error {
+	if err := w.validateBirthWrite(bat); err != nil {
+		return err
+	}
 	return w.sinker.Write(ctx, bat)
 }
 
@@ -299,10 +329,16 @@ func (w *CNS3Writer) MemorySizeThreshold() int {
 }
 
 func (w *CNS3Writer) WriteOwned(ctx context.Context, bat *batch.Batch) (bool, error) {
+	if err := w.validateBirthWrite(bat); err != nil {
+		return false, err
+	}
 	return w.sinker.WriteOwned(ctx, bat)
 }
 
 func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, err error) {
+	if w.birthMetadataErr != nil {
+		return nil, w.birthMetadataErr
+	}
 	if err = w.sinker.Sync(ctx); err != nil {
 		return
 	}
@@ -312,6 +348,9 @@ func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, er
 }
 
 func (w *CNS3Writer) SyncAndFillBlockInfoBat(ctx context.Context) (*batch.Batch, error) {
+	if w.birthMetadataErr != nil {
+		return nil, w.birthMetadataErr
+	}
 	stats, _, err := w.sinker.SyncAndTakeResults(ctx)
 	if err != nil {
 		return nil, err
@@ -417,6 +456,9 @@ func ExpandObjectStatsToBatch(
 }
 
 func (w *CNS3Writer) FillBlockInfoBat() (*batch.Batch, error) {
+	if w.birthMetadataErr != nil {
+		return nil, w.birthMetadataErr
+	}
 
 	w.ResetBlockInfoBat()
 

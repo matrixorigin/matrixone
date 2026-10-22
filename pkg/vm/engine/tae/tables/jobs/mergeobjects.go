@@ -504,6 +504,17 @@ func (task *mergeObjectsTask) Execute(ctx context.Context) (err error) {
 			)
 		}
 	}()
+	if !task.isTombstone && task.schema.Extra.AppendMissingState != nil {
+		var captured []uint16
+		for _, col := range task.schema.ColDefs {
+			if !col.IsPhyAddr() {
+				captured = append(captured, col.SeqNum)
+			}
+		}
+		if err = validateM0CapturedWrite(task.schema, captured, task.schema.Version); err != nil {
+			return err
+		}
+	}
 	begin := time.Now()
 
 	if time.Since(task.createAt) > time.Second*10 {

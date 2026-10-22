@@ -14,7 +14,10 @@
 
 package jobs
 
-import "github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+import (
+	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
+)
 
 var activeM0WriteSchemaVersion = func(
 	_ *catalog.Schema,
@@ -22,4 +25,11 @@ var activeM0WriteSchemaVersion = func(
 	fallback uint32,
 ) uint32 {
 	return fallback
+}
+
+func validateM0CapturedWrite(schema *catalog.Schema, seqnums []uint16, capturedVersion uint32) error {
+	if schema == nil || schema.Extra == nil || schema.Extra.AppendMissingState == nil {
+		return nil
+	}
+	return objectio.ValidateM0WritePrefix(schema.Extra.AppendMissingState, schema.Version, capturedVersion, seqnums)
 }
