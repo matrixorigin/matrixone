@@ -4429,7 +4429,6 @@ func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.
 	}
 }
 
-
 func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {
 	f := expr.GetF()
 	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 || isJSONNumericComparisonArgs(f.Args) {
