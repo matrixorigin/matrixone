@@ -67,7 +67,8 @@ rg -n "getTableColumnDefSql|extractTableDefColumns|resolveTableVisibleColumns" -
 | 调用点 | 用途 | 归类 |
 | --- | --- | --- |
 | [authenticate.go](../../pkg/frontend/authenticate.go) L1647 `getTableColumnDefFormat`(经 L2113 `getTableColumnDefSql` → util.go L2991 `buildTableDefFromMoColumns`) | 普通表 columns-only 快径;L3026 起对 View 只返回 kind,丢弃持久列,由 planner 走正常 View 绑定 | C16→D 守卫;普通表物理快径保留;该接口在本基线上无生产调用方,C14 处置由 S3 记录为保留的历史物理 helper(见表 B 末行) |
-| [build_show.go](../../pkg/sql/plan/build_show.go) L763/L765/L541/L544(SHOW COLUMNS/COLUMN_NUMBER 普通表分支) | 普通表列读取直接取自 `mo_catalog.mo_columns`;持久列即普通表物理权威 | C04 的普通表物理路径,View 由 `isUserViewMetadata` 改写数据源 |
+| [build_show.go](../../pkg/sql/plan/build_show.go) L763/L765/L769/L771(SHOW COLUMNS/FULL 普通表分支)、L541/L544(SHOW COLUMN_NUMBER 普通表分支) | 普通表列读取直接取自 `mo_catalog.mo_columns`;持久列即普通表物理权威 | C04 的普通表物理路径,View 由 `isUserViewMetadata` 改写数据源(L783) |
+| [build_show.go](../../pkg/sql/plan/build_show.go) L318(`buildShowSequences`,L309 起)、L1053(`buildShowIndex`,L995 起) | SHOW SEQUENCES 读取序列值列类型(`relkind='s'`,序列非 View);SHOW INDEX 经 mo_indexes 左连 mo_columns 取列属性(attnotnull/hidden/generated),仅普通表存在索引行,View 无输出 | C17 物理兼容(S1 明确归属;序列/索引与普通表元数据不因本系列变成 View 输出) |
 | [predefined.go](../../pkg/util/sysview/predefined.go) L277 `informationSchemaColumnsLocalFromSQL`(及模板内的索引/约束源:L529 KEY_COLUMN_USAGE 经 mo_indexes,L825 STATISTICS 经 mo_indexes 连接 mo_columns tcl) | I_S 系统模板中的持久列/索引源;用户 View 行由 derived DDL 剔除,普通表/系统 View 持久列即权威;View 在 mo_indexes 无行,不产生 STATISTICS/KCU 输出 | C06/C17 物理权威(普通表/系统 View) |
 | [subscription_metadata.go](../../pkg/sql/colexec/table_function/subscription_metadata.go) L787 `buildSubscriptionColumnsQuery`(`mo_subscription_columns` TVF) | 订阅发布方普通表行源;I_S COLUMNS 订阅分支对 `relkind='v'` 非系统库用户 View 显式剔除(derived DDL) | C07 普通表部分保留;View 已迁出至 `mo_subscription_view_columns` |
 | [publication_subscription.go](../../pkg/frontend/publication_subscription.go) L3388 `checkColExists` | sys 账户 catalog 表列存在性检查(升级兼容),非租户 View 行 | C15 物理兼容 |
@@ -79,7 +80,7 @@ rg -n "getTableColumnDefSql|extractTableDefColumns|resolveTableVisibleColumns" -
 | [txn_database.go](../../pkg/vm/engine/disttae/txn_database.go)、[logtail_consumer.go](../../pkg/vm/engine/disttae/logtail_consumer.go)、disttae cache/db、tae/logtail、catalog tuplesParse/tuplesGen | mo_columns 物理复制、日志回放与引擎记录编码(含 FIND_TABLE 诊断) | C15 物理兼容 |
 | [tools/checkpointtool](../../pkg/tools/checkpointtool/table_dump.go)、[cmd/mo-object-tool](../../cmd/mo-object-tool/ckp/checkpoint.go) | 离线工具从 checkpoint 的 mo_columns 记录重建表 schema | C15 物理兼容(离线记录层) |
 
-名称常量/谓词/注释引用(无可执行 View 列读取,非消费者):[defines/type.go](../../pkg/defines/type.go) L341、[util/executor/options.go](../../pkg/util/executor/options.go) L318、[sql/util/util.go](../../pkg/sql/util/util.go) L230、[plan/function/func_mo.go](../../pkg/sql/plan/function/func_mo.go) L802/L978、[sql/plan/dml_context.go](../../pkg/sql/plan/dml_context.go) L30、snapshot.go L109(restore 跳过清单)、util.go L3020(注释)。
+名称常量/谓词/注释引用(无可执行 View 列读取,非消费者):[defines/type.go](../../pkg/defines/type.go) L341、build_show.go L389/465/535/757/835(catalog 名过滤谓词)、[util/executor/options.go](../../pkg/util/executor/options.go) L318、[sql/util/util.go](../../pkg/sql/util/util.go) L230、[plan/function/func_mo.go](../../pkg/sql/plan/function/func_mo.go) L802/L978、[sql/plan/dml_context.go](../../pkg/sql/plan/dml_context.go) L30、snapshot.go L109(restore 跳过清单)、util.go L3020(注释)。
 
 ### B. View 列/定义消费者(S4 范围)
 
@@ -129,3 +130,5 @@ S3 所属消费者(C02 查询/嵌套 View、C03 CTAS/default、C08 计划缓存�
   1. 首轮将 `metadata_shape.go` 误判为仅注释引用,并漏列 CDC、自增存储、v4_0_7 等 mo_columns 读取点;根因是未对 broad sweep 的全部命中文件逐一核对,字面模式未覆盖反引号、常量拼接与未限定表名。本版对 `rg -ln "mo_columns|MO_COLUMNS" --type go` 的每个命中文件完成人工分类,补齐物理兼容读者(表 A)并修正该误分类;以上读者均已核实早于首轮基线合入。
   2. 更新已交付事实:S3 #29438 已由 #30551 交付并于 2026-10-21 关闭;#26227 已于 2026-10-10 关闭,D03 替代认可闭环;残余项收缩为 S5 #29440 自身范围。
   3. 核查基线由 `76e152a1dd` 更新为 `c0e826888b`,文档内全部源码行号在新基线上重新校验。
+
+- **R2(2026-10-21)** 依据 PR #30739 审查意见补齐表 A 两条 C17 物理兼容路径:SHOW SEQUENCES(build_show.go L318,序列值列类型,序列非 View)与 SHOW INDEX(L1053,mo_indexes 左连 mo_columns,仅普通表存在索引行);同时将 SHOW COLUMNS FULL 变体(L769/771)并入原 SHOW COLUMNS 行,并把 build_show.go 中其余 `mo_columns` 字面(名过滤谓词)登记为非消费者。
