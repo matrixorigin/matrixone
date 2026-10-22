@@ -152,7 +152,7 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	op.ProjectList = append(op.ProjectList, jsonValue)
 	qry.Nodes[0].ProjectList = op.ProjectList
 	p.InstructionList[0].ProjectList = op.ProjectList
-	// JSON_VALUE overload 2 provisionally requires v129; main through v128
+	// JSON_VALUE overload 2 provisionally requires v130; main through v129
 	// does not admit this contract.
 	client.version = defines.MORPCVersion122
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
@@ -161,11 +161,11 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 129")
+	require.ErrorContains(t, err, "version 130")
 	data, err = p.Marshal()
 	require.NoError(t, err)
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 129")
+	require.ErrorContains(t, err, "version 130")
 	client.version = defines.MORPCVersion123
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion123)
 	c.execType = plan2.ExecTypeAP_MULTICN
@@ -173,11 +173,11 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 129")
+	require.ErrorContains(t, err, "version 130")
 	data, err = p.Marshal()
 	require.NoError(t, err)
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 129")
+	require.ErrorContains(t, err, "version 130")
 	client.version = defines.MORPCVersion128
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
 	c.execType = plan2.ExecTypeAP_MULTICN
@@ -185,11 +185,21 @@ func TestMediumIntAssignmentProtocolPlacementAndSend(t *testing.T) {
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 129")
+	require.ErrorContains(t, err, "version 130")
 	_, err = decodeScope(data, c.proc, true, nil)
-	require.ErrorContains(t, err, "version 129")
+	require.ErrorContains(t, err, "version 130")
 	client.version = defines.MORPCVersion129
 	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+	c.execType = plan2.ExecTypeAP_MULTICN
+	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
+	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
+	require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
+	_, err = encodeRemoteScope(scope, c.proc)
+	require.ErrorContains(t, err, "version 130")
+	_, err = decodeScope(data, c.proc, true, nil)
+	require.ErrorContains(t, err, "version 130")
+	client.version = defines.MORPCVersion130
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))

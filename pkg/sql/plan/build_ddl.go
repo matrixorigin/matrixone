@@ -1557,6 +1557,18 @@ func viewJoinCondWithExpandedStars(
 	return &stableCond, rewritten
 }
 
+// CTAS writes the temporal fractional precision into both plan fields used
+// by schema metadata. Expression types may carry the precision only in Scale.
+func ctasTemporalSchemaType(typ plan.Type) plan.Type {
+	switch types.T(typ.Id) {
+	case types.T_time, types.T_datetime, types.T_timestamp:
+		if typ.Scale >= 0 && typ.Scale <= MaxFsp {
+			typ.Width = typ.Scale
+		}
+	}
+	return typ
+}
+
 // RefreshPreparedCTASInferredColumns aligns columns inferred from AS SELECT
 // with the execute-time query. Explicit column definitions remain the user's
 // schema contract even when a parameter changes the source domain.
@@ -1625,7 +1637,7 @@ func RefreshPreparedCTASInferredColumns(ctx context.Context, p, original *Plan, 
 			return moerr.NewNotSupportedf(ctx,
 				"prepared CTAS inferred column %q has a type-dependent default", target.Name)
 		}
-		target.Typ = source.Typ
+		target.Typ = ctasTemporalSchemaType(source.Typ)
 	}
 	return nil
 }
@@ -1680,7 +1692,7 @@ func genAsSelectCols(
 				typ.NotNullable = expr.Typ.NotNullable
 			}
 		}
-		typ = decimalDivSchemaType(typ, provenance)
+		typ = ctasTemporalSchemaType(decimalDivSchemaType(typ, provenance))
 		// CTAS creates a new table from the query result.  A source column's
 		// AUTO_INCREMENT attribute is not part of that result schema and must
 		// not be copied to the new table.

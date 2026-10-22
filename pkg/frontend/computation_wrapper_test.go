@@ -4475,8 +4475,8 @@ func TestRuntimeSpecializationReplacementCommitsOnlyAfterCompileSuccess(t *testi
 		cw.proc, prepareStmt.PrepareStmt, false, nil, time.Now())
 	oldMetadata := [][]byte{[]byte("old column payload")}
 	oldDiagnostics := []*plan.Expr{{Typ: plan.Type{Id: int32(types.T_int32)}, Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: 0}}}}
-	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata)
-	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, oldMetadata),
+	prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, nil, oldMetadata)
+	require.Nil(t, prepareStmt.installRuntimeSpecializationCache("old", oldPlan, oldCompile, oldDiagnostics, nil, oldMetadata),
 		"reinstalling the live compile must not retire it")
 
 	for _, compileErr := range []error{assert.AnError, context.Canceled} {
@@ -5648,8 +5648,8 @@ func TestInitExecuteStmtParamRebuildsWhenProtocolVersionChanges(t *testing.T) {
 		{name: "main row-lock rollback", from: defines.MORPCVersion123, to: defines.MORPCVersion122},
 		{name: "fractional interval upgrade", from: defines.MORPCVersion123, to: defines.MORPCVersion124},
 		{name: "fractional interval rollback", from: defines.MORPCVersion124, to: defines.MORPCVersion123},
-		{name: "JSON_VALUE upgrade", from: defines.MORPCVersion128, to: defines.MORPCVersion129},
-		{name: "JSON_VALUE rollback", from: defines.MORPCVersion129, to: defines.MORPCVersion128},
+		{name: "JSON_VALUE upgrade", from: defines.MORPCVersion129, to: defines.MORPCVersion130},
+		{name: "JSON_VALUE rollback", from: defines.MORPCVersion130, to: defines.MORPCVersion129},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, test.from)

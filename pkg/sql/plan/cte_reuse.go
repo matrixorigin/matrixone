@@ -83,6 +83,13 @@ func (builder *QueryBuilder) reusableCTEProducer(
 	first := cteRef.occurrences[0]
 	allOccurrencesAreCurrentRoleClosures := currentRoleClosureOutput(first.types)
 	for _, occurrence := range cteRef.occurrences {
+		// Scalar reaggregation can forward a private native identity through
+		// an inline occurrence. Its captured visible transport schema cannot
+		// carry that column, so keep every occurrence of this CTE inline.
+		if occurrence.rootID < 0 || int(occurrence.rootID) >= len(builder.qry.Nodes) ||
+			len(builder.qry.Nodes[occurrence.rootID].ProjectList) != len(occurrence.types) {
+			return 0, nil, false
+		}
 		if occurrence.isCorrelated || !sameCTEOutput(first, occurrence) ||
 			!builder.cteSubtreeIsDeterministic(occurrence.rootID, make(map[int32]bool)) {
 			return 0, nil, false

@@ -51,7 +51,8 @@ func (r RowEntry) String() string {
 		r.Offset,
 		r.Time.ToString(),
 		t.SQLStrings(nil),
-		r.PrimaryIndexBytes)
+		r.PrimaryIndexBytes,
+	)
 }
 
 func (r *RowEntry) Less(than *RowEntry) bool {

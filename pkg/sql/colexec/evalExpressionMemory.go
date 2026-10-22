@@ -87,10 +87,6 @@ func ExpressionExecutorRetainedBytes(executor ExpressionExecutor) (uint64, bool)
 	}
 }
 
-func ExpressionExecutorsRetainedBytes(executors []ExpressionExecutor) (uint64, bool) {
-	return addExpressionExecutorRetainedBytes(0, executors)
-}
-
 func addExpressionExecutorRetainedBytes(total uint64, executors []ExpressionExecutor) (uint64, bool) {
 	for _, executor := range executors {
 		bytes, ok := ExpressionExecutorRetainedBytes(executor)
