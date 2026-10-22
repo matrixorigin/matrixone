@@ -6282,6 +6282,8 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	proc := ses.proc
 	proc.ReplaceTopCtx(execCtx.reqCtx)
+	// Frontend expressions run without a pipeline, but still need the current epoch.
+	proc.ResetQueryContext()
 
 	pu := getPu(ses.GetService())
 	proc.Base.Id = ses.getNextProcessId()
@@ -6634,6 +6636,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				execCtx.reqCtx, epoch = beginAuthorizationEpoch(transition, ses, execCtx)
 				epoch.entered = true
 				proc.ReplaceTopCtx(execCtx.reqCtx)
+				proc.ResetQueryContext()
 				refreshed := *rawInputs[i]
 				refreshed.rewritePolicy, err = captureRewritePolicy(execCtx.reqCtx, ses)
 				if err != nil {
@@ -6768,6 +6771,7 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 				execCtx.reqCtx, epoch = beginAuthorizationEpoch(statementBaseCtx, ses, execCtx)
 				epoch.entered = true
 				proc.ReplaceTopCtx(execCtx.reqCtx)
+				proc.ResetQueryContext()
 			}
 			// SET expressions may execute an internal query, which temporarily
 			// replaces the compiler context's ExecCtx. Restore this outer query
