@@ -698,6 +698,52 @@ rows, err = run_sql("select 1")
 	}
 }
 
+func TestCloneStarlarkWalkerCoversLanguageForms(t *testing.T) {
+	const body = `load("module", "exported")
+
+def helper(a, b=1, *args, **kwargs):
+    x = [a, b]
+    y = (a, b)
+    z = (a)
+    c = a if b else 0
+    d = x[0]
+    e = {"a": a}
+    f = x[0:1:1]
+    g = [i for i in x if i]
+    h = {i: i for i in [1, 2]}
+    i = -a
+    j = a + b
+    k = object.method
+    lam = lambda q=1: q
+    rows, err = mo.sql("select id from source_db.control_t")
+    if a:
+        a += 1
+    elif b:
+        a -= 1
+    else:
+        pass
+    for item in x:
+        continue
+    while a:
+        break
+    return d
+
+out_o = helper(1)
+`
+
+	rewritten, err := rewriteCloneStoredProcedureBodies(
+		context.Background(),
+		[]storedProcedureDefinition{{name: "p_language_forms", lang: "starlark", body: body}},
+		"source_db",
+		"target_db",
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	require.Contains(t, rewritten[0].body, "`target_db`.`control_t`")
+	require.NotContains(t, rewritten[0].body, "from source_db.control_t")
+}
+
 func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
 	functions := []userDefinedFunctionDefinition{
 		{
