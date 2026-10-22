@@ -452,6 +452,31 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings a
 		case *tree.AlterTableAlterColumnClause:
 			pkAffected, err = AlterColumn(cctx, alterTablePlan, option, alterTableCtx)
 			affectedCols = append(affectedCols, option.ColumnName.String())
+		case *tree.TableOptionComment:
+			if tableDef.AppendMissingState == nil {
+				return nil, moerr.NewInvalidInputf(ctx, unsupportedErrorFmt, formatTreeNode(option))
+			}
+			if getNumOfCharacters(option.Comment) > maxLengthOfTableComment {
+				return nil, moerr.NewInvalidInputf(ctx, "comment for field '%s' is too long", tableDef.Name)
+			}
+			setM0CopyExitComment(copyTableDef, option.Comment)
+		case *tree.AlterOptionTableName:
+			if tableDef.AppendMissingState == nil {
+				return nil, moerr.NewInvalidInputf(ctx, unsupportedErrorFmt, formatTreeNode(option))
+			}
+			newName := string(option.Name.ToTableName().ObjectName)
+			if newName != tableDef.Name {
+				_, destination, lookupErr := cctx.Resolve(schemaName, newName, nil)
+				if lookupErr != nil {
+					return nil, lookupErr
+				}
+				if destination != nil {
+					return nil, moerr.NewTableAlreadyExists(ctx, newName)
+				}
+				alterTablePlan.Actions = append(alterTablePlan.Actions, &plan.AlterTable_Action{
+					Action: &plan.AlterTable_Action_AlterName{AlterName: &plan.AlterTableName{OldName: tableDef.Name, NewName: newName}},
+				})
+			}
 		case *tree.TableOptionAutoIncrement:
 			hasAutoIncrementOption = true
 			copyTableDef.AutoIncrOffset = autoIncrementValueToOffset(option.Value)
@@ -1338,7 +1363,16 @@ func initAlterTableContext(originTableDef *TableDef, copyTableDef *TableDef, sch
 }
 
 func buildCopyTableDef(ctx context.Context, tableDef *TableDef) (*TableDef, error) {
+	if err := plan.ValidateAppendMissingTable(tableDef); err != nil {
+		return nil, err
+	}
 	replicaTableDef := DeepCopyTableDef(tableDef, true)
+	if tableDef.AppendMissingState != nil {
+		// COPY reads through the immutable source layout, but publishes a new
+		// complete ordinary layout. Historical snapshots keep the source state.
+		replicaTableDef.AppendMissingState = nil
+		replicaTableDef.Version = 0
+	}
 
 	id, err := uuid.NewV7()
 	if err != nil {
@@ -1469,7 +1503,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if err != nil {
 		return nil, err
 	}
-	if !m0Selected && activeM0PlanHooks.selectAdd != nil && effectiveTableDef.Version > 0 {
+	if !m0Selected && effectiveTableDef.AppendMissingState == nil && activeM0PlanHooks.selectAdd != nil && effectiveTableDef.Version > 0 {
 		if _, err := m0PlanBase(&effectiveTableDef); err == nil {
 			return nil, moerr.NewInvalidInputf(
 				ctx.GetContext(),
@@ -1780,6 +1814,14 @@ Loop:
 		}
 	}
 
+	if tableDef.AppendMissingState != nil {
+		if err := plan.ValidateAppendMissingTable(tableDef); err != nil {
+			return algorithm, err
+		}
+		// Only the separately admitted additive operation may retain the
+		// append domain. All other DDL materializes it in this transaction.
+		functionalCopy = true
+	}
 	if functionalCopy {
 		algorithm = plan.AlterTable_COPY
 	}
