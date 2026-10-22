@@ -62,8 +62,6 @@
 /pkg/common @XuPeng-SH
 /pkg/common/mpool @XuPeng-SH
 /pkg/common/malloc @XuPeng-SH
-/pkg/common/spool @aunjgr @aptend @XuPeng-SH
-/pkg/common/async @XuPeng-SH @aptend
 /pkg/common/bitmap @aunjgr @XuPeng-SH @aptend
 /pkg/common/hashmap @aunjgr @XuPeng-SH @aptend
 /pkg/common/moerr @XuPeng-SH @aptend

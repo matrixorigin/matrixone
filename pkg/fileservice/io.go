@@ -17,6 +17,7 @@ package fileservice
 import (
 	"context"
 	"io"
+	"sync"
 	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -36,6 +37,22 @@ func (r *readCloser) Read(data []byte) (int, error) {
 
 func (r *readCloser) Close() error {
 	return r.closeFunc()
+}
+
+// onceReadCloser keeps Close ownership and its result with the reader. Read
+// remains independent of a potentially blocking Close.
+type onceReadCloser struct {
+	readCloser
+	once sync.Once
+	err  error
+}
+
+func (r *onceReadCloser) Close() error {
+	r.once.Do(func() {
+		r.err = r.readCloser.Close()
+		r.closeFunc = nil
+	})
+	return r.err
 }
 
 type countingReader struct {

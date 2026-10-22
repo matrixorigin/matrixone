@@ -477,7 +477,6 @@ func (timeWin *TimeWin) Call(proc *process.Process) (vm.CallResult, error) {
 				ctr.partIdx = -1
 				ctr.group = -1
 				ctr.withoutFill = true
-				ctr.partEnd = false
 				ctr.partitionBreak = false
 				ctr.partitionWindows = 0
 				ctr.status = firstWindow
@@ -907,7 +906,6 @@ func (ctr *container) fillRows(t *TimeWin, proc *process.Process) error {
 		// where to resume and fall through to the same slide-to-exhaustion
 		// logic that end-of-stream uses.
 		if len(ctr.partExe) > 0 && !ctr.samePartition(ctr.curVecIdx, ctr.curRowIdx, ctr.partIdx, ctr.partRow) {
-			ctr.partEnd = true
 			ctr.breakVecIdx = ctr.curVecIdx
 			ctr.breakRowIdx = ctr.curRowIdx
 			partBreak = true
