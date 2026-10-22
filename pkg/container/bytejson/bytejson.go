@@ -1275,6 +1275,16 @@ func (bj ByteJson) QuerySimpleWithExists(paths []*Path) (ByteJson, bool) {
 }
 
 func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonModifyType) (ByteJson, error) {
+	return bj.modify(pathList, valList, modifyType, false)
+}
+
+// ModifyForLegacyBinding reconstructs scalar-index behavior for pre-#30806
+// persisted DDL verification. Ordinary JSON modifiers must use Modify.
+func (bj ByteJson) ModifyForLegacyBinding(pathList []*Path, valList []ByteJson, modifyType JsonModifyType) (ByteJson, error) {
+	return bj.modify(pathList, valList, modifyType, true)
+}
+
+func (bj ByteJson) modify(pathList []*Path, valList []ByteJson, modifyType JsonModifyType, legacyScalarIndex bool) (ByteJson, error) {
 	var (
 		err error
 	)
@@ -1297,7 +1307,7 @@ func (bj ByteJson) Modify(pathList []*Path, valList []ByteJson, modifyType JsonM
 		path := pathList[i]
 		val := valList[i]
 
-		modifier := &bytejsonModifier{bj: bj}
+		modifier := &bytejsonModifier{bj: bj, legacyScalarIndex: legacyScalarIndex}
 
 		switch modifyType {
 		case JsonModifySet:

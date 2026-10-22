@@ -23,16 +23,17 @@ import (
 )
 
 type bytejsonModifier struct {
-	bj        ByteJson
-	modifyPtr *byte
-	modifyVal ByteJson
+	bj                ByteJson
+	modifyPtr         *byte
+	modifyVal         ByteJson
+	legacyScalarIndex bool
 }
 
 func (bm *bytejsonModifier) insert(path *Path, newBj ByteJson) (ByteJson, error) {
 	// MySQL evaluates a scalar's array index 0 as the autowrapped scalar
 	// itself, so JSON_INSERT leaves the document unchanged instead of
 	// appending and wrapping it into an array (#30774).
-	_, exists := bm.bj.querySimpleExist(path, true)
+	_, exists := bm.bj.querySimpleExist(path, !bm.legacyScalarIndex)
 	if exists {
 		// if path exists, return
 		return bm.bj, nil
@@ -47,7 +48,7 @@ func (bm *bytejsonModifier) insert(path *Path, newBj ByteJson) (ByteJson, error)
 
 func (bm *bytejsonModifier) replace(path *Path, newBj ByteJson) (ByteJson, error) {
 	// Scalar index 0 selects the existing value (#30774).
-	result, exists := bm.bj.querySimpleExist(path, true)
+	result, exists := bm.bj.querySimpleExist(path, !bm.legacyScalarIndex)
 	if !exists {
 		// if path not exists, return
 		return bm.bj, nil
@@ -60,7 +61,7 @@ func (bm *bytejsonModifier) replace(path *Path, newBj ByteJson) (ByteJson, error
 
 func (bm *bytejsonModifier) set(path *Path, newBj ByteJson) (ByteJson, error) {
 	// Scalar index 0 selects the existing value for SET (#30774).
-	result, exists := bm.bj.querySimpleExist(path, true)
+	result, exists := bm.bj.querySimpleExist(path, !bm.legacyScalarIndex)
 	if exists {
 		// set
 		bm.modifyPtr = &result.Data[0]
