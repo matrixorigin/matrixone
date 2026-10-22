@@ -2554,7 +2554,7 @@ func TestDataBranchCSVFinalizationCleanup(t *testing.T) {
 						bat.Clean(ses.proc.Mp()) // ownership never passed to the writer
 					}
 				})
-				pool, err := ants.NewPool(3) // writer, producer and converter
+				pool, err := ants.NewPool(1) // coordination must not occupy the conversion pool
 				require.NoError(t, err)
 				defer pool.Release()
 				tbl := newTestBranchTableStuff(gomock.NewController(t))
