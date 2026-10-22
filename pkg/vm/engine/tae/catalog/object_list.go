@@ -1035,7 +1035,51 @@ func (snapshot ObjectListSnapshot) ScanGroup(
 	group ObjectListGroup,
 	fn func(*ObjectEntry) bool,
 ) {
-	snapshot.trees.group(group).Scan(fn)
+	snapshot.scanGroupUnlocked(group, nil, fn)
+}
+
+// scanGroupUnlocked pins the published tree version, but releases each B-tree
+// scan's read lock before invoking fn. A callback can wait for a transaction or
+// acquire the table lock; holding the tree's read lock then can deadlock a catalog
+// writer that holds the table lock and needs BTree.Copy's write lock.
+func (snapshot ObjectListSnapshot) scanGroupUnlocked(
+	group ObjectListGroup,
+	start *ObjectEntry,
+	fn func(*ObjectEntry) bool,
+) {
+	tree := snapshot.trees.group(group)
+	var last *ObjectEntry
+	for {
+		var batch [64]*ObjectEntry
+		count := 0
+		pivot := start
+		if last != nil {
+			pivot = last
+		}
+		collect := func(entry *ObjectEntry) bool {
+			if entry == last {
+				return true
+			}
+			batch[count] = entry
+			count++
+			return count < len(batch)
+		}
+		if pivot == nil {
+			tree.Scan(collect)
+		} else {
+			tree.Ascend(pivot, collect)
+		}
+		finished := count < len(batch)
+		for _, entry := range batch[:count] {
+			if !fn(entry) {
+				return
+			}
+		}
+		if finished {
+			return
+		}
+		last = batch[count-1]
+	}
 }
 
 // CommitBookmarkStart returns the first object whose prefix max commit can
@@ -1084,7 +1128,7 @@ func (snapshot ObjectListSnapshot) ScanGroupFrom(
 	if start == nil {
 		return
 	}
-	snapshot.trees.group(group).Ascend(start, fn)
+	snapshot.scanGroupUnlocked(group, start, fn)
 }
 
 func (snapshot ObjectListSnapshot) AscendGroup(
@@ -1095,7 +1139,7 @@ func (snapshot ObjectListSnapshot) AscendGroup(
 	var minID objectio.ObjectId
 	var key ObjectEntry
 	initObjectListKey(&key, group, ts, &minID)
-	snapshot.trees.group(group).Ascend(&key, fn)
+	snapshot.scanGroupUnlocked(group, &key, fn)
 }
 
 var _iterPool = sync.Pool{New: func() any {

@@ -222,10 +222,7 @@ func TombstoneRangeScanByObject(
 			// TODO: Bloomfilter
 		}
 		err = tombstone.GetObjectData().CollectObjectTombstoneInRange(ctx, start, end, &objectID, &bat, mp, vpool)
-		if err != nil {
-			return false
-		}
-		return true
+		return err == nil
 	})
 	if err != nil {
 		return nil, err
