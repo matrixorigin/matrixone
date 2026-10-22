@@ -19,6 +19,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"regexp"
@@ -42,7 +43,9 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	planfunction "github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -77,6 +80,12 @@ type ExportConfig struct {
 
 	// Parquet writer for parquet format export
 	parquetWriter *ParquetWriter
+	// The statement stops submissions before joining workers or clearing metadata.
+	cancel          context.CancelFunc
+	workers         sync.WaitGroup
+	stopFileCancel  func() bool
+	fileCancelDone  chan struct{}
+	ownsFileService bool
 }
 
 type writeParam struct {
@@ -180,6 +189,7 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 		readPath = filePath
 
 	} else {
+		ep.ownsFileService = true
 		ep.FileService, readPath, err = fileservice.GetForETLWithParsedPath(process.SQLFileAccessContext(ctx, ep.proc), nil, filePath, fspath)
 		if err != nil {
 			return err
@@ -187,30 +197,24 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 
 	}
 
-	ep.AsyncReader, ep.AsyncWriter = io.Pipe()
-
-	asyncWriteFunc := func() error {
-		vec := fileservice.IOVector{
-			FilePath: readPath,
-			Entries: []fileservice.IOEntry{
-				{
-					ReaderForWrite: ep.AsyncReader,
-					Size:           -1,
-				},
-			},
-		}
-		err := ep.FileService.Write(ctx, vec)
-		if err != nil {
-			err2 := ep.AsyncReader.CloseWithError(err)
-			if err2 != nil {
-				return err2
-			}
-		}
-		return err
-	}
-
+	reader, writer := io.Pipe()
+	ep.AsyncReader, ep.AsyncWriter = reader, writer
+	fs := ep.FileService
+	// Capture this file's endpoints: a split may install another pair later.
+	ep.fileCancelDone = make(chan struct{})
+	cancelDone := ep.fileCancelDone
+	ep.stopFileCancel = context.AfterFunc(ctx, func() {
+		defer close(cancelDone)
+		_ = reader.CloseWithError(ctx.Err())
+		_ = writer.CloseWithError(ctx.Err())
+	})
 	ep.AsyncGroup, _ = errgroup.WithContext(ctx)
-	ep.AsyncGroup.Go(asyncWriteFunc)
+	ep.AsyncGroup.Go(func() error {
+		err := fs.Write(ctx, fileservice.IOVector{FilePath: readPath, Entries: []fileservice.IOEntry{{ReaderForWrite: reader, Size: -1}}})
+		// Release a blocked producer even when the sink fails before reading.
+		_ = reader.CloseWithError(err)
+		return err
+	})
 
 	// Only write CSV header for CSV format (not for jsonline or parquet)
 	exportFormat := ep.userConfig.ExportFormat
@@ -279,33 +283,63 @@ var formatOutputString = func(oq *ExportConfig, tmp, symbol []byte, enclosed byt
 	return nil
 }
 
+// Close completes one file, including a split, without stopping conversion.
 var Close = func(ep *ExportConfig) error {
 	ep.FileCnt++
-	err := ep.AsyncWriter.Close()
-	if err != nil {
-		return err
+	return ep.closeFile(nil)
+}
+
+// Preserve the primary error's concrete type: transaction policy and MySQL
+// error-code consumers still use direct *moerr.Error assertions.
+func exportCleanupError(primary, cleanup error) error {
+	if primary == nil {
+		return cleanup
 	}
-	err = ep.AsyncGroup.Wait()
-	if err != nil {
-		return err
+	if cleanup != nil && !errors.Is(primary, cleanup) && !errors.Is(cleanup, io.ErrClosedPipe) && !errors.Is(cleanup, context.Canceled) {
+		logutil.Warn("secondary export cleanup failure", zap.Error(cleanup), zap.NamedError("primary", primary))
 	}
-	err = ep.AsyncReader.Close()
-	if err != nil {
-		return err
+	return primary
+}
+
+func (ec *ExportConfig) closeFile(cause error) error {
+	var err error
+	if ec.AsyncWriter != nil {
+		if cause != nil {
+			err = ec.AsyncWriter.CloseWithError(cause)
+			if ec.AsyncReader != nil {
+				err = exportCleanupError(err, ec.AsyncReader.CloseWithError(cause))
+			}
+		} else {
+			err = ec.AsyncWriter.Close()
+		}
 	}
-	ep.AsyncReader = nil
-	ep.AsyncWriter = nil
-	ep.AsyncGroup = nil
+	if ec.AsyncGroup != nil {
+		err = exportCleanupError(err, ec.AsyncGroup.Wait())
+	}
+	if ec.AsyncReader != nil {
+		err = exportCleanupError(err, ec.AsyncReader.Close())
+	}
+	if ec.stopFileCancel != nil && !ec.stopFileCancel() {
+		<-ec.fileCancelDone
+	}
+	if ec.ownsFileService && ec.FileService != nil {
+		ec.FileService.Close(context.Background())
+	}
+	ec.AsyncReader, ec.AsyncWriter, ec.AsyncGroup = nil, nil, nil
+	ec.stopFileCancel, ec.fileCancelDone = nil, nil
+	ec.FileService = nil
+	ec.ownsFileService = false
 	return err
 }
 
 var Write = func(ep *ExportConfig, output []byte) (int, error) {
 	n, err := ep.AsyncWriter.Write(output)
 	if err != nil {
-		err2 := ep.AsyncWriter.CloseWithError(err)
-		if err2 != nil {
-			return 0, err2
+		// Closing our own endpoint can surface ErrClosedPipe instead of the cause.
+		if errors.Is(err, io.ErrClosedPipe) && ep.ctx != nil && ep.ctx.Err() != nil {
+			err = ep.ctx.Err()
 		}
+		_ = ep.AsyncWriter.CloseWithError(err)
 	}
 	return n, err
 }
@@ -477,10 +511,8 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 	} else {
 		mp = ss.GetMemPool()
 	}
-
-	// respect cancellation to avoid blocking when downstream writer stops
+	defer bat.Clean(mp)
 	if ctx.Err() != nil {
-		bat.Clean(mp)
 		return
 	}
 
@@ -565,7 +597,6 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				text, err := planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
 				if err != nil {
 					sendExportBatchByte(ctx, ByteChan, &BatchByte{err: err})
-					bat.Clean(mp)
 					return
 				}
 				value := addEscapeToString([]byte(text), closeby)
@@ -659,7 +690,6 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 				sendExportBatchByte(ctx, ByteChan, &BatchByte{
 					err: moerr.NewInternalErrorf(ctx, "constructByte : unsupported type %d", vec.GetType().Oid),
 				})
-				bat.Clean(mp)
 				return
 			}
 		}
@@ -681,11 +711,8 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 		rowCount:  rowCount,
 		err:       nil,
 	}) {
-		bat.Clean(mp)
 		return
 	}
-
-	bat.Clean(mp)
 
 }
 
@@ -742,11 +769,14 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 				return err
 			}
 		case defines.MYSQL_TYPE_BIT:
-			value, err := oq.mrs.GetString(oq.ctx, 0, i)
+			value, err := oq.mrs.GetUint64(oq.ctx, 0, i)
 			if err != nil {
 				return err
 			}
-			if err = formatOutputString(oq, []byte(value), symbol[i], closeby, flag[i], buffer); err != nil {
+			byteLength := (mysqlColumn.Length() + 7) / 8
+			encoded := types.EncodeUint64(&value)[:byteLength]
+			slices.Reverse(encoded)
+			if err = formatOutputString(oq, encoded, symbol[i], closeby, flag[i], buffer); err != nil {
 				return err
 			}
 		case defines.MYSQL_TYPE_TINY, defines.MYSQL_TYPE_SHORT, defines.MYSQL_TYPE_INT24, defines.MYSQL_TYPE_LONG, defines.MYSQL_TYPE_YEAR:
@@ -910,73 +940,77 @@ func exportDataFromResultSetToCSVFile(oq *ExportConfig) error {
 	return err
 }
 
-func exportDataFromBatchToCSVFile(ep *ExportConfig) error {
-	var tmp *BatchByte
-	select {
-	case tmp = <-ep.ByteChan:
-	default:
+// acceptExportBatch and flushExportBatches have one ordered-consumer owner.
+func acceptExportBatch(ep *ExportConfig, value *BatchByte) error {
+	if value.err != nil {
+		return value.err
 	}
-
-	if tmp != nil {
-		if tmp.err != nil {
-			return tmp.err
-		}
-		ep.BatchMap[tmp.index] = tmp
-	}
-
-	value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
-	if !ok {
-		return nil
-	}
-
-	err := writeExportBatchToFile(ep, value)
-	if err != nil {
-		return err
-	}
-	ep.WriteIndex.Add(1)
-	ep.BatchMap[ep.WriteIndex.Load()] = nil
-	return err
+	ep.BatchMap[value.index] = value
+	return flushExportBatches(ep)
 }
 
-func exportAllDataFromBatches(ep *ExportConfig) error {
-	// Handle parquet format separately
-	if ep.getExportFormat() == "parquet" {
-		return finalizeParquetExport(ep)
-	}
-
-	var tmp *BatchByte
+func flushExportBatches(ep *ExportConfig) error {
 	for {
-		tmp = nil
-		if ep.WriteIndex == ep.Index {
-			break
+		if ep.ctx != nil && ep.ctx.Err() != nil {
+			return ep.ctx.Err()
 		}
-		select {
-		case tmp = <-ep.ByteChan:
-		default:
-		}
-		if tmp != nil {
-			if tmp.err != nil {
-				return tmp.err
-			}
-			ep.BatchMap[tmp.index] = tmp
-		}
-
-		value, ok := ep.BatchMap[ep.WriteIndex.Load()+1]
+		next := ep.WriteIndex.Load() + 1
+		value, ok := ep.BatchMap[next]
 		if !ok {
-			continue
+			return nil
 		}
 		if err := writeExportBatchToFile(ep, value); err != nil {
 			return err
 		}
-		ep.WriteIndex.Add(1)
-		ep.BatchMap[ep.WriteIndex.Load()] = nil
-
+		delete(ep.BatchMap, next)
+		ep.WriteIndex.Store(next)
 	}
-	ep.First = false
-	ep.FileCnt = 0
-	ep.ByteChan = nil
-	ep.BatchMap = nil
-	return nil
+}
+
+func exportDataFromBatchToCSVFile(ep *ExportConfig) error {
+	select {
+	case value, ok := <-ep.ByteChan:
+		if !ok {
+			return moerr.NewInternalErrorNoCtx("export result channel closed before finalization")
+		}
+		return acceptExportBatch(ep, value)
+	default:
+		return flushExportBatches(ep)
+	}
+}
+
+func exportAllDataFromBatches(ep *ExportConfig) error {
+	if ep.getExportFormat() == "parquet" {
+		return finalizeParquetExport(ep)
+	}
+	ctx := ep.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// Submissions have stopped. Canceled workers need not publish their indices.
+	target := ep.Index.Load()
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := flushExportBatches(ep); err != nil {
+			return err
+		}
+		if ep.WriteIndex.Load() == target {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case value, ok := <-ep.ByteChan:
+			if !ok {
+				return moerr.NewInternalErrorNoCtx("export result channel closed with missing batches")
+			}
+			if err := acceptExportBatch(ep, value); err != nil {
+				return err
+			}
+		}
+	}
 }
 
 // finalizeParquetExport closes the parquet writer and writes the complete parquet file
@@ -1047,6 +1081,11 @@ func writeParquetToFile(ep *ExportConfig, data []byte) error {
 var _ CsvWriter = &ExportConfig{}
 
 func (ec *ExportConfig) init() {
+	ctx := ec.ctx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ec.ctx, ec.cancel = context.WithCancel(ctx)
 	ec.ByteChan = make(chan *BatchByte, 10)
 	ec.BatchMap = make(map[int32]*BatchByte)
 	ec.Index.Store(0)
@@ -1054,7 +1093,9 @@ func (ec *ExportConfig) init() {
 }
 
 func (ec *ExportConfig) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.Batch) error {
-	ec.Index.Add(1)
+	if ec.ctx != nil && ec.ctx.Err() != nil {
+		return ec.ctx.Err()
+	}
 	// CSV and JSON conversion runs asynchronously and can outlive runner.Run.
 	// The worker copy therefore belongs to the export pipeline, not to the
 	// producing statement's allocation account.
@@ -1063,15 +1104,21 @@ func (ec *ExportConfig) Write(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat
 		return err
 	}
 
+	idx := ec.Index.Add(1)
+	// Parquet is synchronous; CSV/JSON copies belong to joined conversion workers.
+	convert := func(fn func(context.Context, FeSession, *batch.Batch, int32, chan *BatchByte, *ExportConfig)) {
+		ec.workers.Add(1)
+		go func() { defer ec.workers.Done(); fn(ec.ctx, execCtx.ses, copied, idx, ec.ByteChan, ec) }()
+	}
 	// Choose the appropriate constructor based on export format
 	switch ec.getExportFormat() {
 	case "jsonline":
-		go constructJSONLine(execCtx.reqCtx, execCtx.ses, copied, ec.Index.Load(), ec.ByteChan, ec)
+		convert(constructJSONLine)
 	case "parquet":
 		// Parquet export: write batch to parquet writer
 		return ec.writeParquet(execCtx, copied)
 	default: // csv
-		go constructByte(execCtx.reqCtx, execCtx.ses, copied, ec.Index.Load(), ec.ByteChan, ec)
+		convert(constructByte)
 	}
 
 	if err = exportDataFromBatchToCSVFile(ec); err != nil {
@@ -1201,10 +1248,43 @@ func (ec *ExportConfig) flushParquetFile() error {
 	return nil
 }
 
+// finish is called after the producer and ordered consumer stop accessing ec.
+func (ec *ExportConfig) finish(err error) error {
+	if ec == nil {
+		return err
+	}
+	if err == nil && ec.ctx != nil {
+		err = ec.ctx.Err()
+	}
+	if err != nil {
+		if ec.cancel != nil {
+			ec.cancel()
+		}
+		err = exportCleanupError(err, ec.closeFile(err))
+	}
+	ec.workers.Wait()
+	if err == nil {
+		if ec.AsyncWriter != nil || ec.AsyncGroup != nil {
+			err = Close(ec)
+		}
+		if err == nil && ec.ctx != nil {
+			err = ec.ctx.Err()
+		}
+	}
+	if ec.cancel != nil {
+		ec.cancel()
+	}
+	// No worker can publish or read request fields beyond this point.
+	ec.ByteChan, ec.BatchMap = nil, nil
+	ec.mrs, ec.ctx, ec.cancel = nil, nil, nil
+	ec.Ctx, ec.parquetWriter = nil, nil
+	ec.proc = nil
+	return err
+}
+
 func (ec *ExportConfig) Close() {
 	if ec != nil {
-		ec.mrs = nil
-		ec.ctx = nil
+		_ = ec.finish(context.Canceled)
 	}
 }
 
@@ -1289,6 +1369,10 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 	} else {
 		mp = ss.GetMemPool()
 	}
+	defer bat.Clean(mp)
+	if ctx.Err() != nil {
+		return
+	}
 
 	buffer := &bytes.Buffer{}
 	columnNames := make([]string, len(ep.mrs.Columns))
@@ -1297,6 +1381,9 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 	}
 
 	for i := 0; i < bat.RowCount(); i++ {
+		if ctx.Err() != nil {
+			return
+		}
 		row := make(map[string]interface{})
 		for j, vec := range bat.Vecs {
 			colName := columnNames[j]
@@ -1309,10 +1396,8 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 				if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
 					err: err,
 				}) {
-					bat.Clean(mp)
 					return
 				}
-				bat.Clean(mp)
 				return
 			}
 			row[colName] = val
@@ -1322,10 +1407,8 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 			if !sendExportBatchByte(ctx, ByteChan, &BatchByte{
 				err: moerr.NewInternalErrorf(ctx, "failed to marshal JSON: %v", err),
 			}) {
-				bat.Clean(mp)
 				return
 			}
-			bat.Clean(mp)
 			return
 		}
 		buffer.Write(jsonBytes)
@@ -1342,11 +1425,9 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 		writeByte: result,
 		err:       nil,
 	}) {
-		bat.Clean(mp)
 		return
 	}
 
-	bat.Clean(mp)
 }
 
 // vectorValueToJSON converts a vector value at index i to a JSON-compatible Go value
@@ -1384,8 +1465,10 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 	case types.T_char, types.T_varchar, types.T_text:
 		return string(vec.GetBytesAt(i)), nil
 	case types.T_binary, types.T_varbinary, types.T_blob:
-		// Encode binary data as base64
-		return base64.StdEncoding.EncodeToString(vec.GetBytesAt(i)), nil
+		// #30635: wrap base64 in {"$binary":...} so the jsonline loader can
+		// distinguish MO-encoded binary payloads from plain-text JSON
+		// strings; bare strings keep their byte-exact passthrough on load.
+		return map[string]any{external.JsonBinaryKey: base64.StdEncoding.EncodeToString(vec.GetBytesAt(i))}, nil
 	case types.T_datalink:
 		return string(vec.GetBytesAt(i)), nil
 	case types.T_geometry, types.T_geometry32:

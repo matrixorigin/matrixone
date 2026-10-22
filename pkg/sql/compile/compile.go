@@ -504,6 +504,7 @@ func (c *Compile) clear() {
 	c.auxiliaryProductScopes = nil
 	c.pn = nil
 	c.fill = nil
+	c.buildPlanFunc = nil
 	c.preparedParamValues = nil
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
@@ -791,9 +792,6 @@ func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) sc
 func (c *Compile) canRetry(err error) bool {
 	if c.disableRetry || c.proc.IncrStatementDisabled() {
 		return false
-	}
-	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
-		return true
 	}
 	return c.isRetryErr(err)
 }
@@ -5507,13 +5505,17 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, vectorscan.IndexSearchScanProtocolVersion)
+		requiredVersion, err := c.indexSearchScanProtocolVersion(node.IndexSearchScan)
+		if err != nil {
+			return nil, err
+		}
+		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, requiredVersion)
 		if err != nil {
 			return nil, err
 		}
 		if !supported {
 			return nil, moerr.NewNotSupportedNoCtxf(
-				"index search scan requires MORPC protocol version %d on every CN", vectorscan.IndexSearchScanProtocolVersion)
+				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
 		}
 		// Keep the query's coordinator-first list intact for other scans.
 		// Object owners depend only on the selected identities, not ingress.
@@ -8969,6 +8971,19 @@ func supportsRemotePadSpaceSemantics(service string) bool {
 	}
 	protocolVersion, ok := version.(int64)
 	return ok && protocolVersion >= defines.MORPCVersion40
+}
+
+func supportsRemoteViewDefinitionFunction(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion126
 }
 
 func supportsRemoteParquetWholeFileFanout(service string) bool {

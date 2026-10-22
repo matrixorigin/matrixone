@@ -295,9 +295,9 @@ func isEnumOrSetPlanType(typ *plan.Type) bool {
 }
 
 // makeInsertIgnoreMySQLSpecialTypeConstExpr implements MySQL's INSERT IGNORE
-// coercion for literal YEAR, ENUM, and SET values. BIT coercion stays in the
-// shared literal parser. Regular INSERT keeps the existing strict conversion
-// path; only IGNORE reaches this helper.
+// coercion for literal YEAR values. ENUM/SET use runtime conversion so their
+// diagnostics and the current execution's SQL mode are preserved. BIT coercion
+// stays in the shared literal parser; only IGNORE reaches this helper.
 func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 	ctx context.Context,
 	value *tree.NumVal,
@@ -307,29 +307,6 @@ func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 		return nil, false, nil
 	}
 
-	if isEnumPlanType(&targetType) {
-		index, err := mysqlEnumLiteralIndex(targetType.Enumvalues, value)
-		if err != nil {
-			index = 0 // invalid ENUM values are stored as the empty-error member
-		}
-		return &plan.Expr{
-			Typ: targetType,
-			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-				Value: &plan.Literal_EnumVal{EnumVal: uint32(index)},
-			}},
-		}, true, nil
-	}
-
-	if isSetPlanType(&targetType) {
-		bits := mysqlSetIgnoreLiteralBits(targetType.Enumvalues, value)
-		return &plan.Expr{
-			Typ: targetType,
-			Expr: &plan.Expr_Lit{Lit: &plan.Literal{
-				Value: &plan.Literal_U64Val{U64Val: bits},
-			}},
-		}, true, nil
-	}
-
 	if types.T(targetType.Id) == types.T_year && !mysqlYearLiteralIsValid(value) {
 		zero := makePlan2Int64ConstExprWithType(0)
 		expr, err := appendCastBeforeExpr(ctx, zero, targetType)
@@ -337,52 +314,6 @@ func makeInsertIgnoreMySQLSpecialTypeConstExpr(
 	}
 
 	return nil, false, nil
-}
-
-func mysqlEnumLiteralIndex(enumValues string, value *tree.NumVal) (types.Enum, error) {
-	switch value.ValType {
-	case tree.P_int64:
-		v, ok := value.Int64()
-		if !ok || v < 0 || v > int64(^uint16(0)) {
-			return 0, moerr.NewInvalidInputNoCtx("invalid ENUM index")
-		}
-		return types.ParseEnumValue(enumValues, uint16(v))
-	case tree.P_uint64:
-		v, ok := value.Uint64()
-		if !ok || v > uint64(^uint16(0)) {
-			return 0, moerr.NewInvalidInputNoCtx("invalid ENUM index")
-		}
-		return types.ParseEnumValue(enumValues, uint16(v))
-	default:
-		return types.ParseEnum(enumValues, value.String())
-	}
-}
-
-func mysqlSetIgnoreLiteralBits(setValues string, value *tree.NumVal) uint64 {
-	if value.ValType == tree.P_int64 {
-		if v, ok := value.Int64(); ok {
-			return uint64(v) & mysqlSetValidBitmap(setValues)
-		}
-	}
-	if value.ValType == tree.P_uint64 {
-		if v, ok := value.Uint64(); ok {
-			return v & mysqlSetValidBitmap(setValues)
-		}
-	}
-
-	bits := uint64(0)
-	for _, member := range strings.Split(value.String(), ",") {
-		memberBits, err := types.ParseSet(setValues, member)
-		if err == nil {
-			bits |= memberBits
-		}
-	}
-	return bits
-}
-
-func mysqlSetValidBitmap(setValues string) uint64 {
-	bitmap, _ := types.SetValidBitmap(setValues)
-	return bitmap
 }
 
 func mysqlYearLiteralIsValid(value *tree.NumVal) bool {
@@ -1080,6 +1011,11 @@ func newNonReversibleMySQLSpecialOrderError(ctx context.Context) error {
 func makeMySQLSpecialOrderKey(ctx context.Context, displayExpr *plan.Expr, storageType *plan.Type) (*plan.Expr, error) {
 	if !mysqlSpecialOrderTypeReversible(storageType) {
 		return nil, newNonReversibleMySQLSpecialOrderError(ctx)
+	}
+	if isEnumPlanType(storageType) && mysqlSpecialNumericTypeReversible(storageType) {
+		// An empty display in this domain is the stored error member, not an
+		// invalid assignment. Reuse the safe label/typed-zero restoration.
+		return makeMySQLSpecialNumericValue(ctx, displayExpr, storageType)
 	}
 	_, valueToIndex, _, err := mysqlSpecialTypeFuncNames(storageType)
 	if err != nil {

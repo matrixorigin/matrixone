@@ -15,7 +15,6 @@
 package types
 
 import (
-	"strconv"
 	"strings"
 	"sync"
 
@@ -88,22 +87,45 @@ func NormalizeSetValues(values []string) ([]string, error) {
 }
 
 func ParseSet(setStr string, name string) (uint64, error) {
-	descriptor, err := getSetDescriptor(setStr)
+	bits, truncated, err := ParseSetAssignment(setStr, name)
 	if err != nil {
 		return 0, err
+	}
+	if truncated {
+		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: item %s is not in set [%s]", name, setStr)
+	}
+	return bits, nil
+}
+
+// ParseSetAssignment retains valid list members and reports value truncation
+// separately from invalid metadata. SQL-mode policy belongs to its caller.
+func ParseSetAssignment(setStr, name string) (uint64, bool, error) {
+	descriptor, err := getSetDescriptor(setStr)
+	if err != nil {
+		return 0, false, err
 	}
 
 	setBits, matched := descriptor.parseName(name)
 	if matched {
-		return setBits, nil
+		return setBits, false, nil
 	}
-
-	number, err := strconv.ParseUint(name, 0, 64)
-	if err == nil {
-		return descriptor.parseValue(number)
+	if setBits == 0 {
+		// Numeric fallback sees the original bytes, not the end-space-trimmed
+		// name view. Invalid numeric strings lose all bits, unlike typed input.
+		if len(name) > 0 && len(name) < 22 {
+			number, ok := parseEnumSetDecimal(name)
+			if ok && number&^descriptor.validBitmap == 0 {
+				return number, false, nil
+			}
+			return 0, true, nil
+		}
+		// With no name tokens and no numeric fallback (22+ spaces), MySQL
+		// stores zero silently. Shorter all-space strings fail the fallback.
+		if strings.TrimRight(name, " ") == "" {
+			return 0, false, nil
+		}
 	}
-
-	return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL set failed: item %s is not in set [%s]", name, strings.Join(descriptor.values, ","))
+	return setBits, true, nil
 }
 
 // MatchSetName reports whether name is a list of member names of the SET
@@ -187,20 +209,26 @@ func (d *setDescriptor) parseName(name string) (uint64, bool) {
 	if len(name) == 0 {
 		return 0, true
 	}
+	name = strings.TrimRight(name, " ")
+	if len(name) == 0 {
+		return 0, false
+	}
 
 	// Walk the comma-separated items in place (same items as strings.Split)
 	// so a member-name lookup does not allocate.
 	setBits := uint64(0)
+	matched := true
 	for {
 		item, rest, more := strings.Cut(name, ",")
-		normalized := strings.ToLower(strings.TrimRight(item, " "))
+		normalized := strings.ToLower(item)
 		origin, ok := d.normalizedToOrigin[normalized]
 		if !ok {
-			return 0, false
+			matched = false
+		} else {
+			setBits |= d.valueToBit[origin]
 		}
-		setBits |= d.valueToBit[origin]
 		if !more {
-			return setBits, true
+			return setBits, matched
 		}
 		name = rest
 	}

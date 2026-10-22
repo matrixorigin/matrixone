@@ -6372,6 +6372,7 @@ func TestLoadCheckConstraintPolicy(t *testing.T) {
 		} {
 			t.Run(table+"/"+tc.name, func(t *testing.T) {
 				mock := NewMockOptimizer(true, newPlanTestProcess(t))
+				setLoadPrimaryKeyCheck(&mock.ctxt, 1)
 				addPositiveCheck(t, mock, table, "deptno")
 				stmt, err := mysql.ParseOne(t.Context(), fmt.Sprintf(tc.sql, table), 1)
 				require.NoError(t, err)

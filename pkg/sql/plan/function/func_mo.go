@@ -1048,23 +1048,21 @@ func CastIndexToValue(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
-	// The legacy overload takes text; the typed overload takes the source
-	// definition followed by one native ENUM argument.
 	enumValues := vector.GenerateFunctionStrParameter(ivecs[1])
+	// Overload 1 supplies a source definition and native ENUM ordinals.
 	var ordinals vector.FunctionParameterWrapper[types.Enum]
+	var sourceMembers []string
 	if len(ivecs) == 3 {
 		ordinals = vector.GenerateFunctionFixedTypeParameter[types.Enum](ivecs[2])
 	}
 	var valueIndex *enumValueIndex
-	if !selectList.IgnoreAllRow() && length >= enumValueIndexMinRows && ivecs[0].IsConst() && !ivecs[0].IsConstNull() {
-		typeEnum, typeEnumNull := typeEnums.GetStrValue(0)
-		if !typeEnumNull {
-			valueIndex = buildEnumValueIndexForBatch(functionUtil.QuickBytesToStr(typeEnum), length)
-		}
-	}
+	indexAttempted := false
+	allowAdjustment := allowEnumSetAdjustment(proc)
+	var warnings process.WarningAccumulator
+	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
+		if enumSetConversionSkipped(selectList, i) {
 			if err := rs.Append(0, true); err != nil {
 				return err
 			}
@@ -1092,29 +1090,51 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 					}
 					continue
 				}
-				var err error
-				enumStr, err = types.ParseEnumIndex(enumStr, ordinal)
-				if err != nil {
-					return err
+				if ivecs[1].IsConst() {
+					// Decode only after selection/NULL/zero admission, once per call.
+					if sourceMembers == nil {
+						sourceMembers = strings.Split(enumStr, ",")
+					}
+					if len(sourceMembers) <= types.MaxEnumLen && int(ordinal) <= len(sourceMembers) {
+						enumStr = sourceMembers[int(ordinal)-1]
+					} else {
+						// Keep the established malformed-ordinal error contract.
+						var err error
+						enumStr, err = types.ParseEnumIndex(enumStr, ordinal)
+						if err != nil {
+							return err
+						}
+					}
+				} else {
+					var err error
+					enumStr, err = types.ParseEnumIndex(enumStr, ordinal)
+					if err != nil {
+						return err
+					}
 				}
+			}
+			if !indexAttempted && ivecs[0].IsConst() {
+				indexAttempted = true
+				valueIndex = buildEnumValueIndexForBatch(typeEnumVal, length)
 			}
 
 			var (
-				index types.Enum
-				err   error
+				index     types.Enum
+				truncated bool
+				err       error
 			)
 			if valueIndex != nil {
-				index, err = valueIndex.parse(enumStr)
+				index, truncated, err = valueIndex.parse(enumStr)
 			} else {
-				index, err = types.ParseEnum(typeEnumVal, enumStr)
+				index, truncated, err = types.ParseEnumAssignment(typeEnumVal, enumStr)
 			}
 			if err != nil {
-				if !statementIgnore(proc) {
+				return err
+			}
+			if truncated {
+				if err := recordEnumSetTruncation(proc, &warnings, allowAdjustment, "ENUM", enumStr); err != nil {
 					return err
 				}
-				// MySQL INSERT IGNORE stores the ENUM error member (ordinal 0)
-				// for an unrecognized label instead of rejecting the row.
-				index = 0
 			}
 
 			if err := rs.Append(index, false); err != nil {
@@ -1122,6 +1142,7 @@ func CastValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWrappe
 			}
 		}
 	}
+	warnings.Flush(proc)
 	return nil
 }
 
@@ -1139,7 +1160,7 @@ func buildEnumValueIndexForBatch(enumValues string, length int) *enumValueIndex 
 		return nil
 	}
 	labelCount := strings.Count(enumValues, ",") + 1
-	if labelCount < enumValueIndexMinLabels {
+	if labelCount < enumValueIndexMinLabels || labelCount > types.MaxEnumLen {
 		return nil
 	}
 	return buildEnumValueIndex(enumValues)
@@ -1160,6 +1181,9 @@ func buildEnumValueIndex(enumValues string) *enumValueIndex {
 	}
 
 	values := strings.Split(enumValues, ",")
+	if len(values) > types.MaxEnumLen {
+		return nil
+	}
 	index := &enumValueIndex{
 		values:        values,
 		exactIndexes:  make(map[string]types.Enum, len(values)),
@@ -1177,26 +1201,20 @@ func buildEnumValueIndex(enumValues string) *enumValueIndex {
 	return index
 }
 
-func (index *enumValueIndex) parse(value string) (types.Enum, error) {
-	if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
-		return enumIndex, nil
-	}
-	if enumIndex := index.foldedIndexes[enumEqualFoldKey(value)]; enumIndex != 0 {
-		return enumIndex, nil
-	}
-
-	num, err := strconv.ParseUint(value, 0, 64)
-	if err == nil {
-		if num == 0 || num > uint64(len(index.values)) {
-			return 0, moerr.NewInternalErrorNoCtxf(
-				"convert to MySQL enum failed: number %d overflow enum boundary [1, %d]",
-				num, len(index.values))
+func (index *enumValueIndex) parse(value string) (types.Enum, bool, error) {
+	for {
+		if enumIndex := index.exactIndexes[value]; enumIndex != 0 {
+			return enumIndex, false, nil
 		}
-		return types.Enum(num), nil
+		if enumIndex := index.foldedIndexes[enumEqualFoldKey(value)]; enumIndex != 0 {
+			return enumIndex, false, nil
+		}
+		trimmed := strings.TrimRight(value, " ")
+		if trimmed == value {
+			return types.ParseEnumNumericText(value, len(index.values))
+		}
+		value = trimmed
 	}
-
-	return 0, moerr.NewInternalErrorNoCtxf(
-		"convert to MySQL enum failed: item %s is not in enum %v", value, index.values)
 }
 
 func enumEqualFoldKey(value string) string {
@@ -1223,8 +1241,17 @@ func castIntegerToEnum[T uint16 | uint64 | int64](ivecs []*vector.Vector, result
 	rs := vector.MustFunctionResult[types.Enum](result)
 	typeEnums := vector.GenerateFunctionStrParameter(ivecs[0])
 	enumIndexValues := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
+	allowAdjustment := allowEnumSetAdjustment(proc)
+	var warnings process.WarningAccumulator
+	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if enumSetConversionSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		typeEnum, typeEnumNull := typeEnums.GetStrValue(i)
 		enumValueIndex, enumValNull := enumIndexValues.GetValue(i)
 		if typeEnumNull || enumValNull {
@@ -1233,20 +1260,14 @@ func castIntegerToEnum[T uint16 | uint64 | int64](ivecs []*vector.Vector, result
 			}
 		} else {
 			typeEnumVal := functionUtil.QuickBytesToStr(typeEnum)
-			var index types.Enum
-
-			var err error
-			if enumValueIndex < 0 || uint64(enumValueIndex) > uint64(types.MaxEnumLen) {
-				err = moerr.NewInvalidInputf(proc.Ctx, "invalid ENUM index %v", enumValueIndex)
-			} else {
-				index, err = types.ParseEnumValue(typeEnumVal, uint16(enumValueIndex))
-			}
+			index, truncated, err := types.ParseEnumNumberAssignment(typeEnumVal, uint64(enumValueIndex))
 			if err != nil {
-				if !statementIgnore(proc) {
+				return err
+			}
+			if truncated {
+				if err := recordEnumSetTruncation(proc, &warnings, allowAdjustment, "ENUM", enumValueIndex); err != nil {
 					return err
 				}
-				// Invalid numeric ENUM input is adjusted to the error member.
-				index = 0
 			}
 
 			if err = rs.Append(index, false); err != nil {
@@ -1254,6 +1275,7 @@ func castIntegerToEnum[T uint16 | uint64 | int64](ivecs []*vector.Vector, result
 			}
 		}
 	}
+	warnings.Flush(proc)
 	return nil
 }
 
@@ -1289,8 +1311,17 @@ func CastSetValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWra
 	rs := vector.MustFunctionResult[uint64](result)
 	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
 	setValues := vector.GenerateFunctionStrParameter(ivecs[1])
+	allowAdjustment := allowEnumSetAdjustment(proc)
+	var warnings process.WarningAccumulator
+	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if enumSetConversionSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		typeSet, typeSetNull := typeSets.GetStrValue(i)
 		setValue, setValueNull := setValues.GetStrValue(i)
 		if typeSetNull || setValueNull {
@@ -1300,36 +1331,62 @@ func CastSetValueToIndex(ivecs []*vector.Vector, result vector.FunctionResultWra
 			continue
 		}
 
-		index, err := types.ParseSet(functionUtil.QuickBytesToStr(typeSet), functionUtil.QuickBytesToStr(setValue))
+		input := functionUtil.QuickBytesToStr(setValue)
+		index, truncated, err := types.ParseSetAssignment(functionUtil.QuickBytesToStr(typeSet), input)
 		if err != nil {
-			if !statementIgnore(proc) {
+			return err
+		}
+		if truncated {
+			if err := recordEnumSetTruncation(proc, &warnings, allowAdjustment, "SET", input); err != nil {
 				return err
-			}
-			// INSERT IGNORE retains the valid SET members and drops invalid
-			// members, matching MySQL's partial-value adjustment.
-			index = 0
-			setDef := functionUtil.QuickBytesToStr(typeSet)
-			for _, member := range strings.Split(functionUtil.QuickBytesToStr(setValue), ",") {
-				memberBits, memberErr := types.ParseSet(setDef, member)
-				if memberErr == nil {
-					index |= memberBits
-				}
 			}
 		}
 		if err = rs.Append(index, false); err != nil {
 			return err
 		}
 	}
+	warnings.Flush(proc)
 	return nil
 }
 
 func statementIgnore(proc *process.Process) bool {
-	return proc != nil && proc.GetStmtProfile() != nil && proc.GetStmtProfile().GetStatementIgnore()
+	return proc != nil && proc.Base != nil && proc.GetStmtProfile().GetStatementIgnore()
 }
 
-func setMemberBitmap(definition string) uint64 {
-	bitmap, _ := types.SetValidBitmap(definition)
-	return bitmap
+func allowEnumSetAdjustment(proc *process.Process) bool {
+	return proc != nil && proc.Base != nil && (statementIgnore(proc) || !isStrictSqlMode(proc))
+}
+
+func enumSetConversionSkipped(selection *FunctionSelectList, row uint64) bool {
+	return selection != nil && (selection.IgnoreAllRow() || (!selection.ShouldEvalAllRow() && selection.Contains(row)))
+}
+
+func recordEnumSetTruncation(proc *process.Process, warnings *process.WarningAccumulator, allowAdjustment bool, typ string, value any) error {
+	if allowAdjustment {
+		if warnings.Total == 0 {
+			warnings.SetWarningRetentionForProcess(proc)
+		}
+		if !warnings.NeedsDiagnostic() {
+			warnings.AddCount()
+			return nil
+		}
+	}
+	text, ok := value.(string)
+	if !ok {
+		text = fmt.Sprint(value)
+	}
+	// BoundWarningMessage caps bytes, clips at UTF-8 boundaries and clones
+	// borrowed input so a retained diagnostic cannot pin a large source vector.
+	message := fmt.Sprintf("Data truncated for %s value: '%s'", typ, process.BoundWarningMessage(text, 128))
+	if allowAdjustment {
+		warnings.Add(moerr.WARN_DATA_TRUNCATED, message)
+		return nil
+	}
+	ctx := moerr.Context()
+	if proc != nil && proc.Ctx != nil {
+		ctx = proc.Ctx
+	}
+	return moerr.NewEnumSetValueTruncated(ctx, message)
 }
 
 // set("a","b","c") -> CastSetIndexValueToIndex(3) -> 3
@@ -1341,8 +1398,17 @@ func castIntegerToSet[T uint64 | int64](ivecs []*vector.Vector, result vector.Fu
 	rs := vector.MustFunctionResult[uint64](result)
 	typeSets := vector.GenerateFunctionStrParameter(ivecs[0])
 	setIndexValues := vector.GenerateFunctionFixedTypeParameter[T](ivecs[1])
+	allowAdjustment := allowEnumSetAdjustment(proc)
+	var warnings process.WarningAccumulator
+	defer warnings.Reset()
 
 	for i := uint64(0); i < uint64(length); i++ {
+		if enumSetConversionSkipped(selectList, i) {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
 		typeSet, typeSetNull := typeSets.GetStrValue(i)
 		setIndexValue, setIndexNull := setIndexValues.GetValue(i)
 		if typeSetNull || setIndexNull {
@@ -1352,24 +1418,21 @@ func castIntegerToSet[T uint64 | int64](ivecs []*vector.Vector, result vector.Fu
 			continue
 		}
 
-		var index uint64
-		var err error
-		if setIndexValue < 0 {
-			err = moerr.NewInvalidInputf(proc.Ctx, "invalid SET bitmap %v", setIndexValue)
-		} else {
-			index, err = types.ParseSetValue(functionUtil.QuickBytesToStr(typeSet), uint64(setIndexValue))
-		}
+		bitmap, err := types.SetValidBitmap(functionUtil.QuickBytesToStr(typeSet))
 		if err != nil {
-			if !statementIgnore(proc) {
+			return err
+		}
+		index := uint64(setIndexValue) & bitmap
+		if index != uint64(setIndexValue) {
+			if err := recordEnumSetTruncation(proc, &warnings, allowAdjustment, "SET", setIndexValue); err != nil {
 				return err
 			}
-			// Numeric SET input keeps only bits represented by declared members.
-			index = uint64(setIndexValue) & setMemberBitmap(functionUtil.QuickBytesToStr(typeSet))
 		}
 		if err = rs.Append(index, false); err != nil {
 			return err
 		}
 	}
+	warnings.Flush(proc)
 	return nil
 }
 

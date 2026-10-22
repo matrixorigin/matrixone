@@ -368,6 +368,8 @@ type BaseOptimizer struct {
 
 type ViewData struct {
 	Stmt                string
+	Definition          string `json:"definition,omitempty"`
+	CheckOption         string `json:"check_option,omitempty"`
 	DefaultDatabase     string
 	SQLMode             *string          `json:"sql_mode,omitempty"`
 	SecurityType        string           `json:"security_type,omitempty"`
@@ -651,6 +653,10 @@ type QueryBuilder struct {
 	// semantics.
 	cteRefs []*CTERef
 
+	// cteSinkNodes owns shared CTE publication schemas. Unlike other users of
+	// CTESinkOption, all of their readers register for positional column remapping.
+	cteSinkNodes map[int32]struct{}
+
 	// localCTERoots identifies CTE boundaries before executable-column remapping.
 	// Correlated producers must be parameterized before their consumers flatten.
 	localCTERoots map[int32]bool
@@ -884,6 +890,7 @@ type BindContext struct {
 	sliding                      bool
 	explicitSliding              bool
 	isDistinct                   bool
+	hasHaving                    bool // query-block ownership survives constant HAVING elimination
 	normalizeGroupingSetDistinct bool
 	// groupingSetOrderHiddenCount marks the generated ORDER BY projections at
 	// the tail of a grouping-set branch select list. They are qualified after
@@ -1009,7 +1016,7 @@ type BindContext struct {
 	numericProjectionTypes          []Type
 	numericTableProjectionTypes     map[string][]Type
 	numericTableProjectionAmbiguous map[string][]bool
-	numericCteByName                map[string]*tree.CTE
+	numericCteByName                map[string]*CTERef
 
 	timeAsts []tree.Expr
 

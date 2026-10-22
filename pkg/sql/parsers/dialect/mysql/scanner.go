@@ -16,6 +16,7 @@ package mysql
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 	"strconv"
 	"strings"
@@ -237,8 +238,23 @@ func (s *Scanner) scanToken(comments bool) (int, string) {
 			if s.isCharsetIntroducer() {
 				s.incN(8)
 				s.skipBlank()
-				s.inc()
-				return s.scanString('\'', STRING)
+				if s.cur() == '\'' {
+					s.inc()
+					return s.scanString('\'', STRING)
+				}
+				// A character-set-introduced hex literal is text, not a
+				// binary HEXNUM or a width-constrained CAST. Decode through
+				// STRING so binding infers the original character width.
+				s.incN(2) // X'
+				token, value := s.scanHex()
+				if token != HEXNUM {
+					return token, value
+				}
+				decoded, err := hex.DecodeString(value[2:])
+				if err != nil {
+					return LEX_ERROR, value
+				}
+				return STRING, string(decoded)
 			}
 			return s.scanIdentifier(false)
 		}
@@ -368,12 +384,14 @@ func (s *Scanner) TakeExecutableCommentEnd() int {
 }
 
 func (s *Scanner) isCharsetIntroducer() bool {
-	if s.peek(1) != 'u' || s.peek(2) != 't' || s.peek(3) != 'f' || s.peek(4) != '8' ||
-		s.peek(5) != 'm' || s.peek(6) != 'b' || s.peek(7) != '4' {
+	// The introducer name is matched case-insensitively, like MySQL.
+	const charsetIntroducer = "_utf8mb4"
+	end := s.Pos + len(charsetIntroducer)
+	if end > len(s.buf) || !strings.EqualFold(s.buf[s.Pos:end], charsetIntroducer) {
 		return false
 	}
 
-	pos := s.Pos + len("_utf8mb4")
+	pos := end
 	for pos < len(s.buf) {
 		switch s.buf[pos] {
 		case ' ', '\n', '\r', '\t':
@@ -382,7 +400,8 @@ func (s *Scanner) isCharsetIntroducer() bool {
 		}
 		break
 	}
-	return pos < len(s.buf) && s.buf[pos] == '\''
+	return pos < len(s.buf) && (s.buf[pos] == '\'' ||
+		(pos > end && pos+1 < len(s.buf) && (s.buf[pos] == 'x' || s.buf[pos] == 'X') && s.buf[pos+1] == '\''))
 }
 
 // ScanComment finds all Comment (/*  */, //) until gets EOF or LEX_ERROR

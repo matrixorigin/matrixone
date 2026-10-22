@@ -139,7 +139,6 @@ func TestInsertIgnoreAdjustsMySQLSpecialTypeValues(t *testing.T) {
 		NewFunctionTestInput(types.T_uint64.ToType(), []uint64{99, 4, 1}, []bool{false, false, true}),
 	}, NewFunctionTestResult(types.T_uint64.ToType(), false, []uint64{3, 4, 0}, []bool{false, false, true}), CastSetIndexValueToIndex)
 
-	require.Equal(t, uint64(7), setMemberBitmap("x,y,z"))
 	require.False(t, statementIgnore(nil))
 }
 
@@ -154,8 +153,9 @@ func TestEnumValueIndexPreservesParseEnumSemantics(t *testing.T) {
 			"low", "LOW", "LoW", "2", "0x2", "K", "k", "Σ", "ς", "σ",
 			"missing", "0", "65537", "18446744073709551615",
 		} {
-			want, wantErr := types.ParseEnum(definition, input)
-			got, gotErr := index.parse(input)
+			want, wantTruncated, wantErr := types.ParseEnumAssignment(definition, input)
+			got, gotTruncated, gotErr := index.parse(input)
+			require.Equal(t, wantTruncated, gotTruncated)
 			require.Equal(t, want, got, "definition=%q input=%q", definition, input)
 			if wantErr == nil {
 				require.NoError(t, gotErr, "definition=%q input=%q", definition, input)
@@ -209,7 +209,7 @@ func BenchmarkEnumValueIndex(b *testing.B) {
 						b.Fatal("batch should use the enum value index")
 					}
 					for row := 0; row < batchSize; row++ {
-						if _, err := index.parse(input.value); err != nil {
+						if _, truncated, err := index.parse(input.value); err != nil || truncated {
 							b.Fatal(err)
 						}
 					}

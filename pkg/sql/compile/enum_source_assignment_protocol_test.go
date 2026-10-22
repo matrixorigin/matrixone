@@ -46,21 +46,21 @@ func TestEnumSourceAssignmentProtocolPlacementSendReceive(t *testing.T) {
 	require.True(t, features.EnumSourceAssignment)
 	features.TableCollationFunction = true
 	features.LeastGreatestCollationSemantics = true
-	require.Equal(t, defines.MORPCVersion125, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion128, remoteExpressionProtocolVersion(features))
 	qry := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}, Steps: []int32{0}}
 	op := projection.NewArgument()
 	defer op.Release()
 	op.ProjectList = []*planpb.Expr{expr}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	for _, version := range []int64{118, 119, 120, 121, 122, 125, 122} {
+	for _, version := range []int64{118, 119, 120, 121, 122, 128, 122} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{scope.NodeInfo}
 		require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 		_, err := encodeRemoteScope(scope, c.proc)
-		if version < 125 {
+		if version < 128 {
 			require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
-			require.ErrorContains(t, err, "version 125")
+			require.ErrorContains(t, err, "version 128")
 		} else {
 			require.Equal(t, plan2.ExecTypeAP_MULTICN, c.execType)
 			require.NoError(t, err)
@@ -68,12 +68,12 @@ func TestEnumSourceAssignmentProtocolPlacementSendReceive(t *testing.T) {
 	}
 
 	// Placement is not an admission cache: actual destination replacement is rechecked.
-	client.version = defines.MORPCVersion125
+	client.version = defines.MORPCVersion128
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
 	client.version = defines.MORPCVersion122
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 125")
+	require.ErrorContains(t, err, "version 128")
 	originalCtx := c.proc.Ctx
 	canceled, cancel := context.WithCancel(originalCtx)
 	cancel()
@@ -82,11 +82,11 @@ func TestEnumSourceAssignmentProtocolPlacementSendReceive(t *testing.T) {
 	require.Error(t, err)
 	c.proc.Ctx = originalCtx
 	require.ErrorContains(t, validateRemoteExpressionDestination(c.proc, nil, features), "versioned remote destination")
-	require.ErrorContains(t, validateRemoteExpressionDestination(nil, &pipeline.Pipeline{Node: &pipeline.NodeInfo{}}, features), "version 125")
+	require.ErrorContains(t, validateRemoteExpressionDestination(nil, &pipeline.Pipeline{Node: &pipeline.NodeInfo{}}, features), "version 128")
 	client.customResponse = true
 	client.response = &query.Response{}
 	_, err = encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "version 125", "an unknown destination fails closed")
+	require.ErrorContains(t, err, "version 128", "an unknown destination fails closed")
 	require.Equal(t, client.calls, client.releases)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	for _, nested := range []bool{false, true} {
@@ -96,17 +96,17 @@ func TestEnumSourceAssignmentProtocolPlacementSendReceive(t *testing.T) {
 		}
 		data, err := p.Marshal()
 		require.NoError(t, err)
-		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 125")
-		for _, version := range []any{nil, "125", int64(119), int64(122), int64(125)} {
+		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 128")
+		for _, version := range []any{nil, "128", int64(119), int64(122), int64(128)} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			decoded, err := decodeScope(data, c.proc, true, nil)
 			if decoded != nil {
 				decoded.release()
 			}
-			if version == int64(125) {
+			if version == int64(128) {
 				require.NoError(t, err)
 			} else {
-				require.ErrorContains(t, err, "version 125")
+				require.ErrorContains(t, err, "version 128")
 				require.Nil(t, decoded, "reject before allocating operator owners")
 			}
 		}
@@ -123,21 +123,21 @@ func TestEnumSourceAssignmentLocalAndCachedAdmission(t *testing.T) {
 		{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{expr}}}}}},
 		{Plan: &planpb.Plan_Ddl{Ddl: &planpb.DataDefinition{Definition: &planpb.DataDefinition_CreateTable{CreateTable: &planpb.CreateTable{TableDef: &planpb.TableDef{Cols: []*planpb.ColDef{{Default: &planpb.Default{Expr: expr}}}}}}}}},
 	} {
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
 		require.NoError(t, validateEnumSourceAssignmentProtocol(c.proc, pn))
 		require.Zero(t, testing.AllocsPerRun(10, func() { require.NoError(t, validateEnumSourceAssignmentProtocol(c.proc, pn)) }))
 		c.pn = pn
-		for _, version := range []any{int64(119), int64(122), nil, "125"} {
+		for _, version := range []any{int64(119), int64(122), nil, "128"} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-			require.ErrorContains(t, c.Compile(context.Background(), pn, nil), "protocol version 125")
+			require.ErrorContains(t, c.Compile(context.Background(), pn, nil), "protocol version 128")
 			_, err := c.Run(0)
-			require.ErrorContains(t, err, "protocol version 125", "cached execution rechecks a closed capability")
+			require.ErrorContains(t, err, "protocol version 128", "cached execution rechecks a closed capability")
 		}
 	}
 	legacy, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "cast_value_to_index", []*planpb.Expr{arg, arg})
 	require.NoError(t, err)
 	require.NoError(t, validateEnumSourceAssignmentProtocol(nil, legacy))
-	require.ErrorContains(t, validateEnumSourceAssignmentProtocol(nil, expr), "protocol version 125")
+	require.ErrorContains(t, validateEnumSourceAssignmentProtocol(nil, expr), "protocol version 128")
 }
 
 func enumSourceAssignmentTestExpr(t *testing.T, ctx context.Context) *planpb.Expr {
@@ -150,7 +150,7 @@ func enumSourceAssignmentTestExpr(t *testing.T, ctx context.Context) *planpb.Exp
 
 func TestEnumSourceAssignmentExecutionStream(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
-	client.version = defines.MORPCVersion125
+	client.version = defines.MORPCVersion128
 	enumExpr := enumSourceAssignmentTestExpr(t, c.proc.Ctx)
 	temporal, err := plan2.BindFuncExprImplByPlanExpr(c.proc.Ctx, "timestamp", []*planpb.Expr{{Typ: types.T_datetime.ToTypeWithScale(3).PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}})
 	require.NoError(t, err)
@@ -166,8 +166,8 @@ func TestEnumSourceAssignmentExecutionStream(t *testing.T) {
 		exprs []*planpb.Expr
 		want  int64
 	}{
-		{"enum", []*planpb.Expr{enumExpr}, defines.MORPCVersion125},
-		{"enum and temporal", []*planpb.Expr{enumExpr, temporal}, defines.MORPCVersion125},
+		{"enum", []*planpb.Expr{enumExpr}, defines.MORPCVersion128},
+		{"enum and temporal", []*planpb.Expr{enumExpr, temporal}, defines.MORPCVersion128},
 		{"temporal", []*planpb.Expr{temporal}, defines.MORPCVersion122},
 		{"legacy", []*planpb.Expr{legacy}, 0},
 	} {
@@ -183,7 +183,7 @@ func TestEnumSourceAssignmentExecutionStream(t *testing.T) {
 		})
 	}
 	require.Equal(t, client.calls, client.releases)
-	require.Equal(t, defines.MORPCVersion125, enumRequirement)
+	require.Equal(t, defines.MORPCVersion128, enumRequirement)
 	for _, tc := range []struct {
 		name            string
 		version         int64
@@ -191,11 +191,11 @@ func TestEnumSourceAssignmentExecutionStream(t *testing.T) {
 		id              uint64
 		closed, wantErr bool
 	}{
-		{"supported", defines.MORPCVersion125, pipeline.Method_PipelineProtocolCheck, 0, false, false},
+		{"supported", defines.MORPCVersion128, pipeline.Method_PipelineProtocolCheck, 0, false, false},
 		{"replaced by old receiver", defines.MORPCVersion122, pipeline.Method_PipelineProtocolCheck, 0, false, true},
 		{"unknown version", 0, pipeline.Method_PipelineProtocolCheck, 0, false, true},
-		{"unknown method", defines.MORPCVersion125, pipeline.Method_UnknownMethod, 0, false, true},
-		{"wrong stream", defines.MORPCVersion125, pipeline.Method_PipelineProtocolCheck, 1, false, true},
+		{"unknown method", defines.MORPCVersion128, pipeline.Method_UnknownMethod, 0, false, true},
+		{"wrong stream", defines.MORPCVersion128, pipeline.Method_PipelineProtocolCheck, 1, false, true},
 		{"closed stream", 0, pipeline.Method_PipelineProtocolCheck, 0, true, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -219,15 +219,15 @@ func TestEnumSourceAssignmentExecutionStream(t *testing.T) {
 			require.Equal(t, 1, stream.sentCnt, "only the capability check, no pipeline")
 			request := stream.sent[0].(*pipeline.Message)
 			require.Equal(t, pipeline.Method_PipelineProtocolCheck, request.GetCmd())
-			require.Equal(t, defines.MORPCVersion125, request.GetProtocolVersion())
+			require.Equal(t, defines.MORPCVersion128, request.GetProtocolVersion())
 		})
 	}
 }
 
 func TestEnumSourceAssignmentComposesWithVectorStream(t *testing.T) {
 	c, client := vectorPlacementCompile(t, engine.Nodes{{Id: "b", Addr: "b:6001"}, {Id: "a", Addr: "a:6001"}})
-	client.version = defines.MORPCVersion125
-	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+	client.version = defines.MORPCVersion128
+	moruntime.ServiceRuntime(c.proc.GetService()).SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
 	scopes, err := c.compileIndexSearchScan(vectorPlacementNode())
 	require.NoError(t, err)
 	t.Cleanup(func() { ReleaseScopes(scopes) })
@@ -239,7 +239,7 @@ func TestEnumSourceAssignmentComposesWithVectorStream(t *testing.T) {
 	var required int64
 	_, err = encodeRemoteScopeWithProtocol(remote, c.proc, &required)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion125, required)
+	require.Equal(t, defines.MORPCVersion128, required)
 	require.Equal(t, client.calls, client.releases)
 }
 
@@ -248,7 +248,7 @@ func TestEnumSourceAssignmentCTASAdmission(t *testing.T) {
 		t.Run(prefix, func(t *testing.T) {
 			c, _ := expressionProtocolTestCompile(t)
 			rt := moruntime.ServiceRuntime(c.proc.GetService())
-			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion125)
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
 			ctx := plan2.NewMockCompilerContext(false, c.proc)
 			stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, prefix+" db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v", 1)
 			require.NoError(t, err)
@@ -260,14 +260,14 @@ func TestEnumSourceAssignmentCTASAdmission(t *testing.T) {
 			decoded := &planpb.Plan{}
 			require.NoError(t, decoded.Unmarshal(wire))
 			require.Nil(t, decoded.GetDdl().Query)
-			require.Equal(t, defines.MORPCVersion125, decoded.GetDdl().GetCreateTable().CtasExecutionProtocolVersion)
+			require.Equal(t, defines.MORPCVersion128, decoded.GetDdl().GetCreateTable().CtasExecutionProtocolVersion)
 			require.NoError(t, validateTemporalResultProtocol(c.proc, decoded))
 			c.pn = decoded
-			for _, version := range []any{int64(122), nil, "125"} {
+			for _, version := range []any{int64(122), nil, "128"} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-				require.ErrorContains(t, c.Compile(t.Context(), decoded, nil), "protocol version 125")
+				require.ErrorContains(t, c.Compile(t.Context(), decoded, nil), "protocol version 128")
 				_, err = c.Run(0)
-				require.ErrorContains(t, err, "protocol version 125")
+				require.ErrorContains(t, err, "protocol version 128")
 			}
 		})
 	}

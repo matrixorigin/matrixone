@@ -709,7 +709,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
-	builder.checkLoadPrimaryKey = loadChecksPrimaryKey(stmt, originTableDef)
+	builder.checkLoadPrimaryKey, err = loadPrimaryKeyCheckEnabled(ctx, stmt, originTableDef)
+	if err != nil {
+		return nil, err
+	}
 	bindCtx := NewBindContext(builder, nil)
 	terminated := ","
 	enclosedBy := []byte("\"")
@@ -833,7 +836,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			return nil, err
 		}
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
+		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil, tree.IsIgnoreStatement(stmt))
 		if err != nil {
 			return nil, err
 		}
