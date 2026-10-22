@@ -87,6 +87,33 @@ func TestForeachIncrementalObjectDropStartsAfterFrom(t *testing.T) {
 	require.Equal(t, []types.TS{types.BuildTS(4, 0), types.BuildTS(5, 0)}, deletedAt)
 }
 
+func TestForeachIncrementalObjectSkipsOldNonAppendableDrop(t *testing.T) {
+	cata := catalog.MockCatalog(nil)
+	db := catalog.MockDBEntryWithAccInfo(0, 1)
+	table := catalog.MockTableEntryWithDB(db, 2)
+	old := catalog.MockCreatedObjectEntry2ListWithAppendable(
+		table, cata, false, false, types.BuildTS(1, 0),
+	)
+	catalog.MockDroppedObjectEntry2List(old, types.BuildTS(6, 0))
+	newer := catalog.MockCreatedObjectEntry2ListWithAppendable(
+		table, cata, false, false, types.BuildTS(4, 0),
+	)
+	catalog.MockDroppedObjectEntry2List(newer, types.BuildTS(6, 0))
+
+	var visited []types.TS
+	err := foreachIncrementalObject(
+		table.MakeDataObjectSnapshot(),
+		types.BuildTS(3, 0),
+		types.BuildTS(5, 0),
+		func(entry *catalog.ObjectEntry) error {
+			visited = append(visited, entry.CreatedAt)
+			return nil
+		},
+	)
+	require.NoError(t, err)
+	require.Equal(t, []types.TS{types.BuildTS(4, 0)}, visited)
+}
+
 func TestForeachIncrementalObjectSkipsFinalizedOldAppendableObject(t *testing.T) {
 	factory := tables.NewDataFactory(nil, "")
 	cata := catalog.MockCatalog(factory)

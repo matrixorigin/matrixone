@@ -16,7 +16,6 @@ package txnimpl
 
 import (
 	"context"
-	"strconv"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -437,7 +436,6 @@ func observePrePrepareObjectScan(
 	}
 	group := obj.ObjectListGroup()
 	v2.TxnTNPrePrepareObjectScanCounter.WithLabelValues(
-		strconv.FormatUint(tableID, 10),
 		typ,
 		prePrepareObjectKind(obj),
 		prePrepareObjectHasDrop(group),
@@ -607,6 +605,14 @@ func foreachIncrementalObjectWithStats(
 				recordFilter(filterStart, maxCommitBefore, createdAtElapsed, 0, 0)
 				return false
 			}
+			// A non-appendable object's rows have no later AppendNodes. An
+			// older creation cannot introduce a duplicate in [from, to], even
+			// if a bookmark starts before the timestamp seek boundary.
+			if !appendable && obj.CreatedAt.LT(&from) {
+				observeObject(obj, "created_before_from")
+				recordFilter(filterStart, maxCommitBefore, createdAtElapsed, 0, 0)
+				return true
+			}
 			if shouldSkipAObject(obj) {
 				recordFilter(filterStart, maxCommitBefore, createdAtElapsed, 0, 0)
 				return true
@@ -621,10 +627,11 @@ func foreachIncrementalObjectWithStats(
 			return err == nil
 		}
 		scanStart := time.Now()
-		bookmarkStart, bookmarkValid, bookmarkSkipped := snapshot.CommitBookmarkStartWithCount(group, from)
-		if from == txnif.UncommitTS {
-			bookmarkValid = false
-			bookmarkSkipped = 0
+		var bookmarkStart *catalog.ObjectEntry
+		var bookmarkValid bool
+		var bookmarkSkipped int
+		if appendable && from != txnif.UncommitTS {
+			bookmarkStart, bookmarkValid, bookmarkSkipped = snapshot.CommitBookmarkStartWithCount(group, from)
 		}
 		if group == catalog.ObjectListGroupAppendableCreate {
 			kind := "data"
@@ -698,6 +705,13 @@ func foreachIncrementalObjectWithStats(
 				recordFilter(filterStart, maxCommitBefore, createdAtElapsed, deletedAtElapsed, 0)
 				return true
 			}
+			// Dropping an old non-appendable object does not make its old rows
+			// new competitors. The replacement's C entry is checked separately.
+			if !obj.IsAppendable() && obj.CreatedAt.LT(&from) {
+				observeObject(obj, "created_before_from")
+				recordFilter(filterStart, maxCommitBefore, createdAtElapsed, deletedAtElapsed, 0)
+				return true
+			}
 			visibleStart := time.Now()
 			visible := obj.VisibleByTS(to)
 			visibleElapsed := time.Since(visibleStart)
@@ -717,9 +731,10 @@ func foreachIncrementalObjectWithStats(
 			activeStats.operation += time.Since(operationStart)
 			return err == nil
 		}
-		bookmarkStart, bookmarkValid := snapshot.CommitBookmarkStart(group, from)
-		if from == txnif.UncommitTS {
-			bookmarkValid = false
+		var bookmarkStart *catalog.ObjectEntry
+		var bookmarkValid bool
+		if group == catalog.ObjectListGroupAppendableDrop && from != txnif.UncommitTS {
+			bookmarkStart, bookmarkValid = snapshot.CommitBookmarkStart(group, from)
 		}
 		if bookmarkValid {
 			if bookmarkStart != nil {

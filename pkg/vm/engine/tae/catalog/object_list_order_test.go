@@ -22,10 +22,43 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/require"
 )
+
+func TestObjectListRetiredMetricsCannotRepublish(t *testing.T) {
+	const tableID uint64 = 0xfedcba9876543211
+	before := testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge)
+	list := NewObjectListWithTableID(tableID, false)
+	list.publishAppendMaxMetrics(tableID, [3]int{1, 0, 0})
+	require.Equal(t, before+1, testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge))
+	list.retireMetrics()
+	v2.RemoveTxnAObjectMaxCommitState(tableID)
+	list.publishAppendMaxMetrics(tableID, [3]int{1, 0, 0})
+	require.Equal(t, before, testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge))
+}
+
+func TestDatabaseRemovalRetiresChildTableMetrics(t *testing.T) {
+	c := MockCatalog(nil)
+	defer c.Close()
+	beforeSeries := testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge)
+	for i := 0; i < 8; i++ {
+		db, err := c.CreateDBEntry(fmt.Sprintf("metric_gc_%d", i), "", "", nil)
+		require.NoError(t, err)
+		table, err := db.CreateTableEntry(MockSchema(2, 0), nil, nil)
+		require.NoError(t, err)
+		table.dataObjects.publishAppendMaxMetrics(table.ID, [3]int{1, 0, 0})
+		table.tombstoneObjects.publishAppendMaxMetrics(table.ID, [3]int{0, 1, 0})
+		require.NoError(t, c.RemoveDBEntry(db))
+		// Simulate a callback already queued before catalog removal.
+		table.dataObjects.publishAppendMaxMetrics(table.ID, [3]int{1, 0, 0})
+		table.tombstoneObjects.publishAppendMaxMetrics(table.ID, [3]int{0, 1, 0})
+		require.Equal(t, beforeSeries, testutil.CollectAndCount(v2.TxnAObjectMaxCommitStateGauge))
+	}
+}
 
 func makeObjectListOrderTestEntry(
 	marker byte,

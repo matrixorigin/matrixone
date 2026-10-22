@@ -590,26 +590,22 @@ func foreachAobjBefore(_ context.Context,
 	// table.WaitDataObjectCommitted(ts)
 	// table.WaitTombstoneObjectCommitted(ts)
 	data := table.MakeDataObjectSnapshot()
-	dataGroup := data.Group(catalog.ObjectListGroupAppendableCreate)
-	defer dataGroup.Release()
-	for ok := catalog.SeekObjectListGroup(&dataGroup, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = dataGroup.Next() {
-		item := dataGroup.Item()
+	data.AscendGroup(catalog.ObjectListGroupAppendableCreate, lastCkp, func(item *catalog.ObjectEntry) bool {
 		if item.CreatedAt.GT(&ts) {
-			break
+			return false
 		}
 		df(item)
-	}
+		return true
+	})
 
 	tomb := table.MakeTombstoneObjectSnapshot()
-	tombGroup := tomb.Group(catalog.ObjectListGroupAppendableCreate)
-	defer tombGroup.Release()
-	for ok := catalog.SeekObjectListGroup(&tombGroup, catalog.ObjectListGroupAppendableCreate, lastCkp); ok; ok = tombGroup.Next() {
-		item := tombGroup.Item()
+	tomb.AscendGroup(catalog.ObjectListGroupAppendableCreate, lastCkp, func(item *catalog.ObjectEntry) bool {
 		if item.CreatedAt.GT(&ts) {
-			break
+			return false
 		}
 		tf(item)
-	}
+		return true
+	})
 }
 
 func (flusher *flushImpl) collectTableMemUsage(entry *logtail.DirtyTreeEntry, lastCkp types.TS) (memPressureRate float64) {

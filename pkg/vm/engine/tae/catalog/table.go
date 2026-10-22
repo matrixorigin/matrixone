@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	apipb "github.com/matrixorigin/matrixone/pkg/pb/api"
+	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/data"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -201,6 +202,14 @@ func MockStaloneTableEntry(id uint64, schema *Schema) *TableEntry {
 	e.dataObjects.SetTableID(id)
 	e.tombstoneObjects.SetTableID(id)
 	return e
+}
+
+// retireAObjectMetrics stops late ObjectList callbacks before removing the
+// table's metric children. Both table GC and whole-database GC use this path.
+func (entry *TableEntry) retireAObjectMetrics() {
+	entry.dataObjects.retireMetrics()
+	entry.tombstoneObjects.retireMetrics()
+	v2.RemoveTxnAObjectMaxCommitState(entry.ID)
 }
 
 func (entry *TableEntry) GetSoftdeleteObjects(dedupedTS, collectTS types.TS) (objs []*ObjectEntry) {

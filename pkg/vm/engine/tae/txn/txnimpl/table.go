@@ -1719,12 +1719,43 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 				colName = tbl.dataTable.schema.GetPrimaryKey().Name
 			}
 			if !rowIDs.IsNull(i) {
+				matchedRowID := vector.GetFixedAtNoTypeCheck[types.Rowid](rowIDs.GetDownstreamVector(), i)
+				matchedObject, lookupErr := tbl.entry.GetObjectByID(matchedRowID.BorrowObjectID(), isTombstone)
+				var matchedObjectState string
+				if lookupErr != nil || matchedObject == nil {
+					matchedObjectState = fmt.Sprintf("lookup-error=%v", lookupErr)
+				} else {
+					matchedObjectState = fmt.Sprintf(
+						"group=%d created=%s deleted=%s appendable=%v d-entry=%v has-d-counterpart=%v",
+						matchedObject.ObjectListGroup(), matchedObject.CreatedAt.ToString(),
+						matchedObject.DeletedAt.ToString(), matchedObject.IsAppendable(),
+						matchedObject.IsDEntry(), matchedObject.HasDCounterpart(),
+					)
+				}
+				var workspaceDeletes []types.Rowid
+				var workspaceDeleteCount int
+				var workspaceDeleteStats int
+				if tbl.tombstoneTable != nil && tbl.tombstoneTable.tableSpace != nil {
+					workspaceDeleteStats = len(tbl.tombstoneTable.tableSpace.stats)
+					if spaceNode := tbl.tombstoneTable.tableSpace.node; spaceNode != nil && spaceNode.data != nil {
+						workspaceDeletes = vector.MustFixedColWithTypeCheck[types.Rowid](
+							spaceNode.data.GetVectorByName(objectio.TombstoneAttr_Rowid_Attr).GetDownstreamVector(),
+						)
+						workspaceDeleteCount = len(workspaceDeletes)
+						workspaceDeletes = workspaceDeletes[:min(len(workspaceDeletes), 16)]
+					}
+				}
 				logutil.Error("Duplicate",
 					zap.String("table", tbl.dataTable.schema.Name),
 					zap.Bool("is tombstone", isTombstone),
 					zap.String("phase", phase),
 					zap.String("from", base.dedupTS.Next().ToString()),
 					zap.String("to", ts.ToString()),
+					zap.String("matched-rowid", matchedRowID.String()),
+					zap.String("matched-object", matchedObjectState),
+					zap.String("workspace-delete-rowids", fmt.Sprint(workspaceDeletes)),
+					zap.Int("workspace-delete-count", workspaceDeleteCount),
+					zap.Int("workspace-delete-stats", workspaceDeleteStats),
 				)
 				entry := common.TypeStringValue(*pks.GetType(), pks.Get(i), false)
 				err = moerr.NewDuplicateEntryNoCtx(entry, colName)
