@@ -102,6 +102,10 @@ func (loopJoin *LoopJoin) Call(proc *process.Process) (vm.CallResult, error) {
 	result := vm.NewCallResult()
 	var err error
 	for {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			ctr.clearProbeResume()
+			return vm.CancelResult, err
+		}
 		switch ctr.state {
 		case Build:
 			if err = loopJoin.build(proc, analyzer); err != nil {
