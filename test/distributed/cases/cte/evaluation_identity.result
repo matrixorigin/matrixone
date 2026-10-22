@@ -33,4 +33,10 @@ select count(*) from (select k,(with recursive r(n,s) as(select (select t.k),cas
 select count(*) from (select k,(with r as(select result k from generate_series(1,3)g) select (select min(k) from r where k>=t.k)+(select max(k) from r)) v from t) q where (k is null and v is null) or (k=1 and v=4) or (k=2 and v=5);
 ➤ count(*)[-5,64,0]  𝄀
 4
+with r as(select datediff('2026-01-03','2026-01-01')x) select count(*) from(select k,(select max(x) from r group by t.k)v from t)q where v=2;
+➤ count(*)[-5,64,0]  𝄀
+4
+with r as(select convert(extractvalue('<a>ok</a>','/a') using utf8mb4)x) select count(*) from(select k,(select max(x) from r group by t.k)v from t)q where v='ok';
+➤ count(*)[-5,64,0]  𝄀
+4
 drop database cte_evaluation_identity;

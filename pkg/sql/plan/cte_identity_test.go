@@ -82,6 +82,10 @@ func TestCTEIdentityStableControls(t *testing.T) {
 		"with r as(select cast(n_name as integer)x from nation) select a.x,b.x from r a,r b",
 		"with r as(select result from generate_series(abs(1),3)g) select a.result,b.result from r a,r b",
 		"with r as(select value from unnest('[1,2]')u) select a.value,b.value from r a,r b",
+		"with r as(select datediff('2026-01-03','2026-01-01')x) select a.x,b.x from r a,r b",
+		"with r as(select convert('abc' using utf8mb4)x) select a.x,b.x from r a,r b",
+		"with r as(select extractvalue('<a>2</a>','/a')x) select a.x,b.x from r a,r b",
+		"with r as(select unix_timestamp()x) select a.x,b.x from r a,r b",
 		"with unused as(select rand(),missing_column from nation) select 1",
 	} {
 		mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -103,6 +107,8 @@ func TestCTEIdentityInvocationOwnership(t *testing.T) {
 		{"stable series siblings", `select (with r as(select result k from generate_series(1,3)g) select (select min(k) from r where k>=t2.a)+(select max(k) from r)) from bvt_test2.t2`, ""},
 		{"volatile series argument", `with r as(select result k from generate_series(cast(rand()*10 as bigint),10)g) select (select max(k) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
 		{"volatile unnest argument", `with r as(select cast(value as varchar(36))x from unnest(concat('["',uuid(),'"]'))u) select (select max(x) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
+		{"volatile charset argument", `with r as(select convert(uuid() using utf8mb4)x) select (select max(x) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
+		{"effectful stable result", `with r as(select sleep(0)x) select (select max(x) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
 		{"stable recursive wrapper programs", `select (with recursive r(n) as(select (select t2.a) union all select n+1 from r where n<3),s(k) as(select n+1 from r) select (select min(k) from s)+(select max(k) from s)) from bvt_test2.t2`, ""},
 		{"late recursive instability", `select (with recursive r(n,x) as(select 1,cast(null as varchar(36)) union all select n+1,uuid() from r where n<t2.a) select (select max(x) from r)) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
 		{"recursive volatile predecessor", `select (with recursive base(k,x) as(select 1,uuid() union all select k+1,x from base where k<2),r(n,x) as(select 1,x from base union all select n+1,base.x from r join base on r.x=base.x where n<t2.a) select count(*) from r) from bvt_test2.t2`, "shared CTE capture across recursive rounds"},

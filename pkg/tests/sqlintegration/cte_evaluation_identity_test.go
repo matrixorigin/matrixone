@@ -48,6 +48,7 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 		}{
 			{"rand", "with r as(select rand()x) select count(*) from r a join r b on a.x=b.x", 1},
 			{"uuid", "with r as(select uuid()x) select count(*) from r a join r b on a.x=b.x", 1},
+			{"volatile charset argument", "with r as(select convert(uuid() using utf8mb4)x) select count(*) from r a join r b on a.x=b.x", 1},
 			{"volatile unnest argument", `with r as(select value from unnest(concat('["',uuid(),'"]'))u) select count(*) from r a join r b on a.value=b.value`, 1},
 			{"union", "with r as(select 1 k,rand()x union all select 2,rand()) select count(*) from r a join r b on a.k=b.k and a.x=b.x", 2},
 			{"table bag and null", "with r as(select k,uuid()x from t) select count(*) from r a join r b on a.k<=>b.k and a.x=b.x", 4},
@@ -107,10 +108,44 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 				require.Equal(t, []string{"NULL:NULL", "1:4", "2:5", "2:5"}, readWindowNullRows(t, rows))
 			})
 		}
+		t.Run("stable scalar captures", func(t *testing.T) {
+			var zone, mode string
+			require.NoError(t, db.QueryRowContext(ctx, "select @@time_zone,@@block_encryption_mode").Scan(&zone, &mode))
+			defer execSQLRequire(t, ctx, db, "set time_zone='"+zone+"',block_encryption_mode='"+mode+"'")
+			execSQLRequire(t, ctx, db, "set time_zone='+00:00',block_encryption_mode='aes-128-ecb'")
+			for _, tc := range []struct{ name, expr, want string }{
+				{"datediff", "datediff('2026-01-03','2026-01-01')", "2"},
+				{"convert using", "convert('abc' using utf8mb4)", "abc"},
+				{"extractvalue", "extractvalue('<a>2</a>','/a')", "2"},
+				{"updatexml", "updatexml('<a>1</a>','/a','<a>2</a>')", "<a>2</a>"},
+				{"unix timestamp argument", "unix_timestamp('1970-01-01 00:00:02')", "2"},
+				{"uncompress", "hex(uncompress(compress('ab')))", "6162"},
+				{"uncompressed length", "uncompressed_length(compress('ab'))", "2"},
+				{"AES", "hex(aes_decrypt(aes_encrypt('ab','k'),'k'))", "6162"},
+				{"database", "database()", "cte_evaluation_identity"},
+				{"user", "cast(user()=user() as int)", "1"},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					query := "with r as(select " + tc.expr + " x) select t.k,(select max(x) from r group by t.k) from t order by t.k"
+					rows, err := db.QueryContext(ctx, query)
+					require.NoError(t, err)
+					require.Equal(t, []string{"NULL:" + tc.want, "1:" + tc.want, "2:" + tc.want, "2:" + tc.want}, readWindowNullRows(t, rows))
+				})
+			}
+		})
+		t.Run("scalar diagnostics", func(t *testing.T) {
+			rows, err := db.QueryContext(ctx, "with r as(select extractvalue('<a>','/a')x) select t.k,(select max(x) from r group by t.k) from(select 1 k union all select 2)t order by t.k")
+			require.NoError(t, err)
+			require.Equal(t, []string{"1:NULL", "2:NULL"}, readWindowNullRows(t, rows))
+			var warnings int
+			require.NoError(t, db.QueryRowContext(ctx, "show count(*) warnings").Scan(&warnings))
+			require.Equal(t, 2, warnings, "retain the verified base's per-invocation diagnostics")
+		})
 		t.Run("unsupported lifetime captures", func(t *testing.T) {
 			for _, q := range []string{
 				"with r as(select uuid()x) select (select max(x) from r group by t.k) from t",
 				"with r as(select result k from generate_series(cast(rand()*10 as bigint),10)g) select (select max(k) from r group by t.k) from t",
+				"with r as(select convert(uuid() using utf8mb4)x) select (select max(x) from r group by t.k) from t",
 				"select (with recursive r(n,x) as(select 1,cast(null as varchar(36)) union all select n+1,uuid() from r where n<t.k) select (select max(x) from r)) from t",
 				"select (with recursive base as(select uuid()x),r(n,x) as(select 1,x from base union all select n+1,base.x from r join base on r.x=base.x where n<t.k) select count(*) from r) from t",
 			} {
@@ -205,6 +240,46 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 			execSQLRequire(t, ctx, db, "set sql_mode=''")
 			require.NoError(t, stmt.QueryRowContext(ctx, "x").Scan(&got))
 			require.Equal(t, 8, got)
+		})
+		t.Run("prepared scalar execution context", func(t *testing.T) {
+			var zone, mode string
+			require.NoError(t, db.QueryRowContext(ctx, "select @@time_zone,@@block_encryption_mode").Scan(&zone, &mode))
+			defer execSQLRequire(t, ctx, db, "set time_zone='"+zone+"',block_encryption_mode='"+mode+"',timestamp=0")
+			stmt, err := db.PrepareContext(ctx, "with r as(select cast(unix_timestamp(?) as bigint)x,hex(aes_encrypt('a','k','0123456789abcdef'))y,unix_timestamp()z) select t.k,(select max(x) from r group by t.k),(select max(y) from r group by t.k),(select max(z) from r group by t.k) from t order by t.k")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct {
+				zone, mode      string
+				timestamp, want int
+			}{
+				{"+00:00", "aes-128-cbc", 1234, 86400},
+				{"+08:00", "aes-256-cbc", 5678, 57600},
+				{"+00:00", "aes-128-cbc", 1234, 86400},
+			} {
+				execSQLRequire(t, ctx, db, fmt.Sprintf("set time_zone='%s',block_encryption_mode='%s',timestamp=%d", tc.zone, tc.mode, tc.timestamp))
+				var encrypted string
+				require.NoError(t, db.QueryRowContext(ctx, "select hex(aes_encrypt('a','k','0123456789abcdef'))").Scan(&encrypted))
+				rows, err := stmt.QueryContext(ctx, "1970-01-02 00:00:00")
+				require.NoError(t, err)
+				suffix := fmt.Sprintf(":%d:%s:%d", tc.want, encrypted, tc.timestamp)
+				require.Equal(t, []string{"NULL" + suffix, "1" + suffix, "2" + suffix, "2" + suffix}, readWindowNullRows(t, rows))
+			}
+		})
+		t.Run("prepared XML error recovery", func(t *testing.T) {
+			stmt, err := db.PrepareContext(ctx, "with r as(select extractvalue(?,?)x) select t.k,(select max(x) from r group by t.k) from t order by t.k")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct{ path, want string }{{"/a", "2"}, {"[", ""}, {"/a", "3"}} {
+				if tc.want == "" {
+					var key, value sql.NullString
+					err := stmt.QueryRowContext(ctx, "<a></a>", tc.path).Scan(&key, &value)
+					require.ErrorContains(t, err, "XPATH")
+					continue
+				}
+				rows, err := stmt.QueryContext(ctx, "<a>"+tc.want+"</a>", tc.path)
+				require.NoError(t, err)
+				require.Equal(t, []string{"NULL:" + tc.want, "1:" + tc.want, "2:" + tc.want, "2:" + tc.want}, readWindowNullRows(t, rows))
+			}
 		})
 	})
 }

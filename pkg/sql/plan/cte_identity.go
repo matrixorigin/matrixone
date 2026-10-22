@@ -209,10 +209,7 @@ func (builder *QueryBuilder) classifyCTEEvaluation(id int32, seen map[int32]bool
 		return planpb.VisitExprTree(expr, func(expr *planpb.Expr) error {
 			if fn := expr.GetF(); fn != nil {
 				unstable, known := function.GetFunctionValueUnstableByID(fn.Func.Obj)
-				// ENUM/SET display adapters preserve the source value despite
-				// their legacy no-fold flag.
-				_, transparent := transparentOutputSourceExpr(expr)
-				evaluation.valueUnstable = evaluation.valueUnstable || !known || unstable && !transparent
+				evaluation.valueUnstable = evaluation.valueUnstable || !known || unstable
 			}
 			if sub := expr.GetSub(); sub != nil {
 				evaluation.merge(builder.classifyCTEEvaluation(sub.NodeId, seen))
