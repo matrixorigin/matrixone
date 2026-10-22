@@ -925,4 +925,3 @@ TEST(EvalFilterMembershipTest, CroaringNarrowAndWideSpan) {
         ASSERT_EQ(want_pc, 4u);  // rows 3, 32, 64, 199 (31 has cat 1, 150 is deleted)
     }
 }
-
