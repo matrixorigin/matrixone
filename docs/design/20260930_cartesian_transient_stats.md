@@ -1,12 +1,13 @@
 # Transient optimizer statistics for Cartesian DML
 
-Current implementation contract: v12. Owning issues:
+Owning issues:
 [#29497](https://github.com/matrixorigin/matrixone/issues/29497),
 [#29533](https://github.com/matrixorigin/matrixone/issues/29533),
 [#29534](https://github.com/matrixorigin/matrixone/issues/29534).
 Implementation: [PR #29527](https://github.com/matrixorigin/matrixone/pull/29527).
-[Validation and measured limits](20260930_cartesian_transient_stats_validation.md)
-record source/binary provenance, completed checks and unverified environments.
+[Historical validation and measured limits](https://github.com/matrixorigin/matrixone/blob/6cbe375b49696021d72778baa292a66287f080bd/docs/design/20260930_cartesian_transient_stats_validation.md)
+preserve source/binary provenance, completed checks, adverse results and
+unverified environments; they are not current-head validation claims.
 
 Preserve Cartesian estimated-child multiplication and the half-query-cap RIGHT
 DEDUP guard. Estimates do not guarantee runtime capacity; existing allocation
@@ -184,18 +185,13 @@ belong in the linked validation record or PR, not this implementation contract.
 
 ## Compile-time remote expression compatibility work
 
-The latest-head three-round comparison against its actual main merge base
-confirms stale-high CROSS GROUP latency of 0.432→0.969 ms (2.24x). Corrected
-Cartesian multiplication raises AGG BlockNum from 147 to 1172, crossing the
-existing AP_MULTICN threshold. Physical scopes can remain identical on one CN,
-while eleven placement guards repeatedly discover the same expression features.
-CPU profiling attributes 40.70% of sampled CPU to that repeated discovery.
-
-Design-first review by GPT-6.1-sol / xhigh approved this focused consolidation
-before implementation. Reuse RequiredRemoteExpressionFeatures and the existing
-expression_protocol placement owner: discover the current query generation once,
-take the maximum of exactly the prior eleven independent feature floors, and
-use the existing bounded worker probe and local fallback once. All selected
+Corrected Cartesian estimates can cross existing AP_MULTICN thresholds even
+when a one-CN deployment retains the same physical scope count. Repeated
+expression-feature discovery at independent placement guards added avoidable
+compile work. The [expression protocol owner](../../pkg/sql/compile/expression_protocol.go)
+uses `RequiredRemoteExpressionFeatures` once for the current compile generation,
+combines the required feature floors and applies the existing bounded worker
+probe and local fallback. All selected
 workers and the coordinator must meet that maximum; no feature-free query
 requires a probe. Existing temporal/IP floor helpers retain their sender users.
 Delete the replaced placement methods and move their tests to the real common
@@ -214,14 +210,14 @@ strict-write, vector and grouping placement keep their distinct responsibilities
 
 ## Existing CI race: hidden-expression ownership
 
-The pre-optimization head's Ubuntu race job failed in the two-CN sequence test.
+The historical pre-optimization Ubuntu race job exposed this ownership defect
+in the two-CN sequence test.
 The remote variable-expression detector boxed an arbitrary operator-reachable
 struct before checking hidden getter interfaces. Boxing Engine copied its
 private embedded dynamic statistics while the background table-stats task
 updated them under its own lock. Skipping private fields during subsequent
-traversal did not prevent that earlier whole-struct read. This source is
-identical in the actual main base; it is an existing defect exposed by this CI,
-not a consequence of changed Cartesian cardinality.
+traversal did not prevent that earlier whole-struct read. Its clean source comparison predates the repair; the defect was not caused by
+changed Cartesian cardinality.
 
 Both detection and folding hidden hooks must check the existing getter or
 rewriter method set before Interface conversion. Preserve value receivers,
@@ -234,6 +230,20 @@ list, type cache or replacement traversal is introduced.
 A small nested mutable-private-state regression must fail under -race before
 repair and pass afterward, while public Expr detection/folding remains intact.
 Existing aggregate and lock hidden-expression private-copy tests, and the
-actual two-CN sequence consumer, supply reverse-path evidence. Rebuild and
-revalidate the changed sender source; earlier placement performance profiles
-remain tied to their recorded pre-race-fix binary unless explicitly refreshed.
+actual two-CN sequence consumer, supply reverse-path evidence. Historical placement performance profiles remain tied to their recorded
+pre-race-fix binary unless explicitly refreshed.
+
+## Historical evidence boundaries
+
+The linked validation record retains the allocator reservation/restart checks,
+sealed appendable snapshot boundaries, byte-width coverage, prepared growth,
+duplicate atomicity, rollback and real spill oracles. Their exact source,
+configuration, commands and data remain in that immutable record.
+
+The final matched placement campaign retained adverse results: stale-high CROSS
+GROUP was still 21.4% / 0.087 ms above its measured main control, and accurate
+REPLACE was 7.6% above main with its cause unresolved. The later narrow race and
+profile follow-up did not refresh the complete write-performance matrix.
+Historical GPU, cold-S3, real multi-CN, concurrency and original 300M-row workload
+gaps remain unproven by that campaign. No current CI pass, universal resource
+bound or zero-overhead claim follows from this documentation cleanup.

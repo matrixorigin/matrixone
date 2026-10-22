@@ -29,13 +29,18 @@ INCLUDES := -I. $(MO_GPU_CFLAGS) $(foreach root,$(MO_GPU_RAPIDS_INCLUDE_DIRS),-I
 # being dropped with a -Wunknown-pragmas warning.
 #
 # HOST_ARCH gates the auto-vectorize ISA tier used by the host compiler for
-# the cmp loops in filter.hpp's eval_pred_word_typed. Default is -march=haswell
+# the cmp loops in filter.hpp's eval_pred_word_typed. ARM defaults to armv8-a.
+# The x86 default is -march=haswell
 # (AVX2 + BMI2 + FMA, the lowest tier we ship), so the shipped artifact runs
 # on any x86_64 datacenter node from Haswell forward. To target a newer floor
 # at build time, pass HOST_ARCH=znver3 / skylake-avx512 / native — but NEVER
 # leave HOST_ARCH=native in CI artifacts: deploying onto an older node will
 # fail with SIGILL the moment an AVX-512 (or newer) instruction executes.
+ifeq ($(MO_GPU_TARGET_ARCH),aarch64)
+HOST_ARCH ?= armv8-a
+else
 HOST_ARCH ?= haswell
+endif
 NVCC_FLAGS := -O3 -std=c++20 -x cu -Xcompiler "-Wall -Wextra -fPIC -fopenmp -march=$(HOST_ARCH)" --extended-lambda --expt-relaxed-constexpr $(INCLUDES) -DLIBCUDACXX_ENABLE_EXPERIMENTAL_MEMORY_RESOURCE -DRAFT_SYSTEM_LITTLE_ENDIAN=1 \
     -gencode arch=compute_75,code=sm_75 \
     -gencode arch=compute_80,code=sm_80 \
