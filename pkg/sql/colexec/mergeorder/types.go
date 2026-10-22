@@ -182,7 +182,6 @@ type spillRunReader struct {
 	keyBatch    *batch.Batch
 	orderCols   []*vector.Vector
 	rowIdx      int64
-	heapIdx     int
 	fixedWidth  bool
 	rowBytes    int
 	avgRowBytes int
@@ -524,7 +523,6 @@ func (r *spillRunReader) close(proc *process.Process) {
 	}
 	r.reader = nil
 	r.rowIdx = 0
-	r.heapIdx = -1
 	r.fixedWidth = false
 	r.rowBytes = 0
 	r.avgRowBytes = 0

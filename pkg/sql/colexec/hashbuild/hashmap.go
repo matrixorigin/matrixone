@@ -35,14 +35,8 @@ import (
 
 type HashmapBuilder struct {
 	needDupVec bool
-	// InputBatchRowCount is the physical retained row count published with the
-	// JoinMap. hashMapRowCount is the number of those rows that participate in
-	// the current hashmap and its auxiliary-memory projection. REPLACE may
-	// append delete-only rows which belong to the first count but not the
-	// second.
+	// InputBatchRowCount is the physical retained row count published with the JoinMap.
 	InputBatchRowCount int
-	hashMapRowCount    int
-	hashMapRowCountSet bool
 	TrackNullKeys      bool
 	HasNullKey         bool
 	curVecs            []*vector.Vector // evaluated key vecs for the current batch
@@ -215,8 +209,6 @@ func (hb *HashmapBuilder) Prepare(
 		hb.keyExprs = keyCols
 		hb.keyWidth = keyWidth
 		hb.InputBatchRowCount = 0
-		hb.hashMapRowCount = 0
-		hb.hashMapRowCountSet = false
 	}
 
 	if hb.IsDedup {
@@ -249,8 +241,6 @@ func (hb *HashmapBuilder) Reset(proc *process.Process, hashTableHasNotSent bool)
 
 	hb.FreeTemporaryVectors(proc)
 	hb.InputBatchRowCount = 0
-	hb.hashMapRowCount = 0
-	hb.hashMapRowCountSet = false
 	hb.HasNullKey = false
 	hb.Batches.Reset()
 	hb.retainedSpillTailSelected = 0
@@ -552,11 +542,6 @@ func (hb *HashmapBuilder) buildHashmap(
 	if err := checkHashBuildCanceled(proc); err != nil {
 		return err
 	}
-	// Every ordinary build starts with all retained rows participating in the
-	// map. Canonical Dedup rewrites below update this count before resizing the
-	// auxiliary owner and rebuilding.
-	hb.hashMapRowCount = hb.InputBatchRowCount
-	hb.hashMapRowCountSet = true
 	if hb.InputBatchRowCount == 0 {
 		return nil
 	}
@@ -1012,7 +997,6 @@ buildUnits:
 		} else {
 			hb.InputBatchRowCount = totalRowCount
 		}
-		hb.hashMapRowCount = hb.InputBatchRowCount
 		cleanupDedupScratch()
 		hb.resetHashStateForRebuild(proc)
 		needUniqueVec, err = hb.prepareCanonicalRuntimeFilterCollection(
@@ -1048,7 +1032,6 @@ buildUnits:
 			return err
 		}
 		hb.InputBatchRowCount = hb.Batches.RowCount()
-		hb.hashMapRowCount = hb.InputBatchRowCount
 		cleanupDedupScratch()
 		hb.freeDelRows(proc.Mp())
 		hb.resetHashStateForRebuild(proc)

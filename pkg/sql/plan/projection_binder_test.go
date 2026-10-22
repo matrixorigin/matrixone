@@ -1177,7 +1177,6 @@ func TestProjectionBinderBindWinFunc(t *testing.T) {
 		cols:           []string{"a", "b", "c"},
 		colIsHidden:    []bool{false, false, false},
 		types:          []*plan.Type{&plan2Type, &plan2Type, &varcharPlan2Type},
-		refCnts:        []uint{0, 0, 0},
 		colIdByName:    map[string]int32{"a": 0, "b": 1, "c": 2},
 		isClusterTable: false,
 		defaults:       []string{"", "", ""},

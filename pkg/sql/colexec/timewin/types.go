@@ -124,9 +124,6 @@ type container struct {
 	// currently being accumulated belongs to; -1 before the first window.
 	partIdx int
 	partRow int
-	// partEnd mirrors `end` but for one partition: its rows are exhausted, so
-	// windows keep sliding until they pass the partition's last value.
-	partEnd bool
 	// breakVecIdx / breakRowIdx hold the first row of the next partition, the
 	// row the restart re-anchors on.
 	breakVecIdx int
@@ -390,7 +387,6 @@ func (ctr *container) resetParam(timeWin *TimeWin) {
 
 	ctr.partIdx = -1
 	ctr.partRow = 0
-	ctr.partEnd = false
 	ctr.breakVecIdx = 0
 	ctr.breakRowIdx = 0
 	ctr.partLastVal = 0

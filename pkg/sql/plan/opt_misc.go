@@ -2386,7 +2386,7 @@ func handleOptimizerHints(str string, builder *QueryBuilder) {
 	}
 	switch key {
 	case "vectorLocalDOP":
-		builder.optimizerHints.vectorLocalDOP = value
+		// Read directly by VectorLocalDOPEnabled at planning and compilation.
 	case "pushDownLimitToScan":
 		builder.optimizerHints.pushDownLimitToScan = value
 	case "pushDownTopThroughLeftJoin":
