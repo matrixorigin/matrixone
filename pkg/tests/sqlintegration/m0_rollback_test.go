@@ -218,6 +218,7 @@ func m0RunRollbackAt(
 	t *testing.T,
 	cluster embed.Cluster,
 	schema, point string,
+	birthFalse ...bool,
 ) {
 	t.Helper()
 	runSQLIntegration(t, func(cluster embed.Cluster) {
@@ -225,6 +226,13 @@ func m0RunRollbackAt(
 		defer cancel()
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
+		falseFill := len(birthFalse) > 0 && birthFalse[0]
+		definition, predicate, update := " int", "is null", "c_id"
+		if falseFill {
+			closeAdmission := admitM0BirthSQL(t, cn)
+			defer closeAdmission()
+			definition, predicate, update = " boolean default false", "=false", "(c_id%2=0)"
+		}
 		db, table := m0PrepareRollbackTable(t, ctx, cn, schema)
 		defer func() { _ = db.Close() }()
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
@@ -245,7 +253,7 @@ func m0RunRollbackAt(
 		require.NotEmpty(t, beforeHeaders)
 
 		m0AddFaultPoint(t, ctx, db, point, "echo", "injected M0 ALTER failure")
-		_, err = db.ExecContext(ctx, "alter table "+table+" add column rolled_back int")
+		_, err = db.ExecContext(ctx, "alter table "+table+" add column rolled_back"+definition)
 		require.ErrorContains(t, err, "injected M0 ALTER failure")
 		fresh := openM0SQL(t, cn)
 		defer func() { _ = fresh.Close() }()
@@ -258,15 +266,15 @@ func m0RunRollbackAt(
 			"select count(*) from information_schema.columns where table_schema='"+schema+
 				"' and table_name='customer' and column_name='rolled_back'"))
 
-		m0Exec(t, ctx, fresh, "alter table "+table+" add column recovered int")
+		m0Exec(t, ctx, fresh, "alter table "+table+" add column recovered"+definition)
 		_, version := m0TableGeneration(t, ctx, fresh, schema, "customer")
 		require.Equal(t, committedVersion+1, version)
-		require.Equal(t, 3, m0Count(t, ctx, fresh, "select count(*) from "+table+" where recovered is null"))
+		require.Equal(t, 3, m0Count(t, ctx, fresh, "select count(*) from "+table+" where recovered "+predicate))
 		require.Equal(t, 3, m0Count(t, ctx, fresh, "select count(*) from "+table))
 		m0Exec(t, ctx, fresh, "insert into "+table+"(c_id,c_d_id,c_w_id) values(4,4,4)")
-		m0Exec(t, ctx, fresh, "update "+table+" set recovered=c_id")
+		m0Exec(t, ctx, fresh, "update "+table+" set recovered="+update)
 		m0Exec(t, ctx, fresh, "select mo_ctl('dn','flush','"+table+"')")
-		require.Equal(t, 4, m0Count(t, ctx, fresh, "select count(*) from "+table+" where recovered=c_id"))
+		require.Equal(t, 4, m0Count(t, ctx, fresh, "select count(*) from "+table+" where recovered="+update))
 	})
 }
 
@@ -353,13 +361,19 @@ func TestM0AlterDeadlineTNAppliedWindow(t *testing.T) {
 	m0RunAlterCancelWindow(t, "fj/m0/alter/tn-after-apply", "m0_cancel_tn_applied", true)
 }
 
-func m0RunAlterCancelWindow(t *testing.T, waitName, schema string, deadline bool) {
+func m0RunAlterCancelWindow(t *testing.T, waitName, schema string, deadline bool, birthFalse ...bool) {
 	t.Helper()
 	runSQLIntegration(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 		defer cancel()
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
+		definition, predicate := " int", "is null"
+		if len(birthFalse) > 0 && birthFalse[0] {
+			closeAdmission := admitM0BirthSQL(t, cn)
+			defer closeAdmission()
+			definition, predicate = " boolean default false", "=false"
+		}
 		db, table := m0PrepareRollbackTable(t, ctx, cn, schema)
 		defer func() { _ = db.Close() }()
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
@@ -400,7 +414,7 @@ func m0RunAlterCancelWindow(t *testing.T, waitName, schema string, deadline bool
 			require.NoError(t, service.GetEngine().New(alterCtx, op))
 			go func() {
 				result, execErr := service.GetSQLExecutor().Exec(alterCtx,
-					"alter table "+table+" add column canceled int", executor.Options{}.WithTxn(op))
+					"alter table "+table+" add column canceled"+definition, executor.Options{}.WithTxn(op))
 				if execErr == nil {
 					result.Close()
 					execErr = op.Commit(alterCtx)
@@ -409,7 +423,7 @@ func m0RunAlterCancelWindow(t *testing.T, waitName, schema string, deadline bool
 			}()
 		} else {
 			go func() {
-				_, execErr := db.ExecContext(alterCtx, "alter table "+table+" add column canceled int")
+				_, execErr := db.ExecContext(alterCtx, "alter table "+table+" add column canceled"+definition)
 				done <- execErr
 			}()
 		}
@@ -441,10 +455,10 @@ func m0RunAlterCancelWindow(t *testing.T, waitName, schema string, deadline bool
 		require.Eventually(t, func() bool {
 			return fmt.Sprint(before) == fmt.Sprint(m0SchemaProof(t, ctx, reopened, schema, "customer"))
 		}, 10*time.Second, 20*time.Millisecond)
-		m0Exec(t, ctx, reopened, "alter table "+table+" add column retried int")
+		m0Exec(t, ctx, reopened, "alter table "+table+" add column retried"+definition)
 		_, version := m0TableGeneration(t, ctx, reopened, schema, "customer")
 		require.Equal(t, uint32(1), version)
-		require.Equal(t, 3, m0Count(t, ctx, reopened, "select count(*) from "+table+" where retried is null"))
+		require.Equal(t, 3, m0Count(t, ctx, reopened, "select count(*) from "+table+" where retried "+predicate))
 	})
 }
 

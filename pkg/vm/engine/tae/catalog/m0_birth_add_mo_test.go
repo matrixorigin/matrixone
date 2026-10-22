@@ -18,6 +18,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -74,5 +75,32 @@ func TestM0BirthAddAtomicSchemaHistoryAndRecovery(t *testing.T) {
 		after, err := s.Marshal()
 		require.NoError(t, err)
 		require.Equal(t, before, after, "validation must precede schema mutation")
+	}
+}
+
+func TestM0BirthAddOrdinaryCatalogProperties(t *testing.T) {
+	for _, invalidProperty := range []bool{false, true} {
+		s := appendMissingSchema(t)
+		s.Relkind = pkgcatalog.SystemOrdinaryRel
+		properties := []*plan.Property{{Key: pkgcatalog.SystemRelAttr_Kind, Value: pkgcatalog.SystemOrdinaryRel}, {Key: pkgcatalog.SystemRelAttr_CreateSQL, Value: "create table customer (...)"}}
+		if invalidProperty {
+			properties = append(properties, &plan.Property{Key: "stream.connector", Value: "unsupported"})
+		}
+		table := &plan.TableDef{Defs: []*plan.TableDef_DefType{{Def: &plan.TableDef_DefType_Properties{Properties: &plan.PropertiesDef{Properties: properties}}}}}
+		constraint := engine.PlanDefToCstrDef(table)
+		var err error
+		s.Constraint, err = constraint.MarshalBinary()
+		require.NoError(t, err)
+		before, err := s.Marshal()
+		require.NoError(t, err)
+		err = s.ApplyAlterTable(birthAddReq(s, "ordinary_flag"))
+		if invalidProperty {
+			require.Error(t, err)
+			after, e := s.Marshal()
+			require.NoError(t, e)
+			require.Equal(t, before, after)
+		} else {
+			require.NoError(t, err)
+		}
 	}
 }

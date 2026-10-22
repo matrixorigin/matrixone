@@ -18,6 +18,7 @@ package plan
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/m0admission"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -95,9 +96,15 @@ func m0ColumnDefinition(
 
 func validateM0BoundAddColumn(col *plan.ColDef) error {
 	if col == nil || col.Default == nil || !col.Default.NullAbility || col.Typ.NotNullable ||
-		col.Default.OriginString != "" || col.GeneratedCol != nil || col.OnUpdate != nil ||
+		col.GeneratedCol != nil || col.OnUpdate != nil ||
 		col.Primary || col.Hidden || col.ClusterBy || col.Typ.AutoIncr || col.Comment != "" {
 		return moerr.NewInternalErrorNoCtxf("M0: appended column requires nullable/no-backfill semantics")
+	}
+	if plan.IsLiteralFalseDefault(col) && m0admission.Enabled() {
+		return nil
+	}
+	if col.Default.OriginString != "" {
+		return moerr.NewInternalErrorNoCtx("M0: a non-NULL default requires admitted birth-fill capability")
 	}
 	if col.Typ.Id == int32(types.T_enum) || len(col.Typ.Enumvalues) > 0 {
 		return moerr.NewInternalErrorNoCtxf("M0: ENUM and SET appended columns are outside the append domain")
@@ -169,7 +176,20 @@ func selectM0AddColumn(
 	if _, err := AddColumn(ctx, probe, &tree.AlterAddCol{Column: add, Position: position}, bindCtx); err != nil {
 		return false, err
 	}
-	if err := validateM0BoundAddColumn(FindColumn(probe.CopyTableDef.Cols, add.Name.ColName())); err != nil {
+	bound := FindColumn(probe.CopyTableDef.Cols, add.Name.ColName())
+	if plan.IsLiteralFalseDefault(bound) {
+		if !m0admission.Enabled() || !m0LiteralFalseColumn(add) {
+			return false, nil
+		}
+		if err := catalog.ValidateM0BirthTableProperties(table); err != nil {
+			return false, nil
+		}
+	} else if table.AppendMissingState != nil {
+		// The first extension only appends literal-false columns. A different
+		// legal operation exits through COPY rather than entering TN halfway.
+		return false, nil
+	}
+	if err := validateM0BoundAddColumn(bound); err != nil {
 		return false, nil
 	}
 	return true, nil
@@ -200,4 +220,20 @@ func preserveM0CloneLayout(
 	target.IsTemporary = temporary
 	ct.TableDef = target
 	return true, nil
+}
+
+// Bound constant folding is not SQL eligibility. Accept only a BOOLEAN false
+// literal in the original AST, preserving COPY for strings and expressions.
+func m0LiteralFalseColumn(column *tree.ColumnTableDef) bool {
+	found := false
+	for _, attr := range column.Attributes {
+		if def, ok := attr.(*tree.AttributeDefault); ok {
+			literal, ok := def.Expr.(*tree.NumVal)
+			if found || !ok || literal.ValType != tree.P_bool || literal.Bool() {
+				return false
+			}
+			found = true
+		}
+	}
+	return found
 }

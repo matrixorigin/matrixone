@@ -34,7 +34,10 @@ func (s *Schema) prepareM0BirthAdd(add *api.AlterTableAddColumn) (*plan.AppendMi
 	if add.AppendMissingState == nil || add.ExpectedSchemaVersion != s.Version || add.ExpectedNextColSeqnum != s.Extra.NextColSeqnum ||
 		add.InsertPosition != -1 || len(add.XXX_unrecognized) != 0 || s.Relkind != pkgcatalog.SystemOrdinaryRel ||
 		s.Partitioned != 0 || s.FromPublication || len(s.Extra.Checks) != 0 {
-		return invalid()
+		return nil, moerr.NewInternalErrorNoCtxf(
+			"append missing state: TN source admission differs (state=%t version=%d/%d next=%d/%d position=%d kind=%q partition=%d publication=%t checks=%d unknown=%d)",
+			add.AppendMissingState != nil, s.Version, add.ExpectedSchemaVersion,
+			s.Extra.NextColSeqnum, add.ExpectedNextColSeqnum, add.InsertPosition, s.Relkind, s.Partitioned, s.FromPublication, len(s.Extra.Checks), len(add.XXX_unrecognized))
 	}
 	base, err := M0AppendBase(s)
 	if err != nil {
@@ -48,6 +51,10 @@ func (s *Schema) prepareM0BirthAdd(add *api.AlterTableAddColumn) (*plan.AppendMi
 		for _, c := range constraints.Cts {
 			switch c := c.(type) {
 			case *engine.PrimaryKeyDef:
+			case *engine.StreamConfigsDef:
+				if err := pkgcatalog.ValidateM0BirthProperties(c.Configs); err != nil {
+					return nil, err
+				}
 			case *engine.IndexDef:
 				if len(c.Indexes) != 0 {
 					return invalid()

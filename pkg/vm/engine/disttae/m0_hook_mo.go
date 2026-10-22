@@ -21,6 +21,8 @@ import (
 	"crypto/rand"
 	"strings"
 
+	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/m0admission"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -163,6 +165,9 @@ func buildM0CNAddColumn(
 		return nil, moerr.NewInternalErrorNoCtxf("M0: ENUM and SET appended columns are outside the append domain")
 	}
 	falseFill := plan.IsLiteralFalseDefault(add.Column)
+	if falseFill && !m0admission.Enabled() {
+		return nil, moerr.NewInternalErrorNoCtx("M0: false ADD requires guarded same-binary deployment")
+	}
 	if !falseFill && add.Column.Default.Expr != nil {
 		lit := add.Column.Default.Expr.GetLit()
 		if lit == nil || !lit.Isnull {
@@ -171,6 +176,11 @@ func buildM0CNAddColumn(
 	}
 
 	table := tbl.GetTableDef(ctx)
+	if falseFill {
+		if err := pkgcatalog.ValidateM0BirthTableProperties(table); err != nil {
+			return nil, err
+		}
+	}
 	if len(table.Indexes) != 0 || len(table.Fkeys) != 0 ||
 		len(table.RefChildTbls) != 0 || len(table.Checks) != 0 {
 		return nil, moerr.NewInternalErrorNoCtxf("M0: secondary indexes, foreign keys and checks are outside the append domain")
