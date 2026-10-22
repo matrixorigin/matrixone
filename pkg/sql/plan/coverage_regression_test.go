@@ -83,7 +83,7 @@ func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T
 		{"uint8", types.T_array_float32, "uint8", true, "post", false},
 		{"same_int8_affine", types.T_array_int8, "int8", true, "post", false},
 		{"int8_pre", types.T_array_float32, "int8", true, "pre", false},
-		{"int8_include", types.T_array_float32, "int8", true, "include", false},
+		{"int8_iterative", types.T_array_float32, "int8", true, "iterative", false},
 		{"int8_pre_async", types.T_array_float32, "int8", true, "pre", true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -145,7 +145,7 @@ func TestApplyIndicesForSortUsingIvfflat_DistancePredicateOwnership(t *testing.T
 }
 
 func TestApplyIndicesForSortUsingIvfflat_FallsBackOnResidualDistancePredicate(t *testing.T) {
-	for _, mode := range []string{"pre", "post", "include", "auto"} {
+	for _, mode := range []string{"pre", "post", "iterative", "auto"} {
 		t.Run(mode, func(t *testing.T) {
 			builder, _, scanNode, scanNodeID, multiTableIndex := newIvfIncludeModeTestBuilder(t)
 			vecCtx := newIvfIncludeModeVectorSortContext(scanNode, scanNodeID, mode, 0, 2)

@@ -746,6 +746,21 @@ func (ndesc *NodeDescribeImpl) GetIndexSearchScanInfo(ctx context.Context, optio
 			buf.WriteString(setting)
 		}
 	}
+	for _, knob := range []struct {
+		name  string
+		value uint64
+	}{
+		{"Internal Top-K", spec.GetInternalTopk()},
+		{"Max Internal Top-K", spec.GetMaxInternalTopk()},
+		{"Max NProbe", spec.GetMaxNprobe()},
+	} {
+		if knob.value != 0 {
+			buf.WriteString(", ")
+			buf.WriteString(knob.name)
+			buf.WriteString(": ")
+			buf.WriteString(strconv.FormatUint(knob.value, 10))
+		}
+	}
 	if len(spec.GetPreFilters()) > 0 {
 		buf.WriteString(", Index Filter: ")
 		filters := NewExprListDescribeImpl(spec.GetPreFilters())

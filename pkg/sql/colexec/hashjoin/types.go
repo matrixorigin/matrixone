@@ -105,6 +105,7 @@ type container struct {
 	probeMark              bool
 	buildHasNullKey        bool
 	asofLeftCol            int
+	asofResidualEquality   bool
 	asofStrict             bool
 	asofIndexes            []asofIndex
 	asofIndexCount         int
@@ -428,6 +429,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.buildHasNullKey = false
 	ctr.asofLeftCol = -1
 	ctr.asofStrict = false
+	ctr.asofResidualEquality = false
 	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch

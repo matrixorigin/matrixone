@@ -447,6 +447,9 @@ func CanUseZoneMapComparison(overloadID int64, args []*plan.Expr) bool {
 			return false
 		}
 	case EQUAL, NULL_SAFE_EQUAL, NOT_EQUAL, GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL, BETWEEN:
+		if len(args) == 2 && args[0] != nil && args[1] != nil && IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) {
+			return false
+		}
 		if len(args) == 0 {
 			return false
 		}
@@ -892,7 +895,14 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 		return false
 	case GREATEST, LEAST:
 		return false
+	case GREAT_THAN, GREAT_EQUAL, LESS_THAN, LESS_EQUAL:
+		if len(args) == 2 && IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) {
+			return false
+		}
 	case EQUAL, NOT_EQUAL:
+		if len(args) == 2 && IsJSONNumericComparison(types.T(args[0].Typ.Id), types.T(args[1].Typ.Id)) {
+			return false
+		}
 		// Direct JSON/BOOL equality preserves the JSON scalar category. A
 		// physically non-NULL JSON value can still contain JSON null, which the
 		// comparison maps to SQL UNKNOWN. Do not infer a non-NULL result merely
