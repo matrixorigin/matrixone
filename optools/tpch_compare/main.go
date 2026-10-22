@@ -42,6 +42,41 @@ func cli(ctx context.Context, args []string, out, errOut io.Writer) error {
 	f := flag.NewFlagSet(args[0], flag.ContinueOnError)
 	f.SetOutput(errOut)
 	switch args[0] {
+	case "preflight":
+		config := f.String("config", "", "campaign configuration JSON")
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *config == "" {
+			return errors.New("config is required")
+		}
+		p, err := preflight(ctx, *config)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(out, "preflight passed; %d bytes available\n", p.FreeBytes)
+		return err
+	case "run":
+		config := f.String("config", "", "campaign configuration JSON")
+		phase := f.String("phase", "measure", "prepare or measure")
+		id := f.String("id", "", "new run identifier")
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		if *config == "" {
+			return errors.New("config is required")
+		}
+		bounded, cancel := context.WithTimeoutCause(ctx, 24*time.Hour, errors.New("campaign wall-clock budget exhausted"))
+		defer cancel()
+		return campaignRun(bounded, *config, *phase, *id)
+	case "report":
+		config := f.String("config", "", "campaign configuration JSON")
+		root := f.String("run-dir", "", "completed or incomplete run directory")
+		output := f.String("output", "", "new report directory")
+		if err := f.Parse(args[1:]); err != nil {
+			return err
+		}
+		return reportCampaign(*config, *root, *output)
 	case "prepare":
 		root := f.String("work-dir", "", "new dataset directory on local storage")
 		tools := f.String("tools-dir", "", "directory containing pinned dbgen, qgen, queries and answers")
@@ -65,6 +100,7 @@ func cli(ctx context.Context, args []string, out, errOut io.Writer) error {
 	case "worker":
 		request := f.String("request", "", "worker request JSON")
 		response := f.String("response", "", "new receipt JSON")
+		controlled := f.Bool("controlled", false, "use inherited controller gate/event descriptors")
 		if err := f.Parse(args[1:]); err != nil {
 			return err
 		}
@@ -75,7 +111,12 @@ func cli(ctx context.Context, args []string, out, errOut io.Writer) error {
 		if err != nil {
 			return err
 		}
-		receipt, runErr := runWorker(ctx, r)
+		var control *workerControl
+		if *controlled {
+			control = &workerControl{gate: os.NewFile(3, "gate"), events: os.NewFile(4, "events")}
+			defer control.close()
+		}
+		receipt, runErr := runWorker(ctx, r, control)
 		if err := publishJSON(*response, receipt); err != nil {
 			return errors.Join(runErr, err)
 		}
