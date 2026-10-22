@@ -1999,6 +1999,7 @@ func buildNotNullColumnVal(col *ColDef) string {
 		col.Typ.Id == int32(types.T_uint64) ||
 		col.Typ.Id == int32(types.T_float32) ||
 		col.Typ.Id == int32(types.T_float64) ||
+		types.T(col.Typ.Id).IsLowPrecisionFloat() ||
 		col.Typ.Id == int32(types.T_decimal64) ||
 		col.Typ.Id == int32(types.T_decimal128) ||
 		col.Typ.Id == int32(types.T_decimal256) ||

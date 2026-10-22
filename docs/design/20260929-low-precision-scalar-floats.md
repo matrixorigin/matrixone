@@ -108,6 +108,10 @@ GPU kernels agree on the encoding.
   value of these types is exact in float32, so the text converts back to the same bits.
   Marshalled vectors (WAL, batches sent between services) carry the raw 1-/2-byte
   encoding.
+- **Implicit NOT NULL value.** `ALTER TABLE ... ADD COLUMN c bf16 NOT NULL` (and
+  `float16`/`float8`/`float4`) without a `DEFAULT` fills existing rows with `0`, as `float`
+  does, under `ALGORITHM=COPY` and the default algorithm (`plan/narrow_vector_types_test.go`,
+  BVT `dtype/lowprec_float.sql` on a populated table).
 
 ## Invariants
 
