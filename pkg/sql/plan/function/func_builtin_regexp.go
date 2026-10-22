@@ -3118,8 +3118,9 @@ func rewriteRegexpWideMultilineAnchors(pat string, binary bool) string {
 	var b strings.Builder
 	b.Grow(len(pat) + 16)
 	quoted := false
-	class := false
-	classFirst := false
+	type mode struct{ multiline, freeSpacing bool }
+	current := mode{multiline: true}
+	var scopes []mode
 	for i := 0; i < len(pat); {
 		if quoted {
 			if pat[i] == '\\' && i+1 < len(pat) && pat[i+1] == 'E' {
@@ -3136,26 +3137,24 @@ func rewriteRegexpWideMultilineAnchors(pat string, binary bool) string {
 			i += size
 			continue
 		}
-		if class {
-			if classFirst && pat[i] == '^' {
-				classFirst = false
-				b.WriteByte(pat[i])
-				i++
-				continue
+		// Comments are opaque: their parentheses and flag-looking text do
+		// not affect the enclosing group's option state.
+		if current.freeSpacing && pat[i] == '#' {
+			end := i
+			for end < len(pat) && pat[end] != '\n' {
+				end++
 			}
-			if pat[i] == '\\' && i+1 < len(pat) {
-				classFirst = false
-				end := i + regexpEscapeTokenLen(pat, i)
-				b.WriteString(pat[i:end])
-				i = end
-				continue
+			b.WriteString(pat[i:end])
+			i = end
+			continue
+		}
+		if strings.HasPrefix(pat[i:], "(?#") {
+			end := len(pat)
+			if close := strings.IndexByte(pat[i+3:], ')'); close >= 0 {
+				end = i + 3 + close + 1
 			}
-			if pat[i] == ']' && !classFirst {
-				class = false
-			}
-			classFirst = false
-			b.WriteByte(pat[i])
-			i++
+			b.WriteString(pat[i:end])
+			i = end
 			continue
 		}
 		switch pat[i] {
@@ -3170,15 +3169,43 @@ func rewriteRegexpWideMultilineAnchors(pat string, binary bool) string {
 			b.WriteString(pat[i:end])
 			i = end
 		case '[':
-			class = true
-			classFirst = true
+			end := regexpCharClassEnd(pat, i)
+			b.WriteString(pat[i:end])
+			i = end
+		case '(':
+			if end, multiline, scoped, ok := regexpInlineOption(pat, i, current.multiline, 'm'); ok {
+				_, freeSpacing, _, _ := regexpInlineFreeSpacing(pat, i, current.freeSpacing)
+				if scoped {
+					scopes = append(scopes, current)
+				}
+				current = mode{multiline: multiline, freeSpacing: freeSpacing}
+				b.WriteString(pat[i:end])
+				i = end
+				continue
+			}
+			scopes = append(scopes, current)
+			b.WriteByte(pat[i])
+			i++
+		case ')':
+			if n := len(scopes); n > 0 {
+				current = scopes[n-1]
+				scopes = scopes[:n-1]
+			}
 			b.WriteByte(pat[i])
 			i++
 		case '^':
-			b.WriteString(caret)
+			if current.multiline {
+				b.WriteString(caret)
+			} else {
+				b.WriteByte(pat[i])
+			}
 			i++
 		case '$':
-			b.WriteString(dollar)
+			if current.multiline {
+				b.WriteString(dollar)
+			} else {
+				b.WriteByte(pat[i])
+			}
 			i++
 		default:
 			b.WriteByte(pat[i])
