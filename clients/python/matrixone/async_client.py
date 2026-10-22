@@ -148,12 +148,16 @@ class AsyncSnapshotManager:
     async def get(self, name: str) -> Snapshot:
         """Get snapshot asynchronously"""
         # Use mo_catalog.mo_snapshots table like sync client
+        lookup_name = name
+        if len(lookup_name) >= 2 and lookup_name[0] == "`" and lookup_name[-1] == "`":
+            lookup_name = lookup_name[1:-1].replace("``", "`")
+        lookup_name = lookup_name.lower()
         sql = """
             SELECT sname, ts, level, account_name, database_name, table_name
             FROM mo_catalog.mo_snapshots
             WHERE sname = ?
         """
-        result = await self.client.execute(sql, (name,))
+        result = await self.client.execute(sql, (lookup_name,))
 
         if not result.rows:
             raise SnapshotError(f"Snapshot '{name}' not found")

@@ -648,6 +648,65 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(snapshot.name, "review_snap")
         self.assertEqual(snapshot.database, "review_db")
 
+    async def test_create_canonicalizes_snapshot_name_for_lookup(self):
+        """Creation should query the catalog with MatrixOne's canonical identifier."""
+        timestamp_ns = int(datetime(2025, 1, 2, 3, 4, 5).timestamp() * 1000000000)
+        columns = ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name']
+        rows = [('reviewsnap', timestamp_ns, 'cluster', 'sys', None, None)]
+
+        class MockResult:
+            def __init__(self, returns_rows=False, matched=False):
+                self.returns_rows = returns_rows
+                self.rowcount = 0
+                self.matched = matched
+
+            def fetchall(self):
+                return rows if self.matched else []
+
+            def keys(self):
+                return columns
+
+        class MockConnection:
+            def __init__(self):
+                self.statements = []
+
+            async def exec_driver_sql(self, sql):
+                self.statements.append(sql)
+                is_select = sql.lstrip().startswith("SELECT")
+                return MockResult(
+                    returns_rows=is_select,
+                    matched=is_select and "WHERE sname = 'reviewsnap'" in sql,
+                )
+
+        class MockBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            async def __aenter__(self):
+                return self.connection
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def begin(self):
+                return MockBeginContext(self.connection)
+
+        for supplied_name in ("ReviewSnap", "`ReviewSnap`"):
+            with self.subTest(name=supplied_name):
+                client = AsyncClient()
+                connection = MockConnection()
+                client._engine = MockEngine(connection)
+
+                snapshot = await client.snapshots.create(supplied_name, SnapshotLevel.CLUSTER)
+
+                self.assertEqual(len(connection.statements), 2)
+                self.assertIn("WHERE sname = 'reviewsnap'", connection.statements[1])
+                self.assertEqual(snapshot.name, "reviewsnap")
+
     async def test_get_snapshot(self):
         """Test getting snapshot"""
         # Use integer timestamp instead of datetime object
