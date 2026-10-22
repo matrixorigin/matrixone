@@ -110,6 +110,32 @@ func TestBindTemporalMetadataForTimestampArithmetic(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_datetime), convertTz.Typ.Id)
 	require.Equal(t, int32(6), convertTz.Typ.Scale)
+	require.Equal(t, int32(6), convertTz.Typ.Width)
+}
+
+func TestBindConvertTZLiteralFractionalPrecision(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		fsp   int32
+	}{
+		{"2024-02-29 23:59:59", 0},
+		{"2024-02-29 23:59:59.123", 3},
+		{"2024-02-29 23:59:59.123456", 6},
+		{"2024.01.15", 0},
+		{"2024.01.15 12:34:56", 0},
+		{"2024.01.15 12:34:56.123", 3},
+		{"20240115123456.123456", 6},
+	} {
+		t.Run(tc.value, func(t *testing.T) {
+			expr, err := BindFuncExprImplByPlanExpr(t.Context(), "convert_tz", []*plan.Expr{
+				makeStringConst(tc.value), makeStringConst("+00:00"), makeStringConst("+05:30"),
+			})
+			require.NoError(t, err)
+			require.Equal(t, int32(types.T_datetime), expr.Typ.Id)
+			require.Equal(t, tc.fsp, expr.Typ.Scale)
+			require.Equal(t, tc.fsp, expr.Typ.Width)
+		})
+	}
 }
 
 func TestBindTimestampAddFractionalSecond(t *testing.T) {

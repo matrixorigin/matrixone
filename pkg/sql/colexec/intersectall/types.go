@@ -118,10 +118,6 @@ func (intersectAll *IntersectAll) Free(proc *process.Process, pipelineFailed boo
 	intersectAll.FreeMetadata()
 }
 
-func (intersectAll *IntersectAll) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) cleanHashMap() {
 	hashmap.IteratorClearOwner(ctr.iterator)
 	ctr.iterator = nil

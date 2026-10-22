@@ -20,14 +20,26 @@ import (
 	"strings"
 	"testing"
 
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/bytejson"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/stretchr/testify/require"
 )
 
 func TestJSONBinaryCastPreservesOpaqueSubtype(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	previous, existed := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if existed {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, previous)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion113)
 	for _, tc := range []struct {
 		oid     types.T
 		subtype int
@@ -70,8 +82,22 @@ func TestJSONOpaqueObjectKeyUsesJSONVisibleText(t *testing.T) {
 	require.Equal(t, map[string]int{`"base64:type252:` + strings.Repeat("YWFh", 19) + `\nYQ=="`: 1}, object)
 }
 
-func TestJSONBinaryCastMaskedNull(t *testing.T) {
+func TestJSONBinaryCastRepresentationAdmissionAndMaskedNull(t *testing.T) {
 	proc := testutil.NewProcess(t)
+	rt := moruntime.ServiceRuntime(proc.GetService())
+	old, exists := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	t.Cleanup(func() {
+		if exists {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
+		} else {
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion51)
+		}
+	})
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion51)
+	inputs := []FunctionTestInput{NewFunctionTestInput(types.T_blob.ToType(), []string{"bad"}, nil), NewFunctionTestInput(types.T_json.ToType(), []string{}, nil)}
+	test := NewFunctionTestCase(proc, inputs, NewFunctionTestResult(types.T_json.ToType(), true, nil, nil), NewCast)
+	ok, info := test.RunAndFree()
+	require.True(t, ok, info)
 	for _, allNull := range []bool{false, true} {
 		input := []FunctionTestInput{NewFunctionTestInput(types.T_blob.ToType(), []string{"bad"}, []bool{allNull}), NewFunctionTestInput(types.T_json.ToType(), []string{}, nil)}
 		selection := (*FunctionSelectList)(nil)

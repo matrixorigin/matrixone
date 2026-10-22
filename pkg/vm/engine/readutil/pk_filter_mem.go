@@ -58,6 +58,55 @@ type MemPKFilter struct {
 	FilterHint engine.FilterHint
 	HasBF      bool
 	BFSeqNum   int16
+
+	// clusterKey is the optional composite cluster-by filter derived from the
+	// same scan expression. It is set only by NewReader for tables whose sort
+	// key is a composite cluster-by column. Every primary-key accessor --
+	// Valid, Exact, RecordExactHit, FilterVector -- deliberately ignores it:
+	// the cluster filter selects a separate nonunique replay iterator and
+	// takes no part in primary-key semantics.
+	clusterKey *MemClusterKeyFilter
+}
+
+// SetClusterKeyFilter attaches the cluster-key filter. It must be called
+// before the filter is published to a data source.
+func (f *MemPKFilter) SetClusterKeyFilter(cluster *MemClusterKeyFilter) {
+	f.clusterKey = cluster
+}
+
+// ClusterKeyFilter returns the attached cluster-key filter, or nil.
+func (f *MemPKFilter) ClusterKeyFilter() *MemClusterKeyFilter {
+	return f.clusterKey
+}
+
+// ClusterKeyValid reports whether the attached cluster-key filter can prune
+// the committed replay iteration.
+func (f *MemPKFilter) ClusterKeyValid() bool {
+	return f.clusterKey != nil && f.clusterKey.Valid()
+}
+
+// ClusterKeySpecs returns the cluster-key filter specs, or nil when absent.
+func (f *MemPKFilter) ClusterKeySpecs() []MemPKFilterSpec {
+	if f.clusterKey == nil {
+		return nil
+	}
+	return f.clusterKey.Specs()
+}
+
+// ClusterKeyTS returns the snapshot timestamp of the attached cluster-key
+// filter.
+func (f *MemPKFilter) ClusterKeyTS() types.TS {
+	if f.clusterKey == nil {
+		return types.TS{}
+	}
+	return f.clusterKey.TS
+}
+
+func (f *MemPKFilter) ClusterKeyDescriptor() ClusterKeyDescriptor {
+	if f.clusterKey == nil {
+		return ClusterKeyDescriptor{}
+	}
+	return f.clusterKey.Descriptor
 }
 
 func (f *MemPKFilter) Valid() bool {
@@ -144,12 +193,27 @@ func NewMemPKFilter(
 		return
 	}
 
-	var lbVal, ubVal any
-	var packed [][]byte
 	var packer *types.Packer
 	put := packerPool.Get(&packer)
 	defer put.Put()
 
+	op, packed, isVec, ok := encodeMemSortKeySpecs(basePKFilter, packer)
+	if !ok {
+		return
+	}
+	filter.SetFullData(op, isVec, packed...)
+
+	return
+}
+
+// encodeMemSortKeySpecs packs a base sort-key filter into the encoded-key
+// domain shared by the in-memory replay indexes. ok is false when the filter
+// shape is not representable; callers fail open to full row iteration.
+func encodeMemSortKeySpecs(
+	basePKFilter BasePKFilter,
+	packer *types.Packer,
+) (op int, packed [][]byte, isVec bool, ok bool) {
+	var lbVal, ubVal any
 	if basePKFilter.Op != function.IN && basePKFilter.Op != function.PREFIX_IN {
 		switch basePKFilter.Oid {
 		case types.T_bool:
@@ -271,11 +335,10 @@ func NewMemPKFilter(
 				ubVal = types.DecodeUuid(basePKFilter.UB)
 			}
 		default:
-			logutil.Warn("NewMemPKFilter skipped data type",
+			logutil.Warn("encodeMemSortKeySpecs skipped data type",
 				zap.Int("expr op", basePKFilter.Op),
 				zap.String("data type", basePKFilter.Oid.String()))
-			return
-			//panic(basePKFilter.Oid.String())
+			return 0, nil, false, false
 		}
 	}
 
@@ -291,7 +354,7 @@ func NewMemPKFilter(
 			//
 			packed[0] = packed[0][0 : len(packed[0])-1]
 		}
-		filter.SetFullData(basePKFilter.Op, false, packed...)
+		return basePKFilter.Op, packed, false, true
 
 	case function.IN, function.PREFIX_IN:
 		packed = EncodePrimaryKeyVector(basePKFilter.Vec, packer)
@@ -301,11 +364,11 @@ func NewMemPKFilter(
 				packed[x] = packed[x][0 : len(packed[x])-1]
 			}
 		}
-		filter.SetFullData(basePKFilter.Op, true, packed...)
+		return basePKFilter.Op, packed, true, true
 
 	case function.LESS_THAN, function.LESS_EQUAL, function.GREAT_THAN, function.GREAT_EQUAL:
 		packed = append(packed, EncodePrimaryKey(lbVal, packer))
-		filter.SetFullData(basePKFilter.Op, false, packed...)
+		return basePKFilter.Op, packed, false, true
 
 	case function.PREFIX_BETWEEN, function.BETWEEN,
 		RangeLeftOpen, RangeRightOpen, RangeBothOpen,
@@ -319,12 +382,10 @@ func NewMemPKFilter(
 			packed[0] = packed[0][0 : len(packed[0])-1]
 			packed[1] = packed[1][0 : len(packed[1])-1]
 		}
-		filter.SetFullData(basePKFilter.Op, false, packed...)
+		return basePKFilter.Op, packed, false, true
 	default:
-		return
+		return 0, nil, false, false
 	}
-
-	return
 }
 
 func (f *MemPKFilter) setFilterHint(tableDef *plan.TableDef, filterHint engine.FilterHint) {

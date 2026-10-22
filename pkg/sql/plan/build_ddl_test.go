@@ -3526,6 +3526,47 @@ func TestBuildCreateViewTracksMySQLSpecialColumnTypeProvenance(t *testing.T) {
 	}
 }
 
+func TestBuildCTASTemporalFractionalPrecision(t *testing.T) {
+	const sql = `create table temporal_fsp as select
+		addtime(cast('2024-02-29 23:59:59.123456' as datetime(6)), '00:00:00.000001') as added,
+		subtime(cast('2024-02-29 23:59:59.123456' as datetime(6)), '00:00:00.000001') as subtracted,
+		convert_tz('2024-02-29 23:59:59.123456', '+00:00', '+05:30') as converted`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	for _, col := range cols[:3] {
+		require.Equal(t, int32(types.T_datetime), col.Typ.Id, col.Name)
+		require.Equal(t, int32(6), col.Typ.Scale, col.Name)
+		require.Equal(t, int32(6), col.Typ.Width, col.Name)
+	}
+}
+
+func TestBuildCTASConvertTZDottedDatePrecision(t *testing.T) {
+	const sql = `create table temporal_dotted_fsp as select
+		convert_tz('2024.01.15', '+00:00', '+00:00') as dotted_date,
+		convert_tz('2024.01.15 12:34:56', '+00:00', '+00:00') as dotted_datetime,
+		convert_tz('2024.01.15 12:34:56.123', '+00:00', '+00:00') as dotted_fraction,
+		convert_tz('20240115123456.123456', '+00:00', '+00:00') as compact_fraction`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 4)
+	for i, want := range []int32{0, 0, 3, 6} {
+		require.Equal(t, int32(types.T_datetime), cols[i].Typ.Id, cols[i].Name)
+		require.Equal(t, want, cols[i].Typ.Scale, cols[i].Name)
+		require.Equal(t, want, cols[i].Typ.Width, cols[i].Name)
+	}
+}
+
 func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	const sql = "create table copied as select priority, flags, n_name from nation"
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))

@@ -166,6 +166,9 @@ func (c *Compile) Compile(
 			return err
 		}
 	}
+	if err = validateJSONStringConsumerProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
 	if err = plan.RequireLegacyCollations(queryPlan); err != nil {
 		return err
 	}
@@ -446,6 +449,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 	defer func() { warnings.finish(warningsSucceeded, warningDestination) }()
 
 	// Cached plans can outlive the negotiated cluster capability.
+	if err = validateJSONStringConsumerProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
 	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
 		return nil, err
 	}
@@ -731,6 +737,7 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 			return nil, err
 		}
 		defChanged := moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)
+		coverageChanged := moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged)
 		c.onLoadUniqueIndexPromotionRetry(defChanged)
 
 		retryTransitionStart := time.Now()
@@ -785,7 +792,11 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 		// Retry compilation can itself emit expression diagnostics.
 		warnings = newWarningAttempt(c.proc, promoteGroupConcatCut)
-		nextRunC, buildErr := c.buildRetryCompile(defChanged)
+		retryContext := c.proc.GetTopContext()
+		if coverageChanged {
+			retryContext = context.WithValue(retryContext, defines.HnswSnapshotFallbackKey{}, true)
+		}
+		nextRunC, buildErr := c.buildRetryCompile(defChanged || coverageChanged, retryContext)
 		carriedPreRunWall = time.Since(attemptStart)
 		attemptPreRunWall = carriedPreRunWall
 		if buildErr != nil {
@@ -973,8 +984,7 @@ func measureRetryRemoteWait(total *time.Duration, wait func() error) (err error)
 // buildRetryCompile starts the next generation. A build or compile failure is
 // therefore a terminal outcome of that new attempt instead of disappearing
 // into the previous attempt's closing phase.
-func (c *Compile) buildRetryCompile(rebuildPlan bool) (*Compile, error) {
-	topContext := c.proc.GetTopContext()
+func (c *Compile) buildRetryCompile(rebuildPlan bool, topContext context.Context) (*Compile, error) {
 	// Invalidate a completed proof before a different logical generation can be
 	// built or observed.
 	c.onLoadUniqueIndexPromotionRetry(rebuildPlan)

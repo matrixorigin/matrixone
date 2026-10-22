@@ -92,6 +92,18 @@ while [ $# -gt 0 ]; do
 done
 EOF
 chmod +x "$work/bin/go"
+
+# Keep the GPU platform consistent with the amd64 Go and Pixi fixtures.
+cat >"$work/bin/uname" <<'EOF'
+#!/bin/sh
+case "${1:-}" in
+    -s|'') echo Linux ;;
+    -m) echo x86_64 ;;
+    *) exit 1 ;;
+esac
+EOF
+chmod +x "$work/bin/uname"
+
 cat > "$work/bin/readelf" <<'EOF'
 #!/bin/sh
 exit 1
