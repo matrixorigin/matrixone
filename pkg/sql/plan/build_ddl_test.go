@@ -3526,6 +3526,26 @@ func TestBuildCreateViewTracksMySQLSpecialColumnTypeProvenance(t *testing.T) {
 	}
 }
 
+func TestBuildCTASTemporalFractionalPrecision(t *testing.T) {
+	const sql = `create table temporal_fsp as select
+		addtime(cast('2024-02-29 23:59:59.123456' as datetime(6)), '00:00:00.000001') as added,
+		subtime(cast('2024-02-29 23:59:59.123456' as datetime(6)), '00:00:00.000001') as subtracted,
+		convert_tz('2024-02-29 23:59:59.123456', '+00:00', '+05:30') as converted`
+	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	p, err := BuildPlan(NewMockCompilerContext(false, newPlanTestProcess(t)), stmt, false)
+	require.NoError(t, err)
+	cols := p.GetDdl().GetCreateTable().GetTableDef().GetCols()
+	require.GreaterOrEqual(t, len(cols), 3)
+	for _, col := range cols[:3] {
+		require.Equal(t, int32(types.T_datetime), col.Typ.Id, col.Name)
+		require.Equal(t, int32(6), col.Typ.Scale, col.Name)
+		require.Equal(t, int32(6), col.Typ.Width, col.Name)
+	}
+}
+
 func TestBuildCTASPreservesMySQLSpecialColumnTypes(t *testing.T) {
 	const sql = "create table copied as select priority, flags, n_name from nation"
 	ctx := NewMockCompilerContext(false, newPlanTestProcess(t))
