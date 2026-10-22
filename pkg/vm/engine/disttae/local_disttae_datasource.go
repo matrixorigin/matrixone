@@ -869,12 +869,18 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		summaryBuf = v.(*bytes.Buffer)
 	}
 	if ls.pStateRows.insIter == nil {
-		if !ls.memPKFilter.Valid() {
-			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
-		} else {
+		switch {
+		case ls.memPKFilter.Valid():
 			ls.pStateRows.insIter = ls.pState.NewPrimaryKeyIterWithFilters(
 				ls.memPKFilter.TS,
 				ls.memPKFilter.Specs())
+		case ls.memPKFilter.ClusterKeyValid():
+			ls.pStateRows.insIter = ls.pState.NewClusterKeyIterWithFilters(
+				ls.memPKFilter.ClusterKeyTS(),
+				ls.memPKFilter.ClusterKeyDescriptor(),
+				ls.memPKFilter.ClusterKeySpecs())
+		default:
+			ls.pStateRows.insIter = ls.pState.NewRowsIter(ls.snapshotTS, nil, false)
 		}
 		if summaryBuf != nil {
 			summaryBuf.WriteString(fmt.Sprintf("[PScan] insIter created %v\n", ls.memPKFilter.String()))
@@ -910,6 +916,8 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 	)
 	if ls.memPKFilter.Valid() {
 		iterKind = "primary-key"
+	} else if ls.memPKFilter.ClusterKeyValid() {
+		iterKind = "cluster-key"
 	}
 
 	var (

@@ -332,10 +332,6 @@ func (timeWin *TimeWin) Free(proc *process.Process, pipelineFailed bool, err err
 	ctr.prepareParamKind.Reset(nil)
 }
 
-func (timeWin *TimeWin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) resetExes() {
 	for _, exe := range ctr.aggExe {
 		exe.ResetForNextQuery()

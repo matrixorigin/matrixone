@@ -132,7 +132,3 @@ func (preInsert *PreInsert) Free(proc *process.Process, pipelineFailed bool, err
 		preInsert.ctr.buf = nil
 	}
 }
-
-func (preInsert *PreInsert) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

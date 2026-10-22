@@ -18,7 +18,6 @@ import (
 	"bytes"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
-	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -43,9 +42,6 @@ func (o *Operator) String(b *bytes.Buffer)            { b.WriteString("dependent
 func (o *Operator) OpType() vm.OpType                 { return vm.Dependent }
 func (o *Operator) GetOperatorBase() *vm.OperatorBase { return &o.OperatorBase }
 func (o *Operator) Release()                          { o.Template = nil }
-func (o *Operator) ExecProjection(_ *process.Process, b *batch.Batch) (*batch.Batch, error) {
-	return b, nil
-}
 func (o *Operator) SetAllocationAccount(account *mpool.AllocationAccount) error {
 	if account == nil {
 		return mpool.ErrAllocationAccountInvalid
