@@ -1,5 +1,5 @@
 {
-  "version": 3,
+  "version": 4,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
@@ -151,11 +151,13 @@
         "Go realloc",
         "native realloc",
         "destroy"
-      ]
+      ],
+      "terminal_rule": "AllocatedBytes decrements after actual Free/deallocation, not before. Same-pool native Realloc updates capacity in one atomic delta. Pool registration removal does not erase a live transferred-buffer counter."
     },
     "csv": {
       "semantics": "Keep raw line and row limits, additionally bound typed capacity to shared byte unit; a crossing row is retained safely without reusing parser backing storage. Open/Close/EOF/error/reset clear pending state.",
-      "accounting": "Source batch storage and one crossing-row working set must be represented in the query/import working budget; no unlimited pending-row queue."
+      "accounting": "Source batch storage and one crossing-row working set must be represented in the query/import working budget; no unlimited pending-row queue.",
+      "copy_boundary": "Both UnionAll pre-growth and UnionBatch whole-area fast path must use compact referenced payload; shared-window full backing area cannot bypass the admitted byte window."
     },
     "writer": {
       "states": [
@@ -293,7 +295,32 @@
         "HashBuild/HashJoin: SpillExpectedScopes repeated uint32"
       ],
       "backward_compatibility": "New readers without topology fields keep broadcast builds in memory. Old binaries ignore unknown fields and retain their existing in-memory broadcast path. Every build and all its probe scopes share a CN binary; FDs never cross CN/process/version. Existing shuffle path remains supported.",
-      "scope": "Narrow extension of pipeline metadata only; no persistent/catalog/SQL protocol format change."
+      "scope": "Narrow extension of pipeline metadata only; no persistent/catalog/SQL protocol format change.",
+      "whole_query_admission": {
+        "manifest": "Origin enumerates the complete scope DAG per CN, carrying stage schema/role/retained-field/concurrency descriptors plus statement epoch and incoming frame unit; remote recomputes envelopes using its local configuration. Every scope RPC carries only the token/reference to this same complete local ticket.",
+        "ordering": "Before any execution locks, reads or retained allocation, origin opens/reserves all participating CNs including itself in stable CN UUID order. Every query uses this order. Partial success is registered for cleanup immediately. DOP recompilation releases every partial ticket before rebuilding.",
+        "commit": "After every CN admits, commit the minimum selected target unit to all CNs. Promise size may shrink, never increase. Receiver input slots still cover the incoming frame bound. Only then execute any pipeline.",
+        "owner": "One dedicated statement admission control stream per remote CN owns the MessageBoard root ticket. Scope RPCs attach/detach references; normal scope cancellation cannot close or abort the shared root. Scope-start and Close are linearized; an absent/closed token is rejected, never recreated.",
+        "termination": "After all remote scopes/notifications join, origin sends END or ABORT with a cleanup context independent of the cancelled query. An acknowledged END permits ordinary stream close. Any failed send/ack/control-context forces Close(true) on the exclusively locked backend, so server SessionCtx.Done runs root cleanup even if END is lost. Server handler defer removes token, closes root and cancels attached unfinished scopes. No forever tombstone or expected-RPC-count cleanup.",
+        "transport_evidence": [
+          "pkg/cnservice/cnclient/client.go:NewStream uses lock=true and WithBackendReadTimeout(120 seconds)",
+          "pkg/common/morpc/backend.go:stream.Close(true) closes the backend connection",
+          "pkg/sql/compile/remoterunServer.go:connectionCtx is ClientSession.SessionCtx"
+        ],
+        "tests": [
+          "Two origins acquire CNs in opposite natural orders; stable global order prevents wait cycle",
+          "Build map stays live while late probe RPC attaches without requesting new I/W",
+          "Cancellation before all CNs admit releases partial tickets",
+          "END lost or send/ack failure closes independent backend and retires ticket/FDs",
+          "Single normal scope cancellation leaves other scopes shared ticket valid",
+          "Late attach after root Close is rejected without resurrection"
+        ]
+      }
+    },
+    "planner_action_fix": {
+      "classification": "Focused ordinary planner bug, design document exemption; recorded here because it changes the acceptance plan.",
+      "contract": "Only UPDATE action records old irregular-index deletion. Plain INSERT/LOAD and IGNORE retain their new-row index maintenance source when regular index projections are appended.",
+      "evidence": "TestInsertIrregularMaintenanceAction fails insert/ignore on the original source, passes ODKU; with action guard all three pass. Real SQL index correctness is required."
     }
   },
   "ownership_and_wait_graphs": [
@@ -364,12 +391,17 @@
       "agent": "parameter_audit",
       "scope": "HashBuild, broadcast lifecycle, skew semantics and spill framing",
       "decision": "PASS for incorporated closure plus integrated working-set entry"
+    },
+    {
+      "agent": "root",
+      "scope": "Remote whole-query ordering and independent control-stream terminal owner; narrow revision4 of worker proposal",
+      "decision": "PASS design; implementation/transport failure tests remain mandatory"
     }
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 3,
+    "revision": 4,
     "condition": "Implementation must satisfy recorded protocol and consumer tests; no implementation claim based solely on design.",
-    "narrow_revision": "Remote execution reverse-arc closure: worker proposed optional fields, actual per-scope seal and MessageBoard registry; root accepts stated compatibility and records before implementation."
+    "narrow_revision": "Worker proposes complete per-CN stage manifests and ordered all-CN prelock admission with statement control-stream ownership; root reviewed concrete two-origin/late-probe wait graphs and existing transport termination, accepts protocol with acknowledged END or forced exclusive backend close on failure."
   }
 }
