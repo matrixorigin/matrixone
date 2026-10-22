@@ -108,7 +108,7 @@ func (builder *QueryBuilder) decimalFloatPeerValue(expr *plan.Expr) (float64, bo
 		}
 		return current.GetLit() != nil || current.GetT() != nil
 	}
-	if !substitute(copy) || !rule.IsConstant(copy, false) {
+	if !substitute(copy) || !function.IsConstant(copy, false) {
 		return 0, false
 	}
 	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, copy, builder.compCtx.GetProcess(), false, true)
@@ -181,7 +181,7 @@ func (builder *QueryBuilder) singletonProjectedFloatValue(node *plan.Node, expr 
 	if value, ok := builder.decimalFloatPeerValue(candidate); ok {
 		return value, true
 	}
-	if !rule.IsConstant(candidate, false) {
+	if !function.IsConstant(candidate, false) {
 		return 0, false
 	}
 	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, candidate, builder.compCtx.GetProcess(), false, true)

@@ -52,8 +52,8 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 	}
 	if features.CRC32JSONTextBytes {
 		version, known := remoteMORPCProtocolVersion(c.proc.GetService())
-		if !known || version < defines.MORPCVersion129 {
-			return moerr.NewNotSupportedNoCtx("CRC32 JSON text-byte semantics require MORPC protocol version 129")
+		if !known || version < defines.MORPCVersion130 {
+			return moerr.NewNotSupportedNoCtx("CRC32 JSON text-byte semantics require MORPC protocol version 130")
 		}
 	}
 	if queryHasMixedJSONNumericAsof(qry) {
@@ -149,7 +149,7 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 		required = max(required, defines.MORPCVersion115)
 	}
 	if features.CRC32JSONTextBytes {
-		required = max(required, defines.MORPCVersion129)
+		required = max(required, defines.MORPCVersion130)
 	}
 	if features.ViewMetadataFunctions {
 		required = max(required, defines.MORPCVersion126)
@@ -161,6 +161,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
+		return defines.MORPCVersion129
+	}
 	if features.JSONScalarLiteralContracts {
 		return defines.MORPCVersion104
 	}
