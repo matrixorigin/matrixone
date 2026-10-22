@@ -17,8 +17,6 @@
 package plan
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -42,29 +40,29 @@ func m0PlanBaseWithConstraints(table *plan.TableDef, rejectConstraints bool) (ui
 		table.ClusterBy != nil || table.IsTemporary || table.TableType == catalog.SystemPartitionRel ||
 		rejectConstraints && (len(table.Indexes) != 0 || len(table.Fkeys) != 0 ||
 			len(table.RefChildTbls) != 0 || len(table.Checks) != 0) {
-		return 0, fmt.Errorf("M0: table is outside the hidden composite primary-key domain")
+		return 0, moerr.NewInternalErrorNoCtxf("M0: table is outside the hidden composite primary-key domain")
 	}
 	pk := table.Pkey.CompPkeyCol
 	if !pk.Hidden || !pk.Primary || pk.Name != catalog.CPrimaryKeyColName ||
 		table.Pkey.PkeyColName != pk.Name {
-		return 0, fmt.Errorf("M0: table lacks the hidden composite primary-key anchor")
+		return 0, moerr.NewInternalErrorNoCtxf("M0: table lacks the hidden composite primary-key anchor")
 	}
 	if len(table.Cols) < 2 || table.Cols[len(table.Cols)-1].Name != catalog.Row_ID {
-		return 0, fmt.Errorf("M0: rowid is not the final internal column")
+		return 0, moerr.NewInternalErrorNoCtxf("M0: rowid is not the final internal column")
 	}
 	next := uint32(len(table.Cols) - 1)
 	base := uint32(pk.Seqnum) + 1
 	if table.Version != next-base {
-		return 0, fmt.Errorf("M0: table is outside the append-only version domain")
+		return 0, moerr.NewInternalErrorNoCtxf("M0: table is outside the append-only version domain")
 	}
 	for pos, col := range table.Cols[:len(table.Cols)-1] {
 		if col == nil || uint32(col.Seqnum) != uint32(pos) {
-			return 0, fmt.Errorf("M0: dense column identity is not preserved")
+			return 0, moerr.NewInternalErrorNoCtxf("M0: dense column identity is not preserved")
 		}
 		if uint32(pos) >= base && (col.Default == nil || !col.Default.NullAbility || col.Typ.NotNullable ||
 			col.GeneratedCol != nil || col.OnUpdate != nil ||
 			col.Primary || col.Hidden || col.ClusterBy || col.Typ.AutoIncr) {
-			return 0, fmt.Errorf("M0: appended column has unsupported semantics")
+			return 0, moerr.NewInternalErrorNoCtxf("M0: appended column has unsupported semantics")
 		}
 	}
 	return base, nil
@@ -75,20 +73,20 @@ func m0ColumnDefinition(
 	position *tree.ColumnPosition,
 ) error {
 	if spec == nil || position != nil && position.Typ != tree.ColumnPositionNone {
-		return fmt.Errorf("M0: only a trailing additive column is supported")
+		return moerr.NewInternalErrorNoCtxf("M0: only a trailing additive column is supported")
 	}
 	for _, attr := range spec.Attributes {
 		switch attr := attr.(type) {
 		case *tree.AttributeNull:
 			if !attr.Is {
-				return fmt.Errorf("M0: appended column must be nullable")
+				return moerr.NewInternalErrorNoCtxf("M0: appended column must be nullable")
 			}
 		case *tree.AttributeComment:
 		case *tree.AttributeDefault:
 			// The bound plan below accepts only a NULL literal or no expression.
 		case *tree.AttributeCharset, *tree.AttributeCollate:
 		default:
-			return fmt.Errorf("M0: appended column has an unsupported attribute")
+			return moerr.NewInternalErrorNoCtxf("M0: appended column has an unsupported attribute")
 		}
 	}
 	return nil
@@ -98,15 +96,15 @@ func validateM0BoundAddColumn(col *plan.ColDef) error {
 	if col == nil || col.Default == nil || !col.Default.NullAbility || col.Typ.NotNullable ||
 		col.Default.OriginString != "" || col.GeneratedCol != nil || col.OnUpdate != nil ||
 		col.Primary || col.Hidden || col.ClusterBy || col.Typ.AutoIncr {
-		return fmt.Errorf("M0: appended column requires nullable/no-backfill semantics")
+		return moerr.NewInternalErrorNoCtxf("M0: appended column requires nullable/no-backfill semantics")
 	}
 	if col.Typ.Id == int32(types.T_enum) || len(col.Typ.Enumvalues) > 0 {
-		return fmt.Errorf("M0: ENUM and SET appended columns are outside the append domain")
+		return moerr.NewInternalErrorNoCtxf("M0: ENUM and SET appended columns are outside the append domain")
 	}
 	if col.Default.Expr != nil {
 		lit := col.Default.Expr.GetLit()
 		if lit == nil || !lit.GetIsnull() {
-			return fmt.Errorf("M0: appended column requires no non-NULL default")
+			return moerr.NewInternalErrorNoCtxf("M0: appended column requires no non-NULL default")
 		}
 	}
 	return nil

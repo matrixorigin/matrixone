@@ -15,10 +15,10 @@
 package plan
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -57,7 +57,7 @@ func m0PreserveCloneLayout(
 
 func m0ValidateBoundAddColumn(col *ColDef) error {
 	if activeM0PlanHooks.validateAdd == nil {
-		return fmt.Errorf("M0: metadata-only ADD COLUMN is not enabled")
+		return moerr.NewInternalErrorNoCtxf("M0: metadata-only ADD COLUMN is not enabled")
 	}
 	return activeM0PlanHooks.validateAdd(col)
 }
@@ -84,21 +84,6 @@ func M0AppendDomain(table *plan.TableDef) bool {
 		}
 	}
 	return true
-}
-
-// m0IsAppendedColumn avoids treating an appended M0 column as a
-// not-null column solely from stale/optimizer metadata. The read path
-// materializes the missing suffix as NULL, so count(col) must stay
-// countColumnExec.
-func m0IsAppendedColumn(table *plan.TableDef, colPos int) bool {
-	if !M0AppendDomain(table) || colPos < 0 || colPos >= len(table.Cols) {
-		return false
-	}
-	pk := table.Pkey.CompPkeyCol
-	if table.Pkey == nil || pk == nil {
-		return false
-	}
-	return uint32(colPos) >= pk.Seqnum+1
 }
 
 func M0ResolveColumnPosition(table *plan.TableDef, name string, fallback int) int {

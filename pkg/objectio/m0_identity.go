@@ -17,20 +17,18 @@
 package objectio
 
 import (
-	"errors"
-	"fmt"
-
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 )
 
-var ErrM0SchemaIdentityUnavailable = errors.New("M0: object writer schema identity unavailable")
+var ErrM0SchemaIdentityUnavailable = moerr.NewInternalErrorNoCtx("M0: object writer schema identity unavailable")
 
 // M0ObjectSchemaVersion reads the existing version independently of a writer
 // table ID. A proof based on restricted append transitions need not resolve a
 // complete historical writer schema.
 func M0ObjectSchemaVersion(h Header) (uint32, error) {
 	if len(h) < HeaderSize || h.Magic() != uint64(Magic) {
-		return 0, fmt.Errorf("M0: invalid object header")
+		return 0, moerr.NewInternalErrorNoCtx("M0: invalid object header")
 	}
 	return types.DecodeUint32(h[8+2+ExtentSize : 8+2+ExtentSize+4]), nil
 }
@@ -47,7 +45,7 @@ func M0ObjectSchemaIdentity(h Header, meta ObjectDataMeta) (tableID uint64, vers
 		return 0, 0, err
 	}
 	if len(meta) < int(headerLen) {
-		return 0, 0, fmt.Errorf("M0: invalid object metadata")
+		return 0, 0, moerr.NewInternalErrorNoCtx("M0: invalid object metadata")
 	}
 	tableID = meta.BlockHeader().TableID()
 	if tableID == 0 {

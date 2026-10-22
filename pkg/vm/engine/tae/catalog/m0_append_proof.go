@@ -17,8 +17,6 @@
 package catalog
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -45,11 +43,11 @@ func m0EncodedColumnNeedsBackfill(encoded []byte) (bool, error) {
 
 func M0AppendLayoutFromSchema(s *Schema) (objectio.M0AppendLayout, error) {
 	if s == nil {
-		return objectio.M0AppendLayout{}, fmt.Errorf("%w: nil schema", ErrM0Layout)
+		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "nil schema")
 	}
 	pk := s.GetPrimaryKey()
 	if pk == nil {
-		return objectio.M0AppendLayout{}, fmt.Errorf("%w: missing primary key", ErrM0Layout)
+		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "missing primary key")
 	}
 	layout := objectio.M0AppendLayout{
 		Version:       s.Version,
@@ -106,11 +104,11 @@ func M0DerivedAppendLayout(s *Schema) (objectio.M0AppendLayout, error) {
 	}
 	base := uint32(layout.PKSeqnum) + 1
 	if layout.NextColSeqnum <= base {
-		return objectio.M0AppendLayout{}, fmt.Errorf("%w: schema has no append version", ErrM0Layout)
+		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "schema has no append version")
 	}
 	layout.Version = layout.NextColSeqnum - base
 	if err = objectio.ValidateM0AppendLayout(layout); err != nil {
-		return objectio.M0AppendLayout{}, fmt.Errorf("%w: %v", ErrM0Layout, err)
+		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "%v", err)
 	}
 	return layout, nil
 }
@@ -150,11 +148,11 @@ func M0SchemaHasAppendDomainShape(s *Schema) bool {
 func M0AppendLayoutFromPlan(table *plan.TableDef, nextColSeqnum uint32) (objectio.M0AppendLayout, error) {
 	if table == nil || len(table.Cols) < 2 || table.Pkey == nil ||
 		table.Pkey.CompPkeyCol == nil || (table.Version == 0 && nextColSeqnum == 0) {
-		return objectio.M0AppendLayout{}, fmt.Errorf("%w: incomplete CN layout", ErrM0Layout)
+		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "incomplete CN layout")
 	}
 	pk := table.Pkey.CompPkeyCol
 	if !pk.Hidden || !pk.Primary || table.ClusterBy != nil {
-		return objectio.M0AppendLayout{}, fmt.Errorf("%w: CN primary-key anchor", ErrM0Layout)
+		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "CN primary-key anchor")
 	}
 	layout := objectio.M0AppendLayout{
 		Version:       table.Version,
@@ -166,11 +164,11 @@ func M0AppendLayoutFromPlan(table *plan.TableDef, nextColSeqnum uint32) (objecti
 	}
 	for pos, col := range table.Cols {
 		if col == nil {
-			return objectio.M0AppendLayout{}, fmt.Errorf("%w: nil CN column", ErrM0Layout)
+			return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "nil CN column")
 		}
 		if objectio.IsPhysicalAddr(col.Name) {
 			if pos != len(table.Cols)-1 {
-				return objectio.M0AppendLayout{}, fmt.Errorf("%w: rowid is not last", ErrM0Layout)
+				return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "rowid is not last")
 			}
 			continue
 		}
@@ -230,7 +228,7 @@ func M0AppendBase(s *Schema) (uint32, error) {
 		return 0, err
 	}
 	if err = objectio.ValidateM0AppendLayout(layout); err != nil {
-		return 0, fmt.Errorf("%w: %v", ErrM0Layout, err)
+		return 0, wrapM0Error(ErrM0Layout, "%v", err)
 	}
 	return uint32(layout.PKSeqnum) + 1, nil
 }
@@ -251,7 +249,7 @@ func M0ProveAbsentColumn(s *Schema, h objectio.Header, meta objectio.ObjectDataM
 	}
 	absent, err := objectio.ProveM0AbsentColumn(layout, h, meta, seq)
 	if err != nil {
-		return false, fmt.Errorf("%w: %v", ErrM0Layout, err)
+		return false, wrapM0Error(ErrM0Layout, "%v", err)
 	}
 	return absent, nil
 }

@@ -117,4 +117,22 @@ func TestMissingNormalColumnRequiresProof(t *testing.T) {
 	)
 	require.NoError(t, err)
 	defer ReleaseIOVector(&legacy)
+
+	for _, proof := range []struct {
+		name   string
+		object string
+		seqnum uint16
+	}{
+		{"wrong object", "different-object", 1},
+		{"wrong column", name.String(), 2},
+	} {
+		t.Run(proof.name, func(t *testing.T) {
+			_, err := ReadOneBlock(
+				WithLegacyMissingColumnProof(ctx, proof.object, proof.seqnum),
+				&dataMeta, name.String(), 0, []uint16{1}, typs, mp, fs,
+				fileservice.SkipAllCache,
+			)
+			require.ErrorIs(t, err, ErrMissingColumnWithoutProof)
+		})
+	}
 }

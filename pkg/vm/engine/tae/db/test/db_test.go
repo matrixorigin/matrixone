@@ -5449,6 +5449,12 @@ func TestBlockRead(t *testing.T) {
 			}
 			b1 := buildBatch(colTyps)
 			phyAddrColumnPos := -1
+			for i, typ := range colTyps {
+				if typ.Oid == types.T_Rowid {
+					phyAddrColumnPos = i
+				}
+			}
+			require.NotEqual(t, -1, phyAddrColumnPos)
 			cacheVectors := containers.NewVectors(len(colIdxs) + 2)
 			err = blockio.BlockDataReadInner(
 				context.Background(), info, ds, colIdxs, colTyps, phyAddrColumnPos,
@@ -5597,6 +5603,12 @@ func TestBlockRead2(t *testing.T) {
 				info.MetaLocation().SetID(uint16(i))
 				b1 := buildBatch(colTyps)
 				phyAddrColumnPos := -1
+				for i, typ := range colTyps {
+					if typ.Oid == types.T_Rowid {
+						phyAddrColumnPos = i
+					}
+				}
+				require.NotEqual(t, -1, phyAddrColumnPos)
 				cacheVectors := containers.NewVectors(len(colIdxs) + 2)
 				ds.SetTS(beforeDel)
 				err = blockio.BlockDataReadInner(

@@ -79,8 +79,6 @@ func TestM0PlanAdmissionRejectsIdentitiesAndBackfill(t *testing.T) {
 	_, err = m0PlanBase(backfill)
 	require.NoError(t, err)
 	require.Error(t, validateM0BoundAddColumn(backfill.Cols[7]))
-	require.True(t, m0IsAppendedColumn(table, 7))
-	require.False(t, m0IsAppendedColumn(table, 6))
 	require.True(t, M0AppendDomain(table))
 
 	notNull := DeepCopyTableDef(table, true)

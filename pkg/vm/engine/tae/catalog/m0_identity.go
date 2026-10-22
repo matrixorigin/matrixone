@@ -17,8 +17,6 @@
 package catalog
 
 import (
-	"fmt"
-
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 )
 
@@ -32,11 +30,11 @@ func resolveM0ObjectSchema(owner *TableEntry, h objectio.Header, meta objectio.O
 		return nil, err
 	}
 	if owner == nil || owner.ID != tableID {
-		return nil, fmt.Errorf("%w: source relation %d is not resolved", objectio.ErrM0SchemaIdentityUnavailable, tableID)
+		return nil, wrapM0Error(objectio.ErrM0SchemaIdentityUnavailable, "source relation %d is not resolved", tableID)
 	}
 	schema := owner.GetVersionSchema(version)
 	if schema == nil {
-		return nil, fmt.Errorf("%w: source relation %d schema %d is not retained", objectio.ErrM0SchemaIdentityUnavailable, tableID, version)
+		return nil, wrapM0Error(objectio.ErrM0SchemaIdentityUnavailable, "source relation %d schema %d is not retained", tableID, version)
 	}
 	if err := validateM0Schema(schema); err != nil {
 		return nil, err

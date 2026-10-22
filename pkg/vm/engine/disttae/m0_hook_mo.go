@@ -18,9 +18,9 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 	"strings"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
@@ -130,50 +130,50 @@ func buildM0CNAddColumn(
 	req *api.AlterTableReq,
 ) ([]engine.TableDef, error) {
 	if tbl == nil || req == nil || req.GetKind() != api.AlterKind_AddColumn {
-		return nil, fmt.Errorf("M0: invalid CN ADD COLUMN request")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: invalid CN ADD COLUMN request")
 	}
 	if tbl.db.op.IsSnapOp() {
-		return nil, fmt.Errorf("M0: snapshot transaction cannot alter a table")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: snapshot transaction cannot alter a table")
 	}
 	op := tbl.getTxn().op
 	if op == nil {
-		return nil, fmt.Errorf("M0: missing transaction operator")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: missing transaction operator")
 	}
 	options := op.TxnOptions()
 	if options.GetByBegin() || !options.GetAutocommit() ||
 		!op.Txn().IsPessimistic() || !op.Txn().IsRCIsolation() {
-		return nil, fmt.Errorf("M0: ADD COLUMN requires independent pessimistic RC autocommit")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: ADD COLUMN requires independent pessimistic RC autocommit")
 	}
 	if created, err := tbl.isCreatedInTxn(ctx); err != nil {
 		return nil, err
 	} else if created {
-		return nil, fmt.Errorf("M0: table created in the transaction is outside the persisted-root domain")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: table created in the transaction is outside the persisted-root domain")
 	}
 
 	add := req.GetAddColumn()
 	if add == nil || add.Column == nil || add.Column.Hidden || add.Column.Primary ||
 		add.Column.Default == nil || !add.Column.Default.NullAbility || add.Column.Typ.NotNullable ||
 		add.Column.GeneratedCol != nil || add.Column.OnUpdate != nil || add.Column.Typ.AutoIncr {
-		return nil, fmt.Errorf("M0: unsupported appended column")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: unsupported appended column")
 	}
 	if add.Column.Typ.Id == int32(types.T_enum) || len(add.Column.Typ.Enumvalues) > 0 {
-		return nil, fmt.Errorf("M0: ENUM and SET appended columns are outside the append domain")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: ENUM and SET appended columns are outside the append domain")
 	}
 	if add.Column.Default.Expr != nil {
 		lit := add.Column.Default.Expr.GetLit()
 		if lit == nil || !lit.GetIsnull() {
-			return nil, fmt.Errorf("M0: non-NULL default requires backfill")
+			return nil, moerr.NewInternalErrorNoCtxf("M0: non-NULL default requires backfill")
 		}
 	}
 
 	table := tbl.GetTableDef(ctx)
 	if len(table.Indexes) != 0 || len(table.Fkeys) != 0 ||
 		len(table.RefChildTbls) != 0 || len(table.Checks) != 0 {
-		return nil, fmt.Errorf("M0: secondary indexes, foreign keys and checks are outside the append domain")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: secondary indexes, foreign keys and checks are outside the append domain")
 	}
 	next := uint32(len(table.Cols) - 1)
 	if tbl.extraInfo == nil || tbl.extraInfo.NextColSeqnum != next {
-		return nil, fmt.Errorf("M0: stale NextColSeqnum")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: stale NextColSeqnum")
 	}
 	before, err := catalog.M0AppendLayoutFromPlan(table, next)
 	if err != nil {
@@ -215,7 +215,7 @@ func buildM0CNAddColumn(
 	fs := tbl.getTxn().engine.fs
 	if !tbl.getTxn().Readonly() {
 		if uncommitted, _ := tbl.collectUnCommittedDataObjs(0); len(uncommitted) != 0 {
-			return nil, fmt.Errorf("M0: uncommitted data objects must be flushed before ADD COLUMN")
+			return nil, moerr.NewInternalErrorNoCtxf("M0: uncommitted data objects must be flushed before ADD COLUMN")
 		}
 	}
 	if err = ForeachVisibleObjects(
@@ -225,7 +225,7 @@ func buildM0CNAddColumn(
 		func(objCtx context.Context, obj objectio.ObjectEntry) error {
 			ok, _, proofErr := proveM0ReadObject(objCtx, table, obj, fs)
 			if !ok {
-				return fmt.Errorf("M0: current relation has no admissible object root")
+				return moerr.NewInternalErrorNoCtxf("M0: current relation has no admissible object root")
 			}
 			return proofErr
 		},
@@ -259,7 +259,7 @@ func buildM0CNAddColumn(
 		defs = append(defs, def)
 	}
 	if !inserted {
-		return nil, fmt.Errorf("M0: rowid boundary is missing")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: rowid boundary is missing")
 	}
 	return defs, nil
 }

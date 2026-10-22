@@ -35,6 +35,10 @@ select count(*) as parent_unchanged from m0_customer_parent.customer where (c_id
 select count(*) as parent_no_child_insert from m0_customer_parent.customer where c_id=4;
 select count(*) as snapshot_rows from m0_customer_parent.customer {snapshot='m0_customer_snapshot'};
 select count(*) as nullable_child_columns from information_schema.columns where table_schema='m0_customer_child' and table_name='customer' and column_name in ('loyalty_tier_t0_s0','credit_lim_t0_s0','loyalty_tier_t1_s1','credit_lim_t1_s1') and is_nullable='YES';
+select count(c_id) as count_not_null from customer;
+select count(null) as count_null from customer;
+select count(distinct c_balance) as count_distinct_nullable from customer;
+select count(c.c_id) as count_outer_nullable from m0_customer_parent.customer p left join customer c on p.c_id=c.c_id and c.c_id=1;
 select c_id from customer where c_id<0;
 drop snapshot m0_customer_snapshot;
 drop database m0_customer_child;

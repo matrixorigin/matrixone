@@ -172,6 +172,7 @@ func EngineTableDefBySchema(schema *catalog.Schema) ([]engine.TableDef, error) {
 				Seqnum:        schema.ColDefs[idx].SeqNum,
 				ClusterBy:     schema.ColDefs[idx].ClusterBy,
 				AutoIncrement: schema.ColDefs[idx].AutoIncrement,
+				Default:       &plan.Default{NullAbility: schema.ColDefs[idx].Nullable()},
 			},
 		})
 	}

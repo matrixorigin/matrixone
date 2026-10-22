@@ -17,11 +17,11 @@
 package plan
 
 import (
-	"fmt"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 func m0PlanBase(*plan.TableDef) (uint32, error) {
-	return 0, fmt.Errorf("M0: metadata-only ADD COLUMN is not enabled")
+	return 0, moerr.NewInternalErrorNoCtxf("M0: metadata-only ADD COLUMN is not enabled")
 }

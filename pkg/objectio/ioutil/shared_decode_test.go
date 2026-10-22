@@ -136,7 +136,9 @@ func testFusedTopNSelectedDecodeIsolation(t *testing.T, dimensions int) {
 		queryValues[0] = query
 		op := &objectio.IndexReaderTopOp{Typ: types.T_array_float32, MetricType: metric.Metric_L2Distance,
 			NumVec: types.ArrayToBytes(queryValues), Limit: 1, UpperBoundType: bound, UpperBound: 4}
-		rows, distances, _, err := LoadColumnsDataIntoAndTopN(ctx,
+		// This fixture deliberately omits nullable seqnum 3 from this object.
+		missingCtx := objectio.WithLegacyMissingColumnProof(ctx, name.String(), 3)
+		rows, distances, _, err := LoadColumnsDataIntoAndTopN(missingCtx,
 			[]uint16{3, 0}, []types.Type{typs[0], typs[0]}, fs, location, []*vector.Vector{missing, filter}, materialize,
 			1, typs[1], []uint16{2}, []types.Type{typs[2]}, []*vector.Vector{projection},
 			func() ([]int64, error) { return selectRows(filter) }, op, pool, fileservice.SkipFullFilePreloads)

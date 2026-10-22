@@ -229,9 +229,8 @@ func readOneBlockWithMeta(
 		// need fill vector
 		if seqnum > maxSeqnum || blkmeta.ColumnMeta(seqnum).DataType() == 0 {
 			if !CanFillMissingColumn(ctx, name, seqnum) {
-				return ioVec, fmt.Errorf(
-					"%w: seqnum=%d maxseqnum=%d",
-					ErrMissingColumnWithoutProof, seqnum, maxSeqnum,
+				return ioVec, wrapM0Error(
+					ErrMissingColumnWithoutProof, "seqnum=%d maxseqnum=%d", seqnum, maxSeqnum,
 				)
 			}
 			putFillHolder(i, seqnum)

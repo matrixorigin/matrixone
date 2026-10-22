@@ -16,10 +16,25 @@ package objectio
 
 import (
 	"context"
-	"errors"
+	"fmt"
+
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 )
 
-var ErrMissingColumnWithoutProof = errors.New("objectio: missing normal column without proof")
+var ErrMissingColumnWithoutProof = moerr.NewInternalErrorNoCtx("objectio: missing normal column without proof")
+
+// Preserve the sentinel identity while adding the rejected object's details.
+type m0DetailError struct {
+	cause  error
+	detail string
+}
+
+func (e *m0DetailError) Error() string { return e.cause.Error() + ": " + e.detail }
+func (e *m0DetailError) Unwrap() error { return e.cause }
+
+func wrapM0Error(cause error, format string, args ...any) error {
+	return &m0DetailError{cause: cause, detail: fmt.Sprintf(format, args...)}
+}
 
 type m0ProvenObjectKey struct{}
 

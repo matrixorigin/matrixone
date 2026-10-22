@@ -16,9 +16,9 @@ package disttae
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
@@ -90,7 +90,7 @@ var (
 		context.Context,
 		*api.AlterTableReq,
 	) ([]engine.TableDef, error) {
-		return nil, fmt.Errorf("M0: metadata-only ADD COLUMN is not enabled")
+		return nil, moerr.NewInternalErrorNoCtxf("M0: metadata-only ADD COLUMN is not enabled")
 	}
 	activeM0ReadObject = func(
 		context.Context,

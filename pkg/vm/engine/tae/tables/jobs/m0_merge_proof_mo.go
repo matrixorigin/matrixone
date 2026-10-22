@@ -18,8 +18,9 @@ package jobs
 
 import (
 	"context"
-	"fmt"
+	"errors"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -41,10 +42,8 @@ func proveM0MergeObject(
 	}
 	layout, err := catalog.M0DerivedAppendLayout(schema)
 	if err != nil {
-		return true, objectio.M0ObjectProof{}, fmt.Errorf(
-			"M0: prove merge object %s: %w",
-			location.Name().String(),
-			err,
+		return true, objectio.M0ObjectProof{}, errors.Join(
+			moerr.NewInternalErrorNoCtxf("M0: prove merge object %s", location.Name().String()), err,
 		)
 	}
 	reader, err := objectio.NewObjectReaderWithStr(location.Name().String(), fs)
