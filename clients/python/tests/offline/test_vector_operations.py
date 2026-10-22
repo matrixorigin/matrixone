@@ -69,6 +69,79 @@ def test_select_convenience_limit_execution(substitute, limit, expected):
         connection.close()
 
 
+@pytest.mark.parametrize('substitute', [False, True])
+@pytest.mark.parametrize('operation', ['insert', 'insert_many', 'update', 'delete', 'select'])
+def test_sql_builder_clone_executes_same_operation(operation, substitute):
+    connection = sqlite3.connect(':memory:')
+    try:
+        connection.execute('CREATE TABLE clone_fixture (id INTEGER, label TEXT, flag INTEGER)')
+        connection.executemany('INSERT INTO clone_fixture VALUES (?, ?, ?)', [(1, 'old', 0), (2, 'keep', 0)])
+        builder = MatrixOneSQLBuilder()
+        expected = [(1, 'old', 0), (2, 'keep', 0)]
+        if operation == 'insert':
+            builder.insert_into('clone_fixture').values(id=3, label='new', flag=1)
+            expected.append((3, 'new', 1))
+        elif operation == 'insert_many':
+            builder.insert_into('clone_fixture').insert_values(
+                ['id', 'label', 'flag'], [[3, 'new', 1], [4, None, 0]],
+            )
+            expected.extend([(3, 'new', 1), (4, None, 0)])
+        elif operation == 'update':
+            builder.update('clone_fixture').set(label='new', flag=1).where('id = ?', 1)
+            expected[0] = (1, 'new', 1)
+        elif operation == 'delete':
+            builder.delete_from('clone_fixture').where('id = ?', 1)
+            expected.pop(0)
+        else:
+            builder.select_all().from_table('clone_fixture').where('id = ?', 2)
+        clone = builder.clone()
+        sql, params = (clone.build_with_parameter_substitution(), []) if substitute else clone.build()
+        result = connection.execute(sql, params)
+        if operation == 'select':
+            assert result.fetchall() == [(2, 'keep', 0)]
+        assert connection.execute('SELECT * FROM clone_fixture ORDER BY id').fetchall() == expected
+        assert clone.build() == builder.build()
+    finally:
+        connection.close()
+
+
+@pytest.mark.parametrize('operation', ['insert', 'update'])
+def test_sql_builder_clone_mutation_lists_are_independent(operation):
+    builder = MatrixOneSQLBuilder()
+    if operation == 'insert':
+        builder.insert_into('clone_fixture').values(id=1, label='old')
+    else:
+        builder.update('clone_fixture').set(label='old').where('id = ?', 1)
+    original = builder.build()
+    clone = builder.clone()
+    if operation == 'insert':
+        clone.values(id=2, label='new')
+    else:
+        clone.set(flag=1)
+    assert builder.build() == original
+    cloned = clone.build()
+    if operation == 'insert':
+        builder.values(id=3, label='other')
+    else:
+        builder.set(id=3)
+    assert clone.build() == cloned
+    clone.reset()
+    assert builder.build() != original
+
+
+def test_sql_builder_clone_snapshots_bulk_insert_inputs():
+    columns = ['id', 'label']
+    rows = [[1, 'old']]
+    builder = MatrixOneSQLBuilder().insert_into('clone_fixture').insert_values(columns, rows)
+    clone = builder.clone()
+    expected = builder.build()
+    columns.append('flag')
+    rows[0].append(1)
+    rows.append([2, 'new', 0])
+    assert clone.build() == expected
+    assert builder.build() != expected
+
+
 class TestVectorOperationsOffline:
     """Test vector operations using mocks."""
 
