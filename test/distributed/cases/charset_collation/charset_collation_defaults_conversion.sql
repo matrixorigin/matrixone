@@ -5,15 +5,15 @@ use charset_defaults_contract;
 -- Default-only ALTER preserves existing data and governs future declarations.
 create table defaults_target(v varchar(8), c char(8), t tinytext, raw varbinary(8), n int, index iv(v));
 insert into defaults_target values ('a','b','c','d',1),('B','C','D','e',2);
-alter table defaults_target add column before_default varchar(8), default collate utf8mb4_general_ci;
-alter table defaults_target default collate utf8mb4_bin, add column after_default varchar(8);
+alter table defaults_target add column before_default varchar(8), default collate utf8mb4_0900_ai_ci;
+alter table defaults_target default collate utf32_bin, add column after_default varchar(8);
 select column_name,character_set_name,collation_name from information_schema.columns
 where table_schema='charset_defaults_contract' and table_name='defaults_target' order by ordinal_position;
 select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='defaults_target';
 select v,c,t,hex(raw),n from defaults_target order by n;
-alter table defaults_target default collate utf8mb4_general_ci, drop index iv;
+alter table defaults_target default collate utf8mb4_0900_ai_ci, drop index iv;
 select count(*) from information_schema.statistics where table_schema='charset_defaults_contract' and table_name='defaults_target' and index_name='iv';
-alter table defaults_target add index iv(v), default collate utf8mb4_bin;
+alter table defaults_target add index iv(v), default collate utf32_bin;
 select count(*) from defaults_target force index(iv) where v='a';
 
 -- Durable native defaults use their admitted identity and revision.
@@ -37,26 +37,35 @@ select table_name,column_name,collation_name from information_schema.columns
 where table_schema='charset_defaults_contract' and table_name in ('native_like','native_ctas') and column_name='v' order by table_name;
 
 -- CONVERT owns carried columns and rebuilt secondary-index keys.
-create table converted(id int primary key, v varchar(8), index iv(v)) collate=utf8mb4_bin;
+create table converted(id int primary key, v varchar(8), index iv(v)) collate=utf32_bin;
 insert into converted values (1,'ß'),(2,'ss');
 alter table converted convert to character set utf8mb4 collate utf8mb4_unicode_ci;
 select count(*) from converted force index(iv) where v='ss';
 show create table converted;
 show full columns from converted;
-alter table converted default collate=utf8mb4_bin, add column added varchar(8), convert to character set utf8mb4 collate utf8mb4_unicode_ci;
+-- Native relabel is rejected; the admitted legacy request must retain its revision.
+alter table converted convert to character set utf8mb4 collate utf8mb4_bin;
+select count(*) from converted force index(iv) where v='ss';
+alter table converted convert to character set utf8mb4 collate utf32_bin;
+select count(*) from converted force index(iv) where v='ss';
+alter table converted convert to character set utf8mb4 collate utf8mb4_unicode_ci;
+select count(*) from converted force index(iv) where v='ss';
+alter table converted default collate=utf32_bin, add column added varchar(8), convert to character set utf8mb4 collate utf8mb4_unicode_ci;
 select column_name,collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='converted' order by ordinal_position;
 select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='converted';
 select count(*) from converted force index(iv) where v='ss';
 
 -- Disabled domains and native unique-key formats remain closed.
-create table unique_conversion(v varchar(8) unique) collate=utf8mb4_bin;
+create table rejected_native_key(v varchar(8) collate utf8mb4_bin unique);
+select count(*) from information_schema.tables where table_schema='charset_defaults_contract' and table_name='rejected_native_key';
+create table unique_conversion(v varchar(8) unique) collate=utf32_bin;
 insert into unique_conversion values ('ß'),('ss');
 alter table unique_conversion convert to character set utf8mb4 collate utf8mb4_unicode_ci;
 select count(*),min(v),max(v) from unique_conversion;
 select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='unique_conversion' and column_name='v';
 alter table converted convert to character set latin1;
 alter table converted convert to character set gbk;
-create table repertoire_conversion(v varchar(8)) collate=utf8mb4_bin;
+create table repertoire_conversion(v varchar(8)) collate=utf32_bin;
 insert into repertoire_conversion values ('😀');
 alter table repertoire_conversion convert to character set utf8 collate utf8_unicode_ci;
 select count(*),hex(min(v)) from repertoire_conversion;
@@ -75,16 +84,16 @@ select collation_name from information_schema.columns where table_schema='charse
 select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='repertoire_conversion';
 -- DEFAULT-only保留旧列；显式列域覆盖继承；兼容ASCII仍可成功转换。
 alter table repertoire_conversion default collate=utf8_unicode_ci;
-alter table repertoire_conversion modify v varchar(8) collate utf8mb4_bin;
+alter table repertoire_conversion modify v varchar(8) collate utf32_bin;
 select v,hex(v) from repertoire_conversion;
 select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
 -- 最终default回到旧列域时，MODIFY/同名CHANGE无需转换并保留emoji。
-alter table repertoire_conversion default collate=utf8mb4_bin, modify v varchar(8);
+alter table repertoire_conversion default collate=utf32_bin, modify v varchar(8);
 select v,hex(v) from repertoire_conversion;
 select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
 select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='repertoire_conversion';
 alter table repertoire_conversion default collate=utf8_unicode_ci;
-alter table repertoire_conversion change v v varchar(8), default collate=utf8mb4_bin;
+alter table repertoire_conversion change v v varchar(8), default collate=utf32_bin;
 select v,hex(v) from repertoire_conversion;
 select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='repertoire_conversion' and column_name='v';
 select table_collation from information_schema.tables where table_schema='charset_defaults_contract' and table_name='repertoire_conversion';
@@ -93,7 +102,7 @@ select v from defaults_target order by n;
 select collation_name from information_schema.columns where table_schema='charset_defaults_contract' and table_name='defaults_target' and column_name='v';
 
 -- Byte capacity, fixed padding, and computed target values are validated before publication.
-create table binary_conversion(v varchar(1),c char(1),t tinytext) collate=utf8mb4_bin;
+create table binary_conversion(v varchar(1),c char(1),t tinytext) collate=utf32_bin;
 insert into binary_conversion values ('😀','😀','😀');
 alter table binary_conversion convert to character set binary;
 select hex(v),hex(c),hex(t) from binary_conversion;
@@ -102,7 +111,7 @@ alter table binary_conversion modify v varchar(8), modify c char(8);
 alter table binary_conversion convert to character set binary;
 select hex(v),hex(c),hex(t) from binary_conversion;
 show create table binary_conversion;
-create table binary_generated(v varchar(4),g varchar(3) generated always as (concat(v,'x')) stored) collate=utf8mb4_bin;
+create table binary_generated(v varchar(4),g varchar(3) generated always as (concat(v,'x')) stored) collate=utf32_bin;
 insert into binary_generated(v) values ('🧪');
 alter table binary_generated convert to character set binary;
 select hex(v),hex(g) from binary_generated;
@@ -113,7 +122,7 @@ select hex(v),hex(g) from binary_generated;
 show create table binary_generated;
 
 -- COPY checks the destination assignment without removing the user's CAST.
-create table explicit_binary(v varchar(4),g binary(2) generated always as (cast(v as binary(2))) stored) collate=utf8mb4_bin;
+create table explicit_binary(v varchar(4),g binary(2) generated always as (cast(v as binary(2))) stored) collate=utf32_bin;
 insert into explicit_binary(v) values ('🧪');
 alter table explicit_binary convert to character set binary;
 select hex(v),hex(g) from explicit_binary;
@@ -121,9 +130,9 @@ show create table explicit_binary;
 show full columns from explicit_binary;
 
 -- Replay and inheritance never mutate the originating declaration.
-create table source_like(v varchar(8)) collate=utf8mb4_bin;
+create table source_like(v varchar(8)) collate=utf32_bin;
 create table target_like like source_like;
-alter table target_like default collate=utf8mb4_general_ci;
+alter table target_like default collate=utf8mb4_0900_ai_ci;
 alter table source_like add column added varchar(8);
 alter table target_like add column added varchar(8);
 select table_name,column_name,collation_name from information_schema.columns
@@ -134,7 +143,7 @@ create temporary table temporary_default(v varchar(8)) collate utf8mb4_unicode_c
 insert into temporary_default values ('ß'),('ss');
 alter table temporary_default add column added varchar(8) default 'ß';
 select count(*) from temporary_default where added='ss';
-alter table temporary_default default collate utf8mb4_bin;
+alter table temporary_default default collate utf32_bin;
 select count(*) from temporary_default where v='ss';
 alter table temporary_default add column future varchar(8) default 'ß';
 select count(*) from temporary_default where future='ss';

@@ -67,6 +67,20 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 		exec(t, first, "use "+schema)
 		exec(t, second, "use "+other)
 
+		// Historical index/conversion scenarios below use DDL compatibility aliases;
+		// database defaults and their canonical metadata names are not rewritten.
+		t.Run("native admission preserves historical controls", func(t *testing.T) {
+			_, err := first.ExecContext(ctx, "create table rejected_native(v varchar(8), index iv(v)) collate=utf8mb4_bin")
+			require.ErrorContains(t, err, "native PAD collation index on column v is disabled")
+			require.Zero(t, count(t, "select count(*) from mo_catalog.mo_tables where account_id=0 and reldatabase='"+schema+"' and relname='rejected_native'"))
+			exec(t, first, "create table native_conversion(v varchar(8) collate utf8mb4_bin)")
+			exec(t, first, "insert into native_conversion values ('A'),('a')")
+			_, err = first.ExecContext(ctx, "alter table native_conversion modify v varchar(8) collate utf8mb4_general_ci")
+			require.ErrorContains(t, err, "online native PAD collation conversion is disabled")
+			require.Equal(t, "utf8mb4_bin", collation(t, "native_conversion", "v"))
+			require.Equal(t, 2, count(t, "select count(distinct v) from native_conversion"))
+		})
+
 		t.Run("database default is durable target state", func(t *testing.T) {
 			exec(t, first, "create table before_alter(v varchar(8))")
 			exec(t, first, "insert into before_alter values ('a'),('B')")
@@ -112,7 +126,7 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			var tableDefault string
 			require.NoError(t, first.QueryRowContext(ctx, "select table_collation from information_schema.tables where table_schema=? and table_name='native_unique_default'", schema).Scan(&tableDefault))
 			require.Equal(t, "utf8mb4_unicode_ci", tableDefault)
-			exec(t, first, "alter table native_unique_default default collate utf8mb4_bin")
+			exec(t, first, "alter table native_unique_default default collate utf32_bin")
 			require.NoError(t, first.QueryRowContext(ctx, "select table_collation from information_schema.tables where table_schema=? and table_name='native_unique_default'", schema).Scan(&tableDefault))
 			require.Equal(t, "utf8mb4_bin", tableDefault)
 			require.Equal(t, "utf8mb4_unicode_ci", collation(t, "native_unique_default", "v"))
@@ -132,8 +146,8 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 		})
 
 		t.Run("table default does not rewrite existing columns", func(t *testing.T) {
-			exec(t, first, "create table table_default(v varchar(8)) collate utf8mb4_bin")
-			exec(t, first, "alter table table_default default collate=utf8mb4_general_ci")
+			exec(t, first, "create table table_default(v varchar(8)) collate utf32_bin")
+			exec(t, first, "alter table table_default default collate=utf8mb4_0900_ai_ci")
 			exec(t, first, "alter table table_default add column added varchar(8)")
 			require.Equal(t, "utf8mb4_bin", collation(t, "table_default", "v"))
 			require.Equal(t, "utf8mb4_general_ci", collation(t, "table_default", "added"))
@@ -150,7 +164,7 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			exec(t, first, "insert into temporary_default values ('ß'),('ss')")
 			exec(t, first, "alter table temporary_default add column added varchar(8) default 'ß'")
 			require.Equal(t, 2, count(t, "select count(*) from temporary_default where added='ss'"))
-			exec(t, first, "alter table temporary_default default collate utf8mb4_bin")
+			exec(t, first, "alter table temporary_default default collate utf32_bin")
 			require.Equal(t, 2, count(t, "select count(*) from temporary_default where v='ss'"))
 			exec(t, first, "alter table temporary_default add column future varchar(8) default 'ß'")
 			require.Equal(t, 0, count(t, "select count(*) from temporary_default where future='ss'"))
@@ -159,16 +173,16 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 		})
 
 		t.Run("default replacement owns final index definition", func(t *testing.T) {
-			exec(t, first, "create table default_indexes(v varchar(8), index iv(v)) collate=utf8mb4_bin")
+			exec(t, first, "create table default_indexes(v varchar(8), index iv(v)) collate=utf32_bin")
 			exec(t, first, "insert into default_indexes values ('a'),('B')")
-			exec(t, first, "alter table default_indexes default collate=utf8mb4_general_ci, drop index iv")
+			exec(t, first, "alter table default_indexes default collate=utf8mb4_0900_ai_ci, drop index iv")
 			require.Equal(t, 0, count(t, "select count(*) from information_schema.statistics where table_schema='"+schema+"' and table_name='default_indexes' and index_name='iv'"))
-			exec(t, first, "alter table default_indexes add index iv(v), default collate=utf8mb4_bin")
+			exec(t, first, "alter table default_indexes add index iv(v), default collate=utf32_bin")
 			require.Equal(t, 1, count(t, "select count(*) from default_indexes force index(iv) where v='a'"))
 		})
 
 		t.Run("conversion rebuilds secondary indexes", func(t *testing.T) {
-			exec(t, first, "create table index_conversion(id int primary key, v varchar(8), index iv(v)) collate utf8mb4_bin")
+			exec(t, first, "create table index_conversion(id int primary key, v varchar(8), index iv(v)) collate utf32_bin")
 			exec(t, first, "insert into index_conversion values (1,'ß'),(2,'ss')")
 			exec(t, first, "alter table index_conversion convert to character set utf8mb4 collate utf8mb4_unicode_ci")
 			require.Equal(t, "utf8mb4_unicode_ci", collation(t, "index_conversion", "v"))
@@ -216,7 +230,7 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 			} {
 				t.Run(option, func(t *testing.T) {
 					table := fmt.Sprintf("combined_repertoire_%d", i)
-					exec(t, first, "create table "+table+"(v varchar(8)) collate utf8mb4_bin")
+					exec(t, first, "create table "+table+"(v varchar(8)) collate utf32_bin")
 					exec(t, first, "insert into "+table+" values ('😀')")
 					_, err := first.ExecContext(ctx, "alter table "+table+" "+option)
 					require.Error(t, err, "a narrower inherited domain must reject stored emoji before publication")
@@ -230,22 +244,22 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 				})
 			}
 			// DEFAULT alone changes inheritance, not the repertoire of old bytes.
-			exec(t, first, "create table combined_default_only(v varchar(8)) collate utf8mb4_bin")
+			exec(t, first, "create table combined_default_only(v varchar(8)) collate utf32_bin")
 			exec(t, first, "insert into combined_default_only values ('😀')")
 			exec(t, first, "alter table combined_default_only default collate=utf8_unicode_ci")
 			require.Equal(t, "utf8mb4_bin", collation(t, "combined_default_only", "v"))
 			require.Equal(t, 1, count(t, "select count(*) from combined_default_only where v='😀'"))
-			exec(t, first, "alter table combined_default_only modify v varchar(8) collate utf8mb4_bin")
+			exec(t, first, "alter table combined_default_only modify v varchar(8) collate utf32_bin")
 			require.Equal(t, 1, count(t, "select count(*) from combined_default_only where v='😀'"))
 			// Returning the final default to the stored domain is metadata-only,
 			// even when the old table default differs from its existing column.
 			for _, option := range []string{
-				"default collate=utf8mb4_bin, modify v varchar(8)",
-				"modify v varchar(8), default collate=utf8mb4_bin",
-				"default collate=utf8mb4_bin, change v v varchar(8)",
-				"change v v varchar(8), default collate=utf8mb4_bin",
-				"default collate=utf8mb4_bin, modify v varchar(8), algorithm=inplace",
-				"default collate=utf8mb4_bin, modify v varchar(8), algorithm=copy",
+				"default collate=utf32_bin, modify v varchar(8)",
+				"modify v varchar(8), default collate=utf32_bin",
+				"default collate=utf32_bin, change v v varchar(8)",
+				"change v v varchar(8), default collate=utf32_bin",
+				"default collate=utf32_bin, modify v varchar(8), algorithm=inplace",
+				"default collate=utf32_bin, modify v varchar(8), algorithm=copy",
 			} {
 				t.Run(option, func(t *testing.T) {
 					exec(t, first, "alter table combined_default_only default collate=utf8_unicode_ci")
@@ -258,7 +272,7 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 				})
 			}
 			// Compatible bytes are still admitted, with the new domain published.
-			exec(t, first, "create table combined_ascii(v varchar(8)) collate utf8mb4_bin")
+			exec(t, first, "create table combined_ascii(v varchar(8)) collate utf32_bin")
 			exec(t, first, "insert into combined_ascii values ('ascii')")
 			exec(t, first, "alter table combined_ascii change v v varchar(8), default collate=utf8_unicode_ci")
 			require.Equal(t, "utf8_unicode_ci", collation(t, "combined_ascii", "v"))
@@ -266,13 +280,13 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 		})
 
 		t.Run("failed repertoire and unique conversion preserve source", func(t *testing.T) {
-			exec(t, first, "create table repertoire_conversion(v varchar(8)) collate utf8mb4_bin")
+			exec(t, first, "create table repertoire_conversion(v varchar(8)) collate utf32_bin")
 			exec(t, first, "insert into repertoire_conversion values ('😀')")
 			_, err := first.ExecContext(ctx, "alter table repertoire_conversion convert to character set utf8 collate utf8_unicode_ci")
 			require.Error(t, err)
 			require.Equal(t, "utf8mb4_bin", collation(t, "repertoire_conversion", "v"))
 			require.Equal(t, 1, count(t, "select count(*) from repertoire_conversion"))
-			exec(t, first, "create table unique_conversion(v varchar(8) unique) collate utf8mb4_bin")
+			exec(t, first, "create table unique_conversion(v varchar(8) unique) collate utf32_bin")
 			exec(t, first, "insert into unique_conversion values ('ß'),('ss')")
 			_, err = first.ExecContext(ctx, "alter table unique_conversion convert to character set utf8mb4 collate utf8mb4_unicode_ci")
 			require.Error(t, err)
@@ -281,7 +295,7 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 		})
 
 		t.Run("binary conversion and length failure", func(t *testing.T) {
-			exec(t, first, "create table binary_conversion(v varchar(1)) collate utf8mb4_bin")
+			exec(t, first, "create table binary_conversion(v varchar(1)) collate utf32_bin")
 			exec(t, first, "insert into binary_conversion values ('😀')")
 			_, err := first.ExecContext(ctx, "alter table binary_conversion convert to character set binary")
 			require.Error(t, err)
@@ -299,14 +313,14 @@ func TestDatabaseCharsetInheritanceContract(t *testing.T) {
 		})
 
 		t.Run("binary COPY preserves an explicit cast inside a generated expression", func(t *testing.T) {
-			exec(t, first, "create table explicit_binary(v varchar(4),g binary(2) generated always as (cast(v as binary(2))) stored) collate=utf8mb4_bin")
+			exec(t, first, "create table explicit_binary(v varchar(4),g binary(2) generated always as (cast(v as binary(2))) stored) collate=utf32_bin")
 			exec(t, first, "insert into explicit_binary(v) values ('🧪')")
 			exec(t, first, "alter table explicit_binary convert to character set binary")
 			require.Equal(t, 1, count(t, "select count(*) from explicit_binary where hex(v)='F09FA7AA' and hex(g)='F09F'"))
 		})
 
 		t.Run("binary conversion validates generated target values", func(t *testing.T) {
-			exec(t, first, "create table binary_generated(v varchar(4), g varchar(3) generated always as (concat(v,'x')) stored) collate=utf8mb4_bin")
+			exec(t, first, "create table binary_generated(v varchar(4), g varchar(3) generated always as (concat(v,'x')) stored) collate=utf32_bin")
 			exec(t, first, "insert into binary_generated(v) values ('🧪')")
 			_, err := first.ExecContext(ctx, "alter table binary_generated convert to character set binary")
 			require.Error(t, err)

@@ -45,24 +45,32 @@ func TestCharsetConversionPreservesExpressionSemantics(t *testing.T) {
 		}
 		exec("create database conversion_expressions")
 		exec("use conversion_expressions")
+		_, err = conn.ExecContext(ctx, "create table rejected_native(v varchar(8),g varchar(64) generated always as (concat(v collate utf8mb4_bin='a',1/3)) stored) collate utf32_bin")
+		require.ErrorContains(t, err, "native PAD collation persistence is disabled")
+		var rejected int
+		require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where account_id=0 and reldatabase='conversion_expressions' and relname='rejected_native'").Scan(&rejected))
+		require.Zero(t, rejected)
+		// Keep the historical raw arithmetic fixture through its accepted alias.
+		// The UCA case also distinguishes an authored COLLATE from the legacy target.
 		for _, tc := range []struct {
 			name, alter, collation string
 			precision              int
 			expression, input      string
 		}{
-			{"unchanged_session", "convert to character set utf8mb4 collate utf8mb4_bin", "utf8mb4_bin", 10, "a/b", "1"},
+			{"unchanged_session", "convert to character set utf8mb4 collate utf32_bin", "utf8mb4_bin", 10, "a/b", "1"},
 			{"ordinary_copy", "add column extra int, algorithm=copy", "utf8mb4_bin", 0, "a/b", "1"},
-			{"same_domain", "convert to character set utf8mb4 collate utf8mb4_bin", "utf8mb4_bin", 0, "a/b", "1"},
-			{"changed_domain", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "a/b", "1"},
-			{"dependent_same_domain", "convert to character set utf8mb4 collate utf8mb4_bin", "utf8mb4_bin", 0, "concat(v,a/b)", "1"},
-			{"dependent_changed_domain", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "concat(v,a/b)", "1"},
-			{"dependent_authored_cast", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "concat(v,cast(a/b as char(32)))", "1"},
-			{"dependent_numeric_result", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "cast(v as decimal(10,2))/b", "1"},
-			{"authored_collate", "convert to character set utf8mb4 collate utf8mb4_general_ci", "utf8mb4_general_ci", 0, "concat(v collate utf8mb4_bin='a',a/b)", "A"},
+			{"same_domain", "convert to character set utf8mb4 collate utf32_bin", "utf8mb4_bin", 0, "a/b", "1"},
+			{"changed_domain", "convert to character set utf8mb4 collate utf8mb4_0900_ai_ci", "utf8mb4_general_ci", 0, "a/b", "1"},
+			{"dependent_same_domain", "convert to character set utf8mb4 collate utf32_bin", "utf8mb4_bin", 0, "concat(v,a/b)", "1"},
+			{"dependent_changed_domain", "convert to character set utf8mb4 collate utf8mb4_0900_ai_ci", "utf8mb4_general_ci", 0, "concat(v,a/b)", "1"},
+			{"dependent_authored_cast", "convert to character set utf8mb4 collate utf8mb4_0900_ai_ci", "utf8mb4_general_ci", 0, "concat(v,cast(a/b as char(32)))", "1"},
+			{"dependent_numeric_result", "convert to character set utf8mb4 collate utf8mb4_0900_ai_ci", "utf8mb4_general_ci", 0, "cast(v as decimal(10,2))/b", "1"},
+			{"authored_collate", "convert to character set utf8mb4 collate utf8mb4_0900_ai_ci", "utf8mb4_general_ci", 0, "concat(v collate utf8mb4_0900_ai_ci='a',a/b)", "A"},
+			{"authored_uca_collate", "convert to character set utf8mb4 collate utf8mb4_0900_ai_ci", "utf8mb4_general_ci", 0, "concat(v collate utf8mb4_unicode_ci='ss',a/b)", "ß"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec("set div_precision_increment=10")
-				exec("create table " + tc.name + "(v varchar(8), a decimal(10,2), b decimal(10,2), g varchar(64) generated always as(" + tc.expression + ") stored) collate utf8mb4_bin")
+				exec("create table " + tc.name + "(v varchar(8), a decimal(10,2), b decimal(10,2), g varchar(64) generated always as(" + tc.expression + ") stored) collate utf32_bin")
 				exec(fmt.Sprintf("insert into %s(v,a,b) values('%s',1,3)", tc.name, tc.input))
 				read := func() string {
 					t.Helper()
@@ -76,6 +84,8 @@ func TestCharsetConversionPreservesExpressionSemantics(t *testing.T) {
 					expected = "1" + expected
 				} else if tc.name == "authored_collate" {
 					expected = "0" + expected
+				} else if tc.name == "authored_uca_collate" {
+					expected = "1" + expected
 				}
 				require.Equal(t, expected, before)
 				exec(fmt.Sprintf("set div_precision_increment=%d", tc.precision))

@@ -17,6 +17,7 @@ package sqlintegration
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -32,7 +33,8 @@ import (
 // transaction, rollback and result owners.
 type tableCollationReconcileExecutor struct {
 	executor.SQLExecutor
-	drops int
+	drops         int
+	failAfterDrop bool
 }
 
 type tableCollationReconcileTxn struct {
@@ -47,6 +49,9 @@ func (e *tableCollationReconcileExecutor) ExecTxn(ctx context.Context, body func
 }
 
 func (e *tableCollationReconcileTxn) Exec(sql string, opts executor.StatementOption) (executor.Result, error) {
+	if e.owner.failAfterDrop && e.owner.drops > 0 {
+		return executor.Result{}, errors.New("injected failure after TABLES DROP")
+	}
 	result, err := e.TxnExecutor.Exec(sql, opts)
 	if err == nil && sql == "DROP VIEW IF EXISTS information_schema.TABLES" {
 		e.owner.drops++
@@ -130,11 +135,19 @@ func TestTableCollationViewProtocolSQL(t *testing.T) {
 		require.Zero(t, published)
 		err = bootstrap.InitSystemViews(ctx, reconcile)
 		require.ErrorContains(t, err, "protocol version 118")
-		require.Equal(t, 1, reconcile.drops, "the real DROP succeeded before CREATE admission failed")
-		require.Equal(t, before, viewID(), "failed derived publication must roll back the preceding DROP")
+		require.Zero(t, reconcile.drops, "source admission must reject before dropping the protected View")
+		require.Equal(t, before, viewID(), "preflight rejection must preserve the published View")
 		_, err = conn.ExecContext(ctx, "select c from admitted_function where 1=1")
 		require.ErrorContains(t, err, "protocol version 118", "persisted readers must reapply the capability floor")
-		exec(rpc(118))
+		exec(rpc(originalVersion))
+		// Keep the distinct transaction-rollback oracle: an admitted source can
+		// still fail after a real DROP, and that DROP must be rolled back.
+		reconcile.failAfterDrop = true
+		err = bootstrap.InitSystemViews(ctx, reconcile)
+		require.ErrorContains(t, err, "injected failure after TABLES DROP")
+		require.Equal(t, 1, reconcile.drops)
+		require.Equal(t, before, viewID(), "failed CREATE must roll back the preceding DROP")
+		reconcile.failAfterDrop = false
 		require.NoError(t, bootstrap.InitSystemViews(ctx, reconcile), "reconcile after a rejected initialization")
 		require.Equal(t, 2, reconcile.drops)
 		exec("execute c03_persisted_view")
