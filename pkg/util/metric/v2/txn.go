@@ -166,17 +166,13 @@ var (
 	// TxnAObjectDedupCounter records object-list decisions made by
 	// incremental dedup. max_commit_unavailable means the append history is
 	// not sealed/finalized yet, so the object must be read.
-	txnAObjectDedupCounter = prometheus.NewCounterVec(
+	TxnAObjectDedupCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "aobject_dedup_total",
 			Help:      "Total number of appendable objects considered by incremental dedup.",
-		}, []string{"result"})
-	TxnAObjectDedupCandidateCounter            = txnAObjectDedupCounter.WithLabelValues("candidate")
-	TxnAObjectDedupScannedCounter              = txnAObjectDedupCounter.WithLabelValues("scanned")
-	TxnAObjectDedupMaxCommitSkippedCounter     = txnAObjectDedupCounter.WithLabelValues("max_commit_skipped")
-	TxnAObjectDedupMaxCommitUnavailableCounter = txnAObjectDedupCounter.WithLabelValues("max_commit_unavailable")
+		}, []string{"phase", "result"})
 
 	// TxnAObjectMaxCommitStateGauge is the current number of appendable
 	// objects in each max-commit state, split by table and data/tombstone.
@@ -205,17 +201,17 @@ var (
 	txnAObjectMetricCounts = make(map[uint64][2][3]int)
 	txnAObjectMetricTables = make(map[uint64]struct{})
 
-	// TxnTNPrePrepareObjectCounter counts only the object-list work done by
-	// incremental PrePrepare dedup. The group label identifies the independent
-	// object-list B-tree; result distinguishes traversal from filtering and the
-	// actual GetDuplicatedRows call.
+	// TxnTNPrePrepareObjectCounter counts object-list work done by incremental
+	// dedup. The bounded phase label separates Freeze from queued PrePrepare;
+	// group identifies the independent object-list B-tree; result distinguishes
+	// traversal, filtering, and the actual GetDuplicatedRows call.
 	TxnTNPrePrepareObjectCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "tn_preprepare_object_total",
-			Help:      "Object-list entries considered by TN incremental PrePrepare dedup.",
-		}, []string{"type", "group", "result"})
+			Help:      "Object-list entries considered by TN incremental dedup, split by phase.",
+		}, []string{"phase", "type", "group", "result"})
 
 	// TxnTNPrePrepareObjectScanCounter splits the object-list scan by object
 	// kind without a table-id label. Table IDs are unbounded over the life of
@@ -225,8 +221,8 @@ var (
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "tn_preprepare_object_scan_total",
-			Help:      "Objects reached by TN PrePrepare dedup, split by object kind.",
-		}, []string{"type", "object_kind", "drop", "group", "result"})
+			Help:      "Objects reached by TN incremental dedup, split by phase and object kind.",
+		}, []string{"phase", "type", "object_kind", "drop", "group", "result"})
 
 	// TxnTNPrePrepareObjectBookmarkCounter records whether the appendable-create
 	// group could use its prefix max-commit bookmark and how many entries that
@@ -237,8 +233,8 @@ var (
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "tn_preprepare_object_bookmark_total",
-			Help:      "Bookmark decisions and prefix objects skipped by TN incremental PrePrepare dedup.",
-		}, []string{"type", "group", "result"})
+			Help:      "Bookmark decisions and prefix objects skipped by TN incremental dedup, split by phase.",
+		}, []string{"phase", "type", "group", "result"})
 )
 
 // UpdateTxnAObjectMaxCommitState publishes one table/object-list snapshot.
@@ -358,6 +354,17 @@ var (
 	TxnTNApplyQueueWaitDurationHistogram  = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("apply_queue_wait")
 	TxnTNWaitWalAndTailDurationHistogram  = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("wait_wal_and_tail")
 	TxnTNApplyCommitDurationHistogram     = TxnTNCommitQueueStageDurationHistogram.WithLabelValues("apply_commit")
+
+	// Freeze runs before the serialized pre-WAL queue; measure the entire
+	// transaction-store phase separately from the per-table dedup histogram.
+	TxnTNFreezeDurationHistogram = prometheus.NewHistogram(
+		prometheus.HistogramOpts{
+			Namespace: "mo",
+			Subsystem: "txn",
+			Name:      "tn_freeze_duration_seconds",
+			Help:      "Duration of the TN transaction-store Freeze phase before queue admission.",
+			Buckets:   getDurationBuckets(),
+		})
 
 	TxnTNCommitQueueSizeGauge = prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{
@@ -644,21 +651,21 @@ var (
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "tn_preprepare_deduplicate_step_duration_seconds",
-			Help: "Bucketed histogram of individual TN PrePrepare deduplication steps. " +
+			Help: "Bucketed histogram of individual TN incremental deduplication steps, split by phase. " +
 				"Object-list steps include object_list_scan (total), object_list_iterator " +
 				"(iterator residual), object_entry_filter, object_max_commit_lookup, and " +
 				"object_operation.",
 			Buckets: getDurationBuckets(),
-		}, []string{"type", "step"})
+		}, []string{"phase", "type", "step"})
 
 	TxnTNPrePrepareObjectStepDurationHistogram = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "tn_preprepare_object_step_duration_seconds",
-			Help:      "Bucketed histogram of TN PrePrepare ObjectList steps by object-list group.",
+			Help:      "Bucketed histogram of TN incremental ObjectList steps by phase and object-list group.",
 			Buckets:   getDurationBuckets(),
-		}, []string{"type", "group", "step"})
+		}, []string{"phase", "type", "group", "step"})
 
 	TxnTNLogServiceAppendDurationHistogram = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
