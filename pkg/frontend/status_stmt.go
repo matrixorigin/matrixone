@@ -114,7 +114,17 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 		if ep.needExportToFile() {
-			defer func() { err = ep.finish(err) }()
+			defer func() {
+				err = ep.finish(err)
+				if ep.auditEnabled && ses.tStmt != nil {
+					ses.tStmt.UpdateOutfileReceipt(
+						outfileFormat(ep.userConfig),
+						ep.auditBytesWritten,
+						ep.auditRowsWritten,
+						err == nil,
+					)
+				}
+			}()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 			if err != nil {
 				ses.Error(execCtx.reqCtx,

@@ -1477,6 +1477,7 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 	if limit == 0 || limit < -1 {
 		return ""
 	}
+	preparedSQL := redactStatementTextForLogging(prepared.PrepareStmt, strings.TrimSpace(prepared.Sql))
 	var bb strings.Builder
 	appendPart := func(part string) bool {
 		if limit > 0 && len(part) > limit-bb.Len() {
@@ -1491,7 +1492,7 @@ func makeExecuteSql(ctx context.Context, ses *Session, stmt tree.Statement, binE
 		return true
 	}
 	finish := func() string { return commonutil.Abbreviate(bb.String(), limit) }
-	if !appendPart(envStmt) || !appendPart(" // ") || !appendPart(strings.TrimSpace(prepared.Sql)) || !appendPart(" ; ") {
+	if !appendPart(envStmt) || !appendPart(" // ") || !appendPart(preparedSQL) || !appendPart(" ; ") {
 		return finish()
 	}
 	if len(variables) != 0 {

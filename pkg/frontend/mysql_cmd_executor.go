@@ -344,6 +344,9 @@ func redactStatementTextForLogging(statement tree.Statement, text string) string
 	if diagnostic := sqlmongodb.RedactSQLForDiagnostics(text); diagnostic != text {
 		return diagnostic
 	}
+	if diagnostic := redactOutfileStatementText(statement, text); diagnostic != text {
+		return diagnostic
+	}
 
 	switch stmt := statement.(type) {
 	case *tree.CreateIcebergCatalog, *tree.AlterIcebergCatalog,
@@ -6623,6 +6626,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 		execCtx.reqCtx, err2 = RecordStatement(execCtx.reqCtx, ses, proc, cw, beginInstant, currentSQLRecord, sqlType, singleStatement)
 		if err2 != nil {
 			return err2
+		}
+		if receipt, ok := makeOutfileReceipt(diagnosticStmt); ok && ses.tStmt != nil {
+			ses.tStmt.SetOutfileReceipt(*receipt)
 		}
 		// Commit only after the current statement has passed local admission and
 		// has a current statement identity. Authorization and plan construction

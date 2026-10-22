@@ -2069,7 +2069,7 @@ func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 	dir := t.TempDir()
 	ec := &ExportConfig{proc: sysFileAccessTestProcess(), ctx: context.Background(), mrs: mrs, userConfig: &tree.ExportParam{
 		FilePath: filepath.Join(dir, "out_%d.parquet"), ExportFormat: "parquet", SplitSize: 8 << 10,
-	}}
+	}, auditEnabled: true}
 	execCtx := &ExecCtx{reqCtx: ec.ctx, ses: &backSession{feSessionImpl: feSessionImpl{pool: mp}}}
 	require.NoError(t, ec.Write(execCtx, nil, bat))
 	require.NoError(t, finalizeParquetExport(ec))
@@ -2078,19 +2078,24 @@ func TestExportParquetSplitSingleBatchPreservesRows(t *testing.T) {
 	require.NoError(t, err)
 	require.Greater(t, len(files), 1)
 	var got []string
+	var actualBytes, actualRows uint64
 	for _, name := range files {
 		data, err := os.ReadFile(name)
 		require.NoError(t, err)
+		actualBytes += uint64(len(data))
 		rows, err := parquet.Read[struct {
 			Payload string `parquet:"payload,optional"`
 		}](bytes.NewReader(data), int64(len(data)))
 		require.NoError(t, err)
 		require.NotEmpty(t, rows) // No trailing empty split file.
+		actualRows += uint64(len(rows))
 		for _, row := range rows {
 			got = append(got, row.Payload)
 		}
 	}
 	require.ElementsMatch(t, values, got)
+	require.Equal(t, actualBytes, ec.auditBytesWritten)
+	require.Equal(t, actualRows, ec.auditRowsWritten)
 }
 
 func Test_finalizeParquetExportAfterSplitDoesNotCreateTrailingFile(t *testing.T) {

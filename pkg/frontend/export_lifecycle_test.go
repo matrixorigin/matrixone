@@ -190,6 +190,7 @@ func TestExportPipeCancellation(t *testing.T) {
 				ctx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				ep, _, _, _ := exportLifecycleFixture(t, ctx, "csv")
+				ep.auditEnabled = true
 				defer ep.Close()
 				ep.service = ses.GetService()
 				ep.userConfig.FilePath = "SHARED:/cancel.csv"
@@ -229,6 +230,10 @@ func TestExportPipeCancellation(t *testing.T) {
 					} else if phase == "reader" {
 						synctest.Wait()
 						cancel()
+					} else if phase == "late-close" {
+						// Model progress accepted by the pipe before the sink reports a
+						// close error. It must remain provisional, not exact output.
+						ep.CurFileSize, ep.Rows = 17, 1
 					}
 				}
 				err := ep.finish(nil)
@@ -243,6 +248,8 @@ func TestExportPipeCancellation(t *testing.T) {
 				require.Nil(t, ep.AsyncWriter)
 				require.Nil(t, ep.AsyncGroup)
 				require.Nil(t, ep.stopFileCancel)
+				require.Zero(t, ep.auditBytesWritten)
+				require.Zero(t, ep.auditRowsWritten)
 			})
 		})
 	}
@@ -252,18 +259,25 @@ func TestExportSplitAndEmptyFileCleanup(t *testing.T) {
 	for _, empty := range []bool{false, true} {
 		t.Run(map[bool]string{false: "split", true: "empty"}[empty], func(t *testing.T) {
 			dir := t.TempDir()
-			ep := &ExportConfig{ctx: context.Background(), proc: sysFileAccessTestProcess(), userConfig: newDiffCSVUserConfig(), mrs: &MysqlResultSet{}}
+			ep := &ExportConfig{ctx: context.Background(), proc: sysFileAccessTestProcess(), userConfig: newDiffCSVUserConfig(), mrs: &MysqlResultSet{}, auditEnabled: true}
 			ep.userConfig.FilePath = filepath.Join(dir, "out.csv")
 			ep.userConfig.MaxFileSize = 3
 			ep.init()
 			defer ep.Close()
 			require.NoError(t, openNewFile(ep.ctx, ep, ep.mrs))
 			if !empty {
-				require.NoError(t, writeToCSVFile(ep, []byte("a\n")))
-				require.NoError(t, writeToCSVFile(ep, []byte("b\n")))
+				require.NoError(t, writeExportBatchToFile(ep, &BatchByte{writeByte: []byte("a\n"), rowEnds: []int{2}, rowCount: 1}))
+				require.NoError(t, writeExportBatchToFile(ep, &BatchByte{writeByte: []byte("b\n"), rowEnds: []int{2}, rowCount: 1}))
 			}
 			require.NoError(t, exportAllDataFromBatches(ep))
 			require.NoError(t, ep.finish(nil))
+			if empty {
+				require.Zero(t, ep.auditBytesWritten)
+				require.Zero(t, ep.auditRowsWritten)
+			} else {
+				require.EqualValues(t, 4, ep.auditBytesWritten)
+				require.EqualValues(t, 2, ep.auditRowsWritten)
+			}
 			require.Nil(t, ep.FileService)
 			require.Nil(t, ep.AsyncGroup)
 			content, err := os.ReadFile(filepath.Join(dir, "out.csv"))
@@ -276,6 +290,36 @@ func TestExportSplitAndEmptyFileCleanup(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, "b\n", string(content))
 			}
+		})
+	}
+}
+
+func TestExportAuditCountsCSVHeaderAndJSONLines(t *testing.T) {
+	for _, tc := range []struct {
+		name, format, payload, want string
+		rows                        int
+		header                      bool
+		rowEnds                     []int
+	}{
+		{name: "csv header", format: "csv", payload: "42\n", want: "value\n42\n", rows: 1, header: true, rowEnds: []int{3}},
+		{name: "jsonline", format: "jsonline", payload: "{\"value\":1}\n{\"value\":2}\n", want: "{\"value\":1}\n{\"value\":2}\n", rows: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep, _, _, _ := exportLifecycleFixture(t, context.Background(), tc.format)
+			ep.auditEnabled = true
+			ep.userConfig.FilePath = filepath.Join(t.TempDir(), "audit.out")
+			ep.userConfig.Header = tc.header
+			defer ep.Close()
+			require.NoError(t, openNewFile(ep.ctx, ep, ep.mrs))
+			require.NoError(t, writeExportBatchToFile(ep, &BatchByte{
+				writeByte: []byte(tc.payload), rowCount: tc.rows, rowEnds: tc.rowEnds,
+			}))
+			require.NoError(t, ep.finish(nil))
+			actual, err := os.ReadFile(ep.userConfig.FilePath)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, string(actual))
+			require.Equal(t, uint64(len(actual)), ep.auditBytesWritten)
+			require.Equal(t, uint64(tc.rows), ep.auditRowsWritten)
 		})
 	}
 }
