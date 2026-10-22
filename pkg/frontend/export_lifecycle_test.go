@@ -413,6 +413,7 @@ func TestExportJSONLineConversionFailureCompletesPipeWrite(t *testing.T) {
 	column.SetName("value")
 	column.SetColumnType(defines.MYSQL_TYPE_VAR_STRING)
 	source := batch.NewOffHeapWithSize(1)
+	defer source.Clean(ses.pool)
 	source.Vecs[0] = vector.NewOffHeapVecWithType(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendBytes(source.Vecs[0], []byte{'x', 0xff, 'y'}, false, ses.pool))
 	source.SetRowCount(1)
