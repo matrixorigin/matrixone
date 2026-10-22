@@ -1,6 +1,6 @@
 # S4：View 元数据消费者边界与迁移说明
 
-本文记录 S1/S2 已批准契约在 S4 中的接线，不构成默认上线批准。设计依据为 [S1](CLAUDE_20260922-view-metadata-on-demand.md)、[S1 批准记录](CLAUDE_20260928-view-metadata-s1-review.md)及 [S2 v2.1 修订](CLAUDE_20261005-view-s2-scope-revision.md)。
+本文记录 S1/S2 已批准契约在 S4 中的接线，不构成默认上线批准。设计依据为 [S1](CLAUDE_20260922-view-metadata-on-demand.md)、[S1 批准记录](CLAUDE_20260922-view-metadata-on-demand.md#s1-批准与-e1-勘误)及 [S2 v2.1 修订](CLAUDE_20261005-view-s2-scope-revision.md)。
 
 ## 激活及所有权
 

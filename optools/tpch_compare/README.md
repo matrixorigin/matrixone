@@ -169,3 +169,65 @@ All required load replicas' arm, request and worker receipts must also pass
 identity, execution-status and resource checks before any report output is
 created. Keep those receipts when archiving database images, executables or query
 captures; reporting does not reopen the archived data.
+
+## Profiling
+
+```sh
+systemd-run --user --scope --unit=tpch-compare-profile-pilot -p Delegate=yes \
+  ./tpch-compare profile --config /nvme/tpch/campaign.json --id pilot --pilot
+systemd-run --user --scope --unit=tpch-compare-profiles -p Delegate=yes \
+  ./tpch-compare profile --config /nvme/tpch/campaign.json --id full \
+  --baseline /nvme/tpch/comparison/runs/baseline
+```
+
+The pilot uses short SF1 Q1/Q6 windows. Full profiling collects three native
+operator replays per query/scale and repeated-query CPU windows at SF10/SF100.
+Each diagnostic and unprofiled control first executes and discards an unmeasured
+target warm run, before collectors and the resource window start. Cold execution
+is excluded from captured repetitions. These target-warm diagnostic windows
+remain separate from the scored mixed-suite comparison.
+
+Unprofiled/profiled/unprofiled controls expose perturbation. Allocation and wait
+lenses run separately for the largest gaps and representative scan/join/aggregate
+cases; selected SF10 cases also receive one-core controls. Baseline selection
+uses the same configuration, request, worker, query and resource evidence checks
+as timing reports. Incomplete cleanup stops profiling after preserving the failed
+attempt; application and collector processes must join before the next arm.
+An unjoined collector retains its private capture directory, recorded alongside
+the collector PIDs, until its ownership can be resolved.
+
+MO supplies a JSON physical plan and separate text EXPLAIN ANALYZE, because its
+SQL interface rejects ANALYZE with JSON. DuckDB captures detailed JSON for each
+actual statement, including separate Q15 create/query/drop files. Raw native
+fields and metric meanings stay available alongside semantic work families.
+Native operator timers are not whole-application OS CPU or a critical path.
+
+The common CPU lens uses user-mode perf sampling and small PMU groups. Go
+allocation/wait snapshots explain Go activity; DuckDB's Go-client heap is not
+its C++ engine heap. Native allocation bytes remain unavailable without a
+validated collector, and CPU samples do not count copied bytes.
+
+Capture storage, individual artifacts and campaign disk use are bounded. CPU
+postprocessing has a one-minute overall budget: full callgraph conversion gets
+up to 30 seconds, leaf-only recovery up to 15 seconds, and optional rendering up
+to 5 seconds within the remaining budget. On full conversion failure, raw data
+and partial full output remain available; `perf script -G` can recover weighted
+leaf attribution. `stacks.json` explicitly marks missing callgraph coverage, and
+the attempt remains partial. Caller cancellation stops recovery and terminates
+the owned symbolizer process group.
+
+Folded display labels percent-escape percent signs, semicolons and line
+separators. `stacks.json` retains exact raw symbols in exclusive-leaf keys and
+in its `raw_symbols` map from escaped display label to original symbol. Native
+plans, process roles, sample weights and artifact hashes support independent
+analysis. Set `TPCH_COMPARE_FLAMEGRAPH` to a pinned standard FlameGraph
+`flamegraph.pl` to export SVGs. A perf-capable host can explicitly run:
+
+```sh
+TPCH_COMPARE_PERF_INTEGRATION=1 go test -count=1 -run '^TestPerfCollectorIntegration$'
+```
+
+`python3 plot_report.py REPORT/queries.csv OUTPUT` exports comparison figures
+offline; it requires Matplotlib separately. Generated captures, databases and
+figures stay outside Git. Profiling does not compare query results or verify
+loaded data.
