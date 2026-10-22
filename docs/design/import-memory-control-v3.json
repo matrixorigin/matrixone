@@ -1,5 +1,5 @@
 {
-  "version": 5,
+  "version": 6,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
@@ -120,6 +120,16 @@
       "id": "D16",
       "choice": "Control streams use a separate backend pool and caller context during backend acquisition. Returned stream lifetime remains explicit and independent. Board cleanup occurs only after closed root plus final attached scope cleanup.",
       "rationale": "A control owner must not consume the last execution connection, and cancelling a scope does not prove it has stopped reading shared buffers."
+    },
+    {
+      "id": "D17",
+      "choice": "Probe process-instance UUID with admission capability. If a statement includes multiple CNs sharing one process coordinator, use whole-query legacy. Otherwise acquire in (process UUID,CN UUID) order and validate expected process UUID before every Open/Reserve.",
+      "rationale": "CN ordering is insufficient when distinct CN identities alias one process coordinator: one statement can self-wait, and two statements can introduce opposite physical-process edges through different CN aliases. An Open epoch check prevents a restart after capability discovery from changing the ordering identity."
+    },
+    {
+      "id": "D18",
+      "choice": "Use the early irregular-index source only for FAIL/ordinary LOAD. IGNORE maintenance consumes a final projection downstream of duplicate filtering, with or without regular indexes. UPDATE also consumes final images and alone emits old-index deletes.",
+      "rationale": "Public SQL showed ignored duplicate-PK text leaking into FT while the base row and BTREE remained correct after the UPDATE-only guard. The original mixed-index code accidentally restored the filtered source; retain correct IGNORE filtering without recreating the unnecessary ordinary-LOAD old-table join."
     }
   ],
   "alternatives": [
@@ -334,7 +344,10 @@
       "evidence": "TestInsertIrregularMaintenanceAction fails insert/ignore on the original source, passes ODKU; with action guard all three pass. Real SQL index correctness is required."
     },
     "control_terminal": "Control close marks closed/removes token/cancels scopes/closes root WS; shared MessageBoard cleanup waits until all attached scopes detach after operator cleanup. Repeated identical Commit is read-only after publication.",
-    "control_transport": "Dedicated optional ControlStreamClient uses a separate backend pool, owned/closed by the pipeline client; a control stream cannot occupy the last execution backend. Caller context controls only backend creation/acquisition; returned stream lifetime is independently closed. Existing disconnected server SessionCtx retires on the shared 10s morpc sweep."
+    "control_transport": "Dedicated optional ControlStreamClient uses a separate backend pool, owned/closed by the pipeline client; a control stream cannot occupy the last execution backend. Caller context controls only backend creation/acquisition; returned stream lifetime is independently closed. Existing disconnected server SessionCtx retires on the shared 10s morpc sweep.",
+    "expression_key_wire": "After eligibility is proved on the full AST, both join-key sides and non-equality predicate are protobuf-marshaled into manifest byte fields; receivers unmarshal without evaluating and derive the same expression capacity. Unknown function allocation contracts and non-NULL varlen literals retain whole-query legacy. Fixed results alone are not a scratch bound; only audited primitive kernels and serial/serial_full are supported.",
+    "distributed_unit": "All CNs Open before execution, then Commit the global minimum UnitBytes. Therefore each receiver frame is no larger than that receiver own admitted unit (or its already budgeted legal singleton); origin manifests set IncomingUnit=0. Capacity-expression overflow at a large target may shrink unit and retry; malformed descriptors do not.",
+    "process_alias": "common/runtime.ProcessInstanceID is generated once per process, not per service. GetProtocolVersionResponse optional field3 carries it. Missing process identity retains legacy. Same-process multi-CN is conservatively compatible through legacy; physical manifest merging is outside this fix."
   },
   "ownership_and_wait_graphs": [
     "CSV parser -> owned typed input batch -> downstream read-only view; source storage released/reused only after downstream consumption.",
@@ -349,7 +362,8 @@
     "persistence": "Only anonymous temporary spill framing may change; no persistent object/catalog format change.",
     "upgrade": "New queries use one process binary. No cross-version temporary FD sharing is introduced.",
     "scope": "Enable the new working-set admission only when the complete physical DAG has a controlled CSV/JSONLINE source. Generic SELECT/UPDATE/table scans lack this raw-row/typed-batch contract and retain the legacy path; already admitted remote tokens remain valid on a CN without a source.",
-    "capability_probe": "GetProtocolVersionResponse optional bool memory_admission=2; old peers omit it. Probe all CNs before Open; any false uses whole-query legacy, network errors fail normally. Legacy pipeline StopSending does not ACK and cannot be used for probing."
+    "capability_probe": "GetProtocolVersionResponse optional bool memory_admission=2; old peers omit it. Probe all CNs before Open; any false uses whole-query legacy, network errors fail normally. Legacy pipeline StopSending does not ACK and cannot be used for probing.",
+    "legacy_skew": "Without ImportMemory, every max-depth shuffle preserves the prior whole-bucket path. No new default 64MiB singleton limit is imposed on ordinary SELECT/UPDATE or unsupported function-key imports."
   },
   "validation": {
     "unit": [
@@ -414,9 +428,11 @@
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 5,
+    "revision": 6,
     "condition": "Implementation must satisfy recorded protocol and consumer tests; no implementation claim based solely on design.",
     "narrow_revision": "Worker proposes complete per-CN stage manifests and ordered all-CN prelock admission with statement control-stream ownership; root reviewed concrete two-origin/late-probe wait graphs and existing transport termination, accepts protocol with acknowledged END or forced exclusive backend close on failure.",
-    "key_contract_review": "2026-10-22 23:18 +08:00: join worker proposed shared recursive key contract and pre-evaluation whole-query legacy eligibility; root approved subject to complete intermediate old+new/result/packer capacity, overflow and NULL/const coverage, and fixed/serial/unknown compatibility UT. Root independently identified source scope and execution-backend wait graph; separate transport and source gate passed independent review."
+    "key_contract_review": "2026-10-22 23:18 +08:00: join worker proposed shared recursive key contract and pre-evaluation whole-query legacy eligibility; root approved subject to complete intermediate old+new/result/packer capacity, overflow and NULL/const coverage, and fixed/serial/unknown compatibility UT. Root independently identified source scope and execution-backend wait graph; separate transport and source gate passed independent review.",
+    "physical_identity_review": "2026-10-22 23:44 +08:00: Galileo demonstrated supported launch-multi-cn aliases a shared processMemoryCoordinator and creates self-wait. Root independently identified the two-query different-CN-alias P/Q inversion; approved process UUID ordering plus duplicate-process legacy gate and pre-reserve epoch verification, with explicit cancellation/ordering/restart tests.",
+    "ignore_source_review": "CSV worker traced the public SQL failure through early source and final projection; root approved action-by-index-layout DAG UT plus unchanged ignored-word/old-word/new-word public oracles before native import."
   }
 }
