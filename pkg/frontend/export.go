@@ -670,7 +670,7 @@ func constructByte(ctx context.Context, obj FeSession, bat *batch.Batch, index i
 					bat.Clean(mp)
 					return
 				}
-				value := addEscapeToString(util2.UnsafeStringToBytes(arrStr), closeby)
+				value := util2.UnsafeStringToBytes(arrStr)
 				formatOutputString(ep, value, symbol[j], closeby, true, buffer)
 			case types.T_array_bf16:
 				arrStr := types.BytesToArrayToString[types.BF16](vec.GetBytesAt(i))

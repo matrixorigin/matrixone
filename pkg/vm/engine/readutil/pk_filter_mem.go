@@ -215,6 +215,7 @@ func encodeMemSortKeySpecs(
 ) (op int, packed [][]byte, isVec bool, ok bool) {
 	var lbVal, ubVal any
 	if basePKFilter.Op != function.IN && basePKFilter.Op != function.PREFIX_IN {
+		// typeswitch:partial bf16/float16/float8/float4 are rejected as primary and cluster keys
 		switch basePKFilter.Oid {
 		case types.T_bool:
 			lbVal = types.DecodeBool(basePKFilter.LB)
