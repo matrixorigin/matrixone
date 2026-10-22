@@ -55,13 +55,30 @@ import (
 
 const (
 	TransferSinkerMemorySizeThreshold = common.Const1MBytes * 50
+	dedupMetricFreeze                 = "freeze"
+	dedupMetricPrePrepare             = "preprepare"
+	dedupMetricAppend                 = "append"
+	dedupMetricLookup                 = "lookup"
+	dedupMetricOther                  = "other"
 )
 
-func observePrePrepareDedupStep(isTombstone bool, step string, start time.Time) {
-	observePrePrepareDedupStepDuration(isTombstone, step, time.Since(start))
+// Keep metric phases bounded even if a future caller adds a transaction phase.
+func dedupMetricPhase(phase string) string {
+	switch phase {
+	case txnif.FreezePhase:
+		return dedupMetricFreeze
+	case txnif.PrePreparePhase:
+		return dedupMetricPrePrepare
+	default:
+		return dedupMetricOther
+	}
 }
 
-func observePrePrepareDedupStepDuration(isTombstone bool, step string, duration time.Duration) {
+func observePrePrepareDedupStep(phase string, isTombstone bool, step string, start time.Time) {
+	observePrePrepareDedupStepDuration(phase, isTombstone, step, time.Since(start))
+}
+
+func observePrePrepareDedupStepDuration(phase string, isTombstone bool, step string, duration time.Duration) {
 	if duration <= 0 {
 		return
 	}
@@ -69,7 +86,7 @@ func observePrePrepareDedupStepDuration(isTombstone bool, step string, duration 
 	if isTombstone {
 		typ = "tombstone"
 	}
-	v2.TxnTNPrePrepareDeduplicateStepDurationHistogram.WithLabelValues(typ, step).Observe(duration.Seconds())
+	v2.TxnTNPrePrepareDeduplicateStepDurationHistogram.WithLabelValues(phase, typ, step).Observe(duration.Seconds())
 }
 
 // debugSkipFreezePhaseTransfer is a test-only flag. When enabled,
@@ -1292,6 +1309,7 @@ func (tbl *txnTable) GetByFilter(
 			candidates,
 			types.TS{},
 			tbl.store.txn.GetStartTS(),
+			dedupMetricLookup,
 		)
 		if err != nil && !moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) {
 			return
@@ -1441,6 +1459,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, req *apipb.AlterTableReq) e
 
 // PrePrepareDedup performs deduplication during the shared pre-commit prepare phase.
 func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phase string, ts types.TS) (err error) {
+	metricPhase := dedupMetricPhase(phase)
 	baseTable := tbl.getBaseTable(isTombstone)
 	if baseTable == nil || baseTable.tableSpace == nil || !baseTable.schema.HasPK() || baseTable.schema.IsSecondaryIndexTable() {
 		return
@@ -1450,12 +1469,12 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 	if !dedupType.SkipSourcePersisted() {
 		stepStart := time.Now()
 		for _, stats := range baseTable.tableSpace.stats {
-			err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone)
+			err = tbl.DoPrecommitDedupByNode(ctx, stats, isTombstone, metricPhase)
 			if err != nil {
 				return
 			}
 		}
-		observePrePrepareDedupStep(isTombstone, "source_persisted", stepStart)
+		observePrePrepareDedupStep(metricPhase, isTombstone, "source_persisted", stepStart)
 	}
 
 	// DoPrecommitDedupByPK checks for data committed by other transactions
@@ -1476,7 +1495,7 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 	if err != nil {
 		return err
 	}
-	observePrePrepareDedupStep(isTombstone, "build_pk_vector", stepStart)
+	observePrePrepareDedupStep(metricPhase, isTombstone, "build_pk_vector", stepStart)
 	stepStart = time.Now()
 	if zm.Valid() {
 		zm.ResetMinMax()
@@ -1488,13 +1507,13 @@ func (tbl *txnTable) PrePrepareDedup(ctx context.Context, isTombstone bool, phas
 		pkVec.Close()
 		return err
 	}
-	observePrePrepareDedupStep(isTombstone, "build_pk_zonemap", stepStart)
+	observePrePrepareDedupStep(metricPhase, isTombstone, "build_pk_zonemap", stepStart)
 	stepStart = time.Now()
 	if err = tbl.DoPrecommitDedupByPK(pkVec, zm, isTombstone, phase, ts); err != nil {
 		pkVec.Close()
 		return err
 	}
-	observePrePrepareDedupStep(isTombstone, "pk_dedup", stepStart)
+	observePrePrepareDedupStep(metricPhase, isTombstone, "pk_dedup", stepStart)
 	pkVec.Close()
 	baseTable.dedupTS = ts
 	return
@@ -1520,7 +1539,7 @@ func (tbl *txnTable) DedupSnapByPK(
 	}
 	from, to := types.TS{}, tbl.store.txn.GetStartTS()
 	if !isTombstone && candidates.HasCandidate() {
-		err = tbl.findDeletesForCandidates(ctx, candidates, from, to)
+		err = tbl.findDeletesForCandidates(ctx, candidates, from, to, dedupMetricAppend)
 		if err != nil {
 			logutil.Errorf("getRowsByPK failed 2, %v", err)
 			return
@@ -1554,6 +1573,7 @@ func (tbl *txnTable) findDeletesForCandidates(
 	ctx context.Context,
 	candidates *duplicatedRowIDs,
 	from, to types.TS,
+	metricPhase string,
 ) error {
 	combined := tbl.store.rt.VectorPool.Small.GetVector(&objectio.RowidType)
 	defer combined.Close()
@@ -1585,7 +1605,7 @@ func (tbl *txnTable) findDeletesForCandidates(
 			}
 		}
 	}
-	err := tbl.findDeletes(ctx, combined, from, to)
+	err := tbl.findDeletes(ctx, combined, from, to, metricPhase)
 	// findDeletes may have completed filtering for earlier tombstones before
 	// returning a WW conflict from a later one. Preserve that partial result so
 	// callers that intentionally tolerate the conflict do not resurrect a stale
@@ -1605,6 +1625,7 @@ func (tbl *txnTable) findDeletes(
 	ctx context.Context,
 	rowIDs containers.Vector,
 	from, to types.TS,
+	metricPhase string,
 ) (err error) {
 	pkType := rowIDs.GetType()
 	keysZM := index.NewZM(pkType.Oid, pkType.Scale)
@@ -1635,7 +1656,7 @@ retryScan:
 		tbl.entry.WaitTombstoneObjectCommitted(to)
 		snapshot := tbl.entry.MakeTombstoneObjectSnapshot()
 		var scanStats incrementalObjectScanStats
-		scanStats, err = foreachIncrementalObjectWithStats(snapshot, true, from, to, tbl.entry.ID, func(obj *catalog.ObjectEntry) error {
+		scanStats, err = foreachIncrementalObjectWithStats(snapshot, true, from, to, tbl.entry.ID, metricPhase, func(obj *catalog.ObjectEntry) error {
 			objData := obj.GetObjectData()
 			if objData == nil {
 				panic(fmt.Sprintf("logic error, object %v", obj.StringWithLevel(3)))
@@ -1659,7 +1680,7 @@ retryScan:
 				common.WorkspaceAllocator,
 			)
 		})
-		observeIncrementalObjectScanStats(true, scanStats)
+		observeIncrementalObjectScanStats(metricPhase, true, scanStats)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrTxnWWConflict) &&
 				tbl.waitTombstoneRowsCommittedBefore(to, rowIDs, keysZM) {
@@ -1688,6 +1709,7 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 	phase string,
 	ts types.TS,
 ) (err error) {
+	metricPhase := dedupMetricPhase(phase)
 	base := tbl.getBaseTable(isTombstone)
 	moprobe.WithRegion(context.Background(), moprobe.TxnTableDoPrecommitDedupByPK, func() {
 		now := tbl.store.rt.Now()
@@ -1696,16 +1718,16 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 		}
 		var rowIDs containers.Vector
 		stepStart := time.Now()
-		rowIDs, err = base.incrementalGetRowsByPK(tbl.store.ctx, pks, base.dedupTS.Next(), ts, phase == txnif.PrePreparePhase)
-		observePrePrepareDedupStep(isTombstone, "incremental_get_rows", stepStart)
+		rowIDs, err = base.incrementalGetRowsByPK(tbl.store.ctx, pks, base.dedupTS.Next(), ts, metricPhase)
+		observePrePrepareDedupStep(metricPhase, isTombstone, "incremental_get_rows", stepStart)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
 			stepStart = time.Now()
-			err = tbl.findDeletes(tbl.store.ctx, rowIDs, base.dedupTS.Next(), now)
-			observePrePrepareDedupStep(isTombstone, "find_deletes", stepStart)
+			err = tbl.findDeletes(tbl.store.ctx, rowIDs, base.dedupTS.Next(), now, metricPhase)
+			observePrePrepareDedupStep(metricPhase, isTombstone, "find_deletes", stepStart)
 			if err != nil {
 				return
 			}
@@ -1762,12 +1784,12 @@ func (tbl *txnTable) DoPrecommitDedupByPK(
 				return
 			}
 		}
-		observePrePrepareDedupStep(isTombstone, "check_duplicate_rows", stepStart)
+		observePrePrepareDedupStep(metricPhase, isTombstone, "check_duplicate_rows", stepStart)
 	})
 	return
 }
 
-func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.ObjectStats, isTombstone bool) (err error) {
+func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.ObjectStats, isTombstone bool, metricPhase string) (err error) {
 	//loaded := false
 	//TODO::load ZM/BF index first, then load PK column if necessary.
 
@@ -1814,13 +1836,13 @@ func (tbl *txnTable) DoPrecommitDedupByNode(ctx context.Context, stats objectio.
 		if base.dedupTS.IsEmpty() {
 			base.dedupTS = tbl.store.txn.GetStartTS()
 		}
-		rowIDs, err = base.incrementalGetRowsByPK(ctx, pks, base.dedupTS.Next(), now, true)
+		rowIDs, err = base.incrementalGetRowsByPK(ctx, pks, base.dedupTS.Next(), now, metricPhase)
 		if err != nil {
 			return
 		}
 		defer rowIDs.Close()
 		if !isTombstone {
-			err = tbl.findDeletes(ctx, rowIDs, base.dedupTS, now)
+			err = tbl.findDeletes(ctx, rowIDs, base.dedupTS, now, metricPhase)
 		}
 		if err != nil {
 			return

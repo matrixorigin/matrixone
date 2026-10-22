@@ -822,6 +822,8 @@ func (store *txnStore) ApplyCommit() (err error) {
 }
 
 func (store *txnStore) Freeze(ctx context.Context) (err error) {
+	start := time.Now()
+	defer func() { v2.TxnTNFreezeDurationHistogram.Observe(time.Since(start).Seconds()) }()
 	for _, db := range store.dbs {
 		if db.NeedRollback() {
 			if err = db.PrepareRollback(); err != nil {

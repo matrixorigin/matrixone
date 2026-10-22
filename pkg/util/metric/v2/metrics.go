@@ -187,7 +187,7 @@ func initTxnMetrics() {
 	registry.MustRegister(TxnLockRPCQueueRejectCounter)
 	registry.MustRegister(txnPKChangeCheckCounter)
 	registry.MustRegister(txnPKMayBeChangedCounter)
-	registry.MustRegister(txnAObjectDedupCounter)
+	registry.MustRegister(TxnAObjectDedupCounter)
 	registry.MustRegister(TxnAObjectMaxCommitStateGauge)
 	registry.MustRegister(TxnAObjectMaxCommitTableTotalGauge)
 	registry.MustRegister(TxnTNPrePrepareObjectCounter)
@@ -196,6 +196,7 @@ func initTxnMetrics() {
 
 	registry.MustRegister(txnQueueSizeGauge)
 	registry.MustRegister(TxnTNCommitQueueStageDurationHistogram)
+	registry.MustRegister(TxnTNFreezeDurationHistogram)
 	registry.MustRegister(TxnTNCommitQueueSizeGauge)
 	registry.MustRegister(TxnDeadlockDetectorQueueDepthGauge)
 
