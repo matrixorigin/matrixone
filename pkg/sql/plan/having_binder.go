@@ -53,7 +53,7 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	astStr := windowExprAstKey(astExpr)
 
 	if !b.insideAgg {
-		if colPos, ok := lookupGroupByAst(b.ctx, astExpr, astStr); ok {
+		if colPos, ok := b.lookupGroupByExpr(astExpr, astStr); ok {
 			return &plan.Expr{
 				Typ: b.ctx.groupOutputType(colPos),
 				Expr: &plan.Expr_Col{
@@ -138,10 +138,48 @@ func (b *HavingBinder) resolvesAggregateAliases() bool {
 		(b.builder.mysqlFullGroupByCompat || b.builder.mysqlCompatible)
 }
 
+// Alias deferral leaves bare names intact until HAVING can choose between a
+// group and a projected alias. A FULL JOIN USING name represents COALESCE of
+// both inputs, including when it is part of a larger grouping expression.
+func (b *HavingBinder) lookupGroupByExpr(astExpr tree.Expr, astStr string) (int32, bool) {
+	if len(b.ctx.outerUsingCols) == 0 || len(b.ctx.groupByAst) == 0 || !b.resolvesAggregateAliases() {
+		return lookupGroupByAst(b.ctx, astExpr, astStr)
+	}
+	mergedAlias := false
+	walkGroupingSetOrderByExpr(astExpr, func(expr tree.Expr) bool {
+		if mergedAlias {
+			return false
+		}
+		switch node := expr.(type) {
+		case *tree.Subquery:
+			return false // A child query owns its own name resolution.
+		case *tree.FuncExpr:
+			name, _ := node.Func.FunctionReference.(*tree.UnresolvedName)
+			if node.WindowSpec != nil || name != nil && function.GetFunctionIsAggregateByName(strings.ToLower(name.ColName())) {
+				return false // Aggregate/window arguments already use source scope.
+			}
+		case *tree.UnresolvedName:
+			if !node.Star && node.NumParts == 1 && len(b.ctx.outerUsingCols[node.ColName()]) >= 2 {
+				_, mergedAlias = b.ctx.aliasMap[node.ColName()]
+			}
+		}
+		return true
+	})
+	if mergedAlias {
+		qualified, err := b.ctx.qualifyColumnNames(cloneTreeExpr(astExpr), NoAlias)
+		if err != nil {
+			return 0, false // Let ordinary alias/source binding report the error.
+		}
+		// Do not fall back to the bare key: it can identify just one join arm.
+		return lookupGroupByAst(b.ctx, qualified, windowExprAstKey(qualified))
+	}
+	return lookupGroupByAst(b.ctx, astExpr, astStr)
+}
+
 func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
 	aggregateQuery := b.ctx.aggregateQueryForFullGroupBy()
 	if !b.insideAgg && !b.bindingProjectedAlias && b.ctx != nil && !astExpr.Star &&
-		(b.resolvesAggregateAliases() || b.builder.mysqlFullGroupByCompat && !aggregateQuery) {
+		(depth == 0 && b.resolvesAggregateAliases() || b.builder.mysqlFullGroupByCompat && !aggregateQuery) {
 		var projected tree.Expr
 		var found, ambiguous bool
 		if astExpr.NumParts == 1 {

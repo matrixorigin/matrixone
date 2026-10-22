@@ -8,6 +8,7 @@ drop database if exists mysql_compat_only_full_group_by;
 create database mysql_compat_only_full_group_by;
 use mysql_compat_only_full_group_by;
 
+set @having_alias_saved_sql_mode = @@session.sql_mode;
 set session sql_mode = 'ONLY_FULL_GROUP_BY';
 
 create table t_sales(region varchar(10), product varchar(10), qty int);
@@ -164,5 +165,5 @@ from t_fd
 group by id
 order by id;
 
-set session sql_mode = '';
+set session sql_mode = @having_alias_saved_sql_mode;
 drop database mysql_compat_only_full_group_by;

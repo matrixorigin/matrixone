@@ -18,10 +18,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"github.com/matrixorigin/matrixone/pkg/embed"
-	"github.com/stretchr/testify/require"
 	"testing"
 	"time"
+
+	"github.com/matrixorigin/matrixone/pkg/embed"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHavingAliasCollision(t *testing.T) {
@@ -35,7 +36,9 @@ func TestHavingAliasCollision(t *testing.T) {
 		defer db.Close()
 		db.SetMaxOpenConns(1)
 		defer cleanupSQLIntegration(t, cn, "drop database if exists having_alias_collision")
-		for _, s := range []string{"create database having_alias_collision", "use having_alias_collision", "set session sql_mode='ONLY_FULL_GROUP_BY'", "create table g2(id int primary key,k int,v double,s varchar(20))", "insert into g2 values(1,NULL,10,'a'),(2,NULL,20,'b'),(3,1,30,NULL),(4,1,NULL,'c'),(5,2,40,'d'),(6,2,50,NULL)"} {
+		for _, s := range []string{"create database having_alias_collision", "use having_alias_collision", "set session sql_mode='ONLY_FULL_GROUP_BY'", "create table g2(id int primary key,k int,v double,s varchar(20))", "insert into g2 values(1,NULL,10,'a'),(2,NULL,20,'b'),(3,1,30,NULL),(4,1,NULL,'c'),(5,2,40,'d'),(6,2,50,NULL)",
+			"create table a(k int,v int)", "create table b(k int)",
+			"insert into a values(1,10)", "insert into b values(2)"} {
 			execSQLRequire(t, ctx, db, s)
 		}
 		for _, tc := range []struct {
@@ -58,6 +61,16 @@ func TestHavingAliasCollision(t *testing.T) {
 			{"aggregate-without-group", "select sum(v) as s from g2 having s=150", []string{"150"}},
 			{"empty-scalar-aggregate", "select sum(v) as s from g2 where false having s is null", []string{"NULL"}},
 			{"all-null-group", "select k,sum(v) as s from g2 where k=1 and v is null group by k having s is null", []string{"1:NULL"}},
+			{"correlated-group-source", "select sum(v) as k from g2 group by k having exists(select 1 where k=1)", []string{"30"}},
+			{"correlated-qualified-control", "select sum(v) as k from g2 group by k having exists(select 1 where g2.k=1)", []string{"30"}},
+			{"correlated-direct-output", "select k from g2 group by k having exists(select 1 where k=1)", []string{"1"}},
+			{"local-subquery-shadows-group", "select sum(v) as k from g2 group by k having exists(select 1 from b where k=2)", []string{"30", "30", "90"}},
+			{"using-group-left", "select sum(a.v) as k from a full outer join b using(k) group by k having k=1", []string{"10"}},
+			{"using-group-right", "select sum(a.v) as k from a full outer join b using(k) group by k having k=2", []string{"NULL"}},
+			{"using-group-explicit-control", "select sum(a.v) as k from a full outer join b using(k) group by k having coalesce(a.k,b.k)=1", []string{"10"}},
+			{"using-compound-group-left", "select sum(a.v) as k from a full outer join b using(k) group by k+1 having k+1=2", []string{"10"}},
+			{"using-compound-group-right", "select sum(a.v) as k from a full outer join b using(k) group by k+1 having k+1=3", []string{"NULL"}},
+			{"using-chosen-arm-is-not-merged-group", "select sum(a.v) as k from a full outer join b using(k) group by a.k having k=10", []string{"10"}},
 			{"subquery-source-scope", "select k,sum(v) as s from g2 group by k having s=30 and exists(select 1 from g2 z where s='a')", []string{"NULL:30", "1:30"}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
