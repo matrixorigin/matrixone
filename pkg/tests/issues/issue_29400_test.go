@@ -1257,7 +1257,10 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 			_, _ = fault.RemoveFaultPoint(context.Background(), probe)
 		}
 		defer release()
-		dropCtx, dropCancel := context.WithTimeout(ctx, 30*time.Second)
+		// Use the shared, bounded test context for both transactions. A shorter
+		// deadline on A can release its locks and make B's progress a false
+		// positive; a short deadline on B instead measures WAL/runner latency.
+		dropCtx, dropCancel := context.WithCancel(ctx)
 		defer dropCancel()
 		dropA := make(chan error, 1)
 		go func() {
@@ -1275,10 +1278,8 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 			t.Fatalf("A finished before the post-table barrier was released: %v", err)
 		default:
 		}
-		fastCtx, fastCancel := context.WithTimeout(ctx, 10*time.Second)
-		defer fastCancel()
-		_, err = db1.ExecContext(fastCtx, "drop table "+b+".b_child")
-		require.NoError(t, err, "unrelated branch DROP waited for A's post-table work")
+		_, err = db1.ExecContext(ctx, "drop table "+b+".b_child")
+		require.NoError(t, err, "unrelated branch DROP failed while A remained at the post-table barrier")
 		// Completion must precede A leaving the barrier. The deadline bounds
 		// the test; it must never turn A's cancellation into apparent progress.
 		require.NoError(t, dropCtx.Err())
@@ -1294,10 +1295,11 @@ func TestIssue29400DropDatabaseDoesNotHoldBranchDAGAfterTable(t *testing.T) {
 		require.NoError(t, <-dropA)
 		// A now retains all statement locks until COMMIT. Its component must
 		// not pin B's root during this explicit transaction tail.
-		otherCtx, otherCancel := context.WithTimeout(ctx, 10*time.Second)
-		defer otherCancel()
-		_, err = db1.ExecContext(otherCtx, "drop table "+b+".a_root")
-		require.NoError(t, err, "unrelated branch DROP waited for A's COMMIT")
+		_, err = db1.ExecContext(ctx, "drop table "+b+".a_root")
+		require.NoError(t, err, "unrelated branch DROP failed while A remained uncommitted")
+		// Do not credit B with independence if the watchdog cancelled A.
+		// A's successful COMMIT below also proves it stayed open through B.
+		require.NoError(t, ctx.Err())
 		require.NoError(t, tx.Commit())
 		var deleted bool
 		require.NoError(t, db0.QueryRowContext(ctx,
