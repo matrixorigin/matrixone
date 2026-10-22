@@ -91,12 +91,20 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 			cast := filledChar.GetF().Args[0].GetF()
 			require.NotNil(t, cast)
 			require.Equal(t, "cast", cast.GetFunc().GetObjName())
-			require.Len(t, cast.Args, 2)
+			require.Contains(t, []int{2, 3}, len(cast.Args))
+			if len(cast.Args) == 3 {
+				requirePreparedNumericValueKindPair(t, cast.Args[0], cast.Args[2])
+			}
 			_, id := function.DecodeOverloadID(cast.Func.Obj)
 			require.Equal(t, conversionID, id)
 			child := cast.Args[0]
+			if source, private := numericValueProgramSourceOwner(child); private {
+				require.NotNil(t, source, filledChar.String())
+				child = source
+			}
 			require.Equal(t, tc.wantChild, types.T(child.Typ.Id), filledChar.String())
 			if tc.wantStringSource {
+				require.NotNil(t, child.GetLit(), filledChar.String())
 				require.Equal(t, tc.param.Value, child.GetLit().GetSval())
 			}
 		})
@@ -115,14 +123,21 @@ func TestIssue28454To28456CharPreparedBinding(t *testing.T) {
 	require.NotNil(t, filledChar)
 	stringArg := filledChar.GetF().Args[0]
 	require.Equal(t, types.T_uint64, types.T(stringArg.Typ.Id))
-	_, conversionID := function.DecodeOverloadID(stringArg.GetF().Func.Obj)
-	require.Equal(t, function.TextIntegerBitsCastOverload, conversionID)
-	stringLiteral := stringArg.GetLit()
-	if stringLiteral == nil && stringArg.GetF() != nil && len(stringArg.GetF().Args) > 0 {
-		stringLiteral = stringArg.GetF().Args[0].GetLit()
+	cast := stringArg.GetF()
+	require.NotNil(t, cast)
+	require.Contains(t, []int{2, 3}, len(cast.Args))
+	if len(cast.Args) == 3 {
+		requirePreparedNumericValueKindPair(t, cast.Args[0], cast.Args[2])
 	}
-	require.NotNil(t, stringLiteral)
-	require.Equal(t, "abc", stringLiteral.GetSval())
+	_, conversionID := function.DecodeOverloadID(cast.Func.Obj)
+	require.Equal(t, function.TextIntegerBitsCastOverload, conversionID)
+	stringSource := cast.Args[0]
+	if source, private := numericValueProgramSourceOwner(stringSource); private {
+		require.NotNil(t, source)
+		stringSource = source
+	}
+	require.NotNil(t, stringSource.GetLit())
+	require.Equal(t, "abc", stringSource.GetLit().GetSval())
 
 	for _, input := range []types.Type{
 		types.T_varchar.ToType(), types.T_int64.ToType(), types.T_bool.ToType(),
@@ -171,11 +186,20 @@ func TestIssue28454CharPreparedCOMStmtTextKeepsStringSemantics(t *testing.T) {
 			require.Equal(t, types.T_uint64, types.T(arg.Typ.Id), charExpr.String())
 			cast := arg.GetF()
 			require.NotNil(t, cast, charExpr.String())
-			require.Len(t, cast.Args, 2, charExpr.String())
+			require.Contains(t, []int{2, 3}, len(cast.Args), charExpr.String())
+			if len(cast.Args) == 3 {
+				requirePreparedNumericValueKindPair(t, cast.Args[0], cast.Args[2])
+			}
 			_, id := function.DecodeOverloadID(cast.Func.Obj)
 			require.Equal(t, function.TextIntegerBitsCastOverload, id)
-			require.True(t, types.T(cast.Args[0].Typ.Id).IsMySQLString(), charExpr.String())
-			require.Equal(t, tc.value, cast.Args[0].GetLit().GetSval(), "numeric-looking protocol text must not become DECIMAL")
+			stringSource := cast.Args[0]
+			if source, private := numericValueProgramSourceOwner(stringSource); private {
+				require.NotNil(t, source, charExpr.String())
+				stringSource = source
+			}
+			require.True(t, types.T(stringSource.Typ.Id).IsMySQLString(), charExpr.String())
+			require.NotNil(t, stringSource.GetLit(), charExpr.String())
+			require.Equal(t, tc.value, stringSource.GetLit().GetSval(), "numeric-looking protocol text must not become DECIMAL")
 		})
 	}
 }
@@ -217,4 +241,16 @@ func TestIssue28454CharPreparedNumericSourceRetainsRuntimeProvenance(t *testing.
 		return nil
 	}))
 	require.True(t, restored, charExpr.String())
+}
+
+func requirePreparedNumericValueKindPair(t *testing.T, value, kind *planpb.Expr) {
+	t.Helper()
+	valueScope, valueSlot, valueOK := numericProgramRefIdentity(value)
+	kindScope, kindSlot, kindOK := numericProgramRefIdentity(kind)
+	require.True(t, valueOK)
+	require.True(t, kindOK)
+	require.Equal(t, int64(0), valueSlot)
+	require.Equal(t, int64(1), kindSlot)
+	require.Equal(t, valueScope, kindScope)
+	require.True(t, numericProgramDefinitionMatchesRef(value))
 }

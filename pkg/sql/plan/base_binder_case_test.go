@@ -1102,8 +1102,14 @@ func TestPreparedScalarNumericOverloadsUseDoubleDomain(t *testing.T) {
 			cast := fn.GetF().Args[0].GetF()
 			require.NotNil(t, cast)
 			require.Equal(t, "cast", cast.Func.GetObjName())
-			require.NotNil(t, cast.Args[0].GetP())
-			require.Equal(t, int32(types.T_float64), cast.Args[1].Typ.Id)
+			if source, policy, ok := numericValueCastAnalysisSource(fn.GetF().Args[0]); ok {
+				require.Equal(t, function.NumericValueCastPolicyOrdinary, policy)
+				require.NotNil(t, source.GetP(), "the validated CAST9 source view must retain the marker")
+				require.Equal(t, int32(types.T_float64), cast.Args[1].Typ.Id)
+			} else {
+				require.NotNil(t, cast.Args[0].GetP())
+				require.Equal(t, int32(types.T_float64), cast.Args[1].Typ.Id)
+			}
 		})
 	}
 
@@ -1543,7 +1549,10 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.NotNil(t, fn)
 	require.Equal(t, int32(types.T_int64), fn.Typ.Id)
 	require.Equal(t, int32(types.T_int64), fn.GetF().Args[0].Typ.Id)
-	require.Equal(t, int64(-9007199254740993), fn.GetF().Args[0].GetLit().GetI64Val())
+	valueSource, privateNode := numericValueProgramSourceOwner(fn.GetF().Args[0])
+	require.True(t, privateNode, "the value must be inspected through its validated program owner")
+	require.NotNil(t, valueSource.GetLit())
+	require.Equal(t, int64(-9007199254740993), valueSource.GetLit().GetI64Val())
 
 	prepared, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_abs_multi_exact from 'select abs(? + ?)'")
@@ -1657,8 +1666,11 @@ func TestPreparedScalarNumericOverloadsCoverSubqueryAndExactInteger(t *testing.T
 	require.Equal(t, int32(types.T_decimal256), fn.Typ.Id)
 	decimalArg := fn.GetF().Args[0]
 	require.Equal(t, int32(types.T_decimal256), decimalArg.Typ.Id)
-	require.Equal(t, "cast", decimalArg.GetF().Func.GetObjName())
-	require.Equal(t, "12345678901234567890123456789012345.6789", decimalArg.GetF().Args[0].GetLit().GetSval())
+	decimalSource, hasDecimalSource := numericValueProgramSourceOwner(decimalArg)
+	require.True(t, hasDecimalSource, "the decimal value must be inspected through its validated program owner")
+	require.Equal(t, "cast", decimalSource.GetF().Func.GetObjName())
+	require.Equal(t, int32(types.T_decimal256), decimalSource.Typ.Id)
+	require.Equal(t, "12345678901234567890123456789012345.6789", decimalSource.GetF().Args[0].GetLit().GetSval())
 
 	prepared, err = runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare stmt_abs_nested_scalar_round from 'select abs((select round(? + 0) from nation limit 1))'")
@@ -1772,7 +1784,7 @@ func TestBoundFlowControlAfterImplicitStringCastFoldRetainsHexBitNumericRows(t *
 	require.NoError(t, err)
 	features, err := planpb.RequiredRemoteExpressionFeatures(folded)
 	require.NoError(t, err)
-	require.True(t, features.NumericBinaryLiteralProvenance)
+	require.True(t, features.NumericValuePrograms)
 
 	executor, err := colexec.NewExpressionExecutor(proc, folded)
 	require.NoError(t, err)

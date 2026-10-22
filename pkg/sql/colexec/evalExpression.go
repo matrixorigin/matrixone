@@ -93,6 +93,10 @@ type ExpressionExecutor interface {
 	TypeName() string
 }
 
+type numericValueKindProvider interface {
+	numericValueKindAt(row int) bool
+}
+
 type memoExpressionState struct {
 	executor ExpressionExecutor
 	cached   *vector.Vector
@@ -135,15 +139,22 @@ func (expr *memoExpressionExecutor) Free() {
 
 func (expr *memoExpressionExecutor) IsColumnExpr() bool { return false }
 func (expr *memoExpressionExecutor) TypeName() string   { return "memo expression" }
+func (expr *memoExpressionExecutor) numericValueKindAt(row int) bool {
+	return numericValueKindAt(expr.state.executor, row)
+}
 
 type memoRootExpressionExecutor struct {
 	executor ExpressionExecutor
 	states   []*memoExpressionState
+	programs []*scalarNumericProgramState
 }
 
 func (expr *memoRootExpressionExecutor) resetCachedValues() {
 	for _, state := range expr.states {
 		state.cached = nil
+	}
+	for _, program := range expr.programs {
+		program.resetEvaluation()
 	}
 }
 
@@ -166,11 +177,17 @@ func (expr *memoRootExpressionExecutor) ResetForNextQuery() {
 	for _, state := range expr.states {
 		state.executor.ResetForNextQuery()
 	}
+	for _, program := range expr.programs {
+		program.resetForNextQuery()
+	}
 }
 
 func (expr *memoRootExpressionExecutor) Free()              { expr.executor.Free() }
 func (expr *memoRootExpressionExecutor) IsColumnExpr() bool { return expr.executor.IsColumnExpr() }
 func (expr *memoRootExpressionExecutor) TypeName() string   { return expr.executor.TypeName() }
+func (expr *memoRootExpressionExecutor) numericValueKindAt(row int) bool {
+	return numericValueKindAt(expr.executor, row)
+}
 
 type expressionExecutorBuildContext struct {
 	memos                       map[int32]*memoExpressionState
@@ -179,6 +196,22 @@ type expressionExecutorBuildContext struct {
 	joinBuildDiagnosticOwner    *DeferredJoinDiagnostic
 	joinActivation              *[]ExpressionExecutor
 	conditionalJoinDepth        int
+	numericPrograms             map[int64]*scalarNumericProgramState
+	programStates               []*scalarNumericProgramState
+	numericKindDemandDepth      int
+}
+
+func expressionExecutorBuildContextRoot(
+	executor ExpressionExecutor, buildCtx *expressionExecutorBuildContext,
+) ExpressionExecutor {
+	if len(buildCtx.states) == 0 && len(buildCtx.programStates) == 0 {
+		return executor
+	}
+	return &memoRootExpressionExecutor{
+		executor: executor,
+		states:   buildCtx.states,
+		programs: buildCtx.programStates,
+	}
 }
 
 // NewOwnedConstantFilterExecutors is only for a single coordinator filter
@@ -235,11 +268,13 @@ func NewJoinProbeExpressionExecutors(
 	}
 	activation := make([]ExpressionExecutor, 0)
 	execs := make([]ExpressionExecutor, len(planExprs))
+	sharedNumericPrograms := make(map[int64]*scalarNumericProgramState)
 	for i, expr := range planExprs {
 		buildCtx := &expressionExecutorBuildContext{
 			foldOwnedLiteralNumericCast: true,
 			joinBuildDiagnosticOwner:    owner,
 			joinActivation:              &activation,
+			numericPrograms:             sharedNumericPrograms,
 		}
 		var err error
 		execs[i], err = newExpressionExecutorWithAllocation(proc, expr, selection, buildCtx)
@@ -249,9 +284,7 @@ func NewJoinProbeExpressionExecutors(
 			}
 			return nil, nil, err
 		}
-		if len(buildCtx.states) > 0 {
-			execs[i] = &memoRootExpressionExecutor{executor: execs[i], states: buildCtx.states}
-		}
+		execs[i] = expressionExecutorBuildContextRoot(execs[i], buildCtx)
 	}
 	return execs, activation, nil
 }
@@ -267,10 +300,12 @@ func newExpressionExecutorsWithDiagnosticOwner(
 		return nil, err
 	}
 	executors = make([]ExpressionExecutor, len(planExprs))
+	sharedNumericPrograms := make(map[int64]*scalarNumericProgramState)
 	for i := range executors {
 		buildCtx := &expressionExecutorBuildContext{
 			foldOwnedLiteralNumericCast: foldOwnedConstantCasts,
 			joinBuildDiagnosticOwner:    owner,
+			numericPrograms:             sharedNumericPrograms,
 		}
 		executors[i], err = newExpressionExecutorWithAllocation(proc, planExprs[i], selection, buildCtx)
 		if err != nil {
@@ -279,9 +314,7 @@ func newExpressionExecutorsWithDiagnosticOwner(
 			}
 			return nil, err
 		}
-		if len(buildCtx.states) > 0 {
-			executors[i] = &memoRootExpressionExecutor{executor: executors[i], states: buildCtx.states}
-		}
+		executors[i] = expressionExecutorBuildContextRoot(executors[i], buildCtx)
 	}
 	return executors, err
 }
@@ -300,10 +333,10 @@ func NewExpressionExecutorWithAllocation(
 	}
 	buildCtx := &expressionExecutorBuildContext{}
 	executor, err := newExpressionExecutorWithAllocation(proc, planExpr, selection, buildCtx)
-	if err != nil || len(buildCtx.states) == 0 {
+	if err != nil {
 		return executor, err
 	}
-	return &memoRootExpressionExecutor{executor: executor, states: buildCtx.states}, nil
+	return expressionExecutorBuildContextRoot(executor, buildCtx), nil
 }
 
 func newExpressionExecutorWithAllocation(
@@ -343,7 +376,9 @@ func newExpressionExecutorWithAllocation(
 		if err != nil {
 			return nil, err
 		}
-		return NewFixedVectorExpressionExecutor(proc.Mp(), false, vec), nil
+		executor := NewFixedVectorExpressionExecutor(proc.Mp(), false, vec)
+		executor.numericValueKind = t.Lit != nil && !t.Lit.GetIsnull() && t.Lit.GetIsBin()
+		return executor, nil
 
 	case *plan.Expr_T:
 		vec, err := newExpressionConstNull(typ, 1, selection)
@@ -459,6 +494,12 @@ func newExpressionExecutorWithAllocation(
 		// Validate before allocating the result wrapper, including plans retained
 		// from the pre-versioned unary TIMESTAMP implementation.
 		fid, oid := function.DecodeOverloadID(overloadID)
+		if fid == function.SCALAR_PROGRAM {
+			return nil, moerr.NewInvalidInputNoCtx("scalar numeric program definition must be anchored by output zero")
+		}
+		if fid == function.SCALAR_PROGRAM_REF {
+			return newScalarNumericProgramRefExecutor(proc, planExpr, selection, buildCtx, fid)
+		}
 		if fid == function.LOAD_FK_IGNORE_CHECK {
 			if err := function.RequireLoadFKIgnoreProtocol(proc.Ctx, proc); err != nil {
 				return nil, err
@@ -496,6 +537,7 @@ func newExpressionExecutorWithAllocation(
 			executor.rowScopedDiagnostics = overload.HasRowScopedDiagnostics()
 			executor.timeDependent = overload.IsRealTimeRelated()
 			executor.fid, _ = function.DecodeOverloadID(overloadID)
+			executor.numericValueKindDemand = buildCtx.numericKindDemandDepth > 0
 			executor.evalFn, executor.resetFn, executor.freeFn, executor.retainedBytesFn = overload.GetExecuteMethod()
 		}
 		if err = executor.init(proc, len(t.F.Args), typ, selection); err != nil {
@@ -588,6 +630,12 @@ func isRowIndependentMathPrecision(ctx context.Context, expr *plan.Expr) bool {
 		if e.F == nil || e.F.Func == nil {
 			return false
 		}
+		fid, _ := function.DecodeOverloadID(e.F.Func.Obj)
+		if fid == function.SCALAR_PROGRAM || fid == function.SCALAR_PROGRAM_REF {
+			// A lexical value-program reference is not an ordinary SQL scalar
+			// function and cannot be used as a compile-time precision proof.
+			return false
+		}
 		overload, err := function.GetFunctionById(ctx, e.F.Func.Obj)
 		if err != nil || overload.CannotFold() || overload.IsRealTimeRelated() {
 			return false
@@ -675,6 +723,7 @@ type FixedVectorExpressionExecutor struct {
 
 	noNeedToSetLength bool
 	resultVector      *vector.Vector
+	numericValueKind  bool
 }
 
 type FunctionExpressionExecutor struct {
@@ -697,6 +746,11 @@ type FunctionExpressionExecutor struct {
 	// A warning-bearing scalar precision is evaluated normally before a
 	// temporary constant vector is passed to the CEIL/FLOOR kernel.
 	constantMathPrecision bool
+	// numericValueKindDemand marks the single value tree whose paired semantic
+	// kind is consumed by CAST9. Selector functions fill numericValueKindRows
+	// from their already-computed branch masks.
+	numericValueKindDemand bool
+	numericValueKindRows   []bool
 	functionInformationForEval
 	folded      functionFolding
 	selectList1 []bool
@@ -724,7 +778,6 @@ type FunctionExpressionExecutor struct {
 	flowControlKinds         []vector.PrepareParamKind
 	flowControlStringDomains []types.RuntimeStringDomain
 	flowControlStringSources []types.StringSource
-	flowControlIsBinRows     []bool
 	iffNullResults           [2]*vector.Vector
 }
 
@@ -740,6 +793,7 @@ type ColumnExpressionExecutor struct {
 	// because we need to change its type when doing the execution for const null vector.
 	// but other process may using its type at the same time.
 	nullVecCache *vector.Vector
+	lastValue    *vector.Vector
 }
 
 func (expr *ColumnExpressionExecutor) GetRelIndex() int {
@@ -756,10 +810,11 @@ type ParamExpressionExecutor struct {
 	null       *vector.Vector
 	// maskedNull is separate from null/vec because it is not a resolved
 	// parameter value and must never participate in the folded-value cache.
-	maskedNull *vector.Vector
-	vec        *vector.Vector
-	pos        int
-	typ        types.Type
+	maskedNull       *vector.Vector
+	vec              *vector.Vector
+	pos              int
+	typ              types.Type
+	numericValueKind bool
 
 	folded     bool
 	foldedNull bool
@@ -770,6 +825,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	// must follow the input batch for downstream materialization and shuffle.
 	rowCount := expressionRowCount(batches)
 	if noRowsSelected(selectList, rowCount) {
+		expr.numericValueKind = false
 		if expr.maskedNull == nil {
 			var err error
 			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
@@ -795,6 +851,7 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 	}
 
 	if val == nil {
+		expr.numericValueKind = false
 		if expr.null == nil {
 			expr.null, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
 			if err != nil {
@@ -824,7 +881,8 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		err = vector.SetConstBytes(expr.vec, val, 1, proc.GetMPool())
 	}
 	if err == nil {
-		expr.vec.SetIsBin(proc.GetPrepareParamIsBin(expr.pos))
+		expr.numericValueKind = proc.GetPrepareParamIsBin(expr.pos)
+		expr.vec.SetIsBin(expr.numericValueKind)
 		runtimeDomain := types.RuntimeStringInherit
 		if params := proc.GetPrepareParams(); params != nil {
 			runtimeDomain = params.GetRuntimeStringDomainAt(expr.pos)
@@ -849,6 +907,10 @@ func (expr *ParamExpressionExecutor) Eval(proc *process.Process, batches []*batc
 		expr.vec.SetLength(rowCount)
 	}
 	return expr.vec, err
+}
+
+func (expr *ParamExpressionExecutor) numericValueKindAt(_ int) bool {
+	return expr.numericValueKind
 }
 
 func (expr *ParamExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
@@ -904,6 +966,7 @@ type VarExpressionExecutor struct {
 	global            bool
 	typ               types.Type
 	boundStringDomain uint32
+	numericValueKind  bool
 }
 
 func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.Batch, selectList []bool) (*vector.Vector, error) {
@@ -911,6 +974,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 	// must follow the input batch for downstream materialization and shuffle.
 	rowCount := expressionRowCount(batches)
 	if noRowsSelected(selectList, rowCount) {
+		expr.numericValueKind = false
 		if expr.maskedNull == nil {
 			var err error
 			expr.maskedNull, err = newExpressionConstNull(expr.typ, 1, expr.allocation)
@@ -936,6 +1000,7 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	expr.numericValueKind = isBin
 	runtimeDomain := types.RuntimeStringInherit
 	// The binding owns both the static type and its independent row override.
 	// Later SET statements change only the value, not either binding axis.
@@ -1017,6 +1082,10 @@ func (expr *VarExpressionExecutor) Eval(proc *process.Process, batches []*batch.
 		expr.vec.SetLength(rowCount)
 	}
 	return expr.vec, err
+}
+
+func (expr *VarExpressionExecutor) numericValueKindAt(_ int) bool {
+	return expr.numericValueKind
 }
 
 func (expr *VarExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
@@ -1198,6 +1267,17 @@ func expressionRowCount(batches []*batch.Batch) int {
 
 func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches []*batch.Batch, selectList []bool) (err error) {
 	expr.resetFlowControlPrepareParamKind()
+	var conditionKind *vector.Vector
+	if len(expr.parameterExecutor) > 3 {
+		conditionKind, err = expr.parameterExecutor[3].Eval(proc, batches, selectList)
+		if err != nil {
+			return err
+		}
+		// The selected-kind companion is an input to iffFn as well as to
+		// branch selection below. Keep the provider-produced, mask-aligned
+		// vector in the same parameter slot that the kernel consumes.
+		expr.parameterResults[3] = conditionKind
+	}
 	expr.parameterResults[0], err = expr.parameterExecutor[0].Eval(proc, batches, selectList)
 	if err != nil {
 		return err
@@ -1223,7 +1303,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if !trueBranch[i] {
 			continue
 		}
-		truth, err := function.IffConditionTruthyAt(expr.parameterResults[0], uint64(i), mode)
+		truth, err := function.IffConditionTruthyAt(expr.parameterResults[0], uint64(i), mode, conditionKind)
 		if err != nil {
 			return err
 		}
@@ -1239,6 +1319,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if err != nil {
 			return err
 		}
+		expr.recordNumericValueKindRows(expr.parameterExecutor[1], trueBranch, nil, rowCount)
 		expr.observeFlowControlPrepareParamKind(expr.parameterResults[1], expr.parameterExecutor[1], trueBranch)
 	} else {
 		expr.parameterResults[1], err = expr.iffNullResult(0, rowCount)
@@ -1251,6 +1332,7 @@ func (expr *FunctionExpressionExecutor) EvalIff(proc *process.Process, batches [
 		if err != nil {
 			return err
 		}
+		expr.recordNumericValueKindRows(expr.parameterExecutor[2], falseBranch, nil, rowCount)
 		expr.observeFlowControlPrepareParamKind(expr.parameterResults[2], expr.parameterExecutor[2], falseBranch)
 		return nil
 	}
@@ -1323,9 +1405,6 @@ func (expr *FunctionExpressionExecutor) resetFlowControlPrepareParamKind() {
 	if expr.flowControlStringSources != nil {
 		expr.flowControlStringSources = expr.flowControlStringSources[:0]
 	}
-	if expr.flowControlIsBinRows != nil {
-		expr.flowControlIsBinRows = expr.flowControlIsBinRows[:0]
-	}
 }
 
 func (expr *FunctionExpressionExecutor) ensureFlowControlPrepareParamRows(rows int) {
@@ -1368,19 +1447,6 @@ func (expr *FunctionExpressionExecutor) ensureFlowControlStringSourceRows(rows i
 		expr.flowControlStringSources, make([]types.StringSource, rows-old)...)
 }
 
-func (expr *FunctionExpressionExecutor) ensureFlowControlIsBinRows(rows int) {
-	if rows <= len(expr.flowControlIsBinRows) {
-		return
-	}
-	old := len(expr.flowControlIsBinRows)
-	if rows <= cap(expr.flowControlIsBinRows) {
-		expr.flowControlIsBinRows = expr.flowControlIsBinRows[:rows]
-		clear(expr.flowControlIsBinRows[old:])
-		return
-	}
-	expr.flowControlIsBinRows = append(expr.flowControlIsBinRows, make([]bool, rows-old)...)
-}
-
 // observeFlowControlPrepareParamKind inspects only rows that can reach one
 // IF/CASE/COALESCE arm. Column executors intentionally return their full input
 // vector even under a row mask, so checking value.AllNull() would incorrectly
@@ -1395,7 +1461,7 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 		return
 	}
 	resultDomain := types.StaticStringDomain(expr.resultType)
-	if !value.HasNull() && !value.HasBinaryStringMetadata() && !value.HasIsBinMetadata() &&
+	if !value.HasNull() && !value.HasBinaryStringMetadata() &&
 		!value.HasPrepareParamKind() && len(value.GetPrepareParamKinds()) == 0 &&
 		!value.HasStringSourceMetadata() &&
 		types.StaticStringDomain(*value.GetType()) == resultDomain &&
@@ -1419,11 +1485,6 @@ func (expr *FunctionExpressionExecutor) observeFlowControlPrepareParamKind(
 			}
 			if value.IsNull(uint64(row)) {
 				continue
-			}
-			isBin := value.GetIsBinAt(row)
-			if isBin || len(expr.flowControlIsBinRows) != 0 {
-				expr.ensureFlowControlIsBinRows(len(selection))
-				expr.flowControlIsBinRows[row] = isBin
 			}
 			domain := value.GetRuntimeStringDomainAt(row)
 			if domain == types.RuntimeStringInherit {
@@ -1486,12 +1547,6 @@ func (expr *FunctionExpressionExecutor) applyFlowControlPrepareParamKinds(
 ) error {
 	if result == nil || rows <= 0 {
 		return nil
-	}
-	if len(expr.flowControlIsBinRows) != 0 {
-		expr.ensureFlowControlIsBinRows(rows)
-		if err := result.SetIsBinRowsWithMP(expr.flowControlIsBinRows[:rows], mp); err != nil {
-			return err
-		}
 	}
 	if len(expr.flowControlStringDomains) != 0 {
 		expr.ensureFlowControlBinaryStringRows(rows)
@@ -1623,19 +1678,6 @@ func applyTransparentStringSource(
 	if err != nil {
 		return err
 	}
-	// Numeric HEX/BIT provenance is independent of the string's runtime domain.
-	// Preserve it only across implicit string-to-string coercions; casts to a
-	// numeric type consume the marker, and explicit casts are not transparent.
-	if source.GetType().Oid.IsMySQLString() && result.GetType().Oid.IsMySQLString() {
-		if source.HasIsBinRows() {
-			isBinRows := make([]bool, rows)
-			for row := range isBinRows {
-				isBinRows[row] = source.GetIsBinAt(row)
-			}
-			return result.SetIsBinRowsWithMP(isBinRows, mp)
-		}
-		result.SetIsBin(source.GetIsBin())
-	}
 	return nil
 }
 
@@ -1703,9 +1745,11 @@ func (expr *FunctionExpressionExecutor) EvalCase(proc *process.Process, batches 
 			if err != nil {
 				return err
 			}
+			expr.recordNumericValueKindRows(expr.parameterExecutor[i+1], selectedBranch, nil, rowCount)
 			expr.observeFlowControlPrepareParamKind(
 				expr.parameterResults[i+1], expr.parameterExecutor[i+1], selectedBranch)
 		} else {
+			expr.recordNumericValueKindRows(expr.parameterExecutor[i], remaining, nil, rowCount)
 			expr.observeFlowControlPrepareParamKind(
 				expr.parameterResults[i], expr.parameterExecutor[i], remaining)
 		}
@@ -1737,6 +1781,8 @@ func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batc
 		}
 		expr.observeFlowControlPrepareParamKind(
 			expr.parameterResults[i], expr.parameterExecutor[i], remaining)
+		expr.recordNumericValueKindRows(
+			expr.parameterExecutor[i], remaining, expr.parameterResults[i], rowCount)
 		for row := range remaining {
 			if remaining[row] && !expr.parameterResults[i].IsNull(uint64(row)) {
 				remaining[row] = false
@@ -1744,6 +1790,56 @@ func (expr *FunctionExpressionExecutor) EvalCoalesce(proc *process.Process, batc
 		}
 	}
 	return nil
+}
+
+func (expr *FunctionExpressionExecutor) numericValueKindAt(row int) bool {
+	return expr.numericValueKindDemand && row >= 0 && row < len(expr.numericValueKindRows) && expr.numericValueKindRows[row]
+}
+
+func (expr *FunctionExpressionExecutor) beginNumericValueKindEvaluation(rowCount int) {
+	if !expr.numericValueKindDemand {
+		return
+	}
+	if cap(expr.numericValueKindRows) < rowCount {
+		expr.numericValueKindRows = make([]bool, rowCount)
+		return
+	}
+	expr.numericValueKindRows = expr.numericValueKindRows[:rowCount]
+	clear(expr.numericValueKindRows)
+}
+
+func (expr *FunctionExpressionExecutor) recordNumericValueKindRows(
+	child ExpressionExecutor, selected []bool, nonNull *vector.Vector, rowCount int,
+) {
+	if !expr.numericValueKindDemand {
+		return
+	}
+	for row := 0; row < rowCount; row++ {
+		if selected != nil && (row >= len(selected) || !selected[row]) {
+			continue
+		}
+		if nonNull != nil && nonNull.IsNull(uint64(row)) {
+			continue
+		}
+		expr.numericValueKindRows[row] = numericValueKindAt(child, row)
+	}
+}
+
+func (expr *FunctionExpressionExecutor) inheritNumericValueKindRows(
+	child ExpressionExecutor, selected []bool, rowCount int,
+) {
+	if !expr.numericValueKindDemand || !expr.isTransparentNumericValueKindCast() ||
+		!expr.resultType.Oid.IsMySQLString() || len(expr.parameterTypes) == 0 ||
+		!expr.parameterTypes[0].Oid.IsMySQLString() {
+		return
+	}
+	expr.recordNumericValueKindRows(child, selected, nil, rowCount)
+}
+
+func (expr *FunctionExpressionExecutor) isTransparentNumericValueKindCast() bool {
+	return expr.fid == function.CAST && !expr.syntaxExplicitCast &&
+		expr.resultType.Oid.IsMySQLString() && len(expr.parameterTypes) > 0 &&
+		expr.parameterTypes[0].Oid.IsMySQLString()
 }
 
 func noRowsSelected(selectList []bool, rowCount int) bool {
@@ -1781,6 +1877,11 @@ func isRowAlignedExpressionExecutor(executor ExpressionExecutor) bool {
 			executor = source.state.executor
 		case *memoRootExpressionExecutor:
 			executor = source.executor
+		case *scalarNumericProgramRefExecutor:
+			if source.slot == 1 {
+				return true
+			}
+			return isRowAlignedExpressionExecutor(source.state.value)
 		case *ColumnExpressionExecutor:
 			return true
 		case *FunctionExpressionExecutor:
@@ -1935,15 +2036,16 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 		batches = []*batch.Batch{batch.EmptyForConstFoldBatch}
 	}
 	rowCount := expressionRowCount(batches)
+	expr.beginNumericValueKindEvaluation(rowCount)
 	if !expr.folded.canFold && noRowsSelected(selectList, rowCount) {
 		return expr.makeNullResult(rowCount)
 	}
-	if expr.folded.needFoldingCheck {
+	if expr.folded.needFoldingCheck && !expr.numericValueKindDemand {
 		if err := expr.doFold(proc, proc.GetBaseProcessRunningStatus()); err != nil {
 			return nil, err
 		}
 	}
-	if expr.folded.canFold {
+	if expr.folded.canFold && !expr.numericValueKindDemand {
 		if len(batches) > 0 {
 			return expr.getFoldedVector(batches[0].RowCount()), nil
 		}
@@ -1978,6 +2080,10 @@ func (expr *FunctionExpressionExecutor) Eval(proc *process.Process, batches []*b
 				return nil, err
 			}
 		}
+	}
+	if expr.fid != function.IFF && expr.fid != function.CASE && expr.fid != function.COALESCE &&
+		len(expr.parameterExecutor) > 0 {
+		expr.inheritNumericValueKindRows(expr.parameterExecutor[0], selectList, rowCount)
 	}
 
 	if selectList != nil {
@@ -2190,7 +2296,12 @@ func (expr *ColumnExpressionExecutor) Eval(_ *process.Process, batches []*batch.
 			return nil, err
 		}
 	}
+	expr.lastValue = vec
 	return vec, nil
+}
+
+func (expr *ColumnExpressionExecutor) numericValueKindAt(row int) bool {
+	return false
 }
 
 func (expr *ColumnExpressionExecutor) getConstNullVec(
@@ -2242,6 +2353,10 @@ func (expr *FixedVectorExpressionExecutor) Eval(_ *process.Process, batches []*b
 		expr.resultVector.SetLength(batches[0].RowCount())
 	}
 	return expr.resultVector, nil
+}
+
+func (expr *FixedVectorExpressionExecutor) numericValueKindAt(_ int) bool {
+	return expr.numericValueKind
 }
 
 func (expr *FixedVectorExpressionExecutor) EvalWithoutResultReusing(proc *process.Process, batches []*batch.Batch, _ []bool) (*vector.Vector, error) {
@@ -3007,6 +3122,10 @@ func GetExprZoneMap(
 	zms []objectio.ZoneMap,
 	vecs []*vector.Vector) (v objectio.ZoneMap) {
 	var err error
+	if scalarNumericProgramZoneMapConstant(expr) {
+		zms[expr.AuxId] = scalarNumericProgramZoneMap(proc, expr, zms[expr.AuxId])
+		return zms[expr.AuxId]
+	}
 
 	switch t := expr.Expr.(type) {
 	case *plan.Expr_Lit:

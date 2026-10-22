@@ -2441,16 +2441,23 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 			"prepared numeric-prefix casts require MORPC protocol version 30",
 		)
 	}
+	if features.NumericValuePrograms &&
+		(!hasProtocolVersion || protocolVersion < defines.MORPCVersion129) {
+		return moerr.NewNotSupportedNoCtxf(
+			"numeric value programs require MORPC protocol version %d",
+			defines.MORPCVersion129,
+		)
+	}
 	if requiresStringNumericCompatibilityProtocol(proc, features) {
 		if proc != nil && proc.Base != nil && proc.GetSessionInfo().LegacyNumericCompatibilityMode {
 			return moerr.NewNotSupportedNoCtx(
 				"string numeric compatibility cannot run with a legacy session contract",
 			)
 		}
-		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion126 {
+		if !hasProtocolVersion || protocolVersion < defines.MORPCVersion129 {
 			return moerr.NewNotSupportedNoCtxf(
 				"string numeric compatibility requires MORPC protocol version %d",
-				defines.MORPCVersion126,
+				defines.MORPCVersion129,
 			)
 		}
 	}
@@ -2546,7 +2553,6 @@ func requiresStringNumericCompatibilityProtocol(proc *process.Process, features 
 	return features.HistoricalStringMathCompatibility ||
 		features.OrdinaryFloatInt64Bounds ||
 		features.ScalarMathPrecisionCompatibility ||
-		features.NumericBinaryLiteralProvenance ||
 		(features.StrictStringNumericCompatibility && strictStringNumericCompatibilityDefault(proc))
 }
 

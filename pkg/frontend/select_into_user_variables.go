@@ -21,6 +21,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -52,6 +53,11 @@ func validateSelectIntoArity(ctx context.Context, p *plan.Plan, variableCount in
 	if p == nil {
 		return nil
 	}
+	if query := p.GetQuery(); query != nil {
+		if err := plan2.ValidateSelectIntoKindLayout(query); err != nil {
+			return moerr.NewInternalErrorf(ctx, "invalid SELECT INTO result kind layout: %v", err)
+		}
+	}
 	if len(plan2.GetResultColumnsFromPlan(p)) != variableCount {
 		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
 	}
@@ -75,16 +81,56 @@ func selectIntoUserVariablesOutputCallback(
 	collector := newSelectIntoUserVariables(selectStmt.IntoVars)
 	execCtx.selectInto = collector
 	return func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
-		return collector.capture(execCtx.reqCtx, ses, bat)
+		var kindLayout []int32
+		if execCtx.cw != nil {
+			if current := execCtx.cw.Plan(); current != nil && current.GetQuery() != nil {
+				query := current.GetQuery()
+				if err := plan2.ValidateSelectIntoKindLayout(query); err != nil {
+					return moerr.NewInternalErrorf(execCtx.reqCtx, "invalid SELECT INTO result kind layout: %v", err)
+				}
+				kindLayout = query.IntoUserVariableKindColumns
+			}
+		}
+		return collector.capture(execCtx.reqCtx, ses, bat, kindLayout)
 	}
 }
 
-func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSession, bat *batch.Batch) error {
+func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSession, bat *batch.Batch, kindLayouts ...[]int32) error {
 	if bat == nil {
 		return nil
 	}
-	if len(bat.Vecs) != len(collector.vars) {
+	visibleColumns := len(collector.vars)
+	var kindLayout []int32
+	if len(kindLayouts) > 0 {
+		kindLayout = kindLayouts[0]
+	}
+	if len(kindLayout) != 0 && len(kindLayout) != visibleColumns {
 		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
+	expectedWidth := visibleColumns
+	usedPassengers := make([]bool, len(bat.Vecs))
+	for _, passenger := range kindLayout {
+		if passenger == -1 {
+			continue
+		}
+		if passenger < int32(visibleColumns) || int(passenger) >= len(bat.Vecs) {
+			return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+		}
+		if bat.Vecs[passenger] == nil || bat.Vecs[passenger].GetType().Oid != types.T_bool {
+			return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+		}
+		usedPassengers[passenger] = true
+		if int(passenger)+1 > expectedWidth {
+			expectedWidth = int(passenger) + 1
+		}
+	}
+	if len(bat.Vecs) != expectedWidth {
+		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
+	for physical := visibleColumns; physical < len(bat.Vecs); physical++ {
+		if !usedPassengers[physical] {
+			return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+		}
 	}
 	if bat.RowCount() == 0 {
 		return nil
@@ -100,11 +146,19 @@ func (collector *selectIntoUserVariables) capture(ctx context.Context, ses FeSes
 		collector.rowIsBin = make([]bool, len(collector.vars))
 		collector.rowType = make([]plan2.Type, len(collector.vars))
 		collector.rowDomain = make([]types.RuntimeStringDomain, len(collector.vars))
-		if err := extractRowFromEveryVector(ctx, ses, bat, 0, collector.row, false); err != nil {
+		visibleBatch := *bat
+		visibleBatch.Vecs = bat.Vecs[:visibleColumns]
+		if err := extractRowFromEveryVector(ctx, ses, &visibleBatch, 0, collector.row, false); err != nil {
 			return err
 		}
-		for i, vec := range bat.Vecs {
-			collector.rowIsBin[i] = vec.GetIsBinAt(0)
+		for i, vec := range visibleBatch.Vecs {
+			collector.rowIsBin[i] = vec.GetIsBin()
+			if collector.row[i] != nil && len(kindLayout) != 0 && kindLayout[i] >= 0 {
+				kindVector := bat.Vecs[kindLayout[i]]
+				if !kindVector.IsConstNull() && !kindVector.GetNulls().Contains(0) {
+					collector.rowIsBin[i] = collector.rowIsBin[i] || vector.GetFixedAtNoTypeCheck[bool](kindVector, 0)
+				}
+			}
 			collector.rowDomain[i] = vec.GetRuntimeStringDomainAt(0)
 			collector.row[i], collector.rowType[i] = selectIntoUserVariableValueAndType(collector.row[i], *vec.GetType())
 		}

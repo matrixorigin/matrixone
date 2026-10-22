@@ -892,7 +892,13 @@ const (
 	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
 	LOAD_FK_IGNORE_CHECK = 602
 
-	FUNCTION_END_NUMBER = 605
+	// Internal scalar numeric value program. These nodes are compiler metadata
+	// carried in Expr_F and are interpreted by the expression executor; they are
+	// not SQL-callable functions.
+	SCALAR_PROGRAM     = 605
+	SCALAR_PROGRAM_REF = 606
+
+	FUNCTION_END_NUMBER = 607
 )
 
 // functionIdRegister is what function we have registered already.

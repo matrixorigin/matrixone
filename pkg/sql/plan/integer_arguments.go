@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -218,6 +219,16 @@ func (b *baseBinder) integerArgumentStorageSource(source *Expr) (*Expr, error) {
 // stripIntegerSelectionReconciliation removes only binder-owned reconciliation
 // from a selected value. User CAST remains an authoritative value boundary.
 func stripIntegerSelectionReconciliation(expr *Expr) *Expr {
+	if expr.GetPreparedNumeric().GetProvisionalResultCast() && !isExplicitPreparedCast(expr) {
+		if source, policy, ok := numericValueCastAnalysisSource(expr); ok &&
+			policy == function.NumericValueCastPolicyOrdinary {
+			// CAST9 is the prepared-plan form of this same binder-owned
+			// reconciliation. Expose only its validated lexical value source;
+			// the paired kind remains owned by the program and the original cast
+			// policy remains authoritative for explicit conversions.
+			return source
+		}
+	}
 	fn := expr.GetF()
 	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || fn.SyntaxExplicitCast || len(fn.Args) != 2 {
 		return expr
@@ -275,7 +286,8 @@ func integerSourceCastOverload(expr *Expr) int32 {
 
 func isIntegerArgumentCast(expr *Expr) bool {
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" || len(fn.Args) != 2 {
+	if fn == nil || fn.Func == nil || fn.Func.ObjName != "cast" ||
+		(len(fn.Args) != 2 && (len(fn.Args) != 3 || fn.Args[2] == nil || types.T(fn.Args[2].Typ.Id) != types.T_bool)) {
 		return false
 	}
 	_, overload := function.DecodeOverloadID(fn.Func.Obj)
@@ -332,6 +344,44 @@ func (rule *ResetParamRefRule) integerArgumentLogicalSource(source *Expr) (*Expr
 		return nil, err
 	} else if changed {
 		source = refreshed
+	}
+	if fn := source.GetF(); fn != nil && fn.Func != nil {
+		if _, policy, ok := numericValueCastAnalysisSource(source); ok &&
+			(policy == function.NumericValueCastPolicyOrdinary ||
+				policy == function.NumericValueCastPolicyComparison) {
+			// A comparison cast selected while a marker was TEXT may have an
+			// integer target even though EXECUTE supplies a native numeric value.
+			// Rebuild the comparison from the same lexical value owner so its
+			// runtime type (for example FLOAT64 in NULLIF(?, 0)) chooses the
+			// comparison domain before the outer integer consumer is applied.
+			valueOwner := fn.Args[0]
+			positions := preparedNumericValueParamPositions(valueOwner)
+			allNumeric := len(positions) > 0
+			for pos := range positions {
+				if pos < 0 || int(pos) >= len(rule.paramValues) ||
+					!PreparedParamValueHasNumericRuntime(rule.paramValues[pos]) {
+					allNumeric = false
+					break
+				}
+			}
+			if allNumeric {
+				return rule.integerArgumentLogicalSource(valueOwner)
+			}
+		}
+	}
+	if owner, privateNode := numericValueProgramSourceOwner(source); privateNode {
+		if owner == nil {
+			return nil, moerr.NewInvalidInput(rule.ctx, "integer argument has an invalid numeric value program source")
+		}
+		reboundSource, err := rule.integerArgumentLogicalSource(owner)
+		if err != nil {
+			return nil, err
+		}
+		updated, ok := replaceNumericValueProgramSource(source, reboundSource)
+		if !ok {
+			return nil, moerr.NewInvalidInput(rule.ctx, "integer argument numeric value program could not be rebound")
+		}
+		return updated, nil
 	}
 	if isIntegerArgumentCast(source) {
 		return rule.rebindIntegerArgumentCast(source)
@@ -400,9 +450,7 @@ func (rule *ResetParamRefRule) integerArgumentLogicalSource(source *Expr) (*Expr
 					return nil, err
 				}
 			} else if metadata.GetProvisionalResultCast() && !isExplicitPreparedCast(arg) {
-				if cast := arg.GetF(); cast != nil && len(cast.Args) == 2 {
-					arg = cast.Args[0]
-				}
+				arg = stripIntegerSelectionReconciliation(arg)
 			}
 			var err error
 			args[i], err = rule.integerArgumentLogicalSource(arg)

@@ -188,10 +188,24 @@ func IsIntegerArgumentCastOverload(id int32) bool {
 	return id == IntegerArgumentCastOverload || id == TruncatedIntegerArgumentCastOverload || id == TextIntegerBitsCastOverload || id == TemporalIntegerArgumentCastOverload
 }
 
+// NumericValueCastSignature validates the internal CAST9 shape. Its fourth
+// argument selects one of the stable CAST 0..3 policies retained by the
+// source conversion: ordinary, explicit, comparison, or set-operation.
+func NumericValueCastSignature(args []types.Type) bool {
+	if len(args) != 4 || args[2].Oid != types.T_bool || args[3].Oid != types.T_int32 ||
+		!args[1].IsNumeric() || !(args[0].Oid == types.T_any || args[0].Oid.IsMySQLString() || args[0].IsNumeric()) {
+		return false
+	}
+	if args[0].Oid == types.T_any {
+		return true
+	}
+	return IfTypeCastSupported(args[0].Oid, args[1].Oid)
+}
+
 // Private parameter conversions have their own source contract, independent of
 // public CAST support and conversion costs (notably UUID integer-prefix input).
 func integerArgumentCastSignature(id int32, args []types.Type) bool {
-	if len(args) != 2 {
+	if len(args) != 2 && (len(args) != 3 || args[2].Oid != types.T_bool) {
 		return false
 	}
 	source, target := args[0].Oid, args[1].Oid
@@ -256,6 +270,46 @@ func (fn FuncNew) checkArgumentTypes(inputs []types.Type, modes []StringDomainCh
 	check := fn.checkFn(overloads, normalized)
 	if fn.stringDomainCheckFn != nil && len(modes) > 0 {
 		check = fn.stringDomainCheckFn(overloads, normalized, modes)
+	}
+	if check.status != succeedMatched && check.status != succeedWithCast &&
+		fn.stringDomainCheckFn == nil && len(fn.valueArgs) != 0 {
+		// Numeric value roles are the common declaration of which string
+		// arguments may enter a math overload as numeric values. Keep the
+		// function-specific checker as the authority for non-string inputs,
+		// control arguments and overload selection; this fallback only tries
+		// the declared value positions in the established DOUBLE domain.
+		valueInputs := append([]types.Type(nil), normalized...)
+		valueChanged := false
+		for _, position := range fn.valueArgs {
+			if position < 0 || position >= len(valueInputs) ||
+				!valueInputs[position].Oid.IsMySQLString() {
+				continue
+			}
+			valueInputs[position] = types.T_float64.ToType()
+			valueChanged = true
+		}
+		if valueChanged {
+			valueCheck := fn.checkFn(overloads, valueInputs)
+			if valueCheck.status == succeedMatched || valueCheck.status == succeedWithCast {
+				if len(fn.bindingOverloads) > 0 {
+					valueCheck.idx = fn.bindingOverloads[valueCheck.idx]
+				}
+				finalTypes := valueInputs
+				if valueCheck.status == succeedWithCast {
+					if len(valueCheck.finalType) != len(valueInputs) {
+						return newCheckResultWithFailure(failedFunctionParametersWrong)
+					}
+					finalTypes = append([]types.Type(nil), valueCheck.finalType...)
+				}
+				for _, position := range fn.valueArgs {
+					if position >= 0 && position < len(normalized) &&
+						normalized[position].Oid.IsMySQLString() {
+						finalTypes[position] = types.T_float64.ToType()
+					}
+				}
+				return newCheckResultWithCast(valueCheck.idx, finalTypes)
+			}
+		}
 	}
 	if check.status != succeedMatched && check.status != succeedWithCast {
 		return check

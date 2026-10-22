@@ -952,7 +952,7 @@ func iffCheck(_ []overload, inputs []types.Type) checkResult {
 	return newCheckResultWithFailure(failedFunctionParametersWrong)
 }
 
-func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityMode) (bool, error) {
+func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityMode, sourceKind ...*vector.Vector) (bool, error) {
 	if vec.IsConstNull() || vec.GetNulls().Contains(row) {
 		return false, nil
 	}
@@ -989,7 +989,13 @@ func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityM
 	case types.T_decimal256:
 		return vector.GetFixedAtNoTypeCheck[types.Decimal256](vec, int(row)).Compare(types.Decimal256{}) != 0, nil
 	case types.T_char, types.T_varchar, types.T_binary, types.T_varbinary, types.T_blob, types.T_text:
-		value, err := parseBytesToFloat(vec.GetBytesAt(int(row)), vec.GetIsBinAt(int(row)), 64, mode)
+		isBinary := vec.GetIsBin()
+		if len(sourceKind) > 0 && sourceKind[0] != nil {
+			if selectedKind, isNull := vector.GenerateFunctionFixedTypeParameter[bool](sourceKind[0]).GetValue(row); !isNull {
+				isBinary = selectedKind
+			}
+		}
+		value, err := parseBytesToFloat(vec.GetBytesAt(int(row)), isBinary, 64, mode)
 		if err != nil {
 			return false, err
 		}
@@ -1000,6 +1006,12 @@ func IffConditionTruthyAt(vec *vector.Vector, row uint64, mode SQLCompatibilityM
 }
 
 func iffFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if len(parameters) != 3 && len(parameters) != 4 {
+		return moerr.NewInvalidInput(proc.Ctx, "IF requires three values and an optional condition source kind")
+	}
+	if len(parameters) == 4 && parameters[3].GetType().Oid != types.T_bool {
+		return moerr.NewInvalidInput(proc.Ctx, "IF condition source kind must be BOOL")
+	}
 	rett := result.GetResultVector().GetType()
 	switch rett.Oid {
 	case types.T_bit:
@@ -1057,6 +1069,10 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 	types.Decimal64 | types.Decimal128 | types.Decimal256 | types.Timestamp | types.Uuid](vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p2 := vector.GenerateFunctionFixedTypeParameter[T](vecs[1])
 	p3 := vector.GenerateFunctionFixedTypeParameter[T](vecs[2])
+	var conditionKind []*vector.Vector
+	if len(vecs) == 4 {
+		conditionKind = vecs[3:]
+	}
 
 	rs := vector.MustFunctionResult[T](result)
 	mode := CompatibilityModeFromProcess(proc)
@@ -1068,7 +1084,7 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 			}
 			continue
 		}
-		truth, err := IffConditionTruthyAt(vecs[0], i, mode)
+		truth, err := IffConditionTruthyAt(vecs[0], i, mode, conditionKind...)
 		if err != nil {
 			return err
 		}
@@ -1088,6 +1104,10 @@ func generalIffFn[T constraints.Integer | constraints.Float | bool | types.Date 
 func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p2 := vector.GenerateFunctionStrParameter(vecs[1])
 	p3 := vector.GenerateFunctionStrParameter(vecs[2])
+	var conditionKind []*vector.Vector
+	if len(vecs) == 4 {
+		conditionKind = vecs[3:]
+	}
 
 	rs := vector.MustFunctionResult[types.Varlena](result)
 	mode := CompatibilityModeFromProcess(proc)
@@ -1098,7 +1118,7 @@ func strIffFn(vecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 			}
 			continue
 		}
-		truth, err := IffConditionTruthyAt(vecs[0], i, mode)
+		truth, err := IffConditionTruthyAt(vecs[0], i, mode, conditionKind...)
 		if err != nil {
 			return err
 		}

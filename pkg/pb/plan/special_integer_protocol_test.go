@@ -31,7 +31,7 @@ func TestSpecialIntegerConsumerFeatureSignatures(t *testing.T) {
 		{202, 0, []int32{61, 61}, false}, {202, 1, []int32{23, 23}, true},
 		{373, 0, []int32{23, 23, 23}, false}, {373, 35, []int32{33, 34, 61}, false},
 		{373, 36, []int32{23, 23, 31}, true}, {373, 37, []int32{23, 23, 61}, true},
-		{373, 38, []int32{23, 23, 28}, true},
+		{373, 38, []int32{23, 23, 28}, true}, {373, 37, []int32{23, 23, 61, 10}, true},
 	} {
 		t.Run(fmt.Sprintf("%d/%d", tc.id, tc.overload), func(t *testing.T) {
 			fn := &Function{Func: &ObjectRef{Obj: int64(tc.id)<<32 | int64(tc.overload)}}
@@ -76,6 +76,12 @@ func TestSpecialIntegerConsumerFeatureSignatures(t *testing.T) {
 				fn.Args[2].Typ.Id = 23
 				_, err = RequiredRemoteExpressionFeatures(expr)
 				require.Error(t, err)
+				if len(fn.Args) == 4 {
+					fn.Args[2].Typ.Id = 61
+					fn.Args[3].Typ.Id = 23
+					_, err = RequiredRemoteExpressionFeatures(expr)
+					require.Error(t, err)
+				}
 			}
 			fn.Args = fn.Args[:1]
 			_, err = RequiredRemoteExpressionFeatures(expr)

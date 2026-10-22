@@ -49,7 +49,6 @@ const (
 
 	selectedRowsRowBinary = byte(1 << 2)
 	selectedRowsRowText   = byte(1 << 3)
-	selectedRowsKindIsBin = byte(1 << 7)
 
 	selectedRowsKindNone    = byte(0)
 	selectedRowsKindUniform = byte(1)
@@ -166,20 +165,13 @@ func (v *Vector) marshalSelectedRowsTo(
 		}
 	}
 	kindMode := selectedRowsKindNone
-	hasIsBin := v.HasIsBinMetadata()
-	if hasIsBin {
-		// The kind trailer has three high bits reserved above the valid
-		// PrepareParamKind range. Use one for numeric-literal provenance so
-		// selected-row spill preserves the marker without growing the fixed
-		// metadata header or changing its legacy layout.
-		kindMode = selectedRowsKindRows
-	} else if kindSeen {
+	if kindSeen {
 		kindMode = selectedRowsKindUniform
 		if kindMixed {
 			kindMode = selectedRowsKindRows
 		}
+		metadata |= kindMode << selectedRowsKindShift
 	}
-	metadata |= kindMode << selectedRowsKindShift
 	var firstDomain types.RuntimeStringDomain
 	binarySeen := false
 	binaryMixed := false
@@ -319,12 +311,7 @@ func (v *Vector) marshalSelectedRowsTo(
 metadataTrailers:
 	if kindMode == selectedRowsKindRows {
 		for i := 0; i < count; i++ {
-			row := rowAt(i)
-			kindAndIsBin := byte(v.GetPrepareParamKindAt(row))
-			if v.GetIsBinAt(row) {
-				kindAndIsBin |= selectedRowsKindIsBin
-			}
-			if err := writeSelectedRowsByte(w, kindAndIsBin, &encoded); err != nil {
+			if err := writeSelectedRowsByte(w, byte(v.GetPrepareParamKindAt(rowAt(i))), &encoded); err != nil {
 				return err
 			}
 		}
@@ -503,9 +490,7 @@ func (v *Vector) UnmarshalSelectedRowsFrom(
 	case selectedRowsKindUniform:
 		v.SetPrepareParamKind(uniformKind)
 	case selectedRowsKindRows:
-		if err := v.SetPrepareParamKindsAndIsBinFromReaderPreservingStringDomain(
-			r, count, mp, selectedRowsKindIsBin,
-		); err != nil {
+		if err := v.SetPrepareParamKindsFromReader(r, count, mp); err != nil {
 			return err
 		}
 	}

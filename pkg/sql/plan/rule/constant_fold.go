@@ -221,6 +221,13 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 		return expr
 	}
 	overloadID := fn.Func.GetObj()
+	functionID, _ := function.DecodeOverloadID(overloadID)
+	if functionID == function.SCALAR_PROGRAM || functionID == function.SCALAR_PROGRAM_REF {
+		// These private nodes are lexical executor instructions, not SQL
+		// functions. Folding a REF or its definition independently can detach
+		// the selected value from its paired kind output.
+		return expr
+	}
 	if r.isPrepared && IsNullIntegerArgumentCast(expr) {
 		return expr
 	}
@@ -719,7 +726,7 @@ func GetConstantValue(vec *vector.Vector, transAll bool, row uint64) (literal *p
 				Sval: vec.GetStringAt(int(row)),
 			},
 		}
-		literal.IsBin = vec.GetIsBinAt(int(row))
+		literal.IsBin = vec.GetIsBin()
 		if vec.GetType().Oid.IsMySQLString() {
 			switch vec.GetRuntimeStringDomainAt(int(row)) {
 			case types.RuntimeStringText:

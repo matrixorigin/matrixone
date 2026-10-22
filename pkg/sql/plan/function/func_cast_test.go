@@ -966,7 +966,7 @@ func TestStringToFloatSkipsInactiveInvalidRows(t *testing.T) {
 	}
 }
 
-func TestStringToFloatUsesNumericBinaryLiteralRowsNotBinaryStringDomain(t *testing.T) {
+func TestStringToFloatUsesExplicitNumericValueKindNotBinaryStringDomain(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	input := makeBinaryStringTestInput(t, proc, types.T_varchar.ToType(), [][]byte{
 		{0x31}, []byte("1"), {0x31},
@@ -976,15 +976,20 @@ func TestStringToFloatUsesNumericBinaryLiteralRowsNotBinaryStringDomain(t *testi
 		types.RuntimeStringBinary,
 	})
 	defer input.Free(proc.Mp())
-	require.NoError(t, input.SetIsBinRowsWithMP([]bool{true, false, false}, proc.Mp()))
+	kind := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true, false, false}, nil)
+	defer kind.Free(proc.Mp())
+	from := &numericValueKindParameter{
+		FunctionParameterWrapper: vector.GenerateFunctionStrParameter(input),
+		kind:                      vector.GenerateFunctionFixedTypeParameter[bool](kind),
+	}
 
 	result := vector.NewFunctionResultWrapper(types.T_float64.ToType(), proc.Mp()).(*vector.FunctionResult[float64])
 	defer result.Free()
 	require.NoError(t, result.PreExtendAndReset(3))
 	require.NoError(t, strToFloat(context.Background(), SQLCompatibilityMySQL,
-		vector.GenerateFunctionStrParameter(input), result, 64, 3, nil))
+		from, result, 64, 3, nil))
 	require.Equal(t, []float64{49, 1, 1}, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()),
-		"only the HEX/BIT numeric marker selects byte-as-number semantics")
+		"only the BOOL kind companion selects byte-as-number semantics")
 
 	// A static binary string is not a HEX/BIT literal and keeps the ordinary
 	// text-value conversion contract.
@@ -996,11 +1001,11 @@ func TestStringToFloatUsesNumericBinaryLiteralRowsNotBinaryStringDomain(t *testi
 	require.Equal(t, []float64{1}, vector.MustFixedColWithTypeCheck[float64](result.GetResultVector()))
 }
 
-func TestNumericBinaryLiteralMarkerDoesNotImplyBinaryStringDomain(t *testing.T) {
+func TestScalarNumericLiteralMarkerDoesNotSetBinaryStringDomain(t *testing.T) {
 	mp := mpool.MustNewZero()
 	vec := vector.NewVec(types.T_varchar.ToType())
 	require.NoError(t, vector.AppendStringList(vec, []string{"hex", "text", "text override"}, nil, mp))
-	require.NoError(t, vec.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
+	vec.SetIsBin(true)
 	require.NoError(t, vec.SetRuntimeStringDomainAtWithMP(2, types.RuntimeStringText, mp))
 	defer func() {
 		vec.Free(mp)
@@ -1009,10 +1014,10 @@ func TestNumericBinaryLiteralMarkerDoesNotImplyBinaryStringDomain(t *testing.T) 
 
 	binary, perRow := stringDomainMode(vec)
 	require.False(t, binary)
-	require.True(t, perRow, "marker rows need row-exact binary-string operation semantics")
-	require.False(t, vec.GetIsBinaryStringAt(0), "the marker does not mutate runtime string-domain metadata")
-	require.True(t, binaryStringAt(vec, 0, binary, perRow), "direct HEX/BIT retains binary operation semantics")
-	require.False(t, binaryStringAt(vec, 1, binary, perRow), "ordinary text remains text")
+	require.True(t, perRow, "runtime-domain overrides remain row-exact")
+	require.False(t, vec.GetIsBinaryStringAt(0), "the scalar marker does not mutate runtime string-domain metadata")
+	require.True(t, binaryStringAt(vec, 0, binary, perRow), "the scalar marker remains independent of domain metadata")
+	require.True(t, binaryStringAt(vec, 1, binary, perRow), "the scalar marker applies uniformly to its source vector")
 	require.False(t, binaryStringAt(vec, 2, binary, perRow), "explicit runtime text takes precedence over literal fallback")
 }
 

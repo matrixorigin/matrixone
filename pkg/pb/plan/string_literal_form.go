@@ -342,8 +342,49 @@ const (
 	planAnyTypeID                     int32 = 0
 	internalTableCollationFunctionID  int32 = 600
 	loadFKIgnoreCheckFunctionID       int32 = 602
+	scalarNumericProgramFunctionID    int32 = 605
+	scalarNumericProgramRefFunctionID int32 = 606
+	castFunctionID                    int32 = 21
+	octFunctionID                     int32 = 209
+	makeTimeFunctionID                int32 = 373
+	castStrictFunctionID              int32 = 541
+	castAssignFunctionID              int32 = 554
+	castIgnoreFunctionID              int32 = 555
 	maxVarcharWidth                   int32 = 65535
 )
+
+// UsesNumericValueKindCompanion reports execution identities introduced by
+// the numeric-value provenance program. Keep these checks at the plan boundary:
+// a BOOL argument changes function arity even when its value is a constant and
+// no scalar program or CAST overload 9 appears in the expression tree.
+func usesNumericValueKindCompanion(id, overload int32, args []*Expr) bool {
+	if len(args) == 0 {
+		return false
+	}
+	boolAt := func(index int) bool {
+		return index >= 0 && index < len(args) && args[index] != nil && args[index].Typ.Id == planBooleanTypeID
+	}
+	switch id {
+	case castFunctionID:
+		switch overload {
+		case 0, 1, 2, 3:
+			return len(args) == 3 && boolAt(2)
+		case 5, 6, 7, 8:
+			return len(args) == 3 && boolAt(2)
+		case 9:
+			return true
+		}
+	case octFunctionID:
+		return len(args) == 2 && boolAt(1)
+	case makeTimeFunctionID:
+		return len(args) == 4 && boolAt(3)
+	case iffFunctionID:
+		return len(args) == 4 && boolAt(3)
+	case castStrictFunctionID, castAssignFunctionID, castIgnoreFunctionID:
+		return len(args) == 3 && boolAt(2)
+	}
+	return false
+}
 
 // RemoteExpressionFeatures is the complete set of versioned expression
 // capabilities that can make a pipeline unsafe on an older remote worker.
@@ -404,17 +445,16 @@ const (
 // understand the prefix-cast
 // representation but default to permissive conversion when the new SessionInfo
 // marker is absent.
-// NumericBinaryLiteralProvenance requires MORPC v126 in every mode when a
-// CASE/IF/COALESCE result can carry a selected non-NULL HEX/BIT marker. The
-// marker can affect a downstream numeric cast even when every non-NULL branch
-// is marked (or the other branch is NULL), and pre-v126 flow-control executors
-// do not propagate it. This is independent of string-prefix conversion mode.
-// HistoricalStringMathCompatibility requires MORPC v126 in every mode: old
+// NumericValuePrograms requires MORPC v129 for numeric value/kind programs,
+// explicit kind-aware casts, and optional kind arguments on numeric consumers.
+// These plan expressions carry the selected HEX/BIT interpretation as an
+// ordinary BOOL result, independent of Batch metadata and conversion mode.
+// HistoricalStringMathCompatibility requires MORPC v129 in every mode: old
 // CEIL/FLOOR
 // VARCHAR overloads used ParseFloat, not the current mode-aware parser.
-// Ordinary/comparison/set-operation FLOAT -> INT64 casts require MORPC v126's
+// Ordinary/comparison/set-operation FLOAT -> INT64 casts require MORPC v129's
 // exact bounds in every mode, independently of string-prefix conversion.
-// ScalarMathPrecisionCompatibility requires MORPC v126 to preserve row-level
+// ScalarMathPrecisionCompatibility requires MORPC v129 to preserve row-level
 // warnings while presenting a constant precision argument to CEIL/FLOOR kernels.
 type RemoteExpressionFeatures struct {
 	JSONStringConsumerOverload    bool
@@ -430,7 +470,7 @@ type RemoteExpressionFeatures struct {
 	ViewMetadataFunctions             bool
 	NumericPrefix                     bool
 	StrictStringNumericCompatibility  bool
-	NumericBinaryLiteralProvenance    bool
+	NumericValuePrograms              bool
 	HistoricalStringMathCompatibility bool
 	OrdinaryFloatInt64Bounds          bool
 	ScalarMathPrecisionCompatibility  bool
@@ -488,7 +528,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.ViewMetadataFunctions ||
 		features.NumericPrefix ||
 		features.StrictStringNumericCompatibility ||
-		features.NumericBinaryLiteralProvenance ||
+		features.NumericValuePrograms ||
 		features.HistoricalStringMathCompatibility ||
 		features.OrdinaryFloatInt64Bounds ||
 		features.ScalarMathPrecisionCompatibility ||
@@ -621,8 +661,11 @@ func isValidIntegerArgumentSource(id, source int32) bool {
 
 func validateIntegerArgumentCast(expr *Expr, overload int32) error {
 	fn := expr.GetF()
-	if fn == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+	if fn == nil || (len(fn.Args) != 2 && len(fn.Args) != 3) || fn.Args[0] == nil || fn.Args[1] == nil {
 		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST arity")
+	}
+	if len(fn.Args) == 3 && !usesNumericValueKindCompanion(castFunctionID, overload, fn.Args) {
+		return moerr.NewNotSupportedNoCtx("invalid private integer parameter CAST source kind")
 	}
 	target := int32(23)
 	if overload == 7 || (overload != 8 && expr.Typ.Id == 28) {
@@ -869,139 +912,6 @@ func conditionalValueSources(fn *Function, functionID int32, name string) (value
 	return nil, false
 }
 
-type numericBinaryLiteralValueClass struct {
-	hasMarkedValue    bool
-	hasOrdinaryValue  bool
-	definitelyNull    bool
-	definitelyNonNull bool
-}
-
-// numericBinaryLiteralValueClassifier memoizes classification for a single
-// RequiredRemoteExpressionFeatures scan. Nested flow-control expressions
-// otherwise cause each ancestor to rescan its descendants.
-type numericBinaryLiteralValueClassifier struct {
-	classes map[*Expr]numericBinaryLiteralValueClass
-}
-
-func (classifier *numericBinaryLiteralValueClassifier) classify(expr *Expr) numericBinaryLiteralValueClass {
-	if expr == nil {
-		return numericBinaryLiteralValueClass{}
-	}
-	if class, ok := classifier.classes[expr]; ok {
-		return class
-	}
-	if classifier.classes == nil {
-		classifier.classes = make(map[*Expr]numericBinaryLiteralValueClass)
-	}
-	class := classifyNumericBinaryLiteralValueUncached(expr, classifier)
-	classifier.classes[expr] = class
-	return class
-}
-
-// classifyNumericBinaryLiteralValue follows only provenance-transparent
-// implicit casts and flow-control expressions. Ordinary functions and columns
-// may produce unmarked values; they do not inherit literal provenance from
-// their inputs. Explicit CAST deliberately resets the marker.
-func classifyNumericBinaryLiteralValueUncached(
-	expr *Expr,
-	classifier *numericBinaryLiteralValueClassifier,
-) numericBinaryLiteralValueClass {
-	if expr == nil {
-		return numericBinaryLiteralValueClass{}
-	}
-	if literal := expr.GetLit(); literal != nil {
-		if literal.GetIsnull() {
-			return numericBinaryLiteralValueClass{definitelyNull: true}
-		}
-		if literal.GetIsBin() {
-			return numericBinaryLiteralValueClass{hasMarkedValue: true, definitelyNonNull: true}
-		}
-		return numericBinaryLiteralValueClass{hasOrdinaryValue: true, definitelyNonNull: true}
-	}
-	if fn := expr.GetF(); fn != nil && fn.Func != nil {
-		if strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) > 0 {
-			source := classifier.classify(fn.Args[0])
-			if source.definitelyNull {
-				return numericBinaryLiteralValueClass{definitelyNull: true}
-			}
-			if !fn.GetSyntaxExplicitCast() {
-				return source
-			}
-			// An explicit cast is a semantic boundary: a non-NULL result is an
-			// ordinary value regardless of the source literal's HEX/BIT form.
-			return numericBinaryLiteralValueClass{
-				hasOrdinaryValue:  source.hasMarkedValue || source.hasOrdinaryValue,
-				definitelyNonNull: source.definitelyNonNull,
-			}
-		}
-
-		functionID := int32(fn.Func.Obj >> 32)
-		name := strings.ToLower(fn.Func.GetObjName())
-		values, omittedElse := conditionalValueSources(fn, functionID, name)
-		if values != nil {
-			isCoalesce := functionID == coalesceFunctionID || name == "coalesce"
-			result := numericBinaryLiteralValueClass{}
-			if isCoalesce {
-				for _, value := range values {
-					branch := classifier.classify(value)
-					if branch.definitelyNull {
-						continue
-					}
-					result.hasMarkedValue = result.hasMarkedValue || branch.hasMarkedValue
-					result.hasOrdinaryValue = result.hasOrdinaryValue || branch.hasOrdinaryValue
-					if branch.definitelyNonNull {
-						result.definitelyNonNull = true
-						break // later COALESCE arguments are unreachable
-					}
-				}
-				if !result.hasMarkedValue && !result.hasOrdinaryValue {
-					result.definitelyNull = true
-				}
-				return result
-			}
-
-			allDefinitelyNonNull := !omittedElse && len(values) != 0
-			for _, value := range values {
-				branch := classifier.classify(value)
-				result.hasMarkedValue = result.hasMarkedValue || branch.hasMarkedValue
-				result.hasOrdinaryValue = result.hasOrdinaryValue || branch.hasOrdinaryValue
-				allDefinitelyNonNull = allDefinitelyNonNull && branch.definitelyNonNull
-			}
-			result.definitelyNonNull = allDefinitelyNonNull
-			result.definitelyNull = !result.hasMarkedValue && !result.hasOrdinaryValue
-			return result
-		}
-	}
-	return numericBinaryLiteralValueClass{hasOrdinaryValue: true}
-}
-
-// isFlowControlNumericBinaryLiteralSource identifies a CASE/IF/COALESCE result
-// that can carry a selected non-NULL HEX/BIT marker. Uniformly marked values
-// still need the v126 contract: older flow-control executors dropped the scalar
-// marker, so a downstream numeric cast could produce a different result.
-// NULL-only alternatives do not create a marker, but a marked value alongside
-// NULL still does.
-func isFlowControlNumericBinaryLiteralSource(
-	expr *Expr,
-	classifier *numericBinaryLiteralValueClassifier,
-) bool {
-	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
-		return false
-	}
-	fn := expr.GetF()
-	functionID := int32(fn.Func.Obj >> 32)
-	name := strings.ToLower(fn.Func.GetObjName())
-	switch {
-	case functionID == caseFunctionID || functionID == iffFunctionID ||
-		functionID == coalesceFunctionID || name == "case" ||
-		name == "if" || name == "iff" || name == "coalesce":
-	default:
-		return false
-	}
-	class := classifier.classify(expr)
-	return class.hasMarkedValue
-}
-
 func conditionalConditionNeedsMetadataFence(fn *Function, functionID int32, name string) bool {
 	if fn == nil {
 		return false
@@ -1104,7 +1014,7 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 // can retain precise diagnostics, while sharing one owner walk so adding one
 // feature cannot accidentally replace another feature's compatibility gate.
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
-	var numericBinaryLiteralValues numericBinaryLiteralValueClassifier
+	features.NumericValuePrograms = ownerHasSelectIntoKindLayout(owner)
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
 			features.DependentPrograms = features.DependentPrograms || current.GetDependent() != nil || current.GetSlot() != nil
@@ -1131,6 +1041,10 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				features.JSONNumericComparisons = features.JSONNumericComparisons ||
 					isMixedJSONNumericComparison(fn) || ((id == 546 || id == internalJSONComparisonFunctionID) && overload == 1)
 
+				if id == scalarNumericProgramFunctionID || id == scalarNumericProgramRefFunctionID ||
+					(id == castFunctionID && overload == 9) || usesNumericValueKindCompanion(id, overload, fn.Args) {
+					features.NumericValuePrograms = true
+				}
 				if id == internalTableCollationFunctionID {
 					features.TableCollationFunction = true
 				}
@@ -1321,10 +1235,6 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			if isStrictStringNumericCompatibilityCast(current) {
 				features.StrictStringNumericCompatibility = true
 			}
-			if !features.NumericBinaryLiteralProvenance &&
-				isFlowControlNumericBinaryLiteralSource(current, &numericBinaryLiteralValues) {
-				features.NumericBinaryLiteralProvenance = true
-			}
 			if !features.StrictStringNumericCompatibility && isStringConditionCompatibilityFunction(current) {
 				features.StrictStringNumericCompatibility = true
 			}
@@ -1405,6 +1315,66 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 		})
 	})
 	return
+}
+
+// SELECT ... INTO carries a private BOOL passenger layout on Query rather than
+// inside an Expr. Include that descriptor in the same v129 admission feature
+// so older workers cannot silently treat the passenger columns as visible.
+func ownerHasSelectIntoKindLayout(owner any) bool {
+	seen := make(map[uintptr]struct{})
+	var walk func(reflect.Value) bool
+	walk = func(value reflect.Value) bool {
+		if !value.IsValid() {
+			return false
+		}
+		if value.Kind() == reflect.Interface {
+			return !value.IsNil() && walk(value.Elem())
+		}
+		if value.Kind() == reflect.Pointer {
+			if value.IsNil() {
+				return false
+			}
+			if query, ok := value.Interface().(*Query); ok && len(query.IntoUserVariableKindColumns) != 0 {
+				return true
+			}
+			pointer := value.Pointer()
+			if _, ok := seen[pointer]; ok {
+				return false
+			}
+			seen[pointer] = struct{}{}
+			return walk(value.Elem())
+		}
+		switch value.Kind() {
+		case reflect.Struct:
+			for field := 0; field < value.NumField(); field++ {
+				child := value.Field(field)
+				if child.CanInterface() && expressionOwnerContainer(child.Kind()) && walk(child) {
+					return true
+				}
+			}
+		case reflect.Slice, reflect.Array:
+			if !expressionOwnerContainer(value.Type().Elem().Kind()) {
+				return false
+			}
+			for item := 0; item < value.Len(); item++ {
+				if walk(value.Index(item)) {
+					return true
+				}
+			}
+		case reflect.Map:
+			if !expressionOwnerContainer(value.Type().Elem().Kind()) {
+				return false
+			}
+			iterator := value.MapRange()
+			for iterator.Next() {
+				if walk(iterator.Value()) {
+					return true
+				}
+			}
+		}
+		return false
+	}
+	return walk(reflect.ValueOf(owner))
 }
 
 // isStrictStringNumericCompatibilityCast identifies string-to-floating casts
@@ -1610,7 +1580,14 @@ func isSpecialIntegerConsumer(fn *Function, id, overload int32) (bool, error) {
 	default:
 		return false, nil
 	}
-	if len(fn.Args) != count {
+	argumentCount := count
+	if id == makeTimeFunctionID && len(fn.Args) == count+1 {
+		if !usesNumericValueKindCompanion(id, overload, fn.Args) {
+			return false, moerr.NewInvalidInputNoCtx("invalid MAKETIME source kind")
+		}
+		argumentCount++
+	}
+	if len(fn.Args) != argumentCount {
 		return false, moerr.NewInvalidInputNoCtx("invalid special integer consumer arity")
 	}
 	for _, arg := range fn.Args {

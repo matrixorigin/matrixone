@@ -94,17 +94,12 @@ func remoteBatchWireVersion(proc *process.Process) int64 {
 	return version
 }
 
-// marshalRemoteBatch keeps the stable Batch prefix unchanged and appends the
-// optional transient provenance trailer only after the shared protocol gate is
-// enabled. During a rolling upgrade, source metadata is omitted for an older
-// peer while the already-supported provenance axes remain lossless.
+// marshalRemoteBatch preserves the batch's established wire contracts.
+// Numeric value semantics travel in the versioned expression plan rather than
+// in additional Batch metadata.
 func marshalRemoteBatch(proc *process.Process, bat *batch.Batch, buf *bytes.Buffer) ([]byte, error) {
 	if bat == nil {
 		return nil, moerr.NewInvalidInputNoCtx("cannot marshal a nil remote batch")
-	}
-	if bat.HasNumericBinaryLiteralMetadata() && remoteBatchWireVersion(proc) < defines.MORPCVersion126 {
-		return nil, moerr.NewInvalidStateNoCtx(
-			"numeric binary-literal provenance requires MORPCVersion126 for remote dispatch")
 	}
 	if bat.HasGrouping() && remoteBatchWireVersion(proc) < defines.MORPCVersion87 {
 		return nil, moerr.NewInvalidStateNoCtx(

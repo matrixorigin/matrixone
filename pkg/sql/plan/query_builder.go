@@ -3400,7 +3400,8 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 		// Rewrite DISTINCT to AGG
 		node.NodeType = plan.Node_AGG
 		preNode := builder.qry.Nodes[node.Children[0]]
-		node.GroupBy = make([]*Expr, len(preNode.ProjectList))
+		visibleCount := len(preNode.ProjectList)
+		node.GroupBy = make([]*Expr, visibleCount, visibleCount+len(node.PhysicalEqualityKeyList))
 		node.ProjectList = make([]*Expr, len(preNode.ProjectList))
 		node.SpillMem = builder.aggSpillMem
 
@@ -3423,6 +3424,23 @@ func (builder *QueryBuilder) remapAllColRefsForConsumer(
 						ColPos: int32(i),
 					},
 				},
+			}
+		}
+		if len(node.PhysicalEqualityKeyList) > 0 {
+			info := RemapInfo{step: step, node: node, tip: "PhysicalEqualityKeyList"}
+			if len(node.GroupByHashKey) == 0 {
+				node.GroupByHashKey = make([]int32, len(node.PhysicalEqualityKeyList))
+				for i := range node.GroupByHashKey {
+					node.GroupByHashKey[i] = int32(visibleCount + i)
+				}
+			}
+			for i, key := range node.PhysicalEqualityKeyList {
+				copyKey := DeepCopyExpr(key)
+				info.srcExprIdx = i
+				if err := builder.remapColRefForExpr(copyKey, childRemapping.globalToLocal, &info); err != nil {
+					return nil, err
+				}
+				node.GroupBy = append(node.GroupBy, copyKey)
 			}
 		}
 
@@ -4297,6 +4315,12 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	if builder.qry.Correlation != nil {
 		return builder.createDependentQuery()
 	}
+	// Attach numeric source kinds before projection inlining can erase the
+	// producer tree that selected each value. The late pass below is idempotent
+	// and catches outputs introduced by optimizer rewrites.
+	if err := builder.lowerNumericValueKinds(); err != nil {
+		return nil, err
+	}
 	var err error
 	colRefBool := make(map[[2]int32]bool)
 	sinkColRef := make(map[[2]int32]int)
@@ -4440,6 +4464,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 		builder.generateRuntimeFilters(rootID)
 		builder.pushdownVectorIndexTopToTableScan(rootID)
 		builder.removeSimpleProjections(rootID, plan.Node_UNKNOWN, false, colRefCnt)
+		if err = builder.lowerNumericValueKinds(); err != nil {
+			return nil, err
+		}
 		reCalcNodeStatsAfterSwap(rootID, builder, true, false, false)
 		builder.determineWindowPartitionAlgorithms(rootID)
 		builder.deduplicateBlockFilters(rootID)
@@ -4553,6 +4580,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 				node.ExtraOptions = PreparedBlockFilterDisabledScanOption
 			}
 		}
+	}
+	if err := ValidateSelectIntoKindLayout(builder.qry); err != nil {
+		return nil, moerr.NewInternalErrorf(builder.GetContext(), "invalid SELECT INTO result kind layout: %v", err)
 	}
 	return builder.qry, nil
 }

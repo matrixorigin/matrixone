@@ -310,96 +310,77 @@ func TestStrictStringNumericCompatibilityFeature(t *testing.T) {
 	require.True(t, features.NumericPrefix)
 	require.True(t, features.StrictStringNumericCompatibility,
 		"a numeric-prefix FLOAT cast also uses the process compatibility mode")
-	require.False(t, features.NumericBinaryLiteralProvenance,
+	require.False(t, features.NumericValuePrograms,
 		"a plain string-to-FLOAT CAST has no mixed literal provenance")
 
 }
 
-func TestNumericBinaryLiteralProvenanceFeatureTracksFlowControlOutputs(t *testing.T) {
+func TestNumericValueProgramsFeatureTracksStableExecutionIDs(t *testing.T) {
 	const (
-		boolType    int32 = 10
-		varcharType int32 = planVarcharTypeID
+		castID    int32 = 21
+		cast9     int32 = 9
+		programID int32 = 605
+		refID     int32 = 606
+		anyType   int32 = 0
+		boolType  int32 = 10
+		textType  int32 = planVarcharTypeID
 	)
-	column := &Expr{Typ: Type{Id: boolType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
-	text := &Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{
-		Value: &Literal_Sval{Sval: "1"}, LiteralForm: StringLiteralForm_STRING_LITERAL_TEXT,
-	}}}
-	hex := &Expr{Typ: Type{Id: varcharType}, Expr: &Expr_Lit{Lit: &Literal{
-		Value: &Literal_Sval{Sval: "1"}, IsBin: true,
-		LiteralForm: StringLiteralForm_STRING_LITERAL_HEX,
-	}}}
-	call := func(name string, id, resultType int32, args ...*Expr) *Expr {
-		return &Expr{Typ: Type{Id: resultType}, Expr: &Expr_F{F: &Function{
-			Func: &ObjectRef{Obj: int64(id) << 32, ObjName: name}, Args: args,
+	call := func(id, overload int32, name string, typ int32, args ...*Expr) *Expr {
+		return &Expr{Typ: Type{Id: typ}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{Obj: int64(id)<<32 | int64(overload), ObjName: name}, Args: args,
 		}}}
 	}
-	caseExpr := func(value *Expr) *Expr {
-		return call("case", caseFunctionID, varcharType, column, value, text)
+	int64Literal := func(value int64) *Expr {
+		return &Expr{Typ: Type{Id: 23}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_I64Val{I64Val: value}}}}
 	}
-	explicitCast := &Expr{Typ: Type{Id: planBinaryTypeID}, Expr: &Expr_F{F: &Function{
-		Func: &ObjectRef{ObjName: "cast"}, Args: []*Expr{hex}, SyntaxExplicitCast: true,
-	}}}
-	tests := []struct {
+	text := &Expr{Typ: Type{Id: textType}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: "1"}}}}
+	kind := &Expr{Typ: Type{Id: boolType}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Bval{Bval: true}}}}
+	for _, test := range []struct {
 		name string
 		expr *Expr
-		want bool
 	}{
-		{name: "mixed CASE retains marked HEX provenance", expr: caseExpr(hex), want: true},
-		{name: "explicit CAST ends provenance", expr: caseExpr(explicitCast)},
-		{name: "ordinary text CASE has no marked provenance", expr: caseExpr(text)},
-	}
-	for _, test := range tests {
+		{name: "program", expr: call(programID, 0, "_scalar_numeric_program", anyType, int64Literal(1), text)},
+		{name: "program reference", expr: call(refID, 0, "_scalar_numeric_program_ref", textType, int64Literal(1), int64Literal(0))},
+		{name: "CAST overload 9", expr: call(castID, cast9, "cast", 23, text, &Expr{Typ: Type{Id: 0}, Expr: &Expr_T{T: &TargetType{}}}, kind, int64Literal(0))},
+		{name: "integer argument CAST overload 5", expr: call(castID, 5, "cast", 23, text, &Expr{Typ: Type{Id: 23}, Expr: &Expr_T{T: &TargetType{}}}, kind)},
+		{name: "temporal CAST with kind", expr: call(castID, 1, "cast", 51, text, &Expr{Typ: Type{Id: 0}, Expr: &Expr_T{T: &TargetType{}}}, kind)},
+		{name: "OCT with kind", expr: call(209, 27, "oct", textType, text, kind)},
+		{name: "MAKETIME with kind", expr: call(373, 0, "maketime", 51, int64Literal(1), int64Literal(0), int64Literal(0), kind)},
+		{name: "IF condition with kind", expr: call(113, 0, "if", 23, text, int64Literal(1), int64Literal(0), kind)},
+		{name: "strict cast with kind", expr: call(541, 0, "cast_strict", 23, text, &Expr{Typ: Type{Id: 0}, Expr: &Expr_T{T: &TargetType{}}}, kind)},
+		{name: "assignment cast with kind", expr: call(554, 0, "cast_assign", 23, text, &Expr{Typ: Type{Id: 0}, Expr: &Expr_T{T: &TargetType{}}}, kind)},
+		{name: "ignore cast with kind", expr: call(555, 0, "cast_ignore", 23, text, &Expr{Typ: Type{Id: 0}, Expr: &Expr_T{T: &TargetType{}}}, kind)},
+	} {
 		t.Run(test.name, func(t *testing.T) {
-			features, err := RequiredRemoteExpressionFeatures(&struct{ Expr *Expr }{Expr: test.expr})
+			features, err := RequiredRemoteExpressionFeatures(test.expr)
 			require.NoError(t, err)
-			require.Equal(t, test.want, features.NumericBinaryLiteralProvenance)
+			require.True(t, features.NumericValuePrograms)
+			require.True(t, features.Any())
 		})
 	}
-}
 
-func numericProvenanceFlowControlFixture(depth int, mixedMarker bool) *Expr {
-	stringType := Type{Id: planVarcharTypeID}
-	text := &Expr{Typ: stringType, Expr: &Expr_Lit{Lit: &Literal{
-		Value:       &Literal_Sval{Sval: "1"},
-		LiteralForm: StringLiteralForm_STRING_LITERAL_TEXT,
+	legacyFlow := &Expr{Typ: Type{Id: textType}, Expr: &Expr_F{F: &Function{
+		Func: &ObjectRef{Obj: int64(caseFunctionID) << 32, ObjName: "case"},
+		Args: []*Expr{
+			{Typ: Type{Id: boolType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}},
+			text,
+			text,
+		},
 	}}}
-	value := text
-	if mixedMarker {
-		value = &Expr{Typ: stringType, Expr: &Expr_Lit{Lit: &Literal{
-			Value:       &Literal_Sval{Sval: "1"},
-			IsBin:       true,
-			LiteralForm: StringLiteralForm_STRING_LITERAL_HEX,
-		}}}
-	}
-	condition := &Expr{Typ: Type{Id: planBooleanTypeID}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}
-	for range depth {
-		value = &Expr{Typ: stringType, Expr: &Expr_F{F: &Function{
-			Func: &ObjectRef{Obj: int64(caseFunctionID) << 32, ObjName: "case"},
-			Args: []*Expr{condition, value, text},
-		}}}
-	}
-	return value
-}
+	features, err := RequiredRemoteExpressionFeatures(legacyFlow)
+	require.NoError(t, err)
+	require.False(t, features.NumericValuePrograms,
+		"flow control without the program representation does not require its protocol floor")
 
-func TestNumericBinaryLiteralValueClassifierMemoizesNestedFlow(t *testing.T) {
-	const depth = 256
-	for _, mixedMarker := range []bool{false, true} {
-		expr := numericProvenanceFlowControlFixture(depth, mixedMarker)
-		var classifier numericBinaryLiteralValueClassifier
-		class := classifier.classify(expr)
-
-		require.Equal(t, mixedMarker, class.hasMarkedValue)
-		wantClasses := depth + 1 // each CASE plus the shared text leaf
-		if mixedMarker {
-			wantClasses++ // the marked HEX leaf
-		}
-		require.Len(t, classifier.classes, wantClasses,
-			"each unique value expression should be classified at most once")
-
-		features, err := RequiredRemoteExpressionFeatures(expr)
-		require.NoError(t, err)
-		require.Equal(t, mixedMarker, features.NumericBinaryLiteralProvenance)
-	}
+	queryLayout := &Query{StmtType: Query_SELECT, Headings: []string{"v"}, IntoUserVariableKindColumns: []int32{1}}
+	features, err = RequiredRemoteExpressionFeatures(queryLayout)
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms,
+		"a Query-level SELECT INTO passenger layout requires the same v129 contract")
+	features, err = RequiredRemoteExpressionFeatures(&Plan{Plan: &Plan_Query{Query: queryLayout}})
+	require.NoError(t, err)
+	require.True(t, features.NumericValuePrograms,
+		"the Query-level layout must remain visible through its serialized Plan owner")
 }
 
 func TestRequiresMORPCVersion23DynamicStringProvenance(t *testing.T) {

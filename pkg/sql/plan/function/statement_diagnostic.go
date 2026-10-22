@@ -173,7 +173,19 @@ func IsExplicitDecimalCast(expr *plan.Expr) bool {
 	}
 	id, overload := DecodeOverloadID(fn.Func.Obj)
 	source := types.T(fn.Args[0].Typ.Id)
-	return id == CAST && (overload == 1 || fn.GetSyntaxExplicitCast()) &&
+	if id != CAST {
+		return false
+	}
+	if overload == NumericValueCastOverload {
+		validated, ok := numericValueCastFunction(expr)
+		if !ok || validated.Args[1].Typ.Id != expr.Typ.Id ||
+			validated.Args[1].Typ.Width != expr.Typ.Width || validated.Args[1].Typ.Scale != expr.Typ.Scale ||
+			validated.Args[3].GetLit().GetI32Val() != NumericValueCastPolicyExplicit {
+			return false
+		}
+		return (types.Type{Oid: source}).IsNumeric() || source.IsMySQLString()
+	}
+	return (overload == 1 || fn.GetSyntaxExplicitCast()) &&
 		((types.Type{Oid: source}).IsNumeric() || source.IsMySQLString())
 }
 

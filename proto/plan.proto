@@ -1836,6 +1836,13 @@ message Query {
   // Logical access paths, not grants or resolved security roles.
   repeated ViewReference view_references = 18;
   CorrelationSpec correlation = 19;
+
+  // For top-level SELECT ... INTO @var results, maps each visible result
+  // column to its BOOL numeric-literal-kind passenger. -1 means ordinary
+  // string interpretation; nonnegative entries address physical columns
+  // after the visible prefix. This layout is private to the SELECT INTO
+  // collector and does not change SQL result headings or equality keys.
+  repeated int32 into_user_variable_kind_columns = 20;
 }
 
 message TransationControl {

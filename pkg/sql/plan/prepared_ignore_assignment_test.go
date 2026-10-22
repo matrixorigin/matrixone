@@ -39,9 +39,22 @@ func TestPreparedIgnoreAssignmentKeepsRuntimeCast(t *testing.T) {
 					foundDirectParam = true
 					break
 				}
+				if len(args) != 3 {
+					continue
+				}
+				_, slot, validRef := numericProgramRefIdentity(args[0])
+				source, privateOwner := numericValueProgramSourceOwner(args[0])
+				if !validRef || slot != 0 || !privateOwner || source == nil ||
+					!numericProgramDefinitionMatchesRef(args[0]) {
+					continue
+				}
+				if _, hasAssignmentParam := preparedNumericValueParamPositions(source)[0]; hasAssignmentParam {
+					foundDirectParam = true
+					break
+				}
 			}
 			require.True(t, foundDirectParam,
-				"prepared IGNORE assignment must keep a direct parameter as cast_ignore input")
+				"prepared IGNORE assignment must retain its value parameter directly or in a validated paired owner")
 		})
 	}
 }

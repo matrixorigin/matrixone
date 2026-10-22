@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -290,7 +291,11 @@ func runAssignmentIgnoreTimeCastWithMixedNumericBinaryRows(
 		NewAssignIgnoreCast,
 	)
 	t.Cleanup(testCase.Free)
-	require.NoError(t, testCase.parameters[0].SetIsBinRowsWithMP([]bool{true, false}, proc.Mp()))
+	kind := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true, false}, nil)
+	defer kind.Free(proc.Mp())
+	testCase.fn = func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+		return newCast(parameters, result, proc, length, selectList, castModeAssignmentIgnore, true, kind)
+	}
 	result, err := testCase.DebugRun()
 	if err != nil {
 		return nil, session, err
@@ -298,7 +303,7 @@ func runAssignmentIgnoreTimeCastWithMixedNumericBinaryRows(
 	return result, session, nil
 }
 
-func TestAssignmentIgnoreTimeUsesPerRowNumericBinaryMarkers(t *testing.T) {
+func TestAssignmentIgnoreTimeUsesExplicitNumericValueKind(t *testing.T) {
 	t.Run("empty HEX row is NULL but ordinary empty text is zero with warning", func(t *testing.T) {
 		result, session, err := runAssignmentIgnoreTimeCastWithMixedNumericBinaryRows(t, []string{"", ""})
 		require.NoError(t, err)

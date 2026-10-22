@@ -672,6 +672,12 @@ func GetFunctionByNameWithOverload(
 	ctx context.Context, name string, args []types.Type, overloadID int32,
 ) (r FuncGetResult, err error) {
 	originalArgs := args
+	if name == "cast" && overloadID == NumericValueCastOverload {
+		if !NumericValueCastSignature(args) {
+			return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "invalid numeric value cast signature %v", args)
+		}
+		return FuncGetResult{fid: CAST, overloadId: overloadID, retType: args[1]}, nil
+	}
 	if name == "cast" && IsIntegerArgumentCastOverload(overloadID) {
 		if !integerArgumentCastSignature(overloadID, args) {
 			return FuncGetResult{}, moerr.NewInvalidInputf(ctx, "invalid integer argument cast signature %v", args)
@@ -1084,7 +1090,22 @@ type FuncNew struct {
 	// Integer contexts and canonical binding identities are independent of the
 	// source numeric type. An empty bindingOverloads list keeps legacy binding.
 	integerParameters []integerParameter
-	bindingOverloads  []int
+	// valueArgs identifies value operands that participate in the
+	// function's numeric value domain. Control arguments (for example ROUND's
+	// precision) are intentionally excluded.
+	valueArgs []int
+	// sourceKindArgs identifies string operands whose owner consumes the
+	// selected numeric-literal kind as a separate BOOL input.
+	sourceKindArgs  []int
+	sourceKindArity int
+	// preserveDecimalType marks functions whose result remains in the
+	// decimal domain when their first value operand is DECIMAL. The normal
+	// overload resolver still determines the result's precision and scale.
+	preserveDecimalType bool
+	// numContext marks scalar math functions whose result and
+	// value operands share the generic numeric context during binding.
+	numContext       bool
+	bindingOverloads []int
 
 	// checkFn was used to check whether the input type can match the requirement of the function.
 	// if matched, return the corresponding id of overload. If type conversion was required,

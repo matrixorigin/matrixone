@@ -109,7 +109,18 @@ func TestPreparedProjectedExplicitCastDomain(t *testing.T) {
 	require.NoError(t, err)
 	original := prepared.GetDcl().GetPrepare().Plan
 	originalSource := findPlanFunctionExpr(original, "hex").GetF().Args[0].GetF().Args[0]
-	require.True(t, originalSource.GetPreparedNumeric().GetProjectedCommonValue())
+	require.Equal(t, int32(types.T_float64), originalSource.Typ.Id)
+	originalProducer := findPlanFunctionExpr(original, "cast")
+	require.NotNil(t, originalProducer)
+	originalCast := originalProducer.GetF()
+	require.NotNil(t, originalCast)
+	originalCastID, originalCastOverload := planfunction.DecodeOverloadID(originalCast.Func.Obj)
+	require.Equal(t, int32(planfunction.CAST), originalCastID)
+	require.Equal(t, planfunction.NumericValueCastOverload, originalCastOverload)
+	require.Equal(t, int32(types.T_float64), originalProducer.Typ.Id)
+	require.Len(t, originalCast.Args, 4)
+	require.Equal(t, int32(types.T_bool), originalCast.Args[2].Typ.Id)
+	require.Equal(t, int32(1), originalCast.Args[3].GetLit().GetI32Val(), "the original explicit-cast policy must survive lowering")
 	bound, _, err := FillValuesOfParamsInPlanWithSpecialization(context.Background(), original, []any{
 		ParamValue{Value: float64(1.5), SourceType: types.T_float64.ToType(), HasSourceType: true},
 	})
@@ -117,13 +128,30 @@ func TestPreparedProjectedExplicitCastDomain(t *testing.T) {
 	hexExpr := findPlanFunctionExpr(bound, "hex")
 	require.NotNil(t, hexExpr)
 	boundSource := hexExpr.GetF().Args[0].GetF().Args[0]
-	require.True(t, boundSource.GetPreparedNumeric().GetProjectedCommonValue())
 	require.Equal(t, int32(types.T_float64), boundSource.Typ.Id)
+	boundProducer := findPlanFunctionExpr(bound, "cast")
+	require.NotNil(t, boundProducer)
+	boundCast := boundProducer.GetF()
+	require.NotNil(t, boundCast)
+	boundCastID, boundCastOverload := planfunction.DecodeOverloadID(boundCast.Func.Obj)
+	require.Equal(t, int32(planfunction.CAST), boundCastID)
+	require.Equal(t, planfunction.NumericValueCastOverload, boundCastOverload)
+	require.Equal(t, int32(types.T_float64), boundProducer.Typ.Id)
+	require.Len(t, boundCast.Args, 4)
+	require.Equal(t, int32(types.T_bool), boundCast.Args[2].Typ.Id)
+	require.True(t, sameNumericValueProgramScope(boundCast.Args[0], boundCast.Args[2]),
+		"the explicit cast must consume the BOOL companion from its own source program")
+	require.Equal(t, int32(1), boundCast.Args[3].GetLit().GetI32Val(), "the original explicit-cast policy must survive execute-time refresh")
 	proc := testutil.NewProcess(t)
 	executor, err := colexec.NewExpressionExecutor(proc, hexExpr)
 	require.NoError(t, err)
 	defer executor.Free()
-	result, err := executor.Eval(proc, []*batch.Batch{batch.EmptyForConstFoldBatch}, nil)
+	input := batch.NewWithSize(1)
+	input.Vecs[0] = vector.NewVec(types.T_float64.ToType())
+	require.NoError(t, vector.AppendFixed(input.Vecs[0], float64(1.5), false, proc.Mp()))
+	input.SetRowCount(1)
+	defer input.Clean(proc.Mp())
+	result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	require.Equal(t, "2", string(result.GetBytesAt(0)))
 }
@@ -162,7 +190,11 @@ func TestPreparedGroupedIfnullSourceDomain(t *testing.T) {
 	require.NoError(t, err)
 	charExpr := findPlanFunctionExpr(bound, "char")
 	require.NotNil(t, charExpr)
-	commonValue := charExpr.GetF().Args[0].GetF().Args[0]
+	castExpr := charExpr.GetF().Args[0]
+	require.NotNil(t, castExpr.GetF())
+	commonValue, private := numericValueProgramSourceOwner(castExpr.GetF().Args[0])
+	require.True(t, private, "the common value must be read through the validated slot-zero owner")
+	require.NotNil(t, commonValue)
 	require.True(t, commonValue.GetPreparedNumeric().GetIfnullCommonValue())
 	require.Equal(t, int32(types.T_float64), commonValue.Typ.Id)
 }

@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -561,8 +562,16 @@ func TestPreparedRoundAndTruncateKeepRuntimeValueDomain(t *testing.T) {
 					require.NoError(t, planpb.VisitExpressionsInOwner(bound.Plan, func(root *Expr) error {
 						return planpb.VisitExprTree(root, func(expr *Expr) error {
 							fn := expr.GetF()
-							if fn != nil && fn.Func.GetObjName() == "cast" && len(fn.Args) > 0 &&
-								fn.Args[0].GetP() != nil && types.T(expr.Typ.Id).IsDecimal() && expr.Typ.Scale < 2 {
+							if fn == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 ||
+								!types.T(expr.Typ.Id).IsDecimal() || expr.Typ.Scale >= 2 {
+								return nil
+							}
+							if fn.Args[0].GetP() != nil {
+								narrowSourceCast = true
+							} else if _, policy, ok := numericValueCastAnalysisSource(expr); ok &&
+								policy == function.NumericValueCastPolicyExplicit {
+								// CAST9 is an internal lowering of this original explicit
+								// boundary. Inspect it through the validated source owner.
 								narrowSourceCast = true
 							}
 							return nil

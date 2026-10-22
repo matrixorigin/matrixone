@@ -14,6 +14,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -127,7 +128,11 @@ func TestDecimalPrefixSelectionContracts(t *testing.T) {
 				NewFunctionTestInput(target, emptyCastTargetValues(target), nil),
 			}, NewFunctionTestResult(target, false, wanted, nil), NewCast)
 			t.Cleanup(fc.Free)
-			require.NoError(t, fc.parameters[0].SetIsBinRowsWithMP([]bool{false, true}, proc.Mp()))
+			kind := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{false, true}, nil)
+			defer kind.Free(proc.Mp())
+			fc.fn = func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+				return newCast(parameters, result, proc, length, selectList, castModeNormal, false, kind)
+			}
 			fc.fnLength = 2
 			ok, info := fc.Run()
 			require.True(t, ok, info)
@@ -142,7 +147,11 @@ func TestDecimalPrefixSelectionContracts(t *testing.T) {
 		}, NewFunctionTestResult(target, false,
 			[]types.Decimal128{{B0_63: 12}, {}}, []bool{false, true}), NewCast).WithSelectList(selection)
 		t.Cleanup(fc.Free)
-		require.NoError(t, fc.parameters[0].SetIsBinRowsWithMP([]bool{false, true}, proc.Mp()))
+		kind := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{false, true}, nil)
+		defer kind.Free(proc.Mp())
+		fc.fn = func(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+			return newCast(parameters, result, proc, length, selectList, castModeNormal, false, kind)
+		}
 		fc.fnLength = 2
 		ok, info := fc.Run()
 		require.True(t, ok, info)

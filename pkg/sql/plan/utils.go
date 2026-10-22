@@ -1169,6 +1169,35 @@ func preparedNodeOutputContainsParam(
 	return found
 }
 
+func preparedExprInputLineageContainsParam(query *plan.Query, nodeID int32, expr *plan.Expr) bool {
+	if preparedExprContainsParam(expr) {
+		return true
+	}
+	if query == nil || nodeID < 0 || int(nodeID) >= len(query.Nodes) || expr == nil {
+		return false
+	}
+	node := query.Nodes[nodeID]
+	if node == nil {
+		return false
+	}
+	found := false
+	_ = plan.VisitExprTree(expr, func(nested *plan.Expr) error {
+		col := nested.GetCol()
+		if found || col == nil || col.ColPos < 0 {
+			return nil
+		}
+		if col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+			found = preparedNodeOutputContainsParam(
+				query, node.Children[col.RelPos], col.ColPos, make(map[[2]int32]struct{}))
+		} else if len(node.Children) == 1 {
+			found = preparedNodeOutputContainsParam(
+				query, node.Children[0], col.ColPos, make(map[[2]int32]struct{}))
+		}
+		return nil
+	})
+	return found
+}
+
 // collectPreparedIntegerArgumentParamPositions follows only projected ColRef
 // lineage from the private CAST's owning node. After scalar-subquery
 // flattening, the outer CAST sees a ColRef while the contributing ParamRef
@@ -1526,7 +1555,14 @@ func preparedNumericFallbackFunctionArg(fn *plan.Function) (*plan.Expr, bool) {
 }
 
 func isPreparedNumericFallbackExpr(expr *plan.Expr) bool {
-	return expr != nil && expr.GetPreparedNumeric().GetFallback()
+	if expr == nil {
+		return false
+	}
+	owner, privateNode := numericValueProgramSourceOwner(expr)
+	if privateNode {
+		return owner != nil && owner.GetPreparedNumeric().GetFallback()
+	}
+	return expr.GetPreparedNumeric().GetFallback()
 }
 
 func ensurePreparedNumericMetadata(expr *plan.Expr) *plan.PreparedNumericMetadata {
@@ -1795,7 +1831,19 @@ func exprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
 	}
+	if numericValueExpressionHasPrivateProgram(expr) && isStatementConstantNumericValueExpression(expr) &&
+		makeTypeByPlan2Expr(expr).IsNumeric() && types.T(expr.Typ.Id) != types.T_decimal256 {
+		// A complete lexical value owner is evaluated as one row-independent
+		// scalar by the runtime zone-map evaluator. Do not ask ordinary function
+		// metadata to classify its private REF/PROGRAM implementation nodes.
+		return true
+	}
 	if fn := expr.GetF(); fn != nil {
+		fid, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if fid == function.SCALAR_PROGRAM || fid == function.SCALAR_PROGRAM_REF ||
+			(fid == function.CAST && overload == function.NumericValueCastOverload) {
+			return false
+		}
 		kind := function.GetZoneMapEvaluation(fn)
 		if kind == function.ZoneMapUnsupported {
 			return false
@@ -1986,6 +2034,13 @@ func constantFoldWithPreparedExactSource(
 
 	overloadID := fn.Func.GetObj()
 	functionID, _ := function.DecodeOverloadID(overloadID)
+	if functionID == function.SCALAR_PROGRAM || functionID == function.SCALAR_PROGRAM_REF {
+		// Numeric value programs are lexical executor instructions rather than
+		// scalar SQL functions. Their value and BOOL outputs must stay paired
+		// through planning; generic folding must not resolve them in the SQL
+		// overload registry or rewrite one output independently.
+		return expr, nil
+	}
 	if preservePreparedExactSource && rule.IsNullIntegerArgumentCast(expr) {
 		return expr, nil
 	}
@@ -4196,8 +4251,8 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 	if query == nil || !isPreparedDMLStmt(query.StmtType) {
 		return writeExprs
 	}
-	add := func(expr *plan.Expr) {
-		if preparedExprContainsParam(expr) {
+	add := func(nodeID int32, expr *plan.Expr) {
+		if preparedExprInputLineageContainsParam(query, nodeID, expr) {
 			writeExprs[expr] = struct{}{}
 		}
 	}
@@ -4224,7 +4279,7 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 		}
 		if node.NodeType == plan.Node_PROJECT {
 			for _, expr := range node.ProjectList {
-				add(expr)
+				add(nodeID, expr)
 			}
 		}
 		if len(node.Children) > 0 {
@@ -4235,7 +4290,7 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 			visitWritePath(node.Children[0])
 		}
 	}
-	for _, node := range query.Nodes {
+	for nodeIndex, node := range query.Nodes {
 		if node == nil {
 			continue
 		}
@@ -4249,7 +4304,7 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 				input := query.Nodes[childID]
 				if input != nil {
 					for _, expr := range input.ProjectList {
-						add(expr)
+						add(childID, expr)
 					}
 				}
 			}
@@ -4259,25 +4314,25 @@ func preparedDMLWriteExpressions(query *plan.Query) map[*plan.Expr]struct{} {
 		// filter expressions and must remain eligible for specialization.
 		if node.NodeType == plan.Node_INSERT || node.NodeType == plan.Node_MULTI_UPDATE {
 			for _, expr := range node.ProjectList {
-				add(expr)
+				add(int32(nodeIndex), expr)
 			}
 			for _, childID := range node.Children {
 				visitWritePath(childID)
 			}
 		}
 		for _, expr := range node.OnUpdateExprs {
-			add(expr)
+			add(int32(nodeIndex), expr)
 		}
 		if node.DedupJoinCtx != nil {
 			for _, expr := range node.DedupJoinCtx.UpdateColExprList {
-				add(expr)
+				add(int32(nodeIndex), expr)
 			}
 		}
 		if node.RowsetData != nil {
 			for _, col := range node.RowsetData.Cols {
 				for _, row := range col.Data {
 					if row != nil {
-						add(row.Expr)
+						add(int32(nodeIndex), row.Expr)
 					}
 				}
 			}
@@ -4373,6 +4428,24 @@ func (rule *preparedRuntimeTextComparisonScanRule) exprHasNumericDomain(expr *pl
 	if expr == nil {
 		return false
 	}
+	if source, policy, ok := numericValueCastAnalysisSource(expr); ok {
+		if policy == function.NumericValueCastPolicyExplicit ||
+			policy == function.NumericValueCastPolicySetOperation {
+			return false
+		}
+		return rule.exprHasNumericDomain(source)
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil &&
+		strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) == 2 &&
+		!expr.GetPreparedNumeric().GetProvisionalResultCast() && !fn.GetSyntaxExplicitCast() {
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload == 0 && fn.Args[0] != nil && types.T(fn.Args[1].Typ.Id).IsMySQLString() {
+			// The binder may cast the DECIMAL column to TEXT while its prepared
+			// marker is still unresolved. That envelope does not change the
+			// numeric comparison source used to rebind a concrete text packet.
+			return rule.exprHasNumericDomain(fn.Args[0])
+		}
+	}
 	if param := expr.GetP(); param != nil {
 		return rule.paramTypeIsNumeric(int(param.Pos))
 	}
@@ -4404,6 +4477,19 @@ func (rule *preparedRuntimeTextComparisonScanRule) exprHasNumericDomain(expr *pl
 
 func (rule *preparedRuntimeTextComparisonScanRule) collectTextParams(expr *plan.Expr) {
 	if expr == nil {
+		return
+	}
+	if source, policy, ok := numericValueCastAnalysisSource(expr); ok {
+		if policy != function.NumericValueCastPolicyExplicit &&
+			policy != function.NumericValueCastPolicySetOperation {
+			rule.collectTextParams(source)
+		}
+		return
+	}
+	if owner, privateNode := numericValueProgramSourceOwner(expr); privateNode {
+		if owner != nil {
+			rule.collectTextParams(owner)
+		}
 		return
 	}
 	if param := expr.GetP(); param != nil {
@@ -6471,12 +6557,7 @@ func preparedExprUsesStringMathValueArgWithRole(
 }
 
 func isPreparedStringMathFunction(name string) bool {
-	switch strings.ToLower(name) {
-	case "abs", "ceil", "ceiling", "floor", "mod", "round", "sign", "truncate":
-		return true
-	default:
-		return false
-	}
+	return function.HasNumericValueArguments(name)
 }
 
 func preparedRuntimeParamExpr(ctx context.Context, value any, isBin bool, runtimeType types.Type) (*Expr, error) {
@@ -7126,6 +7207,10 @@ func preparedRuntimeSourceParamPosition(expr *Expr) (int, bool) {
 	if expr == nil {
 		return 0, false
 	}
+	if source, policy, ok := numericValueCastAnalysisSource(expr); ok &&
+		policy != function.NumericValueCastPolicyExplicit && !expr.GetF().GetSyntaxExplicitCast() {
+		return preparedRuntimeSourceParamPosition(source)
+	}
 	if param := expr.GetP(); param != nil {
 		return int(param.Pos), true
 	}
@@ -7143,6 +7228,9 @@ func preparedRuntimeSourceParamPosition(expr *Expr) (int, bool) {
 func preparedMathPrecisionSourceParamPosition(expr *Expr) (int, bool) {
 	if expr == nil || isExplicitPreparedCast(expr) {
 		return 0, false
+	}
+	if source, _, ok := numericValueCastAnalysisSource(expr); ok {
+		return preparedMathPrecisionSourceParamPosition(source)
 	}
 	if param := expr.GetP(); param != nil {
 		return int(param.Pos), true
@@ -7190,11 +7278,27 @@ func preparedProjectedParamPosition(
 	if expr == nil || node == nil {
 		return 0, false
 	}
+	if source, privateNode := numericValueProgramSourceOwner(expr); privateNode {
+		if source == nil || source == expr {
+			return 0, false
+		}
+		return preparedProjectedParamPosition(query, node, source, visited, allowJoin)
+	}
+	if source, policy, ok := numericValueCastAnalysisSource(expr); ok &&
+		policy != function.NumericValueCastPolicyExplicit {
+		return preparedProjectedParamPosition(query, node, source, visited, allowJoin)
+	}
 	if param := expr.GetP(); param != nil {
 		return param.Pos, true
 	}
 	if fn := expr.GetF(); fn != nil && expr.GetPreparedNumeric().GetProvisionalResultCast() &&
 		!isExplicitPreparedCast(expr) && len(fn.Args) > 0 {
+		return preparedProjectedParamPosition(query, node, fn.Args[0], visited, allowJoin)
+	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && !fn.GetSyntaxExplicitCast() &&
+		strings.EqualFold(fn.Func.GetObjName(), "cast") && len(fn.Args) == 2 &&
+		fn.Args[0] != nil && fn.Args[1] != nil && fn.Args[1].GetT() != nil &&
+		types.T(fn.Args[1].Typ.Id).IsMySQLString() {
 		return preparedProjectedParamPosition(query, node, fn.Args[0], visited, allowJoin)
 	}
 	col := expr.GetCol()
@@ -7339,6 +7443,12 @@ func refreshPreparedPlanProjectionExprType(
 		if exprImpl.F == nil {
 			return false, nil
 		}
+		if exprImpl.F.Func != nil {
+			fid, _ := function.DecodeOverloadID(exprImpl.F.Func.GetObj())
+			if fid == function.SCALAR_PROGRAM || fid == function.SCALAR_PROGRAM_REF {
+				return refreshPreparedNumericValueProgram(ctx, expr, resolveColumnType, resolveColumnParam, paramRule, correlationRefresh...)
+			}
+		}
 		functionName := ""
 		if exprImpl.F.Func != nil {
 			functionName = exprImpl.F.Func.GetObjName()
@@ -7387,14 +7497,28 @@ func refreshPreparedPlanProjectionExprType(
 		// SQL. Only a transparent projected marker can provide its runtime domain;
 		// a set/common-result column must use its producer's reconciled type.
 		if expr.GetPreparedNumeric().GetProvisionalResultCast() && functionName == "cast" &&
-			!isExplicitPreparedCast(expr) && len(exprImpl.F.Args) == 2 {
-			source, _, err := recoverPreparedProjectedValueOperand(
-				ctx, exprImpl.F.Args[0], resolveColumnParam, paramRule)
-			if err != nil {
-				return false, err
+			!isExplicitPreparedCast(expr) {
+			var valueOwner *plan.Expr
+			if _, policy, ok := numericValueCastAnalysisSource(expr); ok {
+				if policy == function.NumericValueCastPolicyOrdinary ||
+					policy == function.NumericValueCastPolicyComparison {
+					// CAST9 may wrap an ordinary ColRef or a paired program REF.
+					// Retire only the conversion envelope and keep that current
+					// producer owner intact for execution.
+					valueOwner = exprImpl.F.Args[0]
+				}
+			} else if len(exprImpl.F.Args) == 2 {
+				valueOwner = exprImpl.F.Args[0]
 			}
-			*expr = *source
-			return true, nil
+			if valueOwner != nil {
+				source, _, err := recoverPreparedProjectedValueOperand(
+					ctx, valueOwner, resolveColumnParam, paramRule)
+				if err != nil {
+					return false, err
+				}
+				*expr = *source
+				return true, nil
+			}
 		}
 
 		// A grouped subquery may acquire its numeric domain only after the
@@ -7434,7 +7558,7 @@ func refreshPreparedPlanProjectionExprType(
 			}
 		}
 		staleTextIntegerCast := false
-		if isIntegerArgumentCast(expr) && len(exprImpl.F.Args) == 2 && exprImpl.F.Func != nil {
+		if isIntegerArgumentCast(expr) && exprImpl.F.Func != nil {
 			_, overload := function.DecodeOverloadID(exprImpl.F.Func.Obj)
 			staleTextIntegerCast = overload == function.TextIntegerBitsCastOverload &&
 				types.T(exprImpl.F.Args[0].Typ.Id) != types.T_any &&
@@ -7485,7 +7609,11 @@ func refreshPreparedPlanProjectionExprType(
 			rebound, err = appendIntegerArgument(ctx, rebindArgs[0], target, false)
 		}
 		if rebound == nil && err == nil {
-			rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil)
+			if isPreparedPrivateConversionCast(expr) {
+				rebound, err = rebindExplicitPreparedCast(ctx, expr, rebindArgs)
+			} else {
+				rebound, err = bindPreparedFuncExprImplByPlanExpr(ctx, expr, functionName, rebindArgs, nil)
+			}
 		}
 		if err != nil {
 			return false, err
@@ -7558,6 +7686,84 @@ func refreshPreparedPlanProjectionExprType(
 		}
 	}
 
+	return changed, nil
+}
+
+// refreshPreparedNumericValueProgram follows the lexical owner instead of
+// sending private plan nodes through SQL overload binding. Slot zero owns the
+// source expression and paired BOOL; slot one is only a BOOL reference.
+func refreshPreparedNumericValueProgram(
+	ctx context.Context,
+	expr *plan.Expr,
+	resolveColumnType preparedPlanColumnTypeResolver,
+	resolveColumnParam preparedPlanColumnParamResolver,
+	paramRule *ResetParamRefRule,
+	correlationRefresh ...func(*plan.Expr) (bool, error),
+) (bool, error) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false, moerr.NewInvalidInput(ctx, "numeric value program is missing its function")
+	}
+	fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+	definition := expr
+	valueReference := false
+	switch fid {
+	case function.SCALAR_PROGRAM:
+		if _, ok := numericProgramDefinitionScope(expr); !ok {
+			return false, moerr.NewInvalidInput(ctx, "invalid numeric value program definition")
+		}
+	case function.SCALAR_PROGRAM_REF:
+		scope, slot, ok := numericProgramRefIdentity(expr)
+		if !ok {
+			return false, moerr.NewInvalidInput(ctx, "invalid numeric value program reference")
+		}
+		if len(fn.Args) == 2 {
+			if slot != 1 || types.T(expr.Typ.Id) != types.T_bool {
+				return false, moerr.NewInvalidInput(ctx, "invalid numeric value kind reference")
+			}
+			return false, nil
+		}
+		if len(fn.Args) != 3 || slot != 0 || fn.Args[0] == nil {
+			return false, moerr.NewInvalidInput(ctx, "numeric value reference must own slot zero")
+		}
+		definition = fn.Args[0]
+		definitionScope, scopeOK := numericProgramDefinitionScope(definition)
+		if !scopeOK || definitionScope != scope {
+			return false, moerr.NewInvalidInput(ctx, "numeric value reference has a mismatched definition scope")
+		}
+		valueReference = true
+	default:
+		return false, nil
+	}
+	definitionFn := definition.GetF()
+	if definitionFn == nil || definitionFn.Func == nil ||
+		(len(definitionFn.Args) != 2 && len(definitionFn.Args) != 3) || definitionFn.Args[1] == nil {
+		return false, moerr.NewInvalidInput(ctx, "invalid numeric value program definition")
+	}
+	changed, err := refreshPreparedPlanProjectionExprType(
+		ctx, definitionFn.Args[1], resolveColumnType, resolveColumnParam, paramRule, correlationRefresh...)
+	if err != nil {
+		return false, err
+	}
+	if len(definitionFn.Args) == 3 {
+		kindChanged, kindErr := refreshPreparedPlanProjectionExprType(
+			ctx, definitionFn.Args[2], resolveColumnType, resolveColumnParam, paramRule, correlationRefresh...)
+		if kindErr != nil {
+			return false, kindErr
+		}
+		if definitionFn.Args[2] == nil || types.T(definitionFn.Args[2].Typ.Id) != types.T_bool {
+			return false, moerr.NewInvalidInput(ctx, "numeric value program kind source must remain BOOL")
+		}
+		changed = changed || kindChanged
+	}
+	if types.T(definition.Typ.Id) != types.T_any {
+		definition.Typ = makeSimplePlan2Type(types.T_any)
+		changed = true
+	}
+	if valueReference && !reflect.DeepEqual(expr.Typ, definitionFn.Args[1].Typ) {
+		expr.Typ = definitionFn.Args[1].Typ
+		changed = true
+	}
 	return changed, nil
 }
 
@@ -8115,17 +8321,23 @@ func reconcilePreparedSetOperationInputs(
 	targetValid := make([]bool, len(node.ProjectList))
 	pureNullColumns := make([][]bool, len(childProjectLists))
 	sourceExpressions := make([][]*plan.Expr, len(childProjectLists))
+	analysisExpressions := make([][]*plan.Expr, len(childProjectLists))
 	inputTypeChanged := make([]bool, len(node.ProjectList))
 	pureNullMemo := make(map[preparedSetOperationNullKey]bool)
 	pureNullVisiting := make(map[preparedSetOperationNullKey]bool)
 	for branchIdx, projects := range childProjectLists {
 		pureNullColumns[branchIdx] = make([]bool, len(projects))
 		sourceExpressions[branchIdx] = make([]*plan.Expr, len(projects))
+		analysisExpressions[branchIdx] = make([]*plan.Expr, len(projects))
+		// Analyze the runtime source domain separately from the executable
+		// paired value/kind outputs. Replacing a program REF with its raw
+		// parameter would discard the BOOL passenger required by the set node.
 		if branchIdx >= len(node.Children) {
 			continue
 		}
 		for colPos := range projects {
 			sourceExpressions[branchIdx][colPos] = projects[colPos]
+			analysisExpressions[branchIdx][colPos] = projects[colPos]
 			pureNullColumns[branchIdx][colPos] = preparedSetOperationOutputIsPureNull(
 				query, node.Children[branchIdx], int32(colPos), pureNullMemo, pureNullVisiting,
 			)
@@ -8145,6 +8357,7 @@ func reconcilePreparedSetOperationInputs(
 					return false, nil, err
 				}
 				sourceExpressions[branchIdx][colPos] = source
+				analysisExpressions[branchIdx][colPos] = source
 			}
 			if pos, direct := paramRule.setArmParam[preparedSetOperationInputKey{
 				node: node, branchIdx: branchIdx, colPos: colPos,
@@ -8152,16 +8365,19 @@ func reconcilePreparedSetOperationInputs(
 				if source, known, err := paramRule.preparedRuntimeSourceExpr(int(pos), false); err != nil {
 					return false, nil, err
 				} else if known {
-					sourceExpressions[branchIdx][colPos] = source
+					analysisExpressions[branchIdx][colPos] = source
+					if _, privatePair := numericValueProgramSourceOwner(projects[colPos]); !privatePair {
+						sourceExpressions[branchIdx][colPos] = source
+					}
 					pureNullColumns[branchIdx][colPos] = types.T(source.Typ.Id) == types.T_any &&
 						source.GetLit().GetIsnull()
 				}
 			}
-			if colPos < len(node.ProjectList) && sourceExpressions[branchIdx][colPos] != nil {
+			if colPos < len(node.ProjectList) && analysisExpressions[branchIdx][colPos] != nil {
 				originalType, ok := originalInputTypes[preparedSetOperationInputKey{
 					node: node, branchIdx: branchIdx, colPos: colPos,
 				}]
-				if ok && !reflect.DeepEqual(sourceExpressions[branchIdx][colPos].Typ, originalType) {
+				if ok && !reflect.DeepEqual(analysisExpressions[branchIdx][colPos].Typ, originalType) {
 					inputTypeChanged[colPos] = true
 				}
 			}
@@ -8185,12 +8401,13 @@ func reconcilePreparedSetOperationInputs(
 		}
 		branchExprs := make([]*plan.Expr, len(childProjectLists))
 		valid := len(childProjectLists) == len(node.Children)
-		for branchIdx, projects := range childProjectLists {
-			if !valid || colPos >= len(projects) || projects[colPos] == nil {
+		for branchIdx := range analysisExpressions {
+			if !valid || colPos >= len(analysisExpressions[branchIdx]) ||
+				analysisExpressions[branchIdx][colPos] == nil {
 				valid = false
 				break
 			}
-			branchExprs[branchIdx] = sourceExpressions[branchIdx][colPos]
+			branchExprs[branchIdx] = analysisExpressions[branchIdx][colPos]
 		}
 		if !valid {
 			continue

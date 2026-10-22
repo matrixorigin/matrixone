@@ -67,7 +67,7 @@ func (c *Compile) constrainRemoteExpressionWorkers(qry *plan.Query) error {
 				"string numeric compatibility cannot run with a legacy session contract",
 			)
 		}
-		required = max(required, defines.MORPCVersion126)
+		required = max(required, defines.MORPCVersion129)
 	}
 	if required == 0 {
 		return nil
@@ -160,6 +160,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 }
 
 func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
+	if features.NumericValuePrograms {
+		return defines.MORPCVersion130
+	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
 		return defines.MORPCVersion129
 	}

@@ -8081,10 +8081,13 @@ var supportedArrayOperations = []FuncNew{
 var supportedMathBuiltIns = []FuncNew{
 	// function `abs`
 	{
-		functionId: ABS,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    mathStringTypeMatch,
+		functionId:          ABS,
+		valueArgs:           []int{0},
+		numContext:          true,
+		preserveDecimalType: true,
+		class:               plan.Function_STRICT,
+		layout:              STANDARD_FUNCTION,
+		checkFn:             mathStringTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -8172,6 +8175,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `sqrt`
 	{
 		functionId: SQRT,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -8212,6 +8217,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `sign`
 	{
 		functionId: SIGN,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    mathStringTypeMatch,
@@ -8282,6 +8289,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `acos`
 	{
 		functionId: ACOS,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -8303,6 +8312,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `asin`
 	{
 		functionId: ASIN,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -8324,6 +8335,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `atan`
 	{
 		functionId: ATAN,
+		valueArgs:  []int{0, 1},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -8356,6 +8369,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `atan2`
 	{
 		functionId: ATAN2,
+		valueArgs:  []int{0, 1},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -8377,6 +8392,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `degrees`
 	{
 		functionId: DEGREES,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -8398,6 +8415,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `radians`
 	{
 		functionId: RADIANS,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -8733,11 +8752,14 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `ceil`, `ceiling`
 	{
-		functionId:        CEIL,
-		class:             plan.Function_STRICT,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
-		layout:            STANDARD_FUNCTION,
-		checkFn:           mathStringTypeMatchKeepBoolStringFallback,
+		functionId:          CEIL,
+		valueArgs:           []int{0},
+		numContext:          true,
+		preserveDecimalType: true,
+		class:               plan.Function_STRICT,
+		integerParameters:   []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
+		layout:              STANDARD_FUNCTION,
+		checkFn:             mathStringTypeMatchKeepBoolStringFallback,
 
 		Overloads: []overload{
 			{
@@ -8879,6 +8901,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `cos`
 	{
 		functionId: COS,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -8900,6 +8924,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `cot`
 	{
 		functionId: COT,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -8944,6 +8970,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `exp`
 	{
 		functionId: EXP,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -8964,11 +8992,14 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `floor`
 	{
-		functionId:        FLOOR,
-		class:             plan.Function_STRICT,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
-		layout:            STANDARD_FUNCTION,
-		checkFn:           mathStringTypeMatchKeepBoolStringFallback,
+		functionId:          FLOOR,
+		valueArgs:           []int{0},
+		numContext:          true,
+		preserveDecimalType: true,
+		class:               plan.Function_STRICT,
+		integerParameters:   []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
+		layout:              STANDARD_FUNCTION,
+		checkFn:             mathStringTypeMatchKeepBoolStringFallback,
 
 		Overloads: []overload{
 			{
@@ -9332,6 +9363,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `ln`
 	{
 		functionId: LN,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -9354,6 +9387,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `log`
 	{
 		functionId: LOG,
+		valueArgs:  []int{0, 1},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -9387,6 +9422,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `log2`
 	{
 		functionId: LOG2,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -9409,6 +9446,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `log10`
 	{
 		functionId: LOG10,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -9430,10 +9469,12 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `oct`
 	{
-		functionId: OCT,
-		class:      plan.Function_STRICT,
-		layout:     STANDARD_FUNCTION,
-		checkFn:    octTypeCheck,
+		functionId:      OCT,
+		sourceKindArgs:  []int{0},
+		sourceKindArity: 1,
+		class:           plan.Function_STRICT,
+		layout:          STANDARD_FUNCTION,
+		checkFn:         octTypeCheck,
 
 		Overloads: withLegacyOctOverloads([]overload{
 			{
@@ -9663,6 +9704,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `power`
 	{
 		functionId: POW,
+		valueArgs:  []int{0, 1},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -9718,11 +9761,14 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `round`
 	{
-		functionId:        ROUND,
-		class:             plan.Function_STRICT,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
-		layout:            STANDARD_FUNCTION,
-		checkFn:           mathStringTypeMatch,
+		functionId:          ROUND,
+		valueArgs:           []int{0},
+		numContext:          true,
+		preserveDecimalType: true,
+		class:               plan.Function_STRICT,
+		integerParameters:   []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
+		layout:              STANDARD_FUNCTION,
+		checkFn:             mathStringTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9850,11 +9896,14 @@ var supportedMathBuiltIns = []FuncNew{
 
 	// function `truncate`
 	{
-		functionId:        TRUNCATE,
-		class:             plan.Function_STRICT,
-		integerParameters: []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
-		layout:            STANDARD_FUNCTION,
-		checkFn:           mathStringTypeMatch,
+		functionId:          TRUNCATE,
+		valueArgs:           []int{0},
+		numContext:          true,
+		preserveDecimalType: true,
+		class:               plan.Function_STRICT,
+		integerParameters:   []integerParameter{{position: 1, target: types.T_int64, ordinaryCast: true}},
+		layout:              STANDARD_FUNCTION,
+		checkFn:             mathStringTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9983,6 +10032,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `sin`
 	{
 		functionId: SIN,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -10004,6 +10055,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `sinh`
 	{
 		functionId: SINH,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -10025,6 +10078,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `tan`
 	{
 		functionId: TAN,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -10046,6 +10101,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `tanh`
 	{
 		functionId: TANH,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -10066,6 +10123,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `cosh`
 	{
 		functionId: COSH,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -10086,6 +10145,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `asinh`
 	{
 		functionId: ASINH,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -10106,6 +10167,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `acosh`
 	{
 		functionId: ACOSH,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -10126,6 +10189,8 @@ var supportedMathBuiltIns = []FuncNew{
 	// function `atanh`
 	{
 		functionId: ATANH,
+		valueArgs:  []int{0},
+		numContext: true,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
 		checkFn:    fixedTypeMatchWithBoolNumericCast,
@@ -13469,6 +13534,8 @@ var supportedControlBuiltIns = []FuncNew{
 	// function `MAKETIME`
 	{
 		functionId:        MAKETIME,
+		sourceKindArgs:    []int{2},
+		sourceKindArity:   3,
 		class:             plan.Function_STRICT,
 		layout:            STANDARD_FUNCTION,
 		checkFn:           makeTimeIntegerCheck,

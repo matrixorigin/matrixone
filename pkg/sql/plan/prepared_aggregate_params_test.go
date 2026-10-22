@@ -27,6 +27,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/stretchr/testify/require"
 )
 
@@ -991,8 +992,18 @@ func TestPreparedNumericAggregateCoercesStringsWithoutChangingSourceDomain(t *te
 				require.Equal(t, int32(types.T_float64), agg.Typ.Id)
 				arg := agg.GetF().Args[0]
 				require.Equal(t, int32(types.T_float64), arg.Typ.Id)
-				require.True(t, isCastOverload(arg, 0))
-				require.True(t, types.T(arg.GetF().Args[0].Typ.Id).IsMySQLString(),
+				var source *Expr
+				if isCastOverload(arg, 0) {
+					source = arg.GetF().Args[0]
+				} else {
+					var policy int32
+					var ok bool
+					source, policy, ok = numericValueCastAnalysisSource(arg)
+					require.True(t, ok, "aggregate conversion must retain a validated numeric-value owner: %s", arg.String())
+					require.Equal(t, function.NumericValueCastPolicyOrdinary, policy)
+				}
+				require.NotNil(t, source)
+				require.True(t, types.T(source.Typ.Id).IsMySQLString(),
 					"aggregate coercion must not retype the column, recursive CTE, or explicit CHAR cast")
 				if len(prepare.ParamTypes) == 0 {
 					return

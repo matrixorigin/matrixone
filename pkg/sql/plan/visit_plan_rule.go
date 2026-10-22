@@ -930,12 +930,7 @@ func preparedFixedDecimalNumericSource[P any](expr *plan.Expr, positions map[int
 }
 
 func preparedFixedDecimalNumericFunction(name string) bool {
-	switch strings.ToLower(name) {
-	case "abs", "ceil", "ceiling", "floor", "round", "truncate":
-		return true
-	default:
-		return false
-	}
+	return planfunction.PreservesDecimalValueType(name)
 }
 
 // Child calls may acquire their exact result type only after execute-time
@@ -1589,6 +1584,14 @@ func collectFlattenedPreparedNumericSourcePositions(expr *plan.Expr, positions m
 	if expr == nil {
 		return
 	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		fid, _ := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if fid == planfunction.SCALAR_PROGRAM || fid == planfunction.SCALAR_PROGRAM_REF {
+			owner, _ := numericValueProgramSourceOwner(expr)
+			collectFlattenedPreparedNumericSourcePositions(owner, positions)
+			return
+		}
+	}
 	metadata := expr.GetPreparedNumeric()
 	if expr.GetCol() != nil && metadata.GetFallbackSource() && metadata.GetParamPos() >= 0 {
 		positions[metadata.GetParamPos()] = struct{}{}
@@ -1638,6 +1641,14 @@ func collectNumericValueParamPositions(expr *plan.Expr, positions map[int32]stru
 	if expr == nil {
 		return
 	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		fid, _ := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if fid == planfunction.SCALAR_PROGRAM || fid == planfunction.SCALAR_PROGRAM_REF {
+			owner, _ := numericValueProgramSourceOwner(expr)
+			collectNumericValueParamPositions(owner, positions)
+			return
+		}
+	}
 	if param := expr.GetP(); param != nil && param.Pos >= 0 {
 		positions[param.Pos] = struct{}{}
 		return
@@ -1683,6 +1694,11 @@ func collectNumericValueParamPositions(expr *plan.Expr, positions map[int32]stru
 }
 
 func preparedNumericFallbackSource(expr *plan.Expr) (*plan.Expr, bool) {
+	if expr != nil {
+		if owner, privateNode := numericValueProgramSourceOwner(expr); privateNode {
+			expr = owner
+		}
+	}
 	if !isPreparedNumericFallbackExpr(expr) {
 		return nil, false
 	}
@@ -1821,6 +1837,46 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 			return bound, false, nil
 		}
 	}
+	if sourceOwner, privateNode := numericValueProgramSourceOwner(expr); privateNode {
+		if sourceOwner == nil {
+			// A kind REF has no numeric value source. Preserve the already-bound
+			// companion without treating it as an SQL function or a value role.
+			return bound, false, nil
+		}
+		boundSource := bound
+		if bound != nil {
+			if boundOwner, boundPrivate := numericValueProgramSourceOwner(bound); boundPrivate {
+				if boundOwner == nil {
+					return bound, false, nil
+				}
+				if sameNumericValueProgramScope(expr, bound) {
+					boundSource = boundOwner
+				} else {
+					boundSource = sourceOwner
+				}
+			}
+		}
+		reboundSource, changed, err := rule.rebindPreparedNumericExprWithRole(
+			sourceOwner, boundSource, positions, role)
+		if err != nil {
+			return nil, false, err
+		}
+		if !changed {
+			if bound != nil {
+				return bound, false, nil
+			}
+			return expr, false, nil
+		}
+		base := expr
+		if bound != nil && sameNumericValueProgramScope(expr, bound) {
+			base = bound
+		}
+		updated, ok := replaceNumericValueProgramSource(base, reboundSource)
+		if !ok {
+			return nil, false, moerr.NewInvalidInput(rule.ctx, "cannot rebind an invalid numeric value program owner")
+		}
+		return updated, true, nil
+	}
 	if param := expr.GetP(); param != nil {
 		if _, ok := positions[param.Pos]; !ok {
 			if bound != nil {
@@ -1899,10 +1955,8 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 				return bound, false, nil
 			}
 			boundChild := bound
-			if bound != nil {
-				if boundFn := bound.GetF(); boundFn != nil && len(boundFn.Args) > 0 {
-					boundChild = boundFn.Args[0]
-				}
+			if source, ok := matchingPreparedImplicitCastValueSource(expr, bound); ok {
+				boundChild = source
 			}
 			return rule.rebindPreparedNumericExprWithRole(
 				expr.GetF().Args[0], boundChild, positions, role)
@@ -2035,7 +2089,7 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 			}
 			return expr, false, nil
 		}
-		if isExplicitPreparedCast(expr) {
+		if isExplicitPreparedCast(expr) || isPreparedPrivateConversionCast(expr) {
 			bound, err := rebindExplicitPreparedCast(rule.ctx, expr, copy.GetF().Args)
 			return bound, true, err
 		}
@@ -2108,13 +2162,30 @@ func (rule *ResetParamRefRule) rebindPreparedNumericExprWithRole(
 // current source type, but do not resolve it as a new implicit CAST or elide a
 // now-redundant boundary before the enclosing arithmetic is rebound.
 func rebindExplicitPreparedCast(ctx context.Context, original *Expr, args []*Expr) (*Expr, error) {
-	if len(args) != 2 || args[0] == nil || args[1] == nil {
-		return nil, moerr.NewInternalError(ctx, "invalid prepared CAST arguments")
+	if original == nil || original.GetF() == nil || original.GetF().Func == nil {
+		return nil, moerr.NewInternalError(ctx, "invalid prepared CAST expression")
 	}
 	_, overload := planfunction.DecodeOverloadID(original.GetF().Func.Obj)
-	_, err := planfunction.GetFunctionByNameWithOverload(ctx, "cast", []types.Type{
-		makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1]),
-	}, overload)
+	argTypes := make([]types.Type, len(args))
+	if overload == planfunction.NumericValueCastOverload {
+		if len(args) != 4 || args[0] == nil || args[1] == nil || args[2] == nil || args[3] == nil ||
+			types.T(args[2].Typ.Id) != types.T_bool || args[3].GetLit() == nil {
+			return nil, moerr.NewInternalError(ctx, "invalid prepared numeric value CAST arguments")
+		}
+	} else if planfunction.IsIntegerArgumentCastOverload(overload) {
+		if len(args) != 2 && (len(args) != 3 || args[2] == nil || types.T(args[2].Typ.Id) != types.T_bool) {
+			return nil, moerr.NewInternalError(ctx, "invalid prepared integer argument CAST arguments")
+		}
+	} else if len(args) != 2 || args[0] == nil || args[1] == nil {
+		return nil, moerr.NewInternalError(ctx, "invalid prepared CAST arguments")
+	}
+	for i, arg := range args {
+		if arg == nil {
+			return nil, moerr.NewInternalError(ctx, "prepared CAST argument is nil")
+		}
+		argTypes[i] = makeTypeByPlan2Expr(arg)
+	}
+	_, err := planfunction.GetFunctionByNameWithOverload(ctx, "cast", argTypes, overload)
 	if err != nil {
 		return nil, err
 	}
@@ -2340,9 +2411,16 @@ func (rule *ResetParamRefRule) preparedTemporalStrictNullNestedArithmetic(expr *
 	if expr == nil {
 		return false
 	}
+	if source, private := numericValueProgramSourceOwner(expr); private {
+		return source != nil && rule.preparedTemporalStrictNullNestedArithmetic(source)
+	}
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
 		name := strings.ToLower(fn.Func.GetObjName())
 		if name == "cast" && len(fn.Args) > 0 {
+			if _, overload := planfunction.DecodeOverloadID(fn.Func.GetObj()); overload == planfunction.NumericValueCastOverload {
+				source, _, ok := numericValueCastAnalysisSource(expr)
+				return ok && rule.preparedTemporalStrictNullNestedArithmetic(source)
+			}
 			return rule.preparedTemporalStrictNullNestedArithmetic(fn.Args[0])
 		}
 		if !isPreparedTemporalIntegerArithmetic(name) {
@@ -2361,6 +2439,9 @@ func (rule *ResetParamRefRule) preparedTemporalStrictNullValue(expr *plan.Expr) 
 	if expr == nil {
 		return false
 	}
+	if source, private := numericValueProgramSourceOwner(expr); private {
+		return source != nil && rule.preparedTemporalStrictNullValue(source)
+	}
 	if param := expr.GetP(); param != nil && param.Pos >= 0 {
 		return rule.preparedRuntimeParamIsNull(int(param.Pos))
 	}
@@ -2370,6 +2451,10 @@ func (rule *ResetParamRefRule) preparedTemporalStrictNullValue(expr *plan.Expr) 
 	if fn := expr.GetF(); fn != nil && fn.Func != nil {
 		name := strings.ToLower(fn.Func.GetObjName())
 		if name == "cast" && len(fn.Args) > 0 {
+			if _, overload := planfunction.DecodeOverloadID(fn.Func.GetObj()); overload == planfunction.NumericValueCastOverload {
+				source, _, ok := numericValueCastAnalysisSource(expr)
+				return ok && rule.preparedTemporalStrictNullValue(source)
+			}
 			return rule.preparedTemporalStrictNullValue(fn.Args[0])
 		}
 		if isPreparedTemporalIntegerArithmetic(name) {
@@ -2429,6 +2514,12 @@ func (rule *ResetParamRefRule) inferPreparedTemporalNullExpr(
 	if expr == nil {
 		return types.Type{}, false, nil
 	}
+	if source, private := numericValueProgramSourceOwner(expr); private {
+		if source == nil {
+			return types.Type{}, false, nil
+		}
+		return rule.inferPreparedTemporalNullExpr(source)
+	}
 	if param := expr.GetP(); param != nil && param.Pos >= 0 {
 		if !rule.preparedRuntimeParamSelected(int(param.Pos)) {
 			return types.Type{}, false, nil
@@ -2466,6 +2557,16 @@ func (rule *ResetParamRefRule) inferPreparedTemporalNullExpr(
 	}
 	name := strings.ToLower(fn.Func.GetObjName())
 	if name == "cast" && len(fn.Args) > 0 {
+		if _, overload := planfunction.DecodeOverloadID(fn.Func.GetObj()); overload == planfunction.NumericValueCastOverload {
+			source, policy, ok := numericValueCastAnalysisSource(expr)
+			if !ok {
+				return types.Type{}, false, nil
+			}
+			if policy == planfunction.NumericValueCastPolicyExplicit {
+				return makeTypeByPlan2Expr(expr), true, nil
+			}
+			return rule.inferPreparedTemporalNullExpr(source)
+		}
 		if isExplicitPreparedCast(expr) {
 			return makeTypeByPlan2Expr(expr), true, nil
 		}
@@ -2637,6 +2738,12 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 	if expr == nil {
 		return nil, false, nil
 	}
+	if fn := expr.GetF(); fn != nil && fn.Func != nil {
+		fid, _ := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if fid == planfunction.SCALAR_PROGRAM || fid == planfunction.SCALAR_PROGRAM_REF {
+			return rule.refreshPreparedNumericValueProgram(expr, fid)
+		}
+	}
 	if expr.GetCol() != nil && expr.GetPreparedNumeric().GetFallbackSource() {
 		if typ, ok := rule.preparedNumericSourceType(expr); ok && !reflect.DeepEqual(expr.Typ, typ) {
 			copy := DeepCopyExpr(expr)
@@ -2661,6 +2768,21 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 		}
 		if !changed {
 			return expr, false, nil
+		}
+		if isPreparedPrivateConversionCast(expr) {
+			if isIntegerArgumentCast(expr) {
+				_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+				if overload == planfunction.TextIntegerBitsCastOverload &&
+					types.T(copy.GetF().Args[0].Typ.Id) != types.T_any &&
+					!types.T(copy.GetF().Args[0].Typ.Id).IsMySQLString() {
+					target := planfunction.IntegerBitSourceTarget(
+						types.T(copy.GetF().Args[0].Typ.Id), copy.GetF().Args[0].GetLit().GetIsBin())
+					bound, err := appendIntegerArgument(rule.ctx, copy.GetF().Args[0], target, false)
+					return bound, true, err
+				}
+			}
+			bound, err := rebindExplicitPreparedCast(rule.ctx, expr, copy.GetF().Args)
+			return bound, true, err
 		}
 		bound, err := BindFuncExprImplByPlanExpr(rule.ctx, fn.Func.GetObjName(), copy.GetF().Args)
 		if err != nil {
@@ -2698,6 +2820,83 @@ func (rule *ResetParamRefRule) refreshPreparedNumericSource(expr *plan.Expr) (*E
 	return expr, false, nil
 }
 
+// refreshPreparedNumericValueProgram updates the lexical source owner without
+// treating private program identities as SQL functions. Slot one is a borrowed
+// BOOL result and has no independent source expression to refresh.
+func (rule *ResetParamRefRule) refreshPreparedNumericValueProgram(
+	expr *Expr,
+	fid int32,
+) (*Expr, bool, error) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return nil, false, moerr.NewInvalidInput(rule.ctx, "numeric value program is missing its function")
+	}
+	if fid == planfunction.SCALAR_PROGRAM_REF {
+		_, slot, ok := numericProgramRefIdentity(expr)
+		if !ok {
+			return nil, false, moerr.NewInvalidInput(rule.ctx, "invalid numeric value program reference")
+		}
+		if slot == 1 {
+			if types.T(expr.Typ.Id) != types.T_bool {
+				return nil, false, moerr.NewInvalidInput(rule.ctx, "numeric value kind reference must be BOOL")
+			}
+			return expr, false, nil
+		}
+	}
+	owner, private := numericValueProgramSourceOwner(expr)
+	if !private || owner == nil {
+		return nil, false, moerr.NewInvalidInput(rule.ctx, "invalid numeric value program source owner")
+	}
+	definition := expr
+	if fid == planfunction.SCALAR_PROGRAM_REF {
+		if !numericProgramDefinitionMatchesRef(expr) {
+			return nil, false, moerr.NewInvalidInput(rule.ctx, "numeric value program reference has a mismatched definition")
+		}
+		definition = fn.Args[0]
+	}
+	definitionFn := definition.GetF()
+	if definitionFn == nil || definitionFn.Func == nil ||
+		(len(definitionFn.Args) != 2 && len(definitionFn.Args) != 3) || definitionFn.Args[1] == nil {
+		return nil, false, moerr.NewInvalidInput(rule.ctx, "invalid numeric value program definition")
+	}
+	value, valueChanged, err := rule.refreshPreparedNumericSource(definitionFn.Args[1])
+	if err != nil {
+		return nil, false, err
+	}
+	var kind *Expr
+	kindChanged := false
+	if len(definitionFn.Args) == 3 {
+		if definitionFn.Args[2] == nil || types.T(definitionFn.Args[2].Typ.Id) != types.T_bool {
+			return nil, false, moerr.NewInvalidInput(rule.ctx, "numeric value program kind source must be BOOL")
+		}
+		kind, kindChanged, err = rule.refreshPreparedNumericSource(definitionFn.Args[2])
+		if err != nil {
+			return nil, false, err
+		}
+		if kind == nil || types.T(kind.Typ.Id) != types.T_bool {
+			return nil, false, moerr.NewInvalidInput(rule.ctx, "refreshed numeric value program kind source must be BOOL")
+		}
+	}
+	if !valueChanged && !kindChanged {
+		return expr, false, nil
+	}
+	updated := DeepCopyExpr(expr)
+	updatedDefinition := updated
+	if fid == planfunction.SCALAR_PROGRAM_REF {
+		updatedDefinition = updated.GetF().Args[0]
+	}
+	updatedDefinition.GetF().Args[1] = value
+	if len(definitionFn.Args) == 3 {
+		updatedDefinition.GetF().Args[2] = kind
+	}
+	if fid == planfunction.SCALAR_PROGRAM {
+		updated.Typ = makeSimplePlan2Type(types.T_any)
+	} else {
+		updated.Typ = value.Typ
+	}
+	return updated, true, nil
+}
+
 func (rule *ResetParamRefRule) MatchNode(_ *Node) bool {
 	return false
 }
@@ -2716,6 +2915,20 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 	if rewritten, ok := rule.exprMemo[e]; ok {
 		return rewritten, nil
+	}
+	if fn := e.GetF(); fn != nil && fn.Func != nil {
+		fid, _ := planfunction.DecodeOverloadID(fn.Func.GetObj())
+		if fid == planfunction.SCALAR_PROGRAM || fid == planfunction.SCALAR_PROGRAM_REF {
+			rewritten, err := rule.applyNumericValueProgramNode(e)
+			if err != nil {
+				return nil, err
+			}
+			if rule.exprMemo == nil {
+				rule.exprMemo = make(map[*plan.Expr]*plan.Expr)
+			}
+			rule.exprMemo[e] = rewritten
+			return rewritten, nil
+		}
 	}
 	// A scalar subquery may be flattened to a ColRef while its parameter stays
 	// in the inner PROJECT list.  The binder marks both the outer fallback and
@@ -2786,6 +2999,99 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 	}
 	rule.exprMemo[e] = rewritten
 	return rewritten, nil
+}
+
+// applyNumericValueProgramNode rewrites only the SQL source embedded in the
+// lexical value-program definition. Program IDs, scope, output slot, and the
+// paired BOOL output remain owned by the same program while prepared markers
+// inside its value expression are rebound.
+func (rule *ResetParamRefRule) applyNumericValueProgramNode(expr *plan.Expr) (*plan.Expr, error) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return nil, moerr.NewInvalidInput(rule.ctx, "numeric value program is missing its function")
+	}
+	fid, _ := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	switch fid {
+	case planfunction.SCALAR_PROGRAM:
+		return rule.applyNumericValueProgramDefinition(expr)
+	case planfunction.SCALAR_PROGRAM_REF:
+		if len(fn.Args) == 2 {
+			// The kind REF borrows slot one from the slot-zero definition and must
+			// stay scope-identical. It has no independent source expression to bind.
+			_, slot, ok := numericProgramRefIdentity(expr)
+			if !ok || slot != 1 || types.T(expr.Typ.Id) != types.T_bool {
+				return nil, moerr.NewInvalidInput(rule.ctx, "invalid numeric value program reference")
+			}
+			return expr, nil
+		}
+		if len(fn.Args) != 3 {
+			return nil, moerr.NewInvalidInput(rule.ctx, "invalid numeric value program definition reference")
+		}
+		scope, slot, ok := numericProgramRefIdentity(expr)
+		if !ok || slot != 0 {
+			return nil, moerr.NewInvalidInput(rule.ctx, "numeric value program definition must be slot zero")
+		}
+		definitionScope, scopeOK := numericProgramDefinitionScope(fn.Args[0])
+		if !scopeOK || definitionScope != scope {
+			return nil, moerr.NewInvalidInput(rule.ctx, "numeric value program reference has a mismatched definition scope")
+		}
+		definition, err := rule.applyNumericValueProgramDefinition(fn.Args[0])
+		if err != nil {
+			return nil, err
+		}
+		rewritten := DeepCopyExpr(expr)
+		rewritten.GetF().Args[0] = definition
+		raw := definition.GetF().Args[1]
+		rewritten.Typ = raw.Typ
+		return rewritten, nil
+	default:
+		return nil, moerr.NewInvalidInput(rule.ctx, "invalid numeric value program function")
+	}
+}
+
+func (rule *ResetParamRefRule) applyNumericValueProgramDefinition(expr *plan.Expr) (*plan.Expr, error) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 && len(fn.Args) != 3 {
+		return nil, moerr.NewInvalidInput(rule.ctx, "invalid numeric value program definition")
+	}
+	fid, _ := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	if fid != planfunction.SCALAR_PROGRAM || fn.Args[1] == nil {
+		return nil, moerr.NewInvalidInput(rule.ctx, "invalid numeric value program definition")
+	}
+	if _, ok := numericProgramDefinitionScope(expr); !ok {
+		return nil, moerr.NewInvalidInput(rule.ctx, "numeric value program definition has an invalid scope")
+	}
+	rewritten := DeepCopyExpr(expr)
+	value, err := rule.ApplyExpr(DeepCopyExpr(fn.Args[1]))
+	if err != nil {
+		return nil, err
+	}
+	rewritten.GetF().Args[1] = value
+	if len(fn.Args) == 3 {
+		kind, kindErr := rule.ApplyExpr(DeepCopyExpr(fn.Args[2]))
+		if kindErr != nil {
+			return nil, kindErr
+		}
+		if kind == nil || types.T(kind.Typ.Id) != types.T_bool {
+			return nil, moerr.NewInvalidInput(rule.ctx, "numeric value program kind source must remain BOOL")
+		}
+		rewritten.GetF().Args[2] = kind
+	}
+	rewritten.Typ = makeSimplePlan2Type(types.T_any)
+	return rewritten, nil
+}
+
+func numericProgramDefinitionScope(expr *plan.Expr) (int64, bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 && len(fn.Args) != 3 {
+		return 0, false
+	}
+	fid, _ := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	if fid != planfunction.SCALAR_PROGRAM {
+		return 0, false
+	}
+	scope, ok := numericPlanInt64(fn.Args[0])
+	return scope, ok
 }
 
 // PreserveAssignmentCast reports whether VisitPlan must leave the assignment
@@ -3348,12 +3654,16 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			if commonValueResultArg &&
 				originalArgs[i] != nil && originalArgs[i].GetPreparedNumeric().GetProvisionalResultCast() {
 				if cast := arg.GetF(); cast != nil && cast.Func != nil &&
-					cast.Func.GetObjName() == "cast" && len(cast.Args) == 2 && cast.Args[0] != nil &&
-					!cast.GetSyntaxExplicitCast() && cast.Args[0].GetCol() == nil {
+					cast.Func.GetObjName() == "cast" && !cast.GetSyntaxExplicitCast() {
 					// A relational source is refreshed after its producer. Keep its
 					// annotated envelope until that pass can resolve the column.
-					_, overload := planfunction.DecodeOverloadID(cast.Func.GetObj())
-					provisionalCommonValueCast = overload == 0
+					if source, policy, ok := numericValueCastAnalysisSource(arg); ok {
+						provisionalCommonValueCast = policy != planfunction.NumericValueCastPolicyExplicit &&
+							source.GetCol() == nil
+					} else if len(cast.Args) == 2 && cast.Args[0] != nil && cast.Args[0].GetCol() == nil {
+						_, overload := planfunction.DecodeOverloadID(cast.Func.GetObj())
+						provisionalCommonValueCast = overload == 0
+					}
 				}
 			}
 			// A direct plan-only binder can use the comparison-cast overload for a
@@ -3689,7 +3999,12 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				// nested numeric function can supply its actual result domain.
 				source := arg
 				if provisionalCommonValueCast {
-					source = arg.GetF().Args[0]
+					if programSource, policy, ok := numericValueCastAnalysisSource(arg); ok &&
+						policy != planfunction.NumericValueCastPolicyExplicit {
+						source = programSource
+					} else {
+						source = arg.GetF().Args[0]
+					}
 				}
 				if marker := source.GetP(); marker != nil {
 					var known bool
@@ -4328,7 +4643,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 				return nil, resolveErr
 			}
 			var rewritten *Expr
-			if isExplicitPreparedCast(e) {
+			if isExplicitPreparedCast(e) || isPreparedPrivateConversionCast(e) {
 				rewritten, err = rebindExplicitPreparedCast(rule.ctx, e, boundArgs)
 				rule.specialized = true
 			} else {
@@ -5262,6 +5577,16 @@ func unwrapPreparedImplicitCast(expr *plan.Expr, eligible bool) *plan.Expr {
 		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
 			return expr
 		}
+		if source, policy, ok := numericValueCastAnalysisSource(expr); ok {
+			if policy == planfunction.NumericValueCastPolicyExplicit || fn.GetSyntaxExplicitCast() {
+				return expr
+			}
+			if !eligible && !preparedNumericCommonOperandType(types.T(source.Typ.Id)) {
+				return expr
+			}
+			expr = source
+			continue
+		}
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 		if overload != 0 || fn.GetSyntaxExplicitCast() {
 			return expr
@@ -5292,6 +5617,20 @@ func unwrapNumericPrefixDependentImplicitCast(expr *plan.Expr) (*plan.Expr, bool
 		fn := current.GetF()
 		if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
 			break
+		}
+		if source, policy, ok := numericValueCastAnalysisSource(current); ok {
+			if policy == planfunction.NumericValueCastPolicyExplicit || fn.GetSyntaxExplicitCast() {
+				break
+			}
+			target := makeTypeByPlan2Expr(current)
+			sourceType := makeTypeByPlan2Expr(source)
+			if !sourceType.Oid.ToType().IsNumeric() ||
+				(!target.Oid.IsFloat() && !target.Oid.IsMySQLString()) {
+				break
+			}
+			current = source
+			changed = true
+			continue
 		}
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 		if overload != 0 {
@@ -5328,7 +5667,28 @@ func isExplicitPreparedCast(expr *plan.Expr) bool {
 		return false
 	}
 	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	if overload >= planfunction.IntegerArgumentCastOverload && overload <= planfunction.NumericValueCastOverload {
+		if overload == planfunction.NumericValueCastOverload && len(fn.Args) == 4 && fn.Args[3] != nil {
+			if literal := fn.Args[3].GetLit(); literal != nil && !literal.Isnull {
+				return literal.GetI32Val() == planfunction.NumericValueCastPolicyExplicit
+			}
+		}
+		return false
+	}
 	return overload != 0 || fn.GetSyntaxExplicitCast()
+}
+
+func isPreparedPrivateConversionCast(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") {
+		return false
+	}
+	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	return planfunction.IsIntegerArgumentCastOverload(overload) ||
+		overload == planfunction.NumericValueCastOverload
 }
 
 func windowHasNumericPrefixDependency(
@@ -5823,7 +6183,14 @@ func preparedResultParamPosition(expr *plan.Expr, name string) (int, bool) {
 	if !preparedSQLExecuteNumericResultConsumer(name) {
 		return 0, false
 	}
-	param := fn.Args[0].GetP()
+	source := fn.Args[0]
+	if castSource, policy, ok := numericValueCastAnalysisSource(expr); ok {
+		if policy == planfunction.NumericValueCastPolicyExplicit || fn.GetSyntaxExplicitCast() {
+			return 0, false
+		}
+		source = castSource
+	}
+	param := source.GetP()
 	if param == nil || param.Pos < 0 {
 		return 0, false
 	}
@@ -5836,6 +6203,94 @@ func preparedResultParamPosition(expr *plan.Expr, name string) (int, bool) {
 func isImplicitPreparedParamCast(expr *plan.Expr) bool {
 	_, ok := implicitPreparedParam(expr)
 	return ok
+}
+
+// matchingPreparedImplicitCastValueSource returns the value input only when
+// bound is the corresponding, validated conversion envelope for expr. A
+// generic function's first argument is not necessarily the bound value (a
+// scalar numeric program's first argument is its scope id), so callers must
+// not descend through arbitrary function nodes here.
+func matchingPreparedImplicitCastValueSource(expr, bound *plan.Expr) (*plan.Expr, bool) {
+	if expr == nil || bound == nil || expr.GetF() == nil || bound.GetF() == nil ||
+		expr.GetF().Func == nil || bound.GetF().Func == nil {
+		return nil, false
+	}
+	exprFn, boundFn := expr.GetF(), bound.GetF()
+	if !strings.EqualFold(exprFn.Func.GetObjName(), "cast") ||
+		!strings.EqualFold(boundFn.Func.GetObjName(), "cast") ||
+		len(exprFn.Args) != 2 || len(boundFn.Args) < 2 ||
+		exprFn.Args[0] == nil || exprFn.Args[1] == nil ||
+		boundFn.Args[0] == nil || boundFn.Args[1] == nil {
+		return nil, false
+	}
+	if !samePreparedCastType(expr.Typ, bound.Typ) ||
+		!samePreparedCastType(expr.Typ, boundFn.Args[1].Typ) {
+		return nil, false
+	}
+
+	exprID, exprOverload := planfunction.DecodeOverloadID(exprFn.Func.GetObj())
+	boundID, boundOverload := planfunction.DecodeOverloadID(boundFn.Func.GetObj())
+	if exprID != planfunction.CAST || boundID != planfunction.CAST {
+		return nil, false
+	}
+	source := boundFn.Args[0]
+	switch boundOverload {
+	case 0, 4:
+		if boundOverload != exprOverload || len(boundFn.Args) != 2 {
+			return nil, false
+		}
+	case planfunction.NumericValueCastOverload:
+		_, policy, valid := numericValueCastAnalysisSource(bound)
+		if !valid || (policy != planfunction.NumericValueCastPolicyOrdinary &&
+			policy != planfunction.NumericValueCastPolicyComparison) {
+			return nil, false
+		}
+		programSource, sourceKind, valid := planfunction.NumericValueProgramCastOwner(bound)
+		if !valid || sourceKind != nil {
+			// Keep the complete owner when a paired kind is present. Extracting
+			// REF0 alone would sever the value from the BOOL chosen by the same
+			// selector execution.
+			return nil, false
+		}
+		source = programSource
+	default:
+		return nil, false
+	}
+
+	if ownerSource, private := numericValueProgramSourceOwner(source); private {
+		if ownerSource == nil || !numericProgramValueOwnerHasNoKind(source) {
+			return nil, false
+		}
+		source = ownerSource
+	}
+	return source, source != nil
+}
+
+func samePreparedCastType(left, right plan.Type) bool {
+	return left.Id == right.Id &&
+		left.Width == right.Width && left.Scale == right.Scale
+}
+
+func numericProgramValueOwnerHasNoKind(expr *plan.Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil {
+		return true
+	}
+	fid, _ := planfunction.DecodeOverloadID(expr.GetF().Func.GetObj())
+	switch fid {
+	case planfunction.SCALAR_PROGRAM:
+		_, valid := numericProgramDefinitionScope(expr)
+		return valid && len(expr.GetF().Args) == 2
+	case planfunction.SCALAR_PROGRAM_REF:
+		_, slot, valid := numericProgramRefIdentity(expr)
+		if !valid || slot != 0 || len(expr.GetF().Args) != 3 ||
+			!numericProgramDefinitionMatchesRef(expr) {
+			return false
+		}
+		definition := expr.GetF().Args[0].GetF()
+		return definition != nil && len(definition.Args) == 2
+	default:
+		return true
+	}
 }
 
 // isPreparedStringMathParamCast recognizes the comparison-cast envelope that
@@ -5862,10 +6317,48 @@ func preparedStringMathParam(expr *plan.Expr) (*plan.ParamRef, bool) {
 		if param := current.GetP(); param != nil {
 			return param, hasNumericPrefixCast && param.Pos >= 0
 		}
+		if source, privateNode := numericValueProgramSourceOwner(current); privateNode {
+			if source == nil {
+				return nil, false
+			}
+			current = source
+			continue
+		}
 		fn := current.GetF()
-		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") ||
-			len(fn.Args) == 0 || fn.GetSyntaxExplicitCast() {
+		if fn == nil || fn.Func == nil {
 			return nil, false
+		}
+		if !strings.EqualFold(fn.Func.GetObjName(), "cast") {
+			if !hasNumericPrefixCast {
+				return nil, false
+			}
+			// A selector can own the marker while the private integer conversion
+			// wraps the selector's common result. Only use the single value source
+			// when the selector has exactly one relevant parameter; branch-specific
+			// conversions continue through the normal owner-aware rebinder.
+			switch strings.ToLower(fn.Func.GetObjName()) {
+			case "case", "if", "coalesce", "ifnull", "nullif":
+				positions := preparedNumericValueParamPositions(current)
+				if len(positions) == 1 {
+					for position := range positions {
+						return &plan.ParamRef{Pos: position}, true
+					}
+				}
+			}
+			return nil, false
+		}
+		if len(fn.Args) == 0 || fn.GetSyntaxExplicitCast() {
+			return nil, false
+		}
+		if source, policy, ok := numericValueCastAnalysisSource(current); ok {
+			if policy == planfunction.NumericValueCastPolicyExplicit {
+				return nil, false
+			}
+			if policy == planfunction.NumericValueCastPolicyComparison {
+				hasNumericPrefixCast = true
+			}
+			current = source
+			continue
 		}
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 		switch overload {
@@ -5874,7 +6367,11 @@ func preparedStringMathParam(expr *plan.Expr) (*plan.ParamRef, bool) {
 		case 2:
 			hasNumericPrefixCast = true
 		default:
-			return nil, false
+			if planfunction.IsIntegerArgumentCastOverload(overload) {
+				hasNumericPrefixCast = true
+			} else {
+				return nil, false
+			}
 		}
 		current = fn.Args[0]
 	}
@@ -5905,6 +6402,14 @@ func implicitPreparedParam(expr *plan.Expr) (*plan.ParamRef, bool) {
 		}
 		if fn.GetSyntaxExplicitCast() {
 			return nil, false
+		}
+		if source, policy, ok := numericValueCastAnalysisSource(current); ok {
+			if policy == planfunction.NumericValueCastPolicyExplicit {
+				return nil, false
+			}
+			seenCast = true
+			current = source
+			continue
 		}
 		_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
 		if overload != 0 && overload != 4 {
@@ -5962,6 +6467,13 @@ func isPreparedBitwiseOperator(name string) bool {
 // cast or the comparison-cast overload. Explicit and set-operation casts stay
 // semantic boundaries.
 func isPreparedBitwiseParamCast(expr *plan.Expr) bool {
+	if source, policy, ok := numericValueCastAnalysisSource(expr); ok {
+		if policy != planfunction.NumericValueCastPolicyOrdinary &&
+			policy != planfunction.NumericValueCastPolicyComparison {
+			return false
+		}
+		return preparedExprContainsParam(expr.GetF().Args[0]) || preparedExprContainsParam(source)
+	}
 	current := expr
 	seenCast := false
 	for current != nil {
@@ -5988,6 +6500,20 @@ func isPreparedBitwiseParamCast(expr *plan.Expr) bool {
 // The caller has already verified that the original expression contains only
 // provisional casts, so explicit CAST remains authoritative.
 func unwrapImplicitPreparedBinaryParamCast(rewritten *plan.Expr) (*plan.Expr, bool) {
+	if _, policy, ok := numericValueCastAnalysisSource(rewritten); ok {
+		if policy != planfunction.NumericValueCastPolicyOrdinary &&
+			policy != planfunction.NumericValueCastPolicyComparison {
+			return nil, false
+		}
+		valueOwner := rewritten.GetF().Args[0]
+		if valueOwner != nil &&
+			types.StaticStringDomain(makeTypeByPlan2Expr(valueOwner)) == types.StringDomainBinary {
+			// Keep a paired program REF as the executable value owner. The
+			// analysis view may peel its slot-zero definition, but execution
+			// still needs the shared selector/cache semantics.
+			return valueOwner, true
+		}
+	}
 	current := rewritten
 	for current != nil {
 		fn := current.GetF()

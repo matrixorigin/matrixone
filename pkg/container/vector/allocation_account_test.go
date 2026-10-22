@@ -194,25 +194,17 @@ func TestShuffleWithAllocationAccountUsesAlternateCapacityClass(t *testing.T) {
 	vec := newAccountedTestVector(t, types.T_int64.ToType(), ordinary)
 	require.NoError(t, AppendFixedList(
 		vec, []int64{3, 1, 2}, nil, mp))
-	ordinaryBeforeNumericRows := ordinaryController.used
-	require.NoError(t, vec.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
-	require.Greater(t, ordinaryController.used, ordinaryBeforeNumericRows)
-	numericBitmapCharge := ordinaryController.used - ordinaryBeforeNumericRows
 	ordinaryController.failAt = ordinaryController.calls + 1
 	require.NoError(t, vec.ShuffleWithAllocationAccount(
 		[]int64{1, 2, 0}, mp, recovery))
 	require.Equal(t, []int64{1, 2, 3},
 		MustFixedColWithTypeCheck[int64](vec))
-	require.Equal(t, []bool{false, true, true}, []bool{
-		vec.GetIsBinAt(0), vec.GetIsBinAt(1), vec.GetIsBinAt(2),
-	})
 	require.Same(t, ordinary, vec.AllocationAccountSelection())
 	require.False(t, ordinaryController.rejected)
-	require.Equal(t, numericBitmapCharge, ordinaryController.used)
+	require.Zero(t, ordinaryController.used)
 	require.Positive(t, recoveryController.used)
 
 	vec.Free(mp)
-	require.Zero(t, ordinaryController.used)
 	require.Zero(t, recoveryController.used)
 	require.NoError(t,
 		account.UnregisterCapacityController(class, recoveryController))
@@ -256,7 +248,6 @@ func TestUnionBatchWithAllocationAccountDoesNotPropagateCapacityClass(t *testing
 	source := NewVec(types.T_int64.ToType())
 	require.NoError(t, AppendFixedList(
 		source, []int64{3, 1, 2}, nil, mp))
-	require.NoError(t, source.SetIsBinRowsWithMP([]bool{true, false, true}, mp))
 	destination := newAccountedTestVector(
 		t, types.T_int64.ToType(), ordinary)
 	ordinaryController.failAt = ordinaryController.calls + 1
@@ -264,9 +255,6 @@ func TestUnionBatchWithAllocationAccountDoesNotPropagateCapacityClass(t *testing
 		source, 0, source.Length(), nil, mp, recovery))
 	require.Equal(t, []int64{3, 1, 2},
 		MustFixedColWithTypeCheck[int64](destination))
-	require.Equal(t, []bool{true, false, true}, []bool{
-		destination.GetIsBinAt(0), destination.GetIsBinAt(1), destination.GetIsBinAt(2),
-	})
 	require.Same(t, ordinary, destination.AllocationAccountSelection())
 	require.False(t, ordinaryController.rejected)
 	require.Zero(t, ordinaryController.used)
@@ -1851,104 +1839,6 @@ func TestBinaryStringBitmapAllocationFailureIsAtomic(t *testing.T) {
 	require.False(t, vec.GetIsBinaryStringAt(0))
 
 	vec.Free(mp)
-	finalizeTestVectorAllocationAccount(t, state)
-}
-
-func TestNumericBinaryLiteralAllocationAccountLifecycle(t *testing.T) {
-	first := newTestVectorAllocationAccount(t, 1<<20, 8)
-	second := newTestVectorAllocationAccount(t, 1<<20, 8)
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_varchar.ToType(), first.selection)
-	t.Cleanup(func() {
-		vec.Free(mp)
-		finalizeTestVectorAllocationAccount(t, first)
-		finalizeTestVectorAllocationAccount(t, second)
-		require.Zero(t, mp.CurrNB())
-	})
-
-	vec.SetLength(2)
-	require.NoError(t, vec.SetIsBinRowsWithMP([]bool{true, false}, mp))
-	firstUsed := first.account.Snapshot().Used
-	require.Greater(t, firstUsed, uint64(0))
-	equivalent, err := NewAllocationAccountSelection(first.account, testVectorAllocationOwner,
-		testVectorDataAllocationSite, testVectorAreaAllocationSite, testVectorNullAllocationSite, testVectorGroupAllocationSite)
-	require.NoError(t, err)
-	require.NoError(t, vec.SetAllocationAccount(equivalent))
-	for _, selection := range []*AllocationAccountSelection{second.selection, nil} {
-		require.ErrorIs(t, vec.CanSetAllocationAccount(selection), mpool.ErrAllocationAccountInvalid)
-		require.ErrorIs(t, vec.SetAllocationAccount(selection), mpool.ErrAllocationAccountInvalid)
-		require.Same(t, first.selection, vec.AllocationAccountSelection())
-		require.Equal(t, firstUsed, first.account.Snapshot().Used)
-		require.Zero(t, second.account.Snapshot().Used)
-		require.True(t, vec.GetIsBinAt(0))
-		require.False(t, vec.GetIsBinAt(1))
-	}
-
-	vec.ResetWithSameType()
-	require.False(t, vec.HasIsBinRows())
-	require.Equal(t, 1, vec.numericBinaryLiteralRows.ExternalStorageCapacity())
-	require.Equal(t, firstUsed, first.account.Snapshot().Used)
-	require.ErrorIs(t, vec.CanSetAllocationAccount(second.selection), mpool.ErrAllocationAccountInvalid)
-	require.ErrorIs(t, vec.SetAllocationAccount(second.selection), mpool.ErrAllocationAccountInvalid)
-	require.Equal(t, firstUsed, first.account.Snapshot().Used)
-	require.Zero(t, second.account.Snapshot().Used)
-}
-
-func TestNumericBinaryLiteralSingleRowCopyAndRawAppendAllocation(t *testing.T) {
-	registry, err := mpool.NewAllocationAccountRegistry(1, 16)
-	require.NoError(t, err)
-	controller := &rejectNextVectorAllocation{}
-	account, err := registry.OpenWithController(1<<20, controller)
-	require.NoError(t, err)
-	selection, err := NewAllocationAccountSelection(account, testVectorAllocationOwner,
-		testVectorDataAllocationSite, testVectorAreaAllocationSite, testVectorNullAllocationSite, testVectorGroupAllocationSite)
-	require.NoError(t, err)
-	state := testVectorAllocationAccount{registry: registry, account: account, selection: selection}
-	mp := mpool.MustNewZero()
-	vec := newAccountedTestVector(t, types.T_int64.ToType(), selection)
-	t.Cleanup(func() {
-		vec.Free(mp)
-		finalizeTestVectorAllocationAccount(t, state)
-		require.Zero(t, mp.CurrNB())
-	})
-
-	require.NoError(t, vec.PreExtend(2, mp))
-	require.NoError(t, AppendFixed(vec, int64(10), false, mp))
-	vec.SetIsBin(true)
-	controller.failAt = controller.calls + 1
-	err = AppendFixed(vec, int64(20), false, mp)
-	require.ErrorIs(t, err, mpool.ErrAllocationAccountCapacity)
-	require.True(t, controller.rejected)
-	require.Equal(t, 1, vec.Length())
-	require.Equal(t, int64(10), MustFixedColNoTypeCheck[int64](vec)[0])
-	require.True(t, vec.GetIsBinAt(0))
-	require.False(t, vec.HasIsBinRows())
-
-	require.NoError(t, AppendFixed(vec, int64(20), false, mp))
-	require.Equal(t, 2, vec.Length())
-	require.Equal(t, []bool{true, false}, []bool{vec.GetIsBinAt(0), vec.GetIsBinAt(1)})
-	require.True(t, vec.HasIsBinRows())
-}
-
-func TestSelectedBatchPreflightsNumericBinaryLiteralBitmap(t *testing.T) {
-	state := newTestVectorAllocationAccount(t, 1<<20, 16)
-	mp := mpool.MustNewZero()
-	destination := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
-	source := newAccountedTestVector(t, types.T_int64.ToType(), state.selection)
-	require.NoError(t, AppendFixed(destination, int64(10), false, mp))
-	require.NoError(t, AppendFixed(source, int64(20), false, mp))
-	source.SetIsBin(true)
-	flags := []uint8{1}
-	require.NoError(t, destination.PreExtendSelectedBatch(source, 0, 1, flags, 2, mp))
-	state.account.Seal()
-
-	require.NoError(t, destination.UnionBatchPreflighted(source, 0, 1, flags, mp))
-	require.False(t, destination.GetIsBinAt(0))
-	require.True(t, destination.GetIsBinAt(1))
-	require.True(t, destination.HasIsBinRows())
-
-	destination.Free(mp)
-	source.Free(mp)
 	finalizeTestVectorAllocationAccount(t, state)
 }
 

@@ -863,6 +863,14 @@ func TestIffConditionTruthyAt(t *testing.T) {
 		require.Equal(t, want, got)
 	}
 
+	mixedKindVec := newVectorByType(proc.Mp(), types.T_varchar.ToType(), []string{"0", "0"}, nil)
+	kindVec := newVectorByType(proc.Mp(), types.T_bool.ToType(), []bool{true, false}, nil)
+	for row, want := range []bool{true, false} {
+		got, err := IffConditionTruthyAt(mixedKindVec, uint64(row), SQLCompatibilityMySQL, kindVec)
+		require.NoError(t, err)
+		require.Equal(t, want, got, "the selected source kind controls string truthiness")
+	}
+
 	intVec := newVectorByType(proc.Mp(), types.T_int64.ToType(), []int64{0, -1, 9}, nil)
 	intVec.GetNulls().Add(2)
 	for row, want := range []bool{false, true, false} {

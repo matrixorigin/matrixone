@@ -30,6 +30,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"github.com/stretchr/testify/require"
 )
 
@@ -258,6 +259,14 @@ func TestPreparedCeilPrecisionScalarRuntime(t *testing.T) {
 		{"text", ParamValue{Value: "2", SourceType: types.T_varchar.ToType(), HasSourceType: true}, "123.460", "123.450", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			if tc.name == "text" {
+				params := vector.NewVec(types.T_varchar.ToType())
+				t.Cleanup(func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) })
+				for range 2 {
+					require.NoError(t, vector.AppendBytes(params, []byte("2"), false, proc.Mp()))
+				}
+				proc.SetPrepareParams(params)
+			}
 			filled, err := FillValuesOfParamsInPlan(ctx, prepare.Plan, []any{tc.value, tc.value})
 			require.NoError(t, err)
 			for _, check := range []struct {
@@ -276,7 +285,14 @@ func TestPreparedCeilPrecisionScalarRuntime(t *testing.T) {
 						require.NotNil(t, precision.GetF())
 						require.Equal(t, "cast", precision.GetF().Func.GetObjName())
 						_, overload := function.DecodeOverloadID(precision.GetF().Func.GetObj())
-						require.Equal(t, tc.wantOverload, overload)
+						if overload == function.NumericValueCastOverload {
+							source, policy, ok := numericValueCastAnalysisSource(precision)
+							require.True(t, ok, "private CAST9 must retain a validated source owner")
+							require.Equal(t, function.NumericValueCastPolicyOrdinary, policy)
+							require.NotNil(t, source)
+						} else {
+							require.Equal(t, tc.wantOverload, overload)
+						}
 					} else {
 						require.Nil(t, precision.GetF())
 					}
@@ -499,24 +515,10 @@ func TestIntegerArgumentPreparedScalarSubquery(t *testing.T) {
 	require.True(t, isIntegerArgumentCast(privateCast))
 	require.Equal(t, int32(types.T_float64), privateCast.GetF().Args[0].Typ.Id)
 
-	var scalarProjection *Expr
-	for _, node := range query.Nodes {
-		if node == nil || node.NodeType != planpb.Node_PROJECT || len(node.ProjectList) != 1 {
-			continue
-		}
-		if literal := node.ProjectList[0].GetLit(); literal != nil && literal.GetDval() == 1.5 {
-			scalarProjection = node.ProjectList[0]
-			break
-		}
-	}
-	require.NotNil(t, scalarProjection)
-	inner, freeInner, err := colexec.GetReadonlyResultFromExpression(
-		proc, scalarProjection, []*batch.Batch{batch.EmptyForConstFoldBatch})
-	require.NoError(t, err)
-	defer freeInner()
-	input := batch.NewWithSize(1)
-	input.Vecs[0] = inner
-	input.SetRowCount(1)
+	input, freeProjection := evaluateNumericProgramProjection(t, proc, query, batch.EmptyForConstFoldBatch)
+	defer freeProjection()
+	require.Equal(t, 1.5, vector.GetFixedAtNoTypeCheck[float64](input.Vecs[0], 0))
+	require.False(t, vector.GetFixedAtNoTypeCheck[bool](input.Vecs[1], 0))
 	result, freeResult, err := colexec.GetReadonlyResultFromExpression(proc, root.ProjectList[0], []*batch.Batch{input})
 	require.NoError(t, err)
 	defer freeResult()
@@ -547,11 +549,44 @@ func TestIntegerArgumentPreparedGroupedAndSetScalarSubqueries(t *testing.T) {
 			require.True(t, isIntegerArgumentCast(privateCast))
 			require.Equal(t, int32(types.T_float64), privateCast.GetF().Args[0].Typ.Id)
 
-			input := batch.NewWithSize(1)
-			input.Vecs[0], err = vector.NewConstFixed(types.T_float64.ToType(), 1.5, 1, proc.Mp())
-			require.NoError(t, err)
-			input.SetRowCount(1)
-			defer input.Clean(proc.Mp())
+			var input *batch.Batch
+			var freeProjection func()
+			if hasSetOperationNumericKindPassenger(query) {
+				// The set node owns the refreshed public result layout. Its runtime
+				// source here is FLOAT64, with the BOOL passenger kept out of the
+				// set equality key.
+				input = batch.NewWithSize(2)
+				input.Vecs[0], err = vector.NewConstFixed(types.T_float64.ToType(), 1.5, 1, proc.Mp())
+				require.NoError(t, err)
+				input.Vecs[1], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+				require.NoError(t, err)
+				input.SetRowCount(1)
+				defer input.Clean(proc.Mp())
+			} else if _, paired := numericProgramProjectionList(query); paired {
+				sourceInput := batch.NewWithSize(1)
+				sourceInput.Vecs[0], err = vector.NewConstFixed(types.T_float64.ToType(), 1.5, 1, proc.Mp())
+				require.NoError(t, err)
+				sourceInput.SetRowCount(1)
+				defer sourceInput.Clean(proc.Mp())
+				input, freeProjection = evaluateNumericProgramProjection(t, proc, query, sourceInput)
+				defer freeProjection()
+			} else {
+				// GROUP BY exposes the raw numeric value and its BOOL passenger
+				// through the AGG projection instead of a same-node program pair.
+				// This test's runtime source is a DOUBLE, so its string-kind flag is
+				// false; assert that the aggregate keeps the BOOL output slot.
+				require.True(t, hasAggregateNumericKindPassenger(query))
+				input = batch.NewWithSize(2)
+				input.Vecs[0], err = vector.NewConstFixed(types.T_float64.ToType(), 1.5, 1, proc.Mp())
+				require.NoError(t, err)
+				input.Vecs[1], err = vector.NewConstFixed(types.T_bool.ToType(), false, 1, proc.Mp())
+				require.NoError(t, err)
+				input.SetRowCount(1)
+				defer input.Clean(proc.Mp())
+			}
+			require.Equal(t, types.T_float64, input.Vecs[0].GetType().Oid)
+			require.Equal(t, 1.5, vector.GetFixedAtNoTypeCheck[float64](input.Vecs[0], 0))
+			require.False(t, vector.GetFixedAtNoTypeCheck[bool](input.Vecs[1], 0))
 			result, freeResult, err := colexec.GetReadonlyResultFromExpression(
 				proc, root.ProjectList[0], []*batch.Batch{input})
 			require.NoError(t, err)
@@ -559,6 +594,97 @@ func TestIntegerArgumentPreparedGroupedAndSetScalarSubqueries(t *testing.T) {
 			require.Equal(t, "a.b", result.GetStringAt(0))
 		})
 	}
+}
+
+func evaluateNumericProgramProjection(
+	t *testing.T,
+	proc *process.Process,
+	query *planpb.Query,
+	input *batch.Batch,
+) (*batch.Batch, func()) {
+	t.Helper()
+	projectList, ok := numericProgramProjectionList(query)
+	require.True(t, ok, "prepared scalar subquery must project paired value and kind outputs")
+	executors, group, err := colexec.NewProjectionExpressionExecutorsWithAllocation(proc, projectList, nil)
+	require.NoError(t, err)
+	free := func() {
+		for _, executor := range executors {
+			if executor != nil {
+				executor.Free()
+			}
+		}
+	}
+	group.BeginBatch()
+	output := batch.NewWithSize(len(executors))
+	for i, executor := range executors {
+		output.Vecs[i], err = executor.Eval(proc, []*batch.Batch{input}, nil)
+		require.NoError(t, err)
+	}
+	output.SetRowCount(1)
+	return output, free
+}
+
+func numericProgramProjectionList(query *planpb.Query) ([]*Expr, bool) {
+	var projectList []*Expr
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != planpb.Node_PROJECT {
+			continue
+		}
+		for _, value := range node.ProjectList {
+			scope, slot, ok := numericProgramRefIdentity(value)
+			if !ok || slot != 0 {
+				continue
+			}
+			for _, kind := range node.ProjectList {
+				kindScope, kindSlot, kindOK := numericProgramRefIdentity(kind)
+				if kindOK && kindSlot == 1 && kindScope == scope {
+					projectList = node.ProjectList
+					break
+				}
+			}
+			if projectList != nil {
+				break
+			}
+		}
+		if projectList != nil {
+			break
+		}
+	}
+	return projectList, projectList != nil
+}
+
+func hasAggregateNumericKindPassenger(query *planpb.Query) bool {
+	for _, node := range query.Nodes {
+		if node == nil || node.NodeType != planpb.Node_AGG || len(node.ProjectList) < 2 {
+			continue
+		}
+		value, kind := node.ProjectList[0], node.ProjectList[1]
+		if types.T(value.Typ.Id) != types.T_float64 || types.T(kind.Typ.Id) != types.T_bool {
+			continue
+		}
+		kindCol := kind.GetCol()
+		if kindCol != nil && kindCol.ColPos == 1 {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSetOperationNumericKindPassenger(query *planpb.Query) bool {
+	for _, node := range query.Nodes {
+		if node == nil || !isPreparedSetOperationNode(node.NodeType) || len(node.ProjectList) < 2 {
+			continue
+		}
+		value, kind := node.ProjectList[0], node.ProjectList[1]
+		if types.T(value.Typ.Id) != types.T_float64 || types.T(kind.Typ.Id) != types.T_bool {
+			continue
+		}
+		kindCol := kind.GetCol()
+		if kindCol != nil && kindCol.ColPos == 1 {
+			return true
+		}
+	}
+	return false
 }
 
 func TestIntegerArgumentPreparedSourceEvaluation(t *testing.T) {

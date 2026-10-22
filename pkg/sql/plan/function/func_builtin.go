@@ -1634,7 +1634,7 @@ func builtInChar(parameters []*vector.Vector, result vector.FunctionResultWrappe
 				if null {
 					return 0, true
 				}
-				if param.GetIsBinAt(int(idx)) {
+				if param.GetIsBin() {
 					// hex/bit literals (e.g. 0x41, b'01000001') arrive as raw
 					// bytes with IsBin set; interpret them as a big-endian
 					// integer, mirroring the varchar->int64 cast path

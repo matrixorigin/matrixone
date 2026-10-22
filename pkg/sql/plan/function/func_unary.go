@@ -9942,6 +9942,12 @@ func OctTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 // The empty string is NULL; a non-empty string without a numeric prefix is 0.
 func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	resultNulls := result.GetResultVector().GetNulls()
+	var sourceKind vector.FunctionParameterWrapper[bool]
+	if len(ivecs) == 2 {
+		sourceKind = vector.GenerateFunctionFixedTypeParameter[bool](ivecs[1])
+	} else if len(ivecs) != 1 {
+		return moerr.NewInvalidInput(proc.Ctx, "OCT string executor requires one value and an optional source kind")
+	}
 	err := opUnaryBytesToStrWithRowErrorCheck(ivecs, result, length, func(v []byte, row int) (string, error) {
 		if len(v) == 0 {
 			if ivecs[0].IsConst() {
@@ -9950,7 +9956,13 @@ func OctString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc
 				resultNulls.Add(uint64(row))
 			}
 		}
-		if ivecs[0].GetIsBinAt(row) {
+		isBinary := ivecs[0].GetIsBin()
+		if sourceKind != nil {
+			if value, null := sourceKind.GetValue(uint64(row)); !null {
+				isBinary = value
+			}
+		}
+		if isBinary {
 			return strconv.FormatUint(octBinaryLiteralValue(v), 8), nil
 		}
 		s := trimASCIISpace(functionUtil.QuickBytesToStr(v))
@@ -10598,7 +10610,7 @@ func makeRandomBytesLengthGetter(param *vector.Vector, proc *process.Process) (r
 			case types.RuntimeStringBinary:
 				isBinary = true
 			default:
-				isBinary = isBinary || param.GetIsBinaryStringAt(int(i)) || param.GetIsBinAt(int(i))
+				isBinary = isBinary || param.GetIsBinaryStringAt(int(i)) || param.GetIsBin()
 			}
 			if isBinary {
 				if len(value) == 0 {

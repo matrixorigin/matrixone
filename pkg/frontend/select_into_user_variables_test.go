@@ -116,6 +116,56 @@ func TestSelectIntoUserVariablesPreservesBinaryFlagPerColumn(t *testing.T) {
 	require.False(t, textVar.IsBin)
 }
 
+func TestSelectIntoUserVariablesReadsMappedKindPassengers(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "hex_out"}, {Name: "text_out"}})
+
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("31"), false, mp))
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("ordinary"), false, mp))
+	bat.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], true, false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	require.NoError(t, collector.capture(ctx, ses, bat, []int32{2, -1}))
+	require.Len(t, collector.row, 2, "the physical BOOL passenger is not a visible SQL result")
+	require.NoError(t, collector.apply(ctx, ses, "select value into @hex_out, @text_out"))
+	hex, err := ses.GetUserDefinedVar("hex_out")
+	require.NoError(t, err)
+	require.Equal(t, []byte("31"), hex.Value)
+	require.True(t, hex.IsBin, "the mapped kind passenger carries selected HEX provenance")
+	ordinary, err := ses.GetUserDefinedVar("text_out")
+	require.NoError(t, err)
+	require.Equal(t, []byte("ordinary"), ordinary.Value)
+	require.False(t, ordinary.IsBin, "-1 preserves the ordinary string path")
+}
+
+func TestSelectIntoUserVariablesMappedKindLayoutFailsClosed(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	collector := newSelectIntoUserVariables([]*tree.VarExpr{{Name: "out"}})
+
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("31"), false, mp))
+	bat.Vecs[1] = vector.NewVec(types.T_int8.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], int8(1), false, mp))
+	bat.SetRowCount(0)
+	defer bat.Clean(mp)
+
+	err := collector.capture(ctx, ses, bat, []int32{1})
+	require.Error(t, err, "even an empty result must validate the mapped physical BOOL slot")
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrWrongNumberOfColumnsInSelect))
+}
+
 func TestSetUserDefinedVarWithIsBinPreservesFlagThroughBackSession(t *testing.T) {
 	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
 	backSes := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}

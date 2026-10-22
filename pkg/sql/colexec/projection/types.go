@@ -76,6 +76,7 @@ type container struct {
 	buf           *batch.Batch
 	expandBuf     *batch.Batch
 	projExecutors []colexec.ExpressionExecutor
+	programGroup  *colexec.ProjectionExpressionProgramGroup
 	expandOwned   []*vector.Vector
 	nextSet       int
 	hasInput      bool
@@ -94,6 +95,7 @@ func (projection *Projection) Reset(proc *process.Process, pipelineFailed bool, 
 			projection.ctr.projExecutors[i].ResetForNextQuery()
 		}
 	}
+	projection.ctr.programGroup.ResetForNextQuery()
 
 	if projection.OpAnalyzer != nil {
 		projection.OpAnalyzer.Alloc(int64(projection.maxAllocSize))
@@ -109,6 +111,7 @@ func (projection *Projection) Free(proc *process.Process, pipelineFailed bool, e
 		}
 	}
 	projection.ctr.projExecutors = nil
+	projection.ctr.programGroup = nil
 	projection.ctr.buf = nil
 	projection.ctr.expandBuf = nil
 }

@@ -157,7 +157,7 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 							}
 							require.NotNil(t, column, "safe comparisons retain the native column")
 							require.True(t, sameDecimalComparisonType(column.Typ, makePlan2Type(&decimal)))
-							require.True(t, ExprIsZonemappable(context.Background(), filter))
+							require.True(t, ExprIsZonemappable(context.Background(), filter), filter.String())
 						} else {
 							require.Greater(t, args[1].Typ.Width, decimal.Width, "wide bindings retain their wider comparison domain")
 						}
@@ -166,6 +166,57 @@ func TestPreparedDecimalComparisonPruning(t *testing.T) {
 					require.True(t, found)
 				})
 			}
+		})
+	}
+}
+
+func TestPreparedDecimalComparisonPruningRebindsTextKind(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	decimal := types.New(types.T_decimal64, 12, 2)
+	table := makeExprOptCompositeSortKeyTableDef()
+	table.Name, table.TblId = "decimal_kind_filters", 99005
+	table.Cols[2].Typ = makePlan2Type(&decimal)
+	mock.ctxt.tables[table.Name] = table
+	mock.ctxt.objects[table.Name] = &ObjectRef{ObjName: table.Name, Obj: int64(table.TblId)}
+	proc := mock.ctxt.GetProcess()
+
+	for _, tc := range []struct {
+		name               string
+		isBin              bool
+		wantZoneMap        bool
+		wantNumericValueOp bool
+	}{
+		{name: "ordinary text", wantZoneMap: true},
+		{name: "binary kind", isBin: true, wantNumericValueOp: true},
+		{name: "ordinary text after binary rebind", wantZoneMap: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			params := vector.NewVec(types.T_text.ToType())
+			defer func() { proc.SetPrepareParams(nil); params.Free(proc.Mp()) }()
+			require.NoError(t, vector.AppendBytes(params, []byte("16001"), tc.isBin, proc.Mp()))
+			proc.SetPrepareParams(params)
+			stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL,
+				"select c from decimal_kind_filters where c=?", 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			bound, err := BuildPreparedExecutionPlan(&mock.ctxt, stmt,
+				[]PreparedSourceBinding{{Position: 0, Type: types.T_varchar.ToType()}},
+				[]any{ParamValue{Value: "16001", IsBin: tc.isBin, IsBinaryProtocol: true}})
+			require.NoError(t, err)
+			require.True(t, bound.ValueDependent,
+				"the text-kind decision must be recomputed for each execution binding")
+			var filter *Expr
+			for _, node := range bound.Plan.GetQuery().Nodes {
+				if node.NodeType == planpb.Node_TABLE_SCAN && node.TableDef.Name == table.Name {
+					require.Len(t, node.FilterList, 1)
+					filter = node.FilterList[0]
+				}
+			}
+			require.NotNil(t, filter)
+			require.Equal(t, tc.wantZoneMap, ExprIsZonemappable(context.Background(), filter))
+			require.Equal(t, tc.wantNumericValueOp,
+				findNumericValueFunction(bound.Plan, function.CAST, function.NumericValueCastOverload) != nil)
+			require.True(t, function.ContainsParameter(filter))
 		})
 	}
 }
@@ -565,7 +616,7 @@ func TestPreparedNumericPredicateFiltering(t *testing.T) {
 					if tc.native {
 						// BuildPreparedExecutionPlan deliberately skips scan statistics;
 						// assert pruning eligibility here and actual blocks in public QA.
-						require.True(t, ExprIsZonemappable(context.Background(), filter), "safe predicate must allow block pruning")
+						require.True(t, ExprIsZonemappable(context.Background(), filter), "safe predicate must allow block pruning: %s", filter.String())
 					}
 					if checkExplicitResultCast && !tc.native {
 						require.False(t, ExprIsZonemappable(context.Background(), filter), "warning-producing predicate must retain row evaluation")

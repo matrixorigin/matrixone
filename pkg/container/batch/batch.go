@@ -35,26 +35,22 @@ const (
 	prepareParamKindBatchMagic2      = byte('B')
 	prepareParamKindBatchVersionV1   = byte(1)
 	prepareParamKindBatchVersion     = byte(2)
-	prepareParamKindBatchVersionV3   = byte(3)
 	prepareParamKindBatchModeNone    = byte(0)
 	prepareParamKindBatchModeUniform = byte(1)
 	prepareParamKindBatchModeRows    = byte(2)
 	prepareParamKindBatchBinaryFlag  = byte(0x80)
 	prepareParamKindBatchTextFlag    = byte(0x40)
-	prepareParamKindBatchIsBinFlag   = byte(0x20)
 	prepareParamKindBatchMaxRows     = int32(1 << 24)
 )
 
 type prepareParamKindBatchRecord struct {
-	mode                        byte
-	kind                        vector.PrepareParamKind
-	encodedRows                 []byte
-	binaryString                bool
-	textString                  bool
-	numericBinaryLiteral        bool
-	hasNumericBinaryLiteralRows bool
-	stringSource                types.StringSource
-	encodedStringSources        []byte
+	mode                 byte
+	kind                 vector.PrepareParamKind
+	encodedRows          []byte
+	binaryString         bool
+	textString           bool
+	stringSource         types.StringSource
+	encodedStringSources []byte
 }
 
 func setBatchVectorRuntimeStringDomain(
@@ -198,9 +194,6 @@ func (bat *Batch) hasPrepareParamKindMetadata(includeStringSources bool) bool {
 		if vec.GetIsBinaryString() || vec.HasBinaryStringRows() {
 			return true
 		}
-		if vec.HasIsBinMetadata() {
-			return true
-		}
 		if len(vec.GetPrepareParamKinds()) != 0 {
 			return true
 		}
@@ -229,18 +222,6 @@ func (bat *Batch) HasBinaryStringMetadata() bool {
 	}
 	for _, vec := range bat.Vecs {
 		if vec != nil && (vec.GetIsBinaryString() || vec.HasBinaryStringRows()) {
-			return true
-		}
-	}
-	return false
-}
-
-func (bat *Batch) HasNumericBinaryLiteralMetadata() bool {
-	if bat == nil {
-		return false
-	}
-	for _, vec := range bat.Vecs {
-		if vec != nil && vec.HasIsBinMetadata() {
 			return true
 		}
 	}
@@ -288,20 +269,15 @@ func (bat *Batch) prepareParamKindMetadataSize(includeStringSources bool) (int, 
 	}
 	// magic/version + vector count + batch row count + trailing size.
 	total := uint64(4 + 4 + 8 + 4)
-	// Trailer v3 extends v2 rather than defining a new shorter shape, so it
-	// carries one source-mode byte per vector even when every source is the
-	// default expression value.
-	hasStringSources := includeStringSources &&
-		(bat.HasStringSourceMetadata() || bat.HasNumericBinaryLiteralMetadata())
+	hasStringSources := includeStringSources && bat.HasStringSourceMetadata()
 	for _, vec := range bat.Vecs {
 		if vec == nil {
 			return 0, moerr.NewInvalidInputNoCtx("cannot encode prepared parameter metadata for nil vector")
 		}
 		kinds := vec.GetPrepareParamKinds()
 		mixedBinaryString := vec.HasBinaryStringRows() && !hasUniformExplicitTextStringMetadata(vec)
-		mixedNumericBinaryLiteral := vec.HasIsBinRows()
 		switch {
-		case len(kinds) != 0 || mixedBinaryString || mixedNumericBinaryLiteral:
+		case len(kinds) != 0 || mixedBinaryString:
 			if (len(kinds) != 0 && len(kinds) != vec.Length()) ||
 				int64(vec.Length()) > int64(prepareParamKindBatchMaxRows) {
 				return 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata row count")
@@ -355,16 +331,9 @@ func (bat *Batch) appendPrepareParamKindMetadataTo(w io.Writer, includeStringSou
 	if w == nil {
 		return io.ErrClosedPipe
 	}
-	if bat.HasNumericBinaryLiteralMetadata() && !includeStringSources {
-		return moerr.NewNotSupportedNoCtx(
-			"numeric binary-literal provenance requires string-source metadata in the batch metadata trailer")
-	}
 	version := prepareParamKindBatchVersionV1
 	if includeStringSources && bat.HasStringSourceMetadata() {
 		version = prepareParamKindBatchVersion
-	}
-	if bat.HasNumericBinaryLiteralMetadata() {
-		version = prepareParamKindBatchVersionV3
 	}
 	if err := writeBatchMarshalBytes(w, []byte{
 		prepareParamKindBatchMagic0, prepareParamKindBatchMagic1,
@@ -389,9 +358,8 @@ func (bat *Batch) appendPrepareParamKindMetadataTo(w io.Writer, includeStringSou
 		if uniformText {
 			binaryFlag = prepareParamKindBatchTextFlag
 		}
-		mixedNumericBinaryLiteral := vec.HasIsBinRows()
 		switch {
-		case len(kinds) != 0 || mixedBinaryString || mixedNumericBinaryLiteral:
+		case len(kinds) != 0 || mixedBinaryString:
 			if err := writeBatchMarshalByte(w, prepareParamKindBatchModeRows); err != nil {
 				return err
 			}
@@ -406,17 +374,11 @@ func (bat *Batch) appendPrepareParamKindMetadataTo(w io.Writer, includeStringSou
 				if vec.GetRuntimeStringDomainAt(row) == types.RuntimeStringText {
 					encoded |= prepareParamKindBatchTextFlag
 				}
-				if vec.GetIsBinAt(row) {
-					encoded |= prepareParamKindBatchIsBinFlag
-				}
 				if err := writeBatchMarshalByte(w, encoded); err != nil {
 					return err
 				}
 			}
 		case vec.HasPrepareParamKind() && vec.GetPrepareParamKind() != vector.PrepareParamNone:
-			if vec.GetIsBin() {
-				binaryFlag |= prepareParamKindBatchIsBinFlag
-			}
 			if err := writeBatchMarshalByte(w, prepareParamKindBatchModeUniform|binaryFlag); err != nil {
 				return err
 			}
@@ -424,9 +386,6 @@ func (bat *Batch) appendPrepareParamKindMetadataTo(w io.Writer, includeStringSou
 				return err
 			}
 		default:
-			if vec.GetIsBin() {
-				binaryFlag |= prepareParamKindBatchIsBinFlag
-			}
 			if err := writeBatchMarshalByte(w, prepareParamKindBatchModeNone|binaryFlag); err != nil {
 				return err
 			}
@@ -740,7 +699,6 @@ func (bat *Batch) clearPrepareParamMetadata(mp *mpool.MPool) {
 			_ = vec.SetPrepareParamKindsWithMP(nil, mp)
 			_ = vec.SetStringSource(types.StringSourceExpression)
 			vec.SetIsBinaryString(false)
-			vec.SetIsBin(false)
 		}
 	}
 }
@@ -776,9 +734,6 @@ func (bat *Batch) UnmarshalBinaryWithPrepareParamKinds(data []byte, mp *mpool.MP
 		switch record.mode {
 		case prepareParamKindBatchModeNone:
 			applyErr = setBatchVectorRuntimeStringDomain(vec, record.binaryString, record.textString, mp)
-			if applyErr == nil && record.numericBinaryLiteral {
-				vec.SetIsBin(true)
-			}
 		case prepareParamKindBatchModeUniform:
 			if record.kind == vector.PrepareParamNone {
 				applyErr = moerr.NewInvalidInputNoCtx("uniform prepared parameter metadata cannot be None")
@@ -788,27 +743,15 @@ func (bat *Batch) UnmarshalBinaryWithPrepareParamKinds(data []byte, mp *mpool.MP
 			if applyErr == nil {
 				applyErr = setBatchVectorRuntimeStringDomain(vec, record.binaryString, record.textString, mp)
 			}
-			if applyErr == nil && record.numericBinaryLiteral {
-				vec.SetIsBin(true)
-			}
 		case prepareParamKindBatchModeRows:
 			if len(record.encodedRows) != vec.Length() {
 				applyErr = moerr.NewInvalidInputNoCtx("prepared parameter metadata row count mismatch")
 			} else {
-				if record.hasNumericBinaryLiteralRows {
-					applyErr = vec.SetPrepareParamKindsAndBinaryStringFromReader(
-						bytes.NewReader(record.encodedRows), len(record.encodedRows), mp,
-						prepareParamKindBatchBinaryFlag,
-						prepareParamKindBatchTextFlag,
-						prepareParamKindBatchIsBinFlag,
-					)
-				} else {
-					applyErr = vec.SetPrepareParamKindsAndBinaryStringFromReader(
-						bytes.NewReader(record.encodedRows), len(record.encodedRows), mp,
-						prepareParamKindBatchBinaryFlag,
-						prepareParamKindBatchTextFlag,
-					)
-				}
+				applyErr = vec.SetPrepareParamKindsAndBinaryStringFromReader(
+					bytes.NewReader(record.encodedRows), len(record.encodedRows), mp,
+					prepareParamKindBatchBinaryFlag,
+					prepareParamKindBatchTextFlag,
+				)
 			}
 		default:
 			applyErr = moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode")
@@ -916,8 +859,7 @@ func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
 	if magic0 != prepareParamKindBatchMagic0 ||
 		magic1 != prepareParamKindBatchMagic1 ||
 		magic2 != prepareParamKindBatchMagic2 ||
-		version != prepareParamKindBatchVersionV1 && version != prepareParamKindBatchVersion &&
-			version != prepareParamKindBatchVersionV3 {
+		version != prepareParamKindBatchVersionV1 && version != prepareParamKindBatchVersion {
 		return fail(moerr.NewInvalidInputNoCtx("invalid prepared parameter batch trailer"))
 	}
 	nVecs, err := types.ReadInt32(limited)
@@ -947,25 +889,14 @@ func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
 		}
 		binaryString := mode&prepareParamKindBatchBinaryFlag != 0
 		textString := mode&prepareParamKindBatchTextFlag != 0
-		isBin := mode&prepareParamKindBatchIsBinFlag != 0
-		if isBin && version < prepareParamKindBatchVersionV3 {
-			return fail(moerr.NewInvalidInputNoCtx("numeric binary-literal marker requires trailer version 3"))
-		}
 		if binaryString && textString {
 			return fail(moerr.NewInvalidInputNoCtx("binary and text vector flags are mutually exclusive"))
 		}
-		mode &^= prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag |
-			prepareParamKindBatchIsBinFlag
-		if isBin && mode == prepareParamKindBatchModeRows {
-			return fail(moerr.NewInvalidInputNoCtx("row numeric binary-literal metadata cannot also have a scalar marker"))
-		}
+		mode &^= prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag
 		switch mode {
 		case prepareParamKindBatchModeNone:
 			if err := setBatchVectorRuntimeStringDomain(bat.Vecs[i], binaryString, textString, mp); err != nil {
 				return fail(err)
-			}
-			if isBin {
-				bat.Vecs[i].SetIsBin(true)
 			}
 		case prepareParamKindBatchModeUniform:
 			kind, err := readByte()
@@ -979,9 +910,6 @@ func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
 			bat.Vecs[i].SetPrepareParamKind(vector.PrepareParamKind(kind))
 			if err := setBatchVectorRuntimeStringDomain(bat.Vecs[i], binaryString, textString, mp); err != nil {
 				return fail(err)
-			}
-			if isBin {
-				bat.Vecs[i].SetIsBin(true)
 			}
 		case prepareParamKindBatchModeRows:
 			count, err := types.ReadInt32(limited)
@@ -1003,20 +931,11 @@ func (bat *Batch) unmarshalFromReaderWithPrepareParamKinds(
 			if limited.N < minimumRemaining || int64(count) > limited.N-minimumRemaining {
 				return fail(io.ErrUnexpectedEOF)
 			}
-			var applyErr error
-			if version >= prepareParamKindBatchVersionV3 {
-				applyErr = bat.Vecs[i].SetPrepareParamKindsAndBinaryStringFromReader(
-					limited, int(count), mp, prepareParamKindBatchBinaryFlag,
-					prepareParamKindBatchTextFlag, prepareParamKindBatchIsBinFlag,
-				)
-			} else {
-				applyErr = bat.Vecs[i].SetPrepareParamKindsAndBinaryStringFromReader(
-					limited, int(count), mp, prepareParamKindBatchBinaryFlag,
-					prepareParamKindBatchTextFlag,
-				)
-			}
-			if applyErr != nil {
-				return fail(applyErr)
+			if err := bat.Vecs[i].SetPrepareParamKindsAndBinaryStringFromReader(
+				limited, int(count), mp, prepareParamKindBatchBinaryFlag,
+				prepareParamKindBatchTextFlag,
+			); err != nil {
+				return fail(err)
 			}
 		default:
 			return fail(moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata mode"))
@@ -1151,8 +1070,7 @@ func parsePrepareParamKindBatchTrailer(
 	version, err := types.ReadByte(reader)
 	if err != nil || magic0 != prepareParamKindBatchMagic0 ||
 		magic1 != prepareParamKindBatchMagic1 || magic2 != prepareParamKindBatchMagic2 ||
-		version != prepareParamKindBatchVersionV1 && version != prepareParamKindBatchVersion &&
-			version != prepareParamKindBatchVersionV3 {
+		version != prepareParamKindBatchVersionV1 && version != prepareParamKindBatchVersion {
 		return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter batch trailer")
 	}
 	nVecs, err := types.ReadInt32(reader)
@@ -1177,18 +1095,10 @@ func parsePrepareParamKindBatchTrailer(
 		}
 		records[i].binaryString = mode&prepareParamKindBatchBinaryFlag != 0
 		records[i].textString = mode&prepareParamKindBatchTextFlag != 0
-		records[i].numericBinaryLiteral = mode&prepareParamKindBatchIsBinFlag != 0
-		if records[i].numericBinaryLiteral && version < prepareParamKindBatchVersionV3 {
-			return nil, 0, moerr.NewInvalidInputNoCtx("numeric binary-literal marker requires trailer version 3")
-		}
 		if records[i].binaryString && records[i].textString {
 			return nil, 0, moerr.NewInvalidInputNoCtx("binary and text vector flags are mutually exclusive")
 		}
-		mode &^= prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag |
-			prepareParamKindBatchIsBinFlag
-		if records[i].numericBinaryLiteral && mode == prepareParamKindBatchModeRows {
-			return nil, 0, moerr.NewInvalidInputNoCtx("row numeric binary-literal metadata cannot also have a scalar marker")
-		}
+		mode &^= prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag
 		records[i].mode = mode
 		switch mode {
 		case prepareParamKindBatchModeNone:
@@ -1220,14 +1130,7 @@ func parsePrepareParamKindBatchTrailer(
 				if encoded&prepareParamKindBatchBinaryFlag != 0 && encoded&prepareParamKindBatchTextFlag != 0 {
 					return nil, 0, moerr.NewInvalidInputNoCtx("binary and text row flags are mutually exclusive")
 				}
-				if encoded&prepareParamKindBatchIsBinFlag != 0 && version < prepareParamKindBatchVersionV3 {
-					return nil, 0, moerr.NewInvalidInputNoCtx("numeric binary-literal marker requires trailer version 3")
-				}
-				if encoded&prepareParamKindBatchIsBinFlag != 0 {
-					records[i].hasNumericBinaryLiteralRows = true
-				}
-				kind := encoded &^ (prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag |
-					prepareParamKindBatchIsBinFlag)
+				kind := encoded &^ (prepareParamKindBatchBinaryFlag | prepareParamKindBatchTextFlag)
 				if vector.PrepareParamKind(kind) > vector.PrepareParamBoolean {
 					return nil, 0, moerr.NewInvalidInputNoCtx("invalid prepared parameter metadata kind")
 				}

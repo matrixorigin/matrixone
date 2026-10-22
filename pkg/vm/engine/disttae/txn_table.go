@@ -2243,11 +2243,6 @@ func (tbl *txnTable) Write(ctx context.Context, bat *batch.Batch) error {
 	if err != nil {
 		return err
 	}
-	// Numeric HEX/BIT provenance affects expression coercion only; stored table
-	// values use ordinary SQL semantics after this ownership transfer.
-	for _, vec := range ibat.Vecs {
-		vec.SetIsBin(false)
-	}
 	tableName := tbl.writeTableName(ctx)
 	if _, err := tbl.getTxn().writeBatchWithAutoIncrEpoch(
 		ctx,

@@ -2303,42 +2303,19 @@ func (b *baseBinder) resolveNumericFunctionArgs(
 }
 
 func supportsGenericNumericFunctionContext(name string) bool {
-	switch name {
-	// These functions' value arguments are in the same numeric domain as their
-	// result. A numeric return type alone is insufficient: FIELD, LENGTH and
-	// similar functions return numbers while their arguments belong to another
-	// domain.
-	case "abs", "ceil", "ceiling", "floor", "round", "truncate", "sign",
-		"sqrt", "power", "pow", "exp", "ln", "log", "log2", "log10":
-		return true
-	default:
-		return false
-	}
+	// A numeric return type alone is insufficient: FIELD, LENGTH and similar
+	// functions return numbers while their arguments belong to another domain.
+	return function.HasGenericNumericValueContext(name)
 }
 
-// preparedStringMathFunctionValueArg reports which arguments of the
-// string-to-number math functions are value operands.  ROUND/TRUNCATE's
-// second argument is a precision/control operand and must retain the
-// prepare-time integer contract; it must not inherit the permissive DOUBLE
-// source used for their value argument.  MOD consumes both operands as
-// values.  Keep this predicate shared by prepare-time source discovery and
-// execute-time rebinding so the two paths cannot disagree about an argument's
-// role.
+// preparedStringMathFunctionValueArg reports a registry-declared numeric
+// value operand. Precision/control arguments such as ROUND's second operand
+// remain under their separate integer-argument contract.
 func preparedStringMathFunctionValueArg(name string, argIndex, argCount int) bool {
 	if argIndex < 0 || argIndex >= argCount {
 		return false
 	}
-	lowerName := strings.ToLower(name)
-	switch lowerName {
-	case "abs", "ceil", "ceiling", "floor", "sign":
-		return argIndex == 0
-	case "mod":
-		return argCount == 2 && (argIndex == 0 || argIndex == 1)
-	case "round", "truncate":
-		return argIndex == 0
-	default:
-		return false
-	}
+	return function.IsNumericValueArgument(name, argIndex)
 }
 
 func isNumericContextFunction(name string) bool {
@@ -2443,16 +2420,16 @@ func mysqlNumericPrefixFunctionArg(name string, idx, argCount int, source, targe
 		return false
 	}
 
-	lowerName := strings.ToLower(name)
-	switch lowerName {
-	case "abs", "ceil", "ceiling", "floor", "mod", "round", "sign", "truncate":
+	if function.IsNumericValueArgument(name, idx) {
 		// String-valued operands of these numeric functions are deliberately
 		// bound through the comparison cast.  NewCast is intentionally strict
 		// for ordinary implicit reconciliation, whereas NewComparisonCast is
 		// the execution path that carries MySQL's numeric-prefix behavior and
 		// consults MATRIXONE_NATIVE at runtime.  Only value operands are
 		// eligible; ROUND/TRUNCATE precision remains an integer control input.
-		return (lowerName == "mod" && argCount == 2) || idx == 0
+		return true
+	}
+	switch strings.ToLower(name) {
 	case "left", "right", "lpad", "rpad", "repeat":
 		return idx == 1 && argCount >= 2
 	case "space":
@@ -7490,6 +7467,15 @@ func bindPreparedFuncExprImplByPlanExpr(
 	args []*Expr,
 	stringDomainModes []function.StringDomainCheckMode,
 ) (*plan.Expr, error) {
+	// IF's fourth argument is the private BOOL companion emitted by numeric
+	// value lowering. It belongs to the same selected branch as the value, but
+	// the SQL binder must see the original three-argument function signature.
+	var selectedKind *Expr
+	if (strings.EqualFold(name, "if") || strings.EqualFold(name, "iff")) && len(args) == 4 &&
+		args[3] != nil && types.T(args[3].Typ.Id) == types.T_bool {
+		selectedKind = args[3]
+		args = append([]*Expr(nil), args[:3]...)
+	}
 	if stringDomainModes == nil && preparedRegexpCompatibilityStringOperandCount(name, len(args)) > 0 {
 		// PREPARE may defer compatibility for parameter-owned domains, but this
 		// path runs only after the current EXECUTE values have been bound. An
@@ -7497,8 +7483,16 @@ func bindPreparedFuncExprImplByPlanExpr(
 		// again and preserves direct-marker/domainless provenance separately.
 		stringDomainModes = make([]function.StringDomainCheckMode, len(args))
 	}
-	return bindFuncExprImplByPlanExpr(
+	rewritten, err := bindFuncExprImplByPlanExpr(
 		ctx, name, args, true, stringDomainModes, originalBoundExpr, true)
+	if err != nil || selectedKind == nil {
+		return rewritten, err
+	}
+	if fn := rewritten.GetF(); fn != nil {
+		fn.Args = append(fn.Args, selectedKind)
+		return rewritten, nil
+	}
+	return nil, moerr.NewInvalidInput(ctx, "IF kind companion lost its value-producing owner")
 }
 
 func bindFuncExprImplByPlanExpr(
@@ -9053,6 +9047,13 @@ func bindFuncExprImplByPlanExpr(
 					// correction local to CHAR instead of changing global arithmetic or
 					// cast semantics.
 					args[idx], err = appendExplicitCastBeforeExpr(ctx, args[idx], typ)
+				} else if function.IsNumericValueArgument(name, idx) &&
+					argsType[idx].Oid.IsMySQLString() && castType.IsNumeric() {
+					// Numeric functions consume a SQL scalar value plus its semantic
+					// kind. Keep the selector and kind output in one plan program so
+					// HEX/BIT rows are interpreted without vector-carried provenance.
+					args[idx], err = appendNumericValueCastBeforeExpr(
+						ctx, args[idx], typ, function.NumericValueCastPolicyComparison)
 				} else if mysqlNumericPrefixBitwiseArg(name, idx, len(args), argsType[idx], castType) ||
 					mysqlNumericPrefixFunctionArg(name, idx, len(args), argsType[idx], castType) {
 					args[idx], err = appendComparisonCastBeforeExpr(ctx, args[idx], typ)

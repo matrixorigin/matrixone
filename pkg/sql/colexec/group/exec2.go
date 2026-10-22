@@ -168,6 +168,7 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 	group.ctr.legacyH8CharSemantics = false
 	if len(group.ctr.groupByEvaluate.Executor) == len(group.GroupBy) {
 		group.ctr.groupByEvaluate.ResetForNextQuery()
+		group.ctr.groupByProgramGroup.ResetForNextQuery()
 	} else {
 		// calculate the key width and key nullable, and hash table type.
 		group.ctr.keyWidth, group.ctr.keyNullable = 0, false
@@ -237,13 +238,18 @@ func (group *Group) prepareGroupAndAggArg(proc *process.Process) (err error) {
 
 		// create group by evaluate
 		group.ctr.groupByEvaluate.Free()
-		group.ctr.groupByEvaluate, err = colexec.MakeEvalVectorWithAllocation(
-			proc,
-			group.GroupBy,
-			group.ctr.expressionAllocation,
-		)
+		group.ctr.groupByProgramGroup = nil
+		var executors []colexec.ExpressionExecutor
+		executors, group.ctr.groupByProgramGroup, err = colexec.NewProjectionExpressionExecutorsWithAllocation(
+			proc, group.GroupBy, group.ctr.expressionAllocation)
 		if err != nil {
 			return err
+		}
+		group.ctr.groupByEvaluate.Executor = executors
+		group.ctr.groupByEvaluate.Vec = make([]*vector.Vector, len(executors))
+		group.ctr.groupByEvaluate.Typ = make([]types.Type, len(executors))
+		for i, expr := range group.GroupBy {
+			group.ctr.groupByEvaluate.Typ[i] = types.MustTypeFromPlan(expr.Typ)
 		}
 	}
 
