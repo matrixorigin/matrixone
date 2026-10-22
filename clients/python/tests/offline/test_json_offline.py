@@ -9,7 +9,19 @@ Tests cover:
 
 import json
 import pytest
-from sqlalchemy import Column, Integer, String, select, update, Numeric, create_engine, literal, MetaData, Table
+from sqlalchemy import (
+    Boolean,
+    Column,
+    Integer,
+    String,
+    select,
+    update,
+    Numeric,
+    create_engine,
+    literal,
+    MetaData,
+    Table,
+)
 from sqlalchemy.dialects.mysql import JSON
 
 from matrixone.orm import declarative_base
@@ -122,14 +134,27 @@ class TestJSONModification:
         assert "'$.field2'" in sql
 
 
-@pytest.mark.parametrize('function', [
-    json_extract, json_extract_string, json_extract_float64,
-    json_set, json_insert, json_replace,
-])
-@pytest.mark.parametrize('path', [
-    '$.ordinary', '$."owner\'s"', '$."a\\\\b"', '$."中文"',
-    "$.x'), 'different path') --",
-])
+@pytest.mark.parametrize(
+    'function',
+    [
+        json_extract,
+        json_extract_string,
+        json_extract_float64,
+        json_set,
+        json_insert,
+        json_replace,
+    ],
+)
+@pytest.mark.parametrize(
+    'path',
+    [
+        '$.ordinary',
+        '$."owner\'s"',
+        '$."a\\\\b"',
+        '$."中文"',
+        "$.x'), 'different path') --",
+    ],
+)
 def test_json_path_reaches_sql_function_unchanged(function, path):
     # A real SQL parser/DBAPI boundary, with only the JSON function replaced by
     # an echo receiver: paths must remain data, including on cached executions.
@@ -157,7 +182,8 @@ def test_json_path_mutation_supports_executemany(function, expected):
             connection.execute(table.insert().values(data=expression), [{'id': 1}, {'id': 2}])
             rows = connection.execute(select(table.c.id, table.c.data).order_by(table.c.id)).all()
             assert [(row[0], json.loads(row[1])) for row in rows] == [
-                (1, {"owner's": expected}), (2, {"owner's": expected}),
+                (1, {"owner's": expected}),
+                (2, {"owner's": expected}),
             ]
     finally:
         engine.dispose()
@@ -194,6 +220,81 @@ class TestStandardSyntax:
         """Test .cast() method."""
         expr = JsonModel.data['price'].cast(Numeric)
         assert expr is not None
+
+    @pytest.mark.parametrize(
+        'key,path',
+        [
+            ('brand', '$."brand"'),
+            ("owner's", '$."owner\'s"'),
+            ('a"b', '$."a\\"b"'),
+            ('a\\b', '$."a\\\\b"'),
+            ('x.y', '$."x.y"'),
+            ('', '$.""'),
+            ('*', '$."*"'),
+            ('items[0]', '$."items[0]"'),
+            ('\n\t\r\b\f\x00', '$."\\n\\t\\r\\b\\f\\u0000"'),
+            ('中文😀', '$."中文😀"'),
+            (42, '$."42"'),
+        ],
+    )
+    def test_member_path_is_bound_data(self, key, path):
+        compiled = select(JsonModel.data[key].astext).compile()
+        assert list(compiled.params.values()) == [path]
+        assert path not in str(compiled)
+
+    @pytest.mark.parametrize(
+        'convert,function',
+        [
+            (lambda value: value, 'json_extract'),
+            (lambda value: value.astext, 'json_extract_string'),
+            (lambda value: value.asbool, 'json_extract'),
+            (lambda value: value.cast(Integer), 'json_extract_float64'),
+            (lambda value: value.cast(Numeric()), 'json_extract_float64'),
+            (lambda value: value.cast(String), 'json_extract_string'),
+            (lambda value: value.cast(String()), 'json_extract_string'),
+            (lambda value: value.cast(Boolean), 'json_extract'),
+            (lambda value: value == 'value', 'json_extract'),
+            (lambda value: value != 'value', 'json_extract'),
+            (lambda value: value > 1, 'json_extract'),
+            (lambda value: value < 1, 'json_extract'),
+            (lambda value: value >= 1, 'json_extract'),
+            (lambda value: value <= 1, 'json_extract'),
+        ],
+    )
+    def test_consumers_preserve_nested_member_path(self, convert, function):
+        expression = convert(JsonModel.data["owner's"]['x.y'])
+        compiled = select(expression).compile()
+        assert '$."owner\'s"."x.y"' in compiled.params.values()
+        assert function + '(' in str(compiled)
+
+    def test_nested_access_does_not_mutate_parent_or_sibling(self):
+        parent = JsonModel.data['x.y']
+        first = parent['a"b']
+        second = parent['😀']
+        compiled = select(parent.astext, first.astext, second.astext, parent.astext).compile()
+        assert list(compiled.params.values()) == [
+            '$."x.y"',
+            '$."x.y"."a\\"b"',
+            '$."x.y"."😀"',
+            '$."x.y"',
+        ]
+
+    @pytest.mark.parametrize('source', ['orm', 'table', 'alias', 'literal'])
+    def test_default_projection_uses_underlying_from_dependency(self, source):
+        table = JsonModel.__table__.alias('json_alias') if source == 'alias' else JsonModel.__table__
+        column = JsonModel.data if source == 'orm' else table.c.data
+        if source == 'literal':
+            column = literal({'x.y': {'value': 7}}, type_=JSON)
+        statement = select(column['x.y']['value'])
+        compiled = statement.compile()
+        assert '$."x.y"."value"' in compiled.params.values()
+        froms = statement.get_final_froms()
+        if source == 'literal':
+            assert froms == []
+            assert 'FROM' not in str(compiled)
+        else:
+            assert len(froms) == 1
+            assert froms[0] is table
 
 
 class TestComplexQueries:

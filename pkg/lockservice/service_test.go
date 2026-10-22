@@ -3512,12 +3512,12 @@ func TestResumeInvalidService(t *testing.T) {
 }
 
 func TestCommitDetectsStaleLocalBindAfterAllocatorRestart(t *testing.T) {
-	runLockServiceTestsWithLevel(
+	runLockServiceRestartTests(
 		t,
 		zapcore.DebugLevel,
 		[]string{"s1"},
 		time.Hour,
-		func(alloc *lockTableAllocator, s []*service) {
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -3538,12 +3538,12 @@ func TestCommitDetectsStaleLocalBindAfterAllocatorRestart(t *testing.T) {
 			// Simulate a DN/TN pod rebuild: the allocator gets a new epoch and
 			// loses its in-memory bind map, while the CN service keeps running
 			// with the old local lock table cached.
-			alloc.mu.Lock()
-			alloc.mu.services = make(map[string]*serviceBinds)
-			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			alloc.version++
+			oldID, oldVersion := alloc.allocatorID, alloc.version
+			alloc, err = restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = oldID, oldVersion+1
+			})
+			require.NoError(t, err)
 			restartedVersion := alloc.version
-			alloc.mu.Unlock()
 
 			require.Equal(t, staleBind, l1.tableGroups.get(0, staleTable).getBind())
 
@@ -3579,7 +3579,10 @@ func TestCommitDetectsStaleLocalBindAfterAllocatorRestart(t *testing.T) {
 			require.Equal(t, restartedVersion, refreshedBind.Version)
 			require.NoError(t, l1.Unlock(ctx, newTestTxnID(3), timestamp.Timestamp{}))
 		},
-		nil,
+		func(cfg *Config) {
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
+		},
 	)
 }
 
@@ -3687,10 +3690,12 @@ func TestKeepBindFailedSkipsBindPublishedAfterSnapshot(t *testing.T) {
 }
 
 func TestGetBindPurgesStaleBindWhenAllocatorIDChangesWithRegressedVersion(t *testing.T) {
-	runLockServiceTests(
+	runLockServiceRestartTests(
 		t,
+		zapcore.DebugLevel,
 		[]string{"s1"},
-		func(alloc *lockTableAllocator, s []*service) {
+		10*time.Second,
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -3712,32 +3717,37 @@ func TestGetBindPurgesStaleBindWhenAllocatorIDChangesWithRegressedVersion(t *tes
 			l1.lastAllocatorVersion = staleBind.Version
 			l1.allocatorVersionMu.Unlock()
 
-			alloc.mu.Lock()
-			alloc.mu.services = make(map[string]*serviceBinds)
-			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			alloc.allocatorID = "restarted-allocator-with-lower-version"
-			alloc.version = staleBind.Version - 1
+			oldVersion := staleBind.Version
+			alloc, err = restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = "restarted-allocator-with-lower-version", oldVersion-1
+			})
+			require.NoError(t, err)
 			restartedVersion := alloc.version
 			restartedAllocatorID := alloc.allocatorID
-			alloc.mu.Unlock()
 
 			_, err = l1.getLockTableWithCreate(context.Background(), 0, freshTable, newTestRows(2), pb.Sharding_None)
 			require.NoError(t, err)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
-			require.Equal(t, restartedAllocatorID, l1.lastAllocatorID)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
+			require.Equal(t, restartedAllocatorID, l1.allocatorStateSnapshot().id)
 			freshBind := l1.tableGroups.get(0, freshTable).getBind()
 			require.Equal(t, restartedVersion, freshBind.Version)
 			require.Equal(t, restartedAllocatorID, freshBind.AllocatorID)
+		},
+		func(cfg *Config) {
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
 		},
 	)
 }
 
 func TestKeepaliveEpochPurgeKeepsGroupMovePop(t *testing.T) {
-	runLockServiceTests(
+	runLockServiceRestartTests(
 		t,
+		zapcore.DebugLevel,
 		[]string{"s1"},
-		func(alloc *lockTableAllocator, s []*service) {
+		10*time.Second,
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -3752,26 +3762,35 @@ func TestKeepaliveEpochPurgeKeepsGroupMovePop(t *testing.T) {
 			l1.checkCanMoveGroupTables()
 			require.NotNil(t, l1.topGroupTables())
 
-			alloc.mu.Lock()
-			alloc.version++
+			oldID, oldVersion := alloc.allocatorID, alloc.version
+			alloc, err = restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = oldID, oldVersion+1
+			})
+			require.NoError(t, err)
 			restartedVersion := alloc.version
-			alloc.mu.Unlock()
+			require.NotNil(t, alloc.registerService(l1.serviceID))
+			require.True(t, alloc.KeepLockTableBind(l1.serviceID))
 
 			l1.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
 
 			require.Nil(t, l1.topGroupTables())
 			require.Nil(t, l1.tableGroups.get(0, table))
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
+		},
+		func(cfg *Config) {
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
 		},
 	)
 }
 
 func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
-	runLockServiceTestsWithAdjustConfig(
+	runLockServiceRestartTests(
 		t,
+		zapcore.DebugLevel,
 		[]string{"s1"},
 		time.Second*10,
-		func(alloc *lockTableAllocator, s []*service) {
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -3830,14 +3849,11 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 			require.True(t, ok)
 			l1.tableGroups.set(0, staleProxyTable, staleProxy)
 
-			alloc.mu.Lock()
-			alloc.mu.services = make(map[string]*serviceBinds)
-			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			alloc.allocatorID = "restarted-allocator-for-keepalive"
-			alloc.version++
-			restartedAllocatorID := alloc.allocatorID
-			restartedVersion := alloc.version
-			alloc.mu.Unlock()
+			alloc, err := restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = "restarted-allocator-for-keepalive", oldVersion+1
+			})
+			require.NoError(t, err)
+			restartedAllocatorID, restartedVersion := alloc.allocatorID, alloc.version
 
 			currentProxyBind := staleRemoteBind
 			currentProxyBind.Table = currentProxyTable
@@ -3863,19 +3879,23 @@ func TestKeepaliveOKFalseWithNewAllocatorVersionPurgesStaleBinds(t *testing.T) {
 			preserved := l1.tableGroups.get(0, currentProxyTable)
 			require.NotNil(t, preserved)
 			require.Equal(t, currentProxyBind, preserved.getBind())
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
-			require.Equal(t, restartedAllocatorID, l1.lastAllocatorID)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
+			require.Equal(t, restartedAllocatorID, l1.allocatorStateSnapshot().id)
 		},
 		func(cfg *Config) {
 			cfg.EnableRemoteLocalProxy = true
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
 		})
 }
 
 func TestKeepaliveOKFalseFencesActiveTxn(t *testing.T) {
-	runLockServiceTests(
+	runLockServiceRestartTests(
 		t,
+		zapcore.DebugLevel,
 		[]string{"s1"},
-		func(alloc *lockTableAllocator, s []*service) {
+		10*time.Second,
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -3887,12 +3907,11 @@ func TestKeepaliveOKFalseFencesActiveTxn(t *testing.T) {
 			require.NoError(t, err)
 			require.NotNil(t, l1.tableGroups.get(0, table))
 
-			alloc.mu.Lock()
-			alloc.mu.services = make(map[string]*serviceBinds)
-			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			alloc.allocatorID = "restarted-allocator-for-ok-false-fence"
-			alloc.version++
-			alloc.mu.Unlock()
+			oldVersion := alloc.version
+			alloc, err = restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = "restarted-allocator-for-ok-false-fence", oldVersion+1
+			})
+			require.NoError(t, err)
 			require.False(t, alloc.KeepLockTableBind(l1.serviceID))
 
 			l1.remote.keeper.(*lockTableKeeper).doKeepLockTableBind(ctx)
@@ -3907,6 +3926,10 @@ func TestKeepaliveOKFalseFencesActiveTxn(t *testing.T) {
 			_, err = l1.Lock(ctx, table, newTestRows(2), txnID, option)
 			require.True(t, moerr.IsMoErrCode(err, moerr.ErrLockTableBindChanged))
 			require.NoError(t, l1.Unlock(ctx, txnID, timestamp.Timestamp{}))
+		},
+		func(cfg *Config) {
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
 		},
 	)
 }
@@ -4243,10 +4266,12 @@ func TestAllocatorObserverPurgesRemoteAndProxyLockTables(t *testing.T) {
 }
 
 func TestAllocatorObserverConcurrentKeepaliveAndGetBind(t *testing.T) {
-	runLockServiceTests(
+	runLockServiceRestartTests(
 		t,
+		zapcore.DebugLevel,
 		[]string{"s1"},
-		func(alloc *lockTableAllocator, s []*service) {
+		10*time.Second,
+		func(alloc *lockTableAllocator, s []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 			l1 := s[0]
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second*10)
 			defer cancel()
@@ -4259,12 +4284,12 @@ func TestAllocatorObserverConcurrentKeepaliveAndGetBind(t *testing.T) {
 			require.NoError(t, l1.Unlock(ctx, newTestTxnID(1), timestamp.Timestamp{}))
 			require.NotNil(t, l1.tableGroups.get(0, staleTable))
 
-			alloc.mu.Lock()
-			alloc.mu.services = make(map[string]*serviceBinds)
-			alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-			alloc.version++
+			oldID, oldVersion := alloc.allocatorID, alloc.version
+			alloc, err = restart(func(next *lockTableAllocator) {
+				next.allocatorID, next.version = oldID, oldVersion+1
+			})
+			require.NoError(t, err)
 			restartedVersion := alloc.version
-			alloc.mu.Unlock()
 
 			var wg sync.WaitGroup
 			errC := make(chan error, 1)
@@ -4292,7 +4317,11 @@ func TestAllocatorObserverConcurrentKeepaliveAndGetBind(t *testing.T) {
 			close(errC)
 			require.NoError(t, <-errC)
 			require.Nil(t, l1.tableGroups.get(0, staleTable))
-			require.Equal(t, restartedVersion, l1.lastAllocatorVersion)
+			require.Equal(t, restartedVersion, l1.allocatorStateSnapshot().version)
+		},
+		func(cfg *Config) {
+			cfg.KeepBindDuration.Duration = time.Hour
+			cfg.KeepRemoteLockDuration.Duration = time.Hour
 		},
 	)
 }
@@ -6583,22 +6612,43 @@ func runLockServiceTestsWithLevel(
 	adjustConfig func(*Config),
 	opts ...Option,
 ) {
+	runLockServiceRestartTests(t, level, serviceIDs, lockTableBindTimeout,
+		func(allocator *lockTableAllocator, services []*service, _ func(...AllocatorOption) (*lockTableAllocator, error)) {
+			fn(allocator, services)
+		}, adjustConfig, opts...)
+}
+
+func runLockServiceRestartTests(
+	t assert.TestingT,
+	level zapcore.Level,
+	serviceIDs []string,
+	lockTableBindTimeout time.Duration,
+	fn func(*lockTableAllocator, []*service, func(...AllocatorOption) (*lockTableAllocator, error)),
+	adjustConfig func(*Config),
+	opts ...Option,
+) {
 	defer leaktest.AfterTest(t.(testing.TB))()
 
 	runtime.RunTest(
 		"",
 		func(rt runtime.Runtime) {
 			reuse.RunReuseTests(func() {
-				RunLockServicesForTest(
+				runLockServicesForTest(
 					level,
 					serviceIDs,
 					lockTableBindTimeout,
-					func(lta LockTableAllocator, ls []LockService) {
+					func(lta LockTableAllocator, ls []LockService, restart func(...AllocatorOption) (LockTableAllocator, error)) {
 						services := make([]*service, 0, len(ls))
 						for _, s := range ls {
 							services = append(services, s.(*service))
 						}
-						fn(lta.(*lockTableAllocator), services)
+						fn(lta.(*lockTableAllocator), services, func(opts ...AllocatorOption) (*lockTableAllocator, error) {
+							allocator, err := restart(opts...)
+							if err != nil {
+								return nil, err
+							}
+							return allocator.(*lockTableAllocator), nil
+						})
 					},
 					adjustConfig,
 					opts...,
