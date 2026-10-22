@@ -260,6 +260,9 @@ func ExecSQLWithReadResultAndAccount(
 					if varName == "sql_mode" {
 						return "", nil
 					}
+					if varName == "foreign_key_checks" {
+						return int64(1), nil
+					}
 					if varName == "default_week_format" {
 						return int64(0), nil
 					}

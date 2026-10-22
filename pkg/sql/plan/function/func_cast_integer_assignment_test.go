@@ -306,3 +306,33 @@ func TestMediumIntAssignmentBounds(t *testing.T) {
 		}
 	})
 }
+
+func TestParseDecimalInteger(t *testing.T) {
+	for _, tc := range []struct {
+		input, want string
+		wantErr     bool
+	}{
+		{input: "1.9", want: "2"}, {input: "-1.9", want: "-2"}, {input: "2.5", want: "3"},
+		{input: "2.5e0", want: "3"}, {input: "-0.1", want: "-0"}, {input: ".5", want: "1"},
+		{input: "1e2", want: "100"}, {input: "9007199254740993.0", want: "9007199254740993"},
+		{input: "18446744073709551615.4", want: "18446744073709551615"},
+		{input: "18446744073709551615.5", wantErr: true},
+		{input: "10000000000000000000000000000000000000000e-40", want: "1"},
+		{input: "1e-99999999999999999", want: "0"}, {input: "0e99999999999999999", want: "0"},
+		{input: "1e99999999999999999", wantErr: true},
+		{input: "", wantErr: true}, {input: "abc", wantErr: true}, {input: "1x", wantErr: true},
+		{input: "1e", wantErr: true}, {input: "1e+", wantErr: true}, {input: "1 2", wantErr: true},
+		{input: "1+2", wantErr: true}, {input: "NaN", wantErr: true}, {input: "Inf", wantErr: true},
+		{input: "0x1p2", wantErr: true}, {input: "1_0.5", wantErr: true},
+	} {
+		t.Run(tc.input, func(t *testing.T) {
+			got, err := ParseDecimalInteger(tc.input)
+			if tc.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tc.want, got)
+		})
+	}
+}

@@ -1485,7 +1485,7 @@ alter table foreign01 change col2 col2New varchar(100);
 alter table foreign02 change col2 col2new double after col3;
 insert into foreign01 values(3,'bcguwgheinwqneku678',2,2);
 insert into foreign02 values(6,6,6);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 delete from foreign01 where col2New = 'sfhuwe';
 internal error: Cannot delete or update a parent row: a foreign key constraint fails
 delete from foreign02 where col2New = 2;
@@ -2144,8 +2144,16 @@ name
 A
 B
 C
+set @change_enum_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
 alter table t1 modify column name enum('A','B');
-internal error: convert to MySQL enum failed: item C is not in enum [A B]
+Data truncated for ENUM value: 'C'
+select * from t1 order by name;
+name
+A
+B
+C
+set session sql_mode = @change_enum_saved_sql_mode;
 alter table t1 modify column name enum('A','B','C');
 alter table t1 modify column name enum('A','B','C','D'), add column age int;
 select * from t1;

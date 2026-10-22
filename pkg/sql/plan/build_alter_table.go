@@ -242,7 +242,7 @@ func autoIncrementValueToOffset(value uint64) uint64 {
 	return 0
 }
 
-func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, error) {
+func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext, bindings alterColumnBindings) (*Plan, error) {
 	ctx := cctx.GetContext()
 	// 1. get origin table name and Schema name
 	schemaName, tableName := string(stmt.Table.Schema()), string(stmt.Table.Name())
@@ -347,7 +347,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 		}
 	}
 
-	for _, spec := range validAlterSpecs {
+	for ordinal, spec := range validAlterSpecs {
 		switch option := spec.(type) {
 		case *tree.AlterOptionAdd:
 			switch optionAdd := option.Def.(type) {
@@ -405,7 +405,7 @@ func buildAlterTableCopy(stmt *tree.AlterTable, cctx CompilerContext) (*Plan, er
 					return nil, moerr.NewErrCantDropFieldOrKey(ctx, string(option.Name))
 				}
 			case tree.AlterTableDropColumn:
-				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx)
+				pkAffected, err = DropColumn(cctx, alterTablePlan, string(option.Name), alterTableCtx, bindings.clauses[ordinal].preserveIndexes)
 				affectedCols = append(affectedCols, string(option.Name))
 			case tree.AlterTableDropPrimaryKey:
 				err = DropPrimaryKey(cctx, alterTablePlan, alterTableCtx)
@@ -683,6 +683,16 @@ func addAlterCopyForeignKeys(
 		}
 	}
 
+	// #30254: MySQL installs a FOREIGN KEY declared under
+	// foreign_key_checks=0 without validating pre-existing rows; orphans
+	// survive until later DML fails. Skip the existing-row detect SQLs in
+	// that mode; constraint definitions, catalog updates and parent
+	// existence checks below are unaffected.
+	fkChecksEnabled, err := IsForeignKeyChecksEnabled(cctx)
+	if err != nil {
+		return err
+	}
+
 	for _, foreignKey := range foreignKeys {
 		if err := adjustConstraintName(ctx, foreignKey); err != nil {
 			return err
@@ -733,6 +743,12 @@ func addAlterCopyForeignKeys(
 			},
 		})
 		alterTableCtx.UpdateSqls = append(alterTableCtx.UpdateSqls, fkData.UpdateSql)
+
+		if !fkChecksEnabled {
+			// Checks-disabled declarations skip existing-row validation
+			// entirely; the constraint is installed as declared.
+			continue
+		}
 
 		if fkData.IsSelfRefer {
 			detectSQLs, err := genSqlsForCheckFKSelfRefer(
@@ -1411,7 +1427,8 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	if objRef.PubInfo != nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "cannot alter table in subscription database")
 	}
-	options, err := resolveAlterConstraintOptions(ctx, tableDef, stmt.Options)
+	bindings := analyzeAlterColumnBindings(tableDef, stmt.Options)
+	options, err := resolveAlterConstraintOptions(ctx, tableDef, stmt.Options, bindings)
 	if err != nil {
 		return nil, err
 	}
@@ -1474,7 +1491,7 @@ func buildAlterTable(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, error) 
 	}
 
 	if algorithm == plan.AlterTable_COPY {
-		return buildAlterTableCopy(stmt, ctx)
+		return buildAlterTableCopy(stmt, ctx, bindings)
 	} else {
 		return buildAlterTableInplace(stmt, ctx)
 	}

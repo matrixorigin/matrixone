@@ -336,6 +336,8 @@ func newExpressionExecutorWithAllocation(
 		return &memoExpressionExecutor{state: state}, nil
 	}
 	switch t := planExpr.Expr.(type) {
+	case *plan.Expr_Slot:
+		return newDependentSlotExecutor(proc, t.Slot, typ, selection)
 	case *plan.Expr_Lit:
 		vec, err := generateConstExpressionExecutor(proc, typ, t.Lit, selection)
 		if err != nil {
@@ -454,6 +456,23 @@ func newExpressionExecutorWithAllocation(
 
 	case *plan.Expr_F:
 		overloadID := t.F.GetFunc().GetObj()
+		// Validate before allocating the result wrapper, including plans retained
+		// from the pre-versioned unary TIMESTAMP implementation.
+		fid, oid := function.DecodeOverloadID(overloadID)
+		if fid == function.LOAD_FK_IGNORE_CHECK {
+			if err := function.RequireLoadFKIgnoreProtocol(proc.Ctx, proc); err != nil {
+				return nil, err
+			}
+		}
+		if fid == function.TIMESTAMP && oid >= 0 && oid <= 10 {
+			want := types.T_timestamp
+			if oid >= 5 {
+				want = types.T_datetime
+			}
+			if typ.Oid != want {
+				return nil, moerr.NewNotSupportedNoCtx("TIMESTAMP result vector contract mismatch requires rebinding")
+			}
+		}
 		overload, err := function.GetFunctionById(proc.Ctx, overloadID)
 		if err != nil {
 			return nil, err

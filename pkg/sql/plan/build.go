@@ -18,11 +18,13 @@ import (
 	"context"
 	"reflect"
 	gotrace "runtime/trace"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -31,6 +33,22 @@ import (
 
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	return bindAndOptimizeSelectQueryWithValidator(stmtType, ctx, stmt, isPrepareStmt, skipStats, nil)
+}
+
+// isPublicationScopeProbeSelect reports whether the statement is the
+// publication binding probe itself: a top-level SELECT with a literal LIMIT 0.
+// This is the same subscription-scope probe the frontend generates and
+// dispatches bind-only under the defines.PublicationViewBinding marker, and it
+// is the only front-end statement of that shape. Catalogue reads the planner
+// nests while binding the probe (which also execute under the marker) carry no
+// top-level LIMIT 0 and must keep the ordinary optimized build and the
+// execution pipeline after it.
+func isPublicationScopeProbeSelect(stmt *tree.Select) bool {
+	if stmt.Limit == nil || stmt.Limit.Count == nil {
+		return false
+	}
+	count, ok := stmt.Limit.Count.(*tree.NumVal)
+	return ok && count.String() == "0"
 }
 
 func bindAndOptimizeSelectQueryWithValidator(
@@ -103,6 +121,33 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 		if err = validate(builder.qry); err != nil {
 			return nil, err
 		}
+	}
+	if defines.IsPublicationViewBinding(ctx.GetContext()) && isPublicationScopeProbeSelect(stmt) {
+		// Publication scope validation (#27767) stops at the metadata
+		// boundary: the bound tree already proves every published relation,
+		// column and function of the stored definitions binds against the
+		// validating transaction. Everything after binding is the optimizer
+		// proper - createQuery's rewrites fold and eagerly evaluate constant
+		// expressions (foldTableScanFilters runs ConstantFold on WHERE
+		// predicates, pushdownLimitToTableScan and pruneColumns expect folded
+		// constants), so a side-effect function of a published view, such as
+		// enable_fault_injection(), could execute during validation. The
+		// subscriber's own query compiles through createQuery as usual; the
+		// probe discards its plan and reads only the binding result, so the
+		// bound query is returned without running any rewrite.
+		//
+		// Only the probe statement takes this branch. The catalogue reads the
+		// planner nests while binding it (the mo_columns identity read of the
+		// LIMIT 0 shortcut among them) also execute under the marker, but they
+		// must compile, run and stream rows through the ordinary pipeline: a
+		// bound-only build of their join would reach the execution compiler
+		// unrewritten and panic. The literal top-level LIMIT 0 is the same
+		// discrimination the frontend dispatch uses.
+		return &Plan{
+			Plan: &plan.Plan_Query{
+				Query: builder.qry,
+			},
+		}, nil
 	}
 	query, err := builder.createQuery()
 	if err != nil {
@@ -935,7 +980,7 @@ func selectHasExplicitTopLevelLimit(stmt *tree.Select) bool {
 // GetResultColumnsFromPlan
 func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 	getResultColumnsByProjectionlist := func(query *Query) []*ColDef {
-		step := len(query.Steps) - 1
+		step := int(query.MainOutputStep())
 		if query.HasReturning {
 			if query.ReturningStep < 0 || int(query.ReturningStep) >= len(query.Steps) {
 				return nil
@@ -947,6 +992,9 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 			return nil
 		}
 		columns := make([]*ColDef, len(lastNode.ProjectList))
+		// Only BOOLEAN wire metadata consumes expression kind. Keep all other
+		// result types on the existing origin/key path.
+		var kinds *resultColumnKinds
 		for idx, expr := range lastNode.ProjectList {
 			columns[idx] = &ColDef{
 				Name: query.Headings[idx],
@@ -960,7 +1008,18 @@ func GetResultColumnsFromPlan(p *Plan) []*ColDef {
 				}
 			}
 
-			if source := findResultColumnSource(query, query.Steps[step], expr); source != nil {
+			source := findResultColumnSource(query, query.Steps[step], expr)
+			if expr.Typ.Id == int32(types.T_bool) {
+				if source != nil {
+					columns[idx].ResultColumnKind = plan.ResultColumnKind_RESULT_COLUMN_KIND_STORED
+				} else {
+					if kinds == nil {
+						kinds = newResultColumnKinds(query)
+					}
+					columns[idx].ResultColumnKind = kinds.kind(query.Steps[step], expr)
+				}
+			}
+			if source != nil {
 				if columns[idx].TblName == "" {
 					columns[idx].TblName = source.tableName
 				}
@@ -1166,30 +1225,11 @@ func findResultColumnSourceAtJoin(
 		return nil
 	}
 
-	projectedRef := ref
-	childIdx := -1
-	projected := resultColumnProjectionByIdentity(node, ref)
-	if preferLocal && ref.RelPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
-		projected = node.ProjectList[ref.ColPos]
+	route := resultColumnRouteAtJoin(query, node, ref, preferLocal)
+	if route.computed || route.childExpr != nil && route.childExpr.GetCol() == nil {
+		return nil
 	}
-	if projected != nil {
-		if col := projected.GetCol(); col != nil {
-			projectedRef = col
-			// JOIN ProjectList entries use RelPos 0/1 to identify the
-			// corresponding child and ColPos to identify that child's output
-			// slot. This is a local remapping, not a source-table position.
-			if projectedRef.RelPos >= 0 && int(projectedRef.RelPos) < len(node.Children) {
-				childIdx = int(projectedRef.RelPos)
-				if childRef := resultColumnJoinChildProjectionRef(query, node, childIdx, projectedRef.ColPos); childRef != nil {
-					projectedRef = childRef
-				}
-			}
-		}
-	}
-
-	if childIdx < 0 {
-		childIdx = resultColumnJoinChildByBinding(query, node, projectedRef)
-	}
+	projectedRef, childIdx := route.ref, route.childIdx
 	if childIdx >= 0 && childIdx < len(node.Children) {
 		candidate := findResultColumnSourceAtNode(
 			query,
@@ -1226,12 +1266,85 @@ func findResultColumnSourceAtJoin(
 	return resultColumnSourceAfterJoin(found, node, foundChild)
 }
 
+type resultColumnJoinRoute struct {
+	projected *plan.Expr
+	ref       *plan.ColRef
+	childIdx  int
+	childExpr *plan.Expr
+	// computed belongs to the JOIN itself, rather than to a forwarded input.
+	computed bool
+}
+
+// resultColumnRouteAtJoin owns the JOIN projection contract for origin/key,
+// synthetic-score and computed-value provenance. A local JOIN output first
+// resolves through ProjectList; its ColRef then identifies one child by RelPos
+// and one output of that child by ColPos. Preserve the full child expression
+// so value provenance can follow computations without restoring key metadata.
+func resultColumnRouteAtJoin(query *plan.Query, node *plan.Node, ref *plan.ColRef, preferLocal bool) resultColumnJoinRoute {
+	var projected *plan.Expr
+	if node != nil && ref != nil {
+		projected = resultColumnProjectionByIdentity(node, ref)
+		if preferLocal && ref.RelPos == 0 && ref.ColPos >= 0 && int(ref.ColPos) < len(node.ProjectList) {
+			projected = node.ProjectList[ref.ColPos]
+		}
+	}
+	route := resultColumnRouteJoinProjection(query, node, projected, ref)
+	if !route.computed && route.childIdx < 0 {
+		route.childIdx = resultColumnJoinChildByBinding(query, node, route.ref)
+	}
+	return route
+}
+
+// A selected projection already owns its source reference. Share routing with
+// origin lookup without reinterpreting that reference as another output slot.
+func resultColumnRouteJoinProjection(query *plan.Query, node *plan.Node, projected *plan.Expr, ref *plan.ColRef) resultColumnJoinRoute {
+	route := resultColumnJoinRoute{projected: projected, ref: ref, childIdx: -1}
+	if query == nil || node == nil || ref == nil {
+		return route
+	}
+	if route.projected != nil {
+		route.ref = route.projected.GetCol()
+		if route.ref == nil {
+			route.computed = true
+			return route
+		}
+	}
+	// insertMarkJoin owns one boolean marker at (bindingTag,0), remapped by
+	// remapAllColRefs to (-1,0). It has no child source. Check the JOIN's own
+	// reference before following a child: a forwarded AGG grouping slot may
+	// also use (-1,0), but is still a stored value rather than this marker.
+	if node.JoinType == plan.Node_MARK && route.ref.ColPos == 0 &&
+		(route.ref.RelPos == -1 || slices.Contains(node.BindingTags, route.ref.RelPos)) {
+		route.computed = true
+		return route
+	}
+	if route.projected != nil {
+		if col := route.ref; col.RelPos >= 0 && int(col.RelPos) < len(node.Children) {
+			route.childIdx = int(col.RelPos)
+			route.childExpr = resultColumnJoinChildProjection(query, node, route.childIdx, col.ColPos)
+			if childRef := route.childExpr.GetCol(); childRef != nil {
+				route.ref = childRef
+			}
+		}
+	}
+	return route
+}
+
 func resultColumnJoinChildProjectionRef(
 	query *plan.Query,
 	node *plan.Node,
 	childIdx int,
 	colPos int32,
 ) *plan.ColRef {
+	return resultColumnJoinChildProjection(query, node, childIdx, colPos).GetCol()
+}
+
+func resultColumnJoinChildProjection(
+	query *plan.Query,
+	node *plan.Node,
+	childIdx int,
+	colPos int32,
+) *plan.Expr {
 	if query == nil || node == nil || childIdx < 0 || childIdx >= len(node.Children) || colPos < 0 {
 		return nil
 	}
@@ -1243,7 +1356,7 @@ func resultColumnJoinChildProjectionRef(
 	if int(colPos) >= len(child.ProjectList) {
 		return nil
 	}
-	return child.ProjectList[colPos].GetCol()
+	return child.ProjectList[colPos]
 }
 
 func resultColumnJoinChildByBinding(query *plan.Query, node *plan.Node, ref *plan.ColRef) int {

@@ -1661,6 +1661,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 			require.True(t, meta.GetObjectData().PrepareCompact())
 
 			beforeFlushTxn, beforeFlushRel := tae.GetRelation()
+			beforeFlushTS := beforeFlushTxn.GetStartTS()
 			flushTxn, _ := tae.GetRelation()
 			require.Zero(t, tae.Runtime.TransferTable.Len())
 			flushStart := flushTxn.GetStartTS()
@@ -1673,6 +1674,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 			require.Nil(t, task.GetCreatedObjects())
 			require.NoError(t, flushTxn.Commit(ctx))
 			require.Zero(t, tae.Runtime.TransferTable.Len())
+			testutil.CheckAllColRowsByScan(t, beforeFlushRel, 0, true)
 
 			dedupBat := catalog.MockBatch(schema, 1)
 			beforeFlushIt := beforeFlushRel.MakeObjectIt(false)
@@ -1704,6 +1706,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 				require.True(t, checkpointed.HasDropCommitted())
 				require.Equal(t, createTS, checkpointed.GetCreatedAt())
 				require.NoError(t, txn.Commit(ctx))
+				checkRowsAtSnapshot(t, ctx, tae, beforeFlushTS, 0)
 				return
 			}
 			tae.Restart(ctx)
@@ -1713,6 +1716,7 @@ func TestFlushEmptyAppendableObjectReplay(t *testing.T) {
 			require.True(t, replayed.HasDropCommitted())
 			require.Equal(t, createTS, replayed.GetCreatedAt())
 			require.NoError(t, txn.Commit(ctx))
+			checkRowsAtSnapshot(t, ctx, tae, beforeFlushTS, 0)
 		})
 	}
 }
@@ -8110,9 +8114,9 @@ func TestSnapshotMeta(t *testing.T) {
 	db = tae.DB
 	db.DiskCleaner.GetCleaner().DisableGC()
 	snapshots := make([]int64, 0)
-	// Only distinct ordered timestamp values are needed; elapsed wall time is
-	// not part of snapshot metadata reconstruction.
-	firstSnapshot := time.Now().UTC().Add(-time.Second).UnixNano()
+	// Begin after GC is disabled; older history may already have been collected.
+	// Nanosecond offsets provide distinct ordered metadata values without sleeps.
+	firstSnapshot := time.Now().UTC().UnixNano()
 	for i := 0; i < 10; i++ {
 		snapshots = append(snapshots, firstSnapshot+int64(i))
 	}

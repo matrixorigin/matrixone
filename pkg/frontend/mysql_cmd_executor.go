@@ -3086,6 +3086,14 @@ func parsePreparedStatement(execCtx *ExecCtx, ses *Session, rewritten string) (s
 		sessionSQLModeForParser(ses),
 	)
 	if err != nil {
+		// The inner statement's syntax failures arrive as plain parser
+		// errors (PositionedErr), not moerr.Error. Report them as
+		// ER_PARSE_ERROR (1064/42000) the same way the statement would be
+		// rejected when executed directly, instead of a generic 1105
+		// internal error.
+		if _, positioned := err.(mysql.PositionedErr); positioned {
+			err = moerr.NewParseError(execCtx.reqCtx, err.Error())
+		}
 		return rewritten, nil, nil, err
 	}
 	if len(stmts) != 1 {
@@ -3755,16 +3763,8 @@ func handleSwitchRole(ses FeSession, execCtx *ExecCtx, sr *tree.SetRole) error {
 }
 
 func doKill(ses *Session, execCtx *ExecCtx, k *tree.Kill) error {
-	var err error
-	//true: kill a connection
-	//false: kill a query in a connection
-	idThatKill := uint64(ses.GetConnectionID())
-	if !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection {
-		err = getRtMgr(ses.GetService()).kill(execCtx.reqCtx, true, idThatKill, k.ConnectionId, "")
-	} else {
-		err = getRtMgr(ses.GetService()).kill(execCtx.reqCtx, false, idThatKill, k.ConnectionId, k.StmtOption.StatementId)
-	}
-	return err
+	killConnection := !k.Option.Exist || k.Option.Typ == tree.KillTypeConnection
+	return killSession(execCtx.reqCtx, ses, k.ConnectionId, killConnection, k.StmtOption.StatementId)
 }
 
 // handleKill kill a connection or query
@@ -4268,6 +4268,21 @@ func buildPlanWithPrepareMode(
 	forcePrepare bool,
 ) (*plan2.Plan, error) {
 	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
+		// LOAD planning may inspect an external source before producing a plan.
+		// Authorize its target table at this common planning boundary so direct
+		// compilation, prepared-plan rebuilds, compile retries, and executable
+		// wrappers share the same admission check.
+		if loadStmt := loadStatementForPrePlanAuth(stmt); loadStmt != nil {
+			if session, ok := ses.(*Session); ok {
+				authStats, authErr := authenticateLoadBeforePlan(
+					reqCtx, session, loadStmt, ctx.DefaultDatabase())
+				if authErr != nil {
+					return nil, authErr
+				}
+				statistic.StatsInfoFromContext(ctx.GetContext()).PermissionAuth.Add(&authStats)
+			}
+		}
+
 		var ret *plan2.Plan
 		var err error
 
@@ -4388,8 +4403,9 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 	return build()
 }
 
-// buildPlanWithAuthorization wraps the buildPlan function to perform permission checks
-// after the plan has been successfully built.
+// buildPlanWithAuthorization wraps buildPlan with the plan-level permission
+// check. LOAD's pre-plan target check is performed inside buildPlanWithPrepareMode,
+// the common planning boundary shared by this and direct compile paths.
 var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
@@ -4784,10 +4800,19 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 }
 
 func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
+	// The publication binding probe names the exact catalog object the
+	// validation snapshot certified through the executed statement this
+	// parse produces, so its identifiers keep source case and binding can
+	// not silently route to the name's lowercase twin when both spellings
+	// exist. Every other statement parses at the session's case mode.
+	lowerCaseTableNames := parserLowerCaseTableNames(execCtx.ses)
+	if defines.IsPublicationViewBinding(execCtx.reqCtx) {
+		lowerCaseTableNames = 0
+	}
 	return p.ParseWithSQLMode(
 		execCtx.reqCtx,
 		execCtx.input.getSql(),
-		parserLowerCaseTableNames(execCtx.ses),
+		lowerCaseTableNames,
 		sessionSQLModeForParser(execCtx.ses),
 	)
 }
@@ -4814,18 +4839,16 @@ func refreshStatementScopedSessionInfo(ses FeSession, proc *process.Process) {
 	if proc == nil || proc.Base == nil {
 		return
 	}
-	// SessionInfo is reused across statements.  Role changes update the
-	// session's TenantInfo, so refresh the trusted names at the same boundary
-	// as the other statement-scoped fields before planning or execution.
+	// Refresh the authenticated snapshot at every statement boundary, including
+	// later statements within a COM_QUERY and prepared EXECUTE.
+	proc.Base.SessionInfo.Account, proc.Base.SessionInfo.User, proc.Base.SessionInfo.Role = "", "", ""
 	if ses != nil {
 		if tenant := ses.GetTenantInfo(); tenant != nil {
-			// Read both names under one lock. Besides avoiding two lock
-			// acquisitions on every statement, this keeps the account/role pair
-			// from being sampled across a concurrent role transition.
 			tenant.mu.Lock()
-			account, role := tenant.getTenantUnsafe(), tenant.getDefaultRoleUnsafe()
+			account, user, role := tenant.Tenant, tenant.User, tenant.DefaultRole
 			tenant.mu.Unlock()
 			proc.Base.SessionInfo.Account = account
+			proc.Base.SessionInfo.User = user
 			proc.Base.SessionInfo.Role = role
 		}
 	}
@@ -5250,8 +5273,15 @@ func bindSessionDatabaseForStatement(ses *Session, defaultDatabase string) func(
 		return func() {}
 	}
 	currentDatabase := ses.GetDatabaseName()
+	compilerCtx := ses.GetTxnCompileCtx()
+	currentCompilerDatabase := compilerCtx.GetDatabase()
 	ses.SetDatabaseName(defaultDatabase)
-	return func() { ses.SetDatabaseName(currentDatabase) }
+	return func() {
+		ses.SetDatabaseName(currentDatabase)
+		// Replanning can bind the compiler to a prepared statement's database
+		// independently of the active session database.
+		compilerCtx.SetDatabase(currentCompilerDatabase)
+	}
 }
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement

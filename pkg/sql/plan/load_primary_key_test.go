@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"errors"
 	"fmt"
 	"testing"
 
@@ -38,6 +39,7 @@ func TestLoadPrimaryKeyValidationPlan(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			setLoadPrimaryKeyCheck(&mock.ctxt, 1)
 			pn, err := runOneStmt(mock, t, fmt.Sprintf("load data inline format='csv', data='%s' %s into table %s fields terminated by ','", tc.data, tc.mode, tc.table))
 			require.NoError(t, err)
 			require.True(t, pn.GetQuery().LoadTag)
@@ -50,6 +52,9 @@ func TestLoadPrimaryKeyValidationPlan(t *testing.T) {
 				}
 			}
 			require.Equal(t, tc.want, dedups)
+			if tc.want > 0 {
+				requireLoadValidationIndependentOfWrites(t, pn.GetQuery())
+			}
 			if tc.table == "dept" {
 				maintained := 0
 				for _, n := range pn.GetQuery().Nodes {
@@ -63,6 +68,63 @@ func TestLoadPrimaryKeyValidationPlan(t *testing.T) {
 	}
 }
 
+func TestLoadPrimaryKeyValidationJoinOrientation(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		spillMem int64
+		right    bool
+	}{
+		{"right map fits", 512 << 20, true},
+		{"left spill fallback", 1 << 20, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := newPlanTestProcess(t)
+			proc.Base.Lim.Size = 2 << 30 // Budget the estimated keys, without allocating rows.
+			mock := NewMockOptimizer(true, proc)
+			setLoadPrimaryKeyCheck(&mock.ctxt, 1)
+			pn, err := runOneStmt(mock, t, "load data inline format='csv', data='1,d,l' into table dept fields terminated by ','")
+			require.NoError(t, err)
+			qry := pn.GetQuery()
+			var check *planpb.Node
+			for _, n := range qry.Nodes {
+				if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP {
+					require.Nil(t, check)
+					check = n
+				}
+			}
+			require.NotNil(t, check)
+			// Restore logical roles before rerunning the real orientation passes.
+			if check.IsRightJoin {
+				check.Children[0], check.Children[1] = check.Children[1], check.Children[0]
+				check.IsRightJoin = false
+			}
+			// Runtime filters are generated after these passes. Remove that later
+			// physical dependency before changing the costing inputs and replaying.
+			check.RuntimeFilterBuildList = nil
+			check.RuntimeFilterProbeList = nil
+			target, input := check.Children[0], check.Children[1]
+			require.Equal(t, planpb.Node_TABLE_SCAN, qry.Nodes[target].NodeType)
+			require.Equal(t, planpb.Node_SINK_SCAN, qry.Nodes[input].NodeType)
+			qry.Nodes[target].Stats = &planpb.Stats{Outcnt: 100, Rowsize: 8}
+			qry.Nodes[input].Stats = &planpb.Stats{Outcnt: 1 << 20, Rowsize: 1 << 10}
+			builder := NewQueryBuilder(planpb.Query_INSERT, &mock.ctxt, false, true)
+			builder.qry = qry
+			builder.joinSpillMem = tc.spillMem
+			builder.determineBuildAndProbeSide(check.NodeId, false)
+			require.True(t, check.IsRightJoin, "costing chooses the smaller existing target")
+			builder.disableMemoryUnsafeRightDedup(check.NodeId)
+			require.Equal(t, tc.right, check.IsRightJoin)
+			builder.swapJoinChildren(check.NodeId)
+			want := []int32{target, input}
+			if tc.right {
+				want = []int32{input, target}
+			}
+			require.Equal(t, want, check.Children)
+			requireLoadValidationIndependentOfWrites(t, qry)
+		})
+	}
+}
+
 func TestLoadPrimaryKeyValidationFallback(t *testing.T) {
 	old := config.CNPrimaryCheck.Load()
 	t.Cleanup(func() { config.CNPrimaryCheck.Store(old) })
@@ -70,6 +132,7 @@ func TestLoadPrimaryKeyValidationFallback(t *testing.T) {
 		t.Run(fmt.Sprintf("CNPrimaryCheck=%t", check), func(t *testing.T) {
 			config.CNPrimaryCheck.Store(check)
 			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			setLoadPrimaryKeyCheck(&mock.ctxt, 1)
 			stmt, err := mysql.ParseOne(t.Context(), "load data inline format='csv', data='1,n,1,c' into table nation fields terminated by ','", 1)
 			require.NoError(t, err)
 			defer stmt.Free()
@@ -116,6 +179,7 @@ func TestLoadPrimaryKeyValidationExemptions(t *testing.T) {
 
 func TestLoadCompositePrimaryKeyValidationPlan(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	setLoadPrimaryKeyCheck(ctx, 1)
 	create, err := mysql.ParseOne(t.Context(), "create table load_tuple(a int,b int,primary key(a,b))", 1)
 	require.NoError(t, err)
 	defer create.Free()
@@ -142,4 +206,140 @@ func TestLoadCompositePrimaryKeyValidationPlan(t *testing.T) {
 		}
 	}
 	require.True(t, found)
+	requireLoadValidationIndependentOfWrites(t, pn.GetQuery())
+}
+
+// A successful FAIL check preserves the input row set, but its hash partitions
+// must not become the bulk writer's partitions. Check both sides of the shared
+// source so retaining an unreachable DEDUP node cannot satisfy this contract.
+func requireLoadValidationIndependentOfWrites(t *testing.T, qry *planpb.Query) {
+	t.Helper()
+	var validationSources, writeSources []int32
+	var visit func(int32, bool)
+	visit = func(id int32, writing bool) {
+		n := qry.Nodes[id]
+		if writing {
+			require.False(t, n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP,
+				"bulk writers must read the prepared input, independently of validation partitioning")
+		}
+		if n.NodeType == planpb.Node_SINK_SCAN {
+			if writing {
+				writeSources = append(writeSources, n.SourceStep...)
+			} else {
+				validationSources = append(validationSources, n.SourceStep...)
+			}
+		}
+		for _, child := range n.Children {
+			visit(child, writing)
+		}
+	}
+	for _, n := range qry.Nodes {
+		if n.NodeType == planpb.Node_MULTI_UPDATE {
+			visit(n.NodeId, true)
+		}
+	}
+	for _, root := range qry.Steps {
+		n := qry.Nodes[root]
+		if n.NodeType == planpb.Node_PROJECT && len(n.Children) == 1 {
+			child := qry.Nodes[n.Children[0]]
+			if child.NodeType == planpb.Node_JOIN && child.JoinType == planpb.Node_DEDUP {
+				require.Equal(t, planpb.Node_FAIL, child.OnDuplicateAction)
+				require.Len(t, n.ProjectList, 1, "validation retains only the primary-key identity")
+				visit(root, false)
+			}
+		}
+	}
+	require.NotEmpty(t, validationSources, "the independent validation must be an executable step")
+	require.NotEmpty(t, writeSources)
+	require.Equal(t, validationSources, writeSources, "both branches consume one prepared image")
+}
+
+// Keep each existing validation test explicitly opted in; the shared mock's
+// default must match a new SQL session's OFF policy.
+func setLoadPrimaryKeyCheck(ctx *MockCompilerContext, value int8) {
+	previous := *ctx
+	ctx.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+		if name == "mo_pk_check_by_cn" && system && !global {
+			return value, nil
+		}
+		return previous.ResolveVariable(name, system, global)
+	}
+}
+
+func TestLoadPrimaryKeyCheckSessionPolicy(t *testing.T) {
+	for _, enabled := range []int8{0, 1} {
+		t.Run(fmt.Sprintf("enabled=%d", enabled), func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			setLoadPrimaryKeyCheck(&mock.ctxt, enabled)
+			sql := "load data inline format='csv', data='1,n,1,c' into table nation fields terminated by ','"
+			for _, legacy := range []bool{false, true} {
+				stmt, err := mysql.ParseOne(t.Context(), sql, 1)
+				require.NoError(t, err)
+				var pn *planpb.Plan
+				if legacy {
+					pn, err = buildLoad(stmt.(*tree.Load), &mock.ctxt, false)
+				} else {
+					pn, err = BuildPlan(&mock.ctxt, stmt, false)
+				}
+				stmt.Free()
+				require.NoError(t, err)
+				checks := 0
+				for id := range reachableODKUPlanNodes(pn.GetQuery()) {
+					n := pn.GetQuery().Nodes[id]
+					if (n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP) || n.NodeType == planpb.Node_FUZZY_FILTER {
+						checks++
+					}
+				}
+				require.Equal(t, int(enabled), checks, "legacy=%t", legacy)
+			}
+			pn, err := runOneStmt(mock, t, "insert into nation values(1,'n',1,'c')")
+			require.NoError(t, err)
+			checks := 0
+			for id := range reachableODKUPlanNodes(pn.GetQuery()) {
+				n := pn.GetQuery().Nodes[id]
+				if n.NodeType == planpb.Node_JOIN && n.JoinType == planpb.Node_DEDUP {
+					checks++
+				}
+			}
+			require.Equal(t, 1, checks, "INSERT keeps CN primary-key validation under either LOAD policy")
+		})
+	}
+}
+
+func TestLoadPrimaryKeyCheckResolution(t *testing.T) {
+	failure := errors.New("variable resolution failed")
+	for _, tc := range []struct {
+		name         string
+		value        interface{}
+		err          error
+		enabled, bad bool
+	}{
+		{"internal default", nil, nil, false, false},
+		{"off", int8(0), nil, false, false},
+		{"on", int8(1), nil, true, false},
+		{"int64 on", int64(1), nil, true, false},
+		{"invalid integer", int8(2), nil, false, true},
+		{"invalid type", "ON", nil, false, true},
+		{"resolver failure", nil, failure, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+			ctx.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+				require.Equal(t, "mo_pk_check_by_cn", name)
+				require.True(t, system)
+				require.False(t, global)
+				return tc.value, tc.err
+			}
+			got, err := loadPrimaryKeyCheckEnabled(ctx, &tree.Load{}, ctx.tables["nation"])
+			require.Equal(t, tc.enabled, got)
+			if tc.bad {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			if tc.err != nil {
+				require.ErrorIs(t, err, failure)
+			}
+		})
+	}
 }

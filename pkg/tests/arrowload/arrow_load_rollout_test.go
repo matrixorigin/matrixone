@@ -142,9 +142,9 @@ func TestArrowLoadRolloutRollbackDrain(t *testing.T) {
 
 	shutdownErrCh = make(chan error, 1)
 	go func() {
-		shutdownErrCh <- c.Close()
+		shutdownErrCh <- c.Stop()
 	}()
-	// The shutdown waiter proves that Close has entered its real boundary. Only
+	// The shutdown waiter proves that Stop has entered its real boundary. Only
 	// then release shutdown and the admitted LOAD; either the drain or the
 	// cancellation path must remain atomic.
 	waitUntilArrowLoadRolloutHook(t, shutdownWaitersProbe, 30*time.Second)
@@ -186,7 +186,7 @@ func TestArrowLoadRolloutRollbackDrain(t *testing.T) {
 	require.Contains(t, strings.ToLower(err.Error()), "disabled by configuration")
 
 	require.NoError(t, rollbackDB.Close())
-	require.NoError(t, c.Close())
+	require.NoError(t, c.Stop())
 	adjustArrowLoadCluster(c, arrowLoadClusterOptions{
 		cnCount: 1, enabled: true, s3Enabled: false, distributedEnabled: false,
 	})

@@ -247,10 +247,6 @@ func (sample *Sample) Free(proc *process.Process, pipelineFailed bool, err error
 	}
 }
 
-func (sample *Sample) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (sample *Sample) ConvertToPipelineOperator(in *pipeline.Instruction) {
 	in.Agg = &pipeline.Group{
 		Exprs:    sample.GroupExprs,

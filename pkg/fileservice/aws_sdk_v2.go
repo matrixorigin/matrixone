@@ -25,6 +25,7 @@ import (
 	"math"
 	nethttp "net/http"
 	"net/url"
+	"os"
 	gotrace "runtime/trace"
 	"slices"
 	"strings"
@@ -520,7 +521,7 @@ func (a *AwsSDKv2) Write(
 			return err
 		}
 
-	} else if *sizeHint < smallObjectThreshold {
+	} else if *sizeHint < smallObjectThreshold || exclusiveWrite(ctx) {
 		data, err := io.ReadAll(r)
 		if err != nil {
 			return err
@@ -1063,11 +1064,20 @@ func (a *AwsSDKv2) headObject(ctx context.Context, params *s3.HeadObjectInput, o
 func (a *AwsSDKv2) putObject(ctx context.Context, params *s3.PutObjectInput, optFns ...func(*s3.Options)) (*s3.PutObjectOutput, error) {
 	ctx, task := gotrace.NewTask(ctx, "AwsSDKv2.putObject")
 	defer task.End()
+	if exclusiveWrite(ctx) {
+		params.IfNoneMatch = ptrTo("*")
+	}
 	recordS3PutRequest(ctx, a.perfCounterSets...)
 	// not retryable because Reader may be half consumed
 	output, err := a.client.PutObject(ctx, params, optFns...)
 	if err == nil && params.ContentLength != nil {
 		recordS3AcceptedBytes(ctx, *params.ContentLength, a.perfCounterSets...)
+	}
+	if exclusiveWrite(ctx) {
+		var response *http.ResponseError
+		if errors.As(err, &response) && response.Response.StatusCode == 412 {
+			err = moerr.NewFileAlreadyExistsNoCtx(*params.Key)
+		}
 	}
 	return output, err
 }
@@ -1179,8 +1189,18 @@ func (a *AwsSDKv2) mapError(err error, path string) error {
 // explicitAWSConfig never consults process environment or shared configuration.
 // S3 and STS share this mode so role refresh cannot rediscover another principal.
 func explicitAWSConfig(o ObjectStorageArguments, provider aws.CredentialsProvider, client *nethttp.Client) aws.Config {
+	region := o.Region
+	if region == "" {
+		// SQL dynamic providers must not discover credentials from the server
+		// environment, but the region is non-secret configuration. Preserve the
+		// AWS SDK's environment-region fallback for existing S3-compatible URLs.
+		region = os.Getenv("AWS_REGION")
+		if region == "" {
+			region = os.Getenv("AWS_DEFAULT_REGION")
+		}
+	}
 	return aws.Config{
-		Region: o.Region, Credentials: provider, HTTPClient: client,
+		Region: region, Credentials: provider, HTTPClient: client,
 		Logger: logutil.GetS3Logger(), Retryer: func() aws.Retryer { return newAWSRetryer() },
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,

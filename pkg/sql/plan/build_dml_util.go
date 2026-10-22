@@ -185,6 +185,7 @@ func buildInsertPlans(
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, ifExistAutoPkCol bool,
 	insertWithoutUniqueKeyMap map[string]bool,
 	ifInsertFromUniqueColMap map[string]bool,
+	loadConstraintIgnore bool,
 ) error {
 
 	var err error
@@ -237,7 +238,7 @@ func buildInsertPlans(
 		lastNodeId,
 		0,
 		checkColName2Idx,
-		false,
+		loadConstraintIgnore,
 	)
 	if err != nil {
 		return err
@@ -5581,6 +5582,9 @@ func reduceSinkSinkScanNodes(qry *Query) {
 	pointToNodeMap := make(map[int32][]*sinkScanMeta)
 	for sinkNodeId, meta := range sinks {
 		if len(meta.scans) == 1 &&
+			// A frozen main output is an execution root, not an interchangeable
+			// materialization slot. Preserve it when folding late DML sinks.
+			(qry.Correlation == nil || int32(meta.step) != qry.MainOutputStep()) &&
 			// Replacing all of a multi-input parent's children with the sink input
 			// would drop its other branches (for example, the tokenizer side of an
 			// APPLY). This direct fold is valid only for a unary consumer.
@@ -5608,6 +5612,9 @@ func reduceSinkSinkScanNodes(qry *Query) {
 		for _, key := range keys {
 			nodeId := stepMaps[key]
 			newStepIdx := len(newSteps)
+			if qry.Correlation != nil && int32(key) == qry.Correlation.MainOutputStep {
+				qry.Correlation.MainOutputStep = int32(newStepIdx)
+			}
 			newSteps = append(newSteps, nodeId)
 			if scanMetas, ok := pointToNodeMap[nodeId]; ok {
 				for _, scanMeta := range scanMetas {
@@ -5716,7 +5723,7 @@ func runSqlWithSnapshot(
 		exec = v.(executor.SQLExecutor)
 	}
 
-	topContext := proc.GetTopContext()
+	topContext := ViewSchemaCatalogContext(proc.GetTopContext())
 	accountId, err := defines.GetAccountId(topContext)
 	if err != nil {
 		return executor.Result{}, err
@@ -7317,7 +7324,9 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			Typ: ftcols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: tablefunc.BindingTags[0],
+					// This maintenance branch is appended after createQuery remaps
+					// the main query, so use the local two-input APPLY ABI.
+					RelPos: 1,
 					ColPos: int32(i),
 				},
 			},
@@ -7332,8 +7341,6 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 		ProjectList: apply_project,
 	}, bindCtx)
 
-	crossapply := builder.qry.Nodes[lastNodeId]
-
 	// fulltext index projection = (fulltext_index_tokenize output(doc_id, pos, word), __mo_fake_pk_col)
 	project := make([]*plan.Expr, len(ftcols), len(ftcols)+1)
 	for i := range ftcols {
@@ -7341,7 +7348,7 @@ func buildPreInsertFullTextIndex(stmt *tree.Insert, ctx CompilerContext, builder
 			Typ: ftcols[i].Typ,
 			Expr: &plan.Expr_Col{
 				Col: &plan.ColRef{
-					RelPos: crossapply.BindingTags[0],
+					RelPos: 0,
 					ColPos: int32(i),
 				},
 			},

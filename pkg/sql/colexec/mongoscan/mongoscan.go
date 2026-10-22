@@ -252,6 +252,19 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 	maxBytes := firstPositive(scan.Scan.MaxScanBytes, deps.Config.MaxScanBytes)
 
 	bat := scan.ctr.converter.NewBatch()
+	if scan.OutputAllocation != nil {
+		for i, old := range bat.Vecs {
+			owned, allocErr := vector.NewOffHeapVecWithTypeAndAllocation(*old.GetType(), scan.OutputAllocation)
+			if allocErr != nil {
+				bat.Clean(proc.Mp())
+				scan.ctr.done = true
+				scan.closeResources(proc.Ctx)
+				return result, allocErr
+			}
+			old.Free(proc.Mp())
+			bat.Vecs[i] = owned
+		}
+	}
 	var currentBatchBytes int64
 	for bat.RowCount() < batchRows {
 		if err := scan.explicitQueryContextError(); err != nil {
@@ -263,7 +276,6 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 		var raw []byte
 		if scan.ctr.pendingRaw != nil {
 			raw = scan.ctr.pendingRaw
-			scan.ctr.pendingRaw = nil
 		} else {
 			waitStarted := time.Now()
 			cursorCtx := proc.Ctx
@@ -303,7 +315,12 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 		if currentBatchBytes+int64(len(raw)) > maxBatchBytes {
 			// A cursor cannot unread, so retain exactly one bounded document for
 			// the next Call. Copy because driver-owned Current is reused by Next.
-			scan.ctr.pendingRaw = append(scan.ctr.pendingRaw[:0], raw...)
+			if err = scan.retainPendingRaw(proc, raw); err != nil {
+				bat.Clean(proc.Mp())
+				scan.ctr.done = true
+				scan.closeResources(proc.Ctx)
+				return result, err
+			}
 			break
 		}
 		decodeStarted := time.Now()
@@ -313,7 +330,12 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 				// The current document did not fit the decoded/vector budget. Keep
 				// it for the next Call just like a raw-byte boundary; the converter
 				// rolled every vector back to the last committed row.
-				scan.ctr.pendingRaw = append(scan.ctr.pendingRaw[:0], raw...)
+				if err = scan.retainPendingRaw(proc, raw); err != nil {
+					bat.Clean(proc.Mp())
+					scan.ctr.done = true
+					scan.closeResources(proc.Ctx)
+					return result, err
+				}
 				break
 			}
 			bat.Clean(proc.Mp())
@@ -327,6 +349,7 @@ func (scan *MongoScan) Call(proc *process.Process) (vm.CallResult, error) {
 		currentBatchBytes += int64(len(raw))
 		scan.ctr.rows++
 		scan.ctr.rawBytes += int64(len(raw))
+		scan.clearPendingRaw()
 		if maxRows > 0 && scan.ctr.rows > maxRows || maxBytes > 0 && scan.ctr.rawBytes > maxBytes {
 			bat.Clean(proc.Mp())
 			scan.ctr.done = true
@@ -374,7 +397,16 @@ func (scan *MongoScan) appendQueryColumn(proc *process.Process, bat *batch.Batch
 	queryType := types.T_varchar.ToType()
 	var queryVector *vector.Vector
 	var err error
-	if scan.ctr.userQuery == nil {
+	if scan.OutputAllocation != nil {
+		if scan.ctr.userQuery == nil {
+			queryVector, err = vector.NewConstNullWithAllocation(queryType, bat.RowCount(), scan.OutputAllocation)
+		} else {
+			queryVector, err = vector.NewConstBytesWithAllocation(queryType, []byte(scan.ctr.userQuery.Source), bat.RowCount(), proc.Mp(), scan.OutputAllocation)
+		}
+		if err != nil {
+			return err
+		}
+	} else if scan.ctr.userQuery == nil {
 		queryVector = vector.NewConstNull(queryType, bat.RowCount(), proc.Mp())
 	} else {
 		queryVector, err = vector.NewConstBytes(
