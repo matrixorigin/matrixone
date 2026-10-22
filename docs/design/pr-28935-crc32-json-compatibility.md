@@ -10,7 +10,7 @@ PR data.
 | Identity | Binding and execution |
 | --- | --- |
 | CRC32 overload 0 | Existing catalog/wire expressions hash binary JSON; ordinary non-JSON calls retain their original bytes and scalar casts. |
-| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires MORPC v125. |
+| CRC32 overload 1 | New JSON or unresolved bindings hash normalized MarshalJSON bytes for JSON; requires MORPC v129. |
 
 The result stays UINT64; the executor also retains the historic UINT32 wrapper.
 A stored legacy generated value can intentionally differ from a freshly bound
@@ -20,7 +20,7 @@ INSERT, UPDATE, REPLACE, ODKU, prepared rebinding and index maintenance.
 ## Boundaries
 
 Placement checks workers and falls back to one CN. Sending rechecks the actual
-worker at candidate v125; receiving checks the new identity. Old coordinators send identity
+worker at candidate v129; receiving checks the new identity. Old coordinators send identity
 0, which new workers still implement. Unknown capabilities fail closed.
 
 Catalog read and authoring use the existing separate durable admission floors.
@@ -45,19 +45,21 @@ overload 0 in place. Such data cannot be distinguished by identity and must
 not be admitted as a supported upgrade source.
 
 The current maintenance candidate integrates actual main
-`743e749a1e33d6c845bb73999e8c82d297a2b657`. Main owns v123 for capability-gated
+`e238964a7cafc963748830aa606c010085b6d37d`. Main owns v123 for capability-gated
 nonblocking row-lock admission and v124 for exact fractional TIMESTAMPADD
-SECOND intervals. CRC32 overload 1 is provisionally allocated v125 across
+SECOND intervals, v125 for LOAD IGNORE foreign-key diagnostics, v126 for
+information_schema.VIEWS definitions, v127 for IndexSearchScan search knobs,
+and v128 for mixed JSON/numeric comparisons. CRC32 overload 1 is provisionally allocated v129 across
 placement, destination send, receiver, persisted read and durable authoring.
 PR #28935's bounded direct-table migration contract is provisionally allocated
-v126 in its source witness, query request, and proxy target floor. These are
+v130 in its source witness, query request, and proxy target floor. These are
 candidate-local allocations only: they do not imply maintainer allocation
 approval or deployment compatibility with another independent branch using
-v125. Do not import unrelated branch implementations. Revalidate allocations
+v129. Do not import unrelated branch implementations. Revalidate allocations
 against authoritative main before final admission and after any base/source
 change.
 
-Publishing new persisted expressions requires the durable v125 authoring barrier.
+Publishing new persisted expressions requires the durable v129 authoring barrier.
 Once the durable floor is raised, old CNs must stay excluded, including after
 restart. A failed activation does not imply the floor can be lowered. Rollback
 must respect the existing admission mechanism; this change adds no floor reset.

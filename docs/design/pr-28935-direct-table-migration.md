@@ -22,7 +22,10 @@ The reviewed D2 text's v123 CRC32 and provisional v124 direct-migration numbers
 are historical placeholders from its original base. Actual main
 `743e749a1e33d6c845bb73999e8c82d297a2b657` owns v123 for row-lock admission and
 v124 for fractional TIMESTAMPADD; this candidate provisionally assigns CRC32
-v125 and direct-table migration v126. The original D2 and review artifacts
+v129 and direct-table migration v130. Main through
+`e238964a7cafc963748830aa606c010085b6d37d` owns v125 LOAD IGNORE diagnostics,
+v126 VIEWS definitions, v127 IndexSearchScan search knobs, and v128 mixed
+JSON/numeric comparisons. The original D2 and review artifacts
 remain byte-for-byte unchanged; this allocation refresh does not change their
 bounded semantic design. These candidate-local numbers do not imply maintainer
 allocation approval or cross-branch deployment support and must be revalidated

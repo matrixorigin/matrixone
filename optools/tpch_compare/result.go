@@ -271,6 +271,10 @@ func drain(ctx context.Context, conn interface {
 }
 
 func executeUnit(ctx context.Context, conn *sql.Conn, q Query, path string, limit int64) (cap Capture, retErr error) {
+	return executeUnitClock(ctx, conn, q, path, limit, nil)
+}
+
+func executeUnitClock(ctx context.Context, conn *sql.Conn, q Query, path string, limit int64, clock *waveClock) (cap Capture, retErr error) {
 	cap.Version = formatVersion
 	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
@@ -287,6 +291,9 @@ func executeUnit(ctx context.Context, conn *sql.Conn, q Query, path string, limi
 	buffer := bufio.NewWriterSize(lw, 64<<10)
 	encoder := json.NewEncoder(buffer)
 	start := time.Now()
+	if clock != nil {
+		clock.start(start)
+	}
 	var first, last *time.Time
 	for i, s := range q.Statements {
 		if i == q.ResultStatement {
@@ -309,6 +316,9 @@ func executeUnit(ctx context.Context, conn *sql.Conn, q Query, path string, limi
 	err = errors.Join(err, f.Close())
 	closed = true
 	end := time.Now()
+	if clock != nil {
+		clock.finish(end)
+	}
 	cap.ElapsedNS = end.Sub(start).Nanoseconds()
 	cap.CleanupNS = end.Sub(cleanupStart).Nanoseconds()
 	if first != nil {

@@ -123,7 +123,3 @@ func (limit *Limit) Free(proc *process.Process, pipelineFailed bool, err error) 
 		limit.ctr.buf = nil
 	}
 }
-
-func (limit *Limit) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

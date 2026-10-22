@@ -882,7 +882,7 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 				return err
 			}
 			directProofs[i] = proof
-			requiredVersions[i] = defines.MORPCVersion126
+			requiredVersions[i] = defines.MORPCVersion130
 		}
 		features, err := plan.RequiredRemoteExpressionFeatures(st.PreparePlan)
 		if err != nil {
@@ -893,6 +893,11 @@ func (rt *Routine) migrateConnectionFromActionWithCapabilities(
 				return moerr.GetOkExpectedNotSafeToStartTransfer()
 			}
 			requiredVersions[i] = max(requiredVersions[i], defines.MORPCVersion119)
+		}
+		// The migration payload cannot preserve execution-resolved FIELD
+		// return types. Reject under the request owner before exporting handles.
+		if st.fieldTypes != nil {
+			return moerr.GetOkExpectedNotSafeToStartTransfer()
 		}
 		// Migration replays SQL against the current assignment; it does not
 		// transfer this statement's original static type and row-domain binding.

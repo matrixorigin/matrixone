@@ -154,7 +154,7 @@ func collationForExpression(expr *Expr) (expressionCollation, bool) {
 		default:
 			// Foreign/old plans may lack provenance. Read types only; never
 			// evaluate a CASE branch while inferring its collation.
-			if index := preparedStringDomainSourceIndex(name, len(fn.Args)); index >= 0 {
+			if index, _ := preparedStringDomainSourceIndex(name, len(fn.Args)); index >= 0 {
 				if child, ok := collationForExpression(fn.Args[index]); ok {
 					c.rank = child.rank
 				}
@@ -250,7 +250,7 @@ func expressionCollationIndexes(name string, arity int) []int {
 		}
 		return indexes
 	}
-	if index := preparedStringDomainSourceIndex(name, arity); index >= 0 {
+	if index, _ := preparedStringDomainSourceIndex(name, arity); index >= 0 {
 		return []int{index}
 	}
 	return nil

@@ -284,6 +284,90 @@ func TestKafkaReaderJSONL(t *testing.T) {
 	require.Equal(t, `{"s": "y", "a": 8}`, bat.Vecs[5].GetStringAt(1))
 }
 
+func TestKafkaReaderJSONLProjection(t *testing.T) {
+	addr := startKafka(t, "t_json_projection", [][2]string{{"", `{"a":7,"s":"x"}`}})
+	int7, id0 := int32(7), int64(0)
+	for _, tc := range []struct {
+		name    string
+		fields  []int
+		strict  bool
+		wantInt *int32
+		wantID  *int64
+	}{
+		{name: "strict-first", fields: []int{0}, strict: true, wantInt: &int7},
+		{name: "strict-metadata", fields: []int{2}, strict: true, wantID: &id0},
+		{name: "nonstrict-metadata", fields: []int{2}, wantID: &id0},
+		{name: "strict-second", fields: []int{1}, strict: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ks := kafkaScan(addr, "t_json_projection", sqlkafka.FormatJSONL)
+			ks.Autocommit = false
+			ks.StartId = -1
+			ks.Size = 1
+			param, proc, _ := newKafkaTestParam(t, ks)
+			allAttrs, allCols := param.Attrs, param.Cols
+			param.Attrs = make([]plan.ExternAttr, len(tc.fields))
+			param.Cols = make([]*plan.ColDef, len(tc.fields))
+			param.StrictSqlMode = tc.strict
+			names := make([]string, len(tc.fields))
+			for i, field := range tc.fields {
+				param.Attrs[i] = allAttrs[field]
+				param.Attrs[i].ColIndex = int32(i)
+				param.Cols[i] = allCols[field]
+				names[i] = allCols[field].Name
+			}
+			bat := batch.NewOffHeap(names)
+			for i, col := range param.Cols {
+				bat.Vecs[i] = vector.NewOffHeapVecWithType(makeType(&col.Typ, false))
+			}
+			t.Cleanup(func() { bat.Clean(proc.Mp()) })
+			readAllKafka(t, param, proc, bat)
+			require.Equal(t, 1, bat.RowCount())
+			if tc.wantInt != nil {
+				require.Equal(t, *tc.wantInt, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])[0])
+			}
+			if tc.wantID != nil {
+				require.False(t, bat.Vecs[0].GetNulls().Contains(0))
+				require.Equal(t, *tc.wantID, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])[0])
+			}
+			if tc.name == "strict-second" {
+				require.Equal(t, "x", bat.Vecs[0].GetStringAt(0))
+			}
+		})
+	}
+}
+
+func TestKafkaReaderJSONLProjectionRejectsShortObject(t *testing.T) {
+	addr := startKafka(t, "t_json_short", [][2]string{{"", `{"a":7}`}})
+	for _, strict := range []bool{true, false} {
+		name := "nonstrict"
+		if strict {
+			name = "strict"
+		}
+		t.Run(name, func(t *testing.T) {
+			ks := kafkaScan(addr, "t_json_short", sqlkafka.FormatJSONL)
+			ks.Autocommit = false
+			ks.StartId = -1
+			ks.Size = 1
+			param, proc, _ := newKafkaTestParam(t, ks)
+			param.Attrs = []plan.ExternAttr{param.Attrs[2]}
+			param.Attrs[0].ColIndex = 0
+			param.Cols = []*plan.ColDef{param.Cols[2]}
+			param.StrictSqlMode = strict
+			bat := batch.NewOffHeap([]string{catalog.KafkaMessageID})
+			bat.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			t.Cleanup(func() { bat.Clean(proc.Mp()) })
+			r := NewKafkaReader(param)
+			_, err := r.Open(param, proc)
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, r.Close()) })
+			_, err = r.ReadBatch(proc.Ctx, bat, proc, nil)
+			require.ErrorContains(t, err, "input columns")
+			require.Nil(t, param.KafkaPending)
+		})
+	}
+}
+
 // TestKafkaReaderErrors covers the fail-closed record contract: a message
 // with the wrong field count and a message that parses into two records are
 // both errors, and an aborted scan neither commits nor updates the session.

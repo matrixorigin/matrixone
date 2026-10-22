@@ -236,7 +236,3 @@ func (shuffle *Shuffle) Free(proc *process.Process, pipelineFailed bool, err err
 		shuffle.ctr.exprExec = nil
 	}
 }
-
-func (shuffle *Shuffle) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

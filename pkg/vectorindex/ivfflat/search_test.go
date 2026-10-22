@@ -15,6 +15,7 @@
 package ivfflat
 
 import (
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -121,6 +122,46 @@ func TestIvfflatSearchDoesNotAddRowPartitionFilterToExactPkSQL(t *testing.T) {
 	require.NotContains(t, statement, "crc32")
 	require.NotContains(t, statement, "mod(")
 	require.False(t, strings.Contains(statement, "ORDER BY vec_dist"), statement)
+}
+
+func TestIvfflatSearchExactPkWindowCoversEveryList(t *testing.T) {
+	oldRunSql := runSql
+	defer func() { runSql = oldRunSql }()
+	var statement string
+	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		statement = sql
+		return executor.Result{}, nil
+	}
+
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	idxcfg.Ivfflat.Version = 9
+	tblcfg := vectorindex.IndexTableConfig{DbName: "db1", EntriesTable: "entries1"}
+	search := func(exactPkFilter string) *vectorindex.IvfSearchCursor {
+		proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+		sqlproc := sqlexec.NewSqlProcess(proc)
+		sqlproc.ExactPkFilter = exactPkFilter
+		cursor := &vectorindex.IvfSearchCursor{RankedCentroidIDs: []int64{10, 20, 30, 40, 50}}
+		idx := &IvfflatSearchIndex[float32]{Version: 9}
+		_, _, err := idx.Search(sqlproc, idxcfg, tblcfg, []float32{0, 1, 2},
+			vectorindex.RuntimeConfig{Limit: 4, Probe: 2, SearchCursor: cursor, IvfRoutePrepared: true}, 1)
+		require.NoError(t, err)
+		return cursor
+	}
+
+	// nprobe lists: the window is the two nearest lists
+	cursor := search("")
+	require.Contains(t, statement, "IN (10,20)")
+	require.Equal(t, uint(0), cursor.NextBucketOffset)
+	require.Equal(t, uint(2), cursor.CurrentBucketCount)
+	require.False(t, cursor.Exhausted)
+
+	// an exact primary-key set reads every list in one round: the window is every list
+	cursor = search("1,2,3")
+	require.Contains(t, statement, "`__mo_index_pri_col` IN (1,2,3)")
+	require.Equal(t, uint(0), cursor.NextBucketOffset)
+	require.Equal(t, uint(5), cursor.CurrentBucketCount)
+	require.True(t, cursor.Exhausted)
 }
 
 func TestIvfflatSearchFloat32(t *testing.T) {
@@ -483,6 +524,77 @@ func TestIvfSearchIncludeModePreservesNullFlagsAndPushesIsNullFilter(t *testing.
 	require.Equal(t, []bool{true}, rt.IncludeResult.Nulls["rank"])
 }
 
+// TestIvfSearchIncludeModeOversizedRoundLimit searches INCLUDE columns with a round limit
+// of the largest uint (an oversized itopk): the result buffers are bounded and the
+// search returns the rows found.
+func TestIvfSearchIncludeModeOversizedRoundLimit(t *testing.T) {
+	oldRunSQL := runSql
+	defer func() {
+		runSql = oldRunSQL
+	}()
+
+	var capturedSQL string
+	runSql = func(sqlproc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+		capturedSQL = sql
+		bat := batch.NewWithSize(3)
+		bat.Vecs[0] = vector.NewVec(types.T_int64.ToType())
+		bat.Vecs[1] = vector.NewVec(types.T_float64.ToType())
+		bat.Vecs[2] = vector.NewVec(types.T_int32.ToType())
+		require.NoError(t, vector.AppendFixed(bat.Vecs[0], int64(42), false, sqlproc.Proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[1], float64(1.25), false, sqlproc.Proc.Mp()))
+		require.NoError(t, vector.AppendFixed(bat.Vecs[2], int32(7), false, sqlproc.Proc.Mp()))
+		bat.SetRowCount(1)
+		return executor.Result{Mp: sqlproc.Proc.Mp(), Batches: []*batch.Batch{bat}}, nil
+	}
+
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	idxcfg := vectorindex.IndexConfig{}
+	idxcfg.Ivfflat.Metric = uint16(metric.Metric_L2Distance)
+	tblcfg := vectorindex.IndexTableConfig{
+		DbName:             "test_db",
+		EntriesTable:       "test_entries",
+		IncludeColumns:     []string{"rank"},
+		IncludeColumnTypes: []int32{int32(types.T_int32)},
+	}
+	rt := vectorindex.RuntimeConfig{
+		Limit:                   ^uint(0),
+		Probe:                   1,
+		OrigFuncName:            "l2_distance",
+		RequestedIncludeColumns: []string{"rank"},
+		IncludeResult:           &vectorindex.IvfIncludeResult{},
+		SearchCursor:            &vectorindex.IvfSearchCursor{},
+		SearchRoundLimit:        ^uint(0),
+	}
+
+	idx := &IvfflatSearchIndex[float32]{Version: 7}
+	keys, distances, err := idx.Search(sqlexec.NewSqlProcess(proc), idxcfg, tblcfg, []float32{0, 0, 0}, rt, 4)
+	require.NoError(t, err)
+	require.Contains(t, capturedSQL, fmt.Sprintf("LIMIT %d", ^uint(0)))
+	require.Equal(t, []any{int64(42)}, keys.([]any))
+	require.Equal(t, []float64{1.25}, distances)
+	require.Equal(t, []any{int32(7)}, rt.IncludeResult.Data["rank"])
+	require.Equal(t, []bool{false}, rt.IncludeResult.Nulls["rank"])
+	require.LessOrEqual(t, cap(rt.IncludeResult.Data["rank"]), vectorindex.SearchResultPreallocate(uint64(^uint(0))))
+}
+
+// TestSortAndLimitExactResultsOversizedLimit keeps every row under a limit of the
+// largest uint.
+func TestSortAndLimitExactResultsOversizedLimit(t *testing.T) {
+	sortedKeys, sortedDistances, sortedInclude, sortedNulls := sortAndLimitExactResults(
+		[]any{int64(1), int64(2)},
+		[]float64{2, 1},
+		[]string{"rank"},
+		map[string][]any{"rank": {int32(8), int32(9)}},
+		map[string][]bool{"rank": {false, false}},
+		^uint(0),
+	)
+	require.Equal(t, []any{int64(2), int64(1)}, sortedKeys)
+	require.Equal(t, []float64{1, 2}, sortedDistances)
+	require.Equal(t, []any{int32(9), int32(8)}, sortedInclude["rank"])
+	require.Equal(t, []bool{false, false}, sortedNulls["rank"])
+	require.Equal(t, 2, cap(sortedKeys))
+}
+
 func TestSortAndLimitExactResultsKeepsIncludeNullsAligned(t *testing.T) {
 	keys := []any{int64(1), int64(2)}
 	distances := []float64{2, 1}
@@ -732,4 +844,12 @@ func TestBuildActiveCentroidIDsUsesNonOverlappingBucketSlices(t *testing.T) {
 // box-free SearchOutput path yet; it must report "not supported", not silently no-op).
 func TestSearchIntoUnsupported(t *testing.T) {
 	require.ErrorContains(t, (&IvfflatSearch[float32]{}).SearchInto(nil, nil, vectorindex.RuntimeConfig{}, nil), "not supported")
+}
+
+func TestCompleteCentroidRanking(t *testing.T) {
+	require.Equal(t, []int64{2, 0, 1, 3}, completeCentroidRanking([]int64{2, 0, 1, 3}, 4))
+	require.Equal(t, []int64{2, 0, 1, 3}, completeCentroidRanking([]int64{2, 2, 0, 2}, 4))
+	require.Equal(t, []int64{3, 0, 1, 2}, completeCentroidRanking([]int64{3, 7, -1}, 4))
+	require.Equal(t, []int64{0, 1}, completeCentroidRanking(nil, 2))
+	require.Equal(t, []int64{5, 5}, completeCentroidRanking([]int64{5, 5}, 0))
 }

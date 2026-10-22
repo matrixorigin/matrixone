@@ -160,9 +160,13 @@ const (
 	MORPCVersion122    int64 = 122 // unary TIMESTAMP and dynamic TIME result contracts
 	MORPCVersion123    int64 = 123 // capability-gated nonblocking row-lock admission
 	MORPCVersion124    int64 = 124 // exact fractional TIMESTAMPADD SECOND intervals
-	MORPCVersion125    int64 = 125 // CRC32 normalized JSON text-byte execution identity
-	MORPCVersion126    int64 = 126 // bounded direct-table prepared migration and disposable target
-	MORPCLatestVersion       = MORPCVersion126
+	MORPCVersion125    int64 = 125 // LOAD IGNORE foreign-key row rejection diagnostics
+	MORPCVersion126    int64 = 126 // parser-derived information_schema.VIEWS definitions
+	MORPCVersion127    int64 = 127 // IndexSearchScan internal_topk / max_internal_topk search knobs
+	MORPCVersion128    int64 = 128 // category-preserving mixed JSON/numeric comparisons
+	MORPCVersion129    int64 = 129 // CRC32 normalized JSON text-byte execution identity
+	MORPCVersion130    int64 = 130 // bounded direct-table prepared migration and disposable target
+	MORPCLatestVersion       = MORPCVersion130
 )
 
 // DefaultLockWaitTimeoutSeconds is shared by the frontend default and by

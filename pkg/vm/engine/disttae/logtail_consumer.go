@@ -367,6 +367,9 @@ func (c *PushClient) runOwned(fn func()) bool {
 type connector struct {
 	first  atomic.Bool
 	signal chan struct{}
+	// Closed once by connect after the first successful catalog replay. A
+	// receiver paused during that replay must then request ordinary recovery.
+	firstReplayDone chan struct{}
 
 	client *PushClient
 	engine *Engine
@@ -374,9 +377,10 @@ type connector struct {
 
 func newConnector(c *PushClient, e *Engine) *connector {
 	co := &connector{
-		signal: make(chan struct{}, 10),
-		client: c,
-		engine: e,
+		signal:          make(chan struct{}, 10),
+		firstReplayDone: make(chan struct{}),
+		client:          c,
+		engine:          e,
 	}
 	co.first.Store(true)
 	return co
@@ -896,16 +900,8 @@ func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
 
 		case s := <-c.pauseC:
 			logutil.Info("logtail.consumer.receiver.paused")
-			if s {
-				c.sendConnectSig(ctx)
-			}
-
-			// Wait for resuming logtail receiver.
-			select {
-			case <-ctx.Done():
+			if !c.waitForResume(ctx, s) {
 				return
-
-			case <-c.resumeC:
 			}
 			logutil.Info("logtail.consumer.receiver.resumed")
 
@@ -919,6 +915,40 @@ func (c *PushClient) receiveLogtails(ctx context.Context, e *Engine) {
 			}
 		}
 	}
+}
+
+func (c *PushClient) waitForResume(ctx context.Context, reconnect bool) bool {
+	var firstReplayDone <-chan struct{}
+	if reconnect {
+		c.sendConnectSig(ctx)
+	} else {
+		firstReplayDone = c.connector.firstReplayDone
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case <-c.resumeC:
+			return true
+		case <-firstReplayDone:
+			// First-connect retries own recovery until replay completes. After
+			// that handoff, even an earlier pause(false) needs a new connection.
+			c.sendConnectSig(ctx)
+			firstReplayDone = nil
+		}
+	}
+}
+
+func (c *PushClient) completeFirstConnect(e *Engine) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connector.first.Store(false)
+	// Serialize readiness with pause. A failed first connection must recover
+	// through connect's existing reconnect branch before admitting transactions.
+	if !c.mu.paused {
+		e.setPushClientStatus(true)
+	}
+	close(c.connector.firstReplayDone)
 }
 
 func (c *PushClient) startConsumers(ctx context.Context, e *Engine) {
@@ -1174,8 +1204,7 @@ func (c *PushClient) connect(ctx context.Context, e *Engine) {
 				continue
 			}
 
-			e.setPushClientStatus(true)
-			c.connector.first.Store(false)
+			c.completeFirstConnect(e)
 			return
 		}
 	}

@@ -1541,7 +1541,9 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: INTERNAL_JSON_ORDERING_PARAM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedTypeMatchOnly(overloads, inputs, 1)
+		},
 
 		Overloads: []overload{
 			{
@@ -1554,6 +1556,13 @@ var supportedStringBuiltIns = []FuncNew{
 					return normalizeJsonOrderingParam
 				},
 			},
+			{
+				// v128: numeric parameters retain their comparison category and domain.
+				overloadId: 1,
+				args:       []types.T{types.T_text},
+				retType:    func(parameters []types.Type) types.Type { return types.T_json.ToType() },
+				newOp:      func() executeLogicOfOverload { return normalizeJsonOrderingParam },
+			},
 		},
 	},
 
@@ -1562,7 +1571,9 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: INTERNAL_JSON_COMPARISON_PARAM,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
+			return fixedTypeMatchOnly(overloads, inputs, 1)
+		},
 
 		Overloads: []overload{
 			{
@@ -1574,6 +1585,13 @@ var supportedStringBuiltIns = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return normalizeJsonComparisonParam
 				},
+			},
+			{
+				// v128: numeric parameters retain their comparison category and domain.
+				overloadId: 1,
+				args:       []types.T{types.T_text},
+				retType:    func(parameters []types.Type) types.Type { return types.T_json.ToType() },
+				newOp:      func() executeLogicOfOverload { return normalizeJsonComparisonParam },
 			},
 		},
 	},
@@ -14972,6 +14990,52 @@ var supportedOthersBuiltIns = []FuncNew{
 		},
 	},
 
+	// function `mo_view_definition`
+	// Used only by information_schema.VIEWS to provide a parser-aware read path
+	// for legacy ViewData rows that predate the frozen definition field.
+	{
+		functionId: MO_VIEW_DEFINITION,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_text.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInViewDefinition
+				},
+			},
+		},
+	},
+
+	// function `mo_view_check_option`
+	// Shares the parser-aware legacy read path with mo_view_definition so the
+	// separate information_schema column remains consistent with its SELECT.
+	{
+		functionId: MO_VIEW_CHECK_OPTION,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+
+		Overloads: []overload{
+			{
+				overloadId: 0,
+				args:       []types.T{types.T_varchar},
+				retType: func(parameters []types.Type) types.Type {
+					return types.T_varchar.ToType()
+				},
+				newOp: func() executeLogicOfOverload {
+					return builtInViewCheckOption
+				},
+			},
+		},
+	},
+
 	// function `internal_char_length`
 	{
 		functionId: INTERNAL_CHAR_LENGTH,
@@ -16681,6 +16745,22 @@ var supportedOthersBuiltIns = []FuncNew{
 				},
 			},
 		},
+	},
+
+	{
+		functionId: LOAD_FK_IGNORE_CHECK,
+		class:      plan.Function_INTERNAL | plan.Function_STRICT,
+		layout:     STANDARD_FUNCTION,
+		checkFn:    fixedTypeMatch,
+		Overloads: []overload{{
+			overloadId: 0,
+			args:       []types.T{types.T_bool},
+			volatile:   true,
+			retType: func([]types.Type) types.Type {
+				return types.T_bool.ToType()
+			},
+			newOp: func() executeLogicOfOverload { return loadFKIgnoreCheck },
+		}},
 	},
 
 	// function `_check_constraint_assert`

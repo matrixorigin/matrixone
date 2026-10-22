@@ -136,9 +136,34 @@ func tableDumpExpressions(def *planpb.TableDef) []tableDumpExpression {
 }
 
 func tableDumpParserModes() []string {
+	return tableDumpParserModesForFlags(0b111)
+}
+
+// A parser mode only needs to be considered when the origin contains syntax
+// whose meaning that mode changes. Omitting an irrelevant mode is equivalent
+// to the default parse, while retaining every relevant combination preserves
+// the complete migration witness set.
+func tableDumpParserModesForOrigin(origin string) []string {
+	var relevant int
+	if strings.ContainsRune(origin, '\\') {
+		relevant |= 1 << 0 // NO_BACKSLASH_ESCAPES
+	}
+	if strings.ContainsRune(origin, '"') {
+		relevant |= 1 << 1 // ANSI_QUOTES
+	}
+	if strings.Contains(origin, "||") {
+		relevant |= 1 << 2 // PIPES_AS_CONCAT
+	}
+	return tableDumpParserModesForFlags(relevant)
+}
+
+func tableDumpParserModesForFlags(relevant int) []string {
 	flags := []string{"NO_BACKSLASH_ESCAPES", "ANSI_QUOTES", "PIPES_AS_CONCAT"}
-	modes := make([]string, 0, 8)
+	modes := make([]string, 0, 1<<len(flags))
 	for mask := 0; mask < 8; mask++ {
+		if mask&^relevant != 0 {
+			continue
+		}
 		var parts []string
 		for i, flag := range flags {
 			if mask&(1<<i) != 0 {
@@ -291,9 +316,44 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	}
 }
 
+// tableDumpBoundExpressionNeedsNormalization follows exactly the edges that
+// the compatibility normalization below changes. Other expression variants
+// must retain their exact protobuf comparison semantics.
+func tableDumpBoundExpressionNeedsNormalization(expr *planpb.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	if expr.Typ.Table != "" || (expr.Typ.Id == int32(types.T_time) && expr.Typ.Width != 0 && expr.Typ.Width == expr.Typ.Scale) {
+		return true
+	}
+	if fn := expr.GetF(); fn != nil {
+		for _, arg := range fn.Args {
+			if tableDumpBoundExpressionNeedsNormalization(arg) {
+				return true
+			}
+		}
+	}
+	if list := expr.GetList(); list != nil {
+		for _, entry := range list.List {
+			if tableDumpBoundExpressionNeedsNormalization(entry) {
+				return true
+			}
+		}
+	}
+	if lit := expr.GetLit(); lit != nil {
+		return tableDumpBoundExpressionNeedsNormalization(lit.Src)
+	}
+	return false
+}
+
 func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	if a == nil || b == nil {
 		return a == b
+	}
+	// Canonical trees need no compatibility rewrite. Avoid copying both
+	// complete trees for each speculative binding in the witness search.
+	if !tableDumpBoundExpressionNeedsNormalization(a) && !tableDumpBoundExpressionNeedsNormalization(b) {
+		return proto.Equal(a, b)
 	}
 	left := proto.Clone(a).(*planpb.Expr)
 	right := proto.Clone(b).(*planpb.Expr)
@@ -329,6 +389,10 @@ func sameTableDumpBoundExpression(a, b *planpb.Expr) bool {
 	normalize(left)
 	normalize(right)
 	return proto.Equal(left, right)
+}
+
+func sameTableDumpBoundType(a, b planpb.Type) bool {
+	return sameTableDumpBoundExpression(&planpb.Expr{Typ: a}, &planpb.Expr{Typ: b})
 }
 
 func tableDumpImplicitTimestamp(item tableDumpExpression, ast tree.Expr) bool {
@@ -438,6 +502,10 @@ func matchTableDumpTimestampDefault(want, candidate *planpb.Expr, zone *time.Loc
 // whether a binding varies across supported migration eras or division precision.
 // A nil supplied definition classifies a v1 target without trusting a payload.
 func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.TableDef) (bool, error) {
+	return analyzeTableDumpBindingsWithCandidateVisitLimit(ctx, target, supplied, tableDumpMaxCandidateVisits)
+}
+
+func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target, supplied *planpb.TableDef, candidateVisitLimit int) (bool, error) {
 	if ctx == nil || target == nil {
 		return false, moerr.NewInvalidInputNoCtx("table dump binding context is unavailable")
 	}
@@ -479,6 +547,7 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 	zone := proc.GetSessionInfo().TimeZone
 	ctx = tableDumpBindContext{CompilerContext: ctx, ctx: ctx.GetContext(), proc: proc}
 	budget := &tableDumpBindingBudget{}
+	timeZones := newTableDumpTimeZones(time.LoadLocation)
 	var sensitive bool
 	for i, item := range items {
 		if err := ctx.GetContext().Err(); err != nil {
@@ -496,7 +565,7 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 		}
 		var matched bool
 		var parsed bool
-		for _, mode := range tableDumpParserModes() {
+		for _, mode := range tableDumpParserModesForOrigin(item.origin) {
 			stmt, ast, visit, err := parseTableDumpExpression(ctx.GetContext(), item.origin, mode)
 			if err != nil {
 				continue
@@ -548,7 +617,7 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 					return nil, fatal
 				}
 				budget.visits += visit.nodes
-				if budget.visits > tableDumpMaxCandidateVisits {
+				if budget.visits > candidateVisitLimit {
 					fatal = moerr.NewInvalidInputNoCtx("table dump expression binding exceeds limit")
 					return nil, fatal
 				}
@@ -597,7 +666,13 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 					if item.kind == "default" {
 						_, folded := tableDumpTimestampLiteral(candidate)
 						_, stored := tableDumpTimestampLiteral(want)
-						if folded || stored || dependency.folded || err != nil && (dependency.timeZone || dependency.locale) {
+						// A successful binding with a different result type cannot
+						// match under another timezone or locale: those witnesses only
+						// change folded values. Keep failed binds, since another session
+						// may make the expression bindable there.
+						typeCanMatch := err != nil || candidate == nil || want == nil ||
+							sameTableDumpBoundType(candidate.Typ, want.Typ)
+						if typeCanMatch && (folded || stored || dependency.folded || err != nil && (dependency.timeZone || dependency.locale)) {
 							sensitive = true
 							sessions = append(sessions, sessionCandidate{increment, mode, dependency, folded, stored})
 						}
@@ -655,7 +730,7 @@ func AnalyzeTableDumpBindings(ctx CompilerContext, target, supplied *planpb.Tabl
 						if matched || fatal != nil {
 							break
 						}
-						for tz := range tableDumpTimeZones {
+						for tz := range timeZones {
 							rebound, _ := bind(increment, mode, tz, lc)
 							if fatal != nil {
 								break

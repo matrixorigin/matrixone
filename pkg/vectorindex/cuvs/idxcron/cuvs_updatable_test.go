@@ -280,7 +280,70 @@ func TestCuvsUpdatable_MaxOverflowSizeOverridesThreshold(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.True(t, ok)
-	require.Contains(t, reason, fmt.Sprintf("brute-force overflow %d >= MaxOverflowSize %d", MaxOverflowSize, MaxOverflowSize))
+	require.Contains(t, reason, fmt.Sprintf("CDC tail records %d >= MaxOverflowSize %d", MaxOverflowSize, MaxOverflowSize))
+}
+
+func TestCuvsUpdatable_DeleteOnlyRangeChurn(t *testing.T) {
+	for _, tc := range []struct {
+		name, storageType, thresholdParam string
+	}{
+		{"cagra", catalog.Cagra_TblType_Storage, catalog.IntermediateGraphDegree},
+		{"ivfpq", catalog.Ivfpq_TblType_Storage, catalog.IndexAlgoParamLists},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const threshold = 3
+			mp := mpool.MustNewZero()
+			params := fmt.Sprintf(`{"%s":%d}`, tc.thresholdParam, threshold)
+			tableDef := buildTestTableDef(tc.storageType, params, testDim)
+			spec := CuvsUpdatableSpec{StorageTableType: tc.storageType, ThresholdParam: tc.thresholdParam}
+			input := idxcronplugin.UpdatableInput{TableDef: tableDef, IndexName: testIndexName}
+
+			// Each range inserted and deleted a fresh key. Collection keeps
+			// only its trailing DELETE; the source table does not grow.
+			var tail [][]byte
+			selectChunks := func(proc *sqlexec.SqlProcess, sql string) (executor.Result, error) {
+				return stubSelect(t, mp, tail)(proc, sql)
+			}
+			stub := gostub.Stub(&runSelectChunkSql, selectChunks)
+			t.Cleanup(stub.Reset)
+			for rangeNo := 1; rangeNo <= threshold; rangeNo++ {
+				tail = append(tail, chunkBytesWithRecords(t, 0, 1))
+				ok, reason, err := CuvsUpdatable(input, spec)
+				require.NoError(t, err)
+				if rangeNo < threshold {
+					require.False(t, ok)
+					require.Contains(t, reason, fmt.Sprintf("CDC delta records %d < threshold %d", rangeNo, threshold))
+				} else {
+					require.True(t, ok, "retained DELETEs must trigger tail reclamation")
+				}
+			}
+
+			// After a successful rebuild the old tail has been removed.
+			tail = nil
+			ok, _, err := CuvsUpdatable(input, spec)
+			require.NoError(t, err)
+			require.False(t, ok)
+		})
+	}
+}
+
+func TestCuvsUpdatable_DeleteOnlyTailCap(t *testing.T) {
+	mp := mpool.MustNewZero()
+	params := fmt.Sprintf(`{"%s":%d}`, catalog.IntermediateGraphDegree, MaxOverflowSize+1)
+	tableDef := buildTestTableDef(catalog.Cagra_TblType_Storage, params, testDim)
+	stub := gostub.Stub(&runSelectChunkSql, stubSelect(t, mp, [][]byte{
+		chunkBytesWithRecords(t, 0, MaxOverflowSize),
+	}))
+	t.Cleanup(stub.Reset)
+	ok, reason, err := CuvsUpdatable(idxcronplugin.UpdatableInput{
+		TableDef: tableDef, IndexName: testIndexName,
+	}, CuvsUpdatableSpec{
+		StorageTableType: catalog.Cagra_TblType_Storage,
+		ThresholdParam:   catalog.IntermediateGraphDegree,
+	})
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Contains(t, reason, "CDC tail records 200000 >= MaxOverflowSize 200000")
 }
 
 func TestCuvsUpdatable_CadenceBlocksMaxOverflowSize(t *testing.T) {

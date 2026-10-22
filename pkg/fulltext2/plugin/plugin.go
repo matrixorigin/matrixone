@@ -24,6 +24,7 @@ package plugin
 
 import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/fulltext2"
 	ft2coverage "github.com/matrixorigin/matrixone/pkg/fulltext2/plugin/coverage"
 	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
 	catalogplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/catalog"
@@ -71,8 +72,16 @@ func (p *Plugin) Search() searchplugin.Hooks   { return p.searchHooks }
 // filter when its ISCP watermark has reached the read snapshot.
 func (*Plugin) Coverage() coverageplugin.Hooks { return ft2coverage.Hooks{} }
 
+// Injected JSON probes must recheck the transaction-local-write guard on each
+// EXECUTE. User MATCH searches are freshness-tolerant and can reuse their plan.
+func (*Plugin) PreparedPlanDependsOnIndexCoverage(options []byte) bool {
+	opts, err := ft2plan.DecodeScanOptions(options)
+	return err == nil && opts.Mode == fulltext2.JSONProbeMode
+}
+
 var _ indexplugin.AlgoPlugin = (*Plugin)(nil)
 var _ indexplugin.SearchPlugin = (*Plugin)(nil)
+var _ indexplugin.PreparedPlanCoveragePlugin = (*Plugin)(nil)
 
 // init registers fulltext2. CREATE FULLTEXT2 INDEX now creates the hidden tables;
 // build-from-source / MATCH search / CDC / reindex land in the following steps.

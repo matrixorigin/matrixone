@@ -180,6 +180,17 @@ func IsInternalExecutor(ctx context.Context) bool {
 	return false
 }
 
+// AttachInternalExecutor marks statements derived from ctx as trusted internal
+// discovery. Metadata-visibility filters that scope catalog rows to the
+// caller session's active roles exempt such reads: their admission was already
+// authorized at the statement level, and the inspecting session's account or
+// roles may deliberately differ from the account that owns the rows, as when
+// a DDL path resolves the owner account before reading a catalog it must not
+// see through its own session roles.
+func AttachInternalExecutor(ctx context.Context) context.Context {
+	return context.WithValue(ctx, InternalExecutorKey{}, true)
+}
+
 // AttachLockWriterFair marks lock requests derived from ctx as writer-fair.
 // A writer-fair Shared row request waits behind an already queued Exclusive
 // request instead of extending the current Shared-holder generation.
@@ -296,6 +307,27 @@ type OptimizerHints struct{}
 // Determine if now is a bg sql.
 type BgKey struct{}
 
+// PublicationViewBinding marks a background statement whose only job is
+// binding the persisted metadata of a published view: identifiers keep their
+// source case in parsing, the compile stops after binding (no optimizer rule
+// evaluates expressions and no pipeline is built or run), session temporary
+// tables stay out of name resolution, and user-defined function binding is
+// refused with a distinguishable error.
+type PublicationViewBinding struct{}
+
+// WithPublicationViewBinding marks ctx as a publication-view metadata binding
+// statement.
+func WithPublicationViewBinding(ctx context.Context) context.Context {
+	return context.WithValue(ctx, PublicationViewBinding{}, true)
+}
+
+// IsPublicationViewBinding reports whether ctx carries the publication-view
+// metadata binding marker.
+func IsPublicationViewBinding(ctx context.Context) bool {
+	value, _ := ctx.Value(PublicationViewBinding{}).(bool)
+	return value
+}
+
 // Sp variable scope
 type VarScopeKey struct{}
 
@@ -369,3 +401,7 @@ type AutoIncrCache struct {
 // CRC32CopyExpressionsKey carries the final, execution-owned ALTER COPY schema.
 // Regenerated SQL alone cannot preserve historical CRC32 execution identities.
 type CRC32CopyExpressionsKey struct{}
+
+// HnswSnapshotFallbackKey requests a source scan only for a coverage retry.
+// It is statement-local and never changes the session search mode or SQL AST.
+type HnswSnapshotFallbackKey struct{}

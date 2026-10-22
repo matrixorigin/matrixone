@@ -299,6 +299,10 @@ type PrepareStmt struct {
 	// Only migrated handles carry this immutable, bounded replay contract.
 	// Catalog/mode/protocol drift requires explicit client PREPARE.
 	directTableMigration *query.PreparedDirectTableSelectV1
+	fieldTypes           *plan2.PreparedFieldTypes
+	// A committed type-generation rebuild can fail before execution metadata
+	// publishes its replacement snapshot. Retry must not restore the old facts.
+	fieldTypesResetPending bool
 	// Monotonic high-water mark for GROUP_CONCAT across this prepared lifetime,
 	// including executions whose AP or specialization path discards the compile.
 	groupConcatMaxLenFloor uint64
@@ -881,6 +885,8 @@ func (prepareStmt *PrepareStmt) clearRuntimeSpecializationCache() {
 }
 
 func (prepareStmt *PrepareStmt) Close() {
+	prepareStmt.fieldTypes = nil
+	prepareStmt.fieldTypesResetPending = false
 	prepareStmt.closeCursor()
 	prepareStmt.releaseLongDataBuffers()
 	prepareStmt.longDataErr = nil
@@ -1943,9 +1949,9 @@ func (ses *Session) setSessionSysVar(ctx context.Context, name string, val inter
 			return err
 		}
 	}
-	// These values shape bound defaults or constant-folded expressions.
+	// These values shape bound defaults, constant-folded expressions or LOAD validation.
 	// Compare converted values so equivalent SET spellings retain warm plans.
-	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp"
+	planDependencyVariable := name == "sql_mode" || name == "lc_time_names" || name == "explicit_defaults_for_timestamp" || name == "mo_pk_check_by_cn"
 	var oldPlanDependency interface{}
 	if planDependencyVariable {
 		oldValue, getErr := ses.GetSessionSysVar(name)

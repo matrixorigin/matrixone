@@ -339,6 +339,7 @@ const (
 	planUint32TypeID                  int32 = 27
 	planAnyTypeID                     int32 = 0
 	internalTableCollationFunctionID  int32 = 600
+	loadFKIgnoreCheckFunctionID       int32 = 602
 	maxVarcharWidth                   int32 = 65535
 )
 
@@ -374,7 +375,7 @@ const (
 // SpatialDistanceSemantics requires MORPC v90 because geodetic
 // ST_FRECHETDISTANCE/ST_HAUSDORFFDISTANCE change the meaning of existing
 // overloads and the distance family adds length-unit overloads.
-// CRC32JSONTextBytes requires MORPC v125 for the new CRC32 JSON-text execution
+// CRC32JSONTextBytes requires MORPC v129 for the new CRC32 JSON-text execution
 // identity. Legacy catalog and wire expressions retain binary JSON hashing
 // under overload zero.
 // PreparedPrecisionScalar requires MORPC v95 because older executors lose
@@ -400,11 +401,15 @@ const (
 // DynamicTimeResultContracts uses the same epoch for prepared TIME results
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
 type RemoteExpressionFeatures struct {
+	LoadFKIgnoreCheck             bool // v129: LOAD IGNORE FK admission and diagnostics
+	JSONNumericComparisons        bool
 	DependentPrograms             bool
 	CalendarIntervalNormalization bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
-	ScalarDivision                  bool
+	ScalarDivision bool
+	// ViewMetadataFunctions requires v126 for MO_VIEW_DEFINITION/CHECK_OPTION.
+	ViewMetadataFunctions           bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -451,7 +456,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.DependentPrograms || features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -946,6 +951,12 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == loadFKIgnoreCheckFunctionID {
+					features.LoadFKIgnoreCheck = true
+				}
+				features.JSONNumericComparisons = features.JSONNumericComparisons ||
+					isMixedJSONNumericComparison(fn) || ((id == 546 || id == internalJSONComparisonFunctionID) && overload == 1)
+
 				if id == internalTableCollationFunctionID {
 					features.TableCollationFunction = true
 				}
@@ -979,6 +990,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if id == castJSONToArrayFunctionID && isMediumIntArrayCast(current, fn) {
 					features.MediumIntAssignmentBounds = true
+				}
+				// The planner depends on this package, so registry IDs cannot be
+				// imported here. Compile tests bind these IDs to the registry.
+				if id == 603 || id == 604 { // MO_VIEW_DEFINITION / MO_VIEW_CHECK_OPTION
+					features.ViewMetadataFunctions = true
 				}
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
 					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT
@@ -1217,9 +1233,9 @@ func isCRC32JSONTextBytes(expr *Expr) bool {
 	return fn != nil && fn.Func != nil && int32(fn.Func.Obj>>32) == crc32FunctionID && int32(fn.Func.Obj) == CRC32JSONTextOverload
 }
 
-// RequiresMORPCVersion125CRC32JSONTextBytes reports whether an owner contains
+// RequiresMORPCVersion129CRC32JSONTextBytes reports whether an owner contains
 // the normalized-JSON-text CRC32 contract introduced by the CRC32 JSON fix.
-func RequiresMORPCVersion125CRC32JSONTextBytes(owner any) (bool, error) {
+func RequiresMORPCVersion129CRC32JSONTextBytes(owner any) (bool, error) {
 	features, err := RequiredRemoteExpressionFeatures(owner)
 	return features.CRC32JSONTextBytes, err
 }
@@ -1786,4 +1802,21 @@ func TemporalResultContractFeatures(expr *Expr) (timestampDatetime, dynamicTime 
 	return id == 250 && overload >= 6 && overload <= 10,
 		(id == 41 || id == 378) && expr.Typ.Id == planTimeTypeID &&
 			len(fn.Args) == 2 && fn.Args[0] != nil && fn.Args[0].Typ.Id != planTimeTypeID
+}
+
+// Stable storage and registry identities avoid a dependency cycle with the
+// function package. INT128/UINT128 and BIT/YEAR/ENUM are not this domain.
+func isMixedJSONNumericComparison(fn *Function) bool {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+		return false
+	}
+	id := int32(fn.Func.Obj >> 32)
+	if !(id >= 0 && id <= 5 || id == nullSafeEqualFunctionID) {
+		return false
+	}
+	left, right := fn.Args[0].Typ.Id, fn.Args[1].Typ.Id
+	if left == planJSONTypeID {
+		left, right = right, left
+	}
+	return right == planJSONTypeID && ((left >= 20 && left <= 23) || (left >= 25 && left <= 28) || (left >= 30 && left <= 34))
 }
