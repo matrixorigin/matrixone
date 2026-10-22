@@ -75,9 +75,45 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 				require.Equal(t, tc.want, got, tc.query)
 			})
 		}
+		for _, tc := range []struct {
+			name, query string
+			want        []int
+		}{
+			{"late recursive producer", "with recursive b as(select rand()x),r(n) as(select 1 union all select n+1 from r,b where n<3 and b.x>=0) select count(*),sum(n) from r", []int{3, 6}},
+			{"late second member", "with recursive b as(select rand()x),r(n,p) as(select 1,1 union all select n+1,p from r where n=1 union all select n+2,null from r,b where n=1 and b.x>=0) select count(*),sum(n),count(p) from r", []int{3, 6, 2}},
+			{"late UUID identity", "with recursive b as(select uuid()x),r(n,x) as(select 1,cast(null as varchar(36)) union all select n+1,b.x from r,b where n<3) select count(*),sum(a.n),count(a.x),count(distinct a.x) from r a join r c on a.n=c.n and a.x<=>c.x", []int{3, 6, 2, 1}},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				got := make([]int, len(tc.want))
+				columns := make([]any, len(got))
+				for i := range got {
+					columns[i] = &got[i]
+				}
+				require.NoError(t, db.QueryRowContext(ctx, tc.query).Scan(columns...), tc.query)
+				require.Equal(t, tc.want, got, tc.query)
+			})
+		}
+		t.Run("stable recursive sibling programs", func(t *testing.T) {
+			rows, err := db.QueryContext(ctx, "select k,(with recursive r(n) as(select (select t.k) union all select n+1 from r where n<3) select (select min(n) from r)+(select max(n) from r)) v from t order by k")
+			require.NoError(t, err)
+			defer rows.Close()
+			var got [][2]sql.NullInt64
+			for rows.Next() {
+				var row [2]sql.NullInt64
+				require.NoError(t, rows.Scan(&row[0], &row[1]))
+				got = append(got, row)
+			}
+			require.NoError(t, rows.Err())
+			require.Equal(t, [][2]sql.NullInt64{
+				{}, {{Int64: 1, Valid: true}, {Int64: 4, Valid: true}},
+				{{Int64: 2, Valid: true}, {Int64: 5, Valid: true}},
+				{{Int64: 2, Valid: true}, {Int64: 5, Valid: true}},
+			}, got)
+		})
 		t.Run("unsupported lifetime captures", func(t *testing.T) {
 			for _, q := range []string{
 				"with r as(select uuid()x) select (select max(x) from r group by t.k) from t",
+				"select (with recursive r(n,x) as(select 1,cast(null as varchar(36)) union all select n+1,uuid() from r where n<t.k) select (select max(x) from r)) from t",
 				"select (with recursive base as(select uuid()x),r(n,x) as(select 1,x from base union all select n+1,base.x from r join base on r.x=base.x where n<t.k) select count(*) from r) from t",
 			} {
 				var unused int
@@ -86,13 +122,13 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 			}
 		})
 		t.Run("cached reader locking", func(t *testing.T) {
-			for _, q := range []string{
-				"with recursive r(n)as(select 1 union all select n+1 from r where n<3) select a.n from(select n from r)a join r b on a.n=b.n for update",
-				"with r as(select k,uuid()x from t) select a.k from(select k from r)a join r b on a.k=b.k for update",
+			for _, tc := range []struct{ query, wantError string }{
+				{"with recursive r(n)as(select 1 union all select n+1 from r where n<3) select a.n from(select n from r)a join r b on a.n=b.n for update", "FOR UPDATE on a recursive CTE"},
+				{"with r as(select k,uuid()x from t) select a.k from(select k from r)a join r b on a.k=b.k for update", "FOR UPDATE on a materialized CTE"},
 			} {
 				var unused int
-				err := db.QueryRowContext(ctx, q).Scan(&unused)
-				require.ErrorContains(t, err, "FOR UPDATE on a materialized CTE")
+				err := db.QueryRowContext(ctx, tc.query).Scan(&unused)
+				require.ErrorContains(t, err, tc.wantError)
 			}
 		})
 		t.Run("visible schema", func(t *testing.T) {

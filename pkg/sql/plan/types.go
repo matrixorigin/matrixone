@@ -653,8 +653,8 @@ type QueryBuilder struct {
 	cteRefs []*CTERef
 
 	// Required CTE identity belongs to this builder, including validation-only builders.
-	boundCTEs          map[*CTERef]*boundCTE
-	semanticCTESinks   map[int32]*CTERef
+	boundCTEs          map[*CTERef]map[*BindContext]*boundCTE
+	semanticCTESinks   map[int32]*boundCTE
 	recursiveCTEOwners map[int32]*CTERef
 
 	// cteSinkNodes owns shared CTE publication schemas. Unlike other users of

@@ -22,9 +22,22 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
+// cteEvaluation separates source publication from values that cannot be replayed.
+type cteEvaluation struct {
+	needsPublication bool
+	valueUnstable    bool
+}
+
+func (e *cteEvaluation) merge(other cteEvaluation) {
+	e.needsPublication = e.needsPublication || other.needsPublication
+	e.valueUnstable = e.valueUnstable || other.valueUnstable
+}
+
 // boundCTE is a statement-local publication descriptor, never a cache of rows.
 // Runtime generations and budgets remain owned by Compile or dependent.region.
 type boundCTE struct {
+	ref                        *CTERef
+	evaluation                 cteEvaluation
 	hasSingleRow               bool
 	sourceStep                 int32
 	output                     cteOccurrence
@@ -46,7 +59,7 @@ func (builder *QueryBuilder) appendCTEProducer(root int32, ctx *BindContext, tag
 	return builder.appendStep(sink)
 }
 
-func (builder *QueryBuilder) publishBoundCTE(useCtx *BindContext, ref *CTERef, root int32, ctx *BindContext, recursive bool) *boundCTE {
+func (builder *QueryBuilder) publishBoundCTE(useCtx *BindContext, ref *CTERef, root int32, ctx *BindContext, recursive bool, evaluation cteEvaluation) *boundCTE {
 	node := builder.qry.Nodes[root]
 	headings := append([]string(nil), ctx.headings...)
 	if recursive {
@@ -65,7 +78,7 @@ func (builder *QueryBuilder) publishBoundCTE(useCtx *BindContext, ref *CTERef, r
 	for i, expr := range node.ProjectList {
 		output.types[i] = expr.Typ
 	}
-	bound := &boundCTE{output: output, database: ctx.cteDatabase, hasSingleRow: !recursive && ctx.hasSingleRow,
+	bound := &boundCTE{ref: ref, evaluation: evaluation, output: output, database: ctx.cteDatabase, hasSingleRow: !recursive && ctx.hasSingleRow,
 		provenance: make([]OutputColumnProvenance, len(headings)),
 		orderTypes: make([]*planpb.Type, len(headings)), canonicalTypes: make([]*planpb.Type, len(headings)),
 		semanticKeys: append([]string(nil), ctx.projectSemanticKeys...), snapshot: useCtx.snapshot}
@@ -79,13 +92,25 @@ func (builder *QueryBuilder) publishBoundCTE(useCtx *BindContext, ref *CTERef, r
 	}
 	bound.sourceStep = builder.appendCTEProducer(root, ctx, tag)
 	if builder.boundCTEs == nil {
-		builder.boundCTEs = make(map[*CTERef]*boundCTE)
+		builder.boundCTEs = make(map[*CTERef]map[*BindContext]*boundCTE)
 	}
 	if builder.semanticCTESinks == nil {
-		builder.semanticCTESinks = make(map[int32]*CTERef)
+		builder.semanticCTESinks = make(map[int32]*boundCTE)
 	}
-	builder.boundCTEs[ref] = bound
-	builder.semanticCTESinks[builder.qry.Steps[bound.sourceStep]] = ref
+	publications := builder.boundCTEs[ref]
+	if publications == nil {
+		publications = make(map[*BindContext]*boundCTE)
+		builder.boundCTEs[ref] = publications
+	}
+	// Stable graphs may be rebound in another dependent program; their mutable
+	// nodes and substituted correlation slots belong to that query block.
+	// Unstable values retain declaration-wide identity (the nil owner).
+	owner := useCtx.queryBlockOwner
+	if evaluation.valueUnstable {
+		owner = nil
+	}
+	publications[owner] = bound
+	builder.semanticCTESinks[builder.qry.Steps[bound.sourceStep]] = bound
 	return bound
 }
 
@@ -157,26 +182,26 @@ func (builder *QueryBuilder) cteIdentityProducer(root int32) int32 {
 	return builder.qry.Nodes[sinkID].Children[0]
 }
 
-// Value instability is distinct from deterministic row-scoped diagnostics and
-// statement-stable functions. Follow dependencies, not the whole node directory.
-func (builder *QueryBuilder) cteNeedsIdentity(id int32, seen map[int32]bool) bool {
+// Walk executable dependencies once. Recursion and existing publication require
+// a source boundary, but only unstable values forbid cross-owner recomputation.
+func (builder *QueryBuilder) classifyCTEEvaluation(id int32, seen map[int32]bool) cteEvaluation {
 	if seen[id] {
-		return false
+		return cteEvaluation{}
 	}
 	seen[id] = true
+	if bound := builder.semanticCTESinks[id]; bound != nil {
+		return bound.evaluation
+	}
 	node := builder.qry.Nodes[id]
-	if builder.semanticCTESinks[id] != nil {
-		return true
-	}
+	var evaluation cteEvaluation
 	switch node.NodeType {
-	case planpb.Node_SAMPLE, planpb.Node_RECURSIVE_CTE, planpb.Node_EXTERNAL_FUNCTION:
-		return true
+	case planpb.Node_RECURSIVE_CTE:
+		evaluation.needsPublication = true
+	case planpb.Node_SAMPLE, planpb.Node_EXTERNAL_FUNCTION:
+		evaluation.valueUnstable = true
 	case planpb.Node_FUNCTION_SCAN:
-		if !statementStableFunctionScan(node) {
-			return true
-		}
+		evaluation.valueUnstable = !statementStableFunctionScan(node)
 	}
-	needed := false
 	// Catalog defaults/generated expressions are metadata, not scan evaluations.
 	executable := *node
 	executable.TableDef = nil
@@ -184,38 +209,32 @@ func (builder *QueryBuilder) cteNeedsIdentity(id int32, seen map[int32]bool) boo
 		return planpb.VisitExprTree(expr, func(expr *planpb.Expr) error {
 			if fn := expr.GetF(); fn != nil {
 				overload, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
-				// Existing ENUM/SET display adapters preserve a source value;
-				// their legacy no-fold flag does not make that value unstable.
+				// ENUM/SET display adapters preserve the source value despite
+				// their legacy no-fold flag.
 				_, transparent := transparentOutputSourceExpr(expr)
-				needed = needed || !ok || overload.IsVolatile() && !transparent
+				evaluation.valueUnstable = evaluation.valueUnstable || !ok || overload.IsVolatile() && !transparent
 			}
 			if sub := expr.GetSub(); sub != nil {
-				needed = needed || builder.cteNeedsIdentity(sub.NodeId, seen)
+				evaluation.merge(builder.classifyCTEEvaluation(sub.NodeId, seen))
 			}
 			if call := expr.GetDependent(); call != nil && builder.qry.Correlation != nil {
-				needed = needed || builder.cteNeedsIdentity(builder.qry.Correlation.Programs[call.ProgramId-1].RootNode, seen)
+				evaluation.merge(builder.classifyCTEEvaluation(builder.qry.Correlation.Programs[call.ProgramId-1].RootNode, seen))
 			}
 			return nil
 		})
 	})
-	if needed {
-		return true
-	}
 	for _, child := range node.Children {
-		if builder.cteNeedsIdentity(child, seen) {
-			return true
-		}
+		evaluation.merge(builder.classifyCTEEvaluation(child, seen))
 	}
 	for _, step := range node.SourceStep {
-		if builder.cteNeedsIdentity(builder.qry.Steps[step], seen) {
-			return true
-		}
+		evaluation.merge(builder.classifyCTEEvaluation(builder.qry.Steps[step], seen))
 	}
-	return false
+	evaluation.needsPublication = evaluation.needsPublication || evaluation.valueUnstable
+	return evaluation
 }
 
 // A dependent invocation owns its own sources. It cannot capture a statement's
-// materialized value or carry that value through fresh recursive-round regions.
+// unstable materialized value or carry that value through fresh recursive rounds.
 // Validate before dependent binding substitutes any correlated expression.
 func (builder *QueryBuilder) validateCTEInvocation(root int32) error {
 	if len(builder.semanticCTESinks) == 0 {
@@ -235,7 +254,8 @@ func (builder *QueryBuilder) validateCTEInvocation(root int32) error {
 		}
 		seen[key] = true
 		node := builder.qry.Nodes[id]
-		if ref := builder.semanticCTESinks[id]; ref != nil {
+		if bound := builder.semanticCTESinks[id]; bound != nil && bound.evaluation.valueUnstable {
+			ref := bound.ref
 			local := false
 			for ctx := ref.declarationCtx; ctx != nil; ctx = ctx.parent {
 				if ctx.queryBlockOwner == owner {

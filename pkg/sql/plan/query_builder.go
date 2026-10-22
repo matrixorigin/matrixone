@@ -5787,8 +5787,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		}
 	}
 	// recursive statement
-	recursiveLastNodeID := initLastNodeID
-	initSourceStep := int32(len(builder.qry.Steps))
+	initSourceStep := builder.appendStep(initLastNodeID)
 	recursiveSteps := make([]int32, len(stmts))
 	recursiveNodeIDs := make([]int32, len(stmts))
 
@@ -5806,10 +5805,8 @@ func (builder *QueryBuilder) bindRecursiveCte(
 			return
 		}
 		//3.1 add recursive cte Node
-		_ = builder.appendStep(recursiveLastNodeID)
 		recScanId := appendRecursiveScanNode(builder, subCtx, initSourceStep, subCtx.sinkTag)
 		recursiveNodeIDs[i] = recScanId
-		recursiveSteps[i] = int32(len(builder.qry.Steps))
 
 		subCtx.recordCteInBinding(table,
 			CteBindState{
@@ -5817,6 +5814,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 				cte:           cteRef,
 				recScanNodeId: recScanId})
 
+		var recursiveLastNodeID int32
 		recursiveLastNodeID, err = builder.bindSelect(&tree.Select{Select: r}, subCtx, false)
 		if err != nil {
 			return
@@ -5882,6 +5880,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		for i, col := range cols {
 			subCtx.setHeading(i, string(col), headingProvenance{})
 		}
+		// Binding a member can publish other CTEs. Record this sink
+		// only when it is appended, after those producers.
+		recursiveSteps[i] = builder.appendStep(recursiveLastNodeID)
 	}
 	// Record every column explicitly, including incompatible columns as nil.
 	// The nil entry is a suppression sentinel: without it, the final binding
@@ -5901,7 +5902,6 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	}
 
 	//4. add CTE Scan Node
-	_ = builder.appendStep(recursiveLastNodeID)
 	recursiveNotNullable := builder.deriveRecursiveCTENullability(
 		projects,
 		initLastNodeID,
@@ -5987,7 +5987,12 @@ func (builder *QueryBuilder) bindCte(
 	cteRef *CTERef,
 	table string,
 ) (nodeID int32, err error) {
-	if bound := builder.boundCTEs[cteRef]; bound != nil {
+	publications := builder.boundCTEs[cteRef]
+	bound := publications[nil]
+	if bound == nil {
+		bound = publications[ctx.queryBlockOwner]
+	}
+	if bound != nil {
 		return builder.bindCTEReader(ctx, cteRef, bound)
 	}
 	viewCount := len(cteRef.declarationCtx.views)
@@ -6030,14 +6035,15 @@ func (builder *QueryBuilder) bindCte(
 			return 0, err
 		}
 	}
-	if isR || builder.cteNeedsIdentity(nodeID, make(map[int32]bool)) {
+	evaluation := builder.classifyCTEEvaluation(nodeID, make(map[int32]bool))
+	if isR || evaluation.needsPublication {
 		if !isR {
 			nodeID, err = builder.appendMySQLSpecialTypeBoundary(nodeID, outputCtx, outputCtx.outputColumnProvenanceForBoundary())
 			if err != nil {
 				return 0, err
 			}
 		}
-		bound := builder.publishBoundCTE(ctx, cteRef, nodeID, outputCtx, isR)
+		bound := builder.publishBoundCTE(ctx, cteRef, nodeID, outputCtx, isR, evaluation)
 		bound.views = append([]string(nil), cteRef.declarationCtx.views[viewCount:]...)
 		return builder.bindCTEReader(ctx, cteRef, bound)
 	}

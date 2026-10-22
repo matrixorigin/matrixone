@@ -95,26 +95,108 @@ func TestCTEIdentityInvocationOwnership(t *testing.T) {
 		{"outer capture", `with r as(select uuid()x) select (select max(x) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
 		{"local declaration", `select (with r as(select uuid()x) select max(x) from r group by t2.a) from bvt_test2.t2`, ""},
 		{"round capture", `select (with recursive base as(select uuid()x),r(n,x) as(select 1,x from base union all select n+1,base.x from r join base on r.x=base.x where n<t2.a) select count(*) from r) from bvt_test2.t2`, "shared CTE capture across recursive rounds"},
+		{"stable recursive sibling programs", `select (with recursive r(n) as(select (select t2.a) union all select n+1 from r where n<3) select (select min(n) from r)+(select max(n) from r)) from bvt_test2.t2`, ""},
+		{"stable recursive wrapper programs", `select (with recursive r(n) as(select (select t2.a) union all select n+1 from r where n<3),s(k) as(select n+1 from r) select (select min(k) from s)+(select max(k) from s)) from bvt_test2.t2`, ""},
+		{"late recursive instability", `select (with recursive r(n,x) as(select 1,cast(null as varchar(36)) union all select n+1,uuid() from r where n<t2.a) select (select max(x) from r)) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
+		{"recursive volatile predecessor", `select (with recursive base(k,x) as(select 1,uuid() union all select k+1,x from base where k<2),r(n,x) as(select 1,x from base union all select n+1,base.x from r join base on r.x=base.x where n<t2.a) select count(*) from r) from bvt_test2.t2`, "shared CTE capture across recursive rounds"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
-			_, err := runOneStmt(mock, t, tc.sql)
+			logic, err := runOneStmt(mock, t, tc.sql)
 			if tc.wantError != "" {
 				require.ErrorContains(t, err, tc.wantError)
 			} else {
 				require.NoError(t, err)
+				require.NoError(t, logic.GetQuery().ValidateCorrelation())
 			}
 		})
 	}
 }
 
 func TestCTEIdentityCachedReaderLocking(t *testing.T) {
-	for _, q := range []string{
-		"with recursive r(n) as(select 1 union all select n+1 from r where n<3) select a.n from(select n from r)a join r b on a.n=b.n for update",
-		"with r as(select n_nationkey k,uuid()x from nation) select a.k from(select k from r)a join r b on a.k=b.k for update",
+	for _, tc := range []struct{ sql, wantError string }{
+		{"with recursive r(n)as(select 1 union all select n+1 from r where n<3) select a.n from(select n from r)a join r b on a.n=b.n for update", "FOR UPDATE on a recursive CTE"},
+		{"with r as(select n_nationkey k,uuid()x from nation) select a.k from(select k from r)a join r b on a.k=b.k for update", "FOR UPDATE on a materialized CTE"},
 	} {
 		mock := NewMockOptimizer(false, newPlanTestProcess(t))
-		_, err := runOneStmt(mock, t, q)
-		require.ErrorContains(t, err, "FOR UPDATE on a materialized CTE", q)
+		_, err := runOneStmt(mock, t, tc.sql)
+		require.ErrorContains(t, err, tc.wantError, tc.sql)
+	}
+}
+
+func TestCTEIdentityRecursiveSourceSteps(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		members   int
+		nullable  bool
+	}{
+		{"late member", `with recursive b as(select rand() x), r(n) as(select 1 union all select n+1 from r,b where n<3 and b.x>=0) select * from r`, 1, false},
+		{"first of two members", `with recursive b as(select rand() x), r(n,p) as(select 1,1 union all select n+1,p from r,b where n=1 and b.x>=0 union all select n+2,null from r where n=1) select * from r`, 2, true},
+		{"second of two members", `with recursive b as(select rand() x), r(n,p) as(select 1,1 union all select n+1,p from r where n=1 union all select n+2,null from r,b where n=1 and b.x>=0) select * from r`, 2, true},
+		{"transitive producer", `with recursive b as(select rand() x), d as(select x from b), r(n) as(select 1 union all select n+1 from r,d where n<3 and d.x>=0) select * from r`, 1, false},
+		{"anchor control", `with recursive b as(select rand() x), r(n) as(select 1 from b union all select n+1 from r,b where n<3 and b.x>=0) select * from r`, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			checked := false
+			_, err = bindAndOptimizeSelectQueryWithValidator(planpb.Query_SELECT, mock.CurrentContext(), stmt.(*tree.Select), false, false, func(q *Query) error {
+				var recursive *planpb.Node
+				for _, node := range q.Nodes {
+					if node.NodeType == planpb.Node_RECURSIVE_CTE {
+						require.Nil(t, recursive)
+						recursive = node
+					}
+				}
+				require.NotNil(t, recursive)
+				require.Len(t, recursive.SourceStep, tc.members+1)
+				owned := make(map[int32]bool)
+				for i, step := range recursive.SourceStep {
+					sinkID := q.Steps[step]
+					sink := q.Nodes[sinkID]
+					require.Equal(t, planpb.Node_SINK, sink.NodeType)
+					require.Equal(t, i > 0, sink.RecursiveCte)
+					require.False(t, sink.RecursiveSink)
+					require.NotEqual(t, materialized.CTESinkOption, sink.ExtraOptions)
+					require.False(t, owned[sinkID], "each source must own a distinct sink")
+					owned[sinkID] = true
+					registrations := 0
+					for _, id := range q.Steps {
+						if id == sinkID {
+							registrations++
+						}
+					}
+					require.Equal(t, 1, registrations)
+				}
+				if tc.nullable {
+					require.False(t, recursive.ProjectList[1].Typ.NotNullable, "NULL from the second member must reach the common schema")
+				}
+				feedback, outward := 0, 0
+				for _, node := range q.Nodes {
+					if node.NodeType != planpb.Node_RECURSIVE_SCAN && node.NodeType != planpb.Node_SINK_SCAN {
+						continue
+					}
+					for _, step := range node.SourceStep {
+						sink := q.Nodes[q.Steps[step]]
+						if sink.RecursiveSink {
+							require.Equal(t, []int32{recursive.NodeId}, sink.Children)
+							if node.NodeType == planpb.Node_RECURSIVE_SCAN {
+								feedback++
+							} else {
+								outward++
+							}
+						}
+					}
+				}
+				require.Equal(t, tc.members, feedback)
+				require.Equal(t, 1, outward)
+				checked = true
+				return nil
+			})
+			require.NoError(t, err)
+			require.True(t, checked)
+		})
 	}
 }

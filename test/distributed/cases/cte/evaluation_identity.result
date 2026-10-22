@@ -21,4 +21,10 @@ with r as(select uuid() x),s as(select x from r) select count(*) from s a join s
 with recursive base as(select uuid() x),r(n,x) as(select 1,x from base union all select n+1,base.x from r join base on r.x=base.x where n<3) select count(*) from r;
 ➤ count(*)[-5,64,0]  𝄀
 3
+with recursive b as(select rand() x),r(n) as(select 1 union all select r.n+1 from r,b where r.n<3 and b.x>=0) select count(*),sum(n) from r;
+➤ count(*)[-5,64,0]  ¦  sum(n)[3,38,0]  𝄀
+3  ¦  6
+select count(*) from (select k,(with recursive r(n) as(select (select t.k) union all select n+1 from r where n<3) select (select min(n) from r)+(select max(n) from r)) v from t) q where (k is null and v is null) or (k=1 and v=4) or (k=2 and v=5);
+➤ count(*)[-5,64,0]  𝄀
+4
 drop database cte_evaluation_identity;
