@@ -1,8 +1,8 @@
 # Retire obsolete computation and bookkeeping
 
-Version 2, 2026-10-22. Owner: engineering-quality issue #29249.
-Implementation: `cleanup/29249-modules-20261022`.
-Base: `b90e839af241184d14ac819ddc894e9dee097262`.
+Version 3, 2026-10-22. Owner: engineering-quality issue #29249.
+Implementation: [PR #30861](https://github.com/matrixorigin/matrixone/pull/30861).
+Current frozen base: `3ad9adbb4ce6c9f8e421917233cc6f6d40ab5f25`.
 
 ## Boundaries
 
@@ -76,3 +76,30 @@ also excluded. Retiring private write-only state must not change comparisons,
 resource ownership, preflight/admission, error order or operator transitions.
 Run the existing owning planner/operator suites normally and with race detection,
 plus incremental vet/lint; no redundant per-field tests are needed.
+
+## Design review decision
+
+Version 3 records approval of the unchanged version-2 retirement proposal after
+rebase, and updates obsolete Elkan-specific comments to describe the retained
+clustering resolver. It adds no algorithm or ownership change.
+
+- **Phase:** current-proposal design re-admission after existing implementation
+  and conflict-free rebase, before further implementation and final
+  implementation review. Historical approval is not established; commit ordering
+  alone is not approval.
+- **Reviewer:** `gpt-6.1-sol` / `xhigh`.
+- **Session:** `01a163ca-7d53-77e0-b947-5ff37ee4875d`, 2026-10-22.
+- **Decision:** **GO — design only**, no blocking design findings.
+- **Reviewed design:** version 2, Git blob
+  `83663ed7c99db55ead45dce382ccb5cc0ef9b94d`, in proposal
+  [`6776142db5b3d7601fe9a714d953d97733f9cd48`](https://github.com/XuPeng-SH/matrixone/blob/6776142db5b3d7601fe9a714d953d97733f9cd48/docs/design/retire-obsolete-compute-kernels.md).
+- **Reviewed scope:** the complete four-commit proposal: three kernel retirements
+  and twelve private bookkeeping fields across the planner and operators.
+- **Frozen main base:** `3ad9adbb4ce6c9f8e421917233cc6f6d40ab5f25`.
+- **Original remote head:** `6ae3b27230ade978e8c429a47f8d50b8ec5a8151`.
+- **Accepted decision:** direct removal within the documented boundaries;
+  preserve live consumers, ownership, admission, serialization and independent
+  behavioral oracles. Provenance-only corrections need no substantive design
+  re-review; material deviations require a revised design and another gate.
+- **Implementation review:** separate and required; this design decision does
+  not approve the implementation.
