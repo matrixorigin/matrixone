@@ -4526,7 +4526,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: COMPRESS,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -5176,7 +5176,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: QUOTE,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7362,7 +7362,7 @@ var supportedStringBuiltIns = []FuncNew{
 		functionId: SOUNDEX,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    stringDomainFixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -7405,7 +7405,7 @@ var supportedStringBuiltIns = []FuncNew{
 		integerParameters: []integerParameter{{position: 1, target: types.T_int64}},
 		bindingOverloads:  []int{0},
 		layout:            STANDARD_FUNCTION,
-		checkFn:           stringDomainFixedTypeMatch,
+		checkFn:           jsonStringConsumerUnaryDomainTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -9299,7 +9299,7 @@ var supportedMathBuiltIns = []FuncNew{
 		functionId: MD5,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryFixedTypeMatch,
 
 		Overloads: []overload{
 			{
@@ -17095,7 +17095,7 @@ var supportedOthersBuiltIns = []FuncNew{
 		functionId: SHA1,
 		class:      plan.Function_STRICT,
 		layout:     STANDARD_FUNCTION,
-		checkFn:    fixedTypeMatch,
+		checkFn:    jsonStringConsumerUnaryFixedTypeMatch,
 
 		Overloads: []overload{
 			{

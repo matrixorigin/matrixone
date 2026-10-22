@@ -53,3 +53,36 @@ func jsonStringConsumerReturnType(parameters []types.Type) types.Type {
 	}
 	return types.NewWithCharset(types.T_text, 0, 0, types.CharsetUTF8MB4Bin)
 }
+
+// Fixed-string functions remain on their existing overload and executor. A
+// JSON first argument is converted through the same visible-text cast already
+// used by explicit CAST(js AS CHAR); ordinary arguments see no behavior change.
+func jsonStringConsumerUnaryFixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return jsonStringConsumerCastTypeMatch(overloads, inputs, fixedTypeMatch)
+}
+
+func jsonStringConsumerUnaryDomainTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	return jsonStringConsumerCastTypeMatch(overloads, inputs, stringDomainFixedTypeMatch)
+}
+
+func jsonStringConsumerCastTypeMatch(
+	overloads []overload,
+	inputs []types.Type,
+	match func([]overload, []types.Type) checkResult,
+) checkResult {
+	if len(inputs) == 0 || inputs[0].Oid != types.T_json {
+		return match(overloads, inputs)
+	}
+	prepared := append([]types.Type(nil), inputs...)
+	prepared[0] = types.T_varchar.ToType()
+	matched := match(overloads, prepared)
+	if matched.status != succeedMatched && matched.status != succeedWithCast {
+		return matched
+	}
+	castTypes := append([]types.Type(nil), prepared...)
+	if len(matched.finalType) == len(inputs) {
+		copy(castTypes, matched.finalType)
+	}
+	castTypes[0] = prepared[0]
+	return newCheckResultWithCast(matched.idx, castTypes)
+}

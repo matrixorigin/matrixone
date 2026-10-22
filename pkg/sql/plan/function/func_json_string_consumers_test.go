@@ -63,6 +63,31 @@ func TestJSONStringConsumerJSONOverloads(t *testing.T) {
 	}
 }
 
+func TestJSONStringConsumerRemainingFunctionsCastJSONAsVisibleText(t *testing.T) {
+	cases := []struct {
+		name string
+		args []types.Type
+	}{
+		{name: "md5", args: []types.Type{types.T_json.ToType()}},
+		{name: "sha1", args: []types.Type{types.T_json.ToType()}},
+		{name: "sha2", args: []types.Type{types.T_json.ToType(), types.T_int64.ToType()}},
+		{name: "sha2", args: []types.Type{types.T_json.ToType(), types.T_varchar.ToType()}},
+		{name: "compress", args: []types.Type{types.T_json.ToType()}},
+		{name: "quote", args: []types.Type{types.T_json.ToType()}},
+		{name: "soundex", args: []types.Type{types.T_json.ToType()}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name+"/"+tc.args[len(tc.args)-1].Oid.String(), func(t *testing.T) {
+			resolved, err := GetFunctionByName(context.Background(), tc.name, tc.args)
+			require.NoError(t, err)
+			castTypes, shouldCast := resolved.ShouldDoImplicitTypeCast()
+			require.True(t, shouldCast)
+			require.Len(t, castTypes, len(tc.args))
+			require.Equal(t, types.T_varchar, castTypes[0].Oid)
+		})
+	}
+}
+
 func TestJSONStringConsumerRegisteredExecutors(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	t.Cleanup(proc.Free)
