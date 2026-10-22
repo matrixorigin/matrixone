@@ -103,7 +103,10 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	requiredVersion := int64(0)
 	if features.ExactJSONParsing || features.ExactJSONDecimalCast {
-		requiredVersion = defines.MORPCVersion120
+		requiredVersion = defines.MORPCVersion129
+	}
+	if features.JSONNumericComparisons {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion128)
 	}
 	if features.IPFunctionSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion72)
@@ -130,6 +133,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.SpatialDistanceSemantics && requiredVersion < defines.MORPCVersion90 {
 		requiredVersion = defines.MORPCVersion90
 	}
+	if features.DecimalIntegerDivisionSemantics && requiredVersion < defines.MORPCVersion121 {
+		requiredVersion = defines.MORPCVersion121
+	}
 	if features.DecimalDivisionSemantics && requiredVersion < defines.MORPCVersion97 {
 		requiredVersion = defines.MORPCVersion97
 	}
@@ -144,6 +150,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.JSONInputContracts || features.YearBitCast {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
+	if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion122)
+	}
 	if features.DateNumericResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion112)
 	}
@@ -152,6 +161,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.LeastGreatestCollationSemantics {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion117)
+	}
+	if features.TimestampAddSecondIntervals {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion124)
 	}
 	if features.DecimalStatisticalResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion113)
@@ -162,15 +174,27 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
 	}
+	if features.ViewMetadataFunctions {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
+	}
 	return requiredVersion, nil
 }
 
-// observePersistedExpressionProtocol records the requirement while a
-// persisted view expression is still represented as a function tree. Binding
+// observeExpressionProtocol records the requirement while a
+// persisted view or CTAS expression is still represented as a function tree. Binding
 // folds some expressions (notably BETWEEN bounds) before the view validator
 // sees the plan; recording here keeps admission independent of that rewrite.
-func (b *baseBinder) observePersistedExpressionProtocol(expr *planpb.Expr) error {
-	if b == nil || b.ctx == nil || b.ctx.persistedExpressionProtocolRequirement == nil {
+func (b *baseBinder) observeExpressionProtocol(expr *planpb.Expr) error {
+	if b == nil || b.ctx == nil {
+		return nil
+	}
+	if requirement := b.ctx.ctasExecutionProtocolRequirement; requirement != nil && *requirement < defines.MORPCVersion122 {
+		timestamp, dynamicTime := planpb.TemporalResultContractFeatures(expr)
+		if timestamp || dynamicTime {
+			*requirement = defines.MORPCVersion122
+		}
+	}
+	if b.ctx.persistedExpressionProtocolRequirement == nil {
 		return nil
 	}
 	requiredVersion, err := RequiredPersistedExpressionProtocolVersion(expr)

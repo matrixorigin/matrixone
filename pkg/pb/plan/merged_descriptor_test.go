@@ -28,8 +28,9 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 		"Query":            {"correlation": 19},
 		"CreateDatabase":   {"defaults": 5},
 		"AlterDatabase":    {"defaults": 3},
-		"CreateTable":      {"database_defaults": 18},
+		"CreateTable":      {"database_defaults": 18, "ctas_execution_protocol_version": 19},
 		"DatabaseDefaults": {"collation_revision": 6},
+		"ColDef":           {"result_column_kind": 23},
 	}
 	file := decodePlanDescriptor(t, proto.FileDescriptor("plan.proto"))
 	for _, message := range file.GetMessageType() {
@@ -47,4 +48,30 @@ func TestPlanDescriptorMergedContracts(t *testing.T) {
 		delete(want, message.GetName())
 	}
 	require.Empty(t, want, "missing merged message descriptors")
+}
+
+func TestMergedCTASResultColumnKindRoundTrip(t *testing.T) {
+	for _, kind := range []ResultColumnKind{
+		ResultColumnKind_RESULT_COLUMN_KIND_UNKNOWN,
+		ResultColumnKind_RESULT_COLUMN_KIND_STORED,
+		ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+		ResultColumnKind(99), // Preserve a future producer's enum value.
+	} {
+		t.Run(kind.String(), func(t *testing.T) {
+			original := &CreateTable{
+				CtasExecutionProtocolVersion: 83,
+				TableDef: &TableDef{Cols: []*ColDef{{
+					Name: "flag", ResultColumnKind: kind,
+				}}},
+			}
+			encoded, err := original.Marshal()
+			require.NoError(t, err)
+			require.Len(t, encoded, original.ProtoSize())
+			var decoded CreateTable
+			require.NoError(t, decoded.Unmarshal(encoded))
+			require.Equal(t, original.CtasExecutionProtocolVersion, decoded.CtasExecutionProtocolVersion)
+			require.Len(t, decoded.GetTableDef().GetCols(), 1)
+			require.Equal(t, kind, decoded.TableDef.Cols[0].ResultColumnKind)
+		})
+	}
 }

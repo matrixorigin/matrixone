@@ -30,7 +30,7 @@ func TestExactJSONExecutionContracts(t *testing.T) {
 			Func: &ObjectRef{Obj: int64(id)<<32 | int64(overload), ObjName: "renamed"}, Args: args,
 		}}}
 	}
-	parser := fn(601, 0, 62, col(61))
+	parser := fn(605, 0, 62, col(61))
 	for _, test := range []struct {
 		name        string
 		expr        *Expr
@@ -53,6 +53,10 @@ func TestExactJSONExecutionContracts(t *testing.T) {
 		{"calendar interval identity", fn(598, 0, 61, col(61)), false, false},
 		{"main datalink identity", fn(599, 0, 10, col(61)), false, false},
 		{"main table collation identity", fn(600, 0, 61, col(61)), false, false},
+		{"main timestampadd second identity", fn(601, 0, 61, col(61)), false, false},
+		{"main load FK identity", fn(602, 0, 10, col(61)), false, false},
+		{"main view definition identity", fn(603, 0, 61, col(61)), false, false},
+		{"main view check option identity", fn(604, 0, 61, col(61)), false, false},
 		{"legacy least identity", fn(122, 0, 61, col(61), col(61)), false, false},
 		{"collation least identity", fn(122, 4, 61, col(61), col(61)), false, false},
 		{"unrelated function", fn(1, 0, 33, col(62)), false, false},
@@ -71,6 +75,9 @@ func TestExactJSONExecutionContracts(t *testing.T) {
 				require.Equal(t, test.name == "collation least identity", features.LeastGreatestCollationSemantics)
 				require.Equal(t, test.parse, features.ExactJSONParsing)
 				require.Equal(t, test.cast, features.ExactJSONDecimalCast)
+				require.Equal(t, test.name == "main timestampadd second identity", features.TimestampAddSecondIntervals)
+				require.Equal(t, test.name == "main load FK identity", features.LoadFKIgnoreCheck)
+				require.Equal(t, test.name == "main view definition identity" || test.name == "main view check option identity", features.ViewMetadataFunctions)
 				if test.parse || test.cast {
 					require.True(t, features.Any())
 				}

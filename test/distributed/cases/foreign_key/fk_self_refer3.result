@@ -81,7 +81,7 @@ show create table t1;
 Table    Create Table
 t1    CREATE TABLE `t1` (\n  `a` int NOT NULL,\n  `b` int NOT NULL,\n  `c` int DEFAULT NULL,\n  `d` int DEFAULT NULL,\n  `e` int DEFAULT NULL,\n  `f` int DEFAULT NULL,\n  `g` int DEFAULT NULL,\n  `h` int DEFAULT NULL,\n  `i` int DEFAULT NULL,\n  `j` int DEFAULT NULL,\n  `k` int DEFAULT NULL,\n  PRIMARY KEY (`a`,`b`),\n  UNIQUE KEY `a` (`a`,`c`),\n  CONSTRAINT `c1` FOREIGN KEY (`d`,`e`) REFERENCES `t1` (`a`,`b`) ON DELETE RESTRICT ON UPDATE RESTRICT,\n  CONSTRAINT `c2` FOREIGN KEY (`f`,`h`) REFERENCES `t1` (`a`,`c`) ON DELETE RESTRICT ON UPDATE RESTRICT,\n  CONSTRAINT `c3` FOREIGN KEY (`h`,`i`) REFERENCES `p1` (`pa`,`pb`) ON DELETE RESTRICT ON UPDATE RESTRICT,\n  CONSTRAINT `c4` FOREIGN KEY (`h`,`k`) REFERENCES `q2` (`qa`,`qb`) ON DELETE RESTRICT ON UPDATE RESTRICT\n)
 insert into t1 values (1,2,3,1,2,1,3,4,4,4,4);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into p1 values (4,4);
 insert into q2 values (4,4);
 insert into t1 values ( 1,2, 4, 1,2, 1,10, 4,4, 10,4);
@@ -92,7 +92,7 @@ insert into t1 values (
 1,5,
 5,5,
 10,5);
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 insert into p1 values (5,5);
 insert into q2 values (5,5);
 insert into t1 values (

@@ -2478,7 +2478,15 @@ func (mp *MysqlProtocolImpl) makeColumnDefinition41Payload(column *MysqlColumn, 
 		//int<2>              character set
 		pos = mp.io.WriteUint16(data, pos, charsetBinary)
 		//int<4>              column length
-		pos = mp.io.WriteUint32(data, pos, boolColumnLength)
+		columnLength := uint32(boolColumnLength)
+		if column.Length() != 0 && column.Length() != boolColumnLength {
+			// Computed BOOL results use a non-one TINYINT display width. MySQL
+			// clients (notably Connector/J) use a one-byte width to infer
+			// pseudo-BOOLEAN values; preserving the computed width keeps these
+			// results numeric while native BOOLEAN columns retain BOOL metadata.
+			columnLength = column.Length()
+		}
+		pos = mp.io.WriteUint32(data, pos, columnLength)
 		//int<1>              type
 		pos = mp.io.WriteUint8(data, pos, uint8(defines.MYSQL_TYPE_TINY))
 	} else {

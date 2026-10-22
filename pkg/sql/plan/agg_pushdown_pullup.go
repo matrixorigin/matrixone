@@ -184,7 +184,7 @@ func getJoinCondCol(cond *Expr, leftTag int32, rightTag int32) (*plan.Expr_Col, 
 		return nil, nil
 	}
 	fun := cond.GetF()
-	if fun == nil || fun.Func == nil || !IsEqualFunc(fun.Func.Obj) || len(fun.Args) != 2 {
+	if fun == nil || fun.Func == nil || !IsEqualFunc(fun.Func.Obj) || len(fun.Args) != 2 || isJSONNumericComparisonArgs(fun.Args) {
 		return nil, nil
 	}
 	leftRef := fun.Args[0].GetCol()

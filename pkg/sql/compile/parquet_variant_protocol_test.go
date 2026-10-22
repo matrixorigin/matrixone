@@ -41,7 +41,7 @@ func TestParquetVariantReaderProtocolPlacementAndWire(t *testing.T) {
 	})
 	defer op.Release()
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	client.version = defines.MORPCVersion119
+	client.version = defines.MORPCVersion128
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -50,7 +50,7 @@ func TestParquetVariantReaderProtocolPlacementAndWire(t *testing.T) {
 	data, err := encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "Parquet VARIANT")
 	require.Nil(t, data)
-	client.version = defines.MORPCVersion120
+	client.version = defines.MORPCVersion129
 	c.execType = plan2.ExecTypeAP_MULTICN
 	c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 	require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
@@ -62,9 +62,9 @@ func TestParquetVariantReaderProtocolPlacementAndWire(t *testing.T) {
 	// Child scans are covered independently after wire decoding as well.
 	parent := &pipeline.Pipeline{Children: []*pipeline.Pipeline{wire}}
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion119)
-	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, parent), "version 120")
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion120)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion128)
+	require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, parent), "version 129")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
 	require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, parent))
 	require.Equal(t, client.calls, client.releases)
 }

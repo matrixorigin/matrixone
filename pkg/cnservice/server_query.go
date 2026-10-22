@@ -142,6 +142,8 @@ func (s *service) initQueryService() error {
 }
 
 func (s *service) initQueryCommandHandler() {
+	s.addQueryCommandHandler(query.CmdMethod_KillSession, s.handleKillSession)
+	s.addQueryCommandHandler(query.CmdMethod_DisconnectSession, s.handleDisconnectSession)
 	s.addQueryCommandHandler(query.CmdMethod_KillConn, s.handleKillConn)
 	s.addQueryCommandHandler(query.CmdMethod_AlterAccount, s.handleAlterAccount)
 	s.addQueryCommandHandler(query.CmdMethod_TraceSpan, s.handleTraceSpan)
@@ -959,5 +961,36 @@ func (s *service) handleWorkspaceThresholdRequest(
 		WriteThreshold:  write,
 	}
 
+	return nil
+}
+
+// SQL authorization is performed by the owning frontend routine manager. These
+// trusted RPC handlers never execute SQL or forward to another CN.
+func (s *service) handleKillSession(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	if req == nil || req.KillSessionRequest == nil {
+		return moerr.NewInvalidInput(ctx, "missing kill session request")
+	}
+	if err := qclient.CheckMethodVersion(ctx, s.serviceID(), req); err != nil {
+		return err
+	}
+	found, err := s.mo.GetRoutineManager().KillSession(ctx, req.KillSessionRequest)
+	if err != nil {
+		return err
+	}
+	resp.KillSessionResponse = &query.KillSessionResponse{Found: found}
+	return nil
+}
+
+func (s *service) handleDisconnectSession(ctx context.Context, req *query.Request, resp *query.Response, _ *morpc.Buffer) error {
+	if req == nil || req.DisconnectSessionRequest == nil {
+		return moerr.NewInvalidInput(ctx, "missing disconnect session request")
+	}
+	if err := qclient.CheckMethodVersion(ctx, s.serviceID(), req); err != nil {
+		return err
+	}
+	if err := s.mo.GetRoutineManager().DisconnectSession(ctx, req.DisconnectSessionRequest.ConnID); err != nil {
+		return err
+	}
+	resp.DisconnectSessionResponse = &query.DisconnectSessionResponse{}
 	return nil
 }

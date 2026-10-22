@@ -980,7 +980,7 @@ func checkStrictJoinPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
 	//onPred must be equality, children must be column name
 	switch onPredImpl := onPred.Expr.(type) {
 	case *plan.Expr_F:
-		if onPredImpl.F.Func.ObjName != "=" {
+		if onPredImpl.F.Func.ObjName != "=" || isJSONNumericComparisonArgs(onPredImpl.F.Args) {
 			return false, nil, nil
 		}
 		args := onPredImpl.F.Args
@@ -2200,6 +2200,13 @@ func constantFoldWithPreparedExactSource(
 	// cannot decide whether a later fold must retain the peer's exact source.
 	if source, ok := rule.ProvisionalPreparedExactPeerSource(expr); ok {
 		c.Src = source
+	}
+	// Schema consumers need the DIV precision source even when binding folds
+	// the value before output provenance is captured. Reuse Literal.Src rather
+	// than marking unrelated integer widths as decimal DIV results.
+	if c.Src == nil && functionID == function.INTEGER_DIV &&
+		expr.Typ.Width > 0 && expr.Typ.Width <= 20 && expr.Typ.Scale == 0 {
+		c.Src = &plan.Expr{Typ: expr.Typ, Expr: expr.Expr}
 	}
 	ec := &plan.Expr_Lit{
 		Lit: c,
@@ -7755,6 +7762,14 @@ func preparedSetOperationCommonType(
 				argTypes[i] = exact
 			}
 		}
+	}
+	if mixedType, ok := function.MixedTextBinaryCommonType(argTypes); ok {
+		resolved := makePlan2Type(&mixedType)
+		if err := setExpressionCollation(ctx, "union", argExprs, &resolved); err != nil {
+			return types.Type{}, false, err
+		}
+		applyMixedTextBinaryCollationType(&resolved)
+		return makeTypeByPlan2Type(resolved), true, nil
 	}
 
 	coalesce, err := function.GetFunctionByName(ctx, "coalesce", argTypes)

@@ -532,6 +532,11 @@ func newCSVParserFromReader(extern *tree.ExternParam, r io.Reader) (*csvparser.C
 		Comment: plan.GetCSVComment(extern),
 	}
 
+	if extern.Format == tree.JSONLINE {
+		config.SkipWhitespaceRecords = true
+		config.Context = extern.Ctx
+	}
+
 	return csvparser.NewCSVParser(&config, bufio.NewReader(r), csvparser.ReadBlockSize, false)
 }
 

@@ -17,8 +17,12 @@ package plan
 import (
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/common/objectkey"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
 
@@ -30,4 +34,30 @@ func TestBuildViewColumnsRejectsDirectUse(t *testing.T) {
 	defer stmt.Free()
 	_, err = BuildPlan(ctx, stmt, false)
 	require.ErrorContains(t, err, "private to information_schema metadata views")
+}
+
+func TestBuildDerivedViewColumnsPreservesNamesAndDisablesCache(t *testing.T) {
+	f := newViewSchemaTestFixture(t)
+	r := NewViewMetadataRequest(t.Context(), f.provider)
+	defer r.Close()
+	compiler := &viewMetadataTestCompiler{viewSchemaTestCompiler: f.compiler, ctx: r.Context()}
+	for _, name := range []string{ViewColumnsFunctionName, SubscriptionViewColumnsFunctionName} {
+		builder := NewQueryBuilder(planpb.Query_SELECT, compiler, false, true)
+		builder.persistedViewTarget = objectkey.Encode("information_schema", "columns")
+		ctx := NewBindContext(builder, nil)
+		tf := &tree.TableFunction{Func: &tree.FuncExpr{FuncName: tree.NewCStr(name, 1)}}
+		args := []*Expr{makePlan2StringConstExprWithType("database"), makePlan2StringConstExprWithType("view_name"), makePlan2Uint64ConstExprWithType(10)}
+		nodeID, err := builder.buildViewColumns(tf, ctx, args, nil)
+		require.NoError(t, err)
+		node := builder.qry.Nodes[nodeID]
+		require.True(t, node.NotCacheable)
+		for _, arg := range node.TblFuncExprList[:2] {
+			require.Equal(t, int32(types.MaxVarcharLen), arg.Typ.Width)
+		}
+		_, err = builder.buildViewColumns(tf, ctx, args[:1], nil)
+		require.Error(t, err)
+		builder.persistedViewTarget = ""
+		_, err = builder.buildViewColumns(tf, ctx, args, nil)
+		require.ErrorContains(t, err, "private to information_schema")
+	}
 }

@@ -31,18 +31,18 @@ insert into generated_values(id, src, payload, v) values
 create index generated_idx using ivfflat on generated_values(v)
 lists=1 op_type 'vector_l2_ops' include(ginclude);
 select id, ginclude from generated_values
-order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=include';
+order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=iterative';
 update generated_values set src = 3 where id = 1;
 select id, ginclude from generated_values
-order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=include';
+order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=iterative';
 insert into generated_values(id, src, payload, v) values (1, 9, 30, '[0,0]')
 on duplicate key update payload = values(payload);
 select id, ginclude from generated_values
-order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=include';
+order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=iterative';
 insert into generated_values(id, src, payload, v) values (1, 4, 40, '[0,0]')
 on duplicate key update src = values(src);
 select id, ginclude from generated_values
-order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=include';
+order by l2_distance(v, '[0,0]') limit 2 by rank with option 'mode=iterative';
 select id, ginclude from generated_values order by id;
 drop table generated_values;
 

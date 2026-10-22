@@ -176,6 +176,11 @@ func newReaderWithParam(param *tree.ExternParam, reader io.ReadCloser) (*csvpars
 		Comment: "",
 	}
 
+	if param.Format == tree.JSONLINE {
+		config.SkipWhitespaceRecords = true
+		config.Context = param.Ctx
+	}
+
 	return csvparser.NewCSVParser(&config, bufio.NewReader(reader), csvparser.ReadBlockSize, false)
 }
 
@@ -210,9 +215,8 @@ func IgnoredLines(param *tree.ExternParam, ctx CompilerContext) (offset int64, e
 		return 0, err
 	}
 
-	var lastRow []csvparser.Field
 	for skipLines > 0 {
-		lastRow, err = csvReader.Read(lastRow)
+		err = csvReader.ScanRecord()
 		if err != nil {
 			if err == io.EOF {
 				param.Tail.IgnoredLines = 0
@@ -705,7 +709,10 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 	}
 
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
-	builder.checkLoadPrimaryKey = loadChecksPrimaryKey(stmt, originTableDef)
+	builder.checkLoadPrimaryKey, err = loadPrimaryKeyCheckEnabled(ctx, stmt, originTableDef)
+	if err != nil {
+		return nil, err
+	}
 	bindCtx := NewBindContext(builder, nil)
 	terminated := ","
 	enclosedBy := []byte("\"")
@@ -829,7 +836,7 @@ func buildLoad(stmt *tree.Load, ctx CompilerContext, isPrepareStmt bool) (*Plan,
 			return nil, err
 		}
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil)
+		err = buildInsertPlans(ctx, builder, bindCtx, nil, objRef, newTableDef, lastNodeId, ifExistAutoPkCol, nil, nil, tree.IsIgnoreStatement(stmt))
 		if err != nil {
 			return nil, err
 		}

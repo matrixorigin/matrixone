@@ -16,6 +16,7 @@ package frontend
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,31 +78,94 @@ func TestBackSessionInheritsForeignKeyChecks(t *testing.T) {
 	require.Equal(t, int8(0), value)
 }
 
-func TestBackSessionInheritsHnswFeatureGate(t *testing.T) {
+func TestBackSessionInheritsPlanningSettings(t *testing.T) {
 	ctx := context.Background()
-	ses := newFeatureLimitTestSession(t)
-	parent := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
-	child := &backSession{parentBackSession: parent}
+	for _, name := range []string{"experimental_hnsw_index", "mo_pk_check_by_cn"} {
+		t.Run(name, func(t *testing.T) {
+			ses := newFeatureLimitTestSession(t)
+			parent := &backSession{feSessionImpl: feSessionImpl{upstream: ses}}
+			child := &backSession{parentBackSession: parent}
+			for _, backSes := range []*backSession{parent, child} {
+				value, err := backSes.GetSessionSysVar(name)
+				require.NoError(t, err)
+				require.Equal(t, int8(0), value, "new owning sessions default OFF")
+			}
+			for _, enabled := range []int64{1, 0, 1} {
+				require.NoError(t, ses.SetSessionSysVar(ctx, name, enabled))
+				for _, backSes := range []*backSession{parent, child} {
+					value, err := backSes.GetSessionSysVar(strings.ToUpper(name))
+					require.NoError(t, err)
+					require.Equal(t, int8(enabled), value)
+				}
+			}
 
-	for _, enabled := range []int64{1, 0, 1} {
-		require.NoError(t, ses.SetSessionSysVar(ctx, "experimental_hnsw_index", enabled))
-		for _, backSes := range []*backSession{parent, child} {
-			value, err := backSes.GetSessionSysVar("EXPERIMENTAL_HNSW_INDEX")
+			// A direct owner takes precedence over a differently configured parent.
+			other := newFeatureLimitTestSession(t)
+			child.upstream = other
+			value, err := child.GetSessionSysVar(name)
 			require.NoError(t, err)
-			require.Equal(t, int8(enabled), value)
-		}
+			require.Equal(t, int8(0), value)
+			// Independent background sessions keep their executor-default fallback.
+			value, err = (&backSession{}).GetSessionSysVar(name)
+			require.NoError(t, err)
+			require.Nil(t, value)
+			// Caller settings do not change background transaction/SQL-mode overrides.
+			for name, want := range map[string]interface{}{"autocommit": true, "sql_mode": "", "lower_case_table_names": int64(1)} {
+				value, err := child.GetSessionSysVar(name)
+				require.NoError(t, err)
+				require.Equal(t, want, value)
+			}
+		})
 	}
+}
 
-	// Independent background sessions keep their executor-default fallback.
-	value, err := (&backSession{}).GetSessionSysVar("experimental_hnsw_index")
+// TestBackSessionInheritsLowerCaseTableNames pins the persisted-case mode a
+// background parse and compile must resolve identifier case with. Publication
+// binding probes re-parse a stored view definition inside this session, and
+// the marker's binding machinery reads exactly this variable for its own
+// relation resolution, so the probe must inherit the validating session's
+// mode instead of assuming mode 1: on an instance running with
+// lower_case_table_names = 0 a probe that guesses mode 1 resolves a
+// case-distinct definition against the wrong catalog object, certifying a
+// different relation than the session and every subscriber resolve. Background
+// sessions without an upstream keep the registered default, and a restore
+// replay keeps its own mode-0 parse context regardless of the upstream.
+func TestBackSessionInheritsLowerCaseTableNames(t *testing.T) {
+	modeZero := newFeatureLimitTestSession(t)
+	modeZero.sesSysVars = &SystemVariables{mp: map[string]interface{}{
+		"lower_case_table_names": int64(0),
+	}}
+	inheriting := &backSession{}
+	inheriting.upstream = modeZero
+
+	value, err := inheriting.GetSessionSysVar("lower_case_table_names")
 	require.NoError(t, err)
-	require.Nil(t, value)
-	// The feature gate does not change background transaction/SQL-mode overrides.
-	for name, want := range map[string]interface{}{"autocommit": true, "sql_mode": "", "lower_case_table_names": int64(1)} {
-		value, err := child.GetSessionSysVar(name)
-		require.NoError(t, err)
-		require.Equal(t, want, value)
-	}
+	require.Equal(t, int64(0), value,
+		"a background probe inherits the upstream session's case mode")
+
+	defaultBackSes := &backSession{}
+	value, err = defaultBackSes.GetSessionSysVar("lower_case_table_names")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), value,
+		"a background session without an upstream keeps the registered default mode")
+
+	modeOne := newFeatureLimitTestSession(t)
+	inheritingOne := &backSession{}
+	inheritingOne.upstream = modeOne
+
+	value, err = inheritingOne.GetSessionSysVar("lower_case_table_names")
+	require.NoError(t, err)
+	require.Equal(t, int64(1), value,
+		"an upstream at the registered default still resolves mode 1")
+
+	restore := &backSession{}
+	restore.upstream = modeOne
+	restore.SetRestore(true)
+
+	value, err = restore.GetSessionSysVar("lower_case_table_names")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), value,
+		"a restore replay keeps its own mode-0 parse context")
 }
 
 func TestBackSessionDelegatesWarningRetentionLimit(t *testing.T) {

@@ -73,20 +73,23 @@ v114 for native Unicode UNIQUE keys, v115 for calendar intervals, and
 v116 for SELECT scalar division warning diagnostics, v117 for collation-aware
 LEAST/GREATEST, and v118 for table-collation execution.
 Those workers do not implement exact JSON or standard Parquet VARIANT reads;
-the independent feature floor is therefore v120 after main synchronization.
+main additionally allocates v120–v128 for session authorization, DECIMAL DIV,
+temporal results, lock admission, TIMESTAMPADD, LOAD FK diagnostics, VIEWS,
+TopK and mixed JSON/numeric comparisons. The independent feature floor is
+therefore v129 after main synchronization.
 
-MORPC v120 identifies two independent contracts: bound `JSON_PARSE_EXACT`
-identity 601, and existing JSON-to-DECIMAL64/128 CAST semantics. Executors
+MORPC v129 identifies two independent contracts: bound `JSON_PARSE_EXACT`
+identity 605, and existing JSON-to-DECIMAL64/128 CAST semantics. Executors
 sharing the JSON scalar cast path are covered. A JSON column cast needs this
 floor even without the parser in its query. FLOAT conversion and
 JSON-to-DECIMAL256 retain their unchanged contracts.
 
 Fresh compilation and cached execution recheck the current local floor before
-execution. At v120 or newer, this is a constant-time check without a plan walk;
+execution. At v129 or newer, this is a constant-time check without a plan walk;
 below that floor, only affected exact-JSON expressions or Parquet scans reject.
 Local placement avoids a second Parquet metadata parse.
 
-The unmerged historical parser identity 599 and floor 117 are not aliases of the
+The unmerged historical parser identities 599/601 and floors 117/120 are not aliases of the
 current ABI. Existing development catalog expressions from that branch must be
 rebound or rebuilt through their catalog owner before reuse.
 
@@ -95,11 +98,11 @@ when a worker is old or unknown. The sender checks actual identity/address again
 before emitting a payload; the receiver recomputes requirements after decoding.
 Parent cancellation and a coordinator floor lowered during the probe cannot
 authorize a send. Observations do not survive another execution/send. Durable
-expression admission also requires v120; view requirements are captured before
+expression admission also requires v129; view requirements are captured before
 constant folding.
 
 Readers discover Parquet logical annotations after placement, so all Parquet
-file scans conservatively use the same v120 reader floor and stay on the
+file scans conservatively use the same v129 reader floor and stay on the
 coordinator when workers are unsupported. CSV/JSON/Arrow retain their own
 contracts; Kafka, MongoDB, Iceberg, foreign and datastream metadata retain their
 existing owners. Frontend export is coordinator owned; input expressions obey
@@ -107,12 +110,12 @@ the expression gates.
 
 Protocol tests cover bound identities, wire round trips, controls, worker
 placement/replacement, cancellation, failed probes and persisted owners/views.
-A real two-CN SQL test forces multi-CN placement, advertises v118 on a current
+A real two-CN SQL test forces multi-CN placement, advertises v128 on a current
 worker and requires its address to be absent from exact-query execution; with
-v120 restored, that address must occur in distributed execution. Historical
+v129 restored, that address must occur in distributed execution. Historical
 native worker-wire tests at pre-feature main reproduce missing function 598
 (the parser identity at that revision) and decimal rounding, with `0.125`
-as a control. The current worker-wire test pins the new parser identity 601. The advertisement test does not
+as a control. The current worker-wire test pins the new parser identity 605. The advertisement test does not
 deploy an older CN binary.
 
 A separate older-binary startup attempt against a newly initialized v113

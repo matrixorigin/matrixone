@@ -940,3 +940,20 @@ func TestInternalCompilerForeignKeyChecks(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, enabled, "explicit internal ignore takes precedence over session resolver")
 }
+
+func TestInternalCompilerLoadPrimaryKeyPolicy(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	compiler := &compilerContext{ctx: context.Background(), proc: proc}
+	for _, value := range []any{nil, int8(0), int8(1)} {
+		proc.SetResolveVariableFunc(func(name string, system, global bool) (any, error) {
+			require.Equal(t, "mo_pk_check_by_cn", name)
+			require.True(t, system)
+			require.False(t, global)
+			return value, nil
+		})
+		got, err := compiler.ResolveVariable("mo_pk_check_by_cn", true, false)
+		require.NoError(t, err)
+		require.Equal(t, value, got)
+	}
+}

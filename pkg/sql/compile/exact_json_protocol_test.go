@@ -34,7 +34,7 @@ import (
 )
 
 // Pin the semantic capability independently of the current latest version.
-const exactJSONTestProtocol int64 = 120
+const exactJSONTestProtocol int64 = 129
 
 func boundExactJSONProtocolExpressions(t *testing.T) map[string]*planpb.Expr {
 	t.Helper()
@@ -118,7 +118,7 @@ func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
 				c.cnList = engine.Nodes{{Id: "old-worker", Addr: "remote:6001", Mcpu: 4}}
 				require.NoError(t, c.constrainRemoteExpressionWorkers(qry))
 			}
-			for _, old := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118} {
+			for _, old := range []int64{defines.MORPCVersion111, defines.MORPCVersion112, defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128} {
 				place(old)
 				require.Equal(t, plan2.ExecTypeAP_ONECN, c.execType)
 				require.Len(t, c.cnList, 1)
@@ -135,7 +135,7 @@ func TestExactJSONProtocolPlacementSendAndReceive(t *testing.T) {
 			wire := new(pipeline.Pipeline)
 			require.NoError(t, wire.Unmarshal(data))
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, exactJSONTestProtocol-1)
-			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 120")
+			require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(c.proc, wire), "version 129")
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, exactJSONTestProtocol)
 			require.NoError(t, validateRemoteExpressionPipelineProtocol(c.proc, wire))
 			// Replace the worker after successful placement: no observation is cached.
@@ -299,15 +299,15 @@ func TestExactJSONLocalAndCachedAdmission(t *testing.T) {
 			require.NoError(t, validateExactJSONProtocol(c.proc, pn))
 			require.Zero(t, testing.AllocsPerRun(10, func() { require.NoError(t, validateExactJSONProtocol(c.proc, pn)) }))
 			c.pn = pn
-			for _, version := range []any{exactJSONTestProtocol - 1, nil, "120"} {
+			for _, version := range []any{exactJSONTestProtocol - 1, nil, "129"} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-				require.ErrorContains(t, c.Compile(t.Context(), pn, nil), "protocol version 120")
+				require.ErrorContains(t, c.Compile(t.Context(), pn, nil), "protocol version 129")
 				_, err := c.Run(0)
-				require.ErrorContains(t, err, "protocol version 120", "cached execution must recheck a closed floor")
+				require.ErrorContains(t, err, "protocol version 129", "cached execution must recheck a closed floor")
 			}
 		})
 	}
 	plain := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{plan2.MakePlan2Int64ConstExprWithType(1)}}}}}}
 	require.NoError(t, validateExactJSONProtocol(nil, plain), "unrelated local plans retain their original contract")
-	require.ErrorContains(t, validateExactJSONProtocol(nil, owners["parse"]), "protocol version 120")
+	require.ErrorContains(t, validateExactJSONProtocol(nil, owners["parse"]), "protocol version 129")
 }

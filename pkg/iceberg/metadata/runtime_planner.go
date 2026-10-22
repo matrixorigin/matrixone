@@ -22,6 +22,7 @@ import (
 	icebergcatalog "github.com/matrixorigin/matrixone/pkg/iceberg/catalog"
 	icebergio "github.com/matrixorigin/matrixone/pkg/iceberg/io"
 	"github.com/matrixorigin/matrixone/pkg/iceberg/model"
+	icebergref "github.com/matrixorigin/matrixone/pkg/iceberg/ref"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"go.uber.org/zap"
 )
@@ -57,6 +58,10 @@ func (p RuntimeScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanReques
 	if p.ObjectReader == nil {
 		return nil, api.NewError(api.ErrConfigInvalid, "Iceberg runtime scan planner requires object reader factory", nil)
 	}
+	req, refSpec, refDisplay, err := normalizeRuntimeReadRef(req)
+	if err != nil {
+		return nil, err
+	}
 	catalogClient, err := p.CatalogFactory.NewClient(ctx, req.Catalog)
 	if err != nil {
 		return nil, err
@@ -64,8 +69,7 @@ func (p RuntimeScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanReques
 	if validator := combineCatalogValidators(p.CatalogValidator, req.CatalogValidator); validator != nil {
 		catalogClient = validatingCatalogClient{upstream: catalogClient, validator: validator}
 	}
-	var refDisplay string
-	req, refDisplay, err = p.resolveCatalogPrefix(ctx, catalogClient, req)
+	req, err = p.resolveCatalogPrefix(ctx, catalogClient, req, refSpec)
 	if err != nil {
 		return nil, err
 	}
@@ -126,31 +130,62 @@ func (p RuntimeScanPlanner) PlanScan(ctx context.Context, req api.ScanPlanReques
 	return scanPlan, nil
 }
 
-func (p RuntimeScanPlanner) resolveCatalogPrefix(ctx context.Context, client api.CatalogClient, req api.ScanPlanRequest) (api.ScanPlanRequest, string, error) {
+// Interpret user-facing typed refs once, before credential IO and local/server
+// dispatch. LocalScanPlanner receives canonical table refs or explicit selectors.
+// Keep the parsed spec for catalog routing: a name such as "snapshot:11" inside
+// "branch:snapshot:11" must not be parsed a second time.
+func normalizeRuntimeReadRef(req api.ScanPlanRequest) (api.ScanPlanRequest, icebergref.Spec, string, error) {
+	raw := strings.TrimSpace(req.Ref)
+	if raw == "" {
+		raw = strings.TrimSpace(req.Snapshot.RefName)
+	}
+	spec, err := icebergref.ParseNessieRef(raw, nil)
+	if err != nil {
+		return req, icebergref.Spec{}, "", err
+	}
+	refName := spec.Name
+	switch spec.Type {
+	case icebergref.TypeSnapshot:
+		refName = model.DefaultRefMain
+		// SQL time travel overrides the mapping's default selector.
+		if !req.Snapshot.HasSnapshotID && !req.Snapshot.HasTimestampMS {
+			req.Snapshot.SnapshotID = spec.SnapshotID
+			req.Snapshot.HasSnapshotID = true
+		}
+	case icebergref.TypeHash:
+		// Only Nessie has a catalog-level detached-commit representation.
+		// Preserve the existing lookup behavior when no Nessie routing occurs.
+		refName = raw
+	}
+	req.Ref = refName
+	req.Snapshot.RefName = refName
+	req.Snapshot.AllowMainFallback = refName == model.DefaultRefMain
+	return req, spec, raw, nil
+}
+
+func (p RuntimeScanPlanner) resolveCatalogPrefix(ctx context.Context, client api.CatalogClient, req api.ScanPlanRequest, refSpec icebergref.Spec) (api.ScanPlanRequest, error) {
 	if client == nil || strings.TrimSpace(req.Prefix) != "" {
-		return req, "", nil
+		return req, nil
 	}
 	resp, err := client.GetConfig(ctx, api.GetConfigRequest{
 		CatalogRequest: req.CatalogRequest,
 		Warehouse:      req.Catalog.Warehouse,
 	})
 	if err != nil {
-		return req, "", err
+		return req, err
 	}
 	if resp != nil && strings.TrimSpace(resp.Prefix) != "" {
 		req.Prefix = strings.TrimSpace(resp.Prefix)
 	}
-	refDisplay := ""
 	if resp != nil && isNessieCatalogConfig(resp) {
-		if rewritten, display, ok := rewriteNessieRefPrefix(req.Prefix, req.Ref, req.Snapshot.RefName); ok {
+		if rewritten, ok := rewriteNessieRefPrefix(req.Prefix, refSpec); ok {
 			req.Prefix = rewritten
 			req.Ref = ""
 			req.Snapshot.RefName = model.DefaultRefMain
 			req.Snapshot.AllowMainFallback = true
-			refDisplay = display
 		}
 	}
-	return req, refDisplay, nil
+	return req, nil
 }
 
 func isNessieCatalogConfig(resp *api.ConfigResponse) bool {
@@ -168,49 +203,28 @@ func isNessieCatalogConfig(resp *api.ConfigResponse) bool {
 	return false
 }
 
-func rewriteNessieRefPrefix(prefix, requestRef, selectorRef string) (string, string, bool) {
-	ref := strings.TrimSpace(requestRef)
-	if ref == "" {
-		ref = strings.TrimSpace(selectorRef)
+func rewriteNessieRefPrefix(prefix string, spec icebergref.Spec) (string, bool) {
+	refName := spec.Name
+	switch spec.Type {
+	case icebergref.TypeSnapshot:
+		// Snapshot IDs select Iceberg table history, not a catalog reference.
+		return prefix, false
+	case icebergref.TypeHash:
+		// Nessie encodes detached commits as @<hash>, not bare names.
+		refName = "@" + spec.Hash
 	}
-	if ref == "" || ref == model.DefaultRefMain {
-		return prefix, "", false
-	}
-	refName := nessieRefName(ref)
 	if refName == "" || refName == model.DefaultRefMain {
-		return prefix, "", false
+		return prefix, false
 	}
 	parts := strings.SplitN(strings.TrimSpace(prefix), "|", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[1]) == "" {
 		plainPrefix := strings.TrimSpace(prefix)
 		if plainPrefix == "" || plainPrefix == model.DefaultRefMain {
-			return refName, ref, true
+			return refName, true
 		}
-		return prefix, "", false
+		return prefix, false
 	}
-	return refName + "|" + parts[1], ref, true
-}
-
-func nessieRefName(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	if typ, value, ok := strings.Cut(raw, ":"); ok {
-		switch strings.ToLower(strings.TrimSpace(typ)) {
-		case "branch", "tag":
-			return strings.TrimSpace(value)
-		case "hash":
-			value = strings.TrimSpace(value)
-			if value == "" {
-				return ""
-			}
-			// Nessie encodes a detached commit in a REST prefix as @<hash>.
-			// A bare hash is parsed as a named reference instead.
-			return "@" + value
-		}
-	}
-	return raw
+	return refName + "|" + parts[1], true
 }
 
 func (p RuntimeScanPlanner) reportScanMetrics(ctx context.Context, client api.CatalogClient, req api.ScanPlanRequest, plan *api.IcebergScanPlan) {

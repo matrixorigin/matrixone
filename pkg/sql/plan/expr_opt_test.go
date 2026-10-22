@@ -17,16 +17,87 @@ package plan
 import (
 	"math"
 	"testing"
+	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/stretchr/testify/require"
 )
+
+func TestDoMergeFiltersOnCompositeKeyTemporalDomains(t *testing.T) {
+	for _, zone := range []*time.Location{time.UTC, time.FixedZone("UTC+8", 8*3600)} {
+		for _, peerType := range []types.T{types.T_datetime, types.T_timestamp} {
+			t.Run(zone.String()+"/"+peerType.String(), func(t *testing.T) {
+				proc := newPlanTestProcess(t)
+				proc.GetSessionInfo().TimeZone = zone
+				ctx := NewMockCompilerContext(true, proc)
+				builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+				tag := builder.genNewBindTag()
+				typ := types.New(types.T_timestamp, 0, 6)
+				col := makeExprOptInt64Col(tag, 0, "a")
+				col.Typ = makePlan2Type(&typ)
+				table := makeExprOptCompositeSortKeyTableDef()
+				table.Pkey.Names = []string{"a"}
+				table.Pkey.PkeyColName = "a"
+				table.Cols[0].Typ = col.Typ
+				values := []string{"2024-01-01 00:20:00.123456", "2024-01-01 00:30:00.654321"}
+				arms := make([]*planpb.Expr, len(values))
+				for i, value := range values {
+					rhs, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "timestamp", []*planpb.Expr{makePlan2StringConstExprWithType(value)})
+					require.NoError(t, err)
+					if peerType == types.T_timestamp {
+						rhs, err = appendCastBeforeExpr(ctx.GetContext(), rhs, col.Typ)
+						require.NoError(t, err)
+					}
+					arms[i], err = BindFuncExprImplByPlanExpr(ctx.GetContext(), "=", []*planpb.Expr{DeepCopyExpr(col), rhs})
+					require.NoError(t, err)
+				}
+				filter, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), "or", arms)
+				require.NoError(t, err)
+				merged := builder.doMergeFiltersOnCompositeKey(table, tag, filter)
+				require.Len(t, merged, 1)
+				wantFunc := "or"
+				if peerType == types.T_timestamp {
+					wantFunc = "in"
+				}
+				require.Equal(t, wantFunc, merged[0].GetF().Func.ObjName)
+				// Repeated optimization and folding must retain the same domain.
+				merged = builder.doMergeFiltersOnCompositeKey(table, tag, merged...)
+				folded, err := ConstantFold(batch.EmptyForConstFoldBatch, merged[0], proc, false, true)
+				require.NoError(t, err)
+				if peerType == types.T_timestamp {
+					rhs := folded.GetF().Args[1]
+					require.NotNil(t, rhs.GetVec())
+					decoded := vector.NewVec(types.T_any.ToType())
+					defer decoded.Free(proc.Mp())
+					require.NoError(t, decoded.UnmarshalBinary(rhs.GetVec().Data))
+					require.Equal(t, typ, *decoded.GetType())
+				}
+				input := batch.NewWithSize(1)
+				input.Vecs[0] = vector.NewVec(typ)
+				defer input.Clean(proc.Mp())
+				for _, value := range append(values, "2024-01-01 00:40:00.123456") {
+					stamp, err := types.ParseTimestamp(zone, value, 6)
+					require.NoError(t, err)
+					require.NoError(t, vector.AppendFixed(input.Vecs[0], stamp, false, proc.Mp()))
+				}
+				input.SetRowCount(3)
+				executor, err := colexec.NewExpressionExecutor(proc, folded)
+				require.NoError(t, err)
+				defer executor.Free()
+				result, err := executor.Eval(proc, []*batch.Batch{input}, nil)
+				require.NoError(t, err)
+				require.Equal(t, []bool{true, true, false}, vector.MustFixedColWithTypeCheck[bool](result))
+			})
+		}
+	}
+}
 
 func TestDoMergeFiltersOnCompositeKeyKeepsNonSortKeyRanges(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
@@ -43,6 +114,162 @@ func TestDoMergeFiltersOnCompositeKeyKeepsNonSortKeyRanges(t *testing.T) {
 	require.Len(t, ret, 3)
 	requireFuncNames(t, ret, ">", "<")
 	requireNoFuncNames(t, ret, "in_range", "between")
+}
+
+// Equality/range serializations and OR-to-IN require a common physical key
+// domain. Preserve typed JSON/numeric predicates at every admission boundary.
+func TestDoMergeFiltersOnCompositeKeyKeepsJSONNumericPredicates(t *testing.T) {
+	for _, key := range []struct {
+		name  string
+		table *planpb.TableDef
+	}{
+		{"primary", makeExprOptCompositeSortKeyTableDef()},
+		{"cluster", makeExprOptCompositeClusterKeyTableDef()},
+	} {
+		for _, tc := range []struct {
+			name         string
+			part         int32
+			reversed     bool
+			lower, upper string
+		}{
+			{"equality_first", 0, false, "", ""},
+			{"equality_second", 1, false, "", ""},
+			{"equality_reversed", 1, true, "", ""},
+			{"strict_range", 1, false, ">", "<"},
+			{"inclusive_range", 1, false, ">=", "<="},
+			{"reversed_range", 1, true, ">", "<="},
+			{"leading_range", 0, false, ">", "<"},
+		} {
+			t.Run(key.name+"/"+tc.name, func(t *testing.T) {
+				ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+				builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+				tag := builder.genNewBindTag()
+				jsonValue := func(text string) *planpb.Expr {
+					v, err := types.ParseStringToByteJson(text)
+					require.NoError(t, err)
+					b, err := types.EncodeJson(v)
+					require.NoError(t, err)
+					return &planpb.Expr{Typ: types.T_json.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: string(b)}}}}
+				}
+				bind := func(op string, left, right *planpb.Expr) *planpb.Expr {
+					if tc.reversed {
+						left, right = right, left
+						switch op {
+						case ">":
+							op = "<"
+						case ">=":
+							op = "<="
+						case "<":
+							op = ">"
+						case "<=":
+							op = ">="
+						}
+					}
+					e, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), op, []*planpb.Expr{left, right})
+					require.NoError(t, err)
+					return e
+				}
+				var residuals []*planpb.Expr
+				col := func() *planpb.Expr { return makeExprOptInt64Col(tag, tc.part, key.table.Cols[tc.part].Name) }
+				if tc.lower == "" {
+					residuals = []*planpb.Expr{bind("=", col(), jsonValue("1"))}
+				} else {
+					residuals = []*planpb.Expr{bind(tc.lower, col(), jsonValue("1.5")), bind(tc.upper, col(), jsonValue("2.5"))}
+					for _, e := range residuals {
+						ref, _ := classifyRangeBound(e.GetF())
+						require.Nil(t, ref, "mixed bounds cannot participate in index range pairing")
+					}
+				}
+				// A safe ordinary first component can still provide a prefix,
+				// while no mixed component may be serialized or consumed.
+				filters := append([]*planpb.Expr{}, residuals...)
+				other := int32(1) - tc.part
+				filters = append(filters, makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, other, key.table.Cols[other].Name), 1))
+				snapshots := DeepCopyExprList(residuals)
+				ret := builder.doMergeFiltersOnCompositeKey(key.table, tag, filters...)
+				for n, expr := range residuals {
+					require.Contains(t, ret, expr)
+					require.Equal(t, snapshots[n], expr, "no narrowing cast or operand mutation")
+				}
+				for _, expr := range ret {
+					require.NoError(t, planpb.VisitExprTree(expr, func(e *planpb.Expr) error {
+						if f := e.GetF(); f != nil && f.Func.ObjName == "serial" {
+							for _, arg := range f.Args {
+								require.NotEqual(t, int32(types.T_json), arg.Typ.Id)
+							}
+						}
+						return nil
+					}))
+				}
+			})
+		}
+	}
+}
+
+func TestDoMergeFiltersOnCompositeKeyMergesOnlyCompatibleOrArms(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		e, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return e
+	}
+	jsonValue := func(text string) *planpb.Expr {
+		v, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		b, err := types.EncodeJson(v)
+		require.NoError(t, err)
+		return &planpb.Expr{Typ: types.T_json.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: string(b)}}}}
+	}
+	col := func() *planpb.Expr { return makeExprOptInt64Col(tag, 2, "c") }
+	for _, tc := range []struct {
+		name           string
+		reversed, pure bool
+		numericArms    int
+	}{
+		{"mixed", false, false, 0}, {"reversed", true, false, 0},
+		{"mixed_and_pure", false, false, 2}, {"pure_control", false, true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var arms, residuals []*planpb.Expr
+			if !tc.pure {
+				for _, value := range []string{"1.5", "2.5"} {
+					left, right := col(), jsonValue(value)
+					if tc.reversed {
+						left, right = right, left
+					}
+					e := bind("=", left, right)
+					arms = append(arms, e)
+					residuals = append(residuals, e)
+				}
+			}
+			for i := range tc.numericArms {
+				arms = append(arms, bind("=", col(), MakePlan2Int64ConstExprWithType(int64(i+1))))
+			}
+			expr := bind("or", arms...)
+			ret := builder.doMergeFiltersOnCompositeKey(makeExprOptCompositeSortKeyTableDef(), tag, expr)
+			require.Len(t, ret, 1)
+			if tc.pure {
+				require.Equal(t, "in", ret[0].GetF().Func.ObjName)
+			} else {
+				require.Equal(t, "or", ret[0].GetF().Func.ObjName)
+				var remaining []*planpb.Expr
+				flattenLogicalExpressions(ret[0], "or", &remaining)
+				for _, original := range residuals {
+					require.Contains(t, remaining, original)
+				}
+			}
+			require.NoError(t, planpb.VisitExprTree(ret[0], func(e *planpb.Expr) error {
+				if f := e.GetF(); f != nil && f.Func.ObjName == "in" {
+					for _, value := range f.Args[1].GetList().List {
+						require.True(t, isSameColumnType(f.Args[0].Typ, value.Typ))
+					}
+				}
+				return nil
+			}))
+		})
+	}
 }
 
 func TestDoMergeFiltersOnCompositeKeyKeepsNativeUnicodePredicates(t *testing.T) {

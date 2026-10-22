@@ -133,7 +133,7 @@ c1    c2
 5    f
 8    h
 insert into atomic_table_13 values (6,"h");
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 commit;
 show create table atomic_table_13;
 Table    Create Table
@@ -148,7 +148,7 @@ alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references at
 begin;
 alter table atomic_table_13 drop foreign key ffa;
 insert into atomic_table_13 values (8,"h");
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from atomic_table_13;
 c1    c2
 3    d
@@ -168,7 +168,7 @@ alter table atomic_table_13 add constraint ffa foreign key f_a(c1) references at
 begin;
 alter table atomic_table_13 drop foreign key ffa;
 insert into atomic_table_13 values (8,"h");
-internal error: Cannot add or update a child row: a foreign key constraint fails
+Cannot add or update a child row: a foreign key constraint fails
 select * from atomic_table_13;
 c1    c2
 3    d
