@@ -49,6 +49,15 @@ type Request struct {
 	// scan carries no candidate limit.
 	ResultLimit     uint64
 	CandidateBudget uint64
+	// InternalTopK is the internal top-k of the search: BY RANK option itopk, else
+	// the session variable vector_itopk; 0 when unset. CandidateBudget is at least it.
+	InternalTopK uint64
+	// MaxInternalTopK caps InternalTopK while a search widens: BY RANK option
+	// max_itopk, else vector_max_itopk; 0 when unset.
+	MaxInternalTopK uint64
+	// MaxNprobe is the session variable vector_max_nprobe; an IVF search uses
+	// its algo_options max_nprobe first. 0 when unset.
+	MaxNprobe uint64
 	// AlgoValues are the evaluated IndexSearchScan.AlgoExprs, by name, for this
 	// search. Only the index algorithm that declared them interprets them.
 	AlgoValues       []AlgoValue
@@ -116,6 +125,65 @@ type EmptyScanHooks interface {
 // requested by SQL JSON and explicit VERBOSE text; compact text stays stable.
 type ExplainHooks interface {
 	ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]string, error)
+}
+
+// MembershipHooks optionally reports that the search applies a membership key
+// set (Request.MembershipFilter) inside the index search, so the planner may
+// build the PRE shape and serve a fulltext MATCH or membership join with it.
+type MembershipHooks interface {
+	SupportsMembership() bool
+}
+
+// IndexFilterHooks optionally reports that the search evaluates filters on
+// INCLUDE columns and the primary key itself, inside the index search, so
+// mode=pre and mode=iterative apply to it without a membership key set.
+type IndexFilterHooks interface {
+	SupportsIndexFilter() bool
+}
+
+// ProbeKnobsHooks optionally reports that the search probes inverted lists, so
+// the BY RANK options nprobe and max_nprobe apply to it.
+type ProbeKnobsHooks interface {
+	SupportsProbeKnobs() bool
+}
+
+// InternalTopKLimitHooks optionally reports the largest internal top-k one search
+// accepts; itopk and max_itopk above it are rejected.
+type InternalTopKLimitHooks interface {
+	MaxInternalTopKLimit() uint64
+}
+
+// Round is one search round of an iterative search: the internal top-k it requests and,
+// for an IVF index, the lists it probes after those of earlier rounds (0 for a graph
+// index).
+type Round struct {
+	ITopK  uint64
+	NProbe uint64
+}
+
+// SearchStats is what the caller of an iterative-search policy knows about the search; a
+// zero field is unknown.
+type SearchStats struct {
+	// IndexRows is the number of indexed rows.
+	IndexRows uint64
+	// Members is the number of keys of the membership filter.
+	Members uint64
+	// Lists is the number of lists of an IVF index.
+	Lists uint64
+	// Probed is the number of lists the earlier rounds of an IVF search probed.
+	Probed uint64
+}
+
+// IterativeSearchHooks optionally describes the widening policy of an algorithm: the round
+// a search starts with and the round after one that returned too few rows. The
+// algorithm's membership (pre) search runs these rounds itself. The search of each round
+// is the algorithm's regular search.
+type IterativeSearchHooks interface {
+	StartRound(spec *plan.IndexSearchScan, req Request, stats SearchStats) Round
+	// NextRound returns the round after prev and false when the search stops: got reached
+	// its target, or the caps or the index are exhausted. got is the rows of prev for a
+	// search that restarts each round, and of all rounds for one that continues.
+	NextRound(spec *plan.IndexSearchScan, req Request, stats SearchStats, prev Round, got uint64) (Round, bool)
 }
 
 // CandidateBudgetHooks optionally sizes the candidate budget of a scan whose

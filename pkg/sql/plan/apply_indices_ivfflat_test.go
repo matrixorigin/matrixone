@@ -563,11 +563,11 @@ func TestCalculateAdaptiveNprobe(t *testing.T) {
 // TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate verifies that
 // the resolved AUTO parameters and INCLUDE coverage reach the final POST scan.
 func TestPrepareIvfIndexContext_AdaptiveNprobeAndFinalPostCandidate(t *testing.T) {
-	for _, nprobe := range []int64{0, 4} {
+	for _, nprobe := range []uint64{0, 4} {
 		t.Run(fmt.Sprintf("nprobe=%d", nprobe), func(t *testing.T) {
 			baseProbe := int64(10)
 			if nprobe != 0 {
-				baseProbe = nprobe
+				baseProbe = int64(nprobe)
 			}
 			baseMockCtx := NewMockCompilerContext(true, newPlanTestProcess(t))
 			mockCtx := &customMockCompilerContext{

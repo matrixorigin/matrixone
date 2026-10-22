@@ -56,8 +56,9 @@ func TestCagraAlterTableCloneBehavior(t *testing.T) {
 	require.Empty(t, CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
-func TestCagraDefaultOptions(t *testing.T) {
-	got := CatalogHooks{}.DefaultOptions()
+func TestCagraParamsWithoutOptions(t *testing.T) {
+	got, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+	require.NoError(t, err)
 	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
 	require.Equal(t, metric.Quantization_F32_Str, got[catalog.Quantization])
 	require.Equal(t, vectorindex.DistributionMode_SINGLE_GPU_Str, got[catalog.DistributionMode])

@@ -32,6 +32,7 @@ type CreateView struct {
 	AsSource      *Select
 	IfNotExists   bool
 	Materialized  bool
+	CheckOption   string
 	RefreshMethod MaterializedViewRefreshMethod
 	RefreshTiming MaterializedViewRefreshTiming
 }
@@ -52,7 +53,7 @@ const (
 )
 
 func NewCreateMaterializedView(name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
-	node := NewCreateView(false, name, colNames, asSource, ifNotExists)
+	node := NewCreateView(false, name, colNames, asSource, ifNotExists, "")
 	node.Materialized = true
 	return node
 }
@@ -64,13 +65,14 @@ func NewCreateMaterializedViewWithRefresh(name *TableName, colNames IdentifierLi
 	return node
 }
 
-func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool) *CreateView {
+func NewCreateView(replace bool, name *TableName, colNames IdentifierList, asSource *Select, ifNotExists bool, checkOption string) *CreateView {
 	c := reuse.Alloc[CreateView](nil)
 	c.Replace = replace
 	c.Name = name
 	c.ColNames = colNames
 	c.AsSource = asSource
 	c.IfNotExists = ifNotExists
+	c.CheckOption = checkOption
 	return c
 }
 
@@ -119,6 +121,11 @@ func (node *CreateView) Format(ctx *FmtCtx) {
 	}
 	ctx.WriteString(" as ")
 	node.AsSource.Format(ctx)
+	if node.CheckOption != "" && node.CheckOption != "NONE" {
+		ctx.WriteString(" with ")
+		ctx.WriteString(node.CheckOption)
+		ctx.WriteString(" check option")
+	}
 }
 
 func (node *CreateView) reset() {
@@ -153,4 +160,20 @@ func (node *RefreshMaterializedView) Format(ctx *FmtCtx) {
 func (node *RefreshMaterializedView) Free()                    {}
 func (node RefreshMaterializedView) TypeName() string          { return "tree.RefreshMaterializedView" }
 func (node *RefreshMaterializedView) GetStatementType() string { return "Refresh Materialized View" }
-func (node *RefreshMaterializedView) GetQueryType() string     { return QueryTypeDDL }
+
+func WithViewColumnNames(stmt *Select, colNames IdentifierList) *Select {
+	if stmt == nil || len(colNames) == 0 {
+		return stmt
+	}
+	inner := NewSubquery(stmt, false)
+	derived := NewAliasedTableExpr(NewParenTableExpr(inner), "__mo_view_definition", colNames)
+	exprs := make(SelectExprs, len(colNames))
+	for i, colName := range colNames {
+		exprs[i] = SelectExpr{
+			Expr: NewUnresolvedName(NewCStr("__mo_view_definition", 0), NewCStr(string(colName), 0)),
+			As:   NewCStr(string(colName), 0),
+		}
+	}
+	return NewSelect(&SelectClause{Exprs: exprs, From: NewFrom(TableExprs{derived})}, nil, nil)
+}
+func (node *RefreshMaterializedView) GetQueryType() string { return QueryTypeDDL }

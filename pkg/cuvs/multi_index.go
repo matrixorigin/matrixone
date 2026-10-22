@@ -19,6 +19,7 @@
 package cuvs
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 )
@@ -30,7 +31,9 @@ import (
 // overflow quantizes B -> OB inside cuVS, so OB never appears in any signature.
 type BruteForceOverflow[B VectorType] interface {
 	SearchQuantizeAsync(queries []B, numQueries uint64, dimension uint32, limit uint32) (uint64, error)
-	SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, predsJSON string) (uint64, error)
+	SearchQuantizeWithFilterAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, predsJSON string, mem docfilter.CMembership) (uint64, error)
+	PrepareBitset(predsJSON string, mem docfilter.CMembership) (*Bitset, error)
+	SearchQuantizeWithBitsetAsync(queries []B, numQueries uint64, dimension uint32, limit uint32, bitset *Bitset) (uint64, error)
 	SearchWait(jobID uint64, numQueries uint64, limit uint32) ([]int64, []float32, error)
 	Cap() uint64
 	Len() uint64
@@ -158,6 +161,18 @@ type MultiGpuIvfPq[B VectorType, Q VectorType] struct {
 
 func NewMultiGpuIvfPq[B VectorType, Q VectorType](indices []*GpuIvfPq[B, Q], bruteForce BruteForceOverflow[B], dimension uint32, metric DistanceType) *MultiGpuIvfPq[B, Q] {
 	return &MultiGpuIvfPq[B, Q]{indices: indices, bruteForce: bruteForce, dimension: dimension, metric: metric}
+}
+
+// NLists is the largest list count of the built sub-indexes; 0 when only the
+// overflow is searched.
+func (mi *MultiGpuIvfPq[B, Q]) NLists() uint64 {
+	var n uint64
+	for _, idx := range mi.indices {
+		if idx != nil {
+			n = max(n, uint64(idx.GetNList()))
+		}
+	}
+	return n
 }
 
 func (mi *MultiGpuIvfPq[B, Q]) Search(queries []Q, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams) ([]int64, []float32, error) {
@@ -582,7 +597,7 @@ func mergeMultiResults(allNeighbors [][]int64, allDistances [][]float32, numQuer
 // base (B==half, query was []Float16) — they differ only in the concrete query
 // slice the caller asserts to []B. Both async via the worker pool; works
 // overflow-only (no main index, small data).
-func (mi *MultiGpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string) ([]int64, []float32, error) {
+func (mi *MultiGpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, predsJSON string, mem docfilter.CMembership) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -593,9 +608,86 @@ func (mi *MultiGpuCagra[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries 
 	}
 	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, nil, qOv, nil, numQueries, dimension, limit,
 		nil, nil, func(bf BruteForceOverflow[B], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON)
+			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON, mem)
 		}, nil, idxBaseQuery[Q, B]{queries: queries, fn: func(idx GpuIndex[Q], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return idx.(*GpuCagra[B, Q]).SearchQuantizeWithFilterAsync(q, nQ, d, l, sp, predsJSON)
+			return idx.(*GpuCagra[B, Q]).SearchQuantizeWithFilterAsync(q, nQ, d, l, sp, predsJSON, mem)
+		}})
+}
+
+// MultiBitset is the bitsets of one search on a MultiGpuCagra or MultiGpuIvfPq,
+// from its PrepareBitset: one per index and one for the overflow.
+type MultiBitset struct {
+	indices  map[any]*Bitset
+	overflow *Bitset
+}
+
+// Free releases the bitsets; it is a no-op on a nil or freed MultiBitset.
+func (m *MultiBitset) Free() {
+	if m == nil {
+		return
+	}
+	for _, b := range m.indices {
+		b.Free()
+	}
+	m.overflow.Free()
+	m.indices, m.overflow = nil, nil
+}
+
+// prepareMultiBitset prepares the bitset of every index with prep and of the
+// overflow when it is non-nil. On error it frees what it prepared.
+func prepareMultiBitset[I comparable, B VectorType](indices []I, prep func(I) (*Bitset, error),
+	overflow BruteForceOverflow[B], predsJSON string, mem docfilter.CMembership) (_ *MultiBitset, err error) {
+	mb := &MultiBitset{indices: make(map[any]*Bitset, len(indices))}
+	defer func() {
+		if err != nil {
+			mb.Free()
+		}
+	}()
+	for _, idx := range indices {
+		var b *Bitset
+		if b, err = prep(idx); err != nil {
+			return nil, err
+		}
+		mb.indices[idx] = b
+	}
+	if overflow != nil {
+		if mb.overflow, err = overflow.PrepareBitset(predsJSON, mem); err != nil {
+			return nil, err
+		}
+	}
+	return mb, nil
+}
+
+// PrepareBitset builds the filter masks of a search once for every index and the
+// overflow, from predsJSON and mem as SearchQuantizeWithFilter, for
+// SearchQuantizeWithBitset calls to reuse. mem is not referenced after it
+// returns. The caller frees the MultiBitset.
+func (mi *MultiGpuCagra[B, Q]) PrepareBitset(predsJSON string, mem docfilter.CMembership) (*MultiBitset, error) {
+	return prepareMultiBitset(mi.indices, func(idx *GpuCagra[B, Q]) (*Bitset, error) {
+		return idx.PrepareBitset(predsJSON, mem)
+	}, mi.bruteForce, predsJSON, mem)
+}
+
+// SearchQuantizeWithBitset is SearchQuantizeWithFilter on a MultiBitset from
+// PrepareBitset of this MultiGpuCagra.
+func (mi *MultiGpuCagra[B, Q]) SearchQuantizeWithBitset(queries []B, numQueries uint64, dimension uint32, limit uint32, sp CagraSearchParams, bitset *MultiBitset) ([]int64, []float32, error) {
+	if bitset == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("SearchQuantizeWithBitset: bitset is nil")
+	}
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
+	for i, idx := range mi.indices {
+		genericIndices[i] = idx
+	}
+	var qOv []B
+	if mi.bruteForce != nil {
+		qOv = queries
+	}
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, nil, qOv, nil, numQueries, dimension, limit,
+		nil, nil, func(bf BruteForceOverflow[B], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
+			return bf.SearchQuantizeWithBitsetAsync(q, nQ, d, l, bitset.overflow)
+		}, nil, idxBaseQuery[Q, B]{queries: queries, fn: func(idx GpuIndex[Q], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
+			cagra := idx.(*GpuCagra[B, Q])
+			return cagra.SearchQuantizeWithBitsetAsync(q, nQ, d, l, sp, bitset.indices[cagra])
 		}})
 }
 
@@ -611,14 +703,14 @@ func (mi *MultiGpuIvfFlat[B, Q]) SearchQuantizeWithFilter(queries []B, numQuerie
 	}
 	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, nil, qOv, nil, numQueries, dimension, limit,
 		nil, nil, func(bf BruteForceOverflow[B], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON)
+			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON, docfilter.CMembership{})
 		}, nil, idxBaseQuery[Q, B]{queries: queries, fn: func(idx GpuIndex[Q], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
 			return idx.(*GpuIvfFlat[B, Q]).SearchQuantizeWithFilterAsync(q, nQ, d, l, sp, predsJSON)
 		}})
 }
 
 // SearchQuantizeWithFilter — see MultiGpuCagra.SearchQuantizeWithFilter.
-func (mi *MultiGpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string) ([]int64, []float32, error) {
+func (mi *MultiGpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, predsJSON string, mem docfilter.CMembership) ([]int64, []float32, error) {
 	genericIndices := make([]GpuIndex[Q], len(mi.indices))
 	for i, idx := range mi.indices {
 		genericIndices[i] = idx
@@ -629,8 +721,37 @@ func (mi *MultiGpuIvfPq[B, Q]) SearchQuantizeWithFilter(queries []B, numQueries 
 	}
 	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, nil, qOv, nil, numQueries, dimension, limit,
 		nil, nil, func(bf BruteForceOverflow[B], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON)
+			return bf.SearchQuantizeWithFilterAsync(q, nQ, d, l, predsJSON, mem)
 		}, nil, idxBaseQuery[Q, B]{queries: queries, fn: func(idx GpuIndex[Q], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
-			return idx.(*GpuIvfPq[B, Q]).SearchQuantizeWithFilterAsync(q, nQ, d, l, sp, predsJSON)
+			return idx.(*GpuIvfPq[B, Q]).SearchQuantizeWithFilterAsync(q, nQ, d, l, sp, predsJSON, mem)
+		}})
+}
+
+// PrepareBitset — see MultiGpuCagra.PrepareBitset.
+func (mi *MultiGpuIvfPq[B, Q]) PrepareBitset(predsJSON string, mem docfilter.CMembership) (*MultiBitset, error) {
+	return prepareMultiBitset(mi.indices, func(idx *GpuIvfPq[B, Q]) (*Bitset, error) {
+		return idx.PrepareBitset(predsJSON, mem)
+	}, mi.bruteForce, predsJSON, mem)
+}
+
+// SearchQuantizeWithBitset — see MultiGpuCagra.SearchQuantizeWithBitset.
+func (mi *MultiGpuIvfPq[B, Q]) SearchQuantizeWithBitset(queries []B, numQueries uint64, dimension uint32, limit uint32, sp IvfPqSearchParams, bitset *MultiBitset) ([]int64, []float32, error) {
+	if bitset == nil {
+		return nil, nil, moerr.NewInternalErrorNoCtx("SearchQuantizeWithBitset: bitset is nil")
+	}
+	genericIndices := make([]GpuIndex[Q], len(mi.indices))
+	for i, idx := range mi.indices {
+		genericIndices[i] = idx
+	}
+	var qOv []B
+	if mi.bruteForce != nil {
+		qOv = queries
+	}
+	return multiGpuSearchBQ(genericIndices, mi.bruteForce, mi.dimension, nil, nil, qOv, nil, numQueries, dimension, limit,
+		nil, nil, func(bf BruteForceOverflow[B], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
+			return bf.SearchQuantizeWithBitsetAsync(q, nQ, d, l, bitset.overflow)
+		}, nil, idxBaseQuery[Q, B]{queries: queries, fn: func(idx GpuIndex[Q], q []B, nQ uint64, d uint32, l uint32) (uint64, error) {
+			pq := idx.(*GpuIvfPq[B, Q])
+			return pq.SearchQuantizeWithBitsetAsync(q, nQ, d, l, sp, bitset.indices[pq])
 		}})
 }

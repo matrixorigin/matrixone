@@ -1414,6 +1414,14 @@ func checkLineStrict(param *ExternalParam) bool {
 
 const JsonNull = "\\N"
 
+// JsonBinaryKey is the single-key object wrapper JSONLINE OUTFILE uses to
+// export BINARY/VARBINARY/BLOB values: {"$binary":"<base64>"}. The wrapper
+// lets the jsonline loader distinguish MO-encoded binary payloads from plain-
+// text JSON strings: wrapped values are base64-decoded, bare strings pass
+// through byte-exact so historical plain-text files keep loading as-is
+// (matrixone#30635).
+const JsonBinaryKey = "$binary"
+
 var loadZeroBytes = []byte("0")
 
 func getNullFlag(nullMap map[string][]string, attr, field string) bool {
@@ -1852,9 +1860,16 @@ func recordText(line []csvparser.Field, param *ExternalParam) string {
 
 func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
 	mp := proc.GetMPool()
+	// Kafka JSONL object conversion already checks the declared key count.
+	// Its field slice contains only projected data positions, so its length
+	// cannot be used as the record width. Synthetic attrs are filled by
+	// getColData even when no data column is projected.
+	kafkaJSON := param.KafkaScan != nil && param.Extern != nil && param.Extern.Format == tree.JSONLINE
 	if checkLineStrict(param) {
-		if err := checkLineValidRestrictive(param, proc, line, rowIdx); err != nil {
-			return err
+		if !kafkaJSON {
+			if err := checkLineValidRestrictive(param, proc, line, rowIdx); err != nil {
+				return err
+			}
 		}
 		for _, attr := range param.Attrs {
 			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
@@ -1864,7 +1879,7 @@ func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser
 		return nil
 	}
 
-	if int32(len(line)) >= param.ColumnListLen {
+	if kafkaJSON || int32(len(line)) >= param.ColumnListLen {
 		for _, attr := range param.Attrs {
 			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
 				return err

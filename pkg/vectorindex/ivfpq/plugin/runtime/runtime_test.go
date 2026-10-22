@@ -59,11 +59,9 @@ func TestIvfpqAlterTableCloneBehavior(t *testing.T) {
 	require.Empty(t, CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
-func TestIvfpqDefaultOptions(t *testing.T) {
-	got := CatalogHooks{}.DefaultOptions()
-	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
-	require.Equal(t, metric.Quantization_F32_Str, got[catalog.Quantization])
-	require.Equal(t, vectorindex.DistributionMode_SINGLE_GPU_Str, got[catalog.DistributionMode])
+func TestIvfpqParamsWithoutOptions(t *testing.T) {
+	_, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+	require.ErrorContains(t, err, "lists must be > 0")
 }
 
 func TestIvfpqExperimentalFlag(t *testing.T) {

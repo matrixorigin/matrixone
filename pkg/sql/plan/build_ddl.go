@@ -403,6 +403,7 @@ func genViewTableDef(
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
+	checkOption string,
 	forAuthoring bool,
 ) (*plan.TableDef, error) {
 	inferred, err := inferViewColumns(ctx, stmt, colNames, viewDatabase, viewName, forAuthoring)
@@ -437,6 +438,8 @@ func genViewTableDef(
 	}
 	viewData, err := json.Marshal(ViewData{
 		Stmt:                    viewSql,
+		Definition:              tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithViewDefinition()),
+		CheckOption:             strings.ToUpper(checkOption),
 		DefaultDatabase:         ctx.DefaultDatabase(),
 		SQLMode:                 parserSQLModeFromContext(ctx),
 		SecurityType:            getViewSecurityTypeFromContext(ctx),
@@ -2091,7 +2094,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 		viewSource = DeepCopySelect(stmt.AsSource)
 	}
 	tableDef, err := genViewTableDef(
-		ctx, viewSource, stmt.ColNames, createView.Database, string(viewName), true)
+		ctx, viewSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption, true)
 	if err != nil {
 		return nil, err
 	}
@@ -7040,7 +7043,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, true)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, "", true)
 	if err != nil {
 		return nil, err
 	}

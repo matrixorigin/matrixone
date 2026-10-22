@@ -593,3 +593,49 @@ TEST(GpuBruteForceTest, DeletesLeavingFewerThanKPadWithSentinels) {
     expect_only_allowed_bf(r.neighbors, r.distances, limit, {(int64_t)count - 1, (int64_t)count - 2});
     index.destroy();
 }
+
+// prepare_bitset builds the predicate mask once; search_quantize_with_bitset
+// reuses it.
+TEST(GpuBruteForceTest, PreparedBitsetSearch) {
+    const uint32_t dimension = 8;
+    const uint64_t count = 20;
+    std::vector<float> dataset(count * dimension);
+    for (uint64_t i = 0; i < count; ++i)
+        for (uint32_t j = 0; j < dimension; ++j)
+            dataset[i * dimension + j] = (float)i;
+    std::vector<int64_t> cats(count, 1);
+    cats[count - 2] = 2;
+    cats[count - 1] = 2;
+
+    gpu_brute_force_t<float, float> index(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
+    index.start();
+    index.set_filter_columns("[{\"name\":\"cat\",\"type\":1}]", count);
+    index.add_filter_chunk(0, cats.data(), nullptr, count);
+    index.build();
+
+    std::vector<float> query(dimension, 0.0f);
+    auto sp = brute_force_search_params_default();
+    const uint32_t limit = 5;
+    const std::string cat2 = "[{\"col\":0,\"op\":\"=\",\"val\":2}]";
+    auto want = index.search_quantize_with_filter(query.data(), 1, dimension, limit, sp, cat2);
+    auto bitset = index.prepare_bitset(cat2);
+    for (int round = 0; round < 2; ++round) {
+        auto r = index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, bitset.get());
+        expect_only_allowed_bf(r.neighbors, r.distances, limit, {(int64_t)count - 1, (int64_t)count - 2});
+        ASSERT_TRUE(r.neighbors == want.neighbors);
+    }
+    auto job = index.search_quantize_with_bitset_async(query.data(), 1, dimension, limit, sp, bitset.get());
+    bitset.reset();
+    auto r2 = index.search_wait(job);
+    ASSERT_TRUE(r2.neighbors == want.neighbors);
+
+    ASSERT_THROW(index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, nullptr), std::invalid_argument);
+    gpu_brute_force_t<float, float> other(dataset.data(), count, dimension, DistanceType_L2Expanded, 1, 0);
+    other.start();
+    other.build();
+    auto foreign = other.prepare_bitset("");
+    ASSERT_THROW(index.search_quantize_with_bitset(query.data(), 1, dimension, limit, sp, foreign.get()),
+                 std::invalid_argument);
+    other.destroy();
+    index.destroy();
+}
