@@ -117,6 +117,9 @@ func catalogDecimalOperator(name string, arity int) bool {
 	if name == "between" {
 		return arity == 3
 	}
+	if name == "in_range" {
+		return arity == 4
+	}
 	if arity != 2 {
 		return false
 	}

@@ -71,3 +71,25 @@ On the base, the implicit fixture executes both `10^18-1` and `10^18` as false.
 The new reader regression retains those exact serialized bytes, verifies the
 unmigrated failure, compares the migrated predicate with fresh binding across
 the signed domain and both interval endpoints, and preserves the explicit CAST.
+
+`legacy_decimal_in_range_63a964a82f.json` uses the same exact-base procedure
+for the four-argument numeric interval function. The generator checks the
+function name and arity, and executes each persisted predicate at `10^18-1`,
+`10^18`, and `MaxInt64` on the old writer; all return false.
+
+```sql
+-- generated_in_range_0 through generated_in_range_3:
+-- repeat with the final flag 0, 1, 2, and 3, respectively.
+create table legacy_cmp(i bigint, tm time(0), g bool generated always as
+  (in_range(i,cast('00:00:00' as time(0)),cast('00:00:01' as time(0)),0)) stored);
+-- explicit_in_range
+create table legacy_cmp(i bigint, tm time(0), g bool generated always as
+  (in_range(cast(i as decimal(18,0)),cast('00:00:00' as time(0)),
+            cast('00:00:01' as time(0)),0)) stored);
+```
+
+The new-reader tests prove the implicit Decimal64(18,0) failure before migration
+and Decimal128(19,0) recovery afterward, full signed-domain and fresh-binding
+equivalence, all four open/closed endpoint modes, NULL propagation, unchanged
+explicit CAST behavior, catalog immutability, and idempotence. The fourth
+argument is a UINT8 boundary flag, not a numeric operand to widen.
