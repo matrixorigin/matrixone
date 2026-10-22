@@ -230,7 +230,3 @@ func (preInsertUnique *PreInsertUnique) freeAcceptedState(proc *process.Process)
 	preInsertUnique.ctr.acceptedAutoIncrementValues = nil
 	preInsertUnique.ctr.acceptedAutoIncrementZero = false
 }
-
-func (preInsertUnique *PreInsertUnique) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

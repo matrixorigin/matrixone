@@ -34,10 +34,10 @@ func comparisonReceipt(path, variant string, dataset FileID) (WorkerReceipt, err
 	if r.Error != "" || r.Cleanup != "complete" || len(r.Queries) == 0 {
 		return r, errors.New("failed/incomplete worker receipt")
 	}
-	seen := map[[2]int]bool{}
+	seen := map[[3]int]bool{}
 	for _, q := range r.Queries {
-		key := [2]int{q.Query, q.Repetition}
-		if q.Query < 1 || q.Query > 22 || q.Repetition < 0 || q.Error != "" || seen[key] {
+		key := [3]int{q.Query, q.Repetition, q.Stream}
+		if q.Query < 1 || q.Query > 22 || q.Repetition < 0 || q.Stream < 0 || q.Error != "" || seen[key] {
 			return r, errors.New("invalid/failed or repeated worker query receipt")
 		}
 		seen[key] = true
@@ -51,7 +51,7 @@ func matchingSchedules(a, b WorkerReceipt) error {
 	}
 	for i, x := range a.Queries {
 		y := b.Queries[i]
-		if x.Query != y.Query || x.Repetition != y.Repetition {
+		if x.Query != y.Query || x.Repetition != y.Repetition || x.Stream != y.Stream {
 			return errors.New("worker query schedules differ")
 		}
 	}
@@ -84,11 +84,11 @@ func compareReceipts(dataset, left, right, leftUnlimited, rightUnlimited string)
 	if err := matchingSchedules(a, b); err != nil {
 		return 0, err
 	}
-	indices := map[[2]int]int{}
+	indices := map[[3]int]int{}
 	for i, q := range a.Queries {
-		indices[[2]int{q.Query, q.Repetition}] = i
+		indices[[3]int{q.Query, q.Repetition, q.Stream}] = i
 	}
-	proved := map[[2]int]bool{}
+	proved := map[[3]int]bool{}
 	if leftUnlimited != "" {
 		fa, err := comparisonReceipt(leftUnlimited, "unlimited_diagnostic", id)
 		if err != nil {
@@ -105,11 +105,11 @@ func compareReceipts(dataset, left, right, leftUnlimited, rightUnlimited string)
 			return 0, err
 		}
 		for i, x := range fa.Queries {
-			key := [2]int{x.Query, x.Repetition}
+			key := [3]int{x.Query, x.Repetition, x.Stream}
 			j, ok := indices[key]
 			q := d.Queries[x.Query-1]
 			if !ok || q.Limit <= 0 {
-				return 0, errors.New("unlimited proof must match a limited qualification query and repetition")
+				return 0, errors.New("unlimited proof must match a limited qualification query, repetition, and stream")
 			}
 			y := fb.Queries[i]
 			unlimited := q
@@ -127,7 +127,7 @@ func compareReceipts(dataset, left, right, leftUnlimited, rightUnlimited string)
 		}
 	}
 	for i, x := range a.Queries {
-		if proved[[2]int{x.Query, x.Repetition}] {
+		if proved[[3]int{x.Query, x.Repetition, x.Stream}] {
 			continue
 		}
 		if err := compareCaptures(filepath.Dir(left), filepath.Dir(right), x.Capture, b.Queries[i].Capture, d.Queries[x.Query-1]); err != nil {

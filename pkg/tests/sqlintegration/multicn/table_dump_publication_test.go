@@ -25,6 +25,7 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
@@ -55,6 +56,20 @@ func TestTableDumpConcurrentPublication(t *testing.T) {
 		_, err := db.ExecContext(ctx, query)
 		require.NoError(t, err, query)
 	}
+	waitCrossCN := func() {
+		t.Helper()
+		writer, err := cluster.GetCNService(0)
+		require.NoError(t, err)
+		reader, err := cluster.GetCNService(1)
+		require.NoError(t, err)
+		frontier := writer.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+		require.False(t, frontier.IsEmpty(), "writer must publish a commit timestamp")
+		waitCtx, stop := context.WithTimeout(ctx, 10*time.Second)
+		defer stop()
+		snapshot, err := reader.RawService().(cnservice.Service).GetTxnClient().WaitLogTailAppliedAt(waitCtx, frontier)
+		require.NoError(t, err)
+		require.True(t, frontier.Less(snapshot), "reader snapshot must advance past the fixture commit")
+	}
 	const schema = "dump_publication"
 	exec(dbs[0], "create database "+schema)
 	for i := 0; i < 2; i++ {
@@ -70,6 +85,9 @@ func TestTableDumpConcurrentPublication(t *testing.T) {
 	for i, path := range []string{root, alias} {
 		exec(dbs[0], fmt.Sprintf("create stage dump_pub_%d url='file://%s/'", i, path))
 	}
+	// SQL completion on CN0 does not imply CN1 has applied its catalog/data.
+	// Establish fixture visibility before either publisher reaches the barrier.
+	waitCrossCN()
 	if fault.Enable() {
 		t.Cleanup(func() { fault.Disable() })
 	}
@@ -171,6 +189,8 @@ func TestTableDumpConcurrentPublication(t *testing.T) {
 	_, err = os.Stat(filepath.Join(root, "cancelled", "READY"))
 	require.True(t, os.IsNotExist(err), "%v", err)
 	exec(dbs[0], "create table "+schema+".incomplete like "+schema+".src0")
+	// LOAD must reach the archive check, rather than race table visibility.
+	waitCrossCN()
 	_, err = dbs[1].ExecContext(ctx, "load table "+schema+".incomplete from 'stage://dump_pub_1/cancelled'")
 	require.ErrorContains(t, err, "READY marker is missing")
 	_, err = dbs[1].ExecContext(ctx, "dump table "+schema+".src1 to 'stage://dump_pub_1/cancelled'")

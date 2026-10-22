@@ -53,9 +53,6 @@ func (d *DemandInput) Reset(*process.Process, bool, error) {
 	d.requested = false
 }
 func (d *DemandInput) Free(p *process.Process, b bool, e error) { d.Reset(p, b, e) }
-func (d *DemandInput) ExecProjection(_ *process.Process, b *batch.Batch) (*batch.Batch, error) {
-	return b, nil
-}
 func (d *DemandInput) Prepare(*process.Process) error {
 	d.OpAnalyzer = process.NewAnalyzer(d.GetIdx(), false, false, "dependent input")
 	return nil

@@ -160,7 +160,3 @@ func (indexBuild *IndexBuild) Free(proc *process.Process, pipelineFailed bool, e
 		indexBuild.ctr.buf = nil
 	}
 }
-
-func (indexBuild *IndexBuild) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

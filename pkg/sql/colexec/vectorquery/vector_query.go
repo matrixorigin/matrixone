@@ -55,14 +55,11 @@ func init() {
 		func(a *VectorQuery) { *a = VectorQuery{} }, reuse.DefaultOptions[VectorQuery]().WithEnableChecker())
 }
 
-func NewArgument() *VectorQuery                          { return reuse.Alloc[VectorQuery](nil) }
-func (a *VectorQuery) String(buf *bytes.Buffer)          { buf.WriteString("vector_query") }
-func (a *VectorQuery) TypeName() string                  { return "vector_query" }
-func (a *VectorQuery) OpType() vm.OpType                 { return vm.VectorQuery }
-func (a *VectorQuery) GetOperatorBase() *vm.OperatorBase { return &a.OperatorBase }
-func (a *VectorQuery) ExecProjection(_ *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
+func NewArgument() *VectorQuery                           { return reuse.Alloc[VectorQuery](nil) }
+func (a *VectorQuery) String(buf *bytes.Buffer)           { buf.WriteString("vector_query") }
+func (a *VectorQuery) TypeName() string                   { return "vector_query" }
+func (a *VectorQuery) OpType() vm.OpType                  { return vm.VectorQuery }
+func (a *VectorQuery) GetOperatorBase() *vm.OperatorBase  { return &a.OperatorBase }
 func (a *VectorQuery) SetBranchStarter(f func(int) error) { a.startBranch = f }
 func (a *VectorQuery) ClearBranchStarter()                { a.startBranch = nil }
 func (a *VectorQuery) SetBranchWaiter(f func(int) error)  { a.waitBranch = f }
