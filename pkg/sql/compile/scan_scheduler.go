@@ -15,6 +15,7 @@
 package compile
 
 import (
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
@@ -24,7 +25,7 @@ import (
 )
 
 func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
-	rel, _, _, err := c.handleDbRelContext(node, false)
+	rel, _, ctx, err := c.handleDbRelContext(node, false)
 	if err != nil {
 		return nil, err
 	}
@@ -35,6 +36,22 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 	}
 
 	stats := toScheduleScanStats(node)
+	var createdInTxn bool
+	if creator, ok := rel.(engine.RelationCreatedInCurrentTxn); ok {
+		createdInTxn, err = creator.CreatedInCurrentTxn(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if createdInTxn {
+		// Remote CNs cannot see the coordinator's uncommitted catalog changes.
+		// A COPY ALTER replacement may even resolve to the old, same-name table.
+		// Keep this scan local without serializing its intra-CN readers.
+		if stats == nil {
+			stats = &schedule.ScanStats{}
+		}
+		stats.ForceOneCN = true
+	}
 	scanRequest := schedule.ScanRequest{
 		QueryWorkers:         c.scheduledQueryWorkers(),
 		CurrentCN:            c.currentCNWorker(),
@@ -45,6 +62,11 @@ func (c *Compile) generateNodes(node *plan.Node) (engine.Nodes, error) {
 		OneCNBlockThreshold:  int32(plan2.BlockThresholdForOneCN),
 	}
 	scanPlacement := schedule.DecideScanPlacement(scanRequest)
+	if createdInTxn && len(scanPlacement.Workers) > 0 &&
+		!c.canUseLocalExecutionRoute(scanPlacement.Workers[0]) {
+		return nil, moerr.NewInternalError(ctx,
+			"scan of a table created in the current transaction requires the coordinator CN")
+	}
 	c.schedulingTrace.RecordScan(c.schedulingAttempt, scanRequest, scanPlacement)
 	c.recordScanSchedulingMetrics(scanPlacement, stats, forceSingle)
 	c.maybeLogScanPlacement(scanPlacement, stats, forceSingle)
