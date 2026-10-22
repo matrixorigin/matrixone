@@ -2375,3 +2375,46 @@ func TestOutfileUnenclosedCSVRoundTripsThroughLoadParser(t *testing.T) {
 	}
 	require.True(t, got[len(values)].IsNull, "the NULL row must reload as NULL")
 }
+
+// #30703: duplicatedJsonLineColumn flags the first repeated alias.
+func TestDuplicatedJSONLineColumn(t *testing.T) {
+	require.Equal(t, "", duplicatedJSONLineColumn(nil))
+	require.Equal(t, "", duplicatedJSONLineColumn([]string{"a", "b"}))
+	require.Equal(t, "x", duplicatedJSONLineColumn([]string{"id", "x", "y", "x"}))
+	require.Equal(t, "x", duplicatedJSONLineColumn([]string{"x", "x"}))
+}
+
+// #30703: a JSONLINE export whose SELECT aliases repeat must fail explicitly
+// instead of writing rows with one column silently dropped.
+func TestJSONLineExportRejectsDuplicateAliases(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	for _, name := range []string{"id", "x", "x"} {
+		column := new(MysqlColumn)
+		column.SetName(name)
+		mrs.AddColumn(column)
+	}
+	bat := batch.NewWithSize(3)
+	bat.Vecs[0] = testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{1})
+	bat.Vecs[1] = testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{11})
+	bat.Vecs[2] = testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{22})
+	bat.SetRowCount(1)
+
+	ep := &ExportConfig{
+		userConfig: &tree.ExportParam{
+			Fields: tree.NewFields(tree.DefaultFieldsTerminated, false, 0, tree.DefaultFieldsEnclosedBy[0]),
+			Lines:  tree.NewLines("", "\n"),
+		},
+		mrs:        mrs,
+		Symbol:     [][]byte{[]byte(","), []byte(","), []byte("\n")},
+		ColumnFlag: []bool{false, false, false},
+	}
+	bytesChan := make(chan *BatchByte, 1)
+	constructJSONLine(ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, bytesChan, ep)
+
+	result := <-bytesChan
+	require.Error(t, result.err, "duplicate aliases must abort the export")
+	require.Contains(t, result.err.Error(), "duplicate column names")
+	require.Nil(t, result.writeByte)
+}
