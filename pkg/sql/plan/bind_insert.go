@@ -364,16 +364,16 @@ func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceSt
 	return builder.appendNode(scanNode, bindCtx)
 }
 
-// appendOnDupIrregularMaintSource materializes the ON DUPLICATE KEY UPDATE final
-// merged image (the finalProj PROJECT, tagged finalProjTag) into a SINK so that
+// appendResolvedIrregularMaintSource materializes the conflict-resolved final
+// image (the finalProj PROJECT, tagged finalProjTag) into a SINK so that
 // the main plan and the irregular-index maintenance can share it without
 // re-deriving (the DEDUP-join operator computes the merge at runtime, so the
 // merged values are only available downstream of it):
 //
 //   - the main plan (the idxNeedUpdate joins + MULTI_UPDATE that follow) keeps
 //     reading finalProjTag refs via a sink-scan that reuses the same tag;
-//   - both the insert maintenance (new entries) and the delete maintenance (drop
-//     the old entries of the conflicting rows) read the same materialized step.
+//   - insert maintenance reads only the rows surviving IGNORE, or the merged
+//     rows produced by UPDATE; UPDATE also deletes their old index entries.
 //     Its leading columns are the base table columns in tableDef.Cols order (minus
 //     Row_ID), the layout the leaf builders index by PK / indexed-column position.
 //     The PK is immutable under ODKU, so deleting by the final-image PK removes
@@ -381,12 +381,13 @@ func (builder *QueryBuilder) appendTaggedSinkScan(bindCtx *BindContext, sourceSt
 //
 // It records the maintenance context on the builder and returns the main-plan
 // sink-scan the caller must continue from.
-func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
+func (builder *QueryBuilder) appendResolvedIrregularMaintSource(
 	bindCtx *BindContext,
 	finalProjNodeID, finalProjTag, deletePkPos int32, deletePkTyp plan.Type,
 	irregularIndexes []*plan.IndexDef,
 	tableDef *plan.TableDef,
 	objRef *plan.ObjectRef,
+	deleteOld bool,
 ) int32 {
 	sinkID := appendSinkNodeWithTag(builder, bindCtx, finalProjNodeID, finalProjTag)
 	joinStep := builder.appendStep(sinkID)
@@ -394,14 +395,29 @@ func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
 	maintTableDef := *tableDef
 	maintTableDef.Indexes = irregularIndexes
 	builder.irregularMaintSourceStep = joinStep
-	builder.irregularMaintDeleteStep = joinStep
-	builder.irregularMaintDeletePkPos = deletePkPos
-	builder.irregularMaintDeletePkTyp = deletePkTyp
+	builder.irregularMaintDeleteStep = -1
+	if deleteOld {
+		builder.irregularMaintDeleteStep = joinStep
+		builder.irregularMaintDeletePkPos = deletePkPos
+		builder.irregularMaintDeletePkTyp = deletePkTyp
+	}
 	builder.irregularMaintIndexes = irregularIndexes
 	builder.irregularMaintTableDef = &maintTableDef
 	builder.irregularMaintObjRef = objRef
 
 	return builder.appendTaggedSinkScan(bindCtx, joinStep, finalProjTag)
+}
+
+// ODKU and REPLACE both remove stale entries before inserting the final image.
+func (builder *QueryBuilder) appendOnDupIrregularMaintSource(
+	bindCtx *BindContext,
+	finalProjNodeID, finalProjTag, deletePkPos int32, deletePkTyp plan.Type,
+	irregularIndexes []*plan.IndexDef,
+	tableDef *plan.TableDef,
+	objRef *plan.ObjectRef,
+) int32 {
+	return builder.appendResolvedIrregularMaintSource(bindCtx, finalProjNodeID, finalProjTag,
+		deletePkPos, deletePkTyp, irregularIndexes, tableDef, objRef, true)
 }
 
 // buildIrregularIndexMaintenance appends, after createQuery, the synchronous
@@ -1389,9 +1405,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	// Irregular-index (IVF/fulltext) maintenance source for plain INSERT/LOAD (no
 	// conflict resolution): materialize the pre-dedup new-row image and let the
 	// dedup read a sink-scan of it, so the same image feeds the post-createQuery
-	// insert maintenance. ON DUPLICATE KEY UPDATE (onDupAction == UPDATE) is
-	// handled later from the final merged image, after the dedup-update join,
-	// where old entries are also dropped.
+	// insert maintenance. IGNORE is handled later from the surviving rows;
+	// UPDATE uses the final merged image and also drops the old entries.
 	// Row-scoped child→parent foreign-key handling. Both validate only the
 	// statement's own rows, so neither false-positives on rows inserted earlier
 	// under FOREIGN_KEY_CHECKS=0 nor scales with table size:
@@ -1429,7 +1444,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}
-	if onDupAction != plan.Node_UPDATE && len(irregularIndexes) > 0 {
+	if onDupAction == plan.Node_FAIL && len(irregularIndexes) > 0 {
 		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, irregularIndexes, tableDef, dmlCtx.objRefs[0], false)
 		selectNode = builder.qry.Nodes[lastNodeID]
 		selectTag = selectNode.BindingTags[0]
@@ -2010,7 +2025,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	delColName2Idx := make(map[string][2]int32)
 
-	if newProjLen > len(selectNode.ProjectList) {
+	// IGNORE must publish its post-dedup image even without regular indexes:
+	// discarded primary/unique-key conflicts must never reach fulltext/IVF.
+	if newProjLen > len(selectNode.ProjectList) || onDupAction == plan.Node_IGNORE && len(irregularIndexes) > 0 {
 		newProjList := make([]*plan.Expr, 0, newProjLen)
 		finalProjTag := builder.genNewBindTag()
 		pkPos := colName2Idx[tableDef.Name+"."+tableDef.Pkey.PkeyColName]
@@ -2249,13 +2266,16 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				selectNode = builder.qry.Nodes[lastNodeID]
 			}
 		}
-		if len(irregularIndexes) > 0 {
+		if (onDupAction == plan.Node_UPDATE || onDupAction == plan.Node_IGNORE) && len(irregularIndexes) > 0 {
+			// IGNORE shares only the surviving rows; ODKU shares the merged
+			// image and replaces old entries. Plain INSERT/LOAD registered its
+			// source before the dedup and regular-index projections.
 			// ODKU cannot change the PK, so the stale entries are keyed by the same
 			// PK the final image carries at its natural position.
 			odkuPkPos, odkuPkTyp := getPkPos(tableDef, false)
-			lastNodeID = builder.appendOnDupIrregularMaintSource(
+			lastNodeID = builder.appendResolvedIrregularMaintSource(
 				bindCtx, lastNodeID, finalProjTag, int32(odkuPkPos), odkuPkTyp,
-				irregularIndexes, tableDef, dmlCtx.objRefs[0])
+				irregularIndexes, tableDef, dmlCtx.objRefs[0], onDupAction == plan.Node_UPDATE)
 			selectNode = builder.qry.Nodes[lastNodeID]
 		}
 	}

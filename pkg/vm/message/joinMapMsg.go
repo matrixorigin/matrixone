@@ -158,6 +158,7 @@ type JoinMap struct {
 	sels             GroupSels
 	delRows          *bitmap.Bitmap
 	batches          []*batch.Batch
+	releaseMemory    func()
 
 	// spill support
 	Spilled       bool
@@ -267,6 +268,9 @@ func (jm *JoinMap) IsDeleted(row uint64) bool {
 	return jm.delRows != nil && jm.delRows.Contains(uint64(row))
 }
 
+// SetMemoryRelease transfers the retained-data reservation with the map.
+func (jm *JoinMap) SetMemoryRelease(release func()) { jm.releaseMemory = release }
+
 func (jm *JoinMap) FreeMemory() {
 	for i, fd := range jm.SpillBuildFds {
 		if fd != nil {
@@ -288,6 +292,11 @@ func (jm *JoinMap) FreeMemory() {
 	}
 	jm.batches = nil
 	jm.valid = false
+	if jm.releaseMemory != nil {
+		release := jm.releaseMemory
+		jm.releaseMemory = nil
+		release()
+	}
 }
 
 func (jm *JoinMap) Free() {

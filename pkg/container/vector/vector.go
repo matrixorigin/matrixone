@@ -716,51 +716,82 @@ func (v *Vector) MarshalBinary() ([]byte, error) {
 }
 
 func (v *Vector) MarshalBinaryWithBuffer(buf *bytes.Buffer) error {
+	return v.MarshalBinaryTo(buf)
+}
 
-	// write class
-	buf.WriteByte(uint8(v.class))
+// MarshalBinarySize is the byte length of the existing vector encoding. It
+// does not materialize a copy of data or area.
+func (v *Vector) MarshalBinarySize() int64 {
+	dataLen := int64(v.typ.TypeSize())
+	if !v.IsConst() {
+		dataLen *= int64(v.length)
+	} else if v.IsConstNull() {
+		dataLen = 0
+	}
+	nspLen := int64(0)
+	if !v.nsp.EmptyByFlag() {
+		nspLen = 24 + int64(v.nsp.GetBitmap().Size())
+	}
+	return 1 + int64(types.TSize) + 4 + 4 + dataLen + 4 + int64(len(v.area)) + 4 + nspLen + 1
+}
 
-	// write type
-	data := types.EncodeType(&v.typ)
-	buf.Write(data)
-
-	// write length
+// MarshalBinaryTo writes the same format as MarshalBinary without constructing
+// another copy of the whole vector. A short write is an error.
+func (v *Vector) MarshalBinaryTo(w io.Writer) error {
+	write := func(p []byte) error {
+		n, err := w.Write(p)
+		if err == nil && n != len(p) {
+			err = io.ErrShortWrite
+		}
+		return err
+	}
+	if err := write([]byte{byte(v.class)}); err != nil {
+		return err
+	}
+	if err := write(types.EncodeType(&v.typ)); err != nil {
+		return err
+	}
 	length := uint32(v.length)
-	buf.Write(types.EncodeUint32(&length))
-
-	// write dataLen, data
+	if err := write(types.EncodeUint32(&length)); err != nil {
+		return err
+	}
 	dataLen := uint32(v.typ.TypeSize())
 	if !v.IsConst() {
 		dataLen *= uint32(v.length)
 	} else if v.IsConstNull() {
 		dataLen = 0
 	}
-	buf.Write(types.EncodeUint32(&dataLen))
+	if err := write(types.EncodeUint32(&dataLen)); err != nil {
+		return err
+	}
 	if dataLen > 0 {
-		buf.Write(v.data[:dataLen])
+		if err := write(v.data[:dataLen]); err != nil {
+			return err
+		}
 	}
-
-	// write areaLen, area
 	areaLen := uint32(len(v.area))
-	buf.Write(types.EncodeUint32(&areaLen))
-	if areaLen > 0 {
-		buf.Write(v.area)
+	if err := write(types.EncodeUint32(&areaLen)); err != nil {
+		return err
 	}
-
-	// write nspLen, nsp
+	if areaLen > 0 {
+		if err := write(v.area); err != nil {
+			return err
+		}
+	}
 	nspData, err := v.nsp.Show()
 	if err != nil {
 		return err
 	}
 	nspLen := uint32(len(nspData))
-	buf.Write(types.EncodeUint32(&nspLen))
-	if nspLen > 0 {
-		buf.Write(nspData)
+	if err = write(types.EncodeUint32(&nspLen)); err != nil {
+		return err
 	}
-
-	buf.Write(types.EncodeBool(&v.sorted))
-
-	return nil
+	if nspLen > 0 {
+		if err = write(nspData); err != nil {
+			return err
+		}
+	}
+	return write(types.EncodeBool(&v.sorted))
 }
 
 func (v *Vector) UnmarshalBinary(data []byte) error {
@@ -884,24 +915,42 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 	if v.length, err = types.ReadInt32AsInt(r); err != nil {
 		return err
 	}
+	if v.length < 0 || v.typ.Size < 0 {
+		return fmt.Errorf("invalid encoded vector length %d or type size %d", v.length, v.typ.Size)
+	}
 
 	// read data
+	if v.cantFreeData {
+		v.data = nil
+		v.cantFreeData = false
+	}
 	dataLen, dataBuf, err := types.ReadSizeBytesMp(r, v.data, mp, v.offHeap)
+	v.data = dataBuf
 	if err != nil {
 		return err
 	}
-	if dataLen > 0 {
-		v.data = dataBuf
+	expected := int64(v.length) * int64(v.typ.TypeSize())
+	if v.IsConst() {
+		expected = int64(v.typ.TypeSize())
+		if dataLen == 0 {
+			expected = 0
+		}
+	}
+	if expected != int64(dataLen) {
+		return fmt.Errorf("encoded vector data length %d does not match required %d", dataLen, expected)
 	}
 
 	// read area
+	if v.cantFreeArea {
+		v.area = nil
+		v.cantFreeArea = false
+	}
 	areaLen, areaBuf, err := types.ReadSizeBytesMp(r, v.area, mp, v.offHeap)
+	v.area = areaBuf
 	if err != nil {
 		return err
 	}
-	if areaLen > 0 {
-		v.area = areaBuf
-	}
+	_ = areaLen
 
 	// read nsp, do not use mpool.  nspBuf is different because
 	// it is not managed by vector.  In the following, it will
@@ -911,7 +960,20 @@ func (v *Vector) UnmarshalWithReader(r io.Reader, mp *mpool.MPool) error {
 		return err
 	}
 	if nspLen > 0 {
-		v.nsp.Read(nspBuf)
+		// Bitmap.Unmarshal has a fixed count/bit-length/data-length header.
+		// Check its nested length before slicing or exposing it to the bitmap.
+		if nspLen < 24 {
+			return fmt.Errorf("invalid encoded null bitmap header length %d", nspLen)
+		}
+		count := types.DecodeInt64(nspBuf[:8])
+		bits := types.DecodeUint64(nspBuf[8:16])
+		bytes := types.DecodeUint64(nspBuf[16:24])
+		if count < 0 || uint64(count) > bits || bytes%8 != 0 || bytes > uint64(nspLen-24) {
+			return fmt.Errorf("invalid encoded null bitmap size %d", bytes)
+		}
+		if err = v.nsp.Read(nspBuf); err != nil {
+			return err
+		}
 	} else {
 		v.nsp.Reset()
 	}
@@ -2168,7 +2230,9 @@ func GetUnionAllFunction(typ types.Type, mp *mpool.MPool) func(v, w *Vector) err
 			if err := extend(v, w.length, mp); err != nil {
 				return err
 			}
-			if sz := len(v.area) + len(w.area); sz > cap(v.area) {
+			// A window shares the source area; only its live payload is copied.
+			areaBytes := w.WindowSize(0, w.length) - int64(w.length)*int64(w.typ.TypeSize())
+			if sz := len(v.area) + int(areaBytes); sz > cap(v.area) {
 				area, err := mp.Grow(v.area, sz, v.offHeap)
 				if err != nil {
 					return err
@@ -2892,7 +2956,8 @@ func (v *Vector) UnionBatch(w *Vector, offset int64, cnt int, flags []uint8, mp 
 		// w.area, and its header is never read — we just propagate w's null/grouping
 		// bitmaps (shifted by oldLen) and zero the null rows' copied headers so no
 		// rebased garbage offset lingers. Semantically identical to the loop.
-		if flags == nil && offset == 0 && cnt == w.length {
+		if flags == nil && offset == 0 && cnt == w.length &&
+			w.WindowSize(0, w.length)-int64(w.length)*int64(types.VarlenaSize) == int64(len(w.area)) {
 			oldLen := v.length
 			baseOff := len(v.area)
 			if len(w.area) > 0 {

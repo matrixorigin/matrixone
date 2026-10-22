@@ -15,11 +15,11 @@
 package hashbuild
 
 import (
-	"bytes"
 	"os"
 
 	"github.com/matrixorigin/matrixone/pkg/common"
 	"github.com/matrixorigin/matrixone/pkg/common/reuse"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/common/system"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -41,6 +41,9 @@ const (
 )
 
 type container struct {
+	spillAllowed    bool
+	memoryThrottler rscthrottler.RSCThrottler
+	memoryReserved  int64
 	state           int
 	runtimeFilterIn bool
 	hashmapBuilder  HashmapBuilder
@@ -52,29 +55,32 @@ type container struct {
 	// reusable buffers for spill operations
 	spillHashValues      []uint64
 	spillBucketRowIds    [][]int32
-	spillWriteBuf        bytes.Buffer
 	spillBuffers         []*batch.Batch // pool of reusable bucket buffers
 	spillKeyVecs         []*vector.Vector
 	spillNonEmptyBuckets []int
 
 	// cached expression executors for spill (reused across batches)
 	spillExprExecs []colexec.ExpressionExecutor
+	spillExprPlans []*plan.Expr
 }
 
 type HashBuild struct {
-	ctr               container
-	NeedHashMap       bool
-	HashOnPK          bool
-	NeedBatches       bool
-	NeedAllocateSels  bool
-	IsShuffle         bool
-	CanSpill          bool
-	Conditions        []*plan.Expr
-	JoinMapTag        int32
-	JoinMapRefCnt     int32
-	ShuffleIdx        int32
-	RuntimeFilterSpec *plan.RuntimeFilterSpec
-	SpillThreshold    int64
+	ctr                 container
+	NeedHashMap         bool
+	HashOnPK            bool
+	NeedBatches         bool
+	NeedAllocateSels    bool
+	IsShuffle           bool
+	CanSpill            bool
+	Conditions          []*plan.Expr
+	JoinMapTag          int32
+	JoinMapRefCnt       int32
+	ShuffleIdx          int32
+	RuntimeFilterSpec   *plan.RuntimeFilterSpec
+	SpillThreshold      int64
+	SpillExpectedScopes []uint32
+	SpillGroup          *message.JoinSpillGroup
+	SpillEpoch          uint64
 
 	IsDedup                   bool
 	DedupBuildKeepLast        bool
@@ -129,6 +135,12 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 	mapSucceed := hashBuild.ctr.state == SendSucceed
 
 	hashBuild.ctr.hashmapBuilder.Reset(proc, !mapSucceed)
+	if proc.Base.ImportMemory != nil {
+		hashBuild.ctr.hashmapBuilder.FreeExecutors()
+		hashBuild.ctr.hashmapBuilder.cachedIntIterator = nil
+		hashBuild.ctr.hashmapBuilder.cachedStrIterator = nil
+	}
+	hashBuild.ctr.releaseMemory(hashBuild.ctr.memoryReserved)
 	// Only clean up build files when the join map was NOT successfully sent.
 	// When mapSucceed=true, hashjoin owns the files and deletes them after reading.
 	if !mapSucceed {
@@ -142,6 +154,7 @@ func (hashBuild *HashBuild) Reset(proc *process.Process, pipelineFailed bool, er
 }
 func (hashBuild *HashBuild) Free(proc *process.Process, pipelineFailed bool, err error) {
 	hashBuild.cleanupSpillFiles(proc)
+	hashBuild.ctr.releaseMemory(hashBuild.ctr.memoryReserved)
 	hashBuild.ctr.hashmapBuilder.Free(proc)
 	hashBuild.ctr.cleanSpillBufferPool(proc)
 	hashBuild.ctr.freeSpillExprExecs()

@@ -19,6 +19,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/KimMachineGun/automemlimit/memlimit"
 )
 
 // Arena size tiers.  Small arenas serve flush tasks and sinkers that
@@ -52,6 +54,26 @@ type arenaFreeList struct {
 	head     atomic.Pointer[arenaNode]
 	count    atomic.Int32
 	maxCount int32
+	bytes    atomic.Int64
+	maxBytes int64
+	budget   *arenaByteBudget
+}
+
+type arenaByteBudget struct {
+	used  atomic.Int64
+	limit int64
+}
+
+func (b *arenaByteBudget) reserve(size int64) bool {
+	for {
+		used := b.used.Load()
+		if size > b.limit-used {
+			return false
+		}
+		if b.used.CompareAndSwap(used, used+size) {
+			return true
+		}
+	}
 }
 
 var arenaPools [2]arenaFreeList
@@ -70,29 +92,75 @@ func init() {
 	if arenaPools[ArenaLarge].maxCount < 4 {
 		arenaPools[ArenaLarge].maxCount = 4
 	}
+	limit := TotalMem()
+	if cgroup, err := memlimit.FromCgroup(); err == nil && cgroup > 0 && (limit == 0 || cgroup < limit) {
+		limit = cgroup
+	}
+	budget := int64(min(limit/16, 4<<30))
+	shared := &arenaByteBudget{limit: budget}
+	for i := range arenaPools {
+		arenaPools[i].maxBytes = budget
+		arenaPools[i].budget = shared
+	}
 }
 
 // GetArena pops a WriteArena from the requested tier's free list, or
 // creates a pre-warmed arena when the list is empty.
 func GetArena(tier int) *WriteArena {
+	return getArena(tier, 0, false)
+}
+
+// GetArenaWithin checks out only buffers that fit the caller's workspace.
+// Oversized cached storage is retired before any replacement allocation. The
+// data buffer's adaptive growth is capped as well; encoding/compression scratch
+// is separately included in the caller's complete IO envelope.
+func GetArenaWithin(tier int, maxRetainedBytes int) *WriteArena {
+	if maxRetainedBytes < 0 {
+		panic("negative arena workspace")
+	}
+	return getArena(tier, maxRetainedBytes, true)
+}
+
+func getArena(tier, maxRetainedBytes int, bounded bool) *WriteArena {
 	pool := &arenaPools[tier]
-	for {
-		head := pool.head.Load()
-		if head == nil {
-			var initSize, limit int
-			if tier == ArenaSmall {
-				initSize = arenaSmallInit
-				limit = arenaSmallMax
-			} else {
-				initSize = arenaLargeInit
-				limit = arenaMaxSize
-			}
-			a := NewArena(initSize)
+	var initSize, limit int
+	if tier == ArenaSmall {
+		initSize, limit = arenaSmallInit, arenaSmallMax
+	} else {
+		initSize, limit = arenaLargeInit, arenaMaxSize
+	}
+	if bounded {
+		initSize = min(initSize, maxRetainedBytes)
+		limit = min(limit, maxRetainedBytes)
+		if limit == 0 {
+			limit = -1
+		} // explicit zero growth, unlike the default zero value
+	}
+	if a := pool.get(); a != nil {
+		if !bounded || a.Allocated() <= maxRetainedBytes {
 			a.sizeLimit = limit
 			return a
 		}
+		a.FreeBuffers()
+	}
+	a := NewArena(initSize)
+	a.sizeLimit = limit
+	return a
+}
+
+func (pool *arenaFreeList) get() *WriteArena {
+	for {
+		head := pool.head.Load()
+		if head == nil {
+			return nil
+		}
 		if pool.head.CompareAndSwap(head, head.next) {
 			pool.count.Add(-1)
+			size := int64(head.arena.Allocated())
+			pool.bytes.Add(-size)
+			if pool.budget != nil {
+				pool.budget.used.Add(-size)
+			}
 			return head.arena
 		}
 	}
@@ -109,11 +177,39 @@ func PutArena(a *WriteArena) {
 		tier = ArenaLarge
 	}
 	pool := &arenaPools[tier]
+	pool.put(a)
+}
+
+func (pool *arenaFreeList) put(a *WriteArena) {
+	// Count limits alone allow a few wide-column arenas to pin gigabytes.
+	// Reserve all three buffers before publishing; pooled arenas are immutable.
+	size := int64(a.Allocated())
+	if pool.budget != nil && !pool.budget.reserve(size) {
+		a.FreeBuffers()
+		return
+	}
+	for {
+		used := pool.bytes.Load()
+		if size > pool.maxBytes-used {
+			if pool.budget != nil {
+				pool.budget.used.Add(-size)
+			}
+			a.FreeBuffers()
+			return
+		}
+		if pool.bytes.CompareAndSwap(used, used+size) {
+			break
+		}
+	}
 	// Optimistically claim a slot before pushing: increment first, then
 	// check.  This avoids the TOCTOU race where N goroutines each read
 	// count < maxCount and all push, exceeding the soft cap.
 	if pool.count.Add(1) > pool.maxCount {
 		pool.count.Add(-1)
+		pool.bytes.Add(-size)
+		if pool.budget != nil {
+			pool.budget.used.Add(-size)
+		}
 		a.FreeBuffers()
 		return
 	}
@@ -156,25 +252,40 @@ func ScheduleArenaDrain(delay time.Duration) {
 // have been idle for the caller-provided delay.
 func drainArenaPools() {
 	for i := range arenaPools {
-		pool := &arenaPools[i]
-		for {
-			head := pool.head.Load()
-			if head == nil {
-				break
+		arenaPools[i].drain()
+	}
+}
+
+// ReleaseIdleArenas returns unused writer scratch under memory pressure.
+// Checked-out arenas remain owned by their writers and are never touched.
+func ReleaseIdleArenas() {
+	drainArenaPools()
+}
+
+func (pool *arenaFreeList) drain() {
+	for {
+		head := pool.head.Load()
+		if head == nil {
+			return
+		}
+		if pool.head.CompareAndSwap(head, nil) {
+			// Count and free exactly the nodes we grabbed.
+			// Use Add(-n) rather than Store(0) so concurrent
+			// PutArena calls that incremented count after the CAS
+			// are not silently erased.
+			var n int32
+			var size int64
+			for node := head; node != nil; node = node.next {
+				size += int64(node.arena.Allocated())
+				node.arena.FreeBuffers()
+				n++
 			}
-			if pool.head.CompareAndSwap(head, nil) {
-				// Count and free exactly the nodes we grabbed.
-				// Use Add(-n) rather than Store(0) so concurrent
-				// PutArena calls that incremented count after the CAS
-				// are not silently erased.
-				var n int32
-				for node := head; node != nil; node = node.next {
-					node.arena.FreeBuffers()
-					n++
-				}
-				pool.count.Add(-n)
-				break
+			pool.count.Add(-n)
+			pool.bytes.Add(-size)
+			if pool.budget != nil {
+				pool.budget.used.Add(-size)
 			}
+			return
 		}
 	}
 }

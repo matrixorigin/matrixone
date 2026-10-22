@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/filter"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/group"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/hashjoin"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/output"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/table_scan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
@@ -163,6 +164,11 @@ func (s *Scope) Run(c *Compile) (err error) {
 		//s.ScopeAnalyzer.Stop()
 		// it's a fake scope
 		return nil
+	}
+
+	if err = s.armSpillParticipants(); err != nil {
+		pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, true, c.isPrepare, err)
+		return err
 	}
 
 	if s.DataSource == nil {
@@ -384,6 +390,11 @@ func (s *Scope) MergeRun(c *Compile) error {
 
 // cleanPipelineWitchStartFail is used to clean up the pipelines that has failed to start due to a certain reasons.
 func cleanPipelineWitchStartFail(sp *Scope, fail error, isPrepare bool) {
+	if sp.Magic == Normal {
+		// These actuals may fail scheduler submission before Run/Prepare.
+		_ = sp.armSpillParticipants()
+	}
+	sp.abortSpillScope()
 	p := pipeline.New(0, nil, sp.RootOp)
 	p.Cleanup(sp.Proc, true, isPrepare, fail)
 }
@@ -455,6 +466,11 @@ func (s *Scope) ParallelRun(c *Compile) (err error) {
 		// if codes run here, it means some error happens during build the parallel scope.
 		// we should do clean work for source-scope to avoid receiver hung.
 		if parallelScope == nil {
+			if err != nil {
+				// The scope failed construction, independently of any template's
+				// nonowning handle. No expected actual can arrive afterwards.
+				s.abortSpillScope()
+			}
 			pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, true, c.isPrepare, err)
 		}
 	}()
@@ -744,7 +760,24 @@ func (s *Scope) isTableScan() bool {
 }
 
 func newParallelScope(s *Scope) (*Scope, []*Scope) {
+	// Seal the actual duplicate IDs before any probe Prepare/Call. Build scopes
+	// may already have published their immutable source in the current epoch.
+	vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if join, ok := op.(*hashjoin.HashJoin); ok && len(join.SpillExpectedScopes) > 0 {
+			ids := make([]int32, s.NodeInfo.Mcpu)
+			for i := range ids {
+				ids[i] = int32(i)
+			}
+			if err := join.SealSpillScope(s.Proc, ids); err != nil {
+				panic(err)
+			}
+		}
+		return nil
+	})
 	if s.NodeInfo.Mcpu == 1 {
+		if err := s.armSpillParticipants(); err != nil {
+			panic(err)
+		}
 		return s, nil
 	}
 
@@ -770,6 +803,11 @@ func newParallelScope(s *Scope) (*Scope, []*Scope) {
 
 	rs.PreScopes = parallelScopes
 	s.PreScopes = append(s.PreScopes, rs)
+	for _, actual := range parallelScopes {
+		if err := actual.armSpillParticipants(); err != nil {
+			panic(err)
+		}
+	}
 
 	// after parallelScope
 	// s(fake)
@@ -1258,4 +1296,39 @@ func (s *Scope) buildReaders(c *Compile) (readers []engine.Reader, err error) {
 
 func (s Scope) TypeName() string {
 	return "compile.Scope"
+}
+
+// armSpillParticipants is restricted to an actual execution graph. In particular
+// the source graph retained after parallel duplication is only a template.
+func (s *Scope) armSpillParticipants() error {
+	return vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		if join, ok := op.(*hashjoin.HashJoin); ok {
+			return join.ArmSpillParticipant(s.Proc)
+		}
+		return nil
+	})
+}
+
+// abortSpillScope is explicit failed-scope authority, separate from template
+// Free. It also covers failures between sealing topology and publishing actuals.
+func (s *Scope) abortSpillScope() {
+	_ = vm.HandleAllOp(s.RootOp, func(_ vm.Operator, op vm.Operator) error {
+		join, ok := op.(*hashjoin.HashJoin)
+		if !ok || join.IsShuffle || len(join.SpillExpectedScopes) == 0 {
+			return nil
+		}
+		if join.SpillGroup == nil {
+			// Reader/scheduler failure can precede binding this scope's handle,
+			// while another build RPC already owns files in the statement board.
+			group, err := s.Proc.GetMessageBoard().BroadcastSpillGroup(join.JoinMapTag, join.SpillExpectedScopes)
+			if err != nil {
+				return nil
+			}
+			join.SpillGroup, join.SpillEpoch = group, group.Epoch()
+		}
+		// An already bound handle keeps its original epoch: stale failure
+		// cleanup must never target a later execution using the same group.
+		join.SpillGroup.Abort(join.SpillEpoch)
+		return nil
+	})
 }

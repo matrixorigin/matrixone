@@ -34,7 +34,9 @@ func (s *queryService) handleGetProtocolVersion() func(ctx context.Context, req 
 			return nil
 		}
 		resp.GetProtocolVersion = &query.GetProtocolVersionResponse{
-			Version: version.(int64),
+			Version:                  version.(int64),
+			MemoryAdmission:          true,
+			MemoryAdmissionProcessId: runtime.ProcessInstanceID(),
 		}
 		return nil
 	}

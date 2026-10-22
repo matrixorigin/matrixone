@@ -70,6 +70,26 @@ func (external *External) OpType() vm.OpType {
 	return vm.External
 }
 
+// UsesMemoryInput is shared with compiler admission. CSV and JSONLINE have a
+// source allocation table; Parquet and result-scan readers retain their own
+// existing resource paths and cannot claim that table as their memory bound.
+func (external *External) UsesMemoryInput() bool {
+	if external == nil || external.Es == nil {
+		return false
+	}
+	param := external.Es.Extern
+	if param == nil {
+		param = &tree.ExternParam{}
+		if json.Unmarshal([]byte(external.Es.CreateSql), param) != nil {
+			return false
+		}
+		if plan2.InitS3Param(param) != nil {
+			return false
+		}
+	}
+	return param.ExternType != int32(plan.ExternType_RESULT_SCAN) && (param.Format == tree.CSV || param.Format == tree.JSONLINE)
+}
+
 func (external *External) Prepare(proc *process.Process) error {
 	_, span := trace.Start(proc.Ctx, "ExternalPrepare")
 	defer span.End()
@@ -100,6 +120,21 @@ func (external *External) Prepare(proc *process.Process) error {
 	}
 	if !loadFormatIsValid(param.Extern) {
 		return moerr.NewNYIf(proc.Ctx, "load format '%s'", param.Extern.Format)
+	}
+	prepared := false
+	acquired := false
+	defer func() {
+		if !prepared && acquired {
+			external.Free(proc, true, nil)
+		}
+	}()
+	if external.inputLease == nil && proc.Base.ImportMemory != nil && external.UsesMemoryInput() {
+		lease, err := proc.Base.ImportMemory.AcquireInput(proc.Ctx)
+		if err != nil {
+			return err
+		}
+		external.inputLease = lease
+		acquired = lease != nil
 	}
 	if param.Extern.ExternType == int32(plan.ExternType_LOAD) &&
 		(param.Extern.Parallel || param.Extern.ParallelLoadRequested) {
@@ -183,6 +218,7 @@ func (external *External) Prepare(proc *process.Process) error {
 			external.ctr.buf.Vecs[i] = vector.NewOffHeapVecWithType(typ)
 		}
 	}
+	prepared = true
 	return nil
 }
 

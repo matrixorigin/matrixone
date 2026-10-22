@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -223,6 +224,12 @@ func (w *CNS3Writer) WriteOwned(ctx context.Context, bat *batch.Batch) (bool, er
 	return w.sinker.WriteOwned(ctx, bat)
 }
 
+func (w *CNS3Writer) AppendAllocation(bat *batch.Batch) int64 { return w.sinker.AppendAllocation(bat) }
+
+func (w *CNS3Writer) WriteBorrowedToFile(ctx context.Context, bat *batch.Batch, workspace *rscthrottler.WorkspaceLease) error {
+	return w.sinker.WriteBorrowedToFile(ctx, bat, workspace)
+}
+
 func (w *CNS3Writer) Sync(ctx context.Context) (stats []objectio.ObjectStats, err error) {
 	if err = w.sinker.Sync(ctx); err != nil {
 		return
@@ -260,9 +267,7 @@ func (w *CNS3Writer) Close() (err error) {
 	var mp *mpool.MPool
 	if w.sinker != nil {
 		mp = w.sinker.GetMPool()
-		if err = w.sinker.Close(); err != nil {
-			return
-		}
+		err = w.sinker.Close()
 		w.sinker = nil
 	}
 
@@ -271,7 +276,7 @@ func (w *CNS3Writer) Close() (err error) {
 		w.blockInfoBat = nil
 	}
 
-	return nil
+	return err
 }
 
 // Reset discards any buffered or staged data accumulated since the last
