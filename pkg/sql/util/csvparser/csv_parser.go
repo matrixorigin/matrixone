@@ -116,11 +116,19 @@ type CSVParser struct {
 	// E.g., For the row `a,"b","c""d",e`, recordBuffer will contain `abc"de`
 	// and fieldIndexes will contain the indexes [1, 2, 5, 6].
 	recordBuffer []byte
+	// The configured transaction entry limit applies to the complete raw
+	// record, including separators and escaped fragments. Checking only a
+	// readUntil fragment allowed many short fields to bypass the same limit.
+	recordLimit   int
+	recordStart   int64
+	readingRecord bool
 
 	// fieldIndexes is an index of fields inside recordBuffer.
 	// The width field ends at offset fieldIndexes[i] in recordBuffer.
-	fieldIndexes  []int
-	fieldIsQuoted []bool
+	fieldIndexes   []int
+	fieldIsQuoted  []bool
+	retainedFields int
+	fieldsSeen     int
 
 	LastRow []Field
 
@@ -221,6 +229,7 @@ func NewCSVParser(
 		}
 	}
 	return &CSVParser{
+		recordLimit:       config.LargestEntryLimit,
 		reader:            reader,
 		blockBuf:          make([]byte, blockBufSize*BufferSizeScale),
 		remainBuf:         &bytes.Buffer{},
@@ -250,6 +259,20 @@ func (parser *CSVParser) Read(lastRow []Field) (row []Field, err error) {
 
 func (parser *CSVParser) Pos() int64 {
 	return parser.pos
+}
+
+// RetainFields bounds field metadata for readers that project a known prefix.
+// Unretained fields are still parsed and checked against the raw record limit.
+// LOAD retains two extra fields, preserving its strict column-count checks.
+func (parser *CSVParser) RetainFields(n int) { parser.retainedFields = n }
+
+func (parser *CSVParser) finishField(quoted bool) {
+	parser.fieldsSeen++
+	if parser.retainedFields > 0 && parser.fieldsSeen > parser.retainedFields {
+		return
+	}
+	parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
+	parser.fieldIsQuoted = append(parser.fieldIsQuoted, quoted)
 }
 
 func validDelim(r rune) bool {
@@ -513,6 +536,9 @@ func (parser *CSVParser) appendCSVTokenToRecordBuffer(token csvToken) {
 func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 	index := IndexAnyByte(parser.buf, chars)
 	if index >= 0 {
+		if err := parser.checkRecordSize(index); err != nil {
+			return nil, 0, err
+		}
 		ret := parser.buf[:index]
 		parser.buf = parser.buf[index:]
 		parser.pos += int64(index)
@@ -522,10 +548,10 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 	// not found in parser.buf, need allocate and loop.
 	var buf []byte
 	for {
-		buf = append(buf, parser.buf...)
-		if len(buf) > config.LargestEntryLimit {
-			return buf, 0, moerr.NewInternalErrorNoCtx("size of row cannot exceed the max value of txn-entry-size-limit")
+		if err := parser.checkRecordSize(len(buf) + len(parser.buf)); err != nil {
+			return nil, 0, err
 		}
+		buf = append(buf, parser.buf...)
 		parser.buf = nil
 		if err := parser.readBlock(); err != nil || len(parser.buf) == 0 {
 			if err == nil {
@@ -536,6 +562,9 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 		}
 		index := IndexAnyByte(parser.buf, chars)
 		if index >= 0 {
+			if err := parser.checkRecordSize(len(buf) + index); err != nil {
+				return nil, 0, err
+			}
 			buf = append(buf, parser.buf[:index]...)
 			parser.buf = parser.buf[index:]
 			parser.pos += int64(len(buf))
@@ -544,10 +573,25 @@ func (parser *CSVParser) readUntil(chars *byteSet) ([]byte, byte, error) {
 	}
 }
 
+func (parser *CSVParser) checkRecordSize(extra int) error {
+	consumed := int64(extra)
+	if parser.readingRecord {
+		consumed += parser.pos - parser.recordStart
+	}
+	if parser.recordLimit > 0 && consumed > int64(parser.recordLimit) {
+		return moerr.NewInternalErrorNoCtx("size of row cannot exceed the max value of txn-entry-size-limit")
+	}
+	return nil
+}
+
 func (parser *CSVParser) readRecord() error {
+	parser.recordStart = parser.pos
+	parser.readingRecord = true
+	defer func() { parser.readingRecord = false }()
 	parser.recordBuffer = parser.recordBuffer[:0]
 	parser.fieldIndexes = parser.fieldIndexes[:0]
 	parser.fieldIsQuoted = parser.fieldIsQuoted[:0]
+	parser.fieldsSeen = 0
 
 	isEmptyLine := true
 	whitespaceLine := true
@@ -571,6 +615,7 @@ outside:
 				if _, _, rerr := parser.readUntilTerminator(); rerr != nil && rerr != io.EOF {
 					return rerr
 				}
+				parser.recordStart = parser.pos
 				continue
 			}
 		}
@@ -594,12 +639,14 @@ outside:
 			}
 			idx := bytes.Index(content, parser.startingBy)
 			if idx == -1 {
+				parser.recordStart = parser.pos
 				continue
 			}
 			foundStartingByThisLine = true
 			content = content[idx+len(parser.startingBy):]
 			parser.buf = append(content, parser.buf...)
 			parser.pos = oldPos + int64(idx+len(parser.startingBy))
+			parser.recordStart = parser.pos
 		}
 
 		content, firstByte, err := parser.readUntil(&parser.unquoteByteSet)
@@ -621,6 +668,11 @@ outside:
 			firstToken = csvTokenNewLine
 		} else {
 			parser.skipBytes(1)
+			if firstByte != '\n' {
+				if err = parser.checkRecordSize(0); err != nil {
+					return err
+				}
+			}
 			firstToken, err = parser.readUnquoteToken(firstByte)
 			if err != nil {
 				return err
@@ -630,8 +682,7 @@ outside:
 		switch firstToken {
 		case csvTokenComma:
 			whitespaceLine = false
-			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
-			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)
+			parser.finishField(fieldIsQuoted)
 			fieldIsQuoted = false
 		case csvTokenDelimiter:
 			if prevToken != csvTokenComma && prevToken != csvTokenNewLine {
@@ -653,11 +704,13 @@ outside:
 			prevToken = firstToken
 			if !parser.allowEmptyLine {
 				if isEmptyLine {
+					parser.recordStart = parser.pos
 					continue
 				}
 				// skip lines only contain whitespaces
 				if err == nil && whitespaceLine && len(bytes.TrimSpace(parser.recordBuffer)) == 0 {
 					parser.recordBuffer = parser.recordBuffer[:0]
+					parser.recordStart = parser.pos
 					continue
 				}
 			}
@@ -666,8 +719,7 @@ outside:
 					parser.recordBuffer = parser.recordBuffer[:n-1]
 				}
 			}
-			parser.fieldIndexes = append(parser.fieldIndexes, len(parser.recordBuffer))
-			parser.fieldIsQuoted = append(parser.fieldIsQuoted, fieldIsQuoted)
+			parser.finishField(fieldIsQuoted)
 			// the loop is end, no need to reset fieldIsQuoted
 			break outside
 		default:

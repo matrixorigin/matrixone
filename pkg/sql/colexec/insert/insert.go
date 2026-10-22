@@ -55,8 +55,6 @@ type flushLimiter struct {
 
 var flushLimiterState = newFlushLimiter()
 var flushConcurrencyForAcquire = flushConcurrency
-var flushSemaphoreAcquireTimeout = 200 * time.Millisecond
-var flushConcurrencyRefreshInterval = 20 * time.Millisecond
 
 func newFlushLimiter() *flushLimiter {
 	return &flushLimiter{notify: make(chan struct{})}
@@ -163,6 +161,19 @@ func (insert *Insert) Prepare(proc *process.Process) error {
 		fs, err := colexec.GetSharedFSFromProc(proc)
 		if err != nil {
 			return err
+		}
+		if memory := proc.Base.ImportMemory; memory != nil && memory.WorkingSet != nil && !insert.isMemoryTable() {
+			var throttler rscthrottler.RSCThrottler
+			if value, ok := runtime.ServiceRuntime(proc.GetService()).GetGlobalVariables(runtime.CNMemoryThrottler); ok {
+				throttler = value.(rscthrottler.RSCThrottler)
+			}
+			state, err := newControlledS3(proc, insert, fs, throttler)
+			if err != nil {
+				return err
+			}
+			insert.ctr.controlled = state
+			insert.ctr.affectedRows = 0
+			return nil
 		}
 
 		// If the target is not partition table, you only need to operate the main table
@@ -298,6 +309,9 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 	defer func() {
 		v2.TxnStatementInsertS3DurationHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if insert.ctr.controlled != nil {
+		return insert.insertControlledS3(proc, analyzer)
+	}
 	defer func() {
 		if err != nil {
 			insert.refreshAndReleaseS3MemGrant()
@@ -478,34 +492,16 @@ func (insert *Insert) flushS3WriterOnMemoryPressure(proc *process.Process, analy
 }
 
 func acquireFlushSlot(ctx context.Context) (func(), error) {
-	timer := time.NewTimer(flushSemaphoreAcquireTimeout)
-	defer timer.Stop()
-
 	for {
+		if err := context.Cause(ctx); err != nil {
+			return nil, err
+		}
 		release, waitCh := flushLimiterState.tryAcquire()
 		if release != nil {
 			return release, nil
 		}
 		select {
 		case <-waitCh:
-		case <-timer.C:
-			goto retry
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-	}
-
-retry:
-	ticker := time.NewTicker(flushConcurrencyRefreshInterval)
-	defer ticker.Stop()
-	for {
-		release, waitCh := flushLimiterState.tryAcquire()
-		if release != nil {
-			return release, nil
-		}
-		select {
-		case <-waitCh:
-		case <-ticker.C:
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		}

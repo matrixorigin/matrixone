@@ -240,6 +240,7 @@ func UpdateScopeTxnOffset(scope *Scope, txnOffset int) {
 }
 
 func (c *Compile) clear() {
+	defer func() { c.endImportMemory(); c.importMemoryRemote = false }()
 	if c.anal != nil {
 		c.anal.release()
 	}
@@ -570,6 +571,10 @@ func (c *Compile) printPipeline() {
 // 1. lock table.
 // 2. init data source.
 func (c *Compile) prePipelineInitializer() (err error) {
+	if err = c.beginImportMemory(); err != nil {
+		return err
+	}
+	c.beginSpillEpochs()
 	// do table lock.
 	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
 		return err

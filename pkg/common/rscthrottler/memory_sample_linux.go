@@ -1,0 +1,122 @@
+// Copyright 2026 Matrix Origin
+// Licensed under the Apache License, Version 2.0 (the "License");
+//go:build linux
+
+package rscthrottler
+
+import (
+	"errors"
+	"fmt"
+	"math"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+
+	"github.com/containerd/cgroups/v3"
+	"github.com/containerd/cgroups/v3/cgroup1"
+	"github.com/containerd/cgroups/v3/cgroup2"
+)
+
+func readCgroupMemory() (limit, current, inactive int64, err error) {
+	mode := cgroups.Mode()
+	if mode == cgroups.Unavailable {
+		if _, statErr := os.Stat("/sys/fs/cgroup"); errors.Is(statErr, os.ErrNotExist) {
+			return 0, 0, 0, errNoMemoryController
+		}
+		return 0, 0, 0, errors.New("cannot determine cgroup mount state")
+	}
+	if mode == cgroups.Unified {
+		path, e := cgroup2.NestedGroupPath("")
+		if e != nil {
+			return 0, 0, 0, e
+		}
+		if e = cgroup2.VerifyGroupPath(path); e != nil {
+			return 0, 0, 0, e
+		}
+		return readUnifiedMemory(filepath.Join("/sys/fs/cgroup", path))
+	}
+	cg, e := cgroup1.Load(cgroup1.PidPath(os.Getpid()), cgroup1.WithHiearchy(cgroup1.SingleSubsystem(cgroup1.Default, cgroup1.Memory)))
+	if e != nil {
+		if errors.Is(e, cgroup1.ErrMountPointNotExist) || errors.Is(e, cgroup1.ErrMemoryNotSupported) || errors.Is(e, cgroup1.ErrNoCgroupMountDestination) {
+			return 0, 0, 0, errNoMemoryController
+		}
+		return 0, 0, 0, e
+	}
+	stats, e := cg.Stat(cgroup1.IgnoreNotExist)
+	if e != nil {
+		return 0, 0, 0, e
+	}
+	m := stats.GetMemory()
+	if m == nil {
+		return 0, 0, 0, errors.New("incomplete cgroup memory accounting")
+	}
+	if m.GetUsage() == nil || m.GetUsage().GetUsage() == 0 {
+		return 0, 0, 0, errors.New("incomplete cgroup memory usage")
+	}
+	inactive = max(0, memoryInt(m.GetTotalInactiveFile())-memoryInt(m.GetTotalDirty()))
+	inactive = max(0, inactive-memoryInt(m.GetTotalWriteback()))
+	return memoryInt(m.GetHierarchicalMemoryLimit()), memoryInt(m.GetUsage().GetUsage()), inactive, nil
+}
+
+// cgroup2.Manager.Stat masks missing memory.stat and scalar read failures as
+// zero. Read the three required accounting files explicitly so an incomplete
+// sample cannot release container pressure or erase a previously known limit.
+func readUnifiedMemory(path string) (limit, current, inactive int64, err error) {
+	names := []string{"memory.max", "memory.current", "memory.stat"}
+	data := make([][]byte, len(names))
+	missing := 0
+	for i, name := range names {
+		var e error
+		data[i], e = os.ReadFile(filepath.Join(path, name))
+		if errors.Is(e, os.ErrNotExist) {
+			missing++
+		}
+		err = errors.Join(err, e)
+	}
+	if missing == len(names) {
+		info, e := os.Stat(path)
+		if e == nil && info.IsDir() {
+			return 0, 0, 0, errNoMemoryController
+		}
+	}
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	value := strings.TrimSpace(string(data[0]))
+	if value == "max" {
+		limit = math.MaxInt64
+	} else {
+		n, e := strconv.ParseUint(value, 10, 64)
+		if e != nil {
+			return 0, 0, 0, e
+		}
+		limit = memoryInt(n)
+	}
+	n, e := strconv.ParseUint(strings.TrimSpace(string(data[1])), 10, 64)
+	if e != nil {
+		return 0, 0, 0, e
+	}
+	current = memoryInt(n)
+	fields := strings.Fields(string(data[2]))
+	if len(fields) == 0 || len(fields)%2 != 0 {
+		return 0, 0, 0, fmt.Errorf("incomplete cgroup memory.stat")
+	}
+	values := make(map[string]int64)
+	for i := 0; i < len(fields); i += 2 {
+		n, e = strconv.ParseUint(fields[i+1], 10, 64)
+		if e != nil {
+			return 0, 0, 0, e
+		}
+		values[fields[i]] = memoryInt(n)
+	}
+	// Older kernels may omit dirty/writeback counters. In that case retain all
+	// file pages in the pressure estimate rather than inventing reclaim credit.
+	raw, hasInactive := values["inactive_file"]
+	dirty, hasDirty := values["file_dirty"]
+	writeback, hasWriteback := values["file_writeback"]
+	if hasInactive && hasDirty && hasWriteback {
+		inactive = max(0, max(0, raw-dirty)-writeback)
+	}
+	return
+}

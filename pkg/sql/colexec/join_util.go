@@ -19,8 +19,11 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
+	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
+	"math"
+	"unsafe"
 )
 
 type Batches struct {
@@ -97,10 +100,7 @@ func (bs *Batches) CopyIntoBatches(src *batch.Batch, proc *process.Process) (err
 		if lenBuf > 0 && bs.Buf[lenBuf-1].RowCount() != DefaultBatchSize {
 			tmp = bs.Buf[lenBuf-1]
 		} else {
-			preAllocSize := length - offset
-			if len(bs.Buf) > 1 {
-				preAllocSize = DefaultBatchSize
-			}
+			preAllocSize := min(length-offset, DefaultBatchSize)
 			tmp, err = proc.NewBatchFromSrc(src, preAllocSize)
 			if err != nil {
 				return err
@@ -182,6 +182,10 @@ func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int,
 		length = src.RowCount() - offset
 	}
 	for i := range dst.Vecs {
+		area := src.Vecs[i].WindowSize(offset, offset+length) - int64(length*src.Vecs[i].GetType().TypeSize())
+		if err = dst.Vecs[i].PreExtendWithArea(length, int(area), proc.Mp()); err != nil {
+			return 0, err
+		}
 		if err = dst.Vecs[i].UnionBatch(src.Vecs[i], int64(offset), length, nil, proc.Mp()); err != nil {
 			return 0, err
 		}
@@ -189,4 +193,78 @@ func appendToFixedSizeFromOffset(dst *batch.Batch, src *batch.Batch, offset int,
 	}
 	dst.AddRowCount(length)
 	return length, nil
+}
+
+// Allocated counts owned vector storage and Go metadata retained by the batch
+// list. It intentionally does not use Size(), which counts logical lengths.
+func (bs *Batches) Allocated() int64 {
+	total := int64(cap(bs.Buf)) * int64(unsafe.Sizeof((*batch.Batch)(nil)))
+	for _, bat := range bs.Buf {
+		total += batchAllocationMetadata(bat)
+		for _, vec := range bat.Vecs {
+			total += int64(vec.Allocated() + nulls.Allocated(vec.GetNulls()) + nulls.Allocated(vec.GetGrouping()))
+		}
+	}
+	return total
+}
+
+func batchAllocationMetadata(bat *batch.Batch) int64 {
+	return int64(unsafe.Sizeof(batch.Batch{})) + int64(cap(bat.Vecs))*int64(unsafe.Sizeof((*vector.Vector)(nil))) + int64(len(bat.Vecs))*int64(unsafe.Sizeof(vector.Vector{}))
+}
+
+// AppendAllocation is the complete new storage required by CopyIntoBatches,
+// while existing allocations remain live. Varlen append pre-extends its area
+// once, using this same payload calculation, rather than growing per row.
+func (bs *Batches) AppendAllocation(src *batch.Batch) int64 {
+	add := func(a, b int64) int64 {
+		if b < 0 || a > math.MaxInt64-b {
+			return math.MaxInt64
+		}
+		return a + b
+	}
+	total := int64(0)
+	if src.RowCount() == DefaultBatchSize {
+		total = batchAllocationMetadata(src)
+		for _, vec := range src.Vecs {
+			rows := src.RowCount()
+			if vec.IsConst() {
+				rows = 1
+			}
+			if vec.IsConstNull() {
+				rows = 0
+			}
+			total = add(total, mpool.GrowCapacity(0, int64(rows*vec.GetType().TypeSize())))
+			total = add(total, int64(len(vec.GetArea())+nulls.Allocated(vec.GetNulls())+nulls.Allocated(vec.GetGrouping())))
+		}
+	} else {
+		offset, oldCount := 0, len(bs.Buf)
+		if oldCount > 0 && bs.Buf[oldCount-1].RowCount() < DefaultBatchSize {
+			last := bs.Buf[oldCount-1]
+			rows := min(src.RowCount(), DefaultBatchSize-last.RowCount())
+			for i, vec := range last.Vecs {
+				total = add(total, vec.AppendWindowAllocation(src.Vecs[i], 0, rows))
+				total = add(total, nulls.GrowthAllocation(vec.GetNulls(), last.RowCount()+rows+1)+nulls.GrowthAllocation(vec.GetGrouping(), last.RowCount()+rows+1))
+			}
+			offset = rows
+		}
+		for offset < src.RowCount() {
+			rows := min(src.RowCount()-offset, DefaultBatchSize)
+			prealloc := min(src.RowCount()-offset, DefaultBatchSize)
+			total = add(total, batchAllocationMetadata(src))
+			for _, vec := range src.Vecs {
+				total = add(total, mpool.GrowCapacity(0, int64(prealloc*vec.GetType().TypeSize())))
+				area := vec.WindowSize(offset, offset+rows) - int64(rows*vec.GetType().TypeSize())
+				total = add(total, mpool.GrowCapacity(0, area))
+				total = add(total, nulls.GrowthAllocation(nil, rows+1)*2)
+			}
+			offset += rows
+		}
+	}
+	// A growing list keeps its old backing array alive through append. Two times
+	// required entries bounds the Go append capacity policy plus allocator rounding.
+	required := len(bs.Buf) + (src.RowCount()+DefaultBatchSize-1)/DefaultBatchSize + 1
+	if required > cap(bs.Buf) {
+		total = add(total, int64(max(required*2, 16))*int64(unsafe.Sizeof((*batch.Batch)(nil)))+8192)
+	}
+	return total
 }

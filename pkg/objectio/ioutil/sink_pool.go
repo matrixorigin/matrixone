@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/common/rscthrottler"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
@@ -50,16 +51,28 @@ type SinkPool struct {
 }
 
 type poolSinkJob struct {
-	data    []*batch.Batch
-	factory FileSinkerFactory
-	mp      *mpool.MPool
-	fs      fileservice.FileService
-	result  *pipelineResult
+	data           []*batch.Batch
+	factory        FileSinkerFactory
+	mp             *mpool.MPool
+	fs             fileservice.FileService
+	result         *pipelineResult
+	workspace      *rscthrottler.WorkingSet
+	sourceReleased func()
+}
+
+func (job *poolSinkJob) releaseSource() {
+	freeBatches(job.data, job.mp)
+	job.data = nil
+	if job.sourceReleased != nil {
+		job.sourceReleased()
+	}
 }
 
 type poolSyncJob struct {
-	fSinker FileSinker
-	result  *pipelineResult
+	fSinker   FileSinker
+	result    *pipelineResult
+	workspace *rscthrottler.WorkspaceLease
+	ioMP      *mpool.MPool
 }
 
 // pipelineResult tracks accumulated results and errors for one Sinker's
@@ -140,13 +153,40 @@ func (p *SinkPool) runSinkWorker() {
 	for job := range p.sinkChan {
 		r := job.result
 		if r.hasError() {
-			freeBatches(job.data, job.mp)
+			job.releaseSource()
 			r.pending.Done()
 			continue
 		}
 
 		sinkStart := time.Now()
-		fSinker := job.factory(job.mp, job.fs)
+		var workspace *rscthrottler.WorkspaceLease
+		var ioMP *mpool.MPool
+		if job.workspace != nil {
+			var err error
+			workspace, err = job.workspace.AcquireIO(r.ctx, job.workspace.IOBytes())
+			if err != nil {
+				job.releaseSource()
+				r.setError(err)
+				r.pending.Done()
+				continue
+			}
+			ioMP = mpool.MustNew("sink-pool-io")
+		}
+		factoryMP := job.mp
+		if ioMP != nil {
+			factoryMP = ioMP
+		}
+		fSinker := job.factory(factoryMP, job.fs)
+		if fs, ok := fSinker.(*FSinkerImpl); ok && workspace != nil {
+			fs.workspaceBytes = workspace.Capacity()
+			var payload int64
+			var columns int
+			for _, b := range job.data {
+				payload += int64(b.Size())
+				columns = max(columns, len(b.Vecs))
+			}
+			fs.arenaBytes = warmArenaBytes(payload, int64(columns))
+		}
 		var sinkErr error
 		for _, bat := range job.data {
 			if err := fSinker.Sink(r.ctx, bat); err != nil {
@@ -155,10 +195,14 @@ func (p *SinkPool) runSinkWorker() {
 			}
 		}
 		atomic.AddInt64(&r.sinkNs, int64(time.Since(sinkStart)))
-		freeBatches(job.data, job.mp)
+		job.releaseSource()
 
 		if sinkErr != nil {
 			fSinker.Close()
+			mpool.DeleteMPool(ioMP)
+			if workspace != nil {
+				workspace.Release()
+			}
 			r.setError(sinkErr)
 			r.pending.Done()
 			continue
@@ -166,14 +210,23 @@ func (p *SinkPool) runSinkWorker() {
 
 		// Forward to sync worker. Do NOT call r.pending.Done() here;
 		// the sync worker calls it after completing the IO.
+		forwarded := workspace.Transfer()
 		select {
-		case p.syncChan <- &poolSyncJob{fSinker: fSinker, result: r}:
+		case p.syncChan <- &poolSyncJob{fSinker: fSinker, result: r, workspace: forwarded, ioMP: ioMP}:
 		case <-r.ctx.Done():
 			fSinker.Close()
+			mpool.DeleteMPool(ioMP)
+			if forwarded != nil {
+				forwarded.Release()
+			}
 			r.setError(context.Cause(r.ctx))
 			r.pending.Done()
 		case <-p.done:
 			fSinker.Close()
+			mpool.DeleteMPool(ioMP)
+			if forwarded != nil {
+				forwarded.Release()
+			}
 			r.setError(context.Canceled)
 			r.pending.Done()
 		}
@@ -186,6 +239,10 @@ func (p *SinkPool) runSyncWorker() {
 		r := job.result
 		if r.hasError() {
 			job.fSinker.Close()
+			mpool.DeleteMPool(job.ioMP)
+			if job.workspace != nil {
+				job.workspace.Release()
+			}
 			r.pending.Done()
 			continue
 		}
@@ -194,6 +251,10 @@ func (p *SinkPool) runSyncWorker() {
 		stats, err := job.fSinker.Sync(r.ctx)
 		atomic.AddInt64(&r.syncNs, int64(time.Since(syncStart)))
 		job.fSinker.Close()
+		mpool.DeleteMPool(job.ioMP)
+		if job.workspace != nil {
+			job.workspace.Release()
+		}
 
 		if err != nil {
 			r.setError(err)
@@ -212,7 +273,7 @@ func (p *SinkPool) runSyncWorker() {
 func (p *SinkPool) Submit(job *poolSinkJob) error {
 	r := job.result
 	if err := r.getError(); err != nil {
-		freeBatches(job.data, job.mp)
+		job.releaseSource()
 		return err
 	}
 	r.pending.Add(1)
@@ -227,7 +288,7 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 	select {
 	case <-p.done:
 		r.pending.Done()
-		freeBatches(job.data, job.mp)
+		job.releaseSource()
 		return context.Canceled
 	default:
 	}
@@ -236,7 +297,7 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 	select {
 	case <-r.ctx.Done():
 		r.pending.Done()
-		freeBatches(job.data, job.mp)
+		job.releaseSource()
 		if err := r.getError(); err != nil {
 			return err
 		}
@@ -249,14 +310,14 @@ func (p *SinkPool) Submit(job *poolSinkJob) error {
 		return nil
 	case <-r.ctx.Done():
 		r.pending.Done()
-		freeBatches(job.data, job.mp)
+		job.releaseSource()
 		if err := r.getError(); err != nil {
 			return err
 		}
 		return context.Cause(r.ctx)
 	case <-p.done:
 		r.pending.Done()
-		freeBatches(job.data, job.mp)
+		job.releaseSource()
 		return context.Canceled
 	}
 }

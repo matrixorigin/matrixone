@@ -213,30 +213,27 @@ func (update *MultiUpdate) update_s3(proc *process.Process, analyzer process.Ana
 
 	if ctr.state == vm.Eval {
 		result := vm.NewCallResult()
-		var out *batch.Batch
 		for {
-			writer := update.getFlushableS3WriterFunc()
+			writer := ctr.outputWriter
+			if writer == nil {
+				writer = update.getFlushableS3WriterFunc()
+				ctr.outputWriter = writer
+			}
 			if writer == nil {
 				ctr.state = vm.End
-				result.Batch = out
 				return result, nil
 			}
-
-			err := writer.flushTailAndWriteToOutput(proc, analyzer)
-			if err != nil {
+			if err := writer.flushTailAndWriteToOutput(proc, analyzer); err != nil {
 				return vm.CancelResult, err
 			}
-			if writer.outputBat.RowCount() == 0 {
-				return vm.CancelResult, err
+			if writer.outputBat == nil || writer.outputBat.RowCount() == 0 {
+				ctr.outputWriter = nil
+				continue
 			}
-			if out == nil {
-				out = writer.outputBat
-			} else {
-				out, err = out.Append(proc.Ctx, proc.Mp(), writer.outputBat)
-				if err != nil {
-					return vm.CancelResult, err
-				}
-			}
+			// One bounded writer frame per Call. Do not merge every partition's
+			// output through proc.Mp(), which escapes the writer's ownership.
+			result.Batch = writer.outputBat
+			return result, nil
 		}
 	}
 

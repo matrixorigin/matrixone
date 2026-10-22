@@ -17,6 +17,7 @@ package compile
 import (
 	"context"
 	"encoding/hex"
+	"errors"
 	gotrace "runtime/trace"
 	"strings"
 	"time"
@@ -247,20 +248,36 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 		// Before compile.runOnce, Reset the 'StatsInfo' execution related resources in context
 		resetStatsInfoPreRun(stats, isInExecutor)
 
-		// running.
-		if err = runC.prePipelineInitializer(); err == nil {
+		// Every attempt owns its admission root. Pipeline Cleanup has joined
+		// the local scope and IO owners before runOnce returns.
+		err = func() (attemptErr error) {
+			defer func() { runC.endSpillEpochs(attemptErr != nil); runC.endImportMemory() }()
+			if attemptErr = runC.prePipelineInitializer(); attemptErr != nil {
+				return attemptErr
+			}
 			runC.MessageBoard.BeforeRunonce()
-			// Calculate time spent between the start and runOnce execution
 			if !isInExecutor {
 				stats.StoreCompilePreRunOnceDuration(time.Since(preRunOnceStart))
 			}
-
-			if err = runC.runOnce(); err == nil {
-				if runC.anal != nil {
-					runC.anal.retryTimes = retryTimes
-				}
-				break
+			return runC.runOnce()
+		}()
+		if err == nil {
+			if runC.anal != nil {
+				runC.anal.retryTimes = retryTimes
 			}
+			break
+		}
+		var smaller *importDOPRetryError
+		if errors.As(err, &smaller) {
+			if runC != c {
+				runC.Release()
+			}
+			runC, err = c.recompileImportMemory(execTopContext, smaller.next)
+			if err != nil {
+				return nil, err
+			}
+			runC.InitPipelineContextToRetryQuery()
+			continue
 		}
 
 		c.fatalLog(retryTimes, err)
