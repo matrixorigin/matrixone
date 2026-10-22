@@ -131,6 +131,49 @@ func TestJSONLineOutfileLoadPreservesTextAndRejectsInvalidUTF8(t *testing.T) {
 		exec(fmt.Sprintf("load data infile '%s' into table %s.csv_dst fields terminated by ','", csvPath, database))
 		require.Equal(t, wantRows, readRows("csv_dst"))
 
+		exec("create table " + database + ".datalink_src (id int primary key, u datalink)")
+		exec("insert into " + database + ".datalink_src values " +
+			"(1, cast(concat(cast('file:///tmp/a' as binary), unhex('FF'), cast('b' as binary)) as datalink)), " +
+			"(2, cast('file:///tmp/a-valid-b' as datalink))")
+		datalinkRows := query("select id, hex(cast(u as binary)) from " + database + ".datalink_src order by id")
+		defer datalinkRows.Close()
+		var gotDatalinks [][2]string
+		for datalinkRows.Next() {
+			var id int
+			var valueHex string
+			require.NoError(t, datalinkRows.Scan(&id, &valueHex))
+			gotDatalinks = append(gotDatalinks, [2]string{fmt.Sprint(id), valueHex})
+		}
+		require.NoError(t, datalinkRows.Err())
+		require.NoError(t, datalinkRows.Close())
+		require.Equal(t, [][2]string{{"1", "66696C653A2F2F2F746D702F61FF62"}, {"2", "66696C653A2F2F2F746D702F612D76616C69642D62"}}, gotDatalinks)
+
+		badDatalinkPath := filepath.Join(dir, "bad-datalink.jsonl")
+		datalinkFailCtx, datalinkFailCancel := context.WithTimeout(ctx, 15*time.Second)
+		datalinkStarted := time.Now()
+		_, err = conn.ExecContext(datalinkFailCtx, fmt.Sprintf("select u from %s.datalink_src where id=1 into outfile '%s' format 'jsonline'", database, badDatalinkPath))
+		datalinkFailCancel()
+		require.Error(t, err)
+		require.Contains(t, strings.ToLower(err.Error()), "jsonline")
+		require.Contains(t, strings.ToLower(err.Error()), "invalid utf-8")
+		t.Logf("invalid DATALINK UTF-8 OUTFILE error after %s: %v", time.Since(datalinkStarted), err)
+		badDatalinkBytes, badDatalinkReadErr := os.ReadFile(badDatalinkPath)
+		if badDatalinkReadErr == nil {
+			t.Logf("failed invalid DATALINK UTF-8 target bytes=%x text=%q", badDatalinkBytes, string(badDatalinkBytes))
+			require.NotContains(t, string(badDatalinkBytes), "�", "invalid DATALINK input must not be published with replacement characters")
+		} else {
+			require.True(t, errors.Is(badDatalinkReadErr, os.ErrNotExist), "unexpected failed-target read error: %v", badDatalinkReadErr)
+		}
+
+		var datalinkSessionCheck int
+		require.NoError(t, conn.QueryRowContext(ctx, "select 1").Scan(&datalinkSessionCheck))
+		require.Equal(t, 1, datalinkSessionCheck)
+		validDatalinkPath := filepath.Join(dir, "valid-datalink.jsonl")
+		exec(fmt.Sprintf("select u from %s.datalink_src where id=2 into outfile '%s' format 'jsonline'", database, validDatalinkPath))
+		validDatalinkBytes, err := os.ReadFile(validDatalinkPath)
+		require.NoError(t, err)
+		require.Equal(t, []byte("{\"u\":\"file:///tmp/a-valid-b\"}\n"), validDatalinkBytes)
+
 		exec("create table " + database + ".bad_utf8 (s varchar(32))")
 		exec("insert into " + database + ".bad_utf8 values (cast(x'61FF62' as char))")
 		var sourceHex string

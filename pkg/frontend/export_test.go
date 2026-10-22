@@ -1148,6 +1148,39 @@ func TestVectorValueToJSONRejectsInvalidUTF8Text(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("datalink", func(t *testing.T) {
+		values := []struct {
+			name    string
+			value   string
+			wantErr bool
+		}{
+			{name: "invalid URL path UTF-8", value: "file:///tmp/a\xffb", wantErr: true},
+			{name: "valid URL", value: "file:///tmp/a-valid-b"},
+		}
+		for _, tc := range values {
+			t.Run(tc.name, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				vec := vector.NewVec(types.T_datalink.ToType())
+				defer func() {
+					vec.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+				require.NoError(t, vector.AppendBytes(vec, []byte(tc.value), false, mp))
+				got, err := vectorValueToJSON(vec, 0, nil, nil)
+				if tc.wantErr {
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+					require.Contains(t, err.Error(), "JSONLINE")
+					require.Contains(t, err.Error(), "invalid UTF-8")
+					require.NotContains(t, err.Error(), tc.value)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, tc.value, got)
+			})
+		}
+	})
 }
 
 func TestEscapeJSONControl(t *testing.T) {

@@ -1463,7 +1463,7 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		return vector.GetFixedAtNoTypeCheck[float32](vec, i), nil
 	case types.T_float64:
 		return vector.GetFixedAtNoTypeCheck[float64](vec, i), nil
-	case types.T_char, types.T_varchar, types.T_text:
+	case types.T_char, types.T_varchar, types.T_text, types.T_datalink:
 		value := vec.GetBytesAt(i)
 		if !utf8.Valid(value) {
 			return nil, moerr.NewNotSupported(context.Background(),
@@ -1475,8 +1475,6 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 		// distinguish MO-encoded binary payloads from plain-text JSON
 		// strings; bare strings keep their byte-exact passthrough on load.
 		return map[string]any{external.JsonBinaryKey: base64.StdEncoding.EncodeToString(vec.GetBytesAt(i))}, nil
-	case types.T_datalink:
-		return string(vec.GetBytesAt(i)), nil
 	case types.T_geometry, types.T_geometry32:
 		return planfunction.GeometryPayloadToText(vec.GetBytesAt(i))
 	case types.T_array_float32:
