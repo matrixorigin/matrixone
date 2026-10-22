@@ -2859,9 +2859,6 @@ func d256SubDiffScale(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnul
 
 // ---- Decimal256 multiply ----
 
-// d256Mul is the batch kernel for Decimal256 multiplication.
-// Inlines the schoolbook 4×4 Mul256 cross-product to avoid
-// per-element method calls (Mul256 cost 1230 >> inlining budget 80).
 // decimalOperandRange describes a bound implied by a valid operand type, not
 // sampled values or optimizer statistics. It is never stored on a vector.
 type decimalOperandRange uint8
@@ -2886,6 +2883,9 @@ func decimal256OperandRange(typ types.Type) decimalOperandRange {
 	return decimalRangeUnknown
 }
 
+// d256Mul is the batch kernel for Decimal256 multiplication.
+// Inlines the schoolbook 4×4 Mul256 cross-product to avoid
+// per-element method calls (Mul256 cost 1230 >> inlining budget 80).
 func d256Mul(v1, v2, rs []types.Decimal256, scale1, scale2 int32, rsnull *nulls.Nulls) error {
 	return d256MulWithRangeProof(v1, v2, rs, scale1, scale2, rsnull, decimalRangeUnknown, decimalRangeUnknown)
 }
