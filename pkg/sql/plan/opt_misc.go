@@ -673,7 +673,7 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 	newOnList := make([]*plan.Expr, 0)
 	for _, expr := range node.OnList {
 		if exprf := expr.GetF(); exprf != nil {
-			if IsEqualFunc(exprf.Func.GetObj()) {
+			if IsEqualFunc(exprf.Func.GetObj()) && !isJSONNumericComparisonArgs(exprf.Args) {
 				leftcol := exprf.Args[0].GetCol()
 				rightcol := exprf.Args[1].GetCol()
 				if leftcol != nil && rightcol != nil {
@@ -2573,7 +2573,8 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 
 		for _, expr := range baseNode.FilterList {
 			if e, ok := expr.Expr.(*plan.Expr_F); ok {
-				if e.F.Func.GetObjName() == "=" {
+				// Mixed JSON/numeric equality does not identify a physical PK value.
+				if e.F.Func.GetObjName() == "=" && !isJSONNumericComparisonArgs(e.F.Args) {
 					//update t1 set a = 1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 					//delete from where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {

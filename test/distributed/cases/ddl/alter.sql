@@ -526,7 +526,10 @@ alter table v2 modify column b int unique key; -- dup, fuzzy dedup path
 
 create table v3 (a int primary key, b int, c text, unique index IdX2(b));
 
+set @load_pk_check_saved = @@session.mo_pk_check_by_cn;
+set session mo_pk_check_by_cn = on;
 load data infile  '$resources/load_data/dup_load.csv' into table v3 fields terminated by ',';
+set session mo_pk_check_by_cn = @load_pk_check_saved;
 select count(*) from v3;
 
 -- Construct corrupt data explicitly to test ALTER's dedup exemption.

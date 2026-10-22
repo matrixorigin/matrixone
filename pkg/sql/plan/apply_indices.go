@@ -1196,7 +1196,7 @@ func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
 	tag := scanNode.BindingTags[0]
 	for _, filter := range scanNode.FilterList {
 		fn := filter.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 || isJSONNumericComparisonArgs(fn.Args) {
 			continue
 		}
 		leftCol := fn.Args[0].GetCol()
@@ -2529,7 +2529,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		}
 
 		fn := node.FilterList[i].GetF()
-		if fn == nil || len(fn.Args) < 2 {
+		if fn == nil || len(fn.Args) < 2 || isJSONNumericComparisonArgs(fn.Args) {
 			continue
 		}
 		colArgIdx := 0
@@ -2583,7 +2583,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 }
 
 func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
-	if fn == nil {
+	if fn == nil || isJSONNumericComparisonArgs(fn.Args) {
 		return UnsupportedIndexCondition, nil
 	}
 	switch fn.Func.ObjName {
@@ -4261,7 +4261,8 @@ func isUpperBoundOp(name string) bool {
 // classifyRangeBound returns the column and whether the filter is a lower bound.
 // Returns nil if the filter is not a range comparison with a column and constant.
 func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
-	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil ||
+		isJSONNumericComparisonArgs(fn.Args) {
 		return nil, false
 	}
 	op := canonicalRangeOp(fn)

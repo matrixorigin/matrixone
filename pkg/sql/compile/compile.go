@@ -711,12 +711,14 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
-// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
-// he statement
+// isRetryErr accepts transaction retries under RC and snapshot-coverage retries
+// under either isolation level. A coverage retry changes the access path, not
+// the transaction snapshot.
 func (c *Compile) isRetryErr(err error) bool {
-	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-		c.proc.GetTxnOperator().Txn().IsRCIsolation()
+	return moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged) ||
+		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+			c.proc.GetTxnOperator().Txn().IsRCIsolation()
 }
 
 type scopeRunResult struct {
@@ -6613,7 +6615,7 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 	if node == nil || left == nil || right == nil ||
 		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
-		left.Stats == nil {
+		left.Stats == nil || isMixedJSONNumericAsof(node) {
 		return false
 	}
 	leftRows := left.Stats.Outcnt
@@ -6671,6 +6673,25 @@ func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	if isMixedJSONNumericAsof(node) {
+		// Gather complete inputs on one coordinator worker before selecting
+		// eligible predecessors. This also handles a single remote scope.
+		node.RuntimeFilterBuildList = nil
+		if node.Stats != nil && node.Stats.HashmapStats != nil {
+			node.Stats.HashmapStats.Shuffle = false
+			node.Stats.HashmapStats.ShuffleColIdx = -1
+		}
+		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, false)
+		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, false)
+		if !c.scopesRunOnCoordinator(probeScopes) {
+			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
+		}
+		if !c.scopesRunOnCoordinator(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
+		return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
+	}
 	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) ||
 		c.joinNeedsLocalWindow(node, probeScopes, buildScopes) {
 		// Keep WINDOW local: it has no remote encoding. The same local
@@ -7074,6 +7095,9 @@ func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 }
 
 func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
+	if isMixedJSONNumericAsof(node) {
+		return true
+	}
 	isEq := plan2.IsEquiJoin2(node.OnList)
 	if isEq && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_LEFT ||
 		node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_SEMI ||
