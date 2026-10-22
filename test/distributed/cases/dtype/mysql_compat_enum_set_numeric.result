@@ -137,7 +137,7 @@ select sum(s) as ss, avg(s) as avs from (select distinct s from special_numeric_
 0.0  ¦  0.0
 select sum(s) as ss, avg(s) as avs from (select s from special_numeric_empty limit 3) d;
 ➤ ss[8,53,31]  ¦  avs[8,53,31]  𝄀
-0.0  ¦  0.0
+1.0  ¦  0.5
 insert into special_numeric_empty values (4, 2, 2);
 select id, cast(s as decimal(10,2)) as decimal_bitmap, cast(s as double) as double_bitmap
 from (select id, s from special_numeric_empty) d order by id;
@@ -149,7 +149,7 @@ id    decimal_bitmap    double_bitmap
 select id, cast(s as decimal(10,2)) as decimal_bitmap, cast(s as double) as double_bitmap
 from (select id, s from special_numeric_empty order by id limit 4) d order by id;
 id    decimal_bitmap    double_bitmap
-1    0.00    0
+1    1.00    1
 2    0.00    0
 3    null    null
 4    2.00    2

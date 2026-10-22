@@ -67,7 +67,7 @@ func TestNormalizeDeleteOldValueExprPreservesStoredSpecialValue(t *testing.T) {
 	enumDisplay, err := makeEnumOrSetDisplayValue(ctx, enumRaw)
 	require.NoError(t, err)
 
-	normalized, err := normalizeDeleteOldValueExpr(ctx, enumDisplay, enumType)
+	normalized, err := normalizeStoredSpecialValueExpr(ctx, enumDisplay, enumType)
 	require.NoError(t, err)
 	require.Equal(t, enumType, normalized.Typ)
 	require.Equal(t, enumRaw.GetCol(), normalized.GetCol(), "ENUM deletion must retain the stored ordinal expression")
@@ -80,12 +80,10 @@ func TestNormalizeDeleteOldValueExprPreservesStoredSpecialValue(t *testing.T) {
 	setDisplay, err := makeEnumOrSetDisplayValue(ctx, setRaw)
 	require.NoError(t, err)
 
-	normalized, err = normalizeDeleteOldValueExpr(ctx, setDisplay, setType)
+	normalized, err = normalizeStoredSpecialValueExpr(ctx, setDisplay, setType)
 	require.NoError(t, err)
 	require.Equal(t, setType, normalized.Typ)
-	require.Equal(t, moSetCastIndexValueToIndexFun, normalized.GetF().GetFunc().GetObjName())
-	require.Equal(t, setRaw.GetCol(), normalized.GetF().GetArgs()[1].GetCol())
-	require.Empty(t, normalized.GetF().GetArgs()[1].Typ.Enumvalues)
+	require.Equal(t, setRaw.GetCol(), normalized.GetCol(), "SET DML must retain its stored bitmap")
 
 	emptySetType := planpb.Type{Id: int32(types.T_uint64), Enumvalues: ",a,b"}
 	emptySetRaw := &planpb.Expr{
@@ -95,12 +93,10 @@ func TestNormalizeDeleteOldValueExprPreservesStoredSpecialValue(t *testing.T) {
 	emptySetDisplay, err := makeEnumOrSetDisplayValue(ctx, emptySetRaw)
 	require.NoError(t, err)
 
-	normalized, err = normalizeDeleteOldValueExpr(ctx, emptySetDisplay, emptySetType)
+	normalized, err = normalizeStoredSpecialValueExpr(ctx, emptySetDisplay, emptySetType)
 	require.NoError(t, err)
 	require.Equal(t, emptySetType, normalized.Typ)
-	require.Equal(t, moSetCastIndexValueToIndexFun, normalized.GetF().GetFunc().GetObjName())
-	require.Equal(t, emptySetRaw.GetCol(), normalized.GetF().GetArgs()[1].GetCol())
-	require.Empty(t, normalized.GetF().GetArgs()[1].Typ.Enumvalues)
+	require.Equal(t, emptySetRaw.GetCol(), normalized.GetCol(), "SET DML must retain its stored bitmap")
 }
 
 func TestNormalizeDeleteOldValueExprUsesFallbackCast(t *testing.T) {
@@ -110,24 +106,24 @@ func TestNormalizeDeleteOldValueExprUsesFallbackCast(t *testing.T) {
 		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 1, ColPos: 0}},
 	}
 
-	enum, err := normalizeDeleteOldValueExpr(ctx, plain, planpb.Type{
+	enum, err := normalizeStoredSpecialValueExpr(ctx, plain, planpb.Type{
 		Id: int32(types.T_enum), Enumvalues: "a,b",
 	})
 	require.NoError(t, err)
 	require.Equal(t, moEnumCastValueToIndexFun, enum.GetF().GetFunc().GetObjName())
 
-	set, err := normalizeDeleteOldValueExpr(ctx, plain, planpb.Type{
+	set, err := normalizeStoredSpecialValueExpr(ctx, plain, planpb.Type{
 		Id: int32(types.T_uint64), Enumvalues: "a,b",
 	})
 	require.NoError(t, err)
 	require.Equal(t, moSetCastValueToIndexFun, set.GetF().GetFunc().GetObjName())
 
 	ordinary := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_int64)}}
-	got, err := normalizeDeleteOldValueExpr(ctx, ordinary, ordinary.Typ)
+	got, err := normalizeStoredSpecialValueExpr(ctx, ordinary, ordinary.Typ)
 	require.NoError(t, err)
 	require.Same(t, ordinary, got)
 
-	_, err = normalizeDeleteOldValueExpr(ctx, nil, planpb.Type{
+	_, err = normalizeStoredSpecialValueExpr(ctx, nil, planpb.Type{
 		Id: int32(types.T_enum), Enumvalues: "a,b",
 	})
 	require.Error(t, err)
@@ -300,7 +296,7 @@ func TestNormalizeDeleteOldValueProjectionRejectsInvalidChain(t *testing.T) {
 			builder.qry.Nodes = test.nodes
 			visiting := make(map[int32]bool)
 
-			err := builder.normalizeDeleteOldValueProjectionAtNode(
+			err := builder.normalizeStoredSpecialValueProjectionAtNode(
 				0, test.colPos, enumType, visiting,
 			)
 			require.ErrorContains(t, err, test.want)

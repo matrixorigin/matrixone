@@ -333,3 +333,93 @@ func TestEnumValueIndexAssignmentBoundaries(t *testing.T) {
 		}
 	}
 }
+
+// Typed-source conversion shares the ordinary assignment policy. The stored
+// error member remains distinct from a declared empty member in every mode.
+func TestEnumSetTypedSourceAssignmentModes(t *testing.T) {
+	for _, mode := range []string{"strict", "nonstrict", "ignore"} {
+		t.Run(mode, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.Base.IsFrontend = true
+			proc.SetResolveVariableFunc(func(string, bool, bool) (any, error) {
+				if mode == "nonstrict" {
+					return "", nil
+				}
+				return "STRICT_TRANS_TABLES", nil
+			})
+			proc.SetStmtProfile(&process.StmtProfile{})
+			proc.GetStmtProfile().SetStatementRuntimeProfile("Update", "DML", mode == "ignore")
+			for _, constant := range []bool{false, true} {
+				t.Run(fmt.Sprintf("constant=%v", constant), func(t *testing.T) {
+					sink := &arithmeticWarningSink{limit: 1}
+					proc.WarningSink = sink
+					source := NewFunctionTestInput(types.T_varchar.ToType(), []string{",bad,blue", ",bad,blue", ",bad,blue", ",bad,blue"}, nil)
+					if constant {
+						source = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{",bad,blue"}, nil)
+					}
+					fc := NewFunctionTestCase(proc, []FunctionTestInput{
+						NewFunctionTestConstInput(types.T_varchar.ToType(), []string{",blue"}, nil), source,
+						NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{0, 2, 3, 1}, nil),
+					}, NewFunctionTestResult(types.T_enum.ToType(), mode == "strict", []types.Enum{0, 0, 2, 1}, nil), CastValueToIndex)
+					defer fc.Free()
+					fc.fnLength = 4
+					ok, info := fc.Run()
+					require.True(t, ok, info)
+					if mode == "strict" {
+						require.Zero(t, sink.total)
+					} else {
+						require.Equal(t, uint64(1), sink.total)
+						require.Equal(t, uint16(1265), sink.records[0].code)
+					}
+					require.Zero(t, process.WarningDiagnosticBudgetForProcess(proc).Used())
+				})
+			}
+		})
+	}
+}
+
+func TestEnumSetTypedSourceLazyDecode(t *testing.T) {
+	for _, tc := range []struct {
+		name                    string
+		source                  []string
+		ordinals                []types.Enum
+		sourceNull, ordinalNull []bool
+		mask                    *FunctionSelectList
+		want                    []types.Enum
+		nulls                   []bool
+		fail                    bool
+	}{
+		{name: "constant repeated empty", source: []string{",red,blue"}, ordinals: []types.Enum{3, 1, 3, 0}, want: []types.Enum{2, 1, 2, 0}},
+		{name: "row definitions", source: []string{"red,blue", "blue,red"}, ordinals: []types.Enum{1, 1}, want: []types.Enum{3, 2}},
+		{name: "masked invalid", source: []string{"red,blue"}, ordinals: []types.Enum{1, 99, 2}, mask: &FunctionSelectList{AnyNull: true, SelectList: []bool{true, false, true}}, want: []types.Enum{3, 0, 2}, nulls: []bool{false, true, false}},
+		{name: "selected invalid", source: []string{"red,blue"}, ordinals: []types.Enum{1, 99}, fail: true},
+		{name: "null ordinal", source: []string{"red,blue"}, ordinals: []types.Enum{99, 2}, ordinalNull: []bool{true, false}, want: []types.Enum{0, 2}, nulls: []bool{true, false}},
+		{name: "null source", source: []string{"bad"}, sourceNull: []bool{true}, ordinals: []types.Enum{99, 0}, want: []types.Enum{0, 0}, nulls: []bool{true, true}},
+		{name: "all masked", source: []string{"bad"}, ordinals: []types.Enum{99, 99}, mask: &FunctionSelectList{AllNull: true}, want: []types.Enum{0, 0}, nulls: []bool{true, true}},
+		{name: "warning then corrupt ordinal", source: []string{"missing,blue"}, ordinals: []types.Enum{1, 99}, fail: true},
+		{name: "empty batch", source: []string{"bad"}, ordinals: []types.Enum{}, want: []types.Enum{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			proc.GetSessionInfo().SqlMode = process.EmptySqlModeSentinel
+			sink := &arithmeticWarningSink{limit: 1}
+			proc.WarningSink = sink
+			source := NewFunctionTestInput(types.T_varchar.ToType(), tc.source, tc.sourceNull)
+			if len(tc.source) == 1 {
+				source = NewFunctionTestConstInput(types.T_varchar.ToType(), tc.source, tc.sourceNull)
+			}
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{
+				NewFunctionTestConstInput(types.T_varchar.ToType(), []string{",blue,red"}, nil), source,
+				NewFunctionTestInput(types.T_enum.ToType(), tc.ordinals, tc.ordinalNull),
+			}, NewFunctionTestResult(types.T_enum.ToType(), tc.fail, tc.want, tc.nulls), CastValueToIndex).WithSelectList(tc.mask)
+			defer fc.Free()
+			fc.fnLength = len(tc.ordinals)
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+			require.Zero(t, sink.total, "masked/NULL rows and aborted calls must not publish warnings")
+			require.Zero(t, process.WarningDiagnosticBudgetForProcess(proc).Used())
+		})
+	}
+}

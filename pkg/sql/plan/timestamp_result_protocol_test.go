@@ -202,13 +202,16 @@ func TestCTASPopulationProtocolSurvivesQueryReleaseAndFolding(t *testing.T) {
 		version   int64
 	}{
 		{"column", "create table db.t as select timestamp(granted_time) from mo_catalog.mo_role_privs", defines.MORPCVersion122},
+		{"enum", "create table db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v", defines.MORPCVersion128},
+		{"enum_temporary", "create temporary table db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v", defines.MORPCVersion128},
+		{"enum_mixed_folded", "create table db.t as select cast(cast_value_to_index('blue,red','red,blue',cast_value_to_index('red,blue','red')) as unsigned) v, timestamp('2024-02-29') ts", defines.MORPCVersion128},
 		{"folded", "create table db.t as select timestamp('2024-02-29 12:34:56.123')", defines.MORPCVersion122},
 		{"nested", "create table db.t as select v from (select timestamp('2024-02-29 12:34:56.123') v) s", defines.MORPCVersion122},
 		{"temporary", "create temporary table db.t as select timestamp(granted_time) from mo_catalog.mo_role_privs", defines.MORPCVersion122},
 		{"mixed_folded", "create table db.t as select timestamp('2024-02-29 12:34:56.123') x, cast(5.678 as decimal(10,3)) div cast(2 as unsigned) q", defines.MORPCVersion122},
-		{"cast", "create table db.t as select cast('2024-02-29' as datetime)", 0},
-		{"native_time", "create table db.t as select addtime(cast('23:30:00' as time), '02:00:00')", 0},
-		{"week", "create table db.t as select week(granted_time) from mo_catalog.mo_role_privs", 0},
+		{"cast", "create table db.t as select cast('2024-02-29' as datetime)", defines.MORPCVersion98},
+		{"native_time", "create table db.t as select addtime(cast('23:30:00' as time), '02:00:00')", defines.MORPCVersion98},
+		{"week", "create table db.t as select week(granted_time) from mo_catalog.mo_role_privs", defines.MORPCVersion112},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			for _, prepared := range []bool{false, true} {

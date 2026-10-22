@@ -216,6 +216,11 @@ func (builder *QueryBuilder) normalizeUpdateAssignment(
 			return nil, err
 		}
 	}
+	if isEnumOrSetPlanType(&col.Typ) {
+		if raw, ok := builder.materializeTransparentMySQLSpecialAssignmentValue(rhs); ok {
+			rhs = raw
+		}
+	}
 	if isEnumPlanType(&col.Typ) {
 		return funcCastForEnumType(builder.GetContext(), rhs, col.Typ)
 	}
@@ -543,13 +548,6 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 
 			for _, colDef := range tableDef.Cols {
 				if colDef.Name == colName {
-					if isEnumOrSetPlanType(&colDef.Typ) {
-						updateExpr, err = wrapAstExprForMySQLSpecialType(builder.GetContext(), colDef.Typ, updateExpr)
-						if err != nil {
-							return 0, err
-						}
-					}
-
 					if colDef.Typ.AutoIncr {
 						if constExpr, ok := updateExpr.(*tree.NumVal); ok {
 							if constExpr.ValType == tree.P_null {
@@ -618,6 +616,22 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 		return 0, err
 	}
 
+	// Restore OLD storage identity before sequential assignments copy the row.
+	// Display text cannot distinguish ENUM error member 0 from a declared empty
+	// member, or the corresponding SET bitmaps.
+	for i, alias := range dmlCtx.aliases {
+		if len(dmlCtx.updateCol2Expr[i]) == 0 {
+			continue
+		}
+		for _, col := range dmlCtx.tableDefs[i].Cols {
+			if isEnumOrSetPlanType(&col.Typ) {
+				if err = builder.normalizeStoredSpecialValueProjectionAtNode(lastNodeID,
+					oldColName2Idx[alias+"."+col.Name], col.Typ, make(map[int32]bool)); err != nil {
+					return 0, err
+				}
+			}
+		}
+	}
 	selectNode := builder.qry.Nodes[lastNodeID]
 	selectNodeTag := selectNode.BindingTags[0]
 	if sequentialAssignments {
@@ -692,18 +706,7 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 	// Normalize explicit values before automatic columns consume them. Joined
 	// assignments still bind against the original row; sequential assignments
 	// have already been materialized by their shared normalization owner.
-	castStoredValue := func(expr *plan.Expr, typ plan.Type) (*plan.Expr, error) {
-		if isEnumPlanType(&typ) {
-			return funcCastForEnumType(builder.GetContext(), expr, typ)
-		}
-		if isSetPlanType(&typ) {
-			return funcCastForSetType(builder.GetContext(), expr, typ)
-		}
-		if isGeometryPlanType(&typ) {
-			return funcCastForGeometryType(builder.GetContext(), expr, typ)
-		}
-		return expr, nil
-	}
+
 	for i, alias := range dmlCtx.aliases {
 		if len(dmlCtx.updateCol2Expr[i]) == 0 {
 			continue
@@ -731,9 +734,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			// Index maintenance and comparisons consume the stored special-type
 			// domain, not its scan-time VARCHAR display representation.
 			oldPos := oldColName2Idx[qualifiedName]
-			selectNode.ProjectList[oldPos], err = castStoredValue(selectNode.ProjectList[oldPos], col.Typ)
-			if err != nil {
-				return 0, err
+			if isGeometryPlanType(&col.Typ) {
+				selectNode.ProjectList[oldPos], err = funcCastForGeometryType(builder.GetContext(), selectNode.ProjectList[oldPos], col.Typ)
+				if err != nil {
+					return 0, err
+				}
 			}
 		}
 	}
@@ -791,6 +796,11 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			continue
 		}
 		for _, col := range dmlCtx.tableDefs[i].Cols {
+			// Generated consumers must reference the normalized NEW producer,
+			// not copy its expression and evaluate side effects a second time.
+			if col.GeneratedCol != nil {
+				needsAutomaticConsumer = true
+			}
 			_, assigned := newColName2Idx[alias+"."+col.Name]
 			if assigned || col.OnUpdate == nil || col.OnUpdate.Expr == nil {
 				continue
@@ -4636,8 +4646,7 @@ func (builder *QueryBuilder) guardTargetLocalExpr(
 	oldExpr *plan.Expr,
 ) (*plan.Expr, error) {
 	return BindFuncExprImplByPlanExpr(
-		builder.GetContext(),
-		"if",
+		builder.GetContext(), "if",
 		[]*plan.Expr{DeepCopyExpr(targetSelected), newExpr, DeepCopyExpr(oldExpr)},
 	)
 }

@@ -1092,10 +1092,35 @@ func funcCastForEnumType(ctx context.Context, expr *Expr, targetType Type) (*Exp
 	if targetType.Id != int32(types.T_enum) {
 		return expr, nil
 	}
+	if raw, ok := storedMySQLSpecialDomainExpr(expr); ok {
+		expr = raw
+	}
+	targetType.NotNullable = expr.Typ.NotNullable
 	if isEnumPlanType(&expr.Typ) && expr.Typ.Enumvalues == targetType.Enumvalues {
 		expr.Typ = targetType
 		return expr, nil
 	}
+	if isEnumPlanType(&expr.Typ) {
+		// Decode typed members in the scalar conversion so stored ordinal 0
+		// survives a domain change and the source expression is evaluated once.
+		converted, err := BindFuncExprImplByPlanExpr(ctx, moEnumCastValueToIndexFun, []*Expr{
+			makePlan2StringConstExprWithType(targetType.Enumvalues),
+			makePlan2StringConstExprWithType(expr.Typ.Enumvalues),
+			expr,
+		})
+		if err != nil {
+			return nil, err
+		}
+		converted.Typ = targetType
+		return converted, nil
+	}
+	if isEnumOrSetPlanType(&expr.Typ) {
+		expr, err = makeEnumOrSetDisplayValue(ctx, expr)
+		if err != nil {
+			return nil, err
+		}
+	}
+	targetType.NotNullable = expr.Typ.NotNullable
 	sourceExpr := expr
 
 	astArgs := []tree.Expr{
@@ -1146,10 +1171,21 @@ func funcCastForSetType(ctx context.Context, expr *Expr, targetType Type) (*Expr
 	if !isSetPlanType(&targetType) {
 		return expr, nil
 	}
+	if raw, ok := storedMySQLSpecialDomainExpr(expr); ok {
+		expr = raw
+	}
+	targetType.NotNullable = expr.Typ.NotNullable
 	if isSetPlanType(&expr.Typ) && expr.Typ.Enumvalues == targetType.Enumvalues {
 		expr.Typ = targetType
 		return expr, nil
 	}
+	if isEnumOrSetPlanType(&expr.Typ) {
+		expr, err = makeEnumOrSetDisplayValue(ctx, expr)
+		if err != nil {
+			return nil, err
+		}
+	}
+	targetType.NotNullable = expr.Typ.NotNullable
 	sourceExpr := expr
 
 	astArgs := []tree.Expr{

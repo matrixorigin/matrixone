@@ -1751,14 +1751,14 @@ func genAsSelectCols(
 	); err != nil {
 		return nil, nil, 0, err
 	}
-	if !isPrepareStmt && executionProtocol == 0 {
-		features, featureErr := plan.RequiredRemoteExpressionFeatures(query)
+	if !isPrepareStmt {
+		// The population query is released for deferred compilation. Preserve
+		// all its execution requirements before CREATE can have effects.
+		required, featureErr := RequiredPersistedExpressionProtocolVersion(query)
 		if featureErr != nil {
 			return nil, nil, 0, featureErr
 		}
-		if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
-			executionProtocol = defines.MORPCVersion122
-		}
+		executionProtocol = max(executionProtocol, required)
 	}
 	return cols, query, executionProtocol, nil
 }
@@ -1957,9 +1957,6 @@ func buildCTASDefaultFromOrigin(
 	if err = preservePersistedFormatCompatibility(ctx.GetContext(), defaultExpr); err != nil {
 		return nil, err
 	}
-	if err = RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
-		return nil, err
-	}
 	if exprHasLocalColumnRef(defaultExpr) {
 		if err := requireExpressionDefaultProtocol(ctx.GetProcess()); err != nil {
 			return nil, err
@@ -1967,6 +1964,9 @@ func buildCTASDefaultFromOrigin(
 	}
 	defaultExpr, err = makePlan2AssignmentCastExpr(ctx.GetContext(), defaultExpr, typ)
 	if err != nil {
+		return nil, err
+	}
+	if err = RequirePersistedIPFunctionProtocolForAuthoring(ctx.GetContext(), ctx.GetProcess(), defaultExpr); err != nil {
 		return nil, err
 	}
 	defaultExpr, err = ConstantFold(

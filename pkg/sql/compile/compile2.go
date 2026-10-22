@@ -161,6 +161,9 @@ func (c *Compile) Compile(
 		if err = validateTemporalResultProtocol(c.proc, queryPlan); err != nil {
 			return err
 		}
+		if err = validateEnumSourceAssignmentProtocol(c.proc, queryPlan); err != nil {
+			return err
+		}
 		queryPlan, err = c.prepareCreateNamePlan(queryPlan)
 		if err != nil {
 			return err
@@ -173,6 +176,9 @@ func (c *Compile) Compile(
 		return err
 	}
 	if err = validateOctStringProtocol(c.proc, queryPlan); err != nil {
+		return err
+	}
+	if err = validateEnumSourceAssignmentProtocol(c.proc, queryPlan); err != nil {
 		return err
 	}
 	if err = validateHexMySQLNumericProtocol(c.proc, queryPlan); err != nil {
@@ -447,6 +453,9 @@ func (c *Compile) Run(_ uint64) (queryResult *util2.RunResult, err error) {
 
 	// Cached plans can outlive the negotiated cluster capability.
 	if err = validateOctStringProtocol(c.proc, c.pn); err != nil {
+		return nil, err
+	}
+	if err = validateEnumSourceAssignmentProtocol(c.proc, c.pn); err != nil {
 		return nil, err
 	}
 	if err = validateHexMySQLNumericProtocol(c.proc, c.pn); err != nil {

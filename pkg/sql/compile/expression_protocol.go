@@ -76,6 +76,24 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 	return required
 }
 
+// validateEnumSourceAssignmentProtocol fences both fresh and cached local plans.
+// A supported deployment needs no extra expression walk on the execution path.
+func validateEnumSourceAssignmentProtocol(proc *process.Process, owner any) error {
+	if proc != nil {
+		if version, ok := remoteMORPCProtocolVersion(proc.GetService()); ok && version >= defines.MORPCVersion128 {
+			return nil
+		}
+	}
+	features, err := plan.RequiredRemoteExpressionFeatures(owner)
+	if err != nil {
+		return err
+	}
+	if features.EnumSourceAssignment {
+		return moerr.NewNotSupportedNoCtx("typed ENUM source assignment requires MORPC protocol version 128")
+	}
+	return nil
+}
+
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
 	if features.LoadFKIgnoreCheck {
@@ -128,6 +146,9 @@ func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int
 	}
 	if features.DecimalStatisticalResultContracts {
 		required = max(required, defines.MORPCVersion113)
+	}
+	if features.EnumSourceAssignment {
+		required = max(required, defines.MORPCVersion128)
 	}
 	if features.TableCollationFunction {
 		required = max(required, defines.MORPCVersion118)

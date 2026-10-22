@@ -153,8 +153,8 @@ func encodeRemoteScopeWithProtocol(s *Scope, proc *process.Process, requiredProt
 	if err = validateRemoteExpressionFeatures(proc, features); err != nil {
 		return nil, err
 	}
-	if requiredProtocol != nil && (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts) {
-		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion122)
+	if requiredProtocol != nil && (features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts || features.EnumSourceAssignment) {
+		*requiredProtocol = max(*requiredProtocol, remoteExpressionProtocolVersion(features))
 	}
 	if requiredProtocol != nil && features.LoadFKIgnoreCheck {
 		*requiredProtocol = max(*requiredProtocol, defines.MORPCVersion125)
@@ -2370,6 +2370,9 @@ func validateRemoteExpressionFeatures(proc *process.Process, features plan.Remot
 	}
 	if features.IntegerParameterCoercion && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion85) {
 		return moerr.NewNotSupportedNoCtx("integer parameter coercion requires MORPC protocol version 85")
+	}
+	if features.EnumSourceAssignment && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion128) {
+		return moerr.NewNotSupportedNoCtx("typed ENUM source assignment requires MORPC protocol version 128")
 	}
 	if features.TableCollationFunction && (!hasProtocolVersion || protocolVersion < defines.MORPCVersion118) {
 		return moerr.NewNotSupportedNoCtx("internal table collation requires MORPC protocol version 118")
