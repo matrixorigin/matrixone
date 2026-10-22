@@ -687,7 +687,7 @@ def build_select_query(
     if order_by:
         builder.order_by(*order_by)
 
-    if limit:
+    if limit is not None:
         builder.limit(limit)
 
     if use_parameter_substitution:
