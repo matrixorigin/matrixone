@@ -67,7 +67,6 @@ type container struct {
 	// safe check.
 	workDone             bool
 	isGroupBy            bool
-	isMultiSample        bool
 	groupVectorsNullable bool
 	useIntHashMap        bool
 
