@@ -1,5 +1,5 @@
 {
-  "version": 7,
+  "version": 8,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
@@ -16,7 +16,8 @@
     "Per-writer 20 ms ForceRefresh causes redundant process sampling/reclaim and has no fairness guarantee.",
     "CSV currently limits raw input field bytes; MultiUpdate projections and vector capacities can amplify the next allocation.",
     "HashBuild spills only shuffle, copies before testing the threshold; scatter buffers are row bounded and max-depth skew reload is unbounded.",
-    "Deterministic compiler fixtures: after full reclaim permits 64 MiB, old solver grants 4 bytes; max-row floor with identical envelopes shrinks 64 to 32 MiB despite no memory benefit. This is a throughput defect, not yet an explanation of the interrupted native table 29."
+    "Deterministic compiler fixtures: after full reclaim permits 64 MiB, old solver grants 4 bytes; max-row floor with identical envelopes shrinks 64 to 32 MiB despite no memory benefit. This is a throughput defect, not yet an explanation of the interrupted native table 29.",
+    "Final candidate581d746 failed faithful table21 am_case_comprehensive_dataset after20 successes: old insert.Insert returned exhausted on three tries (ask720360..765440, Available about21GB), while RSS peak3.804GiB and cgroup OOM events0. Independent isolated original-schema/original-CSV reproduction also fails. Compiler already reserved old Insert output I/W but the consumer never used them."
   ],
   "goals": [
     "The tested amway import semantics, indexes, row counts and SQL success remain intact under fixed 22 GiB and no inter-round idle/GC/restart.",
@@ -146,6 +147,16 @@
       "alternatives_rejected": [
         "Reset unit to target only after Reclaim: leaves owner-release/FIFO case stale.",
         "Queue only the maximum target: can block forever even when smaller valid layout fits the fixed resident baseline."
+      ]
+    },
+    {
+      "id": "D20",
+      "choice": "Connect disk ToWriteS3 old Insert to the existing statement output/input and single-IO working set, using existing CNS3Writer/Sinker/stream codec. Preserve old no-working-set write behavior. Replace old flush-limiter polling with release/context notifications.",
+      "rationale": "Merely waiting or suppressing an error cannot make D fit while this same statement holds its declared I/W promises; old writer metadata also accumulated until Eval. Existing multi_update already supplies the applicable ownership pattern, and the old Insert output protocol can remain unchanged.",
+      "alternatives_rejected": [
+        "Convert all old Inserts to MultiUpdate: changes planner and MergeBlock protocol beyond the missing consumer boundary.",
+        "Only retry D or increase physical thresholds: can self-wait or restore unbounded allocation.",
+        "Always write every small input directly: discards normal buffered reuse and async IO even when retained-data memory is available."
       ]
     }
   ],
@@ -364,7 +375,16 @@
     "control_transport": "Dedicated optional ControlStreamClient uses a separate backend pool, owned/closed by the pipeline client; a control stream cannot occupy the last execution backend. Caller context controls only backend creation/acquisition; returned stream lifetime is independently closed. Existing disconnected server SessionCtx retires on the shared 10s morpc sweep.",
     "expression_key_wire": "After eligibility is proved on the full AST, both join-key sides and non-equality predicate are protobuf-marshaled into manifest byte fields; receivers unmarshal without evaluating and derive the same expression capacity. Unknown function allocation contracts and non-NULL varlen literals retain whole-query legacy. Fixed results alone are not a scratch bound; only audited primitive kernels and serial/serial_full are supported.",
     "distributed_unit": "All CNs Open before execution, then Commit the global minimum UnitBytes. Therefore each receiver frame is no larger than that receiver own admitted unit (or its already budgeted legal singleton); origin manifests set IncomingUnit=0. Capacity-expression overflow at a large target may shrink unit and retry; malformed descriptors do not.",
-    "process_alias": "common/runtime.ProcessInstanceID is generated once per process, not per service. GetProtocolVersionResponse optional field3 carries it. Missing process identity retains legacy. Same-process multi-CN is conservatively compatible through legacy; physical manifest merging is outside this fix."
+    "process_alias": "common/runtime.ProcessInstanceID is generated once per process, not per service. GetProtocolVersionResponse optional field3 carries it. Missing process identity retains legacy. Same-process multi-CN is conservatively compatible through legacy; physical manifest merging is outside this fix.",
+    "old_insert_revision": {
+      "eligibility": "Only disk ToWriteS3 with an admitted working set uses the new branch. Memory-engine ToWriteS3, partition wrappers, and PreInsert with non-nil CompPkeyExpr or ClusterByExpr retain whole-query legacy before manifest/Open. The latter derived whole-batch expression scratch does not yet have a proven source/input contract; no partial admission or new singleton rejection is introduced. Ordinary Project serial for BTREE is not classified as these PreInsert fields.",
+      "prepare": "Acquire the existing declared output slot, create a private accounted data mpool and separate output mpool, and configure byte unit plus memory workspace on CNS3Writer. Count only InsertCtx.Attrs projection, not hidden input-only columns.",
+      "append": "Cut projected bytes by sum of referenced WindowSize. Reserve complete AppendAllocation before copies; preserve actual owned capacity until destruction. Threshold and cumulative projected retained bytes are at most the actual unit plus one legal crossing singleton. Before crossing, Sync, spool bounded output metadata, and close/recreate buffered writer as required. WithBufferBytes alone does not bound Sync result metadata.",
+      "denial": "Before retry or borrowed IO, retire own destructible buffers via Sync/spool/Close and reconcile to actual allocated bytes. If cold D is still denied, borrow the current input read-only, acquire existing W, WriteBorrowedToFile, release W, and drain bounded results using output I. Never wait for D while retaining I/D/unique W needed for progress.",
+      "metadata": "Take bounded object stats from Sync without expanding them in the D pool. Check metadata vector growth before PreExtend/Expand in output mpool. Preserve original BlockInfo/ObjectStats two-column representation, including different vector lengths. Anonymous length-bounded stream frames live on disk during Build; Eval returns one original-format frame per Call. MergeBlock and transaction protocol remain unchanged.",
+      "terminal": "Error/cancel/Reset/Free join IO and close writer before returning actual D; clean output vectors before output lease release; close anonymous spool exactly once. Partial initialization schedules cleanup immediately. Reset starts an independent generation with no stale output frame.",
+      "flush_limiter": "Legacy limiter waits only while active slot owners exist. Their release closes notify, and context cancellation independently terminates. Remove the 200ms timer and20ms ticker; a CPU concurrency-limit increase is observed at the next guaranteed active-owner release."
+    }
   },
   "ownership_and_wait_graphs": [
     "CSV parser -> owned typed input batch -> downstream read-only view; source storage released/reused only after downstream consumption.",
@@ -406,11 +426,15 @@
       "After reclaim makes target fit, admit target rather than the previously tiny unit",
       "Equal complete max-row envelopes preserve largest execution unit",
       "Owner-release wake reselects largest fitting unit in the same FIFO node",
-      "No-owner minimum impossible after full reclaim returns typed capacity error and releases FIFO node; cancellation never publishes a ticket"
+      "No-owner minimum impossible after full reclaim returns typed capacity error and releases FIFO node; cancellation never publishes a ticket",
+      "Real old Insert.Prepare/Call with high Available and forced D denial succeeds through admitted W with original MergeBlock metadata representation",
+      "Old Insert multiple Sync/spool frames preserve two-block/one-object unequal vector lengths, exact affected rows and terminal pool/lease/FD balance",
+      "Old Insert errors, cancellation and Reset/reuse retire actual buffers before grants and output slot",
+      "Unsupported partition/memory-engine/derived-PreInsert whole-query legacy is selected before any local or remote ticket"
     ],
     "negative_controls": "Each repaired contract must have a discriminating old-code or disabled-mechanism oracle; do not accept compile errors as negative proof.",
     "race": "Focused adaptive race per changed concurrency test plus affected owning packages once.",
-    "public_consumer": "SQL checks with forced-small budgets/spill, main and index counts plus join multiset oracles; native fixed 39-table amway imports.",
+    "public_consumer": "SQL checks with forced-small budgets/spill, main and index counts plus join multiset oracles; native fixed 39-table amway imports.; isolated exact table21 original DDL/CSV/LOCAL INFILE must change from the captured pre-fix exhausted error to27422 correct rows, before restarting all39 tables for five uninterrupted rounds.",
     "real_import": "Same CSV/DDL/SQL/order, 22 GiB no swap, no deliberate gap/GC/restart between at least five rounds; process remains alive after trial.",
     "performance": "Record full/table wall time, RSS+cgroup peaks, allocated capacity, spill bytes/objects, native reclaim count and wait samples. Compare stock successful 303.1-second round and V2 mean 331.1 seconds; do not declare zero regression from shared-host variation."
   },
@@ -449,12 +473,13 @@
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 7,
+    "revision": 8,
     "condition": "Implementation must satisfy recorded protocol and consumer tests; no implementation claim based solely on design.",
     "narrow_revision": "Worker proposes complete per-CN stage manifests and ordered all-CN prelock admission with statement control-stream ownership; root reviewed concrete two-origin/late-probe wait graphs and existing transport termination, accepts protocol with acknowledged END or forced exclusive backend close on failure.",
     "key_contract_review": "2026-10-22 23:18 +08:00: join worker proposed shared recursive key contract and pre-evaluation whole-query legacy eligibility; root approved subject to complete intermediate old+new/result/packer capacity, overflow and NULL/const coverage, and fixed/serial/unknown compatibility UT. Root independently identified source scope and execution-backend wait graph; separate transport and source gate passed independent review.",
     "physical_identity_review": "2026-10-22 23:44 +08:00: Galileo demonstrated supported launch-multi-cn aliases a shared processMemoryCoordinator and creates self-wait. Root independently identified the two-query different-CN-alias P/Q inversion; approved process UUID ordering plus duplicate-process legacy gate and pre-reserve epoch verification, with explicit cancellation/ordering/restart tests.",
     "ignore_source_review": "CSV worker traced the public SQL failure through early source and final projection; root approved action-by-index-layout DAG UT plus unchanged ignored-word/old-word/new-word public oracles before native import.",
-    "largest_unit_review": "2026-10-23 00:05 +08:00: Galileo reproduced stale-unit and max-row plateau failures deterministically; root approved bounded descending full-envelope candidates. Independent final_parameter_review approved with mandatory ownerless full-reclaim-and-typed-capacity-error terminal, including last-owner exit; exact I/W delta and full-layout dedup required."
+    "largest_unit_review": "2026-10-23 00:05 +08:00: Galileo reproduced stale-unit and max-row plateau failures deterministically; root approved bounded descending full-envelope candidates. Independent final_parameter_review approved with mandatory ownerless full-reclaim-and-typed-capacity-error terminal, including last-owner exit; exact I/W delta and full-layout dedup required.",
+    "old_insert_review": "2026-10-23 00:25 +08:00: Socrates traced old Insert through CNS3Writer/Sinker/MergeBlock and proposed the existing I/D/W ownership pattern plus bounded anonymous metadata framing. Root approved preserving original output semantics, high-headroom D-denial progress and all terminal owners; Galileo independently verified compiler role/count/envelope and required cumulative Sync metadata bounds. Derived PreInsert and partition wrappers explicitly retain legacy to avoid claiming absent contracts."
   }
 }
