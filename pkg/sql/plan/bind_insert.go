@@ -2830,6 +2830,11 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				}
 			}
 
+			isPrimaryKey := slices.Contains(tableDef.Pkey.Names, colDef.Name)
+			// Use the bound row owner, before assignment casts obscure the column.
+			// Unlike VALUES(pk), an existing-row identity is safe for every arbiter.
+			isSelfAssignment := isPrimaryKey && isOnDupColumn(updateExpr, scanTag, int32(colIdx))
+
 			// Flink's MySQL JDBC dialect includes every column in the update
 			// clause. When PRIMARY is the only conflict arbiter, pk = VALUES(pk)
 			// is necessarily a no-op because the incoming and existing primary
@@ -2837,9 +2842,14 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			// a physical primary-key update. If a secondary UNIQUE key can select
 			// the conflicting row, the incoming primary key may differ, so retain
 			// the existing rejection for that ambiguous case.
-			if firstUniqueIdxPos < 0 &&
-				slices.Contains(tableDef.Pkey.Names, colDef.Name) &&
-				isOnDupIncomingColumn(updateExpr, selectTag, int32(colIdx)) {
+			if isPrimaryKey && firstUniqueIdxPos < 0 &&
+				isOnDupColumn(updateExpr, selectTag, int32(colIdx)) {
+				// Elide execution, but retain explicit assignment ownership so an
+				// ON UPDATE expression cannot replace this unchanged primary key.
+				updateExprs[colDef.Name] = updateExpr
+				if _, unproven := unprovenPrimaryKeyCols[colDef.Name]; !unproven {
+					immutablePrimaryKeyCols[colDef.Name] = struct{}{}
+				}
 				continue
 			}
 
@@ -2851,24 +2861,25 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err != nil {
 				return 0, err
 			}
-			// MySQL clients such as NiFi's JDBC writer assign every inserted
-			// column in the ODKU arm, including a literal or prepared marker for
-			// the primary key. The value is only a no-op when it equals the row
-			// selected by the primary-key arbiter, so retain the assignment in
-			// order and validate it against the old row at execution time.
-			if slices.Contains(tableDef.Pkey.Names, colDef.Name) {
-				if isDirectODKUPKIdentityValue(astExpr) {
+			// Retain self assignments in order, preserving explicit assignment
+			// ownership without a runtime guard. Direct literals and prepared
+			// markers require a guard against the conflicting row's primary key.
+			// A later identity cannot erase an earlier unproven mutation.
+			if isPrimaryKey {
+				if isSelfAssignment || isDirectODKUPKIdentityValue(astExpr) {
 					if _, unproven := unprovenPrimaryKeyCols[colDef.Name]; !unproven {
-						oldPrimaryKey := &plan.Expr{
-							Typ: colDef.Typ,
-							Expr: &plan.Expr_Col{Col: &plan.ColRef{
-								RelPos: scanTag,
-								ColPos: int32(colIdx),
-							}},
-						}
-						updateExpr, err = buildODKUPKIdentityGuard(builder, oldPrimaryKey, updateExpr)
-						if err != nil {
-							return 0, err
+						if !isSelfAssignment {
+							oldPrimaryKey := &plan.Expr{
+								Typ: colDef.Typ,
+								Expr: &plan.Expr_Col{Col: &plan.ColRef{
+									RelPos: scanTag,
+									ColPos: int32(colIdx),
+								}},
+							}
+							updateExpr, err = buildODKUPKIdentityGuard(builder, oldPrimaryKey, updateExpr)
+							if err != nil {
+								return 0, err
+							}
 						}
 						immutablePrimaryKeyCols[colDef.Name] = struct{}{}
 					}
@@ -3645,6 +3656,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 						continue
 					}
 					if _, skipped := noopSkipCols[col.Name]; skipped {
+						continue
+					}
+					if _, immutable := immutablePrimaryKeyCols[col.Name]; immutable {
 						continue
 					}
 					if _, written := updateExprs[col.Name]; written {
@@ -4651,13 +4665,12 @@ func insertUniqueLockKeyPrefixLengths(idxDef *IndexDef, skip bool) (map[string]i
 		(idxDef.KeyFormat == collation.KeyFormatV1 || len(idxDef.Parts) > 1 || len(prefixLengths) > 0), nil
 }
 
-// isOnDupIncomingColumn reports whether an ON DUPLICATE KEY UPDATE expression
-// is the unmodified incoming value of the target column (VALUES(col)). The
-// expression is checked after binding so normal identifier validation has
-// already taken place.
-func isOnDupIncomingColumn(expr *plan.Expr, selectTag, colPos int32) bool {
+// isOnDupColumn matches a direct reference by its bound row owner and position.
+// Binding has already validated identifiers and distinguishes existing-row
+// columns from incoming VALUES columns through their relation tags.
+func isOnDupColumn(expr *plan.Expr, relTag, colPos int32) bool {
 	col := expr.GetCol()
-	return col != nil && col.RelPos == selectTag && col.ColPos == colPos
+	return col != nil && col.RelPos == relTag && col.ColPos == colPos
 }
 
 // isDirectODKUPKIdentityValue limits the runtime no-op guard to values whose
