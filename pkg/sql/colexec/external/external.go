@@ -1414,6 +1414,14 @@ func checkLineStrict(param *ExternalParam) bool {
 
 const JsonNull = "\\N"
 
+// JsonBinaryKey is the single-key object wrapper JSONLINE OUTFILE uses to
+// export BINARY/VARBINARY/BLOB values: {"$binary":"<base64>"}. The wrapper
+// lets the jsonline loader distinguish MO-encoded binary payloads from plain-
+// text JSON strings: wrapped values are base64-decoded, bare strings pass
+// through byte-exact so historical plain-text files keep loading as-is
+// (matrixone#30635).
+const JsonBinaryKey = "$binary"
+
 var loadZeroBytes = []byte("0")
 
 func getNullFlag(nullMap map[string][]string, attr, field string) bool {
@@ -1432,19 +1440,24 @@ func getNullFlag(nullMap map[string][]string, attr, field string) bool {
 // of the ENUM definition, using the same comma split and case folding as
 // types.ParseEnum.
 func isEnumMember(enumValues, name string) bool {
-	// The ENUM OID distinguishes a single empty member from absent metadata.
-	if len(enumValues) == 0 {
-		return name == ""
-	}
+	// A raw padded legacy label wins before the trailing-space spelling.
 	for {
-		i := strings.IndexByte(enumValues, ',')
-		if i < 0 {
-			return strings.EqualFold(enumValues, name)
+		remaining := enumValues
+		for {
+			item, rest, more := strings.Cut(remaining, ",")
+			if strings.EqualFold(item, name) {
+				return true
+			}
+			if !more {
+				break
+			}
+			remaining = rest
 		}
-		if strings.EqualFold(enumValues[:i], name) {
-			return true
+		trimmed := strings.TrimRight(name, " ")
+		if trimmed == name {
+			return false
 		}
-		enumValues = enumValues[i+1:]
+		name = trimmed
 	}
 }
 
@@ -1452,9 +1465,9 @@ func isEnumMember(enumValues, name string) bool {
 // strings.TrimSpace (unicode.IsSpace) would remove it, and is already valid
 // input for the SET definition, as native INSERT parses it. Trimming such a
 // value could select a different member (' a' or '\u00a0a' vs 'a'); padded
-// non-member input keeps being trimmed. Padded input can only be member names
-// (a numeric bitmap never has whitespace), so the non-throwing name match of
-// the SET parser decides. Unpadded values return early without parsing.
+// non-member input keeps the CSV trimming policy. This guard only protects
+// member names; numeric fallback follows that existing CSV policy, including
+// whitespace normalization. Unpadded values return early without parsing.
 func isPaddedSetInput(setValues, val string) bool {
 	if len(val) == 0 {
 		return false
@@ -1847,9 +1860,16 @@ func recordText(line []csvparser.Field, param *ExternalParam) string {
 
 func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser.Field, rowIdx int, param *ExternalParam) error {
 	mp := proc.GetMPool()
+	// Kafka JSONL object conversion already checks the declared key count.
+	// Its field slice contains only projected data positions, so its length
+	// cannot be used as the record width. Synthetic attrs are filled by
+	// getColData even when no data column is projected.
+	kafkaJSON := param.KafkaScan != nil && param.Extern != nil && param.Extern.Format == tree.JSONLINE
 	if checkLineStrict(param) {
-		if err := checkLineValidRestrictive(param, proc, line, rowIdx); err != nil {
-			return err
+		if !kafkaJSON {
+			if err := checkLineValidRestrictive(param, proc, line, rowIdx); err != nil {
+				return err
+			}
 		}
 		for _, attr := range param.Attrs {
 			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
@@ -1859,7 +1879,7 @@ func materializeOneRow(proc *process.Process, bat *batch.Batch, line []csvparser
 		return nil
 	}
 
-	if int32(len(line)) >= param.ColumnListLen {
+	if kafkaJSON || int32(len(line)) >= param.ColumnListLen {
 		for _, attr := range param.Attrs {
 			if err := getColData(bat, line, rowIdx, param, mp, attr, proc); err != nil {
 				return err

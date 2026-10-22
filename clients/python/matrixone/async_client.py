@@ -695,8 +695,6 @@ class AsyncClient(BaseMatrixOneClient):
             # Initialize metadata manager after successful connection
             self._metadata = AsyncMetadataManager(self)
 
-            self.logger.log_connection(host, port, final_user, database or "default", success=True)
-
             # Setup connection hook (default to ENABLE_ALL if not provided)
             # Allow empty list [] to explicitly disable hooks
             if on_connect is None:
@@ -706,6 +704,11 @@ class AsyncClient(BaseMatrixOneClient):
                 self._setup_connection_hook(on_connect)
                 # Execute the hook once immediately for the initial connection
                 await self._execute_connection_hook_immediately(on_connect)
+
+            # Report success only after initialization returns. Unhandled
+            # initialization failures are fatal, but ordinary callback errors
+            # retain ConnectionHook's existing logged, best-effort policy.
+            self.logger.log_connection(host, port, final_user, database or "default", success=True)
 
         except BaseException as e:
             engine, self._engine = self._engine, None
@@ -1573,7 +1576,7 @@ class AsyncClient(BaseMatrixOneClient):
 
     def _escape_identifier(self, identifier: str) -> str:
         """Escapes an identifier to prevent SQL injection."""
-        return f"`{identifier}`"
+        return f"`{identifier.replace('`', '``')}`"
 
     def _escape_string(self, value: str) -> str:
         """Escapes a string value for SQL queries."""
