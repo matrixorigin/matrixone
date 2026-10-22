@@ -28,6 +28,9 @@ select length(load_file(cast('stage://issue_29761_split_stage/split_1.csv' as da
 select length(load_file(cast('stage://issue_29761_split_stage/split_2.csv' as datalink)));
 ➤ length(load_file(cast(stage://issue_29761_split_stage/split_2.csv as datalink)))[-5,64,0]  𝄀
 48
+select 1 as outfile_receipt_ok
+➤ outfile_receipt_ok[4,32,0]  𝄀
+1
 create table copied_rows (id int, payload varchar(40));
 load data infile 'stage://issue_29761_split_stage/split_0.csv' into table copied_rows fields terminated by ',' ignore 1 lines;
 load data infile 'stage://issue_29761_split_stage/split_1.csv' into table copied_rows fields terminated by ',' ignore 1 lines;

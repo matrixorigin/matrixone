@@ -17,6 +17,7 @@ package frontend
 import (
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -92,7 +93,8 @@ func sanitizeOutfileTarget(raw string) safeOutfileTarget {
 	safe := raw
 
 	if outfileURI.MatchString(raw) {
-		parsed, err := url.Parse(raw)
+		parseable, formatTokens := escapeOutfileFormatSpecifiers(raw)
+		parsed, err := url.Parse(parseable)
 		if err != nil || parsed.Scheme == "" {
 			result.invalid = true
 			return result
@@ -112,6 +114,9 @@ func sanitizeOutfileTarget(raw string) safeOutfileTarget {
 			result.redacted = true
 		}
 		safe = parsed.String()
+		for token, specifier := range formatTokens {
+			safe = strings.ReplaceAll(safe, token, specifier)
+		}
 	} else if parsed, err := fileservice.ParseETLService(raw); err == nil && parsed.Service != "" && len(parsed.ServiceArguments) != 0 {
 		// Service arguments may contain cloud credentials. Keep only the service
 		// identity and file expression; StageFilePath is never consulted here.
@@ -129,7 +134,8 @@ func sanitizeOutfileTarget(raw string) safeOutfileTarget {
 		result.redacted = true
 	}
 
-	if _, err := fileservice.ParsePath(safe); err != nil {
+	pathForValidation, _ := escapeOutfileFormatSpecifiers(safe)
+	if _, err := fileservice.ParsePath(pathForValidation); err != nil {
 		result.invalid = true
 		safe = ""
 	}
@@ -149,6 +155,31 @@ func sanitizeOutfileTarget(raw string) safeOutfileTarget {
 	return result
 }
 
+func escapeOutfileFormatSpecifiers(raw string) (string, map[string]string) {
+	matches := formatSpecifierRegex.FindAllStringIndex(raw, -1)
+	if len(matches) == 0 {
+		return raw, nil
+	}
+
+	prefix := "__matrixone_outfile_format_"
+	for strings.Contains(raw, prefix) {
+		prefix += "_"
+	}
+
+	var builder strings.Builder
+	replacements := make(map[string]string, len(matches))
+	last := 0
+	for i, match := range matches {
+		token := prefix + strconv.Itoa(i) + "__"
+		builder.WriteString(raw[last:match[0]])
+		builder.WriteString(token)
+		replacements[token] = raw[match[0]:match[1]]
+		last = match[1]
+	}
+	builder.WriteString(raw[last:])
+	return builder.String(), replacements
+}
+
 func redactOutfileStatementText(stmt tree.Statement, text string) string {
 	ep, ok := topLevelOutfile(stmt)
 	if !ok {
@@ -160,10 +191,10 @@ func redactOutfileStatementText(stmt tree.Statement, text string) string {
 	}
 	rendered := tree.String(stmt, dialect.MYSQL)
 	if ep.FilePath != "" && strings.Contains(rendered, ep.FilePath) {
-		return strings.Replace(rendered, ep.FilePath, safe.target, 1)
+		return strings.ReplaceAll(rendered, ep.FilePath, safe.target)
 	}
 	if ep.FilePath != "" && strings.Contains(text, ep.FilePath) {
-		return strings.Replace(text, ep.FilePath, safe.target, 1)
+		return strings.ReplaceAll(text, ep.FilePath, safe.target)
 	}
 	return "SELECT ... INTO OUTFILE " + safe.target
 }

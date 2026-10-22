@@ -24,7 +24,7 @@ import (
 )
 
 func TestTopLevelOutfileReceiptAndCredentialRedaction(t *testing.T) {
-	sql := "SELECT 1 INTO OUTFILE 'stage://audit/out.csv?token=out_secret'"
+	sql := "SELECT 'stage://audit/out.csv?token=out_secret' AS marker INTO OUTFILE 'stage://audit/out.csv?token=out_secret'"
 	stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, sql, 1)
 	require.NoError(t, err)
 	receipt, ok := makeOutfileReceipt(stmt)
@@ -38,9 +38,18 @@ func TestTopLevelOutfileReceiptAndCredentialRedaction(t *testing.T) {
 	require.NotContains(t, redacted, "out_secret")
 	require.NotContains(t, redacted, "token")
 	require.Contains(t, redacted, receipt.Target)
+	require.Equal(t, 2, strings.Count(redacted, receipt.Target), "both the projected literal and OUTFILE target must be redacted")
 }
 
 func TestOutfileTargetRetentionIsBoundedAndOrdinarySelectIsUntouched(t *testing.T) {
+	for _, target := range []string{"stage://audit/out_%d.csv", "stage://audit/out_%05d.csv"} {
+		t.Run(target, func(t *testing.T) {
+			safe := sanitizeOutfileTarget(target)
+			require.Equal(t, target, safe.target)
+			require.False(t, safe.invalid)
+		})
+	}
+
 	longTarget := "SHARED:/" + strings.Repeat("x", 5000) + ".csv"
 	safe := sanitizeOutfileTarget(longTarget)
 	require.LessOrEqual(t, len(safe.target), outfileAuditTargetLimit)
