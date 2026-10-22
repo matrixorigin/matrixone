@@ -149,16 +149,19 @@ class AsyncSnapshotManager:
         """Get snapshot asynchronously"""
         # Use mo_catalog.mo_snapshots table like sync client
         lookup_name = name
-        if len(lookup_name) >= 2 and lookup_name[0] == "`" and lookup_name[-1] == "`":
-            lookup_name = lookup_name[1:-1].replace("``", "`")
-        # MatrixOne canonicalizes identifiers with Go's per-rune simple lowercase
-        # mapping. Lower each character separately to avoid Python's contextual
-        # final-sigma mapping and discard the combining dot from U+0130.
-        lookup_name = "".join(char.lower()[0] for char in lookup_name)
+        if (
+            len(lookup_name) >= 2
+            and lookup_name[0] in ('`', '"')
+            and lookup_name[-1] == lookup_name[0]
+        ):
+            quote = lookup_name[0]
+            lookup_name = lookup_name[1:-1].replace(quote * 2, quote)
+        # Let MatrixOne apply the same Go Unicode tables used by its parser;
+        # supported Python releases can ship older character mappings.
         sql = """
             SELECT sname, ts, level, account_name, database_name, table_name
             FROM mo_catalog.mo_snapshots
-            WHERE sname = ?
+            WHERE sname = LOWER(?)
         """
         result = await self.client.execute(sql, (lookup_name,))
 

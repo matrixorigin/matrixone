@@ -585,7 +585,7 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
         self.mock_client.execute.assert_any_await("CREATE SNAPSHOT persisted_snap FOR DATABASE persisted_db")
         self.assertEqual(self.mock_client.execute.await_count, 2)
         lookup_call = self.mock_client.execute.await_args_list[1]
-        self.assertIn("WHERE sname = ?", lookup_call.args[0])
+        self.assertIn("WHERE sname = LOWER(?)", lookup_call.args[0])
         self.assertEqual(lookup_call.args[1], ("persisted_snap",))
         self.assertEqual(snapshot.created_at, created_at)
         self.assertIsNone(snapshot.description)
@@ -643,7 +643,7 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(len(connection.statements), 2)
         self.assertEqual(connection.statements[0], "CREATE SNAPSHOT review_snap FOR DATABASE review_db")
-        self.assertIn("WHERE sname = 'review_snap'", connection.statements[1])
+        self.assertIn("WHERE sname = LOWER('review_snap')", connection.statements[1])
         self.assertNotIn(":name", connection.statements[1])
         self.assertEqual(snapshot.name, "review_snap")
         self.assertEqual(snapshot.database, "review_db")
@@ -666,14 +666,19 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
                 return columns
 
         class MockConnection:
-            def __init__(self, canonical_name):
+            def __init__(self, lookup_name, canonical_name):
+                self.lookup_name = lookup_name
                 self.canonical_name = canonical_name
                 self.statements = []
 
             async def exec_driver_sql(self, sql):
                 self.statements.append(sql)
                 is_select = sql.lstrip().startswith("SELECT")
-                matched = is_select and f"WHERE sname = '{self.canonical_name}'" in sql
+                escaped_lookup = self.lookup_name.replace("'", "''")
+                matched = (
+                    is_select
+                    and f"WHERE sname = LOWER('{escaped_lookup}')" in sql
+                )
                 rows = []
                 if matched:
                     rows = [
@@ -699,22 +704,34 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
                 return MockBeginContext(self.connection)
 
         cases = (
-            ("ReviewSnap", "reviewsnap"),
-            ("`ReviewSnap`", "reviewsnap"),
-            ("`Review``Snap`", "review`snap"),
-            ("İSnap", "isnap"),
-            ("ΟΣ", "οσ"),
+            ("ReviewSnap", "ReviewSnap", "reviewsnap"),
+            ("`ReviewSnap`", "ReviewSnap", "reviewsnap"),
+            ("`Review``Snap`", "Review`Snap", "review`snap"),
+            ("`Review'Snap`", "Review'Snap", "review'snap"),
+            ('"ReviewSnap"', "ReviewSnap", "reviewsnap"),
+            ('"Review""Snap"', 'Review"Snap', 'review"snap'),
+            ("İSnap", "İSnap", "isnap"),
+            ("ΟΣ", "ΟΣ", "οσ"),
+            ("\u1c89Snap", "\u1c89Snap", "\u1c8asnap"),
         )
-        for supplied_name, canonical_name in cases:
-            with self.subTest(name=supplied_name, canonical=canonical_name):
+        for supplied_name, lookup_name, canonical_name in cases:
+            with self.subTest(
+                name=supplied_name,
+                lookup=lookup_name,
+                canonical=canonical_name,
+            ):
                 client = AsyncClient()
-                connection = MockConnection(canonical_name)
+                connection = MockConnection(lookup_name, canonical_name)
                 client._engine = MockEngine(connection)
 
                 snapshot = await client.snapshots.create(supplied_name, SnapshotLevel.CLUSTER)
 
                 self.assertEqual(len(connection.statements), 2)
-                self.assertIn(f"WHERE sname = '{canonical_name}'", connection.statements[1])
+                escaped_lookup = lookup_name.replace("'", "''")
+                self.assertIn(
+                    f"WHERE sname = LOWER('{escaped_lookup}')",
+                    connection.statements[1],
+                )
                 self.assertEqual(snapshot.name, canonical_name)
 
     async def test_get_snapshot(self):
