@@ -426,10 +426,27 @@ func genViewTableDef(
 		}
 	}
 	persistedCreateSQL := rootSQL
-	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, inferred.expandedSelectLists); rewritten {
-		viewSql = stableViewSQL
-		persistedCreateSQL = stableViewSQL
+	definitionStmt := cloneTreeSelect(stmt)
+	if stableViewSQL, stableSelect, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, inferred.expandedSelectLists); stableSelect != nil {
+		// Keep the bound, expanded SELECT for the parser-derived definition even
+		// when rootSQL contains additional statements and cannot be rewritten as a
+		// single CREATE VIEW statement. The legacy Stmt field still retains the
+		// original request for compatibility and first-statement parsing.
+		definitionStmt = stableSelect
+		if rewritten {
+			viewSql = stableViewSQL
+			persistedCreateSQL = stableViewSQL
+		}
+	} else if stableSelect, ok := viewSelectWithExpandedStars(stmt, inferred.expandedSelectLists); ok {
+		// The capture contains resolved names for every bound query block, even
+		// without stars. Nested projections need these names before qualified
+		// identifiers or canonical literals are formatted for metadata replay.
+		definitionStmt = stableSelect
 	}
+	if len(colNames) == 0 {
+		definitionStmt = viewSelectWithStableOutputHeadings(definitionStmt, inferred.headings)
+	}
+	definitionStmt = tree.WithViewColumnNames(definitionStmt, colNames)
 
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	var persistedRequiredProtocol *int64
@@ -437,8 +454,11 @@ func genViewTableDef(
 		persistedRequiredProtocol = &inferred.requiredProtocol
 	}
 	viewData, err := json.Marshal(ViewData{
-		Stmt:                    viewSql,
-		Definition:              tree.StringWithOpts(stmt, dialect.MYSQL, tree.WithViewDefinition()),
+		Stmt: viewSql,
+		// Definition must be generated from the same star-expanded SELECT that is
+		// persisted in Stmt. Formatting the original AST would let metadata replay
+		// a later schema's columns even though the View itself remains frozen.
+		Definition:              tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithViewDefinition()),
 		CheckOption:             strings.ToUpper(checkOption),
 		DefaultDatabase:         ctx.DefaultDatabase(),
 		SQLMode:                 parserSQLModeFromContext(ctx),
@@ -480,16 +500,26 @@ func stableViewSQLWithExpandedStars(
 	viewSql string,
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
 ) (string, bool) {
+	stableSQL, _, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, expandedSelectLists)
+	return stableSQL, rewritten
+}
+
+func stableViewSQLWithExpandedStarsAndSelect(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	viewSql string,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (string, *tree.Select, bool) {
 	// SAMPLE(*) expands to a sampling operator during binding. The rewriter
 	// leaves that query block intact while still stabilizing ordinary stars in
 	// unrelated query blocks.
 	if viewSql == "" || len(expandedSelectLists) == 0 || !viewSelectHasStar(stmt) {
-		return viewSql, false
+		return viewSql, nil, false
 	}
 
 	stableSelect, ok := viewSelectWithExpandedStars(stmt, expandedSelectLists)
 	if !ok {
-		return viewSql, false
+		return viewSql, nil, false
 	}
 
 	parserSQLMode := ""
@@ -498,7 +528,7 @@ func stableViewSQLWithExpandedStars(
 	}
 	stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), viewSql, ctx.GetLowerCaseTableNames(), parserSQLMode)
 	if err != nil {
-		return viewSql, false
+		return viewSql, stableSelect, false
 	}
 	defer func() {
 		for _, statement := range stmts {
@@ -506,23 +536,23 @@ func stableViewSQLWithExpandedStars(
 		}
 	}()
 	if len(stmts) != 1 {
-		return viewSql, false
+		return viewSql, stableSelect, false
 	}
 
 	switch viewStmt := stmts[0].(type) {
 	case *tree.CreateView:
 		stableStmt := *viewStmt
 		stableStmt.AsSource = stableSelect
-		return formatStableViewSQL(&stableStmt), true
+		return formatStableViewSQL(&stableStmt), stableSelect, true
 	case *tree.AlterView:
 		stableStmt := &tree.CreateView{
 			Name:     viewStmt.Name,
 			ColNames: viewStmt.ColNames,
 			AsSource: stableSelect,
 		}
-		return formatStableViewSQL(stableStmt), true
+		return formatStableViewSQL(stableStmt), stableSelect, true
 	default:
-		return viewSql, false
+		return viewSql, nil, false
 	}
 }
 
@@ -1025,6 +1055,72 @@ func viewSelectExprsWithExpandedStars(
 		}
 	}
 	return stableExprs, rewritten
+}
+
+// viewSelectWithStableOutputHeadings keeps the public names assigned during
+// CREATE VIEW stable after binding has qualified identifiers. A bare column
+// already derives the same heading from its final identifier, while a
+// compound expression such as `a + 1` would otherwise replay as `t.a + 1`.
+// Aliases are added only when the expression's actual mode-independent
+// persisted rendering differs from the resolved heading, preserving the
+// existing SQL shape for stable column and literal projections.
+func viewSelectWithStableOutputHeadings(stmt *tree.Select, headings []string) *tree.Select {
+	if stmt == nil || len(headings) == 0 {
+		return stmt
+	}
+	clause := viewTopLevelSelectClause(stmt.Select)
+	if clause == nil || len(clause.Exprs) != len(headings) {
+		return stmt
+	}
+	clause.Exprs = viewSelectExprsWithStableOutputHeadings(clause.Exprs, headings)
+	return stmt
+}
+
+func viewTopLevelSelectClause(stmt tree.SelectStatement) *tree.SelectClause {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		return selectStmt
+	case *tree.Select:
+		return viewTopLevelSelectClause(selectStmt.Select)
+	case *tree.ParenSelect:
+		if selectStmt.Select == nil {
+			return nil
+		}
+		return viewTopLevelSelectClause(selectStmt.Select)
+	case *tree.UnionClause:
+		return viewTopLevelSelectClause(selectStmt.Left)
+	default:
+		return nil
+	}
+}
+
+func viewSelectExprsWithStableOutputHeadings(
+	exprs tree.SelectExprs,
+	headings []string,
+) tree.SelectExprs {
+	stableExprs := cloneTreeSelectExprs(exprs)
+	for i := range stableExprs {
+		if stableExprs[i].As != nil && !stableExprs[i].As.Empty() {
+			continue
+		}
+		if i >= len(headings) || !viewExprNeedsHeadingAlias(stableExprs[i].Expr, headings[i]) {
+			continue
+		}
+		stableExprs[i].As = tree.NewCStr(headings[i], 1)
+	}
+	return stableExprs
+}
+
+func viewExprNeedsHeadingAlias(expr tree.Expr, heading string) bool {
+	if heading == "" {
+		return false
+	}
+	if _, ok := unwrapParenExpr(expr).(*tree.UnresolvedName); ok {
+		return false
+	}
+	return tree.StringWithOpts(expr, dialect.MYSQL,
+		tree.WithSingleQuoteString(), tree.WithQuoteIdentifier(),
+		tree.WithModeIndependentStringLiterals()) != heading
 }
 
 func viewSelectExprsWithExpandedStableHeadings(
