@@ -142,15 +142,8 @@ class AsyncSnapshotManager:
         else:
             raise SnapshotError(f"Invalid snapshot level: {level}")
 
-        if description:
-            sql += f" COMMENT '{description}'"
-
         await self.client.execute(sql)
-
-        # Return snapshot object
-        import datetime
-
-        return Snapshot(name, level, datetime.datetime.now(), description, database, table)
+        return await self.get(name)
 
     async def get(self, name: str) -> Snapshot:
         """Get snapshot asynchronously"""
