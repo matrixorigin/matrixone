@@ -74,6 +74,25 @@ select id from items order by id desc;
 1
 select count(*) from (select cast(name as unsigned) as k from items order by k) s;
 invalid argument cast to uint64, bad value x
+create table left_join_keepalive_l (id int primary key);
+create table left_join_keepalive_r (id int primary key, bad varchar(32));
+insert into left_join_keepalive_l values (1);
+insert into left_join_keepalive_r values (1, 'bad');
+select count(*) from (
+select l.id
+from left_join_keepalive_l l left join left_join_keepalive_r r
+on l.id = r.id and cast(r.bad as unsigned) > 0
+order by r.id
+) s;
+invalid argument cast to uint64, bad value bad
+select count(*) as total from (
+select l.id
+from left_join_keepalive_l l left join left_join_keepalive_r r
+on l.id = r.id
+order by r.id
+) s;
+➤ total[-5,64,0]  𝄀
+1
 prepare count_sorted from 'select count(n) as total from (select n from items where id > ? order by id) s';
 set @min_id = 1;
 execute count_sorted using @min_id;

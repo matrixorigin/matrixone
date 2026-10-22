@@ -50,6 +50,26 @@ select id from items order by id desc;
 -- A sort-only failing cast must not disappear behind an alias.
 select count(*) from (select cast(name as unsigned) as k from items order by k) s;
 
+-- A LEFT JOIN branch kept alive only by the COUNT input ordering must not be
+-- pruned together with its failing ON cast.
+create table left_join_keepalive_l (id int primary key);
+create table left_join_keepalive_r (id int primary key, bad varchar(32));
+insert into left_join_keepalive_l values (1);
+insert into left_join_keepalive_r values (1, 'bad');
+select count(*) from (
+    select l.id
+    from left_join_keepalive_l l left join left_join_keepalive_r r
+      on l.id = r.id and cast(r.bad as unsigned) > 0
+    order by r.id
+) s;
+-- The same shape with a total ON condition may still drop the ordering.
+select count(*) as total from (
+    select l.id
+    from left_join_keepalive_l l left join left_join_keepalive_r r
+      on l.id = r.id
+    order by r.id
+) s;
+
 prepare count_sorted from 'select count(n) as total from (select n from items where id > ? order by id) s';
 set @min_id = 1;
 execute count_sorted using @min_id;

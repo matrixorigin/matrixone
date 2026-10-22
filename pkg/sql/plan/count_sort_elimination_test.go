@@ -39,6 +39,19 @@ func TestCountEliminatesUnobservedSort(t *testing.T) {
 			select distinct e.ename, d.dname from constraint_test.emp e
 			join constraint_test.dept d on e.deptno = d.deptno order by e.ename, d.dname
 		) s`, 2},
+		// An effect-free LEFT JOIN branch released by the Sort may still be
+		// pruned: its unique-key right side cannot raise or filter rows.
+		{"effect-free left join", `select count(*) from (
+			select e.ename from constraint_test.emp e
+			left join constraint_test.dept d on e.deptno = d.deptno order by d.deptno
+		) s`, 0},
+		// INNER JOIN branches are never pruned for missing references, so a
+		// released failing cast on the inner side stays observable in the plan.
+		{"diagnostic inner join", `select count(*) from (
+			select e.ename from constraint_test.emp e
+			join constraint_test.dept d on e.deptno = d.deptno and cast(d.dname as unsigned) > 0
+			order by d.deptno
+		) s`, 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tt.sql)
@@ -75,6 +88,21 @@ func TestCountKeepsObservableOrUnsafeSort(t *testing.T) {
 		{"failing count", "select count(cast(ename as unsigned)) from (select ename from constraint_test.emp order by ename) s"},
 		{"window output", "select count(*) from (select row_number() over (order by empno) as rn from constraint_test.emp order by rn) s"},
 		{"non count consumer", "select ename from (select ename from constraint_test.emp order by ename) s"},
+		// Removing the Sort would release the last outside reference to the
+		// LEFT JOIN right branch, letting removeEffectlessLeftJoins prune the
+		// failing ON cast.
+		{"diagnostic left join", `select count(*) from (
+			select e.ename from constraint_test.emp e
+			left join constraint_test.dept d on e.deptno = d.deptno and cast(d.dname as unsigned) > 0
+			order by d.deptno
+		) s`},
+		// A released LEFT JOIN branch keeps its failing scan filter too:
+		// pruning the branch would discard that evaluation.
+		{"left join filtered branch", `select count(*) from (
+			select e.ename from constraint_test.emp e
+			left join (select deptno from constraint_test.dept where cast(dname as unsigned) > 0) d
+			on e.deptno = d.deptno order by d.deptno
+		) s`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tt.sql)
@@ -82,6 +110,23 @@ func TestCountKeepsObservableOrUnsafeSort(t *testing.T) {
 			require.True(t, reachableNodeType(logical.GetQuery(), planpb.Node_SORT))
 		})
 	}
+}
+
+// The Sort may hold the last outside reference to a LEFT JOIN right branch.
+// Eliminating it would let removeEffectlessLeftJoins prune that branch and hide
+// the failing ON cast, so both nodes must stay reachable.
+func TestCountSortKeepsReleasedDiagnosticLeftJoin(t *testing.T) {
+	logical, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, `select count(*) from (
+		select e.ename from constraint_test.emp e
+		left join constraint_test.dept d on e.deptno = d.deptno and cast(d.dname as unsigned) > 0
+		order by d.deptno
+	) s`)
+	require.NoError(t, err)
+	query := logical.GetQuery()
+	require.True(t, reachableNodeType(query, planpb.Node_SORT), "diagnostic Sort subtree must not be eliminated")
+	join := firstReachableNode(query, planpb.Node_JOIN)
+	require.NotNil(t, join, "LEFT JOIN owning the released diagnostic branch must survive")
+	require.NotEmpty(t, join.OnList, "the failing ON predicate must stay evaluable")
 }
 
 func TestCountSortEliminationPreservesOuterOrder(t *testing.T) {
