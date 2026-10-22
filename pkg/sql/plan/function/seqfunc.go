@@ -533,10 +533,7 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if err != nil {
 			return "", err
 		}
-		if setnum < int64(minv) || setnum > int64(maxv) {
-			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
-		}
-		if setnum < math.MinInt16 || setnum > math.MaxInt16 {
+		if setnum < math.MinInt16 || setnum > math.MaxInt16 || setnum < int64(minv) || setnum > int64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
 		return setVal(proc, int16(setnum), iscalled, storedCalled, rel, db, tblname)
@@ -546,10 +543,7 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if err != nil {
 			return "", err
 		}
-		if setnum < int64(minv) || setnum > int64(maxv) {
-			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
-		}
-		if setnum < math.MinInt32 || setnum > math.MaxInt32 {
+		if setnum < math.MinInt32 || setnum > math.MaxInt32 || setnum < int64(minv) || setnum > int64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
 		return setVal(proc, int32(setnum), iscalled, storedCalled, rel, db, tblname)
@@ -569,10 +563,7 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if err != nil {
 			return "", err
 		}
-		if setnum < uint64(minv) || setnum > uint64(maxv) {
-			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
-		}
-		if setnum > math.MaxUint16 {
+		if setnum > math.MaxUint16 || setnum < uint64(minv) || setnum > uint64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
 		return setVal(proc, uint16(setnum), iscalled, storedCalled, rel, db, tblname)
@@ -582,10 +573,7 @@ func setval(tblname, setnum string, iscalled bool, db string, proc *process.Proc
 		if err != nil {
 			return "", err
 		}
-		if setnum < uint64(minv) || setnum > uint64(maxv) {
-			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
-		}
-		if setnum > math.MaxUint32 {
+		if setnum > math.MaxUint32 || setnum < uint64(minv) || setnum > uint64(maxv) {
 			return "", moerr.NewInternalError(proc.Ctx, "Set value is not in range (minvalue, maxvlue).")
 		}
 		return setVal(proc, uint32(setnum), iscalled, storedCalled, rel, db, tblname)
