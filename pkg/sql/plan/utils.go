@@ -980,7 +980,7 @@ func checkStrictJoinPred(onPred *plan.Expr) (bool, *ColRef, *ColRef) {
 	//onPred must be equality, children must be column name
 	switch onPredImpl := onPred.Expr.(type) {
 	case *plan.Expr_F:
-		if onPredImpl.F.Func.ObjName != "=" {
+		if onPredImpl.F.Func.ObjName != "=" || isJSONNumericComparisonArgs(onPredImpl.F.Args) {
 			return false, nil, nil
 		}
 		args := onPredImpl.F.Args
@@ -2090,7 +2090,7 @@ func constantFoldWithPreparedExactSource(
 	}
 	// Keep the selected-consumer ELT identity visible to remote and persisted
 	// admission. Its executor owns lazy folding of the selected value subtree.
-	if requiresJSON, jsonErr := plan.RequiresMORPCVersion125JSONStringConsumerOverload(expr); jsonErr != nil || requiresJSON {
+	if requiresJSON, jsonErr := plan.RequiresMORPCVersion129JSONStringConsumerOverload(expr); jsonErr != nil || requiresJSON {
 		return expr, nil
 	}
 	if f.IsVolatile() {
@@ -7767,6 +7767,14 @@ func preparedSetOperationCommonType(
 				argTypes[i] = exact
 			}
 		}
+	}
+	if mixedType, ok := function.MixedTextBinaryCommonType(argTypes); ok {
+		resolved := makePlan2Type(&mixedType)
+		if err := setExpressionCollation(ctx, "union", argExprs, &resolved); err != nil {
+			return types.Type{}, false, err
+		}
+		applyMixedTextBinaryCollationType(&resolved)
+		return makeTypeByPlan2Type(resolved), true, nil
 	}
 
 	coalesce, err := function.GetFunctionByName(ctx, "coalesce", argTypes)

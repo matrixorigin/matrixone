@@ -65,6 +65,17 @@ class SiriusToolchainSyncTest(unittest.TestCase):
             check=True,
         )
 
+    def test_platform_compilers_select_x86_for_standalone_mo(self):
+        compilers = 'gcc_linux-64 = "14.*"\ngxx_linux-64 = "14.*"\n'
+        self.sirius.write_text(
+            SIRIUS.replace(compilers, "")
+            + "\n[feature.mo.target.linux-64.dependencies]\n" + compilers
+            + '\n[feature.mo.target.linux-aarch64.dependencies]\ngcc_linux-aarch64 = "15.*"\n'
+        )
+        desired = sync_sirius_mo.desired_constraints(self.sirius)
+        self.assertEqual(desired["gcc_linux-64"], "14.*")
+        self.assertNotIn("gcc_linux-aarch64", desired)
+
     def test_check_reports_cuda_and_cuvs_upgrade_without_writes(self):
         self.sirius.write_text(
             SIRIUS.replace("13.3.*", "13.4.*").replace("26.08.01", "26.10.02")

@@ -43,48 +43,48 @@ func TestODKUTrackingRequiresActualDestinationAndStreamFloor(t *testing.T) {
 	op.ODKUResultTracking = true
 	op.Conditions = [][]*plan.Expr{{}, {}}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	client.version = defines.MORPCVersion126
+	client.version = defines.MORPCVersion130
 	_, err := encodeRemoteScope(scope, c.proc)
-	require.ErrorContains(t, err, "remote destination does not support versioned expression semantics (MORPC version 127)")
-	client.version = defines.MORPCVersion127
+	require.ErrorContains(t, err, "remote destination does not support versioned expression semantics (MORPC version 131)")
+	client.version = defines.MORPCVersion131
 	minimum := int64(0)
 	data, err := encodeRemoteScopeWithProtocol(scope, c.proc, &minimum)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion127, minimum)
+	require.Equal(t, defines.MORPCVersion131, minimum)
 	decoded := new(pipeline.Pipeline)
 	require.NoError(t, decoded.Unmarshal(data))
 	features, err := pipelineExpressionFeatures(decoded)
 	require.NoError(t, err)
 	require.True(t, features.ODKUStatementResult)
 	require.False(t, features.SessionLastInsertIDBaseline)
-	require.Equal(t, defines.MORPCVersion127, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion131, remoteExpressionProtocolVersion(features))
 	scope.NodeInfo.Addr = "stale:6001"
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.Error(t, err)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion126)
-	require.ErrorContains(t, validateRemoteExpressionFeatures(c.proc, features), "ODKU statement result requires MORPC protocol version 127")
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion130)
+	require.ErrorContains(t, validateRemoteExpressionFeatures(c.proc, features), "ODKU statement result requires MORPC protocol version 131")
 }
 
 func TestODKUTrackingRechecksReplacementOnActualStream(t *testing.T) {
-	for _, version := range []int64{defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127} {
+	for _, version := range []int64{defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130, defines.MORPCVersion131} {
 		stream := &fakeStreamSender{}
 		replies := make(chan morpc.Message, 1)
 		replies <- &pipeline.Message{Id: 0, Cmd: pipeline.Method_PipelineProtocolCheck, Sid: pipeline.Status_Last, ProtocolVersion: version}
 		sender := &messageSenderOnClient{ctx: context.Background(), streamSender: stream, receiveCh: replies}
-		err := sender.confirmProtocolOnStream(defines.MORPCVersion127)
-		if version < defines.MORPCVersion127 {
+		err := sender.confirmProtocolOnStream(defines.MORPCVersion131)
+		if version < defines.MORPCVersion131 {
 			require.Error(t, err)
 		} else {
 			require.NoError(t, err)
 		}
-		require.Equal(t, defines.MORPCVersion127, stream.sent[0].(*pipeline.Message).ProtocolVersion)
+		require.Equal(t, defines.MORPCVersion131, stream.sent[0].(*pipeline.Message).ProtocolVersion)
 	}
 }
 
 func TestLASTInsertIDBaselineUsesActualSerializedOwner(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
-	client.version = defines.MORPCVersion127
+	client.version = defines.MORPCVersion131
 	op := projection.NewArgument()
 	defer op.Release()
 	expr := &plan.Expr{Typ: plan.Type{Id: 28}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: int64(function.LAST_INSERT_ID) << 32}}}}
@@ -101,7 +101,7 @@ func TestLASTInsertIDBaselineUsesActualSerializedOwner(t *testing.T) {
 		minimum := int64(0)
 		_, _, data, _, err := prepareRemoteRunSendingDataWithProtocol("", scope, c.proc, nil, uuid.Nil, &minimum)
 		require.NoError(t, err, "a real owned default0 is capturable without resolver/wire presence")
-		require.Equal(t, defines.MORPCVersion127, minimum)
+		require.Equal(t, defines.MORPCVersion131, minimum)
 		info := new(pipeline.ProcessInfo)
 		require.NoError(t, info.Unmarshal(data))
 		require.True(t, info.SessionInfo.LastInsertIdSet)
@@ -185,10 +185,10 @@ func TestRemoteODKUProducerReservationIncludesForwardedSubtrees(t *testing.T) {
 	}
 }
 
-// The old 57/58 capability values and the released-main 124 prefix do not
+// The old 57/58 capability values and the released-main 128 prefix do not
 // implement the complete ODKU summary/baseline contract. Cached and persisted
-// owners must retain 125 even when no remote placement is attempted.
-func TestODKU127SourceCachedAndPersistedFloors(t *testing.T) {
+// owners must retain 131 even when no remote placement is attempted.
+func TestODKU131SourceCachedAndPersistedFloors(t *testing.T) {
 	c, _ := expressionProtocolTestCompile(t)
 	rt := moruntime.ServiceRuntime(c.proc.GetService())
 	last := &plan.Expr{Typ: plan.Type{Id: 28}, Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: int64(function.LAST_INSERT_ID) << 32}}}}
@@ -199,16 +199,16 @@ func TestODKU127SourceCachedAndPersistedFloors(t *testing.T) {
 	for _, owner := range cases {
 		floor, err := planbuilder.RequiredPersistedExpressionProtocolVersion(owner)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion127, floor)
-		for _, version := range []int64{57, 58, 112, 113, 114, 115, 116, 117, 118, 119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126} {
+		require.Equal(t, defines.MORPCVersion131, floor)
+		for _, version := range []int64{57, 58, 112, 113, 114, 115, 116, 117, 118, 119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128, defines.MORPCVersion129, defines.MORPCVersion130} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
-			require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, owner), "protocol version 127")
+			require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, owner), "protocol version 131")
 			cached := &Compile{proc: c.proc, pn: owner}
-			require.ErrorContains(t, cached.Compile(context.Background(), owner, nil), "protocol version 127")
+			require.ErrorContains(t, cached.Compile(context.Background(), owner, nil), "protocol version 131")
 			_, err = cached.Run(0)
-			require.ErrorContains(t, err, "protocol version 127")
+			require.ErrorContains(t, err, "protocol version 131")
 		}
-		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion127)
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion131)
 		require.NoError(t, validateJSONStringConsumerProtocol(c.proc, owner))
 	}
 	node := &plan.Node{ProjectList: []*plan.Expr{last, bindJSONStringConsumerExpr(t, "elt")}, AggList: []*plan.Expr{jsonMinMaxPlanExpr(aggexec.AggIdOfMin)}}
@@ -217,8 +217,8 @@ func TestODKU127SourceCachedAndPersistedFloors(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, features.JSONMinMaxTypedComparison)
 	require.True(t, features.JSONStringConsumerOverload)
-	require.Equal(t, defines.MORPCVersion127, remoteExpressionProtocolVersion(features))
+	require.Equal(t, defines.MORPCVersion131, remoteExpressionProtocolVersion(features))
 	floor, err := planbuilder.RequiredPersistedExpressionProtocolVersion(combined)
 	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion127, floor)
+	require.Equal(t, defines.MORPCVersion131, floor)
 }

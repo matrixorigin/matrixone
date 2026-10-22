@@ -540,10 +540,6 @@ func NewSchedulerClosedNoCtx() *Error {
 	return newError(Context(), ErrSchedulerClosed)
 }
 
-func NewVectorNeedRetryWithPreModeNoCtx() *Error {
-	return newError(Context(), ErrVectorNeedRetryWithPreMode)
-}
-
 // GC sync protection errors
 func NewGCIsRunningNoCtx() *Error {
 	return newError(Context(), ErrGCIsRunning)
@@ -571,4 +567,8 @@ func NewSyncProtectionInvalidNoCtx() *Error {
 
 func NewSyncProtectionExpiredNoCtx(jobID string, validTS, prepareTS int64) *Error {
 	return newError(Context(), ErrSyncProtectionExpired, jobID, validTS, prepareTS)
+}
+
+func NewVectorIndexSnapshotChangedNoCtx() *Error {
+	return newError(Context(), ErrVectorIndexSnapshotChanged)
 }

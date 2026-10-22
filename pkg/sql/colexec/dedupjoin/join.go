@@ -2188,8 +2188,11 @@ func (ctr *container) probe(bat *batch.Batch, ap *DedupJoin, proc *process.Proce
 					}
 					continue
 				}
-				// do nothing for txn.mode = Optimistic
-				if !isPessimistic {
+				// Versioned unique keys are opaque to TN diagnostics. A key
+				// already visible in this snapshot can be rejected here while
+				// its logical input and index name are still available. Keys
+				// committed after the snapshot remain commit-time conflicts.
+				if !isPessimistic && len(ap.DedupKeyExprs) == 0 {
 					continue
 				}
 				rowStr, err := ctr.formatDuplicateEntry(ap, proc, i+k, vals[k])
@@ -2374,8 +2377,10 @@ func (ctr *container) formatDuplicateEntry(ap *DedupJoin, proc *process.Process,
 	// bucket id is not a row index when NULLs precede a conflicting candidate.
 	// Locate its retained physical key only on this terminal diagnostic path;
 	// ordinary successful builds keep their existing memory footprint.
+	itr := ctr.mp.NewIterator()
+	defer hashmap.IteratorClearOwner(itr)
 	for _, bat := range ctr.batches {
-		entry, found, err := findDuplicateEntry(ap, proc, bat, ctr.vecs[0].GetBytesAt(probeRow))
+		entry, found, err := findDuplicateEntry(ap, proc, bat, itr, group)
 		if err != nil || found {
 			return entry, err
 		}
@@ -2383,16 +2388,27 @@ func (ctr *container) formatDuplicateEntry(ap *DedupJoin, proc *process.Process,
 	return "", moerr.NewInternalError(proc.Ctx, "missing duplicate diagnostic row")
 }
 
-func findDuplicateEntry(ap *DedupJoin, proc *process.Process, bat *batch.Batch, key []byte) (string, bool, error) {
-	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, ap.Conditions[1][0], []*batch.Batch{bat})
+func findDuplicateEntry(ap *DedupJoin, proc *process.Process, bat *batch.Batch, itr hashmap.Iterator, group uint64) (string, bool, error) {
+	vec, free, err := colexec.GetReadonlyResultFromExpression(proc, ap.Conditions[1][0], []*batch.Batch{bat, bat})
 	if err != nil {
 		return "", false, err
 	}
 	defer free()
-	for row := 0; row < bat.RowCount(); row++ {
-		if !vec.IsNull(uint64(row)) && bytes.Equal(vec.GetBytesAt(row), key) {
-			entry, err := colexec.FormatDedupKeyFromRow(proc, ap.DedupKeyExprs, bat, row)
-			return entry, true, err
+	// Ask the same map that found the conflict. Besides varlen physical
+	// collation keys, versioned tables can have fixed-width sibling keys;
+	// their hash identity can also normalize values such as signed zero.
+	vecs := []*vector.Vector{vec}
+	for start := 0; start < bat.RowCount(); start += hashmap.UnitLimit {
+		count := min(hashmap.UnitLimit, bat.RowCount()-start)
+		groups, nonNull, err := itr.Find(start, count, vecs)
+		if err != nil {
+			return "", false, err
+		}
+		for row, candidate := range groups[:count] {
+			if nonNull[row] != 0 && candidate == group {
+				entry, err := colexec.FormatDedupKeyFromRow(proc, ap.DedupKeyExprs, bat, start+row)
+				return entry, true, err
+			}
 		}
 	}
 	return "", false, nil

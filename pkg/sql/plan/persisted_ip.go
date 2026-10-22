@@ -102,8 +102,11 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		return 0, moerr.NewNotSupportedNoCtx("persisted legacy interval unit contract requires rebinding")
 	}
 	requiredVersion := int64(0)
+	if features.JSONNumericComparisons {
+		requiredVersion = defines.MORPCVersion128
+	}
 	if features.IPFunctionSemantics {
-		requiredVersion = defines.MORPCVersion72
+		requiredVersion = max(requiredVersion, defines.MORPCVersion72)
 	}
 	if features.StringNumericResultContracts && requiredVersion < defines.MORPCVersion80 {
 		requiredVersion = defines.MORPCVersion80
@@ -145,13 +148,13 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion101)
 	}
 	if features.ODKUStatementResult || features.SessionLastInsertIDBaseline {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion127)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion131)
 	}
 	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion125)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion129)
 	}
 	if features.JSONMinMaxTypedComparison {
-		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
+		requiredVersion = max(requiredVersion, defines.MORPCVersion130)
 	}
 	if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion122)
@@ -176,6 +179,9 @@ func RequiredPersistedExpressionProtocolVersion(owner any) (int64, error) {
 	}
 	if features.CalendarIntervalNormalization {
 		requiredVersion = max(requiredVersion, defines.MORPCVersion115)
+	}
+	if features.ViewMetadataFunctions {
+		requiredVersion = max(requiredVersion, defines.MORPCVersion126)
 	}
 	return requiredVersion, nil
 }

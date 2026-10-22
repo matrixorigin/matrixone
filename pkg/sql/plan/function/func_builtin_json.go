@@ -193,6 +193,13 @@ func normalizeJsonComparisonParam(
 	resultVector := to.GetResultVector()
 	paramType := parameters[0].GetPrepareParamType()
 
+	if length == 0 {
+		resultVector.SetPrepareParamKind(vector.PrepareParamNone)
+		resultVector.SetPrepareParamType(paramType)
+		resultVector.SetPreparedJSONComparisonParam()
+		return nil
+	}
+
 	if selectList != nil && selectList.IgnoreAllRow() {
 		if err := to.AppendMultiBytes(nil, true, length); err != nil {
 			return err
@@ -319,10 +326,16 @@ func encodeJsonComparisonParamWithMetadata(
 func normalizeJsonOrderingParam(
 	parameters []*vector.Vector,
 	result vector.FunctionResultWrapper,
-	_ *process.Process,
+	proc *process.Process,
 	length int,
-	_ *FunctionSelectList,
+	selectList *FunctionSelectList,
 ) error {
+	paramType := parameters[0].GetPrepareParamType()
+	kind := parameters[0].GetPrepareParamKind()
+	if isJSONComparisonNumericType(paramType) || paramType == types.T_any &&
+		(kind == vector.PrepareParamInteger || kind == vector.PrepareParamFloat || kind == vector.PrepareParamDecimal) {
+		return normalizeJsonComparisonParam(parameters, result, proc, length, selectList)
+	}
 	from := vector.GenerateFunctionStrParameter(parameters[0])
 	to := vector.MustFunctionResult[types.Varlena](result)
 	for i := uint64(0); i < uint64(length); i++ {

@@ -4268,6 +4268,21 @@ func buildPlanWithPrepareMode(
 	forcePrepare bool,
 ) (*plan2.Plan, error) {
 	return buildPlanWithStats(reqCtx, ses, ctx, func() (*plan2.Plan, error) {
+		// LOAD planning may inspect an external source before producing a plan.
+		// Authorize its target table at this common planning boundary so direct
+		// compilation, prepared-plan rebuilds, compile retries, and executable
+		// wrappers share the same admission check.
+		if loadStmt := loadStatementForPrePlanAuth(stmt); loadStmt != nil {
+			if session, ok := ses.(*Session); ok {
+				authStats, authErr := authenticateLoadBeforePlan(
+					reqCtx, session, loadStmt, ctx.DefaultDatabase())
+				if authErr != nil {
+					return nil, authErr
+				}
+				statistic.StatsInfoFromContext(ctx.GetContext()).PermissionAuth.Add(&authStats)
+			}
+		}
+
 		var ret *plan2.Plan
 		var err error
 
@@ -4388,8 +4403,9 @@ func buildPlanWithStats(reqCtx context.Context, ses FeSession, ctx plan2.Compile
 	return build()
 }
 
-// buildPlanWithAuthorization wraps the buildPlan function to perform permission checks
-// after the plan has been successfully built.
+// buildPlanWithAuthorization wraps buildPlan with the plan-level permission
+// check. LOAD's pre-plan target check is performed inside buildPlanWithPrepareMode,
+// the common planning boundary shared by this and direct compile paths.
 var buildPlanWithAuthorization = func(reqCtx context.Context, ses FeSession, ctx plan2.CompilerContext, stmt tree.Statement) (*plan2.Plan, error) {
 	planContext := ctx.GetContext()
 	stats := statistic.StatsInfoFromContext(planContext)
@@ -4784,10 +4800,19 @@ var GetComputationWrapper = func(execCtx *ExecCtx, db string, user string, eng e
 }
 
 func parseSql(execCtx *ExecCtx, p *mysql.MySQLParser) (stmts []tree.Statement, err error) {
+	// The publication binding probe names the exact catalog object the
+	// validation snapshot certified through the executed statement this
+	// parse produces, so its identifiers keep source case and binding can
+	// not silently route to the name's lowercase twin when both spellings
+	// exist. Every other statement parses at the session's case mode.
+	lowerCaseTableNames := parserLowerCaseTableNames(execCtx.ses)
+	if defines.IsPublicationViewBinding(execCtx.reqCtx) {
+		lowerCaseTableNames = 0
+	}
 	return p.ParseWithSQLMode(
 		execCtx.reqCtx,
 		execCtx.input.getSql(),
-		parserLowerCaseTableNames(execCtx.ses),
+		lowerCaseTableNames,
 		sessionSQLModeForParser(execCtx.ses),
 	)
 }
@@ -5248,8 +5273,15 @@ func bindSessionDatabaseForStatement(ses *Session, defaultDatabase string) func(
 		return func() {}
 	}
 	currentDatabase := ses.GetDatabaseName()
+	compilerCtx := ses.GetTxnCompileCtx()
+	currentCompilerDatabase := compilerCtx.GetDatabase()
 	ses.SetDatabaseName(defaultDatabase)
-	return func() { ses.SetDatabaseName(currentDatabase) }
+	return func() {
+		ses.SetDatabaseName(currentDatabase)
+		// Replanning can bind the compiler to a prepared statement's database
+		// independently of the active session database.
+		compilerCtx.SetDatabase(currentCompilerDatabase)
+	}
 }
 
 // authenticatePrivilegeOfPrepareAndExecute checks the user can execute the Prepare or Execute statement

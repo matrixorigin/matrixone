@@ -41,7 +41,7 @@ insert into query_vector values ('ref','[0,0]');
 create index ix_apply using ivfflat on tc(v) lists=1 op_type 'vector_l2_ops' include(category);
 explain select tc.id from tc, query_vector q
 where q.name = 'ref' and tc.category = concat('x', '')
-order by l2_distance(tc.v, q.v) limit 2 by rank with option 'mode=include';
+order by l2_distance(tc.v, q.v) limit 2 by rank with option 'mode=iterative';
 -- @regex("Vector Index Scan", true)
 ➤ AP QUERY PLAN ON MULTICN(32 core)[12,-1,0]  𝄀
 Project  𝄀
@@ -57,7 +57,7 @@ Project  𝄀
                     ->  Vector Index Scan on ix_apply [l2_distance]  𝄀
                           Vector Index: ix_apply, Metric: l2_distance, Candidate Limit: 2, NProbe: 5, Index Filter: (__mo_index_include_category = 'x')  𝄀
               ->  Table Scan on ivf_prepared_limit.tc
-prepare s_apply from 'select tc.id from tc, query_vector q where q.name = ''ref'' and tc.category = concat(?, '''') order by l2_distance(tc.v, q.v) limit 2 by rank with option ''mode=include''';
+prepare s_apply from 'select tc.id from tc, query_vector q where q.name = ''ref'' and tc.category = concat(?, '''') order by l2_distance(tc.v, q.v) limit 2 by rank with option ''mode=iterative''';
 set @category = 'x';
 execute s_apply using @category;
 ➤ id[-5,64,0]  𝄀

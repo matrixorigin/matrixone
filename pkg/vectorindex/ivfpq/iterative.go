@@ -1,0 +1,81 @@
+// Copyright 2026 Matrix Origin
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package ivfpq
+
+import (
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
+)
+
+// IterativeSearch is the IVF-PQ widening policy of mode=iterative. A round probes
+// NProbe lists and requests ITopK keys, the candidate budget; the filter runs inside
+// the search, so every key returned qualifies. The first round probes the scan's
+// nprobe lists; each further round doubles them, up to max_nprobe (every list when
+// unset). A round that returns LIMIT rows (every member of a smaller membership, every
+// indexed row when fewer), or probes the cap, is the last. stats.Lists is the list count
+// of the built index; when it is 0 only the overflow is searched, every row in one
+// round, so the first round is the last. cuVS ivf_pq::search takes no list subset, so
+// every round searches the lists again.
+type IterativeSearch struct{}
+
+var _ searchplugin.IterativeSearchHooks = IterativeSearch{}
+
+// StartRound returns the first round of req.
+func (IterativeSearch) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
+	opts, _ := ivfpqplan.DecodeScanOptions(spec.GetAlgoOptions())
+	nprobe := max(uint64(opts.Nprobe), 1)
+	if capLists := iterativeListCap(req, stats); capLists != 0 {
+		nprobe = min(nprobe, capLists)
+	}
+	return searchplugin.Round{ITopK: max(req.CandidateBudget, req.ResultLimit, 1), NProbe: nprobe}
+}
+
+// NextRound returns the round after prev, which returned got rows.
+func (IterativeSearch) NextRound(_ *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
+	capLists := iterativeListCap(req, stats)
+	if got >= iterativeTarget(req, stats) || stats.Lists == 0 || prev.NProbe >= capLists {
+		return prev, false
+	}
+	next := min(vectorindex.SaturatingAddUint64(prev.NProbe, prev.NProbe), capLists)
+	return searchplugin.Round{ITopK: prev.ITopK, NProbe: next}, true
+}
+
+// iterativeTarget is the row count that ends the widening: LIMIT, or the membership
+// size or the indexed rows when fewer.
+func iterativeTarget(req searchplugin.Request, stats searchplugin.SearchStats) uint64 {
+	target := max(req.ResultLimit, 1)
+	if stats.Members != 0 {
+		target = min(target, stats.Members)
+	}
+	if stats.IndexRows != 0 {
+		target = min(target, stats.IndexRows)
+	}
+	return target
+}
+
+// iterativeListCap is the most lists a round probes: max_nprobe, at most the index
+// lists; 0 when neither is known.
+func iterativeListCap(req searchplugin.Request, stats searchplugin.SearchStats) uint64 {
+	switch {
+	case req.MaxNprobe != 0 && stats.Lists != 0:
+		return min(req.MaxNprobe, stats.Lists)
+	case req.MaxNprobe != 0:
+		return req.MaxNprobe
+	default:
+		return stats.Lists
+	}
+}

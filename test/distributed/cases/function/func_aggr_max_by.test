@@ -47,4 +47,17 @@ from window_readings
 group by pump interval(ts, 1, minute) gapfill(partition) fill(null)
 order by pump, _wstart;
 
+-- JSON comparison keys retain their prior rejection: storage-byte order is
+-- not JSON value order. Test both key positions for both aggregate variants.
+create table json_keys(v varchar(32), j json, k bigint);
+insert into json_keys values ('one', '1', 1), ('two_fifty_six', '256', 256);
+select max_by(v, j, cast(0 as signed)) from json_keys;
+select max_by(v, cast(0 as signed), j) from json_keys;
+select max_by_non_null(v, j, cast(0 as signed)) from json_keys;
+select max_by_non_null(v, cast(0 as signed), j) from json_keys;
+-- Numeric keys and JSON return values are still supported.
+select max_by(v, k, cast(0 as signed)) as winner, max_by_non_null(v, k, cast(0 as signed)) as non_null_winner from json_keys;
+select json_type(max_by(j, k, cast(0 as signed))) = json_type(cast('256' as json)) as json_return_type, max_by(j, k, cast(0 as signed)) = cast('256' as json) as json_return_value, max_by_non_null(j, k, cast(0 as signed)) = cast('256' as json) as non_null_json_value from json_keys;
+select min(j) = cast('1' as json) as json_min, max(j) = cast('256' as json) as json_max from json_keys;
+
 drop database max_by_bvt;

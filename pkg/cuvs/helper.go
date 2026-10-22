@@ -593,3 +593,26 @@ func (p *PinnedPool) Destroy() error {
 	p.items = nil
 	return lastErr
 }
+
+// Bitset is the filter masks of one search, built once by the PrepareBitset of
+// an index for the SearchQuantizeWithBitset calls of that index. A running
+// search holds the masks it uses, so Free does not affect it.
+type Bitset struct {
+	ptr C.gpu_bitset_c
+}
+
+// Free releases the bitset; it is a no-op on a nil or freed bitset.
+func (b *Bitset) Free() {
+	if b == nil || b.ptr == nil {
+		return
+	}
+	C.gpu_bitset_free(b.ptr)
+	b.ptr = nil
+}
+
+func (b *Bitset) handle() C.gpu_bitset_c {
+	if b == nil {
+		return nil
+	}
+	return b.ptr
+}

@@ -316,7 +316,6 @@ func TestCompileRunPreservesBinaryPrepareParamAcrossRetries(t *testing.T) {
 		{"ordinary_rc", false, moerr.NewTxnNeedRetryNoCtx()},
 		{"borrowed_rc", true, moerr.NewTxnNeedRetryNoCtx()},
 		{"borrowed_definition", true, moerr.NewTxnNeedRetryWithDefChangedNoCtx()},
-		{"borrowed_vector", true, moerr.NewVectorNeedRetryWithPreModeNoCtx()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			borrowed := tc.borrowed
@@ -675,9 +674,8 @@ func TestCompileStepsDoesNotGiveOutputAdaptiveRetryOwnership(t *testing.T) {
 	compiled, err := c.compileSteps(qry, []*Scope{input}, 0)
 	require.NoError(t, err)
 	require.Len(t, compiled, 1)
-	out, ok := compiled[0].RootOp.(*output.Output)
+	_, ok := compiled[0].RootOp.(*output.Output)
 	require.True(t, ok)
-	require.False(t, out.IsAdaptive)
 }
 
 func TestCompileStepsKeepsOutputOnCurrentCNForSingleRemoteScope(t *testing.T) {

@@ -2090,6 +2090,7 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	lastNodeID int32,
 	selectTag int32,
 	colName2Idx map[string]int32,
+	loadWarnings bool,
 ) (int32, int32, error) {
 	projLen := len(builder.qry.Nodes[lastNodeID].ProjectList)
 	childTyps := make([]plan.Type, projLen)
@@ -2106,11 +2107,30 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 		return lastNodeID, selectTag, nil // only self-referencing FKs: nothing to drop here
 	}
 
-	// Keep a row only when every foreign key is satisfied (FilterList ANDs its conds).
+	if loadWarnings {
+		if err := requireLoadFKIgnoreProtocol(builder.GetContext(), builder.compCtx.GetProcess()); err != nil {
+			return 0, 0, err
+		}
+		// Diagnose once per rejected candidate, even if several FKs fail.
+		allOK := oks[0]
+		for _, ok := range oks[1:] {
+			allOK, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allOK, ok})
+			if err != nil {
+				return 0, 0, err
+			}
+		}
+		predicate, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "_load_fk_ignore_check", []*plan.Expr{allOK})
+		if err != nil {
+			return 0, 0, err
+		}
+		oks = []*plan.Expr{predicate}
+	}
+	// The LOAD barrier must retain diagnostics before every write fanout.
 	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:   plan.Node_FILTER,
-		Children:   []int32{lastNodeID},
-		FilterList: oks,
+		NodeType:        plan.Node_FILTER,
+		Children:        []int32{lastNodeID},
+		FilterList:      oks,
+		FilterIsBarrier: loadWarnings,
 	}, bindCtx)
 
 	newTag := builder.genNewBindTag()
@@ -2671,7 +2691,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	astUpdateExprs tree.UpdateExprs,
 	irregularIndexes []*plan.IndexDef,
 	autoIncrementGeneratedColumn int32,
-	loadCheckIgnore bool,
+	loadConstraintIgnore bool,
 ) (int32, error) {
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
@@ -2948,13 +2968,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	//     the surviving rows — MySQL's row-skip semantics.
 	// ON DUPLICATE KEY UPDATE runs its own in-plan assert over the final merged
 	// image (handled earlier, with appendOnDupIrregularMaintSource).
-	// LOAD IGNORE skips CHECK-invalid rows independently of its duplicate-key
-	// policy. INSERT IGNORE uses the same filter with its own duplicate policy.
-	filterCheckRows := onDupAction == plan.Node_IGNORE || loadCheckIgnore
-	// Materialize unique-key lock columns before that filter so its projection preserves the
-	// physical vectors consumed by LockOp.
-	lockKeysMaterializedBeforeChecks := false
-	if filterCheckRows && len(tableDef.Checks) > 0 {
+	// LOAD constraint rejection is independent of duplicate-key arbitration.
+	filterCheckRows := onDupAction == plan.Node_IGNORE || loadConstraintIgnore
+	fkEnabled := false
+	if onDupAction == plan.Node_FAIL || onDupAction == plan.Node_IGNORE {
+		fkEnabled, err = builder.modernInsertFkCheckEnabled(tableDef)
+		if err != nil {
+			return 0, err
+		}
+	}
+	// Every CHECK/FK fresh-tag projection must carry physical unique-lock
+	// vectors, including ordinary FK LOAD and FK-only composite unique keys.
+	lockKeysMaterializedBeforeConstraints := false
+	if (filterCheckRows && len(tableDef.Checks) > 0) || fkEnabled {
 		needsLockKeyProjection, err := hasMaterializedInsertUniqueLockKey(tableDef, skipUniqueIdx)
 		if err != nil {
 			return 0, err
@@ -2967,7 +2993,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 				return 0, err
 			}
-			lockKeysMaterializedBeforeChecks = true
+			lockKeysMaterializedBeforeConstraints = true
 		}
 	}
 
@@ -3000,32 +3026,18 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 	}
 
-	if onDupAction == plan.Node_FAIL {
-		fkEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
+	if fkEnabled {
+		if onDupAction == plan.Node_IGNORE || loadConstraintIgnore {
+			lastNodeID, selectTag, err = builder.buildInsertIgnoreFkFilter(
+				bindCtx, tableDef, lastNodeID, selectTag, colName2Idx, loadConstraintIgnore)
+		} else {
+			lastNodeID, selectTag, err = builder.buildModernChildFkAssert(bindCtx, tableDef, lastNodeID, selectTag,
+				func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] })
+		}
 		if err != nil {
 			return 0, err
 		}
-		if fkEnabled {
-			// Assert parent existence in the data flow (binding-tagged, robust to a
-			// unique-key child's appended index-helper columns) instead of the
-			// post-createQuery appendForeignConstrantPlan over the materialized image.
-			if lastNodeID, selectTag, err = builder.buildModernChildFkAssert(bindCtx, tableDef, lastNodeID, selectTag,
-				func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }); err != nil {
-				return 0, err
-			}
-			selectNode = builder.qry.Nodes[lastNodeID]
-		}
-	} else if onDupAction == plan.Node_IGNORE {
-		fkEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
-		if err != nil {
-			return 0, err
-		}
-		if fkEnabled {
-			if lastNodeID, selectTag, err = builder.buildInsertIgnoreFkFilter(bindCtx, tableDef, lastNodeID, selectTag, colName2Idx); err != nil {
-				return 0, err
-			}
-			selectNode = builder.qry.Nodes[lastNodeID]
-		}
+		selectNode = builder.qry.Nodes[lastNodeID]
 	}
 	if onDupAction == plan.Node_FAIL && (len(irregularIndexes) > 0 || builder.returningRequested) {
 		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, selectNode, irregularIndexes, tableDef, dmlCtx.objRefs[0], builder.returningRequested)
@@ -3049,7 +3061,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	// Materialize lock keys for composite and prefix unique indexes in advance.
 	// This guarantees the lock target can find __mo_index_idx_col in colName2Idx.
-	if !lockKeysMaterializedBeforeChecks {
+	if !lockKeysMaterializedBeforeConstraints {
 		if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 			return 0, err
 		}
