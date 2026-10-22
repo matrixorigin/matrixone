@@ -12,7 +12,7 @@ Uses a single test table to reduce overhead.
 
 import json
 import pytest
-from sqlalchemy import Column, Integer, String, update, Numeric
+from sqlalchemy import Column, Integer, String, update, Numeric, literal, select
 from matrixone import Client
 from matrixone.orm import declarative_base
 from matrixone.sqlalchemy_ext import (
@@ -115,6 +115,26 @@ def test_table(client):
         client.drop_table(Product)
     except:
         pass
+
+
+@pytest.mark.parametrize('function,expected', [
+    (json_extract, 7), (json_extract_string, 'value'), (json_extract_float64, 7.0),
+    (json_set, 9), (json_insert, 7), (json_replace, 9),
+])
+def test_json_path_quoted_key_roundtrip(client, function, expected):
+    path = '$."owner\'s"'
+    value = 'value' if function is json_extract_string else 7
+    args = [literal(json.dumps({"owner's": value})), path]
+    if function in (json_set, json_insert, json_replace):
+        args.append(9)
+        expression = json_extract(function(*args), path)
+    else:
+        expression = function(*args)
+    actual = client.execute(select(expression)).scalar()
+    # JSON_EXTRACT may expose a JSON number as driver text or a native scalar.
+    if function is not json_extract_string and isinstance(actual, str):
+        actual = json.loads(actual)
+    assert actual == expected
 
 
 class TestJSONExtract:

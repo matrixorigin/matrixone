@@ -308,8 +308,11 @@ func DeepCopyRankOption(opt *plan.RankOption) *plan.RankOption {
 		return nil
 	}
 	return &plan.RankOption{
-		Mode:   opt.Mode,
-		Nprobe: opt.Nprobe,
+		Mode:      opt.Mode,
+		Itopk:     opt.Itopk,
+		MaxItopk:  opt.MaxItopk,
+		Nprobe:    opt.Nprobe,
+		MaxNprobe: opt.MaxNprobe,
 	}
 }
 
@@ -538,6 +541,9 @@ func DeepCopyIndexSearchScan(old *plan.IndexSearchScan) *plan.IndexSearchScan {
 		AlgoOptions:         slices.Clone(old.AlgoOptions),
 		AlgoExprs:           DeepCopyExprList(old.AlgoExprs),
 		AlgoExprNames:       slices.Clone(old.AlgoExprNames),
+		InternalTopk:        old.InternalTopk,
+		MaxInternalTopk:     old.MaxInternalTopk,
+		MaxNprobe:           old.MaxNprobe,
 	}
 }
 

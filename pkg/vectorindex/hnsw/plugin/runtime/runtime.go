@@ -70,12 +70,6 @@ func (CatalogHooks) BuildSessionVars() []string {
 	return nil
 }
 
-func (CatalogHooks) DefaultOptions() map[string]string {
-	return map[string]string{
-		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,
-	}
-}
-
 // HnswIndexFlag is the experimental-feature flag gating HNSW DDL. Single
 // source of truth; both the catalog gate (pkg/sql/compile/util.go via
 // ExperimentalFlag) and the per-plugin HandleCreateIndex gate reference

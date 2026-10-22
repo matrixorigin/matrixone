@@ -21,11 +21,13 @@ import (
 	"strconv"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
+	cagraPkg "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra"
 	cagraplan "github.com/matrixorigin/matrixone/pkg/vectorindex/cagra/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/overfetch"
@@ -38,26 +40,76 @@ type Hooks struct{}
 var _ searchplugin.Hooks = Hooks{}
 var _ searchplugin.ExplainHooks = Hooks{}
 var _ searchplugin.CandidateBudgetHooks = Hooks{}
+var _ searchplugin.IndexFilterHooks = Hooks{}
+var _ searchplugin.MembershipHooks = Hooks{}
+var _ searchplugin.IterativeSearchHooks = Hooks{}
+var _ searchplugin.InternalTopKLimitHooks = Hooks{}
 
-// ExplainSettings preserves compact text and exposes static settings on detailed output.
+// MaxInternalTopKLimit returns cagra.MaxInternalTopK.
+func (Hooks) MaxInternalTopKLimit() uint64 { return cagraPkg.MaxInternalTopK }
+
+// StartRound is the first round of the CAGRA widening policy (cagra.IterativeSearch).
+func (Hooks) StartRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats) searchplugin.Round {
+	return cagraPkg.IterativeSearch{}.StartRound(spec, req, stats)
+}
+
+// NextRound is the round after prev of the CAGRA widening policy (cagra.IterativeSearch).
+func (Hooks) NextRound(spec *plan.IndexSearchScan, req searchplugin.Request, stats searchplugin.SearchStats, prev searchplugin.Round, got uint64) (searchplugin.Round, bool) {
+	return cagraPkg.IterativeSearch{}.NextRound(spec, req, stats, prev, got)
+}
+
+// SupportsIndexFilter reports true: the search applies the INCLUDE and
+// primary-key predicates of its filter inside the index search.
+func (Hooks) SupportsIndexFilter() bool { return true }
+
+// SupportsMembership reports true: the search ANDs the membership key set into its
+// filter mask on the device.
+func (Hooks) SupportsMembership() bool { return true }
+
+// ExplainSettings returns the filter the search applies on the device as SQL ("Index
+// Filter"), and on detailed output the static settings first. Compact output prints
+// nothing for algo options or index params it cannot decode.
 func (Hooks) ExplainSettings(spec *plan.IndexSearchScan, detailed bool) ([]string, error) {
-	if !detailed {
-		return nil, nil
-	}
 	opts, err := cagraplan.DecodeScanOptions(spec.GetAlgoOptions())
 	if err != nil {
+		if !detailed {
+			return nil, nil
+		}
 		return nil, err
 	}
-	settings := []string{
-		"ThreadsSearch: " + strconv.FormatInt(int64(opts.ThreadsSearch), 10),
-		"BatchWindow: " + strconv.FormatInt(int64(opts.BatchWindow), 10),
-		"GpuMultiSimulation: " + strconv.FormatInt(int64(opts.GpuMultiSimulation), 10),
-		"KeyPartType: " + strconv.FormatInt(int64(opts.KeyPartType), 10),
+	var settings []string
+	if detailed {
+		settings = []string{
+			"ThreadsSearch: " + strconv.FormatInt(int64(opts.ThreadsSearch), 10),
+			"BatchWindow: " + strconv.FormatInt(int64(opts.BatchWindow), 10),
+			"GpuMultiSimulation: " + strconv.FormatInt(int64(opts.GpuMultiSimulation), 10),
+			"KeyPartType: " + strconv.FormatInt(int64(opts.KeyPartType), 10),
+		}
+		if opts.FilterJSON != "" {
+			settings = append(settings, "Filter Predicates: "+opts.FilterJSON)
+		}
 	}
-	if opts.FilterJSON != "" {
-		settings = append(settings, "Filter Predicates: "+opts.FilterJSON)
+	filter, err := describeIndexFilter(spec, opts.FilterJSON)
+	if err != nil {
+		if !detailed {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if filter != "" {
+		settings = append(settings, "Index Filter: "+filter)
 	}
 	return settings, nil
+}
+
+// describeIndexFilter renders filterJSON as SQL on the primary key and INCLUDE columns
+// of spec.
+func describeIndexFilter(spec *plan.IndexSearchScan, filterJSON string) (string, error) {
+	include, err := catalog.IncludeColumnsFromIndexParams(spec.GetIndex().GetIndexAlgoParams())
+	if err != nil {
+		return "", err
+	}
+	return vectorindex.DescribeIndexFilter(filterJSON, include, spec.GetSourceTableDef().GetPkey().GetPkeyColName())
 }
 
 // PostFilterCandidateBudget is the cagra post-filter over-fetch of resultLimit.
@@ -66,16 +118,19 @@ func (Hooks) PostFilterCandidateBudget(resultLimit uint64) uint64 {
 }
 
 func (Hooks) NewReader(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (engine.Reader, error) {
-	// The search does not apply a membership key set, so a request whose candidate
-	// limit is only valid under one is refused rather than answered without it.
-	if req.MembershipFilterRequired {
-		return nil, moerr.NewNotSupported(proc.Ctx, "cagra index search with a required membership filter")
+	if req.MembershipFilterRequired && !req.HasMembershipFilter {
+		return nil, moerr.NewInvalidInput(proc.Ctx, "cagra index search requires a membership filter that is missing")
 	}
 	s, err := newSearch(proc, spec, req)
 	if err != nil {
 		return nil, err
 	}
-	return newReader(s)
+	r, err := newReader(s)
+	if err != nil {
+		s.freeMembership()
+		return nil, err
+	}
+	return r, nil
 }
 
 // search is one cagra search: the index and table configuration, the query
@@ -89,6 +144,25 @@ type search struct {
 	limit      uint64
 	filterJSON string
 	snapshot   *plan.Snapshot
+	// iterative is set for mode=iterative: the search widens in rounds up to
+	// maxLimit (max_itopk) or maxProbe (max_nprobe) until resultLimit rows qualify.
+	iterative   bool
+	resultLimit uint64
+	maxLimit    uint64
+	maxProbe    uint64
+	// membership holds the primary keys the search is restricted to, or nil.
+	// emptyMembership is an exact empty key set: the search returns no rows.
+	membership      docfilter.MembershipFilter
+	membershipCount uint64
+	emptyMembership bool
+}
+
+// freeMembership frees the membership filter of s; s may be nil.
+func (s *search) freeMembership() {
+	if s != nil && s.membership != nil {
+		s.membership.Free()
+		s.membership = nil
+	}
 }
 
 func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplugin.Request) (*search, error) {
@@ -138,14 +212,25 @@ func newSearch(proc *process.Process, spec *plan.IndexSearchScan, req searchplug
 	if tblcfg.MetadataTable == "" || tblcfg.IndexTable == "" {
 		return nil, moerr.NewInvalidInputNoCtx("cagra index search is missing its hidden tables")
 	}
-	return &search{
-		proc:       proc,
-		idxcfg:     idxcfg,
-		tblcfg:     tblcfg,
-		query:      req.QueryPayload,
-		queryType:  queryType,
-		limit:      max(req.CandidateBudget, 1),
-		filterJSON: opts.FilterJSON,
-		snapshot:   spec.ScanSnapshot,
-	}, nil
+	s := &search{
+		proc:        proc,
+		idxcfg:      idxcfg,
+		tblcfg:      tblcfg,
+		query:       req.QueryPayload,
+		queryType:   queryType,
+		limit:       max(req.CandidateBudget, 1),
+		filterJSON:  opts.FilterJSON,
+		snapshot:    spec.ScanSnapshot,
+		iterative:   opts.Iterative,
+		resultLimit: req.ResultLimit,
+		maxLimit:    req.MaxInternalTopK,
+		maxProbe:    req.MaxNprobe,
+	}
+	if req.HasMembershipFilter {
+		if s.membership, s.membershipCount, s.emptyMembership, err = vectorindex.BuildMembership(
+			proc.GetService(), "cagra", spec.SourceTableDef, req.MembershipFilter); err != nil {
+			return nil, err
+		}
+	}
+	return s, nil
 }

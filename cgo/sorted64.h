@@ -19,13 +19,31 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 // filter is the validated little-endian [count][sorted uint64 values] payload.
 bool mo_sorted64_contains(const void *filter, uint64_t key);
+
+// Build the payload of a fixed-width integer column in C memory: the non-null values,
+// zero-extended to uint64, sorted and deduplicated; an item whose bytes end past len is
+// skipped. Returns NULL on OOM or an elemsz other than 1, 2, 4 or 8; free it with
+// mo_sorted64_free. key/len/elemsz/nitem/nullmap/nullmaplen read the column like
+// mo_sorted64_test_fixed.
+uint64_t *mo_sorted64_build_fixed(const void *key, size_t len, size_t elemsz,
+                                  size_t nitem, const void *nullmap,
+                                  size_t nullmaplen);
+void mo_sorted64_free(uint64_t *payload);
 
 // Probe a fixed-width integer vector in one C call. Integer bytes are decoded
 // by the same zero-extending little-endian contract as cbitmap / CRoaring.
 void mo_sorted64_test_fixed(const void *filter, const void *key, size_t len,
                             size_t elemsz, size_t nitem, const void *nullmap,
                             size_t nullmaplen, void *result);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif  // MO_SORTED64_H

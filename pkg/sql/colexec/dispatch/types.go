@@ -294,7 +294,3 @@ func (dispatch *Dispatch) CleanupDeferredSpool() {
 
 func (dispatch *Dispatch) Free(proc *process.Process, pipelineFailed bool, err error) {
 }
-
-func (dispatch *Dispatch) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}

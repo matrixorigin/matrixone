@@ -114,7 +114,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			return
 		}
 		if ep.needExportToFile() {
-			defer ep.Close()
+			defer func() { err = ep.finish(err) }()
 			columns, err = execCtx.cw.GetColumns(execCtx.reqCtx)
 			if err != nil {
 				ses.Error(execCtx.reqCtx,
@@ -133,12 +133,12 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 			initExportFileParam(ep, mrs)
 			ep.mrs = mrs
 			ep.ctx = execCtx.reqCtx
+			ep.init()
 			ep.service = ses.GetService()
-			if err = openNewFile(execCtx.reqCtx, ep, mrs); err != nil {
+			if err = openNewFile(ep.ctx, ep, mrs); err != nil {
 				return
 			}
 
-			ep.init()
 			runBegin := time.Now()
 			/*
 				Start pipeline
@@ -158,14 +158,6 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 
 			if err = exportAllDataFromBatches(ep); err != nil {
 				return
-			}
-
-			// For parquet format, file is written in exportAllDataFromBatches
-			// No need to close pipe-based writer
-			if ep.getExportFormat() != "parquet" {
-				if err = Close(ep); err != nil {
-					return
-				}
 			}
 
 		} else {

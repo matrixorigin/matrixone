@@ -105,3 +105,67 @@ checked; added or removed data spaces and ambiguous input mappings fail.
 
 Keep generated datasets, databases and raw captures outside Git. Large benchmark
 campaigns are explicit operations; ordinary tests use only tiny fixtures.
+
+Campaign mode `warm` runs the primary SF1/SF10/SF100 latency comparison: ten
+balanced paired suites per scale, with the same budgets and warmup as `full`.
+It prepares one checkpointed persistent image per engine/scale;
+the three-replicate loading experiment, scaling, cache, and profiling studies
+remain separate parts of `full`.
+
+## Controlled measurement
+
+Start from `campaign.example.json`, replace paths and build identities, and
+reserve an exclusive host window. It defines the complete matrix from the
+methodology. `sf1-smoke` mode requires only SF1 and runs one paired suite; its
+report is explicitly separate from the full campaign.
+
+```sh
+./tpch-compare preflight --config /nvme/tpch/campaign.json
+systemd-run --user --scope --unit=tpch-compare-prepare -p Delegate=yes \
+  ./tpch-compare run --config /nvme/tpch/campaign.json --phase prepare
+systemd-run --user --scope --unit=tpch-compare-measure -p Delegate=yes \
+  ./tpch-compare run --config /nvme/tpch/campaign.json --phase measure --id baseline
+./tpch-compare report --config /nvme/tpch/campaign.json \
+  --run-dir /nvme/tpch/comparison/runs/baseline --output /nvme/tpch/report
+```
+
+The runner manages private MO ports and deployment directories. One delegated
+application cgroup contains every service and query worker. Its total memory and
+CPU set are enforced before exec, including child threads. Swap is disabled for
+that application. Controller work uses the other CCD. Source data and database
+cache ownership are controlled without dropping the host's entire cache.
+
+Preparation loads fresh databases and collects statistics and checkpoints.
+Benchmark scripts perform no dataset scans, reference checks, cross-engine result
+comparisons or correctness replays. Correctness tests and explicit diagnostic
+commands are separate from every benchmark mode. Full mode uses three loads per
+scale/engine and retains the first database.
+Later load replicas are discarded only after their owned processes have joined;
+all receipts remain. The pilot freezes symmetric query deadlines, throughput
+wave lengths and the balanced schedule before scored runs.
+
+Workers report progress through bounded pipes. Parent deadlines and cgroup
+termination can stop a blocked driver independently. CPU/memory/I/O accounting
+is gated around the measured queries, after connection setup and warmup. Eight
+concurrent clients share one DuckDB instance and the original application budget.
+A sampled disk guard checks allocated space and reserve every second; its disk
+measurements are identified as observations rather than an exact filesystem
+quota or unsampled peak. Runtime/cancellation errors and partial artifacts remain
+failures. Each measurement invocation uses a new run identifier and preserves
+earlier attempts.
+
+The next arm is admitted only after managed process waits have finished and the
+application cgroup is empty. Unproven cleanup in either a measured or warm-prime
+arm stops the run after recording the failed attempt and terminal error. Ordinary
+execution failures with completed process cleanup remain failed blocks and may
+continue. Resolve any remaining owned processes before starting another attempt.
+
+Reports contain Markdown, query CSV and whole-window resource CSV. Bootstrap
+intervals resample paired blocks/waves, preserving dependencies among calls in a
+concurrent wave. Missing or failed blocks invalidate the cell's score. Suite/wave
+medians, sums of query medians and geometric mean speedups have separate labels.
+Whole-window CPU or memory is never assigned to an arbitrary query.
+All required load replicas' arm, request and worker receipts must also pass
+identity, execution-status and resource checks before any report output is
+created. Keep those receipts when archiving database images, executables or query
+captures; reporting does not reopen the archived data.

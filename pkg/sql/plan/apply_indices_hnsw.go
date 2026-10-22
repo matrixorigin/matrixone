@@ -15,15 +15,22 @@
 package plan
 
 import (
+	"context"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	indexplugin "github.com/matrixorigin/matrixone/pkg/indexplugin"
+	indexcoverage "github.com/matrixorigin/matrixone/pkg/indexplugin/coverage"
+	"github.com/matrixorigin/matrixone/pkg/logutil"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	hnswplan "github.com/matrixorigin/matrixone/pkg/vectorindex/hnsw/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
+	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 )
 
 type hnswIndexContext struct {
@@ -39,6 +46,80 @@ type hnswIndexContext struct {
 	nThread      int64
 }
 
+// hnswIndexCoversSnapshot is the correctness gate for the HNSW top-k rewrite.
+// The rewrite is an inner join between ANN candidates and the base table; an
+// async generation that is behind the source can therefore silently lose rows.
+// A false result deliberately leaves the original exact scan in place.
+func (builder *QueryBuilder) hnswIndexCoversSnapshot(scanNode *plan.Node, metaDef, idxDef *plan.IndexDef) bool {
+	if builder == nil || builder.compCtx == nil || scanNode == nil ||
+		scanNode.TableDef == nil || idxDef == nil {
+		return false
+	}
+	if builder.GetContext().Value(defines.HnswSnapshotFallbackKey{}) == true {
+		return false
+	}
+	proc := builder.compCtx.GetProcess()
+	if proc == nil {
+		return false
+	}
+	txn := proc.GetTxnOperator()
+	if txn == nil {
+		// Synthetic planner contexts used by unit tests do not have a transaction
+		// and cannot execute a query, so retain the existing plan-construction
+		// behavior for those contexts only.
+		return true
+	}
+	if scanNode.TableDef.TblId == 0 || scanNode.ObjRef == nil ||
+		proc.GetSessionInfo() == nil || proc.GetSessionInfo().StorageEngine == nil {
+		return false
+	}
+
+	sp := sqlexec.NewSqlProcess(proc)
+	scanSnapshotTS := sp.ApplyScanSnapshot(scanNode.ScanSnapshot)
+	readTxn := txn
+	if scanSnapshotTS != nil {
+		readTxn = txn.CloneSnapshotOp(*scanSnapshotTS)
+	}
+
+	ctx := proc.GetTopContext()
+	if acctID, err := sp.EffectiveAccountID(); err == nil {
+		ctx = defines.AttachAccountId(ctx, acctID)
+	}
+	_, _, rel, err := proc.GetSessionInfo().StorageEngine.GetRelationById(
+		ctx, readTxn, scanNode.TableDef.TblId)
+	if err != nil {
+		logutil.Debugf("hnsw index coverage: resolve source relation failed for %s: %v", idxDef.IndexName, err)
+		return false
+	}
+	commitTSProvider, ok := rel.(engine.SourceCommitTSProvider)
+	if !ok {
+		return false
+	}
+
+	readTS := types.TimestampToTS(txn.SnapshotTS())
+	if scanSnapshotTS != nil {
+		readTS = types.TimestampToTS(*scanSnapshotTS)
+	}
+	req := indexcoverage.Request{
+		CNUUID:             proc.GetService(),
+		Txn:                txn,
+		TableID:            scanNode.TableDef.TblId,
+		IndexDef:           metaDef,
+		Snapshot:           readTS,
+		IndexStorageTable:  idxDef.IndexTableName,
+		IndexMetadataDB:    scanNode.ObjRef.SchemaName,
+		IndexMetadataTable: metaDef.IndexTableName,
+		ScanSnapshotTS:     scanSnapshotTS,
+		SourceCommitTS: func(ctx context.Context, mustExceed types.TS) (types.TS, error) {
+			return commitTSProvider.SourceCommitTS(ctx, mustExceed)
+		},
+	}
+	covered, _, err := indexplugin.CoversSnapshot(ctx, idxDef.IndexAlgo, req)
+	if err != nil {
+		logutil.Debugf("hnsw index coverage check failed for %s: %v", idxDef.IndexName, err)
+	}
+	return covered
+}
 func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex) (*hnswIndexContext, error) {
 	if vecCtx == nil || multiTableIndex == nil {
 		return nil, nil
@@ -53,7 +134,6 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	if vecCtx.rankOption != nil && vecCtx.rankOption.Mode == "force" {
 		return nil, nil
 	}
-
 	rewriteAllowed, err := builder.validateVectorIndexSortRewrite(vecCtx)
 	if err != nil || !rewriteAllowed {
 		return nil, err
@@ -62,6 +142,9 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 	metaDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Metadata]
 	idxDef := multiTableIndex.IndexDefs[catalog.Hnsw_TblType_Storage]
 	if metaDef == nil || idxDef == nil {
+		return nil, nil
+	}
+	if !builder.hnswIndexCoversSnapshot(vecCtx.scanNode, metaDef, idxDef) {
 		return nil, nil
 	}
 
@@ -110,6 +193,10 @@ func (builder *QueryBuilder) prepareHnswIndexContext(vecCtx *vectorSortContext, 
 		return nil, err
 	}
 
+	// Checked once the index is known to serve the query: another index on the table may.
+	if err := checkVectorSearchMode(builder.GetContext(), vecCtx, catalog.MoIndexHnswAlgo.ToString()); err != nil {
+		return nil, err
+	}
 	return &hnswIndexContext{
 		vecCtx:       vecCtx,
 		metaDef:      metaDef,
@@ -145,6 +232,33 @@ func (builder *QueryBuilder) resolveInt64Variable(name string, def int64) (int64
 }
 
 func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	return builder.applyIndicesForSortUsingHnswWithColRefCnt(nodeID, vecCtx, multiTableIndex, nil, idxColMap)
+}
+
+// hnswUsesPreFilter reports whether the hnsw search of vecCtx is restricted to the keys
+// of a filtered copy of its scan: under a membership join, a fulltext MATCH filter, or
+// mode=pre or mode=iterative with a filter.
+func (builder *QueryBuilder) hnswUsesPreFilter(vecCtx *vectorSortContext) bool {
+	if vecCtx.hasMembership || builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
+		return true
+	}
+	mode := vectorRankMode(vecCtx)
+	return (mode == "pre" || mode == "iterative") && len(vecCtx.scanNode.FilterList) > 0
+}
+
+// buildAdaptiveHnswTop builds mode=auto as ADAPTIVE_TOP [post, pre, force]. The pre
+// branch is left out when it would equal post: without a filter, or with a fulltext
+// MATCH filter, under which post already searches the matching keys. A region that is
+// small, not replay-safe or not supported by ADAPTIVE_TOP runs force.
+func (builder *QueryBuilder) buildAdaptiveHnswTop(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
+	branch := func(root int32, branchCtx *vectorSortContext, branchMap map[[2]int32]*plan.Expr) (int32, error) {
+		return builder.applyIndicesForSortUsingHnswWithColRefCnt(root, branchCtx, multiTableIndex, colRefCnt, branchMap)
+	}
+	withPre := len(vecCtx.scanNode.FilterList) > 0 && !builder.scanHasMatchedFullTextFilter(vecCtx.scanNode)
+	return builder.buildAdaptiveModeTop(nodeID, vecCtx, idxColMap, branch, withPre)
+}
+
+func (builder *QueryBuilder) applyIndicesForSortUsingHnswWithColRefCnt(nodeID int32, vecCtx *vectorSortContext, multiTableIndex *MultiTableIndex, colRefCnt map[[2]int32]int, idxColMap map[[2]int32]*plan.Expr) (int32, error) {
 
 	if !hasCompleteVectorPagination(vecCtx) || vecCtx.sortNode == nil || vecCtx.scanNode == nil {
 		return nodeID, nil
@@ -160,13 +274,26 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 	if err != nil || hnswCtx == nil {
 		return nodeID, err
 	}
+	if vectorRankMode(vecCtx) == "auto" {
+		return builder.buildAdaptiveHnswTop(nodeID, vecCtx, multiTableIndex, colRefCnt, idxColMap)
+	}
 
 	// With a residual filter the hnsw search is JOIN-ed against the scan and the
 	// filter drops index candidates, so execution over-fetches the candidate
-	// budget from k (#26869).
-	postFilterOverFetch := len(scanNode.FilterList) > 0
+	// budget from k (#26869). A PRE search returns only qualifying keys.
+	usePreFilter := builder.hnswUsesPreFilter(vecCtx)
+	if usePreFilter && (vecCtx.providerNodeID >= 0 || !builder.vectorPreFilterReplaySafe(vecCtx)) {
+		// A per-row query vector runs the search in APPLY, which receives no membership
+		// runtime filter, and a sequence or volatile filter cannot run in both PRE scans:
+		// leave the query to the exact sort.
+		return nodeID, nil
+	}
+	postFilterOverFetch := len(scanNode.FilterList) > 0 && !usePreFilter
 
-	algoOptions, err := hnswplan.EncodeScanOptions(hnswplan.ScanOptions{ThreadsSearch: hnswCtx.nThread})
+	algoOptions, err := hnswplan.EncodeScanOptions(hnswplan.ScanOptions{
+		ThreadsSearch: hnswCtx.nThread,
+		Iterative:     usePreFilter && vectorRankMode(vecCtx) == "iterative",
+	})
 	if err != nil {
 		return 0, err
 	}
@@ -205,9 +332,10 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 			},
 		},
 	}
+	setIndexSearchScanKnobs(tableFuncNode.IndexSearchScan, vecCtx)
 	tableFuncNodeID := builder.appendNode(tableFuncNode, ctx)
 
-	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier("mo_hnsw_alias_0")}, ctx, "")
+	err = builder.addBinding(tableFuncNodeID, tree.AliasClause{Alias: tree.Identifier(indexSearchAlias(ctx, "mo_hnsw_alias"))}, ctx, "")
 	if err != nil {
 		return 0, err
 	}
@@ -224,35 +352,54 @@ func (builder *QueryBuilder) applyIndicesForSortUsingHnsw(nodeID int32, vecCtx *
 		}, ctx)
 	}
 
-	// oncond
-	wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
-		{
-			Typ: hnswCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: scanNode.BindingTags[0],
-					ColPos: hnswCtx.pkPos, // tbl.pk
+	var joinNodeID int32
+	if usePreFilter {
+		preJoinID, ok, err := builder.buildVectorPreFilterJoin(vecCtx, vectorPreFilterInput{
+			ctx:             ctx,
+			scanNode:        scanNode,
+			colRefCnt:       colRefCnt,
+			idxColMap:       idxColMap,
+			pkPos:           hnswCtx.pkPos,
+			pkType:          hnswCtx.pkType,
+			tableFuncTag:    tableFuncTag,
+			tableFuncNodeID: tableFuncNodeID,
+			candidateNodeID: candidateNodeID,
+		})
+		if err != nil || !ok {
+			return nodeID, err
+		}
+		joinNodeID = preJoinID
+	} else {
+		// oncond
+		wherePkEqPk, _ := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*Expr{
+			{
+				Typ: hnswCtx.pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: scanNode.BindingTags[0],
+						ColPos: hnswCtx.pkPos, // tbl.pk
+					},
 				},
 			},
-		},
-		{
-			Typ: hnswCtx.pkType,
-			Expr: &plan.Expr_Col{
-				Col: &plan.ColRef{
-					RelPos: tableFuncTag, // last idxTbl (may be join) relPos
-					ColPos: 0,            // idxTbl.pk
+			{
+				Typ: hnswCtx.pkType,
+				Expr: &plan.Expr_Col{
+					Col: &plan.ColRef{
+						RelPos: tableFuncTag, // last idxTbl (may be join) relPos
+						ColPos: 0,            // idxTbl.pk
+					},
 				},
 			},
-		},
-	})
+		})
 
-	joinNodeID := builder.appendNode(&plan.Node{
-		NodeType: plan.Node_JOIN,
-		Children: []int32{scanNode.NodeId, candidateNodeID},
-		JoinType: plan.Node_INNER,
-		OnList:   []*Expr{wherePkEqPk},
-		// Don't set Limit/Offset on JOIN - they should be applied after SORT
-	}, ctx)
+		joinNodeID = builder.appendNode(&plan.Node{
+			NodeType: plan.Node_JOIN,
+			Children: []int32{scanNode.NodeId, candidateNodeID},
+			JoinType: plan.Node_INNER,
+			OnList:   []*Expr{wherePkEqPk},
+			// Don't set Limit/Offset on JOIN - they should be applied after SORT
+		}, ctx)
+	}
 
 	// Keep FilterList on scanNode so filters are applied during table scan
 	// Clear Limit/Offset from scanNode since they should be applied after SORT
