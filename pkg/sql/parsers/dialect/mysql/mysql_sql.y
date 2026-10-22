@@ -2551,6 +2551,20 @@ grant_stmt:
             },
         }
     }
+|   GRANT priv_list ON priv_level TO role_spec_list grant_option_opt
+    {
+        // MySQL: the object type is optional and defaults to TABLE.
+        $$ = &tree.Grant{
+            Typ: tree.GrantTypePrivilege,
+            GrantPrivilege: tree.GrantPrivilege{
+                Privileges: $2,
+                ObjType: tree.OBJECT_TYPE_TABLE,
+                Level: $4,
+                Roles: $6,
+                GrantOption: $7,
+            },
+        }
+    }
 |   GRANT role_spec_list TO drop_user_spec_list grant_option_opt
     {
         $$ = &tree.Grant{
@@ -2599,6 +2613,20 @@ revoke_stmt:
                 ObjType: $5,
                 Level: $6,
                 Roles: $8,
+            },
+        }
+    }
+|   REVOKE exists_opt priv_list ON priv_level FROM role_spec_list
+    {
+        // MySQL: the object type is optional and defaults to TABLE.
+        $$ = &tree.Revoke{
+            Typ: tree.RevokeTypePrivilege,
+            RevokePrivilege: tree.RevokePrivilege{
+                IfExists: $2,
+                Privileges: $3,
+                ObjType: tree.OBJECT_TYPE_TABLE,
+                Level: $5,
+                Roles: $7,
             },
         }
     }
