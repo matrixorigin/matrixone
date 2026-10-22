@@ -39,7 +39,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
@@ -1043,12 +1042,12 @@ func buildDefaultExprWithColumnsObserved(
 	// try to calculate default value, return err if fails
 	newExpr, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(defaultExpr), proc, false, true)
 	// cast_assign remains an executable expression because its behavior depends
-	// on sql_mode, so rule.IsConstant rejects the outer function. Validate when
+	// on sql_mode, so function.IsConstant rejects the outer function. Validate when
 	// its source value is constant, without eagerly evaluating volatile defaults.
 	constantMediumIntDefault := false
 	if err == nil && isMediumIntPlanType(typ) && newExpr.GetLit() == nil {
 		if cast := newExpr.GetF(); cast != nil && len(cast.Args) > 0 {
-			constantMediumIntDefault = rule.IsConstant(cast.Args[0], false)
+			constantMediumIntDefault = function.IsConstant(cast.Args[0], false)
 		}
 	}
 	if constantMediumIntDefault {

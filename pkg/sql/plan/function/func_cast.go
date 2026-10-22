@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/jsonvalue"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -8873,7 +8874,7 @@ func castToJSON(from *vector.Vector, result vector.FunctionResultWrapper, proc *
 		case types.T_char, types.T_varchar, types.T_text:
 			value, err = types.ParseSliceToByteJson(from.GetBytesAt(row))
 		case types.T_binary, types.T_varbinary, types.T_blob:
-			value = newTypedByteJson(bytejson.TpCodeOpaque, string(from.GetBytesAt(row)))
+			value, err = jsonvalue.FromBinary(ctx, jsonSessionProtocolVersion(proc), from.GetType().Oid, from.GetBytesAt(row))
 		case types.T_bool:
 			value, err = bytejson.CreateByteJSON(vector.GetFixedAtNoTypeCheck[bool](from, row))
 		case types.T_bit:
