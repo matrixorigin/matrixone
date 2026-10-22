@@ -30,9 +30,9 @@ LDFLAGS := $(LIBS) -lroaring $(LINKER_FLAGS)
 
 ifeq ($(MO_CL_CUDA),1)
 # test_xcall_cuda compares the C loop against the CUDA kernel, so it only exists in a CUDA build.
-all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe test_xcall_cuda.exe
+all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe test_sorted64.exe test_xcall_cuda.exe
 else
-all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe
+all: test_add.exe test_bloom.exe test_varlena.exe test_cbitmap.exe test_croaring.exe test_sorted64.exe
 endif
 
 test_xcall_cuda.exe: test_xcall_cuda.c ../xcall.h
@@ -43,6 +43,9 @@ test_add.exe: test_add.c
 
 test_cbitmap.exe: test_cbitmap.c
 	$(TEST_CC) $(CFLAGS) -o $@ test_cbitmap.c $(LDFLAGS)
+
+test_sorted64.exe: test_sorted64.c
+	$(TEST_CC) $(CFLAGS) -o $@ test_sorted64.c $(LDFLAGS)
 
 test_croaring.exe: test_croaring.c
 	$(TEST_CC) $(CFLAGS) -o $@ test_croaring.c $(LDFLAGS)

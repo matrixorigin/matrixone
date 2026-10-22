@@ -835,6 +835,39 @@ func TestCompatibilityForV12PropagatesAppendError(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.Equal(t, 2, successDest.RowCount())
+
+	for _, columns := range [][]int{
+		{ckputil.TableObjectsAttr_Accout_Idx},
+		{ckputil.TableObjectsAttr_Accout_Idx, ckputil.TableObjectsAttr_DB_Idx},
+	} {
+		func() {
+			failureMP, err := mpool.NewMPool("v12-compatibility-error-after-append", 1<<20, mpool.NoFixed)
+			require.NoError(t, err)
+			dest := ckputil.MakeDataScanTableIDBatch()
+			defer func() {
+				dest.Clean(failureMP)
+				mpool.DeleteMPool(failureMP)
+			}()
+			for _, column := range columns {
+				require.NoError(t, dest.Vecs[column].PreExtend(1, failureMP))
+				if column == ckputil.TableObjectsAttr_Accout_Idx {
+					require.NoError(t, dest.Vecs[column].PreExtendBitmap(1, failureMP))
+				}
+			}
+			available := failureMP.Cap() - failureMP.CurrNB()
+			held, err := failureMP.Alloc(int(available), true)
+			require.NoError(t, err)
+			defer failureMP.Free(held)
+			err = compatibilityForV12(
+				objectio.NewBlockid(objectio.NewSegmentid(), 0, 0),
+				source,
+				nil,
+				dest,
+				failureMP,
+			)
+			require.Error(t, err)
+		}()
+	}
 }
 
 func TestCompatibilityForV12PropagatesEveryAppendError(t *testing.T) {

@@ -143,13 +143,6 @@ func (op *PartitionInsert) Call(
 	return input, nil
 }
 
-func (op *PartitionInsert) ExecProjection(
-	proc *process.Process,
-	input *batch.Batch,
-) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (op *PartitionInsert) Free(
 	proc *process.Process,
 	pipelineFailed bool,

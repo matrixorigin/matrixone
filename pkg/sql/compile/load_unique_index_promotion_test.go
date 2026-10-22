@@ -453,7 +453,16 @@ func TestAnalyzeLoadUniqueIndexPromotionMatchesPlannerShape(t *testing.T) {
 	require.NoError(t, err)
 	defer stmt.Free()
 
-	qry, err := plan2.NewMockOptimizer(true, newPlanTestProcess(t)).Optimize(stmt)
+	mock := plan2.NewMockOptimizer(true, newPlanTestProcess(t))
+	ctx := mock.CurrentContext().(*plan2.MockCompilerContext)
+	previous := *ctx
+	ctx.ResolveVariableFunc = func(name string, system, global bool) (interface{}, error) {
+		if name == "mo_pk_check_by_cn" {
+			return int8(1), nil
+		}
+		return previous.ResolveVariable(name, system, global)
+	}
+	qry, err := mock.Optimize(stmt)
 	require.NoError(t, err)
 	pn := &plan.Plan{Plan: &plan.Plan_Query{Query: qry}}
 	require.Len(t, qry.Steps, 3, "exercise the shared image, independent validation, and writer")

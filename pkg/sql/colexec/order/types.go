@@ -526,10 +526,6 @@ func orderTerminalCapacityError(ctx context.Context, err error) error {
 	return err
 }
 
-func (order *Order) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (order *Order) cleanBatch(proc *process.Process) {
 	//big memory, just clean
 	ctr := &order.ctr
