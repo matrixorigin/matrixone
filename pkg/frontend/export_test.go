@@ -2376,45 +2376,69 @@ func TestOutfileUnenclosedCSVRoundTripsThroughLoadParser(t *testing.T) {
 	require.True(t, got[len(values)].IsNull, "the NULL row must reload as NULL")
 }
 
-// #30703: duplicatedJsonLineColumn flags the first repeated alias.
+// #30703: duplicatedJSONLineColumn flags the first repeated alias, even empty.
 func TestDuplicatedJSONLineColumn(t *testing.T) {
-	require.Equal(t, "", duplicatedJSONLineColumn(nil))
-	require.Equal(t, "", duplicatedJSONLineColumn([]string{"a", "b"}))
-	require.Equal(t, "x", duplicatedJSONLineColumn([]string{"id", "x", "y", "x"}))
-	require.Equal(t, "x", duplicatedJSONLineColumn([]string{"x", "x"}))
+	for _, tc := range []struct {
+		names []string
+		want  string
+		found bool
+	}{
+		{},
+		{names: []string{"a", "b"}},
+		{names: []string{"", "x"}},
+		{names: []string{"id", "x", "y", "x"}, want: "x", found: true},
+		{names: []string{"x", "x"}, want: "x", found: true},
+		{names: []string{"", ""}, found: true},
+		{names: []string{"", "", "x", "x"}, found: true},
+	} {
+		name, found := duplicatedJSONLineColumn(tc.names)
+		require.Equal(t, tc.want, name)
+		require.Equal(t, tc.found, found, "columns %q", tc.names)
+	}
 }
 
 // #30703: a JSONLINE export whose SELECT aliases repeat must fail explicitly
 // instead of writing rows with one column silently dropped.
 func TestJSONLineExportRejectsDuplicateAliases(t *testing.T) {
-	ctx := context.Background()
-	mp := mpool.MustNewZero()
-	mrs := &MysqlResultSet{}
-	for _, name := range []string{"id", "x", "x"} {
-		column := new(MysqlColumn)
-		column.SetName(name)
-		mrs.AddColumn(column)
-	}
-	bat := batch.NewWithSize(3)
-	bat.Vecs[0] = testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{1})
-	bat.Vecs[1] = testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{11})
-	bat.Vecs[2] = testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{22})
-	bat.SetRowCount(1)
+	for _, tc := range []struct {
+		name    string
+		columns []string
+		want    string
+	}{
+		{name: "ordinary duplicates", columns: []string{"id", "x", "x"}},
+		{name: "empty duplicates", columns: []string{"", ""}},
+		{name: "empty duplicates before ordinary duplicates", columns: []string{"", "", "x", "x"}},
+		{name: "unique names", columns: []string{"x", "y"}, want: "{\"x\":11,\"y\":22}\n"},
+		{name: "one empty name", columns: []string{"", "x"}, want: "{\"\":11,\"x\":22}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			mrs := &MysqlResultSet{}
+			bat := batch.NewWithSize(len(tc.columns))
+			for i, name := range tc.columns {
+				column := new(MysqlColumn)
+				column.SetName(name)
+				mrs.AddColumn(column)
+				bat.Vecs[i] = testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{int32(11 * (i + 1))})
+			}
+			bat.SetRowCount(1)
+			ep := &ExportConfig{mrs: mrs}
+			bytesChan := make(chan *BatchByte, 1)
+			constructJSONLine(t.Context(), &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, bytesChan, ep)
 
-	ep := &ExportConfig{
-		userConfig: &tree.ExportParam{
-			Fields: tree.NewFields(tree.DefaultFieldsTerminated, false, 0, tree.DefaultFieldsEnclosedBy[0]),
-			Lines:  tree.NewLines("", "\n"),
-		},
-		mrs:        mrs,
-		Symbol:     [][]byte{[]byte(","), []byte(","), []byte("\n")},
-		ColumnFlag: []bool{false, false, false},
+			select {
+			case result := <-bytesChan:
+				if tc.want == "" {
+					require.ErrorContains(t, result.err, "duplicate column names")
+					require.Nil(t, result.writeByte)
+				} else {
+					require.NoError(t, result.err)
+					require.Equal(t, tc.want, string(result.writeByte))
+				}
+			default:
+				t.Fatal("JSONLINE export must report its result")
+			}
+			require.Zero(t, mp.CurrNB(), "the batch must be released on success and failure")
+		})
 	}
-	bytesChan := make(chan *BatchByte, 1)
-	constructJSONLine(ctx, &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, bytesChan, ep)
-
-	result := <-bytesChan
-	require.Error(t, result.err, "duplicate aliases must abort the export")
-	require.Contains(t, result.err.Error(), "duplicate column names")
-	require.Nil(t, result.writeByte)
 }

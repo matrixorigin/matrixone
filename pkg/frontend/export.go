@@ -1580,7 +1580,7 @@ func constructJSONLine(ctx context.Context, obj FeSession, bat *batch.Batch, ind
 	// other on every row, so reject the export up front instead of returning
 	// success and dropping columns (#30703). CSV and parquet exports are not
 	// affected: they write values positionally.
-	if dup := duplicatedJSONLineColumn(columnNames); dup != "" {
+	if dup, found := duplicatedJSONLineColumn(columnNames); found {
 		err := moerr.NewInvalidInputNoCtxf(
 			"jsonline export cannot write duplicate column names ('%s'); give every output column a unique alias",
 			dup)
@@ -1758,15 +1758,15 @@ func vectorValueToJSON(vec *vector.Vector, i int, ss *Session, backSes *backSess
 	}
 }
 
-// duplicatedJSONLineColumn returns the first column name that appears more
-// than once in the export result set, or "" when every name is unique.
-func duplicatedJSONLineColumn(names []string) string {
+// duplicatedJSONLineColumn returns the first repeated column name and whether
+// one was found. Empty names are valid result metadata and can also repeat.
+func duplicatedJSONLineColumn(names []string) (string, bool) {
 	seen := make(map[string]struct{}, len(names))
 	for _, name := range names {
 		if _, dup := seen[name]; dup {
-			return name
+			return name, true
 		}
 		seen[name] = struct{}{}
 	}
-	return ""
+	return "", false
 }
