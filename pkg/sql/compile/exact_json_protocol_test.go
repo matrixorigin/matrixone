@@ -251,6 +251,9 @@ func TestExactJSONProtocolKeepsUpstreamFloors(t *testing.T) {
 	least := bind("least", col, col)
 	collation := bind("internal_table_collation", col)
 	exact := bind("json_parse_exact", col)
+	jsonColumn := &planpb.Expr{Typ: types.T_json.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}
+	jsonNumeric := bind("=", jsonColumn, plan2.MakePlan2Int64ConstExprWithType(1))
+	exactNumeric := bind("=", exact, plan2.MakePlan2Int64ConstExprWithType(1))
 	dependent := &planpb.Expr{Typ: types.T_int64.ToType().PlanType(),
 		Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}}}
 	// Dependent expressions are coordinator-owned: they add no scalar worker
@@ -264,6 +267,8 @@ func TestExactJSONProtocolKeepsUpstreamFloors(t *testing.T) {
 		{"table collation", []*planpb.Expr{collation}, defines.MORPCVersion118, defines.MORPCVersion118},
 		{"both upstream", []*planpb.Expr{least, collation}, defines.MORPCVersion118, defines.MORPCVersion118},
 		{"dependent program", []*planpb.Expr{dependent}, 0, defines.MORPCVersion119},
+		{"main JSON numeric comparison", []*planpb.Expr{jsonNumeric}, defines.MORPCVersion128, defines.MORPCVersion128},
+		{"JSON numeric comparison with exact", []*planpb.Expr{exactNumeric}, exactJSONTestProtocol, exactJSONTestProtocol},
 		{"dependent with exact", []*planpb.Expr{dependent, exact}, exactJSONTestProtocol, exactJSONTestProtocol},
 		{"both with exact", []*planpb.Expr{least, collation, exact}, exactJSONTestProtocol, exactJSONTestProtocol},
 	} {
