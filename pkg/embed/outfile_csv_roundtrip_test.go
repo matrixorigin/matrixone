@@ -63,7 +63,7 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 		exec("create table " + db + ".bits24_src(id int primary key,b bit(24))")
 		// Leading/middle CR, including CR followed by ':' to collide with
 		// the complete multi-byte 'r:' separator after escape translation.
-		exec("insert into " + db + ".bits24_src values (1,6360418),(2,6382178),(3,null),(4,876898),(5,866914),(6,6360378)")
+		exec("insert into " + db + ".bits24_src values (1,6360418),(2,6382178),(3,null),(4,876898),(5,866914),(6,6360378),(7,6385250)")
 		for _, tc := range []struct {
 			name, source, column, field, line, quote, extra string
 		}{
@@ -111,6 +111,10 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 			{"escape-enclosure-r-field-force", "bits24_src", "b", "r", "\n", `\`, " FORCE_QUOTE (b)"},
 			{"escape-enclosure-r-colon-field", "bits24_src", "b", "r:", "\n", `\`, ""},
 			{"escape-enclosure-r-colon-field-force", "bits24_src", "b", "r:", "\n", `\`, " FORCE_QUOTE (b)"},
+			{"cr-enclosure-custom-line", "bits24_src", "b", `\`, "||", "\r", ""},
+			{"cr-enclosure-custom-line-force", "bits24_src", "b", `\`, "||", "\r", " FORCE_QUOTE (b)"},
+			{"cr-enclosure-custom-line-n-colon", "bits24_src", "b", "n:", "||", "\r", ""},
+			{"cr-enclosure-custom-line-n-colon-force", "bits24_src", "b", "n:", "||", "\r", " FORCE_QUOTE (b)"},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec := func(query string) {
@@ -160,12 +164,15 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 		for _, tc := range []struct {
 			name, field, line, quote string
 			value                    int
+			source                   string
 		}{
-			{"field-zero", "0:", "\n", "0", 48},
-			{"line-zero", ",", "0:", "0", 48},
-			{"line-n", ",", "n:", "n", 110},
-			{"line-N", ",", "N:", "N", 78},
-			{"normalized-crlf", `\`, "\r\n", "\n", 65},
+			{"field-zero", "0:", "\n", "0", 48, "bits_src"},
+			{"line-zero", ",", "0:", "0", 48, "bits_src"},
+			{"line-n", ",", "n:", "n", 110, "bits_src"},
+			{"line-N", ",", "N:", "N", 78, "bits_src"},
+			{"normalized-crlf", `\`, "\r\n", "\n", 65, "bits_src"},
+			{"cr-with-lf-escape-field", `\`, "\n", "\r", 2, "bits24_src"},
+			{"cr-with-lf-n-colon-field", "n:", "\n", "\r", 7, "bits24_src"},
 		} {
 			for _, force := range []bool{false, true} {
 				t.Run(fmt.Sprintf("enclosure-prefix/%s/force=%t", tc.name, force), func(t *testing.T) {
@@ -176,14 +183,14 @@ func TestOutfileCSVRestoresStringAndBITValues(t *testing.T) {
 					if force {
 						extra = " FORCE_QUOTE (b)"
 					}
-					_, err := admin.ExecContext(ctx, fmt.Sprintf("select 101 as id,b from %s.bits_src where id=%d INTO OUTFILE %s%s HEADER 'false'%s",
-						db, tc.value, sqlquote.String(path), options, extra))
+					_, err := admin.ExecContext(ctx, fmt.Sprintf("select 101 as id,b from %s.%s where id=%d INTO OUTFILE %s%s HEADER 'false'%s",
+						db, tc.source, tc.value, sqlquote.String(path), options, extra))
 					if err == nil {
 						// Diagnose an incorrectly accepted format using the actual
 						// emitted bytes and LOAD, not an extracted encoder probe.
 						data, readErr := os.ReadFile(path)
 						require.NoError(t, readErr)
-						_, createErr := admin.ExecContext(ctx, "create table "+db+".rejected_restore like "+db+".bits_src")
+						_, createErr := admin.ExecContext(ctx, "create table "+db+".rejected_restore like "+db+"."+tc.source)
 						require.NoError(t, createErr)
 						defer func() {
 							_, dropErr := admin.Exec("drop table " + db + ".rejected_restore")

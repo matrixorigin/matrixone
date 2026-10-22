@@ -60,6 +60,12 @@ func TestOutfileBITCSVAllBytes(t *testing.T) {
 		formats = append(formats, csvFormat{separator, "\n", '\\', csvparser.ReadBlockSize, false},
 			csvFormat{separator, "\n", '\\', csvparser.ReadBlockSize, true})
 	}
+	// CR is safe as an enclosure only when the record separator is not in
+	// LOAD's CR/LF newline family. Preserve that supported neighboring format.
+	for _, separator := range []string{`\`, "n:"} {
+		formats = append(formats, csvFormat{separator, "||", '\r', csvparser.ReadBlockSize, false},
+			csvFormat{separator, "||", '\r', csvparser.ReadBlockSize, true})
+	}
 	for _, format := range formats {
 		enclosed := format.enclosed
 		width := int32(8)
@@ -236,17 +242,24 @@ func TestCSVFramingRejectsEnclosureSeparatorPrefix(t *testing.T) {
 			}
 		}
 	}
-	// Both the physical CRLF prefix and LOAD's normalized LF are boundaries.
-	for _, quote := range []byte{'\r', '\n'} {
-		for _, escape := range []byte{'\\', 0} {
-			ep := newOutfileExportConfig(tree.NewFields(`\`, false, quote, escape), nil, "\r\n")
-			ep.userConfig.FilePath = t.TempDir() + "/rejected.csv"
-			require.ErrorContains(t, ep.validateCSVFraming(t.Context()), "ENCLOSED BY must not be the first byte")
-			require.ErrorContains(t, openNewFile(t.Context(), ep, nil), "ENCLOSED BY must not be the first byte")
-			require.NoFileExists(t, ep.userConfig.FilePath)
-			require.Nil(t, ep.AsyncReader)
-			require.Nil(t, ep.AsyncWriter)
-			require.Nil(t, ep.AsyncGroup)
+	// Default, LF and CRLF termination all recognize both CR and LF as
+	// boundaries, including when CR is not in the configured terminator.
+	for _, line := range []string{"", "\n", "\r\n"} {
+		for _, field := range []string{`\`, "n:"} {
+			for _, quote := range []byte{'\r', '\n'} {
+				for _, escape := range []byte{'\\', 0} {
+					t.Run(fmt.Sprintf("newline=%q/field=%q/quote=%d/escape=%d", line, field, quote, escape), func(t *testing.T) {
+						ep := newOutfileExportConfig(tree.NewFields(field, false, quote, escape), nil, line)
+						ep.userConfig.FilePath = t.TempDir() + "/rejected.csv"
+						require.ErrorContains(t, ep.validateCSVFraming(t.Context()), "ENCLOSED BY must not be the first byte")
+						require.ErrorContains(t, openNewFile(t.Context(), ep, nil), "ENCLOSED BY must not be the first byte")
+						require.NoFileExists(t, ep.userConfig.FilePath)
+						require.Nil(t, ep.AsyncReader)
+						require.Nil(t, ep.AsyncWriter)
+						require.Nil(t, ep.AsyncGroup)
+					})
+				}
+			}
 		}
 	}
 }

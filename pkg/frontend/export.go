@@ -786,20 +786,21 @@ func (ec *ExportConfig) validateCSVFraming(ctx context.Context) error {
 	if ec.getExportFormat() != "csv" {
 		return nil
 	}
-	field, line, quote, _ := ec.csvBoundaryBytes()
-	// LOAD recognizes both the physical CRLF prefix and normalized LF as
-	// record boundaries. Neither can safely be used as an enclosure.
+	field, line, quote, defaultLine := ec.csvBoundaryBytes()
+	// LOAD recognizes both CR and LF in default/LF/normalized-CRLF mode,
+	// even when CR is absent from the configured terminator. Neither can be
+	// an enclosure; retain physical-prefix checks for other terminators too.
 	physicalLine := line
 	if l := ec.userConfig.Lines; l != nil && l.TerminatedBy != nil && l.TerminatedBy.Value != "" {
 		physicalLine = l.TerminatedBy.Value[0]
 	}
 	noQuote := ec.userConfig.Fields == nil || ec.userConfig.Fields.EnclosedBy == nil || ec.userConfig.Fields.EnclosedBy.Value == 0
-	if !noQuote && (quote == field || quote == line || quote == physicalLine) {
+	if !noQuote && (quote == field || quote == line || quote == physicalLine || defaultLine && quote == '\r') {
 		// LOAD may treat framing as a record boundary or a doubled enclosure.
 		// Reject before opening a file, even with prefix escapes disabled:
 		// enclosure doubling is independent of ESCAPED BY.
 		return moerr.NewInvalidInput(ctx,
-			"CSV ENCLOSED BY must not be the first byte of a field or line terminator")
+			"CSV ENCLOSED BY must not be the first byte of a field or line terminator or another recognized newline byte")
 	}
 	if ec.escapeChar() == 0 {
 		return nil
