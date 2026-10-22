@@ -164,6 +164,9 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 	if err := plan.RequireLegacyCollations(tableDef); err != nil {
 		return nil, nil, err
 	}
+	if err := plan.ValidateAppendMissingTable(tableDef); err != nil {
+		return nil, nil, err
+	}
 	planDefs := tableDef.GetDefs()
 	var exeDefs []TableDef
 	var propDef *PropertiesDef
@@ -187,14 +190,18 @@ var PlanDefsToExeDefs = func(tableDef *plan.TableDef) ([]TableDef, *api.SchemaEx
 		exeDefs = append(exeDefs, propDef)
 	}
 	extra := &api.SchemaExtra{
-		FeatureFlag:      tableDef.FeatureFlag,
-		AutoIncrOffset:   tableDef.AutoIncrOffset,
-		AutoIncrEpoch:    tableDef.AutoIncrEpoch,
-		AutoIdCache:      tableDef.AutoIdCache,
-		Checks:           tableDef.Checks,
-		DefaultCharset:   tableDef.DefaultCharset,
-		CollationVersion: tableDef.CollationVersion,
-		KeyFormat:        tableDef.KeyFormat,
+		FeatureFlag:        tableDef.FeatureFlag,
+		AutoIncrOffset:     tableDef.AutoIncrOffset,
+		AutoIncrEpoch:      tableDef.AutoIncrEpoch,
+		AutoIdCache:        tableDef.AutoIdCache,
+		Checks:             tableDef.Checks,
+		DefaultCharset:     tableDef.DefaultCharset,
+		CollationVersion:   tableDef.CollationVersion,
+		KeyFormat:          tableDef.KeyFormat,
+		AppendMissingState: plan.CloneAppendMissingState(tableDef.AppendMissingState),
+	}
+	if state := extra.AppendMissingState; state != nil {
+		extra.NextColSeqnum = state.BaseWidth + uint32(len(state.Columns))
 	}
 	propDef.Properties = append(
 		propDef.Properties,

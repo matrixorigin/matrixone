@@ -40,6 +40,9 @@ func MustMarshalTblExtra(info *SchemaExtra) []byte {
 	if info == nil {
 		return []byte{}
 	}
+	if err := info.ValidateAppendMissing(); err != nil {
+		panic(err)
+	}
 	data, err := info.Marshal()
 	if err != nil {
 		panic(err)
@@ -53,6 +56,9 @@ func MustUnmarshalTblExtra(data []byte) *SchemaExtra {
 		return info
 	}
 	if err := info.Unmarshal(data); err != nil {
+		panic(err)
+	}
+	if err := info.ValidateAppendMissing(); err != nil {
 		panic(err)
 	}
 	return info
@@ -69,28 +75,29 @@ func CloneExtra(info *SchemaExtra) *SchemaExtra {
 		}
 	}
 	return &SchemaExtra{
-		NextColSeqnum:     info.NextColSeqnum,
-		DroppedAttrs:      append([]string{}, info.DroppedAttrs...),
-		ColumnChanged:     info.ColumnChanged,
-		OldName:           info.OldName,
-		MinOsizeQuailifed: info.MinOsizeQuailifed,
-		MaxObjOnerun:      info.MaxObjOnerun,
-		MaxOsizeMergedObj: info.MaxOsizeMergedObj,
-		Hints:             append([]MergeHint{}, info.Hints...),
-		MinCnMergeSize:    info.MinCnMergeSize,
-		BlockMaxRows:      info.BlockMaxRows,
-		ObjectMaxBlocks:   info.ObjectMaxBlocks,
-		FeatureFlag:       info.FeatureFlag,
-		IndexTables:       append([]uint64{}, info.IndexTables...),
-		ParentTableID:     info.ParentTableID,
-		AutoIncrOffset:    info.AutoIncrOffset,
-		AutoIncrEpoch:     info.AutoIncrEpoch,
-		AutoIdCache:       info.AutoIdCache,
-		DefaultCharset:    info.DefaultCharset,
-		CollationVersion:  info.CollationVersion,
-		KeyFormat:         info.KeyFormat,
-		XXX_unrecognized:  append([]byte(nil), info.XXX_unrecognized...),
-		Checks:            checks,
+		NextColSeqnum:      info.NextColSeqnum,
+		DroppedAttrs:       append([]string{}, info.DroppedAttrs...),
+		ColumnChanged:      info.ColumnChanged,
+		OldName:            info.OldName,
+		MinOsizeQuailifed:  info.MinOsizeQuailifed,
+		MaxObjOnerun:       info.MaxObjOnerun,
+		MaxOsizeMergedObj:  info.MaxOsizeMergedObj,
+		Hints:              append([]MergeHint{}, info.Hints...),
+		MinCnMergeSize:     info.MinCnMergeSize,
+		BlockMaxRows:       info.BlockMaxRows,
+		ObjectMaxBlocks:    info.ObjectMaxBlocks,
+		FeatureFlag:        info.FeatureFlag,
+		IndexTables:        append([]uint64{}, info.IndexTables...),
+		ParentTableID:      info.ParentTableID,
+		AutoIncrOffset:     info.AutoIncrOffset,
+		AutoIncrEpoch:      info.AutoIncrEpoch,
+		AutoIdCache:        info.AutoIdCache,
+		DefaultCharset:     info.DefaultCharset,
+		CollationVersion:   info.CollationVersion,
+		KeyFormat:          info.KeyFormat,
+		AppendMissingState: plan.CloneAppendMissingState(info.AppendMissingState),
+		XXX_unrecognized:   append([]byte(nil), info.XXX_unrecognized...),
+		Checks:             checks,
 	}
 }
 

@@ -158,6 +158,17 @@ func TestGetTableDefRestoresChecksFromSchemaExtra(t *testing.T) {
 	require.Equal(t, uint32(types.CharsetBinary), tableDef.DefaultCharset)
 }
 
+func TestAppendMissingCacheProjection(t *testing.T) {
+	state := &plan.AppendMissingState{FormatVersion: 1, LayoutId: []byte("0123456789abcdef"),
+		BaseWidth: 3, PkSeqnum: 2, Columns: []*plan.ColumnBirthFill{{Seqnum: 3, BirthAppendOrdinal: 1,
+			Type: plan.Type{Id: int32(types.T_bool)}, Kind: plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1}}}
+	item := &TableItem{Name: "projection", ExtraInfo: &api.SchemaExtra{NextColSeqnum: 4, AppendMissingState: state}}
+	projected, _ := getTableDef(item, nil)
+	require.Equal(t, state, projected.AppendMissingState)
+	projected.AppendMissingState.LayoutId[0] = 'x'
+	require.Equal(t, byte('0'), item.ExtraInfo.AppendMissingState.LayoutId[0])
+}
+
 func TestGetTableDefRestoresAutoIDCache(t *testing.T) {
 	for _, size := range []uint64{0, 1, 2, 1000000} {
 		tableDef, _ := getTableDef(&TableItem{

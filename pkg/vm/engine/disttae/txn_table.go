@@ -1923,6 +1923,7 @@ func (tbl *txnTable) GetTableDef(ctx context.Context) *plan.TableDef {
 			tbl.tableDef.DefaultCharset = tbl.extraInfo.DefaultCharset
 			tbl.tableDef.CollationVersion = tbl.extraInfo.CollationVersion
 			tbl.tableDef.KeyFormat = tbl.extraInfo.KeyFormat
+			tbl.tableDef.AppendMissingState = plan.CloneAppendMissingState(tbl.extraInfo.AppendMissingState)
 		}
 		if base, ok := m0AppendBaseFromPlan(tbl.tableDef); ok {
 			for _, col := range tbl.tableDef.Cols {

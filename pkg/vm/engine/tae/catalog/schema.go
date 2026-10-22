@@ -383,6 +383,9 @@ func (s *Schema) restoreExtra(data []byte) error {
 	if err := extra.Unmarshal(data); err != nil {
 		return err
 	}
+	if err := extra.ValidateAppendMissing(); err != nil {
+		return err
+	}
 	s.Extra = extra
 	// Sync FromPublication from Extra after deserialization.
 	s.FromPublication = extra.FromPublication
@@ -1028,7 +1031,35 @@ func (s *Schema) Finalize(withoutPhyAddr bool) (err error) {
 		panic("schema: multiple sort keys")
 	}
 	s.isSecondaryIndexTable = strings.Contains(s.Name, "__mo_index_secondary_")
+	if err = s.validateAppendMissingColumns(); err != nil {
+		return
+	}
 	return
+}
+
+func (s *Schema) validateAppendMissingColumns() error {
+	if err := s.Extra.ValidateAppendMissing(); err != nil {
+		return err
+	}
+	state := s.Extra.AppendMissingState
+	if state == nil {
+		return nil
+	}
+	pk := s.GetPrimaryKey()
+	if s.Version != uint32(len(state.Columns)) || s.PhyAddrKey == nil || s.Extra.NextColSeqnum != uint32(len(s.ColDefs)-1) || pk == nil ||
+		!pk.IsCompositeColumn() || !pk.Hidden || uint32(pk.SeqNum) != state.PkSeqnum {
+		return moerr.NewInternalErrorNoCtx("append missing state: TN table shape differs")
+	}
+	for _, fill := range state.Columns {
+		col := s.ColDefs[fill.Seqnum]
+		if uint32(col.SeqNum) != fill.Seqnum || int32(col.Type.Oid) != fill.Type.Id ||
+			col.Type.Width != fill.Type.Width || col.Type.Scale != fill.Type.Scale ||
+			uint32(col.Type.Charset) != fill.Type.Charset || uint32(col.Type.CollationVersion) != fill.Type.CollationVersion ||
+			col.EnumValues != fill.Type.Enumvalues || !col.NullAbility || col.Hidden || col.Primary {
+			return moerr.NewInternalErrorNoCtx("append missing state: TN column type differs")
+		}
+	}
+	return nil
 }
 
 // GetColIdx returns column index for the given column name

@@ -62,3 +62,16 @@ func TestM0DefaultCopyAdmission(t *testing.T) {
 		})
 	}
 }
+
+func TestAppendMissingPlanDeepCopy(t *testing.T) {
+	source := m0TestPlanTable()
+	source.AppendMissingState = &plan.AppendMissingState{FormatVersion: 1, LayoutId: []byte("0123456789abcdef"),
+		BaseWidth: 7, PkSeqnum: 6, Columns: []*plan.ColumnBirthFill{{Seqnum: 7, BirthAppendOrdinal: 1,
+			Type: source.Cols[7].Typ, Kind: plan.MissingFillKind_MISSING_FILL_NULL_V1}}}
+	require.NoError(t, plan.ValidateAppendMissingTable(source))
+	clone := DeepCopyTableDef(source, true)
+	clone.AppendMissingState.LayoutId[0] = 'x'
+	clone.AppendMissingState.Columns[0].Type.Width++
+	require.Equal(t, byte('0'), source.AppendMissingState.LayoutId[0])
+	require.Equal(t, source.Cols[7].Typ.Width, source.AppendMissingState.Columns[0].Type.Width)
+}

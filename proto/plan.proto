@@ -674,6 +674,8 @@ message TableDef {
   uint32 key_format = 41;
   // Semantic revision of default_charset, independent of physical key format.
   uint32 collation_version = 42;
+  // Projection of SchemaExtra.append_missing_state, never a second durable copy.
+  AppendMissingState append_missing_state = 43;
 }
 
 message TableFunction {
@@ -2166,6 +2168,7 @@ message AlterAddColumn {
   string pre_name = 2;
   Type type = 3 [(gogoproto.nullable) = false];
   int32 pos = 4;
+  Default default = 5;
 }
 
 message AlterDropColumn {
@@ -2546,4 +2549,27 @@ message DatabaseDefaults {
   uint64 version = 4;
   uint32 collation_id = 5;
   uint32 collation_revision = 6;
+}
+
+// Immutable interpretation of a legal old physical suffix. This is distinct
+// from the current SQL Default used by INSERT and belongs to a layout history.
+enum MissingFillKind {
+  MISSING_FILL_INVALID = 0;
+  MISSING_FILL_NULL_V1 = 1;
+  MISSING_FILL_BOOL_FALSE_V1 = 2;
+}
+
+message ColumnBirthFill {
+  uint32 seqnum = 1;
+  uint32 birth_append_ordinal = 2;
+  Type type = 3 [(gogoproto.nullable) = false];
+  MissingFillKind kind = 4;
+}
+
+message AppendMissingState {
+  uint32 format_version = 1;
+  bytes layout_id = 2;
+  uint32 base_width = 3;
+  uint32 pk_seqnum = 4;
+  repeated ColumnBirthFill columns = 5;
 }

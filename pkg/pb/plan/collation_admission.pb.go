@@ -52,6 +52,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkAlterTable_Action_AddIndex(p)
 	case *AlterView:
 		return true, v.walkAlterView(p)
+	case *AppendMissingState:
+		return true, v.walkAppendMissingState(p)
 	case *CheckDef:
 		return true, v.walkCheckDef(p)
 	case *CloneTable:
@@ -64,6 +66,8 @@ func (v *legacyCollationVisitor) typed(owner any) (bool, error) {
 		return true, v.walkColDef(p)
 	case *Column:
 		return true, v.walkColumn(p)
+	case *ColumnBirthFill:
+		return true, v.walkColumnBirthFill(p)
 	case *CorrelationProgram:
 		return true, v.walkCorrelationProgram(p)
 	case *CorrelationSpec:
@@ -260,6 +264,9 @@ func (v *legacyCollationVisitor) walkAlterAddColumn(p *AlterAddColumn) error {
 	if err := v.walkType(&p.Type); err != nil {
 		return err
 	}
+	if err := v.walkDefault(p.Default); err != nil {
+		return err
+	}
 	return nil
 }
 func (v *legacyCollationVisitor) walkAlterPartitionOption(p *AlterPartitionOption) error {
@@ -359,6 +366,17 @@ func (v *legacyCollationVisitor) walkAlterView(p *AlterView) error {
 	}
 	return nil
 }
+func (v *legacyCollationVisitor) walkAppendMissingState(p *AppendMissingState) error {
+	if p == nil {
+		return nil
+	}
+	for _, item0 := range p.Columns {
+		if err := v.walkColumnBirthFill(item0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (v *legacyCollationVisitor) walkCheckDef(p *CheckDef) error {
 	if p == nil {
 		return nil
@@ -426,6 +444,15 @@ func (v *legacyCollationVisitor) walkColumn(p *Column) error {
 		if err := v.walkExpr(item0); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+func (v *legacyCollationVisitor) walkColumnBirthFill(p *ColumnBirthFill) error {
+	if p == nil {
+		return nil
+	}
+	if err := v.walkType(&p.Type); err != nil {
+		return err
 	}
 	return nil
 }
@@ -1575,6 +1602,9 @@ func (v *legacyCollationVisitor) walkTableDef(p *TableDef) error {
 		return err
 	}
 	if err := v.walkPartition(p.Partition); err != nil {
+		return err
+	}
+	if err := v.walkAppendMissingState(p.AppendMissingState); err != nil {
 		return err
 	}
 	return nil

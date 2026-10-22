@@ -336,6 +336,9 @@ message AlterTableAddColumn {
     plan.ColDef column    = 1;
     int32 insert_position = 2;  // if the position can be found in the schema,
                                 // the column will be added to the last
+    plan.AppendMissingState append_missing_state = 3;
+    uint32 expected_schema_version = 4;
+    uint32 expected_next_col_seqnum = 5;
 }
 
 message AlterTableReplaceDef {
@@ -419,6 +422,8 @@ message SchemaExtra {
     // Zero retains legacy physical keys and text semantics.
     uint32 key_format = 21;
     uint32 collation_version = 22;
+    // Immutable birth fill values for the restricted append layout.
+    plan.AppendMissingState append_missing_state = 23;
 }
 
 // Int64Map mainly used in unit test
