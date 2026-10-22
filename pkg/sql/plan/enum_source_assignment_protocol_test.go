@@ -52,24 +52,24 @@ func TestEnumSourceAssignmentPersistedAdmission(t *testing.T) {
 	col := stmt.(*tree.CreateTable).Defs[1].(*tree.ColumnTableDef)
 	target := planpb.Type{Id: int32(types.T_enum), Enumvalues: "blue,red"}
 	source := []*ColDef{{Name: "v", Typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}}}
-	for _, floors := range [][3]int64{{122, 123, 123}, {123, 123, 122}, {123, 123, 123}} {
+	for _, floors := range [][3]int64{{131, 132, 132}, {132, 132, 131}, {132, 132, 132}} {
 		set(floors[0], floors[1], floors[2])
 		generated, err := buildGeneratedExpr(proc.Ctx, col, target, source, proc)
-		if floors[0] < 123 || floors[2] < 123 {
-			require.ErrorContains(t, err, "protocol version 123")
+		if floors[0] < 132 || floors[2] < 132 {
+			require.ErrorContains(t, err, "protocol version 132")
 			continue
 		}
 		require.NoError(t, err)
 		required, err := RequiredPersistedExpressionProtocolVersion(generated)
 		require.NoError(t, err)
-		require.Equal(t, defines.MORPCVersion123, required)
+		require.Equal(t, defines.MORPCVersion132, required)
 		data, err := generated.Marshal()
 		require.NoError(t, err)
 		var decoded planpb.GeneratedCol
 		require.NoError(t, decoded.Unmarshal(data))
-		set(123, 122, 123)
-		require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, &decoded), "protocol version 123")
-		set(123, 123, 122)
+		set(132, 122, 132)
+		require.ErrorContains(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, &decoded), "protocol version 132")
+		set(132, 132, 122)
 		require.NoError(t, RequirePersistedExpressionProtocol(proc.Ctx, proc, &decoded), "read does not depend on the authoring floor")
 	}
 	set(122, 122, 122)

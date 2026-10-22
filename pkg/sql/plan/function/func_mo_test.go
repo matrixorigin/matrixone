@@ -512,3 +512,22 @@ func TestCastValueToIndexOverloadIdentity(t *testing.T) {
 		require.Error(t, err)
 	}
 }
+
+func BenchmarkCastValueToIndexTypedSource(b *testing.B) {
+	const rows = 64
+	proc := testutil.NewProcess(b)
+	defer proc.Free()
+	values, want := make([]types.Enum, rows), make([]types.Enum, rows)
+	for i := range values {
+		values[i] = 8
+		want[i] = 1
+	}
+	fc := NewFunctionTestCase(proc, []FunctionTestInput{
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"h,g,f,e,d,c,b,a"}, nil),
+		NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a,b,c,d,e,f,g,h"}, nil),
+		NewFunctionTestInput(types.T_enum.ToType(), values, nil),
+	}, NewFunctionTestResult(types.T_enum.ToType(), false, want, nil), CastValueToIndex)
+	defer fc.Free()
+	fc.fnLength = rows
+	fc.Benchmark(b)
+}
