@@ -231,7 +231,7 @@ select id, match(body) against('hello') as sc from two where match(body) against
 5  ¦  0.018783102
 select t.id, jb.note from two t join jb on t.id=jb.id
 where match(t.body) against('hello') > 0.015 order by t.id;
-➤ id[4,32,0]  ¦  note[12,15,0]  𝄀
+➤ id[4,32,0]  ¦  note[12,20,0]  𝄀
 2  ¦  y  𝄀
 3  ¦  z
 select t.id from two t join jb on t.id=jb.id

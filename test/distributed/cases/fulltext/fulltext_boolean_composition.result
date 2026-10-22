@@ -29,7 +29,7 @@ select id from docs where match(body, alt) against('alpha' in boolean mode) orde
 3  𝄀
 5
 select id, (match(body, alt) against('alpha' in boolean mode) > 0) as hit from docs order by id;
-➤ id[-5,64,0]  ¦  hit[-7,1,0]  𝄀
+➤ id[-5,64,0]  ¦  hit[-6,8,0]  𝄀
 1  ¦  1  𝄀
 3  ¦  1  𝄀
 5  ¦  1
@@ -58,7 +58,7 @@ select id from docs where tag = 1 or match(body, alt) against('alpha' in boolean
 5  𝄀
 7
 select id, (match(body, alt) against('alpha' in boolean mode) > 0) as hit from docs where match(body, alt) against('alpha' in boolean mode) or TRUE order by id;
-➤ id[-5,64,0]  ¦  hit[-7,1,0]  𝄀
+➤ id[-5,64,0]  ¦  hit[-6,8,0]  𝄀
 1  ¦  1  𝄀
 2  ¦  0  𝄀
 3  ¦  1  𝄀
@@ -103,7 +103,7 @@ select id, (match(body, alt) against('alpha' in boolean mode) or tag = 1) as eit
 not (match(body, alt) against('alpha' in boolean mode) or tag = 1) as negated,
 (tag = 1 and not (match(body, alt) against('alpha' in boolean mode))) as scalar_and_not
 from docs where match(body, alt) against('alpha' in boolean mode) or id > 0 order by id;
-➤ id[-5,64,0]  ¦  either_true[-7,1,0]  ¦  negated[-7,1,0]  ¦  scalar_and_not[-7,1,0]  𝄀
+➤ id[-5,64,0]  ¦  either_true[-6,8,0]  ¦  negated[-6,8,0]  ¦  scalar_and_not[-6,8,0]  𝄀
 1  ¦  1  ¦  0  ¦  0  𝄀
 2  ¦  1  ¦  0  ¦  1  𝄀
 3  ¦  1  ¦  0  ¦  0  𝄀
@@ -115,12 +115,12 @@ from docs where match(body, alt) against('alpha' in boolean mode) or id > 0 orde
 select id, cast(match(body, alt) against('alpha' in boolean mode) as decimal(10,3)) as score0,
 (match(body, alt) against('alpha' in boolean mode) = 0) as exact_zero
 from docs where (match(body, alt) against('alpha' in boolean mode) or tag = 1) and id in (2,7) order by id;
-➤ id[-5,64,0]  ¦  score0[3,10,3]  ¦  exact_zero[-7,1,0]  𝄀
+➤ id[-5,64,0]  ¦  score0[3,10,3]  ¦  exact_zero[-6,8,0]  𝄀
 2  ¦  0.000  ¦  1  𝄀
 7  ¦  0.000  ¦  1
 select id, (match(body, alt) against('alpha' in boolean mode) = @alpha_control) as same_score
 from docs where (match(body, alt) against('alpha' in boolean mode) or tag = 1) and id = 1;
-➤ id[-5,64,0]  ¦  same_score[-7,1,0]  𝄀
+➤ id[-5,64,0]  ¦  same_score[-6,8,0]  𝄀
 1  ¦  1
 select id from docs where match(body, alt) against('alpha' in boolean mode) = 0 or tag = 1 order by id;
 ➤ id[-5,64,0]  𝄀
@@ -162,7 +162,7 @@ null  ¦  1
 select id, (match(body, alt) against('alpha' in boolean mode) > 0) as hit,
 row_number() over (order by id) as rn
 from docs where match(body, alt) against('alpha' in boolean mode) or tag = 1 order by id;
-➤ id[-5,64,0]  ¦  hit[-7,1,0]  ¦  rn[-5,64,0]  𝄀
+➤ id[-5,64,0]  ¦  hit[-6,8,0]  ¦  rn[-5,64,0]  𝄀
 1  ¦  1  ¦  1  𝄀
 2  ¦  0  ¦  2  𝄀
 3  ¦  1  ¦  3  𝄀
