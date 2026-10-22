@@ -42,13 +42,22 @@ func TestTopLevelOutfileReceiptAndCredentialRedaction(t *testing.T) {
 }
 
 func TestOutfileTargetRetentionIsBoundedAndOrdinarySelectIsUntouched(t *testing.T) {
-	for _, target := range []string{"stage://audit/out_%d.csv", "stage://audit/out_%05d.csv"} {
+	for _, target := range []string{
+		"stage://audit/out_%d.csv",
+		"stage://audit/out_%05d.csv",
+		"stage://audit/out_%25d_%d.csv",
+		"stage://audit/__matrixone_outfile_format_d__/out_%d_%05d_%d.csv",
+		"stage://audit/" + strings.Repeat("part_%d_", 100) + "end.csv",
+	} {
 		t.Run(target, func(t *testing.T) {
 			safe := sanitizeOutfileTarget(target)
 			require.Equal(t, target, safe.target)
 			require.False(t, safe.invalid)
 		})
 	}
+	malformed := sanitizeOutfileTarget("stage://audit/bad%zz.csv")
+	require.True(t, malformed.invalid)
+	require.Empty(t, malformed.target)
 
 	longTarget := "SHARED:/" + strings.Repeat("x", 5000) + ".csv"
 	safe := sanitizeOutfileTarget(longTarget)

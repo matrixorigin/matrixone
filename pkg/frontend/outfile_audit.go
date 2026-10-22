@@ -17,7 +17,6 @@ package frontend
 import (
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 	"unicode/utf8"
 
@@ -93,7 +92,7 @@ func sanitizeOutfileTarget(raw string) safeOutfileTarget {
 	safe := raw
 
 	if outfileURI.MatchString(raw) {
-		parseable, formatTokens := escapeOutfileFormatSpecifiers(raw)
+		parseable := escapeOutfileFormatSpecifiers(raw)
 		parsed, err := url.Parse(parseable)
 		if err != nil || parsed.Scheme == "" {
 			result.invalid = true
@@ -114,9 +113,7 @@ func sanitizeOutfileTarget(raw string) safeOutfileTarget {
 			result.redacted = true
 		}
 		safe = parsed.String()
-		for token, specifier := range formatTokens {
-			safe = strings.ReplaceAll(safe, token, specifier)
-		}
+		safe = strings.ReplaceAll(safe, "%25", "%")
 	} else if parsed, err := fileservice.ParseETLService(raw); err == nil && parsed.Service != "" && len(parsed.ServiceArguments) != 0 {
 		// Service arguments may contain cloud credentials. Keep only the service
 		// identity and file expression; StageFilePath is never consulted here.
@@ -134,7 +131,7 @@ func sanitizeOutfileTarget(raw string) safeOutfileTarget {
 		result.redacted = true
 	}
 
-	pathForValidation, _ := escapeOutfileFormatSpecifiers(safe)
+	pathForValidation := escapeOutfileFormatSpecifiers(safe)
 	if _, err := fileservice.ParsePath(pathForValidation); err != nil {
 		result.invalid = true
 		safe = ""
@@ -155,29 +152,38 @@ func sanitizeOutfileTarget(raw string) safeOutfileTarget {
 	return result
 }
 
-func escapeOutfileFormatSpecifiers(raw string) (string, map[string]string) {
-	matches := formatSpecifierRegex.FindAllStringIndex(raw, -1)
-	if len(matches) == 0 {
-		return raw, nil
+// escapeOutfileFormatSpecifiers protects printf-style filename templates and
+// valid percent escapes from url.Parse with one percent-escape pass.
+// Malformed percent escapes are left untouched so url.Parse keeps rejecting
+// them rather than accepting them as literal percent bytes.
+func escapeOutfileFormatSpecifiers(raw string) string {
+	for i := 0; i < len(raw); {
+		if raw[i] != '%' {
+			i++
+			continue
+		}
+		end := i + 1
+		for end < len(raw) && raw[end] >= '0' && raw[end] <= '9' {
+			end++
+		}
+		if end < len(raw) && raw[end] == 'd' {
+			// Preserve printf templates, including %d and %05d, for the
+			// existing stage export resolver.
+			i = end + 1
+			continue
+		}
+		if i+2 < len(raw) && isHexByte(raw[i+1]) && isHexByte(raw[i+2]) {
+			// Existing percent-encoded URI bytes remain valid and round-trip.
+			i += 3
+			continue
+		}
+		return raw
 	}
+	return strings.ReplaceAll(raw, "%", "%25")
+}
 
-	prefix := "__matrixone_outfile_format_"
-	for strings.Contains(raw, prefix) {
-		prefix += "_"
-	}
-
-	var builder strings.Builder
-	replacements := make(map[string]string, len(matches))
-	last := 0
-	for i, match := range matches {
-		token := prefix + strconv.Itoa(i) + "__"
-		builder.WriteString(raw[last:match[0]])
-		builder.WriteString(token)
-		replacements[token] = raw[match[0]:match[1]]
-		last = match[1]
-	}
-	builder.WriteString(raw[last:])
-	return builder.String(), replacements
+func isHexByte(b byte) bool {
+	return b >= '0' && b <= '9' || b >= 'a' && b <= 'f' || b >= 'A' && b <= 'F'
 }
 
 func redactOutfileStatementText(stmt tree.Statement, text string) string {

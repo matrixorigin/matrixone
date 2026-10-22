@@ -31,6 +31,7 @@ from system.statement_info
 where connection_id = @outfile_audit_connection_id
   and statement_type = 'Select'
   and status = 'Success'
+  and aggr_count = 0
   and statement like '%split_%d.csv%'
   and json_unquote(json_extract(exec_plan, '$.outfile.target')) = 'stage://issue_29761_split_stage/split_%d.csv'
   and json_unquote(json_extract(exec_plan, '$.outfile.complete')) = 'true'

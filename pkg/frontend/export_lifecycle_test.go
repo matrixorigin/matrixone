@@ -294,6 +294,73 @@ func TestExportSplitAndEmptyFileCleanup(t *testing.T) {
 	}
 }
 
+func TestExportAuditPartialSplitFailureKeepsConfirmedLowerBoundAndAllowsReuse(t *testing.T) {
+	ses := newValidateSession(t)
+	pu := getPu(ses.GetService())
+	original := pu.FileService
+	t.Cleanup(func() { pu.FileService = original })
+
+	injected := errors.New("second split sink failure")
+	completed := make(map[string][]byte)
+	fs := &exportLifecycleFS{write: func(_ context.Context, v fileservice.IOVector) error {
+		data, err := io.ReadAll(v.Entries[0].ReaderForWrite)
+		if err != nil {
+			return err
+		}
+		if v.FilePath == "SHARED:/audit/partial.csv.1" {
+			return injected
+		}
+		completed[v.FilePath] = data
+		return nil
+	}}
+	pu.FileService = fs
+
+	failed, _, _, _ := exportLifecycleFixture(t, context.Background(), "csv")
+	failed.auditEnabled = true
+	failed.service = ses.GetService()
+	failed.userConfig.FilePath = "SHARED:/audit/partial.csv"
+	failed.userConfig.SplitSize = 2
+	defer failed.Close()
+	require.NoError(t, openNewFile(failed.ctx, failed, failed.mrs))
+	require.NoError(t, writeExportBatchToFile(failed, &BatchByte{
+		writeByte: []byte("a\nb\n"), rowEnds: []int{2, 4}, rowCount: 2,
+	}))
+	require.ErrorIs(t, failed.finish(nil), injected)
+	require.Equal(t, []byte("a\n"), completed["SHARED:/audit/partial.csv"])
+	require.NotContains(t, completed, "SHARED:/audit/partial.csv.1", "the failed split is not a confirmed file")
+	require.EqualValues(t, 2, failed.auditBytesWritten)
+	require.EqualValues(t, 1, failed.auditRowsWritten)
+	require.Nil(t, failed.AsyncGroup)
+	require.Nil(t, failed.AsyncWriter)
+
+	failedStatement := motrace.NewStatementInfo()
+	failedStatement.SetOutfileReceipt(motrace.StatementOutfileReceipt{
+		Version: 1, Target: "SHARED:/audit/partial.csv", Format: "csv",
+	})
+	failedStatement.UpdateOutfileReceipt("csv", failed.auditBytesWritten, failed.auditRowsWritten, false)
+	require.JSONEq(t,
+		`{"outfile":{"version":1,"target":"SHARED:/audit/partial.csv","format":"csv","bytes_written":2,"rows_written":1,"complete":false}}`,
+		string(failedStatement.ExecPlan2Json(context.Background())),
+	)
+
+	recovered, _, _, _ := exportLifecycleFixture(t, context.Background(), "csv")
+	recovered.auditEnabled = true
+	recovered.service = ses.GetService()
+	recovered.userConfig.FilePath = "SHARED:/audit/recovered.csv"
+	defer recovered.Close()
+	require.NoError(t, openNewFile(recovered.ctx, recovered, recovered.mrs))
+	require.NoError(t, writeExportBatchToFile(recovered, &BatchByte{
+		writeByte: []byte("c\n"), rowEnds: []int{2}, rowCount: 1,
+	}))
+	require.NoError(t, recovered.finish(nil))
+	require.Equal(t, []byte("c\n"), completed["SHARED:/audit/recovered.csv"])
+	require.EqualValues(t, 2, recovered.auditBytesWritten)
+	require.EqualValues(t, 1, recovered.auditRowsWritten)
+	ordinaryStatement := motrace.NewStatementInfo()
+	require.False(t, ordinaryStatement.HasOutfileReceipt(), "the next ordinary statement has no receipt")
+	require.False(t, fs.closed.Load(), "the shared file service is borrowed")
+}
+
 func TestExportAuditCountsCSVHeaderAndJSONLines(t *testing.T) {
 	for _, tc := range []struct {
 		name, format, payload, want string
