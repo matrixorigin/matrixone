@@ -25,12 +25,14 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	lockpb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/stretchr/testify/require"
@@ -523,6 +525,15 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				}
 				result := <-done
 				finished = true
+				if terminal == "commit" || terminal == "rollback" {
+					require.NoError(t, result)
+					// TRUNCATE commits on CN1. A successful response does not
+					// advance CN0's snapshot in sacrificing-freshness mode.
+					// Fence only the final reads, after the admission race.
+					commitTS := cn1.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+					require.False(t, commitTS.IsEmpty())
+					testutils.WaitLogtailApplied(t, commitTS, cn0)
+				}
 				var newID uint64
 				require.NoError(t, db0.QueryRowContext(ctx,
 					"select rel_id from mo_catalog.mo_tables where reldatabase=? and relname='v'", solo).Scan(&newID))
@@ -539,7 +550,6 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 					_, err = db1.ExecContext(ctx, "truncate table "+solo+".v")
 					require.NoError(t, err, "cancelled/timed-out waiter must not prevent subsequent progress")
 				} else {
-					require.NoError(t, result)
 					require.NotEqual(t, oldID, newID)
 					require.Zero(t, rows)
 				}
@@ -602,6 +612,10 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 			result := <-done
 			finished = true
 			require.NoError(t, result)
+			// The same-table waiter also completes its TRUNCATE on CN1.
+			commitTS := cn1.RawService().(cnservice.Service).GetTxnClient().GetLatestCommitTS()
+			require.False(t, commitTS.IsEmpty())
+			testutils.WaitLogtailApplied(t, commitTS, cn0)
 			var newID, newLogicalID uint64
 			require.NoError(t, db0.QueryRowContext(ctx,
 				"select rel_id, rel_logical_id from mo_catalog.mo_tables where reldatabase=? and relname='same'", solo).Scan(&newID, &newLogicalID))

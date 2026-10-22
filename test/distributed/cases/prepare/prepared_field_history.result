@@ -1,0 +1,861 @@
+DROP DATABASE IF EXISTS field_history_unrelated_ddl;
+DROP DATABASE IF EXISTS field_history_dependencies;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''0'', ''1'', ''2'', ''-1'') AS f';
+SET @field_value = 1;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = '1.9tail';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = _binary '-1tail';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+4
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_value = CAST(1.25 AS DECIMAL(10,2));
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f1, FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f2';
+SET @field_c1 = '1', @field_c2 = '1', @field_a = 'a', @field_b = _binary 'a';
+EXECUTE p_field_history USING @field_c1, @field_a, @field_c2, @field_b;
+➤ f1[-5,64,0]  ¦  f2[-5,64,0]  𝄀
+2  ¦  2
+SET @field_c2 = 1;
+EXECUTE p_field_history USING @field_c1, @field_a, @field_c2, @field_b;
+➤ f1[-5,64,0]  ¦  f2[-5,64,0]  𝄀
+1  ¦  2
+SET @field_c1 = 1, @field_b = 'a';
+EXECUTE p_field_history USING @field_c1, @field_a, @field_c2, @field_b;
+➤ f1[-5,64,0]  ¦  f2[-5,64,0]  𝄀
+1  ¦  1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT DISTINCT FIELD(MAX(CASE WHEN i=0 THEN ? ELSE ? END), ''9'', ''10'') AS f FROM (SELECT 0 i UNION ALL SELECT 1) d';
+SET @field_a = 9, @field_b = 10;
+EXECUTE p_field_history USING @field_a, @field_b;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_a = '9', @field_b = '10';
+EXECUTE p_field_history USING @field_a, @field_b;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_a = _binary '9', @field_b = _binary '10';
+EXECUTE p_field_history USING @field_a, @field_b;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT DISTINCT FIELD(MAX(CASE WHEN i=0 THEN ? ELSE ? END) OVER (), ''9'', ''10'') AS f FROM (SELECT 0 i UNION ALL SELECT 1) d';
+SET @field_a = 9, @field_b = 10;
+EXECUTE p_field_history USING @field_a, @field_b;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_a = '9', @field_b = '10';
+EXECUTE p_field_history USING @field_a, @field_b;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_a = _binary '9', @field_b = _binary '10';
+EXECUTE p_field_history USING @field_a, @field_b;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'WITH d AS (SELECT CASE WHEN ? THEN ? ELSE NULL END x) SELECT FIELD(x, ''A'', ''a'') AS f1, FIELD(x, ''a'', ''A'') AS f2 FROM d';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f1[-5,64,0]  ¦  f2[-5,64,0]  𝄀
+0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f1[-5,64,0]  ¦  f2[-5,64,0]  𝄀
+2  ¦  1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, 9223372036854775808, 18446744073709551615, 0) AS f';
+SET @field_value = 1;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+3
+SET @field_value = '9223372036854775808';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_value = '18446744073709551615';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+3
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(''Z'', CASE WHEN ? THEN ? ELSE NULL END) AS f';
+SET @field_value = 123;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(''1.9'', CASE WHEN ? THEN ? ELSE NULL END) AS f';
+SET @field_value = 123;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = '1.9tail';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CAST(''9007199254740992'' AS DECIMAL(30,0)), CASE WHEN ? THEN ? ELSE NULL END, CAST(''9007199254740992'' AS DECIMAL(30,0))) AS f';
+SET @field_value = 9007199254740993;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = '9007199254740993';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = _binary '9007199254740993';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT(?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT(?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT(?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT_WS('''', ?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN (SELECT ? LIMIT 1) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN (SELECT ? LIMIT 1) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1;
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN (SELECT COALESCE(?, NULL) LIMIT 1) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'WITH d AS (SELECT ? x) SELECT FIELD(CASE WHEN ? THEN x ELSE NULL END, ''A'', ''a'') AS f FROM d';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_value, @field_condition;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_value, @field_condition;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN x ELSE NULL END, ''A'', ''a'') AS f FROM (SELECT ? x LIMIT 1) d';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ELT(1, ?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ELT(1, ?) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = '1', @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_condition = 1;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN NULLIF(?, ''x'') ELSE NULL END, ''A'', ''a'') AS direct_f, FIELD(CASE WHEN ? THEN NULLIF(COALESCE(?, NULL), ''x'') ELSE NULL END, ''A'', ''a'') AS composite_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ direct_f[-5,64,0]  ¦  composite_f[-5,64,0]  𝄀
+0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ direct_f[-5,64,0]  ¦  composite_f[-5,64,0]  𝄀
+1  ¦  2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN NULLIF(?, ''x'') ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = '1', @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+SET @field_condition = 1, @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN (SELECT MAX(?) LIMIT 1) ELSE NULL END, ''A'', ''a'') AS max_f, FIELD(CASE WHEN ? THEN (SELECT MIN(?) LIMIT 1) ELSE NULL END, ''A'', ''a'') AS min_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ max_f[-5,64,0]  ¦  min_f[-5,64,0]  𝄀
+0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ max_f[-5,64,0]  ¦  min_f[-5,64,0]  𝄀
+1  ¦  1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN x ELSE NULL END, ''A'', ''a'') AS f FROM (SELECT ? x UNION ALL SELECT NULL) d ORDER BY f';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ELT(1, COALESCE(?, NULL)) ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ANY_VALUE(?) ELSE NULL END, ''A'', ''a'') AS direct_f, FIELD(CASE WHEN ? THEN (SELECT ANY_VALUE(?) LIMIT 1) ELSE NULL END, ''A'', ''a'') AS scalar_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ direct_f[-5,64,0]  ¦  scalar_f[-5,64,0]  𝄀
+0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ direct_f[-5,64,0]  ¦  scalar_f[-5,64,0]  𝄀
+2  ¦  1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ direct_f[-5,64,0]  ¦  scalar_f[-5,64,0]  𝄀
+2  ¦  1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ANY_VALUE(NULLIF(?, ''x'')) ELSE NULL END, ''A'', ''a'') AS text_f, FIELD(CASE WHEN ? THEN ANY_VALUE(NULLIF(?, 1)) ELSE NULL END, ''A'', ''a'') AS numeric_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ text_f[-5,64,0]  ¦  numeric_f[-5,64,0]  𝄀
+0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ text_f[-5,64,0]  ¦  numeric_f[-5,64,0]  𝄀
+1  ¦  1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition, @field_value, @field_condition, @field_value;
+➤ text_f[-5,64,0]  ¦  numeric_f[-5,64,0]  𝄀
+1  ¦  1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN LAG(?,0) OVER () ELSE NULL END,''A'',''a'') AS lag_f, FIELD(CASE WHEN ? THEN LEAD(?,0) OVER () ELSE NULL END,''A'',''a'') AS lead_f, FIELD(CASE WHEN ? THEN CONCAT(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS concat_f, FIELD(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS lower_f, FIELD(CASE WHEN ? THEN REVERSE(COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS reverse_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_f[-5,64,0]  ¦  lead_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  lower_f[-5,64,0]  ¦  reverse_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_f[-5,64,0]  ¦  lead_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  lower_f[-5,64,0]  ¦  reverse_f[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  2  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_f[-5,64,0]  ¦  lead_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  lower_f[-5,64,0]  ¦  reverse_f[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  2  ¦  2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN LAG(?,0,NULL) OVER () ELSE NULL END,''A'',''a'') AS lag_null_f, FIELD(CASE WHEN ? THEN LEAD(?,0,NULL) OVER () ELSE NULL END,''A'',''a'') AS lead_null_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',LOWER(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_lower_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',REVERSE(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_reverse_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',CONCAT(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_concat_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_null_f[-5,64,0]  ¦  lead_null_f[-5,64,0]  ¦  ws_lower_f[-5,64,0]  ¦  ws_reverse_f[-5,64,0]  ¦  ws_concat_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_null_f[-5,64,0]  ¦  lead_null_f[-5,64,0]  ¦  ws_lower_f[-5,64,0]  ¦  ws_reverse_f[-5,64,0]  ¦  ws_concat_f[-5,64,0]  𝄀
+2  ¦  2  ¦  1  ¦  1  ¦  1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_null_f[-5,64,0]  ¦  lead_null_f[-5,64,0]  ¦  ws_lower_f[-5,64,0]  ¦  ws_reverse_f[-5,64,0]  ¦  ws_concat_f[-5,64,0]  𝄀
+2  ¦  2  ¦  1  ¦  1  ¦  1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN LAG(?,0,NULL) OVER () ELSE NULL END,''A'',''a'') AS lag_null_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',LOWER(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_lower_f, FIELD(CASE WHEN ? THEN CONCAT_WS(_binary '''',LOWER(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_binary_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',CAST(NULL AS BINARY),?) ELSE NULL END,''A'',''a'') AS ws_declared_f';
+SET @field_condition = '1', @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_null_f[-5,64,0]  ¦  ws_lower_f[-5,64,0]  ¦  ws_binary_f[-5,64,0]  ¦  ws_declared_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_null_f[-5,64,0]  ¦  ws_lower_f[-5,64,0]  ¦  ws_binary_f[-5,64,0]  ¦  ws_declared_f[-5,64,0]  𝄀
+2  ¦  1  ¦  2  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ lag_null_f[-5,64,0]  ¦  ws_lower_f[-5,64,0]  ¦  ws_binary_f[-5,64,0]  ¦  ws_declared_f[-5,64,0]  𝄀
+2  ¦  1  ¦  2  ¦  2
+DEALLOCATE PREPARE p_field_history;
+SET @field_condition = 1;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN LAG(?,0,?) OVER () ELSE NULL END,''A'',''a'') AS lag_params_f, FIELD(CASE WHEN ? THEN LEAD(?,0,?) OVER () ELSE NULL END,''A'',''a'') AS lead_params_f, FIELD(CASE WHEN ? THEN LAG(?,0,NULL) OVER () ELSE NULL END,''A'',''a'') AS lag_literal_f, FIELD(CASE WHEN ? THEN LAG(COALESCE(?,NULL),0,?) OVER () ELSE NULL END,''A'',''a'') AS lag_compound_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_value,@field_condition,@field_value,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_value;
+➤ lag_params_f[-5,64,0]  ¦  lead_params_f[-5,64,0]  ¦  lag_literal_f[-5,64,0]  ¦  lag_compound_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_value,@field_condition,@field_value,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_value;
+➤ lag_params_f[-5,64,0]  ¦  lead_params_f[-5,64,0]  ¦  lag_literal_f[-5,64,0]  ¦  lag_compound_f[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_value,@field_condition,@field_value,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_value;
+➤ lag_params_f[-5,64,0]  ¦  lead_params_f[-5,64,0]  ¦  lag_literal_f[-5,64,0]  ¦  lag_compound_f[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT_WS('''',ELT(1,COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_elt_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',LTRIM(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_ltrim_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',(SELECT x FROM (SELECT LOWER(COALESCE(?,NULL)) x UNION ALL SELECT NULL) d WHERE x <> '''' LIMIT 1)) ELSE NULL END,''A'',''a'') AS ws_union_f, FIELD(CASE WHEN ? THEN CONCAT_WS(LOWER(COALESCE(?,NULL)),''a'') ELSE NULL END,''A'',''a'') AS ws_separator_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',(SELECT x FROM (SELECT LOWER(COALESCE(?,NULL)) x UNION ALL SELECT _binary '''') d WHERE x <> '''' LIMIT 1)) ELSE NULL END,''A'',''a'') AS ws_union_binary_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',UNHEX(COALESCE(?,NULL))) ELSE NULL END,''A'',''a'') AS ws_intrinsic_f, FIELD(CASE WHEN ? THEN CONCAT_WS(_binary '''',COALESCE(?,NULL)) ELSE NULL END,''A'',''a'') AS ws_binary_separator_f';
+SET @field_condition = '1', @field_value = NULL, @field_hex = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_hex,@field_condition,@field_value;
+➤ ws_elt_f[-5,64,0]  ¦  ws_ltrim_f[-5,64,0]  ¦  ws_union_f[-5,64,0]  ¦  ws_separator_f[-5,64,0]  ¦  ws_union_binary_f[-5,64,0]  ¦  ws_intrinsic_f[-5,64,0]  ¦  ws_binary_separator_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a', @field_hex = '61';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_hex,@field_condition,@field_value;
+➤ ws_elt_f[-5,64,0]  ¦  ws_ltrim_f[-5,64,0]  ¦  ws_union_f[-5,64,0]  ¦  ws_separator_f[-5,64,0]  ¦  ws_union_binary_f[-5,64,0]  ¦  ws_intrinsic_f[-5,64,0]  ¦  ws_binary_separator_f[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  2  ¦  2  ¦  2
+SET @field_value = _binary 'a', @field_hex = _binary '61';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_hex,@field_condition,@field_value;
+➤ ws_elt_f[-5,64,0]  ¦  ws_ltrim_f[-5,64,0]  ¦  ws_union_f[-5,64,0]  ¦  ws_separator_f[-5,64,0]  ¦  ws_union_binary_f[-5,64,0]  ¦  ws_intrinsic_f[-5,64,0]  ¦  ws_binary_separator_f[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  2  ¦  2  ¦  2
+DEALLOCATE PREPARE p_field_history;
+SET @field_condition = 1;
+SET @field_provenance_mode = @@sql_mode;
+SET SESSION sql_mode = '';
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN CONCAT_WS('''',NULLIF(?,LOWER(COALESCE(?,NULL)))) ELSE NULL END,''A'',''a'') AS nullif_inferred_f, FIELD(CASE WHEN ? THEN CONCAT_WS('''',NULLIF(?,CAST(? AS BINARY(1)))) ELSE NULL END,''A'',''a'') AS nullif_explicit_f, FIELD(CONCAT_WS('''',CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END),''A'',''a'') AS case_inferred_f, FIELD(CONCAT_WS('''',CASE WHEN ? THEN CAST(? AS BINARY(1)) ELSE NULL END),''A'',''a'') AS case_explicit_f, FIELD(CONCAT_WS('''',CASE WHEN ? THEN (CASE WHEN TRUE THEN LOWER(COALESCE(?,NULL)) ELSE NULL END) ELSE NULL END),''A'',''a'') AS case_nested_f';
+SET @field_condition = '1', @field_value = NULL, @field_peer = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_peer,@field_condition,@field_value,@field_peer,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ nullif_inferred_f[-5,64,0]  ¦  nullif_explicit_f[-5,64,0]  ¦  case_inferred_f[-5,64,0]  ¦  case_explicit_f[-5,64,0]  ¦  case_nested_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a', @field_peer = 'x';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_peer,@field_condition,@field_value,@field_peer,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ nullif_inferred_f[-5,64,0]  ¦  nullif_explicit_f[-5,64,0]  ¦  case_inferred_f[-5,64,0]  ¦  case_explicit_f[-5,64,0]  ¦  case_nested_f[-5,64,0]  𝄀
+1  ¦  2  ¦  1  ¦  2  ¦  1
+SET @field_value = _binary 'a', @field_peer = _binary 'x';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_peer,@field_condition,@field_value,@field_peer,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ nullif_inferred_f[-5,64,0]  ¦  nullif_explicit_f[-5,64,0]  ¦  case_inferred_f[-5,64,0]  ¦  case_explicit_f[-5,64,0]  ¦  case_nested_f[-5,64,0]  𝄀
+1  ¦  2  ¦  1  ¦  2  ¦  1
+SET SESSION sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_peer,@field_condition,@field_value,@field_peer,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ nullif_inferred_f[-5,64,0]  ¦  nullif_explicit_f[-5,64,0]  ¦  case_inferred_f[-5,64,0]  ¦  case_explicit_f[-5,64,0]  ¦  case_nested_f[-5,64,0]  𝄀
+1  ¦  2  ¦  1  ¦  2  ¦  1
+DEALLOCATE PREPARE p_field_history;
+SET SESSION sql_mode = @field_provenance_mode;
+SET @field_condition = 1;
+PREPARE p_field_history FROM 'SELECT FIELD(CONCAT_WS('''',ELT(1,CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END)),''A'',''a'') AS registered_elt_f, FIELD(CONCAT_WS('''',LTRIM(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END)),''A'',''a'') AS registered_ltrim_f, FIELD(CONCAT_WS('''',RTRIM(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END)),''A'',''a'') AS registered_rtrim_f, FIELD(CONCAT_WS(ELT(1,CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END),''a''),''A'',''a'') AS registered_separator_f, FIELD(CONCAT_WS('''',(SELECT ELT(1,x) FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x LIMIT 1) d)),''A'',''a'') AS registered_derived_f, FIELD(CONCAT_WS('''',ELT(1,(SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT NULL) d WHERE x<>'''' LIMIT 1))),''A'',''a'') AS registered_union_f, FIELD(CONCAT_WS('''',ELT(1,CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,_binary '''')),''A'',''a'') AS registered_explicit_f, FIELD(CONCAT_WS('''',ELT(1,CASE WHEN ? THEN ? ELSE NULL END)),''A'',''a'') AS registered_null_fact_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ registered_elt_f[-5,64,0]  ¦  registered_ltrim_f[-5,64,0]  ¦  registered_rtrim_f[-5,64,0]  ¦  registered_separator_f[-5,64,0]  ¦  registered_derived_f[-5,64,0]  ¦  registered_union_f[-5,64,0]  ¦  registered_explicit_f[-5,64,0]  ¦  registered_null_fact_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ registered_elt_f[-5,64,0]  ¦  registered_ltrim_f[-5,64,0]  ¦  registered_rtrim_f[-5,64,0]  ¦  registered_separator_f[-5,64,0]  ¦  registered_derived_f[-5,64,0]  ¦  registered_union_f[-5,64,0]  ¦  registered_explicit_f[-5,64,0]  ¦  registered_null_fact_f[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  2  ¦  1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ registered_elt_f[-5,64,0]  ¦  registered_ltrim_f[-5,64,0]  ¦  registered_rtrim_f[-5,64,0]  ¦  registered_separator_f[-5,64,0]  ¦  registered_derived_f[-5,64,0]  ¦  registered_union_f[-5,64,0]  ¦  registered_explicit_f[-5,64,0]  ¦  registered_null_fact_f[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  1  ¦  2  ¦  1
+DEALLOCATE PREPARE p_field_history;
+SET @field_condition = 1;
+PREPARE p_field_history FROM 'SELECT FIELD(GREATEST(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS greatest_f, FIELD(LEAST(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''z''),''A'',''a'') AS least_f, FIELD(GREATEST(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,_binary ''''),''A'',''a'') AS greatest_binary_f, FIELD(LEAST(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,_binary ''z''),''A'',''a'') AS least_binary_f, FIELD(CONCAT_WS('''',ELT(1,(SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT '''') d WHERE x<>'''' LIMIT 1))),''A'',''a'') AS union_inferred_f, FIELD(CONCAT_WS('''',ELT(1,(SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT _binary '''') d WHERE x<>'''' LIMIT 1))),''A'',''a'') AS union_binary_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ greatest_f[-5,64,0]  ¦  least_f[-5,64,0]  ¦  greatest_binary_f[-5,64,0]  ¦  least_binary_f[-5,64,0]  ¦  union_inferred_f[-5,64,0]  ¦  union_binary_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ greatest_f[-5,64,0]  ¦  least_f[-5,64,0]  ¦  greatest_binary_f[-5,64,0]  ¦  least_binary_f[-5,64,0]  ¦  union_inferred_f[-5,64,0]  ¦  union_binary_f[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  2  ¦  1  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ greatest_f[-5,64,0]  ¦  least_f[-5,64,0]  ¦  greatest_binary_f[-5,64,0]  ¦  least_binary_f[-5,64,0]  ¦  union_inferred_f[-5,64,0]  ¦  union_binary_f[-5,64,0]  𝄀
+1  ¦  1  ¦  2  ¦  2  ¦  1  ¦  2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(GREATEST(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS first_binary_greatest_f, FIELD(CONCAT_WS('''',ELT(1,(SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT '''') d WHERE x<>'''' LIMIT 1))),''A'',''a'') AS first_binary_union_f';
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value;
+➤ first_binary_greatest_f[-5,64,0]  ¦  first_binary_union_f[-5,64,0]  𝄀
+2  ¦  2
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value;
+➤ first_binary_greatest_f[-5,64,0]  ¦  first_binary_union_f[-5,64,0]  𝄀
+2  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value;
+➤ first_binary_greatest_f[-5,64,0]  ¦  first_binary_union_f[-5,64,0]  𝄀
+2  ¦  2
+DEALLOCATE PREPARE p_field_history;
+SELECT FIELD(x,'A','a') FROM (SELECT _binary 'a' x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(x, A, a)[-5,64,0]  𝄀
+2
+SELECT FIELD(x,'A','a') FROM (SELECT 'z' x UNION ALL SELECT _binary 'a') d WHERE x<>'z';
+➤ FIELD(x, A, a)[-5,64,0]  𝄀
+2
+SELECT FIELD(x,'A','a') FROM (SELECT _binary 'a' x UNION SELECT '') d WHERE x<>'';
+➤ FIELD(x, A, a)[-5,64,0]  𝄀
+2
+SELECT FIELD(x,'A','a') FROM (SELECT 'a' x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(x, A, a)[-5,64,0]  𝄀
+1
+SELECT FIELD(x,'A','a') FROM (SELECT CAST(_binary 'a' AS CHAR) x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(x, A, a)[-5,64,0]  𝄀
+1
+SELECT FIELD(x,'A','a') FROM (SELECT CAST('a' AS BINARY(1)) x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(x, A, a)[-5,64,0]  𝄀
+2
+SELECT FIELD(CAST(x AS CHAR),'A','a') FROM (SELECT _binary 'a' x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(cast(x as varchar), A, a)[-5,64,0]  𝄀
+1
+SELECT FIELD(CAST(x AS BINARY(1)),'A','a') FROM (SELECT 'a' x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(cast(x as binary(1)), A, a)[-5,64,0]  𝄀
+2
+SELECT FIELD(CONCAT_WS('',ELT(1,x)),'A','a') FROM (SELECT _binary 'a' x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(CONCAT_WS(, ELT(1, x)), A, a)[-5,64,0]  𝄀
+2
+SELECT FIELD(CONCAT_WS('',ELT(1,CAST(x AS CHAR))),'A','a') FROM (SELECT _binary 'a' x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(CONCAT_WS(, ELT(1, cast(x as varchar))), A, a)[-5,64,0]  𝄀
+1
+SELECT FIELD(LOWER(x),'A','a') FROM (SELECT _binary 'A' x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(LOWER(x), A, a)[-5,64,0]  𝄀
+1
+SELECT FIELD(CONCAT_WS('',LOWER(x)),'A','a') FROM (SELECT _binary 'A' x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(CONCAT_WS(, LOWER(x)), A, a)[-5,64,0]  𝄀
+1
+SELECT FIELD(REVERSE(COALESCE(_binary 'a','')),'A','a'), HEX(REVERSE(COALESCE(_binary 'a','')));
+➤ FIELD(REVERSE(COALESCE(a, )), A, a)[-5,64,0]  ¦  HEX(REVERSE(COALESCE(a, )))[12,2040,0]  𝄀
+2  ¦  61
+SELECT FIELD(LOWER(COALESCE(_binary 'A','')),'A','a'), HEX(LOWER(COALESCE(_binary 'A','')));
+➤ FIELD(LOWER(COALESCE(A, )), A, a)[-5,64,0]  ¦  HEX(LOWER(COALESCE(A, )))[-1,16383,0]  𝄀
+1  ¦  41
+SELECT FIELD(UPPER(COALESCE(_binary 'a','')),'A','a'), HEX(UPPER(COALESCE(_binary 'a','')));
+➤ FIELD(UPPER(COALESCE(a, )), A, a)[-5,64,0]  ¦  HEX(UPPER(COALESCE(a, )))[-1,16383,0]  𝄀
+2  ¦  61
+SELECT FIELD(SUBSTRING(COALESCE(_binary 'a',''),1,1),'A','a'), HEX(SUBSTRING(COALESCE(_binary 'a',''),1,1));
+➤ FIELD(SUBSTRING(COALESCE(a, ), 1, 1), A, a)[-5,64,0]  ¦  HEX(SUBSTRING(COALESCE(a, ), 1, 1))[12,2040,0]  𝄀
+2  ¦  61
+SELECT FIELD(REPEAT(COALESCE(_binary 'a',''),1),'A','a'), HEX(REPEAT(COALESCE(_binary 'a',''),1));
+➤ FIELD(REPEAT(COALESCE(a, ), 1), A, a)[-5,64,0]  ¦  HEX(REPEAT(COALESCE(a, ), 1))[12,2040,0]  𝄀
+2  ¦  61
+SELECT FIELD(TRIM(BOTH ' ' FROM COALESCE(_binary ' a ','')),'A','a'), HEX(TRIM(BOTH ' ' FROM COALESCE(_binary ' a ','')));
+➤ FIELD(TRIM(both   from COALESCE( a , )), A, a)[-5,64,0]  ¦  HEX(TRIM(both   from COALESCE( a , )))[12,2040,0]  𝄀
+2  ¦  61
+SELECT FIELD(REVERSE(CAST(COALESCE(_binary 'a','') AS CHAR)),'A','a'), HEX(REVERSE(CAST(COALESCE(_binary 'a','') AS CHAR)));
+➤ FIELD(REVERSE(cast(COALESCE(a, ) as varchar)), A, a)[-5,64,0]  ¦  HEX(REVERSE(cast(COALESCE(a, ) as varchar)))[-1,16383,0]  𝄀
+1  ¦  61
+SELECT FIELD(LOWER(x),'A','a'), HEX(LOWER(x)) FROM (SELECT _binary 'A' x UNION ALL SELECT '') d WHERE x<>'';
+➤ FIELD(LOWER(x), A, a)[-5,64,0]  ¦  HEX(LOWER(x))[-1,16383,0]  𝄀
+1  ¦  41
+PREPARE p_field_history FROM 'SELECT FIELD((SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT '''') d WHERE x<>'''' LIMIT 1),''A'',''a'') AS union_text_f, FIELD((SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT NULL) d WHERE x<>'''' LIMIT 1),''A'',''a'') AS union_null_f, FIELD((SELECT x FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT _binary '''') d WHERE x<>'''' LIMIT 1),''A'',''a'') AS union_binary_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ union_text_f[-5,64,0]  ¦  union_null_f[-5,64,0]  ¦  union_binary_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ union_text_f[-5,64,0]  ¦  union_null_f[-5,64,0]  ¦  union_binary_f[-5,64,0]  𝄀
+1  ¦  2  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ union_text_f[-5,64,0]  ¦  union_null_f[-5,64,0]  ¦  union_binary_f[-5,64,0]  𝄀
+1  ¦  2  ¦  2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(x,''A'',''a'') FROM (SELECT CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END x UNION ALL SELECT '''') d WHERE x<>''''';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(d.x, A, a)[-5,64,0]
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(d.x, A, a)[-5,64,0]  𝄀
+1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(d.x, A, a)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(COALESCE(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS coalesce_f, FIELD(CONCAT(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS concat_f, FIELD(CONCAT('''',CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END),''A'',''a'') AS concat_rev_f, FIELD(IF(1,CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS if_f, FIELD(COALESCE(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,NULL),''A'',''a'') AS null_peer_f, FIELD(CONCAT(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,_binary ''''),''A'',''a'') AS binary_peer_f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ coalesce_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  concat_rev_f[-5,64,0]  ¦  if_f[-5,64,0]  ¦  null_peer_f[-5,64,0]  ¦  binary_peer_f[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ coalesce_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  concat_rev_f[-5,64,0]  ¦  if_f[-5,64,0]  ¦  null_peer_f[-5,64,0]  ¦  binary_peer_f[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  2  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ coalesce_f[-5,64,0]  ¦  concat_f[-5,64,0]  ¦  concat_rev_f[-5,64,0]  ¦  if_f[-5,64,0]  ¦  null_peer_f[-5,64,0]  ¦  binary_peer_f[-5,64,0]  𝄀
+1  ¦  1  ¦  1  ¦  1  ¦  2  ¦  2
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN TRUE THEN CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END ELSE '''' END,''A'',''a'')';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(case when true then case when ? then LOWER(COALESCE(?, null)) else null end else  end, A, a)[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(case when true then case when ? then LOWER(COALESCE(?, null)) else null end else  end, A, a)[-5,64,0]  𝄀
+1
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ FIELD(case when true then case when ? then LOWER(COALESCE(?, null)) else null end else  end, A, a)[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+CREATE DATABASE field_history_dependencies;
+CREATE TABLE field_history_dependencies.t(i INT);
+INSERT INTO field_history_dependencies.t VALUES(1);
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f FROM field_history_dependencies.t';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+CREATE TABLE field_history_dependencies.unrelated(i INT);
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DROP TABLE field_history_dependencies.unrelated;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+ALTER TABLE field_history_dependencies.t ADD COLUMN j INT;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f FROM field_history_dependencies.t';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+CREATE TEMPORARY TABLE field_history_dependencies.t(i INT);
+INSERT INTO field_history_dependencies.t VALUES(2);
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DROP TEMPORARY TABLE field_history_dependencies.t;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+1
+DEALLOCATE PREPARE p_field_history;
+DROP DATABASE field_history_dependencies;
+SET @field_old_sql_mode = @@sql_mode;
+SET @field_old_div_precision = @@div_precision_increment;
+SET SESSION sql_mode = '';
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET SESSION sql_mode = 'ONLY_FULL_GROUP_BY,NO_UNSIGNED_SUBTRACTION';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET SESSION sql_mode = '';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET SESSION div_precision_increment = 8;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET SESSION div_precision_increment = @field_old_div_precision;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+SET SESSION sql_mode = @field_old_sql_mode;
+SET SESSION sql_mode = '';
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN 0-? ELSE NULL END,0,1) AS f';
+SET @field_condition = 1, @field_unsigned = CAST(0 AS UNSIGNED);
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+➤ f[-5,64,0]  𝄀
+1
+SET SESSION sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+SET @field_unsigned = CAST(1 AS UNSIGNED);
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+➤ f[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN 0-? ELSE NULL END,0,1) AS f';
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+➤ f[-5,64,0]  𝄀
+0
+DEALLOCATE PREPARE p_field_history;
+PREPARE p_field_history FROM 'SELECT CASE WHEN ? THEN 0-? ELSE NULL END AS difference';
+EXECUTE p_field_history USING @field_condition,@field_unsigned;
+➤ difference[-5,64,0]  𝄀
+-1
+DEALLOCATE PREPARE p_field_history;
+SET SESSION div_precision_increment = 4;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END,''A'',''a'') AS f, CAST(? AS DECIMAL(65,30))/CAST(1 AS DECIMAL(65,30)) AS d';
+SET @field_value = NULL, @field_decimal = 5;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+➤ f[-5,64,0]  ¦  d[3,65,30]  𝄀
+0  ¦  5.000000000000000000000000000000
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+➤ f[-5,64,0]  ¦  d[3,65,30]  𝄀
+2  ¦  5.000000000000000000000000000000
+SET SESSION div_precision_increment = 8;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+➤ f[-5,64,0]  ¦  d[3,65,30]  𝄀
+2  ¦  5.000000000000000000000000000000
+SET SESSION div_precision_increment = 0;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_decimal;
+➤ f[-5,64,0]  ¦  d[3,65,30]  𝄀
+2  ¦  5.000000000000000000000000000000
+DEALLOCATE PREPARE p_field_history;
+SET SESSION div_precision_increment = @field_old_div_precision;
+SET SESSION sql_mode = @field_old_sql_mode;
+SET SESSION sql_mode = '';
+SET SESSION div_precision_increment = 4;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END,''A'',''a'') AS f';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET SESSION sql_mode = 'NO_UNSIGNED_SUBTRACTION';
+EXECUTE p_field_history USING @field_condition;
+invalid input: Incorrect arguments to EXECUTE
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET SESSION div_precision_increment = 8;
+EXECUTE p_field_history USING @field_condition;
+invalid input: Incorrect arguments to EXECUTE
+EXECUTE p_field_history USING @field_condition,@field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+SET SESSION sql_mode = @field_old_sql_mode;
+SET SESSION div_precision_increment = @field_old_div_precision;
+SET @field_old_locale = @@lc_time_names;
+SET @field_old_prefilter = @@enable_vector_prefilter_by_default;
+SET @field_old_auto_mode = @@enable_vector_auto_mode_by_default;
+SET lc_time_names = 'en_US';
+SET enable_vector_prefilter_by_default = 0;
+SET enable_vector_auto_mode_by_default = 0;
+PREPARE p_field_history FROM 'SELECT FIELD(CASE WHEN ? THEN ? ELSE NULL END, ''A'', ''a'') AS f';
+SET @field_value = NULL;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET lc_time_names = 'fr_FR';
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET enable_vector_prefilter_by_default = 1;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+SET enable_vector_auto_mode_by_default = 1;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+CREATE DATABASE field_history_unrelated_ddl;
+CREATE TABLE field_history_unrelated_ddl.t(i INT);
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DROP DATABASE field_history_unrelated_ddl;
+EXECUTE p_field_history USING @field_condition, @field_value;
+➤ f[-5,64,0]  𝄀
+2
+DEALLOCATE PREPARE p_field_history;
+SET lc_time_names = @field_old_locale;
+SET enable_vector_prefilter_by_default = @field_old_prefilter;
+SET enable_vector_auto_mode_by_default = @field_old_auto_mode;
+PREPARE p_field_history FROM 'SELECT
+FIELD(IFNULL(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,''''),''A'',''a'') AS text_peer,
+FIELD(IFNULL(NULL,CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END),''A'',''a'') AS null_first,
+FIELD(IFNULL(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,NULL),''A'',''a'') AS null_peer,
+FIELD(IFNULL(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,_binary ''''),''A'',''a'') AS binary_peer,
+FIELD(CONCAT_WS('''',IFNULL(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE NULL END,'''')),''A'',''a'') AS nested_consumer,
+FIELD(IFNULL(CASE WHEN ? THEN LOWER(COALESCE(?,NULL)) ELSE _binary '''' END,''''),''A'',''a'') AS binary_case';
+SET @field_condition = 1, @field_value = NULL;
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ text_peer[-5,64,0]  ¦  null_first[-5,64,0]  ¦  null_peer[-5,64,0]  ¦  binary_peer[-5,64,0]  ¦  nested_consumer[-5,64,0]  ¦  binary_case[-5,64,0]  𝄀
+0  ¦  0  ¦  0  ¦  0  ¦  0  ¦  0
+SET @field_value = 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ text_peer[-5,64,0]  ¦  null_first[-5,64,0]  ¦  null_peer[-5,64,0]  ¦  binary_peer[-5,64,0]  ¦  nested_consumer[-5,64,0]  ¦  binary_case[-5,64,0]  𝄀
+1  ¦  2  ¦  2  ¦  2  ¦  1  ¦  2
+SET @field_value = _binary 'a';
+EXECUTE p_field_history USING @field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value,@field_condition,@field_value;
+➤ text_peer[-5,64,0]  ¦  null_first[-5,64,0]  ¦  null_peer[-5,64,0]  ¦  binary_peer[-5,64,0]  ¦  nested_consumer[-5,64,0]  ¦  binary_case[-5,64,0]  𝄀
+1  ¦  2  ¦  2  ¦  2  ¦  1  ¦  2
+DEALLOCATE PREPARE p_field_history;

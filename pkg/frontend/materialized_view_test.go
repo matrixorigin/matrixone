@@ -56,6 +56,7 @@ func TestMaterializedViewReadPrivileges(t *testing.T) {
 func TestMaterializedViewGlobalCatalogOwnership(t *testing.T) {
 	for _, ddl := range catalog.MaterializedViewCatalogDDLs {
 		require.True(t, isMaterializedViewCatalogDDL(ddl), "tenant initialization must not recreate a global MV catalog")
+		require.True(t, isSysOnlyCatalogRelationSQL(ddl), "the shared tenant/publication classifier must retain global MV catalogs")
 	}
 }
 

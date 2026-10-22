@@ -2425,6 +2425,8 @@ func (rule *ResetParamRefRule) ApplyExpr(e *plan.Expr) (*plan.Expr, error) {
 		fallbackSource = nil
 		rewritten, err = rule.integerArgumentRuntimeSource(e)
 		rule.specialized = true
+	} else if fn := e.GetF(); fn != nil && fn.Func != nil && fn.Func.ObjName == "timestampadd_second_interval" && len(fn.Args) == 1 {
+		rewritten, err = rule.rebindTimestampAddSecondInterval(e)
 	} else if hasSourceDependentIntegerArguments(e) {
 		fallbackSource = nil
 		rewritten, err = rule.rebindSourceDependentIntegerArguments(e)
@@ -2910,7 +2912,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 		var originalTemporalExpr *Expr
 		if exprImpl.F.Func != nil {
 			switch strings.ToLower(exprImpl.F.Func.GetObjName()) {
-			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time":
+			case "date_add", "date_sub", "str_to_date", "to_date", "addtime", "subtime", "timediff", "time", "timestamp", "timestampadd":
 				originalTemporalExpr = DeepCopyExpr(e)
 			}
 		}
@@ -3166,7 +3168,7 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 			var rewrittenArg *plan.Expr
 			numericTemporalArg := false
 			switch functionName {
-			case "to_interval_microsecond", "to_calendar_interval", "time", "from_unixtime", "sec_to_time":
+			case "to_interval_microsecond", "to_calendar_interval", "timestampadd_second_interval", "time", "from_unixtime", "sec_to_time":
 				numericTemporalArg = i == 0
 			case "date_add", "date_sub":
 				numericTemporalArg = i == 1 && len(originalArgs) == 3 &&
@@ -3183,7 +3185,22 @@ func (rule *ResetParamRefRule) applyExpr(e *plan.Expr) (*plan.Expr, error) {
 							param.SourceType.Oid == types.T_float64)
 				}
 			}
-			if nestedPreparedBitwiseSource != nil {
+			if functionName == "timestamp" && len(originalArgs) == 1 && temporalDirectMarker(originalArgs[i]) {
+				var known bool
+				rewrittenArg, known, err = rule.preparedRuntimeSourceExpr(paramPos, false)
+				if err != nil {
+					return nil, err
+				}
+				if !known {
+					rewrittenArg, err = rule.ApplyExpr(unwrapPreparedImplicitCast(arg, true))
+					if err != nil {
+						return nil, err
+					}
+				}
+				needResetFunction = true
+				compareArgTypes = true
+				rule.specialized = true
+			} else if nestedPreparedBitwiseSource != nil {
 				var applyErr error
 				rewrittenArg, applyErr = rule.ApplyExpr(DeepCopyExpr(nestedPreparedBitwiseSource))
 				if applyErr != nil {

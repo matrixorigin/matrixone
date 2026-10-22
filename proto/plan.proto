@@ -422,6 +422,12 @@ message ResultColDef {
   repeated ColDef ResultCols = 1;
 }
 
+enum ResultColumnKind {
+  RESULT_COLUMN_KIND_UNKNOWN = 0;
+  RESULT_COLUMN_KIND_STORED = 1;
+  RESULT_COLUMN_KIND_COMPUTED = 2;
+}
+
 message ColDef {
   uint64 col_id = 1;
   // letter case: lower
@@ -454,6 +460,11 @@ message ColDef {
   // Physical table name for result-column origin metadata. tbl_name is the
   // visible table name (and can therefore be an alias).
   string origin_tbl_name = 22;
+  // Whether a result column is produced by evaluating an expression rather
+  // than retaining a stored table column. This is intentionally independent
+  // of origin/key metadata, which can be lost across set operations. UNKNOWN
+  // preserves compatibility with plans produced before this field existed.
+  ResultColumnKind result_column_kind = 23;
 }
 
 message Default {
@@ -996,6 +1007,16 @@ message IndexSearchScan {
   // candidate_limit and handed to the reader by algo_expr_names[i].
   repeated Expr algo_exprs = 20;
   repeated string algo_expr_names = 21;
+  // Internal top-k of the search (BY RANK option itopk; 0 = unset): the number of
+  // candidates the index search returns before filtering, at least the result limit.
+  // The compiler fills unset knobs from the session variables vector_itopk,
+  // vector_max_itopk and vector_max_nprobe.
+  uint64 internal_topk = 22;
+  // Cap on internal_topk while the search widens (BY RANK option max_itopk; 0 = unset).
+  uint64 max_internal_topk = 23;
+  // Cap on the lists an IVF search probes while it widens (BY RANK option max_nprobe;
+  // 0 = unset). Graph indexes ignore it.
+  uint64 max_nprobe = 24;
 }
 
 message Node {
@@ -1336,6 +1357,11 @@ message Node {
 
   // Ordered binding contexts used by view authorization.
   repeated ViewStep view_path = 94;
+
+  // DEDUP only: lossless logical index parts from the incoming row. These
+  // survive pruning and are evaluated only when rendering a diagnostic;
+  // on_list continues to use the opaque physical comparison key.
+  repeated Expr dedup_key_exprs = 95;
 }
 
 message SnapshotExtraInfo {
@@ -1572,6 +1598,10 @@ message LockTarget {
   ObjectRef obj_ref = 15;
   int32 partition_col_idx_in_bat = 16;
   bool has_partition_col = 17;
+  // no_wait is a physical row-lock acquisition policy. It is separate from
+  // the SQL error outcome; SkipLocked targets also use nonblocking acquisition.
+  bool no_wait = 18;
+  bool skip_locked = 19;
 }
 
 message PreInsertUkCtx {
@@ -1614,6 +1644,8 @@ message PreInsertUkCtx {
   repeated string key_names = 16;
   repeated Type key_types = 17;
   repeated int32 key_type_counts = 18;
+  // Parallel to key_columns. Empty lists retain legacy diagnostic rendering.
+  repeated ExprList key_diagnostic_exprs = 19;
 }
 
 message PreInsertCtx {
@@ -2054,6 +2086,9 @@ message CreateTable {
   // Cached metadata-name owner observed before catalog-dependent planning.
   lock.LockTable fk_name_binding = 17;
   DatabaseDefaults database_defaults = 18;
+  // Execution-only requirement for retained CTAS population SQL.
+  // Zero means no additional requirement; this is not a catalog format floor.
+  int64 ctas_execution_protocol_version = 19;
 }
 
 message AlterTableDrop {
@@ -2454,7 +2489,12 @@ enum AlterPartitionType {
 
 message RankOption {
   string mode = 1; // "pre", "post", "force", or "auto"
-  int64 nprobe = 2; // Query-level base probe count; zero uses the session default.
+  // Index search knobs (0 = unset). itopk/max_itopk apply to every vector index;
+  // nprobe/max_nprobe to IVF indexes only.
+  uint64 nprobe = 2;
+  uint64 itopk = 3;
+  uint64 max_itopk = 4;
+  uint64 max_nprobe = 5;
 }
 
 message AlterTableAutoIncrement {

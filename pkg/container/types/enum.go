@@ -30,22 +30,94 @@ func ParseIntToEnum(input int64) (Enum, error) {
 
 // ParseEnum return item index with item name or value.
 func ParseEnum(enumStr string, name string) (Enum, error) {
-	elems := strings.Split(enumStr, ",")
-	enumName, _ := parseEnumName(elems, name)
-	if enumName != Enum(0) {
-		// if match name, return
-		return enumName, nil
+	value, truncated, err := ParseEnumAssignment(enumStr, name)
+	if err != nil {
+		return 0, err
 	}
-	// if name doesn't exist, it's maybe an integer
-	num, err := strconv.ParseUint(name, 0, 64)
-	if err == nil {
-		if num > uint64(MaxEnumLen) {
-			return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: number %d overflow enum boundary [1, %d]", num, len(elems))
-		}
-		return parseEnumValue(elems, uint16(num))
+	if truncated {
+		return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: item %s is not in enum %v", name, strings.Split(enumStr, ","))
 	}
+	return value, nil
+}
 
-	return 0, moerr.NewInternalErrorNoCtxf("convert to MySQL enum failed: item %s is not in enum %v", name, elems)
+// ParseEnumAssignment separates recoverable value truncation from invalid
+// metadata. The caller owns SQL-mode policy and diagnostics.
+func ParseEnumAssignment(enumStr, name string) (Enum, bool, error) {
+	elems := strings.Split(enumStr, ",")
+	enumName, err := parseEnumName(elems, name)
+	if err != nil {
+		return 0, false, err
+	}
+	if enumName != 0 {
+		return enumName, false, nil
+	}
+	return ParseEnumNumericText(name, len(elems))
+}
+
+func validateEnumMemberCount(count int) error {
+	if count < 1 || count > MaxEnumLen {
+		return moerr.NewInvalidInputNoCtxf("invalid enum member count %d", count)
+	}
+	return nil
+}
+
+// ParseEnumNumberAssignment validates the wide numeric source before narrowing.
+// Unlike a quoted zero, numeric zero is a truncated assignment.
+func ParseEnumNumberAssignment(enumStr string, number uint64) (Enum, bool, error) {
+	count := strings.Count(enumStr, ",") + 1
+	if err := validateEnumMemberCount(count); err != nil {
+		return 0, false, err
+	}
+	if number == 0 || number > uint64(count) {
+		return 0, true, nil
+	}
+	return Enum(number), false, nil
+}
+
+// ParseEnumNumericText is shared with indexed label lookup. MySQL only tries
+// decimal ordinal fallback for at most five bytes after removing end spaces.
+func ParseEnumNumericText(input string, memberCount int) (Enum, bool, error) {
+	if err := validateEnumMemberCount(memberCount); err != nil {
+		return 0, false, err
+	}
+	input = strings.TrimRight(input, " ")
+	if len(input) == 0 || len(input) > 5 {
+		return 0, true, nil
+	}
+	number, ok := parseEnumSetDecimal(input)
+	if !ok || number > uint64(memberCount) {
+		return 0, true, nil
+	}
+	return Enum(number), false, nil
+}
+
+// parseEnumSetDecimal consumes the whole MySQL decimal integer spelling.
+// A negative sign applies unsigned arithmetic after checked magnitude parsing.
+func parseEnumSetDecimal(input string) (uint64, bool) {
+	input = strings.TrimLeft(input, " \t\n\r\v\f")
+	negative := false
+	if len(input) > 0 && (input[0] == '+' || input[0] == '-') {
+		negative = input[0] == '-'
+		input = input[1:]
+	}
+	if len(input) == 0 {
+		return 0, false
+	}
+	var number uint64
+	for i := range len(input) {
+		if input[i] < '0' || input[i] > '9' {
+			return 0, false
+		}
+		digit := uint64(input[i] - '0')
+		if number > (^uint64(0)-digit)/10 {
+			return 0, false
+		}
+		number = number*10 + digit
+	}
+	if negative {
+		number = -number
+	}
+	return number, true
 }
 
 // ParseEnumName return item index with item name.
@@ -54,12 +126,23 @@ func ParseEnumName(enumStr string, name string) (Enum, error) {
 	return parseEnumName(elems, name)
 }
 func parseEnumName(elems []string, name string) (Enum, error) {
-	for i, n := range elems {
-		if strings.EqualFold(n, name) {
-			return Enum(uint16(i) + 1), nil
-		}
+	if err := validateEnumMemberCount(len(elems)); err != nil {
+		return 0, err
 	}
-	return Enum(0), nil
+	// Preserve raw padded labels in existing MO definitions before trying the
+	// MySQL trailing-space spelling. Do not normalize stored domain metadata.
+	for {
+		for i, n := range elems {
+			if strings.EqualFold(n, name) {
+				return Enum(i + 1), nil
+			}
+		}
+		trimmed := strings.TrimRight(name, " ")
+		if trimmed == name {
+			return 0, nil
+		}
+		name = trimmed
+	}
 }
 
 // ParseEnumValue return item index with special number.

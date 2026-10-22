@@ -1174,6 +1174,10 @@ func TestDiskCacheCloseCancelsActiveFileFinalizeBeforePublish(t *testing.T) {
 
 func TestDiskCacheCloseWinsAtFilePublicationBoundary(t *testing.T) {
 	cache := newLifecycleTestDiskCache(t)
+	// Exercise publication/Close ordering without waiting for real fsync.
+	// Persistence errors and Close during an active sync have separate tests;
+	// this test must reach the publication gate before initiating Close.
+	cache.fileSync = func(*os.File) error { return nil }
 	publicationReached := make(chan struct{})
 	releasePublication := make(chan struct{})
 	unblock := sync.OnceFunc(func() { close(releasePublication) })

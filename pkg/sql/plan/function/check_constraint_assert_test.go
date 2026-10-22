@@ -127,6 +127,36 @@ func TestAssertODKUPKMutationErrorTag(t *testing.T) {
 	}
 }
 
+func TestAssertFKNoReferencedRowErrorTag(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	defer proc.Free()
+	mp := proc.Mp()
+
+	condition := newVectorByType(mp, types.T_bool.ToType(), []bool{false}, &nulls.Nulls{})
+	defer condition.Free(mp)
+	message := newVectorByType(mp, types.T_varchar.ToType(),
+		[]string{"Cannot add or update a child row: a foreign key constraint fails"}, nulls.NewWithSize(1))
+	defer message.Free(mp)
+	errorType := newVectorByType(mp, types.T_varchar.ToType(),
+		[]string{"fk_no_referenced_row"}, nulls.NewWithSize(1))
+	defer errorType.Free(mp)
+
+	fn, err := GetFunctionByName(proc.Ctx, "assert", []types.Type{
+		types.T_bool.ToType(), types.T_varchar.ToType(), types.T_varchar.ToType(),
+	})
+	require.NoError(t, err)
+	result, err := RunFunctionDirectly(
+		proc, fn.GetEncodedOverloadID(), []*vector.Vector{condition, message, errorType}, 1,
+	)
+	if result != nil {
+		result.Free(mp)
+	}
+	require.Error(t, err)
+	// the client must see MySQL errno 1452 (ER_NO_REFERENCED_ROW_2), which is
+	// the mysql mapping of ErrFKNoReferencedRow2, not an internal error
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrFKNoReferencedRow2), err)
+}
+
 func TestCheckConstraintAssertIgnoreAddsBoundedWarningsAndFiltersRows(t *testing.T) {
 	session := &numericWarningSession{}
 	proc := testutil.NewProcess(t)

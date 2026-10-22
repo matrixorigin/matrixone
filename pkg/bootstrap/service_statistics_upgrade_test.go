@@ -251,7 +251,11 @@ func TestStatisticsUpgradeOldWorkerCannotCompleteNewTask(t *testing.T) {
 
 				old := newServiceForTest("", &memLocker{},
 					clock.NewHLCClock(func() int64 { return 0 }, 0), nil, exec,
-					func(s *service) { s.handles = append(s.handles, v4_0_7.Handler) })
+					func(s *service) {
+						// Use the actual retained handler: its offset and protocol
+						// gate must still match the released binary.
+						s.handles = append(s.handles, v4_0_7.Handler)
+					})
 				defer old.stopper.Stop()
 				// Both the worker admission code and this restored 4.0.7 handler are
 				// unchanged from the old binary; no new-worker-only offset check is used.

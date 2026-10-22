@@ -51,7 +51,7 @@ func (c *Compile) registerMaterializedView(db engine.Database, dbName, name stri
 	if definition == nil {
 		return nil
 	}
-	if err := plan2.RequirePersistedProtocolVersionForAuthoring(c.proc.Ctx, c.proc, defines.MORPCVersion122); err != nil {
+	if err := plan2.RequirePersistedProtocolVersionForAuthoring(c.proc.Ctx, c.proc, defines.MORPCVersion129); err != nil {
 		return err
 	}
 	r, err := db.Relation(c.proc.Ctx, name, nil)
@@ -75,7 +75,7 @@ func (c *Compile) validateMaterializedViewScan(def *plan.TableDef) error {
 	if def == nil || def.TableType != catalog.SystemMaterializedViewRel {
 		return nil
 	}
-	if err := plan2.RequirePersistedProtocolVersion(c.proc.Ctx, c.proc, defines.MORPCVersion122); err != nil {
+	if err := plan2.RequirePersistedProtocolVersion(c.proc.Ctx, c.proc, defines.MORPCVersion129); err != nil {
 		return err
 	}
 	account, err := defines.GetAccountId(c.proc.Ctx)

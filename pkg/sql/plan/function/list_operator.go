@@ -287,6 +287,9 @@ func equalityTypeCheck(_ []overload, inputs []types.Type) checkResult {
 	if len(inputs) != 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
+	if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
+		return newCheckResultWithSuccess(1)
+	}
 	if isJSONBooleanComparison(inputs[0], inputs[1]) {
 		return newCheckResultWithSuccess(0)
 	}
@@ -327,6 +330,12 @@ var supportedOperators = []FuncNew{
 					return equalFn
 				},
 			},
+			{
+				// Appended identity keeps older executors from interpreting mixed vectors.
+				overloadId: 1,
+				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:      func() executeLogicOfOverload { return equalFn },
+			},
 		},
 	},
 
@@ -348,6 +357,12 @@ var supportedOperators = []FuncNew{
 					return nullSafeEqualFn
 				},
 			},
+			{
+				// Appended identity keeps older executors from interpreting mixed vectors.
+				overloadId: 1,
+				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:      func() executeLogicOfOverload { return nullSafeEqualFn },
+			},
 		},
 	},
 
@@ -359,6 +374,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(1)
+				}
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
@@ -386,6 +404,12 @@ var supportedOperators = []FuncNew{
 					return greatThanFn
 				},
 			},
+			{
+				// Appended identity keeps older executors from interpreting mixed vectors.
+				overloadId: 1,
+				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:      func() executeLogicOfOverload { return greatThanFn },
+			},
 		},
 	},
 
@@ -397,6 +421,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(1)
+				}
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
@@ -424,6 +451,12 @@ var supportedOperators = []FuncNew{
 					return greatEqualFn
 				},
 			},
+			{
+				// Appended identity keeps older executors from interpreting mixed vectors.
+				overloadId: 1,
+				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:      func() executeLogicOfOverload { return greatEqualFn },
+			},
 		},
 	},
 
@@ -435,6 +468,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(1)
+				}
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
@@ -462,6 +498,12 @@ var supportedOperators = []FuncNew{
 					return lessThanFn
 				},
 			},
+			{
+				// Appended identity keeps older executors from interpreting mixed vectors.
+				overloadId: 1,
+				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:      func() executeLogicOfOverload { return lessThanFn },
+			},
 		},
 	},
 
@@ -473,6 +515,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(1)
+				}
 				if jsonOrderingWithStringNotSupported(inputs) {
 					return newCheckResultWithFailure(failedFunctionParametersWrong)
 				}
@@ -499,6 +544,12 @@ var supportedOperators = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return lessEqualFn
 				},
+			},
+			{
+				// Appended identity keeps older executors from interpreting mixed vectors.
+				overloadId: 1,
+				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:      func() executeLogicOfOverload { return lessEqualFn },
 			},
 		},
 	},
@@ -572,6 +623,9 @@ var supportedOperators = []FuncNew{
 		layout:     COMPARISON_OPERATOR,
 		checkFn: func(overloads []overload, inputs []types.Type) checkResult {
 			if len(inputs) == 2 {
+				if IsJSONNumericComparison(inputs[0].Oid, inputs[1].Oid) {
+					return newCheckResultWithSuccess(1)
+				}
 				if isJSONBooleanComparison(inputs[0], inputs[1]) {
 					return newCheckResultWithSuccess(0)
 				}
@@ -598,6 +652,12 @@ var supportedOperators = []FuncNew{
 				newOp: func() executeLogicOfOverload {
 					return notEqualFn
 				},
+			},
+			{
+				// Appended identity keeps older executors from interpreting mixed vectors.
+				overloadId: 1,
+				retType:    func(parameters []types.Type) types.Type { return types.T_bool.ToType() },
+				newOp:      func() executeLogicOfOverload { return notEqualFn },
 			},
 		},
 	},
@@ -2309,35 +2369,8 @@ var supportedOperators = []FuncNew{
 					}
 					return newCheckResultWithCast(DecimalIntegerDivUnsignedOverload, targets)
 				}
-				if t1, t2, ok := integerDivBitTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				// Keep same-domain operands unchanged where possible.
-				if integerDivOperatorSupports(inputs[0], inputs[1]) {
-					return newCheckResultWithSuccess(0)
-				}
-				if t1, t2, ok := integerDivUnsignedMixedTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				if t1, t2, ok := integerDivExactTypes(inputs[0], inputs[1]); ok {
-					if inputs[0].Eq(t1) && inputs[1].Eq(t2) {
-						return newCheckResultWithSuccess(0)
-					}
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
-				// Then check with type casting
-				has, t1, t2 := fixedTypeCastRule2(inputs[0], inputs[1])
-				if has && integerDivOperatorSupports(t1, t2) {
-					return newCheckResultWithCast(0, []types.Type{t1, t2})
-				}
 			}
-			return newCheckResultWithFailure(failedFunctionParametersWrong)
+			return legacyIntegerDivCheck(inputs)
 		},
 
 		Overloads: []overload{

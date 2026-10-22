@@ -168,12 +168,12 @@ atomically removes its MV objects.
 
 ## Compatibility and Git4Data
 
-Migration 4.0.18/offset 5 requires 4.0.17 and common protocol 122. The upstream
+Migration 4.0.18/offset 5 requires 4.0.17 and common protocol 129. The upstream
 4.0.17 MEDIUMINT tenant repair stays intact and runs first. Main retains protocol
-120 for session ownership and 121 for DECIMAL DIV; MV admission uses its own
-protocol 122 so neither older capability implies MV support. Catalog installation
+120–128 for session, numeric, temporal, lock, LOAD, VIEWS and TopK contracts;
+MV admission uses its own protocol 129 so neither older capability implies MV support. Catalog installation
 is transactional and restartable; task executor 17 is registered only after
-catalog and common-protocol readiness. A protocol-121 CN blocks MV migration
+catalog and common-protocol readiness. A protocol-128 CN blocks MV migration
 and task admission. An old binary cannot open the upgraded catalog for downgrade.
 
 Definition format 1 remains readable, but refresh requires recreation with

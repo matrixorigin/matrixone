@@ -31,7 +31,7 @@ func TestMaterializedViewUpgrade(t *testing.T) {
 	require.Equal(t, "4.0.18", Handler.Metadata().Version)
 	require.Equal(t, "4.0.17", Handler.Metadata().MinUpgradeVersion)
 	require.Equal(t, uint32(5), Handler.Metadata().VersionOffset)
-	require.Equal(t, defines.MORPCVersion122, Handler.Metadata().RequiredProtocolVersion)
+	require.Equal(t, defines.MORPCVersion129, Handler.Metadata().RequiredProtocolVersion)
 	for _, scenario := range []string{"ready", "DDL failure", "old CN", "protocol query failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			calls := 0
@@ -46,9 +46,9 @@ func TestMaterializedViewUpgrade(t *testing.T) {
 					if scenario == "protocol query failure" {
 						return executor.Result{}, injected
 					}
-					value := `{"result":"cn-a:122,cn-b:122"}`
+					value := `{"result":"cn-a:129,cn-b:129"}`
 					if scenario == "old CN" {
-						value = `{"result":"cn-a:122,cn-b:121"}`
+						value = `{"result":"cn-a:129,cn-b:128"}`
 					}
 					r := executor.NewMemResult([]types.Type{types.T_varchar.ToType()}, mp)
 					r.NewBatchWithRowCount(1)
@@ -70,7 +70,7 @@ func TestMaterializedViewUpgrade(t *testing.T) {
 			err := Handler.HandleClusterUpgrade(context.Background(), tx)
 			switch scenario {
 			case "old CN":
-				require.ErrorContains(t, err, "requires all CNs to support protocol version 122")
+				require.ErrorContains(t, err, "requires all CNs to support protocol version 129")
 				require.Zero(t, calls, "old CN must block before the first catalog DDL")
 			case "protocol query failure":
 				require.ErrorIs(t, err, injected)

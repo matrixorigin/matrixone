@@ -504,6 +504,7 @@ func (c *Compile) clear() {
 	c.auxiliaryProductScopes = nil
 	c.pn = nil
 	c.fill = nil
+	c.buildPlanFunc = nil
 	c.preparedParamValues = nil
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
@@ -710,12 +711,14 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
-// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
-// he statement
+// isRetryErr accepts transaction retries under RC and snapshot-coverage retries
+// under either isolation level. A coverage retry changes the access path, not
+// the transaction snapshot.
 func (c *Compile) isRetryErr(err error) bool {
-	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-		c.proc.GetTxnOperator().Txn().IsRCIsolation()
+	return moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged) ||
+		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+			c.proc.GetTxnOperator().Txn().IsRCIsolation()
 }
 
 type scopeRunResult struct {
@@ -791,9 +794,6 @@ func (c *Compile) preferPrimaryScopeResult(current, candidate scopeRunResult) sc
 func (c *Compile) canRetry(err error) bool {
 	if c.disableRetry || c.proc.IncrStatementDisabled() {
 		return false
-	}
-	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
-		return true
 	}
 	return c.isRetryErr(err)
 }
@@ -5513,13 +5513,17 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, vectorscan.IndexSearchScanProtocolVersion)
+		requiredVersion, err := c.indexSearchScanProtocolVersion(node.IndexSearchScan)
+		if err != nil {
+			return nil, err
+		}
+		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, requiredVersion)
 		if err != nil {
 			return nil, err
 		}
 		if !supported {
 			return nil, moerr.NewNotSupportedNoCtxf(
-				"index search scan requires MORPC protocol version %d on every CN", vectorscan.IndexSearchScanProtocolVersion)
+				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
 		}
 		// Keep the query's coordinator-first list intact for other scans.
 		// Object owners depend only on the selected identities, not ingress.
@@ -6617,7 +6621,7 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 	if node == nil || left == nil || right == nil ||
 		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
-		left.Stats == nil {
+		left.Stats == nil || isMixedJSONNumericAsof(node) {
 		return false
 	}
 	leftRows := left.Stats.Outcnt
@@ -6675,6 +6679,25 @@ func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	if isMixedJSONNumericAsof(node) {
+		// Gather complete inputs on one coordinator worker before selecting
+		// eligible predecessors. This also handles a single remote scope.
+		node.RuntimeFilterBuildList = nil
+		if node.Stats != nil && node.Stats.HashmapStats != nil {
+			node.Stats.HashmapStats.Shuffle = false
+			node.Stats.HashmapStats.ShuffleColIdx = -1
+		}
+		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, false)
+		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, false)
+		if !c.scopesRunOnCoordinator(probeScopes) {
+			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
+		}
+		if !c.scopesRunOnCoordinator(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
+		return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
+	}
 	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) ||
 		c.joinNeedsLocalWindow(node, probeScopes, buildScopes) {
 		// Keep WINDOW local: it has no remote encoding. The same local
@@ -7078,6 +7101,9 @@ func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 }
 
 func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
+	if isMixedJSONNumericAsof(node) {
+		return true
+	}
 	isEq := plan2.IsEquiJoin2(node.OnList)
 	if isEq && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_LEFT ||
 		node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_SEMI ||
@@ -7535,7 +7561,8 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	name := right.GetTableDef().GetTblFunc().GetName()
-	if name == "mo_view_columns" || name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
+	derivedSubscription := name == "mo_subscription_view_columns" && len(right.TblFuncExprList) == 3
+	if name == "mo_view_columns" || derivedSubscription || name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
 		// Session-bound functions and index writers must use the origin process:
 		// a remote mirror workspace cannot publish writes in its transaction.
 		// Gather inputs here without changing the source scans' placement.
@@ -8976,6 +9003,19 @@ func supportsRemotePadSpaceSemantics(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion40
 }
 
+func supportsRemoteViewDefinitionFunction(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion126
+}
+
 func supportsRemoteParquetWholeFileFanout(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
@@ -9546,10 +9586,20 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 }
 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Build the physical lock pipeline before any Scope.Run, RemoteRun, or
+	// MergeRun can start a source. Waiting until LockOp.Prepare is too late for
+	// coordinator plans: MergeRun may start PreScopes before preparing its root
+	// operator. Keep the runtime guard as defense against malformed remote plans.
+	if err := c.validateNonBlockingLockTargets(node.LockTargets); err != nil {
+		return nil, err
+	}
+
 	if c.disableLock {
 		return ss, nil
 	}
+
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
+	coordinatorLock := false
 	localizeLockPlan := c.loadUniqueIndexPromotion != nil || c.prePipelineLockTableID != 0
 	promotedNewTable := false
 	filterPromotedRows := false
@@ -9561,6 +9611,12 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 		filterPromotedRows = true
 	}
 	for _, canonicalTarget := range node.LockTargets {
+		if canonicalTarget == nil {
+			continue
+		}
+		if canonicalTarget.GetNoWait() || canonicalTarget.GetSkipLocked() {
+			coordinatorLock = true
+		}
 		if filterPromotedRows && c.loadUniqueIndexPromotion.coversRowTarget(canonicalTarget) {
 			continue
 		}
@@ -9618,10 +9674,8 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 
 	currentFirstFlag := c.anal.isFirst
 	// The lock operator below is attached to ss[0] alone, so every input
-	// pipeline must be merged into it first or the others' rows reach the
-	// writer unlocked -- a multi-file LOAD fanout hands a TP-classified plan one
-	// scope per file shard, the same case compileMultiUpdate merges on.
-	if !c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
+	// pipeline must be merged into it first or the others' rows reach it unlocked.
+	if coordinatorLock || !c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1 {
 		rs := c.newMergeScope(ss)
 		ss = []*Scope{rs}
 	}
@@ -9641,6 +9695,47 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	ss[0].doSetRootOperator(lockOpArg)
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+// Dependent query kernels construct LockOps without compileLock. Enforce the
+// same admission contract before either physical compiler can publish sources.
+func (c *Compile) validateNonBlockingLockTargets(targets []*plan.LockTarget) error {
+	for _, target := range targets {
+		if target == nil || (!target.GetNoWait() && !target.GetSkipLocked()) {
+			continue
+		}
+		if c.proc == nil {
+			return moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
+		}
+		txnOp := c.proc.GetTxnOperator()
+		if txnOp == nil || !txnOp.Txn().IsPessimistic() {
+			return moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
+		}
+		if c.disableLock {
+			return moerr.NewNotSupportedNoCtx("NOWAIT and SKIP LOCKED require physical lock admission")
+		}
+		if target.GetLockTable() || target.GetLockTableAtTheEnd() {
+			return moerr.NewNotSupportedNoCtx("NOWAIT and SKIP LOCKED require exact row lock targets")
+		}
+	}
+	return nil
+}
+
+func (c *Compile) validateNonBlockingLockPlan(logicalPlan *plan.Plan) error {
+	if logicalPlan == nil || logicalPlan.GetQuery() == nil {
+		return nil
+	}
+	for _, node := range logicalPlan.GetQuery().GetNodes() {
+		if node == nil {
+			continue
+		}
+		if err := c.validateNonBlockingLockTargets(node.GetLockTargets()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Compile) canPrePipelineLockNewTable(target *plan.LockTarget) bool {

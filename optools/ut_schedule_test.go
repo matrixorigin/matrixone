@@ -94,7 +94,7 @@ func scheduleHarnessWithMockTransform(t *testing.T, script, mock string, transfo
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "ut_link_gate.sh", "active_ut_cases.awk", "active_ut_incremental.py", "summarize_ut_slow_cases.py"} {
+	for _, name := range []string{"run_ut.sh", "utilities.sh", "ut_tools.bash", "ut_process.bash", "ut_link_gate.sh", "active_ut_cases.awk", "active_ut_incremental.py", "summarize_ut_slow_cases.py", "validate_ut_report.py"} {
 		data, err := os.ReadFile(name)
 		if err != nil {
 			t.Fatal(err)
@@ -195,6 +195,7 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 	for _, tc := range []struct {
 		name, want      string
 		embeddedBatches string
+		planParallel    string
 		args            []string
 		accepted        bool
 		validationError string
@@ -224,22 +225,27 @@ func TestMakeUTProcessPoolConfiguration(t *testing.T) {
 		{name: "invalid-single-batch-pool", args: []string{"UT_ISSUES_BATCHES=1", "UT_ISSUES_BATCH_PARALLEL=2"}, want: "1 2 1 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
 		{name: "issues-parallel-overflow", args: []string{"UT_ISSUES_BATCH_PARALLEL=18446744073709551618"}, want: "8 18446744073709551618 1 1", validationError: "UT_ISSUES_BATCH_PARALLEL must be"},
 		{name: "embedded-parallel-overflow", args: []string{"UT_EMBEDDED_PACKAGE_PARALLEL=18446744073709551618"}, want: "8 2 18446744073709551618 0", validationError: "UT_EMBEDDED_PACKAGE_PARALLEL must be"},
+		{name: "explicit-plan-two-worker-opt-in", args: []string{"UT_PARALLEL=8", "PLAN_RACE_PARALLEL=2"}, want: "8 4 4 0", planParallel: "2", accepted: true},
+		{name: "explicit-plan-two-on-small-budget", args: []string{"UT_PARALLEL=7", "PLAN_RACE_PARALLEL=2"}, want: "8 2 2 0", planParallel: "2", accepted: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if tc.embeddedBatches == "" {
 				tc.embeddedBatches = "4"
 			}
-			tc.want += " " + tc.embeddedBatches
+			if tc.planParallel == "" {
+				tc.planParallel = "1"
+			}
+			tc.want += " " + tc.embeddedBatches + " " + tc.planParallel
 			args := append([]string{"--no-print-directory", "-s", "-f", "Makefile", "-f", "-", "print-ut-pool-config", "UNAME_S=linux"}, tc.args...)
 			cmd := exec.CommandContext(t.Context(), "make", args...)
 			cmd.Dir = ".."
-			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\" \"$$UT_PREBUILD_EMBEDDED\" \"$$UT_EMBEDDED_BATCHES\"\n")
+			cmd.Stdin = strings.NewReader(".PHONY: print-ut-pool-config\nprint-ut-pool-config:\n\t@printf '%s %s %s %s %s %s\\n' \"$$UT_ISSUES_BATCHES\" \"$$UT_ISSUES_BATCH_PARALLEL\" \"$$UT_EMBEDDED_PACKAGE_PARALLEL\" \"$$UT_PREBUILD_EMBEDDED\" \"$$UT_EMBEDDED_BATCHES\" \"$$PLAN_RACE_PARALLEL\"\n")
 			// Test Make's defaults, not the enclosing UT's scheduling overrides.
 			// Always model the eight-task CI parent, even in focused local runs.
 			for _, value := range append(os.Environ(), "UT_PARALLEL=8") {
 				key, _, _ := strings.Cut(value, "=")
 				switch key {
-				case "UT_PARALLEL", "UT_EMBEDDED_BATCHES", "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
+				case "UT_PARALLEL", "UT_EMBEDDED_BATCHES", "UT_ISSUES_BATCHES", "UT_ISSUES_BATCH_PARALLEL", "UT_EMBEDDED_PACKAGE_PARALLEL", "UT_PREBUILD_EMBEDDED", "PLAN_RACE_PARALLEL", "MAKEFLAGS", "MFLAGS", "MAKEOVERRIDES", "GIT_DIR", "GIT_WORK_TREE":
 					continue
 				}
 				cmd.Env = append(cmd.Env, value)
@@ -271,7 +277,7 @@ grep -Fq "$EXPECT_VALIDATION_ERROR" "$CASE_DIR/validation-log" || exit 92
 			out, err = scheduleHarness(t, script,
 				"UT_ISSUES_BATCHES="+values[0], "UT_ISSUES_BATCH_PARALLEL="+values[1],
 				"UT_EMBEDDED_BATCHES="+values[4], "UT_EMBEDDED_PACKAGE_PARALLEL="+values[2], "UT_PREBUILD_EMBEDDED="+values[3], "EXPECT_ACCEPTED="+strconv.FormatBool(tc.accepted),
-				"EXPECT_VALIDATION_ERROR="+tc.validationError)
+				"PLAN_RACE_PARALLEL="+values[5], "EXPECT_VALIDATION_ERROR="+tc.validationError)
 			if err != nil {
 				t.Fatalf("runner config: %v\n%s", err, out)
 			}
@@ -998,7 +1004,17 @@ func TestHeavyPlanCancellationStopsWritersBeforeMerge(t *testing.T) {
 	script := `source ./run_ut.sh UT
 function logger() { :; }
 trap handle_ut_termination TERM
-trap 'printf "\nCANCEL_REPORT\n"; cat "$UT_REPORT"' EXIT
+function check_cancellation() {
+ status=$?
+ if [[ "$status" == 143 ]]; then
+  [[ -z "$CURRENT_UT_PID$PLAN_RACE_JOB_PID" ]] || status=94
+  if ut_process_group_alive "$writer_pid" || ut_process_group_alive "$plan_pid"; then status=95; fi
+ fi
+ printf '\nCANCEL_REPORT\n'
+ cat "$UT_REPORT"
+ exit "$status"
+}
+trap check_cancellation EXIT
 ENGINE_RACE_REPORT="$CASE_DIR/engine-report"
 printf 'engine\n' > "$ENGINE_RACE_REPORT"
 mkfifo "$CASE_DIR/writer-ready" "$CASE_DIR/writer-wait"
@@ -1009,6 +1025,7 @@ start_ut_command heavy 'heavy writer' bash -c '
  printf "heavy\n" >&9
  IFS= read -r _ <&8
 '
+writer_pid=$CURRENT_UT_PID
 function run_plan_race_shards() {
  trap 'printf "plan-stopped\n" >> "$PLAN_RACE_REPORT"; ut_test_publish_completion; exit 143' TERM
  printf 'plan-start\n' > "$PLAN_RACE_REPORT"
@@ -1016,6 +1033,7 @@ function run_plan_race_shards() {
  IFS= read -r _ <&8
 }
 start_plan_race example/plan
+plan_pid=$PLAN_RACE_JOB_PID
 IFS= read -r -t 10 first <&9 || exit 91
 IFS= read -r -t 10 second <&9 || exit 92
 [[ "$first:$second" == heavy:plan || "$first:$second" == plan:heavy ]] || exit 93
@@ -1655,6 +1673,9 @@ fi
 					"FORCE_LIGHT_LAUNCH_FAILURE="+caseData.forceLaunchFailure,
 					"PREBUILD_VALUE="+caseData.prebuild,
 					"EXPECT_PREBUILD_ACTIVE="+caseData.expectPrebuildActive,
+					// Keep the optional prebuild path deterministic even when the
+					// host's /tmp free-space guard is close to its production threshold.
+					"UT_PREBUILD_MIN_FREE_KB=1",
 					"EMBEDDED_STATUS="+caseData.embeddedStatus)
 			}
 			out, err := runCase(tc)

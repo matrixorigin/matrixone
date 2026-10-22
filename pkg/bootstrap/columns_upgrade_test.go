@@ -104,7 +104,7 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 		require.Equal(t, "4.0.18", final.Version)
 		require.Equal(t, "4.0.17", final.MinUpgradeVersion)
 		require.Equal(t, uint32(5), final.VersionOffset)
-		require.Equal(t, defines.MORPCVersion122, final.RequiredProtocolVersion)
+		require.Equal(t, defines.MORPCVersion129, final.RequiredProtocolVersion)
 
 		// Model a tenant created by an old CN after batch enumeration: the
 		// cluster route has finished, but its persisted account version is old.

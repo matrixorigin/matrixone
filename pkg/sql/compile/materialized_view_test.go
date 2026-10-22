@@ -48,12 +48,12 @@ func TestMaterializedViewExecutionCapability(t *testing.T) {
 	def := &plan.TableDef{TableType: catalog.SystemMaterializedViewRel, TblId: 99}
 	rt := moruntime.ServiceRuntime(proc.GetService())
 	old, present := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
-	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
+	rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
 	t.Cleanup(func() {
 		if present {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, old)
 		} else {
-			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion122)
+			rt.CompareAndDeleteGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
 		}
 	})
 	nodes := []*plan.Node{
@@ -89,14 +89,14 @@ func TestMaterializedViewCompileProtocolAdmission(t *testing.T) {
 		wantErr         bool
 		dependent       bool
 	}{
-		{"old scan protocol", defines.MORPCVersion121, defines.MORPCVersion122, false, false, true, false},
-		{"current scan protocol", defines.MORPCVersion122, defines.MORPCVersion122, false, false, false, false},
-		{"ordinary scan", defines.MORPCVersion121, defines.MORPCVersion121, false, true, false, false},
-		{"old registration protocol", defines.MORPCVersion121, defines.MORPCVersion122, true, false, true, false},
-		{"old registration floor", defines.MORPCVersion122, defines.MORPCVersion121, true, false, true, false},
-		{"old dependent scan protocol", defines.MORPCVersion121, defines.MORPCVersion122, false, false, true, true},
-		{"current dependent scan protocol", defines.MORPCVersion122, defines.MORPCVersion122, false, false, false, true},
-		{"ordinary dependent scan", defines.MORPCVersion121, defines.MORPCVersion121, false, true, false, true},
+		{"old scan protocol", defines.MORPCVersion128, defines.MORPCVersion129, false, false, true, false},
+		{"current scan protocol", defines.MORPCVersion129, defines.MORPCVersion129, false, false, false, false},
+		{"ordinary scan", defines.MORPCVersion128, defines.MORPCVersion128, false, true, false, false},
+		{"old registration protocol", defines.MORPCVersion128, defines.MORPCVersion129, true, false, true, false},
+		{"old registration floor", defines.MORPCVersion129, defines.MORPCVersion128, true, false, true, false},
+		{"old dependent scan protocol", defines.MORPCVersion128, defines.MORPCVersion129, false, false, true, true},
+		{"current dependent scan protocol", defines.MORPCVersion129, defines.MORPCVersion129, false, false, false, true},
+		{"ordinary dependent scan", defines.MORPCVersion128, defines.MORPCVersion128, false, true, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			proc := testutil.NewProcess(t)

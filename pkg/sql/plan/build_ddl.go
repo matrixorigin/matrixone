@@ -229,6 +229,7 @@ func validateViewDefinitionPlugins(ctx CompilerContext, query *plan.Query) error
 // viewColumnInference is the common output of View authoring and description.
 // It owns its columns; definition publication is deliberately a separate step.
 type viewColumnInference struct {
+	headings            []string
 	columns             []*plan.ColDef
 	provenance          []OutputColumnProvenance
 	dependencies        []ViewDependency
@@ -387,6 +388,7 @@ func inferViewColumns(
 	}
 	return &viewColumnInference{
 		columns:             cols,
+		headings:            query.Headings,
 		provenance:          outputColumnProvenance,
 		dependencies:        dependencyCapture.dependencies(),
 		requiredProtocol:    viewRequiredProtocol,
@@ -400,6 +402,7 @@ func genViewTableDef(
 	colNames tree.IdentifierList,
 	viewDatabase string,
 	viewName string,
+	checkOption string,
 	forAuthoring bool,
 ) (*plan.TableDef, error) {
 	inferred, err := inferViewColumns(ctx, stmt, colNames, viewDatabase, viewName, forAuthoring)
@@ -422,10 +425,27 @@ func genViewTableDef(
 		}
 	}
 	persistedCreateSQL := rootSQL
-	if stableViewSQL, rewritten := stableViewSQLWithExpandedStars(ctx, stmt, viewSql, inferred.expandedSelectLists); rewritten {
-		viewSql = stableViewSQL
-		persistedCreateSQL = stableViewSQL
+	definitionStmt := cloneTreeSelect(stmt)
+	if stableViewSQL, stableSelect, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, inferred.expandedSelectLists); stableSelect != nil {
+		// Keep the bound, expanded SELECT for the parser-derived definition even
+		// when rootSQL contains additional statements and cannot be rewritten as a
+		// single CREATE VIEW statement. The legacy Stmt field still retains the
+		// original request for compatibility and first-statement parsing.
+		definitionStmt = stableSelect
+		if rewritten {
+			viewSql = stableViewSQL
+			persistedCreateSQL = stableViewSQL
+		}
+	} else if stableSelect, ok := viewSelectWithExpandedStars(stmt, inferred.expandedSelectLists); ok {
+		// The capture contains resolved names for every bound query block, even
+		// without stars. Nested projections need these names before qualified
+		// identifiers or canonical literals are formatted for metadata replay.
+		definitionStmt = stableSelect
 	}
+	if len(colNames) == 0 {
+		definitionStmt = viewSelectWithStableOutputHeadings(definitionStmt, inferred.headings)
+	}
+	definitionStmt = tree.WithViewColumnNames(definitionStmt, colNames)
 
 	lowerCaseTableNames := ctx.GetLowerCaseTableNames()
 	var persistedRequiredProtocol *int64
@@ -433,7 +453,12 @@ func genViewTableDef(
 		persistedRequiredProtocol = &inferred.requiredProtocol
 	}
 	viewData, err := json.Marshal(ViewData{
-		Stmt:                    viewSql,
+		Stmt: viewSql,
+		// Definition must be generated from the same star-expanded SELECT that is
+		// persisted in Stmt. Formatting the original AST would let metadata replay
+		// a later schema's columns even though the View itself remains frozen.
+		Definition:              tree.StringWithOpts(definitionStmt, dialect.MYSQL, tree.WithViewDefinition()),
+		CheckOption:             strings.ToUpper(checkOption),
 		DefaultDatabase:         ctx.DefaultDatabase(),
 		SQLMode:                 parserSQLModeFromContext(ctx),
 		SecurityType:            getViewSecurityTypeFromContext(ctx),
@@ -474,16 +499,26 @@ func stableViewSQLWithExpandedStars(
 	viewSql string,
 	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
 ) (string, bool) {
+	stableSQL, _, rewritten := stableViewSQLWithExpandedStarsAndSelect(ctx, stmt, viewSql, expandedSelectLists)
+	return stableSQL, rewritten
+}
+
+func stableViewSQLWithExpandedStarsAndSelect(
+	ctx CompilerContext,
+	stmt *tree.Select,
+	viewSql string,
+	expandedSelectLists map[*tree.SelectClause]tree.SelectExprs,
+) (string, *tree.Select, bool) {
 	// SAMPLE(*) expands to a sampling operator during binding. The rewriter
 	// leaves that query block intact while still stabilizing ordinary stars in
 	// unrelated query blocks.
 	if viewSql == "" || len(expandedSelectLists) == 0 || !viewSelectHasStar(stmt) {
-		return viewSql, false
+		return viewSql, nil, false
 	}
 
 	stableSelect, ok := viewSelectWithExpandedStars(stmt, expandedSelectLists)
 	if !ok {
-		return viewSql, false
+		return viewSql, nil, false
 	}
 
 	parserSQLMode := ""
@@ -492,7 +527,7 @@ func stableViewSQLWithExpandedStars(
 	}
 	stmts, err := mysql.ParseWithSQLMode(ctx.GetContext(), viewSql, ctx.GetLowerCaseTableNames(), parserSQLMode)
 	if err != nil {
-		return viewSql, false
+		return viewSql, stableSelect, false
 	}
 	defer func() {
 		for _, statement := range stmts {
@@ -500,23 +535,23 @@ func stableViewSQLWithExpandedStars(
 		}
 	}()
 	if len(stmts) != 1 {
-		return viewSql, false
+		return viewSql, stableSelect, false
 	}
 
 	switch viewStmt := stmts[0].(type) {
 	case *tree.CreateView:
 		stableStmt := *viewStmt
 		stableStmt.AsSource = stableSelect
-		return formatStableViewSQL(&stableStmt), true
+		return formatStableViewSQL(&stableStmt), stableSelect, true
 	case *tree.AlterView:
 		stableStmt := &tree.CreateView{
 			Name:     viewStmt.Name,
 			ColNames: viewStmt.ColNames,
 			AsSource: stableSelect,
 		}
-		return formatStableViewSQL(stableStmt), true
+		return formatStableViewSQL(stableStmt), stableSelect, true
 	default:
-		return viewSql, false
+		return viewSql, nil, false
 	}
 }
 
@@ -1021,6 +1056,72 @@ func viewSelectExprsWithExpandedStars(
 	return stableExprs, rewritten
 }
 
+// viewSelectWithStableOutputHeadings keeps the public names assigned during
+// CREATE VIEW stable after binding has qualified identifiers. A bare column
+// already derives the same heading from its final identifier, while a
+// compound expression such as `a + 1` would otherwise replay as `t.a + 1`.
+// Aliases are added only when the expression's actual mode-independent
+// persisted rendering differs from the resolved heading, preserving the
+// existing SQL shape for stable column and literal projections.
+func viewSelectWithStableOutputHeadings(stmt *tree.Select, headings []string) *tree.Select {
+	if stmt == nil || len(headings) == 0 {
+		return stmt
+	}
+	clause := viewTopLevelSelectClause(stmt.Select)
+	if clause == nil || len(clause.Exprs) != len(headings) {
+		return stmt
+	}
+	clause.Exprs = viewSelectExprsWithStableOutputHeadings(clause.Exprs, headings)
+	return stmt
+}
+
+func viewTopLevelSelectClause(stmt tree.SelectStatement) *tree.SelectClause {
+	switch selectStmt := stmt.(type) {
+	case *tree.SelectClause:
+		return selectStmt
+	case *tree.Select:
+		return viewTopLevelSelectClause(selectStmt.Select)
+	case *tree.ParenSelect:
+		if selectStmt.Select == nil {
+			return nil
+		}
+		return viewTopLevelSelectClause(selectStmt.Select)
+	case *tree.UnionClause:
+		return viewTopLevelSelectClause(selectStmt.Left)
+	default:
+		return nil
+	}
+}
+
+func viewSelectExprsWithStableOutputHeadings(
+	exprs tree.SelectExprs,
+	headings []string,
+) tree.SelectExprs {
+	stableExprs := cloneTreeSelectExprs(exprs)
+	for i := range stableExprs {
+		if stableExprs[i].As != nil && !stableExprs[i].As.Empty() {
+			continue
+		}
+		if i >= len(headings) || !viewExprNeedsHeadingAlias(stableExprs[i].Expr, headings[i]) {
+			continue
+		}
+		stableExprs[i].As = tree.NewCStr(headings[i], 1)
+	}
+	return stableExprs
+}
+
+func viewExprNeedsHeadingAlias(expr tree.Expr, heading string) bool {
+	if heading == "" {
+		return false
+	}
+	if _, ok := unwrapParenExpr(expr).(*tree.UnresolvedName); ok {
+		return false
+	}
+	return tree.StringWithOpts(expr, dialect.MYSQL,
+		tree.WithSingleQuoteString(), tree.WithQuoteIdentifier(),
+		tree.WithModeIndependentStringLiterals()) != heading
+}
+
 func viewSelectExprsWithExpandedStableHeadings(
 	originalExprs tree.SelectExprs,
 	expandedExprs tree.SelectExprs,
@@ -1036,6 +1137,13 @@ func viewSelectExprsWithExpandedStableHeadings(
 		}
 		if i >= len(originalExprs) {
 			continue
+		}
+		// Capture records every resolved heading, but a stable expression such
+		// as a bare column or integer does not need a synthetic alias. Retain
+		// explicit aliases and only publish captured names that formatting needs.
+		if (originalExprs[i].As == nil || originalExprs[i].As.Empty()) &&
+			stableExprs[i].As != nil && !viewExprNeedsHeadingAlias(stableExprs[i].Expr, stableExprs[i].As.Origin()) {
+			stableExprs[i].As = nil
 		}
 		if rewriteClonedExprSubqueriesWithExpandedStars(
 			reflect.ValueOf(originalExprs[i].Expr),
@@ -1525,17 +1633,24 @@ func genAsSelectCols(
 	stmt *tree.Select,
 	isPrepareStmt bool,
 	explicitTargetColumns map[string]struct{},
-) ([]*ColDef, *Query, error) {
+) ([]*ColDef, *Query, int64, error) {
 	var err error
 	var rootId int32
 	builder := NewQueryBuilder(plan.Query_SELECT, ctx, isPrepareStmt, false)
 	bindCtx := NewBindContext(builder, nil)
+	if IsSnapshotValid(ctx.GetSnapshot()) {
+		bindCtx.snapshot = ctx.GetSnapshot()
+	}
+	var executionProtocol int64
+	if !isPrepareStmt {
+		bindCtx.ctasExecutionProtocolRequirement = &executionProtocol
+	}
 
 	if s, ok := stmt.Select.(*tree.ParenSelect); ok {
 		stmt = s.Select
 	}
 	if rootId, err = builder.bindSelect(stmt, bindCtx, true); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	outputColumnProvenance := make([]OutputColumnProvenance, len(bindCtx.headings))
 	for i := range outputColumnProvenance {
@@ -1546,10 +1661,10 @@ func genAsSelectCols(
 	// subqueries can synthesize NULLs even when their source columns are NOT NULL.
 	query, err := builder.createQuery()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	if err = ValidateUnresolvedIndexHints(ctx.GetContext(), query); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
 	rootNode := query.Nodes[query.Steps[query.MainOutputStep()]]
 
@@ -1587,7 +1702,7 @@ func genAsSelectCols(
 						defaultDef, err = buildCTASDefaultFromOrigin(
 							ctx, typ, nullAbility, defaultDef.OriginString)
 						if err != nil {
-							return nil, nil, err
+							return nil, nil, 0, err
 						}
 					}
 				}
@@ -1600,7 +1715,7 @@ func genAsSelectCols(
 		if provenance.CTASDefaultPolicy == CTASDefaultUseTypeDefault {
 			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
@@ -1612,12 +1727,12 @@ func genAsSelectCols(
 		if inheritedAutoIncr && defaultDef.Expr == nil && defaultDef.OriginString == "" {
 			defaultDef, err = buildCTASDefaultForView(ctx, typ, nullAbility)
 			if err != nil {
-				return nil, nil, err
+				return nil, nil, 0, err
 			}
 		}
 
 		if err := validateIdentifier(ctx.GetContext(), bindCtx.headings[i]); err != nil {
-			return nil, nil, err
+			return nil, nil, 0, err
 		}
 		cols[i] = &plan.ColDef{
 			Name: normalizeCTASColumnName(
@@ -1634,9 +1749,18 @@ func genAsSelectCols(
 	if err := remapCTASSourceDefaultsToOutput(
 		ctx.GetContext(), cols, outputColumnProvenance, explicitTargetColumns,
 	); err != nil {
-		return nil, nil, err
+		return nil, nil, 0, err
 	}
-	return cols, query, nil
+	if !isPrepareStmt && executionProtocol == 0 {
+		features, featureErr := plan.RequiredRemoteExpressionFeatures(query)
+		if featureErr != nil {
+			return nil, nil, 0, featureErr
+		}
+		if features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts {
+			executionProtocol = defines.MORPCVersion122
+		}
+	}
+	return cols, query, executionProtocol, nil
 }
 
 // remapCTASSourceDefaultsToOutput converts inherited source-table column
@@ -2053,7 +2177,7 @@ func buildCreateView(stmt *tree.CreateView, ctx CompilerContext) (*Plan, error) 
 	}
 
 	tableDef, err := genViewTableDef(
-		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), true)
+		ctx, stmt.AsSource, stmt.ColNames, createView.Database, string(viewName), stmt.CheckOption, true)
 	if err != nil {
 		return nil, err
 	}
@@ -2695,6 +2819,14 @@ func buildCreateTable(
 		}
 		tableDef.IsTemporary = stmt.Temporary
 
+		// MySQL regenerates CHECK constraint names for CREATE TABLE LIKE; copied
+		// names would collide in (CONSTRAINT_SCHEMA, CONSTRAINT_NAME) and let
+		// metadata joins attribute the source table's expression to the target.
+		//
+		if !preserveCheckNamesForRestore(ctx, cloneStmt) {
+			renameCheckConstraintsForClone(tableDef)
+		}
+
 		// CHECK expressions are stored in source-session SQL syntax. Exclude them
 		// from the temporary SQL skeleton because the rewrite parser uses the
 		// current/default SQL mode, then restore the structured metadata below.
@@ -2742,7 +2874,11 @@ func buildCreateTable(
 			if err := preserveIndexSessionVars(p, tableDef); err != nil {
 				return nil, err
 			}
-			preserveChecksForCreateLike(p, tableDef)
+			// The skeleton contains the final names: ordinary LIKE/CLONE has
+			// regenerated names, while restore retains the source identities.
+			// Reattaching the pre-rewrite tableDef here would undo that choice
+			// for data-branch clones and recreate schema-wide name collisions.
+			preserveChecksForCreateLike(p, likeSkeletonDef)
 			return p, nil
 		}
 
@@ -2796,7 +2932,7 @@ func buildCreateTable(
 				explicitTargetColumns[strings.ToLower(colDef.Name.ColName())] = struct{}{}
 			}
 		}
-		if asSelectCols, asSelectQuery, err = genAsSelectCols(
+		if asSelectCols, asSelectQuery, createTable.CtasExecutionProtocolVersion, err = genAsSelectCols(
 			ctx, stmt.AsSource, isPrepareStmt, explicitTargetColumns,
 		); err != nil {
 			return nil, err
@@ -4133,7 +4269,15 @@ func buildTableDefs(stmt *tree.CreateTable, ctx CompilerContext, createTable *pl
 				)
 			}
 		}
-		if err := appendCheckDef(ctx, createTable.TableDef, check.name, check.expr, columnPos); err != nil {
+		checkName := check.name
+		if checkName == "" {
+			// Unnamed CHECKs are named <table>_chk_<n>, unique to the owning
+			// table.  Prefixing with the table name keeps names unique within
+			// the schema, so information_schema metadata joins cannot associate
+			// one table's expression with another table.
+			checkName = nextUnnamedCheckConstraintName(createTable.TableDef)
+		}
+		if err := appendCheckDef(ctx, createTable.TableDef, checkName, check.expr, columnPos); err != nil {
 			return err
 		}
 	}
@@ -4485,6 +4629,53 @@ func ctasNeedsExplicitSourceProjection(cols, sourceCols []*ColDef) bool {
 	return false
 }
 
+// nextUnnamedCheckConstraintName names an unnamed CHECK the way MySQL does:
+// <table>_chk_<ordinal> counting this table's CHECK definitions from one.
+func nextUnnamedCheckConstraintName(tableDef *TableDef) string {
+	return fmt.Sprintf("%s_chk_%d", tableDef.Name, len(tableDef.Checks)+1)
+}
+
+// Ordinary data-branch clones also run through ExecRestore, which sets both
+// statement and process restore markers. The outer operation's clone level is
+// authoritative: only a genuine restore should keep captured CHECK identities.
+// Retain the marker fallback for callers without an outer clone context.
+func preserveCheckNamesForRestore(ctx CompilerContext, cloneStmt *tree.CloneTable) bool {
+	marked := cloneStmt != nil && cloneStmt.IsRestore
+	if proc := ctx.GetProcess(); proc != nil && proc.GetSessionInfo() != nil {
+		marked = marked || proc.GetSessionInfo().IsRestore
+	}
+	return IsCheckConstraintRestoreReplay(ctx.GetContext(), marked)
+}
+
+// IsCheckConstraintRestoreReplay shares the restore identity decision with
+// execution. Ordinary data-branch clones also carry restore session markers;
+// the outer clone level distinguishes a new owner from historical replay.
+func IsCheckConstraintRestoreReplay(ctx context.Context, marked bool) bool {
+	switch ctx.Value(tree.CloneLevelCtxKey{}) {
+	case tree.NormalCloneLevelTable, tree.NormalCloneLevelDatabase,
+		tree.NormalCloneLevelAccount, tree.NormalCloneLevelCluster:
+		return false
+	case tree.RestoreCloneLevelTable, tree.RestoreCloneLevelDatabase,
+		tree.RestoreCloneLevelAccount, tree.RestoreCloneLevelCluster:
+		return true
+	}
+	return marked
+}
+
+// renameCheckConstraintsForClone regenerates CHECK names for a table created
+// from an existing table definition (CREATE TABLE LIKE): every CHECK from the
+// source receives a fresh <target>_chk_<ordinal> name in definition order, so
+// names stay unique per schema even when the source named its CHECKs
+// explicitly.
+func renameCheckConstraintsForClone(tableDef *plan.TableDef) {
+	for i, check := range tableDef.Checks {
+		if check == nil {
+			continue
+		}
+		check.Name = fmt.Sprintf("%s_chk_%d", tableDef.Name, i+1)
+	}
+}
+
 func appendCheckDef(
 	ctx CompilerContext,
 	tableDef *TableDef,
@@ -4571,6 +4762,9 @@ func appendCheckDef(
 	}
 	if name == "" {
 		name = fmt.Sprintf("__mo_chk_%d", len(tableDef.Checks)+1)
+	}
+	if err := validateIdentifier(ctx.GetContext(), name); err != nil {
+		return err
 	}
 	for _, check := range tableDef.Checks {
 		if check.Name == name {
@@ -5644,22 +5838,19 @@ func CreateIndexDef(ctx planplugin.CompilerContext, indexInfo *tree.Index,
 		}
 		indexDef.IndexAlgoParams = params
 	} else {
-		// default indexInfo.IndexOption values
 		indexDef.Comment = ""
 		indexDef.IndexAlgoParams = ""
-		if p, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
-			// Vector-index algorithms supply their default params via the
-			// plugin (DefaultOptions). Non-vector algos miss the registry
-			// and leave the empty defaults set above.
-			if defaults := p.Catalog().DefaultOptions(); len(defaults) > 0 {
-				params, err := catalog.IndexParamsMapToJsonString(defaults)
-				if err != nil {
-					return nil, err
-				}
-				indexDef.IndexAlgoParams = params
+		if _, ok := indexplugin.Get(indexInfo.KeyType.ToString()); ok {
+			// An index without options takes the plugin's ParamsFromTree of an
+			// empty option list, as CREATE INDEX does.
+			noOptions := *indexInfo
+			noOptions.IndexOption = &tree.IndexOption{}
+			params, err := buildIndexAlgoParams(&noOptions)
+			if err != nil {
+				return nil, err
 			}
+			indexDef.IndexAlgoParams = params
 		}
-
 	}
 
 	// Capture the plugin's build-time session vars (BuildSessionVars) into the
@@ -6563,7 +6754,7 @@ func buildAlterView(stmt *tree.AlterView, ctx CompilerContext) (*Plan, error) {
 	defer func() {
 		ctx.SetBuildingAlterView(false, "", "")
 	}()
-	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, true)
+	tableDef, err := genViewTableDef(ctx, stmt.AsSource, stmt.ColNames, alterView.Database, viewName, "NONE", true)
 	if err != nil {
 		return nil, err
 	}

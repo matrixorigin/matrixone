@@ -1692,6 +1692,16 @@ var gSysVarsDefs = map[string]SystemVariable{
 		Type:              InitSystemVariableBoolType("mo_rollback_txn_on_error"),
 		Default:           int8(0),
 	},
+	// CN primary-key validation for ordinary LOAD only. INSERT keeps its
+	// existing checks; TN validation is controlled independently below.
+	"mo_pk_check_by_cn": {
+		Name:              "mo_pk_check_by_cn",
+		Scope:             ScopeSession,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableBoolType("mo_pk_check_by_cn"),
+		Default:           int8(0),
+	},
 	//whether TN does primary key uniqueness check against transaction's workspace or not.
 	"mo_pk_check_by_dn": {
 		Name:              "mo_pk_check_by_dn",
@@ -4104,6 +4114,30 @@ var gSysVarsDefs = map[string]SystemVariable{
 		SetVarHintApplies: false,
 		Type:              InitSystemVariableIntType("probe_limit", 1, 80000, false),
 		Default:           int64(5),
+	},
+	"vector_itopk": {
+		Name:              "vector_itopk",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("vector_itopk", 0, math.MaxInt32, false),
+		Default:           int64(0),
+	},
+	"vector_max_itopk": {
+		Name:              "vector_max_itopk",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("vector_max_itopk", 0, math.MaxInt32, false),
+		Default:           int64(0),
+	},
+	"vector_max_nprobe": {
+		Name:              "vector_max_nprobe",
+		Scope:             ScopeBoth,
+		Dynamic:           true,
+		SetVarHintApplies: false,
+		Type:              InitSystemVariableIntType("vector_max_nprobe", 0, math.MaxInt32, false),
+		Default:           int64(0),
 	},
 	"kmeans_train_percent": {
 		Name:              "kmeans_train_percent",

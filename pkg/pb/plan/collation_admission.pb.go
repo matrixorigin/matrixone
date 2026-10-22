@@ -1244,6 +1244,11 @@ func (v *legacyCollationVisitor) walkNode(p *Node) error {
 			return err
 		}
 	}
+	for _, item0 := range p.DedupKeyExprs {
+		if err := v.walkExpr(item0); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 func (v *legacyCollationVisitor) walkOnUpdate(p *OnUpdate) error {
@@ -1372,6 +1377,11 @@ func (v *legacyCollationVisitor) walkPreInsertUkCtx(p *PreInsertUkCtx) error {
 	}
 	for _, item0 := range p.KeyTypes {
 		if err := v.walkType(item0); err != nil {
+			return err
+		}
+	}
+	for _, item0 := range p.KeyDiagnosticExprs {
+		if err := v.walkExprList(item0); err != nil {
 			return err
 		}
 	}

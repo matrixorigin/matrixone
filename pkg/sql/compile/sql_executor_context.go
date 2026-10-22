@@ -718,7 +718,8 @@ func (c *compilerContext) ResolveVariable(varName string, isSystemVar bool, isGl
 		(strings.EqualFold(varName, "div_precision_increment") ||
 			strings.EqualFold(varName, "sql_mode") ||
 			strings.EqualFold(varName, "max_dop") ||
-			strings.EqualFold(varName, "foreign_key_checks")) {
+			strings.EqualFold(varName, "foreign_key_checks") ||
+			strings.EqualFold(varName, "mo_pk_check_by_cn")) {
 		if resolve := c.proc.GetResolveVariableFunc(); resolve != nil {
 			return resolve(varName, isSystemVar, isGlobalVar)
 		}

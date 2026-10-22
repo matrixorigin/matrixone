@@ -282,6 +282,12 @@ type OperatorBase struct {
 	Children   []Operator
 }
 
+// ExecProjection returns the input unchanged for operators without projection work.
+// Operators with projection work override this default.
+func (o *OperatorBase) ExecProjection(_ *process.Process, input *batch.Batch) (*batch.Batch, error) {
+	return input, nil
+}
+
 func (o *OperatorBase) SetInfo(info *OperatorInfo) {
 	o.OperatorInfo = *info
 }
