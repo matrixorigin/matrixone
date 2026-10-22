@@ -42,7 +42,7 @@ services:
     depends_on:
       - tn
     ports:
-      - "6002"
+      - "6001"
       - "12345:12345"
     environment:
       - AWS_ACCESS_KEY_ID=minio
@@ -61,7 +61,7 @@ services:
     depends_on:
       - tn
     ports:
-      - "6002"
+      - "6001"
       - "22345:12345"
     profiles:
       - launch

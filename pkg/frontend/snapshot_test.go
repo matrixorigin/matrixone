@@ -38,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/mv"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	sqlmongodb "github.com/matrixorigin/matrixone/pkg/sql/mongodb"
@@ -2121,6 +2122,7 @@ func Test_dropExistsAccount_InRestoreTransaction(t *testing.T) {
 		bh.sql2result["rollback;"] = nil
 
 		// Setup SQL results for doDropAccount (called by dropExistsAccount)
+		bh.sql2result[mv.CatalogReadinessSQL] = newMrsForCheckTenant([][]interface{}{{int64(0)}})
 		sql, _ := getSqlForCheckTenant(ctx, "test_acc")
 		mrs := newMrsForGetAllAccounts([][]interface{}{
 			{uint64(1), "test_acc", "open", uint64(1), nil},

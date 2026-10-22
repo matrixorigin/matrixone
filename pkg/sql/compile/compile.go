@@ -1404,6 +1404,9 @@ func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
 	c.execType = vectorQueryExecType(sequenceExecType(
 		plan2.GetExecType(c.pn.GetQuery(), c.getHaveDDL(), c.isPrepare), qry), qry)
 
+	if defines.MaterializedViewWriteActive(c.proc.Ctx) {
+		c.execType = plan2.ExecTypeAP_ONECN
+	}
 	c.cnList, err = c.scheduleQueryWorkers()
 	if err != nil {
 		return nil, err
@@ -2415,7 +2418,7 @@ func (c *Compile) canUseLiteralLimitZeroFastPath(node *plan.Node) bool {
 		return false
 	}
 	cval, ok := cExpr.Lit.Value.(*plan.Literal_U64Val)
-	return ok && cval.U64Val == 0
+	return ok && cval.U64Val == 0 && !c.containsMaterializedViewScan(node)
 }
 
 func (c *Compile) ownsFoundRows(node *plan.Node) bool {
@@ -5437,6 +5440,9 @@ func (c *Compile) compileValueScan(node *plan.Node) ([]*Scope, error) {
 }
 
 func (c *Compile) compileTableScan(node *plan.Node) ([]*Scope, error) {
+	if err := c.validateMaterializedViewScan(node.TableDef); err != nil {
+		return nil, err
+	}
 	stats := statistic.StatsInfoFromContext(c.proc.GetTopContext())
 	compileStart := time.Now()
 	defer func() {
@@ -11562,7 +11568,7 @@ func (c *Compile) validateDMLTarget(node *plan.Node) error {
 	if blocked {
 		return moerr.NewCCPRReadOnly(c.proc.Ctx)
 	}
-	return nil
+	return c.validateMaterializedViewDML(node)
 }
 
 // shouldBlockCCPRReadOnly checks if the CCPR read-only check should block the operation.

@@ -94,8 +94,13 @@ func TestViewDescriptionTwoCN(t *testing.T) {
 		require.False(t, rows.Next())
 		require.NoError(t, rows.Err())
 	}
+	// Push mode permits a peer to start at its older applied snapshot. A
+	// cross-CN freshness assertion needs an explicit commit-frontier handoff;
+	// this SELECT does not advance the prepared session's DDL generation.
+	syncCommits := func() { exec(first, "select mo_ctl('cn','synccommit','')") }
 	check := func(width int, value string) {
 		t.Helper()
+		syncCommits()
 		for _, db := range []*sql.DB{first, second} {
 			for _, name := range []string{"v", "nested"} {
 				var gotWidth int
@@ -149,7 +154,13 @@ func TestViewDescriptionTwoCN(t *testing.T) {
 		checkPrepared("varchar(90)")
 		sourceID = identity("src")
 		exec(first, "restore table view_description_two_cn.src {snapshot='view_description_restore'}")
-		require.NotEqual(t, sourceID, identity("src"), "restore must exercise physical replacement")
+		restoredID := identity("src")
+		require.NotEqual(t, sourceID, restoredID, "restore must exercise physical replacement")
+		syncCommits()
+		var peerSourceID uint64
+		require.NoError(t, second.QueryRowContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase='view_description_two_cn' and relname='src'").Scan(&peerSourceID))
+		require.Equal(t, restoredID, peerSourceID, "peer must see restored source before prepared metadata validation")
 		require.Equal(t, viewID, identity("v"), "source restore must not recreate the dependent View")
 		checkPrepared("varchar(60)")
 		check(60, "saved")

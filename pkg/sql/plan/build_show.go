@@ -24,10 +24,12 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/common/sqlquote"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/frontend/databranchutils"
+	"github.com/matrixorigin/matrixone/pkg/mv"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
@@ -158,6 +160,26 @@ func buildShowCreateTable(stmt *tree.ShowCreateTable, ctx CompilerContext) (*Pla
 	}
 	if err = ValidateSnapshotScope(snapshot, dbName, tblName, tableDef.DbId, SnapshotTableID(tableDef)); err != nil {
 		return nil, err
+	}
+	if tableDef.TableType == catalog.SystemMaterializedViewRel {
+		if IsSnapshotValid(snapshot) {
+			return nil, moerr.NewNotSupported(ctx.GetContext(), "historical materialized view export")
+		}
+		account, err := ctx.GetAccountId()
+		if err != nil {
+			return nil, err
+		}
+		value, ok := moruntime.ServiceRuntime(ctx.GetProcess().GetService()).GetGlobalVariables(mv.RuntimeKey)
+		service, valid := value.(*mv.Service)
+		if !ok || !valid {
+			return nil, moerr.NewInternalError(ctx.GetContext(), "materialized view service is unavailable")
+		}
+		state, err := service.State(ctx.GetContext(), mv.Key{Account: account, ID: tableDef.TblId})
+		if err != nil {
+			return nil, err
+		}
+		sql := fmt.Sprintf("SELECT %s AS `Table`, %s AS `Create Table`", formatStrLit(tblName), formatStrLit(state.CreateSQL()))
+		return returnByRewriteSQL(ctx, sql, plan.DataDefinition_SHOW_CREATETABLE)
 	}
 	if tableDef.TableType == catalog.SystemViewRel {
 		var newStmt *tree.ShowCreateView
@@ -368,7 +390,7 @@ func buildShowTables(stmt *tree.ShowTables, ctx CompilerContext) (*Plan, error) 
 
 	var tableType string
 	if stmt.Full {
-		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
+		tableType = fmt.Sprintf(", case relkind when 'v' then 'VIEW' when 'm' then 'MATERIALIZED VIEW' when '%s' then 'CLUSTER TABLE' else 'BASE TABLE' end as Table_type", catalog.SystemClusterRel)
 	}
 
 	subName := dbName

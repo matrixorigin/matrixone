@@ -37,7 +37,8 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 		current := versions.Version{Version: "4.0.16", VersionOffset: 1, State: versions.StateReady}
 		definition := sysview.InformationSchemaColumnsV109DDL()
 		tenantVersion := "4.0.16"
-		var queuedVersion, queuedRoute bool
+		var queuedVersion bool
+		var queuedRoutes []string
 		var writes []string
 		failCreate := false
 		injected := errors.New("injected COLUMNS create failure")
@@ -55,12 +56,11 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 			case strings.HasPrefix(sql, "select version from mo_version"):
 				return newBootstrapStringResult("4.0.16"), nil
 			case strings.HasPrefix(sql, "insert into mo_version"):
-				require.Contains(t, sql, "'4.0.17', 1, 0")
+				require.Contains(t, sql, "'4.0.18', 5, 0")
 				queuedVersion = true
 			case strings.HasPrefix(sql, "insert into mo_upgrade"):
-				require.Contains(t, sql, "'4.0.16'")
-				require.Contains(t, sql, "'4.0.17'")
-				queuedRoute = true
+				require.Contains(t, sql, "'4.0.18'")
+				queuedRoutes = append(queuedRoutes, sql)
 			case strings.HasPrefix(sql, "select create_version from mo_account"):
 				return newBootstrapStringResult(tenantVersion), nil
 			case strings.HasPrefix(sql, "SELECT tbl.rel_createsql"):
@@ -80,6 +80,11 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 					"tenant completion must follow the successful view refresh")
 				tenantVersion = "4.0.17"
 				return executor.Result{AffectedRows: 1}, nil
+			case sql == "update mo_account set create_version = '4.0.18' where account_id = 7":
+				require.Equal(t, "4.0.17", tenantVersion, "retain the upstream tenant repair hop")
+				require.Equal(t, sysview.InformationSchemaColumnsDDL, definition)
+				tenantVersion = "4.0.18"
+				return executor.Result{AffectedRows: 1}, nil
 			default:
 				return executor.Result{}, fmt.Errorf("unexpected upgrade SQL: %s", sql)
 			}
@@ -91,18 +96,22 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 		final := s.getFinalVersionHandle().Metadata()
 		require.NoError(t, s.doCheckUpgrade(t.Context()))
 		require.True(t, queuedVersion)
-		require.True(t, queuedRoute, "a completed 4.0.16 cluster must queue the forward repair")
-		require.Equal(t, "4.0.17", final.Version)
-		require.Equal(t, "4.0.16", final.MinUpgradeVersion)
-		require.Equal(t, uint32(1), final.VersionOffset)
-		require.Equal(t, defines.MORPCVersion118, final.RequiredProtocolVersion)
+		require.Len(t, queuedRoutes, 2, "retain the tenant repair and later MV catalog hops")
+		require.Contains(t, queuedRoutes[0], "'4.0.16'")
+		require.Contains(t, queuedRoutes[0], "'4.0.17'")
+		require.Contains(t, queuedRoutes[1], "'4.0.17'")
+		require.Contains(t, queuedRoutes[1], "'4.0.18'")
+		require.Equal(t, "4.0.18", final.Version)
+		require.Equal(t, "4.0.17", final.MinUpgradeVersion)
+		require.Equal(t, uint32(5), final.VersionOffset)
+		require.Equal(t, defines.MORPCVersion129, final.RequiredProtocolVersion)
 
 		// Model a tenant created by an old CN after batch enumeration: the
 		// cluster route has finished, but its persisted account version is old.
 		current = final
 		current.State = versions.StateReady
 		failCreate = true
-		fetchTenant := func() (int32, string, error) { return 7, "4.0.17", nil }
+		fetchTenant := func() (int32, string, error) { return 7, "4.0.18", nil }
 		upgraded, err := s.MaybeUpgradeTenant(t.Context(), fetchTenant, nil)
 		require.ErrorIs(t, err, injected)
 		require.False(t, upgraded)
@@ -114,7 +123,7 @@ func TestColumnsUpgradeReachesExistingTenants(t *testing.T) {
 		require.NoError(t, err)
 		require.True(t, upgraded)
 		require.Equal(t, []string{"DROP VIEW IF EXISTS information_schema.COLUMNS;", sysview.InformationSchemaColumnsDDL}, writes)
-		require.Equal(t, "4.0.17", tenantVersion)
+		require.Equal(t, "4.0.18", tenantVersion)
 		require.Equal(t, sysview.InformationSchemaColumnsDDL, definition)
 		writes = nil
 		upgraded, err = s.MaybeUpgradeTenant(t.Context(), fetchTenant, nil)

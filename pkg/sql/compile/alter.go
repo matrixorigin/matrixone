@@ -1414,6 +1414,11 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		}
 	}
 
+	if !isTemp {
+		if err := c.guardMaterializedViewDDL(dbName, tblName, false); err != nil {
+			return err
+		}
+	}
 	if err = validateAlterDataBranchLineageColumnReplacement(qry, lineagePlan); err != nil {
 		return err
 	}
@@ -1669,6 +1674,12 @@ func (s *Scope) alterTableCopy(c *Compile, cleanup *alterAutoIncrementResetClean
 		}
 		if originRel.GetTableDef(c.proc.Ctx).GetVersion() != sourceDefVersion {
 			return c.alterCopyPostPublicationConflict("source definition changed")
+		}
+		// Preparation runs before source-name admission. A materialized view
+		// can be created during that window without changing the source's
+		// schema or data timestamp. Recheck after locks and RC advancement.
+		if err = c.guardMaterializedViewDDL(dbName, tblName, false); err != nil {
+			return err
 		}
 		sourceChanged, sourceChangedErr := c.alterCopySourceChangedSinceCopy(
 			originRel, lineagePlan.cloneTS,

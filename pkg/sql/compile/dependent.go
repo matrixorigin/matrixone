@@ -100,6 +100,9 @@ func (c *Compile) compileDependentSource(node *plan.Node) (dependent.SourceFacto
 			return op, nil
 		}), nil
 	}
+	if err := c.validateMaterializedViewScan(node.TableDef); err != nil {
+		return nil, err
+	}
 	if node.ObjRef != nil {
 		c.appendMetaTables(node.ObjRef)
 	}

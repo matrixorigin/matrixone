@@ -357,6 +357,11 @@ func (insert *Insert) insert_s3(proc *process.Process, analyzer process.Analyzer
 				atomic.AddUint64(&insert.ctr.affectedRows, affectedRows)
 			}
 
+			if insert.InsertCtx.TableDef != nil {
+				if err := defines.ChargeMaterializedViewOutput(proc.Ctx, insert.InsertCtx.TableDef.TblId, input.Batch.Size()); err != nil {
+					return vm.CancelResult, err
+				}
+			}
 			// write to s3.
 			input.Batch.Attrs = append(input.Batch.Attrs[:0], insert.InsertCtx.Attrs...)
 			if err = insert.acquireS3WriteMemory(proc, analyzer, input.Batch.Size()); err != nil {
@@ -555,6 +560,11 @@ func (insert *Insert) insert_table(proc *process.Process, analyzer process.Analy
 	}
 
 	input := insert.input
+	if insert.InsertCtx.TableDef != nil {
+		if err := defines.ChargeMaterializedViewOutput(proc.Ctx, insert.InsertCtx.TableDef.TblId, input.Batch.Size()); err != nil {
+			return vm.CancelResult, err
+		}
+	}
 	affectedRows := uint64(input.Batch.RowCount())
 	insert.ctr.buf.CleanOnlyData()
 	for i := range insert.ctr.buf.Attrs {

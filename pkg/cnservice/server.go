@@ -52,6 +52,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/logutil"
+	"github.com/matrixorigin/matrixone/pkg/mv"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/partitionservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
@@ -1325,6 +1326,7 @@ func (s *service) initInternalSQlExecutor(mp *mpool.MPool) {
 	s.rt.SetGlobalVariables(runtime.InternalSQLExecutor, s.sqlExecutor)
 	cdc.InitTableDetector(s.rt, s.sqlExecutor)
 	cdc.InitCDCWatermarkUpdater(s.rt, frontend.NewInternalExecutor(s.cfg.UUID))
+	s.rt.SetGlobalVariables(mv.RuntimeKey, mv.NewService(s.sqlExecutor))
 	s.initMongoDBRuntime()
 }
 

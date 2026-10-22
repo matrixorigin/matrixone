@@ -478,7 +478,7 @@ func (exec *txnExecutor) Exec(
 
 	receiveAt := time.Now()
 	lower := exec.opts.LowerCaseTableNames()
-	stmts, err := parsers.Parse(exec.ctx, dialect.MYSQL, sql, lower)
+	stmts, err := parsers.ParseWithSQLMode(exec.ctx, dialect.MYSQL, sql, lower, exec.opts.ParserSQLMode())
 	defer func() {
 		for _, stmt := range stmts {
 			stmt.Free()

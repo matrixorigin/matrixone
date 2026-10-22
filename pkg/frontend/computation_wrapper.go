@@ -1447,7 +1447,8 @@ func initExecuteStmtParamWithResolverInSession(
 			change = true
 		}
 	}
-	rebuildEveryExecute := shouldRebuildPreparePlan(false, executionPlan)
+	rebuildEveryExecute := preparedStatementNeedsMetadataRebind(prepareStmt.PrepareStmt) ||
+		shouldRebuildPreparePlan(false, executionPlan)
 	schemaChanged, schemasValidated, err := validateCapturedPrepareSchemas(
 		owner.GetAccountId(), preparePlan.GetSchemas(), resolve, catalogCache,
 		prepareStmt.Ts, validateSubscriptions, rebuildEveryExecute)
@@ -1659,7 +1660,8 @@ func initExecuteStmtParamWithResolverInSession(
 			owner, originSQL, prepareStmt.schedulingSQLMode)
 		if !executionSes.IsBackgroundSession() && !executionIntent.Explicit {
 			if _, ok := preparePlan.Plan.Plan.(*plan.Plan_Query); ok &&
-				shouldCachePrepareCompile(preparePlan.Plan) {
+				shouldCachePrepareCompile(preparePlan.Plan) &&
+				!preparedStatementNeedsMetadataRebind(prepareStmt.PrepareStmt) {
 				// Prepare-time compiles are cached and must not retain a statement-owned trace.
 				// The execution path attaches the current wrapper trace after cache retrieval.
 				comp, err := createCompile(
@@ -2799,6 +2801,9 @@ func shouldCachePrepareCompile(p *plan.Plan) bool {
 	if p == nil {
 		return true
 	}
+	if plan2.PreparedPlanDependsOnMaterializedViewDependencies(p) {
+		return false
+	}
 	if plan2.PreparedPlanHasPercentileParams(p) {
 		// The percentile marker is evaluated while the physical aggregate is
 		// constructed and becomes immutable executor configuration. Reusing that
@@ -2830,6 +2835,13 @@ func (prepareStmt *PrepareStmt) refreshGenerateSeriesParamMetadata(p *plan.Plan)
 	prepareStmt.temporalRuntimeParamPositions = slices.Compact(positions)
 }
 
+// SHOW CREATE TABLE is lowered to a literal SELECT. Its live catalog policy is
+// not represented by those literals or by the source table's schema version.
+func preparedStatementNeedsMetadataRebind(stmt tree.Statement) bool {
+	_, showCreateTable := stmt.(*tree.ShowCreateTable)
+	return showCreateTable
+}
+
 func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 	if schemaChanged || p == nil {
 		return schemaChanged
@@ -2845,6 +2857,7 @@ func shouldRebuildPreparePlan(schemaChanged bool, p *plan.Plan) bool {
 	query := p.GetQuery()
 	return query != nil && (query.GetHasForeignKeyAction() ||
 		query.GetViewMetadataDependsOnUdf() ||
+		plan2.PreparedPlanDependsOnMaterializedViewDependencies(p) ||
 		plan2.PreparedPlanDependsOnSubscriptionMetadata(p) ||
 		plan2.PreparedPlanDependsOnIndexCoverage(p))
 }

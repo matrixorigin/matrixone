@@ -30,6 +30,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/prashantv/gostub"
 	"github.com/stretchr/testify/require"
 
@@ -1117,6 +1118,7 @@ func TestHandleDumpTableRejectsUnsupportedSchemas(t *testing.T) {
 		{name: "external", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemExternalRel}},
 		{name: "source", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemSourceRel}},
 		{name: "view", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemViewRel}},
+		{name: "materialized view", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemMaterializedViewRel}},
 		{name: "sequence", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemSequenceRel}},
 		{name: "transient", def: &plan.TableDef{Name: "orders", TableType: catalog.SystemTransientRel}},
 		{name: "view-sql", def: &plan.TableDef{Name: "orders", ViewSql: &plan.ViewDef{}}},
@@ -1175,7 +1177,7 @@ func TestHandleLoadTableRejectsNonObjectBackedRelations(t *testing.T) {
 				Table: tree.NewTableName("orders", tree.ObjectNamePrefix{}, nil),
 				Path:  t.TempDir(),
 			})
-			require.Error(t, err)
+			require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "schema admission must reject before reading any dump files: %v", err)
 		})
 	}
 }

@@ -1636,6 +1636,9 @@ func reCreateTableWithPitr(
 	pitrName string,
 	ts int64,
 	tblInfo *tableInfo) (err error) {
+	if tblInfo.relKind == catalog.SystemMaterializedViewRel {
+		return moerr.NewNotSupported(ctx, "PITR of materialized views")
+	}
 	if isExternalTable(tblInfo) {
 		return newExternalTableRestoreError(ctx, tblInfo, "pitr")
 	}

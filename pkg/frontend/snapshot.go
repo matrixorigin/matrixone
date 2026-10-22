@@ -112,12 +112,16 @@ var (
 		"mo_indexes":               systemCatalogRestoreSkip,
 		"mo_account":               systemCatalogRestoreSkip,
 
-		catalog.MOVersionTable:       systemCatalogRestoreSkip,
-		catalog.MOUpgradeTable:       systemCatalogRestoreSkip,
-		catalog.MOUpgradeTenantTable: systemCatalogRestoreSkip,
-		catalog.MOAutoIncrTable:      systemCatalogRestoreSkip,
-		catalog.MO_VIEW_DEPENDENCIES: systemCatalogRestoreSkip,
-		catalog.MO_VIEW_REFRESH:      systemCatalogRestoreSkip,
+		catalog.MOVersionTable:        systemCatalogRestoreSkip,
+		catalog.MOUpgradeTable:        systemCatalogRestoreSkip,
+		catalog.MOUpgradeTenantTable:  systemCatalogRestoreSkip,
+		catalog.MOAutoIncrTable:       systemCatalogRestoreSkip,
+		catalog.MO_VIEW_DEPENDENCIES:  systemCatalogRestoreSkip,
+		catalog.MO_VIEW_REFRESH:       systemCatalogRestoreSkip,
+		catalog.MO_MATERIALIZED_VIEWS: systemCatalogRestoreSkip,
+		catalog.MO_MV_DEPENDENCIES:    systemCatalogRestoreSkip,
+		catalog.MO_MV_REFRESH_RUNS:    systemCatalogRestoreSkip,
+		catalog.MO_MV_ACCOUNT_STATE:   systemCatalogRestoreSkip,
 
 		"mo_user":                       systemCatalogRestoreCopy,
 		"mo_role":                       systemCatalogRestoreCopy,
@@ -1788,6 +1792,11 @@ func dropClusterTable(
 				}
 				continue
 			}
+			// Subsystem-owned cluster catalogs must retain the current schema.
+			// Their bulk-restore policy also governs this destructive cleanup.
+			if needSkipSystemTable(toAccountId, tblInfo) {
+				continue
+			}
 			getLogger(sid).Debug(fmt.Sprintf("[%s] start to drop system table: %v.%v", snapshotName, moCatalog, tblInfo.tblName))
 			if err = bh.Exec(ctx, dropTableIfExistsSQL(moCatalog, tblInfo.tblName)); err != nil {
 				return
@@ -2859,6 +2868,9 @@ func fillTableCreateSQLsForRestore(
 	sequences := make([]*tableInfo, 0)
 	restorable := make([]*tableInfo, 0, len(tableInfos))
 	for _, tblInfo := range tableInfos {
+		if tblInfo.relKind == catalog.SystemMaterializedViewRel {
+			return nil, moerr.NewNotSupportedNoCtx("logical restore/clone of materialized views; drop and recreate their definitions")
+		}
 		createSQL, err := getCreateSQL(tblInfo)
 		if err != nil {
 			if moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {

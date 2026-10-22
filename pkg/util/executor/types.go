@@ -68,6 +68,7 @@ type Options struct {
 	error_chan              chan error
 	sql                     string
 	forceRebuildPlan        bool
+	parserSQLMode           string
 	resolveVariableFunc     func(varName string, isSystemVar, isGlobalVar bool) (interface{}, error)
 	adjustTableExtraFunc    func(*api.SchemaExtra) error
 	keepTxnAlive            bool

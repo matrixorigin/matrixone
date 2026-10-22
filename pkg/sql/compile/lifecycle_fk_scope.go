@@ -508,6 +508,13 @@ func createNameDomain(q *plan.CreateTable, database string) map[plan2.FkReferKey
 		database = q.Database
 	}
 	domain[plan2.FkReferKey{Db: database, Tbl: q.GetTableDef().GetName()}] = struct{}{}
+	// MV publication and source DDL own the same name frontier. Include every
+	// source before any target/source lock or snapshot advancement occurs.
+	if definition, err := catalog.MaterializedViewDefinition(q.GetTableDef()); err == nil && definition != nil {
+		for _, source := range definition.Sources {
+			domain[plan2.FkReferKey{Db: source.Database, Tbl: source.Table}] = struct{}{}
+		}
+	}
 	for i, name := range q.FkTables {
 		if i < len(q.FkDbs) {
 			domain[plan2.FkReferKey{Db: q.FkDbs[i], Tbl: name}] = struct{}{}

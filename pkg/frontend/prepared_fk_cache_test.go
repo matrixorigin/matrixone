@@ -58,6 +58,28 @@ func TestShouldCachePrepareCompileForeignKeyActions(t *testing.T) {
 	require.False(t, checkNodeCanCache(subscriptionMetadataPlan))
 }
 
+func TestMaterializedViewDeletePlanCachePolicy(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		stmt   plan.Query_StatementType
+		node   *plan.Node
+		rebind bool
+	}{
+		{"truncating delete", plan.Query_DELETE, &plan.Node{NodeType: plan.Node_DELETE, DeleteCtx: &plan.DeleteCtx{CanTruncate: true}}, true},
+		{"row delete", plan.Query_DELETE, &plan.Node{NodeType: plan.Node_DELETE, DeleteCtx: &plan.DeleteCtx{}}, false},
+		{"missing delete context", plan.Query_DELETE, &plan.Node{NodeType: plan.Node_DELETE}, false},
+		{"ordinary select", plan.Query_SELECT, &plan.Node{NodeType: plan.Node_TABLE_SCAN}, false},
+		{"other node", plan.Query_DELETE, &plan.Node{NodeType: plan.Node_PROJECT, DeleteCtx: &plan.DeleteCtx{CanTruncate: true}}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{StmtType: tc.stmt, Nodes: []*plan.Node{tc.node}}}}
+			require.Equal(t, tc.rebind, shouldRebuildPreparePlan(false, p))
+			require.Equal(t, !tc.rebind, shouldCachePrepareCompile(p))
+			require.Equal(t, !tc.rebind, checkNodeCanCache(p))
+		})
+	}
+}
+
 func TestInitExecuteStmtParamRebuildsAcrossForeignKeyChecksTransitions(t *testing.T) {
 	for i, test := range []struct {
 		name string

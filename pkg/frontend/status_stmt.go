@@ -163,7 +163,7 @@ func executeStatusStmt(ses *Session, execCtx *ExecCtx) (err error) {
 		} else {
 			return moerr.NewInternalError(execCtx.reqCtx, "select without it generates the result rows")
 		}
-	case *tree.CreateTable:
+	case *tree.CreateTable, *tree.CreateMaterializedView:
 		runBegin := time.Now()
 		if execCtx.runResult, err = execCtx.runner.Run(0); err != nil {
 			return

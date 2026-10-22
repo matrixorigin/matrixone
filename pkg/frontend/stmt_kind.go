@@ -319,6 +319,10 @@ func statementCanBeExecutedInUncommittedTransaction(
 				USE ROLE role;
 		*/
 		return !st.IsUseRole(), nil
+	case *tree.CreateMaterializedView, *tree.RefreshMaterializedView, *tree.DropMaterializedView, *tree.AlterMaterializedView:
+		return false, nil
+	case *tree.ShowMaterializedViews:
+		return true, nil
 	case *tree.DropTable, *tree.DropIndex, *tree.DropView, *tree.TruncateTable, *tree.RenameTable:
 		return true, nil
 	case *tree.DropSequence: //Case1, Case3 above

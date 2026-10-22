@@ -462,6 +462,20 @@ func TestUnionNestedTopClearsAllocationOwners(t *testing.T) {
 	logicPlan, err := plan2.BuildPlan(compilerCtx, statements[0], false)
 	require.NoError(t, err)
 	c := newLazyUnionAllTestCompile(t)
+	// This test owns allocation cleanup, not host disk-pressure policy. Keep
+	// the normal 1 MiB query limit with a private ledger so another fixture's
+	// explicit spill limit and the local filesystem margin cannot change it.
+	budget := process.MustNewExecutionResourceBudget(4<<20, uint64(c.proc.GetLim().Size))
+	t.Cleanup(budget.Close)
+	generation, err := budget.OpenGeneration(1)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		if generation.Used() != 0 || generation.SpillDiskUsed() != 0 || generation.SpillFDUsed() != 0 {
+			t.Errorf("operators retained execution resources: %+v", generation.Snapshot())
+		}
+		generation.Close()
+	})
+	require.NoError(t, c.proc.SetExecutionResourceBudgetForTesting(generation))
 	c.isPrepare = false
 	c.pn = logicPlan
 	c.MessageBoard = message.NewMessageBoard()
