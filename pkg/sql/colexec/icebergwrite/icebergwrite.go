@@ -136,10 +136,6 @@ func (w *IcebergWrite) Free(proc *process.Process, pipelineFailed bool, err erro
 	w.coordinatorFromFactory = false
 }
 
-func (w *IcebergWrite) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (w *IcebergWrite) abortOpen(proc *process.Process, cause error) {
 	if w == nil || w.Coordinator == nil || !w.ctr.opened || w.ctr.finished {
 		return

@@ -17,10 +17,11 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/tests/testutils"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -166,5 +167,49 @@ func TestRenameTableImplicitCommit(t *testing.T) {
 		exec("rollback")
 		table("created_in_txn", 0)
 		count("select count(*) from issue29295.migrated where id=11", 1)
+
+		// ReplaceDef is prepended to each composed ALTER. Its stale CHECK
+		// snapshot must not overwrite the final table/column rename identities.
+		for _, tc := range []struct{ name, oldName, newName, actions string }{
+			{"table_first", "combo_first", "renamed_first", "rename to renamed_first, rename column a to b"},
+			{"column_first", "combo_last", "renamed_last", "rename column a to b, rename to renamed_last"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ctx, cancel := context.WithTimeout(t.Context(), 90*time.Second)
+				defer cancel()
+				conn, err := db.Conn(ctx)
+				require.NoError(t, err)
+				defer conn.Close()
+				exec := func(statement string) {
+					t.Helper()
+					_, err := conn.ExecContext(ctx, statement)
+					require.NoError(t, err, statement)
+				}
+				exec("use issue29295")
+				explicitName := "named_" + tc.name
+				exec("create table " + tc.oldName + " (a int, check(a > 0), constraint " + explicitName + " check(a < 100))")
+				exec("alter table " + tc.oldName + " " + tc.actions)
+				var tableName, ddl string
+				require.NoError(t, conn.QueryRowContext(ctx, "show create table "+tc.newName).Scan(&tableName, &ddl))
+				require.Equal(t, tc.newName, tableName)
+				require.Contains(t, ddl, "CONSTRAINT `"+tc.newName+"_chk_1` CHECK (`b` > 0)")
+				require.Contains(t, ddl, "CONSTRAINT `"+explicitName+"` CHECK (`b` < 100)")
+				require.False(t, strings.Contains(ddl, tc.oldName+"_chk_1"))
+				_, err = conn.ExecContext(ctx, "insert into "+tc.newName+" values(-1)")
+				var checkErr *mysql.MySQLError
+				require.ErrorAs(t, err, &checkErr)
+				require.Equal(t, uint16(3819), checkErr.Number)
+				require.Contains(t, checkErr.Message, tc.newName+"_chk_1")
+				var rows int
+				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+tc.newName).Scan(&rows))
+				require.Zero(t, rows)
+				exec("insert into " + tc.newName + " values(1)")
+				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+tc.newName+" where b=1").Scan(&rows))
+				require.Equal(t, 1, rows)
+				exec("create table " + tc.oldName + " (a int, check(a > 0))")
+				require.NoError(t, conn.QueryRowContext(ctx, "show create table "+tc.oldName).Scan(&tableName, &ddl))
+				require.Contains(t, ddl, "CONSTRAINT `"+tc.oldName+"_chk_1` CHECK (`a` > 0)")
+			})
+		}
 	})
 }

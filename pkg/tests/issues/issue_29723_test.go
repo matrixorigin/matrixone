@@ -153,23 +153,25 @@ WHERE table_schema = ? AND table_name = 'source_int' AND column_name = 'v'`, str
 		require.Error(t, err, "MEDIUMINT AUTO_INCREMENT must reject values beyond its signed range")
 
 		rows, err := db.QueryContext(ctx, `
-SELECT column_name, column_type, numeric_precision
+SELECT column_name, data_type, column_type, numeric_precision
 FROM information_schema.columns
 WHERE table_schema = ? AND table_name = 'types_x'
 ORDER BY ordinal_position`, strings.ToLower(dbName))
 		require.NoError(t, err)
 		defer func() { require.NoError(t, rows.Close()) }()
 		metadata := make(map[string]struct {
+			dataType   string
 			columnType string
 			precision  sql.NullInt64
 		})
 		for rows.Next() {
 			var name string
 			var info struct {
+				dataType   string
 				columnType string
 				precision  sql.NullInt64
 			}
-			require.NoError(t, rows.Scan(&name, &info.columnType, &info.precision))
+			require.NoError(t, rows.Scan(&name, &info.dataType, &info.columnType, &info.precision))
 			metadata[name] = info
 		}
 		require.NoError(t, rows.Err())
@@ -177,10 +179,14 @@ ORDER BY ordinal_position`, strings.ToLower(dbName))
 		for _, name := range []string{"m", "mu", "m3", "m3u"} {
 			info, ok := metadata[name]
 			require.True(t, ok, "missing MEDIUMINT information_schema row for %s", name)
+			require.Equal(t, "mediumint", strings.ToLower(info.dataType))
 			require.Contains(t, strings.ToLower(info.columnType), "mediumint")
 			require.True(t, info.precision.Valid)
 			require.Equal(t, int64(7), info.precision.Int64)
 		}
+		displayInt, ok := metadata["display_int"]
+		require.True(t, ok, "missing INT(24) information_schema row")
+		require.Equal(t, "int", strings.ToLower(displayInt.dataType), "display width must not be mistaken for MEDIUMINT")
 
 		resultRows, err := db.QueryContext(ctx, "SELECT m, mu FROM "+table+" LIMIT 1")
 		require.NoError(t, err)

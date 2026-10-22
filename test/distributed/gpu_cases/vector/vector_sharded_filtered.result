@@ -173,5 +173,17 @@ select id from t where id between 50 and 80 order by l2_distance(v, '[128,128,12
 select id from t where id >= 100 order by l2_distance(v, '[50,50,50,50,50,50,50,50]') limit 1;
 ➤ id[-5,64,0]  𝄀
 100
+select group_concat(id order by id) from (select id from t where id % 7 = 0 order by l2_distance(v, '[30,30,30,30,30,30,30,30]') limit 3 by rank with option 'mode=pre') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+21,28,35
+select group_concat(id order by id) from (select id from t where id % 7 = 0 order by l2_distance(v, '[30,30,30,30,30,30,30,30]') limit 3 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+21,28,35
+select group_concat(id order by id) from (select id from t where id in (select id from t where id between 60 and 70) order by l2_distance(v, '[30,30,30,30,30,30,30,30]') limit 3 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+60,61,62
+select group_concat(id order by id) from (select id from t where id in (select id from t where id between 60 and 70) order by l2_distance(v, '[64,64,64,64,64,64,64,64]') limit 4 by rank with option 'mode=pre') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+62,63,64,65
 drop database sharded_filtered;
 SET gpu_multi_simulation = 0;

@@ -1,0 +1,63 @@
+{
+  "parents": [
+    "804bd56493eb4c0e4e312318a2eca6dc6590bdb5",
+    "75ae9a79d626622e6ccec0bcb28412f5fcf84c7f"
+  ],
+  "go_version": "go version go1.27.1 linux/amd64",
+  "compiler": "gcc (Debian 14.2.0-19) 14.2.0",
+  "source_sha256": {
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.go": "a1ea916d1eb8b9091f6ce10e0b31cb8e6bca25475565c867d9d020a4483bb6b6",
+    "pkg/sql/parsers/dialect/mysql/mysql_sql.y": "850fa23f0f62fe533b19675f416bd758fa13984abae7f6b4eff2d5b875e59984",
+    "pkg/sql/compile/ddl.go": "bf5bb565db4d26ce589356bf1221c5244cb618832d30fe220adc18031b4eaa68",
+    "pkg/sql/plan/build_ddl.go": "38d7a4e01d22ffb004b81838a41fb3de8eafae67b145ee2ead993b7d7c2a5d6e",
+    "pkg/sql/plan/build_alter_table.go": "281c0b83e8ba698822be10f0e37ba4ea68bbfb834ea97c16e06df06de6359a11",
+    "pkg/sql/ttl/policy.go": "0ac6ee39841bc92d848eb2ce259d8c273677940b775155fde3ffe3fa09caec8a",
+    "pkg/sql/ttl/worker.go": "0de3c1ca7783cde8c62046bdbee90f931989596cdc16963be662bf29ef1744f5",
+    "pkg/cnservice/server_task.go": "f5819d732f397f78990dc14024479fb271d6677e900c9757a8071c30992bd157",
+    "pkg/tests/sqlintegration/ttl_test.go": "222eea146238ed0d2e440aca021845e34e765e16e319393194881bff7b795750"
+  },
+  "native_input_sha256": {
+    "cgo/Makefile": "5b5db247ea9029872ee9f2817f1d55c92367c5c0fc74912dc73f0739ed903576",
+    "cgo/arith.c": "84d19e70decfef3379363509d28bbabe1fcea33b98c5e5e7631a9a09ca0896c1",
+    "cgo/bitmap.h": "37c0e61553b35ff6cdc12267fe659eb7dae9bd026b8e87d684594df2c4f7af8d",
+    "cgo/bloom.c": "80a6e23daf051456eb691e5514570037d5de38a14a8b4c459455c9d543950f6a",
+    "cgo/bloom.h": "413dc8003c790f0b57d5a40ce7f0922fcfa7b22a44b4a130d0303ee9b5a653fc",
+    "cgo/cbitmap.c": "6544aba849f63ea7d4f49a3af274f0326f808f94d53e34df6e14d4eaa3baa465",
+    "cgo/cbitmap.h": "307ca3795f2bfdc3520b4dc614b4517245e10decf299e958b2fb55aeb6cb190d",
+    "cgo/compare.c": "0b420a0edb403306d90ed027b1e89bc1d40d581d1702cd72121e03f430a9e027",
+    "cgo/croaring.c": "89bebecc974657f5c554e6964980816384fbe4ee226fa901c798635e3c542d0c",
+    "cgo/croaring.h": "fe81848d3237846dcef4d2f72d6aa85f38f66f4414668c342250448f68a268bb",
+    "cgo/lib.go": "948ea71064ddeb5a06d59ff1b4645ee137784d6321f0625a67c00025ec48dd6c",
+    "cgo/logic.c": "224d39a7cd683fd9e0f85e658f0a70a03bcc28ea443d44f4c7cb47499b978b1a",
+    "cgo/membership.h": "4f31cba279e781c43640e83909b34d3885f2d61a255b6e011f951702473f3d16",
+    "cgo/mo.c": "748c62c51312eeb0c636f4af35d99804dcd0c194008b5f040d1a9c7d365ab491",
+    "cgo/mo.h": "9d400b2f5c56c747986b42637a32cbefd62c0d70caafef9b8bf2f041eb1b7072",
+    "cgo/mo_impl.h": "b467745335e376616535c84b9761096503ab4315ea3eb143bad3f7be2531a0d1",
+    "cgo/sorted64.c": "54a015a90925fb646d7598e7b6465e987c33afcae727e2aa28f144bf98ba1d38",
+    "cgo/sorted64.h": "477e018df4c21722a20a23068525c84e49bf674499d3344e86ffb625d2fa01b3",
+    "cgo/usearchex.c": "d9dfe6e52e84e85ff04132c8574a12bdf7c887ce354a12ca924a2bf15e2bc037",
+    "cgo/usearchex.h": "63ba71a41119ef2656f69af8b76f718b9a79a71224c851b64f386e5e40aa0b35",
+    "cgo/varlena.h": "8985e4531c9987e620d6c73e62e630d5d231d47a7c090ebf369452fd83523891",
+    "cgo/xcall.c": "94a03ab5f5e39d9103f4fbd81fcf6de3490366b1b05bcc8c7cf5cc0e8717f591",
+    "cgo/xcall.h": "43ca384363d521574e00c10057496eb8a2f436c443b44156fe24643cfe84cd3f",
+    "thirdparties/Makefile": "c914388ec80e290e9dea3a82498ae71fd763ea2b6568ba71597d1725be097f25"
+  },
+  "native_artifact_sha256": {
+    "cgo/libmo.so": "af914930213051b50c2dac59222ca00df4e6e5c108365370baf28b2c1db1aeed",
+    "cgo/libmo.a": "d9d37c3eef5b01f9a7b074d26a7cb6531c00f0524627b9a4d047d2ca3f605969",
+    "thirdparties/install/lib/libusearch_c.so": "6e277ff2d9186ea85b8c4800c7d0aabb82d5ed0e2314195abba887af660f8225",
+    "thirdparties/install/lib/libroaring.a": "7a1aca382a4840396761799472a2633c5ced7f7b229411cec23f6d708bd85703"
+  },
+  "log_sha256": {
+    "lint.txt": "e92606b0bf483111dff0a120c315ea165821348f31365020e2468a0059095c47",
+    "tests.txt": "a5e5ba91c07fcc9bf6cce6c99b731ea02da709f86b16ceec6ecc51a1b8a504c2",
+    "native-build.txt": "c7601e72bbacad467e3a2c0b06404faa2c98941f535badf643f8fe74626d1c1f",
+    "integration.txt": "616f3b2eb7129ee39862355316ef6c4e69249ede1925d9da4407853762cdf678"
+  },
+  "parser_generation_exit": 0,
+  "repeat_generation_identical": true,
+  "native_clean_build_exit": 0,
+  "tests_exit": 0,
+  "integration_registration_exit": 0,
+  "incremental_lint_exit": 0
+}

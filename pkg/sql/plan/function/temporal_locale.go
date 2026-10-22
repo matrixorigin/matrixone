@@ -15,6 +15,7 @@
 package function
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -60,6 +61,23 @@ var temporalLocales = map[string]*temporalLocale{
 		months:        [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
 		monthAbbrev:   [12]string{"1月", "2月", "3月", "4月", "5月", "6月", "7月", "8月", "9月", "10月", "11月", "12月"},
 	},
+}
+
+// TemporalLocaleNames returns the supported temporal locale inventory in a
+// stable order. Callers own the returned slice; the evaluation registry stays private.
+func TemporalLocaleNames() []string {
+	names := make([]string, 0, len(temporalLocales))
+	for name := range temporalLocales {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// TemporalLocaleNameForProcess resolves the same effective locale as evaluation,
+// including variable-resolver precedence over the process snapshot.
+func TemporalLocaleNameForProcess(proc *process.Process) string {
+	return temporalLocaleForProcess(proc).name
 }
 
 func temporalLocaleForProcess(proc *process.Process) *temporalLocale {

@@ -1,0 +1,2 @@
+ok  	github.com/matrixorigin/matrixone/pkg/tests/sqlintegration	50.293s
+ok  	github.com/matrixorigin/matrixone/pkg/cnservice	0.065s

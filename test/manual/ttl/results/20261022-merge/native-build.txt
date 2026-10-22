@@ -1,0 +1,28 @@
+make: Entering directory '/workspace/matrixone-ttl-oct19/cgo'
+rm -f *.o *.a *.so *.dylib
+make -C cuda clean
+make[1]: Entering directory '/workspace/matrixone-ttl-oct19/cgo/cuda'
+>>> WARNING - libcuda.so not found, CUDA Driver is not installed.  Please re-install the driver. <<<
+rm -f *.o *.a mocl_kernel64.fatbin mytest
+make[1]: Leaving directory '/workspace/matrixone-ttl-oct19/cgo/cuda'
+make -C cuvs clean
+make[1]: Entering directory '/workspace/matrixone-ttl-oct19/cgo/cuvs'
+Cleaning up...
+rm -f libmocuvs.so *.o test_cuvs_worker benchmark_cuvs benchmark_filter test_kmeans test_dynb test_ivfpq_filter bench_hostview bench_wiki88 bench_upload_cost
+rm -rf obj
+make[1]: Leaving directory '/workspace/matrixone-ttl-oct19/cgo/cuvs'
+make: Leaving directory '/workspace/matrixone-ttl-oct19/cgo'
+make: Entering directory '/workspace/matrixone-ttl-oct19/cgo'
+cc -std=c11 -g -O3 -ffast-math -ftree-vectorize -funroll-loops -Wall -Werror -fPIC -I../thirdparties/install/include -march=haswell -c mo.c -o mo.o
+cc -std=c11 -g -O3 -ffast-math -ftree-vectorize -funroll-loops -Wall -Werror -fPIC -I../thirdparties/install/include -march=haswell -c arith.c -o arith.o
+cc -std=c11 -g -O3 -ffast-math -ftree-vectorize -funroll-loops -Wall -Werror -fPIC -I../thirdparties/install/include -march=haswell -c compare.c -o compare.o
+cc -std=c11 -g -O3 -ffast-math -ftree-vectorize -funroll-loops -Wall -Werror -fPIC -I../thirdparties/install/include -march=haswell -c logic.c -o logic.o
+cc -std=c11 -g -O3 -ffast-math -ftree-vectorize -funroll-loops -Wall -Werror -fPIC -I../thirdparties/install/include -march=haswell -c xcall.c -o xcall.o
+cc -std=c11 -g -O3 -ffast-math -ftree-vectorize -funroll-loops -Wall -Werror -fPIC -I../thirdparties/install/include -march=haswell -c usearchex.c -o usearchex.o
+cc -std=c11 -g -O3 -ffast-math -ftree-vectorize -funroll-loops -Wall -Werror -fPIC -I../thirdparties/install/include -march=haswell -c bloom.c -o bloom.o
+cc -std=c11 -g -O3 -ffast-math -ftree-vectorize -funroll-loops -Wall -Werror -fPIC -I../thirdparties/install/include -march=haswell -c croaring.c -o croaring.o
+cc -std=c11 -g -O3 -ffast-math -ftree-vectorize -funroll-loops -Wall -Werror -fPIC -I../thirdparties/install/include -march=haswell -c cbitmap.c -o cbitmap.o
+cc -std=c11 -g -O3 -ffast-math -ftree-vectorize -funroll-loops -Wall -Werror -fPIC -I../thirdparties/install/include -march=haswell -c sorted64.c -o sorted64.o
+cc mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o croaring.o cbitmap.o sorted64.o -L../thirdparties/install/lib -lusearch_c -lroaring -shared -o libmo.so
+ar -rcs libmo.a mo.o arith.o compare.o logic.o xcall.o usearchex.o bloom.o croaring.o cbitmap.o sorted64.o
+make: Leaving directory '/workspace/matrixone-ttl-oct19/cgo'

@@ -39,6 +39,12 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		version              int64
 		missing, unsupported string
 	}{
+		{features.LoadFKIgnoreCheck, defines.MORPCVersion125,
+			"LOAD IGNORE foreign-key filtering requires a versioned remote destination",
+			"remote destination does not support LOAD IGNORE foreign-key filtering (MORPC version %d)"},
+		{features.JSONNumericComparisons, defines.MORPCVersion128,
+			"mixed JSON/numeric comparisons require a versioned remote destination",
+			"remote destination does not support mixed JSON/numeric comparisons (MORPC version %d)"},
 		{features.ScalarDivision && proc.DivisionByZeroWarningsEnabled(), defines.MORPCVersion116,
 			"SELECT division diagnostics require a versioned remote destination",
 			"remote destination does not support SELECT division diagnostics (MORPC version %d)"},
@@ -63,6 +69,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.DecimalStatisticalResultContracts, defines.MORPCVersion113,
 			"decimal statistical DOUBLE results require a versioned remote destination",
 			"remote destination does not support decimal statistical DOUBLE results (MORPC version %d)"},
+		{features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts, defines.MORPCVersion122,
+			"temporal result contracts require a versioned remote destination",
+			"remote destination does not support temporal result contracts (MORPC version %d)"},
 		{features.DateNumericResultContracts, defines.MORPCVersion112,
 			"signed date result contracts require a versioned remote destination",
 			"remote destination does not support signed date result contracts (MORPC version %d)"},
@@ -72,6 +81,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.PreparedPrecisionScalar, defines.MORPCVersion95,
 			"prepared scalar precision requires a versioned remote destination",
 			"remote destination does not support prepared scalar precision (MORPC version %d)"},
+		{features.DecimalIntegerDivisionSemantics, defines.MORPCVersion121,
+			"decimal integer division requires a versioned remote destination",
+			"remote destination does not support decimal integer division (MORPC version %d)"},
 		{features.DecimalDivisionSemantics, defines.MORPCVersion97,
 			"decimal division requires a versioned remote destination",
 			"remote destination does not support decimal division (MORPC version %d)"},
@@ -93,6 +105,9 @@ func validateRemoteExpressionDestination(proc *process.Process, p *pipeline.Pipe
 		{features.DecimalLiteralSemantics, defines.MORPCVersion89,
 			"exact DECIMAL256 literal semantics require a versioned remote destination",
 			"remote destination does not support exact DECIMAL256 literal semantics (MORPC protocol version %d)"},
+		{features.ViewMetadataFunctions, defines.MORPCVersion126,
+			"view metadata remote execution requires a versioned remote destination",
+			"remote destination does not support view metadata functions (MORPC version %d)"},
 	}
 	var parent context.Context
 	var observed int64

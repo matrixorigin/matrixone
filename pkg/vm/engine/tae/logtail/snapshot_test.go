@@ -16,6 +16,8 @@ package logtail
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
@@ -26,9 +28,176 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/ckputil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+type scriptedCKPDataReader struct {
+	reads  int
+	failAt int
+}
+
+func (r *scriptedCKPDataReader) Read(context.Context, *batch.Batch, *mpool.MPool) (bool, error) {
+	if r.reads == r.failAt {
+		return false, errors.New("checkpoint reader failure")
+	}
+	r.reads++
+	return true, nil
+}
+
+func (*scriptedCKPDataReader) Reset(context.Context) {}
+
+func TestSnapshotMetaPropagatesCheckpointReaderErrors(t *testing.T) {
+	for _, failAt := range []int{0, 1, 2, 3} {
+		t.Run("fail-at-"+strconv.Itoa(failAt), func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			defer mpool.DeleteMPool(mp)
+			reader := &CKPReader{
+				mp:            mp,
+				ckpDataReader: &scriptedCKPDataReader{failAt: failAt},
+			}
+			meta := NewSnapshotMeta()
+			if failAt >= 2 {
+				meta.snapshotTableIDs[1] = struct{}{}
+			}
+			err := meta.Update(
+				context.Background(),
+				nil,
+				reader,
+				types.TS{},
+				types.TS{},
+				"test",
+			)
+			require.Error(t, err)
+		})
+	}
+}
+
+type snapshotUpdateRetryReader struct {
+	reads int
+}
+
+func (r *snapshotUpdateRetryReader) Read(_ context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
+	switch r.reads {
+	case 0, 1:
+		r.reads++
+		return true, nil
+	case 2:
+		r.reads++
+		stats := objectio.NewObjectStats()
+		if err := objectio.SetObjectStatsObjectName(stats, objectio.MockObjectName()); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_Accout_Idx], uint32(1), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DB_Idx], uint64(1), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_Table_Idx], uint64(1), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_ObjectType_Idx], ckputil.ObjectType_Data, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendBytes(bat.Vecs[ckputil.TableObjectsAttr_ID_Idx], stats[:], false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_CreateTS_Idx], types.BuildTS(1, 0), false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_DeleteTS_Idx], types.TS{}, false, mp); err != nil {
+			return false, err
+		}
+		if err := vector.AppendFixed(bat.Vecs[ckputil.TableObjectsAttr_PhysicalAddr_Idx], types.Rowid{}, false, mp); err != nil {
+			return false, err
+		}
+		bat.SetRowCount(1)
+		return false, nil
+	default:
+		return false, errors.New("checkpoint reader failure after snapshot update")
+	}
+}
+
+func (*snapshotUpdateRetryReader) Reset(context.Context) {}
+
+func TestSnapshotMetaUpdateRollsBackPartialRetryState(t *testing.T) {
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	reader := &CKPReader{
+		mp:            mp,
+		ckpDataReader: &snapshotUpdateRetryReader{},
+	}
+	meta := NewSnapshotMeta()
+	meta.snapshotTableIDs[1] = struct{}{}
+	stats := objectio.NewObjectStats()
+	require.NoError(t, objectio.SetObjectStatsObjectName(stats, objectio.MockObjectName()))
+	object := &objectInfo{stats: *stats, createAt: types.BuildTS(1, 0)}
+	meta.objects[1] = map[objectio.Segmentid]*objectInfo{stats.ObjectName().SegmentId(): object}
+	meta.tombstones[1] = map[objectio.Segmentid]*objectInfo{stats.ObjectName().SegmentId(): object}
+	meta.pitr.tid = 2
+	meta.pitr.objects[stats.ObjectName().SegmentId()] = object
+	meta.iscp.tid = 3
+	meta.iscp.tombstones[stats.ObjectName().SegmentId()] = object
+	table := &tableInfo{accountID: 1, dbID: 1, tid: 1, pk: "existing"}
+	meta.tables[1] = map[uint64]*tableInfo{1: table}
+	meta.tableIDIndex[1] = table
+	meta.tablePKIndex[table.pk] = []*tableInfo{table}
+
+	err := meta.Update(
+		context.Background(),
+		nil,
+		reader,
+		types.TS{},
+		types.BuildTS(2, 0),
+		"retry",
+	)
+	require.ErrorContains(t, err, "checkpoint reader failure after snapshot update")
+	require.Len(t, meta.objects, 1)
+	require.Len(t, meta.tombstones, 1)
+	require.Len(t, meta.tablePKIndex[table.pk], 1)
+	require.Equal(t, table, meta.tables[1][1])
+	require.Equal(t, table, meta.tableIDIndex[1])
+	require.Equal(t, table, meta.tablePKIndex[table.pk][0])
+}
+
+func TestSnapshotMetaCloneRestore(t *testing.T) {
+	meta := NewSnapshotMeta()
+	info := &tableInfo{accountID: 1, dbID: 2, tid: 1, pk: "pk"}
+	meta.tables[1] = map[uint64]*tableInfo{1: info}
+	meta.tableIDIndex[1] = info
+	meta.tablePKIndex["pk"] = []*tableInfo{info}
+	meta.objects[1] = map[objectio.Segmentid]*objectInfo{{}: {createAt: types.BuildTS(10, 0)}}
+	meta.snapshotTableIDs[1] = struct{}{}
+	meta.aobjDelTsMap[types.BuildTS(1, 0)] = struct{}{}
+	meta.pitr.tid = 2
+	snapshot := meta.Clone()
+
+	delete(meta.snapshotTableIDs, 1)
+	delete(meta.aobjDelTsMap, types.BuildTS(1, 0))
+	meta.pitr.tid = 3
+	meta.tablePKIndex["pk"] = append(meta.tablePKIndex["pk"], info)
+	meta.tableIDIndex[1].deleteAt = types.BuildTS(20, 0)
+	meta.objects[1][objectio.Segmentid{}].deleteAt = types.BuildTS(20, 0)
+	meta.RestoreFrom(snapshot)
+
+	require.Contains(t, meta.snapshotTableIDs, uint64(1))
+	require.Contains(t, meta.aobjDelTsMap, types.BuildTS(1, 0))
+	require.Equal(t, uint64(2), meta.pitr.tid)
+	require.Len(t, meta.tablePKIndex["pk"], 1)
+	require.Empty(t, meta.tableIDIndex[1].deleteAt)
+	require.Empty(t, meta.objects[1][objectio.Segmentid{}].deleteAt)
+	require.Same(t, meta.tables[1][1], meta.tableIDIndex[1])
+	require.Same(t, meta.tableIDIndex[1], meta.tablePKIndex["pk"][0])
+
+	meta.tableIDIndex[1].deleteAt = types.BuildTS(30, 0)
+	meta.objects[1][objectio.Segmentid{}].deleteAt = types.BuildTS(30, 0)
+	require.Equal(t, types.BuildTS(30, 0), meta.tables[1][1].deleteAt)
+	require.Empty(t, snapshot.tableIDIndex[1].deleteAt, "Clone must remain independent")
+	require.Empty(t, snapshot.objects[1][objectio.Segmentid{}].deleteAt)
+	require.Len(t, snapshot.tablePKIndex["pk"], 1)
+}
 
 // TestSnapshotInfo tests the basic functionality of SnapshotInfo
 func TestSnapshotInfo(t *testing.T) {

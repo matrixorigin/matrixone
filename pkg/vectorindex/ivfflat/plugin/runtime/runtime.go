@@ -106,15 +106,6 @@ func (CatalogHooks) BuildSessionVars() []string {
 	return nil
 }
 
-// DefaultOptions mirrors the IVF-FLAT case of indexParamsToMap when the
-// statement carries no WITH(...) clause: lists=1, op_type=l2.
-func (CatalogHooks) DefaultOptions() map[string]string {
-	return map[string]string{
-		catalog.IndexAlgoParamLists:  "1",
-		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,
-	}
-}
-
 // ExperimentalFlag — IVF-FLAT is NOT gated. The legacy handler on main
 // (Scope.handleVectorIvfFlatIndex) never checked `experimental_ivf_index`
 // at DDL time, so returning "" here preserves that behavior: the gate at
