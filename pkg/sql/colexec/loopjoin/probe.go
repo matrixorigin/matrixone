@@ -163,9 +163,18 @@ func (ctr *container) evalConditionWindow(
 	buildBat *batch.Batch,
 	start int,
 ) (vec *vector.Vector, window *batch.Batch, end int, err error) {
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return nil, nil, 0, err
+	}
 	if ap.PairCondition != nil {
 		vec, err = ap.PairCondition(proc, inBat, probeRow, buildBat, start)
-		return vec, nil, start + 1, err
+		if err != nil {
+			return nil, nil, 0, err
+		}
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return nil, nil, 0, err
+		}
+		return vec, nil, start + 1, nil
 	}
 	end = min(start+conditionWindowRowLimit(buildBat), buildBat.RowCount())
 	conditionInput := buildBat
@@ -177,10 +186,12 @@ func (ctr *container) evalConditionWindow(
 		}
 		conditionInput = window
 	}
-	owned := window != nil
+	// Keep a private ownership pointer: an explicit error return clears the
+	// named window result before deferred cleanup runs.
+	ownedWindow := window
 	defer func() {
-		if owned {
-			window.Clean(proc.Mp())
+		if ownedWindow != nil {
+			ownedWindow.Clean(proc.Mp())
 			window = nil
 		}
 	}()
@@ -193,11 +204,14 @@ func (ctr *container) evalConditionWindow(
 	if err != nil {
 		return nil, nil, 0, err
 	}
+	if err, canceled := vm.CancelCheck(proc); canceled {
+		return nil, nil, 0, err
+	}
 	if !vec.IsConst() && vec.Length() != end-start {
 		return nil, nil, 0, moerr.NewInternalErrorNoCtx(
 			"loop join: condition result length mismatch")
 	}
-	owned = false
+	ownedWindow = nil
 	return vec, window, end, nil
 }
 
@@ -287,9 +301,15 @@ func (ctr *container) scanProbeMatches(
 		}
 	}()
 	for idx := ctr.probeScanBatch; idx < len(mpbat); idx++ {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return 0, -1, -1, false, err
+		}
 		bat := mpbat[idx]
 		start := ctr.probeScanRow
 		for start < bat.RowCount() {
+			if err, canceled := vm.CancelCheck(proc); canceled {
+				return 0, -1, -1, false, err
+			}
 			end := bat.RowCount()
 			var vec *vector.Vector
 			if ctr.expr != nil || ap.PairCondition != nil {
@@ -367,6 +387,9 @@ func (ctr *container) probe(
 		ctr.conditionPending = false
 	}
 	for i := ctr.probeIdx; i < inbat.RowCount(); i++ {
+		if err, canceled := vm.CancelCheck(proc); canceled {
+			return err
+		}
 		if ctr.resultBatchFull(rowCountIncrease) {
 			ctr.yieldProbe(result, rowCountIncrease, i, 0, 0, false)
 			return nil
@@ -455,6 +478,9 @@ func (ctr *container) probe(
 		case plan.Node_INNER, plan.Node_LEFT, plan.Node_OUTER:
 			matched := ctr.probeMatched
 			for idx := ctr.batIdx; idx < len(mpbat); idx++ {
+				if err, canceled := vm.CancelCheck(proc); canceled {
+					return err
+				}
 				bat := mpbat[idx]
 				start := 0
 				if idx == ctr.batIdx {
@@ -468,6 +494,9 @@ func (ctr *container) probe(
 
 				if ctr.expr != nil || ap.PairCondition != nil {
 					for row := start; row < bat.RowCount(); {
+						if err, canceled := vm.CancelCheck(proc); canceled {
+							return err
+						}
 						if ctr.resultBatchFull(rowCountIncrease) {
 							ctr.yieldProbe(
 								result, rowCountIncrease, i, idx, row, matched)
