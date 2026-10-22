@@ -160,6 +160,18 @@ func TestSelectPlanStructure(t *testing.T) {
 					scan := query.Nodes[id]
 					require.Equal(t, pbplan.Node_TABLE_SCAN, scan.NodeType)
 					require.NotNil(t, scan.TableDef)
+					key := "o_orderkey"
+					if scan.TableDef.Name == "lineitem" {
+						key = "l_orderkey"
+					}
+					found := false
+					for _, col := range scan.TableDef.Cols {
+						if col.Name == key {
+							found = true
+							break
+						}
+					}
+					require.True(t, found, "join scan %d (%s) missing %s", id, scan.TableDef.Name, key)
 					tables = append(tables, scan.TableDef.Name)
 				}
 				wantTables, wantColumns := []string{"lineitem", "orders"}, []string{"l_orderkey", "o_orderkey"}
