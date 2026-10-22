@@ -225,10 +225,6 @@ func (window *Window) Free(proc *process.Process, pipelineFailed bool, err error
 	ctr.prepareParamKind.Reset(nil)
 }
 
-func (window *Window) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) resetParam() {
 	ctr.status = receive
 	ctr.emitOffset = 0
