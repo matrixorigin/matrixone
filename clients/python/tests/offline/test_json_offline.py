@@ -7,8 +7,9 @@ Tests cover:
 - Boolean handling
 """
 
+import json
 import pytest
-from sqlalchemy import Column, Integer, String, select, update, Numeric
+from sqlalchemy import Column, Integer, String, select, update, Numeric, create_engine, literal, MetaData, Table
 from sqlalchemy.dialects.mysql import JSON
 
 from matrixone.orm import declarative_base
@@ -119,6 +120,47 @@ class TestJSONModification:
         sql = str(stmt.compile(compile_kwargs={"literal_binds": True}))
         assert "'$.field1'" in sql
         assert "'$.field2'" in sql
+
+
+@pytest.mark.parametrize('function', [
+    json_extract, json_extract_string, json_extract_float64,
+    json_set, json_insert, json_replace,
+])
+@pytest.mark.parametrize('path', [
+    '$.ordinary', '$."owner\'s"', '$."a\\\\b"', '$."中文"',
+    "$.x'), 'different path') --",
+])
+def test_json_path_reaches_sql_function_unchanged(function, path):
+    # A real SQL parser/DBAPI boundary, with only the JSON function replaced by
+    # an echo receiver: paths must remain data, including on cached executions.
+    engine = create_engine('sqlite://')
+    try:
+        with engine.connect() as connection:
+            connection.connection.create_function(function.name, -1, lambda *args: args[1])
+            for current_path in ('$.control', path):
+                args = [literal('{}'), current_path]
+                if function in (json_set, json_insert, json_replace):
+                    args.append(42)
+                assert connection.execute(select(function(*args))).scalar() == current_path
+    finally:
+        engine.dispose()
+
+
+@pytest.mark.parametrize('function,expected', [(json_set, 42), (json_insert, 0), (json_replace, 42)])
+def test_json_path_mutation_supports_executemany(function, expected):
+    engine = create_engine('sqlite://')
+    table = Table('json_path_batch', MetaData(), Column('id', Integer), Column('data', String))
+    try:
+        table.create(engine)
+        with engine.begin() as connection:
+            expression = function(literal(json.dumps({"owner's": 0})), '$."owner\'s"', 42)
+            connection.execute(table.insert().values(data=expression), [{'id': 1}, {'id': 2}])
+            rows = connection.execute(select(table.c.id, table.c.data).order_by(table.c.id)).all()
+            assert [(row[0], json.loads(row[1])) for row in rows] == [
+                (1, {"owner's": expected}), (2, {"owner's": expected}),
+            ]
+    finally:
+        engine.dispose()
 
 
 class TestStandardSyntax:

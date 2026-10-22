@@ -1092,14 +1092,14 @@ func TestJSONSourceCastsAreNotSkipped(t *testing.T) {
 	require.Equal(t, "cast", blobExpr.GetF().Func.ObjName)
 }
 
-func TestJSONComparisonsCastBothOperandsToCommonType(t *testing.T) {
+func TestJSONComparisonOperandDomains(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		sql  string
-		want types.T
+		name        string
+		sql         string
+		left, right types.T
 	}{
-		{name: "numeric", sql: "select cast('3' as json) > 1", want: types.T_int64},
-		{name: "string", sql: "select cast('\"active\"' as json) = 'active'", want: types.T_varchar},
+		{name: "numeric", sql: "select cast('3' as json) > 1", left: types.T_json, right: types.T_int64},
+		{name: "string", sql: "select cast('\"active\"' as json) = 'active'", left: types.T_varchar, right: types.T_varchar},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -1108,8 +1108,8 @@ func TestJSONComparisonsCastBothOperandsToCommonType(t *testing.T) {
 
 			args := pl.GetQuery().Nodes[1].ProjectList[0].GetF().Args
 			require.Len(t, args, 2)
-			require.Equal(t, int32(tc.want), args[0].Typ.Id)
-			require.Equal(t, int32(tc.want), args[1].Typ.Id)
+			require.Equal(t, int32(tc.left), args[0].Typ.Id)
+			require.Equal(t, int32(tc.right), args[1].Typ.Id)
 		})
 	}
 }

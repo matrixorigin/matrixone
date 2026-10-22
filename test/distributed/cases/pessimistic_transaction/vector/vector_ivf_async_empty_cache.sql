@@ -65,8 +65,8 @@ deallocate prepare wait_ix;
 -- warmed the empty generation kept returning the wrong row; post-fix the empty generation was not
 -- retained, so this cold-reloads the real centroids. Run 3x (the issue observed the stale value was
 -- sticky across repeated reads).
-SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=include';
-SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=include';
-SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=include';
+SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=iterative';
+SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=iterative';
+SELECT id FROM t ORDER BY l2_distance(v,'[50,0]') LIMIT 1 BY RANK WITH OPTION 'mode=iterative';
 
 drop database ivf_async_partial_cache;

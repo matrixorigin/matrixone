@@ -82,14 +82,6 @@ func (CatalogHooks) BuildSessionVars() []string {
 	}
 }
 
-func (CatalogHooks) DefaultOptions() map[string]string {
-	return map[string]string{
-		catalog.IndexAlgoParamOpType: metric.OpType_L2Distance,
-		catalog.Quantization:         metric.Quantization_F32_Str,
-		catalog.DistributionMode:     vectorindex.DistributionMode_SINGLE_GPU_Str,
-	}
-}
-
 // CagraIndexFlag is the experimental-feature flag gating CAGRA DDL.
 // Single source of truth; both the catalog gate (pkg/sql/compile/util.go
 // via ExperimentalFlag) and the per-plugin HandleCreateIndex gate

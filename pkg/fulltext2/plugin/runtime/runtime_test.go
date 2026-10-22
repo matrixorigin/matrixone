@@ -56,7 +56,6 @@ func TestCatalogHooks(t *testing.T) {
 	require.Equal(t, []string{"lower_case_table_names"}, h.BuildSessionVars())
 
 	// Nil / empty accessors.
-	require.Nil(t, h.DefaultOptions())
 	require.Nil(t, h.SupportedVectorTypes())
 	require.Nil(t, h.SupportedOpTypes())
 	// INCLUDE columns are supported (actual-value storage): the integer family + varchar/char,
