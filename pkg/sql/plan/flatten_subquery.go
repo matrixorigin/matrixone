@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -2066,6 +2067,29 @@ func (result *aggregateSpineEmptyResult) nullEquivalent(count int) bool {
 // empty. Unknown deterministic filters may retain or remove a singleton;
 // upper aggregates must make those possibilities converge before admission.
 func (builder *QueryBuilder) aggregateSpineOriginalEmpty(subID int32, ctx *BindContext) *aggregateSpineEmptyResult {
+	if builder.compCtx != nil && defines.IsPublicationViewBinding(builder.GetContext()) {
+		// The empty-input proof evaluates substituted constant expressions of
+		// the stored definition through ConstantFold (foldAggregateSpineLiteral
+		// and substituteAggregateSpineEmptyExpr are this file's only fold
+		// sites, and every path into them starts here): a correlated CTE
+		// projection like (WITH x AS (SELECT COUNT(*) AS c FROM base i WHERE
+		// i.id = o.id) SELECT c + CAST(enable_fault_injection() AS SIGNED)
+		// FROM x) reaches it during binding - before the marker's build
+		// boundary - with complete membership, and an unflagged builtin
+		// executes while validation binds. containsVolatileFunction does not
+		// exclude unflagged builtins, so the marker must gate the analysis
+		// itself. nil is this analysis' pre-existing "cannot prove" outcome:
+		// every caller consults the result through nil-safe checks and the
+		// restoration machinery declines to restore, so binding remains a
+		// pure metadata verdict while the subscriber's ordinary compile
+		// answers the same aggregate shape with the full analysis as usual.
+		// The marker is only ever carried by a compilation context: a
+		// builder assembled for a pure structural walk of qry.Nodes (the
+		// direct construction the 29412 proof uses) has no compCtx and so no
+		// marker to consult, and the gate must leave that minimal proof's
+		// pre-marker behavior - the plain analysis below - unchanged.
+		return nil
+	}
 	var path []*plan.Node
 	for nodeID := subID; len(path) < 32; {
 		node := builder.qry.Nodes[nodeID]
