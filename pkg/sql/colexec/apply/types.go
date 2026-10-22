@@ -143,10 +143,6 @@ func (apply *Apply) Free(proc *process.Process, pipelineFailed bool, err error) 
 	}
 }
 
-func (apply *Apply) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	if ctr.rbat != nil {
 		ctr.rbat.Clean(mp)

@@ -2332,6 +2332,11 @@ func prepareFSForDiffAsFile(
 		return
 	}
 
+	// The process-wide shared file service is borrowed; only an ETL service
+	// created here belongs to this operation, so terminal paths must close
+	// only that owned service.
+	ownsTargetFS := false
+
 	if fsPath.Service == defines.SharedFileServiceName {
 		targetFS = getPu(ses.GetService()).FileService
 		targetPath = fullFilePath
@@ -2349,6 +2354,7 @@ func prepareFSForDiffAsFile(
 			return
 		}
 		targetFS = etlFS
+		ownsTargetFS = true
 	}
 
 	cleanup = func() {
@@ -2360,7 +2366,9 @@ func prepareFSForDiffAsFile(
 			if cleanup != nil {
 				cleanup()
 			}
-			targetFS.Close(ctx)
+			if ownsTargetFS {
+				targetFS.Close(ctx)
+			}
 		}
 	}()
 
@@ -2391,22 +2399,44 @@ func prepareFSForDiffAsFile(
 			})
 		}
 
-		release = func() error {
-			closeErr := mut.Close()
-			targetFS.Close(ctx)
-			return closeErr
-		}
+		release = releaseDiffTargetFS(ctx, targetFS, ownsTargetFS, mut.Close)
 	} else {
 		if writeFile, release, err = newSingleWriteAppender(
 			ctx, tblStuff.worker, targetFS, targetPath,
 		); err != nil {
 			return
 		}
+		release = releaseDiffTargetFS(ctx, targetFS, ownsTargetFS, release)
 	}
 
 	return
 }
 
+// releaseDiffTargetFS chains the terminal file-service close after the owned
+// writer or mutator release: an ETL service created by prepareFSForDiffAsFile
+// is closed once its owned writers finished, while the process-wide shared
+// file service is borrowed and never closed here.
+func releaseDiffTargetFS(
+	ctx context.Context,
+	targetFS fileservice.FileService,
+	ownsTargetFS bool,
+	releaseOwned func() error,
+) func() error {
+	if !ownsTargetFS {
+		return releaseOwned
+	}
+	return func() error {
+		err := releaseOwned()
+		targetFS.Close(ctx)
+		return err
+	}
+}
+
+// newSingleWriteAppender streams exactly one output file through a pooled
+// writer task. The returned release closes the pipe endpoint, waits for the
+// writer task, and reports the joined write result; it never closes the
+// target file service, whose lifetime stays with its owner (see
+// releaseDiffTargetFS).
 func newSingleWriteAppender(
 	ctx context.Context,
 	worker *ants.Pool,
@@ -2455,7 +2485,6 @@ func newSingleWriteAppender(
 	release = func() error {
 		closeErr := pw.Close()
 		writeErr := <-done
-		targetFS.Close(ctx)
 		return errors.Join(closeErr, writeErr)
 	}
 

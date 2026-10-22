@@ -730,6 +730,21 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// A winning text collation needs a text result type even when the safe common
+// byte bound was first chosen in the binary domain. In particular, BLOB's
+// result decoding does not preserve UTF-8 text for prepared parameters.
+func applyMixedTextBinaryCollationType(typ *plan.Type) {
+	if typ.Charset == uint32(types.CharsetBinary) {
+		return
+	}
+	switch types.T(typ.Id) {
+	case types.T_varbinary:
+		typ.Id = int32(types.T_varchar)
+	case types.T_blob:
+		typ.Id = int32(types.T_text)
+	}
+}
+
 type ColRefRemapping struct {
 	globalToLocal map[[2]int32][2]int32
 	localToGlobal [][2]int32
@@ -4748,8 +4763,11 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 		if len(tmpArgsType) > 0 {
 			var targetType plan.Type
 			var targetArgType types.Type
+			mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(tmpArgsType)
 			if pureCharType, ok := setOperationPureCharCommonType(tmpArgsType); ok {
 				targetArgType = pureCharType
+			} else if mixedTextBinary {
+				targetArgType = mixedTextBinaryType
 			} else {
 				fGet, err := function.GetFunctionByName(builder.GetContext(), "coalesce", tmpArgsType)
 				if err != nil {
@@ -4841,7 +4859,8 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 						targetArgType.Width = typ.Width
 					}
 				}
-			} else if targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary {
+			} else if !mixedTextBinary &&
+				(targetArgType.Oid == types.T_binary || targetArgType.Oid == types.T_varbinary) {
 				targetArgType = types.T_blob.ToType()
 			}
 			targetType = makePlan2Type(&targetArgType)
@@ -4851,6 +4870,18 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 			if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
 				return 0, err
+			}
+			if mixedTextBinary {
+				applyMixedTextBinaryCollationType(&targetType)
+				if types.T(targetType.Id) == types.T_varchar || types.T(targetType.Id) == types.T_text {
+					for _, typ := range tmpArgsType {
+						setOperationKeyRequired[columnIdx] = setOperationKeyRequired[columnIdx] || typ.Oid == types.T_char
+					}
+					for branchIdx := range setBranchPadSpaceProvenance {
+						setOperationKeyRequired[columnIdx] = setOperationKeyRequired[columnIdx] ||
+							setBranchPadSpaceProvenance[branchIdx][columnIdx]
+					}
+				}
 			}
 			targetArgType = makeTypeByPlan2Type(targetType)
 
@@ -11000,11 +11031,14 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 		commonInputs = append(commonInputs, typ)
 	}
 
+	mixedTextBinaryType, mixedTextBinary := function.MixedTextBinaryCommonType(commonInputs)
 	var commonType types.Type
 	switch {
 	case len(commonInputs) > 0:
 		if pureCharType, ok := setOperationPureCharCommonType(commonInputs); ok {
 			commonType = pureCharType
+		} else if mixedTextBinary {
+			commonType = mixedTextBinaryType
 		} else {
 			resolved, err := function.GetFunctionByName(builder.GetContext(), "coalesce", commonInputs)
 			if err != nil {
@@ -11041,6 +11075,9 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	commonPlanType := makePlan2Type(&commonType)
 	if err := setExpressionCollation(builder.GetContext(), "values", exprs, &commonPlanType); err != nil {
 		return plan.Type{}, err
+	}
+	if mixedTextBinary {
+		applyMixedTextBinaryCollationType(&commonPlanType)
 	}
 	commonType = makeTypeByPlan2Type(commonPlanType)
 	// Physical types do not carry CHAR-derived comparison provenance. Retain

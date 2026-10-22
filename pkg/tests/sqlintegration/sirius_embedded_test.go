@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//go:build sirius && sirius_integration && cgo && linux && amd64
+//go:build sirius && sirius_integration && cgo && linux && (amd64 || arm64)
 
 package sqlintegration
 
@@ -28,8 +28,10 @@ import (
 
 	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
+	moruntime "github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
 	"github.com/stretchr/testify/require"
 )
 
@@ -48,9 +50,23 @@ func TestEmbeddedSiriusPublicMOReader(t *testing.T) {
 		}
 	}))
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, c.Close()) })
+	var serviceRuntime moruntime.Runtime
+	t.Cleanup(func() {
+		require.NoError(t, c.Close())
+		if serviceRuntime != nil {
+			_, registered := serviceRuntime.GetGlobalVariables(compile.SiriusRuntimeKey)
+			require.False(t, registered, "CN shutdown must unregister its Sirius runtime")
+		}
+	})
 	cn, err := c.GetCNService(0)
 	require.NoError(t, err)
+	serviceRuntime = moruntime.ServiceRuntime(cn.ServiceID())
+	require.NotNil(t, serviceRuntime)
+	registered, ok := serviceRuntime.GetGlobalVariables(compile.SiriusRuntimeKey)
+	require.True(t, ok, "Sirius-enabled CN must register its native runtime before serving SQL")
+	native, ok := registered.(*compile.SiriusRuntime)
+	require.True(t, ok)
+	require.NoError(t, native.Validate())
 	db, err := sql.Open("mysql", fmt.Sprintf("dump:111@tcp(127.0.0.1:%d)/", cn.GetServiceConfig().CN.Frontend.Port))
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })

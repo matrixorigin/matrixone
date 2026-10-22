@@ -319,10 +319,6 @@ func (ctr *container) clearProbeResume() {
 	ctr.probeScanHasNull = false
 }
 
-func (loopJoin *LoopJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) cleanBatch(mp *mpool.MPool) {
 	ctr.clearProbeResume()
 	if ctr.resBat != nil {

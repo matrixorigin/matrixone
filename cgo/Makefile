@@ -101,9 +101,8 @@ clean:
 	rm -f *.o *.a *.so *.dylib
 # Accelerator transitions must clean the generation being left, not only the
 # mode requested by the next build. Select by the supported GPU host platform,
-# not MO_CL_CUDA: the CUDA Makefile rejects unsupported macOS/arm64 targets even
-# for clean, while a Linux/x86_64 CPU invocation may be leaving a GPU generation.
-ifeq ($(UNAME_S)_$(UNAME_M),Linux_x86_64)
+# not MO_CL_CUDA: a CPU invocation may be leaving a GPU generation.
+ifneq ($(filter Linux_x86_64 Linux_aarch64 Linux_arm64,$(UNAME_S)_$(UNAME_M)),)
 	$(MAKE) -C cuda clean
 	$(MAKE) -C cuvs clean
 endif

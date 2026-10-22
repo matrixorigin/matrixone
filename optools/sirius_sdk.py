@@ -24,6 +24,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import re
 import shlex
 import shutil
@@ -39,6 +40,18 @@ def run(*args):
 def digest(path):
     with open(path, "rb") as source:
         return hashlib.file_digest(source, "sha256").hexdigest()
+
+
+def native_architecture():
+    """Return the native Go/CUDA architecture pair; cross-builds are unsupported."""
+    architectures = {
+        "x86_64": ("amd64", "x86_64"),
+        "aarch64": ("arm64", "sbsa"),
+        "arm64": ("arm64", "sbsa"),
+    }
+    if platform.system() != "Linux" or platform.machine() not in architectures:
+        raise ValueError("embedded Sirius requires Linux amd64 or arm64")
+    return architectures[platform.machine()]
 
 
 def verify_source_pin(source, revision, mo_root):
@@ -222,7 +235,7 @@ def mo_gpu_runtime(provider, sdk_libraries, repo=None):
     prefix = Path(provider["prefix"])
     search = [
         str(prefix / "lib"),
-        str(prefix / "targets/x86_64-linux/lib"),
+        str(prefix / f"targets/{native_architecture()[1]}-linux/lib"),
         str(repo / "thirdparties/install/lib"),
         str(repo / "cgo"),
         str(repo / "lib"),
@@ -265,10 +278,11 @@ def verify_mo_native_generation(mode, mo_gpu, repo=None):
     values = dict(
         line.split("=", 1) for line in stamp.read_text().splitlines() if "=" in line
     )
+    goarch, _ = native_architecture()
     if (
         values.get("accelerator") != "gpu"
         or values.get("goos") != "linux"
-        or values.get("goarch") != "amd64"
+        or values.get("goarch") != goarch
         or values.get("optimization") not in ("release", "debug")
         or values.get("simsimd") not in ("0", "1")
     ):
@@ -279,7 +293,7 @@ def verify_mo_native_generation(mode, mo_gpu, repo=None):
         str(repo),
         mo_gpu["libmo"],
         "linux",
-        "amd64",
+        goarch,
         "gpu",
         values["optimization"],
         values["simsimd"],

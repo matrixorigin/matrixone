@@ -397,3 +397,7 @@ type AutoIncrCache struct {
 	MaxNum uint64
 	Step   uint64
 }
+
+// HnswSnapshotFallbackKey requests a source scan only for a coverage retry.
+// It is statement-local and never changes the session search mode or SQL AST.
+type HnswSnapshotFallbackKey struct{}
