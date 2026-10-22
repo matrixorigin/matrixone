@@ -652,31 +652,34 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
         """Creation should query the catalog with MatrixOne's canonical identifier."""
         timestamp_ns = int(datetime(2025, 1, 2, 3, 4, 5).timestamp() * 1000000000)
         columns = ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name']
-        rows = [('reviewsnap', timestamp_ns, 'cluster', 'sys', None, None)]
 
         class MockResult:
-            def __init__(self, returns_rows=False, matched=False):
+            def __init__(self, rows, returns_rows=False):
+                self.rows = rows
                 self.returns_rows = returns_rows
                 self.rowcount = 0
-                self.matched = matched
 
             def fetchall(self):
-                return rows if self.matched else []
+                return self.rows
 
             def keys(self):
                 return columns
 
         class MockConnection:
-            def __init__(self):
+            def __init__(self, canonical_name):
+                self.canonical_name = canonical_name
                 self.statements = []
 
             async def exec_driver_sql(self, sql):
                 self.statements.append(sql)
                 is_select = sql.lstrip().startswith("SELECT")
-                return MockResult(
-                    returns_rows=is_select,
-                    matched=is_select and "WHERE sname = 'reviewsnap'" in sql,
-                )
+                matched = is_select and f"WHERE sname = '{self.canonical_name}'" in sql
+                rows = []
+                if matched:
+                    rows = [
+                        (self.canonical_name, timestamp_ns, 'cluster', 'sys', None, None)
+                    ]
+                return MockResult(rows, returns_rows=is_select)
 
         class MockBeginContext:
             def __init__(self, connection):
@@ -695,17 +698,24 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
             def begin(self):
                 return MockBeginContext(self.connection)
 
-        for supplied_name in ("ReviewSnap", "`ReviewSnap`"):
-            with self.subTest(name=supplied_name):
+        cases = (
+            ("ReviewSnap", "reviewsnap"),
+            ("`ReviewSnap`", "reviewsnap"),
+            ("`Review``Snap`", "review`snap"),
+            ("İSnap", "isnap"),
+            ("ΟΣ", "οσ"),
+        )
+        for supplied_name, canonical_name in cases:
+            with self.subTest(name=supplied_name, canonical=canonical_name):
                 client = AsyncClient()
-                connection = MockConnection()
+                connection = MockConnection(canonical_name)
                 client._engine = MockEngine(connection)
 
                 snapshot = await client.snapshots.create(supplied_name, SnapshotLevel.CLUSTER)
 
                 self.assertEqual(len(connection.statements), 2)
-                self.assertIn("WHERE sname = 'reviewsnap'", connection.statements[1])
-                self.assertEqual(snapshot.name, "reviewsnap")
+                self.assertIn(f"WHERE sname = '{canonical_name}'", connection.statements[1])
+                self.assertEqual(snapshot.name, canonical_name)
 
     async def test_get_snapshot(self):
         """Test getting snapshot"""
