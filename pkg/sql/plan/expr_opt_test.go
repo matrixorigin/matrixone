@@ -116,6 +116,162 @@ func TestDoMergeFiltersOnCompositeKeyKeepsNonSortKeyRanges(t *testing.T) {
 	requireNoFuncNames(t, ret, "in_range", "between")
 }
 
+// Equality/range serializations and OR-to-IN require a common physical key
+// domain. Preserve typed JSON/numeric predicates at every admission boundary.
+func TestDoMergeFiltersOnCompositeKeyKeepsJSONNumericPredicates(t *testing.T) {
+	for _, key := range []struct {
+		name  string
+		table *planpb.TableDef
+	}{
+		{"primary", makeExprOptCompositeSortKeyTableDef()},
+		{"cluster", makeExprOptCompositeClusterKeyTableDef()},
+	} {
+		for _, tc := range []struct {
+			name         string
+			part         int32
+			reversed     bool
+			lower, upper string
+		}{
+			{"equality_first", 0, false, "", ""},
+			{"equality_second", 1, false, "", ""},
+			{"equality_reversed", 1, true, "", ""},
+			{"strict_range", 1, false, ">", "<"},
+			{"inclusive_range", 1, false, ">=", "<="},
+			{"reversed_range", 1, true, ">", "<="},
+			{"leading_range", 0, false, ">", "<"},
+		} {
+			t.Run(key.name+"/"+tc.name, func(t *testing.T) {
+				ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+				builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+				tag := builder.genNewBindTag()
+				jsonValue := func(text string) *planpb.Expr {
+					v, err := types.ParseStringToByteJson(text)
+					require.NoError(t, err)
+					b, err := types.EncodeJson(v)
+					require.NoError(t, err)
+					return &planpb.Expr{Typ: types.T_json.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: string(b)}}}}
+				}
+				bind := func(op string, left, right *planpb.Expr) *planpb.Expr {
+					if tc.reversed {
+						left, right = right, left
+						switch op {
+						case ">":
+							op = "<"
+						case ">=":
+							op = "<="
+						case "<":
+							op = ">"
+						case "<=":
+							op = ">="
+						}
+					}
+					e, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), op, []*planpb.Expr{left, right})
+					require.NoError(t, err)
+					return e
+				}
+				var residuals []*planpb.Expr
+				col := func() *planpb.Expr { return makeExprOptInt64Col(tag, tc.part, key.table.Cols[tc.part].Name) }
+				if tc.lower == "" {
+					residuals = []*planpb.Expr{bind("=", col(), jsonValue("1"))}
+				} else {
+					residuals = []*planpb.Expr{bind(tc.lower, col(), jsonValue("1.5")), bind(tc.upper, col(), jsonValue("2.5"))}
+					for _, e := range residuals {
+						ref, _ := classifyRangeBound(e.GetF())
+						require.Nil(t, ref, "mixed bounds cannot participate in index range pairing")
+					}
+				}
+				// A safe ordinary first component can still provide a prefix,
+				// while no mixed component may be serialized or consumed.
+				filters := append([]*planpb.Expr{}, residuals...)
+				other := int32(1) - tc.part
+				filters = append(filters, makeExprOptBinaryInt64Expr(t, ctx, "=", makeExprOptInt64Col(tag, other, key.table.Cols[other].Name), 1))
+				snapshots := DeepCopyExprList(residuals)
+				ret := builder.doMergeFiltersOnCompositeKey(key.table, tag, filters...)
+				for n, expr := range residuals {
+					require.Contains(t, ret, expr)
+					require.Equal(t, snapshots[n], expr, "no narrowing cast or operand mutation")
+				}
+				for _, expr := range ret {
+					require.NoError(t, planpb.VisitExprTree(expr, func(e *planpb.Expr) error {
+						if f := e.GetF(); f != nil && f.Func.ObjName == "serial" {
+							for _, arg := range f.Args {
+								require.NotEqual(t, int32(types.T_json), arg.Typ.Id)
+							}
+						}
+						return nil
+					}))
+				}
+			})
+		}
+	}
+}
+
+func TestDoMergeFiltersOnCompositeKeyMergesOnlyCompatibleOrArms(t *testing.T) {
+	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)
+	tag := builder.genNewBindTag()
+	bind := func(name string, args ...*planpb.Expr) *planpb.Expr {
+		e, err := BindFuncExprImplByPlanExpr(ctx.GetContext(), name, args)
+		require.NoError(t, err)
+		return e
+	}
+	jsonValue := func(text string) *planpb.Expr {
+		v, err := types.ParseStringToByteJson(text)
+		require.NoError(t, err)
+		b, err := types.EncodeJson(v)
+		require.NoError(t, err)
+		return &planpb.Expr{Typ: types.T_json.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: string(b)}}}}
+	}
+	col := func() *planpb.Expr { return makeExprOptInt64Col(tag, 2, "c") }
+	for _, tc := range []struct {
+		name           string
+		reversed, pure bool
+		numericArms    int
+	}{
+		{"mixed", false, false, 0}, {"reversed", true, false, 0},
+		{"mixed_and_pure", false, false, 2}, {"pure_control", false, true, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var arms, residuals []*planpb.Expr
+			if !tc.pure {
+				for _, value := range []string{"1.5", "2.5"} {
+					left, right := col(), jsonValue(value)
+					if tc.reversed {
+						left, right = right, left
+					}
+					e := bind("=", left, right)
+					arms = append(arms, e)
+					residuals = append(residuals, e)
+				}
+			}
+			for i := range tc.numericArms {
+				arms = append(arms, bind("=", col(), MakePlan2Int64ConstExprWithType(int64(i+1))))
+			}
+			expr := bind("or", arms...)
+			ret := builder.doMergeFiltersOnCompositeKey(makeExprOptCompositeSortKeyTableDef(), tag, expr)
+			require.Len(t, ret, 1)
+			if tc.pure {
+				require.Equal(t, "in", ret[0].GetF().Func.ObjName)
+			} else {
+				require.Equal(t, "or", ret[0].GetF().Func.ObjName)
+				var remaining []*planpb.Expr
+				flattenLogicalExpressions(ret[0], "or", &remaining)
+				for _, original := range residuals {
+					require.Contains(t, remaining, original)
+				}
+			}
+			require.NoError(t, planpb.VisitExprTree(ret[0], func(e *planpb.Expr) error {
+				if f := e.GetF(); f != nil && f.Func.ObjName == "in" {
+					for _, value := range f.Args[1].GetList().List {
+						require.True(t, isSameColumnType(f.Args[0].Typ, value.Typ))
+					}
+				}
+				return nil
+			}))
+		})
+	}
+}
+
 func TestDoMergeFiltersOnCompositeKeyKeepsNativeUnicodePredicates(t *testing.T) {
 	ctx := NewMockCompilerContext(true, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, false, false)

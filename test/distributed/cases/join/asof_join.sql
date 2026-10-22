@@ -227,5 +227,42 @@ from constrained_readings r asof join constrained_device_cfg c
  and r.region = c.region
  and r.event_ts <= c.effective_ts;
 
+-- Mixed JSON/numeric equality is candidate eligibility, not a hash key.
+-- A later false candidate must not hide an earlier true predecessor (#30539).
+create table json_asof_left (id int, k int, j json, ts datetime);
+create table json_asof_right (k int, n int, ts datetime);
+insert into json_asof_left values
+(1,1,'1','2026-01-01 10:00:00'),
+(2,1,'"1"','2026-01-01 10:00:00'),
+(3,1,'1.5','2026-01-01 10:00:00'),
+(4,1,'null','2026-01-01 10:00:00'),
+(5,1,'{}','2026-01-01 10:00:00'),
+(6,1,'1',null),
+(7,1,'1','2026-01-01 07:00:00'),
+(8,1,'1','2026-01-01 08:00:00');
+insert into json_asof_right values
+(1,1,'2026-01-01 08:00:00'),(1,2,'2026-01-01 09:00:00');
+select l.id, r.n, r.ts from json_asof_left l asof left join json_asof_right r on l.j=r.n and l.ts>=r.ts order by l.id;
+
+select l.id, r.n from json_asof_left l asof join json_asof_right r on l.k=r.k and l.j=r.n and l.ts>=r.ts order by l.id;
+
+select l.id, r.n from json_asof_left l asof join json_asof_right r on r.n=l.j and l.ts>=r.ts order by l.id;
+
+select l.id, r.n from json_asof_left l asof join json_asof_right r on l.j=r.n+0 and l.ts>r.ts order by l.id;
+
+select l.id, r.n from json_asof_left l asof left join json_asof_right r on l.k=r.k and l.j=r.n and l.ts>=r.ts tolerance interval 1 hour order by l.id;
+
+insert into json_asof_right values (1,1,'2026-01-01 09:00:00');
+
+select l.id, r.n, r.ts from json_asof_left l asof join json_asof_right r on l.j=r.n and l.ts>=r.ts order by l.id;
+
+create table json_asof_empty like json_asof_right;
+
+select count(*) from json_asof_left l asof join json_asof_empty r on l.j=r.n and l.ts>=r.ts;
+
+select count(*) from json_asof_left l asof left join json_asof_empty r on l.j=r.n and l.ts>=r.ts;
+
+select count(*) from json_asof_empty r asof join json_asof_left l on r.n=l.j and r.ts>=l.ts;
+
 drop database asof_join_db;
 set session time_zone = @saved_time_zone;
