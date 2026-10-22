@@ -2443,24 +2443,26 @@ func (s *Scope) CreateView(c *Compile) error {
 		return err
 	}
 
+	var oldLogicalID uint64
 	if exists {
 		if qry.GetIfNotExists() {
 			return nil
 		}
 
-		if qry.GetReplace() {
-			if err = c.runSqlWithOptions(
-				fmt.Sprintf("DROP VIEW IF EXISTS %s", viewName), executor.StatementOption{}.WithDisableLog(),
-			); err != nil {
-				getLogger(s.Proc.GetService()).Error("drop existing view failed",
-					zap.String("databaseName", c.db),
-					zap.String("viewName", qry.GetTableDef().GetName()),
-					zap.Error(err),
-				)
-				return err
-			}
-		} else {
+		if !qry.GetReplace() {
 			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
+		}
+		oldRelation, relationErr := dbSource.Relation(c.proc.Ctx, viewName, nil)
+		if relationErr != nil {
+			return relationErr
+		}
+		oldDef := oldRelation.GetTableDef(c.proc.Ctx)
+		if oldDef.GetViewSql() == nil {
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
+		}
+		oldLogicalID = oldDef.GetLogicalId()
+		if oldLogicalID == 0 {
+			oldLogicalID = oldRelation.GetTableID(c.proc.Ctx)
 		}
 	}
 
@@ -2473,7 +2475,16 @@ func (s *Scope) CreateView(c *Compile) error {
 		return err
 	}
 
-	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), viewName, append(exeCols, exeDefs...)); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	if exists {
+		// Replace only the physical catalog row. Grants remain attached to the
+		// view's logical identity, while an actual DROP/CREATE gets a new one.
+		if err = dbSource.Delete(c.proc.Ctx, viewName); err != nil {
+			return err
+		}
+		createCtx = context.WithValue(createCtx, defines.LogicalIdKey{}, oldLogicalID)
+	}
+	if err = dbSource.Create(createCtx, viewName, append(exeCols, exeDefs...)); err != nil {
 		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),

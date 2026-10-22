@@ -2839,12 +2839,17 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
 			BindingTags:   []int32{idxTag},
 			ScanSnapshot:  leftChild.ScanSnapshot,
+			OriginViews:   append([]string(nil), leftChild.OriginViews...),
+			DirectView:    leftChild.DirectView,
 		}
 		if hasRuntimeFilter {
 			idxTableNode.RuntimeFilterProbeList =
 				[]*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter}
 		}
-		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[nodeID])
+		// The index is another access path for the left scan. A JOIN context
+		// can be absent or belong to an enclosing view, so authorization must
+		// follow the original scan's complete view chain and direct view.
+		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[leftChild.NodeId])
 		builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
 
 		if hasRuntimeFilter {
@@ -2882,7 +2887,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			Limit:    leftChild.Limit,
 			Offset:   leftChild.Offset,
 			OnList:   []*plan.Expr{pkJoinCond},
-		}, builder.ctxByNode[nodeID])
+		}, builder.ctxByNode[leftChild.NodeId])
 
 		leftChild.Limit, leftChild.Offset = nil, nil
 
