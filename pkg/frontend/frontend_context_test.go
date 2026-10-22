@@ -23,6 +23,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -36,6 +37,12 @@ func TestFrontendExpressionContextScope(t *testing.T) {
 	defer ses.Close()
 	expr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "like", []*plan2.Expr{plan2.MakePlan2StringConstExprWithType("MatrixOne"), plan2.MakePlan2StringConstExprWithType("Matrix%")})
 	require.NoError(t, err)
+	const savedID = "00000000-0000-0000-0000-000000000001"
+	idExpr, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), "if", []*plan.Expr{expr, plan2.MakePlan2StringConstExprWithType(savedID), plan2.MakePlan2StringConstExprWithType(savedID)})
+	require.NoError(t, err)
+	idExpr, err = plan2.BindFuncExprImplByPlanExpr(context.Background(), "cast", []*plan.Expr{idExpr, {Typ: plan.Type{Id: int32(types.T_uuid)}, Expr: &plan.Expr_T{T: &plan.TargetType{}}}})
+	require.NoError(t, err)
+	metadataPlan := &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{NodeType: plan.Node_FUNCTION_SCAN, TableDef: &plan.TableDef{TblFunc: &plan.TableFunction{Name: "meta_scan"}}, TblFuncExprList: []*plan.Expr{idExpr}}}}}}
 	stmt, err := parsers.ParseOne(context.Background(), dialect.MYSQL, "set @scope_probe = 'MatrixOne' like 'Matrix%'", 1)
 	require.NoError(t, err)
 	defer stmt.Free()
@@ -82,6 +89,13 @@ func TestFrontendExpressionContextScope(t *testing.T) {
 				} else {
 					require.NoError(t, err)
 					require.Equal(t, true, value)
+				}
+				ids, err := isResultQuery(current, ses.proc, metadataPlan)
+				if current.Err() != nil {
+					require.ErrorIs(t, err, current.Err())
+				} else {
+					require.NoError(t, err)
+					require.Equal(t, []string{savedID}, ids)
 				}
 				require.Same(t, prior, ses.proc.Ctx)
 				require.Same(t, previous, ses.proc.GetTopContext())

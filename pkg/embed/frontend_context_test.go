@@ -191,5 +191,27 @@ func TestFrontendExpressionContextAcrossRequests(t *testing.T) {
 			}
 		})
 
+		t.Run("meta_scan argument", func(t *testing.T) {
+			var previous string
+			require.NoError(t, conn.QueryRowContext(ctx, "select @@save_query_result").Scan(&previous))
+			defer func() {
+				cleanupCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_, err := conn.ExecContext(cleanupCtx, "set save_query_result="+sqlquote.String(previous))
+				require.NoError(t, err)
+			}()
+			_, err := conn.ExecContext(ctx, "set save_query_result=on")
+			require.NoError(t, err)
+			var value int
+			require.NoError(t, conn.QueryRowContext(ctx, "/* save_result */ select 42 as value").Scan(&value))
+			require.Equal(t, 42, value)
+			var id string
+			require.NoError(t, conn.QueryRowContext(ctx, "select last_query_id()").Scan(&id))
+			var count int
+			query := "select count(*) from meta_scan(if(last_query_id() like '%'," + sqlquote.String(id) + "," + sqlquote.String(id) + ")) as m"
+			require.NoError(t, conn.QueryRowContext(ctx, query).Scan(&count))
+			require.Equal(t, 1, count)
+		})
+
 	})
 }
