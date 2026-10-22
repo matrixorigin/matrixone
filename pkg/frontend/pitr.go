@@ -2649,7 +2649,7 @@ func createPubByPitr(
 		// identities in their respective context slots while replaying the CREATE.
 		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Creator, pubInfo.Owner)
 		getLogger(sid).Info(fmt.Sprintf("[%s] recreate publication %s for database %s", pitrName, pubInfo.PubName, pubInfo.DbName))
-		if err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo); err != nil {
+		if err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, ts); err != nil {
 			return
 		}
 	}

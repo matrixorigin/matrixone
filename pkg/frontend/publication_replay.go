@@ -16,6 +16,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
@@ -56,11 +57,49 @@ func publicationStatementForReplay(ctx context.Context, pub *pubsub.PubInfo) (*t
 
 // createPublicationFromRestoreInfo keeps replay on the ordinary creation path,
 // including current database identity, historical principals and subscriber state.
-func createPublicationFromRestoreInfo(ctx context.Context, bh BackgroundExec, pub *pubsub.PubInfo) error {
-	statement, err := publicationStatementForReplay(ctx, pub)
+func createPublicationFromRestoreInfo(ctx context.Context, bh BackgroundExec, pub *pubsub.PubInfo, ts int64) error {
+	replay, err := publicationInfoForBulkRestore(ctx, bh, pub, ts)
+	if err != nil {
+		return err
+	}
+	statement, err := publicationStatementForReplay(ctx, replay)
 	if err != nil {
 		return err
 	}
 	defer statement.Free()
-	return createPublicationWithTableSelection(ctx, bh, statement, pub.TablesStr == pubsub.TableAll)
+	return createPublicationWithTableSelection(ctx, bh, statement, replay.TablesStr == pubsub.TableAll)
+}
+
+// Bulk restore deliberately omits external tables. Remove only those historical
+// objects from an explicit publication selection, not arbitrary missing tables:
+// ordinary creation validation must still catch an incomplete restore. Use the
+// source tenant and timestamp, since current metadata has already been replaced.
+func publicationInfoForBulkRestore(ctx context.Context, bh BackgroundExec, pub *pubsub.PubInfo, ts int64) (*pubsub.PubInfo, error) {
+	if pub.TablesStr == pubsub.TableAll || pub.TablesStr == "" {
+		return pub, nil
+	}
+	target, err := defines.GetAccountId(ctx)
+	if err != nil {
+		return nil, err
+	}
+	tables, err := showFullTablesFromTS(ctx, "", bh, pub.DbName, "", ts, pub.PubAccountId, target)
+	if err != nil {
+		return nil, err
+	}
+	omitted := make(map[string]struct{})
+	for _, table := range tables {
+		if shouldSkipRestoreTableInBulk(table) {
+			omitted[table.tblName] = struct{}{}
+		}
+	}
+	var selected []string
+	for _, name := range strings.Split(pub.TablesStr, pubsub.Sep) {
+		if _, skip := omitted[name]; !skip {
+			selected = append(selected, name)
+		}
+	}
+	// Never mutate snapshot metadata or turn an emptied explicit list into ALL.
+	replay := *pub
+	replay.TablesStr = strings.Join(selected, pubsub.Sep)
+	return &replay, nil
 }

@@ -4261,7 +4261,7 @@ func createPubs(
 		// The CREATE statement carries the stable database name. createPublication
 		// resolves it inside the target tenant and persists the current database
 		// ID, so the historical PubInfo.DbId must not be replayed.
-		err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo)
+		err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, snapshotTs)
 		if err != nil {
 			return
 		}

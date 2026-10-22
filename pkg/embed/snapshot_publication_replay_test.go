@@ -293,3 +293,111 @@ func TestSnapshotEmptyPublicationTablesRestore(t *testing.T) {
 		}
 	})
 }
+
+func TestSnapshotPublicationSkipsExternalTables(t *testing.T) {
+	RunSingleCNBaseClusterTests(t, func(c Cluster) {
+		admin := openIcebergTestDB(t, c)
+		defer admin.Close()
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
+		defer cancel()
+		mustExec := func(query string) {
+			t.Helper()
+			_, err := admin.ExecContext(ctx, query)
+			require.NoError(t, err, query)
+		}
+		mustExec("create account external_pub_owner admin_name 'admin' identified by '111'")
+		mustExec("create account external_pub_sub admin_name 'admin' identified by '111'")
+		defer func() {
+			for _, account := range []string{"external_pub_sub", "external_pub_owner"} {
+				_, err := admin.Exec("drop account " + account)
+				require.NoError(t, err)
+			}
+		}()
+		cn, err := c.GetCNService(0)
+		require.NoError(t, err)
+		connect := func(account string) *sql.DB {
+			t.Helper()
+			db, err := sql.Open("mysql", fmt.Sprintf("%s#admin:111@tcp(127.0.0.1:%d)/", account, cn.GetServiceConfig().CN.Frontend.Port))
+			require.NoError(t, err)
+			return db
+		}
+		owner, sub := connect("external_pub_owner"), connect("external_pub_sub")
+		defer owner.Close()
+		defer sub.Close()
+		for _, tc := range []struct {
+			name, selection, want string
+		}{
+			{name: "no_publication"},
+			{name: "all_tables", selection: "*", want: "*"},
+			{name: "ordinary", selection: "base_t", want: "base_t"},
+			{name: "external_only", selection: "`ext-t`"},
+			{name: "mixed", selection: "base_t,`ext-t`", want: "base_t"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				exec := func(query string) {
+					t.Helper()
+					_, err := owner.ExecContext(ctx, query)
+					require.NoError(t, err, query)
+				}
+				const db, pub, snap = "external_pub_db", "external_pub", "external_pub_snapshot"
+				exec("create database " + db)
+				defer func() {
+					_, err := sub.Exec("drop database if exists external_pub_subscription")
+					require.NoError(t, err)
+					for _, query := range []string{"drop snapshot if exists " + snap, "drop publication if exists " + pub, "drop database if exists " + db} {
+						_, err := owner.Exec(query)
+						require.NoError(t, err, query)
+					}
+				}()
+				exec("create table " + db + ".base_t(id int primary key)")
+				exec("insert into " + db + ".base_t values(1)")
+				exec("create external table " + db + ".`ext-t`(id int) infile{'filepath'='/unused-publication-test.csv','format'='csv'}")
+				if tc.selection != "" {
+					selection := ""
+					if tc.selection != "*" {
+						selection = " table " + tc.selection
+					}
+					exec("create publication " + pub + " database " + db + selection + " account external_pub_sub comment 'external selection'")
+					_, err := sub.ExecContext(ctx, "create database external_pub_subscription from external_pub_owner publication "+pub)
+					require.NoError(t, err)
+				}
+				level := "database " + db
+				exec("create snapshot " + snap + " for " + level)
+				exec("insert into " + db + ".base_t values(2)")
+				for range 2 {
+					exec("restore " + level + "{snapshot='" + snap + "'}")
+					var rows int
+					require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from "+db+".base_t").Scan(&rows))
+					require.Equal(t, 1, rows, "skipping an external table must not roll back the ordinary table restore")
+					require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='"+db+"' and relname='ext-t'").Scan(&rows))
+					require.Zero(t, rows)
+					if tc.selection == "" {
+						continue
+					}
+					var all bool
+					var tables, grants, comment string
+					require.NoError(t, admin.QueryRowContext(ctx, "select all_table,table_list,account_list,comment from mo_catalog.mo_pubs where account_name='external_pub_owner' and pub_name='"+pub+"'").Scan(&all, &tables, &grants, &comment))
+					require.Equal(t, tc.want == "*", all)
+					require.Equal(t, tc.want, tables)
+					require.Equal(t, "external_pub_sub", grants)
+					require.Equal(t, "external selection", comment)
+					var pubTables string
+					require.NoError(t, admin.QueryRowContext(ctx, "select pub_tables from mo_catalog.mo_subs where pub_account_name='external_pub_owner' and pub_name='"+pub+"' and sub_account_name='external_pub_sub'").Scan(&pubTables))
+					require.Equal(t, tc.want, pubTables)
+					if tc.want != "" {
+						require.NoError(t, sub.QueryRowContext(ctx, "select count(*) from external_pub_subscription.base_t").Scan(&rows))
+						require.Equal(t, 1, rows)
+					} else {
+						_, err := sub.ExecContext(ctx, "select * from external_pub_subscription.base_t")
+						require.ErrorContains(t, err, "base_t", "external-only selection must not widen to ALL")
+					}
+					exec("create table " + db + ".`ext-t`(id int primary key)")
+					if tc.want != "*" {
+						_, err := sub.ExecContext(ctx, "select * from external_pub_subscription.`ext-t`")
+						require.ErrorContains(t, err, "ext-t", "reusing an excluded name must not revive publication access")
+					}
+				}
+			})
+		}
+	})
+}

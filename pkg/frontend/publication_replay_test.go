@@ -16,6 +16,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/stretchr/testify/require"
@@ -66,7 +67,7 @@ func TestCreatePublicationFromRestoreInfoPropagatesError(t *testing.T) {
 			bh.sql2err[getAccountIdNamesSql] = failure
 			pub := &pubsub.PubInfo{PubName: "p", DbName: "db", TablesStr: pubsub.TableAll, SubAccountsStr: accounts}
 			ctx := defines.AttachAccountId(t.Context(), sysAccountID)
-			require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub), failure)
+			require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), failure)
 			require.Equal(t, []string{getAccountIdNamesSql}, bh.executedSQLs, "replay must abort before any catalog write")
 		})
 	}
@@ -77,16 +78,70 @@ func TestCreatePublicationReplayRetainsTableSelection(t *testing.T) {
 		t.Run("tables="+tables, func(t *testing.T) {
 			bh, ctx, _ := newCreatePublicationIfNotExistsTest(t, false, false)
 			pub := &pubsub.PubInfo{PubName: "pub1", DbName: "db1", TablesStr: tables, SubAccountsStr: pubsub.AccountAll}
+			bh.sql2result[buildTableInfoListSQL("db1", "", 42, sysAccountID)] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"},
+				[][]interface{}{{"t1", "BASE TABLE", catalog.SystemOrdinaryRel, ""}})
 			want, err := getSqlForInsertIntoMoPubs(ctx, sysAccountID, sysAccountName, "pub1", "db1", 7,
 				tables == pubsub.TableAll, tables, pubsub.AccountAll, "", true)
 			require.NoError(t, err)
 			insertion := errors.New("publication insertion reached")
 			bh.sql2err[want] = insertion
-			require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub), insertion)
+			require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), insertion)
 			require.Equal(t, want, bh.executedSQLs[len(bh.executedSQLs)-1])
 			for _, sql := range bh.executedSQLs {
 				require.False(t, strings.Contains(sql, "mo_subs"), "failed insertion must not change subscriptions")
 			}
 		})
 	}
+}
+
+func TestPublicationReplayOmitsOnlyBulkSkippedTables(t *testing.T) {
+	for _, tc := range []struct{ tables, want string }{
+		{pubsub.TableAll, pubsub.TableAll}, {"", ""}, {"t1", "t1"},
+		{"ext-t", ""}, {"ext-t,t1", "t1"}, {"missing,ext-t", "missing"},
+	} {
+		t.Run("tables="+tc.tables, func(t *testing.T) {
+			bh, ctx, _ := newCreatePublicationIfNotExistsTest(t, false, false)
+			pub := &pubsub.PubInfo{PubAccountId: 7, PubName: "pub1", DbName: "db1", TablesStr: tc.tables,
+				SubAccountsStr: pubsub.AccountAll, Comment: "owner's copy"}
+			original := *pub
+			query := buildTableInfoListSQL("db1", "", 42, 7)
+			bh.sql2result[query] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{
+				{"t1", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+				{"ext-t", "BASE TABLE", catalog.SystemExternalRel, ""},
+			})
+			replay, err := publicationInfoForBulkRestore(ctx, bh, pub, 42)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, replay.TablesStr)
+			require.Equal(t, original, *pub)
+			if tc.tables == "" || tc.tables == pubsub.TableAll {
+				require.Empty(t, bh.executedSQLs, "ALL and explicit-empty require no table enumeration")
+			} else {
+				require.Equal(t, []string{query}, bh.executedSQLs, "read source tenant at the historical timestamp")
+			}
+			if tc.want == "missing" {
+				require.ErrorContains(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), "table 'missing' not exists")
+			} else {
+				want, err := getSqlForInsertIntoMoPubs(ctx, sysAccountID, sysAccountName, "pub1", "db1", 7,
+					tc.want == pubsub.TableAll, tc.want, pubsub.AccountAll, pub.Comment, true)
+				require.NoError(t, err)
+				insertion := errors.New("publication insertion reached")
+				bh.sql2err[want] = insertion
+				require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), insertion)
+				require.Equal(t, want, bh.executedSQLs[len(bh.executedSQLs)-1])
+			}
+			require.Equal(t, original, *pub)
+		})
+	}
+}
+
+func TestPublicationReplayPropagatesHistoricalTableError(t *testing.T) {
+	bh := &backgroundExecTest{}
+	bh.init()
+	pub := &pubsub.PubInfo{PubAccountId: 7, DbName: "db1", TablesStr: "ext-t"}
+	query := buildTableInfoListSQL("db1", "", 42, 7)
+	failure := errors.New("historical table metadata unavailable")
+	bh.sql2err[query] = failure
+	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+	require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), failure)
+	require.Equal(t, []string{query}, bh.executedSQLs, "failed historical lookup must abort before catalog writes")
 }
