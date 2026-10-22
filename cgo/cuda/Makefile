@@ -71,6 +71,9 @@ endif
 
 # architecture
 HOST_ARCH   := $(shell uname -m)
+ifeq ($(HOST_ARCH),arm64)
+HOST_ARCH := aarch64
+endif
 TARGET_ARCH ?= $(HOST_ARCH)
 ifneq (,$(filter $(TARGET_ARCH),x86_64 aarch64 sbsa ppc64le armv7l))
     ifneq ($(TARGET_ARCH),$(HOST_ARCH))

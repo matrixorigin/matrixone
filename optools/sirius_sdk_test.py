@@ -221,7 +221,9 @@ class SDKTest(unittest.TestCase):
                 sirius_sdk.runtime_source(driver, prefix)
 
     def test_mo_gpu_runtime_records_only_same_prefix_elf_closure(self):
-        with tempfile.TemporaryDirectory() as directory:
+        with tempfile.TemporaryDirectory() as directory, \
+             patch.object(sirius_sdk.platform, "system", return_value="Linux"), \
+             patch.object(sirius_sdk.platform, "machine", return_value="aarch64"):
             root = Path(directory)
             repo = root / "mo"
             prefix = root / "sirius/.pixi/envs/mo"
@@ -240,11 +242,14 @@ class SDKTest(unittest.TestCase):
                 f"{name} => {prefix / 'lib' / name} (0x1)" for name in names
             ) + f"\nlibusearch_c.so => {baseline} (0x1)\nlibcuda.so.1 => not found\n"
             result = subprocess.CompletedProcess([], 0, lines, "")
-            with patch.object(sirius_sdk.subprocess, "run", return_value=result), \
+            with patch.object(sirius_sdk.subprocess, "run", return_value=result) as command, \
                  patch.object(sirius_sdk, "elf_soname", side_effect=lambda path: path.name):
                 got = sirius_sdk.mo_gpu_runtime(
                     {"prefix": str(prefix)}, {"libcuvs.so": prefix / "lib/libcuvs.so"}, repo
                 )
+            cuda_target = sirius_sdk.native_architecture()[1]
+            self.assertIn(str(prefix / f"targets/{cuda_target}-linux/lib"),
+                          command.call_args.kwargs["env"]["LD_LIBRARY_PATH"].split(":"))
             self.assertEqual(set(got["runtime_libraries"]), set(names))
             self.assertEqual(got["libmo_sha256"], sirius_sdk.digest(repo / "cgo/libmo.so"))
 
@@ -265,17 +270,22 @@ class SDKTest(unittest.TestCase):
             repo = Path(directory)
             (repo / "cgo").mkdir()
             stamp = repo / "cgo/.mo-native-provenance"
-            stamp.write_text(
-                "accelerator=gpu\ngoos=linux\ngoarch=amd64\n"
-                "optimization=release\nsimsimd=0\n"
-            )
             mo_gpu = {"libmo": str(repo / "cgo/libmo.so")}
-            with patch.object(sirius_sdk, "run", return_value="") as command:
-                sirius_sdk.verify_mo_native_generation("release", mo_gpu, repo)
-            self.assertEqual(command.call_args.args[-3:], ("gpu", "release", "0"))
-            stamp.write_text(stamp.read_text().replace("accelerator=gpu", "accelerator=cpu"))
-            with self.assertRaisesRegex(ValueError, "wrong build key"):
-                sirius_sdk.verify_mo_native_generation("release", mo_gpu, repo)
+            for machine, arch in (("x86_64", "amd64"), ("aarch64", "arm64")):
+                with self.subTest(arch=arch), \
+                     patch.object(sirius_sdk.platform, "system", return_value="Linux"), \
+                     patch.object(sirius_sdk.platform, "machine", return_value=machine):
+                    valid = f"accelerator=gpu\ngoos=linux\ngoarch={arch}\noptimization=release\nsimsimd=0\n"
+                    stamp.write_text(valid)
+                    with patch.object(sirius_sdk, "run", return_value="") as command:
+                        sirius_sdk.verify_mo_native_generation("release", mo_gpu, repo)
+                    self.assertEqual(command.call_args.args[-5:], ("linux", arch, "gpu", "release", "0"))
+                    other = "amd64" if arch == "arm64" else "arm64"
+                    for invalid in (valid.replace("accelerator=gpu", "accelerator=cpu"),
+                                    valid.replace(f"goarch={arch}", f"goarch={other}")):
+                        stamp.write_text(invalid)
+                        with self.assertRaisesRegex(ValueError, "wrong build key"):
+                            sirius_sdk.verify_mo_native_generation("release", mo_gpu, repo)
             sirius_sdk.verify_mo_native_generation("development", mo_gpu, repo)
 
     def package_fixture(self, root):
