@@ -10774,9 +10774,7 @@ func foldFloatComparisonConstants(proc *process.Process, name string, args []*Ex
 		return
 	}
 	fold := func(column, candidate *Expr) *Expr {
-		if column.GetCol() == nil ||
-			(types.T(column.Typ.Id) != types.T_float32 && types.T(column.Typ.Id) != types.T_float64) ||
-			candidate.GetLit() != nil {
+		if column.GetCol() == nil || !types.T(column.Typ.Id).IsFloat() || candidate.GetLit() != nil {
 			return candidate
 		}
 		oid := types.T(candidate.Typ.Id)
@@ -11473,7 +11471,7 @@ func (b *baseBinder) bindNumVal(astExpr *tree.NumVal, typ Type) (*Expr, error) {
 		expr := makePlan2StringConstExprWithType(val, isBin)
 		expr.GetLit().LiteralForm = form
 		if !typ.IsEmpty() {
-			isFloat := typ.Id == int32(types.T_float32) || typ.Id == int32(types.T_float64)
+			isFloat := types.T(typ.Id).IsFloat()
 			return appendCastBeforeExpr(b.GetContext(), expr, typ, isBin, isFloat)
 		}
 		return expr, nil

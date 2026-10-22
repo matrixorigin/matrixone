@@ -997,6 +997,15 @@ func internalNumericPrecision(typ types.Type) (int64, bool) {
 			return int64(typ.Width), true
 		}
 		return 22, true
+	case types.T_bf16:
+		// the significand bits, the implicit leading bit included
+		return 8, true
+	case types.T_float16:
+		return 11, true
+	case types.T_float8:
+		return 4, true
+	case types.T_float4:
+		return 2, true
 	case types.T_decimal64, types.T_decimal128, types.T_decimal256:
 		if typ.Width > 0 {
 			return int64(typ.Width), true
@@ -3496,6 +3505,22 @@ func getPackFunWithPhysical(v *vector.Vector, physicalKey bool) (func(v *vector.
 			val := vector.GetFixedAtNoTypeCheck[float64](v, idx)
 			ps.EncodeFloat64(val)
 		}, nil
+	case types.T_bf16:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeBF16(vector.GetFixedAtNoTypeCheck[types.BF16](v, idx))
+		}, nil
+	case types.T_float16:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat16(vector.GetFixedAtNoTypeCheck[types.Float16](v, idx))
+		}, nil
+	case types.T_float8:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat8(vector.GetFixedAtNoTypeCheck[types.Float8](v, idx))
+		}, nil
+	case types.T_float4:
+		return func(v *vector.Vector, idx int, ps *types.Packer) {
+			ps.EncodeFloat4(vector.GetFixedAtNoTypeCheck[types.Float4](v, idx))
+		}, nil
 	case types.T_date:
 		return func(v *vector.Vector, idx int, ps *types.Packer) {
 			val := vector.GetFixedAtNoTypeCheck[types.Date](v, idx)
@@ -4142,6 +4167,18 @@ func builtInSerialExtract(parameters []*vector.Vector, result vector.FunctionRes
 	case types.T_float64:
 		rs := vector.MustFunctionResult[float64](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_bf16:
+		rs := vector.MustFunctionResult[types.BF16](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float16:
+		rs := vector.MustFunctionResult[types.Float16](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float8:
+		rs := vector.MustFunctionResult[types.Float8](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
+	case types.T_float4:
+		rs := vector.MustFunctionResult[types.Float4](result)
+		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
 		return serialExtractExceptStrings(p1, p2, rs, proc, length, selectList)
@@ -4199,7 +4236,7 @@ func getConstInt64(p vector.FunctionParameterWrapper[int64]) (int64, bool) {
 	return 0, false
 }
 
-func serialExtractExceptStrings[T types.Number | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | types.Enum | types.MoYear](
+func serialExtractExceptStrings[T types.Number | types.BF16 | types.Float16 | types.Float8 | types.Float4 | bool | types.Date | types.Datetime | types.Time | types.Timestamp | types.Uuid | types.Enum | types.MoYear](
 	p1 vector.FunctionParameterWrapper[types.Varlena],
 	p2 vector.FunctionParameterWrapper[int64],
 	result *vector.FunctionResult[T], proc *process.Process, length int, selectList *FunctionSelectList) error {

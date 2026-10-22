@@ -16,7 +16,9 @@ package function
 
 import (
 	"context"
+	"encoding/hex"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -46,6 +48,7 @@ func init() {
 		types.T_decimal64, types.T_decimal128, types.T_decimal256,
 		types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary,
+		types.T_json, types.T_year, types.T_enum,
 	}
 	for _, s := range toLowPrecSources {
 		supportedTypeCast[s] = append(supportedTypeCast[s], lowPrec...)
@@ -186,15 +189,18 @@ func anyToLowPrecFloat[Tr types.LowPrecFloat](
 		}, selectList)
 	case types.T_char, types.T_varchar, types.T_blob, types.T_text,
 		types.T_binary, types.T_varbinary, types.T_datalink:
-		return strToLowPrecFloat(proc.Ctx, from, result, length, ctor, selectList)
+		return strToLowPrecFloat(proc, from, result, length, ctor, selectList)
 	}
 	return moerr.NewInternalError(proc.Ctx, fmt.Sprintf("unsupported cast from %s to %s", from.GetType(), result.GetResultVector().GetType()))
 }
 
-// strToLowPrecFloat parses each selected string to a float then rounds it to Tr. A
-// malformed value errors, matching a strict numeric cast.
+// strToLowPrecFloat converts each selected string to Tr as a string converts to FLOAT: a
+// hex or bit literal is its unsigned integer value, and in MySQL mode a string that is
+// not a number converts to its numeric prefix (0 when there is none) with a warning. The
+// value is rounded once from its exact decimal value, and a value outside the type's
+// finite range errors.
 func strToLowPrecFloat[Tr types.LowPrecFloat](
-	ctx context.Context, from *vector.Vector, result vector.FunctionResultWrapper, length int, ctor func(float32) Tr,
+	proc *process.Process, from *vector.Vector, result vector.FunctionResultWrapper, length int, ctor func(float32) Tr,
 	selectList *FunctionSelectList,
 ) error {
 	src := vector.GenerateFunctionStrParameter(from)
@@ -203,6 +209,8 @@ func strToLowPrecFloat[Tr types.LowPrecFloat](
 		rs.SetNullResult(uint64(length))
 		return nil
 	}
+	isBinary := from.GetIsBin()
+	mode := CompatibilityModeFromProcess(proc)
 	var zero Tr
 	for i := 0; i < length; i++ {
 		if castRowSkipped(selectList, uint64(i)) {
@@ -219,11 +227,15 @@ func strToLowPrecFloat[Tr types.LowPrecFloat](
 			continue
 		}
 		text := string(bs)
-		f, f64, err := types.Float32RoundToOddString(text)
+		f, f64, err := lowPrecTextValue(proc, text, isBinary, mode)
 		if err != nil {
-			return moerr.NewInvalidInput(ctx, fmt.Sprintf("invalid float value %q", text))
+			return err
 		}
-		if err := types.RejectNarrowFloatInput(f, rs.GetType().Oid, f64, strings.TrimSpace(text)); err != nil {
+		input := any(strings.TrimSpace(text))
+		if isBinary {
+			input = f64
+		}
+		if err := types.RejectNarrowFloatInput(f, rs.GetType().Oid, f64, input); err != nil {
 			return err
 		}
 		if err := rs.Append(types.CanonicalLowPrecFloat(ctor(f)), false); err != nil {
@@ -231,6 +243,37 @@ func strToLowPrecFloat[Tr types.LowPrecFloat](
 		}
 	}
 	return nil
+}
+
+// lowPrecTextValue is the value of text as a string converts to FLOAT: f rounded to odd
+// from the exact value, d the value as float64.
+func lowPrecTextValue(proc *process.Process, text string, isBinary bool, mode SQLCompatibilityMode) (float32, float64, error) {
+	if isBinary {
+		if len(text) == 0 {
+			return 0, 0, nil
+		}
+		raw, err := strconv.ParseUint(hex.EncodeToString([]byte(text)), 16, 64)
+		if err != nil {
+			return 0, 0, moerr.NewInvalidInputNoCtxf("%q is invalid numeric string", text)
+		}
+		return types.Float32RoundToOddUint(raw), float64(raw), nil
+	}
+	if f, d, err := types.Float32RoundToOddString(text); err == nil {
+		return f, d, nil
+	}
+	if mode == SQLCompatibilityMatrixOne || isExtensionFloatCandidate(text) {
+		return 0, 0, moerr.NewInvalidInputNoCtxf("invalid float value %q", text)
+	}
+	var f float32
+	var d float64
+	if prefix, _, ok := scanDecimalFloatPrefix(text); ok {
+		var err error
+		if f, d, err = types.Float32RoundToOddString(prefix); err != nil {
+			return 0, 0, moerr.NewInvalidInputNoCtxf("invalid float value %q", text)
+		}
+	}
+	appendNumericCoercionWarning(proc, text)
+	return f, d, nil
 }
 
 // materializeLowPrecAsFloat32 appends every source value, widened to float32, to tmp.

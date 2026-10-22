@@ -190,6 +190,8 @@ func printTuple(tuple Tuple) string {
 			res.WriteString(fmt.Sprintf("(decimal256: %v)", t.Format(0)))
 		case []byte:
 			res.WriteString(fmt.Sprintf("([]byte: %v)", t))
+		case BF16, Float16, Float8, Float4:
+			res.WriteString(fmt.Sprintf("(%T: %v)", t, t.(interface{ ToFloat32() float32 }).ToFloat32()))
 		case float32:
 			res.WriteString(fmt.Sprintf("(float32: %v)", t))
 		case float64:
@@ -235,6 +237,11 @@ const (
 	uuidCode       = 0x52
 	objectIdCode   = 0x53
 	yearCode       = 0x54
+	// the stored bits of a bf16, float16, float8 or float4 value
+	bf16Code    = 0x55
+	float16Code = 0x56
+	float8Code  = 0x57
+	float4Code  = 0x58
 )
 
 var sizeLimits = []uint64{
@@ -419,6 +426,50 @@ func decodeFloat32(b []byte) (float32, int) {
 	return ret, 5
 }
 
+// decodeLowPrecFloat decodes the element at b, whose first byte is the code of a bf16,
+// float16, float8 or float4 element.
+func decodeLowPrecFloat(b []byte) (any, int) {
+	switch b[0] {
+	case bf16Code, float16Code:
+		var bp [2]byte
+		copy(bp[:], b[1:3])
+		adjustFloatBytes(bp[:], false)
+		bits := binary.BigEndian.Uint16(bp[:])
+		if b[0] == bf16Code {
+			return BF16(bits), 3
+		}
+		return Float16(bits), 3
+	case float8Code:
+		bp := [1]byte{b[1]}
+		adjustFloatBytes(bp[:], false)
+		return Float8(bp[0]), 2
+	default:
+		bp := [1]byte{b[1]}
+		adjustFloatBytes(bp[:], false)
+		return Float4(bp[0] >> 4), 2
+	}
+}
+
+// lowPrecFloatTupleSize is the encoded size of a bf16, float16, float8 or float4 element.
+func lowPrecFloatTupleSize(code byte) int {
+	if code == bf16Code || code == float16Code {
+		return 3
+	}
+	return 2
+}
+
+func lowPrecFloatTupleType(code byte) T {
+	switch code {
+	case bf16Code:
+		return T_bf16
+	case float16Code:
+		return T_float16
+	case float8Code:
+		return T_float8
+	}
+	return T_float4
+}
+
 func decodeFloat64(b []byte) (float64, int) {
 	bp := make([]byte, 8)
 	copy(bp, b[1:])
@@ -574,6 +625,13 @@ func decodeTupleTo(b []byte, t Tuple, schema []T) (Tuple, int, []T, error) {
 			}
 			schema = append(schema, T_float32)
 			el, off = decodeFloat32(b[i:])
+
+		case bf16Code, float16Code, float8Code, float4Code:
+			if err = checkBytes(i, lowPrecFloatTupleSize(b[i])); err != nil {
+				return nil, i, nil, err
+			}
+			schema = append(schema, lowPrecFloatTupleType(b[i]))
+			el, off = decodeLowPrecFloat(b[i:])
 
 		case float64Code:
 			if err = checkBytes(i, 9); err != nil {
@@ -755,6 +813,12 @@ func UnpackNthElement(b []byte, n int) (any, T, error) {
 			}
 			schema = T_float32
 			el, off = decodeFloat32(b[i:])
+		case bf16Code, float16Code, float8Code, float4Code:
+			if err = checkBytes(i, lowPrecFloatTupleSize(b[i])); err != nil {
+				return nil, 0, err
+			}
+			schema = lowPrecFloatTupleType(b[i])
+			el, off = decodeLowPrecFloat(b[i:])
 		case float64Code:
 			if err = checkBytes(i, 9); err != nil {
 				return nil, 0, err
@@ -884,6 +948,10 @@ func StringifyTuple(b []byte, types []plan.Type) ([]string, error) {
 			itemLen = 1
 		case b[offset] == float32Code:
 			item, itemLen = stringifyFloat32(b[offset:])
+		case b[offset] == bf16Code, b[offset] == float16Code, b[offset] == float8Code, b[offset] == float4Code:
+			var el any
+			el, itemLen = decodeLowPrecFloat(b[offset:])
+			item = strconv.FormatFloat(float64(el.(interface{ ToFloat32() float32 }).ToFloat32()), 'g', -1, 32)
 		case b[offset] == float64Code:
 			item, itemLen = stringifyFloat64(b[offset:])
 		case b[offset] == dateCode:

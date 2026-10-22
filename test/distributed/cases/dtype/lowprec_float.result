@@ -180,8 +180,8 @@ SELECT a FROM lp INTERSECT SELECT a FROM lp WHERE id < 3 ORDER BY 1;
 2.0
 SET @v = (SELECT b FROM lp WHERE id = 2);
 SELECT @v, @v + 1;
-➤ @v[7,23,31]  ¦  @v + 1[-5,64,0]  𝄀
-2.0  ¦  3
+➤ @v[7,23,31]  ¦  @v + 1[8,53,31]  𝄀
+2.0  ¦  3.0
 INSERT INTO lp VALUES (6, 1.5, 1.5, 1.5, 1.5) ON DUPLICATE KEY UPDATE a = VALUES(a);
 SELECT ROW_COUNT();
 ➤ ROW_COUNT()[-5,64,0]  𝄀
@@ -772,4 +772,110 @@ SELECT id FROM jn WHERE d = CAST(1.5 AS FLOAT) ORDER BY id;
 SELECT id FROM jn WHERE CAST('7' AS JSON) = q;
 invalid argument operator cast, bad value [JSON -> FLOAT4]
 DROP TABLE jn;
+CREATE TABLE uv (id INT, a bf16, f FLOAT);
+INSERT INTO uv VALUES (1, 1.5, 1.5);
+SET @y = CAST(1.5 AS bf16);
+SET @yf = CAST(1.5 AS FLOAT);
+SELECT @y + 1, @y + 0.25, @y * 2, @yf + 1, @yf + 0.25, @yf * 2;
+➤ @y + 1[8,53,31]  ¦  @y + 0.25[8,53,31]  ¦  @y * 2[8,53,31]  ¦  @yf + 1[8,53,31]  ¦  @yf + 0.25[8,53,31]  ¦  @yf * 2[8,53,31]  𝄀
+2.5  ¦  1.75  ¦  3.0  ¦  2.5  ¦  1.75  ¦  3.0
+SET @z = CAST(0.5 AS float8);
+SELECT id FROM uv WHERE a = @z + 1;
+➤ id[4,32,0]  𝄀
+1
+SELECT id FROM uv WHERE f = @z + 1;
+➤ id[4,32,0]  𝄀
+1
+DROP TABLE uv;
+CREATE TABLE ce (a bf16, h float16, q float4, f FLOAT);
+INSERT INTO ce VALUES (0.1, 0.1, 1, 0.1);
+SELECT COUNT(*) FROM ce WHERE a = ABS(-0.1);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM ce WHERE h = ABS(-0.1);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM ce WHERE q IN (ABS(-1.1));
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+SELECT COUNT(*) FROM ce WHERE f = ABS(-0.1);
+➤ COUNT(*)[-5,64,0]  𝄀
+1
+DROP TABLE ce;
+SELECT CAST(0x05 AS bf16), CAST(x'01' AS float4), CAST(b'101' AS float8), CAST(0x05 AS FLOAT);
+➤ cast(0x05 as bf16)[7,23,31]  ¦  cast(0x01 as float4)[7,23,31]  ¦  cast(0b101 as float8)[7,23,31]  ¦  cast(0x05 as float)[7,23,31]  𝄀
+5.0  ¦  1.0  ¦  5.0  ¦  5.0
+SELECT CAST(0x10 AS float4);
+Data truncation: data out of range: data type FLOAT4, value 16
+CREATE TABLE hx (a bf16 DEFAULT 0x02, q float8);
+INSERT INTO hx (q) VALUES (0x03);
+SELECT * FROM hx;
+➤ a[7,23,31]  ¦  q[7,23,31]  𝄀
+2.0  ¦  3.0
+DROP TABLE hx;
+SELECT CAST(CAST('1.5' AS JSON) AS bf16), CAST(CAST(2024 AS YEAR) AS bf16), CAST(CAST('1.5' AS JSON) AS FLOAT);
+➤ cast(cast(1.5 as json) as bf16)[7,23,31]  ¦  cast(cast(2024 as year) as bf16)[7,23,31]  ¦  cast(cast(1.5 as json) as float)[7,23,31]  𝄀
+1.5  ¦  2024.0  ¦  1.5
+CREATE TABLE src (e ENUM('a','b','c'), j JSON, y YEAR);
+INSERT INTO src VALUES ('c', '2.5', 2024);
+SELECT CAST(e AS float4), CAST(j AS float8), CAST(y AS float16), CAST(e AS FLOAT) FROM src;
+➤ cast(e as float4)[7,23,31]  ¦  cast(j as float8)[7,23,31]  ¦  cast(y as float16)[7,23,31]  ¦  cast(e as float)[7,23,31]  𝄀
+3.0  ¦  2.5  ¦  2024.0  ¦  3.0
+CREATE TABLE dst (b bf16, q float4);
+INSERT INTO dst SELECT j, e FROM src;
+SELECT * FROM dst;
+➤ b[7,23,31]  ¦  q[7,23,31]  𝄀
+2.5  ¦  3.0
+SELECT CAST(CAST('7' AS JSON) AS float4);
+Data truncation: data out of range: data type FLOAT4, value 7
+DROP TABLE src;
+DROP TABLE dst;
+CREATE TABLE txt (id INT, b bf16, f FLOAT);
+INSERT INTO txt VALUES (1, 'abc', 'abc');
+INSERT INTO txt VALUES (2, '1abc', '1abc');
+INSERT INTO txt VALUES (3, '', '');
+INSERT IGNORE INTO txt VALUES (4, ' 2.5x', ' 2.5x');
+SELECT * FROM txt ORDER BY id;
+➤ id[4,32,0]  ¦  b[7,23,31]  ¦  f[7,23,31]  𝄀
+1  ¦  0.0  ¦  0.0  𝄀
+2  ¦  1.0  ¦  1.0  𝄀
+3  ¦  0.0  ¦  0.0  𝄀
+4  ¦  2.5  ¦  2.5
+INSERT INTO txt VALUES (5, '1e39x', 1);
+Data truncation: data out of range: data type BF16, value 1e39x
+DROP TABLE txt;
+SELECT HEX(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)));
+➤ HEX(SERIAL(cast(1.5 as bf16), cast(-2 as float16), cast(-0.5 as float8), cast(3 as float4)))[-1,16383,0]  𝄀
+55BFC0563FFF574F58D0
+SELECT SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 0 AS bf16),
+SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 1 AS float16),
+SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 2 AS float8),
+SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 3 AS float4);
+➤ serial_extract(SERIAL(cast(1.5 as bf16), cast(-2 as float16), cast(-0.5 as float8), cast(3 as float4)), 0 as bf16)[7,23,31]  ¦  serial_extract(SERIAL(cast(1.5 as bf16), cast(-2 as float16), cast(-0.5 as float8), cast(3 as float4)), 1 as float16)[7,23,31]  ¦  serial_extract(SERIAL(cast(1.5 as bf16), cast(-2 as float16), cast(-0.5 as float8), cast(3 as float4)), 2 as float8)[7,23,31]  ¦  serial_extract(SERIAL(cast(1.5 as bf16), cast(-2 as float16), cast(-0.5 as float8), cast(3 as float4)), 3 as float4)[7,23,31]  𝄀
+1.5  ¦  -2.0  ¦  -0.5  ¦  3.0
+SELECT SERIAL_FULL(CAST(1.5 AS bf16), NULL) IS NULL, SERIAL(CAST(1.5 AS bf16), NULL) IS NULL;
+➤ SERIAL_FULL(cast(1.5 as bf16), null) is null[-7,1,0]  ¦  SERIAL(cast(1.5 as bf16), null) is null[-7,1,0]  𝄀
+0  ¦  1
+CREATE TABLE so (v float4);
+INSERT INTO so VALUES (6), (-1.5), (0.5), (-6), (0), (4), (-0.5), (1);
+SELECT v FROM so ORDER BY SERIAL(v);
+➤ v[7,23,31]  𝄀
+-6.0  𝄀
+-1.5  𝄀
+-0.5  𝄀
+0.0  𝄀
+0.5  𝄀
+1.0  𝄀
+4.0  𝄀
+6.0
+DROP TABLE so;
+CREATE TABLE np (a bf16, b float16, c float8, d float4, f FLOAT);
+SELECT column_name, numeric_precision FROM information_schema.columns WHERE table_schema = 'lowprec_float' AND table_name = 'np' ORDER BY ordinal_position;
+➤ column_name[12,256,0]  ¦  numeric_precision[-5,64,0]  𝄀
+a  ¦  8  𝄀
+b  ¦  11  𝄀
+c  ¦  4  𝄀
+d  ¦  2  𝄀
+f  ¦  12
+DROP TABLE np;
 DROP DATABASE lowprec_float;

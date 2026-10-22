@@ -5524,6 +5524,92 @@ func TestCastArrayDimensionMismatch(t *testing.T) {
 // TestCastLowPrecFloatMatrix broadens #20567 cast coverage across the source types that
 // convert TO a low-precision float, and the targets a low-precision float converts to,
 // so each branch of anyToLowPrecFloat and of the float32 widening in newCast is exercised.
+// TestCastLowPrecFloatSourcesAsFloat checks that text, hex/bit, JSON, YEAR and ENUM
+// sources convert to bf16/float16/float8/float4 as they convert to FLOAT: text that is not
+// a number converts to its numeric prefix in MySQL mode, a hex or bit literal is its
+// unsigned integer value; a value outside the type's finite range errors.
+func TestCastLowPrecFloatSourcesAsFloat(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	bf16 := types.T_bf16.ToType()
+	f4 := types.T_float4.ToType()
+	bf := func(vs ...float32) []types.BF16 {
+		out := make([]types.BF16, len(vs))
+		for i, v := range vs {
+			out[i] = types.BF16FromFloat32(v)
+		}
+		return out
+	}
+	t.Run("text_numeric_prefix", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"abc", "1abc", "", " 2.5x", "-0.5e1y"}, nil),
+				NewFunctionTestInput(bf16, []types.BF16{}, nil),
+			},
+			NewFunctionTestResult(bf16, false, bf(0, 1, 0, 2.5, -5), nil), NewCast)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, info)
+	})
+	t.Run("text_prefix_out_of_range", func(t *testing.T) {
+		tcc := NewFunctionTestCase(proc,
+			[]FunctionTestInput{
+				NewFunctionTestInput(types.T_varchar.ToType(), []string{"7x"}, nil),
+				NewFunctionTestInput(f4, []types.Float4{}, nil),
+			},
+			NewFunctionTestResult(f4, true, []types.Float4{}, nil), NewCast)
+		succeed, info := tcc.Run()
+		require.True(t, succeed, info)
+	})
+	encodeJSON := func(s string) string {
+		bj, err := types.ParseStringToByteJson(s)
+		require.NoError(t, err)
+		b, err := types.EncodeJson(bj)
+		require.NoError(t, err)
+		return string(b)
+	}
+	for _, tc := range []struct {
+		name  string
+		input FunctionTestInput
+		want  []types.BF16
+	}{
+		{"json", NewFunctionTestInput(types.T_json.ToType(), []string{encodeJSON("2.5"), encodeJSON("-3")}, nil), bf(2.5, -3)},
+		{"year", NewFunctionTestInput(types.T_year.ToType(), []types.MoYear{2024, 1999}, nil), bf(2024, 1999)},
+		{"enum", NewFunctionTestInput(types.T_enum.ToType(), []types.Enum{1, 3}, nil), bf(1, 3)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tcc := NewFunctionTestCase(proc,
+				[]FunctionTestInput{tc.input, NewFunctionTestInput(bf16, []types.BF16{}, nil)},
+				NewFunctionTestResult(bf16, false, tc.want, nil), NewCast)
+			succeed, info := tcc.Run()
+			require.True(t, succeed, info)
+		})
+	}
+
+	// a hex or bit literal is its unsigned integer value; MatrixOne mode keeps text strict
+	for _, tc := range []struct {
+		text   string
+		binary bool
+		mode   SQLCompatibilityMode
+		want   float64
+		fails  bool
+	}{
+		{"\x05", true, SQLCompatibilityMySQL, 5, false},
+		{"\x01\x00", true, SQLCompatibilityMySQL, 256, false},
+		{"", true, SQLCompatibilityMySQL, 0, false},
+		{"abc", false, SQLCompatibilityMatrixOne, 0, true},
+		{"1abc", false, SQLCompatibilityMySQL, 1, false},
+		{"0.30000000000000000000000000000000000000001x", false, SQLCompatibilityMySQL, 0.30000000000000000000000000000000000000001, false},
+	} {
+		f, d, err := lowPrecTextValue(nil, tc.text, tc.binary, tc.mode)
+		if tc.fails {
+			require.Error(t, err, tc.text)
+			continue
+		}
+		require.NoError(t, err, tc.text)
+		require.Equal(t, tc.want, d, tc.text)
+		require.Equal(t, types.Float32RoundToOdd(tc.want), f, tc.text)
+	}
+}
+
 func TestCastLowPrecFloatMatrix(t *testing.T) {
 	proc := testutil.NewProcess(t)
 	bf16 := types.T_bf16.ToType()

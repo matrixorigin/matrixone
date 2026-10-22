@@ -7425,6 +7425,11 @@ func TestLowPrecisionFloatLiteralNarrowing(t *testing.T) {
 		// a numeral beyond DECIMAL128 binds as DECIMAL256
 		{"SELECT id FROM vecblock_t WHERE f = 0.30000000000000000000000000000000000000001", true},
 		{"SELECT id FROM vecblock_t WHERE h <= 6.0000000000000000000000000000000000000001", false},
+		// a constant expression is folded and narrowed as a literal is
+		{"SELECT id FROM vecblock_t WHERE f = abs(-0.3)", true},
+		{"SELECT id FROM vecblock_t WHERE k = abs(-0.1)", true},
+		{"SELECT id FROM vecblock_t WHERE g >= 1 + 0.5", true},
+		{"SELECT id FROM vecblock_t WHERE h <= abs(-6.0000001)", false},
 	} {
 		args := firstFilter(tc.sql).GetF().Args
 		require.Equal(t, tc.narrow, args[0].GetCol() != nil, tc.sql)

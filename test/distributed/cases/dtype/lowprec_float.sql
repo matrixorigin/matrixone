@@ -424,4 +424,72 @@ SELECT id FROM jn WHERE d = CAST(1.5 AS FLOAT) ORDER BY id;
 SELECT id FROM jn WHERE CAST('7' AS JSON) = q;
 DROP TABLE jn;
 
+-- a user variable holding a narrow float computes in DOUBLE, as for FLOAT
+CREATE TABLE uv (id INT, a bf16, f FLOAT);
+INSERT INTO uv VALUES (1, 1.5, 1.5);
+SET @y = CAST(1.5 AS bf16);
+SET @yf = CAST(1.5 AS FLOAT);
+SELECT @y + 1, @y + 0.25, @y * 2, @yf + 1, @yf + 0.25, @yf * 2;
+SET @z = CAST(0.5 AS float8);
+SELECT id FROM uv WHERE a = @z + 1;
+SELECT id FROM uv WHERE f = @z + 1;
+DROP TABLE uv;
+
+-- a constant expression compared with the column is folded and rounded as a literal is
+CREATE TABLE ce (a bf16, h float16, q float4, f FLOAT);
+INSERT INTO ce VALUES (0.1, 0.1, 1, 0.1);
+SELECT COUNT(*) FROM ce WHERE a = ABS(-0.1);
+SELECT COUNT(*) FROM ce WHERE h = ABS(-0.1);
+SELECT COUNT(*) FROM ce WHERE q IN (ABS(-1.1));
+SELECT COUNT(*) FROM ce WHERE f = ABS(-0.1);
+DROP TABLE ce;
+
+-- hex and bit literals are unsigned integers, as for FLOAT
+SELECT CAST(0x05 AS bf16), CAST(x'01' AS float4), CAST(b'101' AS float8), CAST(0x05 AS FLOAT);
+SELECT CAST(0x10 AS float4);
+CREATE TABLE hx (a bf16 DEFAULT 0x02, q float8);
+INSERT INTO hx (q) VALUES (0x03);
+SELECT * FROM hx;
+DROP TABLE hx;
+
+-- JSON, YEAR and ENUM convert as they convert to FLOAT
+SELECT CAST(CAST('1.5' AS JSON) AS bf16), CAST(CAST(2024 AS YEAR) AS bf16), CAST(CAST('1.5' AS JSON) AS FLOAT);
+CREATE TABLE src (e ENUM('a','b','c'), j JSON, y YEAR);
+INSERT INTO src VALUES ('c', '2.5', 2024);
+SELECT CAST(e AS float4), CAST(j AS float8), CAST(y AS float16), CAST(e AS FLOAT) FROM src;
+CREATE TABLE dst (b bf16, q float4);
+INSERT INTO dst SELECT j, e FROM src;
+SELECT * FROM dst;
+SELECT CAST(CAST('7' AS JSON) AS float4);
+DROP TABLE src;
+DROP TABLE dst;
+
+-- text that is not a number converts to its numeric prefix with a warning, as for FLOAT;
+-- a prefix outside the type's finite range is an error
+CREATE TABLE txt (id INT, b bf16, f FLOAT);
+INSERT INTO txt VALUES (1, 'abc', 'abc');
+INSERT INTO txt VALUES (2, '1abc', '1abc');
+INSERT INTO txt VALUES (3, '', '');
+INSERT IGNORE INTO txt VALUES (4, ' 2.5x', ' 2.5x');
+SELECT * FROM txt ORDER BY id;
+INSERT INTO txt VALUES (5, '1e39x', 1);
+DROP TABLE txt;
+
+-- serial keeps the stored bits; serial_extract restores them; the encoding orders as the values
+SELECT HEX(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)));
+SELECT SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 0 AS bf16),
+       SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 1 AS float16),
+       SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 2 AS float8),
+       SERIAL_EXTRACT(SERIAL(CAST(1.5 AS bf16), CAST(-2 AS float16), CAST(-0.5 AS float8), CAST(3 AS float4)), 3 AS float4);
+SELECT SERIAL_FULL(CAST(1.5 AS bf16), NULL) IS NULL, SERIAL(CAST(1.5 AS bf16), NULL) IS NULL;
+CREATE TABLE so (v float4);
+INSERT INTO so VALUES (6), (-1.5), (0.5), (-6), (0), (4), (-0.5), (1);
+SELECT v FROM so ORDER BY SERIAL(v);
+DROP TABLE so;
+
+-- NUMERIC_PRECISION is the significand bits
+CREATE TABLE np (a bf16, b float16, c float8, d float4, f FLOAT);
+SELECT column_name, numeric_precision FROM information_schema.columns WHERE table_schema = 'lowprec_float' AND table_name = 'np' ORDER BY ordinal_position;
+DROP TABLE np;
+
 DROP DATABASE lowprec_float;

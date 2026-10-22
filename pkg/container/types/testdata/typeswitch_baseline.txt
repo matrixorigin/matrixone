@@ -2,8 +2,11 @@
 # file	function	family	count. Fix or tag an entry, then regenerate; never add one.
 pkg/catalog/tuplesParse.go	GenRows	float	1
 pkg/catalog/tuplesParse.go	GenRows	vector	1
+pkg/cdc/sinker_v2.go	cdcTargetColumnTypeMatches	float chain	1
 pkg/common/hashmap/iterator.go	markNonMatchingNaNs	float	1
+pkg/common/hashmap/iterator.go	markNonMatchingNaNs	float chain	1
 pkg/common/hashmap/iterator.go	markNonMatchingNaNs	vector	1
+pkg/common/hashmap/iterator.go	markNonMatchingNaNs	vector chain	1
 pkg/common/hashmap/keycodec/keycodec.go	AppendCanonicalValue	float	1
 pkg/common/hashmap/keycodec/keycodec.go	AppendCanonicalValue	vector	1
 pkg/common/hashmap/keycodec/keycodec.go	CanonicalBytesAt	float	1
@@ -22,6 +25,7 @@ pkg/common/hashmap/strhashmap.go	fillFlatFixedGroupingAwareStr	float	1
 pkg/common/hashmap/strhashmap.go	fillGroupingAwareStr	float	1
 pkg/container/arrowbridge/bind.go	validateLoadTargetType	float	1
 pkg/container/types/types.go	GetArrayElementSize	vector	1
+pkg/container/types/types.go	IsArrayRelate	vector chain	1
 pkg/container/types/types.go	IsOrdered	float	1
 pkg/container/vector/vector.go	InplaceSort	vector	1
 pkg/container/vector/vector.go	InplaceSortAndCompact	vector	1
@@ -33,6 +37,7 @@ pkg/frontend/computation_wrapper.go	untypedUserParamKindForType	float	1
 pkg/frontend/data_branch_hashdiff.go	lcaProbeJoinCastType	float	1
 pkg/frontend/data_branch_helpers.go	dataBranchFloatPKIdentityAt	float	1
 pkg/frontend/data_branch_helpers.go	extractDataBranchSQLRowValue	vector	1
+pkg/frontend/data_branch_helpers.go	isDataBranchFloatType	float chain	1
 pkg/frontend/data_branch_pick.go	appendNumericStringToVec	float	1
 pkg/frontend/data_branch_pick.go	formatPickKeyVectorValueAsString	float	1
 pkg/frontend/data_branch_pick.go	isNumericType	float	1
@@ -46,6 +51,8 @@ pkg/frontend/user_var_migration.go	decodeUserDefinedVarValue	float	1
 pkg/frontend/util.go	convertRowsIntoBatch	float	1
 pkg/iscp/cuvs_writer.go	NewCuvsCdcWriter	vector	1
 pkg/iscp/index_sqlwriter.go	NewHnswSqlWriter	vector	1
+pkg/iscp/index_sqlwriter.go	toIvfflatUpsert	vector chain	1
+pkg/objectio/mergeutil/types.go	MergeSortBatches	float chain	1
 pkg/objectio/types.go	NewReadFilterSearch	vector	1
 pkg/objectio/utils.go	NewVector	float	1
 pkg/objectio/utils.go	NewVector	vector	1
@@ -56,9 +63,13 @@ pkg/sql/colexec/aggexec/aggState.go	copyCanonicalDistinctArgument	float	1
 pkg/sql/colexec/aggexec/aggState.go	distinctArgumentRowsEqual	float	1
 pkg/sql/colexec/aggexec/aggState.go	distinctArgumentRowsEqual	vector	1
 pkg/sql/colexec/aggexec/aggState.go	distinctFixedValue	float	1
+pkg/sql/colexec/aggexec/aggState.go	distinctFloatArgument	float chain	1
+pkg/sql/colexec/aggexec/aggState.go	distinctPayloadKeySize	float chain	1
+pkg/sql/colexec/aggexec/aggState.go	distinctRepresentativeNeedsRaw	float chain	1
 pkg/sql/colexec/aggexec/aggState.go	fixedDistinctRepresentativeIsNegativeZero	float	1
 pkg/sql/colexec/aggexec/aggState.go	normalizeDistinctFixedValue	float	1
 pkg/sql/colexec/aggexec/aggState.go	normalizeDistinctPayloadInPlace	float	1
+pkg/sql/colexec/aggexec/aggState.go	normalizeSpillDistinctKeyForPolicy	float chain	3
 pkg/sql/colexec/aggexec/aggState.go	readStateArg	float	1
 pkg/sql/colexec/aggexec/agg_payload.go	groupConcatFieldBytes	vector	1
 pkg/sql/colexec/aggexec/agg_payload.go	writeGroupConcatArrayData	vector	1
@@ -68,6 +79,7 @@ pkg/sql/colexec/aggexec/approx_count2.go	hllAddUsesCanonicalTypedKey	float	1
 pkg/sql/colexec/aggexec/approx_count2.go	hllAddUsesCanonicalTypedKey	vector	1
 pkg/sql/colexec/aggexec/approx_count2.go	insertHLLValueWithScratch	float	2
 pkg/sql/colexec/aggexec/approx_percentile.go	newApproxPercentileExec	float	1
+pkg/sql/colexec/aggexec/avg_tw_cache2.go		float list	1
 pkg/sql/colexec/aggexec/avg_tw_cache2.go	makeAvgTwCacheExec	float	1
 pkg/sql/colexec/aggexec/capacity_preflight.go	distinctArgumentRowHash	float	1
 pkg/sql/colexec/aggexec/capacity_preflight.go	distinctArgumentRowHash	vector	1
@@ -79,6 +91,7 @@ pkg/sql/colexec/aggexec/jsonagg2.go	buildValueByteJsonWithLocation	vector	1
 pkg/sql/colexec/aggexec/jsonagg2.go	jsonAggregateValueSize	float	1
 pkg/sql/colexec/aggexec/jsonagg2.go	jsonAggregateValueSize	vector	1
 pkg/sql/colexec/aggexec/maxby.go	compareVectorValue	float	1
+pkg/sql/colexec/aggexec/median2.go		float list	1
 pkg/sql/colexec/aggexec/median2.go	newMedianExec	float	1
 pkg/sql/colexec/aggexec/minmax2.go	makeMinMaxExecWithLegacyText	float	1
 pkg/sql/colexec/aggexec/minmax2.go	makeMinMaxExecWithLegacyText	vector	1
@@ -90,20 +103,27 @@ pkg/sql/colexec/aggexec/sumavg2.go	windowSlidingSupported	float	1
 pkg/sql/colexec/aggexec/vardev2.go	makeVarStdDevExec	float	1
 pkg/sql/colexec/aggexec/vector_matmul.go	VectorMatmulVecSupported	vector	1
 pkg/sql/colexec/aggexec/vector_matmul.go	parseVectorMatmulConfig	vector	1
+pkg/sql/colexec/dedup_key.go	FormatDedupKey	float chain	1
 pkg/sql/colexec/deletion/types.go	getNonNullValue	float	1
 pkg/sql/colexec/deletion/types.go	getNonNullValue	vector	1
 pkg/sql/colexec/evalExpression.go	finiteVectorEndpoints	float	1
 pkg/sql/colexec/evalExpression.go	finiteZoneMapEndpoints	float	1
 pkg/sql/colexec/evalExpression.go	zoneMapInVectorOrderIsKnown	vector	1
 pkg/sql/colexec/evalExpression.go	zoneMapTemporalEndpoints	float	1
+pkg/sql/colexec/external/external.go	isDirectParallelLoadType	vector chain	1
 pkg/sql/colexec/external/hive_partition_fill.go	fillConstantVector	float	1
 pkg/sql/colexec/external/iceberg_delete_apply.go	vectorEqualityValue	float	1
 pkg/sql/colexec/external/parquet_nested.go	appendLeafValue	float	1
 pkg/sql/colexec/external/parquet_nested.go	canAppendParquetRowLeafDirectly	float	1
 pkg/sql/colexec/fill/fill.go	setDecimal128Value	float	1
+pkg/sql/colexec/fill/fill.go	setDecimal128Value	float chain	1
 pkg/sql/colexec/fill/fill.go	setLinearInterpolatedValue	float	1
 pkg/sql/colexec/fill/fill.go	setValue	float	1
+pkg/sql/colexec/group/exec2.go	GetKeyWidth	vector chain	1
+pkg/sql/colexec/group/helper.go	hllFloatAddStateSupported	float chain	1
 pkg/sql/colexec/group/helper.go	hllVectorStateSupported	vector	1
+pkg/sql/colexec/hashbuild/hashmap.go	hasNonReflexiveFloatKey	float chain	1
+pkg/sql/colexec/hashbuild/hashmap.go	hasNonReflexiveFloatKey	vector chain	1
 pkg/sql/colexec/lock_range.go	SupportsTotalLockTableRange	float	1
 pkg/sql/colexec/lockop/fetch.go	getFetchRowsFunc	float	1
 pkg/sql/colexec/postdml/postdml.go	GetAnyAsString	float	1
@@ -113,12 +133,16 @@ pkg/sql/colexec/productl2/product_l2.go	build	vector	1
 pkg/sql/colexec/productl2/product_l2.go	newMat	vector	1
 pkg/sql/colexec/runtimefilter/contract.go	CloseFloatSignedZero	float	1
 pkg/sql/colexec/table_function/filter_helper_gpu.go	filterColTypeFromOid	float	1
+pkg/sql/colexec/table_function/ivf_create.go	clustering	vector chain	1
 pkg/sql/colexec/table_function/ivf_create.go	start	vector	1
 pkg/sql/colexec/window/window.go	searchLeftWithLocation	float	1
 pkg/sql/colexec/window/window.go	searchRightWithLocation	float	1
 pkg/sql/colexec/window/window.go	validateRangeFrameBound	float	1
 pkg/sql/compile/compile.go	evalAggOptimize	float	2
+pkg/sql/compile/compile.go	hasLegacyFloatDistinctKeyWire	float chain	1
+pkg/sql/compile/compile.go	isCanonicalFloatHLLAddType	float chain	1
 pkg/sql/compile/compile.go	isCanonicalVectorHLLAddType	vector	1
+pkg/sql/compile/fuzzyCheck.go	newFuzzyCheck	float chain	1
 pkg/sql/compile/fuzzyCheck.go	vectorToString	float	1
 pkg/sql/compile/fuzzyCheck.go	vectorToString	vector	1
 pkg/sql/compile/operator.go	getPercentileConfigValue	float	1
@@ -130,15 +154,28 @@ pkg/sql/iceberg/dml_matched_batch.go	dmlVectorValue	float	1
 pkg/sql/mongodb/converter.go	appendValue	float	1
 pkg/sql/mongodb/converter.go	supportedMOType	float	1
 pkg/sql/plan/apply_indices.go	encodedOrderMatchesSQLOrder	float	1
+pkg/sql/plan/apply_indices.go	isFloatIndexFilterExpr	float chain	1
 pkg/sql/plan/apply_indices.go	regularIndexCursorTypeMatches	float	1
 pkg/sql/plan/apply_indices_fulltext.go	castPreservesZero	float	1
+pkg/sql/plan/apply_indices_ivfflat.go	prepareIvfIndexContext	vector chain	1
 pkg/sql/plan/apply_indices_vector.go	vecElemByteSize	vector	1
 pkg/sql/plan/apply_indices_vector.go	vecTextToBytes	vector	1
+pkg/sql/plan/base_binder.go	bindFuncExprImplByPlanExpr	float chain	5
+pkg/sql/plan/base_binder.go	floatingComparisonConstant	float chain	1
+pkg/sql/plan/base_binder.go	numericFunctionReturnIsStrong	float chain	2
 pkg/sql/plan/base_binder.go	percentileParamTypeSupported	float	1
 pkg/sql/plan/base_binder.go	resetDateFunctionArgs	float	3
+pkg/sql/plan/base_binder.go	resetDateFunctionArgs	float chain	1
+pkg/sql/plan/base_binder.go	resetIntervalFunctionArgs	float chain	1
+pkg/sql/plan/build_alter_add_column.go	checkTypeCapSize	vector chain	1
 pkg/sql/plan/build_constraint_util.go	MakeInsertValueConstExpr	float	1
 pkg/sql/plan/build_constraint_util.go	MakeInsertValueConstExpr	vector	1
+pkg/sql/plan/build_constraint_util.go	appendPrimaryConstraintPlan	float chain	1
+pkg/sql/plan/build_constraint_util.go	bindPrimaryKeyIdentityExpr	float chain	1
+pkg/sql/plan/build_ddl.go	buildTableDefs	vector chain	1
 pkg/sql/plan/build_ddl.go	ctasViewTypeDefaultOrigin	float	1
+pkg/sql/plan/build_load.go	isDirectParallelLoadType	vector chain	1
+pkg/sql/plan/build_vector_index_util.go	ivfEntryRewritePlan	vector chain	1
 pkg/sql/plan/cte_reuse.go	cteAggregateIsTotal	float	1
 pkg/sql/plan/expr_opt.go	numericComparisonWitness	float	1
 pkg/sql/plan/flatten_subquery.go	correlatedPaginationPartitionTypeSupported	float	1
@@ -158,17 +195,17 @@ pkg/sql/plan/function/arithmetic.go	plusFn	float	1
 pkg/sql/plan/function/arithmetic.go	plusFn	vector	1
 pkg/sql/plan/function/arithmetic.go	plusOperatorSupports	float	1
 pkg/sql/plan/function/arithmetic.go	plusOperatorSupports	vector	1
+pkg/sql/plan/function/calendar_interval.go	calendarIntervalOverloads	float list	1
 pkg/sql/plan/function/func_binary.go	Conv	float	1
 pkg/sql/plan/function/func_binary.go	MakeSet	float	1
 pkg/sql/plan/function/func_binary.go	MakeTime	float	3
 pkg/sql/plan/function/func_binary.go	PeriodAdd	float	2
 pkg/sql/plan/function/func_binary.go	PeriodDiff	float	2
 pkg/sql/plan/function/func_binary.go	SecToTime	float	1
+pkg/sql/plan/function/func_binary.go	fieldCheck	float list	1
 pkg/sql/plan/function/func_binary.go	getCount	float	1
 pkg/sql/plan/function/func_binary.go	makeExportSetBitsGetter	float	1
 pkg/sql/plan/function/func_builtin.go	ToIntervalMicrosecond	float	1
-pkg/sql/plan/function/func_builtin.go	builtInSerialExtract	float	1
-pkg/sql/plan/function/func_builtin.go	internalNumericPrecision	float	1
 pkg/sql/plan/function/func_builtin.go	internalNumericScale	float	1
 pkg/sql/plan/function/func_builtin_json.go	preparedTextToJSONValueWithType	float	1
 pkg/sql/plan/function/func_builtin_leastgreatest.go	greatestFn	float	1
@@ -188,6 +225,8 @@ pkg/sql/plan/function/func_cast.go	castToJSON	float	1
 pkg/sql/plan/function/func_cast.go	decimal128ToOthers	float	1
 pkg/sql/plan/function/func_cast.go	decimal256ToOthersWithContext	float	1
 pkg/sql/plan/function/func_cast.go	decimal64ToOthers	float	1
+pkg/sql/plan/function/func_cast.go	decimalToInt64Explicit	float list	2
+pkg/sql/plan/function/func_cast.go	decimalToInt64Explicit	vector list	1
 pkg/sql/plan/function/func_cast.go	enumToOthers	float	1
 pkg/sql/plan/function/func_cast.go	explicitNumericToDecimalTarget	float	1
 pkg/sql/plan/function/func_cast.go	float32ToOthers	float	1
@@ -206,8 +245,8 @@ pkg/sql/plan/function/func_cast.go	uint32ToOthers	float	1
 pkg/sql/plan/function/func_cast.go	uint64ToOthers	float	1
 pkg/sql/plan/function/func_cast.go	uint8ToOthers	float	1
 pkg/sql/plan/function/func_cast.go	yearToOthers	float	1
+pkg/sql/plan/function/func_cast_lowprec_float.go	init	float list	1
 pkg/sql/plan/function/func_cast_vecblock.go	castToBlockScaled	vector	1
-pkg/sql/plan/function/func_compare.go	comparePreparedJSONScalarsAsType	float	1
 pkg/sql/plan/function/func_compare.go	equalAndNotEqualOperatorSupports	float	1
 pkg/sql/plan/function/func_compare.go	equalFn	float	1
 pkg/sql/plan/function/func_compare.go	equalFn	vector	1
@@ -232,10 +271,15 @@ pkg/sql/plan/function/func_unary.go	NormalizeL2Array	vector	1
 pkg/sql/plan/function/func_unary.go	makeRandomBytesLengthGetter	float	1
 pkg/sql/plan/function/func_unary.go	randomBytesCheck	float	1
 pkg/sql/plan/function/list_agg.go		float	1
+pkg/sql/plan/function/list_agg.go	mysqlNumericAggTypeCheck	float list	3
 pkg/sql/plan/function/list_builtIn.go	fromUnixTimeReturnType	float	1
 pkg/sql/plan/function/list_builtIn.go	jsonConstructorSupportsType	float	1
 pkg/sql/plan/function/list_builtIn.go	jsonConstructorSupportsType	vector	1
+pkg/sql/plan/function/list_builtIn.go	makeTimeReturnType	float chain	1
 pkg/sql/plan/function/list_builtIn.go	secToTimeReturnType	float	1
+pkg/sql/plan/function/operatorSet.go		float list	1
+pkg/sql/plan/function/operatorSet.go	strCaseFn	float list	1
+pkg/sql/plan/function/operatorSet.go	strCaseFn	vector list	1
 pkg/sql/plan/function/operator_between.go	betweenImpl	float	1
 pkg/sql/plan/function/operator_between.go	inRangeImpl	float	1
 pkg/sql/plan/function/serial_contract.go	SerialEncodedValueSizeBound	vector	1
@@ -249,13 +293,17 @@ pkg/sql/plan/function/type_check.go	fixedTypeCastRule1	vector	2
 pkg/sql/plan/function/type_check.go	fixedTypeCastRule2	vector	1
 pkg/sql/plan/function/udf.go	vector2DataVector	float	1
 pkg/sql/plan/function/udf.go	writeResponse	float	1
+pkg/sql/plan/function/udf.go	writeResponse	float list	1
 pkg/sql/plan/function/zonemap.go	GetZoneMapEvaluation	float	4
 pkg/sql/plan/hex_catalog_compat.go	migrateFoldedHexDefault	float	1
+pkg/sql/plan/interval_decimal.go	decimalIntervalFloatSourceValue	float chain	1
 pkg/sql/plan/opt_misc.go	comparisonEvaluationIsTotal	float	1
 pkg/sql/plan/opt_misc.go	comparisonEvaluationIsTotal	vector	1
 pkg/sql/plan/opt_misc.go	isTruncationSafeBetween	float	1
 pkg/sql/plan/opt_misc.go	isTruncationSafeIn	float	1
 pkg/sql/plan/opt_misc.go	isTruncationSafeIn	vector	1
+pkg/sql/plan/opt_misc.go	singleRowCastIsTotal	float chain	1
+pkg/sql/plan/opt_misc.go	singleRowSumOrAvgCastIsExact	float chain	1
 pkg/sql/plan/query_builder.go	getRowCarrierTypeCost	float	1
 pkg/sql/plan/query_builder.go	getRowCarrierTypeCost	vector	1
 pkg/sql/plan/rule/constant_fold.go	GetConstantValue	float	1
@@ -264,6 +312,7 @@ pkg/sql/plan/rule/constant_fold.go	GetConstantValue2	float	1
 pkg/sql/plan/rule/constant_fold.go	GetConstantValue2	vector	1
 pkg/sql/plan/rule/partition_topn.go	partitionTopNHashCompatible	float	1
 pkg/sql/plan/rule/partition_topn.go	partitionTopNHashCompatible	vector	1
+pkg/sql/plan/shuffle.go	dedupJoinUsesUnsupportedFloatShuffle	float chain	1
 pkg/sql/plan/stats.go	UpdateStatsInfo	float	1
 pkg/sql/plan/stats.go	estimateFilterWeight	float	1
 pkg/sql/plan/stats.go	fixedTypeRetainedBytes	float	1
@@ -272,9 +321,15 @@ pkg/sql/plan/substrait/export.go	sort	float	1
 pkg/sql/plan/substrait/export.go	substraitType	float	1
 pkg/sql/plan/substrait/export.go	validateScalarSignature	float	1
 pkg/sql/plan/utils.go	checkNoNeedCast	float	3
+pkg/sql/plan/utils.go	checkNoNeedCast	float chain	4
 pkg/sql/plan/utils.go	preparedNumericReprepareType	float	1
 pkg/sql/plan/utils.go	preparedRuntimeParamExpr	float	1
+pkg/sql/plan/visit_plan.go	exploreNode	float chain	1
+pkg/sql/plan/visit_plan_rule.go	applyExpr	float chain	1
+pkg/sql/plan/visit_plan_rule.go	typedRuntimeParamExpr	float chain	1
+pkg/sql/plan/window_binder.go	resetWindowIntervalExpr	float chain	1
 pkg/sql/util/eval_expr_util.go	SetBytesToAnyVector	vector	1
+pkg/sql/util/eval_expr_util.go	checkOverFlow	float chain	1
 pkg/sql/util/index_util.go	compactPrimaryCol	float	1
 pkg/sql/util/index_util.go	compactPrimaryCol	vector	1
 pkg/sql/util/index_util.go	compactSingleIndexCol	float	1
@@ -296,12 +351,22 @@ pkg/util/export/etl/tae.go	getOneRowData	float	1
 pkg/util/export/table/table.go	Reset	float	1
 pkg/util/export/table/table.go	Size	float	1
 pkg/util/export/table/table.go	ToStrings	float	1
+pkg/vectorindex/cagra/plugin/runtime/runtime.go	SupportedIncludeColumnTypes	float list	1
+pkg/vectorindex/cagra/plugin/runtime/runtime.go	SupportedVectorTypes	vector list	1
+pkg/vectorindex/hnsw/plugin/runtime/runtime.go	SupportedVectorTypes	vector list	1
 pkg/vectorindex/hnsw/types.go	QuantizationToUsearch	vector	1
 pkg/vectorindex/ivfflat/plan_reader.go	prepareSearch	vector	1
 pkg/vectorindex/ivfflat/plan_reader.go	queryFloat32	vector	1
+pkg/vectorindex/ivfflat/plugin/compile/compile.go	ivfIndexEntriesTable	vector chain	1
 pkg/vectorindex/ivfflat/plugin/plan/schema.go	BuildSecondaryIndexDefs	vector	1
+pkg/vectorindex/ivfflat/plugin/runtime/runtime.go	SupportedIncludeColumnTypes	float list	1
+pkg/vectorindex/ivfflat/plugin/runtime/runtime.go	SupportedVectorTypes	vector list	1
+pkg/vectorindex/ivfflat/plugin/runtime/runtime.go	ValidQuantization	vector chain	1
 pkg/vectorindex/ivfflat/relation_search.go	entryQueryBytes	vector	1
+pkg/vectorindex/ivfflat/search.go	LoadIndex	vector chain	1
 pkg/vectorindex/ivfflat/search.go	entryQueryExpression	vector	1
+pkg/vectorindex/ivfpq/plugin/runtime/runtime.go	SupportedIncludeColumnTypes	float list	1
+pkg/vectorindex/ivfpq/plugin/runtime/runtime.go	SupportedVectorTypes	vector list	1
 pkg/vectorindex/sqlexec/bloomfilter.go	AppendVectorSQLLiteral	float	1
 pkg/vm/engine/disttae/stats.go	tryGetMinMaxValueByFloat64	float	1
 pkg/vm/engine/disttae/txn.go	checkPKDup	float	1
@@ -332,6 +397,8 @@ pkg/vm/engine/tae/index/zm.go	AnyIn	vector	1
 pkg/vm/engine/tae/index/zm.go	SubVecIn	vector	1
 pkg/vm/engine/tae/index/zm.go	applyArithmetic	float	1
 pkg/vm/engine/tae/index/zm.go	hasNaNBound	float	1
+pkg/vm/engine/tae/tables/functions.go		float list	2
+pkg/vm/engine/tae/tables/functions.go		vector list	2
 pkg/vm/engine/tae/txn/txnimpl/index.go	BatchDedup	float	1
 pkg/vm/engine/tae/txn/txnimpl/index.go	BatchDedup	vector	1
 pkg/vm/engine/tae/txn/txnimpl/index.go	BatchInsert	float	1

@@ -53,7 +53,18 @@ GPU kernels agree on the encoding.
   `IF`/`CASE`/`COALESCE`/`IFNULL`/`NULLIF` over one of these types keep the column
   type, so the projections a multi-table `UPDATE` or `INSERT ... ON DUPLICATE
   KEY UPDATE` builds from them write cells of the column's width. Branches of two
-  different narrow types widen to `float32`.
+  different narrow types widen to `float32`. A user variable holding one of these values
+  computes in `float64`, as a `float` variable does (`@v + 1` with `@v = 1.5` is `2.5`).
+- **Sources.** Every source that converts to `float` converts to these types the same
+  way, then rounds once to the type: numbers, decimals, booleans, `BIT`, `YEAR`, `ENUM`
+  (its index), JSON numbers, and text. A hex or bit literal (`0x05`, `b'101'`) is its
+  unsigned integer value. Text that is not a number converts to its numeric prefix, `0`
+  when there is none (`'abc'` is `0`, `'1abc'` is `1`, `''` is `0`), with the warning
+  `float` gives, in MySQL compatibility mode, and is an error in MatrixOne mode. The range
+  rule below still applies: a value or prefix outside the type's finite range is an error,
+  where `float` would clamp text to its maximum. Tests:
+  `function/func_cast_test.go` (`TestCastLowPrecFloatSourcesAsFloat`),
+  `function/numeric_resolver_test.go`, BVT `dtype/lowprec_float.sql`.
 - **Comparison with a literal.** A numeric literal compared with a column of these types
   (`=`, `<>`, `!=`, `<=>`, `<`, `<=`, `>`, `>=`, `IN`, `NOT IN`, `BETWEEN`) is rounded to
   the column's type, as the stored
@@ -73,7 +84,9 @@ GPU kernels agree on the encoding.
   its float32 value), so a value is narrowed exactly when `CAST` accepts it:
   `f <= 6.0000001` on a `float4` column, or `g <= 448.000001` on a `float8` column,
   compares wide although float32 rounds those literals to the maximum, and the `bf16`
-  printed maximum `±3.3895314e+38` narrows and matches the row it was inserted as. For `<`/`>` this follows the column's grid: a literal that
+  printed maximum `±3.3895314e+38` narrows and matches the row it was inserted as. A
+  constant expression (`a = ABS(-0.1)`, `a >= 1 + 0.5`) is folded first and then rounded
+  as a literal is. For `<`/`>` this follows the column's grid: a literal that
   rounds down compares as its rounded value.
 - **Comparison with JSON.** A JSON value compared with one of these types takes the
   mixed JSON/numeric comparison `float` takes: a JSON number is rounded to the type, as
@@ -114,6 +127,14 @@ GPU kernels agree on the encoding.
   value of these types is exact in float32, so the text converts back to the same bits.
   Marshalled vectors (WAL, batches sent between services) carry the raw 1-/2-byte
   encoding.
+- **`SERIAL` keys.** `SERIAL`/`SERIAL_FULL` encode one of these values as its stored
+  bits, in a tuple element of its own type, ordered as the values are; `SERIAL_EXTRACT`
+  with the same type returns the stored value. (Such a value is never a table key; this
+  is the user-callable function.) Tests: `types/tuple_lowprec_test.go` (every
+  `float8`/`float4` code, `bf16`/`float16` samples: bits, decoders, order), BVT
+  `dtype/lowprec_float.sql`.
+- **`INFORMATION_SCHEMA.COLUMNS.NUMERIC_PRECISION`** is the significand bits, the
+  implicit leading bit included: `bf16` 8, `float16` 11, `float8` 4, `float4` 2.
 - **Implicit NOT NULL value.** `ALTER TABLE ... ADD COLUMN c bf16 NOT NULL` (and
   `float16`/`float8`/`float4`) without a `DEFAULT` fills existing rows with `0`, as `float`
   does, under `ALGORITHM=COPY` and the default algorithm (`plan/narrow_vector_types_test.go`,

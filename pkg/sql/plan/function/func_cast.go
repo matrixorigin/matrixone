@@ -1171,6 +1171,23 @@ func newCastWithoutMediumIntBounds(parameters []*vector.Vector, result vector.Fu
 		if fromType.Oid == types.T_any {
 			return scalarNullToOthers(proc.Ctx, *toType, result, length, selectList)
 		}
+		// typeswitch:partial only the sources that convert to a number through DOUBLE
+		switch fromType.Oid {
+		case types.T_json, types.T_year, types.T_enum:
+			// converted as they are to DOUBLE, then rounded to the type
+			f64 := types.T_float64.ToType()
+			tmp := vector.NewFunctionResultWrapper(f64, proc.Mp())
+			defer tmp.Free()
+			if err := tmp.PreExtendAndReset(length); err != nil {
+				return err
+			}
+			target := vector.NewConstNull(f64, length, proc.Mp())
+			defer target.Free(proc.Mp())
+			if err := newCast([]*vector.Vector{from, target}, tmp, proc, length, selectList, mode, allowTrailingSpaceTrim); err != nil {
+				return err
+			}
+			return castToLowPrecFloat([]*vector.Vector{tmp.GetResultVector(), parameters[1]}, *toType, result, proc, length, selectList)
+		}
 		return castToLowPrecFloat(parameters, *toType, result, proc, length, selectList)
 	}
 	if isLowPrecFloat(fromType.Oid) {
