@@ -449,6 +449,23 @@ func TestScalarSetReaggregationAdmission(t *testing.T) {
 	}
 }
 
+func TestScalarSetReaggregationAllowsIndependentJoinAggregate(t *testing.T) {
+	query := `SELECT o.N_NATIONKEY,
+		(SELECT CAST(b.N_REGIONKEY AS DOUBLE)
+		 FROM NATION b JOIN (SELECT MAX(i.N_NATIONKEY) m FROM NATION i) g
+		   ON b.N_NATIONKEY < g.m
+		 WHERE b.N_NATIONKEY < o.N_NATIONKEY
+		 UNION
+		 SELECT CAST(b.N_REGIONKEY AS DOUBLE)
+		 FROM NATION b JOIN (SELECT MAX(i.N_NATIONKEY) m FROM NATION i) g
+		   ON b.N_NATIONKEY < g.m
+		 WHERE b.N_NATIONKEY < o.N_NATIONKEY)
+		FROM NATION o WHERE o.N_NATIONKEY = 2`
+	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, query)
+	require.NoError(t, err)
+	require.True(t, reachablePlanHasNodeType(p.GetQuery(), planpb.Node_WINDOW), "scalar UNION must use the bounded reaggregation route")
+}
+
 func TestScalarSetRetainsCardinalityOwner(t *testing.T) {
 	for _, tc := range []struct{ name, source, key string }{
 		{"table", "NATION o", "N_NATIONKEY"},

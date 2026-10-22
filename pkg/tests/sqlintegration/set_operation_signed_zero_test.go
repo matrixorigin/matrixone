@@ -214,6 +214,7 @@ func TestSetOperationSignedZero(t *testing.T) {
 				{"float-zero-limit", "select id,cast(((select d from zeros i where i.id=o.id limit 0) union (select d from zeros i where i.id=o.id limit 0)) as varchar) from ci_outer o order by id", []string{"1:NULL", "2:NULL", "3:NULL", "4:NULL", "5:NULL"}},
 				{"float-real-null", "select id,cast((select max(d) from zeros i where i.id=o.id union select max(d) from zeros i where i.id=o.id) as varchar) from ci_outer o order by id", []string{"1:-0", "2:0", "3:-0", "4:0", "5:NULL"}},
 				{"float-count-empty", "select id,cast((select cast(count(*) as double) from zeros i where i.id=o.id and i.id<=3 union select cast(count(*) as double) from zeros i where i.id=o.id and i.id<=3) as varchar) from ci_outer o order by id", []string{"1:1", "2:1", "3:1", "4:0", "5:0"}},
+				{"independent-aggregate-join", "select id,cast((select cast(i.ie as double) from ci_inner i join (select max(g.ie) m from ci_inner g) limit_one on i.ie<limit_one.m where i.oref<o.oref union select cast(i.ie as double) from ci_inner i join (select max(g.ie) m from ci_inner g) limit_one on i.ie<limit_one.m where i.oref<o.oref) as varchar) from ci_outer o where id=2", []string{"2:1"}},
 			} {
 				t.Run(tc.name, func(t *testing.T) {
 					rows, err := conn.QueryContext(ctx, tc.query)
