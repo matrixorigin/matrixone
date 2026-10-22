@@ -73,6 +73,10 @@ func (appender *objectAppender) PrepareAppend(
 	isMergeCompact bool,
 	rows uint32,
 	txn txnif.AsyncTxn) (node txnif.AppendNode, created bool, n uint32, err error) {
+	// GetSchema takes the table read lock. Do not acquire it while holding
+	// appendMVCC's write lock: catalog publication can hold the table lock
+	// while waiting for an ObjectList scan that reads appendMVCC.
+	blockMaxRows := appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows
 	appender.obj.appendMVCC.LockForAppend()
 	sealed := false
 	defer func() {
@@ -82,7 +86,7 @@ func (appender *objectAppender) PrepareAppend(
 		}
 	}()
 	start := appender.obj.reserved.Load()
-	left := appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows - start
+	left := blockMaxRows - start
 	if left == 0 {
 		appender.obj.frozen.Store(true)
 		appender.obj.appendMVCC.SealLocked()
@@ -103,7 +107,7 @@ func (appender *objectAppender) PrepareAppend(
 	}
 	reserved := start + n
 	appender.obj.reserved.Store(reserved)
-	if reserved == appender.obj.meta.Load().GetSchema().Extra.BlockMaxRows {
+	if reserved == blockMaxRows {
 		// The caller holds freezelock while allocating rows. Seal under the
 		// same MVCC write lock as the final AppendNode insertion, so no later
 		// allocator can race final max-commit publication.

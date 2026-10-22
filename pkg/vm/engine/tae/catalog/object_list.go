@@ -69,6 +69,10 @@ mismatched catalog indexes.
 type ObjectList struct {
 	isTombstone bool
 	sync.RWMutex
+	metricPublication struct {
+		sync.Mutex
+		retired bool
+	}
 	objectID_index    map[objectio.ObjectId]objectListIndex
 	trees             atomic.Pointer[objectListTrees]
 	appendMaxes       map[objectio.ObjectId]objectListAppendMax
@@ -193,6 +197,11 @@ func (l *ObjectList) appendMaxMetricSnapshotLocked() (uint64, [3]int) {
 }
 
 func (l *ObjectList) publishAppendMaxMetrics(tableID uint64, counts [3]int) {
+	l.metricPublication.Lock()
+	defer l.metricPublication.Unlock()
+	if l.metricPublication.retired {
+		return
+	}
 	v2.UpdateTxnAObjectMaxCommitState(
 		tableID,
 		l.isTombstone,
@@ -200,6 +209,15 @@ func (l *ObjectList) publishAppendMaxMetrics(tableID uint64, counts [3]int) {
 		counts[appendMaxStateSealedWaiting],
 		counts[appendMaxStateFinalized],
 	)
+}
+
+// retireMetrics serializes with an in-flight append-max publication. Catalog
+// removal calls it before deleting metric children, so a late node callback
+// cannot recreate a retired table's series.
+func (l *ObjectList) retireMetrics() {
+	l.metricPublication.Lock()
+	l.metricPublication.retired = true
+	l.metricPublication.Unlock()
 }
 
 func (l *ObjectList) setAppendMaxStateLocked(id *objectio.ObjectId, state objectListAppendMaxState) {
@@ -364,7 +382,10 @@ func (l *ObjectList) rebuildCommitBookmarks() {
 		l.isTombstone, version, rebuildStart.Sub(pendingAt), len(states))
 
 	var bookmarks [ObjectListGroupNonAppendableDrop + 1]*objectListCommitBookmark
-	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupNonAppendableDrop; group++ {
+	// Only appendable objects can acquire new rows after creation. For the
+	// non-appendable groups a CreatedAt/DeletedAt seek is sufficient, so do not
+	// build or retain prefix max-commit bookmarks for their history.
+	for group := ObjectListGroupAppendableCreate; group <= ObjectListGroupAppendableDrop; group++ {
 		bookmark := &objectListCommitBookmark{}
 		it := trees.groups[group].Iter()
 		maxCommit := types.TS{}

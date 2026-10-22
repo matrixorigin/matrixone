@@ -217,17 +217,16 @@ var (
 			Help:      "Object-list entries considered by TN incremental PrePrepare dedup.",
 		}, []string{"type", "group", "result"})
 
-	// TxnTNPrePrepareObjectScanCounter is the per-table version of the
-	// object-list counter.  Prometheus sample time identifies the scan
-	// interval; callers can use increase() to obtain the number of objects
-	// reached by each PrePrepareDedup scan in that interval.
+	// TxnTNPrePrepareObjectScanCounter splits the object-list scan by object
+	// kind without a table-id label. Table IDs are unbounded over the life of
+	// a TN; a counter child for every historical table would never be evicted.
 	TxnTNPrePrepareObjectScanCounter = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Namespace: "mo",
 			Subsystem: "txn",
 			Name:      "tn_preprepare_object_scan_total",
-			Help:      "Objects reached by TN PrePrepare dedup, split by table and object kind.",
-		}, []string{"table_id", "type", "object_kind", "drop", "group", "result"})
+			Help:      "Objects reached by TN PrePrepare dedup, split by object kind.",
+		}, []string{"type", "object_kind", "drop", "group", "result"})
 
 	// TxnTNPrePrepareObjectBookmarkCounter records whether the appendable-create
 	// group could use its prefix max-commit bookmark and how many entries that
@@ -260,22 +259,28 @@ func UpdateTxnAObjectMaxCommitState(
 		listIndex = 1
 	}
 	counts := [3]int{pending, sealedWaiting, finalized}
-	for i, state := range [...]string{"pending", "sealed_waiting", "finalized"} {
-		TxnAObjectMaxCommitStateGauge.WithLabelValues(
-			strconv.FormatUint(tableID, 10), typ, state).Set(float64(counts[i]))
-	}
-
 	txnAObjectMetricMu.Lock()
+	defer txnAObjectMetricMu.Unlock()
+	all, exists := txnAObjectMetricCounts[tableID]
+	if !exists && counts == [3]int{} {
+		return
+	}
+	labelID := strconv.FormatUint(tableID, 10)
+	for i, state := range [...]string{"pending", "sealed_waiting", "finalized"} {
+		if counts[i] == 0 {
+			TxnAObjectMaxCommitStateGauge.DeleteLabelValues(labelID, typ, state)
+		} else {
+			TxnAObjectMaxCommitStateGauge.WithLabelValues(labelID, typ, state).Set(float64(counts[i]))
+		}
+	}
 	oldActive := false
-	for _, list := range txnAObjectMetricCounts[tableID] {
+	for _, list := range all {
 		if list[0]+list[1]+list[2] > 0 {
 			oldActive = true
 			break
 		}
 	}
-	all := txnAObjectMetricCounts[tableID]
 	all[listIndex] = counts
-	txnAObjectMetricCounts[tableID] = all
 	newActive := false
 	for _, list := range all {
 		if list[0]+list[1]+list[2] > 0 {
@@ -288,10 +293,33 @@ func UpdateTxnAObjectMaxCommitState(
 		TxnAObjectMaxCommitTableTotalGauge.Set(float64(len(txnAObjectMetricTables)))
 	} else if oldActive && !newActive {
 		delete(txnAObjectMetricTables, tableID)
-		delete(txnAObjectMetricCounts, tableID)
 		TxnAObjectMaxCommitTableTotalGauge.Set(float64(len(txnAObjectMetricTables)))
 	}
-	txnAObjectMetricMu.Unlock()
+	if newActive {
+		txnAObjectMetricCounts[tableID] = all
+	} else {
+		delete(txnAObjectMetricCounts, tableID)
+	}
+}
+
+// RemoveTxnAObjectMaxCommitState evicts a table's metric children when its
+// catalog entry is removed. The caller must first stop both ObjectLists from
+// publishing, so a late append-max transition cannot recreate these children.
+func RemoveTxnAObjectMaxCommitState(tableID uint64) {
+	if tableID == 0 {
+		return
+	}
+	txnAObjectMetricMu.Lock()
+	defer txnAObjectMetricMu.Unlock()
+	labelID := strconv.FormatUint(tableID, 10)
+	for _, typ := range [...]string{"data", "tombstone"} {
+		for _, state := range [...]string{"pending", "sealed_waiting", "finalized"} {
+			TxnAObjectMaxCommitStateGauge.DeleteLabelValues(labelID, typ, state)
+		}
+	}
+	delete(txnAObjectMetricCounts, tableID)
+	delete(txnAObjectMetricTables, tableID)
+	TxnAObjectMaxCommitTableTotalGauge.Set(float64(len(txnAObjectMetricTables)))
 }
 
 var (

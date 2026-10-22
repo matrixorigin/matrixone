@@ -24,6 +24,7 @@ import (
 func TestTxnAObjectMaxCommitStateMetric(t *testing.T) {
 	const tableID uint64 = 0xfedcba9876543210
 	beforeTables := testutil.ToFloat64(TxnAObjectMaxCommitTableTotalGauge)
+	beforeSeries := testutil.CollectAndCount(TxnAObjectMaxCommitStateGauge)
 
 	// The metric is a snapshot per table/object-list.  Data and tombstone
 	// lists must contribute to one table without double-counting that table.
@@ -37,9 +38,29 @@ func TestTxnAObjectMaxCommitStateMetric(t *testing.T) {
 		TxnAObjectMaxCommitStateGauge.WithLabelValues("18364758544493064720", "data", "finalized")))
 	require.Equal(t, beforeTables+1, testutil.ToFloat64(TxnAObjectMaxCommitTableTotalGauge))
 
-	// Removing both list snapshots removes the table from the total while
-	// leaving the per-label Prometheus series at zero.
+	// Removing both list snapshots evicts the table and its label children.
 	UpdateTxnAObjectMaxCommitState(tableID, false, 0, 0, 0)
 	UpdateTxnAObjectMaxCommitState(tableID, true, 0, 0, 0)
 	require.Equal(t, beforeTables, testutil.ToFloat64(TxnAObjectMaxCommitTableTotalGauge))
+	require.Equal(t, beforeSeries, testutil.CollectAndCount(TxnAObjectMaxCommitStateGauge))
+	require.NotContains(t, txnAObjectMetricCounts, tableID)
+
+	// An all-zero first snapshot must not retain a table or create series.
+	UpdateTxnAObjectMaxCommitState(tableID, false, 0, 0, 0)
+	require.Equal(t, beforeSeries, testutil.CollectAndCount(TxnAObjectMaxCommitStateGauge))
+	require.NotContains(t, txnAObjectMetricCounts, tableID)
+}
+
+func TestTxnAObjectMetricsEvictDroppedTables(t *testing.T) {
+	beforeTables := testutil.ToFloat64(TxnAObjectMaxCommitTableTotalGauge)
+	beforeSeries := testutil.CollectAndCount(TxnAObjectMaxCommitStateGauge)
+	for i := uint64(0); i < 100; i++ {
+		id := uint64(0xface000000000000) + i
+		UpdateTxnAObjectMaxCommitState(id, false, 1, 0, 0)
+		UpdateTxnAObjectMaxCommitState(id, true, 0, 1, 0)
+		RemoveTxnAObjectMaxCommitState(id)
+		require.NotContains(t, txnAObjectMetricCounts, id)
+	}
+	require.Equal(t, beforeTables, testutil.ToFloat64(TxnAObjectMaxCommitTableTotalGauge))
+	require.Equal(t, beforeSeries, testutil.CollectAndCount(TxnAObjectMaxCommitStateGauge))
 }
