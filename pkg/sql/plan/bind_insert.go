@@ -148,7 +148,7 @@ func (builder *QueryBuilder) bindInsert(stmt *tree.Insert, bindCtx *BindContext)
 	// action is known: plain INSERT shares its new-row image; INSERT IGNORE
 	// shares accepted rows after arbitration; ODKU shares the post-merge final
 	// image plus an old-row image for dropping stale entries.
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, astUpdateExprs, irregularIndexes, autoIncrementGeneratedColumn)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, astUpdateExprs, irregularIndexes, autoIncrementGeneratedColumn, false)
 }
 
 func (builder *QueryBuilder) canSkipDedup(tableDef *plan.TableDef) bool {
@@ -1394,7 +1394,10 @@ func (builder *QueryBuilder) finishIrregularIndexMaintenance(query *plan.Query, 
 	builder.tempOptimizeForDML()
 	builder.determineShuffleForDMLSteps()
 	applyLockTableFallback(builder)
-	return nil
+	if err := builder.refreshCorrelationBindings(); err != nil {
+		return err
+	}
+	return query.ValidateCorrelation()
 }
 
 func (builder *QueryBuilder) determineShuffleForDMLSteps() {
@@ -2041,9 +2044,12 @@ func (builder *QueryBuilder) buildModernChildFkAssert(
 	}
 
 	errExpr := makePlan2StringConstExprWithType("Cannot add or update a child row: a foreign key constraint fails")
+	// the typed assert reports ErrFKNoReferencedRow2 so the client receives
+	// MySQL errno 1452 (ER_NO_REFERENCED_ROW_2) instead of an internal error
+	errTypeExpr := makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)
 	assertConds := make([]*plan.Expr, len(oks))
 	for i, ok := range oks {
-		assertConds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(errExpr)})
+		assertConds[i], err = BindFuncExprImplByPlanExpr(builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(errExpr), DeepCopyExpr(errTypeExpr)})
 		if err != nil {
 			return 0, 0, err
 		}
@@ -2083,6 +2089,7 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 	lastNodeID int32,
 	selectTag int32,
 	colName2Idx map[string]int32,
+	loadWarnings bool,
 ) (int32, int32, error) {
 	projLen := len(builder.qry.Nodes[lastNodeID].ProjectList)
 	childTyps := make([]plan.Type, projLen)
@@ -2099,11 +2106,30 @@ func (builder *QueryBuilder) buildInsertIgnoreFkFilter(
 		return lastNodeID, selectTag, nil // only self-referencing FKs: nothing to drop here
 	}
 
-	// Keep a row only when every foreign key is satisfied (FilterList ANDs its conds).
+	if loadWarnings {
+		if err := requireLoadFKIgnoreProtocol(builder.GetContext(), builder.compCtx.GetProcess()); err != nil {
+			return 0, 0, err
+		}
+		// Diagnose once per rejected candidate, even if several FKs fail.
+		allOK := oks[0]
+		for _, ok := range oks[1:] {
+			allOK, err = BindFuncExprImplByPlanExpr(builder.GetContext(), "and", []*plan.Expr{allOK, ok})
+			if err != nil {
+				return 0, 0, err
+			}
+		}
+		predicate, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "_load_fk_ignore_check", []*plan.Expr{allOK})
+		if err != nil {
+			return 0, 0, err
+		}
+		oks = []*plan.Expr{predicate}
+	}
+	// The LOAD barrier must retain diagnostics before every write fanout.
 	lastNodeID = builder.appendNode(&plan.Node{
-		NodeType:   plan.Node_FILTER,
-		Children:   []int32{lastNodeID},
-		FilterList: oks,
+		NodeType:        plan.Node_FILTER,
+		Children:        []int32{lastNodeID},
+		FilterList:      oks,
+		FilterIsBarrier: loadWarnings,
 	}, bindCtx)
 
 	newTag := builder.genNewBindTag()
@@ -2282,6 +2308,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 	keyNames := make([]string, 0, len(tableDef.Indexes)+1)
 	keyTypes := make([]*plan.Type, 0, len(tableDef.Indexes)+1)
 	keyTypeCounts := make([]int32, 0, len(tableDef.Indexes)+1)
+	keyDiagnostics := make([]*plan.ExprList, 0, len(tableDef.Indexes)+1)
 	appendKeyMetadata := func(parts []string) error {
 		if len(parts) == 0 {
 			return moerr.NewInternalError(builder.GetContext(),
@@ -2334,6 +2361,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			return 0, 0, nil, err
 		}
 		keyExprs = append(keyExprs, DeepCopyExpr(inputPK))
+		keyDiagnostics = append(keyDiagnostics, &plan.ExprList{})
 		pkParts := tableDef.Pkey.Names
 		if len(pkParts) == 0 {
 			pkParts = []string{pkName}
@@ -2387,6 +2415,18 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 		if err := appendKeyMetadata(idxDef.Parts); err != nil {
 			return 0, 0, nil, err
 		}
+		diagnosticExprs, err := builder.makeIndexDedupKeyExprs(tableDef, idxDef, selectTag, func(name string) (int32, bool) {
+			pos, ok := colName2Idx[tableDef.Name+"."+name]
+			return pos, ok
+		})
+		if err != nil {
+			return 0, 0, nil, err
+		}
+		keyDiagnostics = append(keyDiagnostics, &plan.ExprList{List: diagnosticExprs})
+		if len(diagnosticExprs) > 0 {
+			keyNames[len(keyNames)-1] = idxDef.IndexName
+		}
+
 		joinCond, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "=", []*plan.Expr{inputKey, existingKey})
 		if err != nil {
 			return 0, 0, nil, err
@@ -2430,6 +2470,17 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: selectTag, ColPos: markerSelectPos}},
 		})
 	}
+
+	for _, exprs := range keyDiagnostics {
+		for _, expr := range exprs.List {
+			if autoIncrementReorder {
+				if err := builder.remapColRefForExpr(expr, outputRemapping, &RemapInfo{tip: "INSERT IGNORE diagnostic"}); err != nil {
+					return 0, 0, nil, err
+				}
+			}
+			replaceColRefTag(expr, selectTag, projectTag)
+		}
+	}
 	keyColumns := make([]int32, len(keyExprs))
 	conflictColumns := make([]int32, len(conflictExprs))
 	for i, expr := range keyExprs {
@@ -2466,6 +2517,7 @@ func (builder *QueryBuilder) appendInsertIgnoreMultiDedup(
 			KeyNames:               keyNames,
 			KeyTypes:               keyTypes,
 			KeyTypeCounts:          keyTypeCounts,
+			KeyDiagnosticExprs:     keyDiagnostics,
 		},
 	}
 	if autoIncrementReorder {
@@ -2638,6 +2690,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	astUpdateExprs tree.UpdateExprs,
 	irregularIndexes []*plan.IndexDef,
 	autoIncrementGeneratedColumn int32,
+	loadConstraintIgnore bool,
 ) (int32, error) {
 	tableDef := dmlCtx.tableDefs[0]
 	pkName := tableDef.Pkey.PkeyColName
@@ -2844,7 +2897,9 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 
 		for i, updateExpr := range updateColExprList {
-			lastNodeID, updateExpr, err = builder.flattenSubqueries(lastNodeID, updateExpr, bindCtx)
+			// An UPDATE subquery belongs to the current conflict-row image.
+			// Pulling it into the INSERT input would observe the wrong stage.
+			updateExpr, err = builder.bindDependentJoinCondition(updateExpr)
 			if err != nil {
 				return 0, err
 			}
@@ -2912,11 +2967,19 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 	//     the surviving rows — MySQL's row-skip semantics.
 	// ON DUPLICATE KEY UPDATE runs its own in-plan assert over the final merged
 	// image (handled earlier, with appendOnDupIrregularMaintSource).
-	// INSERT IGNORE applies CHECK constraints as a FILTER. Materialize unique-key
-	// lock columns before that filter so its pass-through projection preserves the
-	// physical vectors consumed by LockOp.
-	lockKeysMaterializedBeforeChecks := false
-	if onDupAction == plan.Node_IGNORE && len(tableDef.Checks) > 0 {
+	// LOAD constraint rejection is independent of duplicate-key arbitration.
+	filterCheckRows := onDupAction == plan.Node_IGNORE || loadConstraintIgnore
+	fkEnabled := false
+	if onDupAction == plan.Node_FAIL || onDupAction == plan.Node_IGNORE {
+		fkEnabled, err = builder.modernInsertFkCheckEnabled(tableDef)
+		if err != nil {
+			return 0, err
+		}
+	}
+	// Every CHECK/FK fresh-tag projection must carry physical unique-lock
+	// vectors, including ordinary FK LOAD and FK-only composite unique keys.
+	lockKeysMaterializedBeforeConstraints := false
+	if (filterCheckRows && len(tableDef.Checks) > 0) || fkEnabled {
 		needsLockKeyProjection, err := hasMaterializedInsertUniqueLockKey(tableDef, skipUniqueIdx)
 		if err != nil {
 			return 0, err
@@ -2929,26 +2992,12 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 				return 0, err
 			}
-			lockKeysMaterializedBeforeChecks = true
+			lockKeysMaterializedBeforeConstraints = true
 		}
 	}
 
-	if onDupAction == plan.Node_FAIL {
-		fkEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
-		if err != nil {
-			return 0, err
-		}
-		if fkEnabled {
-			// Assert parent existence in the data flow (binding-tagged, robust to a
-			// unique-key child's appended index-helper columns) instead of the
-			// post-createQuery appendForeignConstrantPlan over the materialized image.
-			if lastNodeID, selectTag, err = builder.buildModernChildFkAssert(bindCtx, tableDef, lastNodeID, selectTag,
-				func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] }); err != nil {
-				return 0, err
-			}
-			selectNode = builder.qry.Nodes[lastNodeID]
-		}
-	} else if onDupAction == plan.Node_IGNORE {
+	if filterCheckRows {
+		checkInputID := lastNodeID
 		lastNodeID, err = appendCheckConstraintPlan(
 			builder,
 			bindCtx,
@@ -2961,18 +3010,33 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		if err != nil {
 			return 0, err
 		}
-		selectNode = builder.qry.Nodes[lastNodeID]
+		if lastNodeID != checkInputID {
+			// CHECK's untagged FILTER carries a physical pass-through projection,
+			// not an executable row image. Restore the complete tagged image for
+			// downstream consumers, including previously computed lock columns.
+			selectTag = builder.genNewBindTag()
+			lastNodeID = builder.appendNode(&plan.Node{
+				NodeType:    plan.Node_PROJECT,
+				Children:    []int32{lastNodeID},
+				ProjectList: getProjectionByLastNodeWithTag(builder, selectNode.NodeId, selectTag),
+				BindingTags: []int32{selectTag},
+			}, bindCtx)
+			selectNode = builder.qry.Nodes[lastNodeID]
+		}
+	}
 
-		fkEnabled, err := builder.modernInsertFkCheckEnabled(tableDef)
+	if fkEnabled {
+		if onDupAction == plan.Node_IGNORE || loadConstraintIgnore {
+			lastNodeID, selectTag, err = builder.buildInsertIgnoreFkFilter(
+				bindCtx, tableDef, lastNodeID, selectTag, colName2Idx, loadConstraintIgnore)
+		} else {
+			lastNodeID, selectTag, err = builder.buildModernChildFkAssert(bindCtx, tableDef, lastNodeID, selectTag,
+				func(colName string) int32 { return colName2Idx[tableDef.Name+"."+colName] })
+		}
 		if err != nil {
 			return 0, err
 		}
-		if fkEnabled {
-			if lastNodeID, selectTag, err = builder.buildInsertIgnoreFkFilter(bindCtx, tableDef, lastNodeID, selectTag, colName2Idx); err != nil {
-				return 0, err
-			}
-			selectNode = builder.qry.Nodes[lastNodeID]
-		}
+		selectNode = builder.qry.Nodes[lastNodeID]
 	}
 	if onDupAction == plan.Node_FAIL && (len(irregularIndexes) > 0 || builder.returningRequested) {
 		lastNodeID = builder.appendIrregularMaintSource(bindCtx, lastNodeID, selectNode, irregularIndexes, tableDef, dmlCtx.objRefs[0], builder.returningRequested)
@@ -2996,7 +3060,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 
 	// Materialize lock keys for composite and prefix unique indexes in advance.
 	// This guarantees the lock target can find __mo_index_idx_col in colName2Idx.
-	if !lockKeysMaterializedBeforeChecks {
+	if !lockKeysMaterializedBeforeConstraints {
 		if err = builder.materializeInsertUniqueLockKeys(tableDef, skipUniqueIdx, colName2Idx, selectNode); err != nil {
 			return 0, err
 		}
@@ -3048,8 +3112,15 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 		}
 	}
+	hasDependentUpdate := false
+	for _, expr := range updateColExprList {
+		_ = plan.VisitExprTree(expr, func(e *plan.Expr) error {
+			hasDependentUpdate = hasDependentUpdate || e.GetDependent() != nil
+			return nil
+		})
+	}
 	emitODKUActionRows := onDupAction == plan.Node_UPDATE &&
-		(len(odkuActionConstraintDef.Checks) > 0 || len(odkuActionConstraintDef.Fkeys) > 0 || len(odkuNotNullColIdxList) > 0)
+		(hasDependentUpdate || len(odkuActionConstraintDef.Checks) > 0 || len(odkuActionConstraintDef.Fkeys) > 0 || len(odkuNotNullColIdxList) > 0)
 	appendODKUFinalOnlyChecks := func(nodeID, inputTag int32) (int32, error) {
 		if len(odkuFinalOnlyCheckDef.Checks) == 0 {
 			return nodeID, nil
@@ -3441,6 +3512,22 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		}
 
 		if !skipPkDedup && (!isFakePK || pkRoleIdxPos >= 0 || useTargetPk) {
+			// FAIL validation does not transform successful LOAD rows. Share the
+			// prepared, locked image so its hash/shuffle/spill partitions cannot
+			// become the bulk writer's partitions and destroy source locality.
+			loadSourceStep := int32(-1)
+			if builder.qry.LoadTag && builder.checkLoadPrimaryKey && onDupAction == plan.Node_FAIL && !isFakePK {
+				imageTag := builder.genNewBindTag()
+				imageID := builder.appendNode(&plan.Node{
+					NodeType:    plan.Node_PROJECT,
+					Children:    []int32{lastNodeID},
+					ProjectList: getProjectionByLastNodeWithTag(builder, selectNode.NodeId, imageTag),
+					BindingTags: []int32{imageTag},
+				}, bindCtx)
+				sinkID := appendSinkNodeWithTag(builder, bindCtx, imageID, builder.genNewBindTag())
+				loadSourceStep = builder.appendStep(sinkID)
+				lastNodeID = builder.appendTaggedSinkScan(bindCtx, loadSourceStep, selectTag)
+			}
 			builder.addNameByColRef(scanTag, tableDef)
 
 			scanNodeID := builder.appendNode(&plan.Node{
@@ -3624,6 +3711,25 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			}
 
 			lastNodeID = builder.appendNode(dedupJoinNode, bindCtx)
+			if loadSourceStep >= 0 {
+				pkPos := colName2Idx[tableDef.Name+"."+pkName]
+				validationID := builder.appendNode(&plan.Node{
+					NodeType: plan.Node_PROJECT,
+					Children: []int32{lastNodeID},
+					ProjectList: []*plan.Expr{{
+						Typ: selectNode.ProjectList[pkPos].Typ,
+						Expr: &plan.Expr_Col{Col: &plan.ColRef{
+							RelPos: selectTag, ColPos: pkPos,
+						}},
+					}},
+					BindingTags: []int32{builder.genNewBindTag()},
+				}, bindCtx)
+				// A normal DML step drains the exact check to EOF. All steps must
+				// succeed before commit; a duplicate cancels/rolls back the writes.
+				builder.appendStep(validationID)
+				lastNodeID = builder.appendTaggedSinkScan(bindCtx, loadSourceStep, selectTag)
+				selectNode = builder.qry.Nodes[lastNodeID]
+			}
 			if emitODKUActionRows {
 				if len(odkuActionConstraintDef.Checks) > 0 {
 					lastNodeID, err = appendCheckConstraintPlan(
@@ -3652,6 +3758,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					assertConds := make([]*plan.Expr, len(oks))
 					fkErrExpr := makePlan2StringConstExprWithType(
 						"Cannot add or update a child row: a foreign key constraint fails")
+					// typed assert -> ErrFKNoReferencedRow2 -> mysql errno 1452
+					fkErrTypeExpr := makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)
 					for i, ok := range oks {
 						eligible := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool), NotNullable: true}, Expr: &plan.Expr_Col{Col: &plan.ColRef{
 							RelPos: selectTag, ColPos: odkuActionFkEligibilityInputPos[i],
@@ -3661,7 +3769,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 							return 0, err
 						}
 						assertConds[i], err = BindFuncExprImplByPlanExpr(
-							builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr)})
+							builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr), DeepCopyExpr(fkErrTypeExpr)})
 						if err != nil {
 							return 0, err
 						}
@@ -3853,6 +3961,17 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				idxOnDupAction = plan.Node_FAIL
 			}
 
+			diagnosticExprs, err := builder.makeIndexDedupKeyExprs(tableDef, idxDef, selectTag, func(name string) (int32, bool) {
+				pos, ok := colName2Idx[tableDef.Name+"."+name]
+				return pos, ok
+			})
+			if err != nil {
+				return 0, err
+			}
+			if len(diagnosticExprs) > 0 {
+				dedupColName = idxDef.IndexName
+			}
+
 			lastNodeID = builder.appendNode(&plan.Node{
 				NodeType:          plan.Node_JOIN,
 				Children:          []int32{idxTableNodeID, lastNodeID},
@@ -3861,6 +3980,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 				OnDuplicateAction: idxOnDupAction,
 				DedupColName:      dedupColName,
 				DedupColTypes:     dedupColTypes,
+				DedupKeyExprs:     diagnosticExprs,
 			}, bindCtx)
 
 		}
@@ -4174,6 +4294,8 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 			assertConds := make([]*plan.Expr, len(oks))
 			fkErrExpr := makePlan2StringConstExprWithType(
 				"Cannot add or update a child row: a foreign key constraint fails")
+			// typed assert -> ErrFKNoReferencedRow2 -> mysql errno 1452
+			fkErrTypeExpr := makePlan2StringConstExprWithType(foreignKeyNoReferencedRowAssert)
 			for i, ok := range oks {
 				eligible := &plan.Expr{
 					Typ: newProjList[odkuFkEligibilityInputPos[i]].Typ,
@@ -4186,7 +4308,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 					return 0, err
 				}
 				assertConds[i], err = BindFuncExprImplByPlanExpr(
-					builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr)})
+					builder.GetContext(), "assert", []*plan.Expr{ok, DeepCopyExpr(fkErrExpr), DeepCopyExpr(fkErrTypeExpr)})
 				if err != nil {
 					return 0, err
 				}
@@ -4385,7 +4507,7 @@ func (builder *QueryBuilder) appendDedupAndMultiUpdateNodesForBindInsert(
 		dmlNode.UpdateCtxList = append(dmlNode.UpdateCtxList, updateCtx)
 	}
 
-	if onDupAction != plan.Node_IGNORE && onDupAction != plan.Node_UPDATE {
+	if !filterCheckRows && onDupAction != plan.Node_UPDATE {
 		lastNodeID, err = appendCheckConstraintPlan(
 			builder,
 			bindCtx,

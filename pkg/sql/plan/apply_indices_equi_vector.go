@@ -42,8 +42,12 @@ func (builder *QueryBuilder) buildVectorEquiJoinContext(proj *plan.Node) *vector
 	if sort == nil || len(sort.OrderBy) != 1 || sort.Limit == nil || isDescendingVectorSort(sort.OrderBy[0].Flag) {
 		return nil
 	}
-	if sort.RankOption != nil && sort.RankOption.Mode != "" && sort.RankOption.Mode != "pre" {
-		return nil
+	if sort.RankOption != nil {
+		switch sort.RankOption.Mode {
+		case "", "pre", "iterative":
+		default:
+			return nil
+		}
 	}
 	join, child := builder.resolveJoinNodeForVectorSort(sort)
 	if join == nil || join.JoinType != plan.Node_INNER || len(join.Children) != 2 || len(join.OnList) == 0 ||
@@ -53,7 +57,7 @@ func (builder *QueryBuilder) buildVectorEquiJoinContext(proj *plan.Node) *vector
 	if child != nil && (len(child.FilterList) != 0 || child.Limit != nil || child.Offset != nil) {
 		return nil
 	}
-	if !builder.adaptiveIvfReplaySafe(proj.NodeId) {
+	if !builder.adaptiveVectorReplaySafe(proj.NodeId) {
 		return nil
 	}
 	left, right := builder.qry.Nodes[join.Children[0]], builder.qry.Nodes[join.Children[1]]

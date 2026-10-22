@@ -5096,6 +5096,88 @@ func TestSetOperationMixedCharVarcharCommonTypeIsOrderIndependent(t *testing.T) 
 
 }
 
+func TestSetOperationMixedTextBinaryKeepsByteWidth(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		sql   string
+		oid   types.T
+		width int32
+	}{
+		{
+			name:  "char before binary with three branches",
+			sql:   "select cast('' as char(1)) union all select cast('hello-long' as binary) union all select cast('' as char(1))",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:  "binary before char",
+			sql:   "select cast('hello-long' as binary) union all select cast('' as char(1))",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:  "bare null has no width",
+			sql:   "select null union all select cast('' as char(1)) union all select cast('hello-long' as binary)",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:  "nested blob stays wide",
+			sql:   "select cast('' as char(1)) as v union all select v from (select cast('hello-long' as binary) as v union all select cast('' as char(1))) as nested",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:  "utf8 character width becomes byte width",
+			sql:   "select cast('abc' as char(3)) union all select cast('x' as binary(1))",
+			oid:   types.T_varbinary,
+			width: 12,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			var setNode *plan.Node
+			for _, node := range logicPlan.GetQuery().Nodes {
+				if node.NodeType == plan.Node_UNION_ALL {
+					setNode = node
+				}
+			}
+			require.NotNil(t, setNode)
+			require.Equal(t, int32(tc.oid), setNode.ProjectList[0].Typ.Id)
+			require.Equal(t, tc.width, setNode.ProjectList[0].Typ.Width)
+			require.Equal(t, uint32(types.CharsetBinary), setNode.ProjectList[0].Typ.Charset)
+			require.False(t, setNode.ProjectList[0].Typ.PadSpace)
+			for _, childID := range setNode.Children {
+				child := logicPlan.GetQuery().Nodes[childID]
+				require.Equal(t, int32(tc.oid), child.ProjectList[0].Typ.Id)
+				require.Equal(t, tc.width, child.ProjectList[0].Typ.Width)
+			}
+		})
+	}
+
+	t.Run("explicit Unicode collation keeps unbounded text", func(t *testing.T) {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"select cast('Á' as char(1)) collate utf8mb4_unicode_ci union all select cast('a ' as binary)")
+		require.NoError(t, err)
+		var setNode *plan.Node
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_UNION_ALL {
+				setNode = node
+			}
+		}
+		require.NotNil(t, setNode)
+		require.Equal(t, int32(types.T_text), setNode.ProjectList[0].Typ.Id)
+		require.Equal(t, int32(types.MaxLongTextLen), setNode.ProjectList[0].Typ.Width)
+		require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), setNode.ProjectList[0].Typ.Charset)
+		require.True(t, setNode.ProjectList[0].Typ.PadSpace)
+		for _, childID := range setNode.Children {
+			child := logicPlan.GetQuery().Nodes[childID]
+			require.Equal(t, int32(types.T_text), child.ProjectList[0].Typ.Id)
+		}
+	})
+}
+
 func TestPreparedSetOperationPureCharUsesCommonPaddedType(t *testing.T) {
 	prepared, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t,
 		"prepare pure_char_set from 'select ? as v union all select ? as v'")
@@ -6308,12 +6390,14 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			notNullable: true,
 		},
 		{
+			// String-to-DATETIME expressions may synthesize NULL; precision
+			// must still grow to the common type regardless of row order.
 			name:        "datetime scale grows",
 			rows:        "row(cast('2024-01-02 12:34:56.123' as datetime(3))), row(cast('2024-01-02 12:34:56.123456' as datetime(6)))",
 			oid:         types.T_datetime,
 			width:       6,
 			scale:       6,
-			notNullable: true,
+			notNullable: false,
 		},
 		{
 			name:        "datetime scale is order independent",
@@ -6321,7 +6405,7 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			oid:         types.T_datetime,
 			width:       6,
 			scale:       6,
-			notNullable: true,
+			notNullable: false,
 		},
 		{
 			name:        "char width grows",
@@ -6337,6 +6421,33 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			width:       8,
 			notNullable: true,
 		},
+		{
+			name:        "mixed char and binary keeps later bytes",
+			rows:        "row(cast('' as char(1))), row(cast('hello-long' as binary)), row(cast('' as char(1)))",
+			oid:         types.T_blob,
+			width:       types.MaxLongTextLen,
+			notNullable: true,
+		},
+		{
+			name:        "mixed binary and char is order independent",
+			rows:        "row(cast('hello-long' as binary)), row(cast('' as char(1)))",
+			oid:         types.T_blob,
+			width:       types.MaxLongTextLen,
+			notNullable: true,
+		},
+		{
+			name:  "bare null before mixed char and binary",
+			rows:  "row(null), row(cast('' as char(1))), row(cast('hello-long' as binary))",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:        "character width reserves utf8 bytes",
+			rows:        "row(cast('abc' as char(3))), row(cast('x' as binary(1)))",
+			oid:         types.T_varbinary,
+			width:       12,
+			notNullable: true,
+		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			node, err := bindValues(t, test.rows)
@@ -6347,6 +6458,10 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			require.Equal(t, test.width, columnType.Width)
 			require.Equal(t, test.scale, columnType.Scale)
 			require.Equal(t, test.notNullable, columnType.NotNullable)
+			if test.oid == types.T_blob || test.oid == types.T_varbinary {
+				require.Equal(t, uint32(types.CharsetBinary), columnType.Charset)
+				require.False(t, columnType.PadSpace)
+			}
 
 			require.Len(t, node.RowsetData.Cols, 1)
 			for _, row := range node.RowsetData.Cols[0].Data {
@@ -6356,6 +6471,28 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("explicit text collation retains text admission", func(t *testing.T) {
+		for _, test := range []struct {
+			rows  string
+			oid   types.T
+			width int32
+		}{
+			{"row(cast('a' as char(1)) collate utf8mb4_unicode_ci), row(cast('A' as binary(1)))", types.T_varchar, 4},
+			{"row(cast('a' as char(1)) collate utf8mb4_unicode_ci), row(cast('A' as binary))", types.T_text, types.MaxLongTextLen},
+		} {
+			node, err := bindValues(t, test.rows)
+			require.NoError(t, err)
+			columnType := node.TableDef.Cols[0].Typ
+			require.Equal(t, int32(test.oid), columnType.Id)
+			require.Equal(t, test.width, columnType.Width)
+			require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), columnType.Charset)
+			for _, row := range node.RowsetData.Cols[0].Data {
+				require.Equal(t, columnType.Id, row.Expr.Typ.Id)
+				require.Equal(t, columnType.Width, row.Expr.Typ.Width)
+			}
+		}
+	})
 
 	t.Run("string comparison provenance", func(t *testing.T) {
 		for _, test := range []struct {
@@ -6526,7 +6663,7 @@ func TestQueryBuilder_appendWindowNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a, lag(a) over (order by a) as prev_a from select_test.bind_select group by a having prev_a > 0", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, false, false, true)
 	require.NoError(t, err)
 	require.Equal(t, 1, len(boundHavingList))
 	require.Len(t, bindCtx.windows, 1)
@@ -6580,7 +6717,7 @@ func TestSplitWindowDependentHavingFilters_WithSubqueryChild(t *testing.T) {
 	require.NoError(t, err)
 
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
-	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	_, _, _, _, _, _, boundHavingList, err := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, false, false, true)
 	require.NoError(t, err)
 	require.Len(t, boundHavingList, 1)
 	require.IsType(t, &plan.Expr_Sub{}, boundHavingList[0].Expr)
@@ -6598,7 +6735,7 @@ func TestQueryBuilder_appendProjectionNode(t *testing.T) {
 	stmts, _ := parsers.Parse(context.TODO(), dialect.MYSQL, "select a from select_test.bind_select", 1)
 	selectClause := stmts[0].(*tree.Select).Select.(*tree.SelectClause)
 
-	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, _, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, false, false, true)
 
 	havingBinder := NewHavingBinder(builder, bindCtx)
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
@@ -6666,7 +6803,7 @@ func TestQueryBuilder_appendResultProjectionNode(t *testing.T) {
 	orderList := stmts[0].(*tree.Select).OrderBy
 
 	// bind select clause
-	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, true)
+	nodeID, selectList, _, notCacheable, _, havingBinder, _, _ := builder.bindSelectClause(bindCtx, selectClause, nil, nil, nil, nil, lockpb.LockMode_Exclusive, false, false, true)
 	// bind projection
 	projectionBinder := NewProjectionBinder(builder, bindCtx, havingBinder)
 	resultLen, notCacheable, _ := builder.bindProjection(bindCtx, projectionBinder, selectList, notCacheable)
@@ -6967,7 +7104,7 @@ func TestParseRankOption(t *testing.T) {
 		rankOption, err := parseRankOption(options, ctx)
 		require.Error(t, err)
 		require.Nil(t, rankOption)
-		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', 'auto', or 'include'")
+		require.Contains(t, err.Error(), "mode must be 'pre', 'post', 'force', 'auto' or 'iterative'")
 		require.Contains(t, err.Error(), "invalid")
 	})
 
@@ -6981,14 +7118,13 @@ func TestParseRankOption(t *testing.T) {
 		require.Equal(t, "force", rankOption.Mode)
 	})
 
-	t.Run("valid mode include", func(t *testing.T) {
-		options := map[string]string{
-			"mode": "include",
+	t.Run("mode include is an alias of iterative", func(t *testing.T) {
+		for _, mode := range []string{"include", " INCLUDE "} {
+			rankOption, err := parseRankOption(map[string]string{"mode": mode}, ctx)
+			require.NoError(t, err)
+			require.NotNil(t, rankOption)
+			require.Equal(t, "iterative", rankOption.Mode)
 		}
-		rankOption, err := parseRankOption(options, ctx)
-		require.NoError(t, err)
-		require.NotNil(t, rankOption)
-		require.Equal(t, "include", rankOption.Mode)
 	})
 
 	t.Run("valid mode auto", func(t *testing.T) {
@@ -7076,6 +7212,34 @@ func TestParseRankOption(t *testing.T) {
 		// The actual value depends on map iteration order, but should be either "pre" or "post"
 		require.Contains(t, []string{"pre", "post"}, rankOption.Mode)
 	})
+}
+
+func TestParseRankOptionSearchKnobs(t *testing.T) {
+	ctx := context.Background()
+	opt, err := parseRankOption(map[string]string{"ITOPK": " 200 ", "max_itopk": "5000", "nprobe": "8", "Max_Nprobe": "64"}, ctx)
+	require.NoError(t, err)
+	require.Equal(t, &plan.RankOption{Itopk: 200, MaxItopk: 5000, Nprobe: 8, MaxNprobe: 64}, opt)
+
+	opt, err = parseRankOption(map[string]string{"mode": "post", "itopk": "10"}, ctx)
+	require.NoError(t, err)
+	require.Equal(t, &plan.RankOption{Mode: "post", Itopk: 10}, opt)
+
+	_, err = parseRankOption(map[string]string{"unknown": "1"}, ctx)
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
+
+	for name, options := range map[string]map[string]string{
+		"zero":             {"itopk": "0"},
+		"negative":         {"max_itopk": "-1"},
+		"not a number":     {"nprobe": "abc"},
+		"fraction":         {"max_nprobe": "1.5"},
+		"itopk above cap":  {"itopk": "10", "max_itopk": "5"},
+		"nprobe above cap": {"nprobe": "10", "max_nprobe": "5"},
+	} {
+		_, err := parseRankOption(options, ctx)
+		require.Error(t, err, name)
+	}
+	_, err = parseRankOption(map[string]string{"itopk": "5", "max_itopk": "5"}, ctx)
+	require.NoError(t, err)
 }
 
 // TestBaseBinder_bindComparisonExpr tests bindComparisonExpr with various comparison operators

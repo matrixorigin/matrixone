@@ -1219,3 +1219,77 @@ func checkAdmissionResult(t *testing.T, version int64, err error, required int64
 		require.NoError(t, err)
 	}
 }
+
+func TestPersistedDependentProgramRequiresV119(t *testing.T) {
+	for _, expr := range []*planpb.Expr{
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}}},
+		{Typ: planpb.Type{Id: int32(types.T_int64)}, Expr: &planpb.Expr_Slot{Slot: &planpb.CorrelationSlot{ProgramId: 1}}},
+	} {
+		version, err := RequiredPersistedExpressionProtocolVersion(expr)
+		require.NoError(t, err)
+		require.Equal(t, defines.MORPCVersion119, version)
+	}
+	dateExpr := &planpb.Expr{
+		Typ: planpb.Type{Id: int32(types.T_int32)},
+		Expr: &planpb.Expr_F{F: &planpb.Function{
+			Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.DAYOFYEAR, 0)},
+			Args: []*planpb.Expr{{Typ: planpb.Type{Id: int32(types.T_date)}, Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}}},
+		}},
+	}
+	owner := &planpb.TableDef{Cols: []*planpb.ColDef{
+		{GeneratedCol: &planpb.GeneratedCol{Expr: dateExpr}},
+		{GeneratedCol: &planpb.GeneratedCol{Expr: &planpb.Expr{
+			Typ:  planpb.Type{Id: int32(types.T_int64)},
+			Expr: &planpb.Expr_Dependent{Dependent: &planpb.DependentExpr{ProgramId: 1}},
+		}}},
+	}}
+	statistical := &planpb.Expr{Typ: types.T_float64.ToType().PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.VAR_POP, 0)},
+		Args: []*planpb.Expr{{Typ: types.New(types.T_decimal128, 38, 18).PlanType()}},
+	}}}
+	statisticalVersion, err := RequiredPersistedExpressionProtocolVersion(statistical)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion113, statisticalVersion)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: statistical}})
+	// Upstream owns 117 independently; dependent programs compose above it.
+	textType := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	textType.CollationVersion = 1
+	col := &planpb.Expr{Typ: textType.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}
+	least, err := BindFuncExprImplByPlanExpr(context.Background(), "least", []*planpb.Expr{col, DeepCopyExpr(col)})
+	require.NoError(t, err)
+	leastVersion, err := RequiredPersistedExpressionProtocolVersion(least)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion117, leastVersion)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: least}})
+	tableCollation := &planpb.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.INTERNAL_TABLE_COLLATION, 0)},
+	}}}
+	tableVersion, err := RequiredPersistedExpressionProtocolVersion(tableCollation)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion118, tableVersion)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: tableCollation}})
+	features, err := planpb.RequiredRemoteExpressionFeatures(owner)
+	require.NoError(t, err)
+	require.True(t, features.TableCollationFunction)
+	require.True(t, features.DateNumericResultContracts)
+	require.True(t, features.DependentPrograms)
+	require.True(t, features.DecimalStatisticalResultContracts)
+	require.True(t, features.LeastGreatestCollationSemantics)
+	version, err := RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion119, version, "compose independent capabilities by maximum")
+
+	decimal := &planpb.Expr{Typ: planpb.Type{Id: int32(types.T_uint64), Width: 7, Scale: 0}, Expr: &planpb.Expr_F{F: &planpb.Function{
+		Func: &planpb.ObjectRef{Obj: function.EncodeOverloadID(function.INTEGER_DIV, function.DecimalIntegerDivUnsignedOverload)},
+	}}}
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: decimal}})
+	version, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion121, version, "main decimal capability remains independent")
+	timestamp, err := BindFuncExprImplByPlanExpr(context.Background(), "timestamp", []*planpb.Expr{{Typ: types.T_datetime.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{}}}})
+	require.NoError(t, err)
+	owner.Cols = append(owner.Cols, &planpb.ColDef{GeneratedCol: &planpb.GeneratedCol{Expr: timestamp}})
+	version, err = RequiredPersistedExpressionProtocolVersion(owner)
+	require.NoError(t, err)
+	require.Equal(t, defines.MORPCVersion122, version, "new result contract composes above all main capabilities")
+}

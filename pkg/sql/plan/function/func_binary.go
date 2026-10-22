@@ -37,6 +37,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/container/nulls"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -3999,6 +4000,9 @@ func convUnsignedDirect[T constraints.Unsigned](
 // expr2 is a TIME expression (can include days like '1 1:1:1.000002')
 // Returns TIME if expr1 is TIME, DATETIME if expr1 is DATETIME/TIMESTAMP
 func AddTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if result.GetResultVector().GetType().Oid == types.T_time {
+		return addTimeToTime(ivecs, result, proc, length, selectList)
+	}
 	// Determine result type based on first argument
 	inputType := ivecs[0].GetType()
 	switch inputType.Oid {
@@ -4020,82 +4024,7 @@ func AddTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func addTimeToTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	stringInput := ivecs[0].GetType().Oid != types.T_time
-	var times1 vector.FunctionParameterWrapper[types.Time]
-	var string1 vector.FunctionParameterWrapper[types.Varlena]
-	if stringInput {
-		string1 = vector.GenerateFunctionStrParameter(ivecs[0])
-	} else {
-		times1 = vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
-	}
-	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[types.Time](result)
-
-	// Determine scale from input
-	scale := int32(rs.GetType().Scale)
-	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
-		scale = scale2
-	}
-	rs.TempSetType(types.New(types.T_time, 0, scale))
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		time2Str, null2 := time2Param.GetStrValue(i)
-		if null2 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-		var time1 types.Time
-		var null1 bool
-		if stringInput {
-			var raw []byte
-			raw, null1 = string1.GetStrValue(i)
-			if !null1 {
-				var parseErr error
-				time1, parseErr = types.ParseTime(functionUtil.QuickBytesToStr(raw), scale)
-				if parseErr != nil {
-					null1 = true
-				}
-			}
-		} else {
-			time1, null1 = times1.GetValue(i)
-		}
-
-		if null1 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Parse time2 string
-		time2, err := parseTimeOperand(functionUtil.QuickBytesToStr(time2Str), scale)
-		if err != nil {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Duration functions publish the MySQL TIME endpoint rather than the
-		// wider internal duration range used by interval arithmetic.
-		resultTime, truncated := timeArithmeticResult(time1, time2, false)
-		if truncated {
-			appendTimeIntervalOverflowWarning(proc)
-		}
-
-		if err := rs.Append(resultTime, truncated); err != nil {
-			return err
-		}
-	}
-	return nil
+	return timeResultArithmetic(ivecs, result, proc, length, selectList, false)
 }
 
 func addTimeToDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -4417,6 +4346,9 @@ func addTimeToString(ivecs []*vector.Vector, result vector.FunctionResultWrapper
 // expr2 is a TIME expression (can include days like '1 1:1:1.000002')
 // Returns TIME if expr1 is TIME, DATETIME if expr1 is DATETIME/TIMESTAMP
 func SubTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) (err error) {
+	if result.GetResultVector().GetType().Oid == types.T_time {
+		return subTimeFromTime(ivecs, result, proc, length, selectList)
+	}
 	// Determine result type based on first argument
 	inputType := ivecs[0].GetType()
 	switch inputType.Oid {
@@ -4438,83 +4370,7 @@ func SubTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *
 }
 
 func subTimeFromTime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	stringInput := ivecs[0].GetType().Oid != types.T_time
-	var times1 vector.FunctionParameterWrapper[types.Time]
-	var string1 vector.FunctionParameterWrapper[types.Varlena]
-	if stringInput {
-		string1 = vector.GenerateFunctionStrParameter(ivecs[0])
-	} else {
-		times1 = vector.GenerateFunctionFixedTypeParameter[types.Time](ivecs[0])
-	}
-	time2Param := vector.GenerateFunctionStrParameter(ivecs[1])
-	rs := vector.MustFunctionResult[types.Time](result)
-
-	// Determine scale from input
-	scale := int32(rs.GetType().Scale)
-	if scale2 := int32(ivecs[1].GetType().Scale); scale2 > scale {
-		scale = scale2
-	}
-	rs.TempSetType(types.New(types.T_time, 0, scale))
-
-	for i := uint64(0); i < uint64(length); i++ {
-		if functionRowSkipped(selectList, i) {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		time2Str, null2 := time2Param.GetStrValue(i)
-		if null2 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-		var time1 types.Time
-		var null1 bool
-		if stringInput {
-			var raw []byte
-			raw, null1 = string1.GetStrValue(i)
-			if !null1 {
-				var parseErr error
-				time1, parseErr = types.ParseTime(functionUtil.QuickBytesToStr(raw), scale)
-				if parseErr != nil {
-					null1 = true
-				}
-			}
-		} else {
-			time1, null1 = times1.GetValue(i)
-		}
-
-		if null1 {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Parse time2 string
-		time2, err := parseTimeOperand(functionUtil.QuickBytesToStr(time2Str), scale)
-		if err != nil {
-			if err := rs.Append(types.Time(0), true); err != nil {
-				return err
-			}
-			continue
-		}
-
-		// Duration functions publish the MySQL TIME endpoint rather than the
-		// wider internal duration range used by interval arithmetic.
-		resultTime, truncated := timeArithmeticResult(time1, time2, true)
-		if truncated {
-			appendTimeIntervalOverflowWarning(proc)
-		}
-
-		if err := rs.Append(resultTime, truncated); err != nil {
-			return err
-		}
-	}
-	return nil
+	return timeResultArithmetic(ivecs, result, proc, length, selectList, true)
 }
 
 func subTimeFromDatetime(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -5570,9 +5426,9 @@ func fieldCheck(overloads []overload, inputs []types.Type) checkResult {
 	if len(inputs) < 2 {
 		return newCheckResultWithFailure(failedFunctionParametersWrong)
 	}
-	// Binary SQL variables use the same byte-preserving, case-insensitive
-	// string comparison as text variables. Without this family check, mixed
-	// BINARY/VARBINARY/BLOB inputs fall through to DOUBLE and distinct byte
+	// Binary and text inputs both belong to the string comparison overload.
+	// Without this family check, mixed BINARY/VARBINARY/BLOB inputs fall
+	// through to DOUBLE and distinct byte
 	// sequences with nonnumeric prefixes compare equal.
 	allStrings := true
 	for _, input := range inputs {
@@ -5818,6 +5674,9 @@ func FieldNumber[T number](ivecs []*vector.Vector, result vector.FunctionResultW
 
 func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ *process.Process, length int, selectList *FunctionSelectList) (err error) {
 	rs := vector.MustFunctionResult[uint64](result)
+	// FIELD compares using the subject expression's resolved domain, including
+	// a selector's common type, rather than its selected row's provenance.
+	binary := types.StaticStringDomain(*ivecs[0].GetType()) == types.StringDomainBinary
 
 	fs := make([]vector.FunctionParameterWrapper[types.Varlena], len(ivecs))
 	for i := range ivecs {
@@ -5829,15 +5688,24 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	for j := 1; j < len(ivecs); j++ {
 
 		for i := uint64(0); i < uint64(length); i++ {
+			if nums[i] != 0 || functionRowSkipped(selectList, i) {
+				continue
+			}
 
 			v1, null1 := fs[0].GetStrValue(i)
 			v2, null2 := fs[j].GetStrValue(i)
 
-			if (nums[i] != 0) || (null1 || null2) {
+			if null1 || null2 {
 				continue
 			}
 
-			if strings.EqualFold(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2)) {
+			var equal bool
+			if binary {
+				equal = bytes.Equal(v1, v2)
+			} else {
+				equal = strings.EqualFold(functionUtil.QuickBytesToStr(v1), functionUtil.QuickBytesToStr(v2))
+			}
+			if equal {
 				nums[i] = uint64(j)
 			}
 
@@ -5845,7 +5713,7 @@ func FieldString(ivecs []*vector.Vector, result vector.FunctionResultWrapper, _ 
 	}
 
 	for i := uint64(0); i < uint64(length); i++ {
-		if err := rs.Append(nums[i], false); err != nil {
+		if err := rs.Append(nums[i], functionRowSkipped(selectList, i)); err != nil {
 			return err
 		}
 	}
@@ -6611,7 +6479,7 @@ func appendLocaleUnknownWarning(proc *process.Process, locale string) {
 		// Bound the echo before formatting; sink-side truncation is too late
 		// to prevent input-sized temporary allocations.
 		if len(locale) > 128 {
-			locale = locale[:128]
+			locale = locale[:util.UTF8PrefixLen(locale, 128)]
 		}
 		appender.AppendWarningDiagnostic(moerr.ER_UNKNOWN_LOCALE,
 			fmt.Sprintf("Unknown locale: '%s'", locale))

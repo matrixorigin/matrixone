@@ -1457,6 +1457,7 @@ func Test_isErrorRollbackWholeTxn(t *testing.T) {
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendClosedNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewNoAvailableBackendNoCtx()))
 	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewBackendCannotConnectNoCtx("test")))
+	assert.Equal(t, true, isErrorRollbackWholeTxn(moerr.NewTxnWriteConflictNoCtx("test")))
 }
 
 func TestNewErrorRollbackWholeTxnCoversEveryCode(t *testing.T) {
@@ -2481,6 +2482,309 @@ func TestColDef2MysqlColumnOriginMetadata(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "table", legacy.Table())
 	require.Equal(t, "table", legacy.OrgTable())
+}
+
+func TestComputedBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	computed, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:             "predicate",
+		Typ:              plan2.Type{Id: int32(types.T_bool)},
+		ResultColumnKind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+	})
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, computed.ColumnType())
+	require.Equal(t, uint32(8), computed.Length())
+
+	proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+	packet := proto.makeColumnDefinition41Payload(computed, int(COM_QUERY))
+	pos := HeaderOffset
+	for range 6 {
+		_, next, ok := proto.readStringLenEnc(packet, pos)
+		require.True(t, ok)
+		pos = next
+	}
+	_, pos, ok := proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	charset, pos, ok := proto.io.ReadUint16(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint16(charsetBinary), charset)
+	length, pos, ok := proto.io.ReadUint32(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint32(8), length)
+	typ, _, ok := proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+
+	native, err := colDef2MysqlColumn(context.Background(), &plan2.ColDef{
+		Name:             "flag",
+		Typ:              plan2.Type{Id: int32(types.T_bool)},
+		ResultColumnKind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED,
+	})
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, native.ColumnType())
+	require.Equal(t, uint32(boolColumnLength), native.Length())
+	packet = proto.makeColumnDefinition41Payload(native, int(COM_QUERY))
+	pos = HeaderOffset
+	for range 6 {
+		_, next, ok := proto.readStringLenEnc(packet, pos)
+		require.True(t, ok)
+		pos = next
+	}
+	_, pos, ok = proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	_, pos, ok = proto.io.ReadUint16(packet, pos)
+	require.True(t, ok)
+	length, pos, ok = proto.io.ReadUint32(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint32(boolColumnLength), length)
+	typ, _, ok = proto.io.ReadUint8(packet, pos)
+	require.True(t, ok)
+	require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+}
+
+func TestAggregateBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, sql := range []string{
+		"select min(n_nationkey is null) as p from nation",
+		"select max(n_nationkey is null) as p from nation",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, columns[0].ResultColumnKind)
+
+			column, err := colDef2MysqlColumn(context.Background(), columns[0])
+			require.NoError(t, err)
+			require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+			require.Equal(t, uint32(8), column.Length())
+		})
+	}
+}
+
+func TestWindowBooleanResultUsesNumericWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name   string
+		sql    string
+		kind   plan2.ResultColumnKind
+		length uint32
+	}{
+		{
+			name:   "computed predicate window",
+			sql:    "select max(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "computed predicate window under distinct",
+			sql:    "select distinct max(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "computed min predicate window",
+			sql:    "select min(n_nationkey is null) over () as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "computed first predicate window",
+			sql:    "select first_value(n_nationkey is null) over (order by n_nationkey) as p from nation",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "aggregate over native boolean window",
+			sql:    "select max(with_grant_option) over () as p from mo_catalog.mo_role_privs",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED,
+			length: 8,
+		},
+		{
+			name:   "native boolean window",
+			sql:    "select first_value(with_grant_option) over () as p from mo_catalog.mo_role_privs",
+			kind:   plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED,
+			length: boolColumnLength,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, tc.sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, 1)
+			require.Equal(t, tc.kind, columns[0].ResultColumnKind)
+
+			column, err := colDef2MysqlColumn(context.Background(), columns[0])
+			require.NoError(t, err)
+			require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+			require.Equal(t, tc.length, column.Length())
+		})
+	}
+}
+
+func TestWindowBooleanResultKeepsStoredBooleanSiblingWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	queryPlan, err := buildSingleSql(mock, t,
+		"select with_grant_option, max(with_grant_option is null) over () as p from mo_catalog.mo_role_privs")
+	require.NoError(t, err)
+	columns := plan.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 2)
+
+	stored, err := colDef2MysqlColumn(context.Background(), columns[0])
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, stored.ColumnType())
+	require.Equal(t, uint32(boolColumnLength), stored.Length())
+
+	computed, err := colDef2MysqlColumn(context.Background(), columns[1])
+	require.NoError(t, err)
+	require.Equal(t, defines.MYSQL_TYPE_BOOL, computed.ColumnType())
+	require.Equal(t, uint32(8), computed.Length())
+}
+
+func TestStackedWindowBooleanResultsKeepWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	queryPlan, err := buildSingleSql(mock, t,
+		"select first_value(with_grant_option) over (order by role_id), "+
+			"max(with_grant_option is null) over (), "+
+			"first_value(with_grant_option is null) over (order by role_id desc) "+
+			"from mo_catalog.mo_role_privs")
+	require.NoError(t, err)
+	columns := plan.GetResultColumnsFromPlan(queryPlan)
+	require.Len(t, columns, 3)
+
+	for i, want := range []struct {
+		kind   plan2.ResultColumnKind
+		length uint32
+	}{
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+		{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+	} {
+		require.Equal(t, want.kind, columns[i].ResultColumnKind)
+		column, err := colDef2MysqlColumn(context.Background(), columns[i])
+		require.NoError(t, err)
+		require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+		require.Equal(t, want.length, column.Length())
+	}
+}
+
+func TestStackedWindowBooleanResultsKeepMixedOutputOrder(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name string
+		sql  string
+		want []struct {
+			kind   plan2.ResultColumnKind
+			length uint32
+		}
+	}{
+		{
+			name: "stored then computed",
+			sql: "select first_value(with_grant_option) over (order by role_id), " +
+				"first_value(role_id is null) over (order by role_id desc) " +
+				"from mo_catalog.mo_role_privs",
+			want: []struct {
+				kind   plan2.ResultColumnKind
+				length uint32
+			}{
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+			},
+		},
+		{
+			name: "computed then stored",
+			sql: "select first_value(role_id is null) over (order by role_id desc), " +
+				"first_value(with_grant_option) over (order by role_id) " +
+				"from mo_catalog.mo_role_privs",
+			want: []struct {
+				kind   plan2.ResultColumnKind
+				length uint32
+			}{
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_COMPUTED, length: 8},
+				{kind: plan2.ResultColumnKind_RESULT_COLUMN_KIND_STORED, length: boolColumnLength},
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			queryPlan, err := buildSingleSql(mock, t, tc.sql)
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(queryPlan)
+			require.Len(t, columns, len(tc.want))
+			for i, want := range tc.want {
+				require.Equal(t, want.kind, columns[i].ResultColumnKind)
+				column, err := colDef2MysqlColumn(context.Background(), columns[i])
+				require.NoError(t, err)
+				require.Equal(t, defines.MYSQL_TYPE_BOOL, column.ColumnType())
+				require.Equal(t, want.length, column.Length())
+			}
+		})
+	}
+}
+
+func TestJoinedBooleanResultsKeepWireMetadata(t *testing.T) {
+	mock := plan.NewMockOptimizer(false, newPlanTestProcess(t))
+	for _, tc := range []struct {
+		name string
+		sql  string
+	}{
+		{
+			name: "distinct cross join",
+			sql: "select a.v, b.v from " +
+				"(select distinct with_grant_option v from mo_catalog.mo_role_privs) a cross join " +
+				"(select distinct role_id is null v from mo_catalog.mo_role_privs) b",
+		},
+		{
+			name: "grouped left join",
+			sql: "select a.v, b.v from " +
+				"(select with_grant_option v from mo_catalog.mo_role_privs group by with_grant_option) a left join " +
+				"(select role_id is null v from mo_catalog.mo_role_privs group by role_id is null) b on a.v = b.v",
+		},
+		{
+			name: "outer distinct right join",
+			sql: "select distinct a.v, b.v from " +
+				"(select distinct with_grant_option v from mo_catalog.mo_role_privs) a right join " +
+				"(select distinct role_id is null v from mo_catalog.mo_role_privs) b on a.v = b.v",
+		},
+	} {
+		for _, reordered := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/reordered_%t", tc.name, reordered), func(t *testing.T) {
+				sql := tc.sql
+				lengths := []uint32{boolColumnLength, 8}
+				if reordered {
+					sql = strings.Replace(sql, "a.v, b.v", "b.v, a.v", 1)
+					lengths = []uint32{8, boolColumnLength}
+				}
+				queryPlan, err := buildSingleSql(mock, t, sql)
+				require.NoError(t, err)
+				columns := plan.GetResultColumnsFromPlan(queryPlan)
+				require.Len(t, columns, 2)
+				proto := &MysqlProtocolImpl{io: NewIOPackage(true)}
+				for i, colDef := range columns {
+					column, err := colDef2MysqlColumn(t.Context(), colDef)
+					require.NoError(t, err)
+					for _, cmd := range []int{int(COM_QUERY), int(COM_STMT_PREPARE)} {
+						packet := proto.makeColumnDefinition41Payload(column, cmd)
+						pos := HeaderOffset
+						for range 6 {
+							_, next, ok := proto.readStringLenEnc(packet, pos)
+							require.True(t, ok)
+							pos = next
+						}
+						_, pos, ok := proto.io.ReadUint8(packet, pos)
+						require.True(t, ok)
+						_, pos, ok = proto.io.ReadUint16(packet, pos)
+						require.True(t, ok)
+						length, pos, ok := proto.io.ReadUint32(packet, pos)
+						require.True(t, ok)
+						require.Equal(t, lengths[i], length, "column %d, command %d", i, cmd)
+						typ, _, ok := proto.io.ReadUint8(packet, pos)
+						require.True(t, ok)
+						require.Equal(t, uint8(defines.MYSQL_TYPE_TINY), typ)
+					}
+				}
+			})
+		}
+	}
 }
 
 func Test_setMysqlColumnTypeMetadataFloatingPointDecimals(t *testing.T) {

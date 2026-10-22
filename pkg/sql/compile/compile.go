@@ -156,6 +156,10 @@ func NewCompile(
 	c.startAt = startAt
 	c.disableRetry = false
 	c.retryTimes = 0
+	// Start every new compilation with the ordinary index-registration policy.
+	// The ALTER COPY private preparation opts out through its executor options;
+	// that opt-out must not survive into this object's next pool generation.
+	c.skipIndexTaskRegistration = false
 	c.ncpu = system.GoMaxProcs()
 	c.lockMeta = NewLockMeta()
 	// TODO: The action of updating the WriteOffset logic should be executed in the `func (c *Compile) Run(_ uint64)` method.
@@ -492,6 +496,7 @@ func (c *Compile) clear() {
 	for i := range c.fuzzys {
 		c.fuzzys[i].release()
 	}
+	c.clearDependentSourceMetadata()
 
 	c.MessageBoard = c.MessageBoard.Reset()
 	c.fuzzys = c.fuzzys[:0]
@@ -499,6 +504,7 @@ func (c *Compile) clear() {
 	c.auxiliaryProductScopes = nil
 	c.pn = nil
 	c.fill = nil
+	c.buildPlanFunc = nil
 	c.preparedParamValues = nil
 	c.preparedJoinDiagnosticFree = false
 	c.resultSink = nil
@@ -566,6 +572,7 @@ func (c *Compile) clear() {
 	c.keepAutoIncrement = 0
 	c.lastInsertIDBaseline = 0
 	c.disableLock = false
+	c.skipIndexTaskRegistration = false
 	c.prePipelineLockTableID = 0
 	c.icebergScanPlanner = nil
 
@@ -704,12 +711,14 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
-// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
-// he statement
+// isRetryErr accepts transaction retries under RC and snapshot-coverage retries
+// under either isolation level. A coverage retry changes the access path, not
+// the transaction snapshot.
 func (c *Compile) isRetryErr(err error) bool {
-	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-		c.proc.GetTxnOperator().Txn().IsRCIsolation()
+	return moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged) ||
+		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+			c.proc.GetTxnOperator().Txn().IsRCIsolation()
 }
 
 type scopeRunResult struct {
@@ -786,9 +795,6 @@ func (c *Compile) canRetry(err error) bool {
 	if c.disableRetry || c.proc.IncrStatementDisabled() {
 		return false
 	}
-	if moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode) {
-		return true
-	}
 	return c.isRetryErr(err)
 }
 
@@ -839,15 +845,19 @@ func (c *Compile) printPipeline() {
 // 1. lock table.
 // 2. init data source.
 func (c *Compile) prePipelineInitializer() (startedSources []*materialized.Source, err error) {
-	// do table lock.
-	if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
-		return nil, err
+	if !c.disableLock {
+		// do table lock.
+		if err = c.lockMeta.doLock(c.e, c.proc); err != nil {
+			return nil, err
+		}
 	}
 	if err = c.unresolvedIndexHintError(); err != nil {
 		return nil, err
 	}
-	if err = c.lockTable(); err != nil {
-		return nil, err
+	if !c.disableLock {
+		if err = c.lockTable(); err != nil {
+			return nil, err
+		}
 	}
 	if err = c.maybePromoteLoadUniqueIndexes(); err != nil {
 		return nil, err
@@ -1375,6 +1385,9 @@ func (c *Compile) shouldPrePipelineLockTable(target *plan.LockTarget) bool {
 // }
 
 func (c *Compile) compileQuery(qry *plan.Query) ([]*Scope, error) {
+	if qry.Correlation != nil {
+		return c.compileDependentQuery(qry)
+	}
 	var err error
 	c.foundRowsOwnerNode = c.selectFoundRowsOwnerNode(qry)
 	c.auxiliaryProductScopes = nil
@@ -1678,7 +1691,7 @@ func (c *Compile) materializeSQLSelectLimit(queryPlan *plan.Plan) (sqlSelectLimi
 	if limitExpr == nil || len(qry.Steps) == 0 {
 		return materialization, nil
 	}
-	finalStep := qry.Steps[len(qry.Steps)-1]
+	finalStep := qry.Steps[qry.MainOutputStep()]
 	if finalStep < 0 || int(finalStep) >= len(qry.Nodes) || qry.Nodes[finalStep] == nil {
 		// Leave malformed-plan reporting to the existing compile/export
 		// validation rather than panicking at this optional materialization.
@@ -2195,8 +2208,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return ss, nil
 	case plan.Node_DELETE:
 		// Check if target table is a CCPR shared table (from publication)
-		if node.DeleteCtx != nil && c.shouldBlockCCPRReadOnly(node.DeleteCtx.TableDef) {
-			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+		if err := c.validateDMLTarget(node); err != nil {
+			return nil, err
 		}
 		if node.DeleteCtx.CanTruncate {
 			s := newScope(TruncateTable)
@@ -2264,8 +2277,8 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return c.compilePreInsert(nodes, node, ss)
 	case plan.Node_INSERT:
 		// Check if target table is a CCPR shared table (from publication)
-		if node.InsertCtx != nil && c.shouldBlockCCPRReadOnly(node.InsertCtx.TableDef) {
-			return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
+		if err := c.validateDMLTarget(node); err != nil {
+			return nil, err
 		}
 		c.appendMetaTables(node.ObjRef)
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -2278,10 +2291,10 @@ func (c *Compile) compilePlanScopeWithUnionAllDemand(
 		return c.compileInsert(nodes, node, ss)
 	case plan.Node_MULTI_UPDATE:
 		// Check if any target table is a CCPR shared table (from publication)
+		if err := c.validateDMLTarget(node); err != nil {
+			return nil, err
+		}
 		for _, updateCtx := range node.UpdateCtxList {
-			if c.shouldBlockCCPRReadOnly(updateCtx.TableDef) {
-				return nil, moerr.NewCCPRReadOnly(c.proc.Ctx)
-			}
 			c.appendMetaTables(updateCtx.ObjRef)
 		}
 		ss, err = c.compilePlanScope(step, node.Children[0], nodes)
@@ -2381,7 +2394,7 @@ func (c *Compile) firstStepToCompile(qry *plan.Query) int {
 	if qry == nil || len(qry.Steps) == 0 {
 		return 0
 	}
-	finalStep := qry.Steps[len(qry.Steps)-1]
+	finalStep := qry.Steps[qry.MainOutputStep()]
 	if finalStep >= 0 && int(finalStep) < len(qry.Nodes) && c.canUseLiteralLimitZeroFastPath(qry.Nodes[finalStep]) {
 		return len(qry.Steps) - 1
 	}
@@ -2420,7 +2433,7 @@ func (c *Compile) selectFoundRowsOwnerNode(qry *plan.Query) *plan.Node {
 		return nil
 	}
 
-	rootID := qry.Steps[len(qry.Steps)-1]
+	rootID := qry.Steps[qry.MainOutputStep()]
 	if rootID < 0 || int(rootID) >= len(qry.Nodes) {
 		return nil
 	}
@@ -2926,6 +2939,12 @@ func (c *Compile) compileExternScanWithPlanNodeIDAndIsolation(
 	planNodeID int32,
 	isolateMongoPlan bool,
 ) ([]*Scope, error) {
+	return c.compileExternScanSource(node, planNodeID, isolateMongoPlan, false)
+}
+
+// serialSource freezes one coordinator source without dispatch/merge workers.
+// Readers are still created by the ordinary External/MongoScan operators.
+func (c *Compile) compileExternScanSource(node *plan.Node, planNodeID int32, isolateMongoPlan, serialSource bool) ([]*Scope, error) {
 	if c.isPrepare {
 		return nil, cantCompileForPrepareErr
 	}
@@ -3037,16 +3056,21 @@ func (c *Compile) compileExternScanWithPlanNodeIDAndIsolation(
 		if err != nil {
 			return nil, err
 		}
-		if len(fileList) == 1 && len(arrowRuntime.shardsByPath[fileList[0]]) > 1 {
+		if !serialSource && len(fileList) == 1 && len(arrowRuntime.shardsByPath[fileList[0]]) > 1 {
 			return c.compileExternScanArrowRecordBatchFanout(
 				node, param, fileList[0], fileSize[0], strictSqlMode, arrowRuntime,
 			)
 		}
-		if param.Parallel && len(fileList) > 1 {
+		if !serialSource && param.Parallel && len(fileList) > 1 {
 			return c.compileExternScanWholeFileFanout(
 				node, param, fileList, fileSize, strictSqlMode, false, arrowRuntime,
 			)
 		}
+	}
+
+	if serialSource {
+		param.Parallel = false
+		return c.compileExternScanSerialReadWrite(node, param, fileList, fileSize, strictSqlMode, arrowRuntime)
 	}
 
 	if param.HivePartitioning {
@@ -5483,13 +5507,17 @@ func (c *Compile) compileIndexSearchScan(node *plan.Node) ([]*Scope, error) {
 				CNIDX: int32(i),
 			}
 		}
-		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, vectorscan.IndexSearchScanProtocolVersion)
+		requiredVersion, err := c.indexSearchScanProtocolVersion(node.IndexSearchScan)
+		if err != nil {
+			return nil, err
+		}
+		supported, err := remoteWorkersSupportProtocol(c.proc, nodes, requiredVersion)
 		if err != nil {
 			return nil, err
 		}
 		if !supported {
 			return nil, moerr.NewNotSupportedNoCtxf(
-				"index search scan requires MORPC protocol version %d on every CN", vectorscan.IndexSearchScanProtocolVersion)
+				"index search scan requires MORPC protocol version %d on every CN", requiredVersion)
 		}
 		// Keep the query's coordinator-first list intact for other scans.
 		// Object owners depend only on the selected identities, not ingress.
@@ -6587,7 +6615,7 @@ func (c *Compile) lazyUnionAllBranches(scopes []*Scope) []*Scope {
 func shouldBuildLeftForAsof(node, left, right *plan.Node) bool {
 	if node == nil || left == nil || right == nil ||
 		(node.JoinType != plan.Node_ASOF && node.JoinType != plan.Node_ASOF_LEFT) ||
-		left.Stats == nil {
+		left.Stats == nil || isMixedJSONNumericAsof(node) {
 		return false
 	}
 	leftRows := left.Stats.Outcnt
@@ -6645,6 +6673,25 @@ func scopesContainOperator(scopes []*Scope, target vm.OpType) bool {
 }
 
 func (c *Compile) compileJoin(node, left, right *plan.Node, probeScopes, buildScopes []*Scope) []*Scope {
+	if isMixedJSONNumericAsof(node) {
+		// Gather complete inputs on one coordinator worker before selecting
+		// eligible predecessors. This also handles a single remote scope.
+		node.RuntimeFilterBuildList = nil
+		if node.Stats != nil && node.Stats.HashmapStats != nil {
+			node.Stats.HashmapStats.Shuffle = false
+			node.Stats.HashmapStats.ShuffleColIdx = -1
+		}
+		probeScopes = c.mergeShuffleScopesIfNeeded(probeScopes, false)
+		buildScopes = c.mergeShuffleScopesIfNeeded(buildScopes, false)
+		if !c.scopesRunOnCoordinator(probeScopes) {
+			probeScopes = []*Scope{c.newMergeScope(probeScopes)}
+		}
+		if !c.scopesRunOnCoordinator(buildScopes) {
+			buildScopes = []*Scope{c.newMergeScope(buildScopes)}
+		}
+		rs := c.compileProbeSideForBroadcastJoin(node, left, right, probeScopes)
+		return c.compileBuildSideForBroadcastJoin(node, rs, buildScopes)
+	}
 	if containsStatementInvariantDiagnosticInList(c.proc, node.OnList) ||
 		c.joinNeedsLocalWindow(node, probeScopes, buildScopes) {
 		// Keep WINDOW local: it has no remote encoding. The same local
@@ -7048,6 +7095,9 @@ func canUseShuffleHashMarkJoinWithInputs(node, left, right *plan.Node) bool {
 }
 
 func (c *Compile) broadcastJoinUsesHash(node *plan.Node) bool {
+	if isMixedJSONNumericAsof(node) {
+		return true
+	}
 	isEq := plan2.IsEquiJoin2(node.OnList)
 	if isEq && (node.JoinType == plan.Node_INNER || node.JoinType == plan.Node_LEFT ||
 		node.JoinType == plan.Node_RIGHT || node.JoinType == plan.Node_SEMI ||
@@ -7505,7 +7555,8 @@ func hasMultiScopeGroup(groups [][]*Scope) bool {
 
 func (c *Compile) compileApply(node, right *plan.Node, rs []*Scope) []*Scope {
 	name := right.GetTableDef().GetTblFunc().GetName()
-	if name == "mo_view_columns" || name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
+	derivedSubscription := name == "mo_subscription_view_columns" && len(right.TblFuncExprList) == 3
+	if name == "mo_view_columns" || derivedSubscription || name == "json_table" || planplugin.TableFuncRequiresCoordinator(name) {
 		// Session-bound functions and index writers must use the origin process:
 		// a remote mirror workspace cannot publish writes in its transaction.
 		// Gather inputs here without changing the source scans' placement.
@@ -8946,6 +8997,19 @@ func supportsRemotePadSpaceSemantics(service string) bool {
 	return ok && protocolVersion >= defines.MORPCVersion40
 }
 
+func supportsRemoteViewDefinitionFunction(service string) bool {
+	rt := moruntime.ServiceRuntime(service)
+	if rt == nil {
+		return false
+	}
+	version, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
+	if !ok {
+		return false
+	}
+	protocolVersion, ok := version.(int64)
+	return ok && protocolVersion >= defines.MORPCVersion126
+}
+
 func supportsRemoteParquetWholeFileFanout(service string) bool {
 	rt := moruntime.ServiceRuntime(service)
 	if rt == nil {
@@ -9516,7 +9580,20 @@ func (c *Compile) compileDelete(node *plan.Node, ss []*Scope) ([]*Scope, error) 
 }
 
 func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
+	// Build the physical lock pipeline before any Scope.Run, RemoteRun, or
+	// MergeRun can start a source. Waiting until LockOp.Prepare is too late for
+	// coordinator plans: MergeRun may start PreScopes before preparing its root
+	// operator. Keep the runtime guard as defense against malformed remote plans.
+	if err := c.validateNonBlockingLockTargets(node.LockTargets); err != nil {
+		return nil, err
+	}
+
+	if c.disableLock {
+		return ss, nil
+	}
+
 	lockRows := make([]*plan.LockTarget, 0, len(node.LockTargets))
+	coordinatorLock := false
 	localizeLockPlan := c.loadUniqueIndexPromotion != nil || c.prePipelineLockTableID != 0
 	promotedNewTable := false
 	filterPromotedRows := false
@@ -9528,6 +9605,12 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 		filterPromotedRows = true
 	}
 	for _, canonicalTarget := range node.LockTargets {
+		if canonicalTarget == nil {
+			continue
+		}
+		if canonicalTarget.GetNoWait() || canonicalTarget.GetSkipLocked() {
+			coordinatorLock = true
+		}
 		if filterPromotedRows && c.loadUniqueIndexPromotion.coversRowTarget(canonicalTarget) {
 			continue
 		}
@@ -9585,10 +9668,8 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 
 	currentFirstFlag := c.anal.isFirst
 	// The lock operator below is attached to ss[0] alone, so every input
-	// pipeline must be merged into it first or the others' rows reach the
-	// writer unlocked -- a multi-file LOAD fanout hands a TP-classified plan one
-	// scope per file shard, the same case compileMultiUpdate merges on.
-	if !c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1 { // todo: don't support dml with multi steps for now
+	// pipeline must be merged into it first or the others' rows reach it unlocked.
+	if coordinatorLock || !c.IsTpQuery() || len(ss) > 1 || len(c.pn.GetQuery().Steps) > 1 {
 		rs := c.newMergeScope(ss)
 		ss = []*Scope{rs}
 	}
@@ -9608,6 +9689,47 @@ func (c *Compile) compileLock(node *plan.Node, ss []*Scope) ([]*Scope, error) {
 	ss[0].doSetRootOperator(lockOpArg)
 	c.anal.isFirst = false
 	return ss, nil
+}
+
+// Dependent query kernels construct LockOps without compileLock. Enforce the
+// same admission contract before either physical compiler can publish sources.
+func (c *Compile) validateNonBlockingLockTargets(targets []*plan.LockTarget) error {
+	for _, target := range targets {
+		if target == nil || (!target.GetNoWait() && !target.GetSkipLocked()) {
+			continue
+		}
+		if c.proc == nil {
+			return moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
+		}
+		txnOp := c.proc.GetTxnOperator()
+		if txnOp == nil || !txnOp.Txn().IsPessimistic() {
+			return moerr.NewNotSupportedNoCtx(
+				"NOWAIT and SKIP LOCKED require a pessimistic transaction")
+		}
+		if c.disableLock {
+			return moerr.NewNotSupportedNoCtx("NOWAIT and SKIP LOCKED require physical lock admission")
+		}
+		if target.GetLockTable() || target.GetLockTableAtTheEnd() {
+			return moerr.NewNotSupportedNoCtx("NOWAIT and SKIP LOCKED require exact row lock targets")
+		}
+	}
+	return nil
+}
+
+func (c *Compile) validateNonBlockingLockPlan(logicalPlan *plan.Plan) error {
+	if logicalPlan == nil || logicalPlan.GetQuery() == nil {
+		return nil
+	}
+	for _, node := range logicalPlan.GetQuery().GetNodes() {
+		if node == nil {
+			continue
+		}
+		if err := c.validateNonBlockingLockTargets(node.GetLockTargets()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (c *Compile) canPrePipelineLockNewTable(target *plan.LockTarget) bool {
@@ -11143,6 +11265,8 @@ func (c *Compile) runSqlWithResultAndOptions(
 
 	lower := c.getLower()
 
+	options = c.internalStatementOption(options)
+
 	if c.pn != nil {
 		if qry, ok := c.pn.Plan.(*plan.Plan_Ddl); ok {
 			if qry.Ddl.DdlType == plan.DataDefinition_DROP_DATABASE {
@@ -11204,6 +11328,13 @@ func (c *Compile) runSqlWithResultAndOptions(
 	}
 	ctx = process.ContextWithWarningSink(ctx, c.proc.WarningSink)
 	return exec.Exec(ctx, sql, opts)
+}
+
+func (c *Compile) internalStatementOption(options executor.StatementOption) executor.StatementOption {
+	if c.disableLock {
+		return options.WithDisableLock()
+	}
+	return options
 }
 
 func (c *Compile) fatalLog(retry int, err error) {
@@ -11408,6 +11539,30 @@ func isTableFromPublication(tableDef *plan.TableDef) bool {
 		}
 	}
 	return false
+}
+
+// validateDMLTarget is shared by ordinary scopes and dependent programs. The
+// target's publication policy must be checked before either path opens readers
+// or constructs write operators.
+func (c *Compile) validateDMLTarget(node *plan.Node) error {
+	blocked := false
+	switch node.NodeType {
+	case plan.Node_DELETE:
+		blocked = node.DeleteCtx != nil && c.shouldBlockCCPRReadOnly(node.DeleteCtx.TableDef)
+	case plan.Node_INSERT:
+		blocked = node.InsertCtx != nil && c.shouldBlockCCPRReadOnly(node.InsertCtx.TableDef)
+	case plan.Node_MULTI_UPDATE:
+		for _, update := range node.UpdateCtxList {
+			if c.shouldBlockCCPRReadOnly(update.TableDef) {
+				blocked = true
+				break
+			}
+		}
+	}
+	if blocked {
+		return moerr.NewCCPRReadOnly(c.proc.Ctx)
+	}
+	return nil
 }
 
 // shouldBlockCCPRReadOnly checks if the CCPR read-only check should block the operation.

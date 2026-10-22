@@ -793,6 +793,10 @@ const (
 	APPROX_PERCENTILE = 557
 	// function `mo_is_legacy_temporary_table`
 	MO_IS_LEGACY_TEMPORARY_TABLE = 558
+	// function `mo_view_definition`
+	MO_VIEW_DEFINITION = 603
+	// function `mo_view_check_option`
+	MO_VIEW_CHECK_OPTION = 604
 
 	// onnx_run: evaluate an ONNX model. Renumbered as main merges claim ids
 	// (549->554->556); referenced by name only, so renumbering is safe.
@@ -883,11 +887,17 @@ const (
 	CHECK_ASYNC_DATALINK_SOURCE = 599
 	INTERNAL_TABLE_COLLATION    = 600
 
-	FUNCTION_END_NUMBER = 601
+	TIMESTAMPADD_SECOND_INTERVAL = 601
+
+	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
+	LOAD_FK_IGNORE_CHECK = 602
+
+	FUNCTION_END_NUMBER = 605
 )
 
 // functionIdRegister is what function we have registered already.
 var functionIdRegister = map[string]int32{
+	"timestampadd_second_interval": TIMESTAMPADD_SECOND_INTERVAL,
 	"_check_async_datalink_source": CHECK_ASYNC_DATALINK_SOURCE,
 
 	"format_bytes":            FORMAT_BYTES,
@@ -991,6 +1001,8 @@ var functionIdRegister = map[string]int32{
 	"median":                       MEDIAN,
 	"approx_percentile":            APPROX_PERCENTILE,
 	"mo_is_legacy_temporary_table": MO_IS_LEGACY_TEMPORARY_TABLE,
+	"mo_view_definition":           MO_VIEW_DEFINITION,
+	"mo_view_check_option":         MO_VIEW_CHECK_OPTION,
 	"max_by":                       MAX_BY,
 	"max_by_non_null":              MAX_BY_NON_NULL,
 	"percentile_cont":              PERCENTILE_CONT,
@@ -1080,6 +1092,7 @@ var functionIdRegister = map[string]int32{
 	"asin":                           ASIN,
 	"assert":                         ASSERT,
 	"_check_constraint_assert":       CHECK_CONSTRAINT_ASSERT,
+	"_load_fk_ignore_check":          LOAD_FK_IGNORE_CHECK,
 	"bit_length":                     BIT_LENGTH,
 	"date":                           DATE,
 	"time":                           TIME,

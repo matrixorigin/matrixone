@@ -1919,6 +1919,10 @@ func (tbl *txnTable) isCreatedInTxn(_ context.Context) (bool, error) {
 
 }
 
+func (tbl *txnTable) CreatedInCurrentTxn(ctx context.Context) (bool, error) {
+	return tbl.isCreatedInTxn(ctx)
+}
+
 func validateAutoIncrEpochAdvance(current uint32, resets uint64) error {
 	if uint64(current)+resets > math.MaxUint32 {
 		return moerr.NewInternalErrorNoCtx("AUTO_INCREMENT epoch exhausted")
@@ -1957,6 +1961,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 	var err error
 	var checkCstr []byte
 	oldTableName := tbl.tableName
+	oldCreateSQL := tbl.createSql
 	olddefs := tbl.defs
 	oldPart := tbl.partitioned
 	oldPartInfo := tbl.partition
@@ -1985,7 +1990,10 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 				tbl.constraint = oldConstraint
 			case api.AlterKind_RenameTable:
 				tbl.tableName = oldTableName
+				tbl.createSql = oldCreateSQL
+				tbl.extraInfo.Checks = oldChecks
 			case api.AlterKind_ReplaceDef:
+				tbl.extraInfo.Checks = oldChecks
 				tbl.extraInfo.DefaultCharset = oldDefaultCharset
 				tbl.extraInfo.CollationVersion = oldCollationVersion
 			case api.AlterKind_RenameColumn:
@@ -2023,10 +2031,39 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			}
 			appendDef = append(appendDef, c)
 		case api.AlterKind_RenameTable:
-			tbl.tableName = req.GetRenameTable().NewName
+			rename := req.GetRenameTable()
+			structuredChecks := false
+			for _, check := range tbl.extraInfo.Checks {
+				structuredChecks = structuredChecks || check != nil
+			}
+			if !structuredChecks && (tbl.relKind == "" || tbl.relKind == catalog.SystemOrdinaryRel) {
+				createSQL, err := plan2.RenameLegacyCheckConstraintNames(ctx, tbl.createSql, rename.OldName, rename.NewName)
+				if err != nil {
+					return err
+				}
+				if createSQL != tbl.createSql {
+					tbl.createSql = createSQL
+					// createWithID consumes properties, while GetTableDef reads
+					// createSql. Publish the same fallback identity through both.
+					appendDef = append(appendDef, &engine.PropertiesDef{Properties: []engine.Property{{
+						Key: catalog.SystemRelAttr_CreateSQL, Value: createSQL,
+					}}})
+				}
+			}
+			tbl.tableName = rename.NewName
+			// Generated CHECK names (<table>_chk_<n>) follow the table they were
+			// generated for. Without this the renamed table keeps owning the old
+			// table's generated names, and recreating a table under the old name
+			// trips ER_CHECK_CONSTRAINT_DUP_NAME (3822).
+			tbl.extraInfo.Checks = plan2.RenameGeneratedCheckConstraintNames(
+				tbl.extraInfo.Checks, rename.OldName, rename.NewName,
+			)
 		case api.AlterKind_ReplaceDef:
 			hasReplaceDef = true
 			replaceDefReq = req
+			// ReplaceDef precedes composed rename actions. Publish its CHECKs
+			// here so later requests retain their final names and expressions.
+			tbl.extraInfo.Checks = api.CloneExtra(&api.SchemaExtra{Checks: req.GetReplaceDef().GetDef().GetChecks()}).Checks
 		case api.AlterKind_RenameColumn:
 			hasReplaceDef = true
 			re := req.GetRenameCol()
@@ -2064,7 +2101,8 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 			return err
 		}
 		// Catalog regeneration uses extraInfo independently of the property
-		// factory in baseDefs. Publish the validated pair through both owners.
+		// factory in baseDefs. CHECKs already follow the ordered requests above;
+		// publishing the replacement again would discard composed renames.
 		tbl.extraInfo.DefaultCharset = replacementExtra.DefaultCharset
 		tbl.extraInfo.CollationVersion = replacementExtra.CollationVersion
 		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
@@ -2139,30 +2177,7 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		// 3. adjust writes for the table
 		txn.Lock()
 		defer txn.Unlock()
-		for i, n := 0, len(txn.writes); i < n; i++ {
-			if cur := txn.writes[i]; cur.tableId == tbl.tableId && cur.bat != nil && cur.bat.RowCount() > 0 {
-				if sels, exist := txn.batchSelectList[cur.bat]; exist && len(sels) == cur.bat.RowCount() {
-					continue
-				}
-				transferred := cur
-				transferred.tableName = tbl.tableName // in case renaming
-				transferred.bat, err = cur.bat.Dup(txn.proc.Mp())
-				transferred.accountedSize = 0
-				if err != nil {
-					return err
-				}
-				if len(renameColMap) > 0 {
-					for i, attr := range transferred.bat.Attrs {
-						if newName, ok := renameColMap[attr]; ok {
-							transferred.bat.Attrs[i] = newName
-						}
-					}
-				}
-				txn.appendWorkspaceEntryLocked(transferred)
-				txn.selectAllBatchRowsLocked(cur.bat)
-
-			}
-		}
+		return txn.transferWorkspaceWritesForAlterLocked(tbl.tableId, tbl.tableName, renameColMap)
 	}
 
 	return nil

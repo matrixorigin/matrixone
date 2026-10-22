@@ -71,9 +71,6 @@ func (CatalogHooks) BuildSessionVars() []string {
 	return []string{"lower_case_table_names"}
 }
 
-// DefaultOptions — no statement-level option JSON required.
-func (CatalogHooks) DefaultOptions() map[string]string { return nil }
-
 // Fulltext2IndexFlag gates CREATE FULLTEXT2 INDEX behind the
 // experimental_fulltext2_index session var (mirrors bm25's Bm25IndexFlag /
 // HNSW's HnswIndexFlag). Both the framework gate (pkg/sql/compile/util.go, via

@@ -339,6 +339,7 @@ const (
 	planUint32TypeID                  int32 = 27
 	planAnyTypeID                     int32 = 0
 	internalTableCollationFunctionID  int32 = 600
+	loadFKIgnoreCheckFunctionID       int32 = 602
 	maxVarcharWidth                   int32 = 65535
 )
 
@@ -392,11 +393,20 @@ const (
 // TableCollationFunction requires MORPC v118 for INTERNAL_TABLE_COLLATION's
 // execution identity, including directly authored catalog expressions.
 // CalendarIntervalNormalization requires MORPC v115 for the new normalization identity.
+// TimestampDatetimeResultContracts requires MORPC v122 for appended unary
+// TIMESTAMP identities; released unary identities retain TIMESTAMP vectors.
+// DynamicTimeResultContracts uses the same epoch for prepared TIME results
+// over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
 type RemoteExpressionFeatures struct {
+	LoadFKIgnoreCheck             bool // v125: LOAD IGNORE FK admission and diagnostics
+	JSONNumericComparisons        bool
+	DependentPrograms             bool
 	CalendarIntervalNormalization bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
-	ScalarDivision                  bool
+	ScalarDivision bool
+	// ViewMetadataFunctions requires v126 for MO_VIEW_DEFINITION/CHECK_OPTION.
+	ViewMetadataFunctions           bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -420,15 +430,19 @@ type RemoteExpressionFeatures struct {
 	SpatialDistanceSemantics          bool
 	PreparedPrecisionScalar           bool
 	DecimalDivisionSemantics          bool
+	DecimalIntegerDivisionSemantics   bool // v121: unsigned DIV overload and display precision
 	// SpecialIntegerConsumers requires v98 independently of private CASTs.
 	SpecialIntegerConsumers                 bool
 	TemporalResultContracts                 bool
 	InvalidTemporalResultContract           bool
 	NormalizedIntervalUnits                 bool
+	TimestampAddSecondIntervals             bool
 	LegacyIntervalUnits                     bool
 	WeekSessionDefault                      bool
 	MediumIntAssignmentBounds               bool
 	DateNumericResultContracts              bool
+	TimestampDatetimeResultContracts        bool
+	DynamicTimeResultContracts              bool
 	DecimalStatisticalResultContracts       bool
 	TableCollationFunction                  bool
 	InvalidDecimalStatisticalResultContract bool
@@ -438,7 +452,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -458,12 +472,15 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.PreparedPrecisionScalar ||
 		features.SpecialIntegerConsumers ||
 		features.DecimalDivisionSemantics ||
+		features.DecimalIntegerDivisionSemantics ||
 		features.TemporalResultContracts ||
 		features.InvalidTemporalResultContract ||
 		features.NormalizedIntervalUnits ||
+		features.TimestampAddSecondIntervals ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
 		features.MediumIntAssignmentBounds ||
+		features.TimestampDatetimeResultContracts || features.DynamicTimeResultContracts ||
 		features.DateNumericResultContracts ||
 		features.DecimalStatisticalResultContracts ||
 		features.TableCollationFunction ||
@@ -913,6 +930,7 @@ func isExpressionResultMetadataContract(expr *Expr) bool {
 func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatures, err error) {
 	err = walkExpressionsInOwner(owner, func(expr *Expr) error {
 		return VisitExprTree(expr, func(current *Expr) error {
+			features.DependentPrograms = features.DependentPrograms || current.GetDependent() != nil || current.GetSlot() != nil
 			if literal := current.GetLit(); literal != nil && !literal.Isnull && current.Typ.Id == planJSONTypeID {
 				_, encodedJSON := literal.Value.(*Literal_Sval)
 				features.JSONScalarLiteralContracts = features.JSONScalarLiteralContracts || encodedJSON
@@ -928,6 +946,12 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == loadFKIgnoreCheckFunctionID {
+					features.LoadFKIgnoreCheck = true
+				}
+				features.JSONNumericComparisons = features.JSONNumericComparisons ||
+					isMixedJSONNumericComparison(fn) || ((id == 546 || id == internalJSONComparisonFunctionID) && overload == 1)
+
 				if id == internalTableCollationFunctionID {
 					features.TableCollationFunction = true
 				}
@@ -962,6 +986,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == castJSONToArrayFunctionID && isMediumIntArrayCast(current, fn) {
 					features.MediumIntAssignmentBounds = true
 				}
+				// The planner depends on this package, so registry IDs cannot be
+				// imported here. Compile tests bind these IDs to the registry.
+				if id == 603 || id == 604 { // MO_VIEW_DEFINITION / MO_VIEW_CHECK_OPTION
+					features.ViewMetadataFunctions = true
+				}
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
 					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT
 					features.YearBitCast = true
@@ -988,10 +1017,16 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 					(current.Typ.Id == 32 || current.Typ.Id == 33 || current.Typ.Id == 34) {
 					features.DecimalDivisionSemantics = true
 				}
+				if id == 14 && (overload == 1 || (overload == 0 && current.Typ.Width > 0 && current.Typ.Width <= 20 && current.Typ.Scale == 0)) {
+					features.DecimalIntegerDivisionSemantics = true
+				}
 				// Function IDs live in the function registry, which cannot be
 				// imported here because the planner depends on this package.
 				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
 					features.LegacyIntervalUnits = true
+				}
+				if id == 601 { // TIMESTAMPADD_SECOND_INTERVAL
+					features.TimestampAddSecondIntervals = true
 				}
 				if id == 583 { // TO_INTERVAL_MICROSECOND
 					features.NormalizedIntervalUnits = true
@@ -1008,6 +1043,16 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				}
 				if id == 216 && (overload == 0 || overload == 1) { // one-arg WEEK
 					features.WeekSessionDefault = true
+				}
+				timestamp, dynamicTime := TemporalResultContractFeatures(current)
+				features.TimestampDatetimeResultContracts = features.TimestampDatetimeResultContracts || timestamp
+				features.DynamicTimeResultContracts = features.DynamicTimeResultContracts || dynamicTime
+				if id == 250 && overload >= 0 && overload <= 10 { // TIMESTAMP
+					want := planTimestampTypeID
+					if overload >= 5 {
+						want = planDatetimeTypeID
+					}
+					features.InvalidTemporalResultContract = features.InvalidTemporalResultContract || current.Typ.Id != want
 				}
 				// Released overloads retain their physical vector ABI. The new
 				// numeric EXTRACT and string ADDTIME/SUBTIME results use appended
@@ -1566,60 +1611,61 @@ func VisitExprTree(expr *Expr, visitor func(*Expr) error) error {
 	if expr == nil {
 		return nil
 	}
-	if err := visitor(expr); err != nil {
-		return err
-	}
-	if lit := expr.GetLit(); lit != nil {
-		if err := VisitExprTree(lit.Src, visitor); err != nil {
+	pending := []*Expr{expr}
+	for len(pending) > 0 {
+		current := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		if current == nil {
+			continue
+		}
+		if err := visitor(current); err != nil {
 			return err
 		}
-	}
-	if fn := expr.GetF(); fn != nil {
-		for _, arg := range fn.Args {
-			if err := VisitExprTree(arg, visitor); err != nil {
-				return err
+		// Push in reverse visitation order; dependent operands are part of the
+		// caller expression while the program root belongs to the query graph.
+		if d := current.GetDependent(); d != nil {
+			pending = append(pending, d.Comparison)
+			for i := len(d.Lhs) - 1; i >= 0; i-- {
+				pending = append(pending, d.Lhs[i])
+			}
+			for i := len(d.Inputs) - 1; i >= 0; i-- {
+				pending = append(pending, d.Inputs[i])
 			}
 		}
-	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			if err := VisitExprTree(item, visitor); err != nil {
-				return err
-			}
-		}
-	}
-	if sub := expr.GetSub(); sub != nil {
-		if err := VisitExprTree(sub.Child, visitor); err != nil {
-			return err
-		}
-	}
-	if window := expr.GetW(); window != nil {
-		if err := VisitExprTree(window.WindowFunc, visitor); err != nil {
-			return err
-		}
-		for _, item := range window.PartitionBy {
-			if err := VisitExprTree(item, visitor); err != nil {
-				return err
-			}
-		}
-		for _, order := range window.OrderBy {
-			if order != nil {
-				if err := VisitExprTree(order.Expr, visitor); err != nil {
-					return err
+		if w := current.GetW(); w != nil {
+			if w.Frame != nil {
+				if w.Frame.End != nil {
+					pending = append(pending, w.Frame.End.Val)
+				}
+				if w.Frame.Start != nil {
+					pending = append(pending, w.Frame.Start.Val)
 				}
 			}
+			for i := len(w.OrderBy) - 1; i >= 0; i-- {
+				if w.OrderBy[i] != nil {
+					pending = append(pending, w.OrderBy[i].Expr)
+				}
+			}
+			for i := len(w.PartitionBy) - 1; i >= 0; i-- {
+				pending = append(pending, w.PartitionBy[i])
+			}
+			pending = append(pending, w.WindowFunc)
 		}
-		if window.Frame != nil {
-			if window.Frame.Start != nil {
-				if err := VisitExprTree(window.Frame.Start.Val, visitor); err != nil {
-					return err
-				}
+		if sub := current.GetSub(); sub != nil {
+			pending = append(pending, sub.Child)
+		}
+		if list := current.GetList(); list != nil {
+			for i := len(list.List) - 1; i >= 0; i-- {
+				pending = append(pending, list.List[i])
 			}
-			if window.Frame.End != nil {
-				if err := VisitExprTree(window.Frame.End.Val, visitor); err != nil {
-					return err
-				}
+		}
+		if fn := current.GetF(); fn != nil {
+			for i := len(fn.Args) - 1; i >= 0; i-- {
+				pending = append(pending, fn.Args[i])
 			}
+		}
+		if lit := current.GetLit(); lit != nil {
+			pending = append(pending, lit.Src)
 		}
 	}
 	return nil
@@ -1711,4 +1757,34 @@ func expressionOwnerContainer(kind reflect.Kind) bool {
 	default:
 		return false
 	}
+}
+
+// TemporalResultContractFeatures classifies one expression before folding.
+// Native TIME inputs keep their released physical result contract.
+func TemporalResultContractFeatures(expr *Expr) (timestampDatetime, dynamicTime bool) {
+	fn := expr.GetF()
+	if fn == nil || fn.Func == nil {
+		return false, false
+	}
+	id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+	return id == 250 && overload >= 6 && overload <= 10,
+		(id == 41 || id == 378) && expr.Typ.Id == planTimeTypeID &&
+			len(fn.Args) == 2 && fn.Args[0] != nil && fn.Args[0].Typ.Id != planTimeTypeID
+}
+
+// Stable storage and registry identities avoid a dependency cycle with the
+// function package. INT128/UINT128 and BIT/YEAR/ENUM are not this domain.
+func isMixedJSONNumericComparison(fn *Function) bool {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+		return false
+	}
+	id := int32(fn.Func.Obj >> 32)
+	if !(id >= 0 && id <= 5 || id == nullSafeEqualFunctionID) {
+		return false
+	}
+	left, right := fn.Args[0].Typ.Id, fn.Args[1].Typ.Id
+	if left == planJSONTypeID {
+		left, right = right, left
+	}
+	return right == planJSONTypeID && ((left >= 20 && left <= 23) || (left >= 25 && left <= 28) || (left >= 30 && left <= 34))
 }

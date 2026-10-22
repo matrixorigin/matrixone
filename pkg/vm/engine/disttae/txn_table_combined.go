@@ -68,6 +68,10 @@ func newCombinedTxnTable(
 	}
 }
 
+func (t *combinedTxnTable) CreatedInCurrentTxn(ctx context.Context) (bool, error) {
+	return t.primary.CreatedInCurrentTxn(ctx)
+}
+
 func filterNilRelations(relations []engine.Relation) []engine.Relation {
 	for i, rel := range relations {
 		if rel == nil {

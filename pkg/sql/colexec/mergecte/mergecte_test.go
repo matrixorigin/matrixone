@@ -746,3 +746,46 @@ func resetChildren(arg *MergeCTE, m *mpool.MPool) {
 	arg.Children = nil
 	arg.AppendChild(op)
 }
+
+func TestMergeCTEAllocationFailureAndReuse(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+	budget, err := proc.GetExecutionResourceBudget()
+	require.NoError(t, err)
+	registry, err := mpool.NewAllocationAccountRegistry(3, 2048)
+	require.NoError(t, err)
+	op := NewArgument().WithNodeCnt(1).WithDistinct(true)
+	defer op.Release()
+	first := makeMergeCTEDistinctBatch(t, proc, []int64{1, 1, 2}, []string{"a", "a", "b"}, []bool{false, false, false})
+	defer first.Clean(proc.Mp())
+	second := makeMergeCTEDistinctBatch(t, proc, []int64{2, 3}, []string{"b", "c"}, []bool{false, false})
+	defer second.Clean(proc.Mp())
+	for _, limit := range []uint64{128, 1 << 24, 1 << 24} {
+		func() {
+			account, err := registry.OpenWithController(limit, budget)
+			require.NoError(t, err)
+			require.NoError(t, op.SetAllocationAccount(account))
+			defer func() {
+				op.Reset(proc, false, nil)
+				op.Free(proc, false, nil)
+				require.NoError(t, op.ClearAllocationAccount(account))
+				require.Zero(t, account.Snapshot().Used)
+				require.Zero(t, budget.Used())
+			}()
+			err = op.Prepare(proc)
+			if limit == 128 {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			out, err := op.ctr.cacheBatch(proc, op.OpAnalyzer, first)
+			require.NoError(t, err)
+			require.Equal(t, []int64{1, 2}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+			out, err = op.ctr.cacheBatch(proc, op.OpAnalyzer, second)
+			require.NoError(t, err)
+			require.Equal(t, []int64{3}, vector.MustFixedColWithTypeCheck[int64](out.Vecs[0]))
+			require.Equal(t, uint64(3), op.ctr.hashTable.GroupCount())
+			require.Positive(t, account.Snapshot().Used)
+		}()
+	}
+}

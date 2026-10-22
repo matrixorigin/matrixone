@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/aggexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
@@ -104,6 +105,10 @@ func (builder *QueryBuilder) flattenOuterJoinConditionSubqueries(
 
 	case *plan.Expr_Sub:
 		side := builder.outerJoinSubqueryInputSide(exprImpl.Sub, leftTags, rightTags)
+		if side&JoinSideOuter != 0 || side&JoinSideBoth == JoinSideBoth || builder.subqueryNeedsDependent(exprImpl.Sub.NodeId) {
+			bound, bindErr := builder.bindDependentJoinCondition(expr)
+			return leftID, rightID, bound, bindErr
+		}
 		if side&JoinSideOuter != 0 {
 			return 0, 0, nil, moerr.NewNYI(
 				builder.GetContext(),
@@ -460,6 +465,17 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	if id, expr, handled, err := builder.tryDeepExistential(nodeID, subquery, ctx, consumer); handled {
 		return id, expr, err
 	}
+	if builder.subqueryNeedsDependent(subquery.NodeId) && !builder.legacyDeepScalarAggregateSafe(subquery, nullResultRejected) {
+		if subquery.Child != nil && hasSubquery(subquery.Child) {
+			var err error
+			nodeID, subquery.Child, err = builder.flattenSubqueriesWithContext(nodeID, subquery.Child, ctx, false)
+			if err != nil {
+				return 0, nil, err
+			}
+		}
+		bound, err := builder.bindDependentSubquery(subquery)
+		return nodeID, bound, err
+	}
 	if subquery.Child != nil && hasSubquery(subquery.Child) {
 		if subquery.Typ != plan.SubqueryRef_SCALAR {
 			return 0, nil, moerr.NewNotSupported(builder.GetContext(), "a quantified subquery's left operand can't contain subquery")
@@ -481,6 +497,13 @@ func (builder *QueryBuilder) flattenSubqueryWithConsumer(
 	var err error
 	subID, err = builder.parameterizeLocalCTEs(nodeID, subID, ctx, subquery.Typ, guarded)
 	if err != nil {
+		// parameterizeLocalCTEs completes all read-only admission before it
+		// rewrites any node. Its rejected replay shapes retain their original
+		// lexical plan and can therefore use invocation-local execution.
+		if moerr.IsMoErrCode(err, moerr.ErrNYI) {
+			bound, bindErr := builder.bindDependentSubquery(subquery)
+			return nodeID, bound, bindErr
+		}
 		return 0, nil, err
 	}
 	if subquery.Typ != plan.SubqueryRef_SCALAR && builder.hasCorrelatedLocalCTEHaving(subID) {
@@ -2044,6 +2067,29 @@ func (result *aggregateSpineEmptyResult) nullEquivalent(count int) bool {
 // empty. Unknown deterministic filters may retain or remove a singleton;
 // upper aggregates must make those possibilities converge before admission.
 func (builder *QueryBuilder) aggregateSpineOriginalEmpty(subID int32, ctx *BindContext) *aggregateSpineEmptyResult {
+	if builder.compCtx != nil && defines.IsPublicationViewBinding(builder.GetContext()) {
+		// The empty-input proof evaluates substituted constant expressions of
+		// the stored definition through ConstantFold (foldAggregateSpineLiteral
+		// and substituteAggregateSpineEmptyExpr are this file's only fold
+		// sites, and every path into them starts here): a correlated CTE
+		// projection like (WITH x AS (SELECT COUNT(*) AS c FROM base i WHERE
+		// i.id = o.id) SELECT c + CAST(enable_fault_injection() AS SIGNED)
+		// FROM x) reaches it during binding - before the marker's build
+		// boundary - with complete membership, and an unflagged builtin
+		// executes while validation binds. containsVolatileFunction does not
+		// exclude unflagged builtins, so the marker must gate the analysis
+		// itself. nil is this analysis' pre-existing "cannot prove" outcome:
+		// every caller consults the result through nil-safe checks and the
+		// restoration machinery declines to restore, so binding remains a
+		// pure metadata verdict while the subscriber's ordinary compile
+		// answers the same aggregate shape with the full analysis as usual.
+		// The marker is only ever carried by a compilation context: a
+		// builder assembled for a pure structural walk of qry.Nodes (the
+		// direct construction the 29412 proof uses) has no compCtx and so no
+		// marker to consult, and the gate must leave that minimal proof's
+		// pre-marker behavior - the plain analysis below - unchanged.
+		return nil
+	}
 	var path []*plan.Node
 	for nodeID := subID; len(path) < 32; {
 		node := builder.qry.Nodes[nodeID]
@@ -2924,7 +2970,7 @@ func (builder *QueryBuilder) pushdownScalarAggregateKeys(subID int32, preds []*p
 				return
 			}
 		}
-		if len(f.Args) != 2 || (f.Func.ObjName != "=" && !IsEqualFunc(f.Func.GetObj())) {
+		if len(f.Args) != 2 || (f.Func.ObjName != "=" && !IsEqualFunc(f.Func.GetObj())) || isJSONNumericComparisonArgs(f.Args) {
 			return
 		}
 
@@ -4276,7 +4322,7 @@ func replaceCountHavingResult(expr *plan.Expr, aggregateTag int32, result *plan.
 
 func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {
 	f := expr.GetF()
-	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 || isJSONNumericComparisonArgs(f.Args) {
 		return nil, false
 	}
 	if c := f.Args[0].GetCorr(); c != nil && c.Depth == 1 && f.Args[1].GetCol() != nil {
@@ -4290,7 +4336,7 @@ func correlatedIdentityOuterKey(expr *plan.Expr) (*plan.CorrColRef, bool) {
 
 func correlatedWindowIdentityKey(expr *plan.Expr) (*plan.Expr, bool) {
 	f := expr.GetF()
-	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 {
+	if f == nil || f.Func == nil || f.Func.ObjName != "=" || len(f.Args) != 2 || isJSONNumericComparisonArgs(f.Args) {
 		return nil, false
 	}
 	if f.Args[0].GetCorr() != nil && f.Args[0].GetCorr().Depth == 1 && f.Args[1].GetCol() != nil {
@@ -4345,6 +4391,21 @@ func (builder *QueryBuilder) pullupCorrelatedPredicates(
 		}
 
 	case plan.Node_WINDOW:
+		// A mixed equality cannot define an inner partition for an outer
+		// correlation value. Skipping key extraction would still move its
+		// predicate above a global window, so reject before that pull-up.
+		for _, pred := range preds {
+			if err := plan.VisitExprTree(pred, func(expr *plan.Expr) error {
+				f := expr.GetF()
+				if f != nil && f.Func != nil && (f.Func.ObjName == "=" || f.Func.ObjName == "<=>") &&
+					isJSONNumericComparisonArgs(f.Args) && exprHasColRef(expr) {
+					return moerr.NewNYI(builder.GetContext(), "correlated window with mixed JSON/numeric predicates")
+				}
+				return nil
+			}); err != nil {
+				return 0, nil, err
+			}
+		}
 		// A window is evaluated independently for every correlated input
 		// row. The partition operator, as well as the window specification,
 		// must receive the identity key so the physical input is grouped.
@@ -4744,8 +4805,12 @@ func collectCorrelatedPaginationPartitionKeys(expr *plan.Expr, keys *[]*plan.Exp
 		return true
 	}
 
+	// The inner key must define the same equality domain as the correlation.
+	// Mixed JSON/numeric comparisons do not: distinct JSON numbers can both
+	// match one FLOAT32 peer after rounding, but form separate raw JSON groups.
 	if fn != nil && fn.Func != nil &&
-		(fn.Func.ObjName == "=" || fn.Func.ObjName == "<=>") && len(fn.Args) == 2 {
+		(fn.Func.ObjName == "=" || fn.Func.ObjName == "<=>") && len(fn.Args) == 2 &&
+		!isJSONNumericComparisonArgs(fn.Args) {
 		leftCorr := hasCorrCol(fn.Args[0])
 		rightCorr := hasCorrCol(fn.Args[1])
 		if leftCorr != rightCorr {

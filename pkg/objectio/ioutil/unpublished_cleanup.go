@@ -39,7 +39,12 @@ const (
 // before the object itself, so a persisted object always has a restart-safe
 // owner even when the object write returns an ambiguous error.
 type UnpublishedObject struct {
-	File                  string `json:"file"`
+	File      string   `json:"file"`
+	DependsOn []string `json:"depends_on,omitempty"`
+	// CleanupID distinguishes attempts that publish the same logical file.
+	// GC metadata names are derived only from their timestamp range, so a
+	// retry can reuse File while still owning a different set of data objects.
+	CleanupID             string `json:"cleanup_id,omitempty"`
 	DBID                  uint64 `json:"db_id"`
 	TableID               uint64 `json:"table_id"`
 	IsTombstone           bool   `json:"is_tombstone"`
@@ -80,6 +85,13 @@ func RecordUnpublishedObjectCleanup(
 		ctx, fs, unpublishedObjectCleanupDir, object)
 }
 
+// UnpublishedObjectCleanupPath returns the durable marker path for object.
+// Callers use it to make dependencies point at the exact publication attempt,
+// rather than at a logical file name that a retry may reuse.
+func UnpublishedObjectCleanupPath(object UnpublishedObject) string {
+	return unpublishedObjectCleanupPath(unpublishedObjectCleanupDir, object)
+}
+
 // RecordCCPRUnpublishedObjectCleanup records a publication-owned object in
 // shared storage. Keeping publication intents in a separate namespace prevents
 // a TN-local active-writer fence from being mistaken for a cross-CN fence.
@@ -114,8 +126,7 @@ func recordUnpublishedObjectCleanup(
 	if err != nil {
 		return "", err
 	}
-	digest := sha256.Sum256(payload)
-	path := fmt.Sprintf("%s%x.json", dir, digest)
+	path := unpublishedObjectCleanupPathFromPayload(dir, payload)
 	err = fs.Write(ctx, fileservice.IOVector{
 		FilePath: path,
 		Entries: []fileservice.IOEntry{{
@@ -129,6 +140,22 @@ func recordUnpublishedObjectCleanup(
 		return path, err
 	}
 	return path, nil
+}
+
+func unpublishedObjectCleanupPath(dir string, object UnpublishedObject) string {
+	payload, err := json.Marshal(unpublishedObjectCleanupIntent{
+		Version: unpublishedObjectCleanupVersion,
+		Object:  object,
+	})
+	if err != nil {
+		return ""
+	}
+	return unpublishedObjectCleanupPathFromPayload(dir, payload)
+}
+
+func unpublishedObjectCleanupPathFromPayload(dir string, payload []byte) string {
+	digest := sha256.Sum256(payload)
+	return fmt.Sprintf("%s%x.json", dir, digest)
 }
 
 // DeleteUnpublishedObjectCleanup releases a durable cleanup intent after the
@@ -425,6 +452,11 @@ func replayUnpublishedObjectCleanupMarkers(
 			hasRemaining = true
 			continue
 		}
+		if decision == DeleteUnpublishedObject &&
+			!unpublishedObjectDependenciesReady(ctx, markerFS, objectFS, intent.Object.DependsOn) {
+			hasRemaining = true
+			continue
+		}
 		if decision == DeleteUnpublishedObject {
 			if _, deleteErr := DeleteUnpublishedObjects(
 				ctx, objectFS, intent.Object.File); deleteErr != nil {
@@ -455,6 +487,31 @@ func replayUnpublishedObjectCleanupMarkers(
 		)
 	}
 	return replayed, inspected, hasRemaining, nil
+}
+
+func unpublishedObjectDependenciesReady(
+	ctx context.Context,
+	markerFS, objectFS fileservice.FileService,
+	dependencies []string,
+) bool {
+	for _, dependency := range dependencies {
+		if dependency == "" {
+			continue
+		}
+		fs := objectFS
+		if strings.HasPrefix(dependency, unpublishedObjectCleanupDir) ||
+			strings.HasPrefix(dependency, ccprUnpublishedObjectCleanupDir) {
+			fs = markerFS
+		}
+		_, err := fs.StatFile(ctx, dependency)
+		if err == nil {
+			return false
+		}
+		if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return false
+		}
+	}
+	return true
 }
 
 func readUnpublishedObjectCleanup(

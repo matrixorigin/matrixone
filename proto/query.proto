@@ -122,6 +122,9 @@ enum CmdMethod {
   // GetVectorIndexCacheKeys lists the exact cache keys a CN currently holds, so an operator can
   // discover the key to pass to GetVectorIndexCacheInfo / EvictVectorIndexCache (test/ops).
   GetVectorIndexCacheKeys = 44;
+  // Current-session SQL authorization and proxy lifecycle cleanup.
+  KillSession = 45;
+  DisconnectSession = 46;
 }
 
 // QueryRequest is the common query request. It contains the query
@@ -309,6 +312,8 @@ message Request {
   GetVectorIndexCacheInfoRequest GetVectorIndexCacheInfo = 44 [ (gogoproto.nullable) = false ];
   EvictVectorIndexCacheRequest EvictVectorIndexCache = 45 [ (gogoproto.nullable) = false ];
   GetVectorIndexCacheKeysRequest GetVectorIndexCacheKeys = 46 [ (gogoproto.nullable) = false ];
+  KillSessionRequest KillSessionRequest = 47;
+  DisconnectSessionRequest DisconnectSessionRequest = 48;
 }
 
 // ShowProcessListResponse is the response of command ShowProcessList.
@@ -383,6 +388,8 @@ message Response {
   GetVectorIndexCacheInfoResponse GetVectorIndexCacheInfo = 45 [ (gogoproto.nullable) = false ];
   EvictVectorIndexCacheResponse EvictVectorIndexCache = 46 [ (gogoproto.nullable) = false ];
   GetVectorIndexCacheKeysResponse GetVectorIndexCacheKeys = 47 [ (gogoproto.nullable) = false ];
+  KillSessionResponse KillSessionResponse = 48;
+  DisconnectSessionResponse DisconnectSessionResponse = 49;
 }
 
 // AlterAccountRequest is the "alter account restricted" query request.
@@ -606,6 +613,8 @@ message PrepareStmt {
   string Name = 1;
   string SQL = 2;
   bytes ParamTypes = 3;
+  // Minimum target protocol needed to rebind this prepared SQL faithfully.
+  int64 RequiredProtocolVersion = 4;
 }
 
 message MigrateTempTable {
@@ -633,6 +642,8 @@ message MigrateConnFromRequest {
   // True when Proxy understands the complete LAST_INSERT_ID migration
   // contract, including the export marker and target compatibility checks.
   bool LastInsertIDMigrationSupported = 5;
+  // Proxy checks each prepared statement's target protocol before handoff.
+  bool PreparedStatementProtocolSupported = 6;
 }
 
 message MigrateConnFromResponse {
@@ -924,3 +935,31 @@ message RefreshSessionAuthResponse {
   // may be retried against another cached backend.
   bool RequestRejected = 4;
 }
+
+// KillSessionPrincipal is captured by the executing authenticated CN session.
+// These messages are only accepted on the trusted internal query service.
+message KillSessionPrincipal {
+  uint32 AccountID = 1;
+  uint32 UserID = 2;
+  string Account = 3;
+  string User = 4;
+  string Role = 5;
+}
+
+message KillSessionRequest {
+  uint64 ConnID = 1;
+  bool KillConnection = 2;
+  string StatementID = 3;
+  KillSessionPrincipal Principal = 4;
+}
+
+message KillSessionResponse {
+  bool Found = 1;
+}
+
+// DisconnectSession is proxy-owned backend cleanup, never a SQL KILL request.
+message DisconnectSessionRequest {
+  uint32 ConnID = 1;
+}
+
+message DisconnectSessionResponse {}

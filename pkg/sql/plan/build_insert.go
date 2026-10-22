@@ -160,7 +160,9 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 	if err != nil {
 		return nil, err
 	}
-	builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
+	if query.Correlation == nil {
+		builder.qry.Steps = append(builder.qry.Steps[:sourceStep], builder.qry.Steps[sourceStep+1:]...)
+	}
 
 	objRef := tblInfo.objRef[0]
 	if len(rewriteInfo.onDuplicateIdx) > 0 {
@@ -188,7 +190,7 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		}
 		query.StmtType = plan.Query_INSERT
 	} else {
-		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap)
+		err = buildInsertPlans(ctx, builder, bindCtx, stmt, objRef, tableDef, rewriteInfo.rootId, ifExistAutoPkCol, insertWithoutUniqueKeyMap, ifInsertFromUniqueColMap, false)
 		if err != nil {
 			return nil, err
 		}
@@ -206,9 +208,16 @@ func buildInsert(stmt *tree.Insert, ctx CompilerContext, isReplace bool, isPrepa
 		return nil, err
 	}
 	query.DetectSqls = sqls
+	builder.replaceLegacyDMLSourceStep(sourceStep)
 	reduceSinkSinkScanNodes(query)
 	builder.tempOptimizeForDML()
 	applyLockTableFallback(builder)
+	if err = builder.refreshCorrelationBindings(); err != nil {
+		return nil, err
+	}
+	if err = query.ValidateCorrelation(); err != nil {
+		return nil, err
+	}
 
 	return &Plan{
 		Plan: &plan.Plan_Query{

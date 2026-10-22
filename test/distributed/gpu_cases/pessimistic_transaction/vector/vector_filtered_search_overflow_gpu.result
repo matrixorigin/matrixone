@@ -1,0 +1,38 @@
+drop database if exists vector_filtered_search_overflow_gpu;
+create database vector_filtered_search_overflow_gpu;
+use vector_filtered_search_overflow_gpu;
+set experimental_cagra_index = 1;
+set experimental_ivfpq_index = 1;
+create table t_cagra(id bigint primary key, note int, v vecf32(8));
+insert into t_cagra select result, result % 2, cast(concat('[', result, ',0,0,0,0,0,0,0]') as vecf32(8)) from generate_series(1, 1000, 1) g;
+create index i_cagra using cagra on t_cagra(v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8;
+insert into t_cagra select result, result % 2, '[0,0,0,0,0,0,0,0]' from generate_series(1001, 1005, 1) g;
+create table t_ivfpq(id bigint primary key, note int, v vecf32(8));
+insert into t_ivfpq select result, result % 2, cast(concat('[', result, ',0,0,0,0,0,0,0]') as vecf32(8)) from generate_series(1, 1000, 1) g;
+create index i_ivfpq using ivfpq on t_ivfpq(v) op_type 'vector_l2_ops' lists=8 m=8 bits_per_code=8;
+insert into t_ivfpq select result, result % 2, '[0,0,0,0,0,0,0,0]' from generate_series(1001, 1005, 1) g;
+select group_concat(id order by id) from (select id from t_cagra where note = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 5 by rank with option 'mode=pre') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,3,1001,1003,1005
+select group_concat(id order by id) from (select id from t_cagra where note = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 5 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,3,1001,1003,1005
+select group_concat(id order by id) from (select id from t_cagra where id > 2 and id < 1004 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 5 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+3,4,1001,1002,1003
+select group_concat(id order by id) from (select id from t_cagra where id in (select id from t_cagra where id between 3 and 6 or id = 1005) order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 3 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+3,4,1005
+select group_concat(if(id > 1000, id, null) order by id), count(*), sum(note != 1) from (select id, note from t_ivfpq where note = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 5 by rank with option 'mode=pre') x;
+➤ group_concat(if(id > 1000, id, null) order by id separator ,)[-1,16383,0]  ¦  count(*)[-5,64,0]  ¦  sum(note != 1)[-5,64,0]  𝄀
+1001,1003,1005  ¦  5  ¦  0
+select group_concat(if(id > 1000, id, null) order by id), count(*), sum(note != 1) from (select id, note from t_ivfpq where note = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 5 by rank with option 'mode=iterative', 'nprobe=1') x;
+➤ group_concat(if(id > 1000, id, null) order by id separator ,)[-1,16383,0]  ¦  count(*)[-5,64,0]  ¦  sum(note != 1)[-5,64,0]  𝄀
+1001,1003,1005  ¦  5  ¦  0
+select group_concat(if(id > 1000, id, null) order by id), count(*), sum(id <= 2 or id >= 1004) from (select id from t_ivfpq where id > 2 and id < 1004 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 5 by rank with option 'mode=iterative', 'nprobe=1') x;
+➤ group_concat(if(id > 1000, id, null) order by id separator ,)[-1,16383,0]  ¦  count(*)[-5,64,0]  ¦  sum(id <= 2 or id >= 1004)[-5,64,0]  𝄀
+1001,1002,1003  ¦  5  ¦  0
+select group_concat(if(id > 1000, id, null) order by id), count(*), sum(id not in (3, 4, 5, 6, 1005)) from (select id from t_ivfpq where id in (select id from t_ivfpq where id between 3 and 6 or id = 1005) order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 3 by rank with option 'mode=iterative', 'nprobe=1') x;
+➤ group_concat(if(id > 1000, id, null) order by id separator ,)[-1,16383,0]  ¦  count(*)[-5,64,0]  ¦  sum(id not in (3, 4, 5, 6, 1005))[-5,64,0]  𝄀
+1005  ¦  3  ¦  0
+drop database vector_filtered_search_overflow_gpu;

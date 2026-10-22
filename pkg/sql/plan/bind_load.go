@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (int32, error) {
@@ -41,7 +42,10 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// strips them from the 1:1 dedup+MULTI_UPDATE plan; LOAD maintains them with
 	// the same modern sink-fanout the INSERT path uses (see bindInsert).
 	tableDef := dmlCtx.tableDefs[0]
-	builder.checkLoadPrimaryKey = loadChecksPrimaryKey(stmt, tableDef)
+	builder.checkLoadPrimaryKey, err = loadPrimaryKeyCheckEnabled(builder.compCtx, stmt, tableDef)
+	if err != nil {
+		return -1, err
+	}
 
 	// Capture irregular (IVF/fulltext/master) indexes before appendNodesForInsertStmt
 	// strips them. HNSW/CAGRA/IVF-PQ are cron-maintained and ride the modern path.
@@ -55,7 +59,7 @@ func (builder *QueryBuilder) bindLoad(stmt *tree.Load, bindCtx *BindContext) (in
 	// LOAD never carries ON DUPLICATE KEY UPDATE, so the irregular-index
 	// maintenance source is the pre-dedup new-row image set up inside
 	// appendDedupAndMultiUpdateNodesForBindInsert (insert-only, no old-row delete).
-	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn)
+	return builder.appendDedupAndMultiUpdateNodesForBindInsert(bindCtx, dmlCtx, lastNodeID, colName2Idx, skipUniqueIdx, nil, irregularIndexes, autoIncrementGeneratedColumn, tree.IsIgnoreStatement(stmt))
 }
 
 func (builder *QueryBuilder) bindExternalScan(
@@ -64,9 +68,28 @@ func (builder *QueryBuilder) bindExternalScan(
 	dmlCtx *DMLContext,
 	assignmentIgnore bool) (int32, map[string]*plan.Expr, error) {
 	externalScanTag := builder.genNewBindTag()
-	err := dmlCtx.ResolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, true)
+	err := dmlCtx.resolveTables(builder.compCtx, tree.TableExprs{stmt.Table}, nil, nil, foreignKeyResolveDeferred, false)
 	if err != nil {
 		return -1, nil, err
+	}
+
+	builder.qry.HasForeignKeyAction = len(dmlCtx.tableDefs[0].Fkeys) > 0
+
+	// Self references still need legacy LOAD's post-execution DetectSqls.
+	// Decide before file/column binding mutates the LOAD AST used by fallback.
+	for _, fk := range dmlCtx.tableDefs[0].Fkeys {
+		if fk == nil {
+			return -1, nil, moerr.NewInternalError(builder.GetContext(), "malformed foreign-key metadata")
+		}
+		if fk.ForeignTbl == 0 {
+			enabled, err := IsForeignKeyChecksEnabled(builder.compCtx)
+			if err != nil {
+				return -1, nil, err
+			}
+			if enabled {
+				return -1, nil, moerr.NewUnsupportedDML(builder.GetContext(), foreignKeyUnsupportedDMLCause)
+			}
+		}
 	}
 
 	ctx := builder.compCtx
@@ -237,7 +260,7 @@ func (builder *QueryBuilder) bindExternalScan(
 
 	externalScanNode := &plan.Node{
 		NodeType: plan.Node_EXTERNAL_SCAN,
-		Stats:    makeLoadExternalStats(stmt.Param, tableDef, offset, ctx.GetContext()),
+		Stats:    makeLoadExternalStats(stmt.Param, tableDef, offset, process.SQLFileAccessContext(ctx.GetContext(), ctx.GetProcess())),
 		ObjRef:   objRef,
 		TableDef: tableDef,
 		ExternScan: &plan.ExternScan{
@@ -271,6 +294,31 @@ func loadChecksPrimaryKey(stmt *tree.Load, tableDef *plan.TableDef) bool {
 	default:
 		return false
 	}
+}
+
+// loadPrimaryKeyCheckEnabled resolves the owning session's LOAD policy once
+// during planning. Internal contexts without a session use the OFF default.
+func loadPrimaryKeyCheckEnabled(ctx CompilerContext, stmt *tree.Load, tableDef *plan.TableDef) (bool, error) {
+	if !loadChecksPrimaryKey(stmt, tableDef) {
+		return false, nil
+	}
+	value, err := ctx.ResolveVariable("mo_pk_check_by_cn", true, false)
+	if err != nil {
+		return false, err
+	}
+	switch v := value.(type) {
+	case nil:
+		return false, nil
+	case int8:
+		if v == 0 || v == 1 {
+			return v == 1, nil
+		}
+	case int64:
+		if v == 0 || v == 1 {
+			return v == 1, nil
+		}
+	}
+	return false, moerr.NewInternalErrorf(ctx.GetContext(), "invalid mo_pk_check_by_cn value: %v", value)
 }
 
 func loadAssignmentIgnore(stmt *tree.Load) bool {

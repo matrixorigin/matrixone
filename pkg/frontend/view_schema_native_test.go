@@ -31,13 +31,19 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/frontend"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/perfcounter"
+	"github.com/matrixorigin/matrixone/pkg/sql/compile"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
@@ -148,6 +154,7 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 		for _, query := range []string{
 			"create database " + database,
 			"create table " + database + ".source (id int not null default 7, label varchar(20) default 'value')",
+			"insert into " + database + ".source values (3, 'first')",
 			"create view " + database + ".target as select id from " + database + ".source",
 			"create view " + database + ".middle as select id, label from " + database + ".source",
 			"create view " + database + ".outer_a as select id, label from " + database + ".middle",
@@ -155,6 +162,9 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 		} {
 			exec(query, executor.Options{})
 		}
+		t.Run("placeholder source authorization", func(t *testing.T) {
+			testNativeViewSchemaRootScopes(t, ctx, cn, svc, database)
+		})
 		var historical timestamp.Timestamp
 		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(_ *frontend.TxnCompilerContext, op client.TxnOperator, _ *process.Process) {
 			historical = op.SnapshotTS()
@@ -163,6 +173,9 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 		exec("alter view "+database+".target as select id, label from "+database+".source", executor.Options{}.WithDatabase(database))
 		// 在源表变更后通过权威 CREATE VIEW 路径建立差分 oracle。
 		exec("create view "+database+".oracle as select id, label from "+database+".middle", executor.Options{})
+		t.Run("derived metadata consumers", func(t *testing.T) {
+			testNativeViewMetadataConsumers(t, ctx, cn, svc, database, historical)
+		})
 		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
 			exec("create view owned as select id, label from source", executor.Options{}.WithDatabase(database).WithTxn(op).WithKeepTxnAlive())
 			exec("create view rollback_only as select id from source", executor.Options{}.WithDatabase(database).WithTxn(op).WithKeepTxnAlive())
@@ -275,7 +288,7 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 			stale.Close()
 		})
 		// 外层事务由 fixture 回滚；未提交的真实 DDL 不能泄漏至下一事务。
-		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(_ *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
+		withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
 			db, err := svc.GetEngine().Database(ctx, database, op)
 			require.NoError(t, err)
 			for _, name := range []string{"owned", "rollback_only"} {
@@ -283,8 +296,161 @@ func TestNativeViewSchemaCatalogOwnDDLHistoryAndSharedReads(t *testing.T) {
 				require.NoError(t, err)
 				require.False(t, exists, name)
 			}
+			ctasStatements, err := mysql.Parse(ctx, "create table plan_only_target as select id_alias, label_alias from outer_b", 1)
+			require.NoError(t, err)
+			defer ctasStatements[0].Free()
+			beforeStamp, beforeRevision := nativeViewSchemaStamp(t, op)
+			deniedRoot := errors.New("only the user source View is authorized")
+			var authorizedRoots []string
+			authorizeSource := func(_ context.Context, dbName, name string, _ *plan.Snapshot) error {
+				authorizedRoots = append(authorizedRoots, dbName+"."+name)
+				if dbName != database || name != "outer_b" {
+					return deniedRoot
+				}
+				return nil
+			}
+			ctas, err := compiler.BuildPlanWithViewSchema(ctx, ctasStatements[0], false, authorizeSource)
+			require.NoError(t, err)
+			require.Equal(t, []string{database + ".outer_b"}, authorizedRoots)
+			deniedStatements, err := mysql.Parse(ctx, "select * from mo_catalog.mo_tables", 1)
+			require.NoError(t, err)
+			defer deniedStatements[0].Free()
+			deniedPlan, err := compiler.BuildPlanWithViewSchema(ctx, deniedStatements[0], false, authorizeSource)
+			require.Nil(t, deniedPlan)
+			require.ErrorIs(t, err, deniedRoot, "user SQL must not gain the internal catalog-query exemption")
+			ctasColumns := ctas.GetDdl().GetCreateTable().TableDef.Cols
+			require.Equal(t, "id_alias", ctasColumns[0].Name)
+			require.Equal(t, "0", ctasColumns[0].Default.OriginString)
+			require.EqualValues(t, 40, ctasColumns[1].Typ.Width)
+			afterStamp, afterRevision := nativeViewSchemaStamp(t, op)
+			require.Equal(t, beforeStamp, afterStamp, "planning CTAS must not advance its borrowed transaction")
+			require.Equal(t, beforeRevision, afterRevision)
+			exists, err := db.RelationExists(ctx, "plan_only_target", proc)
+			require.NoError(t, err)
+			require.False(t, exists, "planning cannot execute CTAS")
+			// Explicit S3 binding must produce an executable base-table subtree,
+			// not a metadata-only View memo scan. The parent owns execution.
+			const query = "select id_alias, label_alias from outer_b"
+			statements, err := mysql.Parse(ctx, query, 1)
+			require.NoError(t, err)
+			defer statements[0].Free()
+			p, err := compiler.BuildPlanWithViewSchema(ctx, statements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+			require.NoError(t, err)
+			columns := plan.GetResultColumnsFromPlan(p)
+			require.Len(t, columns, 2)
+			require.EqualValues(t, 40, columns[1].Typ.Width)
+			names := make([]string, 0, len(p.GetQuery().CatalogDependencies))
+			for _, ref := range p.GetQuery().CatalogDependencies {
+				names = append(names, ref.ObjName)
+			}
+			require.ElementsMatch(t, []string{"outer_b", "middle", "source"}, names)
+			c := compile.NewCompile(cn.GetServiceConfig().CN.ServiceAddress, database, query, "", "",
+				svc.GetEngine(), proc, statements[0], false, nil, time.Now())
+			defer c.Release()
+			var gotIDs []int32
+			var gotLabels []string
+			require.NoError(t, c.Compile(ctx, p, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+				if bat != nil && bat.RowCount() > 0 {
+					ids := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])
+					for i := 0; i < bat.RowCount(); i++ {
+						gotIDs = append(gotIDs, ids[i])
+						gotLabels = append(gotLabels, bat.Vecs[1].GetStringAt(i))
+					}
+				}
+				return nil
+			}))
+			_, err = c.Run(0)
+			require.NoError(t, err)
+			require.Equal(t, []int32{3}, gotIDs)
+			require.Equal(t, []string{"first"}, gotLabels)
 		})
 	})
+}
+
+func testNativeViewSchemaRootScopes(t *testing.T, ctx context.Context, cn embed.ServiceOperator, svc cnservice.Service, database string) {
+	t.Helper()
+	for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+		for _, tc := range []struct {
+			name, query string
+			physical    bool
+		}{
+			{"no_from", "select 1 as one", false},
+			{"dual", "select 1 as one from dual", false},
+			{"qualified_dual", "select 1 as one from " + database + ".dual", true},
+			{"cte_declaration", "with q as (select id from " + database + ".target), r as (select * from q) select sum(id) from (with q as (select id from " + database + ".outer_a) select * from r) d", false},
+			{"cte_order", "with r as (select * from target), target as (select id from " + database + ".outer_a) select sum(id) from r", false},
+		} {
+			cte := tc.name == "cte_declaration" || tc.name == "cte_order"
+			t.Run(mode+"/"+tc.name, func(t *testing.T) {
+				withNativeViewSchemaRead(t, ctx, cn, svc, database, nil, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, proc *process.Process) {
+					statements, err := mysql.Parse(ctx, tc.query, 1)
+					require.NoError(t, err)
+					defer statements[0].Free()
+					var input tree.Statement = statements[0]
+					if mode == "text" {
+						input = &tree.PrepareString{Name: "literal_plan", Sql: tc.query}
+					} else if mode == "typed" {
+						input = &tree.PrepareStmt{Name: "literal_plan", Stmt: statements[0]}
+					}
+					denied := errors.New("physical root denied")
+					authorizations := 0
+					p, err := compiler.BuildPlanWithViewSchema(ctx, input, mode == "direct", func(_ context.Context, db, name string, _ *plan.Snapshot) error {
+						authorizations++
+						if cte && db == database && name == "target" {
+							return nil
+						}
+						return denied
+					})
+					if tc.physical {
+						require.ErrorIs(t, err, denied)
+						require.Nil(t, p)
+						require.Equal(t, 1, authorizations)
+						return
+					}
+					require.NoError(t, err)
+					if cte {
+						require.Positive(t, authorizations)
+					} else {
+						require.Zero(t, authorizations)
+					}
+					if mode == "text" || mode == "typed" {
+						if !cte {
+							require.Empty(t, p.GetDcl().GetPrepare().Schemas)
+						}
+						p = p.GetDcl().GetPrepare().Plan
+					}
+					if cte {
+						require.NotEmpty(t, p.GetQuery().CatalogDependencies)
+						for _, ref := range p.GetQuery().CatalogDependencies {
+							require.NotEqual(t, "outer_a", ref.ObjName)
+						}
+					} else {
+						require.Empty(t, p.GetQuery().CatalogDependencies)
+					}
+					c := compile.NewCompile(cn.GetServiceConfig().CN.ServiceAddress, database, tc.query, "", "",
+						svc.GetEngine(), proc, statements[0], false, nil, time.Now())
+					defer c.Release()
+					var values []int64
+					require.NoError(t, c.Compile(ctx, p, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+						if bat != nil && bat.RowCount() > 0 {
+							if bat.Vecs[0].GetType().Oid != types.T_int64 {
+								return fmt.Errorf("constant source returned type %s", bat.Vecs[0].GetType())
+							}
+							values = append(values, vector.MustFixedColWithTypeCheck[int64](bat.Vecs[0])...)
+						}
+						return nil
+					}))
+					_, err = c.Run(0)
+					require.NoError(t, err)
+					want := int64(1)
+					if cte {
+						want = 3
+					}
+					require.Equal(t, []int64{want}, values)
+				})
+			})
+		}
+	}
 }
 
 func openNativeViewSchemaSQL(t *testing.T, ctx context.Context, cn embed.ServiceOperator, credentials, database string) *sql.DB {
@@ -308,6 +474,8 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			"create table subscribed.collision_source (id int)",
 			"create database schema_other",
 			"create table schema_other.collision_source (id int)",
+			"insert into subscribed.collision_source values (17)",
+			"insert into schema_other.collision_source values (23)",
 		} {
 			_, err := system.ExecContext(ctx, query)
 			require.NoError(t, err, query)
@@ -335,8 +503,11 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 				require.Zero(t, count, "publication DB cannot stand in for the historical source")
 			}
 		}
+		otherPublisher := openNativeViewSchemaSQL(t, ctx, cn, "dump:111", "schema_other")
+		_, err := otherPublisher.ExecContext(ctx, "create view inner_v as select id from collision_source")
+		require.NoError(t, err)
 		publisher := openNativeViewSchemaSQL(t, ctx, cn, "dump:111", "schema_publisher")
-		_, err := publisher.ExecContext(ctx, "create view published as select id from source")
+		_, err = publisher.ExecContext(ctx, "create view published as select id from source")
 		require.NoError(t, err)
 		_, err = publisher.ExecContext(ctx, "create view qualified as select id from schema_publisher.source")
 		require.NoError(t, err)
@@ -345,6 +516,7 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			"create view v_nested as select id from schema_publisher.v_collision",
 			"create view v_other as select id from schema_other.collision_source",
 			"create view v_other_nested as select id from schema_publisher.v_other",
+			"create view v_cross_middle as select id from schema_other.inner_v",
 			fmt.Sprintf("create view v_history_collision as select id from subscribed.collision_source {MO_TS = '%s'}", sourceHistory.DebugString()),
 			"create view v_history_nested as select id from schema_publisher.v_history_collision",
 			fmt.Sprintf("create view v_history_other as select id from schema_other.collision_source {MO_TS = '%s'}", sourceHistory.DebugString()),
@@ -364,6 +536,8 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		require.NoError(t, err)
 		_, err = subscriber.ExecContext(ctx, "create table schema_other.collision_source (id varchar(30))")
 		require.NoError(t, err)
+		_, err = subscriber.ExecContext(ctx, "insert into schema_other.collision_source values ('subscriber-only')")
+		require.NoError(t, err)
 		for _, query := range []string{
 			"create view schema_other.local_view as select id from schema_other.collision_source",
 			"create view schema_other.local_nested as select id from schema_other.local_view",
@@ -382,6 +556,15 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		tenant := &frontend.TenantInfo{Tenant: "schema_subscriber", User: "root", DefaultRole: frontend.GetAccountAdminRole(),
 			TenantID: account, UserID: frontend.GetAdminUserId(), DefaultRoleID: frontend.GetAccountAdminRoleId()}
 		tenantCtx := defines.AttachAccount(ctx, account, tenant.UserID, tenant.DefaultRoleID)
+		cases := []struct{ view, sourceDatabase, sourceView string }{
+			{"v_collision", "subscribed", ""}, {"v_nested", "subscribed", ""},
+			{"v_saved_collision", "subscribed", ""}, {"v_other", "schema_other", ""},
+			{"v_other_nested", "schema_other", ""},
+			{"v_cross_middle", "schema_other", "inner_v"},
+			{"v_history_collision", "subscribed", ""}, {"v_history_nested", "subscribed", ""},
+			{"v_history_other", "schema_other", ""},
+		}
+		t.Run("derived subscription metadata", func(t *testing.T) { testNativeSubscribedViewMetadata(t, tenantCtx, cn, svc, tenant) })
 		var historical timestamp.Timestamp
 		var baseline nativeViewSchemaValue
 		withNativeViewSchemaRead(t, tenantCtx, cn, svc, "subscribed", tenant, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
@@ -399,13 +582,7 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			baseline = describeNativeViewSchema(t, request, "subscribed", "published", nil)
 			require.Len(t, baseline.columns, 1)
 			require.Equal(t, baseline, describeNativeViewSchema(t, request, "subscribed", "published", nil))
-			for _, test := range []struct{ view, sourceDatabase string }{
-				{"v_collision", "subscribed"}, {"v_nested", "subscribed"},
-				{"v_saved_collision", "subscribed"}, {"v_other", "schema_other"},
-				{"v_other_nested", "schema_other"},
-				{"v_history_collision", "subscribed"}, {"v_history_nested", "subscribed"},
-				{"v_history_other", "schema_other"},
-			} {
+			for _, test := range cases {
 				t.Run(test.view, func(t *testing.T) {
 					for i := 0; i < 2; i++ {
 						value := describeNativeViewSchema(t, request, "subscribed", test.view, nil)
@@ -425,8 +602,79 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 						}
 						require.True(t, found)
 					}
+					for _, prepared := range []bool{false, true} {
+						query := "select id from subscribed." + test.view
+						if prepared {
+							query = "prepare derived_schema from '" + query + "'"
+						}
+						statements, err := mysql.Parse(tenantCtx, query, 1)
+						require.NoError(t, err)
+						func() {
+							defer statements[0].Free()
+							p, err := compiler.BuildPlanWithViewSchema(tenantCtx, statements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+							require.NoError(t, err, "prepared=%v", prepared)
+							if prepared {
+								p = p.GetDcl().GetPrepare().Plan
+							}
+							require.EqualValues(t, types.T_int32, plan.GetResultColumnsFromPlan(p)[0].Typ.Id)
+							foundPublisherSource := false
+							for _, ref := range p.GetQuery().CatalogDependencies {
+								if ref.ObjName == "collision_source" && ref.PubInfo != nil && ref.PubInfo.TenantId == int32(catalog.System_Account) {
+									require.Equal(t, test.sourceDatabase, ref.SchemaName, "prepared=%t dependency=%+v", prepared, ref)
+									foundPublisherSource = true
+								}
+							}
+							require.True(t, foundPublisherSource, "reusable plans need the actual publisher catalog account")
+							if test.sourceView != "" {
+								foundMiddle := false
+								for _, ref := range p.GetQuery().CatalogDependencies {
+									if ref.ObjName == test.sourceView {
+										require.Equal(t, test.sourceDatabase, ref.SchemaName)
+										require.NotNil(t, ref.PubInfo)
+										require.EqualValues(t, catalog.System_Account, ref.PubInfo.TenantId)
+										require.Empty(t, ref.SubscriptionName)
+										foundMiddle = true
+									}
+								}
+								require.True(t, foundMiddle)
+								foundPath := false
+								for _, ref := range p.GetQuery().ViewReferences {
+									for _, step := range ref.ViewPath {
+										if step.ViewName == test.sourceView {
+											require.Equal(t, test.sourceDatabase, step.DatabaseName)
+											require.Empty(t, step.SubscriptionName)
+											require.EqualValues(t, catalog.System_Account, step.Snapshot.Tenant.TenantID)
+											foundPath = true
+										}
+									}
+								}
+								require.True(t, foundPath)
+							}
+						}()
+					}
 				})
 			}
+			t.Run("cross_middle_ctas", func(t *testing.T) {
+				for _, prepared := range []bool{false, true} {
+					query := "create table schema_other.plan_only_middle as select id from subscribed.v_cross_middle"
+					if prepared {
+						query = "prepare middle_ctas from '" + query + "'"
+					}
+					func() {
+						statements, err := mysql.Parse(tenantCtx, query, 1)
+						require.NoError(t, err)
+						defer statements[0].Free()
+						p, err := compiler.BuildPlanWithViewSchema(tenantCtx, statements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+						require.NoError(t, err, "prepared=%t", prepared)
+						if prepared {
+							p = p.GetDcl().GetPrepare().Plan
+						}
+						columns := p.GetDdl().GetCreateTable().TableDef.Cols
+						require.Equal(t, "id", columns[0].Name)
+						require.EqualValues(t, types.T_int32, columns[0].Typ.Id)
+					}()
+				}
+			})
 			// Alternate domains within one request, including memo reuse and an
 			// error between successful roots. Inherited state must govern neither
 			// the local root's identity nor its nested source binding.
@@ -478,6 +726,49 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			require.Equal(t, beforeUsed, generation.Used())
 			require.False(t, generation.Closed())
 		})
+		// Execution owns a fresh statement/transaction: Compile/Release may
+		// retire its parent resource generation, unlike read-only description.
+		for _, test := range cases {
+			for _, prepared := range []bool{false, true} {
+				t.Run(fmt.Sprintf("execute/%s/prepared=%t", test.view, prepared), func(t *testing.T) {
+					withNativeViewSchemaRead(t, tenantCtx, cn, svc, "subscribed", tenant, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, proc *process.Process) {
+						query := "select id from subscribed." + test.view
+						if prepared {
+							query = "prepare derived_schema from '" + query + "'"
+						}
+						statements, err := mysql.Parse(tenantCtx, query, 1)
+						require.NoError(t, err)
+						defer statements[0].Free()
+						p, err := compiler.BuildPlanWithViewSchema(tenantCtx, statements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+						require.NoError(t, err)
+						if prepared {
+							p = p.GetDcl().GetPrepare().Plan
+						}
+						require.EqualValues(t, types.T_int32, plan.GetResultColumnsFromPlan(p)[0].Typ.Id)
+						c := compile.NewCompile(cn.GetServiceConfig().CN.ServiceAddress, "subscribed", query, "", "",
+							svc.GetEngine(), proc, statements[0], false, nil, time.Now())
+						defer c.Release()
+						var ids []int32
+						require.NoError(t, c.Compile(tenantCtx, p, func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
+							if bat != nil && bat.RowCount() > 0 {
+								if bat.Vecs[0].GetType().Oid != types.T_int32 {
+									return fmt.Errorf("publisher int column executed with type %s", bat.Vecs[0].GetType())
+								}
+								ids = append(ids, vector.MustFixedColWithTypeCheck[int32](bat.Vecs[0])...)
+							}
+							return nil
+						}))
+						_, err = c.Run(0)
+						require.NoError(t, err)
+						want := int32(17)
+						if test.sourceDatabase == "schema_other" {
+							want = 23
+						}
+						require.Equal(t, []int32{want}, ids, "execution must read the publisher")
+					})
+				})
+			}
+		}
 		_, err = publisher.ExecContext(ctx, "alter view published as select id, id as extra from source")
 		require.NoError(t, err)
 		// 新的外层事务必须具有更新快照，历史查询才真实经过 CloneSnapshotOp。
@@ -513,6 +804,64 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 			require.False(t, generation.Closed())
 		})
 
+		t.Run("prepared_caller_snapshot", func(t *testing.T) {
+			withNativeViewSchemaRead(t, tenantCtx, cn, svc, "subscribed", tenant, func(compiler *frontend.TxnCompilerContext, _ client.TxnOperator, _ *process.Process) {
+				snapshot := &plan.Snapshot{TS: &historical, Tenant: &pb.SnapshotTenant{TenantID: account}}
+				previous := compiler.GetSnapshot()
+				compiler.SetSnapshot(snapshot)
+				defer compiler.SetSnapshot(previous)
+				roleAuthorize := frontend.NativeViewSchemaRoleAuthorizerForTest(compiler)
+				authorize := func(ctx context.Context, database, name string, actual *plan.Snapshot) error {
+					if actual == nil || actual.TS == nil || !actual.TS.Equal(historical) {
+						return fmt.Errorf("only the established historical snapshot is authorized: %s.%s actual=%+v expected=%s", database, name, actual, historical.DebugString())
+					}
+					require.Equal(t, snapshot, actual)
+					return roleAuthorize(ctx, database, name, actual)
+				}
+				for _, mode := range []string{"ordinary", "direct", "text", "typed"} {
+					for _, shape := range []struct {
+						name, query     string
+						aggregate, ctas bool
+					}{
+						{"", "select * from subscribed.published", false, false},
+						{"_cte_sum", "with q as (select id from subscribed.published) select sum(id) from q", true, false},
+						{"_ctas", "create table schema_other.historical_target as select * from subscribed.published", false, true},
+					} {
+						t.Run(mode+shape.name, func(t *testing.T) {
+							query := shape.query
+							statements, err := mysql.Parse(tenantCtx, query, 1)
+							require.NoError(t, err)
+							defer statements[0].Free()
+							var input tree.Statement = statements[0]
+							if mode == "text" {
+								input = &tree.PrepareString{Name: "historical_schema", Sql: query}
+							} else if mode == "typed" {
+								input = &tree.PrepareStmt{Name: "historical_schema", Stmt: statements[0]}
+							}
+							p, err := compiler.BuildPlanWithViewSchema(tenantCtx, input, mode == "direct", authorize)
+							require.NoError(t, err)
+							if mode == "text" || mode == "typed" {
+								p = p.GetDcl().GetPrepare().Plan
+							}
+							columns := plan.GetResultColumnsFromPlan(p)
+							if shape.ctas {
+								columns = nil
+								for _, col := range p.GetDdl().GetCreateTable().TableDef.Cols {
+									if !col.Hidden {
+										columns = append(columns, col)
+									}
+								}
+							}
+							require.Len(t, columns, 1)
+							if !shape.aggregate {
+								require.Equal(t, "id", columns[0].Name)
+								require.EqualValues(t, types.T_int32, columns[0].Typ.Id)
+							}
+						})
+					}
+				}
+			})
+		})
 		_, err = subscriber.ExecContext(ctx, "create user denied identified by 'test123'")
 		require.NoError(t, err)
 		var userID, roleID uint32
@@ -521,6 +870,11 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 		deniedTenant := &frontend.TenantInfo{Tenant: "schema_subscriber", User: "denied", DefaultRole: "public",
 			TenantID: account, UserID: userID, DefaultRoleID: roleID}
 		deniedCtx := defines.AttachAccount(ctx, account, userID, roleID)
+		t.Run("excluded metadata never derives", func(t *testing.T) {
+			testNativeViewMetadataCase(t, deniedCtx, cn, svc, "subscribed", deniedTenant, nativeViewMetadataCase{
+				name: "denied", sql: "select cast(count(*) as char) from information_schema.columns where table_schema='subscribed' and table_name in ('published','missing')", want: [][]string{{"0"}},
+			})
+		})
 		withNativeViewSchemaRead(t, deniedCtx, cn, svc, "subscribed", deniedTenant, func(compiler *frontend.TxnCompilerContext, op client.TxnOperator, proc *process.Process) {
 			generation, err := proc.GetExecutionResourceBudget()
 			require.NoError(t, err)
@@ -536,6 +890,14 @@ func TestNativeViewSchemaSubscriptionHistoryAndRoleDenial(t *testing.T) {
 				require.Nil(t, result)
 				require.ErrorContains(t, err, "view schema access denied")
 				require.False(t, errors.Is(err, plan.ErrViewSchemaChanged), "真实权限查询自身不得推进请求代号")
+				statements, parseErr := mysql.Parse(deniedCtx, "select * from subscribed."+name, 1)
+				require.NoError(t, parseErr)
+				func() {
+					defer statements[0].Free()
+					p, planErr := compiler.BuildPlanWithViewSchema(deniedCtx, statements[0], false, frontend.NativeViewSchemaRoleAuthorizerForTest(compiler))
+					require.Nil(t, p)
+					require.ErrorContains(t, planErr, "view schema access denied")
+				}()
 			}
 			request.Close()
 			afterStamp, afterRevision := nativeViewSchemaStamp(t, op)

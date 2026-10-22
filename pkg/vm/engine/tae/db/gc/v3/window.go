@@ -17,6 +17,7 @@ package gc
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/common/bloomfilter"
 	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
@@ -27,6 +28,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -36,6 +38,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"go.uber.org/zap"
 
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/logtail"
@@ -54,6 +57,37 @@ type WindowOption func(*GCWindow)
 func WithWindowDir(dir string) WindowOption {
 	return func(table *GCWindow) {
 		table.dir = dir
+	}
+}
+
+func WithUnpublishedCleanup(
+	cleanup func(context.Context, []string) error,
+) WindowOption {
+	return func(window *GCWindow) {
+		window.retainUnpublished = cleanup
+	}
+}
+
+// WithUnpublishedObjectLifecycle makes object persistence participate in the
+// same ownership protocol as checkpoint metadata persistence.
+func WithUnpublishedObjectLifecycle(
+	prepare func(context.Context, ioutil.UnpublishedObject) (string, error),
+	finish func(context.Context, string, string) error,
+	abandon func(string),
+) WindowOption {
+	return func(window *GCWindow) {
+		window.prepareUnpublished = prepare
+		window.finishUnpublished = finish
+		window.abandonUnpublished = abandon
+	}
+}
+
+// WithCheckpointScanRollback supplies the transaction boundary for snapshot
+// updates made by processCkpData. It is invoked when collection of the same
+// checkpoint fails after that update has already succeeded.
+func WithCheckpointScanRollback(rollback func()) WindowOption {
+	return func(window *GCWindow) {
+		window.rollbackScan = rollback
 	}
 }
 
@@ -80,6 +114,15 @@ type GCWindow struct {
 	mp  *mpool.MPool
 	fs  fileservice.FileService
 
+	retainUnpublished     func(context.Context, []string) error
+	prepareUnpublished    func(context.Context, ioutil.UnpublishedObject) (string, error)
+	finishUnpublished     func(context.Context, string, string) error
+	abandonUnpublished    func(string)
+	rollbackScan          func()
+	prepared              map[string]string
+	cleanupID             string
+	metadataCleanupFailed bool
+
 	files []objectio.ObjectStats
 
 	tsRange struct {
@@ -96,6 +139,12 @@ func (w *GCWindow) Clone() GCWindow {
 	w2 := *w
 	w2.files = make([]objectio.ObjectStats, len(w.files))
 	copy(w2.files, w.files)
+	if w.prepared != nil {
+		w2.prepared = make(map[string]string, len(w.prepared))
+		for file, marker := range w.prepared {
+			w2.prepared[file] = marker
+		}
+	}
 	return w2
 }
 
@@ -133,7 +182,16 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 	probility float64,
 	mp *mpool.MPool,
 	fs fileservice.FileService,
-) ([]string, string, error) {
+) (filesToGC []string, metaFile string, err error) {
+	w.cleanupID = uuid.New().String()
+	defer func() {
+		// A caller publishes the metadata only after WAL/catalog adoption. Any
+		// earlier error must release in-memory admission while retaining the
+		// durable marker for replay.
+		if err != nil {
+			w.abandonPrepared()
+		}
+	}()
 	// Record memory usage at start
 	v2.GCMemoryObjectsGauge.Set(float64(len(w.files)))
 
@@ -165,8 +223,6 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 
 	vecToGC, filesNotGC := job.Result()
 	defer vecToGC.Free(w.mp)
-	var metaFile string
-	var err error
 	var bf *bloomfilter.BloomFilter
 	if metaFile, err = w.writeMetaForRemainings(
 		ctx, filesNotGC,
@@ -201,7 +257,7 @@ func (w *GCWindow) ExecuteGlobalCheckpointBasedGC(
 				return
 			}
 		})
-	filesToGC := make([]string, 0, len(filesToGCSet))
+	filesToGC = make([]string, 0, len(filesToGCSet))
 	for file := range filesToGCSet {
 		filesToGC = append(filesToGC, file)
 	}
@@ -222,8 +278,12 @@ func (w *GCWindow) ScanCheckpoints(
 	if len(checkpointEntries) == 0 {
 		return
 	}
+	w.cleanupID = uuid.New().String()
 	start := checkpointEntries[0].GetStart()
 	end := checkpointEntries[len(checkpointEntries)-1].GetEnd()
+	previousTSRange := w.tsRange
+	w.tsRange.start = start
+	w.tsRange.end = end
 	getOneBatch := func(cxt context.Context, bat *batch.Batch, mp *mpool.MPool) (bool, error) {
 		select {
 		case <-cxt.Done():
@@ -243,7 +303,9 @@ func (w *GCWindow) ScanCheckpoints(
 			}
 		}
 		objects := make(map[string]map[uint64]*ObjectEntry)
-		collectObjectsFromCheckpointData(ctx, ckpReader, objects)
+		if err = collectObjectsFromCheckpointData(ctx, ckpReader, objects); err != nil {
+			return false, err
+		}
 		if err = collectMapData(objects, bat, mp); err != nil {
 			return false, err
 		}
@@ -251,7 +313,48 @@ func (w *GCWindow) ScanCheckpoints(
 		return false, nil
 	}
 	sinker := w.getSinker(0, buffer)
-	defer sinker.Close()
+	transferred := false
+	defer func() {
+		if !transferred {
+			w.tsRange = previousTSRange
+			w.rollbackScanIfNeeded()
+			w.abandonPrepared()
+			metaCleanupErr := w.deleteMeta(ctx, metaFile)
+			if metaCleanupErr != nil {
+				// The metadata object may still be discoverable after an
+				// ambiguous delete. Its snapshot/account dependencies must stay
+				// available for restart recovery until that ownership is resolved.
+				w.metadataCleanupFailed = true
+				err = errors.Join(err, metaCleanupErr)
+				if w.retainUnpublished != nil && w.prepareUnpublished == nil {
+					persisted, _ := sinker.GetResult()
+					files := objectStatsNames(persisted)
+					files = append(files, sinker.GetUnpublishedFiles()...)
+					if metaFile != "" {
+						files = append(files, ioutil.MakeFullName(w.dir, metaFile))
+					}
+					if retainErr := w.retainUnpublished(
+						ctx, files,
+					); retainErr != nil {
+						err = errors.Join(err, retainErr)
+					}
+				}
+			} else {
+				files, cleanupErr := sinker.DeletePersisted(ctx)
+				if cleanupErr != nil {
+					err = errors.Join(err, cleanupErr)
+					if w.retainUnpublished != nil && w.prepareUnpublished == nil {
+						if retainErr := w.retainUnpublished(ctx, files); retainErr != nil {
+							err = errors.Join(err, retainErr)
+						}
+					}
+				}
+			}
+		}
+		if closeErr := sinker.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
 	if err = readutil.StreamBatchProcess(
 		ctx,
 		getOneBatch,
@@ -286,7 +389,68 @@ func (w *GCWindow) ScanCheckpoints(
 		return
 	}
 	w.files = append(w.files, newFiles...)
+	transferred = true
 	return metaFile, nil
+}
+
+func (w *GCWindow) rollbackScanIfNeeded() {
+	if w.rollbackScan != nil {
+		w.rollbackScan()
+	}
+}
+
+func (w *GCWindow) abandonPrepared() {
+	if w.abandonUnpublished == nil {
+		return
+	}
+	for file := range w.prepared {
+		w.abandonUnpublished(file)
+	}
+	w.prepared = nil
+}
+
+func (w *GCWindow) prepareObject(ctx context.Context, file string) error {
+	if w.prepareUnpublished == nil {
+		return nil
+	}
+	object := ioutil.UnpublishedObject{File: file}
+	if isGCMetadataFile(file) {
+		object.CleanupID = w.cleanupID
+	} else if w.cleanupID != "" {
+		metadata := ioutil.UnpublishedObject{
+			File: ioutil.MakeFullName(
+				w.dir,
+				ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end),
+			),
+			CleanupID: w.cleanupID,
+		}
+		object.DependsOn = []string{ioutil.UnpublishedObjectCleanupPath(metadata)}
+	}
+	marker, err := w.prepareUnpublished(ctx, object)
+	if err != nil {
+		return err
+	}
+	if w.prepared == nil {
+		w.prepared = make(map[string]string)
+	}
+	w.prepared[file] = marker
+	return nil
+}
+
+// Publish releases the active write owner after the resulting metadata has
+// been adopted by the catalog/replay state. The durable marker remains for
+// replay to reconcile with that adopted metadata.
+func (w *GCWindow) Publish(ctx context.Context) error {
+	if w.finishUnpublished == nil {
+		w.prepared = nil
+		return nil
+	}
+	var err error
+	for file, marker := range w.prepared {
+		err = errors.Join(err, w.finishUnpublished(ctx, marker, file))
+	}
+	w.prepared = nil
+	return err
 }
 
 func (w *GCWindow) getSinker(
@@ -302,6 +466,7 @@ func (w *GCWindow) getSinker(
 		w.fs,
 		ioutil.WithTailSizeCap(tailSize),
 		ioutil.WithBuffer(buffer, false),
+		ioutil.WithBeforePersist(w.prepareObject),
 	)
 }
 
@@ -309,12 +474,25 @@ func (w *GCWindow) writeMetaForRemainings(
 	ctx context.Context,
 	stats []objectio.ObjectStats,
 ) (string, error) {
+	if w.cleanupID == "" {
+		w.cleanupID = uuid.New().String()
+	}
 	select {
 	case <-ctx.Done():
 		return "", context.Cause(ctx)
 	default:
 	}
 	name := ioutil.EncodeGCMetadataName(w.tsRange.start, w.tsRange.end)
+	fullName := ioutil.MakeFullName(w.dir, name)
+	if err := w.prepareObject(ctx, fullName); err != nil {
+		return name, err
+	}
+	prepared := true
+	defer func() {
+		if prepared {
+			w.abandonPrepared()
+		}
+	}()
 	ret := batch.NewWithSchema(
 		false, ObjectTableMetaAttrs, ObjectTableMetaTypes,
 	)
@@ -328,17 +506,39 @@ func (w *GCWindow) writeMetaForRemainings(
 	}
 	writer, err := objectio.NewObjectWriterSpecial(
 		objectio.WriterGC,
-		ioutil.MakeFullName(w.dir, name),
+		fullName,
 		w.fs,
 	)
 	if err != nil {
 		return "", err
 	}
 	if _, err := writer.WriteWithoutSeqnum(ret); err != nil {
-		return "", err
+		return name, err
 	}
 	_, err = writer.WriteEnd(ctx)
+	if err == nil {
+		prepared = false
+	}
 	return name, err
+}
+
+func (w *GCWindow) deleteMeta(ctx context.Context, name string) error {
+	if name == "" || w.fs == nil {
+		return nil
+	}
+	err := w.fs.Delete(ctx, ioutil.MakeFullName(w.dir, name))
+	if moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+		return nil
+	}
+	return err
+}
+
+func objectStatsNames(stats []objectio.ObjectStats) []string {
+	files := make([]string, 0, len(stats))
+	for _, stat := range stats {
+		files = append(files, stat.ObjectName().String())
+	}
+	return files
 }
 
 func (w *GCWindow) Merge(o *GCWindow) {
@@ -360,8 +560,8 @@ func (w *GCWindow) Merge(o *GCWindow) {
 	}
 }
 
-func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]map[uint64]*ObjectEntry) {
-	ckpReader.ForEachRow(
+func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CKPReader, objects map[string]map[uint64]*ObjectEntry) error {
+	return ckpReader.ForEachRow(
 		ctx,
 		func(
 			account uint32,
@@ -389,6 +589,11 @@ func collectObjectsFromCheckpointData(ctx context.Context, ckpReader *logtail.CK
 }
 
 func (w *GCWindow) Close() {
+	// A diagnostic or otherwise abandoned window may have prepared durable
+	// cleanup ownership without publishing the resulting metadata. Release
+	// only the in-memory active reservation; the durable marker remains for
+	// cleanup replay.
+	w.abandonPrepared()
 	w.files = nil
 }
 

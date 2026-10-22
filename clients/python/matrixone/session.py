@@ -649,10 +649,9 @@ class Session(SQLAlchemySession):
                 final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
-                from sqlalchemy import text
+                from ._session_execution import execute_session_sql
 
-                # Call parent's execute() with text()
-                result = super().execute(text(final_sql), **kwargs)
+                result = execute_session_sql(super().execute, final_sql, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = super().execute(sql_or_stmt, params, **kwargs)
@@ -1251,10 +1250,9 @@ class AsyncSession(SQLAlchemyAsyncSession):
                 final_sql = self.client._substitute_parameters(sql_or_stmt, params)
                 original_sql = sql_or_stmt
 
-                from sqlalchemy import text
+                from ._session_execution import execute_session_sql
 
-                # Call parent's execute() with text()
-                result = await super().execute(text(final_sql), **kwargs)
+                result = await execute_session_sql(super().execute, final_sql, **kwargs)
             else:
                 # SQLAlchemy statement - call parent's execute() directly
                 result = await super().execute(sql_or_stmt, params, **kwargs)

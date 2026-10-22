@@ -15,20 +15,25 @@
 package isolated
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
+	"runtime/pprof"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/google/uuid"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/queryservice"
 	"github.com/matrixorigin/matrixone/pkg/tnservice"
 	"github.com/matrixorigin/matrixone/pkg/txn/rpc"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -50,6 +55,7 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 		rpc.FJ_TxnServerDrainWithActiveHandler,
 		tnservice.FJ_TNStoreHandlersDrained,
 		objectio.FJ_CommitWaitTargetTenant,
+		objectio.FJ_CommitWaitTargetTxn,
 		commitWaiters,
 		drainWaiters,
 		handlersDrainedWaiters,
@@ -102,14 +108,38 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	db := openIssue28012And28013DB(t, ctx, cluster, accountName+"#root#accountadmin:111", &dbs)
 	dbName := fmt.Sprintf("issue_28012_28013_%d", time.Now().UnixNano())
 	mustExecIssue28012And28013(t, ctx, db, "create database "+dbName)
+	mustExecIssue28012And28013(t, ctx, db, "create table "+dbName+".probe (id int primary key)")
 	txn, err := db.BeginTx(ctx, nil)
 	require.NoError(t, err)
 	_, err = txn.ExecContext(ctx, "create table "+dbName+".t (id int primary key, v int)")
 	require.NoError(t, err)
 	_, err = txn.ExecContext(ctx, "insert into "+dbName+".t values (1, 10), (2, 20), (3, 30)")
 	require.NoError(t, err)
+	var connectionID uint32
+	require.NoError(t, txn.QueryRowContext(ctx, "select connection_id()").Scan(&connectionID))
+	cn, err := cluster.GetCNService(0)
+	require.NoError(t, err)
+	provider, ok := cn.RawService().(interface {
+		SessionMgr() *queryservice.SessionManager
+	})
+	require.True(t, ok)
+	var commitID uuid.UUID
+	for _, session := range provider.SessionMgr().GetAllSessions() {
+		identity, ok := session.(interface {
+			GetConnectionID() uint32
+			GetTxnId() uuid.UUID
+		})
+		if ok && identity.GetConnectionID() == connectionID {
+			commitID = identity.GetTxnId()
+			break
+		}
+	}
+	require.NotEqual(t, uuid.Nil, commitID, "capture the actual SQL transaction before arming its commit barrier")
 
 	require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_CommitWaitTargetTenant, ":::", "ECHO", int64(accountID), "", false))
+	// Tenant selection alone cannot distinguish this commit from asynchronous
+	// work for the same account. Only the SQL transaction may claim this barrier.
+	require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_CommitWaitTargetTxn, ":::", "ECHO", 0, string(commitID[:]), false))
 	require.NoError(t, fault.AddFaultPoint(ctx, objectio.FJ_CommitWait, "1:1::", "WAIT", 0, "", false))
 	require.NoError(t, fault.AddFaultPoint(ctx, commitWaiters, ":::", "GETWAITERS", 0, objectio.FJ_CommitWait, false))
 	require.NoError(t, fault.AddFaultPoint(ctx, commitRelease, ":::", "NOTIFYALL", 0, objectio.FJ_CommitWait, false))
@@ -119,6 +149,15 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	require.NoError(t, fault.AddFaultPoint(ctx, tnservice.FJ_TNStoreHandlersDrained, "1:1::", "WAIT", 0, "", false))
 	require.NoError(t, fault.AddFaultPoint(ctx, handlersDrainedWaiters, ":::", "GETWAITERS", 0, tnservice.FJ_TNStoreHandlersDrained, false))
 	require.NoError(t, fault.AddFaultPoint(ctx, handlersDrainedRelease, ":::", "NOTIFYALL", 0, tnservice.FJ_TNStoreHandlersDrained, false))
+	// Exercise the previously ambiguous tenant-only selector with a real commit
+	// on another connection. It must finish without consuming the target's WAIT.
+	probeCtx, probeCancel := context.WithTimeout(ctx, 10*time.Second)
+	_, probeErr := db.ExecContext(probeCtx, "insert into "+dbName+".probe values (1)")
+	probeCancel()
+	require.NoError(t, probeErr, "another transaction of the same tenant must not claim the commit barrier")
+	waiters, _, triggered := fault.TriggerFault(commitWaiters)
+	require.True(t, triggered)
+	require.Zero(t, waiters, "only the intended commit may register a waiter")
 
 	commitResult := make(chan error, 1)
 	goroutines.Add(1)
@@ -132,13 +171,13 @@ func TestIssue28012And28013AcceptedCommitDuringStandaloneShutdown(t *testing.T) 
 	goroutines.Add(1)
 	go func() {
 		defer goroutines.Done()
-		shutdownResult <- cluster.Close()
+		shutdownResult <- cluster.Stop()
 	}()
 	// This boundary is reached by the TN transaction server from the real
-	// cluster.Close path only after quiesce has started and while the accepted
+	// cluster.Stop path only after quiesce has started and while the accepted
 	// commit is still counted as an active handler.
 	waitIssue28012And28013FaultWaiters(t, drainWaiters, 1, 30*time.Second)
-	_, _, ok := fault.TriggerFault(drainRelease)
+	_, _, ok = fault.TriggerFault(drainRelease)
 	require.True(t, ok)
 
 	// Let Drain itself advance while the commit remains blocked. Neither the TN
@@ -226,10 +265,16 @@ func waitIssue28012And28013Goroutines(goroutines *sync.WaitGroup, timeout time.D
 
 func waitIssue28012And28013FaultWaiters(t *testing.T, probe string, want int64, timeout time.Duration) {
 	t.Helper()
-	require.Eventually(t, func() bool {
+	reached := assert.Eventually(t, func() bool {
 		waiters, _, ok := fault.TriggerFault(probe)
 		return ok && waiters == want
 	}, timeout, 10*time.Millisecond, "fault point %s did not reach %d waiters", probe, want)
+	if !reached {
+		var stacks bytes.Buffer
+		_ = pprof.Lookup("goroutine").WriteTo(&stacks, 2)
+		t.Logf("goroutines at failed shutdown boundary:\n%s", stacks.String())
+		t.FailNow()
+	}
 }
 
 func openIssue28012And28013DB(

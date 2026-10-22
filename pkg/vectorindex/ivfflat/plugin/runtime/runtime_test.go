@@ -73,8 +73,9 @@ func TestIvfflatAlterTableCloneBehavior(t *testing.T) {
 		CatalogHooks{}.RestoreBehavior().DeleteBeforeClone)
 }
 
-func TestIvfflatDefaultOptions(t *testing.T) {
-	got := CatalogHooks{}.DefaultOptions()
+func TestIvfflatParamsWithoutOptions(t *testing.T) {
+	got, err := CatalogHooks{}.ParamsFromTree(&tree.Index{IndexOption: &tree.IndexOption{}})
+	require.NoError(t, err)
 	require.Equal(t, "1", got[catalog.IndexAlgoParamLists])
 	require.Equal(t, metric.OpType_L2Distance, got[catalog.IndexAlgoParamOpType])
 }

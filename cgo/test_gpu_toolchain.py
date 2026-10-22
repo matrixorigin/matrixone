@@ -23,6 +23,10 @@ GPU_ENV = REPO / "cgo/mo-gpu-env"
 
 
 class GPUContractTest(unittest.TestCase):
+    host_arch = "x86_64"
+    target_arch = "x86_64"
+    cuda_target = "x86_64"
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="mo-gpu-contract-")
         self.addCleanup(temporary.cleanup)
@@ -32,12 +36,12 @@ class GPUContractTest(unittest.TestCase):
         (self.project / "pixi.lock").write_text("test lock\n")
         (self.prefix / "conda-meta").mkdir(parents=True)
         paths = (
-            "bin/x86_64-conda-linux-gnu-cc",
-            "bin/x86_64-conda-linux-gnu-c++",
+            f"bin/{self.target_arch}-conda-linux-gnu-cc",
+            f"bin/{self.target_arch}-conda-linux-gnu-c++",
             "bin/nvcc",
-            "targets/x86_64-linux/include/cuda.h",
-            "targets/x86_64-linux/lib/libcudart.so",
-            "targets/x86_64-linux/lib/stubs/libcuda.so",
+            f"targets/{self.cuda_target}-linux/include/cuda.h",
+            f"targets/{self.cuda_target}-linux/lib/libcudart.so",
+            f"targets/{self.cuda_target}-linux/lib/stubs/libcuda.so",
             "include/cuvs/core/c_api.h",
             "lib/libcuvs.so",
             "lib/libcuvs_c.so",
@@ -67,7 +71,7 @@ class GPUContractTest(unittest.TestCase):
         uname.write_text(
             "#!/bin/sh\n"
             "case \"$1\" in\n"
-            "  -m) echo x86_64 ;;\n"
+            f"  -m) echo {self.host_arch} ;;\n"
             "  -s) echo Linux ;;\n"
             "  *) exit 1 ;;\n"
             "esac\n"
@@ -104,8 +108,11 @@ class GPUContractTest(unittest.TestCase):
                 result = self.make(directory, "-B", target)
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertIn(str(self.prefix / "bin/nvcc"), result.stdout)
-                self.assertIn(str(self.prefix / "bin/x86_64-conda-linux-gnu-c++"), result.stdout)
+                self.assertIn(str(self.prefix / f"bin/{self.target_arch}-conda-linux-gnu-c++"), result.stdout)
                 self.assertNotIn("/usr/local/cuda", result.stdout)
+                if directory == "cgo/cuvs":
+                    isa = "armv8-a" if self.target_arch == "aarch64" else "haswell"
+                    self.assertIn(f"-march={isa}", result.stdout)
 
     def test_shell_consumer_uses_link_only_stubs(self):
         result = self.shell()
@@ -115,11 +122,11 @@ class GPUContractTest(unittest.TestCase):
         # /private/var, unlike the lexical TemporaryDirectory path.
         canonical = self.prefix.resolve()
         self.assertEqual(nvcc, str(canonical / "bin/nvcc"))
-        self.assertIn(str(canonical / "targets/x86_64-linux/include"), flags)
+        self.assertIn(str(canonical / f"targets/{self.cuda_target}-linux/include"), flags)
         self.assertNotIn("stubs", runtime)
         self.assertEqual(
             runtime,
-            f"{canonical}/targets/x86_64-linux/lib:{canonical}/lib",
+            f"{canonical}/targets/{self.cuda_target}-linux/lib:{canonical}/lib",
         )
 
     def test_shell_consumer_canonicalizes_project_symlink(self):
@@ -159,6 +166,20 @@ class GPUContractTest(unittest.TestCase):
         self.assertNotEqual(shell.returncode, 0)
         self.assertIn("incomplete Pixi", shell.stderr)
 
+    def test_other_architecture_compiler_cannot_satisfy_native_profile(self):
+        compiler = self.prefix / f"bin/{self.target_arch}-conda-linux-gnu-c++"
+        other = "x86_64" if self.target_arch == "aarch64" else "aarch64"
+        compiler.rename(self.prefix / f"bin/{other}-conda-linux-gnu-c++")
+        self.assertNotEqual(self.make("cgo/cuvs", "helper.o").returncode, 0)
+        self.assertNotEqual(self.shell().returncode, 0)
+
+    def test_unsupported_host_fails_before_compilation(self):
+        uname = self.project / "host-bin/uname"
+        uname.write_text('#!/bin/sh\ncase "$1" in -m) echo ppc64le;; -s) echo Linux;; esac\n')
+        for result in (self.make("cgo/cuvs", "helper.o"), self.shell()):
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("require Linux amd64 or arm64", result.stderr)
+
     def test_cpu_and_clean_do_not_require_pixi(self):
         env = dict(self.env, MO_CL_CUDA="0")
         for name in ("PIXI_PROJECT_ROOT", "PIXI_ENVIRONMENT_NAME", "CONDA_PREFIX"):
@@ -171,6 +192,12 @@ class GPUContractTest(unittest.TestCase):
             with self.subTest(directory=directory):
                 clean = self.make(directory, "clean", env=env)
                 self.assertEqual(clean.returncode, 0, clean.stderr)
+
+
+class ARMGPUContractTest(GPUContractTest):
+    host_arch = "aarch64"
+    target_arch = "aarch64"
+    cuda_target = "sbsa"
 
 
 if __name__ == "__main__":
