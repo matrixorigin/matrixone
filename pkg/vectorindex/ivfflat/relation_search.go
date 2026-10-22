@@ -122,7 +122,7 @@ func (idx *IvfflatSearchIndex[T]) scanEntriesInDomain(
 		prefixFilter *plan.Expr
 	)
 	indexParam := &plan.IndexReaderParam{
-		Limit:   ivfUint64Expr(uint64(limit)),
+		Limit:   ivfTopKLimitExpr(uint64(limit)),
 		OrderBy: []*plan.OrderBySpec{{Flag: orderFlag}},
 	}
 	if len(centroidIDs) > 0 || allCentroids && sqlproc.IvfHasMembershipFilter {

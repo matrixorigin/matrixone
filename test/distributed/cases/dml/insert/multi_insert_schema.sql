@@ -83,8 +83,11 @@ insert first
 select id, name, amount, ts from src;
 select id, j, e, hex(b), d, t, f from conv order by id;
 -- an enum value outside the definition is rejected
+set @mi_schema_saved_sql_mode = @@session.sql_mode;
+set session sql_mode = 'STRICT_TRANS_TABLES';
 insert all into conv (id, e) values (id + 10, name) select id, name from src where name = 'delta';
 select count(*) from conv;
+set session sql_mode = @mi_schema_saved_sql_mode;
 
 -- ================= string width: too-long values are rejected like in a single insert
 create table tight (id int primary key, name varchar(3));
