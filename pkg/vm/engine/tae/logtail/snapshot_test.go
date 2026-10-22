@@ -164,6 +164,11 @@ func TestSnapshotMetaUpdateRollsBackPartialRetryState(t *testing.T) {
 
 func TestSnapshotMetaCloneRestore(t *testing.T) {
 	meta := NewSnapshotMeta()
+	info := &tableInfo{accountID: 1, dbID: 2, tid: 1, pk: "pk"}
+	meta.tables[1] = map[uint64]*tableInfo{1: info}
+	meta.tableIDIndex[1] = info
+	meta.tablePKIndex["pk"] = []*tableInfo{info}
+	meta.objects[1] = map[objectio.Segmentid]*objectInfo{{}: {createAt: types.BuildTS(10, 0)}}
 	meta.snapshotTableIDs[1] = struct{}{}
 	meta.aobjDelTsMap[types.BuildTS(1, 0)] = struct{}{}
 	meta.pitr.tid = 2
@@ -172,13 +177,26 @@ func TestSnapshotMetaCloneRestore(t *testing.T) {
 	delete(meta.snapshotTableIDs, 1)
 	delete(meta.aobjDelTsMap, types.BuildTS(1, 0))
 	meta.pitr.tid = 3
+	meta.tablePKIndex["pk"] = append(meta.tablePKIndex["pk"], info)
+	meta.tableIDIndex[1].deleteAt = types.BuildTS(20, 0)
+	meta.objects[1][objectio.Segmentid{}].deleteAt = types.BuildTS(20, 0)
 	meta.RestoreFrom(snapshot)
 
-	_, ok := meta.snapshotTableIDs[1]
-	require.True(t, ok)
-	_, ok = meta.aobjDelTsMap[types.BuildTS(1, 0)]
-	require.True(t, ok)
+	require.Contains(t, meta.snapshotTableIDs, uint64(1))
+	require.Contains(t, meta.aobjDelTsMap, types.BuildTS(1, 0))
 	require.Equal(t, uint64(2), meta.pitr.tid)
+	require.Len(t, meta.tablePKIndex["pk"], 1)
+	require.Empty(t, meta.tableIDIndex[1].deleteAt)
+	require.Empty(t, meta.objects[1][objectio.Segmentid{}].deleteAt)
+	require.Same(t, meta.tables[1][1], meta.tableIDIndex[1])
+	require.Same(t, meta.tableIDIndex[1], meta.tablePKIndex["pk"][0])
+
+	meta.tableIDIndex[1].deleteAt = types.BuildTS(30, 0)
+	meta.objects[1][objectio.Segmentid{}].deleteAt = types.BuildTS(30, 0)
+	require.Equal(t, types.BuildTS(30, 0), meta.tables[1][1].deleteAt)
+	require.Empty(t, snapshot.tableIDIndex[1].deleteAt, "Clone must remain independent")
+	require.Empty(t, snapshot.objects[1][objectio.Segmentid{}].deleteAt)
+	require.Len(t, snapshot.tablePKIndex["pk"], 1)
 }
 
 // TestSnapshotInfo tests the basic functionality of SnapshotInfo

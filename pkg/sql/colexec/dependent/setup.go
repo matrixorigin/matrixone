@@ -118,6 +118,3 @@ func (*SetupKernel) Release()                                            {}
 func (*SetupKernel) OpType() vm.OpType                                   { return vm.Dependent }
 func (s *SetupKernel) GetOperatorBase() *vm.OperatorBase                 { return &s.OperatorBase }
 func (*SetupKernel) String(b *bytes.Buffer)                              { b.WriteString("dependent setup") }
-func (*SetupKernel) ExecProjection(_ *process.Process, b *batch.Batch) (*batch.Batch, error) {
-	return b, nil
-}

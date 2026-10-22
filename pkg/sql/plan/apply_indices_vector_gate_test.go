@@ -32,6 +32,10 @@ func TestVectorIndexSupportsContext(t *testing.T) {
 	match := makeFullTextMatchExpr("hello", 0, tableDef, scanTag, []int32{2, 3})
 	scanID := builder.appendNode(makeFullTextJoinTestScan(tableDef, scanTag, []*planpb.Expr{match}), ctx)
 	matchScan := builder.qry.Nodes[scanID]
+	booleanMatch, err := BindFuncExprImplByPlanExpr(builder.GetContext(), "not", []*planpb.Expr{DeepCopyExpr(match)})
+	require.NoError(t, err)
+	booleanScanID := builder.appendNode(makeFullTextJoinTestScan(tableDef, scanTag, []*planpb.Expr{booleanMatch}), ctx)
+	booleanScan := builder.qry.Nodes[booleanScanID]
 	plainScan := builder.qry.Nodes[builder.appendNode(makeFullTextJoinTestScan(tableDef, builder.genNewBindTag(), nil), ctx)]
 
 	ivfflat := catalog.MoIndexIvfFlatAlgo.ToString()
@@ -44,6 +48,10 @@ func TestVectorIndexSupportsContext(t *testing.T) {
 		want bool
 	}{
 		{"no context", nil, hnsw, true},
+		{"Boolean MATCH, ivfflat", &vectorSortContext{scanNode: booleanScan}, ivfflat, false},
+		{"Boolean MATCH, hnsw", &vectorSortContext{scanNode: booleanScan}, hnsw, false},
+		{"Boolean MATCH, cagra", &vectorSortContext{scanNode: booleanScan}, cagra, false},
+		{"Boolean MATCH, ivfpq", &vectorSortContext{scanNode: booleanScan}, catalog.MoIndexIvfpqAlgo.ToString(), false},
 		{"plain scan", &vectorSortContext{scanNode: plainScan}, hnsw, true},
 		{"MATCH filter, cagra", &vectorSortContext{scanNode: matchScan}, cagra, true},
 		{"MATCH filter, hnsw", &vectorSortContext{scanNode: matchScan}, hnsw, true},
