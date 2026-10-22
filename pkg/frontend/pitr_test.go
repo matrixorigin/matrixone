@@ -224,7 +224,7 @@ func Test_createPubByPitr(t *testing.T) {
 		bh.sql2result[getSubsSql+" and pub_account_name = 'sys' and pub_name = 'pub01'"] =
 			newMrsForSqlForGetSubs([][]interface{}{})
 
-		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
+		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts, nil)
 		assert.NoError(t, err)
 		var insertSQL string
 		for _, executedSQL := range bh.executedSQLs {
@@ -274,7 +274,7 @@ func Test_createPubByPitr(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
+		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts, nil)
 		assert.Error(t, err)
 	})
 
@@ -316,7 +316,7 @@ func Test_createPubByPitr(t *testing.T) {
 		})
 		bh.sql2result[sql] = mrs
 
-		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
+		err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts, nil)
 		assert.Error(t, err)
 	})
 }
@@ -368,7 +368,7 @@ func Test_createPubByPitrTableScopeModeResolution(t *testing.T) {
 	bh.sql2result[historicalTablesSQL] = newMrsForRestoreStringRows(
 		[]string{"name", "type", "kind", "view"}, [][]interface{}{{"test1", "BASE TABLE", "r", ""}})
 
-	err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
+	err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts, nil)
 	require.Error(t, err)
 	require.ErrorContains(t, err,
 		"session variable lower_case_table_names is unavailable")
@@ -4242,6 +4242,7 @@ func Test_restoreViewsSkipsUnservableView(t *testing.T) {
 		sortedViews := []string{genKey("db01", "ft_v"), genKey("db01", "ok_v")}
 
 		for _, skipIfDependencyMissing := range []bool{false, true} {
+			viewMap[genKey("db01", "ft_v")].unservable = false
 			bh.sql2err = map[string]error{badSQL: moerr.NewFtMatchingKeyNotFound(ctx)}
 			bh.executedSQLs = nil
 
@@ -4255,6 +4256,7 @@ func Test_restoreViewsSkipsUnservableView(t *testing.T) {
 		// An unrelated failure must still abort: only the specific refusal is tolerated,
 		// so genuine corruption is never silently swallowed.
 		bh.sql2err = map[string]error{badSQL: moerr.NewInternalError(ctx, "boom")}
+		viewMap[genKey("db01", "ft_v")].unservable = false
 		bh.executedSQLs = nil
 		err := restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
 		require.Error(t, err, "an unrelated error must remain fatal")
@@ -4267,6 +4269,7 @@ func Test_restoreViewsSkipsUnservableView(t *testing.T) {
 		bh.sql2err = map[string]error{
 			badSQL: moerr.NewInternalError(ctx, moerr.FtMatchingKeyNotFoundMsg),
 		}
+		viewMap[genKey("db01", "ft_v")].unservable = false
 		bh.executedSQLs = nil
 		err = restoreViews(ctx, ses, bh, "sp01", viewMap, 0, sortedViews, false)
 		require.NoError(t, err, "the refusal must be recognised even once its code is lost")

@@ -408,16 +408,21 @@ func TestSnapshotPublicationSkipsExternalTables(t *testing.T) {
 			return db
 		}
 		owner, sub := connect("external_pub_owner"), connect("external_pub_sub")
+		owner.SetMaxOpenConns(1)
 		defer owner.Close()
 		defer sub.Close()
 		for _, tc := range []struct {
 			name, selection, want string
+			unservableView        bool
 		}{
 			{name: "no_publication"},
 			{name: "all_tables", selection: "*", want: "*"},
 			{name: "ordinary", selection: "base_t", want: "base_t"},
 			{name: "external_only", selection: "`ext-t`"},
 			{name: "mixed", selection: "base_t,`ext-t`", want: "base_t"},
+			{name: "unservable_no_publication", unservableView: true},
+			{name: "unservable_all_tables", selection: "*", want: "*", unservableView: true},
+			{name: "unservable_explicit", selection: "base_t,v_ft", want: "base_t", unservableView: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				exec := func(query string) {
@@ -435,9 +440,14 @@ func TestSnapshotPublicationSkipsExternalTables(t *testing.T) {
 						require.NoError(t, err, query)
 					}
 				}()
-				exec("create table " + db + ".base_t(id int primary key)")
-				exec("insert into " + db + ".base_t values(1)")
+				exec("create table " + db + ".base_t(id int primary key, body text)")
+				exec("insert into " + db + ".base_t(id) values(1)")
 				exec("create external table " + db + ".`ext-t`(id int) infile{'filepath'='/unused-publication-test.csv','format'='csv'}")
+				if tc.unservableView {
+					exec("use " + db)
+					exec("create fulltext index ft_body on " + db + ".base_t(body)")
+					exec("create view " + db + ".v_ft as select id from base_t where match(body) against('hello')")
+				}
 				if tc.selection != "" {
 					selection := ""
 					if tc.selection != "*" {
@@ -448,8 +458,11 @@ func TestSnapshotPublicationSkipsExternalTables(t *testing.T) {
 					require.NoError(t, err)
 				}
 				level := "database " + db
+				if tc.unservableView {
+					exec("drop index ft_body on " + db + ".base_t")
+				}
 				exec("create snapshot " + snap + " for " + level)
-				exec("insert into " + db + ".base_t values(2)")
+				exec("insert into " + db + ".base_t(id) values(2)")
 				for range 2 {
 					exec("restore " + level + "{snapshot='" + snap + "'}")
 					var rows int
@@ -457,6 +470,10 @@ func TestSnapshotPublicationSkipsExternalTables(t *testing.T) {
 					require.Equal(t, 1, rows, "skipping an external table must not roll back the ordinary table restore")
 					require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='"+db+"' and relname='ext-t'").Scan(&rows))
 					require.Zero(t, rows)
+					if tc.unservableView {
+						require.NoError(t, owner.QueryRowContext(ctx, "select count(*) from mo_catalog.mo_tables where reldatabase='"+db+"' and relname='v_ft'").Scan(&rows))
+						require.Zero(t, rows, "restore deliberately omits the unservable FULLTEXT view")
+					}
 					if tc.selection == "" {
 						continue
 					}
@@ -481,6 +498,14 @@ func TestSnapshotPublicationSkipsExternalTables(t *testing.T) {
 					if tc.want != "*" {
 						_, err := sub.ExecContext(ctx, "select * from external_pub_subscription.`ext-t`")
 						require.ErrorContains(t, err, "ext-t", "reusing an excluded name must not revive publication access")
+					}
+					if tc.unservableView {
+						exec("use " + db)
+						exec("create view " + db + ".v_ft as select id from base_t")
+						if tc.want != "*" {
+							_, err := sub.ExecContext(ctx, "select * from external_pub_subscription.v_ft")
+							require.ErrorContains(t, err, "v_ft", "reusing an omitted view name must not revive publication access")
+						}
 					}
 				}
 			})

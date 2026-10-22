@@ -66,7 +66,7 @@ func TestCreatePublicationFromRestoreInfoPropagatesError(t *testing.T) {
 			bh.sql2err[getAccountIdNamesSql] = failure
 			pub := &pubsub.PubInfo{PubName: "p", DbName: "db", TablesStr: pubsub.TableAll, SubAccountsStr: accounts}
 			ctx := defines.AttachAccountId(t.Context(), sysAccountID)
-			require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), failure)
+			require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42, nil), failure)
 			require.Equal(t, []string{getAccountIdNamesSql}, bh.executedSQLs, "replay must abort before any catalog write")
 		})
 	}
@@ -134,7 +134,7 @@ func TestPublicationReplayOmitsOnlyBulkSkippedTables(t *testing.T) {
 				{"t1", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
 				{"ext-t", "BASE TABLE", catalog.SystemExternalRel, ""},
 			})
-			replay, err := publicationInfoForBulkRestore(ctx, bh, pub, 42)
+			replay, err := publicationInfoForBulkRestore(ctx, bh, pub, 42, nil)
 			require.NoError(t, err)
 			require.Equal(t, tc.want, replay.TablesStr)
 			require.Equal(t, original, *pub)
@@ -158,7 +158,7 @@ func TestPublicationReplayOmitsOnlyBulkSkippedTables(t *testing.T) {
 				insertion := errors.New("publication insertion reached")
 				bh.sql2err[want] = insertion
 				if tc.want == "" || tc.want == pubsub.TableAll {
-					require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), insertion)
+					require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42, nil), insertion)
 				} else {
 					require.ErrorIs(t, createPublicationWithTableSelection(ctx, bh, statement, false, 1), insertion)
 				}
@@ -181,9 +181,46 @@ func TestPublicationReplayRequiresCaseModeForRetainedSelection(t *testing.T) {
 				{"ext-t", "BASE TABLE", catalog.SystemExternalRel, ""},
 			})
 			ctx := defines.AttachAccountId(t.Context(), sysAccountID)
-			require.ErrorContains(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42),
+			require.ErrorContains(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42, nil),
 				"session variable lower_case_table_names is unavailable")
 			require.Equal(t, []string{query}, bh.executedSQLs, "missing mode must fail before catalog writes")
+		})
+	}
+}
+
+func TestPublicationReplayOmitsOnlyKnownUnservableViews(t *testing.T) {
+	views := map[string]*tableInfo{
+		"skipped":        {dbName: "db1", tblName: "v_ft", typ: view, unservable: true},
+		"working":        {dbName: "db1", tblName: "v_ok", typ: view},
+		"ordinary":       {dbName: "db1", tblName: "t1", typ: "BASE TABLE", unservable: true},
+		"other database": {dbName: "other", tblName: "v_other", typ: view, unservable: true},
+		"nil":            nil,
+	}
+	omitted := publicationOmittedViews(views)
+	require.Len(t, omitted, 2)
+	require.Nil(t, publicationOmittedViews(nil))
+	for _, tc := range []struct{ tables, want string }{
+		{"v_ft,t1", "t1"}, {"v_ft", ""}, {"v_ft,v_ok", "v_ok"},
+		{"missing,v_ft", "missing"}, {"t1,v_ft", "t1"}, {"v_other,v_ft", "v_other"},
+		{"ext-t,v_ft", ""}, {pubsub.TableAll, pubsub.TableAll}, {"", ""},
+	} {
+		t.Run(tc.tables, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			pub := &pubsub.PubInfo{PubAccountId: 7, DbName: "db1", TablesStr: tc.tables, SubAccountsStr: "selected_sub"}
+			original := *pub
+			bh.sql2result[buildTableInfoListSQL("db1", "", 42, 7)] = newMrsForRestoreStringRows(
+				[]string{"name", "type", "kind", "view"}, [][]interface{}{
+					{"t1", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+					{"ext-t", "BASE TABLE", catalog.SystemExternalRel, ""},
+					{"v_ft", "VIEW", catalog.SystemViewRel, ""},
+					{"v_ok", "VIEW", catalog.SystemViewRel, ""},
+					{"v_other", "VIEW", catalog.SystemViewRel, ""},
+				})
+			replay, err := publicationInfoForBulkRestore(defines.AttachAccountId(t.Context(), sysAccountID), bh, pub, 42, omitted)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, replay.TablesStr)
+			require.Equal(t, original, *pub)
 		})
 	}
 }
@@ -196,6 +233,6 @@ func TestPublicationReplayPropagatesHistoricalTableError(t *testing.T) {
 	failure := errors.New("historical table metadata unavailable")
 	bh.sql2err[query] = failure
 	ctx := defines.AttachAccountId(t.Context(), sysAccountID)
-	require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), failure)
+	require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42, nil), failure)
 	require.Equal(t, []string{query}, bh.executedSQLs, "failed historical lookup must abort before catalog writes")
 }

@@ -48,8 +48,8 @@ func publicationStatementForReplay(pub *pubsub.PubInfo) *tree.CreatePublication 
 
 // createPublicationFromRestoreInfo keeps replay on the ordinary creation path,
 // including current database identity, historical principals and subscriber state.
-func createPublicationFromRestoreInfo(ctx context.Context, bh BackgroundExec, pub *pubsub.PubInfo, ts int64) error {
-	replay, err := publicationInfoForBulkRestore(ctx, bh, pub, ts)
+func createPublicationFromRestoreInfo(ctx context.Context, bh BackgroundExec, pub *pubsub.PubInfo, ts int64, omittedViews map[restoreObjectName]struct{}) error {
+	replay, err := publicationInfoForBulkRestore(ctx, bh, pub, ts, omittedViews)
 	if err != nil {
 		return err
 	}
@@ -65,11 +65,26 @@ func createPublicationFromRestoreInfo(ctx context.Context, bh BackgroundExec, pu
 	return createPublicationWithTableSelection(ctx, bh, statement, replay.TablesStr == pubsub.TableAll, lowerCaseTableNames)
 }
 
-// Bulk restore deliberately omits external tables. Remove only those historical
-// objects from an explicit publication selection, not arbitrary missing tables:
+// publicationOmittedViews records only omissions confirmed by this restore's
+// view owner. Database-qualified keys cannot hide same-named objects elsewhere.
+func publicationOmittedViews(views map[string]*tableInfo) map[restoreObjectName]struct{} {
+	var omitted map[restoreObjectName]struct{}
+	for _, info := range views {
+		if info != nil && info.typ == view && info.unservable {
+			if omitted == nil {
+				omitted = make(map[restoreObjectName]struct{})
+			}
+			omitted[restoreObjectName{info.dbName, info.tblName}] = struct{}{}
+		}
+	}
+	return omitted
+}
+
+// Bulk restore deliberately omits external tables and known unservable views.
+// Remove only those historical objects from an explicit selection, not arbitrary missing tables:
 // ordinary creation validation must still catch an incomplete restore. Use the
 // source tenant and timestamp, since current metadata has already been replaced.
-func publicationInfoForBulkRestore(ctx context.Context, bh BackgroundExec, pub *pubsub.PubInfo, ts int64) (*pubsub.PubInfo, error) {
+func publicationInfoForBulkRestore(ctx context.Context, bh BackgroundExec, pub *pubsub.PubInfo, ts int64, omittedViews map[restoreObjectName]struct{}) (*pubsub.PubInfo, error) {
 	if pub.TablesStr == pubsub.TableAll || pub.TablesStr == "" {
 		return pub, nil
 	}
@@ -83,7 +98,8 @@ func publicationInfoForBulkRestore(ctx context.Context, bh BackgroundExec, pub *
 	}
 	omitted := make(map[string]struct{})
 	for _, table := range tables {
-		if shouldSkipRestoreTableInBulk(table) {
+		_, skippedView := omittedViews[restoreObjectName{table.dbName, table.tblName}]
+		if shouldSkipRestoreTableInBulk(table) || table.typ == view && skippedView {
 			omitted[table.tblName] = struct{}{}
 		}
 	}

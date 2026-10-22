@@ -1621,7 +1621,7 @@ func restoreToDatabaseOrTableWithPitr(
 	// restore publication record
 	if !restoreToTbl {
 		getLogger(sid).Info(fmt.Sprintf("[%s] start to create pub: %v", pitrName, dbName))
-		if err = createPubByPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts); err != nil {
+		if err = createPubByPitr(ctx, sid, bh, pitrName, dbName, curAccount, ts, nil); err != nil {
 			return
 		}
 	}
@@ -2623,7 +2623,8 @@ func createPubByPitr(
 	pitrName,
 	dbName string,
 	toAccountId uint32,
-	ts int64) (err error) {
+	ts int64,
+	omittedViews map[restoreObjectName]struct{}) (err error) {
 	// read pub info from mo_pubs
 	sql := getPubInfoWithPitr(ts, toAccountId, dbName)
 	getLogger(sid).Info(fmt.Sprintf("[%s] create pub: get pub info sql: %s", pitrName, sql))
@@ -2649,7 +2650,7 @@ func createPubByPitr(
 		// identities in their respective context slots while replaying the CREATE.
 		toCtx := defines.AttachAccount(ctx, toAccountId, pubInfo.Creator, pubInfo.Owner)
 		getLogger(sid).Info(fmt.Sprintf("[%s] recreate publication %s for database %s", pitrName, pubInfo.PubName, pubInfo.DbName))
-		if err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, ts); err != nil {
+		if err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, ts, omittedViews); err != nil {
 			return
 		}
 	}

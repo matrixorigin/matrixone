@@ -551,6 +551,7 @@ func recreatePublicationsAfterDbRestoreTS(
 	restoreAccount uint32,
 	toAccountId uint32,
 	snapshotTs int64,
+	omittedViews map[restoreObjectName]struct{},
 ) (err error) {
 	if level != tree.RESTORELEVELDATABASE {
 		return nil
@@ -568,7 +569,8 @@ func recreatePublicationsAfterDbRestoreTS(
 		fmt.Sprintf("snapshot restore %s, ts %d", dbName, snapshotTs),
 		dbName,
 		restoreAccount,
-		snapshotTs)
+		snapshotTs,
+		omittedViews)
 }
 
 func getCreateDatabaseSqlFromTS(ctx context.Context,

@@ -1057,7 +1057,7 @@ func doRestoreSnapshot(ctx context.Context, ses *Session, stmt *tree.RestoreSnap
 	// foreign keys). Its live publications were not removed and must not replay.
 	if databaseRecreated {
 		if err = recreatePublicationsAfterDbRestoreTS(
-			ctx, ses.GetService(), bh, stmt.Level, dbName, restoreAccount, toAccountId, snapshot.ts); err != nil {
+			ctx, ses.GetService(), bh, stmt.Level, dbName, restoreAccount, toAccountId, snapshot.ts, publicationOmittedViews(viewMap)); err != nil {
 			return stats, err
 		}
 	}
@@ -1884,6 +1884,7 @@ func restoreViews(
 				// Skip it regardless of skipIfDependencyMissing -- RESTORE ACCOUNT passes
 				// false, so gating on that flag would not help the case that matters.
 				if isUnservableViewError(err) {
+					tblInfo.unservable = true
 					getLogger(ses.GetService()).Warn(fmt.Sprintf(
 						"[%s] skip restore view %v.%v: its definition can never run (%v); "+
 							"the view is NOT present in the restored account",
@@ -4261,7 +4262,7 @@ func createPubs(
 		// The CREATE statement carries the stable database name. createPublication
 		// resolves it inside the target tenant and persists the current database
 		// ID, so the historical PubInfo.DbId must not be replayed.
-		err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, snapshotTs)
+		err = createPublicationFromRestoreInfo(toCtx, bh, pubInfo, snapshotTs, nil)
 		if err != nil {
 			return
 		}
