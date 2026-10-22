@@ -2092,7 +2092,9 @@ func constantFoldWithPreparedExactSource(
 	if functionID == function.ELT && int32(overloadID) == 1 {
 		return expr, nil
 	}
-	if f.CannotFold() || f.IsVolatile() {
+	// Row-scoped diagnostics are admitted speculatively below; only a
+	// warning-free evaluation may replace them with a literal.
+	if f.IsVolatile() {
 		return expr, nil
 	}
 	if rule.IsLegacyTimeAssignmentOutsideInternalRange(fn) {

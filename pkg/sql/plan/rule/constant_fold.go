@@ -244,7 +244,9 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	if functionID == function.ELT && overload == 1 {
 		return expr
 	}
-	if f.CannotFold() || f.IsVolatile() {
+	// Row-scoped diagnostics are admitted speculatively below; only a
+	// warning-free evaluation may replace them with a literal.
+	if f.IsVolatile() {
 		return expr
 	}
 	if IsLegacyTimeAssignmentOutsideInternalRange(fn) {

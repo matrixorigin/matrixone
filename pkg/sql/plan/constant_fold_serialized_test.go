@@ -43,6 +43,7 @@ func TestConstantFoldBitCountDiagnostics(t *testing.T) {
 		for _, value := range []string{"3 ", "3x"} {
 			t.Run(folder+"/"+value, func(t *testing.T) {
 				proc := testutil.NewProcess(t)
+				t.Cleanup(proc.Free)
 				sink := &process.WarningProbe{}
 				proc.WarningSink = sink
 				expr, err := BindFuncExprImplByPlanExpr(proc.Ctx, "bit_count", []*Expr{makePlan2StringConstExprWithType(value)})
@@ -58,7 +59,12 @@ func TestConstantFoldBitCountDiagnostics(t *testing.T) {
 				}
 				require.False(t, sink.Warned(), "speculation must not publish statement warnings")
 				require.Same(t, sink, proc.WarningSink)
-				require.NotNil(t, folded.GetF(), "row-scoped diagnostics must remain runtime-evaluated")
+				if value == "3 " {
+					require.NotNil(t, folded.GetLit(), "warning-free constants must remain usable by literal-only consumers")
+					require.Equal(t, uint64(2), folded.GetLit().GetU64Val())
+				} else {
+					require.NotNil(t, folded.GetF(), "warningful expressions must remain runtime-evaluated")
+				}
 
 				result, free, err := colexec.GetReadonlyResultFromExpression(proc, folded, []*batch.Batch{batch.EmptyForConstFoldBatch})
 				require.NoError(t, err)

@@ -730,7 +730,10 @@ func maxByTypeCheck(_ []overload, inputs []types.Type) checkResult {
 			}
 		}
 	}
+	// Only MIN/MAX have typed JSON key comparison. MAX_BY may return JSON,
+	// but its ordering and tie keys must not reach the bytewise fallback.
 	if !typeInList(casts[0].Oid, AnyValueSupportedTypes) ||
+		casts[1].Oid == types.T_json || casts[2].Oid == types.T_json ||
 		!typeInList(casts[1].Oid, MinMaxSupportedTypes) ||
 		!typeInList(casts[2].Oid, MinMaxSupportedTypes) {
 		return newCheckResultWithFailure(failedAggParametersWrong)
