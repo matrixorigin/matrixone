@@ -82,6 +82,7 @@ func m0ColumnDefinition(
 				return moerr.NewInternalErrorNoCtxf("M0: appended column must be nullable")
 			}
 		case *tree.AttributeComment:
+			return moerr.NewInternalErrorNoCtxf("M0: appended column comments require COPY")
 		case *tree.AttributeDefault:
 			// The bound plan below accepts only a NULL literal or no expression.
 		case *tree.AttributeCharset, *tree.AttributeCollate:
@@ -95,7 +96,7 @@ func m0ColumnDefinition(
 func validateM0BoundAddColumn(col *plan.ColDef) error {
 	if col == nil || col.Default == nil || !col.Default.NullAbility || col.Typ.NotNullable ||
 		col.Default.OriginString != "" || col.GeneratedCol != nil || col.OnUpdate != nil ||
-		col.Primary || col.Hidden || col.ClusterBy || col.Typ.AutoIncr {
+		col.Primary || col.Hidden || col.ClusterBy || col.Typ.AutoIncr || col.Comment != "" {
 		return moerr.NewInternalErrorNoCtxf("M0: appended column requires nullable/no-backfill semantics")
 	}
 	if col.Typ.Id == int32(types.T_enum) || len(col.Typ.Enumvalues) > 0 {

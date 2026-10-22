@@ -56,15 +56,15 @@ func TestM0AlterRefreshesSameRelationDefinitionCache(t *testing.T) {
 	}
 	require.Len(t, table.GetTableDef(context.Background()).Cols, 3)
 
-	table.defs[2].(*engine.AttributeDef).Attr.ID = 4
-	table.defs[2].(*engine.AttributeDef).Attr.Seqnum = 3
-	table.defs = append(table.defs[:2],
-		&engine.AttributeDef{Attr: engine.Attribute{
-			Name: "added", ID: 3, Type: types.T_int32.ToType(),
-			Seqnum: 2, Default: nullable,
-		}},
-		table.defs[2],
-	)
+	oldDefs := table.defs
+	var err error
+	table.defs, err = m0AppendCNDefs(oldDefs, &plan.ColDef{
+		Name: "added", ColId: 3, Typ: plan.Type{Id: int32(types.T_int32)},
+		Seqnum: 2, Default: nullable,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), oldDefs[2].(*engine.AttributeDef).Attr.ID)
+	require.Equal(t, uint16(2), oldDefs[2].(*engine.AttributeDef).Attr.Seqnum)
 	table.version = 1
 	table.RefeshTableDef(context.Background())
 	table.refreshM0DerivedIndices(context.Background())
@@ -78,4 +78,20 @@ func TestM0AlterRefreshesSameRelationDefinitionCache(t *testing.T) {
 	require.Equal(t, uint32(3), def.Cols[3].Seqnum)
 	require.Equal(t, 0, table.primaryIdx)
 	require.Equal(t, 0, table.primarySeqnum)
+
+	columns, err := catalog.GenColumnsFromDefs(0, table.tableName, table.db.databaseName,
+		table.tableId, table.db.databaseId, table.defs)
+	require.NoError(t, err)
+	require.Len(t, columns, len(def.Cols))
+	for i, column := range columns {
+		require.Equal(t, column.Name, def.Cols[i].Name)
+		require.Equal(t, uint64(column.Num), def.Cols[i].ColId)
+		require.Equal(t, uint32(column.Seqnum), def.Cols[i].Seqnum)
+	}
+
+	table.defs = oldDefs
+	table.version = 0
+	table.RefeshTableDef(context.Background())
+	require.Len(t, table.GetTableDef(context.Background()).Cols, 3)
+	require.Equal(t, uint64(3), table.GetTableDef(context.Background()).Cols[2].ColId)
 }

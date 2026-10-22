@@ -153,7 +153,8 @@ func buildM0CNAddColumn(
 	add := req.GetAddColumn()
 	if add == nil || add.Column == nil || add.Column.Hidden || add.Column.Primary ||
 		add.Column.Default == nil || !add.Column.Default.NullAbility || add.Column.Typ.NotNullable ||
-		add.Column.GeneratedCol != nil || add.Column.OnUpdate != nil || add.Column.Typ.AutoIncr {
+		add.Column.GeneratedCol != nil || add.Column.OnUpdate != nil || add.Column.Typ.AutoIncr ||
+		add.Column.Comment != "" {
 		return nil, moerr.NewInternalErrorNoCtxf("M0: unsupported appended column")
 	}
 	if add.Column.Typ.Id == int32(types.T_enum) || len(add.Column.Typ.Enumvalues) > 0 {
@@ -240,10 +241,13 @@ func buildM0CNAddColumn(
 		zap.Uint32("source_version", tbl.version),
 		zap.Uint32("new_seqnum", next),
 	)
+	return m0AppendCNDefs(tbl.defs, newCol)
+}
 
-	defs := make([]engine.TableDef, 0, len(tbl.defs)+1)
+func m0AppendCNDefs(oldDefs []engine.TableDef, newCol *plan.ColDef) ([]engine.TableDef, error) {
+	defs := make([]engine.TableDef, 0, len(oldDefs)+1)
 	inserted := false
-	for _, def := range tbl.defs {
+	for _, def := range oldDefs {
 		if attr, ok := def.(*engine.AttributeDef); ok && objectio.IsPhysicalAddr(attr.Attr.Name) {
 			defs = append(defs, &engine.AttributeDef{Attr: engine.Attribute{
 				Name:          newCol.Name,
@@ -251,10 +255,17 @@ func buildM0CNAddColumn(
 				Type:          types.MustTypeFromPlan(newCol.Typ),
 				Default:       newCol.Default,
 				IsHidden:      false,
-				Seqnum:        uint16(next),
+				Seqnum:        uint16(newCol.Seqnum),
 				AutoIncrement: false,
 			}})
 			inserted = true
+			// The old definition remains the rollback owner. Catalog regeneration
+			// assigns this same trailing identity to its newly generated rowid.
+			rowid := *attr
+			rowid.Attr.ID = newCol.ColId + 1
+			rowid.Attr.Seqnum = uint16(newCol.Seqnum + 1)
+			defs = append(defs, &rowid)
+			continue
 		}
 		defs = append(defs, def)
 	}

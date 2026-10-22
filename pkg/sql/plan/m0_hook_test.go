@@ -96,6 +96,9 @@ func TestM0PlanAdmissionRejectsIdentitiesAndBackfill(t *testing.T) {
 	setColumn := DeepCopyTableDef(table, true).Cols[7]
 	setColumn.Typ.Enumvalues = "a,b,"
 	require.Error(t, validateM0BoundAddColumn(setColumn))
+	commentColumn := DeepCopyTableDef(table, true).Cols[7]
+	commentColumn.Comment = "kept"
+	require.Error(t, validateM0BoundAddColumn(commentColumn))
 
 	inboundFK := DeepCopyTableDef(table, true)
 	inboundFK.RefChildTbls = []uint64{42}
@@ -135,6 +138,10 @@ func TestM0FormalAddBuildsInplaceAddColumnAction(t *testing.T) {
 	require.NotNil(t, add)
 	require.Equal(t, "credit_lim_t0_s0", add.Name)
 	require.Equal(t, int32(-1), add.Pos)
+
+	_, err = buildSingleStmt(mock, t,
+		"alter table constraint_test.customer add column commented int comment 'kept'")
+	require.ErrorContains(t, err, "only supports metadata-only ADD COLUMN")
 
 	_, err = buildSingleStmt(
 		mock,

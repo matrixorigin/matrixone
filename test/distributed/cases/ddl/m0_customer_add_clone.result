@@ -71,6 +71,15 @@ select count(c.c_id) as count_outer_nullable from m0_customer_parent.customer p 
 1
 select c_id from customer where c_id<0;
 ➤ c_id[4,32,0]  𝄀
+create table comment_control(a int, b int, primary key(a,b));
+insert into comment_control values (1,2);
+alter table comment_control add column x int comment 'kept';
+select count(*) as kept_comments from information_schema.columns where table_schema='m0_customer_child' and table_name='comment_control' and column_name='x' and column_comment='kept';
+➤ kept_comments[-5,64,0]  𝄀
+1
+select count(*) as comment_control_rows from comment_control where a=1 and b=2 and x is null;
+➤ comment_control_rows[-5,64,0]  𝄀
+1
 drop snapshot m0_customer_snapshot;
 drop database m0_customer_child;
 drop database m0_customer_parent;

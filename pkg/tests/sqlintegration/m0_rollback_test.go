@@ -26,8 +26,13 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
+	"github.com/matrixorigin/matrixone/pkg/txn/client"
+	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
 )
@@ -223,9 +228,15 @@ func m0RunRollbackAt(
 		db, table := m0PrepareRollbackTable(t, ctx, cn, schema)
 		defer func() { _ = db.Close() }()
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
+		var committedVersion uint32
+		if point == "fj/m0/alter/tn-after-apply" {
+			m0Exec(t, ctx, db, "alter table "+table+" add column first_committed int")
+			committedVersion = 1
+		}
 		observer := openM0SQL(t, cn)
 		defer func() { _ = observer.Close() }()
 		t.Cleanup(func() { m0RemoveFaultPointQuiet(context.Background(), db, point) })
+		defer m0RemoveFaultPointQuiet(context.Background(), observer, point)
 
 		beforeSchema := m0SchemaProof(t, ctx, observer, schema, "customer")
 		beforeObjects := m0ObjectFingerprints(t, ctx, observer, table)
@@ -249,9 +260,13 @@ func m0RunRollbackAt(
 
 		m0Exec(t, ctx, fresh, "alter table "+table+" add column recovered int")
 		_, version := m0TableGeneration(t, ctx, fresh, schema, "customer")
-		require.Equal(t, uint32(1), version)
+		require.Equal(t, committedVersion+1, version)
 		require.Equal(t, 3, m0Count(t, ctx, fresh, "select count(*) from "+table+" where recovered is null"))
 		require.Equal(t, 3, m0Count(t, ctx, fresh, "select count(*) from "+table))
+		m0Exec(t, ctx, fresh, "insert into "+table+"(c_id,c_d_id,c_w_id) values(4,4,4)")
+		m0Exec(t, ctx, fresh, "update "+table+" set recovered=c_id")
+		m0Exec(t, ctx, fresh, "select mo_ctl('dn','flush','"+table+"')")
+		require.Equal(t, 4, m0Count(t, ctx, fresh, "select count(*) from "+table+" where recovered=c_id"))
 	})
 }
 
@@ -260,7 +275,12 @@ func TestM0AlterRollbackAtPrivateDefs(t *testing.T) {
 }
 
 func TestM0AlterRollbackAtTNAlter(t *testing.T) {
+	// This point is CN workspace registration, not TN schema application.
 	m0RunRollbackAt(t, nil, "m0_rollback_tn", disttae.M0FaultAfterTNAlter)
+}
+
+func TestM0AlterRollbackAtTNApplied(t *testing.T) {
+	m0RunRollbackAt(t, nil, "m0_rollback_tn_applied", "fj/m0/alter/tn-after-apply")
 }
 
 func TestM0AlterRollbackAtCatalogDelete(t *testing.T) {
@@ -324,35 +344,94 @@ func TestM0SecondAlterFailureKeepsFirstCommit(t *testing.T) {
 }
 
 func TestM0AlterCancelWindow(t *testing.T) {
+	m0RunAlterCancelWindow(t, disttae.M0FaultAfterTNAlter, "m0_cancel_window", false)
+}
+
+func TestM0AlterDeadlineTNAppliedWindow(t *testing.T) {
+	// MySQL client deadlines are socket-local. Give the CN SQL executor a real
+	// server-side deadline, which MORPC propagates as remaining timeout to TN.
+	m0RunAlterCancelWindow(t, "fj/m0/alter/tn-after-apply", "m0_cancel_tn_applied", true)
+}
+
+func m0RunAlterCancelWindow(t *testing.T, waitName, schema string, deadline bool) {
+	t.Helper()
 	runSQLIntegration(t, func(cluster embed.Cluster) {
 		ctx, cancel := context.WithTimeout(t.Context(), 4*time.Minute)
 		defer cancel()
 		cn, err := cluster.GetCNService(0)
 		require.NoError(t, err)
-		const schema = "m0_cancel_window"
 		db, table := m0PrepareRollbackTable(t, ctx, cn, schema)
+		defer func() { _ = db.Close() }()
 		defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
 		fresh := openM0SQL(t, cn)
 		defer func() { _ = fresh.Close() }()
-		waitName := disttae.M0FaultAfterTNAlter
 		getter := waitName + "/waiters"
 		t.Cleanup(func() {
 			m0RemoveFaultPointQuiet(context.Background(), fresh, getter)
 			m0RemoveFaultPointQuiet(context.Background(), fresh, waitName)
 		})
+		defer func() {
+			m0RemoveFaultPointQuiet(context.Background(), fresh, getter)
+			m0RemoveFaultPointQuiet(context.Background(), fresh, waitName)
+		}()
 		before := m0SchemaProof(t, ctx, fresh, schema, "customer")
 
 		m0AddFaultPoint(t, ctx, fresh, waitName, "wait", "")
 		m0AddFaultPoint(t, ctx, fresh, getter, "getwaiters", waitName)
 		alterCtx, alterCancel := context.WithCancel(ctx)
+		if deadline {
+			alterCancel()
+			alterCtx, alterCancel = context.WithTimeout(ctx, 5*time.Second)
+		}
+		defer alterCancel()
 		done := make(chan error, 1)
-		go func() {
-			_, execErr := db.ExecContext(alterCtx, "alter table "+table+" add column canceled int")
-			done <- execErr
+		if deadline {
+			service := cn.RawService().(cnservice.Service)
+			alterCtx = defines.AttachAccountId(alterCtx, 0)
+			op, createErr := service.GetTxnClient().New(alterCtx, timestamp.Timestamp{},
+				client.WithBeginAutoCommit(false, true), client.WithTxnMode(txn.TxnMode_Pessimistic),
+				client.WithTxnIsolation(txn.TxnIsolation_RC))
+			require.NoError(t, createErr)
+			defer func() {
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cleanupCancel()
+				_ = op.Rollback(cleanupCtx)
+			}()
+			require.NoError(t, service.GetEngine().New(alterCtx, op))
+			go func() {
+				result, execErr := service.GetSQLExecutor().Exec(alterCtx,
+					"alter table "+table+" add column canceled int", executor.Options{}.WithTxn(op))
+				if execErr == nil {
+					result.Close()
+					execErr = op.Commit(alterCtx)
+				}
+				done <- execErr
+			}()
+		} else {
+			go func() {
+				_, execErr := db.ExecContext(alterCtx, "alter table "+table+" add column canceled int")
+				done <- execErr
+			}()
+		}
+		finished := false
+		defer func() {
+			alterCancel()
+			m0RemoveFaultPointQuiet(context.Background(), fresh, waitName)
+			if !finished {
+				select {
+				case <-done:
+				case <-time.After(10 * time.Second):
+					t.Error("ALTER cleanup failed to join")
+				}
+			}
 		}()
 		m0WaitForFaultWaiter(t, ctx, fresh, getter, 1)
-		alterCancel()
-		require.Error(t, m0WaitForError(t, done))
+		if !deadline {
+			alterCancel()
+		}
+		execErr := m0WaitForError(t, done)
+		finished = true
+		require.Error(t, execErr)
 		m0WaitForFaultWaiter(t, ctx, fresh, getter, 0)
 		m0RemoveFaultPoint(t, ctx, fresh, getter)
 		m0RemoveFaultPoint(t, ctx, fresh, waitName)
