@@ -81,6 +81,14 @@ type CoveragePlugin interface {
 	Coverage() coverage.Hooks
 }
 
+// PreparedPlanCoveragePlugin is implemented by algorithms whose index search
+// plan depends on coverage state that can change without a schema version bump.
+// Options let an algorithm distinguish search modes with different policies.
+type PreparedPlanCoveragePlugin interface {
+	AlgoPlugin
+	PreparedPlanDependsOnIndexCoverage(options []byte) bool
+}
+
 var (
 	registryMu sync.RWMutex
 	registry   = map[string]AlgoPlugin{}
@@ -129,6 +137,18 @@ func CoversSnapshot(ctx context.Context, algo string, req coverage.Request) (boo
 		return false, types.TS{}, err
 	}
 	return covered, buildTS, nil
+}
+
+// PreparedPlanDependsOnIndexCoverage asks the registered algorithm whether an
+// INDEX_SEARCH_SCAN must be rebuilt at each EXECUTE. Unregistered algorithms
+// and plugins without this capability leave their prepared plans reusable.
+func PreparedPlanDependsOnIndexCoverage(algo string, options []byte) bool {
+	p, ok := Get(algo)
+	if !ok {
+		return false
+	}
+	policy, ok := p.(PreparedPlanCoveragePlugin)
+	return ok && policy.PreparedPlanDependsOnIndexCoverage(options)
 }
 
 // All returns every registered plugin. Useful for catalog enumeration.
