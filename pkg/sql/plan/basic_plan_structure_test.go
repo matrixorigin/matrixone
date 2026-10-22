@@ -118,9 +118,19 @@ func TestSelectPlanStructure(t *testing.T) {
 				for _, col := range scans[0].TableDef.Cols {
 					columns[col.Name] = col.Typ.Id
 				}
-				require.Equal(t, map[string]int32{
+				wantColumns := map[string]int32{
 					"l_orderkey": int32(types.T_int64), "l_extendedprice": int32(types.T_decimal64),
-				}, columns)
+				}
+				require.Equal(t, wantColumns, columns)
+				require.Len(t, scans[0].ProjectList, 2)
+				projection := make(map[string]int32, len(scans[0].ProjectList))
+				for _, expr := range scans[0].ProjectList {
+					require.NotNil(t, expr)
+					require.NotNil(t, expr.GetCol())
+					name := expr.GetCol().Name
+					projection[name[strings.LastIndexByte(name, '.')+1:]] = expr.Typ.Id
+				}
+				require.Equal(t, wantColumns, projection)
 			case "literal":
 				require.Len(t, root.ProjectList, 2)
 				require.NotNil(t, root.ProjectList[1].GetLit())
