@@ -115,6 +115,199 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 	return false
 }
 
+// provenPureValueFunctions lists every SQL builtin registration that is
+// positively proven to evaluate as a pure value transformation: an
+// in-process computation over its own argument vectors with no effects
+// outside the expression tree - no external service, no process-global or
+// session state, no catalog access, no randomness. The guarded fold of a
+// metadata-only publication-binding probe admits a nested function call
+// only through this list, never through the absence of other flags:
+// llm_chat is registered STRICT without the internal-machinery class bit
+// and without a volatile or real-time-related overload, and a review
+// counterexample showed those negative predicates alone admitting it and
+// its executor issuing the HTTP request during publication and
+// subscription validation. Add a name only after auditing every overload
+// the registration carries; proven_pure_foldable_test.go pins each listed
+// name to a non-internal class and the registry-scan admission rule, and every
+// registration outside this set keeps its rejection whatever its flags
+// declare. The round-14 follow-up review completed the classification for
+// ordinary SQL constant expressions: every writable builtin whose clean
+// overloads are a deterministic in-process value transformation of their own
+// argument vectors is listed, so a valid stored definition folds in the
+// guarded probe exactly as ordinary binding folds it. The audit keeps OUT,
+// deliberately and with its names pinned by the same test: the
+// environment, session and build readers (charset, collation, version,
+// current_* identity and validate_password_strength), the clock- and
+// zone-dependent transforms whose result varies with the session time
+// zone rather than the operands (from_unixtime, convert_tz), the
+// randomness sources (random_bytes), the program interpreters and service
+// callers (llm_chat, llm_embedding, starlark, try_starlark, jq, try_jq),
+// the fulltext match machinery that reads query and index context,
+// aggregates and window functions, and plan-internal helpers a persisted
+// definition never names (serial*, physical_*, to_interval*,
+// __mo_json_* and the range-prefix predicates).
+var provenPureValueFunctions = map[string]struct{}{
+	// Pure boolean comparison, logic, truth-value and membership predicates
+	// of operand values.
+	"=": {}, "<=>": {}, ">": {}, ">=": {}, "<": {}, "<=": {}, "<>": {}, "!=": {},
+	"and": {}, "or": {}, "xor": {}, "not": {},
+	"is": {}, "isnot": {}, "isnotnull": {}, "istrue": {}, "isnottrue": {},
+	"isfalse": {}, "isnotfalse": {},
+	"between": {}, "in": {}, "not_in": {}, "like": {}, "ilike": {},
+	// Pure bitwise value operators.
+	"&": {}, "|": {}, "^": {}, "<<": {}, ">>": {},
+	// Pure numeric and arithmetic value transforms.
+	"abs": {}, "acos": {}, "asin": {}, "atan": {}, "atan2": {}, "bit_count": {},
+	"ceil": {}, "ceiling": {}, "cos": {}, "cot": {}, "degrees": {}, "exp": {},
+	"floor": {}, "ln": {}, "log": {}, "log2": {}, "log10": {}, "mod": {},
+	"pi": {}, "pow": {}, "power": {}, "radians": {}, "round": {}, "sign": {},
+	"sin": {}, "sqrt": {}, "tan": {}, "truncate": {},
+	"sinh": {}, "cosh": {}, "tanh": {}, "asinh": {}, "acosh": {}, "atanh": {},
+	"format_bytes": {}, "format_pico_time": {},
+	// Pure textual value transforms of constant operands.
+	"ascii": {}, "bin": {}, "bit_length": {}, "char_length": {}, "character_length": {},
+	"concat": {}, "concat_ws": {}, "conv": {}, "crc32": {}, "elt": {}, "export_set": {},
+	"field": {}, "find_in_set": {}, "hex": {}, "left": {}, "length": {}, "locate": {},
+	"lower": {}, "lpad": {}, "ltrim": {}, "make_set": {}, "md5": {}, "mid": {},
+	"oct": {}, "octet_length": {}, "ord": {}, "position": {}, "quote": {},
+	"repeat": {}, "replace": {}, "reverse": {}, "right": {}, "rpad": {}, "rtrim": {},
+	"sha1": {}, "sha2": {}, "soundex": {}, "space": {}, "strcmp": {}, "substr": {},
+	"substring": {}, "substring_index": {}, "trim": {}, "unhex": {}, "upper": {},
+	"binary": {}, "char": {}, "empty": {}, "endswith": {}, "startswith": {},
+	"insert": {}, "instr": {}, "reg_match": {}, "not_reg_match": {},
+	"regexp_instr": {}, "regexp_like": {}, "regexp_replace": {}, "regexp_substr": {},
+	"split_part": {}, "compress": {}, "encode": {}, "decode": {},
+	"to_base64": {}, "from_base64": {},
+	// Pure date and time value transforms of constant operands: coercions of
+	// date parts, calendar parts, pure arithmetic and formatting keyed only
+	// by their own arguments.
+	"addtime": {}, "subtime": {},
+	"date": {}, "time": {}, "timestamp": {},
+	"year": {}, "month": {}, "day": {}, "hour": {}, "minute": {}, "second": {},
+	"microsecond": {}, "quarter": {}, "weekofyear": {}, "weekday": {}, "yearweek": {},
+	"dayname": {}, "monthname": {}, "last_day": {}, "extract": {},
+	"date_format": {}, "time_format": {}, "date_trunc": {}, "get_format": {},
+	"dayofmonth": {}, "dayofweek": {}, "dayofyear": {},
+	"to_days": {}, "to_seconds": {}, "from_days": {},
+	"sec_to_time": {}, "time_to_sec": {}, "makedate": {}, "maketime": {},
+	"period_add": {}, "period_diff": {}, "timediff": {}, "timestampdiff": {},
+	"timestampadd": {}, "date_add": {}, "date_sub": {}, "interval": {},
+	// Pure JSON value-tree transforms of constant operands: readers,
+	// extractors, validators and tree editors that never leave the process
+	// and key only on their own argument values.
+	"json_extract": {}, "json_extract_string": {}, "json_extract_float64": {},
+	"json_quote": {}, "json_unquote": {}, "json_row": {}, "json_value": {},
+	"json_length": {}, "json_depth": {}, "json_type": {}, "json_valid": {},
+	"json_keys": {}, "json_pretty": {}, "json_contains": {}, "json_contains_path": {},
+	"json_overlaps": {}, "json_storage_size": {}, "json_storage_free": {},
+	"json_schema_valid": {}, "json_schema_validation_report": {},
+	"json_array": {}, "json_object": {}, "json_set": {}, "json_insert": {},
+	"json_replace": {}, "json_remove": {}, "json_merge": {}, "json_merge_preserve": {},
+	"json_merge_patch": {}, "json_array_append": {}, "json_array_insert": {},
+	"member of": {},
+	// Pure UUID and network-address value transforms.
+	"is_uuid": {}, "uuid_to_bin": {}, "bin_to_uuid": {},
+	"uuid_extract_version": {}, "uuid_extract_timestamp": {},
+	"inet_aton": {}, "inet_ntoa": {}, "inet6_aton": {}, "inet6_ntoa": {},
+	"is_ipv4": {}, "is_ipv6": {}, "is_ipv4_compat": {}, "is_ipv4_mapped": {},
+	// Pure geometry value functions of their own arguments: constructors,
+	// readers, measurements and predicates over constant geometry values.
+	"st_astext": {}, "st_geomfromtext": {}, "st_asbinary": {},
+	"st_geometrytype": {}, "st_x": {}, "st_y": {},
+	"st_numgeometries": {}, "st_geometryn": {}, "st_isempty": {},
+	"st_distance": {}, "st_srid": {}, "st_length": {}, "st_area": {},
+	"st_contains": {}, "st_within": {}, "st_startpoint": {}, "st_endpoint": {},
+	"st_pointn": {}, "st_exteriorring": {}, "st_numinteriorring": {},
+	"st_interiorringn": {}, "st_numpoints": {}, "st_isclosed": {},
+	"st_iscollection": {}, "st_dimension": {}, "st_issimple": {}, "st_isring": {},
+	"st_envelope": {}, "st_centroid": {}, "st_boundary": {}, "st_isvalid": {},
+	"st_pointonsurface": {}, "st_intersects": {}, "st_disjoint": {},
+	"st_touches": {}, "st_crosses": {}, "st_overlaps": {}, "st_equals": {},
+	"st_covers": {}, "st_coveredby": {}, "st_geomfromwkb": {},
+	"st_pointfromtext": {}, "st_linefromtext": {}, "st_polyfromtext": {},
+	"st_mpointfromtext": {}, "st_mlinefromtext": {}, "st_mpolyfromtext": {},
+	"st_geomcollfromtext": {}, "st_pointfromwkb": {}, "st_linefromwkb": {},
+	"st_polyfromwkb": {}, "st_mpointfromwkb": {}, "st_mlinefromwkb": {},
+	"st_mpolyfromwkb": {}, "st_geomcollfromwkb": {},
+	"st_longitude": {}, "st_latitude": {}, "st_swapxy": {}, "st_validate": {},
+	"st_makeenvelope": {}, "st_distance_sphere": {}, "st_geohash": {},
+	"st_latfromgeohash": {}, "st_longfromgeohash": {}, "st_pointfromgeohash": {},
+	"mbrcontains": {}, "mbrcoveredby": {}, "mbrcovers": {}, "mbrdisjoint": {},
+	"mbrequals": {}, "mbrintersects": {}, "mbroverlaps": {}, "mbrtouches": {},
+	"mbrwithin": {}, "st_asgeojson": {}, "st_geomfromgeojson": {},
+	"st_convexhull": {}, "st_simplify": {}, "st_collect": {},
+	"st_lineinterpolatepoint": {}, "st_lineinterpolatepoints": {},
+	"st_pointatdistance": {}, "st_frechetdistance": {}, "st_hausdorffdistance": {},
+	"st_union": {}, "st_intersection": {}, "st_difference": {},
+	"st_symdifference": {}, "st_buffer": {}, "point": {}, "st_point32": {},
+	// Pure bitmap, hyperloglog, vector and geo-cell scalar value transforms.
+	"hll_cardinality": {}, "bitmap_bit_position": {}, "bitmap_bucket_number": {},
+	"bitmap_count": {},
+	"summation":    {}, "l1_norm": {}, "l2_norm": {}, "inner_product": {},
+	"cosine_similarity": {}, "vector_dims": {}, "normalize_l2": {},
+	"l2_distance": {}, "l2_distance_sq": {}, "cosine_distance": {}, "l1_distance": {},
+	"l2_distance_xc": {}, "l2_distance_sq_xc": {},
+	"vecf32_from_base64": {}, "vecf64_from_base64": {}, "vecbf16_from_base64": {},
+	"vecf16_from_base64": {}, "vecint8_from_base64": {}, "vecuint8_from_base64": {},
+	"s2_cellid": {}, "s2_cellid_level": {}, "s2_cellid_center": {},
+	"s2_cellid_area": {}, "s2_cellid_parent": {},
+	"s2_cellid_edgeneighbors": {}, "s2_cellid_edgeneighbours": {},
+	"s2_cellid_allneighbors": {}, "s2_cellid_allneighbours": {},
+	"s2_cellid_areneighbors": {}, "s2_cellid_areneighbours": {},
+	"h3_h3index": {}, "h3_h3index_resolution": {}, "h3_h3index_center": {},
+	"h3_h3index_boundary": {}, "h3_h3index_parent": {},
+	"h3_h3index_neighbors": {}, "h3_h3index_neighbours": {},
+	"h3_h3index_areneighbors": {}, "h3_h3index_areneighbours": {},
+	// Pure constant branch selection and reduction.
+	"case": {}, "coalesce": {}, "greatest": {}, "iff": {}, "ifnull": {}, "least": {},
+	"name_const": {},
+}
+
+// provenPureValueFunctionIds is the resolved id view of
+// provenPureValueFunctions. Every listed name must resolve at package
+// init: a silent drop would silently weaken the guarded fold's gate.
+var provenPureValueFunctionIds map[int32]struct{}
+
+func init() {
+	provenPureValueFunctionIds = make(map[int32]struct{}, len(provenPureValueFunctions))
+	for name := range provenPureValueFunctions {
+		fid, ok := functionIdRegister[name]
+		if !ok {
+			panic(fmt.Sprintf("proven pure builtin %q is not a registered function", name))
+		}
+		provenPureValueFunctionIds[fid] = struct{}{}
+	}
+}
+
+// GetFunctionIsProvenPureFoldableById reports, for the resolved overload
+// overloadID, whether the guarded fold of a metadata-only binding probe
+// may evaluate it for a constant tree: the overload's function belongs to
+// the curated provenPureValueFunctions set, the internal-machinery class
+// bit never qualifies (plain or combined with other class flags -
+// python_user_defined_function is INTERNAL|STRICT and carries no volatile
+// flag, so the rejection must test the bit through testFlag, never compare
+// the whole word, or the caller's guarded fold would execute it right into
+// UdfService.Run), and the resolved overload carries neither the volatile
+// (CannotFold) nor the real-time-related flag. Membership is the purity
+// proof: absence of the excluded flags establishes nothing - llm_chat
+// carries none of them and its executor still performs an HTTP request -
+// so a registration outside the curated set is rejected and the probe
+// keeps that node un-evaluated.
+func GetFunctionIsProvenPureFoldableById(overloadID int64) bool {
+	fid, oIndex := DecodeOverloadID(overloadID)
+	if !validFunctionOverloadID(fid, oIndex) {
+		return false
+	}
+	if _, proven := provenPureValueFunctionIds[fid]; !proven {
+		return false
+	}
+	if allSupportedFunctions[fid].testFlag(plan.Function_INTERNAL) {
+		return false
+	}
+	ov := allSupportedFunctions[fid].Overloads[oIndex]
+	return !ov.CannotFold() && !ov.IsRealTimeRelated()
+}
+
 func GetFunctionIsWinOrderFunById(overloadID int64) bool {
 	fid, oIndex := DecodeOverloadID(overloadID)
 	if !validFunctionOverloadID(fid, oIndex) {
