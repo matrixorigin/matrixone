@@ -65,7 +65,7 @@ func (r *delayedPublication) Read(p []byte) (int, error) {
 }
 
 func TestPublicationSurvivesAllocatorRestart(t *testing.T) {
-	runLockServiceTestsWithLevel(t, zapcore.ErrorLevel, []string{"s1", "s2"}, time.Hour, func(alloc *lockTableAllocator, services []*service) {
+	runLockServiceRestartTests(t, zapcore.ErrorLevel, []string{"s1", "s2"}, time.Hour, func(alloc *lockTableAllocator, services []*service, restart func(...AllocatorOption) (*lockTableAllocator, error)) {
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
 		a, b := services[0], services[1]
@@ -102,23 +102,20 @@ func TestPublicationSurvivesAllocatorRestart(t *testing.T) {
 		manifestB := manifestFor("source_b", "objects/B", payloads["objects/B"])
 		reader := &delayedPublication{Reader: bytes.NewReader(manifestA), entered: make(chan struct{}), release: make(chan struct{})}
 		var release sync.Once
-		defer release.Do(func() { close(reader.release) })
-		done := make(chan error, 1)
+		done := make(chan struct{})
+		var writeErr error
+		defer joinDelayedPublication(t, &release, reader.release, cancel, done)
 		go func() {
-			done <- fileservice.WriteExclusive(ctx, fs, fileservice.IOVector{FilePath: "manifest.json", Entries: []fileservice.IOEntry{{ReaderForWrite: reader, Size: int64(len(manifestA))}}})
+			defer close(done)
+			writeErr = fileservice.WriteExclusive(ctx, fs, fileservice.IOVector{FilePath: "manifest.json", Entries: []fileservice.IOEntry{{ReaderForWrite: reader, Size: int64(len(manifestA))}}})
 		}()
 		select {
 		case <-reader.entered:
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
-		// Lose the allocator's volatile bindings while its RPC workers are live.
-		// The process epoch is immutable and need not change to make the old
-		// binding stale once the other service takes ownership.
-		alloc.mu.Lock()
-		alloc.mu.services = make(map[string]*serviceBinds)
-		alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-		alloc.mu.Unlock()
+		alloc, err = restart()
+		require.NoError(t, err)
 		_, err = b.Lock(ctx, table, newTestRows(1), newTestTxnID(2), newTestRowExclusiveOptions())
 		require.NoError(t, err)
 		require.NoError(t, fileservice.WriteExclusive(ctx, fs, fileservice.IOVector{
@@ -134,12 +131,17 @@ func TestPublicationSurvivesAllocatorRestart(t *testing.T) {
 		require.Empty(t, invalid)
 		require.NoError(t, b.Unlock(ctx, newTestTxnID(2), timestamp.Timestamp{}))
 		release.Do(func() { close(reader.release) })
-		require.True(t, moerr.IsMoErrCode(<-done, moerr.ErrFileAlreadyExists))
+		select {
+		case <-done:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		require.True(t, moerr.IsMoErrCode(writeErr, moerr.ErrFileAlreadyExists))
 		manifestVector := &fileservice.IOVector{FilePath: "manifest.json", Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(manifestB))}}}
 		require.NoError(t, fs.Read(ctx, manifestVector))
+		defer manifestVector.Release()
 		var published publicationManifest
 		require.NoError(t, json.Unmarshal(manifestVector.Entries[0].Data, &published))
-		manifestVector.Release()
 		require.Equal(t, "source_b", published.SourceTable)
 		require.Len(t, published.Relations, 1)
 		require.Len(t, published.Relations[0].Objects, 1)
@@ -147,8 +149,8 @@ func TestPublicationSurvivesAllocatorRestart(t *testing.T) {
 		require.Equal(t, "objects/B", objectPath)
 		objectVector := &fileservice.IOVector{FilePath: objectPath, Entries: []fileservice.IOEntry{{Offset: 0, Size: int64(len(payloads[objectPath]))}}}
 		require.NoError(t, fs.Read(ctx, objectVector))
+		defer objectVector.Release()
 		require.Equal(t, payloads[objectPath], objectVector.Entries[0].Data)
-		objectVector.Release()
 		_, err = fs.StatFile(ctx, "READY")
 		require.NoError(t, err)
 		invalid, err = alloc.Valid(a.serviceID, newTestTxnID(1), []pb.LockTable{oldBind})
@@ -156,4 +158,49 @@ func TestPublicationSurvivesAllocatorRestart(t *testing.T) {
 		require.Equal(t, []uint64{table}, invalid)
 		require.NoError(t, a.Unlock(ctx, newTestTxnID(1), timestamp.Timestamp{}))
 	}, nil)
+}
+
+// Always unblock the reader before joining: context cancellation cannot interrupt
+// a ReaderForWrite that is already inside Read.
+func joinDelayedPublication(t *testing.T, release *sync.Once, barrier chan struct{}, cancel context.CancelFunc, done <-chan struct{}) {
+	t.Helper()
+	release.Do(func() { close(barrier) })
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Error("delayed publication did not exit during cleanup")
+	}
+}
+
+func TestDelayedPublicationCleanupAfterEarlyExit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	fs, err := fileservice.NewLocalETLFS("etl", t.TempDir())
+	require.NoError(t, err)
+	defer fs.Close(ctx)
+	reader := &delayedPublication{Reader: bytes.NewReader([]byte("data")), entered: make(chan struct{}), release: make(chan struct{})}
+	var release sync.Once
+	done := make(chan struct{})
+	func() {
+		defer joinDelayedPublication(t, &release, reader.release, cancel, done)
+		go func() {
+			defer close(done)
+			_ = fileservice.WriteExclusive(ctx, fs, fileservice.IOVector{
+				FilePath: "manifest.json", Entries: []fileservice.IOEntry{{ReaderForWrite: reader, Size: 4}},
+			})
+		}()
+		select {
+		case <-reader.entered:
+		case <-ctx.Done():
+			t.Fatal(ctx.Err())
+		}
+		// Return while the actual file writer is blocked, as an early assertion
+		// exit would; deferred cleanup must join it before closing fs.
+	}()
+	select {
+	case <-done:
+	default:
+		t.Fatal("publication writer survived cleanup")
+	}
 }
