@@ -158,6 +158,15 @@ var openNewFile = func(ctx context.Context, ep *ExportConfig, mrs *MysqlResultSe
 	var filePath string
 	ep.CurFileSize = 0
 	ep.hasCSVData = false
+	// openNewFile is re-entered on file rotation via writeToCSVFile with
+	// ep.ctx, and some callers (for example MODUMP query_result) only set Ctx.
+	// A nil ctx must never reach errgroup.WithContext below.
+	if ctx == nil {
+		ctx = ep.Ctx
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
 
 	// For parquet format, we don't use pipe-based writing
 	// Parquet data is accumulated in memory and written at the end
