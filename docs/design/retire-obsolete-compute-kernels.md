@@ -1,6 +1,6 @@
-# Retire obsolete computation kernels
+# Retire obsolete computation and bookkeeping
 
-Version 1, 2026-10-22. Owner: engineering-quality issue #29249.
+Version 2, 2026-10-22. Owner: engineering-quality issue #29249.
 Implementation: `cleanup/29249-modules-20261022`.
 Base: `b90e839af241184d14ac819ddc894e9dee097262`.
 
@@ -45,3 +45,34 @@ the live implementation or an independent live-path reference oracle.
 There are no new hot-path operations, resources, waits, or allocations. Do not
 claim runtime speedups or reduced CI time without measurements. Review logs,
 candidate inventories, and temporary validation artifacts stay outside source.
+
+## Unconsumed runtime bookkeeping
+
+Remove state only after tracing definitions, all writes, consumers, implicit
+comparison/serialization, and existing test oracles. The bounded candidates are:
+
+| Owner | State to retire | Existing responsibility to preserve |
+| --- | --- | --- |
+| Merge-order spill reader | `heapIdx` and its maintenance loop | Heap slice/order and reader ownership |
+| External writer | `expandedPath` copy | Local expanded URL and file writer |
+| Hash-build | `hashMapRowCount`, `hashMapRowCountSet` | Actual row count, map/selection admission, dedup rebuild |
+| Sampling | `isMultiSample` | Sample pool construction and output |
+| Time windows | `partEnd` and stale comment | Local partition break and cursor restart |
+| Planner binding | `refCnts`, including unused slice allocation | Column resolution and real projection reference-count maps |
+| RETURNING | `returningObjRef` and unused source-helper arguments | Live irregular-maintenance object reference and row-image source |
+| IVF planning | `initialStrategy` | Selected search mode and auto-mode behavior |
+| DML planning | `derivedTableId`, `onDuplicateIsIgnore` | Current root node and INSERT/IGNORE handling |
+| Hint parsing | Duplicate `vectorLocalDOP` cache | Canonical `VectorLocalDOPEnabled`, exact parser rules and allocation ordering |
+
+Update existing test literals and replace dead heap-index assertions with
+observable heap contents/order. Preserve distinct SQL, failure and cleanup
+assertions. An unused-in-production flag that proves a necessary regression
+path is retained unless equivalent observable assertions demonstrate sensitivity
+to the original mechanism through a bounded mutation experiment.
+
+The Substrait capability key's `argumentN` is excluded: struct equality/hash is
+an implicit reader. Shared GPU interfaces and serialized/public metadata are
+also excluded. Retiring private write-only state must not change comparisons,
+resource ownership, preflight/admission, error order or operator transitions.
+Run the existing owning planner/operator suites normally and with race detection,
+plus incremental vet/lint; no redundant per-field tests are needed.
