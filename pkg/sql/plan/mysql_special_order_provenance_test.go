@@ -167,8 +167,8 @@ func singleSortSpec(t *testing.T, logicPlan *planpb.Plan) *planpb.OrderBySpec {
 	return found[0]
 }
 
-// Display recovery uses an unsigned ordinal IF to preserve the error member
-// without feeding its empty display into the assignment converter. Raw ENUM
+// Display recovery casts a native ENUM IF to an unsigned ordinal, preserving
+// the error member without converting its empty display. Raw ENUM
 // keys retain their ENUM type; both representations have definition ordering.
 func requireMySQLSpecialOrderKeyType(t *testing.T, expr *planpb.Expr, typ types.T) {
 	t.Helper()
@@ -187,7 +187,11 @@ func TestEnumOrderRecoveryPreservesErrorMember(t *testing.T) {
 	require.Equal(t, int32(types.T_uint16), key.Typ.Id)
 	require.Equal(t, storage.Enumvalues, key.Typ.Enumvalues)
 	require.False(t, key.Typ.NotNullable)
-	fn := key.GetF()
+	// Numeric consumers explicitly cast the native ENUM IF to UINT16.
+	outer := key.GetF()
+	require.Equal(t, "cast", outer.Func.ObjName)
+	require.Equal(t, int32(types.T_enum), outer.Args[0].Typ.Id)
+	fn := outer.Args[0].GetF()
 	require.Equal(t, "if", fn.Func.ObjName)
 	require.Len(t, fn.Args, 3)
 	require.Equal(t, "=", fn.Args[0].GetF().Func.ObjName)

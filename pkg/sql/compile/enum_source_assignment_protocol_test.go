@@ -36,6 +36,24 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestEnumSourceAssignmentComposesWithCurrentEpochs(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		features planpb.RemoteExpressionFeatures
+		want     int64
+	}{
+		{"load", planpb.RemoteExpressionFeatures{LoadFKIgnoreCheck: true}, defines.MORPCVersion125},
+		{"view", planpb.RemoteExpressionFeatures{ViewMetadataFunctions: true}, defines.MORPCVersion126},
+		{"timestampadd", planpb.RemoteExpressionFeatures{TimestampAddSecondIntervals: true}, defines.MORPCVersion124},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			require.Equal(t, tc.want, remoteExpressionProtocolVersion(tc.features))
+			tc.features.EnumSourceAssignment = true
+			require.Equal(t, defines.MORPCVersion128, remoteExpressionProtocolVersion(tc.features))
+		})
+	}
+}
+
 func TestEnumSourceAssignmentProtocolPlacementSendReceive(t *testing.T) {
 	c, client := expressionProtocolTestCompile(t)
 	arg := &planpb.Expr{Typ: types.T_varchar.ToType().PlanType(), Expr: &planpb.Expr_Lit{Lit: &planpb.Literal{Value: &planpb.Literal_Sval{Sval: ""}}}}
@@ -52,7 +70,7 @@ func TestEnumSourceAssignmentProtocolPlacementSendReceive(t *testing.T) {
 	defer op.Release()
 	op.ProjectList = []*planpb.Expr{expr}
 	scope := &Scope{Magic: Remote, Proc: c.proc, NodeInfo: engine.Node{Id: "old-worker", Addr: "remote:6001"}, RootOp: op}
-	for _, version := range []int64{118, 119, 120, 121, 122, 128, 122} {
+	for _, version := range []int64{118, 119, 120, 121, 122, 127, 128, 127} {
 		client.version = version
 		c.execType = plan2.ExecTypeAP_MULTICN
 		c.cnList = engine.Nodes{scope.NodeInfo}
@@ -71,7 +89,7 @@ func TestEnumSourceAssignmentProtocolPlacementSendReceive(t *testing.T) {
 	client.version = defines.MORPCVersion128
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.NoError(t, err)
-	client.version = defines.MORPCVersion122
+	client.version = defines.MORPCVersion127
 	_, err = encodeRemoteScope(scope, c.proc)
 	require.ErrorContains(t, err, "version 128")
 	originalCtx := c.proc.Ctx
@@ -97,7 +115,7 @@ func TestEnumSourceAssignmentProtocolPlacementSendReceive(t *testing.T) {
 		data, err := p.Marshal()
 		require.NoError(t, err)
 		require.ErrorContains(t, validateRemoteExpressionPipelineProtocol(nil, p), "version 128")
-		for _, version := range []any{nil, "128", int64(119), int64(122), int64(128)} {
+		for _, version := range []any{nil, "128", int64(119), int64(122), int64(127), int64(128)} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			decoded, err := decodeScope(data, c.proc, true, nil)
 			if decoded != nil {
@@ -127,7 +145,7 @@ func TestEnumSourceAssignmentLocalAndCachedAdmission(t *testing.T) {
 		require.NoError(t, validateEnumSourceAssignmentProtocol(c.proc, pn))
 		require.Zero(t, testing.AllocsPerRun(10, func() { require.NoError(t, validateEnumSourceAssignmentProtocol(c.proc, pn)) }))
 		c.pn = pn
-		for _, version := range []any{int64(119), int64(122), nil, "128"} {
+		for _, version := range []any{int64(119), int64(122), int64(127), nil, "128"} {
 			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 			require.ErrorContains(t, c.Compile(context.Background(), pn, nil), "protocol version 128")
 			_, err := c.Run(0)
@@ -263,7 +281,7 @@ func TestEnumSourceAssignmentCTASAdmission(t *testing.T) {
 			require.Equal(t, defines.MORPCVersion128, decoded.GetDdl().GetCreateTable().CtasExecutionProtocolVersion)
 			require.NoError(t, validateTemporalResultProtocol(c.proc, decoded))
 			c.pn = decoded
-			for _, version := range []any{int64(122), nil, "128"} {
+			for _, version := range []any{int64(122), int64(127), nil, "128"} {
 				rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
 				require.ErrorContains(t, c.Compile(t.Context(), decoded, nil), "protocol version 128")
 				_, err = c.Run(0)

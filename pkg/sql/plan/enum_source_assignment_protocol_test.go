@@ -52,7 +52,7 @@ func TestEnumSourceAssignmentPersistedAdmission(t *testing.T) {
 	col := stmt.(*tree.CreateTable).Defs[1].(*tree.ColumnTableDef)
 	target := planpb.Type{Id: int32(types.T_enum), Enumvalues: "blue,red"}
 	source := []*ColDef{{Name: "v", Typ: planpb.Type{Id: int32(types.T_enum), Enumvalues: "red,blue"}}}
-	for _, floors := range [][3]int64{{122, 128, 128}, {128, 128, 122}, {128, 128, 128}} {
+	for _, floors := range [][3]int64{{127, 128, 128}, {128, 128, 127}, {128, 128, 128}} {
 		set(floors[0], floors[1], floors[2])
 		generated, err := buildGeneratedExpr(proc.Ctx, col, target, source, proc)
 		if floors[0] < 128 || floors[2] < 128 {

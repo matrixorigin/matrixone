@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -331,6 +332,63 @@ func TestSpecialTypeUpdateAssignments(t *testing.T) {
 				require.Equal(t, 1, ordinal)
 			}
 		})
+
+		for _, mode := range []string{"strict", "nonstrict", "ignore"} {
+			t.Run("typed-source-policy/"+mode, func(t *testing.T) {
+				var oldMode string
+				require.NoError(t, conn.QueryRowContext(ctx, "select @@session.sql_mode").Scan(&oldMode))
+				defer exec(t, "set sql_mode='"+oldMode+"'")
+				exec(t, "drop table if exists dst")
+				exec(t, "drop table if exists src")
+				exec(t, "create table dst(id int primary key,v enum('blue'),index idx_v(v))")
+				exec(t, "create table src(id int primary key,v enum('red','blue'))")
+				exec(t, "insert into dst values(1,'blue')")
+				exec(t, "insert into src values(1,'red')")
+				sqlMode := "STRICT_TRANS_TABLES"
+				if mode == "nonstrict" {
+					sqlMode = ""
+				}
+				exec(t, "set sql_mode='"+sqlMode+"'")
+				modifier := ""
+				if mode == "ignore" {
+					modifier = "ignore "
+				}
+				_, err := conn.ExecContext(ctx, "update "+modifier+"dst d join src s on d.id=s.id set d.v=s.v")
+				if mode == "strict" {
+					var failure *mysql.MySQLError
+					require.ErrorAs(t, err, &failure)
+					require.Equal(t, uint16(1265), failure.Number)
+				} else {
+					require.NoError(t, err)
+					func() {
+						rows, err := conn.QueryContext(ctx, "show warnings")
+						require.NoError(t, err)
+						defer rows.Close()
+						require.True(t, rows.Next())
+						var level, message string
+						var code int
+						require.NoError(t, rows.Scan(&level, &code, &message))
+						require.Equal(t, 1265, code)
+						require.False(t, rows.Next())
+						require.NoError(t, rows.Err())
+					}()
+				}
+				var got int
+				require.NoError(t, conn.QueryRowContext(ctx, "select cast(v as unsigned) from dst").Scan(&got))
+				if mode == "strict" {
+					require.Equal(t, 1, got)
+				} else {
+					require.Zero(t, got)
+				}
+				var indexed int
+				require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from dst force index(idx_v) where v='blue'").Scan(&indexed))
+				if mode == "strict" {
+					require.Equal(t, 1, indexed)
+				} else {
+					require.Zero(t, indexed)
+				}
+			})
+		}
 		t.Run("stored-ordinal-identity", func(t *testing.T) {
 			exec(t, "drop table if exists dst")
 			exec(t, "drop table if exists src")
