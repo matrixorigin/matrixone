@@ -1395,6 +1395,32 @@ func TestBinaryStringCommonTypeCapsUTF8MB4Width(t *testing.T) {
 	}
 }
 
+func TestMixedTextBinaryCommonTypeDoesNotNarrowUnknownOrLargeInputs(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		inputs []types.Type
+		oid    types.T
+		width  int32
+		ok     bool
+	}{
+		{"known widths", []types.Type{types.New(types.T_char, 1, 0), types.New(types.T_varbinary, 10, 0)}, types.T_varbinary, 10, true},
+		{"character bytes", []types.Type{types.New(types.T_binary, 1, 0), types.New(types.T_varchar, 3, 0)}, types.T_varbinary, 12, true},
+		{"unknown binary width", []types.Type{types.New(types.T_char, 1, 0), types.New(types.T_binary, 0, 0)}, types.T_blob, 0, true},
+		{"character bytes exceed varbinary", []types.Type{types.New(types.T_varchar, types.MaxVarBinaryLen/utf8.UTFMax+1, 0), types.New(types.T_binary, 1, 0)}, types.T_blob, 0, true},
+		{"bare null contributes no width", []types.Type{types.T_any.ToType(), types.New(types.T_char, 1, 0), types.New(types.T_varbinary, 10, 0)}, types.T_varbinary, 10, true},
+		{"pure binary uses existing rule", []types.Type{types.New(types.T_binary, 1, 0), types.New(types.T_varbinary, 10, 0)}, 0, 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			result, ok := MixedTextBinaryCommonType(tc.inputs)
+			require.Equal(t, tc.ok, ok)
+			if ok {
+				require.Equal(t, tc.oid, result.Oid)
+				require.Equal(t, tc.width, result.Width)
+			}
+		})
+	}
+}
+
 func TestBinaryStringCommonTypePreservesSameFixedBinary(t *testing.T) {
 	for _, test := range []struct {
 		name      string
