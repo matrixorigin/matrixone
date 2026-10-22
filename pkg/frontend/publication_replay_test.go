@@ -29,8 +29,7 @@ func TestPublicationStatementForReplayPreservesAuthorization(t *testing.T) {
 				pub := &pubsub.PubInfo{PubName: "review-pub", DbName: "review-db", TablesStr: tables,
 					SubAccountsStr: accounts, Comment: "owner's C:\\copy\\"}
 				original := *pub
-				stmt, err := publicationStatementForReplay(t.Context(), pub)
-				require.NoError(t, err)
+				stmt := publicationStatementForReplay(pub)
 				t.Cleanup(stmt.Free)
 				require.Equal(t, pub.PubName, string(stmt.Name))
 				require.Equal(t, pub.DbName, string(stmt.Database))
@@ -73,6 +72,30 @@ func TestCreatePublicationFromRestoreInfoPropagatesError(t *testing.T) {
 	}
 }
 
+func TestPublicationStatementForReplayPreservesCatalogIdentifiers(t *testing.T) {
+	for _, accounts := range []string{pubsub.AccountAll, "CaseSub", ""} {
+		t.Run("accounts="+accounts, func(t *testing.T) {
+			pub := &pubsub.PubInfo{PubName: "Case`Pub", DbName: "Case DB", TablesStr: "PublishedT,publishedt",
+				SubAccountsStr: accounts, Comment: "owner's C:\\copy\\"}
+			original := *pub
+			statement := publicationStatementForReplay(pub)
+			t.Cleanup(statement.Free)
+			require.Equal(t, pub.PubName, string(statement.Name))
+			require.Equal(t, pub.DbName, string(statement.Database))
+			require.Len(t, statement.Table, 2)
+			require.Equal(t, "PublishedT", string(statement.Table[0].Name()))
+			require.Equal(t, "publishedt", string(statement.Table[1].Name()))
+			require.Equal(t, accounts == pubsub.AccountAll, statement.AccountsSet.All)
+			if accounts == "CaseSub" {
+				require.Equal(t, "CaseSub", string(statement.AccountsSet.SetAccounts[0]))
+			} else {
+				require.Empty(t, statement.AccountsSet.SetAccounts)
+			}
+			require.Equal(t, original, *pub)
+		})
+	}
+}
+
 func TestCreatePublicationReplayRetainsTableSelection(t *testing.T) {
 	for _, tables := range []string{pubsub.TableAll, "", "t1"} {
 		t.Run("tables="+tables, func(t *testing.T) {
@@ -85,8 +108,7 @@ func TestCreatePublicationReplayRetainsTableSelection(t *testing.T) {
 			require.NoError(t, err)
 			insertion := errors.New("publication insertion reached")
 			bh.sql2err[want] = insertion
-			statement, err := publicationStatementForReplay(ctx, pub)
-			require.NoError(t, err)
+			statement := publicationStatementForReplay(pub)
 			t.Cleanup(statement.Free)
 			require.ErrorIs(t, createPublicationWithTableSelection(ctx, bh, statement, tables == pubsub.TableAll, 1), insertion)
 			require.Equal(t, want, bh.executedSQLs[len(bh.executedSQLs)-1])
@@ -125,8 +147,7 @@ func TestPublicationReplayOmitsOnlyBulkSkippedTables(t *testing.T) {
 			// executor supplies. The mock executor has no session; fail-closed
 			// mode resolution is checked separately below and SQL tests exercise
 			// the complete replay with a real background session.
-			statement, err := publicationStatementForReplay(ctx, replay)
-			require.NoError(t, err)
+			statement := publicationStatementForReplay(replay)
 			t.Cleanup(statement.Free)
 			if tc.want == "missing" {
 				require.ErrorContains(t, createPublicationWithTableSelection(ctx, bh, statement, false, 1), "table 'missing' not exists")

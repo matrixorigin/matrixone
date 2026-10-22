@@ -17,23 +17,14 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/pubsub"
 	"github.com/matrixorigin/matrixone/pkg/defines"
-	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 )
 
-func publicationStatementForReplay(ctx context.Context, pub *pubsub.PubInfo) (*tree.CreatePublication, error) {
-	if pub.SubAccountsStr != "" && pub.TablesStr != "" {
-		statements, err := mysql.Parse(ctx, pub.GetCreateSql(), 1)
-		if err != nil {
-			freeStatements(statements)
-			return nil, err
-		}
-		return statements[0].(*tree.CreatePublication), nil
-	}
-
-	// Removing the last account or dropping the last selected table is valid,
-	// but CREATE's grammar cannot spell either empty list. Preserve the names
-	// and grants in an internal AST and pass it directly to the creation backend.
+func publicationStatementForReplay(pub *pubsub.PubInfo) *tree.CreatePublication {
+	// Catalog names are already canonical. Reparsing SQL with a different
+	// lower_case_table_names mode could select a case-distinct private table.
+	// Build the internal AST directly, preserving both names and grants. This
+	// also supports empty account/table lists that CREATE's grammar cannot spell.
 	// The caller carries the separate all-tables bit: an empty AST table list
 	// alone cannot distinguish zero selected tables from an omitted TABLE clause.
 	var tables tree.TableNames
@@ -52,7 +43,7 @@ func publicationStatementForReplay(ctx context.Context, pub *pubsub.PubInfo) (*t
 		}
 	}
 	return tree.NewCreatePublication(false, tree.Identifier(pub.PubName), tree.Identifier(pub.DbName), tables,
-		tree.NewAccountsSetOption(allAccounts, accounts, nil, nil), pub.Comment), nil
+		tree.NewAccountsSetOption(allAccounts, accounts, nil, nil), pub.Comment)
 }
 
 // createPublicationFromRestoreInfo keeps replay on the ordinary creation path,
@@ -62,10 +53,7 @@ func createPublicationFromRestoreInfo(ctx context.Context, bh BackgroundExec, pu
 	if err != nil {
 		return err
 	}
-	statement, err := publicationStatementForReplay(ctx, replay)
-	if err != nil {
-		return err
-	}
+	statement := publicationStatementForReplay(replay)
 	defer statement.Free()
 	var lowerCaseTableNames int64
 	if publicationCreateValidatesTableScope(statement) {

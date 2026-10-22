@@ -48,6 +48,7 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 			explicitTables                              bool
 			emptyAccounts                               bool
 			viewScope, incompleteViewScope              bool
+			caseSensitive, caseCollision                bool
 		}{
 			{name: "quoted_comment", comment: "owner's copy"},
 			{name: "backslash_comment", comment: `owner's C:\new\table\`},
@@ -60,8 +61,31 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 			{name: "empty_quoted_tables", database: "review-empty-db", publication: "review-empty-pub", table: "review-items", explicitTables: true, emptyAccounts: true},
 			{name: "complete_view_scope", explicitTables: true, viewScope: true},
 			{name: "incomplete_view_scope", explicitTables: true, viewScope: true, incompleteViewScope: true},
+			{name: "case_sensitive_noncollision", table: "PublishedT", explicitTables: true, caseSensitive: true},
+			{name: "case_sensitive_collision", table: "PublishedT", explicitTables: true, caseSensitive: true, caseCollision: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
+				if tc.caseSensitive {
+					for _, pool := range []*sql.DB{admin, subscriber} {
+						var savedMode int64
+						require.NoError(t, pool.QueryRowContext(ctx, "select @@global.lower_case_table_names").Scan(&savedMode))
+						defer func() {
+							cleanupCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
+							defer cancel()
+							_, err := pool.ExecContext(cleanupCtx, fmt.Sprintf("set global lower_case_table_names = %d", savedMode))
+							require.NoError(t, err)
+						}()
+						_, err := pool.ExecContext(ctx, "set global lower_case_table_names = 0")
+						require.NoError(t, err)
+						// Variables are tenant-scoped and existing sessions retain
+						// their initial snapshot. Reconnect both tenants' sessions.
+						pool.SetMaxIdleConns(0)
+						pool.SetMaxIdleConns(2)
+						var sessionMode int64
+						require.NoError(t, pool.QueryRowContext(ctx, "select @@lower_case_table_names").Scan(&sessionMode))
+						require.Zero(t, sessionMode)
+					}
+				}
 				dbName, pubName, tableName := tc.database, tc.publication, tc.table
 				if dbName == "" {
 					dbName = "pub_replay_" + tc.name
@@ -97,6 +121,10 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 				}()
 				exec("create table " + db + "." + table + "(id int primary key)")
 				exec("insert into " + db + "." + table + " values(1)")
+				if tc.caseCollision {
+					exec("create table " + db + ".publishedt(id int primary key)")
+					exec("insert into " + db + ".publishedt values(901)")
+				}
 				publishOptions := " account all"
 				if tc.emptyAccounts {
 					publishOptions = " account pub_replay_sub"
@@ -114,6 +142,13 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 				exec("create publication " + publication + " database " + db + publishOptions + " comment " + sqlquote.String(tc.comment))
 				_, err := subscriber.ExecContext(ctx, "create database subscribed from sys publication "+publication)
 				require.NoError(t, err)
+				if tc.caseCollision {
+					var privateValue int
+					require.NoError(t, admin.QueryRowContext(ctx, "select id from "+db+".publishedt").Scan(&privateValue))
+					require.Equal(t, 901, privateValue, "the private table exists at the publisher")
+					require.ErrorContains(t, subscriber.QueryRowContext(ctx, "select id from subscribed.publishedt").Scan(&privateValue),
+						`table "publishedt" does not exist`, "the case-distinct private table must be hidden before restore")
+				}
 				if tc.emptyAccounts {
 					exec("alter publication " + publication + " account drop pub_replay_sub")
 					var accounts string
@@ -172,6 +207,13 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 						require.Equal(t, 1, rows)
 					} else {
 						require.Equal(t, 1, rows)
+					}
+					if tc.caseCollision {
+						var privateValue int
+						require.NoError(t, admin.QueryRowContext(ctx, "select id from "+db+".publishedt").Scan(&privateValue))
+						require.Equal(t, 901, privateValue, "private table data remains distinct")
+						require.ErrorContains(t, subscriber.QueryRowContext(ctx, "select id from subscribed.publishedt").Scan(&privateValue),
+							`table "publishedt" does not exist`, "restore must not grant the lowercase private table")
 					}
 					var subscribedRows int
 					if tc.emptyAccounts {
