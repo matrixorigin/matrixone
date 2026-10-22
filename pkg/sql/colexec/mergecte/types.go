@@ -166,10 +166,6 @@ func (mergeCTE *MergeCTE) Free(proc *process.Process, pipelineFailed bool, err e
 	ctr.directories.FreeMetadata()
 }
 
-func (mergeCTE *MergeCTE) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) cleanHashTable(mp *mpool.MPool) {
 	hashmap.IteratorClearOwner(ctr.iterator)
 	ctr.iterator = nil

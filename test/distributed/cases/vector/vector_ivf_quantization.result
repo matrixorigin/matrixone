@@ -116,7 +116,7 @@ create index qmembershipbf16 using ivfflat on qmembership(v) lists=1 op_type 've
 select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=pre') s;
 ➤ count(*)[-5,64,0]  𝄀
 10
-select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=include') s;
+select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=iterative') s;
 ➤ count(*)[-5,64,0]  𝄀
 10
 set @entries = (select distinct i.index_table_name from mo_catalog.mo_indexes i join mo_catalog.mo_tables t on i.table_id=t.rel_id where t.reldatabase=database() and t.relname='qmembership' and i.name='qmembershipbf16' and i.algo_table_type='entries');
@@ -133,13 +133,13 @@ deallocate prepare entry_stats;
 select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=pre') s;
 ➤ count(*)[-5,64,0]  𝄀
 10
-select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=include') s;
+select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=iterative') s;
 ➤ count(*)[-5,64,0]  𝄀
 10
 select count(*) from (select a from qmembership where v is not null and l2_distance(v,'[0]') > 1 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=pre') s;
 ➤ count(*)[-5,64,0]  𝄀
 10
-select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 2 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=include') s;
+select count(*) from (select a from qmembership where l2_distance(v,'[0]') > 2 and l2_distance(v,'[0]') < 3 order by l2_distance(v,'[0]') limit 10 by rank with option 'mode=iterative') s;
 ➤ count(*)[-5,64,0]  𝄀
 0
 create table q64(a int primary key, v vecf64(4));
