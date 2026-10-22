@@ -1,0 +1,235 @@
+{
+  "version": 1,
+  "status": "draft-design-review",
+  "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
+  "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
+  "target_worktree": "/d/mo-worktrees/v416-import-memory-20261022",
+  "owner": "Codex root with component workers",
+  "authorization": "User requests all remaining memory-control fixes and CSV alignment; online resizing and non-glibc platforms excluded.",
+  "design_gate": {
+    "trigger": "Crosses allocation, operator, spill-file and compiler ownership; adds cancellable admission coordination and shared spill-source lifecycle. Design-first required by mo-dev.",
+    "required_before_implementation": true
+  },
+  "problem_evidence": [
+    "Stock first complete import succeeds and second fails under 22 GiB; idle writer capacity and allocator resident free pages contribute to history dependence.",
+    "V2 closes one cleanup leak, bounds idle Arena bytes and adds native trim; five uninterrupted 39-table rounds pass, but review identifies impossible-admission, reclaim-threshold-gap, retained-delete reservation and incomplete upstream bounds.",
+    "Per-writer 20 ms ForceRefresh causes redundant process sampling/reclaim and has no fairness guarantee.",
+    "CSV currently limits raw input field bytes; MultiUpdate projections and vector capacities can amplify the next allocation.",
+    "HashBuild spills only shuffle, copies before testing the threshold; scatter buffers are row bounded and max-depth skew reload is unbounded."
+  ],
+  "goals": [
+    "The tested amway import semantics, indexes, row counts and SQL success remain intact under fixed 22 GiB and no inter-round idle/GC/restart.",
+    "Every satisfiable admission wait is driven by owner release or reclaim, not an independent 20 ms polling loop.",
+    "Every large import-owned buffer retains a budget charge until destruction or a documented transfer.",
+    "Normal writer reuse and asynchronous IO are preserved where budgets permit.",
+    "Input and spill frames are bounded by actual typed bytes, not only rows or raw CSV bytes.",
+    "Broadcast and skew spill produce complete join semantics without unbounded reload."
+  ],
+  "exclusions": [
+    "Online cgroup resizing",
+    "Adding native trim support for non-glibc systems",
+    "Remote publication or release without existing authorization",
+    "Guaranteeing success when a single irreducible row or minimum query working set cannot fit the environment, or external allocations consume the entire shared cgroup"
+  ],
+  "invariants": {
+    "Q1": "Each reservation, workspace, owned buffer and spill FD has exactly one effective terminal owner; transfer keeps the charge/source alive until the consumer releases it.",
+    "Q2": "A task cannot wait for normal data credits while holding the only workspace that is needed to free those data credits. Reclaim and cancellation never depend on the blocked writer.",
+    "Q3": "Input batch, private retained capacity, pending jobs, spill bucket buffers, spill frames and skew working sets have byte bounds. A cache limit alone is not an active-memory limit.",
+    "accounting": "Use per-owner allocated capacity, not cumulative processed input. Go and native pool allocations both count; serialization/map/bitmap state has an explicit capacity charge.",
+    "progress": "Too-large requests are split before waiting. Physical-pressure denial drives one merged reclaim+fresh sample even below the RSS soft line. Pool denial waits for actual ownership release.",
+    "performance": "No per-writer periodic sampling; hot-path accounting reuses atomic counters and row-window boundaries, with no full retained-state scan for every row."
+  },
+  "decisions": [
+    {
+      "id": "D1",
+      "choice": "Retain nonblocking RSCThrottler compatibility; add optional cancellable admission, request-size and byte-unit capabilities.",
+      "rationale": "Existing mocks and nonblocking spill decisions remain compatible."
+    },
+    {
+      "id": "D2",
+      "choice": "FIFO notification-driven waits with a single process coordinator and a one-second fallback only while waiters exist.",
+      "rationale": "Release/reclaim events wake immediately; fallback observes external frees without 50*N process samples per second. A queued request cannot be bypassed by new ordinary grants."
+    },
+    {
+      "id": "D3",
+      "choice": "Native/process reclamation is single flight and cancellation-independent; denied physical admission may request reclaim below 85% RSS.",
+      "rationale": "Closes the confirmed 17+6>22 GiB threshold gap without lowering a magic percentage."
+    },
+    {
+      "id": "D4",
+      "choice": "Calibrate physical pressure using process RSS and same-cgroup usage after separating reclaimable inactive file cache; do not add RSS and cgroup usage.",
+      "rationale": "The signals overlap and must not be double counted. Keep raw cgroup usage observable."
+    },
+    {
+      "id": "D5",
+      "choice": "Released grants lose their old RSS-covered credit; reclaimable libc pages count as resident until a fresh sample proves they returned.",
+      "rationale": "Cross-arena free chunks are not guaranteed headroom for a new owner."
+    },
+    {
+      "id": "D6",
+      "choice": "Use one byte-unit policy for CSV, writer subbatches and spill frames. CSV enforces raw and typed capacity bounds; MultiUpdate rechecks all actual projections.",
+      "rationale": "CSV cannot infer every downstream index projection. Varlen windows must count referenced payload rather than their shared entire area."
+    },
+    {
+      "id": "D7",
+      "choice": "MultiUpdate uses a private accounting mpool and an owned-capacity counter that includes Go and native buffers; all retained delete/index metadata remain charged.",
+      "rationale": "A shared process mpool delta cannot identify this writer's ownership, especially with async jobs."
+    },
+    {
+      "id": "D8",
+      "choice": "Separate ordinary retained data grants from a bounded process IO/spill workspace permit. A spill/IO worker never waits for ordinary data grants held by its submitter.",
+      "rationale": "Prevents the main-Sync to worker-budget wait cycle. Workspace is acquired before writing and transferred with jobs, then released on success/error/cancel."
+    },
+    {
+      "id": "D9",
+      "choice": "Before mutation reserve a conservative computed append/serialization growth envelope; after the operation reconcile to actual retained capacity.",
+      "rationale": "Accounting only after allocation cannot bound a temporary resize/clone peak. Envelope derives from vector growth and encoded/compression sizes, not customer data names."
+    },
+    {
+      "id": "D10",
+      "choice": "Keep total idle Arena byte cap, but share its budget across size tiers on demand.",
+      "rationale": "A tier cannot discard useful buffers while the other tier leaves budget unused. Checked-out ownership remains separate from idle cache."
+    },
+    {
+      "id": "D11",
+      "choice": "HashBuild requests retained-data budget before copying; denial starts spill using the reserved IO workspace.",
+      "rationale": "No build operator holds its data waiting for a downstream writer to free memory."
+    },
+    {
+      "id": "D12",
+      "choice": "Broadcast spill retains a shared immutable build source. Probe streams spool bounded files; after all participants register, a single spill consumer owns combined probe sources and executes the existing join semantics.",
+      "rationale": "Preserves right/full/semi/anti/single matching without incompatible per-probe bitmaps or an on-the-fly shuffle protocol. Only the spill path serializes; normal broadcast parallelism stays unchanged."
+    },
+    {
+      "id": "D13",
+      "choice": "Skew fallback at the recursion bound uses bounded build chunks and replays probe data, with disk sidecar match state where needed.",
+      "rationale": "All-equal keys cannot be fixed by more repartitioning. Preserve LEFT/FULL/SEMI/ANTI/SINGLE cross-chunk match semantics without loading the entire bucket."
+    },
+    {
+      "id": "D14",
+      "choice": "Serialize spill frames without a second unbounded whole-batch copy; limit scatter by aggregate bytes across buckets before Union.",
+      "rationale": "Spilling must not reproduce the original wide-row memory peak."
+    }
+  ],
+  "alternatives": [
+    {
+      "name": "Tune current percentages/timers only",
+      "rejected": "Does not close impossible requests, mismatched reclaim thresholds, owner accounting or no-workspace cycles."
+    },
+    {
+      "name": "Convert all broadcast joins to shuffle",
+      "rejected": "SINGLE and right-oriented semantics/topology are not uniformly supported; normal small-query parallelism and data routing change."
+    },
+    {
+      "name": "Per-probe independent broadcast spill readers",
+      "rejected": "Independent repartitioning invalidates shared build-row bitmap/finalization for right/full variants."
+    },
+    {
+      "name": "One global callback for every allocation with blocking acquisition",
+      "rejected": "Can block while an allocation owner holds resources needed by its own spill/cleanup. Hot-path overhead and partial mutation retry semantics are unacceptable."
+    }
+  ],
+  "component_contracts": {
+    "throttler": {
+      "optional_api": [
+        "AcquireContext(context.Context,int64) error",
+        "MaxAcquire() int64",
+        "BatchBytes() int64"
+      ],
+      "max_policy": "CN max derives from the existing acquire policy; do not duplicate 0.8 in callers.",
+      "wait_protocol": "Subscribe/enqueue before recheck, Release and dequeue share queue synchronization; cancellation removes its node and wakes successor; last waiter shuts down fallback.",
+      "reclaim_protocol": "Acquire denial reason selects owner-release wait vs process reclaim. Reclaim IO/callbacks occur outside queue locks."
+    },
+    "owned_mpool": {
+      "api": [
+        "MPool.AllocatedBytes() int64"
+      ],
+      "meaning": "Current allocation capacity belonging to this pool, Go and native; existing offheap-only public stats retain their semantics.",
+      "paths": [
+        "alloc",
+        "free/cross-pool free",
+        "Go realloc",
+        "native realloc",
+        "destroy"
+      ]
+    },
+    "csv": {
+      "semantics": "Keep raw line and row limits, additionally bound typed capacity to shared byte unit; a crossing row is retained safely without reusing parser backing storage. Open/Close/EOF/error/reset clear pending state.",
+      "accounting": "Source batch storage and one crossing-row working set must be represented in the query/import working budget; no unlimited pending-row queue."
+    },
+    "writer": {
+      "states": [
+        "empty",
+        "owned staging",
+        "syncing/transferring stats",
+        "reconciled retained",
+        "closed"
+      ],
+      "charge": "private mpool + retained Go capacities/maps/bitmaps + assigned file scratch/workspace; async job source and workspace transfer together.",
+      "failures": "Partial append/write/Sync errors propagate normal errors; temporary quota denial is handled internally without SQL failure or duplicate publication."
+    },
+    "workspace": {
+      "bound": "One process budget, bounded bytes and simultaneous permits; IO has reserved capacity that ordinary retained data cannot consume.",
+      "progress": "Holder must complete IO/cancel without acquiring normal data grants. No task waiting for a workspace may be the only owner that can release that same workspace.",
+      "minimum": "Byte unit is reduced to fit the environment; one irreducible row/minimum working set must fit. Query/import admission must account for source and required operator workspace before normal data fills the available headroom."
+    },
+    "broadcast_spill": {
+      "source": "JoinMap owns immutable build FDs and a participant-scoped spill handoff; source closes after final owner. Per-reader logical offsets use ReadAt/SectionReader, never dup+shared Seek.",
+      "handoff": "Each expected probe registers its bounded probe files exactly once, including empty input. The last registrant takes combined work; other probes end. Cancellation aborts coordination and closes unclaimed files.",
+      "finalize": "The consumer runs with one logical finalizer so RIGHT/FULL and directional semi/anti/single matching retain existing semantics.",
+      "normal_path": "No handoff/coordinator is created when the build stays in memory."
+    },
+    "skew_fallback": {
+      "state": "Current build chunk only in RAM; probe match sidecar persists across chunk replays; output unmatched probe only after final chunk. Scalar SINGLE detects second match across all chunks using existing SQL error semantics.",
+      "cost": "Worst-case IO may be buildChunks times probeBytes; this is an explicit bounded-memory degradation, not a zero-overhead claim."
+    }
+  },
+  "ownership_and_wait_graphs": [
+    "CSV parser -> owned typed input batch -> downstream read-only view; source storage released/reused only after downstream consumption.",
+    "Writer private pool -> Sinker/free-list or output metadata -> synchronous cleanup or transferred consumer; matching grant survives transfer.",
+    "Writer -> pending IO job -> source batches + workspace -> job terminal cleanup; writer Sync waits job but job does not wait writer normal quota.",
+    "HashBuild retained lease -> in-memory JoinMap -> last probe ref -> pool+grant release.",
+    "HashBuild spill files -> immutable shared source -> probe handoff consumer -> bucket/chunk readers -> terminal close.",
+    "Waiting admission -> Release or merged reclaim sample or fallback -> recheck; context cancellation independently removes waiter."
+  ],
+  "compatibility": {
+    "wire": "No SQL/public wire change. Remote spill file handles stay local to the owning CN; build/probe shared sources are local message-board resources.",
+    "persistence": "Only anonymous temporary spill framing may change; no persistent object/catalog format change.",
+    "upgrade": "New queries use one process binary. No cross-version temporary FD sharing is introduced.",
+    "scope": "Linux/glibc with fixed configured memory. Other platforms retain existing compilation and fallback behavior but are not acceptance targets."
+  },
+  "validation": {
+    "unit": [
+      "Impossible request split without permanent wait",
+      "17+6>22 physical denial triggers reclaim below soft line",
+      "FIFO release wakeup, cancellation and no lost notifications",
+      "Last waiter stops shared fallback and no background worker without waiters",
+      "Actual capacity balance including native/Go realloc and cross-pool free",
+      "Retained uncommitted delete and metadata stay charged",
+      "Multi-owner/index publication exactly once across subbatches",
+      "CSV typed expansion, varlen shared area, pending row EOF/reset/cancel",
+      "Shared cache budget conservation under concurrent get/put/drain",
+      "Broadcast two or more probes with interleaved source lifetime and one finalizer",
+      "Skew at max depth for all supported join modes, NULL and non-equi conditions",
+      "Spill/IO memory peak and cancellation without main-worker quota cycles"
+    ],
+    "negative_controls": "Each repaired contract must have a discriminating old-code or disabled-mechanism oracle; do not accept compile errors as negative proof.",
+    "race": "Focused adaptive race per changed concurrency test plus affected owning packages once.",
+    "public_consumer": "SQL checks with forced-small budgets/spill, main and index counts plus join multiset oracles; native fixed 39-table amway imports.",
+    "real_import": "Same CSV/DDL/SQL/order, 22 GiB no swap, no deliberate gap/GC/restart between at least five rounds; process remains alive after trial.",
+    "performance": "Record full/table wall time, RSS+cgroup peaks, allocated capacity, spill bytes/objects, native reclaim count and wait samples. Compare stock successful 303.1-second round and V2 mean 331.1 seconds; do not declare zero regression from shared-host variation."
+  },
+  "delivery": {
+    "phases": [
+      "Design review and recorded approval",
+      "Shared throttler/accounting/workspace primitives with deterministic tests",
+      "CSV/S3 and upper spill consumers",
+      "Static/race/consumer validation",
+      "Five-round real import and self-review"
+    ],
+    "current_production_patch": "V2 remains unmodified during design phase",
+    "publication": "No push/PR/release in this design step."
+  },
+  "reviewers": [],
+  "approval": null
+}
