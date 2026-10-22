@@ -1,6 +1,6 @@
 # Retire unused kernel execution paths
 
-Version 3, 2026-10-22. Owner: #29249.
+Version 4, 2026-10-22. Owner: #29249.
 Implementation: `cleanup/29249-runtime-20261022`.
 Base: `d7f95aa754bfe39126752729d307298710947c17`.
 
@@ -71,8 +71,8 @@ these storage closures, preserving active recovery and I/O compatibility:
 
 - Remove `db/scanner.go` and `scannerop.go`: the scanner constructor, private
   implementation, scanner/error interfaces and callback dispatch have no live
-  constructor, registration or type consumer. Remove its commented cron-job
-  remnants; keep current controller, cron jobs and generic catalog processors.
+  constructor, registration or type consumer. Keep controller and cron-job files
+  unchanged, including reserved integration comments and generic catalog processors.
 - Remove `BlockDataReadNoCopy`; keep `readBlockData`, `BlockDataRead`, row-ID,
   tombstone, selection and release owners used by live reads.
 - Remove `BlockReader.LoadOneSubColumns` with its sole underlying
@@ -80,15 +80,6 @@ these storage closures, preserving active recovery and I/O compatibility:
   Preserve live `LoadSubColumns`/`ReadSubBlock`, `ReadBlockOptions` and formats.
 - Remove the disconnected `CreateBlockOpt` builder and all four methods.
   Keep the live object creation options and writers.
-- Remove unused `ReplayCheckpointEntries`. Retire the complete old catalog
-  replay closure: `OnReplayObjectBatch`, `onReplayCheckpointObject`, and
-  `replayCheckpointDeleteObject`. Their only non-closure consumer is the
-  existing soft-delete regression test. Migrate that test to the live
-  `OnReplayObjectBatch_V2`, keeping all version-link, object-data sharing,
-  visibility and idempotence assertions. Update its stale comments/name and
-  the live replay comment; do not keep an obsolete implementation solely to
-  test itself. Keep all current checkpoint loading, legacy-version decoders,
-  active replay callbacks and shared `ObjectListReplayer`.
 - Retire the disabled special-table size classification: `GatherSpecialTableSize`,
   private `checkSpecial`, both regexes, `cluster`, `triode` constants, and
   `UsageData.special` including its propagation/zero-initialization writes.
@@ -101,9 +92,14 @@ these storage closures, preserving active recovery and I/O compatibility:
   `specialSize`, and account traversal that only adds zero. Preserve response
   contents, account ordering semantics, cache update, locking and timing metrics.
 
-No test cases or assertions are deleted; reuse the current catalog fixture.
-Mutation of the active first-seen delete-counterpart creation must fail the
-migrated test. Keep the mutation outside source through a temporary overlay.
+Catalog/checkpoint replay retirement is explicitly excluded by the owner. Keep
+`OnReplayObjectBatch`, its complete helper closure and tests, and
+`ReplayCheckpointEntries`. Preserve read-instance and write-instance paths,
+including readonly mode, continuous WAL replay, promotion/demotion, rollback,
+and reserved future integration points. Current lack of wiring does not prove
+these are obsolete. Do not delete them to reach a line-count target.
+
+No test cases or assertions are deleted or migrated.
 Reuse full normal/race suites for
 objectio, objectio/ioutil, blockio, catalog, checkpoint, logtail, db and RPC,
 plus relevant existing storage-usage, replay/cancellation and read-release cases.
