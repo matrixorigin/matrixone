@@ -5616,6 +5616,9 @@ func bindFuncExprAndConstFoldInternal(
 	allowInternalFunctionArgs bool,
 	observer func(*plan.Expr) error,
 ) (*plan.Expr, error) {
+	if err := validateJSONSearchEscape(ctx, proc, name, args); err != nil {
+		return nil, err
+	}
 	// The two comparison folders run ConstantFold on non-literal constant
 	// operands before the resolver, and a constant expression of a stored
 	// definition can wrap a side-effect builtin (CAST(enable_fault_injection()
@@ -7362,6 +7365,9 @@ func bindFuncExprImplByPlanExpr(
 	allowInternalFunctionArgs bool,
 ) (*plan.Expr, error) {
 	var err error
+	if err = validateJSONSearchEscape(ctx, nil, name, args); err != nil {
+		return nil, err
+	}
 	// Validate before rewriting or converting argument metadata. Checked public
 	// binding must not turn an unknown identity into a MustTypeFromPlan panic.
 	for _, arg := range args {
@@ -8982,6 +8988,71 @@ func isXMLXPathConstant(expr *Expr) bool {
 		}
 	}
 	return true
+}
+
+// validateJSONSearchEscape enforces the binder-owned constant escape contract.
+// The folded value also supplies the mode-dependent empty-escape diagnostic
+// before runtime document NULL can suppress it.
+func validateJSONSearchEscape(
+	ctx context.Context,
+	proc *process.Process,
+	name string,
+	args []*Expr,
+) error {
+	if !strings.EqualFold(name, "json_search") || len(args) < 4 || args[3] == nil {
+		return nil
+	}
+	escape := args[3]
+	if escape.GetP() != nil || !function.IsFoldCandidate(escape, false) {
+		return moerr.NewWrongArguments(ctx, "json_search")
+	}
+	if proc == nil || escape.GetLit() != nil {
+		return validateJSONSearchEscapeValue(ctx, proc, escape.GetLit())
+	}
+
+	folded, err := ConstantFold(
+		batch.EmptyForConstFoldBatch,
+		DeepCopyExpr(escape),
+		proc,
+		false,
+		true,
+	)
+	if err != nil {
+		return err
+	}
+	return validateJSONSearchEscapeValue(ctx, proc, folded.GetLit())
+}
+
+func validateJSONSearchEscapeValue(
+	ctx context.Context,
+	proc *process.Process,
+	literal *plan.Literal,
+) error {
+	if literal == nil || literal.Isnull {
+		return nil
+	}
+	value, ok := literal.Value.(*plan.Literal_Sval)
+	if !ok || !utf8.ValidString(value.Sval) || utf8.RuneCountInString(value.Sval) > 1 {
+		return moerr.NewWrongArguments(ctx, "json_search")
+	}
+	if value.Sval != "" || proc == nil {
+		return nil
+	}
+	mode := proc.GetSessionInfo().SqlMode
+	if resolver := proc.GetResolveVariableFunc(); resolver != nil {
+		if resolved, err := resolver("sql_mode", true, false); err == nil {
+			if sessionMode, ok := resolved.(string); ok {
+				mode = sessionMode
+			}
+		}
+	}
+	if mode == process.EmptySqlModeSentinel {
+		mode = ""
+	}
+	if mysqlparser.HasSQLMode(mode, "NO_BACKSLASH_ESCAPES") {
+		return moerr.NewWrongArguments(ctx, "json_search")
+	}
+	return nil
 }
 
 // reconcileLagLeadDefaultType refines COALESCE's common domain for LAG/LEAD.

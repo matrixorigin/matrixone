@@ -39,7 +39,8 @@ func TestRequiredRemoteExpressionFeaturesViewMetadataIdentities(t *testing.T) {
 			require.Equal(t, tc.id == 600, features.TableCollationFunction)
 			require.Equal(t, tc.id == 601, features.TimestampAddSecondIntervals)
 			require.Equal(t, tc.id == 602, features.LoadFKIgnoreCheck)
-			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602, features.Any())
+			require.Equal(t, tc.id == 605, features.JSONSearch)
+			require.Equal(t, tc.want || tc.id == 598 || tc.id == 600 || tc.id == 601 || tc.id == 602 || tc.id == 605, features.Any())
 		})
 	}
 	for name, expr := range map[string]*Expr{

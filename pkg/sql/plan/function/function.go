@@ -845,6 +845,9 @@ func deduceNotNullable(ctx context.Context, overloadID int64, args []*plan.Expr)
 				return false
 			}
 		}
+	case JSON_SEARCH:
+		// A valid non-NULL call can return SQL NULL for no match or a NULL path.
+		return false
 	case CASE:
 		if caseHasTemporalPromotion(args) {
 			return false

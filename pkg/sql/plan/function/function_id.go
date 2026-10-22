@@ -892,7 +892,11 @@ const (
 	// Internal LOAD IGNORE predicate; gated by cluster protocol 125.
 	LOAD_FK_IGNORE_CHECK = 602
 
-	FUNCTION_END_NUMBER = 605
+	// JSON_SEARCH requires the executable path-traversal and persisted
+	// expression contract introduced with MORPC v129.
+	JSON_SEARCH = 605
+
+	FUNCTION_END_NUMBER = 606
 )
 
 // functionIdRegister is what function we have registered already.
@@ -1213,6 +1217,7 @@ var functionIdRegister = map[string]int32{
 	"json_agg_to_double":             JSON_AGG_TO_DOUBLE,
 	"json_storage_free":              JSON_STORAGE_FREE,
 	"json_depth":                     JSON_DEPTH,
+	"json_search":                    JSON_SEARCH,
 	"json_contains":                  JSON_CONTAINS,
 	"json_contains_path":             JSON_CONTAINS_PATH,
 	"json_merge":                     JSON_MERGE_PRESERVE,
