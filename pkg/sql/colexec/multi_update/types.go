@@ -304,10 +304,6 @@ func (update *MultiUpdate) freeSeenTargetRows() {
 	update.ctr.seenTargetRows = nil
 }
 
-func (update *MultiUpdate) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (update *MultiUpdate) GetAffectedRows() uint64 {
 	return update.ctr.affectedRows
 }

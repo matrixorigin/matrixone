@@ -1,0 +1,33 @@
+drop database if exists vector_cagra_itopk_limit;
+create database vector_cagra_itopk_limit;
+use vector_cagra_itopk_limit;
+set experimental_cagra_index = 1;
+create table t(id bigint primary key, v vecf32(8));
+insert into t select result, cast(concat('[', result, ',0,0,0,0,0,0,0]') as vecf32(8)) from generate_series(1, 3000, 1) g;
+create index i using cagra on t(v) op_type 'vector_l2_ops' intermediate_graph_degree=16 graph_degree=8;
+select group_concat(id order by id) from (select id from t where id <= 5 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,2,3,4,5
+select group_concat(id order by id) from (select id from t where id <= 5 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative', 'max_itopk=1024') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,2,3,4,5
+select group_concat(id order by id) from (select id from t where id <= 5 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'itopk=1024') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,2,3,4,5
+select id from t where id <= 5 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'itopk=1025';
+invalid input: itopk 1025 exceeds the cagra limit 1024
+select id from t where id <= 5 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative', 'max_itopk=2000';
+invalid input: max_itopk 2000 exceeds the cagra limit 1024
+set vector_itopk = 2000;
+select group_concat(id order by id) from (select id from t where id <= 5 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10) x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,2,3,4,5
+set vector_itopk = 0;
+set vector_max_itopk = 5000;
+select group_concat(id order by id) from (select id from t where id <= 5 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,2,3,4,5
+select id from t where id <= 5 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'max_itopk=2000';
+invalid input: max_itopk 2000 exceeds the cagra limit 1024
+set vector_max_itopk = 0;
+drop database vector_cagra_itopk_limit;

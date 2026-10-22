@@ -257,6 +257,7 @@ func EncodePrimaryKey(v any, packer *types.Packer) []byte {
 }
 
 func EncodePrimaryKeyVector(vec *vector.Vector, packer *types.Packer) (ret [][]byte) {
+	encodePKRowsForTest.Add(uint64(vec.Length()))
 	packer.Reset()
 
 	if vec.IsConstNull() {

@@ -369,6 +369,8 @@ type BaseOptimizer struct {
 
 type ViewData struct {
 	Stmt                string
+	Definition          string `json:"definition,omitempty"`
+	CheckOption         string `json:"check_option,omitempty"`
 	DefaultDatabase     string
 	SQLMode             *string          `json:"sql_mode,omitempty"`
 	SecurityType        string           `json:"security_type,omitempty"`
@@ -893,6 +895,7 @@ type BindContext struct {
 	sliding                      bool
 	explicitSliding              bool
 	isDistinct                   bool
+	hasHaving                    bool // query-block ownership survives constant HAVING elimination
 	normalizeGroupingSetDistinct bool
 	// groupingSetOrderHiddenCount marks the generated ORDER BY projections at
 	// the tail of a grouping-set branch select list. They are qualified after
@@ -1018,7 +1021,7 @@ type BindContext struct {
 	numericProjectionTypes          []Type
 	numericTableProjectionTypes     map[string][]Type
 	numericTableProjectionAmbiguous map[string][]bool
-	numericCteByName                map[string]*tree.CTE
+	numericCteByName                map[string]*CTERef
 
 	timeAsts []tree.Expr
 

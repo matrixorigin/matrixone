@@ -1008,6 +1008,16 @@ message IndexSearchScan {
   // candidate_limit and handed to the reader by algo_expr_names[i].
   repeated Expr algo_exprs = 20;
   repeated string algo_expr_names = 21;
+  // Internal top-k of the search (BY RANK option itopk; 0 = unset): the number of
+  // candidates the index search returns before filtering, at least the result limit.
+  // The compiler fills unset knobs from the session variables vector_itopk,
+  // vector_max_itopk and vector_max_nprobe.
+  uint64 internal_topk = 22;
+  // Cap on internal_topk while the search widens (BY RANK option max_itopk; 0 = unset).
+  uint64 max_internal_topk = 23;
+  // Cap on the lists an IVF search probes while it widens (BY RANK option max_nprobe;
+  // 0 = unset). Graph indexes ignore it.
+  uint64 max_nprobe = 24;
 }
 
 message Node {
@@ -2484,7 +2494,12 @@ enum AlterPartitionType {
 
 message RankOption {
   string mode = 1; // "pre", "post", "force", or "auto"
-  int64 nprobe = 2; // Query-level base probe count; zero uses the session default.
+  // Index search knobs (0 = unset). itopk/max_itopk apply to every vector index;
+  // nprobe/max_nprobe to IVF indexes only.
+  uint64 nprobe = 2;
+  uint64 itopk = 3;
+  uint64 max_itopk = 4;
+  uint64 max_nprobe = 5;
 }
 
 message AlterTableAutoIncrement {

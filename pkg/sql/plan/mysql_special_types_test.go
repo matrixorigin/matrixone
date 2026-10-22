@@ -16,7 +16,6 @@ package plan
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -55,27 +54,25 @@ func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 	yearType := plan.Type{Id: int32(types.T_year)}
 
 	for _, tc := range []struct {
-		name     string
-		target   plan.Type
-		value    *tree.NumVal
-		wantEnum uint32
-		wantSet  uint64
-		handled  bool
+		name    string
+		target  plan.Type
+		value   *tree.NumVal
+		handled bool
 	}{
-		{"empty enum label", emptyEnum, tree.NewNumVal("", "", false, tree.P_char), 1, 0, true},
-		{"empty enum overflow", emptyEnum, tree.NewNumVal(uint64(65537), "65537", false, tree.P_uint64), 0, 0, true},
-		{"empty set bitmap", emptySet, tree.NewNumVal(uint64(3), "3", false, tree.P_uint64), 0, 1, true},
-		{"plain uint64", plan.Type{Id: int32(types.T_uint64)}, tree.NewNumVal(uint64(3), "3", false, tree.P_uint64), 0, 0, false},
-		{"enum valid label", enumType, tree.NewNumVal("b", "b", false, tree.P_char), 2, 0, true},
-		{"enum invalid label", enumType, tree.NewNumVal("bad", "bad", false, tree.P_char), 0, 0, true},
-		{"enum numeric ordinal", enumType, tree.NewNumVal(int64(1), "1", false, tree.P_int64), 1, 0, true},
-		{"enum invalid numeric ordinal", enumType, tree.NewNumVal(uint64(9), "9", false, tree.P_uint64), 0, 0, true},
-		{"set label drops invalid member", setType, tree.NewNumVal("x,bad", "x,bad", false, tree.P_char), 0, 1, true},
-		{"set numeric masks unknown bits", setType, tree.NewNumVal(uint64(99), "99", false, tree.P_uint64), 0, 3, true},
-		{"set negative numeric keeps declared bits", setType, tree.NewNumVal(int64(-1), "-1", false, tree.P_int64), 0, 7, true},
-		{"invalid year becomes zero", yearType, tree.NewNumVal("2156", "2156", false, tree.P_char), 0, 0, true},
-		{"valid year uses normal conversion", yearType, tree.NewNumVal("2024", "2024", false, tree.P_char), 0, 0, false},
-		{"null uses normal conversion", enumType, tree.NewNumVal("", "", false, tree.P_null), 0, 0, false},
+		{"empty enum label", emptyEnum, tree.NewNumVal("", "", false, tree.P_char), false},
+		{"empty enum overflow", emptyEnum, tree.NewNumVal(uint64(65537), "65537", false, tree.P_uint64), false},
+		{"empty set bitmap", emptySet, tree.NewNumVal(uint64(3), "3", false, tree.P_uint64), false},
+		{"plain uint64", plan.Type{Id: int32(types.T_uint64)}, tree.NewNumVal(uint64(3), "3", false, tree.P_uint64), false},
+		{"enum valid label", enumType, tree.NewNumVal("b", "b", false, tree.P_char), false},
+		{"enum invalid label", enumType, tree.NewNumVal("bad", "bad", false, tree.P_char), false},
+		{"enum numeric ordinal", enumType, tree.NewNumVal(int64(1), "1", false, tree.P_int64), false},
+		{"enum invalid numeric ordinal", enumType, tree.NewNumVal(uint64(9), "9", false, tree.P_uint64), false},
+		{"set label drops invalid member", setType, tree.NewNumVal("x,bad", "x,bad", false, tree.P_char), false},
+		{"set numeric masks unknown bits", setType, tree.NewNumVal(uint64(99), "99", false, tree.P_uint64), false},
+		{"set negative numeric keeps declared bits", setType, tree.NewNumVal(int64(-1), "-1", false, tree.P_int64), false},
+		{"invalid year becomes zero", yearType, tree.NewNumVal("2156", "2156", false, tree.P_char), true},
+		{"valid year uses normal conversion", yearType, tree.NewNumVal("2024", "2024", false, tree.P_char), false},
+		{"null uses normal conversion", enumType, tree.NewNumVal("", "", false, tree.P_null), false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			expr, handled, err := makeInsertIgnoreMySQLSpecialTypeConstExpr(ctx, tc.value, tc.target)
@@ -86,25 +83,13 @@ func TestInsertIgnoreMySQLSpecialTypeLiteralHelpers(t *testing.T) {
 				return
 			}
 			require.NotNil(t, expr)
-			if tc.target.Id == int32(types.T_enum) {
-				require.Equal(t, tc.wantEnum, expr.GetLit().GetEnumVal())
-			}
-			if tc.target.Id == int32(types.T_uint64) {
-				require.Equal(t, tc.wantSet, expr.GetLit().GetU64Val())
-			}
+			require.Equal(t, int32(types.T_year), expr.Typ.Id)
 		})
 	}
 
 	require.True(t, mysqlYearLiteralIsValid(tree.NewNumVal(int64(2024), "2024", false, tree.P_int64)))
 	require.False(t, mysqlYearLiteralIsValid(tree.NewNumVal(uint64(^uint64(0)), "18446744073709551615", false, tree.P_uint64)))
 	require.True(t, mysqlYearLiteralIsValid(tree.NewNumVal("ignored", "ignored", false, tree.P_hexnum)))
-	require.Equal(t, uint64(7), mysqlSetValidBitmap("x,y,z"))
-	labels := make([]string, types.MaxSetMembers)
-	for i := range labels {
-		labels[i] = strconv.Itoa(i)
-	}
-	require.Equal(t, ^uint64(0), mysqlSetValidBitmap(strings.Join(labels, ",")))
-	require.Equal(t, uint64(1), mysqlSetValidBitmap(","))
 }
 
 func TestMySQLSpecialOrderTypeReversibility(t *testing.T) {

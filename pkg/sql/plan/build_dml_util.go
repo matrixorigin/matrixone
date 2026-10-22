@@ -187,6 +187,7 @@ func buildInsertPlans(
 	objRef *ObjectRef, tableDef *TableDef, lastNodeId int32, ifExistAutoPkCol bool,
 	insertWithoutUniqueKeyMap map[string]bool,
 	ifInsertFromUniqueColMap map[string]bool,
+	loadConstraintIgnore bool,
 ) error {
 
 	var err error
@@ -239,7 +240,7 @@ func buildInsertPlans(
 		lastNodeId,
 		0,
 		checkColName2Idx,
-		false,
+		loadConstraintIgnore,
 	)
 	if err != nil {
 		return err
@@ -5794,7 +5795,7 @@ func runSqlWithSnapshot(
 		exec = v.(executor.SQLExecutor)
 	}
 
-	topContext := proc.GetTopContext()
+	topContext := ViewSchemaCatalogContext(proc.GetTopContext())
 	accountId, err := defines.GetAccountId(topContext)
 	if err != nil {
 		return executor.Result{}, err

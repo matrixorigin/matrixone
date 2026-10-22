@@ -197,6 +197,30 @@ func ParseIncludeColumnsValue(raw string) ([]string, error) {
 	return cols, nil
 }
 
+// IncludeColumnsFromIndexParams returns the INCLUDE columns of an index's algo-params
+// JSON (the IncludedColumns key, or the historical "include_columns").
+func IncludeColumnsFromIndexParams(indexParams string) ([]string, error) {
+	if indexParams == "" {
+		return nil, nil
+	}
+	var params map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(indexParams), &params); err != nil {
+		return nil, err
+	}
+	value, ok := params[IncludedColumns]
+	if !ok {
+		value, ok = params["include_columns"]
+	}
+	if !ok {
+		return nil, nil
+	}
+	var raw string
+	if err := json.Unmarshal(value, &raw); err != nil {
+		return nil, err
+	}
+	return ParseIncludeColumnsValue(raw)
+}
+
 // MarshalIncludeColumnsValue encodes INCLUDE column names without losing
 // commas or leading/trailing whitespace that are valid inside quoted SQL
 // identifiers. ParseIncludeColumnsValue retains support for the historical

@@ -377,6 +377,22 @@ func saveQueryResult2(execCtx *ExecCtx, crs *perfcounter.CounterSet, bat *batch.
 	if canSaveQueryResult(execCtx.reqCtx, ses) {
 		newCtx := perfcounter.AttachS3RequestKey(execCtx.reqCtx, crs)
 		if bat == nil {
+			// A query that produced zero rows sends no data batches, so the
+			// meta would have no block file to reference and result_scan
+			// rejects the saved result (issue #30553). Stage one typed empty
+			// block first, mirroring the cursor path's FinishStage handling.
+			if ses.queryRowCount == 0 && ses.blockIdx == 0 && ses.rs != nil && len(ses.rs.ResultCols) > 0 {
+				empty := batch.NewWithSize(len(ses.rs.ResultCols))
+				for i, col := range ses.rs.ResultCols {
+					empty.Vecs[i] = vector.NewVec(types.MustTypeFromPlan(col.Typ))
+				}
+				empty.SetRowCount(0)
+				if err := saveBatch(newCtx, ses, empty); err != nil {
+					empty.Clean(ses.GetMemPool())
+					return err
+				}
+				empty.Clean(ses.GetMemPool())
+			}
 			if err := saveMeta(newCtx, ses); err != nil {
 				return err
 			}
@@ -721,8 +737,7 @@ type resultFileInfo struct {
 
 // doDumpQueryResult reads data from the query result, converts it into csv and saves it into
 // the file designated by the path.
-func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {
-	var err error
+func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) (err error) {
 	var columnDefs *plan.ResultColDef
 	var reader *ioutil.BlockReader
 	var blocks []objectio.BlockObject
@@ -779,18 +794,13 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	exportParam.DefaultBufSize = getPu(exportParam.service).SV.ExportDataDefaultFlushSize
 	exportParam.FileService = getPu(exportParam.service).FileService
 	exportParam.Ctx = ctx
-	defer func() {
-		if exportParam.AsyncReader != nil {
-			_ = exportParam.AsyncReader.Close()
-		}
-		if exportParam.AsyncWriter != nil {
-			_ = exportParam.AsyncWriter.Close()
-		}
-	}()
+	exportParam.ctx, exportParam.cancel = context.WithCancel(ctx)
+	defer func() { err = exportParam.finish(err) }()
+
 	initExportFileParam(exportParam, mrs)
 
 	//open output file
-	if err = openNewFile(ctx, exportParam, mrs); err != nil {
+	if err = openNewFile(exportParam.ctx, exportParam, mrs); err != nil {
 		return err
 	}
 
@@ -845,11 +855,6 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				}
 			}
 		}
-	}
-
-	err = Close(exportParam)
-	if err != nil {
-		return err
 	}
 
 	return err
