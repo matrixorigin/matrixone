@@ -7,6 +7,8 @@ This module provides enhanced JSON type that supports:
 - Better Python type mapping
 """
 
+import json
+
 from sqlalchemy import cast, String, Integer, Float, Numeric
 from sqlalchemy.types import TypeDecorator
 from sqlalchemy.dialects.mysql import JSON as MySQLJSON
@@ -24,11 +26,14 @@ class JSONPathElement(ColumnElement):
     """
 
     __visit_name__ = 'json_path_element'
+    # SQLAlchemy uses expression identity for anonymous labels, even when
+    # equality builds a SQL predicate.
+    __hash__ = ColumnElement.__hash__
 
     def __init__(self, column: ColumnElement, key: str):
         self.column = column
         self.key = key
-        self._current_path = f'$.{key}'
+        self._current_path = '$.' + json.dumps(str(key), ensure_ascii=False)
         # Call parent init
         super().__init__()
 
@@ -38,12 +43,12 @@ class JSONPathElement(ColumnElement):
 
         Example:
             Product.specs['hardware']['processor']
-            # Generates path: $.hardware.processor
+            # Generates path: $."hardware"."processor"
         """
         new_element = JSONPathElement.__new__(JSONPathElement)
         new_element.column = self.column
         new_element.key = key
-        new_element._current_path = f'{self._current_path}.{key}'
+        new_element._current_path = self._current_path + '.' + json.dumps(str(key), ensure_ascii=False)
         return new_element
 
     @property
@@ -57,7 +62,7 @@ class JSONPathElement(ColumnElement):
             # Returns: Dell (without quotes)
             Product.specs['brand'].astext
 
-            # SQL: json_extract_string(specs, '$.brand')
+            # SQL: json_extract_string(specs, '$."brand"')
         """
         return json_extract_string(self.column, self._current_path)
 
@@ -72,7 +77,7 @@ class JSONPathElement(ColumnElement):
             # Returns: True/False as boolean comparison
             Product.specs['active'].asbool
 
-            # SQL: json_extract(specs, '$.active') = 'true'
+            # SQL: json_extract(specs, '$."active"') = 'true'
         """
         # Simply check if value equals 'true'
         extracted = json_extract(self.column, self._current_path)
@@ -172,18 +177,13 @@ class JSONPathElement(ColumnElement):
     @property
     def _from_objects(self):
         """Required for SQLAlchemy to understand this as a column element."""
-        return [self.column]
-
-    @property
-    def _is_subquery(self):
-        """Required attribute for SQLAlchemy 2.0."""
-        return False
+        return self.column._from_objects
 
     def _compiler_dispatch(self, visitor, **kwargs):
         """
         Custom compilation - delegate to json_extract.
 
-        This ensures that column['key'] compiles to json_extract(column, '$.key')
+        This ensures that column['key'] compiles to json_extract(column, '$."key"')
         """
         # Create json_extract function call
         extract_func = json_extract(self.column, self._current_path)
