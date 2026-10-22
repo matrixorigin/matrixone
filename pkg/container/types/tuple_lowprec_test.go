@@ -33,25 +33,29 @@ func TestTupleLowPrecFloatBits(t *testing.T) {
 		value any
 		f     float32
 	}
-	var cases [][]elem
-	var f8, f4, b16, h16 []elem
+	f8 := make([]elem, 0, 256)
 	for c := 0; c < 256; c++ {
 		if v := Float8(c); !math.IsNaN(float64(v.ToFloat32())) && c != 0x80 {
 			f8 = append(f8, elem{v, v.ToFloat32()})
 		}
 	}
+	f4 := make([]elem, 0, 16)
 	for c := 0; c < 16; c++ {
 		if c != 0x08 {
 			f4 = append(f4, elem{Float4(c), Float4(c).ToFloat32()})
 		}
 	}
-	for _, v := range []float32{-BF16MaxFinite, -65504, -1.5, -0.30078125, 0, 1e-38, 0.5, 3, BF16MaxFinite} {
+	bf16Values := []float32{-BF16MaxFinite, -65504, -1.5, -0.30078125, 0, 1e-38, 0.5, 3, BF16MaxFinite}
+	b16 := make([]elem, 0, len(bf16Values))
+	for _, v := range bf16Values {
 		b16 = append(b16, elem{BF16FromFloat32(v), BF16FromFloat32(v).ToFloat32()})
 	}
-	for _, v := range []float32{-65504, -2, -6.1e-5, 0, 5.96e-8, 0.099975586, 1, 65504} {
+	float16Values := []float32{-65504, -2, -6.1e-5, 0, 5.96e-8, 0.099975586, 1, 65504}
+	h16 := make([]elem, 0, len(float16Values))
+	for _, v := range float16Values {
 		h16 = append(h16, elem{Float16FromFloat32(v), Float16FromFloat32(v).ToFloat32()})
 	}
-	cases = append(cases, f8, f4, b16, h16)
+	cases := [][]elem{f8, f4, b16, h16}
 	pack := func(v any) []byte {
 		p := NewPacker()
 		defer p.Close()
