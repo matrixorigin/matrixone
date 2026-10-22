@@ -112,10 +112,12 @@ func TestPublicationSurvivesAllocatorRestart(t *testing.T) {
 		case <-ctx.Done():
 			t.Fatal(ctx.Err())
 		}
+		// Lose the allocator's volatile bindings while its RPC workers are live.
+		// The process epoch is immutable and need not change to make the old
+		// binding stale once the other service takes ownership.
 		alloc.mu.Lock()
 		alloc.mu.services = make(map[string]*serviceBinds)
 		alloc.mu.lockTables = make(map[uint32]map[uint64]pb.LockTable)
-		alloc.version++
 		alloc.mu.Unlock()
 		_, err = b.Lock(ctx, table, newTestRows(1), newTestTxnID(2), newTestRowExclusiveOptions())
 		require.NoError(t, err)
