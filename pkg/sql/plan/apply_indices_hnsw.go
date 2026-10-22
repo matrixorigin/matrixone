@@ -55,6 +55,9 @@ func (builder *QueryBuilder) hnswIndexCoversSnapshot(scanNode *plan.Node, metaDe
 		scanNode.TableDef == nil || idxDef == nil {
 		return false
 	}
+	if builder.GetContext().Value(defines.HnswSnapshotFallbackKey{}) == true {
+		return false
+	}
 	proc := builder.compCtx.GetProcess()
 	if proc == nil {
 		return false

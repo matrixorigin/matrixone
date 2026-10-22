@@ -711,12 +711,14 @@ func (c *Compile) run(s *Scope) error {
 	return nil
 }
 
-// isRetryErr if the error is ErrTxnNeedRetry and the transaction is RC isolation, we need to retry t
-// he statement
+// isRetryErr accepts transaction retries under RC and snapshot-coverage retries
+// under either isolation level. A coverage retry changes the access path, not
+// the transaction snapshot.
 func (c *Compile) isRetryErr(err error) bool {
-	return (moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
-		moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
-		c.proc.GetTxnOperator().Txn().IsRCIsolation()
+	return moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged) ||
+		(moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetry) ||
+			moerr.IsMoErrCode(err, moerr.ErrTxnNeedRetryWithDefChanged)) &&
+			c.proc.GetTxnOperator().Txn().IsRCIsolation()
 }
 
 type scopeRunResult struct {

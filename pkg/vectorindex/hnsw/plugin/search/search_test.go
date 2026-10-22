@@ -321,7 +321,7 @@ func TestHnswReaderSearchedGenerationSnapshot(t *testing.T) {
 			done, err := reader.Read(context.Background(), []string{planreader.KeyColumn, planreader.ScoreColumn}, nil, proc.Mp(), out)
 			require.NoError(t, replacementErr)
 			if tc.wantRetry {
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode), "got %v", err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged), "got %v", err)
 				require.Zero(t, out.RowCount(), "unproven candidates must not be emitted")
 			} else {
 				require.NoError(t, err)

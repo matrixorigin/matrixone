@@ -20,6 +20,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -34,15 +35,20 @@ import (
 // A generation built before the latest committed source row cannot answer top-k.
 func TestHnswLaggingGenerationFallsBackToSource(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		build     int64
-		wantIndex bool
+		name        string
+		build       int64
+		wantIndex   bool
+		forceSource bool
 	}{
 		{name: "behind_source", build: 99},
 		{name: "covers_source", build: 100, wantIndex: true},
+		{name: "coverage_retry_uses_source", build: 100, forceSource: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			b, project, sortID, _ := newExactVectorFallbackApplyIndicesCase(t, 0, nil)
+			if tc.forceSource {
+				b.compCtx.SetContext(context.WithValue(b.compCtx.GetContext(), defines.HnswSnapshotFallbackKey{}, true))
+			}
 			scan := b.qry.Nodes[b.qry.Nodes[sortID].Children[0]]
 			scan.ObjRef = &plan.ObjectRef{SchemaName: "db", ObjName: scan.TableDef.Name}
 			scan.TableDef.TblId = 1

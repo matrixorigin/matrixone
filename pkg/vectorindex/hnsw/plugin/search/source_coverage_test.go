@@ -136,7 +136,7 @@ func TestHnswPersistedDeleteCoverage(t *testing.T) {
 			defer out.Clean(proc.Mp())
 			_, err = reader.Read(ctx, []string{planreader.KeyColumn, planreader.ScoreColumn}, nil, proc.Mp(), out)
 			if !tc.covered {
-				require.True(t, moerr.IsMoErrCode(err, moerr.ErrVectorNeedRetryWithPreMode), "got %v", err)
+				require.True(t, moerr.IsMoErrCode(err, moerr.ErrVectorIndexSnapshotChanged), "got %v", err)
 				require.Zero(t, out.RowCount(), "a stale deleted candidate must not escape to the join")
 				return
 			}

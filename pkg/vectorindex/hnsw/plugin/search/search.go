@@ -270,7 +270,7 @@ func (s *searcher) validateSearchedGeneration(buildTS int64) error {
 		return nil
 	}
 	if buildTS <= 0 || s.proc.GetSessionInfo() == nil || s.proc.GetSessionInfo().StorageEngine == nil {
-		return moerr.NewVectorNeedRetryWithPreModeNoCtx()
+		return moerr.NewVectorIndexSnapshotChangedNoCtx()
 	}
 
 	sp := sqlexec.NewSqlProcess(s.proc)
@@ -281,7 +281,7 @@ func (s *searcher) validateSearchedGeneration(buildTS int64) error {
 		readTS = types.TimestampToTS(*snapshotTS)
 	}
 	if !hnswcoverage.BuildPrecedesSnapshot(buildTS, readTS) {
-		return moerr.NewVectorNeedRetryWithPreModeNoCtx()
+		return moerr.NewVectorIndexSnapshotChangedNoCtx()
 	}
 	if snapshotTS != nil {
 		readTxn = readTxn.CloneSnapshotOp(*snapshotTS)
@@ -292,15 +292,15 @@ func (s *searcher) validateSearchedGeneration(buildTS int64) error {
 	}
 	_, _, rel, err := s.proc.GetSessionInfo().StorageEngine.GetRelationById(ctx, readTxn, s.sourceID)
 	if err != nil {
-		return moerr.NewVectorNeedRetryWithPreModeNoCtx()
+		return moerr.NewVectorIndexSnapshotChangedNoCtx()
 	}
 	provider, ok := rel.(engine.SourceCommitTSProvider)
 	if !ok {
-		return moerr.NewVectorNeedRetryWithPreModeNoCtx()
+		return moerr.NewVectorIndexSnapshotChangedNoCtx()
 	}
 	sourceTS, err := provider.SourceCommitTS(ctx, types.BuildTS(buildTS, 0))
 	if err != nil || !hnswcoverage.BuildCoversSnapshot(buildTS, readTS, sourceTS) {
-		return moerr.NewVectorNeedRetryWithPreModeNoCtx()
+		return moerr.NewVectorIndexSnapshotChangedNoCtx()
 	}
 	return nil
 }
