@@ -63,6 +63,9 @@ func startCluster(
 	if err := validateLaunchManifest(cfg); err != nil {
 		return err
 	}
+	if err := validateM0BirthLaunch(cfg); err != nil {
+		return err
+	}
 
 	if cfg.Dynamic.Enable {
 		return launchStartDynamic(ctx, cfg, stopper, shutdownC)
