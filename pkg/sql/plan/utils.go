@@ -31,7 +31,6 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
-	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -52,33 +51,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
-
-func GetBindings(expr *plan.Expr) []int32 {
-	bindingSet := doGetBindings(expr)
-	bindings := make([]int32, 0, len(bindingSet))
-	for id := range bindingSet {
-		bindings = append(bindings, id)
-	}
-	return bindings
-}
-
-func doGetBindings(expr *plan.Expr) map[int32]bool {
-	res := make(map[int32]bool)
-
-	switch expr := expr.Expr.(type) {
-	case *plan.Expr_Col:
-		res[expr.Col.RelPos] = true
-
-	case *plan.Expr_F:
-		for _, child := range expr.F.Args {
-			for id := range doGetBindings(child) {
-				res[id] = true
-			}
-		}
-	}
-
-	return res
-}
 
 func hasCorrCol(expr *plan.Expr) bool {
 	if expr == nil {
@@ -1802,68 +1774,6 @@ func GetColumnsByExpr(
 	return
 }
 
-func EvalFilterExpr(ctx context.Context, expr *plan.Expr, bat *batch.Batch, proc *process.Process) (bool, error) {
-	if len(bat.Vecs) == 0 { //that's constant expr
-		e, err := ConstantFold(bat, expr, proc, false, true)
-		if err != nil {
-			return false, err
-		}
-
-		if cExpr, ok := e.Expr.(*plan.Expr_Lit); ok {
-			if bVal, bOk := cExpr.Lit.Value.(*plan.Literal_Bval); bOk {
-				return bVal.Bval, nil
-			}
-		}
-		return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
-	} else {
-		executor, err := colexec.NewExpressionExecutor(proc, expr)
-		if err != nil {
-			return false, err
-		}
-		defer executor.Free()
-
-		vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			return false, err
-		}
-		if vec.GetType().Oid != types.T_bool {
-			return false, moerr.NewInternalError(ctx, "cannot eval filter expr")
-		}
-		cols := vector.MustFixedColWithTypeCheck[bool](vec)
-		for _, isNeed := range cols {
-			if isNeed {
-				return true, nil
-			}
-		}
-		return false, nil
-	}
-}
-
-func exchangeVectors(datas [][2]any, depth int, tmpResult []any, result *[]*vector.Vector, mp *mpool.MPool) {
-	for i := 0; i < len(datas[depth]); i++ {
-		tmpResult[depth] = datas[depth][i]
-		if depth != len(datas)-1 {
-			exchangeVectors(datas, depth+1, tmpResult, result, mp)
-		} else {
-			for j, val := range tmpResult {
-				vector.AppendAny((*result)[j], val, false, mp)
-			}
-		}
-	}
-}
-
-func BuildVectorsByData(datas [][2]any, dataTypes []uint8, mp *mpool.MPool) []*vector.Vector {
-	vectors := make([]*vector.Vector, len(dataTypes))
-	for i, typ := range dataTypes {
-		vectors[i] = vector.NewVec(types.T(typ).ToType())
-	}
-
-	tmpResult := make([]any, len(datas))
-	exchangeVectors(datas, 0, tmpResult, &vectors, mp)
-
-	return vectors
-}
-
 func ExprIsZonemappable(ctx context.Context, expr *plan.Expr) bool {
 	if expr == nil {
 		return false
@@ -2567,7 +2477,7 @@ func checkNoNeedCast(ctx context.Context, constT, columnT types.Type, constExpr 
 	// casts. When their domain already equals the IN left side, they are safe to
 	// keep in the typed list just like a direct literal. Do not extend this to
 	// row-dependent expressions merely because their declared types match.
-	if constT.Eq(columnT) && (rule.IsConstant(constExpr, false) || isCastOfConstant(constExpr)) {
+	if constT.Eq(columnT) && (function.IsConstant(constExpr, false) || isCastOfConstant(constExpr)) {
 		return true
 	}
 
@@ -2752,7 +2662,7 @@ func isCastOfConstant(expr *plan.Expr) bool {
 	if fn == nil || fn.Func == nil || fn.Func.GetObjName() != "cast" || len(fn.Args) == 0 {
 		return false
 	}
-	return rule.IsConstant(fn.Args[0], false) || isCastOfConstant(fn.Args[0])
+	return function.IsConstant(fn.Args[0], false) || isCastOfConstant(fn.Args[0])
 }
 
 // parseHiveOptionKV handles hive_partitioning / hive_partition_columns keys in
@@ -3330,115 +3240,6 @@ func GetUniqueColAndIdxFromTableDef(tableDef *TableDef) ([]map[string]int, map[s
 	return uniqueCols, uniqueColNames
 }
 
-// GenUniqueColJoinExpr
-// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
-// uniqueCols is: []map[string]int { {'a'=1},  {'b'=2,'c'=3} }
-// we will get expr like: 'leftTag.a = rightTag.a or (leftTag.b = rightTag.b and leftTag.c = rightTag. c)
-func GenUniqueColJoinExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, leftTag int32, rightTag int32) (*Expr, error) {
-	var checkExpr *Expr
-	var err error
-
-	for i, uniqueColMap := range uniqueCols {
-		var condExpr *Expr
-		condIdx := int(0)
-		for _, colIdx := range uniqueColMap {
-			col := tableDef.Cols[colIdx]
-			leftExpr := &Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: leftTag,
-						ColPos: int32(colIdx),
-					},
-				},
-			}
-			rightExpr := &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: rightTag,
-						ColPos: int32(colIdx),
-					},
-				},
-			}
-			eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
-			if err != nil {
-				return nil, err
-			}
-			if condIdx == 0 {
-				condExpr = eqExpr
-			} else {
-				condExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
-				if err != nil {
-					return nil, err
-				}
-			}
-			condIdx++
-		}
-
-		if i == 0 {
-			checkExpr = condExpr
-		} else {
-			checkExpr, err = BindFuncExprImplByPlanExpr(ctx, "or", []*Expr{checkExpr, condExpr})
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
-
-	return checkExpr, nil
-}
-
-// GenUniqueColCheckExpr   like GenUniqueColJoinExpr. but use for on duplicate key clause to check conflict
-// if get table:  t1(a int primary key, b int, c int, d int, unique key(b,c));
-// we get batch like [1,2,3,4, origin_a, origin_b, origin_c, origin_d, row_id ....]。
-// we get expr like:  []*Expr{ 1=origin_a ,  (2 = origin_b and 3 = origin_c) }
-func GenUniqueColCheckExpr(ctx context.Context, tableDef *TableDef, uniqueCols []map[string]int, colCount int) ([]*Expr, error) {
-	checkExpr := make([]*Expr, len(uniqueCols))
-
-	for i, uniqueColMap := range uniqueCols {
-		var condExpr *Expr
-		condIdx := int(0)
-		for _, colIdx := range uniqueColMap {
-			col := tableDef.Cols[colIdx]
-			// insert values
-			leftExpr := &Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 0,
-						ColPos: int32(colIdx),
-					},
-				},
-			}
-			rightExpr := &plan.Expr{
-				Typ: col.Typ,
-				Expr: &plan.Expr_Col{
-					Col: &plan.ColRef{
-						RelPos: 1,
-						ColPos: int32(colIdx + colCount),
-					},
-				},
-			}
-			eqExpr, err := BindFuncExprImplByPlanExpr(ctx, "=", []*Expr{leftExpr, rightExpr})
-			if err != nil {
-				return nil, err
-			}
-			if condIdx == 0 {
-				condExpr = eqExpr
-			} else {
-				condExpr, err = BindFuncExprImplByPlanExpr(ctx, "and", []*Expr{condExpr, eqExpr})
-				if err != nil {
-					return nil, err
-				}
-			}
-			condIdx++
-		}
-		checkExpr[i] = condExpr
-	}
-
-	return checkExpr, nil
-}
 func onlyContainsTag(filter *Expr, tag int32) bool {
 	switch ex := filter.Expr.(type) {
 	case *plan.Expr_Col:
@@ -4127,34 +3928,6 @@ func MakeFalseExpr() *Expr {
 				Value:  &plan.Literal_Bval{Bval: false},
 			},
 		},
-	}
-}
-
-func MakeCPKEYRuntimeFilter(tag int32, upperlimit int32, expr *Expr, tableDef *plan.TableDef, notOnPk bool) *plan.RuntimeFilterSpec {
-	cpkeyIdx, ok := tableDef.Name2ColIndex[catalog.CPrimaryKeyColName]
-	if !ok {
-		panic("fail to convert runtime filter to composite primary key!")
-	}
-	col := expr.GetCol()
-	col.ColPos = cpkeyIdx
-	expr.Typ = tableDef.Cols[cpkeyIdx].Typ
-	return &plan.RuntimeFilterSpec{
-		Tag:         tag,
-		UpperLimit:  upperlimit,
-		Expr:        expr,
-		MatchPrefix: true,
-		NotOnPk:     notOnPk,
-	}
-}
-
-func MakeSerialRuntimeFilter(ctx context.Context, tag int32, matchPrefix bool, upperlimit int32, expr *Expr, notOnPk bool) *plan.RuntimeFilterSpec {
-	serialExpr, _ := BindFuncExprImplByPlanExpr(ctx, "serial", []*plan.Expr{expr})
-	return &plan.RuntimeFilterSpec{
-		Tag:         tag,
-		UpperLimit:  upperlimit,
-		Expr:        serialExpr,
-		MatchPrefix: matchPrefix,
-		NotOnPk:     notOnPk,
 	}
 }
 

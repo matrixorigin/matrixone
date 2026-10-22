@@ -5791,7 +5791,7 @@ func bindFuncExprAndConstFoldInternal(
 		// DECIMAL256 constants can remain executable casts because scalar
 		// Literal has no DECIMAL256 representation. Check constancy rather
 		// than requiring one particular folded representation.
-		if arg1.Typ.Id == int32(types.T_any) || !rule.IsConstant(arg1, false) {
+		if arg1.Typ.Id == int32(types.T_any) || !function.IsConstant(arg1, false) {
 			return nil, moerr.NewInvalidInput(ctx, "2nd argument of in_range must be constant")
 		}
 
@@ -5801,7 +5801,7 @@ func bindFuncExprAndConstFoldInternal(
 		}
 		fnArgs[2] = arg2
 
-		if arg2.Typ.Id == int32(types.T_any) || !rule.IsConstant(arg2, false) {
+		if arg2.Typ.Id == int32(types.T_any) || !function.IsConstant(arg2, false) {
 			return nil, moerr.NewInvalidInput(ctx, "3rd argument of in_range must be constant")
 		}
 
@@ -6018,7 +6018,7 @@ func isPreparedPercentileExpr(expr *Expr) bool {
 // validation and the rational percentile codec without FLOAT64 rounding.
 func normalizePercentileParam(ctx context.Context, name string, args []*Expr) error {
 	if (name != NameApproxPercentile && name != NamePercentileCont && name != NamePercentileDisc) ||
-		len(args) != 2 || !isPreparedPercentileExpr(args[1]) || rule.IsConstant(args[1], false) {
+		len(args) != 2 || !isPreparedPercentileExpr(args[1]) || function.IsConstant(args[1], false) {
 		return nil
 	}
 	if percentileParamTypeSupported(name, makeTypeByPlan2Expr(args[1])) {
@@ -10730,7 +10730,7 @@ func foldDecimalStringComparisonConstants(
 			if candidate == nil || peer == nil ||
 				!types.T(candidate.Typ.Id).IsMySQLString() ||
 				!types.T(peer.Typ.Id).IsDecimal() ||
-				candidate.GetLit() != nil || !rule.IsConstant(candidate, false) {
+				candidate.GetLit() != nil || !function.IsConstant(candidate, false) {
 				continue
 			}
 			folded, err := ConstantFold(

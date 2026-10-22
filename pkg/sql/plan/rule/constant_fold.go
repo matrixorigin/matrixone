@@ -415,7 +415,7 @@ func IsImplicitFloatCastOfExplicitDecimalConstant(expr *plan.Expr) bool {
 		return false
 	}
 	source := fn.Args[0]
-	if source == nil || !types.T(source.Typ.Id).IsDecimal() || !IsConstant(source, false) {
+	if source == nil || !types.T(source.Typ.Id).IsDecimal() || !function.IsConstant(source, false) {
 		return false
 	}
 	sourceFn := source.GetF()
@@ -1170,10 +1170,6 @@ func IsLegacyTimeAssignmentOutsideInternalRange(fn *plan.Function) bool {
 	return outOfRange
 }
 
-func IsConstant(e *plan.Expr, varAndParamIsConst bool) bool {
-	return function.IsConstant(e, varAndParamIsConst)
-}
-
 // ContainsSqlModeDependentDivision preserves the path to divisions whose
 // denominator is not a proven nonzero numeric literal. Folding a parent under
 // an empty sql_mode could otherwise erase warnings for a later EXECUTE.
@@ -1217,34 +1213,6 @@ func ContainsSqlModeDependentDivision(expr *plan.Expr) bool {
 		}
 	}
 	return false
-}
-
-// IsDivisionByZeroConstant checks if the expression is a division/modulo operation
-// where the divisor is a constant zero or either operand is NULL.
-// We skip constant folding for such cases to allow runtime to properly handle them.
-func IsDivisionByZeroConstant(fn *plan.Function) bool {
-	fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
-	if fid != function.DIV && fid != function.INTEGER_DIV && fid != function.MOD {
-		return false
-	}
-	if len(fn.Args) < 2 {
-		return false
-	}
-
-	// Check if either operand is NULL
-	for _, arg := range fn.Args {
-		lit := arg.GetLit()
-		if lit != nil && lit.GetIsnull() {
-			return true
-		}
-	}
-
-	divisor := fn.Args[1]
-	lit := divisor.GetLit()
-	if lit == nil {
-		return false
-	}
-	return isZeroLiteral(lit)
 }
 
 // isZeroLiteral checks if a literal value is zero
