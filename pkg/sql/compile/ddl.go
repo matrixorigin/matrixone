@@ -4060,28 +4060,6 @@ func reconcileRefChildTableID(
 	}
 }
 
-func AddFkeyToRelation(ctx context.Context, fkRelation engine.Relation, fkey *plan.ForeignKeyDef) error {
-	oldCt, err := GetConstraintDef(ctx, fkRelation)
-	if err != nil {
-		return err
-	}
-	var oldFkeys *engine.ForeignKeyDef
-	for _, ct := range oldCt.Cts {
-		if old, ok := ct.(*engine.ForeignKeyDef); ok {
-			oldFkeys = old
-		}
-	}
-	if oldFkeys == nil {
-		oldFkeys = &engine.ForeignKeyDef{}
-	}
-	oldFkeys.Fkeys = append(oldFkeys.Fkeys, fkey)
-	newCt, err := MakeNewCreateConstraint(oldCt, oldFkeys)
-	if err != nil {
-		return err
-	}
-	return fkRelation.UpdateConstraint(ctx, newCt)
-}
-
 // removeChildTblIdFromParentTable removes the tblId from the tableDef of fkRelation.
 // input the fkRelation as the parameter instead of retrieving it again
 // to embrace the fk self refer situation
