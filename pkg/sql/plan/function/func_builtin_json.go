@@ -1191,11 +1191,22 @@ func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			if err != nil {
 				return err
 			}
-			bj = bj.Query([]*bytejson.Path{&parsedPath})
+			// #30781: a matched JSON literal null is a value, only a
+			// non-matching path yields SQL NULL.
+			selected, exists := bj.QueryWithExists([]*bytejson.Path{&parsedPath})
+			if !exists {
+				if err := rs.Append(0, true); err != nil {
+					return err
+				}
+				continue
+			}
+			bj = selected
 		}
 
+		// #30781: the JSON literal null is a scalar of length 1 (MySQL).
+		// SQL-NULL documents were already handled by jIsNull above.
 		if bj.IsNull() {
-			if err := rs.Append(0, true); err != nil {
+			if err := rs.Append(1, false); err != nil {
 				return err
 			}
 			continue
@@ -2173,14 +2184,14 @@ rowLoop:
 		if err != nil {
 			return err
 		}
-		if out.IsNull() && jsonFuncType != bytejson.JsonModifyArrayAppend && jsonFuncType != bytejson.JsonModifyArrayInsert {
-			if err = rs.AppendBytes(nil, true); err != nil {
-				return err
-			}
-		} else {
-			if err = rs.AppendByteJson(out, false); err != nil {
-				return err
-			}
+		// The modifier result is always a JSON document: a JSON literal null
+		// is a value, not SQL NULL. MySQL keeps the JSON literal null for
+		// JSON_SET/JSON_INSERT/JSON_REPLACE applied to it, so a NOT NULL column
+		// must accept the updated document. SQL-NULL propagation was already
+		// handled by the earlier input checks (null source document, null
+		// path or the ARRAY_APPEND null-value contract).
+		if err = rs.AppendByteJson(out, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2673,8 +2684,10 @@ func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_length", "invalid path expression")
 		}
-		val := bj.Query([]*bytejson.Path{&path})
-		if val.IsNull() {
+		// A JSON literal null under the path is an existing value of scalar
+		// length 1 (MySQL); only a non-matching path yields SQL NULL.
+		val, exists := bj.QueryWithExists([]*bytejson.Path{&path})
+		if !exists {
 			rsNull.Add(i)
 			continue
 		}
