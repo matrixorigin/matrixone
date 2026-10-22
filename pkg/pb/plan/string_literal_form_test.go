@@ -73,6 +73,32 @@ func TestValidateStringLiteralFormsAfterWireDecode(t *testing.T) {
 	require.ErrorContains(t, (&GeneratedCol{}).UnmarshalBinary(encoded), "invalid string literal form 99")
 }
 
+func nestedUnaryExpr(depth int) *Expr {
+	expr := &Expr{Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{Value: &Literal_Sval{Sval: "x"}}}}
+	for i := 0; i < depth; i++ {
+		expr = &Expr{Typ: Type{Id: 61}, Expr: &Expr_F{F: &Function{
+			Func: &ObjectRef{ObjName: "identity"}, Args: []*Expr{expr},
+		}}}
+	}
+	return expr
+}
+
+func BenchmarkExprUnmarshalNested(b *testing.B) {
+	encoded, err := nestedUnaryExpr(1024).Marshal()
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportMetric(float64(len(encoded)), "wire-bytes")
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var decoded Expr
+		if err := decoded.Unmarshal(encoded); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 func TestValidateStringLiteralFormsTraversesSubqueryChild(t *testing.T) {
 	expr := &Expr{Expr: &Expr_Sub{Sub: &SubqueryRef{Child: &Expr{
 		Typ: Type{Id: 61}, Expr: &Expr_Lit{Lit: &Literal{
