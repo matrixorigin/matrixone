@@ -16,9 +16,14 @@ package fileservice
 
 import (
 	"context"
+	"errors"
+	"github.com/stretchr/testify/require"
 	"io"
 	"iter"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
 	"time"
 )
 
@@ -127,4 +132,95 @@ func (b *blockingObjectStorage) Write(ctx context.Context, key string, rd io.Rea
 	b.start <- struct{}{}
 	<-b.wait
 	return b.err
+}
+
+// readTestObjectStorage keeps the ordinary and conditional provider entry points
+// observable without an SDK, network server, or shared mutable request state.
+type readTestObjectStorage struct {
+	dummyObjectStorage
+	open func(context.Context, string, *int64, *int64, *ObjectIdentity) (io.ReadCloser, error)
+}
+
+func (s *readTestObjectStorage) Read(ctx context.Context, key string, min, max *int64) (io.ReadCloser, error) {
+	return s.open(ctx, key, min, max, nil)
+}
+func (s *readTestObjectStorage) ReadObjectWithIdentity(ctx context.Context, key string, min, max *int64, expected ObjectIdentity) (io.ReadCloser, error) {
+	return s.open(ctx, key, min, max, &expected)
+}
+func (s *readTestObjectStorage) StatObjectIdentity(context.Context, string) (ObjectIdentity, error) {
+	return ObjectIdentity{ETag: "version1", Size: 8}, nil
+}
+func openTestObject(ctx context.Context, storage ObjectStorage, conditional bool) (io.ReadCloser, error) {
+	min, max := int64(1), int64(4)
+	if conditional {
+		return storage.(objectStorageIdentityReader).ReadObjectWithIdentity(ctx, "key", &min, &max, ObjectIdentity{ETag: "version1", Size: 8})
+	}
+	return storage.Read(ctx, "key", &min, &max)
+}
+
+// Both wrappers own independent Close guards; exercise each directly so an
+// outer guard cannot mask an unguarded inner wrapper.
+func testObjectStorageReadConcurrentClose(t *testing.T, open func(io.ReadCloser) io.ReadCloser, checkReleased func()) {
+	t.Helper()
+	readStarted, readStop := make(chan struct{}), make(chan struct{})
+	closeStarted, closeFinish := make(chan struct{}), make(chan struct{})
+	closeMayInterruptRead := make(chan struct{})
+	allowInterrupt := sync.OnceFunc(func() { close(closeMayInterruptRead) })
+	stopRead, finishClose := sync.OnceFunc(func() { close(readStop) }), sync.OnceFunc(func() { close(closeFinish) })
+	startClose := sync.OnceFunc(func() { close(closeStarted) })
+	var calls atomic.Int32
+	var group sync.WaitGroup
+	t.Cleanup(func() { allowInterrupt(); stopRead(); finishClose(); group.Wait() })
+	readErr, closeErr := errors.New("read interrupted"), errors.New("close failed")
+	body := &readCloser{r: readerFunc(func([]byte) (int, error) {
+		close(readStarted)
+		<-readStop
+		return 0, readErr
+	}), closeFunc: func() error {
+		calls.Add(1)
+		startClose()
+		<-closeMayInterruptRead
+		stopRead()
+		<-closeFinish
+		return closeErr
+	}}
+	reader := open(body)
+	t.Cleanup(func() { allowInterrupt(); stopRead(); finishClose(); _ = reader.Close() })
+	readResult := make(chan error, 1)
+	group.Go(func() { _, err := reader.Read(make([]byte, 1)); readResult <- err })
+	select {
+	case <-readStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("read did not start")
+	}
+	results := make(chan error, 8)
+	for range cap(results) {
+		group.Go(func() { results <- reader.Close() })
+	}
+	select {
+	case <-closeStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close waited for blocked Read")
+	}
+	checkReleased() // Read is still blocked, so its error cannot release the permit.
+	allowInterrupt()
+	select {
+	case err := <-readResult:
+		require.ErrorIs(t, err, readErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("Close did not interrupt Read")
+	}
+	select {
+	case err := <-results:
+		t.Fatalf("Close returned before provider completed: %v", err)
+	default:
+	}
+	finishClose()
+	group.Wait()
+	for range cap(results) {
+		require.ErrorIs(t, <-results, closeErr)
+	}
+	require.ErrorIs(t, reader.Close(), closeErr)
+	require.Equal(t, int32(1), calls.Load())
+	checkReleased()
 }

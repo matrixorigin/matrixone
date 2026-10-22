@@ -91,50 +91,57 @@ func cellKey(t Trial) string {
 	return key
 }
 
-func reportCampaign(config, root, output string) (retErr error) {
-	c, err := readJSON[Campaign](config)
-	if err != nil {
-		return err
-	}
+type campaignEvidence struct {
+	run       RunManifest
+	frozen    Frozen
+	preflight Preflight
+	loads     []loadTiming
+	cells     map[string]*reportCell
+	seen      map[string]bool
+}
+
+// Admit recorded execution evidence once for both timing reports and profiling.
+// This reads metadata, never datasets or captured query results.
+func readCampaignEvidence(c Campaign, root string) (campaignEvidence, error) {
 	if err := c.validate(); err != nil {
-		return err
+		return campaignEvidence{}, err
 	}
 	run, err := readJSON[RunManifest](filepath.Join(root, "run.json"))
 	if err != nil {
-		return err
+		return campaignEvidence{}, err
 	}
 	if run.Version != formatVersion {
-		return errors.New("unsupported run format")
+		return campaignEvidence{}, errors.New("unsupported run format")
 	}
 	if err := run.Frozen.verify(c.Root); err != nil {
-		return err
+		return campaignEvidence{}, err
 	}
 	f, err := readJSON[Frozen](filepath.Join(c.Root, run.Frozen.Path))
 	if err != nil {
-		return err
+		return campaignEvidence{}, err
 	}
 	if f.Version != formatVersion {
-		return errors.New("unsupported frozen format")
+		return campaignEvidence{}, errors.New("unsupported frozen format")
 	}
 	if err := f.Preflight.verify(c.Root); err != nil {
-		return err
+		return campaignEvidence{}, err
 	}
 	p, err := readJSON[Preflight](filepath.Join(c.Root, f.Preflight.Path))
 	if err != nil {
-		return err
+		return campaignEvidence{}, err
 	}
 	if err := verifyCampaignConfig(c, p); err != nil {
-		return err
+		return campaignEvidence{}, err
 	}
 	if !reflect.DeepEqual(f.Trials, schedule(c)) {
-		return errors.New("frozen schedule differs from the declared campaign")
+		return campaignEvidence{}, errors.New("frozen schedule differs from the declared campaign")
 	}
 	if len(run.Pairs) > len(f.Trials) {
-		return errors.New("unexpected extra paired blocks")
+		return campaignEvidence{}, errors.New("unexpected extra paired blocks")
 	}
 	loads, err := readLoads(c, f, p)
 	if err != nil {
-		return err
+		return campaignEvidence{}, err
 	}
 	seen := map[string]bool{}
 	cells := map[string]*reportCell{}
@@ -147,20 +154,20 @@ func reportCampaign(config, root, output string) (retErr error) {
 	}
 	for _, pin := range run.Pairs {
 		if err := pin.verify(root); err != nil {
-			return err
+			return campaignEvidence{}, err
 		}
 		path := filepath.Join(root, pin.Path)
 		pair, err := readJSON[PairRecord](path)
 		if err != nil {
-			return err
+			return campaignEvidence{}, err
 		}
 		if seen[pair.Trial.ID] {
-			return errors.New("duplicate paired block")
+			return campaignEvidence{}, errors.New("duplicate paired block")
 		}
 		seen[pair.Trial.ID] = true
 		index := slices.IndexFunc(f.Trials, func(t Trial) bool { return t.ID == pair.Trial.ID })
 		if index < 0 || !reflect.DeepEqual(pair.Trial, f.Trials[index]) {
-			return errors.New("paired block does not match frozen schedule")
+			return campaignEvidence{}, errors.New("paired block does not match frozen schedule")
 		}
 		key := cellKey(pair.Trial)
 		cell := cells[key]
@@ -172,26 +179,26 @@ func reportCampaign(config, root, output string) (retErr error) {
 		for _, engine := range []string{"mo", "duckdb"} {
 			record, ok := pair.Arms[engine]
 			if !ok {
-				return errors.New("paired arm missing")
+				return campaignEvidence{}, errors.New("paired arm missing")
 			}
 			if record.Version != formatVersion || record.Engine != engine || !reflect.DeepEqual(record.Trial, pair.Trial) {
-				return errors.New("paired arm differs from frozen trial")
+				return campaignEvidence{}, errors.New("paired arm differs from frozen trial")
 			}
 			armRoot := filepath.Join(filepath.Dir(path), engine)
 			receipt, _, err := readArm(armRoot, record)
 			if err != nil {
-				return err
+				return campaignEvidence{}, err
 			}
 			if err := record.Request.verify(armRoot); err != nil {
-				return err
+				return campaignEvidence{}, err
 			}
 			request, err := readJSON[WorkerRequest](filepath.Join(armRoot, record.Request.Path))
 			if err != nil {
-				return err
+				return campaignEvidence{}, err
 			}
 			prepared, ok := f.Prepared[pair.Trial.Scale][engine]
 			if !ok || prepared.Deployment.Engine.Name != engine {
-				return errors.New("frozen deployment missing or differs from paired engine")
+				return campaignEvidence{}, errors.New("frozen deployment missing or differs from paired engine")
 			}
 			expected := scoredRequest(c, f, pair.Trial)
 			expected.Engine = prepared.Deployment.Engine
@@ -201,29 +208,29 @@ func reportCampaign(config, root, output string) (retErr error) {
 			// Reporting archived receipts does not require result captures.
 			expected.OutputRoot = request.OutputRoot
 			if !reflect.DeepEqual(request, expected) {
-				return errors.New("worker request differs from frozen trial")
+				return campaignEvidence{}, errors.New("worker request differs from frozen trial")
 			}
 			if err := verifyScoredWorker(pair.Trial, engine, p, receipt); err != nil {
-				return err
+				return campaignEvidence{}, err
 			}
 			if err := verifyTrialQueries(pair.Trial, f, request, receipt); err != nil {
-				return err
+				return campaignEvidence{}, err
 			}
 			if err := verifyScoredResources(c, record); err != nil {
-				return fmt.Errorf("%s %s: %w", pair.Trial.ID, engine, err)
+				return campaignEvidence{}, fmt.Errorf("%s %s: %w", pair.Trial.ID, engine, err)
 			}
 			receipts[engine] = receipt
 			cell.Arms = append(cell.Arms, record)
 		}
 		a, b := receipts["mo"], receipts["duckdb"]
 		if len(a.Queries) != len(b.Queries) {
-			return errors.New("paired stream sizes differ")
+			return campaignEvidence{}, errors.New("paired stream sizes differ")
 		}
 		blockTimes := map[int][]pairedTimes{}
 		for i, x := range a.Queries {
 			y := b.Queries[i]
 			if x.Query < 1 || x.Query > 22 || x.Query != y.Query || x.Stream != y.Stream || x.Repetition != y.Repetition || x.Error != "" || y.Error != "" || x.Capture.ElapsedNS <= 0 || y.Capture.ElapsedNS <= 0 {
-				return errors.New("invalid paired query timing")
+				return campaignEvidence{}, errors.New("invalid paired query timing")
 			}
 			blockTimes[x.Query] = append(blockTimes[x.Query], pairedTimes{float64(x.Capture.ElapsedNS) / 1e9, float64(y.Capture.ElapsedNS) / 1e9})
 		}
@@ -232,6 +239,20 @@ func reportCampaign(config, root, output string) (retErr error) {
 		}
 		cell.Suites = append(cell.Suites, pairedTimes{float64(a.WaveNS) / 1e9, float64(b.WaveNS) / 1e9})
 	}
+	return campaignEvidence{run: run, frozen: f, preflight: p, loads: loads, cells: cells, seen: seen}, nil
+}
+
+func reportCampaign(config, root, output string) (retErr error) {
+	c, err := readJSON[Campaign](config)
+	if err != nil {
+		return err
+	}
+	evidence, err := readCampaignEvidence(c, root)
+	if err != nil {
+		return err
+	}
+	run, f, p, cells, loads := evidence.run, evidence.frozen, evidence.preflight, evidence.cells, evidence.loads
+	seen := evidence.seen
 	if err := os.Mkdir(output, 0750); err != nil {
 		return err
 	}

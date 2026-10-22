@@ -218,6 +218,13 @@ func (ds *materializedSnapshotDataSource) buildCommittedInMemBatches(
 			ds.snapshotTS,
 			ds.memPKFilter.Specs(),
 		)
+	} else if ds.memPKFilter != nil && ds.memPKFilter.ClusterKeyValid() {
+		iterKind = "cluster-key"
+		iter = ds.pState.NewClusterKeyIterWithFilters(
+			ds.snapshotTS,
+			ds.memPKFilter.ClusterKeyDescriptor(),
+			ds.memPKFilter.ClusterKeySpecs(),
+		)
 	} else {
 		iter = ds.pState.NewRowsIter(ds.snapshotTS, nil, false)
 	}

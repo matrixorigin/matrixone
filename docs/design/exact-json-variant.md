@@ -1,7 +1,7 @@
-# Exact JSON, Parquet VARIANT and automatic path storage: design review R1
+# Exact JSON, Parquet VARIANT and automatic path storage
 
-Status: **proposed; design approval pending**. This document starts a distinct
-design review phase. It does not approve the existing implementation.
+Status: **proposed; design approval pending**. Revision R1 defines the proposed
+contract; it does not approve the existing implementation.
 
 Scope: the complete feature in [implementation PR #30071](https://github.com/matrixorigin/matrixone/pull/30071),
 including [#30057](https://github.com/matrixorigin/matrixone/issues/30057),
@@ -218,7 +218,7 @@ of non-JSON blocks and excluded writer kinds must take the cheap existing path.
 
 For B source rows and P selected paths, discovery is bounded to 1,024 sampled
 rows and 256 candidates; materialization still visits source rows and selected
-paths, and can cost O(B * P * path traversal), P <=32. Each fragment duplicates
+paths, and can cost `O(B × P × path traversal)`, P <=32. Each fragment duplicates
 bytes already in source JSON, adds compression and vector allocation, and can
 increase flush/compaction CPU. The 8 MiB serialized budget is per source block,
 not per object, query, concurrent flush, heap or process. Large source blocks
@@ -330,3 +330,7 @@ Implementation deviations: exact execution/durable admission, mixed-version
                           Parquet placement proof, release compatibility/cost evidence
 Approval record: pending; reviewer, immutable revision, decision and date required
 ```
+
+## Historical proposal
+
+The [original R1 proposal](https://github.com/matrixorigin/matrixone/blob/6cbe375b49696021d72778baa292a66287f080bd/docs/design/20261014-exact-json-variant-design-review.md) records the same pending approval boundary. Moving this document does not grant design or implementation approval.

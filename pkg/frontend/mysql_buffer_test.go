@@ -189,6 +189,18 @@ func TestConnCountsPartialWriteFacts(t *testing.T) {
 	assert.Equal(t, int64(1), ses.GetFlushPacketCnt())
 }
 
+// Make elapsed-time assertions independent of clock resolution: an immediate
+// in-memory append may legitimately take zero ticks. Delay inside Write (not
+// before Flush), so only the measured physical operation includes the delay.
+type measuredOutputWriteConn struct {
+	net.Conn
+}
+
+func (c *measuredOutputWriteConn) Write(p []byte) (int, error) {
+	time.Sleep(time.Millisecond)
+	return c.Conn.Write(p)
+}
+
 func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 	underlying := &partialWriteConn{limit: 5}
 	sv, err := getSystemVariables("test/system_vars_config.toml")
@@ -197,6 +209,7 @@ func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 	conn, err := NewIOSession(underlying, config.NewParameterUnit(sv, nil, nil, nil), "")
 	assert.NoError(t, err)
 	defer conn.Close()
+	conn.conn = &measuredOutputWriteConn{Conn: conn.conn}
 
 	tracker := new(responseOutputWaitTracker)
 	conn.setResponseOutputWaitTracker(tracker)
@@ -216,6 +229,7 @@ func TestConnMeasuresOnlyPhysicalOutputWrite(t *testing.T) {
 func TestConnMeasuresDelayedBufferedFlush(t *testing.T) {
 	underlying, conn := newTestConn(t, NewLeakCheckAllocator())
 	defer conn.Close()
+	conn.conn = &measuredOutputWriteConn{Conn: conn.conn}
 
 	tracker := new(responseOutputWaitTracker)
 	conn.setResponseOutputWaitTracker(tracker)

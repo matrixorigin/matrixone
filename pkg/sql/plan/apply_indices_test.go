@@ -1589,6 +1589,44 @@ func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 	}
 }
 
+func TestIndexJoinPreservesScanAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		path     []*planpb.ViewStep
+		joinPath []*planpb.ViewStep
+	}{
+		{name: "direct scan must not borrow join view", joinPath: []*planpb.ViewStep{{DatabaseName: "db", ViewName: "other"}}},
+		{name: "definer view with no join context", path: []*planpb.ViewStep{{DatabaseName: "db", ViewName: "v"}}},
+		{name: "nested view keeps full path", path: []*planpb.ViewStep{
+			{DatabaseName: "db", ViewName: "outer"},
+			{DatabaseName: "db", ViewName: "inner", Snapshot: &planpb.Snapshot{Tenant: &planpb.SnapshotTenant{TenantID: 7}}},
+		}, joinPath: []*planpb.ViewStep{{DatabaseName: "db", ViewName: "outer"}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, joinID, scanID, _ := makeIndexHintJoinBuilder(t)
+			scan := builder.qry.Nodes[scanID]
+			scan.ViewPath = tc.path
+			scan.ScanSnapshot = &planpb.Snapshot{}
+			builder.ctxByNode[scanID].viewPath = tc.path
+			builder.ctxByNode[joinID] = nil
+			if tc.joinPath != nil {
+				joinCtx := NewBindContext(builder, nil)
+				joinCtx.viewPath = tc.joinPath
+				builder.ctxByNode[joinID] = joinCtx
+			}
+			_, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
+			indexJoin := builder.qry.Nodes[builder.qry.Nodes[joinID].Children[0]]
+			require.Equal(t, planpb.Node_INDEX, indexJoin.JoinType)
+			indexScan := builder.qry.Nodes[indexJoin.Children[1]]
+			require.True(t, indexScan.IndexScanInfo.IsIndexScan)
+			require.Equal(t, scan.ViewPath, indexScan.ViewPath)
+			require.Equal(t, scan.ScanSnapshot, indexScan.ScanSnapshot)
+			require.Equal(t, scan.ObjRef, indexScan.ParentObjRef)
+		})
+	}
+}
+
 func TestApplyIndicesForJoinsSkipsNilIndexMetadata(t *testing.T) {
 	builder, joinID, leftScanID, leftDef := makeIndexHintJoinBuilder(t)
 	leftDef.Indexes = append([]*planpb.IndexDef{nil}, leftDef.Indexes...)
