@@ -15,6 +15,7 @@
 package merge_test
 
 import (
+	"context"
 	"sync"
 	"testing"
 
@@ -29,10 +30,149 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/merge"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/mergeorder"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/projection"
 	"github.com/matrixorigin/matrixone/pkg/sql/internal/materialized"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
 )
+
+func TestMaterializedSinkScanProjectionReclaimsReaderBatches(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	source := materialized.NewSource(2)
+	defer source.Close()
+	require.NoError(t, source.Begin(proc.Mp()))
+	for _, value := range []int64{11, 22, 33} {
+		input := batch.NewOffHeapWithSize(1)
+		defer input.Clean(proc.Mp())
+		input.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+		require.NoError(t, vector.AppendFixed(input.Vecs[0], value, false, proc.Mp()))
+		input.SetRowCount(1)
+		require.NoError(t, source.Append(input))
+		input.Clean(proc.Mp())
+	}
+	source.Finish(nil)
+	storedBytes := proc.Mp().CurrNB()
+	require.Positive(t, storedBytes)
+
+	// Keep only diagnostic handles for cleanup if a pre-fix assertion fails.
+	// The real Merge -> Projection pipeline must reclaim them before assertions.
+	copies := make([]*vector.Vector, 0, 6)
+	defer func() {
+		for _, vec := range copies {
+			vec.Free(proc.Mp())
+		}
+	}()
+	for readerID := 0; readerID < 2; readerID++ {
+		reader := merge.NewArgument().WithSinkScan(true)
+		defer reader.Release()
+		reader.MaterializedSource = source
+		reader.MaterializedReaderID = readerID
+		defer reader.Free(proc, false, nil)
+		require.NoError(t, reader.Prepare(proc))
+		project := projection.NewArgument()
+		defer project.Release()
+		defer project.Free(proc, false, nil)
+		project.ProjectList = []*plan.Expr{{
+			Typ:  plan.Type{Id: int32(types.T_int64)},
+			Expr: &plan.Expr_Col{Col: &plan.ColRef{ColPos: 0}},
+		}}
+		project.AppendChild(reader)
+		require.NoError(t, project.Prepare(proc))
+		var firstReadBytes int64
+		for i, value := range []int64{11, 22, 33} {
+			result, err := project.Call(proc)
+			require.NoError(t, err)
+			require.Equal(t, 1, result.Batch.RowCount())
+			copies = append(copies, result.Batch.Vecs[0])
+			require.Equal(t, value, vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
+			if i == 0 {
+				firstReadBytes = proc.Mp().CurrNB()
+				require.Greater(t, firstReadBytes, storedBytes)
+			} else {
+				require.Equal(t, firstReadBytes, proc.Mp().CurrNB(), "only the current reader batch may remain live")
+			}
+		}
+		result, err := project.Call(proc)
+		require.NoError(t, err)
+		require.Nil(t, result.Batch)
+		require.Equal(t, storedBytes, proc.Mp().CurrNB(), "EOF must reclaim the last consumer copy")
+		project.Reset(proc, false, nil)
+		reader.Reset(proc, false, nil)
+	}
+	require.Zero(t, proc.Mp().CurrNB(), "both readers and producer have finished")
+}
+
+func TestMaterializedSinkScanReaderCleanup(t *testing.T) {
+	for _, mode := range []string{"reset", "free", "producer_error", "cancel", "prepare"} {
+		t.Run(mode, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			ctx, cancel := context.WithCancel(proc.Ctx)
+			defer cancel()
+			proc.Ctx = ctx
+			source := materialized.NewSource(1)
+			defer source.Close()
+			require.NoError(t, source.Begin(proc.Mp()))
+			input := batch.NewOffHeapWithSize(1)
+			defer input.Clean(proc.Mp())
+			input.Vecs[0] = vector.NewOffHeapVecWithType(types.T_int64.ToType())
+			require.NoError(t, vector.AppendFixed(input.Vecs[0], int64(42), false, proc.Mp()))
+			input.SetRowCount(1)
+			inputMemory := proc.Mp().CurrNB()
+			require.Positive(t, inputMemory)
+			require.NoError(t, source.Append(input))
+			storedBytes := proc.Mp().CurrNB()
+			reader := merge.NewArgument().WithSinkScan(true)
+			defer reader.Release()
+			reader.MaterializedSource = source
+			defer reader.Free(proc, false, nil)
+			require.NoError(t, reader.Prepare(proc))
+			result, err := reader.Call(proc)
+			require.NoError(t, err)
+			defer result.Batch.Clean(proc.Mp())
+			require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[0], 0))
+
+			switch mode {
+			case "producer_error":
+				want := moerr.NewInternalErrorNoCtx("materialized producer failed")
+				source.Finish(want)
+				_, err = reader.Call(proc)
+				require.ErrorIs(t, err, want)
+			case "cancel":
+				cancel()
+				_, err = reader.Call(proc)
+				require.ErrorIs(t, err, context.Canceled)
+			case "prepare":
+				require.NoError(t, reader.Prepare(proc))
+			}
+			if mode == "producer_error" || mode == "cancel" || mode == "prepare" {
+				require.Equal(t, storedBytes, proc.Mp().CurrNB(), "only the original and source copy remain")
+			}
+			source.Finish(nil)
+			if mode == "free" {
+				reader.Free(proc, false, nil)
+			} else {
+				reader.Reset(proc, err != nil, err)
+			}
+			require.Equal(t, inputMemory, proc.Mp().CurrNB(), "teardown must release both consumer copy and source reader")
+			// Repeated terminal calls must not double free or release another reader.
+			reader.Reset(proc, false, nil)
+			reader.Free(proc, false, nil)
+			require.Equal(t, inputMemory, proc.Mp().CurrNB())
+			if mode == "reset" {
+				require.NoError(t, source.Begin(proc.Mp()))
+				require.NoError(t, source.Append(input))
+				source.Finish(nil)
+				require.NoError(t, reader.Prepare(proc))
+				next, err := reader.Call(proc)
+				require.NoError(t, err)
+				defer next.Batch.Clean(proc.Mp())
+				require.Equal(t, int64(42), vector.GetFixedAtNoTypeCheck[int64](next.Batch.Vecs[0], 0))
+				reader.Free(proc, false, nil)
+				require.Equal(t, inputMemory, proc.Mp().CurrNB(), "a reused reader must release its new generation")
+			}
+		})
+	}
+}
 
 func TestMaterializedSinkScanConsumersAdvanceIndependently(t *testing.T) {
 	proc := testutil.NewProcess(t)
