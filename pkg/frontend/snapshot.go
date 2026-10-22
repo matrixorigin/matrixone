@@ -2238,7 +2238,7 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 			walkSelect(s.Right)
 		}
 	}
-	walkSelect(create.AsSource.Select)
+	walkSelect(create.AsSource)
 	return deps
 }
 

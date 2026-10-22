@@ -17811,7 +17811,7 @@ func init() {
 	proto.RegisterType((*DatabaseDefaults)(nil), "plan.DatabaseDefaults")
 }
 
-func init() { proto.RegisterFile("proto/plan.proto", fileDescriptor_22bd2bd1e47d7acf) }
+func init() { proto.RegisterFile("plan.proto", fileDescriptor_22bd2bd1e47d7acf) }
 
 var fileDescriptor_22bd2bd1e47d7acf = []byte{
 	// 18720 bytes of a gzipped FileDescriptorProto
@@ -41319,7 +41319,7 @@ func (m *Type) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *MsgHeader) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -45247,7 +45247,7 @@ func (m *Expr) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.validateOwnStringLiteralForm()
 }
 func (m *CorrelationSlot) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -48502,7 +48502,7 @@ func (m *IndexDef) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *ForeignKeyDef) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
@@ -50796,7 +50796,7 @@ func (m *TableDef) Unmarshal(dAtA []byte) error {
 	if iNdEx > l {
 		return io.ErrUnexpectedEOF
 	}
-	return nil
+	return m.ValidateCollation()
 }
 func (m *TableDef_DefType) Unmarshal(dAtA []byte) error {
 	l := len(dAtA)
