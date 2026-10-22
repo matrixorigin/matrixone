@@ -29,7 +29,9 @@ type container struct {
 	receiver             *process.PipelineSignalReceiver
 	materializedPosition int
 	materializedReleased bool
-	materializedBatch    *batch.Batch
+	// Source.Next returns independent copies. Retain the current copy so
+	// pass-through consumers cannot leave its vector storage unclaimed.
+	materializedBatch *batch.Batch
 }
 
 type Merge struct {
@@ -41,8 +43,8 @@ type Merge struct {
 
 	MaterializedSource   *materialized.Source
 	MaterializedReaderID int
-	// 标量 source 至多一批；本算子持有输出副本直到 Reset，TVF 只借用。
-	// 普通 CTE reader 仍保留既有的批所有权转移契约。
+	// Scalar readers retain their only batch until Reset/Free, including after
+	// EOF. Ordinary CTE readers reclaim the previous batch on the next Call.
 	MaterializedSingleBatch bool
 	vm.OperatorBase
 }
@@ -92,10 +94,7 @@ func (merge *Merge) Release() {
 
 func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if merge.MaterializedSource != nil {
-		if merge.ctr.materializedBatch != nil {
-			merge.ctr.materializedBatch.Clean(proc.Mp())
-			merge.ctr.materializedBatch = nil
-		}
+		merge.cleanMaterializedBatch(proc)
 		if !merge.ctr.materializedReleased {
 			merge.MaterializedSource.ReleaseReader(merge.MaterializedReaderID)
 			merge.ctr.materializedReleased = true
@@ -122,6 +121,14 @@ func (merge *Merge) Reset(proc *process.Process, pipelineFailed bool, err error)
 }
 
 func (merge *Merge) Free(proc *process.Process, pipelineFailed bool, err error) {
+	merge.cleanMaterializedBatch(proc)
+	if merge.MaterializedSource != nil && !merge.ctr.materializedReleased {
+		merge.MaterializedSource.ReleaseReader(merge.MaterializedReaderID)
+		merge.ctr.materializedReleased = true
+	}
+}
+
+func (merge *Merge) cleanMaterializedBatch(proc *process.Process) {
 	if merge.ctr.materializedBatch != nil {
 		merge.ctr.materializedBatch.Clean(proc.Mp())
 		merge.ctr.materializedBatch = nil
