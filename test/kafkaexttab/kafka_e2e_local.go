@@ -613,17 +613,24 @@ func runErrorMode(ctx context.Context, db *sql.DB, bootstrap string, r *report) 
 	}
 	defer conn.Close()
 
-	// A message that fails to parse is a row, not a statement failure: one
-	// statement sends the good records to kdest and the bad ones to krejects.
+	// A message that fails to parse is a row, not a statement failure. This
+	// release does not support INSERT FIRST, so replay the bounded source for
+	// each destination with an explicit starting offset.
 	// A Kafka record has no line in a file, so it is identified by
 	// __mo_message_id, and __mo_file_line is NULL.
 	if _, err := conn.ExecContext(ctx,
-		"insert first"+
-			" when errmsg is null then into kafka_e2e.kdest (id, name, amount, ts) values (id, name, amount, ts)"+
-			" else into kafka_e2e.krejects (msg_id, msg, txt) values (mid, errmsg, errtxt)"+
-			" select id, name, amount, ts, __mo_message_id as mid,"+
-			" __mo_error_message as errmsg, __mo_error_text as errtxt"+
-			" from "+src+" where __mo_read_start_id = -1 and __mo_read_timeout = 5"); err != nil {
+		"insert into kafka_e2e.kdest (id, name, amount, ts)"+
+			" select id, name, amount, ts from "+src+
+			" where __mo_read_start_id = -1 and __mo_read_timeout = 5"+
+			" and __mo_error_message is null"); err != nil {
+		return fmt.Errorf("error-mode good rows: %w", err)
+	}
+	if _, err := conn.ExecContext(ctx,
+		"insert into kafka_e2e.krejects (msg_id, msg, txt)"+
+			" select __mo_message_id, __mo_error_message, __mo_error_text"+
+			" from "+src+
+			" where __mo_read_start_id = -1 and __mo_read_timeout = 5"+
+			" and __mo_error_message is not null"); err != nil {
 		return fmt.Errorf("error-mode split: %w", err)
 	}
 
