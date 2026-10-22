@@ -2,11 +2,11 @@
 JSON functions for MatrixOne SQLAlchemy integration.
 
 This module provides JSON manipulation functions compatible with MatrixOne's
-JSON support. These functions handle path literals correctly to avoid parameter
-binding issues.
+JSON support. Path values use SQLAlchemy's string binding and literal rendering
+instead of being interpolated as raw SQL.
 """
 
-from sqlalchemy import literal_column
+from sqlalchemy import literal
 from sqlalchemy.sql.expression import ColumnElement
 from sqlalchemy.sql import functions
 
@@ -16,7 +16,7 @@ class json_extract(functions.GenericFunction):
     Extract values from JSON documents using JSON path expressions.
 
     This function wraps MatrixOne's JSON_EXTRACT function and ensures
-    that path arguments are treated as literals rather than bound parameters.
+    that path arguments remain data for dialect/driver escaping.
 
     Args:
         json_column: The JSON column or expression
@@ -46,8 +46,8 @@ class json_extract(functions.GenericFunction):
     inherit_cache = True
 
     def __init__(self, json_column: ColumnElement, *paths: str, **kwargs):
-        # Convert paths to literal columns to avoid parameter binding
-        literal_paths = [literal_column(f"'{path}'") for path in paths]
+        # Keep paths as data; explicit literal_binds compilation also escapes them.
+        literal_paths = [literal(path) for path in paths]
         super().__init__(json_column, *literal_paths, **kwargs)
 
 
@@ -71,7 +71,7 @@ class json_extract_string(functions.GenericFunction):
     inherit_cache = True
 
     def __init__(self, json_column: ColumnElement, path: str, **kwargs):
-        literal_path = literal_column(f"'{path}'")
+        literal_path = literal(path)
         super().__init__(json_column, literal_path, **kwargs)
 
 
@@ -95,7 +95,7 @@ class json_extract_float64(functions.GenericFunction):
     inherit_cache = True
 
     def __init__(self, json_column: ColumnElement, path: str, **kwargs):
-        literal_path = literal_column(f"'{path}'")
+        literal_path = literal(path)
         super().__init__(json_column, literal_path, **kwargs)
 
 
@@ -130,11 +130,11 @@ class json_set(functions.GenericFunction):
 
     def __init__(self, json_column: ColumnElement, *path_value_pairs, **kwargs):
         # Process path-value pairs
-        # Paths should be literals, values can be bound parameters
+        # Both paths and values use SQLAlchemy's normal parameter handling.
         processed_args = []
         for i, arg in enumerate(path_value_pairs):
             if i % 2 == 0:  # Path (even index)
-                processed_args.append(literal_column(f"'{arg}'"))
+                processed_args.append(literal(arg))
             else:  # Value (odd index)
                 processed_args.append(arg)
 
@@ -166,7 +166,7 @@ class json_insert(functions.GenericFunction):
         processed_args = []
         for i, arg in enumerate(path_value_pairs):
             if i % 2 == 0:  # Path
-                processed_args.append(literal_column(f"'{arg}'"))
+                processed_args.append(literal(arg))
             else:  # Value
                 processed_args.append(arg)
 
@@ -198,7 +198,7 @@ class json_replace(functions.GenericFunction):
         processed_args = []
         for i, arg in enumerate(path_value_pairs):
             if i % 2 == 0:  # Path
-                processed_args.append(literal_column(f"'{arg}'"))
+                processed_args.append(literal(arg))
             else:  # Value
                 processed_args.append(arg)
 

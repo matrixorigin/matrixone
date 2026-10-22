@@ -358,10 +358,6 @@ func (ctr *container) clearAllocationAccount(
 	return nil
 }
 
-func (mergeOrder *MergeOrder) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (mergeOrder *MergeOrder) cleanBatchAndCol(proc *process.Process) {
 	mp := proc.Mp()
 	ctr := &mergeOrder.ctr

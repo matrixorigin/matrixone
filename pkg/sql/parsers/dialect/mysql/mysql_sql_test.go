@@ -5272,10 +5272,10 @@ var (
 			output: "create view t2 as select * from t1",
 		}, {
 			input:  "create VIEW t2 as select * from t1 WITH CASCADED CHECK OPTION",
-			output: "create view t2 as select * from t1",
+			output: "create view t2 as select * from t1 with CASCADED check option",
 		}, {
 			input:  "create VIEW t2 as select * from t1 WITH LOCAL CHECK OPTION",
-			output: "create view t2 as select * from t1",
+			output: "create view t2 as select * from t1 with LOCAL check option",
 		}, {
 			input:  "insert into t1 values(_binary 0x123)",
 			output: "insert into t1 values (0x123)",
@@ -6156,9 +6156,48 @@ func TestUnquotedExtendedIdentifiers(t *testing.T) {
 }
 
 func TestCharsetIntroducerParses(t *testing.T) {
-	stmt, err := ParseOne(context.Background(), "SELECT _utf8mb4'test'", 1)
+	for _, sql := range []string{
+		"SELECT _utf8mb4'test'",
+		"SELECT _UTF8MB4'test'",
+		"SELECT _UtF8mB4'test'",
+		"SELECT DATE_FORMAT(CURRENT_DATE(), _UTF8MB4'%Y-%m')",
+	} {
+		t.Run(sql, func(t *testing.T) {
+			stmt, err := ParseOne(context.Background(), sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+		})
+	}
+}
+
+func TestCharsetIntroducerLiteralValue(t *testing.T) {
+	// An unrecognized introducer would silently parse `_UTF8MB4` as a column
+	// reference with 'test' as its alias instead of a string literal.
+	stmt, err := ParseOne(context.Background(), "SELECT _UTF8MB4'test'", 1)
 	require.NoError(t, err)
-	stmt.Free()
+	defer stmt.Free()
+	clause, ok := stmt.(*tree.Select).Select.(*tree.SelectClause)
+	require.True(t, ok)
+	require.Len(t, clause.Exprs, 1)
+	literal, ok := clause.Exprs[0].Expr.(*tree.NumVal)
+	require.True(t, ok)
+	require.Equal(t, tree.P_char, literal.ValType)
+	require.Equal(t, "test", literal.String())
+	require.True(t, clause.Exprs[0].As.Empty())
+}
+
+func TestCharsetIntroducerHexLiteralValue(t *testing.T) {
+	for _, mode := range []string{"", "ANSI_QUOTES,NO_BACKSLASH_ESCAPES"} {
+		stmt, err := ParseOneWithSQLMode(context.Background(), "SELECT _utf8mb4 X'c3a95ce7958c'", 1, mode)
+		require.NoError(t, err)
+		func() {
+			defer stmt.Free()
+			literal := stmt.(*tree.Select).Select.(*tree.SelectClause).Exprs[0].Expr.(*tree.NumVal)
+			require.Equal(t, tree.P_char, literal.ValType)
+			require.Equal(t, `é\界`, literal.String())
+		}()
+	}
+
 }
 
 func TestUnquotedSupplementaryIdentifiersRejected(t *testing.T) {

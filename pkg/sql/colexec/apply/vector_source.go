@@ -91,6 +91,9 @@ func (s *vectorSource) ApplyStart(row int, proc *process.Process, _ process.Anal
 	if err != nil {
 		return err
 	}
+	if err := vectorscan.ApplySearchKnobs(&req, s.execution.Spec(), proc.GetResolveVariableFunc()); err != nil {
+		return err
+	}
 	if !hasQuery {
 		s.reader = new(readutil.EmptyReader)
 		return nil

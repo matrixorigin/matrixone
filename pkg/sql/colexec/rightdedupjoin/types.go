@@ -97,6 +97,7 @@ type RightDedupJoin struct {
 	DedupColName      string
 	SpillThreshold    int64
 	DedupColTypes     []plan.Type
+	DedupKeyExprs     []*plan.Expr
 	DelColIdx         int32
 	UpdateColIdxList  []int32
 	UpdateColExprList []*plan.Expr
@@ -222,10 +223,6 @@ func (rightDedupJoin *RightDedupJoin) Free(proc *process.Process, pipelineFailed
 		ctr.spillEngine = nil
 	}
 	ctr.cleanEvalVectors()
-}
-
-func (rightDedupJoin *RightDedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
 }
 
 func (ctr *container) cleanExprExecutor() {

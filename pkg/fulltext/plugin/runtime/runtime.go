@@ -71,12 +71,6 @@ func (CatalogHooks) BuildSessionVars() []string {
 	return nil
 }
 
-// DefaultOptions — fulltext defaults are inferred at build time; no
-// statement-level option JSON is required when the WITH(...) clause is
-// omitted. Matches the legacy catalog.IndexParamsToJsonString path
-// returning "" for an empty option map.
-func (CatalogHooks) DefaultOptions() map[string]string { return nil }
-
 // ExperimentalFlag — `experimental_fulltext_index` exists at
 // pkg/frontend/variables.go but is not enforced anywhere today.
 // Returning "" preserves that behavior.
