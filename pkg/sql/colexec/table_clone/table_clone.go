@@ -598,10 +598,6 @@ func (tc *TableClone) GetOperatorBase() *vm.OperatorBase {
 	return &tc.OperatorBase
 }
 
-func (tc *TableClone) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (tc *TableClone) TypeName() string {
 	return "table_clone"
 }

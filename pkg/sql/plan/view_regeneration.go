@@ -53,7 +53,7 @@ func ReplaceRegeneratedViewDependencies(
 		lowerCaseTableNames = *data.LowerCaseTableNames
 	}
 	updated, err := patchPersistedViewMetadata(
-		regenerated.TableDef.ViewSql.View, nil, dependencies,
+		regenerated.TableDef.ViewSql.View, nil, nil, nil, dependencies,
 		lowerCaseTableNames, data.RequiredProtocolVersion)
 	if err != nil {
 		return err
@@ -174,6 +174,7 @@ type parsedViewDefinition struct {
 	columnNames tree.IdentifierList
 	database    string
 	name        string
+	checkOption string
 }
 
 func (p *parsedViewDefinition) free() {
@@ -233,10 +234,12 @@ func parsePersistedViewDefinition(
 	var selectStmt *tree.Select
 	var columnNames tree.IdentifierList
 	var viewDatabase, viewName string
+	checkOption := "NONE"
 	switch statement := statements[0].(type) {
 	case *tree.CreateView:
 		selectStmt, columnNames = statement.AsSource, statement.ColNames
 		viewDatabase, viewName = string(statement.Name.SchemaName), string(statement.Name.ObjectName)
+		checkOption = statement.CheckOption
 	case *tree.AlterView:
 		selectStmt, columnNames = statement.AsSource, statement.ColNames
 		viewDatabase, viewName = string(statement.Name.SchemaName), string(statement.Name.ObjectName)
@@ -256,6 +259,7 @@ func parsePersistedViewDefinition(
 	parsed.ctx, parsed.data = regenerationCtx, viewData
 	parsed.selectStmt, parsed.columnNames = selectStmt, columnNames
 	parsed.database, parsed.name = viewDatabase, viewName
+	parsed.checkOption = checkOption
 	transferred = true
 	return parsed, nil
 }
@@ -278,7 +282,7 @@ func RegenerateViewDefinition(
 	}
 	defer restoreCollationBinding()
 	tableDef, err := genViewTableDef(
-		parsed.ctx, parsed.selectStmt, parsed.columnNames, parsed.database, parsed.name, false)
+		parsed.ctx, parsed.selectStmt, parsed.columnNames, parsed.database, parsed.name, parsed.checkOption, false)
 	if err != nil {
 		return nil, err
 	}
@@ -288,7 +292,7 @@ func RegenerateViewDefinition(
 	}
 
 	updatedViewData, err := patchPersistedViewMetadata(
-		persistedViewData, &generatedData.Stmt, generatedData.Dependencies,
+		persistedViewData, &generatedData.Stmt, &generatedData.Definition, &generatedData.CheckOption, generatedData.Dependencies,
 		parsed.ctx.lowerCaseTableNames, maxPersistedProtocolVersion(
 			parsed.data.RequiredProtocolVersion, generatedData.RequiredProtocolVersion))
 	if err != nil {
@@ -304,6 +308,8 @@ func RegenerateViewDefinition(
 func patchPersistedViewMetadata(
 	persistedViewData string,
 	stableStatement *string,
+	definition *string,
+	checkOption *string,
 	dependencies []ViewDependency,
 	lowerCaseTableNames int64,
 	requiredProtocolVersion *int64,
@@ -322,6 +328,20 @@ func patchPersistedViewMetadata(
 			return "", marshalErr
 		}
 		fields["Stmt"] = encodedStatement
+	}
+	if definition != nil {
+		encodedDefinition, marshalErr := json.Marshal(*definition)
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		fields["definition"] = encodedDefinition
+	}
+	if checkOption != nil {
+		encodedCheckOption, marshalErr := json.Marshal(*checkOption)
+		if marshalErr != nil {
+			return "", marshalErr
+		}
+		fields["check_option"] = encodedCheckOption
 	}
 	fields["dependencies"] = encodedDependencies
 	if requiredProtocolVersion != nil {

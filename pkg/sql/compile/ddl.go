@@ -150,7 +150,7 @@ func (s *Scope) CreateDatabase(c *Compile) error {
 // before transaction-local subscription/FK/view-metadata mutations. The actual
 // drop owners still validate complete schemas and recheck the floor later.
 func (c *Compile) requireDropDatabaseCollations(db engine.Database, dbName string) error {
-	if plan2.RequirePersistedProtocolVersionForAuthoring(c.proc.Ctx, c.proc, defines.MORPCVersion125) == nil {
+	if plan2.RequirePersistedProtocolVersionForAuthoring(c.proc.Ctx, c.proc, defines.MORPCVersion129) == nil {
 		return nil
 	}
 	names, err := db.Relations(c.proc.Ctx)

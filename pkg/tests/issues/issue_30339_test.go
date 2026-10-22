@@ -22,7 +22,9 @@ import (
 	"time"
 
 	"github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/cnservice"
 	"github.com/matrixorigin/matrixone/pkg/embed"
+	pbtxn "github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -164,6 +166,129 @@ func TestUnicodeUniqueDiagnostics(t *testing.T) {
 					exec(t, "create table u_binary(s varchar(30) collate utf32_bin unique)")
 					exec(t, "insert into u_binary values('Alpha'),('alpha')")
 					duplicate(t, "insert into u_binary values('alpha')", "alpha", "s")
+				})
+				t.Run("nullable_sibling_keys", func(t *testing.T) {
+					for _, tc := range []struct{ name, typ, value, entry string }{
+						{"integer", "int", "7", "7"},
+						{"binary", "varchar(30) collate utf8mb4_bin", "'dup'", "dup"},
+					} {
+						t.Run(tc.name, func(t *testing.T) {
+							table := "u_sibling_" + tc.name
+							exec(t, "create table "+table+"(id int primary key,s varchar(30) collate utf8mb4_unicode_ci,k "+tc.typ+",unique key uk_s(s),unique key uk_k(k))")
+							exec(t, "insert into "+table+" values(1,'Alpha',"+tc.value+")")
+							duplicate(t, "insert into "+table+" values(6,'Beta',NULL),(7,'Gamma',"+tc.value+")", tc.entry, "uk_k")
+							var count int
+							require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from "+table).Scan(&count))
+							require.Equal(t, 1, count)
+						})
+					}
+				})
+				t.Run("optimistic_si", func(t *testing.T) {
+					exec(t, "create table u_concurrent(id int primary key,s varchar(30) collate utf8mb4_unicode_ci,unique key uk_s(s))")
+					var previousPKCheck int
+					require.NoError(t, conn.QueryRowContext(ctx, "select @@mo_pk_check_by_dn").Scan(&previousPKCheck))
+					defer func() {
+						cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+						defer stop()
+						_, err := conn.ExecContext(cleanup, fmt.Sprintf("set session mo_pk_check_by_dn=%d", previousPKCheck))
+						assert.NoError(t, err)
+					}()
+					restore := setIssue27718TxnConfig([]embed.ServiceOperator{cn}, pbtxn.TxnMode_Optimistic, pbtxn.TxnIsolation_SI)
+					defer restore()
+					defer func() {
+						fence, stop := context.WithTimeout(context.Background(), 10*time.Second)
+						defer stop()
+						assert.NoError(t, waitIssue27718Commits(fence, []issue27718CommitClient{cn.RawService().(cnservice.Service).GetTxnClient()}))
+					}()
+					rollback := func(c *sql.Conn) {
+						cleanup, stop := context.WithTimeout(context.Background(), 10*time.Second)
+						defer stop()
+						_, err := c.ExecContext(cleanup, "rollback")
+						assert.NoError(t, err)
+					}
+					for _, pkCheck := range []int{0, 1} {
+						t.Run(fmt.Sprintf("tn_check=%d", pkCheck), func(t *testing.T) {
+							exec(t, fmt.Sprintf("set session mo_pk_check_by_dn=%d", pkCheck))
+							for _, tc := range []struct{ name, query, entry string }{
+								{"single", "insert into u_single values(40,'alpha',7)", "alpha"},
+								{"prefix", "insert into u_prefix values(40,'alphaZ',7)", "alp"},
+								{"composite", "insert into u_composite values(40,'alpha',7)", "(alpha,7)"},
+								{"update", "update u_single set s='alpha',n=7 where id=3", "alpha"},
+							} {
+								t.Run(tc.name, func(t *testing.T) {
+									exec(t, "begin")
+									defer rollback(conn)
+									_, err := conn.ExecContext(ctx, tc.query)
+									if err == nil {
+										_, err = conn.ExecContext(ctx, "commit")
+									}
+									checkError(t, err, tc.entry, "uk_named")
+								})
+							}
+							t.Run("prepared_reuse", func(t *testing.T) {
+								stmt, err := conn.PrepareContext(ctx, "insert into u_single values(?,?,7)")
+								require.NoError(t, err)
+								defer stmt.Close()
+								for _, value := range []string{"alpha", "BETA"} {
+									func(stmt *sql.Stmt) {
+										exec(t, "begin")
+										defer rollback(conn)
+										_, err := stmt.ExecContext(ctx, 40, value)
+										if err == nil {
+											_, err = conn.ExecContext(ctx, "commit")
+										}
+										checkError(t, err, value, "uk_named")
+									}(stmt)
+								}
+							})
+							var count int
+							var value string
+							require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from u_single").Scan(&count))
+							require.Equal(t, 4, count)
+							require.NoError(t, conn.QueryRowContext(ctx, "select s from u_single where id=3").Scan(&value))
+							require.Equal(t, "Beta", value)
+							t.Run("self_update", func(t *testing.T) {
+								exec(t, "begin")
+								defer rollback(conn)
+								exec(t, "update u_single set s='Alpha' where id=1")
+								exec(t, "commit")
+							})
+							t.Run("delete_reinsert", func(t *testing.T) {
+								exec(t, "begin")
+								defer rollback(conn)
+								exec(t, "delete from u_single where id=1")
+								exec(t, "insert into u_single values(1,'Alpha',7)")
+								exec(t, "commit")
+							})
+						})
+					}
+					t.Run("concurrent_snapshot", func(t *testing.T) {
+						exec(t, "set session mo_pk_check_by_dn=off")
+						other, err := db.Conn(ctx)
+						require.NoError(t, err)
+						defer other.Close()
+						for _, c := range []*sql.Conn{conn, other} {
+							_, err := c.ExecContext(ctx, "begin")
+							require.NoError(t, err)
+							defer rollback(c)
+							var count int
+							require.NoError(t, c.QueryRowContext(ctx, "select count(*) from "+database+".u_concurrent").Scan(&count))
+							require.Zero(t, count)
+						}
+						exec(t, "insert into u_concurrent values(1,'Alpha')")
+						_, err = other.ExecContext(ctx, "insert into "+database+".u_concurrent values(2,'alpha')")
+						require.NoError(t, err)
+						exec(t, "commit")
+						_, err = other.ExecContext(ctx, "commit")
+						var me *mysql.MySQLError
+						require.ErrorAs(t, err, &me)
+						require.EqualValues(t, 20619, me.Number)
+						require.Equal(t, "w-w conflict", me.Message)
+						require.NoError(t, waitIssue27718Commits(ctx, []issue27718CommitClient{cn.RawService().(cnservice.Service).GetTxnClient()}))
+						var count int
+						require.NoError(t, conn.QueryRowContext(ctx, "select count(*) from u_concurrent").Scan(&count))
+						require.Equal(t, 1, count)
+					})
 				})
 				if cnIndex == 0 {
 					t.Run("snapshot_clone_restore", func(t *testing.T) {

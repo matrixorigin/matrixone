@@ -98,10 +98,6 @@ func (filter *Filter) Free(proc *process.Process, pipelineFailed bool, err error
 	filter.RuntimeFilterExprs = nil
 }
 
-func (filter *Filter) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) cleanExecutor() {
 	for i := range ctr.executors {
 		if ctr.executors[i] != nil {

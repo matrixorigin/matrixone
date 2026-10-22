@@ -89,6 +89,18 @@ func TestBitwiseAggregateCollationProvenance(t *testing.T) {
 					require.Equal(t, expected, arg.Typ)
 					expected.NotNullable = true
 					require.Equal(t, expected, result.Typ)
+
+					// Consuming a binary declaration may change representation,
+					// but must not demote the aggregate's explicit collation.
+					binder := baseBinder{sysCtx: ctx}
+					consumed, err := binder.bindStringSourceDeclaration("=", []*Expr{result})
+					require.NoError(t, err)
+					consumedType := expected
+					if oid == types.T_binary {
+						consumedType.Id = int32(types.T_varbinary) // no fixed-width padding in the representation cast
+					}
+					require.Equal(t, consumedType, consumed[0].Typ)
+					require.Equal(t, expected, result.Typ, "the source declaration remains immutable")
 				})
 			}
 			text := makePlan2StringConstExprWithType("3")
@@ -126,6 +138,9 @@ func TestExplicitCollationConflicts(t *testing.T) {
 		"select greatest('a' collate utf8mb4_bin,'bb') = 'bb' collate utf8mb4_general_ci",
 		"select least('a' collate utf8mb4_bin,'b') = 'a' collate utf8mb4_general_ci",
 		"select name_const('x','a' collate utf8mb4_unicode_ci) = 'a' collate utf8mb4_bin",
+		"select bit_and(substring(cast(X'03' as binary(1)),1,511) collate binary) = (_utf8mb4'a' collate utf8mb4_bin)",
+		"select bit_or(substring(cast(X'03' as binary(1)),1,511) collate binary) = (_utf8mb4'a' collate utf8mb4_bin)",
+		"select bit_xor(substring(cast(X'03' as binary(1)),1,511) collate binary) = (_utf8mb4'a' collate utf8mb4_bin)",
 		"select least(coalesce(cast('a' as char(3)) collate utf8mb4_bin,'a'),coalesce(cast('bb' as char(3)),'bb')) = 'a' collate utf8mb4_general_ci",
 		"select greatest(coalesce(cast('a' as char(3)) collate utf8mb4_bin,'a'),coalesce(cast('bb' as char(3)),'bb')) = 'bb' collate utf8mb4_general_ci",
 		"select least(ifnull(cast('a' as char(3)) collate utf8mb4_bin,'a'),ifnull(cast('b' as char(4)),'b')) = 'a' collate utf8mb4_general_ci",

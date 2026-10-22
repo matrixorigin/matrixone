@@ -2853,7 +2853,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 		typ                        types.T
 		reject                     bool
 	}{
-		{name: "string JSON uses parameter conversion", parameter: "1", jsonValue: `"1"`, typ: types.T_int64},
+		{name: "JSON string differs from numeric parameter", parameter: "1", jsonValue: `"1"`, typ: types.T_int64},
 		{name: "narrow parameter retains range rejection", parameter: "127", jsonValue: `128`, typ: types.T_int8, reject: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -2893,11 +2893,11 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 				} else {
 					require.NoError(t, err)
 					require.Equal(t, 2, result.Length())
-					require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
+					require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 1))
 					require.False(t, result.IsNull(1))
 					require.Equal(t, selection != nil, result.IsNull(0))
 					if selection == nil {
-						require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+						require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 					}
 				}
 			}
@@ -2969,7 +2969,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 					selected1 := selection == nil || selection[1]
 					require.Equal(t, !selected0, result.IsNull(0))
 					if selected0 {
-						require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+						require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 					}
 					require.Equal(t, !selected1 || op == "=", result.IsNull(1))
 					if selected1 && op == "<=>" {
@@ -2987,7 +2987,7 @@ func TestPreparedJSONComparisonSelection(t *testing.T) {
 				result, err := executor.Eval(proc, []*batch.Batch{bat}, []bool{true, false})
 				require.NoError(t, err)
 				require.False(t, result.IsNull(0))
-				require.True(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
+				require.False(t, vector.GetFixedAtNoTypeCheck[bool](result, 0))
 				require.True(t, result.IsNull(1))
 			})
 		}

@@ -23,12 +23,16 @@ import (
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/catalog"
+	"github.com/matrixorigin/matrixone/pkg/common/docfilter"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/util"
 	"github.com/matrixorigin/matrixone/pkg/cuvs"
+	searchplugin "github.com/matrixorigin/matrixone/pkg/indexplugin/search"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/cachegen"
 	cuvscdc "github.com/matrixorigin/matrixone/pkg/vectorindex/cuvs"
+	ivfpqplan "github.com/matrixorigin/matrixone/pkg/vectorindex/ivfpq/plugin/plan"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/memory"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/metric"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
@@ -87,6 +91,24 @@ func (s *IvfpqSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 	if s.Overflow != nil {
 		cardinality = vectorindex.SaturatingAddUint64(cardinality, s.Overflow.Len())
 	}
+	service := ""
+	if sqlproc != nil {
+		service = sqlproc.GetService()
+	}
+	release, err := vectorindex.AdmitFilterMask(docfilter.AdmissionForService(service), rt, cardinality)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer release()
+	if rt.Iterative {
+		return s.searchIterative(sqlproc, anyquery, rt, cardinality)
+	}
+	return s.searchOnce(anyquery, rt, cardinality, nil)
+}
+
+// searchOnce runs one search of rt over an index of cardinality rows. A non-nil
+// bitset is the filter of rt prepared by searchIterative for all its rounds.
+func (s *IvfpqSearch[B, Q]) searchOnce(anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64, bitset *cuvs.MultiBitset) (keys []int64, distances []float64, err error) {
 	limit := vectorindex.ClampSearchLimit(rt.Limit, cardinality, math.MaxUint32)
 	if limit == 0 {
 		return []int64{}, []float64{}, nil
@@ -117,9 +139,16 @@ func (s *IvfpqSearch[B, Q]) Search(sqlproc *sqlexec.SqlProcess, anyquery any, rt
 	if !ok {
 		return nil, nil, moerr.NewInternalErrorNoCtx("IvfpqSearch: query type mismatch")
 	}
-	if rt.FilterJSON != "" {
-		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithFilter(qB, 1, dim, uint32(limit), sp, rt.FilterJSON)
-	} else {
+	switch {
+	case bitset != nil:
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithBitset(qB, 1, dim, uint32(limit), sp, bitset)
+	case rt.FilterJSON != "" || rt.Membership != nil:
+		var mem docfilter.CMembership
+		if mem, err = docfilter.CExactMembershipOf(rt.Membership); err != nil {
+			return nil, nil, err
+		}
+		neighbors64, dists32, err = s.MultiIndex.SearchQuantizeWithFilter(qB, 1, dim, uint32(limit), sp, rt.FilterJSON, mem)
+	default:
 		neighbors64, dists32, err = s.MultiIndex.SearchQuantize(qB, 1, dim, uint32(limit), sp)
 	}
 	if err != nil {
@@ -808,4 +837,52 @@ func (s *IvfpqSearch[B, Q]) DeviceResidency() map[int]int64 {
 		perCard[participants[0]] += overflow
 	}
 	return perCard
+}
+
+// searchIterative answers a mode=iterative search in the rounds of IterativeSearch,
+// each one a searchOnce probing the round's NProbe lists. A canceled statement ends the
+// rounds.
+func (s *IvfpqSearch[B, Q]) searchIterative(sqlproc *sqlexec.SqlProcess, anyquery any, rt vectorindex.RuntimeConfig, cardinality uint64) ([]int64, []float64, error) {
+	algoOptions, err := ivfpqplan.EncodeScanOptions(ivfpqplan.ScanOptions{Nprobe: rt.Probe})
+	if err != nil {
+		return nil, nil, err
+	}
+	spec := &plan.IndexSearchScan{AlgoOptions: algoOptions}
+	req := searchplugin.Request{
+		ResultLimit:     uint64(rt.ResultLimit),
+		CandidateBudget: uint64(rt.Limit),
+		MaxNprobe:       uint64(rt.MaxProbe),
+	}
+	stats := searchplugin.SearchStats{IndexRows: cardinality, Lists: s.MultiIndex.NLists(), Members: uint64(rt.MembershipCount)}
+	// The filter mask is built once and every round searches with it.
+	var bitset *cuvs.MultiBitset
+	if rt.FilterJSON != "" || rt.Membership != nil {
+		mem, err := docfilter.CExactMembershipOf(rt.Membership)
+		if err != nil {
+			return nil, nil, err
+		}
+		if bitset, err = s.MultiIndex.PrepareBitset(rt.FilterJSON, mem); err != nil {
+			return nil, nil, err
+		}
+		defer bitset.Free()
+	}
+	policy := IterativeSearch{}
+	round := policy.StartRound(spec, req, stats)
+	for {
+		rt.Limit, rt.Probe = uint(round.ITopK), uint(round.NProbe)
+		keys, distances, err := s.searchOnce(anyquery, rt, cardinality, bitset)
+		if err != nil {
+			return nil, nil, err
+		}
+		next, more := policy.NextRound(spec, req, stats, round, uint64(len(keys)))
+		if !more {
+			return keys, distances, nil
+		}
+		round = next
+		if sqlproc != nil {
+			if ctx := sqlproc.GetContext(); ctx != nil && ctx.Err() != nil {
+				return nil, nil, ctx.Err()
+			}
+		}
+	}
 }

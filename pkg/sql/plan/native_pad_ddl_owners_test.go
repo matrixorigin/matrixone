@@ -42,7 +42,7 @@ func TestNativePADIndependentDDLOwners(t *testing.T) {
 			rt := moruntime.ServiceRuntime(ctx.GetProcess().GetService())
 			rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
 			_, err = build(sql)
-			require.ErrorContains(t, err, "protocol version 125")
+			require.ErrorContains(t, err, "protocol version 129")
 			require.Equal(t, before, table)
 		})
 	}
@@ -94,8 +94,8 @@ func TestNativePADCloneRetainsMixedGenerations(t *testing.T) {
 	for _, key := range []string{moruntime.MOProtocolVersion, moruntime.PersistedExpressionProtocolFloor, moruntime.PersistedExpressionProtocolAuthoringFloor} {
 		rt.SetGlobalVariables(key, defines.MORPCVersion120)
 		_, err = build("create table copied clone tpch.n")
-		require.ErrorContains(t, err, "protocol version 125", key)
-		rt.SetGlobalVariables(key, defines.MORPCVersion125)
+		require.ErrorContains(t, err, "protocol version 129", key)
+		rt.SetGlobalVariables(key, defines.MORPCVersion129)
 	}
 }
 
@@ -110,7 +110,7 @@ func TestNativePADActionOnlyAdmission(t *testing.T) {
 	// A partial action can carry a native domain absent from both schema snapshots.
 	alter := &planpb.AlterTable{TableDef: &planpb.TableDef{Name: "n"}, Actions: []*planpb.AlterTable_Action{{Action: &planpb.AlterTable_Action_AddColumn{AddColumn: &planpb.AlterAddColumn{Name: "s", Type: col.Typ}}}}}
 	moruntime.ServiceRuntime(ctx.GetProcess().GetService()).SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, defines.MORPCVersion120)
-	require.ErrorContains(t, RequireAlterTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), alter), "protocol version 125")
+	require.ErrorContains(t, RequireAlterTableCollationsForAuthoring(ctx.GetContext(), ctx.GetProcess(), alter), "protocol version 129")
 }
 
 func TestNativePADIndependentIndexRejectsNativeKey(t *testing.T) {

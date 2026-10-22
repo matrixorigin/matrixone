@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	sqlplan "github.com/matrixorigin/matrixone/pkg/sql/plan"
+	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -832,7 +833,7 @@ func writeTableDumpJSON(ctx context.Context, fs fileservice.FileService, name st
 			"table dump manifest exceeds %d bytes", tableDumpMaxManifest,
 		)
 	}
-	return fs.Write(ctx, fileservice.IOVector{
+	return fileservice.WriteExclusive(ctx, fs, fileservice.IOVector{
 		FilePath: name,
 		Entries:  []fileservice.IOEntry{{Offset: 0, Size: int64(len(data)), ReaderForWrite: bytes.NewReader(data)}},
 	})
@@ -1248,6 +1249,21 @@ func dumpTableRelationObjects(
 }
 
 func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) error {
+	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
+	if err != nil {
+		return err
+	}
+	defer closeDumpFS()
+	if err = fileservice.CheckExclusiveWrite(dumpFS); err != nil {
+		return err
+	}
+	for _, name := range []string{tableDumpManifestName, tableDumpReadyName} {
+		if _, err = dumpFS.StatFile(ctx, name); err == nil {
+			return moerr.NewFileAlreadyExistsNoCtx(name)
+		} else if !moerr.IsMoErrCode(err, moerr.ErrFileNotFound) {
+			return err
+		}
+	}
 	dbName, tableName, rel, err := getTableForDump(ctx, ses, stmt.Table)
 	if err != nil {
 		return err
@@ -1289,18 +1305,13 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 			}
 		}
 	}
-	dumpFS, closeDumpFS, err := openTableDumpFS(ctx, ses, stmt.Path)
-	if err != nil {
-		return err
-	}
-	defer closeDumpFS()
 	sourceFS, err := GetObjectFSProvider(ses)
 	if err != nil {
 		return err
 	}
 
-	// A stage path can be targeted concurrently by multiple CNs, and object
-	// stores do not give this workflow an exclusive create token. Do not delete
+	// Multiple CNs may copy immutable source objects before one exclusively
+	// creates the manifest. Object copies have no publication ownership. Do not delete
 	// copied fixture objects on failure: that could remove files published by a
 	// concurrent successful DUMP. Failed fixtures are reclaimed with the stage
 	// fixture lifecycle.
@@ -1325,11 +1336,21 @@ func handleDumpTable(ctx context.Context, ses *Session, stmt *tree.DumpTable) er
 		}
 		manifest.Relations = append(manifest.Relations, relationDump)
 	}
+	// These context-aware barriers let integration tests hold real SQL requests
+	// at the publication boundaries without replacing storage operations.
+	fault.TriggerFaultWithContext(ctx, "table_dump_before_manifest")
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	if err = writeTableDumpJSON(ctx, dumpFS, tableDumpManifestName, manifest); err != nil {
 		return err
 	}
+	fault.TriggerFaultWithContext(ctx, "table_dump_after_manifest")
+	if err = ctx.Err(); err != nil {
+		return err
+	}
 	if !stmt.MetadataOnly {
-		if err = dumpFS.Write(ctx, fileservice.IOVector{FilePath: tableDumpReadyName, Entries: []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("1")}}}); err != nil {
+		if err = fileservice.WriteExclusive(ctx, dumpFS, fileservice.IOVector{FilePath: tableDumpReadyName, Entries: []fileservice.IOEntry{{Offset: 0, Size: 1, Data: []byte("1")}}}); err != nil {
 			return err
 		}
 	}

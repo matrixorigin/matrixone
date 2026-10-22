@@ -721,8 +721,7 @@ type resultFileInfo struct {
 
 // doDumpQueryResult reads data from the query result, converts it into csv and saves it into
 // the file designated by the path.
-func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) error {
-	var err error
+func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportParam) (err error) {
 	var columnDefs *plan.ResultColDef
 	var reader *ioutil.BlockReader
 	var blocks []objectio.BlockObject
@@ -761,6 +760,7 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 		if err != nil {
 			return err
 		}
+		setMysqlColumnTypeMetadata(mcol, typs[i])
 		mrs.AddColumn(mcol)
 	}
 	mrs.Data = make([][]interface{}, 1)
@@ -778,18 +778,13 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 	exportParam.DefaultBufSize = getPu(exportParam.service).SV.ExportDataDefaultFlushSize
 	exportParam.FileService = getPu(exportParam.service).FileService
 	exportParam.Ctx = ctx
-	defer func() {
-		if exportParam.AsyncReader != nil {
-			_ = exportParam.AsyncReader.Close()
-		}
-		if exportParam.AsyncWriter != nil {
-			_ = exportParam.AsyncWriter.Close()
-		}
-	}()
+	exportParam.ctx, exportParam.cancel = context.WithCancel(ctx)
+	defer func() { err = exportParam.finish(err) }()
+
 	initExportFileParam(exportParam, mrs)
 
 	//open output file
-	if err = openNewFile(ctx, exportParam, mrs); err != nil {
+	if err = openNewFile(exportParam.ctx, exportParam, mrs); err != nil {
 		return err
 	}
 
@@ -844,11 +839,6 @@ func doDumpQueryResult(ctx context.Context, ses *Session, eParam *tree.ExportPar
 				}
 			}
 		}
-	}
-
-	err = Close(exportParam)
-	if err != nil {
-		return err
 	}
 
 	return err

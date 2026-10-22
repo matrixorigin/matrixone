@@ -321,6 +321,54 @@ func Test_createPubByPitr(t *testing.T) {
 	})
 }
 
+// Test_createPubByPitrTableScopeModeResolution pins when a PITR publication
+// replay consults the replay executor's lower_case_table_names mode: the
+// explicit table list of this publication certifies a table scope, so its
+// replay must refuse a replay executor that cannot name that mode instead of
+// certifying under a guess. The account-level replay above stays the proof
+// that a shape which certifies nothing never consults the mode.
+func Test_createPubByPitrTableScopeModeResolution(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	defer ctrl.Finish()
+
+	ses := newTestSession(t, ctrl)
+	defer ses.Close()
+
+	bh := &backgroundExecTest{}
+	bh.init()
+
+	bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+	defer bhStub.Reset()
+
+	pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+	pu.SV.SetDefaultValues()
+	pu.SV.KillRountinesInterval = 0
+	setPu("", pu)
+	ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+	rm, _ := NewRoutineManager(ctx, "")
+	ses.rm = rm
+
+	ses.SetTenantInfo(&TenantInfo{
+		Tenant:        sysAccountName,
+		User:          rootName,
+		DefaultRole:   moAdminRoleName,
+		TenantID:      sysAccountID,
+		UserID:        rootID,
+		DefaultRoleID: moAdminRoleID,
+	})
+
+	ts := time.Now().Add(time.Duration(-2) * time.Hour).UnixNano()
+	sql := getPubInfoWithPitr(ts, 0, "test")
+	bh.sql2result[sql] = newMrsForSqlForGetPubs([][]interface{}{
+		{int64(0), "sys", "pub01", "test", uint64(0), "test1", "acc01", "", "", uint64(17), uint64(29), ""},
+	})
+
+	err := createPubByPitr(ctx, "", bh, "pitr01", "test", 0, ts)
+	require.Error(t, err)
+	require.ErrorContains(t, err,
+		"session variable lower_case_table_names is unavailable")
+}
+
 // Test_getPubInfoWithPitrLayout guarantees the PITR publication query
 // projection stays in sync with extractPubInfosFromExecResult. The restore
 // path used to select a shortened layout that fed the pub name into

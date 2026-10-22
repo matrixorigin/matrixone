@@ -1668,3 +1668,126 @@ func resetChildren(arg *Shuffle, bats []*batch.Batch) {
 	arg.Children = nil
 	arg.AppendChild(op)
 }
+
+// Varbinary/binary/blob primary keys and UUID primary keys were previously
+// absent from the hash shuffle dispatch, so LOAD DATA on such tables panicked
+// with "unsupported shuffle type" (#30605). Assert the three dispatch entry
+// points bucket these types deterministically (equal values share a bucket).
+func TestHashShuffleSupportsVarbinaryFamilyAndUuid(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	defer proc.Free()
+
+	newArg := func() *Shuffle {
+		ap := &Shuffle{ShuffleColIdx: 0, BucketNum: 8}
+		ap.ctr.sels = make([][]int32, ap.BucketNum)
+		return ap
+	}
+	batchOf := func(vec *vector.Vector) *batch.Batch {
+		bat := batch.New([]string{"k"})
+		bat.Vecs[0] = vec
+		return bat
+	}
+	bucketOf := func(sels [][]int32, row int32) int {
+		for b, sel := range sels {
+			for _, r := range sel {
+				if r == row {
+					return b
+				}
+			}
+		}
+		return -1
+	}
+
+	t.Run("varbinary", func(t *testing.T) {
+		vec := vector.NewVec(types.T_varbinary.ToType())
+		require.NoError(t, vector.AppendBytes(vec, []byte("AB"), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(vec, []byte("ab"), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(vec, []byte("AB"), false, proc.Mp()))
+		defer vec.Free(proc.Mp())
+
+		ap := newArg()
+		sels := getShuffledSelsByHashWithoutNull(ap, batchOf(vec))
+		require.Equal(t, bucketOf(sels, 0), bucketOf(sels, 2), "equal varbinary values must share a bucket")
+		require.NotEqual(t, -1, bucketOf(sels, 1))
+	})
+
+	t.Run("varbinary with null", func(t *testing.T) {
+		vec := vector.NewVec(types.T_varbinary.ToType())
+		require.NoError(t, vector.AppendBytes(vec, []byte("AB"), false, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(vec, nil, true, proc.Mp()))
+		require.NoError(t, vector.AppendBytes(vec, []byte("ab"), false, proc.Mp()))
+		defer vec.Free(proc.Mp())
+
+		ap := newArg()
+		sels := getShuffledSelsByHashWithNull(ap, batchOf(vec))
+		require.Equal(t, 0, bucketOf(sels, 1), "null key routes to bucket 0")
+		require.NotEqual(t, -1, bucketOf(sels, 0))
+	})
+
+	t.Run("binary and blob", func(t *testing.T) {
+		for _, oid := range []types.T{types.T_binary, types.T_blob, types.T_datalink} {
+			vec := vector.NewVec(oid.ToType())
+			require.NoError(t, vector.AppendBytes(vec, []byte("AB"), false, proc.Mp()))
+			require.NoError(t, vector.AppendBytes(vec, []byte("ab"), false, proc.Mp()))
+
+			ap := newArg()
+			sels := getShuffledSelsByHashWithoutNull(ap, batchOf(vec))
+			require.NotEqual(t, -1, bucketOf(sels, 0), oid.String())
+			vec.Free(proc.Mp())
+		}
+	})
+
+	t.Run("uuid", func(t *testing.T) {
+		mkUuid := func(lo, hi uint64) types.Uuid {
+			var u types.Uuid
+			binary.LittleEndian.PutUint64(u[0:8], lo)
+			binary.LittleEndian.PutUint64(u[8:16], hi)
+			return u
+		}
+		u1, u2 := mkUuid(1, 7), mkUuid(2, 8)
+		vec := vector.NewVec(types.T_uuid.ToType())
+		require.NoError(t, vector.AppendFixed(vec, u1, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(vec, u2, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(vec, u1, false, proc.Mp()))
+		defer vec.Free(proc.Mp())
+
+		ap := newArg()
+		sels := getShuffledSelsByHashWithoutNull(ap, batchOf(vec))
+		require.Equal(t, bucketOf(sels, 0), bucketOf(sels, 2), "equal uuid values must share a bucket")
+	})
+
+	t.Run("uuid with null", func(t *testing.T) {
+		var u1, u2 types.Uuid
+		binary.LittleEndian.PutUint64(u1[0:8], 1)
+		binary.LittleEndian.PutUint64(u1[8:16], 7)
+		binary.LittleEndian.PutUint64(u2[0:8], 2)
+		binary.LittleEndian.PutUint64(u2[8:16], 8)
+		vec := vector.NewVec(types.T_uuid.ToType())
+		require.NoError(t, vector.AppendFixed(vec, u1, false, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(vec, u1, true, proc.Mp()))
+		require.NoError(t, vector.AppendFixed(vec, u2, false, proc.Mp()))
+		defer vec.Free(proc.Mp())
+
+		ap := newArg()
+		sels := getShuffledSelsByHashWithNull(ap, batchOf(vec))
+		require.Equal(t, 0, bucketOf(sels, 1), "null uuid keys route to bucket 0")
+		require.NotEqual(t, -1, bucketOf(sels, 0))
+		require.NotEqual(t, -1, bucketOf(sels, 2))
+	})
+
+	t.Run("uuid const", func(t *testing.T) {
+		var u types.Uuid
+		binary.LittleEndian.PutUint64(u[0:8], 3)
+		vec, err := vector.NewConstFixed(types.T_uuid.ToType(), u, 4, proc.Mp())
+		require.NoError(t, err)
+		defer vec.Free(proc.Mp())
+
+		ap := newArg()
+		require.Less(t, shuffleConstVectorByHash(ap, batchOf(vec)), uint64(ap.BucketNum))
+
+		vb, err := vector.NewConstBytes(types.T_varbinary.ToType(), []byte("AB"), 4, proc.Mp())
+		require.NoError(t, err)
+		defer vb.Free(proc.Mp())
+		require.Less(t, shuffleConstVectorByHash(ap, batchOf(vb)), uint64(ap.BucketNum))
+	})
+}

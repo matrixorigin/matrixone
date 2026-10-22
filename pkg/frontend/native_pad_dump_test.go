@@ -59,7 +59,7 @@ func TestNativePADTableDumpLegacyManifestAndHash(t *testing.T) {
 				rt.CompareAndDeleteGlobalVariables(key, value)
 			}
 		})
-		rt.SetGlobalVariables(key, defines.MORPCVersion125)
+		rt.SetGlobalVariables(key, defines.MORPCVersion129)
 	}
 	ctx := plan.NewMockCompilerContext(false, proc)
 	ctx.SetContext(plan.WithCollationBindingRevision(t.Context(), 1))
@@ -80,7 +80,7 @@ func TestNativePADTableDumpRejectsBeforeNormalization(t *testing.T) {
 			Cols: []*pbplan.ColDef{{Name: "s", Typ: pbplan.Type{Id: int32(types.T_varchar), Width: 8, Charset: 3, CollationVersion: 1}}}},
 		{Name: "n", TableType: catalog.SystemIndexRel, DefaultCharset: 3, CollationVersion: 1,
 			Cols: []*pbplan.ColDef{{Name: "i", Typ: pbplan.Type{Id: int32(types.T_int64)}}}},
-		{Name: "v", TableType: catalog.SystemViewRel, ViewSql: &pbplan.ViewDef{View: `{"Stmt":"create view v as select true as b","collation_binding_revision":1,"required_protocol_version":125}`},
+		{Name: "v", TableType: catalog.SystemViewRel, ViewSql: &pbplan.ViewDef{View: `{"Stmt":"create view v as select true as b","collation_binding_revision":1,"required_protocol_version":129}`},
 			Cols: []*pbplan.ColDef{{Name: "b", Typ: pbplan.Type{Id: int32(types.T_bool)}}}},
 	} {
 		t.Run(source.Name+"/"+source.TableType, func(t *testing.T) {
