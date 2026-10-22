@@ -5104,19 +5104,28 @@ func TestSetOperationMixedTextBinaryKeepsByteWidth(t *testing.T) {
 		width int32
 	}{
 		{
-			name: "char before binary with three branches",
-			sql:  "select cast('' as char(1)) union all select cast('hello-long' as binary) union all select cast('' as char(1))",
-			oid:  types.T_blob,
+			name:  "char before binary with three branches",
+			sql:   "select cast('' as char(1)) union all select cast('hello-long' as binary) union all select cast('' as char(1))",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
 		},
 		{
-			name: "binary before char",
-			sql:  "select cast('hello-long' as binary) union all select cast('' as char(1))",
-			oid:  types.T_blob,
+			name:  "binary before char",
+			sql:   "select cast('hello-long' as binary) union all select cast('' as char(1))",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
 		},
 		{
-			name: "bare null has no width",
-			sql:  "select null union all select cast('' as char(1)) union all select cast('hello-long' as binary)",
-			oid:  types.T_blob,
+			name:  "bare null has no width",
+			sql:   "select null union all select cast('' as char(1)) union all select cast('hello-long' as binary)",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
+		},
+		{
+			name:  "nested blob stays wide",
+			sql:   "select cast('' as char(1)) as v union all select v from (select cast('hello-long' as binary) as v union all select cast('' as char(1))) as nested",
+			oid:   types.T_blob,
+			width: types.MaxLongTextLen,
 		},
 		{
 			name:  "utf8 character width becomes byte width",
@@ -5159,6 +5168,7 @@ func TestSetOperationMixedTextBinaryKeepsByteWidth(t *testing.T) {
 		}
 		require.NotNil(t, setNode)
 		require.Equal(t, int32(types.T_text), setNode.ProjectList[0].Typ.Id)
+		require.Equal(t, int32(types.MaxLongTextLen), setNode.ProjectList[0].Typ.Width)
 		require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), setNode.ProjectList[0].Typ.Charset)
 		require.True(t, setNode.ProjectList[0].Typ.PadSpace)
 		for _, childID := range setNode.Children {
@@ -6415,21 +6425,21 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			name:        "mixed char and binary keeps later bytes",
 			rows:        "row(cast('' as char(1))), row(cast('hello-long' as binary)), row(cast('' as char(1)))",
 			oid:         types.T_blob,
-			width:       0,
+			width:       types.MaxLongTextLen,
 			notNullable: true,
 		},
 		{
 			name:        "mixed binary and char is order independent",
 			rows:        "row(cast('hello-long' as binary)), row(cast('' as char(1)))",
 			oid:         types.T_blob,
-			width:       0,
+			width:       types.MaxLongTextLen,
 			notNullable: true,
 		},
 		{
 			name:  "bare null before mixed char and binary",
 			rows:  "row(null), row(cast('' as char(1))), row(cast('hello-long' as binary))",
 			oid:   types.T_blob,
-			width: 0,
+			width: types.MaxLongTextLen,
 		},
 		{
 			name:        "character width reserves utf8 bytes",
@@ -6469,7 +6479,7 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			width int32
 		}{
 			{"row(cast('a' as char(1)) collate utf8mb4_unicode_ci), row(cast('A' as binary(1)))", types.T_varchar, 4},
-			{"row(cast('a' as char(1)) collate utf8mb4_unicode_ci), row(cast('A' as binary))", types.T_text, 0},
+			{"row(cast('a' as char(1)) collate utf8mb4_unicode_ci), row(cast('A' as binary))", types.T_text, types.MaxLongTextLen},
 		} {
 			node, err := bindValues(t, test.rows)
 			require.NoError(t, err)

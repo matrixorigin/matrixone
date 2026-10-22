@@ -7763,6 +7763,14 @@ func preparedSetOperationCommonType(
 			}
 		}
 	}
+	if mixedType, ok := function.MixedTextBinaryCommonType(argTypes); ok {
+		resolved := makePlan2Type(&mixedType)
+		if err := setExpressionCollation(ctx, "union", argExprs, &resolved); err != nil {
+			return types.Type{}, false, err
+		}
+		applyMixedTextBinaryCollationType(&resolved)
+		return makeTypeByPlan2Type(resolved), true, nil
+	}
 
 	coalesce, err := function.GetFunctionByName(ctx, "coalesce", argTypes)
 	if err != nil {

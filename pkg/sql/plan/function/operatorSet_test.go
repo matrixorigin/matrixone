@@ -1405,8 +1405,11 @@ func TestMixedTextBinaryCommonTypeDoesNotNarrowUnknownOrLargeInputs(t *testing.T
 	}{
 		{"known widths", []types.Type{types.New(types.T_char, 1, 0), types.New(types.T_varbinary, 10, 0)}, types.T_varbinary, 10, true},
 		{"character bytes", []types.Type{types.New(types.T_binary, 1, 0), types.New(types.T_varchar, 3, 0)}, types.T_varbinary, 12, true},
-		{"unknown binary width", []types.Type{types.New(types.T_char, 1, 0), types.New(types.T_binary, 0, 0)}, types.T_blob, 0, true},
-		{"character bytes exceed varbinary", []types.Type{types.New(types.T_varchar, types.MaxVarBinaryLen/utf8.UTFMax+1, 0), types.New(types.T_binary, 1, 0)}, types.T_blob, 0, true},
+		{"unknown binary width", []types.Type{types.New(types.T_char, 1, 0), types.New(types.T_binary, 0, 0)}, types.T_blob, types.MaxLongTextLen, true},
+		{"character bytes exceed varbinary", []types.Type{types.New(types.T_varchar, types.MaxVarBinaryLen/utf8.UTFMax+1, 0), types.New(types.T_binary, 1, 0)}, types.T_blob, types.MaxMediumTextLen, true},
+		{"large utf8 value needs medium capacity", []types.Type{types.New(types.T_varchar, 20000, 0), types.New(types.T_binary, 1, 0)}, types.T_blob, types.MaxMediumTextLen, true},
+		{"nested blob remains binary", []types.Type{types.New(types.T_char, 1, 0), types.New(types.T_blob, types.MaxLongTextLen, 0)}, types.T_blob, types.MaxLongTextLen, true},
+		{"text and binary remain materializable", []types.Type{types.New(types.T_text, types.MaxMediumTextLen, 0), types.New(types.T_binary, 1, 0)}, types.T_blob, types.MaxMediumTextLen, true},
 		{"bare null contributes no width", []types.Type{types.T_any.ToType(), types.New(types.T_char, 1, 0), types.New(types.T_varbinary, 10, 0)}, types.T_varbinary, 10, true},
 		{"pure binary uses existing rule", []types.Type{types.New(types.T_binary, 1, 0), types.New(types.T_varbinary, 10, 0)}, 0, 0, false},
 	} {
