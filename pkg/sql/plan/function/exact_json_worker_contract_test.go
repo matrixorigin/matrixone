@@ -51,6 +51,6 @@ func TestExactJSONWorkerWireCast(t *testing.T) {
 
 func TestExactJSONWorkerWireFunctionIdentity(t *testing.T) {
 	proc := testutil.NewProcess(t)
-	_, err := GetFunctionById(proc.Ctx, int64(601)<<32)
+	_, err := GetFunctionById(proc.Ctx, int64(605)<<32)
 	require.NoError(t, err)
 }
