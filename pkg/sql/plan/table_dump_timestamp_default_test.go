@@ -453,6 +453,61 @@ func TestTableDumpDefaultLocales(t *testing.T) {
 	}
 }
 
+func TestTableDumpHistoricalJapaneseMonthAbbrev(t *testing.T) {
+	proc := newPlanTestProcess(t)
+	proc.GetSessionInfo().TimeZone = time.UTC
+	proc.GetSessionInfo().LCTimeNames = "ja_JP"
+	proc.SetResolveVariableFunc(func(name string, _, _ bool) (any, error) {
+		if name == "lc_time_names" {
+			return "ja_JP", nil
+		}
+		return "", nil
+	})
+	compiler := NewMockCompilerContext(false, proc)
+	compiler.ResolveVariableFunc = func(name string, _, _ bool) (any, error) {
+		switch name {
+		case "lc_time_names":
+			return "ja_JP", nil
+		case "div_precision_increment":
+			return int64(4), nil
+		case "explicit_defaults_for_timestamp":
+			return true, nil
+		}
+		return "", nil
+	}
+	stmt, err := mysql.ParseOne(t.Context(),
+		"create table legacy_ja(a varchar(64) default (date_format('2024-03-01','%b')))", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+	built, err := BuildPlan(compiler, stmt, false)
+	require.NoError(t, err)
+	current := built.GetDdl().GetCreateTable().GetTableDef()
+	require.Equal(t, " 3月", current.Cols[0].Default.Expr.GetLit().GetSval())
+
+	// Before this locale correction, ja_JP %b emitted the same month without
+	// the leading space. Preserve the complete metadata tree across serialization.
+	legacy := proto.Clone(current).(*planpb.TableDef)
+	legacy.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Sval{Sval: "3月"}
+	encoded, err := proto.Marshal(legacy)
+	require.NoError(t, err)
+	var persisted planpb.TableDef
+	require.NoError(t, proto.Unmarshal(encoded, &persisted))
+	before := proto.Clone(&persisted)
+	for _, target := range []*planpb.TableDef{&persisted, current} {
+		sensitive, err := AnalyzeTableDumpBindings(compiler, target, &persisted)
+		require.NoError(t, err)
+		require.True(t, sensitive)
+	}
+	require.True(t, proto.Equal(before, &persisted))
+	require.Equal(t, "ja_JP", proc.GetSessionInfo().LCTimeNames)
+	require.Same(t, time.UTC, proc.GetSessionInfo().TimeZone)
+
+	forged := proto.Clone(&persisted).(*planpb.TableDef)
+	forged.Cols[0].Default.Expr.GetLit().Value = &planpb.Literal_Sval{Sval: "4月"}
+	_, err = AnalyzeTableDumpBindings(compiler, current, forged)
+	require.ErrorContains(t, err, "cannot verify bound default")
+}
+
 const tableDumpSessionSearchTestTimezoneBindings = 8
 
 func tableDumpSessionSearchTestVisitLimit(t *testing.T, origin, baseLocale string) int {

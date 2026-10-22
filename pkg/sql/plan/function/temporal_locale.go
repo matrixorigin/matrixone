@@ -15,6 +15,7 @@
 package function
 
 import (
+	"context"
 	"sort"
 	"strings"
 
@@ -91,6 +92,20 @@ var temporalLocales = map[string]*temporalLocale{
 	},
 }
 
+type legacyJapaneseMonthAbbrevKey struct{}
+
+// WithLegacyJapaneseMonthAbbrev is used only while verifying persisted table
+// defaults authored before Japanese %b adopted MySQL's leading-space format.
+func WithLegacyJapaneseMonthAbbrev(ctx context.Context) context.Context {
+	return context.WithValue(ctx, legacyJapaneseMonthAbbrevKey{}, true)
+}
+
+var legacyJapaneseTemporalLocale = func() *temporalLocale {
+	locale := *temporalLocales["ja_JP"]
+	locale.monthAbbrev = locale.months
+	return &locale
+}()
+
 // TemporalLocaleNames returns the supported temporal locale inventory in a
 // stable order. Callers own the returned slice; the evaluation registry stays private.
 func TemporalLocaleNames() []string {
@@ -123,6 +138,12 @@ func temporalLocaleForProcess(proc *process.Process) *temporalLocale {
 		name = proc.GetSessionInfo().LCTimeNames
 	}
 	if locale, ok := temporalLocales[name]; ok {
+		if name == "ja_JP" && proc != nil {
+			legacy, _ := proc.GetTopContext().Value(legacyJapaneseMonthAbbrevKey{}).(bool)
+			if legacy {
+				return legacyJapaneseTemporalLocale
+			}
+		}
 		return locale
 	}
 	return temporalLocales["en_US"]

@@ -48,6 +48,7 @@ type tableDumpExpressionVisitor struct {
 	hasIntegerDivision bool
 	hasSpecial         bool
 	hasTimestampAdd    bool
+	hasDateFormat      bool
 }
 
 func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
@@ -62,6 +63,8 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 			v.hasSpecial = true
 		case "timestampadd":
 			v.hasTimestampAdd = true
+		case "date_format":
+			v.hasDateFormat = true
 		}
 	}
 	return e, false
@@ -210,8 +213,11 @@ const (
 	tableDumpBindingLegacyZeroTemporalDefault
 )
 
-// A flag selects one coherent pre-migration binding, never per-node metadata.
-const tableDumpBindingPreTemporalNullability tableDumpBindingMode = 1 << 7
+// Flags select one coherent pre-migration binding, never per-node metadata.
+const (
+	tableDumpBindingLegacyJapaneseMonthAbbrev tableDumpBindingMode = 1 << 6
+	tableDumpBindingPreTemporalNullability    tableDumpBindingMode = 1 << 7
+)
 
 type tableDumpDefaultSession struct {
 	timeZone, locale, folded bool
@@ -219,7 +225,7 @@ type tableDumpDefaultSession struct {
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ tableDumpBindingPreTemporalNullability
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingLegacyJapaneseMonthAbbrev)
 	if mode&tableDumpBindingPreTemporalNullability != 0 {
 		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
 	}
@@ -234,6 +240,12 @@ func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tab
 	proc := ctx.GetProcess()
 	if proc == nil {
 		return nil, moerr.NewInternalError(ctx.GetContext(), "table dump expression binding requires a process")
+	}
+	if mode&tableDumpBindingLegacyJapaneseMonthAbbrev != 0 {
+		bindCtx = function.WithLegacyJapaneseMonthAbbrev(bindCtx)
+		previous := proc.GetTopContext()
+		proc.ReplaceTopCtx(function.WithLegacyJapaneseMonthAbbrev(previous))
+		defer proc.ReplaceTopCtx(previous)
 	}
 	if baseMode == tableDumpBindingImplicitTimestamp {
 		// Old implicit defaults and ON UPDATE clauses saved CURRENT_TIMESTAMP()
@@ -747,6 +759,50 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					return false, fatal
 				}
 
+			}
+			// The old ja_JP %b spelling is a DUMP/LOAD witness only. Search it
+			// after current bindings fail so ordinary metadata pays no extra cost.
+			if !matched && item.kind == "default" && visit.hasDateFormat {
+				for increment := int64(0); increment <= maxIncrement && !matched; increment++ {
+					for _, mode := range modes {
+						dependency = tableDumpDefaultSession{}
+						legacyMode := mode | tableDumpBindingLegacyJapaneseMonthAbbrev
+						rebind := func(tz *time.Location) (*planpb.Expr, error) {
+							return bind(increment, legacyMode, tz, "ja_JP")
+						}
+						candidate, err := rebind(zone)
+						if fatal != nil {
+							stmt.Free()
+							return false, fatal
+						}
+						matched = err == nil && sameTableDumpBoundExpression(want, candidate)
+						if matched {
+							break
+						}
+						_, stored := tableDumpTimestampLiteral(want)
+						if dependency.timeZone || stored {
+							if stored {
+								matched = matchTableDumpTimestampDefault(want, nil, zone, rebind)
+							}
+							if !matched {
+								for tz := range timeZones {
+									candidate, err = rebind(tz)
+									if fatal != nil || err == nil && sameTableDumpBoundExpression(want, candidate) {
+										matched = fatal == nil
+										break
+									}
+								}
+							}
+							if fatal != nil {
+								stmt.Free()
+								return false, fatal
+							}
+						}
+					}
+				}
+				if matched {
+					sensitive = true
+				}
 			}
 			stmt.Free()
 			if matched {
