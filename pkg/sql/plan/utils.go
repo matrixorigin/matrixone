@@ -2088,7 +2088,11 @@ func constantFoldWithPreparedExactSource(
 		}
 		spatialChecked = true
 	}
-	if f.IsVolatile() {
+	// Preserve lazy ELT evaluation instead of folding unselected arguments.
+	if functionID == function.ELT && int32(overloadID) == 1 {
+		return expr, nil
+	}
+	if f.CannotFold() || f.IsVolatile() {
 		return expr, nil
 	}
 	if rule.IsLegacyTimeAssignmentOutsideInternalRange(fn) {

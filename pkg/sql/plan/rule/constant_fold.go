@@ -238,7 +238,13 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 		}
 		spatialChecked = true
 	}
-	if f.IsVolatile() {
+	// ELT's selected-subtree evaluation belongs to its lazy executor; eagerly
+	// folding every argument would evaluate unselected invalid expressions.
+	functionID, overload := function.DecodeOverloadID(overloadID)
+	if functionID == function.ELT && overload == 1 {
+		return expr
+	}
+	if f.CannotFold() || f.IsVolatile() {
 		return expr
 	}
 	if IsLegacyTimeAssignmentOutsideInternalRange(fn) {

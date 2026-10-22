@@ -58,12 +58,13 @@ func TestConstantFoldBitCountDiagnostics(t *testing.T) {
 				}
 				require.False(t, sink.Warned(), "speculation must not publish statement warnings")
 				require.Same(t, sink, proc.WarningSink)
-				if value == "3x" {
-					require.NotNil(t, folded.GetF())
-				} else {
-					require.NotNil(t, folded.GetLit())
-					require.Equal(t, uint64(2), folded.GetLit().GetU64Val())
-				}
+				require.NotNil(t, folded.GetF(), "row-scoped diagnostics must remain runtime-evaluated")
+
+				result, free, err := colexec.GetReadonlyResultFromExpression(proc, folded, []*batch.Batch{batch.EmptyForConstFoldBatch})
+				require.NoError(t, err)
+				defer free()
+				require.Equal(t, uint64(2), vector.MustFixedColNoTypeCheck[uint64](result)[0])
+				require.Equal(t, value == "3x", sink.Warned(), "runtime diagnostics must be preserved without planning-time warnings")
 			})
 		}
 	}

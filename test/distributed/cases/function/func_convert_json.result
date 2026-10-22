@@ -30,14 +30,14 @@ y year
 insert into convert_json_source values
 (1, '{"a":1}', '{"a":1}', '{"a":1}', '{"a":1}', b'1010', 2020);
 select json_type(convert(b, json)), json_unquote(convert(b, json)) from convert_json_source;
-➤ json_type(cast(b as json))[12,-1,0]  ¦  json_unquote(cast(b as json))[12,-1,0]  𝄀
-BLOB  ¦  eyJhIjoxfQAAAAAAAAAAAA==
+➤ json_type(cast(b as json))[12,65535,0]  ¦  json_unquote(cast(b as json))[12,65535,0]  𝄀
+BLOB  ¦  base64:type254:eyJhIjoxfQAAAAAAAAAAAA==
 select json_type(convert(vb, json)), json_unquote(convert(vb, json)) from convert_json_source;
-➤ json_type(cast(vb as json))[12,-1,0]  ¦  json_unquote(cast(vb as json))[12,-1,0]  𝄀
-BLOB  ¦  eyJhIjoxfQ==
+➤ json_type(cast(vb as json))[12,65535,0]  ¦  json_unquote(cast(vb as json))[12,65535,0]  𝄀
+BLOB  ¦  base64:type15:eyJhIjoxfQ==
 select json_type(convert(bl, json)), json_unquote(convert(bl, json)) from convert_json_source;
-➤ json_type(cast(bl as json))[12,-1,0]  ¦  json_unquote(cast(bl as json))[12,-1,0]  𝄀
-BLOB  ¦  eyJhIjoxfQ==
+➤ json_type(cast(bl as json))[12,65535,0]  ¦  json_unquote(cast(bl as json))[12,65535,0]  𝄀
+BLOB  ¦  base64:type252:eyJhIjoxfQ==
 select json_type(convert(tx, json)), json_unquote(convert(tx, json)) from convert_json_source;
 ➤ json_type(cast(tx as json))[12,-1,0]  ¦  json_unquote(cast(tx as json))[12,-1,0]  𝄀
 OBJECT  ¦  {"a": 1}
@@ -49,8 +49,8 @@ select json_type(convert(y, json)), convert(y, json) from convert_json_source;
 INTEGER  ¦  2020
 select json_type(convert(cast(x'ff' as blob), json)),
 json_unquote(convert(cast(x'ff' as blob), json));
-➤ json_type(cast(cast(0xff as blob) as json))[12,-1,0]  ¦  json_unquote(cast(cast(0xff as blob) as json))[12,-1,0]  𝄀
-BLOB  ¦  /w==
+➤ json_type(cast(cast(0xff as blob) as json))[12,65535,0]  ¦  json_unquote(cast(cast(0xff as blob) as json))[12,65535,0]  𝄀
+BLOB  ¦  base64:type252:/w==
 create table convert_json_bit_width(bits bit(9));
 insert into convert_json_bit_width values (b'100001010');
 select json_type(convert(bits, json)), json_unquote(convert(bits, json)) from convert_json_bit_width;
@@ -146,27 +146,27 @@ select json_type(convert(b1, json)), json_unquote(convert(b1, json)),
 json_type(convert(bl1, json)), json_unquote(convert(bl1, json)),
 convert(b1, json) = convert(bl1, json)
 from convert_json_bit_blob;
-➤ json_type(cast(b1 as json))[12,-1,0]  ¦  json_unquote(cast(b1 as json))[12,-1,0]  ¦  json_type(cast(bl1 as json))[12,-1,0]  ¦  json_unquote(cast(bl1 as json))[12,-1,0]  ¦  cast(b1 as json) = cast(bl1 as json)[-7,1,0]  𝄀
-BIT  ¦  AQ==  ¦  BLOB  ¦  AQ==  ¦  0
+➤ json_type(cast(b1 as json))[12,65535,0]  ¦  json_unquote(cast(b1 as json))[12,65535,0]  ¦  json_type(cast(bl1 as json))[12,65535,0]  ¦  json_unquote(cast(bl1 as json))[12,65535,0]  ¦  cast(b1 as json) = cast(bl1 as json)[-6,8,0]  𝄀
+BIT  ¦  AQ==  ¦  BLOB  ¦  base64:type252:AQ==  ¦  0
 select json_type(convert(b8, json)), json_unquote(convert(b8, json)),
 json_type(convert(bl8, json)), json_unquote(convert(bl8, json)),
 convert(b8, json) = convert(bl8, json)
 from convert_json_bit_blob;
-➤ json_type(cast(b8 as json))[12,-1,0]  ¦  json_unquote(cast(b8 as json))[12,-1,0]  ¦  json_type(cast(bl8 as json))[12,-1,0]  ¦  json_unquote(cast(bl8 as json))[12,-1,0]  ¦  cast(b8 as json) = cast(bl8 as json)[-7,1,0]  𝄀
-BIT  ¦  /w==  ¦  BLOB  ¦  /w==  ¦  0
+➤ json_type(cast(b8 as json))[12,65535,0]  ¦  json_unquote(cast(b8 as json))[12,65535,0]  ¦  json_type(cast(bl8 as json))[12,65535,0]  ¦  json_unquote(cast(bl8 as json))[12,65535,0]  ¦  cast(b8 as json) = cast(bl8 as json)[-6,8,0]  𝄀
+BIT  ¦  /w==  ¦  BLOB  ¦  base64:type252:/w==  ¦  0
 select json_type(convert(b9, json)), json_unquote(convert(b9, json)),
 json_type(convert(bl9, json)), json_unquote(convert(bl9, json)),
 convert(b9, json) = convert(bl9, json)
 from convert_json_bit_blob;
-➤ json_type(cast(b9 as json))[12,-1,0]  ¦  json_unquote(cast(b9 as json))[12,-1,0]  ¦  json_type(cast(bl9 as json))[12,-1,0]  ¦  json_unquote(cast(bl9 as json))[12,-1,0]  ¦  cast(b9 as json) = cast(bl9 as json)[-7,1,0]  𝄀
-BIT  ¦  AQo=  ¦  BLOB  ¦  AQo=  ¦  0
+➤ json_type(cast(b9 as json))[12,65535,0]  ¦  json_unquote(cast(b9 as json))[12,65535,0]  ¦  json_type(cast(bl9 as json))[12,65535,0]  ¦  json_unquote(cast(bl9 as json))[12,65535,0]  ¦  cast(b9 as json) = cast(bl9 as json)[-6,8,0]  𝄀
+BIT  ¦  AQo=  ¦  BLOB  ¦  base64:type252:AQo=  ¦  0
 drop table convert_json_bit_blob;
 create table convert_json_destination(id int, j json);
 insert into convert_json_destination select 1, bl from convert_json_source;
 insert into convert_json_destination select 2, tx from convert_json_source;
 select id, json_type(j), json_unquote(j) from convert_json_destination order by id;
-➤ id[4,32,0]  ¦  json_type(j)[12,-1,0]  ¦  json_unquote(j)[12,-1,0]  𝄀
-1  ¦  BLOB  ¦  eyJhIjoxfQ==  𝄀
+➤ id[4,32,0]  ¦  json_type(j)[12,65535,0]  ¦  json_unquote(j)[12,65535,0]  𝄀
+1  ¦  BLOB  ¦  base64:type252:eyJhIjoxfQ==  𝄀
 2  ¦  OBJECT  ¦  {"a": 1}
 drop table convert_json_destination;
 drop table convert_json_source;
