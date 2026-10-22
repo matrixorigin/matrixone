@@ -1189,7 +1189,7 @@ func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
 	tag := scanNode.BindingTags[0]
 	for _, filter := range scanNode.FilterList {
 		fn := filter.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 || isJSONNumericComparisonArgs(fn.Args) {
 			continue
 		}
 		leftCol := fn.Args[0].GetCol()
@@ -2043,23 +2043,62 @@ func (builder *QueryBuilder) detectVectorGuardFromSort(sortNode *plan.Node) []in
 }
 
 // vectorIndexSupportsContext reports whether algo may serve vecCtx. A membership join or a
-// fulltext MATCH filter on the scan restricts the Top-K to a key set. Algorithms other than
-// ivfflat only post-filter their candidates, which can drop rows of that Top-K, so they leave
-// such a query to the exact sort. A MATCH only in the projection of the Top-K is served by
-// the fulltext rewrite of that projection, which needs the scan directly under it, so no
-// algorithm rewrites the scan.
+// fulltext MATCH filter on the scan restricts the Top-K to a key set. An algorithm without
+// the membership capability (indexplugin.SupportsMembership) only post-filters its
+// candidates, which can drop rows of that Top-K, so it leaves such a query to the exact
+// sort. A MATCH only in the projection of the Top-K is served by the fulltext rewrite of that
+// projection, which needs the scan directly under it, so no algorithm rewrites the scan.
 func (builder *QueryBuilder) vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
 	if vecCtx == nil || vecCtx.scanNode == nil {
 		return true
 	}
-	ivfflat := algo == catalog.MoIndexIvfFlatAlgo.ToString()
+	membership := indexplugin.SupportsMembership(algo)
 	if builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
-		return ivfflat
+		return membership
 	}
 	if builder.projectionMatchesScan(vecCtx) {
 		return false
 	}
-	return ivfflat || !vecCtx.hasMembership
+	return membership || !vecCtx.hasMembership
+}
+
+// checkVectorSearchMode rejects an explicit mode=pre, mode=iterative or mode=auto on an
+// algorithm with neither the membership nor the index-filter capability, itopk or
+// max_itopk above the algorithm's internal top-k limit, and nprobe or max_nprobe on an
+// algorithm without the probe knobs capability.
+func checkVectorSearchMode(ctx context.Context, vecCtx *vectorSortContext, algo string) error {
+	if vecCtx == nil || vecCtx.rankOption == nil {
+		return nil
+	}
+	switch mode := vecCtx.rankOption.Mode; mode {
+	case "pre", "iterative", "auto":
+		if !indexplugin.SupportsMembership(algo) && !indexplugin.SupportsIndexFilter(algo) {
+			return moerr.NewNotSupportedf(ctx, "mode=%s on index type %s", mode, algo)
+		}
+	}
+	if err := indexplugin.CheckInternalTopK(ctx, algo, vecCtx.rankOption.Itopk, vecCtx.rankOption.MaxItopk); err != nil {
+		return err
+	}
+	if !indexplugin.SupportsProbeKnobs(algo) {
+		if vecCtx.rankOption.Nprobe != 0 {
+			return moerr.NewNotSupportedf(ctx, "nprobe on index type %s", algo)
+		}
+		if vecCtx.rankOption.MaxNprobe != 0 {
+			return moerr.NewNotSupportedf(ctx, "max_nprobe on index type %s", algo)
+		}
+	}
+	return nil
+}
+
+// setIndexSearchScanKnobs copies the BY RANK options itopk, max_itopk and max_nprobe of
+// vecCtx to spec.
+func setIndexSearchScanKnobs(spec *plan.IndexSearchScan, vecCtx *vectorSortContext) {
+	if spec == nil || vecCtx == nil || vecCtx.rankOption == nil {
+		return
+	}
+	spec.InternalTopk = vecCtx.rankOption.Itopk
+	spec.MaxInternalTopk = vecCtx.rankOption.MaxItopk
+	spec.MaxNprobe = vecCtx.rankOption.MaxNprobe
 }
 
 // projectionMatchesScan reports whether the project above or below the Top-K of vecCtx
@@ -2476,7 +2515,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		}
 
 		fn := node.FilterList[i].GetF()
-		if fn == nil || len(fn.Args) < 2 {
+		if fn == nil || len(fn.Args) < 2 || isJSONNumericComparisonArgs(fn.Args) {
 			continue
 		}
 		colArgIdx := 0
@@ -2530,7 +2569,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 }
 
 func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
-	if fn == nil {
+	if fn == nil || isJSONNumericComparisonArgs(fn.Args) {
 		return UnsupportedIndexCondition, nil
 	}
 	switch fn.Func.ObjName {
@@ -4208,7 +4247,8 @@ func isUpperBoundOp(name string) bool {
 // classifyRangeBound returns the column and whether the filter is a lower bound.
 // Returns nil if the filter is not a range comparison with a column and constant.
 func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
-	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil ||
+		isJSONNumericComparisonArgs(fn.Args) {
 		return nil, false
 	}
 	op := canonicalRangeOp(fn)

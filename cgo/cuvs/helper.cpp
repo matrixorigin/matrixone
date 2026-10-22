@@ -16,6 +16,7 @@
 
 #include "helper.h"
 #include "device_memory.hpp"
+#include "index_base.hpp"
 #include "index_cost.hpp"
 #include <unordered_map>
 #include <stdexcept>
@@ -596,6 +597,10 @@ void gpu_free_pinned(void* ptr, void* errmsg) {
     } catch (...) {
         matrixone::set_errmsg(errmsg, "Error in gpu_free_pinned", "unknown C++ exception");
     }
+}
+
+void gpu_bitset_free(gpu_bitset_c bitset) {
+    delete static_cast<matrixone::prepared_bitset_t*>(bitset);
 }
 
 }
