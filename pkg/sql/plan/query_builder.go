@@ -5737,9 +5737,9 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	left *tree.SelectStatement,
 	stmts []tree.SelectStatement,
 	distinct bool,
-) (nodeID int32, err error) {
+) (nodeID int32, outputCtx *BindContext, err error) {
 	if len(s.OrderBy) > 0 {
-		return 0, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
+		return 0, nil, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
 	}
 	if builder.isForUpdate {
 		// The outer SELECT is FOR UPDATE but the recursive CTE body emits a
@@ -5747,7 +5747,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		// SourceStep, so the outer LOCK_OP would never reach the underlying
 		// base tables -- the query would silently take no lock. Reject this
 		// up front instead of letting the user think rows are locked.
-		return 0, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
+		return 0, nil, moerr.NewNotSupported(builder.GetContext(), "SELECT ... FOR UPDATE on a recursive CTE")
 	}
 	//1. bind initial statement
 	targets := ctx.numericTableProjectionTypes[numericProjectionTableKey(ctx, table)]
@@ -5849,7 +5849,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		// Coerce every recursive member to the initial projection types.
 		n := builder.qry.Nodes[builder.qry.Nodes[recursiveLastNodeID].Children[0]]
 		if len(projects) != len(n.ProjectList) {
-			return 0, moerr.NewParseErrorf(builder.GetContext(), "recursive cte %s projection error", table)
+			return 0, nil, moerr.NewParseErrorf(builder.GetContext(), "recursive cte %s projection error", table)
 		}
 		for i := range n.ProjectList {
 			projTyp := projects[i].GetTyp()
@@ -5876,7 +5876,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		cols := cteRef.ast.Name.Cols
 
 		if len(cols) > len(subCtx.headings) {
-			return 0, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
+			return 0, nil, moerr.NewSyntaxErrorf(builder.GetContext(), "table %q has %d columns available but %d columns specified", table, len(subCtx.headings), len(cols))
 		}
 
 		for i, col := range cols {
@@ -5897,7 +5897,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	// union all statement
 	offsetExpr, limitExpr, _, err := builder.bindLimit(initCtx, s.Limit, nil)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 
 	//4. add CTE Scan Node
@@ -5909,11 +5909,15 @@ func (builder *QueryBuilder) bindRecursiveCte(
 		recursiveNodeIDs,
 	)
 	nodeID = appendCTEScanNode(builder, ctx, initSourceStep, initCtx.sinkTag)
+	if builder.recursiveCTEOwners == nil {
+		builder.recursiveCTEOwners = make(map[int32]*CTERef)
+	}
+	builder.recursiveCTEOwners[nodeID] = cteRef
 	builder.qry.Nodes[nodeID].RecursiveUnionDistinct = distinct
 	setMaterializedProjectionNullability(builder.qry.Nodes[nodeID], recursiveNotNullable)
 	builder.qry.Nodes[nodeID].Limit, err = recursiveCTEPrefixLimit(builder.GetContext(), limitExpr, offsetExpr)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
 	//4.1 make recursive parts as the source step of the CTE Scan Node besides initSourceStep of initial statement
 	for i := 0; i < len(recursiveSteps); i++ {
@@ -5944,6 +5948,7 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	// Skipped result rows must still reach the recursive member through the
 	// shared sink. Apply OFFSET only on this non-feedback consumer.
 	builder.qry.Nodes[nodeID].Offset = offsetExpr
+	outputCtx = initCtx
 	return
 }
 
@@ -5982,6 +5987,9 @@ func (builder *QueryBuilder) bindCte(
 	cteRef *CTERef,
 	table string,
 ) (nodeID int32, err error) {
+	if bound := builder.boundCTEs[cteRef]; bound != nil {
+		return builder.bindCTEReader(ctx, cteRef, bound)
+	}
 	viewCount := len(cteRef.declarationCtx.views)
 	var s *tree.Select
 	switch stmt := cteRef.ast.Stmt.(type) {
@@ -5994,6 +6002,7 @@ func (builder *QueryBuilder) bindCte(
 		return
 	}
 
+	var outputCtx *BindContext
 	var left *tree.SelectStatement
 	var stmts []tree.SelectStatement
 	var distinct bool
@@ -6004,17 +6013,33 @@ func (builder *QueryBuilder) bindCte(
 	isR := len(stmts) > 0
 
 	if isR && !cteRef.isRecursive {
-		err = moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
+		return 0, moerr.NewParseErrorf(builder.GetContext(), "not declare RECURSIVE: '%v'", tree.String(stmt, dialect.MYSQL))
 	} else if !isR {
 		nodeID, err = builder.bindNoRecursiveCte(ctx, s, cteRef, table)
 		if err != nil {
 			return 0, err
 		}
+		outputCtx = builder.ctxByNode[nodeID]
 	} else {
-		nodeID, err = builder.bindRecursiveCte(ctx, s, cteRef, table, left, stmts, distinct)
+		// Keep the recursive body's internal binding out of the consumer context.
+		recursiveCtx := NewBindContext(builder, ctx)
+		recursiveCtx.numericTableProjectionTypes = ctx.numericTableProjectionTypes
+		recursiveCtx.numericTableProjectionAmbiguous = ctx.numericTableProjectionAmbiguous
+		nodeID, outputCtx, err = builder.bindRecursiveCte(recursiveCtx, s, cteRef, table, left, stmts, distinct)
 		if err != nil {
 			return 0, err
 		}
+	}
+	if isR || builder.cteNeedsIdentity(nodeID, make(map[int32]bool)) {
+		if !isR {
+			nodeID, err = builder.appendMySQLSpecialTypeBoundary(nodeID, outputCtx, outputCtx.outputColumnProvenanceForBoundary())
+			if err != nil {
+				return 0, err
+			}
+		}
+		bound := builder.publishBoundCTE(ctx, cteRef, nodeID, outputCtx, isR)
+		bound.views = append([]string(nil), cteRef.declarationCtx.views[viewCount:]...)
+		return builder.bindCTEReader(ctx, cteRef, bound)
 	}
 	if builder.localCTERoots == nil {
 		builder.localCTERoots = make(map[int32]bool)

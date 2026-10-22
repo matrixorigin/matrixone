@@ -189,6 +189,9 @@ func (builder *QueryBuilder) bindDependentSubquery(sub *plan.SubqueryRef) (*plan
 	if ctx == nil || len(ctx.results) == 0 {
 		return nil, moerr.NewInternalError(builder.GetContext(), "dependent subquery has no result binding")
 	}
+	if err := builder.validateCTEInvocation(sub.NodeId); err != nil {
+		return nil, err
+	}
 	spec := builder.qry.Correlation
 	if spec == nil {
 		spec = &plan.CorrelationSpec{Version: plan.CorrelationVersion}
