@@ -154,3 +154,62 @@ reference audit, incremental vet/lint and pinned non-JSON molint baseline
 comparison, CPU main build and overall review cover the complete delivery.
 Reuse unaffected V1 evidence. No new hot-path work or resource owner is added;
 no throughput improvement is claimed.
+
+## Approval provenance
+
+Owning issue: #29249. Implementation: [PR #30866](https://github.com/matrixorigin/matrixone/pull/30866).
+This section publishes the original design and implementation review decisions;
+it changes no design scope and does not create a retroactive approval. The
+original V6 content above is retained byte-for-byte. Its SHA-256 is
+`102e7221858119a2f77de558cf5d96259e2ff87cd2554477814c46c97bec58f6`
+at [the pre-implementation V6 revision](https://github.com/matrixorigin/matrixone/blob/ab0b3db39d1f64239e7da5198c3917039c16806e/docs/design/retire-unused-kernel-execution-paths.md).
+That hash identifies the historical design, not this appended document.
+
+Reviewer for every original decision below: **gpt-6.1-sol / xhigh**, session
+`01a1637c-da51-7972-94c9-1d901f359876`; actual model/effort were checked
+against the session metadata. UTC timestamps and excerpts come from its original
+responses. Source filenames and SHA-256 receipts identify the retained local
+records; the substantive decisions are reproduced here for public review.
+
+| Phase | Original UTC decision | Approved boundary and ordering |
+| --- | --- | --- |
+| V1 | 2026-10-22T12:09:55.148Z: PASS — V1 is approved for implementation within the scope below. No design blockers remain. | SQL retirement and exact constancy delegate consolidation. [V1](https://github.com/matrixorigin/matrixone/blob/d02bae7cae7541cb17411012b41c3b50d4b11280/docs/design/retire-unused-sql-execution-helpers.md) precedes implementation `f0cd1f8b52`. |
+| V2 | 2026-10-22T12:33:11.527Z: PASS — V2’s bounded storage extension is approved before implementation. No design blockers remain. | Storage retirement, constant-zero usage classification and RPC simplification; explicit persistence, sentinel and memory-accounting invariants. Reviewed snapshot SHA-256 `a26b734a412018a50dc6e05d2133a5b292ff2164c682e5809d07e5a96143c9a4`. |
+| V3 | 2026-10-22T12:39:02.197Z: PASS — V3’s design delta is approved. No blockers or mandatory design edits remain. | [V3](https://github.com/matrixorigin/matrixone/blob/8c1b36adf921fd258fc0d51f6592149173270e3c/docs/design/retire-unused-kernel-execution-paths.md) precedes storage implementation `bccb754c83`; baseline↔candidate reopen/scan, backup and real object-data replay validation required. Earlier replay-removal scope is superseded by the V4 narrowing below. |
+| CDC → V5 | 2026-10-22T12:50:29.179Z: PASS — approve this bounded CDC/frontend addendum to V4. Record the scope below in the canonical design before implementation. | Bounded CDC/frontend method and result-type retirement; preserve SQL templates, indices and live transaction/watermark/error paths. [V5](https://github.com/matrixorigin/matrixone/blob/de7ac5c308dba2b5852c82e7cadb1b2a058c3399/docs/design/retire-unused-kernel-execution-paths.md) records the addendum before implementation `e263be6b8f`. |
+| V5 implementation | 2026-10-22T13:02:11.443Z: PASS — final overall review complete; no unresolved material blockers. | Combined SQL/storage/CDC implementation accepted at `e263be6b8f`; design SHA-256 `77344daba426e9ca6670248f195af3b455da8ca45931e648c8dd411fced4a383`. |
+| Memo → V6 | 2026-10-22T13:06:36.711Z: PASS — this derivative cleanup is approved against `e263be6b8f`, with no material blockers. Record and commit canonical V6 before implementation. | Remove classifier-only `TNUsageMemo.C`, unused constructor argument and two initialization writes. Preserve both caches, catalog ownership/access and controller/rollback/role wiring. [V6](https://github.com/matrixorigin/matrixone/blob/ab0b3db39d1f64239e7da5198c3917039c16806e/docs/design/retire-unused-kernel-execution-paths.md) precedes implementation `f94980da1c`. |
+| V6 implementation | 2026-10-22T13:11:01.235Z: PASS — combined final head has no unresolved material blockers. | Combined final implementation accepted at `f94980da1c`, against the V6 hash above; refreshed memo-owner/consumer checks and unaffected compatibility evidence reconciled. |
+
+V4 is an owner-directed scope reduction, not approval to remove reserved paths:
+catalog/checkpoint replay, its tests, controller/cronjobs and read/write-instance
+wiring remain intact. It supersedes the replay and integration-comment removals
+previously allowed in V2/V3. The combined V5 and final V6 implementation reviews
+accepted this narrowed scope. CDC approval reviewed V4 SHA-256
+`8ba8076d494bf747a7e767ec1a93b195a3cf73cf5ca0b9563a1ec04c9d9d45c6`
+and required recording the exact addendum before implementation. Memo approval
+likewise required recording V6 before its implementation.
+
+Original design hashes: V1
+`da1547c822198d0ca8ca27b32f36f391521d330897c75c0f65aff41d1b683c64`;
+V3 `39188f52670bb92a757ee30c9efb5297b16e07b41bf3ea6e0eeb2de88a433bb8`.
+The immutable V1, V3, V5 and V6 links above identify those exact design bytes.
+
+| Original review record | SHA-256 receipt |
+| --- | --- |
+| `design.md` | `92b434bc8d46367f0ead1c54a556d5dc9f6a6835f5e45821912c07605de5c238` |
+| `storage-design.md` | `0ac9381354c121e78dcfc6f5cfcb3d17b096fbd43db84de3f99afc6234452e1d` |
+| `storage-design-v3.md` | `70cb35ae35525877507174a1cca89e5cf549e10e0e87be0c36df0e37810ceb06` |
+| `cdc-design.md` | `170f57bf3f9b9d3113c00fde5d91a78f78beb1910a01b67a9970ebc51cf53a62` |
+| `combined-review.md` | `832789978b70b048f078ae7f7f60ff834b7802ae22c15a4b910c85d0d7f19d58` |
+| `memo-design.md` | `e3c2d5b94862c918460bd2c14f6cb77d3dc95232e09e57f265746d5ce7135aea` |
+| `final-delta-review.md` | `56851b6e925f9f0d2bd1892d4a2ada6316e0e1d1466e8f07d35fb76254f8888b` |
+
+Original implementation review range: `d7f95aa754b` → `f94980da1c`.
+After merging main, `3ad9adbb4c` → `72dd7c4db4` has the same production
+changes (31 files, +37/−1,353; no test edits), with identical stable patch ID
+`6ad7b221504d3354e4234c68ad3358b029b06e41`. Original local tests/builds
+remain attributed to their recorded revisions. The successful build, UT, SCA
+and PROXY/PESSIMISTIC multi-CN BVT checks on `72dd7c4db4` are separate CI
+evidence, linked from the PR. No new performance or historical-release
+compatibility claim is introduced.
