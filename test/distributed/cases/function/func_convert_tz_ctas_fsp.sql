@@ -1,0 +1,17 @@
+-- Dots in a date are calendar separators; only dots after the time are fractions.
+drop database if exists issue_28236_tz_fsp;
+create database issue_28236_tz_fsp;
+use issue_28236_tz_fsp;
+
+create table tz_fsp as select
+    convert_tz('2024.01.15', '+00:00', '+00:00') as dotted_date,
+    convert_tz('2024.01.15 12:34:56', '+00:00', '+00:00') as dotted_datetime,
+    convert_tz('2024.01.15 12:34:56.123', '+00:00', '+00:00') as dotted_fraction,
+    convert_tz('20240115123456.123456', '+00:00', '+00:00') as compact_fraction;
+
+select column_name, column_type, datetime_precision
+from information_schema.columns
+where table_schema = database() and table_name = 'tz_fsp'
+order by ordinal_position;
+
+drop database issue_28236_tz_fsp;
