@@ -1,5 +1,5 @@
 {
-  "version": 2,
+  "version": 3,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
@@ -243,7 +243,7 @@
       "publish": "Batches, hashmap, Sels and their D leases transfer together to JoinMap and survive until last probe; NeedBatches=false releases only destroyed owners."
     },
     "broadcast_spill_revision": {
-      "topology": "GroupID, actual ParticipantID(scope identity plus ParallelID), Epoch. scope.go:newParallelScope seals IDs from final actual duplication, including single-instance ID, before any group Prepare/Call. Fresh Reset execution uses fresh epoch.",
+      "topology": "Each CN probe scope receives stable SpillScopeID; SpillExpectedScopes enumerates its complete per-CN group. Scope duplication seals only its own actual ParallelIDs before Prepare. Composite participant=(scopeID<<32)|parallelID. Build may publish before all scopes seal. Claim requires all expected scopes sealed and all actual participants registered. MessageBoard registry rebuilds the shared local group by JoinMapTag and query epoch across remote scope RPCs.",
       "states": [
         "Collecting",
         "Claimed",
@@ -285,6 +285,15 @@
       "conditions": "Use original equality, NULL and additional non-equality predicates before recording match.",
       "cursor": "Persist bucket, chunk, participant/file/frame/row, match-list offset, build-finalize row, final probe scan and phase across Call. Advance cursor and sidecar before returning output. IO errors terminate rather than replay already-published output. Empty chunk advances source.",
       "cost": "Worst-case IO is build-chunks times probe bytes; acceptance measures this bounded-memory degradation."
+    },
+    "remote_execution": {
+      "entry": "Remote decodeScope executes MergeRun without Compile.prePipelineInitializer; admit and attach the local working set and initialize local spill registry before reader/source initialization there, with identical final cleanup.",
+      "wire_fields": [
+        "HashBuild/HashJoin: SpillScopeID uint32",
+        "HashBuild/HashJoin: SpillExpectedScopes repeated uint32"
+      ],
+      "backward_compatibility": "New readers without topology fields keep broadcast builds in memory. Old binaries ignore unknown fields and retain their existing in-memory broadcast path. Every build and all its probe scopes share a CN binary; FDs never cross CN/process/version. Existing shuffle path remains supported.",
+      "scope": "Narrow extension of pipeline metadata only; no persistent/catalog/SQL protocol format change."
     }
   },
   "ownership_and_wait_graphs": [
@@ -296,7 +305,7 @@
     "Waiting admission -> Release or merged reclaim sample or fallback -> recheck; context cancellation independently removes waiter."
   ],
   "compatibility": {
-    "wire": "No SQL/public wire change. Remote spill file handles stay local to the owning CN; build/probe shared sources are local message-board resources.",
+    "wire": "Backward-compatible optional pipeline topology fields identify per-CN broadcast spill participants. Missing topology disables new broadcast spill. No SQL protocol or cross-CN FD transfer.",
     "persistence": "Only anonymous temporary spill framing may change; no persistent object/catalog format change.",
     "upgrade": "New queries use one process binary. No cross-version temporary FD sharing is introduced.",
     "scope": "Linux/glibc with fixed configured memory. Other platforms retain existing compilation and fallback behavior but are not acceptance targets."
@@ -359,7 +368,8 @@
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 2,
-    "condition": "Implementation must satisfy recorded protocol and consumer tests; no implementation claim based solely on design."
+    "revision": 3,
+    "condition": "Implementation must satisfy recorded protocol and consumer tests; no implementation claim based solely on design.",
+    "narrow_revision": "Remote execution reverse-arc closure: worker proposed optional fields, actual per-scope seal and MessageBoard registry; root accepts stated compatibility and records before implementation."
   }
 }
