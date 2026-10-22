@@ -1563,6 +1563,54 @@ func TestSessionTempTableMap(t *testing.T) {
 	assert.Equal(t, uint64(5), ses.GetTempTableVersion())
 }
 
+func TestSessionTempTableMapKeepsDottedIdentitiesDistinct(t *testing.T) {
+	ses := &Session{
+		tempTables:    make(map[string]string),
+		tempTablesRev: make(map[string]string),
+	}
+
+	ses.AddTempTable("x", "y.t", "physical-one")
+	ses.AddTempTable("x.y", "t", "physical-two")
+
+	name, ok := ses.GetTempTable("x", "y.t")
+	require.True(t, ok)
+	require.Equal(t, "physical-one", name)
+	name, ok = ses.GetTempTable("x.y", "t")
+	require.True(t, ok)
+	require.Equal(t, "physical-two", name)
+
+	ses.RemoveTempTableByRealName("physical-one")
+	_, ok = ses.GetTempTable("x", "y.t")
+	require.False(t, ok)
+	name, ok = ses.GetTempTable("x.y", "t")
+	require.True(t, ok)
+	require.Equal(t, "physical-two", name)
+
+	ses.RemoveTempTable("x.y", "t")
+	_, ok = ses.GetTempTable("x.y", "t")
+	require.False(t, ok)
+	require.Empty(t, ses.tempTablesRev)
+}
+
+func TestRetireTemporaryTableRemovesUnknownIndexAliases(t *testing.T) {
+	ses := &Session{
+		tempTables:    make(map[string]string),
+		tempTablesRev: make(map[string]string),
+	}
+	root := "__mo_tmp_session_db_generation_root"
+	index := "__mo_tmp_session_db_generation_index"
+	ses.PublishTemporaryTable("db", "root", root)
+	ses.AddTempIndexTable("db", "index", index)
+
+	ses.RetireTemporaryTable("db", "root", root, nil)
+
+	_, ok := ses.GetTempTable("db", "root")
+	require.False(t, ok)
+	_, ok = ses.GetTempTable("db", "index")
+	require.False(t, ok)
+	require.Empty(t, ses.tempTablesRev)
+}
+
 func TestSessionTempTableMigrationSnapshot(t *testing.T) {
 	ses := &Session{
 		tempTables:          make(map[string]string),

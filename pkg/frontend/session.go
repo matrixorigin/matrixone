@@ -786,7 +786,7 @@ func (ses *Session) addTempTableWithIdentity(
 ) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := dbName + "." + alias
+	key := defines.TempTableAliasKey(dbName, alias)
 	if ses.tempTableIdentities == nil {
 		ses.tempTableIdentities = make(map[string]tempTableIdentity)
 	}
@@ -868,7 +868,7 @@ func (ses *Session) snapshotTempTablesForMigration(ctx context.Context) ([]*quer
 func (ses *Session) GetTempTable(dbName, alias string) (string, bool) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	val, ok := ses.tempTables[dbName+"."+alias]
+	val, ok := ses.tempTables[defines.TempTableAliasKey(dbName, alias)]
 	return val, ok
 }
 
@@ -930,7 +930,7 @@ func (ses *Session) removeTempTablesByDatabase(dbName, txnKey, stmtKey string) {
 func (ses *Session) removeTempTable(dbName, alias, txnKey, stmtKey string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := dbName + "." + alias
+	key := defines.TempTableAliasKey(dbName, alias)
 	if realName, ok := ses.tempTables[key]; ok {
 		ses.recordTempTableMutationLocked(txnKey, stmtKey, key)
 		delete(ses.tempTables, key)

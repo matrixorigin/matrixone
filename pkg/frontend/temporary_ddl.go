@@ -15,9 +15,11 @@ package frontend
 import (
 	"context"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"go.uber.org/zap"
 )
@@ -56,7 +58,7 @@ func (ses *Session) forgetTemporaryTableUndoLocked(key string) {
 func (ses *Session) PublishTemporaryTable(db, alias, physical string) {
 	ses.mu.Lock()
 	defer ses.mu.Unlock()
-	key := db + "." + alias
+	key := defines.TempTableAliasKey(db, alias)
 	ses.forgetTemporaryTableUndoLocked(key)
 	if ses.tempTables == nil {
 		ses.tempTables = make(map[string]string)
@@ -93,6 +95,22 @@ func (ses *Session) RetireTemporaryTable(db, alias, physical string, indexes []s
 	remove(physical)
 	for _, name := range indexes {
 		remove(name)
+	}
+	// A missing root relation has no table definition from which to recover
+	// index names. Temporary root and index relations share the generated
+	// session/database/generation prefix, so retire any remaining children of
+	// this root when the caller has no index list.
+	if len(indexes) == 0 && physical != "" && strings.HasSuffix(physical, alias) {
+		prefix := strings.TrimSuffix(physical, alias)
+		for name, key := range ses.tempTablesRev {
+			if !strings.HasPrefix(name, prefix) {
+				continue
+			}
+			identity := ses.tempTableIdentityLocked(key)
+			if identity.dbName == db && name != physical {
+				remove(name)
+			}
+		}
 	}
 	if ses.retiredTempTables == nil {
 		ses.retiredTempTables = make(map[string]sessionTempTable)

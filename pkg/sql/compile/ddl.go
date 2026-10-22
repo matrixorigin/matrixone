@@ -4611,12 +4611,12 @@ type temporaryDropRetirement struct {
 }
 
 func (s *temporaryDropRetireStage) contains(db, alias string) bool {
-	_, ok := s.aliases[db+"."+alias]
+	_, ok := s.aliases[defines.TempTableAliasKey(db, alias)]
 	return ok
 }
 
 func (s *temporaryDropRetireStage) add(owner process.TemporaryTableDDL, db, alias, physical string, indexes []string) {
-	key := db + "." + alias
+	key := defines.TempTableAliasKey(db, alias)
 	if s.contains(db, alias) {
 		return
 	}
@@ -4831,6 +4831,34 @@ func (s *Scope) dropTableSingleResolved(
 			}
 		}
 	}
+	// A temporary alias is user-visible state even when its physical relation
+	// has already disappeared (for example, after another session drops the
+	// backing database). Retire it through the same owner/staging path as a
+	// healthy temporary drop, while preserving transaction rollback semantics.
+	retireMissingTemporary := func() {
+		if !isTemp {
+			return
+		}
+		if owner, ok := sessionTemporaryDDLOwner(c); ok {
+			if temporaryRetire != nil {
+				temporaryRetire.add(owner, dbName, originTableName, tblName, nil)
+			} else {
+				owner.RetireTemporaryTable(dbName, originTableName, tblName, nil)
+			}
+			return
+		}
+		if session := c.proc.GetSession(); session != nil {
+			// Executor/internal transactions do not use the staged owner above.
+			// If the concrete session owns temporary-table reclamation, retire
+			// directly: the physical identity is already confirmed dead, so a
+			// rollback must not restore an unusable alias.
+			if owner, ok := session.(process.TemporaryTableDDL); ok {
+				owner.RetireTemporaryTable(dbName, originTableName, tblName, nil)
+				return
+			}
+			session.RemoveTempTableByRealName(tblName)
+		}
+	}
 
 	// A plan built for a temporary table must not delete a same-named
 	// permanent table if the session alias disappears before execution.
@@ -4872,6 +4900,10 @@ func (s *Scope) dropTableSingleResolved(
 	if dbSource == nil {
 		dbSource, err = c.e.Database(c.proc.Ctx, dbName, c.proc.GetTxnOperator())
 		if err != nil {
+			if isTemp && (moerr.IsMoErrCode(err, moerr.OkExpectedEOB) ||
+				moerr.IsMoErrCode(err, moerr.ErrBadDB)) {
+				retireMissingTemporary()
+			}
 			if qry.GetIfExists() {
 				return nil
 			}
@@ -4881,6 +4913,9 @@ func (s *Scope) dropTableSingleResolved(
 
 	if rel == nil {
 		if rel, err = dbSource.Relation(c.proc.Ctx, tblName, nil); err != nil {
+			if isTemp && moerr.IsMoErrCode(err, moerr.ErrNoSuchTable) {
+				retireMissingTemporary()
+			}
 			if qry.GetIfExists() {
 				return nil
 			}
