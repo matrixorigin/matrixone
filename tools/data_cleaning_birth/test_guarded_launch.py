@@ -62,6 +62,15 @@ class GuardTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "escapes"):
                 guard.inside(self.root, link / "new")
 
+    def test_data_root_rebinding_rejected(self):
+        manifest_path = self.prepare()
+        manifest = json.loads(manifest_path.read_text())
+        wrong = {key: manifest[key] for key in guard.MARKER_KEYS}
+        wrong["binary_sha256"] = "4" * 64
+        guard.set_data_xattr(manifest["data_roots"][0], json.dumps(wrong).encode())
+        with self.assertRaisesRegex(ValueError, "data-directory"):
+            guard.verify(manifest_path, self.binary)
+
     def test_dynamic_and_unknown_json_rejected(self):
         self.launch.write_text(self.launch.read_text() + "\n[dynamic]\nenable=true\n")
         with self.assertRaisesRegex(ValueError, "static"):

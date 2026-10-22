@@ -272,6 +272,9 @@ func m0RunRollbackAt(
 		require.Equal(t, 3, m0Count(t, ctx, fresh, "select count(*) from "+table+" where recovered "+predicate))
 		require.Equal(t, 3, m0Count(t, ctx, fresh, "select count(*) from "+table))
 		m0Exec(t, ctx, fresh, "insert into "+table+"(c_id,c_d_id,c_w_id) values(4,4,4)")
+		if falseFill {
+			require.Equal(t, 4, m0Count(t, ctx, fresh, "select count(*) from "+table+" where recovered=false"))
+		}
 		m0Exec(t, ctx, fresh, "update "+table+" set recovered="+update)
 		m0Exec(t, ctx, fresh, "select mo_ctl('dn','flush','"+table+"')")
 		require.Equal(t, 4, m0Count(t, ctx, fresh, "select count(*) from "+table+" where recovered="+update))
@@ -463,27 +466,38 @@ func m0RunAlterCancelWindow(t *testing.T, waitName, schema string, deadline bool
 }
 
 func TestM0AlterInsertInterleave(t *testing.T) {
+	m0RunAlterInsertInterleave(t, false)
+}
+
+func m0RunAlterInsertInterleave(t *testing.T, birthFalse bool) {
 	t.Run("dml before alter", func(t *testing.T) {
 		runSQLIntegration(t, func(cluster embed.Cluster) {
 			ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
 			defer cancel()
 			cn, err := cluster.GetCNService(0)
 			require.NoError(t, err)
+			definition, predicate := " int", "is null"
+			if birthFalse {
+				closeAdmission := admitM0BirthSQL(t, cn)
+				defer closeAdmission()
+				definition, predicate = " boolean default false", "=false"
+			}
 			const schema = "m0_dml_before_alter"
 			db, table := m0PrepareRollbackTable(t, ctx, cn, schema)
+			defer db.Close()
 			defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
 			m0Exec(t, ctx, db, "insert into "+table+" values(4,4,4,40000,12000,40)")
 			m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+table+"')")
 			beforeHeaders := m0ObjectHeaderProofs(t, ctx, db, cn, table)
 			require.GreaterOrEqual(t, len(beforeHeaders), 2)
-			m0Exec(t, ctx, db, "alter table "+table+" add column after_dml int")
+			m0Exec(t, ctx, db, "alter table "+table+" add column after_dml"+definition)
 			observer := openM0SQL(t, cn)
 			defer func() { _ = observer.Close() }()
 			require.Equal(t, beforeHeaders, m0ObjectHeaderProofs(t, ctx, observer, cn, table))
 			require.Equal(t, 4, m0Count(t, ctx, db,
-				"select count(*) from "+table+" where after_dml is null"))
+				"select count(*) from "+table+" where after_dml "+predicate))
 			require.Equal(t, 4, m0Count(t, ctx, observer,
-				"select count(*) from "+table+" where after_dml is null"))
+				"select count(*) from "+table+" where after_dml "+predicate))
 		})
 	})
 
@@ -493,8 +507,15 @@ func TestM0AlterInsertInterleave(t *testing.T) {
 			defer cancel()
 			cn, err := cluster.GetCNService(0)
 			require.NoError(t, err)
+			definition, predicate := " int", "is null"
+			if birthFalse {
+				closeAdmission := admitM0BirthSQL(t, cn)
+				defer closeAdmission()
+				definition, predicate = " boolean default false", "=false"
+			}
 			const schema = "m0_alter_holds_lock"
 			control, table := m0PrepareRollbackTable(t, ctx, cn, schema)
+			defer control.Close()
 			defer cleanupSQLIntegration(t, cn, "drop database if exists "+schema)
 			writer := openM0SQL(t, cn)
 			defer func() { _ = writer.Close() }()
@@ -509,7 +530,7 @@ func TestM0AlterInsertInterleave(t *testing.T) {
 			m0AddFaultPoint(t, ctx, control, getter, "getwaiters", waitName)
 			alterDone := make(chan error, 1)
 			go func() {
-				_, execErr := control.ExecContext(ctx, "alter table "+table+" add column lock_interleave int")
+				_, execErr := control.ExecContext(ctx, "alter table "+table+" add column lock_interleave"+definition)
 				alterDone <- execErr
 			}()
 			m0WaitForFaultWaiter(t, ctx, control, getter, 1)
@@ -549,10 +570,10 @@ func TestM0AlterInsertInterleave(t *testing.T) {
 			require.Equal(t, uint32(1), version)
 			require.Equal(t, 4, m0Count(t, ctx, control, "select count(*) from "+table))
 			require.Equal(t, 4, m0Count(t, ctx, control,
-				"select count(*) from "+table+" where lock_interleave is null"))
+				"select count(*) from "+table+" where lock_interleave "+predicate))
 			require.Equal(t, 4, m0Count(t, ctx, observer, "select count(*) from "+table))
 			require.Equal(t, 4, m0Count(t, ctx, observer,
-				"select count(*) from "+table+" where lock_interleave is null"))
+				"select count(*) from "+table+" where lock_interleave "+predicate))
 			m0Exec(t, ctx, observer, "update "+table+" set lock_interleave=5 where c_id in (1,4)")
 			require.Equal(t, 2, m0Count(t, ctx, observer,
 				"select count(*) from "+table+" where lock_interleave=5"))

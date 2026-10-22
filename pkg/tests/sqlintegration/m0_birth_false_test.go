@@ -32,6 +32,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 // This in-process fixture proves SQL semantics with a real executable hash and
@@ -73,6 +74,10 @@ func admitM0BirthSQL(t *testing.T, cn embed.ServiceOperator) func() {
 	require.NoError(t, err)
 	marker := m0admission.Marker{FormatVersion: 1, BinarySHA256: hash(exe), SourceSHA: strings.Repeat("1", 40), NativeSHA256: strings.Repeat("2", 64)}
 	manifest := m0admission.Manifest{Marker: marker, RunID: "embedded-real-sql", Root: root, Args: []string{"embedded-real-sql"}, Files: files}
+	manifest.DataRoots = []string{root}
+	markerBytes, err := json.Marshal(marker)
+	require.NoError(t, err)
+	require.NoError(t, unix.Setxattr(root, m0admission.DataXattrName, markerBytes, 0))
 	markerPath := filepath.Join(root, m0admission.MarkerName)
 	manifestPath := filepath.Join(root, "birth-sql-test-manifest.json")
 	lockPath := filepath.Join(root, m0admission.LockName)
@@ -90,6 +95,7 @@ func admitM0BirthSQL(t *testing.T, cn embed.ServiceOperator) func() {
 		require.NoError(t, syscall.Flock(int(lock.Fd()), syscall.LOCK_UN))
 		require.NoError(t, lock.Close())
 		if !t.Failed() {
+			require.NoError(t, unix.Removexattr(root, m0admission.DataXattrName))
 			for _, path := range []string{markerPath, manifestPath, lockPath} {
 				require.NoError(t, os.Remove(path))
 			}
@@ -139,6 +145,17 @@ func TestM0BirthFalseSQL(t *testing.T) {
 		const table = schema + ".customer"
 		defer cleanupSQLIntegration(t, cn, "drop snapshot if exists m0_birth_false_before", "drop snapshot if exists m0_birth_false_history", "drop database if exists "+schema)
 		m0Exec(t, ctx, db, "create database "+schema)
+		m0Exec(t, ctx, db, "create table "+schema+".empty_customer"+m0RollbackCustomerSchema)
+		m0Exec(t, ctx, db, "alter table "+schema+".empty_customer add column cleaned boolean default false")
+		var emptyCount int
+		var emptyMin, emptyMax sql.NullBool
+		var emptyNegated sql.NullInt64
+		require.NoError(t, db.QueryRowContext(ctx, "select count(cleaned),min(cleaned),max(cleaned),sum(not cleaned) from "+schema+".empty_customer").Scan(&emptyCount, &emptyMin, &emptyMax, &emptyNegated))
+		require.Zero(t, emptyCount)
+		require.False(t, emptyMin.Valid)
+		require.False(t, emptyMax.Valid)
+		require.False(t, emptyNegated.Valid)
+
 		m0Exec(t, ctx, db, "create table "+table+m0RollbackCustomerSchema)
 		m0Exec(t, ctx, db, "insert into "+table+" values(1,1,1,50000,100,10),(2,1,1,50000,100,NULL)")
 		m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+table+"')")
@@ -154,6 +171,17 @@ func TestM0BirthFalseSQL(t *testing.T) {
 		require.Equal(t, objects, m0ObjectFingerprints(t, ctx, db, table), "ADD must not rewrite the old objects")
 		require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+table+" where cleaned=false"))
 		require.Equal(t, 0, m0Count(t, ctx, db, "select count(*) from "+table+" where cleaned is null"))
+		var nonnull, total, negated int
+		var minimum, maximum bool
+		require.NoError(t, db.QueryRowContext(ctx, "select count(cleaned),count(*),min(cleaned),max(cleaned),sum(not cleaned) from "+table).Scan(&nonnull, &total, &minimum, &maximum, &negated))
+		require.Equal(t, 2, nonnull)
+		require.Equal(t, 2, total)
+		require.False(t, minimum)
+		require.False(t, maximum)
+		require.Equal(t, 2, negated)
+		require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+table+" where not cleaned"))
+		require.Zero(t, m0Count(t, ctx, db, "select count(*) from "+table+" where cleaned=true"))
+
 		m0Exec(t, ctx, db, "insert into "+table+" values(3,1,1,50000,100,30,NULL),(4,1,1,50000,100,40,true),(5,1,1,50000,100,50,false)")
 		m0Exec(t, ctx, db, "alter table "+table+" add column cleaned2 boolean default false")
 		_, version = m0TableGeneration(t, ctx, db, schema, "customer")
@@ -191,6 +219,14 @@ func TestM0BirthFalseSQL(t *testing.T) {
 		require.Equal(t, ordinaryContents, m0BirthContents(t, ctx, db, table), "child DELETE must not change its parent")
 		// Materialize old-prefix objects through the real TN merge path, then
 		// reopen CN and finally TN+CN to exercise durable birth state.
+		m0Exec(t, ctx, db, "alter table "+schema+".child add column child_only boolean default false")
+		m0Exec(t, ctx, db, "update "+schema+".child set child_only=true where c_id=3")
+		require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+schema+".child where child_only=true"))
+		parentRows, parentErr := db.QueryContext(ctx, "select child_only from "+table)
+		if parentRows != nil {
+			parentRows.Close()
+		}
+		require.Error(t, parentErr)
 		m0RunL0Merge(t, ctx, db, schema+".child")
 		require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+schema+".child where cleaned is null"))
 		require.NoError(t, db.Close())
@@ -238,6 +274,8 @@ func TestM0BirthFalseSQL(t *testing.T) {
 		_, version = m0TableGeneration(t, ctx, db, schema, "renamed_child")
 		require.Zero(t, version)
 		require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+schema+".renamed_child where cleaned=false"))
+		require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+schema+".renamed_child where child_only=true"))
+
 		m0Exec(t, ctx, db, "alter table "+schema+".history comment='a''b'")
 		_, version = m0TableGeneration(t, ctx, db, schema, "history")
 		require.Zero(t, version)
@@ -264,3 +302,5 @@ func TestM0BirthFalseCancel(t *testing.T) {
 func TestM0BirthFalseDeadlineTNApplied(t *testing.T) {
 	m0RunAlterCancelWindow(t, "fj/m0/alter/tn-after-apply", "m0_birth_deadline", true, true)
 }
+
+func TestM0BirthFalseDMLInterleave(t *testing.T) { m0RunAlterInsertInterleave(t, true) }

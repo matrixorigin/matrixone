@@ -13,6 +13,7 @@ package m0admission
 import (
 	"encoding/json"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -43,6 +44,10 @@ func admissionFixture(t *testing.T) (*Manifest, string, *os.File) {
 	require.NoError(t, err)
 	manifest := &Manifest{Marker: Marker{FormatVersion: 1, BinarySHA256: digest, SourceSHA: strings.Repeat("1", 40), NativeSHA256: strings.Repeat("2", 64)},
 		RunID: "admission-unit", Root: root, Args: []string{"-launch", config}, Files: map[string]string{config: configHash}}
+	manifest.DataRoots = []string{root}
+	markerBytes, err := json.Marshal(manifest.Marker)
+	require.NoError(t, err)
+	require.NoError(t, unix.Setxattr(root, DataXattrName, markerBytes, 0))
 	path := filepath.Join(root, "manifest.json")
 	writeAdmissionJSON(t, path, manifest)
 	writeAdmissionJSON(t, filepath.Join(root, MarkerName), manifest.Marker)
@@ -88,7 +93,7 @@ func TestBirthAdmissionIdentityAndLifetime(t *testing.T) {
 }
 
 func TestBirthAdmissionRejectsUnsafeIdentity(t *testing.T) {
-	for _, scenario := range []string{"binary", "marker", "lock-missing", "lock-unheld", "args", "config", "unknown-format", "symlink-escape"} {
+	for _, scenario := range []string{"binary", "marker", "lock-missing", "lock-unheld", "args", "config", "unknown-format", "symlink-escape", "data-rebound"} {
 		t.Run(scenario, func(t *testing.T) {
 			manifest, path, lock := admissionFixture(t)
 			args := manifest.Args
@@ -96,6 +101,12 @@ func TestBirthAdmissionRejectsUnsafeIdentity(t *testing.T) {
 			case "binary":
 				manifest.BinarySHA256 = strings.Repeat("0", 64)
 				writeAdmissionJSON(t, path, manifest)
+			case "data-rebound":
+				other := manifest.Marker
+				other.BinarySHA256 = strings.Repeat("4", 64)
+				data, e := json.Marshal(other)
+				require.NoError(t, e)
+				require.NoError(t, unix.Setxattr(manifest.Root, DataXattrName, data, 0))
 			case "marker":
 				marker := manifest.Marker
 				marker.SourceSHA = strings.Repeat("3", 40)

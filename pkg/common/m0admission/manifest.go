@@ -42,10 +42,11 @@ type Marker struct {
 
 type Manifest struct {
 	Marker
-	RunID string            `json:"run_id"`
-	Root  string            `json:"root"`
-	Args  []string          `json:"args"`
-	Files map[string]string `json:"files"`
+	RunID     string            `json:"run_id"`
+	Root      string            `json:"root"`
+	Args      []string          `json:"args"`
+	Files     map[string]string `json:"files"`
+	DataRoots []string          `json:"data_roots"`
 }
 
 var admission struct {
@@ -108,9 +109,30 @@ func CheckManagedPath(path string) error {
 // CheckDataDirectory also protects candidate directories when the feature is
 // not admitted, including ordinary builds carrying this compatibility guard.
 func CheckDataDirectory(path string) error {
-	if Enabled() {
-		return CheckManagedPath(path)
+	admission.RLock()
+	manifest := admission.manifest
+	if manifest != nil {
+		defer admission.RUnlock()
+		if err := CheckPath(manifest.Root, path); err != nil {
+			return err
+		}
+		declared := false
+		for _, root := range manifest.DataRoots {
+			declared = declared || root == path
+		}
+		if !declared {
+			return fmt.Errorf("M0 admission: undeclared data/cache directory: %q", path)
+		}
+		marker, err := readDataMarker(path)
+		if err != nil {
+			return err
+		}
+		if *marker != manifest.Marker {
+			return fmt.Errorf("M0 admission: data-directory binary binding differs: %q", path)
+		}
+		return nil
 	}
+	admission.RUnlock()
 	current, err := filepath.Abs(path)
 	if err != nil {
 		return err
@@ -119,6 +141,11 @@ func CheckDataDirectory(path string) error {
 		if _, err := os.Lstat(filepath.Join(current, MarkerName)); err == nil {
 			return fmt.Errorf("M0 admission: candidate data requires its guarded binary")
 		} else if !os.IsNotExist(err) {
+			return err
+		}
+		if _, err := readDataMarker(current); err == nil {
+			return fmt.Errorf("M0 admission: marked data directory requires admission")
+		} else if !noDataMarker(err) {
 			return err
 		}
 		parent := filepath.Dir(current)
@@ -240,6 +267,33 @@ func Initialize(args []string) (func(), error) {
 	}
 	if err != syscall.EWOULDBLOCK && err != syscall.EAGAIN {
 		return nil, err
+	}
+	if len(manifest.DataRoots) == 0 {
+		return nil, fmt.Errorf("M0 admission: no bound data directories")
+	}
+	seenRoots := make(map[string]bool, len(manifest.DataRoots))
+	for _, path := range manifest.DataRoots {
+		if seenRoots[path] {
+			return nil, fmt.Errorf("M0 admission: repeated data directory")
+		}
+		seenRoots[path] = true
+		if err := CheckPath(root, path); err != nil {
+			return nil, err
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, err
+		}
+		if !info.IsDir() {
+			return nil, fmt.Errorf("M0 admission: data root is not a directory")
+		}
+		marker, err := readDataMarker(path)
+		if err != nil {
+			return nil, err
+		}
+		if *marker != manifest.Marker {
+			return nil, fmt.Errorf("M0 admission: data-directory format/binary differs")
+		}
 	}
 	for file, expected := range manifest.Files {
 		if err := CheckPath(root, file); err != nil {

@@ -27,6 +27,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/m0admission"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/sys/unix"
 )
 
 func TestM0BirthStartupAdmission(t *testing.T) {
@@ -68,6 +69,26 @@ func TestM0BirthStartupAdmission(t *testing.T) {
 	require.NoError(t, err)
 	marker := m0admission.Marker{FormatVersion: 1, BinarySHA256: hash(exe), SourceSHA: strings.Repeat("1", 40), NativeSHA256: strings.Repeat("2", 64)}
 	manifest := m0admission.Manifest{Marker: marker, RunID: "startup-unit", Root: root, Args: []string{"-launch", launch}, Files: files}
+	dataRoots := make(map[string]bool)
+	for _, path := range append(append(append([]string{}, cfg.LogServiceConfigFiles...), cfg.TNServiceConfigsFiles...), cfg.CNServiceConfigsFiles...) {
+		parsed := NewConfig()
+		require.NoError(t, parseConfigFromFile(path, parsed))
+		require.NoError(t, parsed.validate())
+		dataRoots[parsed.DataDir] = true
+		for _, fs := range parsed.FileServices {
+			dataRoots[fs.DataDir] = true
+			if fs.Cache.DiskPath != nil && *fs.Cache.DiskPath != "" {
+				dataRoots[*fs.Cache.DiskPath] = true
+			}
+		}
+	}
+	markerBytes, err := json.Marshal(marker)
+	require.NoError(t, err)
+	for path := range dataRoots {
+		manifest.DataRoots = append(manifest.DataRoots, path)
+		require.NoError(t, os.MkdirAll(path, 0700))
+		require.NoError(t, unix.Setxattr(path, m0admission.DataXattrName, markerBytes, 0))
+	}
 	manifestPath := filepath.Join(root, "manifest.json")
 	write(manifestPath, manifest)
 	write(filepath.Join(root, m0admission.MarkerName), marker)
