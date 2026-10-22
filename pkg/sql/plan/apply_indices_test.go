@@ -550,6 +550,44 @@ func TestIndexHintJoinScopeFiltersCandidates(t *testing.T) {
 	}
 }
 
+func TestIndexJoinPreservesScanAuthorization(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		path, joinPath     []string
+		direct, joinDirect string
+	}{
+		{name: "direct scan must not borrow join view", joinPath: []string{"db.other"}, joinDirect: "db.other"},
+		{name: "definer view with no join context", path: []string{"db.v"}, direct: "db.v"},
+		{name: "nested view keeps full path", path: []string{"db.outer", "db.inner"}, direct: "db.inner", joinPath: []string{"db.outer"}, joinDirect: "db.outer"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			builder, joinID, scanID, _ := makeIndexHintJoinBuilder(t)
+			scan := builder.qry.Nodes[scanID]
+			scan.OriginViews, scan.DirectView = tc.path, tc.direct
+			scan.ScanSnapshot = &planpb.Snapshot{Tenant: &planpb.SnapshotTenant{TenantID: 7}}
+			scanCtx := NewBindContext(builder, nil)
+			scanCtx.viewChain, scanCtx.directView = tc.path, tc.direct
+			builder.ctxByNode[scanID] = scanCtx
+			builder.ctxByNode[joinID] = nil
+			if tc.joinPath != nil {
+				joinCtx := NewBindContext(builder, nil)
+				joinCtx.viewChain, joinCtx.directView = tc.joinPath, tc.joinDirect
+				builder.ctxByNode[joinID] = joinCtx
+			}
+			_, err := builder.applyIndicesForJoins(joinID, builder.qry.Nodes[joinID], map[[2]int32]int{}, map[[2]int32]*planpb.Expr{})
+			require.NoError(t, err)
+			indexJoin := builder.qry.Nodes[builder.qry.Nodes[joinID].Children[0]]
+			require.Equal(t, planpb.Node_INDEX, indexJoin.JoinType)
+			indexScan := builder.qry.Nodes[indexJoin.Children[1]]
+			require.True(t, indexScan.IndexScanInfo.IsIndexScan)
+			require.Equal(t, scan.OriginViews, indexScan.OriginViews)
+			require.Equal(t, scan.DirectView, indexScan.DirectView)
+			require.Equal(t, scan.ScanSnapshot, indexScan.ScanSnapshot)
+			require.Equal(t, scan.ObjRef, indexScan.ParentObjRef)
+		})
+	}
+}
+
 func TestIndexJoinBuildsVersionedSerializedRuntimeFilter(t *testing.T) {
 	builder, joinID, leftScanID, _ := makeIndexHintJoinBuilder(t)
 	join := builder.qry.Nodes[joinID]
