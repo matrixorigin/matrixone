@@ -114,7 +114,12 @@ S3 所属消费者(C02 查询/嵌套 View、C03 CTAS/default、C08 计划缓存�
 ## 6. 证据与非证据
 
 - 已执行:第 4 节所列 `rg` 源码搜索(基线 `c0e826888b`)及每个命中文件的人工语义核对(含反引号、常量拼接、未限定表名字面);全部引用行号在本基线上复核;`git diff --check`;文档结构检查(表格列数一致、代码围栏闭合、相对链接存在)。
-- 未执行:Go UT/BVT/race/多 CN/混合 binary/恢复测试——本次仅文档,无生产或测试代码改动;#30551/#30578 已报告的验证证据本记录不重复声称。
+- 已执行(R3 新增):本 PR 追加的可执行合同测试(不改生产代码)——
+  - `TestDerivedColumnsTemplateSeparatesPersistedAndDerivedAuthority`(sysview):锁定 I_S COLUMNS 模板的持久/推导权威隔离(持久分支显式排除用户 View、推导分支重增、订阅候选 CTE 在 APPLY 左侧且携授权与 relkind 谓词、历史单分支模板不凭空得订阅行)。
+  - `TestShowColumnsSplitsPhysicalAndLogicalAuthority`(plan):同一 opt-in 请求下,用户 View 的 DESC/SHOW FULL/COLUMN_NUMBER 计划不扫描 `mo_columns`;普通表同型 SHOW 保留 `mo_columns` 物理扫描。
+  - `TestViewColumnsSkipsNullCandidatesYieldsEmptyResult`、`TestViewColumnsStartRejectsCancelledContext`(table_function):被筛选候选产出空结果而非错误;扫描起始取消以 ctx 错误中止。
+- 已执行(R3 验证):`pkg/util/sysview`、`pkg/sql/colexec/table_function` 全包 normal;`pkg/sql/plan` 全包 normal;plan/table_function 聚焦 `-race`;gofmt、`go vet`、`git diff --check` 通过。
+- 未执行:BVT、native SQL 集成、多 CN/混合 binary/恢复测试——本次无生产代码改动,#30551/#30578 已报告的验证证据本记录不重复声称。
 - 本记录不批准或宣称 S5–S9 的任何门禁已通过;除登记既有决定外,不改变任何 issue 状态,未编辑 #26227、#29005/#29006/#29007。
 
 ## 7. 结论
@@ -132,3 +137,5 @@ S3 所属消费者(C02 查询/嵌套 View、C03 CTAS/default、C08 计划缓存�
   3. 核查基线由 `76e152a1dd` 更新为 `c0e826888b`,文档内全部源码行号在新基线上重新校验。
 
 - **R2(2026-10-21)** 依据 PR #30739 审查意见补齐表 A 两条 C17 物理兼容路径:SHOW SEQUENCES(build_show.go L318,序列值列类型,序列非 View)与 SHOW INDEX(L1053,mo_indexes 左连 mo_columns,仅普通表存在索引行);同时将 SHOW COLUMNS FULL 变体(L769/771)并入原 SHOW COLUMNS 行,并把 build_show.go 中其余 `mo_columns` 字面(名过滤谓词)登记为非消费者。
+
+- **R3(2026-10-22)** 应维护者要求把对账结论固化为可执行合同测试,本 PR 由文档交付扩展为文档 + 测试:新增第 6 节列出的 4 个测试,覆盖 SHOW/I_S 模板的持久与推导权威边界、空结果与取消;不改生产代码。
