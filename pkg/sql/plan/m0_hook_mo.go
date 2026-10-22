@@ -161,6 +161,17 @@ func selectM0AddColumn(
 		!op.Txn().IsPessimistic() || !op.Txn().IsRCIsolation() {
 		return false, nil
 	}
+	// Decide from the bound column before selecting INPLACE. A syntactically
+	// additive column can still require backfill; COPY must remain available
+	// without first entering the metadata-only builder and failing there.
+	probe := &plan.AlterTable{TableDef: table, CopyTableDef: DeepCopyTableDef(table, true)}
+	bindCtx := initAlterTableContext(table, probe.CopyTableDef, table.DbName)
+	if _, err := AddColumn(ctx, probe, &tree.AlterAddCol{Column: add, Position: position}, bindCtx); err != nil {
+		return false, err
+	}
+	if err := validateM0BoundAddColumn(FindColumn(probe.CopyTableDef.Cols, add.Name.ColName())); err != nil {
+		return false, nil
+	}
 	return true, nil
 }
 
