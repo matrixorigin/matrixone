@@ -8240,12 +8240,23 @@ func bindFuncExprImplByPlanExpr(
 		returnType = function.ConvertReturnTypeForBinder(argsType)
 	}
 	if name == "convert_tz" && len(argsType) > 0 {
-		// CONVERT_TZ preserves the source temporal precision.  The overload
-		// lookup may use the implicit DATETIME cast target (whose default scale
-		// is zero), so restore the source scale for view/CTAS metadata.
+		// The implicit DATETIME cast used for overload lookup loses the source
+		// precision. A constant string has the precision of its parsed value,
+		// while a temporal column retains its declared precision.
+		scale := argsType[0].Scale
+		if argsType[0].Oid.IsMySQLString() {
+			scale = 0
+			if lit := args[0].GetLit(); lit != nil && !lit.Isnull {
+				if value, ok := lit.Value.(*plan.Literal_Sval); ok {
+					if _, err := types.ParseDatetime(value.Sval, MaxFsp); err == nil {
+						scale = datetimeLiteralScale(value.Sval)
+					}
+				}
+			}
+		}
 		returnType.Oid = types.T_datetime
-		returnType.Scale = argsType[0].Scale
-		returnType.Width = argsType[0].Width
+		returnType.Scale = scale
+		returnType.Width = scale
 	}
 	adjustControlFlowMetadata(name, args, argsType, &returnType, argsCastType)
 	adjustDateFormatMetadata(name, args, &returnType)
