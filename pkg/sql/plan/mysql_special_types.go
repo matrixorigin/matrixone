@@ -21,6 +21,7 @@ import (
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/geo"
@@ -28,6 +29,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
+	"github.com/matrixorigin/matrixone/pkg/vm/process"
 )
 
 // validateGeometrySRID rejects SRIDs that cannot be stored in the type Width
@@ -153,6 +155,182 @@ func isDirectPreparedGeometrySRIDArg(expr *plan.Expr) bool {
 		return true
 	}
 	return isImplicitPreparedParamCast(expr)
+}
+
+// isGeometrySRIDConstFunction reports whether name is one of the geometry
+// functions whose trailing argument the binder decodes as a constant
+// integer SRID: the constructors that record the SRID in the geometry
+// result type, and the ST_SRID setter. The decode treats the last bound
+// argument of these calls identically, so the argument-level fold below
+// addresses exactly that position.
+func isGeometrySRIDConstFunction(name string) bool {
+	switch strings.ToLower(name) {
+	case "st_geomfromtext", "st_geomfromwkb", "st_geomfrombinary", "st_geometryfromtext",
+		"st_geometryfromwkb", "st_pointfromtext", "st_linefromtext", "st_polygonfromtext",
+		"st_mpointfromtext", "st_mlinefromtext", "st_mpolyfromtext", "st_geomcollfromtext",
+		"st_pointfromgeohash", "st_geomfromgeojson", "st_srid":
+		return true
+	default:
+		return false
+	}
+}
+
+// isGeometrySRIDConstFoldSafe reports whether the whole SRID argument tree
+// is built from literals, the same operator set the binder's own
+// constant-fold switch covers (plus the conversion nodes the resolver adds
+// inside those operators, down to their target-type metadata), and nested
+// functions the function registry positively proves side-effect-free. Only
+// such a tree may be folded here: every node is the pure number or typing
+// machinery of those operators, or a curated pure-value builtin whose
+// evaluation has no effect outside the expression tree, so the fold below
+// cannot execute anything else of a stored definition, and the curated
+// set's reserved entry conditions - the internal-machinery registration bit
+// (plain or combined with other class flags, the python UDF builtin among
+// them) and the volatile and real-time-related overload flags - exclude
+// exactly the machinery and non-determinism the walk must not run.
+// Anything else - a parameter, a column, an unproven builtin (llm_chat is
+// registered STRICT without any excluded flag and still performs an HTTP
+// request through its executor), a volatile or real-time-related builtin,
+// internal machinery, or a function unresolved in the builtin registry (a
+// caller-named user-defined function binds through the separate UDF path
+// and its own marker veto instead) - keeps the argument untouched and the
+// decode reports its own constant-integer error, exactly like an ordinary
+// build of a non-constant definition.
+func isGeometrySRIDConstFoldSafe(expr *plan.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch node := expr.Expr.(type) {
+	case *plan.Expr_Lit:
+		// Any literal atom is admissible: the fold result still has to
+		// decode as a constant integer, so a folded fraction or string meets
+		// the decode's own rejection, the same verdict ordinary binding
+		// gives it.
+		return true
+	case *plan.Expr_T:
+		// Expr_T is the conversion operators' target-type metadata: the
+		// resolver appends it as the trailing argument of every cast node it
+		// builds (appendCastBeforeExprWithOverload in base_binder.go), it
+		// cannot be written from SQL, and nothing executes it - the fold
+		// executor consumes it as a type descriptor. Accepting exactly this
+		// structural leaf lets the implicit casts of otherwise safe
+		// arithmetic ('4325' + 1) pass the walk, while every executable node
+		// keeps requiring the operator whitelist above.
+		return true
+	case *plan.Expr_F:
+		switch node.F.GetFunc().GetObjName() {
+		case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
+			"unary_tilde", "cast", "serial", "serial_full":
+			for _, arg := range node.F.GetArgs() {
+				if !isGeometrySRIDConstFoldSafe(arg) {
+					return false
+				}
+			}
+			return true
+		default:
+			// A nested function is admissible only through the function
+			// registry's positively proven pure set - never through the
+			// absence of a flag: llm_chat is registered STRICT without the
+			// internal bit and without a volatile or real-time-related
+			// overload, so a negative-only test admits it and the guarded
+			// fold executes its HTTP request. The curated set keeps a pure
+			// deterministic builtin inside the arithmetic (ABS of a
+			// literal) folding exactly as ordinary binding folds it, while
+			// rand and sleep stay out through the volatile and real-time
+			// flags, the relation resolvers, the fault-injection machinery
+			// and the LLM, starlark and UDF executors stay out through the
+			// internal bit or pure-set membership, and nothing of any of
+			// them executes here.
+			if !function.GetFunctionIsProvenPureFoldableById(node.F.GetFunc().GetObj()) {
+				return false
+			}
+			for _, arg := range node.F.GetArgs() {
+				if !isGeometrySRIDConstFoldSafe(arg) {
+					return false
+				}
+			}
+			return true
+		}
+	default:
+		return false
+	}
+}
+
+// isGeometrySRIDFoldableRoot reports whether the SRID argument's own root
+// can reach the fold the ordinary binder applies. Only the fold-switch
+// operator names fold there: an arithmetic root binds as a function
+// expression and meets the post-bind fold switch, so an ordinary build
+// folds its whole constant subtree - a nested pure function like ABS folds
+// through that switch's recursion, never as the root itself. The explicit
+// CAST root does not fold either: CAST syntax binds through the dedicated
+// CastExpr path, which wraps its operand with the cast node directly and
+// never visits the fold switch, so an ordinary build leaves a cast-rooted
+// SRID argument unfolded and the decode rejects it with the
+// constant-integer verdict. With the walk accepting deterministic builtins
+// and the resolver's target-type metadata (Expr_T) as subtrees, this root
+// check keeps the probe on the ordinary admission rule's side of both
+// boundaries: it must not start folding at a root ordinary binding itself
+// never folds.
+func isGeometrySRIDFoldableRoot(expr *Expr) bool {
+	fn := expr.GetF()
+	if fn == nil {
+		return true
+	}
+	switch strings.ToLower(fn.GetFunc().GetObjName()) {
+	case "+", "-", "*", "/", "div", "%", "mod", "unary_minus", "unary_plus",
+		"unary_tilde", "serial", "serial_full":
+		return true
+	default:
+		return false
+	}
+}
+
+// foldGeometrySRIDConstArg pre-folds a geometry function's constant
+// expression SRID argument before the bind decodes it. An ordinary build
+// folds the argument during its own nested binding (the post-bind
+// arithmetic constant-fold switch runs for the argument expression), so the
+// decode only ever meets a literal there and a definition with a constant
+// expression SRID is a valid, creatable view. The publication binding
+// marker returns in front of that switch, so the marked probe would meet
+// the still un-folded argument and misclassify the same valid stored
+// definition as broken. This fold runs the same executor-backed
+// ConstantFold over the same already-bound argument, and only after
+// isGeometrySRIDConstFoldSafe proved the tree is literals, that switch's
+// own operator slice, the conversion metadata the resolver added inside it,
+// and nested builtins the registry positively proves side-effect-free (see
+// GetFunctionIsProvenPureFoldableById), and only when
+// isGeometrySRIDFoldableRoot kept the argument on the
+// ordinary admission rule's side of the explicit CAST and non-operator root
+// boundaries - so the probe's admission and rejection verdicts keep
+// matching the ordinary build for proven pure trees, nothing beyond that
+// constant machinery and the curated pure
+// set can execute during validation, and prepared SRID markers keep their own
+// admission path.
+func foldGeometrySRIDConstArg(proc *process.Process, name string, args []*Expr) {
+	if proc == nil || len(args) < 2 || !isGeometrySRIDConstFunction(name) {
+		return
+	}
+	sridArg := args[len(args)-1]
+	if _, ok := sridArg.Expr.(*plan.Expr_Lit); ok {
+		return
+	}
+	if isDirectPreparedGeometrySRIDArg(sridArg) {
+		return
+	}
+	if !isGeometrySRIDFoldableRoot(sridArg) {
+		return
+	}
+	if !isGeometrySRIDConstFoldSafe(sridArg) {
+		return
+	}
+	folded, err := ConstantFold(batch.EmptyForConstFoldBatch, DeepCopyExpr(sridArg), proc, false, true)
+	if err != nil || folded == nil {
+		return
+	}
+	if _, ok := folded.Expr.(*plan.Expr_Lit); !ok {
+		return
+	}
+	args[len(args)-1] = folded
 }
 
 // SRID lives in the geometry type, so bind its value before a parent function

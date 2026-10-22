@@ -1548,7 +1548,12 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	for i, expr := range node.ProjectList {
 		result[i].Rel, result[i].Pos = constructJoinResult(expr, proc)
 	}
-	nonEqCond, eqConds := extraJoinConditions(node.OnList)
+	conditions := node.OnList
+	mixedAsof := isMixedJSONNumericAsof(node)
+	if mixedAsof {
+		conditions = colexec.SplitAndExprs(conditions)
+	}
+	nonEqCond, eqConds := extraJoinConditions(conditions)
 	arg := hashjoin.NewArgument()
 	arg.JoinType = node.JoinType
 	arg.IsRightJoin = node.IsRightJoin
@@ -1574,6 +1579,21 @@ func constructHashJoin(node, left *plan.Node, left_types, right_types []types.Ty
 	arg.IsShuffle = node.Stats.HashmapStats != nil && node.Stats.HashmapStats.Shuffle
 	arg.SpillThreshold = node.SpillMem
 	arg.AsofRightCol = node.AsofRightCol
+	if mixedAsof {
+		arg.IsShuffle = false
+		arg.RuntimeFilterSpecs = nil
+		if len(arg.EqConds[0]) == 0 {
+			// This is only physical coarse grouping. Preserve the logical ON
+			// and evaluate every mixed equality before choosing a predecessor.
+			constant := func() *plan.Expr {
+				return &plan.Expr{
+					Typ:  plan.Type{Id: int32(types.T_int64), NotNullable: true},
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_I64Val{I64Val: 0}}},
+				}
+			}
+			arg.EqConds = [][]*plan.Expr{{constant()}, {constant()}}
+		}
+	}
 
 	for i := range node.SendMsgList {
 		if node.SendMsgList[i].MsgType == int32(message.MsgJoinMap) {

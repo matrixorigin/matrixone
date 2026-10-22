@@ -41,6 +41,24 @@ type remapDbContext struct {
 	collectTableName     func(*tree.TableName)
 	collectProcedureName func(*tree.ProcedureName)
 	collectFunctionName  func(*tree.UnresolvedName)
+	// enterCTEs, when set, takes over the WITH handling of every SELECT the
+	// walker descends into: it registers the members for reference
+	// classification and returns the scope context for the main statement,
+	// while the caller remembers each member's declaration scope so member
+	// bodies are visited later, on demand, with binder visibility (a member
+	// sees the members declared before it, not after). Dependency collection
+	// uses this; database remapping must keep rewriting every CTE body, so it
+	// leaves enterCTEs nil.
+	enterCTEs func(w *tree.With, remap remapDbContext) remapDbContext
+	// collectCTERef, when set, receives unqualified references that resolve to
+	// a CTE visible in the current scope instead of being skipped, so the
+	// dependency collector can record which members a statement uses.
+	collectCTERef func(name *tree.TableName)
+	// visitExpr, when set, observes every expression node the walker reaches,
+	// in every position it walks (projections, filters, subqueries, CTE
+	// bodies, order and limit). Publication scope validation uses it to find
+	// calls the catalog dependency capture cannot represent.
+	visitExpr func(tree.Expr)
 	// err, when non-nil, receives the first fail-closed remapping error (for
 	// example a rewrite-key collision under remapdb). Walkers keep going so
 	// later statements stay consistent, and applyRemapDb* returns the error
@@ -676,6 +694,23 @@ func remapDbInSelect(sel *tree.Select, remap remapDbContext) {
 	if sel == nil {
 		return
 	}
+	if remap.enterCTEs != nil && sel.With != nil {
+		// On-demand CTE walk: enterCTEs registers the members of this scope
+		// (references to them reach collectCTERef) and defers their bodies,
+		// so nested SELECTs anywhere in the statement get the same
+		// binder-consistent handling as the top level.
+		scoped := remap.enterCTEs(sel.With, remap)
+		remapDbInSelectStatement(sel.Select, scoped)
+		remapDbInTimeWindow(sel.TimeWindow, scoped)
+		remapDbInOrderBy(sel.OrderBy, scoped)
+		remapDbInLimit(sel.Limit, scoped)
+		// Role/session/inline rewrite keys and rule bodies must stay aligned with
+		// the remapped table references. The planner builds its lookup key from the
+		// post-remap schema+table, so a source-keyed rewrite would otherwise miss
+		// and silently drop row-level policy (issue #29161).
+		remap.fail(remapRewriteOption(sel.RewriteOption, scoped))
+		return
+	}
 	remapDbInWith(sel.With, remap)
 	scoped := remap
 	if sel.With != nil {
@@ -959,6 +994,9 @@ func remapDbInUpdateExprs(updateExprs tree.UpdateExprs, remap remapDbContext) {
 // WHERE id IN (SELECT ... FROM dbx.t)). Keep this aligned with
 // pkg/sql/parsers/tree/expr.go when adding an expression wrapper with children.
 func remapDbInExpr(expr tree.Expr, remap remapDbContext) {
+	if remap.visitExpr != nil && expr != nil {
+		remap.visitExpr(expr)
+	}
 	switch e := expr.(type) {
 	case nil:
 		return
@@ -1091,9 +1129,21 @@ func remapTableName(tn *tree.TableName, remap remapDbContext) {
 	if tn == nil {
 		return
 	}
+	// The binder resolves an unqualified dual to a value scan before any CTE
+	// lookup, so the dependency collector must not classify it as a CTE
+	// reference even when a WITH member is named dual; the collector's own
+	// classification then drops it. Qualified db.dual stays a real table
+	// reference. Remapping without a collector keeps its previous behavior.
+	unqualifiedDual := remap.collectCTERef != nil && !tn.ExplicitSchema &&
+		string(tn.ObjectName) == "dual"
 	if remap.collectTableName != nil && tn.ObjectName != "" &&
-		(tn.ExplicitSchema || !remap.isVisibleCTE(string(tn.ObjectName))) {
+		(tn.ExplicitSchema || unqualifiedDual || !remap.isVisibleCTE(string(tn.ObjectName))) {
 		remap.collectTableName(tn)
+	} else if remap.collectCTERef != nil && tn.ObjectName != "" &&
+		!tn.ExplicitSchema && remap.isVisibleCTE(string(tn.ObjectName)) {
+		// A dependency collector wants to see which CTE the statement uses;
+		// every other walker keeps skipping these references.
+		remap.collectCTERef(tn)
 	}
 	if tn.ExplicitSchema {
 		if target, ok := remap.lookup(string(tn.SchemaName)); ok {

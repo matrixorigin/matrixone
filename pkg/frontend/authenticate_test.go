@@ -13509,6 +13509,7 @@ type backgroundExecTest struct {
 	dropDatabaseIgnoresForeignKeys bool
 	systemCTELimits                []bool
 	lockWriterFair                 []bool
+	publicationViewBinding         []bool
 	executionAccountIDs            []uint32
 	executionDatabaseTypes         []string
 }
@@ -13647,6 +13648,8 @@ func (bt *backgroundExecTest) Exec(ctx context.Context, s string) error {
 	bt.executedSQLs = append(bt.executedSQLs, s)
 	bt.systemCTELimits = append(bt.systemCTELimits, process.HasSystemCTELimits(ctx))
 	bt.lockWriterFair = append(bt.lockWriterFair, defines.IsLockWriterFair(ctx))
+	bt.publicationViewBinding = append(bt.publicationViewBinding,
+		defines.IsPublicationViewBinding(ctx))
 	accountID, _ := defines.GetAccountId(ctx)
 	bt.executionAccountIDs = append(bt.executionAccountIDs, accountID)
 	databaseType, _ := ctx.Value(defines.DatTypKey{}).(string)
@@ -19788,4 +19791,35 @@ func TestCompoundObjectPrivilegesDoNotAuthorizeSibling(t *testing.T) {
 	allowed, err = checkPrivilegeInCache(t.Context(), ses, priv, true)
 	require.NoError(t, err)
 	require.True(t, allowed, "object-level alternatives still authorize each object")
+}
+
+// TestIsSysOnlyCatalogRelationSQL keeps the classification the sys-only
+// catalog DDLs depend on, byte for byte. The general-tenant account
+// initialization skips exactly these statements, and
+// isPublicationSharedSystemRelation builds its shared-relation set from the
+// complement, so one case-swapped prefix turns a system-owned relation into
+// per-tenant state (the round-15 review caught MoCatalogMoIndexUpdateDDL
+// exactly this way: its statement opens with uppercase CREATE TABLE while
+// the extraction wrote the lowercase literal). The assertions run against the
+// real predefined constants, not restated strings, so a future rewriting of
+// either side has to keep the pair consistent.
+func TestIsSysOnlyCatalogRelationSQL(t *testing.T) {
+	// sys-only: only the system account is initialized with these relations
+	require.True(t, isSysOnlyCatalogRelationSQL(MoCatalogMoAccountDDL),
+		"mo_account stays with the system account")
+	require.True(t, isSysOnlyCatalogRelationSQL(MoCatalogMoPubsDDL),
+		"mo_pubs stays with the system account")
+	require.True(t, isSysOnlyCatalogRelationSQL(MoCatalogMoTableStatsDDL),
+		"mo_table_stats stays with the system account")
+	require.True(t, isSysOnlyCatalogRelationSQL(MoCatalogMoIndexUpdateDDL),
+		"the uppercase MoCatalogMoIndexUpdateDDL classifies sys-only: a lowercase prefix literal misses its case-sensitive CREATE TABLE and the DDL would run for every general tenant")
+	// per-tenant: initialized for every new account, so it must not classify
+	// sys-only or general-tenant initialization would stop creating it
+	require.False(t, isSysOnlyCatalogRelationSQL(MoCatalogMoUserDDL),
+		"mo_user is created for every account")
+	// the checks are case-sensitive by design: the DDL constants define the
+	// exact statements that run, and this documents that only the uppercase
+	// form of the index-update statement matches
+	require.False(t, isSysOnlyCatalogRelationSQL("create table mo_catalog.mo_index_update (x int)"),
+		"the lowercase spelling is not the statement upstream skips tenants for")
 }
