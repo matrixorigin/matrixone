@@ -889,21 +889,35 @@ func rewriteCloneStoredProcedureBodies(
 ) ([]storedProcedureDefinition, error) {
 	rewritten := slices.Clone(procedures)
 	for i := range rewritten {
-		if !strings.EqualFold(rewritten[i].lang, string(tree.SQL)) {
+		if strings.EqualFold(rewritten[i].lang, string(tree.SQL)) {
+			body, err := rewriteCloneSQLRoutineBody(
+				ctx,
+				rewritten[i].body,
+				rewritten[i].sqlMode,
+				srcDBName,
+				dstDBName,
+				lowerCaseTableNames,
+			)
+			if err != nil {
+				return nil, err
+			}
+			rewritten[i].body = body
 			continue
 		}
-		body, err := rewriteCloneSQLRoutineBody(
-			ctx,
-			rewritten[i].body,
-			rewritten[i].sqlMode,
-			srcDBName,
-			dstDBName,
-			lowerCaseTableNames,
-		)
-		if err != nil {
-			return nil, err
+		if strings.EqualFold(rewritten[i].lang, "starlark") {
+			body, err := rewriteCloneStarlarkProcedureBody(
+				ctx,
+				rewritten[i].body,
+				rewritten[i].sqlMode,
+				srcDBName,
+				dstDBName,
+				lowerCaseTableNames,
+			)
+			if err != nil {
+				return nil, err
+			}
+			rewritten[i].body = body
 		}
-		rewritten[i].body = body
 	}
 	return rewritten, nil
 }

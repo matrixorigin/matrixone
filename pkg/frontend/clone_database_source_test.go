@@ -582,6 +582,122 @@ func TestRewriteCloneRoutineBodiesPreserveOpaqueLanguagesAndRejectInvalidSQL(t *
 	})
 }
 
+func TestRewriteCloneStarlarkProcedureBodies(t *testing.T) {
+	procedures := []storedProcedureDefinition{{
+		name: "p_source_reference",
+		lang: "starlark",
+		body: `def run():
+    while True:
+        rows, err = mo.sql("select v, 'source_db' as marker from source_db.clone_probe where id = 1")
+        break
+    other, err = mo.sql("select v from other_db.control_t")
+    return rows[0][0]
+
+out_o = run()
+`,
+	}}
+
+	rewritten, err := rewriteCloneStoredProcedureBodies(
+		context.Background(), procedures, "source_db", "target_db", 1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	require.Contains(t, rewritten[0].body, "`target_db`.`clone_probe`")
+	require.Contains(t, rewritten[0].body, "'source_db'")
+	require.Contains(t, rewritten[0].body, "other_db.control_t")
+	require.NotContains(t, rewritten[0].body, "source_db.clone_probe")
+
+	// A clone must not rewrite unrelated Starlark just to normalize formatting.
+	require.Equal(t, `def run():
+    while True:
+        rows, err = mo.sql("select v, 'source_db' as marker from source_db.clone_probe where id = 1")
+        break
+    other, err = mo.sql("select v from other_db.control_t")
+    return rows[0][0]
+
+out_o = run()
+`, procedures[0].body)
+}
+
+func TestRewriteCloneStarlarkProcedureBodiesPreservesNoSQLBody(t *testing.T) {
+	const body = `label = "source_db"
+out_o = mo.quote(label) + "-ok"
+`
+	rewritten, err := rewriteCloneStoredProcedureBodies(
+		context.Background(),
+		[]storedProcedureDefinition{{name: "p_no_sql", lang: "starlark", body: body}},
+		"source_db",
+		"target_db",
+		1,
+	)
+	require.NoError(t, err)
+	require.Len(t, rewritten, 1)
+	require.Equal(t, body, rewritten[0].body)
+}
+
+func TestRewriteCloneStarlarkProcedureBodiesRejectsUnsafeMoSQL(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+		want string
+	}{
+		{
+			name: "dynamic SQL",
+			body: `query = "select 1"
+rows, err = mo.sql(query)
+`,
+			want: "string literal",
+		},
+		{
+			name: "aliased builtin",
+			body: `run_sql = mo.sql
+rows, err = run_sql("select 1")
+`,
+			want: "direct call",
+		},
+		{
+			name: "module alias",
+			body: `module = mo
+run_sql = module.sql
+rows, err = run_sql("select 1")
+`,
+			want: "direct member call",
+		},
+		{
+			name: "getattr escape",
+			body: `run_sql = getattr(mo, "sql")
+rows, err = run_sql("select 1")
+`,
+			want: "direct member call",
+		},
+		{
+			name: "extra argument",
+			body: `rows, err = mo.sql("select 1", "extra")
+`,
+			want: "exactly one argument",
+		},
+		{
+			name: "invalid SQL literal",
+			body: `rows, err = mo.sql("select from")
+`,
+			want: "cannot safely rewrite",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := rewriteCloneStoredProcedureBodies(
+				context.Background(),
+				[]storedProcedureDefinition{{name: "p_unsafe", lang: "starlark", body: tt.body}},
+				"source_db",
+				"target_db",
+				1,
+			)
+			require.ErrorContains(t, err, tt.want)
+		})
+	}
+}
+
 func TestRewriteCloneUserDefinedFunctionBodies(t *testing.T) {
 	functions := []userDefinedFunctionDefinition{
 		{
