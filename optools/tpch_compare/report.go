@@ -113,11 +113,28 @@ func reportCampaign(config, root, output string) (retErr error) {
 	if err != nil {
 		return err
 	}
+	if f.Version != formatVersion {
+		return errors.New("unsupported frozen format")
+	}
+	if err := f.Preflight.verify(c.Root); err != nil {
+		return err
+	}
+	p, err := readJSON[Preflight](filepath.Join(c.Root, f.Preflight.Path))
+	if err != nil {
+		return err
+	}
+	if err := verifyCampaignConfig(c, p); err != nil {
+		return err
+	}
 	if !reflect.DeepEqual(f.Trials, schedule(c)) {
 		return errors.New("frozen schedule differs from the declared campaign")
 	}
 	if len(run.Pairs) > len(f.Trials) {
 		return errors.New("unexpected extra paired blocks")
+	}
+	loads, err := readLoads(c, f, p)
+	if err != nil {
+		return err
 	}
 	seen := map[string]bool{}
 	cells := map[string]*reportCell{}
@@ -157,26 +174,43 @@ func reportCampaign(config, root, output string) (retErr error) {
 			if !ok {
 				return errors.New("paired arm missing")
 			}
-			receipt, _, err := readArm(filepath.Join(filepath.Dir(path), engine), record)
+			if record.Version != formatVersion || record.Engine != engine || !reflect.DeepEqual(record.Trial, pair.Trial) {
+				return errors.New("paired arm differs from frozen trial")
+			}
+			armRoot := filepath.Join(filepath.Dir(path), engine)
+			receipt, _, err := readArm(armRoot, record)
 			if err != nil {
 				return err
 			}
-			if !receipt.Controlled || receipt.WaveNS <= 0 {
-				return errors.New("standalone/incomplete worker cannot supply scored timing")
-			}
-			if err := record.Request.verify(filepath.Join(filepath.Dir(path), engine)); err != nil {
+			if err := record.Request.verify(armRoot); err != nil {
 				return err
 			}
-			request, err := readJSON[WorkerRequest](filepath.Join(filepath.Dir(path), engine, record.Request.Path))
+			request, err := readJSON[WorkerRequest](filepath.Join(armRoot, record.Request.Path))
 			if err != nil {
 				return err
 			}
-			expected := len(pair.Trial.Queries) * pair.Trial.Clients * request.Repetitions
-			if len(receipt.Queries) != expected {
-				return errors.New("partial query stream cannot supply a suite score")
+			prepared, ok := f.Prepared[pair.Trial.Scale][engine]
+			if !ok || prepared.Deployment.Engine.Name != engine {
+				return errors.New("frozen deployment missing or differs from paired engine")
 			}
-			if receipt.Binary.SHA256 != frozenWorker(c, f) {
-				return errors.New("worker executable changed")
+			expected := scoredRequest(c, f, pair.Trial)
+			expected.Engine = prepared.Deployment.Engine
+			expected.Engine.Threads, expected.Engine.MemoryBytes = pair.Trial.Cores, pair.Trial.MemoryBytes
+			expected.DatasetRoot = c.Datasets[pair.Trial.Scale]
+			// Capture locations are artifact bookkeeping, not frozen workload.
+			// Reporting archived receipts does not require result captures.
+			expected.OutputRoot = request.OutputRoot
+			if !reflect.DeepEqual(request, expected) {
+				return errors.New("worker request differs from frozen trial")
+			}
+			if err := verifyScoredWorker(pair.Trial, engine, p, receipt); err != nil {
+				return err
+			}
+			if err := verifyTrialQueries(pair.Trial, f, request, receipt); err != nil {
+				return err
+			}
+			if err := verifyScoredResources(c, record); err != nil {
+				return fmt.Errorf("%s %s: %w", pair.Trial.ID, engine, err)
 			}
 			receipts[engine] = receipt
 			cell.Arms = append(cell.Arms, record)
@@ -207,10 +241,6 @@ func reportCampaign(config, root, output string) (retErr error) {
 	}
 	defer func() { retErr = errors.Join(retErr, mdFile.Close()) }()
 	md := bufio.NewWriter(mdFile)
-	p, err := readJSON[Preflight](filepath.Join(c.Root, f.Preflight.Path))
-	if err != nil {
-		return err
-	}
 	table, err := os.OpenFile(filepath.Join(output, "queries.csv"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return err
@@ -302,7 +332,7 @@ func reportCampaign(config, root, output string) (retErr error) {
 	}
 	_, _ = fmt.Fprintln(md, "\nCPU and peak memory belong to whole measured windows. Per-query resource attribution requires the dedicated profiling replays; operator timings are not OS CPU time. Tail percentiles require larger per-query samples.")
 	writer.Flush()
-	return errors.Join(writer.Error(), md.Flush(), writeWindows(output, cells), writeLoads(md, c, f))
+	return errors.Join(writer.Error(), writeWindows(output, cells), writeLoads(md, loads))
 }
 
 func writeWindows(output string, cells map[string]*reportCell) (retErr error) {
@@ -323,16 +353,6 @@ func writeWindows(output string, cells map[string]*reportCell) (retErr error) {
 	slices.Sort(keys)
 	for _, key := range keys {
 		for _, a := range cells[key].Arms {
-			if a.After.CPUUsec < a.Before.CPUUsec || a.After.ReadBytes < a.Before.ReadBytes || a.After.WriteBytes < a.Before.WriteBytes {
-				return errors.New("resource counter moved backwards")
-			}
-			if strings.TrimSpace(a.After.Raw["memory.max"]) != strconv.FormatInt(a.Trial.MemoryBytes, 10) || strings.TrimSpace(a.After.Raw["memory.swap.max"]) != "0" {
-				return errors.New("resource cap receipt is missing or differs")
-			}
-			cpus, err := parseCPUSet(a.After.Raw["cpuset.cpus.effective"])
-			if err != nil || len(cpus) != a.Trial.Cores {
-				return errors.New("CPU cap receipt is missing or differs")
-			}
 			peak := "N/A"
 			if a.After.PeakQuality == "window" {
 				peak = strconv.FormatUint(a.After.PeakBytes, 10)
@@ -346,44 +366,217 @@ func writeWindows(output string, cells map[string]*reportCell) (retErr error) {
 	return w.Error()
 }
 
-func writeLoads(w *bufio.Writer, c Campaign, f Frozen) error {
-	_, _ = fmt.Fprintln(w, "\n## Data preparation\n\n| Scale | Engine | Load replicate | Schema s | Load s | Statistics s | Checkpoint s | Allocated bytes after cleanup |\n|---|---|---:|---:|---:|---:|---:|---:|")
+// Admit all resource evidence before collecting scores or creating report files.
+// Cgroups can be reused, so OOM counters may start above zero but cannot change.
+func verifyScoredResources(c Campaign, a ArmRecord) error {
+	previous := a.Before
+	for _, snapshot := range []struct {
+		name  string
+		usage Usage
+	}{{"before", a.Before}, {"after", a.After}, {"after cleanup", a.Trailing}} {
+		u := snapshot.usage
+		if err := verifyResourceCaps(c, a.Trial, u); err != nil {
+			return fmt.Errorf("%s: %w", snapshot.name, err)
+		}
+		if u.CPUUsec < previous.CPUUsec || u.ReadBytes < previous.ReadBytes || u.WriteBytes < previous.WriteBytes || u.OOMKills < previous.OOMKills {
+			return fmt.Errorf("%s resource counter moved backwards", snapshot.name)
+		}
+		if u.OOMKills != a.Before.OOMKills {
+			return fmt.Errorf("%s application cgroup reported an OOM kill", snapshot.name)
+		}
+		previous = u
+	}
+	return nil
+}
+
+func verifyResourceCaps(c Campaign, trial Trial, u Usage) error {
+	if trial.Cores < 1 || trial.Cores > len(c.CPUs) {
+		return errors.New("CPU cap receipt differs from campaign")
+	}
+	if strings.TrimSpace(u.Raw["memory.max"]) != strconv.FormatInt(trial.MemoryBytes, 10) || strings.TrimSpace(u.Raw["memory.swap.max"]) != "0" {
+		return errors.New("resource cap receipt is missing or differs")
+	}
+	expected := slices.Clone(c.CPUs[:trial.Cores])
+	slices.Sort(expected)
+	cpus, err := parseCPUSet(u.Raw["cpuset.cpus.effective"])
+	slices.Sort(cpus)
+	if err != nil || !slices.Equal(cpus, expected) {
+		return errors.New("CPU cap receipt is missing or differs")
+	}
+	return nil
+}
+
+type loadTiming struct {
+	scale, engine string
+	replicate     int
+	timing        LoadReceipt
+	diskBytes     int64
+}
+
+// Resolve every required load receipt before report publication. Database images,
+// source data and executables may have been archived; only receipts are read.
+func readLoads(c Campaign, f Frozen, p Preflight) ([]loadTiming, error) {
+	if len(f.Prepared) != len(c.Datasets) {
+		return nil, errors.New("load preparation differs from campaign")
+	}
+	var loads []loadTiming
 	for _, sf := range []string{"1", "10", "100"} {
+		if _, required := c.Datasets[sf]; !required {
+			continue
+		}
+		if len(f.Prepared[sf]) != 2 {
+			return nil, errors.New("load preparation differs from campaign")
+		}
 		for _, engine := range []string{"mo", "duckdb"} {
 			prepared, ok := f.Prepared[sf][engine]
 			if !ok {
-				continue
+				return nil, errors.New("load preparation differs from campaign")
+			}
+			if !reflect.DeepEqual(prepared.Deployment, loadDeployment(c, sf, engine, 1)) {
+				return nil, errors.New("load deployment differs from campaign")
+			}
+			if len(prepared.Loads) != c.loadReplicates() {
+				return nil, errors.New("load replicate count differs from campaign")
 			}
 			for i, pin := range prepared.Loads {
-				if err := pin.verify(c.Root); err != nil {
-					return err
-				}
-				path := filepath.Join(c.Root, pin.Path)
-				a, err := readJSON[ArmRecord](path)
+				load, err := readLoad(c, p, sf, engine, i+1, pin)
 				if err != nil {
-					return err
+					return nil, fmt.Errorf("SF%s %s load %d: %w", sf, engine, i+1, err)
 				}
-				receipt, _, err := readArm(filepath.Dir(path), a)
-				if err != nil {
-					return err
-				}
-				if receipt.Load == nil {
-					return errors.New("load timing receipt missing")
-				}
-				v := receipt.Load
-				_, _ = fmt.Fprintf(w, "| %s | %s | %d | %.6f | %.6f | %.6f | %.6f | %d |\n", sf, engine, i+1, float64(v.SchemaNS)/1e9, float64(v.LoadNS)/1e9, float64(v.StatisticsNS)/1e9, float64(v.CheckpointNS)/1e9, a.DiskBytes)
+				loads = append(loads, load)
 			}
 		}
+	}
+	return loads, nil
+}
+
+func readLoad(c Campaign, p Preflight, scale, engine string, rep int, pin FileID) (loadTiming, error) {
+	if err := pin.verify(c.Root); err != nil {
+		return loadTiming{}, err
+	}
+	path := filepath.Join(c.Root, pin.Path)
+	a, err := readJSON[ArmRecord](path)
+	if err != nil {
+		return loadTiming{}, err
+	}
+	trial := loadTrial(c, scale, engine, rep)
+	if a.Version != formatVersion || a.Engine != engine || !reflect.DeepEqual(a.Trial, trial) {
+		return loadTiming{}, errors.New("load arm differs from campaign")
+	}
+	root := filepath.Dir(path)
+	receipt, _, err := readArm(root, a)
+	if err != nil {
+		return loadTiming{}, err
+	}
+	if err := a.Request.verify(root); err != nil {
+		return loadTiming{}, err
+	}
+	request, err := readJSON[WorkerRequest](filepath.Join(root, a.Request.Path))
+	if err != nil {
+		return loadTiming{}, err
+	}
+	expected := loadRequest(c, scale, loadDeployment(c, scale, engine, rep))
+	expected.OutputRoot = request.OutputRoot
+	if !reflect.DeepEqual(request, expected) {
+		return loadTiming{}, errors.New("load request differs from campaign")
+	}
+	if err := verifyWorker(scale, engine, p, receipt); err != nil {
+		return loadTiming{}, err
+	}
+	if receipt.Variant != "qualification" || receipt.Clients != 1 || receipt.Controlled || receipt.WaveNS != 0 || len(receipt.Queries) != 0 {
+		return loadTiming{}, errors.New("load worker differs from expected operation")
+	}
+	if receipt.Load == nil || receipt.Load.SchemaNS <= 0 || receipt.Load.LoadNS <= 0 || receipt.Load.StatisticsNS <= 0 || receipt.Load.CheckpointNS <= 0 {
+		return loadTiming{}, errors.New("load timing receipt is missing or invalid")
+	}
+	// Load operations have no query gate or measured-window snapshots. The
+	// controller records their actual caps at cleanup and rejects nonzero OOM
+	// counts for these operations, which have no baseline window snapshot.
+	if err := verifyResourceCaps(c, trial, a.Trailing); err != nil {
+		return loadTiming{}, err
+	}
+	if a.Trailing.OOMKills != 0 {
+		return loadTiming{}, errors.New("load application cgroup reported an OOM kill")
+	}
+	if a.DiskBytes < 0 || a.DiskBytes > c.DiskBytes {
+		return loadTiming{}, errors.New("load disk footprint differs from campaign allowance")
+	}
+	return loadTiming{scale: scale, engine: engine, replicate: rep, timing: *receipt.Load, diskBytes: a.DiskBytes}, nil
+}
+
+func writeLoads(w *bufio.Writer, loads []loadTiming) error {
+	_, _ = fmt.Fprintln(w, "\n## Data preparation\n\n| Scale | Engine | Load replicate | Schema s | Load s | Statistics s | Checkpoint s | Allocated bytes after cleanup |\n|---|---|---:|---:|---:|---:|---:|---:|")
+	for _, load := range loads {
+		v := load.timing
+		_, _ = fmt.Fprintf(w, "| %s | %s | %d | %.6f | %.6f | %.6f | %.6f | %d |\n", load.scale, load.engine, load.replicate, float64(v.SchemaNS)/1e9, float64(v.LoadNS)/1e9, float64(v.StatisticsNS)/1e9, float64(v.CheckpointNS)/1e9, load.diskBytes)
 	}
 	return w.Flush()
 }
 
-func frozenWorker(c Campaign, f Frozen) string {
-	p, err := readJSON[Preflight](filepath.Join(c.Root, f.Preflight.Path))
-	if err != nil {
-		return ""
+func verifyTrialQueries(t Trial, f Frozen, request WorkerRequest, receipt WorkerReceipt) error {
+	repetitions := 1
+	if t.Experiment == "concurrency" {
+		repetitions = f.WaveRepetitions[t.Clients]
 	}
-	return p.Worker.SHA256
+	if t.Clients < 1 || t.Clients > 8 || len(t.Queries) < 1 || len(t.Queries) > 22 ||
+		repetitions < 1 || repetitions > 2000 || repetitions > 4000/t.Clients/len(t.Queries) {
+		return errors.New("invalid frozen query workload")
+	}
+	if request.Version != formatVersion || request.Operation != "queries" ||
+		request.Clients != t.Clients || request.Repetitions != repetitions ||
+		!slices.Equal(request.Queries, t.Queries) {
+		return errors.New("worker request differs from frozen trial")
+	}
+	if len(receipt.Queries) != len(t.Queries)*t.Clients*repetitions {
+		return errors.New("partial query stream cannot supply a suite score")
+	}
+	type identity struct{ query, stream, repetition int }
+	seen := make(map[identity]bool, len(receipt.Queries))
+	for _, q := range receipt.Queries {
+		id := identity{q.Query, q.Stream, q.Repetition}
+		if !slices.Contains(t.Queries, q.Query) || q.Stream < 0 || q.Stream >= t.Clients ||
+			q.Repetition < 0 || q.Repetition >= repetitions || seen[id] {
+			return errors.New("query identities do not cover frozen trial")
+		}
+		seen[id] = true
+	}
+	return nil
+}
+
+func verifyScoredWorker(t Trial, engine string, p Preflight, receipt WorkerReceipt) error {
+	if err := verifyWorker(t.Scale, engine, p, receipt); err != nil {
+		return err
+	}
+	if receipt.Variant != "qualification" {
+		return errors.New("worker variant cannot supply scored timing")
+	}
+	if receipt.Clients != t.Clients {
+		return errors.New("worker client count differs from frozen trial")
+	}
+	if !receipt.Controlled || receipt.WaveNS <= 0 {
+		return errors.New("standalone/incomplete worker cannot supply scored timing")
+	}
+	return nil
+}
+
+func verifyWorker(scale, engine string, p Preflight, receipt WorkerReceipt) error {
+	if receipt.Version != formatVersion {
+		return errors.New("worker receipt version differs")
+	}
+	if receipt.Error != "" || receipt.Cleanup != "complete" {
+		return errors.New("failed/incomplete worker receipt cannot supply timing")
+	}
+	if receipt.Engine != engine {
+		return errors.New("worker engine differs from expected arm")
+	}
+	dataset, ok := p.DatasetIDs[scale]
+	if !ok || dataset.SHA256 == "" || dataset.Bytes <= 0 || receipt.Dataset.SHA256 != dataset.SHA256 || receipt.Dataset.Bytes != dataset.Bytes {
+		return errors.New("worker dataset differs from frozen campaign")
+	}
+	if p.Worker.SHA256 == "" || p.Worker.Bytes <= 0 || receipt.Binary.SHA256 != p.Worker.SHA256 || receipt.Binary.Bytes != p.Worker.Bytes {
+		return errors.New("worker executable changed")
+	}
+	return nil
 }
 func fmtNumber(n float64) string {
 	if math.IsNaN(n) || math.IsInf(n, 0) {

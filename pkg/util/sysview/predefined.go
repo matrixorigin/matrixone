@@ -22,6 +22,18 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/defines"
 )
 
+var (
+	// VIEW_DEFINITION is parser-derived at CREATE/ALTER time. The internal
+	// function returns that frozen field directly and parses only old ViewData
+	// rows that predate it, avoiding a second SQL-level lexer or inactive
+	// lifecycle dependency in this public metadata contract.
+	informationSchemaViewDefinitionSQL  = "mo_view_definition(tbl.viewdef)"
+	informationSchemaViewCheckOptionSQL = "mo_view_check_option(tbl.viewdef)"
+	informationSchemaViewsSourceSQL     = "FROM mo_catalog.mo_tables tbl JOIN __mo_visible_tables visible_tbl ON " +
+		"tbl.account_id = visible_tbl.account_id AND tbl.rel_id = visible_tbl.rel_id LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id WHERE tbl.account_id = current_account_id() " +
+		"and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
+)
+
 // `mysql` database system tables
 // They are all Tenant level system tables
 var (
@@ -317,6 +329,32 @@ func AdaptLegacyInformationSchemaColumnsDDL(definition string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// ViewMetadataColumnsDDL adapts only known system templates for an explicitly
+// owned derived-metadata statement. Pass subscriber-visible names, not a bare
+// publisher ID, to the common request so authorization and root resolution use
+// the caller's namespace. The persisted templates and projections do not change.
+func ViewMetadataColumnsDDL(definition string) (string, bool) {
+	definition = canonicalColumnsViewName(definition)
+	known := definition == InformationSchemaColumnsDDL ||
+		definition == InformationSchemaColumnsV100DDL() || definition == InformationSchemaColumnsV109DDL()
+	if !known {
+		for _, legacy := range []string{InformationSchemaColumnsV41DDL, InformationSchemaColumnsV46DDL, InformationSchemaColumnsV46UpgradeDDL, InformationSchemaColumnsV58DDL()} {
+			derived := informationSchemaDerivedColumnsDDL(legacy)
+			if definition == legacy || definition == derived {
+				definition, known = derived, true
+				break
+			}
+		}
+	}
+	if !known {
+		return "", false
+	}
+	return strings.NewReplacer(
+		"mo_view_columns(mt.rel_id)", "mo_view_columns(mt.reldatabase, mt.relname, mt.rel_id)",
+		"mo_subscription_view_columns(mt.publisher_account_id, mt.rel_id)", "mo_subscription_view_columns(mt.reldatabase, mt.relname, mt.rel_id)",
+	).Replace(definition), true
 }
 
 func IsCurrentInformationSchemaColumnsDDL(definition string) bool {
@@ -756,6 +794,26 @@ var (
 		informationSchemaMetadataVisibilityCTE() + "SELECT 'def' AS `TABLE_CATALOG`," +
 		"tbl.reldatabase AS `TABLE_SCHEMA`," +
 		"tbl.relname AS `TABLE_NAME`," +
+		informationSchemaViewDefinitionSQL + " AS `VIEW_DEFINITION`," +
+		"cast(coalesce(" + informationSchemaViewCheckOptionSQL + ", 'NONE') as varchar(9)) AS `CHECK_OPTION`," +
+		"cast('NO' as varchar(3)) AS `IS_UPDATABLE`," +
+		"usr.user_name + '@' + usr.user_host AS `DEFINER`," +
+		"'DEFINER' AS `SECURITY_TYPE`," +
+		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
+		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
+		informationSchemaViewsSourceSQL
+
+	// Legacy mo_indexes rows encode the default B-tree algorithm as either NULL
+	// or an empty string. Normalize that representation at the MySQL-compatible
+	// information_schema boundary so ORM filters on INDEX_TYPE remain effective.
+
+	// InformationSchemaViewsLegacyDDL is installed until every CN supports the
+	// parser-derived definition function. It must not reference a function ID an
+	// older remote receiver cannot resolve.
+	InformationSchemaViewsLegacyDDL = "CREATE VIEW information_schema.VIEWS AS " +
+		informationSchemaMetadataVisibilityCTE() + "SELECT 'def' AS `TABLE_CATALOG`," +
+		"tbl.reldatabase AS `TABLE_SCHEMA`," +
+		"tbl.relname AS `TABLE_NAME`," +
 		"tbl.rel_createsql AS `VIEW_DEFINITION`," +
 		"cast('NONE' as varchar(9)) AS `CHECK_OPTION`," +
 		"'YES' AS `IS_UPDATABLE`," +
@@ -763,14 +821,7 @@ var (
 		"'DEFINER' AS `SECURITY_TYPE`," +
 		"'utf8mb4' AS `CHARACTER_SET_CLIENT`," +
 		"'" + DefaultCollationForCharset("utf8mb4") + "' AS `COLLATION_CONNECTION` " +
-		"FROM mo_catalog.mo_tables tbl " +
-		"JOIN __mo_visible_tables visible_tbl ON tbl.account_id = visible_tbl.account_id AND tbl.rel_id = visible_tbl.rel_id " +
-		"LEFT JOIN mo_catalog.mo_user usr ON tbl.creator = usr.user_id " +
-		"WHERE tbl.account_id = current_account_id() and tbl.relkind = 'v' and tbl.reldatabase != 'information_schema'"
-
-	// Legacy mo_indexes rows encode the default B-tree algorithm as either NULL
-	// or an empty string. Normalize that representation at the MySQL-compatible
-	// information_schema boundary so ORM filters on INDEX_TYPE remain effective.
+		informationSchemaViewsSourceSQL
 	InformationSchemaStatisticsDDL = fmt.Sprintf("CREATE VIEW information_schema.`STATISTICS` AS "+informationSchemaMetadataVisibilityCTE()+
 		"select 'def' AS `TABLE_CATALOG`,"+
 		"`tbl`.`reldatabase` AS `TABLE_SCHEMA`,"+

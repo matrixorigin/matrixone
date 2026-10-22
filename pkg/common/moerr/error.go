@@ -85,6 +85,7 @@ const (
 	ErrPreparedParamOutOfRange     uint16 = 20207
 	ErrTruncatedWrongValue         uint16 = 20208
 	ErrGroupConcatCut              uint16 = 20209
+	ErrEnumSetValueTruncated       uint16 = 20210
 
 	// Group 3: invalid input
 	ErrBadConfig            uint16 = 20300
@@ -241,7 +242,8 @@ const (
 	ErrTooBigFieldLength            uint16 = 20480
 	// ErrNeedReprepare is returned when a prepared statement depends on
 	// session state that has been invalidated and must not be executed again.
-	ErrNeedReprepare uint16 = 20481
+	ErrNeedReprepare    uint16 = 20481
+	ErrSPRecursionLimit uint16 = 20482
 
 	// Group 5: rpc errors
 	//
@@ -358,6 +360,9 @@ const (
 	ErrRemoteLockWaitTimeout uint16 = 20709
 	// ErrLockWaitTimeout a lock waiter exceeded its configured wait budget
 	ErrLockWaitTimeout uint16 = 20710
+	// ErrLockNowait is a settled NOWAIT row-lock conflict. Unlike ErrLockConflict,
+	// this is a statement error and does not by itself abort the transaction.
+	ErrLockNowait uint16 = 20711
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed       uint16 = 20801
@@ -428,7 +433,8 @@ const (
 	ErrExecutorRunning uint16 = 22201
 
 	// Group 15: Vector Search
-	ErrVectorNeedRetryWithPreMode uint16 = 22301
+	ErrVectorIndexSnapshotChanged uint16 = 22301
+
 	// Group 16: CCPR
 	ErrCCPRReadOnly uint16 = 22401
 
@@ -479,6 +485,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrPreparedParamOutOfRange:     {ER_DATA_OUT_OF_RANGE, []string{"22003"}, "%s value is out of range in '%s'"},
 	ErrTruncatedWrongValue:         {ER_TRUNCATED_WRONG_VALUE, []string{"22007"}, "Truncated incorrect %-.64s value: '%-.128s'"},
 	ErrGroupConcatCut:              {ER_CUT_VALUE_GROUP_CONCAT, []string{"HY000"}, "%s"},
+	ErrEnumSetValueTruncated:       {WARN_DATA_TRUNCATED, []string{"01000"}, "%s"},
 
 	// Group 3: invalid input
 	ErrBadConfig:                    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "invalid configuration: %s"},
@@ -552,6 +559,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrTableAlreadyExists:                       {ER_TABLE_EXISTS_ERROR, []string{"42S01"}, "table %s already exists"},
 	ErrFunctionAlreadyExists:                    {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "function %s already exists"},
 	ErrProcedureAlreadyExists:                   {ER_UDF_ALREADY_EXISTS, []string{MySQLDefaultSqlState}, "procedure %s already exists"},
+	ErrSPRecursionLimit:                         {ER_SP_RECURSION_LIMIT, []string{MySQLDefaultSqlState}, "Recursive limit %d (as set by the max_sp_recursion_depth variable) was exceeded for routine %.192s"},
 	ErrDropNonExistsFunction:                    {ER_CANT_FIND_UDF, []string{MySQLDefaultSqlState}, "function %s doesn't exist"},
 	ErrNoService:                                {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "service %s not found"},
 	ErrDupServiceName:                           {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "duplicate service name %s"},
@@ -684,6 +692,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrCannotCommitOnInvalidCN: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "cannot commit a orphan transaction on invalid cn"},
 	ErrRemoteLockWaitTimeout:   {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "remote lock wait timeout"},
 	ErrLockWaitTimeout:         {ER_LOCK_WAIT_TIMEOUT, []string{MySQLDefaultSqlState}, "Lock wait timeout exceeded; try restarting transaction"},
+	ErrLockNowait:              {ER_LOCK_NOWAIT, []string{"HY000"}, "Statement aborted because lock(s) could not be acquired immediately and NOWAIT is set."},
 
 	// Group 8: partition
 	ErrPartitionFunctionIsNotAllowed:       {ER_PARTITION_FUNCTION_IS_NOT_ALLOWED, []string{MySQLDefaultSqlState}, "This partition function is not allowed"},
@@ -746,7 +755,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrExecutorRunning: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "TaskService: executor %s is already running"},
 
 	// Group 15: Vector Search
-	ErrVectorNeedRetryWithPreMode: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector search need retry with pre mode"},
+	ErrVectorIndexSnapshotChanged: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "vector index generation does not cover the read snapshot"},
 
 	// Group 16: CCPR
 	ErrCCPRReadOnly: {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "ccpr shared object is read-only"},
@@ -1153,6 +1162,12 @@ func NewPreparedParamOutOfRange(ctx context.Context, typ string, statement strin
 func NewDataTruncatedf(ctx context.Context, typ string, format string, args ...any) *Error {
 	msg := fmt.Sprintf(format, args...)
 	return newError(ctx, ErrDataTruncated, typ, msg)
+}
+
+// NewEnumSetValueTruncated is a real strict-assignment failure, even though
+// MySQL uses the same diagnostic number for non-strict truncation warnings.
+func NewEnumSetValueTruncated(ctx context.Context, message string) *Error {
+	return newError(ctx, ErrEnumSetValueTruncated, message)
 }
 
 func NewGroupConcatCut(ctx context.Context, message string) *Error {
@@ -1983,6 +1998,10 @@ func NewErrForeignKeyOnPartitioned(ctx context.Context) *Error {
 }
 func NewCheckRecursiveLevel(ctx context.Context) *Error {
 	return newError(ctx, ErrCheckRecursiveLevel)
+}
+
+func NewSPRecursionLimit(ctx context.Context, limit int64, routine string) *Error {
+	return newError(ctx, ErrSPRecursionLimit, limit, routine)
 }
 
 func NewCteMemoryQuotaExceeded(ctx context.Context, projected, limit uint64) *Error {

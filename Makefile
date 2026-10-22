@@ -614,7 +614,8 @@ UT_ISSUES_BATCH_PARALLEL ?= $(if $(filter 8,$(UT_ISSUES_BATCHES)),$(if $(and $(f
 # The audited embedded batches use the same two-core child budget. Enable four
 # processes only for measured Linux eight-task runs; preserve smaller rollbacks.
 UT_EMBEDDED_PACKAGE_PARALLEL ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSUES_BATCH_PARALLEL)),$(if $(and $(filter linux,$(UNAME_S)),$(filter-out 1 2 3 4 5 6 7,$(UT_PARALLEL))),4,2),1)
-# Audited embed/DML/isolated/SQL batching applies only to the non-prebuild path.
+# Audited batching mode applies only to the non-prebuild path. Four-worker
+# pkg/embed uses eight process generations; other audited packages use four.
 UT_EMBEDDED_BATCHES ?= 4
 # A compiler overlapping cluster processes increases the memory peak. The new
 # issues default prepares embedded packages on demand instead. Preserve
@@ -624,6 +625,13 @@ UT_PREBUILD_EMBEDDED ?= $(if $(filter 8:2 8:3 8:4,$(UT_ISSUES_BATCHES):$(UT_ISSU
 # Reuse released engine slots for plan while resource-heavy work finishes.
 # The heavy process budget is unchanged; set 0 for a sequential A/B baseline.
 UT_OVERLAP_PLAN ?= 1
+# Keep plan race execution serial by default until a representative same-inventory
+# run validates the combined timing and memory impact. Set 2 for controlled runs.
+PLAN_RACE_PARALLEL ?= 1
+# The table-dump plan cases marked independent may run three at a time inside
+# each fresh plan race process. Keep 1 or 2 as explicit rollbacks for
+# constrained or diagnostic runs.
+PLAN_TEST_PARALLEL ?= 3
 # Keep light/issues overlap opt-in: the measured treatment was slower than the
 # serial baseline and left insufficient cgroup memory headroom. Re-enable only
 # when a new schedule has same-runner timing and memory evidence.
@@ -633,7 +641,7 @@ UT_OVERLAP_LIGHT_PARALLEL ?= 2
 # to receive TERM and bounded KILL cleanup in sequence.
 UT_HELPER_TERM_GRACE_TICKS ?= 60
 export UT_EMBEDDED_BATCHES
-export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL UT_OVERLAP_PLAN UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
+export UT_SHARD UT_HARD_TIMEOUT UT_HEARTBEAT_INTERVAL UT_PREBUILD_EMBEDDED UT_PREBUILD_MIN_FREE_KB UT_EMBEDDED_HARD_TIMEOUT_SECONDS UT_ISSUES_BATCHES UT_ISSUES_BATCH_PARALLEL UT_EMBEDDED_PACKAGE_PARALLEL UT_OVERLAP_PLAN PLAN_RACE_PARALLEL PLAN_TEST_PARALLEL UT_OVERLAP_LIGHT UT_OVERLAP_LIGHT_PARALLEL UT_LIGHT_PARALLEL UT_LINK_PARALLEL UT_HELPER_TERM_GRACE_TICKS
 # Native compilation runs before Go tests, so it can use an explicit UT CPU
 # budget without increasing peak race-test memory. With the default UT value,
 # omit -j and preserve recursive make's jobserver contract: a plain make stays

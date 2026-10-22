@@ -746,3 +746,183 @@ TEST(IndexBaseFilterTest, ManifestOmitsFilterWhenEmpty) {
     std::string rm = "rm -rf " + dir;
     ::system(rm.c_str());
 }
+
+// =============================================================================
+// eval_filter_bitmap_cpu_fused: membership of external ids
+// =============================================================================
+
+namespace {
+
+// sorted64 payload: [count][sorted uint64 keys].
+std::vector<uint64_t> make_sorted64(std::vector<uint64_t> keys) {
+    std::sort(keys.begin(), keys.end());
+    std::vector<uint64_t> payload;
+    payload.reserve(keys.size() + 1);
+    payload.push_back(keys.size());
+    payload.insert(payload.end(), keys.begin(), keys.end());
+    return payload;
+}
+
+// host_ids = 1000 + 7 * row: external ids unrelated to row positions.
+std::vector<int64_t> make_host_ids(uint64_t nrows) {
+    std::vector<int64_t> ids(nrows);
+    for (uint64_t i = 0; i < nrows; ++i) ids[i] = 1000 + 7 * static_cast<int64_t>(i);
+    return ids;
+}
+
+HostIdsView view_of(const std::vector<int64_t>& ids) {
+    HostIdsView hv;
+    hv.data  = ids.data();
+    hv.count = ids.size();
+    hv.type  = FilterColType::INT64;
+    return hv;
+}
+
+}  // namespace
+
+TEST(EvalFilterMembershipTest, Sorted64WithPredsDeletesAndShardOffset) {
+    const uint64_t nrows = 200;
+    FilterStore fs = make_store_i32_f32(nrows);
+    auto ids = make_host_ids(nrows);
+    // members: rows 0, 5, 33, 64, 120, 121, 150, 199 (by external id), plus ids absent from the index
+    std::vector<uint64_t> member_rows = {0, 5, 33, 64, 120, 121, 150, 199};
+    std::vector<uint64_t> keys = {1, 999999};
+    for (auto r : member_rows) keys.push_back(static_cast<uint64_t>(ids[r]));
+    auto payload = make_sorted64(keys);
+    mo_membership_t mem{payload.data(), MO_MEMBERSHIP_SORTED64};
+
+    // shard [100, 200): cat (= row % 5) != 1, delete global row 150
+    const uint64_t start = 100, n = 100;
+    std::vector<uint32_t> del((n + 31) / 32, 0xFFFFFFFFu);
+    del[(150 - start) / 32] &= ~(1u << ((150 - start) % 32));
+    auto preds = parse_preds("[{\"col\":1,\"op\":\"!=\",\"val\":1}]");
+    uint64_t pc = 0;
+    auto mask = eval_filter_bitmap_cpu_fused(fs, preds, start, n, &del, view_of(ids), mem, pc);
+
+    uint64_t want_pc = 0;
+    for (uint64_t r = 0; r < n; ++r) {
+        const uint64_t g = start + r;
+        const bool member = std::find(member_rows.begin(), member_rows.end(), g) != member_rows.end();
+        const bool want = member && (g % 5) != 1 && g != 150;
+        want_pc += want;
+        ASSERT_EQ(get_bit(mask, r), want ? 1u : 0u);
+    }
+    ASSERT_EQ(pc, want_pc);
+    ASSERT_EQ(want_pc, 2u);  // rows 120 and 199 (121 has cat 1, 150 is deleted)
+}
+
+TEST(EvalFilterMembershipTest, CbitmapMembershipOnly) {
+    const uint64_t nrows = 70;
+    FilterStore fs = make_store_i32_f32(nrows);
+    auto ids = make_host_ids(nrows);
+    std::vector<int64_t> keys = {ids[3], ids[31], ids[32], ids[69]};
+    void* bm = nullptr;
+    ASSERT_EQ(mo_cbitmap_build_fixed(keys.data(), keys.size() * sizeof(int64_t), sizeof(int64_t),
+                                     keys.size(), nullptr, 0, 1u << 20, 1, &bm),
+              MO_CBITMAP_OK);
+    mo_membership_t mem{bm, MO_MEMBERSHIP_CBITMAP};
+
+    uint64_t pc = 0;
+    auto mask = eval_filter_bitmap_cpu_fused(fs, std::vector<PredOp>{}, 0, nrows, nullptr, view_of(ids), mem, pc);
+    mo_cbitmap_free(bm);
+
+    for (uint64_t r = 0; r < nrows; ++r) {
+        const bool want = r == 3 || r == 31 || r == 32 || r == 69;
+        ASSERT_EQ(get_bit(mask, r), want ? 1u : 0u);
+    }
+    ASSERT_EQ(pc, 4u);
+    for (uint64_t r = nrows; r < 96; ++r) ASSERT_EQ(get_bit(mask, r), 0u);
+}
+
+TEST(EvalFilterMembershipTest, ImplicitIdsRejectMembership) {
+    // an index with implicit ids has no primary keys to test the membership against
+    FilterStore fs = make_store_i32_f32(100);
+    auto payload = make_sorted64({10, 40});
+    const mo_membership_t mem{payload.data(), MO_MEMBERSHIP_SORTED64};
+    const std::vector<PredOp> no_preds;
+    const HostIdsView implicit_ids;
+    uint64_t pc = 0;
+    ASSERT_THROW(eval_filter_bitmap_cpu_fused(fs, no_preds, 0, 100, nullptr, implicit_ids, mem, pc),
+                 std::invalid_argument);
+}
+
+TEST(EvalFilterMembershipTest, EmptyMembershipPassesNothing) {
+    FilterStore fs = make_store_i32_f32(64);
+    auto ids = make_host_ids(64);
+    auto payload = make_sorted64({});
+    mo_membership_t mem{payload.data(), MO_MEMBERSHIP_SORTED64};
+    uint64_t pc = 1;
+    auto mask = eval_filter_bitmap_cpu_fused(fs, parse_preds("[{\"col\":0,\"op\":\">=\",\"val\":0.0}]"),
+                                             0, 64, nullptr, view_of(ids), mem, pc);
+    for (auto w : mask) ASSERT_EQ(w, 0u);
+    ASSERT_EQ(pc, 0u);
+}
+
+TEST(EvalFilterMembershipTest, ApproximateOrUnknownKindThrowsAndNullFilterIsNone) {
+    FilterStore fs = make_store_i32_f32(32);
+    auto ids = make_host_ids(32);
+    uint64_t pc = 0;
+    auto payload = make_sorted64({static_cast<uint64_t>(ids[0])});
+    const std::vector<PredOp> no_preds;
+    const HostIdsView hv = view_of(ids);
+    // a bloom filter (approximate) and an unknown kind are not tested by the mask
+    const mo_membership_t bloom{payload.data(), MO_MEMBERSHIP_BLOOM};
+    const mo_membership_t unknown{payload.data(), 7};
+    ASSERT_THROW(eval_filter_bitmap_cpu_fused(fs, no_preds, 0, 32, nullptr, hv, bloom, pc),
+                 std::invalid_argument);
+    ASSERT_THROW(eval_filter_bitmap_cpu_fused(fs, no_preds, 0, 32, nullptr, hv, unknown, pc),
+                 std::invalid_argument);
+    // a NULL filter is no membership: every row passes
+    const mo_membership_t none{nullptr, MO_MEMBERSHIP_SORTED64};
+    auto mask = eval_filter_bitmap_cpu_fused(fs, no_preds, 0, 32, nullptr, hv, none, pc);
+    ASSERT_EQ(mask[0], 0xFFFFFFFFu);
+    ASSERT_EQ(pc, 32u);
+}
+
+// A sorted64 key set over a wide key span is tested with its binary search.
+TEST(EvalFilterMembershipTest, Sorted64WideSpan) {
+    const uint64_t nrows = 96;
+    FilterStore fs = make_store_i32_f32(nrows);
+    std::vector<int64_t> ids(nrows);
+    for (uint64_t i = 0; i < nrows; ++i) ids[i] = static_cast<int64_t>(i) << 40;  // span 95 << 40
+    auto payload = make_sorted64({static_cast<uint64_t>(ids[1]), static_cast<uint64_t>(ids[33]),
+                                  static_cast<uint64_t>(ids[95]), (uint64_t(1) << 40) + 1});
+    mo_membership_t mem{payload.data(), MO_MEMBERSHIP_SORTED64};
+    uint64_t pc = 0;
+    auto mask = eval_filter_bitmap_cpu_fused(fs, std::vector<PredOp>{}, 0, nrows, nullptr, view_of(ids), mem, pc);
+    for (uint64_t r = 0; r < nrows; ++r) {
+        ASSERT_EQ(get_bit(mask, r), (r == 1 || r == 33 || r == 95) ? 1u : 0u);
+    }
+    ASSERT_EQ(pc, 3u);
+}
+
+// A CRoaring membership over a narrow and a wide key span gives the same rows, with
+// predicates and deletes.
+TEST(EvalFilterMembershipTest, CroaringNarrowAndWideSpan) {
+    for (int64_t step : {int64_t(7), int64_t(1) << 40}) {
+        const uint64_t nrows = 200;
+        FilterStore fs = make_store_i32_f32(nrows);
+        std::vector<int64_t> ids(nrows);
+        for (uint64_t i = 0; i < nrows; ++i) ids[i] = 1000 + step * static_cast<int64_t>(i);
+        std::vector<int64_t> keys = {ids[3], ids[31], ids[32], ids[64], ids[150], ids[199], 5};
+        void* r = mo_croaring_create();
+        ASSERT_TRUE(mo_croaring_add_fixed(r, keys.data(), keys.size() * 8, 8, keys.size(), nullptr, 0));
+        const mo_membership_t mem{r, MO_MEMBERSHIP_CROARING};
+        std::vector<uint32_t> del((nrows + 31) / 32, 0xFFFFFFFFu);
+        del[150 / 32] &= ~(1u << (150 % 32));
+        uint64_t pc = 0;
+        auto mask = eval_filter_bitmap_cpu_fused(fs, parse_preds("[{\"col\":1,\"op\":\"!=\",\"val\":1}]"),
+                                                 0, nrows, &del, view_of(ids), mem, pc);
+        mo_croaring_free(r);
+        uint64_t want_pc = 0;
+        for (uint64_t row = 0; row < nrows; ++row) {
+            const bool member = row == 3 || row == 31 || row == 32 || row == 64 || row == 150 || row == 199;
+            const bool want = member && (row % 5) != 1 && row != 150;
+            want_pc += want;
+            ASSERT_EQ(get_bit(mask, row), want ? 1u : 0u);
+        }
+        ASSERT_EQ(pc, want_pc);
+        ASSERT_EQ(want_pc, 4u);  // rows 3, 32, 64, 199 (31 has cat 1, 150 is deleted)
+    }
+}
+

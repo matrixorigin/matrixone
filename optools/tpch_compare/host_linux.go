@@ -201,6 +201,29 @@ func (g *appGroup) kill() error {
 	return os.WriteFile(filepath.Join(g.path, "cgroup.kill"), []byte("1"), 0600)
 }
 
+// Quiescence requires every managed Wait/log owner to finish as well as empty
+// cgroup membership. An empty group cannot substitute for a failed process join.
+func (g *appGroup) quiescent(processes ...*managedProcess) error {
+	for _, p := range processes {
+		if p == nil {
+			continue
+		}
+		select {
+		case <-p.done:
+		default:
+			return errors.New("managed process has not joined")
+		}
+	}
+	procs, err := os.ReadFile(filepath.Join(g.path, "cgroup.procs"))
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(procs)) != "" {
+		return errors.New("application generation still owns processes")
+	}
+	return nil
+}
+
 type Usage struct {
 	CPUUsec     uint64            `json:"cpu_usec"`
 	UserUsec    uint64            `json:"user_usec"`

@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -402,7 +403,7 @@ func TestAlterConstraintUsesFinalCopyNamespace(t *testing.T) {
 			defer stmt.Free()
 			astBefore := tree.String(stmt, dialect.MYSQL)
 			for range 2 {
-				options, err := resolveAlterConstraintOptions(&mock.ctxt, source, stmt.(*tree.AlterTable).Options)
+				options, err := resolveAlterConstraintOptions(&mock.ctxt, source, stmt.(*tree.AlterTable).Options, analyzeAlterColumnBindings(source, stmt.(*tree.AlterTable).Options))
 				require.NoError(t, err)
 				for i, option := range stmt.(*tree.AlterTable).Options {
 					if drop, ok := option.(*tree.AlterOptionDrop); ok && drop.Typ == tree.AlterTableDropConstraint {
@@ -518,6 +519,122 @@ func TestAlterConstraintUsesResolvedIndexAdmission(t *testing.T) {
 				require.Equal(t, before, source)
 				require.Equal(t, astBefore, tree.String(stmt, dialect.MYSQL))
 			}
+		})
+	}
+}
+
+func TestAlterCopyReplacementIndexBindings(t *testing.T) {
+	for _, tc := range []struct {
+		name, definition, clause string
+		parts                    []string
+	}{
+		{"single unique", "id int primary key,v int,unique key u(v)", "drop column v,add column v int default 7", []string{"v"}},
+		{"composite nullable", "id int primary key,a int,v int,unique key u(a,v)", "drop column v,add column v int default null", []string{"a", "v"}},
+		{"replacement renamed", "id int primary key,v int,unique key u(v)", "drop column v,add column v int,rename column v to x", []string{"x"}},
+		{"replacement changed", "id int primary key,v int,unique key u(v)", "drop column v,add column v int,change column v x bigint", []string{"x"}},
+		{"fresh rename arrives", "id int primary key,v int,unique key u(v)", "drop column v,add column tmp int,rename column tmp to v", []string{"v"}},
+		{"original rename does not replace", "id int primary key,v int,w int,unique key u(v)", "drop column v,rename column w to v", nil},
+		{"renamed old binding removed", "id int primary key,v int,unique key u(v)", "rename column v to x,drop column x,add column v int", nil},
+		{"renamed binding replaced", "id int primary key,v int,unique key u(v)", "rename column v to x,drop column x,add column x int", []string{"x"}},
+		{"source survives name reuse", "id int primary key,v int,unique key u(v)", "rename column v to x,add column v int,drop column v", []string{"x"}},
+		{"replacement removed", "id int primary key,v int,unique key u(v)", "drop column v,add column v int,drop column v", nil},
+		{"replacement replaced again", "id int primary key,v int,unique key u(v)", "drop column v,add column v int,drop column v,add column v int", []string{"v"}},
+		{"genuine composite removal", "id int primary key,a int,v int,unique key u(a,v)", "drop column v", []string{"a"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, "create table check_t("+tc.definition+")")
+			source := mock.ctxt.tables["check_t"]
+			before := proto.Clone(source)
+			p, err := runOneStmt(mock, t, "alter table check_t "+tc.clause)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.True(t, proto.Equal(before, source), "planning must not mutate catalog metadata")
+			if tc.parts == nil {
+				require.Empty(t, alter.CopyTableDef.Indexes)
+				return
+			}
+			require.Len(t, alter.CopyTableDef.Indexes, 1)
+			index := alter.CopyTableDef.Indexes[0]
+			require.Equal(t, "u", index.IndexName)
+			require.Equal(t, tc.parts, index.Parts)
+			require.False(t, alter.Options.SkipIndexesCopy["u"], "changed keys must rebuild")
+			require.False(t, alter.Options.SkipUniqueIdxDedup["u"], "replacement values require dedup")
+		})
+	}
+}
+
+func TestAlterConstraintReplacementKeepsUniqueNamespace(t *testing.T) {
+	for _, clause := range []string{
+		"drop column v,add column v int,drop constraint u",
+		"drop column v,add column tmp int,rename column tmp to v,drop constraint u",
+	} {
+		t.Run(clause, func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int,w int,unique key u(v),constraint u check(w>0))")
+			_, err := runOneStmt(mock, t, "alter table check_t "+clause)
+			require.ErrorContains(t, err, "ambiguous")
+		})
+	}
+	t.Run("replacement removed releases unique namespace", func(t *testing.T) {
+		mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,v int,w int,unique key u(v),constraint u check(w>0))")
+		p, err := runOneStmt(mock, t, "alter table check_t drop column v,add column v int,drop column v,drop constraint u")
+		require.NoError(t, err)
+		require.Empty(t, p.GetDdl().GetAlterTable().CopyTableDef.Indexes)
+		require.Empty(t, p.GetDdl().GetAlterTable().CopyTableDef.Checks)
+	})
+}
+
+func TestAlterConstraintMergedReplacementBindingsReleaseNames(t *testing.T) {
+	mock := newCheckAlterOptimizer(t, "create table check_t(id int primary key,a int,b int,w int,unique key u(a),unique key j(b),constraint u check(w>0))")
+	p, err := runOneStmt(mock, t, "alter table check_t drop column a,add column a int,drop column b,rename column a to b,drop column b,drop constraint u")
+	require.NoError(t, err)
+	require.Empty(t, p.GetDdl().GetAlterTable().CopyTableDef.Indexes)
+	require.Empty(t, p.GetDdl().GetAlterTable().CopyTableDef.Checks)
+}
+
+func TestAlterCopyReplacementKeepsCompleteIndexDefinitions(t *testing.T) {
+	for _, tc := range []struct{ name, definition, clause string }{
+		{"ordinary prefix", "id bigint primary key,v varchar(20),key ix(v(5))", "drop column v,add column v varchar(20)"},
+		{"classic fulltext", "id bigint primary key,body text,fulltext key ft(body)", "drop column body,add column body text"},
+		{"vector key and include payload", "id bigint primary key,v vecf32(3),tag int,index iv using ivfflat(v) lists=1 op_type 'vector_l2_ops' include(tag)", "drop column v,add column v vecf32(3),drop column tag,add column tag int"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, "create table check_t("+tc.definition+")")
+			source := mock.ctxt.tables["check_t"]
+			before := proto.Clone(source).(*TableDef)
+			p, err := runOneStmt(mock, t, "alter table check_t "+tc.clause)
+			require.NoError(t, err)
+			alter := p.GetDdl().GetAlterTable()
+			require.Len(t, alter.CopyTableDef.Indexes, len(before.Indexes))
+			for i, index := range alter.CopyTableDef.Indexes {
+				// The fixture supplies authoritative visibility=true. All other fields,
+				// including aliases, prefix and INCLUDE metadata, must survive unchanged.
+				before.Indexes[i].Visible = index.Visible
+				require.True(t, proto.Equal(before.Indexes[i], index), "physical index %d", i)
+				require.False(t, alter.Options.SkipIndexesCopy[index.IndexName])
+			}
+		})
+	}
+}
+
+func TestAlterConstraintMergedIncludeBindingReleasesIndexName(t *testing.T) {
+	for _, legacy := range []bool{false, true} {
+		t.Run(fmt.Sprintf("legacy=%v", legacy), func(t *testing.T) {
+			mock := newCheckAlterOptimizer(t, "create table check_t(id bigint primary key,a int,b int,v vecf32(3),index u using ivfflat(v) lists=1 op_type 'vector_l2_ops' include(a),constraint u_2 check(id>0))")
+			source := mock.ctxt.tables["check_t"]
+			if legacy {
+				for _, index := range source.Indexes {
+					index.IncludedColumns = nil
+				}
+			}
+			before := proto.Clone(source)
+			p, err := runOneStmt(mock, t, "alter table check_t drop column a,add column a int,drop column b,rename column a to b,drop column b,add column u int unique,drop constraint u_2")
+			require.NoError(t, err)
+			require.True(t, proto.Equal(before, source))
+			alter := p.GetDdl().GetAlterTable()
+			require.Empty(t, alter.CopyTableDef.Checks)
+			require.Len(t, alter.CopyTableDef.Indexes, 1)
+			require.Equal(t, "u", alter.CopyTableDef.Indexes[0].IndexName)
+			require.Equal(t, []string{"u"}, alter.CopyTableDef.Indexes[0].Parts)
 		})
 	}
 }

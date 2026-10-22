@@ -106,15 +106,11 @@ func (g *controllerGate) wait(ctx context.Context, event string) error {
 				}
 				return nil
 			}
-			if err := advanceProgress(active, strings.TrimSpace(m.line), time.Now()); err != nil {
+			now := time.Now()
+			if err := advanceProgress(active, strings.TrimSpace(m.line), now); err != nil {
 				return err
 			}
-			next := time.Now().Add(10 * time.Minute)
-			for _, q := range active {
-				if q.deadline.Before(next) {
-					next = q.deadline
-				}
-			}
+			next := nextProgressDeadline(active, now)
 			if !timer.Stop() {
 				select {
 				case <-timer.C:
@@ -129,6 +125,19 @@ func (g *controllerGate) wait(ctx context.Context, event string) error {
 type activeQuery struct {
 	number   int
 	deadline time.Time
+}
+
+func nextProgressDeadline(active map[int]activeQuery, now time.Time) time.Time {
+	if len(active) == 0 {
+		return now.Add(10 * time.Minute)
+	}
+	var next time.Time
+	for _, q := range active {
+		if next.IsZero() || q.deadline.Before(next) {
+			next = q.deadline
+		}
+	}
+	return next
 }
 
 func advanceProgress(active map[int]activeQuery, line string, now time.Time) error {
@@ -175,8 +184,26 @@ type deployment struct {
 	DebugPort int    `json:"debug_port,omitempty"`
 }
 
-func prepareDeployment(c Campaign, scale, engine string, rep int) (deployment, error) {
+func loadDeployment(c Campaign, scale, engine string, rep int) deployment {
 	root := filepath.Join(c.Root, "engines", "sf"+scale, engine, fmt.Sprintf("load-%d", rep))
+	e := Engine{Name: engine, Threads: 8, MemoryBytes: c.MemoryBytes}
+	d := deployment{Engine: e, Root: root}
+	if engine == "duckdb" {
+		d.Engine.Database = filepath.Join(root, "duckdb.db")
+		return d
+	}
+	h := sha256.Sum256([]byte(root))
+	d.Engine.Database = "tpch_compare_" + hex.EncodeToString(h[:8])
+	d.Engine.DSNEnv = "TPCH_COMPARE_OWNED_MO_DSN"
+	d.SQLPort = c.PortBase + 300
+	d.DebugPort = c.PortBase + 301
+	d.Launch = filepath.Join(root, "launch.toml")
+	return d
+}
+
+func prepareDeployment(c Campaign, scale, engine string, rep int) (deployment, error) {
+	d := loadDeployment(c, scale, engine, rep)
+	root := d.Root
 	if err := os.MkdirAll(filepath.Dir(root), 0750); err != nil {
 		return deployment{}, err
 	}
@@ -186,17 +213,9 @@ func prepareDeployment(c Campaign, scale, engine string, rep int) (deployment, e
 	if err := publishJSON(filepath.Join(root, "owner.json"), map[string]any{"purpose": "tpch-compare deployment", "engine": engine, "scale": scale}); err != nil {
 		return deployment{}, err
 	}
-	e := Engine{Name: engine, Threads: 8, MemoryBytes: c.MemoryBytes}
-	d := deployment{Engine: e, Root: root}
 	if engine == "duckdb" {
-		d.Engine.Database = filepath.Join(root, "duckdb.db")
 		return d, nil
 	}
-	h := sha256.Sum256([]byte(root))
-	d.Engine.Database = "tpch_compare_" + hex.EncodeToString(h[:8])
-	d.Engine.DSNEnv = "TPCH_COMPARE_OWNED_MO_DSN"
-	d.SQLPort = c.PortBase + 300
-	d.DebugPort = c.PortBase + 301
 	data := filepath.Join(root, "data")
 	for _, name := range []string{"cn", "tn", "log"} {
 		input, err := os.ReadFile(filepath.Join(c.MOSource, "etc", "launch", name+".toml"))
@@ -224,7 +243,6 @@ func prepareDeployment(c Campaign, scale, engine string, rep int) (deployment, e
 			return d, err
 		}
 	}
-	d.Launch = filepath.Join(root, "launch.toml")
 	text := fmt.Sprintf("logservices = [%q]\ntnservices = [%q]\ncnservices = [%q]\n", filepath.Join(root, "log.toml"), filepath.Join(root, "tn.toml"), filepath.Join(root, "cn.toml"))
 	return d, os.WriteFile(d.Launch, []byte(text), 0600)
 }
@@ -320,17 +338,16 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 	if err != nil {
 		return record, err
 	}
+	var server, worker *managedProcess
 	defer func() { retErr = errors.Join(retErr, group.close()) }()
 	defer func() {
 		record.Trailing, err = group.snapshot(false)
 		retErr = errors.Join(retErr, err)
-		procs, probeErr := os.ReadFile(filepath.Join(group.path, "cgroup.procs"))
-		retErr = errors.Join(retErr, probeErr)
-		if probeErr == nil && strings.TrimSpace(string(procs)) == "" {
+		if cleanupErr := group.quiescent(server, worker); cleanupErr == nil {
 			record.Cleanup = "complete"
 		} else {
 			record.Cleanup = "failed"
-			retErr = errors.Join(retErr, errors.New("application generation still owns processes"))
+			retErr = errors.Join(retErr, cleanupErr)
 		}
 	}()
 	watchCtx, stopWatch := context.WithCancelCause(ctx)
@@ -386,7 +403,6 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 		}
 	}
 	armStart := time.Now()
-	var server *managedProcess
 	if d.Engine.Name == "mo" {
 		if err := requireFreePorts(c); err != nil {
 			return record, err
@@ -439,7 +455,7 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 		extra = gate.child
 		argv = append(argv, "--controlled")
 	}
-	worker, err := startManaged(ctx, argv, d.Root, d.environment(t.Cores), group, filepath.Join(root, "worker.log"), extra)
+	worker, err = startManaged(ctx, argv, d.Root, d.environment(t.Cores), group, filepath.Join(root, "worker.log"), extra)
 	if err != nil {
 		return record, err
 	}
@@ -526,6 +542,11 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 			return record, fmt.Errorf("MO service shutdown: %w", server.waitErr)
 		}
 	}
+	// Disk/cache bookkeeping assumes the owned deployment has stopped. The
+	// deferred check also covers errors and partial initialization after teardown.
+	if err := group.quiescent(server, worker); err != nil {
+		return record, err
+	}
 	record.Trailing, err = group.snapshot(false)
 	if err != nil {
 		return record, err
@@ -551,6 +572,5 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 		}
 	}
 	record.Status = "pass"
-	record.Cleanup = "complete"
 	return record, nil
 }

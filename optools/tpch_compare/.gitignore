@@ -1,5 +1,3 @@
 /tpch-compare
 /artifacts/
 *.test
-!plot_report.py
-__pycache__/

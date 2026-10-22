@@ -339,6 +339,7 @@ const (
 	planUint32TypeID                  int32 = 27
 	planAnyTypeID                     int32 = 0
 	internalTableCollationFunctionID  int32 = 600
+	loadFKIgnoreCheckFunctionID       int32 = 602
 	maxVarcharWidth                   int32 = 65535
 )
 
@@ -397,11 +398,15 @@ const (
 // DynamicTimeResultContracts uses the same epoch for prepared TIME results
 // over string/calendar ADDTIME/SUBTIME inputs; native TIME inputs are unchanged.
 type RemoteExpressionFeatures struct {
+	LoadFKIgnoreCheck             bool // v125: LOAD IGNORE FK admission and diagnostics
+	JSONNumericComparisons        bool
 	DependentPrograms             bool
 	CalendarIntervalNormalization bool
 	// ScalarDivision is syntactic only. SELECT warning policy supplies its
 	// execution-only floor; persisted expression contracts remain unchanged.
-	ScalarDivision                  bool
+	ScalarDivision bool
+	// ViewMetadataFunctions requires v126 for MO_VIEW_DEFINITION/CHECK_OPTION.
+	ViewMetadataFunctions           bool
 	JSONScalarLiteralContracts      bool
 	JSONInputContracts              bool
 	YearBitCast                     bool
@@ -431,6 +436,7 @@ type RemoteExpressionFeatures struct {
 	TemporalResultContracts                 bool
 	InvalidTemporalResultContract           bool
 	NormalizedIntervalUnits                 bool
+	TimestampAddSecondIntervals             bool
 	LegacyIntervalUnits                     bool
 	WeekSessionDefault                      bool
 	MediumIntAssignmentBounds               bool
@@ -446,7 +452,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.DependentPrograms || features.CalendarIntervalNormalization || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -470,6 +476,7 @@ func (features RemoteExpressionFeatures) Any() bool {
 		features.TemporalResultContracts ||
 		features.InvalidTemporalResultContract ||
 		features.NormalizedIntervalUnits ||
+		features.TimestampAddSecondIntervals ||
 		features.LegacyIntervalUnits ||
 		features.WeekSessionDefault ||
 		features.MediumIntAssignmentBounds ||
@@ -939,6 +946,12 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 			fn := current.GetF()
 			if fn != nil && fn.Func != nil {
 				id, overload := int32(fn.Func.Obj>>32), int32(fn.Func.Obj)
+				if id == loadFKIgnoreCheckFunctionID {
+					features.LoadFKIgnoreCheck = true
+				}
+				features.JSONNumericComparisons = features.JSONNumericComparisons ||
+					isMixedJSONNumericComparison(fn) || ((id == 546 || id == internalJSONComparisonFunctionID) && overload == 1)
+
 				if id == internalTableCollationFunctionID {
 					features.TableCollationFunction = true
 				}
@@ -973,6 +986,11 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == castJSONToArrayFunctionID && isMediumIntArrayCast(current, fn) {
 					features.MediumIntAssignmentBounds = true
 				}
+				// The planner depends on this package, so registry IDs cannot be
+				// imported here. Compile tests bind these IDs to the registry.
+				if id == 603 || id == 604 { // MO_VIEW_DEFINITION / MO_VIEW_CHECK_OPTION
+					features.ViewMetadataFunctions = true
+				}
 				if id == 21 && current.Typ.Id == 11 && len(fn.Args) > 0 &&
 					fn.Args[0] != nil && fn.Args[0].Typ.Id == 55 { // CAST YEAR -> BIT
 					features.YearBitCast = true
@@ -1006,6 +1024,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				// imported here because the planner depends on this package.
 				if id == 189 { // legacy TO_INTERVAL: ambiguous across pre-v97 and v97 binaries
 					features.LegacyIntervalUnits = true
+				}
+				if id == 601 { // TIMESTAMPADD_SECOND_INTERVAL
+					features.TimestampAddSecondIntervals = true
 				}
 				if id == 583 { // TO_INTERVAL_MICROSECOND
 					features.NormalizedIntervalUnits = true
@@ -1749,4 +1770,21 @@ func TemporalResultContractFeatures(expr *Expr) (timestampDatetime, dynamicTime 
 	return id == 250 && overload >= 6 && overload <= 10,
 		(id == 41 || id == 378) && expr.Typ.Id == planTimeTypeID &&
 			len(fn.Args) == 2 && fn.Args[0] != nil && fn.Args[0].Typ.Id != planTimeTypeID
+}
+
+// Stable storage and registry identities avoid a dependency cycle with the
+// function package. INT128/UINT128 and BIT/YEAR/ENUM are not this domain.
+func isMixedJSONNumericComparison(fn *Function) bool {
+	if fn == nil || fn.Func == nil || len(fn.Args) != 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+		return false
+	}
+	id := int32(fn.Func.Obj >> 32)
+	if !(id >= 0 && id <= 5 || id == nullSafeEqualFunctionID) {
+		return false
+	}
+	left, right := fn.Args[0].Typ.Id, fn.Args[1].Typ.Id
+	if left == planJSONTypeID {
+		left, right = right, left
+	}
+	return right == planJSONTypeID && ((left >= 20 && left <= 23) || (left >= 25 && left <= 28) || (left >= 30 && left <= 34))
 }

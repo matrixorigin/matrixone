@@ -300,6 +300,13 @@ func checkMethodVersion(
 		return moerr.NewNotSupportedNoCtx(
 			"writer-fair lock admission is unavailable in the current protocol version")
 	}
+	if err != nil && (req.Method == pb.Method_TryLock || req.Method == pb.Method_ForwardTryLock) {
+		// A FastFail conflict is only recoverable when both peers support the
+		// typed negative acknowledgement and its cleanup capabilities. Never
+		// retry this request as an ordinary waitable Lock against an old peer.
+		return moerr.NewNotSupportedNoCtx(
+			"nonblocking row lock admission is unavailable in the current protocol version")
+	}
 	if err != nil && (req.Method == pb.Method_BeginDrain || req.Method == pb.Method_QueryDrain) {
 		return moerr.NewNotSupportedNoCtx(
 			"instance-bound lock-service drain is unavailable in the current protocol version")
@@ -409,10 +416,12 @@ func (c *client) asyncSend(
 	for i := 0; i < 2; i++ {
 		var lookupErr error
 		switch request.Method {
-		case pb.Method_ForwardLock:
+		case pb.Method_ForwardLock,
+			pb.Method_ForwardTryLock:
 			sid = getUUIDFromServiceIdentifier(request.Lock.Options.ForwardTo)
 			address, lookupErr = c.lookupLockServiceAddress(ctx, sid)
 		case pb.Method_Lock,
+			pb.Method_TryLock,
 			pb.Method_LockWriterFair,
 			pb.Method_Unlock,
 			pb.Method_BatchUnlock,

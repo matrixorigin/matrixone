@@ -257,6 +257,9 @@ func (r *taskRunner) completeDaemonTask(ctx context.Context, dt *daemonTask, cla
 			}
 		}
 	}
+	// A recovery callback may still be running after this executor exits.
+	// Fence its final Running publication before removing the registration.
+	dt.claimLost.Store(true)
 	r.removeDaemonTaskIf(claim.ID, dt)
 }
 
@@ -287,10 +290,19 @@ func newResumeTask(r *taskRunner, t *daemonTask) *resumeTask {
 }
 
 func (t *resumeTask) Handle(ctx context.Context) error {
+	if !t.task.recoveryLifecycle.TryLock() {
+		return nil // Another recovery owns this local routine.
+	}
+	defer t.task.recoveryLifecycle.Unlock()
 	if !t.task.claimLifecycle.TryLock() {
 		return nil // The durable request remains retry-owned.
 	}
-	defer t.task.claimLifecycle.Unlock()
+	claimLocked := true
+	defer func() {
+		if claimLocked {
+			t.task.claimLifecycle.Unlock()
+		}
+	}()
 	if t.task.claimLost.Load() {
 		return nil
 	}
@@ -362,12 +374,21 @@ func (t *resumeTask) Handle(ctx context.Context) error {
 		return nil
 	}
 	t.task.publishClaim(tk)
+	// Recovery may block in I/O. Its generation is now published, so let lease
+	// expiry retire and cancel it without waiting for Resume to return.
+	t.task.claimLifecycle.Unlock()
+	claimLocked = false
 	// ResumeRequested is the durable retry owner. Keep it published until the
 	// active executor has admitted recovery, so a concurrent executor failure or
 	// a synchronous resume error cannot strand daemon Running with no live
 	// execution. A failed attempt is picked up by the next reconciliation pass.
 	if err = (*ar).Resume(); err != nil {
 		return err
+	}
+	t.task.claimLifecycle.Lock()
+	claimLocked = true
+	if t.task.claimLost.Load() || !sameDaemonClaim(t.task.taskSnapshot(), tk) {
+		return nil // Recovery completed after this local generation was retired.
 	}
 
 	tk.TaskStatus = task.TaskStatus_Running
@@ -418,10 +439,19 @@ func newRestartTask(r *taskRunner, t *daemonTask) *restartTask {
 }
 
 func (t *restartTask) Handle(ctx context.Context) error {
+	if !t.task.recoveryLifecycle.TryLock() {
+		return nil // Another recovery owns this local routine.
+	}
+	defer t.task.recoveryLifecycle.Unlock()
 	if !t.task.claimLifecycle.TryLock() {
 		return nil // The durable request remains retry-owned.
 	}
-	defer t.task.claimLifecycle.Unlock()
+	claimLocked := true
+	defer func() {
+		if claimLocked {
+			t.task.claimLifecycle.Unlock()
+		}
+	}()
 	if t.task.claimLost.Load() {
 		return nil
 	}
@@ -511,6 +541,8 @@ func (t *restartTask) Handle(ctx context.Context) error {
 		return nil
 	}
 	t.task.publishClaim(tk)
+	t.task.claimLifecycle.Unlock()
+	claimLocked = false
 
 	eventCDCRestartActiveRoutineCalling.DebugLazy(func() []zap.Field {
 		return cdcRestartEventFields(tk)
@@ -524,6 +556,11 @@ func (t *restartTask) Handle(ctx context.Context) error {
 			}, logutil.ErrorFingerprintFields("error", err)...)...)
 		})
 		return cdcRestartHandleError("CDC restart failed")
+	}
+	t.task.claimLifecycle.Lock()
+	claimLocked = true
+	if t.task.claimLost.Load() || !sameDaemonClaim(t.task.taskSnapshot(), tk) {
+		return nil // Recovery completed after this local generation was retired.
 	}
 
 	// A successful Restart means the replacement generation is locally Running
@@ -872,14 +909,21 @@ type DaemonTaskClaimUpdater interface {
 }
 
 type daemonTask struct {
+	// Serializes Resume/Restart callbacks while claimLifecycle is released for
+	// lease expiry. A second recovery must not advance the same local generation.
+	recoveryLifecycle sync.Mutex
 	// Serializes local claim admission with ownership-loss publication, including
-	// the gap between the durable CAS and publishClaim. Heartbeats never wait
-	// behind startup or its downstream I/O: a busy lifecycle is checked next tick.
+	// the gap between the durable CAS and publishClaim. Recovery releases it
+	// while calling the active routine so lease expiry can retire blocked work.
 	claimLifecycle sync.Mutex
 	taskMu         sync.RWMutex
 	task           task.DaemonTask
-	executor       TaskExecutor
-	claimLost      atomic.Bool
+	// Local lease evidence for ISCP. A successful storage heartbeat does not
+	// update taskSnapshot, so the persisted claim's LastHeartbeat alone becomes
+	// stale even while this runner keeps renewing it.
+	lastSuccessfulHeartbeat time.Time
+	executor                TaskExecutor
+	claimLost               atomic.Bool
 	// activeRoutine is the go-routine runs in background to execute
 	// the daemon task.
 	activeRoutine atomic.Pointer[ActiveRoutine]
@@ -896,7 +940,15 @@ func (t *daemonTask) taskSnapshot() task.DaemonTask {
 // from the same snapshot.
 func (t *daemonTask) publishClaim(claim task.DaemonTask) {
 	t.taskMu.Lock()
+	sameGeneration := sameDaemonClaim(t.task, claim)
+	confirmed := t.lastSuccessfulHeartbeat
 	t.task = claim
+	// The durable claim's heartbeat was stamped before its storage update.
+	// Retain that start time so a slow claim RPC cannot extend the local lease.
+	t.lastSuccessfulHeartbeat = claim.LastHeartbeat
+	if sameGeneration && confirmed.After(t.lastSuccessfulHeartbeat) {
+		t.lastSuccessfulHeartbeat = confirmed
+	}
 	t.taskMu.Unlock()
 	t.claimLost.Store(false)
 
@@ -907,6 +959,27 @@ func (t *daemonTask) publishClaim(claim task.DaemonTask) {
 	if updater, ok := (*ar).(DaemonTaskClaimUpdater); ok {
 		updater.UpdateDaemonTaskClaim(claim)
 	}
+}
+
+func (t *daemonTask) recordHeartbeatSuccess(claim task.DaemonTask, startedAt time.Time) {
+	t.taskMu.Lock()
+	defer t.taskMu.Unlock()
+	if t.claimLost.Load() || !sameDaemonClaim(t.task, claim) {
+		return
+	}
+	// Start time is conservative when the storage call takes a long time.
+	if startedAt.After(t.lastSuccessfulHeartbeat) {
+		t.lastSuccessfulHeartbeat = startedAt
+	}
+}
+
+func (t *daemonTask) lastConfirmedHeartbeat() time.Time {
+	t.taskMu.RLock()
+	defer t.taskMu.RUnlock()
+	if !t.lastSuccessfulHeartbeat.IsZero() {
+		return t.lastSuccessfulHeartbeat
+	}
+	return t.task.LastHeartbeat
 }
 
 func (r *taskRunner) newDaemonTask(t task.DaemonTask) (*daemonTask, error) {
@@ -929,6 +1002,9 @@ func (r *taskRunner) startDaemonTaskWorker() error {
 		return err
 	}
 	if err := r.stopper.RunNamedTask("daemon-tasks-heartbeat", r.sendHeartbeat); err != nil {
+		return err
+	}
+	if err := r.stopper.RunNamedTask("iscp-heartbeat-lease", r.watchISCPHeartbeatLease); err != nil {
 		return err
 	}
 	return nil
@@ -1366,6 +1442,43 @@ func (r *taskRunner) sendHeartbeat(ctx context.Context) {
 	}
 }
 
+// The heartbeat RPC can block behind an unavailable taskservice. Check ISCP's
+// local lease independently so a blocked RPC cannot keep its old executor live
+// after another CN is allowed to claim the durable task.
+func (r *taskRunner) watchISCPHeartbeatLease(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			r.checkISCPHeartbeatLease()
+		}
+	}
+}
+
+func (r *taskRunner) checkISCPHeartbeatLease() {
+	r.daemonTasks.Lock()
+	tasks := make([]*daemonTask, 0, len(r.daemonTasks.m))
+	for _, dt := range r.daemonTasks.m {
+		tasks = append(tasks, dt)
+	}
+	r.daemonTasks.Unlock()
+
+	for _, dt := range tasks {
+		claim := dt.taskSnapshot()
+		if claim.Metadata.Executor == task.TaskCode_ISCPExecutor && r.isISCPHeartbeatExpired(dt) {
+			r.stopDaemonAfterHeartbeatLoss(dt, claim, "ISCP heartbeat lease expired", true)
+		}
+	}
+}
+
+func (r *taskRunner) isISCPHeartbeatExpired(dt *daemonTask) bool {
+	last := dt.lastConfirmedHeartbeat()
+	return last.IsZero() || !time.Now().Before(last.Add(r.options.heartbeatTimeout))
+}
+
 func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 	r.daemonTasks.Lock()
 	tasks := make([]*daemonTask, 0, len(r.daemonTasks.m))
@@ -1376,60 +1489,90 @@ func (r *taskRunner) doSendHeartbeat(ctx context.Context) {
 
 	for _, dt := range tasks {
 		claim := dt.taskSnapshot()
+		startedAt := time.Now()
 		if err := r.service.HeartbeatDaemonTask(ctx, claim); err != nil {
 			r.logger.Error("task heartbeat failed",
 				zap.Uint64("task ID", claim.ID),
 				zap.Error(err))
-			// Storage and network failures are not proof that ownership was lost.
-			// Keep the current generation live and retry its heartbeat on the next
-			// tick. ErrInvalidTask is the explicit taskservice fence: the durable
-			// claim no longer matches this runner/generation and local target work
-			// must stop.
-			if (claim.Metadata.Executor == task.TaskCode_InitCdcStableEpoch || claim.Metadata.Executor == task.TaskCode_InitCdcLosslessStart || claim.Metadata.Executor == task.TaskCode_InitCdcSourcePatternV1) &&
-				moerr.IsMoErrCode(err, moerr.ErrInvalidTask) &&
-				r.relinquishDaemonClaim(dt, claim) {
-				// Relinquish heartbeat ownership before cancellation. Pointer-aware
-				// removal prevents an old heartbeat snapshot from deleting a newer
-				// local generation for the same task ID.
-				ar := dt.activeRoutine.Load()
-				if ar != nil && *ar != nil {
-					active := *ar
-					if scheduleErr := r.stopper.RunNamedTask(
-						"cancel-cdc-after-claim-loss",
-						func(context.Context) {
-							cancel := active.Cancel
-							if preserved, ok := active.(ClaimLossActiveRoutine); ok {
-								cancel = preserved.CancelWithoutWatermarkCleanup
-							}
-							if cancelErr := cancel(); cancelErr != nil {
-								r.logger.Error("failed to stop CDC task after heartbeat failure",
-									zap.Uint64("task ID", claim.ID),
-									zap.Error(cancelErr))
-							}
-						},
-					); scheduleErr != nil {
-						r.logger.Error("failed to schedule CDC stop after heartbeat failure",
-							zap.Uint64("task ID", claim.ID),
-							zap.Error(scheduleErr))
-					}
-				}
+			isISCP := claim.Metadata.Executor == task.TaskCode_ISCPExecutor
+			isClaimFenced := moerr.IsMoErrCode(err, moerr.ErrInvalidTask)
+			isStableCDC := claim.Metadata.Executor == task.TaskCode_InitCdcStableEpoch ||
+				claim.Metadata.Executor == task.TaskCode_InitCdcLosslessStart ||
+				claim.Metadata.Executor == task.TaskCode_InitCdcSourcePatternV1
+			if isClaimFenced && (isStableCDC || isISCP) {
+				r.stopDaemonAfterHeartbeatLoss(dt, claim, "daemon task claim rejected", false)
+			} else if isISCP && r.isISCPHeartbeatExpired(dt) {
+				r.stopDaemonAfterHeartbeatLoss(dt, claim, "ISCP heartbeat lease expired after renewal failure", true)
+			}
+		} else if claim.Metadata.Executor == task.TaskCode_ISCPExecutor {
+			if r.isISCPHeartbeatExpired(dt) {
+				r.stopDaemonAfterHeartbeatLoss(dt, claim, "ISCP heartbeat lease expired before renewal completed", true)
+			} else {
+				dt.recordHeartbeatSuccess(claim, startedAt)
 			}
 		}
 	}
 }
 
+func (r *taskRunner) stopDaemonAfterHeartbeatLoss(dt *daemonTask, claim task.DaemonTask, reason string, requireExpiredLease bool) {
+	// Pointer-aware removal and the claim generation guard prevent an old
+	// heartbeat or watchdog snapshot from cancelling a replacement generation.
+	// An expiry decision must also be rechecked under the heartbeat timestamp
+	// lock, because a renewal can succeed after the caller's initial check.
+	if !r.relinquishDaemonClaimIf(dt, claim, requireExpiredLease) {
+		return
+	}
+	r.logger.Warn(reason, zap.Uint64("task ID", claim.ID), zap.String("runner", claim.TaskRunner))
+	ar := dt.activeRoutine.Load()
+	if ar == nil || *ar == nil {
+		return // Attach will reject the retired claim.
+	}
+	active := *ar
+	if err := r.stopper.RunNamedTask("cancel-daemon-after-heartbeat-loss", func(context.Context) {
+		cancel := active.Cancel
+		if preserved, ok := active.(ClaimLossActiveRoutine); ok {
+			cancel = preserved.CancelWithoutWatermarkCleanup
+		}
+		if cancelErr := cancel(); cancelErr != nil {
+			r.logger.Error("failed to stop daemon task after heartbeat loss",
+				zap.Uint64("task ID", claim.ID), zap.Error(cancelErr))
+		}
+	}); err != nil {
+		r.logger.Error("failed to schedule daemon stop after heartbeat loss",
+			zap.Uint64("task ID", claim.ID), zap.Error(err))
+	}
+}
+
 func (r *taskRunner) relinquishDaemonClaim(dt *daemonTask, failed task.DaemonTask) bool {
+	return r.relinquishDaemonClaimIf(dt, failed, false)
+}
+
+func (r *taskRunner) relinquishDaemonClaimIf(dt *daemonTask, failed task.DaemonTask, requireExpiredLease bool) bool {
 	if !dt.claimLifecycle.TryLock() {
 		return false
 	}
 	defer dt.claimLifecycle.Unlock()
-	current := dt.taskSnapshot()
+	dt.taskMu.Lock()
+	current := dt.task
 	if current.TaskRunner != failed.TaskRunner || !current.LastRun.Equal(failed.LastRun) {
+		dt.taskMu.Unlock()
 		return false // The failed heartbeat belongs to a superseded local claim.
 	}
+	if requireExpiredLease {
+		last := dt.lastSuccessfulHeartbeat
+		if last.IsZero() {
+			last = current.LastHeartbeat
+		}
+		if !last.IsZero() && time.Now().Before(last.Add(r.options.heartbeatTimeout)) {
+			dt.taskMu.Unlock()
+			return false // A concurrent heartbeat renewed this claim's local lease.
+		}
+	}
 	if !dt.claimLost.CompareAndSwap(false, true) {
+		dt.taskMu.Unlock()
 		return false
 	}
+	dt.taskMu.Unlock()
 	return r.removeDaemonTaskIf(failed.ID, dt)
 }
 

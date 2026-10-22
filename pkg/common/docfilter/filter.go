@@ -58,19 +58,72 @@ type MembershipFilter interface {
 }
 
 // CFilter is the C-search ADAPTER contract: a MembershipFilter that can also
-// expose an opaque probe pointer + structure tag for the cgo vector-index
-// filtered-search bridge (pkg/vectorindex/usearchex), whose C predicate tests
-// each candidate key against the structure directly. The bridge type-asserts a
-// MembershipFilter to CFilter, so general filters that cannot back a C search
-// are not forced to expose unsafe.Pointer details.
+// expose an opaque probe pointer + structure tag for cgo. The vector-index search
+// bridges (pkg/vectorindex/usearchex, pkg/cuvs) take only filters built in C
+// memory, through CMembershipOf, and test each key against the structure
+// directly.
 type CFilter interface {
 	MembershipFilter
-	// CHandle returns the opaque pointer borrowed by the C bridge: either a
-	// native handle or a validated, Go-owned Sorted64 payload.
+	// CHandle returns the opaque pointer C borrows: a native handle, or the
+	// Go-owned payload of a Sorted64Filter.
 	CHandle() unsafe.Pointer
 	// CKind reports the structure tag (TagBloom / TagCRoaring / TagCbitmap /
 	// TagSorted64), telling the bridge which C membership test to dispatch.
 	CKind() byte
+}
+
+// CMembership is the C view of a membership filter, mo_membership_t in
+// cgo/membership.h: the handle and structure tag a C membership test dispatches
+// on. A nil Handle is no membership.
+type CMembership struct {
+	Handle unsafe.Pointer
+	Kind   byte
+}
+
+// CExactMembershipOf is CMembershipOf for a consumer that needs an exact membership
+// (the cuVS filter mask): a *CbitmapFilter, *CRoaringFilter or *CSorted64Filter. A C
+// bloom filter is an error there too.
+func CExactMembershipOf(f MembershipFilter) (CMembership, error) {
+	m, err := CMembershipOf(f)
+	if err != nil {
+		return CMembership{}, err
+	}
+	if m.Handle != nil && m.Kind == TagBloom {
+		return CMembership{}, moerr.NewInternalErrorNoCtx("docfilter: an exact membership is required, not a bloom filter")
+	}
+	return m, nil
+}
+
+// CMembershipOf returns the C view of f for a C or C++ consumer (usearch, cuVS); a nil
+// f is no membership. Only a membership in C memory is accepted: a *CbitmapFilter,
+// *CRoaringFilter or *CSorted64Filter (NewForC), or a C bloom filter. A Go-owned
+// Sorted64Filter is an error, as is an invalid filter: passing it as no membership
+// would return rows the filter excludes.
+func CMembershipOf(f MembershipFilter) (CMembership, error) {
+	if f == nil {
+		return CMembership{}, nil
+	}
+	if !f.Valid() {
+		return CMembership{}, moerr.NewInternalErrorNoCtx("docfilter: invalid (non-nil) membership filter")
+	}
+	var cf CFilter
+	switch t := f.(type) {
+	case *CbitmapFilter:
+		cf = t
+	case *CRoaringFilter:
+		cf = t
+	case *CSorted64Filter:
+		cf = t
+	case *cbloomFilter:
+		cf = t
+	default:
+		return CMembership{}, moerr.NewInternalErrorNoCtxf("docfilter: membership filter %T is not built in C memory", f)
+	}
+	handle := cf.CHandle()
+	if handle == nil {
+		return CMembership{}, moerr.NewInternalErrorNoCtx("docfilter: membership filter has nil handle")
+	}
+	return CMembership{Handle: handle, Kind: cf.CKind()}, nil
 }
 
 var (

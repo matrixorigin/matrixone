@@ -6,9 +6,8 @@ Approval: the user accepted the comparison plan and requested implementation.
 Revision 0.4 fixes the workstation, resource accounting, and three-part delivery.
 Owners: benchmark runner, MO SQL/storage, and performance analysis.
 Tracking issue: [#30569](https://github.com/matrixorigin/matrixone/issues/30569).
-Implementation series: [workload/correctness #30588](https://github.com/matrixorigin/matrixone/pull/30588),
-[controlled measurement #30599](https://github.com/matrixorigin/matrixone/pull/30599),
-then profiling collection and analysis.
+Implementation series: workload/correctness; controlled measurement; profiling.
+PR numbers are recorded here when published.
 
 ## 1. Purpose and decisions
 
@@ -392,12 +391,6 @@ EXPLAIN ANALYZE is a separate replay whose result path differs from returning
 the ordinary query results. Keep its operator evidence, but use actual SELECT
 replays for CPU, allocation and output-path diagnosis. Check that the relevant
 plan shape and workload match before relating the two.
-
-The pinned MO SQL interface rejects ANALYZE with FORMAT=JSON. Retain its
-structured EXPLAIN FORMAT=JSON plan and text EXPLAIN ANALYZE output separately;
-do not present estimated JSON statistics as actual execution counters. DuckDB
-uses detailed JSON with ALL statement coverage so Q15's three statements have
-distinct captures. User-mode perf sampling explicitly requests user call chains.
 
 ### 8.2 Audit metric semantics before translating them
 

@@ -31,7 +31,6 @@ type testOperator struct {
 	callCount  int
 	callErr    error
 	result     CallResult
-	projected  *batch.Batch
 	prepared   *process.Process
 	prepareLog *[]string
 }
@@ -66,11 +65,15 @@ func (op *testOperator) Release() {}
 
 func (op *testOperator) GetOperatorBase() *OperatorBase { return &op.OperatorBase }
 
-func (op *testOperator) ExecProjection(_ *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	if op.projected != nil {
-		return op.projected, nil
-	}
-	return input, nil
+type projectionTestOperator struct {
+	testOperator
+	projected       *batch.Batch
+	projectionCalls int
+}
+
+func (op *projectionTestOperator) ExecProjection(_ *process.Process, _ *batch.Batch) (*batch.Batch, error) {
+	op.projectionCalls++
+	return op.projected, nil
 }
 
 type childrenProcessTestOperator struct {
@@ -264,26 +267,65 @@ func TestExecCancelAndProjection(t *testing.T) {
 	projected := batch.NewWithSize(0)
 	projected.SetRowCount(1)
 	proc = &process.Process{Ctx: context.Background()}
-	op = &testOperator{
-		OperatorBase: OperatorBase{OpAnalyzer: process.NewTempAnalyzer()},
-		result:       CallResult{Status: ExecNext, Batch: input},
-		projected:    projected,
+	projectionOp := &projectionTestOperator{
+		testOperator: testOperator{
+			OperatorBase: OperatorBase{OpAnalyzer: process.NewTempAnalyzer()},
+			result:       CallResult{Status: ExecNext, Batch: input},
+		},
+		projected: projected,
 	}
-	result, err = Exec(op, proc)
+	result, err = Exec(projectionOp, proc)
 	require.NoError(t, err)
 	require.Same(t, projected, result.Batch)
-	require.Equal(t, 1, op.callCount)
-	require.Equal(t, int64(1), op.GetOperatorBase().OpAnalyzer.GetOpStats().OutputRows)
+	require.Equal(t, 1, projectionOp.callCount)
+	require.Equal(t, 1, projectionOp.projectionCalls)
+	require.Equal(t, int64(1), projectionOp.GetOperatorBase().OpAnalyzer.GetOpStats().OutputRows)
+
+	projectionOp.result.Status = ExecYield
+	result, err = Exec(projectionOp, proc)
+	require.NoError(t, err)
+	require.Equal(t, ExecYield, result.Status)
+	require.Same(t, input, result.Batch)
+	require.Equal(t, 1, projectionOp.projectionCalls)
 
 	callErr := errors.New("call failed")
-	op = &testOperator{
-		OperatorBase: OperatorBase{OpAnalyzer: process.NewTempAnalyzer()},
-		callErr:      callErr,
-		result:       CallResult{Status: ExecHasMore},
-	}
-	result, err = Exec(op, proc)
+	projectionOp.callErr = callErr
+	projectionOp.result = CallResult{Status: ExecHasMore}
+	result, err = Exec(projectionOp, proc)
 	require.ErrorIs(t, err, callErr)
 	require.Equal(t, ExecHasMore, result.Status)
+	require.Equal(t, 1, projectionOp.projectionCalls)
+}
+
+func TestExecInheritedProjection(t *testing.T) {
+	input := batch.NewWithSize(0)
+	input.SetRowCount(2)
+	for _, tc := range []struct {
+		name   string
+		input  *batch.Batch
+		status ExecStatus
+		rows   int64
+	}{
+		{name: "end", status: ExecStop},
+		{name: "empty", input: batch.NewWithSize(0), status: ExecNext},
+		{name: "nonempty", input: input, status: ExecNext, rows: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			op := &testOperator{
+				OperatorBase: OperatorBase{OpAnalyzer: process.NewTempAnalyzer()},
+				result:       CallResult{Status: tc.status, Batch: tc.input},
+			}
+			result, err := Exec(op, &process.Process{Ctx: context.Background()})
+			require.NoError(t, err)
+			require.Equal(t, tc.status, result.Status)
+			require.True(t, result.Batch == tc.input)
+			require.Equal(t, 1, op.callCount)
+			require.Equal(t, tc.rows, op.OpAnalyzer.GetOpStats().OutputRows)
+			if tc.input != nil {
+				require.Equal(t, int(tc.rows), tc.input.RowCount())
+			}
+		})
+	}
 }
 
 func TestChildrenCallRecordsInputAfterChildExec(t *testing.T) {

@@ -21,6 +21,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strconv"
 	"strings"
@@ -278,11 +279,32 @@ func preflight(ctx context.Context, path string) (p Preflight, retErr error) {
 	return p, nil
 }
 
-func campaignPin(c Campaign, p Preflight) error {
+func verifyCampaignConfig(c Campaign, p Preflight) error {
 	if p.Version != formatVersion || len(p.Errors) > 0 {
 		return errors.New("preflight did not qualify")
 	}
-	for _, pin := range []FileID{p.MO, p.Worker, p.Config} {
+	id, err := identify(p.Config.Path)
+	if err != nil {
+		return err
+	}
+	if id.SHA256 != p.Config.SHA256 || id.Bytes != p.Config.Bytes {
+		return errors.New("campaign configuration changed after preflight")
+	}
+	frozen, err := readJSON[Campaign](p.Config.Path)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(c, frozen) {
+		return errors.New("campaign configuration differs from preflight")
+	}
+	return nil
+}
+
+func campaignPin(c Campaign, p Preflight) error {
+	if err := verifyCampaignConfig(c, p); err != nil {
+		return err
+	}
+	for _, pin := range []FileID{p.MO, p.Worker} {
 		got, err := identify(pin.Path)
 		if err != nil {
 			return err

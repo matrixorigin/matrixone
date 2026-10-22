@@ -40,8 +40,36 @@ type Frozen struct {
 	WorstCaseNS     int64                                `json:"worst_case_ns"`
 }
 
+func (c Campaign) loadReplicates() int {
+	if c.Mode == "full" {
+		return 3
+	}
+	return 1
+}
+
+func loadTrial(c Campaign, scale, engine string, rep int) Trial {
+	return Trial{ID: fmt.Sprintf("load-sf%s-%s-%d", scale, engine, rep), Experiment: "load", Scale: scale, Cores: 8, MemoryBytes: c.MemoryBytes, Clients: 1, Block: rep - 1}
+}
+
+func loadRequest(c Campaign, scale string, d deployment) WorkerRequest {
+	return WorkerRequest{Version: formatVersion, Operation: "load", Engine: d.Engine,
+		DatasetRoot: c.Datasets[scale], QueryDeadlineNS: int64(30 * time.Minute)}
+}
+
 func runRequest(t Trial, warm bool) WorkerRequest {
 	return WorkerRequest{Version: formatVersion, Operation: "queries", Queries: t.Queries, Repetitions: 1, Clients: t.Clients, Warmup: warm, QueryDeadlineNS: int64(30 * time.Minute)}
+}
+
+// scoredRequest describes the frozen workload for both execution and reporting.
+// runArm fills the deployment, resource limits and artifact paths.
+func scoredRequest(c Campaign, f Frozen, t Trial) WorkerRequest {
+	request := runRequest(t, t.Experiment != "process-warm-os" && t.Experiment != "process-cold-os")
+	request.DeadlinesNS = f.DeadlinesNS[t.Scale]
+	request.Seed = c.Seed
+	if t.Experiment == "concurrency" {
+		request.Repetitions = f.WaveRepetitions[t.Clients]
+	}
+	return request
 }
 
 func artifact(root, path string) (FileID, error) {
@@ -75,10 +103,6 @@ func prepareCampaign(ctx context.Context, c Campaign, p Preflight, manager *cgro
 	if err != nil {
 		return f, err
 	}
-	loadReps := 3
-	if c.Mode != "full" {
-		loadReps = 1
-	}
 	scales := []string{"1"}
 	if c.Mode != "sf1-smoke" {
 		scales = []string{"1", "10", "100"}
@@ -88,14 +112,14 @@ func prepareCampaign(ctx context.Context, c Campaign, p Preflight, manager *cgro
 		f.DeadlinesNS[sf] = map[int]int64{}
 		for _, engine := range []string{"mo", "duckdb"} {
 			var kept PreparedEngine
-			for rep := 1; rep <= loadReps; rep++ {
+			for rep := 1; rep <= c.loadReplicates(); rep++ {
 				d, err := prepareDeployment(c, sf, engine, rep)
 				if err != nil {
 					return f, err
 				}
-				t := Trial{ID: fmt.Sprintf("load-sf%s-%s-%d", sf, engine, rep), Experiment: "load", Scale: sf, Cores: 8, MemoryBytes: c.MemoryBytes, Clients: 1, Block: rep - 1}
+				t := loadTrial(c, sf, engine, rep)
 				root := filepath.Join(c.Root, "preparation", t.ID)
-				request := WorkerRequest{Operation: "load", QueryDeadlineNS: int64(30 * time.Minute)}
+				request := loadRequest(c, sf, d)
 				record, err := runArm(ctx, c, p, manager, d, t, root, request)
 				if err != nil {
 					return f, fmt.Errorf("%s: %w", t.ID, err)
@@ -206,7 +230,9 @@ type RunManifest struct {
 	Error    string    `json:"error,omitempty"`
 }
 
-func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, manager *cgroupManager, id string) (manifest RunManifest, retErr error) {
+type armRunner func(context.Context, Campaign, Preflight, *cgroupManager, deployment, Trial, string, WorkerRequest) (ArmRecord, error)
+
+func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, manager *cgroupManager, id string, run armRunner) (manifest RunManifest, retErr error) {
 	if !identifier.MatchString(id) {
 		return manifest, errors.New("run ID must be a lower-case identifier")
 	}
@@ -240,6 +266,18 @@ func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, man
 			return manifest, err
 		}
 		var pairErr error
+		unsafeCleanup := false
+		attempt := func(d deployment, trial Trial, path string, request WorkerRequest) ArmRecord {
+			record, err := run(ctx, c, p, manager, d, trial, path, request)
+			if record.Cleanup != "complete" {
+				unsafeCleanup = true
+				err = errors.Join(err, fmt.Errorf("cleanup %q did not establish application quiescence", record.Cleanup))
+			}
+			if err != nil {
+				pairErr = errors.Join(pairErr, fmt.Errorf("%s/%s %s: %w", trial.ID, d.Engine.Name, trial.Experiment, err))
+			}
+			return record
+		}
 		for _, engine := range t.Arms {
 			d := f.Prepared[t.Scale][engine].Deployment
 			if t.Experiment == "process-warm-os" {
@@ -250,19 +288,17 @@ func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, man
 				request.DeadlinesNS = f.DeadlinesNS[t.Scale]
 				request.Seed = c.Seed
 				path := filepath.Join(pairRoot, "prime-"+engine)
-				if _, err := runArm(ctx, c, p, manager, d, prime, path, request); err != nil {
-					pairErr = errors.Join(pairErr, err)
+				attempt(d, prime, path, request)
+				if unsafeCleanup {
+					break
 				}
 			}
-			request := runRequest(t, t.Experiment != "process-warm-os" && t.Experiment != "process-cold-os")
-			request.DeadlinesNS = f.DeadlinesNS[t.Scale]
-			request.Seed = c.Seed
-			if t.Experiment == "concurrency" {
-				request.Repetitions = f.WaveRepetitions[t.Clients]
-			}
-			record, err := runArm(ctx, c, p, manager, d, t, filepath.Join(pairRoot, engine), request)
+			request := scoredRequest(c, f, t)
+			record := attempt(d, t, filepath.Join(pairRoot, engine), request)
 			pair.Arms[engine] = record
-			pairErr = errors.Join(pairErr, err)
+			if unsafeCleanup {
+				break
+			}
 		}
 		if pairErr != nil {
 			pair.Error = pairErr.Error()
@@ -271,14 +307,17 @@ func executeCampaign(ctx context.Context, c Campaign, p Preflight, f Frozen, man
 		}
 		path := filepath.Join(pairRoot, "pair.json")
 		if err := publishJSON(path, pair); err != nil {
-			return manifest, err
+			return manifest, errors.Join(pairErr, err)
 		}
 		pin, err := artifact(root, path)
 		if err != nil {
-			return manifest, err
+			return manifest, errors.Join(pairErr, err)
 		}
 		manifest.Pairs = append(manifest.Pairs, pin)
 		_, _ = fmt.Fprintf(os.Stderr, "%s: %s\n", t.ID, pair.Status)
+		if unsafeCleanup {
+			return manifest, pairErr
+		}
 	}
 	return manifest, nil
 }
@@ -324,6 +363,6 @@ func campaignRun(ctx context.Context, config, phase, id string) error {
 	if id == "" {
 		id = "run_" + strconv.FormatInt(time.Now().Unix(), 10)
 	}
-	_, err = executeCampaign(ctx, c, p, f, manager, id)
+	_, err = executeCampaign(ctx, c, p, f, manager, id, runArm)
 	return err
 }
