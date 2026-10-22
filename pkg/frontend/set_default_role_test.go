@@ -24,6 +24,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
 )
@@ -52,6 +53,9 @@ func TestSetDefaultRolePrivilegeAndSelfAuthorization(t *testing.T) {
 		DefaultRoleID: 1,
 	})
 	ses.SetFromRealUser(true)
+	bh := &backgroundExecTest{}
+	bh.init()
+	created := stubSetDefaultRoleBackgroundExec(t, bh, nil)
 
 	self, err := setDefaultRoleTargetsAreCurrentUser(context.Background(), ses, stmt)
 	require.NoError(t, err)
@@ -78,6 +82,85 @@ func TestSetDefaultRolePrivilegeAndSelfAuthorization(t *testing.T) {
 	ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(context.Background(), ses, stmt)
 	require.NoError(t, err)
 	require.True(t, ok)
+	for _, tc := range []struct {
+		name, currentUser, targetUser string
+	}{
+		{"invalid authenticated name", "bad:name", "alice"},
+		{"invalid target name", "alice", "bad:name"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			previousUser := ses.GetTenantInfo().User
+			ses.GetTenantInfo().User = tc.currentUser
+			t.Cleanup(func() { ses.GetTenantInfo().User = previousUser })
+			ok, _, err := authenticateUserCanExecuteStatementWithObjectTypeAccountAndDatabase(
+				context.Background(), ses, setDefaultRoleTestStatement("writer", tc.targetUser))
+			require.ErrorContains(t, err, "invalid")
+			require.False(t, ok)
+			require.Zero(t, *created, "invalid identities must not fall through to catalog authorization")
+		})
+	}
+}
+
+func TestSetDefaultRoleNoneThroughFrontendPreservesActiveRole(t *testing.T) {
+	ctx := context.Background()
+	ses := newSetDefaultRoleTestSession(t, "acme", "alice", 7)
+	ses.GetTenantInfo().SetDefaultRole("writer")
+	ses.GetTenantInfo().SetDefaultRoleID(9)
+	bh := &setDefaultRoleLifecycleExec{backgroundExecTest: newSetDefaultRoleTestBackgroundExec(publicRoleName, 1, []setDefaultRoleTestUser{
+		{id: 7, name: "alice", host: "localhost", grants: []int64{1}},
+	})}
+	var opts *BackgroundExecOption
+	stubSetDefaultRoleBackgroundExec(t, bh, &opts)
+	stmt, err := mysql.ParseOne(ctx, "set default role none to 'alice'@'localhost'", 1)
+	require.NoError(t, err)
+	defer stmt.Free()
+
+	_, err = execInFrontend(ses, &ExecCtx{reqCtx: ctx, stmt: stmt})
+	require.NoError(t, err)
+	require.Contains(t, bh.executedSQLs, "update mo_catalog.mo_user set default_role = 1 where user_id = 7;")
+	require.Equal(t, "commit;", bh.executedSQLs[len(bh.executedSQLs)-1])
+	require.NotContains(t, bh.executedSQLs, "rollback;")
+	require.Equal(t, "writer", ses.GetTenantInfo().GetDefaultRole())
+	require.Equal(t, uint32(9), ses.GetTenantInfo().GetDefaultRoleID())
+	require.NotNil(t, opts)
+	require.True(t, opts.forcePessimisticRC)
+	require.True(t, opts.cancelTxnCreateWithRequest)
+	require.Equal(t, 1, bh.closeCalls)
+	require.Equal(t, len(bh.executedSQLs), bh.sqlCountAtClose, "finalize the transaction before closing its executor")
+}
+
+func TestSetDefaultRoleFrontendPropagatesCatalogFailuresAndCloses(t *testing.T) {
+	for _, tc := range []struct {
+		name, failSQL string
+	}{
+		{"begin", "begin;"},
+		{"role lookup", "select role_id, role_name from mo_catalog.mo_role where role_name = 'writer' order by role_id for update;"},
+		{"user lookup", setDefaultRoleUserLookupSQL("alice")},
+		{"direct grant lookup", setDefaultRoleMembershipLookupSQL(7, []int64{2, 9})},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newSetDefaultRoleTestSession(t, "acme", "alice", 7)
+			bh := &setDefaultRoleLifecycleExec{backgroundExecTest: newSetDefaultRoleTestBackgroundExec("writer", 9, []setDefaultRoleTestUser{
+				{id: 7, name: "alice", host: "localhost", grants: []int64{9}},
+			})}
+			injectedErr := errors.New("catalog operation failed")
+			bh.sql2err[tc.failSQL] = injectedErr
+			stubSetDefaultRoleBackgroundExec(t, bh, nil)
+
+			_, err := execInFrontend(ses, &ExecCtx{reqCtx: context.Background(), stmt: setDefaultRoleTestStatement("writer", "alice")})
+			require.ErrorIs(t, err, injectedErr)
+			assertSetDefaultRoleNoWrites(t, bh.backgroundExecTest)
+			require.NotContains(t, bh.executedSQLs, "commit;")
+			if tc.failSQL == "begin;" {
+				require.Equal(t, []string{"begin;"}, bh.executedSQLs)
+			} else {
+				require.Equal(t, []string{tc.failSQL, "rollback;"}, bh.executedSQLs[len(bh.executedSQLs)-2:],
+					"only rollback may follow the failed operation")
+			}
+			require.Equal(t, 1, bh.closeCalls)
+			require.Equal(t, len(bh.executedSQLs), bh.sqlCountAtClose)
+		})
+	}
 }
 
 func TestSetDefaultRoleWriterUsesPrivateLockingTxnAndLeavesSessionRoleUnchanged(t *testing.T) {
@@ -126,12 +209,15 @@ func TestSetDefaultRoleWriterRejectsPartialAndUnsupportedRequests(t *testing.T) 
 	})
 
 	for _, tc := range []struct {
-		name string
-		stmt *tree.SetDefaultRole
+		name        string
+		stmt        *tree.SetDefaultRole
+		wantError   string
+		currentUser string
 	}{
 		{
-			name: "all is unsupported",
-			stmt: &tree.SetDefaultRole{Type: tree.SET_DEFAULT_ROLE_TYPE_ALL, Users: []*tree.User{{Username: "alice", Hostname: "%"}}},
+			name:      "all is unsupported",
+			stmt:      &tree.SetDefaultRole{Type: tree.SET_DEFAULT_ROLE_TYPE_ALL, Users: []*tree.User{{Username: "alice", Hostname: "%"}}},
+			wantError: "ALL is not supported",
 		},
 		{
 			name: "multiple defaults are unsupported",
@@ -140,15 +226,76 @@ func TestSetDefaultRoleWriterRejectsPartialAndUnsupportedRequests(t *testing.T) 
 				Roles: []*tree.Role{{UserName: "writer"}, {UserName: "reader"}},
 				Users: []*tree.User{{Username: "alice", Hostname: "%"}},
 			},
+			wantError: "exactly one role",
 		},
+		{name: "missing statement", wantError: "statement is missing"},
+		{name: "NONE with roles", stmt: &tree.SetDefaultRole{Type: tree.SET_DEFAULT_ROLE_TYPE_NONE, Roles: []*tree.Role{{UserName: "writer"}}}, wantError: "NONE cannot include"},
+		{name: "missing role", stmt: &tree.SetDefaultRole{Type: tree.SET_DEFAULT_ROLE_TYPE_NORMAL}, wantError: "exactly one role"},
+		{name: "nil role", stmt: &tree.SetDefaultRole{Type: tree.SET_DEFAULT_ROLE_TYPE_NORMAL, Roles: []*tree.Role{nil}}, wantError: "exactly one role"},
+		{name: "invalid role type", stmt: &tree.SetDefaultRole{Type: tree.SetDefaultRoleType(-1)}, wantError: "invalid SET DEFAULT ROLE type"},
+		{name: "invalid role name", stmt: setDefaultRoleTestStatement("bad:name", "alice"), wantError: "invalid"},
+		{name: "missing users", stmt: setDefaultRoleTestStatement("writer"), wantError: "at least one user"},
+		{name: "nil user", stmt: &tree.SetDefaultRole{Type: tree.SET_DEFAULT_ROLE_TYPE_NONE, Users: []*tree.User{nil}}, wantError: "empty user"},
+		{name: "authentication option", stmt: &tree.SetDefaultRole{Type: tree.SET_DEFAULT_ROLE_TYPE_NONE, Users: []*tree.User{{Username: "alice", Hostname: "%", AuthOption: &tree.AccountIdentified{}}}}, wantError: "authentication options"},
+		{name: "invalid user name", stmt: setDefaultRoleTestStatement("writer", "bad:name"), wantError: "invalid"},
+		{name: "blank host", stmt: &tree.SetDefaultRole{Type: tree.SET_DEFAULT_ROLE_TYPE_NONE, Users: []*tree.User{{Username: "alice", Hostname: " "}}}, wantError: "requires a user host"},
+		{name: "invalid authenticated name", stmt: setDefaultRoleTestStatement("writer", "alice"), currentUser: "bad:name", wantError: "invalid"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ses := newSetDefaultRoleTestSession(t, "acme", "alice", 7)
+			if tc.currentUser != "" {
+				ses.GetTenantInfo().User = tc.currentUser
+			}
 			bh := &backgroundExecTest{}
 			bh.init()
-			stubSetDefaultRoleBackgroundExec(t, bh, nil)
-			require.Error(t, doSetDefaultRole(context.Background(), ses, tc.stmt))
+			created := stubSetDefaultRoleBackgroundExec(t, bh, nil)
+			require.ErrorContains(t, doSetDefaultRole(context.Background(), ses, tc.stmt), tc.wantError)
+			require.Zero(t, *created, "reject invalid input before allocating an executor")
 			require.Empty(t, bh.executedSQLs)
+		})
+	}
+}
+
+func TestSetDefaultRoleWriterRejectsMissingAndMalformedCatalogRows(t *testing.T) {
+	const roleSQL = "select role_id, role_name from mo_catalog.mo_role where role_name = 'writer' order by role_id for update;"
+	for _, tc := range []struct {
+		name, target, sql, wantError string
+		result                       ExecResult
+	}{
+		{name: "missing role", sql: roleSQL, result: newMrsForSetDefaultRoleRoleRows(nil), wantError: "there is no role"},
+		{name: "ambiguous role", sql: roleSQL, result: newMrsForSetDefaultRoleRoleRows([][]interface{}{{int64(9), "writer"}, {int64(10), "writer"}}), wantError: "multiple catalog rows"},
+		{name: "role id overflow", sql: roleSQL, result: newMrsForSetDefaultRoleRoleRows([][]interface{}{{int64(1) << 32, "writer"}}), wantError: "invalid catalog role"},
+		{name: "role name mismatch", sql: roleSQL, result: newMrsForSetDefaultRoleRoleRows([][]interface{}{{int64(9), "reader"}}), wantError: "invalid catalog role"},
+		{name: "malformed role id", sql: roleSQL, result: newMrsForSetDefaultRoleRoleRows([][]interface{}{{"not-an-id", "writer"}})},
+		{name: "missing authenticated user", sql: setDefaultRoleUserLookupSQL("alice"), result: newMrsForSetDefaultRoleUserRows(nil), wantError: "current user no longer exists"},
+		{name: "missing other target", target: "bob", sql: setDefaultRoleUserLookupSQL("bob"), result: newMrsForSetDefaultRoleUserRows(nil), wantError: "there is no user bob"},
+		{name: "ambiguous user", sql: setDefaultRoleUserLookupSQL("alice"), result: newMrsForSetDefaultRoleUserRows([][]interface{}{{int64(7), "alice", "localhost"}, {int64(8), "alice", "localhost"}}), wantError: "multiple catalog rows"},
+		{name: "user id overflow", sql: setDefaultRoleUserLookupSQL("alice"), result: newMrsForSetDefaultRoleUserRows([][]interface{}{{int64(1) << 32, "alice", "localhost"}}), wantError: "invalid catalog user"},
+		{name: "user name mismatch", sql: setDefaultRoleUserLookupSQL("alice"), result: newMrsForSetDefaultRoleUserRows([][]interface{}{{int64(7), "bob", "localhost"}}), wantError: "invalid catalog user"},
+		{name: "malformed user id", sql: setDefaultRoleUserLookupSQL("alice"), result: newMrsForSetDefaultRoleUserRows([][]interface{}{{"not-an-id", "alice", "localhost"}})},
+		{name: "malformed grant id", sql: setDefaultRoleMembershipLookupSQL(7, []int64{2, 9}), result: newMrsForSetDefaultRoleGrantRows([][]interface{}{{"not-an-id"}})},
+		{name: "unexpected grant", sql: setDefaultRoleMembershipLookupSQL(7, []int64{2, 9}), result: newMrsForSetDefaultRoleGrantRows([][]interface{}{{int64(99)}}), wantError: "unexpected role"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ses := newSetDefaultRoleTestSession(t, "acme", "alice", 7)
+			bh := newSetDefaultRoleTestBackgroundExec("writer", 9, []setDefaultRoleTestUser{
+				{id: 7, name: "alice", host: "localhost", grants: []int64{9}},
+				{id: 8, name: "bob", host: "localhost", grants: []int64{9}},
+			})
+			bh.sql2result[tc.sql] = tc.result
+			stubSetDefaultRoleBackgroundExec(t, bh, nil)
+			target := tc.target
+			if target == "" {
+				target = "alice"
+			}
+			err := doSetDefaultRole(context.Background(), ses, setDefaultRoleTestStatement("writer", target))
+			require.Error(t, err)
+			if tc.wantError != "" {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+			assertSetDefaultRoleNoWrites(t, bh)
+			require.NotContains(t, bh.executedSQLs, "commit;")
+			require.Equal(t, []string{tc.sql, "rollback;"}, bh.executedSQLs[len(bh.executedSQLs)-2:])
 		})
 	}
 }
@@ -228,15 +375,31 @@ func TestSetDefaultRoleWriterRejectsHostAndSelfIdentityMismatch(t *testing.T) {
 }
 
 func TestSetDefaultRoleCatalogQueriesTreatEmptyRowsAsNoMatches(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	bh := mock_frontend.NewMockBackgroundExec(ctrl)
-	bh.EXPECT().ClearExecResultSet()
-	bh.EXPECT().Exec(gomock.Any(), "select missing catalog row")
-	bh.EXPECT().GetExecResultSet().Return([]interface{}{})
-
-	result, err := querySetDefaultRoleResult(context.Background(), bh, "select missing catalog row")
-	require.NoError(t, err)
-	require.Nil(t, result)
+	for _, tc := range []struct {
+		name      string
+		results   []interface{}
+		wantError string
+	}{
+		{name: "no result sets"},
+		{name: "non-result payload", results: []interface{}{42}, wantError: "not the type of result set"},
+		{name: "multiple result sets", results: []interface{}{&MysqlResultSet{}, &MysqlResultSet{}}, wantError: "invalid result"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			bh := mock_frontend.NewMockBackgroundExec(gomock.NewController(t))
+			gomock.InOrder(
+				bh.EXPECT().ClearExecResultSet(),
+				bh.EXPECT().Exec(gomock.Any(), "select catalog row"),
+				bh.EXPECT().GetExecResultSet().Return(tc.results),
+			)
+			result, err := querySetDefaultRoleResult(context.Background(), bh, "select catalog row")
+			if tc.wantError == "" {
+				require.NoError(t, err)
+			} else {
+				require.ErrorContains(t, err, tc.wantError)
+			}
+			require.Nil(t, result)
+		})
+	}
 }
 
 func TestSetDefaultRoleWriterAcceptsZeroRootIDsAndProtectsAdminTargets(t *testing.T) {
@@ -377,14 +540,34 @@ func newMrsForSetDefaultRoleGrantRows(rows [][]interface{}) *MysqlResultSet {
 	return mrs
 }
 
-func stubSetDefaultRoleBackgroundExec(t *testing.T, bh *backgroundExecTest, captured **BackgroundExecOption) {
+type setDefaultRoleLifecycleExec struct {
+	*backgroundExecTest
+	closeCalls, sqlCountAtClose int
+}
+
+func (bh *setDefaultRoleLifecycleExec) Close() {
+	bh.closeCalls++
+	bh.sqlCountAtClose = len(bh.executedSQLs)
+}
+
+func assertSetDefaultRoleNoWrites(t *testing.T, bh *backgroundExecTest) {
+	t.Helper()
+	for _, sql := range bh.executedSQLs {
+		require.NotContains(t, sql, "update mo_catalog.mo_user set default_role")
+	}
+}
+
+func stubSetDefaultRoleBackgroundExec(t *testing.T, bh BackgroundExec, captured **BackgroundExecOption) *int {
 	t.Helper()
 	previous := NewBackgroundExec
+	created := new(int)
 	NewBackgroundExec = func(_ context.Context, _ FeSession, opts ...*BackgroundExecOption) BackgroundExec {
+		*created++
 		if captured != nil && len(opts) > 0 {
 			*captured = opts[0]
 		}
 		return bh
 	}
 	t.Cleanup(func() { NewBackgroundExec = previous })
+	return created
 }
