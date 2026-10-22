@@ -67,25 +67,6 @@ func CopyBatch(bat *batch.Batch, proc *process.Process) (*batch.Batch, error) {
 	return rbat, nil
 }
 
-func SplitTableAndColumn(name string) (string, string) {
-	var schema string
-
-	{ // determine if it is a function call
-		i, j := strings.Index(name, "("), strings.Index(name, ")")
-		if i >= 0 && j >= 0 && j > i {
-			return "", name
-		}
-	}
-	xs := strings.Split(name, ".")
-	for i := 0; i < len(xs)-1; i++ {
-		if i > 0 {
-			schema += "."
-		}
-		schema += xs[i]
-	}
-	return schema, xs[len(xs)-1]
-}
-
 func TableIsLoggingTable(dbName string, tableName string) bool {
 	if tableName == "statement_info" && dbName == "system" {
 		return true
