@@ -4,7 +4,7 @@ Owner: #30849; umbrella #30838. Implementation PR: recorded in the PR that conta
 
 ## Reviewed design
 
-This document records the corresponding PR from the user-approved three-PR plan (2026-10-23, “Implement the plan”). Base at design capture: `060cb430e9ff59e60dc7bdade05758d343516acb`. Each branch starts from authoritative main, does not include or depend on #30880, and leaves its cast files untouched.
+This document records the corresponding PR from the user-approved three-PR plan (2026-10-23, “Implement the plan”). Base at design capture: `060cb430e9ff59e60dc7bdade05758d343516acb`. Each branch starts independently from authoritative main and leaves cast files untouched relative to its base. After #30880 merged, all three branches incorporated main `517a0a412ba5f3b52e6abe722c9675a3d72491af`; the updated comparison baseline includes that cast optimization.
 
 ## Contract and implementation
 
