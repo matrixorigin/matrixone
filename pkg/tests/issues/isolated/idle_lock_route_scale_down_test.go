@@ -22,8 +22,10 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	lock "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/stretchr/testify/require"
 )
@@ -94,6 +96,20 @@ func TestDropDatabaseAfterCNScaleDown(t *testing.T) {
 	cached, err := locks[survivor].GetLockTableBind(0, tableID)
 	require.NoError(t, err)
 	require.Equal(t, bind.ServiceID, cached.ServiceID)
+	// DROP also locks catalog relations. A retiring peer's transaction cleanup
+	// can rebind one of them to that peer after the first owner is retired.
+	// Capture the actual warmed routes without making another allocation.
+	var catalogBinds []lock.LockTable
+	for _, id := range []uint64{catalog.MO_DATABASE_ID, catalog.MO_TABLES_ID, catalog.MO_COLUMNS_ID, tableID} {
+		current, err := locks[survivor].GetLockTableBind(0, id)
+		require.NoError(t, err)
+		if current.Valid {
+			catalogBinds = append(catalogBinds, current)
+		}
+		if id == catalog.MO_TABLES_ID {
+			require.True(t, current.Valid, "DDL must warm the mo_tables route implicated by the coverage failure")
+		}
+	}
 	for i, cn := range cns {
 		if i != survivor {
 			require.NoError(t, dbs[i].Close())
@@ -106,12 +122,19 @@ func TestDropDatabaseAfterCNScaleDown(t *testing.T) {
 		current, err := locks[survivor].GetLockTableBind(0, tableID)
 		return err == nil && !current.Valid
 	}, time.Minute, 50*time.Millisecond, "idle route must disappear after membership converges")
-	// Separately wait for TN's retirement authority. This probe may allocate
-	// the new TN binding, but deliberately does not publish a CN route.
+	// Separately wait for TN's retirement authority for every warmed catalog
+	// route. A different owner is insufficient: it may be the second retired
+	// CN. Only the survivor is a ready owner after this topology transition.
+	// These probes may allocate TN bindings but do not publish CN routes.
 	require.Eventually(t, func() bool {
-		current, err := locks[survivor].GetLatestLockTableBind(cached)
-		return err == nil && current.Valid && current.ServiceID != cached.ServiceID
-	}, 30*time.Second, 100*time.Millisecond, "TN must retire the old owner before declaring scale-down recovered")
+		for _, previous := range catalogBinds {
+			current, err := locks[survivor].GetLatestLockTableBind(previous)
+			if err != nil || !current.Valid || current.ServiceID != locks[survivor].GetServiceID() {
+				return false
+			}
+		}
+		return true
+	}, 30*time.Second, 100*time.Millisecond, "TN must retire every departed catalog owner before declaring scale-down recovered")
 	current, err := locks[survivor].GetLockTableBind(0, tableID)
 	require.NoError(t, err)
 	require.False(t, current.Valid, "the readiness probe must leave the CN route cold")
