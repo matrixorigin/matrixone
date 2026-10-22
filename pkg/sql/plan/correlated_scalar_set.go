@@ -40,7 +40,7 @@ func (builder *QueryBuilder) scalarSetNeedsReaggregation(root int32) bool {
 		root = n.Children[0]
 		n = child
 	}
-	if len(n.ProjectList) != 1 || n.NodeType != plan.Node_UNION || n.Limit != nil || n.Offset != nil || builder.subtreeContainsAggregate(root) || builder.planSubtreeContainsVolatile(root) {
+	if len(n.ProjectList) != 1 || n.NodeType != plan.Node_UNION || n.Limit != nil || n.Offset != nil || builder.subtreeContainsCorrelatedAggregate(root) || builder.planSubtreeContainsVolatile(root) {
 		return false
 	}
 	var needs func(int32) bool
@@ -61,6 +61,66 @@ func (builder *QueryBuilder) scalarSetNeedsReaggregation(root int32) bool {
 		return false
 	}
 	return needs(root)
+}
+
+// subtreeContainsCorrelatedAggregate rejects only aggregates whose input or
+// aggregate expressions depend on the outer row. An independent aggregate in a
+// JOIN branch is a scalar constant for every outer row and can remain in the
+// branch while the surrounding UNION is reaggregated after correlation.
+func (builder *QueryBuilder) subtreeContainsCorrelatedAggregate(root int32) bool {
+	seen := make(map[int32]bool)
+	var hasCorrelation func(int32, map[int32]bool) bool
+	hasCorrelation = func(id int32, active map[int32]bool) bool {
+		if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+			return true
+		}
+		if active[id] {
+			return true
+		}
+		active[id] = true
+		defer delete(active, id)
+		node := builder.qry.Nodes[id]
+		for _, exprs := range [][]*plan.Expr{node.ProjectList, node.FilterList, node.OnList, node.GroupBy, node.AggList, node.WinSpecList} {
+			for _, expr := range exprs {
+				if hasCorrCol(expr) {
+					return true
+				}
+			}
+		}
+		for _, order := range node.OrderBy {
+			if order != nil && hasCorrCol(order.Expr) {
+				return true
+			}
+		}
+		for _, child := range node.Children {
+			if hasCorrelation(child, active) {
+				return true
+			}
+		}
+		return false
+	}
+
+	var visit func(int32) bool
+	visit = func(id int32) bool {
+		if id < 0 || int(id) >= len(builder.qry.Nodes) || builder.qry.Nodes[id] == nil {
+			return true
+		}
+		if seen[id] {
+			return false
+		}
+		seen[id] = true
+		node := builder.qry.Nodes[id]
+		if node.NodeType == plan.Node_AGG && hasCorrelation(id, make(map[int32]bool)) {
+			return true
+		}
+		for _, child := range node.Children {
+			if visit(child) {
+				return true
+			}
+		}
+		return false
+	}
+	return visit(root)
 }
 
 func (builder *QueryBuilder) flattenScalarSetAfterCorrelation(
