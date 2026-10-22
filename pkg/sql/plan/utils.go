@@ -1977,7 +1977,7 @@ func normalizeNativeRangeDirection(expr *plan.Expr, proc *process.Process) (*pla
 
 func ConstantFold(bat *batch.Batch, expr *plan.Expr, proc *process.Process, varAndParamIsConst bool, foldInExpr bool) (*plan.Expr, error) {
 	return constantFoldWithPreparedExactSource(
-		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr), false)
+		bat, expr, proc, varAndParamIsConst, foldInExpr, containsDynamicParam(expr), false, false)
 }
 
 func constantFoldWithPreparedExactSource(
@@ -1988,6 +1988,7 @@ func constantFoldWithPreparedExactSource(
 	foldInExpr bool,
 	preservePreparedExactSource bool,
 	spatialChecked bool,
+	jsonFeatureChecked bool,
 ) (*plan.Expr, error) {
 	if expr.Typ.Id == int32(types.T_interval) {
 		// INTERVAL is an executable argument type but has no standalone scalar
@@ -2003,7 +2004,7 @@ func constantFoldWithPreparedExactSource(
 		cannotFold := false
 		for i := range exprList {
 			foldExpr, err := constantFoldWithPreparedExactSource(
-				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked)
+				bat, exprList[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked, jsonFeatureChecked)
 			if err != nil {
 				return nil, err
 			}
@@ -2078,15 +2079,16 @@ func constantFoldWithPreparedExactSource(
 	if err != nil {
 		return nil, err
 	}
-	// Keep spatial provenance visible to persisted-expression admission. Once
-	// the whole subtree is known to be spatial-free, its children need no scan:
-	// folding constants cannot introduce a spatial function. Rechecking every
-	// descendant would make folding a deep expression quadratic.
-	if !spatialChecked {
-		if requiresSpatial, spatialErr := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); spatialErr != nil || requiresSpatial {
+	// One feature walk preserves spatial and JSON admission identities. A
+	// negative result covers every descendant: folding cannot introduce either
+	// contract, and JSON ELT's selected subtree remains owned by its executor.
+	if !spatialChecked || !jsonFeatureChecked {
+		features, featureErr := plan.RequiredRemoteExpressionFeatures(expr)
+		if featureErr != nil || (!spatialChecked && features.SpatialDistanceSemantics) ||
+			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)) {
 			return expr, nil
 		}
-		spatialChecked = true
+		spatialChecked, jsonFeatureChecked = true, true
 	}
 	if f.IsVolatile() {
 		return expr, nil
@@ -2106,7 +2108,7 @@ func constantFoldWithPreparedExactSource(
 	isVec := false
 	for i := range fn.Args {
 		foldExpr, errFold := constantFoldWithPreparedExactSource(
-			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked)
+			bat, fn.Args[i], proc, varAndParamIsConst, foldInExpr, preservePreparedExactSource, spatialChecked, jsonFeatureChecked)
 		if errFold != nil {
 			if functionID == function.CASE || functionID == function.IFF || functionID == function.COALESCE {
 				// Selection owns branch errors. Retain the failing subtree for

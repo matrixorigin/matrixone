@@ -117,10 +117,17 @@ def test_table(client):
         pass
 
 
-@pytest.mark.parametrize('function,expected', [
-    (json_extract, 7), (json_extract_string, 'value'), (json_extract_float64, 7.0),
-    (json_set, 9), (json_insert, 7), (json_replace, 9),
-])
+@pytest.mark.parametrize(
+    'function,expected',
+    [
+        (json_extract, 7),
+        (json_extract_string, 'value'),
+        (json_extract_float64, 7.0),
+        (json_set, 9),
+        (json_insert, 7),
+        (json_replace, 9),
+    ],
+)
 def test_json_path_quoted_key_roundtrip(client, function, expected):
     path = '$."owner\'s"'
     value = 'value' if function is json_extract_string else 7
@@ -137,14 +144,73 @@ def test_json_path_quoted_key_roundtrip(client, function, expected):
     assert actual == expected
 
 
+@pytest.mark.parametrize(
+    'key',
+    [
+        'ordinary',
+        "owner's",
+        'a"b',
+        'a\\b',
+        'x.y',
+        '',
+        '*',
+        'items[0]',
+        '\n\t\r\b\f\x00',
+        '中文😀',
+        "x'), 'different path') --",
+    ],
+)
+def test_bracket_access_reads_literal_member(client, key):
+    # Distinguish a literal member from nested traversal, wildcards and arrays.
+    document = {'x': {'y': 'nested'}, 'items': ['array'], 'other': 'decoy', key: 'selected'}
+    value = literal(document, type_=JSON)[key]
+    row = client.execute(select(value, value.astext, value.cast(String))).rows[0]
+    assert json.loads(row[0]) == 'selected'
+    assert row[1] == row[2] == 'selected'
+
+
+def test_nested_bracket_access_and_reuse(client):
+    document = {'x.y': {'a"b': 'quoted', '😀': 'unicode', 'null': None}, 'x': {'y': 'decoy'}}
+    parent = literal(document, type_=JSON)['x.y']
+    first = parent['a"b']
+    second = parent['😀']
+    row = client.execute(select(parent, first.astext, second.astext, parent['missing'].astext)).rows[0]
+    assert json.loads(row[0]) == document['x.y']
+    assert row[1:] == ('quoted', 'unicode', None)
+    assert client.execute(select(parent['null'])).scalar() == 'null'
+
+
+def test_bracket_access_typed_values_and_predicates(client):
+    value = literal({"owner's": {'n.m': 7, '*': True, 'a"b': 'selected'}}, type_=JSON)["owner's"]
+    number = value['n.m']
+    text = value['a"b']
+    row = client.execute(
+        select(
+            number.cast(Integer),
+            number.cast(Numeric()),
+            value['*'].asbool,
+            text.astext == 'selected',
+            number == 7,
+            number != 8,
+            number > 6,
+            number < 8,
+            number >= 7,
+            number <= 7,
+        )
+    ).rows[0]
+    assert row == (7.0, 7.0, True, True, True, True, True, True, True, True)
+
+
 class TestJSONExtract:
     """Test json_extract function execution."""
 
     def test_extract_single_path(self, client, test_table):
         """Test extracting single JSON field."""
-        results = client.query(
-            Product.product_name, json_extract(Product.specifications, '$.brand').label('brand')
-        ).execute()
+        results = (
+            client.query(Product.product_name, json_extract(Product.specifications, '$.brand').label('brand'))
+            .order_by(Product.product_id)
+            .execute()
+        )
 
         rows = results.rows
         assert len(rows) == 3
@@ -154,7 +220,9 @@ class TestJSONExtract:
     def test_extract_nested_path(self, client, test_table):
         """Test extracting nested JSON field."""
         results = (
-            client.query(Product.product_name, json_extract(Product.specifications, '$.hardware.processor').label('cpu'))
+            client.query(
+                Product.product_name, json_extract(Product.specifications, '$.hardware.processor').label('cpu')
+            )
             .filter(Product.product_id == 1)
             .execute()
         )
@@ -231,7 +299,9 @@ class TestJSONModification:
         stmt = (
             update(Product)
             .values(
-                specifications=json_insert(Product.specifications, '$.brand', 'ShouldNotChange', '$.warranty', '2 years')
+                specifications=json_insert(
+                    Product.specifications, '$.brand', 'ShouldNotChange', '$.warranty', '2 years'
+                )
             )
             .where(Product.product_id == 2)
         )
@@ -262,9 +332,19 @@ class TestJSONModification:
 class TestStandardSyntax:
     """Test SQLAlchemy standard JSON syntax."""
 
+    def test_default_projection(self, client, test_table):
+        table = Product.__table__.alias('products')
+        expression = table.c.specifications['hardware']['processor']
+        result = client.execute(select(expression).where(table.c.product_id == 1)).scalar()
+        assert json.loads(result) == 'Intel i7'
+
     def test_dict_access(self, client, test_table):
         """Test column['key'] dictionary access."""
-        results = client.query(Product.product_name, Product.specifications['brand'].label('brand')).execute()
+        results = (
+            client.query(Product.product_name, Product.specifications['brand'].label('brand'))
+            .order_by(Product.product_id)
+            .execute()
+        )
 
         assert len(results.rows) == 3
         assert '"Dell"' in results.rows[0][1]
@@ -281,7 +361,11 @@ class TestStandardSyntax:
 
     def test_astext_removes_quotes(self, client, test_table):
         """Test .astext removes JSON quotes."""
-        results = client.query(Product.product_name, Product.specifications['brand'].astext.label('brand')).execute()
+        results = (
+            client.query(Product.product_name, Product.specifications['brand'].astext.label('brand'))
+            .order_by(Product.product_id)
+            .execute()
+        )
 
         # No quotes
         assert results.rows[0][1] == 'Dell'
@@ -289,7 +373,11 @@ class TestStandardSyntax:
 
     def test_cast_to_numeric(self, client, test_table):
         """Test .cast(Numeric) for numeric conversion."""
-        results = client.query(Product.product_name, Product.specifications['price'].cast(Numeric).label('price')).execute()
+        results = (
+            client.query(Product.product_name, Product.specifications['price'].cast(Numeric).label('price'))
+            .order_by(Product.product_id)
+            .execute()
+        )
 
         # Returns numeric values
         assert results.rows[0][1] == 1299.99

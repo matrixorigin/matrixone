@@ -138,10 +138,10 @@ func IsNullIntegerArgumentCast(expr *plan.Expr) bool {
 }
 
 func (r *ConstantFold) constantFold(expr *plan.Expr, proc *process.Process) *plan.Expr {
-	return r.foldExpr(expr, proc, false)
+	return r.foldExpr(expr, proc, false, false)
 }
 
-func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialChecked bool) *plan.Expr {
+func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialChecked, jsonFeatureChecked bool) *plan.Expr {
 	if expr == nil {
 		return expr
 	}
@@ -161,7 +161,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 			exprList := elist.List
 			cannotFold := false
 			for i := range exprList {
-				exprList[i] = r.foldExpr(exprList[i], proc, spatialChecked)
+				exprList[i] = r.foldExpr(exprList[i], proc, spatialChecked, jsonFeatureChecked)
 				if exprList[i].GetLit() == nil {
 					cannotFold = true
 				}
@@ -229,14 +229,16 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	if !exists {
 		return expr
 	}
-	// Preserve the v90 spatial requirement before evaluating any child. A
-	// successful scan covers this entire subtree, so recursive folding can
-	// reuse it instead of scanning every descendant again.
-	if !spatialChecked {
-		if requiresSpatial, err := plan.RequiresMORPCVersion90SpatialDistanceSemantics(expr); err != nil || requiresSpatial {
+	// Share the feature walk between spatial and JSON admission. Keep positive
+	// identities executable and propagate the negative proof to descendants;
+	// JSON ELT's selected subtree still belongs to its lazy executor.
+	if !spatialChecked || !jsonFeatureChecked {
+		features, err := plan.RequiredRemoteExpressionFeatures(expr)
+		if err != nil || (!spatialChecked && features.SpatialDistanceSemantics) ||
+			(!jsonFeatureChecked && (features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts)) {
 			return expr
 		}
-		spatialChecked = true
+		spatialChecked, jsonFeatureChecked = true, true
 	}
 	if f.IsVolatile() {
 		return expr
@@ -256,7 +258,7 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	}
 	isVec := false
 	for i := range fn.Args {
-		fn.Args[i] = r.foldExpr(fn.Args[i], proc, spatialChecked)
+		fn.Args[i] = r.foldExpr(fn.Args[i], proc, spatialChecked, jsonFeatureChecked)
 		isVec = isVec || fn.Args[i].GetVec() != nil && !IsScalarConstantVector(fn.Args[i])
 	}
 	if r.isPrepared && ContainsSqlModeDependentTemporalCall(expr) {
