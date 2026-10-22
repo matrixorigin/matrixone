@@ -83,12 +83,29 @@ select count(*) as retained_grant from mo_catalog.mo_role_privs where role_name 
 select * from db_v1.v1;
 -- @session
 
+-- Repeated replacement in one transaction must keep the original grant identity.
+-- @session:id=1&user=acc_v1:admin&password=111
+begin;
+create or replace view db_v1.v1 as select a + 2 as a from db_v1.t1;
+create or replace view db_v1.v1 as select a + 3 as a from db_v1.t1;
+commit;
+select rel_logical_id = @old_logical_id as logical_preserved from mo_catalog.mo_tables where reldatabase = 'db_v1' and relname = 'v1';
+select count(*) as retained_grant from mo_catalog.mo_role_privs where role_name = 'role_v1' and obj_type = 'view' and obj_id = @old_logical_id and privilege_name = 'select' and with_grant_option = true;
+set @committed_physical_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'db_v1' and relname = 'v1');
+-- @session
+
+-- @session:id=9&user=acc_v1:user_v1&password=111
+select * from db_v1.v1;
+-- @session
+
 -- Failed replacement and transaction rollback must preserve the previous definition/grant.
 -- @session:id=1&user=acc_v1:admin&password=111
 create or replace view db_v1.v1 as select * from db_v1.missing_table;
 begin;
-create or replace view db_v1.v1 as select a + 2 as a from db_v1.t1;
+create or replace view db_v1.v1 as select a + 4 as a from db_v1.t1;
+create or replace view db_v1.v1 as select a + 5 as a from db_v1.t1;
 rollback;
+select rel_id = @committed_physical_id as physical_restored, rel_logical_id = @old_logical_id as logical_preserved from mo_catalog.mo_tables where reldatabase = 'db_v1' and relname = 'v1';
 create or replace view db_v1.t1 as select 7 as a;
 select * from db_v1.t1;
 -- @session

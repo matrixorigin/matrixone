@@ -55,11 +55,29 @@ select count(*) as retained_grant from mo_catalog.mo_role_privs where role_name 
 select * from db_v1.v1;
 ➤ a[-5,64,0]  𝄀
 2
+begin;
+create or replace view db_v1.v1 as select a + 2 as a from db_v1.t1;
+create or replace view db_v1.v1 as select a + 3 as a from db_v1.t1;
+commit;
+select rel_logical_id = @old_logical_id as logical_preserved from mo_catalog.mo_tables where reldatabase = 'db_v1' and relname = 'v1';
+➤ logical_preserved[-6,8,0]  𝄀
+1
+select count(*) as retained_grant from mo_catalog.mo_role_privs where role_name = 'role_v1' and obj_type = 'view' and obj_id = @old_logical_id and privilege_name = 'select' and with_grant_option = true;
+➤ retained_grant[-5,64,0]  𝄀
+1
+set @committed_physical_id = (select rel_id from mo_catalog.mo_tables where reldatabase = 'db_v1' and relname = 'v1');
+select * from db_v1.v1;
+➤ a[-5,64,0]  𝄀
+4
 create or replace view db_v1.v1 as select * from db_v1.missing_table;
 SQL parser error: table "missing_table" does not exist
 begin;
-create or replace view db_v1.v1 as select a + 2 as a from db_v1.t1;
+create or replace view db_v1.v1 as select a + 4 as a from db_v1.t1;
+create or replace view db_v1.v1 as select a + 5 as a from db_v1.t1;
 rollback;
+select rel_id = @committed_physical_id as physical_restored, rel_logical_id = @old_logical_id as logical_preserved from mo_catalog.mo_tables where reldatabase = 'db_v1' and relname = 'v1';
+➤ physical_restored[-6,8,0]  ¦  logical_preserved[-6,8,0]  𝄀
+1  ¦  1
 create or replace view db_v1.t1 as select 7 as a;
 table t1 already exists
 select * from db_v1.t1;
@@ -67,7 +85,7 @@ select * from db_v1.t1;
 1
 select * from db_v1.v1;
 ➤ a[-5,64,0]  𝄀
-2
+4
 drop view db_v1.v1;
 create view db_v1.v1 as select * from db_v1.t1;
 select count(*) as recreated_view_grants from mo_catalog.mo_role_privs where role_name = 'role_v1' and obj_type = 'view' and obj_id = (select rel_logical_id from mo_catalog.mo_tables where reldatabase = 'db_v1' and relname = 'v1');

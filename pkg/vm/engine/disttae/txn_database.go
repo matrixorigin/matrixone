@@ -405,6 +405,14 @@ func (db *txnDatabase) createWithID(
 	if err != nil {
 		return err
 	}
+	// Resolve identity before GetTableDef caches it for relations created in
+	// this transaction, including repeated metadata replacements.
+	logicalId := tableId
+	logicalIdFromCtx := ctx.Value(defines.LogicalIdKey{})
+	isUpdate := logicalIdFromCtx != nil && !strings.HasPrefix(name, catalog.IndexTableNamePrefix)
+	if isUpdate {
+		logicalId = logicalIdFromCtx.(uint64)
+	}
 	tbl := new(txnTable)
 	tbl.eng = txn.engine
 
@@ -413,6 +421,7 @@ func (db *txnDatabase) createWithID(
 		tbl.db = db
 		tbl.tableName = name
 		tbl.tableId = tableId
+		tbl.logicalId = logicalId
 		tbl.accountId = accountId
 		tbl.extraInfo = extra
 
@@ -498,15 +507,6 @@ func (db *txnDatabase) createWithID(
 	var packer *types.Packer
 	put := db.getEng().packerPool.Get(&packer)
 	defer put.Put()
-	var logicalId uint64 = tbl.tableId
-	// Check if this is an UPDATE operation (ALTER/TRUNCATE) by looking for LogicalIdKey in context
-	// This is checked once and reused later
-	logicalIdFromCtx := ctx.Value(defines.LogicalIdKey{})
-	isUpdate := logicalIdFromCtx != nil && !strings.HasPrefix(name, catalog.IndexTableNamePrefix)
-	if isUpdate {
-		logicalId = logicalIdFromCtx.(uint64)
-	}
-	tbl.logicalId = logicalId
 	var compositePk []byte // Declared here to be accessible in both block 3 and block 5
 	{                      // 3. Write create table batch, update tbl.rowiod
 

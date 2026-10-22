@@ -18,12 +18,18 @@ import (
 	"context"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/clusterservice"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/disttae/cache"
+	"github.com/stretchr/testify/require"
 )
 
 // minimal mock cluster for tn handler wiring
@@ -65,4 +71,39 @@ func Test_requestSnapshotRead_Smoke(t *testing.T) {
 	_ = timestamp.Timestamp{}
 
 	_, _ = RequestSnapshotRead(ctx, tbl, &ts)
+}
+
+func TestCreateTablePublishesLogicalIdentity(t *testing.T) {
+	for _, name := range []string{"v", catalog.IndexTableNamePrefix + "test"} {
+		t.Run(name, func(t *testing.T) {
+			packer := types.NewPacker()
+			t.Cleanup(packer.Close)
+			eng := &Engine{packerPool: fileservice.NewPool(1,
+				func() *types.Packer { return packer },
+				func(p *types.Packer) { p.Reset() },
+				func(*types.Packer) {},
+			)}
+			eng.catalog.Store(cache.NewCatalog())
+			op, txn := newResetTxnForTest(t, eng)
+			t.Cleanup(func() { cleanTxnWritesForTest(txn) })
+			txn.tnStores = []DNStore{{}}
+			// Resolve the logical-ID index through the transaction's existing
+			// catalog relation without starting a SQL executor or a service.
+			catDB := &txnDatabase{op: op, databaseId: catalog.MO_CATALOG_ID, databaseName: catalog.MO_CATALOG}
+			txn.databaseOps.addCreateDatabase(genDatabaseKey(0, catalog.MO_CATALOG), 0, catDB)
+			txn.tableCache.Store(genTableKey(0, catalog.MO_TABLES_LOGICAL_ID_INDEX_TABLE_NAME,
+				catalog.MO_CATALOG_ID, catalog.MO_CATALOG), &txnTableDelegate{origin: &txnTable{db: catDB}})
+			ctx := defines.AttachAccountId(context.Background(), 0)
+			if name != "v" {
+				// Hidden indexes must not inherit a base table's logical identity.
+				ctx = context.WithValue(ctx, defines.LogicalIdKey{}, uint64(77))
+			}
+			db := &txnDatabase{op: op, databaseId: 10, databaseName: "db"}
+			require.NoError(t, db.createWithID(ctx, name, 101, []engine.TableDef{&engine.ViewDef{View: "select 1"}}, false, nil))
+			rel, err := db.Relation(ctx, name, nil)
+			require.NoError(t, err)
+			require.Equal(t, uint64(101), rel.GetTableID(ctx))
+			require.Equal(t, uint64(101), rel.GetTableDef(ctx).GetLogicalId())
+		})
+	}
 }
