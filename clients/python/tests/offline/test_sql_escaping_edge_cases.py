@@ -24,9 +24,25 @@ various edge cases including:
 - Double escaping scenarios
 """
 
-import pytest
 from unittest.mock import Mock
+
+import pytest
+
+from matrixone import AsyncClient, Client
+from matrixone.account import BaseAccountManager
 from matrixone.base_client import BaseMatrixOneClient
+
+
+@pytest.mark.parametrize('client_factory', [Client, AsyncClient])
+def test_client_helpers_escape_mysql_identifiers(client_factory):
+    """Client-side DDL helpers must not let names terminate quoted identifiers."""
+    client = client_factory()
+    account_name = "tenant` ; DROP DATABASE prod; --"
+
+    assert client._escape_identifier(account_name) == "`tenant`` ; DROP DATABASE prod; --`"
+    assert BaseAccountManager(client)._build_drop_account_sql(account_name) == (
+        "DROP ACCOUNT `tenant`` ; DROP DATABASE prod; --`"
+    )
 
 
 class TestSQLEscapingEdgeCases:
