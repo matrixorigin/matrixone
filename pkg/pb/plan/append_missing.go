@@ -94,6 +94,10 @@ func ValidateAppendMissingTable(table *TableDef) error {
 		table.Pkey.CompPkeyCol.Seqnum != state.PkSeqnum {
 		return moerr.NewInternalErrorNoCtx("append missing state: table shape differs")
 	}
+	rowid := table.Cols[next]
+	if rowid == nil || rowid.Name != "__mo_rowid" || !rowid.Hidden || rowid.Seqnum != next || rowid.ColId != uint64(next)+1 {
+		return moerr.NewInternalErrorNoCtx("append missing state: trailing rowid identity differs")
+	}
 	for i, col := range table.Cols[:next] {
 		if col == nil || col.Seqnum != uint32(i) || col.ColId != uint64(i)+1 {
 			return moerr.NewInternalErrorNoCtx("append missing state: table identity differs")
@@ -113,7 +117,7 @@ func ValidateAppendMissingTable(table *TableDef) error {
 // create a birth descriptor; caller admission still validates the source AST.
 func IsLiteralFalseDefault(col *ColDef) bool {
 	if col == nil || col.Typ.Id != AppendMissingBoolOID || col.Typ.NotNullable || col.Default == nil ||
-		!col.Default.NullAbility || col.Default.Expr == nil ||
+		!col.Default.NullAbility || col.Default.Expr == nil || col.Default.Expr.Typ.Id != AppendMissingBoolOID ||
 		!strings.EqualFold(strings.TrimSpace(col.Default.OriginString), "false") {
 		return false
 	}

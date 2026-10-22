@@ -1024,6 +1024,10 @@ func DeepCopyDataDefinition(old *plan.DataDefinition) *plan.DataDefinition {
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: AddFk,
 				}
+			case *plan.AlterTable_Action_AddColumn:
+				AlterTable.Actions[i] = &plan.AlterTable_Action{Action: &plan.AlterTable_Action_AddColumn{
+					AddColumn: proto.Clone(act.AddColumn).(*plan.AlterAddColumn),
+				}}
 			case *plan.AlterTable_Action_AlterAutoIncrement:
 				AlterTable.Actions[i] = &plan.AlterTable_Action{
 					Action: &plan.AlterTable_Action_AlterAutoIncrement{

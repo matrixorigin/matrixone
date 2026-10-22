@@ -203,6 +203,7 @@ func TestM0BirthStateCNDomainNeedsDescriptor(t *testing.T) {
 	activeM0Enabled = true
 	t.Cleanup(func() { activeM0Enabled = saved })
 	table := m0TestAppendTableDef()
+	table.Cols[len(table.Cols)-1].Hidden = true
 	for i, c := range table.Cols {
 		c.ColId = uint64(i + 1)
 	}

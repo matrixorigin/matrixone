@@ -28,7 +28,7 @@ func TestAppendMissingPlanToCatalogExtra(t *testing.T) {
 			{Name: "b", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int32)}},
 			key,
 			{Name: "flag", ColId: 4, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_bool)}, Default: &plan.Default{NullAbility: true}},
-			{Name: "__mo_rowid", ColId: 5, Seqnum: 65535, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+			{Name: "__mo_rowid", ColId: 5, Seqnum: 4, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid)}},
 		}, AppendMissingState: &plan.AppendMissingState{FormatVersion: 1, LayoutId: []byte("0123456789abcdef"),
 			BaseWidth: 3, PkSeqnum: 2, Columns: []*plan.ColumnBirthFill{{Seqnum: 3, BirthAppendOrdinal: 1,
 				Type: plan.Type{Id: int32(types.T_bool)}, Kind: plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1}}}}
@@ -42,6 +42,10 @@ func TestAppendMissingPlanToCatalogExtra(t *testing.T) {
 	_, _, err = PlanDefsToExeDefs(table)
 	require.Error(t, err)
 	table.Version = 1
+	table.Cols[4].Seqnum = 3
+	_, _, err = PlanDefsToExeDefs(table)
+	require.Error(t, err)
+	table.Cols[4].Seqnum = 4
 	table.Cols[3].Typ.Id = int32(types.T_int32)
 	_, _, err = PlanDefsToExeDefs(table)
 	require.Error(t, err)

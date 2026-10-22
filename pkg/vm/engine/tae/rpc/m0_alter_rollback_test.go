@@ -26,6 +26,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
@@ -35,6 +36,14 @@ import (
 )
 
 func TestM0HandleCommitAppliedSchemaRollback(t *testing.T) {
+	runM0HandleCommitAppliedSchemaRollback(t, false)
+}
+
+func TestM0BirthHandleCommitAppliedSchemaRollback(t *testing.T) {
+	runM0HandleCommitAppliedSchemaRollback(t, true)
+}
+
+func runM0HandleCommitAppliedSchemaRollback(t *testing.T, birthFalse bool) {
 	const point = "fj/m0/alter/tn-after-apply"
 	wasEnabled := fault.Status()
 	fault.Enable()
@@ -52,6 +61,7 @@ func TestM0HandleCommitAppliedSchemaRollback(t *testing.T) {
 			h := mockTAEHandle(ctx, t, config.WithLongScanAndCKPOpts(nil))
 			defer h.HandleClose(context.Background())
 			schema := catalog.NewEmptySchema("m0_tn_rollback")
+			schema.Relkind = pkgcatalog.SystemOrdinaryRel
 			require.NoError(t, schema.AppendCol("id", types.T_int32.ToType()))
 			require.NoError(t, schema.AppendCol("tenant", types.T_int32.ToType()))
 			require.NoError(t, schema.AppendPKCol(pkgcatalog.CPrimaryKeyColName, types.T_varchar.ToType(), 0))
@@ -64,6 +74,19 @@ func TestM0HandleCommitAppliedSchemaRollback(t *testing.T) {
 			before := old.Schema(false).(*catalog.Schema).Clone()
 
 			add := api.NewAddColumnReq(databaseID, created.ID(), "added", types.NewProtoType(types.T_int32), -1)
+			if birthFalse {
+				added := add.GetAddColumn()
+				next := before.Extra.NextColSeqnum
+				added.Column.Typ = types.NewProtoType(types.T_bool)
+				added.Column.ColId = uint64(next) + 1
+				added.Column.Seqnum = next
+				added.Column.Default = &plan.Default{NullAbility: true, OriginString: "false", Expr: &plan.Expr{Typ: added.Column.Typ,
+					Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}}}}
+				added.ExpectedSchemaVersion = before.Version
+				added.ExpectedNextColSeqnum = next
+				added.AppendMissingState = &plan.AppendMissingState{FormatVersion: 1, LayoutId: []byte("0123456789abcdef"), BaseWidth: next, PkSeqnum: next - 1,
+					Columns: []*plan.ColumnBirthFill{{Seqnum: next, BirthAppendOrdinal: 1, Type: added.Column.Typ, Kind: plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1}}}
+			}
 			encoded, err := add.Marshal()
 			require.NoError(t, err)
 			bat := batch.NewWithSize(1)
@@ -118,6 +141,9 @@ func TestM0HandleCommitAppliedSchemaRollback(t *testing.T) {
 				rel, openErr := db.GetRelationByID(created.ID())
 				require.NoError(t, openErr)
 				applied := rel.Schema(false).(*catalog.Schema)
+				if birthFalse {
+					require.Equal(t, add.GetAddColumn().AppendMissingState, applied.Extra.AppendMissingState)
+				}
 				require.Equal(t, before.Version+1, applied.Version)
 				require.Equal(t, before.Extra.NextColSeqnum+1, applied.Extra.NextColSeqnum)
 				require.Contains(t, applied.NameMap, "added")
@@ -148,6 +174,7 @@ func TestM0HandleCommitAppliedSchemaRollback(t *testing.T) {
 			require.Equal(t, before.ColDefs, restored.Clone().ColDefs)
 			require.Equal(t, before.NameMap, restored.NameMap)
 			require.Equal(t, before.SeqnumMap, restored.SeqnumMap)
+			require.Equal(t, before.Extra.AppendMissingState, restored.Extra.AppendMissingState)
 			require.NoError(t, freshTxn.Rollback(ctx))
 			_, err = h.HandleCommit(ctx, mock1PCTxn(h.db), nil, request)
 			require.NoError(t, err)
@@ -157,6 +184,13 @@ func TestM0HandleCommitAppliedSchemaRollback(t *testing.T) {
 			require.Equal(t, before.Version+1, final.Version)
 			require.Equal(t, before.Extra.NextColSeqnum+1, final.Extra.NextColSeqnum)
 			require.Contains(t, final.NameMap, "added")
+			if birthFalse {
+				require.Equal(t, add.GetAddColumn().AppendMissingState, final.Extra.AppendMissingState)
+				require.Equal(t, add.GetAddColumn().Column.Default.OriginString, "false")
+				stored, err := types.Encode(add.GetAddColumn().Column.Default)
+				require.NoError(t, err)
+				require.Equal(t, stored, final.ColDefs[3].Default)
+			}
 		})
 	}
 }

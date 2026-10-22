@@ -2206,6 +2206,13 @@ func (tbl *txnTable) AlterTable(ctx context.Context, c *engine.ConstraintDef, re
 		baseDefs = append(baseDefs, engine.PlanColsToExeCols(replaceDef.Def.Cols)...)
 	} else if m0Defs != nil {
 		baseDefs = m0Defs
+		if proposed := m0AddReq.GetAddColumn().AppendMissingState; proposed != nil {
+			// oldExtraInfo owns rollback. Do not mutate the previous catalog
+			// projection while publishing the new descriptor/version.
+			tbl.extraInfo = api.CloneExtra(tbl.extraInfo)
+			tbl.extraInfo.AppendMissingState = plan.CloneAppendMissingState(proposed)
+			tbl.extraInfo.NextColSeqnum = proposed.BaseWidth + uint32(len(proposed.Columns))
+		}
 	} else {
 		baseDefs = append([]engine.TableDef{}, tbl.defs...)
 	}

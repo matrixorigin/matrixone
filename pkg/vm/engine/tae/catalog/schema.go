@@ -246,6 +246,13 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 			return moerr.NewErrTooManyFields(context.Background())
 		}
 		add := req.GetAddColumn()
+		if add == nil || add.Column == nil {
+			return moerr.NewInternalErrorNoCtx("invalid ADD COLUMN request")
+		}
+		birth, err := s.prepareM0BirthAdd(add)
+		if err != nil {
+			return err
+		}
 		logutil.Infof("[Alter] add column %s(%s)@%d", add.Column.Name, types.T(add.Column.Typ.Id), add.InsertPosition)
 		logicalIdx := int(add.InsertPosition)
 		// assume there is a rowid column at the end when alter normal table
@@ -270,6 +277,13 @@ func (s *Schema) ApplyAlterTable(req *apipb.AlterTableReq) error {
 
 		s.Extra.ColumnChanged = true
 		s.Extra.NextColSeqnum += 1
+		if birth != nil {
+			s.Extra.AppendMissingState = birth
+			// This transition owns its version advance so Finalize validates
+			// the new descriptor and columns as one state. TableEntry must not
+			// advance it again after this call.
+			s.Version += 1
+		}
 		return s.Finalize(true) // rebuild sortkey
 	case apipb.AlterKind_DropColumn:
 		drop := req.GetDropColumn()
@@ -1047,7 +1061,9 @@ func (s *Schema) validateAppendMissingColumns() error {
 	}
 	pk := s.GetPrimaryKey()
 	if s.Version != uint32(len(state.Columns)) || s.PhyAddrKey == nil || s.Extra.NextColSeqnum != uint32(len(s.ColDefs)-1) || pk == nil ||
-		!pk.IsCompositeColumn() || !pk.Hidden || uint32(pk.SeqNum) != state.PkSeqnum {
+		!pk.IsCompositeColumn() || !pk.Hidden || uint32(pk.SeqNum) != state.PkSeqnum ||
+		s.PhyAddrKey != s.ColDefs[len(s.ColDefs)-1] || s.PhyAddrKey.Idx != len(s.ColDefs)-1 ||
+		s.PhyAddrKey.SeqNum != objectio.SEQNUM_ROWID || s.PhyAddrKey.Type.Oid != types.T_Rowid {
 		return moerr.NewInternalErrorNoCtx("append missing state: TN table shape differs")
 	}
 	for _, fill := range state.Columns {

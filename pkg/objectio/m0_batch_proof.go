@@ -43,8 +43,12 @@ func NewM0BatchProof(table *plan.TableDef, attrs []string, vecs []*vector.Vector
 	for seq := uint32(0); seq < next; seq++ {
 		pos := offset + int(seq)
 		col := table.Cols[seq]
-		if attrs[pos] != col.Name || vecs[pos] == nil || *vecs[pos].GetType() != vector.ProtoTypeToType(col.Typ) {
-			return M0BatchProof{}, ErrMissingColumnWithoutProof
+		if attrs[pos] != col.Name || vecs[pos] == nil {
+			return M0BatchProof{}, wrapM0Error(ErrMissingColumnWithoutProof, "memory prefix seqnum=%d attr=%q expected=%q missing-vector=%t", seq, attrs[pos], col.Name, vecs[pos] == nil)
+		}
+		expected := vector.ProtoTypeToType(col.Typ)
+		if *vecs[pos].GetType() != expected {
+			return M0BatchProof{}, wrapM0Error(ErrMissingColumnWithoutProof, "memory prefix seqnum=%d type=%#v expected=%#v", seq, *vecs[pos].GetType(), expected)
 		}
 	}
 	return M0BatchProof{written: next, relationID: table.TblId, version: table.Version, birth: plan.CloneAppendMissingState(state)}, nil

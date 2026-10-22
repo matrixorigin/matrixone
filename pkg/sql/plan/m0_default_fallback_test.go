@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/golang/mock/gomock"
+	"github.com/matrixorigin/matrixone/pkg/container/types"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
@@ -65,6 +66,7 @@ func TestM0DefaultCopyAdmission(t *testing.T) {
 
 func TestAppendMissingPlanDeepCopy(t *testing.T) {
 	source := m0TestPlanTable()
+	source.Cols[len(source.Cols)-1].Seqnum = uint32(len(source.Cols) - 1)
 	source.AppendMissingState = &plan.AppendMissingState{FormatVersion: 1, LayoutId: []byte("0123456789abcdef"),
 		BaseWidth: 7, PkSeqnum: 6, Columns: []*plan.ColumnBirthFill{{Seqnum: 7, BirthAppendOrdinal: 1,
 			Type: source.Cols[7].Typ, Kind: plan.MissingFillKind_MISSING_FILL_NULL_V1}}}
@@ -74,4 +76,17 @@ func TestAppendMissingPlanDeepCopy(t *testing.T) {
 	clone.AppendMissingState.Columns[0].Type.Width++
 	require.Equal(t, byte('0'), source.AppendMissingState.LayoutId[0])
 	require.Equal(t, source.Cols[7].Typ.Width, source.AppendMissingState.Columns[0].Type.Width)
+}
+
+func TestAppendMissingAddActionDeepCopy(t *testing.T) {
+	typ := plan.Type{Id: int32(types.T_bool)}
+	original := &plan.AlterAddColumn{Name: "flag", Type: typ, Pos: -1, Default: &plan.Default{NullAbility: true, OriginString: "false",
+		Expr: &plan.Expr{Typ: typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}}}}}
+	source := &plan.DataDefinition{DdlType: plan.DataDefinition_ALTER_TABLE, Definition: &plan.DataDefinition_AlterTable{AlterTable: &plan.AlterTable{
+		Actions: []*plan.AlterTable_Action{{Action: &plan.AlterTable_Action_AddColumn{AddColumn: original}}},
+	}}}
+	copied := DeepCopyDataDefinition(source).GetAlterTable().Actions[0].GetAddColumn()
+	require.Equal(t, original, copied)
+	copied.Default.Expr.GetLit().Value = &plan.Literal_Bval{Bval: true}
+	require.True(t, plan.IsLiteralFalseDefault(&plan.ColDef{Typ: typ, Default: original.Default}))
 }

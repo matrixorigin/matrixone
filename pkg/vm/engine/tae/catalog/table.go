@@ -983,8 +983,11 @@ func (entry *TableEntry) AlterTable(ctx context.Context, txn txnif.TxnReader, re
 	if err = newSchema.ApplyAlterTable(req); err != nil {
 		return
 	}
-	if isNewNode {
+	if isNewNode && (req.Kind != apipb.AlterKind_AddColumn || req.GetAddColumn().AppendMissingState == nil) {
 		node.BaseNode.Schema.Version += 1
+	}
+	if err = newSchema.validateAppendMissingColumns(); err != nil {
+		return
 	}
 	return
 }

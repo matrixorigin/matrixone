@@ -7504,9 +7504,10 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 			alterTable.Actions[i] = &plan.AlterTable_Action{
 				Action: &plan.AlterTable_Action_AddColumn{
 					AddColumn: &plan.AlterAddColumn{
-						Name: newCol.Name,
-						Type: newCol.Typ,
-						Pos:  -1,
+						Name:    newCol.Name,
+						Type:    newCol.Typ,
+						Pos:     -1,
+						Default: DeepCopyDefault(newCol.Default),
 					},
 				},
 			}

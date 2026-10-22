@@ -18,6 +18,7 @@ package disttae
 
 import (
 	"context"
+	"crypto/rand"
 	"strings"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -161,10 +162,11 @@ func buildM0CNAddColumn(
 	if add.Column.Typ.Id == int32(types.T_enum) || len(add.Column.Typ.Enumvalues) > 0 {
 		return nil, moerr.NewInternalErrorNoCtxf("M0: ENUM and SET appended columns are outside the append domain")
 	}
-	if add.Column.Default.Expr != nil {
+	falseFill := plan.IsLiteralFalseDefault(add.Column)
+	if !falseFill && add.Column.Default.Expr != nil {
 		lit := add.Column.Default.Expr.GetLit()
-		if lit == nil || !lit.GetIsnull() {
-			return nil, moerr.NewInternalErrorNoCtxf("M0: non-NULL default requires backfill")
+		if lit == nil || !lit.Isnull {
+			return nil, moerr.NewInternalErrorNoCtx("M0: non-NULL default requires backfill")
 		}
 	}
 
@@ -198,10 +200,27 @@ func buildM0CNAddColumn(
 			OriginString: "",
 		},
 	}
+	if table.AppendMissingState != nil && !falseFill {
+		return nil, moerr.NewInternalErrorNoCtx("M0: this append history requires COPY exit for the requested column")
+	}
+	if falseFill {
+		newCol.Default = plan2.DeepCopyDefault(add.Column.Default)
+	}
+	// Keep the private rowid definition consistent before proving the new plan.
+	rowid := afterDef.Cols[len(afterDef.Cols)-1]
+	rowid.ColId = uint64(next) + 2
+	rowid.Seqnum = next + 1
 	afterDef.Cols = append(afterDef.Cols[:len(afterDef.Cols)-1],
 		append([]*plan.ColDef{newCol}, afterDef.Cols[len(afterDef.Cols)-1:]...)...)
 	afterDef.Name2ColIndex[newCol.Name] = int32(len(afterDef.Cols) - 2)
 	afterDef.Version++
+	if falseFill {
+		proposed, err := proposeM0BirthState(table, newCol)
+		if err != nil {
+			return nil, err
+		}
+		afterDef.AppendMissingState = proposed
+	}
 	after, err := catalog.M0AppendLayoutFromPlan(afterDef, next+1)
 	if err != nil {
 		return nil, err
@@ -235,6 +254,12 @@ func buildM0CNAddColumn(
 		false,
 	); err != nil {
 		return nil, err
+	}
+	if falseFill {
+		add.Column = newCol
+		add.AppendMissingState = plan.CloneAppendMissingState(afterDef.AppendMissingState)
+		add.ExpectedSchemaVersion = table.Version
+		add.ExpectedNextColSeqnum = next
 	}
 	logutil.Info("M0_ADMIT_ADD_COLUMN",
 		zap.String("table", table.Name),
@@ -274,4 +299,28 @@ func m0AppendCNDefs(oldDefs []engine.TableDef, newCol *plan.ColDef) ([]engine.Ta
 		return nil, moerr.NewInternalErrorNoCtxf("M0: rowid boundary is missing")
 	}
 	return defs, nil
+}
+
+func proposeM0BirthState(table *plan.TableDef, added *plan.ColDef) (*plan.AppendMissingState, error) {
+	base := table.Pkey.CompPkeyCol.Seqnum + 1
+	next := uint32(len(table.Cols) - 1)
+	state := plan.CloneAppendMissingState(table.AppendMissingState)
+	if state == nil {
+		state = &plan.AppendMissingState{FormatVersion: plan.AppendMissingFormatV1, LayoutId: make([]byte, 16), BaseWidth: base, PkSeqnum: base - 1}
+		if _, err := rand.Read(state.LayoutId); err != nil {
+			return nil, err
+		}
+		for seq := base; seq < next; seq++ {
+			state.Columns = append(state.Columns, &plan.ColumnBirthFill{Seqnum: seq, BirthAppendOrdinal: seq - base + 1, Type: table.Cols[seq].Typ, Kind: plan.MissingFillKind_MISSING_FILL_NULL_V1})
+		}
+	}
+	state.Columns = append(state.Columns, &plan.ColumnBirthFill{Seqnum: next, BirthAppendOrdinal: next - base + 1, Type: added.Typ, Kind: plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1})
+	existing := make([]plan.Type, next)
+	for i := range existing {
+		existing[i] = table.Cols[i].Typ
+	}
+	if err := plan.ValidateAppendMissingExtension(table.AppendMissingState, state, base, table.Version, existing, added); err != nil {
+		return nil, err
+	}
+	return state, nil
 }

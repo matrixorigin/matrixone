@@ -1651,9 +1651,11 @@ func (s *Scope) alterTableInplace(c *Compile, cleanup *alterAutoIncrementResetCl
 			if add == nil {
 				return moerr.NewInternalErrorNoCtx("invalid ADD COLUMN action")
 			}
-			reqs = append(reqs, api.NewAddColumnReq(
-				did, tid, add.Name, add.Type, add.Pos,
-			))
+			req := api.NewAddColumnReq(did, tid, add.Name, add.Type, add.Pos)
+			if add.Default != nil {
+				req.GetAddColumn().Column.Default = plan2.DeepCopyDefault(add.Default)
+			}
+			reqs = append(reqs, req)
 		case *plan.AlterTable_Action_AlterAutoIncrement:
 			targetTableDef := qry.GetCopyTableDef()
 			if targetTableDef == nil {

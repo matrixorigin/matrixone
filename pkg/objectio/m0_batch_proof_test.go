@@ -33,14 +33,14 @@ func batchProofTable() *plan.TableDef {
 			{Name: "b", ColId: 2, Seqnum: 1, Typ: plan.Type{Id: int32(types.T_int32)}}, key,
 			{Name: "flag", ColId: 4, Seqnum: 3, Typ: plan.Type{Id: int32(types.T_bool)}, Default: &plan.Default{NullAbility: true}},
 			{Name: "nullable", ColId: 5, Seqnum: 4, Typ: plan.Type{Id: int32(types.T_bool)}, Default: &plan.Default{NullAbility: true}},
-			{Name: "__mo_rowid", ColId: 6, Seqnum: 5, Typ: plan.Type{Id: int32(types.T_Rowid)}},
+			{Name: "__mo_rowid", ColId: 6, Seqnum: 5, Hidden: true, Typ: plan.Type{Id: int32(types.T_Rowid)}},
 		}}
 }
 
 func TestM0BatchProofRequiresCapturedCompletePrefix(t *testing.T) {
 	table := batchProofTable()
 	attrs := []string{"__mo_rowid", "commit_ts", "a", "b", "__mo_cpkey_col"}
-	vecs := []*vector.Vector{nil, nil, vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_varchar.ToType())}
+	vecs := []*vector.Vector{nil, nil, vector.NewVec(types.T_int32.ToType()), vector.NewVec(types.T_int32.ToType()), vector.NewVec(vector.ProtoTypeToType(table.Cols[2].Typ))}
 	mp := mpool.MustNewZero()
 	defer func() { require.Zero(t, mp.CurrNB()); mpool.DeleteMPool(mp) }()
 	proof, err := NewM0BatchProof(table, attrs, vecs, 0, 3, 2)
