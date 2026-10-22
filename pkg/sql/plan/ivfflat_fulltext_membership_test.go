@@ -74,6 +74,7 @@ func TestIvfPreFulltextMembershipSearchesOnce(t *testing.T) {
 		fulltext2 bool
 		query     string
 		searches  int
+		exactSort bool
 	}{
 		{name: "filter only", query: "select id from docs where match(body) against('needle')", searches: 1},
 		{name: "fulltext2", fulltext2: true, query: "select id from docs where match(body) against('needle')", searches: 1},
@@ -85,7 +86,7 @@ func TestIvfPreFulltextMembershipSearchesOnce(t *testing.T) {
 		{name: "projected score", query: "select id, match(body) against('needle') from docs where match(body) against('needle')", searches: 2},
 		{name: "wrapped projected score", query: "select id, round(match(body) against('needle'), 3) from docs where match(body) against('needle')", searches: 2},
 		{name: "projected body", query: "select id, body from docs where match(body) against('needle')", searches: 1},
-		{name: "volatile conjunct", query: "select id from docs where match(body) against('needle') and match(body) against('needle') > rand()", searches: 2},
+		{name: "volatile conjunct", query: "select id from docs where match(body) against('needle') and match(body) against('needle') > rand()", exactSort: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -93,6 +94,12 @@ func TestIvfPreFulltextMembershipSearchesOnce(t *testing.T) {
 			query := test.query + " order by l2_distance(v,'[0,0]') limit 7 by rank with option 'mode=pre'"
 			qry := buildIvfFulltextMembershipTestPlan(t, ctx, query, false)
 			fulltext, vector, membership := countIvfFulltextSearches(qry)
+			if test.exactSort {
+				// A volatile filter cannot run in both PRE scans.
+				require.Zero(t, vector)
+				require.Zero(t, membership)
+				return
+			}
 			require.Equal(t, 1, vector)
 			require.Positive(t, membership, "PRE must retain exact membership, independently of its runtime filter")
 			require.Equal(t, test.searches, fulltext, "PRE must not repeat a filter-only MATCH on row fetch")

@@ -49,9 +49,9 @@ func (r *collectChangesProbeRelation) CollectChanges(
 }
 
 // TestCollectChangesForwardsCallerPolicy proves the shared wrapper adds no read
-// policy of its own: it forwards the caller's context, so only the iteration
-// that owns the durable job state can opt a range into keeping trailing deletes
-// (#28847). An unconditional opt-in here would also apply to the mo_iscp_log
+// policy of its own: it forwards the caller's context, so the iteration
+// that owns the job type can opt index ranges into keeping trailing deletes.
+// An unconditional opt-in here would also apply to the mo_iscp_log
 // self-scan in applyISCPLogWithRel, which maintains no copied index at all.
 func TestCollectChangesForwardsCallerPolicy(t *testing.T) {
 	from, to := types.BuildTS(1, 0), types.BuildTS(2, 0)
@@ -74,13 +74,10 @@ func TestCollectChangesForwardsCallerPolicy(t *testing.T) {
 	require.True(t, optedIn.gotPreserveAll, "and every other caller option survives")
 }
 
-// TestCollectChangesCtxForJobs pins the opt-in window for #28847: only a job
-// generation seeded by InitSQL whose materialized state may still predate the
-// range start keeps the trailing DELETE of an insert-then-delete key. Seeding
-// happens once (RestoreTable / CREATE TABLE ... CLONE / DATA BRANCH copy an
-// already-built index and re-arm CDC at the DDL transaction's PRE-commit
-// snapshot TS), so every later range coalesces exactly as before and no consumer
-// accumulates extra durable deletes.
+// TestCollectChangesCtxForJobs pins the index policy: every index range keeps
+// the trailing DELETE of an insert-then-delete key, including an inline-built
+// generation without InitSQL and its later ranges. Non-index seeded jobs keep
+// their bounded recovery window.
 //
 // The committed column is the durable mo_iscp_log.watermark. It is the only
 // progress the sink transaction itself writes, so a range the executor merely
@@ -89,6 +86,9 @@ func TestCollectChangesForwardsCallerPolicy(t *testing.T) {
 func TestCollectChangesCtxForJobs(t *testing.T) {
 	seeded := &JobSpec{ConsumerInfo: ConsumerInfo{InitSQL: "U0VMRUNUIDE="}}
 	built := &JobSpec{ConsumerInfo: ConsumerInfo{InitSQL: ""}}
+	seededNonIndex := &JobSpec{ConsumerInfo: ConsumerInfo{
+		ConsumerType: int8(ConsumerType_CNConsumer), InitSQL: "U0VMRUNUIDE=",
+	}}
 	seedWatermark := types.BuildTS(5, 0)
 	selected := types.BuildTS(10, 0)
 	rangeEnd := types.BuildTS(30, 0)
@@ -132,19 +132,14 @@ func TestCollectChangesCtxForJobs(t *testing.T) {
 			want:      true,
 		},
 		{
-			// Steady state: the sink transaction advanced the watermark to the
-			// range end, so the consumer state matches the next range start and
-			// insert-then-delete churn cancels out. This is the bound the
-			// append-only cuVS sinks rely on: their cdc_tail retains every
-			// distinct deleted pk while CuvsUpdatable counts inserts and upserts
-			// only.
+			// Index jobs keep the last DELETE even after a successful range.
 			name:     "seeded generation after its first committed range",
 			jobSpecs: []*JobSpec{seeded},
 			prevStatus: []*JobStatus{{
 				Stage: JobStage_Running, From: seedWatermark, To: selected,
 			}},
 			committed: []types.TS{selected},
-			want:      false,
+			want:      true,
 		},
 		{
 			// A maintenance watermark flush advances the column without replacing
@@ -155,7 +150,7 @@ func TestCollectChangesCtxForJobs(t *testing.T) {
 				Stage: JobStage_Running, From: seedWatermark, To: selected,
 			}},
 			committed: []types.TS{rangeEnd},
-			want:      false,
+			want:      true,
 		},
 		{
 			// A failed attempt may have been applied only partially, so its range
@@ -183,13 +178,13 @@ func TestCollectChangesCtxForJobs(t *testing.T) {
 			want:      true,
 		},
 		{
-			// An inline-built index (fulltext2 CREATE INDEX) has no InitSQL: its
-			// base is built at the very snapshot its CDC is armed from.
+			// COPY ALTER builds the base inline but arms CDC without InitSQL.
+			// Its first range can overlap the copied rows and their deletion.
 			name:       "inline-built generation before its first range",
 			jobSpecs:   []*JobSpec{built},
 			prevStatus: []*JobStatus{{Stage: JobStage_Running}},
 			committed:  []types.TS{seedWatermark},
-			want:       false,
+			want:       true,
 		},
 		{
 			name:     "inline-built generation retrying a failed range",
@@ -198,13 +193,38 @@ func TestCollectChangesCtxForJobs(t *testing.T) {
 				To: selected, ErrorCode: 20601,
 			}},
 			committed: []types.TS{seedWatermark},
+			want:      true,
+		},
+		{
+			name:     "inline-built generation after its first committed range",
+			jobSpecs: []*JobSpec{built},
+			prevStatus: []*JobStatus{{
+				Stage: JobStage_Running, From: seedWatermark, To: selected,
+			}},
+			committed: []types.TS{selected},
+			want:      true,
+		},
+		{
+			name:       "non-index seeded generation before its first range",
+			jobSpecs:   []*JobSpec{seededNonIndex},
+			prevStatus: []*JobStatus{{Stage: JobStage_Running}},
+			committed:  []types.TS{seedWatermark},
+			want:       true,
+		},
+		{
+			name:     "non-index seeded generation after committed range",
+			jobSpecs: []*JobSpec{seededNonIndex},
+			prevStatus: []*JobStatus{{
+				Stage: JobStage_Running, From: seedWatermark, To: selected,
+			}},
+			committed: []types.TS{selected},
 			want:      false,
 		},
 		{
-			// One shared range feeds every job of the iteration, so a single
-			// lagging member opts the whole read in.
-			name:       "shared iteration with one lagging seeded member",
-			jobSpecs:   []*JobSpec{built, seeded},
+			// One shared range feeds every job of the iteration, so its index
+			// member opts the whole read in even after the other job settles.
+			name:       "shared iteration with an index member",
+			jobSpecs:   []*JobSpec{seededNonIndex, built},
 			prevStatus: []*JobStatus{{To: selected}, {Stage: JobStage_Running}},
 			committed:  []types.TS{selected, seedWatermark},
 			want:       true,
@@ -246,11 +266,12 @@ func TestSeedWindowAcrossAbandonedRunningRow(t *testing.T) {
 		ExecWithResult = oldExecWithResult
 	}()
 
-	const jobName = "index_copied_ft2"
+	const jobName = "seeded_non_index"
 	const jobID = uint64(7)
 
 	specJSON, err := MarshalJobSpec(&JobSpec{ConsumerInfo: ConsumerInfo{
-		IndexName: "copied_ft2",
+		ConsumerType: int8(ConsumerType_CNConsumer),
+		IndexName:    "seeded_consumer",
 		// registerJob persists InitSQL base64-encoded, so the durable row and
 		// everything decoded from it carries this form.
 		InitSQL: base64.StdEncoding.EncodeToString([]byte("SELECT 1")),
@@ -304,9 +325,9 @@ func TestSeedWindowAcrossAbandonedRunningRow(t *testing.T) {
 	require.True(t, keepTrailingDeletes(from),
 		"a range that was selected but never consumed must keep delivering the tombstone")
 
-	// The sink transaction's UpdateWatermark is the commit boundary.
+	// The sink transaction's UpdateWatermark closes the non-index seed window.
 	require.False(t, keepTrailingDeletes(to),
-		"a committed range must coalesce again so no sink accumulates durable deletes")
+		"a committed non-index range can coalesce insert-then-delete again")
 }
 
 // TestCollectChangesCtxForJobsKeepsCallerContext proves the opt-in chains onto
@@ -326,8 +347,9 @@ func TestCollectChangesCtxForJobsKeepsCallerContext(t *testing.T) {
 	require.True(t, engine.CollectChangesPreserveAllVersionsFromContext(got))
 	require.Equal(t, "iteration", got.Value(ctxKey{}))
 
-	// A steady-state generation returns the caller's context untouched.
+	// A steady-state non-index generation returns the caller's context untouched.
 	settled := []*JobStatus{{Stage: JobStage_Running, From: seedWatermark, To: types.BuildTS(10, 0)}}
+	seeded[0].ConsumerInfo.ConsumerType = int8(ConsumerType_CNConsumer)
 	require.Equal(t, parent, collectChangesCtxForJobs(
 		parent, seeded, settled, []types.TS{types.BuildTS(10, 0)}))
 }

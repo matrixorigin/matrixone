@@ -37,6 +37,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/geo"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/external"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
@@ -1036,6 +1037,29 @@ func Test_vectorValueToJSON(t *testing.T) {
 			val, err := vectorValueToJSON(vec, 0, nil, nil)
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(val, convey.ShouldEqual, "hello world")
+		})
+
+		// #30635: binary types export wrapped as {"$binary":"<base64>"} so the
+		// jsonline loader can distinguish encoded payloads from plain text.
+		convey.Convey("binary type wraps base64", func() {
+			vec := testutil.NewVector(1, types.T_binary.ToType(), mp, false, []string{"\x00\xff"})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldResemble, map[string]any{external.JsonBinaryKey: "AP8="})
+		})
+
+		convey.Convey("varbinary type wraps bytes equal to the null sentinel", func() {
+			vec := testutil.NewVector(1, types.T_varbinary.ToType(), mp, false, []string{"\\N"})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldResemble, map[string]any{external.JsonBinaryKey: "XE4="})
+		})
+
+		convey.Convey("blob empty value wraps empty base64", func() {
+			vec := testutil.NewVector(1, types.T_blob.ToType(), mp, false, []string{""})
+			val, err := vectorValueToJSON(vec, 0, nil, nil)
+			convey.So(err, convey.ShouldBeNil)
+			convey.So(val, convey.ShouldResemble, map[string]any{external.JsonBinaryKey: ""})
 		})
 
 		// Test date type
