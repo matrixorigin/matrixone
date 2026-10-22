@@ -133,14 +133,20 @@ func (b *HavingBinder) BindExpr(astExpr tree.Expr, depth int32, isRoot bool) (*p
 	return b.baseBindExpr(astExpr, depth, isRoot)
 }
 
+func (b *HavingBinder) resolvesAggregateAliases() bool {
+	return b.ctx.aggregateQueryForFullGroupBy() &&
+		(b.builder.mysqlFullGroupByCompat || b.builder.mysqlCompatible)
+}
+
 func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isRoot bool) (*plan.Expr, error) {
-	if !b.insideAgg && !b.bindingProjectedAlias && b.builder.mysqlFullGroupByCompat &&
-		b.ctx != nil && !b.ctx.aggregateQueryForFullGroupBy() && !astExpr.Star {
+	aggregateQuery := b.ctx.aggregateQueryForFullGroupBy()
+	if !b.insideAgg && !b.bindingProjectedAlias && b.ctx != nil && !astExpr.Star &&
+		(b.resolvesAggregateAliases() || b.builder.mysqlFullGroupByCompat && !aggregateQuery) {
 		var projected tree.Expr
 		var found, ambiguous bool
 		if astExpr.NumParts == 1 {
 			projected, found, ambiguous = b.ctx.havingOutputExpr(astExpr.ColName())
-			if !found && !ambiguous {
+			if !found && !ambiguous && !aggregateQuery {
 				// MySQL also keeps the unqualified source spelling visible when
 				// the source column is directly projected under a different alias
 				// (for example SELECT a AS x ... HAVING a). Resolve this only after
@@ -148,7 +154,7 @@ func (b *HavingBinder) BindColRef(astExpr *tree.UnresolvedName, depth int32, isR
 				// output names remain ambiguous.
 				projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
 			}
-		} else {
+		} else if !aggregateQuery {
 			projected, found, ambiguous = b.ctx.havingProjectedColumnExpr(astExpr)
 		}
 		if ambiguous {
