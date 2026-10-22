@@ -1032,6 +1032,9 @@ func (r *reader) read(
 	policy := fileservice.GetFileServicePolicy(ctx)
 
 	if r.readBlockCnt > r.threshHold {
+		perfcounter.Update(statsCtx, func(c *perfcounter.CounterSet) {
+			c.FileService.ReaderCacheWriteBypassBlocks.Add(1)
+		})
 		policy |= fileservice.SkipMemoryCacheWrites
 	}
 	r.readBlockCnt++
