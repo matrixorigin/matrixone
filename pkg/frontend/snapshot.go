@@ -2222,7 +2222,7 @@ func restoreMaterializedViewDependencies(stmts []tree.Statement, defaultDB strin
 		case *tree.Select:
 			if s.With != nil {
 				for _, cte := range s.With.CTEs {
-					if nested, ok := cte.Stmt.(*tree.Select); ok {
+					if nested, ok := cte.Stmt.(tree.SelectStatement); ok {
 						walkSelect(nested)
 					}
 				}
