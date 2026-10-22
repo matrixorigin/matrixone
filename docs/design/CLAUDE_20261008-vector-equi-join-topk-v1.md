@@ -1,7 +1,7 @@
 # 普通等值 INNER JOIN 的向量 Top-K 索引支持：设计 v1
 
 - 所属 issue：#29702。
-- 状态：v1 已获用户批准；2026-10-09 用户批准 v1.1 方案 A，完整成本比较不再作为首版门禁。批准记录见第 9 节及配套 v1.1 文档。
+- 状态：v1 已获用户批准；2026-10-09 用户批准 v1.1 方案 A，完整成本比较不再作为首版门禁。批准记录见第 9 节。
 - 日期：2026-10-08。
 - 基线：`mo/main`，`ffcce7ecbab771d78edf8415db32880b133cce71`。
 - 实现 PR：尚未创建。
@@ -183,4 +183,22 @@ membership producer 保留与原 JOIN 等价的资格条件，只发布 A 的主
 - 批准记录：用户在 review 本设计后回复 `go ahead`，批准实现 v1。批准前完整文档 SHA256：`062cda7b7acc5e56763bd4588912d78e4624a5cb8d65de41bfaf8040786cb2ba`。
 - 2026-10-08 当前基线公开 planner 红例已确认：唯一键/重复键两组都未出现 Vector Index Scan；相同 TestEquiVectorTopKPublicPlan 将用于绿例。Go 1.27.1，CGo wrapper，退出码 1，仅测试代码新增，未改变生产代码。
 - 2026-10-08 实现核验：核心原型、owning packages、生命周期/race、两轮正常 BVT 及 1536 维实际 SQL 通过；当时因第 4.3 节的完整成本承诺未满足而暂停。
-- 2026-10-09 用户在明确“正确性检查通过且索引可用就优先走 vector index，成本模型以后再做”后回复 `go ahead`，批准 `CLAUDE_20261008-vector-equi-join-topk-v1-1-review.md` 方案 A。已关闭成本门禁；合并最新 mo/main 并继续最终验证，未授权本次自动 push/PR。
+- 2026-10-09 用户在明确“正确性检查通过且索引可用就优先走 vector index，成本模型以后再做”后回复 `go ahead`，批准第 4.3 节的方案 A。已关闭成本门禁；合并最新 mo/main 并继续最终验证，未授权本次自动 push/PR。
+
+## 历史依据与验证边界
+
+[原 v1.1 决定](https://github.com/matrixorigin/matrixone/blob/6cbe375b49696021d72778baa292a66287f080bd/docs/design/CLAUDE_20261008-vector-equi-join-topk-v1-1-review.md)
+记录方案 A 的批准，以及未采用的完整成本选择方案 B。当前
+`BuildLogicalSearch` / `Plan.ApplyForSort` 复用既有 IVF owner；scan 的
+`Stats.Cost` 不能证明完整 JOIN 路径更便宜。首版不新增成本选择器。
+
+索引列必须可证明非 NULL；查询向量须可折叠为非 NULL 常量。无法证明的
+动态参数、变量及 NULL 向量沿旧路径，不把 NULL 排序改成空 ANN 结果。
+已有固定向量 PREPARE 重执行不证明任意动态向量参数均命中索引。
+INNER JOIN 的 bag multiplicity、资格 SEMI 的复制与重绑定、K+OFFSET 证明、
+required-membership 发布、最终分页以及保守 one-CN 边界继续有效。
+
+2026-10-09 基于 `aee2a0b3764781a8ca908618548dfef75e336263` 的
+planner/compile UT、静态检查、两 CN 两入口及两轮 BVT 各 65/65 是历史证据。
+第 9 节的 1536 维验证也限于原修订；本次合并文档没有重新执行这些检查，
+不据此声称当前版本通过或承诺加速。
