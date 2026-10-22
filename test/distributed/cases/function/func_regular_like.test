@@ -114,12 +114,21 @@ CREATE TABLE t_regexp_match_type (
 INSERT INTO t_regexp_match_type VALUES
     (1, 'Abc', 'abc', 'X', 'i'),
     (2, 'Abc', 'abc', 'X', 'c'),
-    (3, 'abc', 'abc', 'X', 'u');
+    (3, 'abc', 'abc', 'X', 'u'),
+    (4, CONCAT('a', CHAR(13), 'b'), '^b', 'X', 'm'),
+    (5, CONCAT('a', CHAR(13), 'b'), '^b', 'X', 'mu');
 SELECT id,
        REGEXP_LIKE(s, p, mt) AS is_match,
        REGEXP_INSTR(s, p, 1, 1, 0, mt) AS start_pos,
        REGEXP_SUBSTR(s, p, 1, 1, mt) AS substr_value,
-       REGEXP_REPLACE(s, p, r, 1, 0, mt) AS replaced
+       HEX(REGEXP_REPLACE(s, p, r, 1, 0, mt)) AS replaced_hex
 FROM t_regexp_match_type
 ORDER BY id;
 DROP TABLE t_regexp_match_type;
+
+# Anchors inside classes and disabled inline scopes keep their meaning.
+SELECT REGEXP_LIKE('$', '[[:alpha:]^$]', 'm') AS posix_literal,
+       REGEXP_LIKE('a', '[^]$]', 'm') AS negated_class,
+       REGEXP_LIKE(CAST(CONCAT('a', CHAR(13), 'b') AS CHAR), '(?-m:^b)', 'm') AS scoped_off;
+SELECT REGEXP_LIKE(X'618562', _binary '^b', 'm') AS binary_nel,
+       REGEXP_LIKE(X'618562', _binary '^b', 'mu') AS binary_unix;

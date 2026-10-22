@@ -551,6 +551,12 @@ func isRegexpPatternWhitespace(ch byte) bool {
 // consumed together so forms such as (?ix:...) do not make a comment scanner
 // lose synchronization. enabled is the x state after applying the header.
 func regexpInlineFreeSpacing(pattern string, start int, current bool) (end int, enabled, scoped, ok bool) {
+	return regexpInlineOption(pattern, start, current, 'x')
+}
+
+// regexpInlineOption reads one flag's state while consuming the complete
+// existing inline-option grammar. Other flags must not split the header.
+func regexpInlineOption(pattern string, start int, current bool, option byte) (end int, enabled, scoped, ok bool) {
 	if start+2 >= len(pattern) || pattern[start] != '(' || pattern[start+1] != '?' {
 		return 0, false, false, false
 	}
@@ -569,10 +575,10 @@ func regexpInlineFreeSpacing(pattern string, start int, current bool) (end int, 
 			off = true
 		case '+':
 			off = false
-		case 'x', 'X':
-			enabled = !off
-			seenOption = true
-		case 'c', 'C', 'd', 'D', 'e', 'E', 'i', 'I', 'm', 'M', 'n', 'N', 's', 'S', 'u', 'U':
+		case 'c', 'C', 'd', 'D', 'e', 'E', 'i', 'I', 'm', 'M', 'n', 'N', 's', 'S', 'u', 'U', 'x', 'X':
+			if pattern[i] == option || pattern[i] == option-('a'-'A') {
+				enabled = !off
+			}
 			seenOption = true
 		default:
 			return 0, false, false, false

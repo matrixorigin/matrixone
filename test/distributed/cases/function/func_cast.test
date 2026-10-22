@@ -112,6 +112,16 @@ execute cast_range_decimal using @cast_range_value;
 show warnings;
 select @@warning_count;
 deallocate prepare cast_range_decimal;
+# Lexically invalid explicit integer casts return zero and own one warning.
+select cast('abc' as signed) as lexical_signed;
+show warnings;
+select @@warning_count;
+select cast('abc' as unsigned) as lexical_unsigned;
+show warnings;
+select @@warning_count;
+select cast(NULL as signed) as lexical_null;
+show warnings;
+select @@warning_count;
 set session sql_mode = @cast_range_saved_sql_mode;
 
 # String numeric cast with sign and radix prefixes.
