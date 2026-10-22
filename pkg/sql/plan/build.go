@@ -24,6 +24,7 @@ import (
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
+	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
@@ -32,6 +33,22 @@ import (
 
 func bindAndOptimizeSelectQuery(stmtType plan.Query_StatementType, ctx CompilerContext, stmt *tree.Select, isPrepareStmt bool, skipStats bool) (*Plan, error) {
 	return bindAndOptimizeSelectQueryWithValidator(stmtType, ctx, stmt, isPrepareStmt, skipStats, nil)
+}
+
+// isPublicationScopeProbeSelect reports whether the statement is the
+// publication binding probe itself: a top-level SELECT with a literal LIMIT 0.
+// This is the same subscription-scope probe the frontend generates and
+// dispatches bind-only under the defines.PublicationViewBinding marker, and it
+// is the only front-end statement of that shape. Catalogue reads the planner
+// nests while binding the probe (which also execute under the marker) carry no
+// top-level LIMIT 0 and must keep the ordinary optimized build and the
+// execution pipeline after it.
+func isPublicationScopeProbeSelect(stmt *tree.Select) bool {
+	if stmt.Limit == nil || stmt.Limit.Count == nil {
+		return false
+	}
+	count, ok := stmt.Limit.Count.(*tree.NumVal)
+	return ok && count.String() == "0"
 }
 
 func bindAndOptimizeSelectQueryWithValidator(
@@ -104,6 +121,33 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 		if err = validate(builder.qry); err != nil {
 			return nil, err
 		}
+	}
+	if defines.IsPublicationViewBinding(ctx.GetContext()) && isPublicationScopeProbeSelect(stmt) {
+		// Publication scope validation (#27767) stops at the metadata
+		// boundary: the bound tree already proves every published relation,
+		// column and function of the stored definitions binds against the
+		// validating transaction. Everything after binding is the optimizer
+		// proper - createQuery's rewrites fold and eagerly evaluate constant
+		// expressions (foldTableScanFilters runs ConstantFold on WHERE
+		// predicates, pushdownLimitToTableScan and pruneColumns expect folded
+		// constants), so a side-effect function of a published view, such as
+		// enable_fault_injection(), could execute during validation. The
+		// subscriber's own query compiles through createQuery as usual; the
+		// probe discards its plan and reads only the binding result, so the
+		// bound query is returned without running any rewrite.
+		//
+		// Only the probe statement takes this branch. The catalogue reads the
+		// planner nests while binding it (the mo_columns identity read of the
+		// LIMIT 0 shortcut among them) also execute under the marker, but they
+		// must compile, run and stream rows through the ordinary pipeline: a
+		// bound-only build of their join would reach the execution compiler
+		// unrewritten and panic. The literal top-level LIMIT 0 is the same
+		// discrimination the frontend dispatch uses.
+		return &Plan{
+			Plan: &plan.Plan_Query{
+				Query: builder.qry,
+			},
+		}, nil
 	}
 	query, err := builder.createQuery()
 	if err != nil {

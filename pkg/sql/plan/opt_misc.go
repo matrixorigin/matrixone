@@ -227,6 +227,9 @@ func increaseRefCntForColRefList(cols []plan.ColRef, inc int, colRefCnt map[[2]i
 
 // FIXME: We should remove PROJECT node for more cases, but keep them now to avoid intricate issues.
 func (builder *QueryBuilder) canRemoveProject(parentType plan.Node_NodeType, node *plan.Node) bool {
+	if builder.isFullTextBooleanScoreProject(node) {
+		return false
+	}
 	if _, protected := builder.existentialGateProjects[node.NodeId]; protected {
 		// Inlining its TRUE slot would turn an ANTI hash key back into a
 		// residual and enumerate every duplicate-key match.
@@ -670,7 +673,7 @@ func (builder *QueryBuilder) removeRedundantJoinCond(nodeID int32, colMap map[[2
 	newOnList := make([]*plan.Expr, 0)
 	for _, expr := range node.OnList {
 		if exprf := expr.GetF(); exprf != nil {
-			if IsEqualFunc(exprf.Func.GetObj()) {
+			if IsEqualFunc(exprf.Func.GetObj()) && !isJSONNumericComparisonArgs(exprf.Args) {
 				leftcol := exprf.Args[0].GetCol()
 				rightcol := exprf.Args[1].GetCol()
 				if leftcol != nil && rightcol != nil {
@@ -2570,7 +2573,8 @@ func (builder *QueryBuilder) lockTableIfLockNoRowsAtTheEndForDelAndUpdate() (err
 
 		for _, expr := range baseNode.FilterList {
 			if e, ok := expr.Expr.(*plan.Expr_F); ok {
-				if e.F.Func.GetObjName() == "=" {
+				// Mixed JSON/numeric equality does not identify a physical PK value.
+				if e.F.Func.GetObjName() == "=" && !isJSONNumericComparisonArgs(e.F.Args) {
 					//update t1 set a = 1 where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 					//delete from where pk = 1; then we allays lock rows pk=1, even pk=1 is not exists
 					if checkIsPkColExpr(e.F.Args[0]) && rule.IsConstant(e.F.Args[1], true) {

@@ -105,6 +105,7 @@ type container struct {
 	probeMark              bool
 	buildHasNullKey        bool
 	asofLeftCol            int
+	asofResidualEquality   bool
 	asofStrict             bool
 	asofIndexes            []asofIndex
 	asofIndexCount         int
@@ -395,10 +396,6 @@ func (hashJoin *HashJoin) Release() {
 	}
 }
 
-func (hashJoin *HashJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err error) {
 	if hashJoin.JoinDiagnostic != nil {
 		hashJoin.JoinDiagnostic.Reset()
@@ -428,6 +425,7 @@ func (hashJoin *HashJoin) Reset(proc *process.Process, pipelineFailed bool, err 
 	ctr.buildHasNullKey = false
 	ctr.asofLeftCol = -1
 	ctr.asofStrict = false
+	ctr.asofResidualEquality = false
 	ctr.globalBuildRowCnt = 0
 	ctr.state = Build
 	ctr.probeState = psNextBatch
