@@ -33,6 +33,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	metric "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/panjf2000/ants/v2"
@@ -211,11 +212,17 @@ func awsS3ErrorXML(code, message string) string {
 }
 
 func newTestAWSClient(t *testing.T, srv *httptest.Server) *AwsSDKv2 {
+	return newTestAWSClientWithTransport(t, srv, srv.Client().Transport)
+}
+
+func newTestAWSClientWithTransport(t *testing.T, srv *httptest.Server, transport http.RoundTripper) *AwsSDKv2 {
 	t.Helper()
+	httpClient := srv.Client()
+	httpClient.Transport = transport
 	cfg := aws.Config{
 		Region:      "us-east-1",
 		Credentials: aws.NewCredentialsCache(credentials.NewStaticCredentialsProvider("id", "key", "")),
-		HTTPClient:  srv.Client(),
+		HTTPClient:  httpClient,
 		Retryer: func() aws.Retryer {
 			return aws.NopRetryer{}
 		},
@@ -1568,9 +1575,7 @@ func TestAwsParallelMultipartAbortOnReadError(t *testing.T) {
 		PartSize:    minMultipartPartSize,
 		Concurrency: 2,
 	})
-	if err == nil {
-		t.Fatal("expected read error")
-	}
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrSizeNotMatch), "got %v", err)
 	if len(state.completeBody) > 0 {
 		t.Fatal("expected no complete body")
 	}

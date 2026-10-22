@@ -5976,42 +5976,17 @@ func TestLockWaitTimeoutExpiresDuringLockTableBindRPC(t *testing.T) {
 }
 
 func TestLockWaitTimeoutCallerContextBeforeCeiling(t *testing.T) {
-	runLockServiceTests(
-		t,
-		[]string{"s1"},
-		func(alloc *lockTableAllocator, s []*service) {
-			l := s[0]
-
-			option := pb.LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
-			}
-
-			// Short context to bound the test.
-			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-			defer cancel()
-
-			// txn1 holds the lock.
-			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
-			require.NoError(t, err)
-
-			// txn2 tries to lock the same row WITHOUT LockWaitTimeout.
-			// The caller context is earlier than the one-hour safety ceiling.
-			option2 := option
-			option2.LockWaitTimeout = 0 // no session/internal timeout; rely on caller context deadline
-			start := time.Now()
-			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
-			elapsed := time.Since(start)
-
-			// Should have waited for the context timeout (~2s), not failed immediately.
-			require.Error(t, err)
-			require.GreaterOrEqual(t, elapsed, time.Second)
-		},
-	)
+	testLockWaitHonorsCallerDeadline(t, 10)
 }
 
 func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
+	for _, timeout := range []int64{0, 20} {
+		t.Run(fmt.Sprintf("timeout_%d", timeout), func(t *testing.T) { testLockWaitSucceedsWhenHolderReleases(t, timeout) })
+	}
+}
+
+func testLockWaitSucceedsWhenHolderReleases(t *testing.T, lockWaitTimeout int64) {
+	t.Helper()
 	runLockServiceTests(
 		t,
 		[]string{"s1"},
@@ -6032,10 +6007,25 @@ func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
 			require.NoError(t, err)
 
 			option2 := option
-			option2.LockWaitTimeout = 20 // long enough to keep scheduler pauses out of this test
+			option2.LockWaitTimeout = lockWaitTimeout
 
 			row := []byte{1}
 			lockErrC := make(chan error, 1)
+			joined := false
+			defer func() {
+				cancel()
+				cleanupCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+				defer stop()
+				assert.NoError(t, l.Unlock(cleanupCtx, []byte("txn1"), timestamp.Timestamp{}))
+				if !joined {
+					select {
+					case <-lockErrC:
+					case <-cleanupCtx.Done():
+						t.Error("release waiter did not exit during cleanup")
+					}
+				}
+				assert.NoError(t, l.Unlock(cleanupCtx, []byte("txn2"), timestamp.Timestamp{}))
+			}()
 			go func() {
 				_, err := l.Lock(ctx, 0, [][]byte{row}, []byte("txn2"), option2)
 				lockErrC <- err
@@ -6062,6 +6052,7 @@ func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
 			for !hasWaiter() {
 				select {
 				case err := <-lockErrC:
+					joined = true
 					require.FailNowf(t, "txn2 lock returned before txn1 unlock", "err: %v", err)
 				case <-waiterDeadline.C:
 					require.FailNow(t, "txn2 did not enter the wait queue before timeout")
@@ -6071,6 +6062,7 @@ func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
 
 			select {
 			case err := <-lockErrC:
+				joined = true
 				require.FailNowf(t, "txn2 lock returned before txn1 unlock", "err: %v", err)
 			default:
 			}
@@ -6079,51 +6071,85 @@ func TestLockWaitTimeoutSucceedsWhenHolderReleases(t *testing.T) {
 			require.NoError(t, l.Unlock(ctx, []byte("txn1"), timestamp.Timestamp{}))
 			select {
 			case err := <-lockErrC:
+				joined = true
 				require.NoError(t, err)
 			case <-time.After(postUnlockAcquireTimeout):
 				require.FailNowf(t, "txn2 did not acquire the lock promptly after txn1 unlocked",
 					"timeout: %s", postUnlockAcquireTimeout)
 			}
-			require.NoError(t, l.Unlock(ctx, []byte("txn2"), timestamp.Timestamp{}))
 		},
 	)
 }
 
 func TestLockWaitTimeoutZeroUsesEarlierCallerContext(t *testing.T) {
-	runLockServiceTests(
-		t,
-		[]string{"s1"},
-		func(alloc *lockTableAllocator, s []*service) {
-			l := s[0]
+	testLockWaitHonorsCallerDeadline(t, 0)
+}
 
-			option := pb.LockOptions{
-				Granularity: pb.Granularity_Row,
-				Mode:        pb.LockMode_Exclusive,
-				Policy:      pb.WaitPolicy_Wait,
+func testLockWaitHonorsCallerDeadline(t *testing.T, lockWaitTimeout int64) {
+	t.Helper()
+	runLockServiceTests(t, []string{"s1"}, func(_ *lockTableAllocator, services []*service) {
+		l := services[0]
+		setupCtx, stopSetup := context.WithTimeout(t.Context(), 10*time.Second)
+		defer stopSetup()
+		options := newTestRowExclusiveOptions()
+		_, err := l.Lock(setupCtx, 0, [][]byte{{1}}, []byte("txn1"), options)
+		require.NoError(t, err)
+		v, err := l.getLockTable(setupCtx, 0, 0)
+		require.NoError(t, err)
+		lt := v.(*localLockTable)
+		previous := lt.options.beforeWait
+
+		// Holder setup consumes none of the caller's wait budget. Observe actual
+		// contention while the caller is live instead of asserting a wall-time floor.
+		ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+		entered := make(chan error, 1)
+		var once sync.Once
+		// This private lock table has one contender, txn2; avoid reading its
+		// mutable transaction fields from the unlocked beforeWait callback.
+		lt.options.beforeWait = func(_ *lockContext) func() {
+			return func() { once.Do(func() { entered <- ctx.Err() }) }
+		}
+		done := make(chan error, 1)
+		joined := false
+		defer func() {
+			cancel()
+			cleanupCtx, stop := context.WithTimeout(context.Background(), 10*time.Second)
+			defer stop()
+			assert.NoError(t, l.Unlock(cleanupCtx, []byte("txn1"), timestamp.Timestamp{}))
+			if !joined {
+				select {
+				case <-done:
+					joined = true
+				case <-cleanupCtx.Done():
+					t.Error("deadline waiter did not exit during cleanup")
+				}
 			}
-
-			// Short context to trigger fast timeout.
-			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-			defer cancel()
-
-			// txn1 holds the lock.
-			_, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn1"), option)
-			require.NoError(t, err)
-
-			// txn2 with LockWaitTimeout=0 should use the earlier context expiry
-			// instead of waiting for the one-hour safety ceiling.
-			option2 := option
-			option2.LockWaitTimeout = 0
-			start := time.Now()
-			_, err = l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), option2)
-			elapsed := time.Since(start)
-
-			require.Error(t, err)
-			// Should have completed near the context deadline, not after 5 minutes.
-			require.GreaterOrEqual(t, elapsed, 300*time.Millisecond)
-			require.Less(t, elapsed, 2*time.Second)
-		},
-	)
+			assert.NoError(t, l.Unlock(cleanupCtx, []byte("txn2"), timestamp.Timestamp{}))
+			// A failed drain is not proof of exit: keep this private fixture's hook
+			// intact until service shutdown rather than race an active callback.
+			if joined {
+				lt.options.beforeWait = previous
+			}
+		}()
+		options.LockWaitTimeout = lockWaitTimeout
+		go func() { _, err := l.Lock(ctx, 0, [][]byte{{1}}, []byte("txn2"), options); done <- err }()
+		watchdog := time.NewTimer(5 * time.Second)
+		defer watchdog.Stop()
+		select {
+		case err := <-entered:
+			require.NoError(t, err, "caller must be live when txn2 enters contention")
+		case <-watchdog.C:
+			t.Fatal("txn2 did not reach the wait path")
+		}
+		select {
+		case err := <-done:
+			joined = true
+			require.ErrorIs(t, err, context.DeadlineExceeded)
+			require.ErrorIs(t, ctx.Err(), context.DeadlineExceeded)
+		case <-watchdog.C:
+			t.Fatal("lock ignored the earlier caller deadline")
+		}
+	})
 }
 
 func BenchmarkWithoutConflict(b *testing.B) {

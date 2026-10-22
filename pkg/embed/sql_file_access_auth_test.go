@@ -47,6 +47,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/util/executor"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vectorindex/sqlexec"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/zap/buffer"
 	"go.uber.org/zap/zapcore"
@@ -216,10 +217,54 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		defer tenant.Close()
 
 		mustExec(t, tenant, "set experimental_fulltext2_index=1")
-		defer func() { _, _ = tenant.Exec("drop database if exists " + dbName) }()
+		var server *httptest.Server
+		defer func() {
+			// Stop the indexed tables' CDC work while its HTTP source is still alive.
+			cleanupCtx, stop := context.WithTimeout(context.Background(), 30*time.Second)
+			defer stop()
+			for _, statement := range []string{"drop database if exists " + dbName, "drop stage if exists sql_file_access_stage", "drop stage if exists sql_file_access_local_stage"} {
+				_, cleanupErr := tenant.ExecContext(cleanupCtx, statement)
+				assert.NoError(t, cleanupErr, statement)
+			}
+			if server != nil {
+				server.Close()
+			}
+		}()
+		poll := func(t *testing.T, description string, probe func(context.Context) (bool, error)) {
+			t.Helper()
+			ctx, stop := context.WithTimeout(t.Context(), 30*time.Second)
+			defer stop()
+			ticker := time.NewTicker(250 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				ready, err := probe(ctx)
+				require.NoError(t, err, description)
+				if ready {
+					return
+				}
+				select {
+				case <-ticker.C:
+				case <-ctx.Done():
+					t.Fatalf("%s: %v", description, ctx.Err())
+				}
+			}
+		}
+		waitTail := func(table, index string, after int64) int64 {
+			var storage string
+			var tail int64
+			poll(t, "CDC tail for "+table, func(ctx context.Context) (bool, error) {
+				if storage == "" {
+					if err := tenant.QueryRowContext(ctx, "select index_table_name from mo_catalog.mo_indexes where name=? and algo_table_type='ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname=?) limit 1", index, table).Scan(&storage); err != nil {
+						return false, err
+					}
+				}
+				err := tenant.QueryRowContext(ctx, "select coalesce(max(chunk_id),-1) from "+sqlquote.QualifiedIdent(dbName, storage)+" where index_id='cdc_tail' and tag=1").Scan(&tail)
+				return tail > after, err
+			})
+			return tail
+		}
 		mustExec(t, tenant, "use "+dbName)
 		mustExec(t, tenant, fmt.Sprintf("create stage sql_file_access_local_stage URL='file://%s'", dir))
-		defer func() { _, _ = tenant.Exec("drop stage if exists sql_file_access_local_stage") }()
 		remoteObjects := map[string][]byte{"/bucket/content.txt": []byte("matrixone stage content")}
 		for _, name := range []string{"mo.pdf", "chinese.pdf", "file-sample_100kB.docx"} {
 			data, err := os.ReadFile(filepath.Join("..", "..", "test", "distributed", "resources", "fulltext", name))
@@ -230,7 +275,7 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 			remoteObjects["/bucket/"+name] = []byte(name)
 		}
 		var objectsMu sync.Mutex
-		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			objectsMu.Lock()
 			defer objectsMu.Unlock()
 			if r.Method == http.MethodDelete {
@@ -286,9 +331,7 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 				_, _ = w.Write(data)
 			}
 		}))
-		defer server.Close()
 		mustExec(t, tenant, fmt.Sprintf("create stage sql_file_access_stage URL='s3://bucket/' CREDENTIALS={'AWS_KEY_ID'='id','AWS_SECRET_KEY'='secret','AWS_REGION'='us-east-1','PROVIDER'='amazon','ENDPOINT'='%s'}", server.URL))
-		defer func() { _, _ = tenant.Exec("drop stage if exists sql_file_access_stage") }()
 		t.Run("async source admission and local TEXT CDC", func(t *testing.T) { testAsyncDatalinkSourceAdmission(t, c, admin, server.URL, dir) })
 
 		t.Run("file TVF and Hive planning admission", func(t *testing.T) {
@@ -454,31 +497,27 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		mustExec(t, tenant, "create table documents (id bigint primary key, fpath datalink, fulltext2 ftidx(fpath))")
 		mustExec(t, tenant, "insert into documents values (1, 'stage://sql_file_access_stage/content.txt'), (2, 'stage://sql_file_access_stage/mo.pdf'), (3, 'stage://sql_file_access_stage/chinese.pdf')")
 
-		// This is the real tenant CDC path: foreground and background execution
-		// both use the same remote-stage contract, without a local-file exception.
-		require.Eventually(t, func() bool {
-			var id int64
-			return tenant.QueryRow("select id from documents where id=1 and match(fpath) against('matrixone')").Scan(&id) == nil && id == 1
-		}, 30*time.Second, 250*time.Millisecond)
+		// Do not warm a possibly empty search snapshot while waiting for CDC.
+		// Readiness belongs to the durable tail; MATCH remains the content oracle.
+		waitTail("documents", "ftidx", -1)
+		matchCtx, stopMatch := context.WithTimeout(t.Context(), 30*time.Second)
+		defer stopMatch()
 
 		var documentID int64
-		require.NoError(t, tenant.QueryRow("select id from documents where id=2 and match(fpath) against('matrixone')").Scan(&documentID))
+		require.NoError(t, tenant.QueryRowContext(matchCtx, "select id from documents where id=1 and match(fpath) against('matrixone')").Scan(&documentID))
+		require.Equal(t, int64(1), documentID)
+		require.NoError(t, tenant.QueryRowContext(matchCtx, "select id from documents where id=2 and match(fpath) against('matrixone')").Scan(&documentID))
 		require.Equal(t, int64(2), documentID)
-		require.NoError(t, tenant.QueryRow("select id from documents where id=3 and match(fpath) against('慢慢地' in natural language mode)").Scan(&documentID))
+		require.NoError(t, tenant.QueryRowContext(matchCtx, "select id from documents where id=3 and match(fpath) against('慢慢地' in natural language mode)").Scan(&documentID))
 		require.Equal(t, int64(3), documentID)
 
 		// Preserve the async content-update oracle on a fresh search object:
 		// wait on its durable tail before its first MATCH can cache a snapshot.
 		mustExec(t, tenant, "create table mutation_documents (id bigint primary key, fpath datalink, fulltext2 mutation_ftidx(fpath))")
-		defer func() { _, _ = tenant.Exec("drop table if exists mutation_documents") }()
 		mustExec(t, tenant, "insert into mutation_documents values (4, 'stage://sql_file_access_stage/mo.pdf')")
-		var mutationStore string
-		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name='mutation_ftidx' and algo_table_type='ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase=database() and relname='mutation_documents') limit 1").Scan(&mutationStore))
-		tailSQL := fmt.Sprintf("select coalesce(max(chunk_id),-1) from `%s`.`%s` where index_id='cdc_tail' and tag=1", dbName, mutationStore)
-		var beforeTail int64
-		require.Eventually(t, func() bool { return tenant.QueryRow(tailSQL).Scan(&beforeTail) == nil && beforeTail >= 0 }, 30*time.Second, 250*time.Millisecond)
+		beforeTail := waitTail("mutation_documents", "mutation_ftidx", -1)
 		mustExec(t, tenant, "update mutation_documents set fpath='stage://sql_file_access_stage/file-sample_100kB.docx' where id=4")
-		require.Eventually(t, func() bool { var now int64; return tenant.QueryRow(tailSQL).Scan(&now) == nil && now > beforeTail }, 30*time.Second, 250*time.Millisecond)
+		waitTail("mutation_documents", "mutation_ftidx", beforeTail)
 		require.NoError(t, tenant.QueryRow("select id from mutation_documents where match(fpath) against('Nulla facilisi' in natural language mode)").Scan(&documentID))
 		require.Equal(t, int64(4), documentID)
 		require.ErrorIs(t, tenant.QueryRow("select id from mutation_documents where match(fpath) against('matrixone')").Scan(&documentID), sql.ErrNoRows)
@@ -487,7 +526,6 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		// later compaction. Owned artifacts are persisted as binary parameters
 		// while generated SQL retains the tenant session identity.
 		mustExec(t, tenant, "create table build_documents (id bigint primary key, body text)")
-		defer func() { _, _ = tenant.Exec("drop table if exists build_documents") }()
 		mustExec(t, tenant, "insert into build_documents values (1, 'initial storage build')")
 		mustExec(t, tenant, "create fulltext2 index build_ftidx on build_documents(body)")
 		var id int64
@@ -498,10 +536,7 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 		var store, meta string
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_ftidx' and algo_table_type = 'ftv2_index' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_documents') limit 1").Scan(&store))
 		require.NoError(t, tenant.QueryRow("select index_table_name from mo_catalog.mo_indexes where name = 'build_ftidx' and algo_table_type = 'ftv2_meta' and table_id in (select rel_id from mo_catalog.mo_tables where reldatabase = database() and relname = 'build_documents') limit 1").Scan(&meta))
-		require.Eventually(t, func() bool {
-			var n int
-			return tenant.QueryRow(fmt.Sprintf("select count(*) from `%s`.`%s` where index_id = 'cdc_tail' and tag = 1", dbName, store)).Scan(&n) == nil && n > 0
-		}, 30*time.Second, 250*time.Millisecond)
+		waitTail("build_documents", "build_ftidx", -1)
 		mustExec(t, tenant, fmt.Sprintf("select * from fulltext2_compact('%s', '%s', '%s', '1') as f", dbName, store, meta))
 		require.NoError(t, tenant.QueryRow("select id from build_documents where match(body) against('compaction')").Scan(&id))
 		require.Equal(t, int64(2), id)
@@ -553,10 +588,11 @@ func TestSQLFileAccessTenantStageCDC(t *testing.T) {
 			require.Equal(t, literalID, storedID)
 			_, err = conn.ExecContext(t.Context(), "insert into "+sqlquote.QualifiedIdent(dbName, "build_vectors")+" values (3, '[0,0,1]')")
 			require.NoError(t, err)
-			require.Eventually(t, func() bool {
+			poll(t, "the loaded model must be modified and persisted by CDC", func(ctx context.Context) (bool, error) {
 				var checksum string
-				return conn.QueryRowContext(t.Context(), "select checksum from "+metaTable+" where index_id="+sqlquote.String(literalID)).Scan(&checksum) == nil && checksum != oldChecksum
-			}, 30*time.Second, 250*time.Millisecond, "the loaded model must be modified and persisted by CDC")
+				err := conn.QueryRowContext(ctx, "select checksum from "+metaTable+" where index_id="+sqlquote.String(literalID)).Scan(&checksum)
+				return checksum != oldChecksum, err
+			})
 			var n int
 			require.NoError(t, conn.QueryRowContext(t.Context(), "select count(*) from "+storeTable+" where index_id="+sqlquote.String(literalID)).Scan(&n))
 			require.Positive(t, n)
