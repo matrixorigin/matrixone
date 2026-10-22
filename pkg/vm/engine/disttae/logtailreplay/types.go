@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/pb/api"
 )
 
 // sharedStates is shared among all PartitionStates
@@ -35,9 +36,11 @@ type RowEntry struct {
 	RowID   objectio.Rowid
 	Time    types.TS
 
-	ID                int64 // a unique version id, for primary index building and validating
-	Deleted           bool
-	Batch             *batch.Batch
+	ID      int64 // a unique version id, for primary index building and validating
+	Deleted bool
+	Batch   *batch.Batch
+	// Immutable and shared by all rows from the same captured logtail batch.
+	WriteSchema       *api.LogtailWriteSchema
 	Offset            int64
 	PrimaryIndexBytes []byte
 }

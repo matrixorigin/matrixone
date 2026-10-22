@@ -33,11 +33,12 @@ func init() {
 
 func proveM0MergeObject(
 	ctx context.Context,
+	relationID uint64,
 	schema *catalog.Schema,
 	location objectio.Location,
 	fs fileservice.FileService,
 ) (bool, objectio.M0ObjectProof, error) {
-	if !catalog.M0SchemaHasAppendDomainShape(schema) {
+	if (schema == nil || schema.Extra == nil || schema.Extra.AppendMissingState == nil) && !catalog.M0SchemaHasAppendDomainShape(schema) {
 		return false, objectio.M0ObjectProof{}, nil
 	}
 	layout, err := catalog.M0DerivedAppendLayout(schema)
@@ -61,9 +62,10 @@ func proveM0MergeObject(
 		return true, objectio.M0ObjectProof{}, err
 	}
 	width, err := objectio.ValidateM0Object(layout, header, meta.MustDataMeta())
-	return true, objectio.M0ObjectProof{
-		ObjectName:  location.Name().String(),
-		WrittenSize: width,
-		SchemaSize:  layout.NextColSeqnum,
-	}, err
+	if err != nil {
+		return true, objectio.M0ObjectProof{}, err
+	}
+	proof, err := objectio.NewM0ObjectProof(location.Name().String(), width, layout.NextColSeqnum,
+		relationID, schema.Version, schema.Extra.AppendMissingState)
+	return true, proof, err
 }

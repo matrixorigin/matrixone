@@ -13,6 +13,7 @@ package plan
 import (
 	"bytes"
 	"math"
+	"strings"
 
 	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
@@ -105,4 +106,21 @@ func ValidateAppendMissingTable(table *TableDef) error {
 		}
 	}
 	return nil
+}
+
+// IsLiteralFalseDefault recognizes only the restricted bound BOOLEAN literal.
+// A folded expression, integer zero or current mutable default alone cannot
+// create a birth descriptor; caller admission still validates the source AST.
+func IsLiteralFalseDefault(col *ColDef) bool {
+	if col == nil || col.Typ.Id != AppendMissingBoolOID || col.Typ.NotNullable || col.Default == nil ||
+		!col.Default.NullAbility || col.Default.Expr == nil ||
+		!strings.EqualFold(strings.TrimSpace(col.Default.OriginString), "false") {
+		return false
+	}
+	lit := col.Default.Expr.GetLit()
+	if lit == nil || lit.Isnull {
+		return false
+	}
+	value, ok := lit.Value.(*Literal_Bval)
+	return ok && !value.Bval
 }

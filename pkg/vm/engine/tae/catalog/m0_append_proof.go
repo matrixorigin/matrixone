@@ -17,6 +17,8 @@
 package catalog
 
 import (
+	"bytes"
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -30,20 +32,27 @@ func m0ColumnNeedsBackfill(def *plan.Default) bool {
 	return lit == nil || !lit.GetIsnull()
 }
 
-func m0EncodedColumnNeedsBackfill(encoded []byte) (bool, error) {
-	if len(encoded) == 0 {
-		return false, nil
+// A non-NULL default is backfill-free only with the immutable, validated
+// descriptor created by the admitted append transition. Mutable SQL defaults
+// alone never authorize interpreting old objects.
+func m0BirthColumnNeedsBackfill(state *plan.AppendMissingState, seq uint32, def *plan.Default) bool {
+	if !m0ColumnNeedsBackfill(def) {
+		return false
 	}
-	var def plan.Default
-	if err := types.Decode(encoded, &def); err != nil {
-		return false, err
+	if state == nil || seq < state.BaseWidth || seq-state.BaseWidth >= uint32(len(state.Columns)) {
+		return true
 	}
-	return m0ColumnNeedsBackfill(&def), nil
+	fill := state.Columns[seq-state.BaseWidth]
+	return fill.Kind != plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1 ||
+		!plan.IsLiteralFalseDefault(&plan.ColDef{Typ: fill.Type, Default: def})
 }
 
 func M0AppendLayoutFromSchema(s *Schema) (objectio.M0AppendLayout, error) {
 	if s == nil {
 		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "nil schema")
+	}
+	if err := s.validateAppendMissingColumns(); err != nil {
+		return objectio.M0AppendLayout{}, err
 	}
 	pk := s.GetPrimaryKey()
 	if pk == nil {
@@ -61,10 +70,14 @@ func M0AppendLayoutFromSchema(s *Schema) (objectio.M0AppendLayout, error) {
 		if col.IsPhyAddr() {
 			continue
 		}
-		backfill, err := m0EncodedColumnNeedsBackfill(col.Default)
-		if err != nil {
-			return objectio.M0AppendLayout{}, err
+		var def *plan.Default
+		if len(col.Default) != 0 {
+			def = &plan.Default{}
+			if err := types.Decode(col.Default, def); err != nil {
+				return objectio.M0AppendLayout{}, err
+			}
 		}
+		backfill := m0BirthColumnNeedsBackfill(s.Extra.AppendMissingState, uint32(col.SeqNum), def)
 		layout.Columns = append(layout.Columns, objectio.M0AppendColumn{
 			Seqnum:        col.SeqNum,
 			Type:          col.Type.Oid,
@@ -150,6 +163,9 @@ func M0AppendLayoutFromPlan(table *plan.TableDef, nextColSeqnum uint32) (objecti
 		table.Pkey.CompPkeyCol == nil || (table.Version == 0 && nextColSeqnum == 0) {
 		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "incomplete CN layout")
 	}
+	if err := plan.ValidateAppendMissingTable(table); err != nil {
+		return objectio.M0AppendLayout{}, err
+	}
 	pk := table.Pkey.CompPkeyCol
 	if !pk.Hidden || !pk.Primary || table.ClusterBy != nil {
 		return objectio.M0AppendLayout{}, wrapM0Error(ErrM0Layout, "CN primary-key anchor")
@@ -183,7 +199,7 @@ func M0AppendLayoutFromPlan(table *plan.TableDef, nextColSeqnum uint32) (objecti
 			AutoIncrement: col.Typ.AutoIncr,
 			Generated:     col.GeneratedCol != nil,
 			OnUpdate:      col.OnUpdate != nil,
-			Backfill:      m0ColumnNeedsBackfill(col.Default),
+			Backfill:      m0BirthColumnNeedsBackfill(table.AppendMissingState, col.Seqnum, col.Default),
 		})
 	}
 	return layout, nil
@@ -252,4 +268,55 @@ func M0ProveAbsentColumn(s *Schema, h objectio.Header, meta objectio.ObjectDataM
 		return false, wrapM0Error(ErrM0Layout, "%v", err)
 	}
 	return absent, nil
+}
+
+// M0MemorySuffixKind proves a captured in-memory schema is a complete old
+// prefix of the read layout. No object header or latest-schema fallback is used.
+func M0MemorySuffixKind(read, write *Schema, seq uint16) (plan.MissingFillKind, error) {
+	reject := func() (plan.MissingFillKind, error) { return plan.MissingFillKind_MISSING_FILL_INVALID, ErrM0Layout }
+	if read == nil || write == nil || read.Extra.AppendMissingState == nil {
+		return reject()
+	}
+	current, err := M0AppendLayoutFromSchema(read)
+	if err != nil {
+		return plan.MissingFillKind_MISSING_FILL_INVALID, err
+	}
+	old, err := M0AppendLayoutFromSchema(write)
+	if err != nil {
+		return plan.MissingFillKind_MISSING_FILL_INVALID, err
+	}
+	if err = objectio.ValidateM0AppendLayout(current); err != nil {
+		return plan.MissingFillKind_MISSING_FILL_INVALID, err
+	}
+	if err = objectio.ValidateM0AppendLayout(old); err != nil {
+		return plan.MissingFillKind_MISSING_FILL_INVALID, err
+	}
+	if old.PKSeqnum != current.PKSeqnum || old.NextColSeqnum > current.NextColSeqnum ||
+		uint32(seq) < old.NextColSeqnum || uint32(seq) >= current.NextColSeqnum {
+		return reject()
+	}
+	for i := range old.Columns {
+		if old.Columns[i] != current.Columns[i] || read.ColDefs[i].Name != write.ColDefs[i].Name ||
+			read.ColDefs[i].Type != write.ColDefs[i].Type {
+			return reject()
+		}
+	}
+	birth := read.Extra.AppendMissingState
+	if previous := write.Extra.AppendMissingState; previous != nil {
+		if !bytes.Equal(previous.LayoutId, birth.LayoutId) || len(previous.Columns) > len(birth.Columns) {
+			return reject()
+		}
+		for i, c := range previous.Columns {
+			if !proto.Equal(c, birth.Columns[i]) {
+				return reject()
+			}
+		}
+	} else {
+		for _, c := range birth.Columns {
+			if c.Seqnum < old.NextColSeqnum && c.Kind != plan.MissingFillKind_MISSING_FILL_NULL_V1 {
+				return reject()
+			}
+		}
+	}
+	return birth.Columns[uint32(seq)-birth.BaseWidth].Kind, nil
 }

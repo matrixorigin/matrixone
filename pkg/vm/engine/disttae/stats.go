@@ -34,6 +34,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/pb/api"
 	"github.com/matrixorigin/matrixone/pkg/pb/gossip"
 	"github.com/matrixorigin/matrixone/pkg/pb/logtail"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	pb "github.com/matrixorigin/matrixone/pkg/pb/statsinfo"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
@@ -2223,6 +2224,12 @@ func collectTableStats(
 	defer func() {
 		v2.TxnStatementUpdateInfoFromZonemapHistogram.Observe(time.Since(start).Seconds())
 	}()
+	if err := planpb.ValidateAppendMissingTable(req.tableDef); err != nil {
+		return 0, err
+	}
+	if req.tableDef.AppendMissingState != nil && !activeM0Enabled {
+		return 0, objectio.ErrMissingColumnWithoutProof
+	}
 	lenCols := len(req.tableDef.Cols) - 1 /* row-id */
 	fs, fsErr := fileservice.Get[fileservice.FileService](req.fs, defines.SharedFileServiceName)
 	if fsErr != nil {
@@ -2259,6 +2266,7 @@ func collectTableStats(
 	onObjFn := func(objCtx context.Context, obj objectio.ObjectEntry) error {
 		objName := obj.ObjectShortName()
 		provenM0 := false
+		var m0Proof objectio.M0ObjectProof
 
 		// ===== Phase 1: Get exact values from ObjectStats (no IO) =====
 		objRows := obj.Rows()
@@ -2288,7 +2296,7 @@ func collectTableStats(
 
 		if m0AppendDomain {
 			var proofErr error
-			provenM0, _, proofErr = activeM0ReadObject(objCtx, req.tableDef, obj, fs)
+			provenM0, m0Proof, proofErr = activeM0ReadObject(objCtx, req.tableDef, obj, fs)
 			if proofErr != nil {
 				return proofErr
 			}
@@ -2317,7 +2325,11 @@ func collectTableStats(
 			for idx, col := range req.tableDef.Cols[:lenCols] {
 				if provenM0 && uint32(col.Seqnum) >= m0Base &&
 					uint32(col.Seqnum) > uint32(meta.BlockHeader().MaxSeqnum()) {
-					info.NullCnts[idx] = int64(objectRowCount)
+					if kind, ok := objectio.MissingColumnFill(objectio.WithM0ProvenObject(objCtx, m0Proof), m0Proof.ObjectName, uint16(col.Seqnum)); !ok {
+						return objectio.ErrMissingColumnWithoutProof
+					} else if kind == planpb.MissingFillKind_MISSING_FILL_NULL_V1 {
+						info.NullCnts[idx] = int64(objectRowCount)
+					}
 					info.ColumnZMs[idx] = objectio.EmptyZm[:]
 					info.DataTypes[idx] = plan2.ExprType2Type(&col.Typ)
 					continue
@@ -2365,7 +2377,11 @@ func collectTableStats(
 			for idx, col := range req.tableDef.Cols[:lenCols] {
 				if provenM0 && uint32(col.Seqnum) >= m0Base &&
 					uint32(col.Seqnum) > uint32(meta.BlockHeader().MaxSeqnum()) {
-					info.NullCnts[idx] += int64(objectRowCount)
+					if kind, ok := objectio.MissingColumnFill(objectio.WithM0ProvenObject(objCtx, m0Proof), m0Proof.ObjectName, uint16(col.Seqnum)); !ok {
+						return objectio.ErrMissingColumnWithoutProof
+					} else if kind == planpb.MissingFillKind_MISSING_FILL_NULL_V1 {
+						info.NullCnts[idx] += int64(objectRowCount)
+					}
 					continue
 				}
 				columnMeta := meta.MustGetColumn(uint16(col.Seqnum))
@@ -2492,6 +2508,21 @@ func collectTableStats(
 		}
 	}
 
+	if state := req.tableDef.AppendMissingState; state != nil {
+		for idx, col := range req.tableDef.Cols[:lenCols] {
+			if col.Seqnum < state.BaseWidth {
+				continue
+			}
+			fill := state.Columns[col.Seqnum-state.BaseWidth]
+			if fill.Kind == planpb.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1 {
+				info.ColumnZMs[idx] = objectio.EmptyZm[:]
+				info.ShuffleRanges[idx] = nil
+				if info.TableRowCount > 0 {
+					info.ColumnNDVs[idx] = math.Max(1, info.ColumnNDVs[idx])
+				}
+			}
+		}
+	}
 	return actualSamplingRatio, nil
 }
 

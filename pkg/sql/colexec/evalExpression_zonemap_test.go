@@ -1746,3 +1746,21 @@ func TestEvaluateFilterByZoneMapArithmeticScaleAnnotations(t *testing.T) {
 		}
 	}
 }
+
+func TestM0BirthMissingFalseZoneMapIsConservative(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	state := &plan.AppendMissingState{FormatVersion: 1, LayoutId: []byte("0123456789abcdef"), BaseWidth: 1, PkSeqnum: 0,
+		Columns: []*plan.ColumnBirthFill{{Seqnum: 1, BirthAppendOrdinal: 1, Type: plan.Type{Id: int32(types.T_bool)}, Kind: plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1}}}
+	proof, err := objectio.NewM0ObjectProof("object", 1, 2, 42, 1, state)
+	require.NoError(t, err)
+	ctx := objectio.WithM0ProvenObject(proc.Ctx, proof)
+	data := objectio.BuildMetaData(1, 1)
+	meta := data.GetBlockMeta(0)
+	col := &plan.Expr{Typ: plan.Type{Id: int32(types.T_bool)}, Expr: &plan.Expr_Col{Col: &plan.ColRef{RelPos: 0, ColPos: 1, Name: "flag"}}}
+	for _, name := range []string{"isnull", "isnotnull"} {
+		expr, err := plan2.BindFuncExprImplByPlanExpr(ctx, name, []*plan.Expr{col})
+		require.NoError(t, err)
+		zms, vecs := makeZoneMapEvalScratch(expr)
+		require.True(t, colexec.EvaluateFilterByZoneMap(ctx, proc, expr, meta, map[int]int{1: 1}, zms, vecs), name)
+	}
+}

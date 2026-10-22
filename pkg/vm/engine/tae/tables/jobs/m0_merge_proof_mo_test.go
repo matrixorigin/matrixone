@@ -49,6 +49,7 @@ func TestM0MergeProofReportsCandidateLayoutFailure(t *testing.T) {
 
 	proven, _, err := proveM0MergeObject(
 		context.Background(),
+		42,
 		schema,
 		objectio.NewRandomLocation(0, 1),
 		nil,
@@ -62,6 +63,7 @@ func TestM0MergeProofReportsCandidateLayoutFailure(t *testing.T) {
 func TestM0MergeProofKeepsOrdinarySchemaInert(t *testing.T) {
 	proven, _, err := proveM0MergeObject(
 		context.Background(),
+		42,
 		catalog.NewEmptySchema("ordinary"),
 		objectio.NewRandomLocation(0, 1),
 		nil,

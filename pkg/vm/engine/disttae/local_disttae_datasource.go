@@ -107,9 +107,12 @@ type LocalDisttaeDataSource struct {
 
 	table *txnTable
 
-	wsCursor  int
-	cachedBat *batch.Batch
-	sels      []int64
+	wsCursor         int
+	cachedBat        *batch.Batch
+	m0CapturedBatch  *batch.Batch
+	m0CapturedSchema *plan.TableDef
+	m0CapturedProof  objectio.M0BatchProof
+	sels             []int64
 
 	txnOffset int
 
@@ -408,6 +411,9 @@ func (ls *LocalDisttaeDataSource) sortBlockList() {
 }
 
 func (ls *LocalDisttaeDataSource) Close() {
+	ls.m0CapturedBatch = nil
+	ls.m0CapturedSchema = nil
+	ls.m0CapturedProof = objectio.M0BatchProof{}
 	if ls.pStateRows.insIter != nil {
 		ls.pStateRows.insIter.Close()
 		ls.pStateRows.insIter = nil
@@ -918,6 +924,17 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 		bfSkipped int
 		delInFile int
 	)
+	var readTable *plan.TableDef
+	if ls.table != nil {
+		readTable = ls.table.GetTableDef(ls.ctx)
+	}
+	if ls.m0CapturedSchema != readTable {
+		ls.m0CapturedSchema = readTable
+		if !ls.m0CapturedProof.MatchesReadSchema(readTable) {
+			ls.m0CapturedBatch = nil
+			ls.m0CapturedProof = objectio.M0BatchProof{}
+		}
+	}
 
 	for goNext && outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
 		for outBatch.Vecs[0].Length() < int(objectio.BlockMaxRows) {
@@ -955,6 +972,18 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 			if minTS.GT(&entry.Time) {
 				minTS = entry.Time
 			}
+			if readTable != nil && readTable.AppendMissingState != nil &&
+				ls.m0CapturedBatch != entry.Batch {
+				captured := entry.WriteSchema
+				if captured == nil || len(captured.XXX_unrecognized) != 0 {
+					return objectio.ErrMissingColumnWithoutProof
+				}
+				ls.m0CapturedProof, err = objectio.NewM0BatchProof(readTable, entry.Batch.Attrs, entry.Batch.Vecs, captured.Version, captured.NextColSeqnum, 2)
+				if err != nil {
+					return err
+				}
+				ls.m0CapturedBatch = entry.Batch
+			}
 			inserted++
 			if err = vector.AppendFixed(
 				physicalColumnPtr,
@@ -981,11 +1010,11 @@ func (ls *LocalDisttaeDataSource) filterInMemCommittedInserts(
 
 				if int(idx) >= len(entry.Batch.Vecs) /*add column*/ ||
 					entry.Batch.Attrs[idx] == "" /*drop column*/ {
-					err = vector.AppendAny(
-						outBatch.Vecs[i],
-						nil,
-						true,
-						mp)
+					if readTable != nil && readTable.AppendMissingState != nil {
+						err = ls.m0CapturedProof.AppendFill(outBatch.Vecs[i], seqNums[i], mp)
+					} else {
+						err = vector.AppendNull(outBatch.Vecs[i], mp)
+					}
 				} else {
 					err = outBatch.Vecs[i].UnionOne(
 						entry.Batch.Vecs[int(idx)],

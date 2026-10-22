@@ -2890,9 +2890,16 @@ func GetExprZoneMap(
 					seqnum := uint16(columnMap[int(exprImpl.Col.ColPos)])
 					colMeta := meta.MustGetColumn(seqnum)
 					matches := colMeta.NullCnt() > 0
-					if proof, ok := objectio.M0ProvenObject(ctx); ok &&
-						uint32(seqnum) >= proof.WrittenSize {
-						matches = true
+					if proof, ok := objectio.M0ProvenObject(ctx); ok {
+						if kind, missing := objectio.MissingColumnFill(ctx, proof.ObjectName, seqnum); missing {
+							if kind != plan.MissingFillKind_MISSING_FILL_NULL_V1 {
+								// A missing false suffix is not an all-NULL zone map.
+								// Keep the first version conservative and scan it.
+								zms[expr.AuxId].Reset()
+								return zms[expr.AuxId]
+							}
+							matches = true
+						}
 					}
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], matches)
 					return zms[expr.AuxId]
@@ -2906,9 +2913,16 @@ func GetExprZoneMap(
 					seqnum := uint16(columnMap[int(exprImpl.Col.ColPos)])
 					colMeta := meta.MustGetColumn(seqnum)
 					matches := colMeta.ZoneMap().IsInited()
-					if proof, ok := objectio.M0ProvenObject(ctx); ok &&
-						uint32(seqnum) >= proof.WrittenSize {
-						matches = false
+					if proof, ok := objectio.M0ProvenObject(ctx); ok {
+						if kind, missing := objectio.MissingColumnFill(ctx, proof.ObjectName, seqnum); missing {
+							if kind != plan.MissingFillKind_MISSING_FILL_NULL_V1 {
+								// A missing false suffix is not an all-NULL zone map.
+								// Keep the first version conservative and scan it.
+								zms[expr.AuxId].Reset()
+								return zms[expr.AuxId]
+							}
+							matches = false
+						}
 					}
 					zms[expr.AuxId] = index.SetBool(zms[expr.AuxId], matches)
 					return zms[expr.AuxId]

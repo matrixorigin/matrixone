@@ -37,7 +37,7 @@ func proveM0ReadLocation(
 	location objectio.Location,
 	fs fileservice.FileService,
 ) (bool, objectio.M0ObjectProof, error) {
-	candidate := catalog.M0PlanLooksLikeAppendDomain(table)
+	candidate := table != nil && (table.AppendMissingState != nil || catalog.M0PlanLooksLikeAppendDomain(table))
 	next := uint32(0)
 	if table != nil && len(table.Cols) > 0 {
 		next = uint32(len(table.Cols) - 1)
@@ -70,9 +70,10 @@ func proveM0ReadLocation(
 		return true, objectio.M0ObjectProof{}, err
 	}
 	width, err := objectio.ValidateM0Object(layout, header, meta.MustDataMeta())
-	return true, objectio.M0ObjectProof{
-		ObjectName:  location.Name().String(),
-		WrittenSize: width,
-		SchemaSize:  layout.NextColSeqnum,
-	}, err
+	if err != nil {
+		return true, objectio.M0ObjectProof{}, err
+	}
+	proof, err := objectio.NewM0ObjectProof(location.Name().String(), width, layout.NextColSeqnum,
+		table.TblId, table.Version, table.AppendMissingState)
+	return true, proof, err
 }

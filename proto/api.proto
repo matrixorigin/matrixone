@@ -87,6 +87,9 @@ message Vector {
 message Batch {
     repeated string attrs = 1 [(gogoproto.nullable) = false];
     repeated Vector vecs  = 2 [(gogoproto.nullable) = false];
+    // Captured TN write schema for in-memory append-domain rows, not a
+    // derivation from the reader's current schema. Nil means unknown.
+    LogtailWriteSchema logtail_write_schema = 3;
 };
 
 message TableID {
@@ -475,4 +478,9 @@ message MergeTaskEntry {
 message CheckpointResp {
     string Location = 1;
     uint64 truncateLsn = 2;
+}
+
+message LogtailWriteSchema {
+    uint32 version = 1;
+    uint32 next_col_seqnum = 2;
 }

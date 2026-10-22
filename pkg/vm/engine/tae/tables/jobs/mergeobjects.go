@@ -273,6 +273,7 @@ func (task *mergeObjectsTask) LoadNextBatch(
 		if !task.m0ProofSet[objIdx] {
 			proven, proof, proofErr := activeM0MergeProof(
 				ctx,
+				task.tid,
 				task.schema,
 				task.mergedObjs[objIdx].GetLocation(),
 				task.rt.Fs,

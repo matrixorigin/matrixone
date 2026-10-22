@@ -197,3 +197,31 @@ func TestM0AlterAdmissionFailureDoesNotPublish(t *testing.T) {
 		})
 	}
 }
+
+func TestM0BirthStateCNDomainNeedsDescriptor(t *testing.T) {
+	saved := activeM0Enabled
+	activeM0Enabled = true
+	t.Cleanup(func() { activeM0Enabled = saved })
+	table := m0TestAppendTableDef()
+	for i, c := range table.Cols {
+		c.ColId = uint64(i + 1)
+	}
+	table.Pkey.CompPkeyCol = table.Cols[2]
+	col := table.Cols[3]
+	col.Typ = plan.Type{Id: plan.AppendMissingBoolOID}
+	col.Default = &plan.Default{NullAbility: true, OriginString: "false", Expr: &plan.Expr{Typ: col.Typ, Expr: &plan.Expr_Lit{Lit: &plan.Literal{Value: &plan.Literal_Bval{Bval: false}}}}}
+	_, ok := m0AppendBaseFromPlan(table)
+	require.False(t, ok)
+	table.AppendMissingState = &plan.AppendMissingState{FormatVersion: 1, LayoutId: []byte("0123456789abcdef"), BaseWidth: 3, PkSeqnum: 2,
+		Columns: []*plan.ColumnBirthFill{{Seqnum: 3, BirthAppendOrdinal: 1, Type: col.Typ, Kind: plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1}}}
+	base, ok := m0AppendBaseFromPlan(table)
+	require.True(t, ok)
+	require.Equal(t, uint32(3), base)
+	table.AppendMissingState.Columns[0].Kind = plan.MissingFillKind_MISSING_FILL_NULL_V1
+	_, ok = m0AppendBaseFromPlan(table)
+	require.False(t, ok)
+	table.AppendMissingState.Columns[0].Kind = plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1
+	col.Default.OriginString = "0"
+	_, ok = m0AppendBaseFromPlan(table)
+	require.False(t, ok)
+}

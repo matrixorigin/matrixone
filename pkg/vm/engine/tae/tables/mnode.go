@@ -223,6 +223,11 @@ func (node *memoryNode) getDataWindowLocked(
 		panic("not expect")
 		// bat.Deletes = bat.WindowDeletes(int(from), int(to-from), false)
 	}
+	// Validate every requested missing column before allocating output vectors.
+	birthFills, err := activeM0MemoryFills(readSchema, node.writeSchema, node.data, colIdxes)
+	if err != nil {
+		return err
+	}
 	if *bat == nil {
 		*bat = containers.NewBatchWithCapacity(len(colIdxes))
 		for _, colIdx := range colIdxes {
@@ -243,8 +248,16 @@ func (node *memoryNode) getDataWindowLocked(
 			var vec containers.Vector
 			if !ok {
 				vec = node.object.rt.VectorPool.Transient.GetVector(&colDef.Type) // TODO
+				isNull := true
+				if birthFills != nil {
+					isNull = birthFills[colIdx]
+				}
+				var value any
+				if !isNull {
+					value = false
+				}
 				for i := from; i < to; i++ {
-					vec.Append(nil, true)
+					vec.Append(value, isNull)
 				}
 			} else {
 				vec = node.data.Vecs[idx].CloneWindowWithPool(int(from), int(to-from), node.object.rt.VectorPool.Transient)
@@ -260,8 +273,16 @@ func (node *memoryNode) getDataWindowLocked(
 			idx, ok := node.writeSchema.SeqnumMap[colDef.SeqNum]
 			var vec containers.Vector
 			if !ok {
-				vec = containers.NewConstNullVector(colDef.Type, int(to-from), mp)
-				(*bat).GetVectorByName(colDef.Name).Extend(vec) // TODO
+				if isNull, typed := birthFills[colIdx]; typed && !isNull {
+					vec = containers.NewVector(colDef.Type, containers.Options{Allocator: mp})
+					for i := from; i < to; i++ {
+						vec.Append(false, false)
+					}
+				} else {
+					vec = containers.NewConstNullVector(colDef.Type, int(to-from), mp)
+				}
+				(*bat).GetVectorByName(colDef.Name).Extend(vec)
+				vec.Close()
 			} else {
 				(*bat).GetVectorByName(colDef.Name).Extend(node.data.Vecs[idx])
 			}

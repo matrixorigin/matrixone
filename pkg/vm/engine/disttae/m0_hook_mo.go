@@ -86,7 +86,7 @@ func proveM0ReadObject(
 	if table == nil {
 		return false, objectio.M0ObjectProof{}, nil
 	}
-	candidate := catalog.M0PlanLooksLikeAppendDomain(table)
+	candidate := table != nil && (table.AppendMissingState != nil || catalog.M0PlanLooksLikeAppendDomain(table))
 	next := uint32(len(table.Cols) - 1)
 	layout, err := catalog.M0AppendLayoutFromPlan(table, next)
 	if err != nil {
@@ -117,11 +117,12 @@ func proveM0ReadObject(
 		return true, objectio.M0ObjectProof{}, err
 	}
 	width, err := objectio.ValidateM0Object(layout, header, meta.MustDataMeta())
-	return true, objectio.M0ObjectProof{
-		ObjectName:  location.Name().String(),
-		WrittenSize: width,
-		SchemaSize:  layout.NextColSeqnum,
-	}, err
+	if err != nil {
+		return true, objectio.M0ObjectProof{}, err
+	}
+	proof, err := objectio.NewM0ObjectProof(location.Name().String(), width, layout.NextColSeqnum,
+		table.TblId, table.Version, table.AppendMissingState)
+	return true, proof, err
 }
 
 func buildM0CNAddColumn(

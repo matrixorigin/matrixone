@@ -56,8 +56,17 @@ func m0AppendBaseFromPlan(table *plan.TableDef) (uint32, bool) {
 	if anchor.Name != pk.Name || !anchor.Hidden || !anchor.Primary {
 		return 0, false
 	}
+	if err := plan.ValidateAppendMissingTable(table); err != nil {
+		return 0, false
+	}
 	for _, col := range table.Cols[base:next] {
-		if !m0PlanColumnSupportsAppend(col) {
+		if m0PlanColumnSupportsAppend(col) {
+			continue
+		}
+		state := table.AppendMissingState
+		if state == nil || col.Seqnum < state.BaseWidth || col.Seqnum-state.BaseWidth >= uint32(len(state.Columns)) ||
+			state.Columns[col.Seqnum-state.BaseWidth].Kind != plan.MissingFillKind_MISSING_FILL_BOOL_FALSE_V1 ||
+			!plan.IsLiteralFalseDefault(col) {
 			return 0, false
 		}
 	}

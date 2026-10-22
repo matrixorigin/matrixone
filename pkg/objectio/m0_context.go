@@ -19,6 +19,7 @@ import (
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
+	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
 
 var ErrMissingColumnWithoutProof error = moerr.NewInternalErrorNoCtx("objectio: missing normal column without proof")
@@ -42,6 +43,9 @@ type M0ObjectProof struct {
 	ObjectName  string
 	WrittenSize uint32
 	SchemaSize  uint32
+	relationID  uint64
+	version     uint32
+	birth       *plan.AppendMissingState
 }
 
 type legacyMissingColumnProof struct {
@@ -52,18 +56,15 @@ type legacyMissingColumnProof struct {
 type legacyMissingColumnKey struct{}
 
 // WithM0ProvenObject marks metadata that has passed the complete M0 object
-// proof. Metadata consumers may interpret an absent appended column as NULL
-// only when this marker is present.
+// proof. Missing suffixes use the immutable birth descriptor, if present;
+// this marker never authorizes interpreting a hole in the written prefix.
 func WithM0ProvenObject(ctx context.Context, proof M0ObjectProof) context.Context {
 	return context.WithValue(ctx, m0ProvenObjectKey{}, proof)
 }
 
 func IsM0ProvenObject(ctx context.Context) bool {
-	if ctx == nil {
-		return false
-	}
-	proof, ok := ctx.Value(m0ProvenObjectKey{}).(M0ObjectProof)
-	return ok && proof.ObjectName != "" && proof.WrittenSize <= proof.SchemaSize
+	_, ok := M0ProvenObject(ctx)
+	return ok
 }
 
 func M0ProvenObject(ctx context.Context) (M0ObjectProof, bool) {
@@ -85,15 +86,32 @@ func WithLegacyMissingColumnProof(ctx context.Context, objectName string, seqnum
 }
 
 func CanFillMissingColumn(ctx context.Context, objectName string, seqnum uint16) bool {
+	_, ok := MissingColumnFill(ctx, objectName, seqnum)
+	return ok
+}
+
+// MissingColumnFill returns an explicit kind only for a proved absent suffix.
+// A physically present NULL is read from its bitmap and never enters here.
+func MissingColumnFill(ctx context.Context, objectName string, seqnum uint16) (plan.MissingFillKind, bool) {
 	if proof, ok := M0ProvenObject(ctx); ok &&
 		proof.ObjectName == objectName &&
 		uint32(seqnum) >= proof.WrittenSize &&
 		uint32(seqnum) < proof.SchemaSize {
-		return true
+		if proof.birth == nil {
+			return plan.MissingFillKind_MISSING_FILL_NULL_V1, true
+		}
+		if uint32(seqnum) < proof.birth.BaseWidth {
+			return plan.MissingFillKind_MISSING_FILL_INVALID, false
+		}
+		col := proof.birth.Columns[uint32(seqnum)-proof.birth.BaseWidth]
+		return col.Kind, true
 	}
 	if ctx == nil {
-		return false
+		return plan.MissingFillKind_MISSING_FILL_INVALID, false
 	}
 	proof, ok := ctx.Value(legacyMissingColumnKey{}).(legacyMissingColumnProof)
-	return ok && proof.ObjectName == objectName && proof.Seqnum == seqnum
+	if ok && proof.ObjectName == objectName && proof.Seqnum == seqnum {
+		return plan.MissingFillKind_MISSING_FILL_NULL_V1, true
+	}
+	return plan.MissingFillKind_MISSING_FILL_INVALID, false
 }

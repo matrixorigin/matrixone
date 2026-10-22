@@ -24,6 +24,7 @@ import (
 
 var activeM0MergeProof = func(
 	context.Context,
+	uint64,
 	*catalog.Schema,
 	objectio.Location,
 	fileservice.FileService,

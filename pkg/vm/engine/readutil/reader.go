@@ -1007,9 +1007,9 @@ func (r *reader) read(
 	if activeM0ReadLocationProofEnabled {
 		var err error
 		objectName := blkInfo.MetaLocation().Name().String()
-		if proof, ok := objectio.M0ProvenObject(ctx); ok && proof.ObjectName == objectName {
+		if proof, ok := objectio.M0ProvenObject(ctx); ok && proof.ObjectName == objectName && proof.MatchesReadSchema(r.tableDef) {
 			provenM0, r.m0Proof, r.m0ProofSet = true, proof, true
-		} else if r.m0ProofSet && r.m0Proof.ObjectName == objectName {
+		} else if r.m0ProofSet && r.m0Proof.ObjectName == objectName && r.m0Proof.MatchesReadSchema(r.tableDef) {
 			provenM0 = true
 		} else {
 			provenM0, r.m0Proof, err = activeM0ReadLocationProof(
@@ -1017,6 +1017,9 @@ func (r *reader) read(
 			)
 			if err != nil {
 				return false, false, err
+			}
+			if provenM0 && (r.m0Proof.ObjectName != objectName || !r.m0Proof.MatchesReadSchema(r.tableDef)) {
+				return false, false, objectio.ErrMissingColumnWithoutProof
 			}
 			r.m0ProofSet = provenM0
 		}
