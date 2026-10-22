@@ -1,6 +1,6 @@
 # Retire unused kernel execution paths
 
-Version 4, 2026-10-22. Owner: #29249.
+Version 5, 2026-10-22. Owner: #29249.
 Implementation: `cleanup/29249-runtime-20261022`.
 Base: `d7f95aa754bfe39126752729d307298710947c17`.
 
@@ -123,3 +123,28 @@ and fresh-WAL cases and current legacy/replay tests. These tests protect this
 refactor against its main baseline; do not claim exhaustive compatibility with
 all historical releases. Any candidate lacking reachability or format proof
 must be retained rather than removed to meet a line-count target.
+
+## CDC/frontend extension
+
+Remove the disconnected `CDCDao.DeleteTaskAndWatermark` and its sole result type
+`DeleteCDCArtifactsResult`. Remove unused `cdcSQLBuilder` methods
+`UpdateTaskStateByTaskIdSQL`, `InsertWatermarkWithValuesSQL`,
+`GetTableWatermarkSQL`, `UpdateWatermarkErrMsgSQL`, `DeleteWatermarkByTableSQL`,
+`UpdateWatermarkSQL`, and `OnDuplicateUpdateWatermarkSQL`, plus unused
+`Executor.GetMaxAllowedPacket` and `Executor.ExecSimpleSQL`.
+
+All ten methods have definition-only repository references, with no interface,
+function-value, test, tagged, registration or documentation consumer. Keep every
+SQL template string, numeric index, registry entry and attribute unchanged.
+Keep the engine-tested `OnDuplicateUpdateWatermarkErrMsgSQL`, live task and
+snapshot-epoch deletion, transaction lifecycle, guarded/monotonic watermark
+updates, ownership fencing and error paths. Reserved engine roles remain out
+of scope. Unknown external Go importers are outside this compatibility proof.
+
+No tests or fixtures change. Validate full normal/race suites for CDC and
+frontend once on the combined storage/CDC candidate, plus existing engine
+`TestGetErrorMsg` normal/race as the real error/watermark consumer. Final
+reference audit, incremental vet/lint and pinned non-JSON molint baseline
+comparison, CPU main build and overall review cover the complete delivery.
+Reuse unaffected V1 evidence. No new hot-path work or resource owner is added;
+no throughput improvement is claimed.
