@@ -121,6 +121,10 @@ func TestBindConvertTZLiteralFractionalPrecision(t *testing.T) {
 		{"2024-02-29 23:59:59", 0},
 		{"2024-02-29 23:59:59.123", 3},
 		{"2024-02-29 23:59:59.123456", 6},
+		{"2024.01.15", 0},
+		{"2024.01.15 12:34:56", 0},
+		{"2024.01.15 12:34:56.123", 3},
+		{"20240115123456.123456", 6},
 	} {
 		t.Run(tc.value, func(t *testing.T) {
 			expr, err := BindFuncExprImplByPlanExpr(t.Context(), "convert_tz", []*plan.Expr{
