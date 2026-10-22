@@ -730,6 +730,21 @@ func setOperationPureCharCommonType(source []types.Type) (types.Type, bool) {
 	return result, true
 }
 
+// A winning text collation needs a text result type even when the safe common
+// byte bound was first chosen in the binary domain. In particular, BLOB's
+// result decoding does not preserve UTF-8 text for prepared parameters.
+func applyMixedTextBinaryCollationType(typ *plan.Type) {
+	if typ.Charset == uint32(types.CharsetBinary) {
+		return
+	}
+	switch types.T(typ.Id) {
+	case types.T_varbinary:
+		typ.Id = int32(types.T_varchar)
+	case types.T_blob:
+		typ.Id = int32(types.T_text)
+	}
+}
+
 type ColRefRemapping struct {
 	globalToLocal map[[2]int32][2]int32
 	localToGlobal [][2]int32
@@ -4855,6 +4870,18 @@ func (builder *QueryBuilder) buildUnionWithResultLen(
 			}
 			if err := setExpressionCollation(builder.GetContext(), "union", branchExprs, &targetType); err != nil {
 				return 0, err
+			}
+			if mixedTextBinary {
+				applyMixedTextBinaryCollationType(&targetType)
+				if types.T(targetType.Id) == types.T_varchar || types.T(targetType.Id) == types.T_text {
+					for _, typ := range tmpArgsType {
+						setOperationKeyRequired[columnIdx] = setOperationKeyRequired[columnIdx] || typ.Oid == types.T_char
+					}
+					for branchIdx := range setBranchPadSpaceProvenance {
+						setOperationKeyRequired[columnIdx] = setOperationKeyRequired[columnIdx] ||
+							setBranchPadSpaceProvenance[branchIdx][columnIdx]
+					}
+				}
 			}
 			targetArgType = makeTypeByPlan2Type(targetType)
 
@@ -11041,12 +11068,8 @@ func (builder *QueryBuilder) coerceValuesColumnToCommonType(
 	if err := setExpressionCollation(builder.GetContext(), "values", exprs, &commonPlanType); err != nil {
 		return plan.Type{}, err
 	}
-	if mixedTextBinary && commonType.Oid == types.T_varbinary &&
-		commonPlanType.Charset != uint32(types.CharsetBinary) {
-		// An explicit text collation can win over a binary VALUES operand.
-		// VARCHAR keeps the safe byte bound while its Unicode value check
-		// rejects malformed bytes. BLOB already performs that validation.
-		commonPlanType.Id = int32(types.T_varchar)
+	if mixedTextBinary {
+		applyMixedTextBinaryCollationType(&commonPlanType)
 	}
 	commonType = makeTypeByPlan2Type(commonPlanType)
 	// Physical types do not carry CHAR-derived comparison provenance. Retain

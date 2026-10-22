@@ -5146,6 +5146,26 @@ func TestSetOperationMixedTextBinaryKeepsByteWidth(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("explicit Unicode collation keeps unbounded text", func(t *testing.T) {
+		logicPlan, err := runOneStmt(NewMockOptimizer(true, newPlanTestProcess(t)), t,
+			"select cast('Á' as char(1)) collate utf8mb4_unicode_ci union all select cast('a ' as binary)")
+		require.NoError(t, err)
+		var setNode *plan.Node
+		for _, node := range logicPlan.GetQuery().Nodes {
+			if node.NodeType == plan.Node_UNION_ALL {
+				setNode = node
+			}
+		}
+		require.NotNil(t, setNode)
+		require.Equal(t, int32(types.T_text), setNode.ProjectList[0].Typ.Id)
+		require.Equal(t, uint32(types.CharsetUTF8MB4UnicodeCI), setNode.ProjectList[0].Typ.Charset)
+		require.True(t, setNode.ProjectList[0].Typ.PadSpace)
+		for _, childID := range setNode.Children {
+			child := logicPlan.GetQuery().Nodes[childID]
+			require.Equal(t, int32(types.T_text), child.ProjectList[0].Typ.Id)
+		}
+	})
 }
 
 func TestPreparedSetOperationPureCharUsesCommonPaddedType(t *testing.T) {
@@ -6449,7 +6469,7 @@ func TestQueryBuilderBindValuesUsesColumnCommonType(t *testing.T) {
 			width int32
 		}{
 			{"row(cast('a' as char(1)) collate utf8mb4_unicode_ci), row(cast('A' as binary(1)))", types.T_varchar, 4},
-			{"row(cast('a' as char(1)) collate utf8mb4_unicode_ci), row(cast('A' as binary))", types.T_blob, 0},
+			{"row(cast('a' as char(1)) collate utf8mb4_unicode_ci), row(cast('A' as binary))", types.T_text, 0},
 		} {
 			node, err := bindValues(t, test.rows)
 			require.NoError(t, err)
