@@ -16,6 +16,7 @@ package function
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"regexp"
 	"strings"
@@ -62,7 +63,7 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 
 	// optimize rule for some special case.
 	if parameters[1].IsConst() && !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow() {
-		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, func(i []byte) []byte {
+		canOptimize, err := optimizeRuleForLike(proc.Ctx, p1, p2, rs, length, func(i []byte) []byte {
 			return i
 		})
 		if canOptimize {
@@ -71,7 +72,7 @@ func (op *opBuiltInRegexp) likeFn(parameters []*vector.Vector, result vector.Fun
 	}
 
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length,
-		op.regMap.likeMatchFn(parameters[1].IsConst(), DefaultEscapeChar, true, false), selectList)
+		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), DefaultEscapeChar, true, false), selectList)
 }
 
 func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
@@ -85,7 +86,7 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 
 	// optimize rule for some special case.
 	if parameters[1].IsConst() && !selectList.IgnoreAllRow() && selectList.ShouldEvalAllRow() {
-		canOptimize, err := optimizeRuleForLike(p1, p2, rs, length, func(i []byte) []byte {
+		canOptimize, err := optimizeRuleForLike(proc.Ctx, p1, p2, rs, length, func(i []byte) []byte {
 			return bytes.ToLower(i)
 		})
 		if canOptimize {
@@ -94,7 +95,7 @@ func (op *opBuiltInRegexp) iLikeFn(parameters []*vector.Vector, result vector.Fu
 	}
 
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters, result, proc, length,
-		op.regMap.likeMatchFn(parameters[1].IsConst(), DefaultEscapeChar, true, true), selectList)
+		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), DefaultEscapeChar, true, true), selectList)
 }
 
 func (op *opBuiltInRegexp) likeFnWithEscape(
@@ -134,7 +135,7 @@ func (op *opBuiltInRegexp) likeFnWithEscape(
 		}
 	}
 	return opBinaryBytesBytesToFixedWithErrorCheck[bool](parameters[:2], result, proc, length,
-		op.regMap.likeMatchFn(parameters[1].IsConst(), escape, escapeEnabled, caseInsensitive), selectList)
+		op.regMap.likeMatchFn(proc.Ctx, parameters[1].IsConst(), escape, escapeEnabled, caseInsensitive), selectList)
 }
 
 func likeNoBackslashEscapes(proc *process.Process) bool {
@@ -156,7 +157,20 @@ func likeNoBackslashEscapes(proc *process.Process) bool {
 	return mysql.HasSQLMode(mode, "NO_BACKSLASH_ESCAPES")
 }
 
-func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], length int,
+// Probe only once per 256 fast-path rows; leave error retrieval on the cold path.
+func likeBatchCanceled(ctx context.Context, row uint64) bool {
+	if row&255 != 0 {
+		return false
+	}
+	select {
+	case <-ctx.Done():
+		return true
+	default:
+		return false
+	}
+}
+
+func optimizeRuleForLike(ctx context.Context, p1, p2 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], length int,
 	specialFnForV func([]byte) []byte) (bool, error) {
 	pat, null := p2.GetStrValue(0)
 	if null {
@@ -169,6 +183,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	// opt rule #1: if expr is empty string, only empty string like empty string.
 	if n == 0 {
 		for i := uint64(0); i < uint64(length); i++ {
+			if likeBatchCanceled(ctx, i) {
+				return true, ctx.Err()
+			}
 			v1, null1 := p1.GetStrValue(i)
 			v1 = specialFnForV(v1)
 			if err := rs.Append(len(v1) == 0, null1); err != nil {
@@ -180,6 +197,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	// opt rule #2.1: anything matches %
 	if n == 1 && pat[0] == '%' {
 		for i := uint64(0); i < uint64(length); i++ {
+			if likeBatchCanceled(ctx, i) {
+				return true, ctx.Err()
+			}
 			_, null1 := p1.GetStrValue(i)
 			if err := rs.Append(true, null1); err != nil {
 				return true, err
@@ -191,6 +211,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	// XXX in UTF8 world, should we do single RUNE matches _?
 	if n == 1 && pat[0] == '_' {
 		for i := uint64(0); i < uint64(length); i++ {
+			if likeBatchCanceled(ctx, i) {
+				return true, ctx.Err()
+			}
 			v1, null1 := p1.GetStrValue(i)
 			v1 = specialFnForV(v1)
 			if err := rs.Append(len(v1) == 1, null1); err != nil {
@@ -202,6 +225,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 	// opt rule #2.3: single char, no wild card, so it is a simple compare eq.
 	if n == 1 && pat[0] != '_' && pat[0] != '%' {
 		for i := uint64(0); i < uint64(length); i++ {
+			if likeBatchCanceled(ctx, i) {
+				return true, ctx.Err()
+			}
 			v1, null1 := p1.GetStrValue(i)
 			v1 = specialFnForV(v1)
 			if err := rs.Append(len(v1) == 1 && v1[0] == pat[0], null1); err != nil {
@@ -223,6 +249,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.1: no wild card, so it is a simple compare eq.
 				literal := functionUtil.RemoveEscapeChar(pat, DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(len(v1) == len(literal) && bytes.Equal(literal, v1), null1); err != nil {
@@ -235,6 +264,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.2: _foobarzoo,
 				literal := functionUtil.RemoveEscapeChar(pat[1:], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(len(v1) == len(literal)+1 && bytes.Equal(literal, v1[1:]), null1); err != nil {
@@ -247,6 +279,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.3, %foobarzoo, it turns into a suffix match.
 				suffix := functionUtil.RemoveEscapeChar(pat[1:], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(bytes.HasSuffix(v1, suffix), null1); err != nil {
@@ -259,6 +294,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.4, foobarzoo_, it turns into eq ingoring last char.
 				prefix := functionUtil.RemoveEscapeChar(pat[:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(len(v1) == len(prefix)+1 && bytes.Equal(prefix, v1[:len(prefix)]), null1); err != nil {
@@ -271,6 +309,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.5 foobarzoo%, prefix match
 				prefix := functionUtil.RemoveEscapeChar(pat[:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(bytes.HasPrefix(v1, prefix), null1); err != nil {
@@ -283,6 +324,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.6 %foobarzoo%, now it is contains
 				substr := functionUtil.RemoveEscapeChar(pat[1:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(bytes.Contains(v1, substr), null1); err != nil {
@@ -295,6 +339,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.7 %foobarzoo_,
 				suffix := functionUtil.RemoveEscapeChar(pat[1:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(len(v1) > 0 && bytes.HasSuffix(v1[:len(v1)-1], suffix), null1); err != nil {
@@ -307,6 +354,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 				// Rule 4.8 _foobarzoo%
 				prefix := functionUtil.RemoveEscapeChar(pat[1:n-1], DefaultEscapeChar)
 				for i := uint64(0); i < uint64(length); i++ {
+					if likeBatchCanceled(ctx, i) {
+						return true, ctx.Err()
+					}
 					v1, null1 := p1.GetStrValue(i)
 					v1 = specialFnForV(v1)
 					if err := rs.Append(len(v1) > 0 && bytes.HasPrefix(v1[1:], prefix), null1); err != nil {
@@ -329,6 +379,9 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 
 		outer:
 			for i := uint64(0); i < uint64(length); i++ {
+				if likeBatchCanceled(ctx, i) {
+					return true, ctx.Err()
+				}
 				v1, null1 := p1.GetStrValue(i)
 				if null1 {
 					rs.AppendMustNull()
@@ -347,10 +400,10 @@ func optimizeRuleForLike(p1, p2 vector.FunctionParameterWrapper[types.Varlena], 
 			return true, nil
 		}
 	}
-	return optimizeAnchoredLikeSegments(p1, rs, pat, length, specialFnForV)
+	return optimizeAnchoredLikeSegments(ctx, p1, rs, pat, length, specialFnForV)
 }
 
-func optimizeAnchoredLikeSegments(p1 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], pat []byte, length int, specialFnForV func([]byte) []byte) (bool, error) {
+func optimizeAnchoredLikeSegments(ctx context.Context, p1 vector.FunctionParameterWrapper[types.Varlena], rs *vector.FunctionResult[bool], pat []byte, length int, specialFnForV func([]byte) []byte) (bool, error) {
 	n := len(pat)
 	// Extend the existing percent-segment optimization to anchored patterns.
 	// Keep escapes, Unicode literals and '_' on the regexp path. Limiting each
@@ -370,6 +423,9 @@ func optimizeAnchoredLikeSegments(p1 vector.FunctionParameterWrapper[types.Varle
 		}
 		prefix, suffix := segments[0], segments[len(segments)-1]
 		for row := uint64(0); row < uint64(length); row++ {
+			if likeBatchCanceled(ctx, row) {
+				return true, ctx.Err()
+			}
 			value, isNull := p1.GetStrValue(row)
 			value = specialFnForV(value)
 			matched := false
@@ -759,10 +815,15 @@ func (rs *regexpSet) regularMatchForLikeOpWithEscape(
 // A constant pattern is prepared lazily, once per vector evaluation. The
 // vector wrapper remains responsible for NULLs and selection, so unevaluated
 // rows never prepare a pattern. No state survives into the next batch.
-func (rs *regexpSet) likeMatchFn(constantPattern bool, escape rune, escapeEnabled, caseInsensitive bool) func([]byte, []byte) (bool, error) {
+func (rs *regexpSet) likeMatchFn(ctx context.Context, constantPattern bool, escape rune, escapeEnabled, caseInsensitive bool) func([]byte, []byte) (bool, error) {
 	var reg *regexp.Regexp
 	ready := false
 	return func(value, pattern []byte) (bool, error) {
+		select {
+		case <-ctx.Done():
+			return false, ctx.Err()
+		default:
+		}
 		if !constantPattern {
 			return rs.regularMatchForLikeOpWithEscape(pattern, value, escape, escapeEnabled, caseInsensitive)
 		}

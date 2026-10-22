@@ -126,6 +126,192 @@ func TestLikePatternSelection(t *testing.T) {
 	}
 }
 
+// Cancel a real context synchronously at an observable evaluation boundary.
+// No goroutine, deadline or production test hook is needed to cancel mid-batch.
+type likeCancelAfterChecksContext struct {
+	context.Context
+	cancel    context.CancelFunc
+	remaining int
+}
+
+func newLikeCancelAfterChecksContext(t *testing.T, checks int) *likeCancelAfterChecksContext {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return &likeCancelAfterChecksContext{Context: ctx, cancel: cancel, remaining: checks}
+}
+
+func (ctx *likeCancelAfterChecksContext) Done() <-chan struct{} {
+	ctx.remaining--
+	if ctx.remaining == 0 {
+		ctx.cancel()
+	}
+	return ctx.Context.Done()
+}
+
+func TestLikeRegexpBatchHonorsCancellation(t *testing.T) {
+	for _, tc := range []struct {
+		name, pattern, value  string
+		escape                string
+		explicit, insensitive bool
+	}{
+		{name: "LIKE", pattern: "a_%b", value: "aXXb"},
+		{name: "ILIKE", pattern: "A_%B", value: "aXXb", insensitive: true},
+		{name: "LIKE ESCAPE", pattern: "a!_%b", value: "a_XXb", explicit: true, escape: "!"},
+		{name: "ILIKE ESCAPE", pattern: "A!_%B", value: "a_XXb", explicit: true, escape: "!", insensitive: true},
+	} {
+		for _, constant := range []bool{true, false} {
+			t.Run(fmt.Sprintf("%s/constant=%v", tc.name, constant), func(t *testing.T) {
+				proc := newLikeTestProcess(t)
+				const rows = 3
+				values := vector.NewVec(types.T_varchar.ToType())
+				defer values.Free(proc.Mp())
+				for range rows {
+					require.NoError(t, vector.AppendBytes(values, []byte(tc.value), false, proc.Mp()))
+				}
+				var patterns *vector.Vector
+				if constant {
+					var err error
+					patterns, err = vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.pattern), rows, proc.Mp())
+					require.NoError(t, err)
+				} else {
+					patterns = vector.NewVec(types.T_varchar.ToType())
+					for range rows {
+						require.NoError(t, vector.AppendBytes(patterns, []byte(tc.pattern), false, proc.Mp()))
+					}
+				}
+				defer patterns.Free(proc.Mp())
+				parameters := []*vector.Vector{values, patterns}
+				if tc.explicit {
+					escape, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.escape), rows, proc.Mp())
+					require.NoError(t, err)
+					defer escape.Free(proc.Mp())
+					parameters = append(parameters, escape)
+				}
+				result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp())
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(rows))
+				ctx := newLikeCancelAfterChecksContext(t, 2)
+				proc.Ctx = ctx
+				op := newOpBuiltInRegexp()
+				fn := op.likeFn
+				if tc.insensitive {
+					fn = op.iLikeFn
+				}
+				err := fn(parameters, result, proc, rows, nil)
+				require.ErrorIs(t, err, context.Canceled)
+				require.Same(t, ctx.Err(), err, "return the original context error")
+				matches := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+				require.True(t, matches[0], "evaluation must begin before cancellation")
+				require.False(t, matches[rows-1], "a canceled batch must not finish successfully")
+			})
+		}
+	}
+}
+
+func TestLikeFastPathBatchHonorsCancellation(t *testing.T) {
+	for _, tc := range []struct{ name, pattern, value string }{
+		{"empty", "", ""},
+		{"any", "%", "a"},
+		{"one rune", "_", "x"},
+		{"one literal", "a", "a"},
+		{"literal", "catalog", "catalog"},
+		{"leading rune", "_tail", "xtail"},
+		{"suffix", "%tail", "prefix_tail"},
+		{"trailing rune", "head_", "headx"},
+		{"prefix", "head%", "headtail"},
+		{"contains", "%mid%", "prefixmidsuffix"},
+		{"suffix rune", "%tail_", "prefix_tailx"},
+		{"rune prefix", "_head%", "xheadtail"},
+		{"unanchored segments", "%a%b%", "xaYbZ"},
+		{"anchored segments", "a%b%c", "aXbYc"},
+	} {
+		for _, insensitive := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/insensitive=%v", tc.name, insensitive), func(t *testing.T) {
+				proc := newLikeTestProcess(t)
+				// The smallest batch crossing the 256-row cancellation interval.
+				const rows = 257
+				values := vector.NewVec(types.T_varchar.ToType())
+				defer values.Free(proc.Mp())
+				for range rows {
+					require.NoError(t, vector.AppendBytes(values, []byte(tc.value), false, proc.Mp()))
+				}
+				patterns, err := vector.NewConstBytes(types.T_varchar.ToType(), []byte(tc.pattern), rows, proc.Mp())
+				require.NoError(t, err)
+				defer patterns.Free(proc.Mp())
+				result := vector.NewFunctionResultWrapper(types.T_bool.ToType(), proc.Mp())
+				defer result.Free()
+				require.NoError(t, result.PreExtendAndReset(rows))
+				ctx := newLikeCancelAfterChecksContext(t, 2)
+				proc.Ctx = ctx
+				op := newOpBuiltInRegexp()
+				fn := op.likeFn
+				if insensitive {
+					fn = op.iLikeFn
+				}
+				err = fn([]*vector.Vector{values, patterns}, result, proc, rows, nil)
+				require.ErrorIs(t, err, context.Canceled)
+				require.Same(t, ctx.Err(), err)
+				matches := vector.MustFixedColNoTypeCheck[bool](result.GetResultVector())
+				require.True(t, matches[255], "the first interval must finish before cancellation")
+				require.False(t, matches[256], "the second interval must observe cancellation")
+			})
+		}
+	}
+}
+
+func TestLikeCancellationPreservesUnevaluatedRows(t *testing.T) {
+	for _, insensitive := range []bool{false, true} {
+		for _, explicit := range []bool{false, true} {
+			for _, mode := range []string{"NULL values", "NULL pattern", "all skipped", "partial selection"} {
+				t.Run(fmt.Sprintf("%s/insensitive=%v/escape=%v", mode, insensitive, explicit), func(t *testing.T) {
+					proc := newLikeTestProcess(t)
+					pattern := NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"a_%b"}, nil)
+					if mode == "NULL pattern" {
+						pattern = NewFunctionTestConstInput(types.T_varchar.ToType(), []string{""}, []bool{true})
+					}
+					valueNulls := []bool{false, false, false}
+					wantNulls := []bool{true, true, true}
+					want := []bool{false, false, false}
+					var selection *FunctionSelectList
+					switch mode {
+					case "NULL values":
+						valueNulls = []bool{true, true, true}
+					case "all skipped":
+						selection = &FunctionSelectList{AnyNull: true, AllNull: true}
+					case "partial selection":
+						selection = &FunctionSelectList{AnyNull: true, SelectList: []bool{false, true, false}}
+						wantNulls = []bool{true, false, true}
+						want[1] = true
+					}
+					inputs := []FunctionTestInput{
+						NewFunctionTestInput(types.T_varchar.ToType(), []string{"aXXb", "aXXb", "aXXb"}, valueNulls), pattern,
+					}
+					if explicit {
+						inputs = append(inputs, NewFunctionTestConstInput(types.T_varchar.ToType(), []string{"!"}, nil))
+					}
+					ctx := newLikeCancelAfterChecksContext(t, 2)
+					proc.Ctx = ctx
+					op := newOpBuiltInRegexp()
+					fn := op.likeFn
+					if insensitive {
+						fn = op.iLikeFn
+					}
+					tcc := NewFunctionTestCase(proc, inputs,
+						NewFunctionTestResult(types.T_bool.ToType(), false, want, wantNulls), fn).WithSelectList(selection)
+					defer tcc.Free()
+					ok, info := tcc.Run()
+					require.True(t, ok, info)
+					require.NoError(t, ctx.Err(), "NULL and skipped rows must not invoke a regexp matcher")
+					if mode != "partial selection" {
+						require.Empty(t, op.regMap.mp, "unevaluated patterns must remain unprepared")
+					}
+				})
+			}
+		}
+	}
+}
+
 // Compare the new anchored segment cases with the unchanged regexp conversion.
 // This catches greedy overlap/anchoring errors across empty and repeated '%'.
 func TestLikeAnchoredSegmentsAgainstRegexp(t *testing.T) {
