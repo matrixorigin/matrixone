@@ -2683,3 +2683,64 @@ func Test_BuiltIn_RegularSubstr(t *testing.T) {
 		require.Equal(t, c.expected, val, i)
 	}
 }
+
+// TestRegexpWideMultilineReviewFindings pins the mo-bot review on PR #30646:
+// (P2) no caret match at end-of-input after a trailing CR/NEL/LS/PS, and
+// (P1/P2) LF-only and oversized subjects keep the base RE2 execution path so
+// constant multiline predicates and large TEXT inputs are not regressed by
+// the internal lookaround rewrite (#30210).
+func TestRegexpWideMultilineReviewFindings(t *testing.T) {
+	op := newOpBuiltInRegexp()
+
+	like := func(pat, str, mt string, binary bool) bool {
+		m, err := op.regMap.regularLikeWithMode(pat, str, mt, binary)
+		require.NoError(t, err)
+		return m
+	}
+
+	// P2 terminal anchor: no caret match at end-of-input after a trailing CR.
+	require.False(t, like("^$", "a\r", "m", false), "caret at end after trailing CR")
+	// Nor after the other MySQL line terminators.
+	require.False(t, like("^$", "a\u0085", "m", false), "caret at end after NEL")
+	require.False(t, like("^$", "a\u2028", "m", false), "caret at end after LS")
+	require.False(t, like("^$", "a\u2029", "m", false), "caret at end after PS")
+	// Trailing LF keeps Go RE2's native multiline contract (unchanged).
+	require.True(t, like("^$", "a\n", "m", false), "trailing LF unchanged")
+	require.True(t, like("^$", "a\r\n", "m", false), "trailing CRLF unchanged")
+	// Interior boundaries and the empty input are preserved.
+	require.True(t, like("^$", "a\n\n", "m", false), "interior empty line")
+	require.True(t, like("^$", "", "m", false), "empty input")
+	require.True(t, like("^b$", "a\rb", "m", false), "interior CR line")
+	require.True(t, like("^b$", "a\r\nb", "m", false), "interior CRLF line")
+	// Binary domain: the same terminal-anchor exclusion on the byte path.
+	require.False(t, like("^$", "a\r", "m", true), "binary trailing CR")
+	require.False(t, like("^$", "a\x85", "m", true), "binary trailing NEL")
+	require.True(t, like("^b$", "a\rb", "m", true), "binary interior CR line")
+
+	// REGEXP_INSTR('a\r', '^', 1, 2, 0, 'm'): only the initial caret exists,
+	// so the second occurrence must be 0 (was 3 before the anchor fix).
+	got, err := op.regMap.regularInstrWithMatchType("^", "a\r", 1, 2, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), got, "instr occurrence 2 on trailing CR")
+	got, err = op.regMap.regularInstrWithMatchType("^", "a\r", 1, 2, 0, true, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(0), got, "binary instr occurrence 2 on trailing CR")
+
+	// P1/P2 routing: pattern with only anchor-injected regexp2 syntax stays
+	// on RE2 for LF-only subjects; CR/NEL subjects still route to regexp2.
+	require.False(t, regexpRowNeedsRegexp2("^alpha", "m", "alpha\nbeta", false), "LF-only subject: RE2")
+	require.False(t, regexpRowNeedsRegexp2("^a", "m", "a\nb", false), "LF-only subject: RE2")
+	require.True(t, regexpRowNeedsRegexp2("^a", "m", "a\rb", false), "CR subject: regexp2")
+	require.True(t, regexpRowNeedsRegexp2("^a", "m", "a\u0085b", false), "NEL subject: regexp2")
+	require.True(t, regexpRowNeedsRegexp2("^a", "m", "a\u2028b", false), "LS subject: regexp2")
+	require.False(t, regexpRowNeedsRegexp2("alpha", "m", "a\rb", false), "no anchors: rewrite no-op")
+	require.False(t, regexpRowNeedsRegexp2("^a", "mu", "a\rb", false), "u pins LF-only endings")
+	require.True(t, regexpRowNeedsRegexp2("^(a)\\1", "m", "aa", false), "user backref keeps regexp2")
+
+	// Oversized subjects stay on the base path: no subject-size aborts.
+	big := strings.Repeat("a", regexp2MaxSubjectBytes+1)
+	require.False(t, regexpRowNeedsRegexp2("^a", "m", big, false), "oversized LF-only: RE2")
+	require.False(t, regexpRowNeedsRegexp2("^a", "m", big+"\r", false), "oversized with CR: RE2 fallback")
+	require.True(t, like("^a", big, "m", false), "oversized MEDIUMTEXT subject")
+	require.True(t, like("^a", big+"\r", "m", false), "oversized wide-terminator subject")
+}

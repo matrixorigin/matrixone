@@ -1080,7 +1080,11 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 
 		patternString := functionUtil.QuickBytesToStr(pattern)
 		binary := regexpMatchUsesBinary(parameters, int(i))
-		if requiresRegexp2PatternWithMatchType(patternString, pureMatchType) {
+		subjectString := ""
+		if !subjectNull {
+			subjectString = functionUtil.QuickBytesToStr(subject)
+		}
+		if regexpRowNeedsRegexp2(patternString, pureMatchType, subjectString, binary) {
 			matcher, err := op.regMap.getRegexp2MatcherWithMatchType(
 				patternString, pureMatchType, binary)
 			if err != nil {
@@ -2297,7 +2301,7 @@ func (rs *regexpSet) regularSubstrWithMatchType(
 	subjectIsBinary bool,
 	pureMatchType string,
 ) (match bool, substr string, err error) {
-	if requiresRegexp2PatternWithMatchType(pat, pureMatchType) {
+	if regexpRowNeedsRegexp2(pat, pureMatchType, str, subjectIsBinary) {
 		return rs.regexp2SubstrWithMatchType(
 			pat, str, pos, occurrence, subjectIsBinary, pureMatchType)
 	}
@@ -2345,7 +2349,7 @@ func (rs *regexpSet) regularReplaceWithMatchType(
 	if err = validateRegexpPattern(pat); err != nil {
 		return "", err
 	}
-	if requiresRegexp2PatternWithMatchType(pat, pureMatchType) {
+	if regexpRowNeedsRegexp2(pat, pureMatchType, str, subjectIsBinary) {
 		return rs.regexp2ReplaceWithMatchType(
 			pat, str, repl, pos, occurrence, subjectIsBinary, pureMatchType)
 	}
@@ -2447,7 +2451,7 @@ func (rs *regexpSet) regularInstrWithMatchType(
 	subjectIsBinary bool,
 	pureMatchType string,
 ) (index int64, err error) {
-	if requiresRegexp2PatternWithMatchType(pat, pureMatchType) {
+	if regexpRowNeedsRegexp2(pat, pureMatchType, str, subjectIsBinary) {
 		return rs.regexp2InstrWithMatchType(
 			pat, str, pos, occurrence, retOption, subjectIsBinary, pureMatchType)
 	}
@@ -3095,13 +3099,17 @@ func regexpMatchTypeWideMultiline(pureMatchType string) bool {
 
 // Zero-width forms of ^ and $ covering the MySQL multiline terminators.
 // CRLF still counts as a single terminator.
-const regexpWideMultilineCaret = `(?:\A|(?<=[\n\x85\x{2028}\x{2029}])|(?<=\r(?!\n)))`
+// After a trailing CR/NEL/LS/PS there is no caret match at end of input:
+// ICU/MySQL report no (nonexistent empty) line there. LF keeps Go RE2's
+// native multiline behavior, which already coincides with the database's
+// observable contract for that terminator (mo-bot review on #30646).
+const regexpWideMultilineCaret = `(?:\A|(?<=[\n])|(?<=[\x85\x{2028}\x{2029}])(?!\z)|(?<=\r(?!\n))(?!\z))`
 const regexpWideMultilineDollar = `(?:\z|(?=\r)|(?<!\r)(?=\n)|(?=[\x85\x{2028}\x{2029}]))`
 
 // Binary-mode variants only emit byte escapes: NEL stays (x85 is one byte),
 // while LS/PS are dropped because binary patterns reject escapes above
 // \x{FF} and neither terminator fits in a single byte (#30210 binary fix).
-const regexpWideMultilineCaretBinary = `(?:\A|(?<=[\n\x85])|(?<=\r(?!\n)))`
+const regexpWideMultilineCaretBinary = `(?:\A|(?<=[\n])|(?<=\x85)(?!\z)|(?<=\r(?!\n))(?!\z))`
 const regexpWideMultilineDollarBinary = `(?:\z|(?=\r)|(?<!\r)(?=\n)|(?=\x85))`
 
 // rewriteRegexpWideMultilineAnchors rewrites unescaped ^ and $ anchors
@@ -3202,6 +3210,19 @@ func regexpPatternWithPureMatchType(pat, pureMatchType string, binary bool) stri
 	return "(?" + engineFlags + ")" + pat
 }
 
+// regexpPatternWithPureMatchTypeRE2 folds match_type into the RE2 flag
+// prefix without applying the wide-multiline anchor rewrite: the rewrite is
+// regexp2-only syntax (lookarounds) and RE2 rejects it. Go's multiline (?m)
+// already matches MySQL semantics for any subject whose line structure does
+// not demand the wider terminator set (see regexpRowNeedsRegexp2).
+func regexpPatternWithPureMatchTypeRE2(pat, pureMatchType string) string {
+	engineFlags := strings.ReplaceAll(pureMatchType, "u", "")
+	if engineFlags == "" {
+		return pat
+	}
+	return "(?" + engineFlags + ")" + pat
+}
+
 // requiresRegexp2PatternWithMatchType routes on the wrapped pattern so
 // that constructs injected by the match_type wrapper (for example the
 // wide-multiline anchor rewrite of issue #30210) also select the regexp2
@@ -3211,6 +3232,50 @@ func requiresRegexp2PatternWithMatchType(pat, pureMatchType string) bool {
 	return requiresRegexp2Pattern(regexpPatternWithPureMatchType(pat, pureMatchType, false))
 }
 
+// regexpWideMultilineSubjectNeedsICU reports whether a subject contains any
+// of MySQL's wide multiline terminators that Go RE2's (?m) does not treat as
+// line boundaries: \r anywhere (both lone-\r caret and \rCRLF-dollar
+// positions differ from LF-only semantics), NEL, LINE SEPARATOR or
+// PARAGRAPH SEPARATOR. Binary subjects span only the byte-sized subset
+// (\r, NEL); LS/PS cannot appear as single bytes.
+func regexpWideMultilineSubjectNeedsICU(subject string, binary bool) bool {
+	if strings.ContainsRune(subject, '\r') {
+		return true
+	}
+	if binary {
+		return strings.IndexByte(subject, 0x85) >= 0
+	}
+	return strings.ContainsAny(subject, "\u0085\u2028\u2029")
+}
+
+// regexpRowNeedsRegexp2 decides the engine for one regexp evaluation. A
+// user pattern RE2 cannot compile at all (backreference, lookaround, \Q,
+// grapheme \X, ...) keeps regexp2 unconditionally. When the pattern's only
+// regexp2 requirement is the injected wide-multiline anchor rewrite, RE2
+// suffices whenever the subject's line structure is LF-only: Go's (?m) ^/$
+// then coincides with the MySQL multiline contract, which restores base
+// REGEXP cost for ordinary constant multiline predicates instead of paying
+// regexp2's compile-per-subject on every row (measured ~66x slower and
+// ~900x more allocations per batch; mo-bot review P1 on #30646). Subjects
+// beyond the regexp2 guard also stay on RE2: base REGEXP had no subject
+// size cap, so adding lookarounds internally must not abort statements
+// that previously succeeded (mo-bot review P2, >1MiB MEDIUMTEXT input).
+func regexpRowNeedsRegexp2(pat, pureMatchType, subject string, binary bool) bool {
+	if requiresRegexp2Pattern(pat) {
+		return true
+	}
+	if !regexpMatchTypeWideMultiline(pureMatchType) {
+		return false
+	}
+	if len(subject) > regexp2MaxSubjectBytes {
+		return false
+	}
+	if rewriteRegexpWideMultilineAnchors(pat, binary) == pat {
+		return false
+	}
+	return regexpWideMultilineSubjectNeedsICU(subject, binary)
+}
+
 // regexpPositionSearchPattern wraps a user pattern so matching can start at a
 // later subject position without changing the original anchor context. A
 // trailing \Q is valid RE2 syntax and quotes through end-of-pattern; close that
@@ -3218,9 +3283,10 @@ func requiresRegexp2PatternWithMatchType(pat, pureMatchType string) bool {
 func regexpPositionSearchPattern(pat, pureMatchType string, binary bool) string {
 	const prefix = "^(?s:.)(?s:.*?)("
 	engineFlags := strings.ReplaceAll(pureMatchType, "u", "")
-	if regexpMatchTypeWideMultiline(pureMatchType) {
-		pat = rewriteRegexpWideMultilineAnchors(pat, binary)
-	}
+	// This wrapper feeds regexp.Compile (RE2) only; the wide-multiline
+	// lookaround rewrite is regexp2-only syntax and must never reach RE2.
+	// Go's (?m) already matches MySQL semantics for every subject routed
+	// here (see regexpRowNeedsRegexp2).
 	var wrapped strings.Builder
 	wrapped.Grow(len(prefix) + len(pat) + len(engineFlags) + 5)
 	wrapped.WriteString(prefix)
@@ -3271,7 +3337,12 @@ func (rs *regexpSet) getRegularMatcherInfoWithMatchType(
 	pat, pureMatchType string,
 	binary bool,
 ) (*regexp.Regexp, bool, error) {
-	rule := regexpPatternWithPureMatchType(pat, pureMatchType, binary)
+	// RE2 receives flags only: Go's multiline (?m) already provides the
+	// LF-centered ^/$ semantics for subjects whose line structure does not
+	// require MySQL's wider terminator set. The wide-multiline lookaround
+	// rewrite is regexp2-only syntax and must never reach regexp.Compile
+	// (mo-bot review on #30646).
+	rule := regexpPatternWithPureMatchTypeRE2(pat, pureMatchType)
 	binaryCaseFold := binary && strings.ContainsRune(pureMatchType, 'i')
 	return rs.getRegularMatcherInfoWithBinaryCaseFold(rule, binary, binaryCaseFold)
 }
@@ -3315,7 +3386,7 @@ func (rs *regexpSet) regularLikeWithMode(pat string, str string, matchType strin
 	if err != nil {
 		return false, err
 	}
-	if requiresRegexp2PatternWithMatchType(pat, pureMatchType) {
+	if regexpRowNeedsRegexp2(pat, pureMatchType, str, binary) {
 		if err := validateRegexpPattern(pat); err != nil {
 			return false, err
 		}
