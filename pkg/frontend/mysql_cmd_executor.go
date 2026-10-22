@@ -4612,6 +4612,9 @@ func doComQuery(ses *Session, execCtx *ExecCtx, input *UserInput) (retErr error)
 
 	proc := ses.proc
 	proc.ReplaceTopCtx(execCtx.reqCtx)
+	// Frontend expressions also use Ctx, without building a new pipeline.
+	// Do not let a completed request's cancellation survive session reuse.
+	proc.ResetQueryContext()
 
 	pu := getPu(ses.GetService())
 	proc.Base.Id = ses.getNextProcessId()
