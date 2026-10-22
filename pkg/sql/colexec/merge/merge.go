@@ -43,6 +43,7 @@ func (merge *Merge) Prepare(proc *process.Process) error {
 		merge.ctr.receiver = nil
 		merge.ctr.materializedPosition = 0
 		merge.ctr.materializedReleased = false
+		merge.cleanMaterializedBatch(proc)
 		return nil
 	}
 
@@ -71,6 +72,10 @@ func (merge *Merge) ActivateReceiverRange(proc *process.Process, start, end int3
 func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 	analyzer := merge.OpAnalyzer
 	if merge.MaterializedSource != nil {
+		// Scalar TVFs borrow their only batch even after EOF, until teardown.
+		if !merge.MaterializedSingleBatch {
+			merge.cleanMaterializedBatch(proc)
+		}
 		bat, end, err := merge.MaterializedSource.Next(proc.Ctx, merge.MaterializedReaderID, merge.ctr.materializedPosition)
 		if err != nil {
 			return vm.CancelResult, err
@@ -80,14 +85,12 @@ func (merge *Merge) Call(proc *process.Process) (vm.CallResult, error) {
 			result.Status = vm.ExecStop
 			return result, nil
 		}
-		if merge.MaterializedSingleBatch {
-			if merge.ctr.materializedBatch != nil {
-				bat.Clean(proc.Mp())
-				return vm.CancelResult, moerr.NewInternalErrorNoCtx("scalar vector source exceeded one batch")
-			}
-			merge.ctr.materializedBatch = bat
+		if merge.MaterializedSingleBatch && merge.ctr.materializedBatch != nil {
+			bat.Clean(proc.Mp())
+			return vm.CancelResult, moerr.NewInternalErrorNoCtx("scalar vector source exceeded one batch")
 		}
 		merge.ctr.materializedPosition++
+		merge.ctr.materializedBatch = bat
 		result.Batch = bat
 		return result, nil
 	}
