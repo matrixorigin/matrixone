@@ -4,7 +4,7 @@
 
 - 任务：[#29438](https://github.com/matrixorigin/matrixone/issues/29438)，父任务 [#29433](https://github.com/matrixorigin/matrixone/issues/29433)。
 - PR 交付同步基线：`76e152a1dd02b7875829027117a6f6344d1f8d33`，以 merge 纳入；此前 PR 基线为 `743e749a1e33d6c845bb73999e8c82d297a2b657`、 `3829ee49c7c118f2f3b0ebf7ed3acbd52483d870`、 `309f618995af4ee23e3b9149365f4af77264090d`、 `d0e7f9a552f90b28dd37c87a30c4c6dc83ae7423`、 `873282742714436bff407dfcdbbe879147162bd3`、`57fb9530859d92791100098d312ea8cacc671910`、`def799e1260dd547cae2e0e54323ea20ec1b7685`，本地验收基线为 `8f600318beffd82185ee8fdd92a8f0b625b8e5e7`，最初核查/反例基线为 `68e642fdc533e96ed8f83ac44659119ad8be97af`。上游同步不改变 S1/S2 契约和本次默认未激活的边界；主输出步与 correlation 采用上游共同 binder/复制语义，不拷贝另一套实现。
-- 依据：[系列契约](CLAUDE_20260922-view-metadata-on-demand.md)、[S1 精确批准记录](CLAUDE_20260928-view-metadata-s1-review.md)、[已批准的 S2 v2.1 修订](CLAUDE_20261005-view-s2-scope-revision.md)。S1/S2 分别通过 #29456/#29633 合入。
+- 依据：[系列契约](CLAUDE_20260922-view-metadata-on-demand.md)、[S1 精确批准记录](CLAUDE_20260922-view-metadata-on-demand.md#s1-批准与-e1-勘误)、[已批准的 S2 v2.1 修订](CLAUDE_20261005-view-s2-scope-revision.md)。S1/S2 分别通过 #29456/#29633 合入。
 - 本文记录上述设计的 S3 接线、边界和验证要求，不是新的上线批准。默认 SQL、PREPARE、cursor 路由不激活新模式；S4、S5/S6、S8/S9 的退出条件没有被本次测试替代。
 - 本轮 CI 的 CHECK namespace SI 恢复测试失败由上游 #30670 修复，直接同步 main，不复制测试补丁或放宽固定 SI snapshot 校验；CI 模式的失败子测/完整相关组及 S3 的新基线消费者验证另行保留。
 
