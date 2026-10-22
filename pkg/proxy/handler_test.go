@@ -1194,3 +1194,44 @@ func TestDisconnectCleanupSealsMigrationBeforeCapture(t *testing.T) {
 	require.Same(t, current, <-killed)
 	require.Same(t, current, tun.getServerConn())
 }
+
+func TestDisconnectCleanupClosesBackendBeforeNotification(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	h := &handler{logger: rt.Logger(), counterSet: newCounterSet()}
+
+	notificationStarted := make(chan struct{})
+	releaseNotification := make(chan struct{})
+	release := sync.OnceFunc(func() { close(releaseNotification) })
+	t.Cleanup(release)
+	backendClosed := make(chan struct{})
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
+	markTunnelInFlight(tun)
+	current := &killCurrentServerConn{
+		cn: &CNServer{connID: 10},
+		closeFn: func() error {
+			close(backendClosed)
+			return nil
+		},
+	}
+	tun.mu.sc = current
+	cc := &mockClientConn{killFn: func(sc ServerConn) error {
+		require.Same(t, current, sc)
+		close(notificationStarted)
+		<-releaseNotification
+		return nil
+	}}
+
+	done := make(chan bool, 1)
+	go func() {
+		done <- h.cleanupBackendOnClientDisconnect(withCode(io.EOF, codeClientDisconnect), cc, tun)
+	}()
+
+	<-notificationStarted
+	select {
+	case <-backendClosed:
+	case <-time.After(time.Second):
+		t.Fatal("backend close waited for control-plane notification")
+	}
+	release()
+	require.True(t, <-done)
+}

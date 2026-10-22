@@ -486,13 +486,16 @@ func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *
 			return true
 		}
 	}
+	// Close the captured backend before any control-plane notification. The
+	// notification is bounded and best-effort, but it must not keep the CN
+	// transport (and its processlist row) alive while it waits.
+	h.closeBackendAfterClientDisconnect(cc, currentSC)
 	if err := cc.KillCurrentBackendConn(currentSC); err != nil {
 		h.logger.Warn("failed to kill backend connection after client disconnect",
 			zap.Uint32("Conn ID", cc.ConnID()),
 			zap.Error(err),
 		)
 	}
-	h.closeBackendAfterClientDisconnect(cc, currentSC)
 	return true
 }
 
