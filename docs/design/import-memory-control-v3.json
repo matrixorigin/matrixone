@@ -1,6 +1,6 @@
 {
-  "version": 1,
-  "status": "draft-design-review",
+  "version": 2,
+  "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
   "target_worktree": "/d/mo-worktrees/v416-import-memory-20261022",
@@ -182,6 +182,109 @@
     "skew_fallback": {
       "state": "Current build chunk only in RAM; probe match sidecar persists across chunk replays; output unmatched probe only after final chunk. Scalar SINGLE detects second match across all chunks using existing SQL error semantics.",
       "cost": "Worst-case IO may be buildChunks times probeBytes; this is an explicit bounded-memory degradation, not a zero-overhead claim."
+    },
+    "working_set_protocol": {
+      "roles": {
+        "I": "Fixed per-pipeline input/output storage and parser credit, owned until consumption; cannot be borrowed by D/W.",
+        "D": "Ordinary retained capacity; acquire complete new allocation before mutation; denial causes flush/spill.",
+        "W": "One process execution slot for destructible spill/encode/IO workspace. Queued jobs hold no slot; no W holder requests D or another W."
+      },
+      "api": [
+        "InputSlotSpec{Count uint32,Bytes int64}",
+        "WorkingSetSpec{UnitBytes int64,Inputs []InputSlotSpec,IOBytes int64}",
+        "ReserveWorkingSet(ctx,spec)(WorkingSet,error)",
+        "WorkingSet.UnitBytes/AcquireInput/AcquireIO/Close",
+        "InputLease.Capacity/Release",
+        "WorkspaceLease.Capacity/Transfer/Release"
+      ],
+      "entry": "Compile.prePipelineInitializer before execution locks and InitAllDataSource. Nested execution must inherit a compatible ticket or reserve before parent locks; no hidden recursive admission.",
+      "topology": "Use maximum effective local Scope Mcpu and every independent live input/output stage, including nested/async stages. This is a conservative planning bound; actual broadcast IDs are separately sealed after duplication.",
+      "I_promise": "sum of all live tickets input-slot bytes, including returned output until downstream consumes it",
+      "W_promise": "max(IOBytes of live tickets); exactly one process W job executes",
+      "atomic": "Reserve I increment plus any increase in W maximum atomically before publishing ticket. Reduce target unit and recompute schema envelopes if statically unsatisfiable; a first-admission waiter owns no execution locks or data.",
+      "unit": "min(64 MiB, admissible request unit), reducible before execution. Target is not a new single-row limit.",
+      "lifetime": "Root, active input, queued IO and transferred job hold references. Close cancels queued acquisition and drops root; active jobs remain valid. Final owner removes promises and recomputes W maximum.",
+      "output": "A W job can publish only into a pre-reserved output I slot or transfer an existing D owner without additional blocking allocation. Returned output cannot keep the only W slot while downstream needs W.",
+      "zero_D": "A legal input window borrowed from I can directly spill through W with D full; no clone into D first.",
+      "physical": "U=max(RSS,max(0,cgroupCurrent-inactiveFile)); predicted use adds outstanding I/W/D promises and proposed increase, minus only proven live resident coverage. Default coverage is zero. Raw cgroup current remains observable. This conservatively overcounts resident allocations; performance must be measured.",
+      "coordination": "One process coordinator coalesces sampling/reclaim across throttlers. Denial below RSS soft threshold still requests reclaim. Release wakes immediately. One-second fallback only with waiters. Ordinary FIFO cannot block W."
+    },
+    "source_and_writer_revision": {
+      "capacity": "MPool.AllocatedBytes counts current Go and native allocated capacity. Global public offheap stats retain existing meaning. Private pool lives until all transferred buffers free.",
+      "growth": "If required exceeds old capacity O, reserve complete new capacity N while O remains charged; never reserve only N-O. Reuse precise vector/mpool growth rules.",
+      "payload": "Window byte accounting counts referenced out-of-line varlen payload, inline/null/const semantics and every actual projection; Window.Size is not the bound.",
+      "source_envelope": "Q=max(unit,TypedRowUpperBound(configured rawRowLimit,schema)). Include typed old plus complete new capacity, raw record old/new growth, readUntil scratch, unescape/charset temporary storage, fixed parser block and field metadata. SourceEnvelope is calculated from this concrete allocation table.",
+      "raw_limit": "Use the existing configured txn-entry-size-limit support boundary, with no new 64MiB row limit. Inspect parser semantics and prevent complete-record/field-metadata growth bypass before allocation; document compatibility of any corrected bypass.",
+      "csv_states": [
+        "read raw row into parser backing view",
+        "before vector mutation compute typed demand and full new capacity",
+        "if nonempty batch crosses unit return batch and preserve one pending raw view without reading parser again",
+        "singleton above target is allowed within reserved row envelope",
+        "EOF/error/Open/Close/reset retire pending and parser state"
+      ],
+      "io_envelope": "IOEnvelope shares implementation-owned sizing functions for sort/merge output, serializer full new capacity, compression bound and allocation rounding, arena fallback, object/block metadata. Borrowed source I/D is excluded; existing and new scratch coexist in W.",
+      "preextend": "PreExtend uses the admitted byte-window row count rather than unconditional 8192 rows.",
+      "writer": "Private pool plus manual map/bitmap/capacity ownership is reconciled after mutation. Automatic spill only returns destroyed/transferred capacity; freeList and uncommitted delete stay charged.",
+      "eval": "Stream per-writer output instead of out.Append through proc.Mp. Metadata is framed/drained during Build or spooled in bounded frames so a single writer cannot grow unlimited metadata before Eval. Preserve MergeBlock transaction semantics.",
+      "async": "Acquire W before executing, transfer with job; queued jobs own input references but no W. Sync may wait for job; job cannot request D/second W. Error/cancel follow same final-owner cleanup."
+    },
+    "hashbuild_revision": {
+      "states": [
+        "CollectingMemory",
+        "BuildingMap",
+        "PublishedMemory",
+        "Spilling",
+        "PublishedSpill",
+        "Failed/Cancelled"
+      ],
+      "precopy": "Reserve full new vector capacity before copy. Nonblocking denial starts spill with W; no retained-data wait.",
+      "prehash": "Capacity calculation lives with hashmap allocator and includes load-factor rounding, old+new resize peak, Sels/results/offsets, key-expression/unique-key scratch and iterator/output storage. Use worst row count and checked arithmetic.",
+      "denial": "Preserve original batches; destroy unpublished partial hashmap; spill original rows; release only destroyed D. Subsequent input spills directly.",
+      "publish": "Batches, hashmap, Sels and their D leases transfer together to JoinMap and survive until last probe; NeedBatches=false releases only destroyed owners."
+    },
+    "broadcast_spill_revision": {
+      "topology": "GroupID, actual ParticipantID(scope identity plus ParallelID), Epoch. scope.go:newParallelScope seals IDs from final actual duplication, including single-instance ID, before any group Prepare/Call. Fresh Reset execution uses fresh epoch.",
+      "states": [
+        "Collecting",
+        "Claimed",
+        "Finished",
+        "Aborted"
+      ],
+      "register": "Each probe spools bounded private input, including empty stream, releases local W, then registers exactly once. Last participant atomically claims all probe files and immutable build source. Others end without waiting.",
+      "failure": "Registration before-error/IO/cancel/failed Reset aborts epoch. Query-context independent cleanup covers never-started participants. Lock protects ownership transfer only; no IO/allocation/FD-close under coordinator lock.",
+      "abort": "Collecting abort detaches registered files and closes outside lock; unregistered remain local. Claimed abort cancels consumer but never closes its active FD concurrently. Claim/Abort linearize to exactly one terminal owner.",
+      "bitmap": "All probes consult shared spill-generation state, including Reset before JoinMap receive. Spill generation sends/waits on no old bitmapChannel. Claimant executes one logical finalizer; normal in-memory protocol stays unchanged.",
+      "source": "Immutable source and each reader have references. SectionReader/ReadAt gives independent logical offsets; dup plus Seek is forbidden. Source closes only after last source/reader reference.",
+      "bucket": "Every FD explicitly local/queued/active. Pop establishes active ownership before reader creation. Repartition publishes children only after successful completion; all failures close local/active/queued resources exactly once."
+    },
+    "spill_codec_revision": {
+      "api": [
+        "Vector.MarshalBinaryTo(io.Writer)",
+        "Batch.MarshalBinaryTo(io.Writer)"
+      ],
+      "compatibility": "Original buffer API delegates the common implementation and retains byte-for-byte persistent format. Temporary spill framing uses bounded counting writer and header patching with WriteAt.",
+      "framing": "No whole-batch serialized copy. Only complete frames are published. Short write, malformed/oversized lengths and encode errors terminate and clean owner.",
+      "scatter": "All buckets share aggregate byte budget. Flush/shrink before Union or PreExtend. Shared varlen area is compacted into bounded window before serialization; stream API alone is insufficient."
+    },
+    "skew_fallback_revision": {
+      "mode": "At max repartition depth, bounded build chunks replay probe files. Never ignore budget and load entire bucket.",
+      "probe_ids": "Stable ParticipantID plus local row ordinal survives repartition. Sealed participant prefix yields global probe ID.",
+      "sidecar": "Disk-backed match counts/state with bounded page cache, no whole-state RAM bitmap/mmap residency. File bytes/cache/FD count recorded.",
+      "semantics": {
+        "INNER": "emit each matching pair once per chunk",
+        "LEFT": "pairs per chunk; unmatched probe only after all chunks",
+        "RIGHT": "pairs; unmatched build after all probe sources for current chunk",
+        "FULL": "RIGHT chunk finalization plus LEFT final probe scan",
+        "LEFT_SEMI": "emit only first transition to matched",
+        "LEFT_ANTI": "emit unmatched probe after all chunks",
+        "RIGHT_SEMI": "emit matched build once at current chunk finalization",
+        "RIGHT_ANTI": "emit unmatched build at current chunk finalization",
+        "LEFT_SINGLE": "count across chunks, second complete match errors with existing semantics; unmatched after all chunks",
+        "RIGHT_SINGLE": "count across all probes for current build row, second match errors; unmatched at chunk finalization"
+      },
+      "conditions": "Use original equality, NULL and additional non-equality predicates before recording match.",
+      "cursor": "Persist bucket, chunk, participant/file/frame/row, match-list offset, build-finalize row, final probe scan and phase across Call. Advance cursor and sidecar before returning output. IO errors terminate rather than replay already-published output. Empty chunk advances source.",
+      "cost": "Worst-case IO is build-chunks times probe bytes; acceptance measures this bounded-memory degradation."
     }
   },
   "ownership_and_wait_graphs": [
@@ -211,7 +314,14 @@
       "Shared cache budget conservation under concurrent get/put/drain",
       "Broadcast two or more probes with interleaved source lifetime and one finalizer",
       "Skew at max depth for all supported join modes, NULL and non-equi conditions",
-      "Spill/IO memory peak and cancellation without main-worker quota cycles"
+      "Spill/IO memory peak and cancellation without main-worker quota cycles",
+      "Complete working-set atomic admission and final reference rollback",
+      "D full: input parses and direct spills via independent W",
+      "Two queued jobs: only runner holds W; Sync cannot form a D/W wait cycle",
+      "Typed and raw CSV capacity checks happen before growth",
+      "Actual duplicated topology seals IDs and retires old bitmap reset protocol",
+      "All join variants compared to independent multiset oracle with one-row Call outputs",
+      "Short write and frame decode failure close active/queued/source FDs"
     ],
     "negative_controls": "Each repaired contract must have a discriminating old-code or disabled-mechanism oracle; do not accept compile errors as negative proof.",
     "race": "Focused adaptive race per changed concurrency test plus affected owning packages once.",
@@ -227,9 +337,29 @@
       "Static/race/consumer validation",
       "Five-round real import and self-review"
     ],
-    "current_production_patch": "V2 remains unmodified during design phase",
+    "current_production_patch": "V2 validated baseline; V3 implementation begins after this reviewed revision.",
     "publication": "No push/PR/release in this design step."
   },
-  "reviewers": [],
-  "approval": null
+  "reviewers": [
+    {
+      "agent": "throttler_v3",
+      "scope": "I/D/W admission, cancellation, physical prediction, wakeup protocol",
+      "decision": "APPROVE for incorporated protocol; envelope consumer tests required"
+    },
+    {
+      "agent": "native_reuse_evidence",
+      "scope": "Source/writer growth, CSV pending raw, owner accounting and async workspace",
+      "decision": "PASS for incorporated closure; parser and IO allocation tables must be implemented and tested"
+    },
+    {
+      "agent": "parameter_audit",
+      "scope": "HashBuild, broadcast lifecycle, skew semantics and spill framing",
+      "decision": "PASS for incorporated closure plus integrated working-set entry"
+    }
+  ],
+  "approval": {
+    "kind": "internal-independent-design-review",
+    "revision": 2,
+    "condition": "Implementation must satisfy recorded protocol and consumer tests; no implementation claim based solely on design."
+  }
 }
