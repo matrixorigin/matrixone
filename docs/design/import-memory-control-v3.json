@@ -1,5 +1,5 @@
 {
-  "version": 6,
+  "version": 7,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
@@ -15,7 +15,8 @@
     "V2 closes one cleanup leak, bounds idle Arena bytes and adds native trim; five uninterrupted 39-table rounds pass, but review identifies impossible-admission, reclaim-threshold-gap, retained-delete reservation and incomplete upstream bounds.",
     "Per-writer 20 ms ForceRefresh causes redundant process sampling/reclaim and has no fairness guarantee.",
     "CSV currently limits raw input field bytes; MultiUpdate projections and vector capacities can amplify the next allocation.",
-    "HashBuild spills only shuffle, copies before testing the threshold; scatter buffers are row bounded and max-depth skew reload is unbounded."
+    "HashBuild spills only shuffle, copies before testing the threshold; scatter buffers are row bounded and max-depth skew reload is unbounded.",
+    "Deterministic compiler fixtures: after full reclaim permits 64 MiB, old solver grants 4 bytes; max-row floor with identical envelopes shrinks 64 to 32 MiB despite no memory benefit. This is a throughput defect, not yet an explanation of the interrupted native table 29."
   ],
   "goals": [
     "The tested amway import semantics, indexes, row counts and SQL success remain intact under fixed 22 GiB and no inter-round idle/GC/restart.",
@@ -38,7 +39,8 @@
     "Q3": "Input batch, private retained capacity, pending jobs, spill bucket buffers, spill frames and skew working sets have byte bounds. A cache limit alone is not an active-memory limit.",
     "accounting": "Use per-owner allocated capacity, not cumulative processed input. Go and native pool allocations both count; serialization/map/bitmap state has an explicit capacity charge.",
     "progress": "Too-large requests are split before waiting. Physical-pressure denial drives one merged reclaim+fresh sample even below the RSS soft line. Pool denial waits for actual ownership release.",
-    "performance": "No per-writer periodic sampling; hot-path accounting reuses atomic counters and row-window boundaries, with no full retained-state scan for every row."
+    "performance": "No per-writer periodic sampling; hot-path accounting reuses atomic counters and row-window boundaries, with no full retained-state scan for every row.",
+    "largest_fitting_unit": "At admission linearization select the largest legal unit fitting the current physical and shared I/W state. Reclaim/release must reconsider larger candidates. Identical complete envelopes preserve the largest unit; reducing an execution unit without reducing its promise is not progress."
   },
   "decisions": [
     {
@@ -130,6 +132,21 @@
       "id": "D18",
       "choice": "Use the early irregular-index source only for FAIL/ordinary LOAD. IGNORE maintenance consumes a final projection downstream of duplicate filtering, with or without regular indexes. UPDATE also consumes final images and alone emits old-index deletes.",
       "rationale": "Public SQL showed ignored duplicate-PK text leaking into FT while the base row and BTREE remained correct after the UPDATE-only guard. The original mixed-index code accidentally restored the filtered source; retain correct IGNORE filtering without recreating the unnecessary ordinary-LOAD old-table join."
+    },
+    {
+      "id": "D19",
+      "choice": "Compiler prepares at most 27 descending power-of-two legal working-set candidates. Optional ReserveWorkingSetCandidates uses one existing FIFO node and selects the largest physically fitting candidate atomically under the coordinator mutex after every relevant wake. Single-spec Reserve delegates to the same implementation.",
+      "rationale": "Resetting the unit only after synchronous reclaim leaves stale small units in FIFO waiters; waiting only for the largest target can reject progress when a smaller unit would fit. A bounded candidate list avoids either failure without a new worker, polling loop, user parameter or per-row work.",
+      "constraints": [
+        "Deduplicate only identical full I/W envelopes (including input layout), never equal totals with different input/workspace decomposition. Fit uses input+max(0,IO-currentWorkspacePromise).",
+        "Preserve FIFO ordering and context removal/rollback; no second node or partial promise. Candidate specs are immutable/owned for the duration of a wait.",
+        "FIFO head with no active owners performs one existing merged full reclaim outside the mutex. It rescans all candidates under the mutex; if none fit, it removes its node and returns a typed minimum-capacity error enabling compiler DOP retry. The same transition applies after the last owner exits while waiting.",
+        "Known sample invalidity does not create credit; existing cancellation, one-second shared fallback and mixed-version legacy behavior remain unchanged. DOP recompilation releases partial statement tickets."
+      ],
+      "alternatives_rejected": [
+        "Reset unit to target only after Reclaim: leaves owner-release/FIFO case stale.",
+        "Queue only the maximum target: can block forever even when smaller valid layout fits the fixed resident baseline."
+      ]
     }
   ],
   "alternatives": [
@@ -237,7 +254,7 @@
       "growth": "If required exceeds old capacity O, reserve complete new capacity N while O remains charged; never reserve only N-O. Reuse precise vector/mpool growth rules.",
       "payload": "Window byte accounting counts referenced out-of-line varlen payload, inline/null/const semantics and every actual projection; Window.Size is not the bound.",
       "source_envelope": "Q=max(unit,TypedRowUpperBound(configured rawRowLimit,schema)). Include typed old plus complete new capacity, raw record old/new growth, readUntil scratch, unescape/charset temporary storage, fixed parser block and field metadata. SourceEnvelope is calculated from this concrete allocation table.",
-      "raw_limit": "Use the existing configured txn-entry-size-limit support boundary, with no new 64MiB row limit. Inspect parser semantics and prevent complete-record/field-metadata growth bypass before allocation; document compatibility of any corrected bypass.",
+      "raw_limit": "Use the existing configured largest-entry-limit support boundary, with no new 64MiB row limit. Inspect parser semantics and prevent complete-record/field-metadata growth bypass before allocation; document compatibility of any corrected bypass.",
       "csv_states": [
         "read raw row into parser backing view",
         "before vector mutation compute typed demand and full new capacity",
@@ -319,7 +336,7 @@
       "scope": "Narrow extension of pipeline metadata only; no persistent/catalog/SQL protocol format change.",
       "whole_query_admission": {
         "manifest": "Origin enumerates the complete scope DAG per CN, carrying stage schema/role/retained-field/concurrency descriptors plus statement epoch and incoming frame unit; remote recomputes envelopes using its local configuration. Every scope RPC carries only the token/reference to this same complete local ticket.",
-        "ordering": "Before any execution locks, reads or retained allocation, origin opens/reserves all participating CNs including itself in stable CN UUID order. Every query uses this order. Partial success is registered for cleanup immediately. DOP recompilation releases every partial ticket before rebuilding.",
+        "ordering": "Before any execution locks, reads or retained allocation, origin opens/reserves all participating CNs including itself in stable (process UUID,CN UUID) order. Every query uses this order. Partial success is registered for cleanup immediately. DOP recompilation releases every partial ticket before rebuilding.",
         "commit": "After every CN admits, commit the minimum selected target unit to all CNs. Promise size may shrink, never increase. Receiver input slots still cover the incoming frame bound. Only then execute any pipeline.",
         "owner": "One dedicated statement admission control stream per remote CN owns the MessageBoard root ticket. Scope RPCs attach/detach references; normal scope cancellation cannot close or abort the shared root. Scope-start and Close are linearized; an absent/closed token is rejected, never recreated.",
         "termination": "After all remote scopes/notifications join, origin sends END or ABORT with a cleanup context independent of the cancelled query. An acknowledged END permits ordinary stream close. Any failed send/ack/control-context forces Close(true) on the exclusively locked backend, so server SessionCtx.Done runs root cleanup even if END is lost. Server handler defer removes token, closes root and cancels attached unfinished scopes. No forever tombstone or expected-RPC-count cleanup.",
@@ -340,7 +357,7 @@
     },
     "planner_action_fix": {
       "classification": "Focused ordinary planner bug, design document exemption; recorded here because it changes the acceptance plan.",
-      "contract": "Only UPDATE action records old irregular-index deletion. Plain INSERT/LOAD and IGNORE retain their new-row index maintenance source when regular index projections are appended.",
+      "contract": "Plain INSERT/LOAD uses the new-row irregular-index maintenance source. IGNORE and UPDATE publish irregular-index additions only from the final post-dedup projection for both regular-index and pure-irregular-index layouts; only UPDATE deletes old irregular-index entries. REPLACE preserves its existing delete-old behavior.",
       "evidence": "TestInsertIrregularMaintenanceAction fails insert/ignore on the original source, passes ODKU; with action guard all three pass. Real SQL index correctness is required."
     },
     "control_terminal": "Control close marks closed/removes token/cancels scopes/closes root WS; shared MessageBoard cleanup waits until all attached scopes detach after operator cleanup. Repeated identical Commit is read-only after publication.",
@@ -385,7 +402,11 @@
       "Typed and raw CSV capacity checks happen before growth",
       "Actual duplicated topology seals IDs and retires old bitmap reset protocol",
       "All join variants compared to independent multiset oracle with one-row Call outputs",
-      "Short write and frame decode failure close active/queued/source FDs"
+      "Short write and frame decode failure close active/queued/source FDs",
+      "After reclaim makes target fit, admit target rather than the previously tiny unit",
+      "Equal complete max-row envelopes preserve largest execution unit",
+      "Owner-release wake reselects largest fitting unit in the same FIFO node",
+      "No-owner minimum impossible after full reclaim returns typed capacity error and releases FIFO node; cancellation never publishes a ticket"
     ],
     "negative_controls": "Each repaired contract must have a discriminating old-code or disabled-mechanism oracle; do not accept compile errors as negative proof.",
     "race": "Focused adaptive race per changed concurrency test plus affected owning packages once.",
@@ -428,11 +449,12 @@
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 6,
+    "revision": 7,
     "condition": "Implementation must satisfy recorded protocol and consumer tests; no implementation claim based solely on design.",
     "narrow_revision": "Worker proposes complete per-CN stage manifests and ordered all-CN prelock admission with statement control-stream ownership; root reviewed concrete two-origin/late-probe wait graphs and existing transport termination, accepts protocol with acknowledged END or forced exclusive backend close on failure.",
     "key_contract_review": "2026-10-22 23:18 +08:00: join worker proposed shared recursive key contract and pre-evaluation whole-query legacy eligibility; root approved subject to complete intermediate old+new/result/packer capacity, overflow and NULL/const coverage, and fixed/serial/unknown compatibility UT. Root independently identified source scope and execution-backend wait graph; separate transport and source gate passed independent review.",
     "physical_identity_review": "2026-10-22 23:44 +08:00: Galileo demonstrated supported launch-multi-cn aliases a shared processMemoryCoordinator and creates self-wait. Root independently identified the two-query different-CN-alias P/Q inversion; approved process UUID ordering plus duplicate-process legacy gate and pre-reserve epoch verification, with explicit cancellation/ordering/restart tests.",
-    "ignore_source_review": "CSV worker traced the public SQL failure through early source and final projection; root approved action-by-index-layout DAG UT plus unchanged ignored-word/old-word/new-word public oracles before native import."
+    "ignore_source_review": "CSV worker traced the public SQL failure through early source and final projection; root approved action-by-index-layout DAG UT plus unchanged ignored-word/old-word/new-word public oracles before native import.",
+    "largest_unit_review": "2026-10-23 00:05 +08:00: Galileo reproduced stale-unit and max-row plateau failures deterministically; root approved bounded descending full-envelope candidates. Independent final_parameter_review approved with mandatory ownerless full-reclaim-and-typed-capacity-error terminal, including last-owner exit; exact I/W delta and full-layout dedup required."
   }
 }
