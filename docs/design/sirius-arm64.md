@@ -24,7 +24,10 @@ Sirius owns the platform-specific `mo` compiler dependencies and lockfile.
 MO's Make/shell GPU helpers select native compiler and CUDA target paths from
 the host (aarch64 compiler, `targets/sbsa-linux` CUDA libraries), its bridge
 admits linux/arm64, and SDK packaging checks native provenance against that
-host. The standalone MO GPU profile remains amd64;
+host. The CN lifecycle entry must select the same native architectures as the
+bridge, then create and register the runtime before SQL admission. Its existing
+startup and shutdown paths remain the sole runtime owner. The standalone MO GPU
+profile remains amd64;
 ARM builds use Sirius's shared profile. No runtime fallback or cross-compilation
 is introduced. Preserve amd64's Haswell host ISA floor; ARM uses ARMv8-A.
 
@@ -47,17 +50,20 @@ wire format, upgrade state, concurrency, or security contract changes.
 
 ## Validation and review
 
-R2 closure: Sirius Pixi profile -> MO GPU helpers -> CGo bridge -> packaging.
-R0 closure: platform documentation. Base/head for this local change is
-1b66ff135c64ef1c642a297105bf599cd3173dee; no origin/main ref is available.
+R2 closure: Sirius Pixi profile -> MO GPU helpers -> CGo bridge -> CN runtime
+registration -> public SQL, plus native packaging. R0 closure: platform
+documentation. The review follow-up is based on PR head
+`3c34ebcac7eb1fdb042ea737951971d714d3298d`, with base/merge-base
+`460b96365a381e74916b044a99fc9423c33ad3fd`.
 The pre-existing untracked `.codegraph/` is outside scope.
 
 Use existing deterministic Make/shell and SDK fixture tests for both native
 architectures, plus mismatched-prefix, missing-input and wrong-architecture
 rejection. Check Go build-file selection for both architectures. Resolve and
 install the frozen ARM profile, build its C smoke consumer, then link MO and
-run the existing native bridge integration tests. SQL/BVT behavior is unchanged;
-the existing native tests are the consumer proof for this build-only change.
+run the existing native bridge, public SQL and native-preparation tests. Public
+SQL must assert that the CN registered a healthy native runtime and unregisters
+it on shutdown; CPU/native result parity alone does not establish offload.
 Full GPU execution evidence remains required before claiming runnable support.
 
 Design review (before implementation): PASS for the native-only architecture
@@ -119,10 +125,44 @@ unit tests, wrapper checks for both architectures, and all 32 bridge tests passe
 The existing public MO-reader integration test was enabled on ARM only in the
 validation checkout. It failed three integer-overflow eligibility assertions:
 hinted queries returned MySQL error 1690 (`data out of range`) instead of error
-1105 containing `not eligible`. This run does not establish full public SQL
-acceptance. The combined MO cuVS/Sirius runtime profile was not tested.
+1105 containing `not eligible`. Subsequent review found that the ARM CN still
+selected its stub, so these failures reflected CPU fallback and did not prove
+native SQL behavior. The combined MO cuVS/Sirius runtime profile was not tested
+in that run.
 
 The committed Sirius pin remains
 `06400cf48073e51955067bfd75c5c4defe955a72`; the isolated build is evidence for
 the MatrixOne implementation with the stated native dependency, not an ARM
 build validation of that unchanged pin.
+
+## CN lifecycle review follow-up (2026-10-22)
+
+The native CN and complementary stub build tags now match the bridge's Linux
+amd64/arm64 support. Both existing public SQL and TPC-H preparation test files
+are enabled on ARM. The public SQL fixture checks runtime registration,
+validation, and unregistration after CN shutdown without adding another runtime
+registry, initializer, cluster, or dataset.
+
+The existing CN build-entry unit test retains the unavailable-build rejection
+and checks that a native build rejects a cancelled start before reading config
+or publishing a runtime. This deterministic regression fails with the old ARM
+CN stub selection, without constructing a GPU runtime.
+
+Real `go list` selection agrees for the bridge and CN on Linux amd64/arm64 with
+CGo, and selects both stubs with CGo disabled or on unsupported platforms. The
+native public SQL test passes all 33 subtests after connecting the CN entry,
+including the three overflow eligibility cases that previously failed. Its
+structured terminal records contain 35 actual GPU executions, all with
+`fallback=false`; the first query completes four GPU tasks and consumes one MO
+input unit. This is fresh execution evidence, not an inference from CPU parity.
+
+Native preparation passes Q1-Q21. Q22 still fails because Sirius rejects
+`substr(expr_0, CAST(1 AS BIGINT), CAST(2 AS BIGINT))` inside an aggregate. That
+native feature gap remains visible; neither its assertion nor the eligibility
+checks are weakened.
+
+This follow-up uses the same isolated Sirius development dependency
+`13ad4bd00d79fdaf07b1d2ff7a2780a787b2056e` and locally restored ARM `mo` profile.
+The committed frozen dependency is still not ARM acceptance evidence. Its
+profile must be delivered in Sirius and the final dependency revalidated before
+release acceptance.
