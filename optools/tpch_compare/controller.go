@@ -337,17 +337,16 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 	if err != nil {
 		return record, err
 	}
+	var server, worker *managedProcess
 	defer func() { retErr = errors.Join(retErr, group.close()) }()
 	defer func() {
 		record.Trailing, err = group.snapshot(false)
 		retErr = errors.Join(retErr, err)
-		procs, probeErr := os.ReadFile(filepath.Join(group.path, "cgroup.procs"))
-		retErr = errors.Join(retErr, probeErr)
-		if probeErr == nil && strings.TrimSpace(string(procs)) == "" {
+		if cleanupErr := group.quiescent(server, worker); cleanupErr == nil {
 			record.Cleanup = "complete"
 		} else {
 			record.Cleanup = "failed"
-			retErr = errors.Join(retErr, errors.New("application generation still owns processes"))
+			retErr = errors.Join(retErr, cleanupErr)
 		}
 	}()
 	watchCtx, stopWatch := context.WithCancelCause(ctx)
@@ -403,7 +402,6 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 		}
 	}
 	armStart := time.Now()
-	var server *managedProcess
 	if d.Engine.Name == "mo" {
 		server, err = startManaged(ctx, []string{c.MOBinary, "-launch", d.Launch, "-debug-http", fmt.Sprintf("127.0.0.1:%d", d.DebugPort)}, d.Root, d.environment(t.Cores), group, filepath.Join(root, "service.log"), nil)
 		if err != nil {
@@ -449,7 +447,7 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 		extra = gate.child
 		argv = append(argv, "--controlled")
 	}
-	worker, err := startManaged(ctx, argv, d.Root, d.environment(t.Cores), group, filepath.Join(root, "worker.log"), extra)
+	worker, err = startManaged(ctx, argv, d.Root, d.environment(t.Cores), group, filepath.Join(root, "worker.log"), extra)
 	if err != nil {
 		return record, err
 	}
@@ -507,6 +505,11 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 			return record, fmt.Errorf("MO service shutdown: %w", server.waitErr)
 		}
 	}
+	// Disk/cache bookkeeping assumes the owned deployment has stopped. The
+	// deferred check also covers errors and partial initialization after teardown.
+	if err := group.quiescent(server, worker); err != nil {
+		return record, err
+	}
 	record.Trailing, err = group.snapshot(false)
 	if err != nil {
 		return record, err
@@ -532,6 +535,5 @@ func runArm(ctx context.Context, c Campaign, p Preflight, manager *cgroupManager
 		}
 	}
 	record.Status = "pass"
-	record.Cleanup = "complete"
 	return record, nil
 }

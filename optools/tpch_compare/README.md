@@ -154,6 +154,12 @@ quota or unsampled peak. Runtime/cancellation errors and partial artifacts remai
 failures. Each measurement invocation uses a new run identifier and preserves
 earlier attempts.
 
+The next arm is admitted only after managed process waits have finished and the
+application cgroup is empty. Unproven cleanup in either a measured or warm-prime
+arm stops the run after recording the failed attempt and terminal error. Ordinary
+execution failures with completed process cleanup remain failed blocks and may
+continue. Resolve any remaining owned processes before starting another attempt.
+
 Reports contain Markdown, query CSV and whole-window resource CSV. Bootstrap
 intervals resample paired blocks/waves, preserving dependencies among calls in a
 concurrent wave. Missing or failed blocks invalidate the cell's score. Suite/wave
