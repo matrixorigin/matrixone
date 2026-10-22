@@ -138,3 +138,16 @@ func TestBirthAdmissionRejectsUnsafeIdentity(t *testing.T) {
 		})
 	}
 }
+
+func TestBirthAdmissionUnadmittedDataDirectory(t *testing.T) {
+	t.Setenv(ManifestEnv, "")
+	root := t.TempDir()
+	marker := Marker{FormatVersion: 1, BinarySHA256: strings.Repeat("1", 64), SourceSHA: strings.Repeat("2", 40), NativeSHA256: strings.Repeat("3", 64)}
+	data, err := json.Marshal(marker)
+	require.NoError(t, err)
+	require.NoError(t, unix.Setxattr(root, DataXattrName, data, 0))
+	require.NoFileExists(t, filepath.Join(root, MarkerName), "this must prove the actual directory marker, without a run sidecar")
+	require.Error(t, CheckDataDirectory(filepath.Join(root, "new-child")))
+	require.NoError(t, unix.Removexattr(root, DataXattrName))
+	require.NoError(t, CheckDataDirectory(filepath.Join(root, "new-child")))
+}
