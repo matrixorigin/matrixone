@@ -515,7 +515,8 @@ func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[
 	childOrderOverwritten := fullTextOrderOverwritten(node, orderOverwritten)
 	for i, childID := range node.Children {
 		if node.NodeType == plan.Node_JOIN && joinCanConsumeIndexHints(node) &&
-			builder.qry.Nodes[childID].NodeType == plan.Node_TABLE_SCAN && builder.scanForcesJoinIndex(childID) {
+			builder.qry.Nodes[childID].NodeType == plan.Node_TABLE_SCAN && builder.scanForcesJoinIndex(childID) &&
+			!scanHasFullTextBooleanComposition(builder.qry.Nodes[childID]) {
 			continue
 		}
 		node.Children[i], err = builder.applyIndicesWithOrder(childID, colRefCnt, idxColMap, childOrderOverwritten)
@@ -523,10 +524,16 @@ func (builder *QueryBuilder) applyIndicesWithOrder(nodeID int32, colRefCnt map[[
 			return -1, err
 		}
 	}
+	if err := builder.rewriteFullTextBooleanConsumers(node); err != nil {
+		return -1, err
+	}
 	replaceColumnsForNode(node, idxColMap)
 
 	switch node.NodeType {
 	case plan.Node_TABLE_SCAN:
+		if scanHasFullTextBooleanComposition(node) {
+			return builder.applyFullTextBooleanComposition(nodeID, node, idxColMap)
+		}
 		return builder.applyIndicesForFilters(nodeID, node, colRefCnt, idxColMap), nil
 
 	case plan.Node_JOIN:
@@ -1189,7 +1196,7 @@ func indexPartFixedByEquality(part string, scanNode *plan.Node) bool {
 	tag := scanNode.BindingTags[0]
 	for _, filter := range scanNode.FilterList {
 		fn := filter.GetF()
-		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 {
+		if fn == nil || fn.Func == nil || fn.Func.ObjName != "=" || len(fn.Args) != 2 || isJSONNumericComparisonArgs(fn.Args) {
 			continue
 		}
 		leftCol := fn.Args[0].GetCol()
@@ -2005,6 +2012,10 @@ func (builder *QueryBuilder) detectFullTextGuard(projNode *plan.Node) []int32 {
 		return nil
 	}
 
+	if scanHasFullTextBooleanComposition(path.scanNode) {
+		return []int32{path.scanNode.NodeId}
+	}
+
 	if path.aggNode != nil {
 		filterids, _ := builder.getFullTextMatchFiltersFromScanNode(path.scanNode)
 		wrappedExprs, _ := builder.getWrappedFullTextMatches(nil, path.scanNode, filterids, nil)
@@ -2051,6 +2062,9 @@ func (builder *QueryBuilder) detectVectorGuardFromSort(sortNode *plan.Node) []in
 func (builder *QueryBuilder) vectorIndexSupportsContext(vecCtx *vectorSortContext, algo string) bool {
 	if vecCtx == nil || vecCtx.scanNode == nil {
 		return true
+	}
+	if scanHasFullTextBooleanComposition(vecCtx.scanNode) {
+		return false
 	}
 	membership := indexplugin.SupportsMembership(algo)
 	if builder.scanHasMatchedFullTextFilter(vecCtx.scanNode) {
@@ -2515,7 +2529,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 		}
 
 		fn := node.FilterList[i].GetF()
-		if fn == nil || len(fn.Args) < 2 {
+		if fn == nil || len(fn.Args) < 2 || isJSONNumericComparisonArgs(fn.Args) {
 			continue
 		}
 		colArgIdx := 0
@@ -2569,7 +2583,7 @@ func (builder *QueryBuilder) applyExtraFiltersOnIndex(idxDef *IndexDef, node *pl
 }
 
 func checkIndexFilter(fn *plan.Function) (int, *plan.ColRef) {
-	if fn == nil {
+	if fn == nil || isJSONNumericComparisonArgs(fn.Args) {
 		return UnsupportedIndexCondition, nil
 	}
 	switch fn.Func.ObjName {
@@ -4247,7 +4261,8 @@ func isUpperBoundOp(name string) bool {
 // classifyRangeBound returns the column and whether the filter is a lower bound.
 // Returns nil if the filter is not a range comparison with a column and constant.
 func classifyRangeBound(fn *plan.Function) (col *plan.ColRef, isLower bool) {
-	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil {
+	if fn == nil || fn.Func == nil || len(fn.Args) < 2 || fn.Args[0] == nil || fn.Args[1] == nil ||
+		isJSONNumericComparisonArgs(fn.Args) {
 		return nil, false
 	}
 	op := canonicalRangeOp(fn)
@@ -4981,12 +4996,16 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			ParentObjRef:  DeepCopyObjectRef(leftChild.ObjRef),
 			BindingTags:   []int32{idxTag},
 			ScanSnapshot:  leftChild.ScanSnapshot,
+			ViewPath:      append([]*plan.ViewStep(nil), leftChild.ViewPath...),
 		}
 		if hasRuntimeFilter {
 			idxTableNode.RuntimeFilterProbeList =
 				[]*plan.RuntimeFilterSpec{nodeProbeRuntimeFilter}
 		}
-		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[nodeID])
+		// The index is another access path for the left scan. A JOIN context
+		// can be absent or belong to an enclosing view, so authorization must
+		// follow the original scan's complete view path.
+		idxTableNodeID := builder.appendNode(idxTableNode, builder.ctxByNode[leftChild.NodeId])
 		builder.inheritIndexHints(idxTableNodeID, leftChild.NodeId)
 
 		if hasRuntimeFilter {
@@ -5024,7 +5043,7 @@ func (builder *QueryBuilder) applyIndicesForJoins(nodeID int32, node *plan.Node,
 			Limit:    leftChild.Limit,
 			Offset:   leftChild.Offset,
 			OnList:   []*plan.Expr{pkJoinCond},
-		}, builder.ctxByNode[nodeID])
+		}, builder.ctxByNode[leftChild.NodeId])
 
 		leftChild.Limit, leftChild.Offset = nil, nil
 

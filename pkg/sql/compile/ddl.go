@@ -3116,7 +3116,7 @@ func (s *Scope) CreateView(c *Compile) error {
 		if dbName == "" {
 			return moerr.NewNoDB(c.proc.Ctx)
 		}
-		// The nested DROP VIEW participates in lifecycle admission. Enter C/G/D
+		// View replacement participates in lifecycle admission. Enter C/G/D
 		// before taking the database lock; otherwise a fresh replacement appears
 		// to be a retained-lock transaction and spuriously FastFails on G.
 		// Admission still FastFails for locks retained by earlier statements.
@@ -3150,34 +3150,32 @@ func (s *Scope) CreateView(c *Compile) error {
 		return err
 	}
 	var oldRelationID, oldLogicalID uint64
-	if exists && qry.GetReplace() {
-		oldRelation, relationErr := dbSource.Relation(c.proc.Ctx, viewName, nil)
-		if relationErr != nil {
-			return relationErr
-		}
-		oldRelationID = oldRelation.GetTableID(c.proc.Ctx)
-		oldLogicalID = oldRelation.GetTableDef(c.proc.Ctx).GetLogicalId()
-	}
-
 	if exists {
 		if qry.GetIfNotExists() {
 			return nil
 		}
-
-		if qry.GetReplace() {
-			if err = c.runSqlWithOptions(
-				fmt.Sprintf("DROP VIEW IF EXISTS %s", quoteAlterCopyTableName(dbName, viewName)),
-				executor.StatementOption{}.WithDisableLog(),
-			); err != nil {
-				getLogger(s.Proc.GetService()).Error("drop existing view failed",
-					zap.String("databaseName", c.db),
-					zap.String("viewName", qry.GetTableDef().GetName()),
-					zap.Error(err),
-				)
+		if !qry.GetReplace() {
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
+		}
+		oldRelation, relationErr := dbSource.Relation(c.proc.Ctx, viewName, nil)
+		if relationErr != nil {
+			return relationErr
+		}
+		if oldRelation.GetTableDef(c.proc.Ctx).GetViewSql() == nil {
+			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
+		}
+		oldRelationID = oldRelation.GetTableID(c.proc.Ctx)
+		oldLogicalID = oldRelation.GetTableDef(c.proc.Ctx).GetLogicalId()
+		if oldLogicalID == 0 {
+			oldLogicalID = oldRelationID
+		}
+		// Preserve the lifecycle gate -> relation lock order used by DROP,
+		// while retaining grants and publication membership for replacement.
+		if c.proc.Base.IsFrontend && !c.ignorePublish && !needSkipDbs[dbName] &&
+			(!c.proc.GetSessionInfo().IsRestore || restoreInvalidatesViewMetadata(c.proc.Ctx)) {
+			if err = lockViewMetadataLifecycleGate(c.proc); err != nil {
 				return err
 			}
-		} else {
-			return moerr.NewTableAlreadyExists(c.proc.Ctx, viewName)
 		}
 	}
 
@@ -3190,7 +3188,16 @@ func (s *Scope) CreateView(c *Compile) error {
 		return err
 	}
 
-	if err = dbSource.Create(context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql), viewName, append(exeCols, exeDefs...)); err != nil {
+	createCtx := context.WithValue(c.proc.Ctx, defines.SqlKey{}, c.sql)
+	if exists {
+		// Like ALTER VIEW, replace only the physical catalog row. An ordinary
+		// DROP would revoke grants bound to the view's logical identity.
+		if err = dbSource.Delete(c.proc.Ctx, viewName); err != nil {
+			return err
+		}
+		createCtx = context.WithValue(createCtx, defines.LogicalIdKey{}, oldLogicalID)
+	}
+	if err = dbSource.Create(createCtx, viewName, append(exeCols, exeDefs...)); err != nil {
 		getLogger(s.Proc.GetService()).Info("createView",
 			zap.String("databaseName", c.db),
 			zap.String("viewName", qry.GetTableDef().GetName()),

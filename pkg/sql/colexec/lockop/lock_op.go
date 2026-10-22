@@ -2119,10 +2119,6 @@ func (lockOp *LockOp) Free(proc *process.Process, pipelineFailed bool, err error
 	lockOp.ctr.relations = nil
 }
 
-func (lockOp *LockOp) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (lockOp *LockOp) resetParker() {
 	if lockOp.ctr.parker != nil {
 		lockOp.ctr.parker.Reset()
