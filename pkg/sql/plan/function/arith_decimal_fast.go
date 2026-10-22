@@ -704,7 +704,7 @@ func d128MulInline(x, y, dst *types.Decimal128, scaleAdj, scale1, scale2 int32) 
 	signy := d128Abs(&ay)
 	neg := signx ^ signy
 
-	// Try 128×128→128 unsigned multiply (inline Mul128InPlace).
+	// Try unsigned 128×128→128 multiplication with overflow checks.
 	// result = ax.lo*ay.lo + cross*2^64 where cross = ax.lo*ay.hi or ax.hi*ay.lo.
 	if ax.B64_127 == 0 || ay.B64_127 == 0 {
 		zhi, zlo := bits.Mul64(ax.B0_63, ay.B0_63)
