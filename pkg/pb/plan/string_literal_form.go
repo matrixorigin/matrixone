@@ -406,9 +406,11 @@ type RemoteExpressionFeatures struct {
 	// execution-only floor; persisted expression contracts remain unchanged.
 	ScalarDivision bool
 	// ViewMetadataFunctions requires v126 for MO_VIEW_DEFINITION/CHECK_OPTION.
-	ViewMetadataFunctions           bool
-	JSONScalarLiteralContracts      bool
-	JSONInputContracts              bool
+	ViewMetadataFunctions      bool
+	JSONScalarLiteralContracts bool
+	JSONInputContracts         bool
+	// JSONSearch requires v130 for its path traversal and JSON result identity.
+	JSONSearch                      bool
 	YearBitCast                     bool
 	NumericPrefix                   bool
 	JSONComparisonParam             bool
@@ -452,7 +454,7 @@ type RemoteExpressionFeatures struct {
 }
 
 func (features RemoteExpressionFeatures) Any() bool {
-	return features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.YearBitCast || features.NumericPrefix ||
+	return features.JSONNumericComparisons || features.LoadFKIgnoreCheck || features.DependentPrograms || features.CalendarIntervalNormalization || features.ViewMetadataFunctions || features.JSONScalarLiteralContracts || features.JSONInputContracts || features.JSONSearch || features.YearBitCast || features.NumericPrefix ||
 		features.JSONComparisonParam ||
 		features.MixedJSONBooleanEquality ||
 		features.FormatNumericArguments ||
@@ -1005,6 +1007,9 @@ func RequiredRemoteExpressionFeatures(owner any) (features RemoteExpressionFeatu
 				if id == 584 && len(fn.Args) == 1 && fn.Args[0] != nil &&
 					staticStringDomainForPlanType(fn.Args[0].Typ) == planStringDomainBinary { // JSON_DEPTH
 					features.JSONInputContracts = true
+				}
+				if id == 605 { // JSON_SEARCH
+					features.JSONSearch = true
 				}
 				special, err := isSpecialIntegerConsumer(fn, id, overload)
 				if err != nil {
