@@ -12,4 +12,6 @@ with r as(select uuid() x),s as(select x from r) select count(*) from s a join s
 with recursive base as(select uuid() x),r(n,x) as(select 1,x from base union all select n+1,base.x from r join base on r.x=base.x where n<3) select count(*) from r;
 with recursive b as(select rand() x),r(n) as(select 1 union all select r.n+1 from r,b where r.n<3 and b.x>=0) select count(*),sum(n) from r;
 select count(*) from (select k,(with recursive r(n) as(select (select t.k) union all select n+1 from r where n<3) select (select min(n) from r)+(select max(n) from r)) v from t) q where (k is null and v is null) or (k=1 and v=4) or (k=2 and v=5);
+select count(*) from (select k,(with recursive r(n,s) as(select (select t.k),cast('a' as char(8)) union all select n+1,concat(s,'') from r where n<3) select (select min(n) from r)+(select max(n) from r)) v from t) q where (k is null and v is null) or (k=1 and v=4) or (k=2 and v=5);
+select count(*) from (select k,(with r as(select result k from generate_series(1,3)g) select (select min(k) from r where k>=t.k)+(select max(k) from r)) v from t) q where (k is null and v is null) or (k=1 and v=4) or (k=2 and v=5);
 drop database cte_evaluation_identity;

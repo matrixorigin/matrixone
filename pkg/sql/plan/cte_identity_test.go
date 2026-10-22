@@ -80,6 +80,8 @@ func TestCTEIdentityStableControls(t *testing.T) {
 	for _, sql := range []string{
 		"with r as(select now()x) select a.x,b.x from r a,r b",
 		"with r as(select cast(n_name as integer)x from nation) select a.x,b.x from r a,r b",
+		"with r as(select result from generate_series(abs(1),3)g) select a.result,b.result from r a,r b",
+		"with r as(select value from unnest('[1,2]')u) select a.value,b.value from r a,r b",
 		"with unused as(select rand(),missing_column from nation) select 1",
 	} {
 		mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -96,6 +98,11 @@ func TestCTEIdentityInvocationOwnership(t *testing.T) {
 		{"local declaration", `select (with r as(select uuid()x) select max(x) from r group by t2.a) from bvt_test2.t2`, ""},
 		{"round capture", `select (with recursive base as(select uuid()x),r(n,x) as(select 1,x from base union all select n+1,base.x from r join base on r.x=base.x where n<t2.a) select count(*) from r) from bvt_test2.t2`, "shared CTE capture across recursive rounds"},
 		{"stable recursive sibling programs", `select (with recursive r(n) as(select (select t2.a) union all select n+1 from r where n<3) select (select min(n) from r)+(select max(n) from r)) from bvt_test2.t2`, ""},
+		{"stable CHAR recursive siblings", `select (with recursive r(n,s) as(select (select t2.a),cast('a' as char(8)) union all select n+1,concat(s,'') from r where n<3) select (select min(n) from r)+(select max(n) from r)) from bvt_test2.t2`, ""},
+		{"stable VARCHAR recursive siblings", `select (with recursive r(n,s) as(select (select t2.a),cast('a' as varchar(8)) union all select n+1,concat(s,'') from r where n<3) select (select min(n) from r)+(select max(n) from r)) from bvt_test2.t2`, ""},
+		{"stable series siblings", `select (with r as(select result k from generate_series(1,3)g) select (select min(k) from r where k>=t2.a)+(select max(k) from r)) from bvt_test2.t2`, ""},
+		{"volatile series argument", `with r as(select result k from generate_series(cast(rand()*10 as bigint),10)g) select (select max(k) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
+		{"volatile unnest argument", `with r as(select cast(value as varchar(36))x from unnest(concat('["',uuid(),'"]'))u) select (select max(x) from r group by t2.a) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
 		{"stable recursive wrapper programs", `select (with recursive r(n) as(select (select t2.a) union all select n+1 from r where n<3),s(k) as(select n+1 from r) select (select min(k) from s)+(select max(k) from s)) from bvt_test2.t2`, ""},
 		{"late recursive instability", `select (with recursive r(n,x) as(select 1,cast(null as varchar(36)) union all select n+1,uuid() from r where n<t2.a) select (select max(x) from r)) from bvt_test2.t2`, "shared CTE capture across dependent invocations"},
 		{"recursive volatile predecessor", `select (with recursive base(k,x) as(select 1,uuid() union all select k+1,x from base where k<2),r(n,x) as(select 1,x from base union all select n+1,base.x from r join base on r.x=base.x where n<t2.a) select count(*) from r) from bvt_test2.t2`, "shared CTE capture across recursive rounds"},
@@ -110,6 +117,45 @@ func TestCTEIdentityInvocationOwnership(t *testing.T) {
 				require.NoError(t, logic.GetQuery().ValidateCorrelation())
 			}
 		})
+	}
+}
+
+func TestCTEEvaluationClassification(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql             string
+		publication, unstable bool
+	}{
+		{"series", "select result from generate_series(abs(1),3)g", false, false},
+		{"series input", "select g.result from nation n join generate_series(n.n_nationkey,n.n_nationkey+1)g on true", false, false},
+		{"unnest", "select value from unnest('[1,2]')u", false, false},
+		{"unnest input", `select u.value from nation n join unnest(concat('["',n.n_name,'"]'))u on true`, false, false},
+		{"CHAR recursion", "with recursive r(n,s)as(select 1,cast('a' as char(8)) union all select n+1,concat(s,'') from r where n<3) select * from r", true, false},
+		{"VARCHAR recursion", "with recursive r(n,s)as(select 1,cast('a' as varchar(8)) union all select n+1,concat(s,'') from r where n<3) select * from r", true, false},
+		{"unstable cast input", "with recursive r(n,s)as(select 1,cast('a' as char(64)) union all select n+1,concat(s,uuid()) from r where n<3) select * from r", true, true},
+		{"unstable series input", "select result from generate_series(cast(rand()*10 as bigint),10)g", true, true},
+		{"unstable unnest input", `select value from unnest(concat('["',uuid(),'"]'))u`, true, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
+			stmt, err := mysql.ParseOne(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			root, err := builder.bindSelect(stmt.(*tree.Select), NewBindContext(builder, nil), true)
+			require.NoError(t, err)
+			evaluation := builder.classifyCTEEvaluation(root, make(map[int32]bool))
+			require.Equal(t, tc.publication, evaluation.needsPublication)
+			require.Equal(t, tc.unstable, evaluation.valueUnstable)
+		})
+	}
+	for _, name := range []string{"json_table", "processlist", "generate_random_int64", "unknown_scan"} {
+		node := &planpb.Node{NodeType: planpb.Node_FUNCTION_SCAN, TableDef: &planpb.TableDef{TblFunc: &planpb.TableFunction{Name: name}}, TblFuncExprList: []*planpb.Expr{{}}}
+		require.False(t, tableFunctionHasStableIntrinsicValues(node), name)
+	}
+	require.False(t, tableFunctionHasStableIntrinsicValues(nil))
+	for _, argc := range []int{0, 4} {
+		node := &planpb.Node{NodeType: planpb.Node_FUNCTION_SCAN, TableDef: &planpb.TableDef{TblFunc: &planpb.TableFunction{Name: "generate_series"}}, TblFuncExprList: make([]*planpb.Expr, argc)}
+		require.False(t, tableFunctionHasStableIntrinsicValues(node))
 	}
 }
 

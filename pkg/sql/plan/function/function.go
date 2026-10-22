@@ -115,6 +115,22 @@ func GetFunctionIsVolatileOrRealTimeRelatedByName(name string) bool {
 	return false
 }
 
+// GetFunctionValueUnstableByID reports the resolved function's own instability
+// within one execution. Callers must inspect its arguments separately.
+// Assignment casts retain their legacy volatile flag to prevent prepare-time
+// folding, but their SQL mode and conversion policy are stable during execution.
+func GetFunctionValueUnstableByID(overloadID int64) (unstable, known bool) {
+	ov, known := GetFunctionByIdWithoutError(overloadID)
+	if !known {
+		return false, false
+	}
+	fid, index := DecodeOverloadID(overloadID)
+	if index == 0 && (fid == CAST_ASSIGN || fid == CAST_IGNORE) {
+		return false, true
+	}
+	return ov.IsVolatile(), true
+}
+
 // provenPureValueFunctions lists every SQL builtin registration that is
 // positively proven to evaluate as a pure value transformation: an
 // in-process computation over its own argument vectors with no effects

@@ -14357,6 +14357,24 @@ func (builder *QueryBuilder) buildApplyTable(tbl *tree.ApplyTableExpr, ctx *Bind
 	return nodeID, nil
 }
 
+// tableFunctionHasStableIntrinsicValues describes the scan itself, excluding
+// argument and child evaluations. Optional CTE reuse has a separate, narrower
+// admission contract. Unknown and externally backed scans remain conservative.
+func tableFunctionHasStableIntrinsicValues(node *plan.Node) bool {
+	if statementStableFunctionScan(node) {
+		return true
+	}
+	if node == nil || node.NodeType != plan.Node_FUNCTION_SCAN || node.TableDef == nil || node.TableDef.TblFunc == nil {
+		return false
+	}
+	switch node.TableDef.TblFunc.Name {
+	case "generate_series", "unnest":
+		return len(node.TblFuncExprList) >= 1 && len(node.TblFuncExprList) <= 3
+	default:
+		return false
+	}
+}
+
 func (builder *QueryBuilder) buildTableFunction(tbl *tree.TableFunction, ctx *BindContext, input *tableFunctionInput) (int32, error) {
 	var (
 		err    error

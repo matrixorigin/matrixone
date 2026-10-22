@@ -1414,6 +1414,27 @@ func TestGetFunctionIsVolatileOrRealTimeRelatedByName(t *testing.T) {
 	assert.False(t, GetFunctionIsVolatileOrRealTimeRelatedByName("unknown_function"))
 }
 
+func TestGetFunctionValueUnstableByID(t *testing.T) {
+	for _, fid := range []int32{CAST_ASSIGN, CAST_IGNORE, RANDOM, UUID, CURRENT_TIMESTAMP, ABS} {
+		t.Run(fmt.Sprint(fid), func(t *testing.T) {
+			id := EncodeOverloadID(fid, 0)
+			unstable, known := GetFunctionValueUnstableByID(id)
+			require.True(t, known)
+			require.Equal(t, fid == RANDOM || fid == UUID, unstable)
+			if fid == CAST_ASSIGN || fid == CAST_IGNORE {
+				ov, ok := GetFunctionByIdWithoutError(id)
+				require.True(t, ok)
+				require.True(t, ov.CannotFold(), "execution stability must not permit prepare-time folding")
+				require.False(t, IsConstant(&plan.Expr{Expr: &plan.Expr_F{F: &plan.Function{Func: &plan.ObjectRef{Obj: id}}}}, true))
+			}
+		})
+	}
+	for _, id := range []int64{-1, EncodeOverloadID(int32(len(allSupportedFunctions)), 0), EncodeOverloadID(CAST_ASSIGN, 99)} {
+		_, known := GetFunctionValueUnstableByID(id)
+		require.False(t, known)
+	}
+}
+
 func TestProducesNoNullUsesFunctionContract(t *testing.T) {
 	require.True(t, ProducesNoNull(EncodeOverloadID(ISNULL, 0)))
 	for _, fid := range []int32{COUNT, STARCOUNT, BIT_AND, BIT_OR, BIT_XOR} {

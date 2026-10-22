@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-sql-driver/mysql"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/stretchr/testify/require"
 )
@@ -47,6 +48,7 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 		}{
 			{"rand", "with r as(select rand()x) select count(*) from r a join r b on a.x=b.x", 1},
 			{"uuid", "with r as(select uuid()x) select count(*) from r a join r b on a.x=b.x", 1},
+			{"volatile unnest argument", `with r as(select value from unnest(concat('["',uuid(),'"]'))u) select count(*) from r a join r b on a.value=b.value`, 1},
 			{"union", "with r as(select 1 k,rand()x union all select 2,rand()) select count(*) from r a join r b on a.k=b.k and a.x=b.x", 2},
 			{"table bag and null", "with r as(select k,uuid()x from t) select count(*) from r a join r b on a.k<=>b.k and a.x=b.x", 4},
 			{"special types", "with r as(select e,s,uuid()x from special) select count(*) from r a join r b on a.e=b.e and a.s=b.s and a.x=b.x", 2},
@@ -93,32 +95,31 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 				require.Equal(t, tc.want, got, tc.query)
 			})
 		}
-		t.Run("stable recursive sibling programs", func(t *testing.T) {
-			rows, err := db.QueryContext(ctx, "select k,(with recursive r(n) as(select (select t.k) union all select n+1 from r where n<3) select (select min(n) from r)+(select max(n) from r)) v from t order by k")
-			require.NoError(t, err)
-			defer rows.Close()
-			var got [][2]sql.NullInt64
-			for rows.Next() {
-				var row [2]sql.NullInt64
-				require.NoError(t, rows.Scan(&row[0], &row[1]))
-				got = append(got, row)
-			}
-			require.NoError(t, rows.Err())
-			require.Equal(t, [][2]sql.NullInt64{
-				{}, {{Int64: 1, Valid: true}, {Int64: 4, Valid: true}},
-				{{Int64: 2, Valid: true}, {Int64: 5, Valid: true}},
-				{{Int64: 2, Valid: true}, {Int64: 5, Valid: true}},
-			}, got)
-		})
+		for _, tc := range []struct{ name, query string }{
+			{"stable recursive sibling programs", "select k,(with recursive r(n) as(select (select t.k) union all select n+1 from r where n<3) select (select min(n) from r)+(select max(n) from r)) v from t order by k"},
+			{"stable CHAR recursive siblings", "select k,(with recursive r(n,s) as(select (select t.k),cast('a' as char(8)) union all select n+1,concat(s,'') from r where n<3) select (select min(n) from r)+(select max(n) from r)) v from t order by k"},
+			{"stable series siblings", "select k,(with r as(select result k from generate_series(1,3)g) select (select min(k) from r where k>=t.k)+(select max(k) from r)) v from t order by k"},
+			{"stable constant rows control", "select k,(with r as(select 1 k union all select 2 union all select 3) select (select min(k) from r where k>=t.k)+(select max(k) from r)) v from t order by k"},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				rows, err := db.QueryContext(ctx, tc.query)
+				require.NoError(t, err)
+				require.Equal(t, []string{"NULL:NULL", "1:4", "2:5", "2:5"}, readWindowNullRows(t, rows))
+			})
+		}
 		t.Run("unsupported lifetime captures", func(t *testing.T) {
 			for _, q := range []string{
 				"with r as(select uuid()x) select (select max(x) from r group by t.k) from t",
+				"with r as(select result k from generate_series(cast(rand()*10 as bigint),10)g) select (select max(k) from r group by t.k) from t",
 				"select (with recursive r(n,x) as(select 1,cast(null as varchar(36)) union all select n+1,uuid() from r where n<t.k) select (select max(x) from r)) from t",
 				"select (with recursive base as(select uuid()x),r(n,x) as(select 1,x from base union all select n+1,base.x from r join base on r.x=base.x where n<t.k) select count(*) from r) from t",
 			} {
 				var unused int
 				err := db.QueryRowContext(ctx, q).Scan(&unused)
 				require.ErrorContains(t, err, "shared CTE capture across")
+				var sqlErr *mysql.MySQLError
+				require.ErrorAs(t, err, &sqlErr)
+				require.EqualValues(t, 20102, sqlErr.Number)
 			}
 		})
 		t.Run("cached reader locking", func(t *testing.T) {
@@ -170,6 +171,40 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 					require.NotEqual(t, first, a, "prepared executions must not reuse materialized rows")
 				}
 			}
+		})
+		t.Run("prepared stable series", func(t *testing.T) {
+			stmt, err := db.PrepareContext(ctx, "select t.k,(with r as(select result k from generate_series(?,?,1)g) select (select min(k) from r where k>=t.k)+(select max(k) from r)) v from t order by t.k")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, tc := range []struct {
+				start, end int
+				want       []string
+			}{
+				{1, 3, []string{"NULL:NULL", "1:4", "2:5", "2:5"}},
+				{3, 1, []string{"NULL:NULL", "1:NULL", "2:NULL", "2:NULL"}},
+				{2, 4, []string{"NULL:NULL", "1:6", "2:6", "2:6"}},
+			} {
+				rows, err := stmt.QueryContext(ctx, tc.start, tc.end)
+				require.NoError(t, err)
+				require.Equal(t, tc.want, readWindowNullRows(t, rows))
+			}
+		})
+		t.Run("prepared recursive SQL mode", func(t *testing.T) {
+			var mode string
+			require.NoError(t, db.QueryRowContext(ctx, "select @@sql_mode").Scan(&mode))
+			defer execSQLRequire(t, ctx, db, "set sql_mode='"+mode+"'")
+			execSQLRequire(t, ctx, db, "set sql_mode='STRICT_TRANS_TABLES'")
+			stmt, err := db.PrepareContext(ctx, "select (with recursive r(n,s)as(select (select t.k),cast('a' as char(2)) union all select n+1,concat(s,?) from r where n<3) select (select sum(n) from r)+(select max(length(s)) from r)) from t where k=1")
+			require.NoError(t, err)
+			defer stmt.Close()
+			var got int
+			err = stmt.QueryRowContext(ctx, "x").Scan(&got)
+			var sqlErr *mysql.MySQLError
+			require.ErrorAs(t, err, &sqlErr)
+			require.EqualValues(t, 1406, sqlErr.Number)
+			execSQLRequire(t, ctx, db, "set sql_mode=''")
+			require.NoError(t, stmt.QueryRowContext(ctx, "x").Scan(&got))
+			require.Equal(t, 8, got)
 		})
 	})
 }

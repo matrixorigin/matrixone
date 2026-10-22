@@ -200,7 +200,7 @@ func (builder *QueryBuilder) classifyCTEEvaluation(id int32, seen map[int32]bool
 	case planpb.Node_SAMPLE, planpb.Node_EXTERNAL_FUNCTION:
 		evaluation.valueUnstable = true
 	case planpb.Node_FUNCTION_SCAN:
-		evaluation.valueUnstable = !statementStableFunctionScan(node)
+		evaluation.valueUnstable = !tableFunctionHasStableIntrinsicValues(node)
 	}
 	// Catalog defaults/generated expressions are metadata, not scan evaluations.
 	executable := *node
@@ -208,11 +208,11 @@ func (builder *QueryBuilder) classifyCTEEvaluation(id int32, seen map[int32]bool
 	_ = planpb.VisitExpressionsInOwner(&executable, func(expr *planpb.Expr) error {
 		return planpb.VisitExprTree(expr, func(expr *planpb.Expr) error {
 			if fn := expr.GetF(); fn != nil {
-				overload, ok := function.GetFunctionByIdWithoutError(fn.Func.Obj)
+				unstable, known := function.GetFunctionValueUnstableByID(fn.Func.Obj)
 				// ENUM/SET display adapters preserve the source value despite
 				// their legacy no-fold flag.
 				_, transparent := transparentOutputSourceExpr(expr)
-				evaluation.valueUnstable = evaluation.valueUnstable || !ok || overload.IsVolatile() && !transparent
+				evaluation.valueUnstable = evaluation.valueUnstable || !known || unstable && !transparent
 			}
 			if sub := expr.GetSub(); sub != nil {
 				evaluation.merge(builder.classifyCTEEvaluation(sub.NodeId, seen))
