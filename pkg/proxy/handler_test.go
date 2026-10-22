@@ -1235,3 +1235,21 @@ func TestDisconnectCleanupClosesBackendBeforeNotification(t *testing.T) {
 	release()
 	require.True(t, <-done)
 }
+
+func TestHandler_handleTunnelErrCleansPlainInFlightEOF(t *testing.T) {
+	rt := runtime.DefaultRuntime()
+	h := &handler{logger: rt.Logger(), counterSet: newCounterSet()}
+	tun := &tunnel{reqC: make(chan IEvent), connCacheEnabled: true}
+	markTunnelInFlight(tun)
+	closed := 0
+	tun.mu.sc = &killCurrentServerConn{
+		cn:      &CNServer{connID: 11},
+		closeFn: func() error { closed++; return nil },
+	}
+	killed := 0
+	cc := &mockClientConn{killFn: func(ServerConn) error { killed++; return nil }}
+
+	require.NoError(t, h.handleTunnelErr(io.EOF, cc, tun, 1, 1))
+	require.Equal(t, 1, closed)
+	require.Equal(t, 1, killed)
+}

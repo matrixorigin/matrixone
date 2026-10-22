@@ -424,7 +424,12 @@ func (h *handler) rejectBeforeSession(conn net.Conn) {
 
 func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID uint64, goId int64) error {
 	skipCacheQuit := false
-	if getErrorCode(err) == codeClientDisconnect {
+	clientDisconnect := getErrorCode(err) == codeClientDisconnect
+	if !clientDisconnect && t != nil && t.hasInFlightClientRequest() {
+		clientDisconnect = (isEOFErr(err) || isConnEndErr(err)) &&
+			getErrorCode(err) != codeServerDisconnect
+	}
+	if clientDisconnect {
 		skipCacheQuit = h.cleanupBackendOnClientDisconnect(err, cc, t)
 	}
 	if isEOFErr(err) || isConnEndErr(err) {
@@ -463,7 +468,8 @@ func (h *handler) handleTunnelErr(err error, cc ClientConn, t *tunnel, sessionID
 // cleanupBackendOnClientDisconnect returns true when the caller must not run
 // the conn-cache QUIT/cache path for this backend connection.
 func (h *handler) cleanupBackendOnClientDisconnect(err error, cc ClientConn, t *tunnel) bool {
-	if cc == nil || getErrorCode(err) != codeClientDisconnect {
+	if cc == nil || getErrorCode(err) == codeServerDisconnect ||
+		(getErrorCode(err) != codeClientDisconnect && !isEOFErr(err) && !isConnEndErr(err)) {
 		return false
 	}
 	var currentSC ServerConn
