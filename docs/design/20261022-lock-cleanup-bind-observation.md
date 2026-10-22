@@ -75,3 +75,46 @@ Review: contract, old/new peers, allocator epochs, invalid route publication,
 unchanged-owner retry, cancellation and bounded ownership are mapped above.
 Decision PASS, no open design blocker. Protocol addition warrants this design
 record; no user-visible SQL or exported LockService interface is changed.
+
+## Revision 2: completed Close must retire allocator ownership
+
+The controlled SQL scenario passed coverage but still failed under race after
+revision 1. Its trace shows an ordinary background SQL acquisition assigning
+mo_tables to the second departing CN before the manual cleanup call. Therefore
+removing cleanup allocation alone is insufficient. This observation invalidates
+any claim that revision 1 alone closes #29447.
+
+After LockService.Close has sealed admission, stopped/joined producers, closed
+physical tables and destroyed the active transaction holder, the instance is
+irreversibly closed. Before releasing its RPC client, report this completed
+local state to the allocator using the existing exact-instance BeginDrain and
+an epoch-echoing ServiceUnLockSucc heartbeat. The allocator's existing terminal
+transition disables owned bindings and rejects late GetBind for that instance.
+No UUID alias or fresh instance may be drained. No terminal report may be sent
+before local ownership is fully destroyed. This is a completed-shutdown report,
+not a fabricated empty snapshot from a running service.
+
+Use one bounded context for both RPCs; do not introduce a retry worker or wait
+for unrelated transactions. Verify the exact identity/attempt and allocator
+epoch response, and verify the terminal acknowledgement. Unsupported old peers,
+allocator replacement and RPC failure retain existing timeout-based retirement
+and emit a diagnostic; they do not undo local teardown or change Close's cached
+local error contract. New and old protocol peers must not interpret an
+unacknowledged terminal report as success.
+
+Required proof: Close with a real owned binding invalidates it before returning;
+late old-instance allocation remains rejected; a distinct survivor allocates
+immediately. Capture protocol order to prove report occurs after local
+transaction/table destruction and before RPC-client release; cover unsupported,
+failed, missing/changed epoch and duplicate Close. Re-run the controlled SQL
+counterexample under the previously failing race mode, original scale-down
+regression, owning LockService normal/race and static checks. No added SQL
+readiness, retry budget or sleeps are allowed.
+
+Design review of revision 2: PASS before implementation. Reuses the existing
+instance/epoch drain protocol and local Close linearization; no new wire mode,
+long-lived state, resource owner or cleanup cycle is introduced. Old in-flight
+commits retain the existing allocator validation/fencing protocol. A completed
+local shutdown cannot perform another lock mutation; the terminal allocator
+state prevents resurrection by late bind requests. The network operation is
+bounded and runs outside local locks, after all local users have joined.
