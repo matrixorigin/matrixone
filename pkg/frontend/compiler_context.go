@@ -757,6 +757,15 @@ func (tcc *TxnCompilerContext) Resolve(dbName string, tableName string, snapshot
 		}
 		useSessionTemporary = tcc.resolvePhysicalObjectAccount(identity, nil, snapshot) == tcc.GetSession().GetAccountId()
 	}
+	if useSessionTemporary && tcc.execCtx != nil &&
+		defines.IsPublicationViewBinding(tcc.execCtx.reqCtx) {
+		// Publication scope validation binds persisted objects only. A
+		// temporary table of the validating session would not merely shadow
+		// the persisted schema here (admitting the declaration a subscriber
+		// can never bind), it can also false-reject a healthy persisted
+		// schema, so it stays out of resolution entirely.
+		useSessionTemporary = false
+	}
 	isTmpTable := false
 	if useSessionTemporary {
 		realName, temporary := tcc.GetSession().GetTempTable(dbName, tableName)
@@ -1586,6 +1595,16 @@ func (tcc *TxnCompilerContext) GetSubscriptionMetadata(
 	if err != nil {
 		return nil, err
 	}
+	// Statement paths resolve the physical source through
+	// checkSubscriptionValidCommon; the metadata enumeration path must agree,
+	// or statistics and other metadata consumers would read the publisher's
+	// catalog for a foreign-source publication. Unauthorized foreign-source
+	// rows are dropped rather than enumerated through the publisher identity,
+	// which would substitute a same-named publisher database for the source.
+	metas, err = resolveSubscriptionSourceAccounts(tempCtx, bh, metas)
+	if err != nil {
+		return nil, err
+	}
 	return getVisibleSubscriptionMetadata(
 		tempCtx, bh, metas, currentProtocolVersion(tcc.GetProcess()),
 	)
@@ -1714,7 +1733,10 @@ func subscriptionMetadataVisibilitySQL(subscriptionNames string, protocolVersion
 func (tcc *TxnCompilerContext) CheckSubscriptionValid(subName, accName, pubName string) error {
 	bh := tcc.getOrCreateBackExec(tcc.GetContext())
 	bh.ClearExecResultSet()
-	_, err := checkSubscriptionValidCommon(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName, bh)
+	// The create-only admission variant: CREATE DATABASE ... FROM must prove
+	// the subscriber can resolve every published view, while runtime resolves
+	// stay on the metadata-only checks.
+	_, err := checkSubscriptionValidForCreate(tcc.GetContext(), tcc.GetSession(), subName, accName, pubName, bh)
 	return err
 }
 
