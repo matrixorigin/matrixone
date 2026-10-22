@@ -36,3 +36,14 @@ func TestM0ReadShardsDefaultKeepsContiguousSplit(t *testing.T) {
 		require.Equal(t, want[i].GetBlockInfoSlice(), got[i].GetBlockInfoSlice())
 	}
 }
+
+func TestM0DefaultHooksDoNotGrantAppendAuthority(t *testing.T) {
+	require.False(t, activeM0Enabled)
+	defs, err := activeM0CNAddColumn(nil, context.Background(), nil)
+	require.Nil(t, defs)
+	require.ErrorContains(t, err, "not enabled")
+	proven, proof, err := activeM0ReadObject(context.Background(), nil, objectio.ObjectEntry{}, nil)
+	require.NoError(t, err)
+	require.False(t, proven)
+	require.Zero(t, proof)
+}

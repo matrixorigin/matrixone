@@ -113,4 +113,10 @@ func TestBatchDataNotNullCheckResolvesAttributesByName(t *testing.T) {
 	require.ErrorContains(t, BatchDataNotNullCheck(
 		[]*vector.Vector{required}, []string{"required"}, tableDef, t.Context(),
 	), "Column 'required' cannot be null")
+
+	require.NoError(t, BatchDataNotNullCheck(
+		[]*vector.Vector{nil}, []string{"required"}, tableDef, t.Context(),
+	))
+	require.Nil(t, findColumnByName(nil, "required"))
+	require.Nil(t, findColumnByName(tableDef, "absent"))
 }

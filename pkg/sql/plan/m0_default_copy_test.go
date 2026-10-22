@@ -36,3 +36,11 @@ func TestDefaultAlterAddColumnUsesCopy(t *testing.T) {
 	require.NotNil(t, alter.CopyTableDef)
 	require.NotNil(t, FindColumn(alter.CopyTableDef.Cols, "default_copy_col"))
 }
+
+func TestDefaultM0PlanBaseRejectsAdmission(t *testing.T) {
+	_, err := m0PlanBase(&TableDef{})
+	require.ErrorContains(t, err, "not enabled")
+	require.Nil(t, activeM0PlanHooks.selectAdd)
+	require.Nil(t, activeM0PlanHooks.preserveClone)
+	require.False(t, activeM0PlanHooks.disableCountNotNull)
+}
