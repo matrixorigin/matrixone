@@ -1948,7 +1948,7 @@ func antiJoinLeftKeysArePrimaryKey(
 	leftKeyCols := make([]int32, 0, len(left.TableDef.Pkey.Names))
 	for _, condition := range node.OnList {
 		fn := condition.GetF()
-		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) {
+		if fn == nil || len(fn.Args) != 2 || !IsEqualFunc(fn.Func.GetObj()) || isJSONNumericComparisonArgs(fn.Args) {
 			continue
 		}
 		first, second := fn.Args[0].GetCol(), fn.Args[1].GetCol()
