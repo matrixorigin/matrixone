@@ -559,7 +559,10 @@ func (s *S3FS) Write(ctx context.Context, vector IOVector) (err error) {
 	}
 	key := s.pathToKey(path.File)
 	existsStart := time.Now()
-	exists, err := s.storage.Exists(ctx, key)
+	exists := false
+	if !exclusiveWrite(ctx) {
+		exists, err = s.storage.Exists(ctx, key)
+	}
 	metric.FSWriteDurationExists.Observe(time.Since(existsStart).Seconds())
 	if err != nil {
 		return err
@@ -636,7 +639,7 @@ func (s *S3FS) write(ctx context.Context, vector IOVector) (bytesWritten int, er
 	}
 
 	if pmw, ok := s.storage.(ParallelMultipartWriter); ok && pmw.SupportsParallelMultipart() &&
-		enableParallel {
+		enableParallel && !exclusiveWrite(ctx) {
 		opt := &ParallelMultipartOption{
 			PartSize:    defaultParallelMultipartPartSize,
 			Concurrency: runtime.NumCPU(),

@@ -1941,19 +1941,26 @@ func (b *baseBinder) numericScalarSources(
 	sources := make([]numericScalarSource, len(infos))
 	ctes = numericScalarVisibleCtes(owner, ctes)
 	for i := range infos {
+		if infos[i].deferMetadata {
+			continue
+		}
 		sources[i].alias = strings.ToLower(infos[i].alias)
 		sources[i].name = strings.ToLower(infos[i].sourceName)
+		sourceCtx := b.ctx
 		if infos[i].source == nil && infos[i].sourceSchema == "" {
-			if cte := ctes[strings.ToLower(infos[i].sourceName)]; cte != nil {
-				infos[i].source, infos[i].aliasCols = numericScalarCteSource(cte, infos[i].aliasCols)
-			} else {
-				infos[i].source, infos[i].aliasCols = numericProjectionCteSource(
-					owner, b.ctx, infos[i].sourceName, infos[i].aliasCols,
-				)
+			infos[i].source, infos[i].aliasCols, sourceCtx = numericProjectionCteSource(
+				b.ctx, infos[i].sourceName, infos[i].aliasCols,
+			)
+			if infos[i].source == nil && b.ctx == nil {
+				if cte := ctes[strings.ToLower(infos[i].sourceName)]; cte != nil {
+					infos[i].source, infos[i].aliasCols = numericScalarCteSource(cte, infos[i].aliasCols)
+				}
 			}
 		}
 		if infos[i].source != nil {
-			cols, scans, ok, err := b.numericScalarSelectOutputs(infos[i].source, depth, visiting, ctes)
+			probe := *b
+			probe.ctx = sourceCtx
+			cols, scans, ok, err := probe.numericScalarSelectOutputs(infos[i].source, depth, visiting, ctes)
 			if err != nil {
 				return nil, false
 			}
@@ -1964,7 +1971,7 @@ func (b *baseBinder) numericScalarSources(
 			sources[i].types = scans
 			sources[i].known = true
 		} else if infos[i].sourceName != "" && b.builder != nil {
-			cols := numericPhysicalTableVisibleCols(b.builder, infos[i])
+			cols := numericPhysicalTableVisibleCols(b.builder, infos[i], b.ctx)
 			if cols == nil {
 				continue
 			}
@@ -2009,6 +2016,14 @@ func (b *baseBinder) numericScalarStatementOutputs(
 	visiting map[*tree.Select]bool,
 	ctes map[string]*tree.CTE,
 ) ([]string, []numericAstTypeScan, bool, error) {
+	if owner.With != nil && b.ctx != nil {
+		probe := *b
+		probe.ctx = numericCteBindingContext(b.ctx, nil)
+		if !registerNumericCteDefinitions(owner, probe.ctx) {
+			return nil, nil, false, nil
+		}
+		b = &probe
+	}
 	switch selectStmt := stmt.(type) {
 	case *tree.SelectClause:
 		sources, sourcesKnown := b.numericScalarSources(owner, selectStmt, depth, visiting, ctes)
@@ -5168,6 +5183,21 @@ func (b *baseBinder) resolvePreparedNumericArgs(name string, args []*Expr) ([]*E
 	return args, nil
 }
 
+// UdfDisallowedInPublicationViewBinding reports that the binder selected a
+// user-defined function while compiling under the publication-view metadata
+// binding marker, which refuses user-defined function binding outright: a
+// subscriber resolves the same call in its own catalog, where the function
+// may be missing or carry a different body. Name is the bound function's
+// name; callers embed it in the stable publication error.
+type UdfDisallowedInPublicationViewBinding struct {
+	Name string
+}
+
+func (e *UdfDisallowedInPublicationViewBinding) Error() string {
+	return fmt.Sprintf(
+		"user-defined function '%s' cannot bind in publication view binding", e.Name)
+}
+
 func bindFuncExprImplUdf(
 	b *baseBinder,
 	name string,
@@ -5178,6 +5208,15 @@ func bindFuncExprImplUdf(
 ) (*plan.Expr, error) {
 	if udf == nil {
 		return nil, moerr.NewNotSupportedf(b.GetContext(), "function '%s'", name)
+	}
+	if defines.IsPublicationViewBinding(b.GetContext()) {
+		// The binder reached user-defined function binding for this call -
+		// builtin resolution by name, arity and argument types did not claim
+		// it, and this account's catalog row did. A subscriber resolves the
+		// same call in its own catalog, where the function may be missing or
+		// carry another body, so the metadata binding refuses it outright and
+		// the caller reports the stable publication error.
+		return nil, &UdfDisallowedInPublicationViewBinding{Name: name}
 	}
 
 	switch udf.Language {
@@ -5577,20 +5616,74 @@ func bindFuncExprAndConstFoldInternal(
 	allowInternalFunctionArgs bool,
 	observer func(*plan.Expr) error,
 ) (*plan.Expr, error) {
-	foldFloatComparisonConstants(proc, name, args)
-	if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
-		return nil, err
+	// The two comparison folders run ConstantFold on non-literal constant
+	// operands before the resolver, and a constant expression of a stored
+	// definition can wrap a side-effect builtin (CAST(enable_fault_injection()
+	// AS CHAR) against a DECIMAL column passes the string-type guard, the
+	// numeric cast the float guard): under the publication binding marker no
+	// operand executes. Skipping the folds keeps overload selection intact
+	// for everything binding can observe: each folder returns an expression
+	// of the input type (the float folder requires the folded type to equal
+	// the candidate's, the decimal-string folder requires the folded literal
+	// to stay a MySQL string), so the overload resolver sees the same
+	// argument types and picks the same overload; only the value
+	// materialization is left to the subscriber's own compile, which
+	// executes these folders as usual.
+	if !defines.IsPublicationViewBinding(ctx) {
+		foldFloatComparisonConstants(proc, name, args)
+		if err := foldDecimalStringComparisonConstants(ctx, proc, name, args); err != nil {
+			return nil, err
+		}
 	}
+	// Geometry SRID arguments are the one fold-backed consumer whose shape
+	// the marker's early return below visibly changes: the decode behind
+	// this call needs a constant integer, an ordinary build folds constant
+	// expressions to that literal during the nested binding of the
+	// argument, and the marked probe must meet the same literal or a valid
+	// stored definition is misclassified as broken. The guarded fold executes
+	// nothing beyond the literal arithmetic of the ordinary fold switch's
+	// own operator set, so the marker's no-evaluation contract keeps
+	// covering every other function of the definition.
+	foldGeometrySRIDConstArg(proc, name, args)
 	retExpr, err := bindFuncExprImplByPlanExpr(
 		ctx, name, args, descendFunctions, nil, nil, allowInternalFunctionArgs)
 	if err != nil {
 		return nil, err
 	}
-	annotateStringLengthSource(retExpr, proc)
+	// String-length source inference runs after the resolver and evaluates
+	// the length argument of the left/right/repeat/lpad/rpad/substring
+	// family through EvaluateConstantExpression, so a constant length of a
+	// stored definition can wrap a side-effect builtin (LEFT('abc',
+	// CAST(enable_fault_injection() AS SIGNED)) executes the builtin at bind
+	// time). Under the publication binding marker no length executes, and
+	// skipping the inference leaves every contract observable at binding
+	// unchanged: the annotation is additive metadata (it writes the
+	// PreparedNumeric.StringDomainSource witness of the output expression and
+	// never mutates the expression's own type), so overload selection, the
+	// bound types and the binding verdict are exactly what an unmarked build
+	// starts from, and the subscriber's ordinary compile infers and folds as
+	// usual.
+	if !defines.IsPublicationViewBinding(ctx) {
+		annotateStringLengthSource(retExpr, proc)
+	}
 	if observer != nil {
 		if err := observer(retExpr); err != nil {
 			return nil, err
 		}
+	}
+
+	if defines.IsPublicationViewBinding(ctx) {
+		// Publication scope validation binds the persisted metadata of an
+		// existing view and must not evaluate any expression of it: the fold
+		// stages behind this switch - the executor-backed comparison folders
+		// before the resolver, and the string-length inference after it - are
+		// skipped under that marker. Every existing definition was fully
+		// validated when it was created, the folders cannot change an
+		// argument's type (see above), the skipped inference writes only
+		// additive witness metadata, and the fold-backed checks here depend
+		// only on literal forms that schema drift can not change, so binding
+		// alone remains the probe's complete and faithful answer.
+		return retExpr, nil
 	}
 
 	switch retExpr.GetF().GetFunc().GetObjName() {

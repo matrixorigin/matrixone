@@ -1,0 +1,18 @@
+drop database if exists vector_ivfpq_iterative_overflow;
+create database vector_ivfpq_iterative_overflow;
+use vector_ivfpq_iterative_overflow;
+set experimental_ivfpq_index = 1;
+create table t_nolists(id bigint primary key, v vecf32(8), index i_nolists using ivfpq(v));
+invalid input: invalid lists. lists must be > 0 for IVFPQ
+create table t_tiny(id bigint primary key, note int, v vecf32(8), index i_tiny using ivfpq(v) lists=8);
+insert into t_tiny select result, result % 2, cast(concat('[', result, ',0,0,0,0,0,0,0]') as vecf32(8)) from generate_series(1, 5, 1) g;
+select group_concat(id order by id) from (select id from t_tiny order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,2,3,4,5
+select group_concat(id order by id) from (select id from t_tiny where id > 2 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+3,4,5
+select group_concat(id order by id) from (select id from t_tiny where note = 1 order by l2_distance(v, '[0,0,0,0,0,0,0,0]') limit 10 by rank with option 'mode=iterative') x;
+➤ group_concat(id order by id separator ,)[-1,16383,0]  𝄀
+1,3,5
+drop database vector_ivfpq_iterative_overflow;

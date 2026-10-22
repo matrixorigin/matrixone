@@ -85,7 +85,10 @@ func TestCreatePublicationReplayRetainsTableSelection(t *testing.T) {
 			require.NoError(t, err)
 			insertion := errors.New("publication insertion reached")
 			bh.sql2err[want] = insertion
-			require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), insertion)
+			statement, err := publicationStatementForReplay(ctx, pub)
+			require.NoError(t, err)
+			t.Cleanup(statement.Free)
+			require.ErrorIs(t, createPublicationWithTableSelection(ctx, bh, statement, tables == pubsub.TableAll, 1), insertion)
 			require.Equal(t, want, bh.executedSQLs[len(bh.executedSQLs)-1])
 			for _, sql := range bh.executedSQLs {
 				require.False(t, strings.Contains(sql, "mo_subs"), "failed insertion must not change subscriptions")
@@ -118,18 +121,48 @@ func TestPublicationReplayOmitsOnlyBulkSkippedTables(t *testing.T) {
 			} else {
 				require.Equal(t, []string{query}, bh.executedSQLs, "read source tenant at the historical timestamp")
 			}
+			// Exercise the shared backend with the explicit mode a real replay
+			// executor supplies. The mock executor has no session; fail-closed
+			// mode resolution is checked separately below and SQL tests exercise
+			// the complete replay with a real background session.
+			statement, err := publicationStatementForReplay(ctx, replay)
+			require.NoError(t, err)
+			t.Cleanup(statement.Free)
 			if tc.want == "missing" {
-				require.ErrorContains(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), "table 'missing' not exists")
+				require.ErrorContains(t, createPublicationWithTableSelection(ctx, bh, statement, false, 1), "table 'missing' not exists")
 			} else {
 				want, err := getSqlForInsertIntoMoPubs(ctx, sysAccountID, sysAccountName, "pub1", "db1", 7,
 					tc.want == pubsub.TableAll, tc.want, pubsub.AccountAll, pub.Comment, true)
 				require.NoError(t, err)
 				insertion := errors.New("publication insertion reached")
 				bh.sql2err[want] = insertion
-				require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), insertion)
+				if tc.want == "" || tc.want == pubsub.TableAll {
+					require.ErrorIs(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42), insertion)
+				} else {
+					require.ErrorIs(t, createPublicationWithTableSelection(ctx, bh, statement, false, 1), insertion)
+				}
 				require.Equal(t, want, bh.executedSQLs[len(bh.executedSQLs)-1])
 			}
 			require.Equal(t, original, *pub)
+		})
+	}
+}
+
+func TestPublicationReplayRequiresCaseModeForRetainedSelection(t *testing.T) {
+	for _, tables := range []string{"t1", "ext-t,t1"} {
+		t.Run(tables, func(t *testing.T) {
+			bh := &backgroundExecTest{}
+			bh.init()
+			pub := &pubsub.PubInfo{PubAccountId: 7, DbName: "db1", TablesStr: tables, SubAccountsStr: pubsub.AccountAll}
+			query := buildTableInfoListSQL("db1", "", 42, 7)
+			bh.sql2result[query] = newMrsForRestoreStringRows([]string{"name", "type", "kind", "view"}, [][]interface{}{
+				{"t1", "BASE TABLE", catalog.SystemOrdinaryRel, ""},
+				{"ext-t", "BASE TABLE", catalog.SystemExternalRel, ""},
+			})
+			ctx := defines.AttachAccountId(t.Context(), sysAccountID)
+			require.ErrorContains(t, createPublicationFromRestoreInfo(ctx, bh, pub, 42),
+				"session variable lower_case_table_names is unavailable")
+			require.Equal(t, []string{query}, bh.executedSQLs, "missing mode must fail before catalog writes")
 		})
 	}
 }

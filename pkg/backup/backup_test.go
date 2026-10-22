@@ -18,24 +18,29 @@ import (
 	"context"
 	"fmt"
 	"path"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/prashantv/gostub"
 
+	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/defines"
 	"github.com/matrixorigin/matrixone/pkg/fileservice"
 	"github.com/matrixorigin/matrixone/pkg/logservice"
 	"github.com/matrixorigin/matrixone/pkg/objectio"
+	"github.com/matrixorigin/matrixone/pkg/objectio/ioutil"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util/fault"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/checkpoint"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/handle"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/iface/txnif"
@@ -585,10 +590,222 @@ func TestBackupData3(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel, int(totalRows), true)
 	assert.NoError(t, txn.Commit(context.Background()))
 	db.MergeBlocks(true)
-	db.ForceGlobalCheckpoint(ctx, db.TxnMgr.Now(), time.Second)
+	require.NoError(t, db.ForceGlobalCheckpoint(ctx, db.TxnMgr.Now(), time.Second))
 	t.Log(db.Catalog.SimplePPString(3))
 	db.Restart(ctx)
 
+}
+
+func TestBackupRestoreGlobalCheckpointWithFreshWAL(t *testing.T) {
+	defer testutils.AfterTest(t)()
+	testutils.EnsureNoLeak(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
+	defer cancel()
+
+	schema := catalog.MockSchemaAll(2, 0)
+	schema.Extra.BlockMaxRows = 10
+	schema.Extra.ObjectMaxBlocks = 10
+	const (
+		sourceRows    = 20
+		historyWindow = 24 * time.Hour
+	)
+	data := catalog.MockBatch(schema, sourceRows+1)
+	defer data.Close()
+	dstFs, err := fileservice.NewFileService(ctx, fileservice.Config{
+		Name: defines.LocalFileServiceName, Backend: "DISK", DataDir: t.TempDir(),
+	}, nil)
+	require.NoError(t, err)
+	defer dstFs.Close(context.Background())
+
+	var sourceGlobalLSN uint64
+	var sourceGlobalEnd types.TS
+	func() {
+		opts := config.WithLongScanAndCKPOpts(nil)
+		source := testutil.NewTestEngine(ctx, ModuleName, t, opts)
+		defer opts.Fs.Close(context.Background())
+		defer func() { require.NoError(t, source.Close()) }()
+		source.BindSchema(schema)
+		// Four small commits make the source WAL generation observably newer
+		// than the single post-restore append/delete transaction below.
+		for offset := 0; offset < sourceRows; offset += 5 {
+			func() {
+				txn, err := source.StartTxn(nil)
+				require.NoError(t, err)
+				defer func() {
+					if txn.GetTxnState(false) == txnif.TxnStateActive {
+						require.NoError(t, txn.Rollback(context.Background()))
+					}
+				}()
+				var rel handle.Relation
+				if offset == 0 {
+					dbH, err := testutil.CreateDatabase2(ctx, txn, "db")
+					require.NoError(t, err)
+					rel, err = testutil.CreateRelation2(ctx, txn, dbH, schema.Clone())
+					require.NoError(t, err)
+				} else {
+					rel = source.GetRelationWithTxn(txn)
+				}
+				rows := data.CloneWindow(offset, 5)
+				defer rows.Close()
+				require.NoError(t, rel.Append(ctx, rows))
+				require.NoError(t, txn.Commit(ctx))
+			}()
+		}
+		require.NoError(t, source.ForceGlobalCheckpoint(ctx, source.TxnMgr.Now(), time.Second))
+		global := source.BGCheckpointRunner.MaxGlobalCheckpoint()
+		require.NotNil(t, global)
+		require.NotEmpty(t, global.GetTableIDLocation())
+		sourceGlobalLSN, sourceGlobalEnd = global.LSN(), global.GetEnd()
+		require.Positive(t, sourceGlobalLSN)
+		// An already-covered timestamp leaves GCKP as the newest boundary.
+		// Its synthetic end is already the next data timestamp: do not skip it.
+		globalBackup, err := source.ForceCheckpointForBackup(ctx, sourceGlobalEnd.Prev())
+		require.NoError(t, err)
+		globalBackupParts := strings.Split(globalBackup, ":")
+		require.Len(t, globalBackupParts, 5)
+		require.Equal(t, sourceGlobalEnd, types.StringToTS(globalBackupParts[4]))
+
+		backupTime := time.Now().UTC()
+		_, err = source.BGCheckpointRunner.DisableCheckpoint(ctx)
+		require.NoError(t, err)
+		locations := []string{backupTime.Format(time.DateTime), globalBackup}
+		seen := make(map[string]bool)
+		compacted := source.BGCheckpointRunner.GetCompacted()
+		for _, entry := range source.BGCheckpointRunner.GetAllCheckpointsForBackup(compacted) {
+			name := entry.GetLocation().Name().String()
+			if !seen[name] {
+				locations = append(locations, fmt.Sprintf("%s:%d", entry.GetLocation(), entry.GetVersion()))
+				seen[name] = true
+			}
+		}
+		var files []*taeFile
+		require.NoError(t, execBackup(ctx, "", opts.Fs, dstFs, locations, 1, types.TS{}, "full", &files, nil, nil))
+		var backup *checkpoint.CheckpointEntry
+		metadataFiles, err := fileservice.SortedList(dstFs.List(ctx, ioutil.GetCheckpointDir()))
+		require.NoError(t, err)
+		for _, file := range metadataFiles {
+			entries, err := checkpoint.ReadEntriesFromMeta(ctx, "", ioutil.GetCheckpointDir(), file.Name, 0, nil, common.CheckpointAllocator, dstFs)
+			require.NoError(t, err)
+			for _, entry := range entries {
+				if entry.IsBackup() {
+					backup = entry
+				}
+			}
+		}
+		require.NotNil(t, backup)
+		indexLocations := backup.GetTableIDLocation()
+		require.NotEmpty(t, indexLocations)
+		manifest, err := readFile(ctx, dstFs, taeList)
+		require.NoError(t, err)
+		manifestRows, err := fromCsvBytes(manifest)
+		require.NoError(t, err)
+		for index := 0; index < indexLocations.Len(); index++ {
+			name := indexLocations.Get(index).Name().String()
+			stat, err := dstFs.StatFile(ctx, name)
+			require.NoError(t, err)
+			checksum, err := checksumFile(ctx, dstFs, name)
+			require.NoError(t, err)
+			require.Equal(t, stat.Size, taeFileSize(t, files, name))
+			require.Equal(t, strconv.FormatInt(stat.Size, 10), csvFieldForPath(t, manifestRows, name, 1))
+			require.Equal(t, fmt.Sprintf("%x", checksum), csvFieldForPath(t, manifestRows, name, 2))
+		}
+	}()
+
+	// A physical restore has the copied file service, not the source's local
+	// WAL directory. Reusing source.Restart would hide LSN-generation mistakes.
+	opts := config.WithLongScanAndCKPOpts(nil)
+	opts.Fs = dstFs
+	restored := testutil.NewTestEngineWithDir(ctx, t.TempDir(), t, opts)
+	defer func() { require.NoError(t, restored.Close()) }()
+	restored.BindSchema(schema)
+	require.NoError(t, restored.ForceGlobalCheckpoint(ctx, restored.TxnMgr.Now(), time.Second))
+	global := restored.BGCheckpointRunner.MaxGlobalCheckpoint()
+	predecessor := restored.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, global)
+	require.NotNil(t, predecessor)
+	globalEnd, globalLSN := global.GetEnd(), global.LSN()
+	require.True(t, globalEnd.GT(&sourceGlobalEnd))
+	predecessorEnd := predecessor.GetEnd()
+	require.Equal(t, predecessorEnd.Next(), globalEnd)
+	require.Equal(t, predecessor.LSN(), globalLSN)
+
+	// Read durable metadata and its real history objects before any new data
+	// commits; an in-memory location or a successful scan is not this oracle.
+	var durableGlobal *checkpoint.CheckpointEntry
+	for name := range restored.BGCheckpointRunner.GetCheckpointMetaFiles() {
+		entries, err := checkpoint.ReadEntriesFromMeta(ctx, "", ioutil.GetCheckpointDir(), name, 0, nil, common.CheckpointAllocator, dstFs)
+		require.NoError(t, err)
+		for _, entry := range entries {
+			if entry.IsGlobal() && entry.GetEnd() == globalEnd {
+				durableGlobal = entry
+			}
+		}
+	}
+	require.NotNil(t, durableGlobal)
+	require.Equal(t, globalLSN, durableGlobal.LSN())
+	require.NotEmpty(t, durableGlobal.GetTableIDLocation())
+	historyStart, historyEnd, known, err := logtail.ReadTableIDHistoryRange(
+		ctx, durableGlobal.GetTableIDLocation(), common.CheckpointAllocator, dstFs,
+	)
+	require.NoError(t, err)
+	require.True(t, known)
+	requiredStart := types.BuildTS(globalEnd.Physical()-historyWindow.Nanoseconds(), 0)
+	requiredEnd := globalEnd.Prev()
+	require.False(t, historyStart.GT(&requiredStart))
+	require.False(t, historyEnd.LT(&requiredEnd))
+
+	func() {
+		txn, rel := restored.GetRelation()
+		defer func() {
+			if txn.GetTxnState(false) == txnif.TxnStateActive {
+				require.NoError(t, txn.Rollback(context.Background()))
+			}
+		}()
+		require.NoError(t, rel.DeleteByFilter(ctx, handle.NewEQFilter(data.Vecs[0].Get(0))))
+		row := data.CloneWindow(sourceRows, 1)
+		defer row.Close()
+		require.NoError(t, rel.Append(ctx, row))
+		require.NoError(t, txn.Commit(ctx))
+	}()
+	require.NoError(t, restored.DB.ForceCheckpoint(ctx, restored.TxnMgr.Now()))
+	incremental := restored.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, incremental)
+	incrementalEnd, incrementalLSN := incremental.GetEnd(), incremental.LSN()
+	require.Equal(t, globalEnd, incremental.GetStart())
+	require.Positive(t, incrementalLSN)
+	require.GreaterOrEqual(t, incrementalLSN, globalLSN)
+	require.Less(t, incrementalLSN, sourceGlobalLSN, "the regression must cross distinct WAL generations")
+	t.Logf("source global LSN=%d, restored global LSN=%d, restored incremental LSN=%d", sourceGlobalLSN, globalLSN, incrementalLSN)
+
+	restored.Restart(ctx)
+	global = restored.BGCheckpointRunner.MaxGlobalCheckpoint()
+	incremental = restored.BGCheckpointRunner.MaxIncrementalCheckpoint()
+	require.NotNil(t, global)
+	require.NotNil(t, incremental)
+	require.Equal(t, globalEnd, global.GetEnd())
+	require.Equal(t, globalLSN, global.LSN())
+	require.NotEmpty(t, global.GetTableIDLocation())
+	require.Equal(t, globalEnd, incremental.GetStart())
+	require.Equal(t, incrementalEnd, incremental.GetEnd())
+	require.Equal(t, incrementalLSN, incremental.LSN())
+	txn, rel := restored.GetRelation()
+	readComplete := false
+	defer func() {
+		if !readComplete && txn.GetTxnState(false) == txnif.TxnStateActive {
+			require.NoError(t, txn.Rollback(context.Background()))
+		}
+	}()
+	testutil.CheckAllColRowsByScan(t, rel, sourceRows, true)
+	_, _, err = rel.GetByFilter(ctx, handle.NewEQFilter(data.Vecs[0].Get(0)))
+	require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotFound))
+	for row := 1; row <= sourceRows; row++ {
+		value, isNull, err := rel.GetValueByFilter(ctx, handle.NewEQFilter(data.Vecs[0].Get(row)), 1)
+		require.NoError(t, err)
+		require.False(t, isNull)
+		require.Equal(t, data.Vecs[1].Get(row), value)
+	}
+	require.NoError(t, txn.Commit(ctx))
+	readComplete = true
 }
 
 func TestBackupData4(t *testing.T) {
@@ -666,7 +883,7 @@ func TestBackupData4(t *testing.T) {
 	testutil.CheckAllColRowsByScan(t, rel, int(totalRows), true)
 	assert.NoError(t, txn.Commit(context.Background()))
 	db.MergeBlocks(true)
-	db.ForceGlobalCheckpoint(ctx, db.TxnMgr.Now(), time.Second)
+	require.NoError(t, db.ForceGlobalCheckpoint(ctx, db.TxnMgr.Now(), time.Second))
 	t.Log(db.Catalog.SimplePPString(3))
 	db.Restart(ctx)
 

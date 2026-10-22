@@ -19,10 +19,12 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/apply"
+	"github.com/matrixorigin/matrixone/pkg/sql/colexec/vectorscan"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
@@ -607,11 +609,18 @@ func TestCompileRequiredVectorScanGatesLocalDOP(t *testing.T) {
 		want  int
 	}{{"", 1}, {"vectorLocalDOP=0", 1}, {"vectorLocalDOP=2", 1}, {"vectorLocalDOP=1", 8}, {"", 1}} {
 		c.proc.SetResolveVariableFunc(func(name string, system, global bool) (interface{}, error) {
+			switch name {
+			case vectorscan.SessionVarITopK:
+				return int64(150), nil
+			case vectorscan.SessionVarMaxITopK, vectorscan.SessionVarMaxNprobe:
+				return int64(0), nil
+			}
 			require.Equal(t, "optimizer_hints", name)
 			return tc.hints, nil
 		})
 		scopes, err := c.compileIndexSearchScan(node)
 		require.NoError(t, err)
+		require.Zero(t, scopes[0].DataSource.node.IndexSearchScan.InternalTopk, "a reusable scope keeps the plan's knobs")
 		require.Len(t, scopes, 1, "required domains stay local even without ForceOneCN")
 		require.Equal(t, c.addr, scopes[0].NodeInfo.Addr)
 		require.Equal(t, int32(1), scopes[0].NodeInfo.CNCNT)
@@ -955,4 +964,42 @@ func TestCompileUnpartitionedIndexSearchScanRunsInOneLocalScope(t *testing.T) {
 	require.Equal(t, int32(1), scopes[0].NodeInfo.CNCNT)
 	require.Equal(t, 1, scopes[0].NodeInfo.Mcpu)
 	require.Zero(t, client.calls, "a local search needs no worker capability probe")
+}
+
+func TestSourceNodeForRemoteRunStampsSessionKnobs(t *testing.T) {
+	c := NewMockCompile(t)
+	c.proc.SetResolveVariableFunc(func(name string, _, _ bool) (interface{}, error) {
+		switch name {
+		case vectorscan.SessionVarITopK:
+			return int64(150), nil
+		case vectorscan.SessionVarMaxNprobe:
+			return int64(32), nil
+		}
+		return int64(0), nil
+	})
+	source := &Source{node: &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{MaxInternalTopk: 900,
+			Index: &plan.IndexDef{IndexAlgo: catalog.MoIndexIvfFlatAlgo.ToString()}}}}
+	node, err := sourceNodeForRemoteRun(source, c.proc)
+	require.NoError(t, err)
+	require.Equal(t, uint64(150), node.IndexSearchScan.InternalTopk)
+	require.Equal(t, uint64(900), node.IndexSearchScan.MaxInternalTopk, "the BY RANK option wins")
+	require.Equal(t, uint64(32), node.IndexSearchScan.MaxNprobe)
+	require.Zero(t, source.node.IndexSearchScan.InternalTopk, "the reusable node is not changed")
+	require.Equal(t, vectorscan.SearchKnobsProtocolVersion, vectorscan.RequiredProtocolVersion(node.IndexSearchScan))
+
+	// a fulltext search takes no vector knob and keeps the IndexSearchScan protocol
+	node, err = sourceNodeForRemoteRun(&Source{node: &plan.Node{NodeType: plan.Node_INDEX_SEARCH_SCAN,
+		IndexSearchScan: &plan.IndexSearchScan{Index: &plan.IndexDef{IndexAlgo: catalog.MOIndexFullTextAlgo.ToString()}}}}, c.proc)
+	require.NoError(t, err)
+	require.Zero(t, node.IndexSearchScan.InternalTopk)
+	require.Zero(t, node.IndexSearchScan.MaxNprobe)
+	require.Equal(t, vectorscan.IndexSearchScanProtocolVersion, vectorscan.RequiredProtocolVersion(node.IndexSearchScan))
+
+	node, err = sourceNodeForRemoteRun(&Source{node: &plan.Node{NodeType: plan.Node_TABLE_SCAN}}, c.proc)
+	require.NoError(t, err)
+	require.Nil(t, node.IndexSearchScan)
+	node, err = sourceNodeForRemoteRun(nil, c.proc)
+	require.NoError(t, err)
+	require.Nil(t, node)
 }

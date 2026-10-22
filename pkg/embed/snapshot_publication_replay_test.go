@@ -44,6 +44,7 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 			externalFK                                  bool
 			explicitTables                              bool
 			emptyAccounts                               bool
+			viewScope, incompleteViewScope              bool
 		}{
 			{name: "quoted_comment", comment: "owner's copy"},
 			{name: "backslash_comment", comment: `owner's C:\new\table\`},
@@ -54,6 +55,8 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 			{name: "quoted_identifiers", database: "review-db", publication: "review-pub", table: "review-items", explicitTables: true},
 			{name: "empty_accounts", comment: "owner's empty authorization", emptyAccounts: true},
 			{name: "empty_quoted_tables", database: "review-empty-db", publication: "review-empty-pub", table: "review-items", explicitTables: true, emptyAccounts: true},
+			{name: "complete_view_scope", explicitTables: true, viewScope: true},
+			{name: "incomplete_view_scope", explicitTables: true, viewScope: true, incompleteViewScope: true},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				dbName, pubName, tableName := tc.database, tc.publication, tc.table
@@ -75,6 +78,10 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 				}
 				exec("create database " + db)
 				defer func() {
+					if tc.viewScope {
+						_, err := admin.Exec("use mo_catalog")
+						require.NoError(t, err)
+					}
 					for _, name := range []string{"subscribed", "denied_sub", "granted_sub"} {
 						_, err := subscriber.Exec("drop database if exists " + name)
 						require.NoError(t, err)
@@ -96,6 +103,11 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 					exec("insert into " + db + ".`other-items` values(1)")
 					publishOptions = " table " + table + ",`other-items` account pub_replay_sub"
 				}
+				if tc.viewScope {
+					exec("use " + db)
+					exec("create view scope_v as select id from " + table)
+					publishOptions = " table " + table + ",`other-items`,scope_v account pub_replay_sub"
+				}
 				exec("create publication " + publication + " database " + db + publishOptions + " comment " + sqlquote.String(tc.comment))
 				_, err := subscriber.ExecContext(ctx, "create database subscribed from sys publication "+publication)
 				require.NoError(t, err)
@@ -109,6 +121,13 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 					exec("create database " + external)
 					exec("create table " + external + ".child_t(id int primary key,parent_id int,foreign key(parent_id) references " + db + ".parent_t(id))")
 					exec("insert into " + external + ".child_t values(1,1)")
+				}
+				if tc.incompleteViewScope {
+					// CREATE was valid. The saved publication now contains a
+					// redefined view that needs an unselected table: replay must
+					// retain main's scope validation and reject atomically.
+					exec("create table private_t(id int primary key)")
+					exec("alter view scope_v as select id from private_t")
 				}
 				exec("create snapshot " + snapshot + " for database " + db)
 				exec("insert into " + db + "." + table + " values(2)")
@@ -129,7 +148,19 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 					exec("alter publication " + publication + " comment " + sqlquote.String(wantComment))
 				}
 				for range 2 {
-					exec(fmt.Sprintf("restore database %s{snapshot='%s'}", db, snapshot))
+					restoreSQL := fmt.Sprintf("restore database %s{snapshot='%s'}", db, snapshot)
+					if tc.incompleteViewScope {
+						_, err := admin.ExecContext(ctx, restoreSQL)
+						require.ErrorContains(t, err, "private_t")
+						var rows int
+						require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from "+db+"."+table).Scan(&rows))
+						require.Equal(t, 2, rows, "scope rejection must roll back restored data")
+						var tables string
+						require.NoError(t, admin.QueryRowContext(ctx, "select table_list from mo_catalog.mo_pubs where pub_name="+sqlquote.String(pubName)).Scan(&tables))
+						require.ElementsMatch(t, []string{tableName, "other-items", "scope_v"}, strings.Split(tables, ","))
+						continue
+					}
+					exec(restoreSQL)
 					var rows int
 					require.NoError(t, admin.QueryRowContext(ctx, "select count(*) from "+db+"."+table).Scan(&rows))
 					if tc.externalFK {
@@ -155,6 +186,10 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 							require.NoError(t, subscriber.QueryRowContext(ctx, "select count(*) from subscribed.`other-items`").Scan(&subscribedRows))
 							require.Equal(t, 1, subscribedRows)
 						}
+						if tc.viewScope {
+							require.NoError(t, subscriber.QueryRowContext(ctx, "select id from subscribed.scope_v").Scan(&subscribedRows))
+							require.Equal(t, 1, subscribedRows)
+						}
 					}
 					var restoredDB, restoredTables, restoredAccounts, comment string
 					result, err := admin.QueryContext(ctx, "select database_name,table_list,account_list,comment from mo_catalog.mo_pubs where pub_name="+sqlquote.String(pubName))
@@ -164,7 +199,11 @@ func TestSnapshotDatabasePublicationReplayBoundaries(t *testing.T) {
 					require.NoError(t, result.Scan(&restoredDB, &restoredTables, &restoredAccounts, &comment))
 					require.Equal(t, dbName, restoredDB)
 					if tc.explicitTables {
-						require.ElementsMatch(t, []string{tableName, "other-items"}, strings.Split(restoredTables, ","))
+						wantTables := []string{tableName, "other-items"}
+						if tc.viewScope {
+							wantTables = append(wantTables, "scope_v")
+						}
+						require.ElementsMatch(t, wantTables, strings.Split(restoredTables, ","))
 					} else {
 						require.Equal(t, "*", restoredTables)
 					}

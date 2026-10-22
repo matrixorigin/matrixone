@@ -67,7 +67,14 @@ func createPublicationFromRestoreInfo(ctx context.Context, bh BackgroundExec, pu
 		return err
 	}
 	defer statement.Free()
-	return createPublicationWithTableSelection(ctx, bh, statement, replay.TablesStr == pubsub.TableAll)
+	var lowerCaseTableNames int64
+	if publicationCreateValidatesTableScope(statement) {
+		lowerCaseTableNames, err = publicationBackgroundLowerCaseTableNames(ctx, bh)
+		if err != nil {
+			return err
+		}
+	}
+	return createPublicationWithTableSelection(ctx, bh, statement, replay.TablesStr == pubsub.TableAll, lowerCaseTableNames)
 }
 
 // Bulk restore deliberately omits external tables. Remove only those historical
