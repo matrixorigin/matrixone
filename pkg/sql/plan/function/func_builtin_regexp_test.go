@@ -2726,21 +2726,57 @@ func TestRegexpWideMultilineReviewFindings(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(0), got, "binary instr occurrence 2 on trailing CR")
 
-	// P1/P2 routing: pattern with only anchor-injected regexp2 syntax stays
-	// on RE2 for LF-only subjects; CR/NEL subjects still route to regexp2.
-	require.False(t, regexpRowNeedsRegexp2("^alpha", "m", "alpha\nbeta", false), "LF-only subject: RE2")
-	require.False(t, regexpRowNeedsRegexp2("^a", "m", "a\nb", false), "LF-only subject: RE2")
-	require.True(t, regexpRowNeedsRegexp2("^a", "m", "a\rb", false), "CR subject: regexp2")
-	require.True(t, regexpRowNeedsRegexp2("^a", "m", "a\u0085b", false), "NEL subject: regexp2")
-	require.True(t, regexpRowNeedsRegexp2("^a", "m", "a\u2028b", false), "LS subject: regexp2")
-	require.False(t, regexpRowNeedsRegexp2("alpha", "m", "a\rb", false), "no anchors: rewrite no-op")
-	require.False(t, regexpRowNeedsRegexp2("^a", "mu", "a\rb", false), "u pins LF-only endings")
-	require.True(t, regexpRowNeedsRegexp2("^(a)\\1", "m", "aa", false), "user backref keeps regexp2")
+	// Routing: one of RE2 / per-line / regexp2 / explicit error per row
+	// (see regexpWideMultilineRoute). LF-only subjects keep the base RE2
+	// path; anchor-only patterns on wide subjects take the per-line route
+	// at any size; patterns that can match a line terminator keep regexp2
+	// up to the admission budget and are rejected explicitly beyond it.
+	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute("^alpha", "m", "alpha\nbeta", false), "LF-only subject: RE2")
+	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute("^a", "m", "a\nb", false), "LF-only subject: RE2")
+	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a", "m", "a\rb", false), "CR subject: per-line")
+	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a", "m", "a\u0085b", false), "NEL subject: per-line")
+	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a", "m", "a\u2028b", false), "LS subject: per-line")
+	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute("alpha", "m", "a\rb", false), "no anchors: rewrite no-op")
+	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute("^a", "mu", "a\rb", false), "u pins LF-only endings")
+	require.Equal(t, regexpRouteRegexp2, regexpWideMultilineRoute("^(a)\\1", "m", "aa", false), "user backref keeps regexp2")
+	require.Equal(t, regexpRouteRegexp2, regexpWideMultilineRoute("^a.b", "m", "a\rb", false), "terminator-matching pattern: regexp2")
 
-	// Oversized subjects stay on the base path: no subject-size aborts.
+	// Oversized subjects stay supported: per-line evaluation has no size cap.
 	big := strings.Repeat("a", regexp2MaxSubjectBytes+1)
-	require.False(t, regexpRowNeedsRegexp2("^a", "m", big, false), "oversized LF-only: RE2")
-	require.False(t, regexpRowNeedsRegexp2("^a", "m", big+"\r", false), "oversized with CR: RE2 fallback")
+	require.Equal(t, regexpRouteRE2, regexpWideMultilineRoute("^a", "m", big, false), "oversized LF-only: RE2")
+	require.Equal(t, regexpRouteWideLines, regexpWideMultilineRoute("^a", "m", big+"\r", false), "oversized with CR: per-line")
 	require.True(t, like("^a", big, "m", false), "oversized MEDIUMTEXT subject")
 	require.True(t, like("^a", big+"\r", "m", false), "oversized wide-terminator subject")
+
+	// mo-bot review: ordinary anchors on wide subjects must not hit regexp2's
+	// admission memory budget (P1), and the >1MiB path must preserve the
+	// multiline contract instead of degrading to LF-only semantics (P2).
+	require.True(t, like("^a", strings.Repeat("a", 16384)+"\r", "m", false), "ordinary anchor + CR: no regexp2 admission")
+	require.True(t, like("^b$", strings.Repeat("a", 1048575)+"\r"+"b", "m", false), "oversized wide multiline parity with ICU")
+
+	// Per-line positional functions keep byte-accurate results on wide
+	// subjects, including terminator preservation in REPLACE.
+	got, err = op.regMap.regularInstrWithMatchType("^cd", "ab\rcd", 1, 1, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, int64(4), got, "instr wide CR: caret after interior terminator")
+
+	found, sub, err := op.regMap.regularSubstrWithMatchType("^b$", "a\nb\rc", 1, 1, false, "m")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Equal(t, "b", sub, "substr wide CR line")
+
+	rep, err := op.regMap.regularReplaceWithMatchType("^b$", "a\r\nb\rc", "Q", 1, 0, false, "m")
+	require.NoError(t, err)
+	require.Equal(t, "a\r\nQ\rc", rep, "replace preserves CRLF bytes")
+
+	// NEL interior line (text) and the binary byte-0x85 variant.
+	require.True(t, like("^b$", "a\u0085b", "m", false), "NEL interior line")
+	require.False(t, like("^b$", "a\x85", "m", true), "binary trailing NEL")
+	require.True(t, like("^b$", "a\x85b", "m", true), "binary NEL interior line")
+
+	// A terminator-matching pattern over the size cap fails explicitly.
+	require.Equal(t, regexpRouteWideTooLarge, regexpWideMultilineRoute("^a.b", "m", big+"\r", false), "oversized terminator-matching pattern: explicit error")
+	_, err = op.regMap.regularLikeWithMode("^a.b", strings.Repeat("a", regexp2MaxSubjectBytes+1)+"\r", "m", false)
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "wide multiline")
 }

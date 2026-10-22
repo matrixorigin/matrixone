@@ -1084,7 +1084,30 @@ func (op *opBuiltInRegexp) builtInRegexpPredicate(
 		if !subjectNull {
 			subjectString = functionUtil.QuickBytesToStr(subject)
 		}
-		if regexpRowNeedsRegexp2(patternString, pureMatchType, subjectString, binary) {
+		route := regexpWideMultilineRoute(patternString, pureMatchType, subjectString, binary)
+		if route == regexpRouteWideTooLarge {
+			return regexpWideMultilineTooLargeError(binary)
+		}
+		if route == regexpRouteWideLines {
+			if subjectNull {
+				if err := rs.Append(false, true); err != nil {
+					return err
+				}
+				continue
+			}
+			match, err := op.regMap.regexpWideLike(patternString, subjectString, pureMatchType, binary)
+			if err != nil {
+				return err
+			}
+			if negate {
+				match = !match
+			}
+			if err = rs.Append(match, false); err != nil {
+				return err
+			}
+			continue
+		}
+		if route == regexpRouteRegexp2 {
 			matcher, err := op.regMap.getRegexp2MatcherWithMatchType(
 				patternString, pureMatchType, binary)
 			if err != nil {
@@ -2301,7 +2324,14 @@ func (rs *regexpSet) regularSubstrWithMatchType(
 	subjectIsBinary bool,
 	pureMatchType string,
 ) (match bool, substr string, err error) {
-	if regexpRowNeedsRegexp2(pat, pureMatchType, str, subjectIsBinary) {
+	route := regexpWideMultilineRoute(pat, pureMatchType, str, subjectIsBinary)
+	if route == regexpRouteWideTooLarge {
+		return false, "", regexpWideMultilineTooLargeError(subjectIsBinary)
+	}
+	if route == regexpRouteWideLines {
+		return rs.regularSubstrWide(pat, str, pos, occurrence, subjectIsBinary, pureMatchType)
+	}
+	if route == regexpRouteRegexp2 {
 		return rs.regexp2SubstrWithMatchType(
 			pat, str, pos, occurrence, subjectIsBinary, pureMatchType)
 	}
@@ -2349,7 +2379,14 @@ func (rs *regexpSet) regularReplaceWithMatchType(
 	if err = validateRegexpPattern(pat); err != nil {
 		return "", err
 	}
-	if regexpRowNeedsRegexp2(pat, pureMatchType, str, subjectIsBinary) {
+	route := regexpWideMultilineRoute(pat, pureMatchType, str, subjectIsBinary)
+	if route == regexpRouteWideTooLarge {
+		return "", regexpWideMultilineTooLargeError(subjectIsBinary)
+	}
+	if route == regexpRouteWideLines {
+		return rs.regularReplaceWide(pat, str, repl, pos, occurrence, subjectIsBinary, pureMatchType)
+	}
+	if route == regexpRouteRegexp2 {
 		return rs.regexp2ReplaceWithMatchType(
 			pat, str, repl, pos, occurrence, subjectIsBinary, pureMatchType)
 	}
@@ -2451,7 +2488,14 @@ func (rs *regexpSet) regularInstrWithMatchType(
 	subjectIsBinary bool,
 	pureMatchType string,
 ) (index int64, err error) {
-	if regexpRowNeedsRegexp2(pat, pureMatchType, str, subjectIsBinary) {
+	route := regexpWideMultilineRoute(pat, pureMatchType, str, subjectIsBinary)
+	if route == regexpRouteWideTooLarge {
+		return 0, regexpWideMultilineTooLargeError(subjectIsBinary)
+	}
+	if route == regexpRouteWideLines {
+		return rs.regularInstrWide(pat, str, pos, occurrence, retOption, subjectIsBinary, pureMatchType)
+	}
+	if route == regexpRouteRegexp2 {
 		return rs.regexp2InstrWithMatchType(
 			pat, str, pos, occurrence, retOption, subjectIsBinary, pureMatchType)
 	}
@@ -3241,7 +3285,7 @@ func regexpPatternWithPureMatchType(pat, pureMatchType string, binary bool) stri
 // prefix without applying the wide-multiline anchor rewrite: the rewrite is
 // regexp2-only syntax (lookarounds) and RE2 rejects it. Go's multiline (?m)
 // already matches MySQL semantics for any subject whose line structure does
-// not demand the wider terminator set (see regexpRowNeedsRegexp2).
+// not demand the wider terminator set (see regexpWideMultilineRoute).
 func regexpPatternWithPureMatchTypeRE2(pat, pureMatchType string) string {
 	engineFlags := strings.ReplaceAll(pureMatchType, "u", "")
 	if engineFlags == "" {
@@ -3275,34 +3319,6 @@ func regexpWideMultilineSubjectNeedsICU(subject string, binary bool) bool {
 	return strings.ContainsAny(subject, "\u0085\u2028\u2029")
 }
 
-// regexpRowNeedsRegexp2 decides the engine for one regexp evaluation. A
-// user pattern RE2 cannot compile at all (backreference, lookaround, \Q,
-// grapheme \X, ...) keeps regexp2 unconditionally. When the pattern's only
-// regexp2 requirement is the injected wide-multiline anchor rewrite, RE2
-// suffices whenever the subject's line structure is LF-only: Go's (?m) ^/$
-// then coincides with the MySQL multiline contract, which restores base
-// REGEXP cost for ordinary constant multiline predicates instead of paying
-// regexp2's compile-per-subject on every row (measured ~66x slower and
-// ~900x more allocations per batch; mo-bot review P1 on #30646). Subjects
-// beyond the regexp2 guard also stay on RE2: base REGEXP had no subject
-// size cap, so adding lookarounds internally must not abort statements
-// that previously succeeded (mo-bot review P2, >1MiB MEDIUMTEXT input).
-func regexpRowNeedsRegexp2(pat, pureMatchType, subject string, binary bool) bool {
-	if requiresRegexp2Pattern(pat) {
-		return true
-	}
-	if !regexpMatchTypeWideMultiline(pureMatchType) {
-		return false
-	}
-	if len(subject) > regexp2MaxSubjectBytes {
-		return false
-	}
-	if rewriteRegexpWideMultilineAnchors(pat, binary) == pat {
-		return false
-	}
-	return regexpWideMultilineSubjectNeedsICU(subject, binary)
-}
-
 // regexpPositionSearchPattern wraps a user pattern so matching can start at a
 // later subject position without changing the original anchor context. A
 // trailing \Q is valid RE2 syntax and quotes through end-of-pattern; close that
@@ -3313,7 +3329,7 @@ func regexpPositionSearchPattern(pat, pureMatchType string, binary bool) string 
 	// This wrapper feeds regexp.Compile (RE2) only; the wide-multiline
 	// lookaround rewrite is regexp2-only syntax and must never reach RE2.
 	// Go's (?m) already matches MySQL semantics for every subject routed
-	// here (see regexpRowNeedsRegexp2).
+	// here (see regexpWideMultilineRoute).
 	var wrapped strings.Builder
 	wrapped.Grow(len(prefix) + len(pat) + len(engineFlags) + 5)
 	wrapped.WriteString(prefix)
@@ -3413,7 +3429,14 @@ func (rs *regexpSet) regularLikeWithMode(pat string, str string, matchType strin
 	if err != nil {
 		return false, err
 	}
-	if regexpRowNeedsRegexp2(pat, pureMatchType, str, binary) {
+	route := regexpWideMultilineRoute(pat, pureMatchType, str, binary)
+	if route == regexpRouteWideTooLarge {
+		return false, regexpWideMultilineTooLargeError(binary)
+	}
+	if route == regexpRouteWideLines {
+		return rs.regexpWideLike(pat, str, pureMatchType, binary)
+	}
+	if route == regexpRouteRegexp2 {
 		if err := validateRegexpPattern(pat); err != nil {
 			return false, err
 		}
