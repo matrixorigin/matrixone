@@ -1,0 +1,32 @@
+drop database if exists func_db_no_default;
+create database func_db_no_default;
+use func_db_no_default;
+select database(), schema(), database() is null;
+➤ database()[12,65535,0]  ¦  schema()[12,65535,0]  ¦  database() is null[-6,8,0]  𝄀
+func_db_no_default  ¦  func_db_no_default  ¦  0
+drop database func_db_no_default;
+select database(), schema(), database() is null, schema() is null;
+➤ database()[12,65535,0]  ¦  schema()[12,65535,0]  ¦  database() is null[-6,8,0]  ¦  schema() is null[-6,8,0]  𝄀
+null  ¦  null  ¦  1  ¦  1
+select ifnull(database(), '(none)'), coalesce(schema(), '(none)');
+➤ ifnull(database(), (none))[12,65535,0]  ¦  coalesce(schema(), (none))[12,65535,0]  𝄀
+(none)  ¦  (none)
+select concat('db=', database()), length(database());
+➤ concat(db=, database())[-1,16383,0]  ¦  length(database())[-5,64,0]  𝄀
+null  ¦  null
+prepare s1 from 'select database() is null';
+execute s1;
+➤ database() is null[-6,8,0]  𝄀
+1
+deallocate prepare s1;
+create database func_db_no_default;
+use func_db_no_default;
+select database(), database() is null;
+➤ database()[12,65535,0]  ¦  database() is null[-6,8,0]  𝄀
+func_db_no_default  ¦  0
+prepare s1 from 'select database() is null';
+execute s1;
+➤ database() is null[-6,8,0]  𝄀
+0
+deallocate prepare s1;
+drop database func_db_no_default;

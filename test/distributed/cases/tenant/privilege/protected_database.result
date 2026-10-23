@@ -96,7 +96,7 @@ select @@global.protected_databases;
 protected_bvt_db,protected_bvt_new,protected_bvt_clone,CamelDB,protected_bvt_later
 select database();
 ➤ database()[12,-1,0]  𝄀
-
+null
 use protected_bvt_later;
 select a from t1;
 ➤ a[4,32,0]  𝄀
