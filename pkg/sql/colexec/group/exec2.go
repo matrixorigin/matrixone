@@ -464,19 +464,15 @@ func (group *Group) Call(
 
 		// spilling -- spill whatever left in memory, and load first spilled bucket.
 		if group.ctr.isSpilling() {
-			if group.ctr.distinctSpill != nil {
-				if _, err = group.ctr.drainExactCountDistinct(
-					proc, group.OpAnalyzer); err != nil {
-					return vm.CancelResult, err
-				}
-			}
 			if bytes, rows, err := group.ctr.spillDataToDisk(proc, group.OpAnalyzer, nil); err != nil {
 				return vm.CancelResult, err
 			} else {
 				group.OpAnalyzer.Spill(bytes)
 				group.OpAnalyzer.SpillRows(rows)
 			}
-			if group.ctr.distinctSpill != nil && group.ctr.mtyp != H0 {
+			// Only final evaluation may reduce exact keys to cardinalities.
+			// Partials retain identities for downstream DISTINCT deduplication.
+			if group.NeedEval && group.ctr.distinctSpill != nil && group.ctr.mtyp != H0 {
 				if err = group.ctr.prepareGroupedDistinctContributions(proc); err != nil {
 					return vm.CancelResult, err
 				}
@@ -1284,26 +1280,23 @@ func (group *Group) outputOneBatch(proc *process.Process) (vm.CallResult, error)
 	if group.NeedEval {
 		return group.ctr.outputOneBatchFinal(proc, group.OpAnalyzer, group.Aggs)
 	} else {
-		// The previous partial batch has returned to the caller. Only now may we
-		// release its state and materialize the next exact-key leaf.
-		if group.ctr.inputDone &&
-			group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) &&
-			group.ctr.distinctSpill != nil {
-			loaded, err := group.ctr.loadNextDistinctPartialLeaf(proc)
-			if err != nil {
-				return vm.CancelResult, err
-			}
-			if !loaded {
-				group.ctr.state = vm.End
-				return vm.CancelResult, nil
-			}
-		} else if group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) &&
-			group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
-			// Hard-capacity recovery can spill even a streaming partial. Retire
-			// the previously returned batch before loading its next bucket, just
-			// as final output does; every partial must reach the merge consumer.
-			if _, err := group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
-				return vm.CancelResult, err
+		// Retire the previous batch only after it has returned to the caller.
+		// Generic reload can drain more exact keys, so finish its queue before
+		// consuming exact-key leaves. Those leaves remain deferred until EOF.
+		if group.ctr.currBatchIdx >= len(group.ctr.groupByBatches) {
+			if group.ctr.spillBkts != nil && group.ctr.spillBkts.Len() != 0 {
+				if _, err := group.ctr.loadSpilledData(proc, group.OpAnalyzer, group.Aggs); err != nil {
+					return vm.CancelResult, err
+				}
+			} else if group.ctr.inputDone && group.ctr.distinctSpill != nil {
+				loaded, err := group.ctr.loadNextDistinctPartialLeaf(proc)
+				if err != nil {
+					return vm.CancelResult, err
+				}
+				if !loaded {
+					group.ctr.state = vm.End
+					return vm.CancelResult, nil
+				}
 			}
 		}
 		// Publish intermediate aggregate state rather than final values.

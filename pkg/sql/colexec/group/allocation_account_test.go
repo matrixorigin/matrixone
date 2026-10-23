@@ -3443,3 +3443,159 @@ func TestStreamingGroupDrainsCapacitySpill(t *testing.T) {
 		})
 	}
 }
+
+// Partial producers must preserve DISTINCT identities across generic spill,
+// resumed input, and workers; exact-key leaves contribute neutral COUNT/SUM.
+func TestStreamingGroupMixedDistinctSpill(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		batches     int
+		cancelReset bool
+	}{{"eof", 2, false}, {"resume", 3, false}, {"cancel-reset", 2, true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			defer proc.Free()
+			baseContext := proc.Ctx
+			defer func() { proc.Ctx = baseContext }()
+			generation := installGroupTestResourceBudget(t, proc)
+			const workers = 2
+			type expected struct {
+				count, sum int64
+				distinct   map[int32]struct{}
+			}
+			want := make(map[string]*expected)
+			inputs := make([]*batch.Batch, tc.batches)
+			for pass := range inputs {
+				input := batch.NewWithSize(2)
+				defer input.Clean(proc.Mp())
+				input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+				input.Vecs[1] = vector.NewVec(types.T_int32.ToType())
+				for row := range 512 {
+					id := row + pass*256
+					key := strings.Repeat("shared prefix ", 6) + strconv.Itoa(id)
+					value, isNull := int32(pass%2), id%17 == 0
+					require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte(key), false, proc.Mp()))
+					require.NoError(t, vector.AppendFixed(input.Vecs[1], value, isNull, proc.Mp()))
+					if want[key] == nil {
+						want[key] = &expected{distinct: make(map[int32]struct{})}
+					}
+					want[key].count += workers
+					if !isNull {
+						want[key].sum += workers * int64(value)
+						want[key].distinct[value] = struct{}{}
+					}
+				}
+				input.SetRowCount(512)
+				inputs[pass] = input
+			}
+			aggs := []aggexec.AggFuncExecExpression{countStarAgg(), sumAgg(1), countDistinctAgg(1)}
+			var partials []*batch.Batch
+			defer func() {
+				for _, b := range partials {
+					b.Clean(proc.Mp())
+				}
+			}()
+			for range workers {
+				func() {
+					partial := newGroupOp(proc, []*plan.Expr{colExpr(0, types.T_varchar)}, aggs)
+					partial.NeedEval, partial.SpillMem = false, 64<<20
+					registry, err := mpool.NewAllocationAccountRegistry(1, 1<<12)
+					require.NoError(t, err)
+					controller := &exactGroupScratchController{limit: 64 << 20}
+					account, err := registry.OpenWithController(64<<20, controller)
+					require.NoError(t, err)
+					require.NoError(t, partial.ctr.setAllocationAccount(account))
+					allocation := groupTestAllocation{generation: generation, registry: registry, account: account}
+					defer func() {
+						partial.Free(proc, false, nil)
+						require.Zero(t, account.Snapshot().Used)
+						require.Zero(t, generation.Snapshot().SpillDiskUsed)
+						require.Zero(t, generation.Snapshot().SpillFDUsed)
+						finalizeGroupTestAllocation(t, partial, allocation)
+					}()
+					prepare := func() {
+						partial.Children = nil
+						partial.SpillMem = 64 << 20
+						controller.limit = 64 << 20
+						partial.AppendChild(colexec.NewMockOperator().WithBatchs(inputs).WithBatchCallback(func(index int) {
+							if index == 1 {
+								// Reject real growth beyond the first resident wave. Recovery must
+								// spill ordinary groups after their exact arguments were drained.
+								controller.limit = controller.used
+								if tc.batches > 2 {
+									partial.ctr.spillMem = 256
+								}
+							} else if index == 2 {
+								require.Zero(t, partial.ctr.spillBkts.Len(), "drain before resuming input")
+							}
+						}))
+						require.NoError(t, partial.Prepare(proc))
+						partial.ctr.distinctDrainKeysForUT = 1
+					}
+					prepare()
+					if tc.cancelReset {
+						ctx, cancel := context.WithCancel(baseContext)
+						defer cancel()
+						proc.Ctx = ctx
+						result, err := vm.Exec(partial, proc)
+						require.NoError(t, err)
+						require.NotNil(t, result.Batch)
+						require.Positive(t, partial.ctr.spillBkts.Len())
+						require.NotNil(t, partial.ctr.distinctSpill)
+						cancel()
+						result, err = vm.Exec(partial, proc)
+						require.ErrorIs(t, err, context.Canceled)
+						require.Nil(t, result.Batch)
+						partial.Reset(proc, true, err)
+						require.Zero(t, account.Snapshot().Used)
+						require.Zero(t, generation.Snapshot().SpillDiskUsed)
+						require.Zero(t, generation.Snapshot().SpillFDUsed)
+						proc.Ctx = baseContext
+						prepare()
+					}
+					for {
+						result, err := vm.Exec(partial, proc)
+						require.NoError(t, err)
+						if result.Batch == nil {
+							break
+						}
+						// The transport copy outlives this producer's allocation account.
+						cloned, err := result.Batch.DupWithoutAllocationAccount(proc.Mp())
+						require.NoError(t, err)
+						cloned.ExtraBuf = append([]byte(nil), result.Batch.ExtraBuf...)
+						partials = append(partials, cloned)
+					}
+					require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupSpillReloadBuckets"])
+					require.Positive(t, partial.OpAnalyzer.GetOpStats().ExtraStats["GroupDistinctSpillKeys"])
+					require.Zero(t, partial.ctr.spillBkts.Len())
+					require.Nil(t, partial.ctr.distinctSpill)
+				}()
+			}
+			merge := newMergeGroupOp(aggs)
+			merge.AppendChild(colexec.NewMockOperator().WithBatchs(partials))
+			defer merge.Free(proc, false, nil)
+			require.NoError(t, merge.Prepare(proc))
+			seen := make(map[string]struct{})
+			for {
+				result, err := vm.Exec(merge, proc)
+				require.NoError(t, err)
+				if result.Batch == nil {
+					break
+				}
+				for row := range result.Batch.RowCount() {
+					key := string(result.Batch.Vecs[0].GetBytesAt(row))
+					require.Contains(t, want, key)
+					require.NotContains(t, seen, key)
+					seen[key] = struct{}{}
+					require.Equal(t, want[key].count, vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[1], row), key)
+					require.Equal(t, int64(len(want[key].distinct)), vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[3], row), key)
+					require.Equal(t, len(want[key].distinct) == 0, result.Batch.Vecs[2].IsNull(uint64(row)), key)
+					if len(want[key].distinct) != 0 {
+						require.Equal(t, want[key].sum, vector.GetFixedAtNoTypeCheck[int64](result.Batch.Vecs[2], row), key)
+					}
+				}
+			}
+			require.Len(t, seen, len(want))
+		})
+	}
+}
