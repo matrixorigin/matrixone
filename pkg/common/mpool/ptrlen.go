@@ -86,11 +86,6 @@ func PtrLenToSlice[T any](p *PtrLen) []T {
 	return unsafe.Slice((*T)(unsafe.Pointer(p.ptr)), n)
 }
 
-func PtrLenFromSlice[T any](p *PtrLen, slice []T) {
-	p.ptr = unsafe.Pointer(&slice[0])
-	p.len = int32(len(slice)) * int32(unsafe.Sizeof(slice[0]))
-}
-
 func AppendFixed[T any](mp *MPool, p *PtrLen, v T) error {
 	bs := p.ToByteSlice()
 	oldNb := len(bs)

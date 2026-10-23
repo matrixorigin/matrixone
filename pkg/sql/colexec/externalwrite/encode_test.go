@@ -334,11 +334,12 @@ func TestEncodeRoundTripGuards(t *testing.T) {
 	_, err = w3.encodeCSV(bat)
 	require.Error(t, err)
 
-	// jsonline: \N never round-trips (the reader compares decoded strings
-	// against the null token), and invalid UTF-8 would be rewritten to U+FFFD
+	// jsonline preserves literal \\N as text, while invalid UTF-8 remains
+	// rejected rather than being rewritten to U+FFFD.
 	wj := NewExternalWriter(nil, WriterConfig{Format: FormatJSONLine, Attrs: []string{"b"}}).(*externalWriter)
-	_, err = wj.encodeJSONLine(bat)
-	require.Error(t, err)
+	out, err = wj.encodeJSONLine(bat)
+	require.NoError(t, err)
+	require.Equal(t, "{\"b\":\"\\\\N\"}\n", string(out))
 	batBad := mkBat("x\xffy")
 	defer batBad.Clean(mp)
 	_, err = wj.encodeJSONLine(batBad)
