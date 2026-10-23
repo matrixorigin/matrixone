@@ -989,10 +989,8 @@ func TestPrimaryKeyGroupEliminationSupportsPreparedConstantOrderPagination(t *te
 	require.False(t, reachableNodeType(query, planpb.Node_SORT))
 	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
 	require.NotNil(t, scan)
-	require.Equal(t, "cast", scan.Limit.GetF().Func.ObjName)
-	require.Equal(t, int32(0), scan.Limit.GetF().Args[0].GetP().Pos)
-	require.Equal(t, "cast", scan.Offset.GetF().Func.ObjName)
-	require.Equal(t, int32(1), scan.Offset.GetF().Args[0].GetP().Pos)
+	requirePreparedBoundedNumericCastParameter(t, scan.Limit, 0)
+	requirePreparedBoundedNumericCastParameter(t, scan.Offset, 1)
 }
 
 func TestPrimaryKeyGroupEliminationRejectsStandaloneIntervalOrder(t *testing.T) {

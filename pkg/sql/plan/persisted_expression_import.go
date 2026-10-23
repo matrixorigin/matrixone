@@ -312,35 +312,10 @@ func validatePersistedNumericProgramRoots(ctx context.Context, roots []*Expr) (*
 }
 
 func validatePersistedNumericProgramCycles(ctx context.Context, group *persistedNumericProgramGroup) error {
-	edges := make(map[int64]map[int64]struct{}, len(group.definitions))
-	for scope, definition := range group.definitions {
-		fn := definition.GetF()
-		if fn == nil || len(fn.Args) < 2 {
-			return persistedNumericProgramError(ctx, "program definition is incomplete")
-		}
-		edges[scope] = make(map[int64]struct{})
-		for _, source := range fn.Args[1:] {
-			if err := walkPersistedExecutableExprRoots(ctx, []*Expr{source}, func(expr *Expr) error {
-				ref := expr.GetF()
-				if ref == nil || ref.Func == nil {
-					return nil
-				}
-				fid, _ := function.DecodeOverloadID(ref.Func.GetObj())
-				if fid != function.SCALAR_PROGRAM_REF {
-					return nil
-				}
-				refScope, _, ok := numericProgramRefIdentity(expr)
-				if !ok {
-					return persistedNumericProgramError(ctx, "reference has an invalid identity")
-				}
-				edges[scope][refScope] = struct{}{}
-				return nil
-			}); err != nil {
-				return err
-			}
-		}
+	edges, err := collectPersistedNumericProgramDependencies(ctx, group)
+	if err != nil {
+		return err
 	}
-
 	state := make(map[int64]uint8, len(group.definitions))
 	var visit func(int64) error
 	visit = func(scope int64) error {
@@ -368,6 +343,54 @@ func validatePersistedNumericProgramCycles(ctx context.Context, group *persisted
 		}
 	}
 	return nil
+}
+
+func collectPersistedNumericProgramDependencies(
+	ctx context.Context, group *persistedNumericProgramGroup,
+) (map[int64]map[int64]struct{}, error) {
+	edges := make(map[int64]map[int64]struct{}, len(group.definitions))
+	for scope, definition := range group.definitions {
+		fn := definition.GetF()
+		if fn == nil || len(fn.Args) < 2 {
+			return nil, persistedNumericProgramError(ctx, "program definition is incomplete")
+		}
+		edges[scope] = make(map[int64]struct{})
+		for _, source := range fn.Args[1:] {
+			if err := walkPersistedExprRootsWithChildren(ctx, []*Expr{source}, func(expr *Expr) error {
+				ref := expr.GetF()
+				if ref == nil || ref.Func == nil {
+					return nil
+				}
+				fid, _ := function.DecodeOverloadID(ref.Func.GetObj())
+				if fid != function.SCALAR_PROGRAM_REF {
+					return nil
+				}
+				refScope, _, ok := numericProgramRefIdentity(expr)
+				if !ok {
+					return persistedNumericProgramError(ctx, "reference has an invalid identity")
+				}
+				edges[scope][refScope] = struct{}{}
+				return nil
+			}, persistedCycleDependencyChildren); err != nil {
+				return nil, err
+			}
+		}
+	}
+	return edges, nil
+}
+
+// A REF contributes one dependency edge to the enclosing definition. Its
+// inline REF0 definition is validated and scanned independently, so walking
+// into that body here would rediscover every descendant edge at each ancestor.
+func persistedCycleDependencyChildren(expr *Expr) []*Expr {
+	fn := expr.GetF()
+	if fn != nil && fn.Func != nil {
+		fid, _ := function.DecodeOverloadID(fn.Func.GetObj())
+		if fid == function.SCALAR_PROGRAM_REF {
+			return nil
+		}
+	}
+	return persistedExecutableExprChildren(expr)
 }
 
 func walkPersistedExprRoots(ctx context.Context, roots []*Expr, visit func(*Expr) error) error {

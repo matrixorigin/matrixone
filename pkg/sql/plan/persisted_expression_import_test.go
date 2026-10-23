@@ -160,6 +160,55 @@ func TestImportPersistedNumericProgramRefreshesNativeIdentityAndType(t *testing.
 	require.True(t, proto.Equal(originalType, &importedSource.Typ), "function refresh must preserve bound result metadata")
 }
 
+func TestPersistedNumericProgramCycleValidationScansDirectDependencies(t *testing.T) {
+	ctx := context.Background()
+	const depth = 64
+	scopes := make([]int64, depth)
+	for i := range scopes {
+		scope, err := allocateNumericValueProgramScope(ctx, nil)
+		require.NoError(t, err)
+		scopes[i] = scope
+	}
+
+	root := MakePlan2StringConstExprWithType("1")
+	for i := depth - 1; i >= 0; i-- {
+		definition := numericValueProgramDefinition(scopes[i], root, nil)
+		root = scalarNumericProgramRef(scopes[i], 0, root.Typ)
+		root.GetF().Args = append([]*Expr{definition}, root.GetF().Args...)
+	}
+	group, err := validatePersistedNumericProgramRoots(ctx, []*Expr{root})
+	require.NoError(t, err)
+	edges, err := collectPersistedNumericProgramDependencies(ctx, group)
+	require.NoError(t, err)
+	edgeCount := 0
+	for _, dependencies := range edges {
+		edgeCount += len(dependencies)
+	}
+	require.Equal(t, depth-1, edgeCount, "each nested program should contribute only its direct REF dependency")
+
+	outerScope, err := allocateNumericValueProgramScope(ctx, nil)
+	require.NoError(t, err)
+	innerScope, err := allocateNumericValueProgramScope(ctx, nil)
+	require.NoError(t, err)
+	innerRaw := MakePlan2StringConstExprWithType("1")
+	innerDefinition := numericValueProgramDefinition(
+		innerScope,
+		innerRaw,
+		scalarNumericProgramRef(outerScope, 1, makeSimplePlan2Type(types.T_bool)),
+	)
+	innerValue := scalarNumericProgramRef(innerScope, 0, innerRaw.Typ)
+	innerValue.GetF().Args = append([]*Expr{innerDefinition}, innerValue.GetF().Args...)
+	outerDefinition := numericValueProgramDefinition(
+		outerScope,
+		innerValue,
+		scalarNumericProgramRef(innerScope, 1, makeSimplePlan2Type(types.T_bool)),
+	)
+	outerValue := scalarNumericProgramRef(outerScope, 0, innerValue.Typ)
+	outerValue.GetF().Args = append([]*Expr{outerDefinition}, outerValue.GetF().Args...)
+	_, err = validatePersistedNumericProgramRoots(ctx, []*Expr{outerValue})
+	require.ErrorContains(t, err, "program scope graph contains a cycle")
+}
+
 func mustProgramScope(t *testing.T, expr *Expr) int64 {
 	t.Helper()
 	scope, _, ok := numericProgramRefIdentity(expr)
