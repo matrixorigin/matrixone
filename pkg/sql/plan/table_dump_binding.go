@@ -365,14 +365,14 @@ func inspectTableDumpBoundExpression(expr *planpb.Expr) (normalize, hasPrivate, 
 				hasPrivate = hasPrivate || fid == function.SCALAR_PROGRAM || fid == function.SCALAR_PROGRAM_REF
 			}
 			for _, arg := range fn.Args {
-				walk(arg, true)
+				walk(arg, normalizeType)
 			}
 		} else if list := current.GetList(); list != nil {
 			for _, entry := range list.List {
-				walk(entry, true)
+				walk(entry, normalizeType)
 			}
 		} else if lit := current.GetLit(); lit != nil {
-			walk(lit.Src, true)
+			walk(lit.Src, normalizeType)
 		} else {
 			// Other Expr variants are not compatibility-normalized, but their
 			// retained identities still participate in private-program checks.

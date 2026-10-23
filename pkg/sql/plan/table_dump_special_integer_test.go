@@ -391,8 +391,9 @@ func TestTableDumpDefaultVerificationCanonicalizesNumericProgramScopes(t *testin
 	target := built.GetDdl().GetCreateTable().GetTableDef()
 	source := proto.Clone(target).(*planpb.TableDef)
 	item := tableDumpExpressions(target)[0]
-	_, ast, _, err := parseTableDumpExpression(compiler.GetContext(), item.origin, tableDumpParserModesForOrigin(item.origin)[0])
+	parsedStmt, ast, _, err := parseTableDumpExpression(compiler.GetContext(), item.origin, tableDumpParserModesForOrigin(item.origin)[0])
 	require.NoError(t, err)
+	defer parsedStmt.Free()
 	boundAgain, err := bindTableDumpExpression(
 		tableDumpBindContext{CompilerContext: compiler, ctx: compiler.GetContext()},
 		target, item, ast, 0, tableDumpBindingCurrent, &tableDumpDefaultSession{})
