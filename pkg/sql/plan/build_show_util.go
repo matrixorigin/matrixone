@@ -1583,6 +1583,7 @@ func formatInfileExternalOptionsForShowCreate(param *tree.ExternParam, sqlMode s
 	// The CSV reader skips lines whose raw prefix matches COMMENT, so the marker
 	// changes which rows are returned; round-trip it (omitted when unset).
 	appendInfileOptionForShowCreate(&parts, "COMMENT", GetCSVComment(param), sqlMode)
+	appendInfileOptionForShowCreate(&parts, "JSON_BINARY", param.JsonBinary, sqlMode)
 	appendHivePartitionOptionsForShowCreate(&parts, param, true, sqlMode)
 	return " INFILE{" + strings.Join(parts, ",") + "}"
 }
@@ -1619,6 +1620,7 @@ func formatS3ExternalOptionsForShowCreate(param *tree.ExternParam, sqlMode strin
 	appendExternalOptionForShowCreate(&parts, "compression", param.CompressType, false, sqlMode)
 	appendExternalOptionForShowCreate(&parts, "format", param.Format, false, sqlMode)
 	appendExternalOptionForShowCreate(&parts, "jsondata", param.JsonData, false, sqlMode)
+	appendExternalOptionForShowCreate(&parts, JSONBinaryOptionKey, param.JsonBinary, false, sqlMode)
 	if pattern, ok := GetWriteFilePattern(param); ok {
 		appendExternalOptionForShowCreate(&parts, ExternalWriteFilePatternKey, pattern, false, sqlMode)
 	}

@@ -574,6 +574,9 @@ func getFunctionByName(
 	}
 
 	check := f.checkArgumentTypes(args, stringDomainModes)
+	if r.fid == UNIX_TIMESTAMP && LegacyUnixTimestampDatetime(ctx) {
+		check = fixedTypeMatch(f.Overloads[:4], args)
+	}
 	if r.fid == INTEGER_DIV && LegacyDecimalIntegerDiv(ctx) {
 		check = legacyIntegerDivCheck(args)
 	}

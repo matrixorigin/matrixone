@@ -2918,6 +2918,53 @@ func builtInUnixTimestamp(parameters []*vector.Vector, result vector.FunctionRes
 	return nil
 }
 
+// DATETIME is a wall-clock value. Convert it directly using the session time
+// zone so a DST gap follows UNIX_TIMESTAMP's normalization policy instead of
+// the strict DATETIME-to-TIMESTAMP assignment cast.
+func builtInUnixTimestampDatetime(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	p1 := vector.GenerateFunctionFixedTypeParameter[types.Datetime](parameters[0])
+	zone := proc.GetSessionInfo().TimeZone
+	if result.GetResultVector().GetType().Oid == types.T_decimal128 {
+		rs := vector.MustFunctionResult[types.Decimal128](result)
+		for i := uint64(0); i < uint64(length); i++ {
+			value, null := p1.GetValue(i)
+			if null || value == types.ZeroDatetime {
+				if err := rs.Append(types.Decimal128{}, true); err != nil {
+					return err
+				}
+				continue
+			}
+			unixMicro := int64(value.ToTimestamp(zone)) - int64(types.UnixToTimestamp(0))
+			if unixMicro < 0 {
+				unixMicro = 0
+			}
+			if err := rs.Append(types.Decimal128{B0_63: uint64(unixMicro)}, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	rs := vector.MustFunctionResult[int64](result)
+	for i := uint64(0); i < uint64(length); i++ {
+		value, null := p1.GetValue(i)
+		if null || value == types.ZeroDatetime {
+			if err := rs.Append(0, true); err != nil {
+				return err
+			}
+			continue
+		}
+		unix := value.ToTimestamp(zone).Unix()
+		if unix < 0 {
+			unix = 0
+		}
+		if err := rs.Append(unix, false); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func parseTimestampForUnix(loc *time.Location, s string) (types.Timestamp, bool) {
 	ts, err := types.ParseTimestamp(loc, s, 6)
 	if err != nil {

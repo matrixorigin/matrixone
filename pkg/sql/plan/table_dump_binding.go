@@ -48,6 +48,7 @@ type tableDumpExpressionVisitor struct {
 	hasIntegerDivision bool
 	hasSpecial         bool
 	hasTimestampAdd    bool
+	hasUnixTimestamp   bool
 	hasJSON            bool
 }
 
@@ -63,6 +64,8 @@ func (v *tableDumpExpressionVisitor) Enter(e tree.Expr) (tree.Expr, bool) {
 			v.hasSpecial = true
 		case "timestampadd":
 			v.hasTimestampAdd = true
+		case "unix_timestamp":
+			v.hasUnixTimestamp = true
 		case "json_length", "json_set", "json_insert", "json_replace":
 			v.hasJSON = true
 		}
@@ -202,7 +205,7 @@ func parseTableDumpExpression(ctx context.Context, origin, mode string) (tree.St
 	return stmt, expr, visitor, nil
 }
 
-type tableDumpBindingMode uint8
+type tableDumpBindingMode uint16
 
 const (
 	tableDumpBindingCurrent tableDumpBindingMode = iota
@@ -214,7 +217,10 @@ const (
 )
 
 // A flag selects one coherent pre-migration binding, never per-node metadata.
-const tableDumpBindingPreTemporalNullability tableDumpBindingMode = 1 << 7
+const (
+	tableDumpBindingPreTemporalNullability   tableDumpBindingMode = 1 << 7
+	tableDumpBindingPreUnixTimestampDatetime tableDumpBindingMode = 1 << 8
+)
 
 const tableDumpBindingPreJSON tableDumpBindingMode = 1 << 6
 
@@ -224,9 +230,12 @@ type tableDumpDefaultSession struct {
 
 func bindTableDumpExpression(ctx CompilerContext, def *planpb.TableDef, item tableDumpExpression, ast tree.Expr, increment int64, mode tableDumpBindingMode, session *tableDumpDefaultSession) (*planpb.Expr, error) {
 	bindCtx := function.WithDivPrecisionIncrement(ctx.GetContext(), int32(increment))
-	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON)
+	baseMode := mode &^ (tableDumpBindingPreTemporalNullability | tableDumpBindingPreJSON | tableDumpBindingPreUnixTimestampDatetime)
 	if mode&tableDumpBindingPreTemporalNullability != 0 {
 		bindCtx = function.WithLegacyTemporalNullability(bindCtx)
+	}
+	if mode&tableDumpBindingPreUnixTimestampDatetime != 0 {
+		bindCtx = function.WithLegacyUnixTimestampDatetime(bindCtx)
 	}
 	switch baseMode {
 	case tableDumpBindingLegacyTimestampAdd:
@@ -631,6 +640,14 @@ func analyzeTableDumpBindingsWithCandidateVisitLimit(ctx CompilerContext, target
 					}
 				}
 				modes = append(modes, tableDumpBindingCurrent|tableDumpBindingPreJSON)
+			}
+			if visit.hasUnixTimestamp {
+				// Rebind complete pre-overload trees, including their implicit
+				// DATETIME -> TIMESTAMP cast, under each applicable earlier era.
+				oldModes := append([]tableDumpBindingMode(nil), modes...)
+				for _, mode := range oldModes {
+					modes = append(modes, mode|tableDumpBindingPreUnixTimestampDatetime)
+				}
 			}
 			// All session witnesses share the ordinary cancellation and total
 			// candidate-node budget. Only complete rebound trees can match.
