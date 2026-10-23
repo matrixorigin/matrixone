@@ -2064,73 +2064,274 @@ func Test_doShowCcprSubscriptions(t *testing.T) {
 }
 
 func Test_doShowPublicationCoverage(t *testing.T) {
-	convey.Convey("show publication coverage", t, func() {
-		ctrl := gomock.NewController(t)
-		defer ctrl.Finish()
+	type pubRow struct {
+		accountID   int64
+		accountName string
+		dbName      string
+		tables      string
+		subs        string
+	}
 
-		tenant := &TenantInfo{
-			Tenant:        sysAccountName,
-			User:          rootName,
-			DefaultRole:   moAdminRoleName,
-			TenantID:      sysAccountID,
-			UserID:        rootID,
-			DefaultRoleID: moAdminRoleID,
+	newCheckColResult := func(ctrl *gomock.Controller, exists bool) []interface{} {
+		er := mock_frontend.NewMockExecResult(ctrl)
+		n := uint64(0)
+		if exists {
+			n = 1
 		}
-		ses := newSes(nil, ctrl)
-		ses.tenant = tenant
+		er.EXPECT().GetRowCount().Return(n).AnyTimes()
+		return []interface{}{er}
+	}
 
-		pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
-		pu.SV.SetDefaultValues()
-		setPu("", pu)
-
-		ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
-		ctx = defines.AttachAccount(ctx, sysAccountID, rootID, moAdminRoleID)
-
-		mockedCheckColResults := func(ctrl *gomock.Controller) []interface{} {
-			er := mock_frontend.NewMockExecResult(ctrl)
-			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-			return []interface{}{er}
+	newPubResult := func(ctrl *gomock.Controller, pubs []pubRow, newSchema bool) []interface{} {
+		er := mock_frontend.NewMockExecResult(ctrl)
+		er.EXPECT().GetRowCount().Return(uint64(len(pubs))).AnyTimes()
+		getStr := func(col uint64, val func(pubRow) string) {
+			er.EXPECT().GetString(gomock.Any(), gomock.Any(), col).DoAndReturn(
+				func(_ context.Context, r, _ uint64) (string, error) { return val(pubs[r]), nil }).AnyTimes()
 		}
-
-		// Mock pub info result with specific tables
-		mockedPubInfoResults := func(ctrl *gomock.Controller) []interface{} {
-			er := mock_frontend.NewMockExecResult(ctrl)
-			er.EXPECT().GetRowCount().Return(uint64(1)).AnyTimes()
-			er.EXPECT().GetInt64(gomock.Any(), uint64(0), uint64(0)).Return(int64(0), nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(1)).Return("sys", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(2)).Return("pub1", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(3)).Return("db1", nil).AnyTimes()
-			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(4)).Return(uint64(0), nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(5)).Return("t1,t2", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(6)).Return("all", nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(7)).Return("", nil).AnyTimes()
-			er.EXPECT().ColumnIsNull(gomock.Any(), uint64(0), uint64(8)).Return(true, nil).AnyTimes()
-			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(9)).Return(uint64(0), nil).AnyTimes()
-			er.EXPECT().GetUint64(gomock.Any(), uint64(0), uint64(10)).Return(uint64(0), nil).AnyTimes()
-			er.EXPECT().GetString(gomock.Any(), uint64(0), uint64(11)).Return("", nil).AnyTimes()
-			return []interface{}{er}
+		getUint64 := func(col uint64, val func(pubRow) uint64) {
+			er.EXPECT().GetUint64(gomock.Any(), gomock.Any(), col).DoAndReturn(
+				func(_ context.Context, r, _ uint64) (uint64, error) { return val(pubs[r]), nil }).AnyTimes()
 		}
+		er.EXPECT().GetInt64(gomock.Any(), gomock.Any(), uint64(0)).DoAndReturn(
+			func(_ context.Context, r, _ uint64) (int64, error) { return pubs[r].accountID, nil }).AnyTimes()
+		if newSchema {
+			// account_id, account_name, pub_name, database_name, database_id,
+			// table_list, account_list, created_time, update_time, owner, creator, comment
+			getStr(1, func(p pubRow) string { return p.accountName })
+			getStr(2, func(p pubRow) string { return "pub1" })
+			getStr(3, func(p pubRow) string { return p.dbName })
+			getUint64(4, func(p pubRow) uint64 { return 0 })
+			getStr(5, func(p pubRow) string { return p.tables })
+			getStr(6, func(p pubRow) string { return p.subs })
+			getStr(7, func(p pubRow) string { return "" })
+			er.EXPECT().ColumnIsNull(gomock.Any(), gomock.Any(), uint64(8)).Return(true, nil).AnyTimes()
+			getUint64(9, func(p pubRow) uint64 { return 0 })
+			getUint64(10, func(p pubRow) uint64 { return 0 })
+			getStr(11, func(p pubRow) string { return "" })
+		} else {
+			// old schema without account_name: account_id, pub_name, database_name,
+			// database_id, table_list, account_list, created_time, update_time, owner, creator, comment
+			getStr(1, func(p pubRow) string { return "pub1" })
+			getStr(2, func(p pubRow) string { return p.dbName })
+			getUint64(3, func(p pubRow) uint64 { return 0 })
+			getStr(4, func(p pubRow) string { return p.tables })
+			getStr(5, func(p pubRow) string { return p.subs })
+			getStr(6, func(p pubRow) string { return "" })
+			er.EXPECT().ColumnIsNull(gomock.Any(), gomock.Any(), uint64(7)).Return(true, nil).AnyTimes()
+			getUint64(8, func(p pubRow) uint64 { return 0 })
+			getUint64(9, func(p pubRow) uint64 { return 0 })
+			getStr(10, func(p pubRow) string { return "" })
+		}
+		return []interface{}{er}
+	}
 
-		bh := mock_frontend.NewMockBackgroundExec(ctrl)
-		bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
-		defer bhStub.Reset()
+	newTablesResult := func(ctrl *gomock.Controller, tables []string) []interface{} {
+		er := mock_frontend.NewMockExecResult(ctrl)
+		er.EXPECT().GetRowCount().Return(uint64(len(tables))).AnyTimes()
+		er.EXPECT().GetString(gomock.Any(), gomock.Any(), uint64(0)).DoAndReturn(
+			func(_ context.Context, r, _ uint64) (string, error) { return tables[r], nil }).AnyTimes()
+		return []interface{}{er}
+	}
 
-		bh.EXPECT().Close().Return().AnyTimes()
-		bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
-		// check col exists
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return(mockedCheckColResults(ctrl))
-		// get pub info
-		bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil).AnyTimes()
-		bh.EXPECT().GetExecResultSet().Return(mockedPubInfoResults(ctrl))
+	pubOwnedByAcc1 := pubRow{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"}
 
-		spc := &tree.ShowPublicationCoverage{Name: "pub1"}
-		err := doShowPublicationCoverage(ctx, ses, spc)
-		convey.So(err, convey.ShouldBeNil)
+	cases := []struct {
+		name        string
+		tenantName  string
+		tenantID    uint32
+		newSchema   bool
+		pubs        []pubRow
+		tablesQuery bool
+		tables      []string
+		wantErr     string
+		wantDbs     []string
+		wantTables  []string
+	}{
+		{
+			name:       "owner not in explicit subscriber list",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs:       []pubRow{pubOwnedByAcc1},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "subscriber in explicit list",
+			tenantName: "acc2", tenantID: 2, newSchema: true,
+			pubs:       []pubRow{pubOwnedByAcc1},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "unrelated account is rejected",
+			tenantName: "acc3", tenantID: 3, newSchema: true,
+			pubs:    []pubRow{pubOwnedByAcc1},
+			wantErr: "account 'acc3' is not allowed to access publication 'pub1'",
+		},
+		{
+			name:       "sys can inspect any publication coverage",
+			tenantName: sysAccountName, tenantID: sysAccountID, newSchema: true,
+			pubs:       []pubRow{pubOwnedByAcc1},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "own publication wins over identically named accessible publication",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 2, accountName: "acc2", dbName: pubsub.TableAll, tables: pubsub.TableAll, subs: pubsub.AccountAll},
+				pubOwnedByAcc1,
+			},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "subscriber resolves the publication it can access when shadowed by a denied one",
+			tenantName: "acc2", tenantID: 2, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc3"},
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc2"},
+			},
+			wantDbs:    []string{"db3"},
+			wantTables: []string{"t9"},
+		},
+		{
+			name:       "two accessible same-named publications report ambiguity",
+			tenantName: "acc2", tenantID: 2, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"},
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc2"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts 'acc1', 'acc3' are accessible to account 'acc2'",
+		},
+		{
+			name:       "ambiguity does not depend on catalog row order",
+			tenantName: "acc2", tenantID: 2, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc2"},
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts 'acc1', 'acc3' are accessible to account 'acc2'",
+		},
+		{
+			name:       "sys reports ambiguity between publications it does not own",
+			tenantName: sysAccountName, tenantID: sysAccountID, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: "t1,t2", subs: "acc2"},
+				{accountID: 3, accountName: "acc3", dbName: "db3", tables: "t9", subs: "acc3"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts 'acc1', 'acc3' are accessible to account 'sys'",
+		},
+		{
+			name:       "own publication wins over several accessible ones",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 2, accountName: "acc2", dbName: pubsub.TableAll, tables: pubsub.TableAll, subs: pubsub.AccountAll},
+				{accountID: 3, accountName: "acc3", dbName: pubsub.TableAll, tables: pubsub.TableAll, subs: pubsub.AccountAll},
+				pubOwnedByAcc1,
+			},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "ambiguity without account_name column reports owner ids",
+			tenantName: "acc2", tenantID: 2, newSchema: false,
+			pubs: []pubRow{
+				{accountID: 1, dbName: "db1", tables: "t1,t2", subs: "acc2"},
+				{accountID: 3, dbName: "db3", tables: "t9", subs: "acc2"},
+			},
+			wantErr: "publication name 'pub1' is ambiguous: 2 publications with this name " +
+				"owned by accounts account_id 1, account_id 3 are accessible to account 'acc2'",
+		},
+		{
+			name:       "missing publication reports not exist",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs:    nil,
+			wantErr: "publication 'pub1' does not exist",
+		},
+		{
+			name:       "owner without account_name column",
+			tenantName: "acc1", tenantID: 1, newSchema: false,
+			pubs:       []pubRow{pubOwnedByAcc1},
+			wantDbs:    []string{"db1", "db1"},
+			wantTables: []string{"t1", "t2"},
+		},
+		{
+			name:       "owner of database level publication sees all tables",
+			tenantName: "acc1", tenantID: 1, newSchema: true,
+			pubs: []pubRow{
+				{accountID: 1, accountName: "acc1", dbName: "db1", tables: pubsub.TableAll, subs: "acc2"},
+			},
+			tablesQuery: true,
+			tables:      []string{"ta", "tb"},
+			wantDbs:     []string{"db1", "db1", "db1"},
+			wantTables:  []string{pubsub.TableAll, "ta", "tb"},
+		},
+	}
 
-		// Verify result set has data
-		convey.So(len(ses.mrs.Data), convey.ShouldBeGreaterThan, 0)
-	})
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctrl := gomock.NewController(t)
+			defer ctrl.Finish()
+
+			tenant := &TenantInfo{
+				Tenant:        tc.tenantName,
+				User:          rootName,
+				DefaultRole:   moAdminRoleName,
+				TenantID:      tc.tenantID,
+				UserID:        rootID,
+				DefaultRoleID: moAdminRoleID,
+			}
+			ses := newSes(nil, ctrl)
+			ses.tenant = tenant
+
+			pu := config.NewParameterUnit(&config.FrontendParameters{}, nil, nil, nil)
+			pu.SV.SetDefaultValues()
+			setPu("", pu)
+
+			ctx := context.WithValue(context.TODO(), config.ParameterUnitKey, pu)
+			ctx = defines.AttachAccount(ctx, tc.tenantID, rootID, moAdminRoleID)
+
+			results := [][]interface{}{
+				newCheckColResult(ctrl, tc.newSchema),
+				newPubResult(ctrl, tc.pubs, tc.newSchema),
+			}
+			if tc.tablesQuery {
+				results = append(results, newTablesResult(ctrl, tc.tables))
+			}
+
+			bh := mock_frontend.NewMockBackgroundExec(ctrl)
+			bhStub := gostub.StubFunc(&NewBackgroundExec, bh)
+			defer bhStub.Reset()
+
+			bh.EXPECT().Close().Return().AnyTimes()
+			bh.EXPECT().ClearExecResultSet().Return().AnyTimes()
+			for _, res := range results {
+				bh.EXPECT().Exec(gomock.Any(), gomock.Any()).Return(nil)
+				bh.EXPECT().GetExecResultSet().Return(res)
+			}
+
+			spc := &tree.ShowPublicationCoverage{Name: "pub1"}
+			err := doShowPublicationCoverage(ctx, ses, spc)
+			if tc.wantErr != "" {
+				require.Error(t, err)
+				require.Contains(t, err.Error(), tc.wantErr)
+				return
+			}
+			require.NoError(t, err)
+
+			var gotDbs, gotTables []string
+			for _, row := range ses.mrs.Data {
+				gotDbs = append(gotDbs, row[0].(string))
+				gotTables = append(gotTables, row[1].(string))
+			}
+			require.Equal(t, tc.wantDbs, gotDbs)
+			require.Equal(t, tc.wantTables, gotTables)
+		})
+	}
 }
 
 func Test_parseSubscriptionUri(t *testing.T) {
