@@ -254,6 +254,16 @@ func TestDecimalCastPrecisionContract(t *testing.T) {
 		{name: "constant128_to256_growth_batch",
 			source: types.New(types.T_decimal128, 38, 2), target: types.New(types.T_decimal256, 40, 4),
 			values: []types.Decimal128{{B0_63: 1234}}, want: []types.Decimal256{{B0_63: 123400}, {B0_63: 123400}, {B0_63: 123400}}, constant: true, length: 3},
+		{name: "null_prefix_64", source: types.New(types.T_decimal64, 12, 2), target: types.New(types.T_decimal64, 14, 4), values: []types.Decimal64{0, 0, 1234}, want: []types.Decimal64{0, 0, 123400}, nulls: []bool{true, true, false}},
+		{name: "null_mixed_64", source: types.New(types.T_decimal64, 12, 2), target: types.New(types.T_decimal64, 14, 4), values: []types.Decimal64{0, 1234, 0}, want: []types.Decimal64{0, 123400, 0}, nulls: []bool{true, false, true}},
+		{name: "null_prefix_128", source: types.New(types.T_decimal128, 20, 2), target: types.New(types.T_decimal128, 22, 4), values: []types.Decimal128{{B0_63: 0}, {B0_63: 0}, {B0_63: 1234}}, want: []types.Decimal128{{B0_63: 0}, {B0_63: 0}, {B0_63: 123400}}, nulls: []bool{true, true, false}},
+		{name: "null_mixed_128", source: types.New(types.T_decimal128, 20, 2), target: types.New(types.T_decimal128, 22, 4), values: []types.Decimal128{{B0_63: 0}, {B0_63: 1234}, {B0_63: 0}}, want: []types.Decimal128{{B0_63: 0}, {B0_63: 123400}, {B0_63: 0}}, nulls: []bool{true, false, true}},
+		{name: "null_prefix_256", source: types.New(types.T_decimal256, 40, 2), target: types.New(types.T_decimal256, 42, 4), values: []types.Decimal256{{B0_63: 0}, {B0_63: 0}, {B0_63: 1234}}, want: []types.Decimal256{{B0_63: 0}, {B0_63: 0}, {B0_63: 123400}}, nulls: []bool{true, true, false}},
+		{name: "null_mixed_256", source: types.New(types.T_decimal256, 40, 2), target: types.New(types.T_decimal256, 42, 4), values: []types.Decimal256{{B0_63: 0}, {B0_63: 1234}, {B0_63: 0}}, want: []types.Decimal256{{B0_63: 0}, {B0_63: 123400}, {B0_63: 0}}, nulls: []bool{true, false, true}},
+		{name: "null_prefix_64to256", source: types.New(types.T_decimal64, 12, 2), target: types.New(types.T_decimal256, 14, 4), values: []types.Decimal64{0, 0, 1234}, want: []types.Decimal256{{B0_63: 0}, {B0_63: 0}, {B0_63: 123400}}, nulls: []bool{true, true, false}},
+		{name: "null_mixed_64to256", source: types.New(types.T_decimal64, 12, 2), target: types.New(types.T_decimal256, 14, 4), values: []types.Decimal64{0, 1234, 0}, want: []types.Decimal256{{B0_63: 0}, {B0_63: 123400}, {B0_63: 0}}, nulls: []bool{true, false, true}},
+		{name: "null_prefix_128to256", source: types.New(types.T_decimal128, 20, 2), target: types.New(types.T_decimal256, 22, 4), values: []types.Decimal128{{B0_63: 0}, {B0_63: 0}, {B0_63: 1234}}, want: []types.Decimal256{{B0_63: 0}, {B0_63: 0}, {B0_63: 123400}}, nulls: []bool{true, true, false}},
+		{name: "null_mixed_128to256", source: types.New(types.T_decimal128, 20, 2), target: types.New(types.T_decimal256, 22, 4), values: []types.Decimal128{{B0_63: 0}, {B0_63: 1234}, {B0_63: 0}}, want: []types.Decimal256{{B0_63: 0}, {B0_63: 123400}, {B0_63: 0}}, nulls: []bool{true, false, true}},
 		{name: "empty64_same_growth", source: types.New(types.T_decimal64, 12, 2), target: types.New(types.T_decimal64, 14, 4),
 			values: []types.Decimal64{}, want: []types.Decimal64{}},
 		{name: "empty128_same_growth", source: types.New(types.T_decimal128, 20, 2), target: types.New(types.T_decimal128, 22, 4),
@@ -366,6 +376,7 @@ func TestDecimalCastScaleGrowthAdmission(t *testing.T) {
 		{types.New(types.T_decimal128, 38, 2), types.New(types.T_decimal64, 18, 4), false},
 	} {
 		require.Equal(t, tc.want, canWidenDecimalScale(tc.from, tc.to), "%v -> %v", tc.from, tc.to)
+		require.Equal(t, tc.want, canWidenResolvedDecimalScale(tc.from.Width, tc.from.Scale, tc.to.Width, tc.to.Scale, tc.from.Oid.ToType().Width, tc.to.Oid.ToType().Width), "resolved %v -> %v", tc.from, tc.to)
 	}
 }
 
@@ -485,5 +496,118 @@ func TestDecimalWideningConstBatch(t *testing.T) {
 			}
 		})
 		require.Zero(t, proc.Mp().CurrNB())
+	}
+}
+
+// NULL admission is bounded by the requested rows, not the backing vector.
+func TestDecimalCastNullDomain(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		source, target types.Type
+		input, want    any
+	}{
+		{"64", types.New(types.T_decimal64, 4, 2), types.New(types.T_decimal64, 5, 4), []types.Decimal64{0, 0, 9999}, []types.Decimal64{0, 0}},
+		{"128", types.New(types.T_decimal128, 4, 2), types.New(types.T_decimal128, 5, 4), []types.Decimal128{{}, {}, {B0_63: 9999}}, []types.Decimal128{{}, {}}},
+		{"256", types.New(types.T_decimal256, 4, 2), types.New(types.T_decimal256, 5, 4), []types.Decimal256{{}, {}, {B0_63: 9999}}, []types.Decimal256{{}, {}}},
+		{"64to256", types.New(types.T_decimal64, 4, 2), types.New(types.T_decimal256, 5, 4), []types.Decimal64{0, 0, 9999}, []types.Decimal256{{}, {}}},
+		{"128to256", types.New(types.T_decimal128, 4, 2), types.New(types.T_decimal256, 5, 4), []types.Decimal128{{}, {}, {B0_63: 9999}}, []types.Decimal256{{}, {}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(proc.Free)
+			fc := NewFunctionTestCase(proc, []FunctionTestInput{NewFunctionTestInput(tc.source, tc.input, []bool{true, true, false}), NewFunctionTestInput(tc.target, emptyCastTargetValues(tc.target), nil)}, NewFunctionTestResult(tc.target, false, tc.want, []bool{true, true}), NewCast)
+			t.Cleanup(fc.Free)
+			fc.fnLength = 2
+			ok, info := fc.Run()
+			require.True(t, ok, info)
+		})
+	}
+}
+
+// BenchmarkDecimalCastSetup includes actual small/no-work shapes and tails.
+func BenchmarkDecimalCastSetup(b *testing.B) {
+	for _, kind := range []string{"d64", "d128", "d256", "64to256", "128to256", "64to128_control"} {
+		for _, shape := range []string{"one", "empty", "allnull", "constant", "large", "null_one", "tiny2", "tiny8", "tiny16", "tail255", "tail257", "prefix", "mixed"} {
+			b.Run(kind+"/"+shape, func(b *testing.B) {
+				n := 256
+				switch shape {
+				case "null_one":
+					n = 1
+				case "tiny2":
+					n = 2
+				case "tiny8":
+					n = 8
+				case "tiny16":
+					n = 16
+				case "tail255":
+					n = 255
+				case "tail257":
+					n = 257
+				}
+				if shape == "one" {
+					n = 1
+				}
+				if shape == "empty" {
+					n = 0
+				}
+				if shape == "large" {
+					n = 8192
+				}
+				src, dst := types.New(types.T_decimal64, 12, 2), types.New(types.T_decimal64, 14, 4)
+				switch kind {
+				case "64to128_control":
+					dst = types.New(types.T_decimal128, 14, 4)
+				case "d128":
+					src, dst = types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal128, 22, 4)
+				case "d256":
+					src, dst = types.New(types.T_decimal256, 40, 2), types.New(types.T_decimal256, 42, 4)
+				case "64to256":
+					dst = types.New(types.T_decimal256, 14, 4)
+				case "128to256":
+					src, dst = types.New(types.T_decimal128, 20, 2), types.New(types.T_decimal256, 22, 4)
+				}
+				makeValues := func(typ types.Type, count int, value int64) any {
+					switch typ.Oid {
+					case types.T_decimal64:
+						v := make([]types.Decimal64, count)
+						for i := range v {
+							v[i] = types.Decimal64(value)
+						}
+						return v
+					case types.T_decimal128:
+						v := make([]types.Decimal128, count)
+						for i := range v {
+							v[i] = types.Decimal128FromInt64(value)
+						}
+						return v
+					default:
+						v := make([]types.Decimal256, count)
+						for i := range v {
+							v[i] = types.Decimal256FromInt64(value)
+						}
+						return v
+					}
+				}
+				count := n
+				if shape == "constant" {
+					count = 1
+				}
+				var mask []bool
+				if shape == "allnull" || shape == "null_one" || shape == "prefix" || shape == "mixed" {
+					mask = make([]bool, n)
+					for i := range mask {
+						mask[i] = shape == "allnull" || shape == "null_one" || (shape == "prefix" && i < 16) || (shape == "mixed" && i%2 == 0)
+					}
+				}
+				input := NewFunctionTestInput(src, makeValues(src, count, 1234), mask)
+				input.isConst = shape == "constant"
+				proc := testutil.NewProcess(b)
+				defer proc.Free()
+				fc := NewFunctionTestCase(proc, []FunctionTestInput{input, NewFunctionTestInput(dst, emptyCastTargetValues(dst), nil)}, NewFunctionTestResult(dst, false, makeValues(dst, n, 123400), mask), NewCast)
+				defer fc.Free()
+				fc.fnLength = n
+				fc.Benchmark(b)
+			})
+		}
 	}
 }

@@ -6202,15 +6202,47 @@ func canWidenDecimalScale(from, to types.Type) bool {
 		to.Width-to.Scale >= from.Width-from.Scale
 }
 
+// canWidenResolvedDecimalScale applies the logical range proof after a typed
+// conversion has established its physical precision limits. Keeping this small
+// avoids dynamic TypeLen/ToType calls and preserves cheap scalar conversions.
+func canWidenResolvedDecimalScale(sourceWidth, sourceScale, targetWidth, targetScale, sourceLimit, targetLimit int32) bool {
+	return sourceLimit <= targetLimit && sourceWidth > 0 && sourceWidth <= sourceLimit &&
+		sourceScale >= 0 && sourceScale <= sourceWidth && targetScale > sourceScale &&
+		targetWidth > 0 && targetWidth <= targetLimit && targetScale <= targetWidth &&
+		targetWidth-targetScale >= sourceWidth-sourceScale
+}
+
+// decimalCastAllNull checks only the requested row domain. Endpoint checks
+// avoid counting a bitmap when an ordinary or mixed batch has a visible value.
+func decimalCastAllNull(source *vector.Vector, length uint64) bool {
+	if source.IsConstNull() {
+		return true
+	}
+	ns := source.GetNulls()
+	return !ns.EmptyByFlag() && ns.Contains(0) &&
+		(length == 1 || (ns.Contains(length-1) && ns.CountRange(0, length) == int(length)))
+}
+
 func decimal64ToDecimal64(
 	from vector.FunctionParameterWrapper[types.Decimal64],
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal64
+	if length == 0 {
+		return nil
+	}
+	if decimalCastAllNull(from.GetSourceVector(), l) {
+		if length == 1 {
+			return to.Append(dft, true)
+		}
+		to.SetNullResult(l)
+		return nil
+	}
 	fromtype := from.GetType()
 	totype := to.GetType()
-	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	safeGrowth := fromtype.Oid == types.T_decimal64 && totype.Oid == types.T_decimal64 &&
+		canWidenResolvedDecimalScale(fromtype.Width, fromtype.Scale, totype.Width, totype.Scale, 18, 18)
 	scaleDelta := totype.Scale - fromtype.Scale
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -6392,14 +6424,25 @@ func decimal64ToDecimal256Array(
 	to *vector.FunctionResult[types.Decimal256], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
+	var dft types.Decimal256
+	if length == 0 {
+		return nil
+	}
+	if decimalCastAllNull(from.GetSourceVector(), l) {
+		if length == 1 {
+			return to.Append(dft, true)
+		}
+		to.SetNullResult(l)
+		return nil
+	}
 	fromtype := from.GetType()
 	totype := to.GetType()
-	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	safeGrowth := fromtype.Oid == types.T_decimal64 && totype.Oid == types.T_decimal256 &&
+		canWidenResolvedDecimalScale(fromtype.Width, fromtype.Scale, totype.Width, totype.Scale, 18, 76)
 	scaleDelta := totype.Scale - fromtype.Scale
-	scaleIn64 := safeGrowth && fromtype.Width+scaleDelta <= types.T_decimal64.ToType().Width
-	scaleIn128 := safeGrowth && !scaleIn64 && fromtype.Width+scaleDelta <= types.T_decimal128.ToType().Width
+	scaleIn64 := safeGrowth && fromtype.Width+scaleDelta <= 18
+	scaleIn128 := safeGrowth && !scaleIn64 && fromtype.Width+scaleDelta <= 38
 	needsCheck := totype.Width < fromtype.Width || totype.Scale != fromtype.Scale
-	var dft types.Decimal256
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -6495,9 +6538,20 @@ func decimal128ToDecimal128(
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal128
+	if length == 0 {
+		return nil
+	}
+	if decimalCastAllNull(from.GetSourceVector(), l) {
+		if length == 1 {
+			return to.Append(dft, true)
+		}
+		to.SetNullResult(l)
+		return nil
+	}
 	fromtype := from.GetType()
 	totype := to.GetType()
-	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	safeGrowth := fromtype.Oid == types.T_decimal128 && totype.Oid == types.T_decimal128 &&
+		canWidenResolvedDecimalScale(fromtype.Width, fromtype.Scale, totype.Width, totype.Scale, 38, 38)
 	scaleDelta := totype.Scale - fromtype.Scale
 	scaleDown := totype.Scale < fromtype.Scale
 	for i = 0; i < l; i++ {
@@ -6537,11 +6591,22 @@ func decimal128ToDecimal256(
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal256
+	if length == 0 {
+		return nil
+	}
+	if decimalCastAllNull(from.GetSourceVector(), l) {
+		if length == 1 {
+			return to.Append(dft, true)
+		}
+		to.SetNullResult(l)
+		return nil
+	}
 	fromtype := from.GetType()
 	totype := to.GetType()
-	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	safeGrowth := fromtype.Oid == types.T_decimal128 && totype.Oid == types.T_decimal256 &&
+		canWidenResolvedDecimalScale(fromtype.Width, fromtype.Scale, totype.Width, totype.Scale, 38, 76)
 	scaleDelta := totype.Scale - fromtype.Scale
-	scaleIn128 := safeGrowth && fromtype.Width+scaleDelta <= types.T_decimal128.ToType().Width
+	scaleIn128 := safeGrowth && fromtype.Width+scaleDelta <= 38
 	scaleDown := totype.Scale < fromtype.Scale
 	needsCheck := totype.Width < fromtype.Width || totype.Scale != fromtype.Scale
 	for i = 0; i < l; i++ {
@@ -6677,9 +6742,20 @@ func decimal256ToDecimal256(
 	var i uint64
 	l := uint64(length)
 	var dft types.Decimal256
+	if length == 0 {
+		return nil
+	}
+	if decimalCastAllNull(from.GetSourceVector(), l) {
+		if length == 1 {
+			return to.Append(dft, true)
+		}
+		to.SetNullResult(l)
+		return nil
+	}
 	fromtype := from.GetType()
 	totype := to.GetType()
-	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	safeGrowth := fromtype.Oid == types.T_decimal256 && totype.Oid == types.T_decimal256 &&
+		canWidenResolvedDecimalScale(fromtype.Width, fromtype.Scale, totype.Width, totype.Scale, 76, 76)
 	scaleDelta := totype.Scale - fromtype.Scale
 	scaleDown := totype.Scale < fromtype.Scale
 	for i = 0; i < l; i++ {
