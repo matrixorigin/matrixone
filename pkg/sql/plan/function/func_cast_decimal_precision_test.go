@@ -555,12 +555,19 @@ func TestDecimalCastNullDomain(t *testing.T) {
 }
 
 func TestDecimalCastParameterRebinding(t *testing.T) {
-	for _, oid := range []types.T{types.T_decimal128, types.T_decimal256} {
+	for _, oid := range []types.T{types.T_decimal64, types.T_decimal128, types.T_decimal256} {
 		t.Run(oid.String(), func(t *testing.T) {
 			proc := testutil.NewProcess(t)
 			t.Cleanup(proc.Free)
-			sourceType, targetType := types.New(types.T_decimal128, 20, 2), types.New(oid, 22, 4)
+			width := int32(22)
+			if oid == types.T_decimal64 {
+				width = 18
+			}
+			sourceType, targetType := types.New(types.T_decimal128, 20, 2), types.New(oid, width, 4)
 			makeWant := func(value uint64, length int) any {
+				if oid == types.T_decimal64 {
+					return []types.Decimal64{types.Decimal64(value), types.Decimal64(value)}[:length]
+				}
 				if oid == types.T_decimal128 {
 					return []types.Decimal128{{B0_63: value}, {B0_63: value}}[:length]
 				}
@@ -585,11 +592,20 @@ func TestDecimalCastParameterRebinding(t *testing.T) {
 				length := tc.length
 				fc.fnLength = length
 				typ := types.New(types.T_decimal128, 20, tc.scale)
-				replacement := vector.NewVec(typ)
+				var replacement *vector.Vector
+				if oid == types.T_decimal64 && length > 1 {
+					var err error
+					replacement, err = vector.NewConstFixed(typ, types.Decimal128{B0_63: tc.coefficient}, length, proc.Mp())
+					require.NoError(t, err)
+				} else {
+					replacement = vector.NewVec(typ)
+				}
 				previous := fc.parameters[0]
 				fc.parameters[0] = replacement
 				previous.Free(proc.Mp())
-				require.NoError(t, vector.AppendFixedList(replacement, []types.Decimal128{{B0_63: tc.coefficient}, {B0_63: tc.coefficient}}[:length], nil, proc.Mp()))
+				if !replacement.IsConst() {
+					require.NoError(t, vector.AppendFixedList(replacement, []types.Decimal128{{B0_63: tc.coefficient}, {B0_63: tc.coefficient}}[:length], nil, proc.Mp()))
+				}
 				if tc.overflow {
 					_, err := fc.DebugRun()
 					require.True(t, moerr.IsMoErrCode(err, moerr.ErrInvalidInput), "%v", err)
