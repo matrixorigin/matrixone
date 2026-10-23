@@ -22,6 +22,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
 
 func (builder *QueryBuilder) buildGenerateSeries(tbl *tree.TableFunction, ctx *BindContext, exprs []*plan.Expr, children []int32) (int32, error) {
@@ -135,13 +136,11 @@ func bindGenerateSeriesArgs(ctx context.Context, exprs []*plan.Expr) ([]*plan.Ex
 func generateSeriesDatetimeScale(exprs []*plan.Expr, runtimeValues ...[]any) int32 {
 	var scale int32
 	for i := 0; i < min(len(exprs), 2); i++ {
-		expr := exprs[i]
-		if len(runtimeValues) > 0 {
-			// PREPARE may have wrapped a marker or a string literal in a
-			// provisional DATETIME(6) cast. Infer the EXECUTE scale from the
-			// original endpoint, not that provisional cast.
-			expr = unwrapPreparedImplicitCast(expr, true)
-		}
+		// PREPARE may wrap an endpoint in a provisional cast or in the
+		// three-argument temporal CAST0 that carries a paired source-kind
+		// output. Inspect the original source only for schema inference; the
+		// executable CAST and its BOOL sibling stay intact.
+		expr := generateSeriesMetadataSourceExpr(exprs[i])
 		if marker := expr.GetP(); marker != nil && len(runtimeValues) > 0 &&
 			marker.Pos >= 0 && int(marker.Pos) < len(runtimeValues[0]) {
 			if value, ok := runtimeValues[0][marker.Pos].(ParamValue); ok {
@@ -170,10 +169,7 @@ func generateSeriesDatetimeScale(exprs []*plan.Expr, runtimeValues ...[]any) int
 	}
 
 	if len(exprs) >= 3 {
-		stepExpr := exprs[2]
-		if len(runtimeValues) > 0 {
-			stepExpr = unwrapPreparedImplicitCast(stepExpr, true)
-		}
+		stepExpr := generateSeriesMetadataSourceExpr(exprs[2])
 		step := stepExpr.GetLit()
 		if marker := stepExpr.GetP(); marker != nil && len(runtimeValues) > 0 &&
 			marker.Pos >= 0 && int(marker.Pos) < len(runtimeValues[0]) {
@@ -191,6 +187,64 @@ func generateSeriesDatetimeScale(exprs []*plan.Expr, runtimeValues ...[]any) int
 		}
 	}
 	return min(scale, int32(MaxFsp))
+}
+
+// generateSeriesTemporalProgramCastSource recognizes only the temporal CAST0
+// wrapper created by kind lowering. It is an analysis view: callers must keep
+// both lexical refs in the executable tree.
+func generateSeriesTemporalProgramCastSource(expr *plan.Expr) (source, sourceKind *plan.Expr, ok bool) {
+	if expr == nil || expr.GetF() == nil || expr.GetF().GetFunc() == nil {
+		return nil, nil, false
+	}
+	fn := expr.GetF()
+	fid, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	if fid != function.CAST || overload != 0 || fn.GetSyntaxExplicitCast() || len(fn.Args) != 3 ||
+		fn.Args[0] == nil || fn.Args[1] == nil || fn.Args[2] == nil || fn.Args[1].GetT() == nil ||
+		types.T(fn.Args[1].Typ.Id) != types.T(expr.Typ.Id) ||
+		fn.Args[1].Typ.Width != expr.Typ.Width || fn.Args[1].Typ.Scale != expr.Typ.Scale ||
+		!types.T(expr.Typ.Id).IsDateRelate() || types.T(fn.Args[2].Typ.Id) != types.T_bool {
+		return nil, nil, false
+	}
+	source, sourceKind, ok = function.NumericValueProgramPairSourceOwner(fn.Args[0], fn.Args[2])
+	if !ok {
+		return nil, nil, false
+	}
+	return source, sourceKind, true
+}
+
+// generateSeriesMetadataSourceExpr strips only ordinary implicit casts and
+// validated temporal CAST0 owners to inspect an endpoint's parameter/type.
+// It never changes the execution expression or treats a standalone REF as a
+// transparent source.
+func generateSeriesMetadataSourceExpr(expr *plan.Expr) *plan.Expr {
+	for expr != nil {
+		if source, _, ok := generateSeriesTemporalProgramCastSource(expr); ok {
+			expr = source
+			continue
+		}
+		if source, policy, ok := numericValueCastAnalysisSource(expr); ok {
+			if policy == function.NumericValueCastPolicyExplicit || expr.GetF().GetSyntaxExplicitCast() {
+				return expr
+			}
+			expr = source
+			continue
+		}
+		fn := expr.GetF()
+		if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") ||
+			fn.GetSyntaxExplicitCast() || len(fn.Args) == 0 || fn.Args[0] == nil {
+			return expr
+		}
+		_, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if overload != 0 {
+			return expr
+		}
+		expr = fn.Args[0]
+	}
+	return nil
+}
+
+func generateSeriesSourceParamPosition(expr *plan.Expr) (int, bool) {
+	return preparedRuntimeSourceParamPosition(generateSeriesMetadataSourceExpr(expr))
 }
 
 func datetimeLiteralScale(value string) int32 {

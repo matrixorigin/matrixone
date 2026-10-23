@@ -15,6 +15,7 @@
 package plan
 
 import (
+	"context"
 	"strings"
 
 	"github.com/gogo/protobuf/proto"
@@ -43,6 +44,30 @@ type numericValueKindLowerer struct {
 type numericValueProgramRebinding struct {
 	source *Expr
 	bound  *Expr
+}
+
+// sameNumericValueProgramMemoExpr allows cost-based selectivity estimates to
+// differ between copies of one lexical source. It only ignores Selectivity
+// after cycle-safe retained-graph validation; all other protobuf fields still
+// have to match exactly.
+func sameNumericValueProgramMemoExpr(ctx context.Context, a, b *Expr) (bool, error) {
+	if err := walkPersistedExprRoots(ctx, []*Expr{a, b}, func(*Expr) error { return nil }); err != nil {
+		return false, err
+	}
+	if proto.Equal(a, b) {
+		return true, nil
+	}
+	if a == nil || b == nil {
+		return false, nil
+	}
+	aCopy, bCopy := proto.Clone(a).(*Expr), proto.Clone(b).(*Expr)
+	if err := walkPersistedExprRoots(ctx, []*Expr{aCopy, bCopy}, func(expr *Expr) error {
+		expr.Selectivity = 0
+		return nil
+	}); err != nil {
+		return false, err
+	}
+	return proto.Equal(aCopy, bCopy), nil
 }
 
 type recursiveNumericKindLayout struct {
@@ -281,8 +306,18 @@ func (l *numericValueKindLowerer) rewriteExpressionScoped(
 							l.programs = make(map[int64]numericValueProgramRebinding)
 						}
 						program, exists := l.programs[scope]
-						if exists && !proto.Equal(program.source, raw) && !proto.Equal(program.bound, raw) {
-							return moerr.NewInternalError(l.builder.GetContext(), "numeric value program scope has conflicting definitions")
+						if exists {
+							sameSource, err := sameNumericValueProgramMemoExpr(l.builder.GetContext(), program.source, raw)
+							if err != nil {
+								return err
+							}
+							sameBound, err := sameNumericValueProgramMemoExpr(l.builder.GetContext(), program.bound, raw)
+							if err != nil {
+								return err
+							}
+							if !sameSource && !sameBound {
+								return moerr.NewInternalError(l.builder.GetContext(), "numeric value program scope has conflicting definitions")
+							}
 						}
 						bound := program.bound
 						if !exists {

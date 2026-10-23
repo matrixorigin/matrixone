@@ -4891,21 +4891,22 @@ func specializePreparedGenerateSeries(ctx context.Context, plan0 *Plan, values [
 			len(node.TblFuncExprList) == 0 || len(node.TableDef.Cols) == 0 {
 			continue
 		}
-		first := unwrapPreparedImplicitCast(node.TblFuncExprList[0], true)
-		marker := first.GetP()
-		parameterized := marker != nil
+		first := generateSeriesMetadataSourceExpr(node.TblFuncExprList[0])
+		firstPosition, firstParameterized := generateSeriesSourceParamPosition(node.TblFuncExprList[0])
+		parameterized := firstParameterized
 		for _, arg := range node.TblFuncExprList[1:] {
-			parameterized = parameterized || unwrapPreparedImplicitCast(arg, true).GetP() != nil
+			_, hasParameter := generateSeriesSourceParamPosition(arg)
+			parameterized = parameterized || hasParameter
 		}
 		if !parameterized {
 			continue
 		}
 		source := makeTypeByPlan2Expr(first)
-		if marker != nil {
-			if marker.Pos < 0 || int(marker.Pos) >= len(values) {
+		if firstParameterized {
+			if firstPosition < 0 || firstPosition >= len(values) {
 				continue
 			}
-			param, ok := values[marker.Pos].(ParamValue)
+			param, ok := values[firstPosition].(ParamValue)
 			if !ok {
 				continue
 			}
@@ -4921,7 +4922,7 @@ func specializePreparedGenerateSeries(ctx context.Context, plan0 *Plan, values [
 		datetimeType := types.T_datetime.ToTypeWithScale(generateSeriesDatetimeScale(bound, values))
 		endpointCount := min(len(bound), 2)
 		for i := 0; i < endpointCount; i++ {
-			original := unwrapPreparedImplicitCast(bound[i], true)
+			original := generateSeriesMetadataSourceExpr(bound[i])
 			if numeric {
 				if original.GetP() == nil {
 					continue
@@ -4934,6 +4935,25 @@ func specializePreparedGenerateSeries(ctx context.Context, plan0 *Plan, values [
 				bound[i] = casted
 				continue
 			}
+			if _, _, pairedTemporalCast := generateSeriesTemporalProgramCastSource(bound[i]); pairedTemporalCast {
+				// Keep the existing CAST0 value/kind owner and scope. Only update
+				// its typed target and result metadata after validating the original
+				// two-argument CAST overload.
+				targetPlan := makePlan2Type(&datetimeType)
+				targetPlan.NotNullable = bound[i].Typ.NotNullable
+				argTypes := []types.Type{
+					types.MustTypeFromPlan(bound[i].GetF().Args[0].Typ),
+					types.MustTypeFromPlan(targetPlan),
+				}
+				if _, err := function.GetFunctionByNameWithOverload(ctx, "cast", argTypes, 0); err != nil {
+					return false, err
+				}
+				retargeted := DeepCopyExpr(bound[i])
+				retargeted.Typ = targetPlan
+				retargeted.GetF().Args[1].Typ = targetPlan
+				bound[i] = retargeted
+				continue
+			}
 			if types.T(bound[i].Typ.Id) == types.T_datetime && bound[i].Typ.Scale == datetimeType.Scale {
 				continue
 			}
@@ -4943,12 +4963,12 @@ func specializePreparedGenerateSeries(ctx context.Context, plan0 *Plan, values [
 			}
 			bound[i] = casted
 		}
-		if len(bound) > 2 && unwrapPreparedImplicitCast(bound[2], true).GetP() != nil {
+		if len(bound) > 2 && generateSeriesMetadataSourceExpr(bound[2]).GetP() != nil {
 			target := types.T_varchar.ToType()
 			if numeric {
 				target = types.T_int64.ToType()
 			}
-			casted, err := appendCastBeforeExpr(ctx, unwrapPreparedImplicitCast(bound[2], true), makePlan2Type(&target))
+			casted, err := appendCastBeforeExpr(ctx, generateSeriesMetadataSourceExpr(bound[2]), makePlan2Type(&target))
 			if err != nil {
 				return false, err
 			}
@@ -5024,7 +5044,7 @@ func PreparedPlanGenerateSeriesParameterInfo(preparePlan *Plan) (endpointPositio
 			continue
 		}
 		for i, arg := range node.TblFuncExprList {
-			position, found := preparedRuntimeSourceParamPosition(arg)
+			position, found := generateSeriesSourceParamPosition(arg)
 			if !found || position < 0 {
 				continue
 			}
@@ -8806,6 +8826,11 @@ func refreshPreparedPlanProjectionTypes(
 				return err
 			}
 		}
+		if node.DedupJoinCtx != nil {
+			if err := refreshExprList(node.DedupJoinCtx.UpdateColExprList); err != nil {
+				return err
+			}
+		}
 		if setOperationSpecialized {
 			if err := refreshPreparedSetOperationPhysicalKeys(ctx, node, childProjectLists); err != nil {
 				return err
@@ -8947,6 +8972,26 @@ func ReplaceFoldExpr(proc *process.Process, expr *Expr, exes *[]colexec.Expressi
 			return false, nil
 		default:
 			return true, nil
+		}
+	}
+
+	// A complete lexical numeric CAST owns paired private value/kind refs. Keep
+	// that conversion intact so its parent can fold one executor for the whole
+	// owner; descending into its private refs would try to resolve unregistered
+	// internal function IDs independently. Row-dependent and diagnostic-bearing
+	// conversions remain at their existing evaluation boundary.
+	if _, _, ok := function.NumericValueProgramCastOwner(expr); ok &&
+		function.IsStatementConstantInput(expr) && !function.ContainsRowScopedConversion(expr) {
+		return true, nil
+	}
+	if fn.Func != nil {
+		fid, overload := function.DecodeOverloadID(fn.Func.GetObj())
+		if fid == function.SCALAR_PROGRAM || fid == function.SCALAR_PROGRAM_REF ||
+			fid == function.CAST && overload == function.NumericValueCastOverload {
+			// Private program nodes and every other CAST9 owner must remain
+			// atomic. In particular, do not descend into a row-dependent or
+			// diagnostic-bearing value/kind pair and fold only part of it.
+			return false, nil
 		}
 	}
 

@@ -2165,7 +2165,30 @@ func rebindExplicitPreparedCast(ctx context.Context, original *Expr, args []*Exp
 	if original == nil || original.GetF() == nil || original.GetF().Func == nil {
 		return nil, moerr.NewInternalError(ctx, "invalid prepared CAST expression")
 	}
-	_, overload := planfunction.DecodeOverloadID(original.GetF().Func.Obj)
+	fid, overload := planfunction.DecodeOverloadID(original.GetF().Func.Obj)
+	assignmentName := ""
+	switch fid {
+	case planfunction.CAST_STRICT:
+		assignmentName = "cast_strict"
+	case planfunction.CAST_ASSIGN:
+		assignmentName = "cast_assign"
+	case planfunction.CAST_IGNORE:
+		assignmentName = "cast_ignore"
+	}
+	if assignmentName != "" {
+		if !strings.EqualFold(original.GetF().Func.GetObjName(), assignmentName) || overload != 0 ||
+			(len(args) != 2 && len(args) != 3) || args[0] == nil || args[1] == nil || args[1].GetT() == nil ||
+			(len(args) == 3 && (args[2] == nil || types.T(args[2].Typ.Id) != types.T_bool)) {
+			return nil, moerr.NewInternalError(ctx, "invalid prepared assignment cast arguments")
+		}
+		baseTypes := []types.Type{makeTypeByPlan2Expr(args[0]), makeTypeByPlan2Expr(args[1])}
+		if _, err := planfunction.GetFunctionByNameWithOverload(ctx, assignmentName, baseTypes, 0); err != nil {
+			return nil, err
+		}
+		bound := DeepCopyExpr(original)
+		bound.GetF().Args = args
+		return bound, nil
+	}
 	argTypes := make([]types.Type, len(args))
 	if overload == planfunction.NumericValueCastOverload {
 		if len(args) != 4 || args[0] == nil || args[1] == nil || args[2] == nil || args[3] == nil ||
@@ -5687,12 +5710,22 @@ func isPreparedPrivateConversionCast(expr *plan.Expr) bool {
 		return false
 	}
 	fn := expr.GetF()
-	if fn == nil || fn.Func == nil || !strings.EqualFold(fn.Func.GetObjName(), "cast") {
+	if fn == nil || fn.Func == nil {
 		return false
 	}
-	_, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
-	return planfunction.IsIntegerArgumentCastOverload(overload) ||
-		overload == planfunction.NumericValueCastOverload
+	fid, overload := planfunction.DecodeOverloadID(fn.Func.GetObj())
+	switch fid {
+	case planfunction.CAST_STRICT, planfunction.CAST_ASSIGN, planfunction.CAST_IGNORE:
+		// Dispatch by ID even for malformed overloads so the owner-aware
+		// rebinder can reject them before public SQL-name binding.
+		return true
+	case planfunction.CAST:
+		return strings.EqualFold(fn.Func.GetObjName(), "cast") &&
+			(planfunction.IsIntegerArgumentCastOverload(overload) ||
+				overload == planfunction.NumericValueCastOverload)
+	default:
+		return false
+	}
 }
 
 func windowHasNumericPrefixDependency(

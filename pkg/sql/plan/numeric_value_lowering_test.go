@@ -26,6 +26,66 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func TestSameNumericValueProgramMemoExprIgnoresOnlySelectivity(t *testing.T) {
+	ctx := context.Background()
+	textType := types.T_varchar.ToType().PlanType()
+	raw := &planpb.Expr{
+		Typ:         textType,
+		Selectivity: 1,
+		Expr:        &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	withoutEstimate := DeepCopyExpr(raw)
+	withoutEstimate.Selectivity = 0
+	same, err := sameNumericValueProgramMemoExpr(ctx, raw, withoutEstimate)
+	require.NoError(t, err)
+	require.True(t, same)
+
+	differentParam := DeepCopyExpr(withoutEstimate)
+	differentParam.GetP().Pos = 1
+	same, err = sameNumericValueProgramMemoExpr(ctx, raw, differentParam)
+	require.NoError(t, err)
+	require.False(t, same)
+	differentType := DeepCopyExpr(withoutEstimate)
+	differentType.Typ.Id = int32(types.T_text)
+	same, err = sameNumericValueProgramMemoExpr(ctx, raw, differentType)
+	require.NoError(t, err)
+	require.False(t, same)
+
+	kind := &planpb.Expr{
+		Typ:  types.T_bool.ToType().PlanType(),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 3}},
+	}
+	cast, err := appendNumericValueCastWithKind(ctx, raw, kind,
+		makeSimplePlan2Type(types.T_int64), function.NumericValueCastPolicyOrdinary)
+	require.NoError(t, err)
+	differentKind := DeepCopyExpr(cast)
+	differentKind.GetF().Args[2].GetCol().ColPos++
+	same, err = sameNumericValueProgramMemoExpr(ctx, cast, differentKind)
+	require.NoError(t, err)
+	require.False(t, same)
+	differentPolicy := DeepCopyExpr(cast)
+	differentPolicy.GetF().Args[3].GetLit().Value = &planpb.Literal_I32Val{I32Val: function.NumericValueCastPolicyComparison}
+	same, err = sameNumericValueProgramMemoExpr(ctx, cast, differentPolicy)
+	require.NoError(t, err)
+	require.False(t, same)
+	nestedEstimate := DeepCopyExpr(cast)
+	nestedEstimate.GetF().Args[0].Selectivity++
+	same, err = sameNumericValueProgramMemoExpr(ctx, cast, nestedEstimate)
+	require.NoError(t, err)
+	require.True(t, same, "nested selectivity is cost metadata too")
+	require.Equal(t, 1.0, cast.GetF().Args[0].Selectivity, "comparison must not mutate the cached expression")
+	nestedParam := DeepCopyExpr(cast)
+	nestedParam.GetF().Args[0].GetP().Pos++
+	same, err = sameNumericValueProgramMemoExpr(ctx, cast, nestedParam)
+	require.NoError(t, err)
+	require.False(t, same, "nested value identity remains strict")
+
+	cycle := &planpb.Expr{Expr: &planpb.Expr_F{F: &planpb.Function{}}}
+	cycle.GetF().Args = []*planpb.Expr{cycle}
+	_, err = sameNumericValueProgramMemoExpr(ctx, cycle, cycle)
+	require.ErrorContains(t, err, "expression graph contains a cycle")
+}
+
 func TestNumericValueKindDistinctLoweringPreservesEqualityTuple(t *testing.T) {
 	const source = `SELECT CASE WHEN id=1 THEN X'31' ELSE '1' END AS v
 		FROM (SELECT 1 AS id UNION ALL SELECT 2 AS id) AS source`

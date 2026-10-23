@@ -30,9 +30,19 @@ func NumericValueProgramCastOwner(expr *planpb.Expr) (source, sourceKind *planpb
 	if !ok {
 		return nil, nil, false
 	}
+	return NumericValueProgramPairSourceOwner(fn.Args[0], fn.Args[2])
+}
 
-	valueFn := fn.Args[0].GetF()
-	kindFn := fn.Args[2].GetF()
+// NumericValueProgramPairSourceOwner validates sibling slot-zero and slot-one
+// references to one lexical program and returns its raw source and optional
+// source-kind expression. It supports metadata analysis of non-CAST9 owners;
+// callers must keep the executable value and BOOL refs intact.
+func NumericValueProgramPairSourceOwner(value, kind *planpb.Expr) (source, sourceKind *planpb.Expr, ok bool) {
+	if value == nil || kind == nil {
+		return nil, nil, false
+	}
+	valueFn := value.GetF()
+	kindFn := kind.GetF()
 	if valueFn == nil || valueFn.Func == nil || kindFn == nil || kindFn.Func == nil {
 		return nil, nil, false
 	}
@@ -61,9 +71,9 @@ func NumericValueProgramCastOwner(expr *planpb.Expr) (source, sourceKind *planpb
 	definitionID, definitionOverload := DecodeOverloadID(definition.Func.GetObj())
 	definitionScope, definitionScopeOK := scalarNumericProgramInt64(definition.Args[0])
 	if definitionID != SCALAR_PROGRAM || definitionOverload != 0 || !definitionScopeOK || definitionScope != valueScope ||
-		(types.T(fn.Args[0].Typ.Id) != types.T(definition.Args[1].Typ.Id) ||
-			fn.Args[0].Typ.Width != definition.Args[1].Typ.Width ||
-			fn.Args[0].Typ.Scale != definition.Args[1].Typ.Scale) {
+		(types.T(value.Typ.Id) != types.T(definition.Args[1].Typ.Id) ||
+			value.Typ.Width != definition.Args[1].Typ.Width ||
+			value.Typ.Scale != definition.Args[1].Typ.Scale) {
 		return nil, nil, false
 	}
 	if len(definition.Args) == 3 {

@@ -15,8 +15,10 @@
 package plan
 
 import (
+	"context"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -167,4 +169,147 @@ func TestReplaceFoldExprStillFoldsWholeConstantCast(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, result.IsConstNull())
 	require.Equal(t, uint64(7), vector.GetFixedAtWithTypeCheck[uint64](result, 0))
+}
+
+func TestReplaceFoldExprKeepsNumericValueProgramCastAtomic(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value string
+		null  bool
+	}{
+		{name: "bound value", value: "945"},
+		{name: "bound NULL", null: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proc := testutil.NewProcess(t)
+			t.Cleanup(func() { proc.Free() })
+			params := vector.NewVec(types.T_text.ToType())
+			require.NoError(t, vector.AppendBytes(params, []byte(tc.value), tc.null, proc.Mp()))
+			proc.SetPrepareParams(params)
+			t.Cleanup(func() {
+				proc.SetPrepareParams(nil)
+				params.Free(proc.Mp())
+			})
+
+			source := &planpb.Expr{
+				Typ:  types.T_text.ToType().PlanType(),
+				Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+			}
+			value, kind, err := makeNumericValueProgramOutputs(t.Context(), source)
+			require.NoError(t, err)
+			targetType := types.T_int32
+			cast, err := appendNumericValueCastWithKind(t.Context(), value, kind,
+				makeSimplePlan2Type(targetType), function.NumericValueCastPolicyOrdinary)
+			require.NoError(t, err)
+			ownerSource, ownerKind, ok := function.NumericValueProgramCastOwner(cast)
+			require.True(t, ok, "the RHS must be the complete lowered CAST9 owner")
+			require.Equal(t, source, ownerSource, "the definition keeps the original bound value source")
+			require.Nil(t, ownerKind, "the two-output definition computes its BOOL result from the selected value")
+			require.Equal(t, int32(function.SCALAR_PROGRAM_REF), numericProgramFunctionID(cast.GetF().Args[2]))
+			require.Equal(t, int64(1), scalarProgramSlotForTest(cast.GetF().Args[2]), "the cast keeps the same program's BOOL output")
+
+			column := &planpb.Expr{
+				Typ:  targetType.ToType().PlanType(),
+				Expr: &planpb.Expr_Col{Col: &planpb.ColRef{Name: "o_w_id", ColPos: 0}},
+			}
+			filter, err := BindFuncExprImplByPlanExpr(t.Context(), "=", []*planpb.Expr{column, cast})
+			require.NoError(t, err)
+			var executors []colexec.ExpressionExecutor
+			t.Cleanup(func() {
+				for _, executor := range executors {
+					executor.Free()
+				}
+			})
+			canFold, err := ReplaceFoldExpr(proc, filter, &executors)
+			require.NoError(t, err)
+			require.False(t, canFold, "the predicate still depends on the table column")
+			if tc.null {
+				rhs := filter.GetF().Args[1]
+				if fold := rhs.GetFold(); fold != nil {
+					require.NoError(t, EvalFoldExpr(proc, filter, &executors))
+					require.True(t, fold.IsConst)
+					require.Empty(t, fold.Data, "a folded SQL NULL has no scalar payload")
+				} else if vec := rhs.GetVec(); vec != nil {
+					decoded := vector.NewVec(types.T_any.ToType())
+					require.NoError(t, decoded.UnmarshalBinary(vec.Data))
+					t.Cleanup(func() { decoded.Free(proc.Mp()) })
+					require.True(t, decoded.IsConstNull())
+				} else {
+					require.NotNil(t, rhs.GetLit())
+					require.True(t, rhs.GetLit().Isnull, "a bound NULL remains a NULL scalar")
+				}
+			} else {
+				require.NotNil(t, filter.GetF().Args[1].GetFold(), "the complete CAST9 result folds as one value")
+				require.NoError(t, EvalFoldExpr(proc, filter, &executors))
+				folded := filter.GetF().Args[1].GetFold()
+				require.NotNil(t, folded)
+				require.True(t, folded.IsConst)
+				require.Equal(t, int32(945), types.DecodeInt32(folded.Data))
+			}
+			require.LessOrEqual(t, len(executors), 1, "the original program tree is never split into private function executors")
+		})
+	}
+}
+
+func TestReplaceFoldExprDoesNotSplitNonconstantNumericProgramOwners(t *testing.T) {
+	proc := testutil.NewProcess(t)
+	t.Cleanup(func() { proc.Free() })
+	ctx := context.Background()
+	makeCast := func(t *testing.T, source *planpb.Expr, kind *planpb.Expr) *planpb.Expr {
+		t.Helper()
+		cast, err := appendNumericValueCastWithKind(ctx, source, kind,
+			makeSimplePlan2Type(types.T_int32), function.NumericValueCastPolicyOrdinary)
+		require.NoError(t, err)
+		return cast
+	}
+	assertUnchanged := func(t *testing.T, expr *planpb.Expr) {
+		t.Helper()
+		before := DeepCopyExpr(expr)
+		var executors []colexec.ExpressionExecutor
+		defer func() {
+			for _, executor := range executors {
+				executor.Free()
+			}
+		}()
+		canFold, err := ReplaceFoldExpr(proc, expr, &executors)
+		require.NoError(t, err)
+		require.False(t, canFold)
+		require.Empty(t, executors, "an incomplete owner must not create a partial executor")
+		require.True(t, proto.Equal(before, expr), "the value/kind owner must remain unchanged")
+	}
+
+	column := &planpb.Expr{
+		Typ:  types.T_text.ToType().PlanType(),
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}},
+	}
+	value, kind, err := makeNumericValueProgramOutputs(ctx, column)
+	require.NoError(t, err)
+	rowDependent := makeCast(t, value, kind)
+	require.False(t, function.IsStatementConstantInput(rowDependent))
+	assertUnchanged(t, rowDependent)
+
+	param := &planpb.Expr{
+		Typ:  types.T_text.ToType().PlanType(),
+		Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 0}},
+	}
+	value, kind, err = makeNumericValueProgramOutputs(ctx, param)
+	require.NoError(t, err)
+	rowDiagnosticCast, err := appendNumericValueCastWithKind(ctx, value, kind,
+		makeSimplePlan2Type(types.T_decimal64), function.NumericValueCastPolicyExplicit)
+	require.NoError(t, err)
+	require.True(t, function.IsStatementConstantInput(rowDiagnosticCast))
+	require.True(t, function.ContainsRowScopedConversion(rowDiagnosticCast))
+	assertUnchanged(t, rowDiagnosticCast)
+
+	physicalCast := makeCast(t,
+		&planpb.Expr{Typ: types.T_text.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+		&planpb.Expr{Typ: types.T_bool.ToType().PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}})
+	assertUnchanged(t, physicalCast)
+
+	value, kind, err = makeNumericValueProgramOutputs(ctx, param)
+	require.NoError(t, err)
+	definition := value.GetF().Args[0]
+	assertUnchanged(t, value)
+	assertUnchanged(t, kind)
+	assertUnchanged(t, definition)
 }
