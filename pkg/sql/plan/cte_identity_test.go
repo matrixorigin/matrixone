@@ -90,6 +90,7 @@ func TestCTEIdentityStableControls(t *testing.T) {
 		"with r as(select convert('abc' using utf8mb4)x) select a.x,b.x from r a,r b",
 		"with r as(select extractvalue('<a>2</a>','/a')x) select a.x,b.x from r a,r b",
 		"with r as(select unix_timestamp()x) select a.x,b.x from r a,r b",
+		"with r as(select unix_timestamp(cast('1970-01-01 00:00:02' as datetime))x) select a.x,b.x from r a,r b",
 		"with unused as(select rand(),missing_column from nation) select 1",
 	} {
 		mock := NewMockOptimizer(false, newPlanTestProcess(t))
@@ -338,6 +339,134 @@ func TestCTESingleReaderPublication(t *testing.T) {
 					require.Less(t, int(step), len(q.Steps))
 				}
 			}
+		})
+	}
+}
+
+func TestCTEFinalizationAcrossStatementRoots(t *testing.T) {
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, false)
+	var roots []int32
+	for i := 0; i < 2; i++ {
+		stmt, err := mysql.ParseOne(t.Context(), `with r as(select uuid() x) select x from r`, 1)
+		require.NoError(t, err)
+		root, err := builder.bindSelect(stmt.(*tree.Select), NewBindContext(builder, nil), true)
+		stmt.Free()
+		require.NoError(t, err)
+		roots = append(roots, root)
+		builder.appendStep(root)
+	}
+	require.Len(t, builder.qry.Steps, 4)
+	sharedMap := map[string]int32{"changed": 3}
+	builder.qry.HasReturning, builder.qry.ReturningStep = true, 3
+	builder.returningSourceStep = 1
+	builder.irregularMaintSourceStep, builder.irregularMaintDeleteStep = 3, 1
+	builder.irregularMaintValueChangedSourceSteps = sharedMap
+	builder.irregularUpdateMaints = []irregularUpdateMaintenance{
+		{sourceStep: 3, deleteStep: 1, insertOnlySourceStep: -1, valueChangedSourceSteps: sharedMap},
+		{sourceStep: 1, deleteStep: -1, insertOnlySourceStep: 3, valueChangedSourceSteps: sharedMap},
+	}
+	builder.finalizeCTEIdentity()
+	require.Equal(t, roots, builder.qry.Steps, "both executable roots must lose their single-reader producer")
+	require.Empty(t, builder.semanticCTESinks)
+	require.EqualValues(t, 1, builder.qry.ReturningStep)
+	require.EqualValues(t, 0, builder.returningSourceStep)
+	require.EqualValues(t, 1, builder.irregularMaintSourceStep)
+	require.EqualValues(t, 0, builder.irregularMaintDeleteStep)
+	require.EqualValues(t, -1, builder.irregularMaintInsertOnlySourceStep)
+	require.EqualValues(t, 1, builder.irregularMaintValueChangedSourceSteps["changed"])
+	require.EqualValues(t, 3, sharedMap["changed"], "aliased old maps must not be remapped in place")
+	for _, owner := range builder.irregularUpdateMaints {
+		require.EqualValues(t, 1, owner.valueChangedSourceSteps["changed"])
+	}
+	require.EqualValues(t, 1, builder.irregularUpdateMaints[0].sourceStep)
+	require.EqualValues(t, 0, builder.irregularUpdateMaints[0].deleteStep)
+	require.EqualValues(t, -1, builder.irregularUpdateMaints[0].insertOnlySourceStep)
+	require.EqualValues(t, 0, builder.irregularUpdateMaints[1].sourceStep)
+	require.EqualValues(t, -1, builder.irregularUpdateMaints[1].deleteStep)
+	require.EqualValues(t, 1, builder.irregularUpdateMaints[1].insertOnlySourceStep)
+	builder.finalizeCTEIdentity()
+	require.Equal(t, roots, builder.qry.Steps)
+	require.EqualValues(t, 1, builder.irregularMaintSourceStep, "finalization must run once")
+}
+
+func TestCTESingleReaderDMLPublication(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		shared    int
+		returning bool
+	}{
+		{"insert", `insert into nation with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select 1,'n',1,x from r limit 1`, 0, false},
+		{"replace", `replace into nation with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select 1,'n',1,x from r limit 1`, 0, false},
+		{"returning", `insert into nation with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select 1,'n',1,x from r limit 1 returning n_comment`, 0, true},
+		{"shared", `insert into nation with r as(select uuid()x) select 1,'n',1,a.x from r a join r b on a.x=b.x`, 1, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			logic, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, tc.sql)
+			require.NoError(t, err)
+			q := logic.GetQuery()
+			shared := 0
+			for _, id := range q.Steps {
+				if q.Nodes[id].ExtraOptions == materialized.CTESinkOption {
+					shared++
+				}
+			}
+			require.Equal(t, tc.shared, shared)
+			for _, node := range q.Nodes {
+				for _, step := range node.SourceStep {
+					require.GreaterOrEqual(t, step, int32(0))
+					require.Less(t, int(step), len(q.Steps))
+				}
+			}
+			require.Equal(t, tc.returning, q.HasReturning)
+			if tc.returning {
+				root := q.Nodes[q.Steps[q.ReturningStep]]
+				require.Equal(t, planpb.Node_PROJECT, root.NodeType)
+				require.Equal(t, []string{"n_comment"}, q.Headings)
+				scan := q.Nodes[root.Children[0]]
+				require.Equal(t, planpb.Node_SINK_SCAN, scan.NodeType)
+				require.Equal(t, planpb.Node_SINK, q.Nodes[q.Steps[scan.SourceStep[0]]].NodeType)
+			}
+		})
+	}
+}
+
+func TestCTESingleReaderLegacyDML(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		writer    planpb.Node_NodeType
+	}{
+		{"insert", `insert into nation with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select 1,'n',1,x from r limit 1`, planpb.Node_INSERT},
+		{"delete", `with r as(select uuid()x) delete nation from nation join r on nation.n_comment=r.x`, planpb.Node_DELETE},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(true, newPlanTestProcess(t))
+			stmt, err := mysql.ParseOne(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			var logic *Plan
+			switch stmt := stmt.(type) {
+			case *tree.Insert:
+				logic, err = buildInsert(stmt, mock.CurrentContext(), false, false)
+			case *tree.Delete:
+				logic, err = buildDelete(stmt, mock.CurrentContext(), false)
+			default:
+				t.Fatalf("unexpected statement %T", stmt)
+			}
+			require.NoError(t, err)
+			q := logic.GetQuery()
+			foundWriter := false
+			for id := range cteReachablePlanNodes(q) {
+				node := q.Nodes[id]
+				require.NotEqual(t, materialized.CTESinkOption, node.ExtraOptions)
+				foundWriter = foundWriter || node.NodeType == tc.writer
+				for _, step := range node.SourceStep {
+					require.GreaterOrEqual(t, step, int32(0))
+					require.Less(t, int(step), len(q.Steps))
+					require.Equal(t, planpb.Node_SINK, q.Nodes[q.Steps[step]].NodeType)
+				}
+			}
+			require.True(t, foundWriter, "writer must remain reachable after source-step compaction")
 		})
 	}
 }

@@ -4297,6 +4297,7 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 			return nil, err
 		}
 	}
+	builder.finalizeCTEIdentity()
 	if builder.qry.Correlation != nil {
 		return builder.createDependentQuery()
 	}

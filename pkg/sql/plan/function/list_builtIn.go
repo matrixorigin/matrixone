@@ -12448,9 +12448,10 @@ var supportedDateAndTimeBuiltIns = []FuncNew{
 				},
 			},
 			{
-				overloadId: 4,
-				volatile:   true,
-				args:       []types.T{types.T_datetime},
+				overloadId:      4,
+				volatile:        true,
+				executionStable: true,
+				args:            []types.T{types.T_datetime},
 				retType: func(parameters []types.Type) types.Type {
 					if parameters[0].Scale > 0 {
 						return types.New(types.T_decimal128, 38, 6)

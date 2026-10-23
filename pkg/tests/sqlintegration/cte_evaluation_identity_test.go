@@ -39,6 +39,7 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 		defer cleanupSQLIntegration(t, cn, "drop database if exists cte_evaluation_identity")
 		for _, q := range []string{"create database cte_evaluation_identity", "use cte_evaluation_identity",
 			"create table t(k int)", "insert into t values(1),(2),(2),(null)",
+			"create table dst(x varchar(100))",
 			"create table special(e enum('b','a'),s set('b','a'))", "insert into special values('b','b'),('a','a')"} {
 			execSQLRequire(t, ctx, db, q)
 		}
@@ -93,6 +94,76 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 					require.EqualValues(t, 20105, sqlErr.Number)
 				}
 			}
+		})
+		t.Run("DML UNION demand", func(t *testing.T) {
+			const source = `with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select x from r`
+			assertCount := func(t *testing.T, want int) {
+				t.Helper()
+				var count, valid int
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*),count(case when length(x)=36 then 1 end) from dst").Scan(&count, &valid))
+				require.Equal(t, want, count)
+				require.Equal(t, want, valid)
+			}
+			for _, tc := range []struct {
+				name, query string
+				want        int64
+			}{
+				{"derived control", `insert into dst select x from(select uuid()x union all select extractvalue('<a/>','['))r limit 1`, 1},
+				{"insert", "insert into dst " + source + " limit 1", 1},
+				{"replace", "replace into dst " + source + " limit 1", 1},
+				{"zero", "insert into dst " + source + " limit 0", 0},
+				{"chain", `insert into dst with r(x) as(select uuid() union all select extractvalue('<a/>','[')),s as(select x from r) select x from s limit 1`, 1},
+				{"offset", `insert into dst with r(x) as(select 'skip' union all select uuid() union all select extractvalue('<a/>','[')) select x from r limit 1 offset 1`, 1},
+				{"shared identity", `insert into dst with r as(select uuid()x) select a.x from r a join r b on a.x=b.x`, 1},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					execSQLRequire(t, ctx, db, "delete from dst")
+					res, err := db.ExecContext(ctx, tc.query)
+					require.NoError(t, err)
+					changed, err := res.RowsAffected()
+					require.NoError(t, err)
+					require.Equal(t, tc.want, changed)
+					assertCount(t, int(tc.want))
+				})
+			}
+			for _, suffix := range []string{"", " limit 2", " order by x limit 1"} {
+				execSQLRequire(t, ctx, db, "delete from dst")
+				_, err := db.ExecContext(ctx, "insert into dst "+source+suffix)
+				var sqlErr *mysql.MySQLError
+				require.ErrorAs(t, err, &sqlErr)
+				require.EqualValues(t, 20105, sqlErr.Number)
+				assertCount(t, 0)
+			}
+			stmt, err := db.PrepareContext(ctx, "insert into dst "+source+" limit ?")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, limit := range []int{1, 2, 1} {
+				execSQLRequire(t, ctx, db, "delete from dst")
+				_, err := stmt.ExecContext(ctx, limit)
+				if limit == 1 {
+					require.NoError(t, err)
+					assertCount(t, 1)
+				} else {
+					var sqlErr *mysql.MySQLError
+					require.ErrorAs(t, err, &sqlErr)
+					require.EqualValues(t, 20105, sqlErr.Number)
+					assertCount(t, 0)
+				}
+			}
+			t.Run("returning", func(t *testing.T) {
+				execSQLRequire(t, ctx, db, "delete from dst")
+				var value string
+				require.NoError(t, db.QueryRowContext(ctx, "insert into dst "+source+" limit 1 returning x").Scan(&value))
+				require.Len(t, value, 36)
+				assertCount(t, 1)
+			})
+			t.Run("CTAS", func(t *testing.T) {
+				execSQLRequire(t, ctx, db, "create table ctas_dst as "+source+" limit 1")
+				var count, width int
+				require.NoError(t, db.QueryRowContext(ctx, "select count(*),min(length(x)) from ctas_dst").Scan(&count, &width))
+				require.Equal(t, 1, count)
+				require.Equal(t, 36, width)
+			})
 		})
 		for _, tc := range []struct {
 			name, query string
@@ -178,6 +249,7 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 				{"extractvalue", "extractvalue('<a>2</a>','/a')", "2"},
 				{"updatexml", "updatexml('<a>1</a>','/a','<a>2</a>')", "<a>2</a>"},
 				{"unix timestamp argument", "unix_timestamp('1970-01-01 00:00:02')", "2"},
+				{"unix timestamp datetime", "unix_timestamp(cast('1970-01-01 00:00:02' as datetime))", "2"},
 				{"uncompress", "hex(uncompress(compress('ab')))", "6162"},
 				{"uncompressed length", "uncompressed_length(compress('ab'))", "2"},
 				{"AES", "hex(aes_decrypt(aes_encrypt('ab','k'),'k'))", "6162"},

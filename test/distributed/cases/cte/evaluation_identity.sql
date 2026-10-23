@@ -16,4 +16,11 @@ select count(*) from (select k,(with recursive r(n,s) as(select (select t.k),cas
 select count(*) from (select k,(with r as(select result k from generate_series(1,3)g) select (select min(k) from r where k>=t.k)+(select max(k) from r)) v from t) q where (k is null and v is null) or (k=1 and v=4) or (k=2 and v=5);
 with r as(select datediff('2026-01-03','2026-01-01')x) select count(*) from(select k,(select max(x) from r group by t.k)v from t)q where v=2;
 with r as(select convert(extractvalue('<a>ok</a>','/a') using utf8mb4)x) select count(*) from(select k,(select max(x) from r group by t.k)v from t)q where v='ok';
+create table dst(x varchar(100));
+insert into dst with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select x from r limit 1;
+select count(*) from dst where length(x)=36;
+insert into dst with r as(select uuid()x) select a.x from r a join r b on a.x=b.x;
+select count(*) from dst where length(x)=36;
+create table ctas_dst as with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select x from r limit 1;
+select count(*) from ctas_dst where length(x)=36;
 drop database cte_evaluation_identity;

@@ -655,6 +655,8 @@ type QueryBuilder struct {
 	// Required CTE identity belongs to this builder, including validation-only builders.
 	boundCTEs        map[*CTERef]map[*BindContext]*boundCTE
 	semanticCTESinks map[int32]*boundCTE
+	// Finalize after the complete statement binds, before optimizer rewrites.
+	cteIdentityFinalized bool
 	// Completed stable CTE roots, valid only until the next binding rewrite.
 	stableCTERoots           map[int32]bool
 	cteRecursiveBindingDepth int

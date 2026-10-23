@@ -311,10 +311,27 @@ func (builder *QueryBuilder) validateCTEInvocation(root int32) error {
 	return visit(root, nil)
 }
 
+// finalizeCTEIdentity is shared by SELECT and direct DML/DDL builders. SELECT
+// finalizes before its optional sharing rewrites; createQuery covers the other
+// entry points once all statement readers and step owners have been bound.
+func (builder *QueryBuilder) finalizeCTEIdentity(extraRoots ...int32) {
+	if builder.cteIdentityFinalized {
+		return
+	}
+	builder.cteIdentityFinalized = true
+	builder.stableCTERoots = nil
+	if len(builder.semanticCTESinks) == 0 || builder.qry.Correlation != nil {
+		return
+	}
+	roots := append([]int32(nil), builder.qry.Steps...)
+	roots = append(roots, extraRoots...)
+	builder.inlineSingleReaderCTEs(roots...)
+}
+
 // inlineSingleReaderCTEs removes a physical publication boundary only after the
-// complete SELECT has bound. Semantic identity and capture checks have already
+// complete statement has bound. Semantic identity and capture checks have already
 // run. Recursive/dependent regions retain their existing publication owners.
-func (builder *QueryBuilder) inlineSingleReaderCTEs(root int32) {
+func (builder *QueryBuilder) inlineSingleReaderCTEs(roots ...int32) {
 	if len(builder.semanticCTESinks) == 0 || builder.qry.Correlation != nil {
 		return
 	}
@@ -358,7 +375,9 @@ func (builder *QueryBuilder) inlineSingleReaderCTEs(root int32) {
 			visit(builder.qry.Steps[step])
 		}
 	}
-	visit(root)
+	for _, root := range roots {
+		visit(root)
+	}
 	if !safe {
 		return
 	}
@@ -401,6 +420,9 @@ func (builder *QueryBuilder) inlineSingleReaderCTEs(root int32) {
 		return
 	}
 	stepMap := make([]int32, len(builder.qry.Steps))
+	for i := range stepMap {
+		stepMap[i] = -1
+	}
 	steps := builder.qry.Steps[:0]
 	for old, id := range builder.qry.Steps {
 		if !removed[int32(old)] {
@@ -409,6 +431,7 @@ func (builder *QueryBuilder) inlineSingleReaderCTEs(root int32) {
 		}
 	}
 	builder.qry.Steps = steps
+	builder.remapCTEStatementSteps(stepMap)
 	for _, node := range builder.qry.Nodes {
 		for i, step := range node.SourceStep {
 			node.SourceStep[i] = stepMap[step]
@@ -425,5 +448,43 @@ func (builder *QueryBuilder) inlineSingleReaderCTEs(root int32) {
 		if len(publications) == 0 {
 			delete(builder.boundCTEs, ref)
 		}
+	}
+}
+
+// These statement owners consume step indexes after createQuery, when CTE
+// producer compaction has already changed the step catalog.
+func (builder *QueryBuilder) remapCTEStatementSteps(stepMap []int32) {
+	remap := func(step int32) int32 {
+		if step < 0 {
+			return step
+		}
+		return stepMap[step]
+	}
+	remapMap := func(old map[string]int32) map[string]int32 {
+		if old == nil {
+			return nil
+		}
+		// Maintenance records can share this map. Copy so each stored old index
+		// is remapped exactly once, regardless of aliases between owners.
+		updated := make(map[string]int32, len(old))
+		for name, step := range old {
+			updated[name] = remap(step)
+		}
+		return updated
+	}
+	if builder.qry.HasReturning {
+		builder.qry.ReturningStep = remap(builder.qry.ReturningStep)
+	}
+	builder.returningSourceStep = remap(builder.returningSourceStep)
+	builder.irregularMaintSourceStep = remap(builder.irregularMaintSourceStep)
+	builder.irregularMaintDeleteStep = remap(builder.irregularMaintDeleteStep)
+	builder.irregularMaintInsertOnlySourceStep = remap(builder.irregularMaintInsertOnlySourceStep)
+	builder.irregularMaintValueChangedSourceSteps = remapMap(builder.irregularMaintValueChangedSourceSteps)
+	for i := range builder.irregularUpdateMaints {
+		owner := &builder.irregularUpdateMaints[i]
+		owner.sourceStep = remap(owner.sourceStep)
+		owner.deleteStep = remap(owner.deleteStep)
+		owner.insertOnlySourceStep = remap(owner.insertOnlySourceStep)
+		owner.valueChangedSourceSteps = remapMap(owner.valueChangedSourceSteps)
 	}
 }
