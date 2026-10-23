@@ -54,6 +54,7 @@ from .exceptions import (
     SnapshotError,
 )
 from .logger import MatrixOneLogger, create_default_logger
+from ._utils import is_non_transactional_statement
 from .pitr import AsyncPitrManager
 from .pubsub import AsyncPubSubManager
 from .snapshot import Snapshot, SnapshotLevel
@@ -1412,18 +1413,54 @@ class AsyncClient(BaseMatrixOneClient):
             # String SQL - original implementation
             final_sql = self._substitute_parameters(sql_or_stmt, params)
 
-            async with self._engine.begin() as conn:
-                # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
-                # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
-                if hasattr(conn, 'exec_driver_sql'):
-                    # Escape % to %% for pymysql's format string handling
-                    escaped_sql = final_sql.replace('%', '%%')
-                    result = await conn.exec_driver_sql(escaped_sql)
-                else:
-                    # Fallback for testing or older SQLAlchemy versions
-                    from sqlalchemy import text
+            # DATA BRANCH MERGE/PICK commit immediately and are rejected by the
+            # server when they arrive inside a transaction (error 20101).
+            # Pooled driver connections run with autocommit=False (implicit
+            # transactions), so these statements execute on a checked-out
+            # connection flipped to autocommit. The flip happens inside the
+            # connection context so a failing flip still releases the checkout,
+            # and the exact previous autocommit state is restored afterwards,
+            # so caller-supplied engines (from_engine) keep their baseline.
+            # Ordinary statements keep the engine.begin() transaction path.
+            non_transactional = is_non_transactional_statement(final_sql)
+            async with self._engine.connect() if non_transactional else self._engine.begin() as conn:
+                restore_autocommit = False
+                prev_autocommit = None
+                if non_transactional:
+                    prev_autocommit = (await conn.exec_driver_sql("SELECT @@autocommit")).scalar()
+                    if isinstance(prev_autocommit, bytes):
+                        prev_autocommit = prev_autocommit.decode()
+                try:
+                    if non_transactional and str(prev_autocommit).strip().lower() not in ("1", "true", "on"):
+                        # Record restoration responsibility BEFORE flipping, so a
+                        # SET whose result read dies after the server applied it
+                        # is still restored (or the connection invalidated).
+                        restore_autocommit = True
+                        await conn.exec_driver_sql("SET autocommit = 1")
+                    # Use exec_driver_sql() to bypass SQLAlchemy's bind parameter parsing
+                    # This prevents JSON strings like {"a":1} from being parsed as :1 bind params
+                    if hasattr(conn, 'exec_driver_sql'):
+                        # Escape % to %% for pymysql's format string handling
+                        escaped_sql = final_sql.replace('%', '%%')
+                        result = await conn.exec_driver_sql(escaped_sql)
+                    else:
+                        # Fallback for testing or older SQLAlchemy versions
+                        from sqlalchemy import text
 
-                    result = await conn.execute(text(final_sql))
+                        result = await conn.execute(text(final_sql))
+                finally:
+                    if restore_autocommit:
+                        try:
+                            await conn.exec_driver_sql("SET autocommit = 0")
+                        except Exception:
+                            # After a cancellation SQLAlchemy invalidates the
+                            # async connection; issuing this restore raises and
+                            # would mask the original cancellation. Drop the
+                            # mutated connection rather than returning it to the
+                            # pool, and never replace the original statement
+                            # outcome (cancellation, timeout, execution error)
+                            # with a restoration error.
+                            await conn.invalidate()
 
                 execution_time = time.time() - start_time
 

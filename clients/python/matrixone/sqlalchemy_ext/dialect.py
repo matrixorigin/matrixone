@@ -96,6 +96,86 @@ class MatrixOneDialect(MySQLDialect):
         # For MatrixOne, we set it to False as we don't have those specific MySQL bugs
         self._needs_correct_for_88718_96365 = False
 
+    def get_isolation_level_values(self, dbapi_conn):
+        """Supported isolation levels, mirroring the stock pymysql driver dialect."""
+        return (
+            "SERIALIZABLE",
+            "READ UNCOMMITTED",
+            "READ COMMITTED",
+            "REPEATABLE READ",
+            "AUTOCOMMIT",
+        )
+
+    @staticmethod
+    def _apply_autocommit(dbapi_connection, value):
+        """Set the DBAPI autocommit flag for the drivers the SDK supports.
+
+        pymysql exposes autocommit as a method (conn.autocommit(value)),
+        while mysql-connector exposes it as a property (conn.autocommit =
+        value); Client.from_engine() explicitly accepts both. Detect the
+        property form on the connection's class so neither raises.
+        """
+        if isinstance(getattr(type(dbapi_connection), "autocommit", None), property):
+            dbapi_connection.autocommit = value
+        else:
+            dbapi_connection.autocommit(value)
+
+    def set_isolation_level(self, dbapi_connection, level):
+        """Apply isolation levels the way the pymysql driver dialect does.
+
+        AUTOCOMMIT maps to the DBAPI autocommit mode; the other levels map to
+        autocommit off plus SET SESSION TRANSACTION ISOLATION LEVEL. The
+        engine-default isolation level is captured before the first change
+        (while the freshly checked-out connection still carries it) so
+        reset_isolation_level can restore it exactly.
+        """
+        self._ensure_default_isolation_level(dbapi_connection)
+        if level == "AUTOCOMMIT":
+            self._apply_autocommit(dbapi_connection, True)
+        else:
+            self._apply_autocommit(dbapi_connection, False)
+            super().set_isolation_level(dbapi_connection, level)
+
+    def _ensure_default_isolation_level(self, dbapi_connection):
+        """Capture the connection's current (engine-default) isolation level.
+
+        matrixone.client._create_engine swaps this dialect in after
+        create_engine(), so the engine never runs initialize() against this
+        instance and default_isolation_level is never populated for it.
+        Reading the level before the first modification recovers the same
+        baseline initialize() would have recorded. Drivers may return the
+        level as text or bytes.
+        """
+        if getattr(self, "default_isolation_level", None) is not None:
+            return
+        cursor = dbapi_connection.cursor()
+        try:
+            cursor.execute("SELECT @@transaction_isolation")
+            row = cursor.fetchone()
+            if row:
+                level = row[0]
+                if isinstance(level, bytes):
+                    level = level.decode()
+                self.default_isolation_level = str(level).upper().replace("-", " ")
+        finally:
+            cursor.close()
+
+    def reset_isolation_level(self, dbapi_connection):
+        """Restore the engine baseline captured by set_isolation_level.
+
+        set_isolation_level is always invoked before the pool registers this
+        reset, so default_isolation_level is populated by then. Pool
+        connections are returned to autocommit off and the captured default
+        transaction isolation level.
+        """
+        self._apply_autocommit(dbapi_connection, False)
+        if getattr(self, "default_isolation_level", None) is not None:
+            cursor = dbapi_connection.cursor()
+            try:
+                cursor.execute("SET SESSION TRANSACTION ISOLATION LEVEL " + self.default_isolation_level)
+            finally:
+                cursor.close()
+
     def _extract_error_code(self, exception):
         """Extract error code from MatrixOne exceptions."""
         if hasattr(exception, "args") and len(exception.args) > 0:
