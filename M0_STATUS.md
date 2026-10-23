@@ -1,25 +1,26 @@
 # M0 restricted metadata-only ADD prototype
 
-Decision, 2026-10-22: **CF9 is a qualified, same-version experimental candidate
-for a restricted Draft PR, not a production feature or a Ready-to-merge change.**
-Focused local validation and normal-binary Linux small-data qualification passed.
-A later CF9-only SF100 first/warm screen also passed. A newly completed matched
-B/CF9 first/warm pair, statistical significance and final background-debt
-accounting are NOT established. These distinctions supersede the historical
-local-only status below.
+Review handoff, 2026-10-23: **request formal maintainer review of the restricted,
+default-disabled M0 candidate, not production enablement or merge approval.**
+The reviewed kernel head is `b3c86e3f3375f6441d3326d08ac23ac6598d4d1d`.
+This status refresh changes documentation only. The evidence below is bound to
+its actual source and mode; a documentation successor does not create a new
+kernel, Linux binary or performance result.
 
 Base: `68e642fdc533e96ed8f83ac44659119ad8be97af`.
 Kernel candidate: `cf9f5ff0f6cfbc11066e24c5bf209234f154cee9` (CF9).
 Publication branch: `codex/m0-restricted-experimental-draft`.
-The original publication commit `971e405e53` adds documentation and a SQL BVT
+The original publication commit `971e405e53` added documentation and a SQL BVT
 fixture only. After Draft creation, the repository bot automatically merged
 `main` at `8f9c50468ea06cd52554f2a5ef94cfb137d930f6` as `7e22a398f254`.
-That integration tree exactly matches a local merge-tree computation; no manual
-conflict resolution or force-push was used. The current PR head therefore also
-contains upstream kernel/native changes. CF9's qualification is evidence for
-the frozen candidate, not a PASS for this integrated head. Current-head CI and
-experimental-tag validation remain pending. Neither the separate
-block-materialization diagnostic nor a fully-deleted-block skip is included.
+That integration tree matches a local merge-tree computation. Subsequent
+integration repairs were reviewed and qualified at
+`e1d1ea829170cec09ed681eb1defce38135eb155` (Q1). The later public ordinal/View
+repairs end at `b3c86e3f`; their local, CI and scoped Linux evidence is recorded
+separately below. CF9 products are not relabelled as integrated-head products.
+Neither block-materialization/shuffle diagnostics nor object-level UPDATE
+replacement is included. PR #30958 is the independent BOOLEAN DEFAULT false
+extension; it is not part of this PR's supported domain or acceptance claim.
 
 ## Scope
 
@@ -81,6 +82,7 @@ block-materialization diagnostic nor a fully-deleted-block skip is included.
 | PRE_INSERT | Resolve written columns by name, including the map fallback, and reject constant NULL for a required column |
 | Catalog create decoder | Transport existing nonzero table versions to the real TN schema; do not add a persistent field |
 | COUNT binding | Resolve column positions by identity/name and keep additional nullability guards; the broad COUNT rewrite disable is M0-only |
+| Public ordinals and Views | Number visible physical columns densely without changing catalog identities; retain derived-View metadata filtering so unselected definitions are not evaluated |
 
 Default hooks still select COPY and retain ordinary read splitting. The shared
 reader/catalog/PRE_INSERT changes require their own review and default-build
@@ -90,8 +92,9 @@ tests; COPY selection alone is not a compatibility proof.
 
 The following original local evidence is retained on base `68e642fd`, with
 owned Go cache and hash-bound native artifacts (`darwin/arm64`, CPU). Later CF9
-version/reader deltas have additional focused evidence described below; these
-rows must not be mistaken for a fresh whole-PR independent review.
+version/reader deltas have additional focused evidence described below. These
+rows retain their historical identity; integrated whole-candidate review and
+subsequent delta evidence are listed separately below.
 
 | Evidence | Result | Scope |
 |---|---|---|
@@ -128,7 +131,43 @@ keeps all old object fingerprints unchanged, and inserts through the resulting
 schema. TN WAL and checkpoint-plus-later-WAL recovery remain separately covered
 by the recovery fixture.
 
-## CF9 Linux Qualification And Screen
+## Integrated Qualification And Review
+
+| Closure | Evidence and validity for the reviewed kernel |
+|---|---|
+| Complete candidate review | Isolated `gpt-6-astra`, medium, reviewed `8f9c5046..22f01a2c` and its 13-file corrective delta to Q1. Final result: `PASS_CODE_REVIEW`. TN-applied fault coverage, private rowid identity and COMMENT admission findings were addressed. This is model review, not GitHub human approval. |
+| Q1 Linux default/M0 | Fresh matching native and normal products at `e1d1ea82`; formal customer SQL, default COPY, partial/full UPDATE, NULLs, parent/child isolation, committed merge, rollback/retry and restart passed. R5 completed the TN-applied handler, cancel/deadline and ADD/DML interleave selections. |
+| Q1 local unhappy paths | Actual TN-applied error/cancel/deadline, formal SQL, clone/merge and default COPY/COUNT/COMMENT passed. Concurrent ADD, cancel, deadline and interleave passed `-race -count=3`; two-mode vet and incremental lint passed. |
+| Q1 to `b3c86e3f` | Only ordinal/View code, tests and the customer fixture changed (seven files). `Makefile`, `cgo`, `thirdparties`, `go.mod` and `go.sum` are unchanged. Unaffected proof/writer/rollback/recovery evidence is reused by content, not relabelled as a fresh whole-head run. |
+| Ordinal/View review and regressions | Isolated Astra medium initial and corrective delta reviews found no blockers. Local default/M0 public ordinal, stored/filtered View SQL and planner regressions plus two-mode vet/lint and error/license/format checks passed. |
+| Shared Linux supplement | D3 `64aa85d3` / C3 `0343d680` fresh products passed the shared ordinal/View regression, original customer fixture, content/NULL/isolation and restart checks. This is tiny-data scoped reuse, not exact-`b3` whole-product qualification or official mo-tester execution. |
+
+D3/C3 planner bodies match the corrective ordinal/View implementation; helper
+license indentation has no semantic effect. D3 also has a separate bound-column
+ADD admission change in `m0_hook_mo.go`, absent from this PR. Their whole-product
+PASS and DEFAULT false behavior are not imported here. Only the matching shared
+closure is reused; ordinary M0 admission remains covered by this PR's Q1 tests.
+
+Retained receipt identifiers outside the source tree:
+
+- `software-dev-followup-20261023/INDEPENDENT_REVIEW.md`,
+  `independent-delta-review.json`, `review-repair-manifest.json` and
+  `QUALIFIED_BASELINE.json`: complete review, resolved findings, precise tests,
+  native/products, R4 SQL and R5 remaining qualification.
+- `m0-public-ordinal-20261023/DELTA_REVIEW.md` and
+  `R2/DELTA_REVIEW.md`, `R2/MANIFEST.json`, `R2/CI_TERMINAL.json`: corrective
+  review, both-mode regressions and actual CI case selection.
+- `data-cleaning-default-false-20261023/CORRECTIVE_R2_LINUX_READBACK.json`
+  and `D3_C3_IDENTITY.json`: shared tiny-data Linux supplement. The 212-file
+  archive SHA-256 is
+  `f5904fe7514c82943c836ab19f31907222f04a89cf93f0ceb105634760db4b10`.
+
+Failed generations remain retained: `72422387` background HOLD, Q1 preparation
+failures, initial ordinal HOLD and `55f3dec` View/license/coverage failures are
+not rewritten as PASS. The data-cleaning performance line remains INCONCLUSIVE
+and NOT_PROMOTED; it supplies no performance result for this PR.
+
+## Historical CF9 Linux Qualification And Screen
 
 Normal Linux products use Go 1.27.1, `GOAMD64=v3`, `GOEXPERIMENT=simd`, and the
 same qualified native artifacts. No diagnostic or race binary supplied the
@@ -182,9 +221,9 @@ Retained evidence identifiers, outside the source tree:
   operation graphs, result/seal/readback/cleanup receipts. Its
   `head-evidence.tar` SHA-256 is
   `6d0e62f37dfd12029200d6782db2029f4f5fe58a2d179fe87b3b311675bc17a0`.
-- Independent fixed-delta reviews exist for reader allocation and the version
-  codec. They do not replace independent review of the complete original M0
-  patch or approval of the publication head.
+- Historical fixed-delta reviews cover reader allocation and the version codec.
+  The later complete integrated-candidate and corrective reviews are recorded
+  above; none substitutes for formal maintainer approval or QA.
 
 The older `72422387` pilot remains historical evidence under its original
 background-correctness HOLD; it is not promoted into healthy CF9 evidence.
@@ -193,14 +232,19 @@ background-correctness HOLD; it is not promoted into healthy CF9 evidence.
 
 `test/distributed/cases/ddl/m0_customer_add_clone.sql` and its `.result` cover
 the public customer ADD/UPDATE/snapshot-clone path, nullable inserted suffixes,
-NOT NULL rejection, COUNT behavior and parent/child isolation. They are authored
-for both default COPY and `mo_m0` result semantics. Their execution on the
-publication head remains pending exact-head BVT CI; no new BVT PASS is claimed.
+NOT NULL rejection, COUNT behavior and parent/child isolation. At `b3c86e3f`,
+[MatrixOne ALL CI run 39876195531](https://github.com/matrixorigin/matrixone/actions/runs/39876195531)
+passed, including UT, SCA, UT Coverage, Coverage and CI Required. PROXY job
+`120165869158` actually selected and passed the customer fixture **48/48** and
+`information_schema_views_metadata.sql` **44/44**, with zero failed/ignored/
+abnormal items. The PESSIMISTIC job did not select these two fixtures; its green
+result is not counted as duplicate case coverage.
 
 Default CI does not establish M0-path coverage: the M0 SQL integration files
 require `//go:build mo_m0`, while the ordinary UT runner selects
-`matrixone_test`. A maintainer-run opt-in tag job must provide the normal CGo
-setup and run `go test -tags mo_m0 -count=1` with the focused selections below:
+`matrixone_test`. Explicit tagged execution is supplied by the local/Q1 Linux
+evidence above, not inferred from green ordinary CI. For maintainer reproduction,
+use the normal CGo setup and the focused selections below:
 
 - `./pkg/tests/sqlintegration`: `TestM0MetadataOnlyAddColumnSQL`,
   `TestM0ConcurrentAddColumnSQL`, `TestM0CloneMergeProofUsesDerivedVersion`,
@@ -211,37 +255,44 @@ setup and run `go test -tags mo_m0 -count=1` with the focused selections below:
 - Focused catalog, proof, writer, read-shard and recovery tests in both relevant
   modes; existing identical local receipts may be reused with explicit binding.
 
-Passing SQL result semantics without path/object evidence is not a claim that
-COPY was eliminated. Experimental-tag exact-head CI remains a separate open
-gate; this Draft does not silently enable the experimental build in production CI.
+Passing SQL results alone does not prove COPY elimination. Q1 tagged/Linux
+qualification includes path and object evidence; ordinary CI does not silently
+enable the experimental tag. A documentation-only successor reuses these
+semantic checks but must satisfy its own applicable CI checks. No single
+exact-head Linux run of every closure is claimed.
 
-## Open Gates
+## Formal Review, QA And Non-Goals
 
-- New BVT exact-head execution and explicit experimental-tag CI/review remain
-  pending, including validation of the bot-integrated main/kernel/native tree.
-  Our publication commits change documentation and fixtures only; historical
-  CF9 binaries and receipts are not relabelled as integrated-head products.
-- No new complete matched B/CF9 first/warm pair, repeated/stability matrix or
-  all-branch SF100 full-content acceptance. Do not wait for another optimization
-  or a rerun merely to publish this restricted Draft.
-- UPDATE remains a known performance tradeoff. Final background drain CPU,
-  writes and debt are not closed. No full-deletion skip, proof cache or fast
-  filter optimization is included.
-- The experimental build conservatively disables broad COUNT rewrites, not
-  only a single customer query. Together with proof/filter and allocation work,
-  this is part of the measured prototype package, not a pure COPY-removal gain.
-- No crash, torn-write or power-loss matrix.
-- No multi-CN rollout, lease handoff or mixed-version reader/writer interop.
-  The default reader fails closed, but a mixed binary deployment has not been
-  exercised.
-- No production enablement. Unsupported schemas and DDL remain outside the
-  domain; ordinary builds still select COPY and `mo_m0` is not a deployment
-  recommendation.
+The formal review handoff targets `XuPeng-SH`, the CODEOWNER covering
+the affected planner/objectio/disttae/TAE paths. Completed model review is not
+an approval on GitHub. Ready-for-review is not Ready-to-merge.
+
+**QA required: yes.** SQL/catalog visibility, clone/merge and recovery semantics
+need deployed acceptance. QA should verify the restricted same-version build
+and ordinary default build separately: exact product/native identity, default
+COPY, M0 admission and unchanged old objects, nullable suffix reads, parent/child
+and old-snapshot isolation, actual merge commit, TN-applied rollback/cancel,
+ADD/DML ordering, restart and ordinary/subscription View metadata permissions
+and filtering. Automated coverage is reusable; QA is not claimed PASS.
+
+Production enablement, mixed-version/multi-CN rollout, power-loss/crash matrices,
+new schema/default support and final maintenance-debt acceptance are outside
+this review handoff. CI, model review and cleanup do not silently satisfy them.
+Unsupported schemas/DDL retain the documented rejection or ordinary fallback;
+the experimental tag is not a deployment recommendation.
+
+No new matched SF100 pair, stability matrix, all-branch full-content check or
+new performance claim is required to begin formal review. UPDATE cost attribution
+remains inconclusive; no shuffle/full-delete/proof-cache, fast-filter,
+object-replacement or P1/P2 optimization is included. Conservative M0 filter
+and COUNT restrictions remain part of the package's tradeoffs.
 
 ## Lifecycle
 
 The accepted CF9 screen completed its own service/worker/watchdog closure,
 seal/readback and successful-volume retirement. Failed receipts remain retained.
-Publication preparation does not touch Ubuntu, ongoing diagnostics, old volumes,
-shared caches, issue state or other branches. Keep the PR Draft and
-`do-not-merge/wip`; QA is required before production or Ready consideration.
+This handoff does not access Ubuntu, mutate diagnostics/old volumes or shared
+caches, merge the PR or close parent issue #30518. That tracker remains open.
+PR #30958's independent extension and performance work do not block review of
+this narrower PR. Maintainer review and QA remain separate from completed
+code/regression evidence and from any later merge decision.
