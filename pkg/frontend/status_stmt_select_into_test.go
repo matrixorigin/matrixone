@@ -22,6 +22,7 @@ import (
 	"github.com/golang/mock/gomock"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	mock_frontend "github.com/matrixorigin/matrixone/pkg/frontend/test"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/matrixorigin/matrixone/pkg/util"
@@ -31,9 +32,15 @@ import (
 type statusStmtTestRunner struct {
 	result *util.RunResult
 	err    error
+	run    func() error
 }
 
 func (r *statusStmtTestRunner) Run(uint64) (*util.RunResult, error) {
+	if r.run != nil {
+		if err := r.run(); err != nil {
+			return nil, err
+		}
+	}
 	return r.result, r.err
 }
 
@@ -135,6 +142,31 @@ func TestExecuteStatusStmtSelectIntoRejectsInvalidOrFailedExecution(t *testing.T
 		execCtx.selectInto.rowCount = 2
 		require.True(t, moerr.IsMoErrCode(executeStatusStmt(ses, execCtx), moerr.ErrTooManyRows))
 	})
+
+	t.Run("revalidates active plan after zero-row retry", func(t *testing.T) {
+		stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "out"}}}
+		ses, execCtx := newSelectIntoStatusTestContext(stmt, &statusStmtTestRunner{result: &util.RunResult{}})
+		execCtx.selectInto = newSelectIntoUserVariables(stmt.IntoVars)
+		activePlan := newResultColumnTestPlan(1)
+		wrapper := &TxnComputationWrapper{stmt: stmt, plan: activePlan}
+		wrapper.compile = &mockCompile{
+			runFunc:     func(uint64) (*util.RunResult, error) { return &util.RunResult{}, nil },
+			getPlanFunc: func() *planpb.Plan { return activePlan },
+			releaseFunc: func() {},
+		}
+		execCtx.cw = wrapper
+		execCtx.runner = &statusStmtTestRunner{
+			result: &util.RunResult{},
+			run: func() error {
+				activePlan = newResultColumnTestPlan(2)
+				return nil
+			},
+		}
+		err := executeStatusStmt(ses, execCtx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrWrongNumberOfColumnsInSelect))
+		_, err = ses.GetUserDefinedVar("out")
+		require.Error(t, err, "zero-row retry must not apply assignments from an unvalidated plan")
+	})
 }
 
 func TestExecuteStatusStmtInBackSelectIntoAssignsUserVariable(t *testing.T) {
@@ -150,6 +182,31 @@ func TestExecuteStatusStmtInBackSelectIntoAssignsUserVariable(t *testing.T) {
 }
 
 func TestExecuteStatusStmtInBackSelectIntoRejectsInvalidOrFailedExecution(t *testing.T) {
+	t.Run("revalidates active plan after zero-row retry", func(t *testing.T) {
+		stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "out"}}}
+		backSes, upstream, execCtx := newBackSelectIntoStatusTestContext(t, stmt, &statusStmtTestRunner{result: &util.RunResult{}})
+		execCtx.selectInto = newSelectIntoUserVariables(stmt.IntoVars)
+		activePlan := newResultColumnTestPlan(1)
+		wrapper := &TxnComputationWrapper{stmt: stmt, plan: activePlan}
+		wrapper.compile = &mockCompile{
+			runFunc:     func(uint64) (*util.RunResult, error) { return &util.RunResult{}, nil },
+			getPlanFunc: func() *planpb.Plan { return activePlan },
+			releaseFunc: func() {},
+		}
+		execCtx.cw = wrapper
+		execCtx.runner = &statusStmtTestRunner{
+			result: &util.RunResult{},
+			run: func() error {
+				activePlan = newResultColumnTestPlan(2)
+				return nil
+			},
+		}
+		err := executeStatusStmtInBack(backSes, execCtx)
+		require.True(t, moerr.IsMoErrCode(err, moerr.ErrWrongNumberOfColumnsInSelect))
+		_, err = upstream.GetUserDefinedVar("out")
+		require.Error(t, err, "zero-row retry must not apply assignments from an unvalidated plan")
+	})
+
 	t.Run("arity mismatch", func(t *testing.T) {
 		stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "out"}, {Name: "other"}}}
 		backSes, _, execCtx := newBackSelectIntoStatusTestContext(t, stmt, &statusStmtTestRunner{result: &util.RunResult{}})

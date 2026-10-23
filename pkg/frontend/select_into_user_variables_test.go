@@ -23,6 +23,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/perfcounter"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	"github.com/stretchr/testify/require"
@@ -230,16 +231,127 @@ func TestSelectIntoUserVariablesOutputCallbackReinitializesCollector(t *testing.
 
 	selectIntoUserVariablesOutputCallback(execCtx, ses, firstStmt, func(*batch.Batch, *perfcounter.CounterSet) error {
 		return nil
-	})
+	}, nil)
 	firstCollector := execCtx.selectInto
 	require.NotNil(t, firstCollector)
 
 	selectIntoUserVariablesOutputCallback(execCtx, ses, secondStmt, func(*batch.Batch, *perfcounter.CounterSet) error {
 		return nil
-	})
+	}, nil)
 	require.NotNil(t, execCtx.selectInto)
 	require.NotSame(t, firstCollector, execCtx.selectInto)
 	require.Equal(t, "second", execCtx.selectInto.vars[0].Name)
+}
+
+func TestSelectIntoUserVariablesCallbackUsesActivePlanLayout(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	stmt := &tree.Select{IntoVars: []*tree.VarExpr{{Name: "hex_out"}, {Name: "text_out"}}}
+	makePlan := func(kindColumns []int32) *planpb.Plan {
+		return &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+			StmtType: planpb.Query_SELECT,
+			Steps:    []int32{0},
+			Headings: []string{"hex_out", "text_out"},
+			Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{
+				{Typ: planpb.Type{Id: int32(types.T_varchar)}},
+				{Typ: planpb.Type{Id: int32(types.T_varchar)}},
+				{Typ: planpb.Type{Id: int32(types.T_bool)}},
+				{Typ: planpb.Type{Id: int32(types.T_bool)}},
+			}}},
+			IntoUserVariableKindColumns: kindColumns,
+		}}}
+	}
+	initialPlan := makePlan([]int32{2, 3})
+	activePlan := makePlan([]int32{3, 2})
+	execCtx := &ExecCtx{
+		reqCtx: context.Background(),
+		cw:     &TxnComputationWrapper{plan: initialPlan},
+	}
+	current := initialPlan
+	callback := selectIntoUserVariablesOutputCallback(
+		execCtx, ses, stmt, func(*batch.Batch, *perfcounter.CounterSet) error { return nil },
+		func() *planpb.Plan { return current },
+	)
+
+	bat := batch.NewWithSize(4)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("31"), false, mp))
+	bat.Vecs[1] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[1], []byte("31"), false, mp))
+	bat.Vecs[2] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[2], false, false, mp))
+	bat.Vecs[3] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[3], true, false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	// A retry can replace the active compiled plan after the wrapper was
+	// created. The output callback must capture the matching physical layout.
+	current = activePlan
+	require.NoError(t, callback(bat, nil))
+	require.NoError(t, execCtx.selectInto.apply(ctx, ses, "select ... into @hex_out, @text_out"))
+	hexValue, err := ses.GetUserDefinedVar("hex_out")
+	require.NoError(t, err)
+	require.True(t, hexValue.IsBin, "the active plan maps hex_out to passenger column 3")
+	textValue, err := ses.GetUserDefinedVar("text_out")
+	require.NoError(t, err)
+	require.False(t, textValue.IsBin, "the active plan maps text_out to passenger column 2")
+}
+
+func TestScalarNumericKindCallbackCapturesPassengerAndForwardsVisibleBatch(t *testing.T) {
+	ctx := context.Background()
+	mp := mpool.MustNewZero()
+	defer mpool.DeleteMPool(mp)
+	ses := &Session{userDefinedVars: make(map[string]*UserDefinedVar)}
+	activePlan := &planpb.Plan{Plan: &planpb.Plan_Query{Query: &planpb.Query{
+		StmtType: planpb.Query_SELECT,
+		Steps:    []int32{0},
+		Headings: []string{"value"},
+		Nodes: []*planpb.Node{{ProjectList: []*planpb.Expr{
+			{Typ: planpb.Type{Id: int32(types.T_varchar)}},
+			{Typ: planpb.Type{Id: int32(types.T_bool)}},
+		}}},
+		IntoUserVariableKindColumns: []int32{1},
+	}}}
+	execCtx := &ExecCtx{
+		reqCtx:                  ctx,
+		numericValueKindCapture: &scalarNumericValueKindCapture{},
+	}
+	bat := batch.NewWithSize(2)
+	bat.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	require.NoError(t, vector.AppendBytes(bat.Vecs[0], []byte("31"), false, mp))
+	// Legacy vector metadata is intentionally ordinary; the paired BOOL owns
+	// the selected HEX provenance for this result.
+	bat.Vecs[1] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], true, false, mp))
+	bat.SetRowCount(1)
+	defer bat.Clean(mp)
+
+	var forwarded *batch.Batch
+	callback := selectIntoUserVariablesOutputCallback(
+		execCtx, ses, &tree.Select{}, func(value *batch.Batch, _ *perfcounter.CounterSet) error {
+			forwarded = value
+			return nil
+		}, func() *planpb.Plan { return activePlan })
+	require.NoError(t, callback(bat, nil))
+	require.NotNil(t, forwarded)
+	require.Len(t, forwarded.Vecs, 1, "the result batch exposes only the visible value")
+	require.Len(t, forwarded.Attrs, 0)
+	kind, available := execCtx.numericValueKindCapture.snapshot()
+	require.True(t, available)
+	require.True(t, kind)
+
+	// A mapped false passenger must override any stale legacy vector marker.
+	bat.Vecs[0].SetIsBin(true)
+	bat.Vecs[1].ResetWithSameType()
+	require.NoError(t, vector.AppendFixed(bat.Vecs[1], false, false, mp))
+	bat.SetRowCount(1)
+	require.NoError(t, callback(bat, nil))
+	kind, available = execCtx.numericValueKindCapture.snapshot()
+	require.True(t, available)
+	require.False(t, kind)
 }
 
 func TestSelectIntoUserVariablesZeroRowsAddsNoDataDiagnostic(t *testing.T) {

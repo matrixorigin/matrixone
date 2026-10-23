@@ -15,9 +15,10 @@ value roles, plan specialization/reuse, and remote execution compatibility.
 
 The change does not make MySQL and MatrixOne native behavior identical, widen
 general string-to-`INT64` conversion, transfer a string-math source role across
-an explicit SQL `CAST`, add a new overload identity, or promise that older peers
-implement newer semantics. String-to-floating `CAST` still follows the selected
-strict/default or `MYSQL_NUMERIC_COMPATIBILITY` policy.
+an explicit SQL `CAST`, or add user-selectable SQL overloads. It uses private
+plan instruction IDs for paired execution outputs and does not promise that
+older peers implement newer semantics. String-to-floating `CAST` still follows
+the selected strict/default or `MYSQL_NUMERIC_COMPATIBILITY` policy.
 
 ## Frozen semantic invariants
 
@@ -66,53 +67,60 @@ as its mode or sender marker.
 Direct string executors, casts, prepared parameters, and historical CEIL/FLOOR
 string overloads use the same effective-mode decision.
 
-### HEX/BIT provenance and transient row state
+### HEX/BIT provenance and paired expression outputs
 
 - HEX/BIT literals retain their byte-numeric interpretation (`X'31'` and
   `B'00110001'` produce 49); an ordinary `BINARY`/`VARBINARY` string is still
   text-numeric and `'1'` produces 1. Runtime binary-string domain is not numeric
   literal provenance.
-- `CASE`, `IF`, and `COALESCE` can select different source kinds per row. A
-  separate execution-only row-level `IsBin` marker follows selected HEX/BIT
-  values. The implicit string-to-`DOUBLE` cast consults this marker (or the
-  source's uniform scalar marker), never the runtime string-domain sidecar.
-- The marker survives implicit binder casts, selection, vector/batch transfer,
-  and remote pipeline transport. It is not stored in stable vector bytes or
-  ordinary materialized table columns. The versioned batch metadata trailer is
-  the transport owner and remains trailer v3, independently numbered from
-  MORPC; stable vector/batch bytes and the ordinary runtime-domain sidecar
-  remain unchanged.
-- Provenance-sensitive flow-control output is fenced at MORPC v126 in every SQL
-  mode when it can select a non-NULL HEX/BIT value. This includes mixed rows,
-  uniformly marked results, and marked-plus-NULL results: older flow-control
-  executors can drop the marker even when no mixed-row bitmap is needed.
-  Explicit casts remain a boundary.
+- `CASE`, `IF`, and `COALESCE` can select different source kinds per row. The
+  plan carries the selected kind as an ordinary BOOL output beside the value
+  program; both outputs come from one evaluation of the original selector and
+  use the same row mask. `IFF` carries its condition kind as a separate operand
+  so truth conversion happens before its lazy value arm is selected.
+- Private plan functions `SCALAR_PROGRAM`/`SCALAR_PROGRAM_REF` own the lexical
+  value and kind relationship. They are not SQL-callable functions and do not
+  add semantic flags to vectors or batches. The implicit numeric cast receives
+  the explicit BOOL input; explicit SQL casts remain semantic boundaries.
+- A query, dependent scalar result, or SELECT INTO result that must expose a
+  kind passenger declares its physical layout separately from its visible
+  columns. Compilers validate that layout and keep the BOOL beside its value
+  through projection, joins, set operations, recursive feedback, and remote
+  execution. Equality keys and user-visible headings continue to describe only
+  the SQL columns.
+- Table materialization ends the execution-only kind. CTAS, defaults,
+  INSERT/INSERT SELECT, UPDATE, and rollback/retry paths store ordinary values;
+  a later read does not inherit the original HEX/BIT source marker.
 
-### Vector allocation ownership
+### Ordinary vector and batch ownership
 
-The row-level numeric-literal bitmap follows the vector's immutable allocation
-selection. Account changes are allowed only before vector backing is created;
-reset clears row marks but retains external capacity under its original
-account, and `Free` releases that capacity. Live storage is not moved between
-accounts.
+Paired BOOL outputs use the existing vector allocation selection and normal
+vector lifecycle. A scalar program owns synthesized rows and invocation
+snapshots; a BOOL column borrowed from an input remains owned by that input.
+`EvalWithoutResultReusing` returns an owned copy, using the requested
+allocation account when one is selected. No numeric-kind bitmap or numeric
+metadata trailer is added to vector or batch formats.
 
 ### Remote compatibility
 
-MORPC v101 retains the upstream JSON/YearBit contract, signed-INT
+MORPC v101 retains its upstream JSON/YearBit contract, signed-INT
 WEEK/DAYOFYEAR results retain their independent MORPC v112 floor, and
 collation-aware LEAST/GREATEST, transactional database defaults/table charset,
 and coordinator-owned parameterized subquery programs retain their independent
 v117, v118, and v119 floors. Upstream exact fractional TIMESTAMPADD SECOND
-intervals retain their independent MORPC v124 floor. This change's
-strict/default string-numeric contract, changed numeric bounds/precision, and
-flow-control provenance use MORPC v126; explicit MySQL/native casts that retain
-existing semantics keep their existing gates. The separate upstream
+intervals retain their independent MORPC v124 floor. This change's numeric
+value/kind programs, private function IDs 605/606, SELECT INTO kind layouts,
+dependent scalar result layouts, and strict/default numeric semantics use
+MORPC v129. Upstream LOAD IGNORE remains v125, VIEW metadata remains v126,
+index/vector-scan features remain v127, and mixed JSON remains v128; numeric
+support does not relabel an upstream feature as v129. Function IDs 603/604
+remain the upstream view metadata functions. The separate upstream
 Unicode-collation metadata contract uses v109. For expressions whose features
-and mode require the new numeric contract, placement falls back to local
-execution when a worker is below v126 or has unknown capability; sender
-preflight rejects a destination downgrade; and receivers reject the changed
-feature when its protocol or session marker is legacy. Unchanged expressions
-retain their existing compatibility gates.
+require numeric programs, placement falls back to local execution when a
+worker is below v129 or has unknown capability, sender preflight rejects a
+destination downgrade, and receivers reject private IDs or layout descriptors
+they cannot interpret. Unchanged expressions retain their existing
+compatibility gates.
 
 ## Deployment and rollback boundary
 
@@ -148,9 +156,10 @@ The execution path is:
 ```text
 prepare role/source classification
   -> execute-time source identification
-  -> value/control binding
-  -> existing overload and cast execution
-  -> cache restoration or remote transport
+  -> lower value and selected-kind outputs together
+  -> consume kind at the owning numeric conversion
+  -> validate and transport declared physical layouts
+  -> drop execution-only kind at table materialization
 ```
 
 - The binder owns provisional types. Prepared execution keeps original
@@ -168,10 +177,24 @@ prepare role/source classification
 - The shared expression-role logic is the authority for which value
   occurrences may be rebound. Control arguments and non-owning string
   functions do not inherit a parent's numeric role.
-- `Vector` owns transient scalar/per-row provenance and its allocation,
-  selection, append, remap, reset, and cleanup lifecycle. `Batch` owns the
-  versioned trailer encoding; the receiver validates before publishing decoded
-  metadata. Stable storage/materialization drops execution-only provenance.
+- Private program IDs 605/606 are validated lexical plan owners. ID 605 defines
+  a value program and ID 606 references its value or BOOL output; IDs 603/604
+  remain upstream view metadata functions. The numeric feature classifier
+  recognizes the complete program and its explicit layout descriptors at
+  MORPC v129.
+- Cross-operator kind passengers are ordinary BOOL columns declared by the
+  lowering pass. DISTINCT, GROUP BY, and set operations retain their original
+  visible equality keys and carry passengers only with the chosen payload row.
+  Recursive UNION DISTINCT hashes its original SQL key columns, not the BOOL
+  passenger. No vector/batch semantic sidecar or trailer-version change is
+  involved.
+- SELECT INTO stores a plan-level map from each visible output to its optional
+  physical BOOL column. Correlated scalar results use a descriptor that marks
+  the second physical column as the BOOL kind. Consumers validate width and
+  type, then copy the value/kind pair before releasing the producer's buffers.
+  Cached plans and descriptor copies retain their declared layouts.
+- Materialized table values deliberately lose execution-only kind provenance;
+  ordinary table storage does not preserve the source's HEX/BIT identity.
 - Existing warning-aware casts own conversion warnings. No new goroutine,
   background resource, external I/O, or retry loop is introduced.
 - The `CEIL`/`FLOOR` precision argument retains its source-aware conversion:
@@ -199,10 +222,16 @@ source provenance at the existing AST consumer; it has not been measured by
 that benchmark. A shared role table or cross-execution cache is deferred until
 cache invalidation and ownership equivalence are specified and measured.
 
-The row-provenance bitmap uses bulk population/normalization and a uniform
-append fast path; it must not rescan or renormalize the existing prefix on
-each append. The vector regression/benchmark covers this hot path. No
-function-wide zonemap optimization is included.
+The earlier role-discovery measurements cover only the prepared source-role
+scan; they do not measure this paired scalar-program path or end-to-end query
+latency. No dedicated mixed-program allocation benchmark or before/after
+scalar-program comparison has been completed, so this note makes no claim of
+zero runtime overhead. A native integer ROUND/FLOOR/CEIL fixture also changed
+from one two-row block to two one-row blocks after removing function-wide
+zonemap eligibility. That observed pruning cost is recorded rather than
+described as a string-only change. A focused benchmark and any optimization
+must preserve native exactness, selected-branch behavior, and one evaluation of
+volatile expressions.
 
 ## Alternatives
 
@@ -221,13 +250,13 @@ function-wide zonemap optimization is included.
 | --- | --- |
 | Source and mode behavior | Literal/column/prepared tests; strict default, explicit MySQL mode, native-wins, warning count/code, and NULL/masked-row controls; complete-text prepared ROUND/TRUNCATE domains in strict and compatibility modes |
 | Roles and boundaries | Value/control argument tests; precision remains `INT64`; nested ownership; explicit CAST stops provenance; unknown/non-owning function controls |
-| HEX/BIT row provenance | CASE/IF/COALESCE tests for mixed, uniform, marked-plus-NULL, text, ordinary BINARY, explicit casts, and nested/implicit casts; selected-row/vector/batch lifecycle tests |
-| Wire lifecycle | Batch v1/v2/v3 round trips, malformed/truncated rejection, legacy sender, stale/reused vector reset, and remote trailer tests |
-| Mixed-version admission | For features/modes requiring the new numeric contract: v109-v125 local fallback plus destination/receiver rejection, and v126 placement/send/receive acceptance; explicit MySQL/native paths that preserve prior semantics retain their own floors. Independent upstream v101 JSON/YearBit, v109 Unicode collation, v112 date results, v117 LEAST/GREATEST, v118 database defaults/table charset, v119 dependent-program controls, v120 current-session KILL authorization/proxy cleanup, v121 exact unsigned DECIMAL DIV, v122 temporal result contracts, v123 capability-gated nonblocking row-lock admission, v124 exact fractional TIMESTAMPADD SECOND intervals, and v125 LOAD IGNORE FK admission/diagnostics; legacy-session rejection |
+| HEX/BIT row provenance | CASE/IF/COALESCE tests for mixed, uniform, marked-plus-NULL, text, ordinary BINARY, explicit casts, and nested selectors; paired-output masks, allocation, reuse, and cleanup |
+| Physical layouts | Query SELECT INTO visible-to-kind mapping, correlated scalar value/BOOL descriptors, deepcopy/retry validation, recursive feedback schemas, and unchanged equality keys |
+| Mixed-version admission | Numeric program IDs and nonempty numeric layout descriptors require v129: local fallback below/unknown, v128 rejection, and v129 acceptance. Independent upstream v101 JSON/YearBit, v109 Unicode collation, v112 date results, v117 LEAST/GREATEST, v118 database defaults/table charset, v119 dependent-program controls, v120 current-session KILL authorization/proxy cleanup, v121 exact unsigned DECIMAL DIV, v122 temporal result contracts, v123 capability-gated nonblocking row-lock admission, v124 exact fractional TIMESTAMPADD SECOND intervals, v125 LOAD IGNORE FK admission/diagnostics, v126 VIEW metadata, v127 index/vector scan, and v128 mixed JSON; legacy-session rejection |
 | SessionInfo wire allocation | Unknown varints at fields 23/26 are not interpreted as numeric mode/marker; field 22 remains `lc_time_names`; fields 24/25 round trip the explicit mode and sender marker; forwarding preserves a zero legacy marker |
 | Prepared-plan reuse | Type changes, error-to-success, NULL-to-success, and restoration of the cached base plan |
 | Numeric correctness and pruning | Integer/DECIMAL/FLOAT source controls; zonemap endpoint traps must not prune matching rows |
-| Resource/performance | Allocation-failure atomicity, vector reset/cleanup/accounting, focused race checks where shared-state risk applies, and plan/bitmap performance tests |
+| Resource/performance | Allocation-failure cleanup, copied-result ownership and selected-account accounting, program cache reset/reuse/free, and focused race checks where shared-state risk applies; mixed-program allocation benchmark remains unrun |
 
 Public prepared-query validation includes scalar precision results and metadata,
 the complete-text ROUND/TRUNCATE value-domain path, the binary-protocol numeric

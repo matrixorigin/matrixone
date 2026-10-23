@@ -1837,8 +1837,8 @@ func (expr *FunctionExpressionExecutor) inheritNumericValueKindRows(
 }
 
 func (expr *FunctionExpressionExecutor) isTransparentNumericValueKindCast() bool {
-	return expr.fid == function.CAST && !expr.syntaxExplicitCast &&
-		expr.resultType.Oid.IsMySQLString() && len(expr.parameterTypes) > 0 &&
+	return expr.isImplicitCast() &&
+		expr.resultType.Oid.IsMySQLString() && len(expr.parameterTypes) == 2 &&
 		expr.parameterTypes[0].Oid.IsMySQLString()
 }
 

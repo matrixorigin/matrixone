@@ -167,6 +167,9 @@ func (b *baseBinder) bindPreparedFieldCase(expr *Expr, ast *tree.CaseExpr) (*Exp
 			args[i], err = castPreparedFieldNumeric(b.GetContext(), preparedCommonValueSource(args[i]), typ)
 		} else {
 			args[i], err = appendExplicitCastBeforeExpr(b.GetContext(), preparedCommonValueSource(args[i]), makePlan2Type(&typ))
+			if err == nil && b.builder != nil && types.T(typ.Oid).IsMySQLString() {
+				markInferredStringDeclarationCast(args[i])
+			}
 		}
 		if err != nil {
 			return nil, err

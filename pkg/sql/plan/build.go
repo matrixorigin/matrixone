@@ -81,7 +81,8 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	}()
 
 	builder := NewQueryBuilder(stmtType, ctx, isPrepareStmt, true)
-	builder.intoUserVariableKindDemand = stmt != nil && len(stmt.IntoVars) > 0
+	builder.intoUserVariableKindDemand = (stmt != nil && len(stmt.IntoVars) > 0) ||
+		HasNumericValueKindDemand(ctx.GetContext())
 	builder.sqlCalcFoundRows = selectHasSQLCalcFoundRows(stmt)
 	builder.persistedViewTarget = persistedViewTarget
 	builder.sessionSelectLimitMayStopEarly = sessionSelectLimitMayStopEarly(

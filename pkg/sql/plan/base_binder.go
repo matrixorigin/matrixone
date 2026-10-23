@@ -211,6 +211,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 				}
 			}
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+			if err == nil {
+				markSyntaxExplicitCast(expr)
+			}
 			return
 		}
 		parentParamType := b.numericParamType
@@ -249,6 +252,9 @@ func (b *baseBinder) baseBindExpr(astExpr tree.Expr, depth int32, isRoot bool) (
 			expr, err = appendExplicitCastBeforeExpr(b.GetContext(), expr, typ)
 		} else {
 			expr, err = appendSyntaxExplicitCastBeforeExpr(b.GetContext(), expr, typ)
+		}
+		if err == nil {
+			markSyntaxExplicitCast(expr)
 		}
 
 	case *tree.BitCastExpr:
@@ -6591,6 +6597,7 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		return args, nil
 	}
 	pos, declaredCollation := preparedStringDomainSourceIndex(name, len(args))
+	kindSourceArgs, _ := function.NumericValueKindArgumentPositions(name)
 	var resolver *preparedFieldStringResolver
 	result, copied := args, false
 	for i, arg := range args {
@@ -6607,10 +6614,20 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 			// consuming its binary declaration here would truncate that value.
 			continue
 		}
-		if preparedStringMathFunctionValueArg(name, i, len(args)) {
+		kindSourceArg := false
+		for _, position := range kindSourceArgs {
+			if position == i {
+				kindSourceArg = true
+				break
+			}
+		}
+		if preparedStringMathFunctionValueArg(name, i, len(args)) || kindSourceArg ||
+			(name == "if" && i == 0) {
 			// String-to-number functions own value conversion. An implicit
-			// declaration cast around a mixed HEX/TEXT selector would erase the
-			// selected row's numeric-literal marker before that conversion.
+			// declaration cast around a selected-kind consumer would erase the
+			// selected row's marker before that function owns conversion. Keep
+			// ordinary SQL CAST boundaries in the input tree; this skips only the
+			// binder's additional declaration normalization.
 			continue
 		}
 		if kind == fieldStringBinary && possibleStringDomainsForExpr(arg) == possibleStringDomainBinary {
@@ -6664,6 +6681,9 @@ func (b *baseBinder) bindStringSourceDeclaration(name string, args []*Expr) ([]*
 		converted, err := appendExplicitCastBeforeExpr(b.GetContext(), arg, target)
 		if err != nil {
 			return nil, err
+		}
+		if b.builder != nil {
+			markInferredStringDeclarationCast(converted)
 		}
 		b.rememberPreparedFieldReturnSource(converted, preparedFieldReturnSource{value: arg})
 		if !copied {

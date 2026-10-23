@@ -58,7 +58,7 @@ func TestNumericValueKindPassengerAcrossRelationalOperators(t *testing.T) {
 		_, err = conn.ExecContext(ctx, "USE "+database)
 		require.NoError(t, err)
 
-		query := func(statement string) [][]string {
+		queryFor := func(t *testing.T, statement string) [][]string {
 			t.Helper()
 			rows, err := conn.QueryContext(ctx, statement)
 			require.NoError(t, err, statement)
@@ -85,6 +85,7 @@ func TestNumericValueKindPassengerAcrossRelationalOperators(t *testing.T) {
 			require.NoError(t, rows.Err())
 			return got
 		}
+		query := func(statement string) [][]string { return queryFor(t, statement) }
 		requirePairedResult := func(row []string, absIndex, sqrtIndex int) {
 			t.Helper()
 			switch row[absIndex] {
@@ -102,10 +103,94 @@ func TestNumericValueKindPassengerAcrossRelationalOperators(t *testing.T) {
 			for _, statement := range []string{
 				"SELECT id, ABS(v), SQRT(v) FROM (SELECT id, CASE WHEN id=1 THEN X'31' ELSE '1' END AS v FROM " + ids + " AS s) AS d ORDER BY id",
 				"SELECT id, ABS(v), SQRT(v) FROM (SELECT id, v FROM (SELECT id, CASE WHEN id=1 THEN X'31' ELSE '1' END AS v FROM " + ids + " AS s) AS raw LIMIT 2) AS d ORDER BY id",
+				"SELECT id, ABS(CASE WHEN id=1 THEN v ELSE '1' END), SQRT(CASE WHEN id=1 THEN v ELSE '1' END) FROM (SELECT id, CASE WHEN id=1 THEN X'31' ELSE '1' END AS v FROM (SELECT 1 AS id UNION ALL SELECT 2 AS id) AS s LIMIT 2) AS d ORDER BY id",
 			} {
 				got := query(statement)
 				require.Equal(t, [][]string{{"1", "49", "7"}, {"2", "1", "1"}}, got, statement)
 			}
+		})
+
+		t.Run("nested_dependent_retained_projection", func(t *testing.T) {
+			statement := "SELECT id, (SELECT (SELECT ABS(d.v))) FROM (SELECT id, CASE WHEN id=1 THEN X'31' ELSE '1' END AS v FROM (SELECT 1 AS id UNION ALL SELECT 2 AS id) AS s LIMIT 2) AS d ORDER BY id"
+			got := queryFor(t, statement)
+			require.Equal(t, [][]string{{"1", "49"}, {"2", "1"}}, got, statement)
+		})
+		t.Run("nested_dependent_condition_source", func(t *testing.T) {
+			statement := "SELECT id, (SELECT (SELECT ABS(CASE WHEN d.id=1 THEN X'31' ELSE '1' END))) FROM (SELECT 1 AS id UNION ALL SELECT 2 AS id) AS d ORDER BY id"
+			got := queryFor(t, statement)
+			require.Equal(t, [][]string{{"1", "49"}, {"2", "1"}}, got, statement)
+		})
+
+		t.Run("explicit_text_cast_clears_hex_kind", func(t *testing.T) {
+			for _, statement := range []string{
+				"SELECT id, ABS(CASE WHEN id=1 THEN CAST(X'31' AS CHAR) ELSE '1' END) FROM " + ids + " AS s ORDER BY id",
+				"SELECT id, ABS(CASE WHEN id=1 THEN CAST(v AS CHAR) ELSE '1' END) FROM (SELECT id, CASE WHEN id=1 THEN X'31' ELSE '1' END AS v FROM " + ids + " AS s) AS d ORDER BY id",
+			} {
+				require.Equal(t, [][]string{{"1", "1"}, {"2", "1"}}, query(statement), statement)
+			}
+		})
+
+		t.Run("insert_values_preserves_selected_kind", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "CREATE TABLE rowset_kind_source (n BIGINT)")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "SET @numeric_kind_pick = 1")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "INSERT INTO rowset_kind_source VALUES (CAST(CASE WHEN @numeric_kind_pick=1 THEN X'31' ELSE '1' END AS SIGNED))")
+			require.NoError(t, err)
+			require.Equal(t, [][]string{{"49"}}, query("SELECT n FROM rowset_kind_source"))
+			_, err = conn.ExecContext(ctx, "SET @numeric_kind_pick = 2")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "INSERT INTO rowset_kind_source VALUES (CAST(CASE WHEN @numeric_kind_pick=1 THEN X'31' ELSE '1' END AS SIGNED))")
+			require.NoError(t, err)
+			require.Equal(t, [][]string{{"49"}, {"1"}}, query("SELECT n FROM rowset_kind_source ORDER BY n DESC"))
+		})
+
+		t.Run("session_variable_assignment_preserves_selected_kind", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "SET @numeric_kind_pick = 1")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "SET @numeric_kind_value = CASE WHEN @numeric_kind_pick=1 THEN X'31' ELSE '1' END")
+			require.NoError(t, err)
+			require.Equal(t, [][]string{{"1", "49", "7"}}, query("SELECT @numeric_kind_value, ABS(@numeric_kind_value), SQRT(@numeric_kind_value)"))
+
+			_, err = conn.ExecContext(ctx, "SET @numeric_kind_pick = 2")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "SET @numeric_kind_value = CASE WHEN @numeric_kind_pick=1 THEN X'31' ELSE '1' END")
+			require.NoError(t, err)
+			require.Equal(t, [][]string{{"1", "1", "1"}}, query("SELECT @numeric_kind_value, ABS(@numeric_kind_value), SQRT(@numeric_kind_value)"))
+		})
+
+		t.Run("prepared_session_variable_assignment_preserves_selected_kind", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "PREPARE numeric_kind_set_stmt FROM 'SET @numeric_kind_value = CASE WHEN ?=1 THEN X''31'' ELSE ''1'' END'")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "SET @numeric_kind_pick = 1")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "EXECUTE numeric_kind_set_stmt USING @numeric_kind_pick")
+			require.NoError(t, err)
+			require.Equal(t, [][]string{{"1", "49", "7"}}, query("SELECT @numeric_kind_value, ABS(@numeric_kind_value), SQRT(@numeric_kind_value)"))
+			_, err = conn.ExecContext(ctx, "SET @numeric_kind_pick = 2")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "EXECUTE numeric_kind_set_stmt USING @numeric_kind_pick")
+			require.NoError(t, err)
+			require.Equal(t, [][]string{{"1", "1", "1"}}, query("SELECT @numeric_kind_value, ABS(@numeric_kind_value), SQRT(@numeric_kind_value)"))
+			_, err = conn.ExecContext(ctx, "DEALLOCATE PREPARE numeric_kind_set_stmt")
+			require.NoError(t, err)
+		})
+
+		t.Run("recursive_cte_preserves_selected_kind", func(t *testing.T) {
+			got := query(`WITH RECURSIVE r(id, v) AS (
+				SELECT 1, X'31'
+				UNION ALL
+				SELECT id+1, '1' FROM r WHERE id < 2
+			) SELECT id, ABS(v), SQRT(v) FROM r ORDER BY id`)
+			require.Equal(t, [][]string{{"1", "49", "7"}, {"2", "1", "1"}}, got)
+		})
+		t.Run("recursive_union_distinct_excludes_kind_passenger", func(t *testing.T) {
+			got := query(`WITH RECURSIVE r(id, v) AS (
+				SELECT 1, X'31'
+				UNION
+				SELECT 1, '1' FROM r WHERE id = 1
+			) SELECT id, ABS(v) FROM r`)
+			require.Equal(t, [][]string{{"1", "49"}}, got)
 		})
 
 		t.Run("integer_oct_maketime_and_cast_consumers", func(t *testing.T) {

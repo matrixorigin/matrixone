@@ -42,6 +42,85 @@ type selectIntoUserVariables struct {
 	rowCount  uint64
 }
 
+// scalarNumericValueKindCapture retains the companion BOOL for the single
+// visible value produced by an internal SET expression SELECT. It deliberately
+// stores only the scalar snapshot; vectors remain owned by the result batch.
+type scalarNumericValueKindCapture struct {
+	mu        sync.Mutex
+	value     bool
+	available bool
+}
+
+func (capture *scalarNumericValueKindCapture) captureBatch(
+	ctx context.Context, query *plan.Query, bat *batch.Batch,
+) error {
+	if bat == nil || query == nil {
+		return nil
+	}
+	if query.StmtType != plan.Query_SELECT || query.HasReturning || len(query.Headings) != 1 {
+		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
+	if err := plan2.ValidateSelectIntoKindLayout(query); err != nil {
+		return moerr.NewInternalErrorf(ctx, "invalid scalar numeric kind layout: %v", err)
+	}
+	step := query.MainOutputStep()
+	if step < 0 || int(step) >= len(query.Steps) {
+		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
+	nodeID := query.Steps[step]
+	if nodeID < 0 || int(nodeID) >= len(query.Nodes) || query.Nodes[nodeID] == nil {
+		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
+	visible := len(query.Headings)
+	projectList := query.Nodes[nodeID].ProjectList
+	if visible > len(projectList) || len(bat.Vecs) != len(projectList) {
+		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
+	kindLayout := query.IntoUserVariableKindColumns
+	if len(kindLayout) != 0 && len(kindLayout) != visible {
+		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
+	passenger := int32(-1)
+	if len(kindLayout) != 0 {
+		passenger = kindLayout[0]
+	}
+	if passenger >= 0 {
+		if passenger < int32(visible) || int(passenger) >= len(bat.Vecs) ||
+			bat.Vecs[passenger] == nil || bat.Vecs[passenger].GetType().Oid != types.T_bool {
+			return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+		}
+	}
+	if bat.RowCount() == 0 {
+		return nil
+	}
+	if bat.Vecs[0] == nil {
+		return moerr.NewWrongNumberOfColumnsInSelect(ctx)
+	}
+	valueIsNull := bat.Vecs[0].IsNull(0)
+	value := false
+	available := passenger >= 0
+	if available && !valueIsNull {
+		kindVector := bat.Vecs[passenger]
+		if !kindVector.IsConstNull() && !kindVector.GetNulls().Contains(0) {
+			value = vector.GetFixedAtNoTypeCheck[bool](kindVector, 0)
+		}
+	}
+	capture.mu.Lock()
+	capture.value = value && !valueIsNull
+	capture.available = available
+	capture.mu.Unlock()
+	return nil
+}
+
+func (capture *scalarNumericValueKindCapture) snapshot() (bool, bool) {
+	if capture == nil {
+		return false, false
+	}
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	return capture.value, capture.available
+}
+
 func newSelectIntoUserVariables(vars []*tree.VarExpr) *selectIntoUserVariables {
 	return &selectIntoUserVariables{vars: vars}
 }
@@ -64,12 +143,51 @@ func validateSelectIntoArity(ctx context.Context, p *plan.Plan, variableCount in
 	return nil
 }
 
+// activeSelectIntoPlan returns the plan generation that produced the current
+// execution result. A prepared execution can rebuild its plan inside Run; the
+// wrapper's published plan is synchronized only after the statement handler
+// returns, so validation immediately after Run must consult the active compile.
+func activeSelectIntoPlan(execCtx *ExecCtx) *plan.Plan {
+	if execCtx == nil || execCtx.cw == nil {
+		return nil
+	}
+	if wrapper, ok := execCtx.cw.(*TxnComputationWrapper); ok && wrapper.compile != nil {
+		return wrapper.compile.GetPlan()
+	}
+	return execCtx.cw.Plan()
+}
+
 func selectIntoUserVariablesOutputCallback(
 	execCtx *ExecCtx,
 	ses FeSession,
 	stmt tree.Statement,
 	fill func(*batch.Batch, *perfcounter.CounterSet) error,
+	currentPlan func() *plan.Plan,
 ) func(*batch.Batch, *perfcounter.CounterSet) error {
+	if capture := execCtx.numericValueKindCapture; capture != nil {
+		return func(bat *batch.Batch, counters *perfcounter.CounterSet) error {
+			if bat == nil {
+				return fill(nil, counters)
+			}
+			if currentPlan == nil {
+				return moerr.NewInternalError(execCtx.reqCtx, "scalar numeric kind capture has no active plan")
+			}
+			current := currentPlan()
+			if current == nil || current.GetQuery() == nil {
+				return moerr.NewInternalError(execCtx.reqCtx, "scalar numeric kind capture has no active query plan")
+			}
+			query := current.GetQuery()
+			if err := capture.captureBatch(execCtx.reqCtx, query, bat); err != nil {
+				return err
+			}
+			visibleBatch := *bat
+			visibleBatch.Vecs = bat.Vecs[:len(query.Headings)]
+			if len(bat.Attrs) >= len(query.Headings) {
+				visibleBatch.Attrs = bat.Attrs[:len(query.Headings)]
+			}
+			return fill(&visibleBatch, counters)
+		}
+	}
 	selectStmt, ok := stmt.(*tree.Select)
 	if !ok || len(selectStmt.IntoVars) == 0 {
 		return fill
@@ -82,8 +200,8 @@ func selectIntoUserVariablesOutputCallback(
 	execCtx.selectInto = collector
 	return func(bat *batch.Batch, _ *perfcounter.CounterSet) error {
 		var kindLayout []int32
-		if execCtx.cw != nil {
-			if current := execCtx.cw.Plan(); current != nil && current.GetQuery() != nil {
+		if currentPlan != nil {
+			if current := currentPlan(); current != nil && current.GetQuery() != nil {
 				query := current.GetQuery()
 				if err := plan2.ValidateSelectIntoKindLayout(query); err != nil {
 					return moerr.NewInternalErrorf(execCtx.reqCtx, "invalid SELECT INTO result kind layout: %v", err)

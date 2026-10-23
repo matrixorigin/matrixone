@@ -25,6 +25,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
+	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec"
 	"github.com/matrixorigin/matrixone/pkg/testutil"
 	"github.com/matrixorigin/matrixone/pkg/vm"
@@ -124,6 +125,37 @@ func TestMergeCTEDistinctFiltersAcrossBatchesAndReset(t *testing.T) {
 	arg.Release()
 	proc.Free()
 	require.Equal(t, int64(0), proc.Mp().CurrNB())
+}
+
+func TestMergeCTEDistinctUsesVisibleKeysAndKeepsPassenger(t *testing.T) {
+	proc := testutil.NewProcessWithOwnedMPool(t, "", mpool.MustNewZero())
+	arg := NewArgument().WithNodeCnt(1).WithDistinct(true)
+	arg.KeyExprs = []*planpb.Expr{{
+		Typ:  planpb.Type{Id: int32(types.T_varchar)},
+		Expr: &planpb.Expr_Col{Col: &planpb.ColRef{RelPos: 0, ColPos: 0}},
+	}}
+	require.NoError(t, arg.Prepare(proc))
+	defer func() {
+		arg.Free(proc, false, nil)
+		arg.Release()
+		proc.Free()
+		require.Equal(t, int64(0), proc.Mp().CurrNB())
+	}()
+
+	input := batch.NewWithSize(2)
+	input.Vecs[0] = vector.NewVec(types.T_varchar.ToType())
+	input.Vecs[1] = vector.NewVec(types.T_bool.ToType())
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("1"), false, proc.Mp()))
+	require.NoError(t, vector.AppendBytes(input.Vecs[0], []byte("1"), false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], true, false, proc.Mp()))
+	require.NoError(t, vector.AppendFixed(input.Vecs[1], false, false, proc.Mp()))
+	input.SetRowCount(2)
+	defer input.Clean(proc.Mp())
+
+	out, err := arg.ctr.cacheBatch(proc, process.NewAnalyzer(0, false, false, "recursive CTE distinct keys"), input)
+	require.NoError(t, err)
+	require.Equal(t, 1, out.RowCount(), "BOOL passenger must not participate in recursive UNION DISTINCT")
+	require.Equal(t, []bool{true}, vector.MustFixedColWithTypeCheck[bool](out.Vecs[1]))
 }
 
 func makeMergeCTEDistinctBatch(

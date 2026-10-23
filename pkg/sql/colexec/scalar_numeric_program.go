@@ -100,7 +100,18 @@ func (expr *scalarNumericProgramRefExecutor) Eval(
 func (expr *scalarNumericProgramRefExecutor) EvalWithoutResultReusing(
 	proc *process.Process, batches []*batch.Batch, selectList []bool,
 ) (*vector.Vector, error) {
-	return expr.Eval(proc, batches, selectList)
+	result, err := expr.Eval(proc, batches, selectList)
+	if err != nil || result == nil {
+		return result, err
+	}
+	// Eval exposes the state-owned cached vector. This interface transfers an
+	// owned result to callers such as merge-order/spill, so return a duplicate
+	// rather than allowing those consumers to free or retain the cache itself.
+	// A selected destination matters when the cache is a borrowed input column.
+	if expr.state.selection != nil {
+		return result.DupOffHeapWithAllocation(proc.Mp(), expr.state.selection)
+	}
+	return result.Dup(proc.Mp())
 }
 
 func (expr *scalarNumericProgramRefExecutor) ResetForNextQuery() {}
@@ -137,13 +148,27 @@ func (expr *scalarNumericProgramRefExecutor) TypeName() string {
 }
 
 func (expr *scalarNumericProgramRefExecutor) numericValueKindAt(row int) bool {
-	if expr.slot == 1 && expr.state.kindRows != nil && row >= 0 && row < expr.state.kindRows.Length() {
-		return vector.MustFixedColWithTypeCheck[bool](expr.state.kindRows)[row]
+	if expr == nil || expr.state == nil || !expr.state.evaluated || row < 0 {
+		return false
 	}
-	if expr.slot == 0 && expr.state.evaluated {
-		return numericValueKindAt(expr.state.value, row)
+	if expr.slot != 0 && expr.slot != 1 {
+		return false
 	}
-	return false
+	if expr.state.valueRows == nil || expr.state.kindRows == nil {
+		return false
+	}
+	if !expr.state.kindRows.IsConst() && row >= expr.state.kindRows.Length() {
+		return false
+	}
+	valueRow := row
+	if expr.state.valueRows.IsConst() {
+		valueRow = 0
+	}
+	if valueRow >= expr.state.valueRows.Length() || expr.state.valueRows.IsNull(uint64(valueRow)) {
+		return false
+	}
+	kind, isNull := vector.GenerateFunctionFixedTypeParameter[bool](expr.state.kindRows).GetValue(uint64(row))
+	return !isNull && kind
 }
 
 // scalarNumericProgramZoneMapConstant admits only a complete CAST9 lexical
@@ -265,8 +290,12 @@ func (state *scalarNumericProgramState) resetEvaluation() {
 	state.evaluated = false
 	state.valueRows = nil
 	state.rowCount = 0
-	state.batches = nil
-	state.selectList = nil
+	// Keep these small per-batch snapshots reusable, but release references to
+	// the previous invocation before the backing arrays are reused.
+	clear(state.batches)
+	state.batches = state.batches[:0]
+	clear(state.selectList)
+	state.selectList = state.selectList[:0]
 	state.nilSelect = false
 }
 

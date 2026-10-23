@@ -494,11 +494,12 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 		Params:              []*planpb.Expr{{AuxId: -3, Expr: &planpb.Expr_P{P: &planpb.ParamRef{Pos: 2}}}},
 		CatalogDependencies: []*planpb.ObjectRef{{SchemaName: "db", ObjName: "dependency"}},
 		HasReturning:        true, ReturningStep: 7, ApplySqlSelectLimit: true,
-		Steps:       []int32{3, 7},
-		Headings:    []string{"id"},
-		LoadTag:     true,
-		LoadWriteS3: true,
-		MaxDop:      8,
+		Steps:                       []int32{3, 7},
+		Headings:                    []string{"id"},
+		IntoUserVariableKindColumns: []int32{2},
+		LoadTag:                     true,
+		LoadWriteS3:                 true,
+		MaxDop:                      8,
 		BackgroundQueries: []*planpb.Query{{
 			StmtType: planpb.Query_SELECT,
 			Headings: []string{"background"},
@@ -530,6 +531,10 @@ func TestDeepCopyQueryPreservesExecutionMetadata(t *testing.T) {
 	require.Equal(t, "t", source.UnresolvedIndexHints[0].Table.ObjName)
 	require.Equal(t, source.Steps, cloned.Steps)
 	require.Equal(t, source.Headings, cloned.Headings)
+	require.Equal(t, source.IntoUserVariableKindColumns, cloned.IntoUserVariableKindColumns)
+	require.NotSame(t, &source.IntoUserVariableKindColumns[0], &cloned.IntoUserVariableKindColumns[0])
+	cloned.IntoUserVariableKindColumns[0] = 3
+	require.Equal(t, int32(2), source.IntoUserVariableKindColumns[0])
 	require.True(t, cloned.LoadTag)
 	require.True(t, cloned.LoadWriteS3)
 	require.Equal(t, int64(8), cloned.MaxDop)

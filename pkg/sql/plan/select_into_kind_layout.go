@@ -15,11 +15,34 @@
 package plan
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 )
+
+type numericValueKindDemandContextKey struct{}
+
+// WithNumericValueKindDemand requests the private BOOL result layout used by
+// internal scalar assignment evaluation. The marker is scoped to a single
+// planning request and is never serialized into the plan.
+func WithNumericValueKindDemand(ctx context.Context) context.Context {
+	if ctx == nil {
+		return nil
+	}
+	return context.WithValue(ctx, numericValueKindDemandContextKey{}, true)
+}
+
+// HasNumericValueKindDemand reports whether this planning request is collecting
+// the selected numeric source kind for an internal scalar assignment.
+func HasNumericValueKindDemand(ctx context.Context) bool {
+	if ctx == nil {
+		return false
+	}
+	demand, _ := ctx.Value(numericValueKindDemandContextKey{}).(bool)
+	return demand
+}
 
 // ValidateSelectIntoKindLayout validates the private physical result layout
 // consumed by SELECT ... INTO. An empty mapping is the legacy exact-width

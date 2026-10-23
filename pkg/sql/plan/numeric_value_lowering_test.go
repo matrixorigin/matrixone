@@ -18,6 +18,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
@@ -138,6 +139,82 @@ func TestNumericValueLoweringKeepsStaticOrdinaryCastIdentities(t *testing.T) {
 			require.Nil(t, findNumericValueFunction(p, function.CAST, function.NumericValueCastOverload))
 		})
 	}
+}
+
+func TestInferredStringDeclarationCastProofIsNarrowAndTransient(t *testing.T) {
+	source := makePlan2StringConstExprWithType("1")
+	target := types.T_text.ToType()
+	cast, err := appendExplicitCastBeforeExpr(context.Background(), source, makePlan2Type(&target))
+	require.NoError(t, err)
+	require.True(t, markInferredStringDeclarationCast(cast))
+	require.True(t, isInferredStringDeclarationCast(cast))
+
+	clonedMetadata := copyPreparedNumericMetadata(cast.PreparedNumeric)
+	require.True(t, clonedMetadata.GetInferredStringDeclarationCast())
+
+	explicit := DeepCopyExpr(cast)
+	markSyntaxExplicitCast(explicit)
+	require.False(t, isInferredStringDeclarationCast(explicit), "SQL CAST syntax remains an authoritative boundary")
+
+	legacy := DeepCopyExpr(cast)
+	legacy.PreparedNumeric = nil
+	require.False(t, isInferredStringDeclarationCast(legacy), "unmarked CAST1 keeps legacy boundary behavior")
+
+	query := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: []*Expr{cast}}}}
+	require.NoError(t, stripInferredStringDeclarationCastProofs(query))
+	require.False(t, isInferredStringDeclarationCast(query.Nodes[0].ProjectList[0]))
+	features, err := planpb.RequiredRemoteExpressionFeatures(query)
+	require.NoError(t, err)
+	require.False(t, features.NumericValuePrograms, "a proof on an unused string cast must not raise the protocol floor")
+}
+
+func TestNumericValueProgramSelectorOwnerRebindIsIdempotent(t *testing.T) {
+	ctx := context.Background()
+	hex := makePlan2StringConstExprWithType("1", true)
+	target := types.T_varchar.ToType()
+	inferred, err := appendExplicitCastBeforeExpr(ctx, hex, makePlan2Type(&target))
+	require.NoError(t, err)
+	require.True(t, markInferredStringDeclarationCast(inferred))
+	selector, err := BindFuncExprImplByPlanExpr(ctx, "case", []*Expr{
+		makePlan2BoolConstExprWithType(true), inferred, makePlan2StringConstExprWithType("1"),
+	})
+	require.NoError(t, err)
+
+	valueRef, kindRef, err := makeNumericValueProgramOutputs(ctx, selector)
+	require.NoError(t, err)
+	duplicateRef := DeepCopyExpr(valueRef)
+	initialScope, ok := numericProgramRefScope(valueRef)
+	require.True(t, ok)
+	kindScope, ok := numericProgramRefScope(kindRef)
+	require.True(t, ok)
+	require.Equal(t, initialScope, kindScope)
+
+	mock := NewMockOptimizer(false, newPlanTestProcess(t))
+	lowerer := &numericValueKindLowerer{builder: &QueryBuilder{compCtx: &mock.ctxt}}
+	require.NoError(t, lowerer.rewriteExpression(&valueRef))
+	firstPass := DeepCopyExpr(valueRef)
+	firstScopeCounter := nextNumericValueProgramScope.Load()
+	require.NoError(t, lowerer.rewriteExpression(&duplicateRef))
+	require.True(t, proto.Equal(valueRef, duplicateRef), "copies of one lexical owner must reuse identical paired child scopes")
+	require.Equal(t, firstScopeCounter, nextNumericValueProgramScope.Load(), "a copied owner must reuse the first transformed definition")
+
+	definition := valueRef.GetF().Args[0].GetF()
+	require.NotNil(t, definition)
+	require.Len(t, definition.Args, 2, "the validated owner keeps its original two-argument definition")
+	pairedLeaf := false
+	require.NoError(t, planpb.VisitExprTree(definition.Args[1], func(expr *Expr) error {
+		if raw, ok := numericProgramRawValue(expr); ok && len(expr.GetF().Args[0].GetF().Args) == 3 {
+			require.NotNil(t, raw)
+			pairedLeaf = true
+		}
+		return nil
+	}))
+	require.True(t, pairedLeaf, "the selector leaf must be rebound to a same-owner value reference")
+	require.True(t, proto.Equal(firstPass, valueRef))
+
+	require.NoError(t, lowerer.rewriteExpression(&valueRef))
+	require.True(t, proto.Equal(firstPass, valueRef), "a second lowering pass must preserve the complete owner tree")
+	require.Equal(t, firstScopeCounter, nextNumericValueProgramScope.Load(), "a second pass must allocate no new program scopes")
 }
 
 func TestNumericValueLoweringUsesOnlyFrozenPreparedTextKind(t *testing.T) {

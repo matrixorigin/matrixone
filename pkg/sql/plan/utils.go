@@ -1580,19 +1580,54 @@ func copyPreparedNumericMetadata(metadata *plan.PreparedNumericMetadata) *plan.P
 		return nil
 	}
 	return &plan.PreparedNumericMetadata{
-		Fallback:                    metadata.Fallback,
-		ParamPos:                    metadata.ParamPos,
-		FallbackSource:              metadata.FallbackSource,
-		FallbackSourceNodeId:        metadata.FallbackSourceNodeId,
-		FallbackSourceColPos:        metadata.FallbackSourceColPos,
-		ProvisionalResultCast:       metadata.ProvisionalResultCast,
-		ProvisionalResultPeer:       metadata.ProvisionalResultPeer,
-		ProvisionalResultPeerTypeId: metadata.ProvisionalResultPeerTypeId,
-		ProvisionalResultPeerWidth:  metadata.ProvisionalResultPeerWidth,
-		ProvisionalResultPeerScale:  metadata.ProvisionalResultPeerScale,
-		StringDomainSource:          DeepCopyExpr(metadata.StringDomainSource),
-		IfnullCommonValue:           metadata.IfnullCommonValue,
-		ProjectedCommonValue:        metadata.ProjectedCommonValue,
+		Fallback:                      metadata.Fallback,
+		ParamPos:                      metadata.ParamPos,
+		FallbackSource:                metadata.FallbackSource,
+		FallbackSourceNodeId:          metadata.FallbackSourceNodeId,
+		FallbackSourceColPos:          metadata.FallbackSourceColPos,
+		ProvisionalResultCast:         metadata.ProvisionalResultCast,
+		ProvisionalResultPeer:         metadata.ProvisionalResultPeer,
+		ProvisionalResultPeerTypeId:   metadata.ProvisionalResultPeerTypeId,
+		ProvisionalResultPeerWidth:    metadata.ProvisionalResultPeerWidth,
+		ProvisionalResultPeerScale:    metadata.ProvisionalResultPeerScale,
+		StringDomainSource:            DeepCopyExpr(metadata.StringDomainSource),
+		IfnullCommonValue:             metadata.IfnullCommonValue,
+		ProjectedCommonValue:          metadata.ProjectedCommonValue,
+		InferredStringDeclarationCast: metadata.InferredStringDeclarationCast,
+	}
+}
+
+// markInferredStringDeclarationCast records only the binder-owned string
+// normalization whose result preserves the selected source kind for numeric
+// consumers. Keep the marker behind the existing sparse metadata pointer.
+func markInferredStringDeclarationCast(expr *plan.Expr) bool {
+	shape := isInferredStringDeclarationCastShape(expr)
+	if !shape {
+		return false
+	}
+	ensurePreparedNumericMetadata(expr).InferredStringDeclarationCast = true
+	return true
+}
+
+func isInferredStringDeclarationCast(expr *plan.Expr) bool {
+	return expr != nil && expr.GetPreparedNumeric().GetInferredStringDeclarationCast() &&
+		isInferredStringDeclarationCastShape(expr)
+}
+
+func isInferredStringDeclarationCastShape(expr *plan.Expr) bool {
+	if expr == nil || expr.GetF() == nil || expr.GetF().Func == nil || expr.GetF().SyntaxExplicitCast ||
+		len(expr.GetF().Args) != 2 || expr.GetF().Args[0] == nil || expr.GetF().Args[1] == nil {
+		return false
+	}
+	fid, overload := function.DecodeOverloadID(expr.GetF().Func.GetObj())
+	return fid == function.CAST && overload == 1 &&
+		types.T(expr.Typ.Id).IsMySQLString() && types.T(expr.GetF().Args[0].Typ.Id).IsMySQLString() &&
+		expr.GetF().Args[1].Typ.Id == expr.Typ.Id
+}
+
+func markSyntaxExplicitCast(expr *plan.Expr) {
+	if fn := expr.GetF(); fn != nil && fn.Func != nil && fn.Func.GetObjName() == "cast" {
+		fn.SyntaxExplicitCast = true
 	}
 }
 

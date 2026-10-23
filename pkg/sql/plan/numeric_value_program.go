@@ -117,16 +117,19 @@ func numericValueMayCarrySelectedKind(expr *Expr) bool {
 	if f == nil || f.Func == nil {
 		return true
 	}
+	fid, overload := function.DecodeOverloadID(f.Func.GetObj())
 	name := strings.ToLower(f.Func.GetObjName())
-	if name == "cast" {
-		if f.SyntaxExplicitCast || len(f.Args) != 2 || f.Args[0] == nil ||
+	if fid == function.CAST {
+		if isInferredStringDeclarationCast(expr) {
+			return numericValueMayCarrySelectedKind(f.Args[0])
+		}
+		if overload != 0 || f.SyntaxExplicitCast || len(f.Args) != 2 || f.Args[0] == nil ||
 			!types.T(expr.Typ.Id).IsMySQLString() || !types.T(f.Args[0].Typ.Id).IsMySQLString() {
 			return false
 		}
 		return numericValueMayCarrySelectedKind(f.Args[0])
 	}
 
-	fid, _ := function.DecodeOverloadID(f.Func.GetObj())
 	if fid == function.SCALAR_PROGRAM_REF {
 		_, slot, ok := numericProgramRefIdentity(expr)
 		if !ok {
@@ -138,7 +141,7 @@ func numericValueMayCarrySelectedKind(expr *Expr) bool {
 		if raw, ok := numericProgramRawValue(expr); ok {
 			definition := f.Args[0].GetF()
 			if definition != nil && len(definition.Args) == 3 {
-				return numericValueMayCarrySelectedKind(definition.Args[2])
+				return !isFalseBoolLiteral(definition.Args[2])
 			}
 			return numericValueMayCarrySelectedKind(raw)
 		}
@@ -146,7 +149,7 @@ func numericValueMayCarrySelectedKind(expr *Expr) bool {
 	}
 	if fid == function.SCALAR_PROGRAM {
 		if len(f.Args) == 3 {
-			return numericValueMayCarrySelectedKind(f.Args[2])
+			return !isFalseBoolLiteral(f.Args[2])
 		}
 		if len(f.Args) == 2 {
 			return numericValueMayCarrySelectedKind(f.Args[1])
@@ -392,6 +395,22 @@ func numericValueProgramDefinition(scope int64, raw, sourceKind *Expr) *Expr {
 			Args: args,
 		}},
 	}
+}
+
+// stripInferredStringDeclarationCastProofs removes binder-only ownership
+// proofs once the final demand pass has either consumed them or established
+// that the query does not need a numeric kind companion. The cast itself
+// remains unchanged in the published plan.
+func stripInferredStringDeclarationCastProofs(owner any) error {
+	return planpb.VisitExpressionsInOwner(owner, func(root *Expr) error {
+		return planpb.VisitExprTree(root, func(expr *Expr) error {
+			metadata := expr.GetPreparedNumeric()
+			if metadata != nil {
+				metadata.InferredStringDeclarationCast = false
+			}
+			return nil
+		})
+	})
 }
 
 // appendNumericValueCastWithKind consumes a raw value and its paired semantic

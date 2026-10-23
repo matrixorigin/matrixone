@@ -297,6 +297,10 @@ message PreparedNumericMetadata {
   // A selector inlined from a projected column owns its reconciled result
   // domain; integer consumers must not reinterpret its individual arms.
   bool projected_common_value = 13;
+  // Marks only a binder-inferred CAST1 that normalizes a string source to a
+  // selected string declaration. Numeric kind lowering may carry the source
+  // kind across that conversion without changing the CAST's runtime behavior.
+  bool inferred_string_declaration_cast = 14;
 }
 
 message Expr {
@@ -356,6 +360,10 @@ message CorrelationProgram {
   int32 root_node = 1;
   repeated Type input_types = 2 [(gogoproto.nullable) = false];
   repeated Type output_types = 3 [(gogoproto.nullable) = false];
+  // A scalar dependent result may carry its selected numeric string kind in
+  // one ordinary BOOL passenger column. Zero preserves the legacy one-column
+  // scalar result layout; one identifies physical column 1 as the passenger.
+  uint32 scalar_result_kind_column = 4;
 }
 
 message CorrelationStage {

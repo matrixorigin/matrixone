@@ -4584,6 +4584,9 @@ func (builder *QueryBuilder) createQuery() (*Query, error) {
 	if err := ValidateSelectIntoKindLayout(builder.qry); err != nil {
 		return nil, moerr.NewInternalErrorf(builder.GetContext(), "invalid SELECT INTO result kind layout: %v", err)
 	}
+	if err := stripInferredStringDeclarationCastProofs(builder.qry); err != nil {
+		return nil, err
+	}
 	return builder.qry, nil
 }
 

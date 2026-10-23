@@ -1225,7 +1225,11 @@ type ExecCtx struct {
 	resultMetadata    *deferredResultMetadata
 	returning         *returningState
 	selectInto        *selectIntoUserVariables
-	isIssue3482       bool
+	// numericValueKindCapture is scoped to one internal scalar SELECT used by
+	// SET evaluation. The output callback copies its paired BOOL into this
+	// capture before forwarding only the visible result columns.
+	numericValueKindCapture *scalarNumericValueKindCapture
+	isIssue3482             bool
 	// remapDb is the effective database remap (role/session/inline merged) for
 	// this statement. It is applied at the AST level to qualified references by
 	// applyRemapDb, and to the current database (for unqualified references) by
@@ -1329,6 +1333,7 @@ func (execCtx *ExecCtx) Close() {
 	execCtx.prepareColDef = nil
 	execCtx.resultMetadata = nil
 	execCtx.selectInto = nil
+	execCtx.numericValueKindCapture = nil
 	execCtx.rewriteEnabled = false
 }
 

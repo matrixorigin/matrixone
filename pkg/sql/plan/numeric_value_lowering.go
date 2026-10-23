@@ -15,6 +15,9 @@
 package plan
 
 import (
+	"strings"
+
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -26,20 +29,54 @@ import (
 // the plan owner that produces it. The kind is an ordinary BOOL expression;
 // no vector or batch metadata crosses a relational boundary.
 type numericValueKindLowerer struct {
-	builder      *QueryBuilder
-	pairs        map[[2]int32]*Expr
-	active       map[[2]int32]bool
-	parents      [][]int32
-	distinctKeys map[int32][]*Expr
+	builder        *QueryBuilder
+	pairs          map[[2]int32]*Expr
+	active         map[[2]int32]bool
+	parents        [][]int32
+	distinctKeys   map[int32][]*Expr
+	programs       map[int64]numericValueProgramRebinding
+	recursive      map[int32]*recursiveNumericKindLayout
+	slotKinds      map[[2]uint32]uint32
+	slotKindActive map[[2]uint32]bool
+}
+
+type numericValueProgramRebinding struct {
+	source *Expr
+	bound  *Expr
+}
+
+type recursiveNumericKindLayout struct {
+	visibleColumns int
+	kindColumns    map[int32]int32
+}
+
+type numericValueLoweringRule struct {
+	lowerer *numericValueKindLowerer
+}
+
+func (numericValueLoweringRule) MatchNode(*Node) bool { return false }
+func (numericValueLoweringRule) IsApplyExpr() bool    { return true }
+func (numericValueLoweringRule) ApplyNode(*Node) error {
+	return nil
+}
+
+func (rule numericValueLoweringRule) ApplyExpr(expr *Expr) (*Expr, error) {
+	if err := rule.lowerer.rewriteExpression(&expr); err != nil {
+		return nil, err
+	}
+	return expr, nil
 }
 
 func (builder *QueryBuilder) lowerNumericValueKinds() error {
 	l := &numericValueKindLowerer{
-		builder:      builder,
-		pairs:        make(map[[2]int32]*Expr),
-		active:       make(map[[2]int32]bool),
-		parents:      make([][]int32, len(builder.qry.Nodes)),
-		distinctKeys: make(map[int32][]*Expr),
+		builder:        builder,
+		pairs:          make(map[[2]int32]*Expr),
+		active:         make(map[[2]int32]bool),
+		parents:        make([][]int32, len(builder.qry.Nodes)),
+		distinctKeys:   make(map[int32][]*Expr),
+		recursive:      make(map[int32]*recursiveNumericKindLayout),
+		slotKinds:      make(map[[2]uint32]uint32),
+		slotKindActive: make(map[[2]uint32]bool),
 	}
 	for nodeID, node := range builder.qry.Nodes {
 		if node == nil {
@@ -57,57 +94,14 @@ func (builder *QueryBuilder) lowerNumericValueKinds() error {
 			}
 		}
 	}
-	for nodeID := range builder.qry.Nodes {
-		node := builder.qry.Nodes[nodeID]
+	visitor := &VisitPlan{isUpdatePlan: builder.qry.StmtType == planpb.Query_UPDATE}
+	rule := numericValueLoweringRule{lowerer: l}
+	for nodeID, node := range builder.qry.Nodes {
 		if node == nil {
 			continue
 		}
-		for i := range node.ProjectList {
-			if err := l.rewriteExpression(&node.ProjectList[i]); err != nil {
-				return err
-			}
-		}
-		for i := range node.GroupBy {
-			if err := l.rewriteExpression(&node.GroupBy[i]); err != nil {
-				return err
-			}
-		}
-		for i := range node.AggList {
-			if err := l.rewriteExpression(&node.AggList[i]); err != nil {
-				return err
-			}
-		}
-		for i := range node.FilterList {
-			if err := l.rewriteExpression(&node.FilterList[i]); err != nil {
-				return err
-			}
-		}
-		for i := range node.OnList {
-			if err := l.rewriteExpression(&node.OnList[i]); err != nil {
-				return err
-			}
-		}
-		for i := range node.PhysicalEqualityKeyList {
-			if err := l.rewriteExpression(&node.PhysicalEqualityKeyList[i]); err != nil {
-				return err
-			}
-		}
-		for i := range node.TblFuncExprList {
-			if err := l.rewriteExpression(&node.TblFuncExprList[i]); err != nil {
-				return err
-			}
-		}
-		for i := range node.WinSpecList {
-			if err := l.rewriteExpression(&node.WinSpecList[i]); err != nil {
-				return err
-			}
-		}
-		for i := range node.OrderBy {
-			if node.OrderBy[i] != nil {
-				if err := l.rewriteExpression(&node.OrderBy[i].Expr); err != nil {
-					return err
-				}
-			}
+		if err := visitor.exploreNode(builder.GetContext(), rule, node, int32(nodeID)); err != nil {
+			return err
 		}
 	}
 	if builder.intoUserVariableKindDemand && len(builder.qry.IntoUserVariableKindColumns) == 0 {
@@ -116,6 +110,32 @@ func (builder *QueryBuilder) lowerNumericValueKinds() error {
 		}
 	}
 	return nil
+}
+
+// NumericValueProgramOutputsForScalar binds selected string leaves for an
+// internal scalar consumer and returns the raw value plus its same-evaluation
+// BOOL kind. It is for local frontend evaluation of SET expressions, not a
+// substitute for lowering relational columns in a query plan.
+func NumericValueProgramOutputsForScalar(
+	ctx CompilerContext, source *Expr,
+) (raw, kind *Expr, paired bool, err error) {
+	if ctx == nil || source == nil {
+		return nil, nil, false, moerr.NewInvalidInputNoCtx("scalar numeric value source is nil")
+	}
+	builder := NewQueryBuilder(planpb.Query_SELECT, ctx, true, true)
+	lowerer := &numericValueKindLowerer{builder: builder}
+	bound, err := lowerer.bindNumericValueLeaves(source)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	if existingKind, ok := scalarNumericProgramKindRef(bound); ok {
+		return bound, existingKind, true, nil
+	}
+	raw, kind, err = makeNumericValueProgramOutputs(builder.GetContext(), bound)
+	if err != nil {
+		return nil, nil, false, err
+	}
+	return raw, kind, !isFalseBoolLiteral(kind), nil
 }
 
 // lowerSelectIntoResultKinds appends ordinary BOOL passengers to the active
@@ -170,7 +190,11 @@ func (builder *QueryBuilder) lowerSelectIntoResultKinds(l *numericValueKindLower
 			lit := expr.GetLit()
 			kind = makePlan2BoolConstExprWithType(!lit.Isnull && lit.GetIsBin())
 		default:
-			raw, kind, err = makeNumericValueProgramOutputs(builder.GetContext(), expr)
+			bound, bindErr := l.bindNumericValueLeaves(expr)
+			if bindErr != nil {
+				return bindErr
+			}
+			raw, kind, err = makeNumericValueProgramOutputs(builder.GetContext(), bound)
 		}
 		if err != nil {
 			return err
@@ -244,6 +268,43 @@ func (l *numericValueKindLowerer) rewriteExpressionScoped(
 	if f := (*expr).GetF(); f != nil {
 		if f.Func != nil {
 			fid, oid := function.DecodeOverloadID(f.Func.Obj)
+			if fid == function.SCALAR_PROGRAM_REF && numericProgramDefinitionMatchesRef(*expr) {
+				if raw, ok := numericProgramRawValue(*expr); ok {
+					definition := f.Args[0].GetF()
+					if definition != nil && len(definition.Args) == 2 {
+						// Rebind the existing lexical owner in place. Its attached
+						// REF0 and sibling REF1 must keep the same scope; wrapping the
+						// raw selector in another program would replay it and recurse
+						// through a fresh two-argument definition on every pass.
+						scope, _ := numericProgramRefScope(*expr)
+						if l.programs == nil {
+							l.programs = make(map[int64]numericValueProgramRebinding)
+						}
+						program, exists := l.programs[scope]
+						if exists && !proto.Equal(program.source, raw) && !proto.Equal(program.bound, raw) {
+							return moerr.NewInternalError(l.builder.GetContext(), "numeric value program scope has conflicting definitions")
+						}
+						bound := program.bound
+						if !exists {
+							var err error
+							bound, err = l.bindNumericValueLeaves(raw)
+							if err != nil {
+								return err
+							}
+							l.programs[scope] = numericValueProgramRebinding{
+								source: DeepCopyExpr(raw),
+								bound:  DeepCopyExpr(bound),
+							}
+						}
+						updated, err := l.replaceNumericProgramRawSource(*expr, bound)
+						if err != nil {
+							return err
+						}
+						*expr = updated
+						f = (*expr).GetF()
+					}
+				}
+			}
 			if allowFrozenPreparedTextKind && fid == function.CAST &&
 				oid == function.NumericValueCastOverload && !f.SyntaxExplicitCast {
 				restored, changed, err := l.restoreFrozenTextComparisonCast(*expr)
@@ -422,6 +483,19 @@ func (l *numericValueKindLowerer) rewriteExpressionScoped(
 				return err
 			}
 		}
+		return nil
+	}
+	if sub := (*expr).GetSub(); sub != nil {
+		return l.rewriteExpressionScoped(&sub.Child, false, false)
+	}
+	if (*expr).GetW() != nil {
+		_, err := applyWindowExpr(*expr, func(child *Expr) (*Expr, error) {
+			if err := l.rewriteExpressionScoped(&child, false, false); err != nil {
+				return nil, err
+			}
+			return child, nil
+		})
+		return err
 	}
 	return nil
 }
@@ -490,9 +564,35 @@ func isTemporalNumericKindTarget(target types.T) bool {
 func (l *numericValueKindLowerer) numericArgumentProgramOutputs(
 	source *Expr, allowFrozenPreparedTextKind bool,
 ) (*Expr, *Expr, error) {
+	if slot := source.GetSlot(); slot != nil {
+		kind, err := l.kindForCorrelationSlot(slot)
+		return DeepCopyExpr(source), kind, err
+	}
+	if call := source.GetDependent(); call != nil {
+		paired, err := l.ensureDependentScalarResultKind(call)
+		if err != nil {
+			return nil, nil, err
+		}
+		if !paired {
+			return DeepCopyExpr(source), makePlan2BoolConstExprWithType(false), nil
+		}
+		return makeNumericValueProgramOutputs(l.builder.GetContext(), source)
+	}
 	if raw, ok := numericProgramRawValue(source); ok {
 		if scope, scopeOK := numericProgramRefScope(source); scopeOK {
-			return DeepCopyExpr(raw), scalarNumericProgramRef(scope, 1, makeSimplePlan2Type(types.T_bool)), nil
+			definition := source.GetF().Args[0].GetF()
+			if definition != nil && len(definition.Args) == 2 {
+				bound, err := l.bindNumericValueLeaves(raw)
+				if err != nil {
+					return nil, nil, err
+				}
+				pairedValue, err := l.replaceNumericProgramRawSource(source, bound)
+				if err != nil {
+					return nil, nil, err
+				}
+				return pairedValue, scalarNumericProgramRef(scope, 1, makeSimplePlan2Type(types.T_bool)), nil
+			}
+			return DeepCopyExpr(source), scalarNumericProgramRef(scope, 1, makeSimplePlan2Type(types.T_bool)), nil
 		}
 	}
 	if col := source.GetCol(); col != nil && col.RelPos >= 0 {
@@ -505,7 +605,272 @@ func (l *numericValueKindLowerer) numericArgumentProgramOutputs(
 	if allowFrozenPreparedTextKind && l.preparedParamKindFrozenFalse(source) {
 		return DeepCopyExpr(source), makePlan2BoolConstExprWithType(false), nil
 	}
-	return makeNumericValueProgramOutputs(l.builder.GetContext(), source)
+	bound, err := l.bindNumericValueLeaves(source)
+	if err != nil {
+		return nil, nil, err
+	}
+	return makeNumericValueProgramOutputs(l.builder.GetContext(), bound)
+}
+
+func (l *numericValueKindLowerer) kindForCorrelationSlot(slot *planpb.CorrelationSlot) (*Expr, error) {
+	if slot == nil || l.builder.qry.Correlation == nil || slot.ProgramId == 0 ||
+		int(slot.ProgramId) > len(l.builder.qry.Correlation.Programs) {
+		return makePlan2BoolConstExprWithType(false), nil
+	}
+	key := [2]uint32{slot.ProgramId, slot.Ordinal}
+	program := l.builder.qry.Correlation.Programs[slot.ProgramId-1]
+	if int(slot.Ordinal) >= len(program.InputTypes) {
+		return nil, moerr.NewInvalidInput(l.builder.GetContext(), "numeric kind demand references an invalid correlation slot")
+	}
+	if kindOrdinal, ok := l.slotKinds[key]; ok {
+		return &Expr{Typ: *DeepCopyType(&program.InputTypes[kindOrdinal]), Expr: &planpb.Expr_Slot{Slot: &planpb.CorrelationSlot{
+			ProgramId: slot.ProgramId, Ordinal: kindOrdinal,
+		}}}, nil
+	}
+	if l.slotKindActive[key] {
+		return nil, moerr.NewInvalidInput(l.builder.GetContext(), "cyclic correlation numeric kind demand")
+	}
+	l.slotKindActive[key] = true
+	defer delete(l.slotKindActive, key)
+
+	type inputOwner struct {
+		call   *planpb.DependentExpr
+		kind   *Expr
+		paired bool
+	}
+	var owners []inputOwner
+	seen := make(map[*planpb.DependentExpr]struct{})
+	for _, node := range l.builder.qry.Nodes {
+		if node == nil {
+			continue
+		}
+		if err := planpb.VisitExpressionsInOwner(node, func(root *Expr) error {
+			return planpb.VisitExprTree(root, func(expr *Expr) error {
+				call := expr.GetDependent()
+				if call == nil || call.ProgramId != slot.ProgramId {
+					return nil
+				}
+				if _, exists := seen[call]; exists {
+					return nil
+				}
+				seen[call] = struct{}{}
+				if int(slot.Ordinal) >= len(call.Inputs) || !proto.Equal(&call.Inputs[slot.Ordinal].Typ, &program.InputTypes[slot.Ordinal]) {
+					return moerr.NewInvalidInput(l.builder.GetContext(), "numeric kind demand has an inconsistent correlation input")
+				}
+				_, kind, err := l.numericArgumentProgramOutputs(call.Inputs[slot.Ordinal], false)
+				if err != nil {
+					return err
+				}
+				owners = append(owners, inputOwner{call: call, kind: kind, paired: !isFalseBoolLiteral(kind)})
+				return nil
+			})
+		}); err != nil {
+			return nil, err
+		}
+	}
+	if len(owners) == 0 {
+		return nil, moerr.NewInvalidInput(l.builder.GetContext(), "numeric kind demand has no correlation call site")
+	}
+	anyPaired := false
+	for _, owner := range owners {
+		anyPaired = anyPaired || owner.paired
+	}
+	if !anyPaired {
+		return makePlan2BoolConstExprWithType(false), nil
+	}
+	if uint64(len(program.InputTypes)) >= uint64(^uint32(0)) {
+		return nil, moerr.NewOOM(l.builder.GetContext())
+	}
+	kindOrdinal := uint32(len(program.InputTypes))
+	kindType := makeSimplePlan2Type(types.T_bool)
+	for _, owner := range owners {
+		kind := owner.kind
+		if !owner.paired {
+			kind = makePlan2BoolConstExprWithType(false)
+		}
+		if kind == nil || types.T(kind.Typ.Id) != types.T_bool {
+			return nil, moerr.NewInvalidInput(l.builder.GetContext(), "correlation numeric kind input is not BOOL")
+		}
+		kind = DeepCopyExpr(kind)
+		kind.Typ = kindType
+		owner.call.Inputs = append(owner.call.Inputs, kind)
+	}
+	program.InputTypes = append(program.InputTypes, kindType)
+	l.slotKinds[key] = kindOrdinal
+	return &Expr{Typ: kindType, Expr: &planpb.Expr_Slot{Slot: &planpb.CorrelationSlot{
+		ProgramId: slot.ProgramId, Ordinal: kindOrdinal,
+	}}}, nil
+}
+
+func (l *numericValueKindLowerer) ensureDependentScalarResultKind(call *planpb.DependentExpr) (bool, error) {
+	if call == nil || call.Reducer != planpb.SubqueryRef_SCALAR || call.Comparison != nil ||
+		call.ProgramId == 0 || l.builder.qry.Correlation == nil ||
+		int(call.ProgramId) > len(l.builder.qry.Correlation.Programs) {
+		return false, nil
+	}
+	program := l.builder.qry.Correlation.Programs[call.ProgramId-1]
+	if program.ScalarResultKindColumn == 1 {
+		if len(program.OutputTypes) != 2 || types.T(program.OutputTypes[1].Id) != types.T_bool {
+			return false, moerr.NewInvalidInput(l.builder.GetContext(), "invalid dependent scalar numeric kind layout")
+		}
+		return true, nil
+	}
+	if program.ScalarResultKindColumn != 0 || len(program.OutputTypes) != 1 {
+		return false, moerr.NewInvalidInput(l.builder.GetContext(), "dependent scalar cannot carry a numeric kind")
+	}
+	if program.RootNode < 0 || int(program.RootNode) >= len(l.builder.qry.Nodes) || l.builder.qry.Nodes[program.RootNode] == nil {
+		return false, moerr.NewInvalidInput(l.builder.GetContext(), "dependent scalar has an invalid result owner")
+	}
+	root := l.builder.qry.Nodes[program.RootNode]
+	if len(root.ProjectList) != 1 {
+		return false, moerr.NewInvalidInput(l.builder.GetContext(), "dependent scalar result is not one visible column")
+	}
+	tag := int32(0)
+	if len(root.BindingTags) > 0 {
+		tag = root.BindingTags[0]
+	}
+	kind, err := l.kindForNodeOutput(program.RootNode, tag, 0)
+	if err != nil || isFalseBoolLiteral(kind) {
+		return false, err
+	}
+	if len(root.ProjectList) == 1 {
+		root.ProjectList = append(root.ProjectList, DeepCopyExpr(kind))
+	} else if len(root.ProjectList) != 2 || types.T(root.ProjectList[1].Typ.Id) != types.T_bool {
+		return false, moerr.NewInvalidInput(l.builder.GetContext(), "dependent scalar result kind changed output arity")
+	}
+	kindType := makeSimplePlan2Type(types.T_bool)
+	root.ProjectList[1].Typ = kindType
+	program.OutputTypes = append(program.OutputTypes, kindType)
+	program.ScalarResultKindColumn = 1
+	return true, nil
+}
+
+// bindNumericValueLeaves attaches already-produced BOOL companions only at
+// value-preserving selector leaves. Conditions and ordinary allocating
+// functions stay in the original tree, so this never re-evaluates a branch or
+// carries provenance through a new string value.
+func (l *numericValueKindLowerer) bindNumericValueLeaves(source *Expr) (*Expr, error) {
+	if source == nil {
+		return nil, nil
+	}
+	if slot := source.GetSlot(); slot != nil &&
+		(types.T(source.Typ.Id).IsMySQLString() || types.T(source.Typ.Id) == types.T_any) {
+		raw, kind, err := l.numericArgumentProgramOutputs(source, false)
+		if err != nil || isFalseBoolLiteral(kind) {
+			return raw, err
+		}
+		paired, _, err := makeNumericValueProgramOutputsWithKind(l.builder.GetContext(), raw, kind)
+		return paired, err
+	}
+	if call := source.GetDependent(); call != nil {
+		paired, err := l.ensureDependentScalarResultKind(call)
+		if err != nil || !paired {
+			return DeepCopyExpr(source), err
+		}
+		return DeepCopyExpr(source), nil
+	}
+	if col := source.GetCol(); col != nil && col.RelPos >= 0 &&
+		(types.T(source.Typ.Id).IsMySQLString() || types.T(source.Typ.Id) == types.T_any) {
+		kind, err := l.kindForGlobalColumn(col.RelPos, col.ColPos)
+		if err != nil {
+			return nil, err
+		}
+		if isFalseBoolLiteral(kind) {
+			return DeepCopyExpr(source), nil
+		}
+		value, _, err := makeNumericValueProgramOutputsWithKind(l.builder.GetContext(), source, kind)
+		return value, err
+	}
+
+	f := source.GetF()
+	if f == nil || f.Func == nil {
+		return DeepCopyExpr(source), nil
+	}
+	fid, overload := function.DecodeOverloadID(f.Func.GetObj())
+	if fid == function.SCALAR_PROGRAM_REF {
+		if raw, ok := numericProgramRawValue(source); ok {
+			definition := f.Args[0].GetF()
+			if definition != nil && len(definition.Args) == 2 {
+				bound, err := l.bindNumericValueLeaves(raw)
+				if err != nil {
+					return nil, err
+				}
+				return l.replaceNumericProgramRawSource(source, bound)
+			}
+		}
+		return DeepCopyExpr(source), nil
+	}
+
+	name := strings.ToLower(f.Func.GetObjName())
+	if fid == function.CAST {
+		if isInferredStringDeclarationCast(source) {
+			value, kind, err := l.numericArgumentProgramOutputs(f.Args[0], false)
+			if err != nil {
+				return nil, err
+			}
+			cast := DeepCopyExpr(source)
+			cast.GetF().Args[0] = value
+			if isFalseBoolLiteral(kind) {
+				return cast, nil
+			}
+			paired, _, err := makeNumericValueProgramOutputsWithKind(l.builder.GetContext(), cast, kind)
+			return paired, err
+		}
+		if overload != 0 || f.SyntaxExplicitCast || len(f.Args) != 2 || f.Args[0] == nil ||
+			!types.T(source.Typ.Id).IsMySQLString() || !types.T(f.Args[0].Typ.Id).IsMySQLString() {
+			return DeepCopyExpr(source), nil
+		}
+		bound, err := l.bindNumericValueLeaves(f.Args[0])
+		if err != nil {
+			return nil, err
+		}
+		copy := DeepCopyExpr(source)
+		copy.GetF().Args[0] = bound
+		return copy, nil
+	}
+
+	indexes := controlFlowValueIndexes(name, len(f.Args))
+	switch name {
+	case "ifnull":
+		if len(f.Args) == 2 {
+			indexes = []int{0, 1}
+		}
+	case "nullif":
+		if len(f.Args) > 0 {
+			indexes = []int{0}
+		}
+	}
+	if len(indexes) == 0 {
+		return DeepCopyExpr(source), nil
+	}
+	copy := DeepCopyExpr(source)
+	for _, index := range indexes {
+		if index < 0 || index >= len(f.Args) || f.Args[index] == nil {
+			return DeepCopyExpr(source), nil
+		}
+		bound, err := l.bindNumericValueLeaves(f.Args[index])
+		if err != nil {
+			return nil, err
+		}
+		copy.GetF().Args[index] = bound
+	}
+	return copy, nil
+}
+
+func (l *numericValueKindLowerer) replaceNumericProgramRawSource(owner, source *Expr) (*Expr, error) {
+	if owner == nil || source == nil || owner.GetF() == nil || len(owner.GetF().Args) != 3 {
+		return nil, moerr.NewInvalidInput(l.builder.GetContext(), "numeric value program reference is malformed")
+	}
+	if _, ok := numericProgramRawValue(owner); !ok {
+		return nil, moerr.NewInvalidInput(l.builder.GetContext(), "numeric value program reference has no validated source")
+	}
+	copy := DeepCopyExpr(owner)
+	definition := copy.GetF().Args[0].GetF()
+	if definition == nil || len(definition.Args) != 2 {
+		return nil, moerr.NewInvalidInput(l.builder.GetContext(), "numeric value program definition is not a selector owner")
+	}
+	definition.Args[1] = DeepCopyExpr(source)
+	return copy, nil
 }
 
 // preparedParamKindFrozenFalse permits the execution-specific plan to use the
@@ -618,6 +983,9 @@ func (l *numericValueKindLowerer) kindAtNodeOutput(nodeID int32, tag, col int32)
 	case planpb.Node_SINK_SCAN:
 		return l.kindForSinkScanOutput(nodeID, node, tag, col)
 	case planpb.Node_SINK:
+		if node.RecursiveSink {
+			return l.kindForRecursiveSinkOutput(nodeID, node, col)
+		}
 		return l.kindForSinkOutput(nodeID, node, col)
 	default:
 		// Stored columns and scan outputs have ordinary SQL string semantics.
@@ -649,10 +1017,17 @@ func (l *numericValueKindLowerer) kindForProjectOutput(nodeID int32, node *planp
 		}
 	}
 	value := node.ProjectList[col]
-	if value == nil || !types.T(value.Typ.Id).IsMySQLString() {
+	if value == nil || (!types.T(value.Typ.Id).IsMySQLString() && types.T(value.Typ.Id) != types.T_any) {
 		return makePlan2BoolConstExprWithType(false), nil
 	}
 	if kind, ok := scalarNumericProgramKindRef(value); ok {
+		bound, err := l.bindNumericValueLeaves(value)
+		if err != nil {
+			return nil, err
+		}
+		node.ProjectList[col] = bound
+		value = bound
+		kind, _ = scalarNumericProgramKindRef(value)
 		if len(node.BindingTags) == 0 {
 			l.pairs[key] = kind
 			return DeepCopyExpr(kind), nil
@@ -708,7 +1083,11 @@ func (l *numericValueKindLowerer) kindForProjectOutput(nodeID int32, node *planp
 		l.pairs[key] = kind
 		return DeepCopyExpr(kind), nil
 	}
-	valueRef, kindRef, err := makeNumericValueProgramOutputsWithKind(l.builder.GetContext(), value, nil)
+	bound, err := l.bindNumericValueLeaves(value)
+	if err != nil {
+		return nil, err
+	}
+	valueRef, kindRef, err := makeNumericValueProgramOutputsWithKind(l.builder.GetContext(), bound, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -948,7 +1327,11 @@ func (l *numericValueKindLowerer) kindForAggregateOutput(nodeID int32, node *pla
 			kind = makePlan2BoolConstExprWithType(false)
 		}
 	} else if types.T(group.Typ.Id).IsMySQLString() {
-		valueRef, kindRef, makeErr := makeNumericValueProgramOutputs(l.builder.GetContext(), group)
+		bound, bindErr := l.bindNumericValueLeaves(group)
+		if bindErr != nil {
+			return nil, bindErr
+		}
+		valueRef, kindRef, makeErr := makeNumericValueProgramOutputs(l.builder.GetContext(), bound)
 		if makeErr != nil {
 			return nil, makeErr
 		}
@@ -1064,7 +1447,13 @@ func (l *numericValueKindLowerer) kindForSinkScanOutput(nodeID int32, node *plan
 			continue
 		}
 		sink := l.builder.qry.Nodes[sinkID]
-		if sink == nil || sink.NodeType != planpb.Node_SINK || sink.ExtraOptions != materialized.CTESinkOption {
+		if sink == nil || sink.NodeType != planpb.Node_SINK {
+			continue
+		}
+		if sink.RecursiveSink {
+			return l.kindForRecursiveSinkScanOutput(nodeID, node, sinkID, sink, col)
+		}
+		if sink.ExtraOptions != materialized.CTESinkOption {
 			continue
 		}
 		kind, err := l.kindForSinkOutput(sinkID, sink, col)
@@ -1077,6 +1466,290 @@ func (l *numericValueKindLowerer) kindForSinkScanOutput(nodeID int32, node *plan
 	}
 	_ = nodeID
 	return makePlan2BoolConstExprWithType(false), nil
+}
+
+// kindForRecursiveSinkScanOutput transports the selected kind through the
+// recursive CTE's existing row schema. Each branch sink writes one ordinary
+// BOOL passenger at the same physical ordinal; recursive scans and the CTE
+// expose that ordinal unchanged on every iteration.
+func (l *numericValueKindLowerer) kindForRecursiveSinkScanOutput(
+	scanID int32, scan *planpb.Node, sinkID int32, sink *planpb.Node, col int32,
+) (*Expr, error) {
+	if len(sink.Children) != 1 || col < 0 || int(col) >= len(sink.ProjectList) {
+		return makePlan2BoolConstExprWithType(false), nil
+	}
+	cteID := sink.Children[0]
+	if cteID < 0 || int(cteID) >= len(l.builder.qry.Nodes) {
+		return nil, moerr.NewInternalError(l.builder.GetContext(), "recursive kind sink has an invalid CTE source")
+	}
+	cte := l.builder.qry.Nodes[cteID]
+	if cte == nil || cte.NodeType != planpb.Node_RECURSIVE_CTE {
+		return nil, moerr.NewInternalError(l.builder.GetContext(), "recursive kind sink does not read a recursive CTE")
+	}
+	kindPos, err := l.ensureRecursiveKind(cteID, cte, sinkID, sink, col)
+	if err != nil {
+		return nil, err
+	}
+	if len(scan.BindingTags) == 0 {
+		return nil, moerr.NewInternalError(l.builder.GetContext(), "recursive kind reader has no output tag")
+	}
+	if err := appendRecursiveBoolProjection(scan, scan.BindingTags[0], kindPos); err != nil {
+		return nil, err
+	}
+	l.preserveRecursiveScan(scanID)
+	kind := GetColExpr(makeSimplePlan2Type(types.T_bool), scan.BindingTags[0], kindPos)
+	l.pairs[[2]int32{scan.BindingTags[0], col}] = DeepCopyExpr(kind)
+	return kind, nil
+}
+
+func (l *numericValueKindLowerer) kindForRecursiveSinkOutput(
+	sinkID int32, sink *planpb.Node, col int32,
+) (*Expr, error) {
+	if len(sink.Children) != 1 || col < 0 || int(col) >= len(sink.ProjectList) {
+		return makePlan2BoolConstExprWithType(false), nil
+	}
+	cteID := sink.Children[0]
+	if cteID < 0 || int(cteID) >= len(l.builder.qry.Nodes) {
+		return nil, moerr.NewInternalError(l.builder.GetContext(), "recursive kind sink has an invalid CTE source")
+	}
+	cte := l.builder.qry.Nodes[cteID]
+	if cte == nil || cte.NodeType != planpb.Node_RECURSIVE_CTE {
+		return makePlan2BoolConstExprWithType(false), nil
+	}
+	kindPos, err := l.ensureRecursiveKind(cteID, cte, sinkID, sink, col)
+	if err != nil {
+		return nil, err
+	}
+	return GetColExpr(makeSimplePlan2Type(types.T_bool), cte.BindingTags[0], kindPos), nil
+}
+
+func (l *numericValueKindLowerer) ensureRecursiveKind(
+	cteID int32, cte *planpb.Node, outputSinkID int32, outputSink *planpb.Node, col int32,
+) (int32, error) {
+	if cte == nil || cte.NodeType != planpb.Node_RECURSIVE_CTE || len(cte.BindingTags) == 0 ||
+		col < 0 || int(col) >= len(cte.ProjectList) {
+		return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive kind request has an invalid output")
+	}
+	if l.recursive == nil {
+		l.recursive = make(map[int32]*recursiveNumericKindLayout)
+	}
+	layout := l.recursive[cteID]
+	if layout == nil {
+		layout = &recursiveNumericKindLayout{
+			visibleColumns: len(cte.ProjectList),
+			kindColumns:    make(map[int32]int32),
+		}
+		l.recursive[cteID] = layout
+	}
+	if slot, ok := layout.kindColumns[col]; ok {
+		return slot, nil
+	}
+	if layout.visibleColumns == 0 || len(cte.ProjectList) < layout.visibleColumns {
+		return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive CTE visible schema changed during kind lowering")
+	}
+	kindPos := int32(len(cte.ProjectList))
+	layout.kindColumns[col] = kindPos
+	cteTag := cte.BindingTags[0]
+	// Publish the recursive reader before resolving the member branch. A
+	// recursive member that selects its prior value must read this BOOL from the
+	// preceding round rather than hit the ordinary cycle fallback.
+	l.pairs[[2]int32{cteTag, col}] = GetColExpr(makeSimplePlan2Type(types.T_bool), cteTag, kindPos)
+
+	if cte.RecursiveUnionDistinct && len(cte.PhysicalEqualityKeyList) == 0 {
+		keys := make([]*Expr, layout.visibleColumns)
+		for i := 0; i < layout.visibleColumns; i++ {
+			keys[i] = GetColExpr(cte.ProjectList[i].Typ, 0, int32(i))
+		}
+		cte.PhysicalEqualityKeyList = keys
+	}
+	if err := appendRecursiveBoolProjection(cte, cteTag, kindPos); err != nil {
+		return 0, err
+	}
+	l.preserveRecursiveScan(cteID)
+
+	for scanID, scan := range l.builder.qry.Nodes {
+		if scan == nil || scan.NodeType != planpb.Node_RECURSIVE_SCAN || !l.recursiveScanReadsCte(scan, cteID) {
+			continue
+		}
+		if len(scan.BindingTags) == 0 {
+			return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive scan has no output tag")
+		}
+		scanTag := scan.BindingTags[0]
+		if err := appendRecursiveBoolProjection(scan, scanTag, kindPos); err != nil {
+			return 0, err
+		}
+		l.pairs[[2]int32{scanTag, col}] = GetColExpr(makeSimplePlan2Type(types.T_bool), scanTag, kindPos)
+		l.preserveRecursiveScan(int32(scanID))
+	}
+
+	for _, step := range cte.SourceStep {
+		if step < 0 || int(step) >= len(l.builder.qry.Steps) {
+			return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive CTE has an invalid producer step")
+		}
+		branchSinkID := l.builder.qry.Steps[step]
+		if branchSinkID < 0 || int(branchSinkID) >= len(l.builder.qry.Nodes) {
+			return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive CTE has an invalid producer sink")
+		}
+		branchSink := l.builder.qry.Nodes[branchSinkID]
+		if branchSink == nil || branchSink.NodeType != planpb.Node_SINK || len(branchSink.Children) != 1 ||
+			len(branchSink.ProjectList) != int(kindPos) {
+			return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive CTE producer schemas do not align")
+		}
+		childID := branchSink.Children[0]
+		if childID < 0 || int(childID) >= len(l.builder.qry.Nodes) || l.builder.qry.Nodes[childID] == nil {
+			return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive CTE producer has an invalid child")
+		}
+		child := l.builder.qry.Nodes[childID]
+		valueCol := branchSink.ProjectList[col].GetCol()
+		if valueCol == nil {
+			return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive CTE producer output is not a column")
+		}
+		branchKind, err := l.kindForNodeOutput(childID, valueCol.RelPos, valueCol.ColPos)
+		if err != nil {
+			return 0, err
+		}
+		localKind, err := recursiveKindExpressionForInput(branchKind, child)
+		if err != nil {
+			return 0, err
+		}
+		projects := make([]*Expr, 0, len(branchSink.ProjectList)+1)
+		for _, output := range branchSink.ProjectList {
+			colRef := output.GetCol()
+			if colRef == nil {
+				return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive CTE producer output is not a column")
+			}
+			projects = append(projects, DeepCopyExpr(output))
+		}
+		projects = append(projects, localKind)
+		var bindCtx *BindContext
+		if int(branchSinkID) < len(l.builder.ctxByNode) {
+			bindCtx = l.builder.ctxByNode[branchSinkID]
+		}
+		helperTag := l.builder.genNewBindTag()
+		helperID := l.builder.appendNode(&planpb.Node{
+			NodeType:    planpb.Node_PROJECT,
+			Children:    []int32{childID},
+			ProjectList: projects,
+			BindingTags: []int32{helperTag},
+			Stats:       child.Stats,
+		}, bindCtx)
+		branchSink.Children[0] = helperID
+		branchSink.BindingTags = []int32{cteTag}
+		branchSink.ProjectList = make([]*Expr, len(projects))
+		for i, project := range projects {
+			branchSink.ProjectList[i] = GetColExpr(project.Typ, helperTag, int32(i))
+		}
+		l.preserveRecursiveSink(branchSinkID)
+	}
+
+	// The feedback sink and every final reader carry the same appended column.
+	if len(outputSink.ProjectList) != int(kindPos) {
+		return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive feedback sink schema does not align")
+	}
+	outputSink.ProjectList = append(outputSink.ProjectList,
+		GetColExpr(makeSimplePlan2Type(types.T_bool), cteTag, kindPos))
+	l.preserveRecursiveSink(outputSinkID)
+	var outputStep int32 = -1
+	for step, root := range l.builder.qry.Steps {
+		if root == outputSinkID {
+			outputStep = int32(step)
+			break
+		}
+	}
+	if outputStep < 0 {
+		return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive feedback sink is not a query-step root")
+	}
+	for readerID, reader := range l.builder.qry.Nodes {
+		if reader == nil || reader.NodeType != planpb.Node_SINK_SCAN ||
+			!sourceStepContainsAny(reader.SourceStep, []int32{outputStep}) {
+			continue
+		}
+		if len(reader.BindingTags) == 0 || len(reader.ProjectList) != int(kindPos) {
+			return 0, moerr.NewInternalError(l.builder.GetContext(), "recursive CTE reader schema does not align")
+		}
+		readerTag := reader.BindingTags[0]
+		reader.ProjectList = append(reader.ProjectList,
+			GetColExpr(makeSimplePlan2Type(types.T_bool), readerTag, kindPos))
+		l.pairs[[2]int32{readerTag, col}] = GetColExpr(makeSimplePlan2Type(types.T_bool), readerTag, kindPos)
+		l.preserveRecursiveScan(int32(readerID))
+	}
+	return kindPos, nil
+}
+
+func (l *numericValueKindLowerer) recursiveScanReadsCte(scan *planpb.Node, cteID int32) bool {
+	for _, step := range scan.SourceStep {
+		if step < 0 || int(step) >= len(l.builder.qry.Steps) {
+			continue
+		}
+		sinkID := l.builder.qry.Steps[step]
+		if sinkID < 0 || int(sinkID) >= len(l.builder.qry.Nodes) {
+			continue
+		}
+		sink := l.builder.qry.Nodes[sinkID]
+		if sink != nil && sink.NodeType == planpb.Node_SINK && sink.RecursiveSink &&
+			len(sink.Children) == 1 && sink.Children[0] == cteID {
+			return true
+		}
+	}
+	return false
+}
+
+func recursiveKindExpressionForInput(kind *Expr, child *planpb.Node) (*Expr, error) {
+	if kind == nil || types.T(kind.Typ.Id) != types.T_bool || child == nil {
+		return nil, moerr.NewInvalidInputNoCtx("recursive CTE kind output must be BOOL")
+	}
+	local := DeepCopyExpr(kind)
+	if local.GetLit() != nil {
+		return local, nil
+	}
+	allowedTags := make(map[int32]struct{}, len(child.BindingTags))
+	for _, tag := range child.BindingTags {
+		allowedTags[tag] = struct{}{}
+	}
+	if err := planpb.VisitExprTree(local, func(expr *Expr) error {
+		col := expr.GetCol()
+		if col == nil {
+			return nil
+		}
+		if _, ok := allowedTags[col.RelPos]; !ok {
+			return moerr.NewInvalidInputNoCtx("recursive CTE kind references a nonlocal producer")
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	return local, nil
+}
+
+func appendRecursiveBoolProjection(node *planpb.Node, tag, pos int32) error {
+	if node == nil || pos < 0 {
+		return moerr.NewInvalidInputNoCtx("recursive kind projection is invalid")
+	}
+	if int(pos) < len(node.ProjectList) {
+		if types.T(node.ProjectList[pos].Typ.Id) != types.T_bool {
+			return moerr.NewInvalidInputNoCtx("recursive kind projection has a conflicting slot")
+		}
+		return nil
+	}
+	if int(pos) != len(node.ProjectList) {
+		return moerr.NewInvalidInputNoCtx("recursive kind projection has a gap")
+	}
+	node.ProjectList = append(node.ProjectList, GetColExpr(makeSimplePlan2Type(types.T_bool), tag, pos))
+	return nil
+}
+
+func (l *numericValueKindLowerer) preserveRecursiveScan(nodeID int32) {
+	if l.builder.preserveScanProjection == nil {
+		l.builder.preserveScanProjection = make(map[int32]struct{})
+	}
+	l.builder.preserveScanProjection[nodeID] = struct{}{}
+}
+
+func (l *numericValueKindLowerer) preserveRecursiveSink(nodeID int32) {
+	if l.builder.preserveSinkProjection == nil {
+		l.builder.preserveSinkProjection = make(map[int32]struct{})
+	}
+	l.builder.preserveSinkProjection[nodeID] = struct{}{}
 }
 
 func sourceStepContainsAny(values, targets []int32) bool {

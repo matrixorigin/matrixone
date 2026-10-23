@@ -149,6 +149,9 @@ func (builder *QueryBuilder) createDependentQuery() (*Query, error) {
 	if err := ValidateSelectIntoKindLayout(q); err != nil {
 		return nil, moerr.NewInternalErrorf(builder.GetContext(), "invalid SELECT INTO result kind layout: %v", err)
 	}
+	if err := stripInferredStringDeclarationCastProofs(q); err != nil {
+		return nil, err
+	}
 	return q, nil
 }
 
