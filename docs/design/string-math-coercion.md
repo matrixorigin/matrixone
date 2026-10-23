@@ -222,17 +222,18 @@ It does not compare against the old repeated plan walk. Roles are summarized
 per execution; no cross-execution role cache is used.
 
 A separate Darwin/arm64 expression microbenchmark evaluates one prebuilt
-128-row batch per operation. At the rebased candidate, native numeric `ABS`
-measured 520 ns/op, 8 B/op, and 1 allocation; ordinary text-column `ABS`
-measured 6.342 μs/op, 56 B/op, and 2 allocations. For a matched current-binder
-control, the same ordinary-text CASE, target, selector, and `ABS` use CAST2's
-comparison policy at 12.678 μs/op, 408 B/op, and 6 allocations; the paired
-program uses CAST9 with that same comparison policy at 16.291 μs/op, 600 B/op,
-and 9 allocations. This measures 3 extra allocations and 192 B/op for the
-paired path (about 28.5% more time for this expression). It is a focused
-executor microbenchmark, not a historical before/after comparison or an
-end-to-end query result. Mixed HEX/text CASE through CAST9 with ordinary policy
-measured 32.740 μs/op, 720 B/op, and 14 allocations; that case returns 49 for
+128-row batch per operation. At HEAD `910d8a50`, native numeric `ABS` measured
+508.3 ns/op, 8 B/op, and 1 allocation; ordinary text-column `ABS` measured
+6.447 μs/op, 56 B/op, and 2 allocations. Two runs of the matched
+current-binder control used the same ordinary-text CASE, target, selector, and
+`ABS`: CAST2 with comparison policy measured 12.678–13.102 μs/op, 408 B/op,
+and 6 allocations; paired CAST9 with that same policy measured 16.011–16.291
+μs/op, 600 B/op, and 9 allocations. The paired path used 3 extra allocations
+and 192 B/op in both runs, with elapsed time 22.2–28.5% higher for this
+expression. This is a focused executor microbenchmark, not a historical
+before/after comparison or an end-to-end query result. Mixed HEX/text CASE
+through CAST9 with ordinary policy measured 33.453 μs/op, 720 B/op, and 14
+allocations; that case returns 49 for
 the HEX-selected row and 1 for the text-selected row, so it is not the matched
 control. A native integer ROUND/FLOOR/CEIL fixture also changed from one
 two-row block to two one-row blocks after removing function-wide zonemap
