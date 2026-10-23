@@ -113,9 +113,9 @@ func TestReviewWideLineSubjectAnchors(t *testing.T) {
 func TestReviewWideLineReplaceOccurrence(t *testing.T) {
 	op := newOpBuiltInRegexp()
 	for _, tc := range []struct {
-		name      string
-		pos, occ  int64
-		want      string
+		name     string
+		pos, occ int64
+		want     string
 	}{
 		{"first", 1, 1, "X\ra"},
 		{"second", 1, 2, "a\rX"},
