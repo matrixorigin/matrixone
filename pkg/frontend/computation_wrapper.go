@@ -353,7 +353,7 @@ func checkResultQueryPrivilege(proc *process.Process, p *plan.Plan, reqCtx conte
 	var stats statistic.StatsArray
 	stats.Reset()
 
-	if ids, err = isResultQuery(proc, p); err != nil || ids == nil {
+	if ids, err = isResultQuery(reqCtx, proc, p); err != nil || ids == nil {
 		return stats, err
 	}
 	return checkPrivilege(sid, ids, reqCtx, ses)
