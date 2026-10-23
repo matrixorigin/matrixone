@@ -16,6 +16,7 @@ package morpc
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -35,27 +36,27 @@ type lateSuccessfulBackendFactory struct {
 	calls   atomic.Int32
 }
 
-type retryableDeadlineBackendFactory struct {
+type retryableBudgetBackendFactory struct {
 	calls atomic.Int32
 }
 
-func (f *retryableDeadlineBackendFactory) Create(
+func (f *retryableBudgetBackendFactory) Create(
 	string,
 	...BackendOption,
 ) (Backend, error) {
 	f.calls.Add(1)
-	return nil, moerr.NewRPCTimeoutNoCtx()
+	return nil, errors.New("temporary backend factory failure")
 }
 
 // TestAutoCreateRetryableFactoryIsBoundedAndReleasesGeneration is the MORPC
-// half of #27523. A stale endpoint can keep returning a retryable dial error;
+// half of #27523. A custom factory can keep returning a retryable error;
 // coalesced callers must share one finite factory budget, and the expired
 // generation must be removed so later topology generations are not poisoned.
 func TestAutoCreateRetryableFactoryIsBoundedAndReleasesGeneration(t *testing.T) {
 	const callers = 16
 	const remote = "stale-cn:6002"
 	manager := newClientGCManager()
-	factory := &retryableDeadlineBackendFactory{}
+	factory := &retryableBudgetBackendFactory{}
 	rpcClient, err := NewClient(
 		t.Name(),
 		factory,
