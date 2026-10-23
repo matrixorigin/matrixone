@@ -396,7 +396,7 @@ func TestIssue29399AccountRestoreRollsBackInvalidPrivileges(t *testing.T) {
 				func() {
 					// Each independent drop owns its full bounded cleanup budget;
 					// preceding drops must not consume the next operation's deadline.
-					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+					cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), testutils.SQLCleanupTimeout(statement))
 					defer cleanupCancel()
 					if _, err := sysDB.ExecContext(cleanupCtx, statement); err != nil {
 						t.Errorf("cleanup %q: %v", statement, err)

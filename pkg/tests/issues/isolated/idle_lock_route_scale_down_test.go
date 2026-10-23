@@ -105,6 +105,30 @@ func testDropDatabaseAfterCNScaleDown(t *testing.T, cleanupDuringRetirement bool
 	cached, err := locks[survivor].GetLockTableBind(0, tableID)
 	require.NoError(t, err)
 	require.Equal(t, bind.ServiceID, cached.ServiceID)
+	// DROP also locks other catalog tables. One registry route is not a
+	// membership barrier for both departing owners, or for the keeper's bounded
+	// eviction worklist. Snapshot the routes this survivor actually cached.
+	catalogIDs, cachedCatalogBinds := func() ([]uint64, []pb.LockTable) {
+		rows, err := dbs[survivor].QueryContext(ctx,
+			"select rel_id from mo_catalog.mo_tables where reldatabase='mo_catalog' and account_id=0")
+		require.NoError(t, err)
+		defer rows.Close()
+		var ids []uint64
+		var binds []pb.LockTable
+		for rows.Next() {
+			var id uint64
+			require.NoError(t, rows.Scan(&id))
+			ids = append(ids, id)
+			current, err := locks[survivor].GetLockTableBind(0, id)
+			require.NoError(t, err)
+			if current.Valid && current.ServiceID != locks[survivor].GetServiceID() {
+				binds = append(binds, current)
+			}
+		}
+		require.NoError(t, rows.Err())
+		return ids, binds
+	}()
+	require.NotEmpty(t, cachedCatalogBinds)
 	if cleanupDuringRetirement {
 		origin := (survivor + 1) % len(cns)
 		catalogBind, err := locks[origin].GetLockTableBind(0, catalog.MO_TABLES_ID)
@@ -141,15 +165,25 @@ func testDropDatabaseAfterCNScaleDown(t *testing.T, cleanupDuringRetirement bool
 	// Observe cache eviction without refreshing it through a SQL probe.
 	// GetLockTableBind only reads local state and performs no allocation/RPC.
 	require.Eventually(t, func() bool {
-		current, err := locks[survivor].GetLockTableBind(0, tableID)
-		return err == nil && !current.Valid
-	}, time.Minute, 50*time.Millisecond, "idle route must disappear after membership converges")
+		for _, id := range catalogIDs {
+			current, err := locks[survivor].GetLockTableBind(0, id)
+			if err != nil || (current.Valid && current.ServiceID != locks[survivor].GetServiceID()) {
+				return false
+			}
+		}
+		return true
+	}, time.Minute, 50*time.Millisecond, "all cached catalog routes to both retired CNs must converge")
 	// Separately wait for TN's retirement authority. This probe may allocate
 	// the new TN binding, but deliberately does not publish a CN route.
 	require.Eventually(t, func() bool {
-		current, err := locks[survivor].GetLatestLockTableBind(cached)
-		return err == nil && current.Valid && current.ServiceID != cached.ServiceID
-	}, 30*time.Second, 100*time.Millisecond, "TN must retire the old owner before declaring scale-down recovered")
+		for _, old := range cachedCatalogBinds {
+			current, err := locks[survivor].GetLatestLockTableBind(old)
+			if err != nil || !current.Valid || current.ServiceID != locks[survivor].GetServiceID() {
+				return false
+			}
+		}
+		return true
+	}, 30*time.Second, 100*time.Millisecond, "TN must retire both owners before declaring scale-down recovered")
 	current, err := locks[survivor].GetLockTableBind(0, tableID)
 	require.NoError(t, err)
 	require.False(t, current.Valid, "the readiness probe must leave the CN route cold")
