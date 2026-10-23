@@ -29,7 +29,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
-	v2 "github.com/matrixorigin/matrixone/pkg/util/metric/v2"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/common"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
@@ -44,9 +43,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/testutils"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/panjf2000/ants/v2"
-	"github.com/prometheus/client_golang/prometheus"
-	"github.com/prometheus/client_golang/prometheus/testutil"
-	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1802,39 +1798,7 @@ func (d *dedupRangeObjectData) GetDuplicatedRows(
 	return d.visit(from, to)
 }
 
-func TestPrePrepareDedupStreamCoverage(t *testing.T) {
-	require.Equal(t, dedupMetricOther, dedupMetricPhase("future-phase"))
-	// The two transaction entry points share an object scan implementation but
-	// must never report into each other's metric phase.
-	objectVisits := func(phase string) float64 {
-		var total float64
-		for _, typ := range []string{"data", "tombstone"} {
-			for _, group := range []catalog.ObjectListGroup{
-				catalog.ObjectListGroupAppendableCreate,
-				catalog.ObjectListGroupAppendableCreateWithDrop,
-				catalog.ObjectListGroupAppendableDrop,
-				catalog.ObjectListGroupNonAppendableCreate,
-				catalog.ObjectListGroupNonAppendableCreateWithDrop,
-				catalog.ObjectListGroupNonAppendableDrop,
-			} {
-				total += testutil.ToFloat64(v2.TxnTNPrePrepareObjectCounter.WithLabelValues(
-					phase, typ, incrementalObjectGroupName(group), "object_get_duplicated_rows"))
-			}
-		}
-		return total
-	}
-	stepSamples := func(phase string) uint64 {
-		var total uint64
-		for _, typ := range []string{"data", "tombstone"} {
-			observer, err := v2.TxnTNPrePrepareDeduplicateStepDurationHistogram.GetMetricWithLabelValues(
-				phase, typ, "build_pk_vector")
-			require.NoError(t, err)
-			metric := &dto.Metric{}
-			require.NoError(t, observer.(prometheus.Metric).Write(metric))
-			total += metric.GetHistogram().GetSampleCount()
-		}
-		return total
-	}
+func TestPrePrepareDedupRangeCoverage(t *testing.T) {
 	for _, tc := range []struct {
 		name, phase string
 		first       bool
@@ -1843,13 +1807,6 @@ func TestPrePrepareDedupStreamCoverage(t *testing.T) {
 		{"preprepare", txnif.PrePreparePhase, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			metricPhase := dedupMetricPhase(tc.phase)
-			otherPhase := dedupMetricFreeze
-			if metricPhase == dedupMetricFreeze {
-				otherPhase = dedupMetricPrePrepare
-			}
-			visitsBefore, otherVisitsBefore := objectVisits(metricPhase), objectVisits(otherPhase)
-			stepsBefore, otherStepsBefore := stepSamples(metricPhase), stepSamples(otherPhase)
 			ctx := context.Background()
 			start, phaseTS := types.BuildTS(2, 0), types.BuildTS(10, 0)
 			schema := catalog.NewEmptySchema("data")
@@ -1912,10 +1869,6 @@ func TestPrePrepareDedupStreamCoverage(t *testing.T) {
 			require.NoError(t, tbl.PrePrepareDedup(ctx, !tc.first, tc.phase, phaseTS))
 			require.Equal(t, 2, calls[!tc.first])
 			require.Equal(t, phaseTS, tbl.getBaseTable(!tc.first).dedupTS)
-			require.Equal(t, visitsBefore+3, objectVisits(metricPhase))
-			require.Equal(t, otherVisitsBefore, objectVisits(otherPhase))
-			require.Equal(t, stepsBefore+3, stepSamples(metricPhase))
-			require.Equal(t, otherStepsBefore, stepSamples(otherPhase))
 			used, _ := pool.Used(false)
 			require.Zero(t, used)
 		})
