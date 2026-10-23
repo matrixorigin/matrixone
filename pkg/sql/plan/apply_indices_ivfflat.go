@@ -49,8 +49,7 @@ type ivfIndexContext struct {
 	pushdownEnabled bool
 
 	// Auto mode support.
-	isAutoMode      bool   // Whether in auto mode
-	initialStrategy string // Initial strategy selected in auto mode ("pre" or "post")
+	isAutoMode bool // Whether in auto mode
 }
 
 // shouldUseForceMode determines if force mode (full table scan) should be used
@@ -580,8 +579,7 @@ func (builder *QueryBuilder) prepareIvfIndexContext(vecCtx *vectorSortContext, m
 		pushdownEnabled: (mode == "pre"),
 
 		// Auto mode fields.
-		isAutoMode:      isAutoMode,
-		initialStrategy: mode,
+		isAutoMode: isAutoMode,
 	}, nil
 }
 

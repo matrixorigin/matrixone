@@ -40,6 +40,7 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
 	"github.com/matrixorigin/matrixone/pkg/datalink"
 	"github.com/matrixorigin/matrixone/pkg/defines"
+	"github.com/matrixorigin/matrixone/pkg/sql/jsonvalue"
 	"github.com/matrixorigin/matrixone/pkg/vm/process"
 	"golang.org/x/exp/constraints"
 )
@@ -6192,6 +6193,7 @@ func decimal128ToFloat[T constraints.Float](
 // canWidenDecimalScale proves that increasing the coefficient's scale cannot
 // exceed either the declared precision or the physical DECIMAL representation.
 // Scale reduction can carry into the integer part, so it stays on the checked path.
+// Source and result types are fixed for a batch; evaluate this before the row loop.
 func canWidenDecimalScale(from, to types.Type) bool {
 	return from.Oid.IsDecimal() && to.Oid.IsDecimal() && from.Oid.TypeLen() <= to.Oid.TypeLen() &&
 		from.Width > 0 && from.Width <= from.Oid.ToType().Width &&
@@ -6208,6 +6210,8 @@ func decimal64ToDecimal64(
 	var dft types.Decimal64
 	fromtype := from.GetType()
 	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	scaleDelta := totype.Scale - fromtype.Scale
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -6217,8 +6221,8 @@ func decimal64ToDecimal64(
 		} else {
 			var result types.Decimal64
 			var err error
-			if canWidenDecimalScale(fromtype, totype) {
-				result, err = v.Scale(totype.Scale - fromtype.Scale)
+			if safeGrowth {
+				result, err = v.Scale(scaleDelta)
 			} else {
 				result, err = types.ParseDecimal64(v.Format(fromtype.Scale), totype.Width, totype.Scale)
 			}
@@ -6390,6 +6394,11 @@ func decimal64ToDecimal256Array(
 	l := uint64(length)
 	fromtype := from.GetType()
 	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	scaleDelta := totype.Scale - fromtype.Scale
+	scaleIn64 := safeGrowth && fromtype.Width+scaleDelta <= types.T_decimal64.ToType().Width
+	scaleIn128 := safeGrowth && !scaleIn64 && fromtype.Width+scaleDelta <= types.T_decimal128.ToType().Width
+	needsCheck := totype.Width < fromtype.Width || totype.Scale != fromtype.Scale
 	var dft types.Decimal256
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
@@ -6404,21 +6413,20 @@ func decimal64ToDecimal256Array(
 			fromdec.B64_127 = ^fromdec.B64_127
 		}
 		result := types.Decimal256FromDecimal128(fromdec)
-		if canWidenDecimalScale(fromtype, totype) {
+		if safeGrowth {
 			var scaled types.Decimal256
 			var err error
-			growth := totype.Scale - fromtype.Scale
-			if fromtype.Width+growth <= types.T_decimal64.ToType().Width {
+			if scaleIn64 {
 				var narrow types.Decimal64
-				narrow, err = v.Scale(growth)
+				narrow, err = v.Scale(scaleDelta)
 				wide := types.Decimal128{B0_63: uint64(narrow), B64_127: uint64(int64(narrow) >> 63)}
 				scaled = types.Decimal256FromDecimal128(wide)
-			} else if fromtype.Width+growth <= types.T_decimal128.ToType().Width {
+			} else if scaleIn128 {
 				var narrow types.Decimal128
-				narrow, err = fromdec.Scale(growth)
+				narrow, err = fromdec.Scale(scaleDelta)
 				scaled = types.Decimal256FromDecimal128(narrow)
 			} else {
-				scaled, err = result.Scale(growth)
+				scaled, err = result.Scale(scaleDelta)
 			}
 			if err != nil {
 				return err
@@ -6426,7 +6434,7 @@ func decimal64ToDecimal256Array(
 			if err = to.Append(scaled, false); err != nil {
 				return err
 			}
-		} else if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
+		} else if needsCheck {
 			dec := result.Format(fromtype.Scale)
 			parsed, err := types.ParseDecimal256(dec, totype.Width, totype.Scale)
 			if err != nil {
@@ -6489,6 +6497,9 @@ func decimal128ToDecimal128(
 	var dft types.Decimal128
 	fromtype := from.GetType()
 	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	scaleDelta := totype.Scale - fromtype.Scale
+	scaleDown := totype.Scale < fromtype.Scale
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -6498,11 +6509,11 @@ func decimal128ToDecimal128(
 		} else {
 			var result types.Decimal128
 			var err error
-			if canWidenDecimalScale(fromtype, totype) {
-				result, err = v.Scale(totype.Scale - fromtype.Scale)
-			} else if totype.Scale < fromtype.Scale {
+			if safeGrowth {
+				result, err = v.Scale(scaleDelta)
+			} else if scaleDown {
 				var scaled types.Decimal128
-				scaled, err = v.Scale(totype.Scale - fromtype.Scale)
+				scaled, err = v.Scale(scaleDelta)
 				if err == nil {
 					result, err = types.ParseDecimal128(scaled.Format(0), totype.Width, 0)
 				}
@@ -6528,6 +6539,11 @@ func decimal128ToDecimal256(
 	var dft types.Decimal256
 	fromtype := from.GetType()
 	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	scaleDelta := totype.Scale - fromtype.Scale
+	scaleIn128 := safeGrowth && fromtype.Width+scaleDelta <= types.T_decimal128.ToType().Width
+	scaleDown := totype.Scale < fromtype.Scale
+	needsCheck := totype.Width < fromtype.Width || totype.Scale != fromtype.Scale
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -6537,15 +6553,15 @@ func decimal128ToDecimal256(
 			continue
 		}
 		result := types.Decimal256FromDecimal128(v)
-		if canWidenDecimalScale(fromtype, totype) {
+		if safeGrowth {
 			var scaled types.Decimal256
 			var err error
-			if fromtype.Width+totype.Scale-fromtype.Scale <= types.T_decimal128.ToType().Width {
+			if scaleIn128 {
 				var narrow types.Decimal128
-				narrow, err = v.Scale(totype.Scale - fromtype.Scale)
+				narrow, err = v.Scale(scaleDelta)
 				scaled = types.Decimal256FromDecimal128(narrow)
 			} else {
-				scaled, err = result.Scale(totype.Scale - fromtype.Scale)
+				scaled, err = result.Scale(scaleDelta)
 			}
 			if err != nil {
 				return err
@@ -6553,11 +6569,11 @@ func decimal128ToDecimal256(
 			if err = to.Append(scaled, false); err != nil {
 				return err
 			}
-		} else if totype.Width < fromtype.Width || totype.Scale != fromtype.Scale {
+		} else if needsCheck {
 			var dec string
 			scale := totype.Scale
-			if totype.Scale < fromtype.Scale {
-				scaled, err := v.Scale(totype.Scale - fromtype.Scale)
+			if scaleDown {
+				scaled, err := v.Scale(scaleDelta)
 				if err != nil {
 					return err
 				}
@@ -6663,6 +6679,9 @@ func decimal256ToDecimal256(
 	var dft types.Decimal256
 	fromtype := from.GetType()
 	totype := to.GetType()
+	safeGrowth := canWidenDecimalScale(fromtype, totype)
+	scaleDelta := totype.Scale - fromtype.Scale
+	scaleDown := totype.Scale < fromtype.Scale
 	for i = 0; i < l; i++ {
 		v, null := from.GetValue(i)
 		if null {
@@ -6673,11 +6692,11 @@ func decimal256ToDecimal256(
 		}
 		var result types.Decimal256
 		var err error
-		if canWidenDecimalScale(fromtype, totype) {
-			result, err = v.Scale(totype.Scale - fromtype.Scale)
-		} else if totype.Scale < fromtype.Scale {
+		if safeGrowth {
+			result, err = v.Scale(scaleDelta)
+		} else if scaleDown {
 			var scaled types.Decimal256
-			scaled, err = v.Scale(totype.Scale - fromtype.Scale)
+			scaled, err = v.Scale(scaleDelta)
 			if err == nil {
 				result, err = types.ParseDecimal256(scaled.Format(0), totype.Width, 0)
 			}
@@ -8873,7 +8892,7 @@ func castToJSON(from *vector.Vector, result vector.FunctionResultWrapper, proc *
 		case types.T_char, types.T_varchar, types.T_text:
 			value, err = types.ParseSliceToByteJson(from.GetBytesAt(row))
 		case types.T_binary, types.T_varbinary, types.T_blob:
-			value = newTypedByteJson(bytejson.TpCodeOpaque, string(from.GetBytesAt(row)))
+			value, err = jsonvalue.FromBinary(ctx, jsonSessionProtocolVersion(proc), from.GetType().Oid, from.GetBytesAt(row))
 		case types.T_bool:
 			value, err = bytejson.CreateByteJSON(vector.GetFixedAtNoTypeCheck[bool](from, row))
 		case types.T_bit:

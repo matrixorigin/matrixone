@@ -167,9 +167,6 @@ func (j *JoinKernel) Call(p *process.Process) (vm.CallResult, error) {
 	}
 	return vm.Exec(j.Join, p)
 }
-func (j *JoinKernel) ExecProjection(_ *process.Process, b *batch.Batch) (*batch.Batch, error) {
-	return b, nil
-}
 func (j *JoinKernel) Reset(*process.Process, bool, error) {
 	j.closeUpdate()
 	if j.frame != nil {

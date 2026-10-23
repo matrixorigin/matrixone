@@ -541,10 +541,6 @@ func (dedupJoin *DedupJoin) Free(proc *process.Process, pipelineFailed bool, err
 	ctr.cleanEvalVectors()
 }
 
-func (dedupJoin *DedupJoin) ExecProjection(proc *process.Process, input *batch.Batch) (*batch.Batch, error) {
-	return input, nil
-}
-
 func (ctr *container) cleanExprExecutor() {
 	for i := range ctr.exprExecs {
 		if ctr.exprExecs[i] != nil {
