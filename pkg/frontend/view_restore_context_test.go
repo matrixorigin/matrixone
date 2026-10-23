@@ -15,6 +15,7 @@
 package frontend
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -92,6 +93,47 @@ func TestCloneViewRestoresOnlyMappedCreationDatabase(t *testing.T) {
 		} else {
 			require.JSONEq(t, `{"DefaultDatabase":"target"}`, got)
 		}
+	}
+}
+
+func TestViewRestoreExecutionParserUsesSavedPolicy(t *testing.T) {
+	const sql = "create view tpch.MixedView as select 1"
+	for _, tc := range []struct {
+		name, definition, replay, want string
+		sessionMode                    int64
+		invalid                        bool
+	}{
+		{"saved lowercase against restore mode zero", `{"lower_case_table_names":1}`, sql, "mixedview", 0, false},
+		{"saved case sensitive", `{"lower_case_table_names":0}`, sql, "MixedView", 1, false},
+		{"saved preserve names", `{"lower_case_table_names":2}`, sql, "MixedView", 1, false},
+		{"legacy absent", `{}`, sql, "MixedView", 0, false},
+		{"legacy null", `{"lower_case_table_names":null}`, sql, "MixedView", 0, false},
+		{"ordinary statement", "", "", "MixedView", 0, false},
+		{"different SQL", `{"lower_case_table_names":1}`, "select 1", "MixedView", 0, false},
+		{"invalid saved mode", `{"lower_case_table_names":3}`, sql, "", 0, true},
+		{"malformed payload", `{`, sql, "", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Context(t.Context())
+			if tc.definition != "" {
+				ctx = plan.WithRestoredViewDefinition(ctx, "tpch", "mixedview", tc.definition, tc.replay)
+			}
+			ses := &wrapperParseSession{lowerCaseTableNames: tc.sessionMode}
+			input := &UserInput{sql: sql, useParserSQLMode: true}
+			execCtx := &ExecCtx{reqCtx: ctx, ses: ses, input: input}
+			wrappers, err := GetComputationWrapperInBack(execCtx, "tpch", input, "", nil, testutil.NewProcess(t), ses)
+			if tc.invalid {
+				require.Error(t, err)
+				require.Empty(t, wrappers)
+				return
+			}
+			require.NoError(t, err)
+			require.Len(t, wrappers, 1)
+			defer wrappers[0].GetAst().Free()
+			view := wrappers[0].GetAst().(*tree.CreateView)
+			require.Equal(t, tc.want, string(view.Name.ObjectName), "assert the AST used for execution, not preliminary classification")
+			require.Equal(t, tc.sessionMode, parserLowerCaseTableNames(ses), "restore must not mutate the session policy")
+		})
 	}
 }
 

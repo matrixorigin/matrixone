@@ -24,6 +24,18 @@ use creation_env;
 create view app.creation_env_v as select id from origin;
 create view inner_v as select id from origin;
 create view app.nested_creation_v as select id from inner_v;
+-- Saved mode 1 must also govern the second, executing parse during restore.
+set view_security_type = 'INVOKER';
+create view app.MixedView as select id from origin;
+create view app.lowercase_control as select id from origin;
+set view_security_type = 'DEFINER';
+select * from app.MixedView;
+select * from app.lowercase_control;
+select relname, json_extract(viewdef, '$.security_type') as security_type,
+json_extract(viewdef, '$.DefaultDatabase') as creation_db,
+json_extract(viewdef, '$.dependencies[0].database_name') as dependency_db
+from mo_catalog.mo_tables where reldatabase = 'app'
+and lower(relname) in ('mixedview', 'lowercase_control') order by relname;
 use app;
 create role reader;
 create user u1 identified by '111' default role reader;
@@ -33,6 +45,8 @@ grant select on view app.v to reader;
 grant select on view app.invoker_secret to reader;
 grant select on view app.creation_env_v to reader;
 grant select on view app.nested_creation_v to reader;
+grant select on view app.MixedView to reader;
+grant select on view app.lowercase_control to reader;
 grant insert on table app.* to reader;
 grant create table on database app to reader;
 grant reader to u1;
@@ -45,6 +59,8 @@ select * from app.v;
 select * from app.invoker_secret;
 select * from app.creation_env_v;
 select * from app.nested_creation_v;
+select * from app.MixedView;
+select * from app.lowercase_control;
 -- @session
 
 -- @session:id=3&user=restore_priv_target:admin&password=111
@@ -57,6 +73,13 @@ create snapshot restore_priv_s1 for account restore_priv_source;
 restore account restore_priv_source {snapshot = 'restore_priv_s1'} to account restore_priv_target;
 
 -- @session:id=4&user=restore_priv_target:admin&password=111
+select * from app.MixedView;
+select * from app.lowercase_control;
+select relname, json_extract(viewdef, '$.security_type') as security_type,
+json_extract(viewdef, '$.DefaultDatabase') as creation_db,
+json_extract(viewdef, '$.dependencies[0].database_name') as dependency_db
+from mo_catalog.mo_tables where reldatabase = 'app'
+and lower(relname) in ('mixedview', 'lowercase_control') order by relname;
 select * from app.t;
 select count(*) as bound_view_grants from mo_catalog.mo_role_privs p
 join mo_catalog.mo_tables t on p.obj_id = t.rel_logical_id
@@ -74,6 +97,8 @@ select * from app.invoker_secret;
 -- The creation database differs from the database containing the view.
 select * from app.creation_env_v;
 select * from app.nested_creation_v;
+select * from app.MixedView;
+select * from app.lowercase_control;
 select * from app.t;
 insert into app.t values (2);
 create table app.owned (id int);
@@ -97,11 +122,20 @@ restore account restore_priv_target {snapshot = 'restore_priv_s2'};
 select * from app.invoker_secret;
 select * from app.creation_env_v;
 select * from app.nested_creation_v;
+select * from app.MixedView;
+select * from app.lowercase_control;
 select * from app.t;
 select * from app.secret;
 delete from app.t;
 -- @session
 -- @session:id=9&user=restore_priv_target:admin&password=111
+select * from app.MixedView;
+select * from app.lowercase_control;
+select relname, json_extract(viewdef, '$.security_type') as security_type,
+json_extract(viewdef, '$.DefaultDatabase') as creation_db,
+json_extract(viewdef, '$.dependencies[0].database_name') as dependency_db
+from mo_catalog.mo_tables where reldatabase = 'app'
+and lower(relname) in ('mixedview', 'lowercase_control') order by relname;
 show grants for role reader;
 select count(*) as bound_table_grants from mo_catalog.mo_role_privs p
 join mo_catalog.mo_tables t on p.obj_id = t.rel_logical_id

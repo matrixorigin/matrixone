@@ -6,7 +6,7 @@
 
 ## 1. 基线与批准边界
 
-当前合并基线为 `mo/main@5fb586e1429386260b900171f65ffa844f49c981`，本地 merge `04db167d87409c8524d7a84ea27faf76583792e3`。首次部分交付 `22b48b77dffaaeeb9f773f47e561ae1d3d0a1728` 只有测试/文档；**续作已经包含生产恢复修复，不再适用“无生产改动”或“覆盖率门禁不适用”的描述。**
+当前合并基线为 `mo/main@be663676872edf6d42695bba41757af0a3251758`，本地 merge `78618cf66941e95eb67879a2e7c47f967fb85b06`。首次部分交付 `22b48b77dffaaeeb9f773f47e561ae1d3d0a1728` 只有测试/文档；**续作已经包含生产恢复修复，不再适用“无生产改动”或“覆盖率门禁不适用”的描述。**
 
 批准依据：
 
@@ -114,7 +114,7 @@
 
 环境为 darwin/arm64、Go 1.27.1、配套 gofmt、golangci-lint 2.14.0 / Go 1.27.1。CGo 首次复用因 provenance 不匹配被拒绝后，以本 worktree `make -j8 cgo` 构建；没有绕过校验。测试使用 `.agents/skills/mo-dev/scripts/mo-cgo-test`；BVT 使用 `~/Develop/matrixorigin/mo-tester` 的工具与自动生成结果，不手改 `.result`。
 
-**当前续作的下列验证已收敛通过；不等于第 6 节完整 S5 已验收。** `closure-*` 对应上述合并基线及当前生产源码。自审最后仅修改 plan 取消测试的 deferred join，随后补跑完整 plan 包及精确 race/static；frontend/native 与服务构建不编译 plan `_test.go`，其源码与 fixture 未变。
+**当前续作的下列验证已收敛通过；不等于第 6 节完整 S5 已验收。** `closure-*` 对应上一轮合并基线 `5fb586e1429386260b900171f65ffa844f49c981` 及当时源码；后续 P2 执行解析修复的当前验证见第 9 节，不将旧结果整体当作最新源码证明。自审最后仅修改 plan 取消测试的 deferred join，随后补跑完整 plan 包及精确 race/static；frontend/native 与服务构建不编译 plan `_test.go`，其源码与 fixture 未变。
 
 | 验证 | 当前终态 |
 | --- | --- |
@@ -162,3 +162,17 @@
 | artifact/文档 | R0/R2，证据与兼容 owner | 真 binary、模型、同 binary、合成模板分开；部分交付不等于上线许可 |
 
 已分段完整检查相对基线的 committed/unstaged/untracked Go、SQL、JSON 变更及自动生成结果，核对各 owner 的 Q1–Q3、选择/终态/指纹；自审还修正了取消测试失败路径的 deferred join。没有将 DetachPrepareParams 用于此只读借用，因为它会临时改变父状态；独立 BaseProcess 与不转移 ownership 的借用已沿真实构造链核实。提交前再次检查暂存文件清单、格式与当前 PR 模板。TODO、日志、二进制不提交；保留未合并 worktree。完整验收阻塞不因本次增加用例而自动消失。
+
+## 9. P2 review 闭包：保存策略必须进入真正执行解析
+
+review 指出的路径已真实复现并修复，**属于本次恢复修复未闭合的路径，不宣称新引入回归**。`back.exec` 的预解析虽然使用保存的标识符策略，`GetComputationWrapperInBack` 却再次按恢复会话解析；原 mode 1 创建的 `MixedView` 被 mode 0 保留为混合大小写，与目标目录的 `mixedview` 不匹配，导致创建环境/安全属性保留跳过。
+
+- 在实际生成执行 AST 的 `useParserSQLMode` 入口，复用 `RestoredViewLowerCaseTableNames` 读取精确 replay SQL 的保存策略；不修改 session/global、普通 SQL、内部命令或直接 AST 路径，不以放宽目标匹配掩盖解析不一致。
+- 执行入口 UT 覆盖模式 0/1/2、保存 mode 1/会话 mode 0、缺失/null、无上下文/不同 SQL、坏 JSON/非法值；直接断言 wrapper AST，并检查会话策略未变。修复前同一 UT 失败，输出保留。
+- 使用上一轮实际交付 binary 的干净实例复现：源为 `INVOKER/creation_env/creation_env`，恢复后的 `MixedView` 为 `DEFINER/app/app`；默认 mode 1 查询找不到 `mixedview`。全小写 control 正常。此 binary 不冒充本轮最新 upstream clean baseline。
+- 扩展原 `restore_account_privileges` fixture，复用已有 bigint/11、int/22 decoy，额外仅两 View、零新增数据行。真实跨账户与同账户恢复后，混合大小写和全小写两者均可查出 bigint/11；目录中保存规范名 `mixedview`、INVOKER、创建库/依赖库 `creation_env`；没有基表权限的 reader 在源、跨账户目标、同账户恢复后均被拒绝。metadata 查询以 `lower(relname)` 过滤，以免把错误混合大小写对象排除而漏检。
+- 当前新验证：6 个 focused 顶层测试 3.087s（包含既有 publication probe 解析对照）、完整 frontend owning package 19.257s；Go 1.27.1 配套 gofmt、vet/lint（0 issues）、普通 binary 构建均通过。本次新增生产 cover blocks **3/3 statements = 100%**，超过 75% 门禁。
+- mo-tester 自动生成当前 result 后，strict comparison 与同实例第二次 strict 均通过；每次生成/执行后都独立检查两个测试账户和两个 snapshot 均为零，避免入口 DROP 掩盖清理失败。服务同时满足 SQL readiness 与 `ISCP-Task Start`，完成后已停止。
+- 此处是顺序、局部 parser 修复，没有新共享状态、异步生命周期、拓扑或激活机制，故不机械重跑 race/双 CN/版本切换；这些维度的旧日志不替代本轮语义证明。完整 S5 缺口与 S8 NO-GO 不变。
+
+本轮命令、真实失败、终态、源码/产物身份、覆盖率和逐 hunk 自审保留于未提交的 `CLAUDE_validation/review-case-*` 及 `CLAUDE_review_case_*`。

@@ -962,6 +962,12 @@ var GetComputationWrapperInBack = func(execCtx *ExecCtx, db string, input *UserI
 			lowerCaseTableNames = 0
 		}
 		if input.useParserSQLMode {
+			// This parse produces the executed AST; preliminary classification
+			// in back.exec is not sufficient to preserve restored identifiers.
+			lowerCaseTableNames, err = plan2.RestoredViewLowerCaseTableNames(execCtx.reqCtx, input.getSql(), lowerCaseTableNames)
+			if err != nil {
+				return nil, err
+			}
 			stmts, err = parsers.ParseWithSQLMode(
 				execCtx.reqCtx,
 				dialect.MYSQL,

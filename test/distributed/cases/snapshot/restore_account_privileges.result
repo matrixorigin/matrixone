@@ -21,6 +21,24 @@ use creation_env;
 create view app.creation_env_v as select id from origin;
 create view inner_v as select id from origin;
 create view app.nested_creation_v as select id from inner_v;
+set view_security_type = 'INVOKER';
+create view app.MixedView as select id from origin;
+create view app.lowercase_control as select id from origin;
+set view_security_type = 'DEFINER';
+select * from app.MixedView;
+➤ id[-5,64,0]  𝄀
+11
+select * from app.lowercase_control;
+➤ id[-5,64,0]  𝄀
+11
+select relname, json_extract(viewdef, '$.security_type') as security_type,
+json_extract(viewdef, '$.DefaultDatabase') as creation_db,
+json_extract(viewdef, '$.dependencies[0].database_name') as dependency_db
+from mo_catalog.mo_tables where reldatabase = 'app'
+and lower(relname) in ('mixedview', 'lowercase_control') order by relname;
+➤ relname[12,5000,0]  ¦  security_type[-1,2147483647,0]  ¦  creation_db[-1,2147483647,0]  ¦  dependency_db[-1,2147483647,0]  𝄀
+lowercase_control  ¦  "INVOKER"  ¦  "creation_env"  ¦  "creation_env"  𝄀
+mixedview  ¦  "INVOKER"  ¦  "creation_env"  ¦  "creation_env"
 use app;
 create role reader;
 create user u1 identified by '111' default role reader;
@@ -30,6 +48,8 @@ grant select on view app.v to reader;
 grant select on view app.invoker_secret to reader;
 grant select on view app.creation_env_v to reader;
 grant select on view app.nested_creation_v to reader;
+grant select on view app.MixedView to reader;
+grant select on view app.lowercase_control to reader;
 grant insert on table app.* to reader;
 grant create table on database app to reader;
 grant reader to u1;
@@ -47,11 +67,29 @@ select * from app.creation_env_v;
 select * from app.nested_creation_v;
 ➤ id[-5,64,0]  𝄀
 11
+select * from app.MixedView;
+internal error: do not have privilege to execute the statement
+select * from app.lowercase_control;
+internal error: do not have privilege to execute the statement
 create database app;
 create table app.t (id int primary key);
 insert into app.t values (99);
 create snapshot restore_priv_s1 for account restore_priv_source;
 restore account restore_priv_source {snapshot = 'restore_priv_s1'} to account restore_priv_target;
+select * from app.MixedView;
+➤ id[-5,64,0]  𝄀
+11
+select * from app.lowercase_control;
+➤ id[-5,64,0]  𝄀
+11
+select relname, json_extract(viewdef, '$.security_type') as security_type,
+json_extract(viewdef, '$.DefaultDatabase') as creation_db,
+json_extract(viewdef, '$.dependencies[0].database_name') as dependency_db
+from mo_catalog.mo_tables where reldatabase = 'app'
+and lower(relname) in ('mixedview', 'lowercase_control') order by relname;
+➤ relname[12,5000,0]  ¦  security_type[-1,2147483647,0]  ¦  creation_db[-1,2147483647,0]  ¦  dependency_db[-1,2147483647,0]  𝄀
+lowercase_control  ¦  "INVOKER"  ¦  "creation_env"  ¦  "creation_env"  𝄀
+mixedview  ¦  "INVOKER"  ¦  "creation_env"  ¦  "creation_env"
 select * from app.t;
 ➤ id[4,32,0]  𝄀
 1
@@ -75,6 +113,10 @@ select * from app.creation_env_v;
 select * from app.nested_creation_v;
 ➤ id[-5,64,0]  𝄀
 11
+select * from app.MixedView;
+internal error: do not have privilege to execute the statement
+select * from app.lowercase_control;
+internal error: do not have privilege to execute the statement
 select * from app.t;
 ➤ id[4,32,0]  𝄀
 1
@@ -96,6 +138,8 @@ GRANT select ON view d.t `reader`  𝄀
 GRANT select ON view d.t `reader`  𝄀
 GRANT select ON view d.t `reader`  𝄀
 GRANT select ON view d.t `reader`  𝄀
+GRANT select ON view d.t `reader`  𝄀
+GRANT select ON view d.t `reader`  𝄀
 GRANT table ownership ON table d.t `reader`
 create snapshot restore_priv_s2 for account restore_priv_target;
 grant select on table app.secret to reader;
@@ -109,6 +153,10 @@ select * from app.creation_env_v;
 select * from app.nested_creation_v;
 ➤ id[-5,64,0]  𝄀
 11
+select * from app.MixedView;
+internal error: do not have privilege to execute the statement
+select * from app.lowercase_control;
+internal error: do not have privilege to execute the statement
 select * from app.t;
 ➤ id[4,32,0]  𝄀
 3
@@ -116,6 +164,20 @@ select * from app.secret;
 internal error: do not have privilege to execute the statement
 delete from app.t;
 internal error: do not have privilege to execute the statement
+select * from app.MixedView;
+➤ id[-5,64,0]  𝄀
+11
+select * from app.lowercase_control;
+➤ id[-5,64,0]  𝄀
+11
+select relname, json_extract(viewdef, '$.security_type') as security_type,
+json_extract(viewdef, '$.DefaultDatabase') as creation_db,
+json_extract(viewdef, '$.dependencies[0].database_name') as dependency_db
+from mo_catalog.mo_tables where reldatabase = 'app'
+and lower(relname) in ('mixedview', 'lowercase_control') order by relname;
+➤ relname[12,5000,0]  ¦  security_type[-1,2147483647,0]  ¦  creation_db[-1,2147483647,0]  ¦  dependency_db[-1,2147483647,0]  𝄀
+lowercase_control  ¦  "INVOKER"  ¦  "creation_env"  ¦  "creation_env"  𝄀
+mixedview  ¦  "INVOKER"  ¦  "creation_env"  ¦  "creation_env"
 show grants for role reader;
 ➤ Grants for reader[12,236,0]  𝄀
 GRANT connect ON account  `reader`  𝄀
@@ -123,6 +185,8 @@ GRANT create table ON database d `reader`  𝄀
 GRANT insert ON table d.* `reader`  𝄀
 GRANT select ON table d.t `reader`  𝄀
 GRANT table ownership ON table d.t `reader`  𝄀
+GRANT select ON view d.t `reader`  𝄀
+GRANT select ON view d.t `reader`  𝄀
 GRANT select ON view d.t `reader`  𝄀
 GRANT select ON view d.t `reader`  𝄀
 GRANT select ON view d.t `reader`  𝄀
