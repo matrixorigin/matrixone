@@ -214,6 +214,16 @@ func fixedTypeMatch(overloads []overload, inputs []types.Type) checkResult {
 	return fixedTypeMatchExcept(overloads, inputs, -1)
 }
 
+// The DATETIME overload is for native DATETIME values. In particular, an
+// implicit TIME -> DATETIME cast uses the host date and cannot supply a valid
+// UNIX epoch for the statement's date.
+func unixTimestampTypeMatch(overloads []overload, inputs []types.Type) checkResult {
+	if len(inputs) == 1 && inputs[0].Oid == types.T_datetime {
+		return fixedTypeMatchOnly(overloads, inputs, 4)
+	}
+	return fixedTypeMatch(overloads[:4], inputs)
+}
+
 // Native temporal inputs avoid formatting and reparsing. Other inputs retain
 // the historical character coercion (including numeric and NULL arguments).
 func lastDayTypeMatch(overloads []overload, inputs []types.Type) checkResult {
