@@ -275,7 +275,18 @@ func (b *preparedFieldTypeBinding) seedParameters(seed *Plan) {
 		seen[expr] = true
 		if fn := expr.GetF(); fn != nil {
 			if fn.Func.ObjName == "cast" && len(fn.Args) > 0 {
-				if p := fn.Args[0].GetP(); p != nil {
+				// Numeric value CAST9 keeps the source parameter behind a
+				// validated lexical value owner. Seed the explicit contract from
+				// that owner without walking into its scope or BOOL reference.
+				source := fn.Args[0]
+				if _, overload := function.DecodeOverloadID(fn.Func.GetObj()); overload == function.NumericValueCastOverload {
+					if owned, _, ok := function.NumericValueProgramCastOwner(expr); ok {
+						source = owned
+					} else {
+						source = nil
+					}
+				}
+				if p := source.GetP(); p != nil && p.Pos >= 0 {
 					b.params[p.Pos] = preparedFieldParameter{typ: makeTypeByPlan2Expr(expr), inherited: isExplicitPreparedCast(expr)}
 				}
 			}

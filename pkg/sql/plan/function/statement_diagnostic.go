@@ -132,6 +132,19 @@ func IsStatementConstantInput(expr *plan.Expr) bool {
 		if fn.Func == nil {
 			return false
 		}
+		fid, overload := DecodeOverloadID(fn.Func.GetObj())
+		if fid == CAST && overload == NumericValueCastOverload {
+			// CAST9 is a private executor contract, so it has no registry
+			// overload to consult below. Admit it only as a complete lexical
+			// owner, and prove both the value and optional kind from the same
+			// statement-constant inputs. Its explicit diagnostic policy remains
+			// classified by ContainsRowScopedConversion.
+			source, sourceKind, ok := NumericValueProgramCastOwner(expr)
+			if !ok || !IsStatementConstantInput(source) {
+				return false
+			}
+			return sourceKind == nil || IsStatementConstantInput(sourceKind)
+		}
 		f, ok := GetFunctionByIdWithoutError(fn.Func.GetObj())
 		if !ok || f.CannotFold() || f.IsRealTimeRelated() || f.IsAgg() || f.IsWin() {
 			return false

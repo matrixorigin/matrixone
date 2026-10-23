@@ -2817,9 +2817,20 @@ func TestBinaryProtocolDecimalRebindPreservesExactAbsDomain(t *testing.T) {
 	}
 	require.NotNil(t, abs)
 	require.Equal(t, int32(types.T_decimal256), abs.Typ.Id)
+	require.Equal(t, int32(39), abs.Typ.Width)
+	require.Equal(t, int32(4), abs.Typ.Scale)
 	require.Equal(t, int32(types.T_decimal256), abs.GetF().Args[0].Typ.Id)
-	require.Equal(t, "cast", abs.GetF().Args[0].GetF().Func.GetObjName())
-	require.Equal(t, value, abs.GetF().Args[0].GetF().Args[0].GetLit().GetSval())
+	executor, err := colexec.NewExpressionExecutor(cw.proc, abs)
+	require.NoError(t, err)
+	defer executor.Free()
+	input := batch.New(nil)
+	input.SetRowCount(1)
+	result, err := executor.Eval(cw.proc, []*batch.Batch{input}, nil)
+	require.NoError(t, err)
+	require.Equal(t, types.T_decimal256, result.GetType().Oid)
+	want, err := types.ParseDecimal256(value, 39, 4)
+	require.NoError(t, err)
+	require.Equal(t, want, vector.GetFixedAtNoTypeCheck[types.Decimal256](result, 0))
 }
 
 func TestInitExecuteStmtParamSpecializesBinaryRuntimePlan(t *testing.T) {
