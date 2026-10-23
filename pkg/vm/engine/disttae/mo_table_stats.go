@@ -1729,6 +1729,24 @@ func (d *dynamicCtx) cleanTableStock() {
 	d.tableStock.tbls = d.tableStock.tbls[:0]
 }
 
+// snapshotTableStock returns the pending table pairs as a copy that is
+// detached from d.tableStock.tbls's backing array. The collector's round hands
+// the copy to alphaTask: its ants workers write tablePair elements without
+// holding d.Lock, so they must never share memory with the collector's stock,
+// which getChangedTableList appends to and cleanTableStock rewrites under the
+// same lock while a second tableStatsExecutor round can already be running.
+// The copy cost is bounded by one stock length per round and is dominated by
+// the per-table work the round performs anyway.
+func (d *dynamicCtx) snapshotTableStock() []tablePair {
+	d.Lock()
+	defer d.Unlock()
+
+	tbls := make([]tablePair, len(d.tableStock.tbls))
+	copy(tbls, d.tableStock.tbls)
+
+	return tbls
+}
+
 func (d *dynamicCtx) tableStatsExecutor(
 	ctx context.Context,
 	service string,
@@ -1774,14 +1792,8 @@ func (d *dynamicCtx) tableStatsExecutor(
 				return err
 			}
 
-			d.Lock()
-			tbls := d.tableStock.tbls[:]
-			d.Unlock()
-
-			if timeout, err = d.alphaTask(
+			if timeout, err = d.runStatsCollectionRound(
 				newCtx, service,
-				tbls,
-				"main routine",
 			); err != nil {
 				logutil.Info(logHeader,
 					zap.String("source", "table stats top executor"),
@@ -1807,6 +1819,22 @@ func (d *dynamicCtx) tableStatsExecutor(
 			d.cleanTableStock()
 		}
 	}
+}
+
+// runStatsCollectionRound hands the stock collected by prepare to one alpha
+// collection round. It is the per-tick handoff tableStatsExecutor performs;
+// the statistics regression exercises this same production function so that
+// the ownership of the handed-over memory is proven on the path the executor
+// uses, not a test copy of it. alphaTask's ants workers write the given
+// tablePair elements without d.Lock, so the stock is passed as a detached
+// snapshot: any aliasing here races a concurrent tableStatsExecutor round's
+// getChangedTableList append and cleanTableStock rewrite on the shared
+// backing array, which is the data race reported in issue #27702.
+func (d *dynamicCtx) runStatsCollectionRound(
+	ctx context.Context,
+	service string,
+) (timeout bool, err error) {
+	return d.alphaTask(ctx, service, d.snapshotTableStock(), "main routine")
 }
 
 func (d *dynamicCtx) prepare(
@@ -1895,6 +1923,11 @@ func (d *dynamicCtx) callAlphaWithRetry(
 	return nil
 }
 
+// alphaTask collects the statistics of the given pairs through pool workers.
+// tbls must be exclusive to this invocation: the submitted workers write the
+// tablePair elements they own (pState, errChan) without d.Lock, and this call
+// itself rewrites and reslices tbls as batches advance, so no other goroutine
+// may read or write the referenced memory while alphaTask runs.
 func (d *dynamicCtx) alphaTask(
 	ctx context.Context,
 	service string,
