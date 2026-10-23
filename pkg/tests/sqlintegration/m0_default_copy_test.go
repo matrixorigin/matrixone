@@ -41,7 +41,7 @@ func TestM0DefaultFalseCopySQL(t *testing.T) {
 		m0Exec(t, ctx, db, "create table "+table+m0RollbackCustomerSchema)
 		m0Exec(t, ctx, db, "insert into "+table+" values (1,1,1,50000,100,10),(2,1,1,50000,100,NULL)")
 		for step := range 2 {
-				m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+table+"')")
+			m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+table+"')")
 			beforeID, _ := m0TableGeneration(t, ctx, db, schema, "customer")
 			beforeObjects := m0ObjectFingerprints(t, ctx, db, table)
 			require.NotEmpty(t, beforeObjects)
@@ -50,10 +50,10 @@ func TestM0DefaultFalseCopySQL(t *testing.T) {
 			afterID, afterVersion := m0TableGeneration(t, ctx, db, schema, "customer")
 			require.NotEqual(t, beforeID, afterID, "control must replace the physical relation through COPY")
 			require.Zero(t, afterVersion)
-				m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+table+"')")
-				afterObjects := m0ObjectFingerprints(t, ctx, db, table)
-				require.NotEmpty(t, afterObjects)
-				require.NotEqual(t, beforeObjects, afterObjects)
+			m0Exec(t, ctx, db, "select mo_ctl('dn','flush','"+table+"')")
+			afterObjects := m0ObjectFingerprints(t, ctx, db, table)
+			require.NotEmpty(t, afterObjects)
+			require.NotEqual(t, beforeObjects, afterObjects)
 			require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+table+" where "+column+" = false"))
 			m0Exec(t, ctx, db, "update "+table+" set c_balance=0 where c_balance is null")
 		}
