@@ -1060,7 +1060,7 @@ func bindWindowSpec(
 func rangeFrameBoundType(orderType plan.Type) *plan.Type {
 	switch types.T(orderType.Id) {
 	case types.T_int8, types.T_int16, types.T_int32:
-		typ := types.T_int64.ToType()
+		typ := types.T_int64.ToType().PlanType()
 		return &typ
 	default:
 		typ := orderType
