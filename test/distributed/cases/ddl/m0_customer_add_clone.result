@@ -89,6 +89,25 @@ select count(*) as kept_comments from information_schema.columns where table_sch
 select count(*) as comment_control_rows from comment_control where a=1 and b=2 and x is null;
 ➤ comment_control_rows[-5,64,0]  𝄀
 1
+create table birth_index_control(c_id int not null, c_d_id int not null, c_w_id int not null, c_credit_lim decimal(12,2), c_ytd_payment decimal(12,2), c_balance decimal(12,2), primary key(c_w_id,c_d_id,c_id));
+insert into birth_index_control values (1,1,1,50000,100,10),(2,1,1,50000,100,20),(3,1,1,50000,100,30);
+alter table birth_index_control add column flag boolean default false;
+update birth_index_control set flag=null where c_id=3;
+create index ix on birth_index_control(c_balance);
+select count(*) as indexed_false_rows from birth_index_control where flag=false;
+➤ indexed_false_rows[-5,64,0]  𝄀
+2
+select count(*) as indexed_null_rows from birth_index_control where flag is null;
+➤ indexed_null_rows[-5,64,0]  𝄀
+1
+select count(*) as indexed_lookup from birth_index_control where c_balance=20 and flag=false;
+➤ indexed_lookup[-5,64,0]  𝄀
+1
+insert into birth_index_control(c_id,c_d_id,c_w_id,c_balance) values (4,1,1,40);
+select count(*) as indexed_new_default from birth_index_control where c_id=4 and flag=false;
+➤ indexed_new_default[-5,64,0]  𝄀
+1
+drop table birth_index_control;
 drop snapshot m0_customer_snapshot;
 drop database m0_customer_child;
 drop database m0_customer_parent;

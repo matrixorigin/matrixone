@@ -68,6 +68,37 @@ func TestM0BirthFalseFallbackSQL(t *testing.T) {
 			require.Zero(t, version)
 			require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+table))
 		}
+		for _, indexSQL := range []string{
+			"create index ix on %s(c_balance)",
+			"alter table %s add index ix(c_balance)",
+			"create unique index ix on %s(c_balance)",
+		} {
+			name := "index_exit"
+			table := schema + "." + name
+			m0Exec(t, ctx, db, "create table "+table+m0RollbackCustomerSchema)
+			m0Exec(t, ctx, db, "insert into "+table+" values(1,1,1,50000,100,10),(2,1,1,50000,100,20)")
+			m0Exec(t, ctx, db, "alter table "+table+" add column flag boolean default false")
+			m0Exec(t, ctx, db, "insert into "+table+" values(3,1,1,50000,100,30,NULL)")
+			beforeID, beforeVersion := m0TableGeneration(t, ctx, db, schema, name)
+			require.Equal(t, uint32(1), beforeVersion)
+			// A failed UNIQUE build must leave the source and its birth state usable.
+			_, err = db.ExecContext(ctx, "create unique index duplicate_flags on "+table+"(flag)")
+			require.ErrorContains(t, err, "Duplicate entry 'false' for key 'flag'")
+			afterFailure, version := m0TableGeneration(t, ctx, db, schema, name)
+			require.Equal(t, beforeID, afterFailure)
+			require.Equal(t, beforeVersion, version)
+			require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+table+" where flag=false"))
+			m0Exec(t, ctx, db, fmt.Sprintf(indexSQL, table))
+			afterID, version := m0TableGeneration(t, ctx, db, schema, name)
+			require.NotEqual(t, beforeID, afterID)
+			require.Zero(t, version)
+			require.Equal(t, 2, m0Count(t, ctx, db, "select count(*) from "+table+" where flag=false"))
+			require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+table+" where flag is null"))
+			require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+table+" where c_balance=20"))
+			m0Exec(t, ctx, db, "insert into "+table+"(c_id,c_d_id,c_w_id,c_balance) values(4,1,1,40)")
+			require.Equal(t, 1, m0Count(t, ctx, db, "select count(*) from "+table+" where c_id=4 and flag=false"))
+			m0Exec(t, ctx, db, "drop table "+table)
+		}
 	})
 }
 

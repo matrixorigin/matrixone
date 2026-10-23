@@ -18,6 +18,7 @@ package plan
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
@@ -71,4 +72,38 @@ func TestM0BirthCopyExitRejectsUnknownState(t *testing.T) {
 	table.AppendMissingState.FormatVersion++
 	_, err := buildCopyTableDef(context.Background(), table)
 	require.Error(t, err)
+}
+
+func TestM0BirthCreateIndexCopyExitPlan(t *testing.T) {
+	for _, statement := range []string{
+		"create index ix on constraint_test.customer(c_balance)",
+		"create unique index ix on constraint_test.customer(c_balance)",
+	} {
+		for _, birthLayout := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/birth=%t", statement, birthLayout), func(t *testing.T) {
+				table := m0BirthExitPlanTable()
+				if !birthLayout {
+					table.AppendMissingState = nil
+					table.Version = 0
+				}
+				mock := NewMockOptimizer(false, newPlanTestProcess(t))
+				mock.ctxt.tables[table.Name] = table
+				mock.ctxt.objects[table.Name] = &ObjectRef{SchemaName: table.DbName, ObjName: table.Name}
+				built, err := buildSingleStmt(mock, t, statement)
+				require.NoError(t, err)
+				if !birthLayout {
+					require.NotNil(t, built.GetDdl().GetCreateIndex(), "ordinary index planning must stay unchanged")
+					return
+				}
+				alter := built.GetDdl().GetAlterTable()
+				require.NotNil(t, alter)
+				require.Equal(t, plan.AlterTable_COPY, alter.AlgorithmType)
+				require.NotNil(t, alter.TableDef.AppendMissingState)
+				require.Nil(t, alter.CopyTableDef.AppendMissingState)
+				require.Zero(t, alter.CopyTableDef.Version)
+				require.NotEmpty(t, alter.CopyTableDef.Indexes)
+				require.Empty(t, table.Indexes, "planning must not mutate the source definition")
+			})
+		}
+	}
 }

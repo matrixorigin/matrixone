@@ -6491,6 +6491,21 @@ func buildCreateIndex(stmt *tree.CreateIndex, ctx CompilerContext) (*Plan, error
 	default:
 		return nil, moerr.NewNotSupportedf(ctx.GetContext(), "statement: '%v'", tree.String(stmt, dialect.MYSQL))
 	}
+	if tableDef.AppendMissingState != nil {
+		// CREATE INDEX and ALTER TABLE ADD INDEX must use the same transactional
+		// COPY exit before changing constraints on a birth-fill layout.
+		var index tree.TableDef
+		switch {
+		case uIdx != nil:
+			index = uIdx
+		case ftIdx != nil:
+			index = ftIdx
+		default:
+			index = sIdx
+		}
+		return buildAlterTable(&tree.AlterTable{Table: stmt.Table,
+			Options: tree.AlterTableOptions{&tree.AlterOptionAdd{Def: index}}}, ctx)
+	}
 	colMap := make(map[string]*ColDef)
 	for _, col := range tableDef.Cols {
 		colMap[col.Name] = col
