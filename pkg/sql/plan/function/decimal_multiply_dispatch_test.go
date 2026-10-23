@@ -48,6 +48,10 @@ func TestDecimalMultiplyConstantBroadcastAndReuse(t *testing.T) {
 	require.True(t, fc.parameters[1].GetNulls().IsEmpty())
 	fc.selectList = nil
 	fc.expected.nullList = nil
+	// Only physical row zero is meaningful for a non-NULL constant. Bits
+	// outside that row must not become NULLs in the broadcast result.
+	fc.parameters[0].GetNulls().Add(1)
+	fc.parameters[1].GetNulls().Add(2)
 	ok, info = fc.Run()
 	require.True(t, ok, info)
 }

@@ -159,7 +159,17 @@ func decimal256Multiply(parameters []*vector.Vector, result vector.FunctionResul
 		nulls.AddRange(resultNulls, 0, uint64(length))
 		return nil
 	}
-	nulls.Or(left.GetNulls(), right.GetNulls(), resultNulls)
+	leftConstant, rightConstant := left.IsConst(), right.IsConst()
+	leftNulls, rightNulls := left.GetNulls(), right.GetNulls()
+	// Non-NULL constants broadcast physical row zero. Unused bitmap bits
+	// outside that row do not belong to the logical evaluation domain.
+	if leftConstant {
+		leftNulls = nil
+	}
+	if rightConstant {
+		rightNulls = nil
+	}
+	nulls.Or(leftNulls, rightNulls, resultNulls)
 	done, _ := maskUnselectedRows(resultNulls, selectList, length)
 	if done || !hasEvaluableRows(resultNulls, length) {
 		return nil
@@ -175,7 +185,7 @@ func decimal256Multiply(parameters []*vector.Vector, result vector.FunctionResul
 		rightRange = decimal256OperandRange(*right.GetType())
 	}
 	var err error
-	if left.IsConst() && right.IsConst() && length > 1 {
+	if leftConstant && rightConstant && length > 1 {
 		// A mask on logical row zero must not suppress a value needed elsewhere.
 		var value [1]types.Decimal256
 		var noNulls nulls.Nulls
