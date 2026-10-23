@@ -239,4 +239,72 @@ func TestIssue29566IndexRebuildCoordinator(t *testing.T) {
 			}
 		})
 	}
+
+	// #29796: COPY ALTER builds from a new, uncommitted table incarnation.
+	// A remote name lookup must not scan the original committed table instead.
+	for _, flush := range []bool{false, true} {
+		t.Run(fmt.Sprintf("copy_alter/flush_%t", flush), func(t *testing.T) {
+			conn = conns[0]
+			plan.SetForceScanOnMultiCN(false)
+			t.Cleanup(func() { plan.SetForceScanOnMultiCN(oldForce) })
+			table := fmt.Sprintf("copy_vectors_%t", flush)
+			exec(t, "create table "+table+"(id bigint primary key, embedding vecf32(3))")
+			exec(t, "insert into "+table+" values(1,'[1,0,0]'),(2,'[0,1,0]'),(3,'[0,0,1]')")
+			if flush {
+				exec(t, "select mo_ctl('dn','flush','"+schema+"."+table+"')")
+			}
+			// Both ingress CNs use the same original object: at least one has
+			// a remote object owner. Rollback keeps it intact for the next CN.
+			for i, coordinator := range conns {
+				t.Run(fmt.Sprintf("cn%d", i), func(t *testing.T) {
+					cn, err := cluster.GetCNService(i)
+					require.NoError(t, err)
+					inventory := clusterservice.GetMOCluster(cn.ServiceID())
+					refresher, ok := inventory.(clusterservice.AuthoritativeRefresher)
+					require.True(t, ok)
+					require.NoError(t, refresher.Refresh(ctx))
+					workers := 0
+					inventory.GetCNService(clusterservice.NewSelector(), func(metadata.CNService) bool {
+						workers++
+						return true
+					})
+					require.Equal(t, 2, workers, "each coordinator must discover both scan workers")
+					conn = coordinator
+					t.Cleanup(func() {
+						cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+						defer cleanupCancel()
+						_, err := coordinator.ExecContext(cleanupCtx, "rollback")
+						require.NoError(t, err)
+					})
+					plan.SetForceScanOnMultiCN(true)
+					// Existing committed tables must still combine remote persisted
+					// rows with the coordinator's transaction-local writes exactly once.
+					exec(t, "begin")
+					exec(t, "insert into "+table+" values(4,'[2,0,0]')")
+					require.Equal(t, []string{"1", "2", "3", "4"}, query(t, "select id from "+table+" order by id"))
+					exec(t, "rollback")
+
+					exec(t, "begin")
+					exec(t, "alter table "+table+" add column note int, add index h_embedding using hnsw(embedding) op_type 'vector_l2_ops'")
+					require.Equal(t, []string{"1\tNULL", "2\tNULL", "3\tNULL"}, query(t, "select id,note from "+table+" order by id"))
+					metadataTable := query(t, "select index_table_name from mo_catalog.mo_indexes where table_id=(select rel_id from mo_catalog.mo_tables where reldatabase='"+schema+"' and relname='"+table+"') and algo_table_type='"+catalog.Hnsw_TblType_Metadata+"'")
+					require.Len(t, metadataTable, 1)
+					// Validate the built generation directly; a query with pending
+					// writes may correctly fall back to a source scan.
+					require.Equal(t, []string{"3"}, query(t, "select sum(nrow) from `"+metadataTable[0]+"`"))
+					search := "select id from " + table + " order by l2_distance(embedding,'[1,0,0]') limit 1 by rank with option 'mode=post'"
+					require.Equal(t, []string{"1"}, query(t, search))
+					if i == 0 {
+						exec(t, "rollback")
+						require.Len(t, query(t, "show columns from "+table), 2)
+					} else {
+						exec(t, "commit")
+						conn = conns[0]
+						require.Equal(t, []string{"1\tNULL", "2\tNULL", "3\tNULL"}, query(t, "select id,note from "+table+" order by id"))
+						require.Equal(t, []string{"1"}, query(t, search))
+					}
+				})
+			}
+		})
+	}
 }

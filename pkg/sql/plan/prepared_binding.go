@@ -96,6 +96,7 @@ type preparedSourceBindingState struct {
 	valueDependent       bool
 	selectStatement      bool
 	diagnosticCandidates []*Expr
+	decimalFloatProofs   []PreparedDecimalFloatProof
 	diagnosticFree       bool
 }
 
@@ -661,6 +662,11 @@ func bindPreparedConsumerArguments(ctx context.Context, name string, args []*Exp
 		return args, nil
 	}
 	name = strings.ToLower(name)
+	if converted, admitted, err := bindPreparedDecimalFloatArguments(ctx, name, args); err != nil {
+		return nil, err
+	} else if admitted {
+		return converted, nil
+	}
 	if converted, admitted, err := bindPreparedDecimalIntegerArguments(ctx, name, args); err != nil {
 		return nil, err
 	} else if admitted {
@@ -987,6 +993,7 @@ type PreparedExecutionPlan struct {
 	Plan                 *Plan
 	FieldTypes           *PreparedFieldTypes
 	DiagnosticCandidates []*Expr
+	DecimalFloatProofs   []PreparedDecimalFloatProof
 	DiagnosticFree       bool
 	ValueDependent       bool
 }
@@ -1049,7 +1056,7 @@ func BuildPreparedExecutionPlan(ctx CompilerContext, stmt tree.Statement,
 		return nil, err
 	}
 	state := preparedBindingState(planning)
-	return &PreparedExecutionPlan{Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates,
+	return &PreparedExecutionPlan{Plan: p, FieldTypes: state.fieldTypes.result(), DiagnosticCandidates: state.diagnosticCandidates, DecimalFloatProofs: state.decimalFloatProofs,
 		DiagnosticFree: state.diagnosticFree, ValueDependent: state.valueDependent}, nil
 }
 

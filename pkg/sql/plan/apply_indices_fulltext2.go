@@ -342,7 +342,7 @@ func (builder *QueryBuilder) findFulltext2IndexTables(scanNode *plan.Node, idxde
 }
 
 // clusterSupportsFulltext2SearchOptions reports whether the cluster protocol
-// version is at least MORPCVersion129.
+// version is at least MORPCVersion130.
 func (builder *QueryBuilder) clusterSupportsFulltext2SearchOptions() bool {
 	proc := builder.compCtx.GetProcess()
 	if proc == nil {
@@ -354,7 +354,7 @@ func (builder *QueryBuilder) clusterSupportsFulltext2SearchOptions() bool {
 	}
 	value, ok := rt.GetGlobalVariables(moruntime.MOProtocolVersion)
 	version, valid := value.(int64)
-	return ok && valid && version >= defines.MORPCVersion129
+	return ok && valid && version >= defines.MORPCVersion130
 }
 
 // fulltext2ThreadsSearch resolves the fulltext2_threads_search session variable
@@ -364,7 +364,7 @@ func (builder *QueryBuilder) clusterSupportsFulltext2SearchOptions() bool {
 // value caps the worker count. Parallel search yields an identical top-k at any
 // value, so a mixed-version cluster is correctness-safe either way.
 //
-// The gate on MORPCVersion129 therefore does not disable parallelism; it only
+// The gate on MORPCVersion130 therefore does not disable parallelism; it only
 // withholds an EXPLICIT operator value until every CN understands the option,
 // emitting the neutral default so no CN is handed a value its peers would not
 // honor. Below the epoch a CN that predates the option ignores it and runs its
@@ -383,7 +383,7 @@ func (builder *QueryBuilder) fulltext2ThreadsSearch() int64 {
 // fulltext2SearchDFCutoff resolves the fulltext2_search_df_cutoff session variable:
 // the global df/N fraction at or above which a ranked bag-of-words term is dropped from
 // the BM25 search. 0 (the default) disables the cutoff. Unlike threads_search this CHANGES
-// the result set, so it is gated on MORPCVersion129 and emits the neutral 0 below the epoch
+// the result set, so it is gated on MORPCVersion130 and emits the neutral 0 below the epoch
 // — a CN that predates the option would otherwise apply no cutoff while its peers did,
 // giving inconsistent top-k across a rolling upgrade. At/above the epoch every CN honors
 // the resolved value, so the result is identical wherever the scan runs.

@@ -970,6 +970,45 @@ func TestJSONExportCancellationCleansBlockedWorkerBatch(t *testing.T) {
 	require.Zero(t, mp.CurrNB())
 }
 
+func TestConstructJSONLineRejectsInvalidUTF8AndReleasesBatch(t *testing.T) {
+	mp := mpool.MustNewZero()
+	mrs := &MysqlResultSet{}
+	column := &MysqlColumn{}
+	column.SetName("value")
+	mrs.AddColumn(column)
+	ep := &ExportConfig{proc: sysFileAccessTestProcess(), mrs: mrs}
+	ses := &backSession{feSessionImpl: feSessionImpl{pool: mp}}
+	bytesChan := make(chan *BatchByte, 2)
+
+	badBatch := batch.NewOffHeapWithSize(1)
+	badVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	badBatch.Vecs[0] = badVec
+	defer badBatch.Clean(mp)
+	require.NoError(t, vector.AppendBytes(badVec, []byte("valid"), false, mp))
+	require.NoError(t, vector.AppendBytes(badVec, []byte("x\xffy"), false, mp))
+	badBatch.SetRowCount(2)
+	require.Positive(t, mp.CurrNB())
+	constructJSONLine(context.Background(), ses, badBatch, 0, bytesChan, ep)
+	failed := <-bytesChan
+	require.Error(t, failed.err)
+	require.True(t, moerr.IsMoErrCode(failed.err, moerr.ErrNotSupported), "%v", failed.err)
+	require.Contains(t, failed.err.Error(), "invalid UTF-8")
+	require.Zero(t, len(failed.writeByte), "do not publish a partial batch containing a valid prefix")
+	require.Zero(t, mp.CurrNB(), "conversion failure must release the worker batch")
+
+	goodBatch := batch.NewOffHeapWithSize(1)
+	goodVec := vector.NewOffHeapVecWithType(types.T_varchar.ToType())
+	goodBatch.Vecs[0] = goodVec
+	defer goodBatch.Clean(mp)
+	require.NoError(t, vector.AppendBytes(goodVec, []byte("next"), false, mp))
+	goodBatch.SetRowCount(1)
+	constructJSONLine(context.Background(), ses, goodBatch, 1, bytesChan, ep)
+	succeeded := <-bytesChan
+	require.NoError(t, succeeded.err)
+	require.Equal(t, []byte("{\"value\":\"next\"}\n"), succeeded.writeByte)
+	require.Zero(t, mp.CurrNB(), "successful batch must release its worker allocation")
+}
+
 func Test_getExportFormat(t *testing.T) {
 	convey.Convey("getExportFormat returns correct format", t, func() {
 		// Test default format (empty string returns "csv")
@@ -1123,6 +1162,78 @@ func Test_vectorValueToJSON(t *testing.T) {
 			convey.So(err, convey.ShouldBeNil)
 			convey.So(val, convey.ShouldEqual, "2023-12-25")
 		})
+	})
+}
+
+func TestVectorValueToJSONRejectsInvalidUTF8Text(t *testing.T) {
+	for _, typ := range []types.T{types.T_char, types.T_varchar, types.T_text} {
+		t.Run(typ.String(), func(t *testing.T) {
+			for _, value := range []string{"", "plain", "世界", "�", `\N`} {
+				func() {
+					mp := mpool.MustNewZero()
+					vec := vector.NewVec(typ.ToType())
+					defer func() {
+						vec.Free(mp)
+						require.Zero(t, mp.CurrNB())
+					}()
+					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+					got, err := vectorValueToJSON(vec, 0, nil, nil)
+					require.NoError(t, err)
+					require.Equal(t, value, got)
+				}()
+			}
+
+			for _, value := range []string{"\xff", "a\xffb", "\xc3"} {
+				func() {
+					mp := mpool.MustNewZero()
+					vec := vector.NewVec(typ.ToType())
+					defer func() {
+						vec.Free(mp)
+						require.Zero(t, mp.CurrNB())
+					}()
+					require.NoError(t, vector.AppendBytes(vec, []byte(value), false, mp))
+					_, err := vectorValueToJSON(vec, 0, nil, nil)
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+					require.Contains(t, err.Error(), "JSONLINE")
+					require.Contains(t, err.Error(), "invalid UTF-8")
+					require.NotContains(t, err.Error(), value)
+				}()
+			}
+		})
+	}
+
+	t.Run("datalink", func(t *testing.T) {
+		values := []struct {
+			name    string
+			value   string
+			wantErr bool
+		}{
+			{name: "invalid URL path UTF-8", value: "file:///tmp/a\xffb", wantErr: true},
+			{name: "valid URL", value: "file:///tmp/a-valid-b"},
+		}
+		for _, tc := range values {
+			t.Run(tc.name, func(t *testing.T) {
+				mp := mpool.MustNewZero()
+				vec := vector.NewVec(types.T_datalink.ToType())
+				defer func() {
+					vec.Free(mp)
+					require.Zero(t, mp.CurrNB())
+				}()
+				require.NoError(t, vector.AppendBytes(vec, []byte(tc.value), false, mp))
+				got, err := vectorValueToJSON(vec, 0, nil, nil)
+				if tc.wantErr {
+					require.Error(t, err)
+					require.True(t, moerr.IsMoErrCode(err, moerr.ErrNotSupported), "%v", err)
+					require.Contains(t, err.Error(), "JSONLINE")
+					require.Contains(t, err.Error(), "invalid UTF-8")
+					require.NotContains(t, err.Error(), tc.value)
+					return
+				}
+				require.NoError(t, err)
+				require.Equal(t, tc.value, got)
+			})
+		}
 	})
 }
 
@@ -2374,4 +2485,71 @@ func TestOutfileUnenclosedCSVRoundTripsThroughLoadParser(t *testing.T) {
 		require.Equal(t, v, got[i].Val, "row %d must round-trip byte-equal", i)
 	}
 	require.True(t, got[len(values)].IsNull, "the NULL row must reload as NULL")
+}
+
+// #30703: duplicatedJSONLineColumn flags the first repeated alias, even empty.
+func TestDuplicatedJSONLineColumn(t *testing.T) {
+	for _, tc := range []struct {
+		names []string
+		want  string
+		found bool
+	}{
+		{},
+		{names: []string{"a", "b"}},
+		{names: []string{"", "x"}},
+		{names: []string{"id", "x", "y", "x"}, want: "x", found: true},
+		{names: []string{"x", "x"}, want: "x", found: true},
+		{names: []string{"", ""}, found: true},
+		{names: []string{"", "", "x", "x"}, found: true},
+	} {
+		name, found := duplicatedJSONLineColumn(tc.names)
+		require.Equal(t, tc.want, name)
+		require.Equal(t, tc.found, found, "columns %q", tc.names)
+	}
+}
+
+// #30703: a JSONLINE export whose SELECT aliases repeat must fail explicitly
+// instead of writing rows with one column silently dropped.
+func TestJSONLineExportRejectsDuplicateAliases(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		columns []string
+		want    string
+	}{
+		{name: "ordinary duplicates", columns: []string{"id", "x", "x"}},
+		{name: "empty duplicates", columns: []string{"", ""}},
+		{name: "empty duplicates before ordinary duplicates", columns: []string{"", "", "x", "x"}},
+		{name: "unique names", columns: []string{"x", "y"}, want: "{\"x\":11,\"y\":22}\n"},
+		{name: "one empty name", columns: []string{"", "x"}, want: "{\"\":11,\"x\":22}\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mp := mpool.MustNewZero()
+			mrs := &MysqlResultSet{}
+			bat := batch.NewWithSize(len(tc.columns))
+			for i, name := range tc.columns {
+				column := new(MysqlColumn)
+				column.SetName(name)
+				mrs.AddColumn(column)
+				bat.Vecs[i] = testutil.NewVector(1, types.T_int32.ToType(), mp, false, []int32{int32(11 * (i + 1))})
+			}
+			bat.SetRowCount(1)
+			ep := &ExportConfig{mrs: mrs}
+			bytesChan := make(chan *BatchByte, 1)
+			constructJSONLine(t.Context(), &backSession{feSessionImpl: feSessionImpl{pool: mp}}, bat, 0, bytesChan, ep)
+
+			select {
+			case result := <-bytesChan:
+				if tc.want == "" {
+					require.ErrorContains(t, result.err, "duplicate column names")
+					require.Nil(t, result.writeByte)
+				} else {
+					require.NoError(t, result.err)
+					require.Equal(t, tc.want, string(result.writeByte))
+				}
+			default:
+				t.Fatal("JSONLINE export must report its result")
+			}
+			require.Zero(t, mp.CurrNB(), "the batch must be released on success and failure")
+		})
+	}
 }
