@@ -23,6 +23,7 @@ import (
 	mock_lock "github.com/matrixorigin/matrixone/pkg/frontend/test/mock_lock"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
 	"github.com/matrixorigin/matrixone/pkg/pb/plan"
+	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/dispatch"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/insert"
 	"github.com/matrixorigin/matrixone/pkg/sql/colexec/multi_update"
@@ -186,7 +187,10 @@ func TestImportMemoryPublicNarrowTargetFitPreservesPlanAndDOP(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	txnClient, txnOp := newTestTxnClientAndOp(ctrl)
 	txnClient.(*mock_frontend.MockTxnClient).EXPECT().RefreshExpressionEnabled().Return(false).AnyTimes()
-	proc.Base.TxnClient, proc.Base.TxnOperator = txnClient, txnOp
+	proc.Base.TxnClient = txnClient
+	// This public control represents an ordinary autocommit statement. The
+	// shared helper's zero options deliberately remain conservative for D34.
+	proc.Base.TxnOperator = &importMemoryTxnOptions{TxnOperator: txnOp, options: txn.TxnOptions{Autocommit: true}}
 	lockConfig := lockservice.Config{ServiceID: t.Name()}
 	lockConfig.Validate()
 	lockConfig.ServiceID = ""

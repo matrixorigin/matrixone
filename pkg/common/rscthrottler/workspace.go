@@ -40,7 +40,9 @@ func (e *RequestTooLargeError) Error() string {
 // WorkingSetCapacityError reports a statically impossible layout, or an
 // ownerless pressure snapshot to a caller that can retry a smaller graph.
 // UntilFit callers receive it only for static impossibility, not temporary
-// whole-process physical pressure.
+// whole-process physical pressure. An explicit NoWait caller can also use it
+// for immediate admission failure: FIFO contention can deny a try even when
+// Available >= Minimum. Neither snapshot promises permanent impossibility.
 type WorkingSetCapacityError struct{ Minimum, Available int64 }
 
 func (e *WorkingSetCapacityError) Error() string {

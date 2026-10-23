@@ -187,10 +187,10 @@ func (s *memoryControlSession) Write(_ context.Context, raw morpc.Message) error
 
 func memoryControlCall(t *testing.T, ctx context.Context, service string, session *memoryControlSession, request MemoryControlRequest) error {
 	t.Helper()
-	if request.Action == MemoryControlOpen && request.ExpectedProcessID == "" {
+	if (request.Action == MemoryControlOpen || request.Action == MemoryControlTryOpen) && request.ExpectedProcessID == "" {
 		request.ExpectedProcessID = runtime.ProcessInstanceID()
 	}
-	if request.Action == MemoryControlOpen && request.Manifest != nil {
+	if (request.Action == MemoryControlOpen || request.Action == MemoryControlTryOpen) && request.Manifest != nil {
 		request.Manifest.Version = query.MemoryAdmissionProtocolVersion
 	}
 	data, err := EncodeMemoryControlRequest(request)
@@ -214,8 +214,16 @@ func receiveMemoryControl(t *testing.T, session *memoryControlSession) MemoryCon
 }
 
 func TestStatementMemoryControlConnectionLifetime(t *testing.T) {
-	for _, terminal := range []string{"end", "disconnect", "lost-open-ack"} {
-		t.Run(terminal, func(t *testing.T) {
+	for _, test := range []struct{ name, action, terminal string }{
+		{"end", MemoryControlOpen, "end"},
+		{"disconnect", MemoryControlOpen, "disconnect"},
+		{"lost-open-ack", MemoryControlOpen, "lost-open-ack"},
+		{"try-end", MemoryControlTryOpen, "end"},
+		{"try-disconnect", MemoryControlTryOpen, "disconnect"},
+		{"try-lost-open-ack", MemoryControlTryOpen, "lost-open-ack"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			terminal := test.terminal
 			service := t.Name()
 			rt := runtime.NewRuntime(metadata.ServiceType_CN, service, zap.NewNop())
 			runtime.SetupServiceBasedRuntime(service, rt)
@@ -231,9 +239,9 @@ func TestStatementMemoryControlConnectionLifetime(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			t.Cleanup(cancel)
 			done := make(chan error, 1)
-			manifest := &MemoryManifest{TargetUnit: 1 << 20, Parallel: 1, Stages: []MemoryStageDescriptor{{Role: MemoryStageOutput, Count: 1, Schema: []types.Type{types.T_int64.ToType()}, TableCount: 1}}}
+			manifest := &MemoryManifest{TargetUnit: 1 << 20, Parallel: 1, NoWait: test.action == MemoryControlTryOpen, Stages: []MemoryStageDescriptor{{Role: MemoryStageOutput, Count: 1, Schema: []types.Type{types.T_int64.ToType()}, TableCount: 1}}}
 			go func() {
-				done <- memoryControlCall(t, ctx, service, session, MemoryControlRequest{Action: MemoryControlOpen, Manifest: manifest})
+				done <- memoryControlCall(t, ctx, service, session, MemoryControlRequest{Action: test.action, Manifest: manifest})
 			}()
 			if terminal != "lost-open-ack" {
 				response := receiveMemoryControl(t, session)

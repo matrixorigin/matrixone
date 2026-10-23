@@ -24,14 +24,15 @@ import (
 
 const MemoryControlMagic = "MO-MEMORY-ADMISSION-1\n"
 const (
-	MemoryControlOpen   = "open"
-	MemoryControlCommit = "commit"
-	MemoryControlEnd    = "end"
-	MemoryControlAbort  = "abort"
-	MemoryStageCSV      = "csv"
-	MemoryStageOutput   = "output"
-	MemoryStageJoin     = "join"
-	MemoryStageProducer = "producer"
+	MemoryControlOpen    = "open"
+	MemoryControlTryOpen = "try-open"
+	MemoryControlCommit  = "commit"
+	MemoryControlEnd     = "end"
+	MemoryControlAbort   = "abort"
+	MemoryStageCSV       = "csv"
+	MemoryStageOutput    = "output"
+	MemoryStageJoin      = "join"
+	MemoryStageProducer  = "producer"
 )
 
 // MemoryManifest describes the entire physical DAG on one CN. It is sent before
@@ -44,7 +45,11 @@ type MemoryManifest struct {
 	TargetUnit   int64                      `json:"target_unit"`
 	IncomingUnit int64                      `json:"incoming_unit"`
 	Parallel     int                        `json:"parallel"`
-	Stages       []MemoryStageDescriptor    `json:"stages"`
+	// NoWait comes from origin transaction options, including for remote CNs.
+	// It forbids admission FIFO/full-reclaim waiting, not ordinary sampling,
+	// short mutex acquisition or the existing best-effort RSS scavenger.
+	NoWait bool                    `json:"no_wait,omitempty"`
+	Stages []MemoryStageDescriptor `json:"stages"`
 }
 
 type MemoryStageDescriptor struct {
@@ -78,10 +83,11 @@ type MemoryControlRequest struct {
 }
 
 type MemoryControlResponse struct {
-	Token         string `json:"token,omitempty"`
-	UnitBytes     int64  `json:"unit_bytes,omitempty"`
-	RetryParallel int    `json:"retry_parallel,omitempty"`
-	Error         string `json:"error,omitempty"`
+	Token         string                                `json:"token,omitempty"`
+	UnitBytes     int64                                 `json:"unit_bytes,omitempty"`
+	RetryParallel int                                   `json:"retry_parallel,omitempty"`
+	Error         string                                `json:"error,omitempty"`
+	Capacity      *rscthrottler.WorkingSetCapacityError `json:"capacity,omitempty"`
 }
 
 func EncodeMemoryControlRequest(request MemoryControlRequest) ([]byte, error) {
@@ -357,7 +363,9 @@ func admitMemoryManifest(ctx context.Context, throttler rscthrottler.RSCThrottle
 	}
 	var working *rscthrottler.WorkingSet
 	final, untilFit := throttler.(rscthrottler.WorkingSetCandidatesUntilFitThrottler)
-	if manifest.Parallel <= 1 && untilFit {
+	if manifest.NoWait {
+		working, err = tryMemoryCandidates(ctx, throttler, specs)
+	} else if manifest.Parallel <= 1 && untilFit {
 		working, err = final.ReserveWorkingSetCandidatesUntilFit(ctx, specs)
 	} else if _, capable := throttler.(rscthrottler.WorkingSetCandidatesThrottler); capable {
 		working, err = rscthrottler.ReserveWorkingSetCandidates(ctx, throttler, specs)
@@ -376,6 +384,40 @@ func admitMemoryManifest(ctx context.Context, throttler rscthrottler.RSCThrottle
 	meta := metas[working.UnitBytes()]
 	meta.WorkingSet = working
 	return meta, nil
+}
+
+// tryMemoryCandidates never joins an admission queue or full recovery. A
+// transaction may own the very workspace/locks that a queued request needs
+// released. Try still preserves the existing FIFO and complete I/W accounting.
+func tryMemoryCandidates(ctx context.Context, throttler rscthrottler.RSCThrottler, specs []rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, error) {
+	if len(specs) == 0 {
+		return nil, errors.New("no legal import working layout")
+	}
+	minimum := workingLayoutTotal(specs[0])
+	for _, spec := range specs {
+		minimum = min(minimum, workingLayoutTotal(spec))
+		working, granted, err := rscthrottler.TryReserveWorkingSet(ctx, throttler, spec)
+		if cause := context.Cause(ctx); cause != nil {
+			if working != nil {
+				working.Close()
+			}
+			return nil, cause
+		}
+		var tooLarge *rscthrottler.RequestTooLargeError
+		if err != nil && !errors.As(err, &tooLarge) {
+			return nil, err
+		}
+		if granted {
+			return working, nil
+		}
+	}
+	headroom := rscthrottler.WorkingSetHeadroom(throttler)
+	if err := context.Cause(ctx); err != nil {
+		return nil, err
+	}
+	// FIFO contention can also deny a try even with Available >= Minimum.
+	// This reports immediate admission failure, not permanent impossibility.
+	return nil, &rscthrottler.WorkingSetCapacityError{Minimum: minimum, Available: headroom.Available}
 }
 
 func reserveLegacyMemoryCandidates(ctx context.Context, throttler rscthrottler.RSCThrottler, specs []rscthrottler.WorkingSetSpec) (*rscthrottler.WorkingSet, error) {

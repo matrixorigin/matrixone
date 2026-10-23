@@ -1,5 +1,5 @@
 {
-  "version": 17,
+  "version": 18,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
   "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
@@ -351,6 +351,23 @@
           "F/dop-target-design-independent-review.json"
         ]
       }
+    },
+    {
+      "id": "D34",
+      "choice": "Origin transactions marked ByBegin or not explicitly Autocommit use finite immediate bounded admission on every CN. Preserve ordinary autocommit FIFO/UntilFit. Use try-open plus optional NoWait for fail-fast compatibility with previous admission peers.",
+      "rationale": "A previous statement can retain transaction workspace or locks until same-session COMMIT/ROLLBACK. Waiting for that memory during LOAD prevents the session reaching COMMIT. Generic recovery cannot free live transaction vectors.",
+      "constraints": [
+        "No admission queue or full-reclaim wait at any DOP; Try all legal candidates once, preserving FIFO fairness, typed capacity, context precedence, DOP retry and reverse partial-CN cleanup.",
+        "Keep existing scavenge and short-lock behavior; NoWait does not mean hard realtime or sampling-only. Production recovery callbacks have no identified transaction/pipeline release dependency.",
+        "Internal zero-valued txn options conservatively select NoWait; absent transaction test/embedding entrypoints preserve existing behavior. Released non-admission peer/unsupported-graph legacy fallback remains the pre-existing compatibility boundary.",
+        "No implicit commit, transaction workspace discard, special data/schema threshold, client retry or shorter timeout. NoWait final pressure can return capacity; no universal finite success claim for irreducible autocommit residency."
+      ],
+      "design_review": {
+        "reviewer": "csv_column_bound; root integration",
+        "decision": "APPROVED BEFORE IMPLEMENTATION",
+        "reviewed_draft_sha256": "a18b6729e872e9a2f92e3d1a72b9797ac0c203308d7709f25f6bec300a29303b",
+        "independent_report_sha256": "7b3fd926b9c5a49477738b12cd900166d80b14e2ec379a0486e80e5fe61156a2"
+      }
     }
   ],
   "alternatives": [
@@ -598,6 +615,154 @@
       "compatibility": "No protobuf, persistent format, SQL or memory-envelope change. Legacy non-spill execution keeps its existing protocol.",
       "normal_completion": "Expected/registered cleanup is classified with pipelineFailed/explicit err plus operator execution-complete state. Normal non-spilled or empty-build completion calls FinishParticipant once; it must not abort. Premature expected termination, error or spilled incomplete collection aborts the owning generation.",
       "cancellation_signal": "Do not infer failure from proc.Ctx.Err(): Pipeline.Cleanup cancels context even on normal cleanup. Use the cleanup outcome and actual completion state; cancellation without Reset is an early Free terminal."
+    },
+    "transaction_admission_revision18": {
+      "reviewed_draft_sha256": "a18b6729e872e9a2f92e3d1a72b9797ac0c203308d7709f25f6bec300a29303b",
+      "problem": {
+        "evidence": "../explicit-transaction-admission-review.json",
+        "reachability": "Frontend permits LOAD in an active transaction; prior INSERT/DELETE workspace and locks can survive EndStatement/IncrStatementID. This is source-proven conditional reachability, not an assertion that N5 encountered it.",
+        "cycle": [
+          "LOAD waits for memory/owner release at admission, including final ownerless UntilFit or active-owner FIFO waiting",
+          "Some decisive residency or lock/workspace belongs to the same explicit/non-autocommit transaction, strongly referenced by prior statements",
+          "Ordinary release requires same session to COMMIT/ROLLBACK, or a safe transaction-owned spill absent from generic recovery",
+          "Sequential session reaches COMMIT/ROLLBACK only after LOAD returns"
+        ],
+        "pressure_witness": "Let M=min candidate I+W, B=irreducible nontransaction residency, H=live prior-transaction residency, L=physical limit. B+M<=L<B+H+M and M<=L gives static feasible but dynamic no progress if no external release/cancel occurs."
+      },
+      "invariants": [
+        "An already eligible bounded import whose origin transaction is ByBegin OR !Autocommit must not enqueue/wait on resource-admission FIFO at any DOP, irrespective of recognized owners. It still reserves a complete bounded working ticket if immediately possible.",
+        "Origin owns transaction policy. The same optional NoWait manifest bit is copied to every local and remote CN manifest before any open. A remote operator must not rederive policy from snapshot/default txn options.",
+        "NoWait tries every finite legal descending candidate at most once with the existing TryReserveWorkingSet. It never calls ReserveWorkingSet, ReserveCandidates, UntilFit, ReclaimForWorkingSet, or installs a worker/waiter. Each successful try atomically respects the existing FIFO and physical commitments.",
+        "Normal known autocommit (ByBegin=false,Autocommit=true) and nil-origin-txn embedding fixtures follow exactly the existing D32/D33 admission paths. No implicit commit, workspace discard, forced rollback, plan special case, threshold, client retry, short deadline, or legacy fallback is introduced to avoid pressure.",
+        "A failed higher-DOP NoWait request preserves the existing CapacityError-to-DOP-recompile path. A failed final-DOP NoWait request returns the existing typed WorkingSetCapacityError with zero newly installed ImportMemory or leaked CN tickets.",
+        "This policy removes the identified cross-statement admission cycle. It does not guarantee every autocommit query/input succeeds or that arbitrary uncancelled physical pressure eventually disappears."
+      ],
+      "txn_policy": {
+        "predicate": "If c.proc/Base/TxnOperator is absent: NoWait=false for existing isolated pure/test/embedding entrypoints. Otherwise opts:=originTxn.TxnOptions(); NoWait=opts.ByBegin || !opts.Autocommit.",
+        "source": "frontend/txn.go WithBeginAutoCommit(execCtx.txnOpt.byBegin,autoCommit) -> txn/client/operator.go options copy; TxnOptions() returns those options.",
+        "matrix": [
+          {
+            "origin": "ordinary frontend autocommit",
+            "ByBegin": false,
+            "Autocommit": true,
+            "NoWait": false,
+            "effect": "Existing D32 transient-pressure FIFO/UntilFit and D33 static target preference unchanged."
+          },
+          {
+            "origin": "BEGIN under autocommit",
+            "ByBegin": true,
+            "Autocommit": true,
+            "NoWait": true,
+            "effect": "Immediate bounded candidates or existing retry/typed final error."
+          },
+          {
+            "origin": "SET autocommit=0 or BEGIN+auto0",
+            "ByBegin": "either",
+            "Autocommit": false,
+            "NoWait": true,
+            "effect": "Immediate bounded candidates or existing retry/typed final error."
+          },
+          {
+            "origin": "real internal txn created without WithBeginAutoCommit; all-zero mock txn options",
+            "ByBegin": false,
+            "Autocommit": false,
+            "NoWait": true,
+            "effect": "Conservative: transaction is not explicitly known autocommit. Internal ExecTxn can share state across SQL; do not rewrite constructor defaults globally."
+          },
+          {
+            "origin": "nil TxnOperator pure/test/embedding fixture",
+            "NoWait": false,
+            "effect": "Preserve current nil-contract. Actual frontend SQL has a txn operator before compile; nil is not a way to mark a real explicit txn autocommit."
+          }
+        ],
+        "not_used": "UserTxn marks both user autocommit and explicit txn and cannot distinguish the dependency."
+      },
+      "no_wait_algorithm": [
+        "Compute complete legal finite specs/metas using existing checked pure envelopes. Keep D33 Parallel>1 known-limit top-target static retry before reservation (unchanged).",
+        "If NoWait=false use byte-identical existing selection paths.",
+        "If NoWait=true iterate specs in existing descending order. For each, check context through Try; continue only on no-grant or RequestTooLargeError; return other errors/cancel immediately. Successful Try owns the complete ticket and selects its corresponding meta.",
+        "After all misses sample existing WorkingSetHeadroom only for diagnostics, recheck context.Cause so cancellation wins over pressure. Compute minimum complete I+W over all specs with existing saturating total. Return the existing CapacityError for immediate admission unavailable (physical pressure OR FIFO contention); Available is a snapshot, not proof of permanent impossibility.",
+        "Existing err handler maps capacity to lower DOP when Parallel>1. Final Parallel<=1 returns typed pressure; no UntilFit call is made. All candidate attempts are bounded by the already finite candidate list, not wall time."
+      ],
+      "wire_compatibility": {
+        "unchanged": "Keep existing memory protocol magic and version. NoWait false omitted. Normal autocommit messages/behavior stay unchanged.",
+        "matrix": [
+          {
+            "origin": "new NoWait=false",
+            "peer": "new or existing v2 admission",
+            "behavior": "Existing open and absent NoWait; original normal behavior."
+          },
+          {
+            "origin": "new NoWait=true",
+            "peer": "new admission",
+            "behavior": "try-open +NoWait true, immediate candidates; supported final pressure reconstructed as existing typed error."
+          },
+          {
+            "origin": "new NoWait=true",
+            "peer": "old experimental v2 admission (ignores unknown JSON)",
+            "behavior": "Unknown try-open does not enter old open branch; empty token lookup fails immediately. Origin closes stream and reverse-aborts earlier tickets; no fallback/retry with ordinary open."
+          },
+          {
+            "origin": "old admission origin",
+            "peer": "new admission",
+            "behavior": "Old open without NoWait stays old behavior. New peer cannot infer absent origin policy; this upgrade direction does not retroactively fix an old origin."
+          },
+          {
+            "origin": "either policy",
+            "peer": "released non-admission peer / unsupported existing graph",
+            "behavior": "Preserve existing whole-statement legacy capability/eligibility fallback. It never entered D32 UntilFit, so this fix neither extends nor removes that older compatibility boundary. Do not call it bounded/controlled."
+          },
+          {
+            "origin": "new malformed request",
+            "peer": "new",
+            "behavior": "open+NoWait true or try-open+NoWait false rejected before reservation; identity/session/version/token checks still apply."
+          }
+        ],
+        "typed_error": "Response.Capacity is optional and only read after RetryParallel. Server preserves ordinary Error text. New origin errors.As sees CapacityError on new peer final pressure; old peer unknown-action is a compatibility error, not fabricated capacity. No token is accepted on a failure."
+      },
+      "ownership_and_wait_graph": {
+        "prior_transaction": "TxnOperator/workspace owns copied live previous-statement vectors and locks through commit/rollback. New import code must not free them.",
+        "before_admission": "Current statement has not acquired new execution locks/readers/input or a new working ticket on this CN. Frontend plan/catalog/session bytes and historical explicit transaction state already exist; cross-CN earlier tickets may exist until this open fails.",
+        "after_try_success": "WorkingSet root owns complete I/W commitments; normal install/attach/scope consumers/IO handoff/joined cleanup unchanged.",
+        "failure": "A failed Try publishes no ticket. All-candidate failure occurs before local Install/Register. acquireMemoryControls owns acquired earlier-process tickets and closes reverse order before DOP retry or terminal return. Remote failed-open closes stream; successful-open ACK failures/session death retain existing owner cleanup.",
+        "frontend_error": "Existing CapacityError is not a moerr whole-transaction rollback class (frontend/util.go isErrorRollbackWholeTxn). Existing explicit txn RollbackLastStatement path preserves prior successful writes; user can subsequently COMMIT/ROLLBACK. Do not modify frontend error/commit semantics."
+      },
+      "existing_refresh_audit": {
+        "definition": "NoWait means no admission FIFO wait, no full-reclaim wait, no waiting for another ticket/transaction to free memory. It does not promise hard realtime, no mutex acquisition, or zero GC/native scavenging latency.",
+        "not_read_only": "TryReserveWorkingSet calls Refresh; WorkingSetHeadroom force-refreshes. Both refresh paths can run existing best-effort RSS scavenging. Never describe them as sampling-only.",
+        "edges": [
+          "Try validates spec and context; Refresh takes m.refreshMu, samples under c.sampleMu, releases sampleMu, updates atomics; actual readProcessMemory reads /proc/cgroup plus total-memory metadata only.",
+          "Existing tryScavengeRSS may take rssScavengeMu and call CN cache target setter/clearer. Those production callbacks take only fileservice memCachePressureMu, update owner map/atomic target/deadline, and call no cache eviction/txn/admission method while holding it.",
+          "Actual cache eviction callback runs asynchronously in a separate goroutine with existing bounded eviction context; it is not joined by Try. c.cacheMu is released before that goroutine calls c.releaseGo, so no cacheMu->goMu held edge.",
+          "Synchronous c.releaseGo takes goMu and calls debug.FreeOSMemory; synchronous c.releaseNative takes nativeMu and calls malloc.ReleaseUnusedMemory -> libc malloc_trim(0). Neither production callback waits for txn commit, a pipeline channel, admission ticket, or c.mu. Live txn vectors remain referenced; GC cannot free them. Ordinary runtime/libc internal locks are finite implementation synchronization, not a resource-release protocol.",
+          "Full reclaim may separately hold reclaimMu and then use cache/go/native locks, but releases those locks before m.refresh(true). c.run similarly finishes each callback/lock before refresh. Thus an existing concurrent full reclaim can add ordinary mutex latency, but no found reverse refreshMu<->goMu/nativeMu/cacheMu lock edge holds across refresh; NoWait itself never invokes or joins fullDone.",
+          "After Refresh, Try takes c.mu, rechecks context and current FIFO/physical commitments, grants atomically or immediately denies. It never holds c.mu while sampling/scavenging or waiting for a ticket."
+        ],
+        "review_required": "Independent reviewer must verify production callback bindings and reverse lock arcs, not just function names. Any reachable transaction/pipeline dependency in this graph reopens this design; do not invent a sampling API without such evidence."
+      },
+      "limits_and_non_goals": [
+        "Even known autocommit has current frontend/plan/catalog/session bytes that admission itself does not release. Long-lived native or kernel charges can make B+M>L forever. D32 only offers observable cancellable waiting, not universal finite success.",
+        "Existing request/session cancellation and remote MaxRpcTime are unchanged; no short timeout or client-side retry is added.",
+        "Explicit or unknown-autocommit transactions can get earlier capacity errors under pressure/FIFO contention, including internal Exec/ExecTxn zero options. Fitting immediate imports still succeed with complete accounting.",
+        "No change to CSV splitting, raw row limits, budgets, physicalFits, thresholds, plan SQL semantics, DOP policy, libc platform scope, caches, or release ownership.",
+        "No claim of SQL reproduction of the source-proven self-wait yet, or N5/TKE failure. Autocommit performance evidence may be reused only after exact unchanged-branch review."
+      ],
+      "validation_plan": {
+        "fixture_reuse": "Use existing compilerMemoryAdmission/candidate/until-fit fixtures, memoryCompileFixture, memoryControlSession/TestStream, acquireMemoryControls reverse-cleanup tests, and real morpc control transport seam. No sleeps/retries/new worker or cluster harness.",
+        "cases": [
+          "Policy matrix: autocommit false/true, BEGIN true/true, auto0 false/false, BEGIN+auto0 true/false, zero real/mock options, nil txn. Every CN entry receives identical origin policy after JSON roundtrip.",
+          "Immediate fitting explicit txn succeeds with complete ticket; first candidate too large but later finite candidate fits; no Reserve/UntilFit/Reclaim calls.",
+          "Final NoWait pressure with no owners returns existing typed error synchronously; active owners and FIFO denial take same no-queue outcome. Diagnostic Available>=Minimum under FIFO denial must not be called permanently impossible.",
+          "High-DOP NoWait pressure and all RequestTooLarge cases preserve lower-DOP retry; final static/dynamic pressure terminal typed error. Noncapacity error/context cause wins and no ImportMemory installed.",
+          "NoWait false normal final uses UntilFit and original existing deterministic late-free test still passes; known normal autocommit manifests/wire remain equal apart from omitted false field.",
+          "New server try-open success/commit/end and failure/no registration; new open+NoWait and try-open+no NoWait malformed rejects. Capacity payload roundtrip retains errors.As; RetryParallel precedence preserved.",
+          "Old-v2 handler compatibility witness: unknown try-open with empty token rejects before admission, versus ordinary open would enter reserve. No downgrade to ordinary open after rejection.",
+          "Remote noWait failure after earlier local/CN success reverse-closes all partials before retry/error; cancel and lost-ACK/session cleanup reuse existing owner lifetimes.",
+          "Origin real txn options helper via public compile/owner seam verifies explicit prior-write transaction retains policy and does not auto-commit. Source-proven retained-workspace chain is reviewed; lightweight frontend typed-error rollback classification case asserts prior txn is not whole-aborted solely for capacity."
+        ],
+        "execution": "Parent runs exact focused normal tests first after approved external overlay, then owning compile/rscthrottler and applicable frontend package normal/race. Child does not execute Go/build/SQL/service. Native explicit-transaction fitting/capacity/cleanup proof to be assigned by parent after N5/post, without changing SQL semantics or arbitrary pressure thresholds.",
+        "performance": "No new row hot-path code; transaction policy read once per manifest build, at most one finite candidate scan per noWait attempt, optional two scalar capacity fields only on failure. Autocommit selection/candidate/recovery path is unchanged. TKE ab96 autocommit evidence remains pending/semantically reusable; no premature performance claim."
+      }
     }
   },
   "ownership_and_wait_graphs": [
@@ -696,12 +861,13 @@
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 17,
+    "revision": 18,
     "decision": "PASS",
-    "scope": "D33 static-impossible target preference with preserved fallback boundaries; D32 previous approval retained",
-    "condition": "Implementation/discriminating tests and both CPU controls plus new uninterrupted native acceptance required; no universal no-regression claim from design.",
+    "scope": "D34 cross-statement admission wait policy; previous D32/D33 scoped approvals retained",
+    "condition": "Design approval only. Exact implementation/negative control/owning tests, minimal public transaction semantics and final-binary repeated import verification remain required; valid ab96 autocommit evidence is reused only after semantic-closure review.",
     "reviewer": "csv_column_bound; root integration",
-    "approved_at": "2026-10-23T18:46:42.837265+08:00"
+    "approved_at": "2026-10-23T19:36:38.545401+08:00",
+    "reviewed_draft_sha256": "a18b6729e872e9a2f92e3d1a72b9797ac0c203308d7709f25f6bec300a29303b"
   },
   "approval_history": [
     {
@@ -746,6 +912,15 @@
       "condition": "Design approval only; discriminating normal/race/consumer/static and complete new-binary native acceptance remain mandatory.",
       "reviewer": "finish_queue_review; root integration",
       "approved_at": "2026-10-23T18:41:28.930642+08:00"
+    },
+    {
+      "kind": "internal-independent-design-review",
+      "revision": 17,
+      "decision": "PASS",
+      "scope": "D33 static-impossible target preference with preserved fallback boundaries; D32 previous approval retained",
+      "condition": "Implementation/discriminating tests and both CPU controls plus new uninterrupted native acceptance required; no universal no-regression claim from design.",
+      "reviewer": "csv_column_bound; root integration",
+      "approved_at": "2026-10-23T18:46:42.837265+08:00"
     }
   ],
   "review_amendment": {

@@ -214,12 +214,19 @@ func handleMemoryControl(ctx context.Context, serviceID string, msg *pipeline.Me
 	}
 	fail := func(err error) (bool, error) {
 		response := MemoryControlResponse{Error: err.Error(), RetryParallel: MemoryRetryParallel(err)}
+		var capacity *rscthrottler.WorkingSetCapacityError
+		if errors.As(err, &capacity) {
+			response.Capacity = capacity
+		}
 		return true, writeMemoryControl(ctx, cs, msg.Id, response, true, acquire)
 	}
 	if decodeErr != nil {
 		return fail(decodeErr)
 	}
-	if request.Action == MemoryControlOpen {
+	if request.Action == MemoryControlOpen || request.Action == MemoryControlTryOpen {
+		if request.Manifest != nil && request.Manifest.NoWait != (request.Action == MemoryControlTryOpen) {
+			return fail(errors.New("memory control open wait policy mismatch"))
+		}
 		if request.Manifest != nil && request.Manifest.Version != query.MemoryAdmissionProtocolVersion {
 			return fail(errors.New("unsupported memory manifest version"))
 		}

@@ -26,8 +26,16 @@ import (
 // asynchronous request dispatch. Unit fake channels cannot establish that a
 // forced client backend close really cancels the independent server owner.
 func TestStatementMemoryRealControlTransport(t *testing.T) {
-	for _, terminal := range []string{"end", "disconnect"} {
-		t.Run(terminal, func(t *testing.T) {
+	for _, test := range []struct {
+		name, terminal string
+		noWait         bool
+	}{
+		{name: "end", terminal: "end"},
+		{name: "disconnect", terminal: "disconnect"},
+		{name: "try-end", terminal: "end", noWait: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			terminal := test.terminal
 			service := t.Name()
 			rt := runtime.NewRuntime(metadata.ServiceType_CN, service, zap.NewNop())
 			runtime.SetupServiceBasedRuntime(service, rt)
@@ -56,7 +64,7 @@ func TestStatementMemoryRealControlTransport(t *testing.T) {
 			// sweep; the independent owner must survive until that real event.
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			t.Cleanup(cancel)
-			manifest := MemoryManifest{Version: query.MemoryAdmissionProtocolVersion, TargetUnit: 1 << 20, Parallel: 1, Stages: []MemoryStageDescriptor{{Role: MemoryStageOutput, Count: 1, Schema: []types.Type{types.T_int64.ToType()}, TableCount: 1}}}
+			manifest := MemoryManifest{Version: query.MemoryAdmissionProtocolVersion, TargetUnit: 1 << 20, Parallel: 1, NoWait: test.noWait, Stages: []MemoryStageDescriptor{{Role: MemoryStageOutput, Count: 1, Schema: []types.Type{types.T_int64.ToType()}, TableCount: 1}}}
 			handle, err := openRemoteMemory(ctx, service, addr, manifest, runtime.ProcessInstanceID())
 			require.NoError(t, err)
 			t.Cleanup(func() { handle.close(context.Canceled) })

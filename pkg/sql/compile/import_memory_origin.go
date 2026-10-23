@@ -151,9 +151,10 @@ func (c *Compile) collectMemoryManifests(target int64) (map[string]*memoryCNMani
 	}
 	locations := c.memoryExecutionLocations()
 	manifests := make(map[string]*memoryCNManifest)
+	noWait := c.importMemoryNoWait()
 	// Include the origin even if it has no controlled stage: all queries acquire
 	// any resources there in exactly the same global CN ordering.
-	manifests[c.addr] = &memoryCNManifest{addr: c.addr, id: c.proc.GetService(), manifest: MemoryManifest{TargetUnit: target, Parallel: c.ncpu, Version: query.MemoryAdmissionProtocolVersion, Producers: producers}}
+	manifests[c.addr] = &memoryCNManifest{addr: c.addr, id: c.proc.GetService(), manifest: MemoryManifest{TargetUnit: target, Parallel: c.ncpu, NoWait: noWait, Version: query.MemoryAdmissionProtocolVersion, Producers: producers}}
 	var walk func(*Scope) error
 	walk = func(scope *Scope) error {
 		if scope == nil {
@@ -162,7 +163,7 @@ func (c *Compile) collectMemoryManifests(target int64) (map[string]*memoryCNMani
 		addr := locations[scope]
 		entry := manifests[addr]
 		if entry == nil {
-			entry = &memoryCNManifest{addr: addr, id: scope.NodeInfo.Id, manifest: MemoryManifest{TargetUnit: target, Parallel: c.ncpu, Version: query.MemoryAdmissionProtocolVersion, Producers: producers}}
+			entry = &memoryCNManifest{addr: addr, id: scope.NodeInfo.Id, manifest: MemoryManifest{TargetUnit: target, Parallel: c.ncpu, NoWait: noWait, Version: query.MemoryAdmissionProtocolVersion, Producers: producers}}
 			manifests[addr] = entry
 		}
 		if entry.id == "" {
@@ -308,8 +309,16 @@ func (h *statementMemoryControl) request(ctx context.Context, request MemoryCont
 		if err != nil {
 			return empty, err
 		}
+		if request.Action == MemoryControlTryOpen {
+			if err := context.Cause(sendCtx); err != nil {
+				return empty, err
+			}
+		}
 		if response.RetryParallel > 0 {
 			return response, &importDOPRetryError{response.RetryParallel}
+		}
+		if response.Capacity != nil {
+			return response, response.Capacity
 		}
 		if response.Error != "" {
 			return response, errors.New(response.Error)
@@ -347,7 +356,13 @@ func openRemoteMemory(ctx context.Context, serviceID, addr string, manifest Memo
 	if err != nil {
 		return nil, err
 	}
-	response, err := h.request(ctx, MemoryControlRequest{Action: MemoryControlOpen, Manifest: &manifest, ExpectedProcessID: expectedProcessID})
+	action := MemoryControlOpen
+	if manifest.NoWait {
+		// Older admission peers ignore unknown JSON fields. A distinct action
+		// makes them reject rather than silently enter their blocking Open.
+		action = MemoryControlTryOpen
+	}
+	response, err := h.request(ctx, MemoryControlRequest{Action: action, Manifest: &manifest, ExpectedProcessID: expectedProcessID})
 	if err != nil {
 		return nil, err
 	}
