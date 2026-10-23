@@ -2189,7 +2189,6 @@ func (rule *ResetParamRefRule) preparedTemporalNullEnvelopeType(
 	originalArgs []*Expr,
 ) (plan.Type, bool, error) {
 	argTypes := make([]types.Type, len(originalArgs))
-	integerBoundary := false
 	for i, arg := range originalArgs {
 		if peer, ok := preparedTemporalNumericPeer(arg); ok && peer.Oid.IsDecimal() {
 			argTypes[i] = peer
@@ -2204,19 +2203,11 @@ func (rule *ResetParamRefRule) preparedTemporalNullEnvelopeType(
 		// in the type-only inference as well; resolving DECIMAL64 + INT directly
 		// would widen an explicit CAST(... AS SIGNED/UNSIGNED) to DECIMAL128.
 		if types.T(typ.Oid).IsInteger() {
-			integerBoundary = true
 			integerPeer := temporalPeer
 			integerPeer.Scale = 0
 			typ = integerPeer
 		}
 		argTypes[i] = typ
-	}
-	if integerBoundary {
-		for i, arg := range originalArgs {
-			if peer, ok := preparedTemporalNumericPeer(arg); ok {
-				argTypes[i] = types.New(types.T_time, 0, peer.Scale)
-			}
-		}
 	}
 	resolved, err := planfunction.GetFunctionByName(rule.ctx, functionName, argTypes)
 	if err != nil {

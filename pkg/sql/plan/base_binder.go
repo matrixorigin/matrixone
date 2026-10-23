@@ -11029,11 +11029,10 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 		if lit == nil || lit.Isnull {
 			continue
 		}
-		// A direct integer literal has an exact value domain. Keep the existing
-		// Decimal128 carrier for addition/subtraction, while preserving the
-		// literal's precision so a later product does not inherit 38 digits.
+		// Multiplication and MOD use the exact bound of a direct integer literal.
+		// Addition/subtraction retain the established integer-domain coercion.
 		// Columns and syntax-explicit casts retain their declared domains.
-		if hasDecimalInput && inputs[i].IsIntOrUint() {
+		if (name == "*" || name == "mod" || name == "%") && hasDecimalInput && inputs[i].IsIntOrUint() {
 			width, exact := decimalIntegerWidth(literalExpr, inputs[i])
 			if !exact || width <= 0 {
 				continue
@@ -11043,7 +11042,7 @@ func refineDecimalArithmeticLiteralLookupTypes(name string, args []*Expr, inputs
 				changed = true
 			}
 			oid := types.T_decimal64
-			if width > types.T_decimal64.ToType().Width || name == "+" || name == "-" {
+			if width > types.T_decimal64.ToType().Width {
 				oid = types.T_decimal128
 			}
 			result[i] = types.New(oid, width, 0)

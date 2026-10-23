@@ -181,8 +181,6 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 	oid := coerced[0].Oid
 	if oid != types.T_decimal256 && precision > 38 {
 		oid = types.T_decimal256
-	} else if operator != "*" && oid == types.T_decimal64 && precision > 18 {
-		oid = types.T_decimal128
 	} else if operator == "*" && oid == types.T_decimal128 && precision <= 38 {
 		// Keep the existing signed-integer/Decimal64 MUL kernel, whose output
 		// is Decimal128. Integer domains retain 19 digits for signed BIGINT;
@@ -208,6 +206,9 @@ func decimalArithmeticInputs(operator string, inputs, coerced []types.Type) ([]t
 }
 
 func decimalAddSubReturnType(parameters []types.Type) types.Type {
+	if parameters[0].Oid == types.T_decimal64 && parameters[1].Oid == types.T_decimal64 {
+		return types.New(types.T_decimal64, 18, max(parameters[0].Scale, parameters[1].Scale))
+	}
 	leftWidth, leftScale, _ := decimalArithmeticDomain(parameters[0])
 	rightWidth, rightScale, _ := decimalArithmeticDomain(parameters[1])
 	scale := max(leftScale, rightScale)

@@ -406,7 +406,7 @@ func TestPreparedTimeArithmeticFallbackPreservesIntegerBoundary(t *testing.T) {
 						require.NoError(t, err)
 						expected := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
 						require.Equal(t, expected.Typ.Id, actual.Typ.Id, "expected=%s actual=%s", expected.String(), actual.String())
-						require.Equal(t, expected.Typ.Width, actual.Typ.Width, "expected=%s actual=%s", expected.String(), actual.String())
+						require.Equal(t, expected.Typ.Width, actual.Typ.Width)
 						require.Equal(t, expected.Typ.Scale, actual.Typ.Scale)
 						want, wantErr := eval(expected)
 						got, gotErr := eval(actual)
@@ -613,7 +613,7 @@ func TestPreparedTimeArithmeticPreservesNullEnvelope(t *testing.T) {
 				context.Background(), preparePlan, tc.values)
 			require.NoError(t, err)
 			expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
-			require.Equal(t, int32(tc.id), expr.Typ.Id, expr.String())
+			require.Equal(t, int32(tc.id), expr.Typ.Id)
 			require.Equal(t, tc.width, expr.Typ.Width)
 			require.Equal(t, int32(0), expr.Typ.Scale)
 			if tc.name != "both integers" {
@@ -637,7 +637,7 @@ func TestPreparedTimeArithmeticPreservesNullEnvelopeThroughAbs(t *testing.T) {
 		})
 	require.NoError(t, err)
 	expr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
-	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id, expr.String())
+	require.Equal(t, int32(types.T_decimal256), expr.Typ.Id)
 	require.Equal(t, int32(40), expr.Typ.Width)
 	require.Equal(t, int32(0), expr.Typ.Scale)
 	require.False(t, expr.Typ.NotNullable)
@@ -737,7 +737,7 @@ func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testi
 	require.NoError(t, err)
 	ordinaryExpr := ordinary.GetQuery().Nodes[len(ordinary.GetQuery().Nodes)-1].ProjectList[0]
 	require.Equal(t, int32(types.T_decimal128), ordinaryExpr.Typ.Id)
-	require.Equal(t, int32(11), ordinaryExpr.Typ.Width)
+	require.Equal(t, int32(22), ordinaryExpr.Typ.Width)
 	require.Equal(t, int32(2), ordinaryExpr.Typ.Scale)
 
 	prepared, err := runOneStmt(mock, t,
@@ -751,7 +751,7 @@ func TestPreparedTimeArithmeticPreservesExplicitDecimalAndNestedDomains(t *testi
 		require.NoError(t, err)
 		preparedExpr := filled.GetQuery().Nodes[len(filled.GetQuery().Nodes)-1].ProjectList[0]
 		require.Equal(t, ordinaryExpr.Typ.Id, preparedExpr.Typ.Id, value)
-		require.Equal(t, int32(22), preparedExpr.Typ.Width, value) // The marker keeps the full BIGINT domain; SQL literal 10 uses two digits.
+		require.Equal(t, ordinaryExpr.Typ.Width, preparedExpr.Typ.Width, value)
 		require.Equal(t, ordinaryExpr.Typ.Scale, preparedExpr.Typ.Scale, value)
 	}
 

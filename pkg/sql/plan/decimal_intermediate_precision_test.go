@@ -27,7 +27,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestDecimalRevenuePrecisionFromLiteral(t *testing.T) {
+func TestDecimalRevenuePrecisionRetainsIntegerDomain(t *testing.T) {
 	ctx := context.Background()
 	decimalType := types.New(types.T_decimal64, 15, 2)
 	literal := makePlan2Int64ConstExprWithType(1)
@@ -35,12 +35,12 @@ func TestDecimalRevenuePrecisionFromLiteral(t *testing.T) {
 	discount, err := BindFuncExprImplByPlanExpr(ctx, "-", []*planpb.Expr{literal, decimalArithmeticTestColumn(decimalType, 0)})
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_decimal128), discount.Typ.Id)
-	require.Equal(t, int32(16), discount.Typ.Width)
+	require.Equal(t, int32(22), discount.Typ.Width)
 	require.True(t, proto.Equal(before, literal), "lookup refinement mutated a shared literal")
 	revenue, err := BindFuncExprImplByPlanExpr(ctx, "*", []*planpb.Expr{decimalArithmeticTestColumn(decimalType, 1), discount})
 	require.NoError(t, err)
 	require.Equal(t, int32(types.T_decimal128), revenue.Typ.Id)
-	require.Equal(t, int32(31), revenue.Typ.Width)
+	require.Equal(t, int32(37), revenue.Typ.Width)
 	require.Equal(t, int32(4), revenue.Typ.Scale)
 }
 
@@ -49,7 +49,7 @@ func TestCTASDecimalArithmeticPublishesDerivedPrecision(t *testing.T) {
 		name, expr   string
 		width, scale int32
 	}{
-		{"discounted revenue", "l_extendedprice * (1 - l_discount)", 31, 4},
+		{"discounted revenue", "l_extendedprice * (1 - l_discount)", 37, 4},
 		{"direct product", "l_extendedprice * l_discount", 30, 4},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

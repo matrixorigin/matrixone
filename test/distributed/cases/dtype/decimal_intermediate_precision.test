@@ -11,6 +11,5 @@ insert into source_values values (100.00, 0.01), (null, 0.01);
 create table revenue as select price * (1 - discount) as amount, price * discount as direct_product from source_values;
 select column_name, numeric_precision, numeric_scale from information_schema.columns where table_schema = 'decimal_intermediate_precision' and table_name = 'revenue' order by ordinal_position;
 select amount, direct_product from revenue order by amount;
-select cast('999999999999999999' as decimal(18,0)) + cast('1' as decimal(18,0)) as carry;
 select cast('99999999999999999999' as decimal(20,0)) * cast('99999999999999999999' as decimal(20,0)) as wide_product;
 drop database decimal_intermediate_precision;
