@@ -7,6 +7,12 @@ This status refresh changes documentation only. The evidence below is bound to
 its actual source and mode; a documentation successor does not create a new
 kernel, Linux binary or performance result.
 
+CI-only follow-up, 2026-10-24: the historical dump round-trip test now verifies
+the TN flush response and waits for a post-flush CN logtail frontier before
+each complete DUMP. TN completion alone did not make the replacement visible to
+the CN. This changes test synchronization only, not kernel/native inputs or the
+DUMP in-memory-row rejection. It does not create new Linux/performance evidence.
+
 Base: `68e642fdc533e96ed8f83ac44659119ad8be97af`.
 Kernel candidate: `cf9f5ff0f6cfbc11066e24c5bf209234f154cee9` (CF9).
 Publication branch: `codex/m0-restricted-experimental-draft`.
@@ -239,6 +245,14 @@ passed, including UT, SCA, UT Coverage, Coverage and CI Required. PROXY job
 `information_schema_views_metadata.sql` **44/44**, with zero failed/ignored/
 abnormal items. The PESSIMISTIC job did not select these two fixtures; its green
 result is not counted as duplicate case coverage.
+
+The documentation successor `0955ad60f4` did not pass its own CI: run
+`39932171577` attempt 1 hit embedded-cluster service/cleanup deadlines. Its one
+failed-jobs-only retry did not repeat those failures but failed
+`TestTimestampAddHistoricalDumpRoundtrip` after an `OK` TN flush because the CN
+still saw in-memory rows. The CI-only follow-up above fixes that missing
+visibility barrier without sleeps, DUMP retries or relaxed assertions. Retain
+both failed attempts; the repaired successor still needs its own terminal CI.
 
 Default CI does not establish M0-path coverage: the M0 SQL integration files
 require `//go:build mo_m0`, while the ordinary UT runner selects
