@@ -74,14 +74,14 @@ func (ctr *container) outputRowBytes(join *HashJoin, leftRow, rightBatch, rightR
 
 // fixedOutputRowWidth is computed once per controlled Prepare. A zero width
 // falls back to the general path (including zero-column projections).
-func (join *HashJoin) fixedOutputRowWidth() (int64, bool) {
+func (hashJoin *HashJoin) fixedOutputRowWidth() (int64, bool) {
 	width := int64(0)
-	for _, column := range join.ResultCols {
+	for _, column := range hashJoin.ResultCols {
 		var typ types.Type
 		if column.Rel == 0 {
-			typ = join.LeftTypes[column.Pos]
+			typ = hashJoin.LeftTypes[column.Pos]
 		} else {
-			typ = join.RightTypes[column.Pos]
+			typ = hashJoin.RightTypes[column.Pos]
 		}
 		if typ.IsVarlen() || int64(typ.TypeSize()) > math.MaxInt64-width {
 			return 0, false
