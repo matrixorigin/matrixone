@@ -19,6 +19,7 @@ import (
 	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"os/exec"
@@ -191,7 +192,12 @@ func runInIsolatedClusterAdmissionProcess(t *testing.T, runPattern string) bool 
 	if os.Getenv("MO_EMBED_ADMISSION_HELPER") == "1" {
 		return false
 	}
-	cmd := exec.CommandContext(t.Context(), os.Args[0], "-test.run="+runPattern)
+	args := []string{"-test.run=" + runPattern}
+	// Keep subprocess counters in the directory collected by go test.
+	if coverageDir := flag.Lookup("test.gocoverdir"); coverageDir != nil && coverageDir.Value.String() != "" {
+		args = append(args, "-test.gocoverdir="+coverageDir.Value.String())
+	}
+	cmd := exec.CommandContext(t.Context(), os.Args[0], args...)
 	cmd.Env = append(os.Environ(), "MO_EMBED_ADMISSION_HELPER=1", "TMPDIR="+t.TempDir())
 	out, err := cmd.CombinedOutput()
 	require.NoError(t, err, "%s", out)
