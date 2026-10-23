@@ -380,7 +380,7 @@ func TestEvalAndShuffle(t *testing.T) {
 
 // TestEvalAndShuffleConst exercises the IsConst / IsConstNull branches
 // of evalAndShuffle and the helper shuffleConstVecByHash for every
-// supported type. ShuffleV2 only supports hash shuffle.
+// supported hash-shuffle type, with the current worker owning the target bucket.
 func TestEvalAndShuffleConst(t *testing.T) {
 	type constCase struct {
 		name      string
@@ -431,6 +431,11 @@ func TestEvalAndShuffleConst(t *testing.T) {
 
 			bat := testutil.NewBatch([]types.Type{c.colType}, false, 4, proc.Mp())
 			defer bat.Clean(proc.Mp())
+			vec, err := arg.ctr.exprExec.Eval(proc, []*batch.Batch{bat}, nil)
+			require.NoError(t, err)
+			if !vec.IsConstNull() {
+				arg.CurrentShuffleIdx = int32(shuffleConstVecByHash(arg.BucketNum, vec))
+			}
 			out, err := arg.evalAndShuffle(bat, proc)
 			require.NoError(t, err)
 			require.NotNil(t, out)

@@ -1573,8 +1573,8 @@ func constructShuffleOperatorForJoinV2(bucketNum int32, node *plan.Node, left bo
 		}
 	}
 
-	hashCol, typ := plan2.GetHashColumn(expr)
-	if hashCol != nil {
+	typ := expr.Typ.Id
+	if hashCol := expr.GetCol(); hashCol != nil {
 		arg.ShuffleColIdx = hashCol.ColPos
 	} else {
 		// expression-based shuffle (e.g., serial_full)
@@ -1606,8 +1606,8 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 		}
 	}
 
-	hashCol, typ := plan2.GetHashColumn(expr)
-	if hashCol != nil {
+	typ := expr.Typ.Id
+	if hashCol := expr.GetCol(); hashCol != nil {
 		arg.ShuffleColIdx = hashCol.ColPos
 	} else {
 		// expression-based shuffle (e.g., serial_full)
@@ -1631,8 +1631,13 @@ func constructShuffleOperatorForJoin(bucketNum int32, node *plan.Node, left bool
 
 func constructShuffleArgForGroupV2(node *plan.Node, dop int32) *shuffleV2.ShuffleV2 {
 	arg := shuffleV2.NewArgument()
-	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
-	arg.ShuffleColIdx = hashCol.ColPos
+	expr := node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx]
+	typ := expr.Typ.Id
+	if hashCol := expr.GetCol(); hashCol != nil {
+		arg.ShuffleColIdx = hashCol.ColPos
+	} else {
+		arg.ShuffleExpr = plan2.DeepCopyExpr(expr)
+	}
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
@@ -1648,8 +1653,13 @@ func constructShuffleArgForGroupV2(node *plan.Node, dop int32) *shuffleV2.Shuffl
 
 func constructShuffleArgForGroup(ss []*Scope, node *plan.Node) *shuffle.Shuffle {
 	arg := shuffle.NewArgument()
-	hashCol, typ := plan2.GetHashColumn(node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx])
-	arg.ShuffleColIdx = hashCol.ColPos
+	expr := node.GroupBy[node.Stats.HashmapStats.ShuffleColIdx]
+	typ := expr.Typ.Id
+	if hashCol := expr.GetCol(); hashCol != nil {
+		arg.ShuffleColIdx = hashCol.ColPos
+	} else {
+		arg.ShuffleExpr = plan2.DeepCopyExpr(expr)
+	}
 	arg.ShuffleType = int32(node.Stats.HashmapStats.ShuffleType)
 	arg.ShuffleColMin = node.Stats.HashmapStats.ShuffleColMin
 	arg.ShuffleColMax = node.Stats.HashmapStats.ShuffleColMax
