@@ -830,8 +830,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if _, assigned := newColName2Idx[qualifiedName]; assigned || col.OnUpdate == nil || col.OnUpdate.Expr == nil {
 				continue
 			}
-			newDefExpr := DeepCopyExpr(col.OnUpdate.Expr)
-			if err = replaceFuncId(builder.GetContext(), newDefExpr); err != nil {
+			newDefExpr, err := importPersistedExpr(builder.GetContext(), col.OnUpdate.Expr)
+			if err != nil {
 				return 0, err
 			}
 			oldPos := oldColName2Idx[qualifiedName]
@@ -1034,8 +1034,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 			if col.GeneratedCol == nil {
 				continue
 			}
-			genExpr, err := builder.applyGeneratedColumnAssignmentCast(
-				DeepCopyExpr(col.GeneratedCol.Expr),
+			genExpr, err := builder.importGeneratedColumnAssignmentCast(
+				col.GeneratedCol.Expr,
 				stmt.Ignore,
 			)
 			if err != nil {
@@ -1910,8 +1910,8 @@ func (builder *QueryBuilder) bindUpdate(stmt *tree.Update, bindCtx *BindContext)
 				if col.GeneratedCol == nil {
 					continue
 				}
-				genExpr, err := builder.applyGeneratedColumnAssignmentCast(
-					DeepCopyExpr(col.GeneratedCol.Expr),
+				genExpr, err := builder.importGeneratedColumnAssignmentCast(
+					col.GeneratedCol.Expr,
 					stmt.Ignore,
 				)
 				if err != nil {
@@ -3667,8 +3667,8 @@ func (builder *QueryBuilder) recomputeMergedPhysicalTargetGeneratedColumns(
 				ownerAlias,
 			)
 		}
-		genExpr, err := builder.applyGeneratedColumnAssignmentCast(
-			DeepCopyExpr(col.GeneratedCol.Expr),
+		genExpr, err := builder.importGeneratedColumnAssignmentCast(
+			col.GeneratedCol.Expr,
 			true,
 		)
 		if err != nil {

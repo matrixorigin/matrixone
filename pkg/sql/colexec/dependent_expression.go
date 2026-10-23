@@ -410,9 +410,9 @@ func decodeDependentNumericProgramRef(ctx context.Context, expr *plan.Expr) (int
 	if f == nil || f.Func == nil {
 		return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program reference")
 	}
-	fid, _ := function.DecodeOverloadID(f.Func.Obj)
+	fid, refOverload := function.DecodeOverloadID(f.Func.Obj)
 	args := f.Args
-	if fid != function.SCALAR_PROGRAM_REF || (len(args) != 2 && len(args) != 3) {
+	if fid != function.SCALAR_PROGRAM_REF || refOverload != 0 || (len(args) != 2 && len(args) != 3) {
 		return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program reference arity")
 	}
 	var definition, scopeExpr, slotExpr *plan.Expr
@@ -444,9 +444,9 @@ func decodeDependentNumericProgramRef(ctx context.Context, expr *plan.Expr) (int
 		if defFn == nil || defFn.Func == nil || len(defFn.Args) < 2 || len(defFn.Args) > 3 {
 			return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program definition")
 		}
-		defID, _ := function.DecodeOverloadID(defFn.Func.Obj)
+		defID, defOverload := function.DecodeOverloadID(defFn.Func.Obj)
 		defScope, defOK := readInt(defFn.Args[0])
-		if defID != function.SCALAR_PROGRAM || !defOK || defScope != scope || defFn.Args[1] == nil ||
+		if defID != function.SCALAR_PROGRAM || defOverload != 0 || !defOK || defScope != scope || defFn.Args[1] == nil ||
 			!proto.Equal(&expr.Typ, &defFn.Args[1].Typ) || (len(defFn.Args) == 3 && (defFn.Args[2] == nil || defFn.Args[2].Typ.Id != 10)) {
 			return 0, 0, nil, moerr.NewInvalidInput(ctx, "invalid scalar numeric program definition")
 		}

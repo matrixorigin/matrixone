@@ -159,6 +159,28 @@ func TestScalarNumericProgramPairsValueAndSelectedBranchKind(t *testing.T) {
 	partialResult, err := partialExecutor.Eval(proc, []*batch.Batch{input}, nil)
 	require.NoError(t, err)
 	require.Equal(t, []int64{0, 49}, vector.MustFixedColWithTypeCheck[int64](partialResult))
+
+	for _, tc := range []struct {
+		name   string
+		mutate func(*plan.Expr)
+	}{
+		{"value ref overload", func(expr *plan.Expr) {
+			expr.GetF().Args[0].GetF().Func.Obj = function.EncodeOverloadID(function.SCALAR_PROGRAM_REF, 1)
+		}},
+		{"kind ref overload", func(expr *plan.Expr) {
+			expr.GetF().Args[2].GetF().Func.Obj = function.EncodeOverloadID(function.SCALAR_PROGRAM_REF, 1)
+		}},
+		{"definition overload", func(expr *plan.Expr) {
+			expr.GetF().Args[0].GetF().Args[0].GetF().Func.Obj = function.EncodeOverloadID(function.SCALAR_PROGRAM, 1)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			invalid := makeProgramCast(binaryText, 108)
+			tc.mutate(invalid)
+			_, err := NewExpressionExecutor(proc, invalid)
+			require.Error(t, err)
+		})
+	}
 }
 
 func TestProjectionProgramGroupCarriesOrdinaryKindPassenger(t *testing.T) {

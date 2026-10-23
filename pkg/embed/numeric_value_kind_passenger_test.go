@@ -192,6 +192,22 @@ func TestNumericValueKindPassengerAcrossRelationalOperators(t *testing.T) {
 			) SELECT id, ABS(v) FROM r`)
 			require.Equal(t, [][]string{{"1", "49"}}, got)
 		})
+		t.Run("persisted_row_dependent_default_preserves_selected_kind", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "CREATE TABLE persisted_default_kind (id INT, n DOUBLE DEFAULT (ABS(CASE WHEN id=1 THEN X'31' ELSE '1' END)))")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "INSERT INTO persisted_default_kind (id) VALUES (1), (2)")
+			require.NoError(t, err)
+			got := query("SELECT id, n FROM persisted_default_kind ORDER BY id")
+			require.Equal(t, [][]string{{"1", "49"}, {"2", "1"}}, got)
+		})
+		t.Run("persisted_string_default_preserves_selected_kind", func(t *testing.T) {
+			_, err := conn.ExecContext(ctx, "CREATE TABLE persisted_string_default_kind (id INT, n VARCHAR(20) DEFAULT (ABS(CASE WHEN id=1 THEN X'31' ELSE '1' END)))")
+			require.NoError(t, err)
+			_, err = conn.ExecContext(ctx, "INSERT INTO persisted_string_default_kind (id) VALUES (1), (2)")
+			require.NoError(t, err)
+			got := query("SELECT id, n FROM persisted_string_default_kind ORDER BY id")
+			require.Equal(t, [][]string{{"1", "49"}, {"2", "1"}}, got)
+		})
 
 		t.Run("integer_oct_maketime_and_cast_consumers", func(t *testing.T) {
 			cases := []struct {

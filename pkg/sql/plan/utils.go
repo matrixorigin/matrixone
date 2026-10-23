@@ -6436,159 +6436,121 @@ func preparedSQLExecuteNumericParamExpr(
 	return nil, nil
 }
 
-func preparedParamUsesStringMathFunction(plan0 *Plan, position int) bool {
-	if plan0 == nil {
-		return false
-	}
-	found := false
-	_ = plan.VisitExpressionsInOwner(plan0, func(expr *plan.Expr) error {
-		if found || expr == nil {
-			return nil
-		}
-		found = preparedExprUsesStringMathValueArg(expr, position)
-		return nil
-	})
-	return found
+type preparedParamRoleSummary struct {
+	stringMathValue   []bool
+	ordinaryPrecision []bool
 }
 
-// preparedParamUsesOrdinaryMathPrecision preserves the original parameter
-// position for source-aware CEIL/FLOOR precision rebinding. Precision is not a
-// numeric-result value role, so it must not opt into string numeric-prefix
-// conversion; retaining only its source marker lets the control cast choose
-// the native integer conversion for numeric EXECUTE values.
-func preparedParamUsesOrdinaryMathPrecision(plan0 *Plan, position int) bool {
-	if plan0 == nil || position < 0 {
-		return false
+type preparedExprRoleVisit struct {
+	expr *plan.Expr
+	role preparedStringMathRole
+}
+
+// summarizePreparedParamRoles classifies every marker in one role-aware plan
+// walk. Parameter materialization needs the same two facts for many markers;
+// memoizing each expression under its inherited role avoids rescanning the
+// full plan once per marker while preserving value/control distinctions.
+func summarizePreparedParamRoles(plan0 *Plan, paramCount int) (preparedParamRoleSummary, error) {
+	summary := preparedParamRoleSummary{
+		stringMathValue:   make([]bool, paramCount),
+		ordinaryPrecision: make([]bool, paramCount),
 	}
-	found := false
-	_ = plan.VisitExpressionsInOwner(plan0, func(expr *plan.Expr) error {
-		if found || expr == nil {
-			return nil
+	if plan0 == nil || paramCount == 0 {
+		return summary, nil
+	}
+
+	seen := make(map[preparedExprRoleVisit]struct{})
+	var walk func(*plan.Expr, preparedStringMathRole)
+	walk = func(expr *plan.Expr, role preparedStringMathRole) {
+		if expr == nil {
+			return
 		}
-		fn := expr.GetF()
-		if fn == nil || fn.Func == nil {
-			return nil
+		visit := preparedExprRoleVisit{expr: expr, role: role}
+		if _, ok := seen[visit]; ok {
+			return
 		}
-		for i, arg := range fn.Args {
-			if _, ordinaryPrecision := function.IntegerArgumentOrdinaryCastTarget(fn.Func.GetObjName(), i); !ordinaryPrecision {
-				continue
+		seen[visit] = struct{}{}
+
+		if param := expr.GetP(); param != nil {
+			position := int(param.Pos)
+			if role == preparedStringMathRoleValue && position >= 0 && position < paramCount {
+				summary.stringMathValue[position] = true
 			}
-			if paramPos, ok := preparedMathPrecisionSourceParamPosition(arg); ok && paramPos == position {
-				found = true
-				return nil
+			return
+		}
+		if literal := expr.GetLit(); literal != nil {
+			walk(literal.Src, role)
+		}
+		if fn := expr.GetF(); fn != nil {
+			name := ""
+			if fn.Func != nil {
+				name = fn.Func.GetObjName()
 			}
-		}
-		return nil
-	})
-	return found
-}
-
-// preparedExprUsesStringMathValueArg finds a string-math value occurrence for
-// position. Numeric roles cross only function arguments whose domain is
-// explicitly known; a string-domain or unknown function resets the inherited
-// role while still allowing an independently nested math owner to be found.
-func preparedExprUsesStringMathValueArg(expr *plan.Expr, position int) bool {
-	return preparedExprUsesStringMathValueArgWithRole(
-		expr, position, preparedStringMathRoleNone)
-}
-
-func preparedExprUsesStringMathValueArgWithRole(
-	expr *plan.Expr,
-	position int,
-	role preparedStringMathRole,
-) bool {
-	if expr == nil {
-		return false
-	}
-	if param := expr.GetP(); param != nil {
-		return int(param.Pos) == position && role == preparedStringMathRoleValue
-	}
-	if literal := expr.GetLit(); literal != nil {
-		if preparedExprUsesStringMathValueArgWithRole(literal.Src, position, role) {
-			return true
-		}
-	}
-	if fn := expr.GetF(); fn != nil {
-		name := ""
-		if fn.Func != nil {
-			name = fn.Func.GetObjName()
-		}
-		for index, arg := range fn.Args {
-			childRole := preparedStringMathRoleNone
-			if role == preparedStringMathRoleNone {
-				// With no inherited role, ordinary wrappers cannot leak a role.
-				// Avoid running the full ownership classifier for every argument in
-				// large no-match trees; only string-math functions establish a new
-				// role at this point.
-				if isPreparedStringMathFunction(name) {
-					if preparedStringMathFunctionValueArg(name, index, len(fn.Args)) {
-						childRole = preparedStringMathRoleValue
-					} else {
-						childRole = preparedStringMathRoleControl
+			for index, arg := range fn.Args {
+				if _, ordinaryPrecision := function.IntegerArgumentOrdinaryCastTarget(name, index); ordinaryPrecision {
+					if position, ok := preparedMathPrecisionSourceParamPosition(arg); ok && position >= 0 && int(position) < paramCount {
+						summary.ordinaryPrecision[position] = true
 					}
 				}
-			} else {
-				var ownsRole bool
-				childRole, ownsRole = preparedNumericFunctionArgRole(expr, index, role)
-				if !ownsRole {
-					// This argument is outside the current numeric function's proven
-					// value domain. Continue searching for a deeper independent
-					// string-math owner without inheriting this ancestor's role.
-					childRole = preparedStringMathRoleNone
+
+				childRole := preparedStringMathRoleNone
+				if role == preparedStringMathRoleNone {
+					// With no inherited role, ordinary wrappers cannot leak a role.
+					// Only string-math functions establish a fresh value/control role.
+					if isPreparedStringMathFunction(name) {
+						if preparedStringMathFunctionValueArg(name, index, len(fn.Args)) {
+							childRole = preparedStringMathRoleValue
+						} else {
+							childRole = preparedStringMathRoleControl
+						}
+					}
+				} else {
+					var ownsRole bool
+					childRole, ownsRole = preparedNumericFunctionArgRole(expr, index, role)
+					if !ownsRole {
+						// Search for deeper math owners without inheriting a role
+						// through an unknown or string-domain argument.
+						childRole = preparedStringMathRoleNone
+					}
+				}
+				walk(arg, childRole)
+			}
+		}
+		if list := expr.GetList(); list != nil {
+			for _, item := range list.List {
+				walk(item, preparedStringMathRoleNone)
+			}
+		}
+		if sub := expr.GetSub(); sub != nil {
+			walk(sub.Child, role)
+		}
+		if window := expr.GetW(); window != nil {
+			walk(window.WindowFunc, role)
+			for _, arg := range window.PartitionBy {
+				walk(arg, preparedStringMathRoleNone)
+			}
+			for _, order := range window.OrderBy {
+				if order != nil {
+					walk(order.Expr, preparedStringMathRoleNone)
 				}
 			}
-			if preparedExprUsesStringMathValueArgWithRole(arg, position, childRole) {
-				return true
+			if window.Frame != nil {
+				if window.Frame.Start != nil {
+					walk(window.Frame.Start.Val, preparedStringMathRoleNone)
+				}
+				if window.Frame.End != nil {
+					walk(window.Frame.End.Val, preparedStringMathRoleNone)
+				}
 			}
 		}
 	}
-	if list := expr.GetList(); list != nil {
-		for _, item := range list.List {
-			// A list is a multi-value container, not a scalar numeric-result
-			// function. Search its members for their own string-math owners, but
-			// do not lend an enclosing scalar role to a bare member.
-			if preparedExprUsesStringMathValueArgWithRole(item, position, preparedStringMathRoleNone) {
-				return true
-			}
-		}
+	if err := plan.VisitExpressionsInOwner(plan0, func(expr *plan.Expr) error {
+		walk(expr, preparedStringMathRoleNone)
+		return nil
+	}); err != nil {
+		return preparedParamRoleSummary{}, err
 	}
-	// A scalar subquery's child is its single value expression, so the enclosing
-	// numeric role can reach that result. Function arguments inside the child
-	// still have to prove their own value-domain ownership above.
-	if sub := expr.GetSub(); sub != nil &&
-		preparedExprUsesStringMathValueArgWithRole(sub.Child, position, role) {
-		return true
-	}
-	if window := expr.GetW(); window != nil {
-		// Only WindowFunc contributes the window expression's scalar value.
-		// Partition/order/frame expressions are independent controls and can
-		// contain their own math owners, but never inherit the outer value role.
-		if preparedExprUsesStringMathValueArgWithRole(window.WindowFunc, position, role) {
-			return true
-		}
-		for _, arg := range window.PartitionBy {
-			if preparedExprUsesStringMathValueArgWithRole(arg, position, preparedStringMathRoleNone) {
-				return true
-			}
-		}
-		for _, order := range window.OrderBy {
-			if order != nil && preparedExprUsesStringMathValueArgWithRole(
-				order.Expr, position, preparedStringMathRoleNone) {
-				return true
-			}
-		}
-		if window.Frame != nil {
-			if window.Frame.Start != nil && preparedExprUsesStringMathValueArgWithRole(
-				window.Frame.Start.Val, position, preparedStringMathRoleNone) {
-				return true
-			}
-			if window.Frame.End != nil && preparedExprUsesStringMathValueArgWithRole(
-				window.Frame.End.Val, position, preparedStringMathRoleNone) {
-				return true
-			}
-		}
-	}
-	return false
+	return summary, nil
 }
 
 func isPreparedStringMathFunction(name string) bool {
@@ -6844,11 +6806,12 @@ func replaceParamValsWithSelection(
 	if err != nil {
 		return false, err
 	}
-	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
-	allowNonnumericStringPrefix := make([]bool, len(paramVals))
-	for i := range paramVals {
-		allowNonnumericStringPrefix[i] = preparedParamUsesStringMathFunction(plan0, i)
+	paramRoles, err := summarizePreparedParamRoles(plan0, len(paramVals))
+	if err != nil {
+		return false, err
 	}
+	directResultPositions := PreparedPlanDirectResultParamPositions(plan0)
+	allowNonnumericStringPrefix := paramRoles.stringMathValue
 	params := make([]*Expr, len(paramVals))
 	sqlExecuteNumericParams := make([]*Expr, len(paramVals))
 	sqlExecuteStringMathParams := make([]*Expr, len(paramVals))
@@ -6874,7 +6837,7 @@ func replaceParamValsWithSelection(
 			runtimeType = param.RuntimeType
 			hasRuntimeType = param.HasRuntimeType
 			numericPrefixSource = param.EnableNumericPrefix
-			retainParamRef = param.RetainParamRef || preparedParamUsesOrdinaryMathPrecision(plan0, i)
+			retainParamRef = param.RetainParamRef || paramRoles.ordinaryPrecision[i]
 			runtimeStringDomain = param.RuntimeStringDomain
 			// Materialize only a non-NULL binary string domain. NULL retains the
 			// prepared marker type, while text sources keep the TEXT transport type.
@@ -6903,7 +6866,7 @@ func replaceParamValsWithSelection(
 				hasExecuteSourceType = true
 			}
 			if !hasExecuteSourceType && param.IsBinaryProtocol && hasRuntimeType &&
-				preparedParamUsesOrdinaryMathPrecision(plan0, i) &&
+				paramRoles.ordinaryPrecision[i] &&
 				(types.T(runtimeType.Oid).IsInteger() || types.T(runtimeType.Oid).IsFloat() ||
 					types.T(runtimeType.Oid).IsDecimal() || runtimeType.Oid == types.T_bool ||
 					runtimeType.Oid == types.T_bit || runtimeType.Oid == types.T_year ||

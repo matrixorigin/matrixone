@@ -386,8 +386,12 @@ func newScalarNumericProgramRefExecutor(
 	fid int32,
 ) (ExpressionExecutor, error) {
 	f := planExpr.GetF()
-	if f == nil {
+	if f == nil || f.Func == nil {
 		return nil, moerr.NewInvalidInputNoCtx("invalid scalar numeric program reference")
+	}
+	refID, refOverload := function.DecodeOverloadID(f.Func.GetObj())
+	if refID != function.SCALAR_PROGRAM_REF || refOverload != 0 {
+		return nil, moerr.NewInvalidInputNoCtx("unsupported scalar numeric program reference overload")
 	}
 	args := f.GetArgs()
 	var definition *plan.Expr
@@ -419,10 +423,10 @@ func newScalarNumericProgramRefExecutor(
 		if defFn == nil || defFn.Func == nil {
 			return nil, moerr.NewInvalidInputNoCtx("scalar numeric program definition is missing")
 		}
-		defID, _ := function.DecodeOverloadID(defFn.Func.GetObj())
+		defID, defOverload := function.DecodeOverloadID(defFn.Func.GetObj())
 		defArgs := defFn.GetArgs()
 		defScope, hasScope := scalarNumericProgramScopeAt(defArgs, 0)
-		if defID != function.SCALAR_PROGRAM || (len(defArgs) != 2 && len(defArgs) != 3) || !hasScope || defScope != scope || defArgs[1] == nil {
+		if defID != function.SCALAR_PROGRAM || defOverload != 0 || (len(defArgs) != 2 && len(defArgs) != 3) || !hasScope || defScope != scope || defArgs[1] == nil {
 			return nil, moerr.NewInvalidInputNoCtx("invalid scalar numeric program definition")
 		}
 		if len(defArgs) == 3 && (defArgs[2] == nil || types.T(defArgs[2].Typ.Id) != types.T_bool) {

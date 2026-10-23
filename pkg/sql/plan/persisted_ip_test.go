@@ -888,17 +888,21 @@ func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
 		}
 	})
 
-	for _, createSQL := range []string{
-		"create view v_typed_date as select cast(l_shipdate as date) as value from lineitem",
-		"create view v_mixed_temporal as select if(1 = 1, cast('2024-01-02 12:34:56.123456' as timestamp(6)), cast('2024-01-02 12:34:56.123' as datetime(3))) as value",
-		"create view v_stable_temporal as select date_sub(now(), interval 10 minute) as value",
-		"create view v_numeric_time as select cast(900 as time) as value",
-		"create view v_hex_numeric as select cast(X'' as signed) as value",
-		"create view v_bit_numeric as select cast(b'0' as double) as value",
+	for _, test := range []struct {
+		createSQL string
+		version   int64
+	}{
+		{"create view v_typed_date as select cast(l_shipdate as date) as value from lineitem", defines.MORPCVersion98},
+		{"create view v_mixed_temporal as select if(1 = 1, cast('2024-01-02 12:34:56.123456' as timestamp(6)), cast('2024-01-02 12:34:56.123' as datetime(3))) as value", defines.MORPCVersion98},
+		{"create view v_stable_temporal as select date_sub(now(), interval 10 minute) as value", defines.MORPCVersion98},
+		{"create view v_numeric_time as select cast(900 as time) as value", defines.MORPCVersion98},
+		{"create view v_hex_numeric as select cast(X'' as signed) as value", defines.MORPCVersion129},
+		{"create view v_bit_numeric as select cast(b'0' as double) as value", defines.MORPCVersion129},
 	} {
+		createSQL := test.createSQL
 		t.Run(createSQL, func(t *testing.T) {
-			build := func(authoringFloor int64) (*Plan, error) {
-				rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion98)
+			build := func(authoringFloor, localProtocol int64) (*Plan, error) {
+				rt.SetGlobalVariables(moruntime.MOProtocolVersion, localProtocol)
 				rt.SetGlobalVariables(moruntime.PersistedExpressionProtocolAuthoringFloor, authoringFloor)
 				stmt, err := parsers.ParseOne(t.Context(), dialect.MYSQL, createSQL, 1)
 				if err != nil {
@@ -908,18 +912,18 @@ func TestPersistedMixedTemporalViewProtocolAdmission(t *testing.T) {
 				return BuildPlan(&rootSQLCompilerContext{MockCompilerContext: ctx, rootSQL: createSQL}, stmt, false)
 			}
 
-			_, err := build(0)
-			require.ErrorContains(t, err, "protocol version 98")
-			_, err = build(defines.MORPCVersion96)
-			require.ErrorContains(t, err, "protocol version 98")
+			_, err := build(0, defines.MORPCVersion98)
+			require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", test.version))
+			_, err = build(defines.MORPCVersion96, defines.MORPCVersion98)
+			require.ErrorContains(t, err, fmt.Sprintf("protocol version %d", test.version))
 
-			created, err := build(defines.MORPCVersion98)
+			created, err := build(test.version, test.version)
 			require.NoError(t, err)
 			var viewData ViewData
 			require.NoError(t, json.Unmarshal(
 				[]byte(created.GetDdl().GetCreateView().GetTableDef().GetViewSql().GetView()), &viewData))
 			require.NotNil(t, viewData.RequiredProtocolVersion)
-			require.Equal(t, int64(defines.MORPCVersion98), *viewData.RequiredProtocolVersion)
+			require.Equal(t, test.version, *viewData.RequiredProtocolVersion)
 		})
 	}
 }

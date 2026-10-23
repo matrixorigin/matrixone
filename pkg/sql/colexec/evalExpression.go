@@ -495,9 +495,15 @@ func newExpressionExecutorWithAllocation(
 		// from the pre-versioned unary TIMESTAMP implementation.
 		fid, oid := function.DecodeOverloadID(overloadID)
 		if fid == function.SCALAR_PROGRAM {
+			if oid != 0 {
+				return nil, moerr.NewInvalidInputNoCtx("unsupported scalar numeric program overload")
+			}
 			return nil, moerr.NewInvalidInputNoCtx("scalar numeric program definition must be anchored by output zero")
 		}
 		if fid == function.SCALAR_PROGRAM_REF {
+			if oid != 0 {
+				return nil, moerr.NewInvalidInputNoCtx("unsupported scalar numeric program reference overload")
+			}
 			return newScalarNumericProgramRefExecutor(proc, planExpr, selection, buildCtx, fid)
 		}
 		if fid == function.LOAD_FK_IGNORE_CHECK {

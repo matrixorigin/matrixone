@@ -142,11 +142,30 @@ func TestDecimalIntegerDivViewBoundaryPlan(t *testing.T) {
 }
 
 func TestDecimalIntegerDivPersistedFloor(t *testing.T) {
-	p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, "prepare decimal_div_floor from 'select cast(? as decimal(10,3)) div cast(2 as unsigned)'")
-	require.NoError(t, err)
-	expr := findPlanFunctionExpr(p.GetDcl().GetPrepare().Plan, "div")
-	require.NotNil(t, expr)
-	floor, err := RequiredPersistedExpressionProtocolVersion(expr)
-	require.NoError(t, err)
-	require.Equal(t, defines.MORPCVersion121, floor)
+	for _, test := range []struct {
+		name  string
+		sql   string
+		floor int64
+	}{
+		{
+			name:  "prepared parameter preserves source kind",
+			sql:   "prepare decimal_div_floor from 'select cast(? as decimal(10,3)) div cast(2 as unsigned)'",
+			floor: defines.MORPCVersion129,
+		},
+		{
+			name:  "native decimal division keeps its existing floor",
+			sql:   "prepare decimal_div_native from 'select cast(5.678 as decimal(10,3)) div cast(2 as unsigned)'",
+			floor: defines.MORPCVersion121,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			p, err := runOneStmt(NewMockOptimizer(false, newPlanTestProcess(t)), t, test.sql)
+			require.NoError(t, err)
+			expr := findPlanFunctionExpr(p.GetDcl().GetPrepare().GetPlan(), "div")
+			require.NotNil(t, expr)
+			floor, err := RequiredPersistedExpressionProtocolVersion(expr)
+			require.NoError(t, err)
+			require.Equal(t, test.floor, floor)
+		})
+	}
 }

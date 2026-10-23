@@ -721,6 +721,62 @@ func TestPreparedSQLExecuteNumericParamExprPreservesSourceDomain(t *testing.T) {
 	}
 }
 
+func TestSummarizePreparedParamRolesKeepsValueAndPrecisionRolesSeparate(t *testing.T) {
+	preparedPlan, paramCount := preparedParamRoleSummaryPlan(1)
+	roles, err := summarizePreparedParamRoles(preparedPlan, paramCount)
+	require.NoError(t, err)
+	require.Equal(t, []bool{true, true, false}, roles.stringMathValue,
+		"only numeric value operands inherit string-math prefix conversion")
+	require.Equal(t, []bool{false, false, true}, roles.ordinaryPrecision,
+		"CEIL precision retains its source marker without becoming a value operand")
+}
+
+func preparedParamRoleSummaryPlan(pairs int) (*plan.Plan, int) {
+	projectList := make([]*plan.Expr, 0, pairs*2)
+	position := int32(0)
+	newParam := func() *plan.Expr {
+		expr := &plan.Expr{
+			Typ:  plan.Type{Id: int32(types.T_text)},
+			Expr: &plan.Expr_P{P: &plan.ParamRef{Pos: position}},
+		}
+		position++
+		return expr
+	}
+	for range pairs {
+		projectList = append(projectList, &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "abs"},
+				Args: []*plan.Expr{newParam()},
+			}},
+		})
+		projectList = append(projectList, &plan.Expr{
+			Typ: plan.Type{Id: int32(types.T_float64)},
+			Expr: &plan.Expr_F{F: &plan.Function{
+				Func: &plan.ObjectRef{ObjName: "ceil"},
+				Args: []*plan.Expr{newParam(), newParam()},
+			}},
+		})
+	}
+	return &plan.Plan{Plan: &plan.Plan_Query{Query: &plan.Query{Nodes: []*plan.Node{{ProjectList: projectList}}}}}, int(position)
+}
+
+func BenchmarkSummarizePreparedParamRoles(b *testing.B) {
+	for _, pairs := range []int{16, 64, 256} {
+		b.Run(fmt.Sprintf("value_and_precision_pairs_%d", pairs), func(b *testing.B) {
+			preparedPlan, paramCount := preparedParamRoleSummaryPlan(pairs)
+			b.ReportAllocs()
+			b.ReportMetric(float64(paramCount), "markers/op")
+			b.ResetTimer()
+			for b.Loop() {
+				if _, err := summarizePreparedParamRoles(preparedPlan, paramCount); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestPreparedRuntimeDecimalTypeBoundaries(t *testing.T) {
 	for _, digits := range []int{65, 66, 67, 76} {
 		value := strings.Repeat("9", digits)

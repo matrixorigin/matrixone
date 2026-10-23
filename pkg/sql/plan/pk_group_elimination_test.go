@@ -779,11 +779,9 @@ func TestPrimaryKeyGroupEliminationSupportsPreparedBoundedDemand(t *testing.T) {
 	scan := firstReachableNode(query, planpb.Node_TABLE_SCAN)
 	require.NotNil(t, scan)
 	require.NotNil(t, scan.Limit)
-	require.Equal(t, "cast", scan.Limit.GetF().Func.ObjName)
-	require.Equal(t, int32(0), scan.Limit.GetF().Args[0].GetP().Pos)
 	require.NotNil(t, scan.Offset)
-	require.Equal(t, "cast", scan.Offset.GetF().Func.ObjName)
-	require.Equal(t, int32(1), scan.Offset.GetF().Args[0].GetP().Pos)
+	requirePreparedBoundedNumericCastParameter(t, scan.Limit, 0)
+	requirePreparedBoundedNumericCastParameter(t, scan.Offset, 1)
 
 	prepared, err = runOneStmt(
 		NewMockOptimizer(false, newPlanTestProcess(t)),
@@ -800,6 +798,31 @@ func TestPrimaryKeyGroupEliminationSupportsPreparedBoundedDemand(t *testing.T) {
 	require.Len(t, scan.FilterList, 1)
 	require.Nil(t, scan.Limit,
 		"bounded demand must not suppress a predicate-parameter conversion error")
+}
+
+func requirePreparedBoundedNumericCastParameter(t *testing.T, expr *planpb.Expr, pos int32) {
+	t.Helper()
+	require.NotNil(t, expr)
+	fn := expr.GetF()
+	require.NotNil(t, fn)
+	require.NotNil(t, fn.Func)
+	fid, overload := function.DecodeOverloadID(fn.Func.GetObj())
+	require.Equal(t, int32(function.CAST), fid)
+	require.Equal(t, function.NumericValueCastOverload, overload)
+	require.Len(t, fn.Args, 4)
+	require.Equal(t, function.NumericValueCastPolicyOrdinary, fn.Args[3].GetLit().GetI32Val())
+
+	valueScope, valueSlot, valueOK := numericProgramRefIdentity(fn.Args[0])
+	kindScope, kindSlot, kindOK := numericProgramRefIdentity(fn.Args[2])
+	require.True(t, valueOK)
+	require.True(t, kindOK)
+	require.Equal(t, int64(0), valueSlot)
+	require.Equal(t, int64(1), kindSlot)
+	require.Equal(t, valueScope, kindScope)
+	raw, rawOK := numericProgramRawValue(fn.Args[0])
+	require.True(t, rawOK)
+	require.NotNil(t, raw.GetP())
+	require.Equal(t, pos, raw.GetP().GetPos())
 }
 
 func TestPrimaryKeyGroupEliminationKeepsAggregateFreeLegacyPathUnbounded(t *testing.T) {

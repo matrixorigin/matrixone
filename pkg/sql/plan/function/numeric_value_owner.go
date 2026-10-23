@@ -36,10 +36,10 @@ func NumericValueProgramCastOwner(expr *planpb.Expr) (source, sourceKind *planpb
 	if valueFn == nil || valueFn.Func == nil || kindFn == nil || kindFn.Func == nil {
 		return nil, nil, false
 	}
-	valueID, _ := DecodeOverloadID(valueFn.Func.GetObj())
-	kindID, _ := DecodeOverloadID(kindFn.Func.GetObj())
+	valueID, valueOverload := DecodeOverloadID(valueFn.Func.GetObj())
+	kindID, kindOverload := DecodeOverloadID(kindFn.Func.GetObj())
 	valueArgs, kindArgs := valueFn.Args, kindFn.Args
-	if valueID != SCALAR_PROGRAM_REF || kindID != SCALAR_PROGRAM_REF ||
+	if valueID != SCALAR_PROGRAM_REF || valueOverload != 0 || kindID != SCALAR_PROGRAM_REF || kindOverload != 0 ||
 		len(valueArgs) != 3 || len(kindArgs) != 2 || valueArgs[0] == nil ||
 		valueArgs[1] == nil || valueArgs[2] == nil || kindArgs[0] == nil || kindArgs[1] == nil {
 		return nil, nil, false
@@ -58,9 +58,9 @@ func NumericValueProgramCastOwner(expr *planpb.Expr) (source, sourceKind *planpb
 		definition.Args[0] == nil || definition.Args[1] == nil {
 		return nil, nil, false
 	}
-	definitionID, _ := DecodeOverloadID(definition.Func.GetObj())
+	definitionID, definitionOverload := DecodeOverloadID(definition.Func.GetObj())
 	definitionScope, definitionScopeOK := scalarNumericProgramInt64(definition.Args[0])
-	if definitionID != SCALAR_PROGRAM || !definitionScopeOK || definitionScope != valueScope ||
+	if definitionID != SCALAR_PROGRAM || definitionOverload != 0 || !definitionScopeOK || definitionScope != valueScope ||
 		(types.T(fn.Args[0].Typ.Id) != types.T(definition.Args[1].Typ.Id) ||
 			fn.Args[0].Typ.Width != definition.Args[1].Typ.Width ||
 			fn.Args[0].Typ.Scale != definition.Args[1].Typ.Scale) {

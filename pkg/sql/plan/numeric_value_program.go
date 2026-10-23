@@ -16,17 +16,13 @@ package plan
 
 import (
 	"context"
-	"math"
 	"strings"
-	"sync/atomic"
 
 	"github.com/matrixorigin/matrixone/pkg/common/moerr"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	planpb "github.com/matrixorigin/matrixone/pkg/pb/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
 )
-
-var nextNumericValueProgramScope atomic.Uint64
 
 // appendNumericValueCastBeforeExpr installs two references to one lexical
 // program. The raw output is the original value tree; the BOOL output is read
@@ -79,11 +75,10 @@ func makeNumericValueProgramOutputsWithKind(ctx context.Context, source, sourceK
 	if sourceKind == nil && !numericValueMayCarrySelectedKind(source) {
 		return DeepCopyExpr(source), makePlan2BoolConstExprWithType(false), nil
 	}
-	scopeID := nextNumericValueProgramScope.Add(1)
-	if scopeID == 0 || scopeID > math.MaxInt64 {
-		return nil, nil, moerr.NewInternalError(ctx, "numeric value program scope exhausted")
+	scope, err := allocateNumericValueProgramScope(ctx, nil)
+	if err != nil {
+		return nil, nil, err
 	}
-	scope := int64(scopeID)
 	raw := DeepCopyExpr(source)
 	definition := numericValueProgramDefinition(scope, raw, sourceKind)
 	valueRef := scalarNumericProgramRef(scope, 0, raw.Typ)

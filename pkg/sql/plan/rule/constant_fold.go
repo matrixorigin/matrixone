@@ -485,7 +485,7 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 		return
 	}
 	fid, overload := function.DecodeOverloadID(fn.GetFunc().GetObj())
-	if fid != function.CAST || overload != 0 {
+	if fid != function.CAST || overload != 0 || fn.GetSyntaxExplicitCast() {
 		return
 	}
 	source := fn.Args[0]
@@ -497,6 +497,10 @@ func PreserveFoldedLiteralStringDomain(expr *plan.Expr, literal *plan.Literal) {
 	sourceDomain := types.StaticStringDomain(types.MustTypeFromPlan(
 		source.Typ))
 	if sourceLiteral := source.GetLit(); sourceLiteral != nil {
+		// CAST0 preserves the source's selected numeric-literal provenance
+		// separately from the runtime string domain. Constant-folding that
+		// implicit string conversion must keep both facts on the literal.
+		literal.IsBin = sourceLiteral.IsBin
 		switch sourceLiteral.LiteralForm {
 		case plan.StringLiteralForm_STRING_LITERAL_TEXT:
 			sourceDomain = types.StringDomainText

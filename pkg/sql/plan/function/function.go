@@ -380,7 +380,7 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 		if e.F == nil || e.F.Func == nil {
 			return false
 		}
-		fid, _ := DecodeOverloadID(e.F.Func.GetObj())
+		fid, overload := DecodeOverloadID(e.F.Func.GetObj())
 		if fid == CASE && purpose != constantForRuntime {
 			return false
 		}
@@ -392,6 +392,12 @@ func isConstant(expr *plan.Expr, allowParameters, currentExecution bool, purpose
 		}
 		if purpose == constantForRuntime && (allSupportedFunctions[fid].isAggregate() || allSupportedFunctions[fid].isWindow()) {
 			return false
+		}
+		if purpose == constantForRuntime && fid == CAST && overload == NumericValueCastOverload {
+			if source, sourceKind, ok := NumericValueProgramCastOwner(expr); ok {
+				return isConstant(source, allowParameters, currentExecution, purpose) &&
+					(sourceKind == nil || isConstant(sourceKind, allowParameters, currentExecution, purpose))
+			}
 		}
 		for _, arg := range e.F.Args {
 			if !isConstant(arg, allowParameters, currentExecution, purpose) {

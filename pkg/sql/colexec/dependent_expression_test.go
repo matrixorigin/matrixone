@@ -19,6 +19,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/gogo/protobuf/proto"
 	"github.com/matrixorigin/matrixone/pkg/container/batch"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
 	"github.com/matrixorigin/matrixone/pkg/container/vector"
@@ -251,6 +252,27 @@ func TestDependentExpressionScalarNumericProgramOwnsValueAndKind(t *testing.T) {
 	result, err := frame.Value(0)
 	require.NoError(t, err)
 	require.Equal(t, int64(49), vector.GetFixedAtNoTypeCheck[int64](result, 0))
+	for _, tc := range []struct {
+		name   string
+		mutate func(*plan.Expr)
+	}{
+		{"value ref overload", func(expr *plan.Expr) {
+			expr.GetF().Args[0].GetF().Func.Obj = function.EncodeOverloadID(function.SCALAR_PROGRAM_REF, 1)
+		}},
+		{"kind ref overload", func(expr *plan.Expr) {
+			expr.GetF().Args[2].GetF().Func.Obj = function.EncodeOverloadID(function.SCALAR_PROGRAM_REF, 1)
+		}},
+		{"definition overload", func(expr *plan.Expr) {
+			expr.GetF().Args[0].GetF().Args[0].GetF().Func.Obj = function.EncodeOverloadID(function.SCALAR_PROGRAM, 1)
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			invalid := proto.Clone(root).(*plan.Expr)
+			tc.mutate(invalid)
+			_, err := CompileDependentExpressions(proc.Ctx, []*plan.Expr{invalid})
+			require.Error(t, err)
+		})
+	}
 	frame.Close()
 	require.Zero(t, budget.Used())
 }
