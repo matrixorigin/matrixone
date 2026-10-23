@@ -1192,6 +1192,52 @@ func TestJSONBinaryCastAndStoredOpaqueRenderingFeatures(t *testing.T) {
 	}
 }
 
+func TestSerializedGroupConcatAggregateJSONFeature(t *testing.T) {
+	const (
+		groupConcatID = uint64(185)
+		distinctFlag  = uint64(1) << 63
+	)
+	for _, tc := range []struct {
+		name     string
+		objName  string
+		distinct bool
+		jsonArg  bool
+	}{
+		{name: "group_concat", objName: "group_concat", jsonArg: true},
+		{name: "group_concat distinct", objName: "group_concat", distinct: true, jsonArg: true},
+		{name: "listagg alias", objName: "listagg", jsonArg: true},
+		{name: "listagg distinct alias", objName: "listagg", distinct: true, jsonArg: true},
+		{name: "ordinary string control", objName: "group_concat"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := groupConcatID << 32
+			if tc.distinct {
+				obj |= distinctFlag
+			}
+			argType := int32(61)
+			if tc.jsonArg {
+				argType = planJSONTypeID
+			}
+			aggregate := &Expr{Typ: Type{Id: 61}, Expr: &Expr_F{F: &Function{
+				Func: &ObjectRef{Obj: int64(obj), ObjName: tc.objName},
+				Args: []*Expr{{Typ: Type{Id: argType}, Expr: &Expr_Col{Col: &ColRef{ColPos: 0}}}},
+			}}}
+			serializedNode := &Node{AggList: []*Expr{aggregate}}
+			data, err := serializedNode.Marshal()
+			require.NoError(t, err)
+			decodedNode := &Node{}
+			require.NoError(t, decodedNode.Unmarshal(data))
+
+			features, err := RequiredRemoteExpressionFeatures(decodedNode)
+			require.NoError(t, err)
+			require.Equal(t, tc.jsonArg, features.JSONOpaqueTextContracts)
+			requires129, err := RequiresMORPCVersion129JSONStringConsumerOverload(decodedNode)
+			require.NoError(t, err)
+			require.Equal(t, tc.jsonArg, requires129)
+		})
+	}
+}
+
 func TestJSONBinaryCastKnownNumericParameterResultNotOpaque(t *testing.T) {
 	marker := &Expr{Typ: Type{Id: 71}, Expr: &Expr_P{P: &ParamRef{Pos: 0}}}
 	numeric := &Expr{Typ: Type{Id: 22}, Expr: &Expr_F{F: &Function{Func: &ObjectRef{Obj: int64(21)<<32 | 1}, Args: []*Expr{marker}}}}

@@ -1153,6 +1153,7 @@ func isJsonNumericType(tp bytejson.TpCode) bool {
 }
 
 func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	legacy := legacyJSONBinding(proc.Ctx)
 	jsonVec := parameters[0]
 	jsonWrapper := vector.GenerateFunctionStrParameter(jsonVec)
 	rs := vector.MustFunctionResult[int64](result)
@@ -1191,11 +1192,30 @@ func jsonLength(parameters []*vector.Vector, result vector.FunctionResultWrapper
 			if err != nil {
 				return err
 			}
-			bj = bj.Query([]*bytejson.Path{&parsedPath})
+			if legacy {
+				bj = bj.Query([]*bytejson.Path{&parsedPath})
+			} else {
+				// #30781: a matched JSON literal null is a value, only a
+				// non-matching path yields SQL NULL.
+				selected, exists := bj.QueryWithExists([]*bytejson.Path{&parsedPath})
+				if !exists {
+					if err := rs.Append(0, true); err != nil {
+						return err
+					}
+					continue
+				}
+				bj = selected
+			}
 		}
 
+		// #30781: the JSON literal null is a scalar of length 1 (MySQL).
+		// SQL-NULL documents were already handled by jIsNull above.
 		if bj.IsNull() {
-			if err := rs.Append(0, true); err != nil {
+			value := int64(1)
+			if legacy {
+				value = 0
+			}
+			if err := rs.Append(value, legacy); err != nil {
 				return err
 			}
 			continue
@@ -2056,6 +2076,7 @@ func jsonMergeDocument(
 }
 
 func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList, jsonFuncType bytejson.JsonModifyType) error {
+	legacy := legacyJSONBinding(proc.Ctx)
 	// implement json_set function
 	// the first parameter is the json object
 	// the rest of the parameters are the path-value pairs
@@ -2110,6 +2131,22 @@ func (op *opBuiltInJsonSet) buildJsonFunction(parameters []*vector.Vector, resul
 		}
 	default:
 		return moerr.NewInvalidInput(proc.Ctx, "invalid json function type")
+	}
+	if legacy {
+		isJSON := jsonVec.GetType().Oid == types.T_json
+		fn = func(raw []byte, paths []*bytejson.Path, values []bytejson.ByteJson) (bytejson.ByteJson, error) {
+			var document bytejson.ByteJson
+			if isJSON {
+				document = types.DecodeJson(raw)
+			} else {
+				var err error
+				document, err = types.ParseSliceToByteJson(raw)
+				if err != nil {
+					return bytejson.Null, err
+				}
+			}
+			return document.ModifyForLegacyBinding(paths, values, jsonFuncType)
+		}
 	}
 
 rowLoop:
@@ -2173,14 +2210,20 @@ rowLoop:
 		if err != nil {
 			return err
 		}
-		if out.IsNull() && jsonFuncType != bytejson.JsonModifyArrayAppend && jsonFuncType != bytejson.JsonModifyArrayInsert {
-			if err = rs.AppendBytes(nil, true); err != nil {
+		if legacy && out.IsNull() && jsonFuncType != bytejson.JsonModifyArrayAppend && jsonFuncType != bytejson.JsonModifyArrayInsert {
+			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
 			}
-		} else {
-			if err = rs.AppendByteJson(out, false); err != nil {
-				return err
-			}
+			continue
+		}
+		// The modifier result is always a JSON document: a JSON literal null
+		// is a value, not SQL NULL. MySQL keeps the JSON literal null for
+		// JSON_SET/JSON_INSERT/JSON_REPLACE applied to it, so a NOT NULL column
+		// must accept the updated document. SQL-NULL propagation was already
+		// handled by the earlier input checks (null source document, null
+		// path or the ARRAY_APPEND null-value contract).
+		if err = rs.AppendByteJson(out, false); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -2637,6 +2680,7 @@ func jsonLengthRoot(ivecs []*vector.Vector, result vector.FunctionResultWrapper,
 }
 
 func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	legacy := legacyJSONBinding(proc.Ctx)
 	result.UseOptFunctionParamFrame(2)
 	rs := vector.MustFunctionResult[int64](result)
 	p1 := vector.OptGetBytesParamFromWrapper(rs, 0, ivecs[0])
@@ -2679,8 +2723,14 @@ func jsonLengthWithPath(ivecs []*vector.Vector, result vector.FunctionResultWrap
 		if err != nil {
 			return moerr.NewInvalidArg(proc.Ctx, "json_length", "invalid path expression")
 		}
-		val := bj.Query([]*bytejson.Path{&path})
-		if val.IsNull() {
+		// A JSON literal null under the path is an existing value of scalar
+		// length 1 (MySQL); only a non-matching path yields SQL NULL.
+		val, exists := bj.QueryWithExists([]*bytejson.Path{&path})
+		if legacy {
+			val = bj.Query([]*bytejson.Path{&path})
+			exists = !val.IsNull()
+		}
+		if !exists {
 			rsNull.Add(i)
 			continue
 		}

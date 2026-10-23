@@ -328,6 +328,77 @@ func TestJSONStringConsumerAfterMainDateProtocol(t *testing.T) {
 	require.Equal(t, remoteExpressionProtocolVersion(elt), remoteExpressionProtocolVersion(both))
 }
 
+// Main's published protocol identities retain their independent contracts;
+// none admits the JSON execution semantics added after protocol 128.
+func TestJSONStringConsumerAfterPublishedMainProtocols(t *testing.T) {
+	c, _ := expressionProtocolTestCompile(t)
+	rt := moruntime.ServiceRuntime(c.proc.GetService())
+	for _, tc := range []struct {
+		version  int64
+		features planpb.RemoteExpressionFeatures
+	}{
+		{defines.MORPCVersion113, planpb.RemoteExpressionFeatures{DecimalStatisticalResultContracts: true}},
+		{defines.MORPCVersion115, planpb.RemoteExpressionFeatures{CalendarIntervalNormalization: true}},
+		{defines.MORPCVersion117, planpb.RemoteExpressionFeatures{LeastGreatestCollationSemantics: true}},
+		{defines.MORPCVersion118, planpb.RemoteExpressionFeatures{TableCollationFunction: true}},
+		{defines.MORPCVersion121, planpb.RemoteExpressionFeatures{DecimalIntegerDivisionSemantics: true}},
+		{defines.MORPCVersion122, planpb.RemoteExpressionFeatures{TimestampDatetimeResultContracts: true}},
+		{defines.MORPCVersion124, planpb.RemoteExpressionFeatures{TimestampAddSecondIntervals: true}},
+		{defines.MORPCVersion125, planpb.RemoteExpressionFeatures{LoadFKIgnoreCheck: true}},
+		{defines.MORPCVersion128, planpb.RemoteExpressionFeatures{JSONNumericComparisons: true}},
+	} {
+		require.Equal(t, tc.version, remoteExpressionProtocolVersion(tc.features))
+		tc.features.JSONStringConsumerOverload = true
+		require.Equal(t, defines.MORPCVersion129, remoteExpressionProtocolVersion(tc.features))
+	}
+	for _, name := range []string{"elt", "concat", "concat_ws", "binary_cast"} {
+		expr := bindJSONStringConsumerExpr(t, name)
+		for _, version := range []int64{defines.MORPCVersion113, defines.MORPCVersion114, defines.MORPCVersion115, defines.MORPCVersion116, defines.MORPCVersion117, defines.MORPCVersion118, defines.MORPCVersion119, defines.MORPCVersion120, defines.MORPCVersion121, defines.MORPCVersion122, defines.MORPCVersion123, defines.MORPCVersion124, defines.MORPCVersion125, defines.MORPCVersion126, defines.MORPCVersion127, defines.MORPCVersion128} {
+			rt.SetGlobalVariables(moruntime.MOProtocolVersion, version)
+			require.ErrorContains(t, validateJSONStringConsumerProtocol(c.proc, expr), "protocol version 129")
+		}
+		rt.SetGlobalVariables(moruntime.MOProtocolVersion, defines.MORPCVersion129)
+		require.NoError(t, validateJSONStringConsumerProtocol(c.proc, expr))
+	}
+}
+
+func TestJSONStringConsumerAndLeastGreatestFloors(t *testing.T) {
+	elt := bindJSONStringConsumerExpr(t, "elt")
+	typ := types.NewWithCharset(types.T_varchar, 20, 0, types.CharsetUTF8MB4UnicodeCI)
+	typ.CollationVersion = 1
+	for _, name := range []string{"least", "greatest"} {
+		t.Run(name, func(t *testing.T) {
+			collated, err := plan2.BindFuncExprImplByPlanExpr(context.Background(), name, []*planpb.Expr{
+				{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 0}}},
+				{Typ: typ.PlanType(), Expr: &planpb.Expr_Col{Col: &planpb.ColRef{ColPos: 1}}},
+			})
+			require.NoError(t, err)
+			for _, expressions := range [][]*planpb.Expr{{elt, collated}, {collated, elt}} {
+				query := &planpb.Query{Nodes: []*planpb.Node{{ProjectList: expressions}}, Steps: []int32{0}}
+				data, err := query.Marshal()
+				require.NoError(t, err)
+				decoded := new(planpb.Query)
+				require.NoError(t, decoded.Unmarshal(data))
+				features, err := planpb.RequiredRemoteExpressionFeatures(decoded)
+				require.NoError(t, err)
+				require.True(t, features.JSONStringConsumerOverload)
+				require.True(t, features.LeastGreatestCollationSemantics)
+				require.Equal(t, defines.MORPCVersion129, remoteExpressionProtocolVersion(features))
+				floor, err := plan2.RequiredPersistedExpressionProtocolVersion(decoded)
+				require.NoError(t, err)
+				require.Equal(t, defines.MORPCVersion129, floor)
+			}
+			features, err := planpb.RequiredRemoteExpressionFeatures(collated)
+			require.NoError(t, err)
+			require.False(t, features.JSONStringConsumerOverload)
+			require.Equal(t, defines.MORPCVersion117, remoteExpressionProtocolVersion(features))
+			floor, err := plan2.RequiredPersistedExpressionProtocolVersion(collated)
+			require.NoError(t, err)
+			require.Equal(t, defines.MORPCVersion117, floor)
+		})
+	}
+}
+
 // Existing stored opaque values need no new CAST/ELT producer in the plan.
 func TestJSONOpaqueExistingConsumerFences(t *testing.T) {
 	for _, name := range []string{"json_row", "json_schema_valid", "json_schema_validation_report"} {

@@ -696,17 +696,6 @@ func DeepCopyGeneratedCol(old *plan.GeneratedCol) *plan.GeneratedCol {
 	}
 }
 
-func DeepCopyTableDefList(src []*plan.TableDef) []*plan.TableDef {
-	if src == nil {
-		return nil
-	}
-	ret := make([]*plan.TableDef, len(src))
-	for i, def := range src {
-		ret[i] = DeepCopyTableDef(def, true)
-	}
-	return ret
-}
-
 func DeepCopySampleFuncSpec(source *plan.SampleFuncSpec) *plan.SampleFuncSpec {
 	if source == nil {
 		return nil

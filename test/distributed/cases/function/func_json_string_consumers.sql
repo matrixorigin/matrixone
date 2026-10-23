@@ -76,5 +76,6 @@ select elt(1, cast(cast('a' as binary(1)) as json)) = '"base64:type254:YQ=="' as
 create table opaque_stored(j json);
 insert into opaque_stored values (cast(cast(repeat('a',58) as blob) as json));
 select elt(1,j) = concat('"base64:type252:',repeat('YWFh',19),char(92),'nYQ=="') as wrapped_elt, concat('',j) = concat('"base64:type252:',repeat('YWFh',19),char(92),'nYQ=="') as wrapped_stored from opaque_stored;
+select (select group_concat(j) from opaque_stored) = (select concat('',j) from opaque_stored) as group_concat_json_visible, (select listagg(j, '') within group (order by 1) from opaque_stored) = (select concat('',j) from opaque_stored) as listagg_json_visible;
 select json_schema_valid('{"type":"string","maxLength":95}',j) as rejects_compact_length, json_schema_valid('{"type":"string","maxLength":96}',j) as accepts_visible_length from opaque_stored;
 drop database issue28905_json_string_consumers;

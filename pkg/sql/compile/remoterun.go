@@ -2093,6 +2093,11 @@ func validateRemoteAggregateProtocol(
 	aggs []aggexec.AggFuncExecExpression,
 ) error {
 	for _, agg := range aggs {
+		if isJSONOpaqueGroupConcatAggregate(agg) {
+			if err := validateRemoteExpressionFeatures(proc, plan.RemoteExpressionFeatures{JSONOpaqueTextContracts: true}); err != nil {
+				return err
+			}
+		}
 		if isDecimalStatisticalAggregate(agg) {
 			if err := requireRemoteDecimalStatisticalResults(proc); err != nil {
 				return err
@@ -2206,11 +2211,11 @@ func requiredRemotePipelineExpressionFeatures(p *pipeline.Pipeline) (plan.Remote
 	if err != nil {
 		return features, err
 	}
-	collectDecimalStatisticalDescriptorFeatures(p, &features)
+	collectAggregateDescriptorFeatures(p, &features)
 	return features, nil
 }
 
-func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
+func collectAggregateDescriptorFeatures(p *pipeline.Pipeline, features *plan.RemoteExpressionFeatures) {
 	if p == nil {
 		return
 	}
@@ -2223,6 +2228,7 @@ func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features 
 				continue
 			}
 			agg := aggexec.MakeAggFunctionExpression(wire.Op, wire.Dist, wire.Expr, wire.Config, wire.ConfigType)
+			features.JSONOpaqueTextContracts = features.JSONOpaqueTextContracts || isJSONOpaqueGroupConcatAggregate(agg)
 			if isDecimalStatisticalAggregate(agg) {
 				features.DecimalStatisticalResultContracts = true
 				features.InvalidDecimalStatisticalResultContract = features.InvalidDecimalStatisticalResultContract ||
@@ -2231,8 +2237,20 @@ func collectDecimalStatisticalDescriptorFeatures(p *pipeline.Pipeline, features 
 		}
 	}
 	for _, child := range p.Children {
-		collectDecimalStatisticalDescriptorFeatures(child, features)
+		collectAggregateDescriptorFeatures(child, features)
 	}
+}
+
+func isJSONOpaqueGroupConcatAggregate(agg aggexec.AggFuncExecExpression) bool {
+	if agg.GetAggID() != aggexec.AggIdOfGroupConcat {
+		return false
+	}
+	for _, arg := range agg.GetArgExpressions() {
+		if arg != nil && types.T(arg.Typ.Id) == types.T_json {
+			return true
+		}
+	}
+	return false
 }
 
 func isDecimalStatisticalAggregate(agg aggexec.AggFuncExecExpression) bool {

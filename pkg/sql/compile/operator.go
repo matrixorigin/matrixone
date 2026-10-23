@@ -2216,7 +2216,7 @@ func constructOrderedPercentileConfig(
 // Some internal plans (notably CTAS's INSERT ... SELECT) bypass the optional
 // optimizer constant-fold pass.  Their expression executor can therefore
 // return a one-row flat vector for a constant cast, although the plan still
-// satisfies rule.IsConstant.  Fold a private copy here so the configuration
+// satisfies function.IsConstant.  Fold a private copy here so the configuration
 // boundary does not depend on which planner path produced the expression.
 func normalizeAggregateConfigExpr(proc *process.Process, expr *plan.Expr) (*plan.Expr, error) {
 	if expr == nil || expr.GetF() == nil {
