@@ -13,7 +13,8 @@ insert into source_rows values
     (2, 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'),
     (3, 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx');
 
-set @outfile_audit_connection_id = connection_id();
+-- @capture:outfile_audit_connection_id
+select connection_id();
 select id, payload from source_rows order by id
 into outfile 'stage://issue_29761_split_stage/split_%d.csv'
 format 'csv' splitsize '64';
@@ -28,7 +29,7 @@ select length(load_file(cast('stage://issue_29761_split_stage/split_2.csv' as da
 -- @wait_expect(1, 60)
 select 1 as outfile_receipt_ok
 from system.statement_info
-where connection_id = @outfile_audit_connection_id
+where connection_id = {{outfile_audit_connection_id}}
   and statement_type = 'Select'
   and status = 'Success'
   and aggr_count = 0
