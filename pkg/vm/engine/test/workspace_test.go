@@ -2504,8 +2504,9 @@ func TestGCFiles(t *testing.T) {
 	defer p.Close()
 
 	var (
-		pool  *ants.Pool
-		files = make([]objectio.ObjectStats, 3)
+		pool    *ants.Pool
+		files   = make([]objectio.ObjectStats, 3)
+		release chan struct{}
 	)
 
 	objectio.SetObjectStatsObjectName(&files[0], objectio.ObjectName{0x1})
@@ -2517,21 +2518,43 @@ func TestGCFiles(t *testing.T) {
 
 	txn.GetProc()
 
+	// The unique object names every GC call below hands over, derived the
+	// same way the production GC callers derive them, so the pool-overload
+	// round can prove the names reached engine ownership instead of
+	// surfacing as a caller error (issue #25590).
+	want := make([]string, 0, len(files))
+	wantSeen := make(map[string]struct{}, len(files))
+	for _, f := range files {
+		name := f.ObjectName().String()
+		if _, ok := wantSeen[name]; ok {
+			continue
+		}
+		wantSeen[name] = struct{}{}
+		want = append(want, name)
+	}
+
 	for j := 0; j < 2; j++ {
 		if j == 1 {
+			// Park the only worker of a nonblocking pool, so every later GC
+			// submission refuses immediately instead of queuing.
 			pool, err = ants.NewPool(1, ants.WithNonblocking(true))
 			require.NoError(t, err)
 			require.NoError(t, p.D.Engine.ResetGCWorkerPool(pool))
-			release := make(chan struct{})
+			release = make(chan struct{})
 			require.NoError(t, pool.Submit(func() { <-release }))
-			defer close(release)
 		}
 
 		err = txn.GCObjsByStats(files...)
+		// The lossless contract (issue #25590): an overloaded nonblocking
+		// pool no longer reports the refused submission as the caller's
+		// error — the whole unsent tail transfers to the engine's
+		// unpublished-pending queue, and the queue owns every name.
+		require.NoError(t, err)
+		queued, _, _ := p.D.Engine.InspectUnpublishedPendingForTest()
 		if j == 1 {
-			require.Error(t, err)
+			require.ElementsMatch(t, want, queued)
 		} else {
-			require.NoError(t, err)
+			require.Empty(t, queued)
 		}
 
 		for i := range files {
@@ -2551,12 +2574,26 @@ func TestGCFiles(t *testing.T) {
 		}
 
 		err = txn.GCObjsByIdxRange(0, len(files)-1)
+		// The index-range GC carries the same lossless contract: the pool
+		// refusal transfers its unsent tail to the engine queue too.
+		require.NoError(t, err)
+		queued, _, _ = p.D.Engine.InspectUnpublishedPendingForTest()
 		if j == 1 {
-			require.Error(t, err)
+			require.ElementsMatch(t, want, queued)
 		} else {
-			require.NoError(t, err)
+			require.Empty(t, queued)
 		}
 	}
+
+	// Free the parked worker and prove the refusal never loses ownership:
+	// these synthetic names carry no parseable file path, so the storage
+	// keeps refusing them and one bounded engine drain pass must keep
+	// exactly the queued names for the next retry (issue #25590).
+	close(release)
+	err = p.D.Engine.DrainUnpublishedPendingForTest(context.Background())
+	require.Error(t, err)
+	queued, _, _ := p.D.Engine.InspectUnpublishedPendingForTest()
+	require.ElementsMatch(t, want, queued)
 }
 
 // Test_WorkspaceForceDumpOnGlobalAccumulation verifies that the workspace
