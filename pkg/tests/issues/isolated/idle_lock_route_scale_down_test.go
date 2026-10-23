@@ -22,9 +22,12 @@ import (
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
+	"github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/embed"
 	"github.com/matrixorigin/matrixone/pkg/lockservice"
+	pb "github.com/matrixorigin/matrixone/pkg/pb/lock"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
+	"github.com/matrixorigin/matrixone/pkg/pb/timestamp"
 	"github.com/stretchr/testify/require"
 )
 
@@ -32,6 +35,14 @@ import (
 // the interleavings; this case checks the first SQL DROP after real CN closes,
 // with one row instead of the original percentile fixture's ten million rows.
 func TestDropDatabaseAfterCNScaleDown(t *testing.T) {
+	testDropDatabaseAfterCNScaleDown(t, false)
+}
+
+func TestDropDatabaseAfterCatalogCleanupDuringCNScaleDown(t *testing.T) {
+	testDropDatabaseAfterCNScaleDown(t, true)
+}
+
+func testDropDatabaseAfterCNScaleDown(t *testing.T, cleanupDuringRetirement bool) {
 	cluster, err := embed.StartTestCluster(embed.WithCNCount(3), embed.WithPreStart(func(svc embed.ServiceOperator) {
 		svc.Adjust(func(cfg *embed.ServiceConfig) {
 			switch svc.ServiceType() {
@@ -94,8 +105,35 @@ func TestDropDatabaseAfterCNScaleDown(t *testing.T) {
 	cached, err := locks[survivor].GetLockTableBind(0, tableID)
 	require.NoError(t, err)
 	require.Equal(t, bind.ServiceID, cached.ServiceID)
+	if cleanupDuringRetirement {
+		origin := (survivor + 1) % len(cns)
+		catalogBind, err := locks[origin].GetLockTableBind(0, catalog.MO_TABLES_ID)
+		require.NoError(t, err)
+		require.True(t, catalogBind.Valid)
+		require.Equal(t, locks[owner].GetServiceID(), catalogBind.ServiceID)
+		// Retain a real remote lock while its owner retires, then make the
+		// second departing CN perform cleanup before that CN itself closes.
+		// Cluster cleanup also owns this transaction if an assertion fails.
+		txn := []byte("catalog-cleanup-before-origin-close")
+		_, err = locks[origin].Lock(ctx, catalog.MO_TABLES_ID, [][]byte{[]byte("catalog-cleanup")}, txn, pb.LockOptions{
+			Granularity: pb.Granularity_Row, Mode: pb.LockMode_Shared, Policy: pb.WaitPolicy_Wait,
+		})
+		require.NoError(t, err)
+		require.NoError(t, dbs[owner].Close())
+		require.NoError(t, cns[owner].Close())
+		// The existing registry probe establishes first-owner retirement
+		// without allocating a replacement for mo_tables itself.
+		require.Eventually(t, func() bool {
+			current, err := locks[survivor].GetLatestLockTableBind(cached)
+			return err == nil && current.Valid && current.ServiceID != cached.ServiceID
+		}, 30*time.Second, 100*time.Millisecond, "first owner must retire before the second CN cleans up")
+		require.NoError(t, locks[origin].Unlock(ctx, txn, timestamp.Timestamp{}))
+		afterCleanup, err := locks[origin].GetLockTableBind(0, catalog.MO_TABLES_ID)
+		require.NoError(t, err)
+		t.Logf("mo_tables route after cleanup: %s", afterCleanup.DebugString())
+	}
 	for i, cn := range cns {
-		if i != survivor {
+		if i != survivor && (!cleanupDuringRetirement || i != owner) {
 			require.NoError(t, dbs[i].Close())
 			require.NoError(t, cn.Close())
 		}
