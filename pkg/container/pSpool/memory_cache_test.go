@@ -36,7 +36,6 @@ func TestControlledSpoolEvictsOnlyReturnedBackingAndReusesSmallCache(t *testing.
 			got, info := sp.ReceiveBatch(0)
 			require.NoError(t, info)
 			borrowed := mp.CurrNB()
-			sp.ForceCleanup()
 			require.Equal(t, borrowed, mp.CurrNB(), "unconfirmed borrowed backing must remain live")
 			require.Len(t, got.Vecs[0].GetBytesAt(0), 8192)
 			sp.ReleaseCurrent(0)
@@ -64,7 +63,7 @@ func TestControlledSpoolEvictsOnlyReturnedBackingAndReusesSmallCache(t *testing.
 			got, info = sp.ReceiveBatch(0)
 			require.NoError(t, info)
 			require.Nil(t, got)
-			sp.Close()
+			sp.ForceCleanupAfterTerminalSignal()
 			require.Zero(t, mp.CurrNB())
 		})
 	}

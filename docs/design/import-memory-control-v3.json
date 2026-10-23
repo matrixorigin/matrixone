@@ -1,9 +1,9 @@
 {
-  "version": 19,
+  "version": 20,
   "status": "reviewed-design",
   "title": "4.1.6 import memory control: ownership, progress, byte batching and spill",
-  "base": "3c7eb8de7f2388de84624fdaf719cc218f8078dc",
-  "target_worktree": "/d/mo-worktrees/v416-import-memory-20261022",
+  "base": "ed9d8aacc74448ed0deffd93925c049f9686f151",
+  "target_worktree": "/d/mo-worktrees/v416-hotfix20261021-import-memory",
   "owner": "Codex root with component workers",
   "authorization": "User requests all remaining memory-control fixes and CSV alignment; online resizing and non-glibc platforms excluded.",
   "design_gate": {
@@ -237,7 +237,9 @@
         "reviewer": "independent foundation/join worker",
         "decision": "APPROVED BEFORE IMPLEMENTATION",
         "evidence": "Verified runOnce root errC closure, Scope.Run deferred Pipeline.Cleanup, Scope.MergeRun deferred wg.Wait including notify cleanup, and fresh BaseProcess in remote decode. Independent reviewer also approved legacy extension with per-Base unowned-ticket guards and cleanup only at the real joined attempt/RPC boundary."
-      }
+      },
+      "status": "historical-superseded-for-typed-pipeline-paths-by-D36",
+      "superseded_contract": "The historical mechanism below is retained only as problem/review evidence. Revision20 D36 is normative: official durable typed terminal, DiscardUnsent, independent cache/final once, preallocated Abort scratch, joined edge drain -> final slot cleanup -> registry removal -> root ticket release. No occupied/publicationFailed or legacy spool End/ack on typed paths."
     },
     {
       "id": "D28",
@@ -254,7 +256,9 @@
         "reviewer": "finish_queue_review independent source review",
         "decision": "APPROVED BEFORE IMPLEMENTATION",
         "evidence": "F/pipeline-publication-review.json establishes enqueue-before-publish -> orphaned queue head -> spool-End token consumes data -> missing receiver End. Reviewer proposed generation-local broken-publication mode, direct terminal markers, preserved live broadcast borrowers and joined ownership. Root approved that design before code changes."
-      }
+      },
+      "status": "historical-superseded-for-typed-pipeline-paths-by-D36",
+      "superseded_contract": "The historical mechanism below is retained only as problem/review evidence. Revision20 D36 is normative: official durable typed terminal, DiscardUnsent, independent cache/final once, preallocated Abort scratch, joined edge drain -> final slot cleanup -> registry removal -> root ticket release. No occupied/publicationFailed or legacy spool End/ack on typed paths."
     },
     {
       "id": "D29",
@@ -387,6 +391,24 @@
         "reviewed_draft_sha256": "81d1682b36892ffd19baf1d81a727a9ec11e0ea1f6cf7836334edcbddfa3dc82",
         "independent_report_sha256": "7d1d5976158aa9f2882d6a87bf3a9c3262b98643f4e53c65a7de2d67ebf45e1b"
       }
+    },
+    {
+      "id": "D36",
+      "choice": "Rebase the complete thirteen-commit import-memory series onto the exact official v4.1.6-hotfix-20261021 tag and integrate one durable typed-terminal ownership graph. Remove unnecessary ordinary SELECT accounting only where no active output bound consumes it.",
+      "approved_design": "docs/design/import-memory-control-d36.json",
+      "revision": 3,
+      "reviewed_sha256": "f13bbfcf88b05c999d306aedc3646809d022f908cbcf3735c383655fb793caf4",
+      "review_decision": "PASS (design only); all implementation, functional/race, real import and matched performance gates remain mandatory",
+      "pipeline_contract": {
+        "terminal": "Official PipelineEdge is the single authority. Reset publishes durable End/Error independently of Ch2 capacity; Call never sends terminal. Preserve Stop settlement, primary execution/retry errors and cancel siblings before join.",
+        "retirement": "Keep official cache cleanupOnce separate from finalCleanupOnce. Register every real receiver in the existing attempt owner during merge Prepare; all production receiver Init sites are in that shared Prepare. After all local sender/receiver/cleanup joins and remote Stop settlement: release saved current receiver data idempotently on every owned Base; DrainForCleanup every edge (including incoming direct remote frames); final-clean every spool slot; clear registries; detach/release root. Borrowers stay valid until release or proven quiescence.",
+        "rollback": "DiscardUnsent once per unnotified receiver replaces publicationFailed/occupied. No nil-End acknowledgement timeout remains on typed paths.",
+        "abort_bookkeeping": "Construct shardRefs and abortCurrentRefs for all spools before execution; single-receiver no-refcheck fast path depends on receiver count. Include both class-rounded arrays and fixed new fields in MemoryMetadataBound.",
+        "edge_metadata": "Derive final Ch2 capacity conservatively from complete existing producer/scope count and maximum parallel stage, bounded by existing compiler constructor constants. Charge concrete PipelineEdge/durable terminal, old/new Ch2+Done, receiver arrays/reflect select, registry struct and spool/edge/receiver registry append capacity. Count merge receiving edges on their actual CN via existing Receivers descriptor field; local/shared edges may be conservatively counted twice. Validate all future constructor rules and custom channels before Open; unproven/overflow topology stays whole-query legacy.",
+        "version3": "Existing admission capability/manifest version becomes3 because v2 cannot enforce new metadata semantics. New origins require exact3 for every CN before any Open; v0/v2/unknownfuture4 retains whole-query legacy. New server rejects nil/Stage-only/inexact manifests before reserve/reclaim/registration. No new wire field/action. Literal oldv2 origin accepts3>=2 then receives strict rejection/error and reverse-closes already opened tickets; transparent rolling success in that unreleased experimental direction is not promised. Released ed9 peers have no admission capability and preserve ordinary legacy SQL. Token/connection-bound close/abort remains idempotent without manifest."
+      },
+      "inherited": "I/W/D ownership, actual visible cgroup v1/v2 mount accounting, NoWait transaction policy, try-open mixed-peer rejection and source/operator eligibility remain normative.",
+      "validation": "Official independent regressions and distinct old memory oracles are retained. New combined cache-before-final, shared borrower Abort, rejected full-channel publication, quiescent reset/reuse, late Stop error and partial-start failure proof required. Historical2ca acceptance is not integrated-source evidence."
     }
   ],
   "alternatives": [
@@ -893,6 +915,14 @@
         "The old-path disabled witness must return a concrete accounting error/no grant; it must not rely on a hung goroutine, arbitrary sleep, timeout, nil provider, changed memory threshold, or fake zero-current success.",
         "The fix localizes the current process controller correctly. It does not redesign general ancestor-limit aggregation, namespace remount administration, or controller migration; genuine unavailable accounting remains fail-closed and visible in the existing waiting log."
       ]
+    },
+    "official_pipeline_revision20": {
+      "terminal": "Official PipelineEdge is the single authority. Reset publishes durable End/Error independently of Ch2 capacity; Call never sends terminal. Preserve Stop settlement, primary execution/retry errors and cancel siblings before join.",
+      "retirement": "Keep official cache cleanupOnce separate from finalCleanupOnce. Register every real receiver in the existing attempt owner during merge Prepare; all production receiver Init sites are in that shared Prepare. After all local sender/receiver/cleanup joins and remote Stop settlement: release saved current receiver data idempotently on every owned Base; DrainForCleanup every edge (including incoming direct remote frames); final-clean every spool slot; clear registries; detach/release root. Borrowers stay valid until release or proven quiescence.",
+      "rollback": "DiscardUnsent once per unnotified receiver replaces publicationFailed/occupied. No nil-End acknowledgement timeout remains on typed paths.",
+      "abort_bookkeeping": "Construct shardRefs and abortCurrentRefs for all spools before execution; single-receiver no-refcheck fast path depends on receiver count. Include both class-rounded arrays and fixed new fields in MemoryMetadataBound.",
+      "edge_metadata": "Derive final Ch2 capacity conservatively from complete existing producer/scope count and maximum parallel stage, bounded by existing compiler constructor constants. Charge concrete PipelineEdge/durable terminal, old/new Ch2+Done, receiver arrays/reflect select, registry struct and spool/edge/receiver registry append capacity. Count merge receiving edges on their actual CN via existing Receivers descriptor field; local/shared edges may be conservatively counted twice. Validate all future constructor rules and custom channels before Open; unproven/overflow topology stays whole-query legacy.",
+      "version3": "Existing admission capability/manifest version becomes3 because v2 cannot enforce new metadata semantics. New origins require exact3 for every CN before any Open; v0/v2/unknownfuture4 retains whole-query legacy. New server rejects nil/Stage-only/inexact manifests before reserve/reclaim/registration. No new wire field/action. Literal oldv2 origin accepts3>=2 then receives strict rejection/error and reverse-closes already opened tickets; transparent rolling success in that unreleased experimental direction is not promised. Released ed9 peers have no admission capability and preserve ordinary legacy SQL. Token/connection-bound close/abort remains idempotent without manifest."
     }
   },
   "ownership_and_wait_graphs": [
@@ -909,7 +939,8 @@
     "upgrade": "New queries use one process binary. No cross-version temporary FD sharing is introduced.",
     "scope": "Enable the new working-set admission only when the complete physical DAG has a controlled CSV source. Generic SELECT/UPDATE/table scans lack this raw-row/typed-batch contract and retain the legacy path; already admitted remote tokens remain valid on a CN without a source.",
     "capability_probe": "GetProtocolVersionResponse optional bool memory_admission=2; old peers omit it. Probe all CNs before Open; any false uses whole-query legacy, network errors fail normally. Legacy pipeline StopSending does not ACK and cannot be used for probing.",
-    "legacy_skew": "Without ImportMemory, every max-depth shuffle preserves the prior whole-bucket path. No new default 64MiB singleton limit is imposed on ordinary SELECT/UPDATE or unsupported function-key imports."
+    "legacy_skew": "Without ImportMemory, every max-depth shuffle preserves the prior whole-bucket path. No new default 64MiB singleton limit is imposed on ordinary SELECT/UPDATE or unsupported function-key imports.",
+    "admission_revision20": "Existing admission capability/manifest version becomes3 because v2 cannot enforce new metadata semantics. New origins require exact3 for every CN before any Open; v0/v2/unknownfuture4 retains whole-query legacy. New server rejects nil/Stage-only/inexact manifests before reserve/reclaim/registration. No new wire field/action. Literal oldv2 origin accepts3>=2 then receives strict rejection/error and reverse-closes already opened tickets; transparent rolling success in that unreleased experimental direction is not promised. Released ed9 peers have no admission capability and preserve ordinary legacy SQL. Token/connection-bound close/abort remains idempotent without manifest."
   },
   "validation": {
     "unit": [
@@ -991,14 +1022,12 @@
   ],
   "approval": {
     "kind": "internal-independent-design-review",
-    "revision": 19,
-    "decision": "PASS",
-    "scope": "D35 cgroup mount-coordinate sampling; prior scoped D32-D34 approvals retained",
-    "condition": "Design approval only. Exact implementation/disabled-path/normal/race/static/build evidence and actual TKE private-v1 sample/admission success remain mandatory; no performance result from the hung/cancelled ab96 run.",
-    "reviewer": "csv_column_bound; root integration",
-    "approved_at": "2026-10-23T20:12:02.907267+08:00",
-    "reviewed_draft_sha256": "81d1682b36892ffd19baf1d81a727a9ec11e0ea1f6cf7836334edcbddfa3dc82",
-    "independent_report_sha256": "7d1d5976158aa9f2882d6a87bf3a9c3262b98643f4e53c65a7de2d67ebf45e1b"
+    "revision": 20,
+    "decision": "PASS (design only)",
+    "scope": "D36 revision3 (B1 saved current and B5 semantic capability/version); prior scoped approvals retained",
+    "reviewed_draft_sha256": "f13bbfcf88b05c999d306aedc3646809d022f908cbcf3735c383655fb793caf4",
+    "condition": "Design only; strict v3/new-source normal/race/public functional/import/performance validation remains mandatory.",
+    "evidence": "F/hotfix20261021-integration/design-d36-review.json and design-d36-review.md"
   },
   "approval_history": [
     {
@@ -1062,6 +1091,17 @@
       "reviewer": "csv_column_bound; root integration",
       "approved_at": "2026-10-23T19:36:38.545401+08:00",
       "reviewed_draft_sha256": "a18b6729e872e9a2f92e3d1a72b9797ac0c203308d7709f25f6bec300a29303b"
+    },
+    {
+      "kind": "internal-independent-design-review",
+      "revision": 19,
+      "decision": "PASS",
+      "scope": "D35 cgroup mount-coordinate sampling; prior scoped D32-D34 approvals retained",
+      "condition": "Design approval only. Exact implementation/disabled-path/normal/race/static/build evidence and actual TKE private-v1 sample/admission success remain mandatory; no performance result from the hung/cancelled ab96 run.",
+      "reviewer": "csv_column_bound; root integration",
+      "approved_at": "2026-10-23T20:12:02.907267+08:00",
+      "reviewed_draft_sha256": "81d1682b36892ffd19baf1d81a727a9ec11e0ea1f6cf7836334edcbddfa3dc82",
+      "independent_report_sha256": "7d1d5976158aa9f2882d6a87bf3a9c3262b98643f4e53c65a7de2d67ebf45e1b"
     }
   ],
   "review_amendment": {

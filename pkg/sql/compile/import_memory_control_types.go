@@ -280,8 +280,26 @@ func memoryManifestLayout(manifest MemoryManifest, unit int64) (*process.ImportM
 			return nil, spec, false, err
 		}
 	}
+	channelCapacity, valid := memoryPipelineChannelCapacity(manifest)
+	if !valid {
+		return nil, spec, false, errors.New("pipeline metadata capacity overflows")
+	}
+	edgeMetadata, valid := process.PipelineEdgeMetadataBound(channelCapacity)
+	if !valid {
+		return nil, spec, false, errors.New("pipeline edge metadata overflows")
+	}
 	for _, stage := range producerStages {
 		capacity := producerBounds[stage.Producer].Scratch
+		if producer := manifest.Producers[stage.Producer]; producer.Receivers > 0 {
+			edges, ok := memoryProduct(edgeMetadata, int64(producer.Receivers))
+			if !ok {
+				return nil, spec, false, errors.New("pipeline receiver metadata overflows")
+			}
+			capacity, ok = memorySum(capacity, edges)
+			if !ok {
+				return nil, spec, false, errors.New("pipeline metadata promise overflows")
+			}
+		}
 		if capacity > 0 {
 			spec.Inputs = append(spec.Inputs, rscthrottler.InputSlotSpec{Name: fmt.Sprintf("producer-%d", stage.Producer), Count: stage.Count, Bytes: capacity})
 		}

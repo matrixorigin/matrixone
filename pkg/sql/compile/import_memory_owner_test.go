@@ -185,6 +185,15 @@ func (s *memoryControlSession) Write(_ context.Context, raw morpc.Message) error
 	return nil
 }
 
+// A complete one-column CSV graph is enough for the control lifecycle. It
+// exercises the real v3 producer proof without opening an input reader.
+func memoryControlFixtureManifest(noWait bool) MemoryManifest {
+	schema := []types.Type{types.T_int64.ToType()}
+	return MemoryManifest{Version: query.MemoryAdmissionProtocolVersion, TargetUnit: 1 << 20, Parallel: 1, NoWait: noWait,
+		Producers: []MemoryProducerDescriptor{{Kind: "csv", Schema: schema}},
+		Stages:    []MemoryStageDescriptor{{Role: MemoryStageCSV, Count: 1, Schema: schema, RetainedFields: 1}}}
+}
+
 func memoryControlCall(t *testing.T, ctx context.Context, service string, session *memoryControlSession, request MemoryControlRequest) error {
 	t.Helper()
 	if (request.Action == MemoryControlOpen || request.Action == MemoryControlTryOpen) && request.ExpectedProcessID == "" {
@@ -239,9 +248,9 @@ func TestStatementMemoryControlConnectionLifetime(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			t.Cleanup(cancel)
 			done := make(chan error, 1)
-			manifest := &MemoryManifest{TargetUnit: 1 << 20, Parallel: 1, NoWait: test.action == MemoryControlTryOpen, Stages: []MemoryStageDescriptor{{Role: MemoryStageOutput, Count: 1, Schema: []types.Type{types.T_int64.ToType()}, TableCount: 1}}}
+			manifest := memoryControlFixtureManifest(test.action == MemoryControlTryOpen)
 			go func() {
-				done <- memoryControlCall(t, ctx, service, session, MemoryControlRequest{Action: test.action, Manifest: manifest})
+				done <- memoryControlCall(t, ctx, service, session, MemoryControlRequest{Action: test.action, Manifest: &manifest})
 			}()
 			if terminal != "lost-open-ack" {
 				response := receiveMemoryControl(t, session)
@@ -284,7 +293,8 @@ func TestStatementMemoryRejectsChangedProcessBeforeAdmission(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	session := &memoryControlSession{ctx: ctx, replies: make(chan *pipeline.Message, 1)}
-	request := MemoryControlRequest{Action: MemoryControlOpen, ExpectedProcessID: "earlier-process", Manifest: &MemoryManifest{TargetUnit: 1 << 20, Parallel: 1, Stages: []MemoryStageDescriptor{{Role: MemoryStageOutput, Count: 1, Schema: []types.Type{types.T_int64.ToType()}, TableCount: 1}}}}
+	manifest := memoryControlFixtureManifest(false)
+	request := MemoryControlRequest{Action: MemoryControlOpen, ExpectedProcessID: "earlier-process", Manifest: &manifest}
 	// No CN runtime is registered: rejection must precede both the runtime
 	// lookup and ReserveWorkingSet, not only the Open ACK.
 	require.NoError(t, memoryControlCall(t, ctx, service, session, request))

@@ -13,7 +13,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/common/runtime"
 	"github.com/matrixorigin/matrixone/pkg/pb/metadata"
 	"github.com/matrixorigin/matrixone/pkg/pb/pipeline"
-	"github.com/matrixorigin/matrixone/pkg/pb/query"
 	"github.com/matrixorigin/matrixone/pkg/pb/txn"
 	"github.com/matrixorigin/matrixone/pkg/txn/client"
 	"github.com/stretchr/testify/require"
@@ -227,7 +226,8 @@ func TestMemoryTryOpenRejectsWaitPolicyMismatchBeforeAdmission(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		t.Cleanup(cancel)
 		session := &memoryControlSession{ctx: ctx, replies: make(chan *pipeline.Message, 1)}
-		request := MemoryControlRequest{Action: test.action, Manifest: &MemoryManifest{Version: query.MemoryAdmissionProtocolVersion, NoWait: test.noWait}, ExpectedProcessID: runtime.ProcessInstanceID()}
+		manifest := memoryControlFixtureManifest(test.noWait)
+		request := MemoryControlRequest{Action: test.action, Manifest: &manifest, ExpectedProcessID: runtime.ProcessInstanceID()}
 		wire, err := EncodeMemoryControlRequest(request)
 		require.NoError(t, err)
 		handled, err := handleMemoryControl(ctx, "missing-runtime-must-not-be-used", &pipeline.Message{Id: 19, Cmd: pipeline.Method_StopSending, Data: wire}, session, func() morpc.Message { return &pipeline.Message{} })

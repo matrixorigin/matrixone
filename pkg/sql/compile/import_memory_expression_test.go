@@ -287,14 +287,14 @@ func TestImportMemoryProducerManifestRoundTripAndValidation(t *testing.T) {
 
 func TestImportMemoryOldBoolPeerAndManifestAreRejectedBeforeOpen(t *testing.T) {
 	c := memoryCompileFixture(t, 1)
-	for _, version := range []uint32{0, 1, query.MemoryAdmissionProtocolVersion} {
+	for _, version := range []uint32{0, 1, 2, query.MemoryAdmissionProtocolVersion, 4} {
 		client := &memoryCapabilityClient{send: func(addr string, _ *query.Request) (*query.Response, error) {
 			return &query.Response{GetProtocolVersion: &query.GetProtocolVersionResponse{MemoryAdmission: true, MemoryAdmissionProcessId: addr, MemoryAdmissionVersion: version}}, nil
 		}}
 		c.proc.Base.QueryClient = client
 		capable, err := c.memoryCapabilities(context.Background(), []*memoryCNManifest{{queryAddr: "A"}, {queryAddr: "B"}})
 		require.NoError(t, err)
-		require.Equal(t, version >= query.MemoryAdmissionProtocolVersion, capable)
+		require.Equal(t, version == query.MemoryAdmissionProtocolVersion, capable)
 		require.Equal(t, 2, client.releases)
 	}
 	ctx, cancel := context.WithCancel(context.Background())

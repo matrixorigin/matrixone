@@ -338,6 +338,10 @@ func (c *Compile) memoryProducers() ([]MemoryProducerDescriptor, map[vm.Operator
 					}
 					regs = regs[receiver.StartIDX:receiver.EndIDX]
 				}
+				if uint64(len(regs)) > math.MaxUint32 {
+					return 0, false, nil
+				}
+				desc.Receivers = uint32(len(regs))
 				channelInputs = true
 				for _, reg := range regs {
 					upstream := senders[reg]
@@ -478,7 +482,7 @@ func memoryProducerStages(descs []MemoryProducerDescriptor, id uint32, count uin
 	var result []MemoryStageDescriptor
 	for {
 		desc := descs[id]
-		if desc.Kind == "expression" || desc.Kind == "scan" || desc.Kind == "apply" || desc.Kind == "spool" || desc.Kind == "preinsert" || desc.Kind == "lock" || desc.Kind == "merge-meta" || desc.Kind == "flush-meta" {
+		if desc.Kind == "pass" && desc.Receivers > 0 || desc.Kind == "expression" || desc.Kind == "scan" || desc.Kind == "apply" || desc.Kind == "spool" || desc.Kind == "preinsert" || desc.Kind == "lock" || desc.Kind == "merge-meta" || desc.Kind == "flush-meta" {
 			result = append(result, MemoryStageDescriptor{Role: MemoryStageProducer, Count: count, Producer: id})
 		}
 		if desc.Kind != "expression" || len(desc.Inputs) != 1 {

@@ -19,32 +19,28 @@ func TestPublicationFailureBelongsToSpoolGenerationAndPreservesBorrowers(t *test
 	t.Cleanup(func() { mpool.DeleteMPool(mp) })
 	sp := InitMyPipelineSpool(mp, 2)
 	t.Cleanup(sp.CloseAfterReadersStopped)
-	require.False(t, sp.PublicationFailed())
 	done, err := sp.SendBatch(context.Background(), SendToAllLocal, source, nil)
 	require.NoError(t, err)
 	require.False(t, done)
 	borrowed, err := sp.ReceiveBatch(0)
 	require.NoError(t, err)
-	sp.MarkPublicationFailed()
-	sp.MarkPublicationFailed()
-	require.True(t, sp.PublicationFailed())
-	sp.ForceCleanup()
+	sp.DiscardUnsent(1)
+	sp.ForceCleanupAfterTerminalSignal()
 	require.Positive(t, mp.AllocatedBytes())
 	require.Equal(t, []int64{11, 12}, vector.MustFixedColNoTypeCheck[int64](borrowed.Vecs[0]))
 	sp.ReleaseCurrent(0)
-	require.Positive(t, mp.AllocatedBytes(), "unpublished second recipient still owns the shared frame")
-	// Both readers have now stopped. The query owner may retire the missing
-	// recipient's reference without synthesizing an internal spool End.
+	require.Zero(t, mp.AllocatedBytes(), "the unnotified recipient was rolled back; final borrower release retires its data")
+	// Both readers have now stopped. Final retirement does not synthesize a
+	// spool End or restore the rejected recipient's reference.
 	sp.CloseAfterReadersStopped()
 	require.Zero(t, mp.AllocatedBytes())
 	sp.CloseAfterReadersStopped()
 	require.Zero(t, mp.AllocatedBytes())
 
-	// Reusing the same memory pool does not transfer broken-publication mode
-	// into the next generation, which keeps its ordinary End/ack protocol.
+	// Reusing the same memory pool creates an independent generation. The
+	// rejected notification cannot consume data or terminal in that generation.
 	next := InitMyPipelineSpool(mp, 1)
 	t.Cleanup(next.CloseAfterReadersStopped)
-	require.False(t, next.PublicationFailed())
 	done, err = next.SendBatch(context.Background(), 0, source, nil)
 	require.NoError(t, err)
 	require.False(t, done)
@@ -58,8 +54,7 @@ func TestPublicationFailureBelongsToSpoolGenerationAndPreservesBorrowers(t *test
 	got, err = next.ReceiveBatch(0)
 	require.NoError(t, err)
 	require.Nil(t, got)
-	next.Close()
-	require.Equal(t, 1, next.drainedReceivers)
+	next.ForceCleanupAfterTerminalSignal()
 	require.Zero(t, mp.AllocatedBytes())
 	next.CloseAfterReadersStopped()
 	require.Zero(t, mp.AllocatedBytes())

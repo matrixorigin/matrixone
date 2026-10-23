@@ -182,7 +182,7 @@ func (s *Scope) Run(c *Compile) (err error) {
 	}
 
 	if err = s.armSpillParticipants(); err != nil {
-		pipeline.NewMerge(s.RootOp).Cleanup(s.Proc, true, c.isPrepare, err)
+		p = pipeline.NewMerge(s.RootOp)
 		return err
 	}
 
