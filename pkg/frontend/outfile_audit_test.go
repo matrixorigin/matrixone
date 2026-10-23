@@ -34,7 +34,7 @@ func TestTopLevelOutfileReceiptAndCredentialRedaction(t *testing.T) {
 	require.True(t, receipt.TargetRedacted)
 	require.False(t, receipt.TargetInvalid)
 
-	redacted := redactOutfileStatementText(stmt, sql)
+	redacted := redactStatementTextForLogging(stmt, sql)
 	require.NotContains(t, redacted, "out_secret")
 	require.NotContains(t, redacted, "token")
 	require.Contains(t, redacted, receipt.Target)

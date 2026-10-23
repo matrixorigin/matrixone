@@ -265,6 +265,65 @@ func Test_writeDataToCSVFile(t *testing.T) {
 	})
 }
 
+func TestWriteExportBatchToFileRejectsAuditOverflow(t *testing.T) {
+	maxUint64 := ^uint64(0)
+	for _, tc := range []struct {
+		name      string
+		format    string
+		splitSize uint64
+		rows      uint64
+		fileBytes uint64
+		batch     BatchByte
+		wantError string
+	}{
+		{
+			name:      "csv unlimited row count",
+			format:    "csv",
+			rows:      maxUint64,
+			batch:     BatchByte{writeByte: []byte("x\n"), rowCount: 1},
+			wantError: "outfile audit row count overflow",
+		},
+		{
+			name:      "csv split row count",
+			format:    "csv",
+			splitSize: 16,
+			rows:      maxUint64,
+			batch:     BatchByte{writeByte: []byte("a\n"), rowEnds: []int{2}, rowCount: 1},
+			wantError: "outfile audit row count overflow",
+		},
+		{
+			name:      "jsonline file byte count",
+			format:    "jsonline",
+			fileBytes: maxUint64,
+			batch:     BatchByte{writeByte: []byte("{}\n"), rowCount: 1},
+			wantError: "outfile audit file byte count overflow",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ep := &ExportConfig{
+				userConfig:   &tree.ExportParam{ExportFormat: tc.format, SplitSize: tc.splitSize},
+				Rows:         tc.rows,
+				CurFileSize:  tc.fileBytes,
+				auditEnabled: true,
+			}
+			writes := 0
+			stub := gostub.Stub(&Write, func(_ *ExportConfig, output []byte) (int, error) {
+				writes++
+				return len(output), nil
+			})
+			defer stub.Reset()
+
+			err := writeExportBatchToFile(ep, &tc.batch)
+			require.ErrorContains(t, err, tc.wantError)
+			require.Zero(t, writes, "overflow must be detected before writing to the sink")
+			require.Equal(t, tc.rows, ep.Rows)
+			require.Equal(t, tc.fileBytes, ep.CurFileSize)
+			require.Zero(t, ep.auditBytesWritten)
+			require.Zero(t, ep.auditRowsWritten)
+		})
+	}
+}
+
 func Test_exportDataToCSVFile(t *testing.T) {
 	convey.Convey("exportDataFromResultSetToCSVFile succ", t, func() {
 		ep := &ExportConfig{proc: sysFileAccessTestProcess(),

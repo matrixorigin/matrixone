@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/matrixorigin/matrixone/pkg/sql/models"
 	db_holder "github.com/matrixorigin/matrixone/pkg/util/export/etl/db"
@@ -98,6 +99,52 @@ func TestExecPlanWithOutfileReceiptPreservesCapacity(t *testing.T) {
 	got = execPlanWithOutfileReceipt([]byte("not-json"), receipt)
 	require.NoError(t, json.Unmarshal(got, &fields))
 	require.NotEmpty(t, fields["outfile"], "malformed plan diagnostics must not discard a valid receipt")
+}
+
+func TestOutfileReceiptValidationAndCapacityBoundaries(t *testing.T) {
+	invalidTarget := NewStatementInfo()
+	invalidTarget.SetOutfileReceipt(StatementOutfileReceipt{Target: string([]byte{'a', 0xff, 'b'}), Format: "csv"})
+	require.True(t, invalidTarget.outfileReceipt.TargetInvalid)
+	require.Empty(t, invalidTarget.outfileReceipt.Target)
+	var invalidFields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(invalidTarget.ExecPlan2Json(context.Background()), &invalidFields))
+	var invalidReceipt StatementOutfileReceipt
+	require.NoError(t, json.Unmarshal(invalidFields["outfile"], &invalidReceipt))
+	require.True(t, invalidReceipt.TargetInvalid)
+	require.Empty(t, invalidReceipt.Target)
+
+	truncatedTarget := NewStatementInfo()
+	truncatedTarget.SetOutfileReceipt(StatementOutfileReceipt{
+		Target: strings.Repeat("a", statementOutfileTargetLimit-1) + "é",
+		Format: "csv",
+	})
+	require.True(t, truncatedTarget.outfileReceipt.TargetTruncated)
+	require.False(t, truncatedTarget.outfileReceipt.TargetInvalid)
+	require.Len(t, truncatedTarget.outfileReceipt.Target, statementOutfileTargetLimit-1)
+	require.True(t, utf8.ValidString(truncatedTarget.outfileReceipt.Target))
+
+	withoutReceipt := NewStatementInfo()
+	withoutReceipt.ExecPlan = &outfileReceiptTestPlan{raw: []byte(`{"kept":true}`)}
+	before := append([]byte(nil), withoutReceipt.ExecPlan2Json(context.Background())...)
+	withoutReceipt.UpdateOutfileReceipt("csv", 10, 1, true)
+	require.False(t, withoutReceipt.HasOutfileReceipt())
+	require.Equal(t, before, withoutReceipt.ExecPlan2Json(context.Background()))
+
+	limit := db_holder.StatementInfoTextLimit
+	prefix, suffix := `{"padding":"`, `"}`
+	exactLimitPlan := []byte(prefix + strings.Repeat("p", limit-len(prefix)-len(suffix)) + suffix)
+	require.Len(t, exactLimitPlan, limit)
+	got := execPlanWithOutfileReceipt(exactLimitPlan, StatementOutfileReceipt{
+		Version: 1, Target: "stage://audit/exact-limit.csv", Format: "csv",
+	})
+	require.LessOrEqual(t, len(got), limit)
+	var fields map[string]json.RawMessage
+	require.NoError(t, json.Unmarshal(got, &fields))
+	require.NotContains(t, fields, "padding", "the full plan is replaced when its receipt would exceed the TEXT bound")
+	require.Contains(t, fields, "outfile")
+	var originalBytes int
+	require.NoError(t, json.Unmarshal(fields["original_bytes"], &originalBytes))
+	require.Equal(t, limit, originalBytes)
 }
 
 func mustJSONRawField(t *testing.T, data json.RawMessage, name string) json.RawMessage {
