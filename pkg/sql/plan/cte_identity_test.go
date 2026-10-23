@@ -15,8 +15,10 @@
 package plan
 
 import (
+	"fmt"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/dialect/mysql"
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
+	"strings"
 	"testing"
 
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -282,6 +284,60 @@ func TestCTEIdentityRecursiveSourceSteps(t *testing.T) {
 			})
 			require.NoError(t, err)
 			require.True(t, checked)
+		})
+	}
+}
+
+// Build the complete plan so this measures classification in its real caller,
+// including the non-CTE control and increasing stable declaration depths.
+func BenchmarkCTEStableChainPlanning(b *testing.B) {
+	for _, depth := range []int{0, 10, 50, 100} {
+		b.Run(fmt.Sprint(depth), func(b *testing.B) {
+			query := "select n_nationkey from nation"
+			if depth > 0 {
+				var sql strings.Builder
+				sql.WriteString("with c0 as(select n_nationkey from nation)")
+				for i := 1; i < depth; i++ {
+					fmt.Fprintf(&sql, ",c%d as(select * from c%d)", i, i-1)
+				}
+				fmt.Fprintf(&sql, " select * from c%d", depth-1)
+				query = sql.String()
+			}
+			mock := NewMockOptimizer(false, newPlanTestProcess(b))
+			b.ReportAllocs()
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if _, err := runOneStmt(mock, b, query); err != nil {
+					b.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
+func TestCTESingleReaderPublication(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		steps     int
+	}{
+		{"single", `with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select x from r limit 1`, 1},
+		{"chain", `with r as(select uuid()x),s as(select x from r) select x from s`, 1},
+		{"shared identity", `with r as(select uuid()x) select a.x,b.x from r a,r b`, 2},
+		{"compact earlier", `with single as(select uuid()x),shared as(select uuid()x) select single.x,a.x,b.x from single,shared a,shared b`, 2},
+		{"compact later", `with shared as(select uuid()x),single as(select uuid()x) select single.x,a.x,b.x from shared a,shared b,single`, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			plan, err := runOneStmt(mock, t, tc.sql)
+			require.NoError(t, err)
+			q := plan.GetQuery()
+			require.Len(t, q.Steps, tc.steps)
+			for _, node := range q.Nodes {
+				for _, step := range node.SourceStep {
+					require.GreaterOrEqual(t, step, int32(0))
+					require.Less(t, int(step), len(q.Steps))
+				}
+			}
 		})
 	}
 }

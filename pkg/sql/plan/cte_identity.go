@@ -26,11 +26,14 @@ import (
 type cteEvaluation struct {
 	needsPublication bool
 	valueUnstable    bool
+	// Binding rewrites may still change these dependencies.
+	mutableDependency bool
 }
 
 func (e *cteEvaluation) merge(other cteEvaluation) {
 	e.needsPublication = e.needsPublication || other.needsPublication
 	e.valueUnstable = e.valueUnstable || other.valueUnstable
+	e.mutableDependency = e.mutableDependency || other.mutableDependency
 }
 
 // boundCTE is a statement-local publication descriptor, never a cache of rows.
@@ -185,6 +188,9 @@ func (builder *QueryBuilder) cteIdentityProducer(root int32) int32 {
 // Walk executable dependencies once. Recursion and existing publication require
 // a source boundary, but only unstable values forbid cross-owner recomputation.
 func (builder *QueryBuilder) classifyCTEEvaluation(id int32, seen map[int32]bool) cteEvaluation {
+	if builder.cteRecursiveBindingDepth == 0 && builder.stableCTERoots[id] {
+		return cteEvaluation{}
+	}
 	if seen[id] {
 		return cteEvaluation{}
 	}
@@ -194,9 +200,11 @@ func (builder *QueryBuilder) classifyCTEEvaluation(id int32, seen map[int32]bool
 	}
 	node := builder.qry.Nodes[id]
 	var evaluation cteEvaluation
+	evaluation.mutableDependency = len(node.SourceStep) > 0
 	switch node.NodeType {
 	case planpb.Node_RECURSIVE_CTE:
 		evaluation.needsPublication = true
+		evaluation.mutableDependency = true
 	case planpb.Node_SAMPLE, planpb.Node_EXTERNAL_FUNCTION:
 		evaluation.valueUnstable = true
 	case planpb.Node_FUNCTION_SCAN:
@@ -211,10 +219,15 @@ func (builder *QueryBuilder) classifyCTEEvaluation(id int32, seen map[int32]bool
 				unstable, known := function.GetFunctionValueUnstableByID(fn.Func.Obj)
 				evaluation.valueUnstable = evaluation.valueUnstable || !known || unstable
 			}
+			if expr.GetCorr() != nil || expr.GetSlot() != nil {
+				evaluation.mutableDependency = true
+			}
 			if sub := expr.GetSub(); sub != nil {
+				evaluation.mutableDependency = true
 				evaluation.merge(builder.classifyCTEEvaluation(sub.NodeId, seen))
 			}
 			if call := expr.GetDependent(); call != nil && builder.qry.Correlation != nil {
+				evaluation.mutableDependency = true
 				evaluation.merge(builder.classifyCTEEvaluation(builder.qry.Correlation.Programs[call.ProgramId-1].RootNode, seen))
 			}
 			return nil
@@ -296,4 +309,121 @@ func (builder *QueryBuilder) validateCTEInvocation(root int32) error {
 		return nil
 	}
 	return visit(root, nil)
+}
+
+// inlineSingleReaderCTEs removes a physical publication boundary only after the
+// complete SELECT has bound. Semantic identity and capture checks have already
+// run. Recursive/dependent regions retain their existing publication owners.
+func (builder *QueryBuilder) inlineSingleReaderCTEs(root int32) {
+	if len(builder.semanticCTESinks) == 0 || builder.qry.Correlation != nil {
+		return
+	}
+	seen := make(map[int32]bool)
+	parents := make(map[int32]int)
+	readers := make(map[int32]int32)
+	safe := true
+	var visit func(int32)
+	visit = func(id int32) {
+		if seen[id] || !safe {
+			return
+		}
+		seen[id] = true
+		node := builder.qry.Nodes[id]
+		if node.NodeType == planpb.Node_RECURSIVE_CTE || node.NodeType == planpb.Node_RECURSIVE_SCAN || node.RecursiveSink || node.RecursiveCte {
+			safe = false
+			return
+		}
+		executable := *node
+		executable.TableDef = nil
+		_ = planpb.VisitExpressionsInOwner(&executable, func(expr *planpb.Expr) error {
+			return planpb.VisitExprTree(expr, func(expr *planpb.Expr) error {
+				if expr.GetSub() != nil || expr.GetDependent() != nil || expr.GetCorr() != nil || expr.GetSlot() != nil {
+					safe = false
+				}
+				return nil
+			})
+		})
+		for _, child := range node.Children {
+			parents[child]++
+			if parents[child] > 1 {
+				safe = false // A shared subtree can execute its scan more than once.
+				return
+			}
+			visit(child)
+		}
+		for _, step := range node.SourceStep {
+			if node.NodeType == planpb.Node_SINK_SCAN && len(node.SourceStep) == 1 {
+				readers[step] = id
+			}
+			visit(builder.qry.Steps[step])
+		}
+	}
+	visit(root)
+	if !safe {
+		return
+	}
+	// Count all references, including abandoned nodes: an unaccounted reference
+	// conservatively retains publication rather than leaving a stale step index.
+	references := make(map[int32]int)
+	for _, node := range builder.qry.Nodes {
+		for _, step := range node.SourceStep {
+			references[step]++
+		}
+	}
+	removed := make(map[int32]bool)
+	for step, reader := range readers {
+		sinkID := builder.qry.Steps[step]
+		bound := builder.semanticCTESinks[sinkID]
+		if bound == nil || references[step] != 1 || bound.ref.isRecursive {
+			continue
+		}
+		sink, scan := builder.qry.Nodes[sinkID], builder.qry.Nodes[reader]
+		if len(sink.Children) != 1 || len(scan.BindingTags) != 1 || len(scan.ProjectList) != len(sink.ProjectList) ||
+			len(scan.FilterList) != 0 || len(scan.OrderBy) != 0 {
+			continue
+		}
+		matching := true
+		for i := range scan.ProjectList {
+			matching = matching && proto.Equal(&scan.ProjectList[i].Typ, &sink.ProjectList[i].Typ)
+		}
+		if !matching {
+			continue
+		}
+		*scan = planpb.Node{NodeType: planpb.Node_PROJECT, NodeId: scan.NodeId,
+			Children: append([]int32(nil), sink.Children...), BindingTags: scan.BindingTags,
+			ProjectList: DeepCopyExprList(sink.ProjectList), Limit: scan.Limit, Offset: scan.Offset}
+		delete(builder.positionalSinkScans, reader)
+		delete(builder.cteSinkNodes, sinkID)
+		delete(builder.semanticCTESinks, sinkID)
+		removed[step] = true
+	}
+	if len(removed) == 0 {
+		return
+	}
+	stepMap := make([]int32, len(builder.qry.Steps))
+	steps := builder.qry.Steps[:0]
+	for old, id := range builder.qry.Steps {
+		if !removed[int32(old)] {
+			stepMap[old] = int32(len(steps))
+			steps = append(steps, id)
+		}
+	}
+	builder.qry.Steps = steps
+	for _, node := range builder.qry.Nodes {
+		for i, step := range node.SourceStep {
+			node.SourceStep[i] = stepMap[step]
+		}
+	}
+	for ref, publications := range builder.boundCTEs {
+		for owner, bound := range publications {
+			if removed[bound.sourceStep] {
+				delete(publications, owner)
+			} else {
+				bound.sourceStep = stepMap[bound.sourceStep]
+			}
+		}
+		if len(publications) == 0 {
+			delete(builder.boundCTEs, ref)
+		}
+	}
 }

@@ -103,6 +103,8 @@ func bindAndOptimizeSelectQueryWithValidatorAndCapture(
 	if err = builder.bindPreparedPredicateDiagnostics(); err != nil {
 		return nil, err
 	}
+	builder.stableCTERoots = nil
+	builder.inlineSingleReaderCTEs(rootId)
 	builder.skipStats = skipStats
 	// Shared-computation rewrites happen before createQuery, so parse the
 	// service-level rollback hint before entering either rewrite.

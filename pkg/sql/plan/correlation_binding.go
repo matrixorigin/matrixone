@@ -182,6 +182,7 @@ func compactCorrelationPlan(q *plan.Query) error {
 // the caller and is forwarded when that caller's boundary is closed. Binding
 // tags identify semantic owners, so shadowed names cannot alias slots.
 func (builder *QueryBuilder) bindDependentSubquery(sub *plan.SubqueryRef) (*plan.Expr, error) {
+	builder.stableCTERoots = nil
 	if sub == nil || sub.NodeId < 0 || int(sub.NodeId) >= len(builder.qry.Nodes) {
 		return nil, moerr.NewInternalError(builder.GetContext(), "invalid dependent subquery root")
 	}

@@ -42,10 +42,63 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 			"create table special(e enum('b','a'),s set('b','a'))", "insert into special values('b','b'),('a','a')"} {
 			execSQLRequire(t, ctx, db, q)
 		}
+		t.Run("single reference UNION demand", func(t *testing.T) {
+			for _, tc := range []struct{ name, query string }{
+				{"derived control", `select x from (select uuid() x union all select extractvalue('<a/>','[')) r limit 1`},
+				{"CTE", `with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select x from r limit 1`},
+				{"chain", `with r(x) as(select uuid() union all select extractvalue('<a/>','[')),s as(select x from r) select x from s limit 1`},
+				{"nested", `with r as(with s(x) as(select uuid() union all select extractvalue('<a/>','[')) select x from s) select x from r limit 1`},
+				{"offset", `with r(x) as(select 'skip' union all select uuid() union all select extractvalue('<a/>','[')) select x from r limit 1 offset 1`},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					var got string
+					require.NoError(t, db.QueryRowContext(ctx, tc.query).Scan(&got), tc.query)
+					require.Len(t, got, 36, tc.query)
+				})
+			}
+			query := `with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select x from r`
+			var got string
+			require.ErrorIs(t, db.QueryRowContext(ctx, query+" limit 0").Scan(&got), sql.ErrNoRows)
+			for _, suffix := range []string{"", " order by x limit 1"} {
+				var sqlErr *mysql.MySQLError
+				require.ErrorAs(t, db.QueryRowContext(ctx, query+suffix).Scan(&got), &sqlErr)
+				require.EqualValues(t, 20105, sqlErr.Number)
+			}
+			stmt, err := db.PrepareContext(ctx, query+" limit ?")
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, limit := range []int{1, 2, 1} {
+				err = func() error {
+					rows, err := stmt.QueryContext(ctx, limit)
+					if err != nil {
+						return err
+					}
+					defer rows.Close()
+					count := 0
+					for rows.Next() {
+						require.NoError(t, rows.Scan(&got))
+						require.Len(t, got, 36)
+						count++
+					}
+					if limit == 1 {
+						require.Equal(t, 1, count)
+					}
+					return rows.Err()
+				}()
+				if limit == 1 {
+					require.NoError(t, err)
+				} else {
+					var sqlErr *mysql.MySQLError
+					require.ErrorAs(t, err, &sqlErr)
+					require.EqualValues(t, 20105, sqlErr.Number)
+				}
+			}
+		})
 		for _, tc := range []struct {
 			name, query string
 			want        int
 		}{
+			{"single projected identity", "with r as(select uuid()x) select count(*) from (select x a,x b from r)q where a=b", 1},
 			{"rand", "with r as(select rand()x) select count(*) from r a join r b on a.x=b.x", 1},
 			{"uuid", "with r as(select uuid()x) select count(*) from r a join r b on a.x=b.x", 1},
 			{"volatile charset argument", "with r as(select convert(uuid() using utf8mb4)x) select count(*) from r a join r b on a.x=b.x", 1},
@@ -54,6 +107,8 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 			{"union", "with r as(select 1 k,rand()x union all select 2,rand()) select count(*) from r a join r b on a.k=b.k and a.x=b.x", 2},
 			{"table bag and null", "with r as(select k,uuid()x from t) select count(*) from r a join r b on a.k<=>b.k and a.x=b.x", 4},
 			{"special types", "with r as(select e,s,uuid()x from special) select count(*) from r a join r b on a.e=b.e and a.s=b.s and a.x=b.x", 2},
+			{"single ENUM numeric", "with r as(select e,uuid()x from special) select sum(e+0) from r", 3},
+			{"single SET numeric", "with r as(select s,uuid()x from special) select sum(s+0) from r", 3},
 			{"special numeric", "with r as(select e,uuid()x from special) select sum(a.e+0) from r a join r b on a.x=b.x", 3},
 			{"grouped", "with r as(select k,rand()x from t group by k) select count(*) from r a join r b on a.k<=>b.k and a.x=b.x", 3},
 			{"recursive", "with recursive r(n,x) as(select 1,rand() union all select n+1,x from r where n<3) select count(*) from r a join r b on a.n=b.n and a.x=b.x", 3},
@@ -63,6 +118,8 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 			{"transitive outer", "with r as(select uuid()x),s as(select x from r) select count(*) from s a join s b on a.x=b.x join r c on a.x=c.x", 1},
 			{"transitive inner", "with s as(with r as(select uuid()x) select x from r) select count(*) from s a join s b on a.x=b.x", 1},
 			{"shadowed declarations", "with r as(select uuid()x) select count(*) from r a join (with r as(select uuid()x) select x from r) b on a.x<>b.x", 1},
+			{"compact earlier step", "with single as(select uuid()x),shared as(select uuid()x) select count(*) from single,shared a,shared b where a.x=b.x", 1},
+			{"compact later step", "with shared as(select uuid()x),single as(select uuid()x) select count(*) from shared a,shared b,single where a.x=b.x", 1},
 			{"three readers", "with r as(select uuid()x) select count(*) from r a join r b on a.x=b.x join r c on b.x=c.x", 1},
 			{"early consumers", "with r as(select k,uuid()x from t where k=1) select count(*) from (select x from r limit 1)a join (select x from r limit 1)b on a.x=b.x", 1},
 			{"exists", "with r as(select uuid()x from t) select count(*) from r a where exists(select 1 from r b where b.x=a.x)", 4},

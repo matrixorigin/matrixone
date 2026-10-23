@@ -5738,6 +5738,13 @@ func (builder *QueryBuilder) bindRecursiveCte(
 	stmts []tree.SelectStatement,
 	distinct bool,
 ) (nodeID int32, outputCtx *BindContext, err error) {
+	// Recursive binding wires and coerces existing feedback nodes.
+	builder.stableCTERoots = nil
+	builder.cteRecursiveBindingDepth++
+	defer func() {
+		builder.cteRecursiveBindingDepth--
+		builder.stableCTERoots = nil
+	}()
 	if len(s.OrderBy) > 0 {
 		return 0, nil, moerr.NewParseError(builder.GetContext(), "not support ORDER BY in recursive cte")
 	}
@@ -6047,6 +6054,14 @@ func (builder *QueryBuilder) bindCte(
 		bound.views = append([]string(nil), cteRef.declarationCtx.views[viewCount:]...)
 		return builder.bindCTEReader(ctx, cteRef, bound)
 	}
+	// Only completed ordinary CTE roots are memoized; recursive and dependent
+	// graphs may still acquire new feedback or substituted expressions.
+	if !evaluation.mutableDependency && builder.cteRecursiveBindingDepth == 0 && !outputCtx.isCorrelated && builder.qry.Correlation == nil {
+		if builder.stableCTERoots == nil {
+			builder.stableCTERoots = make(map[int32]bool)
+		}
+		builder.stableCTERoots[nodeID] = true
+	}
 	if builder.localCTERoots == nil {
 		builder.localCTERoots = make(map[int32]bool)
 	}
@@ -6093,6 +6108,9 @@ func (builder *QueryBuilder) preprocessCte(stmt *tree.Select, ctx *BindContext) 
 }
 
 func (builder *QueryBuilder) bindSelect(stmt *tree.Select, ctx *BindContext, isRoot bool) (nodeID int32, err error) {
+	if isRoot {
+		defer func() { builder.stableCTERoots = nil }()
+	}
 	leaveBinding, bindErr := enterViewSchemaBinding(builder.GetContext())
 	if bindErr != nil {
 		return 0, bindErr
