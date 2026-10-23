@@ -2345,44 +2345,51 @@ func doShowVariables(ses *Session, execCtx *ExecCtx, sv *tree.ShowVariables) err
 			return err
 		}
 
-		executor, err := colexec.NewExpressionExecutor(execCtx.proc, planExpr)
+		err = func() error {
+			restore := bindFrontendExpressionContext(execCtx.proc, execCtx.reqCtx)
+			defer restore()
+			executor, err := colexec.NewExpressionExecutor(execCtx.proc, planExpr)
+			if err != nil {
+				return err
+			}
+			defer executor.Free()
+			vec, err := executor.Eval(execCtx.proc, []*batch.Batch{bat}, nil)
+			if err != nil {
+				return err
+			}
+
+			bs := vector.MustFixedColWithTypeCheck[bool](vec)
+			sels := vector.GetSels()
+			for i, b := range bs {
+				if b {
+					sels = append(sels, int64(i))
+				}
+			}
+
+			bat.Shrink(sels, false)
+			vector.PutSels(sels)
+
+			v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
+			v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
+			rows = rows[:bat.Vecs[0].Length()]
+			for i := range rows {
+				s0, isNull := v0.GetStrValue(uint64(i))
+				if isNull {
+					rows[i][0] = ""
+				} else {
+					rows[i][0] = string(s0)
+				}
+				s1, isNull := v1.GetStrValue(uint64(i))
+				if isNull {
+					rows[i][1] = ""
+				} else {
+					rows[i][1] = string(s1)
+				}
+			}
+			return nil
+		}()
 		if err != nil {
 			return err
-		}
-		vec, err := executor.Eval(execCtx.proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			executor.Free()
-			return err
-		}
-
-		bs := vector.MustFixedColWithTypeCheck[bool](vec)
-		sels := vector.GetSels()
-		for i, b := range bs {
-			if b {
-				sels = append(sels, int64(i))
-			}
-		}
-		executor.Free()
-
-		bat.Shrink(sels, false)
-		vector.PutSels(sels)
-
-		v0 := vector.GenerateFunctionStrParameter(bat.Vecs[0])
-		v1 := vector.GenerateFunctionStrParameter(bat.Vecs[1])
-		rows = rows[:bat.Vecs[0].Length()]
-		for i := range rows {
-			s0, isNull := v0.GetStrValue(uint64(i))
-			if isNull {
-				rows[i][0] = ""
-			} else {
-				rows[i][0] = string(s0)
-			}
-			s1, isNull := v1.GetStrValue(uint64(i))
-			if isNull {
-				rows[i][1] = ""
-			} else {
-				rows[i][1] = string(s1)
-			}
 		}
 	}
 
@@ -3893,43 +3900,50 @@ func doShowCollation(ses *Session, execCtx *ExecCtx, proc *process.Process, sc *
 			return err
 		}
 
-		executor, err := colexec.NewExpressionExecutor(proc, planExpr)
-		if err != nil {
-			return err
-		}
-		vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
-		if err != nil {
-			executor.Free()
-			return err
-		}
-
-		bs := vector.MustFixedColWithTypeCheck[bool](vec)
-		sels := vector.GetSels()
-		for i, b := range bs {
-			if b {
-				sels = append(sels, int64(i))
+		err = func() error {
+			restore := bindFrontendExpressionContext(proc, execCtx.reqCtx)
+			defer restore()
+			executor, err := colexec.NewExpressionExecutor(proc, planExpr)
+			if err != nil {
+				return err
 			}
-		}
-		executor.Free()
+			defer executor.Free()
+			vec, err := executor.Eval(proc, []*batch.Batch{bat}, nil)
+			if err != nil {
+				return err
+			}
 
-		bat.Shrink(sels, false)
-		vector.PutSels(sels)
-		v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
-		v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
-		v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])
-		v3, area3 := vector.MustVarlenaRawData(bat.Vecs[3])
-		v4, area4 := vector.MustVarlenaRawData(bat.Vecs[4])
-		v5 := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[5])
-		v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
-		rows = rows[:len(v0)]
-		for i := range v0 {
-			rows[i][0] = v0[i].GetString(area0)
-			rows[i][1] = v1[i].GetString(area1)
-			rows[i][2] = v2[i]
-			rows[i][3] = v3[i].GetString(area3)
-			rows[i][4] = v4[i].GetString(area4)
-			rows[i][5] = v5[i]
-			rows[i][6] = v6[i].GetString(area6)
+			bs := vector.MustFixedColWithTypeCheck[bool](vec)
+			sels := vector.GetSels()
+			for i, b := range bs {
+				if b {
+					sels = append(sels, int64(i))
+				}
+			}
+
+			bat.Shrink(sels, false)
+			vector.PutSels(sels)
+			v0, area0 := vector.MustVarlenaRawData(bat.Vecs[0])
+			v1, area1 := vector.MustVarlenaRawData(bat.Vecs[1])
+			v2 := vector.MustFixedColWithTypeCheck[int64](bat.Vecs[2])
+			v3, area3 := vector.MustVarlenaRawData(bat.Vecs[3])
+			v4, area4 := vector.MustVarlenaRawData(bat.Vecs[4])
+			v5 := vector.MustFixedColWithTypeCheck[int32](bat.Vecs[5])
+			v6, area6 := vector.MustVarlenaRawData(bat.Vecs[6])
+			rows = rows[:len(v0)]
+			for i := range v0 {
+				rows[i][0] = v0[i].GetString(area0)
+				rows[i][1] = v1[i].GetString(area1)
+				rows[i][2] = v2[i]
+				rows[i][3] = v3[i].GetString(area3)
+				rows[i][4] = v4[i].GetString(area4)
+				rows[i][5] = v5[i]
+				rows[i][6] = v6[i].GetString(area6)
+			}
+			return nil
+		}()
+		if err != nil {
+			return err
 		}
 	}
 

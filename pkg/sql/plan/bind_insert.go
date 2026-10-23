@@ -633,7 +633,7 @@ func (builder *QueryBuilder) appendIrregularMaintSource(
 			colPos[strings.ToLower(col.Name)] = imagePos
 			imagePos++
 		}
-		builder.recordReturningSource(maintStep, tableDef, objRef, tableDef.Name, tableDef.Name, colPos)
+		builder.recordReturningSource(maintStep, tableDef, tableDef.Name, tableDef.Name, colPos)
 	}
 
 	return projID

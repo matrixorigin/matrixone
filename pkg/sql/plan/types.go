@@ -622,7 +622,6 @@ type QueryBuilder struct {
 	returningFilterPos int32
 	returningRequested bool
 	returningTableDef  *plan.TableDef
-	returningObjRef    *plan.ObjectRef
 	returningTableName string
 	returningAlias     string
 	returningColPos    map[string]int32
@@ -676,7 +675,6 @@ type irregularUpdateMaintenance struct {
 }
 
 type OptimizerHints struct {
-	vectorLocalDOP             int
 	pushDownLimitToScan        int
 	pushDownTopThroughLeftJoin int
 	pushDownSemiAntiJoins      int
@@ -1315,7 +1313,6 @@ type Binding struct {
 	// outputColumnProvenance is aligned with cols and carries planner-local
 	// source or pure-NULL output identity. It is never serialized into the plan.
 	outputColumnProvenance []OutputColumnProvenance
-	refCnts                []uint
 	// lower case
 	colIdByName    map[string]int32
 	isClusterTable bool

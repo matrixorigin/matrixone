@@ -142,25 +142,28 @@ class AsyncSnapshotManager:
         else:
             raise SnapshotError(f"Invalid snapshot level: {level}")
 
-        if description:
-            sql += f" COMMENT '{description}'"
-
         await self.client.execute(sql)
-
-        # Return snapshot object
-        import datetime
-
-        return Snapshot(name, level, datetime.datetime.now(), description, database, table)
+        return await self.get(name)
 
     async def get(self, name: str) -> Snapshot:
         """Get snapshot asynchronously"""
         # Use mo_catalog.mo_snapshots table like sync client
+        lookup_name = name
+        if (
+            len(lookup_name) >= 2
+            and lookup_name[0] in ('`', '"')
+            and lookup_name[-1] == lookup_name[0]
+        ):
+            quote = lookup_name[0]
+            lookup_name = lookup_name[1:-1].replace(quote * 2, quote)
+        # Let MatrixOne apply the same Go Unicode tables used by its parser;
+        # supported Python releases can ship older character mappings.
         sql = """
             SELECT sname, ts, level, account_name, database_name, table_name
             FROM mo_catalog.mo_snapshots
-            WHERE sname = :name
+            WHERE sname = LOWER(?)
         """
-        result = await self.client.execute(sql, {"name": name})
+        result = await self.client.execute(sql, (lookup_name,))
 
         if not result.rows:
             raise SnapshotError(f"Snapshot '{name}' not found")
