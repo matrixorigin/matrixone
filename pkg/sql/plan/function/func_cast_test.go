@@ -4962,9 +4962,8 @@ func TestFormatDataTruncationError(t *testing.T) {
 	)
 	require.Contains(t, err3.Error(), "Can't cast column from VARCHAR type to VARCHAR type because of one or more values in that column.")
 
-	// Generic casts and non-CHAR/VARCHAR targets preserve the legacy internal
-	// error contract even if the caller accidentally marks the operation as an
-	// assignment.
+	// Generic/COPY casts preserve the legacy internal error contract. Binary
+	// DML assignments use the same ER_DATA_TOO_LONG mapping as text targets.
 	genericErr := formatDataTruncationError(ctx, constVec, toType, "")
 	require.Equal(t, moerr.ErrInternal, genericErr.(*moerr.Error).ErrorCode())
 	binaryErr := formatDataTruncationError(
@@ -4974,7 +4973,10 @@ func TestFormatDataTruncationError(t *testing.T) {
 		"",
 		true,
 	)
-	require.Equal(t, moerr.ErrInternal, binaryErr.(*moerr.Error).ErrorCode())
+	require.Equal(t, moerr.ErrCastWidthExceeded, binaryErr.(*moerr.Error).ErrorCode())
+	require.Equal(t, uint16(moerr.ER_DATA_TOO_LONG), binaryErr.(*moerr.Error).MySQLCode())
+	copyBinaryErr := formatDataTruncationError(ctx, constVec, types.New(types.T_varbinary, 3, 0), "", false)
+	require.Equal(t, moerr.ErrInternal, copyBinaryErr.(*moerr.Error).ErrorCode())
 }
 
 // TestIsStrictSqlModeSessionInfoFallback covers the branches TestIsStrictSqlMode

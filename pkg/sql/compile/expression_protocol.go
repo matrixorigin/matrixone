@@ -85,6 +85,9 @@ func executionRemoteExpressionProtocolVersion(proc *process.Process, features pl
 
 func remoteExpressionProtocolVersion(features plan.RemoteExpressionFeatures) int64 {
 	required := max(requiredExpressionContractProtocolVersion(features), temporalExpressionProtocolVersion(features))
+	if features.BinaryAssignmentSemantics {
+		required = max(required, defines.MORPCVersion130)
+	}
 	if features.LoadFKIgnoreCheck {
 		required = max(required, defines.MORPCVersion125)
 	}
@@ -296,7 +299,7 @@ func remoteWorkerProtocolVersion(ctx context.Context, proc *process.Process, wor
 }
 
 // Cached compilations can survive a cluster capability rollback. Reject changed
-// result contracts and LOAD FK admission here, before Prepare or statement
+// result contracts, binary assignments and LOAD FK admission here, before Prepare or statement
 // effects; placement/receiver owners retain the other expression policies.
 func validateTemporalResultProtocol(proc *process.Process, owner any) error {
 	var required int64
@@ -321,12 +324,15 @@ func validateTemporalResultProtocol(proc *process.Process, owner any) error {
 	if required > 0 && (!known || version < required) {
 		return moerr.NewNotSupportedf(context.Background(), "CTAS population requires MORPC protocol version %d", required)
 	}
-	if known && version >= defines.MORPCVersion125 {
+	if known && version >= defines.MORPCVersion130 {
 		return nil
 	}
 	features, err := plan.RequiredRemoteExpressionFeatures(owner)
 	if err != nil {
 		return err
+	}
+	if features.BinaryAssignmentSemantics && (!known || version < defines.MORPCVersion130) {
+		return moerr.NewNotSupportedNoCtx("binary assignment semantics require MORPC protocol version 130")
 	}
 	if features.LoadFKIgnoreCheck && (!known || version < defines.MORPCVersion125) {
 		return moerr.NewNotSupportedNoCtx("LOAD IGNORE foreign-key filtering requires MORPC protocol version 125")
