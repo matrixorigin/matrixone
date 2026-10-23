@@ -378,7 +378,7 @@ func TestImportMemoryMergeBlockUsesFinalOutputFramePromise(t *testing.T) {
 	table := &plan.TableDef{Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}}}
 	writer := &insert.Insert{ToWriteS3: true, InsertCtx: &insert.InsertCtx{TableDef: table}}
 	writer.AppendChild(c.scopes[0].RootOp)
-	spool := &connector.Connector{}
+	spool := &connector.Connector{Reg: process.NewPipelineEdge(1, 1)}
 	spool.AppendChild(writer)
 	consumer := &mergeblock.MergeBlock{}
 	consumer.AppendChild(spool)
@@ -419,7 +419,7 @@ func TestImportMemoryFlushS3InfoUsesModernFrameProvenance(t *testing.T) {
 	ctxs := []*multi_update.MultiUpdateCtx{{TableDef: &plan.TableDef{Cols: []*plan.ColDef{{Name: "id", Typ: plan.Type{Id: int32(types.T_int64)}}}}}}
 	writer := &multi_update.MultiUpdate{Action: multi_update.UpdateWriteS3, MultiUpdateCtx: ctxs}
 	writer.AppendChild(c.scopes[0].RootOp)
-	spool := &connector.Connector{}
+	spool := &connector.Connector{Reg: process.NewPipelineEdge(1, 1)}
 	spool.AppendChild(writer)
 	flush := &multi_update.MultiUpdate{Action: multi_update.UpdateFlushS3Info, MultiUpdateCtx: ctxs}
 	flush.AppendChild(spool)
