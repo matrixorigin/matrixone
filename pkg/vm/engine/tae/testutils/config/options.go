@@ -65,6 +65,7 @@ func WithQuickScanAndCKPOpts(
 	opts.GCCfg.GCTTL = time.Millisecond * 1
 	opts.GCCfg.GCInMemoryTTL = time.Millisecond * 1
 	opts.GCCfg.CacheSize = 1
+	opts.GCCfg.GCestimateRows = 100_000
 	opts.GCCfg.GCProbility = 0.000001
 	opts.GCCfg.GCDeleteBatchSize = 2
 	opts.CatalogCfg = new(options.CatalogCfg)
