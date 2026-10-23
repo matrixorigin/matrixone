@@ -1,13 +1,19 @@
 # Partitioned classic FULLTEXT maintenance contract
 
-Revision: R6 actual-main111 conflict integration, 2026-10-13. Issue #28311 / PR #28477.
+Revision: R7 current MORPC130 reconciliation, 2026-10-23. Issue #28311 / PR #28477.
 
-Status: **proposal, approval required**. This document describes the local
-maintenance merge candidate integrating actual main
-`cd8d5abf9665a97d13e50b04840fb74b877fd339` into published PR head
-`34d9b5c52a540c76063427c99d0832e8a8702625`.
+Status: **proposal, approval required**. This revision describes implementation
+snapshot `795e0a7ac8a3c0eff140298aba836a0f3716a65c`, which integrates actual main
+`517a0a412ba5f3b52e6abe722c9675a3d72491af` into published source
+`4658b228182f34d7679d200297c77e9c4cf8d7f5`. R7 reconciles the documented
+capability with that implementation; it changes no runtime behavior and supplies
+neither resource measurements nor receiving-CN acceptance.
 It is not an approval record. The earlier ODKU-only contract does not authorize
 the UPDATE, REPLACE, partition routing, or wire changes described here.
+
+Historical R6 described main `cd8d5abf9665a97d13e50b04840fb74b877fd339`
+and source `34d9b5c52a540c76063427c99d0832e8a8702625`. Its proposed112
+allocation and execution limits below are historical, not the current contract.
 
 ## Problem, invariants, and decision boundary
 
@@ -135,29 +141,39 @@ existing persisted block and catalog formats, not a new posting format.
 
 ## Cumulative compatibility
 
-Integrated main owns MORPC 101-111, including vector-cache control at 102,
+The integrated main snapshot owns MORPC 101-129, including vector-cache control at 102,
 functional-index metadata/generated-key maintenance at 107 (#29472), and
 isolated user-variable NULL regexp history in connection migration at 108,
 native Unicode collation metadata at 109, MEDIUMINT assignment bounds at 110,
-and complete IndexSearchScan/algo_options/algo_exprs at 111. The
+and complete IndexSearchScan/algo_options/algo_exprs at 111. It also owns
+112 for signed INT WEEK/DAYOFYEAR results, 113-128 for subsequent capabilities,
+and 129 for selected JSON ELT/opaque text execution. The
 functional-index creation and 4.0.13 tenant-upgrade floors stay at 107; they
-must not be renumbered or treated as FULLTEXT-route support. This candidate
-uses **proposed 112** for route-preserving PRE_INSERT and partition-index
-MULTI_UPDATE after integrating maincd8d5abf9665a97d13e50b04840fb74b877fd339.
-It is neither an exclusive reservation nor an approved final landing number.
+must not be renumbered or treated as FULLTEXT-route support. Implementation
+snapshot `795e0a7a` uses **MORPC130** for route-preserving PRE_INSERT and
+partition-index MULTI_UPDATE. Main's JSON129 capability is not routed FULLTEXT
+support; historical proposed112 is not the current route floor. The allocation
+is recorded in `pkg/defines/const.go` and used by query placement, actual
+destination admission, execution-stream requirements and recursive receiver
+validation in `pkg/sql/compile`.
+This snapshot allocation is neither an exclusive reservation nor an approved
+final landing number.
 Integration must recheck landing main and competing open protocol owners,
-and refresh maintainer ordering before publication/acceptance. Unmerged
-CRC/JSON_STORAGE_VALUE proposals are not capabilities implemented or admitted
-by this candidate.
+and refresh maintainer ordering before publication/acceptance. Separate unmerged
+proposals do not become implemented capabilities merely by sharing a numeric
+threshold; compare the actual command, handler and payload contract.
 
 New fields are additive: plan UpdateCtx.partition_index_ctx=20,
 plan PreInsertCtx.preserve_input=15, pipeline PreInsert.preserve_input=19.
 Main's existing fields and protocol meanings are retained. The existing
 MultiUpdate wire operator is used; decoding restores its partition wrapper.
 Sender conversion and recursive remote-scope validation must reject routed
-payloads below the new capability. Actual predecessor 111, main's MEDIUMINT
-110, and historical 102-109 are negative controls, while ordinary payloads retain their prior
-admission. Correct mixed-version refusal is required; silently dropping route
+payloads below MORPC130. Reported version129 is the nearest negative component
+control and130 the positive control; older reported versions also reject routed
+payloads, while ordinary payloads retain their prior admission. Those component
+controls are not execution of an actual predecessor binary: real129 destination
+and mixed-binary refusal remain acceptance requirements. Correct mixed-version
+refusal is required; silently dropping route
 metadata is not a compatibility strategy. The sender checks both route fields
 through the complete lowered child tree and probes the actual destination on
 each send. Expression floors and this routing floor share one per-send
@@ -238,9 +254,10 @@ both cardinalities. No measurement or reviewer acceptance is asserted here.
 1. Explicit review of this versioned scope, field ownership, cumulative
    capability, and resource trade-offs by the blocking design reviewers.
 2. Execute focused planner/operator/codec tests on this candidate and exact
-   base, including actual-main 111 refusal / proposed-112 acceptance,
-   unchanged ordinary admission, partitioned key moves, and
-   non-partitioned/vector rejection.
+   base, including reported129 refusal /130 acceptance, unchanged ordinary
+   admission, partitioned key moves, and non-partitioned/vector rejection.
+   Bind component receipts to their exact revision; do not count simulated
+   reported versions as actual-predecessor executable qualification.
 3. Execute the canonical partition FULLTEXT BVT plus unchanged ordinary
    FULLTEXT PK-update/consistency controls; record SHA, environment and results.
 4. In a real multi-CN deployment, prove the producer selects WriteS3 and the
@@ -331,9 +348,16 @@ a capacity risk until its memory envelope is accepted.
 | Open decision | Owner / decision point | Status |
 | --- | --- | --- |
 | R3 ownership/placement/supported scope | Blocking design reviewers, before implementation approval | Approval required |
-| Final cumulative route capability and ordering | Integrator and protocol owners, against landing main and competing open owners | Proposed112 against maincd8d5abf; maintainer ordering pending |
+| Final cumulative route capability and ordering | Integrator and protocol owners, against landing main and competing open owners | Implemented130 at snapshot795e0a7a/base517a0a41; landing-main ordering and approval pending |
 | Multi-CN WriteS3 failure/cancel/visibility/reuse | Allocated deployment validation owner, before acceptance | NOT_RUN |
 | Payload/copy/writer budget and comparative cost | Design reviewers and validation owner, before rollout | Unmeasured / unaccepted |
+
+## Historical execution notes (not R7 acceptance)
+
+The following receipts retain their original revisions and limitations. Words
+such as "current" and "this candidate" in these historical notes refer to those
+original revisions, not the R7 implementation snapshot. R7 does not revalidate
+their source/oracle identity or promote them to current-head acceptance.
 
 Previously reported local execution at semantic candidate `9b89e663d549d93233cfd48a9c265eb8a844396f`
 (2026-10-08, direct Go1.27, Darwin/arm64): fresh owning
@@ -372,7 +396,8 @@ passed twice (882 report checks total), with catalog teardown and a graceful
 service exit without forced kill. These results cover this maintenance delta,
 not whole-feature deployment or design acceptance.
 
-R6 retains those receipts as historical R5 evidence only. Its regenerated
+Historical R6 (superseded, not the current implementation) retains those receipts
+as historical R5 evidence only. Its regenerated
 plan/pipeline bindings retain main's IndexSearchScan and additive route fields;
 sender and receiver route floors are now 112, with 110/111 refusal and 112
 acceptance regressions plus a mixed APPLY/route codec-admission control.
