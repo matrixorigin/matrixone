@@ -39,7 +39,7 @@ select id, match(body) against('beta gamma7') as sc from t1 where match(body) ag
 345  ¦  1.6763626  𝄀
 631  ¦  1.6763626  𝄀
 800  ¦  1.6763626  𝄀
-1255  ¦  1.6763626
+1086  ¦  1.6763626
 select id, match(body) against('beta gamma7') as sc from t8 where match(body) against('beta gamma7') order by sc desc, id limit 10;
 ➤ id[-5,64,0]  ¦  sc[7,5,0]  𝄀
 85  ¦  1.7980341  𝄀
@@ -51,7 +51,7 @@ select id, match(body) against('beta gamma7') as sc from t8 where match(body) ag
 345  ¦  1.6763626  𝄀
 631  ¦  1.6763626  𝄀
 800  ¦  1.6763626  𝄀
-1255  ¦  1.6763626
+1086  ¦  1.6763626
 select count(*) from t1 where match(body) against('alpha gamma7');
 ➤ count(*)[-5,64,0]  𝄀
 18

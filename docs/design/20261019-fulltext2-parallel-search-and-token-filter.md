@@ -3,8 +3,8 @@
 - Status: Review required
 - Tracking issue: [#30402](https://github.com/matrixorigin/matrixone/issues/30402)
 - Implementation PR: [#30618](https://github.com/matrixorigin/matrixone/pull/30618)
-- Design revision: 4
-- Last updated: 2026-10-21
+- Design revision: 5
+- Last updated: 2026-10-23
 
 ## Problem and intent
 
@@ -40,6 +40,11 @@ search and build paths:
    the next segment fills; the produced segments are byte-identical to a serial
    build.
 
+5. **Score-ordered LIMIT pushdown.** An explicit `ORDER BY <score> DESC LIMIT n`
+   over a MATCH query now bounds the index search to the top `LIMIT + OFFSET`
+   candidates, as the implicit relevance order already did, instead of streaming
+   every match into the sort. Its contract is below.
+
 None of the changes alters the segment on-disk format, the posting layout, the
 transaction protocol, or CDC/cron ownership of the asynchronously maintained
 index. All are off by default in behavior: parallel search and parallel build yield
@@ -56,7 +61,9 @@ peak result-memory and error/cancellation contract of the concurrent search; the
 across the build, CDC, and query paths; the maintenance (REINDEX, idxcron)
 behavior of a `token_filter` index; the query-time high-df term cutoff, its
 accepted result change, and its configuration lifetime; and the parallel build's
-identical-output, ordering, memory, transaction-ownership and failure contract.
+identical-output, ordering, memory, transaction-ownership and failure contract;
+and which explicit score orderings bound the index search, and the accepted
+index-lag limit of that bound.
 
 Out of scope: any posting/segment format or wire change; a positional (phrase)
 analyzer; non-`stop` filters (`synonym` and others are reserved names only);
@@ -380,6 +387,66 @@ value, so a mixed deployment returns the uncut result everywhere rather than a
 cut result on some nodes and an uncut one on others. Nothing is persisted: the
 setting never changes the index, so it can be turned off, or the feature reverted,
 at any time without migration.
+
+## Score-ordered LIMIT pushdown contract
+
+### Eligibility
+
+The search is bounded only when the ORDER BY is exactly one key, the MATCH score
+descending with default null placement, and the query has a LIMIT. A query with
+any other or additional ORDER BY key, with `SQL_CALC_FOUND_ROWS`, or with a filter,
+join or aggregate between the sort and the search that the bound cannot see
+through, is not bounded. The sort above the search always re-applies ORDER BY,
+LIMIT and OFFSET.
+
+### Secondary ORDER BY keys are not bounded (decision)
+
+Decided by @cpegeric, 2026-10-23 (PR #30618 review P1).
+
+`ORDER BY score DESC, k2 LIMIT n` is not bounded. With rows tied at the n-th score,
+`k2` decides which of them are returned, and the search ranks by score only, so a
+bounded search could drop the row SQL requires. The query runs unbounded and
+returns the exact result.
+
+To re-order the top n by another key with the bound, rank in a derived table and
+sort the page outside it:
+
+```sql
+SELECT * FROM (
+  SELECT id, MATCH(body) AGAINST('q') AS score FROM t
+  WHERE MATCH(body) AGAINST('q') ORDER BY score DESC LIMIT n
+) AS page ORDER BY id;
+```
+
+The inner query is bounded; which rows tied at its cutoff enter the page is
+unspecified, as for any score-only top n.
+
+Rejected alternatives: carrying the secondary key into the search (by primary key
+or INCLUDE column), or keeping every row tied at the cutoff through each segment,
+worker and merge. Both diverge from the vector indexes, which bound only a
+single distance key, and add tie handling to every top-k path.
+
+### Index lag (decision)
+
+Decided by @cpegeric, 2026-10-23 (PR #30618 review P2). Follow-up:
+[#30853](https://github.com/matrixorigin/matrixone/issues/30853).
+
+The bound counts candidates by the index's view of each document. While the
+asynchronous index lags the base table (briefly after a committed write, and always
+for the transaction's own uncommitted writes), a candidate whose current values fail
+the base-table recheck still takes one of the bounded slots, so the query can return
+fewer than `n` rows. On the base-table join path, predicates evaluated in the index
+are re-checked on current values, so the result is short but holds no wrong rows.
+Before this PR an explicit score ordering on that path was unbounded and did not
+come up short; the bound extends the short-result case to it.
+
+The cause is the general index-freshness problem, present on main for every
+FULLTEXT2 search (a covered search, answered from the index alone, can also return
+stale rows while the index lags). It is tracked as
+[#30853](https://github.com/matrixorigin/matrixone/issues/30853). The fix is a
+freshness check that searches the index only when it reflects every row the read
+can see, and otherwise falls back to an exact scan; it belongs there, not in this
+pushdown's eligibility rule.
 
 ## Source fan-out and resource bounds
 
