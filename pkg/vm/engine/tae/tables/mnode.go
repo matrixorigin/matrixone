@@ -395,6 +395,9 @@ func (node *memoryNode) Scan(
 		maxRow,
 		mp,
 	)
+	if err != nil {
+		return err
+	}
 	for _, idx := range colIdxes {
 		if idx == objectio.SEQNUM_COMMITTS {
 			node.object.appendMVCC.FillInCommitTSVecLocked(

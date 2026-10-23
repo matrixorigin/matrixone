@@ -17,6 +17,7 @@
 package tables
 
 import (
+	"fmt"
 	pkgcatalog "github.com/matrixorigin/matrixone/pkg/catalog"
 	"github.com/matrixorigin/matrixone/pkg/common/mpool"
 	"github.com/matrixorigin/matrixone/pkg/container/types"
@@ -25,6 +26,8 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/catalog"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/containers"
 	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/db/dbutils"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/tables/updates"
+	"github.com/matrixorigin/matrixone/pkg/vm/engine/tae/txn/txnbase"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
@@ -68,7 +71,35 @@ func TestM0BirthMemoryNodePreservesFillAndAppends(t *testing.T) {
 	out.Close()
 	out = nil
 	write.Version = 1
-	require.Error(t, node.getDataWindowLocked(&out, read, []int{3}, 0, 2, mp))
+	proofErr := node.getDataWindowLocked(&out, read, []int{3}, 0, 2, mp)
+	require.Error(t, proofErr)
 	require.Nil(t, out, "invalid new batch is rejected before output allocation")
 	require.Equal(t, uint16(objectio.SEQNUM_ROWID), write.PhyAddrKey.SeqNum)
+
+	mvcc := updates.NewAppendMVCCHandle(nil)
+	mvcc.OnReplayAppendNode(updates.MockAppendNode(types.BuildTS(1, 0), 0, 2, mvcc))
+	node.object.RWMutex = mvcc.RWMutex
+	node.object.appendMVCC = mvcc
+	reader := txnbase.MockTxnReaderWithStartTS(types.BuildTS(2, 0))
+	for _, existing := range []bool{false, true} {
+		t.Run(fmt.Sprintf("scan_rejects_invalid_prefix/existing_output=%t", existing), func(t *testing.T) {
+			var scanned *containers.Batch
+			if existing {
+				scanned = containers.BuildBatch([]string{"flag", objectio.TombstoneAttr_CommitTs_Attr},
+					[]types.Type{types.T_bool.ToType(), types.T_TS.ToType()}, containers.Options{Allocator: mp})
+				defer scanned.Close()
+				scanned.Vecs[0].Append(true, false)
+				scanned.Vecs[1].Append(types.BuildTS(9, 0), false)
+			}
+			err := node.Scan(t.Context(), &scanned, reader, read, 0, []int{3, objectio.SEQNUM_COMMITTS}, mp)
+			require.EqualError(t, err, proofErr.Error(), "Scan must preserve the captured-prefix error")
+			if existing {
+				require.Equal(t, 1, scanned.Length(), "a rejected scan must not extend caller output")
+				require.Equal(t, true, scanned.Vecs[0].Get(0))
+				require.Equal(t, types.BuildTS(9, 0), scanned.Vecs[1].Get(0))
+			} else {
+				require.Nil(t, scanned, "a rejected scan must not allocate output")
+			}
+		})
+	}
 }
