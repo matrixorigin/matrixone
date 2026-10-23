@@ -1,6 +1,9 @@
 # MatrixOne Probe Ledger
 
-Append-only; never rewrite historical rows. To correct an old conclusion, add a new row noting "corrects row N". Dates in `Asia/Shanghai (UTC+8)`. Format per `defect-hunt/SKILL.md` §8.
+Optional cross-round evidence index. One-off probes can keep evidence in their
+task record. Append useful results; do not rewrite historical rows. Correct an
+old conclusion by citing its area, tested form, build, and date in a new row.
+“No defect observed” applies only to the recorded inputs and configuration.
 
-| Area | Tested form | Conclusion | Evidence | Build version | Date (UTC+8) |
+| Area / scope | Tested form | Conclusion / uncertainty | Raw evidence / issue | Build / configuration | Date with timezone |
 |---|---|---|---|---|---|

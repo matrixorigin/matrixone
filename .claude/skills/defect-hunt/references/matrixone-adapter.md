@@ -1,79 +1,114 @@
 # MatrixOne Adapter
 
-Corresponds to the core method in `defect-hunt/SKILL.md`. This file is allowed to rot: conclusions carry dates and sources; re-verify before retesting.
+Use only the sections needed for the current probe. This adapter supplies project
+entry points and durable decisions; it does not prescribe a full test campaign.
 
-## Instance
+## Instance and connection, when executing SQL
+
+Reuse a known test instance when suitable. Record its actual build/version,
+configuration, and topology; the checkout's HEAD alone does not identify a running
+binary. If startup is needed, use an isolated launch configuration based on
+`etc/launch/launch.toml` and its CN/TN/log configs, with test-owned storage paths
+and nonconflicting ports. Follow the existing
+[build guidance](../../mo-dev/references/cgo-build-test.md) if a build is needed.
 
 ```bash
-cd <repo> && ./mo-service -launch /tmp/<dir>/launch.toml     # 1 CN / 1 TN / 1 LOG standalone
-mysql -h127.0.0.1 -P16001 -udump -p111 -D <db>
+# MO_LAUNCH_CONFIG is the prepared, isolated launch config, not a generated default.
+./mo-service -launch "$MO_LAUNCH_CONFIG"
 ```
 
-Config: `cn.toml` / `tn.toml` / `log.toml`; `[cn.frontend] port` sets the connection port; `data-dir` isolates instances. Toggle `enable-auto-id-cache` for counter-style A/B tests.
+Use the frontend port from that configuration as `MO_PORT`. Run a no-database
+`SELECT VERSION(), 1` connection check before selecting or creating a probe
+schema. Reuse existing readiness evidence when it is still valid. Change
+`enable-auto-id-cache` only for a probe that actually needs that comparison.
 
-## Where the five-question trace lands
+## Source entry points, when tracing
 
 | Layer | Path |
 |---|---|
-| Syntax | `pkg/sql/parsers/dialect/mysql/mysql_sql.y` (productions are authoritative) |
+| Syntax | `pkg/sql/parsers/dialect/mysql/mysql_sql.y` |
 | AST | `pkg/sql/parsers/tree/*.go` |
 | Plan/catalog structure | `pkg/sql/plan/build_*.go` -> `pkg/pb/plan/plan.pb.go` |
 | Execution | `pkg/sql/colexec/*`, `pkg/sql/compile/*`, `pkg/frontend/*` |
 | Introspection | `information_schema.*`, `SHOW CREATE TABLE/VIEW/INDEX` |
 
-Reader counting:
+Search a field and its accessors with `rg -n '<field-or-accessor>' pkg/`, then
+follow transformations and consumers. Generated serialization/getter code may
+be part of that path; a reader count alone is not a behavioral verdict.
 
-```bash
-grep -rn "<ProtoField>" pkg/ --include=*.go | grep -v _test | grep -v pb/plan
-```
+## Optional SQL probe helper
 
-## Battery skeleton
+For independent SQL cases, this example stores complete raw streams on disk and
+prints their locations. SQL that depends on session state belongs in one call;
+use persistent connections for interactive or multi-session experiments.
+Set `MO_PORT` to the chosen instance's port. The helper uses TCP and ignores
+client option/login files so implicit databases, init commands, or local sockets
+cannot redirect the probe. The user/password defaults below are for a local
+test instance; pass any additional connection options explicitly. Keep the
+resulting evidence directory local.
 
 ```python
-import os, subprocess
-BASE = ['mysql','-h'+os.environ.get('MO_HOST','127.0.0.1'),
-        '-P'+os.environ.get('MO_PORT','16001'),
-        '-u'+os.environ.get('MO_USER','dump'), '-p'+os.environ.get('MO_PASS','111'),
-        '-N','--raw','-D', os.environ.get('MO_DB','probe')]
-def show(name, sql, timeout=120):
-    p = subprocess.run(BASE+['-e',sql], capture_output=True, text=True, timeout=timeout)
-    out = ' // '.join(p.stdout.strip().splitlines())[:400]
-    err = ' '.join(p.stderr.replace('mysql: [Warning] Using a password on the command line interface can be insecure.','').splitlines())[:250]
-    print(f"CASE {name}\n  rc={p.returncode} out=[{out}] err=[{err}]", flush=True)
+import json
+import os
+from pathlib import Path
+import subprocess
+import tempfile
+
+BASE = ['mysql', '--no-defaults', '--no-login-paths', '--protocol=TCP',
+        '-h', os.environ.get('MO_HOST', '127.0.0.1'),
+        '-P', os.environ['MO_PORT'],
+        '-u', os.environ.get('MO_USER', 'dump'),
+        '--password=' + os.environ.get('MO_PASS', '111'), '-N', '--raw']
+EVIDENCE = Path(tempfile.mkdtemp(prefix='mo-defect-hunt-'))
+
+def show(name, sql, db=None, timeout=120):
+    case = Path(tempfile.mkdtemp(prefix='case-', dir=EVIDENCE))
+    (case / 'query.sql').write_text(sql, encoding='utf-8')
+    result = {'case': name, 'database': db, 'timeout_seconds': timeout,
+              'status': 'exited', 'rc': None, 'evidence': str(case)}
+    command = BASE + (['-D', db] if db is not None else []) + ['-e', sql]
+    try:
+        with (case / 'stdout').open('wb') as out, (case / 'stderr').open('wb') as err:
+            p = subprocess.run(command, stdout=out, stderr=err, timeout=timeout)
+            result['rc'] = p.returncode
+    except subprocess.TimeoutExpired:
+        result['status'] = 'timeout'
+    except OSError as exc:
+        result.update(status='launch-error', error=str(exc))
+    (case / 'result.json').write_text(json.dumps(result) + '\n', encoding='utf-8')
+    print(json.dumps(result), flush=True)
+    return result
 ```
 
-`--raw` is mandatory (otherwise batch output escapes newlines as `\n`); one process per case; reset with `DROP DATABASE IF EXISTS` first.
+`show("ready", "SELECT VERSION(), 1")` does not select a possibly nonexistent
+database. For stateful cases, create and clean only the schema owned by the
+probe. `status=exited` describes client completion, not whether an assertion
+passed; inspect `rc` and the raw streams. Timeout preserves partial output and
+terminates the local client; it does not establish server cancellation. Inspect
+server work before retrying. Preserve binary/text boundaries in comparisons;
+choose explicit SQL predicates when client rendering is ambiguous.
 
-## Dedup
+## Issue search and policy, when preparing an issue
 
 ```bash
-gh issue list --repo matrixorigin/matrixone --state all --search "<phrase>" --limit 5 --json number,title,state
-gh issue view <n> --repo matrixorigin/matrixone --json state,stateReason,labels
+gh issue list --repo matrixorigin/matrixone --state all --search "<phrase>" --limit 100 --json number,title,state,url
+gh issue view <n> --repo matrixorigin/matrixone --json state,stateReason,labels,body,comments,closedByPullRequestsReferences
 ```
 
-Metadata convention: `kind/bug`, assignee `matrix-meow` (details in `mo-bug-triage`).
+Narrow or paginate if results hit the limit. Read the discussion and linked fix
+before classifying a closed issue. Use the repository's
+`.github/ISSUE_TEMPLATE/bug_report.yml` and
+[mo-bug-triage](../../mo-bug-triage/SKILL.md) for intake/label policy; the template
+currently specifies `kind/bug`, `needs-triage`, and assignee `matrix-meow`.
+Only perform writes covered by the user's authorization.
 
-## Ledger
+## Prior evidence and decisions
 
-`references/matrixone-ledger.md`, append-only; read before probing. Dates in `Asia/Shanghai (UTC+8)`.
-
-## Known "by design" (with sources)
+The [probe ledger](matrixone-ledger.md) supports cross-round reuse; append only
+when there is useful evidence to retain. Dates include timezone, normally
+`Asia/Shanghai (UTC+8)`. Record per-task exclusions in the campaign record. No
+subsystem, including partitioned tables, is excluded by this adapter.
 
 | Behavior | Ruling | Source | Date recorded (UTC+8) |
 |---|---|---|---|
-| `INVISIBLE` indexes still participate in path selection (metadata marker only) | Intentional | Maintainer reply; related issue closed as NOT_PLANNED | 2026-10-23 |
-
-Partitioned-table behaviors are out of probing scope per review request (not "verified" — "agreed not to test").
-
-## Worked examples (showing where the breakpoint lands)
-
-| Issue | Class / breakpoint form | Breakpoint |
-|---|---|---|
-| #30898 | Metadata/behavior divergence | rename path has no viewdef rewrite |
-| #30900 | Accepted but no-op | statement classified, no executor |
-| #30905 | Silently dropped | index structure has column names only, no direction field |
-| #30906 | Partially effective | not-null check ignores the IGNORE mode parameter |
-| #30909 | Produced but never consumed | read-only txn marker has zero consumers |
-| #30915 | Silent relaxation (fail-open) | privilege structure has no column list field -> widened to whole table |
-
-This table only illustrates breakpoint shapes, **not a covered list**; re-confirm status per §6 each round.
+| `INVISIBLE` indexes still participate in path selection | Intentional metadata-only behavior; verify the ruling's scope if the contract changes | [Maintainer clarification on #26862](https://github.com/matrixorigin/matrixone/issues/26862#issuecomment-6356340741) | 2026-10-23 |

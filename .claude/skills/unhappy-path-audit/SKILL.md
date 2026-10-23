@@ -7,7 +7,10 @@ description: Full-codebase MatrixOne unhappy-path audit for leak, double cleanup
 
 ## Scope
 
-This skill covers only resources/waits/accumulation (Q1–Q3). Behavioral defects (accepted but no-op, silent failure, partial effect, compatibility drift) belong to `defect-hunt`; combine them this way: lifecycle suspicions surfaced by behavioral experiments come back here for localization.
+This skill covers resources/waits/accumulation (Q1–Q3). For a behavioral probe
+(accepted but no-op, partial effect, compatibility drift), use
+[`defect-hunt`](../defect-hunt/SKILL.md) as needed. Either skill can be used alone;
+bring a behavioral finding here only when it requires ownership or wait analysis.
 
 ## Core Logic (First Principles)
 

@@ -1,201 +1,142 @@
 ---
 name: defect-hunt
-description: Find NEW, evidence-grade defects in a data/query system (SQL engines, storage layers, protocol frontends) by combining white-box "produced but never consumed" tracing with black-box disposition, invariant, A/B-equivalence and degenerate-argument batteries; includes a falsification gate that removes false positives before filing, a duplicate-first issue protocol with regression/design triage, and round economics (when to stop, when the yield has decayed). Use when asked to QA a build, hunt bugs on rarely exercised surface, verify compatibility against a reference implementation, or when earlier rounds produced duplicates or doubtful findings.
+description: Explore behavioral defects in data/query systems through focused source tracing or executable probes. Use for defect hunting, QA exploration, and compatibility investigation; choose only the methods needed for the requested question.
 metadata:
   workflow: defect-hunt
   language: agnostic
 ---
 
-Applicability: the target system **already runs** (has a local instance), **source is readable**, and **an issue tracker exists**.
-Not applicable: performance conclusions (require controlled benchmarks; this method explicitly produces none); resource-leak/concurrency/lifecycle deep dives (use `unhappy-path-audit`'s ownership/wait-for audit; this method stays at the behavioral layer).
+# Defect Hunt
 
-Core stance: **a pasteable command + raw output + breakpoint location** is what counts as a finding. Everything else is a hypothesis.
+Find useful defect candidates and distinguish observations from confirmed failures.
+**A single source trace or SQL probe is a complete valid use of this skill.**
+White-box tracing, black-box probes, reference comparisons, ledgers, and issue
+filing are tools to choose from, not a required sequence.
 
----
+## Choose the scope
 
-# 1. Four gates before filing
+Use the user's question and existing evidence to select the smallest useful task:
 
-A defect stands only if all four hold:
-
-| Gate | Requirement | If not met |
+| Request | Work | Deliverable |
 |---|---|---|
-| G1 Reproducible | One command, a clean starting point (e.g., new database/table or a fresh data directory), raw output | Do not file |
-| G2 Decidable | Reference semantics (spec / another implementation) **or** an internal contradiction (two things that must agree, don't) | Downgrade to "observation"; do not file |
-| G3 Non-duplicate | Searched per §6 | Comment with additional evidence instead |
-| G4 Located | Can point to the layer where it breaks; if not, say "behavioral evidence only" and rate low | Severity must not exceed low |
+| Explore / probe / look for defects | Inspect one suspect path or run focused inputs; expand only when the result warrants it | Candidates or observed behavior, evidence, and uncertainty |
+| Confirm a candidate | Resolve the specific uncertainty with an executable counterexample, source trace, or comparison | Confirmed failure or a bounded cannot-reproduce/by-design conclusion |
+| File or update issues | Reuse valid evidence, check duplicates and current issue state, then perform authorized writes | Issue links and supporting evidence |
 
-Corollary: **without G2 there is no defect**, only "different from my expectation". Expectations must state their source.
+Default to exploration when the user only asks to hunt defects. Do not require a
+running instance for source-only work, source access for black-box work, or an
+issue tracker for local probing. State what the available evidence cannot prove.
+Do not expand a targeted request into a whole-system campaign.
 
----
+For MatrixOne, use the relevant sections of the
+[adapter](references/matrixone-adapter.md). Consult the
+[ledger](references/matrixone-ledger.md) when reusing prior MatrixOne findings or
+continuing a campaign. A one-off probe needs neither a ledger update nor an issue.
 
-# 2. Defect typology (eight classes)
+Resource ownership, waits, and retained-memory questions belong to
+`unhappy-path-audit`; hand off when the observed path needs that analysis. A
+functional probe does not establish a performance conclusion; use controlled
+benchmarks when performance is part of the request.
 
-Classify first, then design the experiment. Each class has a discriminating question; if you cannot answer it, you have not thought it through.
+## Choose a method
 
-| # | Class | Discriminating question | Minimal experiment | Expected evidence |
-|---|---|---|---|---|
-| 1 | **Accepted but no-op** | Statement returns success — did any state change? | Inspect persistent state/metadata immediately after | OK returned, state unchanged |
-| 2 | **Produced but never consumed** | Who reads this value? | Repo-wide count of field readers | Zero readers, or only the rendering layer |
-| 3 | **Partially effective** | Do all checkpoints look at the same switch? | Trigger each failure face of one statement (duplicate / null / out-of-range) | One face is ignored |
-| 4 | **Silent relaxation** (fail-open) | On failure, does it grant more or less? | Constraint / permission / quota scenarios | Restriction silently widened |
-| 5 | **Silent narrowing** (fail-closed) | Does it also reject what it should allow? | Positive case with legal input | Legal input rejected |
-| 6 | **Metadata/behavior divergence** | What does the catalog say vs what actually happens | Query introspection view + actual behavior | They contradict |
-| 7 | **Asymmetric pair** | Write→read, create→drop, upgrade→downgrade — do both directions hold? | Do each, then cross-check | Only one direction works |
-| 8 | **Reference drift** | Do defaults / error codes / formats match the reference? | Compare only where the reference is explicitly defined | Explicit deviation |
+### Trace a suspicious value
 
-Priority (default, adjustable by impact): 4 > 1/2/3 > 6/7 > 5 > 8. Default severity: class 4 (data/permission amplification) → high; 2/3 (silent failure / partial effect) → medium. **Not a hard rule**: 5 (fail-closed rejecting legal input) can reach high in availability/migration-blocking scenarios, and 8 (reference drift) in compatibility work — severity follows impact, not class. These defaults presuppose G4 is met (layer located); behavior-only evidence is always capped at low by G4.
-
----
-
-# 3. White-box: five-question trace
-
-For each suspicious property, ask level by level; every level must name a reader:
+Follow the actual entry point through its semantic owner:
 
 ```
-1 Accepted?    Does the syntax/entry layer recognize this clause/parameter
-2 Stored?      Is there a corresponding field in the intermediate representation (AST/IR)
-3 Propagated?  Does it reach the plan/catalog structure (does the serialized structure carry it)
-4 Consumed?    Is there a branch on the execution path that actually uses it
-5 Reflected?   Is it visible through introspection (SQL example: SHOW / information_schema / status)
+accepted -> represented or normalized -> propagated -> consumed -> observable effect
 ```
 
-Criteria:
+Look for accepted-but-ineffective options, partial enforcement, widened
+permissions/constraints, metadata/behavior disagreement, or asymmetric operations.
+Field-reader searches help locate candidates; they do not prove absence of
+behavior. Follow lowering, renamed fields, generated accessors, serialization,
+and indirect consumers before concluding that a value is dropped. Rendering-only
+metadata may be intentional; check the relevant contract or design decision.
 
-- **Fields at 2/3, zero readers at 4** → silent no-op (the classic "produced but never consumed").
-- **No field at 2** → silently dropped (syntax accepted, semantics evaporated).
-- **4 exists but bypasses a mode parameter** → partially effective.
-- **5 visible, 4 absent** → metadata/behavior divergence.
+### Run a focused probe
 
-Counter-example protection: **if only introspection reads it, it may be a deliberate "marker-style" design**. When the sole reader is a display/rendering layer, check the decision record (issue status / design doc) before calling it a defect.
+Choose the experiment that can answer the question:
 
----
-
-# 4. Black-box: four batteries + control branch
-
-| Battery | Answers | Design notes |
-|---|---|---|
-| **Disposition matrix** | What accepted inputs actually do | Classify each input: truly executed / no-op / clean rejection / fake rejection ("format error" masking "unimplemented") |
-| **Invariants** | Falsify without a reference | Empty-set semantics, commutativity/associativity, inverse-order reversibility, row-count conservation, sequence consistency, idempotency |
-| **A/B equivalence** | Two paths must agree | Literal vs parameterized, index vs full scan, before vs after restart, default vs explicit config |
-| **Degenerate arguments** | Illegal/boundary inputs must error | 0, negative, NULL, extreme values, empty string, overlong, type mismatch |
-
-**A control branch is mandatory**: for every "should have happened but didn't" experiment, include a branch showing "what I would see if it worked". No control = empty test (the largest false-positive source in this method's history: the subject may never have executed at all).
-
-Experiment discipline:
-
-- One process/connection per case; print `rc` + output + error separately; never chain with `&&`.
-- Clean start every round: reset to an empty state (SQL example: `DROP DATABASE IF EXISTS`).
-- For multi-session tests, make the holder print that it really executed (write/commit); otherwise the reader's stale value means nothing.
-
----
-
-# 5. Falsification gate (walk through before filing)
-
-| # | Trap | Self-check |
-|---|---|---|
-| 1 | **Tool/harness itself** | Connection parameters, database selection, timeouts, client short-option spelling |
-| 2 | **Misremembered reference semantics** | Does my claimed "standard behavior" have a source, or is it memory? |
-| 3 | **Empty test** | Is there a control branch proving the subject executed? |
-| 4 | **Scope pollution** | Do same-named objects across scopes (database/namespace/session/account) affect the result? |
-| 5 | **Caching and preallocation** | Are counters/statistics/plan caches affected by prefetch? A/B with the switch off |
-| 6 | **Output truncation/escaping** | Am I seeing partial output? Are newlines/tabs escaped? |
-| 7 | **Design vs defect** | What is the issue status for this behavior? Has a maintainer adjudicated it? |
-| 8 | **Wrong facts about the target's grammar/entry layer** | Before claiming "unsupported": did I read the production/route table, or just try once? |
-
-Any hit → go back and fix the experiment; do not file.
-
----
-
-# 6. Deduplication and triage
-
-Search ladder (at least 3 different phrasings):
-
-```
-<feature phrase> -> <verbatim error fragment> -> <field/view column name> -> <behavior phrasing>
-```
-
-Decision tree:
-
-| Match | Action |
+| Method | Useful comparison |
 |---|---|
-| None | File new |
-| Same root cause and OPEN | Comment with evidence (attach the matrix); do not file |
-| Same root cause, CLOSED/FIXED, still reproduces | **Regression**: reopen and state build + evidence |
-| CLOSED/NOT-PLANNED or already ruled a design decision | Leave it; if you misfiled, roll back immediately with a note |
+| Disposition | Success/rejection versus actual state or metadata |
+| Invariant | A contract that must hold for the selected inputs |
+| Equivalent paths | Literal/parameter, index/scan, restart, or default/explicit setting when their semantics must agree |
+| Boundary input | Zero, negative, NULL, empty, extreme, or mismatched types against their defined behavior; these inputs are not inherently errors |
 
-Key distinction: **"the code looks like it is missing something" != "defect"**. Maintainers' adjudication of a behavior outranks code shape.
+Use a positive/control case when needed to show that the path actually executed
+or to distinguish competing explanations. Do not require a separate control
+when the result itself establishes reachability and the violated contract.
+Use only the fixtures, sessions, topology, and data needed for this question.
+Keep session state within a case; multi-session scenarios must establish the
+required ordering. Reset only test-owned state and arrange cleanup on failure.
 
----
+Preserve the exact command/SQL, build/configuration, exit status, and complete
+stdout/stderr. Previews must point to the raw evidence. On timeout, preserve
+partial output and distinguish client timeout from a proven server hang; check
+for surviving server work before retrying or starting a conflicting probe.
 
-# 7. Economics: yield curve, stop-loss, timebox
+## Calibrate the conclusion
 
-The numbers are **adjustable defaults**, calibrated per project; the direction (switch surface > double down in the same area) is hard.
+Before calling something a confirmed defect, establish:
 
-- **Yield curve**: the first round on a new surface yields most; decays sharply after ~3–4 rounds; later rounds mostly produce "confirmed it is correct". That is normal, not failure.
-- **False-positive rate**: above ~30% means §5 was not executed — fix the process before hunting more. One false positive costs ~one filing (plus the maintainer's time correcting you).
-- **Stop-loss**: 2 consecutive rounds with zero new defects → switch surface (change subsystem/layer: black-box → white-box). Do not keep escalating in the same area.
-- **Timebox**: single probe round <= 90 min, attribution <= 30 min. Overrunning means the target is too big — split it.
-- **Conservation of output**: every round must land in one of three buckets — a new defect, a "confirmed correct" ledger row, or a narrower hypothesis. None of those = spinning.
-- **Shutdown**: after 2 surface switches with zero yield, or a persistently >30% false-positive rate → stop the campaign and deliver a ledger report (tested coverage + open hypotheses).
+- **Observed failure:** an executed, repeatable case with a defined starting
+  state, or a complete source proof of a reachable contract violation. Label
+  source-only findings explicitly; do not claim they were reproduced.
+- **Expected behavior:** a relevant specification/design contract, verified
+  reference behavior, or an internal contradiction. Reference differences alone
+  do not establish a compatibility promise.
+- **Alternative explanations:** resolve the relevant harness, session/scope,
+  caching, output-loss, or design uncertainty. Check those implicated by the
+  evidence; a fixed battery is not required.
 
----
+If evidence is incomplete, keep the candidate and name the missing proof. Do
+not turn it into either a confirmed bug or a claim that the feature is correct.
+Record localization separately: file/line or failing layer if known; otherwise
+“behavioral evidence only.” **Severity follows demonstrated impact, not how far
+the source investigation progressed.** An unlocalized but proven data loss or
+permission violation is not automatically low severity.
 
-# 8. Artifacts
+## Issue disposition, only when needed
 
-**Ledger** (the sole vehicle for cross-round reuse and deduplication):
+Before filing, commenting, or reopening, check that the user's current task or
+prior authorization covers that write. Reuse existing authorization; otherwise
+deliver the finding locally. A request to explore does not itself authorize
+external issue mutations.
 
-- Location: `references/<project>-ledger.md` (same directory as the adapter; never inside the core file)
-- Append-only; never rewrite historical rows; to correct an old conclusion, add a new row noting "corrects row N"
-- Row format (dates include timezone):
+Search open and closed issues using the feature, exact error, affected field,
+and behavior as relevant; inspect likely matches and their full discussion.
+Widen the search when results are inconclusive rather than treating a short
+result list as proof of no duplicate.
 
-```
-area | tested form | conclusion (correct / defect / by design) | evidence (command or issue) | build version | date (with timezone)
-```
-
-If no ledger exists, create it; read it before probing, or your first round will duplicate something.
-
-Boundary between the two stores: maintainer-adjudicated facts (external source) go in the adapter's "known by design" table; conclusions from your own tests go in the ledger. If a test merely confirms an adjudicated decision, record the test in the ledger and cite the adapter row — never duplicate the ruling itself.
-
-**Issue template, eight sections** (incomplete = rejected):
-
-1. One-sentence symptom + direction (fail-open / fail-closed)
-2. Pasteable reproduction (including schema/bootstrap setup, e.g. `CREATE TABLE`, and a clean starting point)
-3. Actual vs expected comparison table
-4. Metadata/catalog evidence (introspection view, DDL/structure echo)
-5. Localization (file:line, or "breaks at layer N"; if impossible, state behavioral evidence only)
-6. Impact (who hits it, in what scenario)
-7. Expected behavior (implement it, or reject it explicitly — pick one)
-8. Version (build/commit + platform), related issues
-
----
-
-# Appendix A: Instantiation checklist (for checking; answers go only into the adapter)
-
-| Item | Acceptance criterion |
+| Evidence | Disposition |
 |---|---|
-| Instance startup command | One command starts an instance from zero, including data-directory isolation |
-| Connection | Port/credentials/client, plus a connectivity self-check |
-| Syntax layer path | The most authoritative productions or route table (not documentation) |
-| Intermediate representation path | AST/IR/serialized structure definitions |
-| Execution layer path | The directory holding the branches that actually consume the property |
-| Introspection views | show/information_schema/status etc. reflecting the state above |
-| Issue tracker commands | One pasteable search command (with state filter) |
-| Known "by design" list | Every entry carries source and date (goes into the adapter, not this file) |
+| No matching defect after search | Prepare/file a new issue within the authorized scope |
+| Same root cause and affected behavior, OPEN | Add useful new evidence to the existing issue; avoid duplicate comments |
+| CLOSED/FIXED, tested build lacks the fix | Record the affected version and fixing commit; do not claim regression |
+| CLOSED/FIXED, tested build includes the fix but still fails | Check the fix's scope; report an incomplete fix or unresolved failure unless a known-good boundary proves regression |
+| Same case passes on a verified fixed build and fails on a later build under equivalent conditions | Report regression with both versions and evidence; reopen if authorized |
+| CLOSED/NOT-PLANNED | Read the reason: deferred work is not proof of correctness; respect a design ruling within its stated scope |
 
-All eight items must live in `references/<project>-adapter.md` before probing starts; otherwise the next agent pays for the same mistakes.
+Use the repository's issue template and triage policy rather than inventing a
+second label/severity workflow. Include reproduction or source proof, actual vs
+expected, impact, version/configuration, and relevant related issues. Add catalog
+or localization evidence when it supports the claim, not as ceremonial sections.
 
-# Appendix B: Failure ledger (generic, paid for in real mistakes)
+## Stop and retain useful evidence
 
-| Misjudgment | Truth | Crystallized check |
-|---|---|---|
-| Claimed "X unsupported" | I got the clause order wrong | Read the grammar productions before claiming unsupported |
-| Saw "duplicate rows" | Same-named objects across databases + only the first row printed | Query with scope predicates; print everything |
-| Counter value looked wrong | Preallocation/cache upper bound | A/B with the switch off |
-| "Feature missing" | Parameter spelling / keyword duplication | Align with the reference implementation's minimal example |
-| "Constraint was relaxed" / constraint rebuild error | Still enforced across partitions; the reference implementation is database-level unique | Accepting DDL != relaxing semantics; align the reference before asserting |
-| Isolation "passed" | Holder never wrote (empty test) | Commit control is mandatory |
-| Rated a design as a defect | Maintainer had already adjudicated | Check the status before reading the code |
+Stop a focused probe when its question is answered or the remaining uncertainty
+requires unavailable evidence. For an open-ended campaign, use the user's budget
+or state a reasonable initial budget; switch surfaces when additional probes no
+longer distinguish hypotheses. Do not widen a user-specified scope just to
+produce more findings.
 
-# Appendix C: Project adaptation
-
-Project specifics (paths, startup, dedup commands, list of behaviors ruled by design) go into `references/<project>-adapter.md`; the ledger goes into `references/<project>-ledger.md`; maintained apart from this file: the core stays portable, the adapter and ledger are allowed to rot.
+Return the observations/candidates, the evidence that supports them, and any
+remaining uncertainty. “No defect observed in these cases” is narrower than
+“confirmed correct.” If cross-round reuse is useful, append a ledger row with
+scope, conclusion, raw evidence location, build/configuration, and date/timezone.
+Correct historical conclusions with a new row. Keep task-specific exclusions in
+that campaign's record, not in the permanent project adapter. Revalidate old
+conclusions when their relevant code, configuration, or contract changes.
