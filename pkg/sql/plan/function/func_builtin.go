@@ -560,6 +560,51 @@ func geometryShowColumnType(typ *types.Type) string {
 	return ts
 }
 
+// columnDefaultValue renders a stored default for information_schema.COLUMNS:
+// DEFAULT NULL is SQL NULL and a string literal is its value, like MySQL.
+// Other defaults keep their origin text.
+func columnDefaultValue(origin string) []byte {
+	if strings.EqualFold(origin, "null") {
+		return nil
+	}
+	n := len(origin)
+	if n < 2 || origin[0] != '\'' || origin[n-1] != '\'' {
+		return functionUtil.QuickStrToBytes(origin)
+	}
+	// Decode the literal the way the MySQL scanner does.
+	buf := make([]byte, 0, n-2)
+	for i := 1; i < n-1; i++ {
+		ch := origin[i]
+		switch {
+		case ch == '\'' && i+1 < n-1 && origin[i+1] == '\'':
+			i++
+		case ch == '\'':
+			// Not a single literal, e.g. 'a' 'b'.
+			return functionUtil.QuickStrToBytes(origin)
+		case ch == '\\' && i+1 < n-1:
+			i++
+			switch ch = origin[i]; ch {
+			case 'n':
+				ch = '\n'
+			case '0':
+				ch = 0
+			case 'b':
+				ch = 8
+			case 'Z':
+				ch = 26
+			case 'r':
+				ch = '\r'
+			case 't':
+				ch = '\t'
+			case '%', '_':
+				buf = append(buf, '\\')
+			}
+		}
+		buf = append(buf, ch)
+	}
+	return buf
+}
+
 func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	p1 := vector.GenerateFunctionStrParameter(parameters[0])
 	p2 := vector.GenerateFunctionFixedTypeParameter[uint8](parameters[1])
@@ -591,7 +636,7 @@ func builtInMoShowVisibleBin(parameters []*vector.Vector, result vector.Function
 			if err != nil {
 				return nil, err
 			}
-			return functionUtil.QuickStrToBytes(def.OriginString), nil
+			return columnDefaultValue(def.OriginString), nil
 		}
 	case typNormal:
 		f = func(s []byte) ([]byte, error) {
