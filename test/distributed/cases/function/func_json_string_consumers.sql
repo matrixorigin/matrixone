@@ -86,7 +86,7 @@ select (select group_concat(j) from opaque_stored) = (select concat('',j) from o
 select json_schema_valid('{"type":"string","maxLength":95}',j) as rejects_compact_length, json_schema_valid('{"type":"string","maxLength":96}',j) as accepts_visible_length from opaque_stored;
 
 -- Remaining functions reported in issue #28905 consume JSON visible text
--- through the same value-preserving cast used by explicit CAST(js AS CHAR).
+-- using the common visible-JSON serializer, not the assignment cast path.
 create table remaining(id int primary key, js json, bits bigint);
 insert into remaining values
     (1, '{"b":2,"a":1}', 256),
@@ -116,4 +116,24 @@ execute remaining_hash_stmt using @json_param, @json_param, @json_param;
 set @json_param = null;
 execute remaining_hash_stmt using @json_param, @json_param, @json_param;
 deallocate prepare remaining_hash_stmt;
+
+-- Escaped JSON string consumers must see the six visible JSON bytes, including
+-- the backslash escape, rather than the decoded string payload.
+create table remaining_escaped(js json);
+-- Text literals keep CAST on its document-parsing path; CHAR() is binary.
+insert into remaining_escaped values (cast('"a\\nb"' as json));
+select json_type(js) = 'STRING' as escaped_string_type_ok, hex(json_unquote(js)) = '610A62' as escaped_payload_ok from remaining_escaped;
+select md5(js) = 'd665f714215a80776250f430c42864d1' as escaped_md5_ok, sha1(js) = '3e10cf070236090738d5b82cc1df9ef2bbddda46' as escaped_sha1_ok, sha2(js,256) = '8cb67f89f9ff0e25bb064da96907151d8e0eb7a5c0d4cde1b72ad1c9a30c065e' as escaped_sha2_ok, sha2(js,'256tail') = '8cb67f89f9ff0e25bb064da96907151d8e0eb7a5c0d4cde1b72ad1c9a30c065e' as escaped_sha2_dynamic_ok, uncompress(compress(js)) = concat(char(34),'a',char(92),'nb',char(34)) as escaped_compress_ok, quote(js) = concat(char(39),char(34),'a',char(92),char(92),'nb',char(34),char(39)) as escaped_quote_ok, soundex(js) = 'A510' as escaped_soundex_ok from remaining_escaped;
+
+-- 65,540 visible JSON bytes exceed VARCHAR(65535); each consumer must receive
+-- the full value rather than an implicitly truncated cast.
+create table remaining_wide(js json);
+insert into remaining_wide select cast(concat('["',repeat('a',65536),'"]') as json);
+select json_type(js) = 'ARRAY' as wide_array_type_ok, length(json_unquote(json_extract(js,'$[0]'))) = 65536 as wide_payload_length_ok from remaining_wide;
+select length(uncompress(compress(js))) = 65540 as wide_visible_length_ok, hex(compress(js)) like '04000100%' as wide_compress_length_prefix_ok, md5(js) = '5e8753f8d5676a65ecd5c673e8204688' as wide_md5_ok, sha1(js) = 'ef1611bef272f528473258bc37f70d4f0c4e4a8d' as wide_sha1_ok, sha2(js,256) = 'c3d56e681749fe23d224d22e13f6e37fdf331ec060c434d30e272e5b89c0721f' as wide_sha2_ok, length(quote(js)) = 65542 as wide_quote_length_ok, soundex(js) = 'A000' as wide_soundex_ok from remaining_wide;
+-- Alternating consonants retain one SOUNDEX output character per input letter.
+-- CTAS must not narrow the result to VARCHAR(65535) after correct evaluation.
+select json_type(cast(concat('["',repeat('bc',32768),'"]') as json)) = 'ARRAY' as soundex_array_type_ok, length(concat('["',repeat('bc',32768),'"]')) = 65540 as soundex_document_length_ok;
+create table remaining_soundex_ctas as select soundex(cast(concat('["',repeat('bc',32768),'"]') as json)) as s;
+select length(s) = 65536 as wide_soundex_ctas_length_ok, left(s,4) = 'B212' as wide_soundex_ctas_prefix_ok from remaining_soundex_ctas;
 drop database issue28905_json_string_consumers;

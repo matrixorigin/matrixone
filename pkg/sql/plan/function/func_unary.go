@@ -1453,7 +1453,8 @@ func QuoteString(str string) string {
 func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
 	parameter := vector.GenerateFunctionStrParameter(ivecs[0])
 	rs := vector.MustFunctionResult[types.Varlena](result)
-	isUTF8Text := isExplicitUTF8Charset(ivecs[0].GetType().Charset)
+	isJSON := ivecs[0].GetType().Oid == types.T_json
+	isUTF8Text := isJSON || isExplicitUTF8Charset(ivecs[0].GetType().Charset)
 	for row := uint64(0); row < uint64(length); row++ {
 		if selectList != nil && (selectList.IgnoreAllRow() ||
 			(!selectList.ShouldEvalAllRow() && selectList.Contains(row))) {
@@ -1462,7 +1463,10 @@ func Quote(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *pr
 			}
 			continue
 		}
-		value, null := parameter.GetStrValue(row)
+		value, null, err := getJSONStringConsumerValue(parameter, row)
+		if err != nil {
+			return err
+		}
 		if null {
 			if err := rs.AppendBytes([]byte("NULL"), false); err != nil {
 				return err
@@ -5838,6 +5842,33 @@ func soundexTextString(str string) string {
 }
 
 func Soundex(ivecs []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
+	if ivecs[0].GetType().Oid == types.T_json {
+		parameter := vector.GenerateFunctionStrParameter(ivecs[0])
+		rs := vector.MustFunctionResult[types.Varlena](result)
+		for row := uint64(0); row < uint64(length); row++ {
+			if functionRowSkipped(selectList, row) {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			value, isNull, err := getJSONStringConsumerValue(parameter, row)
+			if err != nil {
+				return err
+			}
+			if isNull {
+				if err := rs.AppendBytes(nil, true); err != nil {
+					return err
+				}
+				continue
+			}
+			resultValue := functionUtil.QuickStrToBytes(soundexTextString(functionUtil.QuickBytesToStr(value)))
+			if err := rs.AppendBytes(resultValue, false); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
 	textSoundex := SoundexString
 	if isExplicitUTF8Charset(ivecs[0].GetType().Charset) {
 		textSoundex = soundexTextString
@@ -9316,7 +9347,7 @@ func Unhex(parameters []*vector.Vector, result vector.FunctionResultWrapper, pro
 }
 
 func Md5(parameters []*vector.Vector, result vector.FunctionResultWrapper, proc *process.Process, length int, selectList *FunctionSelectList) error {
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
+	return jsonStringConsumerUnaryBytesToBytes(parameters, result, proc, length, func(data []byte) []byte {
 		sum := md5.Sum(data)
 		return []byte(hex.EncodeToString(sum[:]))
 	}, selectList)
@@ -9721,7 +9752,10 @@ func Compress(parameters []*vector.Vector, result vector.FunctionResultWrapper, 
 			continue
 		}
 
-		data, null := source.GetStrValue(i)
+		data, null, err := getJSONStringConsumerValue(source, i)
+		if err != nil {
+			return err
+		}
 		if null {
 			if err := rs.AppendBytes(nil, true); err != nil {
 				return err
@@ -14006,7 +14040,7 @@ func SHA1Func(
 	length int,
 	selectList *FunctionSelectList,
 ) error {
-	return opUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
+	return jsonStringConsumerUnaryBytesToBytes(parameters, result, proc, length, func(v []byte) []byte {
 		sum := sha1.Sum(v)
 		return []byte(hex.EncodeToString(sum[:]))
 	}, selectList)

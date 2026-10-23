@@ -7492,6 +7492,12 @@ func SHA2Func(args []*vector.Vector, result vector.FunctionResultWrapper, _ *pro
 			continue
 		}
 		str, isnull1 := strs.GetStrValue(i)
+		if args[0].GetType().Oid == types.T_json {
+			str, isnull1, err = getJSONStringConsumerValue(strs, i)
+			if err != nil {
+				return err
+			}
+		}
 		shaType, isnull2 := shaTypes.GetValue(i)
 
 		if isnull1 || isnull2 {
@@ -7545,6 +7551,12 @@ func SHA2StringLengthFunc(args []*vector.Vector, result vector.FunctionResultWra
 			continue
 		}
 		str, isnull1 := strs.GetStrValue(i)
+		if args[0].GetType().Oid == types.T_json {
+			str, isnull1, err = getJSONStringConsumerValue(strs, i)
+			if err != nil {
+				return err
+			}
+		}
 		var isnull2 bool
 		var shaType int64
 		if lengthIsConst {
