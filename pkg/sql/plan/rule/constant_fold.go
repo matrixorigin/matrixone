@@ -245,6 +245,14 @@ func (r *ConstantFold) foldExpr(expr *plan.Expr, proc *process.Process, spatialC
 	if requiresJSON, err := plan.RequiresMORPCVersion129JSONStringConsumerOverload(expr); err != nil || requiresJSON {
 		return expr
 	}
+	// ELT's selected-subtree evaluation belongs to its lazy executor; eagerly
+	// folding every argument would evaluate unselected invalid expressions.
+	functionID, overload := function.DecodeOverloadID(overloadID)
+	if functionID == function.ELT && overload == 1 {
+		return expr
+	}
+	// Row-scoped diagnostics are admitted speculatively below; only a
+	// warning-free evaluation may replace them with a literal.
 	if f.IsVolatile() {
 		return expr
 	}

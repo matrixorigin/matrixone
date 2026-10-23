@@ -2005,6 +2005,12 @@ func constantFoldWithPreparedExactSource(
 	if requiresJSON, jsonErr := plan.RequiresMORPCVersion129JSONStringConsumerOverload(expr); jsonErr != nil || requiresJSON {
 		return expr, nil
 	}
+	// Preserve lazy ELT evaluation instead of folding unselected arguments.
+	if functionID == function.ELT && int32(overloadID) == 1 {
+		return expr, nil
+	}
+	// Row-scoped diagnostics are admitted speculatively below; only a
+	// warning-free evaluation may replace them with a literal.
 	if f.IsVolatile() {
 		return expr, nil
 	}
