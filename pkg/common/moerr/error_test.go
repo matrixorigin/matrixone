@@ -248,6 +248,31 @@ func TestViewSelectTmpTableMySQLError(t *testing.T) {
 	require.Equal(t, "View's SELECT refers to a temporary table 'temp_for_view'", err.Error())
 }
 
+func TestDeadLockDetectedMySQLError(t *testing.T) {
+	for name, err := range map[string]*Error{
+		"context":    NewDeadLockDetected(context.Background()),
+		"no context": NewDeadLockDetectedNoCtx(),
+	} {
+		t.Run(name, func(t *testing.T) {
+			check := func(err *Error) {
+				t.Helper()
+				require.Equal(t, ErrDeadLockDetected, err.ErrorCode())
+				require.Equal(t, uint16(1213), err.MySQLCode())
+				require.Equal(t, "40001", err.SqlState())
+				require.Equal(t, "deadlock detected", err.Error())
+				require.True(t, IsMoErrCode(err, ErrDeadLockDetected))
+				require.True(t, MustRollbackTxn(err))
+			}
+			check(err)
+			data, encodeErr := err.MarshalBinary()
+			require.NoError(t, encodeErr)
+			var decoded Error
+			require.NoError(t, decoded.UnmarshalBinary(data))
+			check(&decoded)
+		})
+	}
+}
+
 func TestLockWaitTimeoutMySQLError(t *testing.T) {
 	err := NewLockWaitTimeout(context.Background())
 	require.Equal(t, ErrLockWaitTimeout, err.ErrorCode())
