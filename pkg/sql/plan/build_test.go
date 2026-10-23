@@ -1907,7 +1907,7 @@ func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
 				select sum(n_nationkey) as n_name
 				from nation
 				group by n_regionkey with rollup
-				having n_name <> ''`,
+				having nation.n_name <> ''`,
 			wantError: "must appear in the GROUP BY clause",
 		},
 		{
@@ -1917,7 +1917,7 @@ func TestRollupWindowHavingPreservesFromScopeErrors(t *testing.T) {
 				       row_number() over (order by sum(n_nationkey)) as rn
 				from nation
 				group by n_regionkey with rollup
-				having n_name <> ''`,
+				having nation.n_name <> ''`,
 			wantError: "must appear in the GROUP BY clause",
 		},
 	}

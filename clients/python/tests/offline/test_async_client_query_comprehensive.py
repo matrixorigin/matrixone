@@ -37,7 +37,6 @@ _original_modules = {}
 
 def setup_sqlalchemy_mocks():
     """Setup SQLAlchemy mocks for this test class"""
-    global _original_modules
     _original_modules['pymysql'] = sys.modules.get('pymysql')
     _original_modules['aiomysql'] = sys.modules.get('aiomysql')
     _original_modules['sqlalchemy'] = sys.modules.get('sqlalchemy')
@@ -77,7 +76,6 @@ def setup_sqlalchemy_mocks():
 
 def teardown_sqlalchemy_mocks():
     """Restore original modules"""
-    global _original_modules
     for module_name, original_module in _original_modules.items():
         if original_module is not None:
             sys.modules[module_name] = original_module
@@ -508,45 +506,233 @@ class TestAsyncSnapshotManager(unittest.IsolatedAsyncioTestCase):
 
     async def test_create_cluster_snapshot(self):
         """Test creating cluster snapshot"""
-        self.mock_client.execute.return_value = AsyncResultSet([], [])
+        timestamp_ns = int(datetime.now().timestamp() * 1000000000)
+        self.mock_client.execute.side_effect = [
+            AsyncResultSet([], []),
+            AsyncResultSet(
+                ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name'],
+                [('test_snap', timestamp_ns, 'cluster', 'sys', None, None)],
+            ),
+        ]
 
         snapshot = await self.snapshot_manager.create("test_snap", SnapshotLevel.CLUSTER)
 
-        self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT test_snap FOR CLUSTER")
+        self.mock_client.execute.assert_any_await("CREATE SNAPSHOT test_snap FOR CLUSTER")
+        self.assertEqual(self.mock_client.execute.await_count, 2)
         self.assertEqual(snapshot.name, "test_snap")
         self.assertEqual(snapshot.level, SnapshotLevel.CLUSTER)
 
     async def test_create_database_snapshot(self):
         """Test creating database snapshot"""
-        # Mock the result to include database information
-        mock_result = AsyncResultSet([], [])
-        mock_result.database = "test_db"
-        self.mock_client.execute.return_value = mock_result
+        timestamp_ns = int(datetime.now().timestamp() * 1000000000)
+        self.mock_client.execute.side_effect = [
+            AsyncResultSet([], []),
+            AsyncResultSet(
+                ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name'],
+                [('test_snap', timestamp_ns, 'database', 'sys', 'test_db', None)],
+            ),
+        ]
 
         snapshot = await self.snapshot_manager.create("test_snap", SnapshotLevel.DATABASE, database="test_db")
 
-        self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT test_snap FOR DATABASE test_db")
+        self.mock_client.execute.assert_any_await("CREATE SNAPSHOT test_snap FOR DATABASE test_db")
+        self.assertEqual(self.mock_client.execute.await_count, 2)
         self.assertEqual(snapshot.name, "test_snap")
         self.assertEqual(snapshot.level, SnapshotLevel.DATABASE)
         self.assertEqual(snapshot.database, "test_db")
 
     async def test_create_table_snapshot(self):
         """Test creating table snapshot"""
-        # Mock the result to include database and table information
-        mock_result = AsyncResultSet([], [])
-        mock_result.database = "test_db"
-        mock_result.table = "test_table"
-        self.mock_client.execute.return_value = mock_result
+        timestamp_ns = int(datetime.now().timestamp() * 1000000000)
+        self.mock_client.execute.side_effect = [
+            AsyncResultSet([], []),
+            AsyncResultSet(
+                ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name'],
+                [('test_snap', timestamp_ns, 'table', 'sys', 'test_db', 'test_table')],
+            ),
+        ]
 
         snapshot = await self.snapshot_manager.create(
             "test_snap", SnapshotLevel.TABLE, database="test_db", table="test_table"
         )
 
-        self.mock_client.execute.assert_called_once_with("CREATE SNAPSHOT test_snap FOR TABLE test_db test_table")
+        self.mock_client.execute.assert_any_await("CREATE SNAPSHOT test_snap FOR TABLE test_db test_table")
+        self.assertEqual(self.mock_client.execute.await_count, 2)
         self.assertEqual(snapshot.name, "test_snap")
         self.assertEqual(snapshot.level, SnapshotLevel.TABLE)
         self.assertEqual(snapshot.database, "test_db")
         self.assertEqual(snapshot.table, "test_table")
+
+    async def test_create_returns_persisted_snapshot_metadata(self):
+        """Creation should return the metadata persisted by MatrixOne."""
+        created_at = datetime(2025, 1, 2, 3, 4, 5)
+        timestamp_ns = int(created_at.timestamp() * 1000000000)
+        self.mock_client.execute.side_effect = [
+            AsyncResultSet([], []),
+            AsyncResultSet(
+                ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name'],
+                [('persisted_snap', timestamp_ns, 'database', 'sys', 'persisted_db', None)],
+            ),
+        ]
+
+        snapshot = await self.snapshot_manager.create(
+            "persisted_snap",
+            SnapshotLevel.DATABASE,
+            database="persisted_db",
+            description="client-side description",
+        )
+
+        self.mock_client.execute.assert_any_await("CREATE SNAPSHOT persisted_snap FOR DATABASE persisted_db")
+        self.assertEqual(self.mock_client.execute.await_count, 2)
+        lookup_call = self.mock_client.execute.await_args_list[1]
+        self.assertIn("WHERE sname = LOWER(?)", lookup_call.args[0])
+        self.assertEqual(lookup_call.args[1], ("persisted_snap",))
+        self.assertEqual(snapshot.created_at, created_at)
+        self.assertIsNone(snapshot.description)
+        self.assertEqual(snapshot.database, "persisted_db")
+
+    async def test_create_uses_real_async_client_parameter_binding(self):
+        """Snapshot lookup parameters should cross the real async execution boundary."""
+        timestamp_ns = int(datetime(2025, 1, 2, 3, 4, 5).timestamp() * 1000000000)
+        columns = ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name']
+        rows = [('review_snap', timestamp_ns, 'database', 'sys', 'review_db', None)]
+
+        class MockResult:
+            def __init__(self, returns_rows=False):
+                self.returns_rows = returns_rows
+                self.rowcount = 0
+
+            def fetchall(self):
+                return rows
+
+            def keys(self):
+                return columns
+
+        class MockConnection:
+            def __init__(self):
+                self.statements = []
+
+            async def exec_driver_sql(self, sql):
+                self.statements.append(sql)
+                return MockResult(returns_rows=sql.lstrip().startswith("SELECT"))
+
+        class MockBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            async def __aenter__(self):
+                return self.connection
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def begin(self):
+                return MockBeginContext(self.connection)
+
+        client = AsyncClient()
+        connection = MockConnection()
+        client._engine = MockEngine(connection)
+
+        snapshot = await client.snapshots.create(
+            "review_snap", SnapshotLevel.DATABASE, database="review_db"
+        )
+
+        self.assertEqual(len(connection.statements), 2)
+        self.assertEqual(connection.statements[0], "CREATE SNAPSHOT review_snap FOR DATABASE review_db")
+        self.assertIn("WHERE sname = LOWER('review_snap')", connection.statements[1])
+        self.assertNotIn(":name", connection.statements[1])
+        self.assertEqual(snapshot.name, "review_snap")
+        self.assertEqual(snapshot.database, "review_db")
+
+    async def test_create_canonicalizes_snapshot_name_for_lookup(self):
+        """Creation should query the catalog with MatrixOne's canonical identifier."""
+        timestamp_ns = int(datetime(2025, 1, 2, 3, 4, 5).timestamp() * 1000000000)
+        columns = ['sname', 'ts', 'level', 'account_name', 'database_name', 'table_name']
+
+        class MockResult:
+            def __init__(self, rows, returns_rows=False):
+                self.rows = rows
+                self.returns_rows = returns_rows
+                self.rowcount = 0
+
+            def fetchall(self):
+                return self.rows
+
+            def keys(self):
+                return columns
+
+        class MockConnection:
+            def __init__(self, lookup_name, canonical_name):
+                self.lookup_name = lookup_name
+                self.canonical_name = canonical_name
+                self.statements = []
+
+            async def exec_driver_sql(self, sql):
+                self.statements.append(sql)
+                is_select = sql.lstrip().startswith("SELECT")
+                escaped_lookup = self.lookup_name.replace("'", "''")
+                matched = (
+                    is_select
+                    and f"WHERE sname = LOWER('{escaped_lookup}')" in sql
+                )
+                rows = []
+                if matched:
+                    rows = [
+                        (self.canonical_name, timestamp_ns, 'cluster', 'sys', None, None)
+                    ]
+                return MockResult(rows, returns_rows=is_select)
+
+        class MockBeginContext:
+            def __init__(self, connection):
+                self.connection = connection
+
+            async def __aenter__(self):
+                return self.connection
+
+            async def __aexit__(self, exc_type, exc_val, exc_tb):
+                pass
+
+        class MockEngine:
+            def __init__(self, connection):
+                self.connection = connection
+
+            def begin(self):
+                return MockBeginContext(self.connection)
+
+        cases = (
+            ("ReviewSnap", "ReviewSnap", "reviewsnap"),
+            ("`ReviewSnap`", "ReviewSnap", "reviewsnap"),
+            ("`Review``Snap`", "Review`Snap", "review`snap"),
+            ("`Review'Snap`", "Review'Snap", "review'snap"),
+            ('"ReviewSnap"', "ReviewSnap", "reviewsnap"),
+            ('"Review""Snap"', 'Review"Snap', 'review"snap'),
+            ("İSnap", "İSnap", "isnap"),
+            ("ΟΣ", "ΟΣ", "οσ"),
+            ("\u1c89Snap", "\u1c89Snap", "\u1c8asnap"),
+        )
+        for supplied_name, lookup_name, canonical_name in cases:
+            with self.subTest(
+                name=supplied_name,
+                lookup=lookup_name,
+                canonical=canonical_name,
+            ):
+                client = AsyncClient()
+                connection = MockConnection(lookup_name, canonical_name)
+                client._engine = MockEngine(connection)
+
+                snapshot = await client.snapshots.create(supplied_name, SnapshotLevel.CLUSTER)
+
+                self.assertEqual(len(connection.statements), 2)
+                escaped_lookup = lookup_name.replace("'", "''")
+                self.assertIn(
+                    f"WHERE sname = LOWER('{escaped_lookup}')",
+                    connection.statements[1],
+                )
+                self.assertEqual(snapshot.name, canonical_name)
 
     async def test_get_snapshot(self):
         """Test getting snapshot"""

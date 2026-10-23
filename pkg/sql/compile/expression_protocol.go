@@ -155,6 +155,9 @@ func requiredExpressionContractProtocolVersion(features plan.RemoteExpressionFea
 	if features.LowPrecisionFloatContracts {
 		return plan2.LowPrecisionFloatProtocolVersion
 	}
+	if features.JSONStringConsumerOverload || features.JSONOpaqueTextContracts {
+		return defines.MORPCVersion129
+	}
 	if features.JSONScalarLiteralContracts {
 		return defines.MORPCVersion104
 	}

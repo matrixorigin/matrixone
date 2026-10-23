@@ -24,7 +24,7 @@ import (
 // LowPrecisionFloatProtocolVersion is the MORPC version that carries
 // bf16/float16/float8/float4/vecf8/vecf4 and VECTOR_MATMUL, VECBLOCK_JSON,
 // VECBLOCK_BINARY.
-const LowPrecisionFloatProtocolVersion = defines.MORPCVersion129
+const LowPrecisionFloatProtocolVersion = defines.MORPCVersion130
 
 func init() {
 	plan.SetLowPrecisionFloatContract(plan.LowPrecisionFloatContract{

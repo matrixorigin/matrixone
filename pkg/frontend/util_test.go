@@ -1063,6 +1063,13 @@ func TestRewriteError(t *testing.T) {
 		want2 string
 	}{
 		{
+			name:  "deadlock retains MySQL retry identity",
+			args:  args{err: moerr.NewDeadLockDetectedNoCtx()},
+			want:  1213,
+			want1: "40001",
+			want2: "deadlock detected",
+		},
+		{
 			name: "t1",
 			args: args{
 				err: &testError{s: "non moerr"},

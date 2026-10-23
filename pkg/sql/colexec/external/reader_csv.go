@@ -376,7 +376,7 @@ func (r *CsvReader) transJsonObject2Lines(ctx context.Context, str string, attrs
 		if err != nil {
 			return nil, err
 		}
-		res[attr.ColFieldIndex] = csvparser.Field{Val: val, IsNull: isJsonNullSentinel(valN)}
+		res[attr.ColFieldIndex] = csvparser.Field{Val: val}
 	}
 	return res, nil
 }
@@ -442,7 +442,7 @@ func (r *CsvReader) transJsonArray2Lines(ctx context.Context, str string, attrs 
 		if err != nil {
 			return nil, err
 		}
-		res = append(res, csvparser.Field{Val: val, IsNull: isJsonNullSentinel(valN)})
+		res = append(res, csvparser.Field{Val: val})
 	}
 	return res, nil
 }
@@ -541,17 +541,6 @@ func jsonLineScalarText(ctx context.Context, node bytejson.Node, typ types.T) (s
 	}
 	text.WriteByte(']')
 	return text.String(), nil
-}
-
-// isJsonNullSentinel decides NULL solely from the undecoded JSON input: only
-// a raw JSON string equal to the JsonNull sentinel ("\N") is NULL. A wrapped
-// base64 payload that decodes to the sentinel's bytes (e.g. X'5C4E') is a
-// value and must never be lost to NULL (matrixone#30635). For any non-string
-// scalar the converted text can never equal the sentinel, so this matches the
-// previous value-based comparison for every other column type.
-func isJsonNullSentinel(node bytejson.Node) bool {
-	s, ok := node.V.(string)
-	return ok && s == JsonNull
 }
 
 // isExternalErrorAttr reports whether an attribute is one of the synthesized

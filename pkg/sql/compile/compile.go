@@ -97,7 +97,6 @@ import (
 	"github.com/matrixorigin/matrixone/pkg/sql/parsers/tree"
 	plan2 "github.com/matrixorigin/matrixone/pkg/sql/plan"
 	"github.com/matrixorigin/matrixone/pkg/sql/plan/function"
-	"github.com/matrixorigin/matrixone/pkg/sql/plan/rule"
 	"github.com/matrixorigin/matrixone/pkg/sql/schedule"
 	"github.com/matrixorigin/matrixone/pkg/sql/util"
 	"github.com/matrixorigin/matrixone/pkg/stage/stageutil"
@@ -7691,7 +7690,7 @@ func (c *Compile) compileSort(node *plan.Node, ss []*Scope) []*Scope {
 		return c.compileOrder(node, ss)
 
 	case node.Limit != nil && node.Offset != nil && len(node.OrderBy) > 0:
-		if rule.IsConstant(node.Limit, false) && rule.IsConstant(node.Offset, false) {
+		if function.IsConstant(node.Limit, false) && function.IsConstant(node.Offset, false) {
 			// get limit
 			vec1, free1, err := colexec.GetReadonlyResultFromNoColumnExpression(c.proc, node.Limit)
 			if err != nil {

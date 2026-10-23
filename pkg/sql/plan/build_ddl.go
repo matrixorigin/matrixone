@@ -7051,6 +7051,9 @@ func buildAlterTableInplace(stmt *tree.AlterTable, ctx CompilerContext) (*Plan, 
 	droppedIndexNames := make(map[string]bool)
 	droppedForeignKeyNames := make(map[string]bool)
 	for i, option := range stmt.Options {
+		if isIgnoredStorageTableOption(option) {
+			continue
+		}
 		switch opt := option.(type) {
 		case *tree.AlterOptionDrop:
 			alterTableDrop := new(plan.AlterTableDrop)

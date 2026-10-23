@@ -1087,6 +1087,13 @@ var supportedStringBuiltIns = []FuncNew{
 					return Elt
 				},
 			},
+			{
+				overloadId: 1,
+				retType:    jsonStringConsumerReturnType,
+				newOp: func() executeLogicOfOverload {
+					return Elt
+				},
+			},
 		},
 	},
 

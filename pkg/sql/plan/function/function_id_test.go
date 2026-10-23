@@ -83,14 +83,38 @@ func TestAggregateExecutorIDs(t *testing.T) {
 	}
 }
 
-func TestMinMaxRejectJSON(t *testing.T) {
+func TestMinMaxAcceptJSON(t *testing.T) {
 	for _, name := range []string{"min", "max"} {
-		_, err := GetFunctionByName(
+		fn, err := GetFunctionByName(
 			context.Background(),
 			name,
 			[]types.Type{types.T_json.ToType()},
 		)
-		require.Error(t, err, name)
+		require.NoError(t, err, name)
+		require.Equal(t, types.T_json, fn.GetReturnType().Oid, name)
+	}
+}
+
+func TestMaxByJSONTypeBoundary(t *testing.T) {
+	for _, name := range []string{"max_by", "max_by_non_null"} {
+		t.Run(name, func(t *testing.T) {
+			for _, key := range []int{1, 2} {
+				args := []types.Type{types.T_varchar.ToType(), types.T_int64.ToType(), types.T_int64.ToType()}
+				args[key] = types.T_json.ToType()
+				_, err := GetFunctionByName(context.Background(), name, args)
+				badTypes := "[VARCHAR JSON BIGINT]"
+				if key == 2 {
+					badTypes = "[VARCHAR BIGINT JSON]"
+				}
+				require.EqualError(t, err, "invalid argument aggregate function "+name+", bad value "+badTypes)
+			}
+			for _, valueType := range []types.T{types.T_varchar, types.T_json} {
+				fn, err := GetFunctionByName(context.Background(), name,
+					[]types.Type{valueType.ToType(), types.T_int64.ToType(), types.T_int64.ToType()})
+				require.NoError(t, err)
+				require.Equal(t, valueType, fn.GetReturnType().Oid, "return values do not participate in key comparison")
+			}
+		})
 	}
 }
 

@@ -835,7 +835,8 @@ func TestIssue29400CopyAlterRetainedGatePromotionFastFails(t *testing.T) {
 				} else {
 					var deadlock *mysql.MySQLError
 					require.ErrorAs(t, otherErr, &deadlock)
-					require.Equal(t, moerr.ErrDeadLockDetected, deadlock.Number)
+					require.Equal(t, uint16(1213), deadlock.Number)
+					require.Equal(t, "40001", string(deadlock.SQLState[:]))
 					require.NoError(t, owner.Commit(), "the surviving owner must commit")
 					var value int
 					require.NoError(t, db0.QueryRowContext(ctx,

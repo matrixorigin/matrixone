@@ -41,15 +41,13 @@ const (
 type dmlSelectInfo struct {
 	typ string
 
-	projectList    []*Expr
-	tblInfo        *dmlTableInfo
-	idx            int32
-	rootId         int32
-	derivedTableId int32
+	projectList []*Expr
+	tblInfo     *dmlTableInfo
+	idx         int32
+	rootId      int32
 
-	onDuplicateIdx      []int32
-	onDuplicateExpr     map[string]*Expr
-	onDuplicateIsIgnore bool
+	onDuplicateIdx  []int32
+	onDuplicateExpr map[string]*Expr
 }
 
 type dmlTableInfo struct {
@@ -836,7 +834,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	tag := builder.qry.Nodes[info.rootId].BindingTags[0]
-	info.derivedTableId = info.rootId
 	oldProject := append([]*Expr{}, lastNode.ProjectList...)
 
 	insertColToExpr := make(map[string]*Expr)
@@ -989,7 +986,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 	}
 
 	info.projectList = make([]*Expr, 0, len(projectList))
-	info.derivedTableId = info.rootId
 	for i, e := range projectList {
 		info.projectList = append(info.projectList, &plan.Expr{
 			Typ: e.Typ,
@@ -1174,7 +1170,6 @@ func initInsertStmt(builder *QueryBuilder, bindCtx *BindContext, stmt *tree.Inse
 			info.rootId = newRootId
 			info.onDuplicateIdx = idxs
 			info.onDuplicateExpr = updateExprs
-			info.onDuplicateIsIgnore = stmt.IsIgnore()
 
 			// append ProjectNode
 			info.rootId = builder.appendNode(&plan.Node{
