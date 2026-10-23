@@ -6416,9 +6416,17 @@ func decimal64ToDecimal128Array(
 				}
 			}
 		} else {
+			source := from.GetSourceVector()
+			if source.IsConstNull() {
+				to.SetNullResult(uint64(length))
+				return nil
+			}
+			values := vector.MustFixedColNoTypeCheck[types.Decimal64](source)
+			sourceNulls := source.GetNulls().GetBitmap()
 			var dft types.Decimal128
 			for i := 0; i < length; i++ {
-				v, null := from.GetValue(uint64(i))
+				v := values[i]
+				null := sourceNulls.Contains(uint64(i))
 				if null {
 					if err := to.Append(dft, true); err != nil {
 						return err
