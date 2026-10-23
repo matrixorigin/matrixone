@@ -284,6 +284,7 @@ func (ctr *topNContainer) consume(proc *process.Process, input *batch.Batch) err
 	}
 	defer freeNormalizedHashPartitionKeys(ownedPartitionKeys, proc.Mp())
 
+	reduceSingleRuns := ctr.limit == 1 && !ctr.withTies
 	for start := 0; start < input.RowCount(); start += hashmap.UnitLimit {
 		if err, canceled := vm.CancelCheck(proc); canceled {
 			return err
@@ -293,11 +294,25 @@ func (ctr *topNContainer) consume(proc *process.Process, input *batch.Batch) err
 		if err != nil {
 			return err
 		}
-		for offset, groupID := range groupIDs[:count] {
+		for offset := 0; offset < count; offset++ {
+			groupID := groupIDs[offset]
 			for len(ctr.groups) < int(groupID) {
 				ctr.groups = append(ctr.groups, &partitionHeap{ctr: ctr, tieHead: -1})
 			}
 			row := int64(start + offset)
+			if reduceSingleRuns {
+				// Pick the first best row in this contiguous group run before
+				// copying it. Increasing input otherwise replaces the retained
+				// row (including all payload metadata) for every incoming row.
+				// The candidate never outlives this hash chunk or input batch.
+				for offset+1 < count && groupIDs[offset+1] == groupID {
+					offset++
+					candidate := int64(start + offset)
+					if ctr.compareInputRows(candidate, row) < 0 {
+						row = candidate
+					}
+				}
+			}
 			groupHeap := ctr.groups[groupID-1]
 			if uint64(groupHeap.Len()) < ctr.limit {
 				slot, err := ctr.retainRow(proc, input, row)
@@ -475,6 +490,15 @@ func compactTopNVector(proc *process.Process, bat *batch.Batch, index int, deadB
 func (ctr *topNContainer) compareInput(inputRow, retainedRow int64) int {
 	for _, cmp := range ctr.compares {
 		if result := cmp.Compare(1, 0, inputRow, retainedRow); result != 0 {
+			return result
+		}
+	}
+	return 0
+}
+
+func (ctr *topNContainer) compareInputRows(left, right int64) int {
+	for _, cmp := range ctr.compares {
+		if result := cmp.Compare(1, 1, left, right); result != 0 {
 			return result
 		}
 	}
