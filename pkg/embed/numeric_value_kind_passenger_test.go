@@ -120,6 +120,14 @@ func TestNumericValueKindPassengerAcrossRelationalOperators(t *testing.T) {
 			got := queryFor(t, statement)
 			require.Equal(t, [][]string{{"1", "49"}, {"2", "1"}}, got, statement)
 		})
+		t.Run("nested_dependent_raw_result_kind_reaches_outer_math", func(t *testing.T) {
+			statement := `SELECT id, v, ABS(v), SQRT(v) FROM (
+				SELECT id, (SELECT (SELECT d.v)) AS v
+				FROM (SELECT id, CASE WHEN id=1 THEN X'31' ELSE '1' END AS v FROM ` + ids + ` AS s) AS d
+			) AS result ORDER BY id`
+			got := queryFor(t, statement)
+			require.Equal(t, [][]string{{"1", "1", "49", "7"}, {"2", "1", "1", "1"}}, got, statement)
+		})
 
 		t.Run("explicit_text_cast_clears_hex_kind", func(t *testing.T) {
 			for _, statement := range []string{

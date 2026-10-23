@@ -123,6 +123,33 @@ func TestNumericValueKindLoweringUsesOwnerSpecificCompanions(t *testing.T) {
 	}
 }
 
+func TestNumericValueKindDependentScalarResultDescriptor(t *testing.T) {
+	const source = `SELECT id, CASE WHEN id=1 THEN X'31' ELSE '1' END AS v
+		FROM (SELECT 1 AS id UNION ALL SELECT 2 AS id) AS s`
+	query := `SELECT id, v, ABS(v), SQRT(v) FROM (
+		SELECT id, (SELECT (SELECT d.v)) AS v FROM (` + source + `) AS d
+	) AS result ORDER BY id`
+	p := buildNumericValuePlan(t, query)
+	require.NotNil(t, p.GetQuery().GetCorrelation())
+
+	found := false
+	for _, program := range p.GetQuery().GetCorrelation().GetPrograms() {
+		if program == nil || program.ScalarResultKindColumn != 1 {
+			continue
+		}
+		found = true
+		require.Len(t, program.OutputTypes, 2)
+		require.Equal(t, int32(types.T_bool), program.OutputTypes[1].Id)
+		require.GreaterOrEqual(t, int(program.RootNode), 0)
+		require.Less(t, int(program.RootNode), len(p.GetQuery().Nodes))
+		root := p.GetQuery().Nodes[program.RootNode]
+		require.NotNil(t, root)
+		require.Len(t, root.ProjectList, 2)
+		require.Equal(t, int32(types.T_bool), root.ProjectList[1].Typ.Id)
+	}
+	require.True(t, found, "the nested dependent scalar returning the selected string kind must publish a BOOL result column")
+}
+
 func TestNumericValueKindCorrelationSlotPublishesRawAndKindTogether(t *testing.T) {
 	ctx := context.Background()
 	selector, err := BindFuncExprImplByPlanExpr(ctx, "case", []*Expr{

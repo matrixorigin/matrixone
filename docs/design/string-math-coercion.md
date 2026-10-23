@@ -212,26 +212,33 @@ prepare role/source classification
 
 ## Performance decision
 
-The recorded role-discovery benchmark on Darwin/arm64 reported zero
-allocations, approximately 2.7–2.9 μs for common single-parameter ownership
-cases, 50.8 μs for a deep no-match `P=8` case, and 23.4–23.8 μs for a
-mixed-role `P=5` case. These measurements apply to the reset-based role scan,
-not the public prepared-QUERY execution path, and are not end-to-end query
-latencies. The current prepared-QUERY binding path preserves per-execution
-source provenance at the existing AST consumer; it has not been measured by
-that benchmark. A shared role table or cross-execution cache is deferred until
-cache invalidation and ownership equivalence are specified and measured.
+The prepared-role summary now collects all value and precision roles in one
+plan traversal. Its Darwin/arm64 microbenchmark reports 48 markers at 7.397
+μs/op, 6,792 B/op, and 11 allocations; 192 markers at 26.474 μs/op, 27,240
+B/op, and 15 allocations; and 768 markers at 102.021 μs/op, 110,296 B/op, and
+22 allocations. The benchmark constructs `ABS(?)` and `CEIL(?, ?)` pairs and
+measures only role summarization, not execution or end-to-end query latency.
+It does not compare against the old repeated plan walk. Roles are summarized
+per execution; no cross-execution role cache is used.
 
-The earlier role-discovery measurements cover only the prepared source-role
-scan; they do not measure this paired scalar-program path or end-to-end query
-latency. No dedicated mixed-program allocation benchmark or before/after
-scalar-program comparison has been completed, so this note makes no claim of
-zero runtime overhead. A native integer ROUND/FLOOR/CEIL fixture also changed
-from one two-row block to two one-row blocks after removing function-wide
-zonemap eligibility. That observed pruning cost is recorded rather than
-described as a string-only change. A focused benchmark and any optimization
-must preserve native exactness, selected-branch behavior, and one evaluation of
-volatile expressions.
+A separate Darwin/arm64 expression microbenchmark evaluates one prebuilt
+128-row batch per operation. Native numeric `ABS` measured 553 ns/op, 8 B/op,
+and 1 allocation; ordinary text-column `ABS` measured 6.888 μs/op, 56 B/op,
+and 2 allocations. For a matched control, direct ordinary-text CASE through
+CAST0 measured 12.592 μs/op, 408 B/op, and 6 allocations; the same CASE values
+and row selector through a paired program and CAST9 measured 15.532 μs/op,
+600 B/op, and 9 allocations. This current-code comparison measured 3 extra
+allocations and 192 B/op for the paired path (about 23% more time for this
+expression). It is a focused executor microbenchmark, not a historical
+before/after comparison or an end-to-end query result. Mixed HEX/text CASE
+through the paired program measured 32.751 μs/op, 720 B/op, and 14 allocations;
+that case returns 49 for the HEX-selected row and 1 for the text-selected row,
+so it is not the matched control. A native integer ROUND/FLOOR/CEIL fixture
+also changed from one two-row block to two one-row blocks after removing
+function-wide zonemap eligibility. That observed pruning cost is recorded
+rather than described as a string-only change. Any optimization must preserve
+native exactness, selected-branch behavior, and one evaluation of volatile
+expressions.
 
 ## Alternatives
 
@@ -256,7 +263,7 @@ volatile expressions.
 | SessionInfo wire allocation | Unknown varints at fields 23/26 are not interpreted as numeric mode/marker; field 22 remains `lc_time_names`; fields 24/25 round trip the explicit mode and sender marker; forwarding preserves a zero legacy marker |
 | Prepared-plan reuse | Type changes, error-to-success, NULL-to-success, and restoration of the cached base plan |
 | Numeric correctness and pruning | Integer/DECIMAL/FLOAT source controls; zonemap endpoint traps must not prune matching rows |
-| Resource/performance | Allocation-failure cleanup, copied-result ownership and selected-account accounting, program cache reset/reuse/free, and focused race checks where shared-state risk applies; mixed-program allocation benchmark remains unrun |
+| Resource/performance | Allocation-failure cleanup, copied-result ownership and selected-account accounting, program cache reset/reuse/free, focused race checks, and the measured role-summary and prebuilt 128-row expression microbenchmarks above; neither is an end-to-end query benchmark |
 
 Public prepared-query validation includes scalar precision results and metadata,
 the complete-text ROUND/TRUNCATE value-domain path, the binary-protocol numeric
