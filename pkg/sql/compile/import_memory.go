@@ -71,6 +71,18 @@ func (c *Compile) walkLocalImportOperators(visit func(vm.Operator, int) error) e
 	return nil
 }
 
+// importMemoryNoWait is an origin policy: transactions that are not known to
+// be autocommit can retain previous statements' workspace and locks. Waiting
+// for those resources before this statement returns could wait on itself.
+// A nil operator preserves the existing isolated embedding/test contract.
+func (c *Compile) importMemoryNoWait() bool {
+	if c.proc == nil || c.proc.Base == nil || c.proc.GetTxnOperator() == nil {
+		return false
+	}
+	options := c.proc.GetTxnOperator().TxnOptions()
+	return options.ByBegin || !options.Autocommit
+}
+
 // localMemoryManifest uses actual planned copies, with no source allocation.
 func (c *Compile) localMemoryManifest(unit int64) (MemoryManifest, error) {
 	producers, ids, supported, err := c.memoryProducers()
@@ -80,7 +92,7 @@ func (c *Compile) localMemoryManifest(unit int64) (MemoryManifest, error) {
 	if !supported {
 		return MemoryManifest{}, nil
 	}
-	manifest := MemoryManifest{TargetUnit: unit, Parallel: c.ncpu, Version: query.MemoryAdmissionProtocolVersion, Producers: producers}
+	manifest := MemoryManifest{TargetUnit: unit, Parallel: c.ncpu, NoWait: c.importMemoryNoWait(), Version: query.MemoryAdmissionProtocolVersion, Producers: producers}
 	err = c.walkLocalImportOperators(func(op vm.Operator, parallel int) error {
 		if uint64(parallel) > math.MaxUint32 {
 			return errors.New("too many import working slots")
