@@ -32,7 +32,7 @@ from .account import AccountManager
 from .base_client import BaseMatrixOneClient, BaseMatrixOneExecutor
 from .connection_hooks import ConnectionAction, ConnectionHook, create_connection_hook
 from .exceptions import ConnectionError, QueryError
-from ._utils import is_non_transactional_statement
+from ._utils import detach_from_pool, is_non_transactional_statement
 from .fulltext_manager import FulltextIndexManager
 from .load_data import LoadDataManager
 from .stage import StageManager
@@ -1383,11 +1383,14 @@ class Client(BaseMatrixOneClient):
                             # finalization error from invalidate() must not
                             # escape the finally and mask the original outcome
                             # either; a BaseException raised by the discard
-                            # (interrupt/cancellation) still propagates.
+                            # (interrupt/cancellation) still propagates. When
+                            # the discard itself raises, detach keeps the
+                            # mutated connection out of the pool (SQLAlchemy
+                            # 1.4 runs invalidate listeners before closing).
                             try:
                                 conn.invalidate()
                             except Exception:
-                                pass
+                                detach_from_pool(conn)
                         except BaseException:
                             # KeyboardInterrupt/SystemExit delivered during the
                             # restore escape the clause above and leave the
@@ -1397,7 +1400,7 @@ class Client(BaseMatrixOneClient):
                             try:
                                 conn.invalidate()
                             except Exception:
-                                pass
+                                detach_from_pool(conn)
                             raise
 
                 execution_time = time.time() - start_time

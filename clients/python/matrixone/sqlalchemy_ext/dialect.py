@@ -137,16 +137,22 @@ class MatrixOneDialect(MySQLDialect):
             super().set_isolation_level(dbapi_connection, level)
 
     def _ensure_default_isolation_level(self, dbapi_connection):
-        """Capture the connection's current (engine-default) isolation level.
+        """Capture the connection's current (engine-default) baseline.
 
         matrixone.client._create_engine swaps this dialect in after
         create_engine(), so the engine never runs initialize() against this
         instance and default_isolation_level is never populated for it.
-        Reading the level before the first modification recovers the same
-        baseline initialize() would have recorded. Drivers may return the
-        level as text or bytes.
+        Reading the state before the first modification recovers the same
+        baseline initialize() would have recorded. Drivers may return values
+        as text or bytes.
+
+        The baseline includes the autocommit flag as well as the transaction
+        isolation level: an engine configured with isolation_level='AUTOCOMMIT'
+        (or driver-level autocommit) pools connections whose baseline is
+        autocommit on, and reset_isolation_level must bring that flag back
+        instead of forcing it off.
         """
-        if getattr(self, "default_isolation_level", None) is not None:
+        if getattr(self, "_baseline_captured", False):
             return
         cursor = dbapi_connection.cursor()
         try:
@@ -157,17 +163,33 @@ class MatrixOneDialect(MySQLDialect):
                 if isinstance(level, bytes):
                     level = level.decode()
                 self.default_isolation_level = str(level).upper().replace("-", " ")
+            cursor.execute("SELECT @@autocommit")
+            row = cursor.fetchone()
+            if row:
+                flag = row[0]
+                if isinstance(flag, bytes):
+                    flag = flag.decode()
+                self.default_autocommit = str(flag).strip().lower() in ("1", "true", "on")
         finally:
             cursor.close()
+        self._baseline_captured = True
 
     def reset_isolation_level(self, dbapi_connection):
         """Restore the engine baseline captured by set_isolation_level.
 
         set_isolation_level is always invoked before the pool registers this
-        reset, so default_isolation_level is populated by then. Pool
-        connections are returned to autocommit off and the captured default
-        transaction isolation level.
+        reset, so the baseline is populated by then. Pool connections are
+        returned to their captured baseline: the original autocommit flag,
+        and - when that flag is off - the captured default transaction
+        isolation level. Restoring the flag itself matters for engines
+        configured with isolation_level='AUTOCOMMIT': forcing autocommit off
+        would silently change the engine's commit behavior on subsequent
+        checkouts.
         """
+        self._ensure_default_isolation_level(dbapi_connection)
+        if getattr(self, "default_autocommit", False):
+            self._apply_autocommit(dbapi_connection, True)
+            return
         self._apply_autocommit(dbapi_connection, False)
         if getattr(self, "default_isolation_level", None) is not None:
             cursor = dbapi_connection.cursor()

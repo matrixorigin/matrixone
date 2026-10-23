@@ -394,6 +394,35 @@ def test_sync_keyboard_interrupt_survives_invalidate_failure():
         client.execute("data branch merge src into dst")
 
     connect_conn.invalidate.assert_called_once_with()
+    # the BaseException branch runs the same pool-safety detach fallback
+    connect_conn.detach.assert_called_once_with()
+
+
+def test_sync_invalidate_failure_detaches_connection():
+    # SQLAlchemy 1.4 fires PoolEvents.invalidate listeners BEFORE the
+    # record's hard close, so a raising listener leaves the live, mutated
+    # connection checked out. When the discard raises, the fallback must
+    # still keep the connection out of the pool: detach() marks it for a
+    # literal close instead of a pool return.
+    engine, _, connect_conn, _ = _sync_engine()
+
+    def failing_restore(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        if sql == "SET autocommit = 0":
+            raise Exception("restore failed")
+        return Mock(returns_rows=False, rowcount=0)
+
+    connect_conn.exec_driver_sql.side_effect = failing_restore
+    connect_conn.invalidate.side_effect = RuntimeError("listener raised before close")
+    client = Client(logger=Mock())
+    client._engine = engine
+
+    result = client.execute("data branch merge src into dst")
+
+    assert result is not None  # merge outcome preserved despite both failures
+    connect_conn.invalidate.assert_called_once_with()
+    connect_conn.detach.assert_called_once_with()
 
 
 def _async_engine():
@@ -721,6 +750,36 @@ async def test_async_cancellation_during_restore_survives_invalidate_failure():
         await client._execute("data branch merge src into dst")
 
     connect_conn.invalidate.assert_awaited_once()
+    # the same pool-safety fallback runs on the BaseException branch
+    connect_conn.sync_connection.detach.assert_called_once_with()
+
+
+@pytest.mark.asyncio
+async def test_async_invalidate_failure_detaches_connection():
+    # Async twin of the sync pool-safety fallback. AsyncConnection has no
+    # detach of its own, so the proxied sync Connection is detached; on
+    # SQLAlchemy 1.4 (invalidate listeners fire before the record's hard
+    # close) that is what keeps a mutated connection out of the pool when
+    # the discard itself raises.
+    engine, _, connect_conn, _ = _async_engine()
+
+    async def failing_restore(sql):
+        if sql == "SELECT @@autocommit":
+            return Mock(scalar=Mock(return_value="0"))
+        if sql == "SET autocommit = 0":
+            raise Exception("restore failed")
+        return Mock(returns_rows=False, rowcount=0)
+
+    connect_conn.exec_driver_sql = AsyncMock(side_effect=failing_restore)
+    connect_conn.invalidate = AsyncMock(side_effect=RuntimeError("listener raised before close"))
+    client = AsyncClient(logger=Mock())
+    client._engine = engine
+
+    result = await client._execute("data branch merge src into dst")
+
+    assert result is not None  # merge outcome preserved despite both failures
+    connect_conn.invalidate.assert_awaited_once()
+    connect_conn.sync_connection.detach.assert_called_once_with()
 
 
 @pytest.mark.parametrize(
@@ -801,7 +860,7 @@ def test_inert_comment_ordinary_sql_keeps_begin_path(sql):
 # must recover and restore the engine-default isolation level itself.
 
 
-def _dbapi_conn(default_isolation="REPEATABLE READ"):
+def _dbapi_conn(default_isolation="REPEATABLE READ", autocommit="0"):
     """Mock DBAPI connection answering the isolation-state queries."""
     queries = []
 
@@ -810,6 +869,8 @@ def _dbapi_conn(default_isolation="REPEATABLE READ"):
         cursor = mock_cursor
         if sql == "SELECT @@transaction_isolation":
             cursor._fetchone = (default_isolation,)
+        elif sql == "SELECT @@autocommit":
+            cursor._fetchone = (autocommit,)
         return 0
 
     mock_cursor = Mock()
@@ -838,7 +899,9 @@ def test_dialect_autocommit_set_restores_full_baseline():
     conn.autocommit.assert_called_once_with(True)
     # default isolation captured from the untouched connection
     assert conn.recorded[0] == "SELECT @@transaction_isolation"
+    assert conn.recorded[1] == "SELECT @@autocommit"
     assert dialect.default_isolation_level == "REPEATABLE READ"
+    assert dialect.default_autocommit is False
 
     conn.autocommit.reset_mock()
     dialect.reset_isolation_level(conn)
@@ -856,7 +919,29 @@ def test_dialect_default_isolation_captured_once():
     dialect.set_isolation_level(conn, "REPEATABLE READ")
     # snapshot query ran exactly once; reset restored the captured READ COMMITTED
     assert conn.recorded.count("SELECT @@transaction_isolation") == 1
-    assert "SET SESSION TRANSACTION ISOLATION LEVEL READ COMMITTED" in conn.recorded
+
+
+def test_dialect_reset_restores_autocommit_baseline():
+    # Engine baseline with autocommit on (e.g. a caller's engine configured
+    # with isolation_level='AUTOCOMMIT'): a temporary non-autocommit
+    # isolation selection must reset back to autocommit on, not off, or the
+    # engine's commit behavior changes for every later checkout.
+    from matrixone.sqlalchemy_ext.dialect import MatrixOneDialect
+
+    dialect = MatrixOneDialect()
+    conn = _dbapi_conn(autocommit="1")
+
+    dialect.set_isolation_level(conn, "READ COMMITTED")
+    # during the temporary selection, autocommit is off
+    conn.autocommit.assert_called_once_with(False)
+    conn.autocommit.reset_mock()
+
+    assert dialect.default_autocommit is True
+    before = len(conn.recorded)
+    dialect.reset_isolation_level(conn)
+    # baseline restored: autocommit back on, with no isolation-level SQL
+    conn.autocommit.assert_called_once_with(True)
+    assert not any("ISOLATION LEVEL" in q for q in conn.recorded[before:])
 
 
 class _MethodAutocommitConn:
@@ -999,6 +1084,10 @@ class _FakeCursor:
         elif "set autocommit = 0" in normalized:
             if self._conn.fail_restore:
                 raise OperationalError(2006, "injected restore failure")
+            if self._conn.fail_restore_soft:
+                # not a disconnect code: the engine must NOT auto-invalidate,
+                # so the SDK's own discard path is the one under test
+                raise OperationalError(1105, "injected non-disconnect restore refusal")
             self._conn.autocommit_state = "0"
         elif "data branch merge" in normalized and self._conn.fail_merge:
             raise OperationalError(2006, "injected merge failure")
@@ -1045,12 +1134,14 @@ class _FakeDbapiConnection:
         fail_set_autocommit=False,
         fail_flip_after_apply=False,
         fail_restore=False,
+        fail_restore_soft=False,
         fail_merge=False,
     ):
         self.autocommit_state = autocommit
         self.fail_set_autocommit = fail_set_autocommit
         self.fail_flip_after_apply = fail_flip_after_apply
         self.fail_restore = fail_restore
+        self.fail_restore_soft = fail_restore_soft
         self.fail_merge = fail_merge
         self.executed = []
         self.rollback_calls = 0
@@ -1058,6 +1149,12 @@ class _FakeDbapiConnection:
 
     def cursor(self):
         return _FakeCursor(self)
+
+    def autocommit(self, value):
+        # driver-level autocommit setter used by the isolation-level API
+        # (dialect set_isolation_level / reset_isolation_level, engine
+        # first-connect hooks)
+        self.autocommit_state = "1" if value else "0"
 
     def character_set_name(self):
         # required by the pymysql/mysqldb dialect's connect hook
@@ -1073,7 +1170,7 @@ class _FakeDbapiConnection:
         self.close_calls += 1
 
 
-def _pool_engine(created, **conn_kwargs):
+def _pool_engine(created, _engine_kwargs=None, **conn_kwargs):
     def creator():
         conn = _FakeDbapiConnection(**conn_kwargs)
         created.append(conn)
@@ -1084,6 +1181,7 @@ def _pool_engine(created, **conn_kwargs):
         creator=creator,
         pool_size=1,
         max_overflow=0,
+        **(_engine_kwargs or {}),
     )
     return engine
 
@@ -1218,4 +1316,74 @@ def test_real_pool_invalidate_failure_preserves_success_and_replaces_connection(
     with engine.connect() as checked:
         assert checked.exec_driver_sql("SELECT 1") is not None
     assert len(created) == 2
+    engine.dispose()
+
+
+def test_real_pool_restore_failure_with_raising_invalidate_listener_not_repooled():
+    # The review's reproduced leak: SQLAlchemy 1.4 fires PoolEvents.invalidate
+    # listeners BEFORE the record's hard close, so a raising listener leaves
+    # the live connection - still flipped to autocommit=1 - checked out, and
+    # the pool would hand it to the next checkout. The restore failure here
+    # uses a non-disconnect error so the engine does not auto-invalidate and
+    # the SDK's own discard path is the one under test. On 2.x the record is
+    # marked for recycle instead; the observable contract is the same: the
+    # mutated connection is never reused.
+    from sqlalchemy import event
+
+    created = []
+    engine = _pool_engine(created, autocommit="0", fail_restore_soft=True)
+
+    @event.listens_for(engine, "invalidate")
+    def raising_listener(dbapi_connection, connection_record, exception):
+        raise RuntimeError("injected invalidate listener failure")
+
+    client = Client(logger=Mock())
+    client._engine = engine
+
+    result = client.execute("data branch merge src into dst")
+    assert result is not None  # merge outcome preserved despite the listener
+
+    # next checkout is a fresh physical connection at the engine baseline;
+    # the fresh checkout proves the mutated connection was never reused
+    with engine.connect() as checked:
+        assert checked.exec_driver_sql("SELECT @@autocommit").scalar() == "0"
+    assert len(created) == 2
+    # the mutated physical connection was closed (1.4: literal close after
+    # detach at checkout release; 2.x: recycle-close of the record the
+    # interrupted invalidate marked at the same release)
+    assert created[0].close_calls == 1
+    assert engine.pool.checkedout() == 0
+    engine.dispose()
+
+
+def test_real_pool_autocommit_engine_isolation_baseline_restored():
+    # The review's other pool-state finding: a caller's engine configured
+    # with isolation_level='AUTOCOMMIT' pools connections whose baseline is
+    # autocommit on (the driver dialect's connect hook applies it to every
+    # fresh physical connection). Resetting a temporary per-connection
+    # isolation selection must restore that baseline - autocommit flag
+    # included - instead of forcing autocommit off for every later checkout.
+    created = []
+    engine = _pool_engine(
+        created,
+        _engine_kwargs={"isolation_level": "AUTOCOMMIT"},
+        autocommit="0",
+    )
+    client = Client.from_engine(engine, logger=Mock())
+
+    with client._engine.connect() as conn:
+        # the engine baseline was applied to the fresh physical connection
+        assert created[0].autocommit_state == "1"
+        opt = conn.execution_options(isolation_level="READ COMMITTED")
+        opt.exec_driver_sql("SELECT 1")
+        # during the temporary selection, autocommit is off
+        assert created[0].autocommit_state == "0"
+        opt.close()
+
+    # after checkin, the pool reset restored the engine baseline - and the
+    # same physical connection keeps serving at that baseline
+    assert created[0].autocommit_state == "1"
+    with client._engine.connect() as conn:
+        assert conn.exec_driver_sql("SELECT @@autocommit").scalar() == "1"
+    assert len(created) == 1
     engine.dispose()

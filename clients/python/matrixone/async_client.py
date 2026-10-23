@@ -54,10 +54,25 @@ from .exceptions import (
     SnapshotError,
 )
 from .logger import MatrixOneLogger, create_default_logger
-from ._utils import is_non_transactional_statement
+from ._utils import detach_from_pool, is_non_transactional_statement
 from .pitr import AsyncPitrManager
 from .pubsub import AsyncPubSubManager
 from .snapshot import Snapshot, SnapshotLevel
+
+
+def _detach_failed_invalidate(async_conn):
+    """Detach an async connection whose await-invalidate raised.
+
+    AsyncConnection has no detach of its own; the proxied sync Connection
+    does, and detaching it is bookkeeping only (no driver I/O), so it is
+    safe to call directly from the event loop thread.
+    """
+    try:
+        sync_conn = async_conn.sync_connection
+    except Exception:
+        sync_conn = None
+    if sync_conn is not None:
+        detach_from_pool(sync_conn)
 
 
 class AsyncResultSet:
@@ -1464,11 +1479,14 @@ class AsyncClient(BaseMatrixOneClient):
                             # failure from invalidate() must not escape the
                             # finally and mask the original outcome either; a
                             # BaseException raised by the discard
-                            # (interrupt/cancellation) still propagates.
+                            # (interrupt/cancellation) still propagates. When
+                            # the discard itself raises, detach keeps the
+                            # mutated connection out of the pool (SQLAlchemy
+                            # 1.4 runs invalidate listeners before closing).
                             try:
                                 await conn.invalidate()
                             except Exception:
-                                pass
+                                _detach_failed_invalidate(conn)
                         except BaseException:
                             # asyncio.CancelledError derives from BaseException,
                             # so a cancellation delivered while awaiting this
@@ -1482,7 +1500,7 @@ class AsyncClient(BaseMatrixOneClient):
                             try:
                                 await conn.invalidate()
                             except Exception:
-                                pass
+                                _detach_failed_invalidate(conn)
                             raise
 
                 execution_time = time.time() - start_time
