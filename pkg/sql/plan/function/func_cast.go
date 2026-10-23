@@ -685,6 +685,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal64: {
+		types.T_bool,
 		types.T_bit,
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -697,6 +698,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal128: {
+		types.T_bool,
 		types.T_bit,
 		types.T_float32, types.T_float64,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
@@ -709,6 +711,7 @@ var supportedTypeCast = map[types.T][]types.T{
 	},
 
 	types.T_decimal256: {
+		types.T_bool,
 		types.T_bit,
 		types.T_int8, types.T_int16, types.T_int32, types.T_int64,
 		types.T_uint8, types.T_uint16, types.T_uint32, types.T_uint64,
@@ -2471,6 +2474,9 @@ func decimal64ToOthers(proc *process.Process,
 	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal64ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -2553,6 +2559,9 @@ func decimal128ToOthers(proc *process.Process,
 	mode castMode, strictStringWidth ...bool) error {
 	ctx := proc.Ctx
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal128ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -2647,6 +2656,9 @@ func decimal256ToOthersWithContext(
 	toType types.Type, result vector.FunctionResultWrapper, length int, selectList *FunctionSelectList,
 	mode castMode, strictStringWidth ...bool) error {
 	switch toType.Oid {
+	case types.T_bool:
+		rs := vector.MustFunctionResult[bool](result)
+		return decimalToBool(source, rs, length)
 	case types.T_bit:
 		rs := vector.MustFunctionResult[uint64](result)
 		return decimal256ToBitWithIgnore(ctx, proc, source, rs, int(toType.Width), length, selectList)
@@ -3796,6 +3808,22 @@ func floatToInteger[T1 constraints.Float, T2 constraints.Integer](
 			if err := to.Append(T2(math.Round(float64(v))), false); err != nil {
 				return err
 			}
+		}
+	}
+	return nil
+}
+
+// decimalToBool follows MySQL: any non-zero DECIMAL is TRUE, NULL stays NULL.
+// Every DECIMAL width stores zero as all-zero bits, so comparing with the zero
+// value of the type is exact for negative and fractional values alike.
+func decimalToBool[T types.Decimal64 | types.Decimal128 | types.Decimal256](
+	from vector.FunctionParameterWrapper[T],
+	to *vector.FunctionResult[bool], length int) error {
+	var zero T
+	for i := uint64(0); i < uint64(length); i++ {
+		v, null := from.GetValue(i)
+		if err := to.Append(!null && v != zero, null); err != nil {
+			return err
 		}
 	}
 	return nil
