@@ -2637,6 +2637,9 @@ func decimal128ToOthers(proc *process.Process,
 		return decimal128ToUnsigned(ctx, source, rs, 64, length, selectList)
 	case types.T_decimal64:
 		rs := vector.MustFunctionResult[types.Decimal64](result)
+		if length > 1 && source.GetSourceVector().IsConst() {
+			return decimal128ConstToDecimal64(ctx, source, rs, length, selectList)
+		}
 		return decimal128ToDecimal64(ctx, source, rs, length, selectList)
 	case types.T_decimal128:
 		rs := vector.MustFunctionResult[types.Decimal128](result)
@@ -6587,16 +6590,30 @@ func decimal64ToDecimal256Array(
 	return nil
 }
 
+// decimal128ConstToDecimal64 evaluates the checked conversion once, then
+// materializes the broadcast without changing the ordinary vector kernel.
+func decimal128ConstToDecimal64(ctx context.Context, from vector.FunctionParameterWrapper[types.Decimal128], to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
+	if err := decimal128ToDecimal64(ctx, from, to, 1, selectList); err != nil {
+		return err
+	}
+	if from.GetSourceVector().IsConstNull() {
+		to.SetNullResult(uint64(length))
+		return nil
+	}
+	dst := vector.MustFixedColNoTypeCheck[types.Decimal64](to.GetResultVector())
+	value := dst[0]
+	for i := 1; i < length; i++ {
+		dst[i] = value
+	}
+	return nil
+}
+
 func decimal128ToDecimal64(
 	ctx context.Context,
 	from vector.FunctionParameterWrapper[types.Decimal128],
 	to *vector.FunctionResult[types.Decimal64], length int, selectList *FunctionSelectList) error {
 	var i uint64
 	l := uint64(length)
-	constant := from.GetSourceVector().IsConst()
-	if constant && length > 1 {
-		l = 1
-	}
 	var dft types.Decimal64
 	fromtype := from.GetType()
 	totype := to.GetType()
@@ -6625,17 +6642,6 @@ func decimal128ToDecimal64(
 			if err = to.Append(result, false); err != nil {
 				return err
 			}
-		}
-	}
-	if constant && length > 1 {
-		if from.GetSourceVector().IsConstNull() {
-			to.SetNullResult(uint64(length))
-			return nil
-		}
-		dst := vector.MustFixedColNoTypeCheck[types.Decimal64](to.GetResultVector())
-		value := dst[0]
-		for i := 1; i < length; i++ {
-			dst[i] = value
 		}
 	}
 	return nil
