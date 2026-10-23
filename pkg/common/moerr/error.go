@@ -682,7 +682,7 @@ var errorMsgRefer = map[uint16]moErrorMsgItem{
 	ErrSyncProtectionExpired:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "sync protection expired: job %s validTS %d < prepareTS %d"},
 
 	// Group 7: lock service
-	ErrDeadLockDetected:        {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock detected"},
+	ErrDeadLockDetected:        {ER_LOCK_DEADLOCK, []string{"40001"}, "deadlock detected"},
 	ErrLockTableBindChanged:    {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table bind changed"},
 	ErrLockTableNotFound:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "lock table not found on remote lock service"},
 	ErrDeadlockCheckBusy:       {ER_UNKNOWN_ERROR, []string{MySQLDefaultSqlState}, "deadlock check is busy"},
