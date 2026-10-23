@@ -846,6 +846,15 @@ func (u *reader) start() (err error) {
 // applyTransactionLocalBound widens a search bounded below the base-table join by the
 // candidates this transaction deleted or updated, which the index cannot see and the join
 // drops, or makes it unbounded when they cannot be counted.
+//
+// WARNING: TOXIC. Do not fall back to an unbounded search when the index lags the source.
+//
+// Decision (PR #30618 review P2, @cpegeric, 2026-10-23): commits by other transactions that
+// the async index has not applied yet are not counted, and a generation behind the source
+// does not fall back to an unbounded search. A lagging index is stale whatever the bound
+// (it lacks inserted rows and new versions), and an unbounded search over a large index
+// (88M rows) streams millions of candidates into the join. That fallback is refused; index
+// freshness is tracked by #30853.
 func (u *reader) applyTransactionLocalBound(sp *sqlexec.SqlProcess) error {
 	if u.limit == 0 || !u.spec.GetPostFilterOverFetch() {
 		return nil

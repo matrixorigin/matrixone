@@ -450,10 +450,13 @@ cost. The window, the covered search answered from the index alone, and an exact
 freshness contract are tracked as #30853.
 
 Rejected alternatives: proving index freshness before every bounded search with an
-exact-scan fallback, dropping the bound whenever the transaction has written the
-source table, counting committed deletes after the searched generation from the
-source's change state, and a fixed over-fetch alone, which returns too few rows once
-the transaction has deleted more candidates than its headroom.
+exact-scan fallback; falling back to an unbounded search whenever the searched
+generation is behind the source, which on a large index (88M rows) streams millions
+of candidates into the join while the index is stale anyway; dropping the bound
+whenever the transaction has written the source table; counting committed deletes
+after the searched generation from the source's change state; and a fixed over-fetch
+alone, which returns too few rows once the transaction has deleted more candidates
+than its headroom.
 
 ## Source fan-out and resource bounds
 
