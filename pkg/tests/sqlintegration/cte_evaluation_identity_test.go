@@ -95,6 +95,63 @@ func TestCTEEvaluationIdentity(t *testing.T) {
 				}
 			}
 		})
+		t.Run("recursive sibling UNION demand", func(t *testing.T) {
+			const producer = `r(x) as(select uuid() union all select extractvalue('<a/>','['))`
+			const sequence = `seq(n) as(select 1 union all select n+1 from seq where n<2)`
+			const tail = `(select x from r limit ?) union all select cast(n as char(36)) from seq`
+			query := "with recursive " + sequence + "," + producer + " " + tail
+			checkRows := func(t *testing.T, query func() (*sql.Rows, error), wantUUID int, wantError bool) {
+				t.Helper()
+				rows, err := query()
+				var values []string
+				if err == nil {
+					defer rows.Close()
+					for rows.Next() {
+						var value string
+						require.NoError(t, rows.Scan(&value))
+						values = append(values, value)
+					}
+					err = rows.Err()
+				}
+				if wantError {
+					var sqlErr *mysql.MySQLError
+					require.ErrorAs(t, err, &sqlErr)
+					require.EqualValues(t, 20105, sqlErr.Number)
+					return
+				}
+				require.NoError(t, err)
+				numbers, uuids := []string{}, 0
+				for _, value := range values {
+					if value == "1" || value == "2" {
+						numbers = append(numbers, value)
+					} else {
+						require.Len(t, value, 36)
+						uuids++
+					}
+				}
+				require.ElementsMatch(t, []string{"1", "2"}, numbers)
+				require.Equal(t, wantUUID, uuids)
+			}
+			for _, tc := range []struct{ name, query string }{
+				{"ordinary sibling", query},
+				{"nested recursion", "with " + producer + ",seq as(with recursive s(n) as(select 1 union all select n+1 from s where n<2) select n from s) " + tail},
+				{"derived control", "with recursive " + sequence + ` (select x from(select uuid()x union all select extractvalue('<a/>','['))r limit ?) union all select cast(n as char(36)) from seq`},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					checkRows(t, func() (*sql.Rows, error) { return db.QueryContext(ctx, tc.query, 1) }, 1, false)
+				})
+			}
+			stmt, err := db.PrepareContext(ctx, query)
+			require.NoError(t, err)
+			defer stmt.Close()
+			for _, limit := range []int{0, 1, 2, 1} {
+				checkRows(t, func() (*sql.Rows, error) { return stmt.QueryContext(ctx, limit) }, min(limit, 1), limit == 2)
+			}
+			execSQLRequire(t, ctx, db, "delete from dst")
+			_, err = db.ExecContext(ctx, "insert into dst "+query, 1)
+			require.NoError(t, err)
+			checkRows(t, func() (*sql.Rows, error) { return db.QueryContext(ctx, "select x from dst") }, 1, false)
+		})
 		t.Run("DML UNION demand", func(t *testing.T) {
 			const source = `with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select x from r`
 			assertCount := func(t *testing.T, want int) {

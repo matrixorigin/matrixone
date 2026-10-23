@@ -337,7 +337,24 @@ func (builder *QueryBuilder) inlineSingleReaderCTEs(roots ...int32) {
 	}
 	seen := make(map[int32]bool)
 	parents := make(map[int32]int)
+	// Step roots execute independently; source edges only reference their owner.
+	for _, root := range builder.qry.Steps {
+		parents[root]++
+	}
+	for _, root := range roots {
+		if parents[root] == 0 {
+			parents[root] = 1
+		}
+	}
 	readers := make(map[int32]int32)
+	protected := make(map[int32]bool)
+	var pending []int32
+	protect := func(id int32) {
+		if !protected[id] {
+			protected[id] = true
+			pending = append(pending, id)
+		}
+	}
 	safe := true
 	var visit func(int32)
 	visit = func(id int32) {
@@ -347,8 +364,7 @@ func (builder *QueryBuilder) inlineSingleReaderCTEs(roots ...int32) {
 		seen[id] = true
 		node := builder.qry.Nodes[id]
 		if node.NodeType == planpb.Node_RECURSIVE_CTE || node.NodeType == planpb.Node_RECURSIVE_SCAN || node.RecursiveSink || node.RecursiveCte {
-			safe = false
-			return
+			protect(id)
 		}
 		executable := *node
 		executable.TableDef = nil
@@ -362,10 +378,6 @@ func (builder *QueryBuilder) inlineSingleReaderCTEs(roots ...int32) {
 		})
 		for _, child := range node.Children {
 			parents[child]++
-			if parents[child] > 1 {
-				safe = false // A shared subtree can execute its scan more than once.
-				return
-			}
 			visit(child)
 		}
 		for _, step := range node.SourceStep {
@@ -381,6 +393,24 @@ func (builder *QueryBuilder) inlineSingleReaderCTEs(roots ...int32) {
 	if !safe {
 		return
 	}
+	for id, uses := range parents {
+		if uses > 1 {
+			protect(id)
+		}
+	}
+	// Recursive rounds and repeated ancestors can execute a physical reader
+	// more than once. Protect their dependencies, leaving siblings eligible.
+	for len(pending) > 0 {
+		id := pending[len(pending)-1]
+		pending = pending[:len(pending)-1]
+		node := builder.qry.Nodes[id]
+		for _, child := range node.Children {
+			protect(child)
+		}
+		for _, step := range node.SourceStep {
+			protect(builder.qry.Steps[step])
+		}
+	}
 	// Count all references, including abandoned nodes: an unaccounted reference
 	// conservatively retains publication rather than leaving a stale step index.
 	references := make(map[int32]int)
@@ -393,7 +423,7 @@ func (builder *QueryBuilder) inlineSingleReaderCTEs(roots ...int32) {
 	for step, reader := range readers {
 		sinkID := builder.qry.Steps[step]
 		bound := builder.semanticCTESinks[sinkID]
-		if bound == nil || references[step] != 1 || bound.ref.isRecursive {
+		if bound == nil || references[step] != 1 || bound.ref.isRecursive || protected[reader] || protected[sinkID] {
 			continue
 		}
 		sink, scan := builder.qry.Nodes[sinkID], builder.qry.Nodes[reader]

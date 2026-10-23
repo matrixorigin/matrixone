@@ -343,6 +343,102 @@ func TestCTESingleReaderPublication(t *testing.T) {
 	}
 }
 
+func TestCTESingleReaderRecursiveIsolation(t *testing.T) {
+	for _, tc := range []struct {
+		name, sql string
+		retained  []string
+	}{
+		{"recursive first", `with recursive seq(n) as(select 1 union all select n+1 from seq where n<2), r(x) as(select uuid() union all select extractvalue('<a/>','[')) (select x from r limit 1) union all select cast(n as char(36)) from seq`, []string{"seq"}},
+		{"recursive last", `with recursive seq(n) as(select 1 union all select n+1 from seq where n<2), r(x) as(select uuid() union all select extractvalue('<a/>','[')) select cast(n as char(36)) from seq union all (select x from r limit 1)`, []string{"seq"}},
+		{"nested recursion", `with r(x) as(select uuid() union all select extractvalue('<a/>','[')), seq as(with recursive s(n) as(select 1 union all select n+1 from s where n<2) select n from s) (select x from r limit 1) union all select cast(n as char(36)) from seq`, []string{"s"}},
+		{"recursive predecessor", `with recursive b as(select uuid()x), d as(select x from b), seq(n,x) as(select 1,cast(null as varchar(36)) union all select n+1,d.x from seq,d where n<3), r as(select uuid()x) select seq.n,r.x from seq,r`, []string{"b", "d", "seq"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, true)
+			stmt, err := mysql.ParseOne(t.Context(), tc.sql, 1)
+			require.NoError(t, err)
+			defer stmt.Free()
+			root, err := builder.bindSelect(stmt.(*tree.Select), NewBindContext(builder, nil), true)
+			require.NoError(t, err)
+			builder.appendStep(root)
+			sinks := make(map[string]int32)
+			for id, bound := range builder.semanticCTESinks {
+				sinks[string(bound.ref.ast.Name.Alias)] = id
+			}
+			require.Contains(t, sinks, "r")
+			// Compare retained source identities, not their compacted slot numbers.
+			sources := make(map[int32][]int32)
+			for _, node := range builder.qry.Nodes {
+				for _, step := range node.SourceStep {
+					sources[node.NodeId] = append(sources[node.NodeId], builder.qry.Steps[step])
+				}
+			}
+			builder.finalizeCTEIdentity()
+			require.NotContains(t, builder.qry.Steps, sinks["r"])
+			for _, name := range tc.retained {
+				require.Contains(t, sinks, name)
+				require.Contains(t, builder.qry.Steps, sinks[name], name)
+			}
+			for _, node := range builder.qry.Nodes {
+				for i, step := range node.SourceStep {
+					require.GreaterOrEqual(t, step, int32(0))
+					require.Less(t, int(step), len(builder.qry.Steps))
+					require.Equal(t, sources[node.NodeId][i], builder.qry.Steps[step])
+				}
+			}
+		})
+	}
+}
+
+// These graph-contract cases model repeated execution above one physical scan.
+// They exercise finalization directly, without claiming new SQL reachability.
+func TestCTESingleReaderExecutionUses(t *testing.T) {
+	for _, shape := range []string{"shared ancestor", "root and child", "duplicate step", "duplicate extra root", "abandoned reference"} {
+		t.Run(shape, func(t *testing.T) {
+			mock := NewMockOptimizer(false, newPlanTestProcess(t))
+			builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, false)
+			bind := func() int32 {
+				stmt, err := mysql.ParseOne(t.Context(), `with r as(select uuid()x) select x from r`, 1)
+				require.NoError(t, err)
+				defer stmt.Free()
+				root, err := builder.bindSelect(stmt.(*tree.Select), NewBindContext(builder, nil), true)
+				require.NoError(t, err)
+				return root
+			}
+			root := bind()
+			sink := builder.qry.Steps[0]
+			var extras []int32
+			switch shape {
+			case "shared ancestor":
+				builder.appendStep(builder.appendNode(&planpb.Node{NodeType: planpb.Node_UNION_ALL, Children: []int32{root, root}}, builder.ctxByNode[root]))
+			case "root and child":
+				builder.appendStep(root)
+				builder.appendStep(builder.appendNode(&planpb.Node{NodeType: planpb.Node_PROJECT, Children: []int32{root}}, builder.ctxByNode[root]))
+			case "duplicate step":
+				builder.appendStep(root)
+				builder.appendStep(root)
+			case "duplicate extra root":
+				extras = []int32{root, root}
+			case "abandoned reference":
+				builder.appendStep(root)
+				builder.appendNode(&planpb.Node{NodeType: planpb.Node_SINK_SCAN, SourceStep: []int32{0}}, builder.ctxByNode[root])
+			}
+			// An independent reader must remain eligible in the same statement.
+			other := bind()
+			otherSink := builder.qry.Steps[len(builder.qry.Steps)-1]
+			builder.appendStep(other)
+			builder.finalizeCTEIdentity(extras...)
+			require.NotContains(t, builder.qry.Steps, otherSink)
+			if shape == "duplicate extra root" {
+				require.NotContains(t, builder.qry.Steps, sink)
+			} else {
+				require.Contains(t, builder.qry.Steps, sink)
+			}
+		})
+	}
+}
+
 func TestCTEFinalizationAcrossStatementRoots(t *testing.T) {
 	mock := NewMockOptimizer(false, newPlanTestProcess(t))
 	builder := NewQueryBuilder(planpb.Query_SELECT, mock.CurrentContext(), false, false)

@@ -23,4 +23,7 @@ insert into dst with r as(select uuid()x) select a.x from r a join r b on a.x=b.
 select count(*) from dst where length(x)=36;
 create table ctas_dst as with r(x) as(select uuid() union all select extractvalue('<a/>','[')) select x from r limit 1;
 select count(*) from ctas_dst where length(x)=36;
+-- Recursive siblings must not force an ordinary reader to evaluate undemanded rows.
+with recursive seq(n) as(select 1 union all select n+1 from seq where n<2),r(x) as(select uuid() union all select extractvalue('<a/>','[')) (select cast(length(x) as signed) x from r limit 1) union all select cast(n as signed) from seq order by x;
+with r(x) as(select uuid() union all select extractvalue('<a/>','[')),seq as(with recursive s(n) as(select 1 union all select n+1 from s where n<2) select n from s) (select cast(length(x) as signed) x from r limit 1) union all select cast(n as signed) from seq order by x;
 drop database cte_evaluation_identity;
